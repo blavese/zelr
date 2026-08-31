@@ -7,3 +7,7 @@ build/
 launcher/bin/
 launcher/obj/
 launcher/publish/
+
+# Per-run logs from the pipeline. Kept on disk so a blocked task can be
+# looked at, but they are large and belong to one machine.
+pipeline/state/
