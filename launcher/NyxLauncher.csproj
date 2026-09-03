@@ -10,6 +10,20 @@
     <AssemblyName>nyx</AssemblyName>
     <Platforms>x64</Platforms>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+
+    <!-- How the release is packaged, set here rather than on the command
+         line so it cannot be got wrong by whoever runs the publish.
+
+         WPF talks to Windows through native libraries, and a single file
+         build leaves them inside the bundle where the loader cannot find
+         them unless told to extract them. Without this the window never
+         opens: it throws DllNotFoundException out of WindowsBase before
+         any of our own code runs, which looks exactly like the kernel
+         failing to boot and is nothing of the sort. -->
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
   </PropertyGroup>
 
   <ItemGroup>
