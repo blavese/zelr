@@ -48,6 +48,8 @@ typedef struct {
 } __attribute__((packed)) madt_t;
 
 #define MADT_LAPIC          0
+#define MADT_IOAPIC         1
+#define MADT_OVERRIDE       2
 #define MADT_LAPIC_OVERRIDE 5
 
 /* Memory mapped configuration space: the header, eight reserved bytes, then
@@ -124,6 +126,10 @@ static const rsdp_t *find_rsdp(void) {
 
 static void read_madt(const madt_t *madt) {
     info.lapic_base = madt->lapic_address;
+    /* Bit 0 of the flags says the machine has the 8259 pair wired up and
+       that it must be masked before the IOAPIC is used, or both will
+       deliver the same interrupt. */
+    info.has_8259 = (madt->flags & 1) != 0;
 
     u32 len = madt->header.length;
     const u8 *p = (const u8 *)madt + sizeof(madt_t);
@@ -143,6 +149,27 @@ static void read_madt(const madt_t *madt) {
                    online later. Either is worth trying. */
                 info.usable[info.ncpus] = (flags & 0x3) ? 1 : 0;
                 info.ncpus++;
+            }
+        } else if (type == MADT_IOAPIC && entry_len >= 12) {
+            if (info.nioapic < ACPI_MAX_IOAPIC) {
+                acpi_ioapic_t *io = &info.ioapic[info.nioapic];
+                io->id       = p[2];
+                io->address  = *(const u32 *)(p + 4);
+                io->gsi_base = *(const u32 *)(p + 8);
+                if (io->address) info.nioapic++;
+            }
+        } else if (type == MADT_OVERRIDE && entry_len >= 10) {
+            if (info.noverride < ACPI_MAX_OVERRIDE) {
+                acpi_override_t *o = &info.override[info.noverride];
+                u16 flags = *(const u16 *)(p + 8);
+                o->source = p[3];
+                o->gsi    = *(const u32 *)(p + 4);
+                /* Two bits each, and zero in either means "whatever the bus
+                   normally does", which for the ISA bus is active high and
+                   edge triggered. */
+                o->active_low       = (flags & 0x3) == 0x3;
+                o->level_triggered  = ((flags >> 2) & 0x3) == 0x3;
+                info.noverride++;
             }
         } else if (type == MADT_LAPIC_OVERRIDE && entry_len >= 12) {
             /* A 64 bit address, but the low half is what a 32 bit kernel can

@@ -39,6 +39,9 @@
 #include "pci.h"
 #include "acpi.h"
 #include "io.h"
+#include "ioapic.h"
+#include "lapic.h"
+#include "pic.h"
 
 static int passed, failed;
 
@@ -1159,6 +1162,81 @@ static void test_pcie(void) {
     }
 }
 
+/* Interrupt routing.
+ *
+ * The thing worth checking is not that the IOAPIC was found, it is that the
+ * timer still ticks through it. Almost every machine wires IRQ 0 to input 2
+ * rather than input 0, and a kernel that ignores the firmware's list of such
+ * moves routes a line nothing is connected to. Nothing reports an error:
+ * interrupts are simply never delivered, the scheduler never preempts
+ * anything, and the machine appears to hang at whatever it was doing. So the
+ * clock is measured rather than assumed.
+ */
+static void test_irqs(void) {
+    if (!ioapic_active()) {
+        kprintf("  SKIP  no ioapic on this machine, 8259 only\n");
+        ok("the clock still runs on the 8259", timer_hz() > 0);
+        return;
+    }
+
+    ok("the local apic is up", lapic_present());
+    ok("the controller reports its inputs", ioapic_inputs() >= 16);
+
+    /* Every override the firmware listed has to name a real input, or
+       routing through it writes to a register that is not there. */
+    const acpi_info_t *a = acpi();
+    bool sane = true;
+    for (u32 i = 0; i < a->noverride; i++)
+        if (a->override[i].gsi >= ioapic_inputs()) sane = false;
+    ok("every override names an input that exists", sane);
+
+    /* The timer is the one that matters, and it is the one that moves. */
+    u32 timer_gsi = ioapic_gsi_for_irq(0);
+    ok("the timer's line is known", timer_gsi < ioapic_inputs());
+    kprintf("        irq0 arrives on input %d\n", timer_gsi);
+
+    /* And it is ticking. Interrupts are on by now, so a tick count that
+       moves is proof that a routed line is delivering to a handler and that
+       the handler's acknowledgement is reaching the right controller: miss
+       the EOI and exactly one interrupt is ever delivered. */
+    u64 before = timer_ticks();
+    sleep_ms(60);
+    u64 after = timer_ticks();
+    ok("the clock advances through the ioapic", after > before);
+
+    /* Masking has to actually stop it, or the mask bit is being written to
+       the wrong half of the entry and everything above is a coincidence.
+     *
+     * Nothing in here may wait on the clock, because the clock is the thing
+     * being switched off. sleep_ms waits for a tick count to move and so
+     * never returns while the timer is masked, which is a hang rather than
+     * a failure. (Which is exactly what the first version of this test did.)
+     * So the wait is a spin, and how long to spin is measured against the
+     * running clock first rather than guessed at. */
+    u32 per_tick = 0;
+    u64 mark = timer_ticks();
+    while (timer_ticks() == mark) { }            /* to a tick boundary */
+    mark = timer_ticks();
+    while (timer_ticks() == mark && per_tick < 100000000) per_tick++;
+    ok("the spin was calibrated against the clock", per_tick > 0);
+
+    u32 spin = per_tick * 4;                     /* four ticks' worth */
+
+    ioapic_mask_irq(0);
+    u64 a1 = timer_ticks();
+    for (volatile u32 i = 0; i < spin; i++) { }
+    u64 a2 = timer_ticks();
+    ioapic_unmask_irq(0);
+    ok("masking the timer stops it", a2 == a1);
+
+    u64 b1 = timer_ticks();
+    for (volatile u32 i = 0; i < spin * 4 && timer_ticks() == b1; i++) { }
+    ok("unmasking starts it again", timer_ticks() > b1);
+
+    /* A line no controller owns is refused rather than written somewhere. */
+    ok("an input past the end is refused", ioapic_route_irq(200, 100) == false);
+}
+
 int selftest_run(void) {
     passed = failed = 0;
     kprintf("\n=== nyx self test ===\n");
@@ -1192,6 +1270,7 @@ int selftest_run(void) {
     kprintf("[processors]\n"); test_smp();
     kprintf("[black box]\n"); test_blackbox();
     kprintf("[acpi and pcie]\n"); test_pcie();
+    kprintf("[interrupt routing]\n"); test_irqs();
     kprintf("\n%d passed, %d failed\n", passed, failed);
     kprintf(failed ? "SELFTEST_FAIL\n" : "SELFTEST_PASS\n");
     return failed;

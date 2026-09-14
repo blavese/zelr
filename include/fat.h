@@ -15,6 +15,9 @@ bool fat_mounted(void);
    the OEM name and volume serial in the boot sector say. Used to prefer
    our own volume over one that is merely FAT. */
 bool fat_is_nyx_volume(void);
+
+/* 16 or 32, decided from the cluster count rather than the label. */
+u32  fat_type(void);
 u32  fat_base(void);                    /* where the mounted volume starts */
 
 /* Formats at a base, which for anything but a raw image is the start of a

@@ -28,6 +28,7 @@
 #include "string.h"
 #include "printf.h"
 #include "io.h"
+#include "lapic.h"
 
 extern const u8 trampoline_start[], trampoline_end[];
 
@@ -230,14 +231,15 @@ void smp_init(void) {
     const acpi_info_t *a = acpi();
     if (a->ncpus == 0) return;
 
-    /* The APIC block sits above the identity mapped region. */
-    lapic = (volatile u8 *)paging_map_device(a->lapic_base & ~0xFFFull, 0x1000);
+    /* Mapped and enabled by lapic.c, which may already have been asked for
+       it by the interrupt routing. Doing it in two places would mean two
+       mappings of the same registers and two opinions about whether it is
+       switched on. */
+    if (!lapic_init()) return;
+    lapic = lapic_regs();
     if (!lapic) return;
 
-    /* Enable this processor's own APIC, which is what sends the signals. */
-    apic_write(LAPIC_SVR, apic_read(LAPIC_SVR) | 0x100 | 0xFF);
-
-    u8 self = (u8)(apic_read(LAPIC_ID) >> 24);
+    u8 self = lapic_id();
     cpus[0].info.apic_id = self;
     cpus[0].info.started = true;
 

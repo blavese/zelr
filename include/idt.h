@@ -18,3 +18,8 @@ typedef void (*isr_handler_t)(registers_t *);
 
 void idt_init(void);
 void register_interrupt_handler(u8 n, isr_handler_t h);
+
+/* Whether anything is listening on this vector. Used to decide which lines
+   are worth routing through the IOAPIC: one pointing at a vector with no
+   handler is an interrupt nothing will acknowledge. */
+bool idt_has_handler(u8 n);

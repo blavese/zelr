@@ -102,33 +102,48 @@ desktop draws on it at whatever resolution the firmware picked.
 Whether you can then *use* it depends on the machine, and this is the honest
 boundary.
 
-**Input** goes through a PS/2 keyboard and mouse. Many laptops still emulate
-PS/2 for their built-in keyboard and many do not, and none of them emulate it
-for something plugged into a USB port; a USB keyboard needs a USB stack,
-which is xHCI plus HID and is a large piece of work that is not here. This is
-the wall.
+**Input is the wall.** Keyboard and mouse go through PS/2. Many laptops still
+emulate PS/2 for their built-in keyboard and many do not, and none of them
+emulate it for anything plugged into a USB port. A USB keyboard needs xHCI
+and the HID boot protocol, which is not here. On a machine without PS/2
+emulation you get a desktop you cannot type on.
 
-**Storage** is AHCI and ATA, so a SATA disk is found and an NVMe one is not,
-and NVMe is what most recent laptops have. Without a disk it still runs, on
-an in-memory filesystem that does not survive a reboot.
+Everything else about a modern machine now works.
 
-**The disk it does find is read properly.** GPT and MBR partition tables are
-both read, with both of GPT's checksums verified, so nyx finds a filesystem
-on a disk somebody else partitioned rather than only on an image. It will not
-format an existing partition and it will not touch the EFI System Partition,
-which is FAT and would otherwise qualify; writing scratch data there is how
-you stop a laptop booting.
+**Storage** is NVMe, AHCI and ATA. NVMe is what a laptop bought this decade
+has instead of the other two, and it is reached the way the specification
+describes: queues in ordinary memory, a doorbell whose spacing the controller
+reports rather than one that is assumed, and completions recognised by their
+phase bit.
 
-**The machine is described properly.** PCIe configuration space is reached
-through the mapping the firmware describes in MCFG, so devices can be
-identified past the first 256 bytes of their configuration space, and the
-ACPI tables are taken from the pointer UEFI hands over rather than by
-searching memory that a UEFI machine need not have filled in. Until that was
-wired up nyx had no ACPI on any UEFI machine at all, which meant it reported
-one processor on every laptop and believed it.
+**Partition tables** are read, GPT and MBR, with both of GPT's checksums
+verified, so a filesystem is found on a disk somebody else partitioned rather
+than only on an image. Neither is written. An existing partition is never
+formatted, and the EFI System Partition is never touched: it is FAT, so it
+passes every other test, and it is also how the machine starts.
 
-So: it boots and draws on a modern machine, finds every core, reads a real
-partitioned disk, and cannot yet be typed on unless the keyboard is PS/2.
+**Filesystems** are FAT16 and FAT32. Which one a volume is gets decided by
+counting its clusters, which is the only thing the specification says decides
+it; the string "FAT32" in a boot sector is a label and some formatters get it
+wrong.
+
+**Interrupts** are routed through the IOAPIC, with the firmware's list of
+which legacy line really arrives where applied. Almost every machine moves
+the timer from line 0 to line 2, and a kernel that assumes otherwise waits
+forever for a tick that never comes.
+
+**The machine describes itself** through ACPI: the tables are taken from the
+pointer UEFI hands over rather than by searching memory a UEFI machine need
+not have filled in, the XSDT is preferred where there is one, PCIe
+configuration space is reached through the mapping MCFG describes, and every
+processor the firmware lists is started. Until that pointer was wired through,
+nyx had no ACPI on any UEFI machine at all, which is to say on every laptop,
+and reported one processor whatever the machine had.
+
+So: it boots, draws, finds every core, finds an NVMe disk, reads its GPT,
+mounts a FAT32 partition without disturbing the one the firmware boots from,
+and says what happened if any of that fails. What it cannot do is take a
+keystroke from a USB keyboard.
 
 ### when it does not boot
 
@@ -520,13 +535,14 @@ large range:
   not forward ICMP to the wider internet without elevated privileges, so
   pinging an outside address times out even though DNS and TCP to that same
   address work.
-- **No USB.** Input is a PS/2 keyboard and mouse. A laptop that does not
-  emulate PS/2 for its built-in keyboard has no keyboard here, and nothing
-  plugged into a USB port works at all. A USB stack is xHCI plus HID and is
-  the largest single thing missing.
-- **No NVMe.** Storage is AHCI and ATA, which covers SATA disks and every
-  virtual machine, and does not cover what most recent laptops have. Without
-  a disk it runs from memory and nothing survives a reboot.
+- **No USB, which is the one that matters.** Input is a PS/2 keyboard and
+  mouse. A laptop that does not emulate PS/2 for its built-in keyboard has no
+  keyboard here, and nothing plugged into a USB port works at all. Everything
+  else about a modern machine now works, so this is the single thing standing
+  between nyx and being usable on one: xHCI, then the HID boot protocol.
+- **No FAT long filenames.** A file saved as somethinglong.txt comes back as
+  SOMETHI~1.TXT. The entries that carry the real name are read past rather
+  than understood.
 - **The address space is capped at 64 MiB.** The page tables and the frame
   bitmap both have to describe whatever the kernel claims, and nothing yet
   needs more. Long mode removed the 4 GiB ceiling; this one is self-imposed
@@ -544,6 +560,8 @@ orders of magnitude away from Linux, which is roughly 30 million lines.
     kernel/idt.c       interrupt descriptor table and dispatch
     kernel/isr.S       the 49 interrupt stubs (generated)
     kernel/pic.c       8259 remapping
+    kernel/lapic.c     each processor's own interrupt controller
+    kernel/ioapic.c    interrupt routing, and the firmware's overrides
     kernel/pmm.c       physical frame allocator
     kernel/paging.c    four-level paging
     kernel/heap.c      kmalloc
@@ -551,11 +569,12 @@ orders of magnitude away from Linux, which is roughly 30 million lines.
     kernel/wait.c      blocking on an address instead of spinning
     kernel/blockdev.c  picks a disk driver and hides which one
     kernel/ahci.c      sata through ahci
+    kernel/nvme.c      nvme, the disk a modern laptop has
     kernel/ata.c       ata pio disk driver
+    kernel/parts.c     gpt and mbr partition tables
     kernel/diskfs.c    reading and writing the filesystem image
     kernel/fs.c        the in-memory filesystem, for a machine with no disk
     kernel/pci.c       pci configuration space, ports and the pcie mapping
-    kernel/parts.c     gpt and mbr partition tables
     kernel/netdev.c    picks a network driver and hides which one
     kernel/e1000.c     intel e1000 driver
     kernel/rtl8139.c   rtl8139 driver
@@ -566,7 +585,7 @@ orders of magnitude away from Linux, which is roughly 30 million lines.
     kernel/fbcon.c     the text console drawn into it
     kernel/font.c      the 8x16 font (generated from the drawings)
     kernel/mouse.c     ps/2 mouse and the drawn pointer
-    kernel/fat.c       fat16
+    kernel/fat.c       fat16 and fat32
     kernel/elf.c       elf32 loader
     kernel/syscall.c   the system call table
     kernel/user.c      building and launching ring 3 processes

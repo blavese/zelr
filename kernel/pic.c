@@ -29,6 +29,11 @@ void pic_eoi(u8 irq) {
     outb(PIC1_CMD, 0x20);
 }
 
+void pic_disable(void) {
+    outb(PIC1_DAT, 0xFF);
+    outb(PIC2_DAT, 0xFF);
+}
+
 void pic_mask(u8 irq) {
     u16 port = irq < 8 ? PIC1_DAT : PIC2_DAT;
     if (irq >= 8) irq -= 8;

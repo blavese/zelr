@@ -5,6 +5,8 @@
 #include "pic.h"
 #include "gdt.h"
 #include "blackbox.h"
+#include "ioapic.h"
+#include "lapic.h"
 
 u64 scheduler_switch(u64 rsp);
 
@@ -41,6 +43,8 @@ static void set_gate(u8 n, u64 base, u16 sel, u8 flags) {
 }
 
 void register_interrupt_handler(u8 n, isr_handler_t h) { handlers[n] = h; }
+
+bool idt_has_handler(u8 n) { return handlers[n] != 0; }
 
 void idt_init(void) {
     idtp.limit = sizeof(idt) - 1;
@@ -85,9 +89,14 @@ u64 isr_dispatch(registers_t *r) {
               (u32)r->cs, (u32)r->rflags, (void *)r->rsp, (void *)cr2);
     }
 
-    /* A hardware interrupt has to be acknowledged, or the PIC will never
-       deliver another one at the same or lower priority. */
-    if (r->int_no >= 32 && r->int_no < 48) pic_eoi((u8)(r->int_no - 32));
+    /* A hardware interrupt has to be acknowledged, or nothing at the same or
+       lower priority is ever delivered again. Which controller to tell
+       depends on which one delivered it, and once the IOAPIC is routing,
+       the 8259 is masked and no longer has anything to acknowledge. */
+    if (r->int_no >= 32 && r->int_no < 48) {
+        if (ioapic_active()) lapic_eoi();
+        else                 pic_eoi((u8)(r->int_no - 32));
+    }
 
     /* The scheduler may hand back a different task's frame. */
     u64 resume = (u64)r;

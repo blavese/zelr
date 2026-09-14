@@ -21,6 +21,8 @@
 
 #define ACPI_MAX_CPUS 16
 #define ACPI_MAX_MCFG 4
+#define ACPI_MAX_IOAPIC 4
+#define ACPI_MAX_OVERRIDE 16
 
 /* One contiguous run of buses, and the physical address their configuration
    space starts at. A machine usually has exactly one of these. */
@@ -30,6 +32,28 @@ typedef struct {
     u8  start_bus;
     u8  end_bus;
 } acpi_mcfg_t;
+
+/* An IOAPIC, and the first global interrupt number it is responsible for.
+   A machine with several divides the range between them. */
+typedef struct {
+    u32 address;
+    u32 gsi_base;
+    u8  id;
+} acpi_ioapic_t;
+
+/* What a legacy IRQ number really arrives as.
+ *
+ * The eight lines of an XT are wired to whichever IOAPIC inputs the board
+ * designer chose, and the firmware lists the ones that are not identity
+ * mapped. Almost every machine moves the timer: IRQ 0 comes in on line 2,
+ * and a kernel that assumes otherwise routes a line nothing is connected to
+ * and then waits forever for a tick that never arrives. */
+typedef struct {
+    u8  source;                 /* the legacy IRQ number */
+    u32 gsi;                    /* the line it is really on */
+    bool active_low;
+    bool level_triggered;
+} acpi_override_t;
 
 typedef struct {
     bool found;                 /* the tables were there and made sense */
@@ -45,6 +69,16 @@ typedef struct {
 
     u32         nmcfg;
     acpi_mcfg_t mcfg[ACPI_MAX_MCFG];
+
+    u32           nioapic;
+    acpi_ioapic_t ioapic[ACPI_MAX_IOAPIC];
+
+    u32             noverride;
+    acpi_override_t override[ACPI_MAX_OVERRIDE];
+
+    /* The firmware says the 8259 pair exists and is wired through. When it
+       does not, there is nothing to mask and nothing to fall back to. */
+    bool has_8259;
 } acpi_info_t;
 
 /* Where the firmware said the tables are. Under UEFI this is the only way

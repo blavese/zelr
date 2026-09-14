@@ -1,4 +1,4 @@
-/* FAT16, with directories.
+/* FAT16 and FAT32, with directories.
  *
  * The point of this over a private format is interoperability: a FAT image
  * can be opened by other tools, so files move between nyx and the machine
@@ -11,6 +11,18 @@
  * cannot grow, while every other directory is an ordinary cluster chain that
  * can. Everything here goes through dir_read / dir_write, which hide that
  * difference, so the rest of the file never has to care which kind it has.
+ *
+ * FAT32 removes exactly that wart, and adds two of its own: table entries are
+ * four bytes rather than two, and a directory entry's cluster number is split
+ * across two fields sixteen bytes apart, because the high half was squeezed
+ * into space FAT16 left reserved. Which of the two a volume is is not written
+ * down anywhere; it is worked out from how many clusters it has, and the
+ * string "FAT32" in the boot sector is a label that some formatters get
+ * wrong. The count is the only answer.
+ *
+ * Reading and writing work on both. Formatting only produces FAT16, because
+ * nothing here needs to create a FAT32 volume: the ones that matter, an EFI
+ * System Partition among them, already exist and were made by something else.
  */
 #include "fat.h"
 #include "ata.h"
@@ -31,8 +43,13 @@
 #define ENT_FREE      0x00
 #define ENT_DELETED   0xE5
 
-#define EOC_MIN 0xFFF8u
-#define EOC     0xFFFFu
+/* The top of the range a table entry can hold, reserved to mean "the chain
+   ends here". FAT32 entries are 28 bits wide, not 32: the top four are
+   reserved and must be left as they are found. */
+#define EOC16_MIN 0x0000FFF8u
+#define EOC16     0x0000FFFFu
+#define EOC32_MIN 0x0FFFFFF8u
+#define EOC32     0x0FFFFFFFu
 
 typedef struct {
     u8  name[11];
@@ -73,6 +90,13 @@ static bool vol_write(u32 lba, u32 count, const void *buf) {
 }
 
 u32 fat_base(void) { return part_base; }
+
+/* 16 or 32. Decided by the cluster count at mount, never by the label. */
+static u32   fat_bits = 16;
+static u32   root_cluster;              /* FAT32 only: the root is a chain */
+
+static u32 eoc_min(void) { return fat_bits == 32 ? EOC32_MIN : EOC16_MIN; }
+static u32 eoc(void)     { return fat_bits == 32 ? EOC32     : EOC16; }
 
 static bool  mounted;
 static u16   bytes_per_sector;
@@ -166,17 +190,28 @@ static void from_83(const u8 in[11], char *out) {
 
 /* --- the file allocation table ------------------------------------------ */
 
-static u16 fat_get(u32 cluster) {
-    u32 off = cluster * 2;
-    if (!fat_cache_load(fat_start + off / SECTOR_SIZE)) return EOC;
+static u32 fat_get(u32 cluster) {
+    u32 width = fat_bits / 8;
+    u32 off = cluster * width;
+    if (!fat_cache_load(fat_start + off / SECTOR_SIZE)) return eoc();
+    if (fat_bits == 32)
+        return *(u32 *)(fat_cache + (off % SECTOR_SIZE)) & 0x0FFFFFFFu;
     return *(u16 *)(fat_cache + (off % SECTOR_SIZE));
 }
 
-static bool fat_set(u32 cluster, u16 value) {
-    u32 off = cluster * 2;
+static bool fat_set(u32 cluster, u32 value) {
+    u32 width = fat_bits / 8;
+    u32 off = cluster * width;
     u32 lba = fat_start + off / SECTOR_SIZE;
     if (!fat_cache_load(lba)) return false;
-    *(u16 *)(fat_cache + (off % SECTOR_SIZE)) = value;
+    if (fat_bits == 32) {
+        /* The top four bits belong to whoever set them and are not ours to
+           change, so the new value goes in underneath them. */
+        u32 *slot = (u32 *)(fat_cache + (off % SECTOR_SIZE));
+        *slot = (*slot & 0xF0000000u) | (value & 0x0FFFFFFFu);
+    } else {
+        *(u16 *)(fat_cache + (off % SECTOR_SIZE)) = (u16)value;
+    }
 
     /* Written through rather than buffered: fat_write_file's crash safety
        depends on the new chain really reaching the disk before the directory
@@ -198,7 +233,7 @@ static u32 alloc_cluster(void) {
     for (u32 n = 0; n < cluster_count; n++) {
         u32 c = 2 + (alloc_hint - 2 + n) % cluster_count;
         if (fat_get(c) != 0) continue;
-        if (!fat_set(c, EOC)) return 0;
+        if (!fat_set(c, eoc())) return 0;
         alloc_hint = (c + 1 < cluster_count + 2) ? c + 1 : 2;
         return c;
     }
@@ -206,8 +241,8 @@ static u32 alloc_cluster(void) {
 }
 
 static void free_chain(u32 cluster) {
-    while (cluster >= 2 && cluster < EOC_MIN) {
-        u16 next = fat_get(cluster);
+    while (cluster >= 2 && cluster < eoc_min()) {
+        u32 next = fat_get(cluster);
         fat_set(cluster, 0);
         /* Somewhere behind the hint is free again, so look there next. */
         if (cluster < alloc_hint) alloc_hint = cluster;
@@ -246,8 +281,13 @@ bool fat_mount_at(u32 base_lba) {
     num_fats            = sec[16];
     root_entries        = *(u16 *)(sec + 17);
     u16 total16         = *(u16 *)(sec + 19);
-    fat_sectors         = *(u16 *)(sec + 22);
+    u16 fat_sectors16   = *(u16 *)(sec + 22);
     u32 total32         = *(u32 *)(sec + 32);
+
+    /* A zero in the sixteen bit table size is what says to look in the
+       thirty two bit one, which is a field FAT16 does not have and FAT32
+       put in space that used to be reserved. */
+    fat_sectors = fat_sectors16 ? (u32)fat_sectors16 : *(u32 *)(sec + 36);
 
     total_sectors = total16 ? total16 : total32;
 
@@ -262,8 +302,32 @@ bool fat_mount_at(u32 base_lba) {
     if (data_start >= total_sectors) return false;
     cluster_count = (total_sectors - data_start) / sectors_per_cluster;
 
-    /* FAT16 is defined by its cluster count, not by what the label claims. */
-    if (cluster_count < 4085 || cluster_count > 65524) return false;
+    /* Which of the two this is, decided the only way the specification
+       allows: by counting clusters. The "FAT32" written at offset 82 is a
+       label, some formatters get it wrong, and nothing is required to read
+       it. Below 4085 the volume is FAT12, which this does not do. */
+    if (cluster_count < 4085) return false;
+    fat_bits = (cluster_count > 65524) ? 32 : 16;
+
+    if (fat_bits == 32) {
+        /* The root has no fixed home; it is a chain like any other
+           directory, so there are no root sectors between the tables and the
+           data and the data starts earlier than the arithmetic above put it.
+           Recomputing the cluster count matters: getting it wrong here is
+           what turns a readable volume into one that looks corrupt. */
+        if (root_entries != 0) return false;
+        root_sectors = 0;
+        root_start   = 0;
+        data_start   = fat_start + (u32)num_fats * fat_sectors;
+        if (data_start >= total_sectors) return false;
+        cluster_count = (total_sectors - data_start) / sectors_per_cluster;
+
+        root_cluster = *(u32 *)(sec + 44);
+        if (root_cluster < 2 || root_cluster >= cluster_count + 2) return false;
+    } else {
+        root_cluster = 0;
+        if (root_entries == 0) return false;
+    }
 
     /* Now that the volume has said how big it claims to be, hold it to it.
        A volume whose total_sectors runs past the end of its partition is
@@ -284,6 +348,8 @@ bool fat_mount_at(u32 base_lba) {
 
 bool fat_mount(void) { return fat_mount_at(0); }
 
+u32 fat_type(void) { return mounted ? fat_bits : 0; }
+
 /* The two fields fat_format writes and nothing else does. Checked against
    the boot sector rather than remembered from the mount, so it is still
    right if something else rewrote the volume underneath us. */
@@ -298,6 +364,12 @@ bool fat_is_nyx_volume(void) {
 bool fat_format_at(u32 base_lba, u32 sectors, const char *label) {
     if (!blk_present()) return false;
     fat_forget();
+
+    /* The layout below is a FAT16 one throughout, so the width has to be
+       that while it is written. Mounting at the end decides again from the
+       cluster count and would catch a disagreement. */
+    fat_bits = 16;
+    root_cluster = 0;
 
     part_base = base_lba;
     part_sectors = sectors;
@@ -393,9 +465,9 @@ static u32 entries_per_cluster(void) { return fat_cluster_bytes() / 32; }
 /* How many entries this directory can currently hold. A subdirectory grows,
    so this is a snapshot rather than a fixed number. */
 static u32 dir_capacity(const dir_t *d) {
-    if (d->root) return root_entries;
-    u32 n = 0, c = d->cluster, guard = 0;
-    while (c >= 2 && c < EOC_MIN && guard++ < cluster_count + 2) {
+    if (d->root && fat_bits != 32) return root_entries;
+    u32 n = 0, c = d->root ? root_cluster : d->cluster, guard = 0;
+    while (c >= 2 && c < eoc_min() && guard++ < cluster_count + 2) {
         n += entries_per_cluster();
         c = fat_get(c);
     }
@@ -403,10 +475,31 @@ static u32 dir_capacity(const dir_t *d) {
 }
 
 /* The sector holding entry `index`, and its offset within it. */
+/* Where a directory entry's cluster number lives.
+ *
+ * FAT16 keeps it in one sixteen bit field and leaves another reserved. FAT32
+ * uses the reserved one for the high half, sixteen bytes earlier in the
+ * entry. Reading only the low half on a FAT32 volume works perfectly until a
+ * file lands above cluster 65535, at which point it silently points at a
+ * different file's data. */
+static u32 ent_cluster(const dirent_t *e) {
+    if (fat_bits == 32)
+        return ((u32)e->cluster_hi << 16) | e->cluster_lo;
+    return e->cluster_lo;
+}
+
+static void set_ent_cluster(dirent_t *e, u32 cluster) {
+    e->cluster_lo = (u16)(cluster & 0xFFFF);
+    e->cluster_hi = (fat_bits == 32) ? (u16)(cluster >> 16) : 0;
+}
+
 static bool dir_locate(const dir_t *d, u32 index, u32 *lba_out, u32 *off_out) {
     u32 per_sector = SECTOR_SIZE / 32;
 
-    if (d->root) {
+    /* On FAT16 the root is a fixed run of sectors that cannot grow. On FAT32
+       it is an ordinary chain like any other directory, so the only thing
+       the root flag still means there is "start from root_cluster". */
+    if (d->root && fat_bits != 32) {
         if (index >= root_entries) return false;
         *lba_out = root_start + index / per_sector;
         *off_out = (index % per_sector) * 32;
@@ -415,13 +508,14 @@ static bool dir_locate(const dir_t *d, u32 index, u32 *lba_out, u32 *off_out) {
 
     u32 per_cluster = entries_per_cluster();
     u32 want = index / per_cluster;
-    u32 c = d->cluster, guard = 0;
+    u32 c = d->root ? root_cluster : d->cluster;
+    u32 guard = 0;
     while (want-- > 0) {
-        if (c < 2 || c >= EOC_MIN) return false;
+        if (c < 2 || c >= eoc_min()) return false;
         c = fat_get(c);
         if (guard++ > cluster_count + 2) return false;
     }
-    if (c < 2 || c >= EOC_MIN) return false;
+    if (c < 2 || c >= eoc_min()) return false;
 
     u32 within = index % per_cluster;
     *lba_out = cluster_lba(c) + within / per_sector;
@@ -445,15 +539,17 @@ static bool dir_write(const dir_t *d, u32 index, const dirent_t *in) {
     return vol_write(lba, 1, dsec);
 }
 
-/* Adds one cluster to a subdirectory and zeroes it, so the new entries read
-   as free. The root cannot grow; that is the format, not an omission. */
+/* Adds one cluster to a directory and zeroes it, so the new entries read as
+   free. On FAT16 the root cannot grow, which is the format rather than an
+   omission; on FAT32 it is an ordinary chain and grows like any other. */
 static bool dir_grow(const dir_t *d) {
-    if (d->root) return false;
+    if (d->root && fat_bits != 32) return false;
 
-    u32 last = d->cluster, guard = 0;
+    u32 last = d->root ? root_cluster : d->cluster;
+    u32 guard = 0;
     while (guard++ < cluster_count + 2) {
-        u16 next = fat_get(last);
-        if (next >= EOC_MIN) break;
+        u32 next = fat_get(last);
+        if (next >= eoc_min()) break;
         if (next < 2) return false;
         last = next;
     }
@@ -461,7 +557,7 @@ static bool dir_grow(const dir_t *d) {
     u32 c = alloc_cluster();
     if (!c) return false;
     if (!zero_cluster(c)) { fat_set(c, 0); return false; }
-    return fat_set(last, (u16)c);
+    return fat_set(last, c);
 }
 
 /* Finds a usable slot, growing the directory if it is full. */
@@ -541,15 +637,17 @@ static bool resolve_parent(const char *path, dir_t *parent, char *leaf, u32 leaf
                 else {
                     dirent_t up;
                     if (dir_find(&here, "..", &up) < 0) return false;
-                    if (up.cluster_lo < 2) here = ROOT;
-                    else { here.root = false; here.cluster = up.cluster_lo; }
+                    u32 upc = ent_cluster(&up);
+                    if (upc < 2) here = ROOT;
+                    else { here.root = false; here.cluster = upc; }
                 }
             } else {
                 dirent_t e;
                 if (dir_find(&here, pending, &e) < 0) return false;
                 if (!(e.attr & ATTR_DIRECTORY)) return false;
-                if (e.cluster_lo < 2) here = ROOT;
-                else { here.root = false; here.cluster = e.cluster_lo; }
+                u32 ec = ent_cluster(&e);
+                if (ec < 2) here = ROOT;
+                else { here.root = false; here.cluster = ec; }
             }
         }
         strncpy(pending, part, sizeof(pending) - 1);
@@ -576,16 +674,18 @@ static bool resolve_dir(const char *path, dir_t *out) {
         if (parent.root) { *out = ROOT; return true; }
         dirent_t up;
         if (dir_find(&parent, "..", &up) < 0) return false;
-        if (up.cluster_lo < 2) *out = ROOT;
-        else { out->root = false; out->cluster = up.cluster_lo; }
+        u32 upc = ent_cluster(&up);
+        if (upc < 2) *out = ROOT;
+        else { out->root = false; out->cluster = upc; }
         return true;
     }
 
     dirent_t e;
     if (dir_find(&parent, leaf, &e) < 0) return false;
     if (!(e.attr & ATTR_DIRECTORY)) return false;
-    if (e.cluster_lo < 2) *out = ROOT;
-    else { out->root = false; out->cluster = e.cluster_lo; }
+    u32 ec = ent_cluster(&e);
+    if (ec < 2) *out = ROOT;
+    else { out->root = false; out->cluster = ec; }
     return true;
 }
 
@@ -659,9 +759,9 @@ int fat_read_file(const char *path, u8 *buf, u32 cap) {
 
     u32 want = e.size < cap ? e.size : cap;
     u32 done = 0;
-    u32 cluster = e.cluster_lo;
+    u32 cluster = ent_cluster(&e);
 
-    while (done < want && cluster >= 2 && cluster < EOC_MIN) {
+    while (done < want && cluster >= 2 && cluster < eoc_min()) {
         u32 lba = cluster_lba(cluster);
         for (u32 s = 0; s < sectors_per_cluster && done < want; s++) {
             if (!vol_read(lba + s, 1, sec)) return -1;
@@ -690,7 +790,7 @@ bool fat_write_file(const char *path, const u8 *buf, u32 size) {
     if (slot >= 0) {
         if (e.attr & ATTR_DIRECTORY) return false;
         /* Remember the old chain but do not touch it yet. */
-        old_chain = e.cluster_lo;
+        old_chain = ent_cluster(&e);
     } else {
         memset(&e, 0, sizeof(e));
         slot = dir_free_slot(&parent);
@@ -708,7 +808,7 @@ bool fat_write_file(const char *path, const u8 *buf, u32 size) {
     while (written < size) {
         u32 c = alloc_cluster();
         if (!c) { if (first) free_chain(first); return false; }
-        if (prev) fat_set(prev, (u16)c);
+        if (prev) fat_set(prev, c);
         else first = c;
         prev = c;
 
@@ -729,8 +829,7 @@ bool fat_write_file(const char *path, const u8 *buf, u32 size) {
     /* Make sure the data is on the platter before anything points at it. */
     blk_flush();
 
-    e.cluster_lo = (u16)first;
-    e.cluster_hi = 0;
+    set_ent_cluster(&e, first);
     e.size = size;
     e.write_date = 0x5A21;
     e.write_time = 0;
@@ -760,7 +859,7 @@ bool fat_delete_file(const char *path) {
     if (slot < 0) return false;
     if (e.attr & ATTR_DIRECTORY) return false;      /* rmdir is a different job */
 
-    if (e.cluster_lo >= 2) free_chain(e.cluster_lo);
+    if (ent_cluster(&e) >= 2) free_chain(ent_cluster(&e));
     e.name[0] = ENT_DELETED;
     if (!dir_write(&parent, (u32)slot, &e)) return false;
     return blk_flush();
@@ -790,12 +889,15 @@ bool fat_mkdir(const char *path) {
     memset(dot.name, ' ', 11);
     dot.name[0] = '.';
     dot.attr = ATTR_DIRECTORY;
-    dot.cluster_lo = (u16)c;
+    set_ent_cluster(&dot, c);
     dot.write_date = 0x5A21;
     if (!dir_write(&self, 0, &dot)) { free_chain(c); return false; }
 
     dot.name[1] = '.';
-    dot.cluster_lo = parent.root ? 0 : (u16)parent.cluster;
+    /* ".." pointing at the root is written as cluster zero on both, even
+       on FAT32 where the root has a real cluster number. The specification
+       says so and readers rely on it. */
+    set_ent_cluster(&dot, parent.root ? 0 : parent.cluster);
     if (!dir_write(&self, 1, &dot)) { free_chain(c); return false; }
 
     blk_flush();
@@ -808,7 +910,7 @@ bool fat_mkdir(const char *path) {
     memset(&e, 0, sizeof(e));
     to_83(leaf, e.name);
     e.attr = ATTR_DIRECTORY;
-    e.cluster_lo = (u16)c;
+    set_ent_cluster(&e, c);
     e.size = 0;                       /* directories report zero, by the spec */
     e.write_date = 0x5A21;
     if (!dir_write(&parent, (u32)slot, &e)) { free_chain(c); return false; }
@@ -831,7 +933,8 @@ bool fat_rmdir(const char *path) {
     /* Refuse while anything is still inside, rather than orphaning it. */
     if (fat_count(path) > 0) return false;
 
-    if (e.cluster_lo >= 2) free_chain(e.cluster_lo);
+    u32 ec = ent_cluster(&e);
+    if (ec >= 2) free_chain(ec);
     e.name[0] = ENT_DELETED;
     if (!dir_write(&parent, (u32)slot, &e)) return false;
     return blk_flush();
@@ -856,12 +959,27 @@ u32 fat_reclaim(void) {
     memset(reachable, 0, total);
     reachable[0] = reachable[1] = 1;          /* the two reserved entries */
 
-    /* Directories still to visit, by first cluster. The root is not in here
-       because it has no cluster chain. */
+    /* Directories still to visit, by first cluster. On FAT16 the root is not
+       among them because it has no chain at all. On FAT32 it does, and it has
+       to be marked before anything else: nothing points at the root, so a
+       sweep that only follows directory entries never reaches it, decides its
+       clusters are stranded, and frees them. The next allocation then hands
+       out cluster two and the volume's root is written over by whatever asked
+       for space. (Which is what happened the first time this ran on a FAT32
+       volume: two files in the root, gone.) */
     u32 queue_cap = 64;
     u32 *queue = (u32 *)kmalloc(queue_cap * 4);
     if (!queue) { kfree(reachable); return 0; }
     u32 head = 0, tail = 0;
+
+    if (fat_bits == 32) {
+        u32 c = root_cluster, guard = 0;
+        while (c >= 2 && c < eoc_min() && c < total && guard++ < total) {
+            if (reachable[c]) break;
+            reachable[c] = 1;
+            c = fat_get(c);
+        }
+    }
 
     dir_t d = ROOT;
 
@@ -874,15 +992,15 @@ u32 fat_reclaim(void) {
             if (!entry_is_real(&e)) continue;
             if (e.name[0] == '.') continue;   /* "." and ".." lead in circles */
 
-            u32 c = e.cluster_lo;
+            u32 c = ent_cluster(&e);
             u32 guard = 0;
-            while (c >= 2 && c < EOC_MIN && c < total && guard++ < total) {
+            while (c >= 2 && c < eoc_min() && c < total && guard++ < total) {
                 if (reachable[c]) break;      /* a loop; stop rather than spin */
                 reachable[c] = 1;
                 c = fat_get(c);
             }
 
-            if ((e.attr & ATTR_DIRECTORY) && e.cluster_lo >= 2) {
+            if ((e.attr & ATTR_DIRECTORY) && ent_cluster(&e) >= 2) {
                 if (tail == queue_cap) {
                     u32 *bigger = (u32 *)kmalloc(queue_cap * 8);
                     if (!bigger) break;       /* stop widening, do not lose data */
@@ -891,7 +1009,7 @@ u32 fat_reclaim(void) {
                     queue = bigger;
                     queue_cap *= 2;
                 }
-                queue[tail++] = e.cluster_lo;
+                queue[tail++] = ent_cluster(&e);
             }
         }
 

@@ -16,7 +16,10 @@
 #include "fs.h"
 #include "blockdev.h"
 #include "diskfs.h"
+#include "fat.h"
 #include "pci.h"
+#include "ioapic.h"
+#include "lapic.h"
 #include "netdev.h"
 #include "net.h"
 #include "fb.h"
@@ -221,8 +224,9 @@ void kmain(handoff_t *h) {
            before anything writes a new record, because this boot is about to
            land on the sectors holding the last one. */
         bb_recover();
-        if (n >= 0)      { kprintf("  fs      fat16 mounted, %d entries in the root\n", n);
-                           bb_log("fs fat16 mounted, %d entries in the root", n); }
+        if (n >= 0)      { kprintf("  fs      fat%d mounted, %d entries in the root\n",
+                                   fat_type(), n);
+                           bb_log("fs fat%d mounted, %d entries in the root", fat_type(), n); }
         else if (n == -2) {
             /* A brand new disk should just work rather than telling
                someone to run a command they have never heard of. */
@@ -272,6 +276,30 @@ void kmain(handoff_t *h) {
         bb_log("mouse none: no ps/2 pointer answered");
     serial_enable_irq();
     kprintf("  input   ps/2 keyboard + serial (irq driven)\n");
+
+    /* Interrupt routing, after every driver has registered its handler and
+       before interrupts are ever enabled, which does not happen until
+       sched_start. Doing it here rather than inside each driver means one
+       place decides, and the decision can see which lines are actually
+       claimed: routing one whose vector has no handler would deliver an
+       interrupt nothing acknowledges. */
+    bb_mark("interrupt routing");
+    if (ioapic_init()) {
+        if (acpi()->has_8259) pic_disable();
+        u32 routed = 0;
+        for (u8 irq = 0; irq < 16; irq++) {
+            if (!idt_has_handler((u8)(32 + irq))) continue;
+            if (ioapic_route_irq(irq, (u8)(32 + irq))) routed++;
+        }
+        kprintf("  irqs    ioapic, %d input(s), %d routed\n",
+                ioapic_inputs(), routed);
+        bb_log("irqs ioapic, %d inputs, %d routed, 8259 %s",
+               ioapic_inputs(), routed,
+               acpi()->has_8259 ? "masked" : "absent");
+    } else {
+        kprintf("  irqs    8259, no ioapic described\n");
+        bb_log("irqs 8259 only, no ioapic in the tables");
+    }
 
     bb_mark("syscalls, window server, scheduler");
     syscall_init();
