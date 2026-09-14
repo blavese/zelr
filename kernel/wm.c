@@ -366,7 +366,8 @@ static void draw_chrome(window_t *w, bool focused) {
             focused ? darken(t->accent, 40) : darken(t->surface, 20));
 
     u32 title_fg = focused ? darken(t->accent, 170) : t->text_dim;
-    gfx_text(w->x + 12, w->y + (WM_TITLE_H - FONT_H) / 2, w->title, title_fg);
+    face_text(w->x + 12, w->y + (WM_TITLE_H - face_height(FACE_BODY)) / 2,
+              w->title, title_fg, FACE_BODY);
 
     /* Dots rather than glyphs: at 14 pixels a drawn symbol is mostly noise,
        and the colour and position already say what each one does. The mark
@@ -567,7 +568,8 @@ static void draw_menu(void) {
                           gfx_mix(lighten(t->surface, 6), t->accent, 60));
 
         u32 fg = (i == menu_hover) ? t->text : gfx_mix(t->text, t->text_dim, 120);
-        gfx_text(menu_x + 38, iy + (MENU_ITEM - FONT_H) / 2, MENU[i].label, fg);
+        face_text(menu_x + 38, iy + (MENU_ITEM - face_height(FACE_BODY)) / 2,
+                  MENU[i].label, fg, FACE_BODY);
 
         /* A rounded square stands in for an icon. Accent for the things that
            launch a program, grey for the ones the desktop handles itself. */
@@ -615,14 +617,14 @@ static void draw_taskbar(void) {
     bool badge_hot = menu_open;
     fb_round_rect(8, y + 5, 76, TASKBAR_H - 10, 6,
                   badge_hot ? t->accent : lighten(t->surface, 4));
-    gfx_text(20, y + (TASKBAR_H - FONT_H) / 2, "nyx",
-             badge_hot ? darken(t->accent, 170) : t->accent);
+    face_text(20, y + (TASKBAR_H - face_height(FACE_HEAD)) / 2, "nyx",
+              badge_hot ? darken(t->accent, 170) : t->accent, FACE_HEAD);
 
     int x = 96;
     for (int i = 0; i < nwin; i++) {
         window_t *w = stack[i];
         bool focused = (i == nwin - 1) && !w->minimized;
-        int tw = gfx_text_width(w->title) + 24;
+        int tw = face_width(w->title, FACE_BODY) + 24;
         if (x + tw > (int)fb_width() - 120) break;
 
         u32 chip = lighten(t->surface, 4);
@@ -630,8 +632,8 @@ static void draw_taskbar(void) {
         else if (w->minimized) chip = darken(t->surface, 20);
 
         fb_round_rect(x, y + 5, tw, TASKBAR_H - 10, 6, chip);
-        gfx_text(x + 12, y + (TASKBAR_H - FONT_H) / 2, w->title,
-                 focused ? t->text : t->text_dim);
+        face_text(x + 12, y + (TASKBAR_H - face_height(FACE_BODY)) / 2, w->title,
+                  focused ? t->text : t->text_dim, FACE_BODY);
 
         /* A full underline for the window in front, a short stub for one
            that is only put away, so the taskbar says where everything is. */
@@ -652,8 +654,9 @@ static void draw_taskbar(void) {
         u32 secs = (u32)(timer_ticks() / timer_hz());
         kformat(clock, sizeof(clock), "up %d:%02d", secs / 60, secs % 60);
     }
-    gfx_text((int)fb_width() - gfx_text_width(clock) - 16,
-             y + (TASKBAR_H - FONT_H) / 2, clock, t->text);
+    face_text((int)fb_width() - face_width(clock, FACE_BODY) - 16,
+              y + (TASKBAR_H - face_height(FACE_BODY)) / 2, clock, t->text,
+              FACE_BODY);
 }
 
 static const u8 CURSOR[19][12] = {
@@ -783,7 +786,7 @@ static int taskbar_chip_at(int mx, int my) {
 
     int x = 96;
     for (int i = 0; i < nwin; i++) {
-        int tw = gfx_text_width(stack[i]->title) + 24;
+        int tw = face_width(stack[i]->title, FACE_BODY) + 24;
         if (x + tw > (int)fb_width() - 120) break;
         if (mx >= x && mx < x + tw) return i;
         x += tw + 6;

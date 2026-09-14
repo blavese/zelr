@@ -200,3 +200,81 @@ void fb_vgradient(int x, int y, int w, int h, u32 top, u32 bottom) {
         fb_rect((u32)x, (u32)(y + j), (u32)w, 1, c);
     }
 }
+
+/* --- the anti-aliased face ----------------------------------------------- */
+
+#include "face.h"
+
+static const face_t *face_for(int which) {
+    if (which < 0 || which >= FACE_SIZES) which = 0;
+    return &face_faces[which];
+}
+
+int face_height(int which) { return face_for(which)->size; }
+
+int face_width(const char *s, int which) {
+    const face_t *f = face_for(which);
+    int w = 0;
+    for (; *s; s++) {
+        unsigned char c = (unsigned char)*s;
+        if (c < FACE_FIRST || c > FACE_LAST) c = ' ';
+        w += f->glyphs[c - FACE_FIRST].advance;
+    }
+    return w;
+}
+
+/* `y` is the top of the line, not the baseline: every caller here thinks in
+   boxes, and making them each subtract an ascent would be one more thing to
+   get wrong per call site. */
+void face_text(int x, int y, const char *s, u32 fg, int which) {
+    const face_t *f = face_for(which);
+    int baseline = y + (f->size * 4) / 5;
+
+    for (; *s; s++) {
+        unsigned char c = (unsigned char)*s;
+        if (c < FACE_FIRST || c > FACE_LAST) c = ' ';
+        const face_glyph *g = &f->glyphs[c - FACE_FIRST];
+        const unsigned char *px = f->pixels + g->at;
+
+        for (int gy = 0; gy < g->h; gy++) {
+            int sy = baseline - g->top + gy;
+            if (sy < 0 || sy >= (int)fb_height()) continue;
+            for (int gx = 0; gx < g->w; gx++) {
+                unsigned char a = px[gy * g->w + gx];
+                if (!a) continue;
+                int sx = x + g->left + gx;
+                if (sx < 0 || sx >= (int)fb_width()) continue;
+                fb_put((u32)sx, (u32)sy,
+                       a == 255 ? fg : gfx_mix(fb_get((u32)sx, (u32)sy), fg, a));
+            }
+        }
+        x += g->advance;
+    }
+}
+
+void face_surf_text(u32 *dst, int w, int h, int x, int y,
+                    const char *s, u32 fg, int which) {
+    const face_t *f = face_for(which);
+    int baseline = y + (f->size * 4) / 5;
+
+    for (; *s; s++) {
+        unsigned char c = (unsigned char)*s;
+        if (c < FACE_FIRST || c > FACE_LAST) c = ' ';
+        const face_glyph *g = &f->glyphs[c - FACE_FIRST];
+        const unsigned char *px = f->pixels + g->at;
+
+        for (int gy = 0; gy < g->h; gy++) {
+            int sy = baseline - g->top + gy;
+            if (sy < 0 || sy >= h) continue;
+            for (int gx = 0; gx < g->w; gx++) {
+                unsigned char a = px[gy * g->w + gx];
+                if (!a) continue;
+                int sx = x + g->left + gx;
+                if (sx < 0 || sx >= w) continue;
+                u32 *slot = &dst[(u32)sy * w + sx];
+                *slot = (a == 255) ? fg : gfx_mix(*slot, fg, a);
+            }
+        }
+        x += g->advance;
+    }
+}

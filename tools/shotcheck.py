@@ -35,10 +35,15 @@ INDIGO = (0x6E, 0x8A, 0xE8)
 
 # Where things are on a 1024x768 screen with the default layout.
 BADGE = (40, 745)             # the taskbar launcher
-MENU_SETTINGS = (60, 615)     # third entry of the launcher menu
+# The launcher's entries, in the order wm.c lists them. The menu grows
+# upward from the taskbar, so adding a program moves everything above it and
+# a remembered y is wrong from then on.
+MENU_ENTRIES = ["Terminal", "Files", "Notes", "Paint", "Settings",
+                "System info", "Close all", "Leave desktop"]
+MENU_ITEM_H = 30
+MENU_BOTTOM = 734             # the menu's lower edge, just above the taskbar
 # Settings opens as the second window, so its content starts at 89,98 and the
 # second accent swatch sits 70,74 into that.
-SWATCH_INDIGO = (175, 190)
 
 
 class Monitor:
@@ -127,6 +132,32 @@ def tally(px):
     return counts
 
 
+def centre_of(px, w, h, rgb, min_pixels=200):
+    """Where a block of one colour is, as (x, y) of its middle.
+
+    Clicking a remembered coordinate is how this harness kept breaking. A
+    swatch moves because a window gained a sidebar, or a menu entry moves
+    because two programs were added above it, and the click lands on
+    whatever is there now: the check fails, and it reads as the feature
+    being broken rather than the test being out of date. So the thing is
+    found in the picture instead. Returns None when it is not on screen,
+    which is a real answer and not a coordinate to click anyway.
+    """
+    want = bytes(rgb)
+    xs, ys, n = 0, 0, 0
+    for y in range(h):
+        row = y * w * 3
+        for x in range(w):
+            i = row + x * 3
+            if px[i:i + 3] == want:
+                xs += x
+                ys += y
+                n += 1
+    if n < min_pixels:
+        return None
+    return (xs // n, ys // n)
+
+
 def count_in(px, w, rect, rgb):
     left, top, right, bottom = rect
     want = bytes(rgb)
@@ -192,7 +223,10 @@ def main():
         menu_pixels = count_in(px, w, (10, 540, 210, 730), (0x1F, 0x27, 0x2F))
         checks.append(("the launcher menu opens", menu_pixels > 8000))
 
-        mon.click(*MENU_SETTINGS)
+        # Counted from the bottom of the menu rather than remembered.
+        idx = MENU_ENTRIES.index("Settings")
+        from_bottom = len(MENU_ENTRIES) - 1 - idx
+        mon.click(60, MENU_BOTTOM - 6 - from_bottom * MENU_ITEM_H - MENU_ITEM_H // 2)
         time.sleep(3.0)
         w, h, px, ppm = mon.screen("settings")
         shots.append(ppm)
@@ -208,7 +242,11 @@ def main():
         teal_before = counts.get(bytes(TEAL), 0)
         indigo_before = counts.get(bytes(INDIGO), 0)
 
-        mon.click(*SWATCH_INDIGO)
+        spot = centre_of(px, w, h, INDIGO)
+        checks.append(("the indigo swatch is findable on screen", spot is not None))
+        if spot is None:
+            raise RuntimeError("no indigo swatch on screen to click")
+        mon.click(*spot)
         time.sleep(2.5)
         w, h, px, ppm = mon.screen("recoloured")
         shots.append(ppm)

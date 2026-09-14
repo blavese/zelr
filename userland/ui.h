@@ -24,8 +24,8 @@
  * font cell is 8x16 and anything else puts text on half a pixel. */
 #define UI_PAD        8      /* inside a container, to its contents */
 #define UI_GAP        6      /* between two things that belong together */
-#define UI_ROW       24      /* a list row, a menu item */
-#define UI_BTN_H     28
+#define UI_ROW       26      /* a list row, a menu item */
+#define UI_BTN_H     30
 #define UI_TITLE_H   28      /* a section header inside a window */
 #define UI_RADIUS     6
 #define UI_SCROLL_W  10
@@ -177,7 +177,7 @@ static inline int ui_button(surface *s, ui_input *in, const ui_theme *t,
              : over ? mix(t->panel, t->fg, 24)
              : t->panel;
     round_rect(s, x, y, w, h, UI_RADIUS, face);
-    text_centred(s, x, y, w, h, label, t->fg);
+    face_centred(s, x, y, w, h, label, t->fg, UI_FACE_BODY);
 
     if (over && in->released) { in->released = 0; return 1; }
     return 0;
@@ -192,7 +192,7 @@ static inline int ui_button_primary(surface *s, ui_input *in, const ui_theme *t,
 
     u32 face = held ? mix(t->accent, 0, 60) : over ? mix(t->accent, 0xFFFFFF, 30) : t->accent;
     round_rect(s, x, y, w, h, UI_RADIUS, face);
-    text_centred(s, x, y, w, h, label, t->accent_fg);
+    face_centred(s, x, y, w, h, label, t->accent_fg, UI_FACE_BODY);
 
     if (over && in->released) { in->released = 0; return 1; }
     return 0;
@@ -210,11 +210,12 @@ static inline int ui_row(surface *s, ui_input *in, const ui_theme *t,
     else if (over) rect(s, x, y, w, h, mix(t->bg, t->fg, 18));
 
     u32 fg = selected ? t->accent_fg : t->fg;
-    text(s, x + UI_PAD, y + (h - FONT_H) / 2, label, fg);
+    int ty = y + (h - face_h(UI_FACE_BODY)) / 2;
+    face_draw(s, x + UI_PAD, ty, label, fg, UI_FACE_BODY);
     if (right) {
-        int rw = strlen(right) * FONT_W;
-        text(s, x + w - UI_PAD - rw, y + (h - FONT_H) / 2, right,
-             selected ? t->accent_fg : t->dim);
+        int rw = face_w(right, UI_FACE_BODY);
+        face_draw(s, x + w - UI_PAD - rw, ty, right,
+                  selected ? t->accent_fg : t->dim, UI_FACE_BODY);
     }
 
     if (over && in->right_pressed) { in->right_pressed = 0; return 2; }
@@ -224,18 +225,18 @@ static inline int ui_row(surface *s, ui_input *in, const ui_theme *t,
 
 static inline void ui_label(surface *s, const ui_theme *t,
                             int x, int y, const char *str) {
-    text(s, x, y, str, t->fg);
+    face_draw(s, x, y, str, t->fg, UI_FACE_BODY);
 }
 
 static inline void ui_dim_label(surface *s, const ui_theme *t,
                                 int x, int y, const char *str) {
-    text(s, x, y, str, t->dim);
+    face_draw(s, x, y, str, t->dim, UI_FACE_BODY);
 }
 
 /* A heading with a rule under it, which is how a window says "new section". */
 static inline int ui_section(surface *s, const ui_theme *t,
                              int x, int y, int w, const char *title) {
-    text(s, x, y + 6, title, t->dim);
+    face_draw(s, x, y + 4, title, t->dim, UI_FACE_BODY);
     rect(s, x, y + UI_TITLE_H - 1, w, 1, t->line);
     return y + UI_TITLE_H + UI_GAP;
 }
@@ -248,7 +249,8 @@ static inline int ui_toggle(surface *s, ui_input *in, const ui_theme *t,
     round_rect(s, x, y, tw, th, th / 2, value ? t->accent : mix(t->panel, t->fg, 20));
     int knob = value ? x + tw - th + 2 : x + 2;
     disc(s, knob + (th - 4) / 2, y + th / 2, (th - 4) / 2, RGB(0xff, 0xff, 0xff));
-    if (label) text(s, x + tw + UI_GAP, y + (th - FONT_H) / 2, label, t->fg);
+    if (label) face_draw(s, x + tw + UI_GAP, y + (th - face_h(UI_FACE_BODY)) / 2,
+                         label, t->fg, UI_FACE_BODY);
 
     if (over && in->released) { in->released = 0; return !value; }
     return value;
@@ -353,16 +355,25 @@ static inline void ui_field_draw(surface *s, ui_input *in, const ui_theme *t,
         round_rect(s, x, y + h - 2, w, 2, 1, t->accent);
     }
 
-    int ty = y + (h - FONT_H) / 2;
+    int ty = y + (h - face_h(UI_FACE_BODY)) / 2;
     if (f->len == 0 && placeholder) {
-        text(s, x + UI_PAD, ty, placeholder, t->dim);
+        face_draw(s, x + UI_PAD, ty, placeholder, t->dim, UI_FACE_BODY);
     } else {
-        /* Scroll so the cursor is always in view. */
-        int fit = (w - UI_PAD * 2) / FONT_W;
-        int from = f->cursor > fit ? f->cursor - fit : 0;
-        text(s, x + UI_PAD, ty, f->buf + from, t->fg);
+        /* Scroll so the cursor is always in view. The face is not fixed
+           width, so where the cursor sits has to be measured rather than
+           counted: the prefix before it is drawn into nothing and its
+           width taken. */
+        char keep = f->buf[f->cursor];
+        f->buf[f->cursor] = 0;
+        int upto = face_w(f->buf, UI_FACE_BODY);
+        f->buf[f->cursor] = keep;
+
+        int room = w - UI_PAD * 2;
+        int shift = upto > room ? upto - room : 0;
+        face_draw(s, x + UI_PAD - shift, ty, f->buf, t->fg, UI_FACE_BODY);
         if (f->focused && (ticks() / 30) % 2 == 0)
-            rect(s, x + UI_PAD + (f->cursor - from) * FONT_W, ty, 2, FONT_H, t->accent);
+            rect(s, x + UI_PAD + upto - shift, ty, 2,
+                 face_h(UI_FACE_BODY), t->accent);
     }
 }
 
@@ -379,10 +390,11 @@ static inline void ui_statusbar(surface *s, const ui_theme *t,
     int y = h - UI_ROW;
     rect(s, 0, y, w, UI_ROW, t->panel);
     rect(s, 0, y, w, 1, t->line);
-    if (left)  text(s, UI_PAD, y + (UI_ROW - FONT_H) / 2, left, t->dim);
+    int ty = y + (UI_ROW - face_h(UI_FACE_BODY)) / 2;
+    if (left)  face_draw(s, UI_PAD, ty, left, t->dim, UI_FACE_BODY);
     if (right) {
-        int rw = strlen(right) * FONT_W;
-        text(s, w - UI_PAD - rw, y + (UI_ROW - FONT_H) / 2, right, t->dim);
+        int rw = face_w(right, UI_FACE_BODY);
+        face_draw(s, w - UI_PAD - rw, ty, right, t->dim, UI_FACE_BODY);
     }
 }
 
@@ -413,7 +425,8 @@ static inline int ui_menu(surface *s, ui_input *in, const ui_theme *t,
         int iy = y + UI_GAP + i * UI_ROW;
         int over = ui_hit(in, x, iy, w, UI_ROW);
         if (over) rect(s, x + 2, iy, w - 4, UI_ROW, mix(t->panel, t->accent, 120));
-        text(s, x + UI_PAD, iy + (UI_ROW - FONT_H) / 2, items[i], t->fg);
+        face_draw(s, x + UI_PAD, iy + (UI_ROW - face_h(UI_FACE_BODY)) / 2,
+                  items[i], t->fg, UI_FACE_BODY);
         if (over && in->released) { in->released = 0; chosen = i; }
     }
     return chosen;
