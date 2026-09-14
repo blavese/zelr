@@ -35,6 +35,7 @@
 #include "theme.h"
 #include "smp.h"
 #include "builtin.h"
+#include "blackbox.h"
 
 static int passed, failed;
 
@@ -917,6 +918,126 @@ static void test_layout(void) {
     vfs_delete("/home/kept");
 }
 
+/* The black box has to hold up in exactly the conditions where nothing else
+   is working, so the parts worth checking are the ones that only matter
+   then: that a long boot does not push the fault off the end, that a torn
+   write is not read back as a good record, and that it refuses a disk it
+   did not make. That last one is the dangerous direction: a false positive
+   there overwrites somebody's partition table. */
+static char bb_scratch[BB_BYTES];
+
+static bool bb_contains(const char *needle) {
+    const char *hay = bb_text();
+    u32 n = bb_len(), m = strlen(needle);
+    if (m > n) return false;
+    for (u32 i = 0; i + m <= n; i++) {
+        u32 j = 0;
+        while (j < m && hay[i + j] == needle[j]) j++;
+        if (j == m) return true;
+    }
+    return false;
+}
+
+static void test_blackbox(void) {
+    bb_log("selftest marker alpha");
+    ok("a line reaches the log", bb_contains("selftest marker alpha"));
+
+    u32 before = bb_len();
+    bb_mark("selftest phase");
+    ok("a mark is written as a phase", bb_contains("== selftest phase"));
+    ok("the log grew", bb_len() > before);
+
+    /* A fault, without taking one: the register dump is the part of this
+       that a real fault cannot be relied on to reach. */
+    registers_t r;
+    memset(&r, 0, sizeof(r));
+    r.int_no = 14; r.err_code = 2; r.rip = 0xDEAD1000; r.rsp = 0x7FF0;
+    bb_fault(&r, "a test fault");
+    ok("a fault names itself", bb_contains("!! a test fault"));
+    ok("a fault records the vector", bb_contains("vec=14"));
+    ok("a fault records rip", bb_contains("0xdead1000"));
+
+    /* Overflow. What must survive is the end, because the end is the fault. */
+    for (int i = 0; i < 400; i++)
+        bb_log("filler %d ........................................", i);
+    bb_log("selftest marker omega");
+    ok("the log stays inside its buffer", bb_len() < BB_BYTES);
+    ok("the newest line survives overflow", bb_contains("selftest marker omega"));
+    ok("the oldest line was dropped", !bb_contains("selftest marker alpha"));
+
+    if (!blk_present()) { kprintf("  SKIP  no disk, cannot test the record\n"); return; }
+
+    u8 boot[SECTOR_SIZE];
+    if (!blk_read(0, 1, boot)) { ok("read the boot sector", false); return; }
+
+    bool ours = boot[510] == 0x55 && boot[511] == 0xAA &&
+                memcmp(boot + 3, "NYX     ", 8) == 0 &&
+                *(u16 *)(boot + 14) >= BB_LBA + BB_SECTORS;
+    if (!ours) { kprintf("  SKIP  not a nyx volume with room reserved\n"); return; }
+
+    /* Write, then recover, because bb_prev answers out of what the last
+       recover found rather than off the disk. That indirection is the whole
+       point: this boot's own flush lands on the sectors the last boot left,
+       so the record has to be lifted into memory before that happens. */
+    ok("the record is written", bb_flush());
+    u32 want = bb_len();
+    bb_recover();
+    u32 n = bb_prev(bb_scratch, sizeof(bb_scratch));
+    ok("the record reads back", n > 0);
+    ok("what came back is what went out",
+       n == want && memcmp(bb_scratch, bb_text(), n) == 0);
+
+    /* A half written record must not be trusted. Flip one byte of the text
+       and leave the checksum alone, which is what a power cut looks like. */
+    u8 sec[SECTOR_SIZE];
+    ok("read the record", blk_read(BB_LBA, 1, sec));
+    u8 keep = sec[64];
+    sec[64] = (u8)(keep ^ 0xFF);
+    blk_write(BB_LBA, 1, sec);
+    bb_recover();
+    ok("a torn record is refused", bb_prev(bb_scratch, sizeof(bb_scratch)) == 0);
+    sec[64] = keep;
+    blk_write(BB_LBA, 1, sec);
+    bb_recover();
+    ok("the good record is readable again",
+       bb_prev(bb_scratch, sizeof(bb_scratch)) > 0);
+
+    /* Somebody else's disk. The name is the cheapest of the four checks to
+       break, and breaking any one of them has to be enough. */
+    u8 saved_name[8];
+    memcpy(saved_name, boot + 3, 8);
+    memcpy(boot + 3, "MSWIN4.1", 8);
+    blk_write(0, 1, boot);
+    ok("a volume we did not format is refused", bb_flush() == false);
+    bb_recover();
+    ok("and it is not read from either",
+       bb_prev(bb_scratch, sizeof(bb_scratch)) == 0);
+
+    memcpy(boot + 3, saved_name, 8);
+    blk_write(0, 1, boot);
+    blk_flush();
+    ok("our own volume is accepted again", bb_flush());
+
+    /* Something else in the reserved sectors, which is what a second stage
+       bootloader would look like. The volume still passes every check about
+       who formatted it, so this is the only thing standing between the log
+       and whatever else came to live there. */
+    u8 keep_first[SECTOR_SIZE], intruder[SECTOR_SIZE];
+    ok("read the reserved sector", blk_read(BB_LBA, 1, keep_first));
+    memset(intruder, 0, sizeof(intruder));
+    memcpy(intruder, "NOT A BLACK BOX", 15);
+    blk_write(BB_LBA, 1, intruder);
+    ok("data we do not recognise is not written over", bb_flush() == false);
+
+    /* And a blank region is fine, which is what a fresh format leaves. */
+    memset(intruder, 0, sizeof(intruder));
+    blk_write(BB_LBA, 1, intruder);
+    ok("a blank region is written to", bb_flush());
+
+    blk_write(BB_LBA, 1, keep_first);
+    blk_flush();
+}
+
 int selftest_run(void) {
     passed = failed = 0;
     kprintf("\n=== nyx self test ===\n");
@@ -948,6 +1069,7 @@ int selftest_run(void) {
     kprintf("[waiting]\n");    test_waiting();
     kprintf("[wait timeouts]\n"); test_wait_timeout();
     kprintf("[processors]\n"); test_smp();
+    kprintf("[black box]\n"); test_blackbox();
     kprintf("\n%d passed, %d failed\n", passed, failed);
     kprintf(failed ? "SELFTEST_FAIL\n" : "SELFTEST_PASS\n");
     return failed;

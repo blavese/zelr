@@ -6,7 +6,8 @@
 # on main without it passing. An agent that reports success is not evidence;
 # this is.
 #
-#   gate.sh fast     build, 213 kernel checks, the serial shell test   ~5 min
+#   gate.sh fast     build, 231 kernel checks, the serial shell test, and
+#                    the boot log across a reboot                     ~8 min
 #   gate.sh full     the above, plus all four boot paths and the three
 #                    harnesses that drive the desktop and the keyboard  ~35 min
 #
@@ -82,6 +83,15 @@ run_step "the kernel's own checks" selftest
 shelltest() { timeout 400 bash tools/shell_test.sh 2>&1 | grep -q "all checks passed"; }
 run_step "the shell answers over serial" shelltest
 
+# --- the black box, which needs two boots to check at all -----------------
+#
+# In fast rather than full because everything about running on real hardware
+# depends on it: if this is broken, the first failure on a laptop is a black
+# screen with nothing behind it, and every other check here is being run
+# against a machine that can no longer explain itself.
+bbtest() { timeout 400 bash tools/blackbox_test.sh 2>&1 | grep -q "all checks passed"; }
+run_step "the boot log survives a reboot" bbtest
+
 if [ "$MODE" = "full" ]; then
   # --- every way the machine can be started -------------------------------
   #
@@ -102,7 +112,7 @@ if [ "$MODE" = "full" ]; then
 fi
 
 # --- tidy up after ourselves ----------------------------------------------
-rm -f gate.img deskcheck.img termcheck.img shotcheck.img sel.img 2>/dev/null
+rm -f gate.img deskcheck.img termcheck.img shotcheck.img sel.img blackbox.img 2>/dev/null
 rm -f build/*.ppm 2>/dev/null
 
 echo

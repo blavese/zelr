@@ -33,6 +33,7 @@
 #include "selftest.h"
 #include "string.h"
 #include "io.h"
+#include "blackbox.h"
 
 #define HEAP_BASE (8u * 1024 * 1024)
 #define HEAP_SIZE (16u * 1024 * 1024)
@@ -130,6 +131,11 @@ void kmain_multiboot(u32 magic, u32 mbi_addr) {
 
 void kmain(handoff_t *h) {
     serial_init();
+    /* First, so that everything below it is recorded. The log needs
+       nothing but the serial port and its own static buffer, and both
+       exist by now. */
+    bb_init();
+    bb_mark("serial, vga");
     vga_init();
 
     if (!h || h->magic != HANDOFF_MAGIC)
@@ -140,16 +146,24 @@ void kmain(handoff_t *h) {
 
     banner();
 
+    bb_mark("gdt");
     gdt_init();      kprintf("  gdt     flat segments, tss installed\n");
+    bb_mark("idt");
     idt_init();      kprintf("  idt     256 vectors\n");
+    bb_mark("pic");
     pic_init();      kprintf("  pic     irqs remapped to 32..47\n");
+    bb_mark("memory");
     pmm_init(h);     kprintf("  memory  %d KiB usable, via %s\n",
                              (u32)(pmm_free_frames() * 4), h->loader);
+    bb_log("memory %d KiB usable, loader %s",
+           (u32)(pmm_free_frames() * 4), h->loader);
     /* The heap lives in identity mapped memory, so the frame allocator
        has to be told about it or it will hand the same pages out twice. */
     pmm_reserve(HEAP_BASE, HEAP_SIZE);
 
+    bb_mark("paging");
     paging_init();   kprintf("  paging  enabled\n");
+    bb_mark("heap");
     heap_init(HEAP_BASE, HEAP_SIZE);
     kprintf("  heap    %d KiB\n", HEAP_SIZE / 1024);
     /* Needs paging to map the aperture and the heap for the back
@@ -158,6 +172,7 @@ void kmain(handoff_t *h) {
     /* A UEFI loader has already chosen a mode and there is no way to ask
        for another once the firmware is gone, so take what it gave. Only a
        machine with a BIOS gets to pick. */
+    bb_mark("video");
     bool have_screen = h->fb_base
         ? fb_adopt(h->fb_base, h->fb_width, h->fb_height, h->fb_pitch)
         : fb_init(1024, 768);
@@ -169,52 +184,75 @@ void kmain(handoff_t *h) {
         vga_set_color(VGA_LGREY, VGA_BLACK);
         kprintf("  video   %dx%d 32bpp, %dx%d text\n",
                 fb_width(), fb_height(), fbcon_cols(), fbcon_rows());
+        bb_log("video %dx%d 32bpp, %s", fb_width(), fb_height(),
+               h->fb_base ? "adopted from the loader" : "set through vbe");
     } else {
         kprintf("  video   no vbe, vga text mode\n");
+        bb_log("video none, vga text mode only");
     }
+    bb_mark("filesystem");
     fs_init();
     vfs_init();
+    bb_mark("disk");
     if (blk_init()) {
         kprintf("  disk    %s via %s, %d MiB\n", blk_model(), blk_driver(), blk_sectors() / 2048);
+        bb_log("disk %s via %s, %d MiB", blk_model(), blk_driver(), blk_sectors() / 2048);
+        /* Before anything writes a new record over the old one. */
+        bb_recover();
         int n = diskfs_mount();
-        if (n >= 0)      kprintf("  fs      fat16 mounted, %d entries in the root\n", n);
+        if (n >= 0)      { kprintf("  fs      fat16 mounted, %d entries in the root\n", n);
+                           bb_log("fs fat16 mounted, %d entries in the root", n); }
         else if (n == -2) {
             /* A brand new disk should just work rather than telling
                someone to run a command they have never heard of. */
-            if (diskfs_format()) kprintf("  fs      new disk prepared\n");
-            else                 kprintf("  fs      could not prepare the disk\n");
+            if (diskfs_format()) { kprintf("  fs      new disk prepared\n");
+                                   bb_log("fs new disk prepared"); }
+            else                 { kprintf("  fs      could not prepare the disk\n");
+                                   bb_log("fs could not prepare the disk"); }
         }
-        else              kprintf("  fs      disk unreadable, using memory only\n");
+        else              { kprintf("  fs      disk unreadable, using memory only\n");
+                            bb_log("fs disk unreadable, memory only"); }
     } else {
         kprintf("  disk    none, files will not persist\n");
+        bb_log("disk none: no controller this kernel can drive");
     }
     builtin_install();
     kprintf("  progs   %d built in\n", builtin_count_programs());
 
+    bb_mark("timer");
     timer_init(100); kprintf("  timer   100 Hz\n");
 
     /* Needs the timer: the startup sequence is defined in microseconds and
        there is nothing to measure them with before it. */
+    bb_mark("smp");
     smp_init();
     if (smp_cpu_count() > 1)
         kprintf("  cpu     %d processors, %d started\n",
                 smp_cpu_count(), smp_started());
     else
         kprintf("  cpu     1 processor\n");
+    bb_log("cpu %d found, %d started", smp_cpu_count(), smp_started());
+    bb_mark("network");
     if (netdev_init()) {
         net_init();
         const u8 *m = net_mac();
         kprintf("  net     %s %02x:%02x:%02x:%02x:%02x:%02x\n",
                 netdev_name(), m[0], m[1], m[2], m[3], m[4], m[5]);
+        bb_log("net %s", netdev_name());
     } else {
         kprintf("  net     no card found\n");
+        bb_log("net no card this kernel can drive");
     }
+    bb_mark("input");
     keyboard_init();
     if (fb_active() && mouse_init())
         kprintf("  mouse   ps/2, pointer at %d,%d\n", mouse_x(), mouse_y());
+    else
+        bb_log("mouse none: no ps/2 pointer answered");
     serial_enable_irq();
     kprintf("  input   ps/2 keyboard + serial (irq driven)\n");
 
+    bb_mark("syscalls, window server, scheduler");
     syscall_init();
     winsrv_init();
     sched_init();
@@ -222,5 +260,11 @@ void kmain(handoff_t *h) {
     else               task_create("init", init_task);
 
     kprintf("  sched   %d task(s)\n", task_count());
+
+    /* The last thing written before control leaves this function. A log
+       that ends here booted; one that ends at an earlier mark names the
+       thing that did not finish. */
+    bb_mark("handing over to the scheduler");
+    bb_flush();
     sched_start();
 }

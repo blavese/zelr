@@ -15,6 +15,7 @@
 #include "fat.h"
 #include "ata.h"
 #include "blockdev.h"
+#include "blackbox.h"
 #include "heap.h"
 #include "printf.h"
 #include "string.h"
@@ -252,7 +253,11 @@ bool fat_format(const char *label) {
     if (total < 8192) return false;
 
     u8 spc = 4;                       /* 2 KiB clusters */
-    u16 reserved = 1;
+    /* One for the boot sector, then room for the black box. A volume made
+       by an older build has reserved = 1 and simply gets no disk log; it
+       still mounts, because fat_mount reads this field rather than assuming
+       it. */
+    u16 reserved = 1 + BB_SECTORS;
     u8 fats = 2;
     u16 roots = 512;
     u32 root_secs = ((u32)roots * 32 + SECTOR_SIZE - 1) / SECTOR_SIZE;
@@ -296,6 +301,14 @@ bool fat_format(const char *label) {
     memcpy(sec + 54, "FAT16   ", 8);
     sec[510] = 0x55; sec[511] = 0xAA;
     if (!blk_write(0, 1, sec)) return false;
+
+    /* The reserved sectors past the boot sector, cleared. They are where the
+       black box writes, and it will not write over anything it does not
+       recognise; leaving a previous volume's log there would either be read
+       back as this volume's own history or block the log entirely. */
+    memset(sec, 0, SECTOR_SIZE);
+    for (u32 s = 1; s < reserved; s++)
+        if (!blk_write(s, 1, sec)) return false;
 
     /* both tables, cleared, with the two reserved entries at the front */
     memset(sec, 0, SECTOR_SIZE);

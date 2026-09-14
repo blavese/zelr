@@ -27,6 +27,7 @@
 #include "fb.h"
 #include "vfs.h"
 #include "wait.h"
+#include "blackbox.h"
 
 /* --- built-in programs, which are what /bin holds ----------------------- */
 
@@ -200,6 +201,36 @@ typedef struct {
     sysfs_render_t  render;
 } node_t;
 
+/* This boot's log, as the black box has it. Copied rather than rendered:
+   the text is already formatted, and reformatting it here would mean two
+   places that decide what a log line looks like. */
+static u32 render_boot(char *b, u32 cap) {
+    const char *t = bb_text();
+    u32 n = bb_len();
+    if (n > cap - 1) {
+        /* Keep the end. The last line is the one being looked for. */
+        t += n - (cap - 1);
+        n = cap - 1;
+    }
+    memcpy(b, t, n);
+    b[n] = 0;
+    return n;
+}
+
+/* The boot before this one, off the disk. This is the file that matters
+   after a machine has failed to come up: reboot it from something that
+   works, read this, and the last mark says where it died. */
+static u32 render_lastboot(char *b, u32 cap) {
+    u32 n = bb_prev(b, cap);
+    if (n) return n;
+    out_t o = { b, cap, 0 };
+    put(&o, "no record\n");
+    put(&o, "\n");
+    put(&o, "There is one only after a boot that reached the scheduler, or\n");
+    put(&o, "that panicked, on a volume this kernel formatted.\n");
+    return o.len;
+}
+
 static const node_t nodes[] = {
     { "/sys/version",  render_version  },
     { "/sys/memory",   render_memory   },
@@ -209,6 +240,8 @@ static const node_t nodes[] = {
     { "/sys/devices",  render_devices  },
     { "/sys/net",      render_net      },
     { "/sys/programs", render_programs },
+    { "/sys/boot",     render_boot     },
+    { "/sys/lastboot", render_lastboot },
 };
 #define N_NODES (sizeof(nodes) / sizeof(nodes[0]))
 

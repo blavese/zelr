@@ -4,6 +4,7 @@
 #include "io.h"
 #include "pic.h"
 #include "gdt.h"
+#include "blackbox.h"
 
 u64 scheduler_switch(u64 rsp);
 
@@ -73,6 +74,10 @@ u64 isr_dispatch(registers_t *r) {
     else if (r->int_no < 32) {
         u64 cr2 = 0;
         if (r->int_no == 14) __asm__ volatile ("mov %%cr2, %0" : "=r"(cr2));
+        /* Into the black box before anything else touches the machine: on
+           real hardware this is the only account of the fault that survives
+           it, and panic below never returns. */
+        bb_fault(r, EXC[r->int_no]);
         panic("unhandled exception %d (%s)\n"
               "  rip=%p err=%x cs=%x rflags=%x\n"
               "  rsp=%p cr2=%p",

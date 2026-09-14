@@ -112,6 +112,47 @@ not survive a reboot.
 So: it boots and draws on a modern machine. It is fully usable on one with a
 PS/2-emulating keyboard and a SATA disk, and on any virtual machine.
 
+### when it does not boot
+
+A failure on a laptop used to be a black screen and nothing else. Under QEMU
+the serial line carries the whole story out; the first boot on real hardware
+is the one run where that is not available, and it is also the run most
+likely to fail.
+
+So the kernel narrates itself as it comes up, and there are three ways to
+read it back.
+
+**On the screen.** Any panic paints the tail of the log where a camera can
+see it: the phase marks in blue, the fault and its registers in red. The last
+mark is the thing that did not finish. Photograph it.
+
+**From inside a running system.**
+
+    cat /sys/boot        what this boot did
+    cat /sys/lastboot    what the boot before it did
+
+`/sys/lastboot` is the one that matters after a machine has failed to come
+up: boot it again, read that, and the last mark names where it died. The
+record is lifted off the disk early, before this boot writes its own, so
+rebooting to ask the question does not destroy the answer.
+
+**Over serial**, if the machine has a port. Every line is mirrored as it is
+written, so nothing has to survive for it to be useful.
+
+The log names what each phase found, not just that it ran, which is usually
+the answer on its own:
+
+    [    0] == disk
+    [    0] disk none: no controller this kernel can drive
+    [    0] == network
+    [    0] net no card this kernel can drive
+
+The disk copy lives in sectors reserved at the front of the volume, and is
+written **only to a volume nyx formatted itself**. Four things about the boot
+sector have to agree before a byte is written, and the sectors themselves
+have to be blank or already hold a log. A disk that fails any of those gets
+nothing and keeps working; the screen and serial routes are unaffected.
+
 ## running it from source
 
 You need QEMU and Zig. Zig is used only as a cross compiler, so there is no
@@ -333,30 +374,32 @@ is still the kernel's own, on the console; the one in a window is a program.
 ## testing
 
 The kernel tests itself. `./run.sh -T` boots with selftest on the command line,
-runs 174 checks across every subsystem, then writes to QEMU's debug-exit port
+runs 234 checks across every subsystem, then writes to QEMU's debug-exit port
 so the host gets a real exit status.
 
-    [string]           8 checks      [elf]                 7 checks
-    [physical memory]  4 checks      [userspace]           4 checks
-    [paging]           4 checks      [video]               7 checks
-    [user access]      5 checks      [mouse]               1 check
-    [heap]             5 checks      [graphics]           13 checks
-    [filesystem]       7 checks      [windows]             3 checks
-    [paths]           11 checks      [window server]      16 checks
-    [directories]     12 checks      [built-in programs]   6 checks
-    [open files]      12 checks      [theme]              16 checks
-    [timer]            2 checks      [processors]          2 checks
-    [interrupts]       2 checks
-    [disk]             6 checks
-    [fat]             14 checks
-    [network]          7 checks
+    [string]            8 checks      [video]               7 checks
+    [physical memory]   4 checks      [mouse]               1 check
+    [paging]            4 checks      [graphics]           13 checks
+    [user access]       5 checks      [windows]             3 checks
+    [heap]              5 checks      [window server]      16 checks
+    [filesystem]        7 checks      [built-in programs]   6 checks
+    [paths]            11 checks      [theme]              16 checks
+    [directories]      12 checks      [live tree]          19 checks
+    [open files]       12 checks      [layout]              9 checks
+    [timer]             2 checks      [waiting]             8 checks
+    [interrupts]        2 checks      [wait timeouts]       3 checks
+    [disk]              6 checks      [processors]          2 checks
+    [fat]              14 checks      [black box]          21 checks
+    [network]           7 checks
+    [elf]               7 checks
+    [userspace]         4 checks
 
-    174 passed, 0 failed
+    234 passed, 0 failed
     SELFTEST_PASS
 
 The processor section is two checks on a machine with one CPU and eleven on
 a machine with several, where it hands work to each of them and requires the
-count they share to come back exact. `qemu-system-x86_64 -smp 4` reaches 183.
+count they share to come back exact. `qemu-system-x86_64 -smp 4` reaches 243.
 
 The tests are written to fail for the right reasons. The disk test writes a
 pattern to a spare sector, reads it back, and restores the original. The FAT

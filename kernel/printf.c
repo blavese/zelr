@@ -10,6 +10,7 @@
 #include "fbcon.h"
 #include "serial.h"
 #include "string.h"
+#include "blackbox.h"
 #include "io.h"
 
 void kputc(char c) {
@@ -140,10 +141,24 @@ void panic(const char *fmt, ...) {
     cli();
     vga_set_color(VGA_WHITE, VGA_RED);
     kprintf("\n*** KERNEL PANIC ***\n");
+
+    /* The same words go into the black box, so the reason sits in the log
+       next to the phase it happened in, rather than only on a screen that
+       may not exist. */
+    char why[256];
     va_list ap;
     va_start(ap, fmt);
-    kvprintf(fmt, ap);
+    kvformat(why, sizeof(why), fmt, ap);
     va_end(ap);
-    kprintf("\nSystem halted.\n");
+    kputs(why);
+    bb_log("!! panic: %s", why);
+
+    /* Disk before screen. Painting needs the framebuffer to be in a sane
+       state, and if it is not then this faults again; by then the write has
+       already happened and the log survives either way. */
+    bool written = bb_flush();
+    bb_screen();
+    if (!written) kputs("\n(black box not written: not a nyx volume)\n");
+
     for (;;) hlt();
 }
