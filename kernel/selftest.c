@@ -42,6 +42,7 @@
 #include "ioapic.h"
 #include "lapic.h"
 #include "pic.h"
+#include "clipboard.h"
 
 static int passed, failed;
 
@@ -1237,6 +1238,53 @@ static void test_irqs(void) {
     ok("an input past the end is refused", ioapic_route_irq(200, 100) == false);
 }
 
+/* The clipboard. Small enough that the only things worth checking are the
+   edges: that it round trips, that it refuses more than it can hold rather
+   than truncating, and that asking with no room answers the length. */
+static void test_clipboard(void) {
+    clip_init();
+    ok("a fresh clipboard is empty", clip_len() == 0);
+
+    const char *msg = "copied between programs";
+    ok("text goes in", clip_set(msg, strlen(msg)));
+    ok("the length is what went in", clip_len() == strlen(msg));
+
+    char back[64];
+    u32 n = clip_get(back, sizeof(back));
+    ok("it comes back the same length", n == strlen(msg));
+    ok("and the same bytes", strcmp(back, msg) == 0);
+
+    /* A caller sizing a buffer asks with no room at all. */
+    ok("asking with no buffer answers the length", clip_len() == strlen(msg));
+
+    /* Short buffers truncate and still terminate, because the alternative
+       is a caller reading past the end of its own array. */
+    char small[8];
+    n = clip_get(small, sizeof(small));
+    ok("a short buffer gets what fits", n == sizeof(small) - 1);
+    ok("and is still terminated", small[sizeof(small) - 1] == 0);
+
+    /* More than the buffer holds is refused outright. A paste that silently
+       loses the end of a file is worse than one that does not happen. */
+    static char huge[CLIP_MAX + 16];
+    memset(huge, 'x', sizeof(huge));
+    ok("more than it can hold is refused", clip_set(huge, sizeof(huge)) == false);
+    ok("and what was there is untouched", clip_len() == strlen(msg));
+
+    /* Exactly the maximum is accepted, so the refusal is off by nothing. */
+    ok("the largest it can hold is accepted", clip_set(huge, CLIP_MAX - 1));
+    ok("at its full length", clip_len() == CLIP_MAX - 1);
+
+    ok("setting it again replaces rather than appends",
+       clip_set(msg, strlen(msg)) && clip_len() == strlen(msg));
+
+    u32 g = clip_generation();
+    clip_set("again", 5);
+    ok("every set is visible to a watcher", clip_generation() == g + 1);
+
+    clip_init();
+}
+
 int selftest_run(void) {
     passed = failed = 0;
     kprintf("\n=== nyx self test ===\n");
@@ -1271,6 +1319,7 @@ int selftest_run(void) {
     kprintf("[black box]\n"); test_blackbox();
     kprintf("[acpi and pcie]\n"); test_pcie();
     kprintf("[interrupt routing]\n"); test_irqs();
+    kprintf("[clipboard]\n"); test_clipboard();
     kprintf("\n%d passed, %d failed\n", passed, failed);
     kprintf(failed ? "SELFTEST_FAIL\n" : "SELFTEST_PASS\n");
     return failed;

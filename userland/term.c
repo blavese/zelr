@@ -96,6 +96,29 @@ static surface scr;
 static int win;
 static int rows, cols;
 
+/* --- selecting with the mouse ---------------------------------------------
+ *
+ * A terminal you cannot copy out of is a terminal you retype out of. The
+ * selection is kept as two positions in the scrollback, each a line index
+ * and a column, rather than as pixels: the window can be resized and the
+ * view scrolled underneath a selection, and both of those move the pixels
+ * without moving the text. */
+static int sel_active;            /* there is a selection worth painting */
+static int sel_dragging;
+static int sel_l0, sel_c0;        /* where the drag started */
+static int sel_l1, sel_c1;        /* where it is now */
+
+/* Ordered, so the painter and the copier do not each work it out. */
+static void sel_range(int *l0, int *c0, int *l1, int *c1) {
+    if (sel_l0 < sel_l1 || (sel_l0 == sel_l1 && sel_c0 <= sel_c1)) {
+        *l0 = sel_l0; *c0 = sel_c0; *l1 = sel_l1; *c1 = sel_c1;
+    } else {
+        *l0 = sel_l1; *c0 = sel_c1; *l1 = sel_l0; *c1 = sel_c0;
+    }
+}
+
+static void sel_clear(void) { sel_active = 0; sel_dragging = 0; }
+
 /* The line being typed, and where the cursor sits inside it. */
 static char input[COLS + 1];
 static int  in_len, in_pos;
@@ -182,6 +205,95 @@ static void w_rnum(u32 v, int width) {
 
 /* --- rendering ---------------------------------------------------------- */
 
+/* Which line and column a point in the window lands on. The scrollback is
+   drawn from `start`, so the row on screen is an offset from there rather
+   than an index in its own right. */
+static void point_to_cell(int x, int y, int *line, int *col) {
+    int text_rows = rows - 1;
+    int end = n_lines - view;
+    if (end < 0) end = 0;
+    int start = end - text_rows;
+    if (start < 0) start = 0;
+
+    int row = (y - PAD) / FONT_H;
+    if (row < 0) row = 0;
+    if (row >= text_rows) row = text_rows - 1;
+
+    int c = (x - PAD) / FONT_W;
+    if (c < 0) c = 0;
+    if (c > cols) c = cols;
+
+    int l = start + row;
+    if (l < 0) l = 0;
+    if (l > n_lines) l = n_lines;
+
+    *line = l;
+    *col = c;
+}
+
+/* Defined further down, next to the rest of the input line's handling. */
+static void insert_char(char c);
+static void dim(const char *s);
+
+/* The selected text, flattened. Lines join with a newline, and trailing
+   spaces go: a terminal pads its lines to the width of the window and
+   nobody wants that padding in what they paste. */
+static int selection_text(char *out, int cap) {
+    if (!sel_active) return 0;
+    int l0, c0, l1, c1;
+    sel_range(&l0, &c0, &l1, &c1);
+
+    int n = 0;
+    for (int l = l0; l <= l1 && l < n_lines; l++) {
+        const char *src = line_at(l);
+        int len = strlen(src);
+        int from = (l == l0) ? c0 : 0;
+        int to   = (l == l1) ? c1 : len;
+        if (to > len) to = len;
+        if (from > len) from = len;
+
+        int stop = to;
+        while (stop > from && src[stop - 1] == ' ') stop--;
+
+        for (int i = from; i < stop && n < cap - 1; i++) out[n++] = src[i];
+        if (l != l1 && n < cap - 1) out[n++] = '\n';
+    }
+    out[n] = 0;
+    return n;
+}
+
+static void copy_selection(void) {
+    static char out[COLS * 40];
+    int n = selection_text(out, sizeof(out));
+    if (n <= 0) {
+        /* Nothing selected means the line being typed, which is the other
+           thing somebody reaches for copy to get. */
+        if (in_len <= 0) { dim("nothing to copy"); return; }
+        clip_set(input, in_len);
+        dim("copied the input line");
+        return;
+    }
+    clip_set(out, n);
+    dim("copied");
+}
+
+static void paste_clipboard(void) {
+    int n = clip_len();
+    if (n <= 0) { dim("clipboard is empty"); return; }
+
+    static char incoming[COLS + 1];
+    n = clip_get(incoming, sizeof(incoming));
+
+    /* A newline in the middle would submit half of it, so everything up to
+       the first one is taken and the rest is dropped. A terminal input line
+       holds one line by definition. */
+    for (int i = 0; i < n; i++) {
+        if (incoming[i] == '\n' || incoming[i] == '\r') break;
+        insert_char(incoming[i]);
+    }
+    dim("pasted");
+}
+
 static void draw_all(void) {
     fill(&scr, pal.bg);
 
@@ -194,6 +306,20 @@ static void draw_all(void) {
 
     int y = PAD;
     for (int i = start; i < end; i++) {
+        if (sel_active) {
+            int l0, c0, l1, c1;
+            sel_range(&l0, &c0, &l1, &c1);
+            if (i >= l0 && i <= l1) {
+                int len = strlen(line_at(i));
+                int from = (i == l0) ? c0 : 0;
+                int to   = (i == l1) ? c1 : len;
+                if (to > len) to = len;
+                if (from > to) from = to;
+                if (to > from)
+                    rect(&scr, PAD + from * FONT_W, y,
+                         (to - from) * FONT_W, FONT_H, mix(pal.bg, pal.accent, 120));
+            }
+        }
         text(&scr, PAD, y, line_at(i), colour_of(*slot_at(i)));
         y += FONT_H;
     }
@@ -1390,6 +1516,28 @@ static void history_step(int delta) {
 }
 
 static void on_key(u32 key) {
+    /* Control chords first: they are not text and must not be typed. */
+    if (KEY_CTRL(key)) {
+        int c = key_ctrl_letter(key);
+        if (c == 'c') { copy_selection(); return; }
+        if (c == 'v') { paste_clipboard(); return; }
+        if (c == 'a') {                        /* select everything on screen */
+            if (n_lines > 0) {
+                sel_active = 1;
+                sel_l0 = 0; sel_c0 = 0;
+                sel_l1 = n_lines - 1;
+                sel_c1 = strlen(line_at(n_lines - 1));
+            }
+            return;
+        }
+        if (c == 'l') { sel_clear(); return; }
+        return;
+    }
+    key = KEY_CODE(key);
+
+    /* Typing replaces a selection's reason to exist. */
+    if (sel_active && key != KEY_PAGE_UP && key != KEY_PAGE_DOWN) sel_clear();
+
     /* Anything typed leaves the scrollback and comes back to the prompt,
        which is less surprising than typing into a view you cannot see. */
     if (view && key != KEY_PAGE_UP && key != KEY_PAGE_DOWN) view = 0;
@@ -1499,8 +1647,28 @@ int main(void) {
                 changed = 1;
             }
             if (ev.type == WIN_EV_KEY) { on_key(ev.key); changed = 1; }
-            if (ev.type == WIN_EV_MOUSE && (ev.buttons & WIN_BTN_DOWN)) {
-                if (view) { view = 0; changed = 1; }
+            if (ev.type == WIN_EV_MOUSE) {
+                int line, col;
+                point_to_cell(ev.x, ev.y, &line, &col);
+
+                if (ev.buttons & WIN_BTN_DOWN) {
+                    /* A press starts a selection rather than clearing one,
+                       so a click and a drag are the same gesture and only
+                       the release decides which it was. */
+                    sel_dragging = 1;
+                    sel_active = 0;
+                    sel_l0 = sel_l1 = line;
+                    sel_c0 = sel_c1 = col;
+                    changed = 1;
+                } else if (sel_dragging && (ev.buttons & WIN_BTN_LEFT)) {
+                    sel_l1 = line;
+                    sel_c1 = col;
+                    sel_active = (sel_l0 != sel_l1 || sel_c0 != sel_c1);
+                    changed = 1;
+                } else if (sel_dragging) {
+                    sel_dragging = 0;
+                    changed = 1;
+                }
             }
         }
 

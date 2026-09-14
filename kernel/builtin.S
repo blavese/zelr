@@ -65,3 +65,17 @@ builtin_settings_end:
 builtin_paint_start:
 .incbin "build/user/paint.elf"
 builtin_paint_end:
+
+.balign 4
+.global builtin_files_start
+.global builtin_files_end
+builtin_files_start:
+.incbin "build/user/files.elf"
+builtin_files_end:
+
+.balign 4
+.global builtin_notes_start
+.global builtin_notes_end
+builtin_notes_start:
+.incbin "build/user/notes.elf"
+builtin_notes_end:

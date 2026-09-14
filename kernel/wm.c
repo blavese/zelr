@@ -83,6 +83,8 @@ static const struct {
     const char *program;
 } MENU[] = {
     { "Terminal",     "/bin/term" },
+    { "Files",        "/bin/files" },
+    { "Notes",        "/bin/notes" },
     { "Paint",        "/bin/paint" },
     { "Settings",     "/bin/settings" },
     { "System info",  0 },
@@ -1062,11 +1064,16 @@ void wm_run(void) {
             for (int i = nwin - 1; i >= 0 && !top; i--)
                 if (!stack[i]->minimized) top = stack[i];
 
-            /* Programs get the key without the modifier bits: a chord that
-               reached here was not a shortcut, so what is left is what was
-               typed. */
+            /* Programs get the key, plus the control bit and nothing else.
+               Shift is already folded into the character, so passing it on
+               would mean every capital letter arrived as a chord and no
+               program's comparison against a letter would match. Alt is the
+               desktop's own and a chord using it never reaches here. What is
+               left is control, which is what a program needs to tell copy
+               from the letter c. */
+            u32 out = (u32)KEY_CODE(c) | (u32)(c & KEY_MOD_CTRL);
             if (top && top->owned_by_user) {
-                wm_event_t ev = { WM_EV_KEY, 0, 0, 0, (u32)KEY_CODE(c) };
+                wm_event_t ev = { WM_EV_KEY, 0, 0, 0, out };
                 wm_push_event(top, &ev);
             } else if (top && top->on_key) {
                 top->on_key(top, (char)KEY_CODE(c));

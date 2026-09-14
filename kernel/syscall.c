@@ -14,6 +14,7 @@
 #include "string.h"
 #include "timer.h"
 #include "winsrv.h"
+#include "clipboard.h"
 #include "vfs.h"
 #include "wait.h"
 #include "elf.h"
@@ -137,6 +138,22 @@ static i64 sys_win_resize(registers_t *r) {
     task_t *t = task_current();
     return winsrv_resize(t ? t->pid : 0, (int)r->rbx,
                          (int)r->rcx, (int)r->rdx) ? 0 : -1;
+}
+
+/* The length is passed rather than inferred, so a program can copy text that
+   is not terminated, which is what a selection out of a terminal's grid is. */
+static i64 sys_clip_set(registers_t *r) {
+    u32 len = (u32)r->rcx;
+    if (len > CLIP_MAX) return -1;
+    if (!user_range_ok(r->rbx, len ? len : 1)) return -1;
+    return clip_set((const char *)r->rbx, len) ? (i64)len : -1;
+}
+
+static i64 sys_clip_get(registers_t *r) {
+    u32 cap = (u32)r->rcx;
+    if (cap == 0) return (i64)clip_len();      /* asking how much there is */
+    if (!user_range_ok(r->rbx, cap)) return -1;
+    return (i64)clip_get((char *)r->rbx, cap);
 }
 
 static i64 sys_tasks(registers_t *r) {
@@ -520,6 +537,8 @@ static const syscall_fn TABLE[] = {
     [SYS_TASKS]       = sys_tasks,
     [SYS_WIN_RESIZABLE] = sys_win_resizable,
     [SYS_WIN_RESIZE]    = sys_win_resize,
+    [SYS_CLIP_SET]  = sys_clip_set,
+    [SYS_CLIP_GET]  = sys_clip_get,
 };
 
 #define N_SYSCALLS (sizeof(TABLE) / sizeof(TABLE[0]))

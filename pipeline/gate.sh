@@ -191,6 +191,12 @@ if [ "$MODE" = "full" ]; then
   nvmetest() { timeout 600 bash tools/nvme_test.sh 2>&1 | grep -q "all checks passed"; }
   par_start "nvme is a disk, partitioned and not" nvmetest
 
+  # Copy and paste, which needs a real key press on real hardware to check
+  # at all: the control bit has to survive the keyboard driver, the window
+  # manager and a system call, and each of those has dropped it.
+  cliptest() { timeout 400 python tools/clipcheck.py 2>&1 | grep -q "all checks passed"; }
+  par_start "copy and paste moves text out of a program" cliptest
+
   # And the kernel's own checks once more, on the third driver. The block
   # layer splits a request differently for each one, and that splitting is
   # what was silently broken on AHCI for as long as it existed.
@@ -233,7 +239,7 @@ fi
 
 # --- tidy up after ourselves ----------------------------------------------
 rm -f gate.img gateq.img gatenv.img deskcheck.img termcheck.img shotcheck.img sel.img blackbox.img 2>/dev/null
-rm -f gpttest.*.img fat32test.*.img nvmetest.*.img 2>/dev/null
+rm -f gpttest.*.img fat32test.*.img nvmetest.*.img clipcheck.*.img 2>/dev/null
 rm -f fat32probe.*.txt fat32high.*.txt 2>/dev/null
 rm -f build/*.ppm 2>/dev/null
 

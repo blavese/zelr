@@ -54,6 +54,10 @@
 #define SYS_WIN_RESIZABLE 36
 #define SYS_WIN_RESIZE    37
 
+/* Copy and paste. Text only; see include/clipboard.h for why. */
+#define SYS_CLIP_SET      38
+#define SYS_CLIP_GET      39
+
 /* What SYS_TASKS reports about one task. */
 typedef struct {
     u32  pid;

@@ -60,6 +60,8 @@ typedef long long          nyx_word;
 #define SYS_TASKS       35
 #define SYS_WIN_RESIZABLE 36
 #define SYS_WIN_RESIZE    37
+#define SYS_CLIP_SET      38
+#define SYS_CLIP_GET      39
 
 /* The one door into the kernel. The registers are the same ones a 32-bit nyx
    used, only twice as wide, which is why every argument is a word rather than
@@ -319,6 +321,24 @@ static inline int run_program(const char *path) {
     return wait_for(pid);
 }
 
+/* --- the clipboard --------------------------------------------------------
+
+   One buffer shared by every program, text only. The length is given rather
+   than inferred so a selection out of a grid, which is not terminated, can be
+   copied as it stands. */
+
+static inline int clip_set(const char *text, int len) {
+    return syscall(SYS_CLIP_SET, (nyx_word)text, len, 0);
+}
+
+/* With cap 0 this answers how many bytes are waiting, so a caller can size a
+   buffer before asking for the contents. */
+static inline int clip_get(char *out, int cap) {
+    return syscall(SYS_CLIP_GET, (nyx_word)out, cap, 0);
+}
+
+static inline int clip_len(void) { return syscall(SYS_CLIP_GET, 0, 0, 0); }
+
 /* --- windows -------------------------------------------------------------
 
    A window is a handle and a block of pixels the kernel maps into this
@@ -360,7 +380,28 @@ typedef struct {
 #define KEY_INSERT    0x109
 #define KEY_F1        0x110      /* F1..F12 run consecutively */
 
-#define KEY_IS_SPECIAL(k) ((k) >= 0x100)
+/* The control key arrives as a bit alongside the character, so ctrl+c and a
+   plain c are one field apart. Shift is not here: it is already folded into
+   the character, and alt belongs to the desktop. */
+#define KEY_MOD_CTRL  0x20000
+#define KEY_CODE(k)   ((k) & 0xFFFF)
+#define KEY_CTRL(k)   (((k) & KEY_MOD_CTRL) != 0)
+
+#define KEY_IS_SPECIAL(k) (KEY_CODE(k) >= 0x100)
+
+/* Which letter a control chord was.
+ *
+ * The keyboard driver folds ctrl+letter into the control character it has
+ * meant since teletypes: ctrl+a is 1, ctrl+c is 3, ctrl+v is 22. The
+ * modifier bit rides alongside, so the chord is recognisable, but comparing
+ * the code against 'c' finds nothing. This turns it back into the letter. */
+static inline int key_ctrl_letter(u32 k) {
+    u32 c = KEY_CODE(k);
+    if (c >= 1 && c <= 26) return 'a' + (int)c - 1;
+    if (c >= 'a' && c <= 'z') return (int)c;
+    if (c >= 'A' && c <= 'Z') return (int)c - 'A' + 'a';
+    return 0;
+}
 
 static inline int win_create(const char *title, int w, int h) {
     return syscall(SYS_WIN_CREATE, (nyx_word)title, w, h);

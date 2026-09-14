@@ -28,6 +28,7 @@
 #include "syscall.h"
 #include "shell.h"
 #include "winsrv.h"
+#include "clipboard.h"
 #include "smp.h"
 #include "acpi.h"
 #include "vfs.h"
@@ -303,6 +304,7 @@ void kmain(handoff_t *h) {
 
     bb_mark("syscalls, window server, scheduler");
     syscall_init();
+    clip_init();
     winsrv_init();
     sched_init();
     if (want_selftest) task_create("selftest", selftest_task);

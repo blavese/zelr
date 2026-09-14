@@ -28,6 +28,7 @@
 #include "vfs.h"
 #include "wait.h"
 #include "blackbox.h"
+#include "clipboard.h"
 
 /* --- built-in programs, which are what /bin holds ----------------------- */
 
@@ -231,6 +232,20 @@ static u32 render_lastboot(char *b, u32 cap) {
     return o.len;
 }
 
+/* What is on the clipboard. Reading it from a shell is how you find out
+   whether a copy in one window actually reached the thing a paste in
+   another would read, which is not a question the programs can answer
+   about each other. */
+static u32 render_clipboard(char *b, u32 cap) {
+    u32 n = clip_get(b, cap);
+    if (n == 0) {
+        out_t o = { b, cap, 0 };
+        put(&o, "(empty)\n");
+        return o.len;
+    }
+    return n;
+}
+
 static const node_t nodes[] = {
     { "/sys/version",  render_version  },
     { "/sys/memory",   render_memory   },
@@ -242,6 +257,7 @@ static const node_t nodes[] = {
     { "/sys/programs", render_programs },
     { "/sys/boot",     render_boot     },
     { "/sys/lastboot", render_lastboot },
+    { "/sys/clipboard", render_clipboard },
 };
 #define N_NODES (sizeof(nodes) / sizeof(nodes[0]))
 
