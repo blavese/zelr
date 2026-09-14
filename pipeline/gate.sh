@@ -79,12 +79,39 @@ par_wait() {                       # collect everything par_start launched
     local f="${par_files[$i]}"
     local rc
     rc="$(grep -m1 '^rc=' "$f" | cut -d= -f2)"
-    grep -v '^rc=' "$f" | tail -3 | sed 's/^/        /'
+    # Three lines is the right amount for a step that passed and nowhere
+    # near enough for one that did not.
+    if [ "${rc:-1}" -eq 0 ]; then
+      grep -v '^rc=' "$f" | tail -3 | sed 's/^/        /'
+    else
+      grep -v '^rc=' "$f" | tail -12 | sed 's/^/        /'
+    fi
     report "${par_names[$i]}" "${rc:-1}"
   done
   rm -rf "$PARALLEL_DIR"
   PARALLEL_DIR=""
   par_names=(); par_files=(); par_pids=()
+}
+
+# --- deciding a step, without throwing away the evidence -------------------
+#
+# Every harness here prints a line when it is happy and a list of what broke
+# when it is not. These steps used to be written as a pipe straight into
+# grep -q, which decided correctly and discarded the rest: a failing step
+# reported FAIL and one blank line, and the only way to find out what had
+# actually happened was to run the harness again by hand. That is a slow way
+# to learn something the run already knew.
+#
+# So the output is held. On success nothing is printed, exactly as before.
+# On failure the end of it is, with the PASS lines dropped so what is left
+# is the failures and the count.
+keep() {
+  local want="$1"; shift
+  local out
+  out="$("$@" 2>&1)"
+  if printf '%s' "$out" | grep -q "$want"; then return 0; fi
+  printf '%s\n' "$out" | grep -vE '^\s*PASS' | tail -8
+  return 1
 }
 
 echo "=== gate ($MODE) ==="
@@ -103,6 +130,14 @@ if printf '%s' "$build_out" | grep -qE '\berror\b'; then
   exit 1
 fi
 report "it builds" 0
+
+# Every harness below builds for itself, which is right when one is run
+# on its own and wrong here. These run several at a time, and four
+# builds writing one build directory means one process opens a file
+# another is still writing: on Windows that is a permission error, and
+# it arrives as whichever harness lost the race reporting that the
+# feature it tests is broken. The tree has just been built, so say so.
+export NYX_PREBUILT=1
 
 # Warnings are not failures, but a build that started producing them is
 # something a person should see rather than have buried.
@@ -154,7 +189,7 @@ selftest_q35() {
 par_start "the same checks on q35, with pcie and ahci" selftest_q35
 
 # --- the shell, over the serial line --------------------------------------
-shelltest() { timeout 400 bash tools/shell_test.sh 2>&1 | grep -q "all checks passed"; }
+shelltest() { keep "all checks passed" timeout 400 bash tools/shell_test.sh; }
 par_start "the shell answers over serial" shelltest
 
 # --- the black box, which needs two boots to check at all -----------------
@@ -163,7 +198,7 @@ par_start "the shell answers over serial" shelltest
 # depends on it: if this is broken, the first failure on a laptop is a black
 # screen with nothing behind it, and every other check here is being run
 # against a machine that can no longer explain itself.
-bbtest() { timeout 400 bash tools/blackbox_test.sh 2>&1 | grep -q "all checks passed"; }
+bbtest() { keep "all checks passed" timeout 400 bash tools/blackbox_test.sh; }
 par_start "the boot log survives a reboot" bbtest
 
 par_wait
@@ -182,19 +217,19 @@ if [ "$MODE" = "full" ]; then
   # every other test in this project uses one. None of what these cover is
   # reachable that way: a partition table, the variant of FAT that every EFI
   # System Partition uses, or a controller that is not AHCI or ATA.
-  gpttest() { timeout 600 bash tools/gpt_test.sh 2>&1 | grep -q "all checks passed"; }
+  gpttest() { keep "all checks passed" timeout 600 bash tools/gpt_test.sh; }
   par_start "gpt is read, and refused when it does not add up" gpttest
 
-  fat32test() { timeout 600 bash tools/fat32_test.sh 2>&1 | grep -q "all checks passed"; }
+  fat32test() { keep "all checks passed" timeout 600 bash tools/fat32_test.sh; }
   par_start "fat32 is read and written, and survives a reboot" fat32test
 
-  nvmetest() { timeout 600 bash tools/nvme_test.sh 2>&1 | grep -q "all checks passed"; }
+  nvmetest() { keep "all checks passed" timeout 600 bash tools/nvme_test.sh; }
   par_start "nvme is a disk, partitioned and not" nvmetest
 
   # Copy and paste, which needs a real key press on real hardware to check
   # at all: the control bit has to survive the keyboard driver, the window
   # manager and a system call, and each of those has dropped it.
-  cliptest() { timeout 400 python tools/clipcheck.py 2>&1 | grep -q "all checks passed"; }
+  cliptest() { keep "all checks passed" timeout 400 python tools/clipcheck.py; }
   par_start "copy and paste moves text out of a program" cliptest
 
   # And the kernel's own checks once more, on the third driver. The block
@@ -221,17 +256,17 @@ if [ "$MODE" = "full" ]; then
   #
   # BIOS and UEFI, disc and stick. This is where the bugs that only appear on
   # a stricter machine than QEMU have all been.
-  boottest() { timeout 900 bash tools/iso_test.sh 2>&1 | grep -q "all four paths passed"; }
+  boottest() { keep "all four paths passed" timeout 900 bash tools/iso_test.sh; }
   par_start "all four boot paths" boottest
 
   # --- the parts only a screenshot can check ------------------------------
-  shottest() { timeout 600 python tools/shotcheck.py 2>&1 | grep -q "all checks passed"; }
+  shottest() { keep "all checks passed" timeout 600 python tools/shotcheck.py; }
   par_start "the desktop reaches the screen" shottest
 
-  termtest() { timeout 900 python tools/termcheck.py 2>&1 | grep -q "all 8 checks passed"; }
+  termtest() { keep "all 8 checks passed" timeout 900 python tools/termcheck.py; }
   par_start "typing reaches the terminal" termtest
 
-  desktest() { timeout 900 python tools/deskcheck.py 2>&1 | grep -q "checks passed"; }
+  desktest() { keep "checks passed" timeout 900 python tools/deskcheck.py; }
   par_start "the windows go where they are told" desktest
 
   par_wait

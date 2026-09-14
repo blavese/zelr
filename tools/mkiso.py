@@ -296,10 +296,16 @@ def entry_point(elf_path):
 def main():
     out_path = sys.argv[1] if len(sys.argv) > 1 else os.path.join(BUILD, "nyx.iso")
 
-    subprocess.run(["bash", "build.sh"], cwd=ROOT, check=True,
-                   stdout=subprocess.DEVNULL)
-    subprocess.run(["bash", "bootloader/build.sh"], cwd=ROOT, check=True,
-                   stdout=subprocess.DEVNULL)
+    # Built here when this is run on its own, and not when the gate runs
+    # it. The gate builds once and then starts several harnesses at the
+    # same time; a second build rewrites build/nyx.bin and build/nyx.elf
+    # underneath whichever machine is reading them, which on Windows is a
+    # permission error rather than a torn file.
+    if os.environ.get("NYX_PREBUILT") != "1":
+        subprocess.run(["bash", "build.sh"], cwd=ROOT, check=True,
+                       stdout=subprocess.DEVNULL)
+        subprocess.run(["bash", "bootloader/build.sh"], cwd=ROOT, check=True,
+                       stdout=subprocess.DEVNULL)
 
     kernel_elf = os.path.join(BUILD, "nyx.elf")
     payload_path = os.path.join(BUILD, "nyx.bin")

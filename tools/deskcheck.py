@@ -103,8 +103,14 @@ def drag(mon, frm, to):
 
 def main():
     keep = "--keep" in sys.argv
-    subprocess.run(["bash", "build.sh"], cwd=ROOT, check=True,
-                   stdout=subprocess.DEVNULL)
+    # Built here when this is run on its own, and not when the gate runs
+    # it. The gate builds once and then starts several harnesses at the
+    # same time; a second build rewrites build/nyx.bin and build/nyx.elf
+    # underneath whichever machine is reading them, which on Windows is a
+    # permission error rather than a torn file.
+    if os.environ.get("NYX_PREBUILT") != "1":
+        subprocess.run(["bash", "build.sh"], cwd=ROOT, check=True,
+                       stdout=subprocess.DEVNULL)
 
     if os.path.exists(DISK):
         os.remove(DISK)

@@ -75,8 +75,14 @@ def is_theme(px, w, rgb):
 
 def main():
     keep = "--keep" in sys.argv
-    subprocess.run(["bash", "build.sh"], cwd=ROOT, check=True,
-                   stdout=subprocess.DEVNULL)
+    # Built here when this is run on its own, and not when the gate runs
+    # it. The gate builds once and then starts several harnesses at the
+    # same time; a second build rewrites build/nyx.bin and build/nyx.elf
+    # underneath whichever machine is reading them, which on Windows is a
+    # permission error rather than a torn file.
+    if os.environ.get("NYX_PREBUILT") != "1":
+        subprocess.run(["bash", "build.sh"], cwd=ROOT, check=True,
+                       stdout=subprocess.DEVNULL)
 
     # A fresh disk, so a theme left by an earlier run cannot make a check
     # pass before anything has been typed.
