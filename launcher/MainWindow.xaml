@@ -1,7 +1,7 @@
-<Window x:Class="NyxLauncher.MainWindow"
+<Window x:Class="ZelrLauncher.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="nyx" Height="620" Width="760"
+        Title="zelr" Height="620" Width="760"
         MinHeight="560" MinWidth="680"
         Background="{StaticResource Bg}" Foreground="{StaticResource Text}"
         FontFamily="Segoe UI" WindowStartupLocation="CenterScreen">
@@ -17,7 +17,7 @@
 
         <!-- heading -->
         <StackPanel Grid.Row="0">
-            <TextBlock Text="nyx" FontSize="36" FontWeight="Bold"
+            <TextBlock Text="zelr" FontSize="36" FontWeight="Bold"
                        Foreground="{StaticResource Accent}"/>
             <TextBlock Margin="0,6,0,0" FontSize="14" Foreground="{StaticResource Dim}"
                        TextWrapping="Wrap"
@@ -97,7 +97,7 @@
         <!-- actions -->
         <StackPanel Grid.Row="3" Orientation="Horizontal" Margin="0,20,0,0">
             <Button x:Name="StartButton" Style="{StaticResource Primary}"
-                    Content="Start nyx" Click="Start_Click" IsEnabled="False"/>
+                    Content="Start zelr" Click="Start_Click" IsEnabled="False"/>
             <Button x:Name="SetupButton" Style="{StaticResource Ghost}"
                     Content="Set up the emulator" Margin="12,0,0,0"
                     Click="Setup_Click" Visibility="Collapsed"/>
@@ -106,7 +106,7 @@
         </StackPanel>
 
         <TextBlock Grid.Row="4" Margin="0,18,0,0" FontSize="12" Foreground="{StaticResource Dim}">
-            <Hyperlink NavigateUri="https://github.com/blavese/nyx"
+            <Hyperlink NavigateUri="https://github.com/blavese/zelr"
                        RequestNavigate="Link_Click" Foreground="{StaticResource Dim}">
                 Source code on GitHub
             </Hyperlink>

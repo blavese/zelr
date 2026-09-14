@@ -45,14 +45,14 @@ BLOBS=$(cat build/user/*.elf build/trampoline.bin | cksum | cut -d' ' -f1)
   -mno-sse -mno-sse2 -mno-mmx -mno-80387 -mno-red-zone \
   -mcmodel=small \
   -Wall -Wextra -Wno-unused-parameter \
-  -Iinclude -DNYX_BLOB_STAMP=$BLOBS \
+  -Iinclude -DZELR_BLOB_STAMP=$BLOBS \
   -Wl,-T,linker.ld -Wl,--build-id=none -Wl,-z,max-page-size=4096 \
-  -o build/nyx.elf $SRC
+  -o build/zelr.elf $SRC
 
 # The flat image is what both bootloaders copy into place, and what a
 # multiboot loader is given: the a.out kludge in boot/boot.S points at this
 # rather than at the ELF, because no multiboot loader will parse a 64-bit one.
-python tools/flatten.py build/nyx.elf build/nyx.bin 0x100000 >/dev/null
+python tools/flatten.py build/zelr.elf build/zelr.bin 0x100000 >/dev/null
 
-echo "built build/nyx.elf ($(filesize build/nyx.elf) bytes)"
-echo "      build/nyx.bin ($(filesize build/nyx.bin) bytes)"
+echo "built build/zelr.elf ($(filesize build/zelr.elf) bytes)"
+echo "      build/zelr.bin ($(filesize build/zelr.bin) bytes)"

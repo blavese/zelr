@@ -3,7 +3,7 @@
 
 /* What is on the disk, before any filesystem is.
  *
- * nyx used to read the volume straight off sector zero, which is true of a
+ * zelr used to read the volume straight off sector zero, which is true of a
  * disk image and of nothing else. A real disk is divided, and the division
  * is described one of two ways.
  *

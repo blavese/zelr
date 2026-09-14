@@ -617,7 +617,7 @@ static void draw_taskbar(void) {
     bool badge_hot = menu_open;
     fb_round_rect(8, y + 5, 76, TASKBAR_H - 10, 6,
                   badge_hot ? t->accent : lighten(t->surface, 4));
-    face_text(20, y + (TASKBAR_H - face_height(FACE_HEAD)) / 2, "nyx",
+    face_text(20, y + (TASKBAR_H - face_height(FACE_HEAD)) / 2, "zelr",
               badge_hot ? darken(t->accent, 170) : t->accent, FACE_HEAD);
 
     int x = 96;

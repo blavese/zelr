@@ -3,7 +3,7 @@ using System.Windows;
 using System.Windows.Media;
 using System.Windows.Navigation;
 
-namespace NyxLauncher;
+namespace ZelrLauncher;
 
 public partial class MainWindow : Window
 {
@@ -26,7 +26,7 @@ public partial class MainWindow : Window
         {
             StatusDot.Fill = Brush("Accent");
             StatusTitle.Text = "Ready";
-            StatusDetail.Text = "The emulator is installed. Press Start and a black window will open with nyx running inside it.";
+            StatusDetail.Text = "The emulator is installed. Press Start and a black window will open with zelr running inside it.";
             StartButton.IsEnabled = true;
             SetupButton.Visibility = Visibility.Collapsed;
         }
@@ -35,7 +35,7 @@ public partial class MainWindow : Window
             StatusDot.Fill = Brush("Warn");
             StatusTitle.Text = "One thing is missing";
             StatusDetail.Text =
-                "nyx needs QEMU, a free program that pretends to be a computer so the operating system has something to boot on. " +
+                "zelr needs QEMU, a free program that pretends to be a computer so the operating system has something to boot on. " +
                 "Set up the emulator installs it from Microsoft's own package manager. It is about 150 MB and takes a minute.";
             StartButton.IsEnabled = false;
             SetupButton.Visibility = Visibility.Visible;
@@ -58,7 +58,7 @@ public partial class MainWindow : Window
             proc.Exited += (_, _) => Dispatcher.Invoke(() =>
             {
                 StatusTitle.Text = "Ready";
-                StatusDetail.Text = "nyx closed. Press Start to boot it again.";
+                StatusDetail.Text = "zelr closed. Press Start to boot it again.";
                 StartButton.IsEnabled = true;
             });
         }

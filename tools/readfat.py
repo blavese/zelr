@@ -5,9 +5,9 @@ The kernel writing a filesystem it can read back only proves it is
 self-consistent. This parses the image from the specification instead, so a
 disagreement means the kernel is wrong rather than merely idiosyncratic.
 
-    python tools/readfat.py nyx.img              list the volume
-    python tools/readfat.py nyx.img FILE         print one file
-    python tools/readfat.py nyx.img --put SRC [AS]   copy a file in
+    python tools/readfat.py zelr.img              list the volume
+    python tools/readfat.py zelr.img FILE         print one file
+    python tools/readfat.py zelr.img --put SRC [AS]   copy a file in
 """
 import struct
 import sys

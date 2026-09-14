@@ -1,7 +1,7 @@
 /* FAT16 and FAT32, with directories.
  *
  * The point of this over a private format is interoperability: a FAT image
- * can be opened by other tools, so files move between nyx and the machine
+ * can be opened by other tools, so files move between zelr and the machine
  * hosting it. The format is old and fiddly but exhaustively documented, and
  * every field below sits where the specification says it goes, because
  * anything else produces an image other readers call corrupt.
@@ -353,12 +353,12 @@ u32 fat_type(void) { return mounted ? fat_bits : 0; }
 /* The two fields fat_format writes and nothing else does. Checked against
    the boot sector rather than remembered from the mount, so it is still
    right if something else rewrote the volume underneath us. */
-bool fat_is_nyx_volume(void) {
+bool fat_is_zelr_volume(void) {
     if (!mounted) return false;
     u8 boot[SECTOR_SIZE];
     if (!vol_read(0, 1, boot)) return false;
-    return memcmp(boot + 3, "NYX     ", 8) == 0 &&
-           *(u32 *)(boot + 39) == 0x4E595800u;
+    return memcmp(boot + 3, "ZELR    ", 8) == 0 &&
+           *(u32 *)(boot + 39) == 0x5A4C5200u;
 }
 
 bool fat_format_at(u32 base_lba, u32 sectors, const char *label) {
@@ -405,7 +405,7 @@ bool fat_format_at(u32 base_lba, u32 sectors, const char *label) {
     /* boot sector */
     memset(sec, 0, SECTOR_SIZE);
     sec[0] = 0xEB; sec[1] = 0x3C; sec[2] = 0x90;
-    memcpy(sec + 3, "NYX     ", 8);
+    memcpy(sec + 3, "ZELR    ", 8);
     *(u16 *)(sec + 11) = SECTOR_SIZE;
     sec[13] = spc;
     *(u16 *)(sec + 14) = reserved;
@@ -420,7 +420,7 @@ bool fat_format_at(u32 base_lba, u32 sectors, const char *label) {
     *(u32 *)(sec + 32) = total;
     sec[36] = 0x80;
     sec[38] = 0x29;                     /* extended boot signature */
-    *(u32 *)(sec + 39) = 0x4E595800u;
+    *(u32 *)(sec + 39) = 0x5A4C5200u;
     memset(sec + 43, ' ', 11);
     for (u32 i = 0; i < 11 && label && label[i]; i++) sec[43 + i] = (u8)upcase(label[i]);
     memcpy(sec + 54, "FAT16   ", 8);

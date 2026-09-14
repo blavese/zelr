@@ -38,7 +38,7 @@ type_line() {
 
 boot() {
   { sleep 6; "$1"; sleep 2; } \
-    | timeout 120 "$QEMU" -kernel build/nyx.bin -m 256 -no-reboot -display none \
+    | timeout 120 "$QEMU" -kernel build/zelr.bin -m 256 -no-reboot -display none \
         -serial stdio -drive "file=$IMG,format=raw,if=ide,index=0" \
         > "$OUT" 2>&1 || true
 }

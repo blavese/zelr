@@ -32,10 +32,10 @@ type_line() {
 
 boot() {
   { sleep 6; "$1"; sleep 2; } \
-    | timeout 150 "$QEMU" -machine q35 -kernel build/nyx.bin -m 256 -no-reboot \
+    | timeout 150 "$QEMU" -machine q35 -kernel build/zelr.bin -m 256 -no-reboot \
         -display none -serial stdio \
         -drive "file=$IMG,format=raw,if=none,id=nv0" \
-        -device nvme,drive=nv0,serial=nyx0001 \
+        -device nvme,drive=nv0,serial=zelr0001 \
         > "$OUT" 2>&1 || true
 }
 

@@ -171,8 +171,8 @@ static void counter_task(void) {
    directories and no way to see where you are is worse than one without. */
 static void prompt(void) {
     const char *at = vfs_cwd();
-    if (at[0] == '/' && at[1] == 0) kprintf("nyx> ");
-    else                            kprintf("nyx:%s> ", at);
+    if (at[0] == '/' && at[1] == 0) kprintf("zelr> ");
+    else                            kprintf("zelr:%s> ", at);
 }
 
 static void execute(char *buf) {

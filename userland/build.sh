@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Builds each user program into a standalone ELF executable. These are not
 # linked against the kernel in any way: the only thing they share with it is
-# the system call numbers in nyx.h.
+# the system call numbers in zelr.h.
 set -e
 cd "$(dirname "$0")"
 

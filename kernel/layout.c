@@ -85,7 +85,7 @@ void layout_init(void) {
     seeded_through = read_marker();
 
     seed(1, "/doc/readme",
-         "nyx\n"
+         "zelr\n"
          "\n"
          "An operating system written from scratch. There is no other\n"
          "system underneath this one. The machine powered on, firmware\n"

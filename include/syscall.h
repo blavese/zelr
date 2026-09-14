@@ -65,7 +65,7 @@ typedef struct {
     u32  slices;
     u32  user;
     char name[32];
-} nyx_task_t;
+} zelr_task_t;
 
 /* What SYS_SYSINFO fills in: what the machine is, as far as a program is
    allowed to know. */
@@ -78,7 +78,7 @@ typedef struct {
     u32 screen_w, screen_h;
     u32 syscalls;
     u32 disk_kb_free;
-} nyx_sysinfo_t;
+} zelr_sysinfo_t;
 
 /* What SYS_STAT and SYS_READDIR fill in. Fixed layout: ring 3 reads this
    straight out of a buffer the kernel wrote. */
@@ -86,7 +86,7 @@ typedef struct {
     u32  size;
     u32  is_dir;
     char name[32];
-} nyx_stat_t;
+} zelr_stat_t;
 
 /* What SYS_NETINFO fills in. */
 typedef struct {
@@ -94,7 +94,7 @@ typedef struct {
     u32 ip, gateway, netmask, dns;
     u8  mac[6];
     u16 pad;
-} nyx_netinfo_t;
+} zelr_netinfo_t;
 
 void syscall_init(void);
 

@@ -118,7 +118,7 @@ echo "=== gate ($MODE) ==="
 
 # --- it has to build at all ------------------------------------------------
 #
-# Nothing else runs if this fails. build/nyx.bin is whatever the last
+# Nothing else runs if this fails. build/zelr.bin is whatever the last
 # successful build left there, so carrying on would test the previous version
 # and say something true about code that no longer exists.
 build_out="$(bash build.sh 2>&1)"
@@ -137,7 +137,7 @@ report "it builds" 0
 # another is still writing: on Windows that is a permission error, and
 # it arrives as whichever harness lost the race reporting that the
 # feature it tests is broken. The tree has just been built, so say so.
-export NYX_PREBUILT=1
+export ZELR_PREBUILT=1
 
 # Warnings are not failures, but a build that started producing them is
 # something a person should see rather than have buried.
@@ -152,7 +152,7 @@ selftest() {
   rm -f gate.img
   head -c 33554432 /dev/zero > gate.img
   local out
-  out="$(timeout 300 "$QEMU" -kernel build/nyx.bin -m 256 -no-reboot \
+  out="$(timeout 300 "$QEMU" -kernel build/zelr.bin -m 256 -no-reboot \
       -display none -serial stdio -append selftest \
       -drive "file=gate.img,format=raw,if=ide,index=0" \
       -device isa-debug-exit,iobase=0xf4,iosize=0x04 2>&1)"
@@ -177,7 +177,7 @@ selftest_q35() {
   rm -f gateq.img
   head -c 33554432 /dev/zero > gateq.img
   local out
-  out="$(timeout 300 "$QEMU" -machine q35 -kernel build/nyx.bin -m 256 -no-reboot \
+  out="$(timeout 300 "$QEMU" -machine q35 -kernel build/zelr.bin -m 256 -no-reboot \
       -display none -serial stdio -append selftest \
       -drive "file=gateq.img,format=raw,if=none,id=d0" \
       -device ahci,id=ahci -device ide-hd,drive=d0,bus=ahci.0 \
@@ -239,10 +239,10 @@ if [ "$MODE" = "full" ]; then
     rm -f gatenv.img
     head -c 67108864 /dev/zero > gatenv.img
     local out
-    out="$(timeout 300 "$QEMU" -machine q35 -kernel build/nyx.bin -m 256 -no-reboot \
+    out="$(timeout 300 "$QEMU" -machine q35 -kernel build/zelr.bin -m 256 -no-reboot \
         -display none -serial stdio -append selftest \
         -drive "file=gatenv.img,format=raw,if=none,id=nv0" \
-        -device nvme,drive=nv0,serial=nyx0001 \
+        -device nvme,drive=nv0,serial=zelr0001 \
         -device isa-debug-exit,iobase=0xf4,iosize=0x04 2>&1)"
     rm -f gatenv.img
     printf '%s\n' "$out" | grep -E 'FAIL|passed,' | tail -3

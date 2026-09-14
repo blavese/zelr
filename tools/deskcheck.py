@@ -105,10 +105,10 @@ def main():
     keep = "--keep" in sys.argv
     # Built here when this is run on its own, and not when the gate runs
     # it. The gate builds once and then starts several harnesses at the
-    # same time; a second build rewrites build/nyx.bin and build/nyx.elf
+    # same time; a second build rewrites build/zelr.bin and build/zelr.elf
     # underneath whichever machine is reading them, which on Windows is a
     # permission error rather than a torn file.
-    if os.environ.get("NYX_PREBUILT") != "1":
+    if os.environ.get("ZELR_PREBUILT") != "1":
         subprocess.run(["bash", "build.sh"], cwd=ROOT, check=True,
                        stdout=subprocess.DEVNULL)
 
@@ -118,7 +118,7 @@ def main():
         f.truncate(32 * 1024 * 1024)
 
     proc = subprocess.Popen(
-        [QEMU, "-kernel", os.path.join(BUILD, "nyx.bin"), "-m", "64",
+        [QEMU, "-kernel", os.path.join(BUILD, "zelr.bin"), "-m", "64",
          "-no-reboot", "-display", "none", "-serial", "stdio",
          "-drive", "file=%s,format=raw,if=ide,index=0" % DISK,
          "-monitor", "tcp:127.0.0.1:%d,server,nowait" % MONITOR_PORT],
@@ -219,7 +219,7 @@ def main():
         # The terminal is on screen already at this point, so clicking its
         # taskbar chip would put it away rather than bring it back.
         time.sleep(0.5)
-        typed(mon, "write /nyx.cfg wallpaper 4\n")     # stars
+        typed(mon, "write /zelr.cfg wallpaper 4\n")     # stars
         time.sleep(2.5)
         alt(mon, "d")
         time.sleep(1.5)
@@ -234,7 +234,7 @@ def main():
 
         mon.click(*TASKBAR_CHIP)
         time.sleep(1.5)
-        typed(mon, "write /nyx.cfg wallpaper 6\n")     # weave
+        typed(mon, "write /zelr.cfg wallpaper 6\n")     # weave
         time.sleep(2.5)
         alt(mon, "d")
         time.sleep(1.5)

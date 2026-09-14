@@ -95,7 +95,7 @@ void bb_init(void) {
     len = 0;
     wrapped = false;
     boot_number = 0;
-    append("nyx ");
+    append("zelr ");
     append(KERNEL_VERSION);
     append(" boot log\n");
 }
@@ -174,7 +174,7 @@ void bb_screen(void) {
 
         fb_clear(0x120008);
         fb_rect(0, 0, w, 22, 0xA01020);
-        gfx_text(8, 4, "nyx stopped. this is the boot log.", 0xFFFFFF);
+        gfx_text(8, 4, "zelr stopped. this is the boot log.", 0xFFFFFF);
 
         const char *p; u32 n;
         screen_lines(&p, &n, rows);
@@ -197,7 +197,7 @@ void bb_screen(void) {
     vga_clear();
     const char *p; u32 n;
     screen_lines(&p, &n, 23);
-    vga_write("nyx stopped. boot log:\n");
+    vga_write("zelr stopped. boot log:\n");
     for (u32 row = 0; row < n; row++) {
         while (*p && *p != '\n') vga_putc(*p++);
         vga_putc('\n');
@@ -227,8 +227,8 @@ static bool volume_is_ours(u8 *sec) {
     if (!blk_present()) return false;
     if (!blk_read(volume_base(), 1, sec)) return false;
     if (sec[510] != 0x55 || sec[511] != 0xAA) return false;
-    if (memcmp(sec + 3, "NYX     ", 8) != 0) return false;
-    if (*(u32 *)(sec + 39) != 0x4E595800u) return false;
+    if (memcmp(sec + 3, "ZELR    ", 8) != 0) return false;
+    if (*(u32 *)(sec + 39) != 0x5A4C5200u) return false;
     u16 reserved = *(u16 *)(sec + 14);
     if (reserved < BB_LBA + BB_SECTORS) return false;
     return true;

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Boots the image every way a real machine might, and checks nyx came up.
+# Boots the image every way a real machine might, and checks zelr came up.
 #
 # One file, four paths in. None of them is QEMU's -kernel: every one goes
 # through a bootloader of ours, and two of them go through firmware that
@@ -22,12 +22,12 @@ QEMU="${QEMU:-}"
 
 # UEFI needs firmware. QEMU ships it; without it the two UEFI paths are
 # skipped rather than reported as failures.
-FW="${NYX_UEFI_FW:-}"
+FW="${ZELR_UEFI_FW:-}"
 [ -z "$FW" ] && FW="/c/Program Files/qemu/share/edk2-x86_64-code.fd"
 
 python tools/mkiso.py >/dev/null
 
-ISO=build/nyx.iso
+ISO=build/zelr.iso
 DISK=build/isotest.img
 
 fails=0
@@ -54,7 +54,7 @@ run() {
         > "$out" 2>&1 || true
 
   echo "--- $what ---"
-  for want in "nyx $VERSION" "long mode" "progs" "nyx:/home>" "$what"; do
+  for want in "zelr $VERSION" "long mode" "progs" "zelr:/home>" "$what"; do
     if grep -qF "$want" "$out"; then echo "  PASS  $want"
     else echo "  FAIL  $want"; fails=$((fails+1)); fi
   done
@@ -82,7 +82,7 @@ if [ -f "$FW" ]; then
       -drive "file=$DISK,format=raw,if=ide,index=1"
 else
   echo "--- uefi ---"
-  echo "  SKIP  no firmware at $FW; set NYX_UEFI_FW to test the UEFI paths"
+  echo "  SKIP  no firmware at $FW; set ZELR_UEFI_FW to test the UEFI paths"
   skipped=1
 fi
 

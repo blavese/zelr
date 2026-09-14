@@ -46,7 +46,7 @@ except subprocess.TimeoutExpired:
 # Built here when this is run on its own. Under the gate it is not: the
 # gate has built already, and several harnesses run at once, so a build
 # here would rewrite the kernel image another one's QEMU is reading.
-[ "${NYX_PREBUILT:-}" = "1" ] || bash build.sh >/dev/null
+[ "${ZELR_PREBUILT:-}" = "1" ] || bash build.sh >/dev/null
 OUT=$(mktemp)
 
 type_line() {
@@ -87,7 +87,7 @@ feed() {
   sleep 2.5
 }
 
-feed | run_with_timeout 90 "$QEMU" -kernel build/nyx.bin -m 64 -no-reboot -display none -serial stdio > "$OUT" 2>&1 || true
+feed | run_with_timeout 90 "$QEMU" -kernel build/zelr.bin -m 64 -no-reboot -display none -serial stdio > "$OUT" 2>&1 || true
 
 fails=0
 check() {
@@ -96,7 +96,7 @@ check() {
 }
 
 echo "=== shell test ==="
-check "nyx $VERSION x86_64"        "uname reports the kernel"
+check "zelr $VERSION x86_64"        "uname reports the kernel"
 check "notes"                    "ls shows the seeded files"
 check "written from scratch"     "cat prints file contents"
 check "shell wrote this"         "write then cat round trips"

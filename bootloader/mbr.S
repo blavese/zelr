@@ -93,5 +93,5 @@ dap_lba:
     .long   92
     .long   0
 
-msg:      .asciz "nyx\r\n"
+msg:      .asciz "zelr\r\n"
 msg_fail: .asciz "no bootloader\r\n"

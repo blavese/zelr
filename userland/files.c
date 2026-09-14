@@ -7,7 +7,7 @@
  * Everything here goes through the ordinary file syscalls. There is no
  * privileged path and nothing it can do that a program written by anyone
  * else could not, which is the property worth keeping. */
-#include "nyx.h"
+#include "zelr.h"
 #include "ui.h"
 
 #define MAX_ENTRIES 512
@@ -77,7 +77,7 @@ static void reload(void) {
     selected = -1;
     first_row = 0;
 
-    nyx_stat st;
+    zelr_stat st;
     for (int i = 0; i < MAX_ENTRIES && readdir(cwd, i, &st) == 1; i++) {
         strncpy(entries[count].name, st.name, sizeof(entries[count].name) - 1);
         entries[count].name[sizeof(entries[count].name) - 1] = 0;

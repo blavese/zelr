@@ -117,7 +117,7 @@ static bool patch_trampoline(u64 stack_top, u64 index) {
     u64 len = (u64)(trampoline_end - trampoline_start);
 
     for (u64 i = 0; i + 8 + 32 <= len; i += 4) {
-        if (memcmp(code + i, "NYXSMP01", 8) != 0) continue;
+        if (memcmp(code + i, "ZELRSMP1", 8) != 0) continue;
         /* Four addresses, each a full machine word now: the page tables, the
            stack, where to go and which processor this is. */
         u64 *p = (u64 *)(code + i + 8);

@@ -167,7 +167,7 @@ bool theme_save(void) {
     char out[512];
     int n = 0;
 
-    const char *header = "# nyx desktop settings\n# colours are RRGGBB in hex\n";
+    const char *header = "# zelr desktop settings\n# colours are RRGGBB in hex\n";
     for (const char *p = header; *p; p++) out[n++] = *p;
 
     struct { const char *key; u32 value; bool hex; } fields[] = {

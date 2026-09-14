@@ -97,7 +97,7 @@ def primary_volume_descriptor(total_sectors, root_extent, root_size,
     d[1:6] = b"CD001"
     d[6] = 1
     d[8:40] = b" " * 32                                  # system identifier
-    d[40:72] = b"NYX".ljust(32)                          # volume identifier
+    d[40:72] = b"ZELR".ljust(32)                          # volume identifier
     d[80:88] = both32(total_sectors)
     d[120:124] = both16(1)                               # volume set size
     d[124:128] = both16(1)                               # volume sequence
@@ -107,7 +107,7 @@ def primary_volume_descriptor(total_sectors, root_extent, root_size,
     d[148:152] = struct.pack(">I", PATH_M_LBA)
     d[156:190] = dir_record(b"\x00", root_extent, root_size, True)
     d[190:318] = b" " * 128                              # volume set
-    d[318:446] = b"nyx".ljust(128)                       # publisher
+    d[318:446] = b"zelr".ljust(128)                       # publisher
     d[446:574] = b" " * 128                              # data preparer
     d[574:702] = b"tools/mkiso.py".ljust(128)            # application
     d[702:739] = b" " * 37
@@ -153,7 +153,7 @@ def boot_catalog(loader_lba, loader_sectors_512, esp_lba, esp_sectors_512):
     val = bytearray(32)
     val[0] = 1                                   # header id
     val[1] = 0                                   # x86
-    val[4:28] = b"nyx".ljust(24, b"\x00")
+    val[4:28] = b"zelr".ljust(24, b"\x00")
     val[30] = 0x55
     val[31] = 0xAA
     total = sum(struct.unpack("<16H", bytes(val)))
@@ -225,9 +225,9 @@ def patch_loader(loader, payload_lba, payload_bytes, entry, load_addr,
     The last one is where the loader itself lives, which it needs because the
     first thing it does is read the rest of itself in rather than trust the
     firmware to have loaded all of it."""
-    sig = loader.find(b"NYXBOOT1")
+    sig = loader.find(b"ZELRBOT1")
     if sig < 0:
-        raise SystemExit("the loader has no NYXBOOT1 signature")
+        raise SystemExit("the loader has no ZELRBOT1 signature")
     out = bytearray(loader)
     struct.pack_into("<IIIII", out, sig + 8,
                      payload_lba, payload_bytes, entry, load_addr, loader_lba)
@@ -294,21 +294,21 @@ def entry_point(elf_path):
 
 
 def main():
-    out_path = sys.argv[1] if len(sys.argv) > 1 else os.path.join(BUILD, "nyx.iso")
+    out_path = sys.argv[1] if len(sys.argv) > 1 else os.path.join(BUILD, "zelr.iso")
 
     # Built here when this is run on its own, and not when the gate runs
     # it. The gate builds once and then starts several harnesses at the
-    # same time; a second build rewrites build/nyx.bin and build/nyx.elf
+    # same time; a second build rewrites build/zelr.bin and build/zelr.elf
     # underneath whichever machine is reading them, which on Windows is a
     # permission error rather than a torn file.
-    if os.environ.get("NYX_PREBUILT") != "1":
+    if os.environ.get("ZELR_PREBUILT") != "1":
         subprocess.run(["bash", "build.sh"], cwd=ROOT, check=True,
                        stdout=subprocess.DEVNULL)
         subprocess.run(["bash", "bootloader/build.sh"], cwd=ROOT, check=True,
                        stdout=subprocess.DEVNULL)
 
-    kernel_elf = os.path.join(BUILD, "nyx.elf")
-    payload_path = os.path.join(BUILD, "nyx.bin")
+    kernel_elf = os.path.join(BUILD, "zelr.elf")
+    payload_path = os.path.join(BUILD, "zelr.bin")
     subprocess.run([sys.executable, os.path.join(ROOT, "tools", "flatten.py"),
                     kernel_elf, payload_path, "0x100000"],
                    cwd=ROOT, check=True, stdout=subprocess.DEVNULL)
@@ -324,7 +324,7 @@ def main():
     subprocess.run([sys.executable, os.path.join(ROOT, "tools", "mkfat.py"),
                     esp_path, "4096",
                     efi_path + ":EFI/BOOT/BOOTX64.EFI",
-                    payload_path + ":nyx.bin"],
+                    payload_path + ":zelr.bin"],
                    cwd=ROOT, check=True, stdout=subprocess.DEVNULL)
     esp = open(esp_path, "rb").read()
 
@@ -344,7 +344,7 @@ def main():
 
     le_table, be_table, table_size = path_tables(ROOT_DIR_LBA)
     root = root_directory(ROOT_DIR_LBA,
-                          [(b"NYX.BIN;1", payload_lba, len(payload))])
+                          [(b"ZELR.BIN;1", payload_lba, len(payload))])
 
     image = bytearray(total_sectors * SECTOR)
 

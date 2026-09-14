@@ -1,4 +1,4 @@
-# nyx
+# zelr
 
 A 64-bit operating system written from scratch for x86. It boots itself off a
 disc or a USB stick, through BIOS or UEFI, drives a framebuffer, manages its
@@ -8,7 +8,7 @@ ATA disk, reads the GPT on it, keeps files in directories on a FAT16 or FAT32
 volume, talks to the internet, and runs a desktop whose programs are real
 ring 3 processes. When it fails it says why.
 
-![the nyx desktop](docs/desktop.png)
+![the zelr desktop](docs/desktop.png)
 
 It is not a clone of anything. About 12,300 lines of C and assembly, no libc,
 no runtime dependencies, and nothing borrowed from another kernel: every
@@ -16,25 +16,25 @@ driver, the filesystem, the bootloader, the image writer and the font are
 written here, from the specifications where there is one and from scratch
 where there is not.
 
-The one exception, since "from scratch" invites the question: `nyx.exe`, the
+The one exception, since "from scratch" invites the question: `zelr.exe`, the
 Windows launcher, is a C# program that bundles the .NET runtime, which is
 most of its 162 MB. The kernel inside it is about 700 KB. Nothing third party
-runs on the machine nyx boots.
+runs on the machine zelr boots.
 
 ## running it on Windows
 
-Download **nyx.exe** from the
-[latest release](https://github.com/blavese/nyx/releases/latest) and run it.
+Download **zelr.exe** from the
+[latest release](https://github.com/blavese/zelr/releases/latest) and run it.
 The kernel is inside that file; nothing needs to be built.
 
-The launcher checks for QEMU, the emulator nyx boots on, and offers to install
+The launcher checks for QEMU, the emulator zelr boots on, and offers to install
 it from Microsoft's package manager if it is missing. Then press Start and a
 black window opens with the operating system running in it. Type `guide` when
 you get there.
 
 It runs as a normal user, needs no administrator rights, and cannot affect
 Windows: the kernel only ever sees the pretend machine QEMU gives it. Your
-files live in a disk image under `%LocalAppData%\nyx`.
+files live in a disk image under `%LocalAppData%\zelr`.
 
 Something to try once it boots:
 
@@ -78,7 +78,7 @@ saves it to a disk that survives closing the window.
 
 ## running it on a real machine
 
-Download **nyx.iso**, write it to a USB stick or burn it to a disc, and boot
+Download **zelr.iso**, write it to a USB stick or burn it to a disc, and boot
 from it. One file, four ways in, and it picks the right one itself:
 
 | | from a disc | from a USB stick |
@@ -139,7 +139,7 @@ pointer UEFI hands over rather than by searching memory a UEFI machine need
 not have filled in, the XSDT is preferred where there is one, PCIe
 configuration space is reached through the mapping MCFG describes, and every
 processor the firmware lists is started. Until that pointer was wired through,
-nyx had no ACPI on any UEFI machine at all, which is to say on every laptop,
+zelr had no ACPI on any UEFI machine at all, which is to say on every laptop,
 and reported one processor whatever the machine had.
 
 So: it boots, draws, finds every core, finds an NVMe disk, reads its GPT,
@@ -183,7 +183,7 @@ the answer on its own:
     [    0] net no card this kernel can drive
 
 The disk copy lives in sectors reserved at the front of the volume, and is
-written **only to a volume nyx formatted itself**. Four things about the boot
+written **only to a volume zelr formatted itself**. Four things about the boot
 sector have to agree before a byte is written, and the sectors themselves
 have to be blank or already hold a log. A disk that fails any of those gets
 nothing and keeps working; the screen and serial routes are unaffected.
@@ -203,13 +203,13 @@ x86_64-elf toolchain to build first.
 first three hand the kernel to QEMU with `-kernel`, which means QEMU is doing
 the bootloader's job; `-i` is the one that does not.
 
-The kernel handed to `-kernel` is `build/nyx.bin` rather than the ELF, and
+The kernel handed to `-kernel` is `build/zelr.bin` rather than the ELF, and
 that is not a detail: no multiboot loader will accept a 64-bit ELF, because
 multiboot predates long mode. The multiboot header carries the a.out kludge,
 which tells a loader to stop reading ELF headers and copy the flat image
 instead.
 
-    python tools/mkiso.py       write build/nyx.iso
+    python tools/mkiso.py       write build/zelr.iso
     bash tools/iso_test.sh      boot it as a disc and as a stick
     bash tools/shell_test.sh    type at the shell over the serial line
     python tools/shotcheck.py   use the desktop and look at the screen
@@ -218,7 +218,7 @@ instead.
 
 The Windows launcher lives in `launcher/` and is built with
 `dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true`.
-It embeds `build/nyx.elf` and a starter disk, so build the kernel and run
+It embeds `build/zelr.elf` and a starter disk, so build the kernel and run
 `userland/build.sh` first.
 
 ## what it actually does
@@ -398,7 +398,7 @@ an HTTP GET from user space. It has a line editor, history kept in `/cfg`, tab
 completion over both commands and paths, and thirty-six commands of its own.
 Settings is the interesting one, because it changes how the desktop
 looks without being able to reach the window manager at all. It writes
-`/nyx.cfg`, a plain "key value" file, and the window manager re-reads that four
+`/zelr.cfg`, a plain "key value" file, and the window manager re-reads that four
 times a second. Anything the window can do can also be done with the shell's
 `write` command.
 
@@ -541,7 +541,7 @@ large range:
   mouse. A laptop that does not emulate PS/2 for its built-in keyboard has no
   keyboard here, and nothing plugged into a USB port works at all. Everything
   else about a modern machine now works, so this is the single thing standing
-  between nyx and being usable on one: xHCI, then the HID boot protocol.
+  between zelr and being usable on one: xHCI, then the HID boot protocol.
 - **No FAT long filenames.** A file saved as somethinglong.txt comes back as
   SOMETHI~1.TXT. The entries that carry the real name are read past rather
   than understood.

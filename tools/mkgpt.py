@@ -116,7 +116,7 @@ def build(path, total_kb=65536, bad_header_crc=False, bad_entry_crc=False):
         esp_start, esp_end, "EFI System Partition")
     entries[ENTRY_SIZE:2 * ENTRY_SIZE] = entry(
         guid(GUID_BASIC_DATA), guid("66666666-7777-8888-9999-AAAAAAAAAAAA"),
-        data_start, data_end, "nyx data")
+        data_start, data_end, "zelr data")
 
     entry_crc = zlib.crc32(bytes(entries)) & 0xFFFFFFFF
     if bad_entry_crc:
@@ -149,7 +149,7 @@ def build(path, total_kb=65536, bad_header_crc=False, bad_entry_crc=False):
     esp_img = esp.build()
     img[esp_start * SECTOR:esp_start * SECTOR + len(esp_img)] = esp_img
 
-    data = Fat16Builder(data_sectors * SECTOR // 1024, label="NYXDATA")
+    data = Fat16Builder(data_sectors * SECTOR // 1024, label="ZELRDATA")
     data.add_file("HELLO.TXT", b"read from a gpt partition\n")
     data_img = data.build()
     img[data_start * SECTOR:data_start * SECTOR + len(data_img)] = data_img
@@ -159,7 +159,7 @@ def build(path, total_kb=65536, bad_header_crc=False, bad_entry_crc=False):
     print("  protective mbr at 0, gpt header at 1, entries at 2")
     print("  esp          lba %d..%d  (%d MiB)"
           % (esp_start, esp_end, esp_sectors * SECTOR // 1048576))
-    print("  nyx data     lba %d..%d  (%d MiB)"
+    print("  zelr data     lba %d..%d  (%d MiB)"
           % (data_start, data_end, data_sectors * SECTOR // 1048576))
     return 0
 

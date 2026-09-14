@@ -10,7 +10,7 @@ not known until the thing is linked, so the assembler cannot test them.
 """
 import sys
 
-SIGNATURE = b"NYX1"          # 0x3158594E little-endian
+SIGNATURE = b"ZLR1"          # 0x31524C5A little-endian
 FIRST_SECTOR = 512
 STAGE1_READS = 2048
 

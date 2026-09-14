@@ -6,8 +6,8 @@
     <UseWPF>true</UseWPF>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-    <RootNamespace>NyxLauncher</RootNamespace>
-    <AssemblyName>nyx</AssemblyName>
+    <RootNamespace>ZelrLauncher</RootNamespace>
+    <AssemblyName>zelr</AssemblyName>
     <Platforms>x64</Platforms>
     <ApplicationManifest>app.manifest</ApplicationManifest>
 
@@ -30,7 +30,7 @@
     <!-- The kernel travels inside the launcher, so the release is one file.
          It is the flat image rather than the ELF: no multiboot loader
          will accept a 64-bit ELF, and QEMU's -kernel is one. -->
-    <EmbeddedResource Include="..\build\nyx.bin" Link="nyx.bin" />
+    <EmbeddedResource Include="..\build\zelr.bin" Link="zelr.bin" />
   </ItemGroup>
 
 </Project>

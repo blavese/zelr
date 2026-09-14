@@ -5,7 +5,7 @@
  * shared library would mean a dynamic linker. Two hundred lines of clipping
  * arithmetic is the cheaper answer. */
 #pragma once
-#include "nyx.h"
+#include "zelr.h"
 #include "font.h"
 
 typedef struct {

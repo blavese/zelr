@@ -1,6 +1,6 @@
-/* A bootloader, for booting nyx from a CD or a USB stick.
+/* A bootloader, for booting zelr from a CD or a USB stick.
  *
- * Until now nyx has always been handed to QEMU with -kernel, which means
+ * Until now zelr has always been handed to QEMU with -kernel, which means
  * QEMU did the bootloader's job: it parsed the ELF, put the segments where
  * they belong, built a multiboot information structure and jumped to the
  * entry point. On a real machine nothing does that. This does.
@@ -40,7 +40,7 @@ _start:
     .byte   0x90
 
     /* Patched by tools/mkiso.py. */
-    .ascii  "NYXBOOT1"
+    .ascii  "ZELRBOT1"
 patch_lba:      .long 0          /* first 2048 byte sector of the payload */
 patch_bytes:    .long 0          /* how many bytes of payload there are */
 patch_entry:    .long 0          /* where to jump once it is in memory */
@@ -81,7 +81,7 @@ patch_self:     .long 0          /* the sector this file itself came from */
    clear of everything stage two uses. */
 .set S1_DAP,       0x7010
 .set S1_SCRATCH,   0x9000
-.set S1_SIG,       0x3158594E        /* "NYX1" */
+.set S1_SIG,       0x31524C5A        /* "ZLR1" */
 .set CHUNK_SECTORS, 16           /* 16 x 2048 = 32 KiB per read */
 
 /* --- stage one, which must fit below 0x7E00 ----------------------------- */
@@ -203,7 +203,7 @@ s1_secsize: .word 2048
 s1_try:     .word 0
 /* What the firmware said, then the only two a boot device actually uses. */
 s1_sizes:   .word 0, 2048, 512
-s1_msg:     .asciz "nyx: cannot read the boot device\r\n"
+s1_msg:     .asciz "zelr: cannot read the boot device\r\n"
 
 .align 4
 s1_params:  .space 0x1E
@@ -253,7 +253,7 @@ real_start:
 /* --- real mode helpers -------------------------------------------------- */
 
 /* Prints the null terminated string at DS:SI through the BIOS. This is the
-   only output there is on a machine that has not started nyx yet, so every
+   only output there is on a machine that has not started zelr yet, so every
    failure below ends in one of these. */
 print:
     pushw   %ax
@@ -631,8 +631,8 @@ zero_handoff:
 
     /* The magic the kernel checks before it trusts any of this. */
     /* HANDOFF_MAGIC, low half first, which is how it lands in memory. */
-    movl    $0x3448464F, %es:H_MAGIC
-    movl    $0x4E595836, %es:H_MAGIC + 4
+    movl    $0x36344846, %es:H_MAGIC
+    movl    $0x5A454C52, %es:H_MAGIC + 4
 
     movl    $0x00100000, %es:H_KERNEL_BASE
     movl    $0, %es:H_KERNEL_BASE + 4
@@ -721,7 +721,7 @@ gdt_desc:
     .long   gdt
 
 loader_name:  .asciz "bios"
-msg_boot:     .asciz "nyx bootloader\r\n"
+msg_boot:     .asciz "zelr bootloader\r\n"
 msg_a20:      .asciz "a20 "
 msg_geo:      .asciz "geometry "
 msg_mem:      .asciz "memory "
@@ -744,4 +744,4 @@ msg_a20fail:  .asciz "the a20 gate will not open"
 .align 4
 .globl s1_signature
 s1_signature:
-    .long 0x3158594E
+    .long 0x31524C5A

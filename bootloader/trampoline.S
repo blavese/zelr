@@ -104,7 +104,7 @@ gdt_desc:
    machine word now, because a page table address and a kernel entry point
    are both 64-bit. */
 .align 8
-    .ascii  "NYXSMP01"
+    .ascii  "ZELRSMP1"
 param_cr3:      .quad 0
 param_stack:    .quad 0
 param_entry:    .quad 0

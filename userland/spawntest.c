@@ -1,7 +1,7 @@
 /* Proves a program can start another program, wait for it, and learn what it
    returned. Until spawn and wait existed only the kernel could do any of
    that, which is why anything that composed had to live inside it. */
-#include "nyx.h"
+#include "zelr.h"
 
 int main(void);
 
@@ -35,7 +35,7 @@ int main(void) {
     if (wait_for(9999) != -1) { puts("spawntest: waited on a ghost\n"); return 1; }
 
     /* The task list, which needed a system call of its own. */
-    nyx_task t;
+    zelr_task t;
     int n = 0;
     for (int i = 0; tasks(i, &t) == 1; i++) n++;
     puts("spawntest: "); putn(n); puts(" tasks visible from ring 3\n");

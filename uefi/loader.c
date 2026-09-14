@@ -53,7 +53,7 @@ static void print_dec(u64 v) {
 /* Anything that goes wrong here is fatal: there is nowhere to fall back to
    and no operating system yet to report it. */
 static void die(const CHAR16 *why, EFI_STATUS status) {
-    print(u"\r\nnyx: ");
+    print(u"\r\nzelr: ");
     print(why);
     print(u" (");
     print_hex(status);
@@ -181,7 +181,7 @@ static EFI_FILE_PROTOCOL *open_boot_file(EFI_HANDLE image, const CHAR16 *name) {
    the firmware for that exact address rather than any free pages is the point:
    the kernel is linked to run there. */
 static u64 load_kernel(EFI_HANDLE image, u64 load_at, u64 *size_out) {
-    EFI_FILE_PROTOCOL *file = open_boot_file(image, u"nyx.bin");
+    EFI_FILE_PROTOCOL *file = open_boot_file(image, u"zelr.bin");
 
     /* Seek to the end to learn the size, since asking for file information
        means another structure and another buffer. */
@@ -301,7 +301,7 @@ EFI_STATUS EFIAPI EfiMain(EFI_HANDLE image, EFI_SYSTEM_TABLE *system_table) {
     BS = ST->boot_services;
 
     ST->con_out->clear_screen(ST->con_out);
-    print(u"nyx uefi loader\r\n");
+    print(u"zelr uefi loader\r\n");
 
     /* The firmware will reset the machine if it thinks we have hung. */
     BS->set_watchdog_timer(0, 0, 0, 0);
@@ -343,7 +343,7 @@ EFI_STATUS EFIAPI EfiMain(EFI_HANDLE image, EFI_SYSTEM_TABLE *system_table) {
        is stated in the first sixteen bytes. */
     const char *sig = (const char *)base;
     for (int i = 0; i < 8; i++)
-        if (sig[i] != "NYXKERN"[i]) {
+        if (sig[i] != "ZELRKRN"[i]) {
             /* Nothing can be printed: boot services are gone. */
             for (;;) __asm__ volatile ("hlt");
         }

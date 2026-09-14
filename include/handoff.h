@@ -16,7 +16,7 @@
  * and one of them is a PE binary built for a different ABI.
  */
 
-#define HANDOFF_MAGIC 0x4E5958363448464Full   /* "NYX64HFO" */
+#define HANDOFF_MAGIC 0x5A454C5236344846ull   /* "ZELR64HF" */
 
 /* Kinds of memory, which is all the kernel needs to know. The firmware has
    about fifteen; they collapse to these. */

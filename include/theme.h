@@ -8,7 +8,7 @@
  * by writing a file. The file is plain "key value" lines, because it has to
  * be editable with the `write` command and readable by a person. */
 
-#define THEME_FILE "/nyx.cfg"
+#define THEME_FILE "/zelr.cfg"
 
 typedef enum {
     WALLPAPER_PLAIN = 0,

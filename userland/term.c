@@ -14,7 +14,7 @@
  * The parts, in order: the scrollback, the line editor, the command table,
  * and the loop that feeds one to the other.
  */
-#include "nyx.h"
+#include "zelr.h"
 #include "draw.h"
 
 #define COLS      160
@@ -422,7 +422,7 @@ static void need(const char *usage) { w_reset(); w_str("usage: "); w_str(usage);
 
 static void cmd_ls(int argc, char **argv) {
     const char *where = argc > 1 ? argv[1] : ".";
-    nyx_stat st;
+    zelr_stat st;
     int files = 0, dirs = 0;
     u32 bytes = 0;
 
@@ -464,7 +464,7 @@ static void cmd_ls(int argc, char **argv) {
    filesystem allows nesting deeper than this is useful for. */
 static void walk(const char *dir, int depth, int *files, int *dirs, u32 *bytes) {
     if (depth > 6) return;
-    nyx_stat st;
+    zelr_stat st;
     for (int i = 0; ; i++) {
         if (readdir(dir, i, &st) != 1) break;
 
@@ -491,7 +491,7 @@ static void walk(const char *dir, int depth, int *files, int *dirs, u32 *bytes) 
 
 static void cmd_tree(int argc, char **argv) {
     const char *where = argc > 1 ? argv[1] : ".";
-    nyx_stat st;
+    zelr_stat st;
     if (stat(where, &st) != 0) { err("no such path"); return; }
     if (!st.is_dir) { err("that is a file"); return; }
 
@@ -509,7 +509,7 @@ static void cmd_tree(int argc, char **argv) {
 /* Searches the tree for names containing a string. */
 static void hunt(const char *dir, const char *needle, int depth, int *found) {
     if (depth > 6 || *found >= 200) return;
-    nyx_stat st;
+    zelr_stat st;
     for (int i = 0; ; i++) {
         if (readdir(dir, i, &st) != 1) break;
 
@@ -544,7 +544,7 @@ static char io[IO_BUF];
 
 /* Reads a whole file, returning how much came back, or -1. */
 static int read_all(const char *path) {
-    nyx_stat st;
+    zelr_stat st;
     if (stat(path, &st) != 0) { err("no such file"); return -1; }
     if (st.is_dir) { err("that is a directory"); return -1; }
 
@@ -757,7 +757,7 @@ static bool copy_file(const char *src, const char *dst) {
 
     /* A directory as the target means the same name inside it. */
     char target[VFS_PATH];
-    nyx_stat st;
+    zelr_stat st;
     if (stat(dst, &st) == 0 && st.is_dir) {
         const char *base = src;
         for (const char *p = src; *p; p++) if (*p == '/') base = p + 1;
@@ -784,14 +784,14 @@ static void cmd_mv(int argc, char **argv) {
 
 static void cmd_stat(int argc, char **argv) {
     if (argc < 2) { need("stat PATH"); return; }
-    nyx_stat st;
+    zelr_stat st;
     if (stat(argv[1], &st) != 0) { err("no such path"); return; }
 
     w_reset(); w_str("path      "); w_str(argv[1]); say(work);
     w_reset(); w_str("kind      "); w_str(st.is_dir ? "directory" : "file"); say(work);
     if (st.is_dir) {
         int n = 0;
-        nyx_stat e;
+        zelr_stat e;
         while (readdir(argv[1], n, &e) == 1) n++;
         w_reset(); w_str("entries   "); w_num((u32)n); say(work);
     } else {
@@ -827,7 +827,7 @@ static const char *state_word(u32 s) {
 static void cmd_ps(int argc, char **argv) {
     (void)argc; (void)argv;
     dim(" pid  ring  state      slices  name");
-    nyx_task t;
+    zelr_task t;
     int me = getpid();
     for (int i = 0; tasks(i, &t) == 1; i++) {
         w_reset();
@@ -894,7 +894,7 @@ static void cmd_run(int argc, char **argv) {
 static void cmd_sys(int argc, char **argv) {
     if (argc < 2) {
         dim("the machine, as files");
-        nyx_stat st;
+        zelr_stat st;
         for (int i = 0; readdir("/sys", i, &st) == 1; i++) {
             w_reset(); w_str("  /sys/"); w_str(st.name); say(work);
         }
@@ -948,7 +948,7 @@ static void cmd_time(int argc, char **argv) {
 
 static void cmd_uptime(int argc, char **argv) {
     (void)argc; (void)argv;
-    nyx_sysinfo si;
+    zelr_sysinfo si;
     if (sysinfo(&si) != 0) { err("cannot read the machine"); return; }
     u32 s = si.uptime_seconds;
 
@@ -964,7 +964,7 @@ static void cmd_uptime(int argc, char **argv) {
 
 static void cmd_mem(int argc, char **argv) {
     (void)argc; (void)argv;
-    nyx_sysinfo si;
+    zelr_sysinfo si;
     if (sysinfo(&si) != 0) { err("cannot read the machine"); return; }
 
     /* A bar, because a ratio is easier to see than to read. */
@@ -996,7 +996,7 @@ static void w_ip(u32 v) {
 
 static void cmd_net(int argc, char **argv) {
     (void)argc; (void)argv;
-    nyx_netinfo info;
+    zelr_netinfo info;
     if (netinfo(&info) != 0 || !info.up) { err("no network"); return; }
 
     static const char *labels[4] = { "address  ", "gateway  ", "netmask  ", "resolver " };
@@ -1039,7 +1039,7 @@ static void cmd_get(int argc, char **argv) {
     static char req[512];
     int n = 0;
     const char *parts[5] = { "GET ", path, " HTTP/1.0\r\nHost: ", host,
-                             "\r\nConnection: close\r\nUser-Agent: nyx-term\r\n\r\n" };
+                             "\r\nConnection: close\r\nUser-Agent: zelr-term\r\n\r\n" };
     for (int i = 0; i < 5; i++)
         for (const char *p = parts[i]; *p && n < (int)sizeof(req); p++) req[n++] = *p;
 
@@ -1160,7 +1160,7 @@ static void cmd_pwd(int argc, char **argv) {
 
 static void cmd_about(int argc, char **argv) {
     (void)argc; (void)argv;
-    good("nyx terminal");
+    good("zelr terminal");
     say("A shell that is not part of the kernel.");
     say("");
     w_reset(); w_str("pid       "); w_num((u32)getpid()); say(work);
@@ -1270,7 +1270,7 @@ static void run_line(char *cmdline) {
 
     char path[VFS_PATH];
     path_join("/bin", argv[0], path, sizeof(path));
-    nyx_stat st;
+    zelr_stat st;
     if (stat(path, &st) == 0 && !st.is_dir) {
         bool bg = argc > 1 && argv[argc - 1][0] == '&';
         start_program(path, bg);
@@ -1386,7 +1386,7 @@ static void complete(void) {
         for (int i = 0; i < N_COMMANDS; i++)
             if (strncmp(COMMANDS[i].name, stem, stem_len) == 0) cand_add(COMMANDS[i].name);
 
-        nyx_stat st;
+        zelr_stat st;
         for (int i = 0; readdir("/bin", i, &st) == 1; i++)
             if (strncmp(st.name, stem, stem_len) == 0) cand_add(st.name);
     } else {
@@ -1409,7 +1409,7 @@ static void complete(void) {
         const char *leaf = stem + slash + 1;
         int leaf_len = stem_len - slash - 1;
 
-        nyx_stat st;
+        zelr_stat st;
         for (int i = 0; readdir(dir, i, &st) == 1; i++) {
             if (strncmp(st.name, leaf, leaf_len) != 0) continue;
             /* A directory completes with its slash, so the next tab
@@ -1619,7 +1619,7 @@ int main(void) {
     load_theme();
     history_load();
 
-    good("nyx terminal");
+    good("zelr terminal");
     dim("A shell running in ring 3. Type help, or press F1.");
     dim("Tab completes, up and down are history, PageUp scrolls.");
     say("");

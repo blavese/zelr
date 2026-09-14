@@ -516,7 +516,7 @@ def main():
           % (total, inked), file=sys.stderr)
 
     if "-p" in sys.argv:
-        for sample in ("nyx> Hello 123", "The quick brown fox",
+        for sample in ("zelr> Hello 123", "The quick brown fox",
                        "jumps over {a} [lazy] dog!", "0O1lI |#@%&*_+=~"):
             print(preview(glyphs, sample))
             print()

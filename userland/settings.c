@@ -11,10 +11,10 @@
  * can also be done with the shell's write command, and a settings program
  * that is the only way to change a setting is a settings program you cannot
  * fix when it breaks. */
-#include "nyx.h"
+#include "zelr.h"
 #include "ui.h"
 
-#define CFG "/nyx.cfg"
+#define CFG "/zelr.cfg"
 
 #define SIDEBAR_W 150
 
@@ -289,7 +289,7 @@ void _start(void) {
         else                y = page_about(&s, &in, &t, x, y, cw);
 
         const char *msg = "changes apply as you make them";
-        if (saved_at && ticks() - saved_at < 90) msg = "saved to /nyx.cfg";
+        if (saved_at && ticks() - saved_at < 90) msg = "saved to /zelr.cfg";
         ui_statusbar(&s, &t, w, h, msg, PAGES[page]);
 
         win_commit(win);

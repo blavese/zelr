@@ -3,7 +3,7 @@
 
 This exists because the UEFI half of a bootable image is an EFI System
 Partition, and an ESP is a FAT filesystem. The usual way to make one is
-mtools or a loopback mount, and nyx does not use either: the kernel already
+mtools or a loopback mount, and zelr does not use either: the kernel already
 implements FAT16 from the specification and so does the host-side reader, so
 this is the third implementation of the same document and the one that has to
 create a volume rather than read it.
@@ -27,7 +27,7 @@ class Fat16Builder:
     Cluster allocation is sequential and nothing is ever deleted, which is
     what an image built once and never modified allows."""
 
-    def __init__(self, size_kb, label="NYX"):
+    def __init__(self, size_kb, label="ZELR"):
         self.total_sectors = (size_kb * 1024) // SECTOR
 
         # FAT16 needs at least 4085 clusters to be FAT16 at all, and no more
@@ -194,7 +194,7 @@ class Fat16Builder:
     def boot_sector(self):
         s = bytearray(SECTOR)
         s[0:3] = bytes([0xEB, 0x3C, 0x90])
-        s[3:11] = b"NYX     "
+        s[3:11] = b"ZELR    "
         struct.pack_into("<H", s, 11, SECTOR)
         s[13] = self.sectors_per_cluster
         struct.pack_into("<H", s, 14, self.reserved)
@@ -211,7 +211,7 @@ class Fat16Builder:
                          self.total_sectors if self.total_sectors >= 0x10000 else 0)
         s[36] = 0x80
         s[38] = 0x29
-        struct.pack_into("<I", s, 39, 0x4E595802)
+        struct.pack_into("<I", s, 39, 0x5A4C5202)
         s[43:54] = self.label.upper().ljust(11)[:11].encode("ascii")
         s[54:62] = b"FAT16   "
         s[510] = 0x55
@@ -255,7 +255,7 @@ class Fat32Builder:
     else, so this refuses to produce one small enough to be read as FAT16.
     """
 
-    def __init__(self, size_kb, label="NYX32"):
+    def __init__(self, size_kb, label="ZELR32"):
         self.total_sectors = (size_kb * 1024) // SECTOR
 
         # Small clusters, so a modest image still clears 65524 of them. One
@@ -406,7 +406,7 @@ class Fat32Builder:
     def boot_sector(self):
         s = bytearray(SECTOR)
         s[0:3] = bytes([0xEB, 0x58, 0x90])
-        s[3:11] = b"NYX     "
+        s[3:11] = b"ZELR    "
         struct.pack_into("<H", s, 11, SECTOR)
         s[13] = self.sectors_per_cluster
         struct.pack_into("<H", s, 14, self.reserved)
@@ -427,7 +427,7 @@ class Fat32Builder:
         struct.pack_into("<H", s, 50, 6)            # backup boot sector
         s[64] = 0x80
         s[66] = 0x29
-        struct.pack_into("<I", s, 67, 0x4E595800)
+        struct.pack_into("<I", s, 67, 0x5A4C5200)
         s[71:82] = self.label.upper()[:11].ljust(11).encode("ascii")
         s[82:90] = b"FAT32   "
         s[510], s[511] = 0x55, 0xAA

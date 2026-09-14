@@ -14,7 +14,7 @@ bool fat_mounted(void);
 /* Whether the mounted volume is one this kernel formatted, which is what
    the OEM name and volume serial in the boot sector say. Used to prefer
    our own volume over one that is merely FAT. */
-bool fat_is_nyx_volume(void);
+bool fat_is_zelr_volume(void);
 
 /* 16 or 32, decided from the cluster count rather than the label. */
 u32  fat_type(void);

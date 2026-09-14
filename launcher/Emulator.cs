@@ -4,7 +4,7 @@ using System.IO;
 using System.Reflection;
 using Microsoft.Win32;
 
-namespace NyxLauncher;
+namespace ZelrLauncher;
 
 /// <summary>
 /// Finds QEMU, unpacks the kernel, and starts the machine. Kept away from the
@@ -57,13 +57,13 @@ public static class Emulator
     /// <summary>Writes the embedded kernel next to the user's temp folder and returns its path.</summary>
     public static string ExtractKernel()
     {
-        var dir = Path.Combine(Path.GetTempPath(), "nyx");
+        var dir = Path.Combine(Path.GetTempPath(), "zelr");
         Directory.CreateDirectory(dir);
-        var dest = Path.Combine(dir, "nyx.bin");
+        var dest = Path.Combine(dir, "zelr.bin");
 
         var asm = Assembly.GetExecutingAssembly();
         var name = asm.GetManifestResourceNames()
-                      .FirstOrDefault(n => n.EndsWith("nyx.bin", StringComparison.OrdinalIgnoreCase))
+                      .FirstOrDefault(n => n.EndsWith("zelr.bin", StringComparison.OrdinalIgnoreCase))
                    ?? throw new FileNotFoundException("The kernel is missing from this build.");
 
         using var src = asm.GetManifestResourceStream(name)
@@ -78,10 +78,23 @@ public static class Emulator
     {
         get
         {
-            var dir = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "nyx");
+            var local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+            var dir = Path.Combine(local, "zelr");
+            var disk = Path.Combine(dir, "disk.img");
+
+            // Anyone who ran this before the rename has their files in the
+            // old folder. Moving the image is the difference between keeping
+            // them and silently starting over with an empty disk.
+            var older = Path.Combine(local, "nyx", "disk.img");
+            if (!File.Exists(disk) && File.Exists(older))
+            {
+                Directory.CreateDirectory(dir);
+                File.Move(older, disk);
+                return disk;
+            }
+
             Directory.CreateDirectory(dir);
-            return Path.Combine(dir, "disk.img");
+            return disk;
         }
     }
 
@@ -132,7 +145,7 @@ public static class Emulator
         psi.ArgumentList.Add("-kernel");      psi.ArgumentList.Add(kernel);
         psi.ArgumentList.Add("-m");           psi.ArgumentList.Add("64");
         psi.ArgumentList.Add("-no-reboot");
-        psi.ArgumentList.Add("-name");        psi.ArgumentList.Add("nyx");
+        psi.ArgumentList.Add("-name");        psi.ArgumentList.Add("zelr");
 
         // a persistent disk, so anything saved is still there next time
         psi.ArgumentList.Add("-drive");

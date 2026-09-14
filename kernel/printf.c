@@ -158,7 +158,7 @@ void panic(const char *fmt, ...) {
        already happened and the log survives either way. */
     bool written = bb_flush();
     bb_screen();
-    if (!written) kputs("\n(black box not written: not a nyx volume)\n");
+    if (!written) kputs("\n(black box not written: not a zelr volume)\n");
 
     for (;;) hlt();
 }

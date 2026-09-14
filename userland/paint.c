@@ -7,7 +7,7 @@
  *
  * Drawing primitives are here rather than shared with the kernel, because
  * nothing is shared with the kernel. */
-#include "nyx.h"
+#include "zelr.h"
 
 #define TOOLBAR_H  58
 #define SWATCH     24

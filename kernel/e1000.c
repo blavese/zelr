@@ -1,7 +1,7 @@
 /* Intel 82540EM (e1000).
  *
  * This is the card VirtualBox and VMware present by default, so supporting it
- * is what lets nyx run somewhere other than QEMU. Unlike the RTL8139 it is
+ * is what lets zelr run somewhere other than QEMU. Unlike the RTL8139 it is
  * driven through memory mapped registers and descriptor rings rather than
  * port I/O, and it does the DMA itself: the driver hands it a list of buffers
  * and moves a tail pointer.

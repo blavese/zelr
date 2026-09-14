@@ -2,7 +2,7 @@
  *
  * Modern machines and modern virtual machines present their disks through an
  * AHCI controller rather than the IDE interface the ATA PIO driver speaks, so
- * this is what lets nyx see a disk anywhere but QEMU's legacy default.
+ * this is what lets zelr see a disk anywhere but QEMU's legacy default.
  *
  * The model is different from PIO in a useful way: instead of the CPU moving
  * every word through a port, the driver builds a command in memory, points

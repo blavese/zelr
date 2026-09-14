@@ -15,18 +15,25 @@ bash build.sh >/dev/null
 
 # A raw image file is the disk. It is created on first run and then
 # persists, which is the whole point.
-DISK="${NYX_DISK:-nyx.img}"
+DISK="${ZELR_DISK:-zelr.img}"
+# A disk made before the rename still holds its files, so it comes along.
+# zelr will not claim it as its own volume until it is formatted again,
+# because the name is stamped in the boot sector, but it mounts and reads.
+if [ ! -f "$DISK" ] && [ -f nyx.img ]; then
+  echo "keeping nyx.img from before the rename as $DISK"
+  mv nyx.img "$DISK"
+fi
 if [ ! -f "$DISK" ]; then
   echo "creating $DISK (16 MiB)"
   head -c 16777216 /dev/zero > "$DISK"
 fi
-COMMON=(-kernel build/nyx.bin -m 64 -no-reboot
+COMMON=(-kernel build/zelr.bin -m 64 -no-reboot
         -drive "file=$DISK,format=raw,if=ide,index=0"
         -netdev user,id=n0 -device rtl8139,netdev=n0)
 case "$1" in
   -i) shift
       python tools/mkiso.py
-      exec "$QEMU" -cdrom build/nyx.iso -boot d -m 64 -no-reboot            -drive "file=$DISK,format=raw,if=ide,index=0"            -netdev user,id=n0 -device rtl8139,netdev=n0 -serial stdio "$@" ;;
+      exec "$QEMU" -cdrom build/zelr.iso -boot d -m 64 -no-reboot            -drive "file=$DISK,format=raw,if=ide,index=0"            -netdev user,id=n0 -device rtl8139,netdev=n0 -serial stdio "$@" ;;
   -T) shift
       set +e
       "$QEMU" "${COMMON[@]}" -append selftest -serial stdio -display none \

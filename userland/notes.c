@@ -10,7 +10,7 @@
  * means saving is one write and loading is one read with nothing in between
  * that can disagree about what a line is.
  */
-#include "nyx.h"
+#include "zelr.h"
 #include "ui.h"
 
 #define BUF_MAX   65536

@@ -1,17 +1,17 @@
 @echo off
-rem Boot nyx in QEMU. Double-click it, or run it with one of the words below.
+rem Boot zelr in QEMU. Double-click it, or run it with one of the words below.
 rem
-rem   nyx.bat              a window, on hardware like a machine from 2010
-rem   nyx.bat modern       q35, UEFI, four processors, an NVMe disk
-rem   nyx.bat iso          boot the disc image the way a real machine would
-rem   nyx.bat serial       no window, everything on this console
-rem   nyx.bat test         run the kernel's own checks and report
+rem   zelr.bat              a window, on hardware like a machine from 2010
+rem   zelr.bat modern       q35, UEFI, four processors, an NVMe disk
+rem   zelr.bat iso          boot the disc image the way a real machine would
+rem   zelr.bat serial       no window, everything on this console
+rem   zelr.bat test         run the kernel's own checks and report
 rem
-rem The disk is nyx.img next to this file. It is made on first run and kept
-rem afterwards, which is the point: files written in nyx are still there the
+rem The disk is zelr.img next to this file. It is made on first run and kept
+rem afterwards, which is the point: files written in zelr are still there the
 rem next time. Delete it to start clean.
 rem
-rem The memory given below is more than nyx will use. It maps 64 MiB of
+rem The memory given below is more than zelr will use. It maps 64 MiB of
 rem itself and ignores the rest, so -m 512 and -m 4096 look identical from
 rem inside; what makes it smooth is the acceleration, not the size.
 
@@ -35,8 +35,8 @@ if not defined QEMU (
 )
 
 rem --- the kernel must have been built --------------------------------------
-if not exist "build\nyx.bin" (
-  echo build\nyx.bin is not there. Build it first:
+if not exist "build\zelr.bin" (
+  echo build\zelr.bin is not there. Build it first:
   echo.
   echo   bash build.sh
   echo.
@@ -60,12 +60,22 @@ rem running it, and the honest probe took nine seconds.
 set "ACCEL=accel=whpx:tcg"
 
 rem --- the disk -------------------------------------------------------------
-if not exist "nyx.img" (
-  echo Making nyx.img, 64 MiB. Files written in nyx will be kept in it.
-  fsutil file createnew nyx.img 67108864 >nul 2>&1
+rem A disk made before the rename is still a working filesystem, so it is
+rem taken along rather than left behind for a new empty one. What it is not
+rem is a volume zelr claims as its own: the name is stamped into the boot
+rem sector, so the boot log will not write to it until it is formatted
+rem again. The files on it are readable either way.
+if not exist "zelr.img" if exist "nyx.img" (
+  echo Found nyx.img from before the rename. Keeping it as zelr.img.
+  ren nyx.img zelr.img
+)
+
+if not exist "zelr.img" (
+  echo Making zelr.img, 64 MiB. Files written in zelr will be kept in it.
+  fsutil file createnew zelr.img 67108864 >nul 2>&1
   if errorlevel 1 (
     rem fsutil needs a privilege some setups withhold; PowerShell does not.
-    powershell -NoProfile -Command "$f=[IO.File]::Create('nyx.img');$f.SetLength(67108864);$f.Close()"
+    powershell -NoProfile -Command "$f=[IO.File]::Create('zelr.img');$f.SetLength(67108864);$f.Close()"
   )
 )
 
@@ -86,19 +96,19 @@ rem --------------------------------------------------------------------------
 :plain
 rem An ordinary machine: one processor, a SATA disk, a network card. This is
 rem the configuration most likely to just work.
-echo Booting nyx. Close the window to stop it.
+echo Booting zelr. Close the window to stop it.
 "%QEMU%" -machine q35,%ACCEL% -smp 2 -m 512 -no-reboot ^
-  -drive "file=nyx.img,format=raw,if=none,id=d0" ^
+  -drive "file=zelr.img,format=raw,if=none,id=d0" ^
   -device ahci,id=ahci -device ide-hd,drive=d0,bus=ahci.0 ^
   -netdev user,id=n0 -device e1000,netdev=n0 ^
-  -kernel build\nyx.bin -serial stdio
+  -kernel build\zelr.bin -serial stdio
 goto done
 
 rem --------------------------------------------------------------------------
 :modern
 rem What a laptop bought this decade looks like: UEFI firmware, four
 rem processors, and an NVMe disk rather than anything resembling a cable.
-rem The keyboard is still PS/2, because nyx has no USB stack yet and a
+rem The keyboard is still PS/2, because zelr has no USB stack yet and a
 rem machine with only USB input would boot to a desktop you cannot type on.
 set "FW=%ProgramFiles%\qemu\share\edk2-x86_64-code.fd"
 if not exist "%FW%" (
@@ -111,9 +121,9 @@ rem This one boots the disc rather than being handed the kernel. QEMU's
 rem -kernel loads a kernel itself, which is a shortcut that skips the firmware
 rem entirely; give it UEFI firmware as well and the firmware runs, finds
 rem nothing it can boot, and drops you at an EFI shell. Booting the image goes
-rem through nyx's own UEFI loader, which is the path a real machine takes.
-if not exist "build\nyx.iso" (
-  echo build\nyx.iso is not there, and UEFI needs it rather than the bare
+rem through zelr's own UEFI loader, which is the path a real machine takes.
+if not exist "build\zelr.iso" (
+  echo build\zelr.iso is not there, and UEFI needs it rather than the bare
   echo kernel. Make it with:
   echo.
   echo   python tools\mkiso.py
@@ -121,29 +131,29 @@ if not exist "build\nyx.iso" (
   pause
   exit /b 1
 )
-echo Booting nyx on UEFI, four processors, NVMe. Close the window to stop it.
+echo Booting zelr on UEFI, four processors, NVMe. Close the window to stop it.
 "%QEMU%" -machine q35,%ACCEL% -smp 4 -m 1024 -no-reboot ^
   -drive "if=pflash,format=raw,readonly=on,file=%FW%" ^
-  -cdrom build\nyx.iso -boot d ^
-  -drive "file=nyx.img,format=raw,if=none,id=nv0" ^
-  -device nvme,drive=nv0,serial=nyx0001 ^
+  -cdrom build\zelr.iso -boot d ^
+  -drive "file=zelr.img,format=raw,if=none,id=nv0" ^
+  -device nvme,drive=nv0,serial=zelr0001 ^
   -netdev user,id=n0 -device e1000,netdev=n0 ^
   -serial stdio
 goto done
 
 rem --------------------------------------------------------------------------
 :iso
-rem Through nyx's own bootloader rather than QEMU's -kernel shortcut, which
+rem Through zelr's own bootloader rather than QEMU's -kernel shortcut, which
 rem is the only way to exercise the path a real machine takes.
-if not exist "build\nyx.iso" (
-  echo build\nyx.iso is not there. Make it with:
+if not exist "build\zelr.iso" (
+  echo build\zelr.iso is not there. Make it with:
   echo   python tools\mkiso.py
   pause
   exit /b 1
 )
 echo Booting the disc image. Close the window to stop it.
-"%QEMU%" -machine q35,%ACCEL% -smp 2 -m 512 -no-reboot -cdrom build\nyx.iso -boot d ^
-  -drive "file=nyx.img,format=raw,if=none,id=d0" ^
+"%QEMU%" -machine q35,%ACCEL% -smp 2 -m 512 -no-reboot -cdrom build\zelr.iso -boot d ^
+  -drive "file=zelr.img,format=raw,if=none,id=d0" ^
   -device ahci,id=ahci -device ide-hd,drive=d0,bus=ahci.0 ^
   -netdev user,id=n0 -device e1000,netdev=n0 -serial stdio
 goto done
@@ -152,19 +162,19 @@ rem --------------------------------------------------------------------------
 :serial
 echo No window. Everything appears here; Ctrl+C stops it.
 "%QEMU%" -machine q35,%ACCEL% -smp 2 -m 512 -no-reboot -display none ^
-  -drive "file=nyx.img,format=raw,if=none,id=d0" ^
+  -drive "file=zelr.img,format=raw,if=none,id=d0" ^
   -device ahci,id=ahci -device ide-hd,drive=d0,bus=ahci.0 ^
-  -kernel build\nyx.bin -serial stdio
+  -kernel build\zelr.bin -serial stdio
 goto done
 
 rem --------------------------------------------------------------------------
 :test
 echo Running the kernel's own checks.
 "%QEMU%" -machine q35,%ACCEL% -smp 2 -m 512 -no-reboot -display none ^
-  -drive "file=nyx.img,format=raw,if=none,id=d0" ^
+  -drive "file=zelr.img,format=raw,if=none,id=d0" ^
   -device ahci,id=ahci -device ide-hd,drive=d0,bus=ahci.0 ^
   -device isa-debug-exit,iobase=0xf4,iosize=0x04 ^
-  -kernel build\nyx.bin -append selftest -serial stdio
+  -kernel build\zelr.bin -append selftest -serial stdio
 rem isa-debug-exit reports (code shifted left, or one), so 1 means it passed.
 if errorlevel 2 (
   echo.

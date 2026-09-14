@@ -44,7 +44,7 @@ bool diskfs_format(void) {
         bb_log("fs refused to format a partitioned disk");
         return false;
     }
-    return fat_format("NYX");
+    return fat_format("ZELR");
 }
 
 static int finish_mount(void) {
@@ -94,11 +94,11 @@ int diskfs_mount(void) {
 
             if (!fat_mount_at(p->start)) continue;
 
-            bool ours = fat_is_nyx_volume();
+            bool ours = fat_is_zelr_volume();
             if (pass == 0 && !ours) continue;      /* keep looking for one of ours */
 
             kprintf("  fs      fat16 on partition %d (%s)%s\n",
-                    i + 1, p->name, ours ? ", made by nyx" : "");
+                    i + 1, p->name, ours ? ", made by zelr" : "");
             bb_log("fs mounted partition %d at lba %d, %s",
                    i + 1, p->start, ours ? "ours" : "not ours");
             return finish_mount();

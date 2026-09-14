@@ -158,7 +158,7 @@ static i64 sys_clip_get(registers_t *r) {
 
 static i64 sys_tasks(registers_t *r) {
     u32 index = (u32)r->rbx;
-    if (!user_range_ok(r->rcx, sizeof(nyx_task_t))) return -1;
+    if (!user_range_ok(r->rcx, sizeof(zelr_task_t))) return -1;
 
     task_t *head = task_list();
     if (!head) return 0;
@@ -167,7 +167,7 @@ static i64 sys_tasks(registers_t *r) {
     task_t *p = head;
     do {
         if (i == index) {
-            nyx_task_t out;
+            zelr_task_t out;
             memset(&out, 0, sizeof(out));
             out.pid = p->pid;
             out.state = (u32)p->state;
@@ -291,9 +291,9 @@ static i64 sys_rmdir(registers_t *r) {
 static i64 sys_readdir(registers_t *r) {
     char path[VFS_PATH_MAX];
     if (!copy_path(r->rbx, path, sizeof(path))) return -1;
-    if (!user_range_ok(r->rdx, sizeof(nyx_stat_t))) return -1;
+    if (!user_range_ok(r->rdx, sizeof(zelr_stat_t))) return -1;
 
-    nyx_stat_t st;
+    zelr_stat_t st;
     memset(&st, 0, sizeof(st));
     bool is_dir = false;
     int rc = vfs_list(path, r->rcx, st.name, &st.size, &is_dir);
@@ -306,9 +306,9 @@ static i64 sys_readdir(registers_t *r) {
 static i64 sys_stat(registers_t *r) {
     char path[VFS_PATH_MAX];
     if (!copy_path(r->rbx, path, sizeof(path))) return -1;
-    if (!user_range_ok(r->rcx, sizeof(nyx_stat_t))) return -1;
+    if (!user_range_ok(r->rcx, sizeof(zelr_stat_t))) return -1;
 
-    nyx_stat_t st;
+    zelr_stat_t st;
     memset(&st, 0, sizeof(st));
     bool is_dir = false;
     if (!vfs_stat(path, &st.size, &is_dir)) return -1;
@@ -403,8 +403,8 @@ static i64 sys_resolve(registers_t *r) {
 }
 
 static i64 sys_netinfo(registers_t *r) {
-    if (!user_range_ok(r->rbx, sizeof(nyx_netinfo_t))) return -1;
-    nyx_netinfo_t info;
+    if (!user_range_ok(r->rbx, sizeof(zelr_netinfo_t))) return -1;
+    zelr_netinfo_t info;
     memset(&info, 0, sizeof(info));
     info.up = net_up() ? 1 : 0;
     if (info.up) {
@@ -472,9 +472,9 @@ static i64 sys_win_close(registers_t *r) {
 }
 
 static i64 sys_sysinfo(registers_t *r) {
-    if (!user_range_ok(r->rbx, sizeof(nyx_sysinfo_t))) return -1;
+    if (!user_range_ok(r->rbx, sizeof(zelr_sysinfo_t))) return -1;
 
-    nyx_sysinfo_t info;
+    zelr_sysinfo_t info;
     memset(&info, 0, sizeof(info));
     info.cpus_found = smp_cpu_count();
     info.cpus_started = smp_started();

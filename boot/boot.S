@@ -23,7 +23,7 @@
    multiboot header rather than code, so the entry point is stated here. */
 .section .kheader
 .align 16
-.ascii "NYXKERN"
+.ascii "ZELRKRN"
 .byte 0
 .quad _start64                   /* for a loader already in long mode */
 .quad _start32                   /* for one still in 32-bit protected mode */
@@ -257,4 +257,4 @@ _start64:
 mb_magic:     .long 0
 mb_info:      .long 0
 from_handoff: .long 0
-msg_no64: .asciz "nyx needs a 64-bit processor"
+msg_no64: .asciz "zelr needs a 64-bit processor"

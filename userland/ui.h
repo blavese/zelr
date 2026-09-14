@@ -47,7 +47,7 @@ typedef struct {
  * for programs. That would have meant changing the accent in Settings
  * recoloured the window chrome and left every window's contents alone, which
  * is exactly the incoherence that makes a collection of programs not a
- * desktop environment. So this parses /nyx.cfg, the one the window manager
+ * desktop environment. So this parses /zelr.cfg, the one the window manager
  * already re-reads four times a second, and derives everything from the same
  * choice.
  *
@@ -93,7 +93,7 @@ static inline int ui_cfg_int(const char *text, const char *key, int fallback) {
 
 static inline ui_theme ui_load_theme(void) {
     char cfg[1024];
-    int n = slurp("/nyx.cfg", cfg, sizeof(cfg) - 1);
+    int n = slurp("/zelr.cfg", cfg, sizeof(cfg) - 1);
     if (n < 0) n = 0;
     cfg[n] = 0;
 

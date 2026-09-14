@@ -43,7 +43,7 @@ int http_get(const char *host, const char *path, const char *save_as) {
     fits &= append(req, sizeof(req), &n, " HTTP/1.0\r\nHost: ");
     fits &= append(req, sizeof(req), &n, host);
     fits &= append(req, sizeof(req), &n,
-                   "\r\nUser-Agent: nyx/" KERNEL_VERSION
+                   "\r\nUser-Agent: zelr/" KERNEL_VERSION
                    "\r\nConnection: close\r\n\r\n");
     if (!fits) { tcp_close(); return HTTP_ERR_TOOLONG; }
 

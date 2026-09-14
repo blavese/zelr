@@ -17,7 +17,7 @@ typedef _Bool bool;
 
 /* Wide enough to hold a pointer, which on this machine an int is not. Every
    argument that crosses into the kernel goes through one of these. */
-typedef long long          nyx_word;
+typedef long long          zelr_word;
 
 #define SYS_EXIT       0
 #define SYS_PUTC       1
@@ -63,11 +63,11 @@ typedef long long          nyx_word;
 #define SYS_CLIP_SET      38
 #define SYS_CLIP_GET      39
 
-/* The one door into the kernel. The registers are the same ones a 32-bit nyx
+/* The one door into the kernel. The registers are the same ones a 32-bit zelr
    used, only twice as wide, which is why every argument is a word rather than
    an int: an int would quietly cut the top half off a pointer. */
-static inline nyx_word syscall(nyx_word n, nyx_word a, nyx_word b, nyx_word c) {
-    nyx_word r;
+static inline zelr_word syscall(zelr_word n, zelr_word a, zelr_word b, zelr_word c) {
+    zelr_word r;
     __asm__ volatile ("int $0x80"
                       : "=a"(r)
                       : "a"(n), "b"(a), "c"(b), "d"(c)
@@ -83,11 +83,11 @@ static inline int  ticks(void)           { return syscall(SYS_TICKS, 0, 0, 0); }
 static inline void sleep_ms(int ms)      { syscall(SYS_SLEEP, ms, 0, 0); }
 
 static inline int write(const char *s, int len) {
-    return syscall(SYS_WRITE, 0, (nyx_word)s, len);
+    return syscall(SYS_WRITE, 0, (zelr_word)s, len);
 }
 
 static inline int read_file(const char *name, char *buf, int cap) {
-    return syscall(SYS_READ_FILE, (nyx_word)name, (nyx_word)buf, cap);
+    return syscall(SYS_READ_FILE, (zelr_word)name, (zelr_word)buf, cap);
 }
 
 /* --- strings -------------------------------------------------------------
@@ -178,37 +178,37 @@ typedef struct {
     u32  size;
     u32  is_dir;
     char name[32];
-} nyx_stat;
+} zelr_stat;
 
 static inline int open(const char *path, u32 flags) {
-    return syscall(SYS_OPEN, (nyx_word)path, (nyx_word)flags, 0);
+    return syscall(SYS_OPEN, (zelr_word)path, (zelr_word)flags, 0);
 }
 static inline int close(int fd)  { return syscall(SYS_CLOSE, fd, 0, 0); }
 
 static inline int fread(int fd, void *buf, int len) {
-    return syscall(SYS_FREAD, fd, (nyx_word)buf, len);
+    return syscall(SYS_FREAD, fd, (zelr_word)buf, len);
 }
 static inline int fwrite(int fd, const void *buf, int len) {
-    return syscall(SYS_FWRITE, fd, (nyx_word)buf, len);
+    return syscall(SYS_FWRITE, fd, (zelr_word)buf, len);
 }
 static inline int seek(int fd, int off, int whence) {
     return syscall(SYS_SEEK, fd, off, whence);
 }
 
-static inline int unlink(const char *path) { return syscall(SYS_UNLINK, (nyx_word)path, 0, 0); }
-static inline int mkdir(const char *path)  { return syscall(SYS_MKDIR, (nyx_word)path, 0, 0); }
-static inline int rmdir(const char *path)  { return syscall(SYS_RMDIR, (nyx_word)path, 0, 0); }
+static inline int unlink(const char *path) { return syscall(SYS_UNLINK, (zelr_word)path, 0, 0); }
+static inline int mkdir(const char *path)  { return syscall(SYS_MKDIR, (zelr_word)path, 0, 0); }
+static inline int rmdir(const char *path)  { return syscall(SYS_RMDIR, (zelr_word)path, 0, 0); }
 
 /* Returns 1 when an entry was produced, 0 past the end, -1 on error. */
-static inline int readdir(const char *path, int index, nyx_stat *out) {
-    return syscall(SYS_READDIR, (nyx_word)path, index, (nyx_word)out);
+static inline int readdir(const char *path, int index, zelr_stat *out) {
+    return syscall(SYS_READDIR, (zelr_word)path, index, (zelr_word)out);
 }
-static inline int stat(const char *path, nyx_stat *out) {
-    return syscall(SYS_STAT, (nyx_word)path, (nyx_word)out, 0);
+static inline int stat(const char *path, zelr_stat *out) {
+    return syscall(SYS_STAT, (zelr_word)path, (zelr_word)out, 0);
 }
-static inline int chdir(const char *path) { return syscall(SYS_CHDIR, (nyx_word)path, 0, 0); }
+static inline int chdir(const char *path) { return syscall(SYS_CHDIR, (zelr_word)path, 0, 0); }
 static inline int getcwd(char *buf, int cap) {
-    return syscall(SYS_GETCWD, (nyx_word)buf, cap, 0);
+    return syscall(SYS_GETCWD, (zelr_word)buf, cap, 0);
 }
 
 /* Reads a whole file into a caller-supplied buffer. Returns the length. */
@@ -244,24 +244,24 @@ typedef struct {
     u32 ip, gateway, netmask, dns;
     u8  mac[6];
     u16 pad;
-} nyx_netinfo;
+} zelr_netinfo;
 
 static inline int connect(const char *host, int port) {
-    return syscall(SYS_CONNECT, (nyx_word)host, port, 0);
+    return syscall(SYS_CONNECT, (zelr_word)host, port, 0);
 }
 static inline int send(const void *buf, int len) {
-    return syscall(SYS_SEND, 0, (nyx_word)buf, len);
+    return syscall(SYS_SEND, 0, (zelr_word)buf, len);
 }
 static inline int recv(void *buf, int len) {
-    return syscall(SYS_RECV, 0, (nyx_word)buf, len);
+    return syscall(SYS_RECV, 0, (zelr_word)buf, len);
 }
 static inline int disconnect(void) { return syscall(SYS_DISCONNECT, 0, 0, 0); }
 
 static inline int resolve(const char *host, u32 *out) {
-    return syscall(SYS_RESOLVE, (nyx_word)host, (nyx_word)out, 0);
+    return syscall(SYS_RESOLVE, (zelr_word)host, (zelr_word)out, 0);
 }
-static inline int netinfo(nyx_netinfo *out) {
-    return syscall(SYS_NETINFO, (nyx_word)out, 0, 0);
+static inline int netinfo(zelr_netinfo *out) {
+    return syscall(SYS_NETINFO, (zelr_word)out, 0, 0);
 }
 
 /* What the machine is, as far as a program is allowed to know. */
@@ -274,10 +274,10 @@ typedef struct {
     u32 screen_w, screen_h;
     u32 syscalls;
     u32 disk_kb_free;
-} nyx_sysinfo;
+} zelr_sysinfo;
 
-static inline int sysinfo(nyx_sysinfo *out) {
-    return syscall(SYS_SYSINFO, (nyx_word)out, 0, 0);
+static inline int sysinfo(zelr_sysinfo *out) {
+    return syscall(SYS_SYSINFO, (zelr_word)out, 0, 0);
 }
 
 /* --- other programs ------------------------------------------------------
@@ -298,10 +298,10 @@ typedef struct {
     u32  slices;
     u32  user;
     char name[32];
-} nyx_task;
+} zelr_task;
 
 static inline int spawn(const char *path) {
-    return syscall(SYS_SPAWN, (nyx_word)path, 0, 0);
+    return syscall(SYS_SPAWN, (zelr_word)path, 0, 0);
 }
 static inline int wait_for(int pid) {
     return syscall(SYS_WAIT, pid, 0, 0);
@@ -310,8 +310,8 @@ static inline int kill(int pid) {
     return syscall(SYS_KILL, pid, 0, 0);
 }
 /* Returns 1 when an entry was produced, 0 past the end. */
-static inline int tasks(int index, nyx_task *out) {
-    return syscall(SYS_TASKS, index, (nyx_word)out, 0);
+static inline int tasks(int index, zelr_task *out) {
+    return syscall(SYS_TASKS, index, (zelr_word)out, 0);
 }
 
 /* Starts a program and waits for it, which is what a shell wants. */
@@ -328,13 +328,13 @@ static inline int run_program(const char *path) {
    copied as it stands. */
 
 static inline int clip_set(const char *text, int len) {
-    return syscall(SYS_CLIP_SET, (nyx_word)text, len, 0);
+    return syscall(SYS_CLIP_SET, (zelr_word)text, len, 0);
 }
 
 /* With cap 0 this answers how many bytes are waiting, so a caller can size a
    buffer before asking for the contents. */
 static inline int clip_get(char *out, int cap) {
-    return syscall(SYS_CLIP_GET, (nyx_word)out, cap, 0);
+    return syscall(SYS_CLIP_GET, (zelr_word)out, cap, 0);
 }
 
 static inline int clip_len(void) { return syscall(SYS_CLIP_GET, 0, 0, 0); }
@@ -404,7 +404,7 @@ static inline int key_ctrl_letter(u32 k) {
 }
 
 static inline int win_create(const char *title, int w, int h) {
-    return syscall(SYS_WIN_CREATE, (nyx_word)title, w, h);
+    return syscall(SYS_WIN_CREATE, (zelr_word)title, w, h);
 }
 
 /* The address of this window's pixels, row major, one u32 per pixel. */
@@ -423,7 +423,7 @@ static inline int win_height(int handle) {
 }
 
 static inline int win_poll(int handle, win_event *ev) {
-    return syscall(SYS_WIN_POLL, handle, (nyx_word)ev, 0);
+    return syscall(SYS_WIN_POLL, handle, (zelr_word)ev, 0);
 }
 
 static inline int win_commit(int handle) {

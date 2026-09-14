@@ -398,7 +398,7 @@ static void dhcp_build(dhcp_t *d, u8 type, ipv4_t req_ip, ipv4_t server) {
 bool net_dhcp(u32 timeout_ms) {
     if (!netdev_up()) return false;
 
-    dhcp_xid = 0x4E595800u ^ (u32)timer_ticks();
+    dhcp_xid = 0x5A4C5200u ^ (u32)timer_ticks();
     dhcp_offer_got = dhcp_ack_got = false;
     dhcp_mask = dhcp_gw = dhcp_dns = 0;
     my_ip = 0; bound = false;

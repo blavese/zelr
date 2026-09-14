@@ -1027,9 +1027,9 @@ static void test_blackbox(void) {
     if (!blk_read(0, 1, boot)) { ok("read the boot sector", false); return; }
 
     bool ours = boot[510] == 0x55 && boot[511] == 0xAA &&
-                memcmp(boot + 3, "NYX     ", 8) == 0 &&
+                memcmp(boot + 3, "ZELR    ", 8) == 0 &&
                 *(u16 *)(boot + 14) >= BB_LBA + BB_SECTORS;
-    if (!ours) { kprintf("  SKIP  not a nyx volume with room reserved\n"); return; }
+    if (!ours) { kprintf("  SKIP  not a zelr volume with room reserved\n"); return; }
 
     /* Write, then recover, because bb_prev answers out of what the last
        recover found rather than off the disk. That indirection is the whole
@@ -1405,7 +1405,7 @@ static void test_clock(void) {
 
 int selftest_run(void) {
     passed = failed = 0;
-    kprintf("\n=== nyx self test ===\n");
+    kprintf("\n=== zelr self test ===\n");
     kprintf("[string]\n");     test_string();
     kprintf("[physical memory]\n"); test_pmm();
     kprintf("[paging]\n");     test_paging();

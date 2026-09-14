@@ -47,7 +47,7 @@ def main():
         f.truncate(32 * 1024 * 1024)
 
     proc = subprocess.Popen(
-        [QEMU, "-kernel", os.path.join(BUILD, "nyx.bin"), "-m", "128",
+        [QEMU, "-kernel", os.path.join(BUILD, "zelr.bin"), "-m", "128",
          "-no-reboot", "-display", "none", "-serial", "stdio",
          "-drive", "file=%s,format=raw,if=ide,index=0" % DISK,
          "-monitor", "tcp:127.0.0.1:%d,server,nowait" % PORT],
@@ -119,7 +119,7 @@ def main():
     # Without this the suite would pass on a clipboard that only ever held
     # that first copy, which is exactly what it did when the control bit was
     # being stripped: three of four checks still passed.
-    body = tail.split("nyx:")[0]
+    body = tail.split("zelr:")[0]
     check("what came back is the scrollback, not the one line first copied",
           body.count("\n") > 3)
 

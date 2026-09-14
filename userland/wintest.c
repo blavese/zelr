@@ -3,7 +3,7 @@
  * Everything this program reports it learned from ring 3, through int 0x80.
  * If the surface were not really mapped into this address space, the write
  * below would fault instead of reading back. */
-#include "nyx.h"
+#include "zelr.h"
 
 static void hex(u64 v) {
     const char *d = "0123456789abcdef";

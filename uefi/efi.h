@@ -1,4 +1,4 @@
-/* The parts of the UEFI interface nyx needs, written from the specification.
+/* The parts of the UEFI interface zelr needs, written from the specification.
  *
  * There is a well-known library for this (gnu-efi) and this is deliberately
  * not it. Everything below is a transcription of the structure layouts in the

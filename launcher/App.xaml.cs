@@ -1,6 +1,6 @@
 using System.Windows;
 
-namespace NyxLauncher;
+namespace ZelrLauncher;
 
 public partial class App : Application
 {

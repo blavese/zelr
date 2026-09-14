@@ -213,7 +213,7 @@ bool tcp_connect(ipv4_t ip, u16 port, u32 timeout_ms) {
     peer_ip = ip;
     peer_port = port;
     local_port = (u16)(45000 + (timer_ticks() & 0x0FFF));
-    snd_nxt = 0x4E595800u ^ (u32)(timer_ticks() * 2654435761u);
+    snd_nxt = 0x5A4C5200u ^ (u32)(timer_ticks() * 2654435761u);
     snd_una = snd_nxt;
     rcv_nxt = 0;
     rxlen = 0;

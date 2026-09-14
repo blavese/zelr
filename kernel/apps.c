@@ -23,7 +23,7 @@
 static void about_render(window_t *w) {
     surf_clear(w->canvas, w->cw, w->ch, RGB(0x16, 0x1B, 0x21));
     surf_rect(w->canvas, w->cw, w->ch, 0, 0, w->cw, 34, RGB(0x1E, 0x25, 0x2D));
-    surf_text(w->canvas, w->cw, w->ch, 14, 9, "nyx " KERNEL_VERSION, RGB(0x4F, 0xD6, 0xA0));
+    surf_text(w->canvas, w->cw, w->ch, 14, 9, "zelr " KERNEL_VERSION, RGB(0x4F, 0xD6, 0xA0));
 
     char line[80];
     int y = 48;
