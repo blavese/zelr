@@ -118,6 +118,15 @@ run_step "the shell answers over serial" shelltest
 bbtest() { timeout 400 bash tools/blackbox_test.sh 2>&1 | grep -q "all checks passed"; }
 run_step "the boot log survives a reboot" bbtest
 
+# --- partition tables, which an image does not have -----------------------
+#
+# Every other test here runs against a disk image: one filesystem written
+# across the whole of a disk, which is the single case the partition code
+# exists because it is not. The tables are built by tools/mkgpt.py and the
+# kernel is booted against them, good and deliberately corrupt.
+gpttest() { timeout 600 bash tools/gpt_test.sh 2>&1 | grep -q "all checks passed"; }
+run_step "gpt is read, and refused when it does not add up" gpttest
+
 if [ "$MODE" = "full" ]; then
   # --- every way the machine can be started -------------------------------
   #
@@ -138,7 +147,7 @@ if [ "$MODE" = "full" ]; then
 fi
 
 # --- tidy up after ourselves ----------------------------------------------
-rm -f gate.img gateq.img deskcheck.img termcheck.img shotcheck.img sel.img blackbox.img 2>/dev/null
+rm -f gate.img gateq.img gpttest.img deskcheck.img termcheck.img shotcheck.img sel.img blackbox.img 2>/dev/null
 rm -f build/*.ppm 2>/dev/null
 
 echo

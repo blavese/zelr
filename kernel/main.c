@@ -215,9 +215,12 @@ void kmain(handoff_t *h) {
     if (blk_init()) {
         kprintf("  disk    %s via %s, %d MiB\n", blk_model(), blk_driver(), blk_sectors() / 2048);
         bb_log("disk %s via %s, %d MiB", blk_model(), blk_driver(), blk_sectors() / 2048);
-        /* Before anything writes a new record over the old one. */
-        bb_recover();
         int n = diskfs_mount();
+        /* After the mount, because the log lives inside whichever volume was
+           mounted and until then there is no way to know where that is; and
+           before anything writes a new record, because this boot is about to
+           land on the sectors holding the last one. */
+        bb_recover();
         if (n >= 0)      { kprintf("  fs      fat16 mounted, %d entries in the root\n", n);
                            bb_log("fs fat16 mounted, %d entries in the root", n); }
         else if (n == -2) {

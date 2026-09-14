@@ -100,17 +100,35 @@ It will boot and you will get a screen: UEFI hands over a framebuffer and the
 desktop draws on it at whatever resolution the firmware picked.
 
 Whether you can then *use* it depends on the machine, and this is the honest
-boundary. Input goes through a PS/2 keyboard and mouse. Many laptops still
-emulate PS/2 for their built-in keyboard and many do not, and none of them
-emulate it for something plugged into a USB port; a USB keyboard needs a USB
-stack, which is xHCI plus HID and is a large piece of work that is not here.
-Storage is the same story: nyx speaks AHCI and ATA, so it will find a SATA
-disk, and it will not find an NVMe one, which is what most recent laptops
-have. Without a disk it still runs, with an in-memory filesystem that does
-not survive a reboot.
+boundary.
 
-So: it boots and draws on a modern machine. It is fully usable on one with a
-PS/2-emulating keyboard and a SATA disk, and on any virtual machine.
+**Input** goes through a PS/2 keyboard and mouse. Many laptops still emulate
+PS/2 for their built-in keyboard and many do not, and none of them emulate it
+for something plugged into a USB port; a USB keyboard needs a USB stack,
+which is xHCI plus HID and is a large piece of work that is not here. This is
+the wall.
+
+**Storage** is AHCI and ATA, so a SATA disk is found and an NVMe one is not,
+and NVMe is what most recent laptops have. Without a disk it still runs, on
+an in-memory filesystem that does not survive a reboot.
+
+**The disk it does find is read properly.** GPT and MBR partition tables are
+both read, with both of GPT's checksums verified, so nyx finds a filesystem
+on a disk somebody else partitioned rather than only on an image. It will not
+format an existing partition and it will not touch the EFI System Partition,
+which is FAT and would otherwise qualify; writing scratch data there is how
+you stop a laptop booting.
+
+**The machine is described properly.** PCIe configuration space is reached
+through the mapping the firmware describes in MCFG, so devices can be
+identified past the first 256 bytes of their configuration space, and the
+ACPI tables are taken from the pointer UEFI hands over rather than by
+searching memory that a UEFI machine need not have filled in. Until that was
+wired up nyx had no ACPI on any UEFI machine at all, which meant it reported
+one processor on every laptop and believed it.
+
+So: it boots and draws on a modern machine, finds every core, reads a real
+partitioned disk, and cannot yet be typed on unless the keyboard is PS/2.
 
 ### when it does not boot
 
@@ -374,7 +392,7 @@ is still the kernel's own, on the console; the one in a window is a program.
 ## testing
 
 The kernel tests itself. `./run.sh -T` boots with selftest on the command line,
-runs 234 checks across every subsystem, then writes to QEMU's debug-exit port
+runs 244 checks across every subsystem, then writes to QEMU's debug-exit port
 so the host gets a real exit status.
 
     [string]            8 checks      [video]               7 checks
@@ -388,18 +406,25 @@ so the host gets a real exit status.
     [open files]       12 checks      [layout]              9 checks
     [timer]             2 checks      [waiting]             8 checks
     [interrupts]        2 checks      [wait timeouts]       3 checks
-    [disk]              6 checks      [processors]          2 checks
+    [disk]             12 checks      [processors]          2 checks
     [fat]              14 checks      [black box]          21 checks
+    [acpi and pcie]       4 checks
     [network]           7 checks
     [elf]               7 checks
     [userspace]         4 checks
 
-    234 passed, 0 failed
+    244 passed, 0 failed
     SELFTEST_PASS
 
 The processor section is two checks on a machine with one CPU and eleven on
 a machine with several, where it hands work to each of them and requires the
-count they share to come back exact. `qemu-system-x86_64 -smp 4` reaches 243.
+count they share to come back exact. `qemu-system-x86_64 -smp 4` reaches 253.
+
+The same checks run again on `-machine q35`, which has PCIe and an AHCI
+controller rather than a 1996 chipset and a PIO disk, and reach 252 there.
+Two bugs found the day that was added were invisible on the older machine:
+the block layer would not split a request past the eight sectors AHCI
+accepts, and the ACPI tables were never read on a UEFI machine at all.
 
 The tests are written to fail for the right reasons. The disk test writes a
 pattern to a spare sector, reads it back, and restores the original. The FAT
@@ -529,7 +554,8 @@ orders of magnitude away from Linux, which is roughly 30 million lines.
     kernel/ata.c       ata pio disk driver
     kernel/diskfs.c    reading and writing the filesystem image
     kernel/fs.c        the in-memory filesystem, for a machine with no disk
-    kernel/pci.c       pci configuration space
+    kernel/pci.c       pci configuration space, ports and the pcie mapping
+    kernel/parts.c     gpt and mbr partition tables
     kernel/netdev.c    picks a network driver and hides which one
     kernel/e1000.c     intel e1000 driver
     kernel/rtl8139.c   rtl8139 driver
@@ -552,7 +578,8 @@ orders of magnitude away from Linux, which is roughly 30 million lines.
     kernel/vfs.c       one namespace over the live tree, the disk and memory
     kernel/sysfs.c     /sys and /bin: files that are generated when read
     kernel/layout.c    the directory layout, and what ships in it
-    kernel/acpi.c      reading the firmware tables to find the processors
+    kernel/acpi.c      the firmware tables: processors, and where pcie is
+    kernel/blackbox.c  what the machine was doing when it stopped
     kernel/smp.c       starting them and handing them work
     bootloader/        the BIOS bootloader, and where a second cpu starts
     uefi/              the UEFI bootloader, and the firmware interface

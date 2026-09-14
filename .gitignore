@@ -11,3 +11,7 @@ launcher/publish/
 # Per-run logs from the pipeline. Kept on disk so a blocked task can be
 # looked at, but they are large and belong to one machine.
 pipeline/state/
+
+# Python leaves these next to tools/ when one imports another.
+__pycache__/
+*.pyc

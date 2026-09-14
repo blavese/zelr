@@ -22,6 +22,7 @@
 #include "vga.h"
 #include "fb.h"
 #include "gfx.h"
+#include "fat.h"
 
 /* On disk, and in memory, the same layout: the header is written as part of
    the first sector, so a read gives back everything in one go. */
@@ -206,11 +207,25 @@ void bb_screen(void) {
 
 /* --- the disk, carefully -------------------------------------------------- */
 
+/* Where the volume this belongs to starts.
+ *
+ * On a disk image the filesystem is the disk and this is zero, which is what
+ * it always was. On a partitioned disk it is the start of whichever
+ * partition got mounted, and that matters more than it looks: sector 1 of a
+ * GPT disk is the GPT header itself. Writing a boot log over a partition
+ * table would be a spectacular way to destroy a machine, and while the
+ * checks below already refuse it (a protective MBR carries neither the name
+ * nor the serial fat_format writes), refusing by luck is not the same as
+ * addressing the right sector. */
+static u32 volume_base(void) {
+    return fat_mounted() ? fat_base() : 0;
+}
+
 /* True only for a volume fat_format made, with room reserved for the log.
    Anything else is somebody's real disk and is not written to. */
 static bool volume_is_ours(u8 *sec) {
     if (!blk_present()) return false;
-    if (!blk_read(0, 1, sec)) return false;
+    if (!blk_read(volume_base(), 1, sec)) return false;
     if (sec[510] != 0x55 || sec[511] != 0xAA) return false;
     if (memcmp(sec + 3, "NYX     ", 8) != 0) return false;
     if (*(u32 *)(sec + 39) != 0x4E595800u) return false;
@@ -229,7 +244,7 @@ static bool volume_is_ours(u8 *sec) {
  * written over, which holds whatever else the reserved area grows into. */
 static bool region_is_free(void) {
     u8 first[512];
-    if (!blk_read(BB_LBA, 1, first)) return false;
+    if (!blk_read(volume_base() + BB_LBA, 1, first)) return false;
     if (*(u32 *)first == BB_MAGIC) return true;
     for (u32 i = 0; i < sizeof(first); i++)
         if (first[i]) return false;
@@ -247,7 +262,7 @@ bool bb_flush(void) {
     /* The count comes off the previous record, so it survives a reboot. */
     bb_head_t prev;
     u32 n = 0;
-    if (blk_read(BB_LBA, 1, scratch)) {
+    if (blk_read(volume_base() + BB_LBA, 1, scratch)) {
         memcpy(&prev, scratch, sizeof(prev));
         if (prev.magic == BB_MAGIC) n = prev.boot;
     }
@@ -264,7 +279,7 @@ bool bb_flush(void) {
     u32 secs = (used + 511) / 512;
     if (secs > BB_SECTORS) secs = BB_SECTORS;
 
-    if (!blk_write(BB_LBA, secs, image)) return false;
+    if (!blk_write(volume_base() + BB_LBA, secs, image)) return false;
     blk_flush();
     return true;
 }
@@ -282,7 +297,7 @@ void bb_recover(void) {
     saved_len = 0;
 
     if (!volume_is_ours(scratch)) return;
-    if (!blk_read(BB_LBA, BB_SECTORS, saved)) return;
+    if (!blk_read(volume_base() + BB_LBA, BB_SECTORS, saved)) return;
 
     bb_head_t *h = (bb_head_t *)saved;
     if (h->magic != BB_MAGIC) return;

@@ -3,8 +3,23 @@
 
 #define FAT_PATH_MAX 128
 
+/* Mounts the volume starting at this sector of the disk. Everything inside
+   is relative to it, so a filesystem in a partition and one written across
+   a whole disk are the same code with a different base. fat_mount is the
+   unpartitioned case and is what a disk image needs. */
+bool fat_mount_at(u32 base_lba);
 bool fat_mount(void);
 bool fat_mounted(void);
+
+/* Whether the mounted volume is one this kernel formatted, which is what
+   the OEM name and volume serial in the boot sector say. Used to prefer
+   our own volume over one that is merely FAT. */
+bool fat_is_nyx_volume(void);
+u32  fat_base(void);                    /* where the mounted volume starts */
+
+/* Formats at a base, which for anything but a raw image is the start of a
+   partition. Refuses to write outside `sectors` from there. */
+bool fat_format_at(u32 base_lba, u32 sectors, const char *label);
 bool fat_format(const char *label);
 
 /* Listing a directory. `path` is absolute; "/" is the root. Returns 1 when

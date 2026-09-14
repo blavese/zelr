@@ -53,6 +53,27 @@ typedef struct {
     u32  cluster;
 } dir_t;
 
+/* Where this volume begins on the disk. Zero for an image written without a
+   partition table, which is what this kernel formats and what QEMU is given;
+   anything else on a real disk. Every sector number below is relative to it,
+   so the arithmetic in the rest of this file did not have to change. */
+static u32   part_base;
+static u32   part_sectors;              /* 0 means to the end of the disk */
+
+static bool vol_read(u32 lba, u32 count, void *buf) {
+    if (part_sectors && (lba >= part_sectors || count > part_sectors - lba))
+        return false;
+    return blk_read(part_base + lba, count, buf);
+}
+
+static bool vol_write(u32 lba, u32 count, const void *buf) {
+    if (part_sectors && (lba >= part_sectors || count > part_sectors - lba))
+        return false;
+    return blk_write(part_base + lba, count, buf);
+}
+
+u32 fat_base(void) { return part_base; }
+
 static bool  mounted;
 static u16   bytes_per_sector;
 static u8    sectors_per_cluster;
@@ -94,7 +115,7 @@ static void fat_forget(void) {
 
 static bool fat_cache_load(u32 lba) {
     if (fat_cache_valid && fat_cache_lba == lba) return true;
-    if (!blk_read(lba, 1, fat_cache)) { fat_cache_valid = false; return false; }
+    if (!vol_read(lba, 1, fat_cache)) { fat_cache_valid = false; return false; }
     fat_cache_lba = lba;
     fat_cache_valid = true;
     return true;
@@ -163,7 +184,7 @@ static bool fat_set(u32 cluster, u16 value) {
        other readers will object, and since they are byte for byte the same,
        the one sector goes to each of them. */
     for (u32 copy = 0; copy < num_fats; copy++) {
-        if (!blk_write(lba + copy * fat_sectors, 1, fat_cache)) {
+        if (!vol_write(lba + copy * fat_sectors, 1, fat_cache)) {
             fat_cache_valid = false;
             return false;
         }
@@ -202,17 +223,20 @@ static u32 zero_cluster(u32 cluster) {
     memset(sec, 0, SECTOR_SIZE);
     u32 lba = cluster_lba(cluster);
     for (u32 s = 0; s < sectors_per_cluster; s++)
-        if (!blk_write(lba + s, 1, sec)) return 0;
+        if (!vol_write(lba + s, 1, sec)) return 0;
     return cluster;
 }
 
 /* --- mounting ----------------------------------------------------------- */
 
-bool fat_mount(void) {
+bool fat_mount_at(u32 base_lba) {
     mounted = false;
     fat_forget();
     if (!blk_present()) return false;
-    if (!blk_read(0, 1, sec)) return false;
+
+    part_base = base_lba;
+    part_sectors = 0;                   /* not known until the volume says */
+    if (!vol_read(0, 1, sec)) return false;
 
     if (sec[510] != 0x55 || sec[511] != 0xAA) return false;
 
@@ -241,15 +265,44 @@ bool fat_mount(void) {
     /* FAT16 is defined by its cluster count, not by what the label claims. */
     if (cluster_count < 4085 || cluster_count > 65524) return false;
 
+    /* Now that the volume has said how big it claims to be, hold it to it.
+       A volume whose total_sectors runs past the end of its partition is
+       either corrupt or someone else's, and either way the rest of this
+       file must not be allowed to read outside it. */
+    if (total_sectors == 0) return false;
+    part_sectors = total_sectors;
+
+    u32 disk = blk_sectors();
+    if (disk && (part_base >= disk || total_sectors > disk - part_base)) {
+        part_sectors = 0;
+        return false;
+    }
+
     mounted = true;
     return true;
 }
 
-bool fat_format(const char *label) {
+bool fat_mount(void) { return fat_mount_at(0); }
+
+/* The two fields fat_format writes and nothing else does. Checked against
+   the boot sector rather than remembered from the mount, so it is still
+   right if something else rewrote the volume underneath us. */
+bool fat_is_nyx_volume(void) {
+    if (!mounted) return false;
+    u8 boot[SECTOR_SIZE];
+    if (!vol_read(0, 1, boot)) return false;
+    return memcmp(boot + 3, "NYX     ", 8) == 0 &&
+           *(u32 *)(boot + 39) == 0x4E595800u;
+}
+
+bool fat_format_at(u32 base_lba, u32 sectors, const char *label) {
     if (!blk_present()) return false;
     fat_forget();
 
-    u32 total = blk_sectors();
+    part_base = base_lba;
+    part_sectors = sectors;
+
+    u32 total = sectors ? sectors : blk_sectors() - base_lba;
     if (total < 8192) return false;
 
     u8 spc = 4;                       /* 2 KiB clusters */
@@ -300,7 +353,7 @@ bool fat_format(const char *label) {
     for (u32 i = 0; i < 11 && label && label[i]; i++) sec[43 + i] = (u8)upcase(label[i]);
     memcpy(sec + 54, "FAT16   ", 8);
     sec[510] = 0x55; sec[511] = 0xAA;
-    if (!blk_write(0, 1, sec)) return false;
+    if (!vol_write(0, 1, sec)) return false;
 
     /* The reserved sectors past the boot sector, cleared. They are where the
        black box writes, and it will not write over anything it does not
@@ -308,28 +361,30 @@ bool fat_format(const char *label) {
        back as this volume's own history or block the log entirely. */
     memset(sec, 0, SECTOR_SIZE);
     for (u32 s = 1; s < reserved; s++)
-        if (!blk_write(s, 1, sec)) return false;
+        if (!vol_write(s, 1, sec)) return false;
 
     /* both tables, cleared, with the two reserved entries at the front */
     memset(sec, 0, SECTOR_SIZE);
     for (u32 copy = 0; copy < fats; copy++)
         for (u32 s = 0; s < fsize; s++)
-            if (!blk_write(reserved + copy * fsize + s, 1, sec)) return false;
+            if (!vol_write(reserved + copy * fsize + s, 1, sec)) return false;
 
     memset(sec, 0, SECTOR_SIZE);
     *(u16 *)(sec + 0) = 0xFFF8;         /* media descriptor copy */
     *(u16 *)(sec + 2) = 0xFFFF;         /* end of chain marker */
     for (u32 copy = 0; copy < fats; copy++)
-        if (!blk_write(reserved + copy * fsize, 1, sec)) return false;
+        if (!vol_write(reserved + copy * fsize, 1, sec)) return false;
 
     /* empty root directory */
     memset(sec, 0, SECTOR_SIZE);
     for (u32 s = 0; s < root_secs; s++)
-        if (!blk_write(reserved + (u32)fats * fsize + s, 1, sec)) return false;
+        if (!vol_write(reserved + (u32)fats * fsize + s, 1, sec)) return false;
 
     blk_flush();
-    return fat_mount();
+    return fat_mount_at(base_lba);
 }
+
+bool fat_format(const char *label) { return fat_format_at(0, 0, label); }
 
 /* --- directories -------------------------------------------------------- */
 
@@ -377,7 +432,7 @@ static bool dir_locate(const dir_t *d, u32 index, u32 *lba_out, u32 *off_out) {
 static bool dir_read(const dir_t *d, u32 index, dirent_t *out) {
     u32 lba, off;
     if (!dir_locate(d, index, &lba, &off)) return false;
-    if (!blk_read(lba, 1, dsec)) return false;
+    if (!vol_read(lba, 1, dsec)) return false;
     memcpy(out, dsec + off, 32);
     return true;
 }
@@ -385,9 +440,9 @@ static bool dir_read(const dir_t *d, u32 index, dirent_t *out) {
 static bool dir_write(const dir_t *d, u32 index, const dirent_t *in) {
     u32 lba, off;
     if (!dir_locate(d, index, &lba, &off)) return false;
-    if (!blk_read(lba, 1, dsec)) return false;
+    if (!vol_read(lba, 1, dsec)) return false;
     memcpy(dsec + off, in, 32);
-    return blk_write(lba, 1, dsec);
+    return vol_write(lba, 1, dsec);
 }
 
 /* Adds one cluster to a subdirectory and zeroes it, so the new entries read
@@ -609,7 +664,7 @@ int fat_read_file(const char *path, u8 *buf, u32 cap) {
     while (done < want && cluster >= 2 && cluster < EOC_MIN) {
         u32 lba = cluster_lba(cluster);
         for (u32 s = 0; s < sectors_per_cluster && done < want; s++) {
-            if (!blk_read(lba + s, 1, sec)) return -1;
+            if (!vol_read(lba + s, 1, sec)) return -1;
             u32 n = want - done;
             if (n > SECTOR_SIZE) n = SECTOR_SIZE;
             memcpy(buf + done, sec, n);
@@ -666,7 +721,7 @@ bool fat_write_file(const char *path, const u8 *buf, u32 size) {
                 if (n > SECTOR_SIZE) n = SECTOR_SIZE;
                 memcpy(sec, buf + off, n);
             }
-            if (!blk_write(lba + s, 1, sec)) { if (first) free_chain(first); return false; }
+            if (!vol_write(lba + s, 1, sec)) { if (first) free_chain(first); return false; }
         }
         written += per_cluster;
     }
