@@ -19,6 +19,7 @@
 #include "gfx.h"
 #include "font.h"
 #include "theme.h"
+#include "rtc.h"
 #include "mouse.h"
 #include "keyboard.h"
 #include "heap.h"
@@ -642,12 +643,17 @@ static void draw_taskbar(void) {
         x += tw + 6;
     }
 
-    /* Uptime on the right, which is the only clock this machine has. */
+    /* The time on the right, with uptime under it when there is room. A
+       machine with no usable CMOS clock falls back to counting from boot,
+       which is what this had before there was a clock to read. */
     char clock[24];
-    u32 secs = (u32)(timer_ticks() / timer_hz());
-    kformat(clock, sizeof(clock), "up %d:%02d", secs / 60, secs % 60);
+    if (rtc_present()) rtc_format_short(clock, sizeof(clock));
+    else {
+        u32 secs = (u32)(timer_ticks() / timer_hz());
+        kformat(clock, sizeof(clock), "up %d:%02d", secs / 60, secs % 60);
+    }
     gfx_text((int)fb_width() - gfx_text_width(clock) - 16,
-             y + (TASKBAR_H - FONT_H) / 2, clock, t->text_dim);
+             y + (TASKBAR_H - FONT_H) / 2, clock, t->text);
 }
 
 static const u8 CURSOR[19][12] = {

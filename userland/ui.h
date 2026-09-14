@@ -41,61 +41,85 @@ typedef struct {
     u32 warn;
 } ui_theme;
 
-/* Read once at startup. The defaults are a dark grey that does not fight
-   with anything; /cfg/theme overrides them. */
-static inline ui_theme ui_load_theme(void) {
-    ui_theme t;
-    t.bg        = RGB(0x1e, 0x20, 0x24);
-    t.panel     = RGB(0x2a, 0x2d, 0x33);
-    t.fg        = RGB(0xe6, 0xe8, 0xea);
-    t.dim       = RGB(0x9a, 0xa0, 0xa8);
-    t.accent    = RGB(0x4a, 0x8c, 0xf0);
-    t.accent_fg = RGB(0xff, 0xff, 0xff);
-    t.line      = RGB(0x3a, 0x3e, 0x45);
-    t.warn      = RGB(0xe0, 0x6c, 0x60);
+/* Read once at startup, out of the same file the desktop reads.
+ *
+ * There was very nearly a second config file here, holding a palette just
+ * for programs. That would have meant changing the accent in Settings
+ * recoloured the window chrome and left every window's contents alone, which
+ * is exactly the incoherence that makes a collection of programs not a
+ * desktop environment. So this parses /nyx.cfg, the one the window manager
+ * already re-reads four times a second, and derives everything from the same
+ * choice.
+ *
+ * The file is "key value" lines, values in hex or decimal. Unknown keys are
+ * skipped rather than refused, so a newer Settings cannot break an older
+ * program. */
 
-    /* The theme file is a list of "name value" lines, value in hex. Unknown
-       names are skipped rather than refused, so a newer settings program
-       cannot break an older one. */
-    char buf[1024];
-    int n = slurp("/cfg/theme", buf, sizeof(buf) - 1);
-    if (n <= 0) return t;
-    buf[n] = 0;
+/* The same six the desktop offers, in the same order. Duplicated rather than
+   fetched: a system call to read six constants would be a system call in
+   every program's startup, and if they ever drift the cost is a swatch a
+   shade off. */
+#define UI_PRESETS 6
+static const u32 UI_ACCENTS[UI_PRESETS] = {
+    RGB(0x2C, 0xC7, 0xA0), RGB(0x6E, 0x8A, 0xE8), RGB(0xE0, 0xA0, 0x3C),
+    RGB(0xE0, 0x6A, 0x8C), RGB(0x8A, 0x9B, 0xB0), RGB(0x9A, 0xD1, 0x4A),
+};
 
-    int i = 0;
-    while (i < n) {
-        int ls = i;
-        while (i < n && buf[i] != '\n') i++;
-        int le = i;
-        if (i < n) i++;
+static inline int ui_cfg_int(const char *text, const char *key, int fallback) {
+    int klen = strlen(key);
+    for (int i = 0; text[i]; i++) {
+        if (i && text[i - 1] != '\n') continue;
+        if (strncmp(text + i, key, klen)) continue;
+        if (text[i + klen] != ' ') continue;
 
-        /* split the line on its first space */
-        int sp = ls;
-        while (sp < le && buf[sp] != ' ') sp++;
-        if (sp >= le) continue;
-        buf[sp] = 0;
-        buf[le] = 0;
+        const char *v = text + i + klen + 1;
+        int hex = (v[0] == '0' && (v[1] == 'x' || v[1] == 'X'));
+        if (hex) v += 2;
 
-        u32 v = 0;
-        for (const char *p = buf + sp + 1; *p; p++) {
+        int got = 0, n = 0;
+        for (; *v && *v != '\n'; v++) {
             int d;
-            if (*p >= '0' && *p <= '9') d = *p - '0';
-            else if (*p >= 'a' && *p <= 'f') d = *p - 'a' + 10;
-            else if (*p >= 'A' && *p <= 'F') d = *p - 'A' + 10;
-            else continue;
-            v = v * 16 + (u32)d;
+            if (*v >= '0' && *v <= '9') d = *v - '0';
+            else if (hex && *v >= 'a' && *v <= 'f') d = *v - 'a' + 10;
+            else if (hex && *v >= 'A' && *v <= 'F') d = *v - 'A' + 10;
+            else break;
+            n = n * (hex ? 16 : 10) + d;
+            got = 1;
         }
-
-        const char *k = buf + ls;
-        if      (!strcmp(k, "bg"))        t.bg = v;
-        else if (!strcmp(k, "panel"))     t.panel = v;
-        else if (!strcmp(k, "fg"))        t.fg = v;
-        else if (!strcmp(k, "dim"))       t.dim = v;
-        else if (!strcmp(k, "accent"))    t.accent = v;
-        else if (!strcmp(k, "accentfg"))  t.accent_fg = v;
-        else if (!strcmp(k, "line"))      t.line = v;
-        else if (!strcmp(k, "warn"))      t.warn = v;
+        return got ? n : fallback;
     }
+    return fallback;
+}
+
+static inline ui_theme ui_load_theme(void) {
+    char cfg[1024];
+    int n = slurp("/nyx.cfg", cfg, sizeof(cfg) - 1);
+    if (n < 0) n = 0;
+    cfg[n] = 0;
+
+    int preset = ui_cfg_int(cfg, "preset", 0);
+    if (preset < 0 || preset >= UI_PRESETS) preset = 0;
+    int light = ui_cfg_int(cfg, "light", 0);
+
+    ui_theme t;
+    t.accent = (u32)ui_cfg_int(cfg, "accent", (int)UI_ACCENTS[preset]);
+
+    if (light) {
+        t.bg        = RGB(0xf4, 0xf5, 0xf7);
+        t.panel     = RGB(0xe7, 0xe9, 0xec);
+        t.fg        = RGB(0x1c, 0x1f, 0x24);
+        t.dim       = RGB(0x6a, 0x71, 0x7a);
+        t.line      = RGB(0xd2, 0xd6, 0xdb);
+        t.accent_fg = RGB(0xff, 0xff, 0xff);
+    } else {
+        t.bg        = RGB(0x1e, 0x20, 0x24);
+        t.panel     = RGB(0x2a, 0x2d, 0x33);
+        t.fg        = RGB(0xe6, 0xe8, 0xea);
+        t.dim       = RGB(0x9a, 0xa0, 0xa8);
+        t.line      = RGB(0x3a, 0x3e, 0x45);
+        t.accent_fg = RGB(0xff, 0xff, 0xff);
+    }
+    t.warn = RGB(0xe0, 0x6c, 0x60);
     return t;
 }
 

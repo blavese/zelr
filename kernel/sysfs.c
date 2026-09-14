@@ -29,6 +29,7 @@
 #include "wait.h"
 #include "blackbox.h"
 #include "clipboard.h"
+#include "rtc.h"
 
 /* --- built-in programs, which are what /bin holds ----------------------- */
 
@@ -246,6 +247,18 @@ static u32 render_clipboard(char *b, u32 cap) {
     return n;
 }
 
+/* The wall clock, which is the one thing here that does not come from
+   counting since boot. */
+static u32 render_time(char *b, u32 cap) {
+    out_t o = { b, cap, 0 };
+    char now[24];
+    rtc_format(now, sizeof(now));
+    put(&o, "now       %s\n", now);
+    put(&o, "source    %s\n", rtc_present() ? "cmos clock" : "none");
+    put(&o, "uptime    %d s\n", (u32)(timer_ticks() / (timer_hz() ? timer_hz() : 100)));
+    return o.len;
+}
+
 static const node_t nodes[] = {
     { "/sys/version",  render_version  },
     { "/sys/memory",   render_memory   },
@@ -258,6 +271,7 @@ static const node_t nodes[] = {
     { "/sys/boot",     render_boot     },
     { "/sys/lastboot", render_lastboot },
     { "/sys/clipboard", render_clipboard },
+    { "/sys/time",     render_time      },
 };
 #define N_NODES (sizeof(nodes) / sizeof(nodes[0]))
 

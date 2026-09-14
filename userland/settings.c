@@ -2,268 +2,300 @@
  *
  * This program cannot reach into the window manager and has no way to ask it
  * for anything. What it can do is write a file. The window manager re-reads
- * that file four times a second, so a choice made here shows up on the
- * desktop behind this window almost immediately, without either side knowing
- * anything about the other beyond the format.
+ * that file four times a second, and every program built on ui.h reads it at
+ * startup, so a choice made here shows up on the desktop behind this window
+ * almost immediately without either side knowing anything about the other
+ * beyond the format.
  *
  * The file is plain "key value" text on purpose: everything this window does
- * can also be done with the shell's write command. */
+ * can also be done with the shell's write command, and a settings program
+ * that is the only way to change a setting is a settings program you cannot
+ * fix when it breaks. */
 #include "nyx.h"
-#include "draw.h"
+#include "ui.h"
 
 #define CFG "/nyx.cfg"
 
-#define W 440
-#define H 440
-
-static surface scr;
-static int win;
+#define SIDEBAR_W 150
 
 /* What is being edited. These are the same names the kernel's theme.c
    parses; nothing else is shared between the two. */
 static int preset = 0;
+static int light = 0;
 static int wallpaper = 3;
 static int corner = 8;
 static int shadows = 1;
 static int animate = 1;
 static int quirks = 1;
 
-static int dirty_frames;      /* shows a confirmation for a moment after saving */
+static int saved_at;            /* when, so the confirmation can fade */
 
-/* The preset accents, duplicated from theme.c. Two copies of six colours is
-   cheaper than a system call to fetch them, and if they drift the only cost
-   is that the swatch is a shade off what the desktop shows. */
-static const u32 ACCENTS[6] = {
-    RGB(0x2C, 0xC7, 0xA0), RGB(0x6E, 0x8A, 0xE8), RGB(0xE0, 0xA0, 0x3C),
-    RGB(0xE0, 0x6A, 0x8C), RGB(0x8A, 0x9B, 0xB0), RGB(0x9A, 0xD1, 0x4A),
+static const char *const PRESET_NAMES[UI_PRESETS] = {
+    "Teal", "Indigo", "Amber", "Rose", "Slate", "Lime"
 };
-static const char *PRESET_NAMES[6] = { "teal", "indigo", "amber", "rose", "slate", "lime" };
-/* Seven, in the order theme.h numbers them. */
+
 #define N_WALLPAPERS 7
-static const char *WALLPAPERS[N_WALLPAPERS] = {
-    "plain", "grid", "dots", "gradient", "stars", "waves", "weave"
+static const char *const WALLPAPERS[N_WALLPAPERS] = {
+    "Plain", "Grid", "Dots", "Gradient", "Stars", "Waves", "Weave"
 };
+
 static const int CORNERS[4] = { 0, 4, 8, 14 };
+static const char *const CORNER_NAMES[4] = { "Square", "Slight", "Round", "Very round" };
 
-#define BG      RGB(0x15, 0x1B, 0x22)
-#define PANEL   RGB(0x1E, 0x26, 0x2F)
-#define FG      RGB(0xDA, 0xE3, 0xEA)
-#define DIM     RGB(0x77, 0x86, 0x93)
-#define EDGE    RGB(0x2C, 0x36, 0x41)
+static const char *const PAGES[] = { "Appearance", "Desktop", "System", "About" };
+#define N_PAGES 4
+static int page = 0;
 
-static u32 accent(void) { return ACCENTS[preset]; }
-
-/* --- the config file ---------------------------------------------------- */
-
-static int find_value(const char *text, const char *key, int fallback) {
-    int klen = strlen(key);
-    for (int i = 0; text[i]; i++) {
-        if (i && text[i - 1] != '\n') continue;
-        if (strncmp(text + i, key, klen) != 0) continue;
-        if (text[i + klen] != ' ') continue;
-
-        int j = i + klen + 1;
-        int v = 0, any = 0;
-        while (text[j] >= '0' && text[j] <= '9') { v = v * 10 + (text[j] - '0'); j++; any = 1; }
-        return any ? v : fallback;
-    }
-    return fallback;
-}
+/* --- the config file ------------------------------------------------------ */
 
 static void load(void) {
-    static char buf[1024];
+    char buf[1024];
     int n = slurp(CFG, buf, sizeof(buf) - 1);
-    if (n <= 0) return;
+    if (n < 0) n = 0;
     buf[n] = 0;
 
-    /* The first line is a comment, so a key at offset 0 cannot be matched by
-       the loop above; prefixing a newline makes every key look the same. */
-    static char padded[1030];
-    padded[0] = '\n';
-    memcpy(padded + 1, buf, n + 1);
+    preset    = ui_cfg_int(buf, "preset", 0);
+    light     = ui_cfg_int(buf, "light", 0);
+    wallpaper = ui_cfg_int(buf, "wallpaper", 3);
+    corner    = ui_cfg_int(buf, "corner", 8);
+    shadows   = ui_cfg_int(buf, "shadows", 1);
+    animate   = ui_cfg_int(buf, "animate", 1);
+    quirks    = ui_cfg_int(buf, "quirks", 1);
 
-    preset    = find_value(padded, "preset", preset);
-    wallpaper = find_value(padded, "wallpaper", wallpaper);
-    corner    = find_value(padded, "corner", corner);
-    shadows   = find_value(padded, "shadows", shadows);
-    animate   = find_value(padded, "animate", animate);
-    quirks    = find_value(padded, "quirks", quirks);
-
-    if (preset < 0 || preset > 5) preset = 0;
+    if (preset < 0 || preset >= UI_PRESETS) preset = 0;
     if (wallpaper < 0 || wallpaper >= N_WALLPAPERS) wallpaper = 3;
-    if (corner < 0 || corner > 20) corner = 8;
 }
 
+static int put_kv(char *out, int at, const char *key, int value) {
+    for (int i = 0; key[i]; i++) out[at++] = key[i];
+    out[at++] = ' ';
+    at += utoa((u32)value, out + at);
+    out[at++] = '\n';
+    return at;
+}
+
+/* Written whole every time rather than edited in place. The file is a few
+   hundred bytes and a partial rewrite is a way to end up with two values for
+   one key. */
 static void save(void) {
-    char out[256];
+    char out[512];
     int n = 0;
-    const char *head = "# written by settings\n";
-    for (const char *p = head; *p; p++) out[n++] = *p;
-
-    struct { const char *key; int value; } fields[6] = {
-        { "preset", preset }, { "wallpaper", wallpaper }, { "corner", corner },
-        { "shadows", shadows }, { "animate", animate }, { "quirks", quirks },
-    };
-    for (int i = 0; i < 6; i++) {
-        for (const char *p = fields[i].key; *p; p++) out[n++] = *p;
-        out[n++] = ' ';
-        n += utoa((u32)fields[i].value, out + n);
-        out[n++] = '\n';
-    }
-
+    n = put_kv(out, n, "preset", preset);
+    n = put_kv(out, n, "light", light);
+    n = put_kv(out, n, "wallpaper", wallpaper);
+    n = put_kv(out, n, "corner", corner);
+    n = put_kv(out, n, "shadows", shadows);
+    n = put_kv(out, n, "animate", animate);
+    n = put_kv(out, n, "quirks", quirks);
+    out[n] = 0;
     spit(CFG, out, n);
-    dirty_frames = 60;
+    saved_at = ticks();
 }
 
-/* --- layout ------------------------------------------------------------- */
+/* --- a swatch, which is the one widget only this program needs ------------ */
 
-/* Every control is a rectangle with an index, so hit testing and drawing
-   agree by construction rather than by two lists being kept in step. */
-typedef struct { int x, y, w, h; } box;
+static int swatch(surface *s, ui_input *in, int x, int y, u32 colour, int chosen) {
+    int d = 34;
+    int over = ui_hit(in, x, y, d, d);
 
-static box swatch_box(int i)    { return (box){ 24 + i * 46, 74, 36, 36 }; }
-/* Four across, wrapping, because seven no longer fit on one line. */
-static box wallpaper_box(int i) {
-    return (box){ 24 + (i % 4) * 100, 168 + (i / 4) * 40, 92, 32 };
-}
-static box corner_box(int i)    { return (box){ 24 + i * 62, 298, 54, 32 }; }
-static box shadow_box(void)     { return (box){ 24, 360, 122, 32 }; }
-static box animate_box(void)    { return (box){ 154, 360, 122, 32 }; }
-static box quirks_box(void)     { return (box){ 284, 360, 132, 32 }; }
+    if (chosen || over) {
+        round_rect(s, x - 3, y - 3, d + 6, d + 6, UI_RADIUS + 2,
+                   chosen ? colour : mix(colour, 0, 140));
+    }
+    round_rect(s, x, y, d, d, UI_RADIUS, colour);
 
-static int inside(box b, int x, int y) {
-    return x >= b.x && x < b.x + b.w && y >= b.y && y < b.y + b.h;
+    if (over && in->released) { in->released = 0; return 1; }
+    return 0;
 }
 
-static void section(int y, const char *label) {
-    text(&scr, 24, y, label, DIM);
-}
+/* --- pages ---------------------------------------------------------------- */
 
-static void toggle(box b, const char *label, int on) {
-    round_rect(&scr, b.x, b.y, b.w, b.h, 6, on ? accent() : PANEL);
-    frame(&scr, b.x, b.y, b.w, b.h, EDGE);
-
-    /* A small switch, so the state reads without depending on colour. */
-    int kw = 20, kh = 12;
-    int kx = b.x + 10, ky = b.y + (b.h - kh) / 2;
-    round_rect(&scr, kx, ky, kw, kh, kh / 2, on ? RGB(0x14, 0x1A, 0x20) : EDGE);
-    disc(&scr, on ? kx + kw - 5 : kx + 5, ky + kh / 2, 4,
-         on ? accent() : DIM);
-
-    text(&scr, kx + kw + 10, b.y + (b.h - FONT_H) / 2, label,
-         on ? RGB(0x10, 0x16, 0x1C) : FG);
-}
-
-static void draw_all(void) {
-    fill(&scr, BG);
-
-    /* header */
-    round_rect(&scr, 0, 0, W, 52, 0, PANEL);
-    text(&scr, 24, 18, "Appearance", FG);
-    text(&scr, 24 + 11 * FONT_W, 18, "  desktop settings", DIM);
-    rect(&scr, 0, 51, W, 1, EDGE);
-
-    section(58, "accent");
-    for (int i = 0; i < 6; i++) {
-        box b = swatch_box(i);
-        round_rect(&scr, b.x, b.y, b.w, b.h, 8, ACCENTS[i]);
-        if (i == preset) {
-            round_rect(&scr, b.x - 3, b.y - 3, b.w + 6, b.h + 6, 10,
-                       mix(BG, ACCENTS[i], 90));
-            round_rect(&scr, b.x, b.y, b.w, b.h, 8, ACCENTS[i]);
-            disc(&scr, b.x + b.w / 2, b.y + b.h / 2, 5, RGB(0x12, 0x17, 0x1C));
+static int page_appearance(surface *s, ui_input *in, ui_theme *t, int x, int y, int w) {
+    y = ui_section(s, t, x, y, w, "Accent");
+    for (int i = 0; i < UI_PRESETS; i++) {
+        if (swatch(s, in, x + i * 46, y, UI_ACCENTS[i], i == preset)) {
+            preset = i;
+            save();
         }
     }
-    text(&scr, 24, 120, PRESET_NAMES[preset], FG);
+    ui_dim_label(s, t, x + UI_PRESETS * 46 + UI_GAP, y + 10, PRESET_NAMES[preset]);
+    y += 34 + UI_PAD * 2;
 
-    section(152, "wallpaper");
-    for (int i = 0; i < N_WALLPAPERS; i++) {
-        box b = wallpaper_box(i);
-        int on = (i == wallpaper);
-        round_rect(&scr, b.x, b.y, b.w, b.h, 6, on ? accent() : PANEL);
-        frame(&scr, b.x, b.y, b.w, b.h, EDGE);
-        text_centred(&scr, b.x, b.y, b.w, b.h, WALLPAPERS[i],
-                     on ? RGB(0x10, 0x16, 0x1C) : FG);
-    }
+    y = ui_section(s, t, x, y, w, "Mode");
+    int was = light;
+    light = ui_toggle(s, in, t, x, y, light ? "Light" : "Dark", light);
+    if (light != was) save();
+    y += 20 + UI_PAD * 2;
 
-    section(282, "corners");
+    y = ui_section(s, t, x, y, w, "Window corners");
     for (int i = 0; i < 4; i++) {
-        box b = corner_box(i);
-        int on = (CORNERS[i] == corner);
-        round_rect(&scr, b.x, b.y, b.w, b.h, CORNERS[i] ? CORNERS[i] / 2 + 2 : 0,
-                   on ? accent() : PANEL);
-        frame(&scr, b.x, b.y, b.w, b.h, EDGE);
-        char label[8];
-        utoa((u32)CORNERS[i], label);
-        text_centred(&scr, b.x, b.y, b.w, b.h, label,
-                     on ? RGB(0x10, 0x16, 0x1C) : FG);
+        if (ui_button(s, in, t, x + i * 96, y, 90, CORNER_NAMES[i])) {
+            corner = CORNERS[i];
+            save();
+        }
+        if (CORNERS[i] == corner)
+            rect(s, x + i * 96, y + UI_BTN_H - 2, 90, 2, t->accent);
     }
+    y += UI_BTN_H + UI_PAD * 2;
 
-    section(344, "effects");
-    toggle(shadow_box(), "shadows", shadows);
-    toggle(animate_box(), "smooth", animate);
-    toggle(quirks_box(), "quirks", quirks);
+    y = ui_section(s, t, x, y, w, "Effects");
+    was = shadows;
+    shadows = ui_toggle(s, in, t, x, y, "Shadows under windows", shadows);
+    if (shadows != was) save();
+    y += 26;
 
-    if (dirty_frames > 0) {
-        const char *msg = "saved to /nyx.cfg";
-        int tw = strlen(msg) * FONT_W;
-        text(&scr, W - tw - 20, 20, msg, accent());
+    was = animate;
+    animate = ui_toggle(s, in, t, x, y, "Animate menus and highlights", animate);
+    if (animate != was) save();
+    y += 26;
+
+    return y;
+}
+
+static int page_desktop(surface *s, ui_input *in, ui_theme *t, int x, int y, int w) {
+    y = ui_section(s, t, x, y, w, "Wallpaper");
+    for (int i = 0; i < N_WALLPAPERS; i++) {
+        int col = i % 4, row = i / 4;
+        if (ui_button(s, in, t, x + col * 96, y + row * (UI_BTN_H + UI_GAP),
+                      90, WALLPAPERS[i])) {
+            wallpaper = i;
+            save();
+        }
+        if (i == wallpaper)
+            rect(s, x + col * 96, y + row * (UI_BTN_H + UI_GAP) + UI_BTN_H - 2,
+                 90, 2, t->accent);
     }
+    y += (UI_BTN_H + UI_GAP) * 2 + UI_PAD;
+
+    y = ui_section(s, t, x, y, w, "Behaviour");
+    int was = quirks;
+    quirks = ui_toggle(s, in, t, x, y, "Shake a window to clear the others", quirks);
+    if (quirks != was) save();
+    y += 26;
+
+    ui_dim_label(s, t, x, y + 4, "Alt and a number picks a window.");
+    y += 20;
+    ui_dim_label(s, t, x, y + 4, "Drag a window to an edge to snap it there.");
+    y += 26;
+    return y;
 }
 
-/* --- input -------------------------------------------------------------- */
+/* Reads the live tree rather than keeping its own numbers, so what is shown
+   is what the kernel says now. */
+static int show_file(surface *s, ui_theme *t, int x, int y, int w, const char *path) {
+    char buf[1024];
+    int n = slurp(path, buf, sizeof(buf) - 1);
+    if (n <= 0) {
+        ui_dim_label(s, t, x, y, "(nothing there)");
+        return y + FONT_H + UI_GAP;
+    }
+    buf[n] = 0;
 
-static void on_click(int x, int y) {
-    for (int i = 0; i < 6; i++)
-        if (inside(swatch_box(i), x, y)) { preset = i; save(); return; }
-    for (int i = 0; i < N_WALLPAPERS; i++)
-        if (inside(wallpaper_box(i), x, y)) { wallpaper = i; save(); return; }
-    for (int i = 0; i < 4; i++)
-        if (inside(corner_box(i), x, y)) { corner = CORNERS[i]; save(); return; }
-    if (inside(shadow_box(), x, y))  { shadows = !shadows; save(); return; }
-    if (inside(animate_box(), x, y)) { animate = !animate; save(); return; }
-    if (inside(quirks_box(), x, y))  { quirks = !quirks; save(); return; }
+    int line_start = 0;
+    for (int i = 0; i <= n; i++) {
+        if (buf[i] != '\n' && buf[i] != 0) continue;
+        char save_c = buf[i];
+        buf[i] = 0;
+        if (buf[line_start]) {
+            text(s, x, y, buf + line_start, t->fg);
+            y += FONT_H + 2;
+        }
+        buf[i] = save_c;
+        line_start = i + 1;
+        if (y > 600) break;
+    }
+    (void)w;
+    return y + UI_GAP;
 }
 
-int main(void);
+static int page_system(surface *s, ui_input *in, ui_theme *t, int x, int y, int w) {
+    (void)in;
+    y = ui_section(s, t, x, y, w, "Memory");
+    y = show_file(s, t, x, y, w, "/sys/memory");
 
-__attribute__((section(".text._start"))) void _start(void) {
-    exit(main());
+    y = ui_section(s, t, x, y, w, "Processors");
+    y = show_file(s, t, x, y, w, "/sys/cpu");
+
+    y = ui_section(s, t, x, y, w, "Devices");
+    y = show_file(s, t, x, y, w, "/sys/devices");
+    return y;
 }
 
-int main(void) {
-    win = win_create("settings", W, H);
-    if (win < 0) { puts("settings: no window\n"); return 1; }
+static int page_about(surface *s, ui_input *in, ui_theme *t, int x, int y, int w) {
+    (void)in;
+    y = ui_section(s, t, x, y, w, "This system");
+    y = show_file(s, t, x, y, w, "/sys/version");
 
-    scr.px = win_surface(win);
-    if (!scr.px) { puts("settings: no surface\n"); return 1; }
-    scr.w = win_width(win);
-    scr.h = win_height(win);
-    if (scr.w <= 0 || scr.h <= 0) return 1;
+    y = ui_section(s, t, x, y, w, "Uptime");
+    y = show_file(s, t, x, y, w, "/sys/uptime");
+
+    y = ui_section(s, t, x, y, w, "Network");
+    y = show_file(s, t, x, y, w, "/sys/net");
+    return y;
+}
+
+/* --- the window ----------------------------------------------------------- */
+
+void _start(void) {
+    int win = win_create("Settings", 620, 520);
+    if (win < 0) exit(1);
+    win_allow_resize(win);
 
     load();
-    draw_all();
-    win_commit(win);
+    ui_input in;
+    memset(&in, 0, sizeof(in));
 
     for (;;) {
-        win_event ev;
-        int changed = 0;
+        int w = win_width(win), h = win_height(win);
+        u32 *px = win_surface(win);
+        if (!px || w <= 0 || h <= 0) break;
+        surface s = { px, w, h };
 
-        while (win_poll(win, &ev) == 1) {
-            if (ev.type == WIN_EV_CLOSE) { win_close(win); return 0; }
-            if (ev.type == WIN_EV_MOUSE && (ev.buttons & WIN_BTN_DOWN)) {
-                on_click(ev.x, ev.y);
-                changed = 1;
-            }
-            if (ev.type == WIN_EV_KEY) {
-                if (ev.key == 'r') { load(); changed = 1; }
-                if (ev.key == 's') { save(); changed = 1; }
-            }
+        /* Re-read every frame, so the window recolours itself the moment a
+           choice is made rather than on the next launch. */
+        ui_theme t = ui_load_theme();
+
+        ui_begin(&in);
+        win_event ev;
+        int closing = 0;
+        while (win_poll(win, &ev)) {
+            if (ev.type == WIN_EV_CLOSE) { closing = 1; break; }
+            ui_feed(&in, &ev);
+        }
+        if (closing) break;
+
+        if (in.key == KEY_UP && page > 0) page--;
+        if (in.key == KEY_DOWN && page < N_PAGES - 1) page++;
+
+        fill(&s, t.bg);
+
+        /* The sidebar, which is what makes this a settings application
+           rather than one long column of controls. */
+        rect(&s, 0, 0, SIDEBAR_W, h, t.panel);
+        rect(&s, SIDEBAR_W - 1, 0, 1, h, t.line);
+        for (int i = 0; i < N_PAGES; i++) {
+            int iy = UI_PAD + i * (UI_ROW + 2);
+            if (ui_row(&s, &in, &t, 0, iy, SIDEBAR_W - 1, PAGES[i], 0, i == page) == 1)
+                page = i;
         }
 
-        if (dirty_frames > 0) { dirty_frames--; if (dirty_frames == 0) changed = 1; }
+        int x = SIDEBAR_W + UI_PAD * 2;
+        int cw = w - x - UI_PAD * 2;
+        int y = UI_PAD;
 
-        if (changed) { draw_all(); win_commit(win); }
-        sleep_ms(20);
+        if (page == 0)      y = page_appearance(&s, &in, &t, x, y, cw);
+        else if (page == 1) y = page_desktop(&s, &in, &t, x, y, cw);
+        else if (page == 2) y = page_system(&s, &in, &t, x, y, cw);
+        else                y = page_about(&s, &in, &t, x, y, cw);
+
+        const char *msg = "changes apply as you make them";
+        if (saved_at && ticks() - saved_at < 90) msg = "saved to /nyx.cfg";
+        ui_statusbar(&s, &t, w, h, msg, PAGES[page]);
+
+        win_commit(win);
+        sleep_ms(16);
     }
+
+    win_close(win);
+    exit(0);
 }

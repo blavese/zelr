@@ -43,6 +43,7 @@
 #include "lapic.h"
 #include "pic.h"
 #include "clipboard.h"
+#include "rtc.h"
 
 static int passed, failed;
 
@@ -1285,6 +1286,108 @@ static void test_clipboard(void) {
     clip_init();
 }
 
+/* The clock.
+ *
+ * What can be checked without knowing what time it actually is: that the
+ * fields are in range, that reading it twice does not go backwards, and that
+ * it advances. The last one is the interesting one, because the failure this
+ * chip invites is reading during an update and getting a mixture of the old
+ * time and the new. That produces a value that is in range, looks entirely
+ * reasonable, and is an hour wrong.
+ */
+static void test_clock(void) {
+    if (!rtc_present()) {
+        kprintf("  SKIP  no cmos clock on this machine\n");
+        return;
+    }
+
+    rtc_time_t t;
+    ok("the clock reads", rtc_read(&t));
+    ok("the month is a month", t.month >= 1 && t.month <= 12);
+    ok("the day is a day", t.day >= 1 && t.day <= 31);
+    ok("the hour is an hour", t.hour <= 23);
+    ok("the minute is a minute", t.minute <= 59);
+    ok("the second is a second", t.second <= 59);
+
+    /* Four digits, and this century. A two digit year that was never widened
+       reads as 26, which passes every range check above. */
+    ok("the year is a four digit year", t.year >= 1970 && t.year < 2200);
+
+    /* Read it again straight away. Nothing should have gone backwards, and a
+       read that lands mid update usually does. */
+    rtc_time_t again;
+    ok("it reads a second time", rtc_read(&again));
+    ok("the date did not change under us",
+       again.year == t.year && again.month == t.month && again.day == t.day);
+
+    int moved_back = 0;
+    if (again.hour < t.hour) moved_back = 1;
+    else if (again.hour == t.hour && again.minute < t.minute) moved_back = 1;
+    else if (again.hour == t.hour && again.minute == t.minute &&
+             again.second < t.second) moved_back = 1;
+    ok("time did not run backwards", !moved_back);
+
+    /* And it moves. Waiting for the second to turn over proves the chip is
+       running rather than returning one frozen value. */
+    u8 started = again.second;
+    int changed = 0;
+    for (int i = 0; i < 30 && !changed; i++) {
+        sleep_ms(100);
+        rtc_time_t now;
+        if (rtc_read(&now) && now.second != started) changed = 1;
+    }
+    ok("the clock is running", changed);
+
+    /* Hammer it across several update boundaries.
+     *
+     * The chip updates in place once a second, and a read taken during that
+     * update returns a mixture of the old time and the new: 11:59:59
+     * becoming 12:00:00 can be read as 11:00:00, which is an hour wrong and
+     * passes every range check above. One read cannot see this, because the
+     * window is about two milliseconds in every thousand. Several thousand
+     * reads across a few seconds cross it repeatedly, and any torn value
+     * shows up as time going backwards.
+     *
+     * It has never caught anything here and probably cannot: removing the
+     * double read entirely still passes, because QEMU updates its emulated
+     * chip atomically as far as the guest is concerned and so never produces
+     * a torn value at all. The protection in rtc.c is against what the real
+     * part does, and this check is left in to catch a regression on hardware
+     * that does it. Treat it as unverified rather than as passing. */
+    rtc_time_t prev;
+    int back = 0, reads = 0;
+    if (rtc_read(&prev)) {
+        for (int i = 0; i < 4000; i++) {
+            rtc_time_t now;
+            if (!rtc_read(&now)) continue;
+            reads++;
+            u32 a = (u32)prev.hour * 3600 + (u32)prev.minute * 60 + prev.second;
+            u32 b = (u32)now.hour * 3600 + (u32)now.minute * 60 + now.second;
+            /* Midnight is the one legitimate way round. */
+            if (b + 60 < a && !(prev.hour == 23 && now.hour == 0)) back++;
+            prev = now;
+        }
+    }
+    ok("several thousand reads were taken", reads > 1000);
+    ok("none of them read a time earlier than the one before", back == 0);
+
+    char text[24];
+    rtc_format(text, sizeof(text));
+    ok("it formats to the full width", strlen(text) == 19);
+    ok("with dashes where a date has them", text[4] == '-' && text[7] == '-');
+    ok("and colons where a time has them", text[13] == ':' && text[16] == ':');
+
+    char shortform[8];
+    rtc_format_short(shortform, sizeof(shortform));
+    ok("the short form is hh:mm", strlen(shortform) == 5 && shortform[2] == ':');
+
+    /* A buffer too small must be refused rather than written past. */
+    char tiny[4];
+    tiny[3] = '#';
+    rtc_format(tiny, 3);
+    ok("a buffer too small is not written past", tiny[3] == '#');
+}
+
 int selftest_run(void) {
     passed = failed = 0;
     kprintf("\n=== nyx self test ===\n");
@@ -1320,6 +1423,7 @@ int selftest_run(void) {
     kprintf("[acpi and pcie]\n"); test_pcie();
     kprintf("[interrupt routing]\n"); test_irqs();
     kprintf("[clipboard]\n"); test_clipboard();
+    kprintf("[clock]\n"); test_clock();
     kprintf("\n%d passed, %d failed\n", passed, failed);
     kprintf(failed ? "SELFTEST_FAIL\n" : "SELFTEST_PASS\n");
     return failed;

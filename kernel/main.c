@@ -29,6 +29,7 @@
 #include "shell.h"
 #include "winsrv.h"
 #include "clipboard.h"
+#include "rtc.h"
 #include "smp.h"
 #include "acpi.h"
 #include "vfs.h"
@@ -244,6 +245,17 @@ void kmain(handoff_t *h) {
     }
     builtin_install();
     kprintf("  progs   %d built in\n", builtin_count_programs());
+
+    bb_mark("clock");
+    if (rtc_init()) {
+        char now[24];
+        rtc_format(now, sizeof(now));
+        kprintf("  clock   %s\n", now);
+        bb_log("clock %s", now);
+    } else {
+        kprintf("  clock   none, uptime only\n");
+        bb_log("clock none: no usable cmos clock");
+    }
 
     bb_mark("timer");
     timer_init(100); kprintf("  timer   100 Hz\n");
