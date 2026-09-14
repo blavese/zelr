@@ -8,6 +8,9 @@ not known until the thing is linked, so the assembler cannot test them.
 
   python tools/check_loader.py build/cdboot.bin
 """
+import io
+import os
+import re
 import sys
 
 SIGNATURE = b"ZLR1"          # 0x31524C5A little-endian
@@ -40,5 +43,47 @@ def main(path):
     return 0
 
 
+def check_handoff(root):
+    """The handoff magic is one constant kept in two places.
+
+    include/handoff.h defines it as a 64-bit number. cdboot.S is 16-bit code
+    with no 64-bit stores, so it writes the low half and the high half
+    separately, as two literals with no connection to the header at all.
+    Edit one and the kernel rejects a handoff that is correct in every other
+    respect, and the only symptom is a machine that stops after the loader.
+
+    Nothing checked this. It went wrong during the rename to zelr, and it
+    was found by searching the tree for the old value in hex rather than by
+    anything here.
+    """
+    hdr = io.open(os.path.join(root, "include", "handoff.h"), encoding="utf-8").read()
+    m = re.search(r"#define\s+HANDOFF_MAGIC\s+0x([0-9A-Fa-f]+)u?ll", hdr)
+    if not m:
+        print("loader: no HANDOFF_MAGIC in include/handoff.h", file=sys.stderr)
+        return 1
+    want = int(m.group(1), 16)
+
+    boot = io.open(os.path.join(root, "bootloader", "cdboot.S"), encoding="utf-8").read()
+    # Anchored to the end of the line so the low half is not matched by
+    # the high half's line, which begins with the same text.
+    lo = re.search(r"movl\s+\$0x([0-9A-Fa-f]{1,8}), %es:H_MAGIC\s*$", boot, re.M)
+    hi = re.search(r"movl\s+\$0x([0-9A-Fa-f]{1,8}), %es:H_MAGIC \+ 4\s*$", boot, re.M)
+    if not lo or not hi:
+        print("loader: cdboot.S does not write H_MAGIC in two halves",
+              file=sys.stderr)
+        return 1
+
+    got = int(hi.group(1), 16) << 32 | int(lo.group(1), 16)
+    if got != want:
+        print("loader: cdboot.S writes %016X, the kernel expects %016X"
+              % (got, want), file=sys.stderr)
+        return 1
+
+    print("      handoff magic %016X, written in halves that agree" % want)
+    return 0
+
+
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1] if len(sys.argv) > 1 else "build/cdboot.bin"))
+    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    rc = main(sys.argv[1] if len(sys.argv) > 1 else "build/cdboot.bin")
+    sys.exit(rc or check_handoff(here))

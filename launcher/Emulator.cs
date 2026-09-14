@@ -85,12 +85,21 @@ public static class Emulator
             // Anyone who ran this before the rename has their files in the
             // old folder. Moving the image is the difference between keeping
             // them and silently starting over with an empty disk.
+            // Failing to move it is not worth refusing to start over: the
+            // file can be locked by a machine still running, or sitting
+            // somewhere this user cannot write. Falling through leaves the
+            // old image untouched and makes a new one.
             var older = Path.Combine(local, "nyx", "disk.img");
             if (!File.Exists(disk) && File.Exists(older))
             {
-                Directory.CreateDirectory(dir);
-                File.Move(older, disk);
-                return disk;
+                try
+                {
+                    Directory.CreateDirectory(dir);
+                    File.Move(older, disk);
+                    return disk;
+                }
+                catch (IOException) { }
+                catch (UnauthorizedAccessException) { }
             }
 
             Directory.CreateDirectory(dir);
