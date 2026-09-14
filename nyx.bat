@@ -10,6 +10,10 @@ rem
 rem The disk is nyx.img next to this file. It is made on first run and kept
 rem afterwards, which is the point: files written in nyx are still there the
 rem next time. Delete it to start clean.
+rem
+rem The memory given below is more than nyx will use. It maps 64 MiB of
+rem itself and ignores the rest, so -m 512 and -m 4096 look identical from
+rem inside; what makes it smooth is the acceleration, not the size.
 
 setlocal enabledelayedexpansion
 cd /d "%~dp0"
@@ -40,6 +44,21 @@ if not exist "build\nyx.bin" (
   exit /b 1
 )
 
+rem --- hardware acceleration -------------------------------------------------
+rem
+rem This is the whole difference between smooth and choppy. Without it QEMU
+rem interprets every instruction in software, which is about five times slower
+rem here: the kernel's own checks take 44 seconds that way and 9 with it.
+rem
+rem whpx is the Windows Hypervisor Platform. It needs that Windows feature
+rem turned on, and it will not start when something else already owns the
+rem processor's virtualisation, which usually means WSL2, Docker Desktop or
+rem Hyper-V. Writing the two separated by a colon asks QEMU to try them in
+rem order and say "falling back to tcg" if it has to, which is better than
+rem probing for it here: a probe means running the machine once before
+rem running it, and the honest probe took nine seconds.
+set "ACCEL=accel=whpx:tcg"
+
 rem --- the disk -------------------------------------------------------------
 if not exist "nyx.img" (
   echo Making nyx.img, 64 MiB. Files written in nyx will be kept in it.
@@ -68,7 +87,7 @@ rem --------------------------------------------------------------------------
 rem An ordinary machine: one processor, a SATA disk, a network card. This is
 rem the configuration most likely to just work.
 echo Booting nyx. Close the window to stop it.
-"%QEMU%" -machine q35 -m 512 -no-reboot ^
+"%QEMU%" -machine q35,%ACCEL% -smp 2 -m 512 -no-reboot ^
   -drive "file=nyx.img,format=raw,if=none,id=d0" ^
   -device ahci,id=ahci -device ide-hd,drive=d0,bus=ahci.0 ^
   -netdev user,id=n0 -device e1000,netdev=n0 ^
@@ -103,7 +122,7 @@ if not exist "build\nyx.iso" (
   exit /b 1
 )
 echo Booting nyx on UEFI, four processors, NVMe. Close the window to stop it.
-"%QEMU%" -machine q35 -smp 4 -m 1024 -no-reboot ^
+"%QEMU%" -machine q35,%ACCEL% -smp 4 -m 1024 -no-reboot ^
   -drive "if=pflash,format=raw,readonly=on,file=%FW%" ^
   -cdrom build\nyx.iso -boot d ^
   -drive "file=nyx.img,format=raw,if=none,id=nv0" ^
@@ -123,7 +142,7 @@ if not exist "build\nyx.iso" (
   exit /b 1
 )
 echo Booting the disc image. Close the window to stop it.
-"%QEMU%" -machine q35 -m 512 -no-reboot -cdrom build\nyx.iso -boot d ^
+"%QEMU%" -machine q35,%ACCEL% -smp 2 -m 512 -no-reboot -cdrom build\nyx.iso -boot d ^
   -drive "file=nyx.img,format=raw,if=none,id=d0" ^
   -device ahci,id=ahci -device ide-hd,drive=d0,bus=ahci.0 ^
   -netdev user,id=n0 -device e1000,netdev=n0 -serial stdio
@@ -132,7 +151,7 @@ goto done
 rem --------------------------------------------------------------------------
 :serial
 echo No window. Everything appears here; Ctrl+C stops it.
-"%QEMU%" -machine q35 -m 512 -no-reboot -display none ^
+"%QEMU%" -machine q35,%ACCEL% -smp 2 -m 512 -no-reboot -display none ^
   -drive "file=nyx.img,format=raw,if=none,id=d0" ^
   -device ahci,id=ahci -device ide-hd,drive=d0,bus=ahci.0 ^
   -kernel build\nyx.bin -serial stdio
@@ -141,7 +160,7 @@ goto done
 rem --------------------------------------------------------------------------
 :test
 echo Running the kernel's own checks.
-"%QEMU%" -machine q35 -m 512 -no-reboot -display none ^
+"%QEMU%" -machine q35,%ACCEL% -smp 2 -m 512 -no-reboot -display none ^
   -drive "file=nyx.img,format=raw,if=none,id=d0" ^
   -device ahci,id=ahci -device ide-hd,drive=d0,bus=ahci.0 ^
   -device isa-debug-exit,iobase=0xf4,iosize=0x04 ^

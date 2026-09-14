@@ -468,7 +468,22 @@ static void test_userspace(void) {
     task_wait((u32)pid);
     ok("it reached exit on its own", !task_alive((u32)pid));
     ok("ring 3 code issued system calls", syscall_count() >= before + 7);
-    ok("its address space was reclaimed", pmm_free_frames() == free_before);
+    /* Waited for rather than asserted outright.
+     *
+     * task_wait returns as soon as the task is dead, and the address space
+     * is freed afterwards by the collector, which runs on a scheduler tick.
+     * Those are not the same moment. Under software emulation a tick almost
+     * always landed in between and this passed as a plain equality; with
+     * hardware acceleration the check outruns the collector and it failed
+     * about one run in three. The memory is reclaimed either way, so what
+     * this should say is that it comes back, not that it comes back before
+     * anything else has had a turn. */
+    u32 reclaimed = 0;
+    for (int i = 0; i < 50 && !reclaimed; i++) {
+        if (pmm_free_frames() >= free_before) reclaimed = 1;
+        else sleep_ms(10);
+    }
+    ok("its address space was reclaimed", reclaimed);
 }
 
 
