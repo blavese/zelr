@@ -172,6 +172,24 @@ void kmain(handoff_t *h) {
     /* A UEFI loader has already chosen a mode and there is no way to ask
        for another once the firmware is gone, so take what it gave. Only a
        machine with a BIOS gets to pick. */
+    /* Before anything probes the bus. The disk and network drivers below
+       both walk PCI, and on a machine where the mapped path is available it
+       is the one that can see all of a device's configuration space. Needs
+       paging, which is why it is not earlier. */
+    bb_mark("acpi, pcie");
+    acpi_use_rsdp(h->rsdp);
+    acpi_init();
+    if (pci_ecam_init()) {
+        kprintf("  pcie    ecam at %p, buses 0..%d\n",
+                (void *)pci_ecam_base(), pci_ecam_last_bus());
+        bb_log("pcie ecam at %p, buses 0..%d, tables via %s",
+               (void *)pci_ecam_base(), pci_ecam_last_bus(),
+               acpi()->used_xsdt ? "xsdt" : "rsdt");
+    } else {
+        kprintf("  pcie    none, using the legacy config ports\n");
+        bb_log("pcie no mcfg, legacy config ports only");
+    }
+
     bb_mark("video");
     bool have_screen = h->fb_base
         ? fb_adopt(h->fb_base, h->fb_width, h->fb_height, h->fb_pitch)

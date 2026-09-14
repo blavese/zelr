@@ -50,6 +50,16 @@ typedef struct {
 #define MADT_LAPIC          0
 #define MADT_LAPIC_OVERRIDE 5
 
+/* Memory mapped configuration space: the header, eight reserved bytes, then
+   one sixteen byte entry per run of buses. */
+typedef struct {
+    u64 base;
+    u16 segment;
+    u8  start_bus;
+    u8  end_bus;
+    u32 reserved;
+} __attribute__((packed)) mcfg_entry_t;
+
 static acpi_info_t info;
 
 const acpi_info_t *acpi(void) { return &info; }
@@ -74,10 +84,28 @@ static bool checksum_ok(const u8 *p, u32 len) {
     return sum == 0;
 }
 
-/* The pointer is either in the first kilobyte of the extended BIOS data area
+/* What the bootloader was told, if it was told anything. */
+static u64 given_rsdp;
+
+void acpi_use_rsdp(u64 phys) { given_rsdp = phys; }
+
+/* The pointer is either where the firmware said it is, or, on a machine that
+   booted through a BIOS, in the first kilobyte of the extended BIOS data area
    or somewhere in the last 128 KiB below a megabyte, on a 16 byte boundary
-   in both cases. */
+   in both cases.
+ *
+ * The scan is not a substitute for being told. UEFI firmware is under no
+ * obligation to leave anything in those addresses, and on the machines where
+ * it does not, a kernel that only scans finds no tables, which reads as a
+ * machine with one processor and no PCIe rather than as the failure it is. */
 static const rsdp_t *find_rsdp(void) {
+    if (given_rsdp) {
+        const rsdp_t *r = (const rsdp_t *)map_phys(given_rsdp, sizeof(rsdp_t));
+        if (r && memcmp(r->sig, "RSD PTR ", 8) == 0 && checksum_ok((const u8 *)r, 20))
+            return r;
+        /* Told, but wrong. Fall through and look: better than giving up. */
+    }
+
     u64 ebda = (u64)(*(volatile u16 *)0x40E) << 4;
     if (ebda >= 0x400 && ebda < 0xA0000) {
         for (u64 a = ebda; a < ebda + 1024; a += 16) {
@@ -126,7 +154,55 @@ static void read_madt(const madt_t *madt) {
     }
 }
 
+static void read_mcfg(const sdt_header_t *h) {
+    u32 len = h->length;
+    if (len < sizeof(sdt_header_t) + 8) return;
+
+    const u8 *p = (const u8 *)h + sizeof(sdt_header_t) + 8;
+    const u8 *end = (const u8 *)h + len;
+
+    while (p + sizeof(mcfg_entry_t) <= end && info.nmcfg < ACPI_MAX_MCFG) {
+        const mcfg_entry_t *e = (const mcfg_entry_t *)p;
+
+        /* A run has to be the right way round and land somewhere. Firmware
+           gets this wrong often enough that a driver built on an unchecked
+           entry would be reading from address zero on those machines. */
+        if (e->base && e->start_bus <= e->end_bus) {
+            info.mcfg[info.nmcfg].base      = e->base;
+            info.mcfg[info.nmcfg].segment   = e->segment;
+            info.mcfg[info.nmcfg].start_bus = e->start_bus;
+            info.mcfg[info.nmcfg].end_bus   = e->end_bus;
+            info.nmcfg++;
+        }
+        p += sizeof(mcfg_entry_t);
+    }
+}
+
+/* One entry of whichever directory was used. Both kinds are a physical
+   address of a table; they differ only in how wide that address is. */
+static void read_table(u64 phys) {
+    const sdt_header_t *h = (const sdt_header_t *)map_phys(phys, sizeof(sdt_header_t));
+    if (!h) return;
+    if (h->length < sizeof(sdt_header_t) || h->length > 0x10000) return;
+    if (!map_phys(phys, h->length)) return;
+    if (!checksum_ok((const u8 *)h, h->length)) return;
+
+    if (memcmp(h->sig, "APIC", 4) == 0 && h->length >= sizeof(madt_t))
+        read_madt((const madt_t *)h);
+    else if (memcmp(h->sig, "MCFG", 4) == 0)
+        read_mcfg(h);
+}
+
+/* The tables are read once. Two callers want them and the order they run in
+   is not theirs to decide: the PCIe mapping has to exist before the disk and
+   network drivers probe, and bringing up the other processors happens well
+   after that. Whichever asks first does the work. */
+static bool acpi_ran;
+
 bool acpi_init(void) {
+    if (acpi_ran) return info.found;
+    acpi_ran = true;
+
     memset(&info, 0, sizeof(info));
     info.lapic_base = 0xFEE00000;                 /* the architectural default */
 
@@ -135,32 +211,54 @@ bool acpi_init(void) {
 
     memcpy(info.oem, rsdp->oem, 6);
     info.oem[6] = 0;
+    info.revision = rsdp->revision;
 
-    const sdt_header_t *rsdt = (const sdt_header_t *)map_phys(rsdp->rsdt_address,
-                                                              sizeof(sdt_header_t));
-    if (!rsdt || memcmp(rsdt->sig, "RSDT", 4) != 0) return false;
+    /* Revision 2 and above carry a second checksum over the whole structure,
+       and only then are the length and the xsdt address part of it. Reading
+       those fields without checking it means trusting bytes that an ACPI 1.0
+       firmware never wrote. */
+    bool xsdt_ok = false;
+    if (rsdp->revision >= 2 && rsdp->length >= sizeof(rsdp_t) &&
+        checksum_ok((const u8 *)rsdp, rsdp->length) && rsdp->xsdt_address)
+        xsdt_ok = true;
 
-    u32 length = rsdt->length;
+    u64 dir_phys = xsdt_ok ? rsdp->xsdt_address : (u64)rsdp->rsdt_address;
+    const char *want = xsdt_ok ? "XSDT" : "RSDT";
+    u32 stride = xsdt_ok ? 8u : 4u;
+
+    const sdt_header_t *dir =
+        (const sdt_header_t *)map_phys(dir_phys, sizeof(sdt_header_t));
+
+    /* Firmware that claims an XSDT and then does not provide a usable one is
+       rare but not unheard of, so fall back rather than give up. */
+    if ((!dir || memcmp(dir->sig, want, 4) != 0) && xsdt_ok) {
+        xsdt_ok = false;
+        dir_phys = rsdp->rsdt_address;
+        want = "RSDT";
+        stride = 4;
+        dir = (const sdt_header_t *)map_phys(dir_phys, sizeof(sdt_header_t));
+    }
+    if (!dir || memcmp(dir->sig, want, 4) != 0) return false;
+
+    u32 length = dir->length;
     if (length < sizeof(sdt_header_t) || length > 0x10000) return false;
-    if (!map_phys(rsdp->rsdt_address, length)) return false;
-    if (!checksum_ok((const u8 *)rsdt, length)) return false;
+    if (!map_phys(dir_phys, length)) return false;
+    if (!checksum_ok((const u8 *)dir, length)) return false;
 
-    u32 count = (length - sizeof(sdt_header_t)) / 4;
-    const u32 *entries = (const u32 *)((const u8 *)rsdt + sizeof(sdt_header_t));
+    info.used_xsdt = xsdt_ok;
 
+    u32 count = (length - sizeof(sdt_header_t)) / stride;
+    const u8 *entries = (const u8 *)dir + sizeof(sdt_header_t);
+    info.ntables = count;
+
+    /* Every entry, not the first interesting one: the MADT and the MCFG are
+       both wanted and nothing says which comes first. */
     for (u32 i = 0; i < count; i++) {
-        const sdt_header_t *h = (const sdt_header_t *)map_phys(entries[i],
-                                                               sizeof(sdt_header_t));
-        if (!h) continue;
-        if (memcmp(h->sig, "APIC", 4) != 0) continue;
-        if (h->length < sizeof(madt_t) || h->length > 0x10000) continue;
-        if (!map_phys(entries[i], h->length)) continue;
-        if (!checksum_ok((const u8 *)h, h->length)) continue;
-
-        read_madt((const madt_t *)h);
-        info.found = info.ncpus > 0;
-        return info.found;
+        u64 phys = xsdt_ok ? *(const u64 *)(entries + i * 8)
+                           : (u64)*(const u32 *)(entries + i * 4);
+        if (phys) read_table(phys);
     }
 
-    return false;
+    info.found = info.ncpus > 0;
+    return info.found;
 }

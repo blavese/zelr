@@ -100,6 +100,10 @@ static u8               *dma_buf;      /* bounce buffer for one transfer */
 
 bool ahci_present(void) { return present; }
 u32  ahci_sectors(void) { return total_sectors; }
+
+/* One PRDT entry pointing at one staging buffer, and that buffer is four
+   kilobytes. Eight sectors fill it exactly. */
+u32  ahci_max_run(void) { return 8; }
 const char *ahci_model(void) { return model; }
 
 /* Allocates zeroed memory on a given alignment. The heap is inside the

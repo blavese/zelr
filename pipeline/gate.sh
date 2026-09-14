@@ -6,8 +6,8 @@
 # on main without it passing. An agent that reports success is not evidence;
 # this is.
 #
-#   gate.sh fast     build, 231 kernel checks, the serial shell test, and
-#                    the boot log across a reboot                     ~8 min
+#   gate.sh fast     build, the kernel's checks on two different machines,
+#                    the serial shell test, the boot log across a reboot ~12 min
 #   gate.sh full     the above, plus all four boot paths and the three
 #                    harnesses that drive the desktop and the keyboard  ~35 min
 #
@@ -79,6 +79,32 @@ selftest() {
 }
 run_step "the kernel's own checks" selftest
 
+# --- and again on a machine made this century ------------------------------
+#
+# The default QEMU machine is a 1996 chipset: no PCIe, so configuration space
+# goes through the port pair, and the disk is the ATA driver. q35 has an MCFG
+# table and an AHCI controller, so it exercises the mapped path and the other
+# driver. Every check is the same; what differs is the hardware underneath.
+#
+# This is here because both bugs found on the day it was added were invisible
+# to the run above: the block layer would not split a request past eight
+# sectors, which only AHCI refuses, and ACPI was never given the pointer the
+# UEFI loader had already found. Both would have shown up first on a laptop.
+selftest_q35() {
+  rm -f gateq.img
+  head -c 33554432 /dev/zero > gateq.img
+  local out
+  out="$(timeout 300 "$QEMU" -machine q35 -kernel build/nyx.bin -m 256 -no-reboot \
+      -display none -serial stdio -append selftest \
+      -drive "file=gateq.img,format=raw,if=none,id=d0" \
+      -device ahci,id=ahci -device ide-hd,drive=d0,bus=ahci.0 \
+      -device isa-debug-exit,iobase=0xf4,iosize=0x04 2>&1)"
+  rm -f gateq.img
+  printf '%s\n' "$out" | grep -E 'FAIL|passed,' | tail -3
+  printf '%s' "$out" | grep -q SELFTEST_PASS
+}
+run_step "the same checks on q35, with pcie and ahci" selftest_q35
+
 # --- the shell, over the serial line --------------------------------------
 shelltest() { timeout 400 bash tools/shell_test.sh 2>&1 | grep -q "all checks passed"; }
 run_step "the shell answers over serial" shelltest
@@ -112,7 +138,7 @@ if [ "$MODE" = "full" ]; then
 fi
 
 # --- tidy up after ourselves ----------------------------------------------
-rm -f gate.img deskcheck.img termcheck.img shotcheck.img sel.img blackbox.img 2>/dev/null
+rm -f gate.img gateq.img deskcheck.img termcheck.img shotcheck.img sel.img blackbox.img 2>/dev/null
 rm -f build/*.ppm 2>/dev/null
 
 echo

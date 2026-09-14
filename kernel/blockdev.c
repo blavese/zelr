@@ -49,20 +49,69 @@ const char *blk_driver(void) {
     }
 }
 
-bool blk_read(u32 lba, u32 count, void *buf) {
+/* How many sectors the driver underneath will take at once.
+ *
+ * They disagree, and by a lot: the AHCI driver stages through a single four
+ * kilobyte buffer and so stops at eight, while the ATA one will take 255. A
+ * caller asking for more than the driver allows is told false, which reads
+ * as a disk error rather than as a request that wanted splitting, and it is
+ * invisible on whichever of the two happens to be in use on the machine
+ * being tested. (Measured: the boot log asks for 32 sectors, worked on every
+ * ATA machine, and silently never wrote a byte on any AHCI one, which is to
+ * say on every machine made this century.) Splitting belongs here because
+ * here is the only place it can be done once. */
+static u32 max_run(void) {
     switch (disk) {
-        case DISK_AHCI: return ahci_read(lba, count, buf);
-        case DISK_ATA:  return ata_read(lba, count, buf);
+        case DISK_AHCI: return ahci_max_run();
+        case DISK_ATA:  return ata_max_run();
+        default:        return 0;
+    }
+}
+
+static bool one_read(u32 lba, u32 n, void *buf) {
+    switch (disk) {
+        case DISK_AHCI: return ahci_read(lba, n, buf);
+        case DISK_ATA:  return ata_read(lba, n, buf);
         default:        return false;
     }
 }
 
-bool blk_write(u32 lba, u32 count, const void *buf) {
+static bool one_write(u32 lba, u32 n, const void *buf) {
     switch (disk) {
-        case DISK_AHCI: return ahci_write(lba, count, buf);
-        case DISK_ATA:  return ata_write(lba, count, buf);
+        case DISK_AHCI: return ahci_write(lba, n, buf);
+        case DISK_ATA:  return ata_write(lba, n, buf);
         default:        return false;
     }
+}
+
+bool blk_read(u32 lba, u32 count, void *buf) {
+    u32 run = max_run();
+    if (!run || count == 0) return false;
+
+    u8 *p = (u8 *)buf;
+    while (count) {
+        u32 n = count < run ? count : run;
+        if (!one_read(lba, n, p)) return false;
+        lba += n;
+        p += (u64)n * SECTOR_SIZE;
+        count -= n;
+    }
+    return true;
+}
+
+bool blk_write(u32 lba, u32 count, const void *buf) {
+    u32 run = max_run();
+    if (!run || count == 0) return false;
+
+    const u8 *p = (const u8 *)buf;
+    while (count) {
+        u32 n = count < run ? count : run;
+        if (!one_write(lba, n, p)) return false;
+        lba += n;
+        p += (u64)n * SECTOR_SIZE;
+        count -= n;
+    }
+    return true;
 }
 
 bool blk_flush(void) {

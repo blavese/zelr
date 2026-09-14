@@ -36,6 +36,9 @@
 #include "smp.h"
 #include "builtin.h"
 #include "blackbox.h"
+#include "pci.h"
+#include "acpi.h"
+#include "io.h"
 
 static int passed, failed;
 
@@ -256,6 +259,39 @@ static void test_disk(void) {
 
     blk_write(lba, 1, original);
     ok("original contents restored", blk_read(lba, 1, back) && memcmp(original, back, SECTOR_SIZE) == 0);
+
+    /* More sectors than any one driver command can carry.
+     *
+     * The AHCI driver stops at eight and the ATA one at 255, so a request
+     * for sixteen is a single command on one of them and has to be split on
+     * the other. Nothing above this layer should be able to tell which,
+     * and until the block layer split them, nothing above it could: the
+     * boot log asked for 32 and quietly wrote nothing on every AHCI
+     * machine while passing on every ATA one. */
+    if (blk_sectors() > 64) {
+        static u8 big_out[16 * SECTOR_SIZE], big_in[16 * SECTOR_SIZE];
+        static u8 big_keep[16 * SECTOR_SIZE];
+        u32 at = blk_sectors() - 24;
+
+        ok("a run longer than one command reads", blk_read(at, 16, big_keep));
+
+        /* A pattern that differs between sectors, so a split that repeats or
+           drops one is visible rather than averaging out. */
+        for (u32 i = 0; i < sizeof(big_out); i++)
+            big_out[i] = (u8)((i / SECTOR_SIZE) * 31 + (i % SECTOR_SIZE) * 7 + 11);
+
+        ok("a run longer than one command writes", blk_write(at, 16, big_out));
+        ok("and reads back", blk_read(at, 16, big_in));
+        ok("every sector of it survived the round trip",
+           memcmp(big_out, big_in, sizeof(big_out)) == 0);
+
+        blk_write(at, 16, big_keep);
+        ok("the long run was put back",
+           blk_read(at, 16, big_in) && memcmp(big_keep, big_in, sizeof(big_keep)) == 0);
+
+        /* A count of zero is not a short request, it is a caller mistake. */
+        ok("a zero length request is refused", blk_read(at, 0, big_in) == false);
+    }
 }
 
 static void test_net(void) {
@@ -1038,6 +1074,91 @@ static void test_blackbox(void) {
     blk_flush();
 }
 
+/* The two ways of reaching configuration space have to agree.
+ *
+ * This is the check worth having, because the mapped path is arithmetic on a
+ * base address and arithmetic is exactly what goes wrong silently: a wrong
+ * shift gives you a different device's registers, which read as plausible
+ * numbers rather than as an error. The port pair is implemented here rather
+ * than called, so the comparison is against something this file computes
+ * itself and not against the code being tested. */
+static u32 legacy_read32(u8 bus, u8 slot, u8 func, u8 offset) {
+    u32 addr = 0x80000000u | ((u32)bus << 16) | ((u32)slot << 11)
+             | ((u32)func << 8) | (offset & 0xFC);
+    outl(0xCF8, addr);
+    return inl(0xCFC);
+}
+
+static void test_pcie(void) {
+    const acpi_info_t *a = acpi();
+    ok("the acpi tables were found", a->found);
+    if (a->found) {
+        ok("a directory of tables was read", a->ntables > 0);
+        ok("at least one processor is described", a->ncpus > 0);
+    }
+
+    if (!pci_ecam_active()) {
+        kprintf("  SKIP  no mcfg on this machine, legacy ports only\n");
+        /* The fallback still has to behave. Past 256 there is no answer and
+           the caller must be told so rather than handed a wrapped offset. */
+        ok("extended space reads as absent without a mapping",
+           pci_read32(0, 0, 0, 0x100) == 0xFFFFFFFFu);
+        return;
+    }
+
+    ok("a base address was published", pci_ecam_base() != 0);
+    ok("the base is page aligned", (pci_ecam_base() & 0xFFF) == 0);
+
+    /* Walk what is actually on the bus and compare every function both ways.
+       Anything present is a real test; an empty slot reads as all ones down
+       both paths and proves nothing, so those are counted and not asserted. */
+    u32 compared = 0, disagreed = 0;
+    for (u16 bus = 0; bus <= pci_ecam_last_bus() && bus < 4; bus++) {
+        for (u8 slot = 0; slot < 32; slot++) {
+            for (u8 func = 0; func < 8; func++) {
+                u32 viaport = legacy_read32((u8)bus, slot, func, 0x00);
+                if ((u16)(viaport & 0xFFFF) == 0xFFFF) continue;
+
+                u32 viamap = pci_read32((u8)bus, slot, func, 0x00);
+                u32 cls_p  = legacy_read32((u8)bus, slot, func, 0x08);
+                u32 cls_m  = pci_read32((u8)bus, slot, func, 0x08);
+                compared++;
+                if (viaport != viamap || cls_p != cls_m) disagreed++;
+            }
+        }
+    }
+    ok("there was something on the bus to compare", compared > 0);
+    ok("both paths report the same ids and classes", disagreed == 0);
+
+    /* The host bridge is function zero of slot zero and is on every machine
+       that has a bus at all. Its extended space is only reachable one way. */
+    pci_dev_t host;
+    bool have_host = pci_find_class(0x06, 0x00, 0x00, &host);
+    if (have_host) {
+        u32 lo = pci_read32(host.bus, host.slot, host.func, 0x00);
+        ok("the bridge answers through the mapping", (u16)(lo & 0xFFFF) != 0xFFFF);
+
+        /* Reading past 256 must not alias back to the start of the function,
+           which is what a missing offset in the address arithmetic does. */
+        u32 ext = pci_read32(host.bus, host.slot, host.func, 0x100);
+        ok("extended space does not alias the header", ext != lo);
+    }
+
+    /* An offset nothing can satisfy is refused rather than wrapped. */
+    ok("an out of range offset reads as absent",
+       pci_read32(0, 0, 0, 0x1000) == 0xFFFFFFFFu);
+    ok("an impossible slot reads as absent",
+       pci_read32(0, 32, 0, 0x00) == 0xFFFFFFFFu);
+
+    if (a->nmcfg) {
+        bool sane = true;
+        for (u32 i = 0; i < a->nmcfg; i++)
+            if (!a->mcfg[i].base || a->mcfg[i].start_bus > a->mcfg[i].end_bus)
+                sane = false;
+        ok("every mcfg entry describes a real range", sane);
+    }
+}
+
 int selftest_run(void) {
     passed = failed = 0;
     kprintf("\n=== nyx self test ===\n");
@@ -1070,6 +1191,7 @@ int selftest_run(void) {
     kprintf("[wait timeouts]\n"); test_wait_timeout();
     kprintf("[processors]\n"); test_smp();
     kprintf("[black box]\n"); test_blackbox();
+    kprintf("[acpi and pcie]\n"); test_pcie();
     kprintf("\n%d passed, %d failed\n", passed, failed);
     kprintf(failed ? "SELFTEST_FAIL\n" : "SELFTEST_PASS\n");
     return failed;

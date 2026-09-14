@@ -105,6 +105,10 @@ bool ata_init(void) {
 
 bool ata_present(void)  { return present; }
 u32  ata_sectors(void)  { return total_sectors; }
+
+/* The sector count register is eight bits. Zero there means 256, which
+   this does not use, so 255 is the most one command can move. */
+u32  ata_max_run(void)  { return 255; }
 const char *ata_model(void) { return model; }
 
 static void select_lba(u32 lba, u8 count) {
