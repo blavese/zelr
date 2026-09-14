@@ -2,9 +2,11 @@
 
 A 64-bit operating system written from scratch for x86. It boots itself off a
 disc or a USB stick, through BIOS or UEFI, drives a framebuffer, manages its
-own memory, preempts its own tasks, starts the machine's other processors,
-keeps files in directories on a FAT16 disk, talks to the internet, and runs a
-desktop whose programs are real ring 3 processes.
+own memory, preempts its own tasks, starts every processor the firmware
+describes, routes its interrupts through the IOAPIC, finds an NVMe, SATA or
+ATA disk, reads the GPT on it, keeps files in directories on a FAT16 or FAT32
+volume, talks to the internet, and runs a desktop whose programs are real
+ring 3 processes. When it fails it says why.
 
 ![the nyx desktop](docs/desktop.png)
 
