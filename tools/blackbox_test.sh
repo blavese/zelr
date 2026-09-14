@@ -22,7 +22,12 @@ QEMU="${QEMU:-}"
 [ -z "$QEMU" ] && QEMU=$(command -v qemu-system-x86_64 || true)
 [ -z "$QEMU" ] && QEMU="/c/Program Files/qemu/qemu-system-x86_64.exe"
 
-IMG=blackbox.img
+# The working image carries the process id. Two copies of this running at
+# once otherwise share a name in the repository root, and the first to
+# finish deletes the other's disk out from under it. That is not
+# hypothetical: it happened, and it looked like a builder that could not
+# find its input.
+IMG="blackbox.$$.img"
 OUT1=$(mktemp)
 OUT2=$(mktemp)
 FENCED=$(mktemp)
