@@ -6,7 +6,10 @@
 
 /* Fed from the handoff rather than from multiboot, because a machine that
    booted through UEFI has no multiboot information at all. */
-void pmm_init(const handoff_t *h);
+/* bitmap_limit is the address the bitmap must stay below, which is where
+   the heap begins. A machine with more memory than fits in that gap gets as
+   much of it as can be described. */
+void pmm_init(const handoff_t *h, u64 bitmap_limit);
 
 /* Marks a physical range as spoken for, so it is never handed out. */
 void pmm_reserve(u64 start, u64 size);

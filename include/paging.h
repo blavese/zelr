@@ -1,5 +1,6 @@
 #pragma once
 #include "types.h"
+#include "handoff.h"
 
 #define PTE_PRESENT  0x001
 #define PTE_RW       0x002
@@ -13,8 +14,27 @@
 
 /* Identity mapped, shared by every address space. Everything the kernel
    allocates lives below this line, so a physical address is a valid pointer
-   and drivers can hand one to a device without translation. */
-#define KERNEL_SPACE_MB 64ull
+   and drivers can hand one to a device without translation.
+ *
+ * The bottom of it is mapped a page at a time, because that is the part
+ * whose mappings get changed: the kernel itself, the frame bitmap, the heap,
+ * the trampoline the other processors start on, and the text mode buffer at
+ * 0xB8000 which is not memory at all and has to be reachable anyway. */
+#define KERNEL_LOW_MB 64ull
+
+/* Above that, memory is mapped in 2 MiB pages, and only where the firmware
+   said there is memory.
+ *
+ * Mapping everything instead would be simpler and wrong. The space between
+ * the memory below 4 GiB and the memory above it is where devices put their
+ * registers, and a device mapped as ordinary cacheable memory does not work:
+ * a write sits in the cache instead of reaching the hardware. Those holes
+ * are left unmapped here so that paging_map_device maps them properly, with
+ * caching turned off, when a driver asks for one.
+ *
+ * The ceiling is what the frame bitmap can describe before it runs into the
+ * heap, and is enforced rather than assumed. */
+#define KERNEL_SPACE_MAX_GB 64ull
 
 /* Where user space begins, and why it is so far up.
  *
@@ -32,7 +52,12 @@
 #define USER_SPACE_BASE   0x0000008000000000ull
 #define USER_SPACE_END    0x000000FFFFFFF000ull
 
-void paging_init(void);
+/* Takes the memory map because what gets mapped is what the firmware said
+   is memory, rather than a fixed span that happens to be big enough. */
+void paging_init(const handoff_t *h);
+
+/* How much memory ended up identity mapped. */
+u64  paging_mapped_bytes(void);
 
 /* Operate on whichever address space is loaded. */
 bool map_page(u64 virt, u64 phys, u64 flags);

@@ -61,13 +61,84 @@ static u64 *step(u64 *table, u64 virt, int level, bool create, u64 flags) {
     return (u64 *)(table[i] & PTE_ADDR_MASK);
 }
 
+/* Turns one 2 MiB page into the 512 four kilobyte pages it was made of.
+ *
+ * The mapping does not change: the same memory stays reachable at the same
+ * addresses with the same flags. What changes is that it can now be altered
+ * a page at a time, which is what somebody wanting to map a single page
+ * inside a region mapped in one go actually needs.
+ *
+ * No flush is needed for the entries themselves, because none of them
+ * translate anywhere new. The caller changes one of them next and
+ * invalidates that address, and invalidating an address drops whatever
+ * covers it, including the large entry that used to. */
+static bool split_huge(u64 *pd, u64 i) {
+    u64 entry = pd[i];
+    u64 base = entry & PTE_ADDR_MASK;
+    u64 flags = entry & 0xFFF & ~PTE_HUGE;
+
+    u64 frame = pmm_alloc_frame();
+    if (!frame) return false;
+    u64 *pt = (u64 *)frame;
+    for (u64 k = 0; k < ENTRIES; k++)
+        pt[k] = (base + k * PAGE_SIZE) | flags | PTE_PRESENT;
+
+    pd[i] = frame | PTE_PRESENT | PTE_RW | (entry & PTE_USER);
+    return true;
+}
+
 /* The page table containing `virt`, or null. */
 static u64 *table_for(u64 *pml4, u64 virt, bool create, u64 flags) {
     u64 *pdpt = step(pml4, virt, 4, create, flags);
     if (!pdpt) return 0;
     u64 *pd = step(pdpt, virt, 3, create, flags);
     if (!pd) return 0;
+
+    /* Somebody wants a page inside a region mapped in one piece. It has to
+       come apart first, or the write below would land in the middle of an
+       entry that is a page rather than a table. */
+    u64 i = index_of(virt, 2);
+    if ((pd[i] & PTE_PRESENT) && (pd[i] & PTE_HUGE)) {
+        if (!create) return 0;
+        if (!split_huge(pd, i)) return 0;
+    }
     return step(pd, virt, 2, create, flags);
+}
+
+/* Maps 2 MiB in one entry, with no table underneath it. */
+static bool map_huge_in(u64 *pml4, u64 virt, u64 phys, u64 flags) {
+    u64 *pdpt = step(pml4, virt, 4, true, flags);
+    if (!pdpt) return false;
+    u64 *pd = step(pdpt, virt, 3, true, flags);
+    if (!pd) return false;
+    pd[index_of(virt, 2)] =
+        (phys & PTE_ADDR_MASK) | (flags & 0xFFF) | PTE_PRESENT | PTE_HUGE;
+    return true;
+}
+
+/* Translates an address whether it is mapped a page at a time or as part of
+   a larger one. Walking to the bottom table and reading an entry there only
+   works for the first kind, and gets a flat no for the second, which reads
+   as memory that is not mapped at all. */
+static u64 resolve(u64 *pml4, u64 virt) {
+    u64 *pdpt = step(pml4, virt, 4, false, 0);
+    if (!pdpt) return 0;
+
+    u64 i3 = index_of(virt, 3);
+    if (!(pdpt[i3] & PTE_PRESENT)) return 0;
+    if (pdpt[i3] & PTE_HUGE)                          /* a gigabyte of it */
+        return (pdpt[i3] & PTE_ADDR_MASK) | (virt & 0x3FFFFFFFull);
+
+    u64 *pd = (u64 *)(pdpt[i3] & PTE_ADDR_MASK);
+    u64 i2 = index_of(virt, 2);
+    if (!(pd[i2] & PTE_PRESENT)) return 0;
+    if (pd[i2] & PTE_HUGE)                            /* two megabytes */
+        return (pd[i2] & PTE_ADDR_MASK) | (virt & 0x1FFFFFull);
+
+    u64 *pt = (u64 *)(pd[i2] & PTE_ADDR_MASK);
+    u64 e = pt[index_of(virt, 1)];
+    if (!(e & PTE_PRESENT)) return 0;
+    return (e & PTE_ADDR_MASK) | (virt & 0xFFFull);
 }
 
 static bool map_in(u64 *pml4, u64 virt, u64 phys, u64 flags) {
@@ -173,11 +244,7 @@ u64 paging_kernel_directory(void)  { return (u64)kernel_pml4; }
 
 u64 virt_to_phys_in(u64 pml4_phys, u64 virt) {
     if (!pml4_phys) return 0;
-    u64 *pt = table_for((u64 *)pml4_phys, virt, false, 0);
-    if (!pt) return 0;
-    u64 e = pt[index_of(virt, 1)];
-    if (!(e & PTE_PRESENT)) return 0;
-    return (e & PTE_ADDR_MASK) | (virt & 0xFFF);
+    return resolve((u64 *)pml4_phys, virt);
 }
 
 u64 virt_to_phys(u64 virt) {
@@ -211,21 +278,57 @@ static void page_fault(registers_t *r) {
           (r->err_code & 4) ? "user" : "kernel");
 }
 
-void paging_init(void) {
+#define HUGE_SIZE (2ull * 1024 * 1024)
+
+/* How much of memory ended up identity mapped, for the boot log and for the
+   checks that this did what it says. */
+static u64 mapped_bytes;
+u64 paging_mapped_bytes(void) { return mapped_bytes; }
+
+void paging_init(const handoff_t *h) {
     u64 frame = pmm_alloc_frame();
     if (!frame) panic("paging: no frame for the top level table");
     kernel_pml4 = (u64 *)frame;
     current_pml4 = kernel_pml4;
     memset(kernel_pml4, 0, PAGE_SIZE);
 
-    /* Identity map the low region so kernel code, the frame bitmap and the
-       heap all keep the addresses they already have. The trampoline that got
-       us here mapped the first 4 GiB with large pages; this replaces that
-       with 4 KiB pages, which is what the rest of the kernel expects to be
-       able to change one page at a time. */
-    for (u64 a = 0; a < KERNEL_SPACE_MB * 1024ull * 1024ull; a += PAGE_SIZE) {
+    /* The bottom, a page at a time, whatever the firmware thinks is there.
+       Kernel code, the frame bitmap and the heap all keep the addresses they
+       already have, and the text mode buffer and the trampoline are down
+       there too and are not memory the firmware would call usable. The
+       trampoline that got us here mapped the first 4 GiB with large pages;
+       this replaces that with something the rest of the kernel can change a
+       page at a time. */
+    u64 low = KERNEL_LOW_MB * 1024ull * 1024ull;
+    for (u64 a = 0; a < low; a += PAGE_SIZE) {
         if (!map_page(a, a, PTE_PRESENT | PTE_RW))
             panic("paging: identity map failed at %p", (void *)a);
+    }
+    mapped_bytes = low;
+
+    /* The rest of memory, 2 MiB at a time, and only where there is memory.
+       Four kilobyte pages would work and would cost 32 MiB of page tables
+       for 16 GiB of memory, plus four million table writes before the
+       machine has finished booting. */
+    u64 ceiling = KERNEL_SPACE_MAX_GB * 1024ull * 1024ull * 1024ull;
+    for (u64 i = 0; i < h->region_count; i++) {
+        const mem_region_t *r = &h->regions[i];
+        if (r->type != MEM_USABLE) continue;
+
+        /* Rounded inward. A 2 MiB page covers 2 MiB whether or not all of
+           it was offered, and rounding outward would quietly hand out the
+           firmware's own tables, or a device, as if it were memory. */
+        u64 a = (r->base + HUGE_SIZE - 1) & ~(HUGE_SIZE - 1);
+        u64 end = (r->base + r->len) & ~(HUGE_SIZE - 1);
+        if (a < low) a = low;
+        if (end > ceiling) end = ceiling;
+
+        for (; a < end; a += HUGE_SIZE) {
+            if (resolve(kernel_pml4, a)) continue;         /* already there */
+            if (!map_huge_in(kernel_pml4, a, a, PTE_PRESENT | PTE_RW))
+                panic("paging: could not map memory at %p", (void *)a);
+            mapped_bytes += HUGE_SIZE;
+        }
     }
 
     register_interrupt_handler(14, page_fault);

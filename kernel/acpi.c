@@ -70,8 +70,12 @@ const acpi_info_t *acpi(void) { return &info; }
    nothing to do; above it, the pages are mapped where they already are, so
    the pointer the caller gets is the physical address either way. */
 static const void *map_phys(u64 phys, u64 len) {
-    u64 limit = KERNEL_SPACE_MB * 1024ull * 1024ull;
-    if (phys + len <= limit) return (const void *)phys;
+    /* Asked of the page tables rather than compared against a constant.
+       What is identity mapped is now whatever the firmware said is memory,
+       so there is no single line below which the answer is always yes. */
+    if (virt_to_phys(phys) == phys
+        && virt_to_phys(phys + len - 1) == phys + len - 1)
+        return (const void *)phys;
 
     u64 first = phys & ~0xFFFull;
     u64 last = (phys + len + PAGE_SIZE - 1) & ~0xFFFull;

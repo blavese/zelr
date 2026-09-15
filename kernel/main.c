@@ -159,7 +159,8 @@ void kmain(handoff_t *h) {
     bb_mark("pic");
     pic_init();      kprintf("  pic     irqs remapped to 32..47\n");
     bb_mark("memory");
-    pmm_init(h);     kprintf("  memory  %d KiB usable, via %s\n",
+    pmm_init(h, HEAP_BASE);
+                     kprintf("  memory  %d KiB usable, via %s\n",
                              (u32)(pmm_free_frames() * 4), h->loader);
     bb_log("memory %d KiB usable, loader %s",
            (u32)(pmm_free_frames() * 4), h->loader);
@@ -168,7 +169,9 @@ void kmain(handoff_t *h) {
     pmm_reserve(HEAP_BASE, HEAP_SIZE);
 
     bb_mark("paging");
-    paging_init();   kprintf("  paging  enabled\n");
+    paging_init(h);
+    kprintf("  paging  enabled, %d MiB mapped\n",
+            (u32)(paging_mapped_bytes() / (1024 * 1024)));
     bb_mark("heap");
     heap_init(HEAP_BASE, HEAP_SIZE);
     kprintf("  heap    %d KiB\n", HEAP_SIZE / 1024);

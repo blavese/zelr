@@ -586,10 +586,12 @@ large range:
 - **No FAT long filenames.** A file saved as somethinglong.txt comes back as
   SOMETHI~1.TXT. The entries that carry the real name are read past rather
   than understood.
-- **The address space is capped at 64 MiB.** The page tables and the frame
-  bitmap both have to describe whatever the kernel claims, and nothing yet
-  needs more. Long mode removed the 4 GiB ceiling; this one is self-imposed
-  and it is a constant.
+- **Memory is capped at 64 GiB**, and by how much bitmap fits between the
+  kernel and the heap, whichever is lower. What the machine actually has is
+  what gets mapped: the bottom 64 MiB a page at a time, and everything the
+  firmware called usable above that in 2 MiB pages. The gaps between are
+  left alone, because that is where devices keep their registers and they
+  have to be mapped uncached rather than as ordinary memory.
 
 It is a real kernel in that it boots itself on a bare machine, drives its own
 hardware, and can fetch a file from a real server and keep it on a real disk.

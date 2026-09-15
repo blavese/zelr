@@ -91,6 +91,65 @@ static void test_heap(void) {
     kfree(z);
 }
 
+/* The identity map, now that it covers whatever the machine has rather than
+   a fixed 64 MiB. */
+static void test_identity_map(void) {
+    u64 low = KERNEL_LOW_MB * 1024ull * 1024ull;
+    u64 mapped = paging_mapped_bytes();
+
+    ok("the identity map covers at least the low region", mapped >= low);
+
+    /* One to one, which is the whole reason it exists: a pointer the kernel
+       holds is a physical address a device can be given. */
+    bool one_to_one = true;
+    for (u64 a = 0x100000; a < low; a += 4ull * 1024 * 1024)
+        if (virt_to_phys(a) != a) one_to_one = false;
+    ok("and every address in it translates to itself", one_to_one);
+
+    /* Memory above the low region is mapped in 2 MiB pages, and the point of
+       mapping it is being able to use it. Written through a pointer and read
+       back, because a page table entry that is present and wrong looks
+       exactly like one that is right until something touches it. */
+    if (mapped > low + 4ull * 1024 * 1024) {
+        u64 a = low + 2ull * 1024 * 1024;
+        ok("memory above it is mapped too", virt_to_phys(a) == a);
+
+        volatile u64 *p = (volatile u64 *)a;
+        u64 keep = *p;
+        *p = 0x5A5AC3C3A5A53C3Cull;
+        ok("and can be written and read back", *p == 0x5A5AC3C3A5A53C3Cull);
+        *p = keep;
+
+        /* A single page inside one of those large ones can still be mapped
+           on its own, which means the large one came apart correctly and
+           everything around it survived. */
+        u64 probe = a + 8ull * 1024 * 1024;
+        if (probe + PAGE_SIZE < mapped) {
+            u64 frame = pmm_alloc_frame();
+            if (frame) {
+                u64 neighbour = probe + PAGE_SIZE;
+                bool remapped = map_page(probe, frame, PTE_PRESENT | PTE_RW);
+                ok("a 2 MiB page can be split to remap one page inside it",
+                   remapped && virt_to_phys(probe) == frame);
+                ok("and the pages beside it are undisturbed",
+                   virt_to_phys(neighbour) == neighbour);
+                map_page(probe, probe, PTE_PRESENT | PTE_RW);
+                pmm_free_frame(frame);
+            }
+        }
+    }
+
+    /* The gap between the memory below 4 GiB and the memory above it is
+       where devices live, and it must not be mapped as ordinary memory: a
+       driver that found it already mapped would use it cached, and a cached
+       write to a device register does not reach the device. Only checked on
+       a machine big enough to have the gap at all. */
+    if (mapped > 4ull * 1024 * 1024 * 1024) {
+        ok("the hole below 4 GiB is left for devices to claim",
+           virt_to_phys(0xC0000000ull) == 0);
+    }
+}
+
 static void test_pmm(void) {
     u32 free_before = pmm_free_frames();
     u32 f1 = pmm_alloc_frame(), f2 = pmm_alloc_frame();
@@ -1415,6 +1474,7 @@ int selftest_run(void) {
     passed = failed = 0;
     kprintf("\n=== zelr self test ===\n");
     kprintf("[string]\n");     test_string();
+    kprintf("[the identity map]\n"); test_identity_map();
     kprintf("[physical memory]\n"); test_pmm();
     kprintf("[paging]\n");     test_paging();
     kprintf("[user access]\n"); test_user_access();
