@@ -17,6 +17,16 @@ typedef struct {
 typedef void (*isr_handler_t)(registers_t *);
 
 void idt_init(void);
+
+/* Loads the table built by idt_init on the processor that calls it. There is
+   one table and every processor shares it; each still has to point its own
+   register at it. */
+void idt_load(void);
+
+/* The vector one processor sends to another to wake it from a halt. Above
+   the hardware lines and below the system call gate, so it collides with
+   neither. */
+#define VEC_AP_WAKE 0xF0
 void register_interrupt_handler(u8 n, isr_handler_t h);
 
 /* Whether anything is listening on this vector. Used to decide which lines

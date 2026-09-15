@@ -753,10 +753,18 @@ static void test_smp(void) {
         if (smp_cpu(i)->started) helpers++;
     ok("at least one other processor came up", helpers > 0);
 
-    /* They should be spinning in their idle loop already. */
+    /* An idle processor should be asleep, not burning a core.
+     *
+     * This used to check the opposite: that the spin counter was climbing,
+     * which it was, because the idle loop never stopped running. That is
+     * exactly the thing that stopped zelr booting on a machine given more
+     * than one processor, and the check said it was working as intended.
+     * A counter that moves a handful of times is one that woke, looked and
+     * went back to sleep; one that moves thousands of times is spinning. */
     u64 spins_before = smp_cpu(1)->spins;
     sleep_ms(50);
-    ok("an idle processor is really looping", smp_cpu(1)->spins > spins_before);
+    u64 moved = smp_cpu(1)->spins - spins_before;
+    ok("an idle processor is asleep rather than spinning", moved < 100);
 
     /* Hand the same job to all of them and join in. */
     shared_counter = 0;

@@ -20,6 +20,7 @@
  * are given something, so there is nothing to race over.
  */
 #include "smp.h"
+#include "idt.h"
 #include "acpi.h"
 #include "paging.h"
 #include "pmm.h"
@@ -168,25 +169,56 @@ static bool start_cpu(u32 index) {
 }
 
 /* Where an application processor arrives, with paging on and a stack of its
-   own. It never returns and never enables interrupts: it has no interrupt
-   table, and it does not need one to do what it is here for. */
+   own. It never returns.
+ *
+ * It used to sit in a tight loop reading its own work slot, on the grounds
+ * that it had no interrupt table and did not need one. That loop is why
+ * zelr would not boot on a machine given more than one processor: it holds
+ * a core at a hundred percent for as long as the machine is on, and under
+ * a hypervisor that is enough to starve the boot processor of the time it
+ * needs to take a timer interrupt. The symptom is not a slow machine, it
+ * is a dead one: the scheduler waits for a first tick that never comes, so
+ * nothing runs, and a keyboard nothing is reading looks broken.
+ *
+ * It sleeps now, and is woken when there is something to do. That costs a
+ * shared interrupt table, a vector and an inter-processor interrupt, and
+ * it is what an idle processor is supposed to do on any machine.
+ */
 static void ap_main(void *arg) {
     u64 index = (u64)arg;
-    if (index >= SMP_MAX_CPUS) for (;;) __asm__ volatile ("hlt");
+    if (index >= SMP_MAX_CPUS) for (;;) __asm__ volatile ("cli; hlt");
 
     slot_t *me = &cpus[index];
+
+    /* Its own local APIC first: the registers are already mapped, but the
+       switch that lets this processor receive anything is per processor and
+       has only ever been thrown on the boot one. */
+    lapic_enable();
+
+    /* The table is the one the boot processor built; this points at it. A
+       processor that halts with interrupts on and no table would triple
+       fault on the first one that arrived. */
+    idt_load();
+
     me->info.started = true;
 
     for (;;) {
+        /* Checked with interrupts off, so a wake-up cannot arrive between
+           finding no work and going to sleep and be lost. sti does not take
+           effect until after the instruction that follows it, which is what
+           makes the halt below safe. */
+        __asm__ volatile ("cli");
         void (*fn)(void *) = me->fn;
         if (fn) {
+            __asm__ volatile ("sti");
             void *a = me->arg;
             me->fn = 0;
             fn(a);
             me->info.jobs++;
+            continue;
         }
         me->info.spins++;
-        __asm__ volatile ("pause");
+        __asm__ volatile ("sti; hlt");
     }
 }
 
@@ -206,6 +238,14 @@ bool smp_run(u32 cpu, void (*fn)(void *), void *arg) {
        processor tests. Writing it first would let it read a stale argument. */
     __sync_synchronize();
     cpus[cpu].fn = fn;
+
+    /* It is asleep until told otherwise. */
+    apic_write(LAPIC_ICR_HI, (u32)cpus[cpu].info.apic_id << 24);
+    /* Asserted, edge triggered. Everything except an INIT de-assert has to
+       say so; sent without it the interrupt is simply not delivered, and a
+       processor waiting to be woken waits forever. */
+    apic_write(LAPIC_ICR_LO, ICR_ASSERT | VEC_AP_WAKE);
+    apic_wait();
     return true;
 }
 

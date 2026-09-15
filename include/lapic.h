@@ -18,6 +18,10 @@ bool lapic_init(void);
 bool lapic_present(void);
 u8   lapic_id(void);
 
+/* Enables the calling processor's own local APIC. lapic_init does this for
+   the one that calls it; every other processor has to do it for itself. */
+void lapic_enable(void);
+
 /* End of interrupt. Every interrupt delivered through the local APIC has to
    be acknowledged or nothing at the same or lower priority arrives again. */
 void lapic_eoi(void);

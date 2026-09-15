@@ -37,6 +37,18 @@ bool lapic_init(void) {
     return true;
 }
 
+/* Switches on the local APIC of the processor that calls it.
+ *
+ * lapic_init maps the registers and returns early once they are mapped, so
+ * the enable bit it writes is written on the boot processor and nowhere
+ * else. The address is shared but the register is not: every processor has
+ * its own, and one that has never been enabled delivers nothing at all, not
+ * even an interrupt sent to it by name. */
+void lapic_enable(void) {
+    if (!regs) return;
+    write(LAPIC_SVR, read(LAPIC_SVR) | 0x100 | 0xFF);
+}
+
 u8 lapic_id(void) {
     return regs ? (u8)(read(LAPIC_ID) >> 24) : 0;
 }

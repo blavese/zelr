@@ -333,6 +333,14 @@ isr47:
     push $47
     jmp isr_common
 
+/* Not a hardware line. An idle processor halts rather than spinning, and
+   this is what another processor sends to wake it up. */
+.global isr240
+isr240:
+    push $0
+    push $240
+    jmp isr_common
+
 .global isr128
 isr128:
     push $0
@@ -394,3 +402,4 @@ isr_stub_table:
     .quad isr46
     .quad isr47
     .quad isr128
+    .quad isr240

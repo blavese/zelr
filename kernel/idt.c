@@ -58,8 +58,13 @@ void idt_init(void) {
     /* 0x80 is the syscall gate: DPL 3 so ring 3 may invoke it. */
     set_gate(0x80, (u64)isr_stub_table[48], GDT_KERNEL_CODE, 0xEE);
 
+    /* And the wake-up one processor sends another. Ring 0 only. */
+    set_gate(VEC_AP_WAKE, (u64)isr_stub_table[49], GDT_KERNEL_CODE, 0x8E);
+
     idt_flush((u64)&idtp);
 }
+
+void idt_load(void) { idt_flush((u64)&idtp); }
 
 static const char *EXC[] = {
     "divide by zero", "debug", "non-maskable interrupt", "breakpoint",
@@ -96,6 +101,12 @@ u64 isr_dispatch(registers_t *r) {
     if (r->int_no >= 32 && r->int_no < 48) {
         if (ioapic_active()) lapic_eoi();
         else                 pic_eoi((u8)(r->int_no - 32));
+    } else if (r->int_no == VEC_AP_WAKE) {
+        /* Nothing outside the processor delivered this, so only its own
+           local APIC has to be told. Forgetting leaves the in-service bit
+           set and nothing at that priority is ever delivered again, which
+           is a processor that wakes exactly once. */
+        lapic_eoi();
     }
 
     /* The scheduler may hand back a different task's frame. */
