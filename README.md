@@ -556,8 +556,10 @@ large range:
   name entries.
 - **No shared libraries**, no dynamic linking, no relocation: programs are
   static and loaded at a fixed address.
-- **No window resizing**, and eight windows at once. A surface is allocated
-  once, at the size the window was created with.
+- **Eight windows at once**, which is a fixed array and not a limit anybody
+  reached. Resizing works, by the corner grip, by maximising and by snapping
+  to an edge: the surface is reallocated and the program is told its new
+  size. This entry used to say resizing did not exist, long after it did.
 - **The system info window is still kernel code**, because it reports on the
   allocator, the scheduler and the clock, and no system call exposes those.
   Every other window on the desktop belongs to a ring 3 process.
