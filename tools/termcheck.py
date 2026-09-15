@@ -18,26 +18,18 @@ question with a yes or no answer:
 If completion filled in the rest, the line read `theme amber` and the window
 is amber. If it did nothing, the line read `themamber` and nothing happened.
 
+Each step waits for its colour rather than sleeping and hoping. A repaint
+that takes four seconds under load is a repaint, not a failure.
+
   python tools/termcheck.py [--keep]
 """
 import os
-import socket
-import subprocess
 import sys
-import time
-
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-BUILD = os.path.join(ROOT, "build")
-DISK = os.path.join(ROOT, "termcheck.img")
-MONITOR_PORT = 55733
-
-QEMU = os.environ.get("QEMU") or "C:/Program Files/qemu/qemu-system-x86_64.exe"
-if not os.path.exists(QEMU):
-    from shutil import which
-    QEMU = which("qemu-system-x86_64") or QEMU
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from shotcheck import Monitor, count_in, tally      # noqa: E402
+from harness import Guest, Checks, build_once, count_in, ROOT      # noqa: E402
+
+DISK = os.path.join(ROOT, "termcheck.%d.img" % os.getpid())
 
 # The palettes term.c ships, as the backgrounds they paint.
 SLATE = (0x10, 0x14, 0x1A)
@@ -61,60 +53,26 @@ def keys(mon, text, settle=0.06):
         mon.send("sendkey %s" % NAMED.get(ch, ch), settle=settle)
 
 
-def background(mon, name, shots):
-    w, h, px, ppm = mon.screen(name)
-    shots.append(ppm)
-    return w, px
-
-
-def is_theme(px, w, rgb):
+def themed(rgb):
     """True when the terminal's page is painted in this colour. The window is
     most of the screen, so a few thousand pixels is far above any accident."""
-    return count_in(px, w, PAGE, rgb) > 50000
+    return lambda w, h, px: count_in(px, w, PAGE, rgb) > 50000
 
 
 def main():
     keep = "--keep" in sys.argv
-    # Built here when this is run on its own, and not when the gate runs
-    # it. The gate builds once and then starts several harnesses at the
-    # same time; a second build rewrites build/zelr.bin and build/zelr.elf
-    # underneath whichever machine is reading them, which on Windows is a
-    # permission error rather than a torn file.
-    if os.environ.get("ZELR_PREBUILT") != "1":
-        subprocess.run(["bash", "build.sh"], cwd=ROOT, check=True,
-                       stdout=subprocess.DEVNULL)
-
-    # A fresh disk, so a theme left by an earlier run cannot make a check
-    # pass before anything has been typed.
-    if os.path.exists(DISK):
-        os.remove(DISK)
-    with open(DISK, "wb") as f:
-        f.truncate(32 * 1024 * 1024)
-
-    proc = subprocess.Popen(
-        [QEMU, "-kernel", os.path.join(BUILD, "zelr.bin"), "-m", "64",
-         "-no-reboot", "-display", "none", "-serial", "stdio",
-         "-drive", "file=%s,format=raw,if=ide,index=0" % DISK,
-         "-monitor", "tcp:127.0.0.1:%d,server,nowait" % MONITOR_PORT],
-        cwd=ROOT, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT)
-
-    shots = []
-    checks = []
+    build_once()
+    vm = Guest(DISK, memory=64)
+    c = Checks("terminal test")
 
     try:
-        time.sleep(4.5)                        # let it boot
-        for ch in "desktop\n":                 # typed, not pasted: see shell_test.sh
-            proc.stdin.write(ch.encode())
-            proc.stdin.flush()
-            time.sleep(0.05)
-        time.sleep(5.0)                        # the terminal starts and draws
+        vm.wait_boot()
+        vm.type("desktop\n")       # typed, not pasted: see shell_test.sh
+        mon = vm.monitor()
 
-        mon = Monitor(MONITOR_PORT)
-
-        w, px = background(mon, "term-start", shots)
-        checks.append(("the terminal opens in its default colours",
-                       is_theme(px, w, SLATE)))
+        w, h, px, shot, ok = mon.wait_screen(
+            "term-start", themed(SLATE), timeout=60)
+        c.add("the terminal opens in its default colours", ok, shot)
 
         # --- typing at all ------------------------------------------------
         #
@@ -122,102 +80,70 @@ def main():
         # reaches a ring 3 program: PS/2 controller, kernel keyboard, window
         # server queue, and the program's own event loop.
         keys(mon, "theme paper\n")
-        time.sleep(3.0)
-        w, px = background(mon, "term-typed", shots)
-        checks.append(("a typed command reaches a ring 3 program",
-                       is_theme(px, w, PAPER)))
+        _, _, _, shot, ok = mon.wait_screen("term-typed", themed(PAPER))
+        c.add("a typed command reaches a ring 3 program", ok, shot)
 
         # --- tab completion -----------------------------------------------
         #
         # "them" is not a command. It becomes one only if Tab finishes it.
         keys(mon, "them")
-        mon.send("sendkey tab", settle=0.5)
+        mon.send("sendkey tab", settle=0.4)
         keys(mon, "amber\n")
-        time.sleep(3.0)
-        w, px = background(mon, "term-completed", shots)
-        checks.append(("tab completes a command name", is_theme(px, w, AMBER)))
+        _, _, _, shot, ok = mon.wait_screen("term-completed", themed(AMBER))
+        c.add("tab completes a command name", ok, shot)
 
         # --- history ------------------------------------------------------
         #
         # Two commands back is `theme paper`. Getting there means the up
         # arrow arrived as a key of its own rather than as an escape byte,
         # and that the editor walked the right way through the ring.
-        mon.send("sendkey up", settle=0.35)
-        mon.send("sendkey up", settle=0.35)
-        mon.send("sendkey ret", settle=0.35)
-        time.sleep(3.0)
-        w, px = background(mon, "term-history", shots)
-        checks.append(("the up arrow walks back through history",
-                       is_theme(px, w, PAPER)))
+        mon.send("sendkey up", settle=0.3)
+        mon.send("sendkey up", settle=0.3)
+        mon.send("sendkey ret", settle=0.2)
+        _, _, _, shot, ok = mon.wait_screen("term-history", themed(PAPER))
+        c.add("the up arrow walks back through history", ok, shot)
 
         # --- editing in the middle of a line ------------------------------
         #
         # Type "theme phosphr", walk the cursor left one, insert the missing
         # letter. Only a real cursor makes this land on a theme that exists.
         keys(mon, "theme phosphr")
-        mon.send("sendkey left", settle=0.3)
+        mon.send("sendkey left", settle=0.25)
         keys(mon, "o")
-        mon.send("sendkey ret", settle=0.35)
-        time.sleep(3.0)
-        w, px = background(mon, "term-edited", shots)
-        checks.append(("the left arrow moves the cursor, and typing inserts",
-                       is_theme(px, w, PHOSPHOR)))
+        mon.send("sendkey ret", settle=0.2)
+        _, _, _, shot, ok = mon.wait_screen("term-edited", themed(PHOSPHOR))
+        c.add("the left arrow moves the cursor, and typing inserts", ok, shot)
 
         # --- backspace and delete -----------------------------------------
         #
-        # "theme paperX", backspace kills the X. Then home, delete, and a
-        # fresh letter: proof that Home and Delete arrive as themselves.
+        # "theme paperx", backspace kills the x. Then home, delete, and the
+        # line starts one character later: proof that Home and Delete arrive
+        # as themselves rather than as text.
         keys(mon, "theme paperx")
-        mon.send("sendkey backspace", settle=0.3)
-        mon.send("sendkey ret", settle=0.35)
-        time.sleep(3.0)
-        w, px = background(mon, "term-backspace", shots)
-        checks.append(("backspace removes the character before the cursor",
-                       is_theme(px, w, PAPER)))
+        mon.send("sendkey backspace", settle=0.25)
+        mon.send("sendkey ret", settle=0.2)
+        _, _, _, shot, ok = mon.wait_screen("term-backspace", themed(PAPER))
+        c.add("backspace removes the character before the cursor", ok, shot)
 
         keys(mon, "xtheme amber")
-        mon.send("sendkey home", settle=0.3)
-        mon.send("sendkey delete", settle=0.3)
-        mon.send("sendkey ret", settle=0.35)
-        time.sleep(3.0)
-        w, px = background(mon, "term-delete", shots)
-        checks.append(("home goes to the start and delete removes forwards",
-                       is_theme(px, w, AMBER)))
+        mon.send("sendkey home", settle=0.25)
+        mon.send("sendkey delete", settle=0.25)
+        mon.send("sendkey ret", settle=0.2)
+        _, _, _, shot, ok = mon.wait_screen("term-delete", themed(AMBER))
+        c.add("home goes to the start and delete removes forwards", ok, shot)
 
         # --- the theme is remembered --------------------------------------
         #
         # It was written to /cfg/term. Reading it back through the terminal's
-        # own cat is a round trip through the filesystem from ring 3.
+        # own cat is a round trip through the filesystem from ring 3, and the
+        # window is still amber afterwards because the program survived it.
         keys(mon, "cat /cfg/term\n")
-        time.sleep(3.0)
-        w, px = background(mon, "term-cfg", shots)
-        checks.append(("the terminal is still running after all of that",
-                       is_theme(px, w, AMBER)))
-
-        mon.close()
-
+        _, _, _, shot, ok = mon.wait_screen("term-cfg", themed(AMBER))
+        c.add("the terminal is still running after all of that", ok, shot)
     finally:
-        proc.terminate()
-        try:
-            proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-        if not keep and os.path.exists(DISK):
-            os.remove(DISK)
+        vm.stop()
 
-    print("=== terminal test ===")
-    failed = 0
-    for name, passed in checks:
-        print("  %s  %s" % ("PASS" if passed else "FAIL", name))
-        if not passed:
-            failed += 1
-    print()
-    if failed:
-        print("terminal test: %d failed" % failed)
-        print("screenshots: %s" % ", ".join(shots))
-    else:
-        print("terminal test: all %d checks passed" % len(checks))
-    return 1 if failed else 0
+    return c.report(keep=keep)
 
 
 if __name__ == "__main__":

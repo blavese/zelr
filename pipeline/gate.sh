@@ -28,10 +28,39 @@ MODE="${1:-fast}"
 QEMU="${QEMU:-/c/Program Files/qemu/qemu-system-x86_64.exe}"
 [ -x "$QEMU" ] || QEMU="$(command -v qemu-system-x86_64 || echo "$QEMU")"
 
+# --- one at a time ---------------------------------------------------------
+#
+# Every step here boots a machine, builds a disk in the tree and drives the
+# screen of whatever it booted. Two gates at once therefore do not get twice
+# as much done, they get half as much done twice while contending for the
+# same files. That happened three times in one day, and each time the result
+# was a list of failures with nothing to do with the code. Refusing is
+# better than remembering not to.
+LOCK="${TMPDIR:-/tmp}/zelr-gate.lock"
+if ! mkdir "$LOCK" 2>/dev/null; then
+  echo "a gate is already running here (pid $(cat "$LOCK/pid" 2>/dev/null))."
+  echo "wait for it, or remove $LOCK if it is not."
+  exit 2
+fi
+echo $$ > "$LOCK/pid"
+trap 'rm -rf "$LOCK"' EXIT INT TERM
+
+# And nothing else should be using the machine either. One virtual machine
+# left open in a window is enough to make the screen harnesses miss their
+# timing, which is how three of them were blamed on the kernel.
+others=$(ps -W 2>/dev/null | grep -ciE 'qemu-system|vmware-vmx|VirtualBox' || true)
+if [ "${others:-0}" -gt 0 ]; then
+  echo "note: $others virtual machine(s) are already running; close them, or"
+  echo "      the screen checks will be sharing this host with them"
+fi
+
 failures=0
+started_at=$(date +%s)
 report() {
-  if [ "$2" -eq 0 ]; then printf '  PASS  %s\n' "$1"
-  else printf '  FAIL  %s\n' "$1"; failures=$((failures + 1)); fi
+  local mark="PASS"
+  if [ "$2" -ne 0 ]; then mark="FAIL"; failures=$((failures + 1)); fi
+  if [ -n "${3:-}" ]; then printf '  %s  %-56s %4ds\n' "$mark" "$1" "$3"
+  else                     printf '  %s  %s\n' "$mark" "$1"; fi
 }
 
 run_step() {
@@ -66,7 +95,8 @@ par_start() {                      # par_start <name> <function>
   local name="$1"; shift
   [ -n "$PARALLEL_DIR" ] || PARALLEL_DIR="$(mktemp -d)"
   local f="$PARALLEL_DIR/step$(( ${#par_names[@]} )).txt"
-  ( "$@" > "$f" 2>&1; echo "rc=$?" >> "$f" ) &
+  ( s=$(date +%s); "$@" > "$f" 2>&1; rc=$?
+    echo "rc=$rc" >> "$f"; echo "secs=$(( $(date +%s) - s ))" >> "$f" ) &
   par_names+=("$name")
   par_files+=("$f")
   par_pids+=("$!")
@@ -77,16 +107,17 @@ par_wait() {                       # collect everything par_start launched
   for i in "${!par_pids[@]}"; do wait "${par_pids[$i]}" 2>/dev/null; done
   for i in "${!par_names[@]}"; do
     local f="${par_files[$i]}"
-    local rc
+    local rc secs
     rc="$(grep -m1 '^rc=' "$f" | cut -d= -f2)"
+    secs="$(grep -m1 '^secs=' "$f" | cut -d= -f2)"
     # Three lines is the right amount for a step that passed and nowhere
     # near enough for one that did not.
     if [ "${rc:-1}" -eq 0 ]; then
-      grep -v '^rc=' "$f" | tail -3 | sed 's/^/        /'
+      grep -vE '^(rc|secs)=' "$f" | tail -3 | sed 's/^/        /'
     else
-      grep -v '^rc=' "$f" | tail -12 | sed 's/^/        /'
+      grep -vE '^(rc|secs)=' "$f" | tail -12 | sed 's/^/        /'
     fi
-    report "${par_names[$i]}" "${rc:-1}"
+    report "${par_names[$i]}" "${rc:-1}" "${secs:-0}"
   done
   rm -rf "$PARALLEL_DIR"
   PARALLEL_DIR=""
@@ -102,15 +133,21 @@ par_wait() {                       # collect everything par_start launched
 # actually happened was to run the harness again by hand. That is a slow way
 # to learn something the run already knew.
 #
-# So the output is held. On success nothing is printed, exactly as before.
-# On failure the end of it is, with the PASS lines dropped so what is left
-# is the failures and the count.
+# So the output is held. On success nothing is printed. On failure the end of
+# it is, with the PASS lines dropped so what is left is the failures.
+#
+# The decision is the exit status, not a phrase in the output. Matching a
+# phrase makes the wording part of the contract, and nothing says so: two of
+# these harnesses were reworded from "all checks passed" to "all 9 checks
+# passed", which is the same harness reporting the same success, and the gate
+# called both of them failures while printing the word PASS underneath. Every
+# one of these exits non-zero when it fails, which is the thing actually
+# worth asking about.
 keep() {
-  local want="$1"; shift
-  local out
-  out="$("$@" 2>&1)"
-  if printf '%s' "$out" | grep -q "$want"; then return 0; fi
-  printf '%s\n' "$out" | grep -vE '^\s*PASS' | tail -8
+  local out rc
+  out="$("$@" 2>&1)"; rc=$?
+  if [ "$rc" -eq 0 ]; then return 0; fi
+  printf '%s\n' "$out" | grep -vE '^\s*PASS' | tail -10
   return 1
 }
 
@@ -198,7 +235,7 @@ selftest_q35() {
 par_start "the same checks on q35, with pcie and ahci" selftest_q35
 
 # --- the shell, over the serial line --------------------------------------
-shelltest() { keep "all checks passed" timeout 400 bash tools/shell_test.sh; }
+shelltest() { keep timeout 400 bash tools/shell_test.sh; }
 par_start "the shell answers over serial" shelltest
 
 # --- the black box, which needs two boots to check at all -----------------
@@ -207,7 +244,7 @@ par_start "the shell answers over serial" shelltest
 # depends on it: if this is broken, the first failure on a laptop is a black
 # screen with nothing behind it, and every other check here is being run
 # against a machine that can no longer explain itself.
-bbtest() { keep "all checks passed" timeout 400 bash tools/blackbox_test.sh; }
+bbtest() { keep timeout 400 bash tools/blackbox_test.sh; }
 par_start "the boot log survives a reboot" bbtest
 
 par_wait
@@ -226,19 +263,19 @@ if [ "$MODE" = "full" ]; then
   # every other test in this project uses one. None of what these cover is
   # reachable that way: a partition table, the variant of FAT that every EFI
   # System Partition uses, or a controller that is not AHCI or ATA.
-  gpttest() { keep "all checks passed" timeout 600 bash tools/gpt_test.sh; }
+  gpttest() { keep timeout 600 bash tools/gpt_test.sh; }
   par_start "gpt is read, and refused when it does not add up" gpttest
 
-  fat32test() { keep "all checks passed" timeout 600 bash tools/fat32_test.sh; }
+  fat32test() { keep timeout 600 bash tools/fat32_test.sh; }
   par_start "fat32 is read and written, and survives a reboot" fat32test
 
-  nvmetest() { keep "all checks passed" timeout 600 bash tools/nvme_test.sh; }
+  nvmetest() { keep timeout 600 bash tools/nvme_test.sh; }
   par_start "nvme is a disk, partitioned and not" nvmetest
 
   # Copy and paste, which needs a real key press on real hardware to check
   # at all: the control bit has to survive the keyboard driver, the window
   # manager and a system call, and each of those has dropped it.
-  cliptest() { keep "all checks passed" timeout 400 python tools/clipcheck.py; }
+  cliptest() { keep timeout 400 python tools/clipcheck.py; }
   par_start "copy and paste moves text out of a program" cliptest
 
   # And the kernel's own checks once more, on the third driver. The block
@@ -265,17 +302,18 @@ if [ "$MODE" = "full" ]; then
   #
   # BIOS and UEFI, disc and stick. This is where the bugs that only appear on
   # a stricter machine than QEMU have all been.
-  boottest() { keep "all four paths passed" timeout 900 bash tools/iso_test.sh; }
+  boottest() { keep timeout 900 bash tools/iso_test.sh; }
   par_start "all four boot paths" boottest
 
   # --- the parts only a screenshot can check ------------------------------
-  shottest() { keep "all checks passed" timeout 600 python tools/shotcheck.py; }
+  shottest() { keep timeout 600 python tools/shotcheck.py; }
   par_start "the desktop reaches the screen" shottest
 
-  termtest() { keep "all 8 checks passed" timeout 900 python tools/termcheck.py; }
+  termtest() { keep timeout 900 python tools/termcheck.py; }
   par_start "typing reaches the terminal" termtest
 
-  desktest() { keep "checks passed" timeout 900 python tools/deskcheck.py; }
+  desktest() { keep timeout 900 python tools/deskcheck.py; }
+
   par_start "the windows go where they are told" desktest
 
   par_wait
@@ -288,9 +326,10 @@ rm -f fat32probe.*.txt fat32high.*.txt 2>/dev/null
 rm -f build/*.ppm 2>/dev/null
 
 echo
+took=$(( $(date +%s) - started_at ))
 if [ "$failures" -eq 0 ]; then
-  echo "gate ($MODE): everything passed"
+  echo "gate ($MODE): everything passed in $((took / 60))m $((took % 60))s"
   exit 0
 fi
-echo "gate ($MODE): $failures failed"
+echo "gate ($MODE): $failures failed, after $((took / 60))m $((took % 60))s"
 exit 1

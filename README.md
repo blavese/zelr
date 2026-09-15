@@ -503,6 +503,36 @@ receive path had lost nothing, because it was never given the bytes. QEMU's
 takes IRQ4 and buffers into a ring, and the harness types at human speed, which
 the guest keeps up with exactly (irqs=104 got=104 read=104 dropped=0).
 
+**The tests waited by sleeping, and lied about it.** The three harnesses that
+drive the desktop each did the same thing: press a key, sleep three seconds,
+take a screenshot, decide. On an idle machine that is enough. Under the full
+gate, which runs four machines at once, it is not, so about one run in ten
+failed on a different check each time. Every one of those reads as a broken
+window manager, and one of them cost most of a day before it turned out that
+tripling every sleep made the failure vanish on the exact commit that appeared
+to have caused it. They wait for what they are waiting for now, which is both
+reliable and two to four times faster, because a check that passes in 300 ms
+no longer costs three seconds.
+
+Three real faults were underneath that. Screenshots were read as soon as the
+file existed rather than when QEMU had finished writing it, so the bottom of a
+short one read as black and whatever was being counted was not there. QEMU's
+serial output went to a pipe nobody drained, which stops the guest dead once
+it fills. And the window manager reads the mouse once per pass of its own
+loop, so a press and release that both land inside one pass is a click it
+never sees; the harness holds the button down for longer now, and checks that
+the click did something rather than assuming.
+
+**And three of them passed for the wrong reason.** The wallpaper checks were
+the worst: one compared the length of a screenshot against zero, which is true
+of any picture. The other two compared two pictures of the desktop and called
+them different, and they were, because a window was still closing in the first
+one and the mouse pointer had moved between them. Deliberately breaking the
+config parser so that setting a wallpaper did nothing at all left all three
+still reporting PASS. They wait for the windows to be gone and park the
+pointer somewhere outside the comparison now, and all three fail on that
+break.
+
 ## what it does not do
 
 Being explicit about the boundary, because "operating system" covers a very
@@ -617,8 +647,9 @@ orders of magnitude away from Linux, which is roughly 30 million lines.
     userland/          programs, built separately from the kernel:
                        a terminal, paint, settings and three small tests
     tools/             build checks, the font generator, a FAT reader and
-                       a FAT writer, the image builder, and the four test
-                       harnesses
+                       a FAT writer, the image builder, the four test
+                       harnesses, and harness.py, which is how they drive a
+                       running machine and wait for it
     launcher/          the Windows launcher (C#/WPF)
 
 ## license

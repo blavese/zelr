@@ -15,16 +15,15 @@ So the copying happens in the desktop and the answer is read from
 it. Nothing here asks a program whether it thinks it worked.
 """
 import os
-import subprocess
 import sys
-import time
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, os.path.join(ROOT, "tools"))
-from shotcheck import Monitor, QEMU, BUILD          # noqa: E402
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from harness import Guest, Checks, build_once, count_in, ROOT      # noqa: E402
 
-PORT = 45613
 DISK = os.path.join(ROOT, "clipcheck.%d.img" % os.getpid())
+
+SLATE = (0x10, 0x14, 0x1A)
+PAGE = (120, 120, 700, 460)
 
 NAMED = {
     " ": "spc", "\n": "ret", "\t": "tab", "/": "slash", ".": "dot",
@@ -41,78 +40,68 @@ def keys(mon, text, settle=0.06):
 
 
 def main():
-    if os.path.exists(DISK):
-        os.remove(DISK)
-    with open(DISK, "wb") as f:
-        f.truncate(32 * 1024 * 1024)
-
-    proc = subprocess.Popen(
-        [QEMU, "-kernel", os.path.join(BUILD, "zelr.bin"), "-m", "128",
-         "-no-reboot", "-display", "none", "-serial", "stdio",
-         "-drive", "file=%s,format=raw,if=ide,index=0" % DISK,
-         "-monitor", "tcp:127.0.0.1:%d,server,nowait" % PORT],
-        cwd=ROOT, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT)
-
-    fails = 0
-
-    def check(name, ok):
-        nonlocal fails
-        print("  %s  %s" % ("PASS" if ok else "FAIL", name))
-        if not ok:
-            fails += 1
-
+    build_once()
+    vm = Guest(DISK, memory=128)
+    c = Checks("clipboard test")
     out = ""
-    try:
-        time.sleep(5.0)
-        for ch in "desktop\n":
-            proc.stdin.write(ch.encode()); proc.stdin.flush(); time.sleep(0.05)
-        time.sleep(6.5)
 
-        mon = Monitor(PORT)
+    try:
+        vm.wait_boot()
+        vm.type("desktop\n")
+        mon = vm.monitor()
+
+        # The terminal has to be up before anything is typed at it, and how
+        # long that takes depends on what else the host is running.
+        _, _, _, shot, up = mon.wait_screen(
+            "clip-start",
+            lambda w, h, px: count_in(px, w, PAGE, SLATE) > 50000, timeout=60)
+        c.add("the terminal is up to be typed into", up, shot)
 
         # 1. Copy the line being typed. With nothing selected that is what
         #    copy takes, which is the case somebody reaches for most.
         keys(mon, MARKER)
-        time.sleep(0.4)
-        mon.send("sendkey ctrl-c", settle=0.8)
+        mon.send("sendkey ctrl-c", settle=0.6)
 
         # 2. Clear it, then paste it back into a command and run it. If the
         #    bytes come out of the clipboard, echo prints them.
         for _ in range(len(MARKER) + 4):
             mon.send("sendkey backspace", settle=0.03)
         keys(mon, "echo ")
-        mon.send("sendkey ctrl-v", settle=0.8)
-        mon.send("sendkey ret", settle=0.8)
-        time.sleep(1.0)
+        mon.send("sendkey ctrl-v", settle=0.6)
+        mon.send("sendkey ret", settle=0.6)
 
         # 3. Put something else on the clipboard, so what is read at the end
         #    cannot be the original copy still sitting there.
         keys(mon, DECOY)
-        time.sleep(0.3)
-        mon.send("sendkey ctrl-c", settle=0.8)
+        mon.send("sendkey ctrl-c", settle=0.6)
         for _ in range(len(DECOY) + 2):
             mon.send("sendkey backspace", settle=0.03)
 
         # 4. Select the whole scrollback and copy it. The marker can only be
         #    in there if step 2 really pasted and the shell really ran it.
-        mon.send("sendkey ctrl-a", settle=0.6)
-        mon.send("sendkey ctrl-c", settle=0.8)
+        mon.send("sendkey ctrl-a", settle=0.5)
+        mon.send("sendkey ctrl-c", settle=0.6)
 
-        # 5. Leave the desktop and read the clipboard from outside.
-        mon.send("sendkey esc", settle=1.5)
-        for ch in "cat /sys/clipboard\n":
-            proc.stdin.write(ch.encode()); proc.stdin.flush(); time.sleep(0.05)
-        time.sleep(2.5)
+        # 5. Leave the desktop and read the clipboard from outside. Waiting
+        #    for the console to come back is what tells us the desktop let
+        #    go, rather than guessing at how long that takes.
+        mon.send("sendkey esc")
+        handed_back = vm.wait_serial("back at the shell", timeout=30)
+        c.add("the desktop handed the console back", handed_back)
+
+        # The clipboard is read on the console, and what says the read
+        # finished is the prompt coming back after it rather than a guess at
+        # how long it takes.
+        out = vm.run("cat /sys/clipboard")
     finally:
-        proc.kill()
-        out = proc.stdout.read().decode("utf-8", "replace")
+        out = vm.serial() or out
+        vm.stop()
 
     tail = out.split("cat /sys/clipboard")[-1] if "cat /sys/clipboard" in out else ""
 
-    check("the desktop handed the console back", "cat /sys/clipboard" in out)
-    check("the clipboard is readable from outside the program", bool(tail.strip()))
-    check("a selection copied out of a ring 3 program reached the kernel",
+    c.add("the clipboard is readable from outside the program",
+          bool(tail.strip()))
+    c.add("a selection copied out of a ring 3 program reached the kernel",
           MARKER in tail)
     # The last copy was a select-all over the scrollback, so what came back
     # has to be many lines rather than the single input line step 1 copied.
@@ -120,21 +109,16 @@ def main():
     # that first copy, which is exactly what it did when the control bit was
     # being stripped: three of four checks still passed.
     body = tail.split("zelr:")[0]
-    check("what came back is the scrollback, not the one line first copied",
+    c.add("what came back is the scrollback, not the one line first copied",
           body.count("\n") > 3)
 
-    if fails:
+    rc = c.report()
+    if rc:
         print("\n--- what the console said ---")
         for line in out.splitlines()[-20:]:
             print("   ", line)
-
-    if os.path.exists(DISK):
-        try:
-            os.remove(DISK)
-        except OSError:
-            pass
-    print("\n%s" % ("all checks passed" if fails == 0 else "%d failed" % fails))
-    return 1 if fails else 0
+    return rc
 
 
-sys.exit(main())
+if __name__ == "__main__":
+    sys.exit(main())
