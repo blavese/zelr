@@ -240,6 +240,12 @@ real_start:
     call    print
     call    load_payload
 
+    /* Did any of it arrive? The kernel's image starts with its own name,
+       so this is cheap and it is the difference between a message and a
+       machine that resets with nothing on the screen. The loader has
+       already been wrong about this once. */
+    call    check_payload
+
     movw    $msg_go, %si
     call    print
 
@@ -251,6 +257,23 @@ real_start:
     ljmpl   $0x08, $protected
 
 /* --- real mode helpers -------------------------------------------------- */
+
+/* The first four bytes at 0x100000 against the first four of ZELRKRN. Read
+   through FS for the same reason the copy is: if the big limit is not there
+   any more this is exactly as blind as the copy was, and says so. */
+check_payload:
+    movl    patch_load, %esi
+    movl    %fs:(%esi), %eax
+    cmpl    $0x524C455A, %eax
+    jne     payload_missing
+    ret
+
+payload_missing:
+    movw    $msg_nopayload, %si
+    call    print
+1:  cli
+    hlt
+    jmp     1b
 
 /* Prints the null terminated string at DS:SI through the BIOS. This is the
    only output there is on a machine that has not started zelr yet, so every
@@ -573,6 +596,25 @@ load_payload:
     int     $0x13
     jc      read_failed
 
+    /* The BIOS call above can take the 4 GiB limit away again.
+     *
+     * Unreal mode keeps that limit in the hidden half of FS, which nothing
+     * in real mode can read back, and a firmware that loads FS in its disk
+     * service replaces it with an ordinary 64 KiB one. QEMU's does not and
+     * VMware's does, which is why this worked everywhere it was tested and
+     * failed on the first real firmware it met.
+     *
+     * What that failure looked like is worth knowing. With a 64 KiB limit
+     * the writes below are out of bounds, which is #GP, and in real mode
+     * #GP is vector 13: the same vector as INT 13h. Every out of bounds
+     * write called the BIOS disk service, which returned, so the copy loop
+     * ran to completion, printed its dots, announced the kernel and jumped
+     * to an address it had read out of memory that was still zero.
+     *
+     * So it is re-established after every call rather than once at the
+     * start. It costs a few instructions per 32 KiB. */
+    call    enter_unreal
+
     /* Copy it up. ECX counts dwords; a chunk is 32 KiB so it fits in CX. */
     movl    $BUFFER_SEG * 16, %esi
     movl    cur_dest, %edi
@@ -730,6 +772,7 @@ msg_load:     .asciz "loading "
 msg_dot:      .asciz "."
 msg_nl:       .asciz "\r\n"
 msg_go:       .asciz "starting kernel\r\n"
+msg_nopayload: .asciz "the kernel did not reach 1 MiB; halted\r\n"
 msg_halt:     .asciz "\r\nhalted.\r\n"
 msg_nomem:    .asciz "the firmware would not describe memory"
 msg_readfail: .asciz "could not read the boot device"
