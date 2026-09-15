@@ -144,6 +144,15 @@ export ZELR_PREBUILT=1
 warncount="$(printf '%s' "$build_out" | grep -c 'warning:')"
 [ "$warncount" -gt 0 ] && printf '        (%s build warnings)\n' "$warncount"
 
+# What the kernel says its version is, which is also what goes inside the
+# downloads. It is edited by hand and nothing depended on it, so it has
+# drifted twice: once three releases behind, once one.
+# Decided on the exit code, not on a word in the output: "version" appears
+# in what it prints when it is happy and in what it prints when it is not,
+# so matching that would have passed either way.
+vercheck() { python tools/check_version.py; }
+run_step "the version is not behind the newest tag" vercheck
+
 # --- the kernel's own checks ----------------------------------------------
 #
 # A fresh disk each time: a test that passes only because a previous run left
