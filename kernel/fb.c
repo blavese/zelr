@@ -9,6 +9,7 @@
  * Reading from video memory over PCI is slow enough that compositing directly
  * in it is visibly sluggish. */
 #include "fb.h"
+#include "svga.h"
 #include "io.h"
 #include "pci.h"
 #include "paging.h"
@@ -43,6 +44,10 @@
 #define VBOX_DEVICE 0xBEEF
 
 static bool   active = false;
+/* The adapter on VMware needs to be told which pixels changed, and no
+   other one here does, so the flush has to know which it is driving. */
+static bool   via_svga = false;
+static bool   adopted  = false;
 static u32    width, height, pitch;
 static u8    *lfb;          /* mapped video memory */
 static u8    *back;         /* back buffer we actually draw into */
@@ -58,6 +63,13 @@ static u16 vbe_read(u16 reg) {
 }
 
 bool fb_active(void) { return active; }
+
+const char *fb_backend(void) {
+    if (!active)    return "none";
+    if (adopted)    return "adopted from the loader";
+    if (via_svga)   return "set through the vmware adapter";
+    return "set through vbe";
+}
 u32  fb_width(void)  { return width; }
 u32  fb_height(void) { return height; }
 u32  fb_pitch(void)  { return pitch; }
@@ -71,6 +83,8 @@ u8  *fb_pixels(void) { return back; }
  * usually a long way above where the kernel identity maps. */
 bool fb_adopt(u64 base, u32 w, u32 h, u32 pitch_pixels) {
     active = false;
+    via_svga = false;
+    adopted = true;
     if (!base || !w || !h) return false;
 
     width = w;
@@ -90,17 +104,43 @@ bool fb_adopt(u64 base, u32 w, u32 h, u32 pitch_pixels) {
     return true;
 }
 
+/* VMware's adapter, tried when there is no VBE to ask.
+ *
+ * Kept apart from fb_init below rather than folded into it: the two set a
+ * mode in entirely different ways, and the only thing they share is what
+ * they leave behind. */
+static bool init_svga(u32 w, u32 h) {
+    svga_mode_t m;
+    if (!svga_init(w, h, &m)) return false;
+
+    width  = m.width;
+    height = m.height;
+    pitch  = m.pitch;
+    lfb    = (u8 *)m.fb_phys;
+
+    back = (u8 *)kmalloc((u64)pitch * height);
+    if (!back) return false;
+
+    via_svga = true;
+    active = true;
+    fb_clear(0);
+    fb_flush();
+    return true;
+}
+
 bool fb_init(u32 w, u32 h) {
     active = false;
+    via_svga = false;
+    adopted = false;
 
     /* Version 0xB0C2 or later understands the linear framebuffer bit. */
     u16 id = vbe_read(VBE_ID);
-    if (id < 0xB0C0 || id > 0xB0CF) return false;
+    if (id < 0xB0C0 || id > 0xB0CF) return init_svga(w, h);
 
     /* The card's memory aperture is the first BAR of the VGA device. */
     pci_dev_t vga;
     if (!pci_find(VGA_VENDOR, VGA_DEVICE, &vga) &&
-        !pci_find(VBOX_VENDOR, VBOX_DEVICE, &vga)) return false;
+        !pci_find(VBOX_VENDOR, VBOX_DEVICE, &vga)) return init_svga(w, h);
 
     u64 phys = vga.bar0 & 0xFFFFFFF0u;
     if (!phys) return false;
@@ -183,6 +223,7 @@ void fb_frame(u32 x, u32 y, u32 w, u32 h, u32 rgb) {
 void fb_flush(void) {
     if (!active) return;
     memcpy(lfb, back, pitch * height);
+    if (via_svga) svga_update(0, 0, width, height);
 }
 
 void fb_flush_rect(u32 x, u32 y, u32 w, u32 h) {
@@ -194,4 +235,5 @@ void fb_flush_rect(u32 x, u32 y, u32 w, u32 h) {
         u32 off = (y + j) * pitch + x * 4;
         memcpy(lfb + off, back + off, w * 4);
     }
+    if (via_svga) svga_update(x, y, w, h);
 }

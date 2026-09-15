@@ -11,6 +11,12 @@ bool fb_init(u32 width, u32 height);
 bool fb_adopt(u64 base, u32 width, u32 height, u32 pitch_pixels);
 bool fb_active(void);
 
+/* Which of the three ways the screen was obtained, for the boot log. The
+   log used to say "vbe" whichever it had been, which is wrong on VMware
+   and is exactly the sort of reporting that sends someone looking in the
+   wrong place. */
+const char *fb_backend(void);
+
 u32  fb_width(void);
 u32  fb_height(void);
 u32  fb_pitch(void);       /* bytes per scanline */

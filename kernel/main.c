@@ -207,11 +207,10 @@ void kmain(handoff_t *h) {
         vga_set_color(VGA_LGREY, VGA_BLACK);
         kprintf("  video   %dx%d 32bpp, %dx%d text\n",
                 fb_width(), fb_height(), fbcon_cols(), fbcon_rows());
-        bb_log("video %dx%d 32bpp, %s", fb_width(), fb_height(),
-               h->fb_base ? "adopted from the loader" : "set through vbe");
+        bb_log("video %dx%d 32bpp, %s", fb_width(), fb_height(), fb_backend());
     } else {
-        kprintf("  video   no vbe, vga text mode\n");
-        bb_log("video none, vga text mode only");
+        kprintf("  video   no adapter found, vga text mode\n");
+        bb_log("video none: no vbe and no vmware adapter, vga text only");
     }
     bb_mark("filesystem");
     fs_init();
