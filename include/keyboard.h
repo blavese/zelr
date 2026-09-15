@@ -37,6 +37,17 @@
 #define KEY_IS_SPECIAL(k) (KEY_CODE(k) >= 0x100)
 
 void keyboard_init(void);
+
+/* A key from a keyboard that is not the PS/2 one.
+ *
+ * A USB keyboard reports which modifiers were held in the same report as the
+ * key, so the key arrives already stamped rather than being stamped here
+ * from state this file keeps. It goes into the same ring buffer, which is
+ * what lets everything above this not care which keyboard was typed on. */
+void keyboard_inject(int key);
+
+/* And what it is holding down now, for kbd_alt and the two beside it. */
+void keyboard_set_mods(bool alt, bool ctrl, bool shift);
 bool kbd_has_char(void);
 char kbd_getchar(void);          /* blocking */
 int  kbd_trygetchar(void);       /* -1 when empty */

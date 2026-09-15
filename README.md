@@ -10,10 +10,12 @@ ring 3 processes. When it fails it says why.
 
 ![the zelr desktop](docs/desktop.png)
 
-It is not a clone of anything. About 12,300 lines of C and assembly, no libc,
-no runtime dependencies, and nothing borrowed from another kernel: every
-driver, the filesystem, the bootloader, the image writer and the font are
-written here, from the specifications where there is one and from scratch
+It is not a clone of anything. About 33,500 lines in all, of which 3,700 are
+generated font data: roughly 19,600 hand-written lines of kernel, bootloaders
+and headers, 5,500 of ring 3 programs, 5,500 of build and test tooling. No
+libc, no runtime dependencies, and nothing borrowed from another kernel:
+every driver, the filesystem, the bootloader, the image writer and the font
+are written here, from the specifications where there is one and from scratch
 where there is not.
 
 The one exception, since "from scratch" invites the question: `zelr.exe`, the
@@ -104,13 +106,17 @@ desktop draws on it at whatever resolution the firmware picked.
 Whether you can then *use* it depends on the machine, and this is the honest
 boundary.
 
-**Input is the wall.** Keyboard and mouse go through PS/2. Many laptops still
-emulate PS/2 for their built-in keyboard and many do not, and none of them
-emulate it for anything plugged into a USB port. A USB keyboard needs xHCI
-and the HID boot protocol, which is not here. On a machine without PS/2
-emulation you get a desktop you cannot type on.
+**Input** goes through PS/2 where a machine still has it, and through USB
+where it does not. There is an xHCI driver and the HID boot protocol, so a
+keyboard or mouse plugged into a USB port is found at boot, addressed, and
+read; both feed the same buffer the PS/2 drivers fill, so nothing above the
+driver knows which one was typed on.
 
-Everything else about a modern machine now works.
+What is not there is a hub driver, so a device plugged into a hub rather than
+straight into the machine is not found, and nothing but keyboards and mice is
+claimed: a USB stick enumerates and is then left alone. Devices already
+plugged in at boot are the ones that work, because nothing watches for a port
+changing afterwards.
 
 **Storage** is NVMe, AHCI and ATA. NVMe is what a laptop bought this decade
 has instead of the other two, and it is reached the way the specification
@@ -144,8 +150,8 @@ and reported one processor whatever the machine had.
 
 So: it boots, draws, finds every core, finds an NVMe disk, reads its GPT,
 mounts a FAT32 partition without disturbing the one the firmware boots from,
-and says what happened if any of that fails. What it cannot do is take a
-keystroke from a USB keyboard.
+takes a keystroke from a USB keyboard, and says what happened if any of that
+fails.
 
 ### when it does not boot
 
@@ -215,6 +221,7 @@ instead.
     python tools/shotcheck.py   use the desktop and look at the screen
     python tools/termcheck.py   type into the terminal and check the result
     python tools/deskcheck.py   move the windows and check where they went
+    python tools/usbcheck.py    boot with a usb keyboard and mouse, and use them
 
 The Windows launcher lives in `launcher/` and is built with
 `dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true`.
@@ -567,11 +574,13 @@ large range:
   not forward ICMP to the wider internet without elevated privileges, so
   pinging an outside address times out even though DNS and TCP to that same
   address work.
-- **No USB, which is the one that matters.** Input is a PS/2 keyboard and
-  mouse. A laptop that does not emulate PS/2 for its built-in keyboard has no
-  keyboard here, and nothing plugged into a USB port works at all. Everything
-  else about a modern machine now works, so this is the single thing standing
-  between zelr and being usable on one: xHCI, then the HID boot protocol.
+- **USB stops at keyboards and mice.** There is an xHCI driver and the HID
+  boot protocol, which is what a laptop needs to be typed on at all. There is
+  no hub driver, so only what is plugged straight into the machine is found;
+  nothing is noticed after boot, because no port is watched for a change; and
+  no other class is claimed, so a USB stick is enumerated and then ignored.
+  The controller is polled on the timer tick rather than wired to an
+  interrupt, which costs up to ten milliseconds of latency on a key press.
 - **No FAT long filenames.** A file saved as somethinglong.txt comes back as
   SOMETHI~1.TXT. The entries that carry the real name are read past rather
   than understood.
@@ -639,6 +648,8 @@ orders of magnitude away from Linux, which is roughly 30 million lines.
     kernel/vga.c       text console
     kernel/serial.c    16550 uart, interrupt driven
     kernel/keyboard.c  ps/2 keyboard
+    kernel/xhci.c      the usb host controller every laptop has
+    kernel/usb.c       enumeration, and the hid boot protocol
     kernel/timer.c     programmable interval timer
     kernel/shell.c     the shell
     kernel/welcome.c   the first-run text and the guided tour

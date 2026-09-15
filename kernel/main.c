@@ -7,6 +7,7 @@
 #include "pic.h"
 #include "timer.h"
 #include "keyboard.h"
+#include "usb.h"
 #include "multiboot.h"
 #include "handoff.h"
 #include "pmm.h"
@@ -286,6 +287,13 @@ void kmain(handoff_t *h) {
         kprintf("  mouse   ps/2, pointer at %d,%d\n", mouse_x(), mouse_y());
     else
         bb_log("mouse none: no ps/2 pointer answered");
+    /* After the keyboard and the mouse, because what it finds is handed
+       to them. A machine with no xHCI controller passes straight through
+       this, which is every emulated machine not given one on purpose, and
+       almost no real one. */
+    usb_init();
+    if (usb_present()) kprintf("  usb     %s\n", usb_describe());
+
     serial_enable_irq();
     kprintf("  input   ps/2 keyboard + serial (irq driven)\n");
 

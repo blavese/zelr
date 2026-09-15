@@ -9,8 +9,9 @@
 #   gate.sh fast     build, the kernel's checks on two different machines,
 #                    the serial shell test, the boot log across a reboot  ~4 min
 #   gate.sh full     the above, plus the disks (gpt, fat32, nvme), all four
-#                    boot paths, and the three harnesses that drive the
-#                    desktop and the keyboard                            ~18 min
+#                    boot paths, the three harnesses that drive the desktop
+#                    and the keyboard, and a machine with a USB keyboard and
+#                    mouse on it                                         ~17 min
 #
 # Steps that do not share state run at once. Each boots its own machine and
 # builds its own disk, named after its own process id, so the only thing they
@@ -314,7 +315,12 @@ if [ "$MODE" = "full" ]; then
 
   desktest() { keep timeout 900 python tools/deskcheck.py; }
 
+  # The only check in this project that says anything about whether zelr
+  # would take a keystroke on a laptop. Everything else types over the serial
+  # line or at a PS/2 keyboard, and a machine built this decade has neither.
+  usbtest() { keep timeout 600 python tools/usbcheck.py; }
   par_start "the windows go where they are told" desktest
+  par_start "a usb keyboard and mouse are found and used" usbtest
 
   par_wait
 fi
@@ -322,6 +328,7 @@ fi
 # --- tidy up after ourselves ----------------------------------------------
 rm -f gate.img gateq.img gatenv.img deskcheck.img termcheck.img shotcheck.img sel.img blackbox.img 2>/dev/null
 rm -f gpttest.*.img fat32test.*.img nvmetest.*.img clipcheck.*.img 2>/dev/null
+rm -f shotcheck.*.img termcheck.*.img deskcheck.*.img usbcheck.*.img 2>/dev/null
 rm -f fat32probe.*.txt fat32high.*.txt 2>/dev/null
 rm -f build/*.ppm 2>/dev/null
 

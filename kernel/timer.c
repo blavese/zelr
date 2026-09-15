@@ -4,6 +4,7 @@
 #include "idt.h"
 #include "pic.h"
 #include "io.h"
+#include "usb.h"
 
 static volatile u64 ticks = 0;
 static u32 frequency = 100;
@@ -11,6 +12,11 @@ static u32 frequency = 100;
 static void on_tick(registers_t *r) {
     (void)r;
     ticks++;
+
+    /* The USB controller is not wired to an interrupt here, so this is what
+       moves it along: a key pressed on a USB keyboard is noticed on the next
+       tick. See kernel/xhci.c for why it is polled rather than wired up. */
+    usb_poll();
 }
 
 void timer_init(u32 hz) {

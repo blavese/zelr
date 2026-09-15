@@ -104,6 +104,26 @@ void mouse_show(void) {
     drawn = true;
 }
 
+/* Where the pointer ends up, given movement and buttons. Shared, because a
+   USB mouse produces exactly the same three things through an entirely
+   different path and there is no reason for the answer to differ. */
+void mouse_inject(i32 dx, i32 dy, u8 btns) {
+    buttons = btns;
+    if (!dx && !dy) return;
+
+    mouse_hide();
+    mx += dx;
+    my -= dy;                                   /* screen y grows downward */
+    i32 maxx = (i32)fb_width() - 1;
+    i32 maxy = (i32)fb_height() - 1;
+    if (mx < 0) mx = 0;
+    if (my < 0) my = 0;
+    if (mx > maxx) mx = maxx;
+    if (my > maxy) my = maxy;
+    moves++;
+    mouse_show();
+}
+
 static void on_packet(void) {
     u8 flags = packet[0];
     if (!(flags & 0x08)) { phase = 0; return; }     /* lost sync */
@@ -114,21 +134,7 @@ static void on_packet(void) {
     if (flags & 0x10) dx |= (i32)0xFFFFFF00;        /* sign extend */
     if (flags & 0x20) dy |= (i32)0xFFFFFF00;
 
-    buttons = flags & 0x07;
-
-    if (dx || dy) {
-        mouse_hide();
-        mx += dx;
-        my -= dy;                                   /* screen y grows downward */
-        i32 maxx = (i32)fb_width() - 1;
-        i32 maxy = (i32)fb_height() - 1;
-        if (mx < 0) mx = 0;
-        if (my < 0) my = 0;
-        if (mx > maxx) mx = maxx;
-        if (my > maxy) my = maxy;
-        moves++;
-        mouse_show();
-    }
+    mouse_inject(dx, dy, flags & 0x07);
 }
 
 static void mouse_isr(registers_t *r) {

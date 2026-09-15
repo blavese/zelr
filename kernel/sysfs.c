@@ -14,6 +14,7 @@
  * image have to live somewhere, and the root is where the user's files are.
  */
 #include "sysfs.h"
+#include "usb.h"
 #include "printf.h"
 #include "string.h"
 #include "pmm.h"
@@ -170,7 +171,11 @@ static u32 render_devices(char *b, u32 cap) {
     if (fb_active()) put(&o, "video     %dx%d 32bpp\n", fb_width(), fb_height());
     else             put(&o, "video     vga text\n");
 
-    put(&o, "keyboard  ps/2\n");
+    if (usb_present())
+        put(&o, "usb       %s, %d report(s)\n", usb_describe(), usb_reports());
+    else
+        put(&o, "usb       no controller\n");
+    put(&o, "keyboard  ps/2%s\n", usb_keyboards() ? " and usb" : "");
     put(&o, "storage   %s\n", vfs_disk_backed() ? "fat16 on disk" : "memory only");
     return o.len;
 }

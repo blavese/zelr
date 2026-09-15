@@ -143,6 +143,17 @@ void keyboard_init(void) {
 
 bool kbd_has_char(void) { return head != tail; }
 
+/* See include/keyboard.h. The key is already stamped with its modifiers,
+   because the keyboard that sent it said what they were. */
+void keyboard_inject(int key) {
+    u32 next = (head + 1) % BUFSZ;
+    if (next != tail) { buf[head] = key; head = next; }
+}
+
+void keyboard_set_mods(bool a, bool c, bool s) {
+    alt = a; ctrl = c; shift = s;
+}
+
 bool kbd_alt(void)   { return alt; }
 bool kbd_ctrl(void)  { return ctrl; }
 bool kbd_shift(void) { return shift; }
