@@ -554,9 +554,9 @@ large range:
 - **No fork or exec in the Unix sense.** A program is loaded and run; it
   cannot start another or replace itself. The launcher and the shell start
   programs because they are the kernel, not because a program can.
-- **Thirty-one system calls.** Enough to print, walk directories, read and
-  write files, open one TCP connection, sleep, exit and own a window. There is
-  no signal, no pipe, no memory mapping and no way to wait on anything.
+- **Forty system calls.** Enough to print, walk directories, read and write
+  files, open one TCP connection, sleep, exit, wait on a child and own a
+  window. There is no signal, no pipe and no memory mapping.
 - **8.3 names only.** Directories work and nest, but a file is eight
   characters and an extension, because that is what FAT16 stores without long
   name entries.

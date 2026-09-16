@@ -52,6 +52,17 @@ static u32    width, height, pitch;
 static u8    *lfb;          /* mapped video memory */
 static u8    *back;         /* back buffer we actually draw into */
 
+/* Drawing goes through a back buffer so that a half drawn frame is never on
+   the screen. When there is not enough memory for one, drawing straight into
+   video memory is still worth doing: it tears, and tearing is the difference
+   between a screen and a machine that looks like it never booted. */
+static bool take_back_buffer(u64 bytes) {
+    back = (u8 *)kmalloc(bytes);
+    if (back) return true;
+    back = lfb;
+    return false;
+}
+
 static void vbe_write(u16 reg, u16 value) {
     outw(VBE_INDEX, reg);
     outw(VBE_DATA, value);
@@ -95,8 +106,7 @@ bool fb_adopt(u64 base, u32 w, u32 h, u32 pitch_pixels) {
     if (!paging_map_device(base, bytes)) return false;
     lfb = (u8 *)base;
 
-    back = (u8 *)kmalloc(bytes);
-    if (!back) return false;
+    take_back_buffer(bytes);
 
     active = true;
     fb_clear(0);
@@ -222,7 +232,7 @@ void fb_frame(u32 x, u32 y, u32 w, u32 h, u32 rgb) {
 
 void fb_flush(void) {
     if (!active) return;
-    memcpy(lfb, back, pitch * height);
+    if (back != lfb) memcpy(lfb, back, pitch * height);
     if (via_svga) svga_update(0, 0, width, height);
 }
 
@@ -231,9 +241,10 @@ void fb_flush_rect(u32 x, u32 y, u32 w, u32 h) {
     if (x >= width || y >= height) return;
     if (x + w > width)  w = width - x;
     if (y + h > height) h = height - y;
-    for (u32 j = 0; j < h; j++) {
-        u32 off = (y + j) * pitch + x * 4;
-        memcpy(lfb + off, back + off, w * 4);
-    }
+    if (back != lfb)
+        for (u32 j = 0; j < h; j++) {
+            u32 off = (y + j) * pitch + x * 4;
+            memcpy(lfb + off, back + off, w * 4);
+        }
     if (via_svga) svga_update(x, y, w, h);
 }
