@@ -161,6 +161,17 @@ What is not there is any other class. Only the machine's own ports are
 watched for a change: plug a keyboard into a hub that is already connected
 and it is not found until the next boot.
 
+**Sound** is Intel HD Audio, which is the controller every machine made this
+century has. The controller half is small: a list of buffer descriptors and a
+run bit, and once it is running whatever is in the buffer is what comes out.
+The work is the codec behind it, a graph of converters, mixers and physical
+sockets where nothing says which of them you can actually hear. The driver
+reads the configuration the manufacturer left on each socket, picks the one
+most likely to be the speaker, and walks backwards along the connection lists
+until it reaches a converter. Tested by playing notes and measuring the
+recording, because every step of an audio driver can report success while
+producing silence.
+
 **Storage** is NVMe, AHCI and ATA. NVMe is what a laptop bought this decade
 has instead of the other two, and it is reached the way the specification
 describes: queues in ordinary memory, a doorbell whose spacing the controller
@@ -266,6 +277,7 @@ instead.
     python tools/deskcheck.py   move the windows and check where they went
     python tools/usbcheck.py    boot with usb keyboard, mouse and stick, use them
     python tools/inputcheck.py  type on machines touched while they booted
+    python tools/soundcheck.py  play notes and measure what came out
     python tools/shots.py       retake the screenshots in this readme
 
 The Windows launcher lives in `launcher/` and is built with
@@ -702,6 +714,8 @@ orders of magnitude away from Linux, which is roughly 30 million lines.
     kernel/xhci.c      the usb host controller every laptop has
     kernel/usb.c       enumeration, and the hid boot protocol
     kernel/usbdisk.c   usb sticks, which are scsi through bulk endpoints
+    kernel/hda.c       the sound controller, and walking its codec
+    kernel/sound.c     what is in the buffer when the hardware reads it
     kernel/timer.c     programmable interval timer
     kernel/shell.c     the shell
     kernel/welcome.c   the first-run text and the guided tour

@@ -15,6 +15,7 @@
 #include "timer.h"
 #include "winsrv.h"
 #include "clipboard.h"
+#include "sound.h"
 #include "vfs.h"
 #include "wait.h"
 #include "elf.h"
@@ -154,6 +155,30 @@ static i64 sys_clip_get(registers_t *r) {
     if (cap == 0) return (i64)clip_len();      /* asking how much there is */
     if (!user_range_ok(r->rbx, cap)) return -1;
     return (i64)clip_get((char *)r->rbx, cap);
+}
+
+static i64 sys_sound_info(registers_t *r) {
+    if (!user_range_ok(r->rbx, sizeof(sound_info_t))) return -1;
+    sound_info_t *out = (sound_info_t *)r->rbx;
+    out->present = sound_present() ? 1 : 0;
+    out->rate = sound_rate();
+    out->channels = sound_channels();
+    out->reserved = 0;
+    return 0;
+}
+
+static i64 sys_sound_write(registers_t *r) {
+    u32 count = (u32)r->rcx;
+    if (!sound_present()) return -1;
+    if (!count) return 0;
+
+    /* Capped so that one call cannot ask the kernel to sit in a write for
+       longer than the sound it is writing. The caller loops. */
+    if (count > 4096) count = 4096;
+
+    u64 bytes = (u64)count * sound_channels() * 2;
+    if (!user_range_ok(r->rbx, bytes)) return -1;
+    return (i64)sound_write((const i16 *)r->rbx, count);
 }
 
 static i64 sys_tasks(registers_t *r) {
@@ -539,6 +564,8 @@ static const syscall_fn TABLE[] = {
     [SYS_WIN_RESIZE]    = sys_win_resize,
     [SYS_CLIP_SET]  = sys_clip_set,
     [SYS_CLIP_GET]  = sys_clip_get,
+    [SYS_SOUND_INFO]  = sys_sound_info,
+    [SYS_SOUND_WRITE] = sys_sound_write,
 };
 
 #define N_SYSCALLS (sizeof(TABLE) / sizeof(TABLE[0]))
