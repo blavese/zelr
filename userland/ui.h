@@ -37,6 +37,7 @@ typedef struct {
     u32 dim;         /* secondary text */
     u32 accent;      /* selection, focus, the active thing */
     u32 accent_fg;   /* text on top of accent */
+    u32 soft;        /* accent at low strength, for a row that is selected */
     u32 line;        /* borders and separators */
     u32 warn;
 } ui_theme;
@@ -119,6 +120,7 @@ static inline ui_theme ui_load_theme(void) {
         t.line      = RGB(0x3a, 0x3e, 0x45);
         t.accent_fg = RGB(0xff, 0xff, 0xff);
     }
+    t.soft = mix(t.bg, t.accent, light ? 40 : 48);
     t.warn = RGB(0xe0, 0x6c, 0x60);
     return t;
 }
@@ -206,16 +208,25 @@ static inline int ui_row(surface *s, ui_input *in, const ui_theme *t,
     int h = UI_ROW;
     int over = ui_hit(in, x, y, w, h);
 
-    if (selected)  rect(s, x, y, w, h, t->accent);
-    else if (over) rect(s, x, y, w, h, mix(t->bg, t->fg, 18));
+    /* A selected row is a tint of the accent with a bar down its leading
+       edge, not a block of the accent itself. Filling the row solid makes
+       the sidebar the loudest thing on screen, louder than whatever the
+       selection is pointing at, and it fights every other use of the
+       colour. The tint says the same thing at a tenth of the volume. */
+    if (selected) {
+        rect(s, x, y, w, h, t->soft);
+        rect(s, x, y, 3, h, t->accent);
+    } else if (over) {
+        rect(s, x, y, w, h, mix(t->bg, t->fg, 18));
+    }
 
-    u32 fg = selected ? t->accent_fg : t->fg;
+    u32 fg = selected ? t->accent : t->fg;
     int ty = y + (h - face_h(UI_FACE_BODY)) / 2;
     face_draw(s, x + UI_PAD, ty, label, fg, UI_FACE_BODY);
     if (right) {
         int rw = face_w(right, UI_FACE_BODY);
         face_draw(s, x + w - UI_PAD - rw, ty, right,
-                  selected ? t->accent_fg : t->dim, UI_FACE_BODY);
+                  selected ? t->accent : t->dim, UI_FACE_BODY);
     }
 
     if (over && in->right_pressed) { in->right_pressed = 0; return 2; }
@@ -236,7 +247,7 @@ static inline void ui_dim_label(surface *s, const ui_theme *t,
 /* A heading with a rule under it, which is how a window says "new section". */
 static inline int ui_section(surface *s, const ui_theme *t,
                              int x, int y, int w, const char *title) {
-    face_draw(s, x, y + 4, title, t->dim, UI_FACE_BODY);
+    face_draw(s, x, y + 4, title, t->dim, UI_FACE_BOLD);
     rect(s, x, y + UI_TITLE_H - 1, w, 1, t->line);
     return y + UI_TITLE_H + UI_GAP;
 }

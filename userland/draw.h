@@ -135,8 +135,10 @@ static inline u32 mix(u32 under, u32 over, int alpha) {
  * the drawing here, so a caller positions text the way it positions a box. */
 #include "face.h"
 
-#define UI_FACE_BODY 0       /* 15px */
-#define UI_FACE_HEAD 1       /* 20px */
+#define UI_FACE_SMALL 0      /* 13px */
+#define UI_FACE_BODY  1      /* 15px */
+#define UI_FACE_HEAD  2      /* 20px */
+#define UI_FACE_BOLD  3      /* 15px bold */
 
 static inline const face_t *face_of(int which) {
     if (which < 0 || which >= FACE_SIZES) which = 0;

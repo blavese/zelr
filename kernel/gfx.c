@@ -166,6 +166,25 @@ void fb_round_frame(int x, int y, int w, int h, int r, u32 rgb) {
 /* A soft edge under a window, drawn by darkening what is already there in
    rings that fade outward. Reading the framebuffer back is what makes this
    work over any wallpaper without knowing what it is. */
+/* One horizontal run of the shadow, darkened in place. */
+static void shadow_span(int px0, int px1, int py, int alpha) {
+    if (py < 0 || py >= (int)fb_height()) return;
+    if (px0 < 0) px0 = 0;
+    if (px1 > (int)fb_width()) px1 = (int)fb_width();
+    for (int px = px0; px < px1; px++)
+        fb_put((u32)px, (u32)py, gfx_mix(fb_get((u32)px, (u32)py), 0, alpha));
+}
+
+/*
+ * Rings of decreasing darkness around a rounded rectangle.
+ *
+ * Only the ring is drawn, because the window covers the middle. Saying that
+ * by testing every pixel in the rectangle and skipping the ones in the
+ * middle costs the area of the window on every ring of every shadow of every
+ * frame: about two million iterations for one ordinary window, essentially
+ * all of them rejected. The spans are known without looking, so they are
+ * walked directly instead. What is drawn is identical.
+ */
 void fb_shadow(int x, int y, int w, int h, int r, int spread) {
     for (int s = spread; s >= 1; s--) {
         int alpha = 70 / (s + 1);
@@ -174,20 +193,28 @@ void fb_shadow(int x, int y, int w, int h, int r, int spread) {
 
         for (int j = 0; j < rh; j++) {
             int py = ry + j;
-            if (py < 0 || py >= (int)fb_height()) continue;
 
             int inset = 0;
             if (j < rr) inset = corner_inset(rr, j);
             else if (j >= rh - rr) inset = corner_inset(rr, rh - 1 - j);
 
-            for (int i = inset; i < rw - inset; i++) {
-                /* Only the ring matters; the inside is covered anyway. */
-                bool edge = (i < inset + 2) || (i >= rw - inset - 2) ||
-                            (j < 2) || (j >= rh - 2);
-                if (!edge) continue;
-                int px = rx + i;
-                if (px < 0 || px >= (int)fb_width()) continue;
-                fb_put((u32)px, (u32)py, gfx_mix(fb_get((u32)px, (u32)py), 0, alpha));
+            int left = rx + inset;
+            int right = rx + rw - inset;
+            if (right <= left) continue;
+
+            /* The top and bottom two rows are solid across. */
+            if (j < 2 || j >= rh - 2) {
+                shadow_span(left, right, py, alpha);
+                continue;
+            }
+
+            /* Everything between is two vertical edges, two pixels wide,
+               unless the row is so narrow that they meet. */
+            if (right - left <= 4) {
+                shadow_span(left, right, py, alpha);
+            } else {
+                shadow_span(left, left + 2, py, alpha);
+                shadow_span(right - 2, right, py, alpha);
             }
         }
     }

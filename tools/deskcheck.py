@@ -40,6 +40,10 @@ BTN_MAX = (WIN_X + OUTER_W - 46 + 7, BTN_Y)
 BTN_MIN = (WIN_X + OUTER_W - 66 + 7, BTN_Y)
 GRIP = (WIN_X + OUTER_W - 7, WIN_Y + OUTER_H - 7)
 
+# The window's own frame, for counts that are about the window and not about
+# whatever else happens to be the same colour somewhere on the desktop.
+WIN_RECT = (WIN_X, WIN_Y, WIN_X + OUTER_W, WIN_Y + OUTER_H)
+
 # The same buttons once the window has been maximised, when its frame is at
 # 0,0 and as wide as the screen.
 BTN_MAX_WHEN_MAXIMISED = (SCREEN_W - 46 + 7, 5 + 7)
@@ -89,12 +93,12 @@ def wait_page(mon, name, want, timeout=30):
     return page(px, w), (w, h, px), shot, ok
 
 
-def click_page(mon, at, name, want, timeout=24):
+def click_page(mon, at, name, want, timeout=24, rect=WHOLE):
     """Clicks something, and checks it did what it was clicked for."""
     w, h, px, shot, ok = mon.click_for(
-        at[0], at[1], name, lambda w, h, px: want(page(px, w)),
+        at[0], at[1], name, lambda w, h, px: want(page(px, w, rect)),
         timeout=timeout)
-    return page(px, w), shot, ok
+    return page(px, w, rect), shot, ok
 
 
 def desktop_bytes(w, h, px):
@@ -157,8 +161,13 @@ def main():
         c.add("the terminal opens at the size it asked for", ok, shot)
 
         # --- minimise ------------------------------------------------------
+        # Counted inside the window's own rectangle rather than across the
+        # screen. The terminal's page colour is one the desktop gradient can
+        # also land on, so a screen wide count says "the window is still
+        # there" when what it found was the wallpaper in the gap beside the
+        # panel. Scoped here it can only be answering the question asked.
         _, shot, ok = click_page(mon, BTN_MIN, "desk-minimised",
-                                 lambda n: n < 1000)
+                                 lambda n: n < 200, rect=WIN_RECT)
         c.add("the minimise button takes the window off screen", ok, shot)
 
         # --- and back, from the taskbar -------------------------------------

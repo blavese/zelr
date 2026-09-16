@@ -38,9 +38,15 @@ u32  gfx_mix(u32 under, u32 over, int alpha);
  * already there. That is the whole difference between text that looks drawn
  * and text that looks printed. */
 
-#define FACE_BODY  0        /* 15px, the default for chrome */
-#define FACE_HEAD  1        /* 20px */
-#define FACE_TITLE 2        /* 26px */
+/* The scale, in the order genface.py emits it. Names rather than numbers
+   because the order changes whenever a size is added, and a call site that
+   said 1 would then quietly draw at a different size. */
+#define FACE_SMALL      0   /* 13px, for things that sit under something */
+#define FACE_BODY       1   /* 15px, the default for chrome */
+#define FACE_HEAD       2   /* 20px */
+#define FACE_TITLE      3   /* 26px */
+#define FACE_BODY_BOLD  4   /* 15px, for emphasis at body size */
+#define FACE_HEAD_BOLD  5   /* 20px, for a heading that has to lead */
 
 void face_text(int x, int y, const char *s, u32 fg, int which);
 int  face_width(const char *s, int which);
