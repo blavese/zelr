@@ -20,7 +20,7 @@ where there is not.
 
 The one exception, since "from scratch" invites the question: `zelr.exe`, the
 Windows launcher, is a C# program that bundles the .NET runtime, which is
-most of its 162 MB. The kernel inside it is about 700 KB. Nothing third party
+most of its 162 MB. The kernel inside it is about 1.5 MB. Nothing third party
 runs on the machine zelr boots.
 
 ## running it on Windows
