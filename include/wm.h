@@ -34,6 +34,10 @@ struct window {
     int   x, y;               /* outer top-left, including the title bar */
     int   cw, ch;             /* content size */
     char  title[32];
+    /* The program that opened it, so the taskbar can tell that the window
+       in front is the app whose icon is pinned two inches to the left. A
+       window the kernel opened for itself has none. */
+    char  app[32];
     u32  *canvas;             /* cw * ch pixels, owned by the window */
     bool  open;
     bool  dirty;              /* content changed since the last composite */

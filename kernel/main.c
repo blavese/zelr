@@ -171,8 +171,10 @@ void kmain(handoff_t *h) {
     if (!h || h->magic != HANDOFF_MAGIC)
         panic("started without a handoff structure");
 
-    for (const char *p = h->cmdline; *p; p++)
-        if (!strncmp(p, "selftest", 8)) { want_selftest = true; break; }
+    for (const char *p = h->cmdline; *p; p++) {
+        if (!strncmp(p, "selftest", 8)) want_selftest = true;
+        if (!strncmp(p, "console", 7))  shell_console_only();
+    }
 
     banner();
 

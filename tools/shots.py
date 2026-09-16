@@ -36,6 +36,16 @@ MENU_TOP = SCREEN_H - TASKBAR_H - TASKBAR_GAP - (8 * MENU_ITEM + 12) - 8
 LAUNCHER = (40, SCREEN_H - TASKBAR_H - TASKBAR_GAP + 17)
 PARK = (1010, SCREEN_H - 10)
 
+# The apps kept on the panel start past the badge, 30 pixels apart, with the
+# terminal first. Its icon is what brings the terminal back.
+TERMINAL_ICON = (TASKBAR_GAP + 8 + 76 + 12 + 11,
+                 SCREEN_H - TASKBAR_H - TASKBAR_GAP + 15)
+
+# Somewhere the pointer is not asking for the panel. Anywhere along the
+# bottom of the screen brings it back out over whatever is maximised, which
+# is the opposite of what the picture is of.
+HIGH = (1010, 300)
+
 # The terminal as it opens, and the buttons on it.
 WIN_X, WIN_Y, WIN_CW = 40, 36, 760
 OUTER_W = WIN_CW + 2
@@ -92,9 +102,9 @@ def stroke(mon, x0, y0, steps):
     mon.send("mouse_button 0", settle=0.4)
 
 
-def shoot(mon, name, settle=0.6):
+def shoot(mon, name, settle=0.6, park=PARK):
     """One picture, parked so the pointer is never mid-screen in it."""
-    mon.move_to(*PARK)
+    mon.move_to(*park)
     time.sleep(settle)
     w, h, px, ppm = mon.screen("shot-" + name)
 
@@ -156,6 +166,25 @@ def main():
         mon.click(*menu_item(SETTINGS))
         time.sleep(2.5)
         shoot(mon, "settings")
+
+        # --- a wallpaper that moves, with nothing in front of it ----------
+        #
+        # The terminal is brought to the front first. Typing goes to whatever
+        # window has focus, and what had it was the settings window, which
+        # ignored the whole line: the picture came out showing the wallpaper
+        # that was already on.
+        mon.click(*TERMINAL_ICON)
+        time.sleep(1.5)
+        vm.type("write /zelr.cfg wallpaper 7\n")
+        time.sleep(1.5)
+        mon.send("sendkey alt-d", settle=1.8)
+        shoot(mon, "wallpaper")
+
+        # --- and the panel out of the way of a maximised window -----------
+        mon.click(*TERMINAL_ICON)
+        time.sleep(1.5)
+        mon.send("sendkey alt-up", settle=1.8)
+        shoot(mon, "maximised", park=HIGH)
 
     finally:
         vm.stop()

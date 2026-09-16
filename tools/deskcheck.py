@@ -57,8 +57,44 @@ LAUNCHER_RECT = (10, 458, 226, 720)
 # The same buttons once the window has been maximised, when its frame is at
 # 0,0 and as wide as the screen.
 BTN_MAX_WHEN_MAXIMISED = (SCREEN_W - 46 + 7, 5 + 7)
-TASKBAR_CHIP = (150, SCREEN_H - TASKBAR_H + 17)
 LAUNCHER = (40, SCREEN_H - TASKBAR_H - TASKBAR_GAP + 17)
+
+# The panel, where it sits when it is out, and the band it occupies. A
+# maximised window takes the whole screen and the panel tucks itself under
+# the bottom edge, so counting its own colour in this band says which of the
+# two is happening without reading anything.
+PANEL_Y = SCREEN_H - TASKBAR_H - TASKBAR_GAP
+PANEL_BAND = (TASKBAR_GAP, PANEL_Y, SCREEN_W - TASKBAR_GAP, PANEL_Y + TASKBAR_H)
+PANEL = MENU_PANEL                     # the floating layer, same colour
+
+# The apps kept on the panel: the badge, then an icon every 30 pixels. The
+# terminal is the first of them, and since a running program whose app is
+# pinned is shown by its icon rather than by a chip of its own, that icon is
+# what a click has to land on to bring the terminal back.
+PINS_X = TASKBAR_GAP + 8 + 76 + 12
+PIN_STEP = 30
+TASKBAR_CHIP = (PINS_X + 11, PANEL_Y + 15)
+
+
+def icon_at(i):
+    """The middle of an icon, for clicking."""
+    return (PINS_X + i * PIN_STEP + 11, PANEL_Y + 15)
+
+
+def icon_ink(px, w, i):
+    """A pixel of an icon's own colour, left of the letter in it, which is
+    what says which app is in that slot."""
+    x, y = PINS_X + i * PIN_STEP + 4, PANEL_Y + 15
+    o = (y * w + x) * 3
+    return tuple(px[o:o + 3])
+
+
+def right_click(mon, x, y):
+    """The monitor's second button, which arrives at the guest as the right
+    one. Held, for the same reason click holds the left."""
+    mon.move_to(x, y)
+    mon.send("mouse_button 2", settle=0.4)
+    mon.send("mouse_button 0", settle=0.6)
 
 # Where the pointer is put before a wallpaper is photographed. It is drawn on
 # the desktop like everything else, so leaving it wherever the last click
@@ -201,15 +237,37 @@ def main():
         # was told to redraw at the new size so its own page reaches the
         # bottom of it. A frame stretched without the program hearing about
         # it would pass the first and fail the second.
-        strip = (100, SCREEN_H - TASKBAR_H - 40, 900, SCREEN_H - TASKBAR_H - 10)
+        # The whole screen, panel included: it tucks itself away for a
+        # window that wants the room. 730000 rather than 650000 is the
+        # difference between the two: stopping above the panel is 714000 of
+        # this colour and reaching the bottom of the screen is 759000, so
+        # the old threshold passed either way and said nothing about which
+        # had happened.
+        strip = (100, SCREEN_H - 50, 900, SCREEN_H - 12)
         w, h, px, shot, ok = mon.click_for(
             BTN_MAX[0], BTN_MAX[1], "desk-maximised",
-            lambda w, h, px: (page(px, w) > 650000
+            lambda w, h, px: (page(px, w) > 730000
                               and count_in(px, w, strip, PAGE) > 20000))
-        c.add("the maximise button fills the screen above the taskbar",
-              page(px, w) > 650000, shot)
+        c.add("the maximise button fills the whole screen",
+              page(px, w) > 730000, shot)
         c.add("and the program redrew into the space it was given",
               count_in(px, w, strip, PAGE) > 20000, shot)
+        c.add("the panel tucks itself out of the way",
+              count_in(px, w, PANEL_BAND, PANEL) < 500, shot)
+
+        # And comes back for the pointer, over the window rather than
+        # beside it, then goes again when the pointer leaves.
+        mon.move_to(600, SCREEN_H - 1)
+        w, h, px, shot, up = mon.wait_screen(
+            "desk-panel-back",
+            lambda w, h, px: count_in(px, w, PANEL_BAND, PANEL) > 15000)
+        c.add("and comes back when the pointer reaches the bottom", up, shot)
+
+        mon.move_to(500, 300)
+        w, h, px, shot, gone = mon.wait_screen(
+            "desk-panel-away",
+            lambda w, h, px: count_in(px, w, PANEL_BAND, PANEL) < 500)
+        c.add("and goes again when the pointer leaves it", gone, shot)
 
         # --- restore --------------------------------------------------------
         small, shot, ok = click_page(mon, BTN_MAX_WHEN_MAXIMISED,
@@ -326,8 +384,151 @@ def main():
         _, _, shot, ok = wait_page(mon, "desk-cleared", lambda n: n < 1000)
         c.add("alt and d puts everything away at once", ok, shot)
 
+        # --- the size of the screen -------------------------------------------
+        #
+        # Written into the same file the colours live in, from ring 3, and
+        # applied by the window manager the next time it reads it. The
+        # picture that comes back is a different size, which is not
+        # something any amount of drawing could fake.
+        #
+        # 800 by 600 rather than something larger: the back buffer is the
+        # whole screen and this machine has 64 MiB, so a size that does not
+        # fit would be testing the heap rather than the screen.
+        mon.click(*TASKBAR_CHIP)
+        wait_page(mon, "desk-back-3", lambda n: n > 100000)
+        typed(mon, "write /zelr.cfg width 800\n")
+        typed(mon, "append /zelr.cfg height 600\n")
+
+        _, _, _, shot, smaller = mon.wait_screen(
+            "desk-800x600", lambda w, h, px: w == 800 and h == 600, timeout=30)
+        c.add("a screen size written from ring 3 is the size of the screen",
+              smaller, shot)
+
+        # And the desktop is laid out for it rather than still drawn for the
+        # old one: the panel is where the bottom of this screen is.
+        band = (TASKBAR_GAP, 600 - TASKBAR_H - TASKBAR_GAP,
+                800 - TASKBAR_GAP, 600 - TASKBAR_GAP)
+        _, _, _, shot, moved = mon.wait_screen(
+            "desk-800-panel",
+            lambda w, h, px: (w == 800
+                              and count_in(px, w, band, PANEL) > 8000),
+            timeout=30)
+        c.add("and the panel is at the bottom of the new one", moved, shot)
+
+        # Back, so nothing after this has to know about it.
+        typed(mon, "write /zelr.cfg width 1024\n")
+        typed(mon, "append /zelr.cfg height 768\n")
+        mon.wait_screen("desk-back-big",
+                        lambda w, h, px: w == SCREEN_W and h == SCREEN_H,
+                        timeout=30)
+        # --- the apps kept on the panel ---------------------------------------
+        #
+        # Left until last, because all of it changes what is on the taskbar
+        # and everything above knows where the taskbar's first icon is.
+        #
+        # Each app's icon is a colour worked out from its path, so reading
+        # one pixel of each says which app is in which slot, and that is the
+        # whole of what dragging one along the panel is supposed to change.
+        mon.move_to(*PARK)
+        w, h, px, shot = None, None, None, None
+        w, h, px, shot, _ = mon.wait_screen(
+            "desk-pins", lambda w, h, px: True)
+        before = [icon_ink(px, w, i) for i in range(5)]
+        c.add("the taskbar starts with the apps the machine ships",
+              len(set(before)) >= 3 and all(p != PANEL for p in before), shot)
+
+        # The first one dragged two places along. The two it passes move up
+        # to make room, so what lands where is known exactly.
+        mon.drag(icon_at(0), icon_at(2))
+        w, h, px, shot, moved = mon.wait_screen(
+            "desk-pin-moved",
+            lambda w, h, px: (icon_ink(px, w, 2) == before[0]
+                              and icon_ink(px, w, 0) == before[1]))
+        c.add("an icon dragged along the taskbar changes places", moved, shot)
+
+        # Off the panel with the right button, which is the only way back to
+        # a taskbar somebody does not want five things on.
+        right_click(mon, *icon_at(4))
+        w, h, px, shot, dropped = mon.wait_screen(
+            "desk-pin-off",
+            lambda w, h, px: icon_ink(px, w, 4) == PANEL)
+        c.add("and the right button takes one off it", dropped, shot)
+
+        # And back on, from the launcher, with the same button. Settings is
+        # the fifth entry and it was the fifth icon.
+        mon.click(*LAUNCHER)
+        mon.wait_screen(
+            "desk-menu-2",
+            lambda w, h, px: count_in(px, w, LAUNCHER_RECT, MENU_PANEL) > 8000)
+        right_click(mon, 60, MENU_TOP + 6 + 4 * MENU_ITEM + MENU_ITEM // 2)
+        w, h, px, shot, backon = mon.wait_screen(
+            "desk-pin-on",
+            lambda w, h, px: icon_ink(px, w, 4) != PANEL)
+        c.add("and an app from the launcher can be put back on", backon, shot)
+
     finally:
         vm.stop()
+
+    # --- and a machine nobody told to open a desktop --------------------------
+    #
+    # Everything above boots with console on the kernel command line, because
+    # every one of those checks starts by waiting for a shell prompt. This one
+    # boots the way a machine booted from a disc does, with no command line at
+    # all, and the desktop should be there without anyone asking for it.
+    # More memory than the rest of this needs, because the last two checks
+    # ask for a screen four times the size and the back buffer for one is
+    # eight megabytes of heap.
+    auto = Guest(os.path.join(ROOT, "deskauto.%d.img" % os.getpid()), memory=512,
+                 args="")
+    try:
+        mon = auto.monitor()
+        _, _, _, shot, up = mon.wait_screen(
+            "desk-auto",
+            lambda w, h, px: count_in(px, w, PANEL_BAND, PANEL) > 15000,
+            timeout=90)
+        c.add("a machine nobody told opens the desktop by itself", up, shot)
+
+        # Nothing has printed a prompt, because nothing is at a console.
+        c.add("and the console is not what came up",
+              "zelr:/home>" not in auto.serial(), shot)
+
+        # Escape is the way out, and the only way out on a machine with no
+        # command line, which makes it worth checking rather than assuming.
+        auto.type("\x1b")
+        c.add("and escape leaves it for the shell",
+              auto.wait_prompt(1, timeout=30))
+
+        # --- a screen nothing here was written for ----------------------------
+        #
+        # Every coordinate in this file is for 1024 by 768, and the desktop
+        # itself holds none: the panel, the launcher and every window are
+        # laid out from the width and height of the framebuffer each frame.
+        # This is what says so. 1920 by 1080 is both larger in every
+        # direction and a different shape.
+        auto.run("write /zelr.cfg width 1920")
+        auto.run("append /zelr.cfg height 1080")
+        auto.type("desktop\n")
+
+        mon = auto.monitor()
+        _, _, _, shot, big = mon.wait_screen(
+            "desk-1920",
+            lambda w, h, px: w == 1920 and h == 1080, timeout=60)
+        c.add("a screen twice the size is the size it was asked for", big, shot)
+
+        band = (TASKBAR_GAP, 1080 - TASKBAR_H - TASKBAR_GAP,
+                1920 - TASKBAR_GAP, 1080 - TASKBAR_GAP)
+        _, _, _, shot, laid = mon.wait_screen(
+            "desk-1920-panel",
+            lambda w, h, px: (w == 1920
+                              and count_in(px, w, band, PANEL) > 30000),
+            timeout=30)
+        c.add("and the desktop is laid out across all of it", laid, shot)
+    finally:
+        auto.stop()
+        try:
+            os.remove(os.path.join(ROOT, "deskauto.%d.img" % os.getpid()))
+        except OSError:
+            pass
 
     for s in shots:
         if s not in c.shots:

@@ -126,6 +126,14 @@ int winsrv_create(u32 pid, const char *title, int cw, int ch) {
     window_t *w = wm_create(title, x, y, cw, ch);
     if (!w) { kfree(raw); return -1; }
 
+    /* Which program this is. The task was named after the path it was
+       loaded from, which is what the taskbar matches a pinned app against. */
+    task_t *owner = task_by_pid(pid);
+    if (owner) {
+        strncpy(w->app, owner->name, sizeof(w->app) - 1);
+        w->app[sizeof(w->app) - 1] = 0;
+    }
+
     /* Point the window at the pages the program will get, and let the one
        the manager allocated go. */
     kfree(w->canvas);

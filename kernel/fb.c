@@ -148,19 +148,23 @@ static bool init_svga(u32 w, u32 h) {
     return true;
 }
 
-bool fb_init(u32 w, u32 h) {
-    active = false;
-    via_svga = false;
-    adopted = false;
+/* Is there a card here whose mode we can set at all. */
+static bool bga_present(pci_dev_t *out) {
+    u16 id = vbe_read(VBE_ID);       /* 0xB0C2 or later knows about the lfb */
+    if (id < 0xB0C0 || id > 0xB0CF) return false;
+    return pci_find(VGA_VENDOR, VGA_DEVICE, out)
+        || pci_find(VBOX_VENDOR, VBOX_DEVICE, out);
+}
 
-    /* Version 0xB0C2 or later understands the linear framebuffer bit. */
-    u16 id = vbe_read(VBE_ID);
-    if (id < 0xB0C0 || id > 0xB0CF) return init_svga(w, h);
-
-    /* The card's memory aperture is the first BAR of the VGA device. */
+/* Sets a mode and leaves width, height, pitch and lfb describing it.
+ *
+ * The back buffer is deliberately not this function's business. Changing
+ * mode while the machine is running has to be able to put the previous one
+ * back when the card refuses, and it cannot do that if the buffer it was
+ * drawing into has already been thrown away. */
+static bool bga_mode(u32 w, u32 h) {
     pci_dev_t vga;
-    if (!pci_find(VGA_VENDOR, VGA_DEVICE, &vga) &&
-        !pci_find(VBOX_VENDOR, VBOX_DEVICE, &vga)) return init_svga(w, h);
+    if (!bga_present(&vga)) return false;
 
     u64 phys = vga.bar0 & 0xFFFFFFF0u;
     if (!phys) return false;
@@ -171,34 +175,84 @@ bool fb_init(u32 w, u32 h) {
     vbe_write(VBE_BPP, 32);
     vbe_write(VBE_ENABLE, VBE_ENABLED | VBE_LFB);
 
-    /* Confirm the card actually took the mode rather than assuming. */
+    /* Confirm the card actually took the mode rather than assuming. A card
+       with too little memory for the size asked for says so here, which is
+       the whole of what makes offering a list of sizes safe. */
     if (vbe_read(VBE_XRES) != (u16)w || vbe_read(VBE_YRES) != (u16)h) {
         vbe_write(VBE_ENABLE, VBE_DISABLED);
         return false;
     }
 
-    width = w;
-    height = h;
-    pitch = w * 4;
-
     /* Map the aperture. It sits far above the identity mapped region, so it
        needs page table entries of its own. */
-    u64 bytes = (u64)pitch * height;
+    u64 bytes = (u64)w * 4 * h;
     for (u64 off = 0; off < bytes; off += PAGE_SIZE) {
         if (!map_page(phys + off, phys + off, PTE_PRESENT | PTE_RW)) {
             vbe_write(VBE_ENABLE, VBE_DISABLED);
             return false;
         }
     }
-    lfb = (u8 *)phys;
 
-    back = (u8 *)kmalloc(bytes);
-    if (!back) {
+    width = w;
+    height = h;
+    pitch = w * 4;
+    lfb = (u8 *)phys;
+    return true;
+}
+
+bool fb_init(u32 w, u32 h) {
+    active = false;
+    via_svga = false;
+    adopted = false;
+
+    pci_dev_t vga;
+    if (!bga_present(&vga)) return init_svga(w, h);
+    if (!bga_mode(w, h)) return false;
+
+    if (!take_back_buffer((u64)pitch * height)) {
         vbe_write(VBE_ENABLE, VBE_DISABLED);
         return false;
     }
 
     active = true;
+    fb_clear(0);
+    fb_flush();
+    return true;
+}
+
+/* A screen the firmware set up is the size the firmware chose and stays
+   that size: the mode was set before ExitBootServices and there is nothing
+   left to ask afterwards. Saying so is better than offering a list of
+   sizes that all silently do nothing. */
+bool fb_mode_settable(void) { return active && !adopted && !via_svga; }
+
+bool fb_set_mode(u32 w, u32 h) {
+    if (!fb_mode_settable()) return false;
+    if (w < 640 || h < 480 || w > 4096 || h > 4096) return false;
+    if (w == width && h == height) return true;
+
+    u32 ow = width, oh = height, opitch = pitch;
+    u8 *oback = back, *olfb = lfb;
+
+    if (!bga_mode(w, h)) {
+        width = ow; height = oh; pitch = opitch; lfb = olfb;
+        bga_mode(ow, oh);                    /* back to one that worked */
+        return false;
+    }
+
+    /* The new buffer is taken before the old one is let go, so a size the
+       heap cannot hold leaves the screen exactly as it was rather than with
+       nothing to draw into. */
+    u8 *fresh = (u8 *)kmalloc((u64)pitch * height);
+    if (!fresh) {
+        width = ow; height = oh; pitch = opitch; lfb = olfb;
+        bga_mode(ow, oh);
+        return false;
+    }
+
+    back = fresh;
+    if (oback != olfb) kfree(oback);
+
     fb_clear(0);
     fb_flush();
     return true;

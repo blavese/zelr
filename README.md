@@ -31,6 +31,14 @@ When it fails it says why.
 <td align="center"><sub>paint, a ring 3 process like everything else</sub></td>
 <td align="center"><sub>the theme, which changes as you touch it</sub></td>
 </tr>
+<tr>
+<td width="50%"><img src="docs/wallpaper.png" alt="an animated wallpaper with the apps along the panel"></td>
+<td width="50%"><img src="docs/maximised.png" alt="a terminal filling the whole screen with the panel gone"></td>
+</tr>
+<tr>
+<td align="center"><sub>one of the six wallpapers that move, and the apps kept on the panel</sub></td>
+<td align="center"><sub>and the panel tucked away for a window that wanted the screen</sub></td>
+</tr>
 </table>
 
 Every one of those was photographed by `tools/shots.py`, which boots the
@@ -65,9 +73,11 @@ It runs as a normal user, needs no administrator rights, and cannot affect
 Windows: the kernel only ever sees the pretend machine QEMU gives it. Your
 files live in a disk image under `%LocalAppData%\zelr`.
 
-Something to try once it boots:
-
-    desktop
+It opens the desktop by itself, with a terminal on it. Escape leaves that
+for the console, and `desktop` at the console goes back. Both directions are
+there because both are useful: the desktop is what a machine with a screen
+should do when you switch it on, and the console is what you want when you
+are driving it down a serial line or something has gone wrong.
 
 A terminal opens. Click the wallpaper, or the badge in the corner, for the
 launcher: paint, settings, and what the machine is made of. Drag a title bar
@@ -76,6 +86,13 @@ Drag the bottom right corner to resize, or drag a title bar to an edge to
 snap. Alt and tab changes window, alt and an arrow snaps, alt and d clears
 the desktop, and shaking a window sends the others away. Escape returns to
 the shell.
+
+The apps along the panel are kept there. Drag one to move it, right click it
+to take it off, and right click anything in the launcher to put it on. A
+program that is running is the same icon with a line under it, so the panel
+reads as what you keep and then what you happen to have open. All of that is
+in the settings window too, along with the screen size, whether the desktop
+opens at startup, and one button that puts every setting back.
 
 Everything on that desktop except the system info window is a separate
 program running in ring 3. Settings cannot reach into the window manager at
@@ -152,10 +169,8 @@ Something plugged in after boot is noticed and enumerated from a kernel task,
 and pulling it out is noticed too.
 
 A USB stick works too. Mass storage is SCSI posted through two bulk
-endpoints, so a stick is enumerated, asked how big it is, and read and
-written a sector at a time. It is not a disk the filesystem can mount yet,
-because the block layer still holds exactly one disk picked at boot, so for
-now it is reached through the shell rather than through a path.
+endpoints, so a stick is enumerated, asked how big it is, read and written a
+sector at a time, and mounted: its files are under `/usb`.
 
 What is not there is any other class. Only the machine's own ports are
 watched for a change: plug a keyboard into a hub that is already connected
@@ -454,6 +469,45 @@ screen is assembled into the back buffer and pushed once per frame so a window
 moving over another leaves no trail. Title bars drag, clicking raises, the
 close box closes, and a taskbar shows what is open.
 
+**The panel.** A bar welded to the bottom of the screen means a maximised
+window is not maximised: it stops short, and the last thirty pixels of the
+display are spent on something that is looked at occasionally. A bar that is
+always hidden means reaching for it every time, which is worse. So it is
+neither. Nothing wants the room and it is out, floating clear of the edge
+with the wallpaper showing around it; something does and it slides away and
+the window has the whole screen; put the pointer at the bottom and it comes
+back over the window, and stays as long as the pointer is on it. There is no
+setting for any of that. It is a consequence of what is on the screen.
+
+A window covering the whole screen also means the wallpaper and everything
+under that window are being drawn and then painted over, twelve times a
+second if the wallpaper is one that moves. Neither is drawn at all now.
+
+The apps on it are a list in a file, `/zelr.pins`, one program to a line.
+Dragging an icon reorders the list as the pointer crosses each slot rather
+than when the button comes up, so the icons move out of the way while it is
+happening. There are no icon files anywhere in this project: an app's icon is
+a rounded square in a colour worked out from its own path, with the first
+letter of its name in it, which tells five of them apart at a glance and
+costs nothing to carry.
+
+**The screen, at whatever size.** Nothing on this desktop knows a
+resolution: every window, the panel, the launcher and each wallpaper is laid
+out from the width and height of the framebuffer, every frame. So the size
+can change while the machine is running. Pick one in the settings window and
+it is written into the same file the colours live in; the window manager
+reads that four times a second, asks the card for the mode, and refits the
+windows around what came back. A size the card will not take leaves the
+screen exactly as it was, because the new back buffer is allocated before
+the old one is let go and the card is asked what mode it is actually in
+rather than told.
+
+Where the mode came from decides whether it can be changed at all, and the
+settings window says which it is rather than offering a list that does
+nothing: a mode this kernel set through the dispatch interface can be set
+again, and a framebuffer a UEFI machine handed over is the size the firmware
+chose for as long as the machine is on.
+
 **The window server.** A program in ring 3 cannot touch the framebuffer and
 cannot be handed a kernel pointer, so a window's pixels are allocated on a page
 boundary and mapped into the calling process with the user bit set. The program
@@ -489,6 +543,14 @@ looks without being able to reach the window manager at all. It writes
 `/zelr.cfg`, a plain "key value" file, and the window manager re-reads that four
 times a second. Anything the window can do can also be done with the shell's
 `write` command.
+
+Eleven wallpapers, six of which move: drifting stars, travelling waves,
+aurora, rain, wandering orbs and rings going out from the middle. They are
+all cheap on purpose, because this has to stay smooth on a machine with no
+graphics acceleration of any kind: a column fill or a few thousand points a
+frame, never a calculation per pixel of the screen. The curves come from a
+seventeen entry table, since the kernel is built with no floating point in it
+at all.
 
 **Shell.** Reads from the keyboard or the serial line, whichever produces a
 character first, so a person can type at it and a script can pipe into it. It
@@ -632,9 +694,6 @@ large range:
 - **Forty system calls.** Enough to print, walk directories, read and write
   files, open one TCP connection, sleep, exit, wait on a child and own a
   window. There is no signal, no pipe and no memory mapping.
-- **8.3 names only.** Directories work and nest, but a file is eight
-  characters and an extension, because that is what FAT16 stores without long
-  name entries.
 - **No shared libraries**, no dynamic linking, no relocation: programs are
   static and loaded at a fixed address.
 - **Eight windows at once**, which is a fixed array and not a limit anybody
@@ -718,6 +777,7 @@ orders of magnitude away from Linux, which is roughly 30 million lines.
     kernel/wm.c        the window manager and the launcher
     kernel/winsrv.c    handing window surfaces across to ring 3
     kernel/theme.c     the desktop's appearance, and the file it lives in
+    kernel/pins.c      the apps kept on the taskbar, and their file
     kernel/builtin.S   the user programs, pasted into the kernel image
     kernel/apps.c      the system info window
     kernel/vfs.c       one namespace over the live tree, the disk and memory

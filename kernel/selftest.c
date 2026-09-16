@@ -33,6 +33,7 @@
 #include "font.h"
 #include "winsrv.h"
 #include "theme.h"
+#include "pins.h"
 #include "smp.h"
 #include "builtin.h"
 #include "blackbox.h"
@@ -722,6 +723,65 @@ static void test_open_files(void) {
 
     ok("a missing file will not open without create", vfs_open("/nope.txt", O_READ) < 0);
     vfs_delete("/fd.txt");
+}
+
+static void test_pins(void) {
+    vfs_delete(PIN_FILE);
+    pins_init();
+
+    /* A machine that has never been told otherwise starts with the programs
+       it ships, which is also what makes the taskbar worth looking at the
+       first time somebody opens the desktop. */
+    ok("a machine with no list starts with one", pins_count() > 0);
+    ok("and the terminal is on it", pins_find("/bin/term") >= 0);
+    ok("something that is not a program is not", pins_find("/bin/nope") < 0);
+
+    int had = pins_count();
+    ok("an app can be pinned", pins_add("Count", "/bin/count"));
+    ok("and is then on the list", pins_count() == had + 1);
+    ok("pinning the same one twice does nothing", !pins_add("Count", "/bin/count"));
+
+    /* The order is the list, because the order is what a person drags an
+       icon along the panel to change. */
+    int from = pins_find("/bin/count");
+    pins_move(from, 0);
+    ok("an app can be moved to the front", pins_find("/bin/count") == 0);
+    ok("and what was in front moved along", pins_find("/bin/term") == 1);
+    pins_move(0, pins_count() - 1);
+    ok("and to the back", pins_find("/bin/count") == pins_count() - 1);
+
+    /* Out of range is a thing a drag does at both ends of the panel. */
+    pins_move(0, -4);
+    ok("moving past the front stays at the front", pins_find("/bin/term") == 0);
+    pins_move(0, 99);
+    ok("and past the back stays at the back", pins_find("/bin/term") == pins_count() - 1);
+
+    /* What survives a reboot is what is in the file. */
+    int want = pins_count();
+    ok("the list saves", pins_save());
+    pins_init();
+    ok("and comes back the same length", pins_count() == want);
+    ok("in the same order", pins_find("/bin/term") == want - 1);
+    ok("with the names it was given",
+       !strcmp(pin_at(pins_find("/bin/count"))->label, "Count"));
+
+    /* Emptying it has to stick. A list somebody cleared that came back full
+       on the next boot would be the taskbar refusing to be configured. */
+    while (pins_count()) pins_remove(0);
+    ok("everything can be unpinned", pins_count() == 0);
+    pins_init();
+    ok("and an emptied list stays empty", pins_count() == 0);
+
+    /* There is a limit and it is the array's. */
+    for (int i = 0; i < PIN_MAX + 4; i++) {
+        char path[16];
+        kformat(path, sizeof(path), "/bin/p%d", i);
+        pins_add("X", path);
+    }
+    ok("the list stops at what it can hold", pins_count() == PIN_MAX);
+
+    vfs_delete(PIN_FILE);
+    pins_init();
 }
 
 static void test_theme(void) {
@@ -1497,6 +1557,7 @@ int selftest_run(void) {
     kprintf("[window server]\n"); test_winsrv();
     kprintf("[built-in programs]\n"); test_builtin();
     kprintf("[theme]\n");      test_theme();
+    kprintf("[taskbar]\n");    test_pins();
     kprintf("[live tree]\n"); test_live_tree();
     kprintf("[layout]\n");    test_layout();
     kprintf("[waiting]\n");    test_waiting();

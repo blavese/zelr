@@ -18,6 +18,10 @@ typedef enum {
     WALLPAPER_STARS,        /* drifts, so the desktop is never quite still */
     WALLPAPER_WAVES,
     WALLPAPER_WEAVE,
+    WALLPAPER_AURORA,       /* bands of light leaning across the screen */
+    WALLPAPER_RAIN,
+    WALLPAPER_ORBS,
+    WALLPAPER_PULSE,
     WALLPAPER_COUNT
 } wallpaper_t;
 
@@ -61,6 +65,15 @@ typedef struct {
        anything else that is delightful the first time and in the way the
        twentieth. Off is a real setting, not a hidden one. */
     bool quirks;
+
+    /* Whether the desktop opens by itself when the machine starts. Escape
+       leaves it and lands at the console, which is how a machine set this
+       way is still a machine somebody can type at. */
+    bool autodesktop;
+
+    /* The screen size to ask for. Zero for whatever the machine gave us,
+       which is the only answer on one whose firmware set the mode. */
+    int  want_w, want_h;
 } theme_t;
 
 void theme_init(void);

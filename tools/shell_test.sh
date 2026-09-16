@@ -87,7 +87,7 @@ feed() {
   sleep 2.5
 }
 
-feed | run_with_timeout 90 "$QEMU" -kernel build/zelr.bin -m 64 -no-reboot -display none -serial stdio > "$OUT" 2>&1 || true
+feed | run_with_timeout 90 "$QEMU" -kernel build/zelr.bin -m 64 -no-reboot -display none -serial stdio -append console > "$OUT" 2>&1 || true
 
 fails=0
 check() {

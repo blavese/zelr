@@ -132,14 +132,19 @@ def count_in(px, w, rect, rgb):
     return n
 
 
-def centre_of(px, w, h, rgb, min_pixels=200):
+def centre_of(px, w, h, rgb, min_pixels=200, within=None):
     """Where a block of one colour is, as (x, y) of its middle.
 
     Clicking a remembered coordinate is how these harnesses kept breaking: a
     swatch moves because a window gained a sidebar, and the click lands on
     whatever is there now. So the thing is found in the picture instead.
     None when it is not on screen, which is an answer and not a coordinate
-    to click anyway."""
+    to click anyway.
+
+    within limits it to a rectangle. The taskbar draws every pinned app in a
+    colour from the same palette the themes use, so a colour that used to
+    mean one thing on screen now means that thing or an icon, and the answer
+    to "where is it" was the point between the two."""
     want = bytes(rgb)
     xs = ys = n = 0
     start = 0
@@ -151,6 +156,9 @@ def centre_of(px, w, h, rgb, min_pixels=200):
         if i % 3:
             continue
         y, x = divmod(i // 3, w)
+        if within and not (within[0] <= x < within[2]
+                           and within[1] <= y < within[3]):
+            continue
         xs += x
         ys += y
         n += 1
@@ -465,8 +473,16 @@ class Guest:
                 "-no-reboot", "-display", "none", "-serial", "stdio",
                 "-drive", "file=%s,format=raw,if=ide,index=0" % disk,
                 "-monitor", "tcp:127.0.0.1:%d,server,nowait" % self.port]
-        if args:
-            cmd += ["-append", args]
+        # A machine with a screen opens the desktop by itself, and every
+        # harness here starts by waiting for a shell prompt on the serial
+        # line. So unless a caller asked for something else, this says
+        # console, which is the kernel command line word for staying at one.
+        # Escape would also do it and is what a person would press; a word
+        # on the command line has no timing in it at all.
+        if args is None:   cmd += ["-append", "console"]
+        elif args:         cmd += ["-append", args]
+        # args="" is the real thing: no command line at all, which is
+        # what a machine booted from a disc or a stick has.
         if extra:
             cmd += extra
 
