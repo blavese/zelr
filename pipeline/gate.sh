@@ -336,9 +336,14 @@ if [ "$MODE" = "screen" ] || [ "$MODE" = "full" ]; then
   # Machines that were interfered with while they were starting, which is
   # what people actually do and what nothing else here covered.
   inputtest() { keep timeout 600 python tools/inputcheck.py; }
+
+  # Notes played, and then measured in a recording of what came out, which is
+  # the only part of an audio driver that cannot report success while silent.
+  soundtest() { keep timeout 600 python tools/soundcheck.py; }
   par_start "the windows go where they are told" desktest
   par_start "a usb keyboard and mouse are found and used" usbtest
   par_start "input survives being touched during boot" inputtest
+  par_start "notes come out at the pitch they were asked for" soundtest
 
   par_wait
 fi

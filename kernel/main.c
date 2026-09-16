@@ -8,6 +8,7 @@
 #include "timer.h"
 #include "keyboard.h"
 #include "ps2.h"
+#include "sound.h"
 #include "usb.h"
 #include "multiboot.h"
 #include "handoff.h"
@@ -330,6 +331,12 @@ void kmain(handoff_t *h) {
        almost no real one. */
     usb_init();
     if (usb_present()) kprintf("  usb     %s\n", usb_describe());
+
+    bb_mark("sound");
+    if (sound_init())
+        kprintf("  sound   %s, %d Hz\n", sound_describe(), sound_rate());
+    else
+        bb_log("sound none: no hd audio controller answered");
 
     serial_enable_irq();
     kprintf("  input   ps/2 keyboard + serial (irq driven)\n");

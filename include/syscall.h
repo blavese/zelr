@@ -58,6 +58,18 @@
 #define SYS_CLIP_SET      38
 #define SYS_CLIP_GET      39
 
+/* Sound. A program asks what the hardware is and then hands over frames of
+   signed sixteen bit samples, interleaved, at the rate it was told. */
+#define SYS_SOUND_INFO    40
+#define SYS_SOUND_WRITE   41
+
+typedef struct {
+    u32 present;
+    u32 rate;
+    u32 channels;
+    u32 reserved;
+} sound_info_t;
+
 /* What SYS_TASKS reports about one task. */
 typedef struct {
     u32  pid;

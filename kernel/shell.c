@@ -26,6 +26,7 @@
 #include "fb.h"
 #include "elf.h"
 #include "usbdisk.h"
+#include "sound.h"
 #include "io.h"
 #include "welcome.h"
 #include "serial.h"
@@ -374,6 +375,21 @@ static void execute(char *buf) {
         volatile int z = 0;
         volatile int x = 1 / z;
         (void)x;
+    } else if (!strcmp(c, "beep")) {
+        /* A note, which is the smallest thing that proves the whole
+           path works: a converter, a pin, a running stream, and a
+           buffer refilled in time. */
+        if (!sound_present()) { kprintf("no sound device\n"); return; }
+
+        u32 hz = argc > 1 ? num(argv[1]) : 440;
+        u32 ms = argc > 2 ? num(argv[2]) : 400;
+        if (hz < 20) hz = 20;
+        if (hz > 20000) hz = 20000;      /* past hearing either way */
+        if (ms > 10000) ms = 10000;
+
+        kprintf("%d Hz for %d ms\n", hz, ms);
+        sound_tone(hz, ms);
+        kprintf("done\n");
     } else if (!strcmp(c, "stick")) {
         /* The USB disk, which is not the one the system booted from and so
            is not what `disk` reports on.

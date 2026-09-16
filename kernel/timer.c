@@ -2,6 +2,7 @@
    preempts on. */
 #include "timer.h"
 #include "ps2.h"
+#include "sound.h"
 #include "idt.h"
 #include "pic.h"
 #include "io.h"
@@ -25,6 +26,10 @@ static void on_tick(registers_t *r) {
        controller delivering anything further. Before this, that was a
        keyboard and a mouse dead until the machine was power cycled. */
     ps2_poll_from_timer();
+
+    /* And the sound buffer, which plays on a loop and would otherwise repeat
+       whatever was last written to it forever. */
+    sound_poll();
 }
 
 void timer_init(u32 hz) {
