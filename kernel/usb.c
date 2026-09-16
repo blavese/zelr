@@ -27,6 +27,8 @@
 #include "printf.h"
 #include "string.h"
 #include "timer.h"
+#include "sched.h"
+#include "io.h"
 #include "blackbox.h"
 
 /* --- the requests ---------------------------------------------------------- */
@@ -41,6 +43,7 @@
 #define DESC_ENDPOINT   5
 
 #define CLASS_HID       3
+#define CLASS_HUB       9
 #define SUB_BOOT        1
 #define PROTO_KEYBOARD  1
 #define PROTO_MOUSE     2
@@ -94,13 +97,14 @@ typedef struct {
     bool keyboard;              /* otherwise a mouse */
     u8   slot;
     u8   dci;
+    u32  root;                  /* the root port its tree hangs off */
     u16  length;                /* how much of the report to expect */
     u8  *buf;                   /* the controller writes into this */
     u8   last[REPORT_MAX];      /* the previous one, to tell presses apart */
 } device_t;
 
 static device_t devices[MAX_DEVICES];
-static u32 nkeyboards, nmice;
+static u32 nkeyboards, nmice, nhubs;
 static volatile u32 nreports;
 static bool started;
 static char description[128];
@@ -252,31 +256,135 @@ static void on_report(u8 slot, u8 dci, u32 residual) {
 static u8 *bounce;
 #define BOUNCE_MAX 512
 
-static bool get_descriptor(u8 slot, u8 type, u8 index, void *out, u16 len) {
-    if (!bounce || len > BOUNCE_MAX) return false;
-    memset(bounce, 0, len);
-    usb_setup_t s = { 0x80, REQ_GET_DESCRIPTOR,
-                      (u16)((u16)type << 8 | index), 0, len };
-    if (!xhci_control(slot, &s, bounce, len)) return false;
-    memcpy(out, bounce, len);
+/* Every request in this file goes through here: the eight bytes saying what
+   is being asked, and a buffer for whatever comes back. */
+static bool request(u8 slot, u8 type, u8 req, u16 value, u16 index,
+                    void *out, u16 len) {
+    if (len > BOUNCE_MAX) return false;
+    if (len && !bounce) return false;
+    if (len) memset(bounce, 0, len);
+    usb_setup_t s = { type, req, value, index, len };
+    if (!xhci_control(slot, &s, len ? bounce : 0, len)) return false;
+    if (len && out) memcpy(out, bounce, len);
     return true;
 }
 
+static bool get_descriptor(u8 slot, u8 type, u8 index, void *out, u16 len) {
+    return request(slot, 0x80, REQ_GET_DESCRIPTOR,
+                   (u16)((u16)type << 8 | index), 0, out, len);
+}
+
+/* Waiting, in two very different worlds.
+ *
+ * Enumeration runs twice: once from main, before interrupts have ever been
+ * switched on, and again from a task every time something is plugged in.
+ * task_sleep falls back to halting until a timer interrupt when there is no
+ * task, and in the first of those worlds that interrupt cannot arrive, so
+ * the machine would stop there and never finish booting. A write to a port
+ * that goes nowhere takes about a microsecond and works in both. */
+static void wait_ms(u32 ms) {
+    if (task_current()) { task_sleep(ms); return; }
+    while (ms--) for (u32 i = 0; i < 1000; i++) io_wait();
+}
+
 static bool set_configuration(u8 slot, u8 value) {
-    usb_setup_t s = { 0x00, REQ_SET_CONFIG, value, 0, 0 };
-    return xhci_control(slot, &s, 0, 0);
+    return request(slot, 0x00, REQ_SET_CONFIG, value, 0, 0, 0);
 }
 
 static bool set_boot_protocol(u8 slot, u8 interface) {
-    usb_setup_t s = { 0x21, REQ_SET_PROTOCOL, 0, interface, 0 };
-    return xhci_control(slot, &s, 0, 0);
+    return request(slot, 0x21, REQ_SET_PROTOCOL, 0, interface, 0, 0);
 }
 
 static bool set_idle(u8 slot, u8 interface) {
     /* Zero means report only when something changes. Without it a keyboard
        with a key held down repeats it as fast as its interval allows. */
-    usb_setup_t s = { 0x21, REQ_SET_IDLE, 0, interface, 0 };
-    return xhci_control(slot, &s, 0, 0);
+    return request(slot, 0x21, REQ_SET_IDLE, 0, interface, 0, 0);
+}
+
+/* --- hubs --------------------------------------------------------------- */
+/*
+ * A hub is an ordinary USB device that happens to have ports. It is asked
+ * about itself the same way as anything else, and then each of its ports is
+ * powered, looked at and reset, which is exactly what the controller does for
+ * its own root ports. What comes out the other side is another device to
+ * enumerate, and sometimes another hub.
+ *
+ * This matters more on a laptop than it looks. A built-in keyboard and
+ * touchpad are often behind a hub that is part of the chipset rather than
+ * plugged into a port anybody can see, so a driver that walks only root ports
+ * finds an empty machine and reports, correctly and uselessly, that there is
+ * no keyboard.
+ */
+#define DESC_HUB        0x29
+#define DESC_HUB_SS     0x2A
+
+typedef struct {
+    u8  length;
+    u8  type;
+    u8  ports;
+    u16 characteristics;
+    u8  power_on_delay;         /* in units of 2 ms */
+    u8  current_ma;
+} __attribute__((packed)) hub_desc_t;
+
+/* What a port says about itself. */
+#define PS_CONNECTED    0x0001
+#define PS_ENABLED      0x0002
+#define PS_RESETTING    0x0010
+#define PS_LOW_SPEED    0x0200
+#define PS_HIGH_SPEED   0x0400
+
+/* And what can be asked of it. */
+#define FEAT_PORT_RESET         4
+#define FEAT_PORT_POWER         8
+#define FEAT_C_PORT_CONNECTION  16
+#define FEAT_C_PORT_RESET       20
+
+static bool hub_descriptor(u8 slot, bool super, hub_desc_t *out) {
+    u16 type = super ? DESC_HUB_SS : DESC_HUB;
+    return request(slot, 0xA0, REQ_GET_DESCRIPTOR, (u16)(type << 8), 0,
+                   out, sizeof *out);
+}
+
+static bool port_feature(u8 slot, u8 port, u16 feature, bool set) {
+    return request(slot, 0x23, set ? 3 : 1, feature, port, 0, 0);
+}
+
+static bool port_status(u8 slot, u8 port, u16 *status, u16 *change) {
+    u8 b[4] = { 0, 0, 0, 0 };
+    if (!request(slot, 0xA3, 0, 0, port, b, 4)) return false;
+    *status = (u16)(b[0] | (b[1] << 8));
+    *change = (u16)(b[2] | (b[3] << 8));
+    return true;
+}
+
+/* Brings one downstream port up, and says what speed answered. */
+static xhci_speed_t reset_hub_port(u8 slot, u8 port) {
+    u16 status = 0, change = 0;
+    if (!port_status(slot, port, &status, &change)) return XHCI_SPEED_NONE;
+    if (!(status & PS_CONNECTED)) return XHCI_SPEED_NONE;
+
+    if (!port_feature(slot, port, FEAT_PORT_RESET, true))
+        return XHCI_SPEED_NONE;
+
+    /* A reset takes tens of milliseconds and the hub says when it is done by
+       dropping the bit. Twenty tries at ten milliseconds is comfortably more
+       than the specification allows it to take. */
+    for (int i = 0; i < 20; i++) {
+        wait_ms(10);
+        if (!port_status(slot, port, &status, &change)) return XHCI_SPEED_NONE;
+        if (!(status & PS_RESETTING) && (status & PS_ENABLED)) break;
+    }
+    if (!(status & PS_ENABLED)) return XHCI_SPEED_NONE;
+
+    /* Acknowledged, or the hub keeps reporting the same change forever and
+       the port reads as though it had only just been plugged in. */
+    port_feature(slot, port, FEAT_C_PORT_RESET, false);
+    port_feature(slot, port, FEAT_C_PORT_CONNECTION, false);
+
+    if (status & PS_LOW_SPEED)  return XHCI_SPEED_LOW;
+    if (status & PS_HIGH_SPEED) return XHCI_SPEED_HIGH;
+    return XHCI_SPEED_FULL;
 }
 
 /* --- setting one up ------------------------------------------------------------ */
@@ -292,7 +400,8 @@ static device_t *free_device(void) {
    stepping by that length and never by the size of the structure being
    looked for: there are records in here this file has never heard of and
    stepping over them correctly is the whole trick. */
-static bool claim_interface(u8 slot, const u8 *cfg, u16 total) {
+static bool claim_interface(u8 slot, u32 root_port,
+                            const u8 *cfg, u16 total) {
     const interface_desc_t *want = 0;
     u16 at = 0;
 
@@ -333,6 +442,7 @@ static bool claim_interface(u8 slot, const u8 *cfg, u16 total) {
                 d->keyboard = (want->protocol == PROTO_KEYBOARD);
                 d->slot = slot;
                 d->dci = dci;
+                d->root = root_port;
                 d->length = mps < REPORT_MAX ? mps : REPORT_MAX;
 
                 set_boot_protocol(slot, want->number);
@@ -350,8 +460,59 @@ static bool claim_interface(u8 slot, const u8 *cfg, u16 total) {
     return false;
 }
 
-static void setup_port(u32 port) {
-    u8 slot = xhci_attach(port);
+/* How far down a chain of hubs to follow. USB allows five tiers below the
+   root, which is also as many as the route string has room for: four bits
+   each and twenty bits of it. */
+#define MAX_TIER 5
+
+static void enumerate(const xhci_where_t *where, u8 tier);
+
+/* Everything plugged into one hub, and everything plugged into those. */
+static void walk_hub(u8 slot, const xhci_where_t *hub, u8 tier,
+                     xhci_speed_t hub_speed) {
+    if (tier >= MAX_TIER) return;
+
+    hub_desc_t hd;
+    memset(&hd, 0, sizeof hd);
+    if (!hub_descriptor(slot, hub_speed == XHCI_SPEED_SUPER, &hd)) return;
+    if (!hd.ports || hd.ports > 15) return;
+
+    /* The controller will not route anything to a device behind this until
+       it knows it is a hub and how many ports it has. */
+    u8 think_time = (u8)((hd.characteristics >> 5) & 3);
+    if (!xhci_mark_hub(slot, hd.ports, think_time, false)) return;
+
+    for (u8 p = 1; p <= hd.ports; p++)
+        port_feature(slot, p, FEAT_PORT_POWER, true);
+
+    /* The hub says how long its ports take to come up, in units of two
+       milliseconds, and a port read before then reads as empty. */
+    wait_ms((u32)hd.power_on_delay * 2u + 20u);
+
+    for (u8 p = 1; p <= hd.ports; p++) {
+        xhci_speed_t speed = reset_hub_port(slot, p);
+        if (speed == XHCI_SPEED_NONE) continue;
+
+        xhci_where_t child = *hub;
+        child.speed = speed;
+        /* The path, one nibble per tier, this hub's port in this tier's. */
+        child.route = hub->route | ((u32)(p & 0xF) << (4 * tier));
+
+        /* A slow device behind a fast hub is reached by the controller
+           talking to the hub at the fast speed and letting the hub do the
+           slow part. It has to be told which hub, and which of its ports. */
+        if (hub_speed == XHCI_SPEED_HIGH
+            && (speed == XHCI_SPEED_LOW || speed == XHCI_SPEED_FULL)) {
+            child.tt_slot = slot;
+            child.tt_port = p;
+        }
+        enumerate(&child, (u8)(tier + 1));
+    }
+}
+
+/* One device, wherever it is in the tree. */
+static void enumerate(const xhci_where_t *where, u8 tier) {
+    u8 slot = xhci_attach(where);
     if (!slot) return;
 
     /* Eight bytes first, because until the device has said how big its
@@ -370,18 +531,97 @@ static void setup_port(u32 port) {
     memset(&head, 0, sizeof head);
     if (!get_descriptor(slot, DESC_CONFIG, 0, &head, sizeof head)) return;
     u16 total = head.total_length;
-    if (!total || total > 512) return;
+    if (!total || total > BOUNCE_MAX) return;
 
     u8 *cfg = (u8 *)kmalloc(total);
     if (!cfg) return;
     memset(cfg, 0, total);
     if (get_descriptor(slot, DESC_CONFIG, 0, cfg, total)
-        && set_configuration(slot, head.value))
-        claim_interface(slot, cfg, total);
+        && set_configuration(slot, head.value)) {
+        /* A hub says so in its device descriptor rather than in one of its
+           interfaces, which is the one place a class code is about the whole
+           device rather than about one thing it does. */
+        if (dev.device_class == CLASS_HUB) {
+            nhubs++;
+            bb_log("usb hub on slot %d, tier %d", slot, tier);
+            walk_hub(slot, where, tier, where->speed);
+        } else {
+            claim_interface(slot, where->root_port, cfg, total);
+        }
+    }
     kfree(cfg);
 }
 
+static void setup_port(u32 port) {
+    if (!xhci_reset_root_port(port)) return;
+    xhci_where_t w = { port, 0, xhci_speed(port), 0, 0 };
+    enumerate(&w, 0);
+}
+
+/* --- something was plugged in, or pulled out -------------------------------------- */
+/*
+ * The controller reports a port changing on its event ring, and that ring is
+ * drained inside an interrupt handler, where none of the work can be done:
+ * enumerating a device is a series of control transfers, each of which waits
+ * for the controller to answer. So the handler records that something
+ * happened and this task does the work.
+ *
+ * Only root ports are watched. A hub reports changes on its own interrupt
+ * endpoint, and following that would mean keeping every hub's endpoint
+ * listening and decoding its bitmap; what is here notices anything plugged
+ * into the machine itself and finds whatever is behind it at that point,
+ * which is the case that matters on a laptop.
+ */
+static bool claimed[XHCI_MAX_PORTS];
+static void describe(void);
+
+/* Drops everything that was hanging off a root port that is now empty. */
+static void forget_root(u32 port) {
+    for (u32 i = 0; i < MAX_DEVICES; i++) {
+        device_t *d = &devices[i];
+        if (!d->used || d->root != port) continue;
+        if (d->keyboard) { if (nkeyboards) nkeyboards--; }
+        else             { if (nmice) nmice--; }
+        xhci_detach(d->slot);
+        d->used = false;
+        bb_log("usb device on port %d unplugged", port);
+    }
+}
+
+static void rescan(void) {
+    u32 ports = xhci_ports();
+    for (u32 p = 0; p < ports && p < XHCI_MAX_PORTS; p++) {
+        bool there = xhci_port_connected(p);
+        if (there && !claimed[p]) {
+            claimed[p] = true;
+            setup_port(p);
+            describe();
+        } else if (!there && claimed[p]) {
+            claimed[p] = false;
+            forget_root(p);
+            describe();
+        }
+    }
+}
+
+static void service(void) {
+    for (;;) {
+        task_sleep(300);
+        if (xhci_took_port_change()) rescan();
+    }
+}
+
+void usb_start_service(void) {
+    if (started) task_create("usb", service);
+}
+
 /* --- the outside ---------------------------------------------------------------- */
+static void describe(void) {
+    kformat(description, sizeof description,
+            "%s, %d hub(s), %d keyboard(s), %d mouse",
+            xhci_describe(), nhubs, nkeyboards, nmice);
+}
+
 void usb_init(void) {
     bounce = (u8 *)kmalloc(BOUNCE_MAX);
     if (!bounce) return;
@@ -392,12 +632,14 @@ void usb_init(void) {
     xhci_on_report(on_report);
 
     u32 ports = xhci_ports();
-    for (u32 p = 0; p < ports; p++)
-        if (xhci_port_connected(p)) setup_port(p);
+    for (u32 p = 0; p < ports; p++) {
+        if (!xhci_port_connected(p)) continue;
+        if (p < XHCI_MAX_PORTS) claimed[p] = true;
+        setup_port(p);
+    }
 
     started = true;
-    kformat(description, sizeof description, "%s, %d keyboard(s), %d mouse",
-              xhci_describe(), nkeyboards, nmice);
+    describe();
 }
 
 void usb_poll(void) {
@@ -407,6 +649,7 @@ void usb_poll(void) {
 bool usb_present(void) { return started; }
 u32  usb_keyboards(void) { return nkeyboards; }
 u32  usb_mice(void) { return nmice; }
+u32  usb_hubs(void) { return nhubs; }
 u32  usb_reports(void) { return nreports; }
 const char *usb_describe(void) {
     return description[0] ? description : "not started";

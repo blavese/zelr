@@ -112,11 +112,17 @@ keyboard or mouse plugged into a USB port is found at boot, addressed, and
 read; both feed the same buffer the PS/2 drivers fill, so nothing above the
 driver knows which one was typed on.
 
-What is not there is a hub driver, so a device plugged into a hub rather than
-straight into the machine is not found, and nothing but keyboards and mice is
-claimed: a USB stick enumerates and is then left alone. Devices already
-plugged in at boot are the ones that work, because nothing watches for a port
-changing afterwards.
+Hubs are walked as well, down the five tiers USB allows, so a keyboard behind
+one is found the same way as a keyboard on a port of the machine itself. That
+matters more than it sounds on a laptop, where the built-in keyboard is often
+behind a hub inside the chipset rather than on a port anybody can see.
+Something plugged in after boot is noticed and enumerated from a kernel task,
+and pulling it out is noticed too.
+
+What is not there is any other class, so a USB stick enumerates and is then
+left alone. Only the machine's own ports are watched for a change: plug a
+keyboard into a hub that is already connected and it is not found until the
+next boot.
 
 **Storage** is NVMe, AHCI and ATA. NVMe is what a laptop bought this decade
 has instead of the other two, and it is reached the way the specification
@@ -576,11 +582,11 @@ large range:
   not forward ICMP to the wider internet without elevated privileges, so
   pinging an outside address times out even though DNS and TCP to that same
   address work.
-- **USB stops at keyboards and mice.** There is an xHCI driver and the HID
-  boot protocol, which is what a laptop needs to be typed on at all. There is
-  no hub driver, so only what is plugged straight into the machine is found;
-  nothing is noticed after boot, because no port is watched for a change; and
-  no other class is claimed, so a USB stick is enumerated and then ignored.
+- **USB stops at keyboards and mice.** There is an xHCI driver, the HID boot
+  protocol and a hub driver, which is what a laptop needs to be typed on at
+  all. No other class is claimed, so a USB stick is enumerated and then
+  ignored. Only the machine's own ports are watched for a change, so
+  something plugged into a hub after boot is not found until the next one.
   The controller is polled on the timer tick rather than wired to an
   interrupt, which costs up to ten milliseconds of latency on a key press.
 - **No FAT long filenames.** A file saved as somethinglong.txt comes back as

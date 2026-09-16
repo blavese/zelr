@@ -27,6 +27,26 @@ USB = ["-device", "qemu-xhci,id=xhci",
        "-device", "usb-kbd,bus=xhci.0",
        "-device", "usb-mouse,bus=xhci.0"]
 
+# The same two devices, one hub further away. On qemu-xhci the first four
+# ports are the USB 2 ones and the last four are USB 3 only, and a 2.0 hub
+# has to go on a 2.0 port, so the hub is on port 1 and 1.1 and 1.2 are its
+# own ports.
+#
+# Nothing else in this project covers this, and it is the shape a laptop
+# actually has: the built-in keyboard is very often behind a hub inside the
+# chipset rather than on a port of the controller itself. A driver that walks
+# only root ports finds nothing on a machine like this and is not obviously
+# broken until somebody tries it on hardware.
+HUB = ["-device", "qemu-xhci,id=xhci",
+       "-device", "usb-hub,bus=xhci.0,port=1",
+       "-device", "usb-kbd,bus=xhci.0,port=1.1",
+       "-device", "usb-mouse,bus=xhci.0,port=1.2"]
+
+# A machine that starts with a mouse and no keyboard on USB at all, so that
+# a keyboard turning up later is unambiguous.
+HOTPLUG = ["-device", "qemu-xhci,id=xhci",
+           "-device", "usb-mouse,bus=xhci.0,id=mouse"]
+
 NAMED = {" ": "spc", "\n": "ret", "/": "slash", ".": "dot", "-": "minus"}
 
 
@@ -130,7 +150,86 @@ def main():
     finally:
         vm.stop()
 
+    check_behind_a_hub(c)
+    check_hot_plug(c)
     return c.report()
+
+
+def check_behind_a_hub(c):
+    """The same machine again, with everything one hub further away."""
+    vm = Guest(os.path.join(ROOT, "usbhub.%d.img" % os.getpid()),
+               memory=128, machine="q35", extra=HUB)
+    try:
+        vm.wait_boot()
+        boot = vm.serial()
+        c.add("a hub is found and walked", "1 hub(s)" in boot)
+        c.add("and the keyboard and mouse behind it",
+              "1 keyboard(s), 1 mouse" in boot)
+
+        # Typing is the part that proves the route string and the transaction
+        # translator were right, rather than only that a descriptor was read.
+        mon = vm.monitor()
+        marks = vm.prompts()
+        keys(mon, "uname\n")
+        typed = vm.wait_prompt(marks + 1, timeout=30)
+        c.add("a key on a keyboard behind a hub reaches the shell", typed)
+        c.add("and the command it typed ran", "x86_64" in vm.serial())
+    finally:
+        vm.stop()
+
+def devices(vm, text, timeout=25):
+    """Waits for the device list to say something.
+
+    The task that watches for a port changing polls, so none of this is
+    instant, and asking once and calling it a failure would be a test of the
+    timing rather than of the driver."""
+    end = time.time() + timeout
+    while True:
+        if text in vm.run("cat /sys/devices"):
+            return True
+        if time.time() > end:
+            return False
+        time.sleep(1)
+
+
+def check_hot_plug(c):
+    """Something plugged in while the machine is already running.
+
+    Enumeration at boot happens in the quietest conditions the machine ever
+    has: interrupts are still off, nothing else is running, and the whole
+    thing is one straight line of code. This is the same work done from a
+    task, with the scheduler going and interrupts on, which is the only way
+    it ever happens on a machine somebody is using. It is also the one path
+    that cannot be reached by starting QEMU with the device already there,
+    so nothing else in this file covers it.
+    """
+    vm = Guest(os.path.join(ROOT, "usbhot.%d.img" % os.getpid()),
+               memory=128, machine="q35", extra=HOTPLUG)
+    try:
+        vm.wait_boot()
+        c.add("a machine can start with no usb keyboard",
+              "0 keyboard(s)" in vm.run("cat /sys/devices"))
+
+        mon = vm.monitor()
+        mon.send("device_add usb-kbd,bus=xhci.0,id=latecomer")
+        plugged = devices(vm, "1 keyboard(s)")
+        c.add("a keyboard plugged in later is noticed", plugged)
+
+        # Noticing it is not the same as being able to use it: the slot has
+        # to have been addressed, configured and left listening.
+        marks = vm.prompts()
+        keys(mon, "uname" + chr(10))
+        typed = vm.wait_prompt(marks + 1, timeout=30)
+        c.add("and it can be typed on", typed and "x86_64" in vm.serial())
+
+        # Only says anything if there was one there to pull out. Without
+        # that, a machine which never noticed the keyboard at all still
+        # reads as zero keyboards and this passes for the wrong reason.
+        mon.send("device_del latecomer")
+        c.add("and pulling it out is noticed too",
+              plugged and devices(vm, "0 keyboard(s)"))
+    finally:
+        vm.stop()
 
 
 if __name__ == "__main__":
