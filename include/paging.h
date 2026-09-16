@@ -6,6 +6,9 @@
 #define PTE_RW       0x002
 #define PTE_USER     0x004
 #define PTE_NOCACHE  0x018      /* write-through and cache-disable together */
+#define PTE_WC       0x080      /* in a 4 KiB entry this is the PAT bit, and
+                                   the slot it selects is set to write
+                                   combining by paging_init_pat */
 #define PTE_HUGE     0x080      /* this entry is the page, not a table */
 
 /* The physical address inside an entry. The top bits are flags, and bit 63
@@ -85,3 +88,13 @@ u64  paging_kernel_directory(void);
 
 /* Maps a device's registers where they already are, uncached. */
 void *paging_map_device(u64 phys, u64 bytes);
+
+/* The same, but write combining rather than uncached. For a framebuffer, and
+   for nothing else: it is the right type only where writes are many, ordering
+   between them does not matter, and nothing is ever read back. */
+void *paging_map_wc(u64 phys, u64 bytes);
+
+/* Puts a write combining entry in the page attribute table. Called once,
+   before anything is mapped with PTE_WC. */
+void paging_init_pat(void);
+bool paging_wc_ready(void);

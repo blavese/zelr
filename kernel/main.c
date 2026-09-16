@@ -194,6 +194,8 @@ void kmain(handoff_t *h) {
 
     bb_mark("paging");
     paging_init(h);
+    /* Before anything is mapped, because it decides what a mapping means. */
+    paging_init_pat();
     kprintf("  paging  enabled, %d MiB mapped\n",
             (u32)(paging_mapped_bytes() / (1024 * 1024)));
     bb_mark("heap");
@@ -235,7 +237,12 @@ void kmain(handoff_t *h) {
         vga_set_color(VGA_LGREY, VGA_BLACK);
         kprintf("  video   %dx%d 32bpp, %dx%d text\n",
                 fb_width(), fb_height(), fbcon_cols(), fbcon_rows());
-        bb_log("video %dx%d 32bpp, %s", fb_width(), fb_height(), fb_backend());
+        bb_log("video %dx%d 32bpp, %s, full flush %d kcycles, %s",
+               fb_width(), fb_height(), fb_backend(),
+               (u32)(fb_flush_cycles() / 1000),
+               paging_wc_ready() ? "write combining" : "uncached");
+        bb_log("video %s", fb_double_buffered()
+               ? "double buffered" : "NO BACK BUFFER, drawing straight at the screen");
     } else {
         kprintf("  video   no adapter found, vga text mode\n");
         bb_log("video none: no vbe and no vmware adapter, vga text only");

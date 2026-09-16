@@ -32,6 +32,25 @@ static inline bool interrupts_enabled(void) {
     return (flags & 0x200) != 0;
 }
 
+static inline u64 rdmsr(u32 msr) {
+    u32 lo, hi;
+    __asm__ volatile ("rdmsr" : "=a"(lo), "=d"(hi) : "c"(msr));
+    return ((u64)hi << 32) | lo;
+}
+static inline void wrmsr(u32 msr, u64 value) {
+    __asm__ volatile ("wrmsr" :: "c"(msr), "a"((u32)value),
+                                 "d"((u32)(value >> 32)));
+}
+static inline void cpuid_read(u32 leaf, u32 *a, u32 *b, u32 *c, u32 *d) {
+    __asm__ volatile ("cpuid" : "=a"(*a), "=b"(*b), "=c"(*c), "=d"(*d)
+                              : "a"(leaf), "c"(0));
+}
+static inline u64 rdtsc(void) {
+    u32 lo, hi;
+    __asm__ volatile ("rdtsc" : "=a"(lo), "=d"(hi));
+    return ((u64)hi << 32) | lo;
+}
+
 static inline void cli(void) { __asm__ volatile ("cli"); }
 static inline void sti(void) { __asm__ volatile ("sti"); }
 static inline void hlt(void) { __asm__ volatile ("hlt"); }

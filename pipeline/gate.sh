@@ -8,10 +8,10 @@
 #
 #   gate.sh fast     build, the kernel's checks on two different machines,
 #                    the serial shell test, the boot log across a reboot  ~4 min
-#   gate.sh full     the above, plus the disks (gpt, fat32, nvme), all four
-#                    boot paths, the three harnesses that drive the desktop
-#                    and the keyboard, and a machine with a USB keyboard and
-#                    mouse on it                                         ~17 min
+#   gate.sh screen   the above, plus everything that drives the desktop, the
+#                    terminal, the windows, USB and the input path    ~5 min
+#   gate.sh full     the above, plus the disks (gpt, fat32, nvme) and all four
+#                    boot paths                                       ~17 min
 #
 # Steps that do not share state run at once. Each boots its own machine and
 # builds its own disk, named after its own process id, so the only thing they
@@ -21,11 +21,20 @@
 # than a thorough one that gets skipped. full runs before anything reaches
 # main, because the boot paths and the window manager are exactly where this
 # project's real bugs have been.
+#
+# screen exists because four of full's steps take six minutes each and all
+# four are about disks and boot sectors. A change to the keyboard, the
+# compositor or the window manager cannot reach any of them, and paying
+# seventeen minutes to be told so is how a gate stops being run.
 
 set -uo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
 MODE="${1:-fast}"
+case "$MODE" in
+  fast|screen|full) ;;
+  *) echo "gate.sh [fast|screen|full]"; exit 2 ;;
+esac
 QEMU="${QEMU:-/c/Program Files/qemu/qemu-system-x86_64.exe}"
 [ -x "$QEMU" ] || QEMU="$(command -v qemu-system-x86_64 || echo "$QEMU")"
 
@@ -298,14 +307,18 @@ if [ "$MODE" = "full" ]; then
   par_start "the same checks again, on an nvme disk" selftest_nvme
 
   par_wait
+fi
 
+if [ "$MODE" = "full" ]; then
   # --- every way the machine can be started -------------------------------
   #
   # BIOS and UEFI, disc and stick. This is where the bugs that only appear on
   # a stricter machine than QEMU have all been.
   boottest() { keep timeout 900 bash tools/iso_test.sh; }
   par_start "all four boot paths" boottest
+fi
 
+if [ "$MODE" = "screen" ] || [ "$MODE" = "full" ]; then
   # --- the parts only a screenshot can check ------------------------------
   shottest() { keep timeout 600 python tools/shotcheck.py; }
   par_start "the desktop reaches the screen" shottest

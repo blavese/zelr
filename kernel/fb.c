@@ -9,6 +9,7 @@
  * Reading from video memory over PCI is slow enough that compositing directly
  * in it is visibly sluggish. */
 #include "fb.h"
+#include "io.h"
 #include "svga.h"
 #include "io.h"
 #include "pci.h"
@@ -48,6 +49,12 @@ static bool   active = false;
    other one here does, so the flush has to know which it is driving. */
 static bool   via_svga = false;
 static bool   adopted  = false;
+
+/* How long it takes to put the whole back buffer on the screen, measured on
+   the one this does at startup so it costs nothing to know. In cycles,
+   because the timer does not exist yet when video is set up, and because
+   what is wanted from it is a comparison rather than a duration. */
+static u64    flush_cycles;
 static u32    width, height, pitch;
 static u8    *lfb;          /* mapped video memory */
 static u8    *back;         /* back buffer we actually draw into */
@@ -103,7 +110,10 @@ bool fb_adopt(u64 base, u32 w, u32 h, u32 pitch_pixels) {
     pitch = pitch_pixels * 4;
 
     u64 bytes = (u64)pitch * height;
-    if (!paging_map_device(base, bytes)) return false;
+    /* Write combining rather than uncached. The whole screen is copied
+       through this aperture every time anything changes, and uncached made
+       that copy most of what a frame cost. */
+    if (!paging_map_wc(base, bytes)) return false;
     lfb = (u8 *)base;
 
     take_back_buffer(bytes);
@@ -232,7 +242,19 @@ void fb_frame(u32 x, u32 y, u32 w, u32 h, u32 rgb) {
 
 void fb_flush(void) {
     if (!active) return;
-    if (back != lfb) memcpy(lfb, back, pitch * height);
+    if (back != lfb) {
+        /* The first one is timed, whichever path set the mode up. One rdtsc
+           against a copy this size is not worth measuring. */
+        u64 t0 = rdtsc();
+        memcpy(lfb, back, (u64)pitch * height);
+
+        /* Write combining is allowed to hold the last partial buffer back
+           and to reorder what it sends. Neither matters to a screen except
+           at the end of a frame, where a few pixels arriving late is a few
+           pixels that are wrong until something else happens to push them. */
+        __asm__ volatile ("sfence" ::: "memory");
+        if (!flush_cycles) flush_cycles = rdtsc() - t0;
+    }
     if (via_svga) svga_update(0, 0, width, height);
 }
 
@@ -241,10 +263,16 @@ void fb_flush_rect(u32 x, u32 y, u32 w, u32 h) {
     if (x >= width || y >= height) return;
     if (x + w > width)  w = width - x;
     if (y + h > height) h = height - y;
-    if (back != lfb)
+    if (back != lfb) {
         for (u32 j = 0; j < h; j++) {
             u32 off = (y + j) * pitch + x * 4;
             memcpy(lfb + off, back + off, w * 4);
         }
+        __asm__ volatile ("sfence" ::: "memory");
+    }
     if (via_svga) svga_update(x, y, w, h);
 }
+
+u64 fb_flush_cycles(void) { return flush_cycles; }
+
+bool fb_double_buffered(void) { return active && back != lfb; }
