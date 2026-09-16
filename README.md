@@ -119,10 +119,15 @@ behind a hub inside the chipset rather than on a port anybody can see.
 Something plugged in after boot is noticed and enumerated from a kernel task,
 and pulling it out is noticed too.
 
-What is not there is any other class, so a USB stick enumerates and is then
-left alone. Only the machine's own ports are watched for a change: plug a
-keyboard into a hub that is already connected and it is not found until the
-next boot.
+A USB stick works too. Mass storage is SCSI posted through two bulk
+endpoints, so a stick is enumerated, asked how big it is, and read and
+written a sector at a time. It is not a disk the filesystem can mount yet,
+because the block layer still holds exactly one disk picked at boot, so for
+now it is reached through the shell rather than through a path.
+
+What is not there is any other class. Only the machine's own ports are
+watched for a change: plug a keyboard into a hub that is already connected
+and it is not found until the next boot.
 
 **Storage** is NVMe, AHCI and ATA. NVMe is what a laptop bought this decade
 has instead of the other two, and it is reached the way the specification
@@ -227,7 +232,7 @@ instead.
     python tools/shotcheck.py   use the desktop and look at the screen
     python tools/termcheck.py   type into the terminal and check the result
     python tools/deskcheck.py   move the windows and check where they went
-    python tools/usbcheck.py    boot with a usb keyboard and mouse, and use them
+    python tools/usbcheck.py    boot with usb keyboard, mouse and stick, use them
 
 The Windows launcher lives in `launcher/` and is built with
 `dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true`.
@@ -582,10 +587,12 @@ large range:
   not forward ICMP to the wider internet without elevated privileges, so
   pinging an outside address times out even though DNS and TCP to that same
   address work.
-- **USB stops at keyboards and mice.** There is an xHCI driver, the HID boot
-  protocol and a hub driver, which is what a laptop needs to be typed on at
-  all. No other class is claimed, so a USB stick is enumerated and then
-  ignored. Only the machine's own ports are watched for a change, so
+- **A USB stick is not a mountable disk.** It can be read and written by
+  sector, and the shell's `stick` command does exactly that, but the block
+  layer still holds one disk chosen at boot and has no handle to say which,
+  so FAT cannot be pointed at a stick yet. Beyond keyboards, mice, hubs and
+  mass storage no other class is claimed.
+  Only the machine's own ports are watched for a change, so
   something plugged into a hub after boot is not found until the next one.
   The controller is polled on the timer tick rather than wired to an
   interrupt, which costs up to ten milliseconds of latency on a key press.
@@ -660,6 +667,7 @@ orders of magnitude away from Linux, which is roughly 30 million lines.
     kernel/keyboard.c  ps/2 keyboard
     kernel/xhci.c      the usb host controller every laptop has
     kernel/usb.c       enumeration, and the hid boot protocol
+    kernel/usbdisk.c   usb sticks, which are scsi through bulk endpoints
     kernel/timer.c     programmable interval timer
     kernel/shell.c     the shell
     kernel/welcome.c   the first-run text and the guided tour
