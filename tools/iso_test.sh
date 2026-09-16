@@ -44,6 +44,10 @@ run() {
   # Type at it, so the check proves the shell is really running rather than
   # that the banner happened to be printed.
   (sleep 9
+   # Booted from an image, so there is no command line to ask for the
+   # console: the desktop is up, and escape is what leaves it. That makes
+   # the prompt this greps for evidence of both.
+   printf '\033'; sleep 3
    s="write booted.txt $what"
    for (( i=0; i<${#s}; i++ )); do printf '%s' "${s:$i:1}"; sleep 0.05; done
    printf '\n'; sleep 1.5

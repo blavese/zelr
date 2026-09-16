@@ -30,7 +30,13 @@ static const struct {
     { "lime",   RGB(0x9A, 0xD1, 0x4A), RGB(0x14, 0x1A, 0x14), RGB(0x1D, 0x25, 0x1D) },
 };
 
-bool wallpaper_moves(wallpaper_t w) { return w == WALLPAPER_STARS; }
+/* Which ones have to be redrawn to look right. Everything else is painted
+   once and left alone, which costs nothing at all to have on. */
+bool wallpaper_moves(wallpaper_t w) {
+    return w == WALLPAPER_STARS  || w == WALLPAPER_WAVES
+        || w == WALLPAPER_AURORA || w == WALLPAPER_RAIN
+        || w == WALLPAPER_ORBS   || w == WALLPAPER_PULSE;
+}
 
 const char *theme_preset_name(int i) {
     if (i < 0 || i >= THEME_PRESETS) return "";
@@ -117,6 +123,9 @@ void theme_init(void) {
     current.shadows = true;
     current.animate = true;
     current.quirks = true;
+    current.autodesktop = true;
+    current.want_w = 0;
+    current.want_h = 0;
     derive();
     theme_reload();
 }
@@ -159,6 +168,9 @@ static void apply(const char *key, const char *value) {
     else if (!strcmp(key, "shadows")) current.shadows = parse_dec(value) != 0;
     else if (!strcmp(key, "animate")) current.animate = parse_dec(value) != 0;
     else if (!strcmp(key, "quirks"))  current.quirks = parse_dec(value) != 0;
+    else if (!strcmp(key, "autodesktop")) current.autodesktop = parse_dec(value) != 0;
+    else if (!strcmp(key, "width"))   current.want_w = (int)parse_dec(value);
+    else if (!strcmp(key, "height"))  current.want_h = (int)parse_dec(value);
     else if (!strcmp(key, "preset"))  theme_apply_preset((int)parse_dec(value));
 }
 
@@ -236,6 +248,9 @@ bool theme_save(void) {
         { "corner",    (u32)current.corner,     false },
         { "shadows",   current.shadows ? 1u : 0u, false },
         { "animate",   current.animate ? 1u : 0u, false },
+        { "autodesktop", current.autodesktop ? 1u : 0u, false },
+        { "width",     (u32)current.want_w,     false },
+        { "height",    (u32)current.want_h,     false },
     };
 
     for (u32 f = 0; f < sizeof(fields) / sizeof(fields[0]); f++) {

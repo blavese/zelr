@@ -57,6 +57,15 @@ MENU_RECT = (10, 540, 210, 730)
 MENU_PANEL = (0x3F, 0x46, 0x4D)   # the floating layer
 PAGE = (120, 120, 700, 480)
 
+# Everything above the panel.
+#
+# The apps kept on the taskbar are drawn in colours from the same six the
+# themes use, so a preset colour is on screen whether or not the window that
+# offers it is open. Every count below is inside this rather than across the
+# screen, which is what they were always asking about: the window, not the
+# desktop it is on.
+ABOVE = (0, 0, 1024, 700)
+
 
 def main():
     keep = "--keep" in sys.argv
@@ -80,7 +89,7 @@ def main():
         # so waiting on the chrome alone catches the terminal half drawn and
         # every check after it reads a screen that was still being painted.
         drawn = lambda w, h, px: (count_in(px, w, TITLEBAR, CHROME) > 6000
-                                  and count_all(px, TEAL) > 1200
+                                  and count_in(px, w, ABOVE, TEAL) > 1200
                                   and count_in(px, w, PAGE, SLATE) > 100000)
         w, h, px, shot, up = mon.wait_screen("desktop", drawn, timeout=60)
         c.add("a ring 3 terminal drew its window", drawn(w, h, px),
@@ -105,16 +114,16 @@ def main():
         from_bottom = len(MENU_ENTRIES) - 1 - idx
         w, h, px, shot, ran = mon.click_for(
             60, MENU_BOTTOM - 6 - from_bottom * MENU_ITEM_H - MENU_ITEM_H // 2,
-            "settings", lambda w, h, px: count_all(px, INDIGO) > 500,
+            "settings", lambda w, h, px: count_in(px, w, ABOVE, INDIGO) > 500,
             timeout=40)
         c.add("it launches settings, another ring 3 program", ran, shot)
         c.add("whose accent swatches are all on screen",
-              all(count_all(px, s) > 200 for s in SWATCHES), shot)
+              all(count_in(px, w, ABOVE, s) > 200 for s in SWATCHES), shot)
 
-        teal_before = count_all(px, TEAL)
-        indigo_before = count_all(px, INDIGO)
+        teal_before = count_in(px, w, ABOVE, TEAL)
+        indigo_before = count_in(px, w, ABOVE, INDIGO)
 
-        spot = centre_of(px, w, h, INDIGO)
+        spot = centre_of(px, w, h, INDIGO, within=ABOVE)
         c.add("the indigo swatch is findable on screen", spot is not None, shot)
 
         # --- changing the accent -------------------------------------------
@@ -128,16 +137,16 @@ def main():
             c.add("and the old accent is gone from the chrome", False, shot)
         else:
             def repainted(w, h, px):
-                return (count_all(px, INDIGO) > indigo_before * 4
-                        and count_all(px, TEAL) < teal_before / 4)
+                return (count_in(px, w, ABOVE, INDIGO) > indigo_before * 4
+                        and count_in(px, w, ABOVE, TEAL) < teal_before / 4)
 
             w, h, px, shot, _ = mon.click_for(spot[0], spot[1],
                                               "recoloured", repainted,
                                               timeout=30)
             c.add("choosing an accent repaints the window manager",
-                  count_all(px, INDIGO) > indigo_before * 4, shot)
+                  count_in(px, w, ABOVE, INDIGO) > indigo_before * 4, shot)
             c.add("and the old accent is gone from the chrome",
-                  count_all(px, TEAL) < teal_before / 4, shot)
+                  count_in(px, w, ABOVE, TEAL) < teal_before / 4, shot)
     finally:
         vm.stop()
 

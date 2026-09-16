@@ -30,7 +30,9 @@
 #include "user.h"
 #include "elf.h"
 #include "apps.h"
+#include "pins.h"
 #include "winsrv.h"
+#include "fbcon.h"
 #include "io.h"
 
 #define TASKBAR_H  34
@@ -41,14 +43,27 @@
 #define TASKBAR_GAP 10
 #define TASKBAR_R   10
 
-/* The top of the floating panel, which is also the floor for windows. */
-static int taskbar_y(void) {
+/* Where the panel sits when it is out. Where it is actually drawn is
+   somewhere between that and off the bottom of the screen, because it tucks
+   itself away for a window that wants the room; taskbar_y below says where,
+   and everything that draws it or asks what is under the pointer goes
+   through that one function so the two can never disagree. */
+static int panel_rest_y(void) {
     return (int)fb_height() - TASKBAR_H - TASKBAR_GAP;
 }
 
-/* Where the chips start, past the launcher badge. */
+/* The badge, then the pinned apps, then a chip for each remaining window. */
 #define TASKBAR_BADGE_W 76
-static int taskbar_chips_x(void) { return TASKBAR_GAP + TASKBAR_BADGE_W + 20; }
+#define PIN_ICON  22
+#define PIN_STEP  (PIN_ICON + 8)
+
+static int taskbar_pins_x(void) {
+    return TASKBAR_GAP + 8 + TASKBAR_BADGE_W + 12;
+}
+
+static int taskbar_chips_x(void) {
+    return taskbar_pins_x() + pins_count() * PIN_STEP + 14;
+}
 #define MENU_W     210
 #define MENU_ITEM  30
 #define SHADOW     5
@@ -307,6 +322,141 @@ static void blit_surface(const u32 *px, int sw, int sh, int dx, int dy) {
     }
 }
 
+/* --- the panel that tucks itself away ------------------------------------
+ *
+ * A bar welded to the bottom of the screen means a maximised window is not
+ * maximised: it stops short, and the last thirty pixels of the display are
+ * spent on something that is only occasionally looked at. A bar that is
+ * always hidden means reaching for it every time, which is worse.
+ *
+ * So it is neither. Nothing wants the room, it is out, floating clear of
+ * the edge with the wallpaper showing around it. Something does want the
+ * room, it slides away and the window has the whole screen. Put the pointer
+ * at the bottom and it comes back over the window, and stays as long as the
+ * pointer is on it. No setting, nothing to turn on: it is a consequence of
+ * what is on screen.
+ */
+#define PANEL_MS   170      /* going away, and coming back */
+#define PANEL_EDGE 3        /* how close to the bottom brings it back */
+
+static bool panel_shown = true;
+static u64  panel_since;
+
+/* An icon being pressed, and dragged along the panel to reorder it. */
+static int  pin_press = -1;
+static int  pin_press_x;
+static int  pin_at_x;
+static bool pin_moved;
+
+/* Where the panel is drawn this frame. */
+static int taskbar_y(void) {
+    int out = panel_rest_y();
+    int away = (int)fb_height() + SHADOW;
+    u32 p = phase_of(panel_since, PANEL_MS);
+    int from = panel_shown ? away : out;
+    int to   = panel_shown ? out  : away;
+    return from + ((to - from) * (int)p) / ANIM_FULL;
+}
+
+/* True when something on screen wants the room the panel is in. Only a
+   maximised window does: everything else leaves the panel where it is. */
+static bool panel_in_the_way(void) {
+    for (int i = 0; i < nwin; i++)
+        if (!stack[i]->minimized && stack[i]->maximized) return true;
+    return false;
+}
+
+/* Everything above the panel, which is where a window is allowed to be.
+   With the panel tucked away, that is the screen. */
+static int work_h(void) {
+    return panel_in_the_way() ? (int)fb_height() : panel_rest_y();
+}
+
+/* The topmost window covering the whole screen, or -1.
+ *
+ * Nothing below one is drawn and neither is the wallpaper: all of it would
+ * be painted over before the frame reached the screen. A maximised terminal
+ * with a wallpaper that drifts was repainting the whole desktop twelve
+ * times a second for nobody. */
+static int covering_index(void) {
+    for (int i = nwin - 1; i >= 0; i--) {
+        window_t *w = stack[i];
+        if (w->minimized || !w->maximized) continue;
+
+        /* Measured rather than taken on trust. */
+        if (w->x <= 0 && w->y <= 0
+            && w->x + wm_outer_w(w) >= (int)fb_width()
+            && w->y + wm_outer_h(w) >= (int)fb_height()) return i;
+    }
+    return -1;
+}
+
+/* A sine, as 64 steps of a period, running from -248 to 248. A table is
+   smaller than the code to compute one, and this kernel has no floating
+   point in it at all, so everything that curves curves through here. */
+static const u8 SINE_Q[17] = {
+    0, 24, 49, 73, 97, 120, 142, 163, 181, 198, 212, 224, 233, 240, 245,
+    247, 248
+};
+
+static int sine64(u32 phase) {
+    phase &= 63;
+    if (phase < 16) return (int)SINE_Q[phase];
+    if (phase < 32) return (int)SINE_Q[32 - phase];
+    if (phase < 48) return -(int)SINE_Q[phase - 32];
+    return -(int)SINE_Q[64 - phase];
+}
+
+/* A circle's outline, from one eighth of it mirrored eight ways. Two rows
+   thick, or it disappears at the size these are drawn at. */
+static void ring(int cx, int cy, int r, u32 c) {
+    if (r <= 0) return;
+    int x = r, y = 0, err = 1 - r;
+    while (x >= y) {
+        const int P[8][2] = {
+            { x, y }, { y, x }, { -y, x }, { -x, y },
+            { -x, -y }, { -y, -x }, { y, -x }, { x, -y }
+        };
+        for (int i = 0; i < 8; i++) {
+            fb_put((u32)(cx + P[i][0]), (u32)(cy + P[i][1]), c);
+            fb_put((u32)(cx + P[i][0]), (u32)(cy + P[i][1] + 1), c);
+        }
+        y++;
+        if (err < 0) err += 2 * y + 1;
+        else { x--; err += 2 * (y - x) + 1; }
+    }
+}
+
+/* Whether the panel should be out, given where the pointer is.
+ *
+ * Out whenever nothing needs the room. Tucked when something does, unless
+ * the pointer is at the very bottom of the screen asking for it, and then
+ * out for as long as the pointer is on it: a panel that goes away under the
+ * hand reaching for it is worse than one that never moves. */
+static bool panel_should_show(int my) {
+    if (menu_open || dragging || pin_press >= 0) return true;
+    if (!panel_in_the_way()) return true;
+    if (panel_shown) return my >= panel_rest_y() - 6;
+    return my >= (int)fb_height() - PANEL_EDGE;
+}
+
+/* The band the panel moves through. Everything is composited whatever
+   changed, so this is about what has to be copied to the card, and the
+   panel sliding does not oblige the other nine tenths of the screen to
+   make that trip. */
+static void panel_frame(void) {
+    need_frame_in(0, panel_rest_y() - SHADOW - 38, (int)fb_width(),
+                  TASKBAR_H + TASKBAR_GAP + SHADOW * 2 + 42);
+}
+
+static void panel_update(int my) {
+    bool want = panel_should_show(my);
+    if (want == panel_shown) return;
+    panel_shown = want;
+    panel_since = timer_ticks();
+    panel_frame();
+}
+
 /* Lighter and darker versions of a colour, for edges and hovers. */
 static u32 lighten(u32 c, int amount) { return gfx_mix(c, RGB(0xFF, 0xFF, 0xFF), amount); }
 static u32 darken(u32 c, int amount)  { return gfx_mix(c, 0, amount); }
@@ -373,26 +523,20 @@ static void draw_wallpaper(void) {
     }
 
     case WALLPAPER_WAVES: {
-        /* Bands whose height follows a quarter of a sine, mirrored out to a
-           full period. A table is smaller than the code to compute one and
-           this is the only place anything here needs a curve. */
-        static const u8 QUARTER[17] = {
-            0, 24, 49, 73, 97, 120, 142, 163, 181, 198, 212, 224,
-            233, 240, 245, 247, 248
-        };
+        /* Five lines whose height follows a sine. They travel: the phase
+           carries the clock, so the whole set slides sideways rather than
+           being a still picture of something that should be moving.
+           A thousand columns of two pixels, five times, and nothing else. */
         fb_rect(0, 0, fb_width(), (u32)h, t->desktop);
+        u32 drift = (u32)(timer_ticks() / 4);
 
         for (u32 x = 0; x < fb_width(); x++) {
-            u32 phase = (x / 3) % 64;
-            int v = (phase < 16) ? QUARTER[phase]
-                  : (phase < 32) ? QUARTER[32 - phase]
-                  : (phase < 48) ? -QUARTER[phase - 32]
-                                 : -QUARTER[64 - phase];
-
             for (int band = 0; band < 5; band++) {
+                int v = sine64(x / 3 + drift + (u32)band * 5);
                 int y = h * (band + 1) / 6 + v / 8;
                 if (y < 0 || y >= h) continue;
-                fb_rect(x, (u32)y, 1, 2, lighten(t->desktop, 10 + band * 4));
+                fb_rect(x, (u32)y, 1, 2,
+                        gfx_mix(t->desktop, t->accent, 22 + band * 12));
             }
         }
         break;
@@ -415,6 +559,122 @@ static void draw_wallpaper(void) {
                 int x = d + k;
                 if (x >= 0 && x < (int)fb_width()) fb_put((u32)x, (u32)k, line);
             }
+        break;
+    }
+
+    case WALLPAPER_AURORA: {
+        /* Three bands of light leaning across the screen and drifting, each
+           soft at its edges. Built as columns: for every x, one short run
+           of pixels per band. There is no per pixel work over the screen
+           anywhere in it, which is what keeps it affordable. */
+        fb_vgradient(0, 0, (int)fb_width(), h, lighten(t->desktop, 18),
+                     t->desktop);
+        u32 drift = (u32)(timer_ticks() / 6);
+        const int REACH = 17;
+
+        for (int band = 0; band < 3; band++) {
+            u32 tint = band == 0 ? t->accent
+                     : band == 1 ? lighten(t->accent, 70)
+                                 : darken(t->accent, 50);
+            int base = h / 3 + band * h / 8;
+            u32 slow = 5 + (u32)band * 3;
+
+            for (u32 x = 0; x < fb_width(); x++) {
+                int y = base + sine64(x / slow + drift + (u32)band * 11) / 5;
+                for (int dy = -REACH; dy <= REACH; dy++) {
+                    int yy = y + dy;
+                    if (yy < 0 || yy >= h) continue;
+                    int d = dy < 0 ? -dy : dy;
+                    int a = (REACH - d) * 40 / REACH;
+                    fb_put(x, (u32)yy,
+                           gfx_mix(fb_get(x, (u32)yy), tint, a));
+                }
+            }
+        }
+        break;
+    }
+
+    case WALLPAPER_RAIN: {
+        /* Streaks falling at three speeds, each fading out behind its head.
+           Where a drop is comes from its number and the clock, so none of
+           them is stored anywhere. */
+        fb_rect(0, 0, fb_width(), (u32)h, t->desktop);
+        u32 now = (u32)timer_ticks();
+
+        for (u32 i = 0; i < 170; i++) {
+            u32 hx = i * 2654435761u;
+            u32 speed = 4 + (i % 5) * 3;
+            u32 x = (hx >> 11) % fb_width();
+            u32 y = ((hx >> 3) + now * speed) % (u32)(h + 60);
+            int len = 5 + (int)(i % 4) * 4;
+
+            for (int k = 0; k < len; k++) {
+                int yy = (int)y - k;
+                if (yy < 0 || yy >= h) continue;
+                fb_put(x, (u32)yy,
+                       gfx_mix(t->desktop, t->accent, 75 - k * 65 / len));
+            }
+        }
+        break;
+    }
+
+    case WALLPAPER_ORBS: {
+        /* Five soft discs wandering on paths that never quite repeat,
+           because each one's two sines run at rates with nothing in common.
+           Brightness falls off with the square of the distance from the
+           middle, which needs no square root and is the reason they have no
+           edge to them. */
+        fb_vgradient(0, 0, (int)fb_width(), h, lighten(t->desktop, 12),
+                     t->desktop);
+        u32 now = (u32)timer_ticks();
+
+        for (int i = 0; i < 5; i++) {
+            int r = 44 + i * 9;
+            int span_x = (int)fb_width() / 2 - r;
+            int span_y = h / 2 - r;
+            int cx = (int)fb_width() / 2
+                     + sine64(now / (7 + (u32)i * 2) + (u32)i * 9) * span_x / 248;
+            int cy = h / 2
+                     + sine64(now / (11 + (u32)i * 3) + (u32)i * 21) * span_y / 248;
+            u32 tint = i & 1 ? lighten(t->accent, 60) : t->accent;
+            int r2 = r * r;
+
+            for (int dy = -r; dy <= r; dy++) {
+                int yy = cy + dy;
+                if (yy < 0 || yy >= h) continue;
+                for (int dx = -r; dx <= r; dx++) {
+                    int d2 = dx * dx + dy * dy;
+                    if (d2 >= r2) continue;
+                    int xx = cx + dx;
+                    if (xx < 0 || xx >= (int)fb_width()) continue;
+                    int a = (r2 - d2) * 34 / r2;
+                    fb_put((u32)xx, (u32)yy,
+                           gfx_mix(fb_get((u32)xx, (u32)yy), tint, a));
+                }
+            }
+        }
+        break;
+    }
+
+    case WALLPAPER_PULSE: {
+        /* Rings going out from the middle, fading as they widen, spaced so
+           that one leaves as the next arrives. An outline is a few thousand
+           points however wide it gets, so this costs the same whatever the
+           screen is. */
+        fb_rect(0, 0, fb_width(), (u32)h, t->desktop);
+        int reach = ((int)fb_width() + h) / 2;
+        u32 now = (u32)(timer_ticks() * 3);
+
+        for (int k = 0; k < 7; k++) {
+            int r = (int)((now + (u32)(k * reach / 7)) % (u32)reach);
+            int fade = 90 - r * 80 / reach;
+            if (fade < 6) continue;
+
+            int cx = (int)fb_width() / 2, cy = h / 2;
+            ring(cx, cy, r - 3, gfx_mix(t->desktop, t->accent, fade / 3));
+            ring(cx, cy, r,     gfx_mix(t->desktop, t->accent, fade));
+            ring(cx, cy, r + 3, gfx_mix(t->desktop, t->accent, fade / 2));
+        }
         break;
     }
 
@@ -460,15 +720,17 @@ static bool on_grip(const window_t *w, int mx, int my) {
     return mx >= gx && mx < gx + GRIP && my >= gy && my < gy + GRIP;
 }
 
-/* Everything above the taskbar, which is where a window is allowed to be. */
-static int work_h(void) { return taskbar_y(); }
-
 static void draw_chrome(window_t *w, bool focused) {
     const theme_t *t = theme();
     int ow = wm_outer_w(w), oh = wm_outer_h(w);
-    int r = t->corner;
 
-    if (t->shadows) fb_shadow(w->x, w->y, ow, oh, r, SHADOW);
+    /* Edge to edge, so there is nothing for a rounded corner to show
+       through and nothing beside it for a shadow to fall on. Drawing them
+       anyway costs a read of the screen back per pixel around the whole
+       frame, for four notches of desktop colour in the corners. */
+    int r = w->maximized ? 0 : t->corner;
+
+    if (t->shadows && !w->maximized) fb_shadow(w->x, w->y, ow, oh, r, SHADOW);
 
     /* The body, so the rounded bottom corners have something under them. */
     fb_round_rect(w->x, w->y, ow, oh, r, t->surface);
@@ -591,7 +853,12 @@ static void place(window_t *w, int x, int y, int cw, int ch) {
 
 /* The rectangle a snap zone corresponds to, in outer coordinates. */
 static void snap_rect(snap_t zone, int *x, int *y, int *cw, int *ch) {
-    int fw = (int)fb_width(), fh = work_h();
+    int fw = (int)fb_width();
+
+    /* A maximised window gets the whole screen, because the panel tucks
+       itself away for one. A window snapped to a side does not: the panel
+       stays out beside it, so it stops above it. */
+    int fh = (zone == SNAP_FULL) ? (int)fb_height() : work_h();
     switch (zone) {
     case SNAP_LEFT:  *x = 0;      *y = 0; *cw = fw / 2 - WM_BORDER * 2; break;
     case SNAP_RIGHT: *x = fw / 2; *y = 0; *cw = fw / 2 - WM_BORDER * 2; break;
@@ -767,6 +1034,93 @@ static void draw_resize_preview(void) {
                        ow - i * 2, oh - i * 2, t->corner, t->accent);
 }
 
+/* --- the apps on the panel -----------------------------------------------
+ *
+ * A pinned app is an icon in the panel whether it is running or not, and a
+ * running one whose program is pinned is shown by that icon rather than
+ * twice. So the panel reads left to right as: what you keep, then what you
+ * happen to have open.
+ */
+
+/* How bright a colour reads, which is not its average: the eye weighs green
+   far more than blue. */
+static u32 luma_of(u32 c) {
+    return ((((c >> 16) & 0xFF) * 77) + (((c >> 8) & 0xFF) * 151)
+            + ((c & 0xFF) * 28)) >> 8;
+}
+
+/* An app's own colour, from its path, so the same program is the same
+   colour on every machine and adding one does not renumber the others.
+   The palette is the theme's own presets: six colours already chosen to
+   work together, rather than six invented here. */
+static u32 pin_colour(const char *path) {
+    u32 hash = 2166136261u;
+    for (const char *p = path; *p; p++) hash = (hash ^ (u32)*p) * 16777619u;
+    return theme_preset_accent((int)(hash % THEME_PRESETS));
+}
+
+/* The window a program has open, or nothing. The topmost, so clicking an
+   icon twice does not walk backwards through a stack of them. */
+static window_t *window_for_app(const char *path) {
+    if (!path || !path[0]) return 0;
+    for (int i = nwin - 1; i >= 0; i--)
+        if (!strcmp(stack[i]->app, path)) return stack[i];
+    return 0;
+}
+
+/* True for a window that already has an icon on the panel. */
+static bool shown_as_pin(const window_t *w) {
+    return w->app[0] && pins_find(w->app) >= 0;
+}
+
+static int taskbar_pin_at(int mx, int my) {
+    int y = taskbar_y();
+    if (my < y + 2 || my >= y + TASKBAR_H - 2) return -1;
+
+    int x = taskbar_pins_x();
+    for (int i = 0; i < pins_count(); i++, x += PIN_STEP) {
+        if (mx >= x - 4 && mx < x + PIN_ICON + 4) return i;
+    }
+    return -1;
+}
+
+/* Which slot a drag is over, which is not the same question: anywhere past
+   the last icon is the last slot rather than nowhere. */
+static int pin_slot_at(int mx) {
+    int rel = mx - taskbar_pins_x() + PIN_STEP / 2;
+    if (rel < 0) return 0;
+    int slot = rel / PIN_STEP;
+    if (slot >= pins_count()) slot = pins_count() - 1;
+    return slot;
+}
+
+/* There are no icon files anywhere in this project and inventing a format
+   to hold five pictures would be worse than this: a rounded square in the
+   app's colour with the first letter of its name in it, which tells them
+   apart at a glance and costs nothing to carry. */
+static void draw_pin_icon(int x, int y, const pin_t *p, bool hot, bool running) {
+    const theme_t *t = theme();
+    u32 c = pin_colour(p->path);
+
+    if (hot) fb_round_rect(x - 4, y - 3, PIN_ICON + 8, PIN_ICON + 6, 7, t->raised);
+    fb_round_rect(x, y, PIN_ICON, PIN_ICON, 6, c);
+    fb_rect((u32)(x + 6), (u32)y, (u32)(PIN_ICON - 12), 1, lighten(c, 70));
+    fb_round_frame(x, y, PIN_ICON, PIN_ICON, 6, darken(c, 60));
+
+    char first[2] = { p->label[0], 0 };
+    if (first[0] >= 'a' && first[0] <= 'z') first[0] = (char)(first[0] - 32);
+    u32 ink = luma_of(c) > 140 ? darken(c, 200) : RGB(0xFF, 0xFF, 0xFF);
+    face_text(x + (PIN_ICON - face_width(first, FACE_BODY_BOLD)) / 2,
+              y + (PIN_ICON - face_height(FACE_BODY_BOLD)) / 2,
+              first, ink, FACE_BODY_BOLD);
+
+    /* A bar under it while the program is running, in the same place the
+       chips put theirs, so one line across the panel says what is open. */
+    if (running)
+        fb_rect((u32)(x + PIN_ICON / 2 - 4), (u32)(y + PIN_ICON + 3), 8, 2,
+                t->accent);
+}
+
 static void draw_taskbar(void) {
     const theme_t *t = theme();
     int y = taskbar_y();
@@ -785,9 +1139,26 @@ static void draw_taskbar(void) {
     face_text(px + 20, y + (TASKBAR_H - face_height(FACE_HEAD_BOLD)) / 2, "zelr",
               badge_hot ? t->accent_text : t->accent, FACE_HEAD_BOLD);
 
+    /* The pinned apps. The one being dragged is left out and drawn under
+       the pointer instead; the list has already been reordered around it,
+       so what is on screen is the answer rather than a preview of it. */
+    int hot = pin_moved ? -1 : taskbar_pin_at(last_mx, last_my);
+    int px_pin = taskbar_pins_x();
+    for (int i = 0; i < pins_count(); i++, px_pin += PIN_STEP) {
+        const pin_t *p = pin_at(i);
+        if (pin_moved && i == pin_press) continue;
+        draw_pin_icon(px_pin, y + 4, p, i == hot, window_for_app(p->path) != 0);
+    }
+    if (pin_moved && pin_press >= 0) {
+        const pin_t *p = pin_at(pin_press);
+        if (p) draw_pin_icon(pin_at_x - PIN_ICON / 2, y + 2, p, true,
+                             window_for_app(p->path) != 0);
+    }
+
     int x = taskbar_chips_x();
     for (int i = 0; i < nwin; i++) {
         window_t *w = stack[i];
+        if (shown_as_pin(w)) continue;          /* its icon already says so */
         bool focused = (i == nwin - 1) && !w->minimized;
         int chip_face = focused ? FACE_BODY_BOLD : FACE_BODY;
         int tw = face_width(w->title, chip_face) + 24;
@@ -823,6 +1194,25 @@ static void draw_taskbar(void) {
     face_text((int)fb_width() - TASKBAR_GAP - face_width(clock, FACE_BODY) - 16,
               y + (TASKBAR_H - face_height(FACE_BODY)) / 2, clock, t->text,
               FACE_BODY);
+
+    /* And the name of the icon under the pointer, above it. */
+    if (hot >= 0) {
+        const pin_t *p = pin_at(hot);
+        int tw = face_width(p->label, FACE_BODY) + 18;
+        int th = 22;
+        int tx = taskbar_pins_x() + hot * PIN_STEP + PIN_ICON / 2 - tw / 2;
+        int ty = y - th - 6;
+
+        if (tx < TASKBAR_GAP) tx = TASKBAR_GAP;
+        if (tx + tw > (int)fb_width() - TASKBAR_GAP)
+            tx = (int)fb_width() - TASKBAR_GAP - tw;
+
+        if (t->shadows) fb_shadow(tx, ty, tw, th, 6, SHADOW);
+        fb_round_rect(tx, ty, tw, th, 6, t->overlay);
+        fb_round_frame(tx, ty, tw, th, 6, t->hairline);
+        face_text(tx + 9, ty + (th - face_height(FACE_BODY)) / 2,
+                  p->label, t->text, FACE_BODY);
+    }
 }
 
 static const u8 CURSOR[19][12] = {
@@ -853,9 +1243,16 @@ static void composite(void) {
        here takes a pointer into one. */
     winsrv_reap_retired();
 
-    draw_wallpaper();
+    /* A window covering the screen means the wallpaper and everything
+       under that window are drawn and then painted over. The screen is
+       filled flat instead of skipped entirely, because chrome blends with
+       what is beneath it and what is beneath it would otherwise be the
+       last frame, blended again, every frame. */
+    int cover = covering_index();
+    if (cover >= 0) fb_rect(0, 0, fb_width(), fb_height(), theme()->desktop);
+    else            draw_wallpaper();
 
-    for (int i = 0; i < nwin; i++) {
+    for (int i = cover > 0 ? cover : 0; i < nwin; i++) {
         window_t *w = stack[i];
         w->dirty = false;
         if (w->minimized) continue;         /* still a window, just not here */
@@ -873,6 +1270,8 @@ static void composite(void) {
 
         blit_surface(px, cw, ch, w->x + WM_BORDER, w->y + WM_TITLE_H);
     }
+
+    for (int i = 0; i < cover; i++) stack[i]->dirty = false;
 
     draw_snap_preview();
     draw_resize_preview();
@@ -912,6 +1311,30 @@ static void menu_choose(int i) {
     else if (!strcmp(MENU[i].label, "Leave desktop")) running = false;
 }
 
+/* What the launcher calls a program, so an app pinned from its own window
+   is named the way the menu names it rather than however the program
+   happened to title the window. */
+static const char *label_for(const char *path, const char *fallback) {
+    for (int i = 0; i < MENU_N; i++)
+        if (MENU[i].program && !strcmp(MENU[i].program, path))
+            return MENU[i].label;
+    return fallback;
+}
+
+/* Clicking an icon: start the program, or if it is already running, do what
+   clicking its chip would have done. */
+static void pin_activate(int i) {
+    const pin_t *p = pin_at(i);
+    if (!p) return;
+
+    window_t *w = window_for_app(p->path);
+    if (!w) { launch(p->path); return; }
+
+    if (w->minimized)              set_minimized(w, false);
+    else if (w == stack[nwin - 1]) set_minimized(w, true);
+    else                           wm_raise(w);
+}
+
 static int menu_item_at(int mx, int my) {
     if (!menu_open) return -1;
     int h = MENU_N * MENU_ITEM + 12;
@@ -924,7 +1347,7 @@ static int menu_item_at(int mx, int my) {
 static void open_menu_at(int x, int y) {
     int h = MENU_N * MENU_ITEM + 12;
     if (x + MENU_W > (int)fb_width()) x = (int)fb_width() - MENU_W - 4;
-    if (y + h > (int)fb_height() - TASKBAR_H) y = (int)fb_height() - TASKBAR_H - h - 4;
+    if (y + h > panel_rest_y()) y = panel_rest_y() - h - 4;
     if (x < 4) x = 4;
     if (y < 4) y = 4;
     menu_x = x; menu_y = y;
@@ -934,6 +1357,70 @@ static void open_menu_at(int x, int y) {
     menu_since = timer_ticks();
     menu_hover_since = 0;
     need_frame();
+}
+
+/* --- the screen changing size -------------------------------------------
+ *
+ * Somebody picks a size in the settings window, which writes it into the
+ * same file the colours live in, and this is what notices. Nothing else
+ * about the desktop knows a resolution: everything is laid out from
+ * fb_width and fb_height every frame, so the only work here is that the
+ * windows do not know the ground moved under them.
+ */
+static void screen_changed(void) {
+    for (int i = 0; i < nwin; i++) {
+        window_t *w = stack[i];
+
+        if (w->maximized) {
+            /* Refitted rather than un-maximised and done again, so where it
+               would go back to is still where it came from. */
+            int x, y, cw, ch;
+            snap_rect(SNAP_FULL, &x, &y, &cw, &ch);
+            place(w, x, y, cw, ch);
+        } else {
+            int cw = w->cw, ch = w->ch;
+            if (cw > (int)fb_width() - 8) cw = (int)fb_width() - 8;
+            if (ch > work_h() - WM_TITLE_H - 8) ch = work_h() - WM_TITLE_H - 8;
+            if (cw < 160) cw = 160;
+            if (ch < 80) ch = 80;
+            if (cw != w->cw || ch != w->ch) wm_resize(w, cw, ch);
+
+            if (w->x + wm_outer_w(w) > (int)fb_width())
+                w->x = (int)fb_width() - wm_outer_w(w);
+            if (w->y + wm_outer_h(w) > work_h())
+                w->y = work_h() - wm_outer_h(w);
+            if (w->x < 0) w->x = 0;
+            if (w->y < 0) w->y = 0;
+        }
+
+        /* Where it goes back to has to be somewhere it can be seen. */
+        if (w->restore_x + w->restore_cw > (int)fb_width())
+            w->restore_x = 0;
+        if (w->restore_y + w->restore_ch > work_h())
+            w->restore_y = 0;
+    }
+    need_frame();
+}
+
+/* The size asked for, if it is not the size we have and the card will take
+   it. A framebuffer the firmware set up cannot be changed at all, so this
+   quietly does nothing there rather than pretending. */
+/* What the machine started with. That is what no setting at all means,
+   and what putting everything back goes to. */
+static u32 boot_w, boot_h;
+
+static void apply_screen_size(void) {
+    const theme_t *t = theme();
+    u32 w = t->want_w ? (u32)t->want_w : boot_w;
+    u32 h = t->want_h ? (u32)t->want_h : boot_h;
+
+    if (!w || !h) return;
+    if (w == fb_width() && h == fb_height()) return;
+    if (!fb_mode_settable()) return;
+    if (!fb_set_mode(w, h)) return;
+
+    fbcon_init();          /* the console behind this is a different shape */
+    screen_changed();
 }
 
 /* --- input -------------------------------------------------------------- */
@@ -963,6 +1450,7 @@ static int taskbar_chip_at(int mx, int my) {
 
     int x = taskbar_chips_x();
     for (int i = 0; i < nwin; i++) {
+        if (shown_as_pin(stack[i])) continue;
         /* Measured in the face it is drawn in. The window in front carries
            a heavier title, so measuring every chip in the regular weight
            puts the edge of the widest one in the wrong place and a click
@@ -997,6 +1485,17 @@ static void handle_mouse(int mx, int my, u8 buttons) {
             menu_hover_since = timer_ticks();
             need_frame();
         }
+        /* The right button over an entry keeps it on the panel, or takes it
+           off again if it is already there. */
+        if (right_now && over >= 0 && MENU[over].program) {
+            int at = pins_find(MENU[over].program);
+            if (at >= 0) pins_remove(at);
+            else         pins_add(MENU[over].label, MENU[over].program);
+            menu_open = false;
+            need_frame();
+            return;
+        }
+
         if (pressed_now) {
             if (over >= 0) { menu_choose(over); return; }
             /* A click anywhere else dismisses it, and does nothing more. */
@@ -1007,6 +1506,16 @@ static void handle_mouse(int mx, int my, u8 buttons) {
     }
 
     if (released) {
+        /* An icon that was being held. Dragged, and the order it has been
+           put into is written down; not dragged, and it was a click. */
+        if (pin_press >= 0) {
+            if (pin_moved) pins_save();
+            else           pin_activate(pin_press);
+            pin_press = -1;
+            pin_moved = false;
+            panel_frame();
+        }
+
         /* Hand the release to whoever was being drawn in, before dropping
            the capture: a program needs to know a stroke ended. */
         if (mouse_capture && mouse_capture->owned_by_user) {
@@ -1074,6 +1583,27 @@ static void handle_mouse(int mx, int my, u8 buttons) {
         return;
     }
 
+    /* An icon being dragged along the panel.
+     *
+     * The list is reordered as the pointer crosses each slot rather than
+     * when the button comes up, so the icons move out of the way while it
+     * is happening. A few pixels of travel are allowed first: a click with
+     * a steady hand still moves the mouse by one or two, and a click that
+     * silently reordered the panel would be a mystery. */
+    if (pin_press >= 0 && (buttons & 1)) {
+        int moved = mx - pin_press_x;
+        if (moved < 0) moved = -moved;
+        if (moved > 5) pin_moved = true;
+
+        if (pin_moved) {
+            int slot = pin_slot_at(mx);
+            if (slot != pin_press) { pins_move(pin_press, slot); pin_press = slot; }
+            pin_at_x = mx;
+            panel_frame();
+        }
+        return;
+    }
+
     /* Once a drag starts inside a window's content it keeps receiving
        movement, even if the pointer strays outside. */
     if (mouse_capture) {
@@ -1099,20 +1629,46 @@ static void handle_mouse(int mx, int my, u8 buttons) {
         if (on_taskbar_badge(mx, my)) {
             if (menu_open) { menu_open = false; need_frame(); }
             else open_menu_at(TASKBAR_GAP,
-                              taskbar_y() - (MENU_N * MENU_ITEM + 12) - 8);
+                              panel_rest_y() - (MENU_N * MENU_ITEM + 12) - 8);
+            return;
+        }
+
+        int pin = taskbar_pin_at(mx, my);
+        if (pin >= 0) {
+            if (right_now) { pins_remove(pin); panel_frame(); return; }
+            pin_press = pin;
+            pin_press_x = mx;
+            pin_at_x = mx;
+            pin_moved = false;
             return;
         }
 
         int chip = taskbar_chip_at(mx, my);
         if (chip >= 0) {
+            window_t *c = stack[chip];
+
+            /* The right button keeps the program on the panel after the
+               window it is running in has gone. */
+            if (right_now) {
+                if (c->app[0]) pins_add(label_for(c->app, c->title), c->app);
+                panel_frame();
+                return;
+            }
+
             /* Clicking the window already in front puts it away; clicking
                anything else brings it back and raises it. */
-            window_t *c = stack[chip];
             if (c->minimized)                 set_minimized(c, false);
             else if (chip == nwin - 1)        set_minimized(c, true);
             else                              wm_raise(c);
             return;
         }
+
+        /* The panel itself, anywhere there is nothing on it. Worth saying
+           out loud now that the work area can reach the bottom of the
+           screen: without this, clicking an empty stretch of the panel
+           opens the launcher underneath it. */
+        int ty = taskbar_y();
+        if (my >= ty && my < ty + TASKBAR_H) return;
 
         if (my < work_h()) open_menu_at(mx, my);
         return;
@@ -1230,6 +1786,11 @@ void wm_run(void) {
     if (!fb_active()) { kprintf("the desktop needs a framebuffer\n"); return; }
 
     theme_init();
+    pins_init();
+
+    /* Before anything is applied, so there is something to go back to. */
+    if (!boot_w) { boot_w = fb_width(); boot_h = fb_height(); }
+    apply_screen_size();
 
     running = true;
     menu_open = false;
@@ -1250,6 +1811,11 @@ void wm_run(void) {
             last_buttons = buttons;
             need_frame();
         }
+
+        /* Asked every pass rather than only when the mouse moves: what the
+           panel should be doing also changes when a window is maximised,
+           closed or put away, and none of those touch the pointer. */
+        panel_update(last_my);
 
         int c = kbd_trygetchar();
         if (c >= 0 && KEY_CODE(c) == 27) {         /* escape */
@@ -1285,7 +1851,18 @@ void wm_run(void) {
            and is a 512 byte read. */
         if (timer_ticks() - last_theme_check > timer_hz() / 4) {
             last_theme_check = timer_ticks();
-            if (theme_reload()) need_frame();
+            if (theme_reload()) { apply_screen_size(); need_frame(); }
+
+            /* The same arrangement for the taskbar's own list, which the
+               settings window writes and this side has to be told about.
+             *
+             * Not while an icon is being dragged. The list is reordered as
+             * the pointer crosses each slot and only written down when the
+             * button comes up, so re-reading the file in the middle of that
+             * puts the old order back under the hand moving it. Which is
+             * exactly what it did, and the check for dragging an icon is
+             * what said so. */
+            if (pin_press < 0 && pins_reload()) panel_frame();
         }
 
         /* A window that has redrawn needs its own rectangle sent, not the
@@ -1304,13 +1881,15 @@ void wm_run(void) {
            when nothing else changed. A wallpaper that moves needs it far
            more often than that, but only while it is the one on. */
         static u64 last_tick;
-        u64 every = wallpaper_moves(theme()->wallpaper) ? timer_hz() / 12
-                                                        : timer_hz();
+        u64 every = (wallpaper_moves(theme()->wallpaper) && covering_index() < 0)
+                    ? timer_hz() / 12 : timer_hz();
         if (!every) every = 1;
         if (timer_ticks() - last_tick >= every) {
             last_tick = timer_ticks();
             need_frame();
         }
+
+        if (still_moving(panel_since, PANEL_MS)) panel_frame();
 
         /* Anything mid transition wants the next frame. This is the only
            thing driving an animation: no timer of its own, no frame count,
@@ -1332,6 +1911,10 @@ void wm_run(void) {
     running = false;
     menu_open = false;
     dragging = resizing = mouse_capture = 0;
+    pin_press = -1;
+    pin_moved = false;
+    panel_shown = true;
+    panel_since = 0;
     snap_preview = SNAP_NONE;
     shake_reset();
     mouse_set_autodraw(true);

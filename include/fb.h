@@ -11,6 +11,14 @@ bool fb_init(u32 width, u32 height);
 bool fb_adopt(u64 base, u32 width, u32 height, u32 pitch_pixels);
 bool fb_active(void);
 
+/* Changing the size while the machine is running.
+ *
+ * Only where the mode is ours to set. A framebuffer the firmware handed
+ * over cannot be changed at all once its boot services are gone, which is
+ * every UEFI machine, so this says so rather than pretending. */
+bool fb_mode_settable(void);
+bool fb_set_mode(u32 w, u32 h);
+
 /* Which of the three ways the screen was obtained, for the boot log. The
    log used to say "vbe" whichever it had been, which is wrong on VMware
    and is exactly the sort of reporting that sends someone looking in the

@@ -36,6 +36,7 @@ type_line() {
 boot() {
   { sleep 6; type_line "cat /HELLO.TXT"; sleep 2; } \
     | timeout 90 "$QEMU" -kernel build/zelr.bin -m 256 -no-reboot -display none \
+        -append console \
         -serial stdio -drive "file=$IMG,format=raw,if=ide,index=0" \
         > "$OUT" 2>&1 || true
 }

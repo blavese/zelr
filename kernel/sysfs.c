@@ -268,6 +268,20 @@ static u32 render_time(char *b, u32 cap) {
     return o.len;
 }
 
+/* What the screen is, written for a program to read rather than for a
+   person. The settings window offers a list of sizes, and whether
+   offering one is honest depends on how this screen was obtained: a
+   mode this kernel set can be set again, and one the firmware handed
+   over cannot be changed at all once its boot services are gone. */
+static u32 render_screen(char *b, u32 cap) {
+    out_t o = { b, cap, 0 };
+    put(&o, "width %d\n", fb_active() ? fb_width() : 0);
+    put(&o, "height %d\n", fb_active() ? fb_height() : 0);
+    put(&o, "settable %d\n", fb_mode_settable() ? 1 : 0);
+    put(&o, "source %s\n", fb_backend());
+    return o.len;
+}
+
 static const node_t nodes[] = {
     { "/sys/version",  render_version  },
     { "/sys/memory",   render_memory   },
@@ -281,6 +295,7 @@ static const node_t nodes[] = {
     { "/sys/lastboot", render_lastboot },
     { "/sys/clipboard", render_clipboard },
     { "/sys/time",     render_time      },
+    { "/sys/screen",   render_screen    },
 };
 #define N_NODES (sizeof(nodes) / sizeof(nodes[0]))
 

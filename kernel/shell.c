@@ -31,6 +31,8 @@
 #include "io.h"
 #include "welcome.h"
 #include "serial.h"
+#include "theme.h"
+#include "fbcon.h"
 
 #define LINE_MAX 256
 #define ARG_MAX  16
@@ -187,6 +189,38 @@ static void prompt(void) {
     else                            kprintf("zelr:%s> ", at);
 }
 
+/* Opens the desktop, and comes back when it is left.
+
+   A function rather than four lines inside the command, because the
+   machine now does this by itself at startup as well. */
+static void enter_desktop(void) {
+    /* Open with a terminal, which is the most useful thing to have
+       there. Everything else is on the launcher. It is an ordinary
+       ring 3 program and draws on its own, through the window server,
+       while this task runs the compositor. */
+    u32 psize = 0;
+    u8 *pimg = vfs_slurp("/bin/term", &psize);
+    if (pimg) {
+        int rc = user_spawn_elf("/bin/term", pimg, psize);
+        if (rc < 0) kprintf("desktop: term: %s\n", elf_error(rc));
+        kfree(pimg);
+    }
+
+    wm_run();
+
+    /* The desktop owned the screen; give the console its own back.
+     *
+     * Both, because which one is in front depends on whether there is a
+     * framebuffer, and clearing the text console on a machine that has one
+     * leaves the console's own output arriving on top of the desktop that
+     * was there a moment ago. That barely mattered when the desktop was
+     * something you typed a command to get into. It is the way out of one
+     * the machine opens by itself. */
+    if (fb_active()) fbcon_clear();
+    vga_clear();
+    kprintf("back at the shell\n");
+}
+
 static void execute(char *buf) {
     char *argv[ARG_MAX];
     u32 argc = split(buf, argv, ARG_MAX);
@@ -197,22 +231,7 @@ static void execute(char *buf) {
     else if (!strcmp(c, "guide")) guide_print();
     else if (!strcmp(c, "desktop")) {
         if (!fb_active()) { kprintf("the desktop needs a framebuffer" "\n"); return; }
-
-        /* Open with a terminal, which is the most useful thing to have
-           there. Everything else is on the launcher. It is an ordinary ring
-           3 program and draws on its own, through the window server, while
-           this task runs the compositor. */
-        u32 psize = 0;
-        u8 *pimg = vfs_slurp("/bin/term", &psize);
-        if (pimg) {
-            int rc = user_spawn_elf("term", pimg, psize);
-            if (rc < 0) kprintf("desktop: term: %s" "\n", elf_error(rc));
-            kfree(pimg);
-        }
-        wm_run();
-        /* the desktop owned the screen; give the console its own back */
-        vga_clear();
-        kprintf("back at the shell" "\n");
+        enter_desktop();
     }
     else if (!strcmp(c, "bg")) {
         if (argc < 2) { kprintf("usage: bg PROGRAM" "\n"); return; }
@@ -502,8 +521,25 @@ static void reboot_now(void) {
     for (;;) hlt();
 }
 
+static bool console_only;
+
+void shell_console_only(void) { console_only = true; }
+
 void shell_task(void) {
     welcome_print();
+
+    /* A machine with a screen opens the desktop by itself, because that is
+       what switching a computer on is supposed to do. Escape leaves it and
+       lands here, so the console is still one key away.
+     *
+     * Two things turn it off: the setting, and the word console on the
+     * kernel command line. The second exists because a machine being driven
+     * down a serial line by something expecting a prompt should not have to
+     * press escape to get one, and because there has to be a way back in
+     * when the setting is wrong. */
+    theme_init();
+    if (fb_active() && !console_only && theme()->autodesktop) enter_desktop();
+
     u32 len = 0;
     prompt();
     for (;;) {
