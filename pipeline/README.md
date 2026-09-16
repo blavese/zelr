@@ -129,7 +129,14 @@ checks the version string is actually inside each file before uploading.
 ## The gate
 
     bash pipeline/gate.sh fast
+    bash pipeline/gate.sh screen
     bash pipeline/gate.sh full
+
+screen is fast plus everything that drives the desktop, the terminal, the
+windows, USB and the input path. It exists because four of full's steps take
+six minutes each and all four are about disks and boot sectors, which a change
+to the compositor or the keyboard cannot reach. Four and a half minutes
+against seventeen.
 
 This is the only thing in the pipeline that decides anything, so it is worth
 being suspicious of. It has been checked three ways: with a deliberately

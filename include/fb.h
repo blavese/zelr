@@ -30,6 +30,13 @@ void fb_frame(u32 x, u32 y, u32 w, u32 h, u32 rgb);
 
 /* Everything is drawn into a back buffer; this pushes it to the card. */
 void fb_flush(void);
+
+/* What the full screen copy at startup cost, in cycles. */
+u64 fb_flush_cycles(void);
+
+/* False when the back buffer would not fit and drawing goes straight at the
+   screen, which is visible as tearing and as every draw costing bus time. */
+bool fb_double_buffered(void);
 void fb_flush_rect(u32 x, u32 y, u32 w, u32 h);
 
 #define RGB(r, g, b) (((u32)(r) << 16) | ((u32)(g) << 8) | (u32)(b))

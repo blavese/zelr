@@ -343,6 +343,60 @@ void paging_init(const handoff_t *h) {
  * address are the same number. That only works while nothing else wants that
  * part of the address space, which on a machine with 64 bits of it is a safe
  * assumption for a long time yet. */
+/* Write combining, which is what a framebuffer wants and what nothing else
+ * in this kernel does.
+ *
+ * A page marked uncached is written one store at a time, each going straight
+ * out to the bus and waiting. Write combining lets the processor gather
+ * neighbouring stores into full cache line bursts before sending them, which
+ * on a screen sized copy is most of the difference between a frame that
+ * appears and a frame you watch being drawn.
+ *
+ * There is no bit meaning "write combining". The memory type is chosen by a
+ * three bit index into a register, built from PWT, PCD and, in a 4 KiB entry,
+ * bit 7. What the firmware leaves in that register has no write combining
+ * entry in it at all, so one is put there: slot four, the one reached by bit
+ * 7 with the other two clear, which otherwise duplicates slot zero. */
+#define IA32_PAT 0x277
+
+/* Slots 0..7, low byte first: WB, WT, UC-, UC, WC, WT, UC-, UC. Only the
+   fifth differs from what the firmware sets, and the four below it keep
+   their meanings so that every existing mapping means what it did. */
+#define PAT_WITH_WC 0x0007040100070406ull
+
+static bool pat_ready;
+
+static bool cpu_has_pat(void) {
+    u32 a, b, c, d;
+    cpuid_read(1, &a, &b, &c, &d);
+    return (d >> 16) & 1;
+}
+
+void paging_init_pat(void) {
+    pat_ready = false;
+    if (!cpu_has_pat()) return;
+    wrmsr(IA32_PAT, PAT_WITH_WC);
+    pat_ready = true;
+}
+
+bool paging_wc_ready(void) { return pat_ready; }
+
+void *paging_map_wc(u64 phys, u64 bytes) {
+    /* Without the register entry, bit 7 would select whatever the firmware
+       left in slot four, which is write back: a framebuffer that is cached
+       and never flushed shows nothing at all. Uncached is slow but correct,
+       so that is what a machine without PAT gets. */
+    if (!pat_ready) return paging_map_device(phys, bytes);
+
+    u64 first = phys & ~0xFFFull;
+    u64 last = (phys + bytes + PAGE_SIZE - 1) & ~0xFFFull;
+    for (u64 a = first; a < last; a += PAGE_SIZE) {
+        unmap_page(a);
+        if (!map_page(a, a, PTE_PRESENT | PTE_RW | PTE_WC)) return 0;
+    }
+    return (void *)phys;
+}
+
 void *paging_map_device(u64 phys, u64 bytes) {
     u64 first = phys & ~0xFFFull;
     u64 last = (phys + bytes + PAGE_SIZE - 1) & ~0xFFFull;
