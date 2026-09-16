@@ -329,6 +329,9 @@ void kmain(handoff_t *h) {
     clip_init();
     winsrv_init();
     sched_init();
+    /* After the scheduler exists, because it is a task, and the task is how
+       anything plugged in later gets noticed at all. */
+    usb_start_service();
     if (want_selftest) task_create("selftest", selftest_task);
     else               task_create("init", init_task);
 

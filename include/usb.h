@@ -26,6 +26,12 @@ void usb_poll(void);
 bool usb_present(void);
 u32  usb_keyboards(void);
 u32  usb_mice(void);
+u32  usb_hubs(void);
+
+/* Starts the task that watches for something being plugged in. Separate from
+   usb_init because it needs a scheduler, and usb_init runs long before there
+   is one. */
+void usb_start_service(void);
 
 /* How many reports have arrived from all of them. Zero after a key has been
    pressed means the keys are going somewhere else, which is the difference

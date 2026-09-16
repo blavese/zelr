@@ -49,11 +49,44 @@ bool xhci_present(void);
 u32  xhci_ports(void);
 bool xhci_port_connected(u32 port);
 
-/* Resets a port and gives the device on it an address of its own. Returns
-   the slot the controller assigned, or 0 when there is nothing there or it
-   would not come up. */
-u8   xhci_attach(u32 port);
+/* Where a device sits, which the controller has to be told because it is
+   the thing routing packets to it.
+ *
+ * A device plugged straight into the machine is on a root port with nothing
+ * in between. One behind a hub needs the path as well: four bits per tier,
+ * lowest tier first, which is what a route string is. And a slow device
+ * behind a fast hub needs to say which hub is doing the conversion, because
+ * the controller talks to that hub at the fast speed and the hub does the
+ * slow part on its own. */
+typedef struct {
+    u32 root_port;              /* the port on the controller */
+    u32 route;                  /* four bits per hub below it, 0 on a root */
+    xhci_speed_t speed;
+    u8  tt_slot;                /* the hub translating, or 0 for none */
+    u8  tt_port;
+} xhci_where_t;
+
+/* Resets a root port. False when there is nothing on it, or it would not
+   come up. */
+bool xhci_reset_root_port(u32 port);
+
+/* Gives a device an address of its own. Returns the slot the controller
+   assigned, or 0. */
+u8   xhci_attach(const xhci_where_t *where);
 xhci_speed_t xhci_speed(u32 port);
+
+/* Tells the controller that a slot it has already addressed is a hub, and
+   how many ports it has. Until it knows, it will not route anything to
+   anything plugged into that hub. */
+bool xhci_mark_hub(u8 slot, u8 ports, u8 think_time, bool multi_tt);
+
+/* Gives a slot back, for a device that has been unplugged. What the slot was
+   built out of is kept and used again by whatever is plugged in next. */
+void xhci_detach(u8 slot);
+
+/* Whether a root port has reported a change since this was last asked.
+   Reading it clears it. */
+bool xhci_took_port_change(void);
 
 /* One control transfer, start to finish. data may be null for a transfer
    with no data stage. */

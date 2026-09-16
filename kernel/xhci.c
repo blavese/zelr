@@ -100,6 +100,7 @@
 #define TRB_STATUS          4
 #define TRB_LINK            6
 #define TRB_ENABLE_SLOT     9
+#define TRB_DISABLE_SLOT    10
 #define TRB_ADDRESS_DEVICE  11
 #define TRB_CONFIGURE_EP    12
 #define TRB_EVALUATE_CTX    13
@@ -189,6 +190,9 @@ static volatile u32 xfer_left[XHCI_MAX_SLOTS][MAX_DCI];
 
 static void (*report_cb)(u8 slot, u8 dci, u32 len);
 
+/* Set when a root port reports a change and cleared by whoever acts on it. */
+static volatile bool port_changed;
+
 /* --- register access ------------------------------------------------------ */
 static u32 rd32(volatile u8 *base, u32 off) {
     return *(volatile u32 *)(base + off);
@@ -218,9 +222,19 @@ static u32 *ctx_at(u8 *base, u32 index) {
 }
 
 /* --- rings ---------------------------------------------------------------- */
-static bool ring_init(ring_t *r) {
-    r->trb = (trb_t *)alloc_aligned(RING_TRBS * sizeof(trb_t), 64);
-    if (!r->trb) return false;
+/* Allocated the first time and emptied every time after.
+ *
+ * The heap here hands out an aligned address inside a larger block, so the
+ * pointer that comes back is not the one kfree wants and these cannot be
+ * freed at all. Keeping them and using them again is what stops a device
+ * being unplugged and plugged back in from leaking a ring each time. */
+static bool ring_ready(ring_t *r) {
+    if (!r->trb) {
+        r->trb = (trb_t *)alloc_aligned(RING_TRBS * sizeof(trb_t), 64);
+        if (!r->trb) return false;
+    } else {
+        memset(r->trb, 0, RING_TRBS * sizeof(trb_t));
+    }
     r->at = 0;
     r->cycle = 1;
     /* The last entry points back at the first and tells the controller to
@@ -231,6 +245,8 @@ static bool ring_init(ring_t *r) {
     r->trb[RING_TRBS - 1].control = TRB_TYPE(TRB_LINK) | TRB_TOGGLE;
     return true;
 }
+
+static bool ring_init(ring_t *r) { return ring_ready(r); }
 
 /* Puts one TRB on a ring. The cycle bit goes on last, because it is what
    tells the controller the entry is there: writing it first would let the
@@ -329,9 +345,14 @@ static void drain_events(void) {
                     report_cb(slot, dci, xfer_left[slot][dci]);
                 }
             }
+        } else if (type == TRB_PORT_STATUS) {
+            /* Something was plugged in or pulled out. Which port it was is
+               in the event, but the answer is worked out by looking at all
+               of them anyway, and none of it can happen here: enumerating a
+               device means control transfers, and this runs inside an
+               interrupt handler. So it is recorded and acted on elsewhere. */
+            port_changed = true;
         }
-        /* Port status changes are noticed by looking at the port, which is
-           what attach does, so there is nothing to record here. */
 
         event_at++;
         if (event_at == EVENT_TRBS) {
@@ -352,6 +373,12 @@ void xhci_poll(void) {
 }
 
 void xhci_on_report(void (*fn)(u8 slot, u8 dci, u32 len)) { report_cb = fn; }
+
+bool xhci_took_port_change(void) {
+    if (!port_changed) return false;
+    port_changed = false;
+    return true;
+}
 
 /* --- commands ------------------------------------------------------------- */
 /* Issues one command and waits for the controller to finish it. Returns the
@@ -582,27 +609,44 @@ static bool reset_port(u32 port) {
     return (sc & PORT_PED) != 0;
 }
 
-u8 xhci_attach(u32 port) {
-    if (!present || port >= nports) return 0;
-    if (!reset_port(port)) return 0;
+bool xhci_reset_root_port(u32 port) {
+    if (!present || port >= nports) return false;
+    return reset_port(port);
+}
 
-    xhci_speed_t speed = xhci_speed(port);
+u8 xhci_attach(const xhci_where_t *w) {
+    if (!present || !w) return 0;
+    xhci_speed_t speed = w->speed;
     if (speed == XHCI_SPEED_NONE) return 0;
 
+    u32 port = w->root_port;
     u8 slot = 0;
     if (command(0, 0, TRB_TYPE(TRB_ENABLE_SLOT), &slot) != COMP_SUCCESS)
         return 0;
     if (!slot || slot >= XHCI_MAX_SLOTS) return 0;
 
+    /* The contexts and the rings are kept from last time this slot was in
+       use, for the same reason rings are: nothing here can be freed, so
+       everything here is reused. */
     slot_t *s = &slots[slot];
+    u8 *device_ctx = s->device_ctx;
+    u8 *input_ctx = s->input_ctx;
+    trb_t *rings[MAX_DCI];
+    for (u32 i = 0; i < MAX_DCI; i++) rings[i] = s->ep[i].trb;
+
     memset(s, 0, sizeof *s);
+    s->device_ctx = device_ctx;
+    s->input_ctx = input_ctx;
+    for (u32 i = 0; i < MAX_DCI; i++) s->ep[i].trb = rings[i];
     s->port = port;
 
     /* 32 contexts, at whatever a context is on this controller. */
-    s->device_ctx = (u8 *)alloc_aligned(32 * ctx_stride, 64);
-    s->input_ctx = (u8 *)alloc_aligned(33 * ctx_stride, 64);
+    if (!s->device_ctx) s->device_ctx = (u8 *)alloc_aligned(32 * ctx_stride, 64);
+    if (!s->input_ctx)  s->input_ctx = (u8 *)alloc_aligned(33 * ctx_stride, 64);
     if (!s->device_ctx || !s->input_ctx) return 0;
-    if (!ring_init(&s->ep[1])) return 0;
+    memset(s->device_ctx, 0, 32 * ctx_stride);
+    memset(s->input_ctx, 0, 33 * ctx_stride);
+    if (!ring_ready(&s->ep[1])) return 0;
 
     dcbaa[slot] = (u64)s->device_ctx;
 
@@ -613,10 +657,15 @@ u8 xhci_attach(u32 port) {
     ctrl[1] = 0x3;                                  /* slot and ep0 */
 
     u32 *sc = ctx_at(s->input_ctx, 1);
-    /* Route string zero, because this is on a root port and not behind a
-       hub; speed; and one context below this one, meaning just ep0. */
-    sc[0] = ((u32)speed << 20) | (1u << 27);
+    /* The path to it, its speed, and one context below this one meaning
+       just endpoint zero. The route is zero for a device on a root port and
+       the chain of hub ports for anything below one. */
+    sc[0] = (w->route & 0xFFFFF) | ((u32)speed << 20) | (1u << 27);
     sc[1] = (port + 1) << 16;                       /* ports count from one */
+    /* And which hub converts for it, if it is a slow device on a fast hub.
+       Without this the controller sends at the device's speed through a hub
+       that is not expecting it, and nothing answers. */
+    sc[2] = (u32)w->tt_slot | ((u32)w->tt_port << 8);
 
     u32 *ep0 = ctx_at(s->input_ctx, 2);
     ep0[1] = (4u << 3)                              /* control, both ways */
@@ -634,6 +683,42 @@ u8 xhci_attach(u32 port) {
         return 0;
     }
     return slot;
+}
+
+/* See include/xhci.h. The fields live in the slot context, and Configure
+   Endpoint with only the slot context named is what applies them.
+ *
+ * Nothing here is covered by the tests. QEMU routes to a device behind a hub
+ * whether or not it has been told the hub is a hub, so the usb harness passes
+ * with the hub bit deliberately left clear, which was checked. Real
+ * controllers use it to decide how to reach anything below this slot, so it
+ * is set because the specification says to and not because anything here
+ * proves it. */
+bool xhci_mark_hub(u8 slot, u8 ports, u8 think_time, bool multi_tt) {
+    if (!present || slot >= XHCI_MAX_SLOTS || !slots[slot].used) return false;
+    slot_t *s = &slots[slot];
+
+    memset(s->input_ctx, 0, 33 * ctx_stride);
+    u32 *ctrl = ctx_at(s->input_ctx, 0);
+    ctrl[1] = 0x1;                                  /* the slot context only */
+
+    memcpy(ctx_at(s->input_ctx, 1), ctx_at(s->device_ctx, 0), ctx_stride);
+    u32 *sc = ctx_at(s->input_ctx, 1);
+    sc[0] |= (1u << 26);                            /* this is a hub */
+    if (multi_tt) sc[0] |= (1u << 25);
+    sc[1] = (sc[1] & 0x00FFFFFFu) | ((u32)ports << 24);
+    sc[2] = (sc[2] & ~(3u << 16)) | (((u32)think_time & 3) << 16);
+
+    return command((u64)s->input_ctx, 0,
+                   TRB_TYPE(TRB_CONFIGURE_EP) | ((u32)slot << 24), 0)
+           == COMP_SUCCESS;
+}
+
+void xhci_detach(u8 slot) {
+    if (!present || slot >= XHCI_MAX_SLOTS || !slots[slot].used) return;
+    command(0, 0, TRB_TYPE(TRB_DISABLE_SLOT) | ((u32)slot << 24), 0);
+    slots[slot].used = false;
+    dcbaa[slot] = 0;
 }
 
 /* --- control transfers ------------------------------------------------------ */
@@ -698,7 +783,7 @@ bool xhci_open_interrupt_in(u8 slot, u8 dci, u16 max_packet, u8 interval) {
     if (!present || slot >= XHCI_MAX_SLOTS || !slots[slot].used) return false;
     if (dci < 2 || dci >= MAX_DCI) return false;
     slot_t *s = &slots[slot];
-    if (!ring_init(&s->ep[dci])) return false;
+    if (!ring_ready(&s->ep[dci])) return false;
 
     memset(s->input_ctx, 0, 33 * ctx_stride);
     u32 *ctrl = ctx_at(s->input_ctx, 0);
