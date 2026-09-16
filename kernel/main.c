@@ -42,7 +42,29 @@
 #include "blackbox.h"
 
 #define HEAP_BASE (8u * 1024 * 1024)
-#define HEAP_SIZE (16u * 1024 * 1024)
+#define HEAP_MIN  (16ull * 1024 * 1024)
+/* The heap has to stay inside the part of memory that is mapped a page at a
+   time, because it is reserved and handed out before the rest of the map
+   exists. */
+#define HEAP_MAX  (KERNEL_LOW_MB * 1024 * 1024 - HEAP_BASE)
+
+static u64 heap_bytes = HEAP_MIN;
+
+/* The compositor's back buffer is the largest single thing this kernel ever
+   allocates, and how large is decided by the panel rather than by anything
+   here: 8 MiB at 1920x1080, 20 at 2880x1800, 32 at 3840x2160. The last two
+   are ordinary laptop screens now and neither fits in a fixed 16 MiB heap.
+   What that failure looks like is worth spelling out, because it is not an
+   error message: the allocation fails, the framebuffer is never adopted, and
+   the fallback for having no framebuffer is VGA text mode, which a machine
+   that booted through UEFI does not have. So it boots, and the screen stays
+   black, and nothing says why. */
+static u64 heap_size_for(const handoff_t *h) {
+    if (!h->fb_base || !h->fb_pitch || !h->fb_height) return HEAP_MIN;
+    u64 screen = (u64)h->fb_pitch * 4ull * (u64)h->fb_height;
+    u64 want = HEAP_MIN + ((screen + 0xFFFFFull) & ~0xFFFFFull);
+    return want > HEAP_MAX ? HEAP_MAX : want;
+}
 
 static bool want_selftest = false;
 
@@ -166,15 +188,16 @@ void kmain(handoff_t *h) {
            (u32)(pmm_free_frames() * 4), h->loader);
     /* The heap lives in identity mapped memory, so the frame allocator
        has to be told about it or it will hand the same pages out twice. */
-    pmm_reserve(HEAP_BASE, HEAP_SIZE);
+    heap_bytes = heap_size_for(h);
+    pmm_reserve(HEAP_BASE, heap_bytes);
 
     bb_mark("paging");
     paging_init(h);
     kprintf("  paging  enabled, %d MiB mapped\n",
             (u32)(paging_mapped_bytes() / (1024 * 1024)));
     bb_mark("heap");
-    heap_init(HEAP_BASE, HEAP_SIZE);
-    kprintf("  heap    %d KiB\n", HEAP_SIZE / 1024);
+    heap_init(HEAP_BASE, heap_bytes);
+    kprintf("  heap    %d KiB\n", (u32)(heap_bytes / 1024));
     /* Needs paging to map the aperture and the heap for the back
        buffer, so this is the earliest it can come up. Anything
        printed before now is only in the serial log. */

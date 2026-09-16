@@ -92,6 +92,8 @@ static void setup_graphics(handoff_t *h) {
 
     u32 best = gop->mode->mode;
     u32 best_pixels = 0;
+    u32 smallest = gop->mode->mode;
+    u32 smallest_pixels = 0xFFFFFFFFu;
 
     for (u32 i = 0; i < gop->mode->max_mode; i++) {
         EFI_GRAPHICS_OUTPUT_MODE_INFORMATION *info;
@@ -100,13 +102,25 @@ static void setup_graphics(handoff_t *h) {
         if (info->pixel_format != PixelRedGreenBlueReserved8BitPerColor &&
             info->pixel_format != PixelBlueGreenRedReserved8BitPerColor) continue;
 
-        /* Bigger is better, but not so big that the compositor's back buffer
-           will not fit in the heap. */
-        if (info->horizontal_resolution > 1920) continue;
-        if (info->vertical_resolution > 1200) continue;
-
         u32 pixels = info->horizontal_resolution * info->vertical_resolution;
+        if (pixels < smallest_pixels) { smallest_pixels = pixels; smallest = i; }
+
+        /* Bigger is better, up to what the kernel can afford a back buffer
+           for. The heap grows to fit the mode chosen here, so this is the
+           ceiling on that rather than a property of any particular panel. */
+        if (info->horizontal_resolution > 3840) continue;
+        if (info->vertical_resolution > 2160) continue;
+
         if (pixels > best_pixels) { best_pixels = pixels; best = i; }
+    }
+
+    /* Nothing this machine offers is small enough. Keeping the mode the
+       firmware happens to be in is the wrong answer, because that is usually
+       the panel's own resolution and therefore the largest of the lot: the
+       one that was just rejected. Take the smallest instead. */
+    if (!best_pixels && smallest_pixels != 0xFFFFFFFFu) {
+        best = smallest;
+        best_pixels = smallest_pixels;
     }
 
     if (best_pixels && best != gop->mode->mode) {
