@@ -86,10 +86,108 @@ static u8  last_buttons;
 static int last_mx, last_my;
 static bool needs_composite = true;
 
+/* What of the screen has to reach video memory this frame.
+ *
+ * Drawing is into ordinary memory and costs almost nothing. Copying the
+ * result out is ninety two per cent of a frame, measured, because video
+ * memory is uncached and every write goes to the device rather than to a
+ * cache line. A full screen copy is three megabytes at this size and twenty
+ * at a laptop's, so a frame that only moved a menu should not pay for one.
+ *
+ * Whole is the default and everything that has ever asked for a frame still
+ * gets one. Only the animation asks for less, and only because it knows
+ * exactly what it touched. */
+static bool frame_is_whole = true;
+
+/* The union of everything that changed, when it is not the whole screen.
+   Empty when x1 is not past x0. */
+static int dmg_x0, dmg_y0, dmg_x1, dmg_y1;
+
+static void damage(int x, int y, int w, int h) {
+    if (w <= 0 || h <= 0) return;
+    if (dmg_x1 <= dmg_x0) {                 /* first of this frame */
+        dmg_x0 = x; dmg_y0 = y; dmg_x1 = x + w; dmg_y1 = y + h;
+        return;
+    }
+    if (x < dmg_x0) dmg_x0 = x;
+    if (y < dmg_y0) dmg_y0 = y;
+    if (x + w > dmg_x1) dmg_x1 = x + w;
+    if (y + h > dmg_y1) dmg_y1 = y + h;
+}
+
+/* One rectangle rather than a list. Two windows redrawing in opposite
+   corners therefore cost the whole screen, which is the price of not
+   keeping a list, and the case that matters is one thing moving. */
+static void need_frame(void) {
+    needs_composite = true;
+    frame_is_whole = true;
+}
+
+/* Another frame, but only this much of it has to be sent. */
+static void need_frame_in(int x, int y, int w, int h) {
+    needs_composite = true;
+    damage(x, y, w, h);
+}
+
+/* --- things that move ----------------------------------------------------
+ *
+ * There is one way of doing this and everything uses it: whatever is moving
+ * records the tick it started on, and asks here how far along it is. Nothing
+ * owns a timer, nothing counts frames, and nothing has to be told to stop.
+ * The compositor keeps painting while anything is still in flight and goes
+ * back to sleep when nothing is.
+ *
+ * The clock runs at a hundred ticks a second, so the shortest transition
+ * worth having is around ten of them. Faster than that and it arrives in a
+ * frame or two, which is a jump with extra work.
+ *
+ * All of it is integer: this kernel is built with no floating point at all,
+ * so the curve below is fixed point where 256 means finished.
+ */
+#define ANIM_FULL  256
+#define MENU_MS    200       /* the launcher arriving */
+#define HOVER_MS   110      /* a highlight coming up under the pointer */
+
+static u64 anim_len(u32 ms) {
+    u64 n = ((u64)ms * timer_hz()) / 1000u;
+    return n ? n : 1;
+}
+
+/* Fast to begin with and settling at the end, which is what makes a
+   transition read as something arriving rather than a number changing.
+   Cubic, so 1 - (1-p)^3. */
+static u32 ease_out(u32 p) {
+    if (p >= ANIM_FULL) return ANIM_FULL;
+    u32 inv = ANIM_FULL - p;
+    inv = (inv * inv) / ANIM_FULL;
+    inv = (inv * (ANIM_FULL - p)) / ANIM_FULL;
+    return ANIM_FULL - inv;
+}
+
+/* How far into a transition that began on this tick, 0 to 256.
+ *
+ * With animation switched off everything is already finished, which is the
+ * whole of what the toggle in the settings program does. Before this it was
+ * read from the file, written back to it, and never once looked at. */
+static u32 phase_of(u64 since, u32 ms) {
+    if (!since || !theme()->animate) return ANIM_FULL;
+    u64 len = anim_len(ms);
+    u64 gone = timer_ticks() - since;
+    if (gone >= len) return ANIM_FULL;
+    return ease_out((u32)((gone * ANIM_FULL) / len));
+}
+
+static bool still_moving(u64 since, u32 ms) {
+    return since && phase_of(since, ms) < ANIM_FULL;
+}
+
 /* The launcher. Open when someone clicks the desktop or the taskbar badge. */
 static bool menu_open;
 static int  menu_x, menu_y;
 static int  menu_hover = -1;
+static int  menu_left = -1;         /* the item the pointer has just left */
+static u64  menu_since;             /* when it opened */
+static u64  menu_hover_since;       /* when the highlight last changed */
 
 static u64 last_theme_check;
 
@@ -115,7 +213,7 @@ bool wm_active(void) { return running; }
 int wm_outer_w(const window_t *w) { return w->cw + WM_BORDER * 2; }
 int wm_outer_h(const window_t *w) { return w->ch + WM_TITLE_H + WM_BORDER; }
 
-void wm_invalidate(window_t *w) { if (w) w->dirty = true; needs_composite = true; }
+void wm_invalidate(window_t *w) { if (w) w->dirty = true; need_frame(); }
 
 window_t *wm_create(const char *title, int x, int y, int cw, int ch) {
     if (nwin >= WM_MAX_WINDOWS) return 0;
@@ -132,7 +230,7 @@ window_t *wm_create(const char *title, int x, int y, int cw, int ch) {
     surf_clear(w->canvas, cw, ch, theme()->surface);
 
     stack[nwin++] = w;                    /* new windows open on top */
-    needs_composite = true;
+    need_frame();
     return w;
 }
 
@@ -158,7 +256,7 @@ void wm_close(window_t *w) {
        program drops its handle. */
     if (w->canvas && !w->owned_by_user) kfree(w->canvas);
     kfree(w);
-    needs_composite = true;
+    need_frame();
 }
 
 void wm_raise(window_t *w) {
@@ -167,7 +265,7 @@ void wm_raise(window_t *w) {
         if (stack[i] != w) continue;
         for (int j = i; j < nwin - 1; j++) stack[j] = stack[j + 1];
         stack[nwin - 1] = w;
-        needs_composite = true;
+        need_frame();
         return;
     }
 }
@@ -469,7 +567,7 @@ bool wm_resize(window_t *w, int cw, int ch) {
     w->cw = cw;
     w->ch = ch;
     w->dirty = true;
-    needs_composite = true;
+    need_frame();
     return true;
 }
 
@@ -488,7 +586,7 @@ static void place(window_t *w, int x, int y, int cw, int ch) {
     if (!wm_resize(w, cw, ch)) return;
     w->x = x;
     w->y = y;
-    needs_composite = true;
+    need_frame();
 }
 
 /* The rectangle a snap zone corresponds to, in outer coordinates. */
@@ -525,7 +623,7 @@ static void set_minimized(window_t *w, bool yes) {
     if (w->minimized == yes) return;
     w->minimized = yes;
     if (!yes) wm_raise(w);
-    needs_composite = true;
+    need_frame();
 }
 
 /* The size a corner drag is currently asking for, clamped so a window
@@ -590,30 +688,54 @@ static bool shake_detected(void) {
 
 static void shake_reset(void) { shake_n = 0; }
 
+/* How strongly item i should be lit: rising for the one under the pointer,
+   falling for the one it just left, nothing for the rest. */
+static u32 item_light(int i) {
+    u32 p = phase_of(menu_hover_since, HOVER_MS);
+    if (i == menu_hover) return p;
+    if (i == menu_left)  return ANIM_FULL - p;
+    return 0;
+}
+
 static void draw_menu(void) {
     if (!menu_open) return;
     const theme_t *t = theme();
     int h = MENU_N * MENU_ITEM + 12;
 
-    if (t->shadows) fb_shadow(menu_x, menu_y, MENU_W, h, 8, SHADOW);
-    fb_round_rect(menu_x, menu_y, MENU_W, h, 8, t->overlay);
-    fb_rect((u32)(menu_x + 8), (u32)menu_y, (u32)(MENU_W - 16), 1, t->sheen);
-    fb_round_frame(menu_x, menu_y, MENU_W, h, 8, t->hairline);
+    /* It comes up from below rather than appearing. Eight pixels is enough
+       to be read as movement and short enough not to be waited for. */
+    u32 p = phase_of(menu_since, MENU_MS);
+    int rise = (int)(((ANIM_FULL - p) * 8) / ANIM_FULL);
+    int mx = menu_x, my = menu_y + rise;
+
+    if (t->shadows) fb_shadow(mx, my, MENU_W, h, 8, SHADOW);
+    fb_round_rect(mx, my, MENU_W, h, 8, t->overlay);
+    fb_rect((u32)(mx + 8), (u32)my, (u32)(MENU_W - 16), 1, t->sheen);
+    fb_round_frame(mx, my, MENU_W, h, 8, t->hairline);
 
     for (int i = 0; i < MENU_N; i++) {
-        int iy = menu_y + 6 + i * MENU_ITEM;
-        if (i == menu_hover)
-            fb_round_rect(menu_x + 5, iy, MENU_W - 10, MENU_ITEM, 6,
-                          gfx_mix(lighten(t->surface, 6), t->accent, 60));
+        int iy = my + 6 + i * MENU_ITEM;
 
-        u32 fg = (i == menu_hover) ? t->text : gfx_mix(t->text, t->text_dim, 120);
-        face_text(menu_x + 38, iy + (MENU_ITEM - face_height(FACE_BODY)) / 2,
+        u32 lit = item_light(i);
+        if (lit) {
+            u32 hot = gfx_mix(t->raised, t->accent, 60);
+            fb_round_rect(mx + 5, iy, MENU_W - 10, MENU_ITEM, 6,
+                          gfx_mix(t->overlay, hot, (int)lit * 255 / ANIM_FULL));
+        }
+
+        /* The label comes up out of the panel with it, so the whole thing
+           settles at once instead of the text landing first. */
+        u32 rest = gfx_mix(t->text, t->text_dim, 120);
+        u32 fg = gfx_mix(rest, t->text, (int)lit * 255 / ANIM_FULL);
+        fg = gfx_mix(t->overlay, fg, (int)p * 255 / ANIM_FULL);
+        face_text(mx + 38, iy + (MENU_ITEM - face_height(FACE_BODY)) / 2,
                   MENU[i].label, fg, FACE_BODY);
 
         /* A rounded square stands in for an icon. Accent for the things that
            launch a program, grey for the ones the desktop handles itself. */
-        fb_round_rect(menu_x + 16, iy + MENU_ITEM / 2 - 6, 12, 12, 3,
-                      MENU[i].program ? t->accent : darken(t->text_dim, 60));
+        u32 pip = MENU[i].program ? t->accent : darken(t->text_dim, 60);
+        fb_round_rect(mx + 16, iy + MENU_ITEM / 2 - 6, 12, 12, 3,
+                      gfx_mix(t->overlay, pip, (int)p * 255 / ANIM_FULL));
     }
 }
 
@@ -757,7 +879,15 @@ static void composite(void) {
     draw_taskbar();
     draw_menu();
     draw_cursor(last_mx, last_my);
-    fb_flush();
+    if (frame_is_whole || dmg_x1 <= dmg_x0) {
+        fb_flush();
+    } else {
+        fb_flush_rect(dmg_x0, dmg_y0, dmg_x1 - dmg_x0, dmg_y1 - dmg_y0);
+    }
+    /* Cleared, not set: the next frame sends only what asks to be sent, and
+       everything that changes the whole screen already calls need_frame. */
+    frame_is_whole = false;
+    dmg_x0 = dmg_y0 = dmg_x1 = dmg_y1 = 0;
 }
 
 /* --- launching ---------------------------------------------------------- */
@@ -772,7 +902,7 @@ static void launch(const char *path) {
 
 static void menu_choose(int i) {
     menu_open = false;
-    needs_composite = true;
+    need_frame();
     if (i < 0 || i >= MENU_N) return;
 
     if (MENU[i].program) { launch(MENU[i].program); return; }
@@ -800,7 +930,10 @@ static void open_menu_at(int x, int y) {
     menu_x = x; menu_y = y;
     menu_open = true;
     menu_hover = -1;
-    needs_composite = true;
+    menu_left = -1;
+    menu_since = timer_ticks();
+    menu_hover_since = 0;
+    need_frame();
 }
 
 /* --- input -------------------------------------------------------------- */
@@ -858,12 +991,17 @@ static void handle_mouse(int mx, int my, u8 buttons) {
 
     if (menu_open) {
         int over = menu_item_at(mx, my);
-        if (over != menu_hover) { menu_hover = over; needs_composite = true; }
+        if (over != menu_hover) {
+            menu_left = menu_hover;
+            menu_hover = over;
+            menu_hover_since = timer_ticks();
+            need_frame();
+        }
         if (pressed_now) {
             if (over >= 0) { menu_choose(over); return; }
             /* A click anywhere else dismisses it, and does nothing more. */
             menu_open = false;
-            needs_composite = true;
+            need_frame();
             return;
         }
     }
@@ -894,12 +1032,12 @@ static void handle_mouse(int mx, int my, u8 buttons) {
         dragging = 0;
         resizing = 0;
         mouse_capture = 0;
-        needs_composite = true;
+        need_frame();
     }
 
     if (resizing) {
         resize_from_pointer(mx, my, &resize_cw, &resize_ch);
-        needs_composite = true;
+        need_frame();
         return;
     }
 
@@ -923,7 +1061,7 @@ static void handle_mouse(int mx, int my, u8 buttons) {
             dragging->y = work_h() - WM_TITLE_H;
 
         snap_t zone = dragging->resizable ? snap_zone_at(mx, my) : SNAP_NONE;
-        if (zone != snap_preview) { snap_preview = zone; needs_composite = true; }
+        if (zone != snap_preview) { snap_preview = zone; need_frame(); }
 
         shake_note(mx);
         if (theme()->quirks && shake_detected()) {
@@ -932,7 +1070,7 @@ static void handle_mouse(int mx, int my, u8 buttons) {
             shake_reset();
         }
 
-        needs_composite = true;
+        need_frame();
         return;
     }
 
@@ -959,8 +1097,9 @@ static void handle_mouse(int mx, int my, u8 buttons) {
     if (!w) {
         /* Nothing under the pointer: the taskbar, or the desktop itself. */
         if (on_taskbar_badge(mx, my)) {
-            if (menu_open) { menu_open = false; needs_composite = true; }
-            else open_menu_at(8, (int)fb_height() - TASKBAR_H - (MENU_N * MENU_ITEM + 12) - 6);
+            if (menu_open) { menu_open = false; need_frame(); }
+            else open_menu_at(TASKBAR_GAP,
+                              taskbar_y() - (MENU_N * MENU_ITEM + 12) - 8);
             return;
         }
 
@@ -1033,7 +1172,7 @@ static void cycle_windows(void) {
     for (int i = nwin - 2; i >= 0; i--) {
         if (stack[i]->minimized) continue;
         wm_raise(stack[i]);
-        needs_composite = true;
+        need_frame();
         return;
     }
     /* Everything else is minimised, so bring the nearest one back. */
@@ -1098,7 +1237,7 @@ void wm_run(void) {
     last_mx = mouse_x();
     last_my = mouse_y();
     last_buttons = mouse_buttons();
-    needs_composite = true;
+    need_frame();
     last_theme_check = timer_ticks();
 
     while (running) {
@@ -1109,12 +1248,12 @@ void wm_run(void) {
             last_mx = mx; last_my = my;
             handle_mouse(mx, my, buttons);
             last_buttons = buttons;
-            needs_composite = true;
+            need_frame();
         }
 
         int c = kbd_trygetchar();
         if (c >= 0 && KEY_CODE(c) == 27) {         /* escape */
-            if (menu_open) { menu_open = false; needs_composite = true; }
+            if (menu_open) { menu_open = false; need_frame(); }
             else break;
         } else if (c >= 0 && handle_shortcut(c)) {
             /* Claimed by the desktop. */
@@ -1146,11 +1285,20 @@ void wm_run(void) {
            and is a 512 byte read. */
         if (timer_ticks() - last_theme_check > timer_hz() / 4) {
             last_theme_check = timer_ticks();
-            if (theme_reload()) needs_composite = true;
+            if (theme_reload()) need_frame();
         }
 
-        for (int i = 0; i < nwin; i++)
-            if (stack[i]->dirty) needs_composite = true;
+        /* A window that has redrawn needs its own rectangle sent, not the
+           whole screen. With a terminal on the desktop this fired on nearly
+           every pass, which is why no frame was ever a partial one. */
+        for (int i = 0; i < nwin; i++) {
+            window_t *w = stack[i];
+            if (!w->dirty) continue;
+            if (w->minimized) { need_frame(); continue; }
+            need_frame_in(w->x - SHADOW - 2, w->y - SHADOW - 2,
+                          wm_outer_w(w) + SHADOW * 4,
+                          wm_outer_h(w) + SHADOW * 4);
+        }
 
         /* The taskbar clock ticks, so repaint at least once a second even
            when nothing else changed. A wallpaper that moves needs it far
@@ -1161,7 +1309,17 @@ void wm_run(void) {
         if (!every) every = 1;
         if (timer_ticks() - last_tick >= every) {
             last_tick = timer_ticks();
-            needs_composite = true;
+            need_frame();
+        }
+
+        /* Anything mid transition wants the next frame. This is the only
+           thing driving an animation: no timer of its own, no frame count,
+           and nothing to switch off when it finishes. */
+        if (menu_open && (still_moving(menu_since, MENU_MS)
+                          || still_moving(menu_hover_since, HOVER_MS))) {
+            need_frame_in(menu_x - 14, menu_y - 14,
+                          MENU_W + 28, MENU_N * MENU_ITEM + 12 + 28);
+            need_frame_in(last_mx - 2, last_my - 2, 20, 28);
         }
 
         if (needs_composite) {

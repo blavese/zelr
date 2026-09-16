@@ -21,13 +21,18 @@ import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from harness import Guest, Checks, build_once, count_in, ROOT      # noqa: E402
+from harness import (Guest, Checks, build_once, count_in, _count,
+                     ROOT)      # noqa: E402
 
 DISK = os.path.join(ROOT, "deskcheck.%d.img" % os.getpid())
 
 PAGE = (0x10, 0x14, 0x1A)          # the terminal's default background
 SCREEN_W, SCREEN_H = 1024, 768
 TASKBAR_H = 34
+TASKBAR_GAP = 10                   # the panel floats clear of the edge
+MENU_ITEM = 30
+MENU_TOP = SCREEN_H - TASKBAR_H - TASKBAR_GAP - (8 * MENU_ITEM + 12) - 8
+MENU_PANEL = (0x3F, 0x46, 0x4D)    # the floating layer
 
 # The terminal as it opens.
 WIN_X, WIN_Y, WIN_CW, WIN_CH = 40, 36, 760, 480
@@ -44,11 +49,16 @@ GRIP = (WIN_X + OUTER_W - 7, WIN_Y + OUTER_H - 7)
 # whatever else happens to be the same colour somewhere on the desktop.
 WIN_RECT = (WIN_X, WIN_Y, WIN_X + OUTER_W, WIN_Y + OUTER_H)
 
+# Where the launcher sits when it opens from the taskbar badge, clear of the
+# taskbar below it and of the clock, so nothing in this rectangle changes on
+# its own while the menu is coming up.
+LAUNCHER_RECT = (10, 458, 226, 720)
+
 # The same buttons once the window has been maximised, when its frame is at
 # 0,0 and as wide as the screen.
 BTN_MAX_WHEN_MAXIMISED = (SCREEN_W - 46 + 7, 5 + 7)
 TASKBAR_CHIP = (150, SCREEN_H - TASKBAR_H + 17)
-LAUNCHER = (40, SCREEN_H - TASKBAR_H + 17)
+LAUNCHER = (40, SCREEN_H - TASKBAR_H - TASKBAR_GAP + 17)
 
 # Where the pointer is put before a wallpaper is photographed. It is drawn on
 # the desktop like everything else, so leaving it wherever the last click
@@ -99,6 +109,16 @@ def click_page(mon, at, name, want, timeout=24, rect=WHOLE):
         at[0], at[1], name, lambda w, h, px: want(page(px, w, rect)),
         timeout=timeout)
     return page(px, w, rect), shot, ok
+
+
+def patch(px, w, rect):
+    """The pixels inside a rectangle, as bytes, for comparing frames."""
+    left, top, right, bottom = rect
+    out = bytearray()
+    for y in range(top, bottom):
+        row = y * w * 3
+        out += px[row + left * 3:row + right * 3]
+    return bytes(out)
 
 
 def desktop_bytes(w, h, px):
@@ -280,10 +300,16 @@ def main():
         # its canvas in its own colour, so which is in front is visible in how
         # much of the terminal is left showing.
         mon.click(*LAUNCHER)
-        mon.wait_screen("desk-menu",
-                        lambda w, h, px: count_in(px, w, (10, 540, 210, 730),
-                                                  (0x1F, 0x27, 0x2F)) > 8000)
-        mon.click(60, 645)                            # Paint, second entry
+        _, _, _, _, up = mon.wait_screen(
+            "desk-menu",
+            lambda w, h, px: count_in(px, w, LAUNCHER_RECT, MENU_PANEL) > 8000)
+        c.add("the launcher menu opens where it is expected", up)
+
+        # Paint, the fourth entry, worked out from where the menu is rather
+        # than from a number. The number said Paint and had been landing on
+        # System info, which opens a window of its own, so the check below
+        # passed without a second program ever being started.
+        mon.click(60, MENU_TOP + 6 + 3 * MENU_ITEM + MENU_ITEM // 2)
         w, h, px, shot, ok = mon.wait_screen(
             "desk-two",
             lambda w, h, px: desktop_bytes(w, h, px) != weave, timeout=40)
@@ -299,6 +325,7 @@ def main():
         alt(mon, "d")
         _, _, shot, ok = wait_page(mon, "desk-cleared", lambda n: n < 1000)
         c.add("alt and d puts everything away at once", ok, shot)
+
     finally:
         vm.stop()
 
