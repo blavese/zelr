@@ -47,6 +47,26 @@ HUB = ["-device", "qemu-xhci,id=xhci",
 HOTPLUG = ["-device", "qemu-xhci,id=xhci",
            "-device", "usb-mouse,bus=xhci.0,id=mouse"]
 
+# A stick is a drive plus a usb-storage device in front of it, the same
+# shape as a real one: the controller sees bulk endpoints and a SCSI target
+# behind them, and has no idea the medium is a file on the host.
+STICK_MB = 8
+PATTERN = bytes((0xDE, 0xAD, 0xBE, 0xEF)) * 4
+PATTERN_LBA = 100
+WRITE_LBA = 200
+WRITE_BYTE = 0xAB
+
+
+def make_stick(path):
+    """An empty disk with something recognisable at a known sector."""
+    with open(path, "wb") as f:
+        f.truncate(STICK_MB * 1024 * 1024)
+        f.seek(PATTERN_LBA * 512)
+        f.write(PATTERN + bytes(512 - len(PATTERN)))
+    return ["-drive", "if=none,id=stick,format=raw,file=%s" % path,
+            "-device", "usb-storage,bus=xhci.0,drive=stick"]
+
+
 NAMED = {" ": "spc", "\n": "ret", "/": "slash", ".": "dot", "-": "minus"}
 
 
@@ -152,6 +172,7 @@ def main():
 
     check_behind_a_hub(c)
     check_hot_plug(c)
+    check_a_stick(c)
     return c.report()
 
 
@@ -230,6 +251,80 @@ def check_hot_plug(c):
               plugged and devices(vm, "0 keyboard(s)"))
     finally:
         vm.stop()
+
+
+
+
+def fresh(vm, line):
+    """What a command printed, rather than everything the machine has said.
+
+    Guest.run hands back the whole console, boot log included, so a check
+    for a string that also appears at boot passes whether the command
+    printed it or not. Found by breaking one: the size line was reworded,
+    and the check for it kept passing on the boot log's copy of the same
+    words.
+    """
+    mark = len(vm.serial())
+    vm.run(line)
+    return vm.serial()[mark:]
+
+
+def check_a_stick(c):
+    """A USB stick, enumerated and then actually used.
+
+    Enumerating one proves almost nothing. A device will report a capacity it
+    cannot move a byte of, and the three bulk transfers that make up a SCSI
+    command each fail in their own way. So this reads a sector the host put a
+    pattern in, writes a different sector, and then checks from the host that
+    the write reached the file. A driver that only looks like it works cannot
+    pass the last of those.
+    """
+    img = os.path.join(ROOT, "stick.%d.img" % os.getpid())
+    extra = ["-device", "qemu-xhci,id=xhci"] + make_stick(img)
+
+    vm = Guest(os.path.join(ROOT, "usbstick.%d.img" % os.getpid()),
+               memory=256, machine="q35", extra=extra)
+    try:
+        vm.wait_boot()
+        c.add("a usb stick is found", "1 disk(s)" in vm.serial())
+
+        out = fresh(vm, "stick")
+        c.add("and says how big it is", "sectors of 512 bytes" in out)
+
+        # 8 MiB is 16384 sectors. Anything wildly different means the
+        # capacity came back as something other than what was attached.
+        c.add("and the size is the size of the disk attached",
+              "16384 sectors" in out)
+
+        out = fresh(vm, "stick read %d" % PATTERN_LBA)
+        c.add("a sector written by the host reads back",
+              "de ad be ef" in out.lower())
+
+        out = fresh(vm, "stick write %d %d" % (WRITE_LBA, WRITE_BYTE))
+        c.add("a sector can be written", "wrote sector" in out)
+
+        out = fresh(vm, "stick read %d" % WRITE_LBA)
+        want = ("%x " % WRITE_BYTE) * 3
+        c.add("and reads back as what was written", want in out.lower() + " ")
+    finally:
+        vm.stop()
+
+    # The strongest of these, and the only one the guest cannot fake: the
+    # bytes are on the host's disk now.
+    landed = False
+    try:
+        with open(img, "rb") as f:
+            f.seek(WRITE_LBA * 512)
+            block = f.read(512)
+        landed = len(block) == 512 and all(b == WRITE_BYTE for b in block)
+    except OSError:
+        landed = False
+    c.add("and the bytes are on the host's disk afterwards", landed)
+
+    try:
+        os.remove(img)
+    except OSError:
+        pass
 
 
 if __name__ == "__main__":

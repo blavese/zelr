@@ -25,6 +25,7 @@
 #include "apps.h"
 #include "fb.h"
 #include "elf.h"
+#include "usbdisk.h"
 #include "io.h"
 #include "welcome.h"
 #include "serial.h"
@@ -35,6 +36,12 @@
 static void reboot_now(void);
 
 static char line[LINE_MAX];
+
+static u32 num(const char *s) {
+    u32 v = 0;
+    for (u32 i = 0; s[i] >= '0' && s[i] <= '9'; i++) v = v * 10 + (u32)(s[i] - '0');
+    return v;
+}
 
 static u32 split(char *s, char **argv, u32 max) {
     u32 n = 0;
@@ -367,6 +374,45 @@ static void execute(char *buf) {
         volatile int z = 0;
         volatile int x = 1 / z;
         (void)x;
+    } else if (!strcmp(c, "stick")) {
+        /* The USB disk, which is not the one the system booted from and so
+           is not what `disk` reports on.
+         *
+           Reading and writing a raw sector is the only way to tell whether
+           the driver underneath actually works. A device will happily report
+           a capacity it cannot move a single byte of, and enumerating one is
+           not the same as talking to it. */
+        if (!usbdisk_present()) { kprintf("no usb disk\n"); return; }
+
+        if (argc < 2) {
+            kprintf("model    %s\n", usbdisk_model());
+            kprintf("size     %d sectors of %d bytes\n",
+                    usbdisk_sectors(), usbdisk_block_size());
+            return;
+        }
+
+        u32 lba = argc > 2 ? num(argv[2]) : 0;
+        u32 bytes = usbdisk_block_size();
+        u8 *buf = (u8 *)kmalloc(bytes);
+        if (!buf) { kprintf("out of memory\n"); return; }
+
+        if (!strcmp(argv[1], "read")) {
+            if (!usbdisk_read(lba, 1, buf)) {
+                kprintf("read failed at %d\n", lba);
+            } else {
+                kprintf("sector %d:", lba);
+                for (u32 i = 0; i < 16; i++) kprintf(" %x", buf[i]);
+                kprintf("\n");
+            }
+        } else if (!strcmp(argv[1], "write")) {
+            u8 fill = argc > 3 ? (u8)num(argv[3]) : 0;
+            for (u32 i = 0; i < bytes; i++) buf[i] = fill;
+            if (usbdisk_write(lba, 1, buf)) kprintf("wrote sector %d\n", lba);
+            else                            kprintf("write failed at %d\n", lba);
+        } else {
+            kprintf("stick [read|write] <lba> [byte]\n");
+        }
+        kfree(buf);
     } else if (!strcmp(c, "reboot")) {
         kprintf("rebooting\n");
         reboot_now();

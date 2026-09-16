@@ -15,6 +15,7 @@
  */
 #include "sysfs.h"
 #include "usb.h"
+#include "usbdisk.h"
 #include "printf.h"
 #include "string.h"
 #include "pmm.h"
@@ -177,6 +178,9 @@ static u32 render_devices(char *b, u32 cap) {
         put(&o, "usb       no controller\n");
     put(&o, "keyboard  ps/2%s\n", usb_keyboards() ? " and usb" : "");
     put(&o, "storage   %s\n", vfs_disk_backed() ? "fat16 on disk" : "memory only");
+    if (usbdisk_present())
+        put(&o, "usbdisk   %s, %d sector(s) of %d bytes\n",
+            usbdisk_model(), usbdisk_sectors(), usbdisk_block_size());
     return o.len;
 }
 

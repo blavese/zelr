@@ -106,7 +106,27 @@ bool xhci_set_packet_size(u8 slot, u16 max_packet);
 /* Tells the controller about an interrupt-in endpoint, so it can be polled.
    dci is the endpoint's index in the device context: 2*number+1 for an in
    endpoint. */
+/* What an endpoint is for. The controller needs to be told, because it
+   schedules each kind differently: interrupt endpoints get a guaranteed
+   slice every so many frames, bulk gets whatever is left over. */
+#define XHCI_EP_BULK_OUT    2
+#define XHCI_EP_BULK_IN     6
+#define XHCI_EP_INT_IN      7
+
+bool xhci_open_endpoint(u8 slot, u8 dci, u8 kind, u16 max_packet, u8 interval);
 bool xhci_open_interrupt_in(u8 slot, u8 dci, u16 max_packet, u8 interval);
+
+/* One bulk transfer, there and back before this returns.
+ *
+ * Storage is the reason this exists and storage is synchronous all the way
+ * up: a read is asked for and the answer is needed before anything else can
+ * happen. The buffer has to be identity mapped, which everything from the
+ * kernel heap is.
+ *
+ * Returns the number of bytes actually moved, or -1. Short is not an error:
+ * a device is allowed to send less than was asked for, and for a read that
+ * is how the last block of a file arrives. */
+int  xhci_bulk(u8 slot, u8 dci, void *data, u32 len, bool in);
 
 /* Hands the controller a buffer to fill the next time the endpoint has
    something to say. One report per call: it is queued again when it comes

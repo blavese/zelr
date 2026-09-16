@@ -27,6 +27,7 @@
 #include "printf.h"
 #include "string.h"
 #include "timer.h"
+#include "usbdisk.h"
 #include "sched.h"
 #include "io.h"
 #include "blackbox.h"
@@ -44,6 +45,12 @@
 
 #define CLASS_HID       3
 #define CLASS_HUB       9
+/* Mass storage, speaking SCSI, over two bulk endpoints. Every stick is this
+   and almost nothing else: the other transports in the specification were
+   for floppy drives. */
+#define CLASS_MSC       8
+#define SUB_SCSI        6
+#define PROTO_BBB       0x50
 #define SUB_BOOT        1
 #define PROTO_KEYBOARD  1
 #define PROTO_MOUSE     2
@@ -104,7 +111,7 @@ typedef struct {
 } device_t;
 
 static device_t devices[MAX_DEVICES];
-static u32 nkeyboards, nmice, nhubs;
+static u32 nkeyboards, nmice, nhubs, ndisks;
 static volatile u32 nreports;
 static bool started;
 static char description[128];
@@ -403,6 +410,9 @@ static device_t *free_device(void) {
 static bool claim_interface(u8 slot, u32 root_port,
                             const u8 *cfg, u16 total) {
     const interface_desc_t *want = 0;
+    const interface_desc_t *disk = 0;
+    u8  bulk_in = 0, bulk_out = 0;
+    u16 bulk_mps = 0;
     u16 at = 0;
 
     while (at + 2 <= total) {
@@ -416,6 +426,21 @@ static bool claim_interface(u8 slot, u32 root_port,
             want = (i->iclass == CLASS_HID && i->subclass == SUB_BOOT
                     && (i->protocol == PROTO_KEYBOARD
                         || i->protocol == PROTO_MOUSE)) ? i : 0;
+            disk = (i->iclass == CLASS_MSC && i->subclass == SUB_SCSI
+                    && i->protocol == PROTO_BBB) ? i : 0;
+        } else if (type == DESC_ENDPOINT && disk
+                   && len >= sizeof(endpoint_desc_t)) {
+            /* Two bulk endpoints, one each way. Collected rather than acted
+               on, because both are needed before either is any use. */
+            const endpoint_desc_t *e = (const endpoint_desc_t *)rec;
+            if ((e->attributes & 0x03) == 2) {
+                bool in = (e->address & 0x80) != 0;
+                u8 number = e->address & 0x0F;
+                u8 dci = (u8)(number * 2 + (in ? 1 : 0));
+                if (in) bulk_in = dci; else bulk_out = dci;
+                u16 mps = e->max_packet & 0x7FF;
+                if (mps) bulk_mps = mps;
+            }
         } else if (type == DESC_ENDPOINT && want
                    && len >= sizeof(endpoint_desc_t)) {
             const endpoint_desc_t *e = (const endpoint_desc_t *)rec;
@@ -457,6 +482,27 @@ static bool claim_interface(u8 slot, u32 root_port,
         }
         at = (u16)(at + len);
     }
+
+    /* A stick, if both halves of it turned up.
+     *
+     * The lower numbered endpoint is opened first. Each Configure Endpoint
+     * says how far down the context array the controller should look, and
+     * opening the higher one second means that number only ever rises. */
+    if (bulk_in && bulk_out && bulk_mps) {
+        u8 lo = bulk_in < bulk_out ? bulk_in : bulk_out;
+        u8 hi = bulk_in < bulk_out ? bulk_out : bulk_in;
+        u8 lo_kind = (lo == bulk_in) ? XHCI_EP_BULK_IN : XHCI_EP_BULK_OUT;
+        u8 hi_kind = (hi == bulk_in) ? XHCI_EP_BULK_IN : XHCI_EP_BULK_OUT;
+
+        if (!xhci_open_endpoint(slot, lo, lo_kind, bulk_mps, 0)) return false;
+        if (!xhci_open_endpoint(slot, hi, hi_kind, bulk_mps, 0)) return false;
+
+        if (!usbdisk_attach(slot, bulk_in, bulk_out)) return false;
+        ndisks++;
+        bb_log("usb disk on slot %d, in ep %d out ep %d", slot, bulk_in, bulk_out);
+        return true;
+    }
+
     return false;
 }
 
@@ -582,6 +628,7 @@ static void forget_root(u32 port) {
         if (!d->used || d->root != port) continue;
         if (d->keyboard) { if (nkeyboards) nkeyboards--; }
         else             { if (nmice) nmice--; }
+        usbdisk_detach(d->slot);
         xhci_detach(d->slot);
         d->used = false;
         bb_log("usb device on port %d unplugged", port);
@@ -618,8 +665,8 @@ void usb_start_service(void) {
 /* --- the outside ---------------------------------------------------------------- */
 static void describe(void) {
     kformat(description, sizeof description,
-            "%s, %d hub(s), %d keyboard(s), %d mouse",
-            xhci_describe(), nhubs, nkeyboards, nmice);
+            "%s, %d hub(s), %d keyboard(s), %d mouse, %d disk(s)",
+            xhci_describe(), nhubs, nkeyboards, nmice, ndisks);
 }
 
 void usb_init(void) {
@@ -650,6 +697,7 @@ bool usb_present(void) { return started; }
 u32  usb_keyboards(void) { return nkeyboards; }
 u32  usb_mice(void) { return nmice; }
 u32  usb_hubs(void) { return nhubs; }
+u32  usb_disks(void) { return ndisks; }
 u32  usb_reports(void) { return nreports; }
 const char *usb_describe(void) {
     return description[0] ? description : "not started";
