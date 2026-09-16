@@ -2,6 +2,9 @@
 #include "types.h"
 
 bool mouse_init(void);
+
+/* One byte of a packet, already read off the controller. */
+void mouse_byte(u8 b);
 bool mouse_present(void);
 i32  mouse_x(void);
 i32  mouse_y(void);

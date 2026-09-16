@@ -4,6 +4,7 @@
 #include "idt.h"
 #include "pic.h"
 #include "io.h"
+#include "ps2.h"
 #include "serial.h"
 
 /* The buffer holds ints rather than chars, because a key is not always a
@@ -77,8 +78,12 @@ static int keypad_key(u8 code) {
     }
 }
 
-static void on_key(registers_t *r) {
-    u8 sc = inb(0x60);
+/* One scancode, already taken off the controller by kernel/ps2.c.
+ *
+ * It reads the port rather than this, because the byte might have been the
+ * mouse's, and that can only be told from the status register as it was
+ * before the read. */
+void keyboard_byte(u8 sc) {
 
     /* A prefix on its own. The byte after it is what was actually pressed. */
     if (sc == 0xE0) { extended = true; return; }
@@ -136,8 +141,13 @@ static void on_key(registers_t *r) {
     push(c);
 }
 
+static void on_irq(registers_t *r) {
+    (void)r;
+    ps2_poll();
+}
+
 void keyboard_init(void) {
-    register_interrupt_handler(33, on_key);
+    register_interrupt_handler(33, on_irq);
     pic_unmask(1);
 }
 

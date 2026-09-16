@@ -9,6 +9,7 @@
 #include "fb.h"
 #include "idt.h"
 #include "pic.h"
+#include "ps2.h"
 #include "io.h"
 #include "printf.h"
 #include "string.h"
@@ -61,17 +62,10 @@ i32  mouse_y(void) { return my; }
 u8   mouse_buttons(void) { return buttons; }
 u32  mouse_moves(void) { return moves; }
 
-static void wait_write(void) {
-    for (u32 i = 0; i < 100000; i++) if (!(inb(PS2_STAT) & 2)) return;
-}
-static void wait_read(void) {
-    for (u32 i = 0; i < 100000; i++) if (inb(PS2_STAT) & 1) return;
-}
-
 static void mouse_cmd(u8 cmd) {
-    wait_write(); outb(PS2_CMD, 0xD4);      /* next byte goes to the mouse */
-    wait_write(); outb(PS2_DATA, cmd);
-    wait_read();  (void)inb(PS2_DATA);      /* consume the ack */
+    ps2_command(0xD4);                      /* the next byte is for the mouse */
+    ps2_write_data(cmd);
+    ps2_read(0);                            /* and it acknowledges each one */
 }
 
 void mouse_hide(void) {
@@ -137,14 +131,20 @@ static void on_packet(void) {
     mouse_inject(dx, dy, flags & 0x07);
 }
 
-static void mouse_isr(registers_t *r) {
-    (void)r;
-    u8 status = inb(PS2_STAT);
-    if (!(status & 0x20)) return;                   /* not from the mouse */
-
-    packet[phase++] = inb(PS2_DATA);
+/* One byte of a packet, already taken off the controller.
+ *
+ * Which device a byte came from can only be told from the status register as
+ * it was before the read, so kernel/ps2.c does the reading and the sorting
+ * and this is handed the ones that were the mouse's. */
+void mouse_byte(u8 b) {
+    packet[phase++] = b;
     if (phase == 1 && !(packet[0] & 0x08)) { phase = 0; return; }
     if (phase == 3) { phase = 0; on_packet(); }
+}
+
+static void mouse_isr(registers_t *r) {
+    (void)r;
+    ps2_poll();
 }
 
 bool mouse_init(void) {
@@ -154,15 +154,9 @@ bool mouse_init(void) {
     moves = 0;
     drawn = false;
 
-    wait_write(); outb(PS2_CMD, 0xA8);               /* enable the aux port */
-
-    /* Turn on the interrupt for device 2 in the controller config byte. */
-    wait_write(); outb(PS2_CMD, 0x20);
-    wait_read();  u8 cfg = inb(PS2_DATA);
-    cfg |= 0x02;                                     /* aux interrupt */
-    cfg &= (u8)~0x20;                                /* aux clock enabled */
-    wait_write(); outb(PS2_CMD, 0x60);
-    wait_write(); outb(PS2_DATA, cfg);
+    /* The port and the interrupt are the controller's business and were set
+       up before this ran. What is left is the device itself. */
+    if (!ps2_present()) return false;
 
     mouse_cmd(0xF6);                                 /* restore defaults */
     mouse_cmd(0xF4);                                 /* start reporting */

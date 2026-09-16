@@ -319,8 +319,13 @@ if [ "$MODE" = "full" ]; then
   # would take a keystroke on a laptop. Everything else types over the serial
   # line or at a PS/2 keyboard, and a machine built this decade has neither.
   usbtest() { keep timeout 600 python tools/usbcheck.py; }
+
+  # Machines that were interfered with while they were starting, which is
+  # what people actually do and what nothing else here covered.
+  inputtest() { keep timeout 600 python tools/inputcheck.py; }
   par_start "the windows go where they are told" desktest
   par_start "a usb keyboard and mouse are found and used" usbtest
+  par_start "input survives being touched during boot" inputtest
 
   par_wait
 fi

@@ -1,6 +1,7 @@
 /* Programmable Interval Timer on IRQ0. This is the heartbeat the scheduler
    preempts on. */
 #include "timer.h"
+#include "ps2.h"
 #include "idt.h"
 #include "pic.h"
 #include "io.h"
@@ -17,6 +18,13 @@ static void on_tick(registers_t *r) {
        moves it along: a key pressed on a USB keyboard is noticed on the next
        tick. See kernel/xhci.c for why it is polled rather than wired up. */
     usb_poll();
+
+    /* And the 8042, which does raise an interrupt but only on the edge of a
+       byte arriving. One that turned up while the line was still masked, or
+       while an interrupt was lost, sits in the output buffer and stops the
+       controller delivering anything further. Before this, that was a
+       keyboard and a mouse dead until the machine was power cycled. */
+    ps2_poll_from_timer();
 }
 
 void timer_init(u32 hz) {
