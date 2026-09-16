@@ -15,7 +15,7 @@
  * find out which of the three answered. */
 
 #define VFS_PATH_MAX FAT_PATH_MAX
-#define VFS_NAME_MAX 32
+#define VFS_NAME_MAX FAT_NAME_MAX
 #define VFS_MAX_OPEN 16
 
 

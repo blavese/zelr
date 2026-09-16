@@ -27,6 +27,7 @@
 #include "elf.h"
 #include "usbdisk.h"
 #include "sound.h"
+#include "power.h"
 #include "io.h"
 #include "welcome.h"
 #include "serial.h"
@@ -68,6 +69,7 @@ static void cmd_help(void) {
             "  cat NAME        print a file\n"
             "  write NAME TEXT create or overwrite a file\n"
             "  append NAME TXT add a line to a file\n"
+            "  cp SRC DST      copy a file\n"
             "  rm NAME         delete a file\n"
             "  disk            show the attached disk\n"
             "  sync            force a write to disk\n"
@@ -330,6 +332,29 @@ static void execute(char *buf) {
         bool ok = (c[0] == 'w') ? vfs_write(argv[1], text, len)
                                 : vfs_append(argv[1], text, len);
         kprintf(ok ? "ok\n" : "failed\n");
+    } else if (!strcmp(c, "cp")) {
+        /* The terminal had this and the shell did not, which stopped
+           mattering the moment there was a second volume to copy
+           between. Whole file at a time: the heap is the limit, and
+           anything that does not fit in it does not fit on a floppy
+           sized volume either. */
+        if (argc < 3) { kprintf("usage: cp SRC DST\n"); return; }
+
+        u32 size = 0;
+        if (!vfs_stat(argv[1], &size, 0)) {
+            kprintf("cp: %s: no such file\n", argv[1]);
+            return;
+        }
+
+        u8 *buf = (u8 *)kmalloc(size ? size : 1);
+        if (!buf) { kprintf("cp: out of memory\n"); return; }
+
+        int got = vfs_read(argv[1], buf, size);
+        if (got < 0) kprintf("cp: %s: cannot read\n", argv[1]);
+        else if (!vfs_write(argv[2], buf, (u32)got))
+            kprintf("cp: %s: cannot write\n", argv[2]);
+        else kprintf("ok\n");
+        kfree(buf);
     } else if (!strcmp(c, "rm")) {
         if (argc < 2) kprintf("usage: rm NAME\n");
         else kprintf(vfs_delete(argv[1]) ? "ok\n" : "rm: no such file\n");
@@ -429,6 +454,17 @@ static void execute(char *buf) {
             kprintf("stick [read|write] <lba> [byte]\n");
         }
         kfree(buf);
+    } else if (!strcmp(c, "shutdown") || !strcmp(c, "poweroff")) {
+        /* Anything not yet on the disk goes first. A machine that is
+           switched off does not come back to finish writing. */
+        if (!power_can_off()) {
+            kprintf("cannot power off: %s\n", power_describe());
+            return;
+        }
+        kprintf("powering off\n");
+        diskfs_flush();
+        power_off();
+        kprintf("the firmware did not take it\n");
     } else if (!strcmp(c, "reboot")) {
         kprintf("rebooting\n");
         reboot_now();

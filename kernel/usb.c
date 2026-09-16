@@ -28,6 +28,7 @@
 #include "string.h"
 #include "timer.h"
 #include "usbdisk.h"
+#include "diskfs.h"
 #include "sched.h"
 #include "io.h"
 #include "blackbox.h"
@@ -500,6 +501,11 @@ static bool claim_interface(u8 slot, u32 root_port,
         if (!usbdisk_attach(slot, bulk_in, bulk_out)) return false;
         ndisks++;
         bb_log("usb disk on slot %d, in ep %d out ep %d", slot, bulk_in, bulk_out);
+
+        /* And mounted, if there is anything on it to mount. A stick that is
+           blank, or formatted as something this kernel does not read, is
+           still a disk: it just has no files under /usb. */
+        diskfs_mount_removable(usbdisk_blk_id());
         return true;
     }
 
@@ -628,6 +634,8 @@ static void forget_root(u32 port) {
         if (!d->used || d->root != port) continue;
         if (d->keyboard) { if (nkeyboards) nkeyboards--; }
         else             { if (nmice) nmice--; }
+        /* Before the disk goes, so nothing is left pointing at it. */
+        diskfs_unmount_removable();
         usbdisk_detach(d->slot);
         xhci_detach(d->slot);
         d->used = false;

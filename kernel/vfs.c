@@ -146,6 +146,27 @@ static int ram_list(const char *dir, u32 index, char *name_out, u32 *size_out, b
 
 /* --- listing and stat --------------------------------------------------- */
 
+/* Which volume a path is on, and what it is called there.
+ *
+ * Everything under /usb is the removable volume, with the prefix taken off,
+ * because a volume knows nothing about where it was mounted. Everything else
+ * is the disk the machine booted from.
+ *
+ * Deciding it here, at the edge, is what keeps the volume out of every
+ * function below: they ask about the selected one, and this is the only
+ * place that selects. */
+#define USB_MOUNT "/usb"
+
+static const char *route(const char *abs) {
+    if (abs[0] == '/' && abs[1] == 'u' && abs[2] == 's' && abs[3] == 'b'
+        && (abs[4] == '/' || abs[4] == 0)) {
+        fat_select(FAT_VOL_USB);
+        return abs[4] ? abs + 4 : "/";
+    }
+    fat_select(FAT_VOL_DISK);
+    return abs;
+}
+
 int vfs_list(const char *path, u32 index, char *name_out, u32 *size_out, bool *dir_out) {
     char abs[VFS_PATH_MAX];
     if (!vfs_resolve(path ? path : ".", abs, sizeof(abs))) return -1;
@@ -157,17 +178,19 @@ int vfs_list(const char *path, u32 index, char *name_out, u32 *size_out, bool *d
        the volume. */
     bool at_root = (abs[0] == '/' && abs[1] == 0);
     if (at_root) {
-        static const char *tops[] = { "bin", "sys" };
-        if (index < 2) {
+        static const char *tops[] = { "bin", "sys", "usb" };
+        u32 ntop = fat_mounted_on(FAT_VOL_USB) ? 3 : 2;
+        if (index < ntop) {
             if (name_out) { strncpy(name_out, tops[index], VFS_NAME_MAX - 1); name_out[VFS_NAME_MAX - 1] = 0; }
             if (size_out) *size_out = 0;
             if (dir_out)  *dir_out = true;
             return 1;
         }
-        index -= 2;
+        index -= ntop;
     }
 
-    if (fat_mounted()) return fat_list(abs, index, name_out, size_out, dir_out);
+    const char *on = route(abs);
+    if (fat_mounted()) return fat_list(on, index, name_out, size_out, dir_out);
     return ram_list(abs, index, name_out, size_out, dir_out);
 }
 
@@ -189,7 +212,8 @@ bool vfs_stat(const char *path, u32 *size_out, bool *dir_out) {
 
     if (live_path(abs)) return sysfs_stat(abs, size_out, dir_out);
 
-    if (fat_mounted()) return fat_stat(abs, size_out, dir_out);
+    const char *on = route(abs);
+    if (fat_mounted()) return fat_stat(on, size_out, dir_out);
 
     file_t *f = fs_find(abs);
     if (!f) return false;
@@ -206,7 +230,8 @@ int vfs_read(const char *path, void *buf, u32 cap) {
 
     if (live_path(abs)) return sysfs_read(abs, buf, cap);
 
-    if (fat_mounted()) return fat_read_file(abs, (u8 *)buf, cap);
+    const char *on = route(abs);
+    if (fat_mounted()) return fat_read_file(on, (u8 *)buf, cap);
 
     file_t *f = fs_find(abs);
     if (!f || f->is_dir) return -1;
@@ -220,7 +245,8 @@ bool vfs_write(const char *path, const void *buf, u32 len) {
     if (!vfs_resolve(path, abs, sizeof(abs))) return false;
     if (live_path(abs)) return false;   /* generated, or the kernel's own copy */
 
-    if (fat_mounted()) return fat_write_file(abs, (const u8 *)buf, len);
+    const char *on = route(abs);
+    if (fat_mounted()) return fat_write_file(on, (const u8 *)buf, len);
     return fs_write(abs, buf, len);
 }
 
@@ -246,7 +272,8 @@ bool vfs_delete(const char *path) {
     if (!vfs_resolve(path, abs, sizeof(abs))) return false;
     if (live_path(abs)) return false;
 
-    if (fat_mounted()) return fat_delete_file(abs);
+    const char *on = route(abs);
+    if (fat_mounted()) return fat_delete_file(on);
     return fs_delete(abs);
 }
 
@@ -256,7 +283,8 @@ bool vfs_mkdir(const char *path) {
     if (abs[0] == '/' && abs[1] == 0) return false;
     if (live_path(abs)) return false;
 
-    if (fat_mounted()) return fat_mkdir(abs);
+    const char *on = route(abs);
+    if (fat_mounted()) return fat_mkdir(on);
     return fs_mkdir(abs);
 }
 
@@ -267,7 +295,8 @@ bool vfs_rmdir(const char *path) {
     if (live_path(abs)) return false;
     if (vfs_count(abs) > 0) return false;
 
-    if (fat_mounted()) return fat_rmdir(abs);
+    const char *on = route(abs);
+    if (fat_mounted()) return fat_rmdir(on);
     return fs_delete(abs);
 }
 

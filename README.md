@@ -161,6 +161,27 @@ What is not there is any other class. Only the machine's own ports are
 watched for a change: plug a keyboard into a hub that is already connected
 and it is not found until the next boot.
 
+**A USB stick mounts.** Plug one in and its files are under `/usb`, read and
+written like anything else, and `cp` moves files between it and the disk the
+machine booted from. The block layer holds disks by number rather than
+holding one picked at boot, which is what made that possible: a stick
+registers itself when it arrives and the volume is mounted from its partition
+table, or from the whole device when it has no table, which is the two shapes
+a stick comes in.
+
+**Files keep their names.** A FAT directory entry holds eight characters and
+three more, and everything since 1995 has carried the real name in extra
+entries in front of that one. Both are written and read, so
+`a-rather-long-file-name.txt` is what it is called rather than
+`A-RATHE~1.TXT`, and a name that always fitted is still stored the way it
+always was. tools/readfat.py reads them too, so the two implementations
+disagree out loud rather than quietly.
+
+**It turns off.** There is no instruction for that: a machine is switched off
+by asking the chipset for sleep state five, and what has to be written to ask
+is two numbers the firmware chose and left in its own bytecode. The kernel
+finds them by reading it. `shutdown` in the shell.
+
 **Sound** is Intel HD Audio, which is the controller every machine made this
 century has. The controller half is small: a list of buffer descriptors and a
 run bit, and once it is running whatever is in the buffer is what comes out.
@@ -278,6 +299,9 @@ instead.
     python tools/usbcheck.py    boot with usb keyboard, mouse and stick, use them
     python tools/inputcheck.py  type on machines touched while they booted
     python tools/soundcheck.py  play notes and measure what came out
+    python tools/mountcheck.py  mount a usb stick and copy files off it
+    python tools/namecheck.py   save long names and read them back
+    python tools/powercheck.py  tell it to shut down, see if it does
     python tools/shots.py       retake the screenshots in this readme
 
 The Windows launcher lives in `launcher/` and is built with
@@ -633,18 +657,16 @@ large range:
   not forward ICMP to the wider internet without elevated privileges, so
   pinging an outside address times out even though DNS and TCP to that same
   address work.
-- **A USB stick is not a mountable disk.** It can be read and written by
-  sector, and the shell's `stick` command does exactly that, but the block
-  layer still holds one disk chosen at boot and has no handle to say which,
-  so FAT cannot be pointed at a stick yet. Beyond keyboards, mice, hubs and
-  mass storage no other class is claimed.
-  Only the machine's own ports are watched for a change, so
+- **USB stops at keyboards, mice, hubs and storage.** No other class is
+  claimed. Only the machine's own ports are watched for a change, so
   something plugged into a hub after boot is not found until the next one.
   The controller is polled on the timer tick rather than wired to an
   interrupt, which costs up to ten milliseconds of latency on a key press.
-- **No FAT long filenames.** A file saved as somethinglong.txt comes back as
-  SOMETHI~1.TXT. The entries that carry the real name are read past rather
-  than understood.
+- **Two volumes at a time.** The disk the machine booted from, and one
+  removable. A second stick is a disk with a number and no way to mount it.
+- **Names are ASCII.** The entries that carry a long name hold sixteen bit
+  characters, and anything above 127 comes back as a question mark rather
+  than as half of something nobody can type.
 - **Memory is capped at 64 GiB**, and by how much bitmap fits between the
   kernel and the heap, whichever is lower. What the machine actually has is
   what gets mapped: the bottom 64 MiB a page at a time, and everything the
@@ -716,6 +738,7 @@ orders of magnitude away from Linux, which is roughly 30 million lines.
     kernel/usbdisk.c   usb sticks, which are scsi through bulk endpoints
     kernel/hda.c       the sound controller, and walking its codec
     kernel/sound.c     what is in the buffer when the hardware reads it
+    kernel/power.c     turning the machine off, which means reading aml
     kernel/timer.c     programmable interval timer
     kernel/shell.c     the shell
     kernel/welcome.c   the first-run text and the guided tour

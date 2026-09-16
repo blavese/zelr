@@ -29,3 +29,6 @@ bool usbdisk_attach(u8 slot, u8 in_dci, u8 out_dci);
 
 /* And when whatever it was hanging off went away. */
 void usbdisk_detach(u8 slot);
+
+/* Which disk number it was given, or BLK_NONE when there is no stick. */
+u32 usbdisk_blk_id(void);

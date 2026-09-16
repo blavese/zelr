@@ -76,7 +76,7 @@ typedef struct {
     u32  state;              /* 0 ready, 1 running, 2 sleeping, 3 blocked, 4 dead */
     u32  slices;
     u32  user;
-    char name[32];
+    char name[64];
 } zelr_task_t;
 
 /* What SYS_SYSINFO fills in: what the machine is, as far as a program is

@@ -3,6 +3,27 @@
 
 #define FAT_PATH_MAX 128
 
+/* The longest name this reads or writes. Sixty three characters covers
+   anything anybody types; the limit exists because a directory entry
+   carries thirteen at a time and something has to bound the loop. */
+#define FAT_NAME_MAX 64
+
+/* Two volumes: the disk the machine booted from, and something removable.
+   Enough to copy a file from one to the other, which is the point. */
+#define FAT_VOLUMES   2
+#define FAT_VOL_DISK  0
+#define FAT_VOL_USB   1
+
+/* Which volume the calls below are about. Selected at the edge, in
+   kernel/vfs.c, from the path. */
+void fat_select(u32 vol);
+u32  fat_selected(void);
+bool fat_mounted_on(u32 vol);
+void fat_forget_volume(u32 vol);
+
+/* Mounts a volume of a given disk at a given sector. */
+bool fat_mount_on(u32 vol, u32 dev, u32 base_lba);
+
 /* Mounts the volume starting at this sector of the disk. Everything inside
    is relative to it, so a filesystem in a partition and one written across
    a whole disk are the same code with a different base. fat_mount is the
