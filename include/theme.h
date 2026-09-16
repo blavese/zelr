@@ -26,11 +26,31 @@ typedef enum {
 bool wallpaper_moves(wallpaper_t w);
 
 typedef struct {
-    u32 accent;          /* title bars, highlights, the pointer's own colour */
+    u32 accent;          /* the one loud colour, spent only where it counts */
     u32 desktop;         /* the background behind everything */
     u32 surface;         /* window chrome and the taskbar */
     u32 text;
     u32 text_dim;
+
+    /* Derived, and deliberately not in the file.
+     *
+     * Three colours cannot describe a surface sitting on top of another
+     * surface, so every place that needed one was mixing its own out of
+     * lighten() and darken() with a number chosen on the spot. Twenty of
+     * those and nothing lines up: the same conceptual layer comes out a
+     * different colour in the taskbar than in a menu, and changing the
+     * theme moves them by different amounts.
+     *
+     * These are one step, two steps, an edge and a highlight, worked out
+     * once from the colours that are in the file, so the whole desktop
+     * stays coherent when somebody changes one of them. */
+    u32 raised;          /* one layer up: a title bar, a card, a well */
+    u32 overlay;         /* two layers up: menus and anything floating */
+    u32 hairline;        /* the edge that separates a layer from the next */
+    u32 sheen;           /* a lighter top edge, as if lit from above */
+    u32 accent_soft;     /* accent at low strength, for a selected row */
+    u32 accent_text;     /* text that has to sit on the accent itself */
+    u32 text_mute;       /* one level quieter than text_dim */
 
     wallpaper_t wallpaper;
     int  corner;         /* window corner radius, 0 for square */

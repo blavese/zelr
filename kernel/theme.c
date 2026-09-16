@@ -37,6 +37,8 @@ const char *theme_preset_name(int i) {
     return PRESETS[i].name;
 }
 
+static void derive(void);
+
 u32 theme_preset_accent(int i) {
     if (i < 0 || i >= THEME_PRESETS) return 0;
     return PRESETS[i].accent;
@@ -47,12 +49,61 @@ void theme_apply_preset(int i) {
     current.accent = PRESETS[i].accent;
     current.desktop = PRESETS[i].desktop;
     current.surface = PRESETS[i].surface;
+    derive();
 }
 
 int theme_current_preset(void) {
     for (int i = 0; i < THEME_PRESETS; i++)
         if (PRESETS[i].accent == current.accent) return i;
     return -1;                            /* a colour someone set by hand */
+}
+
+/* --- the recipe ---------------------------------------------------------
+ *
+ * A theme names three colours. Everything else on screen is worked out from
+ * them here, once, so that a layer looks like the same layer wherever it is
+ * drawn and a changed accent moves everything that depends on it together.
+ */
+static u32 mix(u32 a, u32 b, int t) {
+    if (t < 0) t = 0;
+    if (t > 255) t = 255;
+    u32 ar = (a >> 16) & 0xFF, ag = (a >> 8) & 0xFF, ab = a & 0xFF;
+    u32 br = (b >> 16) & 0xFF, bg = (b >> 8) & 0xFF, bb = b & 0xFF;
+    return RGB((ar * (255 - t) + br * t) / 255,
+               (ag * (255 - t) + bg * t) / 255,
+               (ab * (255 - t) + bb * t) / 255);
+}
+
+/* How bright a colour reads, which is not its average: the eye weighs green
+   far more than blue. */
+static u32 luma(u32 c) {
+    return ((((c >> 16) & 0xFF) * 77) + (((c >> 8) & 0xFF) * 151)
+            + ((c & 0xFF) * 28)) >> 8;
+}
+
+static void derive(void) {
+    bool dark = luma(current.surface) < 128;
+    const u32 W = RGB(0xFF, 0xFF, 0xFF);
+    const u32 K = RGB(0x00, 0x00, 0x00);
+
+    /* Layers lift toward the light in both modes; a light theme just needs
+       much less of it before the step is visible. */
+    current.raised  = mix(current.surface, W, dark ? 26 : 12);
+    current.overlay = mix(current.surface, W, dark ? 42 : 18);
+    current.sheen   = mix(current.surface, W, dark ? 92 : 48);
+
+    /* An edge has to go the other way in a light theme or it disappears. */
+    current.hairline = dark ? mix(current.surface, W, 44)
+                            : mix(current.surface, K, 28);
+
+    current.accent_soft = mix(current.surface, current.accent, dark ? 48 : 40);
+
+    /* Text on the accent has to survive whatever accent somebody picked. */
+    current.accent_text = luma(current.accent) > 140
+                          ? mix(current.accent, K, 205)
+                          : W;
+
+    current.text_mute = mix(current.text_dim, current.surface, 95);
 }
 
 const theme_t *theme(void) { return &current; }
@@ -66,6 +117,7 @@ void theme_init(void) {
     current.shadows = true;
     current.animate = true;
     current.quirks = true;
+    derive();
     theme_reload();
 }
 
@@ -144,6 +196,10 @@ bool theme_reload(void) {
 
         if (k) apply(key, value);
     }
+
+    /* The file names three colours; the rest of the palette follows from
+       them, so it is rebuilt here rather than left over from before. */
+    derive();
 
     return memcmp(&before, &current, sizeof(theme_t)) != 0;
 }

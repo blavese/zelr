@@ -34,6 +34,21 @@
 #include "io.h"
 
 #define TASKBAR_H  34
+/* The panel floats clear of the screen edge rather than being welded to it.
+   A bar that runs edge to edge is a border of the display; one with air
+   around it is an object lying on the desktop, and the desktop is then
+   something with depth rather than a backdrop. */
+#define TASKBAR_GAP 10
+#define TASKBAR_R   10
+
+/* The top of the floating panel, which is also the floor for windows. */
+static int taskbar_y(void) {
+    return (int)fb_height() - TASKBAR_H - TASKBAR_GAP;
+}
+
+/* Where the chips start, past the launcher badge. */
+#define TASKBAR_BADGE_W 76
+static int taskbar_chips_x(void) { return TASKBAR_GAP + TASKBAR_BADGE_W + 20; }
 #define MENU_W     210
 #define MENU_ITEM  30
 #define SHADOW     5
@@ -200,7 +215,9 @@ static u32 darken(u32 c, int amount)  { return gfx_mix(c, 0, amount); }
 
 static void draw_wallpaper(void) {
     const theme_t *t = theme();
-    int h = (int)fb_height() - TASKBAR_H;
+    /* All the way down, because the panel no longer covers the bottom of
+       the screen and the wallpaper shows around it. */
+    int h = (int)fb_height();
 
     switch (t->wallpaper) {
     case WALLPAPER_GRADIENT:
@@ -346,7 +363,7 @@ static bool on_grip(const window_t *w, int mx, int my) {
 }
 
 /* Everything above the taskbar, which is where a window is allowed to be. */
-static int work_h(void) { return (int)fb_height() - TASKBAR_H; }
+static int work_h(void) { return taskbar_y(); }
 
 static void draw_chrome(window_t *w, bool focused) {
     const theme_t *t = theme();
@@ -359,15 +376,32 @@ static void draw_chrome(window_t *w, bool focused) {
     fb_round_rect(w->x, w->y, ow, oh, r, t->surface);
 
     /* The title bar is the top of that same rounded shape, which is why it
-       is drawn as its own rounded rect and then squared off at the bottom. */
-    u32 bar = focused ? t->accent : lighten(t->surface, 10);
+       is drawn as its own rounded rect and then squared off at the bottom.
+     *
+     * It is a surface and not a slab of accent. Accent on the largest
+     * element of every window spends the one loud colour on the thing that
+     * needs it least, leaves nothing louder for what does, and is most of
+     * why a desktop reads as old. Focus is said three quieter ways instead:
+     * the bar lifts a layer, the title goes to full strength in the heavier
+     * weight, and the window's own edge picks up the accent. */
+    u32 bar = focused ? t->raised : t->surface;
     fb_round_rect(w->x, w->y, ow, WM_TITLE_H + r, r, bar);
-    fb_rect((u32)w->x, (u32)(w->y + WM_TITLE_H - 1), (u32)ow, 1,
-            focused ? darken(t->accent, 40) : darken(t->surface, 20));
 
-    u32 title_fg = focused ? darken(t->accent, 170) : t->text_dim;
-    face_text(w->x + 12, w->y + (WM_TITLE_H - face_height(FACE_BODY)) / 2,
-              w->title, title_fg, FACE_BODY);
+    /* Lit from above: one brighter row along the top, which is what stops a
+       flat fill reading as a sticker. */
+    fb_rect((u32)(w->x + r), (u32)w->y, (u32)(ow - r * 2), 1, t->sheen);
+
+    /* And the edge between the bar and the body. */
+    fb_rect((u32)w->x, (u32)(w->y + WM_TITLE_H - 1), (u32)ow, 1, t->hairline);
+
+    /* The window in front carries its title in the heavier weight. Colour
+       alone was doing that job, which leaves nothing for a theme where the
+       accent is close to the surface, and weight reads at a glance in a way
+       a hue does not. */
+    u32 title_fg = focused ? t->text : t->text_dim;
+    int title_face = focused ? FACE_BODY_BOLD : FACE_BODY;
+    face_text(w->x + 12, w->y + (WM_TITLE_H - face_height(title_face)) / 2,
+              w->title, title_fg, title_face);
 
     /* Dots rather than glyphs: at 14 pixels a drawn symbol is mostly noise,
        and the colour and position already say what each one does. The mark
@@ -378,7 +412,7 @@ static void draw_chrome(window_t *w, bool focused) {
         if (order[i] == BTN_MAX && !w->resizable) continue;
 
         int bx, by, bs = button_box(w, order[i], &bx, &by);
-        u32 dot = focused ? tint[i] : darken(t->surface, 30);
+        u32 dot = focused ? tint[i] : t->hairline;
         fb_round_rect(bx, by, bs, bs, bs / 2, dot);
         if (!focused) continue;
 
@@ -396,7 +430,11 @@ static void draw_chrome(window_t *w, bool focused) {
         }
     }
 
-    fb_round_frame(w->x, w->y, ow, oh, r, darken(t->surface, 55));
+    /* The focused window is the one wearing the accent, one pixel of it.
+       This is the whole of the accent's job in a window and it is enough:
+       the eye finds a coloured outline in a field of grey immediately. */
+    fb_round_frame(w->x, w->y, ow, oh, r,
+                   focused ? t->accent : t->hairline);
 
     /* Three short strokes in the corner, which is how a grip has looked
        for long enough that nobody needs to be told. */
@@ -558,8 +596,9 @@ static void draw_menu(void) {
     int h = MENU_N * MENU_ITEM + 12;
 
     if (t->shadows) fb_shadow(menu_x, menu_y, MENU_W, h, 8, SHADOW);
-    fb_round_rect(menu_x, menu_y, MENU_W, h, 8, lighten(t->surface, 6));
-    fb_round_frame(menu_x, menu_y, MENU_W, h, 8, darken(t->surface, 40));
+    fb_round_rect(menu_x, menu_y, MENU_W, h, 8, t->overlay);
+    fb_rect((u32)(menu_x + 8), (u32)menu_y, (u32)(MENU_W - 16), 1, t->sheen);
+    fb_round_frame(menu_x, menu_y, MENU_W, h, 8, t->hairline);
 
     for (int i = 0; i < MENU_N; i++) {
         int iy = menu_y + 6 + i * MENU_ITEM;
@@ -608,32 +647,37 @@ static void draw_resize_preview(void) {
 
 static void draw_taskbar(void) {
     const theme_t *t = theme();
-    int y = (int)fb_height() - TASKBAR_H;
+    int y = taskbar_y();
+    int px = TASKBAR_GAP;
+    int pw = (int)fb_width() - TASKBAR_GAP * 2;
 
-    fb_rect(0, (u32)y, fb_width(), TASKBAR_H, darken(t->surface, 40));
-    fb_rect(0, (u32)y, fb_width(), 1, lighten(t->surface, 12));
+    if (t->shadows) fb_shadow(px, y, pw, TASKBAR_H, TASKBAR_R, SHADOW);
+    fb_round_rect(px, y, pw, TASKBAR_H, TASKBAR_R, t->overlay);
+    fb_rect((u32)(px + TASKBAR_R), (u32)y, (u32)(pw - TASKBAR_R * 2), 1, t->sheen);
+    fb_round_frame(px, y, pw, TASKBAR_H, TASKBAR_R, t->hairline);
 
     /* The launcher badge, which is also what the desktop menu opens from. */
     bool badge_hot = menu_open;
-    fb_round_rect(8, y + 5, 76, TASKBAR_H - 10, 6,
-                  badge_hot ? t->accent : lighten(t->surface, 4));
-    face_text(20, y + (TASKBAR_H - face_height(FACE_HEAD)) / 2, "zelr",
-              badge_hot ? darken(t->accent, 170) : t->accent, FACE_HEAD);
+    fb_round_rect(px + 8, y + 5, TASKBAR_BADGE_W, TASKBAR_H - 10, 6,
+                  badge_hot ? t->accent : t->raised);
+    face_text(px + 20, y + (TASKBAR_H - face_height(FACE_HEAD_BOLD)) / 2, "zelr",
+              badge_hot ? t->accent_text : t->accent, FACE_HEAD_BOLD);
 
-    int x = 96;
+    int x = taskbar_chips_x();
     for (int i = 0; i < nwin; i++) {
         window_t *w = stack[i];
         bool focused = (i == nwin - 1) && !w->minimized;
-        int tw = face_width(w->title, FACE_BODY) + 24;
-        if (x + tw > (int)fb_width() - 120) break;
+        int chip_face = focused ? FACE_BODY_BOLD : FACE_BODY;
+        int tw = face_width(w->title, chip_face) + 24;
+        if (x + tw > (int)fb_width() - TASKBAR_GAP - 120) break;
 
-        u32 chip = lighten(t->surface, 4);
-        if (focused)        chip = gfx_mix(chip, t->accent, 70);
-        else if (w->minimized) chip = darken(t->surface, 20);
+        u32 chip = t->raised;
+        if (focused)           chip = t->accent_soft;
+        else if (w->minimized) chip = t->surface;
 
         fb_round_rect(x, y + 5, tw, TASKBAR_H - 10, 6, chip);
-        face_text(x + 12, y + (TASKBAR_H - face_height(FACE_BODY)) / 2, w->title,
-                  focused ? t->text : t->text_dim, FACE_BODY);
+        face_text(x + 12, y + (TASKBAR_H - face_height(chip_face)) / 2, w->title,
+                  focused ? t->text : t->text_dim, chip_face);
 
         /* A full underline for the window in front, a short stub for one
            that is only put away, so the taskbar says where everything is. */
@@ -654,7 +698,7 @@ static void draw_taskbar(void) {
         u32 secs = (u32)(timer_ticks() / timer_hz());
         kformat(clock, sizeof(clock), "up %d:%02d", secs / 60, secs % 60);
     }
-    face_text((int)fb_width() - face_width(clock, FACE_BODY) - 16,
+    face_text((int)fb_width() - TASKBAR_GAP - face_width(clock, FACE_BODY) - 16,
               y + (TASKBAR_H - face_height(FACE_BODY)) / 2, clock, t->text,
               FACE_BODY);
 }
@@ -781,13 +825,19 @@ static window_t *window_at(int mx, int my, bool *on_title, button_t *button) {
 /* Which taskbar chip is under the pointer, or -1. The widths have to be
    worked out the same way the drawing does, so this walks the same list. */
 static int taskbar_chip_at(int mx, int my) {
-    int y = (int)fb_height() - TASKBAR_H;
+    int y = taskbar_y();
     if (my < y + 5 || my >= y + TASKBAR_H - 5) return -1;
 
-    int x = 96;
+    int x = taskbar_chips_x();
     for (int i = 0; i < nwin; i++) {
-        int tw = face_width(stack[i]->title, FACE_BODY) + 24;
-        if (x + tw > (int)fb_width() - 120) break;
+        /* Measured in the face it is drawn in. The window in front carries
+           a heavier title, so measuring every chip in the regular weight
+           puts the edge of the widest one in the wrong place and a click
+           near it lands on the neighbour. */
+        bool focused = (i == nwin - 1) && !stack[i]->minimized;
+        int face = focused ? FACE_BODY_BOLD : FACE_BODY;
+        int tw = face_width(stack[i]->title, face) + 24;
+        if (x + tw > (int)fb_width() - TASKBAR_GAP - 120) break;
         if (mx >= x && mx < x + tw) return i;
         x += tw + 6;
     }
@@ -795,8 +845,10 @@ static int taskbar_chip_at(int mx, int my) {
 }
 
 static bool on_taskbar_badge(int mx, int my) {
-    int y = (int)fb_height() - TASKBAR_H;
-    return my >= y + 5 && my < y + TASKBAR_H - 5 && mx >= 8 && mx < 84;
+    int y = taskbar_y();
+    return my >= y + 5 && my < y + TASKBAR_H - 5
+           && mx >= TASKBAR_GAP + 8
+           && mx < TASKBAR_GAP + 8 + TASKBAR_BADGE_W;
 }
 
 static void handle_mouse(int mx, int my, u8 buttons) {

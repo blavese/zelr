@@ -28,6 +28,17 @@ from harness import (Guest, Checks, build_once, count_all, count_in,     # noqa:
 DISK = os.path.join(ROOT, "shotcheck.%d.img" % os.getpid())
 
 TEAL = (0x2C, 0xC7, 0xA0)
+# The title bar, which is a surface one layer above the window and not the
+# accent. The accent is a one pixel frame around the focused window, so there
+# is a couple of thousand of it on screen rather than a title bar's worth.
+# The focused window's title bar: the surface one layer above the window.
+CHROME = (0x31, 0x38, 0x3F)
+# And where that window's title bar is, because counting this colour across
+# the whole screen is not a check at all. The first attempt counted a shade
+# the wallpaper gradient also passes through, and went on passing with the
+# title bar deleted outright, which is how that was found. Inside the bar
+# and clear of its text and its border. */
+TITLEBAR = (60, 40, 700, 56)
 INDIGO = (0x6E, 0x8A, 0xE8)
 SLATE = (0x10, 0x14, 0x1A)
 SWATCHES = [TEAL, INDIGO, (0xE0, 0xA0, 0x3C), (0xE0, 0x6A, 0x8C),
@@ -43,7 +54,7 @@ MENU_ENTRIES = ["Terminal", "Files", "Notes", "Paint", "Settings",
 MENU_ITEM_H = 30
 MENU_BOTTOM = 734             # the menu's lower edge, just above the taskbar
 MENU_RECT = (10, 540, 210, 730)
-MENU_PANEL = (0x1F, 0x27, 0x2F)
+MENU_PANEL = (0x3F, 0x46, 0x4D)   # the floating layer
 PAGE = (120, 120, 700, 480)
 
 
@@ -68,12 +79,11 @@ def main():
         # accent chrome appears first and its page is filled a moment later,
         # so waiting on the chrome alone catches the terminal half drawn and
         # every check after it reads a screen that was still being painted.
-        w, h, px, shot, up = mon.wait_screen(
-            "desktop",
-            lambda w, h, px: (count_all(px, TEAL) > 3000
-                              and count_in(px, w, PAGE, SLATE) > 100000),
-            timeout=60)
-        c.add("a ring 3 terminal drew its window", count_all(px, TEAL) > 3000,
+        drawn = lambda w, h, px: (count_in(px, w, TITLEBAR, CHROME) > 6000
+                                  and count_all(px, TEAL) > 1200
+                                  and count_in(px, w, PAGE, SLATE) > 100000)
+        w, h, px, shot, up = mon.wait_screen("desktop", drawn, timeout=60)
+        c.add("a ring 3 terminal drew its window", drawn(w, h, px),
               shot)
         c.add("the screen is the mode that was asked for",
               (w, h) == (1024, 768), shot)
