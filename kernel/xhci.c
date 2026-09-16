@@ -113,6 +113,7 @@
 #define TRB_CHAIN       (1u << 4)
 #define TRB_IOC         (1u << 5)       /* tell me when this one is done */
 #define TRB_IDT         (1u << 6)       /* the data is in the TRB itself */
+#define TRB_ISP         (1u << 2)       /* a short packet ends the transfer */
 #define TRB_TYPE(t)     ((u32)(t) << 10)
 #define TRB_TYPE_OF(c)  (((c) >> 10) & 0x3F)
 #define TRB_DIR_IN      (1u << 16)
@@ -779,7 +780,8 @@ bool xhci_set_packet_size(u8 slot, u16 max_packet) {
 }
 
 /* --- interrupt endpoints ----------------------------------------------------- */
-bool xhci_open_interrupt_in(u8 slot, u8 dci, u16 max_packet, u8 interval) {
+bool xhci_open_endpoint(u8 slot, u8 dci, u8 kind, u16 max_packet,
+                        u8 interval) {
     if (!present || slot >= XHCI_MAX_SLOTS || !slots[slot].used) return false;
     if (dci < 2 || dci >= MAX_DCI) return false;
     slot_t *s = &slots[slot];
@@ -793,13 +795,19 @@ bool xhci_open_interrupt_in(u8 slot, u8 dci, u16 max_packet, u8 interval) {
        endpoints below it, which is the number the controller uses to decide
        how much of the context to look at. */
     memcpy(ctx_at(s->input_ctx, 1), ctx_at(s->device_ctx, 0), ctx_stride);
+    /* How far down the context array the controller should look. Raised
+       to reach this endpoint and never lowered: a device with two endpoints
+       is configured with two commands, and setting the count to the second
+       one's index would drop the first if it happened to be higher. */
     u32 *sc = ctx_at(s->input_ctx, 1);
-    sc[0] = (sc[0] & ~(0x1Fu << 27)) | ((u32)dci << 27);
+    u32 have = (sc[0] >> 27) & 0x1F;
+    if (dci > have)
+        sc[0] = (sc[0] & ~(0x1Fu << 27)) | ((u32)dci << 27);
 
     u32 *ep = ctx_at(s->input_ctx, dci + 1);
     ep[0] = (u32)interval << 16;
-    ep[1] = (7u << 3)                     /* interrupt, inward */
-          | (3u << 1)
+    ep[1] = ((u32)kind << 3)
+          | (3u << 1)                     /* three tries before giving up */
           | ((u32)max_packet << 16);
     ep[2] = (u32)((u64)s->ep[dci].trb | 1);
     ep[3] = (u32)((u64)s->ep[dci].trb >> 32);
@@ -808,6 +816,46 @@ bool xhci_open_interrupt_in(u8 slot, u8 dci, u16 max_packet, u8 interval) {
     return command((u64)s->input_ctx, 0,
                    TRB_TYPE(TRB_CONFIGURE_EP) | ((u32)slot << 24), 0)
            == COMP_SUCCESS;
+}
+
+bool xhci_open_interrupt_in(u8 slot, u8 dci, u16 max_packet, u8 interval) {
+    return xhci_open_endpoint(slot, dci, XHCI_EP_INT_IN, max_packet, interval);
+}
+
+/* See include/xhci.h. One Normal TRB, the doorbell, and a wait.
+ *
+ * Simpler than a control transfer because there are no stages: the direction
+ * was settled when the endpoint was opened, so the data is all there is. The
+ * residue the controller reports is what it did not manage to move, which is
+ * how a short read says how short it was.
+ *
+ * The short packet bit matters more than it looks. Without it a device that
+ * sends less than was asked for leaves the endpoint halfway through a
+ * transfer that never completes, and everything after it on that endpoint
+ * waits behind it forever. */
+int xhci_bulk(u8 slot, u8 dci, void *data, u32 len, bool in) {
+    (void)in;                       /* the endpoint already knows which way */
+    if (!present || slot >= XHCI_MAX_SLOTS || !slots[slot].used) return -1;
+    if (dci < 2 || dci >= MAX_DCI) return -1;
+    if (len && !data) return -1;
+    if (len && virt_to_phys((u64)data) != (u64)data) return -1;
+
+    ring_t *r = &slots[slot].ep[dci];
+    u32 before = xfer_done[slot][dci];
+
+    ring_push(r, (u64)data, len, TRB_TYPE(TRB_NORMAL) | TRB_IOC | TRB_ISP);
+    doorbell(slot, dci);
+
+    for (u32 i = 0; xfer_done[slot][dci] == before; i++) {
+        xhci_poll();
+        if (i > 50000) return -1;
+        spin_us(100);
+    }
+
+    u8 code = xfer_code[slot][dci];
+    if (code != COMP_SUCCESS && code != COMP_SHORT_PACKET) return -1;
+    u32 left = xfer_left[slot][dci];
+    return (int)(len > left ? len - left : 0);
 }
 
 bool xhci_listen(u8 slot, u8 dci, void *buf, u16 len) {

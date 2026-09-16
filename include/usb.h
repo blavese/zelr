@@ -27,6 +27,7 @@ bool usb_present(void);
 u32  usb_keyboards(void);
 u32  usb_mice(void);
 u32  usb_hubs(void);
+u32  usb_disks(void);
 
 /* Starts the task that watches for something being plugged in. Separate from
    usb_init because it needs a scheduler, and usb_init runs long before there
