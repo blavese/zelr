@@ -29,6 +29,59 @@
 #include "blackbox.h"
 #include "blockdev.h"
 #include "printf.h"
+#include "string.h"
+
+/* A removable disk, mounted at /usb.
+ *
+ * parts.c reads the table of the disk the machine booted from and holds the
+ * answer, so it is no use here. A stick is one of two shapes anyway: a
+ * partition table with a FAT volume in it, which is what anything formatted
+ * by Windows looks like, or a filesystem written across the whole device,
+ * which is what a floppy looked like and what plenty of sticks still are.
+ * Both are tried, in that order, and fat_mount_on decides: a sector that is
+ * not a boot sector fails the checks it already makes.
+ */
+static const u8 FAT_TYPES[] = { 0x01, 0x04, 0x06, 0x0B, 0x0C, 0x0E, 0xEF };
+
+static bool type_is_fat(u8 t) {
+    for (u32 i = 0; i < sizeof FAT_TYPES; i++)
+        if (FAT_TYPES[i] == t) return true;
+    return false;
+}
+
+bool diskfs_mount_removable(u32 dev) {
+    if (!blk_device_present(dev)) return false;
+
+    u8 sec[SECTOR_SIZE];
+    if (blk_read_on(dev, 0, 1, sec) && sec[510] == 0x55 && sec[511] == 0xAA) {
+        for (u32 i = 0; i < 4; i++) {
+            const u8 *e = sec + 446 + i * 16;
+            u8 type = e[4];
+            u32 start = (u32)e[8] | ((u32)e[9] << 8)
+                      | ((u32)e[10] << 16) | ((u32)e[11] << 24);
+            if (!start || !type_is_fat(type)) continue;
+            if (fat_mount_on(FAT_VOL_USB, dev, start)) {
+                bb_log("usb volume mounted from partition %d at sector %d",
+                       i + 1, start);
+                return true;
+            }
+        }
+    }
+
+    if (fat_mount_on(FAT_VOL_USB, dev, 0)) {
+        bb_log("usb volume mounted from the whole device");
+        return true;
+    }
+
+    bb_log("usb disk has no filesystem this kernel reads");
+    return false;
+}
+
+void diskfs_unmount_removable(void) {
+    fat_forget_volume(FAT_VOL_USB);
+}
+
+bool diskfs_removable_mounted(void) { return fat_mounted_on(FAT_VOL_USB); }
 
 bool diskfs_available(void) { return blk_present(); }
 bool diskfs_mounted(void)   { return fat_mounted(); }

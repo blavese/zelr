@@ -6,6 +6,12 @@
    prepares one if there is not. */
 
 bool diskfs_available(void);
+
+/* A stick, mounted at /usb. Tries a partition table first and then the whole
+   device, because sticks come both ways. */
+bool diskfs_mount_removable(u32 dev);
+void diskfs_unmount_removable(void);
+bool diskfs_removable_mounted(void);
 bool diskfs_mounted(void);
 bool diskfs_format(void);
 

@@ -14,6 +14,15 @@ import sys
 
 SECTOR = 512
 
+def lfn_checksum(short11):
+    """The checksum a long name entry carries of its short name."""
+    total = 0
+    for b in short11:
+        total = (((total & 1) << 7) + (total >> 1) + b) & 0xFF
+    return total
+
+
+
 
 class Fat16:
     def __init__(self, path, writable=False):
@@ -89,20 +98,52 @@ class Fat16:
             limit = len(raw) // 32
 
         out = []
+        pending = {}          # sequence number -> its thirteen characters
+        pending_sum = None
+
         for i in range(limit):
             e = raw[i * 32:(i + 1) * 32]
             if not e or e[0] == 0x00:
                 break
             if e[0] == 0xE5:
+                pending, pending_sum = {}, None
                 continue
             attr = e[11]
-            if attr & 0x0F == 0x0F:      # long file name fragment
+
+            if attr & 0x0F == 0x0F:
+                # A fragment of a long name. They come before the short entry
+                # they belong to, numbered backwards, and each carries a
+                # checksum of that short name so that a volume edited by
+                # something which does not understand them can be spotted.
+                seq = e[0] & 0x1F
+                chars = e[1:11] + e[14:26] + e[28:32]
+                text = ""
+                for k in range(0, len(chars), 2):
+                    code = chars[k] | (chars[k + 1] << 8)
+                    if code in (0x0000, 0xFFFF):
+                        break
+                    text += chr(code)
+                if pending_sum is not None and pending_sum != e[13]:
+                    pending = {}
+                pending_sum = e[13]
+                pending[seq] = text
                 continue
+
             if attr & 0x08:              # volume label
+                pending, pending_sum = {}, None
                 continue
+
             name = e[0:8].decode("ascii", "replace").rstrip()
             ext = e[8:11].decode("ascii", "replace").rstrip()
             full = f"{name}.{ext}" if ext else name
+
+            # The long name wins, when there is a complete one whose checksum
+            # matches the short name sitting here.
+            if pending and pending_sum == lfn_checksum(e[0:11]):
+                parts = [pending[k] for k in sorted(pending) if k in pending]
+                if len(parts) == max(pending):
+                    full = "".join(parts)
+            pending, pending_sum = {}, None
             first = struct.unpack_from("<H", e, 26)[0]
             size = struct.unpack_from("<I", e, 28)[0]
             out.append((full, first, size, attr))

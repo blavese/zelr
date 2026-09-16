@@ -55,6 +55,17 @@ typedef struct {
     bool level_triggered;
 } acpi_override_t;
 
+/* The fixed table, which is where the registers that turn the machine off
+   live. Everything here is an I/O port number rather than an address. */
+typedef struct {
+    bool present;
+    u32  pm1a_cnt;              /* the control register, and its pair */
+    u32  pm1b_cnt;
+    u32  smi_cmd;               /* how to ask the firmware for ACPI mode */
+    u8   acpi_enable;
+    u64  dsdt;                  /* where the bytecode is, for _S5 */
+} acpi_fadt_t;
+
 typedef struct {
     bool found;                 /* the tables were there and made sense */
     u64  lapic_base;            /* MMIO address of the local APIC */
@@ -66,6 +77,8 @@ typedef struct {
     u8   revision;              /* 0 means ACPI 1.0, so RSDT only */
     bool used_xsdt;             /* which directory the tables came from */
     u32  ntables;               /* entries in it, whether or not understood */
+
+    acpi_fadt_t fadt;
 
     u32         nmcfg;
     acpi_mcfg_t mcfg[ACPI_MAX_MCFG];

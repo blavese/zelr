@@ -340,10 +340,23 @@ if [ "$MODE" = "screen" ] || [ "$MODE" = "full" ]; then
   # Notes played, and then measured in a recording of what came out, which is
   # the only part of an audio driver that cannot report success while silent.
   soundtest() { keep timeout 600 python tools/soundcheck.py; }
+
+  # A stick with a filesystem on it, mounted and copied to and from.
+  mounttest() { keep timeout 600 python tools/mountcheck.py; }
+
+  # Files with the names they were given, across a restart, read back by
+  # something that is not this kernel.
+  nametest() { keep timeout 600 python tools/namecheck.py; }
+
+  # And the machine turning itself off.
+  powertest() { keep timeout 600 python tools/powercheck.py; }
   par_start "the windows go where they are told" desktest
   par_start "a usb keyboard and mouse are found and used" usbtest
   par_start "input survives being touched during boot" inputtest
   par_start "notes come out at the pitch they were asked for" soundtest
+  par_start "a usb stick mounts, and files copy off it" mounttest
+  par_start "files keep the names they were given" nametest
+  par_start "the machine turns itself off" powertest
 
   par_wait
 fi

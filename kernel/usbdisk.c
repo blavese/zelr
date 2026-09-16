@@ -21,6 +21,7 @@
 #include "printf.h"
 #include "io.h"
 #include "blackbox.h"
+#include "blockdev.h"
 
 #define CBW_SIG  0x43425355u          /* "USBC" */
 #define CSW_SIG  0x53425355u          /* "USBS" */
@@ -236,6 +237,23 @@ bool usbdisk_write(u32 lba, u32 count, const void *buf) {
     return rw10(lba, count, (void *)buf, true);
 }
 
+/* Eight sectors at a time. A bulk transfer can be longer than that, but a
+   stick is slow enough that the difference does not show and short requests
+   keep the buffer a command needs small. */
+static u32 usbdisk_max_run(void) { return 8; }
+
+/* Nothing is held back, so there is nothing to push out. */
+static bool usbdisk_flush(void) { return attached; }
+
+static const blkdev_t USB_DEV = {
+    "usb", usbdisk_read, usbdisk_write, usbdisk_flush,
+    usbdisk_sectors, usbdisk_max_run, usbdisk_model, true
+};
+
+static u32 blk_id = BLK_NONE;
+
+u32 usbdisk_blk_id(void) { return blk_id; }
+
 bool usbdisk_attach(u8 slot, u8 in_dci, u8 out_dci) {
     if (attached) return false;               /* one stick is enough for now */
 
@@ -256,13 +274,21 @@ bool usbdisk_attach(u8 slot, u8 in_dci, u8 out_dci) {
     inquiry();                                /* a name is not essential */
     if (!read_capacity()) { attached = false; return false; }
 
-    bb_log("usb disk %s, %d sectors of %d bytes",
-           usbdisk_model(), nsectors, sector_bytes);
+    /* Offered to the rest of the kernel as a disk, which is what makes it
+       mountable rather than merely readable. */
+    blk_id = blk_register(&USB_DEV);
+
+    bb_log("usb disk %s, %d sectors of %d bytes, disk %d",
+           usbdisk_model(), nsectors, sector_bytes, blk_id);
     return true;
 }
 
 void usbdisk_detach(u8 slot) {
     if (!attached || slot != dev_slot) return;
+    if (blk_id != BLK_NONE) {
+        blk_unregister(blk_id);
+        blk_id = BLK_NONE;
+    }
     attached = false;
     nsectors = 0;
     model[0] = 0;

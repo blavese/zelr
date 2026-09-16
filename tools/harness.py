@@ -443,12 +443,19 @@ class Guest:
     that; it looks exactly like a kernel that hung."""
 
     def __init__(self, disk, size_mb=32, memory=64, machine=None,
-                 kernel="zelr.bin", args=None, extra=None):
+                 kernel="zelr.bin", args=None, extra=None,
+                 keep=False, reuse=False):
         self.disk = disk
-        if os.path.exists(disk):
-            os.remove(disk)
-        with open(disk, "wb") as f:
-            f.truncate(size_mb * 1024 * 1024)
+        # Two separate things, and conflating them makes the first machine
+        # decline to create the disk at all: keep leaves it behind at the end,
+        # reuse starts from what is already there. Testing that something
+        # survives being switched off wants the first and then the second.
+        self.keep_disk = keep
+        if not reuse:
+            if os.path.exists(disk):
+                os.remove(disk)
+            with open(disk, "wb") as f:
+                f.truncate(size_mb * 1024 * 1024)
 
         self.port = free_port()
         cmd = [qemu_path()]
@@ -537,6 +544,20 @@ class Guest:
         self.wait_prompt(want, timeout)
         return self.serial()
 
+    def fresh(self, line, timeout=30.0):
+        """What one command printed, rather than everything the machine has
+        ever said.
+
+        run hands back the whole console. That is fine for checking something
+        appeared and useless for checking something is absent, because it will
+        be found in the transcript of an earlier command. Two different tests
+        have passed that way while checking nothing at all: a reworded size
+        line the boot log still contained, and a deleted file an earlier
+        listing still showed."""
+        mark = len(self.serial())
+        self.run(line, timeout)
+        return self.serial()[mark:]
+
     def type(self, text, gap=0.05):
         """One character at a time with a gap.
 
@@ -575,7 +596,9 @@ class Guest:
                 self.proc.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 pass
-        if os.path.exists(self.disk):
+        # Left behind when the caller asked to keep it, so a second machine
+        # can be started on what this one wrote.
+        if not self.keep_disk and os.path.exists(self.disk):
             try:
                 os.remove(self.disk)
             except OSError:

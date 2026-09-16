@@ -211,6 +211,8 @@ static void read_mcfg(const sdt_header_t *h) {
 
 /* One entry of whichever directory was used. Both kinds are a physical
    address of a table; they differ only in how wide that address is. */
+static void read_fadt(const sdt_header_t *h);
+
 static void read_table(u64 phys) {
     const sdt_header_t *h = (const sdt_header_t *)map_phys(phys, sizeof(sdt_header_t));
     if (!h) return;
@@ -222,6 +224,45 @@ static void read_table(u64 phys) {
         read_madt((const madt_t *)h);
     else if (memcmp(h->sig, "MCFG", 4) == 0)
         read_mcfg(h);
+    else if (memcmp(h->sig, "FACP", 4) == 0)
+        read_fadt(h);
+}
+
+/* Little endian fields out of a byte array, because the tables are not
+   aligned to anything and the offsets into them are given in bytes. */
+static u32 le32(const u8 *p) {
+    return (u32)p[0] | ((u32)p[1] << 8) | ((u32)p[2] << 16) | ((u32)p[3] << 24);
+}
+static u64 le64(const u8 *p) {
+    return (u64)le32(p) | ((u64)le32(p + 4) << 32);
+}
+
+/* The fixed table. Its signature is FACP and its name is FADT, for reasons
+   that made sense to somebody in 1996.
+ *
+ * Only four things are taken from it, and all four are about turning the
+ * machine off: the control register, its second half on machines that have
+ * one, the port that asks the firmware to hand over ACPI mode, and where the
+ * bytecode lives. The offsets are fixed and have been since ACPI 1.0. */
+static void read_fadt(const sdt_header_t *h) {
+    if (h->length < 90) return;
+    const u8 *p = (const u8 *)h;
+
+    u32 dsdt32   = le32(p + 40);
+    info.fadt.smi_cmd     = le32(p + 48);
+    info.fadt.acpi_enable = p[52];
+    info.fadt.pm1a_cnt    = le32(p + 64);
+    info.fadt.pm1b_cnt    = le32(p + 68);
+
+    /* The sixty four bit pointer, on anything that has one. A machine with
+       its tables above four gigabytes has nothing useful in the old field. */
+    info.fadt.dsdt = dsdt32;
+    if (h->revision >= 2 && h->length >= 148) {
+        u64 x = le64(p + 140);
+        if (x) info.fadt.dsdt = x;
+    }
+
+    info.fadt.present = info.fadt.pm1a_cnt != 0;
 }
 
 /* The tables are read once. Two callers want them and the order they run in

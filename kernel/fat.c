@@ -74,43 +74,116 @@ typedef struct {
    partition table, which is what this kernel formats and what QEMU is given;
    anything else on a real disk. Every sector number below is relative to it,
    so the arithmetic in the rest of this file did not have to change. */
-static u32   part_base;
-static u32   part_sectors;              /* 0 means to the end of the disk */
+/* Everything that is true of one volume rather than of the filesystem code.
+ *
+ * This was two dozen file scope variables, which is the same thing written
+ * down in a way that only allows one of them. They are fields now and the
+ * names below are macros onto whichever volume is selected, so the thousand
+ * lines underneath did not have to change and could not have been missed.
+ *
+ * There are two: the disk the machine booted from, and something removable.
+ * That is enough to copy a file from one to the other, which is the entire
+ * point of the exercise. */
+typedef struct {
+    u32  dev;                           /* which disk, for blk_read_on */
+    u32  part_base;
+    u32  part_sectors;                  /* 0 means to the end of the disk */
+
+    u32  fat_bits;                      /* 16 or 32, from the cluster count */
+    u32  root_cluster;                  /* FAT32 only: the root is a chain */
+
+    bool mounted;
+    u16  bytes_per_sector;
+    u8   sectors_per_cluster;
+    u16  reserved_sectors;
+    u8   num_fats;
+    u16  root_entries;
+    u32  total_sectors;
+    u32  fat_sectors;
+    u32  fat_start;
+    u32  root_start;
+    u32  root_sectors;
+    u32  data_start;
+    u32  cluster_count;
+
+    u32  alloc_hint;
+    u32  fat_cache_lba;
+    bool fat_cache_valid;
+    u8   fat_cache[SECTOR_SIZE];
+} fatvol_t;
+
+static fatvol_t volumes[FAT_VOLUMES] = {
+    { .fat_bits = 16, .alloc_hint = 2 },
+    { .fat_bits = 16, .alloc_hint = 2 },
+};
+
+/* Which one the calls below are about. Set at the edge, in kernel/vfs.c,
+   from the path: everything under /usb is the removable one and everything
+   else is the disk the machine booted from. */
+static u32 current_volume = FAT_VOL_DISK;
+
+void fat_select(u32 vol) {
+    if (vol < FAT_VOLUMES) current_volume = vol;
+}
+
+u32 fat_selected(void) { return current_volume; }
+
+bool fat_mounted_on(u32 vol) {
+    return vol < FAT_VOLUMES && volumes[vol].mounted;
+}
+
+void fat_forget_volume(u32 vol) {
+    if (vol >= FAT_VOLUMES) return;
+    volumes[vol].mounted = false;
+    volumes[vol].fat_cache_valid = false;
+    volumes[vol].fat_bits = 16;
+    volumes[vol].alloc_hint = 2;
+}
+
+#define CUR                 volumes[current_volume]
+#define part_base           (CUR.part_base)
+#define part_sectors        (CUR.part_sectors)
+#define fat_bits            (CUR.fat_bits)
+#define root_cluster        (CUR.root_cluster)
+#define mounted             (CUR.mounted)
+#define bytes_per_sector    (CUR.bytes_per_sector)
+#define sectors_per_cluster (CUR.sectors_per_cluster)
+#define reserved_sectors    (CUR.reserved_sectors)
+#define num_fats            (CUR.num_fats)
+#define root_entries        (CUR.root_entries)
+#define total_sectors       (CUR.total_sectors)
+#define fat_sectors         (CUR.fat_sectors)
+#define fat_start           (CUR.fat_start)
+#define root_start          (CUR.root_start)
+#define root_sectors        (CUR.root_sectors)
+#define data_start          (CUR.data_start)
+#define cluster_count       (CUR.cluster_count)
+#define alloc_hint          (CUR.alloc_hint)
+#define fat_cache           (CUR.fat_cache)
+#define fat_cache_lba       (CUR.fat_cache_lba)
+#define fat_cache_valid     (CUR.fat_cache_valid)
+
+
 
 static bool vol_read(u32 lba, u32 count, void *buf) {
     if (part_sectors && (lba >= part_sectors || count > part_sectors - lba))
         return false;
-    return blk_read(part_base + lba, count, buf);
+    return blk_read_on(CUR.dev, part_base + lba, count, buf);
 }
 
 static bool vol_write(u32 lba, u32 count, const void *buf) {
     if (part_sectors && (lba >= part_sectors || count > part_sectors - lba))
         return false;
-    return blk_write(part_base + lba, count, buf);
+    return blk_write_on(CUR.dev, part_base + lba, count, buf);
 }
 
 u32 fat_base(void) { return part_base; }
 
 /* 16 or 32. Decided by the cluster count at mount, never by the label. */
-static u32   fat_bits = 16;
-static u32   root_cluster;              /* FAT32 only: the root is a chain */
 
 static u32 eoc_min(void) { return fat_bits == 32 ? EOC32_MIN : EOC16_MIN; }
 static u32 eoc(void)     { return fat_bits == 32 ? EOC32     : EOC16; }
 
-static bool  mounted;
-static u16   bytes_per_sector;
-static u8    sectors_per_cluster;
-static u16   reserved_sectors;
-static u8    num_fats;
-static u16   root_entries;
-static u32   total_sectors;
-static u32   fat_sectors;
-static u32   fat_start;
-static u32   root_start;
-static u32   root_sectors;
-static u32   data_start;
-static u32   cluster_count;
 
 /* Three buffers, because there are three things being read at once and any
    two of them sharing one would overwrite each other. A directory operation
@@ -124,13 +197,9 @@ static u8 dsec[SECTOR_SIZE];     /* directory entries */
  * Finding a free cluster walks the table, and 256 entries share a sector.
  * Reading that sector once per entry instead of once per 256 is what made
  * writing a file cost time proportional to the size of the whole volume. */
-static u8   fat_cache[SECTOR_SIZE];
-static u32  fat_cache_lba;
-static bool fat_cache_valid;
 
 /* Where the last search stopped. A file is a run of allocations, and each
    one restarting at the front of the table is what made it quadratic. */
-static u32  alloc_hint = 2;
 
 static void fat_forget(void) {
     fat_cache_valid = false;
@@ -264,10 +333,23 @@ static u32 zero_cluster(u32 cluster) {
 
 /* --- mounting ----------------------------------------------------------- */
 
+/* Mounts a volume of a particular disk. The selection is put back
+   afterwards, so mounting something does not change what the next call is
+   about. */
+bool fat_mount_on(u32 vol, u32 dev, u32 base_lba) {
+    if (vol >= FAT_VOLUMES) return false;
+    u32 was = current_volume;
+    current_volume = vol;
+    volumes[vol].dev = dev;
+    bool ok = fat_mount_at(base_lba);
+    current_volume = was;
+    return ok;
+}
+
 bool fat_mount_at(u32 base_lba) {
     mounted = false;
     fat_forget();
-    if (!blk_present()) return false;
+    if (!blk_device_present(CUR.dev)) return false;
 
     part_base = base_lba;
     part_sectors = 0;                   /* not known until the volume says */
@@ -584,6 +666,290 @@ static bool entry_is_real(const dirent_t *e) {
     return true;
 }
 
+/* --- long names ---------------------------------------------------------
+ *
+ * A FAT directory entry holds eight characters and three more, folded to
+ * upper case, and that is all the 1981 specification allows. Everything since
+ * has carried the real name in extra entries placed in front of the short
+ * one, each holding thirteen characters, numbered backwards, and marked with
+ * an attribute combination that a reader from 1981 skips as a volume label.
+ *
+ * Each of those entries also carries a checksum of the short name it belongs
+ * to. That is what makes the arrangement safe: a disk edited by something
+ * that only understands short names leaves the long entries behind pointing
+ * at a name that has changed, the checksum no longer matches, and a reader
+ * that checks it falls back to the short name instead of showing a file that
+ * is not there.
+ *
+ * Short names are still written for anything that fits in one, so every file
+ * this system wrote before today reads back exactly as it did.
+ */
+#define ATTR_LFN_MASK 0x3F
+#define LFN_CHARS     13
+#define LFN_LAST      0x40
+
+typedef struct {
+    u8  seq;
+    u8  part1[10];            /* five characters */
+    u8  attr;                 /* always ATTR_LFN */
+    u8  type;
+    u8  checksum;             /* of the short name this belongs to */
+    u8  part2[12];            /* six more */
+    u16 cluster;              /* always zero */
+    u8  part3[4];             /* and the last two */
+} __attribute__((packed)) lfn_t;
+
+static u8 short_checksum(const u8 name[11]) {
+    u8 sum = 0;
+    for (u32 i = 0; i < 11; i++)
+        sum = (u8)(((sum & 1) << 7) + (sum >> 1) + name[i]);
+    return sum;
+}
+
+static void lfn_get(const lfn_t *l, u16 out[LFN_CHARS]) {
+    for (u32 i = 0; i < 5; i++)
+        out[i] = (u16)(l->part1[i * 2] | (l->part1[i * 2 + 1] << 8));
+    for (u32 i = 0; i < 6; i++)
+        out[5 + i] = (u16)(l->part2[i * 2] | (l->part2[i * 2 + 1] << 8));
+    for (u32 i = 0; i < 2; i++)
+        out[11 + i] = (u16)(l->part3[i * 2] | (l->part3[i * 2 + 1] << 8));
+}
+
+static void lfn_put(lfn_t *l, const u16 in[LFN_CHARS]) {
+    for (u32 i = 0; i < 5; i++) {
+        l->part1[i * 2] = (u8)in[i];
+        l->part1[i * 2 + 1] = (u8)(in[i] >> 8);
+    }
+    for (u32 i = 0; i < 6; i++) {
+        l->part2[i * 2] = (u8)in[5 + i];
+        l->part2[i * 2 + 1] = (u8)(in[5 + i] >> 8);
+    }
+    for (u32 i = 0; i < 2; i++) {
+        l->part3[i * 2] = (u8)in[11 + i];
+        l->part3[i * 2 + 1] = (u8)(in[11 + i] >> 8);
+    }
+}
+
+/* The real name of the entry at `index`, assembled from whatever sits in
+   front of it. Returns 0 when there is nothing there, which is every file
+   written by something that only ever wrote short names. */
+static u32 long_name_of(const dir_t *d, u32 index, const dirent_t *shortent,
+                        char *out, u32 cap) {
+    if (index == 0) return 0;
+    u8 want = short_checksum(shortent->name);
+
+    char buf[FAT_NAME_MAX];
+    memset(buf, 0, sizeof buf);
+    u32 len = 0;
+    bool complete = false;
+
+    for (int i = (int)index - 1; i >= 0; i--) {
+        dirent_t raw;
+        if (!dir_read(d, (u32)i, &raw)) return 0;
+        if ((raw.attr & ATTR_LFN_MASK) != ATTR_LFN) break;
+
+        const lfn_t *l = (const lfn_t *)&raw;
+        if (l->checksum != want) return 0;     /* left over from another name */
+
+        u32 seq = l->seq & 0x1F;
+        if (seq == 0) return 0;
+
+        u32 at = (seq - 1) * LFN_CHARS;
+        if (at >= FAT_NAME_MAX - 1) return 0;
+
+        u16 chars[LFN_CHARS];
+        lfn_get(l, chars);
+        for (u32 k = 0; k < LFN_CHARS; k++) {
+            u32 pos = at + k;
+            if (pos >= FAT_NAME_MAX - 1) break;
+            u16 ch = chars[k];
+            if (ch == 0x0000 || ch == 0xFFFF) continue;
+            /* Anything outside ASCII becomes a question mark rather than
+               half of a character nobody can type. */
+            buf[pos] = (ch < 0x80) ? (char)ch : '?';
+            if (pos + 1 > len) len = pos + 1;
+        }
+
+        if (l->seq & LFN_LAST) { complete = true; break; }
+    }
+
+    if (!complete || !len || len >= cap) return 0;
+    memcpy(out, buf, len);
+    out[len] = 0;
+    return len;
+}
+
+static bool same_name(const char *a, const char *b) {
+    while (*a && *b) {
+        if (upcase(*a) != upcase(*b)) return false;
+        a++; b++;
+    }
+    return *a == 0 && *b == 0;
+}
+
+/* Whether a name needs the long form at all.
+ *
+ * Lower case on its own is not a reason. A short name is stored folded and
+ * read back folded, which is what every file in this system has always done,
+ * and making those long as well would change how existing volumes read. The
+ * reasons are the ones that genuinely cannot be written in eight and three:
+ * length, spaces, and more than one dot. */
+static bool needs_long(const char *name) {
+    u32 base = 0, ext = 0;
+    bool dot = false, in_ext = false;
+    for (u32 i = 0; name[i]; i++) {
+        char c = name[i];
+        if (c == '.') {
+            if (dot) return true;
+            dot = true;
+            in_ext = true;
+            continue;
+        }
+        if (c == ' ') return true;
+        if (in_ext) ext++; else base++;
+    }
+    return base > 8 || ext > 3;
+}
+
+static bool short_taken(const dir_t *d, const u8 name[11]) {
+    u32 cap = dir_capacity(d);
+    dirent_t e;
+    for (u32 i = 0; i < cap; i++) {
+        if (!dir_read(d, i, &e)) break;
+        if (e.name[0] == ENT_FREE) break;
+        if (!entry_is_real(&e)) continue;
+        if (memcmp(e.name, name, 11) == 0) return true;
+    }
+    return false;
+}
+
+/* The short name a long one is filed under.
+ *
+ * The first few usable characters, a tilde and a number, which is what
+ * everything else does. The number is what makes it unique, and it has to
+ * be, because the short name is the one the file is actually found by. */
+static void make_alias(const dir_t *d, const char *name, u8 out[11]) {
+    char base[8];
+    u32 b = 0;
+    for (u32 i = 0; name[i] && b < 6; i++) {
+        char c = name[i];
+        if (c == '.') break;
+        if (c == ' ') continue;
+        base[b++] = upcase(c);
+    }
+    if (!b) base[b++] = 'X';
+
+    const char *dot = 0;
+    for (u32 i = 0; name[i]; i++) if (name[i] == '.') dot = name + i;
+
+    for (u32 n = 1; n <= 999; n++) {
+        char tail[5];
+        u32 t = 0;
+        tail[t++] = '~';
+        if (n >= 100) tail[t++] = (char)('0' + n / 100);
+        if (n >= 10)  tail[t++] = (char)('0' + (n / 10) % 10);
+        tail[t++] = (char)('0' + n % 10);
+
+        u32 keep = 8 - t;
+        if (keep > b) keep = b;
+
+        memset(out, ' ', 11);
+        for (u32 i = 0; i < keep; i++) out[i] = (u8)base[i];
+        for (u32 i = 0; i < t; i++) out[keep + i] = (u8)tail[i];
+        if (dot)
+            for (u32 j = 0; j < 3 && dot[1 + j]; j++)
+                out[8 + j] = (u8)upcase(dot[1 + j]);
+
+        if (!short_taken(d, out)) return;
+    }
+}
+
+/* A run of free slots, growing the directory once if there is not one. */
+static int dir_free_run(const dir_t *d, u32 want) {
+    for (int attempt = 0; attempt < 2; attempt++) {
+        u32 cap = dir_capacity(d);
+        u32 run = 0;
+        for (u32 i = 0; i < cap; i++) {
+            dirent_t e;
+            if (!dir_read(d, i, &e)) break;
+            if (e.name[0] == ENT_FREE || e.name[0] == ENT_DELETED) {
+                if (++run == want) return (int)(i + 1 - want);
+            } else {
+                run = 0;
+            }
+        }
+        if (attempt > 0 || !dir_grow(d)) return -1;
+    }
+    return -1;
+}
+
+/* Puts a name into a directory and hands back the slot the short entry goes
+   in. The caller fills in the rest of that entry and writes it, so a failure
+   part way through this leaves entries that describe nothing rather than a
+   file with no contents. */
+static int dir_put_name(const dir_t *d, const char *name, dirent_t *e) {
+    if (!needs_long(name)) {
+        int slot = dir_free_slot(d);
+        if (slot < 0) return -1;
+        to_83(name, e->name);
+        return slot;
+    }
+
+    u32 chars = 0;
+    while (name[chars]) chars++;
+    if (chars >= FAT_NAME_MAX) return -1;
+
+    u32 n = (chars + LFN_CHARS - 1) / LFN_CHARS;
+    int start = dir_free_run(d, n + 1);
+    if (start < 0) return -1;
+
+    make_alias(d, name, e->name);
+    u8 sum = short_checksum(e->name);
+
+    /* Numbered backwards, so the entry nearest the short one is the first
+       part of the name and the one furthest away is marked as the last. */
+    for (u32 i = 0; i < n; i++) {
+        lfn_t l;
+        memset(&l, 0xFF, sizeof l);
+        l.seq = (u8)(n - i);
+        if (i == 0) l.seq |= LFN_LAST;
+        l.attr = ATTR_LFN;
+        l.type = 0;
+        l.checksum = sum;
+        l.cluster = 0;
+
+        u16 chunk[LFN_CHARS];
+        u32 at = (n - i - 1) * LFN_CHARS;
+        for (u32 k = 0; k < LFN_CHARS; k++) {
+            u32 pos = at + k;
+            if (pos < chars)       chunk[k] = (u16)(u8)name[pos];
+            else if (pos == chars) chunk[k] = 0x0000;
+            else                   chunk[k] = 0xFFFF;
+        }
+        lfn_put(&l, chunk);
+
+        if (!dir_write(d, (u32)start + i, (const dirent_t *)&l)) return -1;
+    }
+    return start + (int)n;
+}
+
+/* Marks the long entries in front of a short one as gone. Left behind, they
+   describe a file that no longer exists. */
+static void dir_drop_long(const dir_t *d, u32 index, const dirent_t *shortent) {
+    if (index == 0) return;
+    u8 sum = short_checksum(shortent->name);
+    for (int i = (int)index - 1; i >= 0; i--) {
+        dirent_t raw;
+        if (!dir_read(d, (u32)i, &raw)) break;
+        if ((raw.attr & ATTR_LFN_MASK) != ATTR_LFN) break;
+        if (((const lfn_t *)&raw)->checksum != sum) break;
+        bool last = (((const lfn_t *)&raw)->seq & LFN_LAST) != 0;
+        raw.name[0] = ENT_DELETED;
+        dir_write(d, (u32)i, &raw);
+        if (last) break;
+    }
+}
+
 static int dir_find(const dir_t *d, const char *name, dirent_t *out) {
     u8 want[11];
     to_83(name, want);
@@ -594,6 +960,14 @@ static int dir_find(const dir_t *d, const char *name, dirent_t *out) {
         if (e.name[0] == ENT_FREE) break;
         if (!entry_is_real(&e)) continue;
         if (memcmp(e.name, want, 11) == 0) { if (out) *out = e; return (int)i; }
+
+        /* And by the name somebody actually gave it, which is not the one
+           stored in this entry when it did not fit. */
+        char real[FAT_NAME_MAX];
+        if (long_name_of(d, i, &e, real, sizeof real) && same_name(real, name)) {
+            if (out) *out = e;
+            return (int)i;
+        }
     }
     return -1;
 }
@@ -619,7 +993,7 @@ static const char *next_component(const char *p, char *out, u32 cap) {
    may not exist yet. A trailing slash is ignored. */
 static bool resolve_parent(const char *path, dir_t *parent, char *leaf, u32 leaf_cap) {
     dir_t here = ROOT;
-    char part[16], pending[16];
+    char part[FAT_NAME_MAX], pending[FAT_NAME_MAX];
     bool have_pending = false;
 
     const char *p = path;
@@ -665,7 +1039,7 @@ static bool resolve_parent(const char *path, dir_t *parent, char *leaf, u32 leaf
 /* Resolves a whole path to a directory. */
 static bool resolve_dir(const char *path, dir_t *out) {
     dir_t parent;
-    char leaf[16];
+    char leaf[FAT_NAME_MAX];
     if (!resolve_parent(path, &parent, leaf, sizeof(leaf))) return false;
     if (!leaf[0]) { *out = parent; return true; }       /* the root itself */
 
@@ -708,7 +1082,16 @@ int fat_list(const char *path, u32 index, char *name_out, u32 *size_out, bool *d
         if (e.name[0] == '.') continue;
 
         if (seen == index) {
-            if (name_out) from_83(e.name, name_out);
+            if (name_out) {
+                /* The long one if there is one, and the short one otherwise.
+                   A caller's buffer is VFS_NAME_MAX, which is what the cap
+                   passed here protects. */
+                char real[FAT_NAME_MAX];
+                if (long_name_of(&d, i, &e, real, FAT_NAME_MAX))
+                    strncpy(name_out, real, FAT_NAME_MAX - 1);
+                else
+                    from_83(e.name, name_out);
+            }
             if (size_out) *size_out = e.size;
             if (dir_out)  *dir_out = (e.attr & ATTR_DIRECTORY) != 0;
             return 1;
@@ -728,7 +1111,7 @@ bool fat_stat(const char *path, u32 *size_out, bool *dir_out) {
     if (!mounted) return false;
 
     dir_t parent;
-    char leaf[16];
+    char leaf[FAT_NAME_MAX];
     if (!resolve_parent(path, &parent, leaf, sizeof(leaf))) return false;
 
     if (!leaf[0] || strcmp(leaf, ".") == 0 || strcmp(leaf, "..") == 0) {
@@ -750,7 +1133,7 @@ int fat_read_file(const char *path, u8 *buf, u32 cap) {
     if (!mounted) return -1;
 
     dir_t parent;
-    char leaf[16];
+    char leaf[FAT_NAME_MAX];
     if (!resolve_parent(path, &parent, leaf, sizeof(leaf))) return -1;
 
     dirent_t e;
@@ -779,7 +1162,7 @@ bool fat_write_file(const char *path, const u8 *buf, u32 size) {
     if (!mounted) return false;
 
     dir_t parent;
-    char leaf[16];
+    char leaf[FAT_NAME_MAX];
     if (!resolve_parent(path, &parent, leaf, sizeof(leaf))) return false;
     if (!leaf[0]) return false;
 
@@ -793,9 +1176,8 @@ bool fat_write_file(const char *path, const u8 *buf, u32 size) {
         old_chain = ent_cluster(&e);
     } else {
         memset(&e, 0, sizeof(e));
-        slot = dir_free_slot(&parent);
+        slot = dir_put_name(&parent, leaf, &e);
         if (slot < 0) return false;
-        to_83(leaf, e.name);
         e.attr = ATTR_ARCHIVE;
     }
 
@@ -851,7 +1233,7 @@ bool fat_delete_file(const char *path) {
     if (!mounted) return false;
 
     dir_t parent;
-    char leaf[16];
+    char leaf[FAT_NAME_MAX];
     if (!resolve_parent(path, &parent, leaf, sizeof(leaf))) return false;
 
     dirent_t e;
@@ -860,6 +1242,7 @@ bool fat_delete_file(const char *path) {
     if (e.attr & ATTR_DIRECTORY) return false;      /* rmdir is a different job */
 
     if (ent_cluster(&e) >= 2) free_chain(ent_cluster(&e));
+    dir_drop_long(&parent, (u32)slot, &e);
     e.name[0] = ENT_DELETED;
     if (!dir_write(&parent, (u32)slot, &e)) return false;
     return blk_flush();
@@ -871,7 +1254,7 @@ bool fat_mkdir(const char *path) {
     if (!mounted) return false;
 
     dir_t parent;
-    char leaf[16];
+    char leaf[FAT_NAME_MAX];
     if (!resolve_parent(path, &parent, leaf, sizeof(leaf))) return false;
     if (!leaf[0] || strcmp(leaf, ".") == 0 || strcmp(leaf, "..") == 0) return false;
     if (dir_find(&parent, leaf, 0) >= 0) return false;      /* already there */
@@ -903,12 +1286,10 @@ bool fat_mkdir(const char *path) {
     blk_flush();
 
     /* Only once the directory is a valid one does anything point at it. */
-    int slot = dir_free_slot(&parent);
-    if (slot < 0) { free_chain(c); return false; }
-
     dirent_t e;
     memset(&e, 0, sizeof(e));
-    to_83(leaf, e.name);
+    int slot = dir_put_name(&parent, leaf, &e);
+    if (slot < 0) { free_chain(c); return false; }
     e.attr = ATTR_DIRECTORY;
     set_ent_cluster(&e, c);
     e.size = 0;                       /* directories report zero, by the spec */
@@ -921,7 +1302,7 @@ bool fat_rmdir(const char *path) {
     if (!mounted) return false;
 
     dir_t parent;
-    char leaf[16];
+    char leaf[FAT_NAME_MAX];
     if (!resolve_parent(path, &parent, leaf, sizeof(leaf))) return false;
     if (!leaf[0] || leaf[0] == '.') return false;
 
