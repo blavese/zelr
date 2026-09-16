@@ -115,6 +115,17 @@ Override any of it to spend less:
 
     CODEX_MODEL=gpt-5.6-luna bash pipeline/batch.sh
 
+## Releasing
+
+    bash pipeline/release.sh v0.16.0 notes.md
+
+The readme tells people to download zelr.exe and zelr.iso from the latest
+release. For fifteen releases neither was attached: the notes were written by
+hand and nobody built the artifacts, so following the readme led to a page
+offering a source tarball and nothing else. This builds both, refuses to
+continue if the version compiled into the kernel disagrees with the tag, and
+checks the version string is actually inside each file before uploading.
+
 ## The gate
 
     bash pipeline/gate.sh fast
@@ -190,6 +201,7 @@ forty minutes of wall clock, most of it in QEMU.
     parse_review.py     reading a reply that was supposed to be JSON
     gate.sh             the verification, fast and full
     cycle.sh            one task, start to finish
+    release.sh          building the iso and the exe, and attaching them
     loop.sh             cycles, with a budget and a stop rule
     backlog.md          what to do next
     prompts/
