@@ -233,6 +233,7 @@ instead.
     python tools/termcheck.py   type into the terminal and check the result
     python tools/deskcheck.py   move the windows and check where they went
     python tools/usbcheck.py    boot with usb keyboard, mouse and stick, use them
+    python tools/inputcheck.py  type on machines touched while they booted
 
 The Windows launcher lives in `launcher/` and is built with
 `dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true`.

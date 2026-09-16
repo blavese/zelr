@@ -7,6 +7,7 @@
 #include "pic.h"
 #include "timer.h"
 #include "keyboard.h"
+#include "ps2.h"
 #include "usb.h"
 #include "multiboot.h"
 #include "handoff.h"
@@ -308,6 +309,9 @@ void kmain(handoff_t *h) {
         bb_log("net no card this kernel can drive");
     }
     bb_mark("input");
+    /* Before either driver, because both arrive through it and neither can
+       be trusted to leave it in a state the other one needs. */
+    ps2_init();
     keyboard_init();
     if (fb_active() && mouse_init())
         kprintf("  mouse   ps/2, pointer at %d,%d\n", mouse_x(), mouse_y());

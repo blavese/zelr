@@ -38,6 +38,9 @@
 
 void keyboard_init(void);
 
+/* A scancode that has already been read off the controller. */
+void keyboard_byte(u8 sc);
+
 /* A key from a keyboard that is not the PS/2 one.
  *
  * A USB keyboard reports which modifiers were held in the same report as the
