@@ -2,13 +2,40 @@
 
 A 64-bit operating system written from scratch for x86. It boots itself off a
 disc or a USB stick, through BIOS or UEFI, drives a framebuffer, manages its
-own memory, preempts its own tasks, starts every processor the firmware
-describes, routes its interrupts through the IOAPIC, finds an NVMe, SATA or
-ATA disk, reads the GPT on it, keeps files in directories on a FAT16 or FAT32
-volume, talks to the internet, and runs a desktop whose programs are real
-ring 3 processes. When it fails it says why.
+own memory, preempts its own tasks, and starts every processor the firmware
+describes.
+
+It routes its interrupts through the IOAPIC, finds an NVMe, SATA or ATA disk,
+reads the GPT on it, keeps files in directories on a FAT16 or FAT32 volume,
+talks to the internet over its own TCP/IP stack, takes input from PS/2 and
+USB, and runs a desktop whose programs are real ring 3 processes.
+
+When it fails it says why.
 
 ![the zelr desktop](docs/desktop.png)
+
+<table>
+<tr>
+<td width="50%"><img src="docs/launcher.png" alt="the launcher open over a terminal"></td>
+<td width="50%"><img src="docs/files.png" alt="the file manager in front of the terminal"></td>
+</tr>
+<tr>
+<td align="center"><sub>the launcher, animating open over a running terminal</sub></td>
+<td align="center"><sub>two windows, and which of them has focus</sub></td>
+</tr>
+<tr>
+<td width="50%"><img src="docs/paint.png" alt="the paint program with three strokes drawn"></td>
+<td width="50%"><img src="docs/settings.png" alt="the settings program showing accent colours"></td>
+</tr>
+<tr>
+<td align="center"><sub>paint, a ring 3 process like everything else</sub></td>
+<td align="center"><sub>the theme, which changes as you touch it</sub></td>
+</tr>
+</table>
+
+Every one of those was photographed by `tools/shots.py`, which boots the
+machine, drives it, and saves what came out. They are not mockups and they do
+not go stale quietly.
 
 It is not a clone of anything. About 33,500 lines in all, of which 3,700 are
 generated font data: roughly 19,600 hand-written lines of kernel, bootloaders
@@ -82,6 +109,11 @@ saves it to a disk that survives closing the window.
 
 Download **zelr.iso**, write it to a USB stick or burn it to a disc, and boot
 from it. One file, four ways in, and it picks the right one itself:
+
+![the console at startup](docs/boot.png)
+
+<sub>what it says on the way up, before anything graphical happens</sub>
+
 
 | | from a disc | from a USB stick |
 |---|---|---|
@@ -234,6 +266,7 @@ instead.
     python tools/deskcheck.py   move the windows and check where they went
     python tools/usbcheck.py    boot with usb keyboard, mouse and stick, use them
     python tools/inputcheck.py  type on machines touched while they booted
+    python tools/shots.py       retake the screenshots in this readme
 
 The Windows launcher lives in `launcher/` and is built with
 `dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true`.
@@ -684,4 +717,12 @@ orders of magnitude away from Linux, which is roughly 30 million lines.
 
 ## license
 
-MIT, see LICENSE.
+GPLv3, see [LICENSE](LICENSE).
+
+Free to read, run, change and share. The condition is that anything built from
+it stays that way: distribute a modified version and it carries the same
+license, with the source. Selling it is allowed, and always has been under
+this license. Closing it is not.
+
+Versions up to and including 0.16.1 went out under MIT and stay under MIT.
+Nothing here is retroactive.
