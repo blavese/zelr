@@ -171,6 +171,28 @@ bool pci_find(u16 vendor, u16 device, pci_dev_t *out) {
     return false;
 }
 
+u32 pci_list_class(u8 class_code, u8 subclass, pci_dev_t *out, u32 max) {
+    u16 end = last_bus();
+    u32 found = 0;
+
+    for (u16 bus = 0; bus <= end; bus++) {
+        for (u8 slot = 0; slot < 32; slot++) {
+            for (u8 func = 0; func < 8; func++) {
+                u32 id = pci_read32((u8)bus, slot, func, 0x00);
+                if ((u16)(id & 0xFFFF) == 0xFFFF) continue;
+
+                u32 cls = pci_read32((u8)bus, slot, func, 0x08);
+                if ((u8)(cls >> 24) != class_code) continue;
+                if ((u8)(cls >> 16) != subclass) continue;
+
+                if (out && found < max) fill(&out[found], (u8)bus, slot, func, id);
+                found++;
+            }
+        }
+    }
+    return found;
+}
+
 bool pci_find_class(u8 class_code, u8 subclass, u8 prog_if, pci_dev_t *out) {
     u16 end = last_bus();
     for (u16 bus = 0; bus <= end; bus++) {

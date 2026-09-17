@@ -609,6 +609,41 @@ a wheel answers 3. Above the driver it is one number, steps since somebody
 last looked, and the window manager hands it to the window under the pointer
 rather than the focused one.
 
+**A trackpad.** The pad in a laptop answers as that same 1987 mouse unless
+it is asked otherwise, and the asking is a knock of the same kind: there is
+no command that takes an argument, so the argument goes through four
+set-resolution commands two bits at a time, and a status request reads three
+bytes back. A mouse answers with its resolution. A Synaptics answers with
+0x47 in the middle byte, and that is the whole identification.
+
+It has to be done before interrupts are on, which is not a detail. After
+that the timer drains the 8042 on every tick and hands what it finds to the
+packet decoder, so the three bytes of an answer are taken before the read
+sees them, and a pad that is present and answering correctly reports as
+absent.
+
+What comes back is where the finger is, and a pointer needs how far it
+moved, so the work is subtraction and the bugs are all ways subtraction goes
+wrong. A finger that lifts and lands elsewhere must not drag the pointer, so
+the first report of a contact sets an origin and moves nothing. A pad is
+four thousand units across and a screen is a thousand pixels, so the
+difference is divided down, and the remainder is kept, because a pointer
+that cannot be moved slowly cannot be aimed. A finger arriving or leaving
+changes which contact is being reported, and the jump that causes is caught
+by noticing the count change rather than by the distance: the first attempt
+used distance alone, with a limit smaller than an ordinary flick, and threw
+away real movement.
+
+Two fingers scroll. A tap is a contact that ended quickly and went nowhere,
+one finger for the left button and two for the right, held for a few ticks
+afterwards because the window manager reads the buttons once a pass and a
+click released before the next one never happened.
+
+No emulator has one of these, so none of that can be checked against
+hardware here. What is checked is the decoder, by assembling reports and
+feeding them to it, and the checks were themselves checked by breaking the
+decoder six ways to see that each break is caught.
+
 **Shell.** Reads from the keyboard or the serial line, whichever produces a
 character first, so a person can type at it and a script can pipe into it. It
 is still the kernel's own, on the console; the one in a window is a program.
@@ -616,36 +651,37 @@ is still the kernel's own, on the console; the one in a window is a program.
 ## testing
 
 The kernel tests itself. `./run.sh -T` boots with selftest on the command line,
-runs 244 checks across every subsystem, then writes to QEMU's debug-exit port
+runs 340 checks across every subsystem, then writes to QEMU's debug-exit port
 so the host gets a real exit status.
 
-    [string]            8 checks      [video]               7 checks
-    [physical memory]   4 checks      [mouse]               1 check
-    [paging]            4 checks      [graphics]           13 checks
-    [user access]       5 checks      [windows]             3 checks
-    [heap]              5 checks      [window server]      16 checks
-    [filesystem]        7 checks      [built-in programs]   6 checks
-    [paths]            11 checks      [theme]              16 checks
-    [directories]      12 checks      [live tree]          19 checks
-    [open files]       12 checks      [layout]              9 checks
-    [timer]             2 checks      [waiting]             8 checks
-    [interrupts]        2 checks      [wait timeouts]       3 checks
-    [disk]             12 checks      [processors]          2 checks
-    [fat]              14 checks      [black box]          21 checks
-    [acpi and pcie]       4 checks
-    [network]           7 checks
-    [elf]               7 checks
-    [userspace]         4 checks
+    [string]              8 checks   [mouse]               1 check
+    [the identity map]    6 checks   [graphics]           13 checks
+    [physical memory]     4 checks   [windows]             3 checks
+    [paging]              4 checks   [window server]      16 checks
+    [user access]         5 checks   [built-in programs]   6 checks
+    [heap]                5 checks   [theme]              16 checks
+    [filesystem]          7 checks   [taskbar]            18 checks
+    [paths]              11 checks   [live tree]          19 checks
+    [directories]        12 checks   [layout]              9 checks
+    [open files]         12 checks   [waiting]            14 checks
+    [timer]               2 checks   [trackpad]           25 checks
+    [interrupts]          2 checks   [wait timeouts]       3 checks
+    [disk]               12 checks   [processors]          2 checks
+    [fat]                14 checks   [black box]          21 checks
+    [network]             7 checks   [acpi and pcie]       4 checks
+    [elf]                 7 checks   [interrupt routing]   9 checks
+    [userspace]           4 checks   [clipboard]          14 checks
+    [video]               7 checks   [clock]              18 checks
 
-    244 passed, 0 failed
+    340 passed, 0 failed
     SELFTEST_PASS
 
 The processor section is two checks on a machine with one CPU and eleven on
 a machine with several, where it hands work to each of them and requires the
-count they share to come back exact. `qemu-system-x86_64 -smp 4` reaches 253.
+count they share to come back exact. `qemu-system-x86_64 -smp 4` reaches 349.
 
 The same checks run again on `-machine q35`, which has PCIe and an AHCI
-controller rather than a 1996 chipset and a PIO disk, and reach 252 there.
+controller rather than a 1996 chipset and a PIO disk, and reach 348 there.
 Two bugs found the day that was added were invisible on the older machine:
 the block layer would not split a request past the eight sectors AHCI
 accepts, and the ACPI tables were never read on a UEFI machine at all.
@@ -856,6 +892,7 @@ orders of magnitude away from Linux, which is roughly 30 million lines.
     kernel/winsrv.c    handing window surfaces across to ring 3
     kernel/theme.c     the desktop's appearance, and the file it lives in
     kernel/pins.c      the apps kept on the taskbar, and their file
+    kernel/synaptics.c a trackpad, and turning a position into a pointer
     userland/monitor.c what the machine is doing, while it does it
     userland/music.c   wav files, resampled to whatever the card wants
     userland/calc.c    arithmetic in millionths, because there is no fpu
