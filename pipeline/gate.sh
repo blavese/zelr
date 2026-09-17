@@ -369,6 +369,11 @@ if [ "$MODE" = "screen" ] || [ "$MODE" = "full" ]; then
   # only reason getting one proves anything. Run twice, with a card and
   # without, because a panel that says the same either way reads nothing.
   nettest() { keep timeout 900 python tools/netcheck.py; }
+
+  # And pages off a web server that is not part of this project, so what the
+  # client gets right is measured against somebody else's implementation
+  # rather than against another half of the same idea.
+  webtest() { keep timeout 900 python tools/webcheck.py; }
   par_start "the windows go where they are told" desktest
   par_start "a usb keyboard and mouse are found and used" usbtest
   par_start "input survives being touched during boot" inputtest
@@ -377,6 +382,7 @@ if [ "$MODE" = "screen" ] || [ "$MODE" = "full" ]; then
   par_start "files keep the names they were given" nametest
   par_start "the machine turns itself off" powertest
   par_start "an address is asked for and arrives" nettest
+  par_start "pages come back off a real web server" webtest
   par_start "the programs it ships with do what they say" apptest
 
   par_wait

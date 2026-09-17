@@ -10,3 +10,4 @@
 
 /* Returns the HTTP status code, or one of the negatives above. */
 int http_get(const char *host, const char *path, const char *save_as);
+/* `host` may carry a port: "name" or "name:port". */
