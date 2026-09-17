@@ -37,6 +37,9 @@
 #include "diskfs.h"
 #include "fbcon.h"
 #include "sched.h"
+#include "net.h"
+#include "netdev.h"
+#include "wifi.h"
 #include "io.h"
 
 #define TASKBAR_H  34
@@ -72,6 +75,11 @@ static int taskbar_chips_x(void) {
 #define VOL_W      30
 #define VOLPOP_W   208
 #define VOLPOP_H   40
+
+/* And the network, left of that. */
+#define NET_W      26
+#define NETPOP_W   268
+#define NETPOP_H   150
 
 #define MENU_W     210
 #define MENU_ITEM  30
@@ -207,6 +215,8 @@ static bool still_moving(u64 since, u32 ms) {
 
 /* The volume panel, open when someone clicks the speaker. */
 static bool volume_open;
+static bool net_open;
+static bool dhcp_running;
 static bool volume_drag;
 static int  volume_before_mute = 70;
 
@@ -1233,6 +1243,156 @@ static void draw_volume_panel(void) {
               num, t->text, FACE_BODY);
 }
 
+/* --- the network, left of the speaker -------------------------------------
+ *
+ * The icon says three things apart: no link, a link with no address, and a
+ * link that can reach somewhere. The middle one is the state people actually
+ * get stuck in and the one an icon with two states cannot show, which is why
+ * a cable plugged into a router with no DHCP on it looks, on most machines,
+ * exactly like no cable at all.
+ */
+static int taskbar_net_x(void) {
+    return taskbar_volume_x() - NET_W - 6;
+}
+
+static bool on_net_button(int mx, int my) {
+    int y = taskbar_y();
+    if (my < y + 5 || my >= y + TASKBAR_H - 5) return false;
+    int x = taskbar_net_x();
+    return mx >= x && mx < x + NET_W;
+}
+
+/* Four bars, the ones above the strength drawn faintly rather than left out,
+   so the icon is the same size and shape whatever it is saying. */
+static void draw_signal(int x, int y, u32 on, u32 off, int bars) {
+    for (int i = 0; i < 4; i++) {
+        int h = 3 + i * 3;
+        fb_rect((u32)(x + i * 4), (u32)(y + 12 - h), 3, (u32)h,
+                i < bars ? on : off);
+    }
+}
+
+/* A socket with a cable going into it, for a wired connection, because
+   bars would be a lie about something that has no signal strength. */
+static void draw_wired(int x, int y, u32 fg) {
+    fb_round_rect(x + 1, y + 4, 13, 8, 2, fg);
+    fb_rect((u32)(x + 5), (u32)(y + 1), 5, 3, fg);
+    fb_rect((u32)(x + 4), (u32)(y + 12), 7, 2, fg);
+}
+
+static void net_panel_rect(int *px, int *py) {
+    int x = taskbar_net_x() + NET_W / 2 - NETPOP_W / 2;
+    if (x < TASKBAR_GAP) x = TASKBAR_GAP;
+    if (x + NETPOP_W > (int)fb_width() - TASKBAR_GAP)
+        x = (int)fb_width() - TASKBAR_GAP - NETPOP_W;
+    *px = x;
+    *py = taskbar_y() - NETPOP_H - 8;
+}
+
+/* The button in the panel that asks for an address. */
+static void dhcp_button_rect(int *bx, int *by, int *bw, int *bh) {
+    int px, py;
+    net_panel_rect(&px, &py);
+    *bw = NETPOP_W - 28;
+    *bh = 26;
+    *bx = px + 14;
+    *by = py + NETPOP_H - 14 - *bh;
+}
+
+static void draw_net_panel(void) {
+    if (!net_open) return;
+    const theme_t *t = theme();
+
+    int px, py;
+    net_panel_rect(&px, &py);
+
+    if (t->shadows) fb_shadow(px, py, NETPOP_W, NETPOP_H, 10, SHADOW);
+    fb_round_rect(px, py, NETPOP_W, NETPOP_H, 10, t->overlay);
+    fb_rect((u32)(px + 10), (u32)py, (u32)(NETPOP_W - 20), 1, t->sheen);
+    fb_round_frame(px, py, NETPOP_W, NETPOP_H, 10, t->hairline);
+
+    int line = face_height(FACE_BODY) + 6;
+    int ty = py + 12;
+    int tx = px + 14;
+
+    /* net_up means the card is up, which is not the same as being able to
+       reach anything: that needs an address, and the whole point of this
+       panel is telling those two apart. */
+    bool card = netdev_name()[0] != 0 && netdev_up();
+    bool addressed = net_ip() != 0;
+    char buf[64];
+
+    /* What the wire is. */
+    if (card) {
+        kformat(buf, sizeof(buf), "%s", netdev_name());
+        face_text(tx, ty, buf, t->text, FACE_BODY);
+    } else {
+        face_text(tx, ty, "no wired card", t->text_dim, FACE_BODY);
+    }
+    ty += line;
+
+    /* And whether it has got anywhere. An address is the thing that decides
+       whether anything works, so it is the line in the ordinary colour. */
+    if (addressed) {
+        char ip[20];
+        net_format_ip(net_ip(), ip);
+        kformat(buf, sizeof(buf), "address %s", ip);
+        face_text(tx, ty, buf, t->text, FACE_BODY);
+        ty += line;
+
+        net_format_ip(net_gateway(), ip);
+        kformat(buf, sizeof(buf), "router  %s", ip);
+        face_text(tx, ty, buf, t->text_dim, FACE_BODY);
+    } else {
+        face_text(tx, ty, dhcp_running ? "asking for an address"
+                                       : "no address", t->text_dim, FACE_BODY);
+        ty += line;
+        face_text(tx, ty, "nothing can be reached without one",
+                  t->text_dim, FACE_SMALL);
+    }
+    ty += line + 4;
+
+    /* And the wireless situation, which on most machines is the reason
+       somebody opened this panel. */
+    face_text(tx, ty, wifi_describe(), t->text_dim, FACE_SMALL);
+    ty += face_height(FACE_SMALL) + 4;
+    if (wifi_state() != WIFI_NONE) {
+        kformat(buf, sizeof(buf), "%s %04x:%04x", wifi_maker(),
+                wifi_vendor(), wifi_device());
+        face_text(tx, ty, buf, t->text_dim, FACE_SMALL);
+    }
+
+    int bx, by, bw, bh;
+    dhcp_button_rect(&bx, &by, &bw, &bh);
+    bool over = last_mx >= bx && last_mx < bx + bw
+             && last_my >= by && last_my < by + bh;
+    u32 face = dhcp_running ? t->raised
+             : over ? gfx_mix(t->accent, t->text, 20) : t->accent;
+    fb_round_rect(bx, by, bw, bh, 6, face);
+
+    const char *label = dhcp_running ? "asking..." : "ask for an address";
+    u32 label_colour = dhcp_running ? t->text_dim : t->accent_text;
+    face_text(bx + bw / 2 - face_width(label, FACE_BODY) / 2,
+              by + (bh - face_height(FACE_BODY)) / 2,
+              label, label_colour, FACE_BODY);
+}
+
+/* Asking takes seconds and happens in a task of its own, because the
+   compositor stopping for the length of a DHCP exchange is the desktop
+   freezing every time somebody plugs a cable in. */
+static void dhcp_task(void) {
+    net_dhcp(6000);
+    dhcp_running = false;
+    task_exit();
+}
+
+static void start_dhcp(void) {
+    if (dhcp_running || !netdev_up()) return;
+    dhcp_running = true;
+    if (!task_create("dhcp", dhcp_task)) dhcp_running = false;
+    need_frame();
+}
+
 static void volume_from_pointer(int mx) {
     int tx, ty, tw;
     volume_track(&tx, &ty, &tw);
@@ -1322,6 +1482,23 @@ static void draw_taskbar(void) {
                      t->volume);
     }
 
+    {
+        int nx = taskbar_net_x();
+        bool hot = net_open || on_net_button(last_mx, last_my);
+        if (hot) fb_round_rect(nx - 2, y + 5, NET_W + 4, TASKBAR_H - 10, 6,
+                               t->raised);
+
+        /* Three states, not two. A link with no address is the one people
+           get stuck in, and an icon that cannot show it sends them looking
+           at the cable. */
+        bool link = netdev_up();
+        bool reachable = net_ip() != 0;
+        u32 fg = reachable ? t->text : link ? t->text_dim : t->text_mute;
+
+        if (link) draw_wired(nx + 5, y + 10, fg);
+        else      draw_signal(nx + 5, y + 10, fg, t->text_mute, 0);
+    }
+
     /* And the name of the icon under the pointer, above it. */
     if (hot >= 0) {
         const pin_t *p = pin_at(hot);
@@ -1404,6 +1581,7 @@ static void composite(void) {
     draw_resize_preview();
     draw_taskbar();
     draw_volume_panel();
+    draw_net_panel();
     draw_menu();
     draw_cursor(last_mx, last_my);
     if (frame_is_whole || dmg_x1 <= dmg_x0) {
@@ -1645,6 +1823,23 @@ static void handle_mouse(int mx, int my, u8 buttons) {
 
     if (volume_drag && (buttons & 1)) { volume_from_pointer(mx); return; }
 
+    if (net_open && (pressed_now || right_now)) {
+        int px, py;
+        net_panel_rect(&px, &py);
+        if (mx >= px && mx < px + NETPOP_W && my >= py && my < py + NETPOP_H) {
+            int bx, by, bw, bh;
+            dhcp_button_rect(&bx, &by, &bw, &bh);
+            if (mx >= bx && mx < bx + bw && my >= by && my < by + bh)
+                start_dhcp();
+            return;
+        }
+        if (!on_net_button(mx, my)) {
+            net_open = false;
+            need_frame();
+            return;
+        }
+    }
+
     if (volume_open && (pressed_now || right_now)) {
         int tx, ty, tw;
         volume_track(&tx, &ty, &tw);
@@ -1794,7 +1989,15 @@ static void handle_mouse(int mx, int my, u8 buttons) {
             return;
         }
 
+        if (on_net_button(mx, my)) {
+            net_open = !net_open;
+            volume_open = false;      /* one thing open over the panel */
+            need_frame();
+            return;
+        }
+
         if (on_volume_button(mx, my)) {
+            net_open = false;
             if (right_now) {
                 /* The right button is mute, which is the volume it was at
                    kept somewhere so that unmuting is not a guess. */

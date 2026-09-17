@@ -24,6 +24,7 @@
 #include "ioapic.h"
 #include "lapic.h"
 #include "netdev.h"
+#include "wifi.h"
 #include "net.h"
 #include "fb.h"
 #include "fbcon.h"
@@ -373,6 +374,7 @@ void kmain(handoff_t *h) {
         kprintf("  net     no card found\n");
         bb_log("net no card this kernel can drive");
     }
+    wifi_init();
     net_survey();
     bb_mark("input");
     /* Before either driver, because both arrive through it and neither can

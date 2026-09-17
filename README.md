@@ -331,6 +331,7 @@ instead.
     python tools/powercheck.py  tell it to shut down, see if it does
     python tools/appcheck.py    make the calculator divide, play a file
     python tools/abicheck.py    the structs the kernel writes and programs read
+    python tools/netcheck.py    click for an address, see if one arrives
     python tools/shots.py       retake the screenshots in this readme
 
 The Windows launcher lives in `launcher/` and is built with
@@ -609,6 +610,49 @@ a wheel answers 3. Above the driver it is one number, steps since somebody
 last looked, and the window manager hands it to the window under the pointer
 rather than the focused one.
 
+**The network, and being straight about it.** There is an icon on the panel
+next to the speaker, and it says three things apart rather than two: no
+link, a link with no address, and a link that can reach something. The
+middle one is the state people actually get stuck in, and an icon with two
+states cannot show it, which is why a cable plugged into a router with no
+DHCP behind it looks, on most machines, exactly like no cable at all.
+Clicking it opens a panel with the card, the address, the router, and a
+button that asks for one. Asking happens in a task of its own, because a
+compositor that stops for the length of a DHCP exchange is a desktop that
+freezes whenever somebody plugs a cable in.
+
+The panel also says what wireless hardware is present and whether it can be
+used, which needs explaining. Most wireless cards run the 802.11 MAC as
+firmware on a processor of their own, and that firmware is a binary from the
+vendor. A kernel written from scratch cannot make such a card transmit at
+all: the logic is not missing, it is on the other side of a chip that will
+not start without its own software, and no amount of further code changes
+that. Atheros parts are the exception, because their MAC is in hardware.
+So a machine with wireless it cannot use says which card and why, which is
+more useful than an empty list of networks and a good deal more honest.
+
+**WPA2, written out.** Joining a protected network is not sending the
+password: the password never crosses the air. Both ends grind it into the
+same key and then prove to each other that they did. All of that is
+arithmetic and none of it needs a radio to be right, so it is written and
+checked first: SHA-1, HMAC-SHA1, PBKDF2 and AES, and on top of them the key
+a password and a network name turn into, the session keys, the signature on
+a handshake message, and unwrapping the group key.
+
+Every number it is checked against is somebody else's: FIPS 180-1, RFC 2202,
+RFC 6070, IEEE 802.11i annex H, FIPS-197, RFC 3394. That is the point.
+Cryptography that has only been made to agree with itself is cryptography
+nobody should trust, including whoever wrote it.
+
+Two details worth the space. The addresses and nonces go into the derivation
+smallest first rather than in the order they arrived, because neither end is
+in charge and both have to sort the same pair the same way; getting it wrong
+gives two keys that are each perfectly well formed and are not the same, and
+it surfaces later as traffic that cannot be read. And a signature is
+compared a byte at a time with no early exit, because a comparison that
+stops at the first difference tells anyone who can time it how much of a
+guess was right.
+
 **A trackpad.** The pad in a laptop answers as that same 1987 mouse unless
 it is asked otherwise, and the asking is a knock of the same kind: there is
 no command that takes an argument, so the argument goes through four
@@ -651,37 +695,38 @@ is still the kernel's own, on the console; the one in a window is a program.
 ## testing
 
 The kernel tests itself. `./run.sh -T` boots with selftest on the command line,
-runs 340 checks across every subsystem, then writes to QEMU's debug-exit port
+runs 381 checks across every subsystem, then writes to QEMU's debug-exit port
 so the host gets a real exit status.
 
-    [string]              8 checks   [mouse]               1 check
-    [the identity map]    6 checks   [graphics]           13 checks
-    [physical memory]     4 checks   [windows]             3 checks
-    [paging]              4 checks   [window server]      16 checks
-    [user access]         5 checks   [built-in programs]   6 checks
-    [heap]                5 checks   [theme]              16 checks
-    [filesystem]          7 checks   [taskbar]            18 checks
-    [paths]              11 checks   [live tree]          19 checks
-    [directories]        12 checks   [layout]              9 checks
-    [open files]         12 checks   [waiting]            14 checks
-    [timer]               2 checks   [trackpad]           25 checks
-    [interrupts]          2 checks   [wait timeouts]       3 checks
-    [disk]               12 checks   [processors]          2 checks
-    [fat]                14 checks   [black box]          21 checks
-    [network]             7 checks   [acpi and pcie]       4 checks
-    [elf]                 7 checks   [interrupt routing]   9 checks
-    [userspace]           4 checks   [clipboard]          14 checks
-    [video]               7 checks   [clock]              18 checks
+    [string]              8 checks   [graphics]           13 checks
+    [the identity map]    6 checks   [windows]             3 checks
+    [physical memory]     4 checks   [window server]      16 checks
+    [paging]              4 checks   [built-in programs]   6 checks
+    [user access]         5 checks   [theme]              16 checks
+    [heap]                5 checks   [taskbar]            18 checks
+    [filesystem]          7 checks   [live tree]          19 checks
+    [paths]              11 checks   [layout]              9 checks
+    [directories]        12 checks   [waiting]            14 checks
+    [open files]         12 checks   [trackpad]           25 checks
+    [timer]               2 checks   [crypto]             22 checks
+    [interrupts]          2 checks   [wpa]                19 checks
+    [disk]               12 checks   [wait timeouts]       3 checks
+    [fat]                14 checks   [processors]          2 checks
+    [network]             7 checks   [black box]          21 checks
+    [elf]                 7 checks   [acpi and pcie]       4 checks
+    [userspace]           4 checks   [interrupt routing]   9 checks
+    [video]               7 checks   [clipboard]          14 checks
+    [mouse]               1 check    [clock]              18 checks
 
-    340 passed, 0 failed
+    381 passed, 0 failed
     SELFTEST_PASS
 
 The processor section is two checks on a machine with one CPU and eleven on
 a machine with several, where it hands work to each of them and requires the
-count they share to come back exact. `qemu-system-x86_64 -smp 4` reaches 349.
+count they share to come back exact. `qemu-system-x86_64 -smp 4` reaches 390.
 
 The same checks run again on `-machine q35`, which has PCIe and an AHCI
-controller rather than a 1996 chipset and a PIO disk, and reach 348 there.
+controller rather than a 1996 chipset and a PIO disk, and reach 389 there.
 Two bugs found the day that was added were invisible on the older machine:
 the block layer would not split a request past the eight sectors AHCI
 accepts, and the ACPI tables were never read on a UEFI machine at all.
@@ -893,6 +938,9 @@ orders of magnitude away from Linux, which is roughly 30 million lines.
     kernel/theme.c     the desktop's appearance, and the file it lives in
     kernel/pins.c      the apps kept on the taskbar, and their file
     kernel/synaptics.c a trackpad, and turning a position into a pointer
+    kernel/crypto.c    sha-1, hmac, pbkdf2 and aes, written out
+    kernel/wpa.c       what a wireless password turns into
+    kernel/wifi.c      what wireless hardware is here, and whether it is usable
     userland/monitor.c what the machine is doing, while it does it
     userland/music.c   wav files, resampled to whatever the card wants
     userland/calc.c    arithmetic in millionths, because there is no fpu
