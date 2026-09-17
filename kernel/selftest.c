@@ -12,6 +12,8 @@
 #include "sysfs.h"
 #include "timer.h"
 #include "synaptics.h"
+#include "crypto.h"
+#include "wpa.h"
 #include "sched.h"
 #include "wait.h"
 #include "syscall.h"
@@ -1016,6 +1018,326 @@ static void test_idle_accounting(void) {
        waited_idle > spun_idle + 10);
 }
 
+/* --- the arithmetic a password is made of ---------------------------------
+ *
+ * Every one of these is somebody else's answer. The point of a cryptographic
+ * check is not that the code agrees with itself, it is that it agrees with a
+ * number published by the people who defined the thing, arrived at on other
+ * machines by other implementations. Anything less and a quietly wrong
+ * cipher passes its own tests forever.
+ *
+ * The sources, in order: FIPS 180-1 for SHA-1, RFC 2202 for HMAC, RFC 6070
+ * for PBKDF2, IEEE 802.11i annex H for the two that turn a passphrase into a
+ * wireless key, FIPS-197 for AES and RFC 3394 for unwrapping. */
+
+static int hex_digit(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+static bool is_hex(const u8 *got, u32 len, const char *want) {
+    for (u32 i = 0; i < len; i++) {
+        int hi = hex_digit(want[i * 2]), lo = hex_digit(want[i * 2 + 1]);
+        if (hi < 0 || lo < 0) return false;
+        if (got[i] != (u8)((hi << 4) | lo)) return false;
+    }
+    return want[len * 2] == 0;
+}
+
+static void from_hex(const char *s, u8 *out, u32 len) {
+    for (u32 i = 0; i < len; i++)
+        out[i] = (u8)((hex_digit(s[i * 2]) << 4) | hex_digit(s[i * 2 + 1]));
+}
+
+static void test_crypto(void) {
+    u8 d[32];
+
+    /* --- SHA-1, FIPS 180-1 ------------------------------------------------ */
+    sha1("abc", 3, d);
+    ok("sha-1 of abc", is_hex(d, 20, "a9993e364706816aba3e25717850c26c9cd0d89d"));
+
+    sha1("abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq", 56, d);
+    ok("sha-1 of a message that spans two blocks",
+       is_hex(d, 20, "84983e441c3bd26ebaae4aa1f95129e5e54670f1"));
+
+    /* A million bytes, which is the one that exercises the length counter
+       past anything a single block can hold. */
+    {
+        sha1_t s;
+        sha1_init(&s);
+        for (int i = 0; i < 1000; i++) {
+            char chunk[1000];
+            for (int j = 0; j < 1000; j++) chunk[j] = 'a';
+            sha1_update(&s, chunk, 1000);
+        }
+        sha1_final(&s, d);
+        ok("sha-1 of a million letters",
+           is_hex(d, 20, "34aa973cd4c4daa4f61eeb2bdbad27316534016f"));
+    }
+
+    ok("sha-1 of nothing at all",
+       (sha1("", 0, d), is_hex(d, 20,
+                               "da39a3ee5e6b4b0d3255bfef95601890afd80709")));
+
+    /* --- HMAC-SHA1, RFC 2202 --------------------------------------------- */
+    {
+        u8 key[80];
+        for (int i = 0; i < 20; i++) key[i] = 0x0B;
+        hmac_sha1(key, 20, (const u8 *)"Hi There", 8, d);
+        ok("hmac-sha1, the first published case",
+           is_hex(d, 20, "b617318655057264e28bc0b6fb378c8ef146be00"));
+
+        hmac_sha1((const u8 *)"Jefe", 4,
+                  (const u8 *)"what do ya want for nothing?", 28, d);
+        ok("hmac-sha1 with a short key",
+           is_hex(d, 20, "effcdf6ae5eb2fa2d27416d5f184df9c259a7c79"));
+
+        /* Longer than a block, so the key is replaced by its own hash. */
+        for (int i = 0; i < 80; i++) key[i] = 0xAA;
+        hmac_sha1(key, 80,
+                  (const u8 *)"Test Using Larger Than Block-Size Key - "
+                              "Hash Key First", 54, d);
+        ok("hmac-sha1 with a key longer than a block",
+           is_hex(d, 20, "aa4ae5e15272d00e95705637ce8a3b55ed402112"));
+    }
+
+    /* --- PBKDF2-HMAC-SHA1, RFC 6070 --------------------------------------- */
+    pbkdf2_sha1("password", (const u8 *)"salt", 4, 1, d, 20);
+    ok("pbkdf2 with one round",
+       is_hex(d, 20, "0c60c80f961f0e71f3a9b524af6012062fe037a6"));
+
+    pbkdf2_sha1("password", (const u8 *)"salt", 4, 2, d, 20);
+    ok("pbkdf2 with two, which is where the folding starts to matter",
+       is_hex(d, 20, "ea6c014dc72d6f8ccd1ed92ace1d41f0d8de8957"));
+
+    pbkdf2_sha1("password", (const u8 *)"salt", 4, 4096, d, 20);
+    ok("pbkdf2 with four thousand",
+       is_hex(d, 20, "4b007901b765489abead49d926f721d065a429c1"));
+
+    /* --- and the same thing as a wireless key, IEEE 802.11i annex H ------- */
+    /* The salt is the network's name, which is why the same password on two
+       networks is two different keys. */
+    pbkdf2_sha1("password", (const u8 *)"IEEE", 4, 4096, d, 32);
+    ok("the published wpa key for password on IEEE",
+       is_hex(d, 32, "f42c6fc52df0ebef9ebb4b90b38a5f90"
+                     "2e83fe1b135a70e23aed762e9710a12e"));
+
+    pbkdf2_sha1("ThisIsAPassword", (const u8 *)"ThisIsASSID", 11, 4096, d, 32);
+    ok("and the second one, which uses both blocks",
+       is_hex(d, 32, "0dc0d6eb90555ed6419756b9a15ec3e3"
+                     "209b63df707dd508d14581f8982721af"));
+
+    /* --- AES, FIPS-197 ---------------------------------------------------- */
+    {
+        u8 key[32], in[16], out[16], back[16];
+        aes_t a;
+
+        from_hex("000102030405060708090a0b0c0d0e0f", key, 16);
+        from_hex("00112233445566778899aabbccddeeff", in, 16);
+
+        ok("a 128 bit key is accepted", aes_set_key(&a, key, 128));
+        aes_encrypt_block(&a, in, out);
+        ok("aes-128 encrypts the published block",
+           is_hex(out, 16, "69c4e0d86a7b0430d8cdb78070b4c55a"));
+
+        aes_decrypt_block(&a, out, back);
+        ok("and decrypts it back", is_hex(back, 16,
+                                          "00112233445566778899aabbccddeeff"));
+
+        from_hex("000102030405060708090a0b0c0d0e0f"
+                 "101112131415161718191a1b1c1d1e1f", key, 32);
+        ok("a 256 bit key is accepted", aes_set_key(&a, key, 256));
+        aes_encrypt_block(&a, in, out);
+        ok("aes-256 encrypts the published block",
+           is_hex(out, 16, "8ea2b7ca516745bfeafc49904b496089"));
+
+        ok("and a key of a size that does not exist is refused",
+           !aes_set_key(&a, key, 192));
+    }
+
+    /* --- unwrapping a key, RFC 3394 --------------------------------------- */
+    {
+        u8 kek[16], wrapped[24], out[16];
+        from_hex("000102030405060708090A0B0C0D0E0F", kek, 16);
+        from_hex("1FA68B0A8112B447AEF34BD8FB5A7B829D3E862371D2CFE5",
+                 wrapped, 24);
+
+        ok("a wrapped key comes out", aes_unwrap_key(kek, 128, wrapped, 24, out));
+        ok("and is the key that went in",
+           is_hex(out, 16, "00112233445566778899AABBCCDDEEFF"));
+
+        /* One bit wrong anywhere and it has to say so, because this is the
+           only thing standing between a wrong password and a wrong key
+           being used as though it were right. */
+        wrapped[5] ^= 0x01;
+        ok("a wrapped key with a bit changed is refused",
+           !aes_unwrap_key(kek, 128, wrapped, 24, out));
+        wrapped[5] ^= 0x01;
+
+        kek[0] ^= 0x80;
+        ok("and so is the right key under the wrong one",
+           !aes_unwrap_key(kek, 128, wrapped, 24, out));
+    }
+}
+
+/* --- joining a protected network ------------------------------------------
+ *
+ * The published answers run out here. There are test vectors for the key a
+ * password turns into and there is no widely published one for the rest of
+ * the derivation, so these check two other things instead.
+ *
+ * First, that the expansion is assembled the way the standard describes it,
+ * by composing the same HMAC calls in the check and requiring the same
+ * bytes. That is not circular: HMAC itself is pinned to RFC 2202 above, and
+ * what is in question here is whether the label, the zero byte, the data
+ * and the counter go in in that order, which is exactly where these go
+ * wrong.
+ *
+ * Second, the properties the standard requires, which are stronger than any
+ * single vector: that both ends sorting the same pair arrive at the same
+ * key however it reached them, and that anything else changing changes it.
+ */
+static void test_wpa(void) {
+    u8 pmk[PMK_LEN];
+
+    wpa_pmk("password", "IEEE", pmk);
+    ok("the password and the network name make the published key",
+       is_hex(pmk, 32, "f42c6fc52df0ebef9ebb4b90b38a5f90"
+                       "2e83fe1b135a70e23aed762e9710a12e"));
+
+    /* The name is part of it, so the same password elsewhere is not the
+       same key. This is what stops one precomputed table opening every
+       network with a common password on it. */
+    u8 other[PMK_LEN];
+    wpa_pmk("password", "IEEF", other);
+    ok("the same password on another network is another key",
+       memcmp(pmk, other, PMK_LEN) != 0);
+
+    /* --- the expansion, against the same HMAC composed here --------------- */
+    {
+        const char *label = "Pairwise key expansion";
+        u8 key[32], data[76];
+        for (int i = 0; i < 32; i++) key[i] = (u8)(i * 7 + 1);
+        for (int i = 0; i < 76; i++) data[i] = (u8)(i * 3);
+
+        u8 got[40], want[SHA1_SIZE];
+        wpa_prf(key, 32, label, data, sizeof(data), got, sizeof(got));
+
+        u8 zero = 0, counter = 0;
+        u32 label_len = 22;
+        const u8 *parts[4] = { (const u8 *)label, &zero, data, &counter };
+        u32 lens[4] = { label_len, 1, sizeof(data), 1 };
+
+        hmac_sha1_vector(key, 32, parts, lens, 4, want);
+        ok("the first block of the expansion is the hmac of label, zero, "
+           "data and a counter", memcmp(got, want, SHA1_SIZE) == 0);
+
+        counter = 1;
+        hmac_sha1_vector(key, 32, parts, lens, 4, want);
+        ok("and the second block is the same with the counter moved on",
+           memcmp(got + SHA1_SIZE, want, 40 - SHA1_SIZE) == 0);
+    }
+
+    /* --- the ordering, which is the bug this always has ------------------- */
+    {
+        u8 aa[6]  = { 0x00, 0x11, 0x22, 0x33, 0x44, 0x55 };
+        u8 spa[6] = { 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF };
+        u8 anonce[NONCE_LEN], snonce[NONCE_LEN];
+        for (int i = 0; i < NONCE_LEN; i++) {
+            anonce[i] = (u8)(i + 1);
+            snonce[i] = (u8)(200 - i);
+        }
+
+        u8 ours[PTK_LEN], theirs[PTK_LEN];
+        wpa_ptk(pmk, aa, spa, anonce, snonce, ours);
+
+        /* The other end has the same four things the other way round, and
+           has to arrive at the same key or nothing either of them sends
+           afterwards can be read by the other. */
+        wpa_ptk(pmk, spa, aa, snonce, anonce, theirs);
+        ok("both ends derive the same key from the same four things",
+           memcmp(ours, theirs, PTK_LEN) == 0);
+
+        /* And it is this session's key. A new random number from either end
+           has to produce a different one, or last week's traffic could be
+           replayed into this week. */
+        u8 again[PTK_LEN];
+        snonce[0] ^= 0x01;
+        wpa_ptk(pmk, aa, spa, anonce, snonce, again);
+        ok("one bit of a different nonce makes a different key",
+           memcmp(ours, again, PTK_LEN) != 0);
+        snonce[0] ^= 0x01;
+
+        aa[0] ^= 0x01;
+        wpa_ptk(pmk, aa, spa, anonce, snonce, again);
+        ok("and so does a different access point",
+           memcmp(ours, again, PTK_LEN) != 0);
+        aa[0] ^= 0x01;
+
+        other[0] ^= 0x01;
+        wpa_ptk(other, aa, spa, anonce, snonce, again);
+        ok("and so does a different password",
+           memcmp(ours, again, PTK_LEN) != 0);
+
+        /* --- the signature on a message ----------------------------------- */
+        const u8 *kck = ours;              /* the first 16 bytes of the ptk */
+        u8 frame[EAPOL_MIN_LEN];
+        for (u32 i = 0; i < sizeof(frame); i++) frame[i] = (u8)(i);
+
+        u8 before[EAPOL_MIN_LEN];
+        memcpy(before, frame, sizeof(frame));
+
+        wpa_sign(kck, frame, sizeof(frame));
+        ok("a signed message checks out", wpa_check_mic(kck, frame, sizeof(frame)));
+
+        memcpy(before, frame, sizeof(frame));
+        wpa_check_mic(kck, frame, sizeof(frame));
+        ok("and checking it did not change it",
+           memcmp(before, frame, sizeof(frame)) == 0);
+
+        frame[40] ^= 0x01;
+        ok("a message with a byte changed does not",
+           !wpa_check_mic(kck, frame, sizeof(frame)));
+        frame[40] ^= 0x01;
+
+        frame[EAPOL_MIC_OFFSET] ^= 0x01;
+        ok("nor does one with the signature itself changed",
+           !wpa_check_mic(kck, frame, sizeof(frame)));
+        frame[EAPOL_MIC_OFFSET] ^= 0x01;
+
+        u8 wrong[KCK_LEN];
+        memcpy(wrong, kck, KCK_LEN);
+        wrong[0] ^= 0x01;
+        ok("and somebody with the wrong key cannot check it",
+           !wpa_check_mic(wrong, frame, sizeof(frame)));
+
+        ok("a message too short to hold a signature is refused",
+           !wpa_check_mic(kck, frame, 32));
+    }
+
+    /* --- the group key inside the third message --------------------------- */
+    {
+        u8 kek[16], wrapped[24], gtk[32];
+        u32 gtk_len = 0;
+        from_hex("000102030405060708090A0B0C0D0E0F", kek, 16);
+        from_hex("1FA68B0A8112B447AEF34BD8FB5A7B829D3E862371D2CFE5",
+                 wrapped, 24);
+
+        ok("the group key comes out of its wrapping",
+           wpa_unwrap_gtk(kek, wrapped, 24, gtk, &gtk_len));
+        ok("and is the length the wrapping said", gtk_len == 16);
+        ok("and is the right key",
+           is_hex(gtk, 16, "00112233445566778899AABBCCDDEEFF"));
+
+        ok("a wrapping that is not a whole number of blocks is refused",
+           !wpa_unwrap_gtk(kek, wrapped, 20, gtk, &gtk_len));
+        ok("and one too short to hold anything is refused",
+           !wpa_unwrap_gtk(kek, wrapped, 8, gtk, &gtk_len));
+    }
+}
+
 /* --- the trackpad ---------------------------------------------------------
  *
  * No emulator has a Synaptics pad, so nothing here can show that one is
@@ -1822,6 +2144,8 @@ int selftest_run(void) {
     kprintf("[waiting]\n");    test_waiting();
     test_idle_accounting();
     kprintf("[trackpad]\n");   test_trackpad();
+    kprintf("[crypto]\n");     test_crypto();
+    kprintf("[wpa]\n");        test_wpa();
     kprintf("[wait timeouts]\n"); test_wait_timeout();
     kprintf("[processors]\n"); test_smp();
     kprintf("[black box]\n"); test_blackbox();
