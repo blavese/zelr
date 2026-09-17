@@ -13,6 +13,7 @@
 #include "string.h"
 #include "printf.h"
 #include "fb.h"
+#include "sound.h"
 
 static theme_t current;
 
@@ -147,6 +148,7 @@ void theme_init(void) {
     current.autodesktop = true;
     current.want_w = 0;
     current.want_h = 0;
+    current.volume = 70;
     derive();
     theme_reload();
 }
@@ -192,6 +194,7 @@ static void apply(const char *key, const char *value) {
     else if (!strcmp(key, "autodesktop")) current.autodesktop = parse_dec(value) != 0;
     else if (!strcmp(key, "width"))   current.want_w = (int)parse_dec(value);
     else if (!strcmp(key, "height"))  current.want_h = (int)parse_dec(value);
+    else if (!strcmp(key, "volume"))  current.volume = (int)parse_dec(value);
     else if (!strcmp(key, "preset"))  theme_apply_preset((int)parse_dec(value));
     else if (!strcmp(key, "light")) {
         /* The whole palette follows from this, so whichever order the file
@@ -244,6 +247,15 @@ bool theme_reload(void) {
     return memcmp(&before, &current, sizeof(theme_t)) != 0;
 }
 
+void theme_set_volume(int percent) {
+    if (percent < 0) percent = 0;
+    if (percent > 100) percent = 100;
+    if (percent == current.volume) return;
+    current.volume = percent;
+    sound_set_volume((u32)percent);
+    theme_save();
+}
+
 static int put_hex(char *out, u32 v) {
     const char *hex = "0123456789abcdef";
     for (int i = 5; i >= 0; i--) out[5 - i] = hex[(v >> (i * 4)) & 0xF];
@@ -280,6 +292,7 @@ bool theme_save(void) {
         { "autodesktop", current.autodesktop ? 1u : 0u, false },
         { "width",     (u32)current.want_w,     false },
         { "height",    (u32)current.want_h,     false },
+        { "volume",    (u32)current.volume,     false },
     };
 
     /* A palette nobody can name still has to survive a reboot. */

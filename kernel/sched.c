@@ -258,6 +258,18 @@ void task_yield(void) {
     __asm__ volatile ("int $32");
 }
 
+/* Whole ticks only. A halt ended early by a key or the mouse inside the
+   same tick counts as nothing, which charges the task for time it spent
+   waiting. That is the direction to be wrong in: it can say busy when it
+   was idle, and never idle when it was busy. */
+void task_idle_wait(void) {
+    if (!interrupts_enabled()) return;   /* halting here would never return */
+
+    u64 before = timer_ticks();
+    hlt();
+    if (current) current->idle_ticks += timer_ticks() - before;
+}
+
 void task_sleep(u32 ms) {
     if (!current) { sleep_ms(ms); return; }
     current->wake_at = timer_ticks() + (ms * timer_hz()) / 1000u;

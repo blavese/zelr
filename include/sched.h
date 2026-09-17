@@ -14,6 +14,8 @@ typedef enum {
     TASK_READY, TASK_RUNNING, TASK_SLEEPING, TASK_BLOCKED, TASK_DEAD
 } task_state_t;
 
+#define TASK_ARG_MAX 128
+
 typedef struct task {
     u64  rsp;                 /* saved kernel stack pointer */
     u64  stack_base;
@@ -26,9 +28,20 @@ typedef struct task {
     bool reaped;              /* somebody has collected that status */
     u64  died_at;             /* when it finished, for the grace period */
     u32  slices;              /* how many times it has been scheduled */
+
+    /* Of those, the ones it spent halted waiting for something to happen.
+       The scheduler cannot tell work from waiting: it hands out a slice on
+       every tick to whatever is runnable, and a task sitting in a poll loop
+       looks exactly like a task doing arithmetic. So the waiting says so
+       itself, and slices minus these is what the task actually did. */
+    u64  idle_ticks;
     u64  dir;                 /* address space, 0 means the kernel's */
     bool user;                /* runs in ring 3 */
     char cwd[TASK_CWD_MAX];   /* working directory, inherited at creation */
+
+    /* What this program was started on, if anything: one string, which for
+       everything that uses it is a path. Set before the task can run. */
+    char arg[TASK_ARG_MAX];
     struct task *next;
 } task_t;
 
@@ -44,6 +57,12 @@ void   sched_start(void);
 void   task_exit_with(int status);
 void   task_exit(void);
 void   task_sleep(u32 ms);
+
+/* Parks the processor until something happens, and does not count the time
+   against the task. For a loop that has nothing to do until input arrives or
+   the next frame is due: it is a halt, so any interrupt ends it, and the
+   ticks it slept through are taken off what the task is charged for. */
+void   task_idle_wait(void);
 void   task_yield(void);
 task_t *task_current(void);
 task_t *task_list(void);

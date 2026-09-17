@@ -74,6 +74,27 @@ builtin_files_start:
 builtin_files_end:
 
 .balign 4
+.global builtin_calc_start
+.global builtin_calc_end
+builtin_calc_start:
+.incbin "build/user/calc.elf"
+builtin_calc_end:
+
+.balign 4
+.global builtin_music_start
+.global builtin_music_end
+builtin_music_start:
+.incbin "build/user/music.elf"
+builtin_music_end:
+
+.balign 4
+.global builtin_monitor_start
+.global builtin_monitor_end
+builtin_monitor_start:
+.incbin "build/user/monitor.elf"
+builtin_monitor_end:
+
+.balign 4
 .global builtin_notes_start
 .global builtin_notes_end
 builtin_notes_start:

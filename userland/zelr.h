@@ -8,6 +8,7 @@ typedef unsigned short     u16;
 typedef unsigned char      u8;
 typedef int                i32;
 typedef unsigned long long u64;
+typedef long long          i64;
 
 /* _Bool is a keyword; the spellings are the header, which there is not one
    of here. */
@@ -69,6 +70,8 @@ typedef long long          zelr_word;
 #define SYS_POWER         42
 #define POWER_OFF     0
 #define POWER_REBOOT  1
+#define SYS_SPAWN_ARG     43
+#define SYS_GETARG        44
 
 /* The one door into the kernel. The registers are the same ones a 32-bit zelr
    used, only twice as wide, which is why every argument is a word rather than
@@ -299,13 +302,29 @@ static inline int sysinfo(zelr_sysinfo *out) {
 #define TASK_BLOCKED  3
 #define TASK_DEAD     4
 
+/* Must match zelr_task_t in include/syscall.h, which the kernel copies
+   whole into whatever address is handed to tasks(). See tools/abicheck.py:
+   this was 32 and the kernel's was 64, so every call wrote 32 bytes past
+   the end of the caller's variable. */
 typedef struct {
     u32  pid;
     u32  state;
     u32  slices;
+    u32  idle;
     u32  user;
-    char name[32];
+    char name[64];
 } zelr_task;
+
+/* Starts a program and tells it one thing, which is almost always the file
+   it is being asked to open. */
+static inline int spawn_arg(const char *path, const char *arg) {
+    return syscall(SYS_SPAWN_ARG, (zelr_word)path, (zelr_word)arg, 0);
+}
+
+/* What this program was started on, or an empty string. */
+static inline int getarg(char *out, int cap) {
+    return syscall(SYS_GETARG, (zelr_word)out, (zelr_word)cap, 0);
+}
 
 static inline int spawn(const char *path) {
     return syscall(SYS_SPAWN, (zelr_word)path, 0, 0);

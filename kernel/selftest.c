@@ -970,6 +970,51 @@ static void test_waiting(void) {
     ok("waiting on a task that never existed says so", task_wait(999999) == -1);
 }
 
+/* --- work against waiting -------------------------------------------------
+ *
+ * A slice is a tick the scheduler handed a task. It is not a tick the task
+ * used: this kernel is round robin, so a loop waiting for a key is picked
+ * every tick and spends the slice halted. Counting slices as work made an
+ * idle machine read a hundred per cent, and the system monitor said so for
+ * a whole release before anyone worked out that it could not be right.
+ *
+ * So both directions are checked here. Spinning has to show up as work, and
+ * waiting has to show up as waiting, and neither is allowed to look like the
+ * other. Getting either backwards fails this. */
+static void test_idle_accounting(void) {
+    task_t *me = task_current();
+    ok("there is a task to measure", me != 0);
+    if (!me) return;
+
+    /* Spinning. The tick count is read straight from the timer, so the loop
+       ends after a known stretch of time whatever the processor's speed. */
+    u32 slices = me->slices;
+    u64 idle = me->idle_ticks;
+    u64 until = timer_ticks() + 30;
+    while (timer_ticks() < until) { /* busy on purpose */ }
+
+    u32 spun_slices = me->slices - slices;
+    u64 spun_idle = me->idle_ticks - idle;
+    ok("a spinning task is given slices", spun_slices > 10);
+    ok("and none of them count as waiting", spun_idle == 0);
+
+    /* Waiting. The same stretch of time, spent halted. */
+    slices = me->slices;
+    idle = me->idle_ticks;
+    until = timer_ticks() + 30;
+    while (timer_ticks() < until) task_idle_wait();
+
+    u32 waited_slices = me->slices - slices;
+    u64 waited_idle = me->idle_ticks - idle;
+    ok("a waiting task is given slices too", waited_slices > 10);
+    ok("and nearly all of them count as waiting",
+       waited_idle * 10 >= (u64)waited_slices * 8);
+
+    /* Which is the whole point: the two are told apart. */
+    ok("so waiting and working do not look the same",
+       waited_idle > spun_idle + 10);
+}
+
 static volatile int timeout_reached;
 
 static void timeout_task(void) {
@@ -1561,6 +1606,7 @@ int selftest_run(void) {
     kprintf("[live tree]\n"); test_live_tree();
     kprintf("[layout]\n");    test_layout();
     kprintf("[waiting]\n");    test_waiting();
+    test_idle_accounting();
     kprintf("[wait timeouts]\n"); test_wait_timeout();
     kprintf("[processors]\n"); test_smp();
     kprintf("[black box]\n"); test_blackbox();

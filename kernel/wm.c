@@ -33,8 +33,10 @@
 #include "pins.h"
 #include "winsrv.h"
 #include "power.h"
+#include "sound.h"
 #include "diskfs.h"
 #include "fbcon.h"
+#include "sched.h"
 #include "io.h"
 
 #define TASKBAR_H  34
@@ -66,6 +68,11 @@ static int taskbar_pins_x(void) {
 static int taskbar_chips_x(void) {
     return taskbar_pins_x() + pins_count() * PIN_STEP + 14;
 }
+/* The volume button, left of the clock, and the little panel it opens. */
+#define VOL_W      30
+#define VOLPOP_W   208
+#define VOLPOP_H   40
+
 #define MENU_W     210
 #define MENU_ITEM  30
 #define SHADOW     5
@@ -198,6 +205,11 @@ static bool still_moving(u64 since, u32 ms) {
     return since && phase_of(since, ms) < ANIM_FULL;
 }
 
+/* The volume panel, open when someone clicks the speaker. */
+static bool volume_open;
+static bool volume_drag;
+static int  volume_before_mute = 70;
+
 /* The launcher. Open when someone clicks the desktop or the taskbar badge. */
 static bool menu_open;
 static int  menu_x, menu_y;
@@ -218,6 +230,9 @@ static const struct {
     { "Notes",        "/bin/notes" },
     { "Paint",        "/bin/paint" },
     { "Settings",     "/bin/settings" },
+    { "Monitor",      "/bin/monitor" },
+    { "Music",        "/bin/music" },
+    { "Calculator",   "/bin/calc" },
     { "System info",  0 },
     { "Close all",    0 },
     { "Leave desktop", 0 },
@@ -1134,6 +1149,102 @@ static void draw_pin_icon(int x, int y, const pin_t *p, bool hot, bool running) 
                 t->accent);
 }
 
+static void clock_text(char *out, u32 cap) {
+    if (rtc_present()) { rtc_format_short(out, cap); return; }
+
+    /* A machine with no usable CMOS clock counts from boot instead, which
+       is what this had before there was a clock to read. */
+    u32 secs = (u32)(timer_ticks() / timer_hz());
+    kformat(out, cap, "up %d:%02d", secs / 60, secs % 60);
+}
+
+/* The right hand end of the panel: the clock against the edge, and the
+   speaker to the left of it. Worked out in one place so that what is drawn
+   and what a click lands on cannot drift apart. */
+static int taskbar_volume_x(void) {
+    char clock[24];
+    clock_text(clock, sizeof(clock));
+    return (int)fb_width() - TASKBAR_GAP - 16
+           - face_width(clock, FACE_BODY) - 14 - VOL_W;
+}
+
+static bool on_volume_button(int mx, int my) {
+    int y = taskbar_y();
+    if (my < y + 5 || my >= y + TASKBAR_H - 5) return false;
+    int x = taskbar_volume_x();
+    return mx >= x && mx < x + VOL_W;
+}
+
+/* A speaker, drawn rather than stored: a box, a cone widening out of it, and
+   one bar for quiet or two for loud. A cross instead when it is off. */
+static void draw_speaker(int x, int y, u32 fg, int level) {
+    fb_rect((u32)(x + 2), (u32)(y + 5), 3, 6, fg);
+    for (int i = 0; i < 5; i++)
+        fb_rect((u32)(x + 5 + i), (u32)(y + 5 - i), 1, (u32)(6 + i * 2), fg);
+
+    if (level <= 0) {
+        for (int i = 0; i < 6; i++) {
+            fb_rect((u32)(x + 13 + i), (u32)(y + 5 + i), 2, 1, fg);
+            fb_rect((u32)(x + 13 + i), (u32)(y + 10 - i), 2, 1, fg);
+        }
+        return;
+    }
+    fb_rect((u32)(x + 13), (u32)(y + 5), 2, 6, fg);
+    if (level > 45) fb_rect((u32)(x + 17), (u32)(y + 2), 2, 12, fg);
+}
+
+/* Where the slider's track is, which the drawing and the dragging both
+   need and neither should work out for itself. */
+static void volume_track(int *x, int *y, int *w) {
+    int px = taskbar_volume_x() + VOL_W / 2 - VOLPOP_W / 2;
+    if (px < TASKBAR_GAP) px = TASKBAR_GAP;
+    if (px + VOLPOP_W > (int)fb_width() - TASKBAR_GAP)
+        px = (int)fb_width() - TASKBAR_GAP - VOLPOP_W;
+
+    *x = px + 16;
+    *y = taskbar_y() - VOLPOP_H - 8 + VOLPOP_H / 2 - 3;
+    *w = VOLPOP_W - 32 - 40;
+}
+
+static void draw_volume_panel(void) {
+    if (!volume_open) return;
+    const theme_t *t = theme();
+
+    int tx, ty, tw;
+    volume_track(&tx, &ty, &tw);
+    int px = tx - 16, py = taskbar_y() - VOLPOP_H - 8;
+
+    if (t->shadows) fb_shadow(px, py, VOLPOP_W, VOLPOP_H, 10, SHADOW);
+    fb_round_rect(px, py, VOLPOP_W, VOLPOP_H, 10, t->overlay);
+    fb_rect((u32)(px + 10), (u32)py, (u32)(VOLPOP_W - 20), 1, t->sheen);
+    fb_round_frame(px, py, VOLPOP_W, VOLPOP_H, 10, t->hairline);
+
+    int level = theme()->volume;
+    int on = tw * level / 100;
+
+    fb_round_rect(tx, ty, tw, 6, 3, t->raised);
+    if (on > 0) fb_round_rect(tx, ty, on, 6, 3, t->accent);
+    fb_round_rect(tx + on - 6, ty - 4, 13, 13, 6, t->accent);
+    fb_round_frame(tx + on - 6, ty - 4, 13, 13, 6, darken(t->accent, 60));
+
+    char num[8];
+    kformat(num, sizeof(num), "%d", level);
+    face_text(tx + tw + 14, py + (VOLPOP_H - face_height(FACE_BODY)) / 2,
+              num, t->text, FACE_BODY);
+}
+
+static void volume_from_pointer(int mx) {
+    int tx, ty, tw;
+    volume_track(&tx, &ty, &tw);
+    if (tw <= 0) return;
+
+    int v = (mx - tx) * 100 / tw;
+    if (v < 0) v = 0;
+    if (v > 100) v = 100;
+    theme_set_volume(v);
+    need_frame();
+}
+
 static void draw_taskbar(void) {
     const theme_t *t = theme();
     int y = taskbar_y();
@@ -1195,18 +1306,21 @@ static void draw_taskbar(void) {
         x += tw + 6;
     }
 
-    /* The time on the right, with uptime under it when there is room. A
-       machine with no usable CMOS clock falls back to counting from boot,
-       which is what this had before there was a clock to read. */
+    /* The time on the right, and the volume to the left of it. */
     char clock[24];
-    if (rtc_present()) rtc_format_short(clock, sizeof(clock));
-    else {
-        u32 secs = (u32)(timer_ticks() / timer_hz());
-        kformat(clock, sizeof(clock), "up %d:%02d", secs / 60, secs % 60);
-    }
+    clock_text(clock, sizeof(clock));
     face_text((int)fb_width() - TASKBAR_GAP - face_width(clock, FACE_BODY) - 16,
               y + (TASKBAR_H - face_height(FACE_BODY)) / 2, clock, t->text,
               FACE_BODY);
+
+    {
+        int vx = taskbar_volume_x();
+        bool hot = volume_open || on_volume_button(last_mx, last_my);
+        if (hot) fb_round_rect(vx - 2, y + 5, VOL_W + 4, TASKBAR_H - 10, 6,
+                               t->raised);
+        draw_speaker(vx + 4, y + 9, t->volume ? t->text : t->text_dim,
+                     t->volume);
+    }
 
     /* And the name of the icon under the pointer, above it. */
     if (hot >= 0) {
@@ -1289,6 +1403,7 @@ static void composite(void) {
     draw_snap_preview();
     draw_resize_preview();
     draw_taskbar();
+    draw_volume_panel();
     draw_menu();
     draw_cursor(last_mx, last_my);
     if (frame_is_whole || dmg_x1 <= dmg_x0) {
@@ -1528,9 +1643,32 @@ static void handle_mouse(int mx, int my, u8 buttons) {
         }
     }
 
+    if (volume_drag && (buttons & 1)) { volume_from_pointer(mx); return; }
+
+    if (volume_open && (pressed_now || right_now)) {
+        int tx, ty, tw;
+        volume_track(&tx, &ty, &tw);
+        int px = tx - 16, py = taskbar_y() - VOLPOP_H - 8;
+        if (mx >= px && mx < px + VOLPOP_W && my >= py && my < py + VOLPOP_H) {
+            volume_drag = true;
+            volume_from_pointer(mx);
+            return;
+        }
+        if (!on_volume_button(mx, my)) {
+            /* A click anywhere else puts it away and does nothing more,
+               which is what the launcher does and what people expect of
+               anything that opened over the top of something. */
+            volume_open = false;
+            need_frame();
+            return;
+        }
+    }
+
     if (released) {
         /* An icon that was being held. Dragged, and the order it has been
            put into is written down; not dragged, and it was a click. */
+        volume_drag = false;
+
         if (pin_press >= 0) {
             if (pin_moved) pins_save();
             else           pin_activate(pin_press);
@@ -1653,6 +1791,23 @@ static void handle_mouse(int mx, int my, u8 buttons) {
             if (menu_open) { menu_open = false; need_frame(); }
             else open_menu_at(TASKBAR_GAP,
                               panel_rest_y() - (MENU_N * MENU_ITEM + 12) - 8);
+            return;
+        }
+
+        if (on_volume_button(mx, my)) {
+            if (right_now) {
+                /* The right button is mute, which is the volume it was at
+                   kept somewhere so that unmuting is not a guess. */
+                if (theme()->volume) {
+                    volume_before_mute = theme()->volume;
+                    theme_set_volume(0);
+                } else {
+                    theme_set_volume(volume_before_mute);
+                }
+            } else {
+                volume_open = !volume_open;
+            }
+            need_frame();
             return;
         }
 
@@ -1812,6 +1967,7 @@ void wm_run(void) {
     pins_init();
 
     /* Before anything is applied, so there is something to go back to. */
+    sound_set_volume((u32)theme()->volume);
     if (!boot_w) { boot_w = fb_width(); boot_h = fb_height(); }
     apply_screen_size();
 
@@ -1845,7 +2001,10 @@ void wm_run(void) {
            one gesture, and every desktop that makes you click first is
            wrong about it. */
         i32 wheel = mouse_take_scroll();
-        if (wheel) {
+        if (wheel && on_volume_button(last_mx, last_my)) {
+            theme_set_volume(theme()->volume - wheel * 5);
+            need_frame();
+        } else if (wheel) {
             bool on_title = false;
             button_t btn = BTN_NONE;
             window_t *over = window_at(last_mx, last_my, &on_title, &btn);
@@ -1944,6 +2103,13 @@ void wm_run(void) {
         if (needs_composite) {
             composite();
             needs_composite = false;
+        } else {
+            /* Nothing to draw and nothing moved, so stop asking. This loop
+               used to poll the mouse as fast as the processor would go,
+               which on a laptop is a warm one for a desktop sitting still.
+               A halt ends on the next interrupt, and every reason to do
+               another pass is one: the timer, a key, the mouse. */
+            task_idle_wait();
         }
     }
 
@@ -1953,6 +2119,8 @@ void wm_run(void) {
     dragging = resizing = mouse_capture = 0;
     pin_press = -1;
     pin_moved = false;
+    volume_open = false;
+    volume_drag = false;
     panel_shown = true;
     panel_since = 0;
     snap_preview = SNAP_NONE;

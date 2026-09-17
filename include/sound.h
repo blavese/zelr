@@ -15,6 +15,11 @@ bool sound_init(void);
 bool sound_present(void);
 const char *sound_describe(void);
 
+/* How loud, as a percentage, applied to everything on its way into the
+   buffer. Zero is silence and is how mute is spelt. */
+u32  sound_volume(void);
+void sound_set_volume(u32 percent);
+
 u32 sound_rate(void);
 u32 sound_channels(void);
 

@@ -31,7 +31,7 @@ SCREEN_W, SCREEN_H = 1024, 768
 TASKBAR_H = 34
 TASKBAR_GAP = 10                   # the panel floats clear of the edge
 MENU_ITEM = 30
-MENU_ENTRIES = 9         # the launcher's entries, which set its height
+MENU_ENTRIES = 12        # the launcher's entries, which set its height
 MENU_TOP = (SCREEN_H - TASKBAR_H - TASKBAR_GAP
             - (MENU_ENTRIES * MENU_ITEM + 12) - 8)
 MENU_PANEL = (0x3F, 0x46, 0x4D)    # the floating layer

@@ -41,6 +41,26 @@ static u64 written;
 static u64 zeroed;
 static u32 last_pos;
 
+/* Everything written goes through this. Seventy rather than a hundred
+   because a machine that comes up at full volume is a machine somebody
+   turns down once and resents twice. */
+static u32 volume = 70;
+
+u32 sound_volume(void) { return volume; }
+
+void sound_set_volume(u32 percent) {
+    if (percent > 100) percent = 100;
+    volume = percent;
+}
+
+/* The copy into the ring, quieter. At full volume it is the memcpy it was. */
+static void copy_at(i16 *dst, const i16 *src, u32 samples) {
+    if (volume >= 100) { memcpy(dst, src, (u64)samples * 2); return; }
+    if (!volume)       { memset(dst, 0, (u64)samples * 2); return; }
+    for (u32 i = 0; i < samples; i++)
+        dst[i] = (i16)(((i32)src[i] * (i32)volume) / 100);
+}
+
 bool sound_present(void)  { return ready; }
 u32  sound_rate(void)     { return hda_rate(); }
 u32  sound_channels(void) { return hda_channels(); }
@@ -159,7 +179,7 @@ u32 sound_write(const i16 *frames, u32 count) {
            timer, so it can land in the middle of this copy, and if it were
            to see the old mark it would zero the bytes being written. */
         written += run;
-        memcpy((u8 *)ring + at, src + done, run);
+        copy_at((i16 *)((u8 *)ring + at), (const i16 *)(src + done), run / 2);
         done += run;
 
         if (zeroed < written) zeroed = written;

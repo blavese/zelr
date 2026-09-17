@@ -104,6 +104,35 @@ static i64 sys_spawn(registers_t *r) {
     return rc;
 }
 
+static i64 sys_spawn_arg(registers_t *r) {
+    char path[VFS_PATH_MAX], arg[TASK_ARG_MAX];
+    if (!copy_path(r->rbx, path, sizeof(path))) return -1;
+    if (!copy_path(r->rcx, arg, sizeof(arg))) return -1;
+
+    u32 size = 0;
+    u8 *image = vfs_slurp(path, &size);
+    if (!image) return -1;
+
+    int rc = user_spawn_elf_arg(path, image, size, arg);
+    kfree(image);
+    return rc;
+}
+
+static i64 sys_getarg(registers_t *r) {
+    u32 cap = (u32)r->rcx;
+    if (!cap) return 0;
+    if (!user_range_ok(r->rbx, cap)) return -1;
+
+    task_t *t = task_current();
+    const char *from = t ? t->arg : "";
+    char *out = (char *)r->rbx;
+
+    u32 i = 0;
+    for (; from[i] && i < cap - 1; i++) out[i] = from[i];
+    out[i] = 0;
+    return (i64)i;
+}
+
 static i64 sys_wait(registers_t *r) {
     return task_wait((u32)r->rbx);
 }
@@ -211,6 +240,7 @@ static i64 sys_tasks(registers_t *r) {
             out.pid = p->pid;
             out.state = (u32)p->state;
             out.slices = p->slices;
+            out.idle = (u32)p->idle_ticks;
             out.user = p->user ? 1 : 0;
             strncpy(out.name, p->name, sizeof(out.name) - 1);
             memcpy((void *)r->rcx, &out, sizeof(out));
@@ -591,6 +621,8 @@ static const syscall_fn TABLE[] = {
     [SYS_SOUND_INFO]  = sys_sound_info,
     [SYS_SOUND_WRITE] = sys_sound_write,
     [SYS_POWER]       = sys_power,
+    [SYS_SPAWN_ARG]   = sys_spawn_arg,
+    [SYS_GETARG]      = sys_getarg,
 };
 
 #define N_SYSCALLS (sizeof(TABLE) / sizeof(TABLE[0]))

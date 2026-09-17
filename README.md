@@ -39,6 +39,14 @@ When it fails it says why.
 <td align="center"><sub>one of the six wallpapers that move, and the apps kept on the panel</sub></td>
 <td align="center"><sub>and the panel tucked away for a window that wanted the screen</sub></td>
 </tr>
+<tr>
+<td width="50%"><img src="docs/monitor.png" alt="the system monitor showing processor use and a task list"></td>
+<td width="50%"><img src="docs/calc.png" alt="the calculator showing 19.5 over the system monitor"></td>
+</tr>
+<tr>
+<td align="center"><sub>what the machine is doing, thirty seconds of it</sub></td>
+<td align="center"><sub>and 78 / 4, worked out without a floating point unit</sub></td>
+</tr>
 </table>
 
 Every one of those was photographed by `tools/shots.py`, which boots the
@@ -80,12 +88,16 @@ should do when you switch it on, and the console is what you want when you
 are driving it down a serial line or something has gone wrong.
 
 A terminal opens. Click the wallpaper, or the badge in the corner, for the
-launcher: paint, settings, and what the machine is made of. Drag a title bar
+launcher: a file manager, an editor, paint, settings, a system monitor, a
+music player, a calculator, and what the machine is made of. Drag a title bar
 to move a window; the three dots close it, fill the screen, or put it away.
 Drag the bottom right corner to resize, or drag a title bar to an edge to
 snap. Alt and tab changes window, alt and an arrow snaps, alt and d clears
 the desktop, and shaking a window sends the others away. Escape returns to
 the shell.
+
+The wheel scrolls whatever is under the pointer, the speaker by the clock
+sets the volume, and the launcher can switch the machine off.
 
 The apps along the panel are kept there. Drag one to move it, right click it
 to take it off, and right click anything in the launcher to put it on. A
@@ -317,6 +329,8 @@ instead.
     python tools/mountcheck.py  mount a usb stick and copy files off it
     python tools/namecheck.py   save long names and read them back
     python tools/powercheck.py  tell it to shut down, see if it does
+    python tools/appcheck.py    make the calculator divide, play a file
+    python tools/abicheck.py    the structs the kernel writes and programs read
     python tools/shots.py       retake the screenshots in this readme
 
 The Windows launcher lives in `launcher/` and is built with
@@ -552,6 +566,49 @@ frame, never a calculation per pixel of the screen. The curves come from a
 seventeen entry table, since the kernel is built with no floating point in it
 at all.
 
+**Eight programs.** The terminal, the file manager, the editor, paint,
+settings, a system monitor, a music player and a calculator, all ring 3 and
+all using nothing the kernel does not offer everybody.
+
+The monitor is the one that says most about the machine, and the number it
+puts at the top took two goes. The scheduler counts slices, one for whichever
+task it picked on each tick, and the share of ticks handed out looks like the
+answer. It is not: this is a round robin kernel, so a loop waiting for a key
+is picked every tick and spends the slice halted. Measured that way an idle
+machine reads a hundred per cent, and it did.
+
+So a loop that is only waiting says so, the kernel counts the ticks it slept
+through, and slices minus those is work. Two things came out of that. The
+processor figure means something, and the desktop stopped spinning its loop
+as fast as the processor would go when there was nothing on it to draw, which
+on a laptop is the difference between a warm machine and a cool one.
+
+The calculator is integer arithmetic, because there is no floating point
+anywhere in this system: the kernel is built with the vector registers turned
+off and a program that used a double would fault on the first instruction
+that touched one. Everything in it is a sixty four bit count of millionths.
+
+The music player reads WAV files, which is a header and then the samples.
+The hardware plays at one rate and in stereo and will not be argued with, so
+a file recorded at some other rate is stepped through at a ratio held in
+sixteen fixed point bits and a mono file has each sample written twice. Put
+one on a USB stick, plug it in, and it is under `/usb`.
+
+**Opening a file.** A program could be started and could not be told
+anything, so a file manager could offer to open a file in the editor and had
+no way to say which file. A task now carries one string, which for everything
+that uses it is a path: the file manager decides from the name which program
+should have it, and that program is told which file. The terminal passes one
+too, so `music /usb/tone.wav` and `notes readme` do what they look like.
+
+**Scrolling.** A PS/2 mouse reports three byte packets because that is what a
+mouse reported in 1987, and only starts sending a fourth after it is asked in
+a way no ordinary sequence of commands would produce by accident: three
+sample rates in a fixed order, and then asking the device who it is. One with
+a wheel answers 3. Above the driver it is one number, steps since somebody
+last looked, and the window manager hands it to the window under the pointer
+rather than the focused one.
+
 **Shell.** Reads from the keyboard or the serial line, whichever produces a
 character first, so a person can type at it and a script can pipe into it. It
 is still the kernel's own, on the console; the one in a window is a program.
@@ -673,6 +730,27 @@ loop, so a press and release that both land inside one pass is a click it
 never sees; the harness holds the button down for longer now, and checks that
 the click did something rather than assuming.
 
+**A directory that ring 3 saw as empty.** `ls /` in the terminal on the
+desktop listed nothing, and so did the file manager, while the same call from
+the kernel's own shell listed six entries. vfs_list fills a name with strncpy,
+strncpy pads to the full width, and the struct the readdir system call filled
+had a 32 byte name in it while the width became 64 when long filenames
+landed. Every readdir wrote 32 bytes past the end of a struct on the kernel
+stack, upward, into the saved registers the call returns through: the listing
+worked, and what the program got back was a zero the padding had written. The
+field is as wide as what the kernel writes into it now, and a static assert
+says so.
+
+**A calculator that could not divide.** 78 / 4 came out as 0.099489, which is
+78 / 784. Drawing the pending operation formatted the first number by writing
+it into the display, keeping a copy of what was there and putting it back
+afterwards; it put the string back and left the flag that says whether the
+display is being typed into, so the digit after an operator was appended to
+the first number instead of starting the second. Found by a check that makes
+the calculator work out a sum and then types the answer in by hand: if the
+arithmetic is right the two pictures of the display are identical, and it
+reads no text off the screen at all.
+
 **And three of them passed for the wrong reason.** The wallpaper checks were
 the worst: one compared the length of a screenshot against zero, which is true
 of any picture. The other two compared two pictures of the desktop and called
@@ -778,6 +856,9 @@ orders of magnitude away from Linux, which is roughly 30 million lines.
     kernel/winsrv.c    handing window surfaces across to ring 3
     kernel/theme.c     the desktop's appearance, and the file it lives in
     kernel/pins.c      the apps kept on the taskbar, and their file
+    userland/monitor.c what the machine is doing, while it does it
+    userland/music.c   wav files, resampled to whatever the card wants
+    userland/calc.c    arithmetic in millionths, because there is no fpu
     kernel/builtin.S   the user programs, pasted into the kernel image
     kernel/apps.c      the system info window
     kernel/vfs.c       one namespace over the live tree, the disk and memory
