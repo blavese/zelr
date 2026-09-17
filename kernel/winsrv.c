@@ -22,6 +22,7 @@
 #include "string.h"
 #include "printf.h"
 #include "io.h"
+#include "fb.h"
 
 typedef struct {
     bool      used;
@@ -120,9 +121,25 @@ int winsrv_create(u32 pid, const char *title, int cw, int ch) {
 
     /* Cascade windows so two programs do not open on top of each other. The
        vertical step has to clear a title bar, or the window underneath is
-       there but cannot be clicked on. */
+       there but cannot be clicked on.
+     *
+     * Starting clear of the icon column, because the desktop icons are what
+     * is there to look at when nothing is running and the first window used
+     * to open square on top of them.
+     *
+     * Then pulled back on to the screen. The cascade walks right and down,
+     * and a window wide enough to begin with walks off the edge by the
+     * fifth one: what opens is a title bar whose buttons are past the end
+     * of the screen, so the window cannot be closed. */
     int step = handle % 5;
-    int x = 40 + step * 48, y = 36 + step * 38;
+    int x = wm_icons_right() + 14 + step * 48, y = 36 + step * 38;
+
+    int maxx = (int)fb_width() - (cw + WM_BORDER * 2);
+    int maxy = wm_work_height() - (ch + WM_TOP + WM_BORDER);
+    if (x > maxx) x = maxx;
+    if (y > maxy) y = maxy;
+    if (x < 0) x = 0;
+    if (y < 0) y = 0;
     window_t *w = wm_create(title, x, y, cw, ch);
     if (!w) { kfree(raw); return -1; }
 

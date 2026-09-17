@@ -604,9 +604,81 @@ static void test_wm(void) {
     ok("windows can be created", a && b);
     if (!a || !b) return;
 
+    /* WM_TOP, not WM_TITLE_H: the title bar sits below the top border
+       rather than replacing it, so the frame is a border all the way round
+       with a bar inside it. Written as WM_TITLE_H this was short by a
+       border and stayed right only while the border was one pixel. */
     ok("outer size allows for the chrome",
        wm_outer_w(a) == 120 + WM_BORDER * 2 &&
-       wm_outer_h(a) == 80 + WM_TITLE_H + WM_BORDER);
+       wm_outer_h(a) == 80 + WM_TOP + WM_BORDER);
+
+    /* --- the event queue --------------------------------------------------
+     *
+     * Built on a window nobody is looking at, so what goes in is the only
+     * thing that comes out. */
+    {
+        wm_event_t ev, out;
+        int got;
+
+        /* Two moves in a row are one move, at the newer position. */
+        ev = (wm_event_t){ WM_EV_MOUSE, 10, 10, 0, 0 };
+        wm_push_event(b, &ev);
+        ev.x = 20; ev.y = 21;
+        wm_push_event(b, &ev);
+        got = 0;
+        while (wm_pop_event(b, &out)) got++;
+        ok("a move that only moved replaces the last one",
+           got == 1 && out.x == 20 && out.y == 21);
+
+        /* A press is not a move and is never folded into one. */
+        ev = (wm_event_t){ WM_EV_MOUSE, 30, 30, 0, 0 };
+        wm_push_event(b, &ev);
+        ev.buttons = 0x81;
+        wm_push_event(b, &ev);
+        ev.buttons = 0x81;
+        wm_push_event(b, &ev);
+        got = 0;
+        while (wm_pop_event(b, &out)) got++;
+        ok("a press stays a separate event, and so does a second one",
+           got == 3);
+
+        /* And the thing this was written for: a backlog of moves must not
+           be able to push a press off the end. Twice the queue's worth,
+           which is fewer than one walk across the screen produces. */
+        for (int i = 0; i < WM_EVENT_QUEUE * 2; i++) {
+            ev = (wm_event_t){ WM_EV_MOUSE, i, i, 0, 0 };
+            wm_push_event(b, &ev);
+        }
+        ev = (wm_event_t){ WM_EV_MOUSE, 99, 99, 0x81, 0 };
+        wm_push_event(b, &ev);
+
+        bool pressed = false;
+        while (wm_pop_event(b, &out))
+            if (out.buttons & 0x80) pressed = true;
+        ok("a press survives a backlog of moves", pressed);
+
+        /* And the other half of a click. The release carries no buttons and
+           neither does the move after it, so folding one into the other on
+           the strength of that alone puts the release wherever the pointer
+           went next, and a button let go somewhere else was not clicked. */
+        ev = (wm_event_t){ WM_EV_MOUSE, 50, 50, 0x81, 0 };
+        wm_push_event(b, &ev);
+        ev = (wm_event_t){ WM_EV_MOUSE, 51, 51, 0x01, 0 };
+        wm_push_event(b, &ev);
+        ev = (wm_event_t){ WM_EV_MOUSE, 52, 52, 0, 0 };
+        wm_push_event(b, &ev);
+        ev = (wm_event_t){ WM_EV_MOUSE, 900, 900, 0, 0 };
+        wm_push_event(b, &ev);
+
+        int released_at = -1;
+        bool down_first = false;
+        while (wm_pop_event(b, &out)) {
+            if (out.buttons & 1) down_first = true;
+            else if (down_first && released_at < 0) released_at = out.x;
+        }
+        ok("the release stays where the button was let go",
+           down_first && released_at == 52);
+    }
 
     /* Closing must also drop the manager's reference, or the next composite
        walks freed memory. */
@@ -985,6 +1057,30 @@ static void test_waiting(void) {
  * waiting has to show up as waiting, and neither is allowed to look like the
  * other. Getting either backwards fails this. */
 static void test_idle_accounting(void) {
+    /* Every state has its own word for it.
+     *
+     * Distinct rather than merely present, because what went wrong was a
+     * table of four indexed by a state that has five: blocked came out as
+     * "dead", and dead read the pointer past the end of the array and
+     * printed whatever bytes were there. `ps` had been showing a line of
+     * machine code where the state should be. */
+    {
+        const char *n[] = {
+            task_state_name(TASK_READY),   task_state_name(TASK_RUNNING),
+            task_state_name(TASK_SLEEPING), task_state_name(TASK_BLOCKED),
+            task_state_name(TASK_DEAD),
+        };
+        bool distinct = true, plain = true;
+        for (int i = 0; i < 5; i++) {
+            for (int j = 0; j < i; j++)
+                if (!strcmp(n[i], n[j])) distinct = false;
+            for (int k = 0; n[i][k]; k++)
+                if (n[i][k] < 'a' || n[i][k] > 'z') plain = false;
+        }
+        ok("every task state has a word of its own", distinct);
+        ok("and it is a word", plain);
+    }
+
     task_t *me = task_current();
     ok("there is a task to measure", me != 0);
     if (!me) return;

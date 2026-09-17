@@ -243,13 +243,19 @@ void _start(void) {
         fill(&s, t.bg);
 
         /* --- what it says -------------------------------------------------- */
+        /* A sunk well with paper at the bottom, which is the shape that has
+           always meant a thing to be read rather than pressed. The keys
+           around it are raised; this is the one part of the window that is
+           not, and that alone says which is which. */
         int disp_h = 86;
-        rect(&s, 0, 0, w, disp_h, t.panel);
-        rect(&s, 0, disp_h - 1, w, 1, t.line);
+        int dx, dy, dw, dh;
+        ui_well(&s, &t, UI_PAD, UI_PAD, w - UI_PAD * 2, disp_h - UI_PAD * 2,
+                &dx, &dy, &dw, &dh);
 
         const char *text_now = error ? "cannot" : entry;
         int tw = face_w(text_now, UI_FACE_HEAD);
-        face_draw(&s, w - UI_PAD * 2 - tw, disp_h - face_h(UI_FACE_HEAD) - 14,
+        face_draw(&s, dx + dw - UI_PAD - tw,
+                  dy + dh - face_h(UI_FACE_HEAD) - UI_PAD,
                   text_now, error ? t.warn : t.fg, UI_FACE_HEAD);
 
         /* What is waiting, small, above it: 12 + is a state worth seeing.
@@ -263,7 +269,7 @@ void _start(void) {
             wait[n++] = ' ';
             wait[n++] = pending;
             wait[n] = 0;
-            face_draw(&s, UI_PAD * 2, 10, wait, t.dim, UI_FACE_SMALL);
+            face_draw(&s, dx + UI_PAD, dy + UI_PAD, wait, t.dim, UI_FACE_SMALL);
         }
 
         /* --- the keys ------------------------------------------------------- */
@@ -282,19 +288,23 @@ void _start(void) {
             int over = ui_hit(&in, kx, ky, width, kh);
             int held = over && in.down;
 
-            /* The operators carry the accent, the rest are surfaces. The one
-               being held goes darker, which is the only feedback a key can
-               give that it heard you. */
+            /* The operators carry the accent, the rest are surfaces. A key
+               is a key, so it is built the way every other button on this
+               desktop is: raised until it is held, and then the bevel turns
+               over and the label moves a pixel down and right. A calculator
+               with flat keys is a picture of a calculator. */
             int is_op = KEYS[i].key == '+' || KEYS[i].key == '-'
                      || KEYS[i].key == 'x' || KEYS[i].key == '/'
                      || KEYS[i].key == '=';
             u32 face = is_op ? t.accent : t.panel;
             if (KEYS[i].key == pending && is_op) face = mix(t.accent, 0, 60);
-            if (held)      face = mix(face, 0, 70);
-            else if (over) face = mix(face, t.fg, 22);
+            if (over && !held) face = mix(face, t.edge_hi, 70);
 
-            round_rect(&s, kx, ky, width, kh, UI_RADIUS, face);
-            face_centred(&s, kx, ky, width, kh, KEYS[i].label,
+            rect(&s, kx, ky, width, kh, face);
+            if (held) ui_sunken(&s, &t, kx, ky, width, kh);
+            else      ui_raised(&s, &t, kx, ky, width, kh);
+            face_centred(&s, kx + (held ? 1 : 0), ky + (held ? 1 : 0),
+                         width, kh, KEYS[i].label,
                          is_op ? t.accent_fg : t.fg, UI_FACE_HEAD);
 
             if (over && in.released) { in.released = 0; press(KEYS[i].key); }

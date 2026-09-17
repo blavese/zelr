@@ -46,17 +46,18 @@ SWATCHES = [TEAL, INDIGO, (0xE0, 0xA0, 0x3C), (0xE0, 0x6A, 0x8C),
             (0x8A, 0x9B, 0xB0), (0x9A, 0xD1, 0x4A)]
 
 # Where things are on a 1024x768 screen with the default layout.
-BADGE = (40, 745)             # the taskbar launcher
+BADGE = (40, 751)             # the taskbar launcher, flush to the bottom
 # The launcher's entries, in the order wm.c lists them. The menu grows
 # upward from the taskbar, so adding a program moves everything above it and
 # a remembered y is wrong from then on.
 MENU_ENTRIES = ["Terminal", "Files", "Notes", "Paint", "Settings",
                 "Monitor", "Music", "Calculator",
                 "System info", "Close all", "Leave desktop", "Shut down"]
-MENU_ITEM_H = 30
-MENU_PAD = 6                  # the inset above the first entry
-MENU_RECT = (10, 400, 210, 716)
-MENU_PANEL = (0x3F, 0x46, 0x4D)   # the floating layer
+MENU_ITEM_H = 24
+MENU_PAD = 4                  # the inset above the first entry
+MENU_BRAND = 26               # the strip down the left, which is not a row
+MENU_RECT = (0, 440, 226, 728)
+MENU_PANEL = (0xD6, 0xD3, 0xCD)   # the surface everything is built from
 PAGE = (120, 120, 700, 480)
 
 # Everything above the panel.
@@ -79,8 +80,13 @@ def menu_top(px, w, h):
     entry down the list, the check clicked the entry under Settings, and
     every check after it failed saying Settings never opened.
     """
-    x0, x1 = MENU_RECT[0], MENU_RECT[2]
-    for y in range(h):
+    x0, y0, x1, y1 = MENU_RECT
+    # Inside the menu's own band, not merely inside its columns. Scanning
+    # every row on the screen found the top border of a window higher up
+    # instead: the frame is the same grey the menu is, and once the frame
+    # stopped being one pixel wide there was enough of it in these columns
+    # to look like a menu. The click then went to the top of the screen.
+    for y in range(max(0, y0), min(h, y1)):
         if count_in(px, w, (x0, y, x1, y + 1), MENU_PANEL) > (x1 - x0) // 2:
             return y
     return None
@@ -123,9 +129,11 @@ def main():
         # accent chrome appears first and its page is filled a moment later,
         # so waiting on the chrome alone catches the terminal half drawn and
         # every check after it reads a screen that was still being painted.
-        drawn = lambda w, h, px: (count_in(px, w, TITLEBAR, CHROME) > 6000
-                                  and count_in(px, w, ABOVE, TEAL) > 1200
-                                  and count_in(px, w, PAGE, SLATE) > 100000)
+        # Palette independent on purpose. The chrome's colours are the thing
+        # this file kept encoding and the thing that keeps changing, so what
+        # is waited for is the terminal's own dark page, which belongs to the
+        # program rather than to the theme.
+        drawn = lambda w, h, px: count_in(px, w, PAGE, SLATE) > 100000
         w, h, px, shot, up = mon.wait_screen("desktop", drawn, timeout=60)
         c.add("a ring 3 terminal drew its window", drawn(w, h, px),
               shot)
@@ -148,19 +156,30 @@ def main():
         top = settled_menu_top(mon)
         c.add("the menu's top edge is on the screen", top is not None, shot)
         idx = MENU_ENTRIES.index("Settings")
+
         w, h, px, shot, ran = mon.click_for(
-            60, (top or 0) + MENU_PAD + idx * MENU_ITEM_H + MENU_ITEM_H // 2,
-            "settings", lambda w, h, px: count_in(px, w, ABOVE, INDIGO) > 500,
+            MENU_BRAND + 40,
+            (top or 0) + MENU_PAD + idx * MENU_ITEM_H + MENU_ITEM_H // 2,
+            # Waited for on all six swatches rather than on the accent.
+            # The accent was already on the screen before the click, from
+            # the terminal's own prompt, so the wait ended immediately and
+            # the picture was taken before Settings had drawn anything: the
+            # check passed, and what it was checking had not happened yet.
+            "settings",
+            lambda w, h, px: all(count_in(px, w, ABOVE, sw) > 200
+                                 for sw in SWATCHES),
             timeout=40)
         c.add("it launches settings, another ring 3 program", ran, shot)
         c.add("whose accent swatches are all on screen",
-              all(count_in(px, w, ABOVE, s) > 200 for s in SWATCHES), shot)
+              all(count_in(px, w, ABOVE, sw) > 200 for sw in SWATCHES), shot)
 
         teal_before = count_in(px, w, ABOVE, TEAL)
         indigo_before = count_in(px, w, ABOVE, INDIGO)
+        print("      accent pixels before: teal %d, indigo %d"
+              % (teal_before, indigo_before))
 
-        spot = centre_of(px, w, h, INDIGO, within=ABOVE)
-        c.add("the indigo swatch is findable on screen", spot is not None, shot)
+        spot = centre_of(px, w, h, TEAL, within=ABOVE)
+        c.add("the teal swatch is findable on screen", spot is not None, shot)
 
         # --- changing the accent -------------------------------------------
         #
@@ -172,17 +191,29 @@ def main():
             c.add("choosing an accent repaints the window manager", False, shot)
             c.add("and the old accent is gone from the chrome", False, shot)
         else:
+            # How much moved, not how many times more there is. Six swatches
+            # of every preset colour are on the screen whatever the theme is,
+            # and they are most of both counts, so a ratio barely shifts even
+            # when the whole of the chrome has changed colour. What is asked
+            # for here is a swing of most of a swatch's worth of pixels, in
+            # opposite directions.
+            SWING = 600
+
             def repainted(w, h, px):
-                return (count_in(px, w, ABOVE, INDIGO) > indigo_before * 4
-                        and count_in(px, w, ABOVE, TEAL) < teal_before / 4)
+                return (count_in(px, w, ABOVE, TEAL) - teal_before > SWING
+                        and indigo_before - count_in(px, w, ABOVE, INDIGO) > SWING)
 
             w, h, px, shot, _ = mon.click_for(spot[0], spot[1],
                                               "recoloured", repainted,
                                               timeout=30)
+            teal_after = count_in(px, w, ABOVE, TEAL)
+            indigo_after = count_in(px, w, ABOVE, INDIGO)
+            print("      accent pixels after:  teal %d, indigo %d"
+                  % (teal_after, indigo_after))
             c.add("choosing an accent repaints the window manager",
-                  count_in(px, w, ABOVE, INDIGO) > indigo_before * 4, shot)
+                  teal_after - teal_before > SWING, shot)
             c.add("and the old accent is gone from the chrome",
-                  count_in(px, w, ABOVE, TEAL) < teal_before / 4, shot)
+                  indigo_before - indigo_after > SWING, shot)
     finally:
         vm.stop()
 

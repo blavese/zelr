@@ -23,7 +23,29 @@ void fb_round_rect(int x, int y, int w, int h, int r, u32 rgb);
 void fb_round_frame(int x, int y, int w, int h, int r, u32 rgb);
 void fb_shadow(int x, int y, int w, int h, int r, int spread);
 void fb_vgradient(int x, int y, int w, int h, u32 top, u32 bottom);
+void fb_hgradient(int x, int y, int w, int h, u32 left, u32 right);
 u32  gfx_mix(u32 under, u32 over, int alpha);
+
+/* --- edges that catch the light -------------------------------------------
+ *
+ * The whole of the classic look is one idea: a surface is not a colour, it
+ * is a plane with a light above and to the left of it. Everything raised
+ * has a bright top and left and a dark bottom and right, everything sunk
+ * has it the other way round, and a control says what it is by which way
+ * its edges go rather than by being tinted.
+ *
+ * Two pixels rather than one, because one is a line and two is a bevel: the
+ * outer pair carry the strong colours and the inner pair the soft ones, and
+ * together they read as a chamfer at any size.
+ *
+ * Colours are passed in rather than read from the theme so that this stays
+ * a drawing routine. The four are named going inward from the top left. */
+void fb_bevel(int x, int y, int w, int h,
+              u32 tl_outer, u32 tl_inner, u32 br_inner, u32 br_outer);
+
+/* One pixel each way, for the places a full bevel is too heavy: a menu
+   separator, the well around a text field, the groove between toolbars. */
+void fb_bevel_thin(int x, int y, int w, int h, u32 tl, u32 br);
 
 /* --- the anti-aliased face -----------------------------------------------
  *

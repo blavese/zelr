@@ -29,23 +29,49 @@ DISK = os.path.join(ROOT, "deskcheck.%d.img" % os.getpid())
 PAGE = (0x10, 0x14, 0x1A)          # the terminal's default background
 SCREEN_W, SCREEN_H = 1024, 768
 TASKBAR_H = 34
-TASKBAR_GAP = 10                   # the panel floats clear of the edge
-MENU_ITEM = 30
+TASKBAR_GAP = 0                    # the panel is flush to the bottom edge
+MENU_ITEM = 24
+MENU_PAD = 4
+MENU_BRAND = 26          # the strip down its left, which is not a row
 MENU_ENTRIES = 12        # the launcher's entries, which set its height
 MENU_TOP = (SCREEN_H - TASKBAR_H - TASKBAR_GAP
-            - (MENU_ENTRIES * MENU_ITEM + 12) - 8)
-MENU_PANEL = (0x3F, 0x46, 0x4D)    # the floating layer
+            - (MENU_ENTRIES * MENU_ITEM + MENU_PAD * 2) - 2)
+# The surface everything on this desktop is built out of. There is no
+# separate floating layer any more: a menu and a panel are the same grey as
+# a window, and what says they are above it is the bevel round the edge.
+MENU_PANEL = (0xD6, 0xD3, 0xCD)
 
-# The terminal as it opens.
-WIN_X, WIN_Y, WIN_CW, WIN_CH = 40, 36, 760, 480
-OUTER_W = WIN_CW + 2
-OUTER_H = WIN_CH + 24 + 1
+# The terminal as it opens, and the frame around it. Written out the way
+# wm.c writes it rather than as four numbers that happened to be right: the
+# border went from one pixel to four and every one of these moved with it.
+WM_BORDER = 4
+WM_TITLE_H = 20
+WM_TOP = WM_BORDER + WM_TITLE_H
 
-BTN_Y = WIN_Y + 5 + 7
-BTN_CLOSE = (WIN_X + OUTER_W - 26 + 7, BTN_Y)
-BTN_MAX = (WIN_X + OUTER_W - 46 + 7, BTN_Y)
-BTN_MIN = (WIN_X + OUTER_W - 66 + 7, BTN_Y)
-GRIP = (WIN_X + OUTER_W - 7, WIN_Y + OUTER_H - 7)
+# The first window opens past the icon column rather than on top of it,
+# which is where winsrv.c starts the cascade: ICON_LEFT + ICON_CELL_W, and
+# a gap.
+ICON_LEFT, ICON_CELL_W = 14, 78
+WIN_X = ICON_LEFT + ICON_CELL_W + 14
+WIN_Y, WIN_CW, WIN_CH = 36, 760, 480
+OUTER_W = WIN_CW + WM_BORDER * 2
+OUTER_H = WIN_CH + WM_TOP + WM_BORDER
+
+# Three buttons against the right hand end of the title bar, right to left.
+BTN_W, BTN_H, BTN_GAP = 16, 14, 2
+BTN_STEP = BTN_W + BTN_GAP
+BTN_Y = WIN_Y + WM_BORDER + (WM_TITLE_H - BTN_H) // 2 + BTN_H // 2
+
+
+def btn_x(origin_x, outer_w, slot):
+    return (origin_x + outer_w - WM_BORDER - 2 - BTN_W
+            - slot * BTN_STEP + BTN_W // 2)
+
+
+BTN_CLOSE = (btn_x(WIN_X, OUTER_W, 0), BTN_Y)
+BTN_MAX = (btn_x(WIN_X, OUTER_W, 1), BTN_Y)
+BTN_MIN = (btn_x(WIN_X, OUTER_W, 2), BTN_Y)
+GRIP = (WIN_X + OUTER_W - 8, WIN_Y + OUTER_H - 8)
 
 # The window's own frame, for counts that are about the window and not about
 # whatever else happens to be the same colour somewhere on the desktop.
@@ -54,11 +80,12 @@ WIN_RECT = (WIN_X, WIN_Y, WIN_X + OUTER_W, WIN_Y + OUTER_H)
 # Where the launcher sits when it opens from the taskbar badge, clear of the
 # taskbar below it and of the clock, so nothing in this rectangle changes on
 # its own while the menu is coming up.
-LAUNCHER_RECT = (10, 428, 226, 720)
+LAUNCHER_RECT = (6, 442, 228, 726)
 
 # The same buttons once the window has been maximised, when its frame is at
 # 0,0 and as wide as the screen.
-BTN_MAX_WHEN_MAXIMISED = (SCREEN_W - 46 + 7, 5 + 7)
+BTN_MAX_WHEN_MAXIMISED = (btn_x(0, SCREEN_W, 1),
+                          WM_BORDER + (WM_TITLE_H - BTN_H) // 2 + BTN_H // 2)
 LAUNCHER = (40, SCREEN_H - TASKBAR_H - TASKBAR_GAP + 17)
 
 # The panel, where it sits when it is out, and the band it occupies. A
@@ -66,7 +93,13 @@ LAUNCHER = (40, SCREEN_H - TASKBAR_H - TASKBAR_GAP + 17)
 # the bottom edge, so counting its own colour in this band says which of the
 # two is happening without reading anything.
 PANEL_Y = SCREEN_H - TASKBAR_H - TASKBAR_GAP
-PANEL_BAND = (TASKBAR_GAP, PANEL_Y, SCREEN_W - TASKBAR_GAP, PANEL_Y + TASKBAR_H)
+# Stopping short of the very bottom, because a window and the panel are now
+# the same grey: what says one is above the other is the bevel round it, not
+# its colour. A window filling the screen puts its own bottom border in this
+# band, and four pixels across the width of the screen is four thousand of
+# them, which read as a panel that had not tucked itself away at all.
+PANEL_BAND = (TASKBAR_GAP, PANEL_Y, SCREEN_W - TASKBAR_GAP,
+              PANEL_Y + TASKBAR_H - 6)
 PANEL = MENU_PANEL                     # the floating layer, same colour
 
 # The apps kept on the panel: the badge, then an icon every 30 pixels. The
@@ -373,7 +406,7 @@ def main():
         # than from a number. The number said Paint and had been landing on
         # System info, which opens a window of its own, so the check below
         # passed without a second program ever being started.
-        mon.click(60, MENU_TOP + 6 + 3 * MENU_ITEM + MENU_ITEM // 2)
+        mon.click(MENU_BRAND + 40, MENU_TOP + MENU_PAD + 3 * MENU_ITEM + MENU_ITEM // 2)
         w, h, px, shot, ok = mon.wait_screen(
             "desk-two",
             lambda w, h, px: desktop_bytes(w, h, px) != weave, timeout=40)
@@ -497,7 +530,7 @@ def main():
         mon.wait_screen(
             "desk-menu-2",
             lambda w, h, px: count_in(px, w, LAUNCHER_RECT, MENU_PANEL) > 8000)
-        right_click(mon, 60, MENU_TOP + 6 + 4 * MENU_ITEM + MENU_ITEM // 2)
+        right_click(mon, MENU_BRAND + 40, MENU_TOP + MENU_PAD + 4 * MENU_ITEM + MENU_ITEM // 2)
         w, h, px, shot, backon = mon.wait_screen(
             "desk-pin-on",
             lambda w, h, px: icon_ink(px, w, 4) != PANEL)

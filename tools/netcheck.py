@@ -22,18 +22,24 @@ from harness import Guest, Checks, build_once, count_in, ROOT    # noqa: E402
 DISK = os.path.join(ROOT, "netcheck.%d.img" % os.getpid())
 
 SCREEN_W, SCREEN_H = 1024, 768
-TASKBAR_H, TASKBAR_GAP = 34, 10
+TASKBAR_H, TASKBAR_GAP = 34, 0     # the panel is flush to the bottom edge
 NETPOP_W, NETPOP_H = 268, 150
 
 # The right hand end of the panel, worked out the way wm.c works it out: the
 # clock against the edge, the speaker left of it, the network left of that.
 # The clock is always five characters, so this does not move.
-NET_ICON = (SCREEN_W - TASKBAR_GAP - 16 - 48 - 14 - 30 - 6 - 13,
-            SCREEN_H - TASKBAR_H - TASKBAR_GAP + 17)
+# Worked out the way wm.c works it out: the clock against the right edge,
+# the speaker left of it, the network left of that.
+CLOCK_W = 40                       # five characters, which never changes
+VOL_W, NET_W = 30, 26
+VOLUME_X = SCREEN_W - TASKBAR_GAP - 16 - CLOCK_W - 14 - VOL_W
+NET_X = VOLUME_X - NET_W - 6
+NET_ICON = (NET_X + NET_W // 2, SCREEN_H - TASKBAR_H - TASKBAR_GAP + 17)
 
 # Just the network icon: left of the speaker, right of the app icons, and
 # clear of the clock, so what is in here changes only when the icon does.
-ICON_RECT = (880, 728, 916, 752)
+ICON_RECT = (NET_X, SCREEN_H - TASKBAR_H + 6, NET_X + NET_W,
+             SCREEN_H - TASKBAR_H + 28)
 
 # Where the panel lands, and the button along the bottom of it.
 POP_X = SCREEN_W - TASKBAR_GAP - NETPOP_W
@@ -41,7 +47,9 @@ POP_Y = SCREEN_H - TASKBAR_H - TASKBAR_GAP - 8 - NETPOP_H
 POP_RECT = (POP_X, POP_Y, POP_X + NETPOP_W, POP_Y + NETPOP_H)
 BUTTON = (POP_X + 14 + 120, POP_Y + NETPOP_H - 14 - 13)
 
-OVERLAY = (0x3F, 0x46, 0x4D)      # the floating layer the panel is drawn on
+# The panel is built out of the same surface everything else is, rather than
+# tinted a layer lighter, so this is that grey.
+OVERLAY = (0xD6, 0xD3, 0xCD)
 
 
 def region(px, w, rect):

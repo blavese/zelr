@@ -2,8 +2,14 @@
 #include "types.h"
 
 #define WM_MAX_WINDOWS 8
-#define WM_TITLE_H     24
-#define WM_BORDER      1
+#define WM_TITLE_H     20
+#define WM_BORDER      4
+
+/* How far the client area sits below the top of the window: the frame's
+   edge and then the title bar. Named, because a dozen places need it and
+   every one of them used to add the two up for itself, which is fine until
+   the frame stops being one pixel. */
+#define WM_TOP         (WM_BORDER + WM_TITLE_H)
 
 typedef struct window window_t;
 
@@ -53,6 +59,11 @@ struct window {
        the owner is outside the kernel; in-kernel windows use the callbacks. */
     wm_event_t queue[WM_EVENT_QUEUE];
     u32  q_head, q_tail;
+
+    /* The buttons carried by the last two mouse events pushed, which is how
+       a pointer that only moved is told apart from one that also did
+       something. See wm_push_event. */
+    u32  q_last_buttons, q_prev_buttons;
     bool owned_by_user;
 
     /* Set by the owner. A window nobody has said can be resized is left
@@ -91,3 +102,13 @@ bool wm_pop_event(window_t *w, wm_event_t *out);
 
 int  wm_outer_w(const window_t *w);
 int  wm_outer_h(const window_t *w);
+
+/* Where the desktop's icon column ends, so a window opening for the first
+   time does not land on top of it. The icons are the one thing on the
+   desktop that is there to be looked at when nothing is running, and every
+   window used to open over them. */
+int  wm_icons_right(void);
+
+/* The height a window has to live in: the screen, less the panel when the
+   panel is resting on the bottom of it. */
+int  wm_work_height(void);

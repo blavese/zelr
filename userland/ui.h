@@ -40,7 +40,66 @@ typedef struct {
     u32 soft;        /* accent at low strength, for a row that is selected */
     u32 line;        /* borders and separators */
     u32 warn;
+
+    /* --- the edges -------------------------------------------------------
+     *
+     * The same idea the window chrome is built from, so a button inside a
+     * window and a button on the title bar catch the light the same way. A
+     * surface here is a plane lit from the top left: raised things are
+     * bright there and dark at the bottom right, sunk things are the other
+     * way round, and a control says what it is by its edges rather than by
+     * being a different colour.
+     *
+     * Four, because a bevel is two pixels: the outer pair carry the strong
+     * colours and the inner pair the soft ones. */
+    u32 edge_hi;
+    u32 edge_light;
+    u32 edge_shadow;
+    u32 edge_dark;
+    u32 well;        /* the ground inside something sunk: a field, a list */
 } ui_theme;
+
+/* --- surfaces that catch the light ---------------------------------------
+ *
+ * Every raised and sunk thing in every program goes through these two, so
+ * that they all agree about where the light is. Getting that wrong in one
+ * place is the difference between a desktop and a pile of programs. */
+static inline void ui_bevel(surface *s, int x, int y, int w, int h,
+                            u32 tl_out, u32 tl_in, u32 br_in, u32 br_out) {
+    if (w <= 0 || h <= 0) return;
+    /* The top row whole and the left column starting below it, so the two
+       do not both claim the corner and leave a notch. */
+    rect(s, x, y, w, 1, tl_out);
+    rect(s, x, y + 1, 1, h - 1, tl_out);
+    rect(s, x, y + h - 1, w, 1, br_out);
+    rect(s, x + w - 1, y, 1, h - 1, br_out);
+    if (w <= 2 || h <= 2) return;
+    rect(s, x + 1, y + 1, w - 2, 1, tl_in);
+    rect(s, x + 1, y + 2, 1, h - 3, tl_in);
+    rect(s, x + 1, y + h - 2, w - 2, 1, br_in);
+    rect(s, x + w - 2, y + 1, 1, h - 2, br_in);
+}
+
+static inline void ui_raised(surface *s, const ui_theme *t,
+                             int x, int y, int w, int h) {
+    ui_bevel(s, x, y, w, h, t->edge_hi, t->edge_light,
+             t->edge_shadow, t->edge_dark);
+}
+
+static inline void ui_sunken(surface *s, const ui_theme *t,
+                             int x, int y, int w, int h) {
+    ui_bevel(s, x, y, w, h, t->edge_dark, t->edge_shadow,
+             t->edge_light, t->edge_hi);
+}
+
+/* A groove: one pixel each way, for a separator or the line under a menu
+   bar, where a full bevel would be too much weight for what it is saying. */
+static inline void ui_groove(surface *s, const ui_theme *t,
+                             int x, int y, int w, int h) {
+    rect(s, x, y, w, 1, t->edge_shadow);
+    rect(s, x, y + 1, w, 1, t->edge_hi);
+    (void)h;
+}
 
 /* Read once at startup, out of the same file the desktop reads.
  *
@@ -98,27 +157,42 @@ static inline ui_theme ui_load_theme(void) {
     if (n < 0) n = 0;
     cfg[n] = 0;
 
-    int preset = ui_cfg_int(cfg, "preset", 0);
+    int preset = ui_cfg_int(cfg, "preset", 1);
     if (preset < 0 || preset >= UI_PRESETS) preset = 0;
-    int light = ui_cfg_int(cfg, "light", 0);
+    /* The built look is what this desktop is, so a machine with no settings
+       file yet gets it rather than falling back to the other one. */
+    int light = ui_cfg_int(cfg, "light", 1);
 
     ui_theme t;
     t.accent = (u32)ui_cfg_int(cfg, "accent", (int)UI_ACCENTS[preset]);
 
     if (light) {
-        t.bg        = RGB(0xf4, 0xf5, 0xf7);
-        t.panel     = RGB(0xe7, 0xe9, 0xec);
-        t.fg        = RGB(0x1c, 0x1f, 0x24);
-        t.dim       = RGB(0x6a, 0x71, 0x7a);
-        t.line      = RGB(0xd2, 0xd6, 0xdb);
+        /* The same grey the chrome is made of. A near-white surface has
+           nowhere to put a highlight, so every bevel on it collapses to one
+           grey line and the whole window goes flat. */
+        t.bg        = RGB(0xd6, 0xd3, 0xcd);
+        t.panel     = RGB(0xd6, 0xd3, 0xcd);
+        t.fg        = RGB(0x12, 0x12, 0x14);
+        t.dim       = RGB(0x5c, 0x5a, 0x57);
+        t.line      = RGB(0x8e, 0x8b, 0x86);
         t.accent_fg = RGB(0xff, 0xff, 0xff);
+        t.edge_hi     = RGB(0xff, 0xff, 0xff);
+        t.edge_light  = RGB(0xe8, 0xe6, 0xe1);
+        t.edge_shadow = RGB(0x86, 0x84, 0x80);
+        t.edge_dark   = RGB(0x3c, 0x3b, 0x39);
+        t.well        = RGB(0xff, 0xff, 0xff);
     } else {
-        t.bg        = RGB(0x1e, 0x20, 0x24);
+        t.bg        = RGB(0x2a, 0x2d, 0x33);
         t.panel     = RGB(0x2a, 0x2d, 0x33);
         t.fg        = RGB(0xe6, 0xe8, 0xea);
         t.dim       = RGB(0x9a, 0xa0, 0xa8);
-        t.line      = RGB(0x3a, 0x3e, 0x45);
+        t.line      = RGB(0x18, 0x1a, 0x1e);
         t.accent_fg = RGB(0xff, 0xff, 0xff);
+        t.edge_hi     = RGB(0x5a, 0x5f, 0x68);
+        t.edge_light  = RGB(0x3c, 0x40, 0x48);
+        t.edge_shadow = RGB(0x1c, 0x1e, 0x22);
+        t.edge_dark   = RGB(0x0c, 0x0d, 0x10);
+        t.well        = RGB(0x1a, 0x1c, 0x20);
     }
     t.soft = mix(t.bg, t.accent, light ? 40 : 48);
     t.warn = RGB(0xe0, 0x6c, 0x60);
@@ -177,11 +251,16 @@ static inline int ui_button(surface *s, ui_input *in, const ui_theme *t,
     int over = ui_hit(in, x, y, w, h);
     int held = over && in->down;
 
-    u32 face = held ? mix(t->panel, t->accent, 90)
-             : over ? mix(t->panel, t->fg, 24)
-             : t->panel;
-    round_rect(s, x, y, w, h, UI_RADIUS, face);
-    face_centred(s, x, y, w, h, label, t->fg, UI_FACE_BODY);
+    /* Held is not a colour. The bevel turns over and the label moves a
+       pixel down and right, so the button is genuinely depressed: that
+       reads as a press at any size and in any palette, which a tint does
+       not. */
+    u32 face = over && !held ? mix(t->panel, t->edge_hi, 70) : t->panel;
+    rect(s, x, y, w, h, face);
+    if (held) ui_sunken(s, t, x, y, w, h);
+    else      ui_raised(s, t, x, y, w, h);
+    face_centred(s, x + (held ? 1 : 0), y + (held ? 1 : 0), w, h,
+                 label, t->fg, UI_FACE_BODY);
 
     if (over && in->released) { in->released = 0; return 1; }
     return 0;
@@ -194,9 +273,17 @@ static inline int ui_button_primary(surface *s, ui_input *in, const ui_theme *t,
     int over = ui_hit(in, x, y, w, h);
     int held = over && in->down;
 
-    u32 face = held ? mix(t->accent, 0, 60) : over ? mix(t->accent, 0xFFFFFF, 30) : t->accent;
-    round_rect(s, x, y, w, h, UI_RADIUS, face);
-    face_centred(s, x, y, w, h, label, t->accent_fg, UI_FACE_BODY);
+    u32 face = over && !held ? mix(t->accent, 0xFFFFFF, 30) : t->accent;
+    rect(s, x, y, w, h, face);
+    if (held) ui_sunken(s, t, x, y, w, h);
+    else      ui_raised(s, t, x, y, w, h);
+    face_centred(s, x + (held ? 1 : 0), y + (held ? 1 : 0), w, h,
+                 label, t->accent_fg, UI_FACE_BODY);
+    /* And a ring just inside the bevel, which is how the default button in
+       a dialogue said it was the default long before anything glowed. */
+    if (!held) ui_bevel(s, x + 2, y + 2, w - 4, h - 4,
+                        mix(t->accent, 0xFFFFFF, 60), face, face,
+                        mix(t->accent, 0, 70));
 
     if (over && in->released) { in->released = 0; return 1; }
     return 0;
@@ -361,12 +448,12 @@ static inline void ui_field_draw(surface *s, ui_input *in, const ui_theme *t,
     if (over && in->released) { in->released = 0; f->focused = 1; }
     else if (in->released && !over) f->focused = 0;
 
-    round_rect(s, x, y, w, h, UI_RADIUS, mix(t->bg, 0, 50));
-    if (f->focused) {
-        /* A ring rather than a fill, so the text stays as legible as it was. */
-        round_rect(s, x, y, w, 2, 1, t->accent);
-        round_rect(s, x, y + h - 2, w, 2, 1, t->accent);
-    }
+    /* Sunk, and paper coloured inside. Somewhere to type is a hole in the
+       surface with something white at the bottom of it, which is the one
+       shape that has always meant "this accepts text" without a label. */
+    rect(s, x, y, w, h, t->well);
+    ui_sunken(s, t, x, y, w, h);
+    if (f->focused) rect(s, x + 2, y + 2, w - 4, 1, t->accent);
 
     int ty = y + (h - face_h(UI_FACE_BODY)) / 2;
     if (f->len == 0 && placeholder) {
@@ -390,24 +477,97 @@ static inline void ui_field_draw(surface *s, ui_input *in, const ui_theme *t,
     }
 }
 
+/* A well: somewhere content lives, sunk into the window with paper at the
+   bottom of it. Lists, text areas, canvases, anything being looked at rather
+   than pressed. Returns the inside, so a caller draws into the hole rather
+   than working out the two pixel inset for itself. */
+static inline void ui_well(surface *s, const ui_theme *t,
+                           int x, int y, int w, int h,
+                           int *ix, int *iy, int *iw, int *ih) {
+    rect(s, x, y, w, h, t->well);
+    ui_sunken(s, t, x, y, w, h);
+    if (ix) *ix = x + 2;
+    if (iy) *iy = y + 2;
+    if (iw) *iw = w - 4;
+    if (ih) *ih = h - 4;
+}
+
 /* --- chrome --------------------------------------------------------------- */
 
 /* The strip across the top of a window that holds its controls. */
 static inline void ui_toolbar(surface *s, const ui_theme *t, int w, int h) {
     rect(s, 0, 0, w, h, t->panel);
-    rect(s, 0, h - 1, w, 1, t->line);
+    /* A groove under it rather than a line: a toolbar sits on the window,
+       and the two pixels that say so are the same two the chrome uses. */
+    ui_groove(s, t, 0, h - 2, w, 2);
+}
+
+/* A separator between groups of buttons on a toolbar. Vertical twin of the
+   groove, and the reason a row of a dozen icons reads as three groups. */
+static inline void ui_toolbar_gap(surface *s, const ui_theme *t,
+                                  int x, int y, int h) {
+    rect(s, x, y, 1, h, t->edge_shadow);
+    rect(s, x + 1, y, 1, h, t->edge_hi);
+}
+
+/* --- a menu bar -----------------------------------------------------------
+ *
+ * File, Edit, View, Help. The thing most missing from this desktop: every
+ * window had its commands hidden behind whichever button the program's
+ * author found room for, which means no two programs put anything in the
+ * same place and nothing is discoverable.
+ *
+ * Draws the strip and returns which title the pointer is over, or -1. The
+ * program owns which one is open, because a menu bar with an opinion about
+ * that cannot be driven by the keyboard. */
+#define UI_MENUBAR_H 20
+
+static inline int ui_menubar(surface *s, ui_input *in, const ui_theme *t,
+                             int w, const char *const *titles, int count,
+                             int open, int *x_out) {
+    rect(s, 0, 0, w, UI_MENUBAR_H, t->panel);
+
+    int x = 2, hot = -1;
+    for (int i = 0; i < count; i++) {
+        int tw = face_w(titles[i], UI_FACE_BODY) + 16;
+        int over = ui_hit(in, x, 0, tw, UI_MENUBAR_H);
+
+        if (i == open) {
+            rect(s, x, 0, tw, UI_MENUBAR_H, t->accent);
+            face_centred(s, x, 0, tw, UI_MENUBAR_H, titles[i],
+                         t->accent_fg, UI_FACE_BODY);
+        } else {
+            if (over) ui_raised(s, t, x, 0, tw, UI_MENUBAR_H);
+            face_centred(s, x, 0, tw, UI_MENUBAR_H, titles[i],
+                         t->fg, UI_FACE_BODY);
+        }
+
+        if (over) hot = i;
+        if (x_out) x_out[i] = x;
+        x += tw;
+    }
+    return hot;
 }
 
 static inline void ui_statusbar(surface *s, const ui_theme *t,
                                 int w, int h, const char *left, const char *right) {
     int y = h - UI_ROW;
     rect(s, 0, y, w, UI_ROW, t->panel);
-    rect(s, 0, y, w, 1, t->line);
+
+    /* Two sunk panels rather than a strip of text, which is what a status
+       bar has always been: the text sits in something, so an empty one
+       still looks like part of the window instead of a gap. */
     int ty = y + (UI_ROW - face_h(UI_FACE_BODY)) / 2;
-    if (left)  face_draw(s, UI_PAD, ty, left, t->dim, UI_FACE_BODY);
+    int split = right ? w - 140 : w - 3;
+    if (split < 60) split = w - 3;
+
+    ui_sunken(s, t, 2, y + 2, split - 4, UI_ROW - 4);
+    if (left) face_draw(s, 7, ty, left, t->fg, UI_FACE_BODY);
+
     if (right) {
+        ui_sunken(s, t, split, y + 2, w - split - 2, UI_ROW - 4);
         int rw = face_w(right, UI_FACE_BODY);
-        face_draw(s, w - UI_PAD - rw, ty, right, t->dim, UI_FACE_BODY);
+        face_draw(s, w - 6 - rw, ty, right, t->fg, UI_FACE_BODY);
     }
 }
 

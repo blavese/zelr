@@ -87,10 +87,11 @@ there because both are useful: the desktop is what a machine with a screen
 should do when you switch it on, and the console is what you want when you
 are driving it down a serial line or something has gone wrong.
 
-A terminal opens. Click the wallpaper, or the badge in the corner, for the
-launcher: a file manager, an editor, paint, settings, a system monitor, a
-music player, a calculator, and what the machine is made of. Drag a title bar
-to move a window; the three dots close it, fill the screen, or put it away.
+A terminal opens, over a grey desktop with icons down the left of it. Click
+the badge in the corner, or the wallpaper, for the launcher: a file manager,
+an editor, paint, settings, a system monitor, a music player, a calculator,
+and what the machine is made of. Drag a title bar to move a window; the three
+buttons at its right put it away, fill the screen, or close it.
 Drag the bottom right corner to resize, or drag a title bar to an edge to
 snap. Alt and tab changes window, alt and an arrow snaps, alt and d clears
 the desktop, and shaking a window sends the others away. Escape returns to
@@ -610,6 +611,74 @@ a wheel answers 3. Above the driver it is one number, steps since somebody
 last looked, and the window manager hands it to the window under the pointer
 rather than the focused one.
 
+**A desktop that is built rather than tinted.**
+
+The whole of the look is one idea: a surface is not a colour, it is a plane
+with a light above and to the left of it. Everything raised has a bright top
+and left and a dark bottom and right, everything sunk has it the other way
+round, and a control says what it is by which way its edges go. A button is
+raised, so it can be pressed; a list is sunk, so it cannot. Pressing one does
+not tint it, it turns the bevel over and moves the label a pixel down and
+right, so the thing is genuinely depressed. That reads as a press at any size
+and in any palette, which a colour change does not.
+
+Two pixels rather than one, because one is a line and two is a bevel: the
+outer pair carry the strong colours and the inner pair the soft ones, and
+together they read as a chamfer.
+
+It is a grey and not an off-white for a reason that took a rebuild to see.
+Chrome built out of edges needs a surface with room above it and below it,
+and a near-white one has nowhere to put a highlight: every bevel collapses to
+a single grey line and the whole desktop goes flat. So the ground is a warm
+neutral a few steps down, which is the only part of this that is a matter of
+taste rather than mechanics.
+
+Windows are square, because a bevel has to turn a corner to read as one and a
+rounded corner has nowhere to put four edges. Nothing casts a shadow, because
+a bevel already says which way is up and a drop shadow on top of one is two
+answers to the same question. The panel is flush to the bottom edge and the
+full width of it, because a panel is part of the machine rather than a card
+lying on the desktop.
+
+All of it comes out of the theme, so the six accents and the dark ground
+still work: the four edge colours are derived from the surface the same way
+every other colour here is, and a program gets them in the same struct it
+already reads. One header changed and every window in the system changed
+with it, which is the test of whether a toolkit is one.
+
+**A menu bar, at last.** File, Edit, View, Help. The thing most missing from
+this desktop: every window had its commands behind whichever button its
+author found room for, so no two programs put anything in the same place and
+nothing was discoverable. The file manager has one now, and everything in it
+does what the toolbar button or the context menu does. A command reachable
+two ways is not duplication, it is the difference between a program you can
+learn and one you have to be told about.
+
+**Desktop icons, drawn rather than stored.** A bitmap for each would mean a
+file format, a loader for it and a directory to keep them in before anything
+appeared on the screen at all, and at thirty two pixels a drawn shape and a
+stored one are the same picture. Single click selects, a second within half a
+second opens, because dragging one has to start with putting the pointer on
+it. A program's first window opens to the right of them rather than on top,
+which is the only reason to have put them on the left.
+
+**A click that was never delivered.** A window's events arrive through a ring
+of thirty two, and a pointer crossing the screen fills it with nothing but
+positions. So the press was dropped for want of room, the release turned up
+once the backlog had drained, and a release with no press before it sets
+nothing: the program sees the button go up from a state where it was already
+up. Nothing in the path reports a dropped event, so what this looked like was
+a button that did not work, three times over, with the pointer sitting on it
+in the photograph.
+
+Positions are folded into one another now, so the ring cannot fill with them.
+Which events count as positions took a second attempt: the release carries no
+buttons and so does the move after it, and folding one into the other on that
+alone puts the release wherever the pointer went next, which for a button
+means it was let go somewhere else and the click is lost again. An event is
+overwritten only when it carries the same buttons as the one before it and
+the one after it.
+
 **The network, and being straight about it.** There is an icon on the panel
 next to the speaker, and it says three things apart rather than two: no
 link, a link with no address, and a link that can reach something. The
@@ -713,18 +782,18 @@ is still the kernel's own, on the console; the one in a window is a program.
 ## testing
 
 The kernel tests itself. `./run.sh -T` boots with selftest on the command line,
-runs 381 checks across every subsystem, then writes to QEMU's debug-exit port
+runs 387 checks across every subsystem, then writes to QEMU's debug-exit port
 so the host gets a real exit status.
 
     [string]              8 checks   [graphics]           13 checks
-    [the identity map]    6 checks   [windows]             3 checks
+    [the identity map]    6 checks   [windows]             7 checks
     [physical memory]     4 checks   [window server]      16 checks
     [paging]              4 checks   [built-in programs]   6 checks
     [user access]         5 checks   [theme]              16 checks
     [heap]                5 checks   [taskbar]            18 checks
     [filesystem]          7 checks   [live tree]          19 checks
     [paths]              11 checks   [layout]              9 checks
-    [directories]        12 checks   [waiting]            14 checks
+    [directories]        12 checks   [waiting]            16 checks
     [open files]         12 checks   [trackpad]           25 checks
     [timer]               2 checks   [crypto]             22 checks
     [interrupts]          2 checks   [wpa]                19 checks
@@ -736,15 +805,15 @@ so the host gets a real exit status.
     [video]               7 checks   [clipboard]          14 checks
     [mouse]               1 check    [clock]              18 checks
 
-    381 passed, 0 failed
+    387 passed, 0 failed
     SELFTEST_PASS
 
 The processor section is two checks on a machine with one CPU and eleven on
 a machine with several, where it hands work to each of them and requires the
-count they share to come back exact. `qemu-system-x86_64 -smp 4` reaches 390.
+count they share to come back exact. `qemu-system-x86_64 -smp 4` reaches 396.
 
 The same checks run again on `-machine q35`, which has PCIe and an AHCI
-controller rather than a 1996 chipset and a PIO disk, and reach 389 there.
+controller rather than a 1996 chipset and a PIO disk, and reach 395 there.
 Two bugs found the day that was added were invisible on the older machine:
 the block layer would not split a request past the eight sectors AHCI
 accepts, and the ACPI tables were never read on a UEFI machine at all.

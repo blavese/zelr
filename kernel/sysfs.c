@@ -101,16 +101,6 @@ static u32 render_memory(char *b, u32 cap) {
     return o.len;
 }
 
-static const char *state_name(int s) {
-    switch (s) {
-        case TASK_READY:    return "ready";
-        case TASK_RUNNING:  return "running";
-        case TASK_SLEEPING: return "sleeping";
-        case TASK_BLOCKED:  return "blocked";
-        default:            return "dead";
-    }
-}
-
 static u32 render_tasks(char *b, u32 cap) {
     out_t o = { b, cap, 0 };
     put(&o, "pid  state     ring  slices  name\n");
@@ -120,7 +110,7 @@ static u32 render_tasks(char *b, u32 cap) {
     task_t *p = head;
     do {
         put(&o, "%-4d %-9s %-5s %-7d %s\n",
-            p->pid, state_name(p->state), p->user ? "3" : "0",
+            p->pid, task_state_name(p->state), p->user ? "3" : "0",
             p->slices, p->name);
         p = p->next;
     } while (p != head);

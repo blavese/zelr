@@ -37,10 +37,16 @@ static const struct {
    the presets different is the accent and the temperature of the dark
    background, and a light background that shifted temperature with the
    accent would be six nearly identical off-whites nobody asked for. */
-#define LIGHT_DESKTOP RGB(0xE6, 0xE9, 0xEE)
-#define LIGHT_SURFACE RGB(0xF4, 0xF5, 0xF7)
-#define LIGHT_TEXT    RGB(0x1C, 0x1F, 0x24)
-#define LIGHT_DIM     RGB(0x6A, 0x71, 0x7A)
+/* A grey, and not an off-white. Chrome that is built out of edges needs a
+   surface with room above it and below it: a near-white one has nowhere to
+   put a highlight, so every bevel reads as a single grey line and the whole
+   desktop goes flat. This is a warm neutral a couple of steps lighter and
+   cooler than the grey these desktops used to be, which is the whole of the
+   modernising: the construction is the old one, the colour is not. */
+#define LIGHT_DESKTOP RGB(0x33, 0x44, 0x52)
+#define LIGHT_SURFACE RGB(0xD6, 0xD3, 0xCD)
+#define LIGHT_TEXT    RGB(0x12, 0x12, 0x14)
+#define LIGHT_DIM     RGB(0x5C, 0x5A, 0x57)
 
 #define DARK_TEXT     RGB(0xE2, 0xE9, 0xEE)
 #define DARK_DIM      RGB(0x77, 0x86, 0x93)
@@ -133,16 +139,53 @@ static void derive(void) {
                           : W;
 
     current.text_mute = mix(current.text_dim, current.surface, 95);
+
+    /* --- the edges ---------------------------------------------------
+     *
+     * Both modes light from the same direction, so both lift the top left
+     * and drop the bottom right. A dark theme needs far more of the lift
+     * to show it and far less of the drop before it turns to a hole, and
+     * a light one is the other way about. */
+    current.edge_hi     = mix(current.surface, W, dark ? 120 : 255);
+    current.edge_light  = mix(current.surface, W, dark ? 56  : 96);
+    current.edge_shadow = mix(current.surface, K, dark ? 78  : 96);
+    current.edge_dark   = mix(current.surface, K, dark ? 150 : 190);
+
+    /* What is inside something sunk. Paper in a light theme, and a hole in
+       a dark one: the same relationship to the surface either way. */
+    current.well = dark ? mix(current.surface, K, 66)
+                        : mix(current.surface, W, 210);
+
+    /* The title gradient runs along the bar rather than down it, which is
+       the way every desktop that did this well did it: down a 22 pixel bar
+       a vertical gradient has nowhere to go and reads as a smudge. */
+    current.title_a  = current.accent;
+    current.title_b  = mix(current.accent, W, 58);
+    current.title_fg = current.accent_text;
+
+    /* An unfocused bar is the same shape drained of the colour, so the one
+       in front is obvious without either being hard to read. */
+    /* Drained rather than darkened. A window that is merely not in front is
+       still a window somebody is reading, and a title bar that goes nearly
+       black to say so is louder about being unfocused than the focused one
+       is about being focused. */
+    current.title_off_a  = mix(current.surface, dark ? W : K, dark ? 10 : 34);
+    current.title_off_b  = mix(current.surface, W, dark ? 30 : 70);
+    current.title_off_fg = current.text_dim;
 }
 
 const theme_t *theme(void) { return &current; }
 
 void theme_init(void) {
-    current.light = false;
-    theme_apply_preset(0);
+    /* The built look is the one this desktop is, so it is what a machine
+       with no settings file gets: a grey ground, square corners, and no
+       shadow under anything, because a bevel already says which way is up
+       and a drop shadow on top of one is two answers to the same question. */
+    current.light = true;
+    theme_apply_preset(1);
     current.wallpaper = WALLPAPER_GRADIENT;
-    current.corner = 8;
-    current.shadows = true;
+    current.corner = 0;
+    current.shadows = false;
     current.animate = true;
     current.quirks = true;
     current.autodesktop = true;

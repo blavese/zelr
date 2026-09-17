@@ -47,8 +47,8 @@
    A bar that runs edge to edge is a border of the display; one with air
    around it is an object lying on the desktop, and the desktop is then
    something with depth rather than a backdrop. */
-#define TASKBAR_GAP 10
-#define TASKBAR_R   10
+#define TASKBAR_GAP 0
+#define TASKBAR_R   0
 
 /* Where the panel sits when it is out. Where it is actually drawn is
    somewhere between that and off the bottom of the screen, because it tucks
@@ -81,8 +81,13 @@ static int taskbar_chips_x(void) {
 #define NETPOP_W   268
 #define NETPOP_H   150
 
-#define MENU_W     210
-#define MENU_ITEM  30
+/* The brand strip down the left of the launcher, which is the one piece of
+   pure decoration on this desktop and earns its place: it makes the menu
+   unmistakably this system's rather than a list of words over a rectangle. */
+#define MENU_BRAND 26
+#define MENU_W     226
+#define MENU_ITEM  24
+#define MENU_PAD   4
 #define SHADOW     5
 
 static window_t *stack[WM_MAX_WINDOWS];   /* index 0 is the bottom */
@@ -254,7 +259,7 @@ static const struct {
 bool wm_active(void) { return running; }
 
 int wm_outer_w(const window_t *w) { return w->cw + WM_BORDER * 2; }
-int wm_outer_h(const window_t *w) { return w->ch + WM_TITLE_H + WM_BORDER; }
+int wm_outer_h(const window_t *w) { return w->ch + WM_TOP + WM_BORDER; }
 
 void wm_invalidate(window_t *w) { if (w) w->dirty = true; need_frame(); }
 
@@ -317,10 +322,49 @@ void wm_raise(window_t *w) {
 
 void wm_push_event(window_t *w, const wm_event_t *ev) {
     if (!w) return;
+
+    /* A pointer that has only moved overwrites the last move rather than
+       queueing behind it. Where the pointer is now is the only thing a
+       program wants out of a move, and the walk across the screen that gets
+       it somewhere is thirty of them.
+
+       This is what a full queue used to be made of, and the queue dropped
+       whatever arrived while it was full. The thing that arrived was the
+       press, the release turned up once the backlog had drained, and a
+       release with no press before it sets nothing: the program sees the
+       button go up from a state where it was already up. So the click did
+       not happen, three times over, with the pointer sitting on the button
+       in the photograph. Nothing in the path reports a dropped event, which
+       is why this looked like the button not working.
+
+       What must never be folded away is the event that changed the buttons,
+       and being a move is not enough to say an event did not: the release
+       is a mouse event with no buttons in it, and so is the move that comes
+       after it. Folding the second into the first moves the release to
+       wherever the pointer went next, which for a button means it was let
+       go somewhere else and the click is lost again. So an event is only
+       overwritten when it carries the same buttons as this one and as the
+       one before it, which is what makes it a move and nothing else. */
+    if (ev->type == WM_EV_MOUSE && !(ev->buttons & 0x80)
+        && w->q_head != w->q_tail) {
+        u32 last = (w->q_head + WM_EVENT_QUEUE - 1) % WM_EVENT_QUEUE;
+        wm_event_t *prev = &w->queue[last];
+        if (prev->type == WM_EV_MOUSE && prev->buttons == ev->buttons
+            && w->q_prev_buttons == ev->buttons) {
+            *prev = *ev;
+            return;
+        }
+    }
+
     u32 next = (w->q_head + 1) % WM_EVENT_QUEUE;
     if (next == w->q_tail) return;          /* full: drop this one, keep the backlog */
     w->queue[w->q_head] = *ev;
     w->q_head = next;
+
+    if (ev->type == WM_EV_MOUSE) {
+        w->q_prev_buttons = w->q_last_buttons;
+        w->q_last_buttons = ev->buttons;
+    }
 }
 
 bool wm_pop_event(window_t *w, wm_event_t *out) {
@@ -399,6 +443,8 @@ static bool panel_in_the_way(void) {
 static int work_h(void) {
     return panel_in_the_way() ? (int)fb_height() : panel_rest_y();
 }
+
+int wm_work_height(void) { return work_h(); }
 
 /* The topmost window covering the whole screen, or -1.
  *
@@ -497,6 +543,149 @@ static u32 darken(u32 c, int amount)  { return gfx_mix(c, 0, amount); }
 static u32 paper(int amount) {
     const theme_t *t = theme();
     return t->light ? darken(t->desktop, amount) : lighten(t->desktop, amount);
+}
+
+/* --- the icons on the desktop ---------------------------------------------
+ *
+ * Drawn rather than stored, because a bitmap for each would be a file format,
+ * a loader and a directory to keep them in before anything appeared on the
+ * screen, and these are thirty two pixels square: at that size a drawn shape
+ * and a stored one are the same picture.
+ *
+ * They open on a double click. Single click selects, which is what every
+ * desktop that has ever had icons does, and the reason is that dragging one
+ * has to start with putting the pointer on it.
+ */
+#define ICON_TILE  32
+#define ICON_CELL_W 78
+#define ICON_CELL_H 74
+#define ICON_LEFT  14
+#define ICON_TOP   14
+
+int wm_icons_right(void) { return ICON_LEFT + ICON_CELL_W; }
+
+static const struct {
+    const char *label;
+    const char *program;
+    int kind;
+} DESK[] = {
+    { "Terminal", "/bin/term",     0 },
+    { "Files",    "/bin/files",    1 },
+    { "Notes",    "/bin/notes",    2 },
+    { "Paint",    "/bin/paint",    3 },
+    { "Settings", "/bin/settings", 4 },
+};
+#define DESK_N ((int)(sizeof(DESK) / sizeof(DESK[0])))
+
+static int desk_selected = -1;
+static int desk_last_click = -1;
+static u64 desk_last_tick;
+
+static void icon_terminal(int x, int y) {
+    fb_rect((u32)x, (u32)y, ICON_TILE, ICON_TILE, RGB(0x1A, 0x1E, 0x24));
+    fb_bevel(x, y, ICON_TILE, ICON_TILE, RGB(0x60, 0x66, 0x70),
+             RGB(0x40, 0x46, 0x50), RGB(0x10, 0x12, 0x16), RGB(0x06, 0x07, 0x09));
+    u32 green = RGB(0x4C, 0xD9, 0x8A);
+    for (int i = 0; i < 4; i++) {
+        fb_rect((u32)(x + 7 + i), (u32)(y + 10 + i), 2, 2, green);
+        fb_rect((u32)(x + 7 + i), (u32)(y + 18 - i), 2, 2, green);
+    }
+    fb_rect((u32)(x + 14), (u32)(y + 20), 10, 2, green);
+}
+
+static void icon_folder(int x, int y) {
+    u32 body = RGB(0xE2, 0xB8, 0x4E), edge = RGB(0x9A, 0x77, 0x22);
+    fb_rect((u32)(x + 2), (u32)(y + 7), 12, 4, body);       /* the tab */
+    fb_rect((u32)(x + 2), (u32)(y + 10), ICON_TILE - 4, 17, body);
+    fb_rect((u32)(x + 2), (u32)(y + 10), ICON_TILE - 4, 1,
+            RGB(0xF4, 0xD8, 0x8E));
+    fb_bevel_thin(x + 2, y + 7, 12, 5, RGB(0xF4, 0xD8, 0x8E), edge);
+    fb_bevel_thin(x + 2, y + 10, ICON_TILE - 4, 17, RGB(0xF4, 0xD8, 0x8E), edge);
+}
+
+static void icon_page(int x, int y) {
+    fb_rect((u32)(x + 6), (u32)(y + 3), 20, 26, RGB(0xFA, 0xFA, 0xF6));
+    fb_bevel_thin(x + 6, y + 3, 20, 26, RGB(0xFF, 0xFF, 0xFF),
+                  RGB(0x7A, 0x78, 0x74));
+    for (int i = 0; i < 5; i++)
+        fb_rect((u32)(x + 10), (u32)(y + 8 + i * 4), (u32)(i == 4 ? 7 : 12), 1,
+                RGB(0x50, 0x56, 0x62));
+}
+
+static void icon_paint(int x, int y) {
+    u32 ring = RGB(0xC8, 0x8A, 0x58);
+    fb_rect((u32)(x + 4), (u32)(y + 8), 24, 16, RGB(0xE8, 0xC8, 0xA0));
+    fb_bevel_thin(x + 4, y + 8, 24, 16, RGB(0xFA, 0xE8, 0xCC), ring);
+    fb_rect((u32)(x + 8), (u32)(y + 12), 4, 4, RGB(0xD8, 0x44, 0x40));
+    fb_rect((u32)(x + 14), (u32)(y + 12), 4, 4, RGB(0x3C, 0x74, 0xD0));
+    fb_rect((u32)(x + 20), (u32)(y + 12), 4, 4, RGB(0x50, 0xB0, 0x60));
+    fb_rect((u32)(x + 11), (u32)(y + 18), 4, 4, RGB(0xE0, 0xC0, 0x40));
+    fb_rect((u32)(x + 17), (u32)(y + 18), 4, 4, RGB(0x30, 0x30, 0x38));
+}
+
+static void icon_sliders(int x, int y) {
+    const theme_t *t = theme();
+    fb_rect((u32)(x + 3), (u32)(y + 4), 26, 24, t->surface);
+    fb_bevel(x + 3, y + 4, 26, 24, t->edge_hi, t->edge_light,
+             t->edge_shadow, t->edge_dark);
+    for (int i = 0; i < 3; i++) {
+        int ly = y + 10 + i * 6;
+        fb_rect((u32)(x + 7), (u32)ly, 18, 2, t->edge_shadow);
+        fb_rect((u32)(x + 7), (u32)(ly + 1), 18, 1, t->edge_hi);
+        int knob = x + 8 + (i == 1 ? 11 : i * 6);
+        fb_rect((u32)knob, (u32)(ly - 2), 4, 6, t->accent);
+        fb_bevel_thin(knob, ly - 2, 4, 6, t->edge_hi, t->edge_dark);
+    }
+}
+
+static void draw_desk_icon(int i, int x, int y, bool selected) {
+    const theme_t *t = theme();
+    int tx = x + (ICON_CELL_W - ICON_TILE) / 2;
+
+    switch (DESK[i].kind) {
+        case 0: icon_terminal(tx, y); break;
+        case 1: icon_folder(tx, y);   break;
+        case 2: icon_page(tx, y);     break;
+        case 3: icon_paint(tx, y);    break;
+        default: icon_sliders(tx, y); break;
+    }
+
+    const char *label = DESK[i].label;
+    int lw = face_width(label, FACE_BODY);
+    int lx = x + (ICON_CELL_W - lw) / 2;
+    int ly = y + ICON_TILE + 6;
+
+    if (selected) {
+        fb_rect((u32)(lx - 4), (u32)(ly - 2), (u32)(lw + 8),
+                (u32)(face_height(FACE_BODY) + 4), t->accent);
+        face_text(lx, ly, label, t->accent_text, FACE_BODY);
+        return;
+    }
+
+    /* A shadow under the label rather than a panel behind it. The wallpaper
+       can be any colour at all, including one the text would vanish into,
+       and one dark pixel offset by one is enough to stop that without
+       putting a box on the desktop. */
+    face_text(lx + 1, ly + 1, label, RGB(0x10, 0x14, 0x1A), FACE_BODY);
+    face_text(lx, ly, label, RGB(0xF2, 0xF4, 0xF8), FACE_BODY);
+}
+
+static void draw_desk_icons(void) {
+    int y = ICON_TOP;
+    for (int i = 0; i < DESK_N; i++) {
+        draw_desk_icon(i, ICON_LEFT, y, i == desk_selected);
+        y += ICON_CELL_H;
+    }
+}
+
+static int desk_icon_at(int mx, int my) {
+    for (int i = 0; i < DESK_N; i++) {
+        int y = ICON_TOP + i * ICON_CELL_H;
+        if (mx >= ICON_LEFT && mx < ICON_LEFT + ICON_CELL_W
+            && my >= y && my < y + ICON_CELL_H - 6)
+            return i;
+    }
+    return -1;
 }
 
 static void draw_wallpaper(void) {
@@ -724,32 +913,41 @@ static void draw_wallpaper(void) {
 
 /* The three buttons on a title bar, right to left: close, maximise,
    minimise. A window nobody said can be resized has no maximise button,
-   because pressing it would do nothing. */
-#define BTN_SIZE 14
-#define BTN_STEP 20
+   because pressing it would do nothing.
+
+   Wider than they are tall, and bevelled like every other button on the
+   desktop, because that is what makes them read as things to press. The
+   round tinted dots that were here before said what they did by colour
+   alone, which is a convention rather than an affordance: they look the
+   same whether the machine is listening or not. */
+#define BTN_W    16
+#define BTN_H    14
+#define BTN_GAP  2
 
 typedef enum { BTN_NONE = 0, BTN_CLOSE, BTN_MAX, BTN_MIN } button_t;
 
-static int button_box(const window_t *w, button_t which, int *bx, int *by) {
+static void button_box(const window_t *w, button_t which, int *bx, int *by) {
     int slot = (which == BTN_CLOSE) ? 0 : (which == BTN_MAX ? 1 : 2);
-    *bx = w->x + wm_outer_w(w) - 26 - slot * BTN_STEP;
-    *by = w->y + (WM_TITLE_H - BTN_SIZE) / 2;
-    return BTN_SIZE;
+    *bx = w->x + wm_outer_w(w) - WM_BORDER - 2 - BTN_W
+          - slot * (BTN_W + BTN_GAP);
+    *by = w->y + WM_BORDER + (WM_TITLE_H - BTN_H) / 2;
 }
 
 static button_t button_at(const window_t *w, int mx, int my) {
     button_t order[3] = { BTN_CLOSE, BTN_MAX, BTN_MIN };
     for (int i = 0; i < 3; i++) {
         if (order[i] == BTN_MAX && !w->resizable) continue;
-        int bx, by, bs = button_box(w, order[i], &bx, &by);
-        if (mx >= bx && mx < bx + bs && my >= by && my < by + bs) return order[i];
+        int bx, by;
+        button_box(w, order[i], &bx, &by);
+        if (mx >= bx && mx < bx + BTN_W && my >= by && my < by + BTN_H)
+            return order[i];
     }
     return BTN_NONE;
 }
 
 /* The grip in the bottom right corner. Only there on a window that can
    actually be resized. */
-#define GRIP 14
+#define GRIP 16
 
 static bool on_grip(const window_t *w, int mx, int my) {
     if (!w->resizable || w->maximized) return false;
@@ -758,91 +956,121 @@ static bool on_grip(const window_t *w, int mx, int my) {
     return mx >= gx && mx < gx + GRIP && my >= gy && my < gy + GRIP;
 }
 
+/* --- the pieces a built surface is made of --------------------------------
+ *
+ * Raised and sunk are the same routine with the light coming from the other
+ * side, which is the entire trick and the reason it is worth having in one
+ * place: every button, well, panel and groove on this desktop is one of
+ * these two calls, so they all catch the light from the same direction. */
+static void raised(int x, int y, int w, int h) {
+    const theme_t *t = theme();
+    fb_bevel(x, y, w, h, t->edge_hi, t->edge_light, t->edge_shadow, t->edge_dark);
+}
+
+static void sunken(int x, int y, int w, int h) {
+    const theme_t *t = theme();
+    fb_bevel(x, y, w, h, t->edge_dark, t->edge_shadow, t->edge_light, t->edge_hi);
+}
+
+/* A button, with its face, that goes down when it is held. Pressed is not a
+   colour change: the bevel inverts and the label moves a pixel down and
+   right, so the thing genuinely looks depressed rather than highlighted. */
+static void button_face(int x, int y, int w, int h, bool down, bool hot) {
+    const theme_t *t = theme();
+    u32 face = hot && !down ? gfx_mix(t->surface, t->edge_hi, 60) : t->surface;
+    fb_rect((u32)x, (u32)y, (u32)w, (u32)h, face);
+    if (down) sunken(x, y, w, h);
+    else      raised(x, y, w, h);
+}
+
+/* --- the marks on the title bar buttons ----------------------------------- */
+
+static void mark_minimise(int x, int y, u32 c) {
+    fb_rect((u32)(x + 4), (u32)(y + BTN_H - 6), 8, 2, c);
+}
+
+static void mark_maximise(int x, int y, u32 c) {
+    int bx = x + 4, by = y + 3;
+    fb_rect((u32)bx, (u32)by, 8, 8, c);
+    fb_rect((u32)(bx + 1), (u32)(by + 2), 6, 5, theme()->surface);
+}
+
+static void mark_restore(int x, int y, u32 c) {
+    /* Two boxes, the back one peeking out, which is what a window that is
+       already filling the screen offers to undo. */
+    fb_rect((u32)(x + 6), (u32)(y + 2), 6, 6, c);
+    fb_rect((u32)(x + 7), (u32)(y + 4), 4, 3, theme()->surface);
+    fb_rect((u32)(x + 3), (u32)(y + 5), 6, 6, c);
+    fb_rect((u32)(x + 4), (u32)(y + 7), 4, 3, theme()->surface);
+}
+
+static void mark_close(int x, int y, u32 c) {
+    for (int i = 0; i < 7; i++) {
+        fb_rect((u32)(x + 5 + i), (u32)(y + 4 + i), 2, 1, c);
+        fb_rect((u32)(x + 5 + i), (u32)(y + 10 - i), 2, 1, c);
+    }
+}
+
 static void draw_chrome(window_t *w, bool focused) {
     const theme_t *t = theme();
     int ow = wm_outer_w(w), oh = wm_outer_h(w);
 
-    /* Edge to edge, so there is nothing for a rounded corner to show
-       through and nothing beside it for a shadow to fall on. Drawing them
-       anyway costs a read of the screen back per pixel around the whole
-       frame, for four notches of desktop colour in the corners. */
-    int r = w->maximized ? 0 : t->corner;
+    /* The frame is a raised plane with the window sunk into it. Square,
+       because a bevel has to turn a corner to read as one and a rounded
+       corner has nowhere to put the four edges. */
+    fb_rect((u32)w->x, (u32)w->y, (u32)ow, (u32)oh, t->surface);
+    raised(w->x, w->y, ow, oh);
 
-    if (t->shadows && !w->maximized) fb_shadow(w->x, w->y, ow, oh, r, SHADOW);
+    /* --- the title bar ---------------------------------------------------- */
+    int tx = w->x + WM_BORDER;
+    int ty = w->y + WM_BORDER;
+    int tw = ow - WM_BORDER * 2;
 
-    /* The body, so the rounded bottom corners have something under them. */
-    fb_round_rect(w->x, w->y, ow, oh, r, t->surface);
+    if (focused) fb_hgradient(tx, ty, tw, WM_TITLE_H, t->title_a, t->title_b);
+    else         fb_hgradient(tx, ty, tw, WM_TITLE_H, t->title_off_a,
+                              t->title_off_b);
 
-    /* The title bar is the top of that same rounded shape, which is why it
-       is drawn as its own rounded rect and then squared off at the bottom.
-     *
-     * It is a surface and not a slab of accent. Accent on the largest
-     * element of every window spends the one loud colour on the thing that
-     * needs it least, leaves nothing louder for what does, and is most of
-     * why a desktop reads as old. Focus is said three quieter ways instead:
-     * the bar lifts a layer, the title goes to full strength in the heavier
-     * weight, and the window's own edge picks up the accent. */
-    u32 bar = focused ? t->raised : t->surface;
-    fb_round_rect(w->x, w->y, ow, WM_TITLE_H + r, r, bar);
+    u32 title_fg = focused ? t->title_fg : t->title_off_fg;
+    face_text(tx + 6, ty + (WM_TITLE_H - face_height(FACE_BODY_BOLD)) / 2,
+              w->title, title_fg, FACE_BODY_BOLD);
 
-    /* Lit from above: one brighter row along the top, which is what stops a
-       flat fill reading as a sticker. */
-    fb_rect((u32)(w->x + r), (u32)w->y, (u32)(ow - r * 2), 1, t->sheen);
-
-    /* And the edge between the bar and the body. */
-    fb_rect((u32)w->x, (u32)(w->y + WM_TITLE_H - 1), (u32)ow, 1, t->hairline);
-
-    /* The window in front carries its title in the heavier weight. Colour
-       alone was doing that job, which leaves nothing for a theme where the
-       accent is close to the surface, and weight reads at a glance in a way
-       a hue does not. */
-    u32 title_fg = focused ? t->text : t->text_dim;
-    int title_face = focused ? FACE_BODY_BOLD : FACE_BODY;
-    face_text(w->x + 12, w->y + (WM_TITLE_H - face_height(title_face)) / 2,
-              w->title, title_fg, title_face);
-
-    /* Dots rather than glyphs: at 14 pixels a drawn symbol is mostly noise,
-       and the colour and position already say what each one does. The mark
-       inside is what tells them apart at a glance. */
     button_t order[3] = { BTN_CLOSE, BTN_MAX, BTN_MIN };
-    u32 tint[3] = { RGB(0xE0, 0x6A, 0x5A), RGB(0x5E, 0xC2, 0x7A), RGB(0xE0, 0xB0, 0x4A) };
     for (int i = 0; i < 3; i++) {
         if (order[i] == BTN_MAX && !w->resizable) continue;
 
-        int bx, by, bs = button_box(w, order[i], &bx, &by);
-        u32 dot = focused ? tint[i] : t->hairline;
-        fb_round_rect(bx, by, bs, bs, bs / 2, dot);
-        if (!focused) continue;
+        int bx, by;
+        button_box(w, order[i], &bx, &by);
+        bool hot = last_mx >= bx && last_mx < bx + BTN_W
+                && last_my >= by && last_my < by + BTN_H;
+        button_face(bx, by, BTN_W, BTN_H, false, hot);
 
-        u32 mark = darken(dot, 130);
+        u32 mark = t->text;
         switch (order[i]) {
-        case BTN_CLOSE:                                     /* a bar */
-            fb_rect((u32)(bx + 4), (u32)(by + 6), 6, 2, mark);
+        case BTN_CLOSE: mark_close(bx, by, mark); break;
+        case BTN_MAX:
+            if (w->maximized) mark_restore(bx, by, mark);
+            else              mark_maximise(bx, by, mark);
             break;
-        case BTN_MAX:                                       /* a box */
-            fb_round_frame(bx + 4, by + 4, 6, 6, 1, mark);
-            break;
-        default:                                            /* a floor */
-            fb_rect((u32)(bx + 4), (u32)(by + 8), 6, 2, mark);
-            break;
+        default:        mark_minimise(bx, by, mark); break;
         }
     }
 
-    /* The focused window is the one wearing the accent, one pixel of it.
-       This is the whole of the accent's job in a window and it is enough:
-       the eye finds a coloured outline in a field of grey immediately. */
-    fb_round_frame(w->x, w->y, ow, oh, r,
-                   focused ? t->accent : t->hairline);
+    /* --- and the client area, sunk into the frame ------------------------- */
+    int cx = w->x + WM_BORDER;
+    int cy = w->y + WM_TOP;
+    sunken(cx - 1, cy - 1, w->cw + 2, w->ch + 2);
 
-    /* Three short strokes in the corner, which is how a grip has looked
-       for long enough that nobody needs to be told. */
+    /* Three short strokes in the corner, which is how a grip has looked for
+       long enough that nobody needs to be told. Bevelled rather than drawn
+       in one colour, so it belongs to the same surface as everything else. */
     if (w->resizable && !w->maximized) {
-        u32 grip = darken(t->surface, 70);
-        int gx = w->x + ow - 5, gy = w->y + oh - 5;
+        int gx = w->x + ow - 4, gy = w->y + oh - 4;
         for (int i = 0; i < 3; i++) {
             int d = i * 4;
-            fb_rect((u32)(gx - d), (u32)(gy - 2), 3, 2, grip);
-            fb_rect((u32)(gx - 2), (u32)(gy - d), 2, 3, grip);
+            fb_rect((u32)(gx - d - 1), (u32)(gy - 2), 3, 1, t->edge_hi);
+            fb_rect((u32)(gx - d - 1), (u32)(gy - 1), 3, 1, t->edge_dark);
+            fb_rect((u32)(gx - 2), (u32)(gy - d - 1), 1, 3, t->edge_hi);
+            fb_rect((u32)(gx - 1), (u32)(gy - d - 1), 1, 3, t->edge_dark);
         }
     }
 }
@@ -902,7 +1130,7 @@ static void snap_rect(snap_t zone, int *x, int *y, int *cw, int *ch) {
     case SNAP_RIGHT: *x = fw / 2; *y = 0; *cw = fw / 2 - WM_BORDER * 2; break;
     default:         *x = 0;      *y = 0; *cw = fw - WM_BORDER * 2;     break;
     }
-    *ch = fh - WM_TITLE_H - WM_BORDER;
+    *ch = fh - WM_TOP - WM_BORDER;
 }
 
 static void apply_snap(window_t *w, snap_t zone) {
@@ -936,14 +1164,14 @@ static void set_minimized(window_t *w, bool yes) {
 static void resize_from_pointer(int mx, int my, int *cw_out, int *ch_out) {
     if (!resizing) return;
     int cw = mx + resize_off_x - resizing->x - WM_BORDER * 2;
-    int ch = my + resize_off_y - resizing->y - WM_TITLE_H - WM_BORDER;
+    int ch = my + resize_off_y - resizing->y - WM_TOP - WM_BORDER;
 
     if (cw < 160) cw = 160;
     if (ch < 80)  ch = 80;
     if (resizing->x + cw + WM_BORDER * 2 > (int)fb_width())
         cw = (int)fb_width() - resizing->x - WM_BORDER * 2;
-    if (resizing->y + ch + WM_TITLE_H + WM_BORDER > work_h())
-        ch = work_h() - resizing->y - WM_TITLE_H - WM_BORDER;
+    if (resizing->y + ch + WM_TOP + WM_BORDER > work_h())
+        ch = work_h() - resizing->y - WM_TOP - WM_BORDER;
 
     *cw_out = cw;
     *ch_out = ch;
@@ -1005,7 +1233,7 @@ static u32 item_light(int i) {
 static void draw_menu(void) {
     if (!menu_open) return;
     const theme_t *t = theme();
-    int h = MENU_N * MENU_ITEM + 12;
+    int h = MENU_N * MENU_ITEM + MENU_PAD * 2;
 
     /* It comes up from below rather than appearing. Eight pixels is enough
        to be read as movement and short enough not to be waited for. */
@@ -1013,35 +1241,73 @@ static void draw_menu(void) {
     int rise = (int)(((ANIM_FULL - p) * 8) / ANIM_FULL);
     int mx = menu_x, my = menu_y + rise;
 
-    if (t->shadows) fb_shadow(mx, my, MENU_W, h, 8, SHADOW);
-    fb_round_rect(mx, my, MENU_W, h, 8, t->overlay);
-    fb_rect((u32)(mx + 8), (u32)my, (u32)(MENU_W - 16), 1, t->sheen);
-    fb_round_frame(mx, my, MENU_W, h, 8, t->hairline);
+    fb_rect((u32)mx, (u32)my, MENU_W, (u32)h, t->surface);
+    raised(mx, my, MENU_W, h);
+
+    /* --- the strip --------------------------------------------------------
+     *
+     * The letters are stacked rather than turned on their side, because a
+     * glyph rotated by a routine that was never asked to rotate one comes
+     * out as porridge, and four capitals down a strip reads perfectly well
+     * at this size. */
+    fb_vgradient(mx + 2, my + 2, MENU_BRAND - 2, h - 4,
+                 t->accent, gfx_mix(t->accent, RGB(0, 0, 0), 90));
+
+    {
+        static const char *LETTERS[] = { "Z", "E", "L", "R" };
+        int lh = face_height(FACE_BODY_BOLD);
+        int total = 4 * (lh + 2);
+        int ly = my + h - MENU_PAD - 8 - total;
+        if (ly < my + 8) ly = my + 8;
+        for (int i = 0; i < 4; i++) {
+            int lw = face_width(LETTERS[i], FACE_BODY_BOLD);
+            face_text(mx + 2 + (MENU_BRAND - 2 - lw) / 2, ly,
+                      LETTERS[i], t->accent_text, FACE_BODY_BOLD);
+            ly += lh + 2;
+        }
+    }
+
+    /* --- the items --------------------------------------------------------- */
+    int ix = mx + MENU_BRAND;
+    int iw = MENU_W - MENU_BRAND - MENU_PAD;
 
     for (int i = 0; i < MENU_N; i++) {
-        int iy = my + 6 + i * MENU_ITEM;
-
+        int iy = my + MENU_PAD + i * MENU_ITEM;
         u32 lit = item_light(i);
-        if (lit) {
-            u32 hot = gfx_mix(t->raised, t->accent, 60);
-            fb_round_rect(mx + 5, iy, MENU_W - 10, MENU_ITEM, 6,
-                          gfx_mix(t->overlay, hot, (int)lit * 255 / ANIM_FULL));
-        }
 
-        /* The label comes up out of the panel with it, so the whole thing
-           settles at once instead of the text landing first. */
-        u32 rest = gfx_mix(t->text, t->text_dim, 120);
-        u32 fg = gfx_mix(rest, t->text, (int)lit * 255 / ANIM_FULL);
-        fg = gfx_mix(t->overlay, fg, (int)p * 255 / ANIM_FULL);
-        face_text(mx + 38, iy + (MENU_ITEM - face_height(FACE_BODY)) / 2,
-                  MENU[i].label, fg, FACE_BODY);
+        /* A full width bar in the accent, which is what a highlighted menu
+           item has always been, and reads instantly as the one that will
+           happen if the button goes down now. */
+        bool on = lit > ANIM_FULL / 2;
+        if (on) fb_rect((u32)ix, (u32)iy, (u32)iw, MENU_ITEM, t->accent);
 
-        /* A rounded square stands in for an icon. Accent for the things that
-           launch a program, grey for the ones the desktop handles itself. */
-        u32 pip = MENU[i].program ? t->accent : darken(t->text_dim, 60);
-        fb_round_rect(mx + 16, iy + MENU_ITEM / 2 - 6, 12, 12, 3,
-                      gfx_mix(t->overlay, pip, (int)p * 255 / ANIM_FULL));
+        u32 fg = on ? t->accent_text : t->text;
+
+        /* A small tile with the first letter, the same way the panel draws
+           an app, so a program is recognisable in both places. */
+        const char *label = MENU[i].label;
+        char first[2] = { label[0], 0 };
+        if (first[0] >= 'a' && first[0] <= 'z') first[0] = (char)(first[0] - 32);
+
+        int ty = iy + (MENU_ITEM - 16) / 2;
+        u32 tile = MENU[i].program ? t->accent : t->text_dim;
+        if (on) tile = t->accent_text;
+        fb_rect((u32)(ix + 6), (u32)ty, 16, 16, gfx_mix(t->surface, tile, 70));
+        fb_bevel_thin(ix + 6, ty, 16, 16, t->edge_hi, t->edge_dark);
+        face_text(ix + 6 + (16 - face_width(first, FACE_SMALL)) / 2,
+                  ty + (16 - face_height(FACE_SMALL)) / 2, first,
+                  on ? t->text : t->text, FACE_SMALL);
+
+        face_text(ix + 30, iy + (MENU_ITEM - face_height(FACE_BODY)) / 2,
+                  label, fg, FACE_BODY);
+
+        /* A groove above the entries the desktop handles itself, which is
+           where a menu stops offering programs and starts offering the
+           machine. */
+        if (!MENU[i].program && i > 0 && MENU[i - 1].program)
+            fb_bevel_thin(ix + 4, iy - 2, iw - 8, 2, t->edge_shadow, t->edge_hi);
     }
+    (void)p;
 }
 
 /* The outline of where a dragged window would land. Drawn as a frame
@@ -1052,7 +1318,7 @@ static void draw_snap_preview(void) {
 
     int x, y, cw, ch;
     snap_rect(snap_preview, &x, &y, &cw, &ch);
-    int ow = cw + WM_BORDER * 2, oh = ch + WM_TITLE_H + WM_BORDER;
+    int ow = cw + WM_BORDER * 2, oh = ch + WM_TOP + WM_BORDER;
 
     for (int i = 0; i < 3; i++)
         fb_round_frame(x + i, y + i, ow - i * 2, oh - i * 2, t->corner, t->accent);
@@ -1066,7 +1332,7 @@ static void draw_snap_preview(void) {
 static void draw_resize_preview(void) {
     if (!resizing) return;
     const theme_t *t = theme();
-    int ow = resize_cw + WM_BORDER * 2, oh = resize_ch + WM_TITLE_H + WM_BORDER;
+    int ow = resize_cw + WM_BORDER * 2, oh = resize_ch + WM_TOP + WM_BORDER;
     for (int i = 0; i < 2; i++)
         fb_round_frame(resizing->x + i, resizing->y + i,
                        ow - i * 2, oh - i * 2, t->corner, t->accent);
@@ -1224,18 +1490,16 @@ static void draw_volume_panel(void) {
     volume_track(&tx, &ty, &tw);
     int px = tx - 16, py = taskbar_y() - VOLPOP_H - 8;
 
-    if (t->shadows) fb_shadow(px, py, VOLPOP_W, VOLPOP_H, 10, SHADOW);
-    fb_round_rect(px, py, VOLPOP_W, VOLPOP_H, 10, t->overlay);
-    fb_rect((u32)(px + 10), (u32)py, (u32)(VOLPOP_W - 20), 1, t->sheen);
-    fb_round_frame(px, py, VOLPOP_W, VOLPOP_H, 10, t->hairline);
+    fb_rect((u32)px, (u32)py, VOLPOP_W, VOLPOP_H, t->surface);
+    raised(px, py, VOLPOP_W, VOLPOP_H);
 
     int level = theme()->volume;
     int on = tw * level / 100;
 
-    fb_round_rect(tx, ty, tw, 6, 3, t->raised);
-    if (on > 0) fb_round_rect(tx, ty, on, 6, 3, t->accent);
-    fb_round_rect(tx + on - 6, ty - 4, 13, 13, 6, t->accent);
-    fb_round_frame(tx + on - 6, ty - 4, 13, 13, 6, darken(t->accent, 60));
+    fb_rect((u32)tx, (u32)ty, (u32)tw, 6, t->well);
+    if (on > 0) fb_rect((u32)tx, (u32)ty, (u32)on, 6, t->accent);
+    sunken(tx, ty, tw, 6);
+    button_face(tx + on - 5, ty - 5, 11, 16, false, false);
 
     char num[8];
     kformat(num, sizeof(num), "%d", level);
@@ -1306,10 +1570,8 @@ static void draw_net_panel(void) {
     int px, py;
     net_panel_rect(&px, &py);
 
-    if (t->shadows) fb_shadow(px, py, NETPOP_W, NETPOP_H, 10, SHADOW);
-    fb_round_rect(px, py, NETPOP_W, NETPOP_H, 10, t->overlay);
-    fb_rect((u32)(px + 10), (u32)py, (u32)(NETPOP_W - 20), 1, t->sheen);
-    fb_round_frame(px, py, NETPOP_W, NETPOP_H, 10, t->hairline);
+    fb_rect((u32)px, (u32)py, NETPOP_W, NETPOP_H, t->surface);
+    raised(px, py, NETPOP_W, NETPOP_H);
 
     int line = face_height(FACE_BODY) + 6;
     int ty = py + 12;
@@ -1366,12 +1628,10 @@ static void draw_net_panel(void) {
     dhcp_button_rect(&bx, &by, &bw, &bh);
     bool over = last_mx >= bx && last_mx < bx + bw
              && last_my >= by && last_my < by + bh;
-    u32 face = dhcp_running ? t->raised
-             : over ? gfx_mix(t->accent, t->text, 20) : t->accent;
-    fb_round_rect(bx, by, bw, bh, 6, face);
+    button_face(bx, by, bw, bh, false, over && !dhcp_running);
 
     const char *label = dhcp_running ? "asking..." : "ask for an address";
-    u32 label_colour = dhcp_running ? t->text_dim : t->accent_text;
+    u32 label_colour = dhcp_running ? t->text_dim : t->text;
     face_text(bx + bw / 2 - face_width(label, FACE_BODY) / 2,
               by + (bh - face_height(FACE_BODY)) / 2,
               label, label_colour, FACE_BODY);
@@ -1408,85 +1668,102 @@ static void volume_from_pointer(int mx) {
 static void draw_taskbar(void) {
     const theme_t *t = theme();
     int y = taskbar_y();
-    int px = TASKBAR_GAP;
-    int pw = (int)fb_width() - TASKBAR_GAP * 2;
+    int W = (int)fb_width();
 
-    if (t->shadows) fb_shadow(px, y, pw, TASKBAR_H, TASKBAR_R, SHADOW);
-    fb_round_rect(px, y, pw, TASKBAR_H, TASKBAR_R, t->overlay);
-    fb_rect((u32)(px + TASKBAR_R), (u32)y, (u32)(pw - TASKBAR_R * 2), 1, t->sheen);
-    fb_round_frame(px, y, pw, TASKBAR_H, TASKBAR_R, t->hairline);
+    /* Flush to the bottom edge and the full width of it, because a panel is
+       part of the machine rather than a card lying on the desktop. The
+       floating rounded one that was here read as an app, which is most of
+       why the whole desktop looked like a toy. */
+    fb_rect(0, (u32)y, (u32)W, TASKBAR_H, t->surface);
+    fb_bevel_thin(0, y, W, TASKBAR_H + 2, t->edge_hi, t->edge_hi);
+    fb_rect(0, (u32)y, (u32)W, 1, t->edge_hi);
 
-    /* The launcher badge, which is also what the desktop menu opens from. */
-    bool badge_hot = menu_open;
-    fb_round_rect(px + 8, y + 5, TASKBAR_BADGE_W, TASKBAR_H - 10, 6,
-                  badge_hot ? t->accent : t->raised);
-    face_text(px + 20, y + (TASKBAR_H - face_height(FACE_HEAD_BOLD)) / 2, "zelr",
-              badge_hot ? t->accent_text : t->accent, FACE_HEAD_BOLD);
+    /* --- the launcher ----------------------------------------------------- */
+    /* The same arithmetic the hit test uses, rather than a number that
+       happens to look right: a badge drawn somewhere its own click handler
+       does not expect is a button that works everywhere except where it
+       is. */
+    int bx = TASKBAR_GAP + 8, bh = TASKBAR_H - 10, by = y + 5;
+    bool badge_hot = menu_open || (last_my >= by && last_my < by + bh
+                                   && last_mx >= bx
+                                   && last_mx < bx + TASKBAR_BADGE_W);
+    button_face(bx, by, TASKBAR_BADGE_W, bh, menu_open, badge_hot);
+    face_text(bx + 12 + (menu_open ? 1 : 0),
+              by + (bh - face_height(FACE_HEAD_BOLD)) / 2 + (menu_open ? 1 : 0),
+              "zelr", t->accent, FACE_HEAD_BOLD);
 
-    /* The pinned apps. The one being dragged is left out and drawn under
-       the pointer instead; the list has already been reordered around it,
-       so what is on screen is the answer rather than a preview of it. */
+    /* --- the apps kept on it ---------------------------------------------- */
     int hot = pin_moved ? -1 : taskbar_pin_at(last_mx, last_my);
     int px_pin = taskbar_pins_x();
     for (int i = 0; i < pins_count(); i++, px_pin += PIN_STEP) {
         const pin_t *p = pin_at(i);
         if (pin_moved && i == pin_press) continue;
-        draw_pin_icon(px_pin, y + 4, p, i == hot, window_for_app(p->path) != 0);
+        bool running = window_for_app(p->path) != 0;
+        button_face(px_pin - 2, by, PIN_ICON + 4, bh, running, i == hot);
+        draw_pin_icon(px_pin, by + (bh - PIN_ICON) / 2, p, i == hot, running);
     }
     if (pin_moved && pin_press >= 0) {
         const pin_t *p = pin_at(pin_press);
-        if (p) draw_pin_icon(pin_at_x - PIN_ICON / 2, y + 2, p, true,
+        if (p) draw_pin_icon(pin_at_x - PIN_ICON / 2, by + 1, p, true,
                              window_for_app(p->path) != 0);
     }
 
+    /* --- one button a window ----------------------------------------------
+     *
+     * Bevelled and pressed in for whichever is in front, because that is the
+     * same language the rest of the desktop is in: the window you are using
+     * is the button that is down. */
     int x = taskbar_chips_x();
+    int room_end = taskbar_net_x() - 8;
     for (int i = 0; i < nwin; i++) {
         window_t *w = stack[i];
         if (shown_as_pin(w)) continue;          /* its icon already says so */
         bool focused = (i == nwin - 1) && !w->minimized;
-        int chip_face = focused ? FACE_BODY_BOLD : FACE_BODY;
-        int tw = face_width(w->title, chip_face) + 24;
-        if (x + tw > (int)fb_width() - TASKBAR_GAP - 120) break;
 
-        u32 chip = t->raised;
-        if (focused)           chip = t->accent_soft;
-        else if (w->minimized) chip = t->surface;
+        int tw = face_width(w->title, FACE_BODY) + 22;
+        if (tw > 160) tw = 160;
+        if (x + tw > room_end) break;
 
-        fb_round_rect(x, y + 5, tw, TASKBAR_H - 10, 6, chip);
-        face_text(x + 12, y + (TASKBAR_H - face_height(chip_face)) / 2, w->title,
-                  focused ? t->text : t->text_dim, chip_face);
+        bool over = last_mx >= x && last_mx < x + tw
+                 && last_my >= by && last_my < by + bh;
+        button_face(x, by, tw, bh, focused, over);
 
-        /* A full underline for the window in front, a short stub for one
-           that is only put away, so the taskbar says where everything is. */
-        if (focused)
-            fb_rect((u32)(x + 8), (u32)(y + TASKBAR_H - 6), (u32)(tw - 16), 2, t->accent);
-        else if (w->minimized)
-            fb_rect((u32)(x + tw / 2 - 5), (u32)(y + TASKBAR_H - 6), 10, 2, t->text_dim);
-
-        x += tw + 6;
+        int off = focused ? 1 : 0;
+        face_text(x + 8 + off, by + (bh - face_height(FACE_BODY)) / 2 + off,
+                  w->title, w->minimized ? t->text_dim : t->text, FACE_BODY);
+        x += tw + 3;
     }
 
-    /* The time on the right, and the volume to the left of it. */
+    /* --- the tray ----------------------------------------------------------
+     *
+     * Sunk, so the things in it read as indicators rather than as more
+     * buttons: a clock is not something to press and should not look like
+     * it. */
+    int tray_x = taskbar_net_x() - 6;
+    int tray_w = W - tray_x - 2;
+    fb_rect((u32)tray_x, (u32)by, (u32)tray_w, (u32)bh, t->surface);
+    sunken(tray_x, by, tray_w, bh);
+
     char clock[24];
     clock_text(clock, sizeof(clock));
-    face_text((int)fb_width() - TASKBAR_GAP - face_width(clock, FACE_BODY) - 16,
+    face_text(W - 8 - face_width(clock, FACE_BODY),
               y + (TASKBAR_H - face_height(FACE_BODY)) / 2, clock, t->text,
               FACE_BODY);
 
     {
         int vx = taskbar_volume_x();
-        bool hot = volume_open || on_volume_button(last_mx, last_my);
-        if (hot) fb_round_rect(vx - 2, y + 5, VOL_W + 4, TASKBAR_H - 10, 6,
-                               t->raised);
+        bool vhot = volume_open || on_volume_button(last_mx, last_my);
+        if (vhot) fb_rect((u32)(vx - 1), (u32)(by + 2), VOL_W + 2,
+                          (u32)(bh - 4), gfx_mix(t->surface, t->edge_hi, 70));
         draw_speaker(vx + 4, y + 9, t->volume ? t->text : t->text_dim,
                      t->volume);
     }
 
     {
         int nx = taskbar_net_x();
-        bool hot = net_open || on_net_button(last_mx, last_my);
-        if (hot) fb_round_rect(nx - 2, y + 5, NET_W + 4, TASKBAR_H - 10, 6,
-                               t->raised);
+        bool nhot = net_open || on_net_button(last_mx, last_my);
+        if (nhot) fb_rect((u32)(nx - 1), (u32)(by + 2), NET_W + 2,
+                          (u32)(bh - 4), gfx_mix(t->surface, t->edge_hi, 70));
 
         /* Three states, not two. A link with no address is the one people
            get stuck in, and an icon that cannot show it sends them looking
@@ -1502,20 +1779,22 @@ static void draw_taskbar(void) {
     /* And the name of the icon under the pointer, above it. */
     if (hot >= 0) {
         const pin_t *p = pin_at(hot);
-        int tw = face_width(p->label, FACE_BODY) + 18;
-        int th = 22;
+        int tw = face_width(p->label, FACE_BODY) + 14;
+        int th = 20;
         int tx = taskbar_pins_x() + hot * PIN_STEP + PIN_ICON / 2 - tw / 2;
-        int ty = y - th - 6;
+        int ty = y - th - 4;
 
-        if (tx < TASKBAR_GAP) tx = TASKBAR_GAP;
-        if (tx + tw > (int)fb_width() - TASKBAR_GAP)
-            tx = (int)fb_width() - TASKBAR_GAP - tw;
+        if (tx < 2) tx = 2;
+        if (tx + tw > W - 2) tx = W - 2 - tw;
 
-        if (t->shadows) fb_shadow(tx, ty, tw, th, 6, SHADOW);
-        fb_round_rect(tx, ty, tw, th, 6, t->overlay);
-        fb_round_frame(tx, ty, tw, th, 6, t->hairline);
-        face_text(tx + 9, ty + (th - face_height(FACE_BODY)) / 2,
-                  p->label, t->text, FACE_BODY);
+        /* The one yellow thing on the desktop, because that is what a tip
+           has been since before any of this, and it is never mistaken for
+           part of a window. */
+        u32 note = RGB(0xFF, 0xFF, 0xD0);
+        fb_rect((u32)tx, (u32)ty, (u32)tw, (u32)th, note);
+        fb_bevel_thin(tx, ty, tw, th, t->edge_dark, t->edge_dark);
+        face_text(tx + 7, ty + (th - face_height(FACE_BODY)) / 2,
+                  p->label, RGB(0x20, 0x20, 0x18), FACE_BODY);
     }
 }
 
@@ -1553,8 +1832,12 @@ static void composite(void) {
        what is beneath it and what is beneath it would otherwise be the
        last frame, blended again, every frame. */
     int cover = covering_index();
-    if (cover >= 0) fb_rect(0, 0, fb_width(), fb_height(), theme()->desktop);
-    else            draw_wallpaper();
+    if (cover >= 0) {
+        fb_rect(0, 0, fb_width(), fb_height(), theme()->desktop);
+    } else {
+        draw_wallpaper();
+        draw_desk_icons();      /* on the wallpaper, under every window */
+    }
 
     for (int i = cover > 0 ? cover : 0; i < nwin; i++) {
         window_t *w = stack[i];
@@ -1572,7 +1855,7 @@ static void composite(void) {
         int cw = w->cw, ch = w->ch;
         if (were_on) sti();
 
-        blit_surface(px, cw, ch, w->x + WM_BORDER, w->y + WM_TITLE_H);
+        blit_surface(px, cw, ch, w->x + WM_BORDER, w->y + WM_TOP);
     }
 
     for (int i = 0; i < cover; i++) stack[i]->dirty = false;
@@ -1653,15 +1936,17 @@ static void pin_activate(int i) {
 
 static int menu_item_at(int mx, int my) {
     if (!menu_open) return -1;
-    int h = MENU_N * MENU_ITEM + 12;
-    if (mx < menu_x || mx >= menu_x + MENU_W) return -1;
-    if (my < menu_y + 6 || my >= menu_y + h - 6) return -1;
-    int i = (my - menu_y - 6) / MENU_ITEM;
+    int h = MENU_N * MENU_ITEM + MENU_PAD * 2;
+    /* The strip is not a row of anything, so a click on it chooses nothing
+       rather than choosing whatever is level with it. */
+    if (mx < menu_x + MENU_BRAND || mx >= menu_x + MENU_W) return -1;
+    if (my < menu_y + MENU_PAD || my >= menu_y + h - MENU_PAD) return -1;
+    int i = (my - menu_y - MENU_PAD) / MENU_ITEM;
     return (i >= 0 && i < MENU_N) ? i : -1;
 }
 
 static void open_menu_at(int x, int y) {
-    int h = MENU_N * MENU_ITEM + 12;
+    int h = MENU_N * MENU_ITEM + MENU_PAD * 2;
     if (x + MENU_W > (int)fb_width()) x = (int)fb_width() - MENU_W - 4;
     if (y + h > panel_rest_y()) y = panel_rest_y() - h - 4;
     if (x < 4) x = 4;
@@ -1750,7 +2035,7 @@ static window_t *window_at(int mx, int my, bool *on_title, button_t *button) {
         if (mx < w->x || my < w->y || mx >= w->x + ow || my >= w->y + oh) continue;
 
         *button = button_at(w, mx, my);
-        *on_title = (my < w->y + WM_TITLE_H);
+        *on_title = (my >= w->y + WM_BORDER && my < w->y + WM_TOP);
         return w;
     }
     *on_title = false;
@@ -1878,7 +2163,7 @@ static void handle_mouse(int mx, int my, u8 buttons) {
             window_t *w = mouse_capture;
             wm_event_t ev = { WM_EV_MOUSE,
                               mx - (w->x + WM_BORDER),
-                              my - (w->y + WM_TITLE_H), 0, 0 };
+                              my - (w->y + WM_TOP), 0, 0 };
             wm_push_event(w, &ev);
         }
 
@@ -1964,7 +2249,7 @@ static void handle_mouse(int mx, int my, u8 buttons) {
        movement, even if the pointer strays outside. */
     if (mouse_capture) {
         window_t *w = mouse_capture;
-        int lx = mx - (w->x + WM_BORDER), ly = my - (w->y + WM_TITLE_H);
+        int lx = mx - (w->x + WM_BORDER), ly = my - (w->y + WM_TOP);
         if (w->owned_by_user) {
             wm_event_t ev = { WM_EV_MOUSE, lx, ly, buttons, 0 };
             wm_push_event(w, &ev);
@@ -1985,7 +2270,7 @@ static void handle_mouse(int mx, int my, u8 buttons) {
         if (on_taskbar_badge(mx, my)) {
             if (menu_open) { menu_open = false; need_frame(); }
             else open_menu_at(TASKBAR_GAP,
-                              panel_rest_y() - (MENU_N * MENU_ITEM + 12) - 8);
+                              panel_rest_y() - (MENU_N * MENU_ITEM + MENU_PAD * 2) - 2);
             return;
         }
 
@@ -2051,6 +2336,28 @@ static void handle_mouse(int mx, int my, u8 buttons) {
         int ty = taskbar_y();
         if (my >= ty && my < ty + TASKBAR_H) return;
 
+        /* An icon first, then the desktop itself. A single click picks one
+           out and a second within half a second opens it, which is the
+           arrangement everything with icons has used since there were
+           icons: dragging one has to begin by putting the pointer on it,
+           so the first click cannot be the one that opens it. */
+        int icon = desk_icon_at(mx, my);
+        if (icon >= 0) {
+            u64 now = timer_ticks();
+            bool again = (icon == desk_last_click)
+                      && (now - desk_last_tick) < timer_hz() / 2;
+            desk_selected = icon;
+            desk_last_click = icon;
+            desk_last_tick = now;
+            if (again) {
+                launch(DESK[icon].program);
+                desk_last_click = -1;
+            }
+            need_frame();
+            return;
+        }
+
+        desk_selected = -1;
         if (my < work_h()) open_menu_at(mx, my);
         return;
     }
@@ -2083,7 +2390,7 @@ static void handle_mouse(int mx, int my, u8 buttons) {
 
     mouse_capture = w;
     {
-        int lx = mx - (w->x + WM_BORDER), ly = my - (w->y + WM_TITLE_H);
+        int lx = mx - (w->x + WM_BORDER), ly = my - (w->y + WM_TOP);
         if (w->owned_by_user) {
             wm_event_t ev = { WM_EV_MOUSE, lx, ly, buttons | 0x80, 0 };
             wm_push_event(w, &ev);          /* 0x80 marks the initial press */
@@ -2299,7 +2606,7 @@ void wm_run(void) {
         if (menu_open && (still_moving(menu_since, MENU_MS)
                           || still_moving(menu_hover_since, HOVER_MS))) {
             need_frame_in(menu_x - 14, menu_y - 14,
-                          MENU_W + 28, MENU_N * MENU_ITEM + 12 + 28);
+                          MENU_W + 28, MENU_N * MENU_ITEM + MENU_PAD * 2 + 28);
             need_frame_in(last_mx - 2, last_my - 2, 20, 28);
         }
 
