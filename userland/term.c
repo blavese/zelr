@@ -871,8 +871,8 @@ static void cmd_kill(int argc, char **argv) {
 /* Starts a program and waits for it, reporting what it returned. This is
    the whole point of having spawn: the terminal is a ring 3 program starting
    another ring 3 program, with the kernel only lending a hand. */
-static void start_program(const char *path, bool background) {
-    int pid = spawn(path);
+static void start_program_on(const char *path, const char *arg, bool background) {
+    int pid = arg && arg[0] ? spawn_arg(path, arg) : spawn(path);
     if (pid < 0) { w_reset(); w_str("cannot start "); w_str(path); err(work); return; }
 
     if (background) {
@@ -890,6 +890,10 @@ static void start_program(const char *path, bool background) {
     if (status != 0) w_num((u32)status);
     w_str(", "); w_num((u32)elapsed); w_str(" ticks");
     print(work, status == 0 ? C_DIM : C_WARN);
+}
+
+static void start_program(const char *path, bool background) {
+    start_program_on(path, 0, background);
 }
 
 static void cmd_run(int argc, char **argv) {
@@ -1312,7 +1316,12 @@ static void run_line(char *cmdline) {
     zelr_stat st;
     if (stat(path, &st) == 0 && !st.is_dir) {
         bool bg = argc > 1 && argv[argc - 1][0] == '&';
-        start_program(path, bg);
+
+        /* Anything after the name is handed to the program as the one thing
+           it was started on, which for every program here is a file. */
+        const char *arg = 0;
+        if (argc > 1 && argv[1][0] != '&') arg = argv[1];
+        start_program_on(path, arg, bg);
         return;
     }
 

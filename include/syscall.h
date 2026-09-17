@@ -67,6 +67,11 @@
    works, and the first says so rather than hanging when the firmware wanted
    something this kernel does not do. */
 #define SYS_POWER         42
+
+/* Starting a program on something, and asking what this program was started
+   on. One string, which for everything that uses it is a path. */
+#define SYS_SPAWN_ARG     43
+#define SYS_GETARG        44
 #define POWER_OFF     0
 #define POWER_REBOOT  1
 
@@ -82,6 +87,7 @@ typedef struct {
     u32  pid;
     u32  state;              /* 0 ready, 1 running, 2 sleeping, 3 blocked, 4 dead */
     u32  slices;
+    u32  idle;               /* of those, spent halted waiting */
     u32  user;
     char name[64];
 } zelr_task_t;

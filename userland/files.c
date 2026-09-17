@@ -6,28 +6,49 @@
  *
  * Everything here goes through the ordinary file syscalls. There is no
  * privileged path and nothing it can do that a program written by anyone
- * else could not, which is the property worth keeping. */
+ * else could not, which is the property worth keeping.
+ *
+ * Opening a file means starting the program that knows what to do with it,
+ * and telling that program which file. Until there was one argument a task
+ * could be started with, the second half of that was impossible and this
+ * could only open folders.
+ */
 #include "zelr.h"
 #include "ui.h"
 
 #define MAX_ENTRIES 512
+#define NAME_MAX    64          /* as wide as the kernel's own names */
 #define PATH_MAX    256
 
+/* What a file is, as far as opening it goes. */
+#define KIND_DIR    0
+#define KIND_TEXT   1
+#define KIND_SOUND  2
+#define KIND_PROG   3
+#define KIND_OTHER  4
+
 typedef struct {
-    char name[32];
+    char name[NAME_MAX];
     u32  size;
     u32  is_dir;
+    int  kind;
 } entry;
 
 static entry entries[MAX_ENTRIES];
-static int   count;
-static char  cwd[PATH_MAX] = "/";
+static int   count;                     /* after the filter */
+static int   total;                     /* everything in the directory */
+static u32   total_bytes;
+
+static char  cwd[PATH_MAX] = "/home";
 static int   selected = -1;
-static int   first_row;                 /* the top of the scrolled view */
+static int   first_row;
 
 static char  status[128];
-static char  clip_path[PATH_MAX];       /* what copy or cut remembered */
+static char  clip_path[PATH_MAX];
 static int   clip_is_cut;
+
+static char  filter_buf[32];
+static ui_field filter_field;
 
 /* --- paths ---------------------------------------------------------------- */
 
@@ -50,7 +71,47 @@ static void parent_of(char *path) {
     if (!path[0]) { path[0] = '/'; path[1] = 0; }
 }
 
+static int ends_with(const char *name, const char *ext) {
+    int n = strlen(name), e = strlen(ext);
+    if (n <= e) return 0;
+    for (int i = 0; i < e; i++) {
+        char a = name[n - e + i], b = ext[i];
+        if (a >= 'A' && a <= 'Z') a = (char)(a + 32);
+        if (a != b) return 0;
+    }
+    return 1;
+}
+
+/* Which program should have this, decided from the name and where it is.
+   Nothing here reads the file to find out: a name is what a person sees and
+   a guess that disagrees with the name is a guess nobody can correct. */
+static int kind_of(const char *dir, const char *name, int is_dir) {
+    if (is_dir) return KIND_DIR;
+    if (!strncmp(dir, "/bin", 4)) return KIND_PROG;
+    if (ends_with(name, ".wav")) return KIND_SOUND;
+    if (ends_with(name, ".txt") || ends_with(name, ".md")
+        || ends_with(name, ".cfg") || ends_with(name, ".log")
+        || ends_with(name, ".c") || ends_with(name, ".h")
+        || ends_with(name, ".sh")) return KIND_TEXT;
+    return KIND_OTHER;
+}
+
+static const char *kind_name(int k) {
+    switch (k) {
+        case KIND_DIR:   return "folder";
+        case KIND_TEXT:  return "text";
+        case KIND_SOUND: return "sound";
+        case KIND_PROG:  return "program";
+        default:         return "file";
+    }
+}
+
 /* --- the listing ---------------------------------------------------------- */
+
+static void say(const char *msg) {
+    strncpy(status, msg, sizeof(status) - 1);
+    status[sizeof(status) - 1] = 0;
+}
 
 /* Directories first, then files, each alphabetical. readdir gives whatever
    order the filesystem stores, which for FAT is creation order, and a
@@ -61,9 +122,9 @@ static void sort_entries(void) {
         int j = i - 1;
         while (j >= 0) {
             entry *a = &entries[j];
-            int after;
-            if (a->is_dir != key.is_dir) after = !a->is_dir && key.is_dir;
-            else                         after = strcmp(a->name, key.name) > 0;
+            int after = (a->is_dir != key.is_dir)
+                        ? (!a->is_dir && key.is_dir)
+                        : (strcmp(a->name, key.name) > 0);
             if (!after) break;
             entries[j + 1] = entries[j];
             j--;
@@ -72,36 +133,54 @@ static void sort_entries(void) {
     }
 }
 
+/* True when a name passes whatever has been typed into the filter. Case is
+   ignored, because nobody typing three letters into a box means them in a
+   particular case. */
+static int matches(const char *name) {
+    if (!filter_buf[0]) return 1;
+    for (int i = 0; name[i]; i++) {
+        int k = 0;
+        while (filter_buf[k]) {
+            char a = name[i + k], b = filter_buf[k];
+            if (a >= 'A' && a <= 'Z') a = (char)(a + 32);
+            if (b >= 'A' && b <= 'Z') b = (char)(b + 32);
+            if (a != b) break;
+            k++;
+        }
+        if (!filter_buf[k]) return 1;
+    }
+    return 0;
+}
+
 static void reload(void) {
     count = 0;
+    total = 0;
+    total_bytes = 0;
     selected = -1;
     first_row = 0;
 
     zelr_stat st;
     for (int i = 0; i < MAX_ENTRIES && readdir(cwd, i, &st) == 1; i++) {
-        strncpy(entries[count].name, st.name, sizeof(entries[count].name) - 1);
-        entries[count].name[sizeof(entries[count].name) - 1] = 0;
-        entries[count].size = st.size;
-        entries[count].is_dir = st.is_dir;
-        count++;
+        total++;
+        if (!st.is_dir) total_bytes += st.size;
+        if (!matches(st.name)) continue;
+
+        entry *e = &entries[count++];
+        strncpy(e->name, st.name, NAME_MAX - 1);
+        e->name[NAME_MAX - 1] = 0;
+        e->size = st.size;
+        e->is_dir = st.is_dir;
+        e->kind = kind_of(cwd, e->name, (int)st.is_dir);
     }
     sort_entries();
 }
 
-static void say(const char *msg) {
-    strncpy(status, msg, sizeof(status) - 1);
-    status[sizeof(status) - 1] = 0;
-}
-
-/* --- what the buttons do --------------------------------------------------- */
-
-static void enter(int index) {
-    if (index < 0 || index >= count) return;
-    if (!entries[index].is_dir) return;
-    char next[PATH_MAX];
-    join(next, cwd, entries[index].name);
-    strncpy(cwd, next, sizeof(cwd) - 1);
+static void go_to(const char *where) {
+    strncpy(cwd, where, sizeof(cwd) - 1);
     cwd[sizeof(cwd) - 1] = 0;
+    filter_buf[0] = 0;
+    filter_field.len = 0;
+    filter_field.cursor = 0;
     reload();
 }
 
@@ -109,6 +188,47 @@ static void go_up(void) {
     parent_of(cwd);
     reload();
 }
+
+/* --- opening things -------------------------------------------------------
+ *
+ * The whole point of the argument a task can now be started with. Each kind
+ * goes to the program that knows about it, and that program is told which
+ * file rather than having to guess or ask.
+ */
+static void open_with(int index, const char *program) {
+    if (index < 0 || index >= count) return;
+    char target[PATH_MAX];
+    join(target, cwd, entries[index].name);
+
+    if (spawn_arg(program, target) < 0) say("could not start it");
+    else say("opened");
+}
+
+static void open_entry(int index) {
+    if (index < 0 || index >= count) return;
+    entry *e = &entries[index];
+
+    if (e->is_dir) {
+        char next[PATH_MAX];
+        join(next, cwd, e->name);
+        go_to(next);
+        return;
+    }
+
+    char target[PATH_MAX];
+    join(target, cwd, e->name);
+
+    switch (e->kind) {
+        case KIND_SOUND: open_with(index, "/bin/music"); break;
+        case KIND_PROG:
+            if (spawn(target) < 0) say("would not run");
+            else say("started");
+            break;
+        default: open_with(index, "/bin/notes"); break;
+    }
+}
+
+/* --- moving files around --------------------------------------------------- */
 
 /* Copying is a read and a write, because there is no syscall that does it in
    one and adding one would put a loop in the kernel that belongs here. */
@@ -122,13 +242,11 @@ static int copy_file(const char *from, const char *to) {
 static void do_paste(void) {
     if (!clip_path[0]) { say("nothing copied"); return; }
 
-    /* The name is whatever came after the last slash. */
     const char *leaf = clip_path;
     for (const char *p = clip_path; *p; p++) if (*p == '/') leaf = p + 1;
 
     char dest[PATH_MAX];
     join(dest, cwd, leaf);
-
     if (!strcmp(dest, clip_path)) { say("already here"); return; }
 
     if (copy_file(clip_path, dest) < 0) { say("copy failed"); return; }
@@ -154,39 +272,77 @@ static void do_delete(void) {
 /* --- the window ----------------------------------------------------------- */
 
 #define TOOLBAR_H 40
-#define CRUMB_H   26
+#define CRUMB_H   28
+#define SIDE_W    124
 
-static const char *const menu_items[] = { "Open", "Copy", "Cut", "Rename", "Delete" };
-#define MENU_COUNT 5
+static const char *const menu_items[] = {
+    "Open", "Edit", "Play", "Copy", "Cut", "Rename", "Delete"
+};
+#define MENU_COUNT 7
+
+/* The places worth one click. /usb is listed whether or not a stick is in,
+   because a list that changes shape under the pointer is worse than a row
+   that says there is nothing there. */
+static const struct { const char *label, *path; } PLACES[] = {
+    { "Home",      "/home" },
+    { "Documents", "/doc" },
+    { "Programs",  "/bin" },
+    { "System",    "/sys" },
+    { "Temp",      "/tmp" },
+    { "Stick",     "/usb" },
+    { "Root",      "/" },
+};
+#define N_PLACES ((int)(sizeof(PLACES) / sizeof(PLACES[0])))
+
+/* A square in the colour of whatever kind of thing this is. Five colours is
+   enough to tell a folder from a program from a sound at a glance, which is
+   the whole job an icon does in a list this size. */
+static u32 kind_tint(const ui_theme *t, int kind) {
+    switch (kind) {
+        case KIND_DIR:   return t->accent;
+        case KIND_TEXT:  return mix(t->fg, t->accent, 60);
+        case KIND_SOUND: return RGB(0x9A, 0x86, 0xE8);
+        case KIND_PROG:  return RGB(0xE0, 0xA0, 0x3C);
+        default:         return t->dim;
+    }
+}
 
 void _start(void) {
-    int win = win_create("Files", 720, 480);
+    int win = win_create("Files", 780, 520);
     if (win < 0) exit(1);
     win_allow_resize(win);
 
-    ui_theme t = ui_load_theme();
     ui_input in;
     memset(&in, 0, sizeof(in));
 
-    reload();
+    memset(&filter_field, 0, sizeof(filter_field));
+    filter_field.buf = filter_buf;
+    filter_field.cap = sizeof(filter_buf);
+
+    /* Started on a folder: show that one. */
+    char wanted[PATH_MAX];
+    if (getarg(wanted, sizeof(wanted)) > 0 && wanted[0]) go_to(wanted);
+    else reload();
     say("");
 
     /* Rename happens in place: the row turns into a field rather than a
        dialog appearing somewhere else on the screen. */
     int renaming = -1;
-    char rename_buf[32];
+    char rename_buf[NAME_MAX];
     ui_field rename_field;
     memset(&rename_field, 0, sizeof(rename_field));
     rename_field.buf = rename_buf;
     rename_field.cap = sizeof(rename_buf);
 
     int menu_open = 0, menu_x = 0, menu_y = 0;
+    int last_filter_len = 0;
 
     for (;;) {
         int w = win_width(win), h = win_height(win);
         u32 *px = win_surface(win);
         if (!px || w <= 0 || h <= 0) break;
         surface s = { px, w, h };
+        ui_theme t = ui_load_theme();
 
         ui_begin(&in);
         win_event ev;
@@ -215,44 +371,80 @@ void _start(void) {
                 ui_field_key(&rename_field, in.key);
             }
             in.key = 0;
+        } else if (filter_field.focused && in.key) {
+            if (in.key == 27) { filter_buf[0] = 0; filter_field.len = 0;
+                                filter_field.cursor = 0; filter_field.focused = 0; }
+            else ui_field_key(&filter_field, in.key);
+            in.key = 0;
         } else if (in.key) {
             if (in.key == KEY_UP && selected > 0) selected--;
             else if (in.key == KEY_DOWN && selected < count - 1) selected++;
-            else if (in.key == '\n') enter(selected);
+            else if (in.key == '\n') open_entry(selected);
             else if (in.key == '\b') go_up();
             else if (in.key == KEY_DELETE) do_delete();
         }
 
-        /* --- paint ------------------------------------------------------ */
-        fill(&s, t.bg);
-        ui_toolbar(&s, &t, w, TOOLBAR_H);
-
-        int bx = UI_PAD;
-        if (ui_button(&s, &in, &t, bx, (TOOLBAR_H - UI_BTN_H) / 2, 48, "Up")) go_up();
-        bx += 48 + UI_GAP;
-        if (ui_button(&s, &in, &t, bx, (TOOLBAR_H - UI_BTN_H) / 2, 64, "Home")) {
-            strcpy(cwd, "/home");
+        /* Typing in the filter changes what is listed, as it is typed. */
+        if (filter_field.len != last_filter_len) {
+            last_filter_len = filter_field.len;
             reload();
         }
-        bx += 64 + UI_GAP;
-        if (ui_button(&s, &in, &t, bx, (TOOLBAR_H - UI_BTN_H) / 2, 72, "New dir")) {
+
+        /* --- paint ------------------------------------------------------ */
+        fill(&s, t.bg);
+
+        /* The places, down the left. */
+        rect(&s, 0, 0, SIDE_W, h, t.panel);
+        rect(&s, SIDE_W - 1, 0, 1, h, t.line);
+        /* Below the toolbar, which runs the width of the window: a heading
+           tucked under it is a heading nobody can read. */
+        face_draw(&s, UI_PAD, TOOLBAR_H + UI_PAD, "PLACES", t.dim, UI_FACE_SMALL);
+
+        for (int i = 0; i < N_PLACES; i++) {
+            int iy = TOOLBAR_H + UI_PAD + 20 + i * (UI_ROW + 2);
+            int here = !strcmp(cwd, PLACES[i].path);
+            if (ui_row(&s, &in, &t, 0, iy, SIDE_W - 1, PLACES[i].label, 0, here) == 1)
+                go_to(PLACES[i].path);
+        }
+
+        int cx = SIDE_W;
+        int cw = w - SIDE_W;
+
+        ui_toolbar(&s, &t, w, TOOLBAR_H);
+        rect(&s, 0, 0, SIDE_W, TOOLBAR_H, t.panel);
+
+        int bx = cx + UI_PAD;
+        if (ui_button(&s, &in, &t, bx, (TOOLBAR_H - UI_BTN_H) / 2, 48, "Up")) go_up();
+        bx += 48 + UI_GAP;
+        if (ui_button(&s, &in, &t, bx, (TOOLBAR_H - UI_BTN_H) / 2, 60, "Open"))
+            open_entry(selected);
+        bx += 60 + UI_GAP;
+        if (ui_button(&s, &in, &t, bx, (TOOLBAR_H - UI_BTN_H) / 2, 86, "New folder")) {
             char target[PATH_MAX];
             join(target, cwd, "new folder");
             say(mkdir(target) < 0 ? "could not create" : "created");
             reload();
         }
-        bx += 72 + UI_GAP;
-        if (ui_button(&s, &in, &t, bx, (TOOLBAR_H - UI_BTN_H) / 2, 64, "Paste")) do_paste();
+        bx += 86 + UI_GAP;
+        if (ui_button(&s, &in, &t, bx, (TOOLBAR_H - UI_BTN_H) / 2, 60, "Paste"))
+            do_paste();
+
+        /* The filter, against the right hand end of the toolbar. */
+        int fw = 150;
+        if (cw > 460)
+            ui_field_draw(&s, &in, &t, w - UI_PAD - fw, (TOOLBAR_H - UI_BTN_H) / 2,
+                          fw, &filter_field, "filter");
 
         /* The path, as its own strip. */
-        rect(&s, 0, TOOLBAR_H, w, CRUMB_H, mix(t.bg, 0, 30));
-        text(&s, UI_PAD, TOOLBAR_H + (CRUMB_H - FONT_H) / 2, cwd, t.dim);
+        rect(&s, cx, TOOLBAR_H, cw, CRUMB_H, mix(t.bg, 0, 30));
+        face_draw(&s, cx + UI_PAD, TOOLBAR_H + (CRUMB_H - face_h(UI_FACE_BODY)) / 2,
+                  cwd, t.dim, UI_FACE_BODY);
 
         int list_y = TOOLBAR_H + CRUMB_H;
         int list_h = h - list_y - UI_ROW;
         int shown = list_h / UI_ROW;
+        if (shown < 1) shown = 1;
 
-        /* Keep the selection on screen, whichever way it moved. */
         if (selected >= 0) {
             if (selected < first_row) first_row = selected;
             if (selected >= first_row + shown) first_row = selected - shown + 1;
@@ -261,9 +453,10 @@ void _start(void) {
         if (first_row > count - shown) first_row = count - shown;
         if (first_row < 0) first_row = 0;
 
-        if (count == 0) {
-            text(&s, UI_PAD, list_y + UI_PAD, "(empty)", t.dim);
-        }
+        if (count == 0)
+            face_draw(&s, cx + UI_PAD, list_y + UI_PAD,
+                      filter_buf[0] ? "nothing matches" : "(empty)",
+                      t.dim, UI_FACE_BODY);
 
         for (int i = 0; i < shown && first_row + i < count; i++) {
             int idx = first_row + i;
@@ -271,35 +464,53 @@ void _start(void) {
             entry *e = &entries[idx];
 
             if (renaming == idx) {
-                rect(&s, 0, ry, w, UI_ROW, t.bg);
-                ui_field_draw(&s, &in, &t, UI_PAD, ry - 2, w - UI_PAD * 2 - UI_SCROLL_W,
-                              &rename_field, "name");
+                rect(&s, cx, ry, cw, UI_ROW, t.bg);
+                ui_field_draw(&s, &in, &t, cx + UI_PAD, ry - 2,
+                              cw - UI_PAD * 2 - UI_SCROLL_W, &rename_field, "name");
                 continue;
             }
 
-            /* A folder is marked rather than iconified: one glyph reads at
-               this size, a drawn icon does not. */
-            char label[40];
-            int li = 0;
-            label[li++] = e->is_dir ? '[' : ' ';
-            for (int k = 0; e->name[k] && li < (int)sizeof(label) - 2; k++)
-                label[li++] = e->name[k];
-            if (e->is_dir) label[li++] = ']';
-            label[li] = 0;
+            int over = ui_hit(&in, cx, ry, cw - UI_SCROLL_W, UI_ROW);
+            if (idx == selected)
+                rect(&s, cx, ry, cw - UI_SCROLL_W, UI_ROW, t.soft);
+            else if (over)
+                rect(&s, cx, ry, cw - UI_SCROLL_W, UI_ROW, mix(t.bg, t.fg, 14));
 
-            char size[24];
-            if (e->is_dir) {
-                strcpy(size, "folder");
-            } else {
-                int n = utoa(e->size, size);
-                size[n++] = ' '; size[n++] = 'B'; size[n] = 0;
+            /* The tag, then the name, then what it is and how big. */
+            round_rect(&s, cx + UI_PAD, ry + (UI_ROW - 12) / 2, 10, 12, 3,
+                       kind_tint(&t, e->kind));
+
+            int ty = ry + (UI_ROW - face_h(UI_FACE_BODY)) / 2;
+            face_draw(&s, cx + UI_PAD + 20, ty, e->name,
+                      idx == selected ? t.fg : mix(t.fg, t.dim, 90),
+                      UI_FACE_BODY);
+
+            if (cw > 380)
+                face_draw(&s, w - UI_SCROLL_W - 190, ty, kind_name(e->kind),
+                          t.dim, UI_FACE_SMALL);
+
+            if (!e->is_dir) {
+                char size[24];
+                int n;
+                if (e->size >= 1024) {
+                    n = utoa(e->size / 1024, size);
+                    size[n++] = ' '; size[n++] = 'K';
+                } else {
+                    n = utoa(e->size, size);
+                    size[n++] = ' '; size[n++] = 'B';
+                }
+                size[n] = 0;
+                face_draw(&s, w - UI_SCROLL_W - UI_PAD - face_w(size, UI_FACE_SMALL),
+                          ty, size, t.dim, UI_FACE_SMALL);
             }
 
-            int hit = ui_row(&s, &in, &t, 0, ry, w - UI_SCROLL_W, label, size, idx == selected);
-            if (hit == 1) {
-                if (selected == idx && e->is_dir) enter(idx);
+            if (over && in.released) {
+                in.released = 0;
+                if (selected == idx) open_entry(idx);
                 else selected = idx;
-            } else if (hit == 2) {
+            }
+            if (over && in.right_pressed) {
+                in.right_pressed = 0;
                 selected = idx;
                 menu_open = 1;
                 menu_x = in.mx;
@@ -309,35 +520,53 @@ void _start(void) {
 
         ui_scrollbar(&s, &t, w - UI_SCROLL_W, list_y, list_h, first_row, shown, count);
 
-        char right[32];
-        int n = utoa((u32)count, right);
-        right[n++] = ' ';
-        right[n++] = 'i'; right[n++] = 't'; right[n++] = 'e'; right[n++] = 'm';
-        right[n++] = 's'; right[n] = 0;
-        ui_statusbar(&s, &t, w, h, status[0] ? status : cwd, right);
+        /* --- what is down there ------------------------------------------- */
+        char right[48];
+        int n = utoa((u32)total, right);
+        const char *items = " items, ";
+        for (int i = 0; items[i]; i++) right[n++] = items[i];
+        n += utoa(total_bytes / 1024, right + n);
+        right[n++] = ' '; right[n++] = 'K'; right[n] = 0;
+
+        const char *left = status[0] ? status : cwd;
+        char detail[160];
+        if (!status[0] && selected >= 0 && selected < count) {
+            int d = 0;
+            for (int i = 0; entries[selected].name[i] && d < 90; i++)
+                detail[d++] = entries[selected].name[i];
+            detail[d++] = ' '; detail[d++] = '-'; detail[d++] = ' ';
+            const char *k = kind_name(entries[selected].kind);
+            for (int i = 0; k[i]; i++) detail[d++] = k[i];
+            detail[d] = 0;
+            left = detail;
+        }
+        ui_statusbar(&s, &t, w, h, left, right);
 
         if (menu_open) {
-            int pick = ui_menu(&s, &in, &t, menu_x, menu_y, 140, menu_items, MENU_COUNT);
+            int pick = ui_menu(&s, &in, &t, menu_x, menu_y, 150,
+                               menu_items, MENU_COUNT);
             if (pick >= 0) {
                 menu_open = 0;
-                if (pick == 0) enter(selected);
-                else if (pick == 1 && selected >= 0) {
+                if (pick == 0) open_entry(selected);
+                else if (pick == 1) open_with(selected, "/bin/notes");
+                else if (pick == 2) open_with(selected, "/bin/music");
+                else if (pick == 3 && selected >= 0) {
                     join(clip_path, cwd, entries[selected].name);
                     clip_is_cut = 0;
                     clip_set(clip_path, strlen(clip_path));
                     say("copied a path");
-                } else if (pick == 2 && selected >= 0) {
+                } else if (pick == 4 && selected >= 0) {
                     join(clip_path, cwd, entries[selected].name);
                     clip_is_cut = 1;
                     say("cut");
-                } else if (pick == 3 && selected >= 0) {
+                } else if (pick == 5 && selected >= 0) {
                     renaming = selected;
                     strncpy(rename_buf, entries[selected].name, sizeof(rename_buf) - 1);
                     rename_buf[sizeof(rename_buf) - 1] = 0;
                     rename_field.len = strlen(rename_buf);
                     rename_field.cursor = rename_field.len;
                     rename_field.focused = 1;
-                } else if (pick == 4) {
+                } else if (pick == 6) {
                     do_delete();
                 }
             } else if (in.pressed) {

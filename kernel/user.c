@@ -1,5 +1,6 @@
 /* Building and launching ring 3 processes. */
 #include "user.h"
+#include "io.h"
 #include "paging.h"
 #include "pmm.h"
 #include "sched.h"
@@ -81,6 +82,11 @@ int user_spawn_flat(const char *name, const u8 *image, u32 size) {
 }
 
 int user_spawn_elf(const char *name, const u8 *image, u32 size) {
+    return user_spawn_elf_arg(name, image, size, 0);
+}
+
+int user_spawn_elf_arg(const char *name, const u8 *image, u32 size,
+                       const char *arg) {
     u64 dir = paging_new_directory();
     if (!dir) return ELF_ERR_MEMORY;
 
@@ -90,7 +96,19 @@ int user_spawn_elf(const char *name, const u8 *image, u32 size) {
 
     if (!build_stack(dir)) { paging_free_directory(dir); return ELF_ERR_MEMORY; }
 
+    /* Interrupts off across the creation and the argument together: the
+       task is runnable the moment it is on the list, and a program that
+       reads its argument in its first instructions would otherwise find
+       the field still empty. */
+    bool were_on = interrupts_enabled();
+    cli();
     task_t *t = task_create_user(name, dir, entry, USER_STACK_TOP - 16);
+    if (t && arg) {
+        strncpy(t->arg, arg, sizeof(t->arg) - 1);
+        t->arg[sizeof(t->arg) - 1] = 0;
+    }
+    if (were_on) sti();
+
     if (!t) { paging_free_directory(dir); return ELF_ERR_MEMORY; }
     return (int)t->pid;
 }

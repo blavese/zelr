@@ -31,7 +31,7 @@ SCREEN_W, SCREEN_H = 1024, 768
 TASKBAR_H = 34
 TASKBAR_GAP = 10
 MENU_ITEM = 30
-MENU_ENTRIES = 9
+MENU_ENTRIES = 12
 MENU_TOP = (SCREEN_H - TASKBAR_H - TASKBAR_GAP
             - (MENU_ENTRIES * MENU_ITEM + 12) - 8)
 
@@ -84,10 +84,22 @@ def write_png(path, w, h, pixels):
 
 # What the launcher lists, in the order it lists it.
 TERMINAL, FILES, NOTES, PAINT, SETTINGS = 0, 1, 2, 3, 4
+MONITOR, MUSIC, CALC, ABOUT, CLOSE_ALL = 5, 6, 7, 8, 9
 
 
 def menu_item(n):
     return (90, MENU_TOP + MENU_ITEM * n + 15)
+
+
+def open_launcher(mon):
+    """The launcher, whether or not the panel is out.
+
+    The panel tucks itself away under a maximised window and comes back
+    when the pointer asks for it, so a click at the badge lands on the
+    wallpaper if the pointer was not already down there. Move first, let it
+    come out, then click."""
+    mon.click(*LAUNCHER)
+    time.sleep(1.0)
 
 
 def stroke(mon, x0, y0, steps):
@@ -182,8 +194,44 @@ def main():
         mon.send("sendkey alt-d", settle=1.8)
         shoot(mon, "wallpaper")
 
+
+        # --- the monitor, on its own, once it has history to draw ---------
+        #
+        # Everything else is closed first. The other pictures are of windows
+        # over windows on purpose, but this one is a graph, and a graph is
+        # worth looking at only if nothing is sitting on it.
+        #
+        # It samples four times a second and keeps thirty seconds, so a
+        # picture taken as it opens is an empty box. The wait is what puts
+        # something in it.
+        open_launcher(mon)
+        mon.click(*menu_item(CLOSE_ALL))
+        time.sleep(1.5)
+        open_launcher(mon)
+        mon.click(*menu_item(MONITOR))
+        time.sleep(10.0)
+        shoot(mon, "monitor")
+
+        # --- and the calculator over it, with an answer in it -------------
+        #
+        # Typed rather than clicked: the keys are a grid sized from the
+        # window, and a remembered position for one of them is the bug this
+        # project keeps finding.
+        open_launcher(mon)
+        mon.click(*menu_item(CALC))
+        time.sleep(2.5)
+        vm.type("78/4=")
+        time.sleep(1.2)
+        shoot(mon, "calc")
+
         # --- and the panel out of the way of a maximised window -----------
+        #
+        # Last, because a maximised window tucks the panel away, and the
+        # launcher lives on the panel: every shot that needs the launcher
+        # has to happen while there is still one to click.
         mon.click(*TERMINAL_ICON)
+        time.sleep(2.5)
+        vm.type("help\n")            # a fresh one, so give it something to say
         time.sleep(1.5)
         mon.send("sendkey alt-up", settle=1.8)
         shoot(mon, "maximised", park=HIGH)

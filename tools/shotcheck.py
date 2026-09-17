@@ -20,6 +20,7 @@ See tools/harness.py for why that distinction cost a day.
 """
 import os
 import sys
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from harness import (Guest, Checks, build_once, count_all, count_in,     # noqa: E402
@@ -50,10 +51,11 @@ BADGE = (40, 745)             # the taskbar launcher
 # upward from the taskbar, so adding a program moves everything above it and
 # a remembered y is wrong from then on.
 MENU_ENTRIES = ["Terminal", "Files", "Notes", "Paint", "Settings",
+                "Monitor", "Music", "Calculator",
                 "System info", "Close all", "Leave desktop", "Shut down"]
 MENU_ITEM_H = 30
-MENU_BOTTOM = 734             # the menu's lower edge, just above the taskbar
-MENU_RECT = (10, 540, 210, 730)
+MENU_PAD = 6                  # the inset above the first entry
+MENU_RECT = (10, 400, 210, 716)
 MENU_PANEL = (0x3F, 0x46, 0x4D)   # the floating layer
 PAGE = (120, 120, 700, 480)
 
@@ -65,6 +67,39 @@ PAGE = (120, 120, 700, 480)
 # screen, which is what they were always asking about: the window, not the
 # desktop it is on.
 ABOVE = (0, 0, 1024, 700)
+
+
+def menu_top(px, w, h):
+    """The menu's top edge, by looking for it.
+
+    It used to be a number. The menu grows upward from the panel, so where
+    it starts depends on how many entries it has and where the panel is
+    resting, and both of those changed: four more programs pushed it up and
+    the panel moved off the bottom edge. The remembered y then pointed one
+    entry down the list, the check clicked the entry under Settings, and
+    every check after it failed saying Settings never opened.
+    """
+    x0, x1 = MENU_RECT[0], MENU_RECT[2]
+    for y in range(h):
+        if count_in(px, w, (x0, y, x1, y + 1), MENU_PANEL) > (x1 - x0) // 2:
+            return y
+    return None
+
+
+def settled_menu_top(mon, tries=16):
+    """The same, once it has stopped moving.
+
+    The menu rises into place, and enough of it is on screen to say it is
+    open before it has finished arriving."""
+    last = None
+    for _ in range(tries):
+        w, h, px, ppm = mon.screen("menu")
+        top = menu_top(px, w, h)
+        if top is not None and top == last:
+            return top
+        last = top
+        time.sleep(0.25)
+    return last
 
 
 def main():
@@ -109,11 +144,12 @@ def main():
             timeout=25)
         c.add("the launcher menu opens", opened, shot)
 
-        # Counted from the bottom of the menu rather than remembered.
+        # Found on the screen rather than worked out from constants.
+        top = settled_menu_top(mon)
+        c.add("the menu's top edge is on the screen", top is not None, shot)
         idx = MENU_ENTRIES.index("Settings")
-        from_bottom = len(MENU_ENTRIES) - 1 - idx
         w, h, px, shot, ran = mon.click_for(
-            60, MENU_BOTTOM - 6 - from_bottom * MENU_ITEM_H - MENU_ITEM_H // 2,
+            60, (top or 0) + MENU_PAD + idx * MENU_ITEM_H + MENU_ITEM_H // 2,
             "settings", lambda w, h, px: count_in(px, w, ABOVE, INDIGO) > 500,
             timeout=40)
         c.add("it launches settings, another ring 3 program", ran, shot)

@@ -147,11 +147,14 @@ static void join_from(char **argv, u32 argc, u32 start, char *out, u32 cap) {
 static void cmd_ps(void) {
     task_t *t = task_list();
     if (!t) { kprintf("(no tasks)\n"); return; }
-    kprintf("  PID  STATE     SLICES  NAME\n");
+    /* Slices is every tick the scheduler handed this task. Waiting is the
+       ones it spent halted, so the difference is what it actually did. */
+    kprintf("  PID  STATE     SLICES  WAITING  NAME\n");
     const char *st[] = { "ready", "running", "sleeping", "dead" };
     task_t *p = t;
     do {
-        kprintf("  %3d  %-8s  %6d  %s\n", p->pid, st[p->state], p->slices, p->name);
+        kprintf("  %3d  %-8s  %6d  %7d  %s\n", p->pid, st[p->state],
+                p->slices, (u32)p->idle_ticks, p->name);
         p = p->next;
     } while (p != t);
 }
@@ -513,7 +516,7 @@ void shell_task(void) {
     prompt();
     for (;;) {
         int ch = kbd_trygetchar();
-        if (ch < 0) { hlt(); continue; }   /* woken by the timer or a key */
+        if (ch < 0) { task_idle_wait(); continue; }  /* the timer, or a key */
         /* The console has no shortcuts, so a chord is just its character. */
         char c = (char)KEY_CODE(ch);
 

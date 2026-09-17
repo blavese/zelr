@@ -200,6 +200,14 @@ warncount="$(printf '%s' "$build_out" | grep -c 'warning:')"
 vercheck() { python tools/check_version.py; }
 run_step "the version is not behind the newest tag" vercheck
 
+# Every struct that crosses a system call is declared twice, once for the
+# kernel and once for programs, and nothing makes the two agree. The kernel
+# copies the size of its own, so a field that is wider on its side is written
+# past the end of the program's variable. That has happened twice, and cost a
+# day each time. This reads both headers, and takes no time at all.
+abicheck() { python tools/abicheck.py; }
+run_step "the kernel and its programs agree on the structs" abicheck
+
 # --- the kernel's own checks ----------------------------------------------
 #
 # A fresh disk each time: a test that passes only because a previous run left
@@ -350,6 +358,11 @@ if [ "$MODE" = "screen" ] || [ "$MODE" = "full" ]; then
 
   # And the machine turning itself off.
   powertest() { keep timeout 600 python tools/powercheck.py; }
+
+  # The programs that come with it: a calculator checked by making it work
+  # out a sum and then typing the answer in by hand, and a music player
+  # checked by recording what came out of the machine.
+  apptest() { keep timeout 600 python tools/appcheck.py; }
   par_start "the windows go where they are told" desktest
   par_start "a usb keyboard and mouse are found and used" usbtest
   par_start "input survives being touched during boot" inputtest
@@ -357,6 +370,7 @@ if [ "$MODE" = "screen" ] || [ "$MODE" = "full" ]; then
   par_start "a usb stick mounts, and files copy off it" mounttest
   par_start "files keep the names they were given" nametest
   par_start "the machine turns itself off" powertest
+  par_start "the programs it ships with do what they say" apptest
 
   par_wait
 fi

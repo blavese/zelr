@@ -77,6 +77,11 @@ typedef struct {
        way is still a machine somebody can type at. */
     bool autodesktop;
 
+    /* How loud, nought to a hundred. Kept here because this is the file
+       the desktop's settings live in and the control is on the panel, not
+       because it has anything to do with how things look. */
+    int  volume;
+
     /* The screen size to ask for. Zero for whatever the machine gave us,
        which is the only answer on one whose firmware set the mode. */
     int  want_w, want_h;
@@ -92,6 +97,11 @@ bool theme_reload(void);
 /* Writes the current theme back out, which is how the settings program's
    choices survive a reboot. */
 bool theme_save(void);
+
+/* Changing how loud, and remembering it. The taskbar's control calls this
+   rather than writing the file itself, so there is one place that knows
+   what the file looks like. */
+void theme_set_volume(int percent);
 
 /* The named presets a settings program offers. */
 #define THEME_PRESETS 6

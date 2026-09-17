@@ -175,9 +175,13 @@ void _start(void) {
     ui_input in;
     memset(&in, 0, sizeof(in));
 
-    /* A file may have been left for us by whoever started this. */
+    /* Whatever this was started on, which is how the file manager's open
+       reaches the editor. The file left in /cfg is the older way of saying
+       the same thing and still works. */
     char wanted[PATH_MAX];
-    if (slurp("/cfg/notes-open", wanted, sizeof(wanted) - 1) > 0) {
+    if (getarg(wanted, sizeof(wanted)) > 0 && wanted[0]) {
+        load(wanted);
+    } else if (slurp("/cfg/notes-open", wanted, sizeof(wanted) - 1) > 0) {
         int n = strlen(wanted);
         while (n > 0 && (wanted[n - 1] == '\n' || wanted[n - 1] == ' ')) wanted[--n] = 0;
         load(wanted);
