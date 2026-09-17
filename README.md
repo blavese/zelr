@@ -49,6 +49,11 @@ When it fails it says why.
 </tr>
 </table>
 
+![a web browser showing a page fetched over http](docs/browser.png)
+
+<sub>a web browser: that page came off a real web server, over this system's
+own TCP, and was parsed and laid out by the program showing it</sub>
+
 Every one of those was photographed by `tools/shots.py`, which boots the
 machine, drives it, and saves what came out. They are not mockups and they do
 not go stale quietly.
@@ -89,8 +94,8 @@ are driving it down a serial line or something has gone wrong.
 
 A terminal opens, over a grey desktop with icons down the left of it. Click
 the badge in the corner, or the wallpaper, for the launcher: a file manager,
-an editor, paint, settings, a system monitor, a music player, a calculator,
-and what the machine is made of. Drag a title bar to move a window; the three
+an editor, paint, settings, a system monitor, a music player, a calculator, a
+web browser, and what the machine is made of. Drag a title bar to move a window; the three
 buttons at its right put it away, fill the screen, or close it.
 Drag the bottom right corner to resize, or drag a title bar to an edge to
 snap. Alt and tab changes window, alt and an arrow snaps, alt and d clears
@@ -133,7 +138,9 @@ PageUp scrolls back.
     cat page.html
 
 That gets an address from the network, downloads a live web page over TCP, and
-saves it to a disk that survives closing the window.
+saves it to a disk that survives closing the window. `browser example.com`,
+or the browser in the launcher, shows the same page laid out rather than as
+markup.
 
 ## running it on a real machine
 
@@ -679,6 +686,38 @@ means it was let go somewhere else and the click is lost again. An event is
 overwritten only when it carries the same buttons as the one before it and
 the one after it.
 
+**A web browser.** It opens a TCP connection with this system's own stack,
+asks a server for a page, reads the HTML, lays it out against the width of
+its own window and draws it with the letterforms in `face.h`. There is an
+address bar, a history with back and forward, a scrollbar, and links you can
+click.
+
+There is no CSS in it. A page is drawn the way a page was drawn before there
+was any: headings bigger, paragraphs with air around them, lists indented and
+bulleted, preformatted text in the fixed pitch font, links blue and
+underlined, and everything in the order the markup puts it. That is an answer
+rather than a stopgap. A page whose meaning is in its markup reads properly,
+and a page whose meaning is entirely in a style sheet reads as one long
+column, which is what it is.
+
+The work is not in the request. It is in the three ways a server can say
+where a body ends, all of which are common and only one of which is obvious:
+a content length, chunks each with their own size, or nothing at all and the
+body ends when the connection does. A client that knows one of them loses the
+end of about half the web without ever reporting a problem. It is also in the
+markup: script that looks exactly like prose to anything reading for angle
+brackets, tags that are never closed, entities that are not the characters
+they spell, and a page full of curly quotes and dashes on a machine whose
+font is the printable half of ASCII. Each of those is written back the way it
+was written before there was anything but ASCII, so a reader loses the shape
+of a mark rather than the sense of it.
+
+What it cannot do is https, and that is not a footnote: it is most of the
+web. TLS means a certificate parser, big integer arithmetic and a key
+exchange or two, all of which have to be written here as well. It is the next
+piece of work rather than a limitation being papered over, and until it is
+done the browser says so on the page instead of failing quietly.
+
 **The network, and being straight about it.** There is an icon on the panel
 next to the speaker, and it says three things apart rather than two: no
 link, a link with no address, and a link that can reach something. The
@@ -782,7 +821,7 @@ is still the kernel's own, on the console; the one in a window is a program.
 ## testing
 
 The kernel tests itself. `./run.sh -T` boots with selftest on the command line,
-runs 387 checks across every subsystem, then writes to QEMU's debug-exit port
+runs 390 checks across every subsystem, then writes to QEMU's debug-exit port
 so the host gets a real exit status.
 
     [string]              8 checks   [graphics]           13 checks
@@ -803,17 +842,17 @@ so the host gets a real exit status.
     [elf]                 7 checks   [acpi and pcie]       4 checks
     [userspace]           4 checks   [interrupt routing]   9 checks
     [video]               7 checks   [clipboard]          14 checks
-    [mouse]               1 check    [clock]              18 checks
+    [mouse]               4 checks   [clock]              18 checks
 
-    387 passed, 0 failed
+    390 passed, 0 failed
     SELFTEST_PASS
 
 The processor section is two checks on a machine with one CPU and eleven on
 a machine with several, where it hands work to each of them and requires the
-count they share to come back exact. `qemu-system-x86_64 -smp 4` reaches 396.
+count they share to come back exact. `qemu-system-x86_64 -smp 4` reaches 399.
 
 The same checks run again on `-machine q35`, which has PCIe and an AHCI
-controller rather than a 1996 chipset and a PIO disk, and reach 395 there.
+controller rather than a 1996 chipset and a PIO disk, and reach 398 there.
 Two bugs found the day that was added were invisible on the older machine:
 the block layer would not split a request past the eight sectors AHCI
 accepts, and the ACPI tables were never read on a UEFI machine at all.

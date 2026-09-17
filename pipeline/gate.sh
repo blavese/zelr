@@ -374,6 +374,10 @@ if [ "$MODE" = "screen" ] || [ "$MODE" = "full" ]; then
   # client gets right is measured against somebody else's implementation
   # rather than against another half of the same idea.
   webtest() { keep timeout 900 python tools/webcheck.py; }
+
+  # And the browser on top of it: a page off that server, drawn, with its
+  # links clicked and its history walked.
+  browsertest() { keep timeout 900 python tools/browsercheck.py; }
   par_start "the windows go where they are told" desktest
   par_start "a usb keyboard and mouse are found and used" usbtest
   par_start "input survives being touched during boot" inputtest
@@ -383,6 +387,7 @@ if [ "$MODE" = "screen" ] || [ "$MODE" = "full" ]; then
   par_start "the machine turns itself off" powertest
   par_start "an address is asked for and arrives" nettest
   par_start "pages come back off a real web server" webtest
+  par_start "the browser shows a page and follows a link" browsertest
   par_start "the programs it ships with do what they say" apptest
 
   par_wait

@@ -100,3 +100,10 @@ builtin_monitor_end:
 builtin_notes_start:
 .incbin "build/user/notes.elf"
 builtin_notes_end:
+
+.balign 4
+.global builtin_browser_start
+.global builtin_browser_end
+builtin_browser_start:
+.incbin "build/user/browser.elf"
+builtin_browser_end:

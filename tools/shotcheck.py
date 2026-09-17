@@ -51,12 +51,12 @@ BADGE = (40, 751)             # the taskbar launcher, flush to the bottom
 # upward from the taskbar, so adding a program moves everything above it and
 # a remembered y is wrong from then on.
 MENU_ENTRIES = ["Terminal", "Files", "Notes", "Paint", "Settings",
-                "Monitor", "Music", "Calculator",
+                "Monitor", "Music", "Calculator", "Browser",
                 "System info", "Close all", "Leave desktop", "Shut down"]
 MENU_ITEM_H = 24
 MENU_PAD = 4                  # the inset above the first entry
 MENU_BRAND = 26               # the strip down the left, which is not a row
-MENU_RECT = (0, 440, 226, 728)
+MENU_RECT = (0, 300, 226, 728)
 MENU_PANEL = (0xD6, 0xD3, 0xCD)   # the surface everything is built from
 PAGE = (120, 120, 700, 480)
 
@@ -81,11 +81,23 @@ def menu_top(px, w, h):
     every check after it failed saying Settings never opened.
     """
     x0, y0, x1, y1 = MENU_RECT
-    # Inside the menu's own band, not merely inside its columns. Scanning
-    # every row on the screen found the top border of a window higher up
-    # instead: the frame is the same grey the menu is, and once the frame
-    # stopped being one pixel wide there was enough of it in these columns
-    # to look like a menu. The click then went to the top of the screen.
+
+    # Downwards, through a band that begins above the menu and stops before
+    # the panel, and only through the menu's own columns.
+    #
+    # Both halves of that matter and each one has been wrong. Scanning every
+    # row on the screen found the top border of a window instead, because the
+    # frame is the same grey the menu is. Then the band was made to start
+    # below where the menu began, and adding one more program to the launcher
+    # grew it upwards past the start of the band: the scan began in the
+    # middle of the menu and called that the top, so every row was counted
+    # from twenty four pixels too low and the click went one entry down the
+    # list. It opened the monitor and reported that settings would not start.
+    #
+    # The band is the whole space a launcher of any sensible length can
+    # occupy. What has to stay true is that nothing pale is drawn in these
+    # columns above the menu, which on this desktop is the terminal, and the
+    # terminal's page is dark.
     for y in range(max(0, y0), min(h, y1)):
         if count_in(px, w, (x0, y, x1, y + 1), MENU_PANEL) > (x1 - x0) // 2:
             return y
@@ -157,18 +169,34 @@ def main():
         c.add("the menu's top edge is on the screen", top is not None, shot)
         idx = MENU_ENTRIES.index("Settings")
 
-        w, h, px, shot, ran = mon.click_for(
-            MENU_BRAND + 40,
-            (top or 0) + MENU_PAD + idx * MENU_ITEM_H + MENU_ITEM_H // 2,
-            # Waited for on all six swatches rather than on the accent.
-            # The accent was already on the screen before the click, from
-            # the terminal's own prompt, so the wait ended immediately and
-            # the picture was taken before Settings had drawn anything: the
-            # check passed, and what it was checking had not happened yet.
-            "settings",
-            lambda w, h, px: all(count_in(px, w, ABOVE, sw) > 200
-                                 for sw in SWATCHES),
-            timeout=40)
+        # Waited for on all six swatches rather than on the accent. The
+        # accent was already on the screen before the click, from the
+        # terminal's own prompt, so the wait ended immediately and the
+        # picture was taken before Settings had drawn anything: the check
+        # passed, and what it was checking had not happened yet.
+        drew = lambda w, h, px: all(count_in(px, w, ABOVE, sw) > 200
+                                    for sw in SWATCHES)
+
+        # And retried as a whole gesture rather than as a repeated click.
+        # A click on a menu entry closes the menu whatever else it does, so
+        # a second click at the same place lands on the wallpaper and a
+        # third one after that does too: the retry could never work, and
+        # what it reported was that Settings would not start.
+        ran = False
+        for attempt in range(3):
+            w, h, px, shot, ran = mon.click_for(
+                MENU_BRAND + 40,
+                (top or 0) + MENU_PAD + idx * MENU_ITEM_H + MENU_ITEM_H // 2,
+                "settings", drew, timeout=30, tries=1)
+            if ran:
+                break
+            w, h, px, shot, opened = mon.click_for(
+                BADGE[0], BADGE[1], "launcher-again",
+                lambda w, h, px: count_in(px, w, MENU_RECT, MENU_PANEL) > 8000,
+                timeout=25)
+            if not opened:
+                break
+            top = settled_menu_top(mon) or top
         c.add("it launches settings, another ring 3 program", ran, shot)
         c.add("whose accent swatches are all on screen",
               all(count_in(px, w, ABOVE, sw) > 200 for sw in SWATCHES), shot)

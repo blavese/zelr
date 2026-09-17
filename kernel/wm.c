@@ -248,6 +248,7 @@ static const struct {
     { "Monitor",      "/bin/monitor" },
     { "Music",        "/bin/music" },
     { "Calculator",   "/bin/calc" },
+    { "Browser",      "/bin/browser" },
     { "System info",  0 },
     { "Close all",    0 },
     { "Leave desktop", 0 },
@@ -2491,6 +2492,24 @@ void wm_run(void) {
     last_theme_check = timer_ticks();
 
     while (running) {
+        /* Every change of the buttons first, in the order they happened and
+           at the position each happened at.
+         *
+         * Reading the state below is not enough on its own. One pass of this
+           loop ends in compositing the whole screen, and a press and a
+           release that both happen inside one of them read as no change at
+           all: the buttons were up before and they are up now. That is a
+           click on a busy desktop doing nothing, with nothing to say why,
+           and it is what a swatch clicked three times running with no effect
+           turned out to be. */
+        mouse_edge_t edge;
+        while (mouse_take_edge(&edge)) {
+            last_mx = edge.x; last_my = edge.y;
+            handle_mouse(edge.x, edge.y, edge.buttons);
+            last_buttons = edge.buttons;
+            need_frame();
+        }
+
         int mx = mouse_x(), my = mouse_y();
         u8 buttons = mouse_buttons();
 

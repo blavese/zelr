@@ -286,6 +286,28 @@ class Monitor:
 
     def click(self, x, y):
         self.move_to(x, y)
+
+        # And then check it got there, walking again if it did not.
+        #
+        # The walk is reliable until the machine is busy. With several
+        # windows up and the compositor working, some of the steps are lost
+        # and the pointer ends up short: measured, a walk to the launcher
+        # from the panel did not move it at all, and the click went to the
+        # icon it was already sitting on.
+        #
+        # Reading the pointer straight after a move gives the position
+        # before it, which is why correcting from one reading made this
+        # worse when it was tried before. `pointer` waits for two readings
+        # that agree, which is where it has come to rest, and a second walk
+        # from a known position lands.
+        for _ in range(2):
+            at = self.pointer()
+            if at is None:
+                break
+            if abs(at[0] - x) <= 3 and abs(at[1] - y) <= 3:
+                break
+            self.move_to(x, y)
+
         # Held, rather than pressed and let go as fast as the monitor will
         # take it. The window manager reads the mouse once per pass of its
         # own loop, and a pass that ends in compositing the whole screen is
@@ -347,9 +369,15 @@ class Monitor:
         return last
 
     def _pointer_once(self):
-        ppm = os.path.join(BUILD, "pointer.ppm")
+        # Named after this process, because the gate runs several of these
+        # machines at once and they all write into the same build directory.
+        # One deleting the file another was still reading is a check that
+        # fails with a permission error from Windows and nothing to do with
+        # what it was checking.
+        tag = "pointer-%d" % os.getpid()
+        ppm = os.path.join(BUILD, tag + ".ppm")
         try:
-            w, h, px, _ = self.screen("pointer")
+            w, h, px, _ = self.screen(tag)
         except (RuntimeError, ValueError):
             return None
         finally:

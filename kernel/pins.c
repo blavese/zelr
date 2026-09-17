@@ -22,6 +22,7 @@ static const pin_t DEFAULTS[] = {
     { "Notes",    "/bin/notes" },
     { "Paint",    "/bin/paint" },
     { "Settings", "/bin/settings" },
+    { "Browser",  "/bin/browser" },
 };
 
 int pins_count(void) { return count; }

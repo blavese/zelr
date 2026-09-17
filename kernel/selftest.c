@@ -403,6 +403,47 @@ static void test_video(void) {
     ok("font has glyph data", inked);
 }
 
+/* A press and a release that both happen between two reads of the state.
+ *
+ * Nothing samples fast enough to be sure of catching one: the window manager
+ * reads the mouse once a pass of its loop and a pass that composites the
+ * whole screen is not short. So the driver keeps every change until it is
+ * taken, and this is that. Without it a click on a busy desktop does nothing
+ * and there is nothing anywhere to say why. */
+static void test_mouse_edges(void) {
+    mouse_edge_t e;
+    while (mouse_take_edge(&e)) { }             /* start from empty */
+
+    /* Down and up again with no reading in between, which is the case. */
+    mouse_inject(0, 0, 1);
+    mouse_inject(0, 0, 0);
+
+    bool saw_down = false, saw_up = false;
+    int n = 0;
+    while (mouse_take_edge(&e)) {
+        if (e.buttons & 1) saw_down = true;
+        else if (saw_down) saw_up = true;
+        n++;
+    }
+    ok("a press and release inside one frame are both kept", saw_down && saw_up);
+    ok("and in the order they happened", n == 2);
+
+    /* And the position each one happened at, which is what a click is: where
+       the button went down, not where the pointer drifted to afterwards. */
+    while (mouse_take_edge(&e)) { }
+    i32 was_x = mouse_x();
+    mouse_inject(7, 0, 1);                      /* moved and pressed */
+    mouse_inject(9, 0, 1);                      /* moved again, still down */
+    mouse_inject(0, 0, 0);
+    bool right_place = false;
+    while (mouse_take_edge(&e))
+        if (e.buttons & 1) right_place = (e.x == was_x + 7);
+    ok("a press carries where the pointer was when it happened", right_place);
+
+    while (mouse_take_edge(&e)) { }
+    mouse_inject(-16, 0, 0);                    /* put it back */
+}
+
 static void test_mouse(void) {
     if (!mouse_present()) { kprintf("  SKIP  no mouse\n"); return; }
     ok("pointer starts on screen",
@@ -1585,13 +1626,25 @@ static void test_trackpad(void) {
     syn_reset_state(true);
     syn_feed(3000, 3000, 60, 4, 0);
     syn_lift();
-    ok("a quick touch that went nowhere is a left click",
-       mouse_buttons() == 0x01);
 
-    /* And is held, because the window manager reads the buttons once a pass
-       and a click released before the next one never happened. */
+    /* Both of these are looked at before either is reported.
+     *
+     * The hold is eight ticks, and printing one line of a result scrolls a
+     * framebuffer console, which moves several megabytes and can take
+     * longer than that. Asking the question after announcing the answer to
+     * the one before it meant the hold had sometimes already expired, and
+     * the check failed for having been slow to ask rather than for anything
+     * being wrong with what it asked about. */
+    bool down_at_lift = (mouse_buttons() == 0x01);
     syn_tick();
-    ok("and the click is still down a moment later", mouse_buttons() == 0x01);
+    bool down_next_pass = (mouse_buttons() == 0x01);
+
+    ok("a quick touch that went nowhere is a left click", down_at_lift);
+
+    /* The window manager reads the buttons once a pass, and a click let go
+       before the next one never happened as far as it is concerned. */
+    ok("and the click is not let go on the next pass", down_next_pass);
+
     sleep_ms(120);
     syn_tick();
     ok("and is let go after that", mouse_buttons() == 0);
@@ -2228,7 +2281,7 @@ int selftest_run(void) {
     kprintf("[elf]\n");        test_elf();
     kprintf("[userspace]\n");  test_userspace();
     kprintf("[video]\n");      test_video();
-    kprintf("[mouse]\n");      test_mouse();
+    kprintf("[mouse]\n");      test_mouse(); test_mouse_edges();
     kprintf("[graphics]\n");   test_gfx();
     kprintf("[windows]\n");    test_wm();
     kprintf("[window server]\n"); test_winsrv();

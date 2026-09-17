@@ -61,6 +61,7 @@ static const struct { const char *label, *path; } APPS[] = {
     { "Monitor",  "/bin/monitor" },
     { "Music",    "/bin/music" },
     { "Calc",     "/bin/calc" },
+    { "Browser",  "/bin/browser" },
 };
 #define N_APPS ((int)(sizeof(APPS) / sizeof(APPS[0])))
 

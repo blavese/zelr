@@ -1,0 +1,304 @@
+/* Asking a web server for a page, and knowing when it has finished.
+ *
+ * The part of this that takes work is not the request. It is the three
+ * different ways a server can say where the body stops, and a client that
+ * only knows one of them loses the end of about half the pages on the web
+ * without ever reporting a problem:
+ *
+ *   a content length, and the body is exactly that many bytes
+ *   chunked, and the body arrives in pieces each headed by its own size
+ *   neither, and the body ends when the connection does
+ *
+ * All three are here. Which one is in use is decided by the headers and not
+ * by whether the bytes happen to look like one.
+ */
+#pragma once
+#include "zelr.h"
+#include "web.h"
+
+#define WEB_ERR_SCHEME   -1     /* https, which needs a TLS this has not got */
+#define WEB_ERR_CONNECT  -2
+#define WEB_ERR_SEND     -3
+#define WEB_ERR_EMPTY    -4
+#define WEB_ERR_HEADERS  -5     /* an answer with no blank line in it */
+
+typedef struct {
+    int   status;
+    char *body;
+    int   len;
+    int   truncated;               /* the page is bigger than the buffer */
+    char  location[URL_TEXT];      /* where a redirect points */
+    char  ctype[64];
+} response_t;
+
+/* --- building the request ------------------------------------------------ */
+
+static inline int wh_add(char *buf, int cap, int n, const char *s) {
+    for (; *s; s++) {
+        if (n >= cap - 1) return -1;
+        buf[n++] = *s;
+    }
+    buf[n] = 0;
+    return n;
+}
+
+static inline int wh_add_num(char *buf, int cap, int n, int v) {
+    char d[12];
+    int k = 0;
+    if (!v) d[k++] = '0';
+    while (v > 0) { d[k++] = (char)('0' + v % 10); v /= 10; }
+    while (k) {
+        if (n >= cap - 1) return -1;
+        buf[n++] = d[--k];
+    }
+    buf[n] = 0;
+    return n;
+}
+
+/* --- reading the headers ------------------------------------------------- */
+
+/* The value of one header, or an empty string. Folded, because a server may
+   send Content-Length or content-length and both mean the same thing. */
+static inline int wh_header(const char *head, int hlen, const char *name,
+                            char *out, int cap) {
+    out[0] = 0;
+    int nlen = w_len(name);
+    for (int i = 0; i + nlen + 1 < hlen; i++) {
+        if (i && head[i - 1] != '\n') continue;      /* only at a line start */
+        int ok = 1;
+        for (int j = 0; j < nlen; j++)
+            if (w_lower(head[i + j]) != w_lower(name[j])) { ok = 0; break; }
+        if (!ok || head[i + nlen] != ':') continue;
+
+        int at = i + nlen + 1;
+        while (at < hlen && (head[at] == ' ' || head[at] == '\t')) at++;
+        int n = 0;
+        while (at < hlen && head[at] != '\r' && head[at] != '\n') {
+            if (n < cap - 1) out[n++] = head[at];
+            at++;
+        }
+        out[n] = 0;
+        return 1;
+    }
+    return 0;
+}
+
+static inline int wh_number(const char *s) {
+    int v = 0, any = 0;
+    while (*s == ' ') s++;
+    while (*s >= '0' && *s <= '9') { v = v * 10 + (*s++ - '0'); any = 1; }
+    return any ? v : -1;
+}
+
+static inline int wh_hex(const char *s, int len, int *used) {
+    int v = 0, i = 0;
+    for (; i < len; i++) {
+        char c = s[i];
+        int d;
+        if (c >= '0' && c <= '9') d = c - '0';
+        else if (c >= 'a' && c <= 'f') d = c - 'a' + 10;
+        else if (c >= 'A' && c <= 'F') d = c - 'A' + 10;
+        else break;
+        v = v * 16 + d;
+    }
+    *used = i;
+    return i ? v : -1;
+}
+
+/* Where the headers end, or -1. A server is entitled to use bare newlines,
+   and one that does is not broken enough to refuse to talk to. */
+static inline int wh_split(const char *buf, int len, int *skip) {
+    for (int i = 0; i + 1 < len; i++) {
+        if (buf[i] == '\n' && buf[i + 1] == '\n') { *skip = 2; return i; }
+        if (i + 3 < len && buf[i] == '\r' && buf[i + 1] == '\n'
+            && buf[i + 2] == '\r' && buf[i + 3] == '\n') { *skip = 4; return i; }
+    }
+    return -1;
+}
+
+/* Turns a chunked body into a plain one, in the buffer it is already in.
+   Every byte written is behind the byte being read, so this cannot run over
+   itself. Returns the length, or -1 if the pieces do not add up. */
+static inline int wh_dechunk(char *body, int len) {
+    int r = 0, w = 0;
+    for (;;) {
+        int used = 0;
+        int size = wh_hex(body + r, len - r, &used);
+        if (size < 0) return w ? w : -1;
+        r += used;
+        /* Anything after the size on that line is an extension, and the line
+           ends at the newline whatever is in it. */
+        while (r < len && body[r] != '\n') r++;
+        r++;
+        if (size == 0) return w;
+        if (r + size > len) {
+            /* The last piece is short: keep what there is rather than
+               throwing away a page that is all there but the tail. */
+            size = len - r;
+            if (size <= 0) return w;
+            for (int i = 0; i < size; i++) body[w + i] = body[r + i];
+            return w + size;
+        }
+        for (int i = 0; i < size; i++) body[w + i] = body[r + i];
+        w += size;
+        r += size;
+        while (r < len && (body[r] == '\r' || body[r] == '\n')) r++;
+    }
+}
+
+/* --- the fetch ------------------------------------------------------------
+ *
+ * Everything the server says goes into `buf`, and the body is a pointer into
+ * it once the headers have been measured off the front. One buffer rather
+ * than two because a program here has no allocator, and a second buffer of
+ * the same size would be most of what a machine with 64 MiB has spare. */
+static inline int web_fetch(const url_t *u, char *buf, int cap, response_t *r) {
+    r->status = 0;
+    r->body = buf;
+    r->len = 0;
+    r->truncated = 0;
+    r->location[0] = 0;
+    r->ctype[0] = 0;
+
+    if (u->secure) return WEB_ERR_SCHEME;
+    if (connect(u->host, u->port) != 0) return WEB_ERR_CONNECT;
+
+    char req[URL_PATH + URL_HOST + 256];
+    int n = 0;
+    n = wh_add(req, sizeof(req), n, "GET ");
+    if (n >= 0) n = wh_add(req, sizeof(req), n, u->path);
+    if (n >= 0) n = wh_add(req, sizeof(req), n, " HTTP/1.1\r\nHost: ");
+    if (n >= 0) n = wh_add(req, sizeof(req), n, u->host);
+    if (n >= 0 && u->port != 80) {
+        n = wh_add(req, sizeof(req), n, ":");
+        if (n >= 0) n = wh_add_num(req, sizeof(req), n, u->port);
+    }
+    /* identity, because there is no decompressor here and a server that is
+       allowed to gzip will. Close, because this makes one request per
+       connection and a server holding the socket open afterwards is a wait
+       for nothing. */
+    if (n >= 0) n = wh_add(req, sizeof(req), n,
+                           "\r\nUser-Agent: zelr\r\n"
+                           "Accept: text/html,text/plain,*/*\r\n"
+                           "Accept-Encoding: identity\r\n"
+                           "Connection: close\r\n\r\n");
+    if (n < 0) { disconnect(); return WEB_ERR_SEND; }
+
+    /* The socket takes 1400 bytes at a time, and a long path can be more
+       than that. */
+    int sent = 0;
+    while (sent < n) {
+        int piece = n - sent;
+        if (piece > 1400) piece = 1400;
+        if (send(req + sent, piece) < 0) { disconnect(); return WEB_ERR_SEND; }
+        sent += piece;
+    }
+
+    int total = 0, quiet = 0;
+    int hlen = -1, skip = 0, want = -1, chunked = 0;
+
+    for (;;) {
+        int room = cap - 1 - total;
+        if (room <= 0) { r->truncated = 1; break; }
+        int piece = room > 32768 ? 32768 : room;
+
+        int got = recv(buf + total, piece);
+        if (got == NET_EOF) break;
+        if (got < 0) break;
+        if (got == 0) {
+            /* Nothing for a while. Three of those in a row is a server that
+               has stopped talking without saying so, which is different from
+               one that is merely slow: the first two are waited through. */
+            if (++quiet >= 3) break;
+            continue;
+        }
+        quiet = 0;
+        total += got;
+        buf[total] = 0;
+
+        if (hlen < 0) {
+            hlen = wh_split(buf, total, &skip);
+            if (hlen >= 0) {
+                char v[64];
+                if (wh_header(buf, hlen, "transfer-encoding", v, sizeof(v)))
+                    chunked = w_starts_fold(v, "chunked");
+                if (!chunked && wh_header(buf, hlen, "content-length", v, sizeof(v)))
+                    want = wh_number(v);
+            }
+        }
+
+        /* Stop as soon as the answer is complete rather than waiting for the
+           connection to close. A server that ignores Connection: close would
+           otherwise hold this here for the length of three timeouts on every
+           single page. */
+        if (hlen >= 0 && want >= 0 && total - hlen - skip >= want) break;
+        if (hlen >= 0 && chunked) {
+            /* The end of a chunked body is a zero sized piece. */
+            int at = total - 5;
+            if (at < hlen) at = hlen;
+            for (int i = at; i + 4 < total + 1 && i + 4 <= total; i++) {
+                if (buf[i] == '0' && buf[i + 1] == '\r' && buf[i + 2] == '\n'
+                    && buf[i + 3] == '\r' && buf[i + 4] == '\n') {
+                    quiet = 99;
+                    break;
+                }
+            }
+            if (quiet == 99) break;
+        }
+    }
+
+    disconnect();
+    buf[total < cap ? total : cap - 1] = 0;
+
+    if (total == 0) return WEB_ERR_EMPTY;
+    if (hlen < 0) hlen = wh_split(buf, total, &skip);
+    if (hlen < 0) return WEB_ERR_HEADERS;
+
+    if (total > 12 && buf[0] == 'H') {
+        int s = 0;
+        for (int i = 9; i < 12; i++) {
+            if (buf[i] < '0' || buf[i] > '9') { s = 0; break; }
+            s = s * 10 + (buf[i] - '0');
+        }
+        r->status = s;
+    }
+
+    wh_header(buf, hlen, "location", r->location, sizeof(r->location));
+    wh_header(buf, hlen, "content-type", r->ctype, sizeof(r->ctype));
+
+    r->body = buf + hlen + skip;
+    r->len = total - hlen - skip;
+    if (r->len < 0) r->len = 0;
+
+    if (chunked) {
+        int d = wh_dechunk(r->body, r->len);
+        r->len = d > 0 ? d : 0;
+    } else if (want >= 0 && want < r->len) {
+        r->len = want;                       /* ignore anything after it */
+    }
+    r->body[r->len] = 0;
+    return r->status ? r->status : WEB_ERR_EMPTY;
+}
+
+/* Follows redirects, because a bare fetch lands on "301 moved" for a great
+   many perfectly ordinary addresses. Bounded, and a loop is reported rather
+   than followed until the machine gives up. */
+#define WEB_MAX_HOPS 6
+
+static inline int web_get(url_t *u, char *buf, int cap, response_t *r) {
+    for (int hop = 0; hop < WEB_MAX_HOPS; hop++) {
+        int rc = web_fetch(u, buf, cap, r);
+        if (rc < 0) return rc;
+        if (rc != 301 && rc != 302 && rc != 303 && rc != 307 && rc != 308)
+            return rc;
+        if (!r->location[0]) return rc;
+
+        url_t next;
+        if (!url_join(u, r->location, &next)) return rc;
+        if (w_same(next.host, u->host) && w_same(next.path, u->path)
+            && next.port == u->port)
+            return rc;                       /* pointing at itself */
+        url_copy(u, &next);
+    }
+    return r->status;
+}

@@ -23,6 +23,7 @@ import zlib
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from harness import Guest, build_once, count_in, ROOT      # noqa: E402
+from webserver import Server                               # noqa: E402
 
 DISK = os.path.join(ROOT, "shots.%d.img" % os.getpid())
 OUT = os.path.join(ROOT, "docs")
@@ -42,7 +43,7 @@ PINS_X = TASKBAR_GAP + 8 + BADGE_W + 12
 
 MENU_BRAND = 26               # the strip down the left, which is not a row
 MENU_ITEM, MENU_PAD = 24, 4
-MENU_ENTRIES = 12
+MENU_ENTRIES = 13
 MENU_TOP = PANEL_Y - (MENU_ENTRIES * MENU_ITEM + MENU_PAD * 2) - 2
 MENU_W = 226
 MENU_RECT = (0, MENU_TOP, MENU_W, MENU_TOP + MENU_ENTRIES * MENU_ITEM
@@ -119,7 +120,8 @@ def write_png(path, w, h, pixels):
 
 # What the launcher lists, in the order it lists it.
 TERMINAL, FILES, NOTES, PAINT, SETTINGS = 0, 1, 2, 3, 4
-MONITOR, MUSIC, CALC, ABOUT, CLOSE_ALL = 5, 6, 7, 8, 9
+MONITOR, MUSIC, CALC, BROWSER = 5, 6, 7, 8
+ABOUT, CLOSE_ALL = 9, 10
 
 
 def menu_item(n):
@@ -172,12 +174,25 @@ def started(mon, x, y, name, before, timeout=45):
         raise SystemExit("nothing started from " + name)
 
 
-def run_app(mon, index, name):
-    """Open the launcher, pick an entry, and make sure a program started."""
-    before = panel_now(mon)
-    open_launcher(mon)
-    x, y = menu_item(index)
-    started(mon, x, y, name, before)
+def run_app(mon, index, name, tries=3):
+    """Open the launcher, pick an entry, and make sure a program started.
+
+    The whole gesture is repeated, not just the second half of it. Clicking
+    the entry again after a click that did not take lands on the wallpaper,
+    because the first one closed the menu whatever else it did: the retry
+    could never work, and what it produced was three clicks on the desktop
+    and a report that the program would not start."""
+    for attempt in range(tries):
+        before = panel_now(mon)
+        open_launcher(mon)
+        x, y = menu_item(index)
+        _, _, _, _, ok = mon.click_for(
+            x, y, name,
+            lambda w, h, px: region(px, w, PANEL_BAND) != before,
+            timeout=30, tries=1)
+        if ok:
+            return
+    raise SystemExit("nothing started from " + name)
 
 
 def close_all(mon):
@@ -226,9 +241,18 @@ def main():
     build_once()
     os.makedirs(OUT, exist_ok=True)
 
-    vm = Guest(DISK, memory=64)
+    # A web server on this machine, so the browser's picture is of a page
+    # that was actually fetched rather than of one typed into a file. This
+    # project's own server rather than a site on the internet, because a
+    # picture that needs somebody else to be up is a picture that will one
+    # day be of an error message.
+    srv = Server()
+    srv.__enter__()
+
+    vm = Guest(DISK, memory=192, extra=srv.qemu_args())
     try:
         vm.wait_boot()
+        vm.run("dhcp", timeout=25)
         mon = vm.monitor()
 
         # --- the console, before anything graphical happens ---------------
@@ -326,6 +350,19 @@ def main():
         if not ok:
             raise SystemExit("the terminal did not come back")
         time.sleep(1.5)
+
+        # --- the browser, on a page off a real server ----------------------
+        #
+        # Before the terminal is maximised, because a maximised window fills
+        # the screen and a picture of the browser with one behind it is a
+        # picture of the wrong thing.
+        vm.type("browser http://" + srv.host + "/\n")
+        time.sleep(16)
+        shoot(mon, "browser", park=HIGH)
+
+        before = panel_now(mon)
+        started(mon, TERMINAL_ICON[0], TERMINAL_ICON[1], "term-front", before)
+        time.sleep(1.5)
         vm.type("help\n")            # a fresh one, so give it something to say
         time.sleep(1.5)
         mon.send("sendkey alt-up", settle=1.8)
@@ -333,6 +370,7 @@ def main():
 
     finally:
         vm.stop()
+        srv.__exit__(None, None, None)
         try:
             os.remove(DISK)
         except OSError:
