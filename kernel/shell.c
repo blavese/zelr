@@ -292,6 +292,9 @@ static void execute(char *buf) {
         if (!net_up()) { kprintf("no network card\n"); return; }
         const u8 *m = net_mac();
         char b[20];
+        /* Which card, because there can now be more than one kind and a usb
+           adapter arriving is the sort of thing worth being able to see. */
+        kprintf("card     %s\n", netdev_name());
         kprintf("mac      %02x:%02x:%02x:%02x:%02x:%02x\n", m[0],m[1],m[2],m[3],m[4],m[5]);
         if (net_ip()) {
             net_format_ip(net_ip(), b);      kprintf("address  %s\n", b);

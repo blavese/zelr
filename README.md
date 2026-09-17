@@ -631,6 +631,24 @@ that. Atheros parts are the exception, because their MAC is in hardware.
 So a machine with wireless it cannot use says which card and why, which is
 more useful than an empty list of networks and a good deal more honest.
 
+**Ethernet over USB**, which is the answer to a laptop whose wireless will
+not start without a vendor binary. There is still a socket on the side of
+it, and a phone with tethering turned on presents itself as a network
+adapter over the same protocol an adapter does. Nothing in it has to be
+taken on trust from a binary: RNDIS is published, it is two bulk endpoints
+and a handful of messages posted through the control endpoint, and it runs
+over the xHCI stack that was already there for the keyboard.
+
+Two things in it cost an afternoon each and are worth writing down. The
+buffers a control message is built in cannot be on the stack: the controller
+is handed a physical address and this kernel hands it the pointer it has, so
+anything it is pointed at has to live where the two are the same, which the
+heap is and a kernel stack is not always. And a query carries no information
+buffer, so the offset of that buffer is zero: naming an offset for a buffer
+that is not there puts it one past the end of the message, and a device that
+checks stalls the whole transfer. What that looks like from this side is one
+message sending and the next one not.
+
 **WPA2, written out.** Joining a protected network is not sending the
 password: the password never crosses the air. Both ends grind it into the
 same key and then prove to each other that they did. All of that is
@@ -941,6 +959,7 @@ orders of magnitude away from Linux, which is roughly 30 million lines.
     kernel/crypto.c    sha-1, hmac, pbkdf2 and aes, written out
     kernel/wpa.c       what a wireless password turns into
     kernel/wifi.c      what wireless hardware is here, and whether it is usable
+    kernel/usbnet.c    ethernet over usb, for a phone or an adapter
     userland/monitor.c what the machine is doing, while it does it
     userland/music.c   wav files, resampled to whatever the card wants
     userland/calc.c    arithmetic in millionths, because there is no fpu
