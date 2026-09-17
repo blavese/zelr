@@ -78,6 +78,60 @@ static void machine_exit(u32 code) {
     for (;;) hlt();
 }
 
+/* Every network controller on the bus, driven or not.
+ *
+ * Which matters more than it looks. A wireless card is not one kind of
+ * thing: most of them run the 802.11 MAC as firmware on a processor of
+ * their own, and that firmware is a binary from the vendor, so a kernel
+ * that will not carry one cannot make those cards transmit at all. It is
+ * not a question of writing more code. Atheros parts are the exception,
+ * because their MAC is in hardware and the driver talks to it directly,
+ * and they can therefore be driven by a kernel written from scratch.
+ *
+ * So the useful thing a machine can say about a card it cannot drive is
+ * who made it, because that decides whether driving it is possible. */
+static const char *pci_vendor_name(u16 vendor) {
+    switch (vendor) {
+        case 0x8086: return "intel";
+        case 0x168C: return "atheros";
+        case 0x10EC: return "realtek";
+        case 0x14E4: return "broadcom";
+        case 0x1814: return "ralink";
+        case 0x14C3: return "mediatek";
+        case 0x1969: return "qualcomm";
+        case 0x1AF4: return "virtio";
+        case 0x1022: return "amd";
+        default:     return "unknown";
+    }
+}
+
+static void net_survey(void) {
+    pci_dev_t found[6];
+    u32 n = pci_list_class(0x02, 0x00, found, 6);            /* ethernet */
+    u32 room = n < 6 ? 6 - n : 0;
+    u32 other = pci_list_class(0x02, 0x80, found + (n < 6 ? n : 6), room);
+
+    u32 total = n + other;
+    if (total > 6) total = 6;
+
+    for (u32 i = 0; i < total; i++) {
+        bool wireless = i >= n;
+        const char *maker = pci_vendor_name(found[i].vendor);
+
+        /* Atheros is called out by name because it is the one answer that
+           means a radio this kernel could drive on its own terms. */
+        const char *note = !wireless            ? "ethernet"
+                         : found[i].vendor == 0x168C
+                           ? "wireless, no firmware needed"
+                           : "wireless, needs vendor firmware";
+
+        kprintf("  card    %s %04x:%04x at %d:%d.%d, %s\n",
+                maker, found[i].vendor, found[i].device,
+                found[i].bus, found[i].slot, found[i].func, note);
+        bb_log("card %04x:%04x %s", found[i].vendor, found[i].device, note);
+    }
+}
+
 static void banner(void) {
     vga_set_color(VGA_LCYAN, VGA_BLACK);
     kprintf("\n  +--------------------------------+\n");
@@ -319,6 +373,7 @@ void kmain(handoff_t *h) {
         kprintf("  net     no card found\n");
         bb_log("net no card this kernel can drive");
     }
+    net_survey();
     bb_mark("input");
     /* Before either driver, because both arrive through it and neither can
        be trusted to leave it in a state the other one needs. */
