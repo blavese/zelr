@@ -420,6 +420,22 @@ static void need(const char *usage) { w_reset(); w_str("usage: "); w_str(usage);
 
 /* --- looking around ----------------------------------------------------- */
 
+static void cmd_shutdown(int argc, char **argv) {
+    (void)argc; (void)argv;
+    say("switching off");
+    power_off();
+    /* Only here when the firmware wanted something this kernel does not do,
+       which is worth saying rather than looking like nothing happened. */
+    err("this machine will not power off by itself");
+}
+
+static void cmd_reboot(int argc, char **argv) {
+    (void)argc; (void)argv;
+    say("restarting");
+    power_reboot();
+    err("this machine did not restart");
+}
+
 static void cmd_ls(int argc, char **argv) {
     const char *where = argc > 1 ? argv[1] : ".";
     zelr_stat st;
@@ -1092,16 +1108,37 @@ static void apply_palette(int index) {
 
 static void save_theme(const char *name) { spit(THEME_FILE, name, strlen(name)); }
 
+/* Which palette a terminal nobody has chosen one for should be.
+ *
+ * The desktop's own light mode is a system setting and this program is the
+ * one window on it that does not read the system palette: a terminal has
+ * its own idea of colour and always has. So it follows the setting only
+ * when it has not been told otherwise, and `theme` still wins for good. */
+static int default_palette(void) {
+    char cfg[512];
+    int n = slurp("/zelr.cfg", cfg, sizeof(cfg) - 1);
+    if (n < 0) n = 0;
+    cfg[n] = 0;
+    /* One key, looked for at the start of a line, which is all this needs
+       and less than pulling the whole settings header in for it. */
+    for (int i = 0; cfg[i]; i++) {
+        if (i && cfg[i - 1] != '\n') continue;
+        if (strncmp(cfg + i, "light ", 6)) continue;
+        return cfg[i + 6] == '0' ? 0 : 1;           /* slate, or paper */
+    }
+    return 0;
+}
+
 static void load_theme(void) {
     char buf[32];
     int n = slurp(THEME_FILE, buf, sizeof(buf) - 1);
-    if (n <= 0) { apply_palette(0); return; }
+    if (n <= 0) { apply_palette(default_palette()); return; }
     buf[n] = 0;
     for (int i = 0; buf[i]; i++) if (buf[i] == '\n' || buf[i] == '\r') { buf[i] = 0; break; }
 
     for (int i = 0; i < N_PALETTES; i++)
         if (strcmp(PALETTES[i].name, buf) == 0) { apply_palette(i); return; }
-    apply_palette(0);
+    apply_palette(default_palette());
 }
 
 static void cmd_theme(int argc, char **argv) {
@@ -1189,6 +1226,8 @@ typedef struct {
 static const command COMMANDS[] = {
     { "help",    cmd_help,    "[COMMAND]",     "this, or detail on one command" },
     { "ls",      cmd_ls,      "[PATH]",        "list a directory" },
+    { "shutdown", cmd_shutdown, "",            "turn the machine off" },
+    { "reboot",  cmd_reboot,  "",              "start it again" },
     { "tree",    cmd_tree,    "[PATH]",        "everything below a directory" },
     { "cd",      cmd_cd,      "[PATH]",        "change directory, no argument goes home" },
     { "pwd",     cmd_pwd,     "",              "where you are" },
@@ -1644,6 +1683,17 @@ int main(void) {
                 scr.h = ev.y;
                 fit_to_window();
                 view = 0;
+                changed = 1;
+            }
+            if (ev.type == WIN_EV_SCROLL) {
+                /* Three lines a step, which is what everything that has
+                   ever had a wheel does. view counts backwards from the
+                   end, so turning the wheel down means less of it. */
+                int max = n_lines - (rows - 1);
+                if (max < 0) max = 0;
+                view -= ev.y * 3;
+                if (view < 0) view = 0;
+                if (view > max) view = max;
                 changed = 1;
             }
             if (ev.type == WIN_EV_KEY) { on_key(ev.key); changed = 1; }

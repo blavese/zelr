@@ -231,6 +231,16 @@ static void on_mouse(device_t *d, u32 len) {
     i32 dx = (i8)d->buf[1];
     i32 dy = (i8)d->buf[2];
     mouse_inject(dx, -dy, buttons);
+
+    /* A fourth byte, where there is one, is the wheel. The boot protocol
+       describes three and says nothing about a fourth, and mice send one
+       anyway; a report that stops at three simply never gets here. HID
+       counts a wheel the other way round from PS/2: away from the hand is
+       positive there and up the page here. */
+    if (len >= 4) {
+        i32 dz = (i8)d->buf[3];
+        if (dz) mouse_inject_scroll(-dz);
+    }
 }
 
 static void on_report(u8 slot, u8 dci, u32 residual) {

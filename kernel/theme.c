@@ -32,6 +32,18 @@ static const struct {
 
 /* Which ones have to be redrawn to look right. Everything else is painted
    once and left alone, which costs nothing at all to have on. */
+/* The light ground. One set of four rather than one per preset: what makes
+   the presets different is the accent and the temperature of the dark
+   background, and a light background that shifted temperature with the
+   accent would be six nearly identical off-whites nobody asked for. */
+#define LIGHT_DESKTOP RGB(0xE6, 0xE9, 0xEE)
+#define LIGHT_SURFACE RGB(0xF4, 0xF5, 0xF7)
+#define LIGHT_TEXT    RGB(0x1C, 0x1F, 0x24)
+#define LIGHT_DIM     RGB(0x6A, 0x71, 0x7A)
+
+#define DARK_TEXT     RGB(0xE2, 0xE9, 0xEE)
+#define DARK_DIM      RGB(0x77, 0x86, 0x93)
+
 bool wallpaper_moves(wallpaper_t w) {
     return w == WALLPAPER_STARS  || w == WALLPAPER_WAVES
         || w == WALLPAPER_AURORA || w == WALLPAPER_RAIN
@@ -53,8 +65,18 @@ u32 theme_preset_accent(int i) {
 void theme_apply_preset(int i) {
     if (i < 0 || i >= THEME_PRESETS) return;
     current.accent = PRESETS[i].accent;
-    current.desktop = PRESETS[i].desktop;
-    current.surface = PRESETS[i].surface;
+
+    if (current.light) {
+        current.desktop = LIGHT_DESKTOP;
+        current.surface = LIGHT_SURFACE;
+        current.text = LIGHT_TEXT;
+        current.text_dim = LIGHT_DIM;
+    } else {
+        current.desktop = PRESETS[i].desktop;
+        current.surface = PRESETS[i].surface;
+        current.text = DARK_TEXT;
+        current.text_dim = DARK_DIM;
+    }
     derive();
 }
 
@@ -115,9 +137,8 @@ static void derive(void) {
 const theme_t *theme(void) { return &current; }
 
 void theme_init(void) {
+    current.light = false;
     theme_apply_preset(0);
-    current.text = RGB(0xE2, 0xE9, 0xEE);
-    current.text_dim = RGB(0x77, 0x86, 0x93);
     current.wallpaper = WALLPAPER_GRADIENT;
     current.corner = 8;
     current.shadows = true;
@@ -172,6 +193,13 @@ static void apply(const char *key, const char *value) {
     else if (!strcmp(key, "width"))   current.want_w = (int)parse_dec(value);
     else if (!strcmp(key, "height"))  current.want_h = (int)parse_dec(value);
     else if (!strcmp(key, "preset"))  theme_apply_preset((int)parse_dec(value));
+    else if (!strcmp(key, "light")) {
+        /* The whole palette follows from this, so whichever order the file
+           happens to be in, the ground is rebuilt when it is read. */
+        current.light = parse_dec(value) != 0;
+        int at = theme_current_preset();
+        theme_apply_preset(at >= 0 ? at : 0);
+    }
 }
 
 bool theme_reload(void) {
@@ -238,11 +266,12 @@ bool theme_save(void) {
     const char *header = "# zelr desktop settings\n# colours are RRGGBB in hex\n";
     for (const char *p = header; *p; p++) out[n++] = *p;
 
+    int at = theme_current_preset();
     struct { const char *key; u32 value; bool hex; } fields[] = {
-        { "accent",    current.accent,          true },
-        { "desktop",   current.desktop,         true },
-        { "surface",   current.surface,         true },
-        { "text",      current.text,            true },
+        { at >= 0 ? "preset" : "accent",
+          at >= 0 ? (u32)at : current.accent,   at < 0 },
+        { at >= 0 ? "light" : "desktop",
+          at >= 0 ? (current.light ? 1u : 0u) : current.desktop, at < 0 },
         { "wallpaper", (u32)current.wallpaper,  false },
         { "quirks",    (u32)(current.quirks ? 1 : 0), false },
         { "corner",    (u32)current.corner,     false },
@@ -252,6 +281,12 @@ bool theme_save(void) {
         { "width",     (u32)current.want_w,     false },
         { "height",    (u32)current.want_h,     false },
     };
+
+    /* A palette nobody can name still has to survive a reboot. */
+    if (at < 0) {
+        fields[0].key = "accent";
+        fields[1].key = "desktop";
+    }
 
     for (u32 f = 0; f < sizeof(fields) / sizeof(fields[0]); f++) {
         for (const char *p = fields[f].key; *p; p++) out[n++] = *p;

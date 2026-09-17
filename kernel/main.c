@@ -324,7 +324,9 @@ void kmain(handoff_t *h) {
     ps2_init();
     keyboard_init();
     if (fb_active() && mouse_init())
-        kprintf("  mouse   ps/2, pointer at %d,%d\n", mouse_x(), mouse_y());
+        kprintf("  mouse   ps/2%s, pointer at %d,%d\n",
+                mouse_has_wheel() ? " with a wheel" : "",
+                mouse_x(), mouse_y());
     else
         bb_log("mouse none: no ps/2 pointer answered");
     /* After the keyboard and the mouse, because what it finds is handed

@@ -270,8 +270,18 @@ void _start(void) {
 
         /* Keep the cursor's line on screen. */
         int cur_line = line_of(cursor);
-        if (cur_line < scroll_line) scroll_line = cur_line;
-        if (cur_line >= scroll_line + rows) scroll_line = cur_line - rows + 1;
+        /* The wheel moves the page without moving the cursor, which is
+           what makes it reading rather than editing. The page only follows
+           the cursor on a frame where the wheel did not move it, or the
+           two fight and the cursor always wins. */
+        if (in.scroll) {
+            scroll_line += in.scroll * 3;
+            int last = line_of(len);
+            if (scroll_line > last) scroll_line = last;
+        } else {
+            if (cur_line < scroll_line) scroll_line = cur_line;
+            if (cur_line >= scroll_line + rows) scroll_line = cur_line - rows + 1;
+        }
         if (scroll_line < 0) scroll_line = 0;
 
         rect(&s, 0, text_y, GUTTER_W, text_h, mix(t.bg, 0, 30));

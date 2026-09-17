@@ -63,6 +63,13 @@ typedef long long          zelr_word;
 #define SYS_CLIP_SET      38
 #define SYS_CLIP_GET      39
 
+/* Sound, and the power switch. */
+#define SYS_SOUND_INFO    40
+#define SYS_SOUND_WRITE   41
+#define SYS_POWER         42
+#define POWER_OFF     0
+#define POWER_REBOOT  1
+
 /* The one door into the kernel. The registers are the same ones a 32-bit zelr
    used, only twice as wide, which is why every argument is a word rather than
    an int: an int would quietly cut the top half off a pointer. */
@@ -177,7 +184,7 @@ static inline int utoa(u32 v, char *out) {
 typedef struct {
     u32  size;
     u32  is_dir;
-    char name[32];
+    char name[64];              /* the kernel writes all of it */
 } zelr_stat;
 
 static inline int open(const char *path, u32 flags) {
@@ -339,6 +346,35 @@ static inline int clip_get(char *out, int cap) {
 
 static inline int clip_len(void) { return syscall(SYS_CLIP_GET, 0, 0, 0); }
 
+/* --- sound ----------------------------------------------------------------
+
+   Signed sixteen bit samples, interleaved, at whatever rate the hardware
+   agreed to, which is why the rate is asked for rather than assumed. A write
+   returns when the frames are in the buffer, which for a buffer that only
+   drains in real time means it waits. */
+typedef struct {
+    u32 present;
+    u32 rate;
+    u32 channels;
+    u32 reserved;
+} zelr_sound;
+
+static inline int sound_info(zelr_sound *out) {
+    return syscall(SYS_SOUND_INFO, (zelr_word)out, 0, 0);
+}
+
+static inline int sound_write(const short *frames, int count) {
+    return syscall(SYS_SOUND_WRITE, (zelr_word)frames, (zelr_word)count, 0);
+}
+
+/* Neither of these comes back on a machine where it works. */
+static inline int power_off(void) {
+    return syscall(SYS_POWER, POWER_OFF, 0, 0);
+}
+static inline int power_reboot(void) {
+    return syscall(SYS_POWER, POWER_REBOOT, 0, 0);
+}
+
 /* --- windows -------------------------------------------------------------
 
    A window is a handle and a block of pixels the kernel maps into this
@@ -352,6 +388,11 @@ static inline int clip_len(void) { return syscall(SYS_CLIP_GET, 0, 0, 0); }
 /* The window is a different size. x and y carry the new content size, and
    whatever was drawn is gone: ask for the surface again and redraw. */
 #define WIN_EV_RESIZE 4
+
+/* The wheel turned over this window: y is the number of steps, positive
+   downward. Nothing has to ask for these; a window that ignores them
+   simply does not scroll. */
+#define WIN_EV_SCROLL 5
 
 /* Bit 7 of buttons is set on the event that started a press, so a program
    can tell a new stroke from the middle of one. */

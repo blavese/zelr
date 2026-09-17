@@ -32,6 +32,8 @@
 #include "apps.h"
 #include "pins.h"
 #include "winsrv.h"
+#include "power.h"
+#include "diskfs.h"
 #include "fbcon.h"
 #include "io.h"
 
@@ -219,6 +221,7 @@ static const struct {
     { "System info",  0 },
     { "Close all",    0 },
     { "Leave desktop", 0 },
+    { "Shut down",    0 },
 };
 
 #define MENU_N ((int)(sizeof(MENU) / sizeof(MENU[0])))
@@ -461,6 +464,16 @@ static void panel_update(int my) {
 static u32 lighten(u32 c, int amount) { return gfx_mix(c, RGB(0xFF, 0xFF, 0xFF), amount); }
 static u32 darken(u32 c, int amount)  { return gfx_mix(c, 0, amount); }
 
+/* A mark on the desktop, whichever ground it is.
+ *
+ * Every wallpaper was written as the background lightened by a little, which
+ * is a mark on a dark desktop and nothing at all on a near-white one. This
+ * is the same distance in whichever direction is away from the ground. */
+static u32 paper(int amount) {
+    const theme_t *t = theme();
+    return t->light ? darken(t->desktop, amount) : lighten(t->desktop, amount);
+}
+
 static void draw_wallpaper(void) {
     const theme_t *t = theme();
     /* All the way down, because the panel no longer covers the bottom of
@@ -470,12 +483,12 @@ static void draw_wallpaper(void) {
     switch (t->wallpaper) {
     case WALLPAPER_GRADIENT:
         /* Lit from the top left, which is where a desktop usually is. */
-        fb_vgradient(0, 0, (int)fb_width(), h, lighten(t->desktop, 22), t->desktop);
+        fb_vgradient(0, 0, (int)fb_width(), h, paper(22), t->desktop);
         break;
 
     case WALLPAPER_GRID: {
         fb_rect(0, 0, fb_width(), (u32)h, t->desktop);
-        u32 linec = lighten(t->desktop, 14);
+        u32 linec = paper(14);
         for (int y = 0; y < h; y += 32) fb_rect(0, (u32)y, fb_width(), 1, linec);
         for (u32 x = 0; x < fb_width(); x += 32) fb_rect(x, 0, 1, (u32)h, linec);
         break;
@@ -483,7 +496,7 @@ static void draw_wallpaper(void) {
 
     case WALLPAPER_DOTS: {
         fb_rect(0, 0, fb_width(), (u32)h, t->desktop);
-        u32 dot = lighten(t->desktop, 26);
+        u32 dot = paper(26);
         for (int y = 16; y < h; y += 28)
             for (u32 x = 16; x < fb_width(); x += 28) {
                 fb_put(x, (u32)y, dot);
@@ -511,7 +524,7 @@ static void draw_wallpaper(void) {
             u32 x = ((hx >> 9) + drift * speed) % fb_width();
             u32 y = (hy >> 9) % (u32)h;
 
-            u32 c = lighten(t->desktop, 25 + (int)(i % 3) * 45);
+            u32 c = paper(25 + (int)(i % 3) * 45);
             fb_put(x, y, c);
             if (i % 9 == 0) {                   /* a few brighter ones */
                 fb_put(x + 1, y, c);
@@ -546,7 +559,7 @@ static void draw_wallpaper(void) {
         /* Diagonals both ways. Two passes rather than one so the crossings
            come out brighter, which is what makes it read as woven. */
         fb_rect(0, 0, fb_width(), (u32)h, t->desktop);
-        u32 line = lighten(t->desktop, 12);
+        u32 line = paper(12);
         int span = (int)fb_width() + h;
 
         for (int d = 0; d < span; d += 24)
@@ -567,7 +580,7 @@ static void draw_wallpaper(void) {
            soft at its edges. Built as columns: for every x, one short run
            of pixels per band. There is no per pixel work over the screen
            anywhere in it, which is what keeps it affordable. */
-        fb_vgradient(0, 0, (int)fb_width(), h, lighten(t->desktop, 18),
+        fb_vgradient(0, 0, (int)fb_width(), h, paper(18),
                      t->desktop);
         u32 drift = (u32)(timer_ticks() / 6);
         const int REACH = 17;
@@ -624,7 +637,7 @@ static void draw_wallpaper(void) {
            Brightness falls off with the square of the distance from the
            middle, which needs no square root and is the reason they have no
            edge to them. */
-        fb_vgradient(0, 0, (int)fb_width(), h, lighten(t->desktop, 12),
+        fb_vgradient(0, 0, (int)fb_width(), h, paper(12),
                      t->desktop);
         u32 now = (u32)timer_ticks();
 
@@ -1309,6 +1322,16 @@ static void menu_choose(int i) {
     if (!strcmp(MENU[i].label, "System info")) app_about();
     else if (!strcmp(MENU[i].label, "Close all")) { while (nwin > 0) wm_close(stack[nwin - 1]); }
     else if (!strcmp(MENU[i].label, "Leave desktop")) running = false;
+    else if (!strcmp(MENU[i].label, "Shut down")) {
+        /* Anything not yet on the disk goes first: a machine that is
+           switched off does not come back to finish writing. */
+        diskfs_flush();
+        power_off();
+        /* Only here when the firmware wanted something this kernel does
+           not do. Leaving the desktop is then the useful thing, because
+           the console says why. */
+        running = false;
+    }
 }
 
 /* What the launcher calls a program, so an app pinned from its own window
@@ -1816,6 +1839,23 @@ void wm_run(void) {
            panel should be doing also changes when a window is maximised,
            closed or put away, and none of those touch the pointer. */
         panel_update(last_my);
+
+        /* The wheel goes to whatever is under the pointer rather than to
+           whatever has focus. Pointing at a list and turning the wheel is
+           one gesture, and every desktop that makes you click first is
+           wrong about it. */
+        i32 wheel = mouse_take_scroll();
+        if (wheel) {
+            bool on_title = false;
+            button_t btn = BTN_NONE;
+            window_t *over = window_at(last_mx, last_my, &on_title, &btn);
+            if (over && over->owned_by_user) {
+                wm_event_t ev = { WM_EV_SCROLL,
+                                  last_mx - (over->x + WM_BORDER),
+                                  wheel, 0, 0 };
+                wm_push_event(over, &ev);
+            }
+        }
 
         int c = kbd_trygetchar();
         if (c >= 0 && KEY_CODE(c) == 27) {         /* escape */

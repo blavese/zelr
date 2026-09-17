@@ -47,8 +47,10 @@ static const u8 CURSOR[CUR_H][CUR_W] = {
 static bool present = false;
 static i32  mx, my;
 static u8   buttons;
-static u8   packet[3];
+static u8   packet[4];
 static u8   phase;
+static u8   packet_len = 3;      /* four once the wheel is switched on */
+static i32  wheel;
 static u32  moves;
 
 static bool drawn;
@@ -61,11 +63,55 @@ i32  mouse_x(void) { return mx; }
 i32  mouse_y(void) { return my; }
 u8   mouse_buttons(void) { return buttons; }
 u32  mouse_moves(void) { return moves; }
+bool mouse_has_wheel(void) { return packet_len == 4; }
+
+i32 mouse_take_scroll(void) {
+    /* Read and cleared together, with interrupts off: a packet arriving
+       between the two would be a turn of the wheel nobody ever saw. */
+    bool were_on = interrupts_enabled();
+    cli();
+    i32 n = wheel;
+    wheel = 0;
+    if (were_on) sti();
+    return n;
+}
+
+void mouse_inject_scroll(i32 steps) {
+    wheel += steps;
+    moves++;
+}
 
 static void mouse_cmd(u8 cmd) {
     ps2_command(0xD4);                      /* the next byte is for the mouse */
     ps2_write_data(cmd);
     ps2_read(0);                            /* and it acknowledges each one */
+}
+
+/* The knock that turns a two button mouse into one that reports a wheel.
+ *
+ * Three sample rates in a fixed order, which no ordinary sequence of
+ * commands would produce by accident, and then asking the device who it is.
+ * One with a wheel answers 3 and sends four byte packets from then on; one
+ * without answers 0 and nothing about it changes. The rate is put back
+ * afterwards because the knock leaves it at 80 reports a second, which is a
+ * visibly coarser pointer. */
+static bool enable_wheel(void) {
+    static const u8 knock[3] = { 200, 100, 80 };
+    for (u32 i = 0; i < 3; i++) {
+        mouse_cmd(0xF3);
+        mouse_cmd(knock[i]);
+    }
+
+    ps2_command(0xD4);
+    ps2_write_data(0xF2);                   /* get device id */
+    ps2_read(0);                            /* the acknowledgement */
+
+    u8 id = 0;
+    if (!ps2_read(&id)) return false;
+
+    mouse_cmd(0xF3);
+    mouse_cmd(100);
+    return id == 3;
 }
 
 void mouse_hide(void) {
@@ -129,6 +175,15 @@ static void on_packet(void) {
     if (flags & 0x20) dy |= (i32)0xFFFFFF00;
 
     mouse_inject(dx, dy, flags & 0x07);
+
+    if (packet_len == 4) {
+        /* The low four bits are a signed count of steps. The rest carries
+           the fourth and fifth buttons on mice that have them, which
+           nothing here uses. */
+        i32 z = packet[3] & 0x0F;
+        if (z & 0x08) z -= 16;
+        if (z) mouse_inject_scroll(z);
+    }
 }
 
 /* One byte of a packet, already taken off the controller.
@@ -139,7 +194,7 @@ static void on_packet(void) {
 void mouse_byte(u8 b) {
     packet[phase++] = b;
     if (phase == 1 && !(packet[0] & 0x08)) { phase = 0; return; }
-    if (phase == 3) { phase = 0; on_packet(); }
+    if (phase == packet_len) { phase = 0; on_packet(); }
 }
 
 static void mouse_isr(registers_t *r) {
@@ -159,6 +214,8 @@ bool mouse_init(void) {
     if (!ps2_present()) return false;
 
     mouse_cmd(0xF6);                                 /* restore defaults */
+    packet_len = enable_wheel() ? 4 : 3;
+    wheel = 0;
     mouse_cmd(0xF4);                                 /* start reporting */
 
     mx = (i32)(fb_active() ? fb_width() / 2 : 0);
