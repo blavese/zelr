@@ -33,7 +33,7 @@ TASKBAR_GAP = 0                    # the panel is flush to the bottom edge
 MENU_ITEM = 24
 MENU_PAD = 4
 MENU_BRAND = 26          # the strip down its left, which is not a row
-MENU_ENTRIES = 12        # the launcher's entries, which set its height
+MENU_ENTRIES = 13        # the launcher's entries, which set its height
 MENU_TOP = (SCREEN_H - TASKBAR_H - TASKBAR_GAP
             - (MENU_ENTRIES * MENU_ITEM + MENU_PAD * 2) - 2)
 # The surface everything on this desktop is built out of. There is no
@@ -107,6 +107,16 @@ PANEL = MENU_PANEL                     # the floating layer, same colour
 # pinned is shown by its icon rather than by a chip of its own, that icon is
 # what a click has to land on to bring the terminal back.
 PINS_X = TASKBAR_GAP + 8 + 76 + 12
+
+# How many apps a machine nobody has touched keeps on its panel, which is the
+# list in pins.c. Written down rather than counted, so adding one to that list
+# is a check that fails here rather than a check that quietly moves on to
+# whichever icon has slid into the slot it was looking at.
+PINS_N = 6
+
+# And where the last of them sits in the launcher, which is not the same
+# number: the panel keeps six apps and the launcher lists thirteen things.
+LAST_PIN_ENTRY = 8          # Browser
 PIN_STEP = 30
 TASKBAR_CHIP = (PINS_X + 11, PANEL_Y + 15)
 
@@ -503,7 +513,7 @@ def main():
         w, h, px, shot = None, None, None, None
         w, h, px, shot, _ = mon.wait_screen(
             "desk-pins", lambda w, h, px: True)
-        before = [icon_ink(px, w, i) for i in range(5)]
+        before = [icon_ink(px, w, i) for i in range(PINS_N)]
         c.add("the taskbar starts with the apps the machine ships",
               len(set(before)) >= 3 and all(p != PANEL for p in before), shot)
 
@@ -517,23 +527,31 @@ def main():
         c.add("an icon dragged along the taskbar changes places", moved, shot)
 
         # Off the panel with the right button, which is the only way back to
-        # a taskbar somebody does not want five things on.
-        right_click(mon, *icon_at(4))
+        # a taskbar somebody does not want six things on.
+        #
+        # The last one, because taking any other off slides the ones after it
+        # along and the slot is full again: the check then reads whichever
+        # icon moved up as the one that would not go away.
+        last = PINS_N - 1
+        right_click(mon, *icon_at(last))
         w, h, px, shot, dropped = mon.wait_screen(
             "desk-pin-off",
-            lambda w, h, px: icon_ink(px, w, 4) == PANEL)
+            lambda w, h, px: icon_ink(px, w, last) == PANEL)
         c.add("and the right button takes one off it", dropped, shot)
 
-        # And back on, from the launcher, with the same button. Settings is
-        # the fifth entry and it was the fifth icon.
+        # And back on, from the launcher, with the same button. The same app
+        # that was taken off: right clicking any other one takes that one off
+        # instead, because the button is a toggle.
         mon.click(*LAUNCHER)
         mon.wait_screen(
             "desk-menu-2",
             lambda w, h, px: count_in(px, w, LAUNCHER_RECT, MENU_PANEL) > 8000)
-        right_click(mon, MENU_BRAND + 40, MENU_TOP + MENU_PAD + 4 * MENU_ITEM + MENU_ITEM // 2)
+        right_click(mon, MENU_BRAND + 40,
+                    MENU_TOP + MENU_PAD + LAST_PIN_ENTRY * MENU_ITEM
+                    + MENU_ITEM // 2)
         w, h, px, shot, backon = mon.wait_screen(
             "desk-pin-on",
-            lambda w, h, px: icon_ink(px, w, 4) != PANEL)
+            lambda w, h, px: icon_ink(px, w, last) != PANEL)
         c.add("and an app from the launcher can be put back on", backon, shot)
 
     finally:

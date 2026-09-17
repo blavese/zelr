@@ -48,6 +48,42 @@ static const u8 CURSOR[CUR_H][CUR_W] = {
 static bool present = false;
 static i32  mx, my;
 static u8   buttons;
+
+/* --- button changes, kept until somebody reads them ----------------------
+ *
+ * The window manager reads the mouse once a pass of its loop, and a pass
+ * that ends in compositing the whole screen is not short. A press and a
+ * release that both happen inside one of them are invisible to anything
+ * reading the level: the state before is up, the state after is up, and
+ * nothing in between ever happened.
+ *
+ * That is not a theoretical loss. It is a click on a busy desktop doing
+ * nothing at all, with no sign of why, and it is what several checks here
+ * kept failing on: a swatch clicked three times running that never changed
+ * the colour, a menu entry that would not launch.
+ *
+ * So each change is kept, with where the pointer was when it happened,
+ * until it is taken. The position matters as much as the change: a click is
+ * where the button went down, not where the pointer ended up. */
+#define MOUSE_EDGES 32
+static mouse_edge_t edges[MOUSE_EDGES];
+static volatile u32 edge_head, edge_tail;
+
+static void edge_record(void) {
+    u32 next = (edge_head + 1) % MOUSE_EDGES;
+    if (next == edge_tail) return;          /* nobody is reading; keep the backlog */
+    edges[edge_head].x = mx;
+    edges[edge_head].y = my;
+    edges[edge_head].buttons = buttons;
+    edge_head = next;
+}
+
+bool mouse_take_edge(mouse_edge_t *out) {
+    if (edge_head == edge_tail) return false;
+    *out = edges[edge_tail];
+    edge_tail = (edge_tail + 1) % MOUSE_EDGES;
+    return true;
+}
 static u8   packet[4];
 static u8   phase;
 static u8   packet_len = 3;      /* four once the wheel is switched on */
@@ -151,20 +187,26 @@ void mouse_show(void) {
    USB mouse produces exactly the same three things through an entirely
    different path and there is no reason for the answer to differ. */
 void mouse_inject(i32 dx, i32 dy, u8 btns) {
+    u8 was = buttons;
     buttons = btns;
-    if (!dx && !dy) return;
 
-    mouse_hide();
-    mx += dx;
-    my -= dy;                                   /* screen y grows downward */
-    i32 maxx = (i32)fb_width() - 1;
-    i32 maxy = (i32)fb_height() - 1;
-    if (mx < 0) mx = 0;
-    if (my < 0) my = 0;
-    if (mx > maxx) mx = maxx;
-    if (my > maxy) my = maxy;
-    moves++;
-    mouse_show();
+    if (dx || dy) {
+        mouse_hide();
+        mx += dx;
+        my -= dy;                               /* screen y grows downward */
+        i32 maxx = (i32)fb_width() - 1;
+        i32 maxy = (i32)fb_height() - 1;
+        if (mx < 0) mx = 0;
+        if (my < 0) my = 0;
+        if (mx > maxx) mx = maxx;
+        if (my > maxy) my = maxy;
+        moves++;
+        mouse_show();
+    }
+
+    /* After the move, not before it: a packet can carry both, and where the
+       button went down is where the pointer ended up. */
+    if (was != btns) edge_record();
 }
 
 static void on_packet(void) {

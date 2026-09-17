@@ -23,6 +23,7 @@ extern const u8 builtin_notes_start[], builtin_notes_end[];
 extern const u8 builtin_monitor_start[], builtin_monitor_end[];
 extern const u8 builtin_calc_start[], builtin_calc_end[];
 extern const u8 builtin_music_start[], builtin_music_end[];
+extern const u8 builtin_browser_start[], builtin_browser_end[];
 
 typedef struct {
     const char *name;
@@ -45,6 +46,7 @@ static const program_t PROGRAMS[] = {
     { "monitor",   builtin_monitor_start,   builtin_monitor_end   },
     { "calc",      builtin_calc_start,      builtin_calc_end      },
     { "music",     builtin_music_start,     builtin_music_end     },
+    { "browser",   builtin_browser_start,   builtin_browser_end   },
 };
 
 #define N_PROGRAMS (sizeof(PROGRAMS) / sizeof(PROGRAMS[0]))

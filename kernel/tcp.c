@@ -54,6 +54,11 @@ typedef enum { T_CLOSED, T_SYNSENT, T_OPEN, T_CLOSING, T_DONE } tstate_t;
 static volatile tstate_t state = T_CLOSED;
 static ipv4_t peer_ip;
 static u16    peer_port, local_port;
+
+/* Walked rather than picked, so no two connections close together share one.
+   Started off the clock so that two boots of the same machine do not open
+   with the same number. */
+static u16    next_port;
 static volatile u32 snd_nxt, snd_una, rcv_nxt;
 static volatile bool got_fin;
 
@@ -246,10 +251,26 @@ bool tcp_connect(ipv4_t ip, u16 port, u32 timeout_ms) {
     if (!rxbuf) {
         rxbuf = (u8 *)kmalloc(RXCAP);
         if (!rxbuf) return false;
+        next_port = (u16)(45000 + (timer_ticks() & 0x0FFF));
     }
     peer_ip = ip;
     peer_port = port;
-    local_port = (u16)(45000 + (timer_ticks() & 0x0FFF));
+
+    /* A port this connection has not used before.
+     *
+     * It used to be worked out from the clock, which gives a different one
+     * every time as long as the clock has moved. Two connections inside the
+     * same tick got the same port, and the peer still has the last one in
+     * its books: the new handshake looks like an old connection turning up
+     * again and is dropped, so connecting takes the full timeout and then
+     * fails.
+     *
+     * Nothing does that by hand. A redirect does: the answer arrives, the
+     * connection closes and the next one opens in the same instant. So
+     * following a redirect worked or did not depending on where in a tick
+     * it happened to land. */
+    if (next_port < 45000 || next_port >= 61000) next_port = 45000;
+    local_port = next_port++;
     snd_nxt = 0x5A4C5200u ^ (u32)(timer_ticks() * 2654435761u);
     snd_una = snd_nxt;
     rcv_nxt = 0;

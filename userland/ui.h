@@ -204,19 +204,32 @@ static inline ui_theme ui_load_theme(void) {
  * A program collects events into one of these and hands it to every widget.
  * Widgets read it; only the click flags are consumed, so two overlapping
  * widgets cannot both claim the same press. */
+/* How many keys one frame can carry.
+ *
+ * It used to carry one, and each new one overwrote the last. A frame is
+ * sixteen milliseconds and somebody typing quickly puts two or three keys
+ * inside one, so letters went missing out of the middle of whatever was
+ * being typed: a browser given an address got most of it, and the editor
+ * dropped characters out of sentences. Nothing reported it, because from
+ * inside the program the key simply never arrived. */
+#define UI_KEYS 16
+
 typedef struct {
     int  mx, my;          /* where the pointer is */
     int  down;            /* a button is held */
     int  pressed;         /* it went down this frame */
     int  released;        /* it came up this frame */
     int  right_pressed;
-    u32  key;             /* a key this frame, 0 for none */
+    u32  key;             /* the first key this frame, 0 for none */
+    u32  keys[UI_KEYS];   /* and all of them, in the order they arrived */
+    int  nkeys;
     int  scroll;          /* wheel, in rows, positive is down */
 } ui_input;
 
 static inline void ui_begin(ui_input *in) {
     in->pressed = in->released = in->right_pressed = 0;
     in->key = 0;
+    in->nkeys = 0;
     in->scroll = 0;
 }
 
@@ -231,7 +244,11 @@ static inline void ui_feed(ui_input *in, const win_event *ev) {
         in->down = now;
         if (ev->buttons & WIN_BTN_RIGHT) in->right_pressed = 1;
     } else if (ev->type == WIN_EV_KEY) {
-        in->key = ev->key;
+        /* The first one, not the last. A program that reads in->key and
+           nothing else then acts on the key that arrived first, which is the
+           one a person pressed first. */
+        if (!in->nkeys) in->key = ev->key;
+        if (in->nkeys < UI_KEYS) in->keys[in->nkeys++] = ev->key;
     } else if (ev->type == WIN_EV_SCROLL) {
         in->scroll += ev->y;
     }

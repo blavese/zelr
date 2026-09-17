@@ -50,6 +50,25 @@ part of this project.</p>
 </body></html>
 """
 
+# A page with some of everything in it and no link, so that what is on the
+# screen is decided entirely by the markup and the layout.
+SAMPLE = b"""<!doctype html>
+<html><head><title>every shape</title></head><body>
+<h1>A heading</h1>
+<p>A paragraph with <b>bold</b> in it and a word in <code>code</code>.
+It is long enough to need wrapping at any sensible window width, which is
+the point of it.</p>
+<h2>A smaller heading</h2>
+<ul><li>one</li><li>two</li><li>three</li></ul>
+<ol><li>first</li><li>second</li></ol>
+<hr>
+<blockquote>Something set in from the margin.</blockquote>
+<pre>  preformatted
+  two   spaces   kept</pre>
+<p>Entities: &amp; &lt; &gt; &quot; &mdash; &hellip; &copy;</p>
+</body></html>
+"""
+
 SECOND = b"""<!doctype html>
 <html><head><title>the second page</title></head>
 <body><h1>Second</h1><p>You followed a link to get here.</p>
@@ -99,6 +118,23 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._send(BIG, ctype="text/plain")
         elif path.startswith("/size/"):
             self._send(filler(int(path[6:])), ctype="text/plain")
+        elif path == "/framed":
+            # The same bytes as /measured, sent in pieces with a size on each
+            # rather than with a length on the whole. A browser that gets the
+            # decoding wrong renders this differently from the other one, and
+            # comparing the two pictures is the check.
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.send_header("Transfer-Encoding", "chunked")
+            self.end_headers()
+            body = SAMPLE
+            step = 97                    # an awkward size on purpose
+            for i in range(0, len(body), step):
+                piece = body[i:i + step]
+                self.wfile.write(b"%X\r\n" % len(piece) + piece + b"\r\n")
+            self.wfile.write(b"0\r\n\r\n")
+        elif path == "/measured":
+            self._send(SAMPLE)
         elif path == "/chunked":
             # No length: the body arrives in pieces and ends with a zero.
             self.send_response(200)

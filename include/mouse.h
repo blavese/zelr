@@ -3,6 +3,16 @@
 
 bool mouse_init(void);
 
+/* One change of the buttons, and where the pointer was when it happened.
+ *
+ * Reading mouse_buttons() gives the state now, which is not the same thing:
+ * anything that samples it once a frame misses a press and a release that
+ * both happened inside one frame, and on a busy desktop that is an ordinary
+ * click doing nothing. These are kept until they are taken, in order. */
+typedef struct { i32 x, y; u8 buttons; } mouse_edge_t;
+
+bool mouse_take_edge(mouse_edge_t *out);
+
 /* One byte of a packet, already read off the controller. */
 void mouse_byte(u8 b);
 bool mouse_present(void);
