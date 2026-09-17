@@ -262,6 +262,13 @@ static inline int connect(const char *host, int port) {
 static inline int send(const void *buf, int len) {
     return syscall(SYS_SEND, 0, (zelr_word)buf, len);
 }
+/* recv gives back the number of bytes it took out of the connection, 0 when
+   nothing arrived in time and the connection is still up, and NET_EOF once
+   the other end has finished and there is nothing left. A loop that stops on
+   0 stops early on a slow server; one that never stops hangs on a finished
+   one. */
+#define NET_EOF (-2)
+
 static inline int recv(void *buf, int len) {
     return syscall(SYS_RECV, 0, (zelr_word)buf, len);
 }

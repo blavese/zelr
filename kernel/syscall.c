@@ -447,12 +447,20 @@ static i64 sys_send(registers_t *r) {
     return tcp_send((const void *)buf, (u16)len) ? (i32)len : -1;
 }
 
+/* Reads what has arrived, and says which kind of nothing it got.
+ *
+ * Zero used to mean both "not yet" and "that was all", which a program
+ * reading in a loop cannot tell apart: it either stops early on a slow
+ * server or waits forever on a finished one. NET_EOF is the second. */
 static i64 sys_recv(registers_t *r) {
     if (!sock_open || sock_owner != caller_pid()) return -1;
     u64 buf = r->rcx, len = r->rdx;
     if (len == 0 || len > 65536) return -1;
     if (!user_range_ok(buf, len)) return -1;
-    return (i32)tcp_recv((u8 *)buf, len, 4000);
+
+    u32 n = tcp_recv((u8 *)buf, len, 4000);
+    if (n) return (i32)n;
+    return tcp_ended() ? -2 : 0;
 }
 
 static i64 sys_disconnect(registers_t *r) {

@@ -1066,9 +1066,13 @@ static void cmd_get(int argc, char **argv) {
     if (send(req, n) < 0) { err("send failed"); disconnect(); return; }
 
     int total = 0;
+    int quiet = 0;
     for (;;) {
         int got = recv(io + total, (int)sizeof(io) - 1 - total);
-        if (got <= 0) break;
+        if (got == NET_EOF) break;
+        if (got < 0) break;
+        if (got == 0) { if (++quiet >= 3) break; continue; }
+        quiet = 0;
         total += got;
         if (total >= (int)sizeof(io) - 1) break;
     }
