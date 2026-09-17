@@ -158,6 +158,8 @@ static inline void ui_feed(ui_input *in, const win_event *ev) {
         if (ev->buttons & WIN_BTN_RIGHT) in->right_pressed = 1;
     } else if (ev->type == WIN_EV_KEY) {
         in->key = ev->key;
+    } else if (ev->type == WIN_EV_SCROLL) {
+        in->scroll += ev->y;
     }
 }
 

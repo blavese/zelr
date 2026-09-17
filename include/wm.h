@@ -16,6 +16,9 @@ typedef struct window window_t;
 /* The window is a different size now. x and y carry the new content size,
    and whatever the program had drawn is gone. */
 #define WM_EV_RESIZE 4
+/* The wheel turned over this window. y carries the steps, positive
+   downward; x and buttons are where the pointer was. */
+#define WM_EV_SCROLL 5
 
 typedef struct {
     u32 type;

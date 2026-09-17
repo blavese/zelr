@@ -31,7 +31,9 @@ SCREEN_W, SCREEN_H = 1024, 768
 TASKBAR_H = 34
 TASKBAR_GAP = 10                   # the panel floats clear of the edge
 MENU_ITEM = 30
-MENU_TOP = SCREEN_H - TASKBAR_H - TASKBAR_GAP - (8 * MENU_ITEM + 12) - 8
+MENU_ENTRIES = 9         # the launcher's entries, which set its height
+MENU_TOP = (SCREEN_H - TASKBAR_H - TASKBAR_GAP
+            - (MENU_ENTRIES * MENU_ITEM + 12) - 8)
 MENU_PANEL = (0x3F, 0x46, 0x4D)    # the floating layer
 
 # The terminal as it opens.
@@ -52,7 +54,7 @@ WIN_RECT = (WIN_X, WIN_Y, WIN_X + OUTER_W, WIN_Y + OUTER_H)
 # Where the launcher sits when it opens from the taskbar badge, clear of the
 # taskbar below it and of the clock, so nothing in this rectangle changes on
 # its own while the menu is coming up.
-LAUNCHER_RECT = (10, 458, 226, 720)
+LAUNCHER_RECT = (10, 428, 226, 720)
 
 # The same buttons once the window has been maximised, when its frame is at
 # 0,0 and as wide as the screen.
@@ -102,6 +104,10 @@ def right_click(mon, x, y):
 # checks then pass because the mouse moved. Down in the taskbar it is outside
 # the part being compared, and it is in the same place every time.
 PARK = (1010, SCREEN_H - 10)
+
+# Inside the terminal's page and clear of the pointer, which is parked in the
+# window so that the wheel has something to land on.
+WHEEL_PAGE = (60, 70, 600, 300)
 
 WHOLE = (0, 0, SCREEN_W, SCREEN_H)
 LEFT_HALF = (0, 0, SCREEN_W // 2, SCREEN_H - TASKBAR_H)
@@ -384,6 +390,37 @@ def main():
         _, _, shot, ok = wait_page(mon, "desk-cleared", lambda n: n < 1000)
         c.add("alt and d puts everything away at once", ok, shot)
 
+        # --- the wheel ---------------------------------------------------------
+        #
+        # The monitor's dz is the other way round from the packet the mouse
+        # sends: dz 1 is a turn away from the hand, which is the scrollback
+        # coming down over the page. The pointer is parked inside the window
+        # and away from the rectangle being compared, because the wheel goes
+        # to whatever is under the pointer and the pointer is drawn.
+        mon.click(*TASKBAR_CHIP)
+        wait_page(mon, "desk-back-wheel", lambda n: n > 100000)
+        typed(mon, "help\n")
+        time.sleep(1.5)
+
+        mon.move_to(700, 450)
+        time.sleep(0.5)
+        w, h, px, shot, _ = mon.wait_screen("desk-wheel-before", lambda w, h, px: True)
+        before = patch(px, w, WHEEL_PAGE)
+
+        for _ in range(6):
+            mon.send("mouse_move 0 0 1", settle=0.15)
+        w, h, px, shot, rolled = mon.wait_screen(
+            "desk-wheel-up",
+            lambda w, h, px: patch(px, w, WHEEL_PAGE) != before, timeout=20)
+        c.add("the wheel scrolls the window under the pointer", rolled, shot)
+
+        for _ in range(12):
+            mon.send("mouse_move 0 0 -1", settle=0.15)
+        w, h, px, shot, back = mon.wait_screen(
+            "desk-wheel-down",
+            lambda w, h, px: patch(px, w, WHEEL_PAGE) == before, timeout=20)
+        c.add("and the other way brings it back", back, shot)
+
         # --- the size of the screen -------------------------------------------
         #
         # Written into the same file the colours live in, from ring 3, and
@@ -394,8 +431,8 @@ def main():
         # 800 by 600 rather than something larger: the back buffer is the
         # whole screen and this machine has 64 MiB, so a size that does not
         # fit would be testing the heap rather than the screen.
-        mon.click(*TASKBAR_CHIP)
-        wait_page(mon, "desk-back-3", lambda n: n > 100000)
+        # The terminal is already in front: the wheel checks above brought it
+        # back, and clicking its icon again would put it away.
         typed(mon, "write /zelr.cfg width 800\n")
         typed(mon, "append /zelr.cfg height 600\n")
 

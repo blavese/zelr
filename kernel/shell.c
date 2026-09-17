@@ -37,8 +37,6 @@
 #define LINE_MAX 256
 #define ARG_MAX  16
 
-static void reboot_now(void);
-
 static char line[LINE_MAX];
 
 static u32 num(const char *s) {
@@ -486,39 +484,10 @@ static void execute(char *buf) {
         kprintf("the firmware did not take it\n");
     } else if (!strcmp(c, "reboot")) {
         kprintf("rebooting\n");
-        reboot_now();
+        power_reboot();
     } else {
         kprintf("%s: not found (try help)\n", c);
     }
-}
-
-/* Restarting the machine, in the three ways there are.
- *
- * The keyboard controller is the old way and the one every emulator answers
- * to. A laptop often has no keyboard controller at all, and a port that
- * nothing answers reads back 0xFF: waiting for a bit in it to clear waits
- * for a bit that is always set, which is a machine that locks up on the word
- * reboot and comes back only on the power button. The loop below is bounded
- * for that reason rather than for tidiness.
- *
- * After it, the reset control register, which is where firmware without an
- * 8042 puts the same function. And if neither answered, a triple fault:
- * taking an interrupt with no table to look it up in is not a request the
- * machine can decline.
- */
-static void reboot_now(void) {
-    for (u32 i = 0; i < 100000; i++)
-        if (!(inb(0x64) & 0x02)) break;
-    outb(0x64, 0xFE);
-    io_wait();
-
-    outb(0xCF9, 0x02);                  /* reset control, prepared */
-    outb(0xCF9, 0x06);                  /* and asked for */
-    io_wait();
-
-    struct { u16 limit; u64 base; } __attribute__((packed)) none = { 0, 0 };
-    __asm__ volatile ("lidt %0; int3" :: "m"(none));
-    for (;;) hlt();
 }
 
 static bool console_only;

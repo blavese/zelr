@@ -50,7 +50,7 @@ BADGE = (40, 745)             # the taskbar launcher
 # upward from the taskbar, so adding a program moves everything above it and
 # a remembered y is wrong from then on.
 MENU_ENTRIES = ["Terminal", "Files", "Notes", "Paint", "Settings",
-                "System info", "Close all", "Leave desktop"]
+                "System info", "Close all", "Leave desktop", "Shut down"]
 MENU_ITEM_H = 30
 MENU_BOTTOM = 734             # the menu's lower edge, just above the taskbar
 MENU_RECT = (10, 540, 210, 730)

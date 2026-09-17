@@ -63,6 +63,13 @@
 #define SYS_SOUND_INFO    40
 #define SYS_SOUND_WRITE   41
 
+/* Switching the machine off, or restarting it. Neither returns when it
+   works, and the first says so rather than hanging when the firmware wanted
+   something this kernel does not do. */
+#define SYS_POWER         42
+#define POWER_OFF     0
+#define POWER_REBOOT  1
+
 typedef struct {
     u32 present;
     u32 rate;
@@ -97,7 +104,10 @@ typedef struct {
 typedef struct {
     u32  size;
     u32  is_dir;
-    char name[32];
+    /* As wide as VFS_NAME_MAX, which is checked in syscall.c. The kernel
+       fills this with strncpy and strncpy pads to the full width, so a
+       narrower field here is written past rather than truncated. */
+    char name[64];
 } zelr_stat_t;
 
 /* What SYS_NETINFO fills in. */

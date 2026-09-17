@@ -56,6 +56,12 @@ typedef struct {
     u32 accent_text;     /* text that has to sit on the accent itself */
     u32 text_mute;       /* one level quieter than text_dim */
 
+    /* A light ground rather than a dark one. The presets name an accent
+       and the temperature of the dark palette; the light one is the same
+       accent over near-white, and everything derived below already knows
+       which of the two it is looking at. */
+    bool light;
+
     wallpaper_t wallpaper;
     int  corner;         /* window corner radius, 0 for square */
     bool shadows;

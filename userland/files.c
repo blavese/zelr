@@ -257,6 +257,7 @@ void _start(void) {
             if (selected < first_row) first_row = selected;
             if (selected >= first_row + shown) first_row = selected - shown + 1;
         }
+        if (in.scroll) first_row += in.scroll * 3;
         if (first_row > count - shown) first_row = count - shown;
         if (first_row < 0) first_row = 0;
 

@@ -27,6 +27,8 @@
 #include "pmm.h"
 #include "fb.h"
 #include "fat.h"
+#include "power.h"
+#include "diskfs.h"
 
 /* A pointer from ring 3 has to be inside user space to begin with. Being
    mapped is checked separately, and being reachable from ring 3 after that. */
@@ -95,11 +97,9 @@ static i64 sys_spawn(registers_t *r) {
     u8 *image = vfs_slurp(path, &size);
     if (!image) return -1;
 
-    /* The name shown in the task list is the file's, not the whole path. */
-    const char *name = path;
-    for (const char *p = path; *p; p++) if (*p == '/') name = p + 1;
-
-    int rc = user_spawn_elf(name, image, size);
+    /* Named after the path, because that is what the taskbar matches a
+       window against to know it is the app whose icon is pinned. */
+    int rc = user_spawn_elf(path, image, size);
     kfree(image);
     return rc;
 }
@@ -179,6 +179,20 @@ static i64 sys_sound_write(registers_t *r) {
     u64 bytes = (u64)count * sound_channels() * 2;
     if (!user_range_ok(r->rbx, bytes)) return -1;
     return (i64)sound_write((const i16 *)r->rbx, count);
+}
+
+static i64 sys_power(registers_t *r) {
+    /* Anything not yet on the disk goes first. A machine that is switched
+       off does not come back to finish writing. */
+    diskfs_flush();
+
+    if ((u32)r->rbx == POWER_REBOOT) {
+        power_reboot();
+        return -1;
+    }
+    if (!power_can_off()) return -1;
+    power_off();
+    return -1;                  /* only reached when the firmware declined */
 }
 
 static i64 sys_tasks(registers_t *r) {
@@ -312,6 +326,16 @@ static i64 sys_rmdir(registers_t *r) {
     if (!copy_path(r->rbx, path, sizeof(path))) return -1;
     return vfs_rmdir(path) ? 0 : -1;
 }
+
+/* What the kernel writes into a name, and what a program has room for, are
+   the same number or this is a stack overflow on every listing. It was one
+   for a release: names were eight and three, the field was 32 bytes and
+   that was enough, and then long filenames made VFS_NAME_MAX 64 and nothing
+   said so. The write goes upward, into the saved registers the syscall
+   returns through, so what ring 3 got back was a zero from the padding and
+   every directory looked empty. */
+_Static_assert(sizeof(((zelr_stat_t *)0)->name) >= VFS_NAME_MAX,
+               "readdir writes VFS_NAME_MAX bytes into zelr_stat_t.name");
 
 static i64 sys_readdir(registers_t *r) {
     char path[VFS_PATH_MAX];
@@ -566,6 +590,7 @@ static const syscall_fn TABLE[] = {
     [SYS_CLIP_GET]  = sys_clip_get,
     [SYS_SOUND_INFO]  = sys_sound_info,
     [SYS_SOUND_WRITE] = sys_sound_write,
+    [SYS_POWER]       = sys_power,
 };
 
 #define N_SYSCALLS (sizeof(TABLE) / sizeof(TABLE[0]))
