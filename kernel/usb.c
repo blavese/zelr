@@ -28,6 +28,8 @@
 #include "string.h"
 #include "timer.h"
 #include "usbdisk.h"
+#include "usbnet.h"
+#include "net.h"
 #include "diskfs.h"
 #include "sched.h"
 #include "io.h"
@@ -50,6 +52,8 @@
    and almost nothing else: the other transports in the specification were
    for floppy drives. */
 #define CLASS_MSC       8
+#define CLASS_CDC       2        /* the talking half of a network adapter */
+#define CLASS_CDC_DATA  0x0A     /* and the half the frames go through */
 #define SUB_SCSI        6
 #define PROTO_BBB       0x50
 #define SUB_BOOT        1
@@ -112,7 +116,7 @@ typedef struct {
 } device_t;
 
 static device_t devices[MAX_DEVICES];
-static u32 nkeyboards, nmice, nhubs, ndisks;
+static u32 nkeyboards, nmice, nhubs, ndisks, nnets;
 static volatile u32 nreports;
 static bool started;
 static char description[128];
@@ -422,6 +426,8 @@ static bool claim_interface(u8 slot, u32 root_port,
                             const u8 *cfg, u16 total) {
     const interface_desc_t *want = 0;
     const interface_desc_t *disk = 0;
+    const interface_desc_t *netdata = 0;
+    u8  comm_iface = 0xFF;
     u8  bulk_in = 0, bulk_out = 0;
     u16 bulk_mps = 0;
     u16 at = 0;
@@ -439,7 +445,14 @@ static bool claim_interface(u8 slot, u32 root_port,
                         || i->protocol == PROTO_MOUSE)) ? i : 0;
             disk = (i->iclass == CLASS_MSC && i->subclass == SUB_SCSI
                     && i->protocol == PROTO_BBB) ? i : 0;
-        } else if (type == DESC_ENDPOINT && disk
+
+            /* A network adapter is two interfaces: one that is talked to and
+               one the frames go through. The second is the one with the bulk
+               endpoints on it, and the first is remembered as it goes past
+               because the setup messages are posted to that one. */
+            if (i->iclass == CLASS_CDC) comm_iface = i->number;
+            netdata = (i->iclass == CLASS_CDC_DATA) ? i : 0;
+        } else if (type == DESC_ENDPOINT && (disk || netdata)
                    && len >= sizeof(endpoint_desc_t)) {
             /* Two bulk endpoints, one each way. Collected rather than acted
                on, because both are needed before either is any use. */
@@ -499,6 +512,33 @@ static bool claim_interface(u8 slot, u32 root_port,
      * The lower numbered endpoint is opened first. Each Configure Endpoint
      * says how far down the context array the controller should look, and
      * opening the higher one second means that number only ever rises. */
+    if (bulk_in && bulk_out && bulk_mps && netdata) {
+        u8 lo = bulk_in < bulk_out ? bulk_in : bulk_out;
+        u8 hi = bulk_in < bulk_out ? bulk_out : bulk_in;
+        u8 lo_kind = (lo == bulk_in) ? XHCI_EP_BULK_IN : XHCI_EP_BULK_OUT;
+        u8 hi_kind = (hi == bulk_in) ? XHCI_EP_BULK_IN : XHCI_EP_BULK_OUT;
+
+        if (!xhci_open_endpoint(slot, lo, lo_kind, bulk_mps, 0)) return false;
+        if (!xhci_open_endpoint(slot, hi, hi_kind, bulk_mps, 0)) return false;
+
+        /* The data interface comes after the one that is talked to, so by
+           here the other number has already gone past. Nothing to fall back
+           on if it has not, and a guess would be a control message sent to
+           the wrong interface. */
+        if (comm_iface == 0xFF) return false;
+        if (!usbnet_attach(slot, bulk_in, bulk_out, comm_iface)) return false;
+
+        nnets++;
+        bb_log("usb network on slot %d, in ep %d out ep %d", slot,
+               bulk_in, bulk_out);
+
+        /* A new link, so the old address is forgotten along with the arp
+           cache that went with it. Keeping either would be claiming an
+           address on a network this machine is no longer on. */
+        net_init();
+        return true;
+    }
+
     if (bulk_in && bulk_out && bulk_mps) {
         u8 lo = bulk_in < bulk_out ? bulk_in : bulk_out;
         u8 hi = bulk_in < bulk_out ? bulk_out : bulk_in;
@@ -685,6 +725,12 @@ static void describe(void) {
     kformat(description, sizeof description,
             "%s, %d hub(s), %d keyboard(s), %d mouse, %d disk(s)",
             xhci_describe(), nhubs, nkeyboards, nmice, ndisks);
+    if (nnets) {
+        u32 at = 0;
+        while (description[at]) at++;
+        kformat(description + at, sizeof description - at,
+                ", %d network", nnets);
+    }
 }
 
 void usb_init(void) {

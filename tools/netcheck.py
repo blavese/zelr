@@ -171,6 +171,38 @@ def main():
               icons["bare"] != icons["wired"])
     finally:
         vm2.stop()
+
+    # --- and one whose only network is a usb adapter ------------------------
+    #
+    # Which is the case this was written for. A laptop whose wireless will
+    # not start without a vendor binary still has a socket on the side of it,
+    # and a phone with tethering turned on presents exactly this. No card on
+    # the pci bus at all here, so an address arriving proves the frames went
+    # through the usb stack and nothing else.
+    vm3 = Guest(DISK, memory=192, machine="q35",
+                extra=["-nic", "none",
+                       "-device", "qemu-xhci",
+                       "-device", "usb-net,netdev=u1",
+                       "-netdev", "user,id=u1"])
+    try:
+        vm3.wait_boot()
+        c.add("a usb adapter is found and is the card",
+              "usb ethernet" in vm3.run("net"))
+        c.add("it has an address of its own before any of ours",
+              address_of(vm3) in ("", "0.0.0.0"))
+
+        vm3.run("dhcp", timeout=25)
+        c.add("and an address arrives over usb",
+              address_of(vm3) == "10.0.2.15")
+
+        # Frames counted in both directions, so this cannot pass on a driver
+        # that received the lease and never sent anything.
+        out = vm3.run("net")
+        counted = [ln for ln in out.splitlines() if ln.strip().startswith("packets")]
+        c.add("with frames counted going out as well as coming in",
+              bool(counted) and "0 in, 0 out" not in counted[-1])
+    finally:
+        vm3.stop()
         try:
             os.remove(DISK)
         except OSError:
