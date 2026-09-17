@@ -14,6 +14,12 @@ typedef enum {
     TASK_READY, TASK_RUNNING, TASK_SLEEPING, TASK_BLOCKED, TASK_DEAD
 } task_state_t;
 
+/* The name of a state, for anything in the kernel that prints one. Written
+   once because it was written twice: a table of four indexed by a state that
+   has five in it read past the end of itself, and `ps` printed the bytes of
+   whatever came after it in place of the word. */
+const char *task_state_name(task_state_t s);
+
 #define TASK_ARG_MAX 128
 
 typedef struct task {

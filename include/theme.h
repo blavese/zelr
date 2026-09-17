@@ -56,6 +56,27 @@ typedef struct {
     u32 accent_text;     /* text that has to sit on the accent itself */
     u32 text_mute;       /* one level quieter than text_dim */
 
+    /* --- the edges ---------------------------------------------------
+     *
+     * A second idea of colour, for chrome that is built rather than
+     * tinted. A surface here is a plane with a light above and to the
+     * left of it, and the four below are what an edge facing the light
+     * and an edge facing away from it look like, twice over: strong on
+     * the outside of a bevel and soft on the inside.
+     *
+     * Derived from the surface like everything else, so a theme still
+     * only names a few colours and the chrome follows. */
+    u32 edge_hi;         /* the outer lit edge, nearly white */
+    u32 edge_light;      /* the inner lit edge */
+    u32 edge_shadow;     /* the inner shaded edge */
+    u32 edge_dark;       /* the outer shaded edge, nearly black */
+    u32 well;            /* the ground inside something sunk: a field, a list */
+
+    /* A title bar is a gradient rather than a fill, which is most of what
+     * separates chrome that looks built from chrome that looks printed. */
+    u32 title_a, title_b, title_fg;
+    u32 title_off_a, title_off_b, title_off_fg;
+
     /* A light ground rather than a dark one. The presets name an accent
        and the temperature of the dark palette; the light one is the same
        accent over near-white, and everything derived below already knows

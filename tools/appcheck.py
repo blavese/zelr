@@ -46,9 +46,27 @@ AUDIO = ["-audiodev", "wav,id=a0,path=" + REC.replace("\\", "/"),
 
 # The calculator opens as the second window, so it cascades one step in from
 # where the terminal is. Its keys are a four by five grid under the display.
-CALC_X, CALC_Y = 88, 74
-CALC_W, CALC_H = 280, 380
-DISPLAY = (CALC_X + 4, CALC_Y + 24 + 4, CALC_X + CALC_W - 4, CALC_Y + 24 + 86)
+#
+# Written the way the kernel writes it. Every one of these was a number that
+# happened to be right until the frame went from one pixel to four and the
+# cascade moved clear of the desktop icons; the clicks then landed a few
+# pixels off every key, and the check that the answer was right went on
+# passing because both pictures were of a display nothing had reached.
+WM_BORDER, WM_TITLE_H = 4, 20
+WM_TOP = WM_BORDER + WM_TITLE_H
+ICON_LEFT, ICON_CELL_W = 14, 78           # where winsrv.c starts the cascade
+CASCADE_X = ICON_LEFT + ICON_CELL_W + 14
+
+CALC_X, CALC_Y = CASCADE_X + 48, 36 + 38  # one step in: the second window
+CALC_W, CALC_H = 280, 380                 # what the program asks for
+
+INNER_X, INNER_Y = CALC_X + WM_BORDER, CALC_Y + WM_TOP
+UI_PAD, UI_GAP = 8, 6
+DISPLAY_H = 86
+
+# Inside the display's well, clear of the bevel round it.
+DISPLAY = (INNER_X + UI_PAD + 2, INNER_Y + UI_PAD + 2,
+           INNER_X + CALC_W - UI_PAD - 2, INNER_Y + DISPLAY_H - UI_PAD - 2)
 
 
 def key_at(col, row):
@@ -56,15 +74,15 @@ def key_at(col, row):
 
     The grid is worked out from the window's content size the same way the
     program works it out, because a remembered coordinate is how these
-    harnesses break. The content is CALC_W by CALC_H, starting one pixel in
-    and a title bar down, with an 86 pixel display above the keys."""
-    gx = CALC_X + 1 + 8
-    gy = CALC_Y + 24 + 86 + 8
-    gw = CALC_W - 16
-    gh = CALC_H - 86 - 8 - 8
-    kw = (gw - 6 * 3) // 4
-    kh = (gh - 6 * 4) // 5
-    return (gx + col * (kw + 6) + kw // 2, gy + row * (kh + 6) + kh // 2)
+    harnesses break."""
+    gx = INNER_X + UI_PAD
+    gy = INNER_Y + DISPLAY_H + UI_PAD
+    gw = CALC_W - UI_PAD * 2
+    gh = CALC_H - DISPLAY_H - UI_PAD * 2
+    kw = (gw - UI_GAP * 3) // 4
+    kh = (gh - UI_GAP * 4) // 5
+    return (gx + col * (kw + UI_GAP) + kw // 2,
+            gy + row * (kh + UI_GAP) + kh // 2)
 
 
 def make_tone():
@@ -134,11 +152,18 @@ def main():
         vm.type("calc\n")
         time.sleep(3)
 
+        # What the display says before anything has been pressed, so that
+        # two identical pictures of a display nothing reached cannot be read
+        # as the arithmetic coming out right. They were, once: the keys had
+        # moved and every click was landing between them.
+        empty = display(mon, "calc-empty")
+
         # 7 8 / 4 =
         for col, row in ((0, 1), (1, 1), (3, 0), (0, 2), (3, 4)):
             mon.click(*key_at(col, row))
             time.sleep(0.35)
         worked = display(mon, "calc-divided")
+        c.add("the keys reach the calculator at all", worked != empty)
 
         # C, then the answer typed in by hand.
         mon.click(*key_at(0, 0))

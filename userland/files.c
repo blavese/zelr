@@ -50,6 +50,35 @@ static int   clip_is_cut;
 static char  filter_buf[32];
 static ui_field filter_field;
 
+/* --- the menu bar ---------------------------------------------------------
+ *
+ * Every command this program has, in the place every program puts them.
+ * The toolbar keeps the four worth a button of their own; everything else
+ * was previously reachable only by right clicking something, which is to
+ * say it was not reachable by anyone who did not already know.
+ *
+ * The program owns which title is open rather than the widget, because a
+ * menu bar with its own opinion about that cannot be driven by a keyboard
+ * later on. */
+static const char *const MENU_TITLES[] = { "File", "Edit", "View", "Help" };
+#define N_MENUS 4
+
+static const char *const FILE_ITEMS[] = {
+    "Open", "New folder", "Rename", "Delete", "Close"
+};
+static const char *const EDIT_ITEMS[] = { "Copy", "Cut", "Paste" };
+static const char *const VIEW_ITEMS[] = { "Refresh", "Home", "Root" };
+static const char *const HELP_ITEMS[] = { "About Files" };
+
+static const char *const *MENU_ITEMS[N_MENUS] = {
+    FILE_ITEMS, EDIT_ITEMS, VIEW_ITEMS, HELP_ITEMS
+};
+static const int MENU_COUNTS[N_MENUS] = { 5, 3, 3, 1 };
+static const int MENU_WIDTHS[N_MENUS] = { 130, 110, 110, 130 };
+
+static int bar_open = -1;              /* which title is down, or none */
+static int bar_x[N_MENUS];
+
 /* --- paths ---------------------------------------------------------------- */
 
 static void join(char *out, const char *dir, const char *name) {
@@ -393,55 +422,84 @@ void _start(void) {
         /* --- paint ------------------------------------------------------ */
         fill(&s, t.bg);
 
+        /* The menu bar owns the top of the window, and everything else is
+           measured from under it. */
+        int top = UI_MENUBAR_H;
+        int hot_title = ui_menubar(&s, &in, &t, w, MENU_TITLES, N_MENUS,
+                                   bar_open, bar_x);
+
+        /* Once one is open, sliding along the bar moves to the next, which
+           is what a menu bar has always done and what makes it browsable. */
+        if (bar_open >= 0 && hot_title >= 0 && hot_title != bar_open)
+            bar_open = hot_title;
+
+        if (in.released && hot_title >= 0) {
+            in.released = 0;
+            bar_open = (bar_open == hot_title) ? -1 : hot_title;
+        }
+
+        int tool_y = top;
+
         /* The places, down the left. */
-        rect(&s, 0, 0, SIDE_W, h, t.panel);
-        rect(&s, SIDE_W - 1, 0, 1, h, t.line);
-        /* Below the toolbar, which runs the width of the window: a heading
-           tucked under it is a heading nobody can read. */
-        face_draw(&s, UI_PAD, TOOLBAR_H + UI_PAD, "PLACES", t.dim, UI_FACE_SMALL);
+        rect(&s, 0, top, SIDE_W, h - top, t.panel);
+        face_draw(&s, UI_PAD, tool_y + TOOLBAR_H + UI_PAD, "PLACES",
+                  t.dim, UI_FACE_SMALL);
 
         for (int i = 0; i < N_PLACES; i++) {
-            int iy = TOOLBAR_H + UI_PAD + 20 + i * (UI_ROW + 2);
+            int iy = tool_y + TOOLBAR_H + UI_PAD + 20 + i * (UI_ROW + 2);
             int here = !strcmp(cwd, PLACES[i].path);
-            if (ui_row(&s, &in, &t, 0, iy, SIDE_W - 1, PLACES[i].label, 0, here) == 1)
+            if (ui_row(&s, &in, &t, 2, iy, SIDE_W - 6, PLACES[i].label, 0, here) == 1)
                 go_to(PLACES[i].path);
         }
 
         int cx = SIDE_W;
         int cw = w - SIDE_W;
 
-        ui_toolbar(&s, &t, w, TOOLBAR_H);
-        rect(&s, 0, 0, SIDE_W, TOOLBAR_H, t.panel);
+        rect(&s, 0, tool_y, w, TOOLBAR_H, t.panel);
+        ui_groove(&s, &t, 0, tool_y + TOOLBAR_H - 2, w, 2);
+        ui_toolbar_gap(&s, &t, SIDE_W - 3, tool_y + 3, TOOLBAR_H - 8);
 
+        int btn_y = tool_y + (TOOLBAR_H - UI_BTN_H) / 2;
         int bx = cx + UI_PAD;
-        if (ui_button(&s, &in, &t, bx, (TOOLBAR_H - UI_BTN_H) / 2, 48, "Up")) go_up();
+        if (ui_button(&s, &in, &t, bx, btn_y, 48, "Up")) go_up();
         bx += 48 + UI_GAP;
-        if (ui_button(&s, &in, &t, bx, (TOOLBAR_H - UI_BTN_H) / 2, 60, "Open"))
+        if (ui_button(&s, &in, &t, bx, btn_y, 60, "Open"))
             open_entry(selected);
         bx += 60 + UI_GAP;
-        if (ui_button(&s, &in, &t, bx, (TOOLBAR_H - UI_BTN_H) / 2, 86, "New folder")) {
+        if (ui_button(&s, &in, &t, bx, btn_y, 86, "New folder")) {
             char target[PATH_MAX];
             join(target, cwd, "new folder");
             say(mkdir(target) < 0 ? "could not create" : "created");
             reload();
         }
         bx += 86 + UI_GAP;
-        if (ui_button(&s, &in, &t, bx, (TOOLBAR_H - UI_BTN_H) / 2, 60, "Paste"))
+        if (ui_button(&s, &in, &t, bx, btn_y, 60, "Paste"))
             do_paste();
 
         /* The filter, against the right hand end of the toolbar. */
         int fw = 150;
         if (cw > 460)
-            ui_field_draw(&s, &in, &t, w - UI_PAD - fw, (TOOLBAR_H - UI_BTN_H) / 2,
+            ui_field_draw(&s, &in, &t, w - UI_PAD - fw, btn_y,
                           fw, &filter_field, "filter");
 
-        /* The path, as its own strip. */
-        rect(&s, cx, TOOLBAR_H, cw, CRUMB_H, mix(t.bg, 0, 30));
-        face_draw(&s, cx + UI_PAD, TOOLBAR_H + (CRUMB_H - face_h(UI_FACE_BODY)) / 2,
-                  cwd, t.dim, UI_FACE_BODY);
+        /* The path, in a well of its own: it is something being read, not
+           something to press. */
+        int crumb_y = tool_y + TOOLBAR_H;
+        rect(&s, cx, crumb_y, cw, CRUMB_H, t.bg);
+        ui_well(&s, &t, cx + 4, crumb_y + 3, cw - 8, CRUMB_H - 6, 0, 0, 0, 0);
+        face_draw(&s, cx + 10, crumb_y + (CRUMB_H - face_h(UI_FACE_BODY)) / 2,
+                  cwd, t.fg, UI_FACE_BODY);
 
-        int list_y = TOOLBAR_H + CRUMB_H;
+        int list_y = crumb_y + CRUMB_H;
         int list_h = h - list_y - UI_ROW;
+
+        /* Sunk, with paper at the bottom of it. What is in a window is
+           either something to press or something to look at, and this is
+           the shape that says which. */
+        ui_well(&s, &t, cx + 4, list_y, cw - 8, list_h - 4, 0, 0, 0, 0);
+        list_y += 2;
+        list_h -= 8;
+
         int shown = list_h / UI_ROW;
         if (shown < 1) shown = 1;
 
@@ -523,7 +581,7 @@ void _start(void) {
         /* --- what is down there ------------------------------------------- */
         char right[48];
         int n = utoa((u32)total, right);
-        const char *items = " items, ";
+        const char *items = total == 1 ? " item, " : " items, ";
         for (int i = 0; items[i]; i++) right[n++] = items[i];
         n += utoa(total_bytes / 1024, right + n);
         right[n++] = ' '; right[n++] = 'K'; right[n] = 0;
@@ -541,6 +599,66 @@ void _start(void) {
             left = detail;
         }
         ui_statusbar(&s, &t, w, h, left, right);
+
+        /* --- the menu that is down, over everything else ------------------
+         *
+         * Drawn last so it sits over the window rather than under whatever
+         * is painted after it, and every one of its entries does the same
+         * thing the toolbar button or the context menu does. A command
+         * reachable two ways is not duplication: it is the difference
+         * between a program you can learn and one you have to be told
+         * about. */
+        if (bar_open >= 0) {
+            int pick = ui_menu(&s, &in, &t, bar_x[bar_open], UI_MENUBAR_H,
+                               MENU_WIDTHS[bar_open],
+                               MENU_ITEMS[bar_open], MENU_COUNTS[bar_open]);
+            if (pick >= 0) {
+                int which = bar_open;
+                bar_open = -1;
+
+                if (which == 0) {                       /* File */
+                    if (pick == 0) open_entry(selected);
+                    else if (pick == 1) {
+                        char target[PATH_MAX];
+                        join(target, cwd, "new folder");
+                        say(mkdir(target) < 0 ? "could not create" : "created");
+                        reload();
+                    } else if (pick == 2 && selected >= 0) {
+                        renaming = selected;
+                        strncpy(rename_buf, entries[selected].name,
+                                sizeof(rename_buf) - 1);
+                        rename_buf[sizeof(rename_buf) - 1] = 0;
+                        rename_field.len = strlen(rename_buf);
+                        rename_field.cursor = rename_field.len;
+                        rename_field.focused = 1;
+                    } else if (pick == 3 && selected >= 0) {
+                        char target[PATH_MAX];
+                        join(target, cwd, entries[selected].name);
+                        say(unlink(target) < 0 ? "could not delete" : "deleted");
+                        reload();
+                    } else if (pick == 4) closing = 1;
+                } else if (which == 1) {                /* Edit */
+                    if (pick == 0 && selected >= 0) {
+                        join(clip_path, cwd, entries[selected].name);
+                        clip_is_cut = 0;
+                        say("copied");
+                    } else if (pick == 1 && selected >= 0) {
+                        join(clip_path, cwd, entries[selected].name);
+                        clip_is_cut = 1;
+                        say("cut");
+                    } else if (pick == 2) do_paste();
+                } else if (which == 2) {                /* View */
+                    if (pick == 0) reload();
+                    else if (pick == 1) go_to("/home");
+                    else if (pick == 2) go_to("/");
+                } else {                                /* Help */
+                    say("Files, a ring 3 program");
+                }
+            } else if (in.released) {
+                in.released = 0;
+                bar_open = -1;             /* a click anywhere else shuts it */
+            }
+        }
 
         if (menu_open) {
             int pick = ui_menu(&s, &in, &t, menu_x, menu_y, 150,

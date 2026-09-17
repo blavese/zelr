@@ -228,6 +228,36 @@ void fb_vgradient(int x, int y, int w, int h, u32 top, u32 bottom) {
     }
 }
 
+void fb_hgradient(int x, int y, int w, int h, u32 left, u32 right) {
+    if (w <= 0) return;
+    for (int i = 0; i < w; i++) {
+        u32 c = gfx_mix(left, right, i * 255 / (w > 1 ? w - 1 : 1));
+        fb_rect((u32)(x + i), (u32)y, 1, (u32)h, c);
+    }
+}
+
+/* The corners belong to the run that starts there, so the top row is drawn
+   whole and the left column starts one below it. Drawn the other way the
+   two meet twice and the corner pixel takes whichever colour went last,
+   which at a bevel's scale is a visible notch. */
+static void edge(int x, int y, int w, int h, u32 tl, u32 br) {
+    if (w <= 0 || h <= 0) return;
+    fb_rect((u32)x, (u32)y, (u32)w, 1, tl);                    /* top */
+    fb_rect((u32)x, (u32)(y + 1), 1, (u32)(h - 1), tl);        /* left */
+    fb_rect((u32)x, (u32)(y + h - 1), (u32)w, 1, br);          /* bottom */
+    fb_rect((u32)(x + w - 1), (u32)y, 1, (u32)(h - 1), br);    /* right */
+}
+
+void fb_bevel(int x, int y, int w, int h,
+              u32 tl_outer, u32 tl_inner, u32 br_inner, u32 br_outer) {
+    edge(x, y, w, h, tl_outer, br_outer);
+    edge(x + 1, y + 1, w - 2, h - 2, tl_inner, br_inner);
+}
+
+void fb_bevel_thin(int x, int y, int w, int h, u32 tl, u32 br) {
+    edge(x, y, w, h, tl, br);
+}
+
 /* --- the anti-aliased face ----------------------------------------------- */
 
 #include "face.h"

@@ -150,10 +150,10 @@ static void cmd_ps(void) {
     /* Slices is every tick the scheduler handed this task. Waiting is the
        ones it spent halted, so the difference is what it actually did. */
     kprintf("  PID  STATE     SLICES  WAITING  NAME\n");
-    const char *st[] = { "ready", "running", "sleeping", "dead" };
     task_t *p = t;
     do {
-        kprintf("  %3d  %-8s  %6d  %7d  %s\n", p->pid, st[p->state],
+        kprintf("  %3d  %-8s  %6d  %7d  %s\n", p->pid,
+                task_state_name(p->state),
                 p->slices, (u32)p->idle_ticks, p->name);
         p = p->next;
     } while (p != t);

@@ -258,6 +258,22 @@ void task_yield(void) {
     __asm__ volatile ("int $32");
 }
 
+/* A switch rather than a table, because a table has to be kept the same
+   length as the enum and nothing says when it is not. One was four long
+   against five states: a blocked task printed as dead and a dead one read
+   the pointer past the end of the array and printed the bytes of whatever
+   came next. */
+const char *task_state_name(task_state_t s) {
+    switch (s) {
+        case TASK_READY:    return "ready";
+        case TASK_RUNNING:  return "running";
+        case TASK_SLEEPING: return "sleeping";
+        case TASK_BLOCKED:  return "blocked";
+        case TASK_DEAD:     return "dead";
+    }
+    return "?";
+}
+
 /* Whole ticks only. A halt ended early by a key or the mouse inside the
    same tick counts as nothing, which charges the task for time it spent
    waiting. That is the direction to be wrong in: it can say busy when it

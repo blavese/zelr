@@ -1117,7 +1117,11 @@ static void save_theme(const char *name) { spit(THEME_FILE, name, strlen(name));
  * The desktop's own light mode is a system setting and this program is the
  * one window on it that does not read the system palette: a terminal has
  * its own idea of colour and always has. So it follows the setting only
- * when it has not been told otherwise, and `theme` still wins for good. */
+ * when it has not been told otherwise, and `theme` still wins for good.
+ *
+ * With no settings file at all it is slate, which is not the desktop's
+ * default and is meant not to be: a machine nobody has set up yet still
+ * gets a dark terminal, because that is what a terminal is. */
 static int default_palette(void) {
     char cfg[512];
     int n = slurp("/zelr.cfg", cfg, sizeof(cfg) - 1);

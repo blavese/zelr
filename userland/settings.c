@@ -19,12 +19,19 @@
 #define SIDEBAR_W 150
 
 /* What is being edited. These are the same names the kernel's theme.c
-   parses; nothing else is shared between the two. */
-static int preset = 0;
-static int light = 0;
+   parses; nothing else is shared between the two.
+ *
+ * And the same values theme_init starts from, which matters more than it
+ * looks: on a machine with no settings file yet nobody has written these
+ * down, so both sides are running on their own idea of the defaults. When
+ * they disagreed this window opened showing teal and dark on a desktop that
+ * was indigo and light, and every control in it was reporting a machine
+ * that did not exist. */
+static int preset = 1;
+static int light = 1;
 static int wallpaper = 3;
-static int corner = 8;
-static int shadows = 1;
+static int corner = 0;
+static int shadows = 0;
 static int animate = 1;
 static int quirks = 1;
 static int autodesktop = 1;
@@ -169,18 +176,22 @@ static void load(void) {
     if (n < 0) n = 0;
     buf[n] = 0;
 
-    preset    = ui_cfg_int(buf, "preset", 0);
-    light     = ui_cfg_int(buf, "light", 0);
-    wallpaper = ui_cfg_int(buf, "wallpaper", 3);
-    corner    = ui_cfg_int(buf, "corner", 8);
-    shadows   = ui_cfg_int(buf, "shadows", 1);
-    animate   = ui_cfg_int(buf, "animate", 1);
-    quirks    = ui_cfg_int(buf, "quirks", 1);
-    autodesktop = ui_cfg_int(buf, "autodesktop", 1);
-    scr_w     = ui_cfg_int(buf, "width", 0);
-    scr_h     = ui_cfg_int(buf, "height", 0);
+    /* What a key falls back to is what the variable already holds, so the
+       defaults are written down once at the top of this file and not twice.
+       They were twice, and the second copy was the one that ran: changing
+       the first changed nothing at all. */
+    preset    = ui_cfg_int(buf, "preset", preset);
+    light     = ui_cfg_int(buf, "light", light);
+    wallpaper = ui_cfg_int(buf, "wallpaper", wallpaper);
+    corner    = ui_cfg_int(buf, "corner", corner);
+    shadows   = ui_cfg_int(buf, "shadows", shadows);
+    animate   = ui_cfg_int(buf, "animate", animate);
+    quirks    = ui_cfg_int(buf, "quirks", quirks);
+    autodesktop = ui_cfg_int(buf, "autodesktop", autodesktop);
+    scr_w     = ui_cfg_int(buf, "width", scr_w);
+    scr_h     = ui_cfg_int(buf, "height", scr_h);
 
-    if (preset < 0 || preset >= UI_PRESETS) preset = 0;
+    if (preset < 0 || preset >= UI_PRESETS) preset = 1;
     if (wallpaper < 0 || wallpaper >= N_WALLPAPERS) wallpaper = 3;
 }
 
@@ -220,11 +231,11 @@ static void save(void) {
  * reads it the same way, so the two cannot end up disagreeing about what
  * the defaults are. */
 static void reset_everything(void) {
-    preset = 0;
-    light = 0;
+    preset = 1;
+    light = 1;
     wallpaper = 3;
-    corner = 8;
-    shadows = 1;
+    corner = 0;
+    shadows = 0;
     animate = 1;
     quirks = 1;
     autodesktop = 1;
