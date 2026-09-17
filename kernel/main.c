@@ -28,6 +28,7 @@
 #include "fb.h"
 #include "fbcon.h"
 #include "mouse.h"
+#include "synaptics.h"
 #include "syscall.h"
 #include "shell.h"
 #include "winsrv.h"
@@ -344,6 +345,38 @@ void kmain(handoff_t *h) {
 
     serial_enable_irq();
     kprintf("  input   ps/2 keyboard + serial (irq driven)\n");
+
+    /* What the pointer turned out to be. Said out loud because a trackpad
+       that was found and is doing nothing and a trackpad that was never
+       found look identical from the far side of the screen, and on a laptop
+       this is the first thing worth knowing. */
+    if (syn_present())
+        kprintf("  pointer synaptics %d.%d, caps %06x%s\n",
+                syn_major(), syn_minor(), syn_capabilities(),
+                mouse_has_wheel() ? ", two finger scroll" : "");
+    else if (mouse_present())
+        kprintf("  pointer ps/2 mouse%s\n",
+                mouse_has_wheel() ? " with a wheel" : "");
+    else
+        kprintf("  pointer none found\n");
+
+    /* And what a pointer might be hiding behind, on a machine where it is
+       not on the 8042. A laptop trackpad that is not a ps/2 device is on an
+       i2c controller, and those turn up under one of two classes depending
+       on how the vendor felt that year. There is no driver for either yet,
+       so this only says what is there, which is the thing that has to be
+       known before there is any point writing one. */
+    {
+        pci_dev_t serial[4];
+        u32 n = pci_list_class(0x0C, 0x80, serial, 4);          /* other bus */
+        u32 dsp = pci_list_class(0x11, 0x80, serial + (n < 4 ? n : 4),
+                                 n < 4 ? 4 - n : 0);            /* or here */
+        u32 total = n + dsp;
+        for (u32 i = 0; i < total && i < 4; i++)
+            kprintf("  i2c     %04x:%04x at %d:%d.%d, no driver\n",
+                    serial[i].vendor, serial[i].device,
+                    serial[i].bus, serial[i].slot, serial[i].func);
+    }
 
     /* Interrupt routing, after every driver has registered its handler and
        before interrupts are ever enabled, which does not happen until

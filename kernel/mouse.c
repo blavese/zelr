@@ -10,6 +10,7 @@
 #include "idt.h"
 #include "pic.h"
 #include "ps2.h"
+#include "synaptics.h"
 #include "io.h"
 #include "printf.h"
 #include "string.h"
@@ -63,7 +64,9 @@ i32  mouse_x(void) { return mx; }
 i32  mouse_y(void) { return my; }
 u8   mouse_buttons(void) { return buttons; }
 u32  mouse_moves(void) { return moves; }
-bool mouse_has_wheel(void) { return packet_len == 4; }
+/* A trackpad has no wheel and scrolls anyway, with two fingers, which is
+   what anything asking this actually wants to know. */
+bool mouse_has_wheel(void) { return packet_len == 4 || syn_present(); }
 
 i32 mouse_take_scroll(void) {
     /* Read and cleared together, with interrupts off: a packet arriving
@@ -192,6 +195,12 @@ static void on_packet(void) {
  * it was before the read, so kernel/ps2.c does the reading and the sorting
  * and this is handed the ones that were the mouse's. */
 void mouse_byte(u8 b) {
+    /* A trackpad in absolute mode sends six byte reports that mean something
+       else entirely, so it decodes its own. Everything after that arrives
+       back here through mouse_inject, which is the same door the USB mouse
+       comes in by. */
+    if (syn_present()) { syn_byte(b); return; }
+
     packet[phase++] = b;
     if (phase == 1 && !(packet[0] & 0x08)) { phase = 0; return; }
     if (phase == packet_len) { phase = 0; on_packet(); }
@@ -214,7 +223,16 @@ bool mouse_init(void) {
     if (!ps2_present()) return false;
 
     mouse_cmd(0xF6);                                 /* restore defaults */
-    packet_len = enable_wheel() ? 4 : 3;
+
+    /* A trackpad first, because one answering as a plain mouse is what the
+       last thirty years of laptops have been putting up with. It either
+       identifies itself or it does not, and the knock leaves a mouse exactly
+       where it found it, so there is nothing to undo when it does not. */
+    if (syn_detect()) {
+        packet_len = 6;
+    } else {
+        packet_len = enable_wheel() ? 4 : 3;
+    }
     wheel = 0;
     mouse_cmd(0xF4);                                 /* start reporting */
 

@@ -11,6 +11,7 @@
 #include "layout.h"
 #include "sysfs.h"
 #include "timer.h"
+#include "synaptics.h"
 #include "sched.h"
 #include "wait.h"
 #include "syscall.h"
@@ -1015,6 +1016,219 @@ static void test_idle_accounting(void) {
        waited_idle > spun_idle + 10);
 }
 
+/* --- the trackpad ---------------------------------------------------------
+ *
+ * No emulator has a Synaptics pad, so nothing here can show that one is
+ * found: that has to happen on a real laptop. What can be shown is
+ * everything after a report arrives, by building reports and feeding them
+ * to the decoder.
+ *
+ * Which is the half where the mistakes are. A pad reports where the finger
+ * is and a pointer needs how far it moved, and every one of the checks below
+ * that is not about arithmetic is about a way that subtraction goes wrong:
+ * a finger that lands somewhere else, a finger moving too slowly to divide,
+ * a second finger arriving. */
+
+/* A report, assembled the way the pad assembles one. The bits of x, y and w
+   are scattered across four of the six bytes, which is the sort of layout
+   that comes of adding fields to a three byte packet for twenty years. */
+static void syn_pack(u8 out[6], i32 x, i32 y, u8 z, u8 w, u8 btns) {
+    out[0] = (u8)(0x80 | (((w >> 2) & 3) << 4) | (((w >> 1) & 1) << 2)
+                  | (btns & 3));
+    out[1] = (u8)((((y >> 8) & 0x0F) << 4) | ((x >> 8) & 0x0F));
+    out[2] = z;
+    out[3] = (u8)(0xC0 | (((y >> 12) & 1) << 5) | (((x >> 12) & 1) << 4)
+                  | ((w & 1) << 2) | (btns & 3));
+    out[4] = (u8)(x & 0xFF);
+    out[5] = (u8)(y & 0xFF);
+}
+
+static void syn_feed(i32 x, i32 y, u8 z, u8 w, u8 btns) {
+    u8 p[6];
+    syn_pack(p, x, y, z, w, btns);
+    for (int i = 0; i < 6; i++) syn_byte(p[i]);
+}
+
+static void syn_lift(void) { syn_feed(0, 0, 0, 0, 0); }
+
+/* Somewhere in the middle of the screen, so that nothing below is measuring
+   the edge the pointer is clamped against. */
+static bool park_pointer(void) {
+    mouse_inject(-20000, 20000, 0);       /* into the corner */
+    mouse_inject(400, -300, 0);           /* and out to a known place */
+    return mouse_x() == 400 && mouse_y() == 300;
+}
+
+static void test_trackpad(void) {
+    /* The knock must not mistake an ordinary mouse for a pad, which is what
+       is on the other end of this in every emulator and on most desks.
+       Asked at boot and answered wrongly, this machine would be driving a
+       mouse through six byte reports and the pointer would be dead.
+ 
+       Not by calling syn_detect again: that talks to the hardware, and by
+       now the timer is draining the controller on every tick and would eat
+       the answer. What is asked is what the machine concluded at boot. */
+    ok("this machine did not conclude it has a trackpad", !syn_present());
+
+    /* And the decision itself, which is the part an emulator can exercise:
+       a pad's answer, a mouse's answer, and one bit between them. */
+    {
+        static const u8 pad[3]   = { 0x02, 0x47, 0x07 };
+        static const u8 mouse[3] = { 0x00, 0x02, 0x64 };
+        static const u8 near[3]  = { 0x02, 0x46, 0x07 };
+        ok("a pad's answer is recognised", syn_answer_is_pad(pad));
+        ok("a mouse's answer is not", !syn_answer_is_pad(mouse));
+        ok("and neither is one bit away from a pad's",
+           !syn_answer_is_pad(near));
+    }
+
+    syn_reset_state(true);
+    ok("the pointer can be parked away from the edges", park_pointer());
+
+    /* --- a position, turned into movement ------------------------------- */
+    i32 x0 = mouse_x(), y0 = mouse_y();
+    syn_feed(3000, 3000, 60, 4, 0);
+    ok("the first report of a contact moves nothing",
+       mouse_x() == x0 && mouse_y() == y0);
+
+    syn_feed(3600, 3000, 60, 4, 0);       /* 600 units right, six to a pixel */
+    ok("a finger moving right moves the pointer right",
+       mouse_x() == x0 + 100);
+
+    /* The pad counts y upward and the screen counts it downward. Getting
+       this backwards is the one bug in a trackpad everybody notices. */
+    syn_feed(3600, 3600, 60, 4, 0);
+    ok("a finger moving up the pad moves the pointer up",
+       mouse_y() == y0 - 100);
+    syn_lift();
+
+    /* --- slowly ---------------------------------------------------------- */
+    /* Two units at a time, divided by six. Each one on its own is nothing,
+       and three of them are a pixel only if the remainder is kept. Without
+       that, a finger moved slowly does not move the pointer at all. */
+    syn_reset_state(true);
+    x0 = mouse_x();
+    syn_feed(3000, 3000, 60, 4, 0);
+    syn_feed(3002, 3000, 60, 4, 0);
+    syn_feed(3004, 3000, 60, 4, 0);
+    ok("two of six pixels is still nothing", mouse_x() == x0);
+    syn_feed(3006, 3000, 60, 4, 0);
+    ok("but the remainder is kept, so a slow finger still moves it",
+       mouse_x() == x0 + 1);
+    syn_lift();
+
+    /* --- and too far ----------------------------------------------------- */
+    /* A second finger landing changes which contact is being reported, and
+       the difference looks like a flick across the whole pad. */
+    syn_reset_state(true);
+    x0 = mouse_x();
+    syn_feed(3000, 3000, 60, 4, 0);
+    syn_feed(4500, 3000, 60, 4, 0);
+    ok("a jump no finger could make is not a movement", mouse_x() == x0);
+    syn_lift();
+
+    /* --- two fingers scroll ---------------------------------------------- */
+    syn_reset_state(true);
+    mouse_take_scroll();                  /* whatever was pending, cleared */
+    x0 = mouse_x(); y0 = mouse_y();
+    syn_feed(3000, 3000, 60, 0, 0);       /* width 0 is two fingers */
+    syn_feed(3000, 2760, 60, 0, 0);       /* 240 units down the pad */
+    ok("two fingers do not move the pointer",
+       mouse_x() == x0 && mouse_y() == y0);
+    ok("two fingers moved down the pad scroll down",
+       mouse_take_scroll() == 2);
+    syn_lift();
+
+    /* The second finger landing is the real reason a position jumps, and it
+       is caught by the count changing rather than by the distance. Without
+       this, starting a scroll throws the pointer across the screen first. */
+    syn_reset_state(true);
+    mouse_take_scroll();
+    x0 = mouse_x(); y0 = mouse_y();
+    syn_feed(3000, 3000, 60, 4, 0);       /* one finger, the origin */
+    syn_feed(3300, 3000, 60, 4, 0);       /* moving: 300 units, 50 pixels */
+    ok("one finger moves the pointer", mouse_x() == x0 + 50);
+    /* Away in both directions, because a second finger that lands at the
+       same height would go straight down the scrolling path and the jump
+       would never show as movement. This check missed exactly that until
+       the decoder was broken on purpose to see whether it would. */
+    syn_feed(3900, 2400, 60, 0, 0);       /* a second lands, far away */
+    ok("a second finger landing does not move the pointer",
+       mouse_x() == x0 + 50 && mouse_y() == y0);
+    ok("nor does it scroll", mouse_take_scroll() == 0);
+
+    /* And lifting one of them is the same problem the other way round. */
+    syn_feed(3500, 2400, 60, 4, 0);       /* back to one, somewhere else */
+    ok("a finger leaving does not move the pointer either",
+       mouse_x() == x0 + 50 && mouse_y() == y0);
+    syn_lift();
+
+    /* --- tapping --------------------------------------------------------- */
+    syn_reset_state(true);
+    syn_feed(3000, 3000, 60, 4, 0);
+    syn_lift();
+    ok("a quick touch that went nowhere is a left click",
+       mouse_buttons() == 0x01);
+
+    /* And is held, because the window manager reads the buttons once a pass
+       and a click released before the next one never happened. */
+    syn_tick();
+    ok("and the click is still down a moment later", mouse_buttons() == 0x01);
+    sleep_ms(120);
+    syn_tick();
+    ok("and is let go after that", mouse_buttons() == 0);
+
+    /* Two fingers tap the other button. */
+    syn_reset_state(true);
+    syn_feed(3000, 3000, 60, 0, 0);
+    syn_lift();
+    ok("two fingers tapping is a right click", mouse_buttons() == 0x02);
+    sleep_ms(120);
+    syn_tick();
+
+    /* A finger resting is not a tap, or the pointer clicks wherever it is
+       left. */
+    syn_reset_state(true);
+    syn_feed(3000, 3000, 60, 4, 0);
+    sleep_ms(300);
+    syn_lift();
+    ok("a finger held down is not a tap", mouse_buttons() == 0);
+
+    /* Neither is one that moved: that was a drag of the pointer. */
+    syn_reset_state(true);
+    syn_feed(3000, 3000, 60, 4, 0);
+    syn_feed(3150, 3000, 60, 4, 0);
+    syn_lift();
+    ok("a touch that travelled is not a tap", mouse_buttons() == 0);
+
+    /* --- finding the start of a report ----------------------------------- */
+    /* Six bytes with no length prefix, read from a stream that can be joined
+       half way through. The first byte of a report has its top two bits 10
+       and the fourth has 11, and both are checked, so a stream out of step
+       costs one report rather than decoding into a pointer that flies off. */
+    syn_reset_state(true);
+    x0 = mouse_x();
+    syn_byte(0x40); syn_byte(0x00); syn_byte(0xFF);   /* none of them a start */
+    syn_feed(3000, 3000, 60, 4, 0);                   /* the origin */
+    syn_feed(3600, 3000, 60, 4, 0);
+    ok("a report found mid stream is still decoded", mouse_x() == x0 + 100);
+
+    /* And the second anchor: three good bytes then a fourth that cannot be
+       one, which has to throw the report away rather than shift into it. */
+    syn_reset_state(true);
+    x0 = mouse_x();
+    syn_feed(3000, 3000, 60, 4, 0);
+    syn_byte(0x80); syn_byte(0x00); syn_byte(0x3C);
+    syn_byte(0x00);                                   /* not 11 at the top */
+    syn_feed(3600, 3000, 60, 4, 0);
+    ok("a fourth byte that cannot be one throws the report away",
+       mouse_x() == x0 + 100);
+
+    syn_lift();
+    syn_reset_state(false);
+    mouse_inject(0, 0, 0);
+}
+
 static volatile int timeout_reached;
 
 static void timeout_task(void) {
@@ -1607,6 +1821,7 @@ int selftest_run(void) {
     kprintf("[layout]\n");    test_layout();
     kprintf("[waiting]\n");    test_waiting();
     test_idle_accounting();
+    kprintf("[trackpad]\n");   test_trackpad();
     kprintf("[wait timeouts]\n"); test_wait_timeout();
     kprintf("[processors]\n"); test_smp();
     kprintf("[black box]\n"); test_blackbox();

@@ -43,6 +43,16 @@ void pci_write32(u8 bus, u8 slot, u8 func, u16 offset, u32 value);
 void pci_write16(u8 bus, u8 slot, u8 func, u16 offset, u16 value);
 bool pci_find(u16 vendor, u16 device, pci_dev_t *out);
 bool pci_find_class(u8 class_code, u8 subclass, u8 prog_if, pci_dev_t *out);
+
+/* Every device of a class and subclass, whatever its programming interface,
+   up to max of them. Returns how many there are, which may be more than
+   were written.
+
+   For saying what a machine has before there is a driver for it. A laptop
+   trackpad that is not on the 8042 is on an I2C controller, and which
+   controller decides what writing that driver involves, so a machine that
+   cannot use one can at least report that it is there. */
+u32  pci_list_class(u8 class_code, u8 subclass, pci_dev_t *out, u32 max);
 void pci_enable_bus_master(const pci_dev_t *d);
 
 /* Walks the capability list, returning the offset of the first capability

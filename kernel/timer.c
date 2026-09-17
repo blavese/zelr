@@ -7,6 +7,7 @@
 #include "pic.h"
 #include "io.h"
 #include "usb.h"
+#include "synaptics.h"
 
 static volatile u64 ticks = 0;
 static u32 frequency = 100;
@@ -26,6 +27,10 @@ static void on_tick(registers_t *r) {
        controller delivering anything further. Before this, that was a
        keyboard and a mouse dead until the machine was power cycled. */
     ps2_poll_from_timer();
+
+    /* And the release of a trackpad tap, which nothing else can cause: by
+       the time it has to happen the finger is already off the pad. */
+    syn_tick();
 
     /* And the sound buffer, which plays on a loop and would otherwise repeat
        whatever was last written to it forever. */
