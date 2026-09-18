@@ -35,6 +35,7 @@
 #include "winsrv.h"
 #include "clipboard.h"
 #include "rtc.h"
+#include "rng.h"
 #include "smp.h"
 #include "acpi.h"
 #include "vfs.h"
@@ -352,6 +353,20 @@ void kmain(handoff_t *h) {
 
     bb_mark("timer");
     timer_init(100); kprintf("  timer   100 Hz\n");
+
+    /* After the clock and the timer, both of which it mixes in. What it can
+       say here is only what the processor offered: the timing source is
+       collected in the timer interrupt and does not exist yet, because
+       interrupts are not enabled until the scheduler starts. */
+    bb_mark("entropy");
+    rng_init();
+    if (rng_ready()) {
+        kprintf("  random  %s\n", rng_sources());
+        bb_log("random %s", rng_sources());
+    } else {
+        kprintf("  random  no hardware source, collecting timing jitter\n");
+        bb_log("random no rdseed and no rdrand, timing jitter only");
+    }
 
     /* Needs the timer: the startup sequence is defined in microseconds and
        there is nothing to measure them with before it. */

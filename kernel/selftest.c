@@ -57,6 +57,8 @@
 #include "pic.h"
 #include "clipboard.h"
 #include "rtc.h"
+#include "rng.h"
+#include "tls.h"
 
 static int passed, failed;
 
@@ -1324,6 +1326,175 @@ static void test_sha256(void) {
                early, "derived", empty, 32, derived) && is_hex(derived, 32,
            "6f2615a108c702c5678f54fc9dbab69716c076189c48250cebeac3576c3611ba"));
     }
+}
+
+/* --- the rest of the key schedule, against the same traced handshake -----
+ *
+ * RFC 8448 records one real 1-RTT handshake from end to end, every
+ * intermediate value included. The two above are where it starts; these are
+ * the ones that decide whether a record can be read, and they were the
+ * untested part.
+ *
+ * This is worth doing as known answers rather than as a round trip with
+ * itself, because a key schedule that is wrong in a consistent way encrypts
+ * and decrypts its own records perfectly and cannot talk to anything else.
+ * The failure that produces is "a record did not authenticate", arriving
+ * from a server that did nothing wrong, and there is no way to tell from
+ * that end which side is at fault. */
+static void test_tls_schedule(void) {
+    /* The shared secret the traced handshake's x25519 produced, and the
+       transcript hash over its ClientHello and ServerHello. */
+    static const u8 shared[32] = {
+        0x8b,0xd4,0x05,0x4f,0xb5,0x5b,0x9d,0x63,0xfd,0xfb,0xac,0xf9,
+        0xf0,0x4b,0x9f,0x0d,0x35,0xe6,0xd6,0x3f,0x53,0x75,0x63,0xef,
+        0xd4,0x62,0x72,0x90,0x0f,0x89,0x49,0x2d
+    };
+    static const u8 th_hello[32] = {
+        0x86,0x0c,0x06,0xed,0xc0,0x78,0x58,0xee,0x8e,0x78,0xf0,0xe7,
+        0x42,0x8c,0x58,0xed,0xd6,0xb4,0x3f,0x2c,0xa3,0xe6,0xe9,0x5f,
+        0x02,0xed,0x06,0x3c,0xf0,0xe1,0xca,0xd8
+    };
+
+    u8 zeros[32], early[32], derived[32], empty[32];
+    u8 hs[32], c_hs[32], s_hs[32], key[16], iv[12];
+
+    memset(zeros, 0, sizeof(zeros));
+    sha256("", 0, empty);
+    hkdf_extract(0, 0, zeros, sizeof(zeros), early);
+    ok("the schedule reaches the same early secret",
+       tls13_derive_secret(early, "derived", empty, 32, derived));
+
+    /* The handshake secret: the derived value as salt, the shared secret as
+       input. Getting these two the wrong way round still produces thirty two
+       bytes that look exactly as good. */
+    hkdf_extract(derived, 32, shared, 32, hs);
+    ok("tls 1.3 handshake secret", is_hex(hs, 32,
+       "1dc826e93606aa6fdc0aadc12f741b01046aa6b99f691ed221a9f0ca043fbeac"));
+
+    ok("the client's handshake traffic secret",
+       tls13_derive_secret(hs, "c hs traffic", th_hello, 32, c_hs) &&
+       is_hex(c_hs, 32,
+       "b3eddb126e067f35a780b3abf45e2d8f3b1a950738f52e9600746a0e27a55a21"));
+
+    ok("the server's handshake traffic secret",
+       tls13_derive_secret(hs, "s hs traffic", th_hello, 32, s_hs) &&
+       is_hex(s_hs, 32,
+       "b67b7d690cc16c4e75e54213cb2d37b4e9c912bcded9105d42befd59d391ad38"));
+
+    /* And what the record layer is actually handed. The label goes through
+       the same function every other key does, so a mistake in it would have
+       shown up above; what these catch is the lengths, which are the one
+       thing that differs between a key and the secret it came from. */
+    ok("the server's handshake record key",
+       hkdf_expand_label(s_hs, "key", 0, 0, key, 16) &&
+       is_hex(key, 16, "3fce516009c21727d0f2e4e86ee403bc"));
+    ok("and its nonce",
+       hkdf_expand_label(s_hs, "iv", 0, 0, iv, 12) &&
+       is_hex(iv, 12, "5d313eb2671276ee13000b30"));
+
+    ok("the client's handshake record key",
+       hkdf_expand_label(c_hs, "key", 0, 0, key, 16) &&
+       is_hex(key, 16, "dbfaa693d1762c5b666af5d950258d01"));
+    ok("and its nonce",
+       hkdf_expand_label(c_hs, "iv", 0, 0, iv, 12) &&
+       is_hex(iv, 12, "5bd3c71b836e0b76bb73265f"));
+
+    /* The master secret, and the keys the conversation proper runs under. */
+    {
+        u8 master[32], c_ap[32], s_ap[32];
+        static const u8 th_finished[32] = {
+            0x96,0x08,0x10,0x2a,0x0f,0x1c,0xcc,0x6d,0xb6,0x25,0x0b,0x7b,
+            0x7e,0x41,0x7b,0x1a,0x00,0x0e,0xaa,0xda,0x3d,0xaa,0xe4,0x77,
+            0x7a,0x76,0x86,0xc9,0xff,0x83,0xdf,0x13
+        };
+        ok("the schedule moves on from the handshake secret",
+           tls13_derive_secret(hs, "derived", empty, 32, derived) &&
+           is_hex(derived, 32,
+           "43de77e0c77713859a944db9db2590b53190a65b3ee2e4f12dd7a0bb7ce254b4"));
+
+        hkdf_extract(derived, 32, zeros, 32, master);
+        ok("tls 1.3 master secret", is_hex(master, 32,
+           "18df06843d13a08bf2a449844c5f8a478001bc4d4c627984d5a41da8d0402919"));
+
+        ok("the client's application traffic secret",
+           tls13_derive_secret(master, "c ap traffic", th_finished, 32, c_ap) &&
+           is_hex(c_ap, 32,
+           "9e40646ce79a7f9dc05af8889bce6552875afa0b06df0087f792ebb7c17504a5"));
+        ok("the server's application traffic secret",
+           tls13_derive_secret(master, "s ap traffic", th_finished, 32, s_ap) &&
+           is_hex(s_ap, 32,
+           "a11af9f05531f856ad47116b45a950328204b4f44bfb6b3a4b4f1f3fcb631643"));
+    }
+}
+
+/* --- the generator the keys come out of ----------------------------------
+ *
+ * There is no test that can show bytes are unpredictable; anything checkable
+ * about them is checkable by whoever is guessing. What is checkable is that
+ * a source was found at all, and that the obvious ways of being broken are
+ * not happening: handing out the same block twice, or handing out a pool
+ * that was never stirred.
+ *
+ * The first of those is the one that matters. A generator seeded with
+ * nothing produces a perfectly good looking connection that anybody can
+ * read, and the only moment it can be caught is here. */
+static void test_rng(void) {
+    u8 a[64], b[64];
+
+    /* The jitter source is collected in the timer interrupt and is the only
+       one an emulated machine has, so it is not there the instant the
+       machine boots. Waiting for it is the test: if it never arrives, this
+       machine cannot make a key and says so rather than making a bad one. */
+    for (int i = 0; i < 400 && !rng_ready(); i++) sleep_ms(10);
+    ok("a source of randomness was found", rng_ready());
+    ok("and it says which", rng_sources()[0] && strcmp(rng_sources(), "none") != 0);
+
+    memset(a, 0, sizeof(a));
+    memset(b, 0, sizeof(b));
+    rng_bytes(a, sizeof(a));
+    rng_bytes(b, sizeof(b));
+
+    {
+        bool all_zero = true;
+        for (u32 i = 0; i < sizeof(a); i++) if (a[i]) { all_zero = false; break; }
+        ok("the bytes are not a block of zeros", !all_zero);
+    }
+
+    ok("asking twice does not give the same bytes",
+       memcmp(a, b, sizeof(a)) != 0);
+
+    /* A request longer than one hash block is built from several, and each
+       has to differ. A counter that does not move gives back the same block
+       repeated, which passes every check above. */
+    ok("a long request is not one block repeated",
+       memcmp(a, a + 32, 32) != 0);
+}
+
+/* --- what the TLS layer does before it has a connection -------------------
+ *
+ * The handshake itself needs a server, and there is not one here. What can
+ * be checked without one is that the refusals happen: a client that sends
+ * anything at all before it knows who it is talking to has already lost,
+ * whatever it does afterwards. */
+static void test_tls(void) {
+    u8 buf[16];
+
+    ok("nothing is connected to begin with", !tls_active());
+
+    /* No name means nothing to check a certificate against, which is a
+       refusal rather than a connection with the check skipped. */
+    ok("a connection with no host name is refused", !tls_connect(""));
+    ok("and it says why", tls_error()[0] && strcmp(tls_error(), "no error") != 0);
+    ok("and nothing was opened by trying", !tls_active());
+
+    ok("sending on a connection that is not open fails",
+       !tls_send("hello", 5));
+    ok("and reading from one gives nothing", tls_recv(buf, sizeof(buf), 0) == 0);
+
+    /* Closing something that was never open is allowed and does nothing,
+       because the alternative is every caller checking first. */
+    tls_close();
+    ok("closing a connection that was never open is harmless", !tls_active());
 }
 
 /* --- AES-GCM, the NIST test vectors ---------------------------------- */
@@ -3007,6 +3178,8 @@ int selftest_run(void) {
     kprintf("[sha-512]\n");    test_sha512();
     kprintf("[p-384]\n");      test_p384();
     kprintf("[certificates]\n"); test_x509();
+    kprintf("[randomness]\n"); test_rng();
+    kprintf("[tls 1.3]\n");    test_tls_schedule(); test_tls();
     kprintf("[wpa]\n");        test_wpa();
     kprintf("[wait timeouts]\n"); test_wait_timeout();
     kprintf("[processors]\n"); test_smp();

@@ -1044,20 +1044,50 @@ static void cmd_resolve(int argc, char **argv) {
 }
 
 /* An HTTP GET, done entirely from user space through the socket calls. */
+/* Whether a typed address starts with this scheme, ignoring case. */
+static int starts_scheme(const char *s, const char *want) {
+    for (; *want; s++, want++) {
+        char c = *s;
+        if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+        if (c != *want) return 0;
+    }
+    return 1;
+}
+
 static void cmd_get(int argc, char **argv) {
     if (argc < 2) { need("get HOST [PATH] [FILE]"); return; }
     const char *host = argv[1];
     const char *path = argc > 2 ? argv[2] : "/";
     const char *save = argc > 3 ? argv[3] : 0;
 
+    /* https unless the address says otherwise, for the same reason the
+       browser does it: the plain one sends the request where anybody can
+       read it, and defaulting to the safe one costs a name that has to be
+       typed in full when a site really does only speak http. */
+    int secure = 1;
+    if (starts_scheme(host, "https://")) host += 8;
+    else if (starts_scheme(host, "http://")) { secure = 0; host += 7; }
+
     w_reset(); w_str("connecting to "); w_str(host); dim(work);
     draw_all();
     win_commit(win);
 
-    if (connect(host, 80) != 0) { err("could not connect"); return; }
+    if (secure) {
+        if (connect_tls(host, 443) != 0) {
+            static char reason[128];
+            tls_why(reason, sizeof(reason));
+            err(reason[0] ? reason : "could not connect");
+            return;
+        }
+        static char what[64];
+        tls_what(what, sizeof(what));
+        w_reset(); w_str("secure: "); w_str(what); dim(work);
+    } else if (connect(host, 80) != 0) { err("could not connect"); return; }
 
     static char req[512];
     int n = 0;
+    /* 1.0 keeps the answer in one piece: 1.1 lets a server chunk it, and
+       nothing here puts chunks back together. */
     const char *parts[5] = { "GET ", path, " HTTP/1.0\r\nHost: ", host,
                              "\r\nConnection: close\r\nUser-Agent: zelr-term\r\n\r\n" };
     for (int i = 0; i < 5; i++)
@@ -1268,7 +1298,7 @@ static const command COMMANDS[] = {
     { "uptime",  cmd_uptime,  "",              "how long this has been running" },
     { "net",     cmd_net,     "",              "the address, if there is one" },
     { "resolve", cmd_resolve, "HOST",          "look up a name" },
-    { "get",     cmd_get,     "HOST [PATH] [FILE]", "fetch a page over http" },
+    { "get",     cmd_get,     "HOST [PATH] [FILE]", "fetch a page, https unless said" },
     { "theme",   cmd_theme,   "[NAME]",        "change the colours" },
     { "history", cmd_history, "",              "what you have typed" },
     { "echo",    cmd_echo,    "TEXT",          "print it back" },

@@ -1,21 +1,27 @@
-"""Compares the structs the kernel writes with the structs programs read.
+"""Compares the two sides of the system call interface.
 
-Every one of these is declared twice: once in include/syscall.h, which the
+Everything here is declared twice: once in include/syscall.h, which the
 kernel fills in, and once in userland/zelr.h, which a program hands to the
-syscall. Nothing makes the two agree. The kernel copies sizeof(its own
-struct) into the address the program gave it, so a field that is wider on
-the kernel's side is written straight past the end of the program's
-variable and into whatever the compiler put after it.
+syscall. Nothing makes the two agree.
 
-That has now happened twice for the same reason, a name that grew:
+For structs, the kernel copies sizeof(its own struct) into the address the
+program gave it, so a field that is wider on the kernel's side is written
+straight past the end of the program's variable and into whatever the
+compiler put after it. That has now happened twice for the same reason, a
+name that grew:
 
   - readdir wrote 64 bytes into a 32 byte name, over the register frame the
     syscall returns through, and `ls /` came back empty in ring 3
   - tasks did the same thing over the locals of whatever called it, and the
     system monitor read every task as using none of the processor
 
-Both were found by looking at a screen and wondering why it was wrong. This
-reads both headers instead, and takes a minute of nobody's time.
+For the numbers, the failure is quieter still: a program asking for call 45
+and getting call 46 does not crash, it does something else, and which
+something depends on what the registers happened to hold. Nothing in the
+build notices, because each header compiles perfectly on its own.
+
+Both kinds were found by looking at a screen and wondering why it was
+wrong. This reads both headers instead, and takes a minute of nobody's time.
 
   python tools/abicheck.py
 """
@@ -85,10 +91,57 @@ def describe(f):
     return "%s %s%s" % (f[0], f[1], "[%d]" % f[2] if f[2] != 1 else "")
 
 
+def numbers(text):
+    """{SYS_NAME: number} for every call the header gives a number to."""
+    out = {}
+    for name, value in re.findall(
+            r"#define\s+(SYS_[A-Z0-9_]+)\s+(\d+)", text):
+        out[name] = int(value)
+    return out
+
+
+def check_numbers(c, ktext, utext):
+    kn, un = numbers(ktext), numbers(utext)
+
+    # Both sides having the same names matters as much as the same values: a
+    # call the kernel serves and no program can name is dead, and one a
+    # program names and the kernel does not serve returns -1 forever.
+    only_kernel = sorted(set(kn) - set(un))
+    only_user = sorted(set(un) - set(kn))
+    c.add("every call the kernel serves has a name programs can use",
+          not only_kernel)
+    if only_kernel:
+        print("  only in include/syscall.h: %s" % ", ".join(only_kernel))
+    c.add("and every name programs use is one the kernel serves",
+          not only_user)
+    if only_user:
+        print("  only in userland/zelr.h: %s" % ", ".join(only_user))
+
+    disagree = sorted(n for n in set(kn) & set(un) if kn[n] != un[n])
+    for n in disagree:
+        print("  %s is %d to the kernel and %d to a program"
+              % (n, kn[n], un[n]))
+    c.add("the numbers agree on both sides", not disagree)
+
+    # Two calls sharing a number means the table has one of them in it and
+    # the other silently runs the wrong handler.
+    seen = {}
+    clash = []
+    for name, v in sorted(kn.items()):
+        if v in seen:
+            clash.append("%d is both %s and %s" % (v, seen[v], name))
+        seen[v] = name
+    for line in clash:
+        print("  %s" % line)
+    c.add("no two calls share a number", not clash)
+
+
 def main():
     ktext = strip_comments(io.open(KERNEL, encoding="utf-8").read())
     utext = strip_comments(io.open(USER, encoding="utf-8").read())
     c = Checks("the two sides of the syscall")
+
+    check_numbers(c, ktext, utext)
 
     for kname, uname in PAIRS:
         kbody, ubody = body_of(ktext, kname), body_of(utext, uname)

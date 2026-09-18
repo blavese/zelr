@@ -16,11 +16,12 @@
 #include "zelr.h"
 #include "web.h"
 
-#define WEB_ERR_SCHEME   -1     /* https, which needs a TLS this has not got */
+#define WEB_ERR_SCHEME   -1     /* a scheme that is not http or https */
 #define WEB_ERR_CONNECT  -2
 #define WEB_ERR_SEND     -3
 #define WEB_ERR_EMPTY    -4
 #define WEB_ERR_HEADERS  -5     /* an answer with no blank line in it */
+#define WEB_ERR_TLS      -6     /* the connection would not prove who it was */
 
 typedef struct {
     int   status;
@@ -29,6 +30,8 @@ typedef struct {
     int   truncated;               /* the page is bigger than the buffer */
     char  location[URL_TEXT];      /* where a redirect points */
     char  ctype[64];
+    int   secure;                  /* it was encrypted, and to whom it said */
+    char  how[64];                 /* what was agreed, or why it was refused */
 } response_t;
 
 /* --- building the request ------------------------------------------------ */
@@ -159,9 +162,22 @@ static inline int web_fetch(const url_t *u, char *buf, int cap, response_t *r) {
     r->truncated = 0;
     r->location[0] = 0;
     r->ctype[0] = 0;
+    r->secure = 0;
+    r->how[0] = 0;
 
-    if (u->secure) return WEB_ERR_SCHEME;
-    if (connect(u->host, u->port) != 0) return WEB_ERR_CONNECT;
+    if (u->secure) {
+        /* The handshake checks the certificate against u->host, so reaching
+           the next line means the bytes after it are going to the site that
+           was asked for and not merely to whatever answered. */
+        if (connect_tls(u->host, u->port) != 0) {
+            tls_why(r->how, sizeof(r->how));
+            return WEB_ERR_TLS;
+        }
+        r->secure = 1;
+        tls_what(r->how, sizeof(r->how));
+    } else {
+        if (connect(u->host, u->port) != 0) return WEB_ERR_CONNECT;
+    }
 
     char req[URL_PATH + URL_HOST + 256];
     int n = 0;
@@ -169,7 +185,10 @@ static inline int web_fetch(const url_t *u, char *buf, int cap, response_t *r) {
     if (n >= 0) n = wh_add(req, sizeof(req), n, u->path);
     if (n >= 0) n = wh_add(req, sizeof(req), n, " HTTP/1.1\r\nHost: ");
     if (n >= 0) n = wh_add(req, sizeof(req), n, u->host);
-    if (n >= 0 && u->port != 80) {
+    /* The port belongs in Host only when it is not the one the scheme
+       implies. Sending "Host: www.google.com:443" is legal and a number of
+       servers answer it with a redirect to themselves, forever. */
+    if (n >= 0 && u->port != (u->secure ? 443 : 80)) {
         n = wh_add(req, sizeof(req), n, ":");
         if (n >= 0) n = wh_add_num(req, sizeof(req), n, u->port);
     }
@@ -295,9 +314,13 @@ static inline int web_get(url_t *u, char *buf, int cap, response_t *r) {
 
         url_t next;
         if (!url_join(u, r->location, &next)) return rc;
+        /* Pointing at itself. The scheme is part of that: http to https on
+           the same host and path is the single most common redirect there
+           is, and treating it as a loop would refuse every site that does
+           the right thing. */
         if (w_same(next.host, u->host) && w_same(next.path, u->path)
-            && next.port == u->port)
-            return rc;                       /* pointing at itself */
+            && next.port == u->port && next.secure == u->secure)
+            return rc;
         url_copy(u, &next);
     }
     return r->status;

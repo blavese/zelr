@@ -14,10 +14,16 @@
  * page whose meaning is entirely in a style sheet reads as a long column,
  * which is what it is.
  *
- * The one thing it cannot do is https, and that is not a small footnote: it
- * is most of the web. TLS is a certificate parser, a big integer library and
- * two or three key exchanges, and all of that has to be written here too. It
- * is the next piece of work rather than a limitation being worked around.
+ * https works, which took a certificate parser, a big integer library, two
+ * key exchanges and a root store to say so. None of it is borrowed either.
+ *
+ * The status line says "encrypted" or "NOT encrypted" in words rather than
+ * drawing a padlock, because a padlock is a picture people have learned to
+ * read as a promise about the site. What this can actually promise is
+ * narrower and worth being exact about: the bytes came from whoever holds
+ * the name that was typed, proved by a signature chaining to an authority
+ * this machine was built trusting. It says nothing about whether the site
+ * is honest or the page is safe.
  */
 #include "zelr.h"
 #include "draw.h"
@@ -602,10 +608,17 @@ static void say(const char *a, const char *b) {
     status[n] = 0;
 }
 
+static void say_more(const char *s) {
+    int n = 0;
+    while (status[n]) n++;
+    for (const char *p = s; *p && n < (int)sizeof(status) - 1; p++) status[n++] = *p;
+    status[n] = 0;
+}
+
 static const char *why(int rc) {
     switch (rc) {
-        case WEB_ERR_SCHEME:  return "this address is https, which needs TLS. "
-                                     "Not built yet.";
+        case WEB_ERR_SCHEME:  return "that is not an address this can fetch";
+        case WEB_ERR_TLS:     return "the connection would not prove who it was";
         case WEB_ERR_CONNECT: return "could not connect to that host";
         case WEB_ERR_SEND:    return "the request could not be sent";
         case WEB_ERR_EMPTY:   return "the server said nothing";
@@ -642,8 +655,16 @@ static void load(const char *address, int width, int keep_scroll) {
 
     int rc = web_get(&here, src, SRC_MAX, &reply);
     if (rc < 0) {
-        show_message("Cannot show this page", why(rc), width);
-        say(why(rc), 0);
+        /* A refused certificate has a reason worth reading, and it is the
+           one kind of failure where the difference between "expired" and
+           "for a different site" is the whole story. */
+        if (rc == WEB_ERR_TLS && reply.how[0]) {
+            show_message("This connection was refused", reply.how, width);
+            say("refused: ", reply.how);
+        } else {
+            show_message("Cannot show this page", why(rc), width);
+            say(why(rc), 0);
+        }
         title[0] = 0;
         return;
     }
@@ -677,6 +698,12 @@ static void load(const char *address, int width, int keep_scroll) {
     else if (reply.truncated || truncated)
         say("shown as far as it fits: the page is bigger than this can hold", 0);
     else say(shown, nlinks == 1 ? " link on this page" : " links on this page");
+
+    /* Whether anybody in between could have read it, said either way.
+       Marking only the encrypted case trains people to read a missing mark
+       as nothing in particular, and the case worth noticing is the other
+       one. */
+    say_more(reply.secure ? ", encrypted" : ", NOT encrypted");
 }
 
 static void push_history(const char *address) {
@@ -793,7 +820,7 @@ void _start(void) {
     int dirty = 1;              /* something changed and a frame is owed */
 
     if (have_arg) set_address(arg);
-    else set_address("http://example.com/");
+    else set_address("https://example.com/");
     push_history(address);
 
     for (;;) {

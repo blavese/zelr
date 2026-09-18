@@ -336,7 +336,7 @@ static void execute(char *buf) {
             else         kprintf("no reply from %s: seq=%d\n", b, i + 1);
         }
     } else if (!strcmp(c, "fetch")) {
-        if (argc < 2) { kprintf("usage: fetch HOST [PATH] [SAVEAS]\n"); return; }
+        if (argc < 2) { kprintf("usage: fetch [https://]HOST [PATH] [SAVEAS]\n"); return; }
         if (!net_ip()) { kprintf("no address yet, run: dhcp\n"); return; }
         const char *path = argc > 2 ? argv[2] : "/";
         const char *save = argc > 3 ? argv[3] : 0;
@@ -344,6 +344,10 @@ static void execute(char *buf) {
         if (rc == HTTP_ERR_RESOLVE) kprintf("cannot resolve %s\n", argv[1]);
         else if (rc == HTTP_ERR_CONNECT) kprintf("could not connect\n");
         else if (rc == HTTP_ERR_TOOLONG) kprintf("the host and path do not fit in a request\n");
+        else if (rc == HTTP_ERR_TLS) { /* http_get already said which check failed */ }
+        else if (rc == HTTP_ERR_SEND) kprintf("the request could not be sent\n");
+        else if (rc == HTTP_ERR_EMPTY) kprintf("nothing came back\n");
+        else if (rc == HTTP_ERR_MEMORY) kprintf("not enough memory for the answer\n");
         else if (rc < 0) kprintf("fetch failed\n");
     } else if (!strcmp(c, "resolve")) {
         if (argc < 2) { kprintf("usage: resolve HOSTNAME\n"); return; }

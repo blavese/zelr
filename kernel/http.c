@@ -1,6 +1,13 @@
-/* Just enough HTTP to ask a server for a page and keep the answer. */
+/* Just enough HTTP to ask a server for a page and keep the answer.
+ *
+ * Over TLS when the address says https, in which case the connection is the
+ * same one and only what goes through it differs. A bare name is still http:
+ * this is the shell's debugging fetch and what it is usually pointed at is a
+ * machine on the same desk with no certificate at all. The browser, which is
+ * pointed at the web, guesses the other way. */
 #include "http.h"
 #include "tcp.h"
+#include "tls.h"
 #include "net.h"
 #include "fs.h"
 #include "heap.h"
@@ -25,7 +32,7 @@ static bool append(char *buf, u32 cap, u32 *n, const char *s) {
 /* Splits "name" or "name:port" apart. A URL is allowed to carry a port and
    a server is allowed to listen on one, so a client that can only reach 80
    cannot be pointed at anything but a public website. */
-static u16 split_port(const char *in, char *host, u32 cap) {
+static u16 split_port(const char *in, char *host, u32 cap, u16 fallback) {
     u32 n = 0;
     u16 port = 0;
     const char *p = in;
@@ -37,12 +44,32 @@ static u16 split_port(const char *in, char *host, u32 cap) {
         for (p++; *p >= '0' && *p <= '9'; p++) v = v * 10 + (u32)(*p - '0');
         if (v > 0 && v < 65536) port = (u16)v;
     }
-    return port ? port : 80;
+    return port ? port : fallback;
+}
+
+/* Shuts the connection down in the right order. The TLS close notification
+   has to go out over a connection that is still up, so it goes first. */
+static void done(bool secure) {
+    if (secure) tls_close();
+    tcp_close();
+}
+
+static bool starts_fold(const char *s, const char *want) {
+    for (; *want; s++, want++) {
+        char c = *s;
+        if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+        if (c != *want) return false;
+    }
+    return true;
 }
 
 int http_get(const char *spec, const char *path, const char *save_as) {
+    bool secure = false;
+    if (starts_fold(spec, "https://")) { secure = true; spec += 8; }
+    else if (starts_fold(spec, "http://")) spec += 7;
+
     char host[128];
-    u16 port = split_port(spec, host, sizeof(host));
+    u16 port = split_port(spec, host, sizeof(host), secure ? 443 : 80);
 
     ipv4_t ip = net_parse_ip(host);
     if (!ip && !net_resolve(host, &ip, 5000)) return HTTP_ERR_RESOLVE;
@@ -52,6 +79,19 @@ int http_get(const char *spec, const char *path, const char *save_as) {
     kprintf("connecting to %s (%s) port %d\n", host, addr, port);
 
     if (!tcp_connect(ip, port, 6000)) return HTTP_ERR_CONNECT;
+
+    if (secure) {
+        /* The name, not the address: what is being checked is that the
+           certificate is for the site that was asked for, and an address can
+           be anybody's. A failed handshake closes the connection rather than
+           leaving one open that the rest of this would happily use. */
+        if (!tls_connect(host)) {
+            kprintf("tls: %s\n", tls_error());
+            tcp_close();
+            return HTTP_ERR_TLS;
+        }
+        kprintf("secure: %s\n", tls_describe());
+    }
 
     /* HTTP/1.0 with an explicit close, so the server ends the body by
        closing the connection and we do not have to parse chunked encoding.
@@ -68,12 +108,16 @@ int http_get(const char *spec, const char *path, const char *save_as) {
     fits &= append(req, sizeof(req), &n,
                    "\r\nUser-Agent: zelr/" KERNEL_VERSION
                    "\r\nConnection: close\r\n\r\n");
-    if (!fits) { tcp_close(); return HTTP_ERR_TOOLONG; }
+    if (!fits) { done(secure); return HTTP_ERR_TOOLONG; }
 
-    if (!tcp_send(req, (u16)n)) { tcp_close(); return HTTP_ERR_SEND; }
+    if (!(secure ? tls_send(req, n) : tcp_send(req, (u16)n))) {
+        if (secure) kprintf("tls: %s\n", tls_error());
+        done(secure);
+        return HTTP_ERR_SEND;
+    }
 
     u8 *buf = (u8 *)kmalloc(BODY_CAP);
-    if (!buf) { tcp_close(); return HTTP_ERR_MEMORY; }
+    if (!buf) { done(secure); return HTTP_ERR_MEMORY; }
 
     /* Read until the server closes, rather than once. One read is whatever
        happened to have arrived by then, which for anything bigger than a
@@ -81,14 +125,19 @@ int http_get(const char *spec, const char *path, const char *save_as) {
        missing. */
     u32 got = 0;
     while (got < BODY_CAP) {
-        u32 n = tcp_recv(buf + got, BODY_CAP - got, 10000);
+        u32 n = secure ? tls_recv(buf + got, BODY_CAP - got, 10000)
+                       : tcp_recv(buf + got, BODY_CAP - got, 10000);
         got += n;
-        if (!n && tcp_ended()) break;
+        if (!n && (secure ? (tls_ended() || tcp_ended()) : tcp_ended())) break;
         if (!n) break;                     /* nothing in ten seconds */
     }
-    tcp_close();
+    done(secure);
 
-    if (got == 0) { kfree(buf); return HTTP_ERR_EMPTY; }
+    if (got == 0) {
+        if (secure) kprintf("tls: %s\n", tls_error());
+        kfree(buf);
+        return HTTP_ERR_EMPTY;
+    }
 
     /* Split the headers from the body at the blank line. */
     u32 body = 0;

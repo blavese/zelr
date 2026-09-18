@@ -1,4 +1,4 @@
-/* The entire user-facing interface: thirty-six system calls and a little
+/* The entire user-facing interface: forty-seven system calls and a little
    sugar. There is no libc here, and nothing is linked in from the kernel;
    every call below crosses the ring boundary through int 0x80. */
 #pragma once
@@ -72,6 +72,12 @@ typedef long long          zelr_word;
 #define POWER_REBOOT  1
 #define SYS_SPAWN_ARG     43
 #define SYS_GETARG        44
+
+/* The same socket, encrypted. See connect_tls below. */
+#define SYS_TLS_CONNECT   45
+#define SYS_TLS_STATUS    46
+#define TLS_WHY   0
+#define TLS_WHAT  1
 
 /* The one door into the kernel. The registers are the same ones a 32-bit zelr
    used, only twice as wide, which is why every argument is a word rather than
@@ -259,6 +265,25 @@ typedef struct {
 static inline int connect(const char *host, int port) {
     return syscall(SYS_CONNECT, (zelr_word)host, port, 0);
 }
+
+/* The same thing with TLS 1.3 done on it first, including checking that the
+   certificate at the other end is for `host`. Zero means the connection is
+   open and everything sent through send() from here on is encrypted; there
+   is no separate call to turn it on and so no way to forget one.
+ *
+   Anything else means no connection at all, encrypted or otherwise: a failed
+   handshake closes the socket rather than leaving one open that a caller
+   might use anyway. tls_why() says what went wrong, and is meant to be shown
+   to somebody rather than logged. */
+static inline int connect_tls(const char *host, int port) {
+    return syscall(SYS_TLS_CONNECT, (zelr_word)host, port, 0);
+}
+
+static inline int tls_status(char *out, int cap, int which) {
+    return syscall(SYS_TLS_STATUS, (zelr_word)out, cap, which);
+}
+static inline int tls_why(char *out, int cap)  { return tls_status(out, cap, TLS_WHY); }
+static inline int tls_what(char *out, int cap) { return tls_status(out, cap, TLS_WHAT); }
 static inline int send(const void *buf, int len) {
     return syscall(SYS_SEND, 0, (zelr_word)buf, len);
 }

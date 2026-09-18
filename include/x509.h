@@ -85,6 +85,12 @@ bool x509_signed_by(const x509_t *child, const x509_t *issuer);
    rather than by whatever it was fetched from. */
 bool x509_host_matches(const x509_t *cert, const char *host);
 
+/* Pulls the two halves out of a DER encoded ECDSA signature. The handshake
+   needs the same thing as the chain does. */
+bool x509_ecdsa_split(const u8 *sig, u32 len,
+                      const u8 **r, u32 *r_len,
+                      const u8 **s, u32 *s_len);
+
 /* The time now, packed the same way as the fields above, or zero when the
    machine has no usable clock. */
 u64 x509_now(void);

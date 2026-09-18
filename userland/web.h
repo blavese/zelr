@@ -15,7 +15,7 @@ typedef struct {
     char host[URL_HOST];
     char path[URL_PATH];
     int  port;
-    int  secure;              /* the page asked for https, which is not here */
+    int  secure;              /* https, so the connection is a TLS one */
 } url_t;
 
 /* --- small string helpers -------------------------------------------------
@@ -94,15 +94,22 @@ static inline void url_text(const url_t *u, char *out, int cap) {
     out[n] = 0;
 }
 
-/* Takes an address the way a person types one. A bare name is http, a
-   missing path is the root, and anything after a # is for finding a place on
-   the page rather than for the server, so it never goes in the request. */
+/* Takes an address the way a person types one. A missing path is the root,
+   and anything after a # is for finding a place on the page rather than for
+   the server, so it never goes in the request.
+ *
+   A bare name is https. It used to be http, for the honest reason that http
+   was the only thing here that worked. Now that both do, guessing the
+   unencrypted one would mean a typed address went out in the clear and got
+   redirected, and the first request, the one carrying the address, would
+   already have been readable by then. A site that only does http is still
+   reachable by saying so. */
 static inline int url_parse(const char *in, url_t *out) {
     while (*in == ' ') in++;
 
-    out->secure = 0;
-    if (w_starts_fold(in, "https://")) { out->secure = 1; in += 8; }
-    else if (w_starts_fold(in, "http://")) in += 7;
+    out->secure = 1;
+    if (w_starts_fold(in, "https://")) in += 8;
+    else if (w_starts_fold(in, "http://")) { out->secure = 0; in += 7; }
     else if (w_starts_fold(in, "//")) in += 2;
 
     int n = 0;
@@ -150,9 +157,24 @@ static inline int url_join(const url_t *base, const char *href, url_t *out) {
     while (*href == ' ') href++;
     if (!*href || *href == '#') { url_copy(out, base); return 1; }
 
-    if (w_starts_fold(href, "http://") || w_starts_fold(href, "https://")
-        || w_starts_fold(href, "//"))
+    if (w_starts_fold(href, "http://") || w_starts_fold(href, "https://"))
         return url_parse(href, out);
+
+    /* A scheme relative link keeps the scheme of the page it is on, which is
+       the entire reason for writing one. Parsing it on its own would apply
+       the rule for something a person typed and could quietly take an
+       encrypted page's links down to http. */
+    if (w_starts_fold(href, "//")) {
+        int stated = 0;
+        for (const char *p = href + 2; *p && *p != '/' && *p != '?'; p++)
+            if (*p == ':') { stated = 1; break; }
+        if (!url_parse(href, out)) return 0;
+        out->secure = base->secure;
+        /* A port written in the link is the port. Only the one url_parse
+           guessed from a scheme that was not there gets corrected. */
+        if (!stated) out->port = out->secure ? 443 : 80;
+        return 1;
+    }
 
     /* Anything with a scheme this cannot speak is not a page to go to. */
     for (int i = 0; href[i] && href[i] != '/' && i < 12; i++) {
