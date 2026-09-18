@@ -17,6 +17,7 @@
 #include "x25519.h"
 #include "testcerts.h"
 #include "rsa.h"
+#include "p256.h"
 #include "sha256.h"
 #include "wpa.h"
 #include "sched.h"
@@ -1551,6 +1552,112 @@ static void test_rsa(void) {
     }
 }
 
+/* --- ECDSA on P-256, against a signature a real authority made -------- */
+static void test_p256(void) {
+    /* The curve arithmetic on its own, against points anybody can look up.
+       When a signature check fails these say whether the arithmetic or the
+       signature logic is at fault, which is otherwise a long afternoon. */
+    {
+        u8 k[32], x[32];
+
+        memset(k, 0, 32); k[31] = 1;
+        ok("one times the base point is the base point",
+           p256_base_x(k, x) && is_hex(x, 32,
+           "6b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c296"));
+
+        memset(k, 0, 32); k[31] = 2;
+        ok("twice the base point is the published doubling",
+           p256_base_x(k, x) && is_hex(x, 32,
+           "7cf27b188d034f7e8a52380304b51ac3c08969e277f21b35a60b48fc47669978"));
+
+        memset(k, 0, 32); k[31] = 3;
+        ok("and three times it",
+           p256_base_x(k, x) && is_hex(x, 32,
+           "5ecbe4d1a6330a44c8f7ef951d4bf165e6c6b721efada985fb41661bc6e7fd6c"));
+
+        /* The order of the group times the base point is the identity,
+           which is the one fact that exercises the whole scalar loop and
+           every carry in it. */
+        from_hex("ffffffff00000000ffffffffffffffff"
+                 "bce6faada7179e84f3b9cac2fc632551", k, 32);
+        ok("the order times the base point is the point at infinity",
+           !p256_base_x(k, x));
+    }
+
+    ok("a real ecdsa signature over p-256 verifies",
+       p256_verify(ec_signer_pubkey, ec_signed_leaf_hash,
+                   ec_signed_leaf_r, sizeof(ec_signed_leaf_r),
+                   ec_signed_leaf_s, sizeof(ec_signed_leaf_s)));
+
+    /* A different message. */
+    {
+        u8 h[32];
+        memcpy(h, ec_signed_leaf_hash, 32);
+        h[0] ^= 1;
+        ok("and it does not verify a different hash",
+           !p256_verify(ec_signer_pubkey, h,
+                        ec_signed_leaf_r, sizeof(ec_signed_leaf_r),
+                        ec_signed_leaf_s, sizeof(ec_signed_leaf_s)));
+    }
+
+    /* Either half of the signature changed. Both halves matter, and a
+       verifier that only really uses one of them exists. */
+    {
+        u8 r[32], s[32];
+        memcpy(r, ec_signed_leaf_r, 32);
+        memcpy(s, ec_signed_leaf_s, 32);
+        r[31] ^= 1;
+        ok("nor one with r changed",
+           !p256_verify(ec_signer_pubkey, ec_signed_leaf_hash, r, 32,
+                        ec_signed_leaf_s, sizeof(ec_signed_leaf_s)));
+        memcpy(r, ec_signed_leaf_r, 32);
+        s[31] ^= 1;
+        ok("nor one with s changed",
+           !p256_verify(ec_signer_pubkey, ec_signed_leaf_hash, r, 32, s, 32));
+    }
+
+    /* Zero is not a scalar, and a verifier that lets it through accepts
+       signatures on anything. */
+    {
+        u8 zero[32];
+        memset(zero, 0, 32);
+        ok("a zero r is refused",
+           !p256_verify(ec_signer_pubkey, ec_signed_leaf_hash, zero, 32,
+                        ec_signed_leaf_s, sizeof(ec_signed_leaf_s)));
+        ok("a zero s is refused",
+           !p256_verify(ec_signer_pubkey, ec_signed_leaf_hash,
+                        ec_signed_leaf_r, sizeof(ec_signed_leaf_r), zero, 32));
+    }
+
+    /* A key that is not a point on the curve. Feeding one of those to a
+       verifier that does not check is a known way to extract information
+       from it, so the check is that the key is rejected outright. */
+    {
+        u8 bad[65];
+        memcpy(bad, ec_signer_pubkey, 65);
+        bad[40] ^= 0x20;
+        ok("a public key that is not on the curve is refused",
+           !p256_verify(bad, ec_signed_leaf_hash,
+                        ec_signed_leaf_r, sizeof(ec_signed_leaf_r),
+                        ec_signed_leaf_s, sizeof(ec_signed_leaf_s)));
+
+        memcpy(bad, ec_signer_pubkey, 65);
+        bad[0] = 0x02;
+        ok("and so is a point in a form this does not read",
+           !p256_verify(bad, ec_signed_leaf_hash,
+                        ec_signed_leaf_r, sizeof(ec_signed_leaf_r),
+                        ec_signed_leaf_s, sizeof(ec_signed_leaf_s)));
+    }
+
+    /* And the signature under somebody else's key. */
+    {
+        ok("a valid signature under the wrong key does not verify",
+           !p256_verify(ec_signer_pubkey, intermediate_signed_leaf_hash,
+                        ec_signed_leaf_r, sizeof(ec_signed_leaf_r),
+                        ec_signed_leaf_s, sizeof(ec_signed_leaf_s)));
+    }
+}
+
 static void test_crypto(void) {
     u8 d[32];
 
@@ -2661,6 +2768,7 @@ int selftest_run(void) {
     kprintf("[aes-gcm]\n");    test_gcm();
     kprintf("[x25519]\n");     test_x25519();
     kprintf("[rsa]\n");        test_rsa();
+    kprintf("[p-256]\n");      test_p256();
     kprintf("[wpa]\n");        test_wpa();
     kprintf("[wait timeouts]\n"); test_wait_timeout();
     kprintf("[processors]\n"); test_smp();
