@@ -435,12 +435,19 @@ on first boot. `tools/readfat.py` parses the image straight from the
 specification, sharing no code with the kernel, and can copy a file in from the
 host.
 
-**Network.** PCI enumeration to find the card, then one of two drivers behind
+**Network.** PCI enumeration to find the card, then one of three drivers behind
 a common interface. The Intel e1000 is tried first, since it is what VirtualBox
-and VMware present by default; it is driven through memory-mapped registers and
-descriptor rings the card DMAs into by itself. A Realtek RTL8139 driver covers
-the other common case with a circular receive buffer and four transmit
-descriptors. On top of either: ethernet, ARP with a cache, IPv4 with checksums,
+presents and what VMware presents to a guest it recognises; it is driven through
+memory-mapped registers and descriptor rings the card DMAs into by itself. The
+AMD PCnet-PCI II is what VMware hands a guest it does not recognise, which is
+anything written from scratch, so it is the card most people who try this on
+their own machine will actually get: no registers at fixed addresses, an
+address port and two data ports, and a block of memory in a fixed layout that
+the card is told to go and read. A Realtek RTL8139 driver covers QEMU's older
+default with a circular receive buffer and four transmit descriptors. If none
+of them matches, the machine says which controller it found and that there is
+no driver for it, rather than saying there is no card. On top of any of them:
+ethernet, ARP with a cache, IPv4 with checksums,
 ICMP (it answers pings and sends them), UDP, a DHCP client, a DNS resolver, and
 a single-connection TCP client with a three way handshake, orderly close, and
 retransmission with exponential backoff. `fetch` uses all of it to do an
@@ -1047,6 +1054,7 @@ orders of magnitude away from Linux, which is roughly 30 million lines.
     kernel/pci.c       pci configuration space, ports and the pcie mapping
     kernel/netdev.c    picks a network driver and hides which one
     kernel/e1000.c     intel e1000 driver
+    kernel/pcnet.c     amd pcnet-pci driver, what vmware gives an unknown guest
     kernel/rtl8139.c   rtl8139 driver
     kernel/net.c       ethernet, arp, ip, icmp, udp, dhcp, dns
     kernel/tcp.c       tcp client

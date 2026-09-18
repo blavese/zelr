@@ -363,6 +363,17 @@ static void test_disk(void) {
 }
 
 static void test_net(void) {
+    /* Before the skip, because the interesting case for this one is the
+       machine that has no driven card: a network controller sitting on the
+       bus with nothing here able to drive it must be reported as that and
+       not as an empty slot, and a machine that is working must never
+       report one. */
+    u16 uv = 0, ud = 0;
+    bool stranded = netdev_undriven(&uv, &ud);
+    ok("a card that is driven is not also reported as undriven",
+       !(net_up() && stranded));
+    ok("an undriven card is named by its ids", !stranded || (uv && uv != 0xFFFF));
+
     if (!net_up()) { kprintf("  SKIP  no network card\n"); return; }
     const u8 *m = net_mac();
     bool nonzero = false;

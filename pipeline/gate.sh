@@ -394,10 +394,24 @@ if [ "$MODE" = "screen" ] || [ "$MODE" = "full" ]; then
 fi
 
 # --- tidy up after ourselves ----------------------------------------------
+#
+# After ourselves, and not after anybody else. The working files carry the
+# process id of the check that made them, and each check removes its own on
+# the way out. This sweep is only for the ones left behind by a run that was
+# killed, so it has to leave alone anything newer than the moment this run
+# started: that is somebody else's, still in use, and deleting it produces a
+# builder that cannot find its input, in another terminal, minutes later.
+# Which is the failure the process id in those names was added to prevent,
+# reintroduced here by a wildcard.
+stale() {
+  find . -maxdepth 1 -name "$1" ! -newermt "@$started_at" -delete 2>/dev/null
+}
 rm -f gate.img gateq.img gatenv.img deskcheck.img termcheck.img shotcheck.img sel.img blackbox.img 2>/dev/null
-rm -f gpttest.*.img fat32test.*.img nvmetest.*.img clipcheck.*.img 2>/dev/null
-rm -f shotcheck.*.img termcheck.*.img deskcheck.*.img usbcheck.*.img 2>/dev/null
-rm -f fat32probe.*.txt fat32high.*.txt 2>/dev/null
+for pat in 'gpttest.*.img' 'fat32test.*.img' 'nvmetest.*.img' 'clipcheck.*.img' \
+           'shotcheck.*.img' 'termcheck.*.img' 'deskcheck.*.img' 'usbcheck.*.img' \
+           'fat32probe.*.txt' 'fat32high.*.txt'; do
+  stale "$pat"
+done
 rm -f build/*.ppm 2>/dev/null
 
 echo
