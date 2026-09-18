@@ -18,6 +18,8 @@
 #include "testcerts.h"
 #include "rsa.h"
 #include "ec.h"
+#include "roots.h"
+#include "x509.h"
 #include "sha256.h"
 #include "sha512.h"
 #include "wpa.h"
@@ -1737,6 +1739,160 @@ static void test_p384(void) {
                   p384_signed_s, sizeof(p384_signed_s)));
 }
 
+/* --- certificates, and chains of them --------------------------------- */
+static void test_x509(void) {
+    static x509_t leaf, mid, root;
+
+    ok("the leaf certificate parses",
+       x509_parse(test_cert0, sizeof(test_cert0), &leaf));
+    ok("the intermediate parses",
+       x509_parse(test_cert1, sizeof(test_cert1), &mid));
+    ok("and the one above it",
+       x509_parse(test_cert2, sizeof(test_cert2), &root));
+
+    ok("the leaf carries an elliptic key on p-256",
+       leaf.key_type == X509_KEY_EC && leaf.curve == EC_P256 && leaf.ec_len == 65);
+    ok("the intermediate carries a 2048 bit rsa key",
+       mid.key_type == X509_KEY_RSA && mid.rsa.n_len == 256 && mid.rsa.e == 65537);
+    ok("and the one above it a 4096 bit one",
+       root.key_type == X509_KEY_RSA && root.rsa.n_len == 512);
+
+    /* Who may sign. A leaf that could sign other certificates would let
+       anybody with a certificate for one site issue one for another. */
+    ok("the leaf is not allowed to sign certificates",
+       leaf.has_basic_constraints && !leaf.is_ca);
+    ok("the intermediate is", mid.has_basic_constraints && mid.is_ca);
+
+    /* The names line up the way a chain requires. */
+    ok("the leaf's issuer is the intermediate's subject",
+       leaf.issuer_len == mid.subject_len &&
+       memcmp(leaf.issuer, mid.subject, leaf.issuer_len) == 0);
+
+    /* The signatures themselves, which is what the chain is for. */
+    ok("the intermediate signed the leaf", x509_signed_by(&leaf, &mid));
+    ok("and the one above signed the intermediate", x509_signed_by(&mid, &root));
+    ok("but the leaf was not signed by the top one",
+       !x509_signed_by(&leaf, &root));
+
+    /* The dates were read, not invented. */
+    ok("the leaf's validity was read",
+       leaf.not_before > 20200000000000ULL && leaf.not_after > leaf.not_before);
+
+    /* --- which host a certificate is for ------------------------------- */
+
+    ok("a certificate for *.google.com is for www.google.com",
+       x509_host_matches(&leaf, "www.google.com"));
+    ok("and the match ignores case",
+       x509_host_matches(&leaf, "WWW.Google.COM"));
+    ok("a wildcard covers one label and not two",
+       !x509_host_matches(&leaf, "a.b.google.com"));
+    ok("and it is not the bare domain",
+       !x509_host_matches(&leaf, "nonesuch.example.org"));
+    ok("a certificate is not for a site it does not name",
+       !x509_host_matches(&leaf, "example.com"));
+    ok("nor for a name that merely ends the same way",
+       !x509_host_matches(&leaf, "www.google.com.evil.example"));
+    ok("nor for nothing at all", !x509_host_matches(&leaf, ""));
+
+    /* --- the whole chain ------------------------------------------------ */
+    {
+        const u8 *ders[3] = { test_cert0, test_cert1, test_cert2 };
+        u32 lens[3] = { sizeof(test_cert0), sizeof(test_cert1),
+                        sizeof(test_cert2) };
+
+        /* A fixed moment inside the leaf's validity, so this check does not
+           start failing on a particular day in the future for a reason that
+           has nothing to do with the code. */
+        u64 when = 20261001000000ULL;
+
+        ok("a real chain verifies to an authority this machine trusts",
+           x509_verify_chain(ders, lens, 3, "www.google.com", when) == X509_OK);
+
+        ok("the same chain is refused for a different host",
+           x509_verify_chain(ders, lens, 3, "www.example.com", when)
+           == X509_WRONG_NAME);
+
+        ok("and refused before it was issued",
+           x509_verify_chain(ders, lens, 3, "www.google.com",
+                             20200101000000ULL) == X509_NOT_YET_VALID);
+        ok("and after it expired",
+           x509_verify_chain(ders, lens, 3, "www.google.com",
+                             20300101000000ULL) == X509_EXPIRED);
+
+        /* One byte of the signed part changed. The signature is over these
+           bytes, so this must be caught by arithmetic rather than by
+           anything noticing the value looks wrong. */
+        {
+            static u8 tampered[sizeof(test_cert0)];
+            memcpy(tampered, test_cert0, sizeof(test_cert0));
+            /* Inside the validity dates, which is the interesting place to
+               change: it is a field the chain is supposed to protect. */
+            tampered[110] = tampered[110] == '5' ? '6' : '5';
+            const u8 *bad[3] = { tampered, test_cert1, test_cert2 };
+            ok("a chain with one byte of the leaf altered is refused",
+               x509_verify_chain(bad, lens, 3, "www.google.com", when)
+               != X509_OK);
+        }
+
+        /* The chain without its top certificate still has to reach a
+           trusted root, and does not here, because the intermediate's
+           issuer is not itself an anchor. */
+        {
+            u32 two[2] = { sizeof(test_cert0), sizeof(test_cert1) };
+            ok("a chain that stops short of a trusted authority is refused",
+               x509_verify_chain(ders, two, 2, "www.google.com", when)
+               == X509_UNTRUSTED);
+        }
+
+        /* And a chain of just the leaf. */
+        {
+            u32 one[1] = { sizeof(test_cert0) };
+            ok("a lone leaf certificate proves nothing",
+               x509_verify_chain(ders, one, 1, "www.google.com", when)
+               != X509_OK);
+        }
+    }
+
+    /* --- the parser against input that is not a certificate ------------- */
+    {
+        static x509_t junk;
+        u8 empty[1] = { 0 };
+        ok("nothing at all is not a certificate", !x509_parse(empty, 0, &junk));
+        ok("one byte is not a certificate", !x509_parse(empty, 1, &junk));
+
+        /* A truncated certificate: every length inside it now points past
+           the end, which is the case a parser that trusts its lengths walks
+           straight off. */
+        for (u32 cut = 1; cut < 64; cut++) {
+            if (x509_parse(test_cert0, sizeof(test_cert0) - cut * 17, &junk)) {
+                ok("a truncated certificate is refused", false);
+                break;
+            }
+            if (cut == 63) ok("a truncated certificate is refused", true);
+        }
+
+        /* A length claiming more than the buffer holds. */
+        {
+            static u8 lying[64];
+            memcpy(lying, test_cert0, sizeof(lying));
+            lying[2] = 0xff;             /* the outer length, made enormous */
+            lying[3] = 0xff;
+            ok("a certificate whose length runs past its own end is refused",
+               !x509_parse(lying, sizeof(lying), &junk));
+        }
+    }
+
+    /* --- the trust store ------------------------------------------------ */
+    ok("there are trusted authorities to check against", roots_count() > 10);
+    {
+        const u8 *found; u32 found_len;
+        ok("an authority nobody has heard of is not trusted",
+           !roots_find((const u8 *)"not a name", 10, &found, &found_len));
+        ok("and the one that signed this chain is",
+           roots_find(root.issuer, root.issuer_len, &found, &found_len));
+    }
+}
+
 static void test_crypto(void) {
     u8 d[32];
 
@@ -2850,6 +3006,7 @@ int selftest_run(void) {
     kprintf("[p-256]\n");      test_p256();
     kprintf("[sha-512]\n");    test_sha512();
     kprintf("[p-384]\n");      test_p384();
+    kprintf("[certificates]\n"); test_x509();
     kprintf("[wpa]\n");        test_wpa();
     kprintf("[wait timeouts]\n"); test_wait_timeout();
     kprintf("[processors]\n"); test_smp();
