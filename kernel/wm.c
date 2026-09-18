@@ -1590,7 +1590,15 @@ static void draw_net_panel(void) {
         kformat(buf, sizeof(buf), "%s", netdev_name());
         face_text(tx, ty, buf, t->text, FACE_BODY);
     } else {
-        face_text(tx, ty, "no wired card", t->text_dim, FACE_BODY);
+        /* "No card" and "a card with no driver for it" look the same from
+           here and are not the same problem, so say which it is. */
+        u16 uv = 0, ud = 0;
+        if (netdev_undriven(&uv, &ud)) {
+            kformat(buf, sizeof(buf), "%04x:%04x, no driver", uv, ud);
+            face_text(tx, ty, buf, t->text_dim, FACE_BODY);
+        } else {
+            face_text(tx, ty, "no wired card", t->text_dim, FACE_BODY);
+        }
     }
     ty += line;
 

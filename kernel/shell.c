@@ -289,7 +289,17 @@ static void execute(char *buf) {
             kprintf("free     %d KiB\n", fat_free_bytes() / 1024);
         }
     }    else if (!strcmp(c, "net")) {
-        if (!net_up()) { kprintf("no network card\n"); return; }
+        if (!net_up()) {
+            /* A machine with a card nothing here drives is a different
+               problem from a machine with no card, and only one of them is
+               fixed by plugging something in. */
+            u16 uv = 0, ud = 0;
+            if (netdev_undriven(&uv, &ud))
+                kprintf("card     %04x:%04x on the bus, no driver for it\n", uv, ud);
+            else
+                kprintf("no network card\n");
+            return;
+        }
         const u8 *m = net_mac();
         char b[20];
         /* Which card, because there can now be more than one kind and a usb

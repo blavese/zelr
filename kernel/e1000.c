@@ -90,8 +90,12 @@ typedef struct {
 
 static pci_dev_t dev;
 static volatile u8 *mmio;
-static rx_desc_t *rx_ring;
-static tx_desc_t *tx_ring;
+
+/* The card writes these, so a wait on a status bit is a wait on something
+   the compiler cannot see change. Without this it is entitled to read the
+   word once and spin on the answer. */
+static volatile rx_desc_t *rx_ring;
+static volatile tx_desc_t *tx_ring;
 static u8 *rx_buf[RX_DESCS];
 static u8 *tx_buf[TX_DESCS];
 static u32 rx_cur, tx_cur;
@@ -148,7 +152,7 @@ static bool read_mac(void) {
 
 static bool rx_init(void) {
     void *raw;
-    rx_ring = (rx_desc_t *)alloc_aligned(sizeof(rx_desc_t) * RX_DESCS, 16, &raw);
+    rx_ring = (volatile rx_desc_t *)alloc_aligned(sizeof(rx_desc_t) * RX_DESCS, 16, &raw);
     if (!rx_ring) return false;
 
     for (int i = 0; i < RX_DESCS; i++) {
@@ -172,7 +176,7 @@ static bool rx_init(void) {
 
 static bool tx_init(void) {
     void *raw;
-    tx_ring = (tx_desc_t *)alloc_aligned(sizeof(tx_desc_t) * TX_DESCS, 16, &raw);
+    tx_ring = (volatile tx_desc_t *)alloc_aligned(sizeof(tx_desc_t) * TX_DESCS, 16, &raw);
     if (!tx_ring) return false;
 
     for (int i = 0; i < TX_DESCS; i++) {

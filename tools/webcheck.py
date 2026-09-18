@@ -88,6 +88,46 @@ def main():
         finally:
             vm.stop()
 
+        # --- and again on the other card ----------------------------------
+        #
+        # The PCnet is what VMware hands a guest it does not recognise, so it
+        # is the card most people who try this will actually get, and it is
+        # not the one anything else here is run against.
+        #
+        # The large body is the one that matters. Everything small passes on
+        # a driver that drops frames, because there are not enough of them to
+        # drop; this ring is sized to hold a whole advertised window and the
+        # check is whether it does.
+        other = Guest(DISK, memory=192, extra=srv.qemu_args(model="pcnet"))
+        try:
+            other.wait_boot()
+            other.run("dhcp", timeout=25)
+            c.add("the same pages come back off the other card",
+                  fetched(other, srv.host, "/size/1000") == (200, 1000))
+            c.add("and a body bigger than the window does not lose frames",
+                  fetched(other, srv.host, "/size/200000", timeout=200)
+                  == (200, 200000))
+        finally:
+            other.stop()
+
+        # --- and a card nothing here can drive ----------------------------
+        #
+        # Which is the case this all started from: a machine with a network
+        # controller sitting on the bus, no driver for it, and a report of
+        # "no card" that sends you looking at the cable. The ids are the
+        # whole value of the message, because they are what says whether a
+        # driver could be written.
+        stranded = Guest(DISK, memory=192, extra=["-nic", "user,model=ne2k_pci"])
+        try:
+            stranded.wait_boot()
+            said = stranded.fresh("net", timeout=20)
+            c.add("a card with no driver is not reported as no card",
+                  "no network card" not in said)
+            c.add("and it is named by the ids that say whose it is",
+                  "10ec:8029" in said)
+        finally:
+            stranded.stop()
+
         # --- and a server that answers instantly ---------------------------
         #
         # One fetch, because this path carries one connection. It is here for
