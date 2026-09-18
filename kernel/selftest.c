@@ -17,8 +17,9 @@
 #include "x25519.h"
 #include "testcerts.h"
 #include "rsa.h"
-#include "p256.h"
+#include "ec.h"
 #include "sha256.h"
+#include "sha512.h"
 #include "wpa.h"
 #include "sched.h"
 #include "wait.h"
@@ -1562,17 +1563,17 @@ static void test_p256(void) {
 
         memset(k, 0, 32); k[31] = 1;
         ok("one times the base point is the base point",
-           p256_base_x(k, x) && is_hex(x, 32,
+           ec_base_x(EC_P256, k, 32, x) && is_hex(x, 32,
            "6b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c296"));
 
         memset(k, 0, 32); k[31] = 2;
         ok("twice the base point is the published doubling",
-           p256_base_x(k, x) && is_hex(x, 32,
+           ec_base_x(EC_P256, k, 32, x) && is_hex(x, 32,
            "7cf27b188d034f7e8a52380304b51ac3c08969e277f21b35a60b48fc47669978"));
 
         memset(k, 0, 32); k[31] = 3;
         ok("and three times it",
-           p256_base_x(k, x) && is_hex(x, 32,
+           ec_base_x(EC_P256, k, 32, x) && is_hex(x, 32,
            "5ecbe4d1a6330a44c8f7ef951d4bf165e6c6b721efada985fb41661bc6e7fd6c"));
 
         /* The order of the group times the base point is the identity,
@@ -1581,11 +1582,11 @@ static void test_p256(void) {
         from_hex("ffffffff00000000ffffffffffffffff"
                  "bce6faada7179e84f3b9cac2fc632551", k, 32);
         ok("the order times the base point is the point at infinity",
-           !p256_base_x(k, x));
+           !ec_base_x(EC_P256, k, 32, x));
     }
 
     ok("a real ecdsa signature over p-256 verifies",
-       p256_verify(ec_signer_pubkey, ec_signed_leaf_hash,
+       ec_verify(EC_P256, ec_signer_pubkey, 65, ec_signed_leaf_hash, 32,
                    ec_signed_leaf_r, sizeof(ec_signed_leaf_r),
                    ec_signed_leaf_s, sizeof(ec_signed_leaf_s)));
 
@@ -1595,7 +1596,7 @@ static void test_p256(void) {
         memcpy(h, ec_signed_leaf_hash, 32);
         h[0] ^= 1;
         ok("and it does not verify a different hash",
-           !p256_verify(ec_signer_pubkey, h,
+           !ec_verify(EC_P256, ec_signer_pubkey, 65, h, 32,
                         ec_signed_leaf_r, sizeof(ec_signed_leaf_r),
                         ec_signed_leaf_s, sizeof(ec_signed_leaf_s)));
     }
@@ -1608,12 +1609,12 @@ static void test_p256(void) {
         memcpy(s, ec_signed_leaf_s, 32);
         r[31] ^= 1;
         ok("nor one with r changed",
-           !p256_verify(ec_signer_pubkey, ec_signed_leaf_hash, r, 32,
+           !ec_verify(EC_P256, ec_signer_pubkey, 65, ec_signed_leaf_hash, 32, r, 32,
                         ec_signed_leaf_s, sizeof(ec_signed_leaf_s)));
         memcpy(r, ec_signed_leaf_r, 32);
         s[31] ^= 1;
         ok("nor one with s changed",
-           !p256_verify(ec_signer_pubkey, ec_signed_leaf_hash, r, 32, s, 32));
+           !ec_verify(EC_P256, ec_signer_pubkey, 65, ec_signed_leaf_hash, 32, r, 32, s, 32));
     }
 
     /* Zero is not a scalar, and a verifier that lets it through accepts
@@ -1622,10 +1623,10 @@ static void test_p256(void) {
         u8 zero[32];
         memset(zero, 0, 32);
         ok("a zero r is refused",
-           !p256_verify(ec_signer_pubkey, ec_signed_leaf_hash, zero, 32,
+           !ec_verify(EC_P256, ec_signer_pubkey, 65, ec_signed_leaf_hash, 32, zero, 32,
                         ec_signed_leaf_s, sizeof(ec_signed_leaf_s)));
         ok("a zero s is refused",
-           !p256_verify(ec_signer_pubkey, ec_signed_leaf_hash,
+           !ec_verify(EC_P256, ec_signer_pubkey, 65, ec_signed_leaf_hash, 32,
                         ec_signed_leaf_r, sizeof(ec_signed_leaf_r), zero, 32));
     }
 
@@ -1637,14 +1638,14 @@ static void test_p256(void) {
         memcpy(bad, ec_signer_pubkey, 65);
         bad[40] ^= 0x20;
         ok("a public key that is not on the curve is refused",
-           !p256_verify(bad, ec_signed_leaf_hash,
+           !ec_verify(EC_P256, bad, 65, ec_signed_leaf_hash, 32,
                         ec_signed_leaf_r, sizeof(ec_signed_leaf_r),
                         ec_signed_leaf_s, sizeof(ec_signed_leaf_s)));
 
         memcpy(bad, ec_signer_pubkey, 65);
         bad[0] = 0x02;
         ok("and so is a point in a form this does not read",
-           !p256_verify(bad, ec_signed_leaf_hash,
+           !ec_verify(EC_P256, bad, 65, ec_signed_leaf_hash, 32,
                         ec_signed_leaf_r, sizeof(ec_signed_leaf_r),
                         ec_signed_leaf_s, sizeof(ec_signed_leaf_s)));
     }
@@ -1652,10 +1653,88 @@ static void test_p256(void) {
     /* And the signature under somebody else's key. */
     {
         ok("a valid signature under the wrong key does not verify",
-           !p256_verify(ec_signer_pubkey, intermediate_signed_leaf_hash,
+           !ec_verify(EC_P256, ec_signer_pubkey, 65, intermediate_signed_leaf_hash, 32,
                         ec_signed_leaf_r, sizeof(ec_signed_leaf_r),
                         ec_signed_leaf_s, sizeof(ec_signed_leaf_s)));
     }
+}
+
+/* --- SHA-384 and SHA-512, FIPS 180-4 ---------------------------------- */
+static void test_sha512(void) {
+    u8 d[64];
+
+    sha384("abc", 3, d);
+    ok("sha-384 of abc", is_hex(d, 48,
+       "cb00753f45a35e8bb5a03d699ac65007272c32ab0eded163"
+       "1a8b605a43ff5bed8086072ba1e7cc2358baeca134c825a7"));
+
+    sha384("", 0, d);
+    ok("sha-384 of nothing at all", is_hex(d, 48,
+       "38b060a751ac96384cd9327eb1b1e36a21fdb71114be0743"
+       "4c0cc7bf63f6e1da274edebfe76f65fbd51ad2f14898b95b"));
+
+    sha512("abc", 3, d);
+    ok("sha-512 of abc", is_hex(d, 64,
+       "ddaf35a193617abacc417349ae20413112e6fa4e89a97ea2"
+       "0a9eeee64b55d39a2192992a274fc1a836ba3c23a3feebbd"
+       "454d4423643ce80e2a9ac94fa54ca49f"));
+
+    /* A message that crosses the block boundary, where the length has to
+       go in a block of its own. The block here is a hundred and twenty
+       eight bytes and the length field sixteen, which is the pair most
+       easily got wrong by analogy with the smaller hash. */
+    sha384("abcdefghbcdefghicdefghijdefghijkefghijklfghijklmghijklmn"
+           "hijklmnoijklmnopjklmnopqklmnopqrlmnopqrsmnopqrstnopqrstu", 112, d);
+    ok("sha-384 of a message that needs a padding block of its own",
+       is_hex(d, 48,
+       "09330c33f71147e83d192fc782cd1b4753111b173b3b05d2"
+       "2fa08086e3b0f712fcc7c71a557e2db966c3e9fa91746039"));
+}
+
+/* --- ECDSA over P-384 ------------------------------------------------- */
+static void test_p384(void) {
+    u8 k[48], x[48];
+
+    memset(k, 0, 48); k[47] = 1;
+    ok("one times the p-384 base point is the base point",
+       ec_base_x(EC_P384, k, 48, x) && is_hex(x, 48,
+       "aa87ca22be8b05378eb1c71ef320ad746e1d3b628ba79b98"
+       "59f741e082542a385502f25dbf55296c3a545e3872760ab7"));
+
+    memset(k, 0, 48); k[47] = 2;
+    ok("twice it is the published doubling",
+       ec_base_x(EC_P384, k, 48, x) && is_hex(x, 48,
+       "08d999057ba3d2d969260045c55b97f089025959a6f434d6"
+       "51d207d19fb96e9e4fe0e86ebe0e64f85b96a9c75295df61"));
+
+    from_hex("ffffffffffffffffffffffffffffffffffffffffffffffff"
+             "c7634d81f4372ddf581a0db248b0a77aecec196accc52973", k, 48);
+    ok("the order times the base point is the point at infinity",
+       !ec_base_x(EC_P384, k, 48, x));
+
+    ok("a real ecdsa signature over p-384 verifies",
+       ec_verify(EC_P384, p384_signer_pubkey, sizeof(p384_signer_pubkey),
+                 p384_signed_hash, sizeof(p384_signed_hash),
+                 p384_signed_r, sizeof(p384_signed_r),
+                 p384_signed_s, sizeof(p384_signed_s)));
+
+    {
+        u8 h[48];
+        memcpy(h, p384_signed_hash, 48);
+        h[10] ^= 1;
+        ok("and not a different hash",
+           !ec_verify(EC_P384, p384_signer_pubkey, sizeof(p384_signer_pubkey),
+                      h, 48, p384_signed_r, sizeof(p384_signed_r),
+                      p384_signed_s, sizeof(p384_signed_s)));
+    }
+
+    /* A p-384 key handed to the p-256 code must be refused on its length
+       rather than half read. */
+    ok("a key for the other curve is refused",
+       !ec_verify(EC_P256, p384_signer_pubkey, sizeof(p384_signer_pubkey),
+                  p384_signed_hash, 32,
+                  p384_signed_r, sizeof(p384_signed_r),
+                  p384_signed_s, sizeof(p384_signed_s)));
 }
 
 static void test_crypto(void) {
@@ -2769,6 +2848,8 @@ int selftest_run(void) {
     kprintf("[x25519]\n");     test_x25519();
     kprintf("[rsa]\n");        test_rsa();
     kprintf("[p-256]\n");      test_p256();
+    kprintf("[sha-512]\n");    test_sha512();
+    kprintf("[p-384]\n");      test_p384();
     kprintf("[wpa]\n");        test_wpa();
     kprintf("[wait timeouts]\n"); test_wait_timeout();
     kprintf("[processors]\n"); test_smp();
