@@ -13,6 +13,11 @@
 #include "timer.h"
 #include "synaptics.h"
 #include "crypto.h"
+#include "gcm.h"
+#include "x25519.h"
+#include "testcerts.h"
+#include "rsa.h"
+#include "sha256.h"
 #include "wpa.h"
 #include "sched.h"
 #include "wait.h"
@@ -1199,6 +1204,353 @@ static void from_hex(const char *s, u8 *out, u32 len) {
         out[i] = (u8)((hex_digit(s[i * 2]) << 4) | hex_digit(s[i * 2 + 1]));
 }
 
+/* --- SHA-256, FIPS 180-4 --------------------------------------------- */
+static void test_sha256(void) {
+    u8 d[64];
+
+    sha256("abc", 3, d);
+    ok("sha-256 of abc", is_hex(d, 32,
+       "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"));
+
+    sha256("", 0, d);
+    ok("sha-256 of nothing at all", is_hex(d, 32,
+       "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"));
+
+    sha256("abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq", 56, d);
+    ok("sha-256 of a message that spans two blocks", is_hex(d, 32,
+       "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1"));
+
+    /* The length counter, past anything one block holds. */
+    {
+        sha256_t s;
+        sha256_init(&s);
+        for (int i = 0; i < 1000; i++) {
+            char chunk[1000];
+            for (int j = 0; j < 1000; j++) chunk[j] = 'a';
+            sha256_update(&s, chunk, 1000);
+        }
+        sha256_final(&s, d);
+        ok("sha-256 of a million letters", is_hex(d, 32,
+           "cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0"));
+    }
+
+    /* A message that lands exactly on a block boundary, where the padding
+       has to add a whole further block rather than fitting in the last. */
+    {
+        char b[56];
+        for (int i = 0; i < 56; i++) b[i] = 'a';
+        sha256(b, 55, d);
+        ok("sha-256 where the padding just fits", is_hex(d, 32,
+           "9f4390f8d30c2dd92ec9f095b65e2b9ae9b0a925a5258e241c9f1e910f734318"));
+        sha256(b, 56, d);
+        ok("sha-256 where the padding needs a block of its own", is_hex(d, 32,
+           "b35439a4ac6f0948b6d6f9e3c6af0f5f590ce20f1bde7090ef7970686ec6738a"));
+    }
+
+    /* --- HMAC-SHA256, RFC 4231 ------------------------------------------ */
+    {
+        u8 key[131];
+        for (int i = 0; i < 20; i++) key[i] = 0x0b;
+        hmac_sha256(key, 20, (const u8 *)"Hi There", 8, d);
+        ok("hmac-sha256, rfc 4231 case 1", is_hex(d, 32,
+           "b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7"));
+
+        hmac_sha256((const u8 *)"Jefe", 4,
+                    (const u8 *)"what do ya want for nothing?", 28, d);
+        ok("hmac-sha256, rfc 4231 case 2", is_hex(d, 32,
+           "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843"));
+
+        /* A key longer than the block, which is the case that is replaced by
+           its own hash and the one an implementation can get wrong while
+           passing everything else. */
+        for (int i = 0; i < 131; i++) key[i] = 0xaa;
+        hmac_sha256(key, 131,
+                    (const u8 *)"Test Using Larger Than Block-Size Key - "
+                                "Hash Key First", 54, d);
+        ok("hmac-sha256 with a key longer than a block", is_hex(d, 32,
+           "60e431591ee0b67f0d8a26aacbf5b77f8e0bc6213728c5140546040f0ee37f54"));
+    }
+
+    /* --- HKDF, RFC 5869 -------------------------------------------------- */
+    {
+        u8 ikm[22], salt[13], info[10], prk[32], okm[42];
+        for (int i = 0; i < 22; i++) ikm[i] = 0x0b;
+        for (int i = 0; i < 13; i++) salt[i] = (u8)i;
+        for (int i = 0; i < 10; i++) info[i] = (u8)(0xf0 + i);
+
+        hkdf_extract(salt, 13, ikm, 22, prk);
+        ok("hkdf extract, rfc 5869 case 1", is_hex(prk, 32,
+           "077709362c2e32df0ddc3f0dc47bba6390b6c73bb50f9c3122ec844ad7c2b3e5"));
+
+        ok("hkdf expand, rfc 5869 case 1",
+           hkdf_expand(prk, info, 10, okm, 42) && is_hex(okm, 42,
+           "3cb25f25faacd57a90434f64d0362f2a2d2d0a90cf1a5a4c5db02d56ecc4c5bf"
+           "34007208d5b887185865"));
+
+        /* No salt at all, which is a different path: the zero block stands
+           in for one, and an implementation that skips it gets a different
+           answer without complaining. */
+        hkdf_extract(0, 0, ikm, 22, prk);
+        ok("hkdf extract with no salt, rfc 5869 case 3", is_hex(prk, 32,
+           "19ef24a32c717b167f33a91d6f648bdf96596776afdb6377ac434c1c293ccb04"));
+        ok("hkdf expand with no info, rfc 5869 case 3",
+           hkdf_expand(prk, (const u8 *)"", 0, okm, 42) && is_hex(okm, 42,
+           "8da4e775a563c18f715f802a063c5a31b8a11f5c5ee1879ec3454e5f3c738d2d"
+           "9d201395faa4b61a96c8"));
+    }
+
+    /* --- the labelled form TLS 1.3 uses ---------------------------------- */
+    {
+        /* From RFC 8448, the traced handshake: the early secret with no
+           pre-shared key, and the secret derived from it. Checking this
+           rather than only the pieces is the point, because the label
+           construction is where a key schedule goes wrong silently. */
+        u8 early[32], derived[32], empty[32];
+        /* The input is thirty two zero bytes and not an empty string: with
+           no pre-shared key the specification says to use a block of zeros
+           the length of the hash, and the two give different answers. */
+        u8 no_psk[32];
+        memset(no_psk, 0, sizeof(no_psk));
+        hkdf_extract(0, 0, no_psk, sizeof(no_psk), early);
+        ok("tls 1.3 early secret with no pre-shared key", is_hex(early, 32,
+           "33ad0a1c607ec03b09e6cd9893680ce210adf300aa1f2660e1b22e10f170f92a"));
+
+        sha256("", 0, empty);
+        ok("tls 1.3 derived secret", tls13_derive_secret(
+               early, "derived", empty, 32, derived) && is_hex(derived, 32,
+           "6f2615a108c702c5678f54fc9dbab69716c076189c48250cebeac3576c3611ba"));
+    }
+}
+
+/* --- AES-GCM, the NIST test vectors ---------------------------------- */
+static void test_gcm(void) {
+    gcm_t g;
+    u8 key[16], iv[12], buf[64], tag[16], aad[20];
+
+    /* Case 1: no key, no nonce, nothing to encrypt. It checks the field
+       multiplication alone, since there is no data for anything else to go
+       wrong in. */
+    memset(key, 0, 16);
+    memset(iv, 0, 12);
+    ok("aes-gcm takes a 128 bit key", gcm_init(&g, key, 128));
+    gcm_seal(&g, iv, 0, 0, buf, 0, tag);
+    ok("aes-gcm tag over nothing at all", is_hex(tag, 16,
+       "58e2fccefa7e3061367f1d57a4e7455a"));
+
+    /* Case 2: one block of zeros. */
+    memset(buf, 0, 16);
+    gcm_seal(&g, iv, 0, 0, buf, 16, tag);
+    ok("aes-gcm encrypts a block of zeros", is_hex(buf, 16,
+       "0388dace60b6a392f328c2b971b2fe78"));
+    ok("aes-gcm tags a block of zeros", is_hex(tag, 16,
+       "ab6e47d42cec13bdf53a67b21257bddf"));
+
+    /* Case 4: a real key, four blocks of data and twenty bytes of header
+       that is authenticated but not encrypted, which is the shape TLS uses.
+       The last block is partial, which is the case a loop that assumes
+       whole blocks gets wrong. */
+    from_hex("feffe9928665731c6d6a8f9467308308", key, 16);
+    from_hex("cafebabefacedbaddecaf888", iv, 12);
+    from_hex("feedfacedeadbeeffeedfacedeadbeefabaddad2", aad, 20);
+    from_hex("d9313225f88406e5a55909c5aff5269a"
+             "86a7a9531534f7da2e4c303d8a318a72"
+             "1c3c0c95956809532fcf0e2449a6b525"
+             "b16aedf5aa0de657ba637b39", buf, 60);
+
+    gcm_init(&g, key, 128);
+    gcm_seal(&g, iv, aad, 20, buf, 60, tag);
+    ok("aes-gcm with a header and a partial last block", is_hex(buf, 60,
+       "42831ec2217774244b7221b784d0d49c"
+       "e3aa212f2c02a4e035c17e2329aca12e"
+       "21d514b25466931c7d8f6a5aac84aa05"
+       "1ba30b396a0aac973d58e091"));
+    ok("and its tag", is_hex(tag, 16, "5bc94fbc3221a5db94fae95ae7121a47"));
+
+    /* And back again. Encrypting correctly is half of it; the half that
+       matters is refusing a message that was changed. */
+    ok("aes-gcm opens what it sealed",
+       gcm_open(&g, iv, aad, 20, buf, 60, tag)
+       && is_hex(buf, 16, "d9313225f88406e5a55909c5aff5269a"));
+
+    gcm_seal(&g, iv, aad, 20, buf, 60, tag);
+    buf[7] ^= 1;
+    ok("a changed message is refused", !gcm_open(&g, iv, aad, 20, buf, 60, tag));
+
+    gcm_seal(&g, iv, aad, 20, buf, 60, tag);
+    tag[0] ^= 1;
+    ok("a changed tag is refused", !gcm_open(&g, iv, aad, 20, buf, 60, tag));
+
+    /* The header is authenticated and not encrypted, so changing it has to
+       be caught even though not a byte of the message moved. In TLS the
+       header carries the length, so this is the check that stops a record
+       being claimed to be a different size than it is. */
+    gcm_seal(&g, iv, aad, 20, buf, 60, tag);
+    aad[3] ^= 1;
+    ok("a changed header is refused", !gcm_open(&g, iv, aad, 20, buf, 60, tag));
+    aad[3] ^= 1;
+
+    /* A refused message must not leave the decryption lying about. */
+    gcm_seal(&g, iv, aad, 20, buf, 60, tag);
+    tag[15] ^= 0x80;
+    gcm_open(&g, iv, aad, 20, buf, 60, tag);
+    bool cleared = true;
+    for (int i = 0; i < 60; i++) if (buf[i]) cleared = false;
+    ok("and it leaves nothing behind to be used by mistake", cleared);
+}
+
+/* --- X25519, RFC 7748 ------------------------------------------------- */
+static void test_x25519(void) {
+    u8 sk[32], pk[32], got[32];
+
+    /* The two scalar multiplications given in section 5.2. */
+    from_hex("a546e36bf0527c9d3b16154b82465edd"
+             "62144c0ac1fc5a18506a2244ba449ac4", sk, 32);
+    from_hex("e6db6867583030db3594c1a424b15f7c"
+             "726624ec26b3353b10a903a6d0ab1c4c", pk, 32);
+    ok("x25519, the first vector in rfc 7748",
+       x25519(sk, pk, got) && is_hex(got, 32,
+       "c3da55379de9c6908e94ea4df28d084f32eccf03491c71f754b4075577a28552"));
+
+    from_hex("4b66e9d4d1b4673c5ad22691957d6af5"
+             "c11b6421e0ea01d42ca4169e7918ba0d", sk, 32);
+    from_hex("e5210f12786811d3f4b7959d0538ae2c"
+             "31dbe7106fc03c3efc4cd549c715a493", pk, 32);
+    ok("x25519, the second vector in rfc 7748",
+       x25519(sk, pk, got) && is_hex(got, 32,
+       "95cbde9476e8907d7aade45cb4b873f88b595a68799fa152e6f8f7647aac7957"));
+
+    /* The base point vectors from section 6.1: a private key turned into
+       the public value that is actually sent, and both sides arriving at
+       the same secret, which is the only property that matters. */
+    {
+        u8 a_priv[32], b_priv[32], a_pub[32], b_pub[32], s1[32], s2[32];
+
+        from_hex("77076d0a7318a57d3c16c17251b26645"
+                 "df4c2f87ebc0992ab177fba51db92c2a", a_priv, 32);
+        from_hex("5dab087e624a8a4b79e17f8b83800ee6"
+                 "6f3bb1292618b6fd1c2f8b27ff88e0eb", b_priv, 32);
+
+        x25519_public(a_priv, a_pub);
+        ok("a private key makes the published public value", is_hex(a_pub, 32,
+           "8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a"));
+
+        x25519_public(b_priv, b_pub);
+        ok("and so does the other one", is_hex(b_pub, 32,
+           "de9edb7d7b7dc1b4d35b61c2ece435373f8343c85b78674dadfc7e146f882b4f"));
+
+        ok("each side works out the shared secret from the other's public value",
+           x25519(a_priv, b_pub, s1) && is_hex(s1, 32,
+           "4a5d9d5ba4ce2de1728e3bf480350f25e07e21c947d19e3376f09b3c1e161742"));
+        ok("and both arrive at the same one",
+           x25519(b_priv, a_pub, s2) && memcmp(s1, s2, 32) == 0);
+    }
+
+    /* A peer value of zero drives the answer to zero whatever the private
+       key is, which is a peer choosing the key rather than agreeing one.
+       Accepting it is the difference between a private connection and one
+       that only looks private. */
+    {
+        u8 zero[32];
+        memset(zero, 0, 32);
+        from_hex("77076d0a7318a57d3c16c17251b26645"
+                 "df4c2f87ebc0992ab177fba51db92c2a", sk, 32);
+        ok("a peer value that forces a known secret is refused",
+           !x25519(sk, zero, got));
+
+        /* And the other low order points, which do the same thing less
+           obviously. */
+        u8 one[32];
+        memset(one, 0, 32); one[0] = 1;
+        ok("and so is the next one", !x25519(sk, one, got));
+    }
+}
+
+/* --- RSA verification, against signatures made by a real authority ---- */
+static void test_rsa(void) {
+    static rsa_key_t key;
+
+    /* The root's key, and the intermediate it signed. A 4096 bit modulus,
+       which is the size the roots actually use and the one an arithmetic
+       bug is most likely to show up at. */
+    memcpy(key.n, root_signed_intermediate_mod,
+           sizeof(root_signed_intermediate_mod));
+    key.n_len = sizeof(root_signed_intermediate_mod);
+    key.e = root_signed_intermediate_e;
+
+    ok("a real 4096 bit signature from a certificate authority verifies",
+       rsa_verify_pkcs1(&key, root_signed_intermediate_sig,
+                        sizeof(root_signed_intermediate_sig),
+                        root_signed_intermediate_hash, 32));
+
+    /* One bit of a different message must not. */
+    {
+        u8 h[32];
+        memcpy(h, root_signed_intermediate_hash, 32);
+        h[31] ^= 1;
+        ok("and it does not verify a different hash",
+           !rsa_verify_pkcs1(&key, root_signed_intermediate_sig,
+                             sizeof(root_signed_intermediate_sig), h, 32));
+    }
+
+    /* Nor must a changed signature. */
+    {
+        static u8 s[512];
+        memcpy(s, root_signed_intermediate_sig,
+               sizeof(root_signed_intermediate_sig));
+        s[100] ^= 0x40;
+        ok("nor a signature with a byte changed",
+           !rsa_verify_pkcs1(&key, s, sizeof(root_signed_intermediate_sig),
+                             root_signed_intermediate_hash, 32));
+    }
+
+    /* The other size, and the other real signature: the intermediate's
+       2048 bit key over the leaf for *.google.com. */
+    memcpy(key.n, intermediate_signed_leaf_mod,
+           sizeof(intermediate_signed_leaf_mod));
+    key.n_len = sizeof(intermediate_signed_leaf_mod);
+    key.e = intermediate_signed_leaf_e;
+
+    ok("a real 2048 bit signature verifies too",
+       rsa_verify_pkcs1(&key, intermediate_signed_leaf_sig,
+                        sizeof(intermediate_signed_leaf_sig),
+                        intermediate_signed_leaf_hash, 32));
+
+    /* And the right signature under the wrong key does not, which is the
+       whole point of a chain: it is not enough that a signature is valid,
+       it has to be valid under the key that was supposed to have made it. */
+    memcpy(key.n, root_signed_intermediate_mod,
+           sizeof(root_signed_intermediate_mod));
+    key.n_len = sizeof(root_signed_intermediate_mod);
+    ok("and a valid signature under the wrong key does not",
+       !rsa_verify_pkcs1(&key, intermediate_signed_leaf_sig,
+                         sizeof(intermediate_signed_leaf_sig),
+                         intermediate_signed_leaf_hash, 32));
+
+    /* A signature the length of the modulus is required. Short ones are
+       where a verifier that left pads without noticing goes wrong. */
+    memcpy(key.n, intermediate_signed_leaf_mod,
+           sizeof(intermediate_signed_leaf_mod));
+    key.n_len = sizeof(intermediate_signed_leaf_mod);
+    ok("a signature of the wrong length is refused",
+       !rsa_verify_pkcs1(&key, intermediate_signed_leaf_sig, 255,
+                         intermediate_signed_leaf_hash, 32));
+
+    /* A signature is a number below the modulus. One that is not is
+       either a broken encoder or somebody probing, and either way there is
+       nothing to verify. */
+    {
+        static u8 s[256];
+        memcpy(s, intermediate_signed_leaf_mod, sizeof(s));
+        ok("a signature not below the modulus is refused",
+           !rsa_verify_pkcs1(&key, s, sizeof(s),
+                             intermediate_signed_leaf_hash, 32));
+        memset(s, 0, sizeof(s));
+        ok("and so is one of nothing at all",
+           !rsa_verify_pkcs1(&key, s, sizeof(s),
+                             intermediate_signed_leaf_hash, 32));
+    }
+}
+
 static void test_crypto(void) {
     u8 d[32];
 
@@ -2305,6 +2657,10 @@ int selftest_run(void) {
     test_idle_accounting();
     kprintf("[trackpad]\n");   test_trackpad();
     kprintf("[crypto]\n");     test_crypto();
+    kprintf("[sha-256]\n");    test_sha256();
+    kprintf("[aes-gcm]\n");    test_gcm();
+    kprintf("[x25519]\n");     test_x25519();
+    kprintf("[rsa]\n");        test_rsa();
     kprintf("[wpa]\n");        test_wpa();
     kprintf("[wait timeouts]\n"); test_wait_timeout();
     kprintf("[processors]\n"); test_smp();
