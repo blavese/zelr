@@ -416,10 +416,12 @@ static bool hash_for(x509_sig_t alg, const u8 *data, u32 len,
     }
 }
 
-/* ECDSA-Sig-Value ::= SEQUENCE { r INTEGER, s INTEGER } */
-static bool split_ecdsa(const u8 *sig, u32 len,
-                        const u8 **r, u32 *r_len,
-                        const u8 **s, u32 *s_len) {
+/* ECDSA-Sig-Value ::= SEQUENCE { r INTEGER, s INTEGER }.
+   Shared with the handshake, which has to read the same shape out of the
+   signature a server makes over the transcript. */
+bool x509_ecdsa_split(const u8 *sig, u32 len,
+                      const u8 **r, u32 *r_len,
+                      const u8 **s, u32 *s_len) {
     der_t d, seq;
     der_init(&d, sig, len);
     if (!der_enter(&d, DER_SEQ, &seq)) return false;
@@ -457,7 +459,7 @@ bool x509_signed_by(const x509_t *child, const x509_t *issuer) {
         case X509_SIG_ECDSA_SHA384: {
             if (issuer->key_type != X509_KEY_EC) return false;
             const u8 *r, *s; u32 r_len, s_len;
-            if (!split_ecdsa(child->sig, child->sig_len, &r, &r_len, &s, &s_len))
+            if (!x509_ecdsa_split(child->sig, child->sig_len, &r, &r_len, &s, &s_len))
                 return false;
             return ec_verify(issuer->curve, issuer->ec, issuer->ec_len,
                              h, h_len, r, r_len, s, s_len);

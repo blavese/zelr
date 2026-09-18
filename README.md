@@ -7,8 +7,10 @@ describes.
 
 It routes its interrupts through the IOAPIC, finds an NVMe, SATA or ATA disk,
 reads the GPT on it, keeps files in directories on a FAT16 or FAT32 volume,
-talks to the internet over its own TCP/IP stack, takes input from PS/2 and
-USB, and runs a desktop whose programs are real ring 3 processes.
+talks to the internet over its own TCP/IP stack, opens an https connection
+with its own TLS 1.3 and checks the certificate at the other end against its
+own root store, takes input from PS/2 and USB, and runs a desktop whose
+programs are real ring 3 processes.
 
 When it fails it says why.
 
@@ -719,11 +721,18 @@ font is the printable half of ASCII. Each of those is written back the way it
 was written before there was anything but ASCII, so a reader loses the shape
 of a mark rather than the sense of it.
 
-What it cannot do is https, and that is not a footnote: it is most of the
-web. TLS means a certificate parser, big integer arithmetic and a key
-exchange or two, all of which have to be written here as well. It is the next
-piece of work rather than a limitation being papered over, and until it is
-done the browser says so on the page instead of failing quietly.
+It does https, which is most of the web and was most of the work. A typed
+name goes to https unless it says otherwise, because guessing the other way
+sends the address itself in the clear and then follows a redirect to the
+encrypted one, by which point the thing worth hiding has already been said
+out loud. The status line reports which of the two happened, in words,
+either way: marking only the encrypted case teaches people to read a missing
+mark as nothing in particular.
+
+What the encryption proves is narrow and the browser does not overstate it.
+It means the bytes came from whoever holds the name that was typed, because
+a signature chains from that name to an authority this machine was built
+trusting. It does not mean the site is honest or the page is safe.
 
 **The network, and being straight about it.** There is an icon on the panel
 next to the speaker, and it says three things apart rather than two: no
@@ -828,31 +837,45 @@ is still the kernel's own, on the console; the one in a window is a program.
 ## testing
 
 The kernel tests itself. `./run.sh -T` boots with selftest on the command line,
-runs 390 checks across every subsystem, then writes to QEMU's debug-exit port
+runs 511 checks across every subsystem, then writes to QEMU's debug-exit port
 so the host gets a real exit status.
 
-    [string]              8 checks   [graphics]           13 checks
-    [the identity map]    6 checks   [windows]             7 checks
-    [physical memory]     4 checks   [window server]      16 checks
-    [paging]              4 checks   [built-in programs]   6 checks
-    [user access]         5 checks   [theme]              16 checks
-    [heap]                5 checks   [taskbar]            18 checks
-    [filesystem]          7 checks   [live tree]          19 checks
-    [paths]              11 checks   [layout]              9 checks
-    [directories]        12 checks   [waiting]            16 checks
-    [open files]         12 checks   [trackpad]           25 checks
-    [timer]               2 checks   [crypto]             22 checks
-    [interrupts]          2 checks   [wpa]                19 checks
-    [disk]               12 checks   [wait timeouts]       3 checks
-    [fat]                14 checks   [processors]          2 checks
-    [network]             7 checks   [black box]          21 checks
-    [elf]                 7 checks   [acpi and pcie]       4 checks
-    [userspace]           4 checks   [interrupt routing]   9 checks
-    [video]               7 checks   [clipboard]          14 checks
-    [mouse]               4 checks   [clock]              18 checks
+    [string]                8 checks   [taskbar]              18 checks
+    [the identity map]      2 checks   [live tree]            19 checks
+    [physical memory]       4 checks   [layout]                9 checks
+    [paging]                4 checks   [waiting]              16 checks
+    [user access]           5 checks   [trackpad]             25 checks
+    [heap]                  5 checks   [crypto]               22 checks
+    [filesystem]            7 checks   [sha-256]              15 checks
+    [paths]                11 checks   [aes-gcm]              11 checks
+    [directories]          12 checks   [x25519]                8 checks
+    [open files]           12 checks   [rsa]                   8 checks
+    [timer]                 2 checks   [p-256]                13 checks
+    [interrupts]            2 checks   [sha-512]               4 checks
+    [disk]                 12 checks   [p-384]                 6 checks
+    [fat]                  14 checks   [certificates]         34 checks
+    [network]               9 checks   [randomness]            5 checks
+    [elf]                   7 checks   [tls 1.3]              19 checks
+    [userspace]             4 checks   [wpa]                  19 checks
+    [video]                 7 checks   [wait timeouts]         3 checks
+    [mouse]                 4 checks   [processors]            2 checks
+    [graphics]             13 checks   [black box]            21 checks
+    [windows]               7 checks   [acpi and pcie]         4 checks
+    [window server]        16 checks   [interrupt routing]     9 checks
+    [built-in programs]     6 checks   [clipboard]            14 checks
+    [theme]                16 checks   [clock]                18 checks
 
-    390 passed, 0 failed
+    511 passed, 0 failed
     SELFTEST_PASS
+
+The cryptographic sections are all known answers from published documents:
+the hashes against FIPS 180, AES-GCM against the NIST vectors, X25519
+against RFC 7748, the curves against their own test vectors, the TLS key
+schedule against the handshake traced end to end in RFC 8448, and the
+certificate checks against a chain google.com actually served. A test that
+only agrees with the thing it is testing proves nothing here, because an
+implementation that is wrong in a consistent way passes it and then cannot
+talk to anybody.
 
 The processor section is two checks on a machine with one CPU and eleven on
 a machine with several, where it hands work to each of them and requires the
@@ -1002,7 +1025,14 @@ large range:
 - **TCP handles one connection at a time.** It retransmits with exponential
   backoff and gives up after six tries, but there is no congestion control, no
   window scaling and no selective acknowledgement.
-- **No TLS**, so `fetch` is plain HTTP only.
+- **TLS is 1.3 and one cipher suite**: AES-128-GCM with SHA-256 over X25519,
+  which every 1.3 server must implement. There is no TLS 1.2 and no second
+  suite, and that is the design rather than an unfinished part of it. Every
+  attack that has broken this protocol in practice worked by talking two
+  modern implementations into an old thing they both still supported, and
+  the defence is not to have it. A server too old for 1.3 is refused rather
+  than accommodated. There is no session resumption, so every connection
+  does the full handshake.
 - **Ping only reaches the local network.** ICMP is implemented in both
   directions and pinging the gateway works. QEMU's user mode networking does
   not forward ICMP to the wider internet without elevated privileges, so
@@ -1058,7 +1088,7 @@ orders of magnitude away from Linux, which is roughly 30 million lines.
     kernel/rtl8139.c   rtl8139 driver
     kernel/net.c       ethernet, arp, ip, icmp, udp, dhcp, dns
     kernel/tcp.c       tcp client
-    kernel/http.c      http get
+    kernel/http.c      http get, over tls when the address says https
     kernel/fb.c        linear framebuffer via the bochs vbe ports
     kernel/fbcon.c     the text console drawn into it
     kernel/font.c      the 8x16 font (generated from the drawings)
@@ -1073,6 +1103,16 @@ orders of magnitude away from Linux, which is roughly 30 million lines.
     kernel/pins.c      the apps kept on the taskbar, and their file
     kernel/synaptics.c a trackpad, and turning a position into a pointer
     kernel/crypto.c    sha-1, hmac, pbkdf2 and aes, written out
+    kernel/sha256.c    sha-256, hkdf, and the labelled form tls 1.3 uses
+    kernel/sha512.c    sha-384 and sha-512
+    kernel/gcm.c       aes-gcm, which is what tls 1.3 encrypts with
+    kernel/x25519.c    the key exchange, rfc 7748
+    kernel/ec.c        ecdsa on p-256 and p-384
+    kernel/rsa.c       rsa signature checking, pkcs#1 and pss
+    kernel/x509.c      certificates, and what makes a chain of them mean something
+    kernel/roots.c     the authorities this machine believes (generated)
+    kernel/tls.c       tls 1.3, client side
+    kernel/rng.c       unpredictable bytes, and refusing to invent them
     kernel/wpa.c       what a wireless password turns into
     kernel/wifi.c      what wireless hardware is here, and whether it is usable
     kernel/usbnet.c    ethernet over usb, for a phone or an adapter

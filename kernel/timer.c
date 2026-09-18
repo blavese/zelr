@@ -8,6 +8,7 @@
 #include "io.h"
 #include "usb.h"
 #include "synaptics.h"
+#include "rng.h"
 
 static volatile u64 ticks = 0;
 static u32 frequency = 100;
@@ -35,6 +36,11 @@ static void on_tick(registers_t *r) {
     /* And the sound buffer, which plays on a loop and would otherwise repeat
        whatever was last written to it forever. */
     sound_poll();
+
+    /* One cycle counter sample. This is the only place the interval between
+       two interrupts can be measured, and on a machine with no rdseed and no
+       rdrand it is the only unpredictable thing there is. */
+    rng_tick();
 }
 
 void timer_init(u32 hz) {

@@ -22,6 +22,7 @@
 #include "user.h"
 #include "net.h"
 #include "tcp.h"
+#include "tls.h"
 #include "heap.h"
 #include "smp.h"
 #include "pmm.h"
@@ -421,6 +422,15 @@ static i64 sys_getcwd(registers_t *r) {
 
 static u32 sock_owner;
 static bool sock_open;
+static bool sock_secure;
+
+/* Shuts the socket down in the right order: the TLS close notification has
+   to go out over a connection that is still up, so it goes first. */
+static void sock_drop(void) {
+    if (sock_secure) { tls_close(); sock_secure = false; }
+    tcp_close();
+    sock_open = false;
+}
 
 static i64 sys_connect(registers_t *r) {
     char host[128];
@@ -436,14 +446,62 @@ static i64 sys_connect(registers_t *r) {
 
     sock_owner = caller_pid();
     sock_open = true;
+    sock_secure = false;
     return 0;
+}
+
+/* The same connection, with the handshake done on it before the caller gets
+   it back. The name is needed twice over and for different things: to find
+   the address, and to check that the certificate at the other end is for the
+   site that was asked for rather than merely for whoever answered. */
+static i64 sys_connect_tls(registers_t *r) {
+    char host[128];
+    if (!copy_path(r->rbx, host, sizeof(host))) return -1;
+    u16 port = (u16)r->rcx;
+    if (!port) port = 443;
+    if (!net_up()) return -1;
+    if (sock_open) return -1;
+
+    ipv4_t ip = net_parse_ip(host);
+    if (!ip && !net_resolve(host, &ip, 6000)) return -1;
+    if (!tcp_connect(ip, port, 6000)) return -1;
+
+    /* A handshake that fails takes the connection with it. Leaving the TCP
+       side open after a certificate was refused would let a caller that
+       ignored the return value carry on and send the request in the clear,
+       to the machine that just failed to prove who it was. */
+    if (!tls_connect(host)) { tcp_close(); return -1; }
+
+    sock_owner = caller_pid();
+    sock_open = true;
+    sock_secure = true;
+    return 0;
+}
+
+/* Why the last handshake failed, or what the open one agreed on. */
+static i64 sys_tls_status(registers_t *r) {
+    u64 buf = r->rbx, cap = r->rcx;
+    if (cap == 0 || cap > 256) return -1;
+    if (!user_range_ok(buf, cap)) return -1;
+
+    const char *s = r->rdx == TLS_WHAT ? tls_describe() : tls_error();
+    u32 n = (u32)strlen(s);
+    if (n + 1 > cap) n = (u32)cap - 1;
+    memcpy((void *)buf, s, n);
+    ((char *)buf)[n] = 0;
+    return (i32)n;
 }
 
 static i64 sys_send(registers_t *r) {
     if (!sock_open || sock_owner != caller_pid()) return -1;
     u64 buf = r->rcx, len = r->rdx;
-    if (len == 0 || len > 1400) return -1;
+    /* A plain send is one segment, because that is what the stack writes in
+       one go. TLS makes its own records and splits them itself, so the limit
+       there is the record size rather than the segment. */
+    if (len == 0 || len > (sock_secure ? 8192u : 1400u)) return -1;
     if (!user_range_ok(buf, len)) return -1;
+    if (sock_secure)
+        return tls_send((const void *)buf, (u32)len) ? (i32)len : -1;
     return tcp_send((const void *)buf, (u16)len) ? (i32)len : -1;
 }
 
@@ -458,6 +516,16 @@ static i64 sys_recv(registers_t *r) {
     if (len == 0 || len > 65536) return -1;
     if (!user_range_ok(buf, len)) return -1;
 
+    if (sock_secure) {
+        u32 n = tls_recv((u8 *)buf, len, 4000);
+        if (n) return (i32)n;
+        /* A finished TLS connection is one that said so in an alert, or one
+           whose carrier stopped. The second is not a clean ending and is
+           reported the same way, because a caller can do nothing different
+           about it and the alternative is waiting forever. */
+        return (tls_ended() || tcp_ended()) ? -2 : 0;
+    }
+
     u32 n = tcp_recv((u8 *)buf, len, 4000);
     if (n) return (i32)n;
     return tcp_ended() ? -2 : 0;
@@ -466,15 +534,14 @@ static i64 sys_recv(registers_t *r) {
 static i64 sys_disconnect(registers_t *r) {
     (void)r;
     if (!sock_open || sock_owner != caller_pid()) return -1;
-    tcp_close();
-    sock_open = false;
+    sock_drop();
     return 0;
 }
 
 /* Frees the socket when its owner dies, so a crashed program does not lock
    the only connection the machine has. */
 void syscall_release(u32 pid) {
-    if (sock_open && sock_owner == pid) { tcp_close(); sock_open = false; }
+    if (sock_open && sock_owner == pid) sock_drop();
 }
 
 static i64 sys_resolve(registers_t *r) {
@@ -612,6 +679,8 @@ static const syscall_fn TABLE[] = {
     [SYS_CHDIR]       = sys_chdir,
     [SYS_GETCWD]      = sys_getcwd,
     [SYS_CONNECT]     = sys_connect,
+    [SYS_TLS_CONNECT] = sys_connect_tls,
+    [SYS_TLS_STATUS]  = sys_tls_status,
     [SYS_SEND]        = sys_send,
     [SYS_RECV]        = sys_recv,
     [SYS_DISCONNECT]  = sys_disconnect,

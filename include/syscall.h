@@ -72,6 +72,20 @@
    on. One string, which for everything that uses it is a path. */
 #define SYS_SPAWN_ARG     43
 #define SYS_GETARG        44
+
+/* The same one socket, with a TLS 1.3 handshake done on it before anything
+   is sent. Afterwards SYS_SEND and SYS_RECV carry the same bytes they always
+   did and the encryption is not the caller's business, which is the point:
+   a program should not be able to get this wrong by forgetting a step.
+ *
+   SYS_TLS_STATUS says what happened, because "it did not connect" is not
+   worth showing anybody. Which one it answers is in rdx: TLS_WHY for the
+   reason the last attempt failed, TLS_WHAT for what was agreed. */
+#define SYS_TLS_CONNECT   45
+#define SYS_TLS_STATUS    46
+#define TLS_WHY   0
+#define TLS_WHAT  1
+
 #define POWER_OFF     0
 #define POWER_REBOOT  1
 
