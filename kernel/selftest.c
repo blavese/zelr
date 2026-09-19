@@ -1470,6 +1470,37 @@ static void test_rng(void) {
        memcmp(a, a + 32, 32) != 0);
 }
 
+/* --- the kernel stack this is all running on --------------------------
+ *
+ * Every check above has run on one kernel stack, and the deepest path
+ * through them is the certificate one: a chain walk holds a parsed
+ * certificate, which holds a 512 byte modulus, and underneath that the
+ * modular exponentiation holds several numbers of that size at once, while
+ * every interrupt that lands in the middle of it is pushed on top.
+ *
+ * This is last on purpose. The stack is painted when the task is made and
+ * nothing repaints it, so what is left here is the deepest the whole run
+ * ever went rather than the depth at this moment. A margin that has quietly
+ * gone to nothing is a thing to find out about here, rather than from a
+ * fault in an allocator in some other task some time later.
+ *
+ * The number is printed either way, because "it still fits" and "it fits
+ * with sixty bytes to spare" are not the same report. */
+static void test_stack(void) {
+    task_t *self = task_current();
+    ok("this task can be asked about its own stack", self != 0);
+    if (!self) return;
+
+    u32 room = task_stack_headroom(self);
+    kprintf("        the deepest this run went left %d bytes of %d spare\n",
+            room, TASK_STACK_SIZE);
+
+    /* A quarter of it. Below that, the next thing added to a deep path
+       reaches the end, and what is at the end of a kernel stack is the
+       heap block header underneath it. */
+    ok("and a quarter of it was never needed", room >= TASK_STACK_SIZE / 4);
+}
+
 /* --- what the TLS layer does before it has a connection -------------------
  *
  * The handshake itself needs a server, and there is not one here. What can
@@ -3188,6 +3219,7 @@ int selftest_run(void) {
     kprintf("[interrupt routing]\n"); test_irqs();
     kprintf("[clipboard]\n"); test_clipboard();
     kprintf("[clock]\n"); test_clock();
+    kprintf("[kernel stack]\n"); test_stack();
     kprintf("\n%d passed, %d failed\n", passed, failed);
     kprintf(failed ? "SELFTEST_FAIL\n" : "SELFTEST_PASS\n");
     return failed;

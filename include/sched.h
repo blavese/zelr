@@ -6,6 +6,20 @@
    scheduler has no other reason to know about the filesystem. */
 #define TASK_CWD_MAX 128
 
+/* Every task gets a kernel stack of this size, and nothing grows one, so it
+   has to be big enough for the deepest path in the kernel with an interrupt
+   landing at the bottom of it.
+ *
+ * That path is certificate verification, and it is genuinely large: a
+ * parsed certificate carries a 4096 bit modulus, and the modular
+ * exponentiation underneath it holds five numbers of that size at once plus
+ * a product one limb wider. It comes to a little over sixteen kilobytes,
+ * which is what 16384 used to be, and the margin was 168 bytes. The timer
+ * interrupt spends a few hundred of those the moment it lands in the middle
+ * of the arithmetic, and then it is the heap block underneath the stack
+ * being written to rather than the stack. */
+#define TASK_STACK_SIZE 32768u
+
 /* BLOCKED is different from SLEEPING: a sleeping task has a time it wants to
    wake at, a blocked one is waiting for something to happen and may have no
    deadline at all. The scheduler skips both, but only one of them can be
@@ -80,6 +94,12 @@ bool   task_alive(u32 pid);
    there is no such task. Collecting the status is what lets the task record
    finally be freed. */
 int    task_wait(u32 pid);
+
+/* Bytes of this task's kernel stack that nothing has written yet. Kernel
+   stacks are painted at creation, so this is a high water mark and not a
+   reading of where the stack happens to be now. Zero would mean the whole
+   of it has been used, which is one step from using more than there is. */
+u32    task_stack_headroom(const task_t *t);
 
 u32    task_count(void);
 u32    task_blocked_count(void);

@@ -16,7 +16,37 @@
 #include "io.h"
 #include "paging.h"
 
-#define STACK_SIZE 16384u
+#define STACK_SIZE TASK_STACK_SIZE
+
+/* Every kernel stack is painted with this before anything runs on it. Two
+   things come out of that.
+ *
+ * The first is that the bottom word is a guard: a task that runs past the
+ * end of its stack writes over it, and the switch away from that task says
+ * so. Without it the first sign of an overflow is somewhere else entirely.
+ * A kernel stack comes from the heap, and the bytes below it are the header
+ * of the neighbouring block, so overrunning one corrupts a free list that
+ * some unrelated task walks into later: a fault in kmalloc, in a task that
+ * did nothing wrong, long after the one that did has finished.
+ *
+ * The second is that the paint that is left says how close every task came,
+ * which is the only honest way to pick a stack size. */
+#define STACK_PAINT 0xC5C5C5C5C5C5C5C5ull
+
+static void paint_stack(u8 *stack) {
+    u64 *w = (u64 *)stack;
+    for (u32 i = 0; i < STACK_SIZE / 8; i++) w[i] = STACK_PAINT;
+}
+
+/* Bytes at the bottom that have never been written. A task that has used
+   all of its stack reads zero here, and one that has used more than all of
+   it does not get this far. */
+u32 task_stack_headroom(const task_t *t) {
+    const u64 *w = (const u64 *)t->stack_base;
+    u32 i = 0;
+    while (i < STACK_SIZE / 8 && w[i] == STACK_PAINT) i++;
+    return i * 8;
+}
 
 /* How long a finished task's record survives so its status can be collected.
    Ten seconds is far longer than any wait here takes and short enough that
@@ -44,6 +74,7 @@ task_t *task_create(const char *name, void (*entry)(void)) {
     if (!t) return 0;
     u8 *stack = (u8 *)kmalloc(STACK_SIZE);
     if (!stack) { kfree(t); return 0; }
+    paint_stack(stack);
 
     t->stack_base = (u64)stack;
     t->pid = next_pid++;
@@ -81,6 +112,7 @@ task_t *task_create_user(const char *name, u64 dir, u64 entry, u64 stack_top) {
     if (!t) return 0;
     u8 *stack = (u8 *)kmalloc(STACK_SIZE);
     if (!stack) { kfree(t); return 0; }
+    paint_stack(stack);
 
     t->stack_base = (u64)stack;
     t->pid = next_pid++;
@@ -200,6 +232,16 @@ u64 scheduler_switch(u64 rsp) {
 
     if (current) {
         current->rsp = rsp;
+
+        /* Checked here because this is the one place every task passes
+           through, and because the alternative is finding out from a fault
+           in something unrelated. Said out loud rather than repaired: a
+           stack that has already been run off the end of has written over
+           whatever was underneath it, and carrying on would be carrying on
+           with a heap that is no longer what it says it is. */
+        if (*(const volatile u64 *)current->stack_base != STACK_PAINT)
+            panic("the %s task ran off the end of its kernel stack", current->name);
+
         if (current->state == TASK_RUNNING) current->state = TASK_READY;
     }
 
