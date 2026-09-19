@@ -11,6 +11,7 @@
 #include "heap.h"
 #include "netpriv.h"
 #include "tcp.h"
+#include "sched.h"
 
 #define ETH_P_IP   0x0800
 #define ETH_P_ARP  0x0806
@@ -425,6 +426,29 @@ bool net_dhcp(u32 timeout_ms) {
     return true;
 }
 
+/* --- asking for one without stopping to wait ----------------------------- */
+
+/* An exchange takes seconds, and there are two places that start one: the
+   machine at startup, and the button on the panel for when that did not
+   work. Neither can afford to block, and both sharing one socket and one
+   transaction id means they must not overlap, so the flag lives here with
+   the socket rather than in either caller. */
+static bool dhcp_asking;
+
+bool net_dhcp_busy(void) { return dhcp_asking; }
+
+static void dhcp_task(void) {
+    net_dhcp(6000);
+    dhcp_asking = false;
+    task_exit();
+}
+
+void net_dhcp_start(void) {
+    if (dhcp_asking || !netdev_up()) return;
+    dhcp_asking = true;
+    if (!task_create("dhcp", dhcp_task)) dhcp_asking = false;
+}
+
 /* --- icmp echo ---------------------------------------------------------- */
 
 int net_ping(ipv4_t dst, u32 timeout_ms) {
@@ -521,10 +545,31 @@ bool net_resolve(const char *host, ipv4_t *out, u32 timeout_ms) {
     q[n++] = 0; q[n++] = 1;                  /* IN */
 
     u16 sport = (u16)(40000 + (timer_ticks() & 0x3FF));
-    if (!net_udp_send(my_dns, sport, 53, q, (u16)n)) return false;
 
+    /* Asked more than once, because this is one UDP datagram each way and
+       either of them is allowed to go missing. A resolver client that sends
+       one query and gives up when nothing comes back reports that a name
+       does not exist, which is a different and much more alarming thing
+       than a packet having been dropped, and it is the answer everything
+       above this gets told. The ARP above does the same for the same
+       reason.
+     *
+       The identifier stays the same across the attempts: a late answer to
+       the first query is a perfectly good answer to the second. */
     u64 deadline = timer_ticks() + (timeout_ms * timer_hz()) / 1000u;
-    while (!dns_got && timer_ticks() < deadline) net_poll();
+    u64 gap = (timer_hz() * 3) / 4;             /* three quarters of a second */
+
+    for (int tries = 0; tries < 4 && !dns_got; tries++) {
+        if (!net_udp_send(my_dns, sport, 53, q, (u16)n)) return false;
+
+        u64 until = timer_ticks() + gap;
+        if (until > deadline) until = deadline;
+        while (!dns_got && timer_ticks() < until) net_poll();
+
+        if (timer_ticks() >= deadline) break;
+        gap *= 2;
+    }
+
     if (!dns_got || !dns_result) return false;
 
     *out = dns_result;

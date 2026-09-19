@@ -482,8 +482,26 @@ void kmain(handoff_t *h) {
     /* After the scheduler exists, because it is a task, and the task is how
        anything plugged in later gets noticed at all. */
     usb_start_service();
-    if (want_selftest) task_create("selftest", selftest_task);
-    else               task_create("init", init_task);
+    if (want_selftest) {
+        task_create("selftest", selftest_task);
+    } else {
+        task_create("init", init_task);
+
+        /* And ask for an address, rather than waiting to be told to.
+         *
+         * This was a button on the panel and nothing else, which meant a
+         * machine that had just booted had a working card, a working stack
+         * and no address, so everything that used the network failed while
+         * saying something else about itself. Nobody reads "no address" as
+         * "press the button in the corner first".
+         *
+         * Here rather than beside the card, because it is a task and there
+         * was no scheduler to put one on yet at that point: written there
+         * first, it silently created nothing and the machine still came up
+         * with no address. Not during the self test, because that runs its
+         * own exchange on the same socket, and two at once is a race. */
+        net_dhcp_start();
+    }
 
     kprintf("  sched   %d task(s)\n", task_count());
 

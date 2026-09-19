@@ -238,11 +238,31 @@ bool pcnet_send(const void *data, u16 len) {
 
 void pcnet_poll(void) {
     if (!up) return;
+
     /* handle_rx walks the ring and gives descriptors back, and the card's
        own interrupt does the same thing, so letting one interrupt the other
        loses frames. The walk is short. */
     bool were_on = interrupts_enabled();
     cli();
+
+    /* Read and acknowledge the status register, and not only because there
+       might be a flag in it. Polling used to look at the descriptors alone,
+       which touches nothing but memory the card wrote earlier, and that is
+       the whole problem: a poll that never addresses the card is not a
+       conversation with it.
+     *
+       The card decides whether it is able to receive at the moment a frame
+       arrives, and something has to make it look again afterwards. Reading
+       the register is that something. Without it a machine could sit in a
+       tight polling loop for two hundred thousand turns, with every one of
+       its sixty four descriptors free and the receiver switched on, while
+       the answer it was waiting for went past on the wire. It recovered
+       whenever anything else happened to touch the card, so it looked like
+       a card that worked for a while and then stopped, differently every
+       time, and it was reliably wrong on the first connection after boot. */
+    u16 csr0 = csr_read(0);
+    if (csr0 & CSR0_ACK) csr_write(0, (u16)((csr0 & CSR0_ACK) | CSR0_INEA));
+
     handle_rx();
     if (were_on) sti();
 }

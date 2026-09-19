@@ -135,12 +135,13 @@ PageUp scrolls back.
     write notes hello
     cat notes
 
-    dhcp
     fetch example.com / page.html
     cat page.html
 
-That gets an address from the network, downloads a live web page over TCP, and
-saves it to a disk that survives closing the window. `browser example.com`,
+That downloads a live web page over TCP and saves it to a disk that survives
+closing the window. A machine with a card asks for an address at startup, so
+there is nothing to do first; `dhcp` asks again, for when there was nothing
+to answer the first time. `browser example.com`,
 or the browser in the launcher, shows the same page laid out rather than as
 markup.
 
@@ -741,9 +742,13 @@ middle one is the state people actually get stuck in, and an icon with two
 states cannot show it, which is why a cable plugged into a router with no
 DHCP behind it looks, on most machines, exactly like no cable at all.
 Clicking it opens a panel with the card, the address, the router, and a
-button that asks for one. Asking happens in a task of its own, because a
-compositor that stops for the length of a DHCP exchange is a desktop that
-freezes whenever somebody plugs a cable in.
+button that asks for one. The machine asks by itself at startup, so the
+button is for when that found nothing to answer; before it did, a freshly
+booted machine sat there with a working card and no address while everything
+that touched the network failed saying something else about itself. Either
+way the asking happens in a task of its own, because a compositor that stops
+for the length of a DHCP exchange is a desktop that freezes whenever somebody
+plugs a cable in.
 
 The panel also says what wireless hardware is present and whether it can be
 used, which needs explaining. Most wireless cards run the 802.11 MAC as
@@ -837,35 +842,36 @@ is still the kernel's own, on the console; the one in a window is a program.
 ## testing
 
 The kernel tests itself. `./run.sh -T` boots with selftest on the command line,
-runs 511 checks across every subsystem, then writes to QEMU's debug-exit port
+runs 522 checks across every subsystem, then writes to QEMU's debug-exit port
 so the host gets a real exit status.
 
-    [string]                8 checks   [taskbar]              18 checks
-    [the identity map]      2 checks   [live tree]            19 checks
-    [physical memory]       4 checks   [layout]                9 checks
-    [paging]                4 checks   [waiting]              16 checks
-    [user access]           5 checks   [trackpad]             25 checks
-    [heap]                  5 checks   [crypto]               22 checks
-    [filesystem]            7 checks   [sha-256]              15 checks
-    [paths]                11 checks   [aes-gcm]              11 checks
-    [directories]          12 checks   [x25519]                8 checks
-    [open files]           12 checks   [rsa]                   8 checks
-    [timer]                 2 checks   [p-256]                13 checks
-    [interrupts]            2 checks   [sha-512]               4 checks
-    [disk]                 12 checks   [p-384]                 6 checks
-    [fat]                  14 checks   [certificates]         34 checks
-    [network]               9 checks   [randomness]            5 checks
-    [elf]                   7 checks   [tls 1.3]              19 checks
-    [userspace]             4 checks   [wpa]                  19 checks
-    [video]                 7 checks   [wait timeouts]         3 checks
-    [mouse]                 4 checks   [processors]            2 checks
-    [graphics]             13 checks   [black box]            21 checks
-    [windows]               7 checks   [acpi and pcie]         4 checks
-    [window server]        16 checks   [interrupt routing]     9 checks
-    [built-in programs]     6 checks   [clipboard]            14 checks
-    [theme]                16 checks   [clock]                18 checks
+    [string]                8 checks   [live tree]            19 checks
+    [the identity map]      6 checks   [layout]                9 checks
+    [physical memory]       4 checks   [waiting]              16 checks
+    [paging]                4 checks   [trackpad]             25 checks
+    [user access]           5 checks   [crypto]               22 checks
+    [heap]                  5 checks   [sha-256]              15 checks
+    [filesystem]            7 checks   [aes-gcm]              11 checks
+    [paths]                11 checks   [x25519]                8 checks
+    [directories]          12 checks   [rsa]                   8 checks
+    [open files]           12 checks   [p-256]                13 checks
+    [timer]                 2 checks   [sha-512]               4 checks
+    [interrupts]            2 checks   [p-384]                 6 checks
+    [disk]                 12 checks   [certificates]         39 checks
+    [fat]                  14 checks   [randomness]            5 checks
+    [network]               9 checks   [tls 1.3]              19 checks
+    [elf]                   7 checks   [wpa]                  19 checks
+    [userspace]             4 checks   [wait timeouts]         3 checks
+    [video]                 7 checks   [processors]            2 checks
+    [mouse]                 4 checks   [black box]            21 checks
+    [graphics]             13 checks   [acpi and pcie]         4 checks
+    [windows]               7 checks   [interrupt routing]     9 checks
+    [window server]        16 checks   [clipboard]            14 checks
+    [built-in programs]     6 checks   [clock]                18 checks
+    [theme]                16 checks   [kernel stack]          2 checks
+    [taskbar]              18 checks
 
-    511 passed, 0 failed
+    522 passed, 0 failed
     SELFTEST_PASS
 
 The cryptographic sections are all known answers from published documents:
@@ -879,13 +885,23 @@ talk to anybody.
 
 The processor section is two checks on a machine with one CPU and eleven on
 a machine with several, where it hands work to each of them and requires the
-count they share to come back exact. `qemu-system-x86_64 -smp 4` reaches 399.
+count they share to come back exact. `qemu-system-x86_64 -smp 4` reaches 531.
 
 The same checks run again on `-machine q35`, which has PCIe and an AHCI
-controller rather than a 1996 chipset and a PIO disk, and reach 398 there.
+controller rather than a 1996 chipset and a PIO disk, and reach 530 there.
 Two bugs found the day that was added were invisible on the older machine:
 the block layer would not split a request past the eight sectors AHCI
 accepts, and the ACPI tables were never read on a UEFI machine at all.
+
+The last section is about the run itself. Every kernel stack is painted
+when its task is made, so what is still painted at the end says how deep
+the whole run went: the deepest path is certificate verification, which
+holds a 4096 bit modulus and several numbers of that size underneath it,
+and it reaches a little over sixteen kilobytes with the interrupts that
+land in the middle of it. It used to have a 16 KiB stack. The margin was
+168 bytes, and on the runs where it was not, the bytes written past the end
+were the header of the heap block underneath, so the fault surfaced as a
+garbage pointer in the allocator, in some other task, some time later.
 
 The tests are written to fail for the right reasons. The disk test writes a
 pattern to a spare sector, reads it back, and restores the original. The FAT
@@ -1033,6 +1049,11 @@ large range:
   the defence is not to have it. A server too old for 1.3 is refused rather
   than accommodated. There is no session resumption, so every connection
   does the full handshake.
+- **Certificates are checked with SHA-256, SHA-384 and SHA-512 over RSA, and
+  with ECDSA on P-256 and P-384.** Not SHA-1, which is broken for signatures
+  and is not worth accepting to read a page. A root that signs itself with
+  it is not a problem: a self-signature proves nothing, and the copy in the
+  store is the one believed.
 - **Ping only reaches the local network.** ICMP is implemented in both
   directions and pinging the gateway works. QEMU's user mode networking does
   not forward ICMP to the wider internet without elevated privileges, so

@@ -90,12 +90,32 @@ def leave_desktop(vm, mon):
     vm.wait_prompt()
 
 
+def wait_for_address(vm, seconds=25):
+    """The address the machine got on its own, or "" if it never did."""
+    end = time.time() + seconds
+    while time.time() < end:
+        got = address_of(vm)
+        if got not in ("", "0.0.0.0"):
+            return got
+        time.sleep(2)
+    return ""
+
+
 def use_desktop(vm, c, wired):
     vm.wait_boot()
 
-    # Asked at the console, which is the only place the answer can be read.
-    c.add("there is no address before anything is asked for",
-          address_of(vm) in ("", "0.0.0.0"))
+    # A machine with a card asks for an address by itself, at startup, and
+    # nothing here presses anything to make that happen. This used to check
+    # the opposite, because the only thing that ever asked was the button on
+    # the panel, and a freshly booted machine sat there with a working card
+    # and no address while everything that used the network failed saying
+    # something else about itself.
+    if wired:
+        c.add("an address arrives without anything being asked for",
+              wait_for_address(vm) == "10.0.2.15")
+    else:
+        c.add("a machine with no card does not invent one",
+              address_of(vm) in ("", "0.0.0.0"))
 
     vm.type("desktop\n")
     time.sleep(6)
@@ -150,19 +170,22 @@ def main():
     # --- a machine with a card ---------------------------------------------
     vm = Guest(DISK, memory=128)
     try:
-        mon, icons["wired"], after, shot = use_desktop(vm, c, True)
+        mon, icons["wired"], _, shot = use_desktop(vm, c, True)
         leave_desktop(vm, mon)
         got = address_of(vm)
 
         # QEMU hands out this one. It comes from its DHCP server, not from
         # anything here, which is what makes it worth checking.
-        c.add("asking gets an address from the dhcp server",
+        c.add("the address came from the dhcp server",
               got == "10.0.2.15")
         c.add("and a router to send everything else to",
               vm.run("net").find("10.0.2.2") >= 0)
 
-        c.add("and the icon changed once there was an address",
-              after != icons["wired"], shot)
+        # The button is still there, and pressing it on a machine that
+        # already has one has to leave it with one. Asking twice is the
+        # ordinary case now rather than the only one.
+        c.add("and pressing the button anyway does not lose it",
+              got == "10.0.2.15", shot)
     finally:
         vm.stop()
 
@@ -196,12 +219,15 @@ def main():
         vm3.wait_boot()
         c.add("a usb adapter is found and is the card",
               "usb ethernet" in vm3.run("net"))
-        c.add("it has an address of its own before any of ours",
-              address_of(vm3) in ("", "0.0.0.0"))
-
-        vm3.run("dhcp", timeout=25)
-        c.add("and an address arrives over usb",
-              address_of(vm3) == "10.0.2.15")
+        # No pci card at all here, so an address arriving proves the frames
+        # went through the usb stack and nothing else. It is asked for at
+        # startup like any other, and asked again here in case the adapter
+        # was still being enumerated when the first one went out.
+        got3 = wait_for_address(vm3)
+        if not got3:
+            vm3.run("dhcp", timeout=25)
+            got3 = wait_for_address(vm3)
+        c.add("and an address arrives over usb", got3 == "10.0.2.15")
 
         # Frames counted in both directions, so this cannot pass on a driver
         # that received the lease and never sent anything.
