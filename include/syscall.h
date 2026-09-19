@@ -86,6 +86,21 @@
 #define TLS_WHY   0
 #define TLS_WHAT  1
 
+/* Why a connection did not happen.
+ *
+ * Connecting used to answer -1 for every reason there is, which put the
+ * caller in the position of having to guess. A browser given that guessed
+ * the last thing in the chain and told somebody their certificate had been
+ * refused, on a machine that had no address at all and had never sent a
+ * packet. These are ordered the way the attempt is: no card or no address,
+ * then no answer from the resolver, then no answer from the host, and only
+ * then anything the certificate had to do with. */
+#define NET_ERR_DOWN     -2     /* no card, or no address on it */
+#define NET_ERR_RESOLVE  -3     /* the name did not turn into an address */
+#define NET_ERR_CONNECT  -4     /* the address did not answer */
+#define NET_ERR_TLS      -5     /* it answered and would not prove who it was */
+#define NET_ERR_BUSY     -6     /* the one connection is already in use */
+
 #define POWER_OFF     0
 #define POWER_REBOOT  1
 

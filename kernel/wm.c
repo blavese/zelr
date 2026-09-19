@@ -221,7 +221,6 @@ static bool still_moving(u64 since, u32 ms) {
 /* The volume panel, open when someone clicks the speaker. */
 static bool volume_open;
 static bool net_open;
-static bool dhcp_running;
 static bool volume_drag;
 static int  volume_before_mute = 70;
 
@@ -1615,7 +1614,7 @@ static void draw_net_panel(void) {
         kformat(buf, sizeof(buf), "router  %s", ip);
         face_text(tx, ty, buf, t->text_dim, FACE_BODY);
     } else {
-        face_text(tx, ty, dhcp_running ? "asking for an address"
+        face_text(tx, ty, net_dhcp_busy() ? "asking for an address"
                                        : "no address", t->text_dim, FACE_BODY);
         ty += line;
         face_text(tx, ty, "nothing can be reached without one",
@@ -1637,10 +1636,10 @@ static void draw_net_panel(void) {
     dhcp_button_rect(&bx, &by, &bw, &bh);
     bool over = last_mx >= bx && last_mx < bx + bw
              && last_my >= by && last_my < by + bh;
-    button_face(bx, by, bw, bh, false, over && !dhcp_running);
+    button_face(bx, by, bw, bh, false, over && !net_dhcp_busy());
 
-    const char *label = dhcp_running ? "asking..." : "ask for an address";
-    u32 label_colour = dhcp_running ? t->text_dim : t->text;
+    const char *label = net_dhcp_busy() ? "asking..." : "ask for an address";
+    u32 label_colour = net_dhcp_busy() ? t->text_dim : t->text;
     face_text(bx + bw / 2 - face_width(label, FACE_BODY) / 2,
               by + (bh - face_height(FACE_BODY)) / 2,
               label, label_colour, FACE_BODY);
@@ -1648,17 +1647,11 @@ static void draw_net_panel(void) {
 
 /* Asking takes seconds and happens in a task of its own, because the
    compositor stopping for the length of a DHCP exchange is the desktop
-   freezing every time somebody plugs a cable in. */
-static void dhcp_task(void) {
-    net_dhcp(6000);
-    dhcp_running = false;
-    task_exit();
-}
-
+   freezing every time somebody plugs a cable in. The task and the flag that
+   says one is running belong to net.c, because the machine also asks once by
+   itself at startup and the two must not overlap. */
 static void start_dhcp(void) {
-    if (dhcp_running || !netdev_up()) return;
-    dhcp_running = true;
-    if (!task_create("dhcp", dhcp_task)) dhcp_running = false;
+    net_dhcp_start();
     need_frame();
 }
 

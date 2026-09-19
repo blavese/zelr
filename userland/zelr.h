@@ -79,6 +79,16 @@ typedef long long          zelr_word;
 #define TLS_WHY   0
 #define TLS_WHAT  1
 
+/* Why connect() or connect_tls() said no. In the order the attempt happens,
+   so the first one that applies is the one that comes back: a machine with
+   no address never reaches the resolver, and nothing that failed before the
+   handshake has anything to say about a certificate. */
+#define NET_ERR_DOWN     (-2)
+#define NET_ERR_RESOLVE  (-3)
+#define NET_ERR_CONNECT  (-4)
+#define NET_ERR_TLS      (-5)
+#define NET_ERR_BUSY     (-6)
+
 /* The one door into the kernel. The registers are the same ones a 32-bit zelr
    used, only twice as wide, which is why every argument is a word rather than
    an int: an int would quietly cut the top half off a pointer. */

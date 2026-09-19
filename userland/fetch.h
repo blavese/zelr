@@ -22,6 +22,22 @@
 #define WEB_ERR_EMPTY    -4
 #define WEB_ERR_HEADERS  -5     /* an answer with no blank line in it */
 #define WEB_ERR_TLS      -6     /* the connection would not prove who it was */
+#define WEB_ERR_DOWN     -7     /* no card, or no address on it */
+#define WEB_ERR_RESOLVE  -8     /* the name did not turn into an address */
+#define WEB_ERR_BUSY     -9     /* the one connection is already in use */
+
+/* The kernel answers with a reason; this is the same reason in this file's
+   numbering. Collapsing them all to "could not connect" is what made a
+   machine with no address report a refused certificate. */
+static inline int web_err_from(int rc) {
+    switch (rc) {
+        case NET_ERR_DOWN:    return WEB_ERR_DOWN;
+        case NET_ERR_RESOLVE: return WEB_ERR_RESOLVE;
+        case NET_ERR_TLS:     return WEB_ERR_TLS;
+        case NET_ERR_BUSY:    return WEB_ERR_BUSY;
+        default:              return WEB_ERR_CONNECT;
+    }
+}
 
 typedef struct {
     int   status;
@@ -169,14 +185,19 @@ static inline int web_fetch(const url_t *u, char *buf, int cap, response_t *r) {
         /* The handshake checks the certificate against u->host, so reaching
            the next line means the bytes after it are going to the site that
            was asked for and not merely to whatever answered. */
-        if (connect_tls(u->host, u->port) != 0) {
-            tls_why(r->how, sizeof(r->how));
-            return WEB_ERR_TLS;
+        int rc = connect_tls(u->host, u->port);
+        if (rc != 0) {
+            /* Only a handshake that was actually reached has a reason worth
+               reading. Asking TLS why a machine with no address failed gets
+               "no error", which is true and useless. */
+            if (rc == NET_ERR_TLS) tls_why(r->how, sizeof(r->how));
+            return web_err_from(rc);
         }
         r->secure = 1;
         tls_what(r->how, sizeof(r->how));
     } else {
-        if (connect(u->host, u->port) != 0) return WEB_ERR_CONNECT;
+        int rc = connect(u->host, u->port);
+        if (rc != 0) return web_err_from(rc);
     }
 
     char req[URL_PATH + URL_HOST + 256];

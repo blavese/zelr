@@ -437,12 +437,12 @@ static i64 sys_connect(registers_t *r) {
     if (!copy_path(r->rbx, host, sizeof(host))) return -1;
     u16 port = (u16)r->rcx;
     if (!port) return -1;
-    if (!net_up()) return -1;
-    if (sock_open) return -1;              /* already in use */
+    if (!net_up()) return NET_ERR_DOWN;
+    if (sock_open) return NET_ERR_BUSY;
 
     ipv4_t ip = net_parse_ip(host);
-    if (!ip && !net_resolve(host, &ip, 6000)) return -1;
-    if (!tcp_connect(ip, port, 6000)) return -1;
+    if (!ip && !net_resolve(host, &ip, 6000)) return NET_ERR_RESOLVE;
+    if (!tcp_connect(ip, port, 6000)) return NET_ERR_CONNECT;
 
     sock_owner = caller_pid();
     sock_open = true;
@@ -459,18 +459,18 @@ static i64 sys_connect_tls(registers_t *r) {
     if (!copy_path(r->rbx, host, sizeof(host))) return -1;
     u16 port = (u16)r->rcx;
     if (!port) port = 443;
-    if (!net_up()) return -1;
-    if (sock_open) return -1;
+    if (!net_up()) return NET_ERR_DOWN;
+    if (sock_open) return NET_ERR_BUSY;
 
     ipv4_t ip = net_parse_ip(host);
-    if (!ip && !net_resolve(host, &ip, 6000)) return -1;
-    if (!tcp_connect(ip, port, 6000)) return -1;
+    if (!ip && !net_resolve(host, &ip, 6000)) return NET_ERR_RESOLVE;
+    if (!tcp_connect(ip, port, 6000)) return NET_ERR_CONNECT;
 
     /* A handshake that fails takes the connection with it. Leaving the TCP
        side open after a certificate was refused would let a caller that
        ignored the return value carry on and send the request in the clear,
        to the machine that just failed to prove who it was. */
-    if (!tls_connect(host)) { tcp_close(); return -1; }
+    if (!tls_connect(host)) { tcp_close(); return NET_ERR_TLS; }
 
     sock_owner = caller_pid();
     sock_open = true;

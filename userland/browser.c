@@ -618,12 +618,33 @@ static void say_more(const char *s) {
 static const char *why(int rc) {
     switch (rc) {
         case WEB_ERR_SCHEME:  return "that is not an address this can fetch";
+        case WEB_ERR_DOWN:    return "this machine has no address. It asks for "
+                                     "one at startup, so either there is no "
+                                     "card or nothing answered; the network "
+                                     "panel next to the clock will ask again.";
+        case WEB_ERR_RESOLVE: return "that name did not turn into an address. "
+                                     "Either it does not exist, or the name "
+                                     "server is not answering.";
+        case WEB_ERR_BUSY:    return "something else is using the one "
+                                     "connection this machine has";
         case WEB_ERR_TLS:     return "the connection would not prove who it was";
         case WEB_ERR_CONNECT: return "could not connect to that host";
         case WEB_ERR_SEND:    return "the request could not be sent";
         case WEB_ERR_EMPTY:   return "the server said nothing";
         case WEB_ERR_HEADERS: return "the answer was not http";
         default:              return "the fetch failed";
+    }
+}
+
+/* The heading above the reason. A refused certificate and a machine that
+   never got as far as sending a packet are different enough that giving them
+   the same heading is how somebody ends up looking at the wrong thing. */
+static const char *why_heading(int rc) {
+    switch (rc) {
+        case WEB_ERR_DOWN:    return "No network address";
+        case WEB_ERR_RESOLVE: return "That name did not resolve";
+        case WEB_ERR_TLS:     return "This connection was refused";
+        default:              return "Cannot show this page";
     }
 }
 
@@ -657,12 +678,14 @@ static void load(const char *address, int width, int keep_scroll) {
     if (rc < 0) {
         /* A refused certificate has a reason worth reading, and it is the
            one kind of failure where the difference between "expired" and
-           "for a different site" is the whole story. */
+           "for a different site" is the whole story. Anything that failed
+           before the handshake has no such reason, and printing the empty
+           one said "refused: no error" on a machine that had no address. */
         if (rc == WEB_ERR_TLS && reply.how[0]) {
-            show_message("This connection was refused", reply.how, width);
+            show_message(why_heading(rc), reply.how, width);
             say("refused: ", reply.how);
         } else {
-            show_message("Cannot show this page", why(rc), width);
+            show_message(why_heading(rc), why(rc), width);
             say(why(rc), 0);
         }
         title[0] = 0;
