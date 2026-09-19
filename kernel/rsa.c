@@ -194,17 +194,40 @@ static bool same(const u8 *a, const u8 *b, u32 len) {
     return diff == 0;
 }
 
-/* The prefix a SHA-256 digest is wrapped in for PKCS#1 v1.5: the DER for
-   "this is a sha-256 hash", written out rather than parsed, because the
-   only correct value is this one and parsing it invites accepting others. */
+/* The prefix a digest is wrapped in for PKCS#1 v1.5: the DER for "this is a
+   hash of such and such a kind", written out rather than parsed, because for
+   each kind the only correct value is this one and parsing it invites
+   accepting others.
+
+   All three, because a chain is not all one hash. A certificate authority
+   signs with what it chose, not with what the leaf below it used, and
+   SHA-384 over RSA is ordinary at the top of a chain: GlobalSign's R46 root
+   is cross-signed that way, which is most of the BBC. Supporting one hash
+   here meant those chains parsed, hashed correctly, and were then refused
+   by the arithmetic with nothing to say about which link was at fault. */
 static const u8 SHA256_DER[] = {
     0x30, 0x31, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65,
     0x03, 0x04, 0x02, 0x01, 0x05, 0x00, 0x04, 0x20
 };
+static const u8 SHA384_DER[] = {
+    0x30, 0x41, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65,
+    0x03, 0x04, 0x02, 0x02, 0x05, 0x00, 0x04, 0x30
+};
+static const u8 SHA512_DER[] = {
+    0x30, 0x51, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65,
+    0x03, 0x04, 0x02, 0x03, 0x05, 0x00, 0x04, 0x40
+};
 
 bool rsa_verify_pkcs1(const rsa_key_t *key, const u8 *sig, u32 sig_len,
                       const u8 *hash, u32 hash_len) {
-    if (hash_len != SHA256_SIZE) return false;
+    /* The length decides which prefix, and nothing else does. A caller
+       cannot ask for one hash and hand over another. */
+    const u8 *der;
+    u32 der_len;
+    if (hash_len == 32)      { der = SHA256_DER; der_len = sizeof(SHA256_DER); }
+    else if (hash_len == 48) { der = SHA384_DER; der_len = sizeof(SHA384_DER); }
+    else if (hash_len == 64) { der = SHA512_DER; der_len = sizeof(SHA512_DER); }
+    else return false;
 
     u8 em[RSA_MAX_BYTES];
     if (!rsa_public(key, sig, sig_len, em, key->n_len)) return false;
@@ -212,10 +235,10 @@ bool rsa_verify_pkcs1(const rsa_key_t *key, const u8 *sig, u32 sig_len,
     /* 0x00 0x01 <0xff...> 0x00 <der> <hash>, and every one of those bytes
        is checked. The attacks on this are all about a verifier that looks
        for the hash and does not mind what is in front of it. */
-    u32 want = 3 + sizeof(SHA256_DER) + SHA256_SIZE;   /* 00 01 ... 00 */
+    u32 want = 3 + der_len + hash_len;                 /* 00 01 ... 00 */
     if (key->n_len < want + 8) return false;           /* too little padding */
 
-    u32 pad_len = key->n_len - 2 - 1 - sizeof(SHA256_DER) - SHA256_SIZE;
+    u32 pad_len = key->n_len - 2 - 1 - der_len - hash_len;
 
     u8 bad = 0;
     bad |= em[0];
@@ -225,8 +248,8 @@ bool rsa_verify_pkcs1(const rsa_key_t *key, const u8 *sig, u32 sig_len,
     if (bad) return false;
 
     const u8 *p = em + 3 + pad_len;
-    if (!same(p, SHA256_DER, sizeof(SHA256_DER))) return false;
-    return same(p + sizeof(SHA256_DER), hash, SHA256_SIZE);
+    if (!same(p, der, der_len)) return false;
+    return same(p + der_len, hash, hash_len);
 }
 
 /* MGF1, the mask generating function PSS is defined in terms of: the hash

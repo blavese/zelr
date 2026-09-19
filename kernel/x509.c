@@ -443,10 +443,12 @@ bool x509_signed_by(const x509_t *child, const x509_t *issuer) {
         case X509_SIG_RSA_SHA384:
         case X509_SIG_RSA_SHA512:
             if (issuer->key_type != X509_KEY_RSA) return false;
-            /* Only SHA-256 has its wrapper written out, so the other two
-               are refused rather than checked loosely. Nothing in the
-               chains that matter uses them for the digest. */
-            if (child->sig_alg != X509_SIG_RSA_SHA256) return false;
+            /* All three wrappers are written out now, and which one is used
+               follows from the length of the digest rather than from
+               anything a certificate says about itself. The note that used
+               to stand here said nothing that mattered used SHA-384; the
+               cross-signature over GlobalSign's R46 root does, and it is
+               most of the BBC. */
             return rsa_verify_pkcs1(&issuer->rsa, child->sig, child->sig_len,
                                     h, h_len);
 
@@ -597,6 +599,32 @@ x509_result_t x509_verify_chain(const u8 *const *ders, const u32 *lens, u32 n,
 
     x509_t anchor;
     const u8 *root; u32 root_len;
+
+    /* A server is allowed to send the root itself, and many do. That
+       certificate is still not evidence of anything by being there, but if
+       the store holds one with the same subject then the store's own copy
+       is the thing to believe, and the served one can be set aside
+       entirely: the link below it is re-checked against the key this
+       machine shipped with rather than against the key the server supplied.
+       A forged copy of a root therefore fails here even though the loop
+       above accepted the chain that led to it.
+     *
+       Doing it this way also sidesteps a question that has no good answer.
+       A root is self-signed, and old ones are self-signed with SHA-1, which
+       is not an algorithm to start accepting in order to read a web page.
+       Go Daddy's Class 2 root is one of those and archive.org still serves
+       it. Verifying a self-signature proves nothing anyway: it says the
+       certificate was made by whoever made it. */
+    if (roots_find(top->subject, top->subject_len, &root, &root_len)) {
+        /* One certificate that is itself an anchor says nothing about a
+           host, whatever name is on it. */
+        if (i == 0) return X509_UNTRUSTED;
+        if (!x509_parse(root, root_len, &anchor)) return X509_BAD_PARSE;
+        if (!anchor.has_basic_constraints || !anchor.is_ca) return X509_NOT_A_CA;
+        if (!x509_signed_by(&chain[i - 1], &anchor)) return X509_BAD_SIGNATURE;
+        return X509_OK;
+    }
+
     if (!roots_find(top->issuer, top->issuer_len, &root, &root_len))
         return X509_UNTRUSTED;
     if (!x509_parse(root, root_len, &anchor)) return X509_BAD_PARSE;
