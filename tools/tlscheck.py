@@ -15,10 +15,11 @@ So this is deliberately an outward test. It needs a working connection and
 it will fail without one, which is the right way round: a machine that
 cannot reach the web should not report that its https works.
 
-Three sites rather than one, because a single site is a single certificate
+Several sites rather than one, because a single site is a single certificate
 authority, a single chain shape and a single server implementation, and
-passing against it says nothing about the second. They are picked to have
-different roots.
+passing against it says nothing about the second. Two of the ones here were
+added after they were found to be refused, each for a reason the first three
+could never have shown.
 
 What is not here is a site with a deliberately bad certificate. The obvious
 ones are only reachable over TLS 1.2, which this refuses before it has
@@ -45,6 +46,19 @@ SITES = [
     ("www.google.com", "<title>Google</title>"),
     ("example.com", "Example Domain"),
     ("wikipedia.org", None),          # answers with a redirect, which is fine
+
+    # These two are here because each of them was once refused, and for a
+    # different reason, and both reasons looked identical from the outside:
+    # "a signature in the chain is wrong", which is also what a forgery
+    # looks like.
+    #
+    # The BBC's chain is cross-signed with SHA-384, and only SHA-256 had its
+    # PKCS#1 wrapper written out. archive.org sends its own root, which is
+    # self-signed with SHA-1, and verifying that self-signature is both
+    # impossible here and pointless: a root signs itself, which proves
+    # nothing. The store's copy is the one to believe.
+    ("www.bbc.co.uk", None),
+    ("archive.org", None),
 ]
 
 

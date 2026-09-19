@@ -2055,6 +2055,42 @@ static void test_x509(void) {
         }
     }
 
+    /* --- a digest other than SHA-256 ------------------------------------
+     *
+     * A chain is not all one hash. The authority at the top signs with what
+     * it chose, and SHA-384 over RSA is ordinary there. This checked only
+     * SHA-256 once, and refused those chains with "a signature in the chain
+     * is wrong", which is the same thing it says about a forgery. */
+    {
+        static x509_t r46, r3;
+        const u8 *root = 0; u32 root_len = 0;
+
+        ok("a certificate signed with sha-384 parses",
+           x509_parse(test_cert_sha384, sizeof(test_cert_sha384), &r46));
+        ok("and its algorithm is read as rsa with sha-384",
+           r46.sig_alg == X509_SIG_RSA_SHA384);
+        ok("its issuer is one this machine trusts",
+           roots_find(r46.issuer, r46.issuer_len, &root, &root_len));
+
+        if (root && x509_parse(root, root_len, &r3)) {
+            ok("and the sha-384 signature over it checks out",
+               x509_signed_by(&r46, &r3));
+
+            /* The same certificate with one byte of the signed part moved.
+               Supporting a digest is not worth much if it accepts anything
+               hashed with it. */
+            static u8 bent[sizeof(test_cert_sha384)];
+            memcpy(bent, test_cert_sha384, sizeof(bent));
+            bent[200] = (u8)(bent[200] ^ 0x01);
+            static x509_t bad;
+            ok("while one byte of it altered does not",
+               !x509_parse(bent, sizeof(bent), &bad) || !x509_signed_by(&bad, &r3));
+        } else {
+            ok("and the sha-384 signature over it checks out", false);
+            ok("while one byte of it altered does not", false);
+        }
+    }
+
     /* --- the parser against input that is not a certificate ------------- */
     {
         static x509_t junk;
