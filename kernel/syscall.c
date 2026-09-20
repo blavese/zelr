@@ -781,6 +781,31 @@ static i64 sys_win_poll(registers_t *r) {
     return 1;
 }
 
+/* What a window is showing, as words, so the desktop's find can look
+   through it. A window that never calls this is not searched and is not
+   pretended to be: find says how many windows it could look in. */
+static i64 sys_win_text(registers_t *r) {
+    u64 addr = r->rcx;
+    int len = (int)r->rdx;
+    if (len < 0) len = 0;
+    if (len > WM_TEXT_MAX) len = WM_TEXT_MAX;
+    if (len && !user_range_ok(addr, (u64)len)) return -1;
+
+    window_t *w = winsrv_window(caller_pid(), (int)r->rbx);
+    if (!w) return -1;
+    wm_set_text(w, (const char *)addr, len);
+    return len;
+}
+
+/* And what is being looked for, for a window that has just been told that
+   somebody is. */
+static i64 sys_win_find(registers_t *r) {
+    u64 addr = r->rbx;
+    int cap = (int)r->rcx;
+    if (cap <= 0 || !user_range_ok(addr, (u64)cap)) return -1;
+    return wm_find_query((char *)addr, cap);
+}
+
 static i64 sys_win_commit(registers_t *r) {
     return winsrv_commit(caller_pid(), (int)r->rbx) ? 0 : -1;
 }
@@ -829,6 +854,8 @@ static const syscall_fn TABLE[] = {
     [SYS_WIN_SIZE]    = sys_win_size,
     [SYS_WIN_POLL]    = sys_win_poll,
     [SYS_WIN_COMMIT]  = sys_win_commit,
+    [SYS_WIN_TEXT]    = sys_win_text,
+    [SYS_WIN_FIND]    = sys_win_find,
     [SYS_WIN_CLOSE]   = sys_win_close,
     [SYS_OPEN]        = sys_open,
     [SYS_CLOSE]       = sys_close,

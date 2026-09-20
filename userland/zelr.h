@@ -121,6 +121,10 @@ typedef long long          zelr_word;
  * include/signal.h, which says what that leaves out and why. */
 #define SYS_SIGNAL        54
 #define SYS_SIGSEND       55
+
+/* What a window is showing, in words, and what is being looked for. */
+#define SYS_WIN_TEXT      56
+#define SYS_WIN_FIND      57
 #define TLS_WHY   0
 #define TLS_WHAT  1
 
@@ -562,6 +566,10 @@ static inline int power_reboot(void) {
    downward. Nothing has to ask for these; a window that ignores them
    simply does not scroll. */
 #define WIN_EV_SCROLL 5
+/* Somebody is looking for a word. What they are looking for does not fit in
+   an event, so ask for it with win_find_query; ev.y is which match to go
+   to, counting from nought, so pressing return again walks through them. */
+#define WIN_EV_FIND   6
 
 /* Bit 7 of buttons is set on the event that started a press, so a program
    can tell a new stroke from the middle of one. */
@@ -630,6 +638,21 @@ static inline int win_width(int handle) {
 static inline int win_height(int handle) {
     int v = syscall(SYS_WIN_SIZE, handle, 0, 0);
     return v < 0 ? -1 : (v & 0xFFFF);
+}
+
+/* What this window is showing, in words, so the desktop can find things in
+   it. A program that never says is never searched -- which is honest, and
+   is why the find bar counts the windows it can look in.
+
+   Said again whenever what is shown changes. It is a copy, taken here, so
+   the buffer is the caller's to reuse the moment this returns. */
+static inline int win_set_text(int handle, const char *s, int len) {
+    return syscall(SYS_WIN_TEXT, handle, (zelr_word)s, len);
+}
+
+/* And what is being looked for, once WIN_EV_FIND says somebody is. */
+static inline int win_find_query(char *out, int cap) {
+    return syscall(SYS_WIN_FIND, (zelr_word)out, cap, 0);
 }
 
 static inline int win_poll(int handle, win_event *ev) {

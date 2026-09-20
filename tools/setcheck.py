@@ -201,10 +201,13 @@ def main():
                   + CTX_ITEM // 2)
         time.sleep(2.5)
 
-        # The window is opened from the field on the dock, which is also the
-        # only thing that proves the field works from a test rather than a
-        # photograph.
-        mon.click(512, PANEL_Y + DOCK_H // 2)
+        # Opened from the launcher, reached from the name at the left of the
+        # dock. It used to be reached from a field down the middle of the
+        # bar; that field is a find button in the tray now and looks for
+        # words on the screen rather than for programs, so the launcher has
+        # one way in and this is it. What is typed still narrows the list,
+        # which is the part this is leaning on.
+        mon.click(DOCK_SIDE + 16 + 38, PANEL_Y + DOCK_H // 2)
         time.sleep(1.5)
         for ch in "sett":
             mon.send("sendkey %s" % ch, settle=0.12)
@@ -217,7 +220,7 @@ def main():
                                          IN_Y + 400),
                                         (0xFA, 0xFA, 0xFC), 8) > 20000,
             timeout=45)
-        c.add("the settings window opens from the field on the dock",
+        c.add("the settings window opens from a name typed into the launcher",
               opened, shot)
 
         mon.click(*sidebar("Everything"))

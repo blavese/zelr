@@ -91,52 +91,41 @@ static int panel_rest_y(void) {
 /* The badge, then the pinned apps, then a chip for each remaining window. */
 #define TASKBAR_BADGE_W 76
 
-/* What replaced the row of pinned icons.
+/* Find, which is a button in the tray and not a bar down the middle.
  *
- * Six coloured letters in circles told you which six programs somebody had
- * chosen, and nothing else: to reach a seventh you opened the launcher
- * anyway. A field in the middle of the bar reaches all of them and is the
- * one thing on a desktop that is always worth having within one click. It
- * is also, unlike a row of badges, the same size whatever is installed.
+ * It was a bar down the middle: a wide field, the height of the dock, sat
+ * in the centre of it. Two things were wrong with that and only one of them
+ * was the size. It took the part of the bar the window chips grow into, so
+ * a machine with a few windows open had nowhere to put them; and what it
+ * did was open the launcher, which is to say it was a second way to start a
+ * program and the desktop already had one.
  *
- * Clicking it opens the launcher with the field focused, and what is typed
- * from then on narrows what the launcher shows. See menu_matches below:
- * there is no index and no ranking, because thirteen labels is a loop.
+ * So it is a button the size of the other things in the tray, and what it
+ * opens looks through what is on the screen rather than through the list of
+ * programs. ctrl+f opens it too, which is where a person's hand already
+ * goes when they want to find a word.
  *
- * Its width is a setting and its height is not: a field in a bar wants to
- * be the height of the bar less its margins, and a person who set the two
- * independently would mostly be setting them wrong. */
+ * The width setting is now the width of the bar that opens, which is the
+ * only width there is left to set. */
 static int dock_x(void);
 static int dock_w(void);
 static int taskbar_net_x(void);
 
-static int dock_find_w(void) {
-    int v = theme()->dock_search_w;
-    if (v < 80) v = 80;
+#define FIND_W      26          /* the button, beside the other tray icons */
+#define FINDBAR_H   38
 
-    /* Whatever is left after the name at one end and the tray at the
-       other. The setting is what somebody asked for and this is what the
-       bar can give them: a field seven hundred pixels wide in a bar six
-       hundred wide is a field with the clock inside it. */
-    int room = dock_w() - (theme()->dock_brand ? 110 : 20) - 170;
-    if (room < 80) room = 80;
+static int findbar_w(void) {
+    int v = theme()->dock_search_w;
+    if (v < 120) v = 120;
+    int room = (int)fb_width() - TASKBAR_GAP * 2;
     if (v > room) v = room;
     return v;
 }
-static int dock_find_h(void) {
-    int v = TASKBAR_H - 18;
-    return v < 16 ? 16 : v;
-}
-
-#define DOCK_FIND_W dock_find_w()
-#define DOCK_FIND_H dock_find_h()
 
 static int dock_x(void) { return DOCK_SIDE; }
 static int dock_w(void) { return (int)fb_width() - DOCK_SIDE * 2; }
 
-static int dock_find_x(void) {
-    return dock_x() + (dock_w() - DOCK_FIND_W) / 2;
-}
+static int taskbar_find_x(void) { return taskbar_net_x() - FIND_W - 6; }
 
 static int taskbar_chips_x(void) {
     if (!theme()->dock_brand) return dock_x() + 16;
@@ -154,8 +143,8 @@ static int taskbar_chips_x(void) {
  * wrong. */
 static int taskbar_chips_end(void) {
     int end = taskbar_net_x() - 8;
-    if (theme()->look == LOOK_MODERN && theme()->dock_search) {
-        int before = dock_find_x() - 10;
+    if (theme()->dock_search) {
+        int before = taskbar_find_x() - 6;
         if (before < end) end = before;
     }
     return end;
@@ -344,6 +333,17 @@ static bool volume_drag;
 static int  volume_before_mute = 70;
 
 /* The launcher. Open when someone clicks the desktop or the taskbar badge. */
+/* Find: what is being looked for and what was found. Up here with the rest
+   of the dock's state because the bar is drawn long before the code that
+   works on it is reached. */
+static bool find_open;
+static char find_q[64];
+static int  find_qn;
+static int  find_total;      /* how many times it appears, everywhere */
+static int  find_windows;    /* how many windows had anything to look at */
+static int  find_at;         /* which match return is on */
+static int  find_win;        /* the window holding it, or -1 */
+
 static bool menu_open;
 static int  menu_x, menu_y;
 static int  menu_hover = -1;
@@ -2340,6 +2340,64 @@ static void draw_volume_panel(void) {
               num, t->text, FACE_BODY);
 }
 
+/* --- the find bar ----------------------------------------------------------
+ *
+ * Small, in the corner, above the button that opens it. Not in the middle
+ * and not the width of the screen: it is a thing you type six letters into
+ * and then stop looking at, and the screen behind it is the thing being
+ * searched, so covering that screen is the one thing it must not do.
+ *
+ * The count on the right is the whole of the feedback. "3 of 12" says it
+ * found something and where you are in it; "no matches" says it looked and
+ * did not. Before anything is typed it says how many windows it can look
+ * in, so a screen where nothing has published anything is told apart from
+ * a word that is not there -- those are very different answers and one
+ * number tells them apart.
+ */
+static void draw_find_bar(void) {
+    if (!find_open) return;
+    const theme_t *t = theme();
+
+    int w = findbar_w();
+    int x = (int)fb_width() - TASKBAR_GAP - w;
+    if (x < TASKBAR_GAP) x = TASKBAR_GAP;
+    int y = taskbar_y() - FINDBAR_H - 8;
+
+    if (t->look == LOOK_MODERN) {
+        if (t->shadows) fb_shadow(x, y, w, FINDBAR_H, 10, 7);
+        fb_round_rect_aa(x, y, w, FINDBAR_H, 10, t->overlay, 248);
+        fb_round_rect_aa(x, y, w, FINDBAR_H, 10, t->stroke, 85);
+    } else {
+        fb_rect((u32)x, (u32)y, (u32)w, FINDBAR_H, t->surface);
+        raised(x, y, w, FINDBAR_H);
+    }
+
+    int ty = y + (FINDBAR_H - face_height(FACE_BODY)) / 2;
+    int tx = x + 14;
+
+    char tail[56];
+    if (find_qn == 0)
+        kformat(tail, sizeof(tail), "%d to look in", find_windows);
+    else if (find_total == 0)
+        kformat(tail, sizeof(tail), "not on screen");
+    else
+        kformat(tail, sizeof(tail), "%d of %d", find_at + 1, find_total);
+
+    int tw = face_width(tail, FACE_BODY);
+    face_text(x + w - 14 - tw, ty, tail,
+              (find_qn > 0 && find_total == 0) ? t->text_mute : t->text_dim,
+              FACE_BODY);
+
+    if (find_qn > 0) {
+        face_text(tx, ty, find_q, t->text, FACE_BODY);
+        fb_rect((u32)(tx + 2 + face_width(find_q, FACE_BODY)),
+                (u32)(y + 9), 1, (u32)(FINDBAR_H - 18), t->accent);
+    } else {
+        fb_rect((u32)tx, (u32)(y + 9), 1, (u32)(FINDBAR_H - 18), t->accent);
+        face_text(tx + 6, ty, "find on screen", t->text_mute, FACE_BODY);
+    }
+}
+
 /* --- the network, left of the speaker -------------------------------------
  *
  * The icon says three things apart: no link, a link with no address, and a
@@ -2642,70 +2700,6 @@ static void draw_taskbar(void) {
                   "zelr", t->accent, FACE_HEAD_BOLD);
     }
 
-    /* --- the field that replaced the icons ---------------------------------
-     *
-     * Centred in the bar rather than beside the brand, because the middle
-     * of a wide bar is the one place nothing else wants and the eye goes
-     * there first. Sunk very slightly into the glass: the same trick a
-     * search field has had since before any of this, which is the only
-     * shape a person reads as "type here" without a label.
-     */
-    if (t->look == LOOK_MODERN && t->dock_search) {
-        int fx = dock_find_x();
-        int fy = y + (TASKBAR_H - DOCK_FIND_H) / 2;
-        bool fhot = last_my >= fy && last_my < fy + DOCK_FIND_H
-                 && last_mx >= fx && last_mx < fx + DOCK_FIND_W;
-
-        fb_round_rect_aa(fx, fy, DOCK_FIND_W, DOCK_FIND_H, DOCK_FIND_H / 2,
-                         t->text, (fhot || menu_open) ? 26 : 16);
-        fb_round_rect_aa(fx, fy, DOCK_FIND_W, DOCK_FIND_H, DOCK_FIND_H / 2,
-                         menu_open ? t->accent : t->stroke,
-                         menu_open ? 150 : (fhot ? 90 : 55));
-
-        /* A ring and a handle, which is a magnifier at any size that has
-           room for a ring and a handle. */
-        u32 ink = fhot ? t->text : t->text_dim;
-        int gx = fx + 16, gy = fy + DOCK_FIND_H / 2;
-
-        /* A ring, from one eighth of a circle mirrored eight ways. There is
-           no sine here to ask and none needed: a glyph this small is a
-           handful of pixels either way. */
-        static const int RING[5][2] = { {5,0}, {4,2}, {4,3}, {3,4}, {0,5} };
-        for (int k = 0; k < 5; k++) {
-            int a = RING[k][0], b = RING[k][1];
-            fb_put((u32)(gx + a), (u32)(gy + b), ink);
-            fb_put((u32)(gx - a), (u32)(gy + b), ink);
-            fb_put((u32)(gx + a), (u32)(gy - b), ink);
-            fb_put((u32)(gx - a), (u32)(gy - b), ink);
-            fb_put((u32)(gx + b), (u32)(gy + a), ink);
-            fb_put((u32)(gx - b), (u32)(gy + a), ink);
-            fb_put((u32)(gx + b), (u32)(gy - a), ink);
-            fb_put((u32)(gx - b), (u32)(gy - a), ink);
-        }
-        /* and its handle */
-        for (int k = 0; k < 4; k++) {
-            fb_put((u32)(gx + 4 + k), (u32)(gy + 4 + k), ink);
-            fb_put((u32)(gx + 5 + k), (u32)(gy + 4 + k), ink);
-        }
-
-        /* What has been typed, where it was typed. The panel above shows
-           the matches; this shows the query, because the field is where
-           the pointer was when the typing started and is where the eye
-           is. */
-        int ty = fy + (DOCK_FIND_H - face_height(FACE_BODY)) / 2;
-        if (menu_qn > 0) {
-            face_text(fx + 30, ty, menu_q, t->text, FACE_BODY);
-            fb_rect((u32)(fx + 32 + face_width(menu_q, FACE_BODY)),
-                    (u32)(fy + 6), 1, (u32)(DOCK_FIND_H - 12), t->accent);
-        } else if (menu_open) {
-            fb_rect((u32)(fx + 32), (u32)(fy + 6), 1,
-                    (u32)(DOCK_FIND_H - 12), t->accent);
-            face_text(fx + 38, ty, "type to find", t->text_mute, FACE_BODY);
-        } else {
-            face_text(fx + 30, ty, "Search", t->text_dim, FACE_BODY);
-        }
-    }
-
     /* --- one button a window ----------------------------------------------
      *
      * Bevelled and pressed in for whichever is in front, because that is the
@@ -2757,6 +2751,42 @@ static void draw_taskbar(void) {
      * Sunk, so the things in it read as indicators rather than as more
      * buttons: a clock is not something to press and should not look like
      * it. */
+    /* --- find, beside the other tray icons ---------------------------------
+     *
+     * A ring and a handle, which is a magnifier at any size that has room
+     * for both. The same glyph the bar down the middle carried, at the size
+     * everything else in the tray is, which is the size it should always
+     * have been. */
+    if (t->dock_search) {
+        int fx = taskbar_find_x();
+        int fy = y;
+        bool fhot = last_my >= fy + 5 && last_my < fy + TASKBAR_H - 5
+                 && last_mx >= fx && last_mx < fx + FIND_W;
+        if (fhot || find_open)
+            fb_round_rect_aa(fx, fy + 6, FIND_W, TASKBAR_H - 12, 7,
+                             find_open ? t->accent : t->text,
+                             find_open ? 120 : 22);
+
+        u32 ink = (fhot || find_open) ? t->text : t->text_dim;
+        int gx = fx + FIND_W / 2 - 1, gy = fy + TASKBAR_H / 2 - 1;
+        static const int RING[5][2] = { {5,0}, {4,2}, {4,3}, {3,4}, {0,5} };
+        for (int k = 0; k < 5; k++) {
+            int ra = RING[k][0], rb = RING[k][1];
+            fb_put((u32)(gx + ra), (u32)(gy + rb), ink);
+            fb_put((u32)(gx - ra), (u32)(gy + rb), ink);
+            fb_put((u32)(gx + ra), (u32)(gy - rb), ink);
+            fb_put((u32)(gx - ra), (u32)(gy - rb), ink);
+            fb_put((u32)(gx + rb), (u32)(gy + ra), ink);
+            fb_put((u32)(gx - rb), (u32)(gy + ra), ink);
+            fb_put((u32)(gx + rb), (u32)(gy - ra), ink);
+            fb_put((u32)(gx - rb), (u32)(gy - ra), ink);
+        }
+        for (int k = 0; k < 4; k++) {
+            fb_put((u32)(gx + 4 + k), (u32)(gy + 4 + k), ink);
+            fb_put((u32)(gx + 5 + k), (u32)(gy + 4 + k), ink);
+        }
+    }
+
     int tray_x = taskbar_net_x() - 6;
     int tray_w = W - tray_x - 2;
     if (t->look == LOOK_MODERN) {
@@ -2899,6 +2929,7 @@ static void composite(void) {
     draw_resize_preview();
     draw_taskbar();
     draw_volume_panel();
+    draw_find_bar();
     draw_net_panel();
     draw_menu();
     draw_ctx();
@@ -3207,16 +3238,191 @@ static bool on_taskbar_badge(int mx, int my) {
            && mx < dock_x() + 16 + TASKBAR_BADGE_W;
 }
 
-/* And the field in the middle, which says it opens the launcher. It did
-   not: nothing tested for it, so a click on it landed on the stretch of
-   bar that swallows clicks and the field was decoration. */
-static bool on_dock_find(int mx, int my) {
-    if (theme()->look != LOOK_MODERN || !theme()->dock_search) return false;
+/* --- looking for a word --------------------------------------------------
+ *
+ * A window is a rectangle of pixels, so the desktop cannot read what is on
+ * one: there is no text in a picture of text. What there is instead is what
+ * each program says it is showing, published through wm_set_text, and this
+ * looks through that.
+ *
+ * Which means find answers about what is on the screen rather than about
+ * what is on the disk, and that is the point of it. A program that has said
+ * nothing is not searched and is not pretended to be: the bar says how many
+ * windows it could look at, so "no matches" is told apart from "nothing to
+ * look at".
+ *
+ * Case is ignored, because nobody looking for a word on a screen means the
+ * capital one. */
+static char find_fold(char c) {
+    return (c >= 'A' && c <= 'Z') ? (char)(c + 32) : c;
+}
+
+static int find_count_in(const window_t *w, const char *q, int qn) {
+    if (qn <= 0 || w->textlen < qn) return 0;
+    int n = 0;
+    for (int i = 0; i + qn <= w->textlen; i++) {
+        int k = 0;
+        while (k < qn && find_fold(w->text[i + k]) == find_fold(q[k])) k++;
+        if (k == qn) { n++; i += qn - 1; }
+    }
+    return n;
+}
+
+/* Counted over the whole screen, and the window the current match is in.
+   Walked from the front backwards, because the window somebody is looking
+   at is the one they mean. */
+static void find_recount(void) {
+    find_total = 0;
+    find_windows = 0;
+    find_win = -1;
+
+    int seen = 0;
+    for (int i = nwin - 1; i >= 0; i--) {
+        window_t *w = stack[i];
+        if (w->minimized) continue;
+        if (w->textlen > 0) find_windows++;
+        int n = find_count_in(w, find_q, find_qn);
+        if (!n) continue;
+        if (find_win < 0 || (find_at >= seen && find_at < seen + n))
+            if (find_at >= seen && find_at < seen + n) find_win = i;
+        if (find_win < 0 && seen == 0) find_win = i;
+        seen += n;
+        find_total += n;
+    }
+    if (find_total == 0) { find_at = 0; find_win = -1; return; }
+    if (find_at >= find_total) find_at = 0;
+    if (find_win < 0) {
+        /* The count moved under it -- somebody typed another letter -- so
+           start again at the first one. */
+        find_at = 0;
+        for (int i = nwin - 1; i >= 0 && find_win < 0; i--)
+            if (!stack[i]->minimized
+                && find_count_in(stack[i], find_q, find_qn))
+                find_win = i;
+    }
+}
+
+/* Take the match to whoever is showing it: raise the window and tell it
+   which one, so a program that can scroll to a word does. */
+static void find_go(void) {
+    if (find_win < 0 || find_win >= nwin) return;
+    window_t *w = stack[find_win];
+
+    int local = find_at;
+    for (int i = nwin - 1; i > find_win; i--)
+        if (!stack[i]->minimized)
+            local -= find_count_in(stack[i], find_q, find_qn);
+    if (local < 0) local = 0;
+
+    wm_raise(w);
+    wm_event_t ev = { WM_EV_FIND, 0, local, 0, 0 };
+    wm_push_event(w, &ev);
+    need_frame();
+}
+
+/* Nothing matches any more, which is as much an answer as a match is: a
+   window that lit a word and is never told the word has changed goes on
+   showing the last one that was found, and what that looks like is a find
+   that got stuck. Told to everyone, because any of them may be holding a
+   mark. */
+static void find_clear_marks(void) {
+    for (int i = 0; i < nwin; i++) {
+        if (!stack[i]->owned_by_user) continue;
+        wm_event_t ev = { WM_EV_FIND, 0, -1, 0, 0 };
+        wm_push_event(stack[i], &ev);
+    }
+    need_frame();
+}
+
+void wm_set_text(window_t *w, const char *s, int len) {
+    if (!w) return;
+    if (len < 0) len = 0;
+    if (len > WM_TEXT_MAX) len = WM_TEXT_MAX;
+    for (int i = 0; i < len; i++) w->text[i] = s[i];
+    w->textlen = len;
+    /* What is on the screen changed, so what was counted about it did. */
+    if (find_open && find_qn > 0) { find_recount(); need_frame(); }
+}
+
+int wm_find_query(char *out, int cap) {
+    int n = find_qn;
+    if (n > cap - 1) n = cap - 1;
+    for (int i = 0; i < n; i++) out[i] = find_q[i];
+    if (cap > 0) out[n] = 0;
+    return n;
+}
+
+static void find_close(void) {
+    if (!find_open) return;
+    find_clear_marks();
+    find_open = false;
+    find_qn = 0;
+    find_q[0] = 0;
+    find_total = 0;
+    find_win = -1;
+    need_frame();
+}
+
+static void find_start(void) {
+    if (find_open) return;
+    find_open = true;
+    menu_open = false;          /* one thing at a time on the dock */
+    find_qn = 0;
+    find_q[0] = 0;
+    find_at = 0;
+    find_recount();
+    need_frame();
+}
+
+/* Returns true when the key was for the find bar. */
+static bool find_key(int key) {
+    if (!find_open) return false;
+    int c = KEY_CODE(key);
+
+    if (c == 27) { find_close(); return true; }
+    if (c == '\n' || c == '\r') {
+        if (find_total > 0) {
+            find_at = (find_at + 1) % find_total;
+            find_recount();
+            find_go();
+        }
+        return true;
+    }
+    if (c == '\b') {
+        if (find_qn > 0) {
+            find_q[--find_qn] = 0;
+            find_at = 0;
+            find_recount();
+            if (find_total > 0) find_go();
+            else find_clear_marks();
+        }
+        need_frame();
+        return true;
+    }
+    if (c >= ' ' && c < 127 && find_qn < (int)sizeof(find_q) - 1) {
+        find_q[find_qn++] = (char)c;
+        find_q[find_qn] = 0;
+        find_at = 0;
+        find_recount();
+        /* Taken to straight away, the way a find field does: what is being
+           looked for is usually on the screen already and waiting for
+           return to prove it is a find that feels broken. */
+        if (find_total > 0) find_go();
+        else find_clear_marks();
+        need_frame();
+        return true;
+    }
+    /* Anything else -- an arrow, a function key -- is not for this, but the
+       bar stays up: it is a small thing in the corner, not a modal. */
+    return true;
+}
+
+static bool on_find_button(int mx, int my) {
+    if (!theme()->dock_search) return false;
     int y = taskbar_y();
-    int fy = y + (TASKBAR_H - DOCK_FIND_H) / 2;
-    int fx = dock_find_x();
-    return my >= fy && my < fy + DOCK_FIND_H
-        && mx >= fx && mx < fx + DOCK_FIND_W;
+    if (my < y + 5 || my >= y + TASKBAR_H - 5) return false;
+    int x = taskbar_find_x();
+    return mx >= x && mx < x + FIND_W;
 }
 
 static void handle_mouse(int mx, int my, u8 buttons) {
@@ -3449,12 +3655,9 @@ static void handle_mouse(int mx, int my, u8 buttons) {
             return;
         }
 
-        if (on_dock_find(mx, my)) {
-            /* Centred under the field rather than against the left of the
-               dock, because that is where the eye already is. */
-            if (menu_open) { menu_open = false; need_frame(); }
-            else open_menu_at(dock_find_x() + DOCK_FIND_W / 2 - MENU_W / 2,
-                              panel_rest_y() - menu_full_h() - 8);
+        if (on_find_button(mx, my)) {
+            if (find_open) find_close();
+            else find_start();
             return;
         }
 
@@ -3615,6 +3818,20 @@ static void minimize_all(void) {
  * the time a key is read the chord that produced it has usually been let go
  * again. */
 static bool handle_shortcut(int key) {
+    /* ctrl+f, which is where a hand already goes to look for a word. Ahead
+       of the alt test because it is the one chord here that is not one.
+     *
+     * The control bit is not required, because a bare six already means
+     * this: ctrl and a letter is that letter's position in the alphabet,
+     * and six is what a keyboard sends for ctrl+f whether or not anything
+     * bothered to also say which modifier was down. A serial line sends
+     * the byte and no modifiers at all, so requiring the bit would make
+     * this work under a hand and not under a test. */
+    if (KEY_CODE(key) == 6) {
+        if (find_open) find_close();
+        else find_start();
+        return true;
+    }
     if (!(key & KEY_MOD_ALT)) return false;
     int c = KEY_CODE(key);
 
@@ -3728,10 +3945,15 @@ void wm_run(void) {
 
         int c = kbd_trygetchar();
         if (c >= 0 && KEY_CODE(c) == 27) {         /* escape */
-            if (menu_open) { menu_open = false; need_frame(); }
+            if (find_open) find_close();
+            else if (menu_open) { menu_open = false; need_frame(); }
             else break;
         } else if (c >= 0 && handle_shortcut(c)) {
             /* Claimed by the desktop. */
+        } else if (c >= 0 && find_key(c)) {
+            /* The find bar has the keyboard while it is up. It is one line
+               in the corner rather than a window, so nothing else would
+               give it back. */
         } else if (c >= 0 && menu_open && menu_key(c)) {
             /* Typed into the field on the dock. Tried after the chords,
                so alt and tab still walks the stack with the launcher up,

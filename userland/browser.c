@@ -127,6 +127,8 @@ static const picture *pic_of(int node) {
  * Keeping it anywhere else means two answers that agree until somebody
  * types.
  */
+static int browser_win = -1;
+
 static int focus_node = -1;
 
 /* The same editor the address bar uses, pointed at whichever control has the
@@ -184,6 +186,71 @@ static void focus_control(int el) {
     focus_field.len = w_len(focus_buf);
     focus_field.cursor = focus_field.len;
     focus_field.focused = 1;
+}
+
+/* --- being searchable ------------------------------------------------------
+ *
+ * A window is a rectangle of pixels, and there is no text in a picture of
+ * text, so the desktop cannot read a page off the screen. What it can read
+ * is what the program says it is showing, and this says it.
+ *
+ * What is published is the words of the laid out page rather than the
+ * source: what a reader can see is what they mean when they look for it,
+ * and the source is full of markup and script that nobody is looking at.
+ *
+ * The match is found again here rather than being carried back, because the
+ * desktop counts matches in a string and what this needs is the line of the
+ * page it fell on. Counting twice over the same text in the same order
+ * gives the same answer, which is the only thing the two sides have to
+ * agree about.
+ */
+static int find_item = -1;        /* the run holding the match, or -1 */
+
+static char fold_ch(char c) {
+    return (c >= 'A' && c <= 'Z') ? (char)(c + 32) : c;
+}
+
+static void publish_text(void) {
+    static char buf[4096];
+    int n = 0;
+    for (int i = 0; i < page.nitems && n < (int)sizeof(buf) - 2; i++) {
+        const litem *it = &page.items[i];
+        if (it->kind != LK_TEXT || it->at < 0) continue;
+        for (const char *t = page.text + it->at;
+             *t && n < (int)sizeof(buf) - 2; t++)
+            buf[n++] = *t;
+        buf[n++] = ' ';
+    }
+    win_set_text(browser_win, buf, n);
+}
+
+/* The nth match, scrolled to and remembered so it can be drawn lit. */
+static void find_show(int which, int view_h) {
+    find_item = -1;
+
+    char q[64];
+    int qn = win_find_query(q, sizeof(q));
+    if (qn <= 0) return;
+
+    int seen = 0;
+    for (int i = 0; i < page.nitems; i++) {
+        const litem *it = &page.items[i];
+        if (it->kind != LK_TEXT || it->at < 0) continue;
+        const char *t = page.text + it->at;
+        for (int k = 0; t[k]; k++) {
+            int j = 0;
+            while (j < qn && t[k + j] && fold_ch(t[k + j]) == fold_ch(q[j])) j++;
+            if (j < qn) continue;
+            if (seen == which) {
+                find_item = i;
+                scroll = it->y - view_h / 3;
+                if (scroll < 0) scroll = 0;
+                return;
+            }
+            seen++;
+            k += j - 1;
+        }
+    }
 }
 
 /* --- sending a form -------------------------------------------------------
@@ -633,6 +700,8 @@ static void build(const char *html, int len, int width, int want_sheets,
 
     hover_node = -1;
     relayout(width);
+    find_item = -1;
+    publish_text();
 
     if (doc.title >= 0) w_copy(title, sizeof(title), doc.arena + doc.title,
                                sizeof(title));
@@ -987,6 +1056,14 @@ static void draw_page(surface *s, int ox, int oy, int vw, int vh) {
             continue;
         }
 
+        if (i == find_item) {
+            /* Behind the words rather than over them, so they stay
+               readable: a find that hides what it found is a find that
+               makes somebody scroll back to it. */
+            rect(s, x - 2, sy - 1, tface_w(page.text + it->at, it->face) + 4,
+                 tface_h(it->face) + 3, 0xFFE58F);
+        }
+
         if (it->at < 0) continue;
         const char *str = page.text + it->at;
 
@@ -1046,6 +1123,7 @@ static void set_address(const char *s) {
 void _start(void) {
     int win = win_create("Browser", 860, 620);
     if (win < 0) exit(1);
+    browser_win = win;
     win_allow_resize(win);
 
     ui_input in;
@@ -1088,6 +1166,11 @@ void _start(void) {
         int scrolled = 0;
         while (win_poll(win, &ev)) {
             if (ev.type == WIN_EV_CLOSE) { closing = 1; break; }
+            if (ev.type == WIN_EV_FIND) {
+                find_show(ev.y, view_h);
+                dirty = 1;
+                continue;
+            }
             if (ev.type == WIN_EV_SCROLL) scrolled += ev.y;
             ui_feed(&in, &ev);
 
@@ -1110,6 +1193,7 @@ void _start(void) {
             relayout(view_w - UI_PAD * 2);
             laid_for = view_w;
             want_width = 0;
+            publish_text();
             dirty = 1;
         }
 

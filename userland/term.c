@@ -294,8 +294,29 @@ static void paste_clipboard(void) {
     dim("pasted");
 }
 
+/* What is on the screen, in words, so the desktop's find can look through
+   it. A window is a rectangle of pixels and there is no text in a picture
+   of text, so a terminal that says nothing is a terminal nobody can search
+   -- which for the most text there is on this desktop would be the wrong
+   way round.
+
+   The recent lines rather than the whole scrollback, because find answers
+   about what can be seen and what has scrolled away cannot. */
+static void publish_text(void) {
+    static char buf[4096];
+    int n = 0;
+    int from = n_lines > 60 ? n_lines - 60 : 0;
+    for (int i = from; i < n_lines && n < (int)sizeof(buf) - 2; i++) {
+        const char *t = line_at(i);
+        for (int k = 0; t[k] && n < (int)sizeof(buf) - 2; k++) buf[n++] = t[k];
+        buf[n++] = '\n';
+    }
+    win_set_text(win, buf, n);
+}
+
 static void draw_all(void) {
     fill(&scr, pal.bg);
+    publish_text();
 
     /* The last row belongs to the prompt, so the scrollback gets the rest. */
     int text_rows = rows - 1;
