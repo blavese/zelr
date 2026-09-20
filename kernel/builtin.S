@@ -233,3 +233,9 @@ builtin_svgtest_end:
 builtin_layouttest_start:
 .incbin "build/user/layouttest.elf"
 builtin_layouttest_end:
+
+.global builtin_wiretest_start
+.global builtin_wiretest_end
+builtin_wiretest_start:
+.incbin "build/user/wiretest.elf"
+builtin_wiretest_end:

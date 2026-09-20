@@ -43,6 +43,7 @@ extern const u8 builtin_pngtest_start[], builtin_pngtest_end[];
 extern const u8 builtin_jpegtest_start[], builtin_jpegtest_end[];
 extern const u8 builtin_svgtest_start[], builtin_svgtest_end[];
 extern const u8 builtin_layouttest_start[], builtin_layouttest_end[];
+extern const u8 builtin_wiretest_start[], builtin_wiretest_end[];
 
 typedef struct {
     const char *name;
@@ -84,6 +85,7 @@ static const program_t PROGRAMS[] = {
     { "jpegtest",  builtin_jpegtest_start,  builtin_jpegtest_end  },
     { "svgtest",   builtin_svgtest_start,   builtin_svgtest_end   },
     { "layouttest", builtin_layouttest_start, builtin_layouttest_end },
+    { "wiretest", builtin_wiretest_start, builtin_wiretest_end },
 };
 
 #define N_PROGRAMS (sizeof(PROGRAMS) / sizeof(PROGRAMS[0]))

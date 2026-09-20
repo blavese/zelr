@@ -244,11 +244,16 @@ static void execute(char *buf) {
         if (rc > 0) kprintf("[%d] %s running in the background" "\n", rc, argv[1]);
         else kprintf("bg: %s: %s" "\n", argv[1], elf_error(rc));
     } else if (!strcmp(c, "exec")) {
-        if (argc < 2) { kprintf("usage: exec PROGRAM" "\n" "e.g. exec hello" "\n"); return; }
+        if (argc < 2) { kprintf("usage: exec PROGRAM [ARG]" "\n" "e.g. exec hello" "\n"); return; }
         u32 size = 0;
         u8 *img = vfs_slurp(argv[1], &size);
         if (!img) { kprintf("exec: %s: no such file" "\n", argv[1]); return; }
-        int rc = user_spawn_elf(argv[1], img, size);
+        /* And whatever followed it. A program that takes an address or a
+           file name could be started from the desktop's shell, which passes
+           one, and not from here, which did not -- so the same program
+           behaved differently depending on which shell ran it. */
+        int rc = argc > 2 ? user_spawn_elf_arg(argv[1], img, size, argv[2])
+                          : user_spawn_elf(argv[1], img, size);
         kfree(img);
         if (rc > 0) {
             /* Wait for it, the way a shell does, so its output is not

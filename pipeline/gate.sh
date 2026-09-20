@@ -459,6 +459,12 @@ if [ "$MODE" = "screen" ] || [ "$MODE" = "full" ]; then
   # with the escaping wrong.
   formtest() { keep timeout 600 python tools/formcheck.py; }
 
+  # What travels, rather than what is shown: a compressed body put back
+  # together, a connection kept between requests, and a cookie that comes
+  # back. The middle one is counted by the server, because a client that
+  # opened one connection per request looks the same from inside itself.
+  wiretest() { keep timeout 600 python tools/wirecheck.py; }
+
   # https against the actual web. Everything else about TLS is checked
   # against fixed answers, which proves the arithmetic and cannot prove that
   # a real server will talk to it. This needs a working connection and fails
@@ -480,6 +486,7 @@ if [ "$MODE" = "screen" ] || [ "$MODE" = "full" ]; then
   par_start "https works against the real web" tlstest
   par_start "the browser shows a page and follows a link" browsertest
   par_start "a form is filled in and arrives as it was filled in" formtest
+  par_start "bodies arrive compressed and connections are kept" wiretest
   par_start "the programs it ships with do what they say" apptest
   par_start "a shell, with pipes and redirection" shtest
   par_start "a setting written by hand reaches the screen" settest

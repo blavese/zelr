@@ -280,8 +280,29 @@ POSTED = b"""<html><head><title>a form that posts</title></head><body>
 # is not the client marking its own work.
 RECEIVED = []
 
+# How many connections were opened, and how many requests came down them.
+# The second divided by the first is the whole question about keep alive, and
+# it is a question only the server can answer: a client that opened one
+# connection per request looks identical from inside itself.
+COUNTS = {"connections": 0, "requests": 0}
+
+# And what a Cookie header said, per request, so a session can be checked
+# from the side that would actually act on it.
+COOKIES = []
+
+GZIPPED = b"""<html><head><title>compressed</title></head><body>
+<h1>Sent compressed</h1>
+<p>This page went over the wire deflated, with a gzip wrapper round it, and
+had to be put back together at the other end before any of these words
+existed.</p>
+</body></html>"""
+
 
 class Handler(http.server.BaseHTTPRequestHandler):
+    def setup(self):
+        COUNTS["connections"] += 1
+        http.server.BaseHTTPRequestHandler.setup(self)
+
     protocol_version = "HTTP/1.1"
 
     def log_message(self, *a):
@@ -321,12 +342,46 @@ class Handler(http.server.BaseHTTPRequestHandler):
         else:
             self._send(b"<html><body><h1>404</h1></body></html>", status=404)
 
+    def _gzip(self, body):
+        """Compressed, but only for a client that said it could cope.
+
+        Sending it to one that did not ask is how a check passes against a
+        browser that never learned to undo it."""
+        import gzip as gz
+        if "gzip" not in (self.headers.get("Accept-Encoding") or ""):
+            self._send(body)
+            return
+        packed = gz.compress(body)
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html")
+        self.send_header("Content-Encoding", "gzip")
+        self.send_header("Content-Length", str(len(packed)))
+        self.end_headers()
+        self.wfile.write(packed)
+
     def do_GET(self):
+        COUNTS["requests"] += 1
+        COOKIES.append(self.headers.get("Cookie") or "")
         path = self.path.split("?")[0]
         query = self.path.split("?", 1)[1] if "?" in self.path else ""
 
         if path == "/" or path == "/index.html":
             self._send(PAGE)
+        elif path == "/gz":
+            self._gzip(GZIPPED)
+        elif path == "/setcookie":
+            self._send(b"<html><body><h1>set</h1>"
+                       b"<p><a href=\"/whoami\">who am i</a></p></body></html>",
+                       extra=[("Set-Cookie", "sid=abc123; Path=/"),
+                              ("Set-Cookie", "pref=dark; Path=/")])
+        elif path == "/whoami":
+            got = self.headers.get("Cookie") or "nothing"
+            self._send(b"<html><body><h1>you are</h1><p id=who>"
+                       + got.encode() + b"</p></body></html>")
+        elif path == "/bye":
+            self._send(b"<html><body><h1>bye</h1>"
+                       b"<p><a href=\"/whoami\">who am i</a></p></body></html>",
+                       extra=[("Set-Cookie", "sid=; Path=/; Max-Age=0")])
         elif path == "/form":
             self._send(FORM)
         elif path == "/posts":
@@ -421,6 +476,19 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
 class Server:
     """Started with `with`, so a check that fails still puts the port back."""
+
+    def counts(self):
+        """Connections opened and requests served, since the last reset."""
+        return dict(COUNTS)
+
+    def cookies(self):
+        """The Cookie header of every request, oldest first."""
+        return list(COOKIES)
+
+    def reset_counts(self):
+        COUNTS["connections"] = 0
+        COUNTS["requests"] = 0
+        del COOKIES[:]
 
     def received(self):
         """Every form this server was sent, oldest first."""

@@ -938,6 +938,22 @@ positioned boxes, table column widths and grid, each of which turns a page
 from one column into several, and a browser that does half of them puts
 things where nobody chose.
 
+**What travels, and how often.** The body is asked for compressed and put
+back together on arrival, using the deflate that was written for PNG with a
+different wrapper in front of it — three to five times fewer bytes over a
+stack that carries one connection at a time. The connection is kept between
+requests when the answer said how long it was, so a page and its pictures
+are one handshake rather than a dozen, and over https a dozen of the
+expensive kind; a kept connection that the far end has closed is not a fault
+but the ordinary way of things, so a request that fails on one is tried once
+more on a new one — but only when nothing came back at all, because a
+request the server answered and then dropped may already have been acted on.
+And cookies are remembered, with domain and path matching, so that a session
+survives a click. They live in memory and go when the browser does, which is
+a decision rather than half a job: a cookie written to disk is something
+somebody has to be able to find and delete, and there is nowhere to say so
+yet.
+
 The work is not in the request. It is in the three ways a server can say
 where a body ends, all of which are common and only one of which is obvious:
 a content length, chunks each with their own size, or nothing at all and the

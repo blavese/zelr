@@ -263,8 +263,11 @@ def main():
             if got is not None:
                 how, text = got
                 c.add("as a POST", how == "post")
+                whole = "q=over+the+wire" in pairs_of(text)
+                if not whole:
+                    print("      the server was sent %r" % (text,))
                 c.add("with what was typed in the body rather than the address",
-                      "q=over+the+wire" in pairs_of(text))
+                      whole)
         finally:
             vm.stop()
             try:
