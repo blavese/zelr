@@ -100,8 +100,48 @@ static inline int dom_new(ddoc *d, int kind, int tag) {
     return i;
 }
 
+/* Taking a node out of wherever it is. The parser never needs this: it
+   builds a tree once and only ever adds to the end of it. A script needs it
+   for every one of appendChild, removeChild and insertBefore, because all
+   three can be handed a node that is already somewhere.
+
+   Nothing is freed. The node keeps its index, its text and its attributes,
+   because a script that takes an element out and puts it back is ordinary,
+   and because the arena all of it lives in is thrown away whole when the
+   page is left. What it costs is that a script churning the tree runs the
+   node count down rather than reusing it, and there are twelve thousand. */
+static inline void dom_unlink(ddoc *d, int node) {
+    if (node < 0 || node >= d->count) return;
+    dnode *n = &d->nodes[node];
+    if (n->parent >= 0) {
+        dnode *p = &d->nodes[n->parent];
+        if (p->first == node) p->first = n->next;
+        if (p->last == node) p->last = n->prev;
+    }
+    if (n->prev >= 0) d->nodes[n->prev].next = n->next;
+    if (n->next >= 0) d->nodes[n->next].prev = n->prev;
+    n->parent = n->prev = n->next = -1;
+}
+
+/* Whether b is a or anything under it. Putting an element inside its own
+   descendant makes a ring, and a ring is not a tree that terminates: the
+   layout walks children until there are none and would not come back. A
+   script can ask for it by accident in two lines, so it is refused here
+   rather than discovered as a machine that has stopped. */
+static inline int dom_contains(const ddoc *d, int a, int b) {
+    while (b >= 0) {
+        if (b == a) return 1;
+        b = d->nodes[b].parent;
+    }
+    return 0;
+}
+
 static inline void dom_append(ddoc *d, int parent, int child) {
     if (parent < 0 || child < 0 || parent == child) return;
+    if (dom_contains(d, child, parent)) return;
+    /* A node being moved rather than added. The parser only ever passes
+       fresh ones, for which this is nothing. */
+    if (d->nodes[child].parent >= 0) dom_unlink(d, child);
     dnode *p = &d->nodes[parent], *c = &d->nodes[child];
     c->parent = parent;
     c->prev = p->last;
@@ -109,6 +149,36 @@ static inline void dom_append(ddoc *d, int parent, int child) {
     if (p->last >= 0) d->nodes[p->last].next = child;
     else p->first = child;
     p->last = child;
+}
+
+/* Before a sibling rather than at the end. A reference that is not actually
+   a child of this parent means the end, which is what the DOM says. */
+static inline void dom_insert_before(ddoc *d, int parent, int child, int ref) {
+    if (parent < 0 || child < 0 || parent == child) return;
+    if (ref < 0 || ref >= d->count || d->nodes[ref].parent != parent) {
+        dom_append(d, parent, child);
+        return;
+    }
+    if (dom_contains(d, child, parent)) return;
+    if (d->nodes[child].parent >= 0) dom_unlink(d, child);
+    dnode *c = &d->nodes[child], *r = &d->nodes[ref];
+    c->parent = parent;
+    c->prev = r->prev;
+    c->next = ref;
+    if (r->prev >= 0) d->nodes[r->prev].next = child;
+    else d->nodes[parent].first = child;
+    r->prev = child;
+}
+
+/* An element made by a script rather than read out of a page. An unknown
+   name is kept as text, the same way the parser keeps one, so tagName
+   answers with what was asked for rather than with nothing. */
+static inline int dom_create_element(ddoc *d, const char *name, int len) {
+    int tag = html_tag_of(name, len);
+    int el = dom_new(d, DN_ELEMENT, tag);
+    if (el < 0) return -1;
+    if (tag == T_OTHER) d->nodes[el].text = dom_str(d, name, len);
+    return el;
 }
 
 /* --- attributes ----------------------------------------------------------
