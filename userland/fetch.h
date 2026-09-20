@@ -14,6 +14,8 @@
  */
 #pragma once
 #include "zelr.h"
+#include "alloc.h"
+#include "inflate.h"
 #include "web.h"
 
 #define WEB_ERR_SCHEME   -1     /* a scheme that is not http or https */
@@ -25,6 +27,7 @@
 #define WEB_ERR_DOWN     -7     /* no card, or no address on it */
 #define WEB_ERR_RESOLVE  -8     /* the name did not turn into an address */
 #define WEB_ERR_BUSY     -9     /* the one connection is already in use */
+#define WEB_ERR_ENCODING -10    /* compressed in a way this cannot undo */
 
 /* The kernel answers with a reason; this is the same reason in this file's
    numbering. Collapsing them all to "could not connect" is what made a
@@ -102,6 +105,254 @@ static inline int wh_header(const char *head, int hlen, const char *name,
     return 0;
 }
 
+/* The nth header of a name, because Set-Cookie is the one header a server
+   sends several of and taking the first would lose every session that needs
+   two. */
+static inline int wh_header_nth(const char *head, int hlen, const char *name,
+                                char *out, int cap, int nth) {
+    out[0] = 0;
+    int nlen = w_len(name);
+    int seen = 0;
+    for (int i = 0; i + nlen + 1 < hlen; i++) {
+        if (i && head[i - 1] != '\n') continue;
+        int ok = 1;
+        for (int j = 0; j < nlen; j++)
+            if (w_lower(head[i + j]) != w_lower(name[j])) { ok = 0; break; }
+        if (!ok || head[i + nlen] != ':') continue;
+        if (seen++ != nth) continue;
+
+        int at = i + nlen + 1;
+        while (at < hlen && (head[at] == ' ' || head[at] == '\t')) at++;
+        int n = 0;
+        while (at < hlen && head[at] != '\r' && head[at] != '\n') {
+            if (n < cap - 1) out[n++] = head[at];
+            at++;
+        }
+        out[n] = 0;
+        return 1;
+    }
+    return 0;
+}
+
+/* --- gzip -----------------------------------------------------------------
+ *
+ * A server allowed to compress will, and everything this asks for used to
+ * say identity because there was nothing here to undo it. There is: the
+ * deflate written for PNG is the same deflate, with a different wrapper in
+ * front of it -- ten bytes, some optional strings, and eight bytes of
+ * checksum behind that nothing here reads, because what a checksum would
+ * catch the transport has already checked and a page that decodes is a
+ * page.
+ *
+ * Three to five times less to move over one connection at a time, which on
+ * this machine is the difference between a page arriving and a page
+ * arriving eventually.
+ */
+static inline int wh_gunzip(char *body, int len, int cap) {
+    if (len < 12) return -1;
+    const u8 *p = (const u8 *)body;
+    if (p[0] != 0x1F || p[1] != 0x8B || p[2] != 8) return -1;
+
+    int flg = p[3];
+    int at = 10;
+    if (flg & 4) {                                   /* extra */
+        if (at + 2 > len) return -1;
+        at += 2 + (p[at] | (p[at + 1] << 8));
+    }
+    if (flg & 8)  { while (at < len && p[at]) at++; at++; }    /* a name */
+    if (flg & 16) { while (at < len && p[at]) at++; at++; }    /* a comment */
+    if (flg & 2)  at += 2;                                     /* a head sum */
+    if (at >= len) return -1;
+
+    u8 *out = (u8 *)malloc((u64)cap);
+    if (!out) return -1;
+
+    int got = inflate_raw(p + at, len - at, out, cap);
+    if (got < 0) { free(out); return -1; }
+    for (int i = 0; i < got; i++) body[i] = (char)out[i];
+    free(out);
+    return got;
+}
+
+/* --- cookies --------------------------------------------------------------
+ *
+ * Without these a session does not survive a click: a site sets one when
+ * you sign in, sends you to the next page, and that page has never heard of
+ * you. So there is a jar.
+ *
+ * They live in memory and go when the browser does. That is a decision and
+ * not half a job: a cookie written to disk is a thing somebody has to be
+ * able to find and delete, and this machine has nowhere to say so yet.
+ * Expires and Max-Age are read only far enough to notice a server deleting
+ * one, which is how a sign-out works.
+ */
+#define CK_MAX     64
+#define CK_NAME    96
+#define CK_VALUE   768
+#define CK_DOMAIN  URL_HOST
+#define CK_PATH    160
+
+typedef struct {
+    char name[CK_NAME];
+    char value[CK_VALUE];
+    char domain[CK_DOMAIN];
+    char path[CK_PATH];
+    int  secure;
+    int  used;
+} cookie_t;
+
+static cookie_t ck_jar[CK_MAX];
+
+static inline void ck_forget_all(void) {
+    for (int i = 0; i < CK_MAX; i++) ck_jar[i].used = 0;
+}
+
+/* host ends with domain, on a label boundary. "example.com" is a cookie for
+   "www.example.com" and is emphatically not one for "notexample.com". */
+static inline int ck_domain_ok(const char *host, const char *domain) {
+    if (!domain[0]) return 0;
+    int h = w_len(host), d = w_len(domain);
+    if (d > h) return 0;
+    for (int i = 0; i < d; i++)
+        if (w_lower(host[h - d + i]) != w_lower(domain[i])) return 0;
+    return d == h || host[h - d - 1] == '.';
+}
+
+static inline int ck_path_ok(const char *path, const char *cpath) {
+    if (!cpath[0] || (cpath[0] == '/' && !cpath[1])) return 1;
+    int c = w_len(cpath);
+    for (int i = 0; i < c; i++)
+        if (path[i] != cpath[i]) return 0;
+    return path[c] == 0 || path[c] == '/' || cpath[c - 1] == '/';
+}
+
+static inline int ck_same(const cookie_t *k, const char *name,
+                          const char *domain, const char *path) {
+    return w_same(k->name, name) && w_same(k->domain, domain)
+        && w_same(k->path, path);
+}
+
+/* One Set-Cookie line. */
+static inline void ck_take_one(const url_t *u, const char *line) {
+    char name[CK_NAME], value[CK_VALUE];
+    char domain[CK_DOMAIN], path[CK_PATH];
+    int secure = 0, drop = 0;
+
+    int i = 0;
+    int n = 0;
+    while (line[i] && line[i] != '=' && line[i] != ';') {
+        if (n < CK_NAME - 1) name[n++] = line[i];
+        i++;
+    }
+    name[n] = 0;
+    while (n > 0 && name[n - 1] == ' ') name[--n] = 0;
+    if (!name[0] || line[i] != '=') return;
+    i++;
+
+    n = 0;
+    while (line[i] && line[i] != ';') {
+        if (n < CK_VALUE - 1) value[n++] = line[i];
+        i++;
+    }
+    value[n] = 0;
+    while (n > 0 && value[n - 1] == ' ') value[--n] = 0;
+
+    w_copy(domain, sizeof(domain), u->host, sizeof(domain));
+    w_copy(path, sizeof(path), "/", sizeof(path));
+
+    while (line[i] == ';') {
+        i++;
+        while (line[i] == ' ') i++;
+
+        char key[32];
+        n = 0;
+        while (line[i] && line[i] != '=' && line[i] != ';') {
+            if (n < (int)sizeof(key) - 1) key[n++] = line[i];
+            i++;
+        }
+        key[n] = 0;
+
+        char val[160];
+        n = 0;
+        if (line[i] == '=') {
+            i++;
+            while (line[i] && line[i] != ';') {
+                if (n < (int)sizeof(val) - 1) val[n++] = line[i];
+                i++;
+            }
+        }
+        val[n] = 0;
+
+        if (w_same_fold(key, "secure")) secure = 1;
+        else if (w_same_fold(key, "domain")) {
+            const char *d = val[0] == '.' ? val + 1 : val;
+            /* A server may only widen a cookie to a domain it is inside. */
+            if (ck_domain_ok(u->host, d))
+                w_copy(domain, sizeof(domain), d, sizeof(domain));
+        } else if (w_same_fold(key, "path")) {
+            if (val[0] == '/') w_copy(path, sizeof(path), val, sizeof(path));
+        } else if (w_same_fold(key, "max-age")) {
+            if (val[0] == '0' || val[0] == '-') drop = 1;
+        } else if (w_same_fold(key, "expires")) {
+            /* Only far enough to see a server deleting one, which is what a
+               sign-out is. Anything in nineteen-seventy is in the past. */
+            for (int q = 0; val[q] && val[q + 3]; q++)
+                if (val[q] == '1' && val[q + 1] == '9' && val[q + 2] == '7'
+                    && val[q + 3] == '0') { drop = 1; break; }
+        }
+    }
+
+    int free_slot = -1;
+    for (int k = 0; k < CK_MAX; k++) {
+        if (!ck_jar[k].used) { if (free_slot < 0) free_slot = k; continue; }
+        if (ck_same(&ck_jar[k], name, domain, path)) {
+            if (drop) ck_jar[k].used = 0;
+            else w_copy(ck_jar[k].value, CK_VALUE, value, CK_VALUE);
+            return;
+        }
+    }
+    if (drop || free_slot < 0) return;
+
+    cookie_t *k = &ck_jar[free_slot];
+    w_copy(k->name, CK_NAME, name, CK_NAME);
+    w_copy(k->value, CK_VALUE, value, CK_VALUE);
+    w_copy(k->domain, CK_DOMAIN, domain, CK_DOMAIN);
+    w_copy(k->path, CK_PATH, path, CK_PATH);
+    k->secure = secure;
+    k->used = 1;
+}
+
+static inline void ck_take(const url_t *u, const char *head, int hlen) {
+    char line[CK_VALUE + 256];
+    for (int nth = 0; nth < 16; nth++) {
+        if (!wh_header_nth(head, hlen, "set-cookie", line, sizeof(line), nth))
+            break;
+        ck_take_one(u, line);
+    }
+}
+
+/* What to send with this request, as "a=1; b=2", or nothing. */
+static inline int ck_header(const url_t *u, char *out, int cap) {
+    int w = 0;
+    out[0] = 0;
+    for (int i = 0; i < CK_MAX; i++) {
+        cookie_t *k = &ck_jar[i];
+        if (!k->used) continue;
+        if (k->secure && !u->secure) continue;
+        if (!ck_domain_ok(u->host, k->domain)) continue;
+        if (!ck_path_ok(u->path, k->path)) continue;
+
+        int need = w_len(k->name) + w_len(k->value) + 4;
+        if (w + need >= cap) break;
+        if (w) { out[w++] = ';'; out[w++] = ' '; }
+        for (const char *p = k->name; *p; p++) out[w++] = *p;
+        out[w++] = '=';
+        for (const char *p = k->value; *p; p++) out[w++] = *p;
+    }
+    out[w] = 0;
+    return w;
+}
+
 static inline int wh_number(const char *s) {
     int v = 0, any = 0;
     while (*s == ' ') s++;
@@ -171,11 +422,42 @@ static inline int wh_dechunk(char *body, int len) {
  * it once the headers have been measured off the front. One buffer rather
  * than two because a program here has no allocator, and a second buffer of
  * the same size would be most of what a machine with 64 MiB has spare. */
+/* --- keeping the connection ----------------------------------------------
+ *
+ * Every request used to open a connection, ask, and close it. A page with a
+ * dozen pictures on it therefore paid a dozen handshakes, and over https a
+ * dozen of the expensive kind; on a machine whose stack holds one
+ * connection at a time that is the largest single cost of showing a page.
+ *
+ * So the connection is kept when the answer said how long it was -- by a
+ * length or by chunks -- and the server did not ask for it to be closed.
+ * When the answer did not say, the only thing that marks its end is the
+ * close, so there is nothing to keep.
+ *
+ * A kept connection can be closed at the other end at any moment and
+ * without warning, which is not a fault but the ordinary way of things. A
+ * request that fails on one is therefore tried once more on a new one --
+ * but only when nothing came back at all, because a request the server
+ * answered and then dropped may have been acted on, and asking again is how
+ * somebody orders twice.
+ */
+static char ka_host[URL_HOST];
+static int  ka_port, ka_secure, ka_live;
+
+static inline void web_drop(void) {
+    if (ka_live) { disconnect(); ka_live = 0; }
+}
+
+static inline int ka_matches(const url_t *u) {
+    return ka_live && u->port == ka_port && u->secure == ka_secure
+        && w_same_fold(u->host, ka_host);
+}
+
 /* One request. A body means POST: the same head with a method, a length
    and a type on it, and the bytes after the blank line. Nothing else about
    the exchange differs, which is why it is one function and not two. */
-static inline int web_fetch(const url_t *u, const char *body,
-                            char *buf, int cap, response_t *r) {
+static inline int web_fetch_once(const url_t *u, const char *body,
+                                 char *buf, int cap, response_t *r) {
     r->status = 0;
     r->body = buf;
     r->len = 0;
@@ -185,7 +467,12 @@ static inline int web_fetch(const url_t *u, const char *body,
     r->secure = 0;
     r->how[0] = 0;
 
-    if (u->secure) {
+    if (ka_matches(u)) {
+        /* Already there. A TLS connection kept is a handshake not done. */
+        r->secure = u->secure;
+        if (u->secure) tls_what(r->how, sizeof(r->how));
+    } else if (u->secure) {
+        web_drop();
         /* The handshake checks the certificate against u->host, so reaching
            the next line means the bytes after it are going to the site that
            was asked for and not merely to whatever answered. */
@@ -200,11 +487,12 @@ static inline int web_fetch(const url_t *u, const char *body,
         r->secure = 1;
         tls_what(r->how, sizeof(r->how));
     } else {
+        web_drop();
         int rc = connect(u->host, u->port);
         if (rc != 0) return web_err_from(rc);
     }
 
-    char req[URL_PATH + URL_HOST + 256];
+    char req[URL_PATH + URL_HOST + CK_VALUE + 512];
     int n = 0;
     n = wh_add(req, sizeof(req), n, body ? "POST " : "GET ");
     if (n >= 0) n = wh_add(req, sizeof(req), n, u->path);
@@ -224,8 +512,16 @@ static inline int web_fetch(const url_t *u, const char *body,
     if (n >= 0) n = wh_add(req, sizeof(req), n,
                            "\r\nUser-Agent: zelr\r\n"
                            "Accept: text/html,text/plain,*/*\r\n"
-                           "Accept-Encoding: identity\r\n"
-                           "Connection: close\r\n");
+                           "Accept-Encoding: gzip\r\n"
+                           "Connection: keep-alive\r\n");
+
+    /* Whatever this site has already said to remember about itself. */
+    char cookies[CK_VALUE];
+    if (ck_header(u, cookies, sizeof(cookies))) {
+        if (n >= 0) n = wh_add(req, sizeof(req), n, "Cookie: ");
+        if (n >= 0) n = wh_add(req, sizeof(req), n, cookies);
+        if (n >= 0) n = wh_add(req, sizeof(req), n, "\r\n");
+    }
     /* A server is entitled to read exactly this many bytes and not one
        more, so the length has to be the body's and not the buffer's. */
     if (body) {
@@ -316,7 +612,26 @@ static inline int web_fetch(const url_t *u, const char *body,
         }
     }
 
-    disconnect();
+    /* Kept only when the answer said how long it was. Where it did not,
+       the close is the only thing that marks the end and there is nothing
+       to keep. */
+    int keep = 0;
+    if (hlen >= 0 && (want >= 0 || chunked)) {
+        char conn[32];
+        if (!wh_header(buf, hlen, "connection", conn, sizeof(conn))
+            || !w_starts_fold(conn, "close"))
+            keep = 1;
+    }
+    if (keep) {
+        ka_live = 1;
+        ka_port = u->port;
+        ka_secure = u->secure;
+        w_copy(ka_host, sizeof(ka_host), u->host, sizeof(ka_host));
+    } else {
+        disconnect();
+        ka_live = 0;
+    }
+
     buf[total < cap ? total : cap - 1] = 0;
 
     if (total == 0) return WEB_ERR_EMPTY;
@@ -334,6 +649,7 @@ static inline int web_fetch(const url_t *u, const char *body,
 
     wh_header(buf, hlen, "location", r->location, sizeof(r->location));
     wh_header(buf, hlen, "content-type", r->ctype, sizeof(r->ctype));
+    ck_take(u, buf, hlen);
 
     r->body = buf + hlen + skip;
     r->len = total - hlen - skip;
@@ -346,7 +662,36 @@ static inline int web_fetch(const url_t *u, const char *body,
         r->len = want;                       /* ignore anything after it */
     }
     r->body[r->len] = 0;
+
+    /* Undone after the chunks, because the chunking is how it travelled and
+       the compression is what it is. */
+    char enc[32];
+    if (wh_header(buf, hlen, "content-encoding", enc, sizeof(enc))
+        && w_starts_fold(enc, "gzip")) {
+        int room = cap - (int)(r->body - buf) - 1;
+        int got = wh_gunzip(r->body, r->len, room);
+        if (got < 0) {
+            web_drop();
+            return WEB_ERR_ENCODING;
+        }
+        r->len = got;
+        r->body[r->len] = 0;
+    }
     return r->status ? r->status : WEB_ERR_EMPTY;
+}
+
+/* And once more on a fresh connection when a kept one had been closed at
+   the far end. Only when nothing came back: a request the server answered
+   and then dropped may already have been acted on. */
+static inline int web_fetch(const url_t *u, const char *body,
+                            char *buf, int cap, response_t *r) {
+    int reused = ka_matches(u);
+    int rc = web_fetch_once(u, body, buf, cap, r);
+    if (rc >= 0 || !reused) return rc;
+    if (rc != WEB_ERR_SEND && rc != WEB_ERR_EMPTY && rc != WEB_ERR_CONNECT)
+        return rc;
+    web_drop();
+    return web_fetch_once(u, body, buf, cap, r);
 }
 
 /* Follows redirects, because a bare fetch lands on "301 moved" for a great
