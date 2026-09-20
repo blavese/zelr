@@ -120,6 +120,9 @@ static const picture *pic_of(int node) {
 static int   scripts_ran;
 static int   scripts_changed;      /* one of them wrote to the document */
 static char  script_err[128];
+/* A handler that threw is worth saying once, and saying it on every click
+   after that would bury whatever the status line was for. */
+static int   said_script_err;
 
 /* --- saying what happened ------------------------------------------------- */
 
@@ -365,6 +368,8 @@ static void gather_pictures(void) {
 
 static void build(const char *html, int len, int width, int want_sheets,
                   int *fetched, int *skipped) {
+    /* Before the tree it is bound to is taken apart under it. */
+    jsdom_close();
     dom_parse(&doc, html, len);
 
     css_init(&sheet);
@@ -385,8 +390,14 @@ static void build(const char *html, int len, int width, int want_sheets,
        the layout is about to read, so running them afterwards would show
        the page as it was and correct it a frame later. */
     script_err[0] = 0;
-    scripts_ran = jsdom_run(&doc, script_err, (int)sizeof(script_err),
-                            &scripts_changed);
+    said_script_err = 0;
+    scripts_ran = 0;
+    scripts_changed = 0;
+    if (jsdom_open(&doc)) {
+        scripts_ran = jsdom_scripts(script_err, (int)sizeof(script_err));
+        jsdom_loaded();
+        scripts_changed = jsdom_changed();
+    }
 
     hover_node = -1;
     relayout(width);
@@ -810,6 +821,14 @@ void _start(void) {
             }
         }
 
+        /* Anything the page asked to have done later. A page that calls
+           setTimeout and is never called back is not slow: it is stopped
+           part of the way through whatever it was doing. */
+        if (jsdom_live() && jsdom_timers() && jsdom_changed()) {
+            relayout(view_w - UI_PAD * 2);
+            dirty = 1;
+        }
+
         scroll -= scrolled * 48;
 
         int limit = page.height - view_h;
@@ -886,6 +905,33 @@ void _start(void) {
             hover_node = node_under;
             relayout(view_w - UI_PAD * 2);
             over_link = lay_link_at(&page, dx, dy);
+        }
+
+        /* A click goes to the page before it goes to the browser.
+         *
+         * Which order that happens in is the whole behaviour of a menu, a
+         * tab strip and every link that is really a button: the page gets
+         * to say the ordinary consequence should not follow, and if it says
+         * so, the link under the pointer is not followed. A browser that
+         * navigated first would run the handler on a page that was already
+         * leaving. */
+        if (in.released && node_under >= 0 && jsdom_live()) {
+            int stop = jsdom_click(node_under);
+
+            /* A handler that changed the document changed what is on the
+               screen, and nothing else in this loop would notice: the
+               layout is rebuilt on a resize, a hover or a load, and a click
+               is none of those. */
+            if (jsdom_changed()) {
+                relayout(view_w - UI_PAD * 2);
+                over_link = lay_link_at(&page, dx, dy);
+                dirty = 1;
+            }
+            if (jsdom_error()[0] && !said_script_err) {
+                said_script_err = 1;
+                say("a script stopped: ", jsdom_error());
+            }
+            if (stop) in.released = 0;
         }
 
         if (over_link >= 0 && in.released) {
