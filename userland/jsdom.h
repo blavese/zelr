@@ -688,6 +688,36 @@ static int jd_host_get(jctx *J, jobj *o, const char *name, jval *out) {
         *out = js_from_str(js_str(J, v ? v : ""));
         return 1;
     }
+    /* What is in a control, which is the attribute the browser types into
+       and the layout draws, so a script reading it gets what is on the
+       screen and a script writing it puts something there.
+
+       Only for the elements that have one. Answering "" for every element
+       in the document would let a page read a value off a paragraph and
+       believe it. */
+    if (w_same(name, "value")) {
+        int tag = jd_doc->nodes[el].tag;
+        const char *v = dom_attr(jd_doc, el, "value");
+        if (v) { *out = js_from_str(js_str(J, v)); return 1; }
+        if (tag == T_TEXTAREA) {
+            static char buf[4096];
+            dom_text_content(jd_doc, el, buf, (int)sizeof(buf));
+            *out = js_from_str(js_str(J, buf));
+            return 1;
+        }
+        if (tag == T_INPUT || tag == T_SELECT || tag == T_BUTTON) {
+            *out = js_from_str(js_str(J, ""));
+            return 1;
+        }
+        return 0;
+    }
+    /* A box written with a bare `checked` has an empty value, and one that
+       has been unticked has to leave something behind saying so. */
+    if (w_same(name, "checked")) {
+        const char *v = dom_attr(jd_doc, el, "checked");
+        *out = js_bool(v && !w_same(v, "0"));
+        return 1;
+    }
     if (w_same(name, "classList")) {
         jobj *cl = jd_classlist(J, el);
         *out = cl ? js_from_obj(cl) : js_null();
@@ -772,6 +802,19 @@ static int jd_host_set(jctx *J, jobj *o, const char *name, jval v) {
         jstr *s = js_to_str(J, v);
         if (s && dom_attr_set(jd_doc, el, "class", s->s))
             jd_dirty = 1;
+        return 1;
+    }
+    if (w_same(name, "value")) {
+        jstr *s = js_to_str(J, v);
+        if (s) {
+            dom_attr_set(jd_doc, el, "value", s->s);
+            jd_dirty = 1;
+        }
+        return 1;
+    }
+    if (w_same(name, "checked")) {
+        dom_attr_set(jd_doc, el, "checked", js_to_bool(v) ? "1" : "0");
+        jd_dirty = 1;
         return 1;
     }
     return 0;

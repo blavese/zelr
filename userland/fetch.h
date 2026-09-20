@@ -171,7 +171,11 @@ static inline int wh_dechunk(char *body, int len) {
  * it once the headers have been measured off the front. One buffer rather
  * than two because a program here has no allocator, and a second buffer of
  * the same size would be most of what a machine with 64 MiB has spare. */
-static inline int web_fetch(const url_t *u, char *buf, int cap, response_t *r) {
+/* One request. A body means POST: the same head with a method, a length
+   and a type on it, and the bytes after the blank line. Nothing else about
+   the exchange differs, which is why it is one function and not two. */
+static inline int web_fetch(const url_t *u, const char *body,
+                            char *buf, int cap, response_t *r) {
     r->status = 0;
     r->body = buf;
     r->len = 0;
@@ -202,7 +206,7 @@ static inline int web_fetch(const url_t *u, char *buf, int cap, response_t *r) {
 
     char req[URL_PATH + URL_HOST + 256];
     int n = 0;
-    n = wh_add(req, sizeof(req), n, "GET ");
+    n = wh_add(req, sizeof(req), n, body ? "POST " : "GET ");
     if (n >= 0) n = wh_add(req, sizeof(req), n, u->path);
     if (n >= 0) n = wh_add(req, sizeof(req), n, " HTTP/1.1\r\nHost: ");
     if (n >= 0) n = wh_add(req, sizeof(req), n, u->host);
@@ -221,7 +225,17 @@ static inline int web_fetch(const url_t *u, char *buf, int cap, response_t *r) {
                            "\r\nUser-Agent: zelr\r\n"
                            "Accept: text/html,text/plain,*/*\r\n"
                            "Accept-Encoding: identity\r\n"
-                           "Connection: close\r\n\r\n");
+                           "Connection: close\r\n");
+    /* A server is entitled to read exactly this many bytes and not one
+       more, so the length has to be the body's and not the buffer's. */
+    if (body) {
+        if (n >= 0) n = wh_add(req, sizeof(req), n,
+                               "Content-Type: application/x-www-form-"
+                               "urlencoded\r\nContent-Length: ");
+        if (n >= 0) n = wh_add_num(req, sizeof(req), n, w_len(body));
+        if (n >= 0) n = wh_add(req, sizeof(req), n, "\r\n");
+    }
+    if (n >= 0) n = wh_add(req, sizeof(req), n, "\r\n");
     if (n < 0) { disconnect(); return WEB_ERR_SEND; }
 
     /* The socket takes 1400 bytes at a time, and a long path can be more
@@ -232,6 +246,21 @@ static inline int web_fetch(const url_t *u, char *buf, int cap, response_t *r) {
         if (piece > 1400) piece = 1400;
         if (send(req + sent, piece) < 0) { disconnect(); return WEB_ERR_SEND; }
         sent += piece;
+    }
+
+    /* And the body after the head, in the same sized pieces. Not part of
+       req: a form can be longer than the buffer a request line fits in. */
+    if (body) {
+        int blen = w_len(body), bs = 0;
+        while (bs < blen) {
+            int piece = blen - bs;
+            if (piece > 1400) piece = 1400;
+            if (send(body + bs, piece) < 0) {
+                disconnect();
+                return WEB_ERR_SEND;
+            }
+            bs += piece;
+        }
     }
 
     int total = 0, quiet = 0;
@@ -325,9 +354,10 @@ static inline int web_fetch(const url_t *u, char *buf, int cap, response_t *r) {
    than followed until the machine gives up. */
 #define WEB_MAX_HOPS 6
 
-static inline int web_get(url_t *u, char *buf, int cap, response_t *r) {
+static inline int web_send(url_t *u, const char *body, char *buf, int cap,
+                           response_t *r) {
     for (int hop = 0; hop < WEB_MAX_HOPS; hop++) {
-        int rc = web_fetch(u, buf, cap, r);
+        int rc = web_fetch(u, body, buf, cap, r);
         if (rc < 0) return rc;
         if (rc != 301 && rc != 302 && rc != 303 && rc != 307 && rc != 308)
             return rc;
@@ -343,6 +373,23 @@ static inline int web_get(url_t *u, char *buf, int cap, response_t *r) {
             && next.port == u->port && next.secure == u->secure)
             return rc;
         url_copy(u, &next);
+
+        /* What a redirect after a form means. 303 says plainly to ask again
+           with GET, and 301 and 302 after a POST are treated the same way
+           because that is what every browser settled on and what every
+           server now expects; 307 and 308 were invented to say keep the
+           method, so they do. Sending the form again to wherever it was
+           sent is how somebody orders twice. */
+        if (body && (rc == 301 || rc == 302 || rc == 303)) body = 0;
     }
     return r->status;
+}
+
+static inline int web_get(url_t *u, char *buf, int cap, response_t *r) {
+    return web_send(u, 0, buf, cap, r);
+}
+
+static inline int web_post(url_t *u, const char *body, char *buf, int cap,
+                           response_t *r) {
+    return web_send(u, body ? body : "", buf, cap, r);
 }

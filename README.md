@@ -624,18 +624,56 @@ filling them in.
 An element is a plain JavaScript object with its index in the document
 written on it, so reading `el.textContent` walks the document as it stands
 rather than a copy taken when the object was made, and writing it changes the
-document the layout is about to read. Scripts run once, after the page is
-parsed and before it is laid out, which is why a page that rewrites itself
-appears rewritten rather than appearing and then correcting itself.
+document the layout is about to read.
 
-What is bound is what a page can actually do: `getElementById`,
-`getElementsByTagName`, `textContent`, `className`, `id`, `tagName`,
-`getAttribute`, `setAttribute`, and `document.title`. There is no
-`addEventListener`, because nothing delivers events yet; no `createElement`,
-because nothing would put one anywhere; no `innerHTML`, because that means
-running the parser over a fragment and this parser builds whole documents.
-A property that is missing is better than one that quietly returns undefined
-and lets a page believe it worked.
+The world a script runs in is opened when the page is built and closed when
+the page is left, rather than torn down the moment the scripts finish. That
+is the difference between a page something happened to and a page that is
+running: a handler is by definition a piece of a program that runs after the
+program has finished, and before this there was nothing left for one to run
+in. A page with no script and no handler attribute opens nothing and costs
+nothing, which is still most pages.
+
+What is bound is what a page can actually do. Reading and finding:
+`getElementById`, `getElementsByTagName`, `textContent`, `className`,
+`classList`, `id`, `tagName`, `value`, `checked`, `getAttribute`,
+`setAttribute`, `parentNode`, `firstChild`, `nextSibling`, `children` and
+`document.title`. Changing: `createElement`, `createTextNode`,
+`appendChild`, `insertBefore`, `removeChild` and `remove`. Hearing:
+`addEventListener` and `removeEventListener`, `onclick` and its relatives,
+with an event that carries the element actually hit, `preventDefault` and
+`stopPropagation`, delivered from that element up to the document. And
+later: `setTimeout`, `setInterval` and the two that cancel them.
+
+Appending a node that is already somewhere moves it, and putting an element
+inside its own descendant is refused — that one is not a wrong answer but a
+ring, and everything that walks children until there are none walks it
+forever.
+
+What is still absent is absent rather than approximated: no capture phase,
+because a listener registered for capture and run at bubble time is worse
+than one not run; no `querySelector`; no `innerHTML`, because that means
+running the parser over a fragment and this parser builds whole documents;
+and no regular expressions in the language itself. A property that is
+missing is better than one that quietly returns undefined and lets a page
+believe it worked.
+
+**And the forms work.** An `<input>` used to be laid out as nothing at all:
+the layout had a name for a field and never made one, so there was no box to
+click, nothing to type into and no path from a filled in form to a request —
+which is to say a search box, the commonest thing on the web, did not work.
+Text fields, passwords, checkboxes, radio buttons, textareas, buttons and
+hidden fields are drawn now, take the keyboard, and are sent on Return or on
+the button. A control keeps its value in the document as the attribute a
+page would have written it in, so the layout, the drawing, a script asking
+`el.value` and what is submitted are all one answer rather than four that
+agree until somebody types.
+
+`GET` puts the fields in the address and `POST` puts them in a body, which
+is the whole difference between a form and a password in a server's log. A
+redirect after a `POST` is followed with `GET` for 301, 302 and 303 and with
+the method kept for 307 and 308, because sending the form again to wherever
+it was sent is how somebody orders twice.
 
 **Windows.** A compositing window manager: windows are off-screen surfaces,
 the manager owns the chrome, the stacking order and the pointer, and the whole
@@ -882,13 +920,23 @@ its own window and draws it with the letterforms in `face.h`. There is an
 address bar, a history with back and forward, a scrollbar, and links you can
 click.
 
-There is no CSS in it. A page is drawn the way a page was drawn before there
-was any: headings bigger, paragraphs with air around them, lists indented and
-bulleted, preformatted text in the fixed pitch font, links blue and
-underlined, and everything in the order the markup puts it. That is an answer
-rather than a stopgap. A page whose meaning is in its markup reads properly,
-and a page whose meaning is entirely in a style sheet reads as one long
-column, which is what it is.
+It used to have no CSS at all, and drew pages the way pages were drawn
+before there was any: headings bigger, links blue, one column. That is a
+defensible answer for a document and the wrong one for the web as it is,
+where the difference between a menu and a list of links, or between a
+sidebar and the article, exists only in a style sheet. Without one a page is
+not simplified — it is read in the wrong order, and nobody is told that is
+what is happening. So there is a style sheet reader now: selectors with the
+three combinators that matter, the cascade in specificity then source order,
+inheritance, the box model, and block, inline and flex layout.
+
+And the page can be used rather than only read. A click goes to the page
+before it goes to the browser, so a page that says the ordinary consequence
+should not follow is obeyed; forms are drawn, typed into and sent. What is
+still absent is named in the source rather than guessed at: floats,
+positioned boxes, table column widths and grid, each of which turns a page
+from one column into several, and a browser that does half of them puts
+things where nobody chose.
 
 The work is not in the request. It is in the three ways a server can say
 where a body ends, all of which are common and only one of which is obvious:

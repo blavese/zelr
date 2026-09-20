@@ -121,6 +121,92 @@ static inline int tface_w(const char *s, int which) {
     return tface_wn(s, n, which);
 }
 
+/* --- form controls --------------------------------------------------------
+ *
+ * A control is a box whose contents are a value rather than markup. The
+ * layout decides how big one is; what is written inside it is read out of
+ * the document at the moment of drawing, because a value changes without
+ * the page being laid out again, and somebody typing into a field would
+ * otherwise cost a reflow per keystroke.
+ *
+ * The kinds are named here rather than in the browser because both have to
+ * agree about them: the layout decides how much room a checkbox takes and
+ * the browser decides what a checkbox looks like, and those are the same
+ * checkbox.
+ */
+enum { CTL_NONE = 0, CTL_TEXT, CTL_PASSWORD, CTL_BUTTON,
+       CTL_CHECK, CTL_RADIO, CTL_AREA, CTL_SELECT, CTL_HIDDEN };
+
+static inline int lay_same_fold(const char *a, const char *b) {
+    for (int i = 0;; i++) {
+        char x = a[i], y = b[i];
+        if (x >= 'A' && x <= 'Z') x = (char)(x + 32);
+        if (y >= 'A' && y <= 'Z') y = (char)(y + 32);
+        if (x != y) return 0;
+        if (!x) return 1;
+    }
+}
+
+static inline int lay_control_kind(const ddoc *d, int el) {
+    if (el < 0 || el >= d->count || d->nodes[el].kind != DN_ELEMENT)
+        return CTL_NONE;
+    int tag = d->nodes[el].tag;
+    if (tag == T_TEXTAREA) return CTL_AREA;
+    if (tag == T_SELECT)   return CTL_SELECT;
+    if (tag == T_BUTTON)   return CTL_BUTTON;
+    if (tag != T_INPUT)    return CTL_NONE;
+
+    /* A type nobody wrote is text, and a type nothing here knows is text
+       too: that is what a browser does with the ones invented after it was
+       written, and it is the answer that leaves the field usable. */
+    const char *t = dom_attr(d, el, "type");
+    if (!t || !*t) return CTL_TEXT;
+    if (lay_same_fold(t, "hidden"))   return CTL_HIDDEN;
+    if (lay_same_fold(t, "password")) return CTL_PASSWORD;
+    if (lay_same_fold(t, "checkbox")) return CTL_CHECK;
+    if (lay_same_fold(t, "radio"))    return CTL_RADIO;
+    if (lay_same_fold(t, "submit") || lay_same_fold(t, "button")
+        || lay_same_fold(t, "reset") || lay_same_fold(t, "image"))
+        return CTL_BUTTON;
+    return CTL_TEXT;
+}
+
+/* The words on a control, which are not what it submits: a button carries a
+   label and sends a value, and a password shows none of what it holds. */
+static inline const char *lay_control_label(const ddoc *d, int el, int kind) {
+    static char buf[256];
+    if (kind == CTL_BUTTON) {
+        const char *v = dom_attr(d, el, "value");
+        if (v && *v) return v;
+        if (d->nodes[el].tag == T_BUTTON) {
+            dom_text_content(d, el, buf, (int)sizeof(buf));
+            return buf[0] ? buf : "Button";
+        }
+        const char *t = dom_attr(d, el, "type");
+        if (t && lay_same_fold(t, "reset")) return "Reset";
+        return "Submit";
+    }
+    if (kind == CTL_SELECT) {
+        /* Whatever the first option says, because nothing here opens one.
+           A list that cannot be opened, showing its first entry, is at
+           least the value it would send. */
+        for (int c = d->nodes[el].first; c >= 0; c = d->nodes[c].next)
+            if (d->nodes[c].kind == DN_ELEMENT && d->nodes[c].tag == T_OPTION) {
+                dom_text_content(d, c, buf, (int)sizeof(buf));
+                return buf;
+            }
+        return "";
+    }
+    if (kind == CTL_AREA) {
+        const char *v = dom_attr(d, el, "value");
+        if (v) return v;
+        dom_text_content(d, el, buf, (int)sizeof(buf));
+        return buf;
+    }
+    const char *v = dom_attr(d, el, "value");
+    return v ? v : "";
+}
+
 /* --- the run of the layout ----------------------------------------------- */
 
 typedef struct {
@@ -473,6 +559,79 @@ static inline void lay_inline(lctx *L, int node, const cstyle *parent, int *y) {
                         lay_text_run(L, alt, &s2, y);
                     }
                 }
+            } else if (lay_control_kind(d, at) != CTL_NONE) {
+                int ck = lay_control_kind(d, at);
+                int face = face_pick(st.font_px, st.bold, st.mono);
+                int fw = 0, fh = tface_h(face) + 10;
+
+                if (ck == CTL_CHECK || ck == CTL_RADIO) {
+                    fw = fh = tface_h(face) + 2;
+                } else if (ck == CTL_BUTTON) {
+                    fw = tface_w(lay_control_label(d, at, ck), face) + 20;
+                } else if (ck == CTL_AREA) {
+                    const char *cols = dom_attr(d, at, "cols");
+                    const char *rows = dom_attr(d, at, "rows");
+                    int nc = cols ? lay_number(cols) : 0;
+                    int nr = rows ? lay_number(rows) : 0;
+                    if (nc < 1) nc = 28;
+                    if (nr < 1) nr = 3;
+                    fw = tface_wn("0", 1, face) * nc + 10;
+                    fh = tface_h(face) * nr + nr * 4 + 8;
+                } else {
+                    const char *size = dom_attr(d, at, "size");
+                    int nc = size ? lay_number(size) : 0;
+                    if (nc < 1) nc = 20;
+                    fw = tface_wn("0", 1, face) * nc + 10;
+                }
+
+                if (fw > L->line_width) fw = L->line_width;
+                if (fw < 8) fw = 8;
+
+                /* Hidden carries a value and takes no room, which is the
+                   whole point of it. Drawn as nothing rather than as an
+                   empty box, because an empty box is a field somebody will
+                   try to type into. */
+                if (ck != CTL_HIDDEN) {
+                    if (L->pen + fw > L->line_left + L->line_width
+                        && L->pen > L->line_left) {
+                        int left = L->line_left, width = L->line_width;
+                        int al = L->align;
+                        lay_line_end(L, y);
+                        lay_line_start(L, *y, left, width, al);
+                    }
+
+                    litem *it = lay_item(L);
+                    if (it) {
+                        it->kind = LK_FIELD;
+                        it->x = L->pen;
+                        it->y = L->line_top;
+                        it->w = fw;
+                        it->h = fh;
+                        it->node = at;
+                        it->at = -1;
+                        it->face = (short)face;
+                        it->color = st.color;
+                        it->bg = st.background;
+                        it->has_bg = st.has_bg;
+                        it->link = L->cur_link;
+                        L->pen += fw + 2;
+                        lay_line_fit(L, fh, fh);
+                        L->line_started = 1;
+                        L->pending_space = 0;
+                    }
+                }
+
+                /* What is inside a control belongs to the control and not
+                   to the page: the text in a button is its label and the
+                   text in a textarea is its value, and the box draws both
+                   rather than letting them flow out after it. */
+                int skip = at;
+                while (skip >= 0 && d->nodes[skip].next < 0
+                       && d->nodes[skip].parent != node)
+                    skip = d->nodes[skip].parent;
+                at = skip >= 0 ? d->nodes[skip].next : -1;
+                if (skip == node) at = -1;
+                continue;
             } else if (sp + 1 < LAY_DEPTH) {
                 sp++;
                 stack[sp] = st;

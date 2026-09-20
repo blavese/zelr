@@ -453,6 +453,12 @@ if [ "$MODE" = "screen" ] || [ "$MODE" = "full" ]; then
   # megabyte screenshot, and three at once is a gigabyte of writes.
   browsertest() { keep timeout 600 python tools/browsercheck.py; }
 
+  # Filling a form in and sending it, checked against what the server was
+  # actually sent rather than against what the browser says it sent. The
+  # second is the client marking its own work and passes just as happily
+  # with the escaping wrong.
+  formtest() { keep timeout 600 python tools/formcheck.py; }
+
   # https against the actual web. Everything else about TLS is checked
   # against fixed answers, which proves the arithmetic and cannot prove that
   # a real server will talk to it. This needs a working connection and fails
@@ -473,6 +479,7 @@ if [ "$MODE" = "screen" ] || [ "$MODE" = "full" ]; then
   par_start "pages come back off a real web server" webtest
   par_start "https works against the real web" tlstest
   par_start "the browser shows a page and follows a link" browsertest
+  par_start "a form is filled in and arrives as it was filled in" formtest
   par_start "the programs it ships with do what they say" apptest
   par_start "a shell, with pipes and redirection" shtest
   par_start "a setting written by hand reaches the screen" settest
