@@ -65,7 +65,13 @@ rm -f "$IMG"
 head -c 33554432 /dev/zero > "$IMG"
 
 # --- first boot: writes the record, then the power goes off ---------------
-{ sleep 6; type_line "echo first boot done"; sleep 1; } | boot "$OUT1"
+#
+# The reboot is how the machine is stopped. Nothing used to stop it, so both
+# boots ran until `timeout` killed them ninety seconds later and this was a
+# three minute check doing about twenty seconds of work. A reboot rather than
+# a poweroff, because poweroff flushes and the whole question here is what
+# reached the disk without one.
+{ sleep 6; type_line "echo first boot done"; sleep 1; type_line "reboot"; sleep 1; } | boot "$OUT1"
 
 check "== handing over to the scheduler" "$OUT1" "the first boot ran to the end"
 check "first boot done" "$OUT1" "the first boot reached a shell"
@@ -73,7 +79,7 @@ check "fs new disk prepared" "$OUT1" "the first boot formatted the disk"
 
 # --- second boot: the disk is the only thing that carried over ------------
 { sleep 6; type_line "echo BEGIN_RECORD"; type_line "cat /sys/lastboot";
-  type_line "echo END_RECORD"; sleep 2; } | boot "$OUT2"
+  type_line "echo END_RECORD"; sleep 2; type_line "reboot"; sleep 1; } | boot "$OUT2"
 
 sed -n '/BEGIN_RECORD/,/END_RECORD/p' "$OUT2" > "$FENCED"
 

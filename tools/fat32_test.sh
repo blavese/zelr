@@ -37,7 +37,17 @@ type_line() {
 }
 
 boot() {
-  { sleep 6; "$1"; sleep 2; } \
+  # The reboot at the end is what stops the machine. Without it nothing ever
+  # told it to stop, so every boot ran until `timeout` killed it — a fixed
+  # 120 seconds whatever the work took — and these were the slowest checks
+  # in the gate by a wide margin.
+  #
+  # A reboot rather than a poweroff, and that is the whole point: poweroff
+  # flushes to disk on the way out, and what is being checked here is what
+  # reached the disk without anybody flushing it. A reboot is exactly as
+  # abrupt as the kill it replaces. qemu exits rather than restarting
+  # because -no-reboot is already in the line below.
+  { sleep 6; "$1"; sleep 2; type_line "reboot"; sleep 2; } \
     | timeout 120 "$QEMU" -kernel build/zelr.bin -m 256 -no-reboot -display none \
         -append console \
         -serial stdio -drive "file=$IMG,format=raw,if=ide,index=0" \

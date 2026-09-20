@@ -51,7 +51,7 @@ MENU_RECT = (0, MENU_TOP, MENU_W, MENU_TOP + MENU_ENTRIES * MENU_ITEM
 
 # The surface everything on this desktop is built from, which is what says a
 # menu or a window is covering the wallpaper.
-MENU_PANEL = (0xD6, 0xD3, 0xCD)
+MENU_PANEL = (0xF4, 0xF4, 0xF7)
 
 LAUNCHER = (TASKBAR_GAP + 8 + BADGE_W // 2, PANEL_Y + TASKBAR_H // 2)
 PARK = (1010, SCREEN_H - 10)

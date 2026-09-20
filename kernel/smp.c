@@ -30,6 +30,7 @@
 #include "printf.h"
 #include "io.h"
 #include "lapic.h"
+#include "fpu.h"
 
 extern const u8 trampoline_start[], trampoline_end[];
 
@@ -199,6 +200,13 @@ static void ap_main(void *arg) {
        processor that halts with interrupts on and no table would triple
        fault on the first one that arrived. */
     idt_load();
+
+    /* The control registers are per processor, so this one has to be told
+       about the floating point unit too. Without it a task scheduled here
+       faults on its first vector instruction and the same task on the boot
+       processor does not, which is the kind of difference that reads as
+       random. */
+    fpu_init();
 
     me->info.started = true;
 

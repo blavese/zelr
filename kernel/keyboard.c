@@ -6,6 +6,7 @@
 #include "io.h"
 #include "ps2.h"
 #include "serial.h"
+#include "signal.h"
 
 /* The buffer holds ints rather than chars, because a key is not always a
    character: an arrow or a page key has no letter to stand for it. */
@@ -32,6 +33,20 @@ static const char MAP_SHIFT[128] = {
     0,  '*', 0, ' ',
 };
 
+/* Ctrl-C is both a keystroke and an interruption.
+ *
+ * Raised here rather than where the console is read, because by the time
+ * anybody reads the console the program being interrupted has usually not
+ * read anything for a while — it is off in a loop, which is why it is being
+ * interrupted. The keystroke is queued as well as raised, so that a shell
+ * sitting at its prompt sees it and can clear the line it had half typed.
+ */
+static int interrupting(int c) {
+    if (c != 3) return 0;
+    signal_interrupt();
+    return 1;
+}
+
 static void push(int c) {
     u32 next = (head + 1) % BUFSZ;
     /* Stamped with what was held down now, because that is the only moment
@@ -40,6 +55,7 @@ static void push(int c) {
     if (ctrl)  c |= KEY_MOD_CTRL;
     if (shift) c |= KEY_MOD_SHIFT;
 
+    interrupting(KEY_CODE(c));
     if (next != tail) { buf[head] = c; head = next; }
 }
 
@@ -174,6 +190,10 @@ int kbd_trygetchar(void) {
            automated tests drive the shell. It arrives on IRQ4 and is
            buffered there, so nothing is lost between polls. */
         int s = serial_trygetc();
+        /* Not raised here: the serial interrupt already did, when the byte
+           arrived. Doing it again when the byte is finally read would
+           interrupt whatever was running by then, which is usually the
+           thing that was started next. */
         if (s >= 0) return s == 13 ? 10 : s;   /* CR becomes LF */
         return -1;
     }

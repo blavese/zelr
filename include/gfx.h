@@ -23,6 +23,17 @@ void fb_round_rect(int x, int y, int w, int h, int r, u32 rgb);
 void fb_round_frame(int x, int y, int w, int h, int r, u32 rgb);
 void fb_shadow(int x, int y, int w, int h, int r, int spread);
 void fb_vgradient(int x, int y, int w, int h, u32 top, u32 bottom);
+
+/* --- surfaces that are material rather than built ------------------------
+ *
+ * A rounded rectangle with its corners measured rather than stepped, and
+ * with an alpha, so a panel can let the wallpaper through it. A soft round
+ * light, for a background that has depth in it. And the gloss along the top
+ * of a pane, which is the one thing from that era of interfaces that still
+ * reads as light. */
+void fb_round_rect_aa(int x, int y, int w, int h, int r, u32 rgb, int alpha);
+void fb_glow(int cx, int cy, int rx, int ry, u32 rgb, int strength);
+void fb_sheen(int x, int y, int w, int h, int r, int strength);
 void fb_hgradient(int x, int y, int w, int h, u32 left, u32 right);
 u32  gfx_mix(u32 under, u32 over, int alpha);
 

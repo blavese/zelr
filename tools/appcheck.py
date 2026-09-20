@@ -209,8 +209,16 @@ def main():
         c.add("the stick is there to play from", "usb volume mounted" in boot)
 
         # Started on the file, which is the argument a task can now carry.
+        #
+        # Twelve seconds rather than six. This is the one check in the
+        # gate that measures something in real time — sound coming back
+        # out of the machine at the pitch that went in — and six
+        # seconds of wall clock on a host running a dozen machines is
+        # not six seconds of a guest getting to play anything. It came
+        # back silent in the gate and at 440 Hz on its own, twice,
+        # which is what that looks like.
         vm.type("music /usb/TONE.WAV\n")
-        time.sleep(6)
+        time.sleep(12)
     finally:
         vm.stop()
         for junk in (DISK, STICK, TONE):

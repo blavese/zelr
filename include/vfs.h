@@ -47,15 +47,12 @@ bool vfs_rmdir(const char *path);
 const char *vfs_cwd(void);
 bool vfs_chdir(const char *path);
 
-/* Open files, for programs that want to work in pieces rather than in one
-   go. A file is held in memory while open and written back on close. */
-int  vfs_open(const char *path, u32 flags);
-int  vfs_fd_read(int fd, void *buf, u32 len);
-int  vfs_fd_write(int fd, const void *buf, u32 len);
-int  vfs_fd_seek(int fd, i32 offset, u32 whence);          /* 0 set, 1 cur, 2 end */
-int  vfs_fd_size(int fd);
-bool vfs_close(int fd);
-void vfs_release(u32 pid);              /* closes whatever a dead task left */
+/* True for a path the filesystem makes up as it goes, or holds its own copy
+   of: /sys, and /bin. Nothing may be written to one. */
+bool vfs_generated(const char *abs);
+
+/* Open files are in include/fd.h. They are a process's business rather than
+   the filesystem's, which is why they left this header. */
 
 /* Reading a whole file into a buffer the caller must free. */
 u8  *vfs_slurp(const char *path, u32 *size_out);

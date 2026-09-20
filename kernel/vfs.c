@@ -31,7 +31,10 @@ u32 vfs_builtin_count(void) { return sysfs_program_count(); }
 
 /* Paths the live tree answers for. Nothing written to the disk can shadow
    one, and nothing here can be written to. */
-static bool live_path(const char *abs) {
+/* Paths the filesystem generates or the kernel carries its own copy of.
+   Neither can be written to, and fd.c has to ask as well, which is why this
+   is no longer private to this file. */
+bool vfs_generated(const char *abs) {
     return sysfs_owns(abs) ||
            (strncmp(abs, "/bin", 4) == 0 && (abs[4] == 0 || abs[4] == '/'));
 }
@@ -171,7 +174,7 @@ int vfs_list(const char *path, u32 index, char *name_out, u32 *size_out, bool *d
     char abs[VFS_PATH_MAX];
     if (!vfs_resolve(path ? path : ".", abs, sizeof(abs))) return -1;
 
-    if (live_path(abs)) return sysfs_list(abs, index, name_out, size_out, dir_out);
+    if (vfs_generated(abs)) return sysfs_list(abs, index, name_out, size_out, dir_out);
 
     /* The root has the live tree's two directories in it before anything
        that is actually stored, so ls shows them without them existing on
@@ -210,7 +213,7 @@ bool vfs_stat(const char *path, u32 *size_out, bool *dir_out) {
         return true;
     }
 
-    if (live_path(abs)) return sysfs_stat(abs, size_out, dir_out);
+    if (vfs_generated(abs)) return sysfs_stat(abs, size_out, dir_out);
 
     const char *on = route(abs);
     if (fat_mounted()) return fat_stat(on, size_out, dir_out);
@@ -228,7 +231,7 @@ int vfs_read(const char *path, void *buf, u32 cap) {
     char abs[VFS_PATH_MAX];
     if (!vfs_resolve(path, abs, sizeof(abs))) return -1;
 
-    if (live_path(abs)) return sysfs_read(abs, buf, cap);
+    if (vfs_generated(abs)) return sysfs_read(abs, buf, cap);
 
     const char *on = route(abs);
     if (fat_mounted()) return fat_read_file(on, (u8 *)buf, cap);
@@ -243,7 +246,7 @@ int vfs_read(const char *path, void *buf, u32 cap) {
 bool vfs_write(const char *path, const void *buf, u32 len) {
     char abs[VFS_PATH_MAX];
     if (!vfs_resolve(path, abs, sizeof(abs))) return false;
-    if (live_path(abs)) return false;   /* generated, or the kernel's own copy */
+    if (vfs_generated(abs)) return false;   /* generated, or the kernel's own copy */
 
     const char *on = route(abs);
     if (fat_mounted()) return fat_write_file(on, (const u8 *)buf, len);
@@ -270,7 +273,7 @@ bool vfs_append(const char *path, const void *buf, u32 len) {
 bool vfs_delete(const char *path) {
     char abs[VFS_PATH_MAX];
     if (!vfs_resolve(path, abs, sizeof(abs))) return false;
-    if (live_path(abs)) return false;
+    if (vfs_generated(abs)) return false;
 
     const char *on = route(abs);
     if (fat_mounted()) return fat_delete_file(on);
@@ -281,7 +284,7 @@ bool vfs_mkdir(const char *path) {
     char abs[VFS_PATH_MAX];
     if (!vfs_resolve(path, abs, sizeof(abs))) return false;
     if (abs[0] == '/' && abs[1] == 0) return false;
-    if (live_path(abs)) return false;
+    if (vfs_generated(abs)) return false;
 
     const char *on = route(abs);
     if (fat_mounted()) return fat_mkdir(on);
@@ -292,7 +295,7 @@ bool vfs_rmdir(const char *path) {
     char abs[VFS_PATH_MAX];
     if (!vfs_resolve(path, abs, sizeof(abs))) return false;
     if (abs[0] == '/' && abs[1] == 0) return false;
-    if (live_path(abs)) return false;
+    if (vfs_generated(abs)) return false;
     if (vfs_count(abs) > 0) return false;
 
     const char *on = route(abs);
@@ -325,142 +328,12 @@ u8 *vfs_slurp(const char *path, u32 *size_out) {
     return buf;
 }
 
-/* --- open files --------------------------------------------------------- */
-
-/* A file is read into memory when opened and written back when closed. That
-   is the same trade the rest of the system makes: simple, and fine at these
-   sizes. It also means a program can seek freely without the disk layer
-   needing to understand offsets. */
-typedef struct {
-    bool used;
-    u32  pid;
-    char path[VFS_PATH_MAX];
-    u8  *data;
-    u32  size, cap, pos;
-    bool writable, dirty;
-} open_file_t;
-
-static open_file_t open_files[VFS_MAX_OPEN];
+/* Open files used to be here. They are in kernel/fd.c now, because a
+   descriptor turned out to be two things rather than one: a file, and a
+   number in a process that refers to it. What is left in this file is the
+   part that never depended on a process at all — paths, and what is at
+   them. */
 
 void vfs_init(void) {
-    memset(open_files, 0, sizeof(open_files));
     sysfs_init();
-}
-
-static u32 here_pid(void) {
-    task_t *t = task_current();
-    return t ? t->pid : 0;
-}
-
-static open_file_t *fd_lookup(int fd) {
-    if (fd < 0 || fd >= VFS_MAX_OPEN) return 0;
-    open_file_t *f = &open_files[fd];
-    if (!f->used || f->pid != here_pid()) return 0;
-    return f;
-}
-
-static bool grow_to(open_file_t *f, u32 need) {
-    if (need <= f->cap) return true;
-    u32 cap = f->cap ? f->cap : 256;
-    while (cap < need) cap *= 2;
-    u8 *bigger = (u8 *)kmalloc(cap);
-    if (!bigger) return false;
-    if (f->size) memcpy(bigger, f->data, f->size);
-    memset(bigger + f->size, 0, cap - f->size);
-    if (f->data) kfree(f->data);
-    f->data = bigger;
-    f->cap = cap;
-    return true;
-}
-
-int vfs_open(const char *path, u32 flags) {
-    char abs[VFS_PATH_MAX];
-    if (!vfs_resolve(path, abs, sizeof(abs))) return -1;
-
-    u32 size = 0;
-    bool is_dir = false;
-    bool exists = vfs_stat(abs, &size, &is_dir);
-    if (is_dir) return -1;
-    if (!exists && !(flags & O_CREATE)) return -1;
-    if ((flags & O_WRITE) && live_path(abs)) return -1;
-
-    int fd = -1;
-    for (int i = 0; i < VFS_MAX_OPEN; i++)
-        if (!open_files[i].used) { fd = i; break; }
-    if (fd < 0) return -1;
-
-    open_file_t *f = &open_files[fd];
-    memset(f, 0, sizeof(*f));
-    strncpy(f->path, abs, VFS_PATH_MAX - 1);
-    f->pid = here_pid();
-    f->writable = (flags & (O_WRITE | O_CREATE | O_TRUNC | O_APPEND)) != 0;
-
-    if (exists && !(flags & O_TRUNC)) {
-        if (!grow_to(f, size ? size : 1)) return -1;
-        int got = vfs_read(abs, f->data, size);
-        if (got < 0) { if (f->data) kfree(f->data); memset(f, 0, sizeof(*f)); return -1; }
-        f->size = (u32)got;
-    } else if (!exists || (flags & O_TRUNC)) {
-        f->dirty = true;                /* an empty file that must be created */
-    }
-
-    f->pos = (flags & O_APPEND) ? f->size : 0;
-    f->used = true;
-    return fd;
-}
-
-int vfs_fd_read(int fd, void *buf, u32 len) {
-    open_file_t *f = fd_lookup(fd);
-    if (!f) return -1;
-    if (f->pos >= f->size) return 0;
-    u32 n = f->size - f->pos;
-    if (n > len) n = len;
-    memcpy(buf, f->data + f->pos, n);
-    f->pos += n;
-    return (int)n;
-}
-
-int vfs_fd_write(int fd, const void *buf, u32 len) {
-    open_file_t *f = fd_lookup(fd);
-    if (!f || !f->writable) return -1;
-    if (!grow_to(f, f->pos + len)) return -1;
-    memcpy(f->data + f->pos, buf, len);
-    f->pos += len;
-    if (f->pos > f->size) f->size = f->pos;
-    f->dirty = true;
-    return (int)len;
-}
-
-int vfs_fd_seek(int fd, i32 offset, u32 whence) {
-    open_file_t *f = fd_lookup(fd);
-    if (!f) return -1;
-    i32 base = whence == 1 ? (i32)f->pos : whence == 2 ? (i32)f->size : 0;
-    i32 want = base + offset;
-    if (want < 0) return -1;
-    f->pos = (u32)want;
-    return want;
-}
-
-int vfs_fd_size(int fd) {
-    open_file_t *f = fd_lookup(fd);
-    return f ? (int)f->size : -1;
-}
-
-static bool close_slot(open_file_t *f) {
-    bool ok = true;
-    if (f->dirty) ok = vfs_write(f->path, f->data ? f->data : (const u8 *)"", f->size);
-    if (f->data) kfree(f->data);
-    memset(f, 0, sizeof(*f));
-    return ok;
-}
-
-bool vfs_close(int fd) {
-    open_file_t *f = fd_lookup(fd);
-    if (!f) return false;
-    return close_slot(f);
-}
-
-void vfs_release(u32 pid) {
-    for (int i = 0; i < VFS_MAX_OPEN; i++)
-        if (open_files[i].used && open_files[i].pid == pid) close_slot(&open_files[i]);
 }

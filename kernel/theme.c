@@ -43,6 +43,21 @@ static const struct {
    desktop goes flat. This is a warm neutral a couple of steps lighter and
    cooler than the grey these desktops used to be, which is the whole of the
    modernising: the construction is the old one, the colour is not. */
+/* --- the modern ground ---------------------------------------------------
+ *
+ * A near white rather than the warm grey above, because the warm grey was
+ * chosen to have room above and below it for a bevel and there are no
+ * bevels here. What a modern surface needs instead is to be quiet enough
+ * that a hairline shows on it. */
+#define MODERN_L_SURFACE RGB(0xF4, 0xF4, 0xF7)
+#define MODERN_L_TEXT    RGB(0x17, 0x18, 0x1C)
+#define MODERN_L_DIM     RGB(0x5D, 0x60, 0x6A)
+#define MODERN_D_SURFACE RGB(0x22, 0x24, 0x2B)
+
+/* And the ground behind everything: a deep blue the wallpaper builds its
+   lights on top of, rather than a flat slab. */
+#define MODERN_DESKTOP   RGB(0x10, 0x25, 0x4A)
+
 #define LIGHT_DESKTOP RGB(0x33, 0x44, 0x52)
 #define LIGHT_SURFACE RGB(0xD6, 0xD3, 0xCD)
 #define LIGHT_TEXT    RGB(0x12, 0x12, 0x14)
@@ -73,14 +88,16 @@ void theme_apply_preset(int i) {
     if (i < 0 || i >= THEME_PRESETS) return;
     current.accent = PRESETS[i].accent;
 
+    bool modern = current.look == LOOK_MODERN;
+
     if (current.light) {
-        current.desktop = LIGHT_DESKTOP;
-        current.surface = LIGHT_SURFACE;
-        current.text = LIGHT_TEXT;
-        current.text_dim = LIGHT_DIM;
+        current.desktop  = modern ? MODERN_DESKTOP : LIGHT_DESKTOP;
+        current.surface  = modern ? MODERN_L_SURFACE : LIGHT_SURFACE;
+        current.text     = modern ? MODERN_L_TEXT : LIGHT_TEXT;
+        current.text_dim = modern ? MODERN_L_DIM : LIGHT_DIM;
     } else {
-        current.desktop = PRESETS[i].desktop;
-        current.surface = PRESETS[i].surface;
+        current.desktop  = modern ? MODERN_DESKTOP : PRESETS[i].desktop;
+        current.surface  = modern ? MODERN_D_SURFACE : PRESETS[i].surface;
         current.text = DARK_TEXT;
         current.text_dim = DARK_DIM;
     }
@@ -156,12 +173,33 @@ static void derive(void) {
     current.well = dark ? mix(current.surface, K, 66)
                         : mix(current.surface, W, 210);
 
-    /* The title gradient runs along the bar rather than down it, which is
-       the way every desktop that did this well did it: down a 22 pixel bar
-       a vertical gradient has nowhere to go and reads as a smudge. */
-    current.title_a  = current.accent;
-    current.title_b  = mix(current.accent, W, 58);
-    current.title_fg = current.accent_text;
+    /* --- material ----------------------------------------------------
+     *
+     * What a floating pane is tinted with before the wallpaper shows
+     * through it, and the hairline that separates it from what is behind.
+     * In a dark theme the tint is the surface itself; in a light one it is
+     * lifted, because a light panel over a dark wallpaper needs to stay
+     * light when a third of the wallpaper is coming through it. */
+    current.glass  = dark ? mix(current.surface, W, 10)
+                          : mix(current.surface, W, 80);
+    current.stroke = dark ? mix(current.surface, W, 60)
+                          : mix(current.surface, K, 26);
+
+    /* A title bar. Built, it is a gradient along the bar rather than down
+       it, which is the way every desktop that did this well did it: down a
+       22 pixel bar a vertical gradient has nowhere to go and reads as a
+       smudge. Modern, it is not a coloured bar at all. It is the same
+       material as the window under it, and what says which window is in
+       front is the text and the shadow rather than a band of accent. */
+    if (current.look == LOOK_MODERN) {
+        current.title_a  = current.raised;
+        current.title_b  = current.raised;
+        current.title_fg = current.text;
+    } else {
+        current.title_a  = current.accent;
+        current.title_b  = mix(current.accent, W, 58);
+        current.title_fg = current.accent_text;
+    }
 
     /* An unfocused bar is the same shape drained of the colour, so the one
        in front is obvious without either being hard to read. */
@@ -169,23 +207,37 @@ static void derive(void) {
        still a window somebody is reading, and a title bar that goes nearly
        black to say so is louder about being unfocused than the focused one
        is about being focused. */
-    current.title_off_a  = mix(current.surface, dark ? W : K, dark ? 10 : 34);
-    current.title_off_b  = mix(current.surface, W, dark ? 30 : 70);
-    current.title_off_fg = current.text_dim;
+    if (current.look == LOOK_MODERN) {
+        current.title_off_a  = current.surface;
+        current.title_off_b  = current.surface;
+        current.title_off_fg = current.text_dim;
+    } else {
+        current.title_off_a  = mix(current.surface, dark ? W : K, dark ? 10 : 34);
+        current.title_off_b  = mix(current.surface, W, dark ? 30 : 70);
+        current.title_off_fg = current.text_dim;
+    }
 }
 
 const theme_t *theme(void) { return &current; }
 
 void theme_init(void) {
-    /* The built look is the one this desktop is, so it is what a machine
-       with no settings file gets: a grey ground, square corners, and no
-       shadow under anything, because a bevel already says which way is up
-       and a drop shadow on top of one is two answers to the same question. */
+    /* The modern look is what a machine with no settings file gets.
+     *
+       It was the built one, and the note here used to explain why: a bevel
+       already says which way is up, and a drop shadow on top of one is two
+       answers to the same question. That reasoning is still right about
+       bevels. It is the bevels that are the choice, and having made it once
+       the whole desktop was locked to a particular decade.
+
+       So the look is a setting now, and both sides of it are complete. A
+       machine set to BUILT gets exactly what this used to be, down to the
+       square corners and the absence of a shadow. */
+    current.look = LOOK_MODERN;
     current.light = true;
     theme_apply_preset(1);
-    current.wallpaper = WALLPAPER_GRADIENT;
-    current.corner = 0;
-    current.shadows = false;
+    current.wallpaper = WALLPAPER_BLOOM;
+    current.corner = 10;
+    current.shadows = true;
     current.animate = true;
     current.quirks = true;
     current.autodesktop = true;
@@ -235,6 +287,13 @@ static void apply(const char *key, const char *value) {
     else if (!strcmp(key, "animate")) current.animate = parse_dec(value) != 0;
     else if (!strcmp(key, "quirks"))  current.quirks = parse_dec(value) != 0;
     else if (!strcmp(key, "autodesktop")) current.autodesktop = parse_dec(value) != 0;
+    else if (!strcmp(key, "look")) {
+        /* The look changes what the palette is derived from, so the preset
+           has to be applied again rather than only the flag being set. */
+        current.look = parse_dec(value) ? LOOK_BUILT : LOOK_MODERN;
+        int at = theme_current_preset();
+        theme_apply_preset(at >= 0 ? at : 1);
+    }
     else if (!strcmp(key, "width"))   current.want_w = (int)parse_dec(value);
     else if (!strcmp(key, "height"))  current.want_h = (int)parse_dec(value);
     else if (!strcmp(key, "volume"))  current.volume = (int)parse_dec(value);
@@ -327,6 +386,7 @@ bool theme_save(void) {
           at >= 0 ? (u32)at : current.accent,   at < 0 },
         { at >= 0 ? "light" : "desktop",
           at >= 0 ? (current.light ? 1u : 0u) : current.desktop, at < 0 },
+        { "look",      (u32)(current.look == LOOK_BUILT ? 1 : 0), false },
         { "wallpaper", (u32)current.wallpaper,  false },
         { "quirks",    (u32)(current.quirks ? 1 : 0), false },
         { "corner",    (u32)current.corner,     false },

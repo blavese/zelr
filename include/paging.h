@@ -81,6 +81,10 @@ bool virt_is_user_in(u64 pml4_phys, u64 virt);
 /* A fresh address space sharing the kernel's mappings. Returns the physical
    address of the top level table, or 0. */
 u64  paging_new_directory(void);
+/* A copy of an address space, with every user page duplicated and everything
+   shared with the kernel left shared. What fork is built on. */
+u64  paging_clone_directory(u64 pml4_phys);
+
 void paging_free_directory(u64 pml4_phys);
 void paging_switch(u64 pml4_phys);
 u64  paging_current_directory(void);

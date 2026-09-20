@@ -17,7 +17,8 @@ import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from harness import Guest, Checks, build_once, count_in, ROOT    # noqa: E402
+from harness import (Guest, Checks, build_once, count_near,
+                     ROOT)    # noqa: E402
 
 DISK = os.path.join(ROOT, "netcheck.%d.img" % os.getpid())
 
@@ -30,7 +31,10 @@ NETPOP_W, NETPOP_H = 268, 150
 # The clock is always five characters, so this does not move.
 # Worked out the way wm.c works it out: the clock against the right edge,
 # the speaker left of it, the network left of that.
-CLOCK_W = 40                       # five characters, which never changes
+# Five characters, which never changes — and neither does the width, because
+# the digits in this face all have one advance. Eight pixels each and four
+# for the colon, at body size.
+CLOCK_W = 36
 VOL_W, NET_W = 30, 26
 VOLUME_X = SCREEN_W - TASKBAR_GAP - 16 - CLOCK_W - 14 - VOL_W
 NET_X = VOLUME_X - NET_W - 6
@@ -47,9 +51,11 @@ POP_Y = SCREEN_H - TASKBAR_H - TASKBAR_GAP - 8 - NETPOP_H
 POP_RECT = (POP_X, POP_Y, POP_X + NETPOP_W, POP_Y + NETPOP_H)
 BUTTON = (POP_X + 14 + 120, POP_Y + NETPOP_H - 14 - 13)
 
-# The panel is built out of the same surface everything else is, rather than
-# tinted a layer lighter, so this is that grey.
-OVERLAY = (0xD6, 0xD3, 0xCD)
+# What the panel is tinted with before the wallpaper behind it shows through.
+# It is laid down at an alpha of 248 out of 255, so a trace of what is behind
+# comes with it and the count below has to allow for that.
+OVERLAY = (0xF4, 0xF4, 0xF7)
+OVERLAY_TOL = 6
 
 
 def region(px, w, rect):
@@ -135,7 +141,8 @@ def use_desktop(vm, c, wired):
     before = region(px, w, POP_RECT)
     w, h, px, shot, opened = mon.click_for(
         NET_ICON[0], NET_ICON[1], "net-panel",
-        lambda w, h, px: count_in(px, w, POP_RECT, OVERLAY) > 4000,
+        lambda w, h, px: count_near(px, w, POP_RECT, OVERLAY,
+                                    OVERLAY_TOL) > 4000,
         timeout=20)
     c.add("clicking it opens the network panel", opened, shot)
     c.add("which is drawn over what was there",

@@ -715,10 +715,23 @@ def _grave(p):
 
 # --- lowercase ------------------------------------------------------------
 
-@glyph("a", 560)
+@glyph("a", 548)
 def _a(p):
-    _bowl(p, 50, 480, 0, XH)
-    p.stem(480 - STEM / 2, 0, XH * 0.52)
+    """Double storey, which is the letter that decides whether a face reads
+    as a humanist sans or as something geometric.
+
+    It was single storey: a full height bowl with a stub of a stem beside it,
+    which is the shape of a handwriting face and not of this one. Nothing
+    else in the alphabet looks like that here, so the one letter that turns
+    up in almost every word was the one letter out of step.
+
+    Three strokes: a stem up the right as far as the arm, a bowl closed
+    against it in the lower half, and an arm over the top that leaves the
+    stem, curves across and comes down to a terminal on the left."""
+    x0, x1 = 52, 486
+    p.stem(x1 - STEM / 2, 0, XH * 0.62)
+    _bowl(p, x0, x1, 0, XH * 0.56, STEM * 0.95)
+    _bowl(p, x0, x1, XH * 0.24, XH, STEM * 0.95, 0, 165)
     return p
 
 @glyph("b", 570)
@@ -922,58 +935,130 @@ def _tilde(p):
 # in it, and what it actually needs is to put a glyph on the screen. So each
 # size is measured once, at build time, and what ships is coverage bytes.
 
-# A scale rather than a pile of sizes: each step is far enough from the last
-# to read as a different level and not as a mistake. The kernel draws window
-# chrome and the desktop and gets the whole thing; a userland program embeds
-# whatever it uses in its own binary, so it gets the three it actually needs.
-FACES_KERNEL = [(13, ""), (15, ""), (20, ""), (26, ""), (15, "b"), (20, "b")]
-FACES_USER = [(13, ""), (15, ""), (20, ""), (15, "b")]
+# The kernel draws window chrome and the desktop, where the sizes are chosen
+# by this system and there are few of them. A browser is the other case
+# entirely: a page asks for whatever size it likes, in any unit, and the
+# nearest available one is what it gets. Four sizes meant every page came out
+# at one of four sizes, so a heading and its subheading were the same size
+# and a caption was body text. These are close enough together that rounding
+# to the nearest is not visible, which is the whole point of having them.
+#
+# Each face is (pixel size, weight, monospaced).
+#
+# The monospaced ones are the same letterforms on a fixed advance rather than
+# a second set of drawings. A real monospaced face narrows the wide letters
+# and widens the narrow ones so the fixed step does not look forced, and this
+# does not do that; what it gets right is the thing code needs, which is that
+# column n is under column n on the line above.
+FACES_KERNEL = [(13, "", 0), (15, "", 0), (20, "", 0), (26, "", 0),
+                (15, "b", 0), (20, "b", 0), (15, "", 1), (15, "b", 1)]
+
+# What an ordinary program draws with: its own chrome, at sizes this system
+# chose. Every program that includes draw.h carries the whole of this in its
+# binary, so it is short on purpose.
+# The last two are the monospaced cut, for the terminal and anything else
+# that puts characters on a grid. Those used to be drawn with the 8x16 bitmap
+# font, which is the one thing on this screen with hard stairstep edges on
+# every character, and no amount of rounded corners anywhere else makes up
+# for a window full of it.
+FACES_USER = [(13, "", 0), (15, "", 0), (20, "", 0), (15, "b", 0),
+              (15, "", 1), (15, "b", 1)]
+
+# And what something that lays out somebody else's text draws with. A page
+# asks for whatever size it likes and gets the nearest of these; with four
+# sizes a heading and its subheading came out identical and a caption came
+# out as body text. These are close enough that the rounding is not visible.
+#
+# In a file of its own because it is half a megabyte of coverage, and a
+# calculator has no business carrying that around.
+FACES_TEXT = [
+    (11, "", 0), (12, "", 0), (13, "", 0), (14, "", 0), (15, "", 0),
+    (16, "", 0), (17, "", 0), (19, "", 0), (21, "", 0), (24, "", 0),
+    (28, "", 0), (34, "", 0), (42, "", 0),
+    (11, "b", 0), (12, "b", 0), (13, "b", 0), (14, "b", 0), (15, "b", 0),
+    (16, "b", 0), (17, "b", 0), (19, "b", 0), (21, "b", 0), (24, "b", 0),
+    (28, "b", 0), (34, "b", 0), (42, "b", 0),
+    (12, "", 1), (13, "", 1), (14, "", 1), (15, "", 1), (17, "", 1),
+    (13, "b", 1), (15, "b", 1),
+]
 
 ORDER = [chr(c) for c in range(32, 127)]
 
 
-def build(size, weight=""):
+# The cell a monospaced glyph has to live in, in em units. Wider than the
+# average proportional advance because it is the widest letters that set it,
+# and narrower than those letters are naturally, because a cell as wide as an
+# m wastes a third of the line on every i.
+MONO_ADV = 620
+
+
+def _fit_cell(contours, adv):
+    """Puts a proportional glyph into the monospaced cell.
+
+    Simply replacing the advance does not work, which is worth saying plainly
+    because it is the obvious thing to try: m and w are half again as wide as
+    the cell and they run straight into the letter after them. So anything
+    wider than the cell is condensed into it and anything narrower is centred
+    in it, which is how a monospaced face derived from a proportional one has
+    always been made. The wide letters are a little narrow and the narrow ones
+    have air around them; what it buys is that column n is under column n on
+    the line above, which is the only thing a terminal actually needs."""
+    if adv <= 0:
+        return contours
+    if adv > MONO_ADV:
+        k = MONO_ADV / adv
+        return [[(x * k, y) for (x, y) in c] for c in contours]
+    shift = (MONO_ADV - adv) / 2.0
+    return [[(x + shift, y) for (x, y) in c] for c in contours]
+
+
+def build(size, weight="", mono=0):
     """Every glyph at one size: (w, h, left, top, advance, bytes)."""
     set_weight(weight)
     out = []
     scale = size / EM
+    step = int(round(MONO_ADV * scale)) if mono else 0
     for ch in ORDER:
         fn, adv = G[ch]
         p = fn(Pen())
-        w, h, left, top, rows = rasterise(p.contours, size)
+        contours = _fit_cell(p.contours, adv) if mono else p.contours
+        w, h, left, top, rows = rasterise(contours, size)
         data = bytearray()
         for r in rows:
             data.extend(r)
-        out.append((w, h, left, top, int(round(adv * scale)), bytes(data)))
+        out.append((w, h, left, top,
+                    step if mono else int(round(adv * scale)), bytes(data)))
     return out
 
 
-def emit(path, guard, sizes, prefix):
-    faces = [(s, w, build(s, w)) for (s, w) in sizes]
+def emit(path, guard, sizes, prefix, decls=True, include=None):
+    faces = [(s, w, m, build(s, w, m)) for (s, w, m) in sizes]
 
     lines = []
     lines.append("/* Generated by tools/genface.py. Do not edit by hand;")
     lines.append("   the letterforms are drawn in that file. */")
-    lines.append("#pragma once" if guard else "")
-    lines.append('#include "%s"' % ("types.h" if guard else "zelr.h"))
+    lines.append("#pragma once")
+    lines.append('#include "%s"' % (include or ("types.h" if guard else "zelr.h")))
     lines.append("")
-    lines.append("/* One byte of coverage per pixel: 0 is background, 255 is")
-    lines.append("   solidly inside the letter. Everything between is an edge. */")
-    lines.append("typedef struct {")
-    lines.append("    short w, h;          /* of the bitmap, not the glyph */")
-    lines.append("    short left, top;     /* where it sits against the pen */")
-    lines.append("    short advance;       /* how far the pen then moves */")
-    lines.append("    unsigned int at;     /* into the blob below */")
-    lines.append("} face_glyph;")
-    lines.append("")
-    lines.append("#define FACE_FIRST 32")
-    lines.append("#define FACE_LAST  126")
-    lines.append("#define FACE_COUNT %d" % len(ORDER))
-    lines.append("#define FACE_SIZES %d" % len(sizes))
+    up = prefix.upper()
+    if decls:
+        lines.append("/* One byte of coverage per pixel: 0 is background, 255 is")
+        lines.append("   solidly inside the letter. Everything between is an edge. */")
+        lines.append("typedef struct {")
+        lines.append("    short w, h;          /* of the bitmap, not the glyph */")
+        lines.append("    short left, top;     /* where it sits against the pen */")
+        lines.append("    short advance;       /* how far the pen then moves */")
+        lines.append("    unsigned int at;     /* into the blob below */")
+        lines.append("} face_glyph;")
+        lines.append("")
+        lines.append("#define FACE_FIRST 32")
+        lines.append("#define FACE_LAST  126")
+        lines.append("#define FACE_COUNT %d" % len(ORDER))
+    lines.append("#define %s_SIZES %d" % (up, len(sizes)))
     lines.append("")
 
-    for size, weight, face in faces:
-        tag = "%d%s" % (size, weight)
+    for size, weight, mono, face in faces:
+        tag = "%d%s%s" % (size, weight, "m" if mono else "")
         blob = bytearray()
         metrics = []
         for (w, h, left, top, adv, data) in face:
@@ -1004,27 +1089,63 @@ def emit(path, guard, sizes, prefix):
         lines.append("};")
         lines.append("")
 
-    lines.append("typedef struct {")
-    lines.append("    short size;")
-    lines.append("    const face_glyph *glyphs;")
-    lines.append("    const unsigned char *pixels;")
-    lines.append("} face_t;")
-    lines.append("")
-    lines.append("static const face_t %s_faces[FACE_SIZES] = {" % prefix)
-    for size, weight, _ in faces:
-        tag = "%d%s" % (size, weight)
-        lines.append("    { %d, %s_g_%s, %s_px_%s },   /* %dpx %s */"
-                     % (size, prefix, tag, prefix, tag, size,
-                        "bold" if weight else "regular"))
+    if decls:
+        lines.append("typedef struct {")
+        lines.append("    short size;")
+        lines.append("    short bold, mono;")
+        lines.append("    const face_glyph *glyphs;")
+        lines.append("    const unsigned char *pixels;")
+        lines.append("} face_t;")
+        lines.append("")
+    lines.append("static const face_t %s_faces[%s_SIZES] = {" % (prefix, up))
+    for size, weight, mono, _ in faces:
+        tag = "%d%s%s" % (size, weight, "m" if mono else "")
+        lines.append("    { %d, %d, %d, %s_g_%s, %s_px_%s },   /* %dpx %s%s */"
+                     % (size, 1 if weight else 0, 1 if mono else 0,
+                        prefix, tag, prefix, tag, size,
+                        "bold" if weight else "regular",
+                        " monospaced" if mono else ""))
     lines.append("};")
     lines.append("")
 
     with open(path, "w", newline="") as f:
         f.write("\n".join(lines))
-    return sum(len(d) for _s, _w, face in faces for (*_m, d) in face)
+    return sum(len(d) for _s, _w, _mo, face in faces for (*_m, d) in face)
 
 
 def main():
+    if "--mono" in sys.argv:
+        # Rendered as a caller would, one cell at a time, because the thing
+        # worth looking at is whether the columns line up and whether m and w
+        # have been squeezed past legibility.
+        size = int(sys.argv[sys.argv.index("--mono") + 1]) if "--mono" in sys.argv[:-1] else 15
+        set_weight("")
+        face = build(size, "", 1)
+        step = int(round(MONO_ADV * size / EM))
+        lines = ["MWmw iIl1 ->=+ {}[]", "for (i = 0; i < n; i++) {", "  x |= 0xFF & ~y;  /* a */"]
+        for text in lines:
+            rows = [[" "] * (step * len(text) + 4) for _ in range(size + 6)]
+            for i, ch in enumerate(text):
+                if ch not in ORDER:
+                    continue
+                w, h, left, top, adv, data = face[ORDER.index(ch)]
+                for gy in range(h):
+                    for gx in range(w):
+                        v = data[gy * w + gx]
+                        if v < 40:
+                            continue
+                        ry = (size * 4 // 5) - top + gy + 1
+                        rx = i * step + left + 1
+                        if 0 <= ry < len(rows) and 0 <= rx < len(rows[0]):
+                            rows[ry][rx] = "@" if v > 170 else ("+" if v > 90 else ".")
+            print("  |" + "".join(rows[0]).rstrip() + "|")
+            for r in rows[1:]:
+                line = "".join(r).rstrip()
+                if line:
+                    print("  |" + line + "|")
+        print("  cell %dpx wide, %dpx em" % (step, size))
+        return 0
+
     if "--preview" in sys.argv:
         size = 22
         set_weight("b" if "--bold" in sys.argv else "")
@@ -1038,8 +1159,14 @@ def main():
 
     n1 = emit("include/face.h", True, FACES_KERNEL, "face")
     n2 = emit("userland/face.h", False, FACES_USER, "face")
-    print("  include/face.h    %d faces, %d bytes of coverage" % (len(FACES_KERNEL), n1))
-    print("  userland/face.h   %d faces, %d bytes of coverage" % (len(FACES_USER), n2))
+    n3 = emit("userland/facetext.h", True, FACES_TEXT, "tface",
+              decls=False, include="face.h")
+    print("  include/face.h      %d faces, %d bytes of coverage"
+          % (len(FACES_KERNEL), n1))
+    print("  userland/face.h     %d faces, %d bytes of coverage"
+          % (len(FACES_USER), n2))
+    print("  userland/facetext.h %d faces, %d bytes of coverage"
+          % (len(FACES_TEXT), n3))
     return 0
 
 

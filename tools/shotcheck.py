@@ -57,7 +57,11 @@ MENU_ITEM_H = 24
 MENU_PAD = 4                  # the inset above the first entry
 MENU_BRAND = 26               # the strip down the left, which is not a row
 MENU_RECT = (0, 300, 226, 728)
-MENU_PANEL = (0xD6, 0xD3, 0xCD)   # the surface everything is built from
+# The launcher panel. This is the modern look's overlay colour, which is the
+# surface lifted one step; under the built look it was the surface itself,
+# and the two are different enough that a check written against one sees
+# nothing at all under the other.
+MENU_PANEL = (0xF3, 0xF3, 0xF6)
 PAGE = (120, 120, 700, 480)
 
 # Everything above the panel.

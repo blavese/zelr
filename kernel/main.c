@@ -36,9 +36,11 @@
 #include "clipboard.h"
 #include "rtc.h"
 #include "rng.h"
+#include "fpu.h"
 #include "smp.h"
 #include "acpi.h"
 #include "vfs.h"
+#include "fd.h"
 #include "builtin.h"
 #include "layout.h"
 #include "selftest.h"
@@ -252,6 +254,13 @@ void kmain(handoff_t *h) {
     heap_bytes = heap_size_for(h);
     pmm_reserve(HEAP_BASE, heap_bytes);
 
+    /* Before anything runs a program, because a program compiled with the
+       vector instructions takes an invalid opcode on its first one until
+       this has happened. Cheap, and per processor: the others do the same
+       for themselves when they start. */
+    fpu_init();
+    kprintf("  fpu     sse enabled, %d bytes of state per task\n", FPU_AREA);
+
     bb_mark("paging");
     paging_init(h);
     /* Before anything is mapped, because it decides what a mapping means. */
@@ -310,6 +319,7 @@ void kmain(handoff_t *h) {
     bb_mark("filesystem");
     fs_init();
     vfs_init();
+    fd_init();
     bb_mark("disk");
     if (blk_init()) {
         kprintf("  disk    %s via %s, %d MiB\n", blk_model(), blk_driver(), blk_sectors() / 2048);

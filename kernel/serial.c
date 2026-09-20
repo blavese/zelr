@@ -2,6 +2,7 @@
    terminal, so the automated tests read the OS's output from here. */
 #include "serial.h"
 #include "io.h"
+#include "signal.h"
 #include "idt.h"
 #include "pic.h"
 
@@ -45,6 +46,15 @@ static void serial_isr(registers_t *r) {
         while (inb(COM1 + 5) & 1) {
             char c = (char)inb(COM1);
             rx_isr_bytes++;
+
+            /* An interrupt has to be noticed here rather than where this
+               ring is drained, because while the program being interrupted
+               is running nobody drains it: the shell that would is blocked
+               waiting for that very program. The byte is kept as well as
+               acted on, so a shell at its prompt still sees it and can
+               throw away the line it had half typed. */
+            if (c == 3) signal_interrupt();
+
             u32 next = (rx_head + 1) % RXSZ;
             if (next != rx_tail) { rx[rx_head] = c; rx_head = next; }
             else rx_overruns++;             /* our ring was full */

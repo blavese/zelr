@@ -53,7 +53,15 @@ run() {
    printf '\n'; sleep 1.5
    s="cat booted.txt"
    for (( i=0; i<${#s}; i++ )); do printf '%s' "${s:$i:1}"; sleep 0.05; done
-   printf '\n'; sleep 2.5) \
+   printf '\n'; sleep 2.5
+   # And then stop it. Nothing used to, so each of the four paths ran
+   # until `timeout` killed it ninety seconds after it had finished,
+   # which was nearly the whole of this check. A reboot rather than a
+   # poweroff so nothing is flushed on the way out, and qemu exits
+   # rather than restarting because -no-reboot is already below.
+   s="reboot"
+   for (( i=0; i<${#s}; i++ )); do printf '%s' "${s:$i:1}"; sleep 0.05; done
+   printf '\n'; sleep 1) \
     | timeout 90 "$QEMU" "$@" -m 256 -no-reboot -display none -serial stdio \
         > "$out" 2>&1 || true
 

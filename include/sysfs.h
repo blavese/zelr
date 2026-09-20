@@ -16,6 +16,19 @@
  * The VFS checks here before either of the real backends, so these paths
  * cannot be shadowed by a file somebody writes on the disk. */
 
+/* How many built-in programs there is room for.
+ *
+ * Public, and asserted against in kernel/builtin.c, because this number was
+ * private and the table outgrew it: registering the seventeenth program
+ * returned quietly, the last one in the list was the browser, and /bin
+ * simply did not have a browser in it any more. Nothing said so — not the
+ * build, not the boot, not the kernel's own checks. A screenshot did, two
+ * hundred checks later.
+ *
+ * So the number is here, where the table that has to fit in it can see it,
+ * and the fit is now a compile error rather than a program that vanishes. */
+#define SYSFS_MAX_PROGRAMS 32
+
 /* Fills out with text and returns how many bytes it wrote. Called with a
    buffer of at least SYSFS_MAX bytes. */
 #define SYSFS_MAX 4096
