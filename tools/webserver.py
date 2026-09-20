@@ -237,6 +237,50 @@ def filler(n):
 BIG = filler(200000)
 
 
+
+# A form, and a page that says back exactly what arrived. The value of this
+# one is that it is the server deciding what was received rather than the
+# browser reporting what it thinks it sent: a client that escapes a space
+# wrongly, or sends a box that was never ticked, looks correct from inside
+# itself and wrong here.
+# Every control is given a colour of its own, because the check that drives
+# this has to find them on the screen, and a field is otherwise the same
+# white as the page behind it. The unnamed box is there to be left out: a
+# control with no name sends nothing, and a client that sent it anyway would
+# look perfectly correct from inside itself.
+FORM = b"""<html><head><title>a form</title></head><body>
+<style>
+#q{background:#00A000}
+#deep{background:#C000C0}
+#go{background:#E08000}
+#spare{background:#00C0C0}
+#off{background:#808000}
+</style>
+<h1>Ask something</h1>
+<form action="/said" method="get">
+<input id="q" name="q" size="24" value="">
+<input id="spare" size="6" value="ignored">
+<input id="deep" type="checkbox" name="deep" value="yes">
+<input id="off" type="checkbox" name="off" value="no">
+<input type="hidden" name="from" value="zelr">
+<input id="go" type="submit" value="Search">
+</form>
+</body></html>"""
+
+POSTED = b"""<html><head><title>a form that posts</title></head><body>
+<style>#q{background:#00A000}#go{background:#E08000}</style>
+<h1>Say something</h1>
+<form action="/said" method="post">
+<input id="q" name="q" size="24" value="">
+<input id="go" type="submit" value="Send">
+</form>
+</body></html>"""
+
+# What the server was actually sent, which is the only account of a form that
+# is not the client marking its own work.
+RECEIVED = []
+
+
 class Handler(http.server.BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
@@ -252,11 +296,43 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _said(self, how, text):
+        RECEIVED.append((how, text))
+        """What arrived, as a page, with the pairs one to a line."""
+        out = [b"<html><head><title>said</title></head><body><h1>said</h1>"]
+        out.append(b"<p id=how>" + how.encode() + b"</p><ul>")
+        for pair in text.split("&"):
+            if not pair:
+                continue
+            out.append(b"<li>" + pair.encode() + b"</li>")
+        # A way on to the form that posts, so a check does not have to type
+        # an address: typing one goes through the serial port a character at
+        # a time and the guest drops what it cannot drain in time.
+        out.append(b"</ul><p><a href=\"/posts\">post one</a></p>"
+                   b"</body></html>")
+        self._send(b"".join(out))
+
+    def do_POST(self):
+        path = self.path.split("?")[0]
+        n = int(self.headers.get("Content-Length") or 0)
+        body = self.rfile.read(n).decode("latin-1")
+        if path == "/said":
+            self._said("post", body)
+        else:
+            self._send(b"<html><body><h1>404</h1></body></html>", status=404)
+
     def do_GET(self):
         path = self.path.split("?")[0]
+        query = self.path.split("?", 1)[1] if "?" in self.path else ""
 
         if path == "/" or path == "/index.html":
             self._send(PAGE)
+        elif path == "/form":
+            self._send(FORM)
+        elif path == "/posts":
+            self._send(POSTED)
+        elif path == "/said":
+            self._said("get", query)
         elif path == "/second":
             self._send(SECOND)
         elif path == "/styled":
@@ -345,6 +421,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
 class Server:
     """Started with `with`, so a check that fails still puts the port back."""
+
+    def received(self):
+        """Every form this server was sent, oldest first."""
+        return list(RECEIVED)
+
+    def forget(self):
+        del RECEIVED[:]
 
     def __init__(self):
         self.httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)

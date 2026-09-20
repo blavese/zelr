@@ -116,6 +116,187 @@ static const picture *pic_of(int node) {
     return 0;
 }
 
+/* --- what is being typed into ---------------------------------------------
+ *
+ * A control holds its value in the document, as the attribute a page would
+ * have written it in, so that there is one answer to what is in a field and
+ * everything reads it from the same place: the layout sizes the box, the
+ * drawing writes the value into it, a script that asks gets what is on the
+ * screen, and submitting sends exactly what can be seen.
+ *
+ * Keeping it anywhere else means two answers that agree until somebody
+ * types.
+ */
+static int focus_node = -1;
+
+/* The same editor the address bar uses, pointed at whichever control has the
+   keyboard. One of them, rather than one per field: only one can be typed
+   into, and the value is written back to the document on every keystroke, so
+   there is nothing to keep for the others. */
+static char     focus_buf[1024];
+static ui_field focus_field = { focus_buf, sizeof(focus_buf), 0, 0, 0 };
+
+static int field_checked(int el) {
+    const char *v = dom_attr(&doc, el, "checked");
+    return v && !w_same(v, "0");
+}
+
+/* A checkbox written with a bare `checked` has an empty value, which is not
+   the same as not being there; unchecking one has to leave something
+   behind, so it leaves a nought. */
+static void field_set_checked(int el, int on) {
+    dom_attr_set(&doc, el, "checked", on ? "1" : "0");
+}
+
+static const char *field_value(int el, int kind) {
+    return lay_control_label(&doc, el, kind);
+}
+
+static void field_set_value(int el, const char *v) {
+    dom_attr_set(&doc, el, "value", v);
+}
+
+/* The form an element is in, or -1. Walked up rather than looked up: a page
+   may name a form anywhere and nest one nowhere, and the enclosing element
+   is what the markup actually says. */
+static int form_of(int el) {
+    while (el >= 0) {
+        if (doc.nodes[el].kind == DN_ELEMENT && doc.nodes[el].tag == T_FORM)
+            return el;
+        el = doc.nodes[el].parent;
+    }
+    return -1;
+}
+
+static void focus_control(int el) {
+    focus_node = el;
+    focus_field.focused = 0;
+    focus_buf[0] = 0;
+    focus_field.len = 0;
+    focus_field.cursor = 0;
+    if (el < 0) return;
+
+    int ck = lay_control_kind(&doc, el);
+    if (ck != CTL_TEXT && ck != CTL_PASSWORD && ck != CTL_AREA) return;
+
+    w_copy(focus_buf, sizeof(focus_buf), field_value(el, ck),
+           sizeof(focus_buf));
+    focus_field.len = w_len(focus_buf);
+    focus_field.cursor = focus_field.len;
+    focus_field.focused = 1;
+}
+
+/* --- sending a form -------------------------------------------------------
+ *
+ * Everything a form holds, named and escaped, in document order, which is
+ * the order a server is entitled to expect.
+ *
+ * A control with no name sends nothing, which is how a page marks the boxes
+ * that are for the reader rather than for the server. A checkbox that is
+ * not ticked sends nothing at all rather than sending "off": the absence is
+ * the message, and a server reading a ticked box and an unticked one as two
+ * different values of the same key is the one thing this must not do.
+ */
+static char go_to[URL_TEXT];
+static int  load_post;
+static char post_body[4096];
+static int  want_go;
+static int  go_is_post;
+
+static void url_encode_into(char *out, int cap, int *at, const char *v) {
+    static const char *hex = "0123456789ABCDEF";
+    for (const char *q = v; *q && *at < cap - 4; q++) {
+        unsigned char c = (unsigned char)*q;
+        if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')
+            || (c >= '0' && c <= '9')
+            || c == '-' || c == '_' || c == '.' || c == '~')
+            out[(*at)++] = (char)c;
+        else if (c == ' ')
+            out[(*at)++] = '+';
+        else {
+            out[(*at)++] = '%';
+            out[(*at)++] = hex[c >> 4];
+            out[(*at)++] = hex[c & 15];
+        }
+    }
+    out[*at] = 0;
+}
+
+static int form_query(int form, char *out, int cap) {
+    int at = 0;
+    out[0] = 0;
+    for (int i = 0; i < doc.count; i++) {
+        if (doc.nodes[i].kind != DN_ELEMENT) continue;
+
+        int ck = lay_control_kind(&doc, i);
+        if (ck == CTL_NONE || ck == CTL_BUTTON) continue;
+        if (form_of(i) != form) continue;
+
+        const char *name = dom_attr(&doc, i, "name");
+        if (!name || !*name) continue;
+        if ((ck == CTL_CHECK || ck == CTL_RADIO) && !field_checked(i)) continue;
+
+        /* Copied out before anything else is read: the value of a textarea
+           comes back in a buffer that the next read of any label reuses. */
+        char keep[1024];
+        if (ck == CTL_CHECK || ck == CTL_RADIO) {
+            const char *vv = dom_attr(&doc, i, "value");
+            w_copy(keep, sizeof(keep), vv && *vv ? vv : "on", sizeof(keep));
+        } else {
+            w_copy(keep, sizeof(keep), field_value(i, ck), sizeof(keep));
+        }
+
+        if (at && at < cap - 1) out[at++] = '&';
+        url_encode_into(out, cap, &at, name);
+        if (at < cap - 1) out[at++] = '=';
+        url_encode_into(out, cap, &at, keep);
+    }
+    out[at] = 0;
+    return at;
+}
+
+static void submit_form(int form) {
+    if (form < 0) return;
+
+    char query[sizeof(post_body)];
+    form_query(form, query, (int)sizeof(query));
+
+    const char *action = dom_attr(&doc, form, "action");
+    const char *method = dom_attr(&doc, form, "method");
+    int post = method && lay_same_fold(method, "post");
+
+    /* A form with no action goes back to the page it is on, which is what
+       the specification says and what a search box on a site relies on. */
+    url_t target;
+    if (action && *action) {
+        if (!url_join(&here, action, &target)) return;
+    } else {
+        url_copy(&target, &here);
+    }
+
+    url_text(&target, go_to, sizeof(go_to));
+
+    /* Whatever query the current address had is the previous answer's, not
+       this form's, and carrying it would send both. */
+    for (int i = 0; go_to[i]; i++)
+        if (go_to[i] == '?') { go_to[i] = 0; break; }
+
+    go_is_post = post;
+    post_body[0] = 0;
+    if (post) {
+        w_copy(post_body, sizeof(post_body), query, sizeof(post_body));
+    } else if (query[0]) {
+        int n = w_len(go_to);
+        if (n < (int)sizeof(go_to) - 2) {
+            go_to[n++] = '?';
+            go_to[n] = 0;
+            w_copy(go_to + n, (int)sizeof(go_to) - n, query,
+                   (int)sizeof(go_to) - n);
+        }
+    }
+    want_go = 1;
+}
+
 /* What the page's own scripts did, for the status line to mention. */
 static int   scripts_ran;
 static int   scripts_changed;      /* one of them wrote to the document */
@@ -389,6 +570,7 @@ static void build(const char *html, int len, int width, int want_sheets,
        out: a script that writes to an element is writing to the document
        the layout is about to read, so running them afterwards would show
        the page as it was and correct it a frame later. */
+    focus_control(-1);
     script_err[0] = 0;
     said_script_err = 0;
     scripts_ran = 0;
@@ -467,7 +649,16 @@ static void load(const char *address, int width, int keep_scroll) {
     url_copy(&here, &u);
     say("fetching ", address);
 
-    int rc = web_get(&here, src, SRC_MAX, &reply);
+    /* A form sent with POST is the one fetch that carries something, and
+       it is spent once: going back to it afterwards asks again with GET
+       rather than sending the form a second time. */
+    int rc;
+    if (load_post) {
+        load_post = 0;
+        rc = web_post(&here, post_body, src, SRC_MAX, &reply);
+    } else {
+        rc = web_get(&here, src, SRC_MAX, &reply);
+    }
     if (rc < 0) {
         /* A refused certificate has a reason worth reading, and it is the
            one kind of failure where the difference between "expired" and
@@ -643,6 +834,78 @@ static void draw_page(surface *s, int ox, int oy, int vw, int vh) {
             continue;
         }
 
+        if (it->kind == LK_FIELD) {
+            int ck = lay_control_kind(&doc, it->node);
+            int focused = (it->node == focus_node);
+            u32 edge = focused ? 0x3B6FD6 : 0xA9A9A9;
+            int w = it->w, h = it->h;
+
+            /* A page that styles its fields gets the fields it styled.
+               Without a colour of its own a text box is paper and a button
+               is the colour of a button. */
+            u32 inside = it->has_bg ? it->bg
+                       : (ck == CTL_BUTTON ? 0xE6E6EA : 0xFFFFFF);
+
+            if (ck == CTL_CHECK || ck == CTL_RADIO) {
+                rect(s, x, sy, w, h, inside);
+                rect(s, x, sy, w, 1, edge);
+                rect(s, x, sy + h - 1, w, 1, edge);
+                rect(s, x, sy, 1, h, edge);
+                rect(s, x + w - 1, sy, 1, h, edge);
+                if (field_checked(it->node)) {
+                    if (ck == CTL_RADIO) disc(s, x + w / 2, sy + h / 2,
+                                              w / 4, 0x1A1A1A);
+                    else rect(s, x + 3, sy + 3, w - 6, h - 6, 0x1A1A1A);
+                }
+                continue;
+            }
+
+            rect(s, x, sy, w, h, inside);
+            rect(s, x, sy, w, 1, edge);
+            rect(s, x, sy + h - 1, w, 1, edge);
+            rect(s, x, sy, 1, h, edge);
+            rect(s, x + w - 1, sy, 1, h, edge);
+
+            /* Read out of the document now rather than held from when the
+               page was laid out, because typing changes it and typing does
+               not lay the page out again. */
+            const char *val = field_value(it->node, ck);
+            char shown[192];
+            int n = 0;
+            if (ck == CTL_PASSWORD) {
+                for (const char *q = val; *q && n < (int)sizeof(shown) - 1; q++)
+                    shown[n++] = '*';
+            } else {
+                for (const char *q = val; *q && n < (int)sizeof(shown) - 1; q++)
+                    shown[n++] = (*q == '\n' || *q == '\r') ? ' ' : *q;
+            }
+            shown[n] = 0;
+
+            /* The end of it rather than the start: somebody typing wants to
+               see what they are typing, and a field that shows the first
+               twenty characters of what they wrote is one they cannot use. */
+            int room = w - 10;
+            int from = 0;
+            while (from < n && tface_wn(shown + from, n - from, it->face) > room)
+                from++;
+
+            int th = tface_h(it->face);
+            int ty = sy + (h - th) / 2;
+            if (ck == CTL_AREA) ty = sy + 4;
+            int tx = x + 5;
+            if (ck == CTL_BUTTON)
+                tx = x + (w - tface_wn(shown + from, n - from, it->face)) / 2;
+
+            tface_draw(s, tx, ty, shown + from, 0x1A1A1A, it->face);
+
+            if (focused && ck != CTL_BUTTON) {
+                int cx = tx + tface_wn(shown + from, n - from, it->face);
+                if (cx > x + w - 3) cx = x + w - 3;
+                rect(s, cx + 1, ty, 1, th, 0x1A1A1A);
+            }
+            continue;
+        }
+
         if (it->kind == LK_BULLET) {
             if (it->at >= 0)
                 tface_draw(s, x, sy, page.text + it->at, it->color, it->face);
@@ -754,6 +1017,17 @@ void _start(void) {
             if (ev.type == WIN_EV_CLOSE) { closing = 1; break; }
             if (ev.type == WIN_EV_SCROLL) scrolled += ev.y;
             ui_feed(&in, &ev);
+
+            /* One frame holds sixteen keys and this loop drains the whole
+               queue, so everything past the sixteenth used to be read out
+               of the queue and thrown away. Nothing reports that: what it
+               looks like is an address bar that loses most of a long
+               address, which reads as the keyboard or the network rather
+               than as this.
+             *
+             * Left in the queue instead. There is a frame owed already --
+             * keys arrived -- and the next pass takes the next sixteen. */
+            if (in.nkeys >= UI_KEYS) break;
         }
         if (closing) break;
 
@@ -794,6 +1068,26 @@ void _start(void) {
                     bar_fresh = 0;
                     ui_field_key(&bar, raw);
                 }
+            } else if (focus_node >= 0) {
+                int ck = lay_control_kind(&doc, focus_node);
+                if (k == 27) {
+                    focus_control(-1);
+                } else if (k == '\n' && ck != CTL_AREA) {
+                    /* Return in a field sends the form it is in, which is
+                       how a search box has always worked and the only way
+                       to use one that has no button beside it. */
+                    int f = form_of(focus_node);
+                    focus_control(-1);
+                    submit_form(f);
+                } else if (ck == CTL_CHECK || ck == CTL_RADIO) {
+                    if (k == ' ')
+                        field_set_checked(focus_node,
+                                          !field_checked(focus_node));
+                } else {
+                    ui_field_key(&focus_field, raw);
+                    field_set_value(focus_node, focus_buf);
+                }
+                dirty = 1;
             } else {
                 int pg = view_h - 40;
                 if (k == KEY_DOWN)       scroll += 40;
@@ -826,6 +1120,17 @@ void _start(void) {
            part of the way through whatever it was doing. */
         if (jsdom_live() && jsdom_timers() && jsdom_changed()) {
             relayout(view_w - UI_PAD * 2);
+            dirty = 1;
+        }
+
+        /* Where a form asked to go, once the click or the key that sent
+           it has been dealt with. */
+        if (want_go) {
+            want_go = 0;
+            load_post = go_is_post;
+            set_address(go_to);
+            push_history(go_to);
+            want_load = 1;
             dirty = 1;
         }
 
@@ -933,6 +1238,53 @@ void _start(void) {
             }
             if (stop) in.released = 0;
         }
+
+        /* A control takes the click before a link does. It comes after the
+           page has had it, so a handler that says the ordinary thing should
+           not happen has already cleared the release and neither the field
+           nor the link sees it. */
+        if (in.released && node_under >= 0) {
+            int ck = lay_control_kind(&doc, node_under);
+            if (ck != CTL_NONE && ck != CTL_HIDDEN) {
+                in.released = 0;
+                bar.focused = 0;
+                dirty = 1;
+
+                if (ck == CTL_CHECK) {
+                    field_set_checked(node_under, !field_checked(node_under));
+                    focus_control(node_under);
+                } else if (ck == CTL_RADIO) {
+                    /* One of a name at a time, which is the only thing that
+                       makes a radio button different from a checkbox. */
+                    const char *nm = dom_attr(&doc, node_under, "name");
+                    int mine = form_of(node_under);
+                    if (nm && *nm)
+                        for (int i = 0; i < doc.count; i++) {
+                            if (lay_control_kind(&doc, i) != CTL_RADIO) continue;
+                            if (form_of(i) != mine) continue;
+                            const char *o = dom_attr(&doc, i, "name");
+                            if (o && w_same(o, nm)) field_set_checked(i, 0);
+                        }
+                    field_set_checked(node_under, 1);
+                    focus_control(node_under);
+                } else if (ck == CTL_BUTTON) {
+                    const char *t = dom_attr(&doc, node_under, "type");
+                    focus_control(-1);
+                    if (!(t && lay_same_fold(t, "reset")))
+                        submit_form(form_of(node_under));
+                } else {
+                    focus_control(node_under);
+                }
+            }
+        }
+
+        /* Clicking anywhere else puts the field down, so that what is typed
+           next scrolls the page rather than going into a box nobody is
+           looking at. */
+        if (in.released && focus_node >= 0
+            && (node_under < 0
+                || lay_control_kind(&doc, node_under) == CTL_NONE))
+            focus_control(-1);
 
         if (over_link >= 0 && in.released) {
             in.released = 0;

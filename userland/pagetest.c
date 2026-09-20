@@ -546,6 +546,28 @@ int main(void) {
             "waiting");
     }
 
+    /* What is in a field, as a script sees it. The same attribute the
+       browser types into and the layout draws, so all three agree. */
+    {
+        load("<body><input id=f value='before'><input id=c type=checkbox>"
+             "<script>"
+             "var f = document.getElementById('f');"
+             "document.title = f.value;"
+             "f.value = 'after';"
+             "document.getElementById('c').checked = true;"
+             "</script></body>");
+
+        char err[128];
+        int changed = 0;
+        run_scripts(&page, err, (int)sizeof(err), &changed);
+        oks("a script reads what is in a field",
+            page.title >= 0 ? page.arena + page.title : "", "before");
+        oks("and writing it puts it there",
+            dom_attr(&page, dom_by_id(&page, "f"), "value"), "after");
+        oks("and a box it ticks is ticked",
+            dom_attr(&page, dom_by_id(&page, "c"), "checked"), "1");
+    }
+
     puts(failed ? "PAGETEST_FAIL\n" : "PAGETEST_PASS\n");
     return failed;
 }
