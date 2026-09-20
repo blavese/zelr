@@ -453,13 +453,23 @@ bool theme_reload(void) {
     return memcmp(&before, &current, sizeof(theme_t)) != 0;
 }
 
-void theme_set_volume(int percent) {
+/* The level, applied but not written down.
+ *
+ * Dragging a slider changes it once for every pixel the hand travels, and
+ * writing it down is a write to the disk. Two hundred of those inside one
+ * gesture is a slider that lags behind the pointer for a reason that has
+ * nothing to do with sound. Whoever is dragging saves once, at the end. */
+bool theme_set_volume_live(int percent) {
     if (percent < 0) percent = 0;
     if (percent > 100) percent = 100;
-    if (percent == current.volume) return;
+    if (percent == current.volume) return false;
     current.volume = percent;
     sound_set_volume((u32)percent);
-    theme_save();
+    return true;
+}
+
+void theme_set_volume(int percent) {
+    if (theme_set_volume_live(percent)) theme_save();
 }
 
 static int put_hex(char *out, u32 v) {

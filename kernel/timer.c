@@ -56,8 +56,27 @@ void timer_init(u32 hz) {
 u64 timer_ticks(void) { return ticks; }
 u32 timer_hz(void)    { return frequency; }
 
+/* Asked for milliseconds, delivered in ticks, and never fewer than one.
+ *
+ * The timer runs at a hundred hertz, so anything under ten milliseconds used
+ * to divide to zero ticks and this returned without waiting for anything.
+ * That is not a short sleep; it is a busy loop wearing the word sleep, and
+ * every caller that used it to pace something got no pacing at all.
+ *
+ * What it cost: the sound buffer's writer waits for room by sleeping two
+ * milliseconds at a time and gives up when two hundred and fifty of those
+ * pass without the hardware moving. At zero milliseconds each that is a few
+ * microseconds, so any note longer than the third of a second the buffer
+ * holds was abandoned a third of the way through -- silently, because
+ * nothing checks how much of a note was accepted. A one second note played
+ * for a third of a second and the machine reported nothing wrong.
+ *
+ * Rounded up rather than down, for the same reason: a sleep that is asked
+ * for and not taken is worse than one that is a few milliseconds long. */
 void sleep_ms(u32 ms) {
-    u32 delta = (ms * frequency) / 1000u;
+    if (!ms) return;
+    u32 delta = (ms * frequency + 999u) / 1000u;
+    if (!delta) delta = 1;
     u64 target = ticks + delta;
     while (ticks < target) __asm__ volatile ("hlt");
 }

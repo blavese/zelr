@@ -48,29 +48,107 @@
 #include "io.h"
 #include "blackbox.h"
 
-#define HEAP_BASE (8u * 1024 * 1024)
-#define HEAP_MIN  (16ull * 1024 * 1024)
-/* The heap has to stay inside the part of memory that is mapped a page at a
-   time, because it is reserved and handed out before the rest of the map
-   exists. */
-#define HEAP_MAX  (KERNEL_LOW_MB * 1024 * 1024 - HEAP_BASE)
+extern u8 __kernel_end[];
+
+/* Where the kernel's own memory starts.
+ *
+ * It was eight megabytes, fixed, with the kernel image and the frame bitmap
+ * that describes all of memory squeezed in underneath. The image carries
+ * every user program inside it and had grown to seven and a half, which left
+ * four hundred kilobytes for the bitmap and no warning at all about what
+ * happens when the next program is added: the bitmap gets no room, decides
+ * it can describe nothing, and the machine reports no memory and stops.
+ *
+ * So it follows the image instead, with two megabytes left for the bitmap,
+ * which is what it takes to describe the sixty four gigabytes this kernel
+ * will map. */
+#define BITMAP_ROOM (2ull * 1024 * 1024)
+
+static u64 heap_base(void) {
+    u64 a = (u64)__kernel_end + BITMAP_ROOM;
+    return (a + 0xFFFFFull) & ~0xFFFFFull;      /* to the next megabyte */
+}
+
+/* The floor. The compositor's back buffer and the copy of it the flush
+   compares against are the two largest things this kernel ever allocates,
+   and how large is decided by the panel: 3 MiB each at 1024x768, 8 at
+   1920x1080, 32 at 3840x2160. What too small a heap looks like is worth
+   spelling out, because it is not an error message: the allocation fails,
+   the framebuffer is never adopted, and the fallback for having no
+   framebuffer is VGA text mode, which a machine that booted through UEFI
+   does not have. So it boots, and the screen stays black, and nothing says
+   why. */
+#define HEAP_MIN  (24ull * 1024 * 1024)
+
+/* And the ceiling, and the share.
+ *
+ * The old answer was sixteen megabytes plus room for the screen, on a
+ * machine with 256 MiB and on one with 4 GiB alike. That is the literal
+ * reason giving zelr four gigabytes changed nothing whatsoever: nothing in
+ * it would ever ask for the difference. A quarter, to half a gigabyte, is
+ * the kernel taking a share of what it was given and leaving the rest for
+ * the programs, which get theirs a page at a time from the frame allocator
+ * and can use all of it. */
+#define HEAP_SHARE 4
+#define HEAP_CEIL  (512ull * 1024 * 1024)
 
 static u64 heap_bytes = HEAP_MIN;
 
-/* The compositor's back buffer is the largest single thing this kernel ever
-   allocates, and how large is decided by the panel rather than by anything
-   here: 8 MiB at 1920x1080, 20 at 2880x1800, 32 at 3840x2160. The last two
-   are ordinary laptop screens now and neither fits in a fixed 16 MiB heap.
-   What that failure looks like is worth spelling out, because it is not an
-   error message: the allocation fails, the framebuffer is never adopted, and
-   the fallback for having no framebuffer is VGA text mode, which a machine
-   that booted through UEFI does not have. So it boots, and the screen stays
-   black, and nothing says why. */
-static u64 heap_size_for(const handoff_t *h) {
-    if (!h->fb_base || !h->fb_pitch || !h->fb_height) return HEAP_MIN;
-    u64 screen = (u64)h->fb_pitch * 4ull * (u64)h->fb_height;
-    u64 want = HEAP_MIN + ((screen + 0xFFFFFull) & ~0xFFFFFull);
-    return want > HEAP_MAX ? HEAP_MAX : want;
+static u64 usable_total(const handoff_t *h) {
+    u64 n = 0;
+    for (u64 i = 0; i < h->region_count; i++)
+        if (h->regions[i].type == MEM_USABLE) n += h->regions[i].len;
+    return n;
+}
+
+/* Usable memory that runs without a break from here.
+ *
+ * The heap is one block, so this is the honest ceiling: memory on the far
+ * side of a hole the firmware reserved is still memory and is still handed
+ * out a page at a time, but it is not part of this. Regions are not required
+ * to be in order, so this grows the end until nothing extends it. */
+static u64 usable_run_from(const handoff_t *h, u64 from) {
+    u64 end = from;
+    for (u64 pass = 0; pass < HANDOFF_MAX_REGIONS; pass++) {
+        u64 was = end;
+        for (u64 i = 0; i < h->region_count; i++) {
+            const mem_region_t *r = &h->regions[i];
+            if (r->type != MEM_USABLE) continue;
+            if (r->base > end || r->base + r->len <= end) continue;
+            end = r->base + r->len;
+        }
+        if (end == was) break;
+    }
+    return end > from ? end - from : 0;
+}
+
+static u64 heap_size_for(const handoff_t *h, u64 base) {
+    u64 screen = (h->fb_base && h->fb_pitch && h->fb_height)
+               ? (u64)h->fb_pitch * 4ull * (u64)h->fb_height : 0;
+    u64 need = HEAP_MIN + ((screen * 2 + 0xFFFFFull) & ~0xFFFFFull);
+
+    u64 share = usable_total(h) / HEAP_SHARE;
+    u64 want = share > need ? share : need;
+    if (want > HEAP_CEIL) want = HEAP_CEIL;
+
+    /* Never past the end of the run it sits in, and leave a megabyte of it
+       so that the frame allocator is not handed a heap with nothing beside
+       it. */
+    u64 run = usable_run_from(h, base);
+    run = run > (1024ull * 1024) ? run - (1024ull * 1024) : 0;
+    if (want > run) want = run;
+
+    /* Below the line the kernel maps a page at a time, anything goes. Above
+       it, memory is mapped two megabytes at a time and only where a whole
+       one of them is usable, so a heap that crosses the line has to end on
+       one of those boundaries to be sure of being mapped at all. */
+    u64 low = KERNEL_LOW_MB * 1024ull * 1024ull;
+    if (base + want > low) {
+        u64 end = (base + want) & ~(2ull * 1024 * 1024 - 1);
+        want = end > base ? end - base : 0;
+    }
+
+    return want;
 }
 
 static bool want_selftest = false;
@@ -244,15 +322,16 @@ void kmain(handoff_t *h) {
     bb_mark("pic");
     pic_init();      kprintf("  pic     irqs remapped to 32..47\n");
     bb_mark("memory");
-    pmm_init(h, HEAP_BASE);
-                     kprintf("  memory  %d KiB usable, via %s\n",
-                             (u32)(pmm_free_frames() * 4), h->loader);
+    u64 hbase = heap_base();
+    pmm_init(h, hbase);
+                     kprintf("  memory  %d MiB usable, via %s\n",
+                             (u32)(pmm_free_frames() / 256), h->loader);
     bb_log("memory %d KiB usable, loader %s",
            (u32)(pmm_free_frames() * 4), h->loader);
     /* The heap lives in identity mapped memory, so the frame allocator
        has to be told about it or it will hand the same pages out twice. */
-    heap_bytes = heap_size_for(h);
-    pmm_reserve(HEAP_BASE, heap_bytes);
+    heap_bytes = heap_size_for(h, hbase);
+    pmm_reserve(hbase, heap_bytes);
 
     /* Before anything runs a program, because a program compiled with the
        vector instructions takes an invalid opcode on its first one until
@@ -268,8 +347,15 @@ void kmain(handoff_t *h) {
     kprintf("  paging  enabled, %d MiB mapped\n",
             (u32)(paging_mapped_bytes() / (1024 * 1024)));
     bb_mark("heap");
-    heap_init(HEAP_BASE, heap_bytes);
-    kprintf("  heap    %d KiB\n", (u32)(heap_bytes / 1024));
+    heap_init(hbase, heap_bytes);
+    /* Said as a share rather than as a number, because the number on its own
+       does not answer the question anybody actually has, which is whether
+       giving the machine more memory did anything. */
+    kprintf("  heap    %d MiB at %d MiB, %d MiB left for programs\n",
+            (u32)(heap_bytes / (1024 * 1024)),
+            (u32)(hbase / (1024 * 1024)),
+            (u32)(pmm_free_frames() * 4096ull / (1024 * 1024)));
+    bb_log("heap %d MiB at %p", (u32)(heap_bytes / (1024 * 1024)), (void *)hbase);
     /* Needs paging to map the aperture and the heap for the back
        buffer, so this is the earliest it can come up. Anything
        printed before now is only in the serial log. */
@@ -420,10 +506,26 @@ void kmain(handoff_t *h) {
     if (usb_present()) kprintf("  usb     %s\n", usb_describe());
 
     bb_mark("sound");
-    if (sound_init())
+    if (sound_init()) {
         kprintf("  sound   %s, %d Hz\n", sound_describe(), sound_rate());
-    else
-        bb_log("sound none: no hd audio controller answered");
+        bb_log("sound %s, %d Hz", sound_describe(), sound_rate());
+    } else {
+        /* What is on the bus and not being driven, rather than nothing at
+           all. A machine with a sound controller this kernel does not know
+           and a machine with no sound hardware at all used to look
+           identical from here -- both said nothing -- and they need
+           completely different answers from whoever is reading. */
+        pci_dev_t audio[4];
+        u32 n = pci_list_class(0x04, 0x01, audio, 4);          /* multimedia */
+        if (n < 4) n += pci_list_class(0x04, 0x03, audio + n, 4 - n);  /* hda */
+
+        for (u32 i = 0; i < n; i++)
+            kprintf("  sound   %04x:%04x at %d:%d.%d, no driver\n",
+                    audio[i].vendor, audio[i].device,
+                    audio[i].bus, audio[i].slot, audio[i].func);
+        if (!n) kprintf("  sound   no controller found\n");
+        bb_log("sound none, %d undriven controller(s) on the bus", n);
+    }
 
     serial_enable_irq();
     kprintf("  input   ps/2 keyboard + serial (irq driven)\n");
@@ -492,6 +594,10 @@ void kmain(handoff_t *h) {
     /* After the scheduler exists, because it is a task, and the task is how
        anything plugged in later gets noticed at all. */
     usb_start_service();
+    /* Same reason, and the same place: frames arrive whether or not somebody
+       is blocked waiting for one, and since the card's interrupt stopped
+       running the stack there has to be something that does. */
+    net_start_service();
     if (want_selftest) {
         task_create("selftest", selftest_task);
     } else {

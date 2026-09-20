@@ -223,14 +223,20 @@ static u32 volume_base(void) {
 
 /* True only for a volume fat_format made, with room reserved for the log.
    Anything else is somebody's real disk and is not written to. */
+/* Where the log starts inside the volume, learnt from the boot sector the
+   check below reads and remembered for the calls that follow it. Every one
+   of those is made straight after a check that succeeded, so this is never
+   read without having just been written. */
+static u32 log_lba = BB_LBA_MIN;
+
 static bool volume_is_ours(u8 *sec) {
     if (!blk_present()) return false;
     if (!blk_read(volume_base(), 1, sec)) return false;
-    if (sec[510] != 0x55 || sec[511] != 0xAA) return false;
-    if (memcmp(sec + 3, "ZELR    ", 8) != 0) return false;
-    if (*(u32 *)(sec + 39) != 0x5A4C5200u) return false;
-    u16 reserved = *(u16 *)(sec + 14);
-    if (reserved < BB_LBA + BB_SECTORS) return false;
+    if (!fat_boot_is_ours(sec)) return false;
+
+    u32 at = fat_boot_log_lba(sec);
+    if (fat_boot_reserved(sec) < at + BB_SECTORS) return false;
+    log_lba = at;
     return true;
 }
 
@@ -244,7 +250,7 @@ static bool volume_is_ours(u8 *sec) {
  * written over, which holds whatever else the reserved area grows into. */
 static bool region_is_free(void) {
     u8 first[512];
-    if (!blk_read(volume_base() + BB_LBA, 1, first)) return false;
+    if (!blk_read(volume_base() + log_lba, 1, first)) return false;
     if (*(u32 *)first == BB_MAGIC) return true;
     for (u32 i = 0; i < sizeof(first); i++)
         if (first[i]) return false;
@@ -262,7 +268,7 @@ bool bb_flush(void) {
     /* The count comes off the previous record, so it survives a reboot. */
     bb_head_t prev;
     u32 n = 0;
-    if (blk_read(volume_base() + BB_LBA, 1, scratch)) {
+    if (blk_read(volume_base() + log_lba, 1, scratch)) {
         memcpy(&prev, scratch, sizeof(prev));
         if (prev.magic == BB_MAGIC) n = prev.boot;
     }
@@ -279,7 +285,7 @@ bool bb_flush(void) {
     u32 secs = (used + 511) / 512;
     if (secs > BB_SECTORS) secs = BB_SECTORS;
 
-    if (!blk_write(volume_base() + BB_LBA, secs, image)) return false;
+    if (!blk_write(volume_base() + log_lba, secs, image)) return false;
     blk_flush();
     return true;
 }
@@ -297,7 +303,7 @@ void bb_recover(void) {
     saved_len = 0;
 
     if (!volume_is_ours(scratch)) return;
-    if (!blk_read(volume_base() + BB_LBA, BB_SECTORS, saved)) return;
+    if (!blk_read(volume_base() + log_lba, BB_SECTORS, saved)) return;
 
     bb_head_t *h = (bb_head_t *)saved;
     if (h->magic != BB_MAGIC) return;

@@ -208,6 +208,17 @@ static void ap_main(void *arg) {
        random. */
     fpu_init();
 
+    /* And the page attribute table, for the same reason and with a worse
+       failure. It is a register, not a page table entry: what the bit in a
+       mapping selects is decided per processor, and the value the firmware
+       leaves has no write combining entry in it at all. So the framebuffer,
+       mapped write combining and drawn into by the boot processor at full
+       speed, is write back cached on this one -- the pixels go into a cache
+       nothing flushes, and what reaches the screen is whatever happens to be
+       evicted. Nothing used to write to the screen from here, which is why
+       it never showed. */
+    paging_init_pat();
+
     me->info.started = true;
 
     for (;;) {
@@ -231,6 +242,18 @@ static void ap_main(void *arg) {
 }
 
 /* --- handing out work --------------------------------------------------- */
+
+/* An application processor that is up and has nothing to do, or zero.
+ *
+ * Zero is the boot processor and is never an answer: it is the one asking.
+ * Asked rather than remembered, because whether one is free is a question
+ * about right now. */
+u32 smp_helper(void) {
+    if (!active) return 0;
+    for (u32 i = 1; i < ncpus; i++)
+        if (cpus[i].info.started && !cpus[i].fn) return i;
+    return 0;
+}
 
 bool smp_busy(u32 cpu) {
     if (cpu == 0 || cpu >= ncpus) return false;

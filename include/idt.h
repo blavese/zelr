@@ -27,6 +27,21 @@ void idt_load(void);
    the hardware lines and below the system call gate, so it collides with
    neither. */
 #define VEC_AP_WAKE 0xF0
+
+/* And the one a task raises on itself to be switched away from.
+ *
+ * This used to be the timer's vector, because the timer's handler ends in
+ * the scheduler and raising it got the switch for free. What it also got was
+ * the rest of that handler -- the tick counter, the polling, the sound
+ * buffer -- all of it run as though a hundredth of a second had passed when
+ * nothing of the sort had happened.
+ *
+ * The cost was the clock. Every yield added a tick, so the number of ticks
+ * in a second depended on how often the machine happened to give up a slice:
+ * a hundred hertz timer read as two hundred with one task sleeping in a
+ * loop, and every sleep, timeout and deadline in the kernel is counted in
+ * those ticks, so all of them were short together and none of them said so. */
+#define VEC_YIELD   0xF1
 void register_interrupt_handler(u8 n, isr_handler_t h);
 
 /* Whether anything is listening on this vector. Used to decide which lines

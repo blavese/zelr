@@ -26,7 +26,9 @@
 #include "smp.h"
 #include "blockdev.h"
 #include "netdev.h"
+#include "sound.h"
 #include "net.h"
+#include "tcp.h"
 #include "fb.h"
 #include "vfs.h"
 #include "wait.h"
@@ -152,6 +154,16 @@ static u32 render_devices(char *b, u32 cap) {
     else
         put(&o, "disk      none\n");
 
+    /* Where the play position comes from, which is worth reporting rather
+       than hiding: some controllers read the buffer perfectly well and never
+       say how far through it they are, and the kernel keeps time for them. */
+    if (sound_present())
+        put(&o, "sound     %s, %d Hz, %d channels, position %s\n",
+            sound_describe(), sound_rate(), sound_channels(),
+            sound_clocked() ? "timed here" : "from the controller");
+    else
+        put(&o, "sound     none\n");
+
     if (netdev_up()) {
         const u8 *m = netdev_mac();
         put(&o, "network   %s %02x:%02x:%02x:%02x:%02x:%02x\n",
@@ -186,6 +198,13 @@ static u32 render_net(char *b, u32 cap) {
     net_format_ip(net_dns(), ip);     put(&o, "dns       %s\n", ip);
     put(&o, "state     %s\n", net_up() ? "configured" : "no address yet");
     put(&o, "packets   %d in, %d out\n", net_rx_packets(), net_tx_packets());
+    put(&o, "queue     %d waiting, %d deepest, %d dropped\n",
+        net_rx_queued(), net_rx_deepest(), net_rx_dropped());
+    /* What the connection had to cope with. Segments arriving in the wrong
+       order are ordinary and are counted because for a while the answer to
+       one was to end the connection where it stood. */
+    put(&o, "tcp       %d resent, %d out of order, %d reset\n",
+        tcp_retransmits(), tcp_out_of_order(), tcp_resets());
     return o.len;
 }
 
@@ -270,6 +289,11 @@ static u32 render_screen(char *b, u32 cap) {
     put(&o, "height %d\n", fb_active() ? fb_height() : 0);
     put(&o, "settable %d\n", fb_mode_settable() ? 1 : 0);
     put(&o, "source %s\n", fb_backend());
+    put(&o, "frames %d\n", (u32)fb_frames());
+    put(&o, "shared %d\n", (u32)fb_shared_frames());
+    put(&o, "lastkib %d\n", (u32)(fb_last_sent() / 1024));
+    put(&o, "fullkib %d\n", (u32)(fb_screen_bytes() / 1024));
+    put(&o, "sentkib %d\n", (u32)(fb_total_sent() / 1024));
     return o.len;
 }
 

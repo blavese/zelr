@@ -34,6 +34,9 @@ bool smp_active(void);
    running or is still busy. The function runs with interrupts off. */
 bool smp_run(u32 cpu, void (*fn)(void *), void *arg);
 bool smp_busy(u32 cpu);
+
+/* A processor other than this one that is up and idle, or zero. */
+u32  smp_helper(void);
 bool smp_wait(u32 cpu, u32 timeout_ms);
 
 /* A plain spinlock, for anything two processors might touch at once. */

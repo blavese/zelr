@@ -383,6 +383,24 @@ if [ "$MODE" = "screen" ] || [ "$MODE" = "full" ]; then
   # the only part of an audio driver that cannot report success while silent.
   soundtest() { keep timeout 600 python tools/soundcheck.py; }
 
+  # The same notes out of the other controller. VMware gives a guest whose
+  # kind it does not recognise an Ensoniq rather than HD Audio, and it does
+  # not recognise this one, so the card most people will actually meet is
+  # the one the check above does not touch.
+  enstest() { keep timeout 600 python tools/enscheck.py; }
+
+  # And the slider on the dock, which is the one place sound is a feature
+  # rather than a driver: the note it plays is played at the level it was
+  # just set to, so the check is that the quiet one is quieter.
+  voltest() { keep timeout 600 python tools/volcheck.py; }
+
+  # And what a frame costs. The desktop sends the bands of the screen that
+  # differ from the last one rather than all of it, and hands half of the
+  # comparison to a second processor; both are easy to claim and easy to
+  # break silently, because a screen that is drawn correctly the slow way
+  # looks exactly like one drawn correctly the fast way.
+  frametest() { keep timeout 600 python tools/framecheck.py; }
+
   # A stick with a filesystem on it, mounted and copied to and from.
   mounttest() { keep timeout 600 python tools/mountcheck.py; }
 
@@ -445,6 +463,9 @@ if [ "$MODE" = "screen" ] || [ "$MODE" = "full" ]; then
   par_start "a usb keyboard and mouse are found and used" usbtest
   par_start "input survives being touched during boot" inputtest
   par_start "notes come out at the pitch they were asked for" soundtest
+  par_start "and out of the ensoniq as well" enstest
+  par_start "the volume slider can be heard changing the volume" voltest
+  par_start "a frame sends the part of the screen that changed" frametest
   par_start "a usb stick mounts, and files copy off it" mounttest
   par_start "files keep the names they were given" nametest
   par_start "the machine turns itself off" powertest

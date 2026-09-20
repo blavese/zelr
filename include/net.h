@@ -9,6 +9,17 @@ void  net_init(void);
 void  net_receive(const u8 *frame, u16 len);
 void  net_poll(void);
 
+/* The task that runs the stack when nothing else is waiting on it. Started
+   once the scheduler exists, because it is a task. */
+void  net_start_service(void);
+
+/* What the queue between the card and the stack is doing. Dropped frames are
+   frames the card delivered that nothing came to collect, which is the one
+   number that says the machine is behind rather than merely busy. */
+u32   net_rx_queued(void);
+u32   net_rx_dropped(void);
+u32   net_rx_deepest(void);
+
 bool  net_up(void);
 ipv4_t net_ip(void);
 ipv4_t net_gateway(void);

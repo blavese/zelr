@@ -240,6 +240,15 @@ until it reaches a converter. Tested by playing notes and measuring the
 recording, because every step of an audio driver can report success while
 producing silence.
 
+There is a second controller, because HD Audio is not what a virtual machine
+necessarily offers: VMware hands a guest whose kind it does not recognise an
+Ensoniq AudioPCI, and it does not recognise a system written from scratch. The
+ES1370 and the ES1371 are one design with the front end swapped — the same
+block of memory, size, format and run bit, which is the whole of what makes a
+sound — so they are one driver with two ways of setting a rate and two mixers.
+One of them plays the buffer and never says how far through it is, so when the
+position register does not move the kernel keeps time for it instead.
+
 **Storage** is NVMe, AHCI and ATA. NVMe is what a laptop bought this decade
 has instead of the other two, and it is reached the way the specification
 describes: queues in ordinary memory, a doorbell whose spacing the controller
@@ -346,6 +355,9 @@ instead.
     python tools/usbcheck.py    boot with usb keyboard, mouse and stick, use them
     python tools/inputcheck.py  type on machines touched while they booted
     python tools/soundcheck.py  play notes and measure what came out
+    python tools/enscheck.py    the same, out of the other sound card
+    python tools/volcheck.py    drag the volume slider, listen to the result
+    python tools/framecheck.py  move the pointer, ask what the frames cost
     python tools/mountcheck.py  mount a usb stick and copy files off it
     python tools/namecheck.py   save long names and read them back
     python tools/powercheck.py  tell it to shut down, see if it does
@@ -515,10 +527,14 @@ for.
 **Graphics.** Mode setting through the Bochs VBE dispatch ports rather than a
 BIOS call, so it works from protected mode with no real mode trampoline and no
 help from the bootloader. The aperture is found through the VGA device's PCI
-BAR and mapped explicitly. Drawing goes to a back buffer and is pushed to the
-card in one go, because compositing directly in video memory over PCI is
-visibly slow. The console is redrawn on top of that with a bitmap font, so
-everything that already printed kept working.
+BAR and mapped explicitly. Drawing goes to a back buffer, because compositing
+directly in video memory over PCI is visibly slow. What is sent to the card is
+the part of that buffer which differs from what the card was last given: a copy
+of it is kept and compared a band of rows at a time, so moving the pointer
+costs two bands of forty eight rather than three megabytes. Half of that
+comparison goes to another processor when there is one to spare. The console is
+redrawn on top of it all with a bitmap font, so everything that already printed
+kept working.
 
 **Other processors.** A PC boots with one CPU running and does not say the
 others exist, so `acpi.c` goes and reads the firmware tables to find them and
@@ -529,7 +545,8 @@ afterwards is a decision rather than a requirement: sharing the scheduler
 would mean a lock on the heap, the task list, the filesystem and every driver,
 so instead each one waits for a function to be handed to it. The boot
 processor still owns the kernel; the others own nothing until they are given
-something.
+something. What they are given is the frame: the compositor hands half of
+every screen comparison to whichever one is free.
 
 **Programs.** Ring 3, its own address space per process, and fifty-four
 system calls through int 0x80. A program can start another program, block
@@ -1218,9 +1235,10 @@ large range:
   allocator, the scheduler and the clock, and no system call exposes those.
   Every other window on the desktop belongs to a ring 3 process.
 - **The other processors do not run tasks.** They are started, they execute
-  work handed to them and they share a lock, but the scheduler runs on the
-  boot processor alone. Spreading it would mean a lock on the heap, the task
-  list, the filesystem and every driver.
+  work handed to them -- half of every frame's comparison against the last
+  one -- and they share a lock, but the scheduler runs on the boot processor
+  alone. Spreading it would mean a lock on the heap, the task list, the
+  filesystem and every driver.
 - **TCP handles one connection at a time.** It retransmits with exponential
   backoff and gives up after six tries, but there is no congestion control, no
   window scaling and no selective acknowledgement.
@@ -1252,12 +1270,14 @@ large range:
 - **Names are ASCII.** The entries that carry a long name hold sixteen bit
   characters, and anything above 127 comes back as a question mark rather
   than as half of something nobody can type.
-- **Memory is capped at 64 GiB**, and by how much bitmap fits between the
-  kernel and the heap, whichever is lower. What the machine actually has is
-  what gets mapped: the bottom 64 MiB a page at a time, and everything the
-  firmware called usable above that in 2 MiB pages. The gaps between are
-  left alone, because that is where devices keep their registers and they
-  have to be mapped uncached rather than as ordinary memory.
+- **Memory is capped at 64 GiB.** What the machine actually has is what gets
+  mapped: the bottom 64 MiB a page at a time, and everything the firmware
+  called usable above that in 2 MiB pages. The gaps between are left alone,
+  because that is where devices keep their registers and they have to be
+  mapped uncached rather than as ordinary memory. The kernel keeps a quarter
+  of what it finds for its own heap, to half a gigabyte, and hands out the
+  rest a page at a time; the heap starts after the kernel image, with room
+  left for the bitmap that describes everything else.
 
 It is a real kernel in that it boots itself on a bare machine, drives its own
 hardware, and can fetch a file from a real server and keep it on a real disk.
@@ -1343,6 +1363,7 @@ orders of magnitude away from Linux, which is roughly 30 million lines.
     kernel/usb.c       enumeration, and the hid boot protocol
     kernel/usbdisk.c   usb sticks, which are scsi through bulk endpoints
     kernel/hda.c       the sound controller, and walking its codec
+    kernel/ens.c       the one a virtual machine gives you instead
     kernel/sound.c     what is in the buffer when the hardware reads it
     kernel/power.c     turning the machine off, which means reading aml
     kernel/timer.c     programmable interval timer

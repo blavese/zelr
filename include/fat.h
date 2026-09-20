@@ -37,6 +37,14 @@ bool fat_mounted(void);
    our own volume over one that is merely FAT. */
 bool fat_is_zelr_volume(void);
 
+/* The same question, and where the log lives, asked of a boot sector that
+   has been read rather than of the volume that is mounted. The black box
+   needs both before anything is mounted and from the fault path, and the
+   answers differ between the two widths. */
+bool fat_boot_is_ours(const u8 *boot);
+u32  fat_boot_log_lba(const u8 *boot);
+u32  fat_boot_reserved(const u8 *boot);
+
 /* 16 or 32, decided from the cluster count rather than the label. */
 u32  fat_type(void);
 u32  fat_base(void);                    /* where the mounted volume starts */

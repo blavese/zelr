@@ -432,6 +432,11 @@ bool fat_mount(void) { return fat_mount_at(0); }
 
 u32 fat_type(void) { return mounted ? fat_bits : 0; }
 
+/* The serial this kernel stamps on a volume it made. It is the ASCII "ZLR"
+   with a zero under it, which is not a number anything else would land on
+   by accident. */
+#define ZELR_VOLUME_ID 0x5A4C5200u
+
 /* The two fields fat_format writes and nothing else does. Checked against
    the boot sector rather than remembered from the mount, so it is still
    right if something else rewrote the volume underneath us. */
@@ -439,19 +444,90 @@ bool fat_is_zelr_volume(void) {
     if (!mounted) return false;
     u8 boot[SECTOR_SIZE];
     if (!vol_read(0, 1, boot)) return false;
-    return memcmp(boot + 3, "ZELR    ", 8) == 0 &&
-           *(u32 *)(boot + 39) == 0x5A4C5200u;
+    return fat_boot_is_ours(boot);
+}
+
+/* Whether a boot sector is one this kernel wrote, and where in its reserved
+   area the log goes. Both are asked of a sector that has been read but not
+   mounted, because the log is read before anything is decided and written
+   from the fault path.
+
+   The volume serial number is the marker, because it is the one field a
+   formatter is free to put anything in. It lives at a different offset on
+   the two widths: FAT32 put four bytes of table size where FAT16 keeps the
+   serial, and moved the serial down past the fields that came with it. */
+static bool boot_is_fat32(const u8 *boot) {
+    return *(const u16 *)(boot + 17) == 0 && *(const u16 *)(boot + 22) == 0;
+}
+
+bool fat_boot_is_ours(const u8 *boot) {
+    if (boot[510] != 0x55 || boot[511] != 0xAA) return false;
+    if (memcmp(boot + 3, "ZELR    ", 8) != 0) return false;
+    u32 at = boot_is_fat32(boot) ? 67 : 39;
+    return *(const u32 *)(boot + at) == ZELR_VOLUME_ID;
+}
+
+/* FAT16 has nothing in its reserved area but the boot sector, so the log
+   starts straight after it. FAT32 has three more things there that other
+   readers expect at the addresses the specification names -- the filesystem
+   information sector, and a backup of the boot sector and of that -- so the
+   log starts after the last of them. */
+u32 fat_boot_log_lba(const u8 *boot) { return boot_is_fat32(boot) ? 8 : 1; }
+
+u32 fat_boot_reserved(const u8 *boot) { return *(const u16 *)(boot + 14); }
+
+/* How many sectors to a cluster, so that the number of clusters lands in the
+   range the width can describe.
+ *
+ * FAT16 counts clusters in sixteen bits and reserves the top of the range,
+ * which leaves 65524 of them. At the two kilobyte clusters this used to
+ * always use, that is 128 MiB, and everything past it was refused: an eight
+ * gigabyte disk asked for a table with four million entries in it, the
+ * count came out above what the width holds, and formatting failed with
+ * nothing to do about it. Which is what "could not prepare the disk" was.
+ *
+ * So the cluster grows with the volume until thirty two kilobytes, the
+ * largest FAT16 is ordinarily written with, and past that -- about two
+ * gigabytes -- the volume is FAT32, which this can now write. */
+static bool fat_layout(u32 total, u32 spc, u32 bits, u32 reserved,
+                       u32 fats, u32 roots, u32 *fsize_out, u32 *clusters_out) {
+    u32 ent = (bits == 32) ? 4 : 2;
+    u32 root_secs = ((u32)roots * 32 + SECTOR_SIZE - 1) / SECTOR_SIZE;
+
+    /* The table has to be big enough to describe the clusters that are left
+       after the table itself is subtracted, so solve for it. */
+    u32 fsize = 1, clusters = 0, data = 0;
+    for (int i = 0; i < 16; i++) {
+        if (total <= reserved + fats * fsize + root_secs) return false;
+        data = total - reserved - fats * fsize - root_secs;
+        clusters = data / spc;
+        u32 need = ((clusters + 2) * ent + SECTOR_SIZE - 1) / SECTOR_SIZE;
+        if (need == fsize) break;
+        fsize = need;
+    }
+
+    /* And if it did not settle, err upwards: a table with room for clusters
+       that do not exist is wasted space, one with room for fewer than there
+       are is a volume that reads its own data as somebody else's. */
+    if (total <= reserved + fats * fsize + root_secs) return false;
+    data = total - reserved - fats * fsize - root_secs;
+    clusters = data / spc;
+    u32 need = ((clusters + 2) * ent + SECTOR_SIZE - 1) / SECTOR_SIZE;
+    if (need > fsize) {
+        fsize = need;
+        if (total <= reserved + fats * fsize + root_secs) return false;
+        data = total - reserved - fats * fsize - root_secs;
+        clusters = data / spc;
+    }
+
+    *fsize_out = fsize;
+    *clusters_out = clusters;
+    return true;
 }
 
 bool fat_format_at(u32 base_lba, u32 sectors, const char *label) {
     if (!blk_present()) return false;
     fat_forget();
-
-    /* The layout below is a FAT16 one throughout, so the width has to be
-       that while it is written. Mounting at the end decides again from the
-       cluster count and would catch a disagreement. */
-    fat_bits = 16;
-    root_cluster = 0;
 
     part_base = base_lba;
     part_sectors = sectors;
@@ -459,54 +535,92 @@ bool fat_format_at(u32 base_lba, u32 sectors, const char *label) {
     u32 total = sectors ? sectors : blk_sectors() - base_lba;
     if (total < 8192) return false;
 
-    u8 spc = 4;                       /* 2 KiB clusters */
-    /* One for the boot sector, then room for the black box. A volume made
-       by an older build has reserved = 1 and simply gets no disk log; it
-       still mounts, because fat_mount reads this field rather than assuming
-       it. */
-    u16 reserved = 1 + BB_SECTORS;
-    u8 fats = 2;
-    u16 roots = 512;
-    u32 root_secs = ((u32)roots * 32 + SECTOR_SIZE - 1) / SECTOR_SIZE;
+    u8  fats = 2;
+    u32 spc = 0, fsize = 0, clusters = 0;
+    u32 reserved = 0, roots = 0;
+    u32 bits = 0;
 
-    /* The table has to be big enough to describe the clusters that are left
-       after the table itself is subtracted, so solve for it. */
-    u32 fsize = 1;
-    for (int i = 0; i < 16; i++) {
-        u32 data = total - reserved - (u32)fats * fsize - root_secs;
-        u32 clusters = data / spc;
-        u32 need = ((clusters + 2) * 2 + SECTOR_SIZE - 1) / SECTOR_SIZE;
-        if (need == fsize) break;
-        fsize = need;
+    /* FAT16 for anything it can describe, because it is the simpler volume
+       and every small disk and every image made before this was one. */
+    for (u32 try_spc = 4; try_spc <= 64 && !bits; try_spc *= 2) {
+        u32 f = 0, c = 0;
+        u32 res = 1 + BB_SECTORS;
+        if (!fat_layout(total, try_spc, 16, res, fats, 512, &f, &c)) continue;
+        if (c < 4085 || c > 65524) continue;
+        bits = 16; spc = try_spc; fsize = f; clusters = c;
+        reserved = res; roots = 512;
     }
 
-    u32 data = total - reserved - (u32)fats * fsize - root_secs;
-    u32 clusters = data / spc;
-    if (clusters < 4085 || clusters > 65524) return false;
+    /* And FAT32 past that. The cluster sizes are the ones every other
+       formatter uses for a disk of each size, so a volume made here looks
+       ordinary to whatever reads it next. */
+    if (!bits) {
+        u32 try_spc = total <= 16777216u ? 8
+                    : total <= 33554432u ? 16
+                    : total <= 67108864u ? 32 : 64;
+        for (; try_spc <= 128 && !bits; try_spc *= 2) {
+            u32 f = 0, c = 0;
+            /* The boot sector, the information sector, a backup of both at
+               six and seven, then the log. */
+            u32 res = 8 + BB_SECTORS;
+            if (!fat_layout(total, try_spc, 32, res, fats, 0, &f, &c)) continue;
+            if (c < 65525 || c > 0x0FFFFFF5u) continue;
+            bits = 32; spc = try_spc; fsize = f; clusters = c;
+            reserved = res; roots = 0;
+        }
+    }
+
+    if (!bits) return false;
+
+    fat_bits = bits;
+    root_cluster = (bits == 32) ? 2 : 0;
+
+    u32 root_secs = ((u32)roots * 32 + SECTOR_SIZE - 1) / SECTOR_SIZE;
 
     /* boot sector */
     memset(sec, 0, SECTOR_SIZE);
     sec[0] = 0xEB; sec[1] = 0x3C; sec[2] = 0x90;
     memcpy(sec + 3, "ZELR    ", 8);
     *(u16 *)(sec + 11) = SECTOR_SIZE;
-    sec[13] = spc;
-    *(u16 *)(sec + 14) = reserved;
+    sec[13] = (u8)spc;
+    *(u16 *)(sec + 14) = (u16)reserved;
     sec[16] = fats;
-    *(u16 *)(sec + 17) = roots;
+    *(u16 *)(sec + 17) = (u16)roots;
     *(u16 *)(sec + 19) = 0;
     sec[21] = 0xF8;                     /* fixed disk */
-    *(u16 *)(sec + 22) = (u16)fsize;
+    *(u16 *)(sec + 22) = (bits == 32) ? 0 : (u16)fsize;
     *(u16 *)(sec + 24) = 32;
     *(u16 *)(sec + 26) = 8;
     *(u32 *)(sec + 28) = 0;
     *(u32 *)(sec + 32) = total;
-    sec[36] = 0x80;
-    sec[38] = 0x29;                     /* extended boot signature */
-    *(u32 *)(sec + 39) = 0x5A4C5200u;
-    memset(sec + 43, ' ', 11);
-    for (u32 i = 0; i < 11 && label && label[i]; i++) sec[43 + i] = (u8)upcase(label[i]);
-    memcpy(sec + 54, "FAT16   ", 8);
+
+    if (bits == 32) {
+        *(u32 *)(sec + 36) = fsize;     /* the table size lives here instead */
+        *(u16 *)(sec + 40) = 0;         /* both tables, kept in step */
+        *(u16 *)(sec + 42) = 0;         /* version zero, the only one */
+        *(u32 *)(sec + 44) = 2;         /* the root is an ordinary chain */
+        *(u16 *)(sec + 48) = 1;         /* where the free count is kept */
+        *(u16 *)(sec + 50) = 6;         /* and where the spare copy goes */
+        sec[64] = 0x80;
+        sec[66] = 0x29;                 /* extended boot signature */
+        *(u32 *)(sec + 67) = ZELR_VOLUME_ID;
+        memset(sec + 71, ' ', 11);
+        for (u32 i = 0; i < 11 && label && label[i]; i++)
+            sec[71 + i] = (u8)upcase(label[i]);
+        memcpy(sec + 82, "FAT32   ", 8);
+    } else {
+        sec[36] = 0x80;
+        sec[38] = 0x29;                 /* extended boot signature */
+        *(u32 *)(sec + 39) = ZELR_VOLUME_ID;
+        memset(sec + 43, ' ', 11);
+        for (u32 i = 0; i < 11 && label && label[i]; i++)
+            sec[43 + i] = (u8)upcase(label[i]);
+        memcpy(sec + 54, "FAT16   ", 8);
+    }
     sec[510] = 0x55; sec[511] = 0xAA;
+
+    u8 boot[SECTOR_SIZE];
+    memcpy(boot, sec, SECTOR_SIZE);
     if (!vol_write(0, 1, sec)) return false;
 
     /* The reserved sectors past the boot sector, cleared. They are where the
@@ -517,24 +631,50 @@ bool fat_format_at(u32 base_lba, u32 sectors, const char *label) {
     for (u32 s = 1; s < reserved; s++)
         if (!vol_write(s, 1, sec)) return false;
 
-    /* both tables, cleared, with the two reserved entries at the front */
+    if (bits == 32) {
+        /* The information sector: a count of free clusters and a hint at
+           where to start looking, which nothing here reads and every other
+           reader expects to find. Both are written as unknown rather than
+           as a number that will be wrong the moment a file is made. */
+        memset(sec, 0, SECTOR_SIZE);
+        *(u32 *)(sec + 0)   = 0x41615252u;
+        *(u32 *)(sec + 484) = 0x61417272u;
+        *(u32 *)(sec + 488) = 0xFFFFFFFFu;
+        *(u32 *)(sec + 492) = 0xFFFFFFFFu;
+        *(u32 *)(sec + 508) = 0xAA550000u;
+        if (!vol_write(1, 1, sec)) return false;
+        if (!vol_write(7, 1, sec)) return false;
+        if (!vol_write(6, 1, boot)) return false;
+    }
+
+    /* both tables, cleared, with the reserved entries at the front */
     memset(sec, 0, SECTOR_SIZE);
     for (u32 copy = 0; copy < fats; copy++)
         for (u32 s = 0; s < fsize; s++)
             if (!vol_write(reserved + copy * fsize + s, 1, sec)) return false;
 
     memset(sec, 0, SECTOR_SIZE);
-    *(u16 *)(sec + 0) = 0xFFF8;         /* media descriptor copy */
-    *(u16 *)(sec + 2) = 0xFFFF;         /* end of chain marker */
+    if (bits == 32) {
+        *(u32 *)(sec + 0) = 0x0FFFFFF8u;    /* media descriptor copy */
+        *(u32 *)(sec + 4) = 0x0FFFFFFFu;    /* end of chain marker */
+        *(u32 *)(sec + 8) = 0x0FFFFFFFu;    /* and the root, one cluster long */
+    } else {
+        *(u16 *)(sec + 0) = 0xFFF8;
+        *(u16 *)(sec + 2) = 0xFFFF;
+    }
     for (u32 copy = 0; copy < fats; copy++)
         if (!vol_write(reserved + copy * fsize, 1, sec)) return false;
 
-    /* empty root directory */
+    /* empty root directory: a fixed run of sectors on FAT16, one cluster of
+       the data area on FAT32 */
     memset(sec, 0, SECTOR_SIZE);
-    for (u32 s = 0; s < root_secs; s++)
-        if (!vol_write(reserved + (u32)fats * fsize + s, 1, sec)) return false;
+    u32 root_lba = reserved + (u32)fats * fsize;
+    u32 root_len = (bits == 32) ? spc : root_secs;
+    for (u32 s = 0; s < root_len; s++)
+        if (!vol_write(root_lba + s, 1, sec)) return false;
 
     blk_flush();
+    (void)clusters;
     return fat_mount_at(base_lba);
 }
 
