@@ -14,6 +14,7 @@
 #pragma once
 #include "js.h"
 #include "jsparse.h"
+#include "jsregex.h"
 
 static jval js_eval(jctx *J, int node, jscope *sc, jval this_val);
 static jsignal js_exec(jctx *J, int node, jscope *sc, jval this_val);
@@ -546,6 +547,149 @@ static jval js_arg(jval *argv, int argc, int i) {
    a method fetched off a value has to remember which value it came from. */
 static jval js_bound_this;
 
+/* --- regular expressions --------------------------------------------------
+ *
+ * A pattern object keeps its source and its flags as ordinary properties,
+ * which is what a script expects to be able to read, and is compiled fresh
+ * for each call. Compiling is a walk over a string that is almost always
+ * under thirty characters; keeping a compiled copy would mean somewhere to
+ * put it on an object that has no room for one, and a page that builds a
+ * pattern in a loop would leak them.
+ *
+ * One scratch engine, because nothing here matches two patterns at once:
+ * every use below compiles, matches and is finished before the next.
+ */
+static rx js_rx;
+
+static int js_is_regex(jval v) {
+    return v.t == JS_OBJ && v.obj && v.obj->kind == JO_REGEX;
+}
+
+/* Loads the pattern on an object into the scratch engine. Returns 0 and
+   leaves a thrown error when the pattern is one this cannot read, because a
+   page told its pattern is not understood can say so, and a page quietly
+   matching nothing cannot. */
+static int js_rx_load(jctx *J, jval v, int line) {
+    if (!js_is_regex(v)) return 0;
+    jval src = js_get_prop(v.obj, js_str(J, "source"));
+    jval flg = js_get_prop(v.obj, js_str(J, "flags"));
+    jstr *ss = src.t == JS_STR ? src.str : 0;
+    jstr *sf = flg.t == JS_STR ? flg.str : 0;
+    if (!ss) return 0;
+
+    char flags[8];
+    u32 i = 0;
+    for (; sf && i < sf->len && i < sizeof(flags) - 1; i++) flags[i] = sf->s[i];
+    flags[i] = 0;
+
+    if (!rx_compile(&js_rx, ss->s, (int)ss->len, flags)) {
+        js_throw(J, js_rx.why[0] ? js_rx.why : "a pattern this cannot read",
+                 line);
+        return 0;
+    }
+    return 1;
+}
+
+static jobj *js_regex_new(jctx *J, const char *pat, u32 len, int flags);
+
+/* The array exec and match hand back: the whole match at nought, then each
+   group, with where it was found and what it was found in. */
+static jval js_rx_result(jctx *J, jstr *s) {
+    jobj *out = js_array(J);
+    if (!out) return js_null();
+    for (int i = 0; i < js_rx.ncaps; i++) {
+        if (js_rx.cap_start[i] < 0 || js_rx.cap_end[i] < js_rx.cap_start[i])
+            js_arr_set(J, out, (u32)i, js_undef());
+        else
+            js_arr_set(J, out, (u32)i,
+                       js_from_str(js_str_n(J, s->s + js_rx.cap_start[i],
+                                            (u32)(js_rx.cap_end[i]
+                                                  - js_rx.cap_start[i]))));
+    }
+    js_set(J, out, "index", js_num((double)js_rx.cap_start[0]));
+    js_set(J, out, "input", js_from_str(s));
+    return js_from_obj(out);
+}
+
+static jval nat_re_test(jctx *J, jval t, jval *a, int n) {
+    jstr *s = js_to_str(J, js_arg(a, n, 0));
+    if (!s || !js_rx_load(J, t, J->error_line)) return js_bool(0);
+    return js_bool(rx_search(&js_rx, s->s, (int)s->len, 0) >= 0);
+}
+
+/* exec walks a global pattern through its subject one call at a time, which
+   is what lastIndex is for and the only reason a page calls it in a loop. */
+static jval nat_re_exec(jctx *J, jval t, jval *a, int n) {
+    jstr *s = js_to_str(J, js_arg(a, n, 0));
+    if (!s || !js_rx_load(J, t, J->error_line)) return js_null();
+
+    int from = 0;
+    if (js_rx.global) {
+        jval li = js_get_prop(t.obj, js_str(J, "lastIndex"));
+        from = li.t == JS_NUM ? (int)li.num : 0;
+        if (from < 0 || from > (int)s->len) {
+            js_set(J, t.obj, "lastIndex", js_num(0));
+            return js_null();
+        }
+    }
+
+    if (rx_search(&js_rx, s->s, (int)s->len, from) < 0) {
+        if (js_rx.global) js_set(J, t.obj, "lastIndex", js_num(0));
+        return js_null();
+    }
+    if (js_rx.global) {
+        /* An empty match would otherwise stand still for ever. */
+        int next = js_rx.cap_end[0];
+        if (next == js_rx.cap_start[0]) next++;
+        js_set(J, t.obj, "lastIndex", js_num((double)next));
+    }
+    return js_rx_result(J, s);
+}
+
+static jobj *js_regex_new(jctx *J, const char *pat, u32 len, int flags) {
+    jobj *o = js_object(J, JO_REGEX);
+    if (!o) return 0;
+
+    char f[4];
+    int w = 0;
+    if (flags & RXF_G) f[w++] = 'g';
+    if (flags & RXF_I) f[w++] = 'i';
+    if (flags & RXF_M) f[w++] = 'm';
+    f[w] = 0;
+
+    js_set(J, o, "source", js_from_str(js_str_n(J, pat, len)));
+    js_set(J, o, "flags", js_from_str(js_str(J, f)));
+    js_set(J, o, "global", js_bool((flags & RXF_G) != 0));
+    js_set(J, o, "ignoreCase", js_bool((flags & RXF_I) != 0));
+    js_set(J, o, "multiline", js_bool((flags & RXF_M) != 0));
+    js_set(J, o, "lastIndex", js_num(0));
+    js_set(J, o, "test", js_from_obj(js_native(J, "test", nat_re_test)));
+    js_set(J, o, "exec", js_from_obj(js_native(J, "exec", nat_re_exec)));
+    return o;
+}
+
+/* RegExp("a.b", "i"), for a pattern that is not known until it is built.
+   With or without `new`: both are written, and an engine that takes only
+   one of them refuses half the pages that use it. */
+static jval nat_regexp_make(jctx *J, jval t, jval *a, int n) {
+    (void)t;
+    jval first = js_arg(a, n, 0);
+    jstr *pat = js_is_regex(first)
+              ? js_get_prop(first.obj, js_str(J, "source")).str
+              : js_to_str(J, first);
+    jstr *flg = n > 1 ? js_to_str(J, js_arg(a, n, 1)) : 0;
+
+    int flags = 0;
+    for (u32 i = 0; flg && i < flg->len; i++) {
+        if (flg->s[i] == 'g') flags |= RXF_G;
+        else if (flg->s[i] == 'i') flags |= RXF_I;
+        else if (flg->s[i] == 'm') flags |= RXF_M;
+    }
+    if (!pat) return js_null();
+    jobj *o = js_regex_new(J, pat->s, pat->len, flags);
+    return o ? js_from_obj(o) : js_null();
+}
+
 static jval nat_str_charat(jctx *J, jval t, jval *a, int n) {
     jstr *s = js_to_str(J, t);
     int i = (int)js_to_num(J, js_arg(a, n, 0));
@@ -653,6 +797,32 @@ static jval nat_str_split(jctx *J, jval t, jval *a, int n) {
         js_arr_push(J, out, js_from_str(s));
         return js_from_obj(out);
     }
+    if (js_is_regex(a[0])) {
+        if (!js_rx_load(J, a[0], J->error_line)) return js_from_obj(out);
+        int from = 0, at = 0;
+        while (from <= (int)s->len) {
+            if (rx_search(&js_rx, s->s, (int)s->len, from) < 0) break;
+            if (js_rx.cap_end[0] == js_rx.cap_start[0]) {
+                /* A pattern that matches nothing splits between every
+                   character rather than standing still. */
+                if (js_rx.cap_start[0] >= (int)s->len) break;
+                from = js_rx.cap_start[0] + 1;
+                js_arr_push(J, out,
+                            js_from_str(js_str_n(J, s->s + at,
+                                                 (u32)(from - at))));
+                at = from;
+                continue;
+            }
+            js_arr_push(J, out,
+                        js_from_str(js_str_n(J, s->s + at,
+                                             (u32)(js_rx.cap_start[0] - at))));
+            at = from = js_rx.cap_end[0];
+        }
+        js_arr_push(J, out, js_from_str(js_str_n(J, s->s + at,
+                                                 s->len - (u32)at)));
+        return js_from_obj(out);
+    }
+
     jstr *sep = js_to_str(J, a[0]);
     if (sep && sep->len == 0) {
         for (u32 i = 0; i < s->len; i++)
@@ -671,7 +841,106 @@ static jval nat_str_split(jctx *J, jval t, jval *a, int n) {
     return js_from_obj(out);
 }
 
+/* Building the replacement, with $1 and friends standing for what the
+   groups caught. A page writing $1 and getting the two characters back is
+   the commonest way a rewrite silently produces nonsense. */
+static void js_rx_expand(jctx *J, jstr *with, jstr *s, char *out, int cap,
+                         int *w) {
+    for (u32 i = 0; with && i < with->len && *w < cap - 1; i++) {
+        if (with->s[i] == '$' && i + 1 < with->len) {
+            char d = with->s[i + 1];
+            if (d == '$') { out[(*w)++] = '$'; i++; continue; }
+            if (d == '&') {
+                for (int k = js_rx.cap_start[0];
+                     k < js_rx.cap_end[0] && *w < cap - 1; k++)
+                    out[(*w)++] = s->s[k];
+                i++;
+                continue;
+            }
+            if (d >= '0' && d <= '9') {
+                int g = d - '0';
+                i++;
+                if (i + 1 < with->len && with->s[i + 1] >= '0'
+                    && with->s[i + 1] <= '9'
+                    && (g * 10 + (with->s[i + 1] - '0')) < js_rx.ncaps) {
+                    g = g * 10 + (with->s[i + 1] - '0');
+                    i++;
+                }
+                if (g > 0 && g < js_rx.ncaps && js_rx.cap_start[g] >= 0)
+                    for (int k = js_rx.cap_start[g];
+                         k < js_rx.cap_end[g] && *w < cap - 1; k++)
+                        out[(*w)++] = s->s[k];
+                continue;
+            }
+        }
+        out[(*w)++] = with->s[i];
+    }
+    (void)J;
+}
+
+static jval nat_str_replace_re(jctx *J, jval t, jval *a, int n) {
+    jstr *s = js_to_str(J, t);
+    jval re = js_arg(a, n, 0);
+    jval rep = js_arg(a, n, 1);
+    if (!s || !js_rx_load(J, re, J->error_line)) return js_from_str(s);
+
+    int every = js_rx.global;
+    static char out[16384];
+    int w = 0, from = 0;
+
+    for (;;) {
+        if (rx_search(&js_rx, s->s, (int)s->len, from) < 0) break;
+
+        for (int k = from; k < js_rx.cap_start[0] && w < (int)sizeof(out) - 1; k++)
+            out[w++] = s->s[k];
+
+        if (rep.t == JS_OBJ && rep.obj
+            && (rep.obj->kind == JO_FUNC || rep.obj->kind == JO_NATIVE)) {
+            /* A function is handed the match and its groups, the way it is
+               everywhere else, and what it returns goes in. */
+            jval args[RX_CAPS + 2];
+            int argc = 0;
+            for (int g = 0; g < js_rx.ncaps && argc < RX_CAPS; g++)
+                args[argc++] = js_rx.cap_start[g] < 0 ? js_undef()
+                    : js_from_str(js_str_n(J, s->s + js_rx.cap_start[g],
+                                           (u32)(js_rx.cap_end[g]
+                                                 - js_rx.cap_start[g])));
+            args[argc++] = js_num((double)js_rx.cap_start[0]);
+            args[argc++] = js_from_str(s);
+
+            int start = js_rx.cap_start[0], end = js_rx.cap_end[0];
+            jval got = js_call(J, rep, js_undef(), args, argc);
+            if (J->sig != JS_OK) return js_from_str(s);
+            jstr *gs = js_to_str(J, got);
+            for (u32 k = 0; gs && k < gs->len && w < (int)sizeof(out) - 1; k++)
+                out[w++] = gs->s[k];
+            /* The engine is scratch and the call may have used it. */
+            if (!js_rx_load(J, re, J->error_line)) return js_from_str(s);
+            js_rx.cap_start[0] = start;
+            js_rx.cap_end[0] = end;
+        } else {
+            jstr *with = js_to_str(J, rep);
+            js_rx_expand(J, with, s, out, (int)sizeof(out), &w);
+        }
+
+        int next = js_rx.cap_end[0];
+        if (next == js_rx.cap_start[0]) {
+            if (next < (int)s->len && w < (int)sizeof(out) - 1)
+                out[w++] = s->s[next];
+            next++;
+        }
+        from = next;
+        if (!every || from > (int)s->len) break;
+    }
+
+    for (int k = from; k < (int)s->len && w < (int)sizeof(out) - 1; k++)
+        out[w++] = s->s[k];
+    out[w] = 0;
+    return js_from_str(js_str_n(J, out, (u32)w));
+}
+
 static jval nat_str_replace(jctx *J, jval t, jval *a, int n) {
+    if (js_is_regex(js_arg(a, n, 0))) return nat_str_replace_re(J, t, a, n);
     jstr *s = js_to_str(J, t);
     jstr *find = js_to_str(J, js_arg(a, n, 0));
     jstr *with = js_to_str(J, js_arg(a, n, 1));
@@ -692,6 +961,43 @@ static jval nat_str_repeat(jctx *J, jval t, jval *a, int n) {
     return js_from_str(out);
 }
 
+/* Every match of a global pattern, as strings; with a plain one, the same
+   array exec gives, which is what a page destructures for its groups. */
+static jval nat_str_match(jctx *J, jval t, jval *a, int n) {
+    jstr *s = js_to_str(J, t);
+    jval re = js_arg(a, n, 0);
+    if (!s || !js_is_regex(re)) return js_null();
+    if (!js_rx_load(J, re, J->error_line)) return js_null();
+
+    if (!js_rx.global) {
+        if (rx_search(&js_rx, s->s, (int)s->len, 0) < 0) return js_null();
+        return js_rx_result(J, s);
+    }
+
+    jobj *out = js_array(J);
+    if (!out) return js_null();
+    int from = 0;
+    u32 got = 0;
+    while (from <= (int)s->len) {
+        if (rx_search(&js_rx, s->s, (int)s->len, from) < 0) break;
+        js_arr_set(J, out, got++,
+                   js_from_str(js_str_n(J, s->s + js_rx.cap_start[0],
+                                        (u32)(js_rx.cap_end[0]
+                                              - js_rx.cap_start[0]))));
+        from = js_rx.cap_end[0];
+        if (from == js_rx.cap_start[0]) from++;
+    }
+    return got ? js_from_obj(out) : js_null();
+}
+
+static jval nat_str_search(jctx *J, jval t, jval *a, int n) {
+    jstr *s = js_to_str(J, t);
+    jval re = js_arg(a, n, 0);
+    if (!s || !js_is_regex(re)) return js_num(-1);
+    if (!js_rx_load(J, re, J->error_line)) return js_num(-1);
+    return js_num((double)rx_search(&js_rx, s->s, (int)s->len, 0));
+}
+
 static jval js_string_method(jctx *J, jval target, jstr *name) {
     js_bound_this = target;
     struct { const char *n; jnative f; } M[] = {
@@ -704,6 +1010,7 @@ static jval js_string_method(jctx *J, jval target, jstr *name) {
         { "trim", nat_str_trim }, { "split", nat_str_split },
         { "replace", nat_str_replace }, { "replaceAll", nat_str_replace },
         { "repeat", nat_str_repeat },
+        { "match", nat_str_match }, { "search", nat_str_search },
         { 0, 0 }
     };
     for (int i = 0; M[i].n; i++) {
@@ -1032,6 +1339,14 @@ static jval js_eval(jctx *J, int node, jscope *sc, jval this_val) {
     switch (n->kind) {
         case N_NUM:   return js_num(n->num);
         case N_STR:   return js_from_str(n->str);
+        case N_REGEX: {
+            /* A fresh object each time the literal is reached, because a
+               global pattern carries a lastIndex and two loops sharing one
+               would each start where the other left off. */
+            jobj *o = js_regex_new(J, n->str ? n->str->s : "",
+                                   n->str ? n->str->len : 0, n->op);
+            return o ? js_from_obj(o) : js_undef();
+        }
         case N_TRUE:  return js_bool(1);
         case N_FALSE: return js_bool(0);
         case N_NULL:  return js_null();
@@ -1884,6 +2199,10 @@ static void js_globals(jctx *J) {
     js_set(J, console, "warn", js_from_obj(js_native(J, "warn", nat_log)));
     js_set(J, console, "error", js_from_obj(js_native(J, "error", nat_log)));
     js_declare(J, g, js_str(J, "console"), js_from_obj(console));
+
+    /* For a pattern that is not known until it is built. */
+    js_declare(J, g, js_str(J, "RegExp"),
+               js_from_obj(js_native(J, "RegExp", nat_regexp_make)));
 
     jobj *math = js_object(J, JO_PLAIN);
     js_set(J, math, "floor", js_from_obj(js_native(J, "floor", nat_m_floor)));

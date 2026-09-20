@@ -103,7 +103,7 @@ typedef struct jprop {
 } jprop;
 
 typedef enum {
-    JO_PLAIN = 0, JO_ARRAY, JO_FUNC, JO_NATIVE
+    JO_PLAIN = 0, JO_ARRAY, JO_FUNC, JO_NATIVE, JO_REGEX
 } jokind;
 
 struct jctx;
@@ -159,7 +159,7 @@ struct jscope {
 typedef enum {
     N_NONE = 0,
     /* expressions */
-    N_NUM, N_STR, N_TRUE, N_FALSE, N_NULL, N_UNDEF, N_IDENT,
+    N_NUM, N_STR, N_REGEX, N_TRUE, N_FALSE, N_NULL, N_UNDEF, N_IDENT,
     N_ARRAY, N_OBJECT, N_FUNC, N_CALL, N_NEW, N_MEMBER, N_INDEX,
     N_UNARY, N_BINARY, N_LOGICAL, N_ASSIGN, N_COND, N_SEQ,
     N_PREINC, N_POSTINC, N_TYPEOF, N_DELETE, N_THIS,

@@ -25,8 +25,14 @@
 #include "js.h"
 
 typedef enum {
-    T_EOF = 0, T_NUM, T_STRING, T_NAME, T_PUNCT, T_KEYWORD
+    T_EOF = 0, T_NUM, T_STRING, T_REGEX, T_NAME, T_PUNCT, T_KEYWORD
 } ttype;
+
+/* Which flags a regular expression literal carried, as bits, because the
+   node they end up on has one string on it and that is the pattern. */
+#define RXF_I 1
+#define RXF_G 2
+#define RXF_M 4
 
 /* The operators, as one number each, so the parser can switch on them. */
 typedef enum {
@@ -48,6 +54,7 @@ typedef struct {
     u32    len;
     int    line;
     int    nl_before;         /* a newline came before this token */
+    int    flags;             /* T_REGEX: which letters followed it */
 } jtok;
 
 typedef struct {
@@ -58,6 +65,15 @@ typedef struct {
     jtok   tok;               /* the one being looked at */
     int    nl;                /* a newline has been passed since the last */
     int    failed;
+
+    /* Whether the token just read could end an expression.
+     *
+     * This is the whole of how a slash is told apart from a regular
+     * expression, and there is no other way to tell: `a / b` and `/ab/`
+     * are the same three characters and differ only in what came before.
+     * After a number, a name, a string or a closing bracket, a slash is
+     * division; anywhere else it opens a pattern. */
+    int    ends_expr;
 } jlex;
 
 /* --- characters ---------------------------------------------------------- */
@@ -112,7 +128,23 @@ static int js_is_word(const char *s, u32 len, const char *w) {
 
 /* --- one token ----------------------------------------------------------- */
 
+/* The one question a slash depends on. A keyword mostly cannot end an
+   expression -- `return /x/` is a pattern -- but the four that are values
+   can. */
+static int js_tok_ends_expr(const jtok *t) {
+    if (t->type == T_NUM || t->type == T_STRING || t->type == T_NAME
+        || t->type == T_REGEX)
+        return 1;
+    if (t->type == T_KEYWORD)
+        return (t->len == 4 && (t->text[0] == 't' || t->text[0] == 'n'))
+            || (t->len == 5 && t->text[0] == 'f');
+    if (t->type == T_PUNCT && t->len == 1)
+        return t->text[0] == ')' || t->text[0] == ']' || t->text[0] == '}';
+    return 0;
+}
+
 static void js_next(jlex *L) {
+    L->ends_expr = js_tok_ends_expr(&L->tok);
     L->nl = 0;
 
     for (;;) {
@@ -304,6 +336,48 @@ static void js_next(jlex *L) {
         return;
     }
 
+    /* --- a regular expression --------------------------------------------
+     *
+     * Checked before every operator that starts with a slash, including
+     * `/=`, because `/=x/` is a perfectly ordinary pattern and reading it
+     * as a divide-and-assign is how an engine rejects a line that every
+     * browser accepts.
+     *
+     * A slash inside a class does not close it: `/[/]/` is one character.
+     */
+    if (c == '/' && !L->ends_expr) {
+        u32 i = L->at + 1;
+        int in_class = 0, closed = 0;
+        while (i < L->n) {
+            char d = L->src[i];
+            if (d == '\\') { i += 2; continue; }
+            if (d == '\n') break;
+            if (d == '[') in_class = 1;
+            else if (d == ']') in_class = 0;
+            else if (d == '/' && !in_class) { closed = 1; break; }
+            i++;
+        }
+        if (closed) {
+            L->tok.type = T_REGEX;
+            L->tok.text = L->src + L->at + 1;
+            L->tok.len = i - (L->at + 1);
+            L->tok.flags = 0;
+            i++;
+            while (i < L->n) {
+                char f = L->src[i];
+                if (f == 'i') L->tok.flags |= RXF_I;
+                else if (f == 'g') L->tok.flags |= RXF_G;
+                else if (f == 'm') L->tok.flags |= RXF_M;
+                else if (js_alnum(f)) { /* a flag nothing here knows */ }
+                else break;
+                i++;
+            }
+            L->at = i;
+            return;
+        }
+        /* No closing slash on this line, so it was a divide after all. */
+    }
+
     /* --- punctuation ------------------------------------------------------ */
     L->tok.type = T_PUNCT;
     L->tok.text = L->src + L->at;
@@ -476,6 +550,15 @@ static int js_parse_primary(jparse *P) {
     if (P->L.tok.type == T_STRING) {
         int n = js_node(J, N_STR, line);
         if (n >= 0) J->nodes[n].str = js_str_n(J, P->L.tok.text, P->L.tok.len);
+        js_next(&P->L);
+        return n;
+    }
+    if (P->L.tok.type == T_REGEX) {
+        int n = js_node(J, N_REGEX, line);
+        if (n >= 0) {
+            J->nodes[n].str = js_str_n(J, P->L.tok.text, P->L.tok.len);
+            J->nodes[n].op = P->L.tok.flags;
+        }
         js_next(&P->L);
         return n;
     }
