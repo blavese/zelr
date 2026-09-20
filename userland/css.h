@@ -39,10 +39,22 @@ enum {
     P_BORDER_T, P_BORDER_R, P_BORDER_B, P_BORDER_L, P_BORDER_COLOR,
     P_WIDTH, P_MAX_WIDTH, P_HEIGHT, P_LINE_HEIGHT, P_WHITE_SPACE,
     P_LIST_STYLE, P_RADIUS, P_TEXT_INDENT, P_VISIBILITY, P_OPACITY,
+    P_FLEX_DIR, P_JUSTIFY, P_ALIGN_ITEMS, P_FLEX_WRAP, P_GAP, P_FLEX_GROW,
     P_COUNT
 };
 
-enum { D_INLINE = 0, D_BLOCK, D_INLINE_BLOCK, D_LIST_ITEM, D_NONE, D_TABLE_CELL };
+enum { D_INLINE = 0, D_BLOCK, D_INLINE_BLOCK, D_LIST_ITEM, D_NONE,
+       D_TABLE_CELL, D_FLEX };
+
+/* A flex container's own settings, and a flex item's one of them.
+ *
+ * display:flex used to fall through to block, which is not a small
+ * difference: every row on every modern page came out as a column. A menu
+ * across the top of a site became the menu down the side of nothing, and no
+ * amount of getting the pictures right was going to fix it. */
+enum { FD_ROW = 0, FD_ROW_REVERSE, FD_COLUMN, FD_COLUMN_REVERSE };
+enum { JC_START = 0, JC_CENTER, JC_END, JC_BETWEEN, JC_AROUND, JC_EVENLY };
+enum { AI_STRETCH = 0, AI_START, AI_CENTER, AI_END, AI_BASELINE };
 enum { A_LEFT = 0, A_CENTER, A_RIGHT, A_JUSTIFY };
 enum { WS_NORMAL = 0, WS_PRE, WS_NOWRAP };
 enum { LS_DISC = 0, LS_DECIMAL, LS_NONE, LS_CIRCLE, LS_SQUARE };
@@ -71,6 +83,12 @@ typedef struct {
     short width, max_width, height;      /* -1 for auto */
     short line_h;                        /* per cent of the font size */
     short radius, indent;
+
+    /* Set on a flex container, and read by its children's layout rather
+       than by their own style. */
+    unsigned char flex_dir, justify, align_items, flex_wrap;
+    short gap;
+    short grow;                          /* this element's own flex-grow */
 } cstyle;
 
 /* --- the text of a sheet -------------------------------------------------
@@ -296,6 +314,15 @@ static const cprop CSS_PROPS[] = {
     { "background-color", P_BACKGROUND },
     { "background", P_BACKGROUND },
     { "display", P_DISPLAY },
+    { "flex-direction", P_FLEX_DIR },
+    { "justify-content", P_JUSTIFY },
+    { "align-items", P_ALIGN_ITEMS },
+    { "flex-wrap", P_FLEX_WRAP },
+    { "gap", P_GAP },
+    { "column-gap", P_GAP },
+    { "row-gap", P_GAP },
+    { "flex-grow", P_FLEX_GROW },
+    { "flex", P_FLEX_GROW },
     { "font-size", P_FONT_SIZE },
     { "font-weight", P_FONT_WEIGHT },
     { "font-style", P_FONT_STYLE },
@@ -874,6 +901,12 @@ static inline void css_default_style(cstyle *st, int root_px) {
     st->bold = st->italic = st->mono = 0;
     st->underline = st->strike = 0;
     st->display = D_INLINE;
+    st->flex_dir = FD_ROW;
+    st->justify = JC_START;
+    st->align_items = AI_STRETCH;
+    st->flex_wrap = 0;
+    st->gap = 0;
+    st->grow = 0;
     st->align = A_LEFT;
     st->white = WS_NORMAL;
     st->list = LS_DISC;
@@ -924,8 +957,62 @@ static inline void css_apply(const csheet *s, const cdecl *dcl, cstyle *st,
             else if (w_starts_fold(v, "inline")) st->display = D_INLINE;
             else if (w_starts_fold(v, "list-item")) st->display = D_LIST_ITEM;
             else if (w_starts_fold(v, "table-cell")) st->display = D_TABLE_CELL;
-            else st->display = D_BLOCK;   /* block, flex, grid, table: a box */
+            else if (w_starts_fold(v, "flex")) st->display = D_FLEX;
+            else st->display = D_BLOCK;   /* block, grid, table: a box */
             break;
+
+        case P_FLEX_DIR:
+            if (w_starts_fold(v, "row-reverse")) st->flex_dir = FD_ROW_REVERSE;
+            else if (w_starts_fold(v, "column-reverse")) st->flex_dir = FD_COLUMN_REVERSE;
+            else if (w_starts_fold(v, "column")) st->flex_dir = FD_COLUMN;
+            else st->flex_dir = FD_ROW;
+            break;
+
+        case P_JUSTIFY:
+            if (w_starts_fold(v, "space-between")) st->justify = JC_BETWEEN;
+            else if (w_starts_fold(v, "space-around")) st->justify = JC_AROUND;
+            else if (w_starts_fold(v, "space-evenly")) st->justify = JC_EVENLY;
+            else if (w_starts_fold(v, "center")) st->justify = JC_CENTER;
+            else if (w_starts_fold(v, "flex-end") || w_starts_fold(v, "end")
+                     || w_starts_fold(v, "right")) st->justify = JC_END;
+            else st->justify = JC_START;
+            break;
+
+        case P_ALIGN_ITEMS:
+            if (w_starts_fold(v, "center")) st->align_items = AI_CENTER;
+            else if (w_starts_fold(v, "flex-end") || w_starts_fold(v, "end"))
+                st->align_items = AI_END;
+            else if (w_starts_fold(v, "flex-start") || w_starts_fold(v, "start"))
+                st->align_items = AI_START;
+            else if (w_starts_fold(v, "baseline")) st->align_items = AI_BASELINE;
+            else st->align_items = AI_STRETCH;
+            break;
+
+        case P_FLEX_WRAP:
+            st->flex_wrap = w_starts_fold(v, "wrap") ? 1 : 0;
+            break;
+
+        case P_GAP: {
+            clen L = css_len(v);
+            st->gap = (short)css_px(L, st->font_px, root_px, pct_of);
+            if (st->gap < 0) st->gap = 0;
+            break;
+        }
+
+        case P_FLEX_GROW: {
+            /* `flex: 1` and `flex-grow: 1` mean the same thing here. The
+               shorthand's other two parts — how it shrinks and what it
+               starts from — are read past: an item that grows is the whole
+               of what a page uses this for. */
+            const char *p = v;
+            while (*p == ' ') p++;
+            if (w_starts_fold(p, "none")) { st->grow = 0; break; }
+            if (w_starts_fold(p, "auto")) { st->grow = 1; break; }
+            int n = 0, any = 0;
+            while (*p >= '0' && *p <= '9') { n = n * 10 + (*p++ - '0'); any = 1; }
+            st->grow = (short)(any ? n : 0);
+            break;
+        }
         case P_FONT_SIZE: {
             if (w_starts_fold(v, "smaller")) { st->font_px = (short)(st->font_px * 5 / 6); break; }
             if (w_starts_fold(v, "larger")) { st->font_px = (short)(st->font_px * 6 / 5); break; }

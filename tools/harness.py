@@ -208,6 +208,53 @@ def centre_of(px, w, h, rgb, min_pixels=200, within=None):
     return (xs // n, ys // n)
 
 
+# --- how wide a piece of chrome text is ------------------------------------
+#
+# Several checks need to know where something at the right hand end of the
+# panel sits, and where it sits is measured in from the edge past the clock.
+# That was written down as a number, and the number was the width of five
+# digits in the fifteen pixel face; the clock was then set in the twenty
+# pixel one and every position derived from it moved by thirteen pixels
+# while the constant went on saying thirty six.
+#
+# The advances are in the generated header, so they can be read rather than
+# remembered. This is the same sum face_width does in gfx.c.
+FACE_BODY, FACE_HEAD, FACE_TITLE, FACE_BODY_BOLD, FACE_HEAD_BOLD = 1, 2, 3, 4, 5
+
+_ADVANCES = {}
+
+
+def face_width(text, which=FACE_BODY):
+    """The width of a string in one of the kernel's faces, in pixels."""
+    if not _ADVANCES:
+        head = os.path.join(ROOT, "include", "face.h")
+        with open(head, encoding="utf-8") as fh:
+            src = fh.read()
+        # The tables in the order face_faces lists them, which is the order
+        # the FACE_ numbers above index.
+        order = ["face_g_13", "face_g_15", "face_g_20", "face_g_26",
+                 "face_g_15b", "face_g_20b", "face_g_15m", "face_g_15bm"]
+        for i, name in enumerate(order):
+            at = src.index("static const face_glyph %s[95] = {" % name)
+            end = src.index("\n};", at)
+            rows = re.findall(r"\{([^{}]*)\}", src[at:end])
+            adv = []
+            for row in rows:
+                parts = [p.strip() for p in row.split(",")]
+                adv.append(int(parts[4]))
+            assert len(adv) == 95, "%s has %d glyphs" % (name, len(adv))
+            _ADVANCES[i] = adv
+
+    adv = _ADVANCES[which]
+    total = 0
+    for ch in text:
+        c = ord(ch)
+        if c < 32 or c > 126:
+            c = 32
+        total += adv[c - 32]
+    return total
+
+
 def read_ppm(path):
     with open(path, "rb") as f:
         data = f.read()
@@ -261,6 +308,7 @@ class Monitor:
                 time.sleep(0.2)
         self.s.settimeout(timeout)
         self.buf = b""
+
         self._to_prompt()          # the banner it opens with
 
     def _to_prompt(self, timeout=180):

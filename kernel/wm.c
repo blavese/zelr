@@ -30,7 +30,6 @@
 #include "user.h"
 #include "elf.h"
 #include "apps.h"
-#include "pins.h"
 #include "winsrv.h"
 #include "power.h"
 #include "sound.h"
@@ -42,12 +41,42 @@
 #include "wifi.h"
 #include "io.h"
 
-#define TASKBAR_H  34
-/* The panel floats clear of the screen edge rather than being welded to it.
-   A bar that runs edge to edge is a border of the display; one with air
-   around it is an object lying on the desktop, and the desktop is then
-   something with depth rather than a backdrop. */
-#define TASKBAR_GAP 0
+/* A bar that floats clear of the edges rather than one welded to them.
+ *
+ * It used to be flush to the bottom and the full width, and the reason
+ * written down here was that a panel is part of the machine rather than a
+ * card lying on the desktop. That was true of a panel made of the same grey
+ * as a window. It is not true of one made of glass: a floating bar with the
+ * wallpaper running underneath and past it on every side reads as a layer
+ * above the desktop, which is what it is, and it gives the wallpaper its
+ * corners back.
+ *
+ * Forty four pixels by default. It was thirty four, which was a strip, and
+ * then fifty six, which was a slab: a floating bar is read as an object,
+ * and an object a quarter the height of nothing on the screen is furniture
+ * rather than a dock. Forty four clears a twenty pixel clock with air
+ * around it and nothing more.
+ *
+ * By default, though, and not by decree. Every number on this bar is in
+ * the settings file now, including whether it floats at all: a gap of
+ * nought welds it back to the bottom edge, which is what it used to be and
+ * what somebody may well want again.
+ *
+ * The names stay so the eighty places that use them do not change, and so
+ * that none of them can hold a number the settings window has since moved.
+ */
+static int dock_h_now(void) {
+    int v = theme()->dock_h;
+    return v >= 20 ? v : 44;
+}
+static int dock_gap_now(void)  { int v = theme()->dock_gap;  return v >= 0 ? v : 14; }
+static int dock_side_now(void) { int v = theme()->dock_side; return v >= 0 ? v : 16; }
+static int dock_r_now(void)    { int v = theme()->dock_radius; return v >= 0 ? v : 14; }
+
+#define TASKBAR_H   dock_h_now()
+#define TASKBAR_GAP dock_gap_now()
+#define DOCK_SIDE   dock_side_now()
+#define DOCK_R      dock_r_now()
 #define TASKBAR_R   0
 
 /* Where the panel sits when it is out. Where it is actually drawn is
@@ -61,15 +90,75 @@ static int panel_rest_y(void) {
 
 /* The badge, then the pinned apps, then a chip for each remaining window. */
 #define TASKBAR_BADGE_W 76
-#define PIN_ICON  22
-#define PIN_STEP  (PIN_ICON + 8)
 
-static int taskbar_pins_x(void) {
-    return TASKBAR_GAP + 8 + TASKBAR_BADGE_W + 12;
+/* What replaced the row of pinned icons.
+ *
+ * Six coloured letters in circles told you which six programs somebody had
+ * chosen, and nothing else: to reach a seventh you opened the launcher
+ * anyway. A field in the middle of the bar reaches all of them and is the
+ * one thing on a desktop that is always worth having within one click. It
+ * is also, unlike a row of badges, the same size whatever is installed.
+ *
+ * Clicking it opens the launcher with the field focused, and what is typed
+ * from then on narrows what the launcher shows. See menu_matches below:
+ * there is no index and no ranking, because thirteen labels is a loop.
+ *
+ * Its width is a setting and its height is not: a field in a bar wants to
+ * be the height of the bar less its margins, and a person who set the two
+ * independently would mostly be setting them wrong. */
+static int dock_x(void);
+static int dock_w(void);
+static int taskbar_net_x(void);
+
+static int dock_find_w(void) {
+    int v = theme()->dock_search_w;
+    if (v < 80) v = 80;
+
+    /* Whatever is left after the name at one end and the tray at the
+       other. The setting is what somebody asked for and this is what the
+       bar can give them: a field seven hundred pixels wide in a bar six
+       hundred wide is a field with the clock inside it. */
+    int room = dock_w() - (theme()->dock_brand ? 110 : 20) - 170;
+    if (room < 80) room = 80;
+    if (v > room) v = room;
+    return v;
+}
+static int dock_find_h(void) {
+    int v = TASKBAR_H - 18;
+    return v < 16 ? 16 : v;
+}
+
+#define DOCK_FIND_W dock_find_w()
+#define DOCK_FIND_H dock_find_h()
+
+static int dock_x(void) { return DOCK_SIDE; }
+static int dock_w(void) { return (int)fb_width() - DOCK_SIDE * 2; }
+
+static int dock_find_x(void) {
+    return dock_x() + (dock_w() - DOCK_FIND_W) / 2;
 }
 
 static int taskbar_chips_x(void) {
-    return taskbar_pins_x() + pins_count() * PIN_STEP + 14;
+    if (!theme()->dock_brand) return dock_x() + 16;
+    return dock_x() + 16 + TASKBAR_BADGE_W + 18;
+}
+
+/* Where the row of window chips has to stop.
+ *
+ * At the tray, and at the field before it if there is one. The field is
+ * centred in the bar and the chips grow from the left, which is fine while
+ * the bar is wide and is a collision the moment it is not: with the dock
+ * inset two hundred pixels a side, the first chip was drawn straight
+ * through the middle of the field. Both the drawing and the hit test ask
+ * this, so neither can be right about where a chip ends while the other is
+ * wrong. */
+static int taskbar_chips_end(void) {
+    int end = taskbar_net_x() - 8;
+    if (theme()->look == LOOK_MODERN && theme()->dock_search) {
+        int before = dock_find_x() - 10;
+        if (before < end) end = before;
+    }
+    return end;
 }
 /* The volume button, left of the clock, and the little panel it opens. */
 #define VOL_W      30
@@ -81,13 +170,29 @@ static int taskbar_chips_x(void) {
 #define NETPOP_W   268
 #define NETPOP_H   150
 
-/* The brand strip down the left of the launcher, which is the one piece of
-   pure decoration on this desktop and earns its place: it makes the menu
-   unmistakably this system's rather than a list of words over a rectangle. */
-#define MENU_BRAND 26
-#define MENU_W     226
-#define MENU_ITEM  24
-#define MENU_PAD   4
+/* The launcher, in two columns.
+ *
+ * It was one: thirteen rows of one word each, which is a list rather than a
+ * menu and which got taller every time the machine learned to do something
+ * new. Thirteen is already most of the height of the screen and there is no
+ * number of programs at which that stops being true.
+ *
+ * Two columns do not get taller. The left is what kind of thing you want,
+ * the right is the things of that kind, and the panel is as tall as the
+ * longest of those -- five rows today and five rows after another dozen
+ * programs, because a dozen programs is two or three more categories at
+ * most and a category costs one row.
+ */
+#define MENU_RAIL  132          /* the kinds, down the left */
+#define MENU_PANE  152          /* the things of that kind */
+#define MENU_PAD   10
+#define MENU_W     (MENU_PAD * 2 + MENU_RAIL + MENU_PANE)
+#define MENU_ITEM  32
+
+/* An index into the panel that says which column it came from, so that one
+   hover and one click handler can serve both and neither can mistake the
+   third kind for the third program. */
+#define MENU_RIGHT 100
 #define SHADOW     5
 
 static window_t *stack[WM_MAX_WINDOWS];   /* index 0 is the bottom */
@@ -182,8 +287,22 @@ static void need_frame_in(int x, int y, int w, int h) {
  * so the curve below is fixed point where 256 means finished.
  */
 #define ANIM_FULL  256
-#define MENU_MS    200       /* the launcher arriving */
-#define HOVER_MS   110      /* a highlight coming up under the pointer */
+
+/* How long each transition takes.
+ *
+ * Three constants in a fixed ratio to one another, moved together by one
+ * setting: what a person means by "faster" is the whole desktop rather
+ * than the launcher in particular, and three sliders would mostly be three
+ * ways to make the desktop disagree with itself. A hundred and twenty is
+ * what these were written at. */
+static u32 anim_scale(u32 ms) {
+    int k = theme()->anim_ms;
+    if (k < 20) k = 120;
+    return (ms * (u32)k) / 120;
+}
+
+#define MENU_MS    anim_scale(200)   /* the launcher arriving */
+#define HOVER_MS   anim_scale(110)   /* a highlight under the pointer */
 
 static u64 anim_len(u32 ms) {
     u64 n = ((u64)ms * timer_hz()) / 1000u;
@@ -231,30 +350,179 @@ static int  menu_hover = -1;
 static int  menu_left = -1;         /* the item the pointer has just left */
 static u64  menu_since;             /* when it opened */
 static u64  menu_hover_since;       /* when the highlight last changed */
+static int  menu_cat;               /* which kind the right column shows */
+
+/* The desktop's own menu, which is a different thing from the launcher.
+ *
+ * A launcher answers "what can this machine run"; a menu on the desktop
+ * answers "what can I do here, now, to this". They were the same panel
+ * because there was only one panel, and the result was that the right
+ * button on the wallpaper offered thirteen programs and nothing at all
+ * about the wallpaper. */
+static bool ctx_open;
+static int  ctx_x, ctx_y;
+static int  ctx_hover = -1, ctx_left = -1;
+static u64  ctx_since, ctx_hover_since;
+
+#define CTX_W    204
+#define CTX_ITEM 30
+#define CTX_PAD  8
+
+static const struct {
+    const char *label;
+    const char *program;
+} CTX[] = {
+    { "Open terminal",     "/bin/term" },
+    { "Browse files",      "/bin/files" },
+    { "Select all",        0 },
+    { "Personalise",       "/bin/settings" },
+    { "Close all windows", 0 },
+    { "System info",       0 },
+};
+#define CTX_N ((int)(sizeof(CTX) / sizeof(CTX[0])))
+#define CTX_H (CTX_N * CTX_ITEM + CTX_PAD * 2)
 
 static u64 last_theme_check;
 
 /* What the launcher offers. A null program means the kernel handles it. */
-static const struct {
+typedef struct {
     const char *label;
     const char *program;
-} MENU[] = {
+} mitem_t;
+
+static const mitem_t M_WORK[] = {
     { "Terminal",     "/bin/term" },
     { "Files",        "/bin/files" },
     { "Notes",        "/bin/notes" },
+    { "Calculator",   "/bin/calc" },
+};
+static const mitem_t M_WEB[] = {
+    { "Browser",      "/bin/browser" },
+};
+static const mitem_t M_MEDIA[] = {
     { "Paint",        "/bin/paint" },
+    { "Music",        "/bin/music" },
+};
+static const mitem_t M_SYSTEM[] = {
     { "Settings",     "/bin/settings" },
     { "Monitor",      "/bin/monitor" },
-    { "Music",        "/bin/music" },
-    { "Calculator",   "/bin/calc" },
-    { "Browser",      "/bin/browser" },
     { "System info",  0 },
+};
+static const mitem_t M_SESSION[] = {
     { "Close all",    0 },
     { "Leave desktop", 0 },
     { "Shut down",    0 },
 };
 
-#define MENU_N ((int)(sizeof(MENU) / sizeof(MENU[0])))
+/* There is no Games here, and a category with nothing in it is a promise
+   the machine cannot keep: a row that opens onto an empty column reads as
+   something broken rather than as something not written yet. It goes in
+   the day there is a game to put in it. */
+#define CAT(a) a, ((int)(sizeof(a) / sizeof((a)[0])))
+static const struct {
+    const char *name;
+    const mitem_t *items;
+    int n;
+} MCAT[] = {
+    { "Productivity", CAT(M_WORK)    },
+    { "Internet",     CAT(M_WEB)     },
+    { "Media",        CAT(M_MEDIA)   },
+    { "System",       CAT(M_SYSTEM)  },
+    { "Session",      CAT(M_SESSION) },
+};
+#undef CAT
+
+#define MCAT_N ((int)(sizeof(MCAT) / sizeof(MCAT[0])))
+
+/* As tall as the taller column, worked out rather than written down: a
+   constant here is one that is wrong the first time a category grows. */
+static int menu_rows(void) {
+    int rows = MCAT_N;
+    for (int i = 0; i < MCAT_N; i++)
+        if (MCAT[i].n > rows) rows = MCAT[i].n;
+    return rows;
+}
+
+/* The height with nothing typed, which is also the most it can be: the
+   panel is laid out upward from the dock, so this is the room reserved
+   for it whatever it ends up showing. */
+static int menu_full_h(void) { return MENU_PAD * 2 + menu_rows() * MENU_ITEM; }
+
+/* --- what has been typed into the field on the dock -----------------------
+ *
+ * The field was drawn and did nothing. It looked like somewhere to type,
+ * which is the whole reason it is the shape it is, and a field that looks
+ * like somewhere to type and is not is worse than no field: every person
+ * who tries it learns that this desktop's controls are decoration.
+ *
+ * What it does now is the ordinary thing. Anything typed while the
+ * launcher is up goes in here, the panel shows what matches instead of the
+ * kinds, and return runs the first of them. There is no index and no
+ * ranking: thirteen labels is a loop.
+ */
+#define MENU_QMAX 24
+#define MENU_HITS 4             /* the query takes the top row of the panel */
+
+static char menu_q[MENU_QMAX + 1];
+static int  menu_qn;
+
+static char menu_low(char c) { return c >= 'A' && c <= 'Z' ? (char)(c + 32) : c; }
+
+/* The query anywhere in the label, not only at the front: somebody after
+   the browser may well type "web" or "brow", and one of those working
+   while the other silently finds nothing is the kind of search that
+   teaches people not to use it. */
+static bool menu_matches(const char *label) {
+    if (menu_qn <= 0) return true;
+    for (int at = 0; label[at]; at++) {
+        int i = 0;
+        while (i < menu_qn && label[at + i]
+               && menu_low(label[at + i]) == menu_low(menu_q[i])) i++;
+        if (i == menu_qn) return true;
+    }
+    return false;
+}
+
+static int menu_hits(const mitem_t **out, int max) {
+    int n = 0;
+    for (int c = 0; c < MCAT_N; c++)
+        for (int j = 0; j < MCAT[c].n; j++) {
+            if (!menu_matches(MCAT[c].items[j].label)) continue;
+            if (n < max) out[n] = &MCAT[c].items[j];
+            n++;
+        }
+    return n < max ? n : max;
+}
+
+/* As tall as what is in it. A panel that stays five rows deep while it is
+   showing one match is a box with a word at the top of it, and the empty
+   four rows read as four things that failed to load. */
+static int menu_h(void) {
+    if (menu_qn <= 0) return menu_full_h();
+    const mitem_t *hit[MENU_HITS];
+    int n = menu_hits(hit, MENU_HITS);
+    if (n < 1) n = 1;                 /* the row that says there are none */
+    return MENU_PAD * 2 + (n + 1) * MENU_ITEM;
+}
+
+/* It shrinks upward, because it hangs from the dock. menu_y is where the
+   full panel's top would be, and everything that draws or hits the panel
+   goes through this so the two can never disagree about where it is. */
+static int menu_top(void) { return menu_y + menu_full_h() - menu_h(); }
+
+/* The two the rest of the kernel asks for through wm.h. Both fall back to
+   what they used to be when nobody has said otherwise, which matters at
+   boot: the self test builds windows before theme_init has run, and a
+   title bar of nought pixels is a window with no title bar. */
+int wm_title_h(void) {
+    int v = theme()->title_h;
+    return v >= 16 ? v : 32;
+}
+
+int wm_border(void) {
+    int v = theme()->border;
+    return (v >= 0 && v <= 8) ? v : 1;
+}
 
 bool wm_active(void) { return running; }
 
@@ -408,17 +676,13 @@ static void blit_surface(const u32 *px, int sw, int sh, int dx, int dy) {
  * pointer is on it. No setting, nothing to turn on: it is a consequence of
  * what is on screen.
  */
-#define PANEL_MS   170      /* going away, and coming back */
+#define PANEL_MS   anim_scale(170)   /* going away, and coming back */
 #define PANEL_EDGE 3        /* how close to the bottom brings it back */
 
 static bool panel_shown = true;
 static u64  panel_since;
 
 /* An icon being pressed, and dragged along the panel to reorder it. */
-static int  pin_press = -1;
-static int  pin_press_x;
-static int  pin_at_x;
-static bool pin_moved;
 
 /* Where the panel is drawn this frame. */
 static int taskbar_y(void) {
@@ -441,6 +705,9 @@ static bool panel_in_the_way(void) {
 /* Everything above the panel, which is where a window is allowed to be.
    With the panel tucked away, that is the screen. */
 static int work_h(void) {
+    int mode = theme()->dock_hide;
+    if (mode <= 0) return panel_rest_y();     /* it never moves, so nor does this */
+    if (mode >= 2) return (int)fb_height();   /* it is never there to be avoided */
     return panel_in_the_way() ? (int)fb_height() : panel_rest_y();
 }
 
@@ -508,8 +775,15 @@ static void ring(int cx, int cy, int r, u32 c) {
  * out for as long as the pointer is on it: a panel that goes away under the
  * hand reaching for it is worse than one that never moves. */
 static bool panel_should_show(int my) {
-    if (menu_open || dragging || pin_press >= 0) return true;
-    if (!panel_in_the_way()) return true;
+    if (menu_open || ctx_open || dragging) return true;
+
+    /* Never, when a window wants the room, or always: the middle one is
+       what this did with no setting at all, and it is still the default.
+       The other two are the two things people actually ask for. */
+    int mode = theme()->dock_hide;
+    if (mode <= 0) return true;
+    if (mode == 1 && !panel_in_the_way()) return true;
+
     if (panel_shown) return my >= panel_rest_y() - 6;
     return my >= (int)fb_height() - PANEL_EDGE;
 }
@@ -556,13 +830,34 @@ static u32 paper(int amount) {
  * desktop that has ever had icons does, and the reason is that dragging one
  * has to start with putting the pointer on it.
  */
-#define ICON_TILE  32
-#define ICON_CELL_W 78
-#define ICON_CELL_H 74
-#define ICON_LEFT  14
-#define ICON_TOP   14
+/* The pictogram is drawn in a thirty two unit square and scaled to
+   whatever size the icons are set to, so that making them bigger moves the
+   whole drawing rather than leaving a thirty two pixel picture in the
+   middle of a sixty four pixel tile. IS() is that scaling, and every
+   coordinate inside a pictogram goes through it. */
+static int icon_tile(void) {
+    int v = theme()->icon_size;
+    return v >= 16 ? v : 32;
+}
+static int icon_gap(void) {
+    int v = theme()->icon_gap;
+    return v >= 8 ? v : 30;
+}
 
-int wm_icons_right(void) { return ICON_LEFT + ICON_CELL_W; }
+#define ICON_TILE   icon_tile()
+#define IS(v)       ((v) * ICON_TILE / 32)
+#define ICON_CELL_W (ICON_TILE + icon_gap() * 2)
+#define ICON_CELL_H (ICON_TILE + icon_gap() + 26)
+#define ICON_LEFT  18
+#define ICON_TOP   20
+
+/* Where a window may start without landing on the icon column. With no
+   icons on the desktop there is no column, and a window that still
+   cascaded from behind one would be avoiding something that is not
+   there. */
+int wm_icons_right(void) {
+    return theme()->desk_icons ? ICON_LEFT + ICON_CELL_W : ICON_LEFT;
+}
 
 static const struct {
     const char *label;
@@ -577,70 +872,215 @@ static const struct {
 };
 #define DESK_N ((int)(sizeof(DESK) / sizeof(DESK[0])))
 
-static int desk_selected = -1;
+/* Which icons are picked out. A set rather than one of them, because a
+   band drawn across the desktop can land on more than one and a desktop
+   that can only hold one selected icon cannot say what a band caught. */
+static u32 desk_sel;
 static int desk_last_click = -1;
 static u64 desk_last_tick;
 
+static bool desk_is_sel(int i) { return (desk_sel >> i) & 1u; }
+
+/* The band itself: where it started, where the pointer is, and which
+   button is holding it down, because either of them can draw one. */
+static bool band_on;
+static int  band_ax, band_ay, band_bx, band_by;
+static u8   band_button;
+
+/* The five pictograms, flat, and drawn to whatever size the icons are.
+ *
+ * They were drawn with bevels, which is what a picture of a thing looked
+ * like when a screen had a hundred and thirty thousand pixels and every
+ * edge had to be argued for. On a desktop made of light they read as five
+ * embossed stickers. Flat shapes with one rounded corner apiece say the
+ * same thing and stop drawing attention to their own edges.
+ *
+ * Every coordinate in them goes through IS(), which is the same number
+ * measured in a thirty two unit square and scaled to the tile. Without it
+ * an icon size of sixty four is a sixty four pixel tile with a thirty two
+ * pixel drawing in the corner of it, which is not a bigger icon, it is a
+ * broken one. IS1() is for thicknesses, which round to nothing at small
+ * sizes and then the line they were drawing is simply absent.
+ */
+#define IS1(v) (IS(v) < 1 ? 1 : IS(v))
+
 static void icon_terminal(int x, int y) {
-    fb_rect((u32)x, (u32)y, ICON_TILE, ICON_TILE, RGB(0x1A, 0x1E, 0x24));
-    fb_bevel(x, y, ICON_TILE, ICON_TILE, RGB(0x60, 0x66, 0x70),
-             RGB(0x40, 0x46, 0x50), RGB(0x10, 0x12, 0x16), RGB(0x06, 0x07, 0x09));
-    u32 green = RGB(0x4C, 0xD9, 0x8A);
-    for (int i = 0; i < 4; i++) {
-        fb_rect((u32)(x + 7 + i), (u32)(y + 10 + i), 2, 2, green);
-        fb_rect((u32)(x + 7 + i), (u32)(y + 18 - i), 2, 2, green);
+    bool modern = theme()->look == LOOK_MODERN;
+    if (modern) {
+        fb_round_rect_aa(x, y, ICON_TILE, ICON_TILE, IS(8),
+                         RGB(0x15, 0x19, 0x22), 255);
+        fb_round_rect_aa(x, y, ICON_TILE, ICON_TILE, IS(8),
+                         RGB(0x3A, 0x44, 0x58), 120);
+    } else {
+        fb_rect((u32)x, (u32)y, (u32)ICON_TILE, (u32)ICON_TILE,
+                RGB(0x1A, 0x1E, 0x24));
+        fb_bevel(x, y, ICON_TILE, ICON_TILE, RGB(0x60, 0x66, 0x70),
+                 RGB(0x40, 0x46, 0x50), RGB(0x10, 0x12, 0x16),
+                 RGB(0x06, 0x07, 0x09));
     }
-    fb_rect((u32)(x + 14), (u32)(y + 20), 10, 2, green);
+    u32 green = RGB(0x4C, 0xD9, 0x8A);
+
+    /* The chevron is stepped a pixel at a time rather than scaled step by
+       step: scaling the steps leaves gaps between them at any size where
+       one unit is more than one pixel, and a dotted chevron is not a
+       chevron. */
+    int n = IS1(4), th = IS1(2);
+    for (int i = 0; i < n; i++) {
+        fb_rect((u32)(x + IS(7) + i), (u32)(y + IS(10) + i),
+                (u32)th, (u32)th, green);
+        fb_rect((u32)(x + IS(7) + i), (u32)(y + IS(18) - i),
+                (u32)th, (u32)th, green);
+    }
+    fb_rect((u32)(x + IS(14)), (u32)(y + IS(20)), (u32)IS1(10), (u32)th, green);
 }
 
 static void icon_folder(int x, int y) {
     u32 body = RGB(0xE2, 0xB8, 0x4E), edge = RGB(0x9A, 0x77, 0x22);
-    fb_rect((u32)(x + 2), (u32)(y + 7), 12, 4, body);       /* the tab */
-    fb_rect((u32)(x + 2), (u32)(y + 10), ICON_TILE - 4, 17, body);
-    fb_rect((u32)(x + 2), (u32)(y + 10), ICON_TILE - 4, 1,
+    if (theme()->look == LOOK_MODERN) {
+        /* Two tones and no outline: the back of the folder a shade darker
+           than its front is the whole of what makes it read as a folder. */
+        fb_round_rect_aa(x + IS(2), y + IS(6), IS1(13), IS1(8), IS(3),
+                         RGB(0xC9, 0xA0, 0x3E), 255);
+        fb_round_rect_aa(x + IS(2), y + IS(9), ICON_TILE - IS(4), IS1(18),
+                         IS(4), body, 255);
+        fb_round_rect_aa(x + IS(2), y + IS(9), ICON_TILE - IS(4), IS1(9),
+                         IS(4), RGB(0xFF, 0xFF, 0xFF), 26);
+        return;
+    }
+    fb_rect((u32)(x + IS(2)), (u32)(y + IS(7)), (u32)IS1(12), (u32)IS1(4), body);
+    fb_rect((u32)(x + IS(2)), (u32)(y + IS(10)), (u32)(ICON_TILE - IS(4)),
+            (u32)IS1(17), body);
+    fb_rect((u32)(x + IS(2)), (u32)(y + IS(10)), (u32)(ICON_TILE - IS(4)), 1,
             RGB(0xF4, 0xD8, 0x8E));
-    fb_bevel_thin(x + 2, y + 7, 12, 5, RGB(0xF4, 0xD8, 0x8E), edge);
-    fb_bevel_thin(x + 2, y + 10, ICON_TILE - 4, 17, RGB(0xF4, 0xD8, 0x8E), edge);
+    fb_bevel_thin(x + IS(2), y + IS(7), IS1(12), IS1(5),
+                  RGB(0xF4, 0xD8, 0x8E), edge);
+    fb_bevel_thin(x + IS(2), y + IS(10), ICON_TILE - IS(4), IS1(17),
+                  RGB(0xF4, 0xD8, 0x8E), edge);
 }
 
 static void icon_page(int x, int y) {
-    fb_rect((u32)(x + 6), (u32)(y + 3), 20, 26, RGB(0xFA, 0xFA, 0xF6));
-    fb_bevel_thin(x + 6, y + 3, 20, 26, RGB(0xFF, 0xFF, 0xFF),
-                  RGB(0x7A, 0x78, 0x74));
+    if (theme()->look == LOOK_MODERN) {
+        fb_round_rect_aa(x + IS(5), y + IS(2), IS1(22), IS1(28), IS(4),
+                         RGB(0xFC, 0xFC, 0xFF), 255);
+        /* The lines in two weights, because a page of writing is not five
+           identical rules and the difference is what makes it read as one. */
+        for (int i = 0; i < 5; i++)
+            fb_round_rect_aa(x + IS(9), y + IS(8 + i * 4),
+                             i == 4 ? IS1(7) : IS1(14), IS1(2), IS(1),
+                             i == 0 ? RGB(0x37, 0x3D, 0x4A)
+                                    : RGB(0x8A, 0x92, 0xA4), 255);
+        return;
+    }
+    fb_rect((u32)(x + IS(6)), (u32)(y + IS(3)), (u32)IS1(20), (u32)IS1(26),
+            RGB(0xFA, 0xFA, 0xF6));
+    fb_bevel_thin(x + IS(6), y + IS(3), IS1(20), IS1(26),
+                  RGB(0xFF, 0xFF, 0xFF), RGB(0x7A, 0x78, 0x74));
     for (int i = 0; i < 5; i++)
-        fb_rect((u32)(x + 10), (u32)(y + 8 + i * 4), (u32)(i == 4 ? 7 : 12), 1,
-                RGB(0x50, 0x56, 0x62));
+        fb_rect((u32)(x + IS(10)), (u32)(y + IS(8 + i * 4)),
+                (u32)(i == 4 ? IS1(7) : IS1(12)), 1, RGB(0x50, 0x56, 0x62));
 }
 
 static void icon_paint(int x, int y) {
     u32 ring = RGB(0xC8, 0x8A, 0x58);
-    fb_rect((u32)(x + 4), (u32)(y + 8), 24, 16, RGB(0xE8, 0xC8, 0xA0));
-    fb_bevel_thin(x + 4, y + 8, 24, 16, RGB(0xFA, 0xE8, 0xCC), ring);
-    fb_rect((u32)(x + 8), (u32)(y + 12), 4, 4, RGB(0xD8, 0x44, 0x40));
-    fb_rect((u32)(x + 14), (u32)(y + 12), 4, 4, RGB(0x3C, 0x74, 0xD0));
-    fb_rect((u32)(x + 20), (u32)(y + 12), 4, 4, RGB(0x50, 0xB0, 0x60));
-    fb_rect((u32)(x + 11), (u32)(y + 18), 4, 4, RGB(0xE0, 0xC0, 0x40));
-    fb_rect((u32)(x + 17), (u32)(y + 18), 4, 4, RGB(0x30, 0x30, 0x38));
+    if (theme()->look == LOOK_MODERN) {
+        /* Five wells of colour on a rounded palette, and no rim: the
+           colours are the picture. */
+        fb_round_rect_aa(x + IS(3), y + IS(7), IS1(26), IS1(18), IS(6),
+                         RGB(0xF3, 0xE3, 0xCC), 255);
+        static const u32 WELL[5] = {
+            RGB(0xE5, 0x48, 0x43), RGB(0x3C, 0x74, 0xD0),
+            RGB(0x3F, 0xB9, 0x63), RGB(0xEF, 0xC1, 0x3C),
+            RGB(0x2B, 0x2E, 0x38) };
+        for (int i = 0; i < 3; i++)
+            fb_round_rect_aa(x + IS(7 + i * 6), y + IS(11), IS1(5), IS1(5),
+                             IS(2), WELL[i], 255);
+        for (int i = 0; i < 2; i++)
+            fb_round_rect_aa(x + IS(10 + i * 6), y + IS(18), IS1(5), IS1(5),
+                             IS(2), WELL[3 + i], 255);
+        return;
+    }
+    fb_rect((u32)(x + IS(4)), (u32)(y + IS(8)), (u32)IS1(24), (u32)IS1(16),
+            RGB(0xE8, 0xC8, 0xA0));
+    fb_bevel_thin(x + IS(4), y + IS(8), IS1(24), IS1(16),
+                  RGB(0xFA, 0xE8, 0xCC), ring);
+    static const u32 DAB[5] = {
+        RGB(0xD8, 0x44, 0x40), RGB(0x3C, 0x74, 0xD0), RGB(0x50, 0xB0, 0x60),
+        RGB(0xE0, 0xC0, 0x40), RGB(0x30, 0x30, 0x38) };
+    for (int i = 0; i < 3; i++)
+        fb_rect((u32)(x + IS(8 + i * 6)), (u32)(y + IS(12)),
+                (u32)IS1(4), (u32)IS1(4), DAB[i]);
+    for (int i = 0; i < 2; i++)
+        fb_rect((u32)(x + IS(11 + i * 6)), (u32)(y + IS(18)),
+                (u32)IS1(4), (u32)IS1(4), DAB[3 + i]);
 }
 
 static void icon_sliders(int x, int y) {
     const theme_t *t = theme();
-    fb_rect((u32)(x + 3), (u32)(y + 4), 26, 24, t->surface);
-    fb_bevel(x + 3, y + 4, 26, 24, t->edge_hi, t->edge_light,
+    if (t->look == LOOK_MODERN) {
+        /* Three rails and three knobs, on nothing. A panel behind them
+           would be a second rectangle inside the tile that is already
+           behind them. */
+        for (int i = 0; i < 3; i++) {
+            int ly = y + IS(9 + i * 7);
+            fb_round_rect_aa(x + IS(5), ly, IS1(22), IS1(3), IS(1),
+                             RGB(0x8A, 0x92, 0xA4), 255);
+            int knob = x + IS(5) + IS(i == 0 ? 14 : i == 1 ? 4 : 10);
+            fb_round_rect_aa(knob, ly - IS(3), IS1(7), IS1(9), IS(3),
+                             t->accent, 255);
+        }
+        return;
+    }
+    fb_rect((u32)(x + IS(3)), (u32)(y + IS(4)), (u32)IS1(26), (u32)IS1(24),
+            t->surface);
+    fb_bevel(x + IS(3), y + IS(4), IS1(26), IS1(24), t->edge_hi, t->edge_light,
              t->edge_shadow, t->edge_dark);
     for (int i = 0; i < 3; i++) {
-        int ly = y + 10 + i * 6;
-        fb_rect((u32)(x + 7), (u32)ly, 18, 2, t->edge_shadow);
-        fb_rect((u32)(x + 7), (u32)(ly + 1), 18, 1, t->edge_hi);
-        int knob = x + 8 + (i == 1 ? 11 : i * 6);
-        fb_rect((u32)knob, (u32)(ly - 2), 4, 6, t->accent);
-        fb_bevel_thin(knob, ly - 2, 4, 6, t->edge_hi, t->edge_dark);
+        int ly = y + IS(10 + i * 6);
+        fb_rect((u32)(x + IS(7)), (u32)ly, (u32)IS1(18), (u32)IS1(2),
+                t->edge_shadow);
+        fb_rect((u32)(x + IS(7)), (u32)(ly + IS1(1)), (u32)IS1(18), 1,
+                t->edge_hi);
+        int knob = x + IS(8) + IS(i == 1 ? 11 : i * 6);
+        fb_rect((u32)knob, (u32)(ly - IS(2)), (u32)IS1(4), (u32)IS1(6),
+                t->accent);
+        fb_bevel_thin(knob, ly - IS(2), IS1(4), IS1(6), t->edge_hi,
+                      t->edge_dark);
     }
 }
 
 static void draw_desk_icon(int i, int x, int y, bool selected) {
     const theme_t *t = theme();
     int tx = x + (ICON_CELL_W - ICON_TILE) / 2;
+
+    /* A tile behind it.
+     *
+     * The pictograms are small and were drawn to sit on a grey desktop; on
+     * a photograph of one they are five loose shapes floating on a
+     * gradient. A rounded square of the wallpaper's own light behind each
+     * gives them somewhere to sit, which is what every desktop that stopped
+     * looking like 1998 did first — and it costs one rectangle.
+     */
+    if (t->look == LOOK_MODERN) {
+        int pad = IS1(10), r = IS1(14);
+        int bx = tx - pad, by = y - pad;
+        int bw = ICON_TILE + pad * 2, bh = ICON_TILE + pad * 2;
+
+        bool hot = !band_on
+                && last_mx >= x && last_mx < x + ICON_CELL_W
+                && last_my >= y - pad && last_my < y + ICON_TILE + pad;
+
+        if (selected) {
+            fb_round_rect_aa(bx, by, bw, bh, r, t->accent, 110);
+            fb_round_rect_aa(bx, by, bw, bh, r, RGB(0xFF, 0xFF, 0xFF), 60);
+        } else {
+            fb_round_rect_aa(bx, by, bw, bh, r, RGB(0xFF, 0xFF, 0xFF),
+                             hot ? 42 : 20);
+            fb_round_rect_aa(bx, by, bw, bh, r, RGB(0xFF, 0xFF, 0xFF),
+                             hot ? 55 : 28);
+            fb_round_rect_aa(bx + 1, by + 1, bw - 2, bh - 2, r - 1,
+                             RGB(0xFF, 0xFF, 0xFF), hot ? 34 : 14);
+        }
+    }
 
     switch (DESK[i].kind) {
         case 0: icon_terminal(tx, y); break;
@@ -653,7 +1093,19 @@ static void draw_desk_icon(int i, int x, int y, bool selected) {
     const char *label = DESK[i].label;
     int lw = face_width(label, FACE_BODY);
     int lx = x + (ICON_CELL_W - lw) / 2;
-    int ly = y + ICON_TILE + 6;
+    int ly = y + ICON_TILE + (theme()->look == LOOK_MODERN ? 16 : 6);
+
+    if (t->look == LOOK_MODERN) {
+        /* White, with a soft dark copy underneath rather than a box behind.
+           The wallpaper can be any colour at all, and one dark pixel offset
+           by one is enough to keep the label readable on all of them
+           without putting a panel on the desktop. */
+        face_text(lx + 1, ly + 1, label, RGB(0x06, 0x09, 0x14), FACE_BODY);
+        face_text(lx, ly, label,
+                  selected ? RGB(0xFF, 0xFF, 0xFF) : RGB(0xEC, 0xF0, 0xF8),
+                  FACE_BODY);
+        return;
+    }
 
     if (selected) {
         fb_rect((u32)(lx - 4), (u32)(ly - 2), (u32)(lw + 8),
@@ -671,19 +1123,83 @@ static void draw_desk_icon(int i, int x, int y, bool selected) {
 }
 
 static void draw_desk_icons(void) {
+    if (!theme()->desk_icons) return;
     int y = ICON_TOP;
     for (int i = 0; i < DESK_N; i++) {
-        draw_desk_icon(i, ICON_LEFT, y, i == desk_selected);
+        draw_desk_icon(i, ICON_LEFT, y, desk_is_sel(i));
         y += ICON_CELL_H;
     }
 }
 
-static int desk_icon_at(int mx, int my) {
+/* Where icon i is, as a rectangle, so that drawing it, clicking it and
+   sweeping a band over it all ask the same question. */
+static void desk_icon_rect(int i, int *x, int *y, int *w, int *h) {
+    *x = ICON_LEFT;
+    *y = ICON_TOP + i * ICON_CELL_H;
+    *w = ICON_CELL_W;
+    *h = ICON_CELL_H - 6;
+}
+
+/* The band, in the order a rectangle wants rather than the order it was
+   drawn in: it is dragged in whichever of the four directions the hand
+   went, and everything downstream wants a top left and a size. */
+static void band_rect(int *x, int *y, int *w, int *h) {
+    int x0 = band_ax < band_bx ? band_ax : band_bx;
+    int x1 = band_ax < band_bx ? band_bx : band_ax;
+    int y0 = band_ay < band_by ? band_ay : band_by;
+    int y1 = band_ay < band_by ? band_by : band_ay;
+    *x = x0; *y = y0; *w = x1 - x0; *h = y1 - y0;
+}
+
+static void band_select(void) {
+    int bx, by, bw, bh;
+    band_rect(&bx, &by, &bw, &bh);
+    desk_sel = 0;
     for (int i = 0; i < DESK_N; i++) {
-        int y = ICON_TOP + i * ICON_CELL_H;
-        if (mx >= ICON_LEFT && mx < ICON_LEFT + ICON_CELL_W
-            && my >= y && my < y + ICON_CELL_H - 6)
-            return i;
+        int ix, iy, iw, ih;
+        desk_icon_rect(i, &ix, &iy, &iw, &ih);
+        if (bx < ix + iw && bx + bw > ix && by < iy + ih && by + bh > iy)
+            desk_sel |= 1u << i;
+    }
+}
+
+static void draw_band(void) {
+    if (!band_on) return;
+    const theme_t *t = theme();
+    int x, y, w, h;
+    band_rect(&x, &y, &w, &h);
+    if (w < 1 || h < 1) return;
+
+    if (t->look == LOOK_MODERN) {
+        /* A wash with a line round it. The wash alone is a smudge on the
+           wallpaper and the line alone is a frame with a hole in it; the
+           two together are the only thing a person reads as "everything
+           inside here". */
+        fb_round_rect_aa(x, y, w, h, 3, t->accent, 46);
+        fb_round_rect_aa(x, y, w, 1, 0, t->accent, 190);
+        fb_round_rect_aa(x, y + h - 1, w, 1, 0, t->accent, 190);
+        fb_round_rect_aa(x, y, 1, h, 0, t->accent, 190);
+        fb_round_rect_aa(x + w - 1, y, 1, h, 0, t->accent, 190);
+    } else {
+        /* The dotted frame, which is what a machine with no alpha to
+           spend drew instead and which still reads perfectly well. */
+        for (int i = 0; i < w; i += 2) {
+            fb_rect((u32)(x + i), (u32)y, 1, 1, t->text);
+            fb_rect((u32)(x + i), (u32)(y + h - 1), 1, 1, t->text);
+        }
+        for (int i = 0; i < h; i += 2) {
+            fb_rect((u32)x, (u32)(y + i), 1, 1, t->text);
+            fb_rect((u32)(x + w - 1), (u32)(y + i), 1, 1, t->text);
+        }
+    }
+}
+
+static int desk_icon_at(int mx, int my) {
+    if (!theme()->desk_icons) return -1;
+    for (int i = 0; i < DESK_N; i++) {
+        int x, y, w, h;
+        desk_icon_rect(i, &x, &y, &w, &h);
+        if (mx >= x && mx < x + w && my >= y && my < y + h) return i;
     }
     return -1;
 }
@@ -715,22 +1231,33 @@ static void draw_wallpaper(void) {
          * of something, which is what every desktop background of the last
          * fifteen years has been trying to be. */
         int W = (int)fb_width();
-        u32 top = RGB(0x0B, 0x16, 0x38);
-        u32 bot = RGB(0x08, 0x2E, 0x4E);
-        fb_vgradient(0, 0, W, h, top, bot);
 
-        /* Cyan high on the left, which is the main source. */
-        fb_glow(W / 5, h / 5, W / 2, h / 2, RGB(0x35, 0xC8, 0xE0), 120);
-        /* A violet one behind it, further over and lower down. */
-        fb_glow((W * 3) / 4, (h * 2) / 5, (W * 2) / 5, (h * 2) / 5,
-                RGB(0x6A, 0x4B, 0xD8), 95);
-        /* Green low and right, which is what keeps it from reading as one
-           blue wash with a bright patch in it. */
-        fb_glow((W * 5) / 8, (h * 9) / 10, (W * 2) / 5, h / 3,
-                RGB(0x2E, 0xD0, 0x9E), 70);
-        /* And a small bright one, to give the others somewhere to fall away
-           from. */
-        fb_glow(W / 4, h / 4, W / 7, h / 7, RGB(0xCF, 0xF6, 0xFF), 90);
+        /* A deep ground that is not quite black and not quite blue, warming
+           very slightly toward the bottom. The old one went from navy to a
+           lighter teal and the lighter end is what made it read as a
+           gradient: a background gets darker toward the bottom in every
+           photograph ever taken, because that is where the ground is. */
+        fb_vgradient(0, 0, W, h, RGB(0x0A, 0x0F, 0x2A), RGB(0x07, 0x0A, 0x1B));
+
+        /* Two lights, not four. Four is a pattern; two is a time of day.
+           One large and cool, high and off to the left, and one smaller and
+           warmer well below it on the other side, so the eye travels
+           between them rather than settling in the middle. */
+        if (t->glows) {
+        fb_glow((W * 3) / 10, h / 4, (W * 3) / 5, (h * 3) / 5,
+                RGB(0x3A, 0x7B, 0xFF), 96);
+        fb_glow((W * 4) / 5, (h * 7) / 10, (W * 2) / 5, (h * 2) / 5,
+                RGB(0x9B, 0x4B, 0xE0), 64);
+
+        /* A small bright core inside the first, which is what gives the
+           larger wash somewhere to fall away from and stops it reading as
+           flat colour with the edges blurred. */
+        fb_glow((W * 3) / 10, h / 4, W / 9, h / 9, RGB(0xC8, 0xDE, 0xFF), 70);
+        }
+
+        /* And the corners pulled down, which is the difference between a
+           background and a wash. */
+        if (t->vignette > 0) fb_vignette(t->vignette);
         break;
     }
 
@@ -954,8 +1481,11 @@ static void draw_wallpaper(void) {
    round tinted dots that were here before said what they did by colour
    alone, which is a convention rather than an affordance: they look the
    same whether the machine is listening or not. */
-#define BTN_W    16
-#define BTN_H    14
+static int btn_w(void) { int v = theme()->button_w; return v >= 12 ? v : 30; }
+static int btn_h(void) { int v = theme()->button_h; return v >= 10 ? v : 24; }
+
+#define BTN_W  btn_w()
+#define BTN_H  btn_h()
 #define BTN_GAP  2
 
 typedef enum { BTN_NONE = 0, BTN_CLOSE, BTN_MAX, BTN_MIN } button_t;
@@ -1032,14 +1562,20 @@ static void button_face(int x, int y, int w, int h, bool down, bool hot) {
 
 /* --- the marks on the title bar buttons ----------------------------------- */
 
+/* The three marks, centred in whatever size the button is. They were drawn
+ * at fixed offsets from the top left, which was the same thing as centred
+ * while the button was sixteen by fourteen and stopped being it the moment
+ * the button grew. */
+#define MARK 10
+
 static void mark_minimise(int x, int y, u32 c) {
-    fb_rect((u32)(x + 4), (u32)(y + BTN_H - 6), 8, 2, c);
+    fb_rect((u32)(x + (BTN_W - MARK) / 2), (u32)(y + BTN_H / 2), MARK, 1, c);
 }
 
 static void mark_maximise(int x, int y, u32 c) {
-    int bx = x + 4, by = y + 3;
-    fb_rect((u32)bx, (u32)by, 8, 8, c);
-    fb_rect((u32)(bx + 1), (u32)(by + 2), 6, 5, theme()->surface);
+    int bx = x + (BTN_W - MARK) / 2, by = y + (BTN_H - MARK) / 2;
+    fb_rect((u32)bx, (u32)by, MARK, MARK, c);
+    fb_rect((u32)(bx + 1), (u32)(by + 1), MARK - 2, MARK - 2, theme()->surface);
 }
 
 static void mark_restore(int x, int y, u32 c) {
@@ -1052,9 +1588,10 @@ static void mark_restore(int x, int y, u32 c) {
 }
 
 static void mark_close(int x, int y, u32 c) {
-    for (int i = 0; i < 7; i++) {
-        fb_rect((u32)(x + 5 + i), (u32)(y + 4 + i), 2, 1, c);
-        fb_rect((u32)(x + 5 + i), (u32)(y + 10 - i), 2, 1, c);
+    int bx = x + (BTN_W - MARK) / 2, by = y + (BTN_H - MARK) / 2;
+    for (int i = 0; i < MARK; i++) {
+        fb_rect((u32)(bx + i), (u32)(by + i), 1, 1, c);
+        fb_rect((u32)(bx + i), (u32)(by + MARK - 1 - i), 1, 1, c);
     }
 }
 
@@ -1284,6 +1821,7 @@ static void resize_from_pointer(int mx, int my, int *cw_out, int *ch_out) {
 
 /* Which edge of the screen the pointer is close enough to for a snap. */
 static snap_t snap_zone_at(int mx, int my) {
+    if (!theme()->snap) return SNAP_NONE;
     const int EDGE = 12;
     if (my <= EDGE) return SNAP_FULL;
     if (mx <= EDGE) return SNAP_LEFT;
@@ -1338,95 +1876,231 @@ static u32 item_light(int i) {
 static void draw_menu(void) {
     if (!menu_open) return;
     const theme_t *t = theme();
-    int h = MENU_N * MENU_ITEM + MENU_PAD * 2;
+    int h = menu_h();
 
     /* It comes up from below rather than appearing. Eight pixels is enough
        to be read as movement and short enough not to be waited for. */
     u32 p = phase_of(menu_since, MENU_MS);
     int rise = (int)(((ANIM_FULL - p) * 8) / ANIM_FULL);
-    int mx = menu_x, my = menu_y + rise;
+    int mx = menu_x, my = menu_top() + rise;
 
     if (t->look == LOOK_MODERN) {
         /* A floating panel, so it gets the deepest shadow on the desktop:
            it is the one thing that is genuinely above everything else and
            it is gone again in a moment. */
-        if (t->shadows) fb_shadow(mx, my, MENU_W, h, 10, 8);
+        if (t->shadows) fb_shadow(mx, my, MENU_W, h, 16, 12);
         /* Flat, with no gloss on it. A menu is a list of words somebody is
            reading right now, and a sheen across the top of one puts a
            gradient behind the first two items and not behind the rest. The
            gloss belongs on the bar, which is furniture. */
-        fb_round_rect_aa(mx, my, MENU_W, h, 10, t->overlay, 250);
-        fb_round_rect_aa(mx, my, MENU_W, h, 10, t->stroke, 85);
-        fb_round_rect_aa(mx + 1, my + 1, MENU_W - 2, h - 2, 9, t->overlay, 252);
+        fb_round_rect_aa(mx, my, MENU_W, h, 16, t->overlay, 250);
+        fb_round_rect_aa(mx, my, MENU_W, h, 16, t->stroke, 85);
+        fb_round_rect_aa(mx + 1, my + 1, MENU_W - 2, h - 2, 15, t->overlay, 252);
     } else {
         fb_rect((u32)mx, (u32)my, MENU_W, (u32)h, t->surface);
         raised(mx, my, MENU_W, h);
     }
 
-    /* --- the strip --------------------------------------------------------
+    /* There was a strip of colour down the left of this with the letters
+       Z E L R stacked in it, and a coloured tile beside every entry holding
+       the first letter of the word next to it. Thirteen of those is not
+       thirteen icons, it is the same word twice, and the strip was the one
+       thing on the screen that was decoration rather than information.
      *
-     * The letters are stacked rather than turned on their side, because a
-     * glyph rotated by a routine that was never asked to rotate one comes
-     * out as porridge, and four capitals down a strip reads perfectly well
-     * at this size. */
-    fb_vgradient(mx + 2, my + 2, MENU_BRAND - 2, h - 4,
-                 t->accent, gfx_mix(t->accent, RGB(0, 0, 0), 90));
+       What is down the left now is the only thing that earns that column:
+       which kind of thing you are after. */
 
-    {
-        static const char *LETTERS[] = { "Z", "E", "L", "R" };
-        int lh = face_height(FACE_BODY_BOLD);
-        int total = 4 * (lh + 2);
-        int ly = my + h - MENU_PAD - 8 - total;
-        if (ly < my + 8) ly = my + 8;
-        for (int i = 0; i < 4; i++) {
-            int lw = face_width(LETTERS[i], FACE_BODY_BOLD);
-            face_text(mx + 2 + (MENU_BRAND - 2 - lw) / 2, ly,
-                      LETTERS[i], t->accent_text, FACE_BODY_BOLD);
-            ly += lh + 2;
+    /* --- what was typed, and what matches it ------------------------------- */
+    if (menu_qn > 0) {
+        int qx = mx + MENU_PAD, qw = MENU_W - MENU_PAD * 2;
+        int qy = my + MENU_PAD;
+
+        face_text(qx + 12, qy + (MENU_ITEM - face_height(FACE_BODY)) / 2,
+                  menu_q, t->text, FACE_BODY);
+
+        /* A caret, steady rather than blinking. Nothing on this desktop
+           blinks and adding the one thing that does would need a timer
+           whose whole job is to make a line disappear. */
+        int cx = qx + 14 + face_width(menu_q, FACE_BODY);
+        fb_rect((u32)cx, (u32)(qy + 7), 1, (u32)(MENU_ITEM - 14), t->accent);
+
+        if (t->look == LOOK_MODERN)
+            fb_round_rect_aa(qx + 8, qy + MENU_ITEM - 1, qw - 16, 1, 0,
+                             t->stroke, 130);
+        else
+            fb_bevel_thin(qx, qy + MENU_ITEM - 1, qw, 1,
+                          t->edge_shadow, t->edge_hi);
+
+        const mitem_t *hit[MENU_HITS];
+        int n = menu_hits(hit, MENU_HITS);
+
+        if (n == 0) {
+            face_text(qx + 12,
+                      qy + MENU_ITEM
+                      + (MENU_ITEM - face_height(FACE_BODY)) / 2,
+                      "nothing by that name", t->text_mute, FACE_BODY);
+            return;
+        }
+
+        for (int j = 0; j < n; j++) {
+            int iy = qy + (j + 1) * MENU_ITEM;
+            bool on = item_light(MENU_RIGHT + j) > ANIM_FULL / 2;
+
+            if (t->look == LOOK_MODERN) {
+                if (on) fb_round_rect_aa(qx, iy + 1, qw, MENU_ITEM - 2, 8,
+                                         t->accent, 42);
+                face_text(qx + 12,
+                          iy + (MENU_ITEM - face_height(FACE_BODY)) / 2,
+                          hit[j]->label, t->text, FACE_BODY);
+            } else {
+                if (on) fb_rect((u32)qx, (u32)iy, (u32)qw, MENU_ITEM,
+                                t->accent);
+                face_text(qx + 8,
+                          iy + (MENU_ITEM - face_height(FACE_BODY)) / 2,
+                          hit[j]->label, on ? t->accent_text : t->text,
+                          FACE_BODY);
+            }
+        }
+        return;
+    }
+
+    /* --- the kinds, down the left ------------------------------------------ */
+    int rx = mx + MENU_PAD;
+    int rw = MENU_RAIL - 8;
+
+    for (int i = 0; i < MCAT_N; i++) {
+        int iy = my + MENU_PAD + i * MENU_ITEM;
+        bool here = (i == menu_cat);
+        bool lit  = item_light(i) > ANIM_FULL / 2;
+
+        if (t->look == LOOK_MODERN) {
+            if (here)     fb_round_rect_aa(rx, iy + 1, rw, MENU_ITEM - 2, 8,
+                                           t->accent, 58);
+            else if (lit) fb_round_rect_aa(rx, iy + 1, rw, MENU_ITEM - 2, 8,
+                                           t->text, 20);
+
+            /* A short bar against the left edge of the one that is open,
+               because a fill alone cannot be told apart from a hover and
+               this column has one of each on it at once. */
+            if (here)
+                fb_round_rect_aa(rx + 2, iy + 9, 3, MENU_ITEM - 18, 1,
+                                 t->accent, 255);
+
+            face_text(rx + 14, iy + (MENU_ITEM - face_height(FACE_BODY)) / 2,
+                      MCAT[i].name, here ? t->text : t->text_dim, FACE_BODY);
+
+            /* How many are in it, set small and against the far edge. A
+               category is worth choosing partly for how much is behind it,
+               and that is one number the column has room for. */
+            char n[4];
+            kformat(n, sizeof(n), "%d", MCAT[i].n);
+            face_text(rx + rw - 10 - face_width(n, FACE_SMALL),
+                      iy + (MENU_ITEM - face_height(FACE_SMALL)) / 2,
+                      n, t->text_mute, FACE_SMALL);
+        } else {
+            if (here || lit)
+                fb_rect((u32)rx, (u32)iy, (u32)rw, MENU_ITEM,
+                        here ? t->accent : t->edge_hi);
+            face_text(rx + 8, iy + (MENU_ITEM - face_height(FACE_BODY)) / 2,
+                      MCAT[i].name, here ? t->accent_text : t->text,
+                      FACE_BODY);
         }
     }
 
-    /* --- the items --------------------------------------------------------- */
-    int ix = mx + MENU_BRAND;
-    int iw = MENU_W - MENU_BRAND - MENU_PAD;
+    /* --- the rule between the columns -------------------------------------- */
+    int sx = mx + MENU_PAD + MENU_RAIL - 4;
+    if (t->look == LOOK_MODERN)
+        fb_round_rect_aa(sx, my + MENU_PAD + 6, 1, h - MENU_PAD * 2 - 12, 0,
+                         t->stroke, 110);
+    else
+        fb_bevel_thin(sx, my + MENU_PAD, 1, h - MENU_PAD * 2,
+                      t->edge_shadow, t->edge_hi);
 
-    for (int i = 0; i < MENU_N; i++) {
-        int iy = my + MENU_PAD + i * MENU_ITEM;
-        u32 lit = item_light(i);
+    /* --- the things of that kind, down the right --------------------------- */
+    int ix = mx + MENU_PAD + MENU_RAIL + 4;
+    int iw = MENU_PANE - MENU_PAD - 4;
 
-        /* A full width bar in the accent, which is what a highlighted menu
-           item has always been, and reads instantly as the one that will
-           happen if the button goes down now. */
-        bool on = lit > ANIM_FULL / 2;
-        if (on) fb_rect((u32)ix, (u32)iy, (u32)iw, MENU_ITEM, t->accent);
+    for (int j = 0; j < MCAT[menu_cat].n; j++) {
+        int iy = my + MENU_PAD + j * MENU_ITEM;
+        bool on = item_light(MENU_RIGHT + j) > ANIM_FULL / 2;
 
-        u32 fg = on ? t->accent_text : t->text;
+        if (t->look == LOOK_MODERN) {
+            /* A rounded patch rather than a bar to the edges, so the panel
+               keeps its margin and the highlight reads as a thing being
+               pointed at rather than a row being filled in. */
+            if (on)
+                fb_round_rect_aa(ix, iy + 1, iw, MENU_ITEM - 2, 8,
+                                 t->accent, 42);
 
-        /* A small tile with the first letter, the same way the panel draws
-           an app, so a program is recognisable in both places. */
-        const char *label = MENU[i].label;
-        char first[2] = { label[0], 0 };
-        if (first[0] >= 'a' && first[0] <= 'z') first[0] = (char)(first[0] - 32);
-
-        int ty = iy + (MENU_ITEM - 16) / 2;
-        u32 tile = MENU[i].program ? t->accent : t->text_dim;
-        if (on) tile = t->accent_text;
-        fb_rect((u32)(ix + 6), (u32)ty, 16, 16, gfx_mix(t->surface, tile, 70));
-        fb_bevel_thin(ix + 6, ty, 16, 16, t->edge_hi, t->edge_dark);
-        face_text(ix + 6 + (16 - face_width(first, FACE_SMALL)) / 2,
-                  ty + (16 - face_height(FACE_SMALL)) / 2, first,
-                  on ? t->text : t->text, FACE_SMALL);
-
-        face_text(ix + 30, iy + (MENU_ITEM - face_height(FACE_BODY)) / 2,
-                  label, fg, FACE_BODY);
-
-        /* A groove above the entries the desktop handles itself, which is
-           where a menu stops offering programs and starts offering the
-           machine. */
-        if (!MENU[i].program && i > 0 && MENU[i - 1].program)
-            fb_bevel_thin(ix + 4, iy - 2, iw - 8, 2, t->edge_shadow, t->edge_hi);
+            /* Full strength, all of them: dimming the ones the kernel
+               handles made four working commands look unavailable. */
+            face_text(ix + 12,
+                      iy + (MENU_ITEM - face_height(FACE_BODY)) / 2,
+                      MCAT[menu_cat].items[j].label, t->text, FACE_BODY);
+        } else {
+            if (on) fb_rect((u32)ix, (u32)iy, (u32)iw, MENU_ITEM, t->accent);
+            face_text(ix + 8, iy + (MENU_ITEM - face_height(FACE_BODY)) / 2,
+                      MCAT[menu_cat].items[j].label,
+                      on ? t->accent_text : t->text, FACE_BODY);
+        }
     }
-    (void)p;
+}
+
+/* How strongly a row of the desktop menu should be lit. The same two
+   variables and the same rise as the launcher, kept apart from it because
+   the two can never be open at once but can both be halfway through
+   fading when the other opens. */
+static u32 ctx_light(int i) {
+    u32 p = phase_of(ctx_hover_since, HOVER_MS);
+    if (i == ctx_hover) return p;
+    if (i == ctx_left)  return ANIM_FULL - p;
+    return 0;
+}
+
+static void draw_ctx(void) {
+    if (!ctx_open) return;
+    const theme_t *t = theme();
+
+    u32 p = phase_of(ctx_since, MENU_MS);
+    int rise = (int)(((ANIM_FULL - p) * 6) / ANIM_FULL);
+    int mx = ctx_x, my = ctx_y + rise;
+
+    if (t->look == LOOK_MODERN) {
+        if (t->shadows) fb_shadow(mx, my, CTX_W, CTX_H, 14, 12);
+        fb_round_rect_aa(mx, my, CTX_W, CTX_H, 14, t->overlay, 250);
+        fb_round_rect_aa(mx, my, CTX_W, CTX_H, 14, t->stroke, 85);
+        fb_round_rect_aa(mx + 1, my + 1, CTX_W - 2, CTX_H - 2, 13,
+                         t->overlay, 252);
+    } else {
+        fb_rect((u32)mx, (u32)my, CTX_W, CTX_H, t->surface);
+        raised(mx, my, CTX_W, CTX_H);
+    }
+
+    int ix = mx + CTX_PAD;
+    int iw = CTX_W - CTX_PAD * 2;
+
+    for (int i = 0; i < CTX_N; i++) {
+        int iy = my + CTX_PAD + i * CTX_ITEM;
+        bool on = ctx_light(i) > ANIM_FULL / 2;
+
+        if (t->look == LOOK_MODERN) {
+            if (on) fb_round_rect_aa(ix, iy + 1, iw, CTX_ITEM - 2, 7,
+                                     t->accent, 42);
+            face_text(ix + 12, iy + (CTX_ITEM - face_height(FACE_BODY)) / 2,
+                      CTX[i].label, t->text, FACE_BODY);
+        } else {
+            if (on) fb_rect((u32)ix, (u32)iy, (u32)iw, CTX_ITEM, t->accent);
+            face_text(ix + 8, iy + (CTX_ITEM - face_height(FACE_BODY)) / 2,
+                      CTX[i].label, on ? t->accent_text : t->text, FACE_BODY);
+        }
+
+        /* The rule between what opens something and what happens to what
+           is already open. */
+        if (i == 4 && t->look == LOOK_MODERN)
+            fb_round_rect_aa(ix + 8, iy - 1, iw - 16, 1, 0, t->stroke, 120);
+        else if (i == 4)
+            fb_rect((u32)ix, (u32)iy, (u32)iw, 1, t->edge_shadow);
+    }
 }
 
 /* The outline of where a dragged window would land. Drawn as a frame
@@ -1465,87 +2139,36 @@ static void draw_resize_preview(void) {
  * happen to have open.
  */
 
-/* How bright a colour reads, which is not its average: the eye weighs green
-   far more than blue. */
-static u32 luma_of(u32 c) {
-    return ((((c >> 16) & 0xFF) * 77) + (((c >> 8) & 0xFF) * 151)
-            + ((c & 0xFF) * 28)) >> 8;
-}
 
-/* An app's own colour, from its path, so the same program is the same
-   colour on every machine and adding one does not renumber the others.
-   The palette is the theme's own presets: six colours already chosen to
-   work together, rather than six invented here. */
-static u32 pin_colour(const char *path) {
-    u32 hash = 2166136261u;
-    for (const char *p = path; *p; p++) hash = (hash ^ (u32)*p) * 16777619u;
-    return theme_preset_accent((int)(hash % THEME_PRESETS));
-}
-
-/* The window a program has open, or nothing. The topmost, so clicking an
-   icon twice does not walk backwards through a stack of them. */
-static window_t *window_for_app(const char *path) {
-    if (!path || !path[0]) return 0;
-    for (int i = nwin - 1; i >= 0; i--)
-        if (!strcmp(stack[i]->app, path)) return stack[i];
-    return 0;
-}
-
-/* True for a window that already has an icon on the panel. */
-static bool shown_as_pin(const window_t *w) {
-    return w->app[0] && pins_find(w->app) >= 0;
-}
-
-static int taskbar_pin_at(int mx, int my) {
-    int y = taskbar_y();
-    if (my < y + 2 || my >= y + TASKBAR_H - 2) return -1;
-
-    int x = taskbar_pins_x();
-    for (int i = 0; i < pins_count(); i++, x += PIN_STEP) {
-        if (mx >= x - 4 && mx < x + PIN_ICON + 4) return i;
-    }
-    return -1;
-}
-
-/* Which slot a drag is over, which is not the same question: anywhere past
-   the last icon is the last slot rather than nowhere. */
-static int pin_slot_at(int mx) {
-    int rel = mx - taskbar_pins_x() + PIN_STEP / 2;
-    if (rel < 0) return 0;
-    int slot = rel / PIN_STEP;
-    if (slot >= pins_count()) slot = pins_count() - 1;
-    return slot;
-}
-
-/* There are no icon files anywhere in this project and inventing a format
-   to hold five pictures would be worse than this: a rounded square in the
-   app's colour with the first letter of its name in it, which tells them
-   apart at a glance and costs nothing to carry. */
-static void draw_pin_icon(int x, int y, const pin_t *p, bool hot, bool running) {
-    const theme_t *t = theme();
-    u32 c = pin_colour(p->path);
-
-    if (hot) fb_round_rect(x - 4, y - 3, PIN_ICON + 8, PIN_ICON + 6, 7, t->raised);
-    fb_round_rect(x, y, PIN_ICON, PIN_ICON, 6, c);
-    fb_rect((u32)(x + 6), (u32)y, (u32)(PIN_ICON - 12), 1, lighten(c, 70));
-    fb_round_frame(x, y, PIN_ICON, PIN_ICON, 6, darken(c, 60));
-
-    char first[2] = { p->label[0], 0 };
-    if (first[0] >= 'a' && first[0] <= 'z') first[0] = (char)(first[0] - 32);
-    u32 ink = luma_of(c) > 140 ? darken(c, 200) : RGB(0xFF, 0xFF, 0xFF);
-    face_text(x + (PIN_ICON - face_width(first, FACE_BODY_BOLD)) / 2,
-              y + (PIN_ICON - face_height(FACE_BODY_BOLD)) / 2,
-              first, ink, FACE_BODY_BOLD);
-
-    /* A bar under it while the program is running, in the same place the
-       chips put theirs, so one line across the panel says what is open. */
-    if (running)
-        fb_rect((u32)(x + PIN_ICON / 2 - 4), (u32)(y + PIN_ICON + 3), 8, 2,
-                t->accent);
-}
 
 static void clock_text(char *out, u32 cap) {
-    if (rtc_present()) { rtc_format_short(out, cap); return; }
+    if (rtc_present()) {
+        rtc_format_short(out, cap);
+
+        /* Twelve hour is the same string with the hour folded and two
+           letters after it, rather than a second formatter in rtc.c: the
+           clock is the desktop's, and the only thing the desktop wants
+           from the hardware is the hour it actually is. */
+        if (!theme()->clock_24 && cap >= 9
+            && out[0] >= '0' && out[0] <= '9' && out[2] == ':') {
+            int hh = (out[0] - '0') * 10 + (out[1] - '0');
+            bool pm = hh >= 12;
+            int h12 = hh % 12;
+            if (!h12) h12 = 12;
+            out[0] = (char)('0' + h12 / 10);
+            out[1] = (char)('0' + h12 % 10);
+            out[5] = ' ';
+            out[6] = pm ? 'p' : 'a';
+            out[7] = 'm';
+            out[8] = 0;
+            /* A leading nought on a twelve hour clock is the one thing
+               nobody writes. */
+            if (out[0] == '0') {
+                for (int i = 0; i < 8; i++) out[i] = out[i + 1];
+            }
+        }
+        return;
+    }
 
     /* A machine with no usable CMOS clock counts from boot instead, which
        is what this had before there was a clock to read. */
@@ -1556,11 +2179,21 @@ static void clock_text(char *out, u32 cap) {
 /* The right hand end of the panel: the clock against the edge, and the
    speaker to the left of it. Worked out in one place so that what is drawn
    and what a click lands on cannot drift apart. */
-static int taskbar_volume_x(void) {
+/* How much of the right hand end the clock takes, which is nothing at all
+   when it is switched off: the tray then moves over into the room it was
+   using rather than leaving a hole where it used to be. */
+static int clock_slot_w(void) {
+    if (!theme()->dock_clock) return 0;
     char clock[24];
     clock_text(clock, sizeof(clock));
-    return (int)fb_width() - TASKBAR_GAP - 16
-           - face_width(clock, FACE_BODY) - 14 - VOL_W;
+    return face_width(clock, theme()->look == LOOK_MODERN ? FACE_HEAD
+                                                          : FACE_BODY);
+}
+
+static int taskbar_volume_x(void) {
+    /* Measured in from the dock's own right edge rather than the screen's,
+       because the dock no longer reaches it. */
+    return dock_x() + dock_w() - 20 - clock_slot_w() - 16 - VOL_W;
 }
 
 static bool on_volume_button(int mx, int my) {
@@ -1570,22 +2203,86 @@ static bool on_volume_button(int mx, int my) {
     return mx >= x && mx < x + VOL_W;
 }
 
-/* A speaker, drawn rather than stored: a box, a cone widening out of it, and
-   one bar for quiet or two for loud. A cross instead when it is off. */
-static void draw_speaker(int x, int y, u32 fg, int level) {
-    fb_rect((u32)(x + 2), (u32)(y + 5), 3, 6, fg);
-    for (int i = 0; i < 5; i++)
-        fb_rect((u32)(x + 5 + i), (u32)(y + 5 - i), 1, (u32)(6 + i * 2), fg);
+/* --- the glyphs in the tray ----------------------------------------------
+ *
+ * Placed pixel by pixel rather than assembled out of rectangles, which is
+ * how the pointer a few hundred lines down has always been drawn and for
+ * the same reason. Both of these were built out of shapes and both came
+ * out wrong in the same way: the sound leaving a speaker was two straight
+ * bars, which beside anything read as tally marks, and the network was a
+ * rounded box with a nub above and another below, which at sixteen pixels
+ * read as an insect. Arcs computed from a radius were no better -- at this
+ * size the rounding decides the shape, and three concentric ones came out
+ * as a lattice.
+ *
+ * Sixteen pixels is not a drawing of a thing. It is an arrangement of two
+ * hundred and fifty six cells, and the only reliable way to arrange them
+ * is to arrange them.
+ *
+ * The digit in a cell says which part of the glyph it belongs to, so one
+ * bitmap serves the quiet speaker and the loud one, and one serves all
+ * five strengths of a signal, instead of five bitmaps that could drift.
+ */
+#define GLYPH 16
 
-    if (level <= 0) {
-        for (int i = 0; i < 6; i++) {
-            fb_rect((u32)(x + 13 + i), (u32)(y + 5 + i), 2, 1, fg);
-            fb_rect((u32)(x + 13 + i), (u32)(y + 10 - i), 2, 1, fg);
+/* Which parts to draw, as bits: part '1' is bit zero. */
+static void glyph(int x, int y, const char *bits, const u32 *ink, int parts) {
+    for (int j = 0; j < GLYPH; j++)
+        for (int i = 0; i < GLYPH; i++) {
+            char c = bits[j * GLYPH + i];
+            if (c == ' ') continue;
+            int k = c - '1';
+            if (!((parts >> k) & 1)) continue;
+            fb_put((u32)(x + i), (u32)(y + j), ink[k]);
         }
-        return;
-    }
-    fb_rect((u32)(x + 13), (u32)(y + 5), 2, 6, fg);
-    if (level > 45) fb_rect((u32)(x + 17), (u32)(y + 2), 2, 12, fg);
+}
+
+/* 1 the cone, 2 the near wave, 3 the far one. */
+static const char G_SPEAKER[] =
+    "                "
+    "                "
+    "       1        "
+    "      11    3   "
+    "     111     3  "
+    "    1111 2    3 "
+    "11111111  2   3 "
+    "11111111  2   3 "
+    "11111111  2   3 "
+    "11111111  2   3 "
+    "    1111 2    3 "
+    "     111     3  "
+    "      11    3   "
+    "       1        "
+    "                "
+    "                ";
+
+/* The same cone with a cross where the waves were, rather than the waves
+   drawn faintly: silence is not a quiet sound. */
+static const char G_MUTE[] =
+    "                "
+    "                "
+    "       1        "
+    "      11        "
+    "     111        "
+    "    1111 44  44 "
+    "11111111  4444  "
+    "11111111   44   "
+    "11111111   44   "
+    "11111111  4444  "
+    "    1111 44  44 "
+    "     111        "
+    "      11        "
+    "       1        "
+    "                "
+    "                ";
+
+_Static_assert(sizeof(G_SPEAKER) == GLYPH * GLYPH + 1, "the speaker is not 16 by 16");
+_Static_assert(sizeof(G_MUTE) == GLYPH * GLYPH + 1, "the mute speaker is not 16 by 16");
+
+static void draw_speaker(int x, int y, u32 fg, int level) {
+    const u32 ink[4] = { fg, fg, fg, fg };
+    if (level <= 0) { glyph(x, y, G_MUTE, ink, 0x9); return; }
+    glyph(x, y, G_SPEAKER, ink, level > 45 ? 0x7 : 0x3);
 }
 
 /* Where the slider's track is, which the drawing and the dragging both
@@ -1662,22 +2359,65 @@ static bool on_net_button(int mx, int my) {
     return mx >= x && mx < x + NET_W;
 }
 
-/* Four bars, the ones above the strength drawn faintly rather than left out,
-   so the icon is the same size and shape whatever it is saying. */
+/* Three arcs over a dot. Flat across the top with the ends dropping away
+   quickly, rather than an even curve: three even curves three rows apart
+   have each one's falling end level with the next one's rise, and what
+   that draws is a lattice.
+ *
+   The arcs above the strength are drawn faintly rather than left out, so
+   the icon keeps its size and shape whatever it is saying. One that
+   changes outline as the signal moves is one the eye has to find again
+   every time it does. */
+static const char G_SIGNAL[] =
+    "                "
+    "                "
+    "   4444444444   "
+    " 44          44 "
+    "                "
+    "     333333     "
+    "   33      33   "
+    "                "
+    "      2222      "
+    "    22    22    "
+    "                "
+    "       11       "
+    "      1111      "
+    "      1111      "
+    "       11       "
+    "                ";
+
+/* A plug on the end of a lead, for a wired connection, because arcs would
+   be a lie about something that has no signal strength. */
+static const char G_PLUG[] =
+    "                "
+    "                "
+    "       11       "
+    "       11       "
+    "  111111111111  "
+    "  1          1  "
+    "  1          1  "
+    "  1          1  "
+    "  1          1  "
+    "  111111111111  "
+    "    11 11 11    "
+    "    11 11 11    "
+    "    11 11 11    "
+    "                "
+    "                "
+    "                ";
+
+_Static_assert(sizeof(G_SIGNAL) == GLYPH * GLYPH + 1, "the signal is not 16 by 16");
+_Static_assert(sizeof(G_PLUG) == GLYPH * GLYPH + 1, "the plug is not 16 by 16");
+
 static void draw_signal(int x, int y, u32 on, u32 off, int bars) {
-    for (int i = 0; i < 4; i++) {
-        int h = 3 + i * 3;
-        fb_rect((u32)(x + i * 4), (u32)(y + 12 - h), 3, (u32)h,
-                i < bars ? on : off);
-    }
+    const u32 ink[4] = { bars >= 1 ? on : off, bars >= 2 ? on : off,
+                         bars >= 3 ? on : off, bars >= 4 ? on : off };
+    glyph(x, y, G_SIGNAL, ink, 0xF);
 }
 
-/* A socket with a cable going into it, for a wired connection, because
-   bars would be a lie about something that has no signal strength. */
 static void draw_wired(int x, int y, u32 fg) {
-    fb_round_rect(x + 1, y + 4, 13, 8, 2, fg);
-    fb_rect((u32)(x + 5), (u32)(y + 1), 5, 3, fg);
-    fb_rect((u32)(x + 4), (u32)(y + 12), 7, 2, fg);
+    const u32 ink[4] = { fg, fg, fg, fg };
+    glyph(x, y, G_PLUG, ink, 0x1);
 }
 
 static void net_panel_rect(int *px, int *py) {
@@ -1827,9 +2567,24 @@ static void draw_taskbar(void) {
        bevel, because a bevel on a translucent surface is a bevel on
        nothing. */
     if (t->look == LOOK_MODERN) {
-        fb_round_rect_aa(0, y, W, TASKBAR_H, 0, t->glass, 214);
-        fb_sheen(0, y, W, TASKBAR_H, 0, 38);
-        fb_rect(0, (u32)y, (u32)W, 1, t->stroke);
+        int dx = dock_x(), dw = dock_w();
+
+        /* A shadow first, so the bar sits above the wallpaper rather than
+           being a hole cut in it. */
+        if (t->shadows) fb_shadow(dx, y, dw, TASKBAR_H, DOCK_R, 10);
+
+        /* Glass, twice: once for the tint and once for a hairline round the
+           edge. A single pass leaves the corners looking chewed, because
+           the antialiasing on the outside of a rounded rectangle is what
+           tells the eye where the edge is. */
+        fb_round_rect_aa(dx, y, dw, TASKBAR_H, DOCK_R, t->glass, 208);
+        fb_round_rect_aa(dx, y, dw, TASKBAR_H, DOCK_R, t->stroke, 70);
+        fb_round_rect_aa(dx + 1, y + 1, dw - 2, TASKBAR_H - 2, DOCK_R - 1,
+                         t->glass, 232);
+
+        /* And a light along the top edge, which is what every piece of
+           glass in the world has and no flat rectangle does. */
+        fb_sheen(dx, y, dw, TASKBAR_H, DOCK_R, 44);
     } else {
         fb_rect(0, (u32)y, (u32)W, TASKBAR_H, t->surface);
         fb_bevel_thin(0, y, W, TASKBAR_H + 2, t->edge_hi, t->edge_hi);
@@ -1841,29 +2596,80 @@ static void draw_taskbar(void) {
        happens to look right: a badge drawn somewhere its own click handler
        does not expect is a button that works everywhere except where it
        is. */
-    int bx = TASKBAR_GAP + 8, bh = TASKBAR_H - 10, by = y + 5;
-    bool badge_hot = menu_open || (last_my >= by && last_my < by + bh
-                                   && last_mx >= bx
-                                   && last_mx < bx + TASKBAR_BADGE_W);
-    button_face(bx, by, TASKBAR_BADGE_W, bh, menu_open, badge_hot);
-    face_text(bx + 12 + (menu_open ? 1 : 0),
-              by + (bh - face_height(FACE_HEAD_BOLD)) / 2 + (menu_open ? 1 : 0),
-              "zelr", t->accent, FACE_HEAD_BOLD);
-
-    /* --- the apps kept on it ---------------------------------------------- */
-    int hot = pin_moved ? -1 : taskbar_pin_at(last_mx, last_my);
-    int px_pin = taskbar_pins_x();
-    for (int i = 0; i < pins_count(); i++, px_pin += PIN_STEP) {
-        const pin_t *p = pin_at(i);
-        if (pin_moved && i == pin_press) continue;
-        bool running = window_for_app(p->path) != 0;
-        button_face(px_pin - 2, by, PIN_ICON + 4, bh, running, i == hot);
-        draw_pin_icon(px_pin, by + (bh - PIN_ICON) / 2, p, i == hot, running);
+    int bx = dock_x() + 16, bh = TASKBAR_H - 14, by = y + 7;
+    if (t->dock_brand) {
+        bool badge_hot = menu_open || (last_my >= by && last_my < by + bh
+                                       && last_mx >= bx
+                                       && last_mx < bx + TASKBAR_BADGE_W);
+        button_face(bx, by, TASKBAR_BADGE_W, bh, menu_open, badge_hot);
+        face_text(bx + 12 + (menu_open ? 1 : 0),
+                  by + (bh - face_height(FACE_HEAD_BOLD)) / 2
+                  + (menu_open ? 1 : 0),
+                  "zelr", t->accent, FACE_HEAD_BOLD);
     }
-    if (pin_moved && pin_press >= 0) {
-        const pin_t *p = pin_at(pin_press);
-        if (p) draw_pin_icon(pin_at_x - PIN_ICON / 2, by + 1, p, true,
-                             window_for_app(p->path) != 0);
+
+    /* --- the field that replaced the icons ---------------------------------
+     *
+     * Centred in the bar rather than beside the brand, because the middle
+     * of a wide bar is the one place nothing else wants and the eye goes
+     * there first. Sunk very slightly into the glass: the same trick a
+     * search field has had since before any of this, which is the only
+     * shape a person reads as "type here" without a label.
+     */
+    if (t->look == LOOK_MODERN && t->dock_search) {
+        int fx = dock_find_x();
+        int fy = y + (TASKBAR_H - DOCK_FIND_H) / 2;
+        bool fhot = last_my >= fy && last_my < fy + DOCK_FIND_H
+                 && last_mx >= fx && last_mx < fx + DOCK_FIND_W;
+
+        fb_round_rect_aa(fx, fy, DOCK_FIND_W, DOCK_FIND_H, DOCK_FIND_H / 2,
+                         t->text, (fhot || menu_open) ? 26 : 16);
+        fb_round_rect_aa(fx, fy, DOCK_FIND_W, DOCK_FIND_H, DOCK_FIND_H / 2,
+                         menu_open ? t->accent : t->stroke,
+                         menu_open ? 150 : (fhot ? 90 : 55));
+
+        /* A ring and a handle, which is a magnifier at any size that has
+           room for a ring and a handle. */
+        u32 ink = fhot ? t->text : t->text_dim;
+        int gx = fx + 16, gy = fy + DOCK_FIND_H / 2;
+
+        /* A ring, from one eighth of a circle mirrored eight ways. There is
+           no sine here to ask and none needed: a glyph this small is a
+           handful of pixels either way. */
+        static const int RING[5][2] = { {5,0}, {4,2}, {4,3}, {3,4}, {0,5} };
+        for (int k = 0; k < 5; k++) {
+            int a = RING[k][0], b = RING[k][1];
+            fb_put((u32)(gx + a), (u32)(gy + b), ink);
+            fb_put((u32)(gx - a), (u32)(gy + b), ink);
+            fb_put((u32)(gx + a), (u32)(gy - b), ink);
+            fb_put((u32)(gx - a), (u32)(gy - b), ink);
+            fb_put((u32)(gx + b), (u32)(gy + a), ink);
+            fb_put((u32)(gx - b), (u32)(gy + a), ink);
+            fb_put((u32)(gx + b), (u32)(gy - a), ink);
+            fb_put((u32)(gx - b), (u32)(gy - a), ink);
+        }
+        /* and its handle */
+        for (int k = 0; k < 4; k++) {
+            fb_put((u32)(gx + 4 + k), (u32)(gy + 4 + k), ink);
+            fb_put((u32)(gx + 5 + k), (u32)(gy + 4 + k), ink);
+        }
+
+        /* What has been typed, where it was typed. The panel above shows
+           the matches; this shows the query, because the field is where
+           the pointer was when the typing started and is where the eye
+           is. */
+        int ty = fy + (DOCK_FIND_H - face_height(FACE_BODY)) / 2;
+        if (menu_qn > 0) {
+            face_text(fx + 30, ty, menu_q, t->text, FACE_BODY);
+            fb_rect((u32)(fx + 32 + face_width(menu_q, FACE_BODY)),
+                    (u32)(fy + 6), 1, (u32)(DOCK_FIND_H - 12), t->accent);
+        } else if (menu_open) {
+            fb_rect((u32)(fx + 32), (u32)(fy + 6), 1,
+                    (u32)(DOCK_FIND_H - 12), t->accent);
+            face_text(fx + 38, ty, "type to find", t->text_mute, FACE_BODY);
+        } else {
+            face_text(fx + 30, ty, "Search", t->text_dim, FACE_BODY);
+        }
     }
 
     /* --- one button a window ----------------------------------------------
@@ -1872,10 +2678,9 @@ static void draw_taskbar(void) {
      * same language the rest of the desktop is in: the window you are using
      * is the button that is down. */
     int x = taskbar_chips_x();
-    int room_end = taskbar_net_x() - 8;
+    int room_end = taskbar_chips_end();
     for (int i = 0; i < nwin; i++) {
         window_t *w = stack[i];
-        if (shown_as_pin(w)) continue;          /* its icon already says so */
         bool focused = (i == nwin - 1) && !w->minimized;
 
         int tw = face_width(w->title, FACE_BODY) + 22;
@@ -1884,12 +2689,33 @@ static void draw_taskbar(void) {
 
         bool over = last_mx >= x && last_mx < x + tw
                  && last_my >= by && last_my < by + bh;
-        button_face(x, by, tw, bh, focused, over);
 
-        int off = focused ? 1 : 0;
-        face_text(x + 8 + off, by + (bh - face_height(FACE_BODY)) / 2 + off,
-                  w->title, w->minimized ? t->text_dim : t->text, FACE_BODY);
-        x += tw + 3;
+        if (t->look == LOOK_MODERN) {
+            /* A pill, filled in the accent for whichever window is in
+               front and in nothing at all for the rest until the pointer
+               arrives. The bar is quiet when nothing is happening on it,
+               which is the whole difference between a dock and a toolbar. */
+            if (focused)
+                fb_round_rect_aa(x, by, tw, bh, bh / 2, t->accent, 46);
+            else if (over)
+                fb_round_rect_aa(x, by, tw, bh, bh / 2, t->text, 22);
+
+            /* And a short line under the one in front, which is how a dock
+               says "this one" without a border. */
+            if (focused)
+                fb_round_rect_aa(x + tw / 2 - 7, by + bh - 3, 14, 3, 1,
+                                 t->accent, 235);
+
+            face_text(x + 12, by + (bh - face_height(FACE_BODY)) / 2,
+                      w->title, w->minimized ? t->text_dim : t->text,
+                      FACE_BODY);
+        } else {
+            button_face(x, by, tw, bh, focused, over);
+            int off = focused ? 1 : 0;
+            face_text(x + 8 + off, by + (bh - face_height(FACE_BODY)) / 2 + off,
+                      w->title, w->minimized ? t->text_dim : t->text, FACE_BODY);
+        }
+        x += tw + 6;
     }
 
     /* --- the tray ----------------------------------------------------------
@@ -1913,24 +2739,51 @@ static void draw_taskbar(void) {
 
     char clock[24];
     clock_text(clock, sizeof(clock));
-    face_text(W - 8 - face_width(clock, FACE_BODY),
-              y + (TASKBAR_H - face_height(FACE_BODY)) / 2, clock, t->text,
-              FACE_BODY);
+    if (!t->dock_clock) {
+        /* Nothing, and nothing in its place. */
+    } else if (t->look == LOOK_MODERN) {
+        /* Set larger than everything else on the bar, because it is the one
+           thing on it that gets read rather than clicked. */
+        face_text(dock_x() + dock_w() - 20 - face_width(clock, FACE_HEAD),
+                  y + (TASKBAR_H - face_height(FACE_HEAD)) / 2, clock,
+                  t->text, FACE_HEAD);
+    } else {
+        face_text(W - 8 - face_width(clock, FACE_BODY),
+                  y + (TASKBAR_H - face_height(FACE_BODY)) / 2, clock, t->text,
+                  FACE_BODY);
+    }
+
+    /* Both glyphs are sixteen pixels square and both are centred in the
+       bar, rather than each carrying an offset that happened to look right
+       at whatever height the bar was when it was written. */
+    int gy = y + (TASKBAR_H - 16) / 2;
 
     {
         int vx = taskbar_volume_x();
         bool vhot = volume_open || on_volume_button(last_mx, last_my);
-        if (vhot) fb_rect((u32)(vx - 1), (u32)(by + 2), VOL_W + 2,
-                          (u32)(bh - 4), gfx_mix(t->surface, t->edge_hi, 70));
-        draw_speaker(vx + 4, y + 9, t->volume ? t->text : t->text_dim,
-                     t->volume);
+        if (vhot) {
+            if (t->look == LOOK_MODERN)
+                fb_round_rect_aa(vx - 3, by, VOL_W + 6, bh, bh / 2,
+                                 t->text, volume_open ? 34 : 22);
+            else
+                fb_rect((u32)(vx - 1), (u32)(by + 2), VOL_W + 2,
+                        (u32)(bh - 4), gfx_mix(t->surface, t->edge_hi, 70));
+        }
+        draw_speaker(vx + (VOL_W - 16) / 2, gy,
+                     t->volume ? t->text : t->text_dim, t->volume);
     }
 
     {
         int nx = taskbar_net_x();
         bool nhot = net_open || on_net_button(last_mx, last_my);
-        if (nhot) fb_rect((u32)(nx - 1), (u32)(by + 2), NET_W + 2,
-                          (u32)(bh - 4), gfx_mix(t->surface, t->edge_hi, 70));
+        if (nhot) {
+            if (t->look == LOOK_MODERN)
+                fb_round_rect_aa(nx - 3, by, NET_W + 6, bh, bh / 2,
+                                 t->text, net_open ? 34 : 22);
+            else
+                fb_rect((u32)(nx - 1), (u32)(by + 2), NET_W + 2,
+                        (u32)(bh - 4), gfx_mix(t->surface, t->edge_hi, 70));
+        }
 
         /* Three states, not two. A link with no address is the one people
            get stuck in, and an icon that cannot show it sends them looking
@@ -1939,30 +2792,10 @@ static void draw_taskbar(void) {
         bool reachable = net_ip() != 0;
         u32 fg = reachable ? t->text : link ? t->text_dim : t->text_mute;
 
-        if (link) draw_wired(nx + 5, y + 10, fg);
-        else      draw_signal(nx + 5, y + 10, fg, t->text_mute, 0);
+        if (link) draw_wired(nx + (NET_W - 16) / 2, gy, fg);
+        else      draw_signal(nx + (NET_W - 16) / 2, gy, fg, t->text_mute, 0);
     }
 
-    /* And the name of the icon under the pointer, above it. */
-    if (hot >= 0) {
-        const pin_t *p = pin_at(hot);
-        int tw = face_width(p->label, FACE_BODY) + 14;
-        int th = 20;
-        int tx = taskbar_pins_x() + hot * PIN_STEP + PIN_ICON / 2 - tw / 2;
-        int ty = y - th - 4;
-
-        if (tx < 2) tx = 2;
-        if (tx + tw > W - 2) tx = W - 2 - tw;
-
-        /* The one yellow thing on the desktop, because that is what a tip
-           has been since before any of this, and it is never mistaken for
-           part of a window. */
-        u32 note = RGB(0xFF, 0xFF, 0xD0);
-        fb_rect((u32)tx, (u32)ty, (u32)tw, (u32)th, note);
-        fb_bevel_thin(tx, ty, tw, th, t->edge_dark, t->edge_dark);
-        face_text(tx + 7, ty + (th - face_height(FACE_BODY)) / 2,
-                  p->label, RGB(0x20, 0x20, 0x18), FACE_BODY);
-    }
 }
 
 static const u8 CURSOR[19][12] = {
@@ -2004,6 +2837,7 @@ static void composite(void) {
     } else {
         draw_wallpaper();
         draw_desk_icons();      /* on the wallpaper, under every window */
+        draw_band();            /* and the band over the icons it catches */
     }
 
     for (int i = cover > 0 ? cover : 0; i < nwin; i++) {
@@ -2033,6 +2867,7 @@ static void composite(void) {
     draw_volume_panel();
     draw_net_panel();
     draw_menu();
+    draw_ctx();
     draw_cursor(last_mx, last_my);
     if (frame_is_whole || dmg_x1 <= dmg_x0) {
         fb_flush();
@@ -2055,17 +2890,18 @@ static void launch(const char *path) {
     kfree(img);
 }
 
-static void menu_choose(int i) {
+static void menu_run(const mitem_t *it) {
     menu_open = false;
+    menu_qn = 0;
+    menu_q[0] = 0;
     need_frame();
-    if (i < 0 || i >= MENU_N) return;
 
-    if (MENU[i].program) { launch(MENU[i].program); return; }
+    if (it->program) { launch(it->program); return; }
 
-    if (!strcmp(MENU[i].label, "System info")) app_about();
-    else if (!strcmp(MENU[i].label, "Close all")) { while (nwin > 0) wm_close(stack[nwin - 1]); }
-    else if (!strcmp(MENU[i].label, "Leave desktop")) running = false;
-    else if (!strcmp(MENU[i].label, "Shut down")) {
+    if (!strcmp(it->label, "System info")) app_about();
+    else if (!strcmp(it->label, "Close all")) { while (nwin > 0) wm_close(stack[nwin - 1]); }
+    else if (!strcmp(it->label, "Leave desktop")) running = false;
+    else if (!strcmp(it->label, "Shut down")) {
         /* Anything not yet on the disk goes first: a machine that is
            switched off does not come back to finish writing. */
         diskfs_flush();
@@ -2077,49 +2913,141 @@ static void menu_choose(int i) {
     }
 }
 
-/* What the launcher calls a program, so an app pinned from its own window
-   is named the way the menu names it rather than however the program
-   happened to title the window. */
-static const char *label_for(const char *path, const char *fallback) {
-    for (int i = 0; i < MENU_N; i++)
-        if (MENU[i].program && !strcmp(MENU[i].program, path))
-            return MENU[i].label;
-    return fallback;
+/* An index from either column, or from the list of matches when something
+   has been typed. One from the left opens that kind and leaves the panel
+   up, which is the whole point of the left column; anything else does the
+   thing and puts the panel away. */
+static void menu_choose(int i) {
+    if (menu_qn > 0) {
+        const mitem_t *hit[MENU_HITS];
+        int n = menu_hits(hit, MENU_HITS);
+        int j = i - MENU_RIGHT;
+        if (j >= 0 && j < n) menu_run(hit[j]);
+        return;
+    }
+
+    if (i >= 0 && i < MCAT_N) {
+        if (i != menu_cat) { menu_cat = i; need_frame(); }
+        return;
+    }
+
+    int j = i - MENU_RIGHT;
+    if (j < 0 || j >= MCAT[menu_cat].n) return;
+    menu_run(&MCAT[menu_cat].items[j]);
 }
 
-/* Clicking an icon: start the program, or if it is already running, do what
-   clicking its chip would have done. */
-static void pin_activate(int i) {
-    const pin_t *p = pin_at(i);
-    if (!p) return;
+/* A key, while the launcher is up. True when the launcher took it, which
+   is what keeps it out of whatever window is behind. */
+static bool menu_key(int key) {
+    int c = KEY_CODE(key);
 
-    window_t *w = window_for_app(p->path);
-    if (!w) { launch(p->path); return; }
+    if (c == '\n' || c == '\r') {
+        /* Whatever is under the pointer, or the first match if it is
+           nowhere near the panel, which is where a hand that has just
+           finished typing usually leaves it. */
+        int want = (menu_hover >= MENU_RIGHT) ? menu_hover : MENU_RIGHT;
+        menu_choose(want);
+        return true;
+    }
 
-    if (w->minimized)              set_minimized(w, false);
-    else if (w == stack[nwin - 1]) set_minimized(w, true);
-    else                           wm_raise(w);
+    if (c == '\b' || c == 127) {
+        if (menu_qn > 0) {
+            menu_q[--menu_qn] = 0;
+            menu_hover = menu_left = -1;
+            need_frame();
+        }
+        return true;
+    }
+
+    if (c >= 32 && c < 127 && menu_qn < MENU_QMAX) {
+        menu_q[menu_qn++] = (char)c;
+        menu_q[menu_qn] = 0;
+        menu_hover = menu_left = -1;
+        need_frame();
+        return true;
+    }
+    return false;
 }
 
+
+/* Which row of which column, or -1. The two columns are not the same
+   length, so a row level with the fourth kind is nothing at all when the
+   kind that is open has three things in it. */
 static int menu_item_at(int mx, int my) {
     if (!menu_open) return -1;
-    int h = MENU_N * MENU_ITEM + MENU_PAD * 2;
-    /* The strip is not a row of anything, so a click on it chooses nothing
-       rather than choosing whatever is level with it. */
-    if (mx < menu_x + MENU_BRAND || mx >= menu_x + MENU_W) return -1;
-    if (my < menu_y + MENU_PAD || my >= menu_y + h - MENU_PAD) return -1;
-    int i = (my - menu_y - MENU_PAD) / MENU_ITEM;
-    return (i >= 0 && i < MENU_N) ? i : -1;
+    int h = menu_h(), top = menu_top();
+    if (mx < menu_x || mx >= menu_x + MENU_W) return -1;
+    if (my < top + MENU_PAD || my >= top + h - MENU_PAD) return -1;
+
+    int row = (my - top - MENU_PAD) / MENU_ITEM;
+
+    /* While something has been typed the panel is one column, and its top
+       row is the query rather than a result. */
+    if (menu_qn > 0) {
+        const mitem_t *hit[MENU_HITS];
+        int n = menu_hits(hit, MENU_HITS);
+        if (row < 1 || row - 1 >= n) return -1;
+        return MENU_RIGHT + row - 1;
+    }
+
+    int split = menu_x + MENU_PAD + MENU_RAIL - 4;
+
+    if (mx < split)
+        return (row >= 0 && row < MCAT_N) ? row : -1;
+    return (row >= 0 && row < MCAT[menu_cat].n) ? MENU_RIGHT + row : -1;
+}
+
+static int ctx_item_at(int mx, int my) {
+    if (!ctx_open) return -1;
+    if (mx < ctx_x || mx >= ctx_x + CTX_W) return -1;
+    if (my < ctx_y + CTX_PAD || my >= ctx_y + CTX_H - CTX_PAD) return -1;
+    int i = (my - ctx_y - CTX_PAD) / CTX_ITEM;
+    return (i >= 0 && i < CTX_N) ? i : -1;
+}
+
+static void open_ctx_at(int x, int y) {
+    if (x + CTX_W > (int)fb_width()) x = (int)fb_width() - CTX_W - 4;
+    if (y + CTX_H > panel_rest_y()) y = panel_rest_y() - CTX_H - 4;
+    if (x < 4) x = 4;
+    if (y < 4) y = 4;
+    ctx_x = x; ctx_y = y;
+    ctx_open = true;
+    menu_open = false;
+    ctx_hover = -1;
+    ctx_left = -1;
+    ctx_since = timer_ticks();
+    ctx_hover_since = 0;
+    need_frame();
+}
+
+static void ctx_choose(int i) {
+    ctx_open = false;
+    need_frame();
+    if (i < 0 || i >= CTX_N) return;
+
+    if (CTX[i].program) { launch(CTX[i].program); return; }
+
+    if (!strcmp(CTX[i].label, "Select all")) {
+        desk_sel = (DESK_N >= 32) ? 0xFFFFFFFFu : (1u << DESK_N) - 1u;
+    } else if (!strcmp(CTX[i].label, "Close all windows")) {
+        while (nwin > 0) wm_close(stack[nwin - 1]);
+    } else if (!strcmp(CTX[i].label, "System info")) {
+        app_about();
+    }
 }
 
 static void open_menu_at(int x, int y) {
-    int h = MENU_N * MENU_ITEM + MENU_PAD * 2;
+    int h = menu_full_h();
     if (x + MENU_W > (int)fb_width()) x = (int)fb_width() - MENU_W - 4;
     if (y + h > panel_rest_y()) y = panel_rest_y() - h - 4;
     if (x < 4) x = 4;
     if (y < 4) y = 4;
     menu_x = x; menu_y = y;
     menu_open = true;
+    ctx_open = false;
+    menu_cat = 0;
+    menu_qn = 0;
+    menu_q[0] = 0;
     menu_hover = -1;
     menu_left = -1;
     menu_since = timer_ticks();
@@ -2214,30 +3142,47 @@ static window_t *window_at(int mx, int my, bool *on_title, button_t *button) {
    worked out the same way the drawing does, so this walks the same list. */
 static int taskbar_chip_at(int mx, int my) {
     int y = taskbar_y();
-    if (my < y + 5 || my >= y + TASKBAR_H - 5) return -1;
+    if (my < y + 7 || my >= y + TASKBAR_H - 7) return -1;
 
     int x = taskbar_chips_x();
     for (int i = 0; i < nwin; i++) {
-        if (shown_as_pin(stack[i])) continue;
         /* Measured in the face it is drawn in. The window in front carries
            a heavier title, so measuring every chip in the regular weight
            puts the edge of the widest one in the wrong place and a click
            near it lands on the neighbour. */
         bool focused = (i == nwin - 1) && !stack[i]->minimized;
         int face = focused ? FACE_BODY_BOLD : FACE_BODY;
-        int tw = face_width(stack[i]->title, face) + 24;
-        if (x + tw > (int)fb_width() - TASKBAR_GAP - 120) break;
+        int tw = face_width(stack[i]->title, face) + 22;
+        if (tw > 160) tw = 160;
+        if (x + tw > taskbar_chips_end()) break;
         if (mx >= x && mx < x + tw) return i;
         x += tw + 6;
     }
     return -1;
 }
 
+/* Where the badge is drawn, not near it. This measured from TASKBAR_GAP,
+   which is the gap under the dock and had nothing to do with the left of
+   it: the button worked over a stretch ten pixels left of where it was
+   painted, which is the sort of thing that reads as a slow machine. */
 static bool on_taskbar_badge(int mx, int my) {
+    if (!theme()->dock_brand) return false;
     int y = taskbar_y();
-    return my >= y + 5 && my < y + TASKBAR_H - 5
-           && mx >= TASKBAR_GAP + 8
-           && mx < TASKBAR_GAP + 8 + TASKBAR_BADGE_W;
+    return my >= y + 7 && my < y + TASKBAR_H - 7
+           && mx >= dock_x() + 16
+           && mx < dock_x() + 16 + TASKBAR_BADGE_W;
+}
+
+/* And the field in the middle, which says it opens the launcher. It did
+   not: nothing tested for it, so a click on it landed on the stretch of
+   bar that swallows clicks and the field was decoration. */
+static bool on_dock_find(int mx, int my) {
+    if (theme()->look != LOOK_MODERN || !theme()->dock_search) return false;
+    int y = taskbar_y();
+    int fy = y + (TASKBAR_H - DOCK_FIND_H) / 2;
+    int fx = dock_find_x();
+    return my >= fy && my < fy + DOCK_FIND_H
+        && mx >= fx && mx < fx + DOCK_FIND_W;
 }
 
 static void handle_mouse(int mx, int my, u8 buttons) {
@@ -2253,12 +3198,15 @@ static void handle_mouse(int mx, int my, u8 buttons) {
             menu_hover_since = timer_ticks();
             need_frame();
         }
-        /* The right button over an entry keeps it on the panel, or takes it
-           off again if it is already there. */
-        if (right_now && over >= 0 && MENU[over].program) {
-            int at = pins_find(MENU[over].program);
-            if (at >= 0) pins_remove(at);
-            else         pins_add(MENU[over].label, MENU[over].program);
+        /* The pointer resting on a kind opens it. A click would work and
+           would also mean two clicks to reach anything, which is one more
+           than the list it replaced needed. */
+        if (over >= 0 && over < MCAT_N && over != menu_cat) {
+            menu_cat = over;
+            need_frame();
+        }
+
+        if (right_now) {           /* nothing to pin to any more */
             menu_open = false;
             need_frame();
             return;
@@ -2268,6 +3216,22 @@ static void handle_mouse(int mx, int my, u8 buttons) {
             if (over >= 0) { menu_choose(over); return; }
             /* A click anywhere else dismisses it, and does nothing more. */
             menu_open = false;
+            need_frame();
+            return;
+        }
+    }
+
+    if (ctx_open) {
+        int over = ctx_item_at(mx, my);
+        if (over != ctx_hover) {
+            ctx_left = ctx_hover;
+            ctx_hover = over;
+            ctx_hover_since = timer_ticks();
+            need_frame();
+        }
+        if (pressed_now || right_now) {
+            if (over >= 0) { ctx_choose(over); return; }
+            ctx_open = false;
             need_frame();
             return;
         }
@@ -2311,18 +3275,43 @@ static void handle_mouse(int mx, int my, u8 buttons) {
         }
     }
 
-    if (released) {
-        /* An icon that was being held. Dragged, and the order it has been
-           put into is written down; not dragged, and it was a click. */
-        volume_drag = false;
-
-        if (pin_press >= 0) {
-            if (pin_moved) pins_save();
-            else           pin_activate(pin_press);
-            pin_press = -1;
-            pin_moved = false;
-            panel_frame();
+    /* A band being dragged out. Handled before anything that cares which
+       button went down, because from here until it is let go the only
+       thing that matters is where the pointer is. */
+    if (band_on) {
+        bool held = (band_button == 1) ? (buttons & 1) : (buttons & 2);
+        if (held) {
+            if (mx != band_bx || my != band_by) {
+                band_bx = mx;
+                band_by = my;
+                band_select();
+                need_frame();
+            }
+            return;
         }
+
+        band_on = false;
+
+        /* A press and a release in the same place is a click, and a click
+           on the wallpaper is a menu: the left button asks what this
+           machine can run and the right asks what can be done here. Four
+           pixels of slack, because a hand on a real mouse moves one or two
+           between pressing and letting go and a menu that fails to open
+           for that is a menu that fails at random. */
+        int dx = band_bx - band_ax, dy = band_by - band_ay;
+        if (dx < 0) dx = -dx;
+        if (dy < 0) dy = -dy;
+        if (dx < 4 && dy < 4) {
+            desk_sel = 0;
+            if (band_button == 2) open_ctx_at(band_ax, band_ay);
+            else                  open_menu_at(band_ax, band_ay);
+        }
+        need_frame();
+        return;
+    }
+
+    if (released) {
+        volume_drag = false;
 
         /* Hand the release to whoever was being drawn in, before dropping
            the capture: a program needs to know a stroke ended. */
@@ -2391,26 +3380,6 @@ static void handle_mouse(int mx, int my, u8 buttons) {
         return;
     }
 
-    /* An icon being dragged along the panel.
-     *
-     * The list is reordered as the pointer crosses each slot rather than
-     * when the button comes up, so the icons move out of the way while it
-     * is happening. A few pixels of travel are allowed first: a click with
-     * a steady hand still moves the mouse by one or two, and a click that
-     * silently reordered the panel would be a mystery. */
-    if (pin_press >= 0 && (buttons & 1)) {
-        int moved = mx - pin_press_x;
-        if (moved < 0) moved = -moved;
-        if (moved > 5) pin_moved = true;
-
-        if (pin_moved) {
-            int slot = pin_slot_at(mx);
-            if (slot != pin_press) { pins_move(pin_press, slot); pin_press = slot; }
-            pin_at_x = mx;
-            panel_frame();
-        }
-        return;
-    }
 
     /* Once a drag starts inside a window's content it keeps receiving
        movement, even if the pointer strays outside. */
@@ -2436,8 +3405,16 @@ static void handle_mouse(int mx, int my, u8 buttons) {
         /* Nothing under the pointer: the taskbar, or the desktop itself. */
         if (on_taskbar_badge(mx, my)) {
             if (menu_open) { menu_open = false; need_frame(); }
-            else open_menu_at(TASKBAR_GAP,
-                              panel_rest_y() - (MENU_N * MENU_ITEM + MENU_PAD * 2) - 2);
+            else open_menu_at(dock_x(), panel_rest_y() - menu_full_h() - 8);
+            return;
+        }
+
+        if (on_dock_find(mx, my)) {
+            /* Centred under the field rather than against the left of the
+               dock, because that is where the eye already is. */
+            if (menu_open) { menu_open = false; need_frame(); }
+            else open_menu_at(dock_find_x() + DOCK_FIND_W / 2 - MENU_W / 2,
+                              panel_rest_y() - menu_full_h() - 8);
             return;
         }
 
@@ -2466,27 +3443,9 @@ static void handle_mouse(int mx, int my, u8 buttons) {
             return;
         }
 
-        int pin = taskbar_pin_at(mx, my);
-        if (pin >= 0) {
-            if (right_now) { pins_remove(pin); panel_frame(); return; }
-            pin_press = pin;
-            pin_press_x = mx;
-            pin_at_x = mx;
-            pin_moved = false;
-            return;
-        }
-
         int chip = taskbar_chip_at(mx, my);
         if (chip >= 0) {
             window_t *c = stack[chip];
-
-            /* The right button keeps the program on the panel after the
-               window it is running in has gone. */
-            if (right_now) {
-                if (c->app[0]) pins_add(label_for(c->app, c->title), c->app);
-                panel_frame();
-                return;
-            }
 
             /* Clicking the window already in front puts it away; clicking
                anything else brings it back and raises it. */
@@ -2512,20 +3471,35 @@ static void handle_mouse(int mx, int my, u8 buttons) {
         if (icon >= 0) {
             u64 now = timer_ticks();
             bool again = (icon == desk_last_click)
-                      && (now - desk_last_tick) < timer_hz() / 2;
-            desk_selected = icon;
+                      && (now - desk_last_tick)
+                         < timer_hz() * (u64)theme()->dblclick_ms / 1000;
+            desk_sel = 1u << icon;
             desk_last_click = icon;
             desk_last_tick = now;
             if (again) {
                 launch(DESK[icon].program);
                 desk_last_click = -1;
             }
+            /* The right button on an icon is the desktop's menu too, with
+               the icon picked out behind it. */
+            if (right_now) open_ctx_at(mx, my);
             need_frame();
             return;
         }
 
-        desk_selected = -1;
-        if (my < work_h()) open_menu_at(mx, my);
+        /* The wallpaper. Nothing is decided here: a press starts a band,
+           and whether it turns out to be a band or a click is not known
+           until the button comes up. Opening a menu on the press instead
+           is what made it impossible to drag one out at all -- the menu
+           was already up and eating the movement. */
+        if (my < work_h()) {
+            band_on = true;
+            band_button = pressed_now ? 1 : 2;
+            band_ax = band_bx = mx;
+            band_ay = band_by = my;
+            desk_sel = 0;
+            need_frame();
+        }
         return;
     }
 
@@ -2641,7 +3615,6 @@ void wm_run(void) {
     if (!fb_active()) { kprintf("the desktop needs a framebuffer\n"); return; }
 
     theme_init();
-    pins_init();
 
     /* Before anything is applied, so there is something to go back to. */
     sound_set_volume((u32)theme()->volume);
@@ -2717,6 +3690,11 @@ void wm_run(void) {
             else break;
         } else if (c >= 0 && handle_shortcut(c)) {
             /* Claimed by the desktop. */
+        } else if (c >= 0 && menu_open && menu_key(c)) {
+            /* Typed into the field on the dock. Tried after the chords,
+               so alt and tab still walks the stack with the launcher up,
+               and before the windows, so a letter does not arrive in the
+               terminal behind it. */
         } else if (c >= 0 && nwin > 0) {
             /* A window that is put away is not the one being typed at, so
                find the front one that is actually on screen. */
@@ -2756,7 +3734,6 @@ void wm_run(void) {
              * puts the old order back under the hand moving it. Which is
              * exactly what it did, and the check for dragging an icon is
              * what said so. */
-            if (pin_press < 0 && pins_reload()) panel_frame();
         }
 
         /* A window that has redrawn needs its own rectangle sent, not the
@@ -2788,10 +3765,16 @@ void wm_run(void) {
         /* Anything mid transition wants the next frame. This is the only
            thing driving an animation: no timer of its own, no frame count,
            and nothing to switch off when it finishes. */
+        if (ctx_open && (still_moving(ctx_since, MENU_MS)
+                         || still_moving(ctx_hover_since, HOVER_MS))) {
+            need_frame_in(ctx_x - 14, ctx_y - 14, CTX_W + 28, CTX_H + 28);
+            need_frame_in(last_mx - 2, last_my - 2, 20, 28);
+        }
+
         if (menu_open && (still_moving(menu_since, MENU_MS)
                           || still_moving(menu_hover_since, HOVER_MS))) {
             need_frame_in(menu_x - 14, menu_y - 14,
-                          MENU_W + 28, MENU_N * MENU_ITEM + MENU_PAD * 2 + 28);
+                          MENU_W + 28, menu_full_h() + 28);
             need_frame_in(last_mx - 2, last_my - 2, 20, 28);
         }
 
@@ -2811,9 +3794,10 @@ void wm_run(void) {
     while (nwin > 0) wm_close(stack[nwin - 1]);
     running = false;
     menu_open = false;
+    ctx_open = false;
+    band_on = false;
+    desk_sel = 0;
     dragging = resizing = mouse_capture = 0;
-    pin_press = -1;
-    pin_moved = false;
     volume_open = false;
     volume_drag = false;
     panel_shown = true;

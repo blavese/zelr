@@ -46,17 +46,55 @@ SWATCHES = [TEAL, INDIGO, (0xE0, 0xA0, 0x3C), (0xE0, 0x6A, 0x8C),
             (0x8A, 0x9B, 0xB0), (0x9A, 0xD1, 0x4A)]
 
 # Where things are on a 1024x768 screen with the default layout.
-BADGE = (40, 751)             # the taskbar launcher, flush to the bottom
-# The launcher's entries, in the order wm.c lists them. The menu grows
-# upward from the taskbar, so adding a program moves everything above it and
-# a remembered y is wrong from then on.
-MENU_ENTRIES = ["Terminal", "Files", "Notes", "Paint", "Settings",
-                "Monitor", "Music", "Calculator", "Browser",
-                "System info", "Close all", "Leave desktop", "Shut down"]
-MENU_ITEM_H = 24
-MENU_PAD = 4                  # the inset above the first entry
-MENU_BRAND = 26               # the strip down the left, which is not a row
-MENU_RECT = (0, 300, 226, 728)
+SCREEN_W, SCREEN_H = 1024, 768
+DOCK_H, DOCK_GAP, DOCK_SIDE = 44, 14, 16
+PANEL_Y = SCREEN_H - DOCK_H - DOCK_GAP
+
+BADGE = (DOCK_SIDE + 16 + 38, PANEL_Y + DOCK_H // 2)   # the name on the dock
+
+# The launcher is two columns now: which kind of thing down the left, the
+# things of that kind down the right. Reaching a program is therefore two
+# moves rather than one -- rest on the kind, click the thing -- and a
+# remembered row number means nothing without knowing which column it is in.
+MENU_PAD = 10
+MENU_ITEM_H = 32
+MENU_RAIL = 132
+MENU_PANE = 152
+MENU_W = MENU_PAD * 2 + MENU_RAIL + MENU_PANE
+MENU_LEFT = DOCK_SIDE
+
+# Which kind, and where in it. Settings is the first thing under System,
+# which is the fourth kind. Written as names and looked up, so moving a
+# program between kinds is one edit here rather than two numbers to work
+# out again.
+MENU_KINDS = ["Productivity", "Internet", "Media", "System", "Session"]
+MENU_IN = {
+    "Productivity": ["Terminal", "Files", "Notes", "Calculator"],
+    "Internet": ["Browser"],
+    "Media": ["Paint", "Music"],
+    "System": ["Settings", "Monitor", "System info"],
+    "Session": ["Close all", "Leave desktop", "Shut down"],
+}
+
+MENU_RECT = (MENU_LEFT + 4, 380, MENU_LEFT + MENU_W - 4, PANEL_Y - 6)
+
+
+def menu_where(name):
+    """Which kind a program is under, and where in that kind."""
+    for kind, things in MENU_IN.items():
+        if name in things:
+            return MENU_KINDS.index(kind), things.index(name)
+    raise KeyError(name)
+
+
+def rail_at(top, i):
+    return (MENU_LEFT + MENU_PAD + 40,
+            top + MENU_PAD + i * MENU_ITEM_H + MENU_ITEM_H // 2)
+
+
+def pane_at(top, j):
+    return (MENU_LEFT + MENU_PAD + MENU_RAIL + 50,
+            top + MENU_PAD + j * MENU_ITEM_H + MENU_ITEM_H // 2)
 # The launcher panel. This is the modern look's overlay colour, which is the
 # surface lifted one step; under the built look it was the surface itself,
 # and the two are different enough that a check written against one sees
@@ -64,14 +102,10 @@ MENU_RECT = (0, 300, 226, 728)
 MENU_PANEL = (0xF3, 0xF3, 0xF6)
 PAGE = (120, 120, 700, 480)
 
-# Everything above the panel.
-#
-# The apps kept on the taskbar are drawn in colours from the same six the
-# themes use, so a preset colour is on screen whether or not the window that
-# offers it is open. Every count below is inside this rather than across the
-# screen, which is what they were always asking about: the window, not the
-# desktop it is on.
-ABOVE = (0, 0, 1024, 700)
+# Everything above the dock. Every count below is inside this rather than
+# across the screen, which is what they were always asking about: the
+# window, not the desktop it is on.
+ABOVE = (0, 0, SCREEN_W, PANEL_Y - 2)
 
 
 def menu_top(px, w, h):
@@ -171,7 +205,7 @@ def main():
         # Found on the screen rather than worked out from constants.
         top = settled_menu_top(mon)
         c.add("the menu's top edge is on the screen", top is not None, shot)
-        idx = MENU_ENTRIES.index("Settings")
+        kind, thing = menu_where("Settings")
 
         # Waited for on all six swatches rather than on the accent. The
         # accent was already on the screen before the click, from the
@@ -188,9 +222,14 @@ def main():
         # what it reported was that Settings would not start.
         ran = False
         for attempt in range(3):
+            # The kind first, which opens it: the pointer resting on a row
+            # of the left column is what changes the right one, so this is
+            # a move rather than a click and the click that follows it has
+            # to land on the column that move just filled.
+            mon.move_to(*rail_at(top or 0, kind))
+            time.sleep(0.6)
             w, h, px, shot, ran = mon.click_for(
-                MENU_BRAND + 40,
-                (top or 0) + MENU_PAD + idx * MENU_ITEM_H + MENU_ITEM_H // 2,
+                pane_at(top or 0, thing)[0], pane_at(top or 0, thing)[1],
                 "settings", drew, timeout=30, tries=1)
             if ran:
                 break

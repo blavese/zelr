@@ -52,7 +52,7 @@ AUDIO = ["-audiodev", "wav,id=a0,path=" + REC.replace("\\", "/"),
 # cascade moved clear of the desktop icons; the clicks then landed a few
 # pixels off every key, and the check that the answer was right went on
 # passing because both pictures were of a display nothing had reached.
-WM_BORDER, WM_TITLE_H = 4, 20
+WM_BORDER, WM_TITLE_H = 1, 32
 WM_TOP = WM_BORDER + WM_TITLE_H
 ICON_LEFT, ICON_CELL_W = 14, 78           # where winsrv.c starts the cascade
 CASCADE_X = ICON_LEFT + ICON_CELL_W + 14

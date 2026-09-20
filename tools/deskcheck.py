@@ -22,20 +22,67 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from harness import (Guest, Checks, build_once, count_in, count_near,
-                     row_mean, colour_gap, _count, ROOT)      # noqa: E402
+                     row_mean, colour_gap, face_width, FACE_BODY,
+                     _count, ROOT)                            # noqa: E402
 
 DISK = os.path.join(ROOT, "deskcheck.%d.img" % os.getpid())
 
 PAGE = (0x10, 0x14, 0x1A)          # the terminal's default background
 SCREEN_W, SCREEN_H = 1024, 768
-TASKBAR_H = 34
-TASKBAR_GAP = 0                    # the panel is flush to the bottom edge
-MENU_ITEM = 24
-MENU_PAD = 4
-MENU_BRAND = 26          # the strip down its left, which is not a row
-MENU_ENTRIES = 13        # the launcher's entries, which set its height
-MENU_TOP = (SCREEN_H - TASKBAR_H - TASKBAR_GAP
-            - (MENU_ENTRIES * MENU_ITEM + MENU_PAD * 2) - 2)
+TASKBAR_H = 44
+TASKBAR_GAP = 14                   # the dock floats clear of the edge
+DOCK_SIDE = 16
+
+# The launcher is two columns: the kinds down the left, the things of that
+# kind down the right, and as tall as the longer of them.
+MENU_ITEM = 32
+MENU_PAD = 10
+MENU_RAIL = 132
+MENU_PANE = 152
+MENU_W = MENU_PAD * 2 + MENU_RAIL + MENU_PANE
+MENU_ROWS = 5            # five kinds, and no kind has more than four in it
+MENU_H = MENU_PAD * 2 + MENU_ROWS * MENU_ITEM
+
+# It opens from the badge against the left of the dock, eight pixels above
+# it. Written the way wm.c writes it rather than as the numbers that came
+# out of it once.
+MENU_LEFT = DOCK_SIDE
+MENU_TOP = SCREEN_H - TASKBAR_H - TASKBAR_GAP - MENU_H - 8
+
+
+def rail_row(i):
+    """The middle of the i'th kind, down the left."""
+    return (MENU_LEFT + MENU_PAD + 40,
+            MENU_TOP + MENU_PAD + i * MENU_ITEM + MENU_ITEM // 2)
+
+
+def pane_row(j):
+    """The middle of the j'th thing of whichever kind is open."""
+    return (MENU_LEFT + MENU_PAD + MENU_RAIL + 50,
+            MENU_TOP + MENU_PAD + j * MENU_ITEM + MENU_ITEM // 2)
+
+
+# The field in the middle of the dock, and where the launcher lands when
+# it is what opened it: centred under the field rather than against the left
+# of the dock, because that is where the eye already is.
+DOCK_FIND_W, DOCK_FIND_H = 260, 26
+FIND_X = DOCK_SIDE + ((SCREEN_W - DOCK_SIDE * 2) - DOCK_FIND_W) // 2
+DOCK_FIND = (FIND_X + DOCK_FIND_W // 2,
+             SCREEN_H - TASKBAR_H - TASKBAR_GAP + TASKBAR_H // 2)
+FIND_MENU_LEFT = FIND_X + DOCK_FIND_W // 2 - MENU_W // 2
+FIND_RECT = (FIND_MENU_LEFT + 4, MENU_TOP + 4,
+             FIND_MENU_LEFT + MENU_W - 4, MENU_TOP + MENU_H - 4)
+
+# Well inside Paint's canvas, which is the surface colour over four hundred
+# by two hundred and fifty pixels. Nothing else this desktop draws covers
+# that rectangle in one colour.
+PAINT_CANVAS = (300, 200, 700, 450)
+
+# The desktop's own menu, which the right button opens where it is pressed.
+CTX_W, CTX_ITEM, CTX_PAD = 204, 30, 8
+CTX_N = 6
+CTX_H = CTX_N * CTX_ITEM + CTX_PAD * 2
+CTX_CLOSE_ALL = 4        # the row that closes every window
 # The surface a menu is drawn on. Nearly the window surface, lifted a
 # little, and laid down at an alpha of 250 out of 255 — so a trace of the
 # wallpaper comes through it and an exact count finds fewer pixels than are
@@ -45,22 +92,24 @@ MENU_TOL = 6
 
 # The terminal as it opens, and the frame around it. Written out the way
 # wm.c writes it rather than as four numbers that happened to be right: the
-# border went from one pixel to four and every one of these moved with it.
-WM_BORDER = 4
-WM_TITLE_H = 20
+# border went from one pixel to four and every one of these moved with it,
+# and then back to one when the chrome was rebuilt.
+WM_BORDER = 1
+WM_TITLE_H = 32
 WM_TOP = WM_BORDER + WM_TITLE_H
 
 # The first window opens past the icon column rather than on top of it,
 # which is where winsrv.c starts the cascade: ICON_LEFT + ICON_CELL_W, and
 # a gap.
-ICON_LEFT, ICON_CELL_W = 14, 78
+ICON_LEFT, ICON_CELL_W = 18, 92
+ICON_TOP, ICON_CELL_H = 20, 88
 WIN_X = ICON_LEFT + ICON_CELL_W + 14
 WIN_Y, WIN_CW, WIN_CH = 36, 760, 480
 OUTER_W = WIN_CW + WM_BORDER * 2
 OUTER_H = WIN_CH + WM_TOP + WM_BORDER
 
 # Three buttons against the right hand end of the title bar, right to left.
-BTN_W, BTN_H, BTN_GAP = 16, 14, 2
+BTN_W, BTN_H, BTN_GAP = 30, 24, 2
 BTN_STEP = BTN_W + BTN_GAP
 BTN_Y = WIN_Y + WM_BORDER + (WM_TITLE_H - BTN_H) // 2 + BTN_H // 2
 
@@ -79,16 +128,17 @@ GRIP = (WIN_X + OUTER_W - 8, WIN_Y + OUTER_H - 8)
 # whatever else happens to be the same colour somewhere on the desktop.
 WIN_RECT = (WIN_X, WIN_Y, WIN_X + OUTER_W, WIN_Y + OUTER_H)
 
-# Where the launcher sits when it opens from the taskbar badge, clear of the
-# taskbar below it and of the clock, so nothing in this rectangle changes on
-# its own while the menu is coming up.
-LAUNCHER_RECT = (6, 442, 228, 726)
+# Where the launcher sits when it opens from the dock badge, inset a little
+# from its own edges so the rounded corners and the shadow are outside the
+# rectangle being counted.
+LAUNCHER_RECT = (MENU_LEFT + 4, MENU_TOP + 4,
+                 MENU_LEFT + MENU_W - 4, MENU_TOP + MENU_H - 4)
 
 # The same buttons once the window has been maximised, when its frame is at
 # 0,0 and as wide as the screen.
 BTN_MAX_WHEN_MAXIMISED = (btn_x(0, SCREEN_W, 1),
                           WM_BORDER + (WM_TITLE_H - BTN_H) // 2 + BTN_H // 2)
-LAUNCHER = (40, SCREEN_H - TASKBAR_H - TASKBAR_GAP + 17)
+LAUNCHER = (DOCK_SIDE + 16 + 38, SCREEN_H - TASKBAR_H - TASKBAR_GAP + 22)
 
 # The panel, where it sits when it is out, and the band it occupies. A
 # maximised window takes the whole screen and the panel tucks itself under
@@ -96,23 +146,36 @@ LAUNCHER = (40, SCREEN_H - TASKBAR_H - TASKBAR_GAP + 17)
 # two is happening without reading anything.
 PANEL_Y = SCREEN_H - TASKBAR_H - TASKBAR_GAP
 
-# The apps kept on the panel: the badge, then an icon every 30 pixels. The
-# terminal is the first of them, and since a running program whose app is
-# pinned is shown by its icon rather than by a chip of its own, that icon is
-# what a click has to land on to bring the terminal back.
-PINS_X = TASKBAR_GAP + 8 + 76 + 12
+# The dock holds the brand, then a chip for each window. There are no
+# pinned apps on it any more: six letters in circles said which six programs
+# somebody had chosen and nothing else, and reaching a seventh meant opening
+# the launcher regardless.
+CHIPS_X = DOCK_SIDE + 16 + 76 + 18
 
-# How many apps a machine nobody has touched keeps on its panel, which is the
-# list in pins.c. Written down rather than counted, so adding one to that list
-# is a check that fails here rather than a check that quietly moves on to
-# whichever icon has slid into the slot it was looking at.
-PINS_N = 6
 
-# And where the last of them sits in the launcher, which is not the same
-# number: the panel keeps six apps and the launcher lists thirteen things.
-LAST_PIN_ENTRY = 8          # Browser
-PIN_STEP = 30
-TASKBAR_CHIP = (PINS_X + 11, PANEL_Y + 15)
+def chip_at(titles, i):
+    """The middle of the ith chip, given the titles in stack order.
+
+    A chip is as wide as its own title, so where the second one starts
+    depends on what the first one is called. This used to be one fixed
+    point, which was right because it was not a chip at all: it was the
+    pinned terminal, in the same slot whatever else was running. With the
+    pins gone the terminal is wherever the stack puts it, and after an
+    alt-tab that is not the front."""
+    x = CHIPS_X
+    for n, title in enumerate(titles):
+        w = min(face_width(title, FACE_BODY) + 22, 160)
+        if n == i:
+            return (x + w // 2, PANEL_Y + TASKBAR_H // 2)
+        x += w + 6
+    raise IndexError(i)
+
+
+TASKBAR_CHIP = chip_at(["zelr terminal"], 0)
+
+# After alt-tab the terminal is behind paint in the stack, so it is the
+# second chip rather than the first.
+TERMINAL_CHIP_2 = chip_at(["paint", "zelr terminal"], 1)
 
 
 def panel_showing(px, w, h):
@@ -142,33 +205,11 @@ def panel_showing(px, w, h):
     return colour_gap(inside, above) > 60
 
 
-def slot_empty(px, w, i):
-    """True when nothing is pinned in this slot.
-
-    An empty slot shows the panel through it, and the panel has no fixed
-    colour, so what it is compared against is the panel directly below the
-    same slot: the same glass over almost the same wallpaper, a few pixels
-    down and clear of the icon. A slot with an app in it is that app's own
-    colour and nothing like it.
-    """
-    x = PINS_X + i * PIN_STEP + 4
-    ink = icon_ink(px, w, i)
-    o = ((PANEL_Y + TASKBAR_H - 3) * w + x) * 3
-    behind = tuple(px[o:o + 3])
-    return colour_gap(ink, behind) < 24
-
-
-def icon_at(i):
-    """The middle of an icon, for clicking."""
-    return (PINS_X + i * PIN_STEP + 11, PANEL_Y + 15)
-
-
-def icon_ink(px, w, i):
-    """A pixel of an icon's own colour, left of the letter in it, which is
-    what says which app is in that slot."""
-    x, y = PINS_X + i * PIN_STEP + 4, PANEL_Y + 15
-    o = (y * w + x) * 3
-    return tuple(px[o:o + 3])
+def desk_icon_rect(i):
+    """The cell the i'th desktop icon occupies, which is what a click and a
+    band both land on. The same arithmetic wm.c uses."""
+    y = ICON_TOP + i * ICON_CELL_H
+    return (ICON_LEFT, y, ICON_LEFT + ICON_CELL_W, y + ICON_CELL_H - 6)
 
 
 def right_click(mon, x, y):
@@ -450,11 +491,13 @@ def main():
                                         MENU_TOL) > 8000)
         c.add("the launcher menu opens where it is expected", up)
 
-        # Paint, the fourth entry, worked out from where the menu is rather
-        # than from a number. The number said Paint and had been landing on
-        # System info, which opens a window of its own, so the check below
-        # passed without a second program ever being started.
-        mon.click(MENU_BRAND + 40, MENU_TOP + MENU_PAD + 3 * MENU_ITEM + MENU_ITEM // 2)
+        # Paint, which is now two moves rather than one: the kind, then
+        # the thing. Media is the third kind and Paint the first thing in
+        # it, and both are worked out from where the menu is rather than
+        # from a number that happened to be right once.
+        mon.move_to(*rail_row(2))
+        time.sleep(0.6)
+        mon.click(*pane_row(0))
         w, h, px, shot, ok = mon.wait_screen(
             "desk-two",
             lambda w, h, px: desktop_bytes(w, h, px) != weave, timeout=40)
@@ -478,8 +521,10 @@ def main():
         # coming down over the page. The pointer is parked inside the window
         # and away from the rectangle being compared, because the wheel goes
         # to whatever is under the pointer and the pointer is drawn.
-        mon.click(*TASKBAR_CHIP)
-        wait_page(mon, "desk-back-wheel", lambda n: n > 100000)
+        mon.click(*TERMINAL_CHIP_2)
+        _, _, shot, back = wait_page(mon, "desk-back-wheel",
+                                     lambda n: n > 100000)
+        c.add("the terminal comes back from its chip on the dock", back, shot)
         typed(mon, "help\n")
         time.sleep(1.5)
 
@@ -536,60 +581,135 @@ def main():
         mon.wait_screen("desk-back-big",
                         lambda w, h, px: w == SCREEN_W and h == SCREEN_H,
                         timeout=30)
-        # --- the apps kept on the panel ---------------------------------------
+        # --- the wallpaper, and the two things pressing it can mean ---------
         #
-        # Left until last, because all of it changes what is on the taskbar
-        # and everything above knows where the taskbar's first icon is.
+        # Left until last, because all of it ends with windows closed and
+        # icons picked out, and everything above knows what is on the
+        # screen.
         #
-        # Each app's icon is a colour worked out from its path, so reading
-        # one pixel of each says which app is in which slot, and that is the
-        # whole of what dragging one along the panel is supposed to change.
-        mon.move_to(*PARK)
-        w, h, px, shot = None, None, None, None
-        w, h, px, shot, _ = mon.wait_screen(
-            "desk-pins", lambda w, h, px: True)
-        before = [icon_ink(px, w, i) for i in range(PINS_N)]
-        c.add("the taskbar starts with the apps the machine ships",
-              len(set(before)) >= 3
-              and not any(slot_empty(px, w, i) for i in range(PINS_N)), shot)
+        # Nothing is decided on the press: a press starts a band and only
+        # the release says whether it was a band or a click. So each of
+        # these is a press and a release, and the one in the middle is a
+        # press, a journey and a release.
+        alt(mon, "d")
+        time.sleep(1.0)
 
-        # The first one dragged two places along. The two it passes move up
-        # to make room, so what lands where is known exactly.
-        mon.drag(icon_at(0), icon_at(2))
-        w, h, px, shot, moved = mon.wait_screen(
-            "desk-pin-moved",
-            lambda w, h, px: (icon_ink(px, w, 2) == before[0]
-                              and icon_ink(px, w, 0) == before[1]))
-        c.add("an icon dragged along the taskbar changes places", moved, shot)
-
-        # Off the panel with the right button, which is the only way back to
-        # a taskbar somebody does not want six things on.
-        #
-        # The last one, because taking any other off slides the ones after it
-        # along and the slot is full again: the check then reads whichever
-        # icon moved up as the one that would not go away.
-        last = PINS_N - 1
-        right_click(mon, *icon_at(last))
-        w, h, px, shot, dropped = mon.wait_screen(
-            "desk-pin-off",
-            lambda w, h, px: slot_empty(px, w, last))
-        c.add("and the right button takes one off it", dropped, shot)
-
-        # And back on, from the launcher, with the same button. The same app
-        # that was taken off: right clicking any other one takes that one off
-        # instead, because the button is a toggle.
-        mon.click(*LAUNCHER)
-        mon.wait_screen(
-            "desk-menu-2",
-            lambda w, h, px: count_near(px, w, LAUNCHER_RECT, MENU_PANEL,
+        # A click on the wallpaper is the launcher, where it was clicked.
+        # It is pushed back on screen if it would not fit, which at this
+        # height it would not, so the top is where the pushing leaves it.
+        click_x, click_y = 600, 620
+        here = (click_x + 4, PANEL_Y - MENU_H,
+                click_x + MENU_W - 4, PANEL_Y - 8)
+        mon.click(click_x, click_y)
+        _, _, _, shot, up = mon.wait_screen(
+            "desk-wallpaper-menu",
+            lambda w, h, px: count_near(px, w, here, MENU_PANEL,
                                         MENU_TOL) > 8000)
-        right_click(mon, MENU_BRAND + 40,
-                    MENU_TOP + MENU_PAD + LAST_PIN_ENTRY * MENU_ITEM
-                    + MENU_ITEM // 2)
-        w, h, px, shot, backon = mon.wait_screen(
-            "desk-pin-on",
-            lambda w, h, px: not slot_empty(px, w, last))
-        c.add("and an app from the launcher can be put back on", backon, shot)
+        c.add("a click on the wallpaper opens the launcher under it", up, shot)
+
+        mon.click(900, 120)          # and a click off it puts it away
+        time.sleep(1.0)
+
+        # The right button is the desktop's own menu, which is a different
+        # panel: what can be done here, rather than what can be run.
+        cx, cy = 600, 300
+        ctx_rect = (cx + 4, cy + 4, cx + CTX_W - 4, cy + CTX_H - 4)
+        right_click(mon, cx, cy)
+        _, _, _, shot, up = mon.wait_screen(
+            "desk-ctx",
+            lambda w, h, px: count_near(px, w, ctx_rect, MENU_PANEL,
+                                        MENU_TOL) > 4000)
+        c.add("the right button opens the desktop's own menu", up, shot)
+
+        # And the rows on it do what they say. Close all windows leaves a
+        # desktop with nothing on it but the wallpaper and the icons, which
+        # is what the page count already knows how to say.
+        mon.click(cx + 60, cy + CTX_PAD + CTX_CLOSE_ALL * CTX_ITEM
+                  + CTX_ITEM // 2)
+        _, _, shot, ok = wait_page(mon, "desk-ctx-closed", lambda n: n < 1000)
+        c.add("and closing every window from it closes every window",
+              ok, shot)
+
+        # A press that travels is a band.
+        #
+        # The wallpaper it is drawn over is compared with itself rather than
+        # with another part of the same wallpaper: this one has lights in it
+        # and a vignette, so no two stretches of it are the same colour and
+        # a check that compared two of them would pass whether a band was
+        # drawn or not.
+        mon.move_to(620, 520)
+        still_desktop(mon, "desk-settled", shots)
+        w, h, px, _, _ = mon.wait_screen("desk-noband",
+                                         lambda w, h, px: True)
+        BAND_IN = (200, 200, 560, 400)
+        quiet = patch(px, w, BAND_IN)
+        quiet_icons = [patch(px, w, desk_icon_rect(i)) for i in range(1, 5)]
+
+        # Held open for the picture, because a band that has been let go is
+        # not on the screen any more.
+        mon.send("mouse_button 1", settle=0.3)
+        at = [620, 520]
+        for step in range(1, 9):
+            x = 620 + (60 - 620) * step // 8
+            y = 520 + (90 - 520) * step // 8
+            mon.send("mouse_move %d %d" % (x - at[0], y - at[1]), settle=0.1)
+            at = [x, y]
+
+        w, h, px, shot, drawn = mon.wait_screen(
+            "desk-band",
+            lambda w, h, px: patch(px, w, BAND_IN) != quiet, timeout=15)
+        c.add("a press that travels draws a band on the wallpaper",
+              drawn, shot)
+
+        # And the icons it went over are picked out. The pointer ends up
+        # over the first one, so that one is left out of the count: a tile
+        # lights under the pointer whether it is selected or not, and a
+        # check that cannot tell those apart is not a check.
+        caught = [patch(px, w, desk_icon_rect(i)) for i in range(1, 5)]
+        c.add("and the icons it went over are picked out",
+              all(a != b for a, b in zip(quiet_icons, caught)), shot)
+
+        mon.send("mouse_button 0", settle=0.6)
+
+        # What it caught stays caught once the button is up, and a band
+        # somewhere else lets them go again.
+        mon.drag((700, 200), (900, 420))
+        mon.move_to(*PARK)
+        w, h, px, shot, freed = mon.wait_screen(
+            "desk-unband",
+            lambda w, h, px: all(patch(px, w, desk_icon_rect(i)) == q
+                                 for i, q in zip(range(1, 5), quiet_icons)),
+            timeout=15)
+        c.add("and a band somewhere else lets them go", freed, shot)
+
+        # --- the field in the middle of the dock ---------------------------
+        #
+        # It was a picture of a field: the right shape, in the right place,
+        # and nothing at all behind it. A control that looks like somewhere
+        # to type and is not teaches whoever tries it that the controls on
+        # this desktop are decoration, which is a worse thing to have said
+        # than nothing.
+        mon.click(*DOCK_FIND)
+        _, _, _, shot, up = mon.wait_screen(
+            "desk-find",
+            lambda w, h, px: count_near(px, w, FIND_RECT, MENU_PANEL,
+                                        MENU_TOL) > 8000)
+        c.add("the field on the dock opens the launcher under itself",
+              up, shot)
+
+        # Three letters from the middle of a word, so this is a search
+        # rather than a prefix: somebody after the browser may well type
+        # "web", and a search where one of those works and the other
+        # silently finds nothing is one people stop using.
+        typed(mon, "ain")
+        typed(mon, "\n")
+        _, _, _, shot, ran = mon.wait_screen(
+            "desk-found",
+            lambda w, h, px: count_near(px, w, PAINT_CANVAS, MENU_PANEL,
+                                        8) > 90000,
+            timeout=40)
+        c.add("and what is typed into it finds a program and runs it",
+              ran, shot)
 
     finally:
         vm.stop()

@@ -10,4 +10,4 @@ typedef uint8_t  u8;  typedef int8_t   i8;
 typedef uint64_t u64; typedef int64_t  i64;
 
 #define KERNEL_NAME    "zelr"
-#define KERNEL_VERSION "0.30.0"
+#define KERNEL_VERSION "0.31.0"

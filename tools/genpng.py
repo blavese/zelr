@@ -1,0 +1,170 @@
+"""Builds the pictures userland/pngtest.c decodes, as a C header.
+
+The decoder is ours and is written from the specification. What it needs to
+be checked against is files somebody else made, so this makes them — and
+makes them deliberately, one per thing that can go wrong:
+
+  every row filter, because they are undone in order and a mistake in one
+  shows up as the rest of the picture sliding
+
+  every colour kind, because a palette, a greyscale and a truecolour image
+  are three different loops and only one of them is the common case
+
+  a stored deflate block and a compressed one, because they are different
+  code paths and the stored one is what a tiny image usually is
+
+zlib is used here, in a tool that runs on the host, exactly as tools/shots.py
+uses it to write screenshots. Nothing inside zelr uses it: userland/inflate.h
+is the decoder, and the point of this file is to have something it did not
+produce to decode.
+
+  python tools/genpng.py
+"""
+import os
+import struct
+import zlib
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+OUT = os.path.join(ROOT, "userland", "pngdata.h")
+
+SIG = b"\x89PNG\r\n\x1a\n"
+
+
+def chunk(name, body):
+    return (struct.pack(">I", len(body)) + name + body
+            + struct.pack(">I", zlib.crc32(name + body) & 0xFFFFFFFF))
+
+
+def png(w, h, depth, colour, raw, palette=None, trans=None, level=9):
+    """raw is the scanlines with their filter bytes already in front."""
+    out = SIG
+    out += chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, depth, colour, 0, 0, 0))
+    if palette:
+        out += chunk(b"PLTE", bytes(palette))
+    if trans:
+        out += chunk(b"tRNS", bytes(trans))
+    out += chunk(b"IDAT", zlib.compress(bytes(raw), level))
+    out += chunk(b"IEND", b"")
+    return out
+
+
+def paeth(a, b, c):
+    p = a + b - c
+    pa, pb, pc = abs(p - a), abs(p - b), abs(p - c)
+    if pa <= pb and pa <= pc:
+        return a
+    return b if pb <= pc else c
+
+
+def filter_row(kind, row, prev, bpp):
+    """Applies a filter, which is what an encoder does; the decoder undoes it."""
+    out = bytearray()
+    for i, v in enumerate(row):
+        left = row[i - bpp] if i >= bpp else 0
+        up = prev[i] if prev else 0
+        upleft = prev[i - bpp] if (prev and i >= bpp) else 0
+        if kind == 0:
+            out.append(v)
+        elif kind == 1:
+            out.append((v - left) & 0xFF)
+        elif kind == 2:
+            out.append((v - up) & 0xFF)
+        elif kind == 3:
+            out.append((v - ((left + up) >> 1)) & 0xFF)
+        else:
+            out.append((v - paeth(left, up, upleft)) & 0xFF)
+    return bytes([kind]) + bytes(out)
+
+
+IMAGES = {}
+
+# --- truecolour, every filter, one per row --------------------------------
+#
+# The pixel at (x, y) is a function of both, so a row undone with the wrong
+# filter is wrong in a way the next row cannot hide.
+W, H = 8, 5
+rows = []
+for y in range(H):
+    row = bytearray()
+    for x in range(W):
+        row += bytes([(x * 31 + y * 7) & 0xFF,
+                      (x * 11 + y * 53) & 0xFF,
+                      (x * 3 + y * 97) & 0xFF])
+    rows.append(bytes(row))
+
+raw = bytearray()
+prev = None
+for y, row in enumerate(rows):
+    raw += filter_row(y % 5, row, prev, 3)
+    prev = row
+IMAGES["filters"] = (png(W, H, 8, 2, raw), W, H, rows)
+
+# --- a palette, with one entry transparent --------------------------------
+PAL = [255, 0, 0,  0, 255, 0,  0, 0, 255,  255, 255, 255]
+TRNS = [0]                       # the first colour is fully transparent
+praw = bytearray()
+pixels = [[0, 1, 2, 3], [3, 2, 1, 0], [1, 1, 2, 2], [0, 3, 0, 3]]
+for row in pixels:
+    praw += bytes([0]) + bytes(row)
+IMAGES["palette"] = (png(4, 4, 8, 3, praw, palette=PAL, trans=TRNS), 4, 4, pixels)
+
+# --- greyscale at one bit a pixel ------------------------------------------
+# 0b10110001 is the top row, high bit first, so pixel 0 is white.
+graw = bytes([0, 0b10110001, 0, 0b01001110])
+IMAGES["grey1"] = (png(8, 2, 1, 0, graw), 8, 2, None)
+
+# --- truecolour with alpha --------------------------------------------------
+araw = bytearray([0])
+araw += bytes([255, 0, 0, 255,  0, 255, 0, 128])
+araw += bytes([0])
+araw += bytes([0, 0, 255, 0,    255, 255, 255, 255])
+IMAGES["alpha"] = (png(2, 2, 8, 6, araw), 2, 2, None)
+
+# --- the same truecolour image, stored rather than compressed ---------------
+# Level zero writes stored blocks, which is a different path through the
+# decoder and is what a very small picture usually turns out to be.
+raw2 = bytearray()
+prev = None
+for row in rows:
+    raw2 += filter_row(0, row, prev, 3)
+    prev = row
+IMAGES["stored"] = (png(W, H, 8, 2, raw2, level=0), W, H, rows)
+
+
+def carray(name, data):
+    out = "static const u8 %s[%d] = {\n" % (name, len(data))
+    for i in range(0, len(data), 16):
+        out += "    " + ", ".join(str(b) for b in data[i:i + 16]) + ",\n"
+    return out + "};\n\n"
+
+
+def main():
+    text = ['/* Generated by tools/genpng.py. Do not edit by hand.\n'
+            '\n'
+            '   Pictures for userland/pngtest.c to decode, made by something\n'
+            '   that is not the decoder. See that file for why each is here. */\n'
+            '#pragma once\n'
+            '#include "zelr.h"\n\n']
+
+    for name, (data, w, h, _) in IMAGES.items():
+        text.append("/* %d by %d */\n" % (w, h))
+        text.append(carray("PNG_" + name.upper(), data))
+
+    # What the filtered image should come back as, so the check is against
+    # the pixels rather than against "it did not crash".
+    want = bytearray()
+    for row in rows:
+        want += row
+    text.append("/* The pixels PNG_FILTERS and PNG_STORED are both of. */\n")
+    text.append(carray("PNG_WANT", want))
+
+    io_open = open(OUT, "w", newline="\n")
+    io_open.write("".join(text))
+    io_open.close()
+    print("wrote %s" % OUT)
+    for name, (data, w, h, _) in IMAGES.items():
+        print("  %-9s %d by %d, %d bytes" % (name, w, h, len(data)))
+
+
+if __name__ == "__main__":
+    main()

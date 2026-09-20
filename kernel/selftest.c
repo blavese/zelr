@@ -1021,12 +1021,50 @@ static void test_theme(void) {
     ok("corner applied", theme()->corner == 14);
     ok("shadows applied", !theme()->shadows);
 
-    /* A value out of range must be clamped rather than believed. */
+    /* A value out of range must be clamped rather than believed, and to
+       the bound the table gives rather than to a number written down here.
+       This said twenty; the table said twenty four; the check then failed
+       on a clamp that was working perfectly, which is the whole failure
+       this table exists to stop happening. */
     const char *bad = "wallpaper 99\ncorner 900\n";
     vfs_write(THEME_FILE, bad, (u32)strlen(bad));
     theme_reload();
     ok("a silly wallpaper falls back", theme()->wallpaper < WALLPAPER_COUNT);
-    ok("a silly corner is clamped", theme()->corner <= 20);
+
+    const theme_knob *corner = 0;
+    for (int i = 0; i < theme_knob_count(); i++)
+        if (!strcmp(theme_knob_at(i)->key, "corner")) corner = theme_knob_at(i);
+    ok("the settings table has the corner in it", corner != 0);
+    ok("and a silly corner is clamped to what it says",
+       corner && theme()->corner == corner->hi);
+
+    /* And so is every other setting, which is one loop rather than thirty
+       one checks nobody would write. Each is asked for far too much and far
+       too little in turn and has to come back holding the bound. */
+    {
+        bool high = true, low = true;
+        for (int i = 0; i < theme_knob_count(); i++) {
+            const theme_knob *k = theme_knob_at(i);
+            char line[64];
+            int n = 0;
+            for (const char *p = k->key; *p; p++) line[n++] = *p;
+            line[n++] = ' ';
+            line[n++] = '9'; line[n++] = '9'; line[n++] = '9';
+            line[n++] = '9'; line[n++] = '9'; line[n++] = '\n';
+            vfs_write(THEME_FILE, line, (u32)n);
+            theme_reload();
+            if (theme_knob_get(k) != k->hi) high = false;
+
+            n = 0;
+            for (const char *p = k->key; *p; p++) line[n++] = *p;
+            line[n++] = ' '; line[n++] = '0'; line[n++] = '\n';
+            vfs_write(THEME_FILE, line, (u32)n);
+            theme_reload();
+            if (theme_knob_get(k) != (k->lo > 0 ? k->lo : 0)) low = false;
+        }
+        ok("every setting clamps to the top of its range", high);
+        ok("and to the bottom of it", low);
+    }
 
     vfs_delete(THEME_FILE);
 }

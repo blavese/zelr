@@ -66,6 +66,106 @@ static const struct {
 #define DARK_TEXT     RGB(0xE2, 0xE9, 0xEE)
 #define DARK_DIM      RGB(0x77, 0x86, 0x93)
 
+/* --- every setting that is a plain number --------------------------------
+ *
+ * The parser walked a chain of strcmp and the writer walked a list of
+ * fields and the settings window had a control per setting, and all three
+ * were maintained by hand. The comments in userland/settings.c are a
+ * record of what that costs: a key the window wrote that the kernel did
+ * not parse did nothing, and a key the kernel had that the window did not
+ * was deleted every time the window saved.
+ *
+ * So there is one list, and it is this one. Adding a setting is adding a
+ * line here and a field in theme.h; the file format, the parser, the
+ * writer and the settings window all follow without being told.
+ *
+ * Bounds are part of the entry because a settings file is a file a person
+ * edits, and a person who sets a dock two thousand pixels tall should get
+ * a very tall dock rather than a desktop with nothing on it.
+ */
+#define K(field) ((u16)__builtin_offsetof(theme_t, field))
+
+static const theme_knob KNOBS[] = {
+    /* --- the dock ------------------------------------------------------ */
+    { "dock_h",       "Height",              K(dock_h),        0,  20, 120,  44 },
+    { "dock_gap",     "Gap below it",        K(dock_gap),      0,   0,  80,  14 },
+    { "dock_side",    "Gap at the sides",    K(dock_side),     0,   0, 400,  16 },
+    { "dock_radius",  "Corner",              K(dock_radius),   0,   0,  40,  14 },
+    { "dock_brand",   "Show the name",       K(dock_brand),    1,   0,   1,   1 },
+    { "dock_search",  "Show the field",      K(dock_search),   1,   0,   1,   1 },
+    { "dock_search_w", "Field width",        K(dock_search_w), 0,  80, 700, 260 },
+    { "dock_clock",   "Show the clock",      K(dock_clock),    1,   0,   1,   1 },
+    { "clock_24",     "Twenty four hour",    K(clock_24),      1,   0,   1,   1 },
+    { "dock_hide",    "Tuck away",           K(dock_hide),     0,   0,   2,   1 },
+
+    /* --- windows ------------------------------------------------------- */
+    { "title_h",      "Title bar",           K(title_h),       0,  16,  64,  32 },
+    { "border",       "Frame",               K(border),        0,   0,   8,   1 },
+    { "button_w",     "Button width",        K(button_w),      0,  12,  60,  30 },
+    { "button_h",     "Button height",       K(button_h),      0,  10,  48,  24 },
+    { "corner",       "Window corner",       K(corner),        0,   0,  24,  12 },
+    { "shadows",      "Shadows",             K(shadows),       1,   0,   1,   1 },
+    { "snap",         "Snap to the edges",   K(snap),          1,   0,   1,   1 },
+
+    /* --- the desktop --------------------------------------------------- */
+    { "desk_icons",   "Icons on it",         K(desk_icons),    1,   0,   1,   1 },
+    { "icon_size",    "Icon size",           K(icon_size),     0,  16,  64,  32 },
+    { "icon_gap",     "Room around one",     K(icon_gap),      0,   8,  60,  30 },
+    { "vignette",     "Darken at the edges", K(vignette),      0,   0, 255, 150 },
+    { "glows",        "Lights in it",        K(glows),         1,   0,   1,   1 },
+    { "wallpaper",    "Wallpaper",           K(wallpaper),     0,   0,
+                                             WALLPAPER_COUNT - 1,
+                                             WALLPAPER_BLOOM },
+
+    /* --- behaviour ----------------------------------------------------- */
+    { "animate",      "Fade rather than snap", K(animate),     1,   0,   1,   1 },
+    { "anim_ms",      "How long a fade takes", K(anim_ms),     0,  20, 600, 120 },
+    { "dblclick_ms",  "Double click within",   K(dblclick_ms), 0, 150, 1200, 500 },
+    { "quirks",       "Shake to clear",        K(quirks),      1,   0,   1,   1 },
+    { "autodesktop",  "Desktop at boot",       K(autodesktop), 1,   0,   1,   1 },
+
+    /* --- the machine --------------------------------------------------- */
+    { "volume",       "Volume",              K(volume),        0,   0, 100,  70 },
+    { "width",        "Screen width",        K(want_w),        0,   0, 4096,  0 },
+    { "height",       "Screen height",       K(want_h),        0,   0, 4096,  0 },
+};
+#undef K
+
+#define N_KNOBS ((int)(sizeof(KNOBS) / sizeof(KNOBS[0])))
+
+/* The wallpaper is an enum and the table reads it as an int. That is true
+   of every enum in C and would stop being true the day one of them is
+   given an explicit narrow type, which is the kind of change that breaks
+   quietly. */
+_Static_assert(sizeof(wallpaper_t) == sizeof(int),
+               "the knob table reads the wallpaper as an int");
+
+int theme_knob_count(void) { return N_KNOBS; }
+
+const theme_knob *theme_knob_at(int i) {
+    return (i < 0 || i >= N_KNOBS) ? 0 : &KNOBS[i];
+}
+
+/* The field, whatever its type. A bool is one byte and an int is four, and
+   an enum is an int as far as this is concerned: wallpaper_t is in the
+   table above because a wallpaper is a number a person may set and there
+   is no reason it should be the one number they cannot. */
+static int knob_get(const theme_knob *k) {
+    const u8 *base = (const u8 *)&current;
+    if (k->is_bool) return *(const bool *)(base + k->at) ? 1 : 0;
+    return *(const int *)(base + k->at);
+}
+
+static void knob_set(const theme_knob *k, int v) {
+    if (v < k->lo) v = k->lo;
+    if (v > k->hi) v = k->hi;
+    u8 *base = (u8 *)&current;
+    if (k->is_bool) *(bool *)(base + k->at) = v != 0;
+    else            *(int *)(base + k->at) = v;
+}
+
+int theme_knob_get(const theme_knob *k) { return k ? knob_get(k) : 0; }
+
 bool wallpaper_moves(wallpaper_t w) {
     return w == WALLPAPER_STARS  || w == WALLPAPER_WAVES
         || w == WALLPAPER_AURORA || w == WALLPAPER_RAIN
@@ -78,6 +178,7 @@ const char *theme_preset_name(int i) {
 }
 
 static void derive(void);
+static void theme_defaults(void);
 
 u32 theme_preset_accent(int i) {
     if (i < 0 || i >= THEME_PRESETS) return 0;
@@ -235,23 +336,27 @@ void theme_init(void) {
     current.look = LOOK_MODERN;
     current.light = true;
     theme_apply_preset(1);
-    current.wallpaper = WALLPAPER_BLOOM;
-    current.corner = 10;
-    current.shadows = true;
-    current.animate = true;
-    current.quirks = true;
-    current.autodesktop = true;
-    current.want_w = 0;
-    current.want_h = 0;
-    current.volume = 70;
+    theme_defaults();
     derive();
     theme_reload();
 }
 
 /* --- the file ----------------------------------------------------------- */
 
+/* What a machine that has never been touched arrives with. Written out
+   here rather than beside each field, because the settings window's Reset
+   has to produce exactly this and used to do it from its own copy of the
+   list: the two drifted, and resetting a machine left it on a desktop
+   neither side thought was the default. */
+static void theme_defaults(void) {
+    for (int i = 0; i < N_KNOBS; i++) knob_set(&KNOBS[i], KNOBS[i].def);
+}
+
 static u32 parse_hex(const char *s) {
     u32 v = 0;
+    /* With or without the prefix: a file written before colours carried
+       one still has to load. */
+    if (s[0] == '0' && (s[1] == 'x' || s[1] == 'X')) s += 2;
     for (int i = 0; s[i]; i++) {
         char c = s[i];
         u32 d;
@@ -271,22 +376,19 @@ static u32 parse_dec(const char *s) {
 }
 
 static void apply(const char *key, const char *value) {
+    /* Anything in the table is a number with bounds, and that is the whole
+       of what reading it takes. */
+    for (int i = 0; i < N_KNOBS; i++)
+        if (!strcmp(key, KNOBS[i].key)) {
+            knob_set(&KNOBS[i], (int)parse_dec(value));
+            return;
+        }
+
     if (!strcmp(key, "accent"))      current.accent = parse_hex(value);
     else if (!strcmp(key, "desktop")) current.desktop = parse_hex(value);
     else if (!strcmp(key, "surface")) current.surface = parse_hex(value);
     else if (!strcmp(key, "text"))    current.text = parse_hex(value);
-    else if (!strcmp(key, "wallpaper")) {
-        u32 v = parse_dec(value);
-        current.wallpaper = (wallpaper_t)(v < WALLPAPER_COUNT ? v : 0);
-    }
-    else if (!strcmp(key, "corner"))  {
-        u32 v = parse_dec(value);
-        current.corner = (int)(v > 20 ? 20 : v);
-    }
-    else if (!strcmp(key, "shadows")) current.shadows = parse_dec(value) != 0;
-    else if (!strcmp(key, "animate")) current.animate = parse_dec(value) != 0;
-    else if (!strcmp(key, "quirks"))  current.quirks = parse_dec(value) != 0;
-    else if (!strcmp(key, "autodesktop")) current.autodesktop = parse_dec(value) != 0;
+    else if (!strcmp(key, "text_dim")) current.text_dim = parse_hex(value);
     else if (!strcmp(key, "look")) {
         /* The look changes what the palette is derived from, so the preset
            has to be applied again rather than only the flag being set. */
@@ -294,9 +396,6 @@ static void apply(const char *key, const char *value) {
         int at = theme_current_preset();
         theme_apply_preset(at >= 0 ? at : 1);
     }
-    else if (!strcmp(key, "width"))   current.want_w = (int)parse_dec(value);
-    else if (!strcmp(key, "height"))  current.want_h = (int)parse_dec(value);
-    else if (!strcmp(key, "volume"))  current.volume = (int)parse_dec(value);
     else if (!strcmp(key, "preset"))  theme_apply_preset((int)parse_dec(value));
     else if (!strcmp(key, "light")) {
         /* The whole palette follows from this, so whichever order the file
@@ -308,7 +407,12 @@ static void apply(const char *key, const char *value) {
 }
 
 bool theme_reload(void) {
-    char buf[512];
+    /* The file is a key a line and there are now some thirty of them, so
+       this is a kilobyte and a half rather than the half kilobyte it was.
+       A short read here is not an error anywhere: it simply stops part way
+       down the file, and what it stops before is whatever happens to be at
+       the bottom of it. */
+    char buf[2048];
     int n = vfs_read(THEME_FILE, buf, sizeof(buf) - 1);
     if (n <= 0) return false;
     buf[n] = 0;
@@ -360,8 +464,10 @@ void theme_set_volume(int percent) {
 
 static int put_hex(char *out, u32 v) {
     const char *hex = "0123456789abcdef";
-    for (int i = 5; i >= 0; i--) out[5 - i] = hex[(v >> (i * 4)) & 0xF];
-    return 6;
+    out[0] = '0';
+    out[1] = 'x';
+    for (int i = 5; i >= 0; i--) out[2 + 5 - i] = hex[(v >> (i * 4)) & 0xF];
+    return 8;
 }
 
 static int put_num(char *out, u32 v) {
@@ -373,42 +479,59 @@ static int put_num(char *out, u32 v) {
     return n;
 }
 
+static int put_key(char *out, int n, const char *key) {
+    for (const char *p = key; *p; p++) out[n++] = *p;
+    out[n++] = ' ';
+    return n;
+}
+
 bool theme_save(void) {
-    char out[512];
+    char out[1536];
     int n = 0;
 
-    const char *header = "# zelr desktop settings\n# colours are RRGGBB in hex\n";
+    const char *header =
+        "# zelr desktop settings\n"
+        "# colours are 0xRRGGBB; everything else is a plain number\n"
+        "# a line this kernel does not know is kept as a comment would be:\n"
+        "# skipped, so a file from a later version still loads here\n";
     for (const char *p = header; *p; p++) out[n++] = *p;
 
+    /* The palette first, because look and light rebuild it and a colour
+       set by hand has to be able to win. Whichever way round the file is
+       read the last word on a colour is the colour line itself. */
     int at = theme_current_preset();
-    struct { const char *key; u32 value; bool hex; } fields[] = {
-        { at >= 0 ? "preset" : "accent",
-          at >= 0 ? (u32)at : current.accent,   at < 0 },
-        { at >= 0 ? "light" : "desktop",
-          at >= 0 ? (current.light ? 1u : 0u) : current.desktop, at < 0 },
-        { "look",      (u32)(current.look == LOOK_BUILT ? 1 : 0), false },
-        { "wallpaper", (u32)current.wallpaper,  false },
-        { "quirks",    (u32)(current.quirks ? 1 : 0), false },
-        { "corner",    (u32)current.corner,     false },
-        { "shadows",   current.shadows ? 1u : 0u, false },
-        { "animate",   current.animate ? 1u : 0u, false },
-        { "autodesktop", current.autodesktop ? 1u : 0u, false },
-        { "width",     (u32)current.want_w,     false },
-        { "height",    (u32)current.want_h,     false },
-        { "volume",    (u32)current.volume,     false },
-    };
+    n = put_key(out, n, "look");
+    n += put_num(out + n, (u32)(current.look == LOOK_BUILT ? 1 : 0));
+    out[n++] = '\n';
+    n = put_key(out, n, "light");
+    n += put_num(out + n, current.light ? 1u : 0u);
+    out[n++] = '\n';
 
-    /* A palette nobody can name still has to survive a reboot. */
-    if (at < 0) {
-        fields[0].key = "accent";
-        fields[1].key = "desktop";
+    if (at >= 0) {
+        n = put_key(out, n, "preset");
+        n += put_num(out + n, (u32)at);
+        out[n++] = '\n';
+    } else {
+        /* A palette nobody can name still has to survive a reboot, and all
+           four of it: writing the accent and the ground and leaving the
+           surface behind was a palette that came back half itself. */
+        struct { const char *key; u32 value; } c[] = {
+            { "accent",  current.accent },
+            { "desktop", current.desktop },
+            { "surface", current.surface },
+            { "text",    current.text },
+            { "text_dim", current.text_dim },
+        };
+        for (u32 i = 0; i < sizeof(c) / sizeof(c[0]); i++) {
+            n = put_key(out, n, c[i].key);
+            n += put_hex(out + n, c[i].value);
+            out[n++] = '\n';
+        }
     }
 
-    for (u32 f = 0; f < sizeof(fields) / sizeof(fields[0]); f++) {
-        for (const char *p = fields[f].key; *p; p++) out[n++] = *p;
-        out[n++] = ' ';
-        n += fields[f].hex ? put_hex(out + n, fields[f].value)
-                           : put_num(out + n, fields[f].value);
+    for (int i = 0; i < N_KNOBS; i++) {
+        n = put_key(out, n, KNOBS[i].key);
+        n += put_num(out + n, (u32)knob_get(&KNOBS[i]));
         out[n++] = '\n';
     }
 

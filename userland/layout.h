@@ -50,6 +50,14 @@ typedef struct {
     int href;                     /* into the text arena */
 } llink;
 
+/* A picture that has arrived, as far as the layout is concerned: which
+   element it belongs to and how big it is. Not the pixels — those belong to
+   whoever fetched it, and the layout has no business decoding anything. */
+typedef struct {
+    int node;
+    int w, h;
+} limage;
+
 typedef struct {
     litem items[LAY_ITEMS];
     int   nitems;
@@ -121,6 +129,12 @@ typedef struct {
     const cindex *x;
     const cmatch *m;
     const cinline *inl;           /* one per DOM node, or null */
+
+    /* The pictures that arrived, if any. A page laid out before they have
+       is laid out with their alt text, which is what happens on the first
+       pass and is corrected on the second. */
+    const limage *imgs;
+    int           nimgs;
     ldoc   *out;
     int     root_px;
 
@@ -144,6 +158,25 @@ static inline int lay_put(lctx *L, const char *s, int n) {
     for (int i = 0; i < n; i++) o->text[o->used++] = s[i];
     o->text[o->used++] = 0;
     return at;
+}
+
+/* A number out of an attribute. width="200" is written without a unit,
+   and what follows the digits is ignored the way a browser ignores it. */
+static inline int lay_number(const char *s) {
+    int v = 0, any = 0;
+    while (*s == ' ' || *s == '	') s++;
+    while (*s >= '0' && *s <= '9') {
+        v = v * 10 + (*s++ - '0');
+        any = 1;
+        if (v > 100000) return 100000;
+    }
+    return any ? v : 0;
+}
+
+static inline const limage *lay_image_of(const lctx *L, int node) {
+    for (int i = 0; i < L->nimgs; i++)
+        if (L->imgs[i].node == node) return &L->imgs[i];
+    return 0;
 }
 
 static inline litem *lay_item(lctx *L) {
@@ -380,15 +413,65 @@ static inline void lay_inline(lctx *L, int node, const cstyle *parent, int *y) {
                 lay_line_end(L, y);
                 lay_line_start(L, *y, left, width, al);
             } else if (n->tag == T_IMG) {
-                /* No pictures are fetched, so an image is the space it asks
-                   for with its words in it, which is what alt text is for
-                   and is a great deal more use than a gap. */
-                const char *alt = dom_attr(d, at, "alt");
-                if (alt && *alt) {
-                    cstyle s2 = st;
-                    s2.color = 0x6B6B6B;
-                    s2.italic = 1;
-                    lay_text_run(L, alt, &s2, y);
+                const limage *pic = lay_image_of(L, at);
+
+                if (pic && pic->w > 0 && pic->h > 0) {
+                    /* What the page asked for beats what the file is, and
+                       what there is room for beats both: a picture wider
+                       than the column would push everything else off it. */
+                    int iw = pic->w, ih = pic->h;
+                    const char *aw = dom_attr(d, at, "width");
+                    const char *ah = dom_attr(d, at, "height");
+                    int want_w = aw ? lay_number(aw) : 0;
+                    int want_h = ah ? lay_number(ah) : 0;
+
+                    if (want_w > 0 && want_h > 0) { iw = want_w; ih = want_h; }
+                    else if (want_w > 0) { ih = ih * want_w / iw; iw = want_w; }
+                    else if (want_h > 0) { iw = iw * want_h / ih; ih = want_h; }
+
+                    if (iw > L->line_width && iw > 0) {
+                        ih = ih * L->line_width / iw;
+                        iw = L->line_width;
+                    }
+                    if (ih < 1) ih = 1;
+                    if (iw < 1) iw = 1;
+
+                    /* It sits on the line like a very tall word, so text
+                       beside it flows the way text beside a picture does. */
+                    if (L->pen + iw > L->line_left + L->line_width
+                        && L->pen > L->line_left) {
+                        int left = L->line_left, width = L->line_width;
+                        int al = L->align;
+                        lay_line_end(L, y);
+                        lay_line_start(L, *y, left, width, al);
+                    }
+
+                    litem *it = lay_item(L);
+                    if (it) {
+                        it->kind = LK_IMAGE;
+                        it->x = L->pen;
+                        it->y = L->line_top;
+                        it->w = iw;
+                        it->h = ih;
+                        it->node = at;
+                        it->at = -1;
+                        it->link = L->cur_link;
+                        L->pen += iw;
+                        lay_line_fit(L, ih, ih);
+                        L->line_started = 1;
+                        L->pending_space = 0;
+                    }
+                } else {
+                    /* Nothing arrived, so it is the words it came with,
+                       which is what alt text is for and a great deal more
+                       use than a gap. */
+                    const char *alt = dom_attr(d, at, "alt");
+                    if (alt && *alt) {
+                        cstyle s2 = st;
+                        s2.color = 0x6B6B6B;
+                        s2.italic = 1;
+                        lay_text_run(L, alt, &s2, y);
+                    }
                 }
             } else if (sp + 1 < LAY_DEPTH) {
                 sp++;
@@ -424,7 +507,232 @@ static inline int lay_is_block_node(lctx *L, int n, const cstyle *parent) {
     if (L->d->nodes[n].kind != DN_ELEMENT) return 0;
     cstyle st;
     lay_style(L, n, parent, &st, L->line_width);
-    return st.display == D_BLOCK || st.display == D_LIST_ITEM;
+    /* A flex container is a block: it takes the width it is given and
+       starts on its own line. What is different about it is only what it
+       does with its children, and that is decided inside lay_block. Left
+       out of here, it was treated as inline and never reached the code
+       that knows what a row is. */
+    return st.display == D_BLOCK || st.display == D_LIST_ITEM
+        || st.display == D_FLEX;
+}
+
+
+/* --- laying things out in a row ------------------------------------------
+ *
+ * Everything above lays out downward: a block starts where the last one
+ * ended and takes the whole width. A flex container does not. Its children
+ * go along an axis, share out whatever room is spare, and line up against
+ * each other on the other axis — and since display:flex used to fall through
+ * to block, every row on every modern page came out as a column.
+ *
+ * The algorithm here is the honest short version of the real one:
+ *
+ *   measure each child, by laying it out and throwing that away
+ *   add up what they want; if it is more than there is, shrink them all in
+ *     proportion; if it is less, hand the spare room to whoever asked to
+ *     grow, and then position the rest according to justify-content
+ *   lay each child out again, for real, at the place and width it ended up
+ *     with, and slide it down the cross axis for align-items
+ *
+ * Measuring by laying out and throwing it away is not how a fast engine does
+ * this — a fast one keeps a separate cheap pass that computes intrinsic
+ * widths without emitting anything. It is, though, exactly right, because
+ * the thing being measured is the thing that will be drawn rather than a
+ * second implementation of it that can disagree.
+ */
+
+#define LAY_FLEX_MAX 32
+
+/* Lays a node out and forgets it, returning how wide its content came out
+   and how tall. Everything the layout was in the middle of is put back. */
+static int lay_measure(lctx *L, int node, const cstyle *parent, int avail,
+                       int *height) {
+    /* Field by field rather than by copying the whole context.
+     *
+     * A struct assignment of something this size is a call to memcpy, and
+     * there is no memcpy to call: this is a program with no library under
+     * it. The compiler is within its rights and the linker says so. */
+    int s_line_at = L->line_at, s_line_n = L->line_n;
+    int s_pen = L->pen, s_top = L->line_top;
+    int s_h = L->line_h, s_base = L->line_base;
+    int s_left = L->line_left, s_width = L->line_width;
+    int s_align = L->align, s_space = L->pending_space;
+    int s_started = L->line_started, s_link = L->cur_link;
+    int s_depth = L->list_depth;
+    int s_count[LAY_DEPTH];
+    for (int i = 0; i < LAY_DEPTH; i++) s_count[i] = L->list_count[i];
+
+    int items = L->out->nitems, used = L->out->used, links = L->out->nlinks;
+
+    int y = 0;
+    lay_block(L, node, parent, 0, avail, &y);
+
+    int right = 0;
+    for (int i = items; i < L->out->nitems; i++) {
+        int r = L->out->items[i].x + L->out->items[i].w;
+        if (r > right) right = r;
+    }
+
+    *height = y;
+
+    L->line_at = s_line_at; L->line_n = s_line_n;
+    L->pen = s_pen; L->line_top = s_top;
+    L->line_h = s_h; L->line_base = s_base;
+    L->line_left = s_left; L->line_width = s_width;
+    L->align = s_align; L->pending_space = s_space;
+    L->line_started = s_started; L->cur_link = s_link;
+    L->list_depth = s_depth;
+    for (int i = 0; i < LAY_DEPTH; i++) L->list_count[i] = s_count[i];
+
+    L->out->nitems = items;
+    L->out->used = used;
+    L->out->nlinks = links;
+    return right;
+}
+
+/* A flex container. `cx` and `cw` are inside its own padding and border, and
+   `y` is where its contents start and where they are finished. */
+static void lay_flex(lctx *L, int node, const cstyle *st, int cx, int cw,
+                     int *y) {
+    const ddoc *d = L->d;
+
+    int kid[LAY_FLEX_MAX];
+    int n = 0;
+    for (int c = d->nodes[node].first; c >= 0 && n < LAY_FLEX_MAX;
+         c = d->nodes[c].next) {
+        if (d->nodes[c].kind == DN_ELEMENT) kid[n++] = c;
+    }
+    if (n == 0) return;
+
+    int column = st->flex_dir == FD_COLUMN || st->flex_dir == FD_COLUMN_REVERSE;
+    int reverse = st->flex_dir == FD_ROW_REVERSE
+               || st->flex_dir == FD_COLUMN_REVERSE;
+    int gap = st->gap > 0 ? st->gap : 0;
+
+    /* --- down the page is nearly what already happens ---------------------
+     *
+     * A column of flex items is a stack of blocks with a gap between them
+     * and a chance to be reversed. The one thing worth doing properly is
+     * the gap, because a page that asked for one and did not get it has
+     * everything touching. */
+    if (column) {
+        for (int i = 0; i < n; i++) {
+            int k = kid[reverse ? n - 1 - i : i];
+            if (i) *y += gap;
+            lay_block(L, k, st, cx, cw, y);
+        }
+        return;
+    }
+
+    /* --- along the line ---------------------------------------------------- */
+    int want[LAY_FLEX_MAX], high[LAY_FLEX_MAX], grow[LAY_FLEX_MAX];
+    int total = 0, grows = 0;
+
+    for (int i = 0; i < n; i++) {
+        int h = 0;
+        /* Measured with room to spare, so the answer is how wide the child
+           would like to be rather than how wide it was squeezed into. */
+        int w = lay_measure(L, kid[i], st, cw > 0 ? cw * 3 : 2000, &h);
+        if (w < 1) w = 1;
+        if (w > cw && cw > 0) w = cw;
+
+        cstyle own;
+        lay_style(L, kid[i], st, &own, cw);
+        if (own.width >= 0) w = own.width;
+
+        want[i] = w;
+        high[i] = h;
+        grow[i] = own.grow > 0 ? own.grow : 0;
+        grows += grow[i];
+        total += w;
+    }
+    total += gap * (n - 1);
+
+    /* Too wide: everything shrinks in proportion, down to a floor, because
+       a row that overflows takes the page with it. */
+    if (total > cw && total > 0) {
+        int room = cw - gap * (n - 1);
+        if (room < n) room = n;
+        int sum = 0;
+        for (int i = 0; i < n; i++) sum += want[i];
+        for (int i = 0; i < n; i++) {
+            want[i] = sum > 0 ? want[i] * room / sum : room / n;
+            if (want[i] < 8) want[i] = 8;
+        }
+        total = 0;
+        for (int i = 0; i < n; i++) total += want[i];
+        total += gap * (n - 1);
+    }
+
+    int spare = cw - total;
+    if (spare < 0) spare = 0;
+
+    /* Anything that asked to grow takes the spare room first, and then
+       there is none left to justify with — which is what `flex: 1` is for
+       and why a page that uses it does not also use space-between. */
+    if (grows > 0 && spare > 0) {
+        int left = spare;
+        for (int i = 0; i < n; i++) {
+            if (!grow[i]) continue;
+            int add = spare * grow[i] / grows;
+            if (add > left) add = left;
+            want[i] += add;
+            left -= add;
+        }
+        if (left > 0) {
+            for (int i = n - 1; i >= 0; i--)
+                if (grow[i]) { want[i] += left; break; }
+        }
+        spare = 0;
+    }
+
+    /* Where the first one starts and what goes between them. */
+    int pen = cx;
+    int between = gap;
+    if (spare > 0) {
+        if (st->justify == JC_CENTER) pen += spare / 2;
+        else if (st->justify == JC_END) pen += spare;
+        else if (st->justify == JC_BETWEEN && n > 1) between += spare / (n - 1);
+        else if (st->justify == JC_AROUND) {
+            between += spare / n;
+            pen += spare / (n * 2);
+        } else if (st->justify == JC_EVENLY) {
+            between += spare / (n + 1);
+            pen += spare / (n + 1);
+        }
+    }
+
+    /* The row is as tall as its tallest child, which is what the ones that
+       are shorter are aligned within. */
+    int tallest = 0;
+    for (int i = 0; i < n; i++) if (high[i] > tallest) tallest = high[i];
+
+    int top = *y;
+    for (int idx = 0; idx < n; idx++) {
+        int i = reverse ? n - 1 - idx : idx;
+
+        int before = L->out->nitems;
+        int child_y = top;
+        lay_block(L, kid[i], st, pen, want[i], &child_y);
+
+        /* Slid down the cross axis afterwards, which is cheaper than laying
+           it out somewhere else and gives the same answer. Stretch is left
+           where it is: making a child taller means laying it out again with
+           a height it did not ask for, and a box at the top of its row is
+           what stretch looks like when everything in it is the same height
+           anyway. */
+        int mine = high[i] > 0 ? high[i] : child_y - top;
+        int dy = 0;
+        if (st->align_items == AI_CENTER) dy = (tallest - mine) / 2;
+        else if (st->align_items == AI_END) dy = tallest - mine;
+        if (dy > 0)
+            for (int k = before; k < L->out->nitems; k++)
+                L->out->items[k].y += dy;
+
+        pen += want[i] + between;
+    }
+
+    *y = top + tallest;
 }
 
 static void lay_block(lctx *L, int node, const cstyle *parent, int x,
@@ -514,6 +822,12 @@ static void lay_block(lctx *L, int node, const cstyle *parent, int x,
         }
     }
 
+    /* A flex container lays its children along a line rather than down
+       the page, so it does not use the walk below at all. */
+    if (st.display == D_FLEX) {
+        lay_flex(L, node, &st, cx, cw, y);
+    } else {
+
     /* The children: consecutive inline ones share a line, each block one
        starts on its own. */
     int child = d->nodes[node].first;
@@ -540,6 +854,7 @@ static void lay_block(lctx *L, int node, const cstyle *parent, int x,
         child = next;
     }
     if (inline_open) lay_line_end(L, y);
+    }
     if (pushed) L->list_depth--;
 
     *y += st.pb + st.bb;
@@ -576,7 +891,8 @@ static void lay_block(lctx *L, int node, const cstyle *parent, int x,
 
 static inline void lay_run(ldoc *out, const ddoc *d, const csheet *s,
                            const cindex *x, const cmatch *m,
-                           const cinline *inl, int width, int root_px) {
+                           const cinline *inl, const limage *imgs, int nimgs,
+                           int width, int root_px) {
     out->nitems = 0;
     out->used = 0;
     out->nlinks = 0;
@@ -584,6 +900,7 @@ static inline void lay_run(ldoc *out, const ddoc *d, const csheet *s,
 
     lctx L;
     L.d = d; L.s = s; L.x = x; L.m = m; L.inl = inl;
+    L.imgs = imgs; L.nimgs = nimgs;
     L.out = out; L.root_px = root_px;
     L.line_started = 0; L.pending_space = 0; L.cur_link = -1;
     L.line_at = 0; L.line_n = 0; L.pen = 0;

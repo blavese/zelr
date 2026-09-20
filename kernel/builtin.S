@@ -205,3 +205,31 @@ builtin_spin_end:
 builtin_ps_start:
 .incbin "build/user/ps.elf"
 builtin_ps_end:
+
+.balign 4
+.global builtin_pngtest_start
+.global builtin_pngtest_end
+builtin_pngtest_start:
+.incbin "build/user/pngtest.elf"
+builtin_pngtest_end:
+
+.balign 4
+.global builtin_jpegtest_start
+.global builtin_jpegtest_end
+builtin_jpegtest_start:
+.incbin "build/user/jpegtest.elf"
+builtin_jpegtest_end:
+
+.balign 4
+.global builtin_svgtest_start
+.global builtin_svgtest_end
+builtin_svgtest_start:
+.incbin "build/user/svgtest.elf"
+builtin_svgtest_end:
+
+.balign 4
+.global builtin_layouttest_start
+.global builtin_layouttest_end
+builtin_layouttest_start:
+.incbin "build/user/layouttest.elf"
+builtin_layouttest_end:

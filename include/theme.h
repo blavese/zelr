@@ -135,6 +135,44 @@ typedef struct {
     /* The screen size to ask for. Zero for whatever the machine gave us,
        which is the only answer on one whose firmware set the mode. */
     int  want_w, want_h;
+
+    /* --- the rest of the desktop, which used to be constants -------------
+     *
+     * Every number below was a #define in wm.c, which is to say it was
+     * somebody's taste compiled in. None of them is a number there is a
+     * right answer to: a dock can reasonably be shorter, or against the
+     * top, or welded to the edge rather than floating; a title bar can
+     * reasonably have more room in it; icons can reasonably be bigger.
+     *
+     * They are here because this is the file the desktop reads, and they
+     * are plain numbers in it because the whole point of a plain file is
+     * that `write` can set the ones no window happens to offer.
+     */
+    int  dock_h;              /* how tall the dock is */
+    int  dock_gap;            /* clear of the screen edge; 0 welds it on */
+    int  dock_side;           /* and clear of the sides */
+    int  dock_radius;         /* the corner it is cut with */
+    bool dock_brand;          /* the name badge at its left */
+    bool dock_search;         /* the field in the middle */
+    int  dock_search_w;
+    bool dock_clock;
+    bool clock_24;            /* or twelve hour, with am and pm */
+    int  dock_hide;           /* 0 never, 1 when a window wants the room,
+                                 2 always, out only when reached for */
+
+    int  title_h;             /* the bar at the top of a window */
+    int  border;              /* the frame around one */
+    int  button_w, button_h;  /* the three buttons in that bar */
+    bool snap;                /* dragging to an edge snaps the window */
+
+    bool desk_icons;          /* the icons on the wallpaper */
+    int  icon_size;           /* how big the pictogram is */
+    int  icon_gap;            /* the room around it inside its cell */
+    int  vignette;            /* how much the wallpaper darkens at the edge */
+    bool glows;               /* and whether it has lights in it at all */
+
+    int  anim_ms;             /* how long a fade takes */
+    int  dblclick_ms;         /* how close two clicks have to be to be two */
 } theme_t;
 
 void theme_init(void);
@@ -152,6 +190,31 @@ bool theme_save(void);
    rather than writing the file itself, so there is one place that knows
    what the file looks like. */
 void theme_set_volume(int percent);
+
+/* --- every setting that is a plain number --------------------------------
+ *
+ * One table, rather than a parser arm and a writer line and a control, all
+ * three of which had to be remembered separately and one of which was
+ * always forgotten. A key the settings window wrote and the kernel did not
+ * parse was a setting that silently did nothing, and a key the kernel knew
+ * about and the window did not was a setting the window deleted every time
+ * it saved. Both of those have happened here.
+ *
+ * Now the parser walks this, the writer walks this, and a settings program
+ * reads it through /sys/settings and can offer a control for every entry
+ * without being told what the entries are. */
+typedef struct {
+    const char *key;
+    const char *label;    /* for a program that has to show it to a person */
+    u16  at;              /* where it lives in theme_t */
+    u8   is_bool;
+    int  lo, hi;
+    int  def;             /* what a machine nobody has touched arrives with */
+} theme_knob;
+
+int               theme_knob_count(void);
+const theme_knob *theme_knob_at(int i);
+int               theme_knob_get(const theme_knob *k);
 
 /* The named presets a settings program offers. */
 #define THEME_PRESETS 6

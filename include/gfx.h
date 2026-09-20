@@ -33,6 +33,11 @@ void fb_vgradient(int x, int y, int w, int h, u32 top, u32 bottom);
  * reads as light. */
 void fb_round_rect_aa(int x, int y, int w, int h, int r, u32 rgb, int alpha);
 void fb_glow(int cx, int cy, int rx, int ry, u32 rgb, int strength);
+
+/* Darkens toward the corners, which is what stops a gradient reading as a
+   gradient. Every photograph has this and no drawing does, which is most of
+   why a flat wash looks like a diagram of a background. */
+void fb_vignette(int strength);
 void fb_sheen(int x, int y, int w, int h, int r, int strength);
 void fb_hgradient(int x, int y, int w, int h, u32 left, u32 right);
 u32  gfx_mix(u32 under, u32 over, int alpha);

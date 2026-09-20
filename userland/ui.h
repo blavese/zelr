@@ -250,6 +250,26 @@ static inline ui_theme ui_load_theme(void) {
     t.modern = !built;
     t.accent = (u32)ui_cfg_int(cfg, "accent", (int)UI_ACCENTS[preset]);
 
+    /* And then the accent the desktop is actually using, if the kernel is
+       offering it.
+     *
+       Everything above is this program working the palette out for itself
+       from preset, light and look, which is right while those three are
+       all that decides a colour. It stops being right the moment somebody
+       sets one by hand: the window manager would draw the dock in that
+       colour and every window in front of it would draw its buttons in
+       whatever this guessed. Reading /sys/theme is asking rather than
+       guessing, and a machine that is not offering it falls through to the
+       guess, which is what this always did. */
+    {
+        char live[192];
+        int ln = slurp("/sys/theme", live, sizeof(live) - 1);
+        if (ln > 0) {
+            live[ln] = 0;
+            t.accent = (u32)ui_cfg_int(live, "accent", (int)t.accent);
+        }
+    }
+
     if (t.modern) {
         /* Near white, because nothing here is a bevel that needs room above
            and below it. What a modern surface needs is to be quiet enough
@@ -603,13 +623,21 @@ static inline void ui_field_key(ui_field *f, u32 key) {
     f->buf[f->len] = 0;
 }
 
-static inline void ui_field_draw(surface *s, ui_input *in, const ui_theme *t,
-                                 int x, int y, int w, ui_field *f,
-                                 const char *placeholder) {
+/* Returns 1 on the frame it was clicked into, which is not the same as the
+   frame it became focused on: clicking a field that already has the
+   keyboard is a thing people do constantly and the caller cannot see it
+   otherwise, because the release is consumed here. */
+static inline int ui_field_draw(surface *s, ui_input *in, const ui_theme *t,
+                                int x, int y, int w, ui_field *f,
+                                const char *placeholder) {
     int h = UI_BTN_H;
     int over = ui_hit(in, x, y, w, h);
-    if (over && in->released) { in->released = 0; f->focused = 1; }
-    else if (in->released && !over) f->focused = 0;
+    int clicked = 0;
+    if (over && in->released) {
+        in->released = 0;
+        f->focused = 1;
+        clicked = 1;
+    } else if (in->released && !over) f->focused = 0;
 
     /* Sunk, and paper coloured inside. Somewhere to type is a hole in the
        surface with something white at the bottom of it, which is the one
@@ -647,6 +675,8 @@ static inline void ui_field_draw(surface *s, ui_input *in, const ui_theme *t,
             rect(s, x + UI_PAD + upto - shift, ty, 2,
                  face_h(UI_FACE_BODY), t->accent);
     }
+
+    return clicked;
 }
 
 /* A well: somewhere content lives, sunk into the window with paper at the

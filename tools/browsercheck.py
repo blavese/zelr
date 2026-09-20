@@ -33,16 +33,42 @@ SCREEN_W, SCREEN_H = 1024, 768
 # Where the window lands, worked out the way winsrv.c works it out: past the
 # desktop's icon column, one cascade step in because the terminal took the
 # first, and pulled back on to the screen if it would not fit.
-WM_BORDER, WM_TITLE_H = 4, 20
+WM_BORDER, WM_TITLE_H = 1, 32
 WM_TOP = WM_BORDER + WM_TITLE_H
-ICON_LEFT, ICON_CELL_W = 14, 78
+#
+# The icon column is where wm_icons_right() says it is, and it moved: the
+# cells went from 78 wide to 92 and their left inset from 14 to 18, which
+# put every control in this window eighteen pixels right of where the clicks
+# below were aimed. The window opened, drew, and did nothing when pressed,
+# and what that reported was a browser that would not follow a link.
+ICON_LEFT, ICON_CELL_W = 18, 92
 CASCADE_X = ICON_LEFT + ICON_CELL_W + 14
+
+# The dock, because the work area is what the vertical clamp is measured
+# against.
+DOCK_H, DOCK_GAP = 44, 14
+WORK_H = SCREEN_H - DOCK_H - DOCK_GAP
 
 WIN_CW, WIN_CH = 860, 620
 WIN_X = CASCADE_X + 48
 WIN_Y = 36 + 38
+
+# Pulled back on to the screen, both ways, the way winsrv.c does it. The
+# horizontal clamp was here and the vertical one was not, which was fine
+# while it never fired: a twenty pixel title bar and a work area reaching to
+# thirty four from the bottom left a six hundred and twenty pixel window at
+# seventy four still fitting. A thirty two pixel title bar and a dock that
+# floats clear of the edge take thirty two pixels out of that between them,
+# so the window is lifted eighteen pixels and everything in its toolbar went
+# with it.
 if WIN_X > SCREEN_W - (WIN_CW + WM_BORDER * 2):
     WIN_X = SCREEN_W - (WIN_CW + WM_BORDER * 2)
+if WIN_Y > WORK_H - (WIN_CH + WM_TOP + WM_BORDER):
+    WIN_Y = WORK_H - (WIN_CH + WM_TOP + WM_BORDER)
+if WIN_X < 0:
+    WIN_X = 0
+if WIN_Y < 0:
+    WIN_Y = 0
 
 INNER_X = WIN_X + WM_BORDER
 INNER_Y = WIN_Y + WM_TOP
@@ -61,10 +87,34 @@ VIEW_W = WIN_CW - 6 - UI_SCROLL_W
 VIEW_H = WIN_CH - (TOOLBAR_H + 3) - UI_ROW - 3
 PAGE = (VIEW_X + 2, VIEW_Y + 2, VIEW_X + VIEW_W - 2, VIEW_Y + VIEW_H - 2)
 
+# Where the pointer goes to be out of the way.
+#
+# Two checks here compare one rendering of a page against another and want
+# them identical, and the pointer is drawn by the window manager like
+# everything else: a picture with it inside the rectangle being compared
+# cannot match one without it.
+#
+# It used to park at the right hand edge of the screen, a few pixels clear
+# of the page. Then the icon column grew, the window cascaded further right,
+# and those few pixels became none: the pointer sat in the page, and "going
+# back" compared a page with a pointer on it against the same page without
+# one. What it reported was a browser that would not go back. It had gone
+# back.
+#
+# Left of the window and below the page, which is wallpaper, and worked out
+# from PAGE rather than from the screen so it cannot drift back in.
+PARK = (PAGE[0] - 60, PAGE[3] + 8)
+assert 0 < PARK[0] < PAGE[0], "the pointer is parked inside the page"
+
 # The accent, which is what a link is drawn in. The second preset is what a
 # machine nobody has touched starts with.
 LINK = (0x6E, 0x8A, 0xE8)
 PAPER = (0xFF, 0xFF, 0xFF)
+
+# The colour of the picture the server serves, and of the drawing. Nothing
+# else on the screen is this, so counting it asks whether the thing arrived,
+# decoded and reached the glass -- three separate things, one number.
+LOGO = (0xE1, 0x1D, 0x48)
 
 # The colour /styled asks for its band to be. Nothing else on the screen is
 # this colour, so counting it is the same question as "was the sheet read".
@@ -84,27 +134,42 @@ def page_now(mon, name):
     return region(px, w, PAGE), px, w, ppm
 
 
-def page_settled(mon, name, tries=40):
-    """The page once it has stopped changing.
+def page_settled(mon, name, steady=3, gap=0.4, tries=40):
+    """The page once it has stopped changing, and stayed stopped.
 
     Two checks here compare one rendering against another and want them to
     be identical, which means the picture has to be of a page that finished
     drawing. A fixed sleep cannot promise that: a page delivered in chunks
     takes as long as it takes, and a picture taken in the middle of it
-    differs from the same page delivered whole — which reads as the chunked
+    differs from the same page delivered whole -- which reads as the chunked
     decoder being wrong when what happened was that nobody waited.
 
-    So this takes pictures until two in a row are the same, which is the
-    only thing that actually means "finished".
+    Two identical frames four tenths of a second apart is not that either.
+    It is "nothing changed in four hundred milliseconds", which happens in
+    the middle of a draw often enough that the chunked check failed about
+    one run in three. Measured on a run where both pages did finish, the two
+    renders came out identical to the byte, so the decoder was never what
+    was wrong.
+
+    Three frames, spanning about a second, is a pause a draw does not
+    survive. It costs one more screenshot on a page that had already
+    stopped.
     """
+    same = 0
     last = None
+    got = None
     for _ in range(tries):
         now, px, w, ppm = page_now(mon, name)
+        got = (now, px, w, ppm)
         if last is not None and now == last:
-            return now, px, w, ppm
+            same += 1
+            if same >= steady - 1:
+                return got
+        else:
+            same = 0
         last = now
-        time.sleep(0.4)
-    return page_now(mon, name)
+        time.sleep(gap)
+    return got if got else page_now(mon, name)
 
 
 def go(vm, mon, url, settle=9.0, was=None, name="br-going"):
@@ -136,7 +201,7 @@ def go(vm, mon, url, settle=9.0, was=None, name="br-going"):
                         lambda w, h, px: region(px, w, PAGE) != was,
                         timeout=settle + 30)
 
-    mon.move_to(SCREEN_W - 20, 300)         # the pointer off everything
+    mon.move_to(*PARK)                      # the pointer off the page
     time.sleep(0.8)
 
 
@@ -156,7 +221,7 @@ def main():
 
             vm.type("browser http://%s/\n" % srv.host)
             time.sleep(14)
-            mon.move_to(SCREEN_W - 20, 300)
+            mon.move_to(*PARK)
             time.sleep(1.0)
 
             first, px, w, shot = page_now(mon, "br-first")
@@ -177,7 +242,7 @@ def main():
                 spot[0], spot[1], "br-second",
                 lambda w, h, px: region(px, w, PAGE) != first, timeout=30)
             c.add("clicking it goes to the page it points at", moved, shot2)
-            mon.move_to(SCREEN_W - 20, 300)
+            mon.move_to(*PARK)
             time.sleep(0.8)
             second, px2, w2, shot2 = page_now(mon, "br-second-still")
             c.add("which is a different page from the one before it",
@@ -195,12 +260,20 @@ def main():
             # One with a length on it and one in chunks. If the chunked
             # decoder loses a byte or keeps a size line, the two renders are
             # not the same, and nothing else here would notice.
-            go(vm, mon, "http://%s/measured" % srv.host)
+            # They are meant to come out identical, which is what makes
+            # them awkward to arrive at: a page that renders the same as the
+            # one before it cannot be told from never having left. Each is
+            # reached from a page that looks like neither, so the journey
+            # visibly changes something and the settle below has a finished
+            # page to settle on.
+            go(vm, mon, "http://%s/bare" % srv.host, settle=6.0)
+            go(vm, mon, "http://%s/measured" % srv.host, settle=8.0)
             measured, _, _, shotm = page_settled(mon, "br-measured")
             c.add("a page with every shape in it renders",
                   len(set(measured)) > 8, shotm)
 
-            go(vm, mon, "http://%s/framed" % srv.host)
+            go(vm, mon, "http://%s/bare" % srv.host, settle=6.0)
+            go(vm, mon, "http://%s/framed" % srv.host, settle=8.0)
             framed, _, _, shotf = page_settled(mon, "br-framed")
             c.add("and the same page sent in chunks renders identically",
                   framed == measured, shotf)
@@ -228,6 +301,43 @@ def main():
             c.add("and has no band on it at all",
                   count_in(pxb, wb, PAGE, BAND) < 200, shotb)
 
+            # --- a picture -------------------------------------------------
+            #
+            # The whole way through: fetched over http as a second request,
+            # inflated, unfiltered, turned into pixels and drawn at the size
+            # the layout left for it.
+            go(vm, mon, "http://%s/picture" % srv.host, settle=12.0,
+               was=bare, name="br-going-picture")
+            withpic, pxp, wp, shotp = page_settled(mon, "br-picture")
+            c.add("a picture on a page is fetched, decoded and drawn",
+                  count_in(pxp, wp, PAGE, LOGO) > 10000, shotp)
+
+            # And one that is not there falls back to the words it carries,
+            # which is what alt text is for. A browser that drew nothing at
+            # all would look the same as one that drew the picture wrongly,
+            # so this asks that the page differs from the one with it.
+            go(vm, mon, "http://%s/missing-picture" % srv.host, settle=10.0,
+               was=withpic, name="br-going-nopic")
+            nopic, pxn, wn, shotn = page_settled(mon, "br-missing-picture")
+            c.add("and one that is not there does not draw anything",
+                  count_in(pxn, wn, PAGE, LOGO) < 100, shotn)
+            c.add("so the two pages do not look the same",
+                  nopic != withpic, shotn)
+
+            # --- a drawing -------------------------------------------------
+            #
+            # An SVG is not a picture, it is instructions for making one, so
+            # this asks a different question: not whether the bytes decoded
+            # but whether the shapes were drawn, at the size the page asked
+            # for rather than the size they describe. It catches a viewBox
+            # read under the wrong name, which draws at the ratio of the
+            # height asked for to a square the drawing never had.
+            go(vm, mon, "http://%s/drawn" % srv.host, settle=12.0,
+               was=nopic, name="br-going-drawn")
+            drawn, pxd, wd, shotd = page_settled(mon, "br-drawn")
+            c.add("a drawing on a page is rendered and drawn",
+                  count_in(pxd, wd, PAGE, LOGO) > 10000, shotd)
+
             # --- a page that runs its own script ---------------------------
             #
             # The band is the whole check, and it asks a lot at once: nothing
@@ -237,7 +347,7 @@ def main():
             # document rather than a copy of it, and the cascade had to match
             # a class that was not there when the sheet was indexed.
             go(vm, mon, "http://%s/scripted" % srv.host, settle=12.0,
-               was=bare, name="br-going-scripted")
+               was=drawn, name="br-going-scripted")
             scripted, pxc, wc, shotc = page_settled(mon, "br-scripted")
             c.add("a page's own script runs, and changes the page",
                   count_in(pxc, wc, PAGE, BAND) > 3000, shotc)

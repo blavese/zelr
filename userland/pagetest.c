@@ -106,6 +106,26 @@ int main(void) {
     dom_set_text(&page, head, "replaced", 8);
     oks("an element's text can be replaced", content_of(head), "replaced");
 
+    /* --- whitespace, which is content or is not depending on what is beside it */
+    {
+        load("<body><p><a>Gmail</a> <a>Images</a></p>"
+             "<div>one</div>  <div>two</div>"
+             "<p>  lots   of   room  </p></body>");
+
+        oks("a space between two inline things separates them",
+            content_of(dom_by_tag(&page, T_P, 0)), "Gmail Images");
+
+        /* After a block the line has already ended, so the space would sit
+           at the start of the next line where it is dropped anyway. */
+        oks("and one after a block element is not kept",
+            content_of(dom_by_tag(&page, T_DIV, 1)), "two");
+
+        /* What is inside an element is left exactly as written; collapsing
+           runs is the line breaker's business, not the parser's. */
+        ok("and a run inside an element is left for the line breaker",
+           content_of(dom_by_tag(&page, T_P, 1))[0] != 0);
+    }
+
     /* --- a script on the page ---------------------------------------------- */
     {
         load("<html><head><title>before</title></head><body>"
