@@ -14,6 +14,7 @@
  * image have to live somewhere, and the root is where the user's files are.
  */
 #include "sysfs.h"
+#include "theme.h"
 #include "usb.h"
 #include "usbdisk.h"
 #include "printf.h"
@@ -272,6 +273,55 @@ static u32 render_screen(char *b, u32 cap) {
     return o.len;
 }
 
+/* Every setting there is, with what it is called, what it is now, and
+ * what it may be set to.
+ *
+ * This exists so a settings program does not have to know the list. It
+ * used to: the window had a control per setting, hand written, and the
+ * kernel had a parser arm per setting, hand written, and the two were
+ * maintained separately by whoever remembered. The comments in
+ * userland/settings.c are the record of what that cost.
+ *
+ * A program that reads this can offer a control for a setting nobody has
+ * written a control for, which means the answer to "can I change that" is
+ * yes for everything in the file rather than for the subset somebody got
+ * round to.
+ *
+ * The colours are not here. A colour is not a number with a range, and a
+ * slider from nought to sixteen million is not a way to choose one.
+ */
+static u32 render_settings(char *b, u32 cap) {
+    out_t o = { b, cap, 0 };
+    put(&o, "# key value low high default label\n");
+    for (int i = 0; i < theme_knob_count(); i++) {
+        const theme_knob *k = theme_knob_at(i);
+        put(&o, "%s %d %d %d %d %s\n", k->key, (u32)theme_knob_get(k),
+            (u32)k->lo, (u32)k->hi, (u32)k->def, k->label);
+    }
+    return o.len;
+}
+
+/* The palette the desktop is actually using.
+ *
+ * A program in ring 3 works its own colours out of preset, light and look,
+ * which is right while those three are the only things that decide a
+ * colour and wrong the moment somebody sets one by hand: the window
+ * manager would use the colour and the windows in front of it would not.
+ * Reading this is how a program asks rather than guesses. */
+static u32 render_theme(char *b, u32 cap) {
+    const theme_t *t = theme();
+    out_t o = { b, cap, 0 };
+    put(&o, "accent 0x%06x\n", t->accent);
+    put(&o, "desktop 0x%06x\n", t->desktop);
+    put(&o, "surface 0x%06x\n", t->surface);
+    put(&o, "text 0x%06x\n", t->text);
+    put(&o, "text_dim 0x%06x\n", t->text_dim);
+    put(&o, "light %d\n", t->light ? 1 : 0);
+    put(&o, "look %d\n", t->look == LOOK_BUILT ? 1 : 0);
+    put(&o, "preset %d\n", (u32)theme_current_preset());
+    return o.len;
+}
+
 static const node_t nodes[] = {
     { "/sys/version",  render_version  },
     { "/sys/memory",   render_memory   },
@@ -286,6 +336,8 @@ static const node_t nodes[] = {
     { "/sys/clipboard", render_clipboard },
     { "/sys/time",     render_time      },
     { "/sys/screen",   render_screen    },
+    { "/sys/settings", render_settings  },
+    { "/sys/theme",    render_theme     },
 };
 #define N_NODES (sizeof(nodes) / sizeof(nodes[0]))
 

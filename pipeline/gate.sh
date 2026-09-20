@@ -399,6 +399,21 @@ if [ "$MODE" = "screen" ] || [ "$MODE" = "full" ]; then
   apptest() { keep timeout 600 python tools/appcheck.py; }
   shtest() { keep timeout 600 python tools/shcheck.py; }
 
+  # Every number the desktop is drawn from is a line in a file now. This
+  # asks the kernel to describe its own settings, writes one from the
+  # console and watches the dock move, and then works the same control in
+  # the settings window and watches the same thing happen. The last of
+  # those is the one that matters: the window used to keep its own copy of
+  # the list and delete from the file every key it had not heard of.
+  settest() { keep timeout 600 python tools/setcheck.py; }
+
+  # The picture decoders, the rasteriser and the layout, which are
+  # arithmetic and need no screen at all. They are checked against answers
+  # produced by somebody else's libraries on the host, and for a while
+  # nothing ran them: ninety odd checks sitting in the image where only
+  # somebody who knew their names would find them.
+  pictest() { keep timeout 600 python tools/piccheck.py; }
+
   # The network, from the icon on the panel to an address. The reply comes
   # from QEMU's own DHCP server rather than from anything here, which is the
   # only reason getting one proves anything. Run twice, with a card and
@@ -412,7 +427,13 @@ if [ "$MODE" = "screen" ] || [ "$MODE" = "full" ]; then
 
   # And the browser on top of it: a page off that server, drawn, with its
   # links clicked and its history walked.
-  browsertest() { keep timeout 900 python tools/browsercheck.py; }
+  #
+  # One step, and quick now for a reason that has nothing to do with this
+  # file: it used to sleep a fixed nine to fourteen seconds at every page it
+  # visited. It was briefly three steps as well, which made it flaky and
+  # starved whatever ran beside it -- every poll in there writes a two
+  # megabyte screenshot, and three at once is a gigabyte of writes.
+  browsertest() { keep timeout 600 python tools/browsercheck.py; }
 
   # https against the actual web. Everything else about TLS is checked
   # against fixed answers, which proves the arithmetic and cannot prove that
@@ -433,6 +454,8 @@ if [ "$MODE" = "screen" ] || [ "$MODE" = "full" ]; then
   par_start "the browser shows a page and follows a link" browsertest
   par_start "the programs it ships with do what they say" apptest
   par_start "a shell, with pipes and redirection" shtest
+  par_start "a setting written by hand reaches the screen" settest
+  par_start "the decoders and the layout, with no screen at all" pictest
 
   par_wait
 fi

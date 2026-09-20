@@ -33,6 +33,9 @@
 #include "css.h"
 #include "layout.h"
 #include "jsdom.h"
+#include "png.h"
+#include "jpeg.h"
+#include "svg.h"
 
 /* --- how much room there is ----------------------------------------------
  *
@@ -74,6 +77,44 @@ static int   hover_node = -1;
 /* The size everything relative is relative to. A page that says 1.2em means
    twenty per cent more than this, and a page that says nothing gets it. */
 static int   root_px = 16;
+
+/* --- the pictures -------------------------------------------------------
+ *
+ * Fetched after the page is parsed and before it is laid out, because the
+ * layout has to know how big each one is to leave room for it. One
+ * connection at a time is all this kernel's TCP does, so they arrive one
+ * after another and a page of many pictures is slow — visibly so, and
+ * honestly so, rather than appearing to hang.
+ *
+ * A picture that will not decode is not an error: the element falls back to
+ * its alt text, which is what that text is for. Only the count of what was
+ * skipped is worth saying.
+ */
+#define PICS_MAX 24
+
+typedef struct {
+    int     node;                /* which img element */
+    picture pic;                 /* its pixels, or nothing */
+} shown;
+
+static shown  pics[PICS_MAX];
+static int    npics;
+static limage pic_sizes[PICS_MAX];
+static int    npic_sizes;
+static int    pics_skipped;
+
+static void pics_drop(void) {
+    for (int i = 0; i < npics; i++) picture_free(&pics[i].pic);
+    npics = 0;
+    npic_sizes = 0;
+    pics_skipped = 0;
+}
+
+static const picture *pic_of(int node) {
+    for (int i = 0; i < npics; i++)
+        if (pics[i].node == node && pics[i].pic.rgb) return &pics[i].pic;
+    return 0;
+}
 
 /* What the page's own scripts did, for the status line to mention. */
 static int   scripts_ran;
@@ -231,7 +272,7 @@ static int gather_linked_sheets(int *fetched, int *skipped) {
 static void relayout(int width) {
     match.hover = hover_node;
     match.visited_links = 0;
-    lay_run(&page, &doc, &sheet, &index_, &match, inl, width, root_px);
+    lay_run(&page, &doc, &sheet, &index_, &match, inl, pic_sizes, npic_sizes, width, root_px);
 }
 
 /* What this system thinks a link looks like, which is the accent the rest of
@@ -257,6 +298,71 @@ static void accent_sheet(void) {
     css_parse(&sheet, rule, n);
 }
 
+/* Every img in the document, fetched and decoded in the order they appear.
+ *
+ * The buffer is the one the style sheets use: by this point every sheet has
+ * been parsed into the cascade and what is in it is no longer needed, and a
+ * second buffer of this size is a megabyte that is idle on every page
+ * without a picture on it. */
+static void gather_pictures(void) {
+    for (int i = 0; i < doc.count && npics < PICS_MAX; i++) {
+        if (doc.nodes[i].kind != DN_ELEMENT || doc.nodes[i].tag != T_IMG)
+            continue;
+
+        const char *src = dom_attr(&doc, i, "src");
+        if (!src || !*src) continue;
+
+        url_t u;
+        if (!url_join(&here, src, &u)) { pics_skipped++; continue; }
+
+        response_t r;
+        int rc = web_get(&u, cssbuf, CSS_MAX, &r);
+        if (rc < 0 || rc >= 400 || r.len <= 0) { pics_skipped++; continue; }
+
+        shown *s = &pics[npics];
+        s->node = i;
+
+        /* Which of the three it is, from the bytes rather than from what the
+           server said it was. A server that labels a PNG as an octet stream
+           is common; a PNG that does not start with the PNG signature is
+           not, so the bytes are the better authority. */
+        const u8 *body = (const u8 *)r.body;
+        int ok = 0;
+
+        if (r.len > 8 && body[0] == 137 && body[1] == 'P'
+            && body[2] == 'N' && body[3] == 'G') {
+            ok = png_decode(body, r.len, &s->pic, 0xFFFFFF) == PNG_OK;
+        } else if (r.len > 3 && body[0] == 0xFF && body[1] == 0xD8) {
+            ok = jpeg_decode(body, r.len, &s->pic) == JPG_OK;
+        } else {
+            /* A drawing, which is markup and so can start with an XML
+               declaration, a comment, or the element itself. */
+            int at = 0;
+            while (at < r.len && (body[at] == ' ' || body[at] == '\n'
+                                  || body[at] == '\r' || body[at] == '\t')) at++;
+            if (at < r.len && body[at] == '<') {
+                /* What the page asked for, so a drawing lands at the size
+                   the layout is about to leave for it rather than at
+                   whatever size it happens to describe. */
+                const char *aw = dom_attr(&doc, i, "width");
+                const char *ah = dom_attr(&doc, i, "height");
+                int want_w = aw ? lay_number(aw) : 0;
+                int want_h = ah ? lay_number(ah) : 0;
+                ok = svg_render((const char *)body, r.len, want_w, want_h,
+                                &s->pic, 0xFFFFFF) == SVG_OK;
+            }
+        }
+
+        if (!ok) { pics_skipped++; continue; }
+
+        pic_sizes[npic_sizes].node = i;
+        pic_sizes[npic_sizes].w = s->pic.w;
+        pic_sizes[npic_sizes].h = s->pic.h;
+        npic_sizes++;
+        npics++;
+    }
+}
+
 static void build(const char *html, int len, int width, int want_sheets,
                   int *fetched, int *skipped) {
     dom_parse(&doc, html, len);
@@ -269,6 +375,10 @@ static void build(const char *html, int len, int width, int want_sheets,
     else { *fetched = 0; *skipped = 0; }
     gather_inline_styles();
     css_index(&sheet, &index_);
+
+    /* The pictures, before the layout so it can leave room for them. */
+    pics_drop();
+    if (want_sheets) gather_pictures();
 
     /* And then whatever the page brought with it, before any of it is laid
        out: a script that writes to an element is writing to the document
@@ -398,6 +508,17 @@ static void load(const char *address, int width, int keep_scroll) {
     /* And what the page's own scripts did. A script that threw is worth
        saying out loud: the page will look like the one it was before it
        ran, and without this there is nothing to tell the two apart. */
+    if (npics) {
+        char n[16];
+        number_into(n, npics);
+        say_more(", ");
+        say_more(n);
+        say_more(npics == 1 ? " picture" : " pictures");
+        if (pics_skipped) say_more(" (more would not show)");
+    } else if (pics_skipped) {
+        say_more(", no picture on it would show");
+    }
+
     if (script_err[0]) {
         say_more(", a script stopped: ");
         say_more(script_err);
@@ -485,6 +606,32 @@ static void draw_page(surface *s, int ox, int oy, int vw, int vh) {
             continue;
         }
 
+        if (it->kind == LK_IMAGE) {
+            const picture *p = pic_of(it->node);
+            if (p && p->rgb && it->w > 0 && it->h > 0) {
+                /* Nearest neighbour, chosen rather than settled for. A
+                   picture on a page is usually drawn at or near its own
+                   size, where every filter agrees; where it is not, the
+                   difference is a page that draws now against one that
+                   draws in a moment. */
+                for (int row = 0; row < it->h; row++) {
+                    int dy = sy + row;
+                    if (dy < oy || dy >= oy + vh) continue;
+                    int src_y = row * p->h / it->h;
+                    for (int col = 0; col < it->w; col++) {
+                        int dx = x + col;
+                        if (dx < ox || dx >= ox + vw) continue;
+                        if (dx < 0 || dx >= s->w) continue;
+                        const u8 *q = p->rgb + ((src_y * p->w)
+                                                + (col * p->w / it->w)) * 3;
+                        s->px[(u32)dy * s->w + dx] =
+                            ((u32)q[0] << 16) | ((u32)q[1] << 8) | q[2];
+                    }
+                }
+            }
+            continue;
+        }
+
         if (it->kind == LK_BULLET) {
             if (it->at >= 0)
                 tface_draw(s, x, sy, page.text + it->at, it->color, it->face);
@@ -533,9 +680,15 @@ static ui_field bar = { address, sizeof(address), 0, 0, 0 };
  * Clicking an address bar and typing replaces what was there, which is what
  * every browser does and the only reason anybody can change an address
  * without reaching for the backspace key sixty times. It is a selection in
- * everything but drawing: there is nothing here that can show one yet. */
+ * everything but drawing: there is nothing here that can show one yet.
+ *
+ * It used to be set when the bar became focused, which is not the same
+ * thing and is wrong in the ordinary case: the bar keeps the keyboard after
+ * an address is entered, so the second address somebody types is clicked
+ * into a field that already has it, no transition happens, and what they
+ * type is appended to what was there. Two addresses run together into one
+ * and the page does not change. */
 static int bar_fresh;
-static int bar_was_focused;
 
 static void set_address(const char *s) {
     w_copy(address, sizeof(address), s, sizeof(address));
@@ -770,10 +923,9 @@ void _start(void) {
         int go_w = 40;
         int field_w = w - bx - go_w - UI_GAP - UI_PAD;
         if (field_w < 80) field_w = 80;
-        ui_field_draw(&s, &in, &t, bx, UI_PAD, field_w, &bar,
-                      "type an address");
-        if (bar.focused && !bar_was_focused) bar_fresh = 1;
-        bar_was_focused = bar.focused;
+        if (ui_field_draw(&s, &in, &t, bx, UI_PAD, field_w, &bar,
+                          "type an address"))
+            bar_fresh = 1;
         if (ui_button_primary(&s, &in, &t, bx + field_w + UI_GAP, UI_PAD,
                               go_w, "Go")) {
             push_history(address);

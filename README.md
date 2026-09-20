@@ -96,10 +96,12 @@ there because both are useful: the desktop is what a machine with a screen
 should do when you switch it on, and the console is what you want when you
 are driving it down a serial line or something has gone wrong.
 
-A terminal opens, over a grey desktop with icons down the left of it. Click
-the badge in the corner, or the wallpaper, for the launcher: a file manager,
-an editor, paint, settings, a system monitor, a music player, a calculator, a
-web browser, and what the machine is made of. Drag a title bar to move a window; the three
+A terminal opens, over a desktop with icons down the left of it. Click the
+name at the left of the dock, or the wallpaper, for the launcher: the
+programs by kind -- a file manager, an editor, paint, settings, a system
+monitor, a music player, a calculator, a web browser, and what the machine
+is made of. Or click the field in the middle of the dock and type, which
+searches the lot of them. Drag a title bar to move a window; the three
 buttons at its right put it away, fill the screen, or close it.
 Drag the bottom right corner to resize, or drag a title bar to an edge to
 snap. Alt and tab changes window, alt and an arrow snaps, alt and d clears
@@ -107,14 +109,19 @@ the desktop, and shaking a window sends the others away. Escape returns to
 the shell.
 
 The wheel scrolls whatever is under the pointer, the speaker by the clock
-sets the volume, and the launcher can switch the machine off.
+sets the volume, and the launcher can switch the machine off. Drag on the
+wallpaper to sweep a band over the icons; press the right button on it for
+the desktop's own menu.
 
-The apps along the panel are kept there. Drag one to move it, right click it
-to take it off, and right click anything in the launcher to put it on. A
-program that is running is the same icon with a line under it, so the panel
-reads as what you keep and then what you happen to have open. All of that is
-in the settings window too, along with the screen size, whether the desktop
-opens at startup, and one button that puts every setting back.
+Everything the desktop is drawn from is a setting. Not the colours and the
+wallpaper alone: the dock's height, the gap it floats clear of the edge by,
+whether the name and the field and the clock are on it at all, a window's
+title bar and frame and corner, the size of the icons, how long a fade
+takes, how close two clicks have to be. Thirty one of them, each a line in
+`/zelr.cfg`, and the settings window's Everything page is generated from the
+kernel's own list of them rather than written by hand -- so there is nothing
+in the file that the window cannot set, and nothing the window sets that the
+file does not hold.
 
 Everything on that desktop except the system info window is a separate
 program running in ring 3. Settings cannot reach into the window manager at
@@ -343,6 +350,8 @@ instead.
     python tools/namecheck.py   save long names and read them back
     python tools/powercheck.py  tell it to shut down, see if it does
     python tools/appcheck.py    make the calculator divide, play a file
+    python tools/setcheck.py    write a setting by hand, watch the dock move
+    python tools/piccheck.py    the decoders and the layout, with no screen
     python tools/abicheck.py    the structs the kernel writes and programs read
     python tools/netcheck.py    click for an address, see if one arrives
     python tools/shots.py       retake the screenshots in this readme
@@ -615,29 +624,38 @@ and lets a page believe it worked.
 the manager owns the chrome, the stacking order and the pointer, and the whole
 screen is assembled into the back buffer and pushed once per frame so a window
 moving over another leaves no trail. Title bars drag, clicking raises, the
-close box closes, and a taskbar shows what is open.
+close box closes, and a chip on the dock shows what is open.
 
-**The panel.** A bar welded to the bottom of the screen means a maximised
+**The dock.** A bar welded to the bottom of the screen means a maximised
 window is not maximised: it stops short, and the last thirty pixels of the
 display are spent on something that is looked at occasionally. A bar that is
-always hidden means reaching for it every time, which is worse. So it is
-neither. Nothing wants the room and it is out, floating clear of the edge
-with the wallpaper showing around it; something does and it slides away and
-the window has the whole screen; put the pointer at the bottom and it comes
-back over the window, and stays as long as the pointer is on it. There is no
-setting for any of that. It is a consequence of what is on the screen.
+always hidden means reaching for it every time, which is worse. So the
+default is neither. Nothing wants the room and it is out, floating clear of
+the edge with the wallpaper showing around it; something does and it slides
+away and the window has the whole screen; put the pointer at the bottom and
+it comes back over the window, and stays as long as the pointer is on it.
+
+That is the default and not the rule. All three answers are a setting --
+never tuck away, tuck away when a window needs the room, or always -- along
+with the height, the gaps, the corner and what is on it. A gap of nothing
+welds it back to the bottom edge, which is what this was for fifteen
+versions.
 
 A window covering the whole screen also means the wallpaper and everything
 under that window are being drawn and then painted over, twelve times a
 second if the wallpaper is one that moves. Neither is drawn at all now.
 
-The apps on it are a list in a file, `/zelr.pins`, one program to a line.
-Dragging an icon reorders the list as the pointer crosses each slot rather
-than when the button comes up, so the icons move out of the way while it is
-happening. There are no icon files anywhere in this project: an app's icon is
-a rounded square in a colour worked out from its own path, with the first
-letter of its name in it, which tells five of them apart at a glance and
-costs nothing to carry.
+It used to keep a row of pinned apps, and no longer does. Six coloured
+letters in circles said which six programs somebody had chosen and nothing
+else: to reach a seventh you opened the launcher anyway. What is in the
+middle of the bar instead is a field that reaches all of them, is the same
+size whatever is installed, and takes text -- a substring rather than a
+prefix, so "ain" finds Paint and return runs it.
+
+There are no icon files anywhere in this project. The five on the desktop
+are drawn: flat shapes in a thirty two unit square, scaled to whatever size
+the icons are set to, so a bigger icon is a bigger drawing rather than a
+small one in the corner of a large tile.
 
 **The screen, at whatever size.** Nothing on this desktop knows a
 resolution: every window, the panel, the launcher and each wallpaper is laid
@@ -1286,8 +1304,8 @@ orders of magnitude away from Linux, which is roughly 30 million lines.
     kernel/user.c      building and launching ring 3 processes
     kernel/wm.c        the window manager and the launcher
     kernel/winsrv.c    handing window surfaces across to ring 3
-    kernel/theme.c     the desktop's appearance, and the file it lives in
-    kernel/pins.c      the apps kept on the taskbar, and their file
+    kernel/theme.c     every setting the desktop has, its range and its
+                       default, and the file they live in
     kernel/synaptics.c a trackpad, and turning a position into a pointer
     kernel/crypto.c    sha-1, hmac, pbkdf2 and aes, written out
     kernel/sha256.c    sha-256, hkdf, and the labelled form tls 1.3 uses

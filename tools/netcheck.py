@@ -17,37 +17,45 @@ import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from harness import (Guest, Checks, build_once, count_near,
-                     ROOT)    # noqa: E402
+from harness import (Guest, Checks, build_once, count_near, face_width,
+                     FACE_HEAD, ROOT)    # noqa: E402
 
 DISK = os.path.join(ROOT, "netcheck.%d.img" % os.getpid())
 
 SCREEN_W, SCREEN_H = 1024, 768
-TASKBAR_H, TASKBAR_GAP = 34, 0     # the panel is flush to the bottom edge
+TASKBAR_H, TASKBAR_GAP = 44, 14    # the dock floats clear of the edge
+DOCK_SIDE = 16
 NETPOP_W, NETPOP_H = 268, 150
 
-# The right hand end of the panel, worked out the way wm.c works it out: the
-# clock against the edge, the speaker left of it, the network left of that.
-# The clock is always five characters, so this does not move.
-# Worked out the way wm.c works it out: the clock against the right edge,
-# the speaker left of it, the network left of that.
-# Five characters, which never changes — and neither does the width, because
-# the digits in this face all have one advance. Eight pixels each and four
-# for the colon, at body size.
-CLOCK_W = 36
+PANEL_Y = SCREEN_H - TASKBAR_H - TASKBAR_GAP
+DOCK_RIGHT = DOCK_SIDE + (SCREEN_W - DOCK_SIDE * 2)
+
+# The right hand end of the dock, worked out the way wm.c works it out: the
+# clock against the dock's own right edge, the speaker left of it, the
+# network left of that.
+#
+# The clock's width is measured rather than written down. It used to be
+# thirty six, which was five digits in the body face, and then the clock was
+# set in the head face and everything derived from this moved thirteen
+# pixels while the number went on saying thirty six.
+CLOCK_W = face_width("12:54", FACE_HEAD)
 VOL_W, NET_W = 30, 26
-VOLUME_X = SCREEN_W - TASKBAR_GAP - 16 - CLOCK_W - 14 - VOL_W
+VOLUME_X = DOCK_RIGHT - 20 - CLOCK_W - 16 - VOL_W
 NET_X = VOLUME_X - NET_W - 6
-NET_ICON = (NET_X + NET_W // 2, SCREEN_H - TASKBAR_H - TASKBAR_GAP + 17)
+NET_ICON = (NET_X + NET_W // 2, PANEL_Y + TASKBAR_H // 2)
 
-# Just the network icon: left of the speaker, right of the app icons, and
-# clear of the clock, so what is in here changes only when the icon does.
-ICON_RECT = (NET_X, SCREEN_H - TASKBAR_H + 6, NET_X + NET_W,
-             SCREEN_H - TASKBAR_H + 28)
+# Just the network glyph, which is sixteen pixels square and centred in the
+# bar: left of the speaker and clear of the clock, so what is in here
+# changes only when the icon does.
+GLYPH_Y = PANEL_Y + (TASKBAR_H - 16) // 2
+ICON_RECT = (NET_X + (NET_W - 16) // 2, GLYPH_Y,
+             NET_X + (NET_W - 16) // 2 + 16, GLYPH_Y + 16)
 
-# Where the panel lands, and the button along the bottom of it.
-POP_X = SCREEN_W - TASKBAR_GAP - NETPOP_W
-POP_Y = SCREEN_H - TASKBAR_H - TASKBAR_GAP - 8 - NETPOP_H
+# Where the panel lands, and the button along the bottom of it. Centred
+# under the icon, then pushed back inside the screen if it would hang off.
+POP_X = min(NET_X + NET_W // 2 - NETPOP_W // 2,
+            SCREEN_W - TASKBAR_GAP - NETPOP_W)
+POP_Y = PANEL_Y - 8 - NETPOP_H
 POP_RECT = (POP_X, POP_Y, POP_X + NETPOP_W, POP_Y + NETPOP_H)
 BUTTON = (POP_X + 14 + 120, POP_Y + NETPOP_H - 14 - 13)
 

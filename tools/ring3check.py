@@ -34,6 +34,10 @@ SUITES = [
     ("forktest",  "FORKTEST_PASS",  "fork and exec", 120),
     ("fdtest",    "FDTEST_PASS",    "descriptors", 120),
     ("pagetest",  "PAGETEST_PASS",  "a page and a script on it", 120),
+    ("pngtest",   "PNGTEST_PASS",   "pictures", 120),
+    ("jpegtest",  "JPEGTEST_PASS",  "photographs", 180),
+    ("svgtest",   "SVGTEST_PASS",   "drawings", 180),
+    ("layouttest", "LAYOUTTEST_PASS", "where things end up", 120),
 ]
 
 

@@ -157,6 +157,65 @@ SCRIPTED = b"""<!doctype html>
 # band and the words come from running it rather than from the markup.
 UNSCRIPTED = SCRIPTED[:SCRIPTED.index(b"<script>")] + b"</body></html>" + chr(10).encode()
 
+# A picture, built here rather than kept as a file, so the test data is in
+# the same place as everything else it is testing with. Solid rose, which is
+# a colour nothing else on the screen is, so counting it answers "did the
+# picture arrive, decode and get drawn" in one number.
+def _logo(w, h, rgb):
+    import struct
+    import zlib
+
+    def chunk(name, body):
+        return (struct.pack(">I", len(body)) + name + body
+                + struct.pack(">I", zlib.crc32(name + body) & 0xFFFFFFFF))
+
+    raw = bytearray()
+    for _ in range(h):
+        raw.append(0)                       # no filter on this row
+        raw += bytes(rgb) * w
+
+    return (b"\x89PNG\r\n\x1a\n"
+            + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(bytes(raw), 9))
+            + chunk(b"IEND", b""))
+
+
+LOGO = _logo(160, 90, (225, 29, 72))
+
+# A drawing rather than a picture: the same colour, described as shapes. This
+# is what a logo on a real page is now, and it is why the browser could show
+# the word Google and no Google.
+DRAWING = b"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 60">
+  <rect x="0" y="0" width="100" height="60" fill="#e11d48"/>
+</svg>
+"""
+
+DRAWN = b"""<!doctype html>
+<html><head><title>a drawing</title>
+<style>body { font-family: sans-serif; padding: 24px }</style></head>
+<body>
+<h1>a drawing</h1>
+<p>below this line there should be one</p>
+<img src="/logo.svg" width="200" height="120" alt="a drawing that did not draw">
+</body></html>
+"""
+
+PICTURE = b"""<!doctype html>
+<html><head><title>a picture</title>
+<style>body { font-family: sans-serif; padding: 24px }</style></head>
+<body>
+<h1>a picture</h1>
+<p>below this line there should be one</p>
+<img src="/logo.png" alt="this is what it says when it cannot be shown">
+</body></html>
+"""
+
+# The same page pointing at something that is not there, so the words it
+# carries are what shows instead. That is what alt text is for, and a
+# browser that drew nothing at all would look identical to one that drew
+# the picture wrongly.
+MISSING = PICTURE.replace(b"/logo.png", b"/no-such-picture.png")
+
 BARE = STYLED.replace(b'<link rel="stylesheet" href="/style.css">', b"")
 BARE = BARE[:BARE.index(b"<style>")] + BARE[BARE.index(b"</style>") + 8:]
 BARE = BARE.replace(b' style="text-align:center;color:#15803d"', b"")
@@ -204,6 +263,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._send(STYLED)
         elif path == "/bare":
             self._send(BARE)
+        elif path == "/logo.svg":
+            self._send(DRAWING, ctype="image/svg+xml")
+        elif path == "/drawn":
+            self._send(DRAWN)
+        elif path == "/logo.png":
+            self._send(LOGO, ctype="image/png")
+        elif path == "/picture":
+            self._send(PICTURE)
+        elif path == "/missing-picture":
+            self._send(MISSING)
         elif path == "/scripted":
             self._send(SCRIPTED)
         elif path == "/unscripted":

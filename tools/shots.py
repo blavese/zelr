@@ -22,7 +22,8 @@ import time
 import zlib
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from harness import Guest, build_once, count_in, ROOT      # noqa: E402
+from harness import (Guest, build_once, count_in, count_near,
+                     ROOT)                                # noqa: E402
 from webserver import Server                               # noqa: E402
 
 DISK = os.path.join(ROOT, "shots.%d.img" % os.getpid())
@@ -34,31 +35,38 @@ SCREEN_W, SCREEN_H = 1024, 768
 # of it once. Every one of these moved when the panel went flush to the
 # bottom edge and the menu's rows got shorter, and a picture taken with the
 # old ones is a picture of the pointer landing somewhere else.
-TASKBAR_H, TASKBAR_GAP = 34, 0
+TASKBAR_H, TASKBAR_GAP = 44, 14
+DOCK_SIDE = 16
 PANEL_Y = SCREEN_H - TASKBAR_H - TASKBAR_GAP
 
 BADGE_W = 76
-PIN_ICON, PIN_STEP = 22, 30
-PINS_X = TASKBAR_GAP + 8 + BADGE_W + 12
+CHIPS_X = DOCK_SIDE + 16 + BADGE_W + 18
 
-MENU_BRAND = 26               # the strip down the left, which is not a row
-MENU_ITEM, MENU_PAD = 24, 4
-MENU_ENTRIES = 13
-MENU_TOP = PANEL_Y - (MENU_ENTRIES * MENU_ITEM + MENU_PAD * 2) - 2
-MENU_W = 226
-MENU_RECT = (0, MENU_TOP, MENU_W, MENU_TOP + MENU_ENTRIES * MENU_ITEM
-             + MENU_PAD * 2)
+# The launcher is two columns now: the kinds down the left, the things of
+# that kind down the right, and as tall as the longer of them.
+MENU_ITEM, MENU_PAD = 32, 10
+MENU_RAIL, MENU_PANE = 132, 152
+MENU_W = MENU_PAD * 2 + MENU_RAIL + MENU_PANE
+MENU_ROWS = 5
+MENU_H = MENU_PAD * 2 + MENU_ROWS * MENU_ITEM
+MENU_LEFT = DOCK_SIDE
+MENU_TOP = PANEL_Y - MENU_H - 8
+MENU_RECT = (MENU_LEFT + 4, MENU_TOP + 4,
+             MENU_LEFT + MENU_W - 4, MENU_TOP + MENU_H - 4)
 
 # The surface everything on this desktop is built from, which is what says a
-# menu or a window is covering the wallpaper.
+# menu or a window is covering the wallpaper. Laid down at an alpha just
+# short of opaque, so a trace of what is behind comes through and an exact
+# count finds fewer pixels than are there.
 MENU_PANEL = (0xF4, 0xF4, 0xF7)
+MENU_TOL = 6
 
-LAUNCHER = (TASKBAR_GAP + 8 + BADGE_W // 2, PANEL_Y + TASKBAR_H // 2)
+LAUNCHER = (DOCK_SIDE + 16 + BADGE_W // 2, PANEL_Y + TASKBAR_H // 2)
 PARK = (1010, SCREEN_H - 10)
 
-# The apps kept on the panel start past the badge, a step apart, with the
-# terminal first. Its icon is what brings the terminal back.
-TERMINAL_ICON = (PINS_X + PIN_ICON // 2, PANEL_Y + TASKBAR_H // 2)
+# The dock holds a chip for each window, past the badge, with the terminal
+# first. Its chip is what brings the terminal back.
+TERMINAL_ICON = (CHIPS_X + 30, PANEL_Y + TASKBAR_H // 2)
 
 # Somewhere the pointer is not asking for the panel. Anywhere along the
 # bottom of the screen brings it back out over whatever is maximised, which
@@ -83,7 +91,7 @@ ABOVE = (0, 0, SCREEN_W, PANEL_Y)
 # buttons further along and nothing under the icons moved at all. Both
 # programs were running the whole time the check was saying they had not
 # started. Compared as bytes, so it does not encode any colour.
-PANEL_BAND = (PINS_X - 6, PANEL_Y + 4, 860, PANEL_Y + TASKBAR_H - 1)
+PANEL_BAND = (CHIPS_X - 6, PANEL_Y + 4, 840, PANEL_Y + TASKBAR_H - 1)
 
 # The terminal's own page, which is neither the wallpaper nor any window
 # this desktop draws, so counting it is a check that a terminal is up.
@@ -118,15 +126,25 @@ def write_png(path, w, h, pixels):
     return len(png)
 
 
-# What the launcher lists, in the order it lists it.
-TERMINAL, FILES, NOTES, PAINT, SETTINGS = 0, 1, 2, 3, 4
-MONITOR, MUSIC, CALC, BROWSER = 5, 6, 7, 8
-ABOUT, CLOSE_ALL = 9, 10
+# What the launcher lists: which kind a thing is in, and where it is in
+# that kind. One number was enough when the menu was one list of thirteen.
+TERMINAL, FILES, NOTES, CALC = (0, 0), (0, 1), (0, 2), (0, 3)
+BROWSER = (1, 0)
+PAINT, MUSIC = (2, 0), (2, 1)
+SETTINGS, MONITOR, ABOUT = (3, 0), (3, 1), (3, 2)
+CLOSE_ALL = (4, 0)
 
 
-def menu_item(n):
-    """The middle of the nth entry, clear of the brand strip on the left."""
-    return (MENU_BRAND + 40, MENU_TOP + MENU_PAD + MENU_ITEM * n + MENU_ITEM // 2)
+def rail_row(i):
+    """The middle of the ith kind, down the left."""
+    return (MENU_LEFT + MENU_PAD + 40,
+            MENU_TOP + MENU_PAD + i * MENU_ITEM + MENU_ITEM // 2)
+
+
+def pane_row(j):
+    """The middle of the jth thing of whichever kind is open."""
+    return (MENU_LEFT + MENU_PAD + MENU_RAIL + 50,
+            MENU_TOP + MENU_PAD + j * MENU_ITEM + MENU_ITEM // 2)
 
 
 def open_launcher(mon):
@@ -141,7 +159,8 @@ def open_launcher(mon):
     rather than carrying on taking pictures of nothing."""
     _, _, _, _, ok = mon.click_for(
         LAUNCHER[0], LAUNCHER[1], "launcher-open",
-        lambda w, h, px: count_in(px, w, MENU_RECT, MENU_PANEL) > 8000,
+        lambda w, h, px: count_near(px, w, MENU_RECT, MENU_PANEL,
+                                    MENU_TOL) > 8000,
         timeout=25)
     if not ok:
         raise SystemExit("the launcher did not open")
@@ -174,6 +193,15 @@ def started(mon, x, y, name, before, timeout=45):
         raise SystemExit("nothing started from " + name)
 
 
+def pick(mon, where):
+    """The kind, then the thing. The pointer resting on a kind opens it, so
+    the first half of this is a move rather than a click."""
+    cat, item = where
+    mon.move_to(*rail_row(cat))
+    time.sleep(0.5)
+    return pane_row(item)
+
+
 def run_app(mon, index, name, tries=3):
     """Open the launcher, pick an entry, and make sure a program started.
 
@@ -185,7 +213,7 @@ def run_app(mon, index, name, tries=3):
     for attempt in range(tries):
         before = panel_now(mon)
         open_launcher(mon)
-        x, y = menu_item(index)
+        x, y = pick(mon, index)
         _, _, _, _, ok = mon.click_for(
             x, y, name,
             lambda w, h, px: region(px, w, PANEL_BAND) != before,
@@ -199,10 +227,11 @@ def close_all(mon):
     """The other direction: everything gone, and the screen back to
     wallpaper."""
     open_launcher(mon)
-    x, y = menu_item(CLOSE_ALL)
+    x, y = pick(mon, CLOSE_ALL)
     _, _, _, _, ok = mon.click_for(
         x, y, "close-all",
-        lambda w, h, px: count_in(px, w, ABOVE, MENU_PANEL) < 4000,
+        lambda w, h, px: count_near(px, w, ABOVE, MENU_PANEL,
+                                    MENU_TOL) < 4000,
         timeout=30)
     if not ok:
         raise SystemExit("close all left something on the screen")
@@ -278,7 +307,8 @@ def main():
         # The menu is already up from the picture above, so this picks an
         # entry out of it rather than opening it again.
         before = panel_now(mon)
-        started(mon, menu_item(FILES)[0], menu_item(FILES)[1], "files", before)
+        fx, fy = pick(mon, FILES)
+        started(mon, fx, fy, "files", before)
         time.sleep(1.5)
         shoot(mon, "files")
 

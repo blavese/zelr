@@ -136,6 +136,28 @@ static inline const char *dom_attr(const ddoc *d, int el, const char *name) {
     return 0;
 }
 
+/* The same, without caring about the case of the name.
+ *
+ * Attribute names are folded to lower case on the way in, a few lines
+ * below, because HTML does not care about their case. SVG does: viewBox is
+ * spelled with a capital B in every drawing ever written, and asking for it
+ * by that spelling found nothing at all. What that produced was not an
+ * error but a drawing at the wrong scale -- with no viewBox the renderer
+ * falls back to a hundred by a hundred, so a wide drawing came out at the
+ * ratio of the height it was asked for to a square it never had.
+ *
+ * Rather than have each caller remember which side of the fold it is on. */
+static inline const char *dom_attr_fold(const ddoc *d, int el,
+                                        const char *name) {
+    if (el < 0 || d->nodes[el].kind != DN_ELEMENT) return 0;
+    const dnode *n = &d->nodes[el];
+    for (int i = 0; i < n->attr_n; i++) {
+        const dattr *a = &d->attrs[n->attr_at + i];
+        if (w_same_fold(d->arena + a->name, name)) return d->arena + a->value;
+    }
+    return 0;
+}
+
 /* Sets one, adding it when it was not there.
  *
  * The runs are laid out end to end, so there is nowhere to put a new
@@ -371,9 +393,42 @@ static inline void dom_parse(ddoc *d, const char *p, int len) {
             int start = i;
             while (i < len && p[i] != '<') i++;
             int at = dp_text(&z, p + start, i - start, 1);
-            /* Whitespace between blocks is not content, and a text node full
-               of it makes every later pass check for one. */
-            if (dp_all_space(d->arena + at)) { d->used = at; continue; }
+
+            /* Whitespace on its own is content or it is not, and which one
+               depends entirely on what is beside it.
+               *
+               * Between two inline things it is a word separator:
+               * <a>Gmail</a> <a>Images</a> is two words, and throwing it away
+               * spells GmailImages. This file used to throw all of it away
+               * and that is what every page looked like — every link on
+               * google.com run together into one.
+               *
+               * It is discardable in two places, and only two. At the start
+               * of a container there is nothing for it to separate. After a
+               * block element the line has already ended, so a space would
+               * sit at the start of the next line, where the line breaker
+               * drops it anyway.
+               *
+               * What is kept is one space rather than what was written,
+               * because an indented page is mostly newlines and the run that
+               * separates two words means exactly as much as a single space
+               * does. The line breaker collapses runs for the same reason. */
+            if (dp_all_space(d->arena + at)) {
+                d->used = at;
+
+                int parent = dp_top(&z);
+                if (parent < 0) continue;
+                int last = d->nodes[parent].last;
+                if (last < 0) continue;
+                if (d->nodes[last].kind == DN_ELEMENT
+                    && dom_is_block(d->nodes[last].tag)) continue;
+
+                int sp = dom_new(d, DN_TEXT, T_OTHER);
+                if (sp < 0) return;
+                d->nodes[sp].text = dom_str(d, " ", 1);
+                dom_append(d, parent, sp);
+                continue;
+            }
             int t = dom_new(d, DN_TEXT, T_OTHER);
             if (t < 0) return;
             d->nodes[t].text = at;

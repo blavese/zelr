@@ -420,6 +420,39 @@ void fb_round_rect_aa(int x, int y, int w, int h, int r, u32 rgb, int alpha) {
 /* A soft round light. The falloff is the square of one minus the square of
    the distance, which is bright in the middle, and fades to nothing at the
    edge rather than stopping at a visible rim. */
+/* The opposite of a glow: less light the further out, strongest in the
+ * corners and nothing at all in the middle.
+ *
+ * The falloff is squared distance from the centre, measured against the
+ * half diagonal, which is the one measure that reaches exactly one at all
+ * four corners whatever shape the screen is. A vignette worked out against
+ * the width alone is a vignette that is far too strong on a wide screen and
+ * missing on a tall one. */
+void fb_vignette(int strength) {
+    if (strength <= 0) return;
+    int w = (int)fb_width(), h = (int)fb_height();
+    int cx = w / 2, cy = h / 2;
+    if (w <= 0 || h <= 0) return;
+
+    for (int py = 0; py < h; py++) {
+        int dy = ((py - cy) * 1000) / (h / 2 ? h / 2 : 1);
+        int dy2 = (dy * dy) / 1000;
+        for (int px = 0; px < w; px++) {
+            int dx = ((px - cx) * 1000) / (w / 2 ? w / 2 : 1);
+            /* Halved, so the two together reach a thousand at a corner
+               rather than two thousand. */
+            int d2 = (dy2 + (dx * dx) / 1000) / 2;
+            if (d2 <= 120) continue;              /* the middle is untouched */
+
+            int a = (strength * (d2 - 120)) / 880;
+            if (a <= 0) continue;
+            if (a > 255) a = 255;
+            fb_put((u32)px, (u32)py,
+                   gfx_mix(fb_get((u32)px, (u32)py), RGB(0, 0, 0), a));
+        }
+    }
+}
+
 void fb_glow(int cx, int cy, int rx, int ry, u32 rgb, int strength) {
     if (rx <= 0 || ry <= 0 || strength <= 0) return;
     int x0 = cx - rx, x1 = cx + rx, y0 = cy - ry, y1 = cy + ry;

@@ -2,8 +2,26 @@
 #include "types.h"
 
 #define WM_MAX_WINDOWS 8
-#define WM_TITLE_H     20
-#define WM_BORDER      4
+
+/* How tall the title bar is, and how wide the frame around a window.
+ *
+ * Both were constants. Twenty pixels was what a bar is when the buttons in
+ * it are sixteen, and four pixels of frame was a band of window colour all
+ * the way round whatever the program had drawn -- which is why every
+ * window looked like a picture in a mount. The current answers are
+ * thirty two and one, and the point is that they are answers rather than
+ * facts: somebody may want a bar with more room in it or a hairline of a
+ * different weight, and there is no reason a desktop should have one
+ * person's taste compiled into it.
+ *
+ * They stay macros so the forty places that use them do not each have to
+ * change, and so that none of them can hold a copy of a number the
+ * settings window is about to move. */
+int wm_title_h(void);
+int wm_border(void);
+
+#define WM_TITLE_H     wm_title_h()
+#define WM_BORDER      wm_border()
 
 /* How far the client area sits below the top of the window: the frame's
    edge and then the title bar. Named, because a dozen places need it and
