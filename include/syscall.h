@@ -128,6 +128,12 @@
  * include/signal.h, which says what that leaves out and why. */
 #define SYS_SIGNAL        54
 #define SYS_SIGSEND       55
+
+/* What a window is showing, in words, so the desktop's find can look
+   through it; and what is being looked for, for a window that has just been
+   told somebody is looking. */
+#define SYS_WIN_TEXT      56
+#define SYS_WIN_FIND      57
 #define TLS_WHY   0
 #define TLS_WHAT  1
 

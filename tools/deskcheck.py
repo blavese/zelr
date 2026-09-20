@@ -62,16 +62,19 @@ def pane_row(j):
             MENU_TOP + MENU_PAD + j * MENU_ITEM + MENU_ITEM // 2)
 
 
-# The field in the middle of the dock, and where the launcher lands when
-# it is what opened it: centred under the field rather than against the left
-# of the dock, because that is where the eye already is.
-DOCK_FIND_W, DOCK_FIND_H = 260, 26
-FIND_X = DOCK_SIDE + ((SCREEN_W - DOCK_SIDE * 2) - DOCK_FIND_W) // 2
-DOCK_FIND = (FIND_X + DOCK_FIND_W // 2,
-             SCREEN_H - TASKBAR_H - TASKBAR_GAP + TASKBAR_H // 2)
-FIND_MENU_LEFT = FIND_X + DOCK_FIND_W // 2 - MENU_W // 2
-FIND_RECT = (FIND_MENU_LEFT + 4, MENU_TOP + 4,
-             FIND_MENU_LEFT + MENU_W - 4, MENU_TOP + MENU_H - 4)
+# The name at the left of the dock, which is what opens the launcher.
+#
+# There used to be a second thing that did: a wide field down the middle of
+# the bar, whose only job was to open this same launcher. It is a find
+# button in the tray now and it looks for words on the screen rather than
+# for programs, so the launcher has one way in again and this is it. What
+# is typed into the launcher still narrows the list, which is what the
+# second check below is about and is unchanged.
+DOCK_BADGE_W = 76
+DOCK_BADGE = (DOCK_SIDE + 16 + DOCK_BADGE_W // 2,
+              SCREEN_H - TASKBAR_H - TASKBAR_GAP + TASKBAR_H // 2)
+MENU_RECT = (MENU_LEFT + 4, MENU_TOP + 4,
+             MENU_LEFT + MENU_W - 4, MENU_TOP + MENU_H - 4)
 
 # Well inside Paint's canvas, which is the surface colour over four hundred
 # by two hundred and fifty pixels. Nothing else this desktop draws covers
@@ -682,20 +685,19 @@ def main():
             timeout=15)
         c.add("and a band somewhere else lets them go", freed, shot)
 
-        # --- the field in the middle of the dock ---------------------------
+        # --- the launcher, and typing into it ------------------------------
         #
-        # It was a picture of a field: the right shape, in the right place,
-        # and nothing at all behind it. A control that looks like somewhere
-        # to type and is not teaches whoever tries it that the controls on
-        # this desktop are decoration, which is a worse thing to have said
-        # than nothing.
-        mon.click(*DOCK_FIND)
+        # Opened from the name at the left of the dock, which is the way in
+        # now that the field down the middle has gone. What that field did
+        # was open this same launcher, so nothing here is lost: the thing
+        # being checked is that a name typed into it narrows the list, and
+        # that is the launcher's own field either way.
+        mon.click(*DOCK_BADGE)
         _, _, _, shot, up = mon.wait_screen(
             "desk-find",
-            lambda w, h, px: count_near(px, w, FIND_RECT, MENU_PANEL,
+            lambda w, h, px: count_near(px, w, MENU_RECT, MENU_PANEL,
                                         MENU_TOL) > 8000)
-        c.add("the field on the dock opens the launcher under itself",
-              up, shot)
+        c.add("the name on the dock opens the launcher beside it", up, shot)
 
         # Three letters from the middle of a word, so this is a search
         # rather than a prefix: somebody after the browser may well type

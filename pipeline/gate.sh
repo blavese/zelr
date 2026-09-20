@@ -470,6 +470,11 @@ if [ "$MODE" = "screen" ] || [ "$MODE" = "full" ]; then
   # to start from the disk the kernel formatted.
   boottest() { keep timeout 600 python tools/bootcheck.py; }
 
+  # ctrl+f, and that what it finds is a word on the screen rather than a
+  # program in a list. The desktop cannot read a window, so this is really
+  # a check that the programs say what they are showing.
+  findtest() { keep timeout 600 python tools/findcheck.py; }
+
   # https against the actual web. Everything else about TLS is checked
   # against fixed answers, which proves the arithmetic and cannot prove that
   # a real server will talk to it. This needs a working connection and fails
@@ -493,6 +498,7 @@ if [ "$MODE" = "screen" ] || [ "$MODE" = "full" ]; then
   par_start "a form is filled in and arrives as it was filled in" formtest
   par_start "bodies arrive compressed and connections are kept" wiretest
   par_start "a machine still starts once it has formatted its disk" boottest
+  par_start "ctrl+f finds a word that is on the screen" findtest
   par_start "the programs it ships with do what they say" apptest
   par_start "a shell, with pipes and redirection" shtest
   par_start "a setting written by hand reaches the screen" settest

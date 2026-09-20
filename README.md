@@ -100,8 +100,10 @@ A terminal opens, over a desktop with icons down the left of it. Click the
 name at the left of the dock, or the wallpaper, for the launcher: the
 programs by kind -- a file manager, an editor, paint, settings, a system
 monitor, a music player, a calculator, a web browser, and what the machine
-is made of. Or click the field in the middle of the dock and type, which
-searches the lot of them. Drag a title bar to move a window; the three
+is made of, with a field in it that narrows the list as you type. Press
+ctrl and f, or the magnifier in the tray, to look for a word that is on the
+screen rather than for a program to start.
+Drag a title bar to move a window; the three
 buttons at its right put it away, fill the screen, or close it.
 Drag the bottom right corner to resize, or drag a title bar to an edge to
 snap. Alt and tab changes window, alt and an arrow snaps, alt and d clears
@@ -680,6 +682,24 @@ the manager owns the chrome, the stacking order and the pointer, and the whole
 screen is assembled into the back buffer and pushed once per frame so a window
 moving over another leaves no trail. Title bars drag, clicking raises, the
 close box closes, and a chip on the dock shows what is open.
+
+**Find, which is not a launcher.** The dock used to carry a wide field
+down the middle of it, and all that field did was open the launcher — a
+second way to start a program on a desktop that already had one, sitting in
+the part of the bar the window chips grow into, so a machine with a few
+windows open had nowhere to put them. It is a button in the tray now, the
+size of the clock beside it, and ctrl and f opens it too.
+
+What it opens looks through what is on the screen. That cannot be done by
+looking: a window is a rectangle of pixels and there is no text in a picture
+of text. So a program says what it is showing — the browser publishes the
+words of the page as laid out, the terminal the lines you can still see —
+and find looks through that. The bar counts what it found, takes you to it,
+and the program paints behind the word so you can see which one it meant.
+A program that has said nothing is not searched and is not pretended to be,
+which is why the bar says how many windows it can look in: "nothing to look
+at" and "that word is not here" are different answers and the count tells
+them apart.
 
 **The dock.** A bar welded to the bottom of the screen means a maximised
 window is not maximised: it stops short, and the last thirty pixels of the

@@ -43,6 +43,12 @@ typedef struct window window_t;
 /* The wheel turned over this window. y carries the steps, positive
    downward; x and buttons are where the pointer was. */
 #define WM_EV_SCROLL 5
+/* Somebody is looking for something. What they are looking for does not fit
+   in an event -- it is a word, and this carries four numbers -- so the
+   window asks for it with wm_find_query when this arrives. `y` is which
+   match to go to, counting from nought, so pressing return again walks
+   through them. */
+#define WM_EV_FIND   6
 
 typedef struct {
     u32 type;
@@ -56,6 +62,19 @@ typedef struct {
 /* Buttons are the raw PS/2 bitmask: bit 0 left, bit 1 right. */
 typedef void (*wm_mouse_fn)(window_t *w, int x, int y, u8 buttons, bool just_pressed);
 typedef void (*wm_key_fn)(window_t *w, char c);
+
+/* What a window is showing, as words.
+ *
+ * A window is a rectangle of pixels and nothing else, so the desktop cannot
+ * read what is on one: there is no text in a picture of text. A program
+ * that wants to be searchable therefore says what it is showing, and this
+ * is where that is kept.
+ *
+ * Four kilobytes of it, which is a screenful of a terminal or the visible
+ * part of a page rather than the whole of either. A find that looked
+ * through everything a program holds would answer about things nobody can
+ * see, and the question being asked is about what is on the screen. */
+#define WM_TEXT_MAX 4096
 
 struct window {
     int   x, y;               /* outer top-left, including the title bar */
@@ -95,11 +114,23 @@ struct window {
        by definition it is not. Zero when there is nothing pending. */
     int  want_cw, want_ch;
 
+    /* What this window is showing, as the program describes it. Empty for
+       a window whose program has never said, which is most of them and is
+       why find says which windows it looked at. */
+    char text[WM_TEXT_MAX];
+    int  textlen;
+
     /* Where it was before it was maximised or snapped, so it has somewhere
        to go back to. */
     bool minimized, maximized;
     int  restore_x, restore_y, restore_cw, restore_ch;
 };
+
+/* What a program says it is showing, for find to look through. */
+void wm_set_text(window_t *w, const char *s, int len);
+
+/* And what is being looked for, for a program that has just been told. */
+int  wm_find_query(char *out, int cap);
 
 window_t *wm_create(const char *title, int x, int y, int cw, int ch);
 void wm_close(window_t *w);
