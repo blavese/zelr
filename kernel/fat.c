@@ -525,6 +525,58 @@ static bool fat_layout(u32 total, u32 spc, u32 bits, u32 reserved,
     return true;
 }
 
+/* --- something that runs ---------------------------------------------------
+ *
+ * A boot sector ends with 0x55 0xAA, and that is not decoration. It is the
+ * mark a BIOS looks for to decide a disk can be started from; finding it,
+ * the firmware loads the sector to 0x7C00 and jumps to it.
+ *
+ * This wrote the mark and left the sector otherwise empty. The jump at the
+ * front went to the first byte after the parameter block, and the first
+ * byte after the parameter block was nought, and so was everything after
+ * that: 0x00 0x00 decodes as `add [bx+si], al`, so the processor walked
+ * through four hundred bytes of it and then off the end of the sector into
+ * whatever was next. On a machine whose disk this is, that is the whole of
+ * the second boot -- the first one formats the disk, and every one after it
+ * finds a disk the firmware believes in and cannot run. VMware reports it
+ * as "tried to execute an invalid part of memory", which is exactly what
+ * happened and gives no hint of where it came from.
+ *
+ * So the sector carries a program now. It is the same one every formatter
+ * writes: say the disk is not the one to start from, and stop. Sixteen bit
+ * real mode, because that is what the processor is in when this runs.
+ */
+static void fat_boot_stub(u8 *sec, u32 at) {
+    static const u8 code[] = {
+        0xFA,                   /* cli                  */
+        0x31, 0xC0,             /* xor ax, ax           */
+        0x8E, 0xD8,             /* mov ds, ax           */
+        0xBE, 0x00, 0x00,       /* mov si, message      (filled in below) */
+        0xAC,                   /* next: lodsb          */
+        0x84, 0xC0,             /* test al, al          */
+        0x74, 0x09,             /* jz stop              */
+        0xB4, 0x0E,             /* mov ah, 0x0E         teletype output */
+        0xBB, 0x07, 0x00,       /* mov bx, 0x0007       page 0, grey      */
+        0xCD, 0x10,             /* int 0x10             */
+        0xEB, 0xF2,             /* jmp next             */
+        0xF4,                   /* stop: hlt            */
+        0xEB, 0xFD              /* jmp stop             */
+    };
+    static const char words[] =
+        "This disk holds files. Start the machine from its installer "
+        "instead.\r\n";
+
+    u32 n = (u32)sizeof(code);
+    u32 at_words = at + n;
+    if (at_words + sizeof(words) > 510) return;      /* no room: leave it */
+
+    memcpy(sec + at, code, n);
+    /* Where the message is once the firmware has put the sector at 0x7C00. */
+    sec[at + 6] = (u8)((0x7C00u + at_words) & 0xFF);
+    sec[at + 7] = (u8)((0x7C00u + at_words) >> 8);
+    memcpy(sec + at_words, words, sizeof(words));
+}
+
 bool fat_format_at(u32 base_lba, u32 sectors, const char *label) {
     if (!blk_present()) return false;
     fat_forget();
@@ -579,7 +631,14 @@ bool fat_format_at(u32 base_lba, u32 sectors, const char *label) {
 
     /* boot sector */
     memset(sec, 0, SECTOR_SIZE);
-    sec[0] = 0xEB; sec[1] = 0x3C; sec[2] = 0x90;
+    /* FAT32 keeps another twenty six bytes of parameters after the ones
+       FAT16 has, so its code starts later and its jump has to say so.
+       Both widths were told 0x3C, which on a FAT32 volume is a jump into
+       the middle of the volume label. */
+    u32 code_at = (bits == 32) ? 0x5A : 0x3E;
+    sec[0] = 0xEB;
+    sec[1] = (u8)(code_at - 2);
+    sec[2] = 0x90;
     memcpy(sec + 3, "ZELR    ", 8);
     *(u16 *)(sec + 11) = SECTOR_SIZE;
     sec[13] = (u8)spc;
@@ -617,6 +676,7 @@ bool fat_format_at(u32 base_lba, u32 sectors, const char *label) {
             sec[43 + i] = (u8)upcase(label[i]);
         memcpy(sec + 54, "FAT16   ", 8);
     }
+    fat_boot_stub(sec, code_at);
     sec[510] = 0x55; sec[511] = 0xAA;
 
     u8 boot[SECTOR_SIZE];

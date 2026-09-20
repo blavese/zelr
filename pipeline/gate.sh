@@ -465,6 +465,11 @@ if [ "$MODE" = "screen" ] || [ "$MODE" = "full" ]; then
   # opened one connection per request looks the same from inside itself.
   wiretest() { keep timeout 600 python tools/wirecheck.py; }
 
+  # The second boot of a machine, which is the one nothing else reaches:
+  # every other check starts the kernel directly and never asks a firmware
+  # to start from the disk the kernel formatted.
+  boottest() { keep timeout 600 python tools/bootcheck.py; }
+
   # https against the actual web. Everything else about TLS is checked
   # against fixed answers, which proves the arithmetic and cannot prove that
   # a real server will talk to it. This needs a working connection and fails
@@ -487,6 +492,7 @@ if [ "$MODE" = "screen" ] || [ "$MODE" = "full" ]; then
   par_start "the browser shows a page and follows a link" browsertest
   par_start "a form is filled in and arrives as it was filled in" formtest
   par_start "bodies arrive compressed and connections are kept" wiretest
+  par_start "a machine still starts once it has formatted its disk" boottest
   par_start "the programs it ships with do what they say" apptest
   par_start "a shell, with pipes and redirection" shtest
   par_start "a setting written by hand reaches the screen" settest

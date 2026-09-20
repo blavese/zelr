@@ -163,7 +163,10 @@ def main():
             # --- typing into it --------------------------------------------
             mon.click(*spot)
             time.sleep(0.6)
-            vm.type("hello world")
+            # Slowly, for the reason go() gives: the guest drops what it
+            # cannot read off the serial port in time, and it reads it
+            # less often when the machine is loaded.
+            vm.type("hello world", gap=0.18)
             time.sleep(1.2)
             mon.move_to(*PARK)
             time.sleep(0.6)
@@ -247,7 +250,7 @@ def main():
 
             mon.click(*spot)
             time.sleep(0.6)
-            vm.type("over the wire")
+            vm.type("over the wire", gap=0.18)
             time.sleep(1.2)
             srv.forget()
             mon.click(*button)
