@@ -454,13 +454,85 @@ static void lay_block(lctx *L, int node, const cstyle *parent, int x,
 /* Inline content, which is everything between two blocks. Walked with an
    explicit style stack rather than by recursion, because an inline run can
    be nested as deep as the page is and this is the hot path. */
+/* The left of an inline box: its margin, border and padding, walked past
+   before any of its words are laid down. The background's slot is taken
+   here and filled in when the box closes, so that it lands in the display
+   list behind what is written on top of it. */
+static inline void lay_inline_open(lctx *L, int node, const cstyle *st,
+                                   int *x0, int *top, int *slot) {
+    *x0 = L->pen;
+    *top = L->line_top;
+    *slot = -1;
+
+    if (st->has_bg || st->bt || st->br || st->bb || st->bl) {
+        litem *bg = lay_item(L);
+        if (bg) {
+            *slot = L->out->nitems - 1;
+            bg->kind = LK_BOX;
+            bg->node = node;
+            bg->w = 0;
+            bg->h = 0;
+        }
+    }
+    L->pen += (st->ml > 0 ? st->ml : 0) + st->bl + st->pl;
+}
+
+/* And the right of it. */
+static inline void lay_inline_close(lctx *L, const cstyle *st, int x0,
+                                    int top, int slot) {
+    L->pen += st->pr + st->br + (st->mr > 0 ? st->mr : 0);
+
+    if (slot < 0) return;
+    litem *bg = &L->out->items[slot];
+    if (top != L->line_top) return;          /* it wrapped: draw nothing */
+
+    bg->x = x0 + (st->ml > 0 ? st->ml : 0);
+    bg->y = top;
+    bg->w = L->pen - bg->x - (st->mr > 0 ? st->mr : 0);
+    bg->h = L->line_h > 0 ? L->line_h : st->font_px;
+    if (bg->w < 0) bg->w = 0;
+    bg->bg = st->background;
+    bg->has_bg = st->has_bg;
+    bg->border = st->border_color;
+    bg->bt = (unsigned char)(st->bt > 255 ? 255 : st->bt);
+    bg->br = (unsigned char)(st->br > 255 ? 255 : st->br);
+    bg->bb = (unsigned char)(st->bb > 255 ? 255 : st->bb);
+    bg->bl = (unsigned char)(st->bl > 255 ? 255 : st->bl);
+    bg->radius = (unsigned char)(st->radius > 40 ? 40 : st->radius);
+}
+
+/* --- the edges of an inline box -------------------------------------------
+ *
+ * An inline element has a left and a right: padding, a border and a margin,
+ * and a background behind the words. None of it was applied, which is why
+ * two links written one after another with no space between them in the
+ * markup came out as one word -- on a real page the space between them is
+ * padding and nothing else, and a page whose navigation reads
+ * "GmailImages" is not a page anybody can use.
+ *
+ * The top and the bottom are deliberately not applied. Padding above and
+ * below an inline box does not move the line it is on, it overflows it, and
+ * a layout that pushed the line down instead would space every paragraph
+ * containing a styled word differently from one without.
+ *
+ * A box that started on one line and ended on another is drawn as nothing.
+ * Splitting it into a piece per line is what a browser does; drawing one
+ * rectangle from where it started to where it ended would be a band across
+ * everything in between, which is worse than the gap.
+ */
 static inline void lay_inline(lctx *L, int node, const cstyle *parent, int *y) {
     const ddoc *d = L->d;
     cstyle stack[LAY_DEPTH];
     int stack_node[LAY_DEPTH];
+    int stack_x[LAY_DEPTH];        /* where the box began */
+    int stack_top[LAY_DEPTH];      /* and on which line */
+    int stack_slot[LAY_DEPTH];     /* its background, taken now, filled later */
     int sp = 0;
     stack[0] = *parent;
     stack_node[0] = -1;
+    stack_x[0] = 0;
+    stack_top[0] = 0;
+    stack_slot[0] = -1;
 
     /* One subtree, in document order, popping styles on the way back up. */
     int at = node;
@@ -473,6 +545,8 @@ static inline void lay_inline(lctx *L, int node, const cstyle *parent, int *y) {
                 if (p == owner) { still_inside = 1; break; }
             if (still_inside) break;
             if (d->nodes[owner].tag == T_A) L->cur_link = -1;
+            lay_inline_close(L, &stack[sp], stack_x[sp], stack_top[sp],
+                             stack_slot[sp]);
             sp--;
         }
 
@@ -543,7 +617,13 @@ static inline void lay_inline(lctx *L, int node, const cstyle *parent, int *y) {
                         it->at = -1;
                         it->link = L->cur_link;
                         L->pen += iw;
-                        lay_line_fit(L, ih, ih);
+                        /* A hundred per cent of its own height. The second
+                           argument is a percentage of the first, so passing
+                           the height twice asked for a line of ih*ih/100 --
+                           right only for a picture a hundred pixels tall,
+                           and too short for every smaller one, which is
+                           what put the next line through the bottom of it. */
+                        lay_line_fit(L, ih, 100);
                         L->line_started = 1;
                         L->pending_space = 0;
                     }
@@ -615,7 +695,7 @@ static inline void lay_inline(lctx *L, int node, const cstyle *parent, int *y) {
                         it->has_bg = st.has_bg;
                         it->link = L->cur_link;
                         L->pen += fw + 2;
-                        lay_line_fit(L, fh, fh);
+                        lay_line_fit(L, fh, 100);
                         L->line_started = 1;
                         L->pending_space = 0;
                     }
@@ -636,6 +716,8 @@ static inline void lay_inline(lctx *L, int node, const cstyle *parent, int *y) {
                 sp++;
                 stack[sp] = st;
                 stack_node[sp] = at;
+                lay_inline_open(L, at, &st, &stack_x[sp], &stack_top[sp],
+                                &stack_slot[sp]);
                 if (n->tag == T_A) {
                     const char *href = dom_attr(d, at, "href");
                     if (href && *href && L->out->nlinks < LAY_LINKS) {
@@ -657,6 +739,16 @@ static inline void lay_inline(lctx *L, int node, const cstyle *parent, int *y) {
             if (at < 0) break;
             if (at == node) { at = -1; break; }
         }
+    }
+
+    /* Whatever is still open. The walk stops as soon as there is nowhere
+       left to go rather than on the way back up, so the right edge of the
+       last box would otherwise never be added and its background never
+       filled in. */
+    while (sp > 0) {
+        lay_inline_close(L, &stack[sp], stack_x[sp], stack_top[sp],
+                         stack_slot[sp]);
+        sp--;
     }
     L->cur_link = -1;
 }

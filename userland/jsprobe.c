@@ -72,6 +72,122 @@ int main(void) {
 
     dom_parse(&doc, reply.body, reply.len);
 
+    /* What the parse made of it, before anything is laid out: a page that
+       renders empty is either one that did not parse or one that parsed and
+       was then all hidden, and these two numbers say which. */
+    int els = 0, anchors = 0, divs = 0, texts = 0, textlen = 0;
+    for (int i = 0; i < doc.count; i++) {
+        if (doc.nodes[i].kind == DN_TEXT) {
+            texts++;
+            const char *t = doc.arena + doc.nodes[i].text;
+            while (*t++) textlen++;
+            continue;
+        }
+        if (doc.nodes[i].kind != DN_ELEMENT) continue;
+        els++;
+        if (doc.nodes[i].tag == T_A) anchors++;
+        if (doc.nodes[i].tag == T_DIV) divs++;
+    }
+    puts("parsed ");
+    number(doc.count);
+    puts(" nodes: ");
+    number(els);
+    puts(" elements, ");
+    number(divs);
+    puts(" divs, ");
+    number(anchors);
+    puts(" links, ");
+    number(texts);
+    puts(" runs of text, ");
+    number(textlen);
+    puts(" characters");
+    if (doc.overflowed) puts(" (the document did not fit)");
+    putc('\n');
+
+    /* How a page that redirects says so. There are two ways and they need
+       different things of a browser: a meta refresh is markup and costs
+       nothing to honour, and a script setting location needs the script to
+       run. Which one it is decides whether this is a small thing to add. */
+    {
+        for (int i = 0; i < doc.count; i++) {
+            if (doc.nodes[i].kind != DN_ELEMENT) continue;
+            if (doc.nodes[i].tag == T_META) {
+                const char *eq = dom_attr(&doc, i, "http-equiv");
+                if (eq) {
+                    puts("meta http-equiv=");
+                    puts(eq);
+                    puts(" content=");
+                    const char *c = dom_attr(&doc, i, "content");
+                    puts(c ? c : "(none)");
+                    putc('\n');
+                }
+            }
+            if (doc.nodes[i].tag == T_A) {
+                const char *h = dom_attr(&doc, i, "href");
+                if (h) {
+                    puts("link: ");
+                    for (int k = 0; h[k] && k < 160; k++) putc(h[k]);
+                    putc('\n');
+                }
+            }
+        }
+    }
+
+    /* What the page says, with the scripts left out, which is what a reader
+       would see: a page whose words are all inside script tags has not been
+       rendered badly, it has been sent without any. */
+    {
+        puts("the page reads: ");
+        int w = 0;
+        for (int i = 0; i < doc.count && w < 400; i++) {
+            if (doc.nodes[i].kind != DN_TEXT) continue;
+            int up = doc.nodes[i].parent;
+            int inside_script = 0;
+            for (int q = up; q >= 0; q = doc.nodes[q].parent)
+                if (doc.nodes[q].tag == T_SCRIPT || doc.nodes[q].tag == T_STYLE) {
+                    inside_script = 1;
+                    break;
+                }
+            if (inside_script) continue;
+            const char *t = doc.arena + doc.nodes[i].text;
+            for (int k = 0; t[k] && w < 400; k++) {
+                char c = t[k];
+                if (c == '\n' || c == '\r' || c == '\t') c = ' ';
+                putc(c);
+                w++;
+            }
+            putc(' ');
+            w++;
+        }
+        if (!w) puts("(nothing outside its scripts)");
+        putc('\n');
+    }
+
+    /* The biggest run of text, and what is holding it. A page that has been
+       swallowed whole shows up here as one enormous run inside whichever
+       element the reader failed to find the end of. */
+    {
+        int big = -1, biglen = 0;
+        for (int i = 0; i < doc.count; i++) {
+            if (doc.nodes[i].kind != DN_TEXT) continue;
+            const char *t = doc.arena + doc.nodes[i].text;
+            int k = 0;
+            while (t[k]) k++;
+            if (k > biglen) { biglen = k; big = i; }
+        }
+        if (big >= 0) {
+            puts("the largest run of text is ");
+            number(biglen);
+            puts(" characters, inside <");
+            puts(dom_tag_name(&doc, doc.nodes[big].parent));
+            puts(">, and starts: ");
+            const char *t = doc.arena + doc.nodes[big].text;
+            for (int k = 0; k < 110 && t[k]; k++)
+                putc(t[k] == '\n' ? ' ' : t[k]);
+            putc('\n');
+        }
+    }
+
     int n = 0, ran = 0, broke = 0;
     for (int i = 0; i < doc.count; i++) {
         if (doc.nodes[i].kind != DN_ELEMENT) continue;

@@ -930,6 +930,20 @@ what is happening. So there is a style sheet reader now: selectors with the
 three combinators that matter, the cascade in specificity then source order,
 inheritance, the box model, and block, inline and flex layout.
 
+Inline boxes have edges. An inline element's margin, border, padding and
+background are applied on the left and the right, which is the difference
+between a navigation bar and the word `GmailImages`: on a real page the gap
+between two links written one after another is padding and nothing else. The
+top and bottom deliberately are not, because padding above an inline box
+does not move the line it sits on, and a layout that pushed the line down
+would space every paragraph containing a styled word differently from one
+without. A box that begins on one line and ends on another is drawn as
+nothing rather than as a band across everything in between.
+
+A page that asks to be replaced by another with `<meta http-equiv="refresh">`
+is followed, bounded and never to its own address, because a page that
+refreshes to itself is a loop every browser has had to stop.
+
 And the page can be used rather than only read. A click goes to the page
 before it goes to the browser, so a page that says the ordinary consequence
 should not follow is obeyed; forms are drawn, typed into and sent. What is

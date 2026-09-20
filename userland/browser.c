@@ -199,6 +199,56 @@ static void focus_control(int el) {
  */
 static char go_to[URL_TEXT];
 static int  load_post;
+
+/* --- a page that asks to be replaced --------------------------------------
+ *
+ * <meta http-equiv="refresh" content="0;url=..."> is markup rather than
+ * script, and it is how a great many sites send a browser somewhere else --
+ * including, as it turns out, google when it does not think it is talking
+ * to a browser at all. A page that carries one and is not followed is a
+ * page that sits there saying "please click here if you are not
+ * redirected", which is the sentence somebody writes for exactly this.
+ *
+ * Bounded, and not to itself. A page that refreshes to its own address is a
+ * loop, and every browser that has ever existed has had to stop one.
+ */
+#define REFRESH_MAX 3
+static int refreshes;
+static int go_is_refresh;      /* this load was the page's idea, not a reader's */
+
+static int meta_refresh(char *out, int cap) {
+    for (int i = 0; i < doc.count; i++) {
+        if (doc.nodes[i].kind != DN_ELEMENT) continue;
+        if (doc.nodes[i].tag != T_META) continue;
+
+        const char *eq = dom_attr(&doc, i, "http-equiv");
+        if (!eq || !lay_same_fold(eq, "refresh")) continue;
+
+        const char *c = dom_attr(&doc, i, "content");
+        if (!c) continue;
+
+        /* "5" alone is this page again after five seconds, which is a thing
+           status boards do and not something to follow. Only one that names
+           somewhere else is worth acting on. */
+        int k = 0;
+        while (c[k] && c[k] != ';') k++;
+        if (!c[k]) continue;
+        k++;
+        while (c[k] == ' ') k++;
+        if (!(c[k] == 'u' || c[k] == 'U')) continue;
+        while (c[k] && c[k] != '=') k++;
+        if (!c[k]) continue;
+        k++;
+        while (c[k] == ' ' || c[k] == '"' || c[k] == '\'') k++;
+
+        int w = 0;
+        while (c[k] && c[k] != '"' && c[k] != '\'' && w < cap - 1)
+            out[w++] = c[k++];
+        out[w] = 0;
+        return w > 0;
+    }
+    return 0;
+}
 static char post_body[4096];
 static int  want_go;
 static int  go_is_post;
@@ -732,6 +782,29 @@ static void load(const char *address, int width, int keep_scroll) {
         say_more(scripts_ran == 1 ? " script ran" : " scripts ran");
     }
 
+    /* And whether it asked to be somewhere else. */
+    if (rc >= 200 && rc < 400 && refreshes < REFRESH_MAX) {
+        char where[URL_TEXT];
+        if (meta_refresh(where, sizeof(where))) {
+            url_t next;
+            if (url_join(&here, where, &next)) {
+                char text_of[URL_TEXT];
+                url_text(&next, text_of, sizeof(text_of));
+                char now[URL_TEXT];
+                url_text(&here, now, sizeof(now));
+                if (!w_same(text_of, now)) {
+                    refreshes++;
+                    go_is_refresh = 1;
+                    w_copy(go_to, sizeof(go_to), text_of, sizeof(go_to));
+                    go_is_post = 0;
+                    post_body[0] = 0;
+                    want_go = 1;
+                    say_more(", following the page's own redirect");
+                }
+            }
+        }
+    }
+
     /* Whether anybody in between could have read it, said either way.
        Marking only the encrypted case trains people to read a missing mark
        as nothing in particular, and the case worth noticing is the other
@@ -1169,6 +1242,11 @@ void _start(void) {
 
         if (want_load) {
             want_load = 0;
+            /* A reader asking for an address starts the count again; a page
+               asking on their behalf does not, or a pair of pages pointing
+               at each other would go round for ever. */
+            if (!go_is_refresh) refreshes = 0;
+            go_is_refresh = 0;
             fill(&s, t.bg);
             ui_toolbar(&s, &t, w, TOOLBAR_H);
             ui_label(&s, &t, UI_PAD, TOOLBAR_H + 20, "fetching...");
