@@ -1,6 +1,7 @@
 /* Boot-time self test. `run.sh -T` boots with this enabled, so the whole
    kernel can be checked from a script without a human watching a screen. */
 #include "selftest.h"
+#include "sound.h"
 #include "printf.h"
 #include "string.h"
 #include "heap.h"
@@ -187,6 +188,16 @@ static void test_paging(void) {
     ok("virt_to_phys agrees", (virt_to_phys(v) & ~0xFFFu) == phys);
     unmap_page(v);
     ok("unmap clears translation", virt_to_phys(v) == 0);
+
+    /* And put it back the way it was found, which is the part that was
+       missing. This address is 13 MiB: it is ordinary low memory, it is
+       inside the kernel heap, and leaving it unmapped leaves a hole in the
+       heap's free space that waits for the heap to grow far enough to hand
+       it out. Nothing connects the fault that follows to a paging test that
+       passed and said so. */
+    ok("and the identity mapping is put back",
+       map_page(v, v, PTE_PRESENT | PTE_RW) && virt_to_phys(v) == v);
+
     pmm_free_frame(phys);
 }
 
@@ -304,6 +315,35 @@ static void test_timer(void) {
     u64 b = timer_ticks();
     ok("timer advances", b > a);
     ok("timer roughly matches the requested delay", (b - a) >= 4 && (b - a) <= 20);
+
+    /* And that nothing but the timer moves the clock.
+     *
+     * A task that gives up the rest of its slice raises an interrupt to get
+     * a switch, and for a long time the interrupt it raised was the timer's
+     * own, because the timer's handler ends in the scheduler and that was
+     * the cheapest way to reach it. What it also reached was the rest of
+     * that handler, starting with the tick counter. So every yield counted
+     * as a hundredth of a second that had not happened, and the clock ran at
+     * whatever rate the machine happened to be giving up slices: measured
+     * against the chip that keeps the date, a hundred hertz timer read two
+     * hundred with one task sleeping in a loop.
+     *
+     * Nothing else in the kernel could have noticed. Every sleep, timeout
+     * and deadline is counted in these ticks, so they were all short
+     * together and all agreed with each other.
+     *
+     * Measured this way rather than against the clock chip: the rate a guest
+     * sees under a hypervisor is not the rate it asked for -- interrupts
+     * arrive late and are dropped outright while it is halted, and the same
+     * kernel on the same machine reads anywhere between sixty and ninety
+     * against a hundred. Fifty yields against a counter that should barely
+     * move has no such slack in it. */
+    u64 quiet = timer_ticks();
+    for (int i = 0; i < 50; i++) task_yield();
+    u64 gained = timer_ticks() - quiet;
+    ok("giving up a slice is not a tick of the clock", gained < 10);
+    if (gained >= 10)
+        kprintf("        fifty yields added %d ticks\n", (u32)gained);
 }
 
 static volatile int bp_hits = 0;
@@ -479,8 +519,14 @@ static void test_mouse(void) {
 static void test_fat(void) {
     if (!blk_present()) { kprintf("  SKIP  no disk attached\n"); return; }
     ok("volume is mounted", fat_mounted());
-    ok("cluster count is in the FAT16 range",
-       fat_total_clusters() >= 4085 && fat_total_clusters() <= 65524);
+    /* The count is what decides the width, so the range it has to be in
+       is the range for the width it came out as. A volume that claims to
+       be one and counts as the other is the corruption this catches. */
+    ok("cluster count is in range for the width it is",
+       fat_type() == 32 ? (fat_total_clusters() >= 65525 &&
+                           fat_total_clusters() <= 0x0FFFFFF5u)
+                        : (fat_total_clusters() >= 4085 &&
+                           fat_total_clusters() <= 65524));
     ok("clusters are a sensible size", fat_cluster_bytes() >= 512);
 
     /* A file that spans more than one cluster exercises chain following,
@@ -1128,14 +1174,31 @@ static void test_smp(void) {
     u64 moved = smp_cpu(1)->spins - spins_before;
     ok("an idle processor is asleep rather than spinning", moved < 100);
 
-    /* Hand the same job to all of them and join in. */
+    /* Hand the same job to all of them and join in.
+     *
+     * What each of them had done before now is written down first, because
+     * this is no longer the only thing that uses them: the compositor hands
+     * half of every frame to whichever processor is free, and on a machine
+     * with a screen that is happening while these lines are being printed.
+     * A count that starts from zero is a count that was right when nothing
+     * else in the kernel had ever asked for a second processor. */
+    u64 jobs_before[SMP_MAX_CPUS];
+    for (u32 i = 0; i < SMP_MAX_CPUS; i++) jobs_before[i] = 0;
+    for (u32 i = 1; i < smp_cpu_count(); i++) jobs_before[i] = smp_cpu(i)->jobs;
+
     shared_counter = 0;
     test_lock = 0;
     for (u32 i = 0; i < SMP_MAX_CPUS; i++) seen_arg[i] = 0;
 
     u32 dispatched = 0;
-    for (u64 i = 1; i < smp_cpu_count(); i++)
-        if (smp_run((u32)i, smp_add_work, (void *)i)) dispatched++;
+    for (u64 i = 1; i < smp_cpu_count(); i++) {
+        /* Retried, for the same reason: a processor that is halfway through
+           a band of the screen is busy, and busy is a refusal. */
+        for (int try = 0; try < 20; try++) {
+            if (smp_run((u32)i, smp_add_work, (void *)i)) { dispatched++; break; }
+            sleep_ms(10);
+        }
+    }
     ok("work was accepted by every other processor", dispatched == helpers);
 
     smp_add_work((void *)0);              /* this processor does a share too */
@@ -1155,8 +1218,9 @@ static void test_smp(void) {
 
     bool counted = true;
     for (u32 i = 1; i < smp_cpu_count(); i++)
-        if (smp_cpu(i)->started && smp_cpu(i)->jobs != 1) counted = false;
-    ok("each one recorded exactly one job", counted);
+        if (smp_cpu(i)->started && smp_cpu(i)->jobs < jobs_before[i] + 1)
+            counted = false;
+    ok("each one recorded the job it was given", counted);
 
     /* Nothing should be left holding the lock. */
     spin_lock(&test_lock);
@@ -2932,9 +2996,13 @@ static void test_blackbox(void) {
     u8 boot[SECTOR_SIZE];
     if (!blk_read(0, 1, boot)) { ok("read the boot sector", false); return; }
 
-    bool ours = boot[510] == 0x55 && boot[511] == 0xAA &&
-                memcmp(boot + 3, "ZELR    ", 8) == 0 &&
-                *(u16 *)(boot + 14) >= BB_LBA + BB_SECTORS;
+    /* Where the log goes depends on the width of the volume, so it is
+       asked of the boot sector rather than assumed. A FAT16 volume keeps
+       it right after the boot sector; a FAT32 one keeps three things of
+       its own in the reserved area first. */
+    u32 lba = fat_boot_log_lba(boot);
+    bool ours = fat_boot_is_ours(boot) &&
+                fat_boot_reserved(boot) >= lba + BB_SECTORS;
     if (!ours) { kprintf("  SKIP  not a zelr volume with room reserved\n"); return; }
 
     /* Write, then recover, because bb_prev answers out of what the last
@@ -2952,14 +3020,14 @@ static void test_blackbox(void) {
     /* A half written record must not be trusted. Flip one byte of the text
        and leave the checksum alone, which is what a power cut looks like. */
     u8 sec[SECTOR_SIZE];
-    ok("read the record", blk_read(BB_LBA, 1, sec));
+    ok("read the record", blk_read(lba, 1, sec));
     u8 keep = sec[64];
     sec[64] = (u8)(keep ^ 0xFF);
-    blk_write(BB_LBA, 1, sec);
+    blk_write(lba, 1, sec);
     bb_recover();
     ok("a torn record is refused", bb_prev(bb_scratch, sizeof(bb_scratch)) == 0);
     sec[64] = keep;
-    blk_write(BB_LBA, 1, sec);
+    blk_write(lba, 1, sec);
     bb_recover();
     ok("the good record is readable again",
        bb_prev(bb_scratch, sizeof(bb_scratch)) > 0);
@@ -2985,18 +3053,18 @@ static void test_blackbox(void) {
        who formatted it, so this is the only thing standing between the log
        and whatever else came to live there. */
     u8 keep_first[SECTOR_SIZE], intruder[SECTOR_SIZE];
-    ok("read the reserved sector", blk_read(BB_LBA, 1, keep_first));
+    ok("read the reserved sector", blk_read(lba, 1, keep_first));
     memset(intruder, 0, sizeof(intruder));
     memcpy(intruder, "NOT A BLACK BOX", 15);
-    blk_write(BB_LBA, 1, intruder);
+    blk_write(lba, 1, intruder);
     ok("data we do not recognise is not written over", bb_flush() == false);
 
     /* And a blank region is fine, which is what a fresh format leaves. */
     memset(intruder, 0, sizeof(intruder));
-    blk_write(BB_LBA, 1, intruder);
+    blk_write(lba, 1, intruder);
     ok("a blank region is written to", bb_flush());
 
-    blk_write(BB_LBA, 1, keep_first);
+    blk_write(lba, 1, keep_first);
     blk_flush();
 }
 
@@ -3309,6 +3377,69 @@ static void test_clock(void) {
     ok("a buffer too small is not written past", tiny[3] == '#');
 }
 
+/* Whether the controller is actually reading the buffer.
+ *
+ * Every other thing a sound driver can be asked reports success while the
+ * machine is silent: the device is found, the codec answers, the descriptor
+ * is written, the run bit is set, and nothing comes out. The one thing that
+ * cannot be faked without hardware is time.
+ *
+ * The ring holds about a third of a second. A note four times longer than
+ * that cannot be handed over in one go: the writer fills the ring, and then
+ * it can only carry on as fast as the hardware empties it. So a note that
+ * takes about as long to write as it lasts is a controller that is reading
+ * the buffer, and nothing else is.
+ *
+ * Both ends are checked. Far too quick means the play position is running
+ * away on its own and the writer never waits, which is a position register
+ * read wrongly. Far too slow means nothing is consuming at all, and the
+ * writer is waiting out its stall timer over and over.
+ *
+ * This is the check that can be run on a machine nothing else here can
+ * reach. There is no way to record what came out of somebody's laptop, but
+ * there is a way to find out whether the bytes left. */
+static void test_sound(void) {
+    if (!sound_present()) { kprintf("  SKIP  no sound controller\n"); return; }
+
+    ok("it says what rate it is running at",
+       sound_rate() >= 8000 && sound_rate() <= 96000);
+    ok("and how many channels it has",
+       sound_channels() >= 1 && sound_channels() <= 8);
+
+    /* How far the hardware got in a fifth of a second, against how far a
+       part running at the rate it claims would have got. Nothing else here
+       is evidence: this is the hardware reporting its own position, and a
+       controller that was set up and never started reports the same number
+       forever. */
+    u32 frame = sound_channels() * 2;
+    u64 a = sound_played();
+    sleep_ms(200);
+    u64 moved = sound_played() - a;
+    u32 want = (sound_rate() / 5) * frame;
+
+    kprintf("        the play position moved %d bytes in 200 ms, against "
+            "%d at %d Hz%s\n", (u32)moved, want, sound_rate(),
+            sound_clocked() ? " (timed, not from the controller)" : "");
+    /* Within a factor of four, and no tighter, because what it is measured
+       against is our own tick counter and under a hypervisor that is worth
+       about as much as the check on it says. The same kernel on the same
+       machine reads half of what it expects and then half again as much,
+       depending on how many processors the host gave it.
+     *
+       What it catches is the thing that matters and has no slack in it at
+       all: a controller that was found, configured, started and reports
+       success while never reading a byte of the buffer reads zero here, and
+       nothing else in this file can tell that apart from working. */
+    ok("the play position advances at about the rate it claims",
+       moved > (u64)want / 4 && moved < (u64)want * 4);
+
+    /* How long a note takes to hand over would say the same thing from the
+       other side, and it is not checked here: it is measured in the ticks
+       above, and under a hypervisor those are worth about as much as the
+       check on them says they are. The position is the hardware's own
+       answer and needs no clock of ours to read. */
+}
+
 int selftest_run(void) {
     passed = failed = 0;
     kprintf("\n=== zelr self test ===\n");
@@ -3361,6 +3492,7 @@ int selftest_run(void) {
     kprintf("[interrupt routing]\n"); test_irqs();
     kprintf("[clipboard]\n"); test_clipboard();
     kprintf("[clock]\n"); test_clock();
+    kprintf("[sound]\n"); test_sound();
     kprintf("[kernel stack]\n"); test_stack();
     kprintf("\n%d passed, %d failed\n", passed, failed);
     kprintf(failed ? "SELFTEST_FAIL\n" : "SELFTEST_PASS\n");

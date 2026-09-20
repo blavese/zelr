@@ -13,6 +13,10 @@ u32  tcp_recv(u8 *out, u32 cap, u32 timeout_ms);
 /* Nothing more is coming. A read of nothing means the end of the answer only
    when this is true, and otherwise means nothing arrived in time. */
 bool tcp_ended(void);
+int  tcp_state_code(void);
+u32  tcp_resets(void);
+u32  tcp_out_of_order(void);
+u32  tcp_retransmits(void);
 
 void tcp_close(void);
 bool tcp_connected(void);

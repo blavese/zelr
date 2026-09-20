@@ -72,6 +72,10 @@ static u64 rt_sent_at;
 static u32 rt_timeout_ms;
 static int rt_tries;
 static u32 rt_total;              /* retransmissions this connection */
+static u32 rst_seen;
+u32 tcp_resets(void) { return rst_seen; }
+static u32 ooo_seen;
+u32 tcp_out_of_order(void) { return ooo_seen; }
 
 /* Big enough to hold what arrives while nobody is reading. The window
    advertised is whatever is free in here, so a peer is told to stop rather
@@ -195,8 +199,9 @@ void tcp_input(ipv4_t src, const u8 *p, u16 len) {
     if (hlen < sizeof(tcp_t) || hlen > len) return;
     const u8 *data = p + hlen;
     u16 dlen = (u16)(len - hlen);
+    u32 seq = np_nl(t->seq);
 
-    if (t->flags & TH_RST) { state = T_DONE; rt_pending = false; return; }
+    if (t->flags & TH_RST) { rst_seen++; state = T_DONE; rt_pending = false; return; }
 
     if (state == T_SYNSENT) {
         if ((t->flags & (TH_SYN | TH_ACK)) == (TH_SYN | TH_ACK)) {
@@ -213,34 +218,65 @@ void tcp_input(ipv4_t src, const u8 *p, u16 len) {
     if (t->flags & TH_ACK) ack_arrived(np_nl(t->ack));
 
     if (dlen) {
-        if (np_nl(t->seq) == rcv_nxt) {
+        if (seq == rcv_nxt) {
             /* Take what there is room for, and acknowledge only that.
                Acknowledging the whole segment and keeping part of it told
                the peer the rest had arrived, so it was never sent again and
                the hole was never filled: the body came back with a piece
                missing out of the middle and nothing said so. A peer is
                allowed to be told a prefix was taken; it is not allowed to be
-               told bytes arrived that were thrown away. */
+               told bytes arrived that were thrown away.
+
+               How full the buffer is and what is in it are one fact and are
+               changed together, with nothing else running. tcp_recv does the
+               same on its side. Both of them are tasks now rather than one
+               task and one interrupt handler, so neither is atomic against
+               the other by construction, and the timer is what would come
+               between them. */
+            bool were_on = interrupts_enabled();
+            if (were_on) cli();
             u32 room = RXCAP - rxlen;
             u32 n = dlen < room ? dlen : room;
             if (n) { memcpy(rxbuf + rxlen, data, n); rxlen += n; rcv_nxt += n; }
+            if (were_on) sti();
             send_ack();
         } else {
             /* Out of order or already seen. Repeat the acknowledgement so the
                peer learns which byte we are actually waiting for. */
+            ooo_seen++;
             send_ack();
         }
     }
 
-    if (t->flags & TH_FIN) {
+    /* A FIN is the end of the data, and it is only the end once the data
+     * is all here.
+     *
+     * It sits at the sequence number after whatever the segment carried, so
+     * it counts only when that was the byte this end was waiting for. This
+     * used to be acted on whichever segment it arrived in and whether or not
+     * anything before it was missing, which is a connection ending with a
+     * hole in the middle of what was being read -- and nothing says so. The
+     * reader is told the answer is complete and hands back a body that stops
+     * partway through, at a different length every time, with no error
+     * anywhere. A two hundred kilobyte page came back whole about half the
+     * time and short the rest.
+     *
+     * Out of order is not rare enough to ignore. One segment overtaking
+     * another inside the host's own network stack is all it takes, and the
+     * last segment of a body is the one carrying the FIN.
+     *
+     * Refusing it is enough on its own: the acknowledgement this end keeps
+     * repeating names the byte it is still waiting for, the peer sends it
+     * again, and the FIN that follows arrives in order. */
+    if ((t->flags & TH_FIN) && !got_fin && seq + dlen == rcv_nxt) {
         rcv_nxt++;
         got_fin = true;
         send_ack();
         if (state == T_OPEN) {
-            u32 seq = snd_nxt;
-            snd_nxt = seq + 1;                 /* the FIN takes one */
+            u32 ours = snd_nxt;                /* not seq: that is the peer's */
+            snd_nxt = ours + 1;                /* the FIN takes one */
             state = T_CLOSING;
-            send_reliable(seq, TH_FIN | TH_ACK, 0, 0);
+            send_reliable(ours, TH_FIN | TH_ACK, 0, 0);
         } else {
             state = T_DONE;
         }
@@ -332,6 +368,18 @@ bool tcp_send(const void *data, u16 len) {
 u32 tcp_recv(u8 *out, u32 cap, u32 timeout_ms) {
     u64 deadline = timer_ticks() + (timeout_ms * timer_hz()) / 1000u;
 
+    /* Once before the buffer is looked at, always.
+     *
+     * The loop below only runs when there is nothing waiting, which during a
+     * download is almost never: the reader takes what has arrived and comes
+     * straight back for more. So on a fast transfer this function used to
+     * return without ever touching the card, and the only thing left moving
+     * frames out of the queue and acknowledgements onto the wire was the
+     * background task, ten times a second. The peer fills the window it was
+     * last told about and waits, and a body that should have taken a second
+     * arrives in pieces or not at all. */
+    net_poll();
+
     while (rxlen == 0 && timer_ticks() < deadline) {
         net_poll();
         tcp_pump();
@@ -381,3 +429,4 @@ void tcp_close(void) {
 }
 
 bool tcp_connected(void) { return state == T_OPEN; }
+int tcp_state_code(void) { return (int)state; }

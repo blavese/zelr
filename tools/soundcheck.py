@@ -115,9 +115,20 @@ def frequency_of(samples, rate):
 
     With hysteresis, so that a sample sitting near zero does not read as a
     dozen crossings. Half the crossings are downward, hence the two.
+
+    Measured across the middle of the note rather than all of it. A note now
+    fades in and out over five milliseconds at each end, so that it does not
+    begin and end with a click, and those ends are below the hysteresis gate
+    while still being long enough to count as part of the note: their time is
+    in the divisor and their cycles are not in the numerator, which reads as
+    a note a couple of percent flat. The pitch of a note is the pitch of the
+    part of it that is sounding.
     """
     if not samples:
         return 0.0
+    edge = len(samples) // 8
+    if edge and len(samples) > 4 * edge:
+        samples = samples[edge:len(samples) - edge]
     gate = max(200, max(abs(s) for s in samples) // 4)
 
     crossings = 0

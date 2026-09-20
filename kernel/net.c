@@ -1,8 +1,10 @@
 /* A small IPv4 stack: ethernet, ARP, IP, ICMP, UDP, DHCP and DNS.
  *
- * Everything here is polled or interrupt driven from the NIC and processed
- * inline; there are no sockets and no buffering beyond one frame at a time,
- * which keeps the whole path short enough to follow. */
+ * There are no sockets. Frames arrive from the card into a queue, and a task
+ * takes them out of it one at a time and runs them through everything below;
+ * the card's interrupt does nothing but fill the queue. That split is the
+ * only structure here, and the comment above the queue says what it cost to
+ * learn that it was needed. */
 #include "net.h"
 #include "netdev.h"
 #include "timer.h"
@@ -10,6 +12,7 @@
 #include "string.h"
 #include "heap.h"
 #include "netpriv.h"
+#include "io.h"
 #include "tcp.h"
 #include "sched.h"
 
@@ -18,6 +21,8 @@
 
 #define IP_ICMP 1
 #define IP_UDP  17
+
+void net_poll(void);
 
 static inline u16 hs(u16 v) { return (u16)((v << 8) | (v >> 8)); }
 static inline u32 hl(u32 v) {
@@ -120,12 +125,19 @@ static u8 txbuf[1600];
 
 static void eth_send(const u8 *dst, u16 type, const void *payload, u16 len) {
     if ((u32)sizeof(eth_t) + len > sizeof(txbuf)) return;
+
+    /* Filling the buffer and handing it over are one step. See above. */
+    bool were_on = interrupts_enabled();
+    if (were_on) cli();
+
     eth_t *e = (eth_t *)txbuf;
     memcpy(e->dst, dst, 6);
     memcpy(e->src, my_mac, 6);
     e->type = hs(type);
     memcpy(txbuf + sizeof(eth_t), payload, len);
     netdev_send(txbuf, (u16)(sizeof(eth_t) + len));
+
+    if (were_on) sti();
 }
 
 static void arp_send(u16 oper, const u8 *target_mac, ipv4_t target_ip) {
@@ -152,7 +164,7 @@ static bool resolve_mac(ipv4_t ip, u8 *out, u32 timeout_ms) {
         arp_send(1, BCAST, ip);
         u64 wait = timer_ticks() + (timer_hz() / 4);
         while (timer_ticks() < wait) {
-            netdev_poll();
+            net_poll();
             if (arp_get(ip, out)) return true;
             if (timer_ticks() > deadline) return false;
         }
@@ -318,8 +330,106 @@ static void handle_ip(const u8 *p, u16 len) {
     else if (ip->proto == 6) tcp_input(hl(ip->src), body, blen);
 }
 
+/* --- the queue between the card and the stack --------------------------- */
+/*
+ * A frame that has arrived, and the stack that reads it, used to be the same
+ * call. The card raised an interrupt, the handler walked the receive ring,
+ * and every frame in it went straight into the code below, all of it on
+ * whichever task happened to be interrupted and all of it with interrupts
+ * off. It worked for one frame at a time and it was not survivable.
+ *
+ * What it does when a frame has to be answered is the part that killed it.
+ * Answering means ip_send, and ip_send needs the peer's hardware address, and
+ * not having one means resolve_mac, which broadcasts a request and then waits
+ * for the reply by polling the card -- which walks the receive ring, and
+ * hands whatever is in it to the stack, which answers, which polls. There is
+ * no bottom to that. Each turn of it costs about five kilobytes of stack
+ * between the staging buffers in ip_send and its caller, a kernel stack is
+ * thirty two, and the seventh turn writes through the end of it into the heap
+ * block underneath. Then a fault, on a stack that is no longer a stack, so
+ * the fault handler faults, and the processor gives up.
+ *
+ * That is not a hypothetical. It is the triple fault on a VMware machine with
+ * a working network: a burst of frames arrives about ten seconds in, the host
+ * logs a few hundred it could not deliver because the ring never drained, and
+ * the guest is gone. On a boot where nothing happened to arrive in that
+ * window it did not happen at all, which is what made it look random.
+ *
+ * So the two halves are separated. The interrupt copies frames into here and
+ * returns, which is all an interrupt should ever do. The stack runs them from
+ * an ordinary task, with interrupts on and a stack it owns.
+ *
+ * The recursion still exists -- a frame delivered here can still need an
+ * address resolved, which still polls -- but it is now bounded, counted, and
+ * happening somewhere it can afford to.
+ */
+#define RXQ_FRAMES    64
+#define RXQ_FRAME_MAX 1536
+
+typedef struct {
+    u16 len;
+    u8  data[RXQ_FRAME_MAX];
+} rxq_slot_t;
+
+static rxq_slot_t *rxq;
+static volatile u32 rxq_head;        /* where the card writes */
+static volatile u32 rxq_tail;        /* where the stack reads */
+static u32 rxq_dropped;
+static u32 rxq_deepest;
+
+/* Delivery is one frame at a time and does not nest.
+ *
+ * It used to be able to, on purpose: a frame whose answer needs an address
+ * resolved broadcasts an ARP request and then polls for the reply, and the
+ * reply is a frame, so handling it meant going round again. Allowing that to
+ * a bounded depth would work and would cost another five kilobytes of kernel
+ * stack per level, on top of the sixteen the deepest task here already uses.
+ *
+ * There is a cheaper answer, because the nesting was never general. The only
+ * thing a send inside a delivery can be waiting for is an address, so that
+ * is the only thing the wait has to look at. arp_only below walks the queue
+ * and handles the ARP frames in it, leaving everything else exactly where it
+ * is for the drain that is already running to pick up in its own time. It
+ * costs a couple of hundred bytes and it cannot recurse, because ARP has no
+ * answer that needs an address resolved.
+ */
+static volatile u32   deliver_depth;
+static void *volatile deliver_owner;
+
+u32 net_rx_queued(void) {
+    u32 h = rxq_head, t = rxq_tail;
+    return (h >= t) ? h - t : RXQ_FRAMES - t + h;
+}
+
+u32 net_rx_dropped(void) { return rxq_dropped; }
+u32 net_rx_deepest(void) { return rxq_deepest; }
+
+/* Called by every driver, from its interrupt handler or from its poll. It
+   copies and returns; nothing above the card runs here. */
 void net_receive(const u8 *frame, u16 len) {
-    if (len < sizeof(eth_t)) return;
+    if (!rxq || len < sizeof(eth_t) || len > RXQ_FRAME_MAX) return;
+
+    u32 head = rxq_head;
+    u32 next = (head + 1) % RXQ_FRAMES;
+    if (next == rxq_tail) { rxq_dropped++; return; }   /* nobody is draining */
+
+    rxq[head].len = len;
+    memcpy(rxq[head].data, frame, len);
+    /* The length is written before the slot is published, because the
+       consumer reads the two in that order. */
+    __sync_synchronize();
+    rxq_head = next;
+
+    u32 depth = net_rx_queued();
+    if (depth > rxq_deepest) rxq_deepest = depth;
+}
+
+static u16 frame_type(const rxq_slot_t *slot) {
+    const eth_t *e = (const eth_t *)slot->data;
+    return hs(e->type);
+}
+
+static void deliver(const u8 *frame, u16 len) {
     const eth_t *e = (const eth_t *)frame;
     const u8 *body = frame + sizeof(eth_t);
     u16 blen = (u16)(len - sizeof(eth_t));
@@ -331,7 +441,108 @@ void net_receive(const u8 *frame, u16 len) {
     }
 }
 
-void net_poll(void) { netdev_poll(); }
+/* The ARP frames waiting, and nothing else.
+ *
+ * A slot that has been handled is emptied rather than removed: the queue is
+ * a ring and there is no taking something out of the middle of one. The
+ * drain skips empty slots, and the producer never looks at a slot between
+ * the tail and the head, so writing to one here is safe. */
+static void arp_only(void) {
+    if (!rxq) return;
+    /* One pass of the queue at most. The head moves while this runs, and a
+       card delivering faster than this can walk would otherwise keep it here
+       for as long as the flood lasted. */
+    u32 n = 0;
+    for (u32 i = rxq_tail; i != rxq_head && n < RXQ_FRAMES;
+         i = (i + 1) % RXQ_FRAMES, n++) {
+        if (rxq[i].len < sizeof(eth_t)) continue;
+        if (frame_type(&rxq[i]) != ETH_P_ARP) continue;
+        u16 len = rxq[i].len;
+        rxq[i].len = 0;
+        handle_arp(rxq[i].data + sizeof(eth_t), (u16)(len - sizeof(eth_t)));
+    }
+}
+
+/* Everything waiting, handed to the stack one frame at a time.
+ *
+ * Nothing is allowed in here twice. Another task is turned away -- it will
+ * get its turn, and the frames it wants are not going anywhere. The same
+ * task arriving again is a send inside a delivery, and that gets arp_only,
+ * which is the only thing it can actually be waiting for. */
+static void net_deliver(void) {
+    if (!rxq) return;
+
+    /* Taking the turn is one step. Two tasks that both read the flag as
+       clear before either set it are two tasks inside the stack at once,
+       and the window between the two is a few instructions: small enough
+       never to be seen and large enough to happen. */
+    void *me = (void *)task_current();
+    bool were_on = interrupts_enabled();
+    if (were_on) cli();
+    bool mine = !deliver_depth;
+    if (mine) { deliver_owner = me; deliver_depth = 1; }
+    if (were_on) sti();
+
+    if (!mine) {
+        if (deliver_owner == me) arp_only();
+        return;
+    }
+
+    /* A frame is copied out before its slot is released, so a card filling
+       the queue behind us cannot write over the one being read. The budget
+       is one pass: a flood must not keep a caller in here indefinitely when
+       what it came for has already gone past. */
+    for (u32 n = 0; n < RXQ_FRAMES; n++) {
+        u32 tail = rxq_tail;
+        if (tail == rxq_head) break;
+
+        u16 len = rxq[tail].len;
+        if (len >= sizeof(eth_t) && len <= RXQ_FRAME_MAX) {
+            u8 frame[RXQ_FRAME_MAX];
+            memcpy(frame, rxq[tail].data, len);
+            rxq_tail = (tail + 1) % RXQ_FRAMES;
+            deliver(frame, len);
+        } else {
+            /* Empty: arp_only got to it first. */
+            rxq_tail = (tail + 1) % RXQ_FRAMES;
+        }
+    }
+
+    deliver_depth = 0;
+    deliver_owner = 0;
+}
+
+/* The card first, so that anything sitting in its ring joins the queue, and
+   then the queue. Every wait in this file and in tcp.c is a loop around this
+   call, which is what makes a stack with no threads work at all. */
+void net_poll(void) {
+    netdev_poll();
+    net_deliver();
+}
+
+/* Frames arrive whether or not anybody is waiting for them, and until this
+   existed the only thing that ran the stack was a caller blocked on an
+   answer. A connection nobody is currently reading from still has to be
+   acknowledged, or the peer stops sending; so does an ARP request for our
+   own address, which is how anything finds us in the first place.
+ *
+ * A hundredth of a second between passes is far below what a round trip
+ * costs, and a caller that is waiting is spinning on net_poll anyway and
+ * does not depend on this. */
+static void net_task(void) {
+    for (;;) {
+        net_poll();
+        task_sleep(10);
+    }
+}
+
+void net_start_service(void) {
+    static bool started;
+    if (started) return;
+    started = true;
+    task_create("net", net_task);
+}
+
 
 /* --- udp ---------------------------------------------------------------- */
 
@@ -607,6 +818,15 @@ void net_format_ip(ipv4_t ip, char *out) {
 }
 
 void net_init(void) {
+    if (!rxq) {
+        rxq = (rxq_slot_t *)kmalloc(sizeof(rxq_slot_t) * RXQ_FRAMES);
+        if (rxq) memset(rxq, 0, sizeof(rxq_slot_t) * RXQ_FRAMES);
+    }
+    rxq_head = rxq_tail = 0;
+    rxq_dropped = rxq_deepest = 0;
+    deliver_depth = 0;
+    deliver_owner = 0;
+
     memset(arp_cache, 0, sizeof(arp_cache));
     my_ip = my_mask = my_gw = my_dns = 0;
     bound = false;

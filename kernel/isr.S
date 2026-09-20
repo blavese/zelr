@@ -333,6 +333,17 @@ isr47:
     push $47
     jmp isr_common
 
+/* Nor is this one. A task that gives up the rest of its slice needs a switch
+   and nothing else, and raising the timer's own vector to get one was how it
+   used to ask: it is the same work, and the frame comes out the same shape.
+   What it also did was run the timer's handler, so every yield counted as a
+   tick that had not happened. */
+.global isr241
+isr241:
+    push $0
+    push $241
+    jmp isr_common
+
 /* Not a hardware line. An idle processor halts rather than spinning, and
    this is what another processor sends to wake it up. */
 .global isr240
@@ -403,3 +414,4 @@ isr_stub_table:
     .quad isr47
     .quad isr128
     .quad isr240
+    .quad isr241

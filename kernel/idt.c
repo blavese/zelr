@@ -61,6 +61,10 @@ void idt_init(void) {
     /* And the wake-up one processor sends another. Ring 0 only. */
     set_gate(VEC_AP_WAKE, (u64)isr_stub_table[49], GDT_KERNEL_CODE, 0x8E);
 
+    /* And the one a task raises on itself to be switched away from. Ring 0:
+       a program asks through the system call gate, not through this. */
+    set_gate(VEC_YIELD, (u64)isr_stub_table[50], GDT_KERNEL_CODE, 0x8E);
+
     idt_flush((u64)&idtp);
 }
 
@@ -111,6 +115,7 @@ u64 isr_dispatch(registers_t *r) {
 
     /* The scheduler may hand back a different task's frame. */
     u64 resume = (u64)r;
-    if (r->int_no == 32) resume = scheduler_switch(resume);
+    if (r->int_no == 32 || r->int_no == VEC_YIELD)
+        resume = scheduler_switch(resume);
     return resume;
 }

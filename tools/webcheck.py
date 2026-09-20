@@ -69,9 +69,23 @@ def main():
             # piece and the reads have to walk through it. A read that handed
             # back its buffer without emptying it returns the first part of
             # this over and over.
-            big = fetched(vm, srv.host, "/size/200000")
-            c.add("a body far bigger than the receive buffer arrives whole",
-                  big is not None and big[1] == 200000)
+            # Three times, because the fault this is here for did not happen
+            # every time: a FIN taken out of order ended the connection with
+            # a hole in the middle of the body, and whether the last segment
+            # overtook anything was luck. One fetch found it about half the
+            # time, which is a check that reports a working stack as often as
+            # a broken one.
+            #
+            # A failing check that only says no costs another run to find out
+            # what it saw, and this one is eight minutes in, so it says.
+            whole = True
+            for _ in range(3):
+                big = fetched(vm, srv.host, "/size/200000")
+                if big is None or big[1] != 200000:
+                    print("      asked for 200000 bytes and got %s" % (big,))
+                    whole = False
+            c.add("a body far bigger than the receive buffer arrives whole,"
+                  " three times over", whole)
 
             # The three ways a server can say where the body ends. Each one
             # is a different path through the client, and a client that only

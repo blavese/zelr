@@ -191,6 +191,10 @@ bool theme_save(void);
    what the file looks like. */
 void theme_set_volume(int percent);
 
+/* The same, without writing the file. Returns whether anything changed, so
+   that whoever is dragging knows whether it has something to save. */
+bool theme_set_volume_live(int percent);
+
 /* --- every setting that is a plain number --------------------------------
  *
  * One table, rather than a parser arm and a writer line and a control, all

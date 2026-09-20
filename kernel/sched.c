@@ -397,8 +397,11 @@ void sched_start(void) {
 }
 
 void task_yield(void) {
-    /* Give up the rest of this slice by asking for a tick early. */
-    __asm__ volatile ("int $32");
+    /* Give up the rest of this slice. Its own vector rather than the
+       timer's: what is wanted is a switch, and the timer's handler does a
+       great deal besides, starting with counting a tick that has not
+       happened. See VEC_YIELD in idt.h. */
+    __asm__ volatile ("int %0" :: "i"(VEC_YIELD));
 }
 
 /* A switch rather than a table, because a table has to be kept the same

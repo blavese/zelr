@@ -62,8 +62,27 @@ void *memmove(void *d, const void *s, size_t n) {
     while (n--) *--dp = *--sp;
     return d;
 }
+/* Eight bytes at a time where both sides are lined up.
+ *
+ * This is asked about whole framebuffers now -- every frame is compared
+ * against the one the card was last given so that only the difference is
+ * sent -- and a byte at a time is three million iterations for a screen
+ * that has not changed. Words make it eight times fewer, and the answer for
+ * the one word that differs is still found a byte at a time, because the
+ * sign of the result is part of what memcmp means. */
 int memcmp(const void *a, const void *b, size_t n) {
     const u8 *x = a, *y = b;
+
+    if (n >= 8 && (((u64)x ^ (u64)y) & 7) == 0) {
+        while (n && ((u64)x & 7)) {
+            if (*x != *y) return *x - *y;
+            x++; y++; n--;
+        }
+        const u64 *xw = (const u64 *)x, *yw = (const u64 *)y;
+        while (n >= 8 && *xw == *yw) { xw++; yw++; n -= 8; }
+        x = (const u8 *)xw; y = (const u8 *)yw;
+    }
+
     while (n--) { if (*x != *y) return *x - *y; x++; y++; }
     return 0;
 }

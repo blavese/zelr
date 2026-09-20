@@ -2539,6 +2539,34 @@ static void start_dhcp(void) {
     need_frame();
 }
 
+/* A note, so that how loud it is can be heard rather than only read.
+ *
+ * The level is applied to everything on its way into the sound buffer, so a
+ * note at a fixed pitch played straight after the change is the change: it
+ * comes out exactly as loud as the setting now is. At zero it is silence,
+ * which is what mute sounds like and is the right answer rather than a
+ * missing one.
+ *
+ * Rate limited, because a hand dragging a slider changes the level once for
+ * every pixel it travels and sixty notes a second is not feedback, it is a
+ * buzz. An eighth of a second apart is about as fast as a run of notes can
+ * be heard as separate. */
+static void volume_blip(void) {
+    static u64 last;
+    if (!sound_present()) return;
+
+    u64 now = timer_ticks();
+    if (last && now - last < timer_hz() / 8) return;
+    last = now;
+
+    /* Short, and it does not block: sound_tone writes into a buffer that is
+       a third of a second long and only waits when there is no room in it. */
+    sound_tone(880, 70);
+}
+
+/* Whether the level has moved since the last time it was written down. */
+static bool volume_unsaved;
+
 static void volume_from_pointer(int mx) {
     int tx, ty, tw;
     volume_track(&tx, &ty, &tw);
@@ -2547,7 +2575,13 @@ static void volume_from_pointer(int mx) {
     int v = (mx - tx) * 100 / tw;
     if (v < 0) v = 0;
     if (v > 100) v = 100;
-    theme_set_volume(v);
+
+    /* Not written to the disk here. A drag is two hundred of these and the
+       file is on a real disk; it goes down once, when the button comes up. */
+    if (theme_set_volume_live(v)) {
+        volume_unsaved = true;
+        volume_blip();
+    }
     need_frame();
 }
 
@@ -3311,7 +3345,13 @@ static void handle_mouse(int mx, int my, u8 buttons) {
     }
 
     if (released) {
-        volume_drag = false;
+        if (volume_drag) {
+            volume_drag = false;
+            if (volume_unsaved) { volume_unsaved = false; theme_save(); }
+            /* And one at the level it was actually left at, which the rate
+               limit above may well have swallowed. */
+            if (sound_present()) sound_tone(880, 70);
+        }
 
         /* Hand the release to whoever was being drawn in, before dropping
            the capture: a program needs to know a stroke ended. */
@@ -3436,6 +3476,7 @@ static void handle_mouse(int mx, int my, u8 buttons) {
                 } else {
                     theme_set_volume(volume_before_mute);
                 }
+                volume_blip();
             } else {
                 volume_open = !volume_open;
             }
@@ -3671,6 +3712,7 @@ void wm_run(void) {
         i32 wheel = mouse_take_scroll();
         if (wheel && on_volume_button(last_mx, last_my)) {
             theme_set_volume(theme()->volume - wheel * 5);
+            volume_blip();
             need_frame();
         } else if (wheel) {
             bool on_title = false;

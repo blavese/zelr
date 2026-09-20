@@ -24,8 +24,12 @@
  * This has to work before paging, before the heap, and before any driver, so
  * the buffer is static and nothing here allocates. */
 
-#define BB_SECTORS 32                    /* 16 KiB, right after the boot sector */
-#define BB_LBA     1
+#define BB_SECTORS 32                    /* 16 KiB, in the reserved area */
+/* Where in the reserved area it starts depends on the width of the volume,
+   because FAT32 keeps three things of its own in there at addresses other
+   readers expect. fat_boot_log_lba answers it from the boot sector; this is
+   the FAT16 answer and the smallest it can be. */
+#define BB_LBA_MIN 1
 #define BB_BYTES   (BB_SECTORS * 512)
 #define BB_MAGIC   0x5842594Eu           /* "NYBX" */
 
