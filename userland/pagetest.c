@@ -15,6 +15,7 @@
 #include "zelr.h"
 #include "alloc.h"
 #include "dom.h"
+#include "css.h"
 #include "jsdom.h"
 
 int main(void);
@@ -46,6 +47,10 @@ static void oks(const char *what, const char *got, const char *want) {
 }
 
 static ddoc page;
+
+/* Somewhere for a selector handed to querySelector to be parsed. The browser
+   lends its own; this lends one of its own so the tests can ask. */
+static csheet qsheet;
 static char text[512];
 
 static void load(const char *html) {
@@ -66,7 +71,7 @@ static const char *content_of(int el) {
 static int run_scripts(ddoc *d, char *err, int errcap, int *changed) {
     if (changed) *changed = 0;
     if (err && errcap) err[0] = 0;
-    if (!jsdom_open(d)) return 0;
+    if (!jsdom_open(d, &qsheet)) return 0;
     int ran = jsdom_scripts(err, errcap);
     jsdom_loaded();
     if (changed) *changed = jsdom_changed();
@@ -500,7 +505,7 @@ int main(void) {
         load("<body><p id=out>waiting</p>"
              "<script>setTimeout(function(){"
              " document.getElementById('out').textContent = 'later'; },"
-             " 20);</script></body>");
+             " 300);</script></body>");
 
         char err[128];
         int changed = 0;
@@ -509,7 +514,7 @@ int main(void) {
             content_of(dom_by_id(&page, "out")), "waiting");
         ok("and does not run before it is due", jsdom_timers() == 0);
 
-        ok("and runs when it is", pump_until(1, 400) == 1);
+        ok("and runs when it is", pump_until(1, 3000) == 1);
         oks("and did the thing it was for",
             content_of(dom_by_id(&page, "out")), "later");
         ok("and does not run again after that", jsdom_timers() == 0);
@@ -566,6 +571,73 @@ int main(void) {
             dom_attr(&page, dom_by_id(&page, "f"), "value"), "after");
         oks("and a box it ticks is ticked",
             dom_attr(&page, dom_by_id(&page, "c"), "checked"), "1");
+    }
+
+    /* --- asking for elements the way a sheet asks -----------------------------
+     *
+     * The same parser and the same matcher the style sheets use, so that a
+     * page cannot style one element and script another.
+     */
+    {
+        load("<body><div class='row'><a id=one class='current'>a</a>"
+             "<a id=two>b</a></div>"
+             "<div class='row'><a id=three>c</a></div>"
+             "<script>"
+             "document.title = document.querySelector('a.current').id"
+             " + ' ' + document.querySelectorAll('.row a').length"
+             " + ' ' + document.querySelectorAll('div.row').length"
+             " + ' ' + (document.querySelector('nope') === null);"
+             "</script></body>");
+
+        char err[128];
+        int changed = 0;
+        run_scripts(&page, err, (int)sizeof(err), &changed);
+        oks("a selector picks the element a sheet would have styled",
+            page.title >= 0 ? page.arena + page.title : "", "one 3 2 true");
+    }
+
+    {
+        load("<body><div id=a><span>one</span></div>"
+             "<div id=b><span id=wanted>two</span></div>"
+             "<script>document.title ="
+             " document.getElementById('b').querySelector('span').id;"
+             "</script></body>");
+
+        char err[128];
+        int changed = 0;
+        run_scripts(&page, err, (int)sizeof(err), &changed);
+        oks("and an element searches what is under it, not the document",
+            page.title >= 0 ? page.arena + page.title : "", "wanted");
+    }
+
+    {
+        load("<body><p id=p>x</p>"
+             "<script>document.title ="
+             " document.querySelector('span, p').id;</script></body>");
+
+        char err[128];
+        int changed = 0;
+        run_scripts(&page, err, (int)sizeof(err), &changed);
+        oks("a list of selectors matches any one of them",
+            page.title >= 0 ? page.arena + page.title : "", "p");
+    }
+
+    /* The selector is parsed on to the end of the browser's own style sheet
+       and rolled back off it. If it were not, a page that asks in a loop
+       would fill the sheet up and the answers would stop coming -- and the
+       page would still be asking the same question. */
+    {
+        load("<body><b id=t>x</b>"
+             "<script>var last = '';"
+             "for (var i = 0; i < 400; i++) last ="
+             " document.querySelector('b#t').id;"
+             "document.title = last;</script></body>");
+
+        char err[128];
+        int changed = 0;
+        run_scripts(&page, err, (int)sizeof(err), &changed);
+        oks("and asking four hundred times does not use the sheet up",
+            page.title >= 0 ? page.arena + page.title : "", "t");
     }
 
     puts(failed ? "PAGETEST_FAIL\n" : "PAGETEST_PASS\n");

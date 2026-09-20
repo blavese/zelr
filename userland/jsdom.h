@@ -1,5 +1,6 @@
 #pragma once
 #include "dom.h"
+#include "css.h"
 #include "js.h"
 #include "jsparse.h"
 #include "jsrun.h"
@@ -47,6 +48,7 @@
 #define JD_DOCUMENT 0x1000000
 
 static ddoc  *jd_doc;            /* what these bindings are bound to */
+static csheet *jd_sheet;         /* borrowed, for asking about selectors */
 static jobj **jd_wrap;           /* one object per node, so identity holds */
 static int    jd_dirty;          /* a script changed what layout must see */
 
@@ -83,6 +85,8 @@ static jval nat_el_append(jctx *J, jval t, jval *a, int n);
 static jval nat_el_insert_before(jctx *J, jval t, jval *a, int n);
 static jval nat_el_remove_child(jctx *J, jval t, jval *a, int n);
 static jval nat_el_remove(jctx *J, jval t, jval *a, int n);
+static jval nat_query(jctx *J, jval t, jval *a, int n);
+static jval nat_query_all(jctx *J, jval t, jval *a, int n);
 
 static jobj *jd_element(jctx *J, int node) {
     if (!jd_doc || node < 0 || node >= jd_doc->count) return 0;
@@ -111,6 +115,10 @@ static jobj *jd_element(jctx *J, int node) {
            js_from_obj(js_native(J, "removeChild", nat_el_remove_child)));
     js_set(J, o, "remove",
            js_from_obj(js_native(J, "remove", nat_el_remove)));
+    js_set(J, o, "querySelector",
+           js_from_obj(js_native(J, "querySelector", nat_query)));
+    js_set(J, o, "querySelectorAll",
+           js_from_obj(js_native(J, "querySelectorAll", nat_query_all)));
 
     if (jd_wrap) jd_wrap[node] = o;
     return o;
@@ -539,6 +547,114 @@ static jobj *jd_classlist(jctx *J, int el) {
     return o;
 }
 
+/* --- finding by selector ---------------------------------------------------
+ *
+ * The parser and the matcher are the ones the style sheets already use, and
+ * that is the whole point of doing it this way. A page's idea of what
+ * "nav > a.current" picks out has to be the same whether it came from a
+ * sheet or from a script; two implementations of that agree until they do
+ * not, and the day they stop is the day a page styles one element and
+ * scripts another.
+ *
+ * A selector arrives as text and has to be parsed somewhere. It is parsed
+ * on to the end of the browser's own sheet and then rolled straight back
+ * off it -- nothing else runs in between, and the counters are restored
+ * whether it matched, failed to match or would not parse at all, so the
+ * sheet afterwards is the sheet before.
+ */
+static int jd_sel_matches(int el, const jstr *sel) {
+    if (!jd_sheet || !jd_doc || !sel || !sel->len) return 0;
+
+    int save_sels = jd_sheet->nsels;
+    int save_used = jd_sheet->used;
+    int save_over = jd_sheet->overflowed;
+
+    int len = (int)sel->len;
+    int at = 0, ok = 0;
+
+    /* A comma is a list of selectors, and matching any one of them is a
+       match. css_parse_selector reads up to the comma and stops. */
+    while (at < len && !ok) {
+        int sel_at = jd_sheet->nsels;
+        int spec = 0;
+        int n = css_parse_selector(jd_sheet, sel->s, len, &at, &spec);
+
+        if (n > 0 && !jd_sheet->overflowed) {
+            crule r;
+            r.sel_at = sel_at;
+            r.sel_n = n;
+            r.decl_at = 0;
+            r.decl_n = 0;
+            r.spec = spec;
+            r.order = 0;
+
+            cmatch m;
+            m.hover = -1;
+            m.visited_links = 0;
+            ok = css_matches(jd_sheet, jd_doc, el, &r, &m);
+        }
+
+        while (at < len && (sel->s[at] == ',' || css_space(sel->s[at]))) at++;
+        if (n <= 0) break;            /* something it cannot read: no match */
+    }
+
+    jd_sheet->nsels = save_sels;
+    jd_sheet->used = save_used;
+    jd_sheet->overflowed = save_over;
+    return ok;
+}
+
+/* In document order, which for the whole document is index order -- the
+   parser makes nodes as it reads them -- and for a subtree is the walk. */
+static jval jd_query(jctx *J, int root, const jstr *sel, int all) {
+    jobj *arr = 0;
+    u32 at = 0;
+    if (all) {
+        arr = js_array(J);
+        if (!arr) return js_null();
+    }
+    if (!jd_doc) return all ? js_from_obj(arr) : js_null();
+
+    if (root < 0) {
+        for (int i = 0; i < jd_doc->count; i++) {
+            if (jd_doc->nodes[i].kind != DN_ELEMENT) continue;
+            if (!jd_sel_matches(i, sel)) continue;
+            if (!all) return jd_el_value(J, i);
+            js_arr_set(J, arr, at++, jd_el_value(J, i));
+        }
+    } else {
+        for (int i = dom_next(jd_doc, root, root); i >= 0;
+             i = dom_next(jd_doc, i, root)) {
+            if (jd_doc->nodes[i].kind != DN_ELEMENT) continue;
+            if (!jd_sel_matches(i, sel)) continue;
+            if (!all) return jd_el_value(J, i);
+            js_arr_set(J, arr, at++, jd_el_value(J, i));
+        }
+    }
+    return all ? js_from_obj(arr) : js_null();
+}
+
+/* The same two on the document and on an element. What differs is where the
+   search starts, and an element searches what is under it rather than
+   itself: a page asking a row for its links does not mean the row. */
+static int jd_query_root(jval t) {
+    if (t.t != JS_OBJ || !t.obj) return -1;
+    int h = t.obj->host;
+    return (h >= 0 && h < JD_DOCUMENT) ? h : -1;
+}
+
+static jval nat_query(jctx *J, jval t, jval *a, int n) {
+    if (n < 1) return js_null();
+    jstr *s = js_to_str(J, js_arg(a, n, 0));
+    return s ? jd_query(J, jd_query_root(t), s, 0) : js_null();
+}
+
+static jval nat_query_all(jctx *J, jval t, jval *a, int n) {
+    if (n < 1) return js_null();
+    jstr *s = js_to_str(J, js_arg(a, n, 0));
+    return s ? jd_query(J, jd_query_root(t), s, 1) : js_null();
+}
+
 /* --- later ----------------------------------------------------------------
  *
  * setTimeout is the only way a page can arrange for something to happen that
@@ -856,14 +972,16 @@ static void jsdom_close(void) {
     js_done(&jd_J);
     jd_open = 0;
     jd_doc = 0;
+    jd_sheet = 0;
     jd_wrap = 0;
     jd_nlisten = 0;
     jd_ntimer = 0;
 }
 
-static int jsdom_open(ddoc *d) {
+static int jsdom_open(ddoc *d, csheet *sheet) {
     jsdom_close();
     if (!d || !jd_page_scripts(d)) return 0;
+    jd_sheet = sheet;
 
     js_init(&jd_J);
     jd_J.host_get = jd_host_get;
@@ -903,6 +1021,11 @@ static int jsdom_open(ddoc *d) {
         js_set(&jd_J, document, "createTextNode",
                js_from_obj(js_native(&jd_J, "createTextNode",
                                      nat_doc_create_text)));
+        js_set(&jd_J, document, "querySelector",
+               js_from_obj(js_native(&jd_J, "querySelector", nat_query)));
+        js_set(&jd_J, document, "querySelectorAll",
+               js_from_obj(js_native(&jd_J, "querySelectorAll",
+                                     nat_query_all)));
         js_declare(&jd_J, jd_J.global, js_str(&jd_J, "document"),
                    js_from_obj(document));
     }

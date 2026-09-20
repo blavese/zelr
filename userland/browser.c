@@ -575,7 +575,7 @@ static void build(const char *html, int len, int width, int want_sheets,
     said_script_err = 0;
     scripts_ran = 0;
     scripts_changed = 0;
-    if (jsdom_open(&doc)) {
+    if (jsdom_open(&doc, &sheet)) {
         scripts_ran = jsdom_scripts(script_err, (int)sizeof(script_err));
         jsdom_loaded();
         scripts_changed = jsdom_changed();

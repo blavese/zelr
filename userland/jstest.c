@@ -310,6 +310,93 @@ int main(void) {
     puts(" of ");
     putn(ran);
     puts(" passed\n");
+    /* --- regular expressions -------------------------------------------
+     *
+     * The first two are the ones that decide whether any of the rest can be
+     * trusted, because a slash and a pattern are the same character and
+     * telling them apart is not a matter of looking at the slash.
+     */
+    expect("a slash after a value is a divide", "(6 / 2)", "3");
+    expect("and a slash where no value can be is a pattern",
+           "/2/.source", "2");
+
+    expect("a pattern says when it matches", "/b/.test('abc')", "true");
+    expect("and when it does not", "/z/.test('abc')", "false");
+    expect("case folded when it is asked to be", "/ABC/i.test('xabcx')",
+           "true");
+    expect("and not when it is not", "/ABC/.test('xabcx')", "false");
+
+    expect("digits", "/^\\d+$/.test('12345')", "true");
+    expect("and something that is not one", "/^\\d+$/.test('12a45')",
+           "false");
+    expect("a class with a range", "/^[a-f]+$/.test('faded')", "true");
+    expect("a class turned inside out", "/^[^0-9]+$/.test('abc')", "true");
+    expect("alternation", "/^(cat|dog)$/.test('dog')", "true");
+    expect("and an empty branch, which is how a page says optional",
+           "/^(ab|)$/.test('')", "true");
+
+    expect("a counted quantifier", "/^a{3}$/.test('aaa')", "true");
+    expect("one that is not met", "/^a{3}$/.test('aa')", "false");
+    expect("a range of counts", "/^a{2,4}$/.test('aaa')", "true");
+    expect("a brace that is not a quantifier is four characters",
+           "/^a{b}$/.test('a{b}')", "true");
+
+    expect("greedy takes as much as it can",
+           "'<<a>><<b>>'.replace(/<<.+>>/, 'x')", "x");
+    expect("lazy takes as little", "'<<a>><<b>>'.replace(/<<.+?>>/, 'x')",
+           "x<<b>>");
+
+    expect("a word boundary", "/\\bcat\\b/.test('the cat sat')", "true");
+    expect("and not one inside a word", "/\\bcat\\b/.test('concatenate')",
+           "false");
+
+    expect("a group comes back out", "/(\\d+)-(\\d+)/.exec('x 12-34')[2]",
+           "34");
+    expect("and so does where it was found",
+           "/(\\d+)/.exec('ab 99').index", "3");
+    expect("a group that matched nothing is undefined",
+           "typeof /(a)|(b)/.exec('b')[1]", "undefined");
+
+    expect("replace puts a group back with a dollar",
+           "'John Smith'.replace(/(\\w+) (\\w+)/, '$2, $1')", "Smith, John");
+    expect("and the whole match with an ampersand",
+           "'abc'.replace(/b/, '[$&]')", "a[b]c");
+    expect("one at a time without g", "'a b c'.replace(/\\s/, '-')",
+           "a-b c");
+    expect("and all of them with it", "'a b c'.replace(/\\s/g, '-')",
+           "a-b-c");
+    expect("a function decides the replacement",
+           "'a1b2'.replace(/\\d/g, function(m){ return '[' + m + ']'; })",
+           "a[1]b[2]");
+
+    expect("match gives every one when global",
+           "'a1b22c333'.match(/\\d+/g).join(',')", "1,22,333");
+    expect("and the groups when it is not",
+           "'ab 99'.match(/(\\d)(\\d)/)[2]", "9");
+    expect("no match is null", "'abc'.match(/\\d/)", "null");
+    expect("search gives where it starts", "'hello world'.search(/world/)",
+           "6");
+    expect("and minus one when it is not there", "'hello'.search(/z/)",
+           "-1");
+    expect("split on a pattern", "'a1b22c'.split(/\\d+/).join('-')",
+           "a-b-c");
+
+    expect("the trim every page writes",
+           "'  hi  '.replace(/^\\s+|\\s+$/g, '')", "hi");
+    expect("anchors that mean the line, with m",
+           "'a\\nb'.match(/^b$/m)[0]", "b");
+    expect("and the string without it", "/^b$/.test('a\\nb')", "false");
+
+    expect("a pattern built out of a string",
+           "RegExp('^a+$').test('aaa')", "true");
+    expect("with its flags", "RegExp('abc', 'i').test('ABC')", "true");
+
+    expect("exec walks a global pattern through its subject",
+           "(function(){ var r = /\\d/g, s = 'a1b2', n = 0;"
+           " while (r.exec(s) !== null) n++; return n; })()", "2");
+    expect("and a pattern that can match nothing still ends",
+           "'aaa'.replace(/b*/g, '-')", "-a-a-a-");
+
     puts(failed ? "JSTEST_FAIL\n" : "JSTEST_PASS\n");
     return failed;
 }
