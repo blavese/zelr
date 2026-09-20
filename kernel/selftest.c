@@ -8,6 +8,8 @@
 #include "paging.h"
 #include "fs.h"
 #include "vfs.h"
+#include "fd.h"
+#include "pipe.h"
 #include "layout.h"
 #include "sysfs.h"
 #include "timer.h"
@@ -811,6 +813,19 @@ static void test_winsrv(void) {
 static void test_builtin(void) {
     ok("programs ship with the kernel", builtin_count_programs() >= 3);
 
+    /* And every one of them arrived. This used to say "three or more",
+       which is true of a list that has lost the end of itself: the table
+       registering them had room for sixteen, the seventeenth was dropped
+       without a word, and the seventeenth was the browser. Comparing the
+       two numbers is the check that would have said so. */
+    ok("and every one of them is in /bin",
+       vfs_builtin_count() == builtin_count_programs());
+
+    /* The last one in the list by name, because the failure this is here
+       for takes the last one and nothing else. */
+    u32 last = 0;
+    ok("including the last of them", vfs_stat("/bin/browser", &last, 0) && last > 1024);
+
     u32 size = 0;
     ok("paint is one of them", vfs_stat("/bin/paint", &size, 0) && size > 1024);
 
@@ -837,30 +852,82 @@ static void test_builtin(void) {
 
 static void test_open_files(void) {
     vfs_delete("/fd.txt");
+    u32 before = fd_live();
 
-    int fd = vfs_open("/fd.txt", O_WRITE | O_CREATE);
+    int fd = fd_open("/fd.txt", O_WRITE | O_CREATE);
     ok("a file can be opened for writing", fd >= 0);
     if (fd < 0) return;
 
-    ok("writing reports what it took", vfs_fd_write(fd, "abcdefgh", 8) == 8);
-    ok("seeking back works", vfs_fd_seek(fd, 0, 0) == 0);
-    ok("overwriting in place works", vfs_fd_write(fd, "ABC", 3) == 3);
-    ok("the size is what was written", vfs_fd_size(fd) == 8);
-    ok("closing writes it out", vfs_close(fd));
+    /* The first file a program opens is 3, every time, because 0, 1 and 2
+       are already the console. A number that depended on what else was
+       open on the machine would make redirection impossible to write. */
+    ok("and it is descriptor three, whatever else is open", fd == 3);
+
+    ok("writing reports what it took", fd_write(fd, "abcdefgh", 8) == 8);
+    ok("seeking back works", fd_seek(fd, 0, 0) == 0);
+    ok("overwriting in place works", fd_write(fd, "ABC", 3) == 3);
+    ok("the size is what was written", fd_size(fd) == 8);
+    ok("closing writes it out", fd_close(fd));
 
     char buf[16];
     ok("and the file has the edit",
        vfs_read("/fd.txt", buf, sizeof(buf)) == 8 && memcmp(buf, "ABCdefgh", 8) == 0);
 
-    fd = vfs_open("/fd.txt", O_READ);
-    ok("reading a chunk at a time works", fd >= 0 && vfs_fd_read(fd, buf, 3) == 3);
-    ok("it starts where it left off", vfs_fd_read(fd, buf, 3) == 3 && memcmp(buf, "def", 3) == 0);
-    ok("seeking to the end reports the size", vfs_fd_seek(fd, 0, 2) == 8);
-    ok("reading past the end gives nothing", vfs_fd_read(fd, buf, 4) == 0);
-    vfs_close(fd);
+    fd = fd_open("/fd.txt", O_READ);
+    ok("reading a chunk at a time works", fd >= 0 && fd_read(fd, buf, 3) == 3);
+    ok("it starts where it left off", fd_read(fd, buf, 3) == 3 && memcmp(buf, "def", 3) == 0);
+    ok("seeking to the end reports the size", fd_seek(fd, 0, 2) == 8);
+    ok("reading past the end gives nothing", fd_read(fd, buf, 4) == 0);
+    fd_close(fd);
 
-    ok("a missing file will not open without create", vfs_open("/nope.txt", O_READ) < 0);
+    ok("a missing file will not open without create", fd_open("/nope.txt", O_READ) < 0);
+
+    /* --- two numbers, one file ------------------------------------------
+     *
+     * The thing a shell needs. Duplicating does not copy the file: both
+     * numbers refer to the same open, so they share the position, and
+     * closing one leaves the other working. */
+    fd = fd_open("/fd.txt", O_WRITE | O_TRUNC);
+    int other = fd_dup(fd);
+    ok("a descriptor can be duplicated", other >= 0 && other != fd);
+    if (other > 0) {
+        ok("writing through one moves the other", fd_write(fd, "12345", 5) == 5 &&
+           fd_seek(other, 0, 1) == 5);
+        ok("closing one leaves the other open", fd_close(fd) && fd_write(other, "6", 1) == 1);
+        fd_close(other);
+        ok("and what both wrote is in the file",
+           vfs_read("/fd.txt", buf, sizeof(buf)) == 6 && memcmp(buf, "123456", 6) == 0);
+    }
+
+    fd = fd_open("/fd.txt", O_READ);
+    ok("a descriptor can be put at a chosen number", fd_dup2(fd, 9) == 9);
+    ok("and the chosen number reads the same file", fd_read(9, buf, 3) == 3 &&
+       memcmp(buf, "123", 3) == 0);
+    fd_close(9);
+    fd_close(fd);
+    ok("duplicating something that is not open is refused", fd_dup2(11, 12) < 0);
     vfs_delete("/fd.txt");
+
+    /* --- pipes ----------------------------------------------------------- */
+    int ends[2];
+    ok("a pipe can be made", fd_pipe(ends));
+    ok("and its two ends are different numbers", ends[0] != ends[1]);
+    ok("what goes in one end", fd_write(ends[1], "hello", 5) == 5);
+    ok("comes out of the other", fd_read(ends[0], buf, 5) == 5 && memcmp(buf, "hello", 5) == 0);
+    ok("writing to the reading end is refused", fd_write(ends[0], "x", 1) < 0);
+    ok("reading from the writing end is refused", fd_read(ends[1], buf, 1) < 0);
+    ok("a pipe cannot be seeked", fd_seek(ends[0], 0, 0) < 0);
+
+    /* Closing the writing end is what ends the file. Without this a
+       pipeline's right hand side waits forever for a left hand side that
+       has already finished. */
+    fd_close(ends[1]);
+    ok("and when the writer has gone, reading says end of file",
+       fd_read(ends[0], buf, 5) == 0);
+    fd_close(ends[0]);
+    ok("both ends closed takes the pipe back", pipe_live() == 0);
+
+    ok("and nothing was left open behind any of it", fd_live() == before);
 }
 
 static void test_pins(void) {
@@ -2734,11 +2801,12 @@ static void test_live_tree(void) {
     /* And it is genuinely read-only, through every door. */
     ok("a generated file cannot be written", !vfs_write("/sys/memory", "x", 1));
     ok("nor deleted", !vfs_delete("/sys/memory"));
-    ok("nor opened for writing", vfs_open("/sys/memory", O_WRITE) < 0);
+    ok("nor opened for writing", fd_open("/sys/memory", O_WRITE) < 0);
     ok("a directory cannot be made inside it", !vfs_mkdir("/sys/mine"));
     ok("and /bin is the same", !vfs_write("/bin/paint", "x", 1));
-    ok("but it can be opened for reading", vfs_open("/sys/memory", O_READ) >= 0);
-    vfs_close(vfs_open("/sys/memory", O_READ));
+    int sysfd = fd_open("/sys/memory", O_READ);
+    ok("but it can be opened for reading", sysfd >= 0);
+    fd_close(sysfd);
 
     ok("something that is not there says so", vfs_read("/sys/nothing", buf, 16) < 0);
     ok("and does not stat", !vfs_stat("/sys/nothing", 0, 0));

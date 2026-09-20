@@ -700,6 +700,40 @@ static void draw_wallpaper(void) {
         fb_vgradient(0, 0, (int)fb_width(), h, paper(22), t->desktop);
         break;
 
+    case WALLPAPER_BLOOM: {
+        /* Depth, made of one gradient and four lights.
+         *
+         * A flat colour behind a desktop is honest and it is also the thing
+         * that makes a screenshot look like a diagram of a desktop rather
+         * than a desktop. What a background needs is somewhere for the eye
+         * to rest that is not a window, and the cheapest way to have one is
+         * light: a deep ground, a wash from a cooler top to a warmer
+         * bottom, and a few soft sources sitting well off centre.
+         *
+         * Off centre on purpose. Lights placed symmetrically read as a
+         * pattern; placed the way they are here they read as a photograph
+         * of something, which is what every desktop background of the last
+         * fifteen years has been trying to be. */
+        int W = (int)fb_width();
+        u32 top = RGB(0x0B, 0x16, 0x38);
+        u32 bot = RGB(0x08, 0x2E, 0x4E);
+        fb_vgradient(0, 0, W, h, top, bot);
+
+        /* Cyan high on the left, which is the main source. */
+        fb_glow(W / 5, h / 5, W / 2, h / 2, RGB(0x35, 0xC8, 0xE0), 120);
+        /* A violet one behind it, further over and lower down. */
+        fb_glow((W * 3) / 4, (h * 2) / 5, (W * 2) / 5, (h * 2) / 5,
+                RGB(0x6A, 0x4B, 0xD8), 95);
+        /* Green low and right, which is what keeps it from reading as one
+           blue wash with a bright patch in it. */
+        fb_glow((W * 5) / 8, (h * 9) / 10, (W * 2) / 5, h / 3,
+                RGB(0x2E, 0xD0, 0x9E), 70);
+        /* And a small bright one, to give the others somewhere to fall away
+           from. */
+        fb_glow(W / 4, h / 4, W / 7, h / 7, RGB(0xCF, 0xF6, 0xFF), 90);
+        break;
+    }
+
     case WALLPAPER_GRID: {
         fb_rect(0, 0, fb_width(), (u32)h, t->desktop);
         u32 linec = paper(14);
@@ -977,6 +1011,19 @@ static void sunken(int x, int y, int w, int h) {
    right, so the thing genuinely looks depressed rather than highlighted. */
 static void button_face(int x, int y, int w, int h, bool down, bool hot) {
     const theme_t *t = theme();
+
+    /* Modern, a button at rest is not drawn at all. It appears under the
+       pointer as a soft rounded patch and it deepens when it is pressed,
+       which is how every desktop of the last decade does it: a row of
+       buttons that are each a raised slab is a row of boxes, and what
+       somebody is actually looking at is the labels. */
+    if (t->look == LOOK_MODERN) {
+        int r = h / 3 > 8 ? 8 : h / 3;
+        if (down)      fb_round_rect_aa(x, y, w, h, r, t->accent_soft, 235);
+        else if (hot)  fb_round_rect_aa(x, y, w, h, r, t->sheen, 110);
+        return;
+    }
+
     u32 face = hot && !down ? gfx_mix(t->surface, t->edge_hi, 60) : t->surface;
     fb_rect((u32)x, (u32)y, (u32)w, (u32)h, face);
     if (down) sunken(x, y, w, h);
@@ -1015,24 +1062,61 @@ static void draw_chrome(window_t *w, bool focused) {
     const theme_t *t = theme();
     int ow = wm_outer_w(w), oh = wm_outer_h(w);
 
-    /* The frame is a raised plane with the window sunk into it. Square,
-       because a bevel has to turn a corner to read as one and a rounded
-       corner has nowhere to put the four edges. */
-    fb_rect((u32)w->x, (u32)w->y, (u32)ow, (u32)oh, t->surface);
-    raised(w->x, w->y, ow, oh);
+    /* Built, the frame is a raised plane with the window sunk into it, and
+       it is square, because a bevel has to turn a corner to read as one and
+       a rounded corner has nowhere to put the four edges.
+     *
+       Modern, it is a pane: one fill, one hairline around it, rounded, with
+       a shadow underneath saying which window is in front. The shadow is
+       the whole of that job here, which is why an unfocused window gets a
+       shallower one rather than a drained title bar. */
+    if (t->look == LOOK_MODERN) {
+        int r = t->corner;
+        if (r > 0 && t->shadows)
+            fb_shadow(w->x, w->y, ow, oh, r, focused ? 7 : 3);
+        fb_round_rect_aa(w->x, w->y, ow, oh, r, t->surface, 255);
+
+        /* The hairline is what separates a light window from a light
+           wallpaper, and there is no other edge doing it.
+         *
+           On the focused window it takes the accent. Without that, the only
+           thing saying which window is in front is the depth of its shadow,
+           and a shadow is not something anybody reads deliberately: two
+           overlapping windows of the same colour with the same flat title
+           bar are two windows, and which one the keyboard is talking to is
+           a question the screen has to answer. */
+        u32 edge = focused ? gfx_mix(t->stroke, t->accent, 190) : t->stroke;
+        fb_round_rect_aa(w->x, w->y, ow, oh, r, edge, focused ? 235 : 110);
+        fb_round_rect_aa(w->x + 1, w->y + 1, ow - 2, oh - 2, r > 0 ? r - 1 : 0,
+                         t->surface, 255);
+    } else {
+        fb_rect((u32)w->x, (u32)w->y, (u32)ow, (u32)oh, t->surface);
+        raised(w->x, w->y, ow, oh);
+    }
 
     /* --- the title bar ---------------------------------------------------- */
     int tx = w->x + WM_BORDER;
     int ty = w->y + WM_BORDER;
     int tw = ow - WM_BORDER * 2;
 
-    if (focused) fb_hgradient(tx, ty, tw, WM_TITLE_H, t->title_a, t->title_b);
-    else         fb_hgradient(tx, ty, tw, WM_TITLE_H, t->title_off_a,
-                              t->title_off_b);
+    if (t->look == LOOK_MODERN) {
+        /* No band of colour. The title bar is the same material as the
+           window, and the thing that says a window is in front is the
+           shadow under it and the weight of its title. A coloured bar is a
+           second answer to a question already answered, and it is the
+           loudest thing on a screen that is mostly somebody's document. */
+        u32 fg = focused ? t->text : t->text_dim;
+        face_text(tx + 10, ty + (WM_TITLE_H - face_height(FACE_BODY)) / 2,
+                  w->title, fg, focused ? FACE_BODY_BOLD : FACE_BODY);
+    } else {
+        if (focused) fb_hgradient(tx, ty, tw, WM_TITLE_H, t->title_a, t->title_b);
+        else         fb_hgradient(tx, ty, tw, WM_TITLE_H, t->title_off_a,
+                                  t->title_off_b);
 
-    u32 title_fg = focused ? t->title_fg : t->title_off_fg;
-    face_text(tx + 6, ty + (WM_TITLE_H - face_height(FACE_BODY_BOLD)) / 2,
-              w->title, title_fg, FACE_BODY_BOLD);
+        u32 title_fg = focused ? t->title_fg : t->title_off_fg;
+        face_text(tx + 6, ty + (WM_TITLE_H - face_height(FACE_BODY_BOLD)) / 2,
+                  w->title, title_fg, FACE_BODY_BOLD);
+    }
 
     button_t order[3] = { BTN_CLOSE, BTN_MAX, BTN_MIN };
     for (int i = 0; i < 3; i++) {
@@ -1042,9 +1126,22 @@ static void draw_chrome(window_t *w, bool focused) {
         button_box(w, order[i], &bx, &by);
         bool hot = last_mx >= bx && last_mx < bx + BTN_W
                 && last_my >= by && last_my < by + BTN_H;
-        button_face(bx, by, BTN_W, BTN_H, false, hot);
 
         u32 mark = t->text;
+        if (t->look == LOOK_MODERN) {
+            /* Nothing at rest, a patch under the pointer, and red under the
+               pointer on close. Red on the one button that cannot be undone
+               and on no other is the clearest thing a title bar does. */
+            if (hot && order[i] == BTN_CLOSE) {
+                fb_round_rect_aa(bx, by, BTN_W, BTN_H, 5,
+                                 RGB(0xD9, 0x3A, 0x3A), 240);
+                mark = RGB(0xFF, 0xFF, 0xFF);
+            } else if (hot) {
+                fb_round_rect_aa(bx, by, BTN_W, BTN_H, 5, t->sheen, 130);
+            }
+        } else {
+            button_face(bx, by, BTN_W, BTN_H, false, hot);
+        }
         switch (order[i]) {
         case BTN_CLOSE: mark_close(bx, by, mark); break;
         case BTN_MAX:
@@ -1058,7 +1155,15 @@ static void draw_chrome(window_t *w, bool focused) {
     /* --- and the client area, sunk into the frame ------------------------- */
     int cx = w->x + WM_BORDER;
     int cy = w->y + WM_TOP;
-    sunken(cx - 1, cy - 1, w->cw + 2, w->ch + 2);
+    if (t->look == LOOK_MODERN) {
+        /* A hairline rather than a well. Sinking the page into the frame is
+           what a built surface does to say "this part is the program"; with
+           no bevels anywhere else it reads as a groove nobody asked for. */
+        fb_frame((u32)(cx - 1), (u32)(cy - 1), (u32)(w->cw + 2),
+                 (u32)(w->ch + 2), t->stroke);
+    } else {
+        sunken(cx - 1, cy - 1, w->cw + 2, w->ch + 2);
+    }
 
     /* Three short strokes in the corner, which is how a grip has looked for
        long enough that nobody needs to be told. Bevelled rather than drawn
@@ -1241,8 +1346,22 @@ static void draw_menu(void) {
     int rise = (int)(((ANIM_FULL - p) * 8) / ANIM_FULL);
     int mx = menu_x, my = menu_y + rise;
 
-    fb_rect((u32)mx, (u32)my, MENU_W, (u32)h, t->surface);
-    raised(mx, my, MENU_W, h);
+    if (t->look == LOOK_MODERN) {
+        /* A floating panel, so it gets the deepest shadow on the desktop:
+           it is the one thing that is genuinely above everything else and
+           it is gone again in a moment. */
+        if (t->shadows) fb_shadow(mx, my, MENU_W, h, 10, 8);
+        /* Flat, with no gloss on it. A menu is a list of words somebody is
+           reading right now, and a sheen across the top of one puts a
+           gradient behind the first two items and not behind the rest. The
+           gloss belongs on the bar, which is furniture. */
+        fb_round_rect_aa(mx, my, MENU_W, h, 10, t->overlay, 250);
+        fb_round_rect_aa(mx, my, MENU_W, h, 10, t->stroke, 85);
+        fb_round_rect_aa(mx + 1, my + 1, MENU_W - 2, h - 2, 9, t->overlay, 252);
+    } else {
+        fb_rect((u32)mx, (u32)my, MENU_W, (u32)h, t->surface);
+        raised(mx, my, MENU_W, h);
+    }
 
     /* --- the strip --------------------------------------------------------
      *
@@ -1490,16 +1609,33 @@ static void draw_volume_panel(void) {
     volume_track(&tx, &ty, &tw);
     int px = tx - 16, py = taskbar_y() - VOLPOP_H - 8;
 
-    fb_rect((u32)px, (u32)py, VOLPOP_W, VOLPOP_H, t->surface);
-    raised(px, py, VOLPOP_W, VOLPOP_H);
+    if (t->look != LOOK_MODERN)
+        fb_rect((u32)px, (u32)py, VOLPOP_W, VOLPOP_H, t->surface);
+    if (t->look == LOOK_MODERN) {
+        if (t->shadows) fb_shadow(px, py, VOLPOP_W, VOLPOP_H, 10, 7);
+        fb_round_rect_aa(px, py, VOLPOP_W, VOLPOP_H, 10, t->overlay, 248);
+        fb_round_rect_aa(px, py, VOLPOP_W, VOLPOP_H, 10, t->stroke, 85);
+        fb_round_rect_aa(px + 1, py + 1, VOLPOP_W - 2, VOLPOP_H - 2, 9, t->overlay, 252);
+    } else {
+        raised(px, py, VOLPOP_W, VOLPOP_H);
+    }
 
     int level = theme()->volume;
     int on = tw * level / 100;
 
-    fb_rect((u32)tx, (u32)ty, (u32)tw, 6, t->well);
-    if (on > 0) fb_rect((u32)tx, (u32)ty, (u32)on, 6, t->accent);
-    sunken(tx, ty, tw, 6);
-    button_face(tx + on - 5, ty - 5, 11, 16, false, false);
+    if (t->look == LOOK_MODERN) {
+        fb_round_rect_aa(tx, ty, tw, 6, 3, t->well, 255);
+        if (on > 0) fb_round_rect_aa(tx, ty, on, 6, 3, t->accent, 255);
+        /* A disc, and a ring of the surface around it, so the knob stays
+           visible wherever along the track it happens to sit. */
+        fb_round_rect_aa(tx + on - 8, ty - 5, 16, 16, 8, t->surface, 255);
+        fb_round_rect_aa(tx + on - 6, ty - 3, 12, 12, 6, t->accent, 255);
+    } else {
+        fb_rect((u32)tx, (u32)ty, (u32)tw, 6, t->well);
+        if (on > 0) fb_rect((u32)tx, (u32)ty, (u32)on, 6, t->accent);
+        sunken(tx, ty, tw, 6);
+        button_face(tx + on - 5, ty - 5, 11, 16, false, false);
+    }
 
     char num[8];
     kformat(num, sizeof(num), "%d", level);
@@ -1570,8 +1706,16 @@ static void draw_net_panel(void) {
     int px, py;
     net_panel_rect(&px, &py);
 
-    fb_rect((u32)px, (u32)py, NETPOP_W, NETPOP_H, t->surface);
-    raised(px, py, NETPOP_W, NETPOP_H);
+    if (t->look != LOOK_MODERN)
+        fb_rect((u32)px, (u32)py, NETPOP_W, NETPOP_H, t->surface);
+    if (t->look == LOOK_MODERN) {
+        if (t->shadows) fb_shadow(px, py, NETPOP_W, NETPOP_H, 10, 7);
+        fb_round_rect_aa(px, py, NETPOP_W, NETPOP_H, 10, t->overlay, 248);
+        fb_round_rect_aa(px, py, NETPOP_W, NETPOP_H, 10, t->stroke, 85);
+        fb_round_rect_aa(px + 1, py + 1, NETPOP_W - 2, NETPOP_H - 2, 9, t->overlay, 252);
+    } else {
+        raised(px, py, NETPOP_W, NETPOP_H);
+    }
 
     int line = face_height(FACE_BODY) + 6;
     int ty = py + 12;
@@ -1673,12 +1817,24 @@ static void draw_taskbar(void) {
     int W = (int)fb_width();
 
     /* Flush to the bottom edge and the full width of it, because a panel is
-       part of the machine rather than a card lying on the desktop. The
-       floating rounded one that was here read as an app, which is most of
-       why the whole desktop looked like a toy. */
-    fb_rect(0, (u32)y, (u32)W, TASKBAR_H, t->surface);
-    fb_bevel_thin(0, y, W, TASKBAR_H + 2, t->edge_hi, t->edge_hi);
-    fb_rect(0, (u32)y, (u32)W, 1, t->edge_hi);
+       part of the machine rather than a card lying on the desktop. A
+       floating rounded one was tried here once and read as an app.
+     *
+       What changes with the modern look is not the shape but the material:
+       the same full width bar, tinted rather than filled, so the wallpaper
+       is still there underneath it and the bar belongs to the screen rather
+       than sitting on top of it. A hairline along the top instead of a
+       bevel, because a bevel on a translucent surface is a bevel on
+       nothing. */
+    if (t->look == LOOK_MODERN) {
+        fb_round_rect_aa(0, y, W, TASKBAR_H, 0, t->glass, 214);
+        fb_sheen(0, y, W, TASKBAR_H, 0, 38);
+        fb_rect(0, (u32)y, (u32)W, 1, t->stroke);
+    } else {
+        fb_rect(0, (u32)y, (u32)W, TASKBAR_H, t->surface);
+        fb_bevel_thin(0, y, W, TASKBAR_H + 2, t->edge_hi, t->edge_hi);
+        fb_rect(0, (u32)y, (u32)W, 1, t->edge_hi);
+    }
 
     /* --- the launcher ----------------------------------------------------- */
     /* The same arithmetic the hit test uses, rather than a number that
@@ -1743,8 +1899,17 @@ static void draw_taskbar(void) {
      * it. */
     int tray_x = taskbar_net_x() - 6;
     int tray_w = W - tray_x - 2;
-    fb_rect((u32)tray_x, (u32)by, (u32)tray_w, (u32)bh, t->surface);
-    sunken(tray_x, by, tray_w, bh);
+    if (t->look == LOOK_MODERN) {
+        /* Nothing at all. A sunk well says "these are indicators rather
+           than buttons", which is true and which the bar no longer needs
+           said: with every button on it invisible until the pointer is over
+           it, a clock that is simply text is already not a button. Drawing
+           the well anyway leaves one bevelled box on an otherwise flat bar,
+           which is the only thing on it that looks out of place. */
+    } else {
+        fb_rect((u32)tray_x, (u32)by, (u32)tray_w, (u32)bh, t->surface);
+        sunken(tray_x, by, tray_w, bh);
+    }
 
     char clock[24];
     clock_text(clock, sizeof(clock));

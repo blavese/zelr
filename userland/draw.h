@@ -139,6 +139,22 @@ static inline u32 mix(u32 under, u32 over, int alpha) {
 #define UI_FACE_BODY  1      /* 15px */
 #define UI_FACE_HEAD  2      /* 20px */
 #define UI_FACE_BOLD  3      /* 15px bold */
+#define UI_FACE_MONO  4      /* 15px, every character the same width */
+#define UI_FACE_MONOB 5      /* and bold */
+
+/* The cell a monospaced character occupies. Every glyph in that face has the
+   same advance, so asking any of them is asking all of them; the space is
+   used because it is the one character certain to be in any face.
+ *
+ * A terminal is a grid and the grid has to come from the face rather than
+ * from a constant, or the columns drift one pixel at a time across the
+ * width of the window. */
+#define MONO_W (face_faces[UI_FACE_MONO].glyphs[' ' - FACE_FIRST].advance)
+
+/* Line height rather than em size: letters with descenders need the room
+   under the baseline, and lines set solid are what makes a wall of text
+   unreadable. */
+#define MONO_H (face_faces[UI_FACE_MONO].size + 3)
 
 static inline const face_t *face_of(int which) {
     if (which < 0 || which >= FACE_SIZES) which = 0;
@@ -183,6 +199,15 @@ static inline void face_draw(surface *s, int x, int y, const char *str,
         }
         x += g->advance;
     }
+}
+
+/* One character of the monospaced face, in its own cell. Used where a
+   caller draws cell by cell because each one has its own colour. */
+static inline void mono_char(surface *s, int x, int y, char c, u32 fg) {
+    char one[2];
+    one[0] = c;
+    one[1] = 0;
+    face_draw(s, x, y, one, fg, UI_FACE_MONO);
 }
 
 static inline void face_centred(surface *s, int x, int y, int w, int h,

@@ -101,9 +101,23 @@ par_names=()
 par_files=()
 par_pids=()
 
+# How many machines may run at once.
+#
+# It used to be all of them: the last group starts thirteen, and thirteen
+# emulated machines on one host is not thirteen times the work done, it is
+# one host that cannot keep up. The checks that suffer are the ones that
+# measure something in real time — a sound coming back at the pitch it was
+# sent, a pointer arriving where it was put, a keystroke reaching a window —
+# and they fail for reasons that have nothing to do with what they check.
+#
+# Four is not much slower. A group takes as long as its slowest member
+# whatever the limit is, and the slowest member here is four minutes.
+PAR_MAX="${PAR_MAX:-4}"
+
 par_start() {                      # par_start <name> <function>
   local name="$1"; shift
   [ -n "$PARALLEL_DIR" ] || PARALLEL_DIR="$(mktemp -d)"
+  while [ "$(jobs -rp | wc -l)" -ge "$PAR_MAX" ]; do sleep 1; done
   local f="$PARALLEL_DIR/step$(( ${#par_names[@]} )).txt"
   ( s=$(date +%s); "$@" > "$f" 2>&1; rc=$?
     echo "rc=$rc" >> "$f"; echo "secs=$(( $(date +%s) - s ))" >> "$f" ) &
@@ -208,6 +222,17 @@ run_step "the version is not behind the newest tag" vercheck
 abicheck() { python tools/abicheck.py; }
 run_step "the kernel and its programs agree on the structs" abicheck
 
+# --- and on what a machine with no settings file looks like ---------------
+#
+# The other half of the same problem. The kernel holds the defaults because
+# it draws a desktop before anybody has written a file; the settings program
+# holds them because it shows controls before it has read one. When the two
+# disagree, the desktop comes up one way, Settings reports another, and
+# changing anything at all in that window rewrites the file out of Settings'
+# idea of the world. Reads both files; takes no time at all.
+defaultcheck() { python tools/defaultcheck.py; }
+run_step "and on what a new machine looks like" defaultcheck
+
 # --- the kernel's own checks ----------------------------------------------
 #
 # A fresh disk each time: a test that passes only because a previous run left
@@ -225,6 +250,15 @@ selftest() {
   printf '%s' "$out" | grep -q SELFTEST_PASS
 }
 par_start "the kernel's own checks" selftest
+
+# --- and the checks the kernel cannot run ---------------------------------
+#
+# Floating point, the heap, and JavaScript are all ring 3. The kernel's own
+# self test reaches none of them: it runs inside a kernel compiled without
+# the vector instructions, with no allocator and no interpreter, before
+# there is a program at all. These are programs, and this runs them.
+ring3test() { keep timeout 600 python tools/ring3check.py; }
+par_start "what a program can do that it could not" ring3test
 
 # --- and again on a machine made this century ------------------------------
 #
@@ -363,6 +397,7 @@ if [ "$MODE" = "screen" ] || [ "$MODE" = "full" ]; then
   # out a sum and then typing the answer in by hand, and a music player
   # checked by recording what came out of the machine.
   apptest() { keep timeout 600 python tools/appcheck.py; }
+  shtest() { keep timeout 600 python tools/shcheck.py; }
 
   # The network, from the icon on the panel to an address. The reply comes
   # from QEMU's own DHCP server rather than from anything here, which is the
@@ -397,6 +432,7 @@ if [ "$MODE" = "screen" ] || [ "$MODE" = "full" ]; then
   par_start "https works against the real web" tlstest
   par_start "the browser shows a page and follows a link" browsertest
   par_start "the programs it ships with do what they say" apptest
+  par_start "a shell, with pipes and redirection" shtest
 
   par_wait
 fi

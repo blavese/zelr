@@ -321,8 +321,16 @@ def main():
     # the kernel it loads. Built by tools/mkfat.py, which is ours.
     esp_path = os.path.join(BUILD, "esp.img")
     efi_path = os.path.join(BUILD, "BOOTX64.EFI")
+    # Big enough for what is going into it, rather than a number chosen when
+    # the kernel was smaller. It was 4096 KB, and the kernel reached 4066: it
+    # fit, and the filesystem around it did not, so the whole of this step
+    # failed on a build that was otherwise fine. A size that is worked out
+    # cannot go stale that way.
+    want_kb = (len(payload) + os.path.getsize(efi_path) + 1023) // 1024
+    want_kb += 1024                       # room for the filesystem around it
+    esp_kb = max(4096, ((want_kb + 1023) // 1024) * 1024)
     subprocess.run([sys.executable, os.path.join(ROOT, "tools", "mkfat.py"),
-                    esp_path, "4096",
+                    esp_path, str(esp_kb),
                     efi_path + ":EFI/BOOT/BOOTX64.EFI",
                     payload_path + ":zelr.bin"],
                    cwd=ROOT, check=True, stdout=subprocess.DEVNULL)

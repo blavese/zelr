@@ -335,3 +335,136 @@ void face_surf_text(u32 *dst, int w, int h, int x, int y,
         x += g->advance;
     }
 }
+
+/* --- the modern surfaces -------------------------------------------------
+ *
+ * Everything above builds chrome out of bevels: a surface with a lit edge
+ * and a shaded one, which is how a desktop said "this is a raised thing"
+ * before it could afford to say it any other way. It still works and it is
+ * still here.
+ *
+ * What follows is the other way of saying it. A surface is a pane of
+ * material: it has a soft edge rather than a bevelled one, it lets what is
+ * behind it show through, and the light on it is a sheen across the top
+ * rather than a line down one side. None of it is more correct than a
+ * bevel. It is a different century.
+ */
+
+/* How much of one pixel falls inside a corner circle, as 0 to 255.
+ *
+ * Sixteen samples rather than one yes-or-no, because the entire difference
+ * between a corner that reads as a curve and one that reads as a staircase
+ * is in the pixels the edge passes through, and there are only ever a
+ * handful of them per corner. Everything is in eighths of a pixel so that
+ * it stays in integers, which is all this kernel has. */
+static int corner_cover(int px, int py, int cx8, int cy8, int r8) {
+    int inside = 0;
+    for (int sy = 0; sy < 4; sy++) {
+        for (int sx = 0; sx < 4; sx++) {
+            int dx = (px * 8 + sx * 2 + 1) - cx8;
+            int dy = (py * 8 + sy * 2 + 1) - cy8;
+            if (dx * dx + dy * dy <= r8 * r8) inside++;
+        }
+    }
+    return inside * 255 / 16;
+}
+
+/* One row of a rounded rectangle, as the span it covers and the coverage of
+   the pixel at each end. Rows away from the corners are simply full. */
+static void round_row(int x, int y, int w, int r, int row_from_edge,
+                      u32 rgb, int alpha) {
+    if (y < 0 || y >= (int)fb_height()) return;
+
+    if (row_from_edge >= r) {
+        for (int px = x; px < x + w; px++) {
+            if (px < 0 || px >= (int)fb_width()) continue;
+            fb_put((u32)px, (u32)y,
+                   alpha >= 255 ? rgb
+                                : gfx_mix(fb_get((u32)px, (u32)y), rgb, alpha));
+        }
+        return;
+    }
+
+    /* Inside a corner row: the two ends are curved and the middle is full. */
+    int cy8 = (r - row_from_edge) * 8;            /* distance up to the centre */
+    for (int i = 0; i < r; i++) {
+        int cov = corner_cover(i, 0, r * 8, cy8, r * 8);
+        if (!cov) continue;
+        int a = alpha >= 255 ? cov : cov * alpha / 255;
+        int left = x + i, right = x + w - 1 - i;
+        if (left >= 0 && left < (int)fb_width())
+            fb_put((u32)left, (u32)y, gfx_mix(fb_get((u32)left, (u32)y), rgb, a));
+        if (right != left && right >= 0 && right < (int)fb_width())
+            fb_put((u32)right, (u32)y, gfx_mix(fb_get((u32)right, (u32)y), rgb, a));
+    }
+    for (int px = x + r; px < x + w - r; px++) {
+        if (px < 0 || px >= (int)fb_width()) continue;
+        fb_put((u32)px, (u32)y,
+               alpha >= 255 ? rgb
+                            : gfx_mix(fb_get((u32)px, (u32)y), rgb, alpha));
+    }
+}
+
+void fb_round_rect_aa(int x, int y, int w, int h, int r, u32 rgb, int alpha) {
+    if (w <= 0 || h <= 0 || alpha <= 0) return;
+    if (r * 2 > w) r = w / 2;
+    if (r * 2 > h) r = h / 2;
+    if (r < 0) r = 0;
+
+    for (int j = 0; j < h; j++) {
+        int from_edge = j < h - 1 - j ? j : h - 1 - j;
+        round_row(x, y + j, w, r, from_edge, rgb, alpha);
+    }
+}
+
+/* A soft round light. The falloff is the square of one minus the square of
+   the distance, which is bright in the middle, and fades to nothing at the
+   edge rather than stopping at a visible rim. */
+void fb_glow(int cx, int cy, int rx, int ry, u32 rgb, int strength) {
+    if (rx <= 0 || ry <= 0 || strength <= 0) return;
+    int x0 = cx - rx, x1 = cx + rx, y0 = cy - ry, y1 = cy + ry;
+    if (x0 < 0) x0 = 0;
+    if (y0 < 0) y0 = 0;
+    if (x1 > (int)fb_width()) x1 = (int)fb_width();
+    if (y1 > (int)fb_height()) y1 = (int)fb_height();
+
+    for (int py = y0; py < y1; py++) {
+        int dy = py - cy;
+        /* In thousandths, so the whole thing stays in integers without
+           losing the shape of the curve near the middle. */
+        int ny = (dy * 1000) / ry;
+        int ny2 = (ny * ny) / 1000;
+        if (ny2 >= 1000) continue;
+        for (int px = x0; px < x1; px++) {
+            int dx = px - cx;
+            int nx = (dx * 1000) / rx;
+            int d2 = ny2 + (nx * nx) / 1000;
+            if (d2 >= 1000) continue;
+            int fall = 1000 - d2;
+            int a = (strength * fall / 1000) * fall / 1000;
+            if (a <= 0) continue;
+            fb_put((u32)px, (u32)py,
+                   gfx_mix(fb_get((u32)px, (u32)py), rgb, a));
+        }
+    }
+}
+
+/* The gloss across the top of a pane.
+ *
+ * A band down the upper part, strongest at the very top and gone by the
+ * middle, which is what a curved surface under a light above it does. It is
+ * the one flourish of that whole era of interfaces that still reads as
+ * light rather than as decoration, so it is worth having and worth keeping
+ * quiet: the strength here is a tenth of what those interfaces used. */
+void fb_sheen(int x, int y, int w, int h, int r, int strength) {
+    if (w <= 0 || h <= 0) return;
+    int band = h / 2;
+    if (band < 1) return;
+    for (int j = 0; j < band; j++) {
+        int fall = ((band - j) * 255) / band;
+        int a = strength * fall / 255 * fall / 255;
+        if (a <= 0) continue;
+        int from_edge = j;
+        round_row(x, y + j, w, r, from_edge, RGB(0xFF, 0xFF, 0xFF), a);
+    }
+}

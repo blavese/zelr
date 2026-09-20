@@ -164,7 +164,7 @@ static void paste(void) {
 /* --- the window ----------------------------------------------------------- */
 
 #define TOOLBAR_H 40
-#define GUTTER_W  (5 * FONT_W)
+#define GUTTER_W  (5 * MONO_W)
 
 void _start(void) {
     int win = win_create("Notes", 700, 520);
@@ -217,8 +217,8 @@ void _start(void) {
 
         int text_y = TOOLBAR_H;
         int text_h = h - text_y - UI_ROW;
-        int rows = text_h / FONT_H;
-        int cols = (w - GUTTER_W - UI_PAD) / FONT_W;
+        int rows = text_h / MONO_H;
+        int cols = (w - GUTTER_W - UI_PAD) / MONO_W;
 
         /* --- keys ------------------------------------------------------- */
         u32 k = in.key;
@@ -292,14 +292,14 @@ void _start(void) {
 
         int at = start_of_line(scroll_line);
         for (int row = 0; row < rows && at <= len; row++) {
-            int ry = text_y + row * FONT_H;
+            int ry = text_y + row * MONO_H;
             int end = line_end(at);
 
             char num[8];
             int nn = utoa((u32)(scroll_line + row + 1), num);
             num[nn] = 0;
-            int nw = strlen(num) * FONT_W;
-            text(&s, GUTTER_W - nw - 4, ry, num, t.dim);
+            int nw = (int)strlen(num) * MONO_W;
+            face_draw(&s, GUTTER_W - nw - 4, ry, num, t.dim, UI_FACE_MONO);
 
             /* The selection is painted under the glyphs rather than over. */
             if (has_selection()) {
@@ -307,16 +307,16 @@ void _start(void) {
                 int from = a > at ? a : at;
                 int to = b < end ? b : end;
                 if (to > from)
-                    rect(&s, GUTTER_W + (from - at) * FONT_W, ry,
-                         (to - from) * FONT_W, FONT_H, mix(t.bg, t.accent, 140));
+                    rect(&s, GUTTER_W + (from - at) * MONO_W, ry,
+                         (to - from) * MONO_W, MONO_H, mix(t.bg, t.accent, 140));
             }
 
             for (int i = 0; at + i < end && i < cols; i++)
-                glyph(&s, GUTTER_W + i * FONT_W, ry, buf[at + i], t.fg);
+                mono_char(&s, GUTTER_W + i * MONO_W, ry, buf[at + i], t.fg);
 
             if (cursor >= at && cursor <= end && (ticks() / 30) % 2 == 0) {
-                int cx = GUTTER_W + (cursor - at) * FONT_W;
-                rect(&s, cx, ry, 2, FONT_H, t.accent);
+                int cx = GUTTER_W + (cursor - at) * MONO_W;
+                rect(&s, cx, ry, 2, MONO_H, t.accent);
             }
 
             if (end >= len) break;
@@ -325,8 +325,8 @@ void _start(void) {
 
         /* Clicking puts the cursor where it was clicked; dragging selects. */
         if (in.my >= text_y && in.my < text_y + text_h && in.mx >= GUTTER_W) {
-            int row = (in.my - text_y) / FONT_H;
-            int col = (in.mx - GUTTER_W) / FONT_W;
+            int row = (in.my - text_y) / MONO_H;
+            int col = (in.mx - GUTTER_W) / MONO_W;
             int at2 = start_of_line(scroll_line + row);
             int end2 = line_end(at2);
             int want = at2 + col;

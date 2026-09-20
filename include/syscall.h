@@ -83,6 +83,51 @@
    reason the last attempt failed, TLS_WHAT for what was agreed. */
 #define SYS_TLS_CONNECT   45
 #define SYS_TLS_STATUS    46
+
+/* Moves this program's heap break and returns where it was.
+ *
+   The one call that makes an allocator possible up here. Everything in ring
+   3 was fixed arrays before it: a program decided at compile time how big
+   the largest thing it would ever handle was, and the browser's limit on
+   the size of a page was a number in a header rather than a property of
+   the machine. */
+#define SYS_SBRK          47
+
+/* --- processes, the way Unix means the word ------------------------------
+ *
+ * Starting a program was one call: hand over a path, get a pid. That is a
+ * spawn, and it is a fine thing to have, but it is not what a shell is built
+ * out of. A shell needs to make a copy of itself, change something in the
+ * copy, and only then become the new program, because everything it wants to
+ * set up first — where the output goes, what the working directory is —
+ * belongs to the child and must not touch the parent.
+ *
+ * So: fork makes the copy and returns twice, zero in the child and the
+ * child's pid in the parent. exec replaces the program running in the
+ * calling process without making a new one. getppid says who forked you. */
+#define SYS_FORK          48
+#define SYS_EXEC          49
+#define SYS_GETPPID       50
+
+/* --- descriptors -------------------------------------------------------
+ *
+ * A program's open files are numbered per program now, 0 in for input, 1 out
+ * and 2 for errors, and these three calls are what a shell does with them.
+ * dup2 is redirection; pipe is the other half of a pipeline. Neither is
+ * interesting on its own: what makes them worth having is that they happen
+ * between a fork and an exec, so the program being run never learns that its
+ * output is not the screen. */
+#define SYS_DUP           51
+#define SYS_DUP2          52
+#define SYS_PIPE          53
+
+/* --- signals -----------------------------------------------------------
+ *
+ * SYS_SIGNAL says what this program wants done with one; SYS_SIGSEND raises
+ * one against another program. There are three signals and no handlers; see
+ * include/signal.h, which says what that leaves out and why. */
+#define SYS_SIGNAL        54
+#define SYS_SIGSEND       55
 #define TLS_WHY   0
 #define TLS_WHAT  1
 

@@ -17,7 +17,14 @@
 #include "clipboard.h"
 #include "sound.h"
 #include "vfs.h"
+#include "fd.h"
+#include "signal.h"
 #include "wait.h"
+#include "io.h"
+#include "gdt.h"
+#include "user.h"
+#include "elf.h"
+#include "heap.h"
 #include "elf.h"
 #include "user.h"
 #include "net.h"
@@ -134,6 +141,120 @@ static i64 sys_getarg(registers_t *r) {
     return (i64)i;
 }
 
+/* --- fork ----------------------------------------------------------------
+ *
+ * Copy the address space, then copy the frame. The child is told nothing:
+ * it comes back from this very call with zero in it, on a stack that is a
+ * copy of the parent's, at the instruction after the one that asked.
+ *
+ * The frame this is handed is the one the interrupt return path will use for
+ * the parent, so the child's copy of it is already correct in every register
+ * except the one the answer arrives in.
+ */
+static i64 sys_fork(registers_t *r) {
+    task_t *parent = task_current();
+    if (!parent || !parent->dir) return -1;
+
+    u64 dir = paging_clone_directory(parent->dir);
+    if (!dir) return -1;
+
+    /* Interrupts off across the copy and the naming together: the child is
+       runnable the instant it is on the list, and a scheduler that ran it
+       before its name was set would print an empty one. */
+    bool were_on = interrupts_enabled();
+    cli();
+    task_t *child = task_fork(parent->name, dir, r, 0);
+    if (were_on) sti();
+
+    if (!child) { paging_free_directory(dir); return -1; }
+    return (i64)child->pid;
+}
+
+/* --- exec ----------------------------------------------------------------
+ *
+ * The other half. This does not make a process: it throws away the one
+ * running in this process and puts another in its place, which is why a
+ * successful exec never returns.
+ *
+ * The old address space cannot be freed while this code is still running on
+ * it, and it is not: the kernel stack this is executing on belongs to the
+ * task rather than to the address space, and the switch below moves to the
+ * new space before the old one goes.
+ */
+static i64 sys_exec(registers_t *r) {
+    task_t *t = task_current();
+    if (!t || !t->dir) return -1;
+
+    char path[VFS_PATH_MAX];
+    if (!copy_path(r->rbx, path, sizeof(path))) return -1;
+
+    char arg[TASK_ARG_MAX];
+    arg[0] = 0;
+    if (r->rcx) {
+        if (!copy_path(r->rcx, arg, sizeof(arg))) return -1;
+    }
+
+    u32 size = 0;
+    u8 *image = vfs_slurp(path, &size);
+    if (!image) return -1;
+
+    u64 dir = paging_new_directory();
+    if (!dir) { kfree(image); return -1; }
+
+    u64 entry = 0;
+    int rc = elf_load(dir, image, size, &entry);
+    kfree(image);
+    if (rc != ELF_OK) { paging_free_directory(dir); return rc; }
+    if (!user_build_stack(dir)) { paging_free_directory(dir); return -1; }
+
+    u64 old = t->dir;
+
+    bool were_on = interrupts_enabled();
+    cli();
+
+    t->dir = dir;
+    paging_switch(dir);
+
+    /* The heap belonged to the program that is being replaced. */
+    t->brk = 0;
+    t->brk_base = 0;
+    strncpy(t->arg, arg, sizeof(t->arg) - 1);
+    t->arg[sizeof(t->arg) - 1] = 0;
+
+    /* A name is what `ps` shows, and a process that became something else
+       should say what it became. */
+    const char *base = path;
+    for (const char *p = path; *p; p++) if (*p == '/') base = p + 1;
+    strncpy(t->name, base, sizeof(t->name) - 1);
+    t->name[sizeof(t->name) - 1] = 0;
+
+    /* Rewriting the frame is how this never returns: the interrupt return
+       path is about to unwind it, and it now describes the new program at
+       its first instruction rather than this call at its last. */
+    memset(r, 0, sizeof(*r));
+    r->rip = entry;
+    r->cs = USER_CODE_SEL;
+    r->ss = USER_DATA_SEL;
+    r->rsp = USER_STACK_START;
+    r->rflags = 0x202;
+    r->int_no = 32;
+
+    if (were_on) sti();
+
+    paging_free_directory(old);
+    return 0;
+}
+
+static i64 sys_getppid(registers_t *r) {
+    (void)r;
+    task_t *t = task_current();
+    return t ? (i64)t->parent_pid : 0;
+}
+
+static i64 sys_sbrk(registers_t *r) {
+    return (i64)user_sbrk((i64)r->rbx);
+}
+
 static i64 sys_wait(registers_t *r) {
     return task_wait((u32)r->rbx);
 }
@@ -149,15 +270,25 @@ static i64 sys_kill(registers_t *r) {
     task_t *t = task_by_pid(pid);
     if (!t || t->state == TASK_DEAD) return -1;
 
-    /* Everything it holds goes back, exactly as if it had exited. */
-    winsrv_release(pid);
-    vfs_release(pid);
-    syscall_release(pid);
-    t->exit_status = -1;
-    t->died_at = timer_ticks();
-    t->state = TASK_DEAD;
-    wake_all(t);
+    /* Everything it holds goes back, exactly as if it had exited. One copy
+       of that, in kernel/signal.c, because there are three ways to end a
+       task now and the risk is that one of them forgets the windows. */
+    signal_end_task(pid, -1);
     return 0;
+}
+
+/* --- signals -------------------------------------------------------------
+ *
+ * What a program does with one, and how one is raised. There is no handler:
+ * see include/signal.h for why the honest version of that is absence. */
+static i64 sys_signal(registers_t *r) {
+    task_t *t = task_current();
+    if (!t) return -1;
+    return signal_disposition(t->pid, (int)r->rbx, (int)r->rcx) ? 0 : -1;
+}
+
+static i64 sys_sigsend(registers_t *r) {
+    return signal_send((u32)r->rbx, (int)r->rcx) ? 0 : -1;
 }
 
 static i64 sys_win_resizable(registers_t *r) {
@@ -255,18 +386,24 @@ static i64 sys_tasks(registers_t *r) {
 }
 
 static i64 sys_putc(registers_t *r) {
-    kputc((char)(r->rbx & 0xFF));
-    return 1;
+    char c = (char)(r->rbx & 0xFF);
+    return fd_write(FD_STDOUT, &c, 1);
 }
 
+/* This used to put the bytes on the screen itself. Now it puts them wherever
+ * this program's descriptor 1 points, which is the screen unless somebody
+ * arranged otherwise — and the somebody is a shell, between the fork and the
+ * exec, with the program none the wiser.
+ *
+ * Every program in the system writes through this call, so every program in
+ * the system became redirectable the moment this line changed, without one
+ * of them being recompiled to know about it. */
 static i64 sys_write(registers_t *r) {
     u64 buf = r->rcx;
     u64 len = r->rdx;
     if (len > 65536) return -1;
     if (!user_range_ok(buf, len)) return -1;
-    const char *p = (const char *)buf;
-    for (u32 i = 0; i < len; i++) kputc(p[i]);
-    return (i32)len;
+    return fd_write(FD_STDOUT, (const void *)buf, (u32)len);
 }
 
 static i64 sys_getpid(registers_t *r) {
@@ -315,29 +452,56 @@ static i64 sys_read_file(registers_t *r) {
 static i64 sys_open(registers_t *r) {
     char path[VFS_PATH_MAX];
     if (!copy_path(r->rbx, path, sizeof(path))) return -1;
-    return vfs_open(path, r->rcx);
+    return fd_open(path, r->rcx);
 }
 
 static i64 sys_close(registers_t *r) {
-    return vfs_close((int)r->rbx) ? 0 : -1;
+    return fd_close((int)r->rbx) ? 0 : -1;
 }
 
 static i64 sys_fread(registers_t *r) {
     u64 buf = r->rcx, len = r->rdx;
     if (len > 1024 * 1024) return -1;
     if (!user_range_ok(buf, len)) return -1;
-    return vfs_fd_read((int)r->rbx, (void *)buf, len);
+    return fd_read((int)r->rbx, (void *)buf, len);
 }
 
 static i64 sys_fwrite(registers_t *r) {
     u64 buf = r->rcx, len = r->rdx;
     if (len > 1024 * 1024) return -1;
     if (!user_range_ok(buf, len)) return -1;
-    return vfs_fd_write((int)r->rbx, (const void *)buf, len);
+    return fd_write((int)r->rbx, (const void *)buf, len);
+}
+
+/* --- duplicating a descriptor -------------------------------------------
+ *
+ * Redirection is this and nothing else. A shell forks, and in the child says
+ * dup2(file, 1): descriptor 1 now refers to the file, the old 1 is closed,
+ * and the program that follows writes to its output exactly as it always
+ * did. Nothing in the program knows, which is the entire point — `sort`
+ * would need a flag for every place its output could ever go, and instead
+ * it needs none. */
+static i64 sys_dup(registers_t *r) {
+    return fd_dup((int)r->rbx);
+}
+
+static i64 sys_dup2(registers_t *r) {
+    return fd_dup2((int)r->rbx, (int)r->rcx);
+}
+
+/* Hands back two numbers, into an array of two the caller owns. */
+static i64 sys_pipe(registers_t *r) {
+    if (!user_range_ok(r->rbx, sizeof(int) * 2)) return -1;
+    int ends[2];
+    if (!fd_pipe(ends)) return -1;
+    int *out = (int *)r->rbx;
+    out[0] = ends[0];
+    out[1] = ends[1];
+    return 0;
 }
 
 static i64 sys_seek(registers_t *r) {
-    return vfs_fd_seek((int)r->rbx, (i32)r->rcx, r->rdx);
+    return fd_seek((int)r->rbx, (i32)r->rcx, r->rdx);
 }
 
 static i64 sys_unlink(registers_t *r) {
@@ -700,6 +864,15 @@ static const syscall_fn TABLE[] = {
     [SYS_POWER]       = sys_power,
     [SYS_SPAWN_ARG]   = sys_spawn_arg,
     [SYS_GETARG]      = sys_getarg,
+    [SYS_SBRK]        = sys_sbrk,
+    [SYS_FORK]        = sys_fork,
+    [SYS_EXEC]        = sys_exec,
+    [SYS_GETPPID]     = sys_getppid,
+    [SYS_DUP]         = sys_dup,
+    [SYS_DUP2]        = sys_dup2,
+    [SYS_PIPE]        = sys_pipe,
+    [SYS_SIGNAL]      = sys_signal,
+    [SYS_SIGSEND]     = sys_sigsend,
 };
 
 #define N_SYSCALLS (sizeof(TABLE) / sizeof(TABLE[0]))

@@ -215,6 +215,85 @@ static void free_table(u64 *table, int level) {
     }
 }
 
+/* --- copying an address space --------------------------------------------
+ *
+ * What fork needs, and the only part of fork that is genuinely difficult.
+ *
+ * Every page the parent mapped for user code is copied, byte for byte, into
+ * a fresh frame, and the tables above it are rebuilt to point at the copies.
+ * Everything the space shares with the kernel is left shared: those entries
+ * are recognised the same way paging_free_directory recognises them, by the
+ * table address matching the kernel's.
+ *
+ * This is the eager version. The usual trick is to map both sides read only
+ * and copy a page when one of them writes to it, which is faster and is a
+ * page fault handler, a per frame reference count, and a whole class of bug
+ * about who owns what. Copying up front is slower by the size of the program
+ * and has none of that; a program here is a few hundred kilobytes.
+ */
+static bool copy_table(u64 *dst, const u64 *src, int level) {
+    for (u64 i = 0; i < ENTRIES; i++) {
+        u64 e = src[i];
+        if (!(e & PTE_PRESENT)) { dst[i] = 0; continue; }
+        if (e & PTE_HUGE) { dst[i] = e; continue; }
+
+        u64 below = e & PTE_ADDR_MASK;
+
+        if (level > 1) {
+            u64 fresh = pmm_alloc_frame();
+            if (!fresh) return false;
+            memset((void *)fresh, 0, PAGE_SIZE);
+            if (!copy_table((u64 *)fresh, (const u64 *)below, level - 1))
+                return false;
+            dst[i] = fresh | (e & 0xFFF);
+            continue;
+        }
+
+        if (!(e & PTE_USER)) { dst[i] = e; continue; }
+
+        u64 fresh = pmm_alloc_frame();
+        if (!fresh) return false;
+        memcpy((void *)fresh, (const void *)below, PAGE_SIZE);
+        dst[i] = fresh | (e & 0xFFF);
+    }
+    return true;
+}
+
+u64 paging_clone_directory(u64 src_phys) {
+    if (!src_phys) return 0;
+    const u64 *src = (const u64 *)src_phys;
+
+    u64 fresh = paging_new_directory();
+    if (!fresh) return 0;
+    u64 *dst = (u64 *)fresh;
+
+    for (u64 i = 0; i < ENTRIES; i++) {
+        u64 e = src[i];
+        if (!(e & PTE_PRESENT)) continue;
+
+        /* Shared with the kernel: paging_new_directory already put it
+           there, and copying it would give this space its own copy of the
+           kernel, which is both wasteful and wrong. */
+        if ((kernel_pml4[i] & PTE_PRESENT)
+            && (e & PTE_ADDR_MASK) == (kernel_pml4[i] & PTE_ADDR_MASK)) {
+            dst[i] = e;
+            continue;
+        }
+
+        u64 table = pmm_alloc_frame();
+        if (!table) { paging_free_directory(fresh); return 0; }
+        memset((void *)table, 0, PAGE_SIZE);
+        if (!copy_table((u64 *)table, (const u64 *)(e & PTE_ADDR_MASK), 3)) {
+            free_table((u64 *)table, 3);
+            pmm_free_frame(table);
+            paging_free_directory(fresh);
+            return 0;
+        }
+        dst[i] = table | (e & 0xFFF);
+    }
+    return fresh;
+}
+
 void paging_free_directory(u64 pml4_phys) {
     if (!pml4_phys || (u64 *)pml4_phys == kernel_pml4) return;
     u64 *pml4 = (u64 *)pml4_phys;

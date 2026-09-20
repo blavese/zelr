@@ -4,6 +4,8 @@
  * interrupt frame sitting on that stack, so switching tasks is just a matter
  * of telling the interrupt return path to unwind a different one. */
 #include "sched.h"
+#include "fd.h"
+#include "signal.h"
 #include "winsrv.h"
 #include "vfs.h"
 #include "syscall.h"
@@ -15,6 +17,7 @@
 #include "gdt.h"
 #include "io.h"
 #include "paging.h"
+#include "fpu.h"
 
 #define STACK_SIZE TASK_STACK_SIZE
 
@@ -36,6 +39,14 @@
 static void paint_stack(u8 *stack) {
     u64 *w = (u64 *)stack;
     for (u32 i = 0; i < STACK_SIZE / 8; i++) w[i] = STACK_PAINT;
+}
+
+/* Where this task's FXSAVE area actually starts. The record came off a heap
+   that aligns to eight and the instruction needs sixteen, so the area is
+   over-allocated and the aligned address inside it is used. */
+static inline u8 *fpu_area_of(task_t *t) {
+    u64 a = (u64)t->fpu;
+    return (u8 *)((a + 15) & ~(u64)15);
 }
 
 /* Bytes at the bottom that have never been written. A task that has used
@@ -80,7 +91,12 @@ task_t *task_create(const char *name, void (*entry)(void)) {
     t->pid = next_pid++;
     strncpy(t->name, name, sizeof(t->name) - 1);
     t->state = TASK_READY;
+    fpu_blank(fpu_area_of(t));
     inherit_cwd(t);
+    /* Started rather than forked, so it gets the three it is born with
+       and nothing else. Inheriting would mean a program handing its
+       open files to something it merely launched. */
+    fd_table_init(t->fd);
 
     /* Build the frame an interrupt return expects to find. Long mode always
        pops rsp and ss, even returning to the same privilege level, so unlike
@@ -107,6 +123,75 @@ task_t *task_create(const char *name, void (*entry)(void)) {
     return t;
 }
 
+/* A task that is a copy of the one calling, which is what fork means.
+ *
+ * The address space is copied by the caller and handed in; what happens here
+ * is the other half, and it is all about the frame. A task that is not
+ * running has a complete interrupt frame on its kernel stack, and returning
+ * to it is the interrupt return path unwinding that frame. So a forked child
+ * is a frame copied from the parent's, with one register changed: the one
+ * the system call's answer comes back in.
+ *
+ * That is the whole of the trick, and it is why both sides come back from
+ * the same call with different answers.
+ */
+task_t *task_fork(const char *name, u64 dir, const registers_t *frame,
+                  u64 child_rax) {
+    task_t *parent = task_current();
+
+    task_t *t = (task_t *)kcalloc(sizeof(task_t));
+    if (!t) return 0;
+    u8 *stack = (u8 *)kmalloc(STACK_SIZE);
+    if (!stack) { kfree(t); return 0; }
+    paint_stack(stack);
+
+    t->stack_base = (u64)stack;
+    t->pid = next_pid++;
+    strncpy(t->name, name, sizeof(t->name) - 1);
+    t->state = TASK_READY;
+    t->dir = dir;
+    t->user = true;
+
+    /* Everything the parent had that is not memory: where it was in the
+       filesystem, what it was told at startup, how far its heap had grown,
+       and the contents of its floating point registers. A child that did
+       not inherit the heap break would hand out addresses the parent had
+       already given away. */
+    if (parent) {
+        for (u32 i = 0; i < sizeof(t->cwd); i++) t->cwd[i] = parent->cwd[i];
+        for (u32 i = 0; i < sizeof(t->arg); i++) t->arg[i] = parent->arg[i];
+        t->brk = parent->brk;
+        t->brk_base = parent->brk_base;
+        t->parent_pid = parent->pid;
+        for (u32 i = 0; i < FPU_AREA + 16; i++) t->fpu[i] = parent->fpu[i];
+    } else {
+        fpu_blank(fpu_area_of(t));
+        strncpy(t->cwd, "/", TASK_CWD_MAX - 1);
+    }
+
+    /* The descriptors come across too, and this is not a detail: it
+       is how a shell arranges a child's output. The child is handed
+       the parent's table, changes one entry, and becomes a program
+       that knows nothing about any of it. */
+    if (parent) fd_table_clone(t->fd, parent->fd);
+    else fd_table_init(t->fd);
+
+    u64 top = ((u64)stack + STACK_SIZE) & ~0xFull;
+    registers_t *f = (registers_t *)(top - sizeof(registers_t));
+    *f = *frame;
+    f->rax = child_rax;
+    t->rsp = (u64)f;
+
+    if (!head) { head = t; t->next = t; }
+    else {
+        task_t *p = head;
+        while (p->next != head) p = p->next;
+        p->next = t;
+        t->next = head;
+    }
+    return t;
+}
+
 task_t *task_create_user(const char *name, u64 dir, u64 entry, u64 stack_top) {
     task_t *t = (task_t *)kcalloc(sizeof(task_t));
     if (!t) return 0;
@@ -120,7 +205,12 @@ task_t *task_create_user(const char *name, u64 dir, u64 entry, u64 stack_top) {
     t->state = TASK_READY;
     t->dir = dir;
     t->user = true;
+    fpu_blank(fpu_area_of(t));
     inherit_cwd(t);
+    /* Started rather than forked, so it gets the three it is born with
+       and nothing else. Inheriting would mean a program handing its
+       open files to something it merely launched. */
+    fd_table_init(t->fd);
 
     /* The privilege change is what makes this frame different: the selectors
        carry a requested privilege of 3, and the stack it returns to is the
@@ -230,8 +320,18 @@ static task_t *pick_next(task_t *from) {
 u64 scheduler_switch(u64 rsp) {
     if (!started || !head) return rsp;
 
+    /* Anything raised since the last time through, acted on before anything
+       is chosen to run. A task that has been interrupted should not get
+       another slice first. */
+    signal_take_pending();
+
     if (current) {
         current->rsp = rsp;
+
+        /* The vector registers belong to whoever was running. Two tasks
+           doing arithmetic at once read each other's operands without
+           this, and the symptom is a wrong number rather than a crash. */
+        fpu_save(fpu_area_of(current));
 
         /* Checked here because this is the one place every task passes
            through, and because the alternative is finding out from a fault
@@ -251,6 +351,7 @@ u64 scheduler_switch(u64 rsp) {
     current = next;
     current->state = TASK_RUNNING;
     current->slices++;
+    fpu_restore(fpu_area_of(current));
 
     /* The next interrupt taken in this task has to land on a stack the CPU
        can find, and in user mode it finds it here. */
@@ -340,7 +441,7 @@ void task_exit_with(int status) {
        crashes must not leave its window on the desktop. */
     if (current) {
         winsrv_release(current->pid);
-        vfs_release(current->pid);
+        fd_table_release(current->fd);
         syscall_release(current->pid);
 
         current->exit_status = status;

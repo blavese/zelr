@@ -215,11 +215,11 @@ static void point_to_cell(int x, int y, int *line, int *col) {
     int start = end - text_rows;
     if (start < 0) start = 0;
 
-    int row = (y - PAD) / FONT_H;
+    int row = (y - PAD) / MONO_H;
     if (row < 0) row = 0;
     if (row >= text_rows) row = text_rows - 1;
 
-    int c = (x - PAD) / FONT_W;
+    int c = (x - PAD) / MONO_W;
     if (c < 0) c = 0;
     if (c > cols) c = cols;
 
@@ -316,45 +316,46 @@ static void draw_all(void) {
                 if (to > len) to = len;
                 if (from > to) from = to;
                 if (to > from)
-                    rect(&scr, PAD + from * FONT_W, y,
-                         (to - from) * FONT_W, FONT_H, mix(pal.bg, pal.accent, 120));
+                    rect(&scr, PAD + from * MONO_W, y,
+                         (to - from) * MONO_W, MONO_H, mix(pal.bg, pal.accent, 120));
             }
         }
-        text(&scr, PAD, y, line_at(i), colour_of(*slot_at(i)));
-        y += FONT_H;
+        face_draw(&scr, PAD, y, line_at(i), colour_of(*slot_at(i)),
+                  UI_FACE_MONO);
+        y += MONO_H;
     }
 
     /* The prompt sits on the bottom row, always visible. */
-    int py = PAD + text_rows * FONT_H;
+    int py = PAD + text_rows * MONO_H;
     rect(&scr, 0, py - 3, scr.w, 1, pal.dim);
 
     char cwd[128];
     if (getcwd(cwd, sizeof(cwd)) < 0) strcpy(cwd, "/");
-    text(&scr, PAD, py, cwd, pal.accent);
-    int x = PAD + (strlen(cwd) + 1) * FONT_W;
-    text(&scr, x, py, "> ", pal.dim);
-    x += 2 * FONT_W;
-    text(&scr, x, py, input, pal.fg);
+    face_draw(&scr, PAD, py, cwd, pal.accent, UI_FACE_MONO);
+    int x = PAD + (strlen(cwd) + 1) * MONO_W;
+    face_draw(&scr, x, py, "> ", pal.dim, UI_FACE_MONO);
+    x += 2 * MONO_W;
+    face_draw(&scr, x, py, input, pal.fg, UI_FACE_MONO);
 
     /* A block cursor sitting on the character it is in front of, so editing
        in the middle of a line is visible rather than guessed at. */
     if (view == 0 && (blink / 12) % 2 == 0) {
-        int cx = x + in_pos * FONT_W;
+        int cx = x + in_pos * MONO_W;
         if (in_pos < in_len) {
-            rect(&scr, cx, py, FONT_W, FONT_H, pal.cursor);
+            rect(&scr, cx, py, MONO_W, MONO_H, pal.cursor);
             char one[2] = { input[in_pos], 0 };
-            text(&scr, cx, py, one, pal.bg);
+            face_draw(&scr, cx, py, one, pal.bg, UI_FACE_MONO);
         } else {
-            rect(&scr, cx, py, 2, FONT_H, pal.cursor);
+            rect(&scr, cx, py, 2, MONO_H, pal.cursor);
         }
     }
 
     if (view > 0) {
         w_reset();
         w_str(" "); w_num((u32)view); w_str(" lines back, End returns ");
-        int tw = strlen(work) * FONT_W;
-        rect(&scr, scr.w - tw - PAD, PAD - 2, tw, FONT_H + 2, pal.dim);
-        text(&scr, scr.w - tw - PAD, PAD, work, pal.bg);
+        int tw = strlen(work) * MONO_W;
+        rect(&scr, scr.w - tw - PAD, PAD - 2, tw, MONO_H + 2, pal.dim);
+        face_draw(&scr, scr.w - tw - PAD, PAD, work, pal.bg, UI_FACE_MONO);
     }
 }
 
@@ -1678,8 +1679,8 @@ __attribute__((section(".text._start"))) void _start(void) {
 /* Works out how much text the window holds now. Called at startup and
    again every time the desktop hands over a different size. */
 static void fit_to_window(void) {
-    cols = (scr.w - PAD * 2) / FONT_W;
-    rows = (scr.h - PAD * 2) / FONT_H;
+    cols = (scr.w - PAD * 2) / MONO_W;
+    rows = (scr.h - PAD * 2) / MONO_H;
     if (cols > COLS) cols = COLS;
     if (cols < 8) cols = 8;
     if (rows < 2) rows = 2;

@@ -85,6 +85,10 @@ feed() {
   sleep 1.5
   type_line "echo done testing"
   sleep 2.5
+  # Stops the machine, so this ends when the typing is done rather
+  # than ninety seconds later.
+  type_line "reboot"
+  sleep 1
 }
 
 feed | run_with_timeout 90 "$QEMU" -kernel build/zelr.bin -m 64 -no-reboot -display none -serial stdio -append console > "$OUT" 2>&1 || true

@@ -29,9 +29,17 @@
  * that did not exist. */
 static int preset = 1;
 static int light = 1;
-static int wallpaper = 3;
-static int corner = 0;
-static int shadows = 0;
+
+/* Zero is the modern look, one is the built one. The same default the kernel
+   has, and it has to stay the same: the note above is about exactly this,
+   and adding a setting the kernel knew about and this did not would have
+   reintroduced it. Saving anything at all from this window writes the whole
+   file, so a key missing here is a key deleted from the machine. */
+static int look = 0;
+
+static int wallpaper = 11;     /* bloom */
+static int corner = 10;
+static int shadows = 1;
 static int animate = 1;
 static int quirks = 1;
 static int autodesktop = 1;
@@ -153,11 +161,11 @@ static const char *const PRESET_NAMES[UI_PRESETS] = {
     "Teal", "Indigo", "Amber", "Rose", "Slate", "Lime"
 };
 
-#define N_WALLPAPERS 11
+#define N_WALLPAPERS 12
 #define WALLPAPER_COLS 4
 static const char *const WALLPAPERS[N_WALLPAPERS] = {
     "Plain", "Grid", "Dots", "Gradient", "Stars", "Waves", "Weave",
-    "Aurora", "Rain", "Orbs", "Pulse"
+    "Aurora", "Rain", "Orbs", "Pulse", "Bloom"
 };
 
 static const int CORNERS[4] = { 0, 4, 8, 14 };
@@ -183,6 +191,7 @@ static void load(void) {
        the first changed nothing at all. */
     preset    = ui_cfg_int(buf, "preset", preset);
     light     = ui_cfg_int(buf, "light", light);
+    look      = ui_cfg_int(buf, "look", look);
     wallpaper = ui_cfg_int(buf, "wallpaper", wallpaper);
     corner    = ui_cfg_int(buf, "corner", corner);
     shadows   = ui_cfg_int(buf, "shadows", shadows);
@@ -193,7 +202,7 @@ static void load(void) {
     scr_h     = ui_cfg_int(buf, "height", scr_h);
 
     if (preset < 0 || preset >= UI_PRESETS) preset = 1;
-    if (wallpaper < 0 || wallpaper >= N_WALLPAPERS) wallpaper = 3;
+    if (wallpaper < 0 || wallpaper >= N_WALLPAPERS) wallpaper = 11;
 }
 
 static int put_kv(char *out, int at, const char *key, int value) {
@@ -212,6 +221,7 @@ static void save(void) {
     int n = 0;
     n = put_kv(out, n, "preset", preset);
     n = put_kv(out, n, "light", light);
+    n = put_kv(out, n, "look", look);
     n = put_kv(out, n, "wallpaper", wallpaper);
     n = put_kv(out, n, "corner", corner);
     n = put_kv(out, n, "shadows", shadows);
@@ -234,9 +244,10 @@ static void save(void) {
 static void reset_everything(void) {
     preset = 1;
     light = 1;
-    wallpaper = 3;
-    corner = 0;
-    shadows = 0;
+    look = 0;
+    wallpaper = 11;
+    corner = 10;
+    shadows = 1;
     animate = 1;
     quirks = 1;
     autodesktop = 1;
@@ -276,6 +287,28 @@ static int page_appearance(surface *s, ui_input *in, ui_theme *t, int x, int y, 
     }
     ui_dim_label(s, t, x + UI_PRESETS * 46 + UI_GAP, y + 10, PRESET_NAMES[preset]);
     y += 34 + UI_PAD * 2;
+
+    y = ui_section(s, t, x, y, w, "Look");
+    {
+        static const char *const LOOKS[2] = { "Modern", "Built" };
+        for (int i = 0; i < 2; i++) {
+            if (ui_button(s, in, t, x + i * 108, y, 102, LOOKS[i])) {
+                look = i;
+                /* The two looks want different corners and different
+                   shadows, and leaving the old ones behind gives a modern
+                   desktop with square windows or a built one with a drop
+                   shadow on top of every bevel. Someone who wants square
+                   modern windows can still say so afterwards; what this
+                   avoids is landing there without asking. */
+                corner  = i ? 0 : 10;
+                shadows = i ? 0 : 1;
+                save();
+            }
+            if (i == look) rect(s, x + i * 108, y + UI_BTN_H - 2, 102, 2,
+                                t->accent);
+        }
+    }
+    y += UI_BTN_H + UI_PAD * 2;
 
     y = ui_section(s, t, x, y, w, "Mode");
     int was = light;

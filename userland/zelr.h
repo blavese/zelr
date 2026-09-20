@@ -76,6 +76,51 @@ typedef long long          zelr_word;
 /* The same socket, encrypted. See connect_tls below. */
 #define SYS_TLS_CONNECT   45
 #define SYS_TLS_STATUS    46
+
+/* Moves this program's heap break and returns where it was.
+ *
+   The one call that makes an allocator possible up here. Everything in ring
+   3 was fixed arrays before it: a program decided at compile time how big
+   the largest thing it would ever handle was, and the browser's limit on
+   the size of a page was a number in a header rather than a property of
+   the machine. */
+#define SYS_SBRK          47
+
+/* --- processes, the way Unix means the word ------------------------------
+ *
+ * Starting a program was one call: hand over a path, get a pid. That is a
+ * spawn, and it is a fine thing to have, but it is not what a shell is built
+ * out of. A shell needs to make a copy of itself, change something in the
+ * copy, and only then become the new program, because everything it wants to
+ * set up first — where the output goes, what the working directory is —
+ * belongs to the child and must not touch the parent.
+ *
+ * So: fork makes the copy and returns twice, zero in the child and the
+ * child's pid in the parent. exec replaces the program running in the
+ * calling process without making a new one. getppid says who forked you. */
+#define SYS_FORK          48
+#define SYS_EXEC          49
+#define SYS_GETPPID       50
+
+/* --- descriptors -------------------------------------------------------
+ *
+ * A program's open files are numbered per program now, 0 in for input, 1 out
+ * and 2 for errors, and these three calls are what a shell does with them.
+ * dup2 is redirection; pipe is the other half of a pipeline. Neither is
+ * interesting on its own: what makes them worth having is that they happen
+ * between a fork and an exec, so the program being run never learns that its
+ * output is not the screen. */
+#define SYS_DUP           51
+#define SYS_DUP2          52
+#define SYS_PIPE          53
+
+/* --- signals -----------------------------------------------------------
+ *
+ * SYS_SIGNAL says what this program wants done with one; SYS_SIGSEND raises
+ * one against another program. There are three signals and no handlers; see
+ * include/signal.h, which says what that leaves out and why. */
+#define SYS_SIGNAL        54
+#define SYS_SIGSEND       55
 #define TLS_WHY   0
 #define TLS_WHAT  1
 
@@ -364,6 +409,69 @@ static inline int spawn_arg(const char *path, const char *arg) {
 }
 
 /* What this program was started on, or an empty string. */
+/* Moves the heap break and returns where it was, which is the address of
+   whatever was just handed out. See alloc.h, which is the only thing that
+   should be calling this: two allocators sharing one break would each
+   believe they owned what the other handed out. */
+/* Makes a copy of this process. Returns 0 in the copy, the copy's pid in
+   the original, and -1 when it could not.
+ *
+   Both sides come back from this same line. That is the whole of it and it
+   is the thing that takes a moment to believe the first time. */
+static inline int fork(void) {
+    return (int)syscall(SYS_FORK, 0, 0, 0);
+}
+
+/* Replaces the program running in this process. Returns only on failure,
+   because on success there is nothing left to return to. */
+static inline int exec(const char *path, const char *arg) {
+    return (int)syscall(SYS_EXEC, (zelr_word)path, (zelr_word)arg, 0);
+}
+
+static inline int getppid(void) {
+    return (int)syscall(SYS_GETPPID, 0, 0, 0);
+}
+
+/* --- signals -------------------------------------------------------------
+ *
+ * Three of them, and no handlers: a program can have one ignored or take
+ * what it does by default, which for all three is that it ends. A shell
+ * ignores SIGINT so that ctrl-C reaches the program it started rather than
+ * the shell waiting for it. */
+#define SIGINT   2
+#define SIGKILL  9
+#define SIGTERM 15
+
+#define SIG_DFL 0
+#define SIG_IGN 1
+
+static inline int signal(int sig, int how) {
+    return (int)syscall(SYS_SIGNAL, sig, how, 0);
+}
+
+/* Raises one against another program. KILL cannot be ignored. */
+static inline int send_signal(int pid, int sig) {
+    return (int)syscall(SYS_SIGSEND, pid, sig, 0);
+}
+
+/* The lowest free descriptor, referring to the same open file as `fd`. */
+static inline int dup(int fd) { return (int)syscall(SYS_DUP, fd, 0, 0); }
+
+/* Makes `to` refer to what `fd` refers to, closing whatever `to` was. This
+   is how output is redirected: dup2(f, 1) in a freshly forked child. */
+static inline int dup2(int fd, int to) {
+    return (int)syscall(SYS_DUP2, fd, to, 0);
+}
+
+/* A pipe, as two descriptors: ends[0] is read from, ends[1] written to. */
+static inline int pipe(int ends[2]) {
+    return (int)syscall(SYS_PIPE, (zelr_word)ends, 0, 0);
+}
+
+static inline void *sbrk(i64 delta) {
+    return (void *)syscall(SYS_SBRK, (zelr_word)delta, 0, 0);
+}
+
 static inline int getarg(char *out, int cap) {
     return syscall(SYS_GETARG, (zelr_word)out, (zelr_word)cap, 0);
 }

@@ -22,8 +22,27 @@ typedef enum {
     WALLPAPER_RAIN,
     WALLPAPER_ORBS,
     WALLPAPER_PULSE,
+    WALLPAPER_BLOOM,        /* deep colour with soft lights in it */
     WALLPAPER_COUNT
 } wallpaper_t;
+
+/* Two ways of saying the same things about a surface.
+ *
+ * BUILT is chrome made out of edges: a lit side, a shaded side, and a hard
+ * line where one surface meets the next. It is how a desktop said "this is
+ * raised" when it could not afford to say it any other way, and it is exact
+ * and legible and this project drew all of it.
+ *
+ * MODERN is chrome made out of material: a soft corner, a hairline, a pane
+ * that lets what is behind it through, and light as a sheen across the top
+ * rather than a line down one side.
+ *
+ * Neither is more correct. They are different centuries, and both are here
+ * because somebody should be able to have the one they want. */
+typedef enum {
+    LOOK_MODERN = 0,
+    LOOK_BUILT
+} look_t;
 
 /* True for a wallpaper that has to be redrawn to look right, which is what
    tells the window manager to keep painting when nothing else has changed. */
@@ -72,6 +91,15 @@ typedef struct {
     u32 edge_dark;       /* the outer shaded edge, nearly black */
     u32 well;            /* the ground inside something sunk: a field, a list */
 
+    /* --- material --------------------------------------------------
+     *
+     * What a pane is made of when the look is MODERN. `glass` is what a
+     * floating panel is tinted with before the wallpaper is let through
+     * it; `stroke` is the hairline around such a panel, which is what
+     * separates it from what is behind it now that no bevel does. */
+    u32 glass;
+    u32 stroke;
+
     /* A title bar is a gradient rather than a fill, which is most of what
      * separates chrome that looks built from chrome that looks printed. */
     u32 title_a, title_b, title_fg;
@@ -83,6 +111,7 @@ typedef struct {
        which of the two it is looking at. */
     bool light;
 
+    look_t look;
     wallpaper_t wallpaper;
     int  corner;         /* window corner radius, 0 for square */
     bool shadows;

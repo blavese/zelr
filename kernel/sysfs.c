@@ -35,7 +35,7 @@
 
 /* --- built-in programs, which are what /bin holds ----------------------- */
 
-#define MAX_PROGRAMS 16
+#define MAX_PROGRAMS SYSFS_MAX_PROGRAMS
 
 typedef struct {
     const char *name;

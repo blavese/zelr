@@ -132,6 +132,47 @@ def count_in(px, w, rect, rgb):
     return n
 
 
+def count_near(px, w, rect, rgb, tol=8):
+    """How many pixels inside this rectangle are within `tol` of this colour.
+
+    For surfaces that do not have one colour. A pane that is tinted glass
+    over a wallpaper takes a little of whatever is behind it, so it comes out
+    a shade different in one place from another and an exact count of it
+    finds almost nothing. The tolerance is what turns "this colour" into
+    "this surface", and it wants to be smaller than the step between the
+    surfaces being told apart.
+    """
+    left, top, right, bottom = rect
+    r, g, b = rgb
+    n = 0
+    for y in range(top, bottom):
+        row = y * w * 3
+        for x in range(left, right):
+            o = row + x * 3
+            if (abs(px[o] - r) <= tol and abs(px[o + 1] - g) <= tol
+                    and abs(px[o + 2] - b) <= tol):
+                n += 1
+    return n
+
+
+def row_mean(px, w, y, left, right):
+    """The average colour of one row, between two columns."""
+    r = g = b = 0
+    row = y * w * 3
+    for x in range(left, right):
+        o = row + x * 3
+        r += px[o]
+        g += px[o + 1]
+        b += px[o + 2]
+    n = max(1, right - left)
+    return (r // n, g // n, b // n)
+
+
+def colour_gap(a, b):
+    """How far apart two colours are, added up across the channels."""
+    return abs(a[0] - b[0]) + abs(a[1] - b[1]) + abs(a[2] - b[2])
+
+
 def centre_of(px, w, h, rgb, min_pixels=200, within=None):
     """Where a block of one colour is, as (x, y) of its middle.
 

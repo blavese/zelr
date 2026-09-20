@@ -21,8 +21,8 @@ import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from harness import (Guest, Checks, build_once, count_in, _count,
-                     ROOT)      # noqa: E402
+from harness import (Guest, Checks, build_once, count_in, count_near,
+                     row_mean, colour_gap, _count, ROOT)      # noqa: E402
 
 DISK = os.path.join(ROOT, "deskcheck.%d.img" % os.getpid())
 
@@ -36,10 +36,12 @@ MENU_BRAND = 26          # the strip down its left, which is not a row
 MENU_ENTRIES = 13        # the launcher's entries, which set its height
 MENU_TOP = (SCREEN_H - TASKBAR_H - TASKBAR_GAP
             - (MENU_ENTRIES * MENU_ITEM + MENU_PAD * 2) - 2)
-# The surface everything on this desktop is built out of. There is no
-# separate floating layer any more: a menu and a panel are the same grey as
-# a window, and what says they are above it is the bevel round the edge.
-MENU_PANEL = (0xD6, 0xD3, 0xCD)
+# The surface a menu is drawn on. Nearly the window surface, lifted a
+# little, and laid down at an alpha of 250 out of 255 — so a trace of the
+# wallpaper comes through it and an exact count finds fewer pixels than are
+# there. Every count of it goes through count_near for that reason.
+MENU_PANEL = (0xF4, 0xF4, 0xF7)
+MENU_TOL = 6
 
 # The terminal as it opens, and the frame around it. Written out the way
 # wm.c writes it rather than as four numbers that happened to be right: the
@@ -93,14 +95,6 @@ LAUNCHER = (40, SCREEN_H - TASKBAR_H - TASKBAR_GAP + 17)
 # the bottom edge, so counting its own colour in this band says which of the
 # two is happening without reading anything.
 PANEL_Y = SCREEN_H - TASKBAR_H - TASKBAR_GAP
-# Stopping short of the very bottom, because a window and the panel are now
-# the same grey: what says one is above the other is the bevel round it, not
-# its colour. A window filling the screen puts its own bottom border in this
-# band, and four pixels across the width of the screen is four thousand of
-# them, which read as a panel that had not tucked itself away at all.
-PANEL_BAND = (TASKBAR_GAP, PANEL_Y, SCREEN_W - TASKBAR_GAP,
-              PANEL_Y + TASKBAR_H - 6)
-PANEL = MENU_PANEL                     # the floating layer, same colour
 
 # The apps kept on the panel: the badge, then an icon every 30 pixels. The
 # terminal is the first of them, and since a running program whose app is
@@ -119,6 +113,49 @@ PINS_N = 6
 LAST_PIN_ENTRY = 8          # Browser
 PIN_STEP = 30
 TASKBAR_CHIP = (PINS_X + 11, PANEL_Y + 15)
+
+
+def panel_showing(px, w, h):
+    """True when the panel is across the bottom of the screen.
+
+    It used to be enough to count the panel's own grey in the bottom band.
+    The panel is not one colour any more: it is tinted glass over whatever
+    wallpaper is behind it, so its colour changes along its own length and
+    changes again when somebody picks a different background.
+
+    What stays true whatever it is made of is that it is a band of its own.
+    A row inside it does not look like a row of what is just above it —
+    light over a dark desktop, light over a dark terminal page. When it has
+    tucked itself away, the two rows are the same thing and the difference
+    collapses. So the check is the difference rather than the colour, and it
+    survives a theme nobody has thought of yet.
+
+    Away from the badge on the left, the pinned icons next to it and the
+    clock on the right, all of which are their own colours whether the panel
+    is there or not.
+    """
+    left, right = 300, w - 220
+    if right <= left:
+        return False
+    inside = row_mean(px, w, h - 6, left, right)
+    above = row_mean(px, w, h - TASKBAR_H - 10, left, right)
+    return colour_gap(inside, above) > 60
+
+
+def slot_empty(px, w, i):
+    """True when nothing is pinned in this slot.
+
+    An empty slot shows the panel through it, and the panel has no fixed
+    colour, so what it is compared against is the panel directly below the
+    same slot: the same glass over almost the same wallpaper, a few pixels
+    down and clear of the icon. A slot with an app in it is that app's own
+    colour and nothing like it.
+    """
+    x = PINS_X + i * PIN_STEP + 4
+    ink = icon_ink(px, w, i)
+    o = ((PANEL_Y + TASKBAR_H - 3) * w + x) * 3
+    behind = tuple(px[o:o + 3])
+    return colour_gap(ink, behind) < 24
 
 
 def icon_at(i):
@@ -302,20 +339,20 @@ def main():
         c.add("and the program redrew into the space it was given",
               count_in(px, w, strip, PAGE) > 20000, shot)
         c.add("the panel tucks itself out of the way",
-              count_in(px, w, PANEL_BAND, PANEL) < 500, shot)
+              not panel_showing(px, w, h), shot)
 
         # And comes back for the pointer, over the window rather than
         # beside it, then goes again when the pointer leaves.
         mon.move_to(600, SCREEN_H - 1)
         w, h, px, shot, up = mon.wait_screen(
             "desk-panel-back",
-            lambda w, h, px: count_in(px, w, PANEL_BAND, PANEL) > 15000)
+            lambda w, h, px: panel_showing(px, w, h))
         c.add("and comes back when the pointer reaches the bottom", up, shot)
 
         mon.move_to(500, 300)
         w, h, px, shot, gone = mon.wait_screen(
             "desk-panel-away",
-            lambda w, h, px: count_in(px, w, PANEL_BAND, PANEL) < 500)
+            lambda w, h, px: not panel_showing(px, w, h))
         c.add("and goes again when the pointer leaves it", gone, shot)
 
         # --- restore --------------------------------------------------------
@@ -409,7 +446,8 @@ def main():
         mon.click(*LAUNCHER)
         _, _, _, _, up = mon.wait_screen(
             "desk-menu",
-            lambda w, h, px: count_in(px, w, LAUNCHER_RECT, MENU_PANEL) > 8000)
+            lambda w, h, px: count_near(px, w, LAUNCHER_RECT, MENU_PANEL,
+                                        MENU_TOL) > 8000)
         c.add("the launcher menu opens where it is expected", up)
 
         # Paint, the fourth entry, worked out from where the menu is rather
@@ -486,12 +524,9 @@ def main():
 
         # And the desktop is laid out for it rather than still drawn for the
         # old one: the panel is where the bottom of this screen is.
-        band = (TASKBAR_GAP, 600 - TASKBAR_H - TASKBAR_GAP,
-                800 - TASKBAR_GAP, 600 - TASKBAR_GAP)
         _, _, _, shot, moved = mon.wait_screen(
             "desk-800-panel",
-            lambda w, h, px: (w == 800
-                              and count_in(px, w, band, PANEL) > 8000),
+            lambda w, h, px: w == 800 and panel_showing(px, w, h),
             timeout=30)
         c.add("and the panel is at the bottom of the new one", moved, shot)
 
@@ -515,7 +550,8 @@ def main():
             "desk-pins", lambda w, h, px: True)
         before = [icon_ink(px, w, i) for i in range(PINS_N)]
         c.add("the taskbar starts with the apps the machine ships",
-              len(set(before)) >= 3 and all(p != PANEL for p in before), shot)
+              len(set(before)) >= 3
+              and not any(slot_empty(px, w, i) for i in range(PINS_N)), shot)
 
         # The first one dragged two places along. The two it passes move up
         # to make room, so what lands where is known exactly.
@@ -536,7 +572,7 @@ def main():
         right_click(mon, *icon_at(last))
         w, h, px, shot, dropped = mon.wait_screen(
             "desk-pin-off",
-            lambda w, h, px: icon_ink(px, w, last) == PANEL)
+            lambda w, h, px: slot_empty(px, w, last))
         c.add("and the right button takes one off it", dropped, shot)
 
         # And back on, from the launcher, with the same button. The same app
@@ -545,13 +581,14 @@ def main():
         mon.click(*LAUNCHER)
         mon.wait_screen(
             "desk-menu-2",
-            lambda w, h, px: count_in(px, w, LAUNCHER_RECT, MENU_PANEL) > 8000)
+            lambda w, h, px: count_near(px, w, LAUNCHER_RECT, MENU_PANEL,
+                                        MENU_TOL) > 8000)
         right_click(mon, MENU_BRAND + 40,
                     MENU_TOP + MENU_PAD + LAST_PIN_ENTRY * MENU_ITEM
                     + MENU_ITEM // 2)
         w, h, px, shot, backon = mon.wait_screen(
             "desk-pin-on",
-            lambda w, h, px: icon_ink(px, w, last) != PANEL)
+            lambda w, h, px: not slot_empty(px, w, last))
         c.add("and an app from the launcher can be put back on", backon, shot)
 
     finally:
@@ -572,7 +609,7 @@ def main():
         mon = auto.monitor()
         _, _, _, shot, up = mon.wait_screen(
             "desk-auto",
-            lambda w, h, px: count_in(px, w, PANEL_BAND, PANEL) > 15000,
+            lambda w, h, px: panel_showing(px, w, h),
             timeout=90)
         c.add("a machine nobody told opens the desktop by itself", up, shot)
 
@@ -603,12 +640,9 @@ def main():
             lambda w, h, px: w == 1920 and h == 1080, timeout=60)
         c.add("a screen twice the size is the size it was asked for", big, shot)
 
-        band = (TASKBAR_GAP, 1080 - TASKBAR_H - TASKBAR_GAP,
-                1920 - TASKBAR_GAP, 1080 - TASKBAR_GAP)
         _, _, _, shot, laid = mon.wait_screen(
             "desk-1920-panel",
-            lambda w, h, px: (w == 1920
-                              and count_in(px, w, band, PANEL) > 30000),
+            lambda w, h, px: w == 1920 and panel_showing(px, w, h),
             timeout=30)
         c.add("and the desktop is laid out across all of it", laid, shot)
     finally:

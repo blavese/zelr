@@ -60,9 +60,11 @@ Every one of those was photographed by `tools/shots.py`, which boots the
 machine, drives it, and saves what came out. They are not mockups and they do
 not go stale quietly.
 
-It is not a clone of anything. About 33,500 lines in all, of which 3,700 are
-generated font data: roughly 19,600 hand-written lines of kernel, bootloaders
-and headers, 5,500 of ring 3 programs, 5,500 of build and test tooling. No
+It is not a clone of anything. About 96,000 lines in all, of which 40,500 are
+generated data that nobody types: the font coverage, the root certificate
+store, the typeface at every size a browser might ask for. What is left is
+roughly 33,300 hand-written lines of kernel, bootloaders and headers, 10,700
+of ring 3 programs, and 10,500 of build and test tooling. No
 libc, no runtime dependencies, and nothing borrowed from another kernel:
 every driver, the filesystem, the bootloader, the image writer and the font
 are written here, from the specifications where there is one and from scratch
@@ -456,13 +458,50 @@ a single-connection TCP client with a three way handshake, orderly close, and
 retransmission with exponential backoff. `fetch` uses all of it to do an
 HTTP GET.
 
-**The font.** Ninety-five glyphs on an 8 by 16 cell, drawn by hand in
+**Two fonts, and one of them is a typeface.**
+
+The first is ninety-five glyphs on an 8 by 16 cell, drawn by hand in
 `tools/genfont.py` as pictures made of dots and hashes, which is also how they
 are edited. It used to be traced from a system typeface, which made the shapes
 somebody else's and put an imaging library in the way of building a font.
-Capitals are nine rows, x-height is six, stems are one pixel, and the whole
-thing is emitted twice: once as a C array for the kernel and once as a header,
-because ring 3 cannot link against the kernel's copy.
+Capitals are nine rows, x-height is six, stems are one pixel. It draws the
+boot console, where a fixed cell is what is wanted and there is nothing to
+anti-alias against yet.
+
+The second is a real typeface. Each glyph in `tools/genface.py` is an outline
+on a thousand unit em, built out of stems, bars and arcs from proportions
+written down once at the top, and filled by measuring how much of each pixel
+lands inside it. That gives eight bits of coverage per pixel instead of a
+yes or no, and it works at any size, because the outline is scaled before it
+is measured rather than after. Nothing is imported and nothing is traced.
+
+A bold cut is the same drawing with heavier strokes rather than a second set
+of outlines, which is the point of having the proportions in one place. The
+`a` is double storey, which is the letter that decides whether a face reads as
+humanist or as something geometric; it was single storey for a while, and the
+one letter that turns up in almost every word was the one letter out of step
+with the rest of the alphabet.
+
+The sizes are chosen against what uses them. Window chrome gets four, because
+this system picks those sizes itself. A browser gets thirty-three, because a
+page asks for whatever size it likes in whatever unit it likes and takes the
+nearest: with four, a heading and its subheading came out identical and a
+caption came out as body text. Those thirty-three are half a megabyte of
+coverage and live in a header of their own, since a calculator has no business
+carrying them.
+
+There is a monospaced cut, and it is not the proportional one with the advance
+replaced. That is the obvious thing to try and it does not work: `m` and `w`
+are half again as wide as the cell and run straight into whatever follows
+them. So anything wider than the cell is condensed into it and anything
+narrower is centred in it, which is how a monospaced face derived from a
+proportional one has always been made. The wide letters come out a little
+narrow and the narrow ones have air around them; what it buys is that column
+n sits under column n on the line above, which is the only thing a terminal
+actually needs. The terminal and the editor draw with it, and used to draw
+with the 8 by 16 bitmap — the one thing on the screen with a staircase on
+every character, which no amount of rounded corners anywhere else makes up
+for.
 
 **Graphics.** Mode setting through the Bochs VBE dispatch ports rather than a
 BIOS call, so it works from protected mode with no real mode trampoline and no
@@ -483,7 +522,7 @@ so instead each one waits for a function to be handed to it. The boot
 processor still owns the kernel; the others own nothing until they are given
 something.
 
-**Programs.** Ring 3, its own address space per process, and thirty-eight
+**Programs.** Ring 3, its own address space per process, and fifty-four
 system calls through int 0x80. A program can start another program, block
 until it finishes and read what it returned from `main`, so the terminal
 starting `paint` is one ring 3 process starting another with the kernel only
@@ -495,6 +534,82 @@ image, so a fresh install already has something to run. They are deliberately
 never saved to the disk: if they were, the first boot would write them out and
 every later boot would run the written copies, so rebuilding the kernel would
 appear to change nothing.
+
+**Processes, the way Unix means the word.** Starting a program used to be
+one call: hand over a path, get back a pid. That is a spawn, and it is not
+what a shell is built out of. A shell needs to make a copy of itself, change
+something in the copy, and only then become the new program, because
+everything it wants to arrange first belongs to the child and must not touch
+the parent.
+
+So `fork` copies the address space and then copies the saved interrupt frame
+with one register changed — the one a system call's answer comes back in. That
+single register is why both sides return from the same line with different
+answers, and it is the whole of the trick. `exec` does the opposite: it makes
+no process at all, it throws away the program running in one and rewrites the
+frame the interrupt return is about to unwind, so it never returns.
+
+**Descriptors, which are two things rather than one.** An open file used to be
+an index into one kernel-wide array tagged with a pid. That worked and it was
+not a process model: the numbers were global, a child inherited nothing, and
+there was no such thing as standard output to redirect. Now there is a table
+of open file descriptions — the file, the position in it, whether it may be
+written — and a small array per process mapping the numbers a program uses to
+them. `fork` copies the array, so a child inherits what the parent had open.
+`exec` keeps it, which is the point. `dup2` puts one description at another
+number, and that is redirection written out in full.
+
+Every program became redirectable when one line of `sys_write` changed, and
+not one of them was recompiled to know about it: they write to descriptor 1
+as they always did, and what 1 means is now somebody else's business.
+
+**A pipe** is a ring buffer with three rules. A reader with nothing to read
+waits; a writer with nowhere to put it waits; and the third is how it ends: a
+read on an empty pipe with no writer left returns zero rather than waiting,
+because zero is how every program already spells end of file, and a pipeline
+whose left hand side has finished must not hang its right.
+
+**Stopping one.** Until there were signals, a program that looped held the
+console until the machine was restarted, which is the difference between a
+shell you can use and a shell you can demonstrate. A signal is raised where
+the keystroke arrives rather than where the console is read, because by the
+time anybody reads the console the program being interrupted has not read
+anything for a while — it is off in a loop, which is why it is being
+interrupted. And it is acted on in the scheduler, because that is the one
+place every task passes through whatever it is doing: a program spinning in a
+loop makes no system calls and would never notice a signal checked on the way
+out of one.
+
+**And a shell that is a program.** `/bin/sh` knows three system calls — fork,
+dup2 and exec — and everything it does is those three arranged differently.
+`cmd > file` is a dup2 between the fork and the exec. `a | b` is a pipe, two
+forks and a dup2 on each side. `cmd &` is not waiting. There is no fourth
+mechanism and no list of commands inside it: a program written tomorrow runs
+exactly as well as one that shipped with the kernel. The shell in the kernel
+is still there, because a machine with no `/bin` still has to be usable, but
+it is no longer the only one.
+
+**And the pages can run.** The engine in `userland/js.h` knows nothing
+about pages — it runs a language, and it was written that way so it could be
+tested without one. What it has instead is two hooks, how a property on a
+host object is read and written, and `userland/jsdom.h` is the browser
+filling them in.
+
+An element is a plain JavaScript object with its index in the document
+written on it, so reading `el.textContent` walks the document as it stands
+rather than a copy taken when the object was made, and writing it changes the
+document the layout is about to read. Scripts run once, after the page is
+parsed and before it is laid out, which is why a page that rewrites itself
+appears rewritten rather than appearing and then correcting itself.
+
+What is bound is what a page can actually do: `getElementById`,
+`getElementsByTagName`, `textContent`, `className`, `id`, `tagName`,
+`getAttribute`, `setAttribute`, and `document.title`. There is no
+`addEventListener`, because nothing delivers events yet; no `createElement`,
+because nothing would put one anywhere; no `innerHTML`, because that means
+running the parser over a fragment and this parser builds whole documents.
+A property that is missing is better than one that quietly returns undefined
+and lets a page believe it worked.
 
 **Windows.** A compositing window manager: windows are off-screen surfaces,
 the manager owns the chrome, the stacking order and the pointer, and the whole
@@ -628,6 +743,36 @@ a wheel answers 3. Above the driver it is one number, steps since somebody
 last looked, and the window manager hands it to the window under the pointer
 rather than the focused one.
 
+**Two looks, and both of them complete.**
+
+A surface can be said two ways, and this draws both. `look 0` is material:
+a soft corner measured rather than stepped, a hairline instead of an edge, a
+panel that lets the wallpaper through it, and light as a sheen across the top
+rather than a line down one side. `look 1` is built, which is everything
+described below. Neither is more correct than the other and the setting is
+one line in `/zelr.cfg`.
+
+Material is the default. The built look was, and having chosen it once the
+whole desktop was locked to a particular decade, which is a strange thing for
+a setting to decide on somebody's behalf.
+
+What material actually costs is three routines in `gfx.c`: a rounded
+rectangle whose corners are measured with sixteen samples per pixel rather
+than stepped, a soft round light, and a gloss. The corner one is the whole
+difference between a curve and a staircase, and it is sixteen comparisons
+per edge pixel, of which there are a few dozen per window.
+
+The rest follows from the palette. A modern surface is near white, because
+nothing on it is a bevel needing room above and below; a built one is a warm
+grey for exactly the opposite reason, set out below. Both are derived from
+the same three colours in the theme, so the six accents and the dark ground
+work under either.
+
+The focused window is edged in the accent. Under the built look a title bar
+was a band of it and there was no doubt; with a flat title bar the only thing
+left saying which window the keyboard is talking to is the depth of its
+shadow, and nobody reads a shadow deliberately.
+
 **A desktop that is built rather than tinted.**
 
 The whole of the look is one idea: a surface is not a colour, it is a plane
@@ -650,12 +795,12 @@ a single grey line and the whole desktop goes flat. So the ground is a warm
 neutral a few steps down, which is the only part of this that is a matter of
 taste rather than mechanics.
 
-Windows are square, because a bevel has to turn a corner to read as one and a
-rounded corner has nowhere to put four edges. Nothing casts a shadow, because
-a bevel already says which way is up and a drop shadow on top of one is two
-answers to the same question. The panel is flush to the bottom edge and the
-full width of it, because a panel is part of the machine rather than a card
-lying on the desktop.
+Windows are square under this look, because a bevel has to turn a corner to
+read as one and a rounded corner has nowhere to put four edges. Nothing casts
+a shadow, because a bevel already says which way is up and a drop shadow on
+top of one is two answers to the same question. The panel is flush to the
+bottom edge and the full width of it under either look, because a panel is
+part of the machine rather than a card lying on the desktop.
 
 All of it comes out of the theme, so the six accents and the dark ground
 still work: the four edge colours are derived from the surface the same way
@@ -842,7 +987,7 @@ is still the kernel's own, on the console; the one in a window is a program.
 ## testing
 
 The kernel tests itself. `./run.sh -T` boots with selftest on the command line,
-runs 522 checks across every subsystem, then writes to QEMU's debug-exit port
+runs 542 checks across every subsystem, then writes to QEMU's debug-exit port
 so the host gets a real exit status.
 
     [string]                8 checks   [live tree]            19 checks
@@ -854,7 +999,7 @@ so the host gets a real exit status.
     [filesystem]            7 checks   [aes-gcm]              11 checks
     [paths]                11 checks   [x25519]                8 checks
     [directories]          12 checks   [rsa]                   8 checks
-    [open files]           12 checks   [p-256]                13 checks
+    [open files]           30 checks   [p-256]                13 checks
     [timer]                 2 checks   [sha-512]               4 checks
     [interrupts]            2 checks   [p-384]                 6 checks
     [disk]                 12 checks   [certificates]         39 checks
@@ -867,11 +1012,11 @@ so the host gets a real exit status.
     [graphics]             13 checks   [acpi and pcie]         4 checks
     [windows]               7 checks   [interrupt routing]     9 checks
     [window server]        16 checks   [clipboard]            14 checks
-    [built-in programs]     6 checks   [clock]                18 checks
+    [built-in programs]     8 checks   [clock]                18 checks
     [theme]                16 checks   [kernel stack]          2 checks
     [taskbar]              18 checks
 
-    522 passed, 0 failed
+    542 passed, 0 failed
     SELFTEST_PASS
 
 The cryptographic sections are all known answers from published documents:
@@ -1019,12 +1164,32 @@ break.
 Being explicit about the boundary, because "operating system" covers a very
 large range:
 
-- **No fork or exec in the Unix sense.** A program is loaded and run; it
-  cannot start another or replace itself. The launcher and the shell start
-  programs because they are the kernel, not because a program can.
-- **Forty system calls.** Enough to print, walk directories, read and write
-  files, open one TCP connection, sleep, exit, wait on a child and own a
-  window. There is no signal, no pipe and no memory mapping.
+- **A page's scripts run once, and then nothing happens.** There is no event
+  loop, no timer, no `addEventListener` and no fetching from a script, so a
+  page that does its work on a click does nothing at all here. What runs is
+  what is in a `<script>` element at the moment the page is read; a script
+  with a `src` is skipped rather than half honoured.
+- **Three signals, and no handlers.** A program can be interrupted, killed or
+  asked to end, and it can have the first two of those ignored — which is how
+  a shell survives the ctrl-C meant for the program it started. What it cannot
+  do is be told and carry on: a handler means building a frame on the
+  program's own stack, pointing it at a function and arranging a way back, and
+  that is a larger thing than what is here. A `signal()` that took a function
+  and never called it would be worse than one that says it cannot.
+- **No process groups.** Which program a ctrl-C is meant for is worked out
+  from the parent chain instead: the console remembers which task last read
+  from it, and the interrupt goes to that task's running children, or to the
+  task itself when it has none. That is the right answer in the case that
+  matters and a guess in the ones that do not.
+- **No job control.** `cmd &` starts something and stops waiting for it, and
+  nothing keeps a list; `jobs` says so rather than printing an empty one.
+- **Fifty-four system calls.** Enough to print, walk directories, read and
+  write files, open one TCP connection, sleep, exit, fork, exec, wait on a
+  child, make a pipe, move a descriptor and own a window. There is no signal
+  and no memory mapping.
+- **One argument, not a vector.** `exec` carries a single string rather than an
+  argv, so a shell joins the words back together and the program splits them
+  again. It works and it is not what Unix does.
 - **No shared libraries**, no dynamic linking, no relocation: programs are
   static and loaded at a fixed address.
 - **Eight windows at once**, which is a fixed array and not a limit anybody
@@ -1113,6 +1278,7 @@ orders of magnitude away from Linux, which is roughly 30 million lines.
     kernel/fb.c        linear framebuffer via the bochs vbe ports
     kernel/fbcon.c     the text console drawn into it
     kernel/font.c      the 8x16 font (generated from the drawings)
+    tools/genface.py   the typeface: outlines, weights, and the rasteriser
     kernel/mouse.c     ps/2 mouse and the drawn pointer
     kernel/fat.c       fat16 and fat32
     kernel/elf.c       elf32 loader

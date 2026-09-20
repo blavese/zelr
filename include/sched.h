@@ -1,4 +1,5 @@
 #pragma once
+#include "fpu.h"
 #include "types.h"
 #include "idt.h"
 
@@ -34,11 +35,27 @@ typedef enum {
    whatever came after it in place of the word. */
 const char *task_state_name(task_state_t s);
 
+/* How many files one task can have open. Matches FD_MAX in include/fd.h,
+   spelled out here for the same reason TASK_CWD_MAX is: the scheduler holds
+   the array and has no other reason to know what is in it. kernel/fd.c
+   asserts the two numbers are still the same. */
+#define TASK_MAX_FD 16
+
 #define TASK_ARG_MAX 128
 
 typedef struct task {
     u64  rsp;                 /* saved kernel stack pointer */
     u64  stack_base;
+
+    /* The floating point and vector registers, as FXSAVE writes them.
+     *
+       Sixteen bytes more than the instruction needs, because FXSAVE faults
+       unless the address is 16 byte aligned and the heap this task record
+       came from only promises 8. The extra is the slack the alignment is
+       taken out of, which costs sixteen bytes per task and removes a whole
+       class of fault that would otherwise depend on where the allocator
+       happened to put things. */
+    u8   fpu[FPU_AREA + 16];
     u32  pid;
     char name[32];
     task_state_t state;
@@ -56,12 +73,42 @@ typedef struct task {
        itself, and slices minus these is what the task actually did. */
     u64  idle_ticks;
     u64  dir;                 /* address space, 0 means the kernel's */
+
+    /* Where this program's heap has grown to.
+     *
+       Nothing in ring 3 could allocate at all before this: every program
+       was a set of fixed arrays decided at compile time, and the browser's
+       limit on how big a page it could show was a number in a header. A
+       program asks for more by moving this, and the pages behind it are
+       mapped as it moves.
+
+       Zero until the first request, because a program that never allocates
+       should not be charged a page for the privilege. */
+    u64  brk, brk_base;
+
+    /* Who forked this one, so a program can be asked about its parent and so
+       a wait can be refused when the waiter is not entitled to it. Zero for
+       anything the kernel started itself. */
+    u32  parent_pid;
     bool user;                /* runs in ring 3 */
     char cwd[TASK_CWD_MAX];   /* working directory, inherited at creation */
 
     /* What this program was started on, if anything: one string, which for
        everything that uses it is a path. Set before the task can run. */
     char arg[TASK_ARG_MAX];
+
+    /* The numbers this task uses for its open files, each an index into the
+       machine's table of them, or -1. Per task rather than global, which is
+       what makes 1 mean this program's output rather than whatever was
+       opened ninth on this machine. Copied by fork and kept by exec. */
+    i16  fd[TASK_MAX_FD];
+
+    /* What has been raised against this task and what it wants ignored,
+       a bit per signal. Acted on by the scheduler rather than at the end
+       of a system call, because a program spinning in a loop makes no
+       system calls and is exactly the program somebody is interrupting. */
+    u32  sig_pending;
+    u32  sig_ignored;
     struct task *next;
 } task_t;
 
@@ -71,6 +118,13 @@ task_t *task_create(const char *name, void (*entry)(void));
 /* Builds a ring 3 task in its own address space. entry and stack_top are
    addresses in that space, not the kernel's. */
 task_t *task_create_user(const char *name, u64 dir, u64 entry, u64 stack_top);
+
+/* A copy of the calling task, sharing nothing but the code it was built
+   from. `frame` is the interrupt frame the caller will itself return
+   through, and `child_rax` is what the copy finds in the register the
+   system call's answer arrives in. */
+task_t *task_fork(const char *name, u64 dir, const registers_t *frame,
+                  u64 child_rax);
 void   sched_start(void);
 
 /* Ends the running task with a status somebody may later collect. */

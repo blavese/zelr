@@ -76,6 +76,92 @@ SECOND = b"""<!doctype html>
 """
 
 
+# --- a page whose appearance is entirely in its style sheets --------------
+#
+# The markup below says nothing about how it looks. Everything that decides
+# that is in three places, on purpose, because they are three different
+# paths through the cascade and a browser can get any one of them right and
+# the others wrong: a sheet fetched over its own connection, a sheet written
+# into the page, and an attribute on one element.
+#
+# BARE is the same markup with none of them. The check is that the two do not
+# look alike, which is a question the browser cannot pass by accident: it
+# fails both if the sheets are ignored and if they are applied to everything.
+
+STYLED = b"""<!doctype html>
+<html><head><title>styled</title>
+<link rel="stylesheet" href="/style.css">
+<style>
+  .band { background: #1d4ed8; color: #ffffff; padding: 22px 26px; }
+  .band h1 { font-size: 30px; margin: 0; color: #ffffff; }
+  #note { border-left: 4px solid #f59e0b; padding-left: 14px; color: #92400e; }
+</style>
+</head>
+<body>
+<div class="band"><h1>A band across the top</h1></div>
+<div class="wrap">
+<p class="lead">This paragraph is set wider and larger than the rest by a
+sheet that arrived over its own connection.</p>
+<p id="note">And this one is called out by an id, which beats the class
+rules above it however many of them there are.</p>
+<p style="text-align:center;color:#15803d">This one says so itself, which
+beats every sheet there is.</p>
+<ul class="plain"><li>no bullet</li><li>on these</li></ul>
+</div>
+</body></html>
+"""
+
+SHEET = b"""
+body { margin: 0; font-size: 16px; color: #333; }
+.wrap { max-width: 520px; margin: 0 auto; padding: 18px 0; }
+.wrap p { line-height: 1.6; margin: 14px 0; }
+p.lead { font-size: 20px; color: #111; }
+ul.plain { list-style-type: none; padding-left: 0; }
+ul.plain li { background: #f1f5f9; padding: 6px 10px; margin: 4px 0;
+              border-radius: 6px; }
+"""
+
+# A page that looks one way if its script ran and another if it did not.
+#
+# The band is the check. Nothing in the markup has the class that paints it:
+# the script puts that class on, so the band exists only if getElementById
+# found the element, the assignment reached the document, and the cascade
+# then matched the class that was not there when the sheet was indexed.
+# Counting one colour asks all of that at once.
+#
+# The sum is there so the answer cannot come from anywhere but running the
+# language: 1 through 10 is 55, and it is written into the page as text.
+SCRIPTED = b"""<!doctype html>
+<html><head><title>before the script</title>
+<style>
+  body { font-family: sans-serif; padding: 24px }
+  .lit { background: #1d4ed8; color: #ffffff; padding: 22px 26px }
+</style></head>
+<body>
+<h1 id="head">before the script</h1>
+<div id="box">a band, if the script switched it on</div>
+<p id="sum">nothing yet</p>
+<script>
+  var total = 0;
+  for (var i = 1; i <= 10; i++) total = total + i;
+
+  document.getElementById("head").textContent = "the script ran";
+  document.getElementById("sum").textContent = "sum " + total;
+  document.getElementById("box").className = "lit";
+  document.title = "after the script";
+</script>
+</body></html>
+"""
+
+# The same page with the script taken out, so the check can show that the
+# band and the words come from running it rather than from the markup.
+UNSCRIPTED = SCRIPTED[:SCRIPTED.index(b"<script>")] + b"</body></html>" + chr(10).encode()
+
+BARE = STYLED.replace(b'<link rel="stylesheet" href="/style.css">', b"")
+BARE = BARE[:BARE.index(b"<style>")] + BARE[BARE.index(b"</style>") + 8:]
+BARE = BARE.replace(b' style="text-align:center;color:#15803d"', b"")
+
+
 def filler(n):
     """A body of a known length whose every byte can be checked.
 
@@ -114,6 +200,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._send(PAGE)
         elif path == "/second":
             self._send(SECOND)
+        elif path == "/styled":
+            self._send(STYLED)
+        elif path == "/bare":
+            self._send(BARE)
+        elif path == "/scripted":
+            self._send(SCRIPTED)
+        elif path == "/unscripted":
+            self._send(UNSCRIPTED)
+        elif path == "/style.css":
+            self._send(SHEET, ctype="text/css")
         elif path == "/big":
             self._send(BIG, ctype="text/plain")
         elif path.startswith("/size/"):

@@ -21,7 +21,7 @@ for src in *.c; do
     -ffreestanding -nostdlib -static -O2 -std=gnu11 \
     -fno-sanitize=undefined -fno-stack-protector -fno-stack-check \
     -fno-builtin -fno-pic -fno-pie -mcmodel=large \
-    -mno-sse -mno-sse2 -mno-mmx -mno-80387 -mno-red-zone \
+    -mno-red-zone \
     -Wall -Wextra \
     -Wl,-T,link.ld -Wl,--build-id=none \
     -o "../build/user/$name.elf" "$src"

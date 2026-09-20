@@ -1,79 +1,62 @@
 /* A web browser.
  *
- * It fetches a page over a TCP connection this system implements, parses the
- * HTML with the reader in html.h, lays the result out against the width of
- * its own window, and draws it with the letterforms in face.h. Nothing in
- * that sentence comes from anywhere else.
+ * It fetches a page over a TCP connection this system implements, builds a
+ * tree out of the HTML, reads the style sheets the page asks for, works out
+ * what every element ends up looking like, lays that out against the width
+ * of its own window, and draws it with letterforms this project drew.
+ * Nothing in that sentence comes from anywhere else.
  *
- * What it is not is a rendering engine with a style sheet in it. There is no
- * CSS here, so a page is drawn the way a page was drawn before there was
- * any: headings are bigger, paragraphs have air around them, lists are
- * indented and bulleted, links are blue and underlined, and everything flows
- * down the page in the order it is written in. That is a real answer rather
- * than a stopgap. A page whose meaning is in its markup reads properly; a
- * page whose meaning is entirely in a style sheet reads as a long column,
- * which is what it is.
+ * It used to have no CSS at all, and drew pages the way pages were drawn
+ * before there was any: headings bigger, links blue, one column. That is a
+ * defensible answer for a document and the wrong one for the web as it is,
+ * where the difference between a menu and a list of links, or between a
+ * sidebar and the article, exists only in a style sheet. Without one a page
+ * is not simplified. It is read in the wrong order, and the reader is not
+ * told that is what is happening.
  *
  * https works, which took a certificate parser, a big integer library, two
  * key exchanges and a root store to say so. None of it is borrowed either.
  *
  * The status line says "encrypted" or "NOT encrypted" in words rather than
  * drawing a padlock, because a padlock is a picture people have learned to
- * read as a promise about the site. What this can actually promise is
- * narrower and worth being exact about: the bytes came from whoever holds
- * the name that was typed, proved by a signature chaining to an authority
- * this machine was built trusting. It says nothing about whether the site
- * is honest or the page is safe.
+ * read as a promise about the site. What this can promise is narrower and
+ * worth being exact about: the bytes came from whoever holds the name that
+ * was typed, proved by a signature chaining to an authority this machine
+ * was built trusting. It says nothing about whether the site is honest.
  */
 #include "zelr.h"
 #include "draw.h"
 #include "ui.h"
 #include "web.h"
 #include "fetch.h"
-#include "html.h"
+#include "dom.h"
+#include "css.h"
+#include "layout.h"
+#include "jsdom.h"
 
 /* --- how much room there is ----------------------------------------------
  *
- * A program here has no allocator, so every one of these is a decision about
- * what the biggest page it can show looks like rather than a number that
- * grows when it needs to. They are sized for a real page: a couple of
- * hundred kilobytes of source, a few thousand words on the screen. */
-#define SRC_MAX    (256 * 1024)
-#define RUNS_MAX   14000
-#define WORDS_MAX  (160 * 1024)
-#define LINKS_MAX  900
+ * These are fixed rather than grown. There is an allocator now — the
+ * JavaScript engine below uses it, in quarter megabyte chunks — but the
+ * buffers a page is read into are decided once and reused for every page,
+ * because a browser that allocated per page would be a browser whose
+ * failure to show one depended on which one it showed before. They are
+ * sized for a real page: a few hundred kilobytes of source, a handful of
+ * style sheets, a few thousand words on the screen. */
+#define SRC_MAX    (320 * 1024)
+#define CSS_MAX    (192 * 1024)
+#define SHEETS_MAX 6
 #define HIST_MAX   40
 
-static char   src[SRC_MAX];
-static hdoc   doc;
+static char src[SRC_MAX];
+static char cssbuf[CSS_MAX];
 
-enum { R_TEXT = 1, R_MONO, R_RULE, R_BULLET };
-
-typedef struct {
-    int x, y, w, h;               /* y is down the document, not the window */
-    int at;                       /* a string in `words` */
-    unsigned char kind, face, bold, under;
-    u32 colour;
-    int link;                     /* into `links`, or -1 */
-} run_t;
-
-static run_t runs[RUNS_MAX];
-static int   nruns;
-
-static char  words[WORDS_MAX];
-static int   nwords;
-
-typedef struct { int href; } link_t;
-static link_t links[LINKS_MAX];
-static int    nlinks;
-
-/* Where a link points, as it was written on the page. It lives in the
-   parser's arena rather than being copied, because a page with six hundred
-   links on it is six hundred addresses and most of them are never used. */
-static const char *link_href(int i) {
-    if (i < 0 || i >= nlinks) return "";
-    return doc.arena + links[i].href;
-}
+static ddoc   doc;
+static csheet sheet;
+static cindex index_;
+static ldoc   page;
+static cmatch match;
+static cinline inl[DOM_NODES];
 
 typedef struct { char text[URL_TEXT]; int scroll; } hist_t;
 static hist_t hist[HIST_MAX];
@@ -83,523 +66,21 @@ static url_t    here;
 static response_t reply;
 
 static char  title[160];
-static char  status[URL_TEXT + 64];
+static char  status[URL_TEXT + 96];
 static int   scroll;
-static int   doc_h;
-static int   truncated;
 static int   over_link = -1;
+static int   hover_node = -1;
 
-/* --- putting words somewhere ---------------------------------------------- */
+/* The size everything relative is relative to. A page that says 1.2em means
+   twenty per cent more than this, and a page that says nothing gets it. */
+static int   root_px = 16;
 
-static int word_put(const char *s, int len) {
-    if (nwords + len + 1 >= WORDS_MAX) return -1;
-    int at = nwords;
-    for (int i = 0; i < len; i++) words[nwords++] = s[i];
-    words[nwords++] = 0;
-    return at;
-}
+/* What the page's own scripts did, for the status line to mention. */
+static int   scripts_ran;
+static int   scripts_changed;      /* one of them wrote to the document */
+static char  script_err[128];
 
-/* --- layout ---------------------------------------------------------------
- *
- * One pass down the node list with a stack of styles. Everything that is not
- * a block is put on the current line until the line is full, and everything
- * that is a block ends the line and leaves a gap.
- */
-
-typedef struct {
-    unsigned char face, bold, mono, pre;
-    short tag;                    /* what opened this level */
-    int link;
-    u32 colour;
-} style_t;
-
-#define STACK_MAX 64
-static style_t stack[STACK_MAX];
-static int     depth;
-
-static int content_w;             /* what the page is laid out against */
-static int pen_x, line_y, line_h;
-static int line_first;            /* the first run on the line being built */
-static int indent;
-static int pending_space;
-static int list_depth;
-static int list_count[8];
-static int list_ordered[8];
-static int skipping;              /* inside head, script, style */
-
-static u32 col_text, col_dim, col_link, col_rule;
-
-static style_t *top(void) { return &stack[depth]; }
-
-static void style_push(void) {
-    if (depth + 1 >= STACK_MAX) return;
-    style_t *a = &stack[depth + 1], *b = &stack[depth];
-    a->face = b->face; a->bold = b->bold; a->mono = b->mono; a->pre = b->pre;
-    a->link = b->link; a->colour = b->colour; a->tag = b->tag;
-    depth++;
-}
-
-static void style_pop(void) {
-    if (depth > 0) depth--;
-}
-
-/* Finishes the line being built.
- *
- * The runs on it were emitted before the height of the line was known, which
- * is the only way to find that height: it is whatever the tallest thing on
- * it turned out to be. So they are moved down to sit on a common bottom edge
- * here, which is what stops a heading and the words beside it from being
- * drawn from different tops. */
-static void line_end(void) {
-    if (line_first < nruns) {
-        for (int i = line_first; i < nruns; i++)
-            runs[i].y = line_y + (line_h - runs[i].h);
-        line_y += line_h;
-    } else if (line_h) {
-        line_y += line_h;
-    }
-    pen_x = indent;
-    line_h = 0;
-    line_first = nruns;
-    pending_space = 0;
-}
-
-static void gap(int px) {
-    line_end();
-    line_y += px;
-}
-
-static run_t *run_new(void) {
-    if (nruns >= RUNS_MAX) return 0;
-    run_t *r = &runs[nruns++];
-    r->x = 0; r->y = 0; r->w = 0; r->h = 0;
-    r->at = -1; r->kind = R_TEXT; r->face = UI_FACE_BODY;
-    r->bold = 0; r->under = 0; r->colour = col_text; r->link = -1;
-    return r;
-}
-
-static int measure(const char *s, int face, int mono, int bold) {
-    if (mono) {
-        int n = 0;
-        while (s[n]) n++;
-        return n * FONT_W;
-    }
-    return face_w(s, face) + (bold ? 1 : 0);
-}
-
-static int height_of(int face, int mono) {
-    return mono ? FONT_H : face_h(face);
-}
-
-/* One word onto the line, wrapping first if it will not fit. */
-static void emit_word(const char *s, int len) {
-    if (len <= 0) return;
-    style_t *st = top();
-
-    int at = word_put(s, len);
-    if (at < 0) { truncated = 1; return; }
-
-    int w = measure(words + at, st->face, st->mono, st->bold);
-    int h = height_of(st->face, st->mono);
-    int space = st->mono ? FONT_W : face_w(" ", st->face);
-
-    int need = w + (pending_space && pen_x > indent ? space : 0);
-    if (pen_x > indent && pen_x + need > content_w) {
-        line_end();
-        pending_space = 0;
-    } else if (pending_space && pen_x > indent) {
-        pen_x += space;
-    }
-    pending_space = 0;
-
-    run_t *r = run_new();
-    if (!r) { truncated = 1; return; }
-    r->kind = st->mono ? R_MONO : R_TEXT;
-    r->x = pen_x;
-    r->w = w;
-    r->h = h;
-    r->at = at;
-    r->face = st->face;
-    r->bold = st->bold;
-    r->under = st->link >= 0;
-    r->colour = st->colour;
-    r->link = st->link;
-
-    pen_x += w;
-    if (h > line_h) line_h = h;
-}
-
-/* A whole line of preformatted text, spaces and all. */
-static void emit_pre_line(const char *s, int len) {
-    line_end();
-    style_t *st = top();
-    if (len > 0) {
-        int at = word_put(s, len);
-        if (at < 0) { truncated = 1; return; }
-        run_t *r = run_new();
-        if (!r) { truncated = 1; return; }
-        r->kind = R_MONO;
-        r->x = indent;
-        r->w = measure(words + at, st->face, 1, 0);
-        r->h = FONT_H;
-        r->at = at;
-        r->colour = st->colour;
-        r->link = st->link;
-        r->under = st->link >= 0;
-        line_h = FONT_H;
-    } else {
-        line_h = FONT_H;
-    }
-    line_end();
-}
-
-static void emit_rule(void) {
-    line_end();
-    run_t *r = run_new();
-    if (!r) return;
-    r->kind = R_RULE;
-    r->x = indent;
-    r->y = line_y + 4;
-    r->w = content_w - indent;
-    r->h = 2;
-    r->colour = col_rule;
-    line_first = nruns;            /* placed already; not part of the line */
-    line_y += 10;
-}
-
-static void emit_bullet(void) {
-    style_t *st = top();
-    run_t *r = run_new();
-    if (!r) return;
-    r->kind = R_BULLET;
-    r->x = indent - 14;
-    r->w = 6;
-    r->h = face_h(UI_FACE_BODY);
-    r->colour = col_dim;
-    r->face = st->face;
-    if (r->h > line_h) line_h = r->h;
-    pen_x = indent;
-}
-
-static void emit_number(int n) {
-    char buf[12];
-    int k = 0;
-    if (!n) buf[k++] = '0';
-    while (n > 0) { buf[k++] = (char)('0' + n % 10); n /= 10; }
-    char out[14];
-    int o = 0;
-    while (k) out[o++] = buf[--k];
-    out[o++] = '.';
-    out[o] = 0;
-
-    int at = word_put(out, o);
-    if (at < 0) return;
-    run_t *r = run_new();
-    if (!r) return;
-    r->kind = R_TEXT;
-    r->x = indent - 26;
-    r->w = face_w(out, UI_FACE_BODY);
-    r->h = face_h(UI_FACE_BODY);
-    r->at = at;
-    r->colour = col_dim;
-    if (r->h > line_h) line_h = r->h;
-    pen_x = indent;
-}
-
-/* The text of one node, broken into words or kept as it is. */
-static void lay_text(const char *s, int len) {
-    if (skipping) return;
-    style_t *st = top();
-
-    if (st->pre) {
-        int start = 0;
-        for (int i = 0; i <= len; i++) {
-            if (i == len || s[i] == '\n') {
-                emit_pre_line(s + start, i - start);
-                start = i + 1;
-            }
-        }
-        return;
-    }
-
-    int i = 0;
-    while (i < len) {
-        if (s[i] == ' ' || s[i] == '\t' || s[i] == '\n' || s[i] == '\r') {
-            pending_space = 1;
-            i++;
-            continue;
-        }
-        int start = i;
-        while (i < len && s[i] != ' ' && s[i] != '\t' && s[i] != '\n'
-               && s[i] != '\r') i++;
-        emit_word(s + start, i - start);
-    }
-}
-
-/* Which tags start a new block, and how much air goes above them. */
-static int block_gap(int tag) {
-    switch (tag) {
-        case T_H1: return 16;
-        case T_H2: return 14;
-        case T_H3: case T_H4: case T_H5: case T_H6: return 12;
-        case T_P: case T_BLOCKQUOTE: case T_PRE: case T_TABLE:
-        case T_FIGURE: case T_FORM: return 10;
-        case T_UL: case T_OL: case T_DL: return 8;
-        case T_DIV: case T_SECTION: case T_ARTICLE: case T_MAIN:
-        case T_HEADER: case T_FOOTER: case T_NAV: case T_ASIDE:
-        case T_LI: case T_DT: case T_DD: case T_TR: case T_CAPTION:
-        case T_FIGCAPTION: case T_HGROUP: return 2;
-        default: return -1;                 /* not a block */
-    }
-}
-
-/* Which open tag a newly opened one ends by itself.
- *
- * Almost nothing on the web closes a list item or a paragraph, and the page
- * that started all of this closes neither its terms nor its definitions. A
- * reader that waits for an end tag that is never coming keeps pushing onto
- * its stack until the stack stops taking them, and from that point on no
- * style on the page applies to anything. */
-static int ends_previous(int opening, int open_now) {
-    if (opening == T_P)  return open_now == T_P;
-    if (opening == T_LI) return open_now == T_LI;
-    if (opening == T_DT || opening == T_DD)
-        return open_now == T_DT || open_now == T_DD;
-    if (opening == T_TR)
-        return open_now == T_TR || open_now == T_TD || open_now == T_TH;
-    if (opening == T_TD || opening == T_TH)
-        return open_now == T_TD || open_now == T_TH;
-    if (opening == T_OPTION) return open_now == T_OPTION;
-    return 0;
-}
-
-static void close_one(int tag);
-
-static void open_tag(const hnode *n) {
-    int tag = n->tag;
-
-    if (tag == T_HEAD || tag == T_SCRIPT || tag == T_STYLE
-        || tag == T_NOSCRIPT || tag == T_TITLE || tag == T_SVG
-        || tag == T_IFRAME || tag == T_META || tag == T_LINK) {
-        skipping++;
-        return;
-    }
-    if (skipping) return;
-
-    while (depth > 0 && ends_previous(tag, stack[depth].tag))
-        close_one(stack[depth].tag);
-
-    int g = block_gap(tag);
-    if (g >= 0) gap(g);
-
-    style_push();
-    style_t *st = top();
-    st->tag = (short)tag;
-
-    switch (tag) {
-        case T_H1: st->face = UI_FACE_HEAD; st->bold = 1; break;
-        case T_H2: st->face = UI_FACE_HEAD; break;
-        case T_H3: case T_H4:
-            st->face = UI_FACE_BOLD; st->bold = 1; break;
-        case T_H5: case T_H6:
-            st->face = UI_FACE_BOLD; break;
-        case T_B: case T_STRONG:
-            st->face = UI_FACE_BOLD; st->bold = 1; break;
-        case T_SMALL: st->face = UI_FACE_SMALL; break;
-        case T_CODE: case T_KBD: case T_SAMP: case T_TT:
-            st->mono = 1; break;
-        case T_PRE:
-            st->mono = 1; st->pre = 1; break;
-        case T_BLOCKQUOTE:
-            indent += 24; pen_x = indent; st->colour = col_dim; break;
-        case T_A:
-            if (n->href >= 0 && nlinks < LINKS_MAX) {
-                links[nlinks].href = n->href;
-                st->link = nlinks++;
-                st->colour = col_link;
-            }
-            break;
-        case T_UL: case T_OL:
-            if (list_depth < 8) {
-                list_ordered[list_depth] = (tag == T_OL);
-                list_count[list_depth] = 0;
-                list_depth++;
-            }
-            indent += 28;
-            pen_x = indent;
-            break;
-        case T_LI:
-            if (list_depth > 0 && list_ordered[list_depth - 1])
-                emit_number(++list_count[list_depth - 1]);
-            else
-                emit_bullet();
-            break;
-        case T_DD: indent += 24; pen_x = indent; break;
-        case T_BR: line_end(); break;
-        case T_HR: emit_rule(); break;
-        case T_TH:
-            /* A heading cell, which is bold and, like any cell, sits beside
-               the one before it rather than under it. There is no table
-               layout here: a row is a line and a cell is a word on it. */
-            st->face = UI_FACE_BOLD;
-            st->bold = 1;
-            pending_space = 1;
-            break;
-        case T_TD:
-            pending_space = 1;
-            break;
-        case T_IMG:
-            if (n->alt >= 0 && doc.arena[n->alt]) {
-                const char *alt = doc.arena + n->alt;
-                emit_word("[", 1);
-                pending_space = 0;
-                lay_text(alt, w_len(alt));
-                pending_space = 0;
-                emit_word("]", 1);
-            }
-            break;
-        case T_INPUT: case T_BUTTON:
-            if (n->alt >= 0 && doc.arena[n->alt]) {
-                const char *v = doc.arena + n->alt;
-                emit_word("[", 1);
-                pending_space = 0;
-                lay_text(v, w_len(v));
-                pending_space = 0;
-                emit_word("]", 1);
-            }
-            break;
-        default: break;
-    }
-}
-
-/* Ends the tag on the top of the stack, whatever wrote it there. */
-static void close_one(int tag) {
-    switch (tag) {
-        case T_UL: case T_OL:
-            if (list_depth > 0) list_depth--;
-            indent -= 28;
-            break;
-        case T_BLOCKQUOTE: indent -= 24; break;
-        case T_DD: indent -= 24; break;
-        default: break;
-    }
-    if (indent < 0) indent = 0;
-
-    /* The pen goes back to the margin only for something that ended a line.
-     *
-     * It used to go back for every end tag, and most end tags on a page are
-     * in the middle of a sentence: the end of a link put the next word back
-     * at the left margin without ending the line, so it was drawn on top of
-     * the words already there. A page with one link at the end of a
-     * paragraph looked perfect and a page with links inside its sentences
-     * came out as two or three lines of text in the same place. */
-    int g = block_gap(tag);
-    if (g >= 0) {
-        line_end();
-        if (tag == T_P || tag == T_H1 || tag == T_H2 || tag == T_H3
-            || tag == T_PRE || tag == T_BLOCKQUOTE || tag == T_UL
-            || tag == T_OL || tag == T_TABLE) line_y += g / 2;
-        pen_x = indent;
-    }
-    style_pop();
-}
-
-static void close_tag(int tag) {
-    if (tag == T_HEAD || tag == T_SCRIPT || tag == T_STYLE
-        || tag == T_NOSCRIPT || tag == T_TITLE || tag == T_SVG
-        || tag == T_IFRAME || tag == T_META || tag == T_LINK) {
-        if (skipping) skipping--;
-        return;
-    }
-    if (skipping) return;
-
-    /* Find what is being closed on the stack. An end tag for something that
-       was never opened closes nothing: taking the top of the stack instead
-       would strip a style off whatever the page is really inside. */
-    int at = -1;
-    for (int d = depth; d > 0; d--)
-        if (stack[d].tag == tag) { at = d; break; }
-
-    if (at < 0) {
-        if (block_gap(tag) >= 0) { line_end(); pen_x = indent; }
-        return;
-    }
-    while (depth >= at) close_one(stack[depth].tag);
-}
-
-static void layout(int width) {
-    ui_theme t = ui_load_theme();
-    col_text = t.fg;
-    col_dim  = t.dim;
-    col_link = t.accent;
-    col_rule = t.line;
-
-    nruns = 0;
-    nwords = 0;
-    nlinks = 0;
-    depth = 0;
-    indent = 0;
-    pen_x = 0;
-    line_y = 0;
-    line_h = 0;
-    line_first = 0;
-    pending_space = 0;
-    list_depth = 0;
-    skipping = 0;
-    truncated = doc.overflowed;
-    content_w = width;
-
-    stack[0].face = UI_FACE_BODY;
-    stack[0].bold = 0;
-    stack[0].mono = 0;
-    stack[0].pre = 0;
-    stack[0].link = -1;
-    stack[0].tag = T_OTHER;
-    stack[0].colour = col_text;
-
-    for (int i = 0; i < doc.count; i++) {
-        const hnode *n = &doc.nodes[i];
-        if (n->kind == N_TEXT) lay_text(doc.arena + n->at, n->len);
-        else if (n->kind == N_OPEN) open_tag(n);
-        else close_tag(n->tag);
-    }
-    line_end();
-    doc_h = line_y + 12;
-}
-
-/* --- plain text ----------------------------------------------------------
- *
- * A server that says text/plain means it, and running it through the markup
- * reader would eat anything in it that looked like a tag. */
-static void layout_plain(const char *s, int len, int width) {
-    doc.count = 0;
-    doc.overflowed = 0;
-    ui_theme t = ui_load_theme();
-    col_text = t.fg;
-    col_dim = t.dim;
-    col_link = t.accent;
-    col_rule = t.line;
-
-    nruns = nwords = nlinks = 0;
-    depth = 0; indent = 0; pen_x = 0; line_y = 0; line_h = 0;
-    line_first = 0; pending_space = 0; list_depth = 0; skipping = 0;
-    truncated = 0;
-    content_w = width;
-
-    stack[0].face = UI_FACE_BODY;
-    stack[0].bold = 0;
-    stack[0].mono = 1;
-    stack[0].pre = 1;
-    stack[0].link = -1;
-    stack[0].tag = T_OTHER;
-    stack[0].colour = col_text;
-
-    lay_text(s, len);
-    line_end();
-    doc_h = line_y + 12;
-}
-
-/* --- fetching and showing ------------------------------------------------- */
+/* --- saying what happened ------------------------------------------------- */
 
 static void say(const char *a, const char *b) {
     int n = 0;
@@ -648,18 +129,209 @@ static const char *why_heading(int rc) {
     }
 }
 
+/* --- building the page ---------------------------------------------------
+ *
+ * Four passes over one tree, in this order because each needs the last: the
+ * tree, then every style sheet that applies to it, then an index of those
+ * rules, then the layout.
+ */
+
+/* Every declaration an element carries in its own style attribute, parsed
+   once here instead of on every layout. A resize lays the page out again,
+   and re-parsing the same declarations on every frame of a window drag is
+   the difference between a reflow and a stutter. */
+static void gather_inline_styles(void) {
+    for (int i = 0; i < doc.count; i++) {
+        inl[i].at = 0;
+        inl[i].n = 0;
+        if (doc.nodes[i].kind != DN_ELEMENT) continue;
+        const char *st = dom_attr(&doc, i, "style");
+        if (!st || !*st) continue;
+        int at = sheet.ndecls;
+        /* The same reader as a block between braces, given a run with no
+           braces around it. */
+        int p = 0, len = w_len(st);
+        while (p < len) {
+            while (p < len && css_space(st[p])) p++;
+            int ns = p;
+            while (p < len && st[p] != ':' && st[p] != ';') p++;
+            int nl = p - ns;
+            while (nl > 0 && css_space(st[ns + nl - 1])) nl--;
+            if (p >= len || st[p] != ':') {
+                while (p < len && st[p] != ';') p++;
+                if (p < len) p++;
+                continue;
+            }
+            p++;
+            int vs = p, depth = 0;
+            while (p < len) {
+                if (st[p] == '(') depth++;
+                else if (st[p] == ')') { if (depth) depth--; }
+                else if (!depth && st[p] == ';') break;
+                p++;
+            }
+            css_declare(&sheet, st + ns, nl, st + vs, p - vs);
+            if (p < len) p++;
+        }
+        inl[i].at = at;
+        inl[i].n = sheet.ndecls - at;
+    }
+}
+
+/* The sheets the page carries itself: every style element, in order. */
+static void gather_inline_sheets(void) {
+    for (int i = 0; i < doc.count; i++) {
+        if (doc.nodes[i].kind != DN_ELEMENT || doc.nodes[i].tag != T_STYLE)
+            continue;
+        int t = doc.nodes[i].first;
+        while (t >= 0) {
+            if (doc.nodes[t].kind == DN_TEXT && doc.nodes[t].text >= 0) {
+                const char *s = doc.arena + doc.nodes[t].text;
+                css_parse(&sheet, s, w_len(s));
+            }
+            t = doc.nodes[t].next;
+        }
+    }
+}
+
+/* And the sheets it links to, which on a modern page is nearly all of them.
+ *
+ * Fetched here rather than skipped, because a page whose entire appearance
+ * is in one linked file and which is shown without it is not the page. Each
+ * one is another round trip, so there is a limit on how many are followed
+ * and the limit is said out loud when it is reached rather than leaving
+ * somebody wondering why one part of a page is styled and the rest is not. */
+static int gather_linked_sheets(int *fetched, int *skipped) {
+    *fetched = *skipped = 0;
+    for (int i = 0; i < doc.count; i++) {
+        if (doc.nodes[i].kind != DN_ELEMENT || doc.nodes[i].tag != T_LINK)
+            continue;
+        const char *rel = dom_attr(&doc, i, "rel");
+        const char *href = dom_attr(&doc, i, "href");
+        if (!rel || !href || !*href) continue;
+
+        /* rel can be a list, and "stylesheet alternate" is one this should
+           not take: an alternate sheet is one the reader has not chosen. */
+        if (!w_same_fold(rel, "stylesheet")) continue;
+
+        if (*fetched >= SHEETS_MAX) { (*skipped)++; continue; }
+
+        url_t u;
+        if (!url_join(&here, href, &u)) { (*skipped)++; continue; }
+
+        response_t r;
+        int rc = web_get(&u, cssbuf, CSS_MAX, &r);
+        if (rc < 200 || rc >= 300 || r.len <= 0) { (*skipped)++; continue; }
+        css_parse(&sheet, r.body, r.len);
+        (*fetched)++;
+    }
+    return *fetched;
+}
+
+static void relayout(int width) {
+    match.hover = hover_node;
+    match.visited_links = 0;
+    lay_run(&page, &doc, &sheet, &index_, &match, inl, width, root_px);
+}
+
+/* What this system thinks a link looks like, which is the accent the rest of
+   the desktop uses.
+ *
+ * Parsed after the browser's own defaults and before anything the page says,
+ * so it beats the default and loses to the page. A site that has chosen its
+ * link colour has chosen it; a site that has not gets the one colour this
+ * machine uses everywhere else for the thing you can press. */
+static void accent_sheet(void) {
+    ui_theme t = ui_load_theme();
+    char rule[64];
+    static const char hex[] = "0123456789abcdef";
+    int n = 0;
+    const char *head = "a{color:#";
+    for (const char *p = head; *p; p++) rule[n++] = *p;
+    u32 c = t.accent;
+    for (int shift = 20; shift >= 0; shift -= 4)
+        rule[n++] = hex[(c >> shift) & 0xF];
+    const char *tail = "}";
+    for (const char *p = tail; *p; p++) rule[n++] = *p;
+    rule[n] = 0;
+    css_parse(&sheet, rule, n);
+}
+
+static void build(const char *html, int len, int width, int want_sheets,
+                  int *fetched, int *skipped) {
+    dom_parse(&doc, html, len);
+
+    css_init(&sheet);
+    css_parse(&sheet, CSS_UA, (int)sizeof(CSS_UA) - 1);
+    accent_sheet();
+    gather_inline_sheets();
+    if (want_sheets) gather_linked_sheets(fetched, skipped);
+    else { *fetched = 0; *skipped = 0; }
+    gather_inline_styles();
+    css_index(&sheet, &index_);
+
+    /* And then whatever the page brought with it, before any of it is laid
+       out: a script that writes to an element is writing to the document
+       the layout is about to read, so running them afterwards would show
+       the page as it was and correct it a frame later. */
+    script_err[0] = 0;
+    scripts_ran = jsdom_run(&doc, script_err, (int)sizeof(script_err),
+                            &scripts_changed);
+
+    hover_node = -1;
+    relayout(width);
+
+    if (doc.title >= 0) w_copy(title, sizeof(title), doc.arena + doc.title,
+                               sizeof(title));
+    else title[0] = 0;
+}
+
 /* Builds a page of our own, for when there is nothing to show. Written as
    html and put through the same reader, so the one path that draws anything
    is the path that is used. */
 static void show_message(const char *heading, const char *body, int width) {
     int n = 0;
-    const char *bits[6] = { "<h1>", heading, "</h1><p>", body, "</p>", 0 };
+    const char *bits[8] = {
+        "<style>body{padding:28px 32px;max-width:640px}"
+        "h1{font-size:1.7em;color:#333}p{color:#555;line-height:1.55}</style>"
+        "<h1>", heading, "</h1><p>", body, "</p>", 0 };
     for (int i = 0; bits[i] && n < SRC_MAX - 1; i++)
         for (const char *p = bits[i]; *p && n < SRC_MAX - 1; p++) src[n++] = *p;
     src[n] = 0;
-    html_parse(&doc, src, n);
-    layout(width);
+    int f, sk;
+    build(src, n, width, 0, &f, &sk);
     scroll = 0;
+}
+
+/* Plain text, shown as plain text: one preformatted block, which is what it
+   is, rather than run through a markup reader that would eat the indentation
+   and every angle bracket in it. */
+static void show_plain(const char *body, int len, int width) {
+    int n = 0;
+    const char *head = "<style>body{padding:16px}"
+                       "pre{font-size:14px;line-height:1.45}</style><pre>";
+    for (const char *p = head; *p && n < SRC_MAX - 1; p++) src[n++] = *p;
+    for (int i = 0; i < len && n < SRC_MAX - 8; i++) {
+        char c = body[i];
+        if (c == '<') { const char *e = "&lt;"; while (*e) src[n++] = *e++; }
+        else if (c == '&') { const char *e = "&amp;"; while (*e) src[n++] = *e++; }
+        else src[n++] = c;
+    }
+    const char *tail = "</pre>";
+    for (const char *p = tail; *p && n < SRC_MAX - 1; p++) src[n++] = *p;
+    src[n] = 0;
+    int f, sk;
+    build(src, n, width, 0, &f, &sk);
+}
+
+static void number_into(char *out, int v) {
+    char tmp[16];
+    int t = 0;
+    if (!v) tmp[t++] = '0';
+    while (v > 0) { tmp[t++] = (char)('0' + v % 10); v /= 10; }
+    int w = 0;
+    while (t) out[w++] = tmp[--t];
+    out[w] = 0;
 }
 
 static void load(const char *address, int width, int keep_scroll) {
@@ -695,32 +367,47 @@ static void load(const char *address, int width, int keep_scroll) {
     int plain = w_starts_fold(reply.ctype, "text/plain")
              || w_starts_fold(reply.ctype, "application/json");
 
+    int fetched = 0, skipped = 0;
     if (plain) {
-        layout_plain(reply.body, reply.len, width);
+        show_plain(reply.body, reply.len, width);
         w_copy(title, sizeof(title), here.path, sizeof(title));
     } else {
-        html_parse(&doc, reply.body, reply.len);
-        layout(width);
-        if (doc.title >= 0) w_copy(title, sizeof(title),
-                                   doc.arena + doc.title, sizeof(title));
-        else title[0] = 0;
+        build(reply.body, reply.len, width, 1, &fetched, &skipped);
     }
 
     if (!keep_scroll) scroll = 0;
 
-    char n[16];
-    int k = 0, v = nlinks;
-    if (!v) n[k++] = '0';
-    while (v) { n[k++] = (char)('0' + v % 10); v /= 10; }
     char shown[16];
-    int o = 0;
-    while (k) shown[o++] = n[--k];
-    shown[o] = 0;
+    number_into(shown, page.nlinks);
 
     if (rc >= 400) say("the server said this page is not there", 0);
-    else if (reply.truncated || truncated)
+    else if (reply.truncated || page.overflowed || doc.overflowed)
         say("shown as far as it fits: the page is bigger than this can hold", 0);
-    else say(shown, nlinks == 1 ? " link on this page" : " links on this page");
+    else say(shown, page.nlinks == 1 ? " link on this page"
+                                     : " links on this page");
+
+    if (fetched) {
+        char n[16];
+        number_into(n, fetched);
+        say_more(", ");
+        say_more(n);
+        say_more(fetched == 1 ? " style sheet" : " style sheets");
+    }
+    if (skipped) say_more(" (more were not read)");
+
+    /* And what the page's own scripts did. A script that threw is worth
+       saying out loud: the page will look like the one it was before it
+       ran, and without this there is nothing to tell the two apart. */
+    if (script_err[0]) {
+        say_more(", a script stopped: ");
+        say_more(script_err);
+    } else if (scripts_ran) {
+        char n[16];
+        number_into(n, scripts_ran);
+        say_more(", ");
+        say_more(n);
+        say_more(scripts_ran == 1 ? " script ran" : " scripts ran");
+    }
 
     /* Whether anybody in between could have read it, said either way.
        Marking only the encrypted case trains people to read a missing mark
@@ -730,8 +417,7 @@ static void load(const char *address, int width, int keep_scroll) {
 }
 
 static void push_history(const char *address) {
-    if (hist_at >= 0 && hist_at < hist_n)
-        hist[hist_at].scroll = scroll;
+    if (hist_at >= 0 && hist_at < hist_n) hist[hist_at].scroll = scroll;
     if (hist_n >= HIST_MAX) {
         for (int i = 1; i < HIST_MAX; i++) {
             for (int k = 0; k < URL_TEXT; k++)
@@ -749,57 +435,89 @@ static void push_history(const char *address) {
 
 /* --- drawing -------------------------------------------------------------- */
 
-static void draw_runs(surface *s, const ui_theme *t, int ox, int oy,
-                      int vw, int vh) {
-    (void)t;
-    for (int i = 0; i < nruns; i++) {
-        run_t *r = &runs[i];
-        int y = r->y - scroll;
-        if (y + r->h < 0 || y > vh) continue;
-
-        if (r->kind == R_RULE) {
-            rect(s, ox + r->x, oy + y, r->w < vw ? r->w : vw, 2, r->colour);
-            continue;
+/* The same blitter as draw.h's, against the browser's own larger set of
+   faces. Written out rather than shared because draw.h's table is the one
+   every other program carries and this one is thirty three faces. */
+static void tface_draw(surface *s, int x, int y, const char *str, u32 fg,
+                       int which) {
+    const face_t *f = tface_of(which);
+    int baseline = y + (f->size * 4) / 5;
+    for (; *str; str++) {
+        unsigned char c = (unsigned char)*str;
+        if (c < FACE_FIRST || c > FACE_LAST) c = ' ';
+        const face_glyph *g = &f->glyphs[c - FACE_FIRST];
+        const unsigned char *px = f->pixels + g->at;
+        for (int gy = 0; gy < g->h; gy++) {
+            int sy = baseline - g->top + gy;
+            if (sy < 0 || sy >= s->h) continue;
+            for (int gx = 0; gx < g->w; gx++) {
+                unsigned char a = px[gy * g->w + gx];
+                if (!a) continue;
+                int sx = x + g->left + gx;
+                if (sx < 0 || sx >= s->w) continue;
+                u32 *slot = &s->px[(u32)sy * s->w + sx];
+                *slot = (a == 255) ? fg : mix(*slot, fg, a);
+            }
         }
-        if (r->kind == R_BULLET) {
-            disc(s, ox + r->x + 3, oy + y + r->h / 2, 3, r->colour);
-            continue;
-        }
-        if (r->at < 0) continue;
-
-        const char *str = words + r->at;
-        if (r->kind == R_MONO) {
-            text(s, ox + r->x, oy + y, str, r->colour);
-        } else {
-            face_draw(s, ox + r->x, oy + y, str, r->colour, r->face);
-            /* Bold without a bold face at every size: the same word again,
-               a pixel to the right. It is what a printer did before there
-               were two cuts of a typeface, and at this size it is the
-               difference between a heading and a line of body text. */
-            if (r->bold) face_draw(s, ox + r->x + 1, oy + y, str, r->colour,
-                                   r->face);
-        }
-        if (r->under) {
-            /* Carried across the space to the next word when that word is
-               the same link. A link underlined word by word looks like
-               several links, which is what it looked like. */
-            int uw = r->w;
-            if (i + 1 < nruns && runs[i + 1].link == r->link
-                && runs[i + 1].y == r->y && runs[i + 1].x > r->x)
-                uw = runs[i + 1].x - r->x;
-            rect(s, ox + r->x, oy + y + r->h - 1, uw, 1, r->colour);
-        }
+        x += g->advance;
     }
 }
 
-static int run_at(int dx, int dy) {
-    for (int i = 0; i < nruns; i++) {
-        run_t *r = &runs[i];
-        if (r->link < 0) continue;
-        if (dx >= r->x && dx < r->x + r->w && dy >= r->y && dy < r->y + r->h)
-            return i;
+static void draw_page(surface *s, int ox, int oy, int vw, int vh) {
+    for (int i = 0; i < page.nitems; i++) {
+        const litem *it = &page.items[i];
+        int y = it->y - scroll;
+        if (y + it->h < -8 || y > vh + 8) continue;
+        int x = ox + it->x;
+        int sy = oy + y;
+
+        if (it->kind == LK_BOX) {
+            int w = it->w, h = it->h;
+            if (w > vw) w = vw;
+            if (it->has_bg) {
+                if (it->radius) round_rect(s, x, sy, w, h, it->radius, it->bg);
+                else rect(s, x, sy, w, h, it->bg);
+            }
+            if (it->bt) rect(s, x, sy, w, it->bt, it->border);
+            if (it->bb) rect(s, x, sy + h - it->bb, w, it->bb, it->border);
+            if (it->bl) rect(s, x, sy, it->bl, h, it->border);
+            if (it->br) rect(s, x + w - it->br, sy, it->br, h, it->border);
+            continue;
+        }
+
+        if (it->kind == LK_BULLET) {
+            if (it->at >= 0)
+                tface_draw(s, x, sy, page.text + it->at, it->color, it->face);
+            else
+                disc(s, x + 6, sy + it->h / 2, 3, it->color);
+            continue;
+        }
+
+        if (it->at < 0) continue;
+        const char *str = page.text + it->at;
+
+        u32 col = it->color;
+        /* The link under the pointer, and only that one. A whole page of
+           links changing colour at once is what happens when the hover is
+           tracked by href rather than by which run it is. */
+        if (it->link >= 0 && it->link == over_link) col = 0x0842A0;
+
+        tface_draw(s, x, sy, str, col, it->face);
+
+        if (it->under || (it->link >= 0 && it->link == over_link)) {
+            /* Carried across the space to the next word when that word is
+               the same link. A link underlined word by word looks like
+               several links, which is what it looked like. */
+            int uw = it->w;
+            if (i + 1 < page.nitems && page.items[i + 1].link == it->link
+                && it->link >= 0 && page.items[i + 1].y == it->y
+                && page.items[i + 1].x > it->x)
+                uw = page.items[i + 1].x - it->x;
+            rect(s, x, sy + it->h - 1, uw, 1, col);
+        }
+        if (it->strike)
+            rect(s, x, sy + it->h / 2, it->w, 1, col);
     }
-    return -1;
 }
 
 /* --- the window ----------------------------------------------------------- */
@@ -840,6 +558,7 @@ void _start(void) {
     int want_load = 1;
     int want_width = 0;
     int last_mx = -1, last_my = -1, last_scroll = -1;
+    int last_hover = -2;
     int dirty = 1;              /* something changed and a frame is owed */
 
     if (have_arg) set_address(arg);
@@ -877,7 +596,7 @@ void _start(void) {
         /* A reflow costs a pass over the whole page, so it happens once the
            dragging has stopped rather than on every frame of it. */
         if (want_width && !in.down) {
-            layout(view_w - UI_PAD * 2);
+            relayout(view_w - UI_PAD * 2);
             laid_for = view_w;
             want_width = 0;
             dirty = 1;
@@ -912,15 +631,19 @@ void _start(void) {
                     ui_field_key(&bar, raw);
                 }
             } else {
-                int page = view_h - 40;
+                int pg = view_h - 40;
                 if (k == KEY_DOWN)       scroll += 40;
                 else if (k == KEY_UP)    scroll -= 40;
-                else if (k == KEY_PAGE_DOWN) scroll += page;
-                else if (k == KEY_PAGE_UP)   scroll -= page;
+                else if (k == KEY_PAGE_DOWN) scroll += pg;
+                else if (k == KEY_PAGE_UP)   scroll -= pg;
                 else if (k == KEY_HOME)  scroll = 0;
-                else if (k == KEY_END)   scroll = doc_h;
-                else if (k == ' ')       scroll += page;
-                else if (k == KEY_LEFT && hist_at > 0) {
+                else if (k == KEY_END)   scroll = page.height;
+                else if (k == ' ')       scroll += pg;
+                else if (k == '+' || k == '=') {
+                    if (root_px < 28) { root_px += 2; want_width = 1; laid_for = -1; }
+                } else if (k == '-') {
+                    if (root_px > 10) { root_px -= 2; want_width = 1; laid_for = -1; }
+                } else if (k == KEY_LEFT && hist_at > 0) {
                     hist[hist_at].scroll = scroll;
                     hist_at--;
                     set_address(hist[hist_at].text);
@@ -936,7 +659,7 @@ void _start(void) {
 
         scroll -= scrolled * 48;
 
-        int limit = doc_h - view_h;
+        int limit = page.height - view_h;
         if (limit < 0) limit = 0;
         if (scroll > limit) scroll = limit;
         if (scroll < 0) scroll = 0;
@@ -964,9 +687,7 @@ void _start(void) {
         dirty = 0;
 
         /* The theme comes off the disk, so it is read on a frame that is
-           being drawn rather than on every pass of this loop. It used to be
-           every pass: sixty file reads a second, on a window nobody was
-           touching, for an answer that had not changed. */
+           being drawn rather than on every pass of this loop. */
         ui_theme t = ui_load_theme();
 
         if (want_load) {
@@ -996,15 +717,28 @@ void _start(void) {
         int dx = in.mx - (view_x + UI_PAD);
         int dy = in.my - view_y + scroll;
         over_link = -1;
+        int node_under = -1;
         if (in.my > view_y && in.my < view_y + view_h) {
-            int hit = run_at(dx, dy);
-            if (hit >= 0) over_link = runs[hit].link;
+            over_link = lay_link_at(&page, dx, dy);
+            node_under = lay_node_at(&page, dx, dy);
+        }
+
+        /* :hover is a style, so an element coming under the pointer changes
+           what the page looks like and the page has to be laid out again.
+           Only when the element actually changed: doing it per frame lays
+           out a whole document sixty times a second for a pointer that has
+           not left the word it was on. */
+        if (node_under != last_hover) {
+            last_hover = node_under;
+            hover_node = node_under;
+            relayout(view_w - UI_PAD * 2);
+            over_link = lay_link_at(&page, dx, dy);
         }
 
         if (over_link >= 0 && in.released) {
             in.released = 0;
             url_t next;
-            if (url_join(&here, link_href(over_link), &next)) {
+            if (url_join(&here, page.text + page.links[over_link].href, &next)) {
                 char text_of[URL_TEXT];
                 url_text(&next, text_of, sizeof(text_of));
                 set_address(text_of);
@@ -1052,7 +786,7 @@ void _start(void) {
             char hover[URL_TEXT];
             if (over_link >= 0) {
                 url_t u;
-                if (url_join(&here, link_href(over_link), &u)) {
+                if (url_join(&here, page.text + page.links[over_link].href, &u)) {
                     url_text(&u, hover, sizeof(hover));
                     left = hover;
                 }
@@ -1066,12 +800,13 @@ void _start(void) {
             /* Clipped at the bottom by drawing into a surface that stops
                where the well does, and at the top by putting the bevel back
                afterwards. */
-            surface page = { px, w, view_y + view_h - 2 };
-            draw_runs(&page, &t, view_x + UI_PAD, view_y + 2, view_w, view_h - 4);
+            surface pg = { px, w, view_y + view_h - 2 };
+            draw_page(&pg, view_x + UI_PAD, view_y + 2, view_w, view_h - 4);
         }
         ui_sunken(&s, &t, view_x, view_y, view_w + UI_SCROLL_W, view_h);
         ui_scrollbar(&s, &t, view_x + view_w + 2, view_y + 2, view_h - 4,
-                     scroll, view_h, doc_h < view_h ? view_h : doc_h);
+                     scroll, view_h,
+                     page.height < view_h ? view_h : page.height);
 
         win_commit(win);
         sleep_ms(16);

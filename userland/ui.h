@@ -57,6 +57,16 @@ typedef struct {
     u32 edge_shadow;
     u32 edge_dark;
     u32 well;        /* the ground inside something sunk: a field, a list */
+
+    /* --- which century ---------------------------------------------------
+     *
+     * The kernel's chrome can be built out of bevels or out of material, and
+     * a program's own controls have to be whichever the window around them
+     * is. A modern title bar with a bevelled toolbar underneath it is the
+     * worst of both and reads as a program that was not updated. */
+    int modern;
+    u32 stroke;      /* the hairline that replaces a bevel */
+    u32 raised;      /* one layer up from bg, for a toolbar or a card */
 } ui_theme;
 
 /* --- surfaces that catch the light ---------------------------------------
@@ -78,6 +88,75 @@ static inline void ui_bevel(surface *s, int x, int y, int w, int h,
     rect(s, x + 1, y + 2, 1, h - 3, tl_in);
     rect(s, x + 1, y + h - 2, w - 2, 1, br_in);
     rect(s, x + w - 2, y + 1, 1, h - 2, br_in);
+}
+
+/* How much of one pixel falls inside a corner circle, as 0 to 255. The
+   kernel has the same routine for the same reason: sixteen samples rather
+   than one yes-or-no is the whole difference between a corner that reads as
+   a curve and one that reads as a staircase. */
+static inline int ui_corner_cover(int px, int cy8, int r8) {
+    int inside = 0;
+    for (int sy = 0; sy < 4; sy++)
+        for (int sx = 0; sx < 4; sx++) {
+            int dx = (px * 8 + sx * 2 + 1) - r8;
+            int dy = (sy * 2 + 1) - cy8;
+            if (dx * dx + dy * dy <= r8 * r8) inside++;
+        }
+    return inside * 255 / 16;
+}
+
+static inline void ui_round(surface *s, int x, int y, int w, int h, int r,
+                            u32 c, int alpha) {
+    if (w <= 0 || h <= 0 || alpha <= 0) return;
+    if (r * 2 > w) r = w / 2;
+    if (r * 2 > h) r = h / 2;
+    if (r < 0) r = 0;
+
+    for (int j = 0; j < h; j++) {
+        int from_edge = j < h - 1 - j ? j : h - 1 - j;
+        int py = y + j;
+        if (py < 0 || py >= s->h) continue;
+
+        if (from_edge >= r) {
+            if (alpha >= 255) rect(s, x, py, w, 1, c);
+            else for (int px = x; px < x + w; px++) {
+                if (px < 0 || px >= s->w) continue;
+                u32 *slot = &s->px[(u32)py * s->w + px];
+                *slot = mix(*slot, c, alpha);
+            }
+            continue;
+        }
+
+        int cy8 = (r - from_edge) * 8;
+        for (int i = 0; i < r; i++) {
+            int cov = ui_corner_cover(i, cy8, r * 8);
+            if (!cov) continue;
+            int a = alpha >= 255 ? cov : cov * alpha / 255;
+            int left = x + i, right = x + w - 1 - i;
+            if (left >= 0 && left < s->w) {
+                u32 *sl = &s->px[(u32)py * s->w + left];
+                *sl = mix(*sl, c, a);
+            }
+            if (right != left && right >= 0 && right < s->w) {
+                u32 *sl = &s->px[(u32)py * s->w + right];
+                *sl = mix(*sl, c, a);
+            }
+        }
+        if (alpha >= 255) rect(s, x + r, py, w - r * 2, 1, c);
+        else for (int px = x + r; px < x + w - r; px++) {
+            if (px < 0 || px >= s->w) continue;
+            u32 *slot = &s->px[(u32)py * s->w + px];
+            *slot = mix(*slot, c, alpha);
+        }
+    }
+}
+
+/* A hairline around a rounded shape: the shape in the line colour with the
+   shape one pixel smaller punched back out of it in the fill colour. */
+static inline void ui_round_outline(surface *s, int x, int y, int w, int h,
+                                    int r, u32 fill, u32 line) {
+    ui_round(s, x, y, w, h, r, line, 255);
+    ui_round(s, x + 1, y + 1, w - 2, h - 2, r > 0 ? r - 1 : 0, fill, 255);
 }
 
 static inline void ui_raised(surface *s, const ui_theme *t,
@@ -159,12 +238,55 @@ static inline ui_theme ui_load_theme(void) {
 
     int preset = ui_cfg_int(cfg, "preset", 1);
     if (preset < 0 || preset >= UI_PRESETS) preset = 0;
-    /* The built look is what this desktop is, so a machine with no settings
-       file yet gets it rather than falling back to the other one. */
     int light = ui_cfg_int(cfg, "light", 1);
 
+    /* Zero is modern, which is what a machine with no settings file gets.
+       The same default as the kernel's, and it has to stay the same one:
+       a window whose chrome disagrees with its contents about which look
+       it is reads as broken rather than as either. */
+    int built = ui_cfg_int(cfg, "look", 0);
+
     ui_theme t;
+    t.modern = !built;
     t.accent = (u32)ui_cfg_int(cfg, "accent", (int)UI_ACCENTS[preset]);
+
+    if (t.modern) {
+        /* Near white, because nothing here is a bevel that needs room above
+           and below it. What a modern surface needs is to be quiet enough
+           that a one pixel line shows on it. */
+        if (light) {
+            t.bg        = RGB(0xf4, 0xf4, 0xf7);
+            t.panel     = RGB(0xfa, 0xfa, 0xfc);
+            t.fg        = RGB(0x17, 0x18, 0x1c);
+            t.dim       = RGB(0x5d, 0x60, 0x6a);
+            t.line      = RGB(0xdd, 0xdd, 0xe3);
+            t.stroke    = RGB(0xd2, 0xd3, 0xda);
+            t.raised    = RGB(0xff, 0xff, 0xff);
+            t.well      = RGB(0xff, 0xff, 0xff);
+        } else {
+            t.bg        = RGB(0x22, 0x24, 0x2b);
+            t.panel     = RGB(0x2a, 0x2d, 0x35);
+            t.fg        = RGB(0xe6, 0xe8, 0xea);
+            t.dim       = RGB(0x9a, 0xa0, 0xa8);
+            t.line      = RGB(0x35, 0x38, 0x41);
+            t.stroke    = RGB(0x3c, 0x40, 0x4a);
+            t.raised    = RGB(0x2f, 0x32, 0x3b);
+            t.well      = RGB(0x1b, 0x1d, 0x23);
+        }
+        t.accent_fg   = RGB(0xff, 0xff, 0xff);
+        /* Kept so that anything still asking for an edge gets something
+           harmless rather than a colour from the other palette. */
+        t.edge_hi     = t.raised;
+        t.edge_light  = t.raised;
+        t.edge_shadow = t.stroke;
+        t.edge_dark   = t.stroke;
+        t.soft = mix(t.bg, t.accent, light ? 40 : 48);
+        t.warn = RGB(0xe0, 0x6c, 0x60);
+        return t;
+    }
+
+    t.stroke = 0;
+    t.raised = 0;
 
     if (light) {
         /* The same grey the chrome is made of. A near-white surface has
@@ -272,6 +394,20 @@ static inline int ui_button(surface *s, ui_input *in, const ui_theme *t,
        pixel down and right, so the button is genuinely depressed: that
        reads as a press at any size and in any palette, which a tint does
        not. */
+    if (t->modern) {
+        /* A card with a hairline, lifting under the pointer and settling
+           when pressed. The press is a colour change rather than a bevel
+           turning over, because there is no bevel to turn. */
+        u32 face = held ? mix(t->raised, t->accent, 40)
+                        : (over ? mix(t->raised, t->accent, 14) : t->raised);
+        ui_round_outline(s, x, y, w, h, 7, face,
+                         held || over ? t->accent : t->stroke);
+        face_centred(s, x, y + (held ? 1 : 0), w, h, label, t->fg,
+                     UI_FACE_BODY);
+        if (over && in->released) { in->released = 0; return 1; }
+        return 0;
+    }
+
     u32 face = over && !held ? mix(t->panel, t->edge_hi, 70) : t->panel;
     rect(s, x, y, w, h, face);
     if (held) ui_sunken(s, t, x, y, w, h);
@@ -289,6 +425,16 @@ static inline int ui_button_primary(surface *s, ui_input *in, const ui_theme *t,
     int h = UI_BTN_H;
     int over = ui_hit(in, x, y, w, h);
     int held = over && in->down;
+
+    if (t->modern) {
+        u32 face = held ? mix(t->accent, 0, 40)
+                        : (over ? mix(t->accent, 0xFFFFFF, 26) : t->accent);
+        ui_round(s, x, y, w, h, 7, face, 255);
+        face_centred(s, x, y + (held ? 1 : 0), w, h, label, t->accent_fg,
+                     UI_FACE_BODY);
+        if (over && in->released) { in->released = 0; return 1; }
+        return 0;
+    }
 
     u32 face = over && !held ? mix(t->accent, 0xFFFFFF, 30) : t->accent;
     rect(s, x, y, w, h, face);
@@ -468,9 +614,18 @@ static inline void ui_field_draw(surface *s, ui_input *in, const ui_theme *t,
     /* Sunk, and paper coloured inside. Somewhere to type is a hole in the
        surface with something white at the bottom of it, which is the one
        shape that has always meant "this accepts text" without a label. */
-    rect(s, x, y, w, h, t->well);
-    ui_sunken(s, t, x, y, w, h);
-    if (f->focused) rect(s, x + 2, y + 2, w - 4, 1, t->accent);
+    if (t->modern) {
+        /* A rounded well with a hairline, and the line goes accent coloured
+           when it has the keyboard. A ring rather than a bar under the
+           text: the bar was the two pixels a bevel left spare, and with no
+           bevel there is nowhere for it to sit. */
+        ui_round_outline(s, x, y, w, h, 7, t->well,
+                         f->focused ? t->accent : t->stroke);
+    } else {
+        rect(s, x, y, w, h, t->well);
+        ui_sunken(s, t, x, y, w, h);
+        if (f->focused) rect(s, x + 2, y + 2, w - 4, 1, t->accent);
+    }
 
     int ty = y + (h - face_h(UI_FACE_BODY)) / 2;
     if (f->len == 0 && placeholder) {
@@ -501,8 +656,11 @@ static inline void ui_field_draw(surface *s, ui_input *in, const ui_theme *t,
 static inline void ui_well(surface *s, const ui_theme *t,
                            int x, int y, int w, int h,
                            int *ix, int *iy, int *iw, int *ih) {
-    rect(s, x, y, w, h, t->well);
-    ui_sunken(s, t, x, y, w, h);
+    if (t->modern) ui_round_outline(s, x, y, w, h, 8, t->well, t->stroke);
+    else {
+        rect(s, x, y, w, h, t->well);
+        ui_sunken(s, t, x, y, w, h);
+    }
     if (ix) *ix = x + 2;
     if (iy) *iy = y + 2;
     if (iw) *iw = w - 4;
@@ -514,15 +672,20 @@ static inline void ui_well(surface *s, const ui_theme *t,
 /* The strip across the top of a window that holds its controls. */
 static inline void ui_toolbar(surface *s, const ui_theme *t, int w, int h) {
     rect(s, 0, 0, w, h, t->panel);
-    /* A groove under it rather than a line: a toolbar sits on the window,
-       and the two pixels that say so are the same two the chrome uses. */
-    ui_groove(s, t, 0, h - 2, w, 2);
+    if (t->modern) {
+        /* One line, not a groove. A groove is two pixels catching light
+           from a source that is not lighting anything else here. */
+        rect(s, 0, h - 1, w, 1, t->line);
+    } else {
+        ui_groove(s, t, 0, h - 2, w, 2);
+    }
 }
 
 /* A separator between groups of buttons on a toolbar. Vertical twin of the
    groove, and the reason a row of a dozen icons reads as three groups. */
 static inline void ui_toolbar_gap(surface *s, const ui_theme *t,
                                   int x, int y, int h) {
+    if (t->modern) { rect(s, x, y + 2, 1, h - 4, t->line); return; }
     rect(s, x, y, 1, h, t->edge_shadow);
     rect(s, x + 1, y, 1, h, t->edge_hi);
 }
@@ -577,6 +740,21 @@ static inline void ui_statusbar(surface *s, const ui_theme *t,
     int ty = y + (UI_ROW - face_h(UI_FACE_BODY)) / 2;
     int split = right ? w - 140 : w - 3;
     if (split < 60) split = w - 3;
+
+    if (t->modern) {
+        /* One line above it and nothing else. The two sunk panels are the
+           shape a status bar has had for thirty years and they are two more
+           boxes on a window that no longer has any: what the text needs to
+           read as a status bar is to be quiet and at the bottom, which a
+           line above it already says. */
+        rect(s, 0, y, w, 1, t->line);
+        if (left) face_draw(s, 10, ty, left, t->dim, UI_FACE_BODY);
+        if (right) {
+            int rw = face_w(right, UI_FACE_BODY);
+            face_draw(s, w - 10 - rw, ty, right, t->dim, UI_FACE_BODY);
+        }
+        return;
+    }
 
     ui_sunken(s, t, 2, y + 2, split - 4, UI_ROW - 4);
     if (left) face_draw(s, 7, ty, left, t->fg, UI_FACE_BODY);
