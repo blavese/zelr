@@ -27,7 +27,7 @@
  *
  * So the number is here, where the table that has to fit in it can see it,
  * and the fit is now a compile error rather than a program that vanishes. */
-#define SYSFS_MAX_PROGRAMS 32
+#define SYSFS_MAX_PROGRAMS 48
 
 /* Fills out with text and returns how many bytes it wrote. Called with a
    buffer of at least SYSFS_MAX bytes. */

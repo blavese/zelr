@@ -239,3 +239,9 @@ builtin_layouttest_end:
 builtin_wiretest_start:
 .incbin "build/user/wiretest.elf"
 builtin_wiretest_end:
+
+.global builtin_jsprobe_start
+.global builtin_jsprobe_end
+builtin_jsprobe_start:
+.incbin "build/user/jsprobe.elf"
+builtin_jsprobe_end:

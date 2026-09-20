@@ -397,6 +397,58 @@ int main(void) {
     expect("and a pattern that can match nothing still ends",
            "'aaa'.replace(/b*/g, '-')", "-a-a-a-");
 
+    /* --- arrow functions -------------------------------------------------
+     *
+     * The one that matters most is the last: a bracket is a bracket until a
+     * => follows it, and an engine that guesses wrong breaks ordinary
+     * arithmetic everywhere.
+     */
+    expect("an arrow with one argument", "(x => x * 2)(4)", "8");
+    expect("and with several", "((a, b) => a + b)(2, 3)", "5");
+    expect("and with none at all", "(() => 7)()", "7");
+    expect("a body in braces says what it returns",
+           "((x) => { return x + 1; })(4)", "5");
+    expect("one arrow can return another",
+           "(a => b => a + b)(1)(2)", "3");
+    expect("this comes from where it was written, not where it is called",
+           "(function(){ var o = { v: 5, get: function(){"
+           " var f = () => this.v; return f(); } }; return o.get(); })()",
+           "5");
+    expect("and a bracket that is not an arrow is still a bracket",
+           "(1 + 2) * 3", "9");
+    expect("even when it holds a list", "(function(a,b){return b;})(1, 2)",
+           "2");
+
+    /* --- instanceof, and labels ------------------------------------------ */
+    expect("an object knows what made it",
+           "(function(){ function Thing(){} return new Thing() instanceof"
+           " Thing; })()", "true");
+    expect("and what did not",
+           "(function(){ function A(){} function B(){} return new A()"
+           " instanceof B; })()", "false");
+    expect("an array is an Array", "[1,2] instanceof Array", "true");
+    expect("and an object is not", "({}) instanceof Array", "false");
+    expect("a function is a Function",
+           "(function(){}) instanceof Function", "true");
+    expect("something that is not an object is not an instance of anything",
+           "5 instanceof Object", "false");
+
+    expect("break leaves the loop it names, not the one it is in",
+           "(function(){ var n = 0;"
+           " outer: for (var i = 0; i < 3; i++) {"
+           "   for (var j = 0; j < 3; j++) { n++; if (j == 1) break outer; }"
+           " } return n; })()", "2");
+    expect("and continue goes round the one it names",
+           "(function(){ var n = 0;"
+           " outer: for (var i = 0; i < 3; i++) {"
+           "   for (var j = 0; j < 3; j++) { n++; continue outer; }"
+           " } return n; })()", "3");
+    expect("a plain break still leaves the nearest loop",
+           "(function(){ var n = 0;"
+           " for (var i = 0; i < 3; i++) {"
+           "   for (var j = 0; j < 3; j++) { n++; break; }"
+           " } return n; })()", "3");
+
     puts(failed ? "JSTEST_FAIL\n" : "JSTEST_PASS\n");
     return failed;
 }

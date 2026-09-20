@@ -491,6 +491,12 @@ static jval js_call(jctx *J, jval fn, jval this_val, jval *argv, int argc) {
     jobj *f = fn.obj;
     if (f->kind == JO_NATIVE) return f->fn(J, this_val, argv, argc);
 
+    /* An arrow function carries the receiver it was written under. */
+    {
+        jprop *lex = js_find(f, js_str(J, "__this__"));
+        if (lex) this_val = lex->v;
+    }
+
     jscope *sc = js_scope(J, f->closure);
     if (!sc) return js_undef();
 
@@ -1243,6 +1249,14 @@ static jplace js_place(jctx *J, int node, jscope *sc, jval this_val) {
     return p;
 }
 
+/* Whether a break or continue that has arrived here was aimed at this
+   loop. One with no name is for whichever loop catches it first; one with a
+   name belongs to the statement of that name and nothing else. */
+static int js_label_mine(jctx *J, jstr *mine) {
+    if (!J->label) return 1;
+    return mine && js_str_eq(J->label, mine);
+}
+
 static jval js_place_get(jctx *J, jplace *p, jscope *sc) {
     if (p->kind == 0) {
         jprop *v = js_lookup(sc, p->name);
@@ -1315,6 +1329,46 @@ static jval js_binary(jctx *J, jop op, jval l, jval r, int line) {
         case OP_SHL:  return js_num((double)(js_to_i32(J, l) << (js_to_u32(J, r) & 31)));
         case OP_SHR:  return js_num((double)(js_to_i32(J, l) >> (js_to_u32(J, r) & 31)));
         case OP_USHR: return js_num((double)(js_to_u32(J, l) >> (js_to_u32(J, r) & 31)));
+
+        /* `x instanceof F`
+         *
+         * There is no prototype chain a script can reach into here, so this
+         * cannot be the walk up one that it is in a bigger engine. What it
+         * is instead is exact about the thing it can be exact about: every
+         * object made with `new` remembers what made it, and that is the
+         * question being asked in nearly every use of this operator.
+         *
+         * What is therefore missing is inheritance -- an object made by one
+         * constructor is not an instance of another that its maker was set
+         * up from. That is said here rather than discovered: a false where
+         * a page expected true is a branch not taken, and the page will
+         * look like it decided something rather than like it broke.
+         *
+         * The built-in names are answered by what the object actually is,
+         * because an array is an array whether or not anybody said new. */
+        case OP_INSTANCEOF: {
+            if (l.t != JS_OBJ || !l.obj) return js_bool(0);
+            if (r.t != JS_OBJ || !r.obj)
+                return js_throw(J, "the right of instanceof is not a "
+                                   "constructor", line);
+
+            jprop *made_by = js_find(l.obj, js_str(J, "__ctor__"));
+            if (made_by && made_by->v.t == JS_OBJ && made_by->v.obj == r.obj)
+                return js_bool(1);
+
+            jstr *nm = r.obj->name;
+            if (nm) {
+                if (js_str_is(nm, "Array"))
+                    return js_bool(l.obj->kind == JO_ARRAY);
+                if (js_str_is(nm, "RegExp"))
+                    return js_bool(l.obj->kind == JO_REGEX);
+                if (js_str_is(nm, "Function"))
+                    return js_bool(l.obj->kind == JO_FUNC
+                                   || l.obj->kind == JO_NATIVE);
+                if (js_str_is(nm, "Object")) return js_bool(1);
+            }
+            return js_bool(0);
+        }
 
         case OP_IN: {
             if (r.t != JS_OBJ || !r.obj) return js_bool(0);
@@ -1391,6 +1445,10 @@ static jval js_eval(jctx *J, int node, jscope *sc, jval this_val) {
             f->nparams = n->c;
             f->closure = sc;
             f->name = n->str;
+            /* An arrow takes `this` from where it was written rather than
+               from wherever it is later called, so it is caught here, at
+               the moment the function value is made. */
+            if (n->op) js_set(J, f, "__this__", this_val);
             return js_from_obj(f);
         }
 
@@ -1469,6 +1527,8 @@ static jval js_eval(jctx *J, int node, jscope *sc, jval this_val) {
             }
             jobj *fresh = js_object(J, JO_PLAIN);
             if (!fresh) return js_undef();
+            /* So that instanceof has something exact to answer with. */
+            if (fn.t == JS_OBJ && fn.obj) js_set(J, fresh, "__ctor__", fn);
             jval self = js_from_obj(fresh);
             jval out = js_call(J, fn, self, argv, argc);
             /* A constructor that returns an object returns that; one that
@@ -1634,29 +1694,48 @@ static jsignal js_exec(jctx *J, int node, jscope *sc, jval this_val) {
             if (n->c >= 0) return js_exec(J, n->c, sc, this_val);
             return J->sig;
 
-        case N_WHILE:
+        case N_WHILE: {
+            jstr *mine = J->pending_label;
+            J->pending_label = 0;
             while (js_to_bool(js_eval(J, n->a, sc, this_val))) {
                 if (J->sig != JS_OK) return J->sig;
                 jsignal s = js_exec(J, n->b, sc, this_val);
-                if (s == JS_BREAK) { J->sig = JS_OK; break; }
-                if (s == JS_CONTINUE) { J->sig = JS_OK; continue; }
+                if (s == JS_BREAK) {
+                    if (!js_label_mine(J, mine)) return s;
+                    J->label = 0; J->sig = JS_OK; break;
+                }
+                if (s == JS_CONTINUE) {
+                    if (!js_label_mine(J, mine)) return s;
+                    J->label = 0; J->sig = JS_OK; continue;
+                }
                 if (s != JS_OK) return s;
                 if (!js_tick(J)) return J->sig;
             }
             return J->sig;
+        }
 
-        case N_DO:
+        case N_DO: {
+            jstr *mine = J->pending_label;
+            J->pending_label = 0;
             for (;;) {
                 jsignal s = js_exec(J, n->b, sc, this_val);
-                if (s == JS_BREAK) { J->sig = JS_OK; break; }
-                if (s == JS_CONTINUE) J->sig = JS_OK;
-                else if (s != JS_OK) return s;
+                if (s == JS_BREAK) {
+                    if (!js_label_mine(J, mine)) return s;
+                    J->label = 0; J->sig = JS_OK; break;
+                }
+                if (s == JS_CONTINUE) {
+                    if (!js_label_mine(J, mine)) return s;
+                    J->label = 0; J->sig = JS_OK;
+                } else if (s != JS_OK) return s;
                 if (!js_to_bool(js_eval(J, n->a, sc, this_val))) break;
                 if (!js_tick(J)) return J->sig;
             }
             return J->sig;
+        }
 
         case N_FOR: {
+            jstr *mine = J->pending_label;
+            J->pending_label = 0;
             if (n->a >= 0) {
                 jsignal s = js_exec(J, n->a, sc, this_val);
                 if (s != JS_OK) return s;
@@ -1666,9 +1745,13 @@ static jsignal js_exec(jctx *J, int node, jscope *sc, jval this_val) {
                     break;
                 if (J->sig != JS_OK) return J->sig;
                 jsignal s = js_exec(J, n->d, sc, this_val);
-                if (s == JS_BREAK) { J->sig = JS_OK; break; }
+                if (s == JS_BREAK) {
+                    if (!js_label_mine(J, mine)) return s;
+                    J->label = 0; J->sig = JS_OK; break;
+                }
+                if (s == JS_CONTINUE && !js_label_mine(J, mine)) return s;
                 if (s != JS_OK && s != JS_CONTINUE) return s;
-                if (s == JS_CONTINUE) J->sig = JS_OK;
+                if (s == JS_CONTINUE) { J->label = 0; J->sig = JS_OK; }
                 if (n->c >= 0) js_eval(J, n->c, sc, this_val);
                 if (!js_tick(J)) return J->sig;
             }
@@ -1721,8 +1804,30 @@ static jsignal js_exec(jctx *J, int node, jscope *sc, jval this_val) {
             J->sig = JS_RETURN;
             return JS_RETURN;
 
-        case N_BREAK:    J->sig = JS_BREAK;    return JS_BREAK;
-        case N_CONTINUE: J->sig = JS_CONTINUE; return JS_CONTINUE;
+        case N_BREAK:
+            J->label = n->str;
+            J->sig = JS_BREAK;
+            return JS_BREAK;
+        case N_CONTINUE:
+            J->label = n->str;
+            J->sig = JS_CONTINUE;
+            return JS_CONTINUE;
+
+        /* The name is handed to the statement about to run, so that a loop
+           can tell a break meant for it from one meant for something it is
+           inside. A labelled thing that is not a loop -- a block, which is
+           the other common one -- catches its own break here. */
+        case N_LABEL: {
+            J->pending_label = n->str;
+            jsignal s = js_exec(J, n->a, sc, this_val);
+            J->pending_label = 0;
+            if (s == JS_BREAK && J->label && js_str_eq(J->label, n->str)) {
+                J->label = 0;
+                J->sig = JS_OK;
+                return JS_OK;
+            }
+            return s;
+        }
 
         case N_THROW: {
             jval v = js_eval(J, n->a, sc, this_val);
@@ -2191,6 +2296,39 @@ static jval nat_obj_values(jctx *J, jval t, jval *a, int n) {
 
 /* --- setting it all up ---------------------------------------------------- */
 
+/* Array, as something a page can name. Array(3) is three empty places and
+   Array(1, 2) is two values, which is the one place this constructor is
+   surprising and the one a page relies on. */
+static jval nat_array_make(jctx *J, jval t, jval *a, int n) {
+    (void)t;
+    jobj *o = js_array(J);
+    if (!o) return js_null();
+    if (n == 1 && a[0].t == JS_NUM) {
+        double want = a[0].num;
+        if (!(want > 0)) return js_from_obj(o);
+        if (want > 100000) want = 100000;
+        for (u32 i = 0; i < (u32)want; i++) js_arr_set(J, o, i, js_undef());
+        return js_from_obj(o);
+    }
+    for (int i = 0; i < n; i++) js_arr_set(J, o, (u32)i, a[i]);
+    return js_from_obj(o);
+}
+
+static jval nat_array_is(jctx *J, jval t, jval *a, int n) {
+    (void)J; (void)t;
+    jval v = js_arg(a, n, 0);
+    return js_bool(v.t == JS_OBJ && v.obj && v.obj->kind == JO_ARRAY);
+}
+
+/* Function exists to be named -- `x instanceof Function` is ordinary -- and
+   not to be called: building one out of text is eval by another spelling,
+   and that is refused here by name like the rest of it. */
+static jval nat_function_make(jctx *J, jval t, jval *a, int n) {
+    (void)t; (void)a; (void)n;
+    return js_throw(J, "a function built out of text is not here",
+                    J->error_line);
+}
+
 static void js_globals(jctx *J) {
     jscope *g = J->global;
 
@@ -2229,7 +2367,17 @@ static void js_globals(jctx *J) {
     js_set(J, object, "keys", js_from_obj(js_native(J, "keys", nat_obj_keys)));
     js_set(J, object, "values",
            js_from_obj(js_native(J, "values", nat_obj_values)));
+    /* Named, so that `instanceof Object` has something to compare with.
+       It is an object rather than a function here because nothing calls it. */
+    object->name = js_str(J, "Object");
     js_declare(J, g, js_str(J, "Object"), js_from_obj(object));
+
+    jobj *array = js_native(J, "Array", nat_array_make);
+    js_set(J, array, "isArray", js_from_obj(js_native(J, "isArray",
+                                                      nat_array_is)));
+    js_declare(J, g, js_str(J, "Array"), js_from_obj(array));
+    js_declare(J, g, js_str(J, "Function"),
+               js_from_obj(js_native(J, "Function", nat_function_make)));
 
     js_declare(J, g, js_str(J, "parseInt"),
                js_from_obj(js_native(J, "parseInt", nat_parseint)));

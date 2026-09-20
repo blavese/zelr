@@ -43,7 +43,8 @@ typedef enum {
     OP_AND, OP_OR, OP_NOT,
     OP_BAND, OP_BOR, OP_BXOR, OP_BNOT, OP_SHL, OP_SHR, OP_USHR,
     OP_ASSIGN, OP_ADDEQ, OP_SUBEQ, OP_MULEQ, OP_DIVEQ, OP_MODEQ,
-    OP_OREQ, OP_ANDEQ, OP_NEG, OP_POS, OP_INC, OP_DEC, OP_IN
+    OP_OREQ, OP_ANDEQ, OP_NEG, OP_POS, OP_INC, OP_DEC, OP_IN, OP_ARROW,
+    OP_INSTANCEOF
 } jop;
 
 typedef struct {
@@ -392,6 +393,8 @@ static void js_next(jlex *L) {
 
     if (TWO('=', '=')) { L->tok.op = OP_EQ;  L->at += 2; L->tok.len = 2; return; }
     if (TWO('!', '=')) { L->tok.op = OP_NE;  L->at += 2; L->tok.len = 2; return; }
+    /* After `==` and `===`, so that neither is read as one of these. */
+    if (TWO('=', '>')) { L->tok.op = OP_ARROW; L->at += 2; L->tok.len = 2; return; }
     if (TWO('<', '=')) { L->tok.op = OP_LE;  L->at += 2; L->tok.len = 2; return; }
     if (TWO('>', '=')) { L->tok.op = OP_GE;  L->at += 2; L->tok.len = 2; return; }
     if (TWO('&', '&')) { L->tok.op = OP_AND; L->at += 2; L->tok.len = 2; return; }
@@ -499,7 +502,18 @@ static void js_expect(jparse *P, char c) {
     char want[2];
     want[0] = c;
     want[1] = 0;
-    js_fail_at(P->J, P->L.tok.line, "expected ", want, 1);
+    /* And what was there instead. "expected )" on its own sends whoever
+       reads it back to the source to find out which ) and what stopped it;
+       the token is the answer and it is right here. */
+    char said[80];
+    int w = 0;
+    for (const char *q = "expected "; *q; q++) said[w++] = *q;
+    said[w++] = c;
+    for (const char *q = ", not "; *q; q++) said[w++] = *q;
+    for (u32 k = 0; k < P->L.tok.len && w < (int)sizeof(said) - 1; k++)
+        said[w++] = P->L.tok.text[k];
+    said[w] = 0;
+    js_fail_at(P->J, P->L.tok.line, said, 0, 0);
     P->L.failed = 1;
 }
 
@@ -514,7 +528,8 @@ static void js_semicolon(jparse *P) {
     if (P->L.tok.type == T_EOF) return;
     if (P->L.tok.nl_before) return;
     js_fail_at(P->J, P->L.tok.line,
-               "expected a semicolon or a new line after this", 0, 0);
+               "expected a semicolon or a new line, not ",
+               P->L.tok.text, P->L.tok.len);
     P->L.failed = 1;
 }
 
@@ -527,7 +542,8 @@ static int js_prec(jop op) {
         case OP_BXOR: return 4;
         case OP_BAND: return 5;
         case OP_EQ: case OP_NE: case OP_SEQ: case OP_SNE: return 6;
-        case OP_LT: case OP_GT: case OP_LE: case OP_GE: case OP_IN: return 7;
+        case OP_LT: case OP_GT: case OP_LE: case OP_GE: case OP_IN:
+        case OP_INSTANCEOF: return 7;
         case OP_SHL: case OP_SHR: case OP_USHR: return 8;
         case OP_ADD: case OP_SUB: return 9;
         case OP_MUL: case OP_DIV: case OP_MOD: return 10;
@@ -791,7 +807,7 @@ static int js_parse_binary(jparse *P, int min_prec) {
         jop op = OP_NONE;
         if (P->L.tok.type == T_PUNCT) op = P->L.tok.op;
         else if (js_at_word(P, "in")) op = OP_IN;
-        else if (js_at_word(P, "instanceof")) op = OP_NONE;
+        else if (js_at_word(P, "instanceof")) op = OP_INSTANCEOF;
 
         int prec = js_prec(op);
         if (!prec || prec < min_prec) return left;
@@ -825,8 +841,102 @@ static int js_parse_cond(jparse *P) {
     return n;
 }
 
+/* --- arrow functions ------------------------------------------------------
+ *
+ * Minified script is mostly these. An engine without them stops at the
+ * first one, which on a real page is within the first few hundred bytes,
+ * and what the reader gets is a page that did nothing.
+ *
+ * They have to be recognised before the expression is parsed, because
+ * `(a, b)` is a perfectly ordinary parenthesised expression right up until
+ * a `=>` follows it, and the lexer is one token deep. So the bracket is
+ * read speculatively and the lexer put back where it was if it turns out
+ * not to be one. Putting it back is exact: the lexer is a value, holding
+ * its position and its one token, and nothing else in the parse has moved.
+ */
+#define JS_ARROW_PARAMS 16
+
+static int js_finish_arrow(jparse *P, jstr **names, int count) {
+    jctx *J = P->J;
+    int line = P->L.tok.line;
+    js_next(&P->L);                          /* past the => */
+
+    int n = js_node(J, N_FUNC, line);
+    if (n < 0) return -1;
+    J->nodes[n].str = 0;
+    /* Marked, so that `this` inside it comes from where it was written. */
+    J->nodes[n].op = 1;
+
+    int tail = -1;
+    for (int i = 0; i < count; i++) {
+        int cell = js_node(J, N_SEQ, line);
+        if (cell < 0) break;
+        J->nodes[cell].str = names[i];
+        if (tail < 0) J->nodes[n].b = cell;
+        else J->nodes[tail].b = cell;
+        tail = cell;
+    }
+    J->nodes[n].c = count;
+
+    if (js_at_punct(P, '{')) {
+        J->nodes[n].a = js_parse_stmt(P);
+    } else {
+        /* A body that is one expression is that expression returned, which
+           is the whole reason anybody writes one of these. */
+        int e = js_parse_assign(P);
+        int r = js_node(J, N_RETURN, line);
+        if (r < 0) return n;
+        J->nodes[r].a = e;
+        J->nodes[n].a = r;
+    }
+    return n;
+}
+
+static int js_try_arrow(jparse *P) {
+    jctx *J = P->J;
+    jlex save = P->L;
+    jstr *names[JS_ARROW_PARAMS];
+
+    if (P->L.tok.type == T_NAME) {
+        names[0] = js_str_n(J, P->L.tok.text, P->L.tok.len);
+        js_next(&P->L);
+        if (P->L.tok.type == T_PUNCT && P->L.tok.op == OP_ARROW)
+            return js_finish_arrow(P, names, 1);
+        P->L = save;
+        return -1;
+    }
+
+    if (!js_at_punct(P, '(')) return -1;
+    js_next(&P->L);
+
+    int count = 0, ok = 1;
+    if (!js_at_punct(P, ')')) {
+        for (;;) {
+            if (P->L.tok.type != T_NAME || count >= JS_ARROW_PARAMS) {
+                ok = 0;
+                break;
+            }
+            names[count++] = js_str_n(J, P->L.tok.text, P->L.tok.len);
+            js_next(&P->L);
+            if (js_eat_punct(P, ',')) continue;
+            break;
+        }
+    }
+    if (ok && js_at_punct(P, ')')) {
+        js_next(&P->L);
+        if (P->L.tok.type == T_PUNCT && P->L.tok.op == OP_ARROW)
+            return js_finish_arrow(P, names, count);
+    }
+
+    P->L = save;
+    return -1;
+}
+
 static int js_parse_assign(jparse *P) {
     jctx *J = P->J;
+    int arrow = js_try_arrow(P);
+    if (arrow >= 0) return arrow;
+
     int left = js_parse_cond(P);
     if (P->L.tok.type != T_PUNCT) return left;
 
@@ -971,8 +1081,37 @@ static int js_parse_block(jparse *P) {
     return head;
 }
 
+/* `outer: for (;;) { ... break outer; }`
+ *
+ * Minified script is full of these, and a name followed by a colon is
+ * otherwise a statement that begins with an expression and then runs into
+ * something that cannot follow it -- which is exactly the error this used
+ * to give. The lexer is one token deep, so the colon is looked for by
+ * reading past the name and putting the lexer back if it is not there. */
+static int js_try_label(jparse *P) {
+    jctx *J = P->J;
+    if (P->L.tok.type != T_NAME) return -1;
+
+    jlex save = P->L;
+    int line = P->L.tok.line;
+    jstr *name = js_str_n(J, P->L.tok.text, P->L.tok.len);
+    js_next(&P->L);
+    if (!js_at_punct(P, ':')) { P->L = save; return -1; }
+    js_next(&P->L);
+
+    int n = js_node(J, N_LABEL, line);
+    if (n < 0) return -1;
+    J->nodes[n].str = name;
+    J->nodes[n].a = js_parse_stmt(P);
+    return n;
+}
+
 static int js_parse_stmt(jparse *P) {
     jctx *J = P->J;
+    {
+        int lab = js_try_label(P);
+        if (lab >= 0) return lab;
+    }
     int line = P->L.tok.line;
     if (P->L.failed) return -1;
 
@@ -1127,11 +1266,21 @@ static int js_parse_stmt(jparse *P) {
 
     if (js_eat_word(P, "break")) {
         int n = js_node(J, N_BREAK, line);
+        /* `break outer`, which only means anything on the same line: a name
+           on the next line is the next statement. */
+        if (n >= 0 && P->L.tok.type == T_NAME && !P->L.tok.nl_before) {
+            J->nodes[n].str = js_str_n(J, P->L.tok.text, P->L.tok.len);
+            js_next(&P->L);
+        }
         js_semicolon(P);
         return n;
     }
     if (js_eat_word(P, "continue")) {
         int n = js_node(J, N_CONTINUE, line);
+        if (n >= 0 && P->L.tok.type == T_NAME && !P->L.tok.nl_before) {
+            J->nodes[n].str = js_str_n(J, P->L.tok.text, P->L.tok.len);
+            js_next(&P->L);
+        }
         js_semicolon(P);
         return n;
     }

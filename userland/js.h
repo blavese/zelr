@@ -166,7 +166,7 @@ typedef enum {
     /* statements */
     N_VAR, N_BLOCK, N_IF, N_WHILE, N_DO, N_FOR, N_FORIN,
     N_RETURN, N_BREAK, N_CONTINUE, N_EXPRSTMT, N_FUNCDECL, N_EMPTY,
-    N_THROW, N_TRY, N_SWITCH, N_CASE
+    N_THROW, N_TRY, N_SWITCH, N_CASE, N_LABEL
 } ntype;
 
 typedef struct {
@@ -188,6 +188,13 @@ typedef struct jctx {
     /* the tree */
     jnode *nodes;
     int    nnodes, ncap;
+
+    /* Where a break or continue is aimed, and the name about to be given to
+       the statement being entered. A loop that is not the one named has to
+       pass the signal on rather than swallowing it, which is the whole of
+       what a label is for. */
+    jstr  *label;
+    jstr  *pending_label;
 
     /* the region */
     jchunk *chunks;
