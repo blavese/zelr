@@ -66,6 +66,39 @@ u32 task_stack_headroom(const task_t *t) {
 
 static task_t *head;        /* circular list */
 static task_t *current;
+
+/* --- somewhere to go when there is nothing to do -------------------------
+ *
+ * There was nowhere. pick_next walked the ring, found nothing runnable, and
+ * returned the task it had been given -- which was the task that had just
+ * asked to sleep. The switch then set it running again. So a sleep returned
+ * with no time passed whenever nothing else wanted the processor, which on
+ * a machine running one program is most of the time.
+ *
+ * Nothing about that is visible as a sleep that did not sleep. What it
+ * looks like is a program that spins: the browser could not yield without
+ * stopping, so it spun, and spinning starved every other task on the
+ * machine. A terminal raised in front of it took neither a typed line nor
+ * a resize. Typing went lossy because the console was not read often
+ * enough to drain the uart. The compositor caught programs half way
+ * through a frame, every frame, because no program was ever between
+ * frames. Four different faults, and one of them.
+ *
+ * So there is a task whose whole job is to be runnable when nothing else
+ * is. It halts, which is also the thing that lets the processor cool down
+ * and a laptop stop spinning its fan, and it charges every tick it spends
+ * there to itself as idle rather than as work. */
+static task_t *idle_task;
+
+static void idle_entry(void) {
+    for (;;) {
+        u64 before = timer_ticks();
+        /* Interrupts are already on -- the frame this task was built with
+           sets IF -- so the halt ends at the next tick at the latest. */
+        hlt();
+        if (idle_task) idle_task->idle_ticks += timer_ticks() - before;
+    }
+}
 static u32 next_pid = 1;
 static bool started = false;
 
@@ -293,10 +326,19 @@ u32 task_count(void) {
     return n;
 }
 
+/* Exactly one lap of the ring, starting after whoever just ran, which is
+   what makes this round robin rather than a search that favours the front
+   of the list. The task that just ran is itself visited last, so a machine
+   with one runnable task keeps running it. */
 static task_t *pick_next(task_t *from) {
-    task_t *p = from ? from->next : head;
+    task_t *start = from ? from->next : head;
+    if (!start) return 0;
+
     u64 now = timer_ticks();
-    for (u32 i = 0; i < 4096 && p; i++, p = p->next) {
+    task_t *p = start;
+    task_t *idle_seen = 0;
+
+    do {
         if (p->state == TASK_SLEEPING && now >= p->wake_at) p->state = TASK_READY;
 
         /* A blocked task with a deadline gets released when it passes, so a
@@ -310,8 +352,20 @@ static task_t *pick_next(task_t *from) {
             p->state = TASK_READY;
         }
 
-        if (p->state == TASK_READY || p->state == TASK_RUNNING) return p;
-    }
+        if (p->state == TASK_READY || p->state == TASK_RUNNING) {
+            /* Idle is runnable by construction and must never be picked
+               over something with work to do, so it is remembered and
+               walked past. */
+            if (p == idle_task) idle_seen = p;
+            else return p;
+        }
+        p = p->next;
+    } while (p && p != start);
+
+    /* Nothing wanted the processor. Before there was an idle task the only
+       answer here was `from`, and handing the processor back to a task that
+       has just asked to sleep is what made a sleep mean nothing. */
+    if (idle_seen) return idle_seen;
     return from;
 }
 
@@ -391,6 +445,12 @@ u64 scheduler_switch(u64 rsp) {
 
 void sched_start(void) {
     if (!head) panic("sched_start with no tasks");
+
+    /* Last, so that the count printed at boot is the number of tasks this
+       machine was asked to run rather than that plus one. */
+    idle_task = task_create("idle", idle_entry);
+    if (!idle_task) panic("no room for an idle task");
+
     started = true;
     sti();
     for (;;) hlt();          /* the first timer tick takes us into a task */
@@ -432,9 +492,27 @@ void task_idle_wait(void) {
     if (current) current->idle_ticks += timer_ticks() - before;
 }
 
+/* Rounded up, and never to nothing.
+ *
+ * (ms * hz) / 1000 truncates, so at a hundred hertz every sleep under ten
+ * milliseconds was a sleep of no ticks at all: the task was marked sleeping
+ * with a wake time already in the past and was runnable again before the
+ * switch. Every caller that used a short sleep to pace something got no
+ * pacing, and the one that noticed was a sound buffer that gave up after
+ * two hundred and fifty two-millisecond sleeps -- a few microseconds, and
+ * then a note abandoned a third of the way through.
+ *
+ * Asking to sleep is asking to give the processor away. A sleep too short
+ * to be counted should still do that much, so anything above zero waits at
+ * least one tick. */
 void task_sleep(u32 ms) {
     if (!current) { sleep_ms(ms); return; }
-    current->wake_at = timer_ticks() + (ms * timer_hz()) / 1000u;
+
+    u32 hz = timer_hz() ? timer_hz() : 100;
+    u64 t = ((u64)ms * hz + 999u) / 1000u;
+    if (ms && !t) t = 1;
+
+    current->wake_at = timer_ticks() + t;
     current->state = TASK_SLEEPING;
     task_yield();
 }
