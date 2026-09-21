@@ -659,7 +659,7 @@ void _start(void) {
         int w = win_width(win), h = win_height(win);
         u32 *px = win_surface(win);
         if (!px || w <= 0 || h <= 0) break;
-        surface s = *frame_surface(px, w, h);
+        surface s = { px, w, h };
         ui_theme t = ui_load_theme();
 
         ui_begin(&in);
@@ -918,7 +918,6 @@ void _start(void) {
             win_set_text(win, buf, n);
         }
 
-        show_frame(px, w, h);
         win_commit(win);
         sleep_ms(16);
     }

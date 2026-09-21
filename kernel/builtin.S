@@ -273,3 +273,10 @@ builtin_cardtest_end:
 builtin_sleeptest_start:
 .incbin "build/user/sleeptest.elf"
 builtin_sleeptest_end:
+
+.balign 4
+.global builtin_halfdrawn_start
+.global builtin_halfdrawn_end
+builtin_halfdrawn_start:
+.incbin "build/user/halfdrawn.elf"
+builtin_halfdrawn_end:

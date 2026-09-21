@@ -12,7 +12,6 @@
  */
 #pragma once
 #include "zelr.h"
-#include "alloc.h"
 #include "draw.h"
 #include "ui.h"
 
@@ -313,58 +312,3 @@ static inline void money(int n, char *out, int cap) {
     }
     out[o] = 0;
 }
-
-/* --- drawing somewhere nobody is looking ----------------------------------
- *
- * Here because both games need it, and only because both games need it: it
- * is not about cards and it belongs somewhere more general the day a third
- * program wants it.
- *
- *
- * A window's surface is the pixels the desktop composites from. There is no
- * second buffer and win_commit does not swap one: it says the window has
- * changed and the compositor reads the same memory the program is writing.
- *
- * Which is fine for a program whose frame is a few small rectangles, and it
- * is not fine for this one. The first thing a frame does is paint the table
- * over everything, and until the cards go back on top there is a stretch of
- * time when the window genuinely contains a table and nothing else. The
- * compositor is a task like any other and it runs in that gap -- reliably,
- * because a sleep from ring 3 can return with no time passed, so this loop
- * never idles and is always somewhere in the middle of a frame. What that
- * looked like was a maximised poker game with no cards, no seats and no
- * buttons in it, which reads as a drawing bug and was a timing one.
- *
- * So the frame is drawn into memory of this program's own and copied over
- * at the end. The copy can be interrupted like anything else, but what the
- * compositor sees then is part of one finished frame and part of another,
- * and between two frames of a card table that is nothing at all.
- *
- * The copy is written through a volatile pointer on purpose: without it the
- * optimiser recognises the loop and replaces it with a call to memcpy,
- * which is a symbol this system does not have. */
-static u32 *shadow;
-static int  shadow_w, shadow_h;
-
-static inline surface *frame_surface(u32 *px, int w, int h) {
-    static surface s;
-    if (!shadow || shadow_w != w || shadow_h != h) {
-        u32 *fresh = (u32 *)malloc((u64)w * (u64)h * 4);
-        if (!fresh) { s.px = px; s.w = w; s.h = h; return &s; }
-        if (shadow) free(shadow);
-        shadow = fresh;
-        shadow_w = w;
-        shadow_h = h;
-    }
-    s.px = shadow; s.w = w; s.h = h;
-    return &s;
-}
-
-static inline void show_frame(u32 *px, int w, int h) {
-    if (!shadow || shadow_w != w || shadow_h != h) return;
-    volatile u32 *d = (volatile u32 *)px;
-    const volatile u32 *b = (const volatile u32 *)shadow;
-    u32 n = (u32)w * (u32)h;
-    for (u32 i = 0; i < n; i++) d[i] = b[i];
-}
-

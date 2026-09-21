@@ -529,11 +529,7 @@ void _start(void) {
         int w = win_width(win), h = win_height(win);
         u32 *px = win_surface(win);
         if (!px || w <= 0 || h <= 0) break;
-        /* Into this program's own memory and copied over when the frame is
-           whole, because the window's pixels are the ones the compositor
-           reads and the first thing a frame does is paint the cloth over
-           everything that was on them. */
-        surface s = *frame_surface(px, w, h);
+        surface s = { px, w, h };
         ui_theme t = ui_load_theme();
 
         ui_begin(&in);
@@ -743,7 +739,6 @@ void _start(void) {
             publish(win);
         }
 
-        show_frame(px, w, h);
         win_commit(win);
         sleep_ms(16);
     }
