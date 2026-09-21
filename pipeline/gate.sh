@@ -100,6 +100,7 @@ PARALLEL_DIR=""
 par_names=()
 par_files=()
 par_pids=()
+par_cmds=()
 
 # How many machines may run at once.
 #
@@ -124,11 +125,14 @@ par_start() {                      # par_start <name> <function>
   par_names+=("$name")
   par_files+=("$f")
   par_pids+=("$!")
+  par_cmds+=("$*")                 # kept so a failure can be tried once more
 }
 
 par_wait() {                       # collect everything par_start launched
   local i
   for i in "${!par_pids[@]}"; do wait "${par_pids[$i]}" 2>/dev/null; done
+
+  local again_names=() again_cmds=()
   for i in "${!par_names[@]}"; do
     local f="${par_files[$i]}"
     local rc secs
@@ -138,14 +142,52 @@ par_wait() {                       # collect everything par_start launched
     # near enough for one that did not.
     if [ "${rc:-1}" -eq 0 ]; then
       grep -vE '^(rc|secs)=' "$f" | tail -3 | sed 's/^/        /'
+      report "${par_names[$i]}" 0 "${secs:-0}"
     else
       grep -vE '^(rc|secs)=' "$f" | tail -12 | sed 's/^/        /'
+      printf '  ....  %-56s %4ds\n' \
+             "${par_names[$i]} (busy host; again, alone)" "${secs:-0}"
+      again_names+=("${par_names[$i]}")
+      again_cmds+=("${par_cmds[$i]}")
     fi
-    report "${par_names[$i]}" "${rc:-1}" "${secs:-0}"
   done
+
+  # A step that failed gets one more go, by itself.
+  #
+  # Everything above ran at once, and what they contend for is the host:
+  # four emulated machines on one. A check that drives the desktop sends a
+  # click as a walk and a drag as nine messages, and a starved guest drops
+  # some of them, which reads as a window manager that will not resize, or
+  # a dealer that will not deal, or a calculator that cannot divide.
+  #
+  # Measured, over three runs of this gate on one tree: two failures, then
+  # one, then two, never the same check twice, and every one of them
+  # passing on its own straight afterwards. PAR_MAX going from thirteen to
+  # four made that rarer and did not make it stop.
+  #
+  # So the second result is the one that counts. This forgives a busy host
+  # and nothing else: a real failure fails alone as well, and takes the
+  # gate down with it. The first failure is still printed in full and the
+  # line above says a second go was needed, because a check that needs two
+  # is worth knowing about even when the second one passes.
+  if [ "${#again_names[@]}" -gt 0 ]; then
+    for i in "${!again_names[@]}"; do
+      local s2 rc2
+      s2=$(date +%s)
+      ${again_cmds[$i]} > "$PARALLEL_DIR/again$i.txt" 2>&1
+      rc2=$?
+      if [ "$rc2" -eq 0 ]; then
+        tail -3 "$PARALLEL_DIR/again$i.txt" | sed 's/^/        /'
+      else
+        tail -12 "$PARALLEL_DIR/again$i.txt" | sed 's/^/        /'
+      fi
+      report "${again_names[$i]}, alone" "$rc2" "$(( $(date +%s) - s2 ))"
+    done
+  fi
+
   rm -rf "$PARALLEL_DIR"
   PARALLEL_DIR=""
-  par_names=(); par_files=(); par_pids=()
+  par_names=(); par_files=(); par_pids=(); par_cmds=()
 }
 
 # --- deciding a step, without throwing away the evidence -------------------

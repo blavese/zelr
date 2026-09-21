@@ -436,6 +436,38 @@ class Monitor:
               "at %s" % (x, y, tries, self.pointer()))
         return last
 
+    def drag_for(self, frm, to, name, want, timeout=24.0, tries=3):
+        """Drags, and makes sure the drag did something.
+
+        The same reasoning as click_for and the same failure, only worse: a
+        drag is a press, eight movements and a release, sent one at a time,
+        so it offers nine chances to lose one instead of one. What comes out
+        when a movement goes missing is a window that did not move, and a
+        check that reports the window manager cannot resize.
+
+        Which is what happened under the gate: the corner drag failed on one
+        run, having passed on its own immediately before and immediately
+        after, and on the next run of the gate it passed and something else
+        failed instead. A different check each time is the signature of the
+        host being busy rather than of anything here being broken.
+
+        Repeating is only safe because the condition is looked at first. A
+        drag that worked has moved the grip out from under where it started,
+        so doing it again would take hold of whatever is there now -- the
+        wallpaper, or another window -- and that is a worse outcome than the
+        failure it is trying to fix."""
+        last = None
+        for _ in range(tries):
+            self.drag(frm, to)
+            w, h, px, shot, ok = self.wait_screen(
+                name, want, timeout=timeout / tries)
+            last = (w, h, px, shot, ok)
+            if ok:
+                return last
+        print("      dragged %s to %s %d times with no effect; the pointer "
+              "was at %s" % (frm, to, tries, self.pointer()))
+        return last
+
     def pointer(self, tries=8):
         """Where the pointer is, read off the screen. None when nothing is
         drawing one, which is the case before the desktop starts.
