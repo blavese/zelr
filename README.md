@@ -1325,11 +1325,11 @@ works perfectly until somebody takes it somewhere else.
 ## testing
 
 The kernel tests itself. `./run.sh -T` boots with selftest on the command line,
-runs 543 checks across every subsystem, then writes to QEMU's debug-exit port
+runs 552 checks across every subsystem, then writes to QEMU's debug-exit port
 so the host gets a real exit status.
 
     [string]                8 checks   [live tree]            19 checks
-    [the identity map]      2 checks   [layout]                9 checks
+    [the identity map]      6 checks   [layout]                9 checks
     [physical memory]       4 checks   [waiting]              16 checks
     [paging]                5 checks   [trackpad]             25 checks
     [user access]           5 checks   [crypto]               22 checks
@@ -1345,16 +1345,16 @@ so the host gets a real exit status.
     [network]               9 checks   [tls 1.3]              19 checks
     [elf]                   7 checks   [wpa]                  19 checks
     [userspace]             4 checks   [wait timeouts]         3 checks
-    [video]                 7 checks   [processors]            2 checks
+    [video]                 7 checks   [processors]            4 checks
     [mouse]                 4 checks   [black box]            21 checks
     [graphics]             13 checks   [acpi and pcie]         4 checks
     [windows]               7 checks   [interrupt routing]     9 checks
-    [window server]        16 checks   [clipboard]            14 checks
+    [window server]        19 checks   [clipboard]            14 checks
     [built-in programs]     8 checks   [clock]                18 checks
     [theme]                19 checks   [kernel stack]          2 checks
     [taskbar]              18 checks
 
-    543 passed, 0 failed
+    552 passed, 0 failed
     SELFTEST_PASS
 
 The cryptographic sections are all known answers from published documents:
@@ -1366,12 +1366,12 @@ only agrees with the thing it is testing proves nothing here, because an
 implementation that is wrong in a consistent way passes it and then cannot
 talk to anybody.
 
-The processor section is two checks on a machine with one CPU and eleven on
-a machine with several, where it hands work to each of them and requires the
-count they share to come back exact. `qemu-system-x86_64 -smp 4` reaches 552.
+The processor section is four checks on a machine with one CPU and fifteen
+on a machine with several, where it hands work to each of them and requires
+the count they share to come back exact. `qemu-system-x86_64 -smp 4` reaches 563.
 
 The same checks run again on `-machine q35`, which has PCIe and an AHCI
-controller rather than a 1996 chipset and a PIO disk, and reach 551 there.
+controller rather than a 1996 chipset and a PIO disk, and reach 560 there.
 Two bugs found the day that was added were invisible on the older machine:
 the block layer would not split a request past the eight sectors AHCI
 accepts, and the ACPI tables were never read on a UEFI machine at all.
