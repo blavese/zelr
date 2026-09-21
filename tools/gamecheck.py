@@ -127,15 +127,32 @@ def main():
             print("      %d white pixels before a deal" % before)
 
         # Return deals, which is the same key a person reaches for.
-        vm.type("\n")
-        time.sleep(4)
-        mon.move_to(20, 20)
-        time.sleep(1.2)
-        w, h, px, shot = mon.screen("bj-deal")
-        dealt = cards_in(px, table)
+        #
+        # Sent again if no cards arrived. One keystroke goes down the serial
+        # line and this guest drops what it cannot drain in time, so a check
+        # that presses Return once and then looks reports a dealer that will
+        # not deal when the host is busy -- which it did, under the gate,
+        # having passed on its own a minute before. Safe to repeat because
+        # the table is looked at first: a hand that was dealt is seen to
+        # have been dealt and Return is not pressed again, which matters,
+        # because the second one would stand the hand.
+        dealt = before
+        for _ in range(4):
+            vm.type(chr(10))
+            deadline = time.time() + 6
+            while time.time() < deadline:
+                time.sleep(1.0)
+                mon.move_to(20, 20)
+                w, h, px, shot = mon.screen("bj-deal")
+                dealt = cards_in(px, table)
+                if dealt > before + 2000:
+                    break
+            if dealt > before + 2000:
+                break
         c.add("and dealing puts cards on it", dealt > before + 2000, shot)
         if dealt <= before + 2000:
-            print("      %d white pixels after a deal" % dealt)
+            print("      %d white pixels on the table after four tries "
+                  "(%d before)" % (dealt, before))
 
         # The dealer's own hand: one card up and one face down before the
         # player has finished, and both of them plus whatever it draws
@@ -225,16 +242,26 @@ def main():
         flop_before = cards_in(px, board)
         c.add("and the board is empty before the flop", flop_before < 200, shot)
 
-        for _ in range(6):
+        # Called until a board appears rather than a fixed six times and a
+        # look. Each c is one byte down the serial line and a busy guest
+        # drops what it cannot drain, so a fixed count reports a game that
+        # never deals a flop when the host is loaded -- which it did, under
+        # the gate, having passed on its own before and after. Calling again
+        # when the board is still empty is only ever another call in the
+        # same betting round, so there is nothing to undo.
+        flop = 0
+        for _ in range(14):
             vm.type("c")
-            time.sleep(1.6)
-        mon.move_to(20, 20)
-        time.sleep(1.2)
-        w, h, px, shot = mon.screen("pk-board")
-        c.add("and calling round brings a board out",
-              cards_in(px, board) > 1500, shot)
-        if cards_in(px, board) <= 1500:
-            print("      %d white pixels on the board" % cards_in(px, board))
+            time.sleep(1.2)
+            mon.move_to(20, 20)
+            w, h, px, shot = mon.screen("pk-board")
+            flop = cards_in(px, board)
+            if flop > 1500:
+                break
+        c.add("and calling round brings a board out", flop > 1500, shot)
+        if flop <= 1500:
+            print("      %d white pixels on the board after fourteen calls"
+                  % flop)
     finally:
         vm.stop()
         try:

@@ -132,6 +132,29 @@ def display(mon, name):
     return patch(px, w, DISPLAY)
 
 
+def tap(mon, keys):
+    """A run of keys, one click each.
+
+    Deliberately not click_for, which is what everything else here reaches
+    for when a click has to be seen to have worked. click_for presses again
+    when the screen did not change, and its own docstring says what makes
+    that safe: the condition is looked at first, so a click that worked is
+    never repeated.
+
+    A keypad breaks that rule. "The display changed" cannot tell a click
+    that landed from a click that landed twice, and a digit entered twice is
+    not a lost keystroke, it is a different sum. Tried, and measured:
+    pressing 7 and then 8 through click_for left the display reading 77, and
+    the check that followed reported a calculator that could not divide.
+
+    So the keys go in plainly, and it is the whole sequence that is looked
+    at and repeated.
+    """
+    for col, row in keys:
+        mon.click(*key_at(col, row))
+        time.sleep(0.35)
+
+
 def main():
     keep = "--keep" in sys.argv
     build_once()
@@ -158,28 +181,35 @@ def main():
         # moved and every click was landing between them.
         empty = display(mon, "calc-empty")
 
-        # 7 8 / 4 =
-        for col, row in ((0, 1), (1, 1), (3, 0), (0, 2), (3, 4)):
-            mon.click(*key_at(col, row))
-            time.sleep(0.35)
-        worked = display(mon, "calc-divided")
+        # 78 / 4, and then 19.5 typed in by hand, and the two pictures of
+        # the display compared.
+        #
+        # Up to three goes, from C each time. A click that never arrived is
+        # not an answer to "does this divide", and under a loaded host one of
+        # the nine does go missing: this failed exactly that way under the
+        # gate, having passed on its own a minute before and a minute after.
+        # Starting from C is what makes another go safe, because it puts the
+        # calculator back to a state this side knows rather than typing
+        # further into one it does not.
+        worked = typed = None
+        for _ in range(3):
+            tap(mon, [(0, 0)])                                  # C
+            tap(mon, [(0, 1), (1, 1), (3, 0), (0, 2), (3, 4)])  # 7 8 / 4 =
+            worked = display(mon, "calc-divided")
+
+            tap(mon, [(0, 0)])                                  # C
+            tap(mon, [(0, 3), (2, 1), (2, 4), (1, 2)])          # 1 9 . 5
+            typed = display(mon, "calc-typed")
+            if worked != empty and worked == typed:
+                break
+
         c.add("the keys reach the calculator at all", worked != empty)
-
-        # C, then the answer typed in by hand.
-        mon.click(*key_at(0, 0))
-        time.sleep(0.35)
-        for col, row in ((0, 3), (2, 1), (2, 4), (1, 2)):     # 1 9 . 5
-            mon.click(*key_at(col, row))
-            time.sleep(0.35)
-        typed = display(mon, "calc-typed")
-
         c.add("the calculator divides, and the answer is the one a person "
               "would have typed", worked == typed)
 
         # Something that is not the answer, so the check above cannot be
         # passing because both pictures are of an empty display.
-        mon.click(*key_at(1, 3))            # 2
-        time.sleep(0.5)
+        tap(mon, [(1, 3)])                  # 2
         other = display(mon, "calc-other")
         c.add("and a different number looks different", other != worked)
 

@@ -409,9 +409,14 @@ def main():
         #
         # Done here, while the window is known to be back at the size and
         # place it opened at, so the grip is where it was.
-        mon.drag(GRIP, (GRIP[0] - 200, GRIP[1] - 150))
-        _, _, shot, ok = wait_page(mon, "desk-resized",
-                                   lambda n: n < small - 100000)
+        # drag_for rather than drag: a drag is nine messages to the guest
+        # and a loaded host drops some of them, which leaves a window that
+        # did not move and a check that says the window manager cannot
+        # resize. It said exactly that once under the gate, having passed on
+        # its own a minute earlier and a minute later.
+        _, _, _, shot, ok = mon.drag_for(
+            GRIP, (GRIP[0] - 200, GRIP[1] - 150), "desk-resized",
+            lambda w, h, px: page(px, w) < small - 100000)
         c.add("dragging the corner makes the window smaller", ok, shot)
 
         # --- snapping with the keyboard -------------------------------------
@@ -668,9 +673,19 @@ def main():
         # over the first one, so that one is left out of the count: a tile
         # lights under the pointer whether it is selected or not, and a
         # check that cannot tell those apart is not a check.
-        caught = [patch(px, w, desk_icon_rect(i)) for i in range(1, 5)]
-        c.add("and the icons it went over are picked out",
-              all(a != b for a, b in zip(quiet_icons, caught)), shot)
+        #
+        # Waited for rather than read off the frame above. The band being
+        # drawn and the icons lighting are two different redraws, and that
+        # frame is the one that satisfied the first of them -- so this used
+        # to ask whether the icons had lit in a picture taken at the moment
+        # the band appeared, and on a busy host the answer is no. The button
+        # is still down, so there is nothing to hurry.
+        w, h, px, shot, picked = mon.wait_screen(
+            "desk-band-caught",
+            lambda w, h, px: all(patch(px, w, desk_icon_rect(i)) != q
+                                 for i, q in zip(range(1, 5), quiet_icons)),
+            timeout=15)
+        c.add("and the icons it went over are picked out", picked, shot)
 
         mon.send("mouse_button 0", settle=0.6)
 

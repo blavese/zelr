@@ -29,8 +29,25 @@ driver" is a task; "finish the operating system" is not.
 Too big or too vague to hand to an agent as they stand. Break one down before
 moving it up.
 
-- Sound. An AC97 or HD Audio driver, and something to play through it.
-- Signals, or something like them: a way to interrupt a running program.
+Two entries were sitting here long after they had been done. Sound is an
+HD Audio driver, an Ensoniq one and a player; signals are in, three of them.
+Both are struck out rather than deleted, because an idea that turns out to
+have been finished is worth a line saying so.
+
+- ~~Sound. An AC97 or HD Audio driver, and something to play through it.~~
+  Done: `kernel/hda.c`, `kernel/ens.c`, `userland/music.c`.
+- ~~Signals, or something like them: a way to interrupt a running program.~~
+  Done, in the narrow sense: three signals and no handlers. The rest of it
+  is the entry below.
+- **Signal handlers.** A program can be interrupted, killed or asked to end,
+  and it cannot be told and carry on. That means building a frame on the
+  program's own stack, pointing it at a function and arranging a way back.
+  The first thing a program written elsewhere will ask for that is not here.
+- **Memory mapping.** `sbrk` moves a break and that is the whole of it. A
+  compiler wants to map a file; so does anything that reads one large.
+- **Something to build zelr on zelr.** An assembler, then a compiler for a
+  subset of C, then a linker. The threshold, and much the largest thing on
+  this page. It needs the two above first, because a compiler is a program.
 - A service model, so the desktop and the network come up as supervised
   things rather than calls in a row inside `kmain`.
 - A packet filter, and something to look at traffic with.
