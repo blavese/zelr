@@ -670,7 +670,8 @@ static inline int ui_field_draw(surface *s, ui_input *in, const ui_theme *t,
 
         int room = w - UI_PAD * 2;
         int shift = upto > room ? upto - room : 0;
-        face_draw(s, x + UI_PAD - shift, ty, f->buf, t->fg, UI_FACE_BODY);
+        face_draw_clip(s, x + UI_PAD - shift, ty, x + 2, x + w - 2,
+                       f->buf, t->fg, UI_FACE_BODY);
         if (f->focused && (ticks() / 30) % 2 == 0)
             rect(s, x + UI_PAD + upto - shift, ty, 2,
                  face_h(UI_FACE_BODY), t->accent);
