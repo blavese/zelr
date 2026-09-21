@@ -13,6 +13,7 @@
  * left that still needs a 64-bit base.
  */
 #include "gdt.h"
+#include "smp.h"
 #include "string.h"
 
 struct gdt_entry {
@@ -40,13 +41,19 @@ struct tss_entry {
     u16 iomap_base;
 } __attribute__((packed));
 
-/* null, kernel code, kernel data, user data, user code, then the TSS, which
-   takes two slots. User data comes before user code because that is the
-   order sysret would want, and there is no reason to differ from it. */
-#define GDT_SLOTS 7
+/* null, kernel code, kernel data, user data, user code, and then two slots
+   for every processor's task state segment. User data comes before user
+   code because that is the order sysret would want, and there is no reason
+   to differ from it. */
+#define GDT_FIXED 5
+#define GDT_SLOTS (GDT_FIXED + SMP_MAX_CPUS * 2)
 static struct gdt_entry gdt[GDT_SLOTS];
 static struct gdt_ptr   gdtp;
-static struct tss_entry tss __attribute__((aligned(16)));
+
+/* One per processor, each aligned, because the processor writes to the one
+   it is using and two of them sharing a cache line is the kind of thing
+   that is merely slow until it is not. */
+static struct tss_entry tss[SMP_MAX_CPUS] __attribute__((aligned(64)));
 
 extern void gdt_flush(u64 gdtp_addr);
 extern void tss_flush(u16 selector);
@@ -60,7 +67,43 @@ static void set_gate(int i, u8 access, u8 flags) {
     gdt[i].base_high = 0;
 }
 
-void tss_set_stack(u64 rsp0) { tss.rsp0 = rsp0; }
+void tss_set_stack_for(u32 cpu, u64 rsp0) {
+    if (cpu < SMP_MAX_CPUS) tss[cpu].rsp0 = rsp0;
+}
+
+void tss_set_stack(u64 rsp0) { tss_set_stack_for(smp_this_cpu(), rsp0); }
+
+u64 tss_stack_of(u32 cpu) {
+    return cpu < SMP_MAX_CPUS ? tss[cpu].rsp0 : 0;
+}
+
+u16 tss_current_selector(void) {
+    u16 sel = 0;
+    __asm__ volatile ("str %0" : "=r"(sel));
+    return sel;
+}
+
+/* Fills in one processor's descriptor. The limit is the segment's own size
+   and the base is where that segment is, which is the whole reason this
+   descriptor is twice the width of the others. */
+static void set_tss(u32 cpu) {
+    u64 base = (u64)&tss[cpu];
+    u32 limit = sizeof(tss[cpu]) - 1;
+
+    memset(&tss[cpu], 0, sizeof(tss[cpu]));
+    tss[cpu].iomap_base = sizeof(tss[cpu]);   /* no I/O permission bitmap */
+
+    struct gdt_system_entry *t =
+        (struct gdt_system_entry *)&gdt[GDT_TSS(cpu) / 8];
+    t->limit_low  = (u16)(limit & 0xFFFF);
+    t->base_low   = (u16)(base & 0xFFFF);
+    t->base_mid   = (u8)((base >> 16) & 0xFF);
+    t->access     = 0x89;              /* present, 64-bit available TSS */
+    t->flags      = (u8)((limit >> 16) & 0x0F);
+    t->base_high  = (u8)((base >> 24) & 0xFF);
+    t->base_upper = (u32)(base >> 32);
+    t->reserved   = 0;
+}
 
 void gdt_init(void) {
     memset(gdt, 0, sizeof(gdt));
@@ -72,25 +115,24 @@ void gdt_init(void) {
     set_gate(GDT_USER_DATA / 8,   0xF2, 0x00);
     set_gate(GDT_USER_CODE / 8,   0xFA, 0x20);
 
-    memset(&tss, 0, sizeof(tss));
-    tss.iomap_base = sizeof(tss);      /* no I/O permission bitmap */
-
-    u64 base = (u64)&tss;
-    u32 limit = sizeof(tss) - 1;
-    struct gdt_system_entry *t =
-        (struct gdt_system_entry *)&gdt[GDT_TSS / 8];
-    t->limit_low  = (u16)(limit & 0xFFFF);
-    t->base_low   = (u16)(base & 0xFFFF);
-    t->base_mid   = (u8)((base >> 16) & 0xFF);
-    t->access     = 0x89;              /* present, 64-bit available TSS */
-    t->flags      = (u8)((limit >> 16) & 0x0F);
-    t->base_high  = (u8)((base >> 24) & 0xFF);
-    t->base_upper = (u32)(base >> 32);
-    t->reserved   = 0;
+    /* Every processor's descriptor, built here on the boot one. They are
+       ordinary read only data once written, so the others have nothing to
+       build -- they load the table and point their task register at their
+       own. */
+    for (u32 i = 0; i < SMP_MAX_CPUS; i++) set_tss(i);
 
     gdtp.limit = sizeof(gdt) - 1;
     gdtp.base  = (u64)&gdt;
 
     gdt_flush((u64)&gdtp);
-    tss_flush(GDT_TSS);
+    tss_flush(GDT_TSS(0));
+}
+
+void gdt_load_cpu(u32 cpu) {
+    if (cpu >= SMP_MAX_CPUS) return;
+    /* The same table. A processor that came up on the trampoline's own
+       descriptors is still using those, and they have no TSS in them at
+       all. */
+    gdt_flush((u64)&gdtp);
+    tss_flush(GDT_TSS(cpu));
 }
