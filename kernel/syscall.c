@@ -273,6 +273,10 @@ static i64 sys_exec(registers_t *r) {
        signal arriving afterwards would jump into it. */
     signal_forget_handlers(t->pid);
 
+    /* And every mapping. They described the address space that is being
+       thrown away; the new program's are its own to ask for. */
+    user_drop_mappings();
+
     /* A name is what `ps` shows, and a process that became something else
        should say what it became. */
     const char *base = path;
@@ -348,6 +352,17 @@ static i64 sys_signal(registers_t *r) {
    interrupted at, so what comes out of the interrupt gate is the program
    carrying on where the signal found it -- which is why the value handed
    back is the rax that was saved rather than a result of anything. */
+static i64 sys_mmap(registers_t *r) {
+    /* The length and what it may be used for. No address hint: the
+       kernel picks, because a program that picks is a program that can
+       pick something already in use. */
+    return (i64)user_mmap(r->rbx, (int)r->rcx);
+}
+
+static i64 sys_munmap(registers_t *r) {
+    return user_munmap(r->rbx, r->rcx) ? 0 : -1;
+}
+
 static i64 sys_sigreturn(registers_t *r) {
     if (signal_return(r)) return (i64)r->rax;
 
@@ -1022,6 +1037,8 @@ static const syscall_fn TABLE[] = {
     [SYS_SIGNAL]      = sys_signal,
     [SYS_SIGSEND]     = sys_sigsend,
     [SYS_SIGRETURN]   = sys_sigreturn,
+    [SYS_MMAP]        = sys_mmap,
+    [SYS_MUNMAP]      = sys_munmap,
 };
 
 #define N_SYSCALLS (sizeof(TABLE) / sizeof(TABLE[0]))

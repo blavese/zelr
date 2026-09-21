@@ -142,6 +142,21 @@
    to wherever the program was when the signal arrived. */
 #define SYS_SIGRETURN     58
 
+/* --- memory a program asks for -----------------------------------------
+ *
+ * Nothing is allocated when one of these is made. A mapping is a promise
+ * that a range of addresses is the program's to reach for, and the pages
+ * arrive one at a time as it reaches -- so a program that maps a gigabyte
+ * and writes a page has been given a page.
+ *
+ * Anonymous only: zeroed memory and nothing else. There is no file
+ * mapping, because doing that honestly means holding a file open behind
+ * the program's back or reading a path inside the fault handler, and read
+ * still reads files.
+ */
+#define SYS_MMAP          59
+#define SYS_MUNMAP        60
+
 /* What a window is showing, in words, so the desktop's find can look
    through it; and what is being looked for, for a window that has just been
    told somebody is looking. */

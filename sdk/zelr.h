@@ -85,6 +85,11 @@ typedef long long          zelr_word;
    directly by a program. */
 #define SYS_SIGRETURN     58
 
+/* Memory a program asks for and is given as it touches it. Anonymous
+   only: zeroed pages, no file mapping. */
+#define SYS_MMAP          59
+#define SYS_MUNMAP        60
+
 /* The same socket, encrypted. See connect_tls below. */
 #define SYS_TLS_CONNECT   45
 #define SYS_TLS_STATUS    46
@@ -569,6 +574,37 @@ static inline int dup2(int fd, int to) {
 /* A pipe, as two descriptors: ends[0] is read from, ends[1] written to. */
 static inline int pipe(int ends[2]) {
     return (int)syscall(SYS_PIPE, (zelr_word)ends, 0, 0);
+}
+
+/* --- memory that costs what it is used -----------------------------------
+ *
+ * A mapping is a promise, not an allocation. Nothing is taken when this
+ * returns; a page arrives the first time you touch one, so asking for a
+ * gigabyte and writing a page costs a page.
+ *
+ * That is what it is for. An allocator can reserve the room it might need
+ * rather than the room it has, and a program can keep a large sparse thing
+ * without paying for the empty parts of it.
+ *
+ * Anonymous only, and zeroed. There is no file mapping: read() reads files.
+ *
+ *   char *p = map(64 * 1024 * 1024, PROT_READ | PROT_WRITE);
+ *   if (p) { p[0] = 1; unmap(p, 64 * 1024 * 1024); }
+ */
+#define PROT_NONE  0
+#define PROT_READ  1
+#define PROT_WRITE 2
+
+/* Returns the address, or 0. The length is rounded up to whole pages. */
+static inline void *map(u64 len, int prot) {
+    return (void *)syscall(SYS_MMAP, (zelr_word)len, prot, 0);
+}
+
+/* Gives one back, whole. The address and length must be the ones map
+   returned: a partial unmap would mean splitting one range into two, and an
+   unmap that fails halfway has taken the pages and kept the promise. */
+static inline int unmap(void *at, u64 len) {
+    return (int)syscall(SYS_MUNMAP, (zelr_word)at, (zelr_word)len, 0);
 }
 
 static inline void *sbrk(i64 delta) {
