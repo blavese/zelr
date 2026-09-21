@@ -373,6 +373,10 @@ static int js_index_of(const jstr *key, u32 *out) {
 
 static jval js_string_method(jctx *J, jval target, jstr *name);
 static jval js_array_method(jctx *J, jval target, jstr *name);
+static jobj *js_native(jctx *J, const char *name, jnative fn);
+static jval nat_fn_call(jctx *J, jval t, jval *a, int n);
+static jval nat_fn_apply(jctx *J, jval t, jval *a, int n);
+static jval nat_fn_bind(jctx *J, jval t, jval *a, int n);
 
 /* Reaching into nothing.
  *
@@ -429,6 +433,30 @@ static jval js_get(jctx *J, jval target, jstr *name) {
             return idx < o->len ? o->items[idx] : js_undef();
         jval m = js_array_method(J, target, name);
         if (m.t != JS_UNDEF) return m;
+    }
+
+    /* --- what you can do to a function --------------------------------
+     *
+     * call, apply and bind: three ways of saying which object a function
+     * should treat as `this`. They are not decoration. A minified script
+     * uses them constantly -- it is how anything written as a method gets
+     * borrowed, and how every library shim on the web starts -- and a page
+     * that calls one and gets "not a function" stops there, part way
+     * through whatever it was setting up.
+     *
+     * Google's front page stops on `call`, which is how this was found:
+     * the error used to say "this is not a function" and name nothing.
+     */
+    if (o->kind == JO_FUNC || o->kind == JO_NATIVE) {
+        if (js_str_is(name, "call") || js_str_is(name, "apply")
+            || js_str_is(name, "bind")) {
+            jobj *m = js_native(J, name->s,
+                                js_str_is(name, "call")  ? nat_fn_call :
+                                js_str_is(name, "apply") ? nat_fn_apply
+                                                         : nat_fn_bind);
+            if (m) js_set(J, m, "__fn__", target);
+            return js_from_obj(m);
+        }
     }
 
     /* Anything the host owns gets asked before the property table, so a
@@ -528,6 +556,69 @@ static jval js_call(jctx *J, jval fn, jval this_val, jval *argv, int argc) {
     }
     if (s == JS_THROWN || s == JS_FAILED) return js_undef();
     return js_undef();
+}
+
+/* --- what you can do to a function ----------------------------------------
+ *
+ * The function itself is on the wrapper as __fn__, put there by js_get when
+ * the method was fetched; the object to treat as `this` is the first
+ * argument for call and apply, and the rest are the arguments.
+ *
+ * bind returns a fresh native holding both, so calling it later runs the
+ * original with the receiver it was bound to. What it does not do is keep
+ * the arguments bound alongside the receiver, which is the other half of
+ * bind and is rarer; it says so rather than dropping them silently, by
+ * passing on whatever it is called with.
+ */
+static jval fn_held(jctx *J, jval self) {
+    if (self.t != JS_OBJ || !self.obj) return js_undef();
+    jprop *p = js_find(self.obj, js_str(J, "__fn__"));
+    return p ? p->v : js_undef();
+}
+
+static jval nat_fn_call(jctx *J, jval t, jval *a, int n) {
+    jval fn = fn_held(J, t);
+    jval who = n > 0 ? a[0] : js_undef();
+    jval rest[JS_ARGS_MAX];
+    int m = 0;
+    for (int i = 1; i < n && m < JS_ARGS_MAX; i++) rest[m++] = a[i];
+    return js_call(J, fn, who, rest, m);
+}
+
+static jval nat_fn_apply(jctx *J, jval t, jval *a, int n) {
+    jval fn = fn_held(J, t);
+    jval who = n > 0 ? a[0] : js_undef();
+
+    /* The second argument is an array of them, which is the whole
+       difference between apply and call. Anything else is no arguments,
+       the way it is everywhere. */
+    jval rest[JS_ARGS_MAX];
+    int m = 0;
+    if (n > 1 && a[1].t == JS_OBJ && a[1].obj && a[1].obj->kind == JO_ARRAY) {
+        jobj *arr = a[1].obj;
+        for (u32 i = 0; i < arr->len && m < JS_ARGS_MAX; i++)
+            rest[m++] = arr->items[i];
+    }
+    return js_call(J, fn, who, rest, m);
+}
+
+static jval nat_fn_bound(jctx *J, jval t, jval *a, int n) {
+    jval fn = fn_held(J, t);
+    jval who = js_undef();
+    if (t.t == JS_OBJ && t.obj) {
+        jprop *p = js_find(t.obj, js_str(J, "__bound__"));
+        if (p) who = p->v;
+    }
+    return js_call(J, fn, who, a, n);
+}
+
+static jval nat_fn_bind(jctx *J, jval t, jval *a, int n) {
+    jval fn = fn_held(J, t);
+    jobj *out = js_native(J, "bound", nat_fn_bound);
+    if (!out) return js_undef();
+    js_set(J, out, "__fn__", fn);
+    js_set(J, out, "__bound__", n > 0 ? a[0] : js_undef());
+    return js_from_obj(out);
 }
 
 /* --- the built-in methods -------------------------------------------------
@@ -1512,6 +1603,32 @@ static jval js_eval(jctx *J, int node, jscope *sc, jval this_val) {
                  cell = J->nodes[cell].b) {
                 argv[argc++] = js_eval(J, J->nodes[cell].a, sc, this_val);
                 if (J->sig != JS_OK) return js_undef();
+            }
+
+            /* Say which name was not a function.
+             *
+               "this is not a function" is true and useless: a page calls
+               hundreds of them and the message names none. The name is
+               right here at the call site, and knowing it is the difference
+               between a report and a thing somebody can act on -- it is how
+               the missing DOM methods below were found rather than
+               guessed. */
+            if (fn.t != JS_OBJ || !fn.obj
+                || (fn.obj->kind != JO_FUNC && fn.obj->kind != JO_NATIVE)) {
+                if (callee >= 0 && J->nodes[callee].str
+                    && (J->nodes[callee].kind == N_MEMBER
+                        || J->nodes[callee].kind == N_IDENT)) {
+                    char said[96];
+                    int w = 0;
+                    const char *nm = J->nodes[callee].str->s;
+                    for (int i = 0; nm[i] && w < (int)sizeof(said) - 24; i++)
+                        said[w++] = nm[i];
+                    const char *tail = " is not a function";
+                    for (int i = 0; tail[i] && w < (int)sizeof(said) - 1; i++)
+                        said[w++] = tail[i];
+                    said[w] = 0;
+                    return js_throw(J, said, n->line);
+                }
             }
             return js_call(J, fn, self, argv, argc);
         }

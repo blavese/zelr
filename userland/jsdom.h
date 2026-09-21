@@ -67,6 +67,20 @@ static void jd_note_error(void) {
     int w = 0;
     for (const char *p = jd_J.error; *p && w < (int)sizeof(jd_err) - 1; p++)
         jd_err[w++] = *p;
+
+    /* And where. A minified page is one line of a hundred thousand
+       characters, so the number is not much on its own -- but it tells one
+       script from another, which is the difference between "something on
+       this page failed" and "the third one did". */
+    if (jd_J.error_line > 0 && w < (int)sizeof(jd_err) - 16) {
+        const char *at = " at line ";
+        for (int i = 0; at[i]; i++) jd_err[w++] = at[i];
+        char num[12];
+        int n = 0, v = jd_J.error_line;
+        if (v > 999999) v = 999999;
+        do { num[n++] = (char)('0' + v % 10); v /= 10; } while (v);
+        while (n) jd_err[w++] = num[--n];
+    }
     jd_err[w] = 0;
 }
 
