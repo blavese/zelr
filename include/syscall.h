@@ -157,6 +157,18 @@
 #define SYS_MMAP          59
 #define SYS_MUNMAP        60
 
+/* What has been written to a file, put where the power going will not
+   take it. A file is held in memory until its last descriptor closes, so
+   a program that keeps one open has nothing on the disk until this. */
+#define SYS_FSYNC         61
+
+/* A different name for a file, within one directory. Across directories
+   is refused rather than done unsafely -- FAT has nowhere to say that two
+   entries are one rename in progress, so a power cut in the middle would
+   leave two names for one file and deleting either would corrupt the
+   other. A caller that needs it can copy and delete. */
+#define SYS_RENAME        62
+
 /* What a window is showing, in words, so the desktop's find can look
    through it; and what is being looked for, for a window that has just been
    told somebody is looking. */

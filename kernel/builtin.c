@@ -55,6 +55,8 @@ extern const u8 builtin_argvtest_start[], builtin_argvtest_end[];
 extern const u8 builtin_sigtest_start[], builtin_sigtest_end[];
 extern const u8 builtin_faulttest_start[], builtin_faulttest_end[];
 extern const u8 builtin_maptest_start[], builtin_maptest_end[];
+extern const u8 builtin_crashwrite_start[], builtin_crashwrite_end[];
+extern const u8 builtin_durtest_start[], builtin_durtest_end[];
 
 typedef struct {
     const char *name;
@@ -108,6 +110,8 @@ static const program_t PROGRAMS[] = {
     { "sigtest",  builtin_sigtest_start,  builtin_sigtest_end  },
     { "faulttest", builtin_faulttest_start, builtin_faulttest_end },
     { "maptest",  builtin_maptest_start,  builtin_maptest_end  },
+    { "crashwrite", builtin_crashwrite_start, builtin_crashwrite_end },
+    { "durtest",  builtin_durtest_start,  builtin_durtest_end  },
 };
 
 #define N_PROGRAMS (sizeof(PROGRAMS) / sizeof(PROGRAMS[0]))

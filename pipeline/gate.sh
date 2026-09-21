@@ -539,6 +539,13 @@ if [ "$MODE" = "screen" ] || [ "$MODE" = "full" ]; then
   # nowhere else, and /bin is what is pasted into the kernel image.
   progtest() { keep timeout 600 python tools/progcheck.py; }
 
+  # The power going out in the middle of a write. kernel/fat.c claims
+  # there is no moment where neither the old file nor the new one is
+  # live; this kills the machine to find out. Six boots, so it is not
+  # cheap and it is the only check of a claim that otherwise fails once,
+  # on somebody's real disk, months later.
+  crashtest() { keep timeout 900 python tools/crashcheck.py; }
+
   # A program built outside this repository, from sdk/ alone, on a volume
   # this repository wrote rather than one the kernel formatted. The one
   # check that says whether zelr can run software it did not write.
@@ -576,6 +583,7 @@ if [ "$MODE" = "screen" ] || [ "$MODE" = "full" ]; then
   par_start "a deal reaches the cloth and the dealer plays it out" gametest
   par_start "what is on the screen is a frame that was finished" teartest
   par_start "a program on the disk runs by typing its name" progtest
+  par_start "a file survives the power going out mid-write" crashtest
   par_start "a program built outside the tree runs on the machine" sdktest
   par_start "programs run on more than one processor" smptest
   par_start "the programs it ships with do what they say" apptest

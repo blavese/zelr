@@ -71,6 +71,14 @@ int  fat_read_file(const char *path, u8 *buf, u32 cap);   /* bytes, or -1 */
 bool fat_write_file(const char *path, const u8 *buf, u32 size);
 bool fat_delete_file(const char *path);
 
+/* A different name for a file, within the same directory.
+
+   One write of eleven bytes inside the entry that is already there, so
+   there is never a moment with two names for one file or none. What it
+   cannot do it refuses: across directories, or to a name that does not
+   fit 8.3, both of which would need a second entry. See kernel/fat.c. */
+bool fat_rename(const char *from, const char *to);
+
 /* True if the path exists. Fills in what it is, if asked. */
 bool fat_stat(const char *path, u32 *size_out, bool *dir_out);
 

@@ -280,6 +280,19 @@ bool vfs_delete(const char *path) {
     return fs_delete(abs);
 }
 
+bool vfs_rename(const char *from, const char *to) {
+    char a[VFS_PATH_MAX], b[VFS_PATH_MAX];
+    if (!vfs_resolve(from, a, sizeof(a))) return false;
+    if (!vfs_resolve(to, b, sizeof(b))) return false;
+
+    /* /bin and /sys are made up as they are read. There is nothing on a
+       disk to rename and nowhere to record a new name. */
+    if (vfs_generated(a) || vfs_generated(b)) return false;
+
+    if (!fat_mounted()) return false;   /* the live tree has no rename */
+    return fat_rename(route(a), route(b));
+}
+
 bool vfs_mkdir(const char *path) {
     char abs[VFS_PATH_MAX];
     if (!vfs_resolve(path, abs, sizeof(abs))) return false;

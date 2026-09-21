@@ -1478,6 +1478,98 @@ bool fat_write_file(const char *path, const u8 *buf, u32 size) {
     return true;
 }
 
+/* --- giving a file a different name -------------------------------------
+ *
+ * Within one directory, and only within one.
+ *
+ * The obvious way -- write a second entry with the new name, then delete
+ * the first -- cannot be made safe on this filesystem. Between those two
+ * writes the power can go, and what is left is two names for one chain of
+ * clusters. That is not a tidy-up job: deleting either name frees the
+ * chain, and the other name is then pointing at clusters that have been
+ * handed to something else. There is no order of those two writes that
+ * avoids it, because FAT has nowhere to say "these two entries are one
+ * rename in progress".
+ *
+ * What can be done safely is changing the name inside the entry that is
+ * already there. Eleven bytes in one directory sector: one write, which the
+ * drive either does or does not, and either way there is exactly one name
+ * for the file.
+ *
+ * The price is what it cannot do, and it says so rather than doing it
+ * badly:
+ *
+ *   across directories, because that means a second entry
+ *   to a name that does not fit 8.3, because that means long name entries
+ *     alongside the short one, and those are more writes
+ *
+ * A caller that needs either can copy the file and delete the original,
+ * which is slower and is not atomic and does not corrupt anything.
+ *
+ * Replacing an existing file is done by removing it first. That is a real
+ * window -- a power cut inside it leaves the destination gone and the
+ * source still there -- but it is a window a repeat of the same rename
+ * closes, which is the better of the two failures available.
+ */
+
+/* Whether a name survives the trip through 8.3 unchanged, which is the
+   condition for the short entry being the whole of what names this file. */
+static bool fits_83(const char *name) {
+    u8 packed[11];
+    char back[FAT_NAME_MAX];
+    to_83(name, packed);
+    from_83(packed, back);
+    return same_name(back, name);
+}
+
+bool fat_rename(const char *from, const char *to) {
+    if (!mounted) return false;
+
+    dir_t src_dir, dst_dir;
+    char src_leaf[FAT_NAME_MAX], dst_leaf[FAT_NAME_MAX];
+    if (!resolve_parent(from, &src_dir, src_leaf, sizeof(src_leaf))) return false;
+    if (!resolve_parent(to, &dst_dir, dst_leaf, sizeof(dst_leaf))) return false;
+    if (!src_leaf[0] || !dst_leaf[0]) return false;
+
+    /* The same directory, which is the whole of what this can do. A
+       directory is identified by where its entries live. */
+    if (src_dir.cluster != dst_dir.cluster || src_dir.root != dst_dir.root)
+        return false;
+
+    if (!fits_83(dst_leaf)) return false;
+
+    dirent_t e;
+    int slot = dir_find(&src_dir, src_leaf, &e);
+    if (slot < 0) return false;
+
+    /* Nothing to do, and saying so beats rewriting the entry. */
+    if (same_name(src_leaf, dst_leaf)) return true;
+
+    /* Out of the way first, if something is there. A directory is not
+       removed by this: a rename that quietly deleted a directory full of
+       files would be the worst call in the system. */
+    dirent_t existing;
+    int taken = dir_find(&dst_dir, dst_leaf, &existing);
+    if (taken >= 0) {
+        if (existing.attr & ATTR_DIRECTORY) return false;
+        if (!fat_delete_file(to)) return false;
+        /* dir_find's slot numbers are still good: deleting marks an entry
+           rather than moving the ones after it. */
+        slot = dir_find(&src_dir, src_leaf, &e);
+        if (slot < 0) return false;
+    }
+
+    /* The long name entries in front of this one describe the old name, so
+       they go. Losing them loses nothing but the spelling: the file is
+       named by the short entry either way, and this is done before the
+       rename so a power cut here leaves the file under its 8.3 name. */
+    dir_drop_long(&src_dir, (u32)slot, &e);
+
+    to_83(dst_leaf, e.name);
+    if (!dir_write(&src_dir, (u32)slot, &e)) return false;
+    return blk_flush();
+}
+
 bool fat_delete_file(const char *path) {
     if (!mounted) return false;
 

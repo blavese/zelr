@@ -40,6 +40,11 @@ int  vfs_read(const char *path, void *buf, u32 cap);       /* bytes, or -1 */
 bool vfs_write(const char *path, const void *buf, u32 len);
 bool vfs_append(const char *path, const void *buf, u32 len);
 bool vfs_delete(const char *path);
+
+/* A different name for a file, within one directory on the disk. False
+   for anything else, including across directories: see kernel/fat.c for
+   why that one cannot be done safely here. */
+bool vfs_rename(const char *from, const char *to);
 bool vfs_mkdir(const char *path);
 bool vfs_rmdir(const char *path);
 

@@ -315,3 +315,17 @@ builtin_faulttest_end:
 builtin_maptest_start:
 .incbin "build/user/maptest.elf"
 builtin_maptest_end:
+
+.balign 4
+.global builtin_crashwrite_start
+.global builtin_crashwrite_end
+builtin_crashwrite_start:
+.incbin "build/user/crashwrite.elf"
+builtin_crashwrite_end:
+
+.balign 4
+.global builtin_durtest_start
+.global builtin_durtest_end
+builtin_durtest_start:
+.incbin "build/user/durtest.elf"
+builtin_durtest_end:
