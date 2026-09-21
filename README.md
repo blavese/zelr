@@ -459,6 +459,19 @@ interrupt return path to unwind a different one. Tasks sleep, yield and exit
 with a status somebody can collect, and dead ones are reaped once it has
 been, or after a grace period if nobody asks.
 
+Every processor has an idle task, and for a long time none of them did. The
+scheduler walked its ring, found nothing runnable, and returned the task it
+had been given -- which was the task that had just asked to sleep. So a
+sleep from ring 3 could return with no time passed: measured, `sleep_ms(100)`
+took 0 ms. Nothing looked like that. What it looked like was a browser that
+starved every other program, because it could not yield without stopping;
+typing that went lossy under load, because the console was not read often
+enough; a compositor that caught every frame half drawn, because no program
+was ever between frames; and timer checks in page scripts that had to poll
+the clock rather than sleep. Four faults and one cause. The idle task halts,
+which is also what lets a processor cool down, and charges its ticks to
+itself so the monitor still reads nothing when nothing is happening.
+
 A task can also block on an address and cost nothing while it waits: the
 scheduler skips it entirely, and whoever changes that thing wakes everyone
 waiting on it. The channel is just an address, so nothing has to be declared
@@ -567,12 +580,39 @@ others exist, so `acpi.c` goes and reads the firmware tables to find them and
 `smp.c` starts each one with an INIT signal followed by a startup signal
 carrying a page number. It begins executing there in real mode with no stack
 and no paging, which is what `bootloader/trampoline.S` is for. What they do
-afterwards is a decision rather than a requirement: sharing the scheduler
-would mean a lock on the heap, the task list, the filesystem and every driver,
-so instead each one waits for a function to be handed to it. The boot
-processor still owns the kernel; the others own nothing until they are given
-something. What they are given is the frame: the compositor hands half of
-every screen comparison to whichever one is free.
+afterwards used to be: wait for a function to be handed to you, run it, go
+back to sleep. That is real parallelism with a small surface and it is not a
+processor running anything -- a machine given four cores ran every program
+on one of them.
+
+They run programs now. Each has a task state segment of its own, because
+that is where a processor finds the stack to switch to when an interrupt
+arrives from ring 3 and two processors sharing one would take their
+interrupts onto the same kernel stack. Each has a current task of its own,
+and a timer of its own: the 8254 sends its tick to one processor, and
+without an interrupt of its own whatever a processor picked up would run
+until it gave the processor back.
+
+One lock covers the kernel. A processor holds it whenever it is not
+executing ring 3 code, which is the coarsest lock there is and the honest
+one to start with: the alternative is a lock on the heap, the task list, the
+filesystem and every driver, which is not one change but forty, and the
+first wrong one is a machine that corrupts itself occasionally. It works
+because the kernel is already non-preemptive -- system calls arrive through
+an interrupt gate, so no timer lands in the middle of one.
+
+What decides whether to give the lock back is the frame being returned
+through rather than what kind of task it is. Asking whether the task was a
+program looked right and was wrong: a program preempted in the middle of a
+system call is a program by that test, so it was resumed without the lock
+and carried on in the kernel with nothing holding anybody else out. It
+failed about one run in three, somewhere different each time.
+
+Kernel tasks stay on the boot processor. The handing out of functions is
+still there, because the compositor gives half of every screen comparison to
+whichever processor is free, and what it hands over is arithmetic over memory
+the caller owns rather than anything the kernel keeps. `cat /sys/cpu` says
+how many slices each processor has given to a program.
 
 **Programs.** Ring 3, its own address space per process, and fifty-eight
 system calls through int 0x80. A program can start another program, block
@@ -587,6 +627,15 @@ never saved to the disk: if they were, the first boot would write them out and
 every later boot would run the written copies, so rebuilding the kernel would
 appear to change nothing.
 
+That is what `/bin` is, and for a long time it was the only place a name was
+looked for -- so a program had to be built into the machine to be run by
+typing its name. The loading was never the missing half: every spawn reads
+through the same VFS as `cat`, so an ELF on the disk has always loaded and
+run. A name is looked for in the working directory first, then `/usb`, then
+`/bin`: a program somebody has just downloaded or copied is the one they
+mean, and a name in both runs the one in front of you rather than the one
+that shipped.
+
 **Processes, the way Unix means the word.** Starting a program used to be
 one call: hand over a path, get back a pid. That is a spawn, and it is not
 what a shell is built out of. A shell needs to make a copy of itself, change
@@ -594,10 +643,20 @@ something in the copy, and only then become the new program, because
 everything it wants to arrange first belongs to the child and must not touch
 the parent.
 
-So `fork` copies the address space and then copies the saved interrupt frame
+So `fork` shares the address space and then copies the saved interrupt frame
 with one register changed — the one a system call's answer comes back in. That
 single register is why both sides return from the same line with different
-answers, and it is the whole of the trick. `exec` does the opposite: it makes
+answers, and it is the whole of the trick.
+
+Shares rather than copies, because the case a shell spends all day on is a
+fork followed by an exec, and every byte copied by that fork is thrown away
+a moment later when the child replaces the address space it was handed. Both
+sides point at the same pages with the write bit off; the first write on
+either side faults, and that page -- only that page -- is copied. When
+nobody else is left holding it there is nothing to copy and the write bit
+simply goes back on, which is what stops a long lived program that forked
+once from paying for it forever. Measured on a program holding four
+megabytes: the fork cost 4208 KiB before and costs 40. `exec` does the opposite: it makes
 no process at all, it throws away the program running in one and rewrites the
 frame the interrupt return is about to unwind, so it never returns.
 
@@ -928,14 +987,16 @@ clock alone deals the same cards to a machine that boots and starts the game
 at the same moment, which on a machine that boots in four seconds is not a
 rare accident.
 
-And the two games draw into memory of their own and copy the finished frame
-over at the end, which is not tidiness. A window's surface is the pixels the
-desktop composites from; there is no second buffer and `win_commit` does not
-swap one. The first thing a frame does is paint the table over everything,
-and the compositor is a task like any other, so it runs in the gap before
-the cards go back on. What that looked like was a maximised poker game with
-no cards, no seats and no buttons in it -- a timing fault wearing a drawing
-fault's clothes.
+The two games used to draw into memory of their own and copy the finished
+frame over at the end, and that is in the window server now where it belongs.
+A window's surface was the pixels the desktop composites from: `win_commit`
+marked the window dirty and swapped nothing, so there was no moment at which
+a frame became finished. The first thing a frame does is paint the table over
+everything, and the compositor is a task like any other, so it ran in the gap
+before the cards went back on. What that looked like was a maximised poker
+game with no cards, no seats and no buttons in it -- a timing fault wearing a
+drawing fault's clothes, and one every graphical program would have had to
+work around for itself.
 
 **Opening a file.** A program could be started and could not be told
 anything, so a file manager could offer to open a file in the editor and had
@@ -1050,7 +1111,8 @@ means it was let go somewhere else and the click is lost again. An event is
 overwritten only when it carries the same buttons as the one before it and
 the one after it.
 
-**A web browser.** It opens a TCP connection with this system's own stack,
+**A web browser.** It opens a TCP connection with this system's own stack --
+one of several, now that there are several to be had --
 asks a server for a page, reads the HTML, lays it out against the width of
 its own window and draws it with the letterforms in `face.h`. There is an
 address bar, a history with back and forward, a scrollbar, and links you can
@@ -1090,8 +1152,9 @@ things where nobody chose.
 
 **What travels, and how often.** The body is asked for compressed and put
 back together on arrival, using the deflate that was written for PNG with a
-different wrapper in front of it — three to five times fewer bytes over a
-stack that carries one connection at a time. The connection is kept between
+different wrapper in front of it — three to five times fewer bytes, which on
+a machine this size is the difference between a page arriving and a page
+arriving eventually. The connection is kept between
 requests when the answer said how long it was, so a page and its pictures
 are one handshake rather than a dozen, and over https a dozen of the
 expensive kind; a kept connection that the far end has closed is not a fault
@@ -1448,14 +1511,21 @@ large range:
 - **The system info window is still kernel code**, because it reports on the
   allocator, the scheduler and the clock, and no system call exposes those.
   Every other window on the desktop belongs to a ring 3 process.
-- **The other processors do not run tasks.** They are started, they execute
-  work handed to them -- half of every frame's comparison against the last
-  one -- and they share a lock, but the scheduler runs on the boot processor
-  alone. Spreading it would mean a lock on the heap, the task list, the
-  filesystem and every driver.
-- **TCP handles one connection at a time.** It retransmits with exponential
-  backoff and gives up after six tries, but there is no congestion control, no
-  window scaling and no selective acknowledgement.
+- **Two processors cannot be inside the kernel at once.** They run programs
+  in parallel, which is where programs spend their time, but one lock covers
+  every system call and every fault. That is the coarsest lock there is and
+  the honest one to start with: the alternative is a lock on the heap, the
+  task list, the filesystem and every driver. Kernel tasks stay on the boot
+  processor for the same reason. This entry used to say the other processors
+  did not run tasks at all.
+- **TCP holds six connections.** It retransmits with exponential backoff and
+  gives up after six tries, but the send window is one segment per
+  connection, and there is no congestion control, no window scaling and no
+  selective acknowledgement.
+- **TLS is one session at a time.** The stack underneath holds several
+  connections; the session state does not, so a machine can have one
+  encrypted connection and five plain ones. A second handshake is refused
+  rather than quietly taking the first one's keys.
 - **TLS is 1.3 and one cipher suite**: AES-128-GCM with SHA-256 over X25519,
   which every 1.3 server must implement. There is no TLS 1.2 and no second
   suite, and that is the design rather than an unfinished part of it. Every
@@ -1562,6 +1632,9 @@ orders of magnitude away from Linux, which is roughly 30 million lines.
     userland/poker.h   what five cards out of seven are worth
     userland/blackjack.c  six decks, a dealer that stands on seventeen
     userland/poker.c   no limit hold'em, side pots and all
+    tools/smpcheck.py  programs on more than one processor
+    tools/tearcheck.py that what is composited is a frame that was finished
+    tools/progcheck.py a program on the disk, run by typing its name
     kernel/builtin.S   the user programs, pasted into the kernel image
     kernel/apps.c      the system info window
     kernel/vfs.c       one namespace over the live tree, the disk and memory

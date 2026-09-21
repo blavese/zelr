@@ -8,11 +8,24 @@
  * by a startup signal carrying the page number to begin executing at, and
  * wait for it to report in.
  *
- * What they do afterwards is the open question. Sharing the scheduler would
- * mean a lock on every structure the kernel has, so instead each processor
- * waits for work to be handed to it and runs it. That is real parallelism
- * with a small surface: the boot processor owns the kernel, and the others
- * own nothing until they are given something. */
+ * What they do afterwards used to be the open question, and the answer used
+ * to be: wait for a function to be handed to you, run it, go back to sleep.
+ * That is real parallelism with a small surface and it is not a processor
+ * running anything -- a machine given four cores ran every program on one.
+ *
+ * They run programs now. Each has a task state segment of its own, a
+ * current task of its own and a timer of its own, and one lock covers the
+ * kernel: a processor holds it whenever it is not executing ring 3 code.
+ * That is the coarsest lock there is, and it is the honest one to start
+ * with -- the alternative is a lock on the heap, the task list, the
+ * filesystem and every driver, which is not one change but forty, and the
+ * first wrong one is a machine that corrupts itself occasionally.
+ *
+ * Kernel tasks stay on the boot processor. What the others take is programs.
+ *
+ * The handing out of functions is still here, because the compositor uses it
+ * for half of every frame comparison, and what it hands over is arithmetic
+ * over memory the caller owns rather than anything the kernel keeps. */
 
 #define SMP_MAX_CPUS 16
 
