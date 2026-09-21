@@ -348,6 +348,12 @@ void kmain(handoff_t *h) {
             (u32)(paging_mapped_bytes() / (1024 * 1024)));
     bb_mark("heap");
     heap_init(hbase, heap_bytes);
+
+    /* Counting who holds a frame needs a byte for every frame, sized from
+       how much memory this machine turned out to have -- so it cannot be
+       done until there is a heap to take it from. Until this, fork copies
+       rather than shares, which is slower and right. */
+    pmm_share_init();
     /* Said as a share rather than as a number, because the number on its own
        does not answer the question anybody actually has, which is whether
        giving the machine more memory did anything. */

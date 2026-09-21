@@ -219,19 +219,39 @@ static void free_table(u64 *table, int level) {
  *
  * What fork needs, and the only part of fork that is genuinely difficult.
  *
- * Every page the parent mapped for user code is copied, byte for byte, into
- * a fresh frame, and the tables above it are rebuilt to point at the copies.
- * Everything the space shares with the kernel is left shared: those entries
- * are recognised the same way paging_free_directory recognises them, by the
- * table address matching the kernel's.
+ * It used to copy every page the parent had mapped for user code, byte for
+ * byte, into a fresh frame. That is the eager version, and the comment here
+ * used to argue it was the right trade: copying up front avoids a page
+ * fault handler, a per frame reference count, and a whole class of bug
+ * about who owns what.
  *
- * This is the eager version. The usual trick is to map both sides read only
- * and copy a page when one of them writes to it, which is faster and is a
- * page fault handler, a per frame reference count, and a whole class of bug
- * about who owns what. Copying up front is slower by the size of the program
- * and has none of that; a program here is a few hundred kilobytes.
+ * What it costs is the thing a shell does all day. `a | b` is two forks and
+ * two execs, and every byte copied by those forks is thrown away by the
+ * exec a moment later: the child's first act is to replace the address
+ * space it was just handed. The work is not merely wasted, it is the
+ * largest single thing fork does.
+ *
+ * So both sides point at the same frames and neither may write to them.
+ * PTE_RW comes off the entry in both directories and PTE_COW goes on, the
+ * frame's holder count goes up, and the first write on either side faults
+ * into paging_resolve_cow below. The parent's entries are changed too --
+ * this is not something done to the child alone, because a parent that
+ * could still write would be changing memory the child is holding.
+ *
+ * Where a frame cannot be shared -- before the heap exists, or a count that
+ * has reached its ceiling -- it is copied then and there. Slower, and
+ * right, and the only difference anybody can see is in /sys/memory.
+ *
+ * Everything the space shares with the kernel is left shared as before:
+ * those entries are recognised the same way paging_free_directory
+ * recognises them, by the table address matching the kernel's.
  */
-static bool copy_table(u64 *dst, const u64 *src, int level) {
+static u64 cow_shared, cow_copies;
+
+u64 paging_cow_saved(void)  { return cow_shared; }
+u64 paging_cow_copies(void) { return cow_copies; }
+
+static bool copy_table(u64 *dst, u64 *src, int level) {
     for (u64 i = 0; i < ENTRIES; i++) {
         u64 e = src[i];
         if (!(e & PTE_PRESENT)) { dst[i] = 0; continue; }
@@ -243,13 +263,23 @@ static bool copy_table(u64 *dst, const u64 *src, int level) {
             u64 fresh = pmm_alloc_frame();
             if (!fresh) return false;
             memset((void *)fresh, 0, PAGE_SIZE);
-            if (!copy_table((u64 *)fresh, (const u64 *)below, level - 1))
+            if (!copy_table((u64 *)fresh, (u64 *)below, level - 1))
                 return false;
             dst[i] = fresh | (e & 0xFFF);
             continue;
         }
 
         if (!(e & PTE_USER)) { dst[i] = e; continue; }
+
+        /* Shared, when the machine can keep count of it. Both entries lose
+           the write bit. */
+        if (pmm_share(below)) {
+            u64 shared = (e & ~(u64)PTE_RW) | PTE_COW;
+            dst[i] = shared;
+            src[i] = shared;
+            cow_shared++;
+            continue;
+        }
 
         u64 fresh = pmm_alloc_frame();
         if (!fresh) return false;
@@ -259,9 +289,63 @@ static bool copy_table(u64 *dst, const u64 *src, int level) {
     return true;
 }
 
+/* --- and the write that separates them -----------------------------------
+ *
+ * Walked from the top rather than looked up in a cache: this happens once
+ * per page per program and the walk is four loads.
+ *
+ * Two outcomes. When somebody else still holds the frame, this space gets
+ * its own copy. When nobody does -- the other side has exited, or has
+ * already copied -- there is nothing to copy, and the write bit goes back
+ * on the frame that is already here. That is what stops a long lived
+ * program that forked once from paying for it forever.
+ */
+static u64 *entry_for(u64 pml4_phys, u64 addr) {
+    u64 *pml4 = (u64 *)pml4_phys;
+    u64 i4 = (addr >> 39) & 0x1FF, i3 = (addr >> 30) & 0x1FF;
+    u64 i2 = (addr >> 21) & 0x1FF, i1 = (addr >> 12) & 0x1FF;
+
+    if (!(pml4[i4] & PTE_PRESENT)) return 0;
+    u64 *pdpt = (u64 *)(pml4[i4] & PTE_ADDR_MASK);
+    if (!(pdpt[i3] & PTE_PRESENT) || (pdpt[i3] & PTE_HUGE)) return 0;
+    u64 *pd = (u64 *)(pdpt[i3] & PTE_ADDR_MASK);
+    if (!(pd[i2] & PTE_PRESENT) || (pd[i2] & PTE_HUGE)) return 0;
+    u64 *pt = (u64 *)(pd[i2] & PTE_ADDR_MASK);
+    if (!(pt[i1] & PTE_PRESENT)) return 0;
+    return &pt[i1];
+}
+
+bool paging_resolve_cow(u64 pml4_phys, u64 addr) {
+    if (!pml4_phys) return false;
+
+    u64 page = addr & ~(u64)(PAGE_SIZE - 1);
+    u64 *pte = entry_for(pml4_phys, page);
+    if (!pte || !(*pte & PTE_COW)) return false;
+
+    u64 frame = *pte & PTE_ADDR_MASK;
+
+    if (pmm_holders(frame) <= 1) {
+        *pte = (*pte | PTE_RW) & ~(u64)PTE_COW;
+    } else {
+        u64 fresh = pmm_alloc_frame();
+        if (!fresh) return false;     /* out of memory, and not ours to hide */
+        memcpy((void *)fresh, (const void *)frame, PAGE_SIZE);
+        pmm_free_frame(frame);        /* one holder fewer, not a free */
+        *pte = fresh | (*pte & 0xFFF);
+        *pte |= PTE_RW;
+        *pte &= ~(u64)PTE_COW;
+        cow_copies++;
+    }
+
+    /* The processor has the old entry cached and would fault on the same
+       page forever without this. */
+    __asm__ volatile ("invlpg (%0)" :: "r"(page) : "memory");
+    return true;
+}
+
 u64 paging_clone_directory(u64 src_phys) {
     if (!src_phys) return 0;
-    const u64 *src = (const u64 *)src_phys;
+    u64 *src = (u64 *)src_phys;
 
     u64 fresh = paging_new_directory();
     if (!fresh) return 0;
@@ -283,7 +367,7 @@ u64 paging_clone_directory(u64 src_phys) {
         u64 table = pmm_alloc_frame();
         if (!table) { paging_free_directory(fresh); return 0; }
         memset((void *)table, 0, PAGE_SIZE);
-        if (!copy_table((u64 *)table, (const u64 *)(e & PTE_ADDR_MASK), 3)) {
+        if (!copy_table((u64 *)table, (u64 *)(e & PTE_ADDR_MASK), 3)) {
             free_table((u64 *)table, 3);
             pmm_free_frame(table);
             paging_free_directory(fresh);
@@ -291,6 +375,13 @@ u64 paging_clone_directory(u64 src_phys) {
         }
         dst[i] = table | (e & 0xFFF);
     }
+
+    /* The parent's own entries lost their write bit a moment ago, and the
+       processor still has the old ones cached. Without this the parent
+       writes through to a page it is now sharing and the child sees the
+       change -- which is a fork that did not fork, and would show up as
+       one program's memory being quietly edited by another. */
+    if (src_phys == (u64)current_pml4) paging_switch(src_phys);
     return fresh;
 }
 

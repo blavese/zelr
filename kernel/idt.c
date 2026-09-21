@@ -1,4 +1,5 @@
 #include "idt.h"
+#include "paging.h"
 #include "printf.h"
 #include "string.h"
 #include "io.h"
@@ -83,6 +84,23 @@ static const char *EXC[] = {
 
 /* Called from isr_common in isr.S */
 u64 isr_dispatch(registers_t *r) {
+    /* A write to a page that is present is the shape of a copy on write
+     * fault and of nothing else here, so it is tried before anything else
+     * is done about the fault.
+     *
+     * The user bit in the error code is deliberately not required. A system
+     * call that writes its answer into the caller's memory does that write
+     * from ring 0, and the page it lands on is as likely to be shared as
+     * any other; requiring the bit would turn the first such call after a
+     * fork into an unhandled exception in the kernel.
+     */
+    if (r->int_no == 14 && (r->err_code & 0x3) == 0x3) {
+        u64 cr2;
+        __asm__ volatile ("mov %%cr2, %0" : "=r"(cr2));
+        if (paging_resolve_cow(paging_current_directory(), cr2))
+            return (u64)r;
+    }
+
     if (handlers[r->int_no]) handlers[r->int_no](r);
     else if (r->int_no < 32) {
         u64 cr2 = 0;

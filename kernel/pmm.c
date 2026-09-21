@@ -13,6 +13,7 @@
 #include "printf.h"
 #include "string.h"
 #include "paging.h"
+#include "heap.h"
 
 extern u8 __kernel_start[], __kernel_end[];
 
@@ -125,9 +126,58 @@ u64 pmm_alloc_frame(void) {
     return 0;
 }
 
+/* --- sharing -------------------------------------------------------------
+ *
+ * A byte a frame, counting the holders past the first. Zero is the ordinary
+ * case, so a frame nothing ever shared costs nothing to check and behaves
+ * exactly as it did.
+ *
+ * It comes from the heap because it is sized from how much memory the
+ * machine turned out to have, and the heap does not exist when pmm_init
+ * runs. Until it does, sharing is refused and whoever asked copies instead:
+ * slower, and right. */
+static u8 *extra;
+
+void pmm_share_init(void) {
+    if (extra || !total_frames) return;
+    extra = (u8 *)kcalloc(total_frames);
+}
+
+bool pmm_share_ready(void) { return extra != 0; }
+
+static u64 shared_now;
+u64 pmm_shared_frames(void) { return shared_now; }
+
+bool pmm_share(u64 addr) {
+    if (!extra || !addr) return false;
+    u64 f = FRAME_IDX(addr);
+    if (f >= total_frames) return false;
+    /* 255 holders of one frame is not a case that arises from forking; it
+       is a case that arises from a counter that has stopped counting, and a
+       count that wrapped would free a frame somebody still holds. */
+    if (extra[f] == 255) return false;
+    if (!extra[f]) shared_now++;
+    extra[f]++;
+    return true;
+}
+
+u32 pmm_holders(u64 addr) {
+    if (!addr) return 0;
+    u64 f = FRAME_IDX(addr);
+    if (f >= total_frames) return 0;
+    return 1u + (extra ? extra[f] : 0u);
+}
+
+/* Giving one back is giving up a hold on it. Only the last one frees. */
 void pmm_free_frame(u64 addr) {
     if (!addr) return;
-    mark_free(FRAME_IDX(addr));
+    u64 f = FRAME_IDX(addr);
+    if (extra && f < total_frames && extra[f]) {
+        extra[f]--;
+        if (!extra[f]) shared_now--;
+        return;
+    }
+    mark_free(f);
 }
 
 u64 pmm_total_frames(void) { return total_frames; }
