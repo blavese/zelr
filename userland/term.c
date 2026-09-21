@@ -1094,8 +1094,10 @@ static void cmd_get(int argc, char **argv) {
     draw_all();
     win_commit(win);
 
+    int sock;
     if (secure) {
-        if (connect_tls(host, 443) != 0) {
+        sock = connect_tls(host, 443);
+        if (sock < 0) {
             static char reason[128];
             tls_why(reason, sizeof(reason));
             err(reason[0] ? reason : "could not connect");
@@ -1104,7 +1106,10 @@ static void cmd_get(int argc, char **argv) {
         static char what[64];
         tls_what(what, sizeof(what));
         w_reset(); w_str("secure: "); w_str(what); dim(work);
-    } else if (connect(host, 80) != 0) { err("could not connect"); return; }
+    } else {
+        sock = connect(host, 80);
+        if (sock < 0) { err("could not connect"); return; }
+    }
 
     static char req[512];
     int n = 0;
@@ -1115,12 +1120,12 @@ static void cmd_get(int argc, char **argv) {
     for (int i = 0; i < 5; i++)
         for (const char *p = parts[i]; *p && n < (int)sizeof(req); p++) req[n++] = *p;
 
-    if (send(req, n) < 0) { err("send failed"); disconnect(); return; }
+    if (send(sock, req, n) < 0) { err("send failed"); disconnect(sock); return; }
 
     int total = 0;
     int quiet = 0;
     for (;;) {
-        int got = recv(io + total, (int)sizeof(io) - 1 - total);
+        int got = recv(sock, io + total, (int)sizeof(io) - 1 - total);
         if (got == NET_EOF) break;
         if (got < 0) break;
         if (got == 0) { if (++quiet >= 3) break; continue; }
@@ -1128,7 +1133,7 @@ static void cmd_get(int argc, char **argv) {
         total += got;
         if (total >= (int)sizeof(io) - 1) break;
     }
-    disconnect();
+    disconnect(sock);
     io[total] = 0;
 
     if (!total) { err("nothing came back"); return; }

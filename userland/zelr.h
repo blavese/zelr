@@ -311,7 +311,16 @@ static inline int spit(const char *path, const void *buf, int len) {
 
 /* --- the network ---------------------------------------------------------
 
-   One connection at a time, because that is what the kernel's TCP supports.
+   Several connections at once. connect() gives back a small number and
+   everything afterwards is handed that number, which is what lets a page
+   fetch its pictures while it is still reading the page, and two programs
+   be online at the same time. It used to be one socket for the whole
+   machine and a second program was told it was busy.
+
+   The number belongs to the program that opened it. Handing another
+   program's number to send() does not work, which with one socket was not
+   a question anybody could ask.
+
    `host` may be a name or a dotted address. */
 
 typedef struct {
@@ -321,6 +330,7 @@ typedef struct {
     u16 pad;
 } zelr_netinfo;
 
+/* A socket, or one of the NET_ERR_ numbers. */
 static inline int connect(const char *host, int port) {
     return syscall(SYS_CONNECT, (zelr_word)host, port, 0);
 }
@@ -333,7 +343,12 @@ static inline int connect(const char *host, int port) {
    Anything else means no connection at all, encrypted or otherwise: a failed
    handshake closes the socket rather than leaving one open that a caller
    might use anyway. tls_why() says what went wrong, and is meant to be shown
-   to somebody rather than logged. */
+   to somebody rather than logged.
+
+   One of these at a time on the machine. The stack holds several
+   connections; the TLS session state in the kernel is still single, so a
+   second encrypted connection is refused rather than quietly taking the
+   first one's keys. Plain ones alongside it are fine. */
 static inline int connect_tls(const char *host, int port) {
     return syscall(SYS_TLS_CONNECT, (zelr_word)host, port, 0);
 }
@@ -343,8 +358,8 @@ static inline int tls_status(char *out, int cap, int which) {
 }
 static inline int tls_why(char *out, int cap)  { return tls_status(out, cap, TLS_WHY); }
 static inline int tls_what(char *out, int cap) { return tls_status(out, cap, TLS_WHAT); }
-static inline int send(const void *buf, int len) {
-    return syscall(SYS_SEND, 0, (zelr_word)buf, len);
+static inline int send(int sock, const void *buf, int len) {
+    return syscall(SYS_SEND, sock, (zelr_word)buf, len);
 }
 /* recv gives back the number of bytes it took out of the connection, 0 when
    nothing arrived in time and the connection is still up, and NET_EOF once
@@ -353,10 +368,12 @@ static inline int send(const void *buf, int len) {
    one. */
 #define NET_EOF (-2)
 
-static inline int recv(void *buf, int len) {
-    return syscall(SYS_RECV, 0, (zelr_word)buf, len);
+static inline int recv(int sock, void *buf, int len) {
+    return syscall(SYS_RECV, sock, (zelr_word)buf, len);
 }
-static inline int disconnect(void) { return syscall(SYS_DISCONNECT, 0, 0, 0); }
+static inline int disconnect(int sock) {
+    return syscall(SYS_DISCONNECT, sock, 0, 0);
+}
 
 static inline int resolve(const char *host, u32 *out) {
     return syscall(SYS_RESOLVE, (zelr_word)host, (zelr_word)out, 0);

@@ -1683,7 +1683,9 @@ static void test_tls(void) {
 
     /* No name means nothing to check a certificate against, which is a
        refusal rather than a connection with the check skipped. */
-    ok("a connection with no host name is refused", !tls_connect(""));
+    /* -1 is not a connection, which is the point: a handshake is asked
+       for over a connection that is already open, and there is none. */
+    ok("a connection with no host name is refused", !tls_connect(-1, ""));
     ok("and it says why", tls_error()[0] && strcmp(tls_error(), "no error") != 0);
     ok("and nothing was opened by trying", !tls_active());
 

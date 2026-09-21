@@ -88,6 +88,11 @@ typedef struct {
     char host[256];
     char error[128];
     char described[64];
+
+    /* Which connection this session is running over. The stack underneath
+       holds several now, so "the connection" is no longer a thing that can
+       be assumed: a session has to carry the one it was handed. */
+    int  tcp;
 } tls_t;
 
 static tls_t T;
@@ -109,9 +114,9 @@ static bool read_exact(u8 *out, u32 n, u32 timeout_ms) {
     u32 have = 0;
     u64 deadline = timer_ticks() + (u64)timeout_ms * timer_hz() / 1000;
     while (have < n) {
-        u32 got = tcp_recv(out + have, n - have, 1000);
+        u32 got = tcp_recv(T.tcp, out + have, n - have, 1000);
         if (got) { have += got; continue; }
-        if (tcp_ended()) return false;
+        if (tcp_ended(T.tcp)) return false;
         if (timer_ticks() > deadline) return false;
     }
     return true;
@@ -121,7 +126,7 @@ static bool read_exact(u8 *out, u32 n, u32 timeout_ms) {
 static bool write_all(const u8 *p, u32 n) {
     while (n) {
         u16 take = n > 1400 ? 1400 : (u16)n;
-        if (!tcp_send(p, take)) return false;
+        if (!tcp_send(T.tcp, p, take)) return false;
         p += take;
         n -= take;
     }
@@ -535,12 +540,13 @@ static bool alloc_buffers(void) {
     return T.rec && T.hs && T.app;
 }
 
-bool tls_connect(const char *host) {
+bool tls_connect(int tcp, const char *host) {
     /* Everything resets except the buffers, which are kept and reused:
        clearing those pointers would leak them and allocate again. */
     u8 *keep_rec = T.rec, *keep_hs = T.hs, *keep_app = T.app;
     memset(&T, 0, sizeof(T));
     T.rec = keep_rec; T.hs = keep_hs; T.app = keep_app;
+    T.tcp = tcp;
 
     if (!alloc_buffers()) { fail("not enough memory for a connection"); return false; }
 

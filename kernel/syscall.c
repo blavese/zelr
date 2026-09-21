@@ -580,20 +580,50 @@ static i64 sys_getcwd(registers_t *r) {
 
 /* --- sockets -------------------------------------------------------------
 
-   The TCP stack handles one connection at a time, so there is one socket and
-   it belongs to whoever opened it. That is a real limit rather than a
-   simplification of the interface: two programs cannot both be connected. */
+   There used to be one, for the whole machine, and it belonged to whoever
+   opened it: a second program asking to connect was told the machine was
+   busy. That was not a simplification of this interface, it was the stack
+   underneath having exactly one connection in file level variables.
 
-static u32 sock_owner;
-static bool sock_open;
-static bool sock_secure;
+   It holds several now, so this does too. A socket is a small number, the
+   caller gets it back from connect and hands it to everything afterwards,
+   and it is checked against the caller on every call -- a program must not
+   be able to read another program's connection by guessing a number, and
+   with one socket that question could not even be asked. */
 
-/* Shuts the socket down in the right order: the TLS close notification has
-   to go out over a connection that is still up, so it goes first. */
-static void sock_drop(void) {
-    if (sock_secure) { tls_close(); sock_secure = false; }
-    tcp_close();
-    sock_open = false;
+#define SOCK_MAX TCP_MAX
+
+typedef struct {
+    bool open;
+    bool secure;
+    u32  owner;
+    int  tcp;
+} sock_t;
+
+static sock_t socks[SOCK_MAX];
+
+/* Shuts one down in the right order: the TLS close notification has to go
+   out over a connection that is still up, so it goes first. */
+static void sock_drop(int h) {
+    if (h < 0 || h >= SOCK_MAX || !socks[h].open) return;
+    if (socks[h].secure) { tls_close(); socks[h].secure = false; }
+    tcp_close(socks[h].tcp);
+    socks[h].open = false;
+}
+
+/* The caller's socket, or nothing. Both halves matter: a number outside the
+   table is a mistake, and a number inside it that belongs to somebody else
+   is the thing this check exists for. */
+static sock_t *sock_of(u64 raw) {
+    if (raw >= SOCK_MAX) return 0;
+    sock_t *s = &socks[raw];
+    if (!s->open || s->owner != caller_pid()) return 0;
+    return s;
+}
+
+static int sock_take(void) {
+    for (int i = 0; i < SOCK_MAX; i++) if (!socks[i].open) return i;
+    return -1;
 }
 
 static i64 sys_connect(registers_t *r) {
@@ -602,44 +632,62 @@ static i64 sys_connect(registers_t *r) {
     u16 port = (u16)r->rcx;
     if (!port) return -1;
     if (!net_up()) return NET_ERR_DOWN;
-    if (sock_open) return NET_ERR_BUSY;
+
+    int h = sock_take();
+    if (h < 0) return NET_ERR_BUSY;          /* every socket is in use */
 
     ipv4_t ip = net_parse_ip(host);
     if (!ip && !net_resolve(host, &ip, 6000)) return NET_ERR_RESOLVE;
-    if (!tcp_connect(ip, port, 6000)) return NET_ERR_CONNECT;
 
-    sock_owner = caller_pid();
-    sock_open = true;
-    sock_secure = false;
-    return 0;
+    int t = tcp_open(ip, port, 6000);
+    if (t < 0) return NET_ERR_CONNECT;
+
+    socks[h].tcp = t;
+    socks[h].owner = caller_pid();
+    socks[h].open = true;
+    socks[h].secure = false;
+    return h;
 }
 
 /* The same connection, with the handshake done on it before the caller gets
    it back. The name is needed twice over and for different things: to find
    the address, and to check that the certificate at the other end is for the
-   site that was asked for rather than merely for whoever answered. */
+   site that was asked for rather than merely for whoever answered.
+
+   Only one of these at a time. The stack holds several connections but the
+   TLS session state in kernel/tls.c is still single, so a machine can have
+   one encrypted connection and the rest plain. Said out loud rather than
+   discovered: a second handshake would quietly take the first one's keys. */
 static i64 sys_connect_tls(registers_t *r) {
     char host[128];
     if (!copy_path(r->rbx, host, sizeof(host))) return -1;
     u16 port = (u16)r->rcx;
     if (!port) port = 443;
     if (!net_up()) return NET_ERR_DOWN;
-    if (sock_open) return NET_ERR_BUSY;
+
+    for (int i = 0; i < SOCK_MAX; i++)
+        if (socks[i].open && socks[i].secure) return NET_ERR_BUSY;
+
+    int h = sock_take();
+    if (h < 0) return NET_ERR_BUSY;
 
     ipv4_t ip = net_parse_ip(host);
     if (!ip && !net_resolve(host, &ip, 6000)) return NET_ERR_RESOLVE;
-    if (!tcp_connect(ip, port, 6000)) return NET_ERR_CONNECT;
+
+    int t = tcp_open(ip, port, 6000);
+    if (t < 0) return NET_ERR_CONNECT;
 
     /* A handshake that fails takes the connection with it. Leaving the TCP
        side open after a certificate was refused would let a caller that
        ignored the return value carry on and send the request in the clear,
        to the machine that just failed to prove who it was. */
-    if (!tls_connect(host)) { tcp_close(); return NET_ERR_TLS; }
+    if (!tls_connect(t, host)) { tcp_close(t); return NET_ERR_TLS; }
 
-    sock_owner = caller_pid();
-    sock_open = true;
-    sock_secure = true;
-    return 0;
+    socks[h].tcp = t;
+    socks[h].owner = caller_pid();
+    socks[h].open = true;
+    socks[h].secure = true;
+    return h;
 }
 
 /* Why the last handshake failed, or what the open one agreed on. */
@@ -657,16 +705,17 @@ static i64 sys_tls_status(registers_t *r) {
 }
 
 static i64 sys_send(registers_t *r) {
-    if (!sock_open || sock_owner != caller_pid()) return -1;
+    sock_t *s = sock_of(r->rbx);
+    if (!s) return -1;
     u64 buf = r->rcx, len = r->rdx;
     /* A plain send is one segment, because that is what the stack writes in
        one go. TLS makes its own records and splits them itself, so the limit
        there is the record size rather than the segment. */
-    if (len == 0 || len > (sock_secure ? 8192u : 1400u)) return -1;
+    if (len == 0 || len > (s->secure ? 8192u : 1400u)) return -1;
     if (!user_range_ok(buf, len)) return -1;
-    if (sock_secure)
+    if (s->secure)
         return tls_send((const void *)buf, (u32)len) ? (i32)len : -1;
-    return tcp_send((const void *)buf, (u16)len) ? (i32)len : -1;
+    return tcp_send(s->tcp, (const void *)buf, (u16)len) ? (i32)len : -1;
 }
 
 /* Reads what has arrived, and says which kind of nothing it got.
@@ -675,37 +724,39 @@ static i64 sys_send(registers_t *r) {
  * reading in a loop cannot tell apart: it either stops early on a slow
  * server or waits forever on a finished one. NET_EOF is the second. */
 static i64 sys_recv(registers_t *r) {
-    if (!sock_open || sock_owner != caller_pid()) return -1;
+    sock_t *s = sock_of(r->rbx);
+    if (!s) return -1;
     u64 buf = r->rcx, len = r->rdx;
     if (len == 0 || len > 65536) return -1;
     if (!user_range_ok(buf, len)) return -1;
 
-    if (sock_secure) {
+    if (s->secure) {
         u32 n = tls_recv((u8 *)buf, len, 4000);
         if (n) return (i32)n;
         /* A finished TLS connection is one that said so in an alert, or one
            whose carrier stopped. The second is not a clean ending and is
            reported the same way, because a caller can do nothing different
            about it and the alternative is waiting forever. */
-        return (tls_ended() || tcp_ended()) ? -2 : 0;
+        return (tls_ended() || tcp_ended(s->tcp)) ? -2 : 0;
     }
 
-    u32 n = tcp_recv((u8 *)buf, len, 4000);
+    u32 n = tcp_recv(s->tcp, (u8 *)buf, len, 4000);
     if (n) return (i32)n;
-    return tcp_ended() ? -2 : 0;
+    return tcp_ended(s->tcp) ? -2 : 0;
 }
 
 static i64 sys_disconnect(registers_t *r) {
-    (void)r;
-    if (!sock_open || sock_owner != caller_pid()) return -1;
-    sock_drop();
+    sock_t *s = sock_of(r->rbx);
+    if (!s) return -1;
+    sock_drop((int)r->rbx);
     return 0;
 }
 
-/* Frees the socket when its owner dies, so a crashed program does not lock
-   the only connection the machine has. */
+/* Frees whatever a program still held when it died, so a crash does not
+   leave connections open that nothing will ever close. */
 void syscall_release(u32 pid) {
-    if (sock_open && sock_owner == pid) sock_drop();
+    for (int i = 0; i < SOCK_MAX; i++)
+        if (socks[i].open && socks[i].owner == pid) sock_drop(i);
 }
 
 static i64 sys_resolve(registers_t *r) {

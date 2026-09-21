@@ -369,6 +369,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._send(PAGE)
         elif path == "/gz":
             self._gzip(GZIPPED)
+        # Two pages whose only job is to be told apart. wiretest opens three
+        # connections at once and has to know which answer came back on
+        # which socket, so the marker has to be a word nothing else on this
+        # server or in an http header can produce.
+        elif path == "/one":
+            self._send(b"<html><body><p>marker-alpha</p></body></html>")
+        elif path == "/two":
+            self._send(b"<html><body><p>marker-beta</p></body></html>")
         elif path == "/setcookie":
             self._send(b"<html><body><h1>set</h1>"
                        b"<p><a href=\"/whoami\">who am i</a></p></body></html>",
