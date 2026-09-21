@@ -193,6 +193,136 @@ u64 user_sbrk(i64 delta) {
     return was;
 }
 
+/* --- what a program asked for, and what it has been given ----------------
+ *
+ * A mapping is a promise. user_mmap writes down a range and allocates
+ * nothing; user_fault_fill hands over one page at a time as the program
+ * reaches for them. So the cost of an address space is what it touches
+ * rather than what it asked for, which is what lets an allocator ask for
+ * room it might need.
+ *
+ * Anonymous only: a mapping is zeroed memory and nothing else. A file
+ * mapping would need this to hold the file open behind the program's back,
+ * or to remember a path and read it inside the fault handler, and neither
+ * of those is a small thing done honestly. read() still reads files.
+ */
+
+/* Whether a range is one this program may reach for. */
+static vma_t *vma_holding(task_t *t, u64 addr) {
+    for (int i = 0; i < t->nvma; i++) {
+        if (!t->vma[i].base) continue;
+        if (addr >= t->vma[i].base && addr < t->vma[i].base + t->vma[i].len)
+            return &t->vma[i];
+    }
+    return 0;
+}
+
+/* Whether anything already claims any part of [base, base+len). */
+static bool vma_clear(task_t *t, u64 base, u64 len) {
+    for (int i = 0; i < t->nvma; i++) {
+        if (!t->vma[i].base) continue;
+        u64 a = t->vma[i].base, b = a + t->vma[i].len;
+        if (base < b && a < base + len) return false;
+    }
+    return true;
+}
+
+u64 user_mmap(u64 len, int prot) {
+    task_t *t = task_current();
+    if (!t || !t->dir || !len) return 0;
+
+    len = (len + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
+    if (len > USER_MMAP_MAX - USER_MMAP_BASE) return 0;
+
+    int slot = -1;
+    for (int i = 0; i < t->nvma; i++) if (!t->vma[i].base) { slot = i; break; }
+    if (slot < 0 && t->nvma < VMA_MAX) slot = t->nvma++;
+    if (slot < 0) return 0;                  /* too many; said rather than hidden */
+
+    /* The lowest gap that fits, walked a page at a time from the bottom of
+       the window. There are at most sixteen ranges, so this is cheap and it
+       reuses what munmap gave back rather than marching up until the window
+       is gone. */
+    for (u64 at = USER_MMAP_BASE; at + len <= USER_MMAP_MAX; at += PAGE_SIZE) {
+        if (!vma_clear(t, at, len)) continue;
+        t->vma[slot].base = at;
+        t->vma[slot].len = len;
+        t->vma[slot].prot = (u32)prot;
+        return at;
+    }
+
+    t->vma[slot].base = 0;
+    return 0;
+}
+
+bool user_munmap(u64 at, u64 len) {
+    task_t *t = task_current();
+    if (!t || !t->dir || !len) return false;
+
+    len = (len + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
+    at &= ~(PAGE_SIZE - 1);
+
+    /* Whole ranges only. A partial unmap would mean splitting one entry
+       into two and finding a slot for the second, which can fail -- and an
+       unmap that fails halfway has taken the pages and kept the promise,
+       which is the worst of both. */
+    for (int i = 0; i < t->nvma; i++) {
+        if (t->vma[i].base != at || t->vma[i].len != len) continue;
+
+        for (u64 a = at; a < at + len; a += PAGE_SIZE) {
+            u64 phys = virt_to_phys_in(t->dir, a);
+            if (!phys) continue;               /* never touched, never given */
+            unmap_page_in(t->dir, a);
+            pmm_free_frame(phys);
+        }
+        t->vma[i].base = 0;
+        t->vma[i].len = 0;
+        paging_switch(t->dir);                 /* the entries just changed */
+        return true;
+    }
+    return false;
+}
+
+bool user_fault_fill(u64 addr, u64 err) {
+    /* Present already means this is not a page that was missing: it is a
+       write to something read-only, which copy on write has already had its
+       chance at. Filling here would hand over a second page and lose
+       whatever was in the first. */
+    if (err & 1) return false;
+
+    task_t *t = task_current();
+    if (!t || !t->dir) return false;
+
+    vma_t *v = vma_holding(t, addr);
+    if (!v) return false;
+
+    /* Writing to a range asked for read-only is the program's mistake, not
+       a page that has not arrived. */
+    if ((err & 2) && !(v->prot & PROT_WRITE)) return false;
+
+    u64 page = addr & ~(PAGE_SIZE - 1);
+    if (virt_to_phys_in(t->dir, page)) return true;   /* another processor won */
+
+    u64 frame = pmm_alloc_frame();
+    if (!frame) return false;                  /* out of memory: the program ends */
+    memset((void *)frame, 0, PAGE_SIZE);
+
+    u64 flags = PTE_PRESENT | PTE_USER;
+    if (v->prot & PROT_WRITE) flags |= PTE_RW;
+    if (!map_page_in(t->dir, page, frame, flags)) {
+        pmm_free_frame(frame);
+        return false;
+    }
+    return true;
+}
+
+void user_drop_mappings(void) {
+    task_t *t = task_current();
+    if (!t) return;
+    for (int i = 0; i < VMA_MAX; i++) { t->vma[i].base = 0; t->vma[i].len = 0; }
+    t->nvma = 0;
+}
+
 int user_spawn_stub(const char *name) {
     u64 dir = paging_new_directory();
     if (!dir) return -1;

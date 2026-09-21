@@ -4,6 +4,15 @@
 #include "idt.h"
 #include "signal.h"
 
+/* One range a program asked to have mapped. See task_t below. */
+#define VMA_MAX 16
+
+typedef struct {
+    u64 base;                 /* page aligned, 0 when the slot is free */
+    u64 len;                  /* a whole number of pages */
+    u32 prot;                 /* PROT_READ, PROT_WRITE */
+} vma_t;
+
 /* Matches VFS_PATH_MAX. Spelled out rather than included, because the
    scheduler has no other reason to know about the filesystem. */
 #define TASK_CWD_MAX 128
@@ -120,6 +129,22 @@ typedef struct task {
        by exec, because the new one is not, and a handler address that
        belonged to the old program is a jump into whatever is there now. */
     u64  sig_handler[SIG_MAX];
+
+    /* What this program has asked to have mapped, and has not been given
+       yet.
+     *
+       A mapping is a promise rather than memory: nothing is allocated when
+       it is made, and a page appears the first time the program touches
+       one. So this is the list the page fault handler consults to tell a
+       program reaching for something it asked for from a program reaching
+       for something that was never its.
+
+       A fixed array, because it is read inside the fault handler and an
+       allocation there is a fault inside a fault. Sixteen is what a
+       program that maps its heap, a file and a guard page or two needs;
+       asking for a seventeenth is refused and says so. */
+    vma_t vma[VMA_MAX];
+    int   nvma;
 
     /* Where a handler returns to: a few instructions in the program itself
        that ask the kernel to put the frame back. The kernel cannot supply
