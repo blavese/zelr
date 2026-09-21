@@ -191,10 +191,24 @@ static EFI_FILE_PROTOCOL *open_boot_file(EFI_HANDLE image, const CHAR16 *name) {
     return file;
 }
 
-/* The kernel is a flat image that belongs at a fixed physical address. Asking
-   the firmware for that exact address rather than any free pages is the point:
-   the kernel is linked to run there. */
-static u64 load_kernel(EFI_HANDLE image, u64 load_at, u64 *size_out) {
+/* The kernel is a flat image that belongs at a fixed physical address, and
+ * the firmware will not always give it to us.
+ *
+ * Asking for that exact address is the obvious thing and it is what this did:
+ * allocate_pages with AllocateAddress at one megabyte, and die if the answer
+ * is no. On this machine's firmware the answer is no -- EFI_NOT_FOUND, for a
+ * region the firmware is using for its own boot services -- and what came out
+ * was a loader that printed its name and then refused, on every UEFI boot,
+ * for at least a release.
+ *
+ * The address is not negotiable, but the moment is. Boot services memory
+ * stops being the firmware's the instant boot services end, so the kernel is
+ * read wherever the firmware is willing to put it and moved into place
+ * afterwards, when nobody is left to mind. The fixed address is still asked
+ * for first, because when it works there is nothing to move.
+ */
+static u64 load_kernel(EFI_HANDLE image, u64 load_at, u64 *size_out,
+                       int *moved_out) {
     EFI_FILE_PROTOCOL *file = open_boot_file(image, u"zelr.bin");
 
     /* Seek to the end to learn the size, since asking for file information
@@ -208,11 +222,16 @@ static u64 load_kernel(EFI_HANDLE image, u64 load_at, u64 *size_out) {
 
     u64 pages = (size + 0xFFF) / 0x1000;
     EFI_PHYSICAL_ADDRESS at = load_at;
+    *moved_out = 0;
+
     EFI_STATUS s = BS->allocate_pages(AllocateAddress, EfiLoaderData, pages, &at);
     if (EFI_ERROR(s)) {
-        /* Some firmware has already put something at 1 MiB. Nothing can be
-           done about that here; the kernel is linked to run at that address. */
-        die(u"cannot reserve the address the kernel is linked at", s);
+        /* Somewhere else, then, and moved into place once the firmware has
+           let go of the machine. */
+        at = 0;
+        s = BS->allocate_pages(AllocateAnyPages, EfiLoaderData, pages, &at);
+        if (EFI_ERROR(s)) die(u"nowhere to put the kernel at all", s);
+        *moved_out = 1;
     }
 
     UINTN want = size;
@@ -239,6 +258,65 @@ static int usable_after_exit(u32 type) {
            type == EfiBootServicesCode ||
            type == EfiBootServicesData ||
            type == EfiLoaderCode;
+}
+
+/* Whether a range will be ours to write to once boot services end.
+ *
+ * Asked before exiting, because afterwards there is nothing to ask. A range
+ * the firmware is using for its own boot services is fair game the moment it
+ * stops using them; its runtime code and its ACPI tables never are, and
+ * copying a kernel over those would break the machine in a way nothing could
+ * report. */
+static int range_is_ours_after_exit(u64 base, u64 len) {
+    static u8 probe_buffer[32 * 1024];
+    UINTN size = sizeof(probe_buffer);
+    UINTN key = 0, desc_size = 0;
+    u32 desc_version = 0;
+
+    if (EFI_ERROR(BS->get_memory_map((UINTN *)&size,
+                                     (EFI_MEMORY_DESCRIPTOR *)probe_buffer,
+                                     &key, &desc_size, &desc_version)))
+        return 0;
+
+    u64 covered = 0;
+    /* Walked until the whole range is accounted for by descriptors that will
+       be ours. A gap the map does not describe at all is not ours either,
+       which is why this counts rather than merely failing to find a bad
+       one. */
+    for (u64 want = base; want < base + len; ) {
+        int found = 0;
+        for (UINTN off = 0; off + desc_size <= size; off += desc_size) {
+            EFI_MEMORY_DESCRIPTOR *d = (EFI_MEMORY_DESCRIPTOR *)(probe_buffer + off);
+            u64 d_base = d->physical_start, d_len = d->pages * 0x1000;
+            if (!d_len || want < d_base || want >= d_base + d_len) continue;
+            if (!usable_after_exit(d->type) && d->type != EfiLoaderData) {
+                /* Named rather than numbered. "Not ours" is not something
+                   anybody can act on; "the firmware's acpi tables, at eight
+                   megabytes" says exactly what the problem is and, on this
+                   firmware, exactly why a kernel this size cannot live at
+                   one megabyte. */
+                print(u"  in the way  ");
+                if (d->type == EfiACPIReclaimMemory)      print(u"acpi tables");
+                else if (d->type == EfiACPIMemoryNVS)     print(u"acpi nvs");
+                else if (d->type == EfiRuntimeServicesCode) print(u"firmware code");
+                else if (d->type == EfiRuntimeServicesData) print(u"firmware data");
+                else if (d->type == EfiReservedMemoryType)  print(u"reserved");
+                else                                      print(u"something");
+                print(u" at ");
+                print_hex(d_base);
+                print(u"\r\n");
+                return 0;
+            }
+            u64 take = d_base + d_len - want;
+            if (want + take > base + len) take = base + len - want;
+            want += take;
+            covered += take;
+            found = 1;
+            break;
+        }
+        if (!found) return 0;
+    }
+    return covered >= len;
 }
 
 /* Reads the firmware's memory map, boils it down to the three kinds the
@@ -342,12 +420,30 @@ EFI_STATUS EFIAPI EfiMain(EFI_HANDLE image, EFI_SYSTEM_TABLE *system_table) {
     setup_graphics(h);
 
     u64 size = 0;
-    u64 base = load_kernel(image, KERNEL_PHYS, &size);
-    h->kernel_base = base;
+    int moved = 0;
+    u64 base = load_kernel(image, KERNEL_PHYS, &size, &moved);
+
+    if (moved && !range_is_ours_after_exit(KERNEL_PHYS, size))
+        die(u"the address the kernel is linked at is not ours to take", 0);
+
+    h->kernel_base = KERNEL_PHYS;
     h->kernel_size = size;
 
     print(u"  leaving the firmware\r\n");
     take_the_machine(image, h);
+
+    /* The firmware is gone, so the address it would not part with is ours.
+     *
+       A move rather than a copy: the staging pages can sit anywhere,
+       including inside the range being written, and which end to start from
+       depends on which way round they are. */
+    if (moved) {
+        u8 *dst = (u8 *)KERNEL_PHYS;
+        const u8 *src = (const u8 *)base;
+        if (dst < src) for (u64 i = 0; i < size; i++) dst[i] = src[i];
+        else           for (u64 i = size; i-- > 0; )  dst[i] = src[i];
+        base = KERNEL_PHYS;
+    }
 
     /* Nothing above this line can be called again. The machine is already in
        long mode with memory identity mapped, so the kernel simply continues

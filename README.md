@@ -1511,6 +1511,22 @@ large range:
 - **The system info window is still kernel code**, because it reports on the
   allocator, the scheduler and the clock, and no system call exposes those.
   Every other window on the desktop belongs to a ring 3 process.
+- **It does not boot under UEFI on firmware that puts something at eight
+  megabytes.** The kernel is linked to run at one megabyte and is a little
+  over nine, and the firmware this is tested against keeps its ACPI NVS at
+  eight — so the range the kernel needs is not the firmware's to give and
+  is not the loader's to take. The BIOS paths are unaffected, because
+  nothing else is down there.
+
+  This is not new and it is not subtle: it has been true since the kernel
+  grew past seven megabytes, which was before the last release. What was
+  new was finding it, because the loader used to report the firmware's
+  status number and nothing else. It now loads the kernel wherever the
+  firmware will have it, moves it into place once boot services are gone,
+  and when it cannot, says what is in the way and where. The fix is to link
+  the kernel somewhere it fits, which is a change to both loaders and to
+  the identity map and is the next thing rather than a footnote to this
+  one.
 - **Two processors cannot be inside the kernel at once.** They run programs
   in parallel, which is where programs spend their time, but one lock covers
   every system call and every fault. That is the coarsest lock there is and
