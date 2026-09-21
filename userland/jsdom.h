@@ -729,6 +729,147 @@ static jval nat_clear_timer(jctx *J, jval t, jval *a, int n) {
     return js_undef();
 }
 
+/* --- asking the network from a script -------------------------------------
+ *
+ * The last thing a page could not do. Everything else it might want after it
+ * has been read is here -- a click, a timer, the document -- and without
+ * this a page can only ever show what arrived with it.
+ *
+ * XMLHttpRequest and not fetch, because fetch returns a promise and this
+ * interpreter has no promises: no async, no await, no then. A fetch that
+ * returned something which looked like a promise and was not would be worse
+ * than not having it, because the page would be written against it and stop
+ * at the first .then. XMLHttpRequest is callback shaped and is what this
+ * engine can honestly offer.
+ *
+ * The request is made on the browser's next pass rather than inside send(),
+ * so the code after send() runs before onload does. That is the contract a
+ * page is written against, and a request that called back before it returned
+ * would break every page that sets its handler after sending. The fetch
+ * itself blocks the browser while it happens, which is a stall rather than a
+ * lie: nothing is told it finished before it did.
+ */
+#define JD_REQUESTS 8
+
+typedef struct {
+    jobj *self;                  /* the request, which holds its own state */
+    int   waiting;
+} jxhr;
+
+static jxhr jd_req[JD_REQUESTS];
+static int  jd_nreq;
+
+/* How one is actually made. Set by the browser, for the same reason the
+   script fetch is: the network and the page's address are its business. */
+static int (*jd_do_request)(const char *method, const char *url,
+                            const char *body, const char **out, int *status);
+
+void jsdom_request_with(int (*fn)(const char *, const char *, const char *,
+                                  const char **, int *)) {
+    jd_do_request = fn;
+}
+
+static const char *jd_prop_str(jobj *o, const char *name, const char *fallback) {
+    jval v = js_get(&jd_J, js_from_obj(o), js_str(&jd_J, name));
+    if (v.t != JS_STR || !v.str) return fallback;
+    return v.str->s;
+}
+
+static jval nat_xhr_open(jctx *J, jval t, jval *a, int n) {
+    if (t.t != JS_OBJ || !t.obj) return js_undef();
+    jstr *m = js_to_str(J, js_arg(a, n, 0));
+    jstr *u = js_to_str(J, js_arg(a, n, 1));
+    js_set(J, t.obj, "__method__", js_from_str(m));
+    js_set(J, t.obj, "__url__", js_from_str(u));
+    js_set(J, t.obj, "readyState", js_num(1));
+    return js_undef();
+}
+
+/* Accepted and dropped. A header this browser does not send is better than a
+   method that refuses a page for asking. */
+static jval nat_xhr_header(jctx *J, jval t, jval *a, int n) {
+    (void)J; (void)t; (void)a; (void)n;
+    return js_undef();
+}
+
+static jval nat_xhr_send(jctx *J, jval t, jval *a, int n) {
+    if (t.t != JS_OBJ || !t.obj) return js_undef();
+
+    if (n > 0) {
+        jval b = js_arg(a, n, 0);
+        if (b.t != JS_UNDEF && b.t != JS_NULL)
+            js_set(J, t.obj, "__body__", js_from_str(js_to_str(J, b)));
+    }
+
+    int slot = -1;
+    for (int i = 0; i < jd_nreq; i++) if (!jd_req[i].waiting) { slot = i; break; }
+    if (slot < 0 && jd_nreq < JD_REQUESTS) slot = jd_nreq++;
+    if (slot < 0) return js_undef();      /* too many at once; silently not sent */
+
+    jd_req[slot].self = t.obj;
+    jd_req[slot].waiting = 1;
+    return js_undef();
+}
+
+/* new XMLHttpRequest(): `new` hands the fresh object in as this, so this
+   decorates it and lets `new` hand it back. */
+static jval nat_xhr_new(jctx *J, jval t, jval *a, int n) {
+    (void)a; (void)n;
+    if (t.t != JS_OBJ || !t.obj) return js_undef();
+    jobj *o = t.obj;
+    js_set(J, o, "readyState", js_num(0));
+    js_set(J, o, "status", js_num(0));
+    js_set(J, o, "responseText", js_from_str(js_str(J, "")));
+    js_set(J, o, "open", js_from_obj(js_native(J, "open", nat_xhr_open)));
+    js_set(J, o, "send", js_from_obj(js_native(J, "send", nat_xhr_send)));
+    js_set(J, o, "setRequestHeader",
+           js_from_obj(js_native(J, "setRequestHeader", nat_xhr_header)));
+    return js_undef();
+}
+
+/* Whatever was sent, made. One per pass, because each one blocks the
+   browser while it happens and a page that sent six would otherwise stop
+   for all six at once. */
+static int jsdom_requests(void) {
+    if (!jd_open || !jd_do_request) return 0;
+
+    for (int i = 0; i < jd_nreq; i++) {
+        if (!jd_req[i].waiting) continue;
+
+        jobj *o = jd_req[i].self;
+        jd_req[i].waiting = 0;
+        if (!o) continue;
+
+        const char *method = jd_prop_str(o, "__method__", "GET");
+        const char *url = jd_prop_str(o, "__url__", "");
+        const char *body = jd_prop_str(o, "__body__", 0);
+        if (!url[0]) continue;
+
+        const char *text = 0;
+        int status = 0;
+        int len = jd_do_request(method, url, body, &text, &status);
+
+        js_set(&jd_J, o, "status", js_num(status));
+        js_set(&jd_J, o, "readyState", js_num(4));
+        js_set(&jd_J, o, "responseText",
+               js_from_str(len > 0 && text ? js_str_n(&jd_J, text, (u32)len)
+                                           : js_str(&jd_J, "")));
+
+        /* onload either way. A page that asked for something it did not get
+           is entitled to find out, and status is where it looks. */
+        jval fn = js_get(&jd_J, js_from_obj(o), js_str(&jd_J, "onload"));
+        if (fn.t == JS_OBJ && fn.obj &&
+            (fn.obj->kind == JO_FUNC || fn.obj->kind == JO_NATIVE)) {
+            jd_J.sig = JS_OK;
+            jd_J.steps = 0;
+            js_call(&jd_J, fn, js_from_obj(o), 0, 0);
+            if (jd_J.sig != JS_OK) { jd_note_error(); jd_J.sig = JS_OK; }
+        }
+        return 1;
+    }
+    return 0;
+}
+
 /* Whatever is due, run once. The browser calls this on every pass of its
    loop; the answer is how many ran, so it knows whether to ask whether the
    document changed.
@@ -968,6 +1109,9 @@ static int jd_page_scripts(const ddoc *d) {
    keeps whatever the scripts wrote into it, because that lives in the
    document's own arena rather than this one. */
 static void jsdom_close(void) {
+    for (int i = 0; i < jd_nreq; i++) { jd_req[i].waiting = 0; jd_req[i].self = 0; }
+    jd_nreq = 0;
+
     if (!jd_open) return;
     js_done(&jd_J);
     jd_open = 0;
@@ -1036,6 +1180,11 @@ static int jsdom_open(ddoc *d, csheet *sheet) {
                js_from_obj(js_native(&jd_J, "setTimeout", nat_set_timeout)));
     js_declare(&jd_J, jd_J.global, js_str(&jd_J, "setInterval"),
                js_from_obj(js_native(&jd_J, "setInterval", nat_set_interval)));
+
+    /* The one thing a page could not do until it was here: ask for
+       something after it had been read. */
+    js_declare(&jd_J, jd_J.global, js_str(&jd_J, "XMLHttpRequest"),
+               js_from_obj(js_native(&jd_J, "XMLHttpRequest", nat_xhr_new)));
     js_declare(&jd_J, jd_J.global, js_str(&jd_J, "clearTimeout"),
                js_from_obj(js_native(&jd_J, "clearTimeout", nat_clear_timer)));
     js_declare(&jd_J, jd_J.global, js_str(&jd_J, "clearInterval"),
@@ -1052,26 +1201,65 @@ static int jsdom_open(ddoc *d, csheet *sheet) {
 /* Returns how many scripts ran. `err` gets the first failure, because a page
  * with a broken script should say so somewhere rather than silently doing
  * nothing — and the second failure is usually the first one's fault. */
+/* How a script with a src gets its text.
+ *
+ * Set by the browser, because fetching it needs the network and the address
+ * of the page it is relative to, and neither belongs down here: this file
+ * knows about a document and an interpreter and deliberately nothing about
+ * where either came from.
+ *
+ * The text it hands back stays valid until the next call, which is all it
+ * has to be -- it is run immediately. */
+static int (*jd_get_script)(const char *src, const char **out);
+
+void jsdom_fetch_with(int (*fn)(const char *, const char **)) {
+    jd_get_script = fn;
+}
+
+/* How many external ones were fetched and how many were not, for the line
+   the browser prints about what a page did. */
+static int jd_outside, jd_outside_failed;
+
+static int jsdom_outside(void) { return jd_outside; }
+static int jsdom_outside_failed(void) { return jd_outside_failed; }
+
 static int jsdom_scripts(char *err, int errcap) {
     if (err && errcap) err[0] = 0;
     if (!jd_open || !jd_doc) return 0;
 
     ddoc *d = jd_doc;
     int ran = 0;
+    jd_outside = jd_outside_failed = 0;
+
     for (int i = 0; i < d->count; i++) {
         if (d->nodes[i].kind != DN_ELEMENT || d->nodes[i].tag != T_SCRIPT)
             continue;
 
-        /* A script with a src is somebody else's file, and nothing here
-           fetches one yet. Skipped rather than half run. */
-        if (dom_attr(d, i, "src")) continue;
-
-        int child = d->nodes[i].first;
-        if (child < 0 || d->nodes[child].kind != DN_TEXT) continue;
-        const char *text = d->arena + d->nodes[child].text;
-
+        const char *text = 0;
         u32 len = 0;
-        while (text[len]) len++;
+
+        const char *src = dom_attr(d, i, "src");
+        if (src && *src) {
+            /* Somebody else's file. Fetched and run where it appears rather
+               than at the end, because the order scripts run in is the
+               order they are written in: a file that defines something and
+               an inline script below it that uses it is the commonest shape
+               on the web, and running them the other way round is a page
+               that fails with a name it has never heard of.
+
+               A script element with a src ignores anything written inside
+               it, which is what every browser does. */
+            if (!jd_get_script) { jd_outside_failed++; continue; }
+            int n = jd_get_script(src, &text);
+            if (n <= 0 || !text) { jd_outside_failed++; continue; }
+            len = (u32)n;
+            jd_outside++;
+        } else {
+            int child = d->nodes[i].first;
+            if (child < 0 || d->nodes[child].kind != DN_TEXT) continue;
+            text = d->arena + d->nodes[child].text;
+            while (text[len]) len++;
+        }
         if (!len) continue;
 
         ran++;

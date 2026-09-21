@@ -153,6 +153,69 @@ SCRIPTED = b"""<!doctype html>
 </body></html>
 """
 
+# A page that does its work after it has been read: on a click, on a timer,
+# and out of a file of its own. Everything the old readme said this browser
+# could not do, in one page, with a colour for each so the answer is a count
+# of pixels rather than the browser's opinion of itself.
+#
+# The three colours are nothing else on the screen: a click turns the button
+# green, a timer turns the second band orange, and the external script turns
+# the third violet. A page that never ran any of them is entirely blue.
+LIVE = b"""<!doctype html>
+<html><head><title>a page that does things</title>
+<style>
+  body { font-family: sans-serif; padding: 20px }
+  div  { padding: 20px 26px; margin-bottom: 14px; color: #ffffff;
+         background: #1d4ed8 }
+  .hit   { background: #00b050 }
+  .late  { background: #ff8000 }
+  .outer { background: #8000ff }
+  .asked { background: #00a0a0 }
+</style></head>
+<body>
+<div id="btn">press me</div>
+<div id="tick">waiting for a timer</div>
+<div id="ext">waiting for a file</div>
+<div id="net">waiting for an answer</div>
+<script>
+  document.getElementById("btn").addEventListener("click", function () {
+    document.getElementById("btn").className = "hit";
+    document.getElementById("btn").textContent = "pressed";
+  });
+  setTimeout(function () {
+    document.getElementById("tick").className = "late";
+    document.getElementById("tick").textContent = "the timer went off";
+  }, 900);
+
+  // Asked for after the page was read, and the handler set after send().
+  // That only works if the request is really made later: a send() that
+  // fetched and called back before it returned would find no handler here.
+  var x = new XMLHttpRequest();
+  x.open("GET", "/live.txt");
+  x.send();
+  x.onload = function () {
+    if (x.status === 200 && x.responseText.indexOf("teal") >= 0) {
+      document.getElementById("net").className = "asked";
+      document.getElementById("net").textContent = "the answer came back";
+    }
+  };
+</script>
+<script src="/live.js"></script>
+</body></html>
+"""
+
+# The same page with every script taken out, so a check can show that the
+# colours come from running them rather than from the markup. Without this,
+# four counts of coloured pixels prove only that a page was drawn.
+LIVE_QUIET = (LIVE[:LIVE.index(b"<script>")]
+              + b"</body></html>" + chr(10).encode())
+
+# Somebody else's file, which is the part a page cannot do for itself.
+LIVE_JS = b"""
+document.getElementById("ext").className = "outer";
+document.getElementById("ext").textContent = "the file ran";
+"""
+
 # The same page with the script taken out, so the check can show that the
 # band and the words come from running it rather than from the markup.
 UNSCRIPTED = SCRIPTED[:SCRIPTED.index(b"<script>")] + b"</body></html>" + chr(10).encode()
@@ -416,6 +479,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._send(SCRIPTED)
         elif path == "/unscripted":
             self._send(UNSCRIPTED)
+        elif path == "/live":
+            self._send(LIVE)
+        elif path == "/live.js":
+            self._send(LIVE_JS, ctype="application/javascript")
+        elif path == "/live.txt":
+            self._send(b"teal", ctype="text/plain")
+        elif path == "/live-quiet":
+            self._send(LIVE_QUIET)
         elif path == "/style.css":
             self._send(SHEET, ctype="text/css")
         elif path == "/big":

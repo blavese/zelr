@@ -49,10 +49,31 @@
 #define SRC_MAX    (320 * 1024)
 #define CSS_MAX    (192 * 1024)
 #define SHEETS_MAX 6
+
+/* A script the page did not bring with it. One buffer, reused: each is run
+   the moment it arrives, so there is never more than one in hand. The limit
+   on how many are followed is the same argument as for sheets -- every one
+   is another round trip -- and it is said out loud when it is reached. */
+#define SCRIPT_MAX  (128 * 1024)
+#define SCRIPTS_MAX 8
+
+/* And what a script asks for while the page is up. Its own buffer, because
+   a reply arriving must not write over the text of the script that asked
+   for it -- which is exactly what sharing one would do. */
+#define REPLY_MAX   (128 * 1024)
+
+/* How many a page may make. A page in a loop asking forever is a page
+   that holds the machine on the network rather than on the processor,
+   and neither is somewhere to leave it. */
+#define ASKS_MAX    64
 #define HIST_MAX   40
 
 static char src[SRC_MAX];
 static char cssbuf[CSS_MAX];
+static char scriptbuf[SCRIPT_MAX];
+static char replybuf[REPLY_MAX];
+static int  scripts_outside;
+static int  asks_made;
 
 static ddoc   doc;
 static csheet sheet;
@@ -570,6 +591,58 @@ static int gather_linked_sheets(int *fetched, int *skipped) {
     return *fetched;
 }
 
+/* A script with a src, fetched. Handed to jsdom.h, which knows how to run
+   one and deliberately knows nothing about where it came from.
+
+   Relative to the page, the way every other address on it is: a page at
+   /a/b.html asking for c.js means /a/c.js, and resolving that is url_join's
+   job and not this one's. */
+static int fetch_script(const char *src, const char **out) {
+    if (scripts_outside >= SCRIPTS_MAX) return 0;
+
+    url_t u;
+    if (!url_join(&here, src, &u)) return 0;
+
+    response_t r;
+    int rc = web_get(&u, scriptbuf, SCRIPT_MAX, &r);
+    if (rc < 200 || rc >= 300 || r.len <= 0) return 0;
+
+    scripts_outside++;
+    *out = r.body;
+    return r.len;
+}
+
+/* What a script asked the network for.
+ *
+ * Same origin is not enforced, because there is nothing here for it to
+ * protect: no cookies are sent with it, there is no credential store, and a
+ * page that reads another site's public text through this learns what
+ * anybody could learn by asking for it. Saying that is better than a check
+ * that looks like a security boundary and is not one.
+ *
+ * The address is resolved against the page, so a script may ask for a path
+ * the way it would write one in a link. */
+static int do_request(const char *method, const char *url, const char *body,
+                      const char **out, int *status) {
+    *out = 0;
+    *status = 0;
+    if (asks_made >= ASKS_MAX) return 0;
+
+    url_t u;
+    if (!url_join(&here, url, &u)) return 0;
+
+    response_t r;
+    int post = method && (method[0] == 'P' || method[0] == 'p');
+    int rc = post ? web_post(&u, body ? body : "", replybuf, REPLY_MAX, &r)
+                  : web_get(&u, replybuf, REPLY_MAX, &r);
+
+    asks_made++;
+    *status = rc;
+    if (rc <= 0 || r.len <= 0) return 0;
+    *out = r.body;
+    return r.len;
+}
+
 static void relayout(int width) {
     match.hover = hover_node;
     match.visited_links = 0;
@@ -692,7 +765,11 @@ static void build(const char *html, int len, int width, int want_sheets,
     said_script_err = 0;
     scripts_ran = 0;
     scripts_changed = 0;
+    scripts_outside = 0;
+    asks_made = 0;
     if (jsdom_open(&doc, &sheet)) {
+        jsdom_fetch_with(fetch_script);
+        jsdom_request_with(do_request);
         scripts_ran = jsdom_scripts(script_err, (int)sizeof(script_err));
         jsdom_loaded();
         scripts_changed = jsdom_changed();
@@ -849,6 +926,18 @@ static void load(const char *address, int width, int keep_scroll) {
         say_more(", ");
         say_more(n);
         say_more(scripts_ran == 1 ? " script ran" : " scripts ran");
+
+        /* Which of them were files of their own, because a page whose work
+           is in one file it links to and which runs without it is not the
+           page -- the same argument as for a style sheet, and the same
+           silence to avoid. */
+        if (jsdom_outside()) {
+            number_into(n, jsdom_outside());
+            say_more(" (");
+            say_more(n);
+            say_more(jsdom_outside() == 1 ? " from a file)" : " from files)");
+        }
+        if (jsdom_outside_failed()) say_more(", one would not come");
     }
 
     /* And whether it asked to be somewhere else. */
@@ -1276,6 +1365,14 @@ int main(int argc, char **argv) {
            setTimeout and is never called back is not slow: it is stopped
            part of the way through whatever it was doing. */
         if (jsdom_live() && jsdom_timers() && jsdom_changed()) {
+            relayout(view_w - UI_PAD * 2);
+            dirty = 1;
+        }
+
+        /* And anything it asked the network for. One per pass: each blocks
+           this loop while it happens, and a page that sent six would
+           otherwise stop for all six before drawing anything. */
+        if (jsdom_live() && jsdom_requests() && jsdom_changed()) {
             relayout(view_w - UI_PAD * 2);
             dirty = 1;
         }
