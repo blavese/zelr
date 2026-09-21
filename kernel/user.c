@@ -293,6 +293,31 @@ bool user_fault_fill(u64 addr, u64 err) {
     task_t *t = task_current();
     if (!t || !t->dir) return false;
 
+    /* The stack, which grows down.
+
+       Every program has one and none of them asked for it, so it is not in
+       the list below; it is a range like any other and this is the same
+       filling, done for the region between where the stack started and how
+       far down it is allowed to reach.
+
+       A wild pointer that lands inside that range gets a page rather than
+       an error, which is the price of not asking the program to declare
+       its own stack. It is the program's own memory either way. */
+    if (addr < USER_STACK_TOP && addr >= USER_STACK_TOP - USER_STACK_MAX) {
+        u64 page = addr & ~(PAGE_SIZE - 1);
+        if (virt_to_phys_in(t->dir, page)) return true;
+
+        u64 frame = pmm_alloc_frame();
+        if (!frame) return false;
+        memset((void *)frame, 0, PAGE_SIZE);
+        if (!map_page_in(t->dir, page, frame,
+                         PTE_PRESENT | PTE_RW | PTE_USER)) {
+            pmm_free_frame(frame);
+            return false;
+        }
+        return true;
+    }
+
     vma_t *v = vma_holding(t, addr);
     if (!v) return false;
 

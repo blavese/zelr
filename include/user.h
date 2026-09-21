@@ -85,6 +85,24 @@ bool user_fault_fill(u64 addr, u64 err);
 /* Forgets every mapping, which is what exec does. */
 void user_drop_mappings(void);
 
+/* How far down a stack may grow.
+
+   A stack starts as a handful of pages and gets another whenever the
+   program reaches past the bottom of what it has, up to this. That is the
+   same machinery mmap uses -- a range the program may reach for, filled a
+   page at a time as it does -- applied to the one region every program has
+   and none of them asked for.
+
+   Before this the stack was sixteen pages and that was the end of it: a
+   program that needed a seventeenth got a page fault, and since the fault
+   handler now ends the program rather than the machine, what that looked
+   like was the browser vanishing on one particular page. It was laying out
+   two hundred kilobytes of html, and a tree is walked by descending it.
+
+   A megabyte is a great deal of descending. Past it the program really has
+   run away -- a loop calling itself -- and the fault is the right answer. */
+#define USER_STACK_MAX (1024ull * 1024ull)
+
 /* The top of a program's stack. Where the stack pointer actually starts is
    a little below it and depends on the words the program was given, so it
    comes back from user_build_stack rather than being a constant here. */
