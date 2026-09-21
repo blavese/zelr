@@ -6,13 +6,6 @@
  * open files could not do it.
  */
 #include "zelr.h"
-#include "args.h"
-
-int main(void);
-
-__attribute__((section(".text._start"))) void _start(void) {
-    exit(main());
-}
 
 static char buf[4096];
 
@@ -32,10 +25,11 @@ static int drain(int from) {
     }
 }
 
-int main(void) {
-    char raw[256];
-    char *argv[16];
-    int argc = args_of(raw, sizeof(raw), argv, 16);
+int main(int ac, char **av) {
+    /* The operands: everything after the program's own name, which is what
+       the body below has always meant by argc and argv. */
+    char **argv = av + 1;
+    int argc = ac - 1;
 
     if (argc == 0) return drain(0) < 0 ? 1 : 0;
 

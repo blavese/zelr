@@ -1,12 +1,5 @@
 #include "zelr.h"
 
-int main(void);
-
-/* The kernel enters here with a fresh stack and nothing else set up. */
-__attribute__((section(".text._start"))) void _start(void) {
-    exit(main());
-}
-
 int main(void) {
     puts("hello from a program the kernel had never seen.\n");
     puts("  pid       "); putn(getpid()); putc('\n');

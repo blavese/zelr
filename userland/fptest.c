@@ -17,12 +17,6 @@
  */
 #include "zelr.h"
 
-int main(void);
-
-__attribute__((section(".text._start"))) void _start(void) {
-    exit(main());
-}
-
 static int failed;
 
 /* The value times a million, which is where the fractional part shows. An

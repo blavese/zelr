@@ -38,8 +38,10 @@ static inline int args_split(char *line, char **out, int max) {
     return n;
 }
 
-/* Puts the words back together, for the one string an exec is allowed to
-   carry. Returns the length written. */
+/* Puts the words back together into one string. Nothing needs this to run a
+   program any more -- exec and spawn carry a vector -- so what is left is
+   the places a line has to be shown or stored as it was typed. Returns the
+   length written. */
 static inline int args_join(char **words, int n, char *out, int cap) {
     int len = 0;
     for (int i = 0; i < n; i++) {
@@ -48,13 +50,4 @@ static inline int args_join(char **words, int n, char *out, int cap) {
     }
     out[len] = 0;
     return len;
-}
-
-/* Everything a program was started on, split into words. The argument
-   arrives as one string — that is all an exec carries — so this is where it
-   becomes words again, in a buffer the caller owns. */
-static inline int args_of(char *buf, int cap, char **out, int max) {
-    buf[0] = 0;
-    getarg(buf, cap);
-    return args_split(buf, out, max);
 }

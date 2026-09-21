@@ -1120,7 +1120,7 @@ static void set_address(const char *s) {
     bar.cursor = bar.len;
 }
 
-void _start(void) {
+int main(int argc, char **argv) {
     int win = win_create("Browser", 860, 620);
     if (win < 0) exit(1);
     browser_win = win;
@@ -1129,8 +1129,8 @@ void _start(void) {
     ui_input in;
     memset(&in, 0, sizeof(in));
 
-    char arg[URL_TEXT];
-    int have_arg = getarg(arg, sizeof(arg)) > 0 && arg[0];
+    const char *arg = argc > 1 ? argv[1] : "";
+    int have_arg = arg[0] != 0;
 
     int laid_for = 0;
     int want_load = 1;

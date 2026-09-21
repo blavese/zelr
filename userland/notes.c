@@ -166,7 +166,7 @@ static void paste(void) {
 #define TOOLBAR_H 40
 #define GUTTER_W  (5 * MONO_W)
 
-void _start(void) {
+int main(int argc, char **argv) {
     int win = win_create("Notes", 700, 520);
     if (win < 0) exit(1);
     win_allow_resize(win);
@@ -179,8 +179,8 @@ void _start(void) {
        reaches the editor. The file left in /cfg is the older way of saying
        the same thing and still works. */
     char wanted[PATH_MAX];
-    if (getarg(wanted, sizeof(wanted)) > 0 && wanted[0]) {
-        load(wanted);
+    if (argc > 1 && argv[1][0]) {
+        load(argv[1]);
     } else if (slurp("/cfg/notes-open", wanted, sizeof(wanted) - 1) > 0) {
         int n = strlen(wanted);
         while (n > 0 && (wanted[n - 1] == '\n' || wanted[n - 1] == ' ')) wanted[--n] = 0;

@@ -70,8 +70,9 @@ typedef long long          zelr_word;
 #define SYS_POWER         42
 #define POWER_OFF     0
 #define POWER_REBOOT  1
-#define SYS_SPAWN_ARG     43
-#define SYS_GETARG        44
+/* A path, a vector of words and how many there are. 44 was SYS_GETARG and
+   is retired: a program reads its words off its own stack now. */
+#define SYS_SPAWN_ARGV    43
 
 /* The same socket, encrypted. See connect_tls below. */
 #define SYS_TLS_CONNECT   45
@@ -150,7 +151,17 @@ static inline zelr_word syscall(zelr_word n, zelr_word a, zelr_word b, zelr_word
     return r;
 }
 
-static inline void exit(int code)        { syscall(SYS_EXIT, code, 0, 0); }
+/* Said to be noreturn because it is, and because that is what tells the
+   compiler the end of a program that finishes on one is not reachable.
+   Without it every window program ends in a warning about a missing
+   return, and in a freestanding build main is not special enough to be
+   excused it. The loop is unreachable and is what makes the promise
+   true rather than merely claimed. */
+__attribute__((noreturn))
+static inline void exit(int code) {
+    syscall(SYS_EXIT, code, 0, 0);
+    for (;;) { }
+}
 
 static inline void putc(char ch)         { syscall(SYS_PUTC, ch, 0, 0); }
 static inline int  getpid(void)          { return syscall(SYS_GETPID, 0, 0, 0); }
@@ -423,13 +434,31 @@ typedef struct {
     char name[64];
 } zelr_task;
 
-/* Starts a program and tells it one thing, which is almost always the file
-   it is being asked to open. */
-static inline int spawn_arg(const char *path, const char *arg) {
-    return syscall(SYS_SPAWN_ARG, (zelr_word)path, (zelr_word)arg, 0);
+/* How many words there are before the null. The vector main was handed
+   ends in one, and so must any vector handed to the two calls below: that
+   is the convention everywhere and it is why they do not take a count. */
+static inline int argv_len(char *const *argv) {
+    int n = 0;
+    if (argv) while (argv[n]) n++;
+    return n;
 }
 
-/* What this program was started on, or an empty string. */
+/* Starts a program on a vector of words. argv[0] is the program's own name
+   by convention, and nothing enforces that. */
+static inline int spawnv(const char *path, char *const *argv) {
+    return (int)syscall(SYS_SPAWN_ARGV, (zelr_word)path, (zelr_word)argv,
+                        argv_len(argv));
+}
+
+/* Starts one on a single word, which is almost always the file it is being
+   asked to open. */
+static inline int spawn_arg(const char *path, const char *arg) {
+    char *v[3];
+    v[0] = (char *)path;
+    v[1] = (char *)arg;
+    v[2] = 0;
+    return spawnv(path, v);
+}
 /* Moves the heap break and returns where it was, which is the address of
    whatever was just handed out. See alloc.h, which is the only thing that
    should be calling this: two allocators sharing one break would each
@@ -445,8 +474,17 @@ static inline int fork(void) {
 
 /* Replaces the program running in this process. Returns only on failure,
    because on success there is nothing left to return to. */
+static inline int execv(const char *path, char *const *argv) {
+    return (int)syscall(SYS_EXEC, (zelr_word)path, (zelr_word)argv,
+                        argv_len(argv));
+}
+
 static inline int exec(const char *path, const char *arg) {
-    return (int)syscall(SYS_EXEC, (zelr_word)path, (zelr_word)arg, 0);
+    char *v[3];
+    v[0] = (char *)path;
+    v[1] = (char *)arg;
+    v[2] = 0;
+    return execv(path, v);
 }
 
 static inline int getppid(void) {
@@ -491,10 +529,6 @@ static inline int pipe(int ends[2]) {
 
 static inline void *sbrk(i64 delta) {
     return (void *)syscall(SYS_SBRK, (zelr_word)delta, 0, 0);
-}
-
-static inline int getarg(char *out, int cap) {
-    return syscall(SYS_GETARG, (zelr_word)out, (zelr_word)cap, 0);
 }
 
 static inline int spawn(const char *path) {
@@ -700,3 +734,39 @@ static inline int win_resize(int handle, int w, int h) {
 }
 
 #define RGB(r, g, b) (((u32)(r) << 16) | ((u32)(g) << 8) | (u32)(b))
+
+/* --- where a program begins ----------------------------------------------
+ *
+ * The kernel enters here with the stack laid out the way System V says it
+ * is: the count, then the vector, then a null, then an environment that is
+ * empty. So a program defines main and reads its words from its arguments,
+ * the way a program does anywhere else, and a startup file written for
+ * another system would find what it expects too.
+ *
+ * This is startup code rather than a function. Nothing called it, so there
+ * is no return address and no frame to unwind, which is what `naked` says
+ * and why the body is instructions rather than C: the prologue a compiler
+ * would write here would be reading a frame that does not exist.
+ *
+ * main may take the two arguments or take none. Both work, because the
+ * caller cleans up on this machine and an argument nobody reads costs a
+ * register that was going to be written anyway. It may also simply return:
+ * what it returns becomes the exit status, and what follows the call makes
+ * sure it never comes back here.
+ */
+#define ZELR_STR2(x) #x
+#define ZELR_STR(x) ZELR_STR2(x)
+
+__attribute__((naked, section(".text._start")))
+void _start(void) {
+    __asm__ volatile(
+        "xorl %ebp, %ebp\n"                      /* the frame chain ends */
+        "movq (%rsp), %rdi\n"                    /* argc */
+        "leaq 8(%rsp), %rsi\n"                   /* argv */
+        "andq $-16, %rsp\n"                      /* what main is promised */
+        "call main\n"
+        "movl %eax, %ebx\n"                      /* the status it returned */
+        "movl $" ZELR_STR(SYS_EXIT) ", %eax\n"
+        "int $0x80\n"
+        "1: jmp 1b\n");                          /* exit does not return */
+}

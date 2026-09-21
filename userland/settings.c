@@ -754,7 +754,7 @@ static int page_about(surface *s, ui_input *in, ui_theme *t,
 
 /* --- the window ----------------------------------------------------------- */
 
-void _start(void) {
+int main(void) {
     int win = win_create("Settings", 700, 580);
     if (win < 0) exit(1);
     win_allow_resize(win);

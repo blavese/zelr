@@ -6,12 +6,6 @@
  */
 #include "zelr.h"
 
-int main(void);
-
-__attribute__((section(".text._start"))) void _start(void) {
-    exit(main());
-}
-
 /* The same five the kernel uses, in the same order. */
 static const char *STATE[] = { "ready", "running", "sleeping", "blocked", "dead" };
 

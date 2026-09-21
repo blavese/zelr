@@ -18,12 +18,6 @@
 #include "web.h"
 #include "fetch.h"
 
-int main(void);
-
-__attribute__((section(".text._start"))) void _start(void) {
-    exit(main());
-}
-
 static int failed;
 
 static void ok(const char *what, int cond) {
@@ -72,9 +66,9 @@ static int body_has(const char *want) {
     return 0;
 }
 
-int main(void) {
-    char base[URL_TEXT];
-    if (getarg(base, sizeof(base)) <= 0 || !base[0]) {
+int main(int argc, char **argv) {
+    const char *base = argc > 1 ? argv[1] : "";
+    if (!base[0]) {
         puts("wiretest needs an address to ask\nWIRETEST_FAIL\n");
         return 1;
     }

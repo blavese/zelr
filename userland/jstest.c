@@ -16,12 +16,6 @@
 #include "jsparse.h"
 #include "jsrun.h"
 
-int main(void);
-
-__attribute__((section(".text._start"))) void _start(void) {
-    exit(main());
-}
-
 static int failed, ran;
 
 static void show(const char *s) { puts(s); }

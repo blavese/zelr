@@ -28,12 +28,6 @@
 #include "alloc.h"
 #include "args.h"
 
-int main(void);
-
-__attribute__((section(".text._start"))) void _start(void) {
-    exit(main());
-}
-
 #define LINE_MAX    512
 #define WORDS_MAX    32
 #define STAGES_MAX    4
@@ -194,7 +188,13 @@ static int builtin(stage_t *st) {
 
 /* --- running ------------------------------------------------------------- */
 
-/* Everything after the command, as the one string an exec carries. */
+/* Becomes the program this stage names, on the words it was given.
+
+   take_redirections has already put a null after the last one, which is
+   what execv counts up to, so the line as typed is the vector and there
+   is nothing to rebuild. It used to be glued back into one string here
+   and taken apart again by the program, which meant `grep "two words"`
+   arrived as two. */
 static void become(stage_t *st) {
     char path[160];
     if (has_slash(st->argv[0])) {
@@ -204,10 +204,7 @@ static void become(stage_t *st) {
         strncpy(path + 5, st->argv[0], sizeof(path) - 6);
     }
 
-    char arg[256];
-    args_join(st->argv + 1, st->argc - 1, arg, sizeof(arg));
-
-    exec(path, arg);
+    execv(path, st->argv);
     /* Only here if it would not run. */
     say_err("not found", st->argv[0]);
     exit(127);

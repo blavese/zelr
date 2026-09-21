@@ -41,7 +41,6 @@ const char *task_state_name(task_state_t s);
    asserts the two numbers are still the same. */
 #define TASK_MAX_FD 16
 
-#define TASK_ARG_MAX 128
 
 typedef struct task {
     u64  rsp;                 /* saved kernel stack pointer */
@@ -92,10 +91,6 @@ typedef struct task {
     u32  parent_pid;
     bool user;                /* runs in ring 3 */
     char cwd[TASK_CWD_MAX];   /* working directory, inherited at creation */
-
-    /* What this program was started on, if anything: one string, which for
-       everything that uses it is a path. Set before the task can run. */
-    char arg[TASK_ARG_MAX];
 
     /* The numbers this task uses for its open files, each an index into the
        machine's table of them, or -1. Per task rather than global, which is

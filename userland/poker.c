@@ -636,7 +636,7 @@ static void chips_at(surface *s, int cx, int cy, int amount) {
     face_draw(s, cx + 17, cy - 8, m, 0xE8E8EE, UI_FACE_SMALL);
 }
 
-void _start(void) {
+int main(void) {
     int win = win_create("Poker", 940, 660);
     if (win < 0) exit(1);
     win_allow_resize(win);

@@ -13,12 +13,6 @@
 #include "alloc.h"
 #include "svg.h"
 
-int main(void);
-
-__attribute__((section(".text._start"))) void _start(void) {
-    exit(main());
-}
-
 static int failed;
 
 static void ok(const char *what, int cond) {

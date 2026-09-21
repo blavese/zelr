@@ -21,12 +21,6 @@
 #include "jsparse.h"
 #include "jsrun.h"
 
-int main(void);
-
-__attribute__((section(".text._start"))) void _start(void) {
-    exit(main());
-}
-
 static char   page[512 * 1024];
 static ddoc   doc;
 static response_t reply;
@@ -43,9 +37,9 @@ static void number(int v) {
     puts(out);
 }
 
-int main(void) {
-    char addr[URL_TEXT];
-    if (getarg(addr, sizeof(addr)) <= 0 || !addr[0]) {
+int main(int argc, char **argv) {
+    const char *addr = argc > 1 ? argv[1] : "";
+    if (!addr[0]) {
         puts("jsprobe needs an address\nJSPROBE_DONE\n");
         return 1;
     }

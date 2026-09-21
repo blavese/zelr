@@ -249,13 +249,15 @@ task_t *task_fork(const char *name, u64 dir, const registers_t *frame,
     t->user = true;
 
     /* Everything the parent had that is not memory: where it was in the
-       filesystem, what it was told at startup, how far its heap had grown,
-       and the contents of its floating point registers. A child that did
-       not inherit the heap break would hand out addresses the parent had
-       already given away. */
+       filesystem, how far its heap had grown, and the contents of its
+       floating point registers. A child that did not inherit the heap break
+       would hand out addresses the parent had already given away.
+
+       Not the words it was started on: those are on the stack, and the
+       stack is memory, so the copy of the address space already carries
+       them. */
     if (parent) {
         for (u32 i = 0; i < sizeof(t->cwd); i++) t->cwd[i] = parent->cwd[i];
-        for (u32 i = 0; i < sizeof(t->arg); i++) t->arg[i] = parent->arg[i];
         t->brk = parent->brk;
         t->brk_base = parent->brk_base;
         t->parent_pid = parent->pid;

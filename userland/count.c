@@ -1,11 +1,5 @@
 #include "zelr.h"
 
-int main(void);
-
-__attribute__((section(".text._start"))) void _start(void) {
-    exit(main());
-}
-
 /* Sleeps between lines, so the shell stays usable while this runs and the
    preemption is visible rather than asserted. */
 int main(void) {

@@ -13,12 +13,6 @@ static void hex(u64 v) {
     for (int i = 60; i >= 0; i -= 4) putc(d[(v >> i) & 0xF]);
 }
 
-int main(void);
-
-__attribute__((section(".text._start"))) void _start(void) {
-    exit(main());
-}
-
 int main(void) {
     int win = win_create("wintest", 64, 48);
     if (win < 0) { puts("wintest: create failed\n"); return 1; }

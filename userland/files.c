@@ -336,7 +336,7 @@ static u32 kind_tint(const ui_theme *t, int kind) {
     }
 }
 
-void _start(void) {
+int main(int argc, char **argv) {
     int win = win_create("Files", 780, 520);
     if (win < 0) exit(1);
     win_allow_resize(win);
@@ -349,8 +349,7 @@ void _start(void) {
     filter_field.cap = sizeof(filter_buf);
 
     /* Started on a folder: show that one. */
-    char wanted[PATH_MAX];
-    if (getarg(wanted, sizeof(wanted)) > 0 && wanted[0]) go_to(wanted);
+    if (argc > 1 && argv[1][0]) go_to(argv[1]);
     else reload();
     say("");
 
