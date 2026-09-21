@@ -130,6 +130,16 @@ def region(px, w, rect):
 
 
 def page_now(mon, name):
+    """One picture, taken now. Only page_settled should want this.
+
+    Everything else here either compares two renderings byte for byte or
+    counts a colour in one, and both of those are questions about a page
+    that finished drawing. Taking the picture immediately answers a
+    different question -- what was on the screen at that instant -- and the
+    difference shows up as a browser that cannot follow a redirect, or a
+    style sheet that was not applied, on a host busy enough that the draw
+    had not caught up. Four of the checks below used to do that, and failed
+    in a different combination every run."""
     w, h, px, ppm = mon.screen(name)
     return region(px, w, PAGE), px, w, ppm
 
@@ -224,7 +234,7 @@ def main():
             mon.move_to(*PARK)
             time.sleep(1.0)
 
-            first, px, w, shot = page_now(mon, "br-first")
+            first, px, w, shot = page_settled(mon, "br-first")
             c.add("a page off a real server is drawn in the window",
                   len(set(first)) > 8, shot)
             c.add("and it is on paper rather than on the desktop",
@@ -244,7 +254,7 @@ def main():
             c.add("clicking it goes to the page it points at", moved, shot2)
             mon.move_to(*PARK)
             time.sleep(0.8)
-            second, px2, w2, shot2 = page_now(mon, "br-second-still")
+            second, px2, w2, shot2 = page_settled(mon, "br-second-still")
             c.add("which is a different page from the one before it",
                   second != first, shot2)
 
@@ -287,7 +297,7 @@ def main():
             # applied to the wrong elements.
             go(vm, mon, "http://%s/styled" % srv.host, settle=12.0,
                was=framed, name="br-going-styled")
-            styled, pxs, ws, shots = page_now(mon, "br-styled")
+            styled, pxs, ws, shots = page_settled(mon, "br-styled")
             c.add("a page with style sheets renders",
                   len(set(styled)) > 8, shots)
             c.add("and the band the sheet asks for is painted across it",
@@ -295,7 +305,7 @@ def main():
 
             go(vm, mon, "http://%s/bare" % srv.host, settle=10.0,
                was=styled, name="br-going-bare")
-            bare, pxb, wb, shotb = page_now(mon, "br-bare")
+            bare, pxb, wb, shotb = page_settled(mon, "br-bare")
             c.add("the same markup with no sheets does not look the same",
                   bare != styled, shotb)
             c.add("and has no band on it at all",
@@ -363,21 +373,21 @@ def main():
             # --- a redirect ------------------------------------------------
             go(vm, mon, "http://%s/redirect" % srv.host,
                was=unscripted, name="br-going-redirect")
-            moved_to, _, _, shotr = page_now(mon, "br-redirect")
+            moved_to, _, _, shotr = page_settled(mon, "br-redirect")
             c.add("a redirect is followed to the page it points at",
                   moved_to == second, shotr)
 
             # --- and something that is not there ---------------------------
             go(vm, mon, "http://%s/nothing-here" % srv.host,
                was=moved_to, name="br-going-404")
-            missing, pxm, wm_, shotn = page_now(mon, "br-404")
+            missing, pxm, wm_, shotn = page_settled(mon, "br-404")
             c.add("a page that is not there says so rather than showing the "
                   "last one", missing != moved_to, shotn)
 
             # --- and an address it cannot speak ----------------------------
             go(vm, mon, "https://%s/" % srv.host, settle=5.0,
                was=missing, name="br-going-https")
-            secure, _, _, shots = page_now(mon, "br-https")
+            secure, _, _, shots = page_settled(mon, "br-https")
             c.add("https says it cannot do that rather than failing quietly",
                   secure != missing, shots)
         finally:
