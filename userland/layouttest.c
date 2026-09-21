@@ -447,6 +447,69 @@ int main(void) {
                    c->x > 200 && c->x < 300, c->x);
     }
 
+    /* --- a selector for something that is not in the tree ------------------
+     *
+     * `::-webkit-scrollbar` names a part of a scrollbar. There is no
+     * scrollbar in the tree and nothing here draws one, so the rule is for
+     * nobody -- but after the two colons are skipped there is no tag, no
+     * class and no id left in it, which is the shape of `*`. It used to
+     * match every element on the page, and `width:6px` with it.
+     *
+     * Found on a real article, which rendered as a column of one word per
+     * line under a stylesheet whose seventh rule styles a scrollbar.
+     */
+    {
+        lay("<style>::-webkit-scrollbar{width:6px}"
+            "#a{background:#eee}</style>"
+            "<div id=a>one two three four five</div>", 600);
+        const litem *a = box_of(by_id("a"));
+        ok("a box under a scrollbar rule lays out", a != 0);
+        if (a) okn("and is not six pixels wide", a->w > 500, a->w);
+    }
+
+    /* The one-colon spelling of a pseudo element is the same thing. */
+    {
+        lay("<style>div:before{width:6px}"
+            "#b{background:#eee}</style><div id=b>words here</div>", 600);
+        const litem *b = box_of(by_id("b"));
+        if (b) okn("nor under the old spelling of one", b->w > 500, b->w);
+    }
+
+    /* --- a length larger than a short ---------------------------------------
+     *
+     * Lengths are kept in hundredths, so 960px is 96000 and does not fit in
+     * the sixteen bits they used to be kept in. It came back as 304.
+     */
+    {
+        lay("<style>#w{width:960px;background:#eee}</style>"
+            "<div id=w>x</div>", 1200);
+        const litem *w = box_of(by_id("w"));
+        if (w) okn("a width past a short's reach is the width", w->w == 960, w->w);
+    }
+
+    /* --- a fraction of the window ------------------------------------------ */
+    {
+        lay("<style>#v{width:50vw;background:#eee}</style>"
+            "<div id=v>x</div>", 600);
+        const litem *v = box_of(by_id("v"));
+        if (v) okn("half the window wide is half the window", v->w == 300, v->w);
+    }
+
+    /* --- a percentage of a height nobody knows yet --------------------------
+     *
+     * `height:100%` with no height above it is auto, and resolving it
+     * against the width instead made a logo as tall as the column was wide
+     * and pushed a whole encyclopaedia article off the bottom of the
+     * window.
+     */
+    {
+        lay("<style>#t{height:100%;background:#eee}</style>"
+            "<div id=t>one line</div>", 600);
+        const litem *t = box_of(by_id("t"));
+        if (t) okn("a percentage height with nothing to measure from is auto",
+                   t->h > 0 && t->h < 100, t->h);
+    }
+
     puts(failed ? "LAYOUTTEST_FAIL\n" : "LAYOUTTEST_PASS\n");
     return failed;
 }
