@@ -30,10 +30,62 @@ typedef struct {
     window_t *win;
     u32      *raw;             /* what kmalloc returned, for kfree */
     u32      *pixels;          /* page aligned inside raw, and what is mapped */
+
+    /* --- the one the desktop reads ---------------------------------------
+     *
+     * There was one surface. The program drew into it and the compositor
+     * read it, the same memory, at whatever moment the compositor happened
+     * to run -- and win_commit did not swap anything, it only said the
+     * window had changed. So a program whose frame begins by painting over
+     * everything genuinely contained, for a while, a background and nothing
+     * else. The compositor is a task like any other and it ran in that gap.
+     *
+     * What that looked like was a maximised card game with no cards, no
+     * seats and no buttons in it, which reads as a drawing fault and was a
+     * timing one. Two programs carried a shadow buffer of their own to get
+     * round it, which is a workaround every graphical program would have
+     * had to repeat.
+     *
+     * So the window server keeps the second one, and every program gets it.
+     * The program draws into `pixels`, which nothing else ever reads;
+     * commit copies that into `shown`, which is what the window points at.
+     *
+     * The copy is not atomic -- three megabytes with the interrupts off
+     * would stall the timer for milliseconds, which is a worse fault than
+     * the one being fixed. What the compositor can still catch is part of
+     * one finished frame and part of another, which for two frames of the
+     * same window is nothing at all, and is a different thing from catching
+     * a frame that has been erased and not yet redrawn. */
+    u32      *shown_raw;
+    u32      *shown;
+
     u64       bytes;           /* rounded up to whole pages */
     u64       user_addr;       /* where the owner sees it, 0 until mapped */
     u64       dir;             /* the address space it was mapped into */
 } slot_t;
+
+/* What a frame costs to publish, counted so /sys can be asked. */
+static u64 published_frames, published_bytes;
+
+u64 winsrv_frames(void)  { return published_frames; }
+u64 winsrv_bytes(void)   { return published_bytes; }
+
+/* The copy itself.
+ *
+ * A word at a time through volatile pointers, because at -O2 clang
+ * recognises this loop and replaces it with a call to memcpy -- which
+ * exists here, so it would link, and would then be a call the kernel makes
+ * several hundred times a second into a byte mover. The word loop is what
+ * is wanted and the volatile is what keeps it. */
+static void publish(slot_t *s) {
+    if (!s->shown || !s->pixels) return;
+    volatile u32 *d = (volatile u32 *)s->shown;
+    const volatile u32 *b = (const volatile u32 *)s->pixels;
+    u64 n = s->bytes / 4;
+    for (u64 i = 0; i < n; i++) d[i] = b[i];
+    published_frames++;
+    published_bytes += s->bytes;
+}
 
 static slot_t slots[WINSRV_MAX];
 
@@ -97,6 +149,7 @@ static void free_slot(slot_t *s) {
     }
     if (s->win) { s->win->on_close = 0; wm_close(s->win); }
     if (s->raw) kfree(s->raw);
+    if (s->shown_raw) kfree(s->shown_raw);
     memset(s, 0, sizeof(*s));
 }
 
@@ -118,6 +171,14 @@ int winsrv_create(u32 pid, const char *title, int cw, int ch) {
     if (!raw) return -1;
     u32 *pixels = (u32 *)(((u64)raw + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1));
     memset(pixels, 0, bytes);
+
+    /* And the one the desktop reads. Not page aligned for any reason of
+       its own -- nothing maps it -- but allocated the same way so the two
+       are the same size and the copy between them is one loop. */
+    u32 *shown_raw = (u32 *)kmalloc(bytes + PAGE_SIZE);
+    if (!shown_raw) { kfree(raw); return -1; }
+    u32 *shown = (u32 *)(((u64)shown_raw + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1));
+    memset(shown, 0, bytes);
 
     /* Cascade windows so two programs do not open on top of each other. The
        vertical step has to clear a title bar, or the window underneath is
@@ -141,7 +202,7 @@ int winsrv_create(u32 pid, const char *title, int cw, int ch) {
     if (x < 0) x = 0;
     if (y < 0) y = 0;
     window_t *w = wm_create(title, x, y, cw, ch);
-    if (!w) { kfree(raw); return -1; }
+    if (!w) { kfree(raw); kfree(shown_raw); return -1; }
 
     /* Which program this is. The task was named after the path it was
        loaded from, which is what the taskbar matches a pinned app against. */
@@ -154,7 +215,7 @@ int winsrv_create(u32 pid, const char *title, int cw, int ch) {
     /* Point the window at the pages the program will get, and let the one
        the manager allocated go. */
     kfree(w->canvas);
-    w->canvas = pixels;
+    w->canvas = shown;            /* what the desktop reads, not what is drawn into */
     w->owned_by_user = true;
     w->on_close = on_wm_close;
 
@@ -163,6 +224,8 @@ int winsrv_create(u32 pid, const char *title, int cw, int ch) {
     s->win = w;
     s->raw = raw;                 /* kfree wants the address kmalloc returned */
     s->pixels = pixels;           /* the mapping starts here, not at raw */
+    s->shown_raw = shown_raw;
+    s->shown = shown;
     s->bytes = bytes;
     s->user_addr = 0;
     s->dir = 0;
@@ -236,6 +299,11 @@ static bool resize_slot(slot_t *s, int cw, int ch) {
     u32 *pixels = (u32 *)(((u64)raw + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1));
     memset(pixels, 0, bytes);
 
+    u32 *shown_raw = (u32 *)kmalloc(bytes + PAGE_SIZE);
+    if (!shown_raw) { kfree(raw); return false; }
+    u32 *shown = (u32 *)(((u64)shown_raw + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1));
+    memset(shown, 0, bytes);
+
     /* Remap in the owner's address space, which is almost never the live
        one: the resize is usually the window manager acting on a window
        belonging to a program that is not currently running. That is why
@@ -257,13 +325,21 @@ static bool resize_slot(slot_t *s, int cw, int ch) {
                 map_page_in(s->dir, s->user_addr + old, (u64)s->pixels + old,
                             PTE_PRESENT | PTE_RW | PTE_USER);
             kfree(raw);
+            kfree(shown_raw);
             return false;
         }
     }
 
-    retire(s->raw);          /* not freed here: the manager may be reading it */
+    /* Only the one the compositor reads has to be parked rather than
+       freed: the manager may be part way through a pass over it. The one
+       the program draws into is not read by anything else, and the program
+       is the caller here, so it can go now. */
+    if (s->raw) kfree(s->raw);
+    retire(s->shown_raw);
     s->raw = raw;
     s->pixels = pixels;
+    s->shown_raw = shown_raw;
+    s->shown = shown;
     s->bytes = bytes;
 
     /* The three fields the compositor reads together, changed together, so
@@ -271,7 +347,7 @@ static bool resize_slot(slot_t *s, int cw, int ch) {
        past the end of it. */
     bool were_on = interrupts_enabled();
     cli();
-    s->win->canvas = pixels;
+    s->win->canvas = shown;
     s->win->cw = cw;
     s->win->ch = ch;
     s->win->want_cw = 0;
@@ -321,10 +397,17 @@ bool winsrv_resize_window(window_t *w, int cw, int ch) {
     return true;
 }
 
+/* Commit now means what its name says.
+ *
+ * It used to mark the window dirty and nothing else: the pixels the
+ * compositor read were the pixels the program was still writing, so there
+ * was no moment a frame became finished. Now the finished frame is copied
+ * where the desktop is looking, and only then is the window marked. */
 bool winsrv_commit(u32 pid, int handle) {
     slot_t *s = lookup(pid, handle);
     if (!s || !s->win) return false;
     apply_pending(s);
+    publish(s);
     wm_invalidate(s->win);
     return true;
 }
