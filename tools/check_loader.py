@@ -13,6 +13,9 @@ import os
 import re
 import sys
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from loadaddr import load_address                        # noqa: E402
+
 SIGNATURE = b"ZLR1"          # 0x31524C5A little-endian
 FIRST_SECTOR = 512
 STAGE1_READS = 2048
@@ -83,7 +86,48 @@ def check_handoff(root):
     return 0
 
 
+def check_load_address(root):
+    """Where the kernel is linked, written out in three languages.
+
+    linker.ld decides it. build.sh and tools/mkiso.py read it from there, so
+    they cannot drift. The other two cannot ask: the UEFI loader needs a C
+    constant, and the real mode loader needs a word in its own header that
+    the firmware can be told to load. mkiso.py patches that word, so the
+    literal in the assembly is only what an unpatched loader would use -- but
+    an unpatched loader is exactly what a partial build produces.
+
+    What disagreement looks like is worth stating, because it is not an error
+    message. A loader that copies the kernel to the wrong address does not
+    discover this. It jumps to the entry point it was given, and executes
+    whatever is there.
+    """
+    want = load_address(root)
+
+    ldr = io.open(os.path.join(root, "uefi", "loader.c"), encoding="utf-8").read()
+    m = re.search(r"#define\s+KERNEL_PHYS\s+0x([0-9A-Fa-f]+)u?ll", ldr)
+    if not m:
+        print("loader: no KERNEL_PHYS in uefi/loader.c", file=sys.stderr)
+        return 1
+    if int(m.group(1), 16) != want:
+        print("loader: uefi/loader.c loads at 0x%X, linker.ld links at 0x%X"
+              % (int(m.group(1), 16), want), file=sys.stderr)
+        return 1
+
+    boot = io.open(os.path.join(root, "bootloader", "cdboot.S"), encoding="utf-8").read()
+    m = re.search(r"^patch_load:\s+\.long\s+0x([0-9A-Fa-f]+)", boot, re.M)
+    if not m:
+        print("loader: cdboot.S has no patch_load", file=sys.stderr)
+        return 1
+    if int(m.group(1), 16) != want:
+        print("loader: cdboot.S defaults to 0x%X, linker.ld links at 0x%X"
+              % (int(m.group(1), 16), want), file=sys.stderr)
+        return 1
+
+    print("      linked at 0x%X, and both loaders agree" % want)
+    return 0
+
+
 if __name__ == "__main__":
     here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     rc = main(sys.argv[1] if len(sys.argv) > 1 else "build/cdboot.bin")
-    sys.exit(rc or check_handoff(here))
+    sys.exit(rc or check_handoff(here) or check_load_address(here))
