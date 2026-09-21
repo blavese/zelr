@@ -1502,11 +1502,22 @@ break.
 Being explicit about the boundary, because "operating system" covers a very
 large range:
 
-- **A page's scripts run once, and then nothing happens.** There is no event
-  loop, no timer, no `addEventListener` and no fetching from a script, so a
-  page that does its work on a click does nothing at all here. What runs is
-  what is in a `<script>` element at the moment the page is read; a script
-  with a `src` is skipped rather than half honoured.
+- **No promises, so no `fetch`.** A page asks the network with
+  `XMLHttpRequest` and a callback. `fetch` returns a promise and this
+  interpreter has none — no async, no await, no `then` — and a `fetch`
+  that returned something promise-shaped and not a promise would be worse
+  than not having one, because a page written against it stops at the
+  first `.then`. The request is made on the browser's next pass rather
+  than inside `send()`, so the code after `send()` runs first, which is
+  the contract a page is written against. The fetch itself stalls the
+  browser while it happens.
+
+  What a page *can* do after it has been read: a click reaches
+  `addEventListener` and `onclick`, `setTimeout` and `setInterval` go
+  off, `DOMContentLoaded` and `load` are delivered, a `<script src>` is
+  fetched and run in the order it appears, and anything that changes the
+  document lays the page out again. This entry used to say none of that
+  existed, long after most of it did.
 - **Three signals.** A program can be interrupted, killed or asked to end.
   It can have the first and the last ignored — which is how a shell
   survives the ctrl-C meant for the program it started — or catch them and

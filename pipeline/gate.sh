@@ -495,6 +495,12 @@ if [ "$MODE" = "screen" ] || [ "$MODE" = "full" ]; then
   # megabyte screenshot, and three at once is a gigabyte of writes.
   browsertest() { keep timeout 600 python tools/browsercheck.py; }
 
+  # A page that does its work after it has been read: on a click, on a
+  # timer, out of a file of its own, and from an answer it asked the
+  # network for. Three of those four were working and unchecked, which
+  # is how the readme came to say none of them existed.
+  livetest() { keep timeout 700 python tools/livecheck.py; }
+
   # Filling a form in and sending it, checked against what the server was
   # actually sent rather than against what the browser says it sent. The
   # second is the client marking its own work and passes just as happily
@@ -562,6 +568,7 @@ if [ "$MODE" = "screen" ] || [ "$MODE" = "full" ]; then
   par_start "pages come back off a real web server" webtest
   par_start "https works against the real web" tlstest
   par_start "the browser shows a page and follows a link" browsertest
+  par_start "a page does its work on a click, a timer and an answer" livetest
   par_start "a form is filled in and arrives as it was filled in" formtest
   par_start "bodies arrive compressed and connections are kept" wiretest
   par_start "a machine still starts once it has formatted its disk" boottest
