@@ -64,14 +64,19 @@ MENU_W = MENU_PAD * 2 + MENU_RAIL + MENU_PANE
 MENU_LEFT = DOCK_SIDE
 
 # Which kind, and where in it. Settings is the first thing under System,
-# which is the fourth kind. Written as names and looked up, so moving a
+# which is the fifth kind -- it was the fourth until Games went in between
+# Media and System, and this list not knowing that is what made the check
+# rest on Media, click where Settings would have been, and report that
+# Settings would not start. Written as names and looked up, so moving a
 # program between kinds is one edit here rather than two numbers to work
 # out again.
-MENU_KINDS = ["Productivity", "Internet", "Media", "System", "Session"]
+MENU_KINDS = ["Productivity", "Internet", "Media", "Games", "System",
+              "Session"]
 MENU_IN = {
     "Productivity": ["Terminal", "Files", "Notes", "Calculator"],
     "Internet": ["Browser"],
     "Media": ["Paint", "Music"],
+    "Games": ["Blackjack", "Poker"],
     "System": ["Settings", "Monitor", "System info"],
     "Session": ["Close all", "Leave desktop", "Shut down"],
 }
