@@ -1227,6 +1227,49 @@ static void set_address(const char *s) {
     bar.cursor = bar.len;
 }
 
+/* --- looking something up ------------------------------------------------
+ *
+ * Where a search goes, and why it is not Google.
+ *
+ * Google's results are not in the page it sends. Asked for
+ * /search?q=anything it returns ninety kilobytes with no result in it at
+ * all -- no headings, no outbound links -- and builds the page from script
+ * afterwards. Measured across three user agents and four sets of
+ * parameters, including the ones that used to mean "no script": every one
+ * came back the same way. It is not a check on what this browser is, it is
+ * that the answer is not sent.
+ *
+ * So a search here goes somewhere that sends its answers. DuckDuckGo's lite
+ * endpoint is HTML -- a table of links and snippets, nothing to run to read
+ * it -- and it renders in this browser as it stands.
+ *
+ * That is a limitation stated rather than a preference. A browser that
+ * cannot run a search engine's application cannot use that search engine,
+ * and naming the one it can use is more useful than failing at the one it
+ * cannot.
+ */
+#define SEARCH_PREFIX "https://lite.duckduckgo.com/lite/?q="
+
+static void set_search(const char *what) {
+    char q[URL_TEXT];
+    url_escape(what, q, (int)sizeof(q));
+
+    char full[URL_TEXT];
+    int w = 0;
+    for (const char *p = SEARCH_PREFIX; *p && w < (int)sizeof(full) - 1; p++)
+        full[w++] = *p;
+    for (const char *p = q; *p && w < (int)sizeof(full) - 1; p++)
+        full[w++] = *p;
+    full[w] = 0;
+    set_address(full);
+}
+
+/* What was typed: somewhere to go, or something to look for. */
+static void go_or_search(const char *typed) {
+    if (url_looks_like_address(typed)) set_address(typed);
+    else set_search(typed);
+}
+
 int main(int argc, char **argv) {
     int win = win_create("Browser", 860, 620);
     if (win < 0) exit(1);
@@ -1246,8 +1289,21 @@ int main(int argc, char **argv) {
     int last_hover = -2;
     int dirty = 1;              /* something changed and a frame is owed */
 
-    if (have_arg) set_address(arg);
-    else set_address("https://example.com/");
+    /* Started on something, which may equally be an address or a thing to
+       look for: `browser an operating system` should search for one. */
+    if (have_arg) {
+        char joined[URL_TEXT];
+        int w = 0;
+        for (int i = 1; i < argc && w < (int)sizeof(joined) - 1; i++) {
+            if (i > 1 && w < (int)sizeof(joined) - 1) joined[w++] = ' ';
+            for (const char *p = argv[i]; *p && w < (int)sizeof(joined) - 1; p++)
+                joined[w++] = *p;
+        }
+        joined[w] = 0;
+        go_or_search(joined);
+    } else {
+        set_address("https://example.com/");
+    }
     push_history(address);
 
     for (;;) {
@@ -1317,6 +1373,10 @@ int main(int argc, char **argv) {
                 if (k == '\n') {
                     bar.focused = 0;
                     bar_fresh = 0;
+                    /* A sentence rather than an address is something to
+                       look for, which is what an address bar has meant for
+                       twenty years. */
+                    go_or_search(address);
                     push_history(address);
                     want_load = 1;
                 } else if (k == 27) {

@@ -10,6 +10,7 @@
  * caller cannot accidentally treat a failure as a success. There is no
  * "mostly valid". */
 #include "x509.h"
+#include "printf.h"
 #include "sha256.h"
 #include "sha512.h"
 #include "rtc.h"
@@ -571,34 +572,95 @@ x509_result_t x509_verify_chain(const u8 *const *ders, const u32 *lens, u32 n,
     x509_result_t why = X509_BAD_SIGNATURE;
     if (!dates_ok(&chain[0], now, &why)) return why;
 
-    /* Each certificate in turn, signed by the next one along, which must
-       also be allowed to sign certificates at all. A chain where an
-       ordinary leaf signs another certificate is the oldest hole there is. */
-    u32 i = 0;
-    for (; i + 1 < n; i++) {
-        const x509_t *child = &chain[i];
-        const x509_t *parent = &chain[i + 1];
+    /* Each certificate in turn, signed by the one whose subject is its
+     * issuer -- found rather than assumed to be the next one along.
+     *
+     * The order a server sends them in is a recommendation and not a rule,
+     * and the recommendation is widely ignored. Chains arrive out of
+     * order, with the root included, with certificates for other hosts
+     * left in, and -- the one that broke this -- with the leaf sent twice.
+     * www.geeksforgeeks.org sends four: the leaf, the leaf again, the
+     * intermediate, and the root.
+     *
+     * Walking them in order meant asking whether the leaf had been signed
+     * by the leaf, finding it had not, and stopping there. The top of the
+     * chain was then the leaf itself, whose issuer is an intermediate that
+     * no trust store contains, so a correctly signed site was reported as
+     * signed by nobody. Every real verifier matches names instead, for
+     * exactly this reason.
+     *
+     * Each certificate is used once, which is what stops a chain that
+     * points at itself from being walked forever.
+     */
+    const u8 *root; u32 root_len;
+    u32 used = 1;                                  /* the leaf is in it */
+    const x509_t *top = &chain[0];
+    const x509_t *below = 0;                       /* whose parent top is */
+    int depth = 0;
 
-        if (child->issuer_len != parent->subject_len ||
-            memcmp(child->issuer, parent->subject, child->issuer_len) != 0)
-            break;                                 /* not actually the parent */
+    for (;;) {
+        /* Stop at the first certificate that is itself an anchor.
+         *
+           A root in wide use is usually signed by an older root as well as
+           by itself, so that machines which have not heard of it yet can
+           still reach something they have. Servers send that cross-signed
+           copy, and above it the older root, and climbing to the top of
+           what was sent lands on whichever ancient authority the chain was
+           built to accommodate -- one that current stores have dropped,
+           which is the whole reason the cross-signature exists.
 
+           archive.org is exactly this: its Go Daddy root arrives signed by
+           Go Daddy's Class 2 authority, which Mozilla removed for being
+           SHA-1. Walking to the end reported a site with an ordinary chain
+           as signed by nobody. Stopping at the first anchor is what every
+           verifier does and is why cross-signing works at all. */
+        if (roots_find(top->subject, top->subject_len, &root, &root_len))
+            break;
+
+        /* Nothing sits above a self-signed certificate, so the walk stops
+           at one rather than looking for a parent it cannot have.
+         *
+           Without this, a chain whose root is self-signed goes looking for
+           another certificate with that same subject, and servers do send
+           one: archive.org follows its Go Daddy root with a fourth
+           certificate carrying no name at all. Walking into it made the top
+           of the chain a certificate no store has ever heard of, and a site
+           with a perfectly ordinary chain was reported as signed by
+           nobody. */
+        if (top->subject_len == top->issuer_len &&
+            memcmp(top->subject, top->issuer, top->subject_len) == 0)
+            break;
+
+        int found = -1;
+        for (u32 k = 0; k < n; k++) {
+            if (used & (1u << k)) continue;
+            if (chain[k].subject_len != top->issuer_len) continue;
+            if (memcmp(chain[k].subject, top->issuer, top->issuer_len) != 0)
+                continue;
+            found = (int)k;
+            break;
+        }
+        if (found < 0) break;
+
+        const x509_t *parent = &chain[found];
         if (!parent->has_basic_constraints || !parent->is_ca)
             return X509_NOT_A_CA;
-        if (parent->path_len >= 0 && (int)i > parent->path_len)
+        if (parent->path_len >= 0 && depth > parent->path_len)
             return X509_NOT_A_CA;
         if (!dates_ok(parent, now, &why)) return why;
-        if (!x509_signed_by(child, parent)) return X509_BAD_SIGNATURE;
+        if (!x509_signed_by(top, parent)) return X509_BAD_SIGNATURE;
+
+        used |= 1u << found;
+        below = top;
+        top = parent;
+        depth++;
     }
 
     /* And the top of what the server sent has to be signed by something
        this machine was told to trust. The server's own last certificate is
        not evidence of anything: it is checked against the trust store by
        its issuer's name and its signature, never accepted for being there. */
-    const x509_t *top = &chain[i];
-
     x509_t anchor;
-    const u8 *root; u32 root_len;
 
     /* A server is allowed to send the root itself, and many do. That
        certificate is still not evidence of anything by being there, but if
@@ -618,10 +680,17 @@ x509_result_t x509_verify_chain(const u8 *const *ders, const u32 *lens, u32 n,
     if (roots_find(top->subject, top->subject_len, &root, &root_len)) {
         /* One certificate that is itself an anchor says nothing about a
            host, whatever name is on it. */
-        if (i == 0) return X509_UNTRUSTED;
+        if (!below) return X509_UNTRUSTED;
         if (!x509_parse(root, root_len, &anchor)) return X509_BAD_PARSE;
         if (!anchor.has_basic_constraints || !anchor.is_ca) return X509_NOT_A_CA;
-        if (!x509_signed_by(&chain[i - 1], &anchor)) return X509_BAD_SIGNATURE;
+
+        /* The certificate directly under the top, which since the walk
+           above follows names rather than positions is not chain[depth-1].
+           Using the position was how a site that sends its leaf twice came
+           to be checked by asking whether the duplicate leaf had been
+           signed by Go Daddy's root -- a real chain reported as a wrong
+           signature. */
+        if (!x509_signed_by(below, &anchor)) return X509_BAD_SIGNATURE;
         return X509_OK;
     }
 
