@@ -325,6 +325,128 @@ int main(void) {
                      img->w);
     }
 
+    /* --- what a width means -----------------------------------------------
+     *
+     * border-box is what nearly every page written this decade sets on
+     * everything, because content-box makes a box with padding wider than
+     * the number asked for. A browser that ignores it lays every such page
+     * out too wide, and the error compounds at each level of nesting
+     * because every child is handed its parent's wrong width. */
+    {
+        lay("<style>"
+            "#c{box-sizing:content-box;width:200px;padding:20px;border:5px solid #000}"
+            "#b{box-sizing:border-box;width:200px;padding:20px;border:5px solid #000}"
+            "</style>"
+            "<div id=c>content</div><div id=b>border</div>", 600);
+
+        const litem *c = box_of(by_id("c"));
+        const litem *b = box_of(by_id("b"));
+        ok("both boxes are laid out", c != 0 && b != 0);
+        /* content-box: 200 of content plus 50 of frame. border-box: 200
+           altogether. What matters is that they differ, and by the frame. */
+        if (c) okn("content-box is the width plus its frame", c->w == 250, c->w);
+        if (b) okn("and border-box is the width", b->w == 200, b->w);
+    }
+
+    /* --- a floor and a ceiling --------------------------------------------- */
+    {
+        lay("<style>"
+            "#n{background:#eee;width:50px;min-width:180px}"
+            "#x{background:#eee;width:500px;max-width:120px}"
+            "#both{background:#eee;width:10px;min-width:200px;max-width:150px}"
+            "</style>"
+            "<div id=n>narrow</div><div id=x>wide</div><div id=both>both</div>", 600);
+
+        const litem *n = box_of(by_id("n"));
+        const litem *x = box_of(by_id("x"));
+        const litem *w = box_of(by_id("both"));
+        if (n) okn("min-width raises a narrow box", n->w == 180, n->w);
+        if (x) okn("max-width lowers a wide one", x->w == 120, x->w);
+        /* When they disagree the floor wins, which is what every engine
+           does and what a page that sets both relies on. */
+        if (w) okn("and a floor beats a ceiling", w->w == 200, w->w);
+    }
+
+    /* --- out of the flow ---------------------------------------------------
+     *
+     * An absolutely positioned box is measured from its nearest positioned
+     * ancestor and takes no space where it was written, so what follows it
+     * closes up as though it were not there. Both halves matter: a browser
+     * that placed it correctly and still reserved its space would push the
+     * rest of the page down by the height of something that is not there. */
+    {
+        lay("<style>"
+            "#outer{background:#eee;position:relative;margin:0;padding:0}"
+            "#spacer{background:#ddd;height:40px}"
+            "#abs{background:#ccc;position:absolute;left:30px;top:10px;width:50px;height:20px}"
+            "#after{background:#bbb;height:15px}"
+            "</style>"
+            "<div id=outer>"
+            "<div id=spacer>s</div>"
+            "<div id=abs>a</div>"
+            "<div id=after>b</div>"
+            "</div>", 600);
+
+        const litem *outer = box_of(by_id("outer"));
+        const litem *abs = box_of(by_id("abs"));
+        const litem *after = box_of(by_id("after"));
+
+        ok("an absolute box is laid out", abs != 0);
+        if (abs && outer) {
+            okn("and sits where its ancestor plus its offsets put it",
+                abs->x == outer->x + 30, abs->x);
+            okn("on the other axis too", abs->y == outer->y + 10, abs->y);
+        }
+        /* The spacer is 40 tall and the absolute box claims 10..30. If it
+           took space, what follows would start below it rather than at 40. */
+        if (after && outer)
+            okn("and takes no space, so what follows closes up",
+                after->y == outer->y + 40, after->y - outer->y);
+    }
+
+    /* --- moved, but still counted ------------------------------------------
+     *
+     * relative is the flow, drawn somewhere else: the element moves and the
+     * space it would have taken is still taken. That is the difference
+     * between it and absolute and the whole reason both exist. */
+    {
+        lay("<style>"
+            "#r{background:#eee;position:relative;left:25px;top:12px;height:30px}"
+            "#next{background:#ddd;height:10px}"
+            "</style>"
+            "<div id=r>moved</div><div id=next>next</div>", 600);
+
+        const litem *r = box_of(by_id("r"));
+        const litem *next = box_of(by_id("next"));
+        if (r) okn("a relative box is moved by its offsets", r->x == 25, r->x);
+        if (next) okn("and the space it left is still taken",
+                      next->y == 30, next->y);
+    }
+
+    /* --- the tag that is older than the standard which removed it ----------
+     *
+     * <center> was obsolete in 1999 and is on the front page of Google,
+     * which is how the web is rather than how it is described. Without it
+     * the element is unknown, an unknown element is inline, and the whole
+     * page renders against the left margin -- which is exactly what this
+     * browser did to google.com until it was added.
+     */
+    {
+        /* A style block, not a style attribute: lay() above parses
+           sheets and deliberately zeroes the inline ones, the way
+           the browser gathers them separately. */
+        lay("<style>#c{background:#eee;width:100px;display:inline-block}</style><center><div id=c>mid</div></center>", 600);
+        const litem *c = box_of(by_id("c"));
+        ok("a centre block lays out", c != 0);
+        /* What <center> does is centre the inline content, which is what
+           text-align:center means -- and it is exactly what Google's front
+           page needs, because the logo, the search box and the buttons are
+           all inline content inside one. A block child with a width of its
+           own is not centred by it, here or anywhere else. */
+        if (c) okn("and the inline content in it is centred rather than left",
+                   c->x > 200 && c->x < 300, c->x);
+    }
+
     puts(failed ? "LAYOUTTEST_FAIL\n" : "LAYOUTTEST_PASS\n");
     return failed;
 }

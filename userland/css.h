@@ -40,8 +40,22 @@ enum {
     P_WIDTH, P_MAX_WIDTH, P_HEIGHT, P_LINE_HEIGHT, P_WHITE_SPACE,
     P_LIST_STYLE, P_RADIUS, P_TEXT_INDENT, P_VISIBILITY, P_OPACITY,
     P_FLEX_DIR, P_JUSTIFY, P_ALIGN_ITEMS, P_FLEX_WRAP, P_GAP, P_FLEX_GROW,
+    P_MIN_WIDTH, P_MIN_HEIGHT, P_MAX_HEIGHT, P_BOX_SIZING,
+    P_POSITION, P_TOP, P_RIGHT, P_BOTTOM, P_LEFT,
     P_COUNT
 };
+
+/* Where an element sits.
+
+   STATIC is the flow. RELATIVE is the flow, drawn somewhere else, and
+   the space it would have taken is still taken. ABSOLUTE and FIXED are
+   out of the flow entirely, measured from an ancestor and from the
+   window respectively, and take no space at all. */
+enum { POS_STATIC = 0, POS_RELATIVE, POS_ABSOLUTE, POS_FIXED };
+
+/* What an offset of `auto` is, which is not the same as zero: an
+   absolute box with no top and no bottom stays where the flow put it. */
+#define CSS_AUTO_OFF ((short)-32768)
 
 enum { D_INLINE = 0, D_BLOCK, D_INLINE_BLOCK, D_LIST_ITEM, D_NONE,
        D_TABLE_CELL, D_FLEX };
@@ -81,6 +95,20 @@ typedef struct {
     short pt, pr, pb, pl;
     short bt, br, bb, bl;
     short width, max_width, height;      /* -1 for auto */
+    short min_width, min_height, max_height;
+
+    /* Whether width means the content box or the whole box.
+
+       border-box is what nearly every page written this decade sets on
+       everything, because content-box makes a box with padding wider
+       than the number you asked for. A browser that ignores it lays
+       every such page out too wide, compounding at every nesting. */
+    unsigned char border_box;
+
+    /* Taken out of the flow, or offset from where it would have been.
+       See lay_positioned in layout.h. */
+    unsigned char position;
+    short top, right_off, bottom, left;  /* -32768 for auto */
     short line_h;                        /* per cent of the font size */
     short radius, indent;
 
@@ -340,6 +368,15 @@ static const cprop CSS_PROPS[] = {
     { "border-left-width", P_BORDER_L },
     { "border-color", P_BORDER_COLOR },
     { "width", P_WIDTH },
+    { "min-width", P_MIN_WIDTH },
+    { "min-height", P_MIN_HEIGHT },
+    { "max-height", P_MAX_HEIGHT },
+    { "box-sizing", P_BOX_SIZING },
+    { "position", P_POSITION },
+    { "top", P_TOP },
+    { "right", P_RIGHT },
+    { "bottom", P_BOTTOM },
+    { "left", P_LEFT },
     { "max-width", P_MAX_WIDTH },
     { "height", P_HEIGHT },
     { "line-height", P_LINE_HEIGHT },
@@ -916,6 +953,9 @@ static inline void css_default_style(cstyle *st, int root_px) {
     st->pt = st->pr = st->pb = st->pl = 0;
     st->bt = st->br = st->bb = st->bl = 0;
     st->width = st->max_width = st->height = -1;
+    st->min_width = st->min_height = st->max_height = -1;
+    st->position = POS_STATIC;
+    st->top = st->right_off = st->bottom = st->left = CSS_AUTO_OFF;
     st->line_h = 145;
     st->radius = 0;
     st->indent = 0;
@@ -1060,6 +1100,19 @@ static inline void css_apply(const csheet *s, const cdecl *dcl, cstyle *st,
             else if (w_starts_fold(v, "square")) st->list = LS_SQUARE;
             else st->list = LS_DISC;
             break;
+        case P_BOX_SIZING:
+            /* content-box is the default and nobody wants it. */
+            st->border_box = (unsigned char)w_starts_fold(v, "border-box");
+            break;
+
+        case P_POSITION:
+            if (w_starts_fold(v, "absolute")) st->position = POS_ABSOLUTE;
+            else if (w_starts_fold(v, "fixed")) st->position = POS_FIXED;
+            else if (w_starts_fold(v, "relative")) st->position = POS_RELATIVE;
+            else if (w_starts_fold(v, "sticky")) st->position = POS_RELATIVE;
+            else st->position = POS_STATIC;
+            break;
+
         case P_VISIBILITY:
             st->visible = (unsigned char)(!w_starts_fold(v, "hidden"));
             break;
@@ -1098,6 +1151,13 @@ static inline void css_apply(const csheet *s, const cdecl *dcl, cstyle *st,
                 case P_BORDER_L: slot = &st->bl; break;
                 case P_WIDTH: slot = &st->width; break;
                 case P_MAX_WIDTH: slot = &st->max_width; break;
+                case P_MIN_WIDTH: slot = &st->min_width; break;
+                case P_MIN_HEIGHT: slot = &st->min_height; break;
+                case P_MAX_HEIGHT: slot = &st->max_height; break;
+                case P_TOP: slot = &st->top; break;
+                case P_RIGHT: slot = &st->right_off; break;
+                case P_BOTTOM: slot = &st->bottom; break;
+                case P_LEFT: slot = &st->left; break;
                 case P_HEIGHT: slot = &st->height; break;
                 case P_RADIUS: slot = &st->radius; break;
                 case P_TEXT_INDENT: slot = &st->indent; break;
@@ -1114,6 +1174,22 @@ static inline void css_apply(const csheet *s, const cdecl *dcl, cstyle *st,
                 for (int q = 0; q < np; q++)
                     if (css_color(v + st2[q], &c)) { st->border_color = c; break; }
             }
+            /* The four offsets are not lengths like the others.
+             *
+               `auto` is not zero for them -- an absolute box with neither a
+               top nor a bottom stays where the flow would have put it --
+               and a negative one is ordinary rather than a mistake, because
+               half the centring on the web is `left: 50%` with a negative
+               margin to match. So they keep their sign and their auto,
+               where every other length here clamps both away. */
+            if (dcl->prop >= P_TOP && dcl->prop <= P_LEFT) {
+                if (L.unit == U_AUTO) { *slot = CSS_AUTO_OFF; break; }
+                if (px < -4000) px = -4000;
+                if (px > 4000) px = 4000;
+                *slot = (short)px;
+                break;
+            }
+
             if (px < -1) px = -1;
             if (px > 4000) px = 4000;
             *slot = (short)px;
@@ -1258,6 +1334,10 @@ static const char CSS_UA[] =
     "div,section,article,main,aside,nav,header,footer,figure,figcaption,"
     "hgroup,form,dl,dt,fieldset,address{display:block}"
     "p{display:block;margin:0.85em 0}"
+    /* Obsolete since 1999 and on the front page of Google. It is a
+       block that centres what is in it, and the centring is inherited
+       by everything inside, which is the whole of what it does. */
+    "center{display:block;text-align:center}"
     "h1{display:block;font-size:2em;font-weight:bold;margin:0.55em 0 0.4em}"
     "h2{display:block;font-size:1.5em;font-weight:bold;margin:0.7em 0 0.35em}"
     "h3{display:block;font-size:1.22em;font-weight:bold;margin:0.8em 0 0.3em}"

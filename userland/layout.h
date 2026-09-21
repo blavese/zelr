@@ -235,6 +235,15 @@ typedef struct {
     int cur_link;                 /* into links, or -1 */
     int list_depth;
     int list_count[LAY_DEPTH];
+
+    /* What an absolutely positioned box is measured from.
+     *
+       Its nearest ancestor that is itself positioned, or the page when
+       there is none -- which is the rule, and is why `position: relative`
+       with no offsets is the commonest declaration on the web: it does
+       nothing to the element and makes it the thing its children are
+       placed against. */
+    int pos_x, pos_y, pos_w;
 } lctx;
 
 static inline int lay_put(lctx *L, const char *s, int n) {
@@ -986,8 +995,84 @@ static void lay_flex(lctx *L, int node, const cstyle *st, int cx, int cw,
     *y = top + tallest;
 }
 
+/* The body: a box laid out where it was told, in the flow. */
+static void lay_block_placed(lctx *L, int node, const cstyle *parent, int x,
+                             int avail, int *y);
+
+/* --- where a box actually goes -------------------------------------------
+ *
+ * Three answers, and the difference between them is what half the layouts on
+ * the web are built out of.
+ *
+ * static is the flow, and is everything below this function.
+ *
+ * relative is the flow, drawn somewhere else. The space it would have taken
+ * is still taken -- nothing moves up to fill it -- so this lays it out
+ * normally and then shifts the items it produced. That is also why
+ * `position: relative` with no offsets is the commonest declaration on the
+ * web: it changes nothing about the element and makes it the thing its
+ * absolutely positioned children are measured from.
+ *
+ * absolute is out of the flow entirely: measured from the nearest positioned
+ * ancestor, and taking no space where it was written, so whatever follows it
+ * closes up as though it were not there.
+ *
+ * fixed is measured from the page rather than the window, which is not what
+ * fixed means -- a fixed banner should stay put while the page scrolls under
+ * it, and this one scrolls away with everything else. It is the closer of
+ * the two wrong answers: the other is to leave it in the flow, which puts a
+ * navigation bar in the middle of the text it was meant to sit above.
+ */
 static void lay_block(lctx *L, int node, const cstyle *parent, int x,
                       int avail, int *y) {
+    cstyle probe;
+    lay_style(L, node, parent, &probe, avail);
+    if (probe.display == D_NONE || !probe.visible) return;
+
+    if (probe.position == POS_ABSOLUTE || probe.position == POS_FIXED) {
+        int keep = *y;
+        int aw = L->pos_w > 16 ? L->pos_w : avail;
+        int bw = probe.width >= 0 ? probe.width : aw;
+
+        int ax = *y >= 0 ? x : x;              /* where the flow left it */
+        if (probe.left != CSS_AUTO_OFF) ax = L->pos_x + probe.left;
+        else if (probe.right_off != CSS_AUTO_OFF)
+            ax = L->pos_x + aw - probe.right_off - bw;
+
+        int ay = *y;
+        if (probe.top != CSS_AUTO_OFF) ay = L->pos_y + probe.top;
+        else if (probe.bottom != CSS_AUTO_OFF) ay = L->pos_y - probe.bottom;
+
+        int room = probe.width >= 0 ? probe.width : (L->pos_x + aw) - ax;
+        if (room < 16) room = 16;
+
+        int sub = ay;
+        lay_block_placed(L, node, parent, ax, room, &sub);
+        *y = keep;                             /* it took no space */
+        return;
+    }
+
+    if (probe.position == POS_RELATIVE) {
+        int first = L->out->nitems;
+        lay_block_placed(L, node, parent, x, avail, y);
+
+        int dx = probe.left != CSS_AUTO_OFF ? probe.left
+               : (probe.right_off != CSS_AUTO_OFF ? -probe.right_off : 0);
+        int dy = probe.top != CSS_AUTO_OFF ? probe.top
+               : (probe.bottom != CSS_AUTO_OFF ? -probe.bottom : 0);
+        if (dx || dy)
+            for (int i = first; i < L->out->nitems; i++) {
+                L->out->items[i].x += dx;
+                L->out->items[i].y += dy;
+            }
+        return;
+    }
+
+    lay_block_placed(L, node, parent, x, avail, y);
+}
+
+static void lay_block_placed(lctx *L, int node, const cstyle *parent, int x,
+                             int avail, int *y) {
     const ddoc *d = L->d;
     cstyle st;
     lay_style(L, node, parent, &st, avail);
@@ -996,16 +1081,41 @@ static void lay_block(lctx *L, int node, const cstyle *parent, int x,
     int ml = st.ml < 0 ? 0 : st.ml;
     int mr = st.mr < 0 ? 0 : st.mr;
     int box_w = avail - ml - mr;
-    if (st.width >= 0 && st.width < box_w) {
+
+    /* What a width means.
+     *
+       With border-box it is the whole box, so the padding and borders come
+       out of it; with content-box, the default nobody wants, it is what is
+       left after them. A browser that ignores box-sizing lays out every
+       page written this decade too wide, and the error compounds at every
+       level of nesting because each child is given its parent's wrong
+       width to work from. */
+    /* box_w below is the border box -- the whole thing, padding and borders
+       included -- so border-box needs no adjusting and content-box is the
+       one that has to grow by its frame. Written the other way round first,
+       which made a content-box div come out exactly its frame too narrow
+       and a border-box one exactly its frame too wide. */
+    int frame = st.pl + st.pr + st.bl + st.br;
+    int want = st.width;
+    if (want >= 0 && !st.border_box) want += frame;
+    int cap = st.max_width;
+    if (cap >= 0 && !st.border_box) cap += frame;
+    int floor_w = st.min_width;
+    if (floor_w >= 0 && !st.border_box) floor_w += frame;
+
+    if (want >= 0 && want < box_w) {
         /* A width with auto margins is centred, which is how most pages put
            their content in the middle of a wide window. */
-        if (st.ml < 0 && st.mr < 0) ml += (box_w - st.width) / 2;
-        box_w = st.width;
+        if (st.ml < 0 && st.mr < 0) ml += (box_w - want) / 2;
+        box_w = want;
     }
-    if (st.max_width >= 0 && st.max_width < box_w) {
-        if (st.ml < 0 && st.mr < 0) ml += (box_w - st.max_width) / 2;
-        box_w = st.max_width;
+    if (cap >= 0 && cap < box_w) {
+        if (st.ml < 0 && st.mr < 0) ml += (box_w - cap) / 2;
+        box_w = cap;
     }
+    /* A floor beats a ceiling, which is what every implementation does and
+       what a page relies on when it sets both. */
+    if (floor_w >= 0 && box_w < floor_w) box_w = floor_w;
     if (box_w < 16) box_w = 16;
 
     *y += st.mt < 0 ? 0 : st.mt;
@@ -1073,6 +1183,16 @@ static void lay_block(lctx *L, int node, const cstyle *parent, int x,
         }
     }
 
+    /* A positioned box is what its positioned descendants are measured
+       from. Saved and put back, because this is a walk and the box two
+       levels up is still the right answer for the box after this one. */
+    int held_x = L->pos_x, held_y = L->pos_y, held_w = L->pos_w;
+    if (st.position != POS_STATIC) {
+        L->pos_x = cx;
+        L->pos_y = box_top;
+        L->pos_w = cw;
+    }
+
     /* A flex container lays its children along a line rather than down
        the page, so it does not use the walk below at all. */
     if (st.display == D_FLEX) {
@@ -1108,12 +1228,32 @@ static void lay_block(lctx *L, int node, const cstyle *parent, int x,
     }
     if (pushed) L->list_depth--;
 
+    L->pos_x = held_x;
+    L->pos_y = held_y;
+    L->pos_w = held_w;
+
     *y += st.pb + st.bb;
     int box_h = *y - box_top;
-    if (st.height >= 0 && st.height > box_h) {
-        *y += st.height - box_h;
-        box_h = st.height;
+
+    /* The same question as width, and the same answer: with border-box the
+       number includes the padding and the borders. */
+    /* And the same way round: box_h is the border box too. */
+    int vframe = st.pt + st.pb + st.bt + st.bb;
+    int want_h = st.height, floor_h = st.min_height, cap_h = st.max_height;
+    if (!st.border_box) {
+        if (want_h >= 0)  want_h  += vframe;
+        if (floor_h >= 0) floor_h += vframe;
+        if (cap_h >= 0)   cap_h   += vframe;
     }
+
+    if (want_h >= 0 && want_h > box_h) { *y += want_h - box_h; box_h = want_h; }
+    if (floor_h >= 0 && floor_h > box_h) { *y += floor_h - box_h; box_h = floor_h; }
+
+    /* A ceiling on height cuts the box rather than the words in it: nothing
+       here clips, so the box stops and whatever was under it moves up. That
+       is what max-height does on a page that uses it to cap a banner, and it
+       is not what it does on one that uses it with overflow. */
+    if (cap_h >= 0 && cap_h < box_h) { *y -= box_h - cap_h; box_h = cap_h; }
 
     /* A horizontal rule is a border on a box with nothing in it, and a box
        with nothing in it is no height at all. */
@@ -1159,6 +1299,10 @@ static inline void lay_run(ldoc *out, const ddoc *d, const csheet *s,
     L.line_left = 0; L.line_width = width; L.align = A_LEFT;
     L.list_depth = 0;
     for (int i = 0; i < LAY_DEPTH; i++) L.list_count[i] = 0;
+
+    /* With nothing positioned above it, an absolutely positioned box is
+       measured from the page. */
+    L.pos_x = 0; L.pos_y = 0; L.pos_w = width;
 
     cstyle root;
     css_default_style(&root, root_px);
