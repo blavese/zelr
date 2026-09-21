@@ -419,12 +419,17 @@ static void baize(surface *s, int w, int h) {
     /* A cloth rather than a flat green: lighter in the middle, where a lamp
        over a table puts it, and darker at the edges. Cheap to do and it is
        the difference between a table and a rectangle. */
+    int span = h > 0 ? h : 1;
     for (int y = 0; y < h; y++) {
-        int dy = (y - h / 3) * 100 / (h ? h : 1);
-        if (dy < 0) dy = -dy;
-        int k = 100 - dy;
-        if (k < 0) k = 0;
-        rect(s, 0, y, w, 1, mix(FELT_DARK, FELT_LIT, k * 70 / 100));
+        int d = y - h / 3;
+        if (d < 0) d = -d;
+        /* Out of two hundred rather than out of seventy. The step between
+           one row's colour and the next is what the eye sees, and seventy
+           levels spread down a maximised window is a step every ten rows,
+           which reads as bands of green rather than as a cloth. */
+        int a = 200 - d * 200 / span;
+        if (a < 0) a = 0;
+        rect(s, 0, y, w, 1, mix(FELT_DARK, FELT_LIT, a));
     }
 }
 
