@@ -266,3 +266,10 @@ builtin_poker_end:
 builtin_cardtest_start:
 .incbin "build/user/cardtest.elf"
 builtin_cardtest_end:
+
+.balign 4
+.global builtin_sleeptest_start
+.global builtin_sleeptest_end
+builtin_sleeptest_start:
+.incbin "build/user/sleeptest.elf"
+builtin_sleeptest_end:
