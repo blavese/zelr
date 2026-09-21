@@ -577,6 +577,55 @@ static void fat_boot_stub(u8 *sec, u32 at) {
     memcpy(sec + at_words, words, sizeof(words));
 }
 
+/* The same sector, on a disk that was already made wrong.
+ *
+ * Shipping the fix above does not repair anything, because a disk that
+ * mounts is never formatted again: a machine upgraded to a kernel that
+ * writes a good sector still starts from the bad one it wrote last time,
+ * and the only cure on offer would be erasing every file on it to get a
+ * fresh one. That is not a fix, it is the same fault with a worse remedy.
+ *
+ * So it is repaired where it lies. What changes is the jump at the front
+ * and the empty space behind the parameter block; the parameters
+ * themselves, the tables, and every file the volume holds are not read
+ * here and not written. Three things have to hold before a byte moves:
+ *
+ *   the volume is one this kernel wrote, which the serial says and which
+ *   nothing else lands on, so somebody's Windows stick is never touched;
+ *   the sector claims to be startable, since a sector with no mark is not
+ *   making the promise this is about; and the jump lands on nought, which
+ *   is the difference between empty space and somebody else's program.
+ *
+ * The last of those is also what makes this safe to run on every mount:
+ * a sector already carrying the stub fails it and is left alone.
+ */
+bool fat_boot_repair(void) {
+    if (!mounted) return false;
+
+    u8 boot[SECTOR_SIZE];
+    if (!vol_read(0, 1, boot)) return false;
+    if (!fat_boot_is_ours(boot)) return false;
+
+    u32 code_at = boot_is_fat32(boot) ? 0x5A : 0x3E;
+    if (boot[code_at] != 0x00) return false;       /* something runs there */
+
+    boot[0] = 0xEB; boot[1] = (u8)(code_at - 2); boot[2] = 0x90;
+    fat_boot_stub(boot, code_at);
+    if (boot[code_at] == 0x00) return false;       /* no room; leave it be */
+
+    if (!vol_write(0, 1, boot)) return false;
+
+    /* FAT32 keeps a second copy of the sector for a reader that finds the
+       first one unreadable. A copy of the fault is still the fault, so it
+       goes too -- and only where this volume says it put it, inside the
+       reserved area, which is the one place it can be. */
+    if (boot_is_fat32(boot)) {
+        u32 spare = *(u16 *)(boot + 50);
+        if (spare && spare < reserved_sectors) vol_write(spare, 1, boot);
+    }
+    return true;
+}
+
 bool fat_format_at(u32 base_lba, u32 sectors, const char *label) {
     if (!blk_present()) return false;
     fat_forget();

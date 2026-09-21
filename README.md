@@ -268,6 +268,18 @@ counting its clusters, which is the only thing the specification says decides
 it; the string "FAT32" in a boot sector is a label and some formatters get it
 wrong.
 
+**The boot sector a format writes carries a program**, because the 0x55 0xAA
+at the end of it is a promise the firmware acts on: it loads the sector to
+0x7C00 and jumps. A formatter that writes the mark and leaves the rest empty
+makes a disk that a BIOS will start from and then execute four hundred bytes
+of nought out of, which is a machine that works once and then does not, with
+a message about invalid memory and no hint of where it came from. So the
+sector says the disk is not the one to start from and halts, in twenty five
+bytes of real mode. A volume zelr formatted before this was true is mended
+when it is mounted rather than reformatted -- the jump and the empty space
+behind the parameters, and nothing else, on a volume whose serial says it is
+ours and whose jump lands on nought.
+
 **Interrupts** are routed through the IOAPIC, with the firmware's list of
 which legacy line really arrives where applied. Almost every machine moves
 the timer from line 0 to line 2, and a kernel that assumes otherwise waits

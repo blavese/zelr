@@ -53,6 +53,36 @@ def lit_band(path, top, bottom):
     return n
 
 
+def bare_bios():
+    """Hands the disk to a plain BIOS with nothing else attached at all.
+
+    No kernel and no image: this is the boot a person gets on every start
+    after the first, and the one that used to end in the firmware executing
+    four hundred bytes of nought."""
+    if os.path.exists(SHOT):
+        os.remove(SHOT)
+    proc = subprocess.Popen(
+        [qemu_path(), "-drive", "file=%s,format=raw,if=ide,index=0" % DISK,
+         "-m", "256", "-display", "none", "-monitor", "stdio"],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT, text=True)
+    told = ""
+    try:
+        time.sleep(10)
+        proc.stdin.write("screendump %s" % SHOT.replace("\\", "/") + chr(10))
+        proc.stdin.flush()
+        time.sleep(3)
+        proc.stdin.write("quit" + chr(10))
+        proc.stdin.flush()
+        # Read it rather than only waiting on it: the monitor writes back,
+        # and a pipe nobody empties is a process that stops when it fills.
+        told = proc.communicate(timeout=30)[0] or ""
+    except Exception:
+        proc.kill()
+        told = "(the monitor did not answer)"
+    return os.path.exists(SHOT), told
+
+
 def main():
     keep = "--keep" in sys.argv
     build_once()
@@ -66,6 +96,11 @@ def main():
     try:
         vm.wait_boot()
         vm.run("ls /", timeout=20)
+        # Something to still be there afterwards. The repair rewrites a
+        # sector of the volume, so the check that it left the volume alone
+        # has to be a file written before it and read after it.
+        vm.run("write /keepme.txt this-file-must-survive", timeout=20)
+        vm.run("sync", timeout=20)
     finally:
         vm.stop()
 
@@ -86,32 +121,7 @@ def main():
           sec[want + 2] != 0)
 
     # --- and a second boot, from that disk, with nothing else --------------
-    #
-    # No kernel and no image: a bare BIOS handed the disk that was just
-    # made. This is the boot that used to end in the firmware executing
-    # zeros, and it is the one somebody gets every time after the first.
-    proc = subprocess.Popen(
-        [qemu_path(), "-drive", "file=%s,format=raw,if=ide,index=0" % DISK,
-         "-m", "256", "-display", "none", "-monitor", "stdio"],
-        stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT, text=True)
-
-    told = ""
-    try:
-        time.sleep(10)
-        proc.stdin.write("screendump %s\n" % SHOT.replace("\\", "/"))
-        proc.stdin.flush()
-        time.sleep(3)
-        proc.stdin.write("quit\n")
-        proc.stdin.flush()
-        # Read it rather than only waiting on it: the monitor writes back,
-        # and a pipe nobody empties is a process that stops when it fills.
-        told = proc.communicate(timeout=30)[0] or ""
-    except Exception:
-        proc.kill()
-        told = "(the monitor did not answer)"
-
-    got = os.path.exists(SHOT)
+    got, told = bare_bios()
     c.add("a bios asked to start from it draws something", got)
     if not got:
         print("      qemu said: %s" % told[-300:].replace("\n", " "))
@@ -123,6 +133,65 @@ def main():
           "than running off the end", lit > 150)
     if got and lit <= 150:
         print("      %d lit pixels where the sector writes" % lit)
+
+    # --- a disk that was already made wrong --------------------------------
+    #
+    # Everything above is about a disk this build formatted. Every disk the
+    # release before it formatted is still wrong, and shipping the fix does
+    # not reach one: a disk that mounts is never formatted again, so the
+    # machine goes on dying at the firmware under a kernel that has the fix
+    # in it, and the only cure on offer would be erasing the files.
+    #
+    # So the sector is put back the way that release left it -- the mark,
+    # the old jump, and nothing behind the parameters -- and the kernel is
+    # booted on it. What is being asked is whether a disk somebody already
+    # has is mended by being mounted, and mended rather than emptied.
+    code_at = want + 2
+    with open(DISK, "r+b") as f:
+        sec0 = bytearray(f.read(512))
+    for i in range(code_at, 510):
+        sec0[i] = 0
+    sec0[0], sec0[1], sec0[2] = 0xEB, 0x3C, 0x90       # what it used to write
+    with open(DISK, "r+b") as f:
+        f.write(bytes(sec0))
+
+    # That the disk really is broken now, before anything is asked to mend
+    # it. Without this the two checks below pass on a disk that was never
+    # damaged, which is the shape of check that goes green for years.
+    with open(DISK, "rb") as f:
+        broken = f.read(512)
+    c.add("the disk was put back the way the last release left it",
+          broken[510] == 0x55 and broken[511] == 0xAA
+          and broken[code_at] == 0)
+
+    vm = Guest(DISK, memory=256, keep=True, reuse=True)
+    try:
+        vm.wait_boot()
+        kept = vm.fresh("cat /keepme.txt", timeout=20)
+    finally:
+        vm.stop()
+
+    with open(DISK, "rb") as f:
+        sec = f.read(512)
+
+    c.add("a disk made without a program gets one when it is mounted",
+          sec[0] == 0xEB and sec[1] == want and sec[2] == 0x90
+          and sec[code_at] != 0)
+    c.add("and the files on it are still there",
+          "this-file-must-survive" in kept)
+
+    # And the whole of it, the way a person meets it: the machine that would
+    # not start, started once with the new kernel, and asked to start from
+    # its own disk again.
+    got2, told2 = bare_bios()
+    c.add("a bios can start from the mended disk", got2)
+    if not got2:
+        print("      qemu said: %s" % told2[-300:].replace(chr(10), " "))
+    lit2 = lit_band(SHOT, 118, 150) if got2 else 0
+    c.add("and it stops with a message rather than running off the end",
+          lit2 > 150)
+    if got2 and lit2 <= 150:
+        print("      %d lit pixels after the repair" % lit2)
 
     if not keep:
         for f in (DISK, SHOT):

@@ -54,6 +54,14 @@ u32  fat_base(void);                    /* where the mounted volume starts */
 bool fat_format_at(u32 base_lba, u32 sectors, const char *label);
 bool fat_format(const char *label);
 
+/* Puts the missing program back in the boot sector of a mounted volume this
+   kernel formatted before it wrote one, which is a disk that starts the
+   firmware and then crashes it. True when it did something. Leaves alone
+   anything it did not write and anything already carrying a program, and
+   touches no part of the volume but the first three bytes and the space
+   behind the parameters. */
+bool fat_boot_repair(void);
+
 /* Listing a directory. `path` is absolute; "/" is the root. Returns 1 when
    an entry was produced, 0 past the end, -1 if the path is not a directory. */
 int  fat_list(const char *path, u32 index, char *name_out, u32 *size_out, bool *dir_out);
