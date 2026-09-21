@@ -121,6 +121,7 @@ static void sel_clear(void) { sel_active = 0; sel_dragging = 0; }
 
 /* The line being typed, and where the cursor sits inside it. */
 static char input[COLS + 1];
+static int  in_off;                 /* the first column of it on screen */
 static int  in_len, in_pos;
 static int  blink;
 
@@ -356,12 +357,30 @@ static void draw_all(void) {
     int x = PAD + (strlen(cwd) + 1) * MONO_W;
     face_draw(&scr, x, py, "> ", pal.dim, UI_FACE_MONO);
     x += 2 * MONO_W;
-    face_draw(&scr, x, py, input, pal.fg, UI_FACE_MONO);
+
+    /* The line can be longer than the row it is written on, so the row is a
+       window onto it that follows the cursor. Scrolled by half a screen at
+       a time rather than one column, because a window that moves on every
+       keystroke makes the text slide about under what is being typed. */
+    int room = cols - (int)strlen(cwd) - 3;
+    if (room < 8) room = 8;
+    if (in_off > in_len) in_off = 0;
+    if (in_pos < in_off) {
+        in_off = in_pos - room / 2;
+        if (in_off < 0) in_off = 0;
+    }
+    if (in_pos > in_off + room - 1) in_off = in_pos - room + 1;
+
+    char shown[COLS + 1];
+    int sn = 0;
+    for (int i = in_off; input[i] && sn < room; i++) shown[sn++] = input[i];
+    shown[sn] = 0;
+    face_draw(&scr, x, py, shown, pal.fg, UI_FACE_MONO);
 
     /* A block cursor sitting on the character it is in front of, so editing
        in the middle of a line is visible rather than guessed at. */
     if (view == 0 && (blink / 12) % 2 == 0) {
-        int cx = x + in_pos * MONO_W;
+        int cx = x + (in_pos - in_off) * MONO_W;
         if (in_pos < in_len) {
             rect(&scr, cx, py, MONO_W, MONO_H, pal.cursor);
             char one[2] = { input[in_pos], 0 };
@@ -1528,9 +1547,9 @@ static void replace_word(int start, const char *with, int len) {
     strncpy(tail, input + in_pos, COLS + 1);
 
     int n = start;
-    for (int i = 0; i < len && n < cols - 2; i++) input[n++] = with[i];
+    for (int i = 0; i < len && n < COLS; i++) input[n++] = with[i];
     in_pos = n;
-    for (int i = 0; tail[i] && n < cols - 2; i++) input[n++] = tail[i];
+    for (int i = 0; tail[i] && n < COLS; i++) input[n++] = tail[i];
     input[n] = 0;
     in_len = n;
 }
@@ -1594,7 +1613,7 @@ static void complete(void) {
         replace_word(start, cand[0], shared);
         /* Exactly one match, and it is a whole word: a space after it saves
            a keystroke and is what everyone expects. */
-        if (n_cand == 1 && cand[0][shared - 1] != '/' && in_len < cols - 2) {
+        if (n_cand == 1 && cand[0][shared - 1] != '/' && in_len < COLS) {
             input[in_len++] = ' ';
             input[in_len] = 0;
             in_pos = in_len;
@@ -1634,7 +1653,7 @@ static void submit(void) {
     strncpy(copy, input, COLS + 1);
     history_add(copy);
 
-    in_len = in_pos = 0;
+    in_len = in_pos = in_off = 0;
     input[0] = 0;
     hist_at = 0;
     view = 0;
@@ -1643,7 +1662,15 @@ static void submit(void) {
 }
 
 static void insert_char(char c) {
-    if (in_len >= cols - 2) return;
+    /* The whole line, not the part of it that fits on screen.
+     *
+       This used to stop at the window's width, silently: a command longer
+       than the row simply lost its end, with nothing to say so. What that
+       looked like was `browser https://.../booting-and-dual-booting-of-
+       operating-system/` starting on a page that did not exist, because
+       everything past column eighty had never been typed. An address is
+       the ordinary case of a long line, so the line scrolls instead. */
+    if (in_len >= COLS) return;
     for (int i = in_len; i > in_pos; i--) input[i] = input[i - 1];
     input[in_pos++] = c;
     in_len++;

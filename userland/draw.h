@@ -174,10 +174,18 @@ static inline int face_w(const char *s, int which) {
     return w;
 }
 
-static inline void face_draw(surface *s, int x, int y, const char *str,
-                             u32 fg, int which) {
+/* Text, kept between two columns as well as inside the surface.
+ *
+ * Anything that scrolls its own text needs this: a field with more in it
+ * than it is wide starts the line to the left of itself, and what is to the
+ * left of it belongs to something else. The address bar drew its URL across
+ * the Reload button next to it. */
+static inline void face_draw_clip(surface *s, int x, int y, int x0, int x1,
+                                  const char *str, u32 fg, int which) {
     const face_t *f = face_of(which);
     int baseline = y + (f->size * 4) / 5;
+    if (x0 < 0) x0 = 0;
+    if (x1 > s->w) x1 = s->w;
 
     for (; *str; str++) {
         unsigned char c = (unsigned char)*str;
@@ -192,13 +200,19 @@ static inline void face_draw(surface *s, int x, int y, const char *str,
                 unsigned char a = px[gy * g->w + gx];
                 if (!a) continue;
                 int sx = x + g->left + gx;
-                if (sx < 0 || sx >= s->w) continue;
+                if (sx < x0 || sx >= x1) continue;
                 u32 *slot = &s->px[(u32)sy * s->w + sx];
                 *slot = (a == 255) ? fg : mix(*slot, fg, a);
             }
         }
         x += g->advance;
+        if (x >= x1) break;              /* the rest of it is off the end */
     }
+}
+
+static inline void face_draw(surface *s, int x, int y, const char *str,
+                             u32 fg, int which) {
+    face_draw_clip(s, x, y, 0, s->w, str, fg, which);
 }
 
 /* One character of the monospaced face, in its own cell. Used where a
