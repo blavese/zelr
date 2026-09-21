@@ -24,6 +24,7 @@
 #include "sched.h"
 #include "timer.h"
 #include "smp.h"
+#include "lapic.h"
 #include "blockdev.h"
 #include "netdev.h"
 #include "sound.h"
@@ -137,11 +138,14 @@ static u32 render_cpu(char *b, u32 cap) {
     out_t o = { b, cap, 0 };
     put(&o, "described %d\n", smp_cpu_count());
     put(&o, "started   %d\n", smp_started());
+    put(&o, "apictimer %d counts per second\n", lapic_timer_hz());
     for (u32 i = 0; i < smp_cpu_count(); i++) {
         const cpu_t *c = smp_cpu(i);
         if (!c) continue;
-        put(&o, "cpu%-6d apic %d, %-8s %d jobs\n",
-            i, c->apic_id, c->started ? "running" : "halted", c->jobs);
+        put(&o, "cpu%-6d apic %d, %-8s %d slices, %d ticks, %d busy\n",
+            i, c->apic_id, c->started ? "running" : "halted",
+            (u32)c->user_slices, (u32)c->local_ticks,
+            (u32)c->lock_misses);
     }
     return o.len;
 }

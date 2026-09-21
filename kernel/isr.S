@@ -338,6 +338,12 @@ isr47:
    used to ask: it is the same work, and the frame comes out the same shape.
    What it also did was run the timer's handler, so every yield counted as a
    tick that had not happened. */
+.global isr242
+isr242:
+    push $0
+    push $242
+    jmp isr_common
+
 .global isr241
 isr241:
     push $0
@@ -415,3 +421,4 @@ isr_stub_table:
     .quad isr128
     .quad isr240
     .quad isr241
+    .quad isr242

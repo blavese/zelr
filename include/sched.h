@@ -109,8 +109,61 @@ typedef struct task {
        system calls and is exactly the program somebody is interrupting. */
     u32  sig_pending;
     u32  sig_ignored;
+
+    /* Which processor is running it, or -1. A task is one thread of
+       execution and cannot be two, so a processor looking for something to
+       run has to be able to see that another one already has this. With a
+       single processor the question could not be asked. */
+    int  on_cpu;
+
     struct task *next;
 } task_t;
+
+/* --- one lock for the kernel ----------------------------------------------
+ *
+ * A processor holds this whenever it is not executing ring 3 code: from the
+ * moment an interrupt or a system call arrives from a program until the
+ * moment it returns to one, and for the whole time it is running a task
+ * that lives in the kernel.
+ *
+ * That is the coarsest lock there is and it is the honest one to start
+ * with. The alternative is a lock on the heap, the task list, the
+ * filesystem and every driver, which is not one change but forty, and the
+ * first wrong one is a machine that corrupts itself occasionally.
+ *
+ * What it costs is that two processors cannot be inside the kernel at once.
+ * What it does not cost is parallelism where it is worth having: ring 3 is
+ * where programs spend their time, and nothing there holds it.
+ *
+ * The kernel is already non-preemptive, which is what makes this tractable.
+ * System calls arrive through an interrupt gate, so the processor clears
+ * the interrupt flag on the way in and no timer lands in the middle of one.
+ * There is no path that takes this lock twice.
+ */
+void   kernel_lock_acquire(void);
+bool   kernel_lock_try(void);
+void   kernel_lock_release(void);
+bool   kernel_lock_held_here(void);
+
+/* Whether a task is a processor's idle task. A processor asleep does not
+   hold the kernel lock: holding it while doing nothing is how one sleeping
+   processor would stop every other one from making a system call. */
+bool   task_is_idle(const task_t *t);
+
+/* Counted where the switch happens, and reported by /sys/cpu. */
+void   sched_note_user_slice(u32 cpu);
+
+/* Paints a kernel stack the way task_create does, for a stack the
+   scheduler did not allocate. Every task's stack carries a known pattern so
+   that the bottom word can be checked on every switch and the paint left
+   over says how deep the deepest path went. */
+void   sched_paint_stack(u64 stack_base);
+
+/* A processor that has just come up, adopting the stack it is standing on
+   as its own idle task. Until it has a task record the scheduler cannot
+   save anything about it, and the first interrupt would have nowhere to
+   put the context it interrupted. */
+void   sched_adopt_ap(u32 cpu, u64 stack_base);
 
 void   sched_init(void);
 task_t *task_create(const char *name, void (*entry)(void));

@@ -42,6 +42,15 @@ void idt_load(void);
  * loop, and every sleep, timeout and deadline in the kernel is counted in
  * those ticks, so all of them were short together and none of them said so. */
 #define VEC_YIELD   0xF1
+
+/* --- a processor's own clock ---------------------------------------------
+ *
+ * The 8254 sends its tick to one processor, and vector 32 is that tick: it
+ * counts time for the machine. A processor running a program needs an
+ * interrupt of its own to be taken off it, and that is this one -- the same
+ * switch, on a different processor, without a second claim about what time
+ * it is. */
+#define VEC_LOCAL_TIMER 0xF2
 void register_interrupt_handler(u8 n, isr_handler_t h);
 
 /* Whether anything is listening on this vector. Used to decide which lines

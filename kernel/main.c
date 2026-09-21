@@ -473,6 +473,16 @@ void kmain(handoff_t *h) {
     /* Needs the timer: the startup sequence is defined in microseconds and
        there is nothing to measure them with before it. */
     bb_mark("smp");
+
+/* Before the other processors, because each one adopts the stack it came
+       up on as a task and joins the ring. sched_init clears that ring, so
+       doing it afterwards threw every one of those tasks away -- and what
+       that looked like was processors whose timers fired, which took the
+       kernel lock, walked a ring containing nothing but themselves, and
+       went back to sleep having found no program to run. Nine thousand
+       interrupts and not one task, with nothing anywhere saying why. */
+    sched_init();
+
     smp_init();
     if (smp_cpu_count() > 1)
         kprintf("  cpu     %d processors, %d started\n",
@@ -596,7 +606,6 @@ void kmain(handoff_t *h) {
     syscall_init();
     clip_init();
     winsrv_init();
-    sched_init();
     /* After the scheduler exists, because it is a task, and the task is how
        anything plugged in later gets noticed at all. */
     usb_start_service();
