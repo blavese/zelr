@@ -255,6 +255,13 @@ static void showdown(void) {
     for (int i = 0; i < SEATS; i++)
         if (!tbl[i].out && !tbl[i].folded && tbl[i].show > best) best = tbl[i].show;
 
+    int winners = 0, only = -1;
+    for (int i = 0; i < SEATS; i++)
+        if (!tbl[i].out && !tbl[i].folded && tbl[i].show == best) {
+            winners++;
+            only = i;
+        }
+
     char line[96];
     int at = 0;
     int first = 1;
@@ -265,7 +272,11 @@ static void showdown(void) {
         for (const char *p = nm; *p && at < 60; p++) line[at++] = *p;
         first = 0;
     }
-    const char *w = " win with ";
+    /* One winner who is not you takes the s. Two of anybody, or you on your
+       own, do not. Writing "Bishop win with a pair of Queens" is a small
+       thing and it is the sort of small thing that makes a program read as
+       though nobody looked at it. */
+    const char *w = (winners == 1 && only != 0) ? " wins with " : " win with ";
     while (*w && at < 74) line[at++] = *w++;
     char words[40];
     hand_words(best, words, sizeof(words));
