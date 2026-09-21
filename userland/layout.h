@@ -703,6 +703,20 @@ static inline void lay_inline(lctx *L, int node, const cstyle *parent, int *y) {
                         it->bg = st.background;
                         it->has_bg = st.has_bg;
                         it->link = L->cur_link;
+
+                        /* A page that rounds its search box gets a rounded
+                           search box. Carried through here because a field
+                           is drawn by the browser rather than by the block
+                           code, so nothing else would ever look at it. */
+                        it->radius = (unsigned char)(st.radius > 255 ? 255
+                                                     : (st.radius < 0 ? 0
+                                                        : st.radius));
+                        it->border = st.border_color;
+                        it->bt = (unsigned char)(st.bt > 8 ? 8 : st.bt);
+                        it->br = (unsigned char)(st.br > 8 ? 8 : st.br);
+                        it->bb = (unsigned char)(st.bb > 8 ? 8 : st.bb);
+                        it->bl = (unsigned char)(st.bl > 8 ? 8 : st.bl);
+
                         L->pen += fw + 2;
                         lay_line_fit(L, fh, 100);
                         L->line_started = 1;
@@ -1039,9 +1053,19 @@ static void lay_block(lctx *L, int node, const cstyle *parent, int x,
         else if (probe.right_off != CSS_AUTO_OFF)
             ax = L->pos_x + aw - probe.right_off - bw;
 
+        /* A top is an offset from the containing block's top, which is
+           known. A bottom is an offset from its bottom, which is not: this
+           is one pass and the height of the thing being measured from is
+           not settled until everything inside it has been laid out --
+           including this box.
+
+           So a box with only a bottom stays where the flow put it. That is
+           wrong, and it is the least wrong answer available: computing it
+           from the top instead puts a footer pinned to the bottom of the
+           page somewhere above the top of it, which is visibly worse than
+           leaving it in place. */
         int ay = *y;
         if (probe.top != CSS_AUTO_OFF) ay = L->pos_y + probe.top;
-        else if (probe.bottom != CSS_AUTO_OFF) ay = L->pos_y - probe.bottom;
 
         int room = probe.width >= 0 ? probe.width : (L->pos_x + aw) - ax;
         if (room < 16) room = 16;

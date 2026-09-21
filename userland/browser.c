@@ -1091,11 +1091,29 @@ static void draw_page(surface *s, int ox, int oy, int vw, int vh) {
                 continue;
             }
 
-            rect(s, x, sy, w, h, inside);
-            rect(s, x, sy, w, 1, edge);
-            rect(s, x, sy + h - 1, w, 1, edge);
-            rect(s, x, sy, 1, h, edge);
-            rect(s, x + w - 1, sy, 1, h, edge);
+            /* Rounded when the page asked for it, which the search box on
+               every site written this decade does. A field drawn square on
+               a page that rounded it does not look like a slightly wrong
+               field, it looks like a different era. */
+            int rad = it->radius;
+            if (rad * 2 > h) rad = h / 2;
+            if (rad > 0) {
+                /* The edge is the shape in the line colour with the inside
+                   drawn on top of it a pixel in, which is how everything
+                   else here draws a hairline round a curve. */
+                u32 line = (it->bt || it->br || it->bb || it->bl) ? it->border
+                                                                  : edge;
+                ui_round(s, x, sy, w, h, rad, line, 255);
+                ui_round(s, x + 1, sy + 1, w - 2, h - 2, rad - 1, inside, 255);
+            } else {
+                u32 line = (it->bt || it->br || it->bb || it->bl) ? it->border
+                                                                  : edge;
+                rect(s, x, sy, w, h, inside);
+                rect(s, x, sy, w, 1, line);
+                rect(s, x, sy + h - 1, w, 1, line);
+                rect(s, x, sy, 1, h, line);
+                rect(s, x + w - 1, sy, 1, h, line);
+            }
 
             /* Read out of the document now rather than held from when the
                page was laid out, because typing changes it and typing does
