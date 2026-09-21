@@ -370,6 +370,7 @@ static inline int dom_is_block(int t) {
         case T_HEADER: case T_FOOTER: case T_SECTION: case T_ARTICLE:
         case T_MAIN: case T_ASIDE: case T_FIGURE: case T_FIGCAPTION:
         case T_PRE: case T_CAPTION: case T_HGROUP: case T_BODY:
+        case T_CENTER:
             return 1;
         default: return 0;
     }

@@ -32,6 +32,12 @@ enum {
     T_SELECT, T_OPTION, T_NAV, T_HEADER, T_FOOTER, T_SECTION, T_ARTICLE,
     T_MAIN, T_ASIDE, T_FIGURE, T_FIGCAPTION, T_SMALL,
     T_NOSCRIPT, T_IFRAME, T_SVG, T_LABEL, T_META, T_LINK, T_HGROUP,
+
+    /* Obsolete since 1999 and on the front page of Google, which is
+       how the web actually is. Without it the element is unknown, and
+       an unknown element is inline and centres nothing -- which is the
+       whole reason that page rendered against the left margin. */
+    T_CENTER,
     T_COUNT
 };
 
@@ -67,6 +73,7 @@ static const char *const HTML_TAGS[T_COUNT] = {
     "select", "option", "nav", "header", "footer", "section", "article",
     "main", "aside", "figure", "figcaption", "small",
     "noscript", "iframe", "svg", "label", "meta", "link", "hgroup",
+    "center",
 };
 
 static inline int html_tag_of(const char *name, int len) {
