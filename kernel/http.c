@@ -49,9 +49,9 @@ static u16 split_port(const char *in, char *host, u32 cap, u16 fallback) {
 
 /* Shuts the connection down in the right order. The TLS close notification
    has to go out over a connection that is still up, so it goes first. */
-static void done(bool secure) {
+static void done(int h, bool secure) {
     if (secure) tls_close();
-    tcp_close();
+    tcp_close(h);
 }
 
 static bool starts_fold(const char *s, const char *want) {
@@ -78,16 +78,17 @@ int http_get(const char *spec, const char *path, const char *save_as) {
     net_format_ip(ip, addr);
     kprintf("connecting to %s (%s) port %d\n", host, addr, port);
 
-    if (!tcp_connect(ip, port, 6000)) return HTTP_ERR_CONNECT;
+    int h = tcp_open(ip, port, 6000);
+    if (h < 0) return HTTP_ERR_CONNECT;
 
     if (secure) {
         /* The name, not the address: what is being checked is that the
            certificate is for the site that was asked for, and an address can
            be anybody's. A failed handshake closes the connection rather than
            leaving one open that the rest of this would happily use. */
-        if (!tls_connect(host)) {
+        if (!tls_connect(h, host)) {
             kprintf("tls: %s\n", tls_error());
-            tcp_close();
+            tcp_close(h);
             return HTTP_ERR_TLS;
         }
         kprintf("secure: %s\n", tls_describe());
@@ -108,16 +109,16 @@ int http_get(const char *spec, const char *path, const char *save_as) {
     fits &= append(req, sizeof(req), &n,
                    "\r\nUser-Agent: zelr/" KERNEL_VERSION
                    "\r\nConnection: close\r\n\r\n");
-    if (!fits) { done(secure); return HTTP_ERR_TOOLONG; }
+    if (!fits) { done(h, secure); return HTTP_ERR_TOOLONG; }
 
-    if (!(secure ? tls_send(req, n) : tcp_send(req, (u16)n))) {
+    if (!(secure ? tls_send(req, n) : tcp_send(h, req, (u16)n))) {
         if (secure) kprintf("tls: %s\n", tls_error());
-        done(secure);
+        done(h, secure);
         return HTTP_ERR_SEND;
     }
 
     u8 *buf = (u8 *)kmalloc(BODY_CAP);
-    if (!buf) { done(secure); return HTTP_ERR_MEMORY; }
+    if (!buf) { done(h, secure); return HTTP_ERR_MEMORY; }
 
     /* Read until the server closes, rather than once. One read is whatever
        happened to have arrived by then, which for anything bigger than a
@@ -126,12 +127,12 @@ int http_get(const char *spec, const char *path, const char *save_as) {
     u32 got = 0;
     while (got < BODY_CAP) {
         u32 n = secure ? tls_recv(buf + got, BODY_CAP - got, 10000)
-                       : tcp_recv(buf + got, BODY_CAP - got, 10000);
+                       : tcp_recv(h, buf + got, BODY_CAP - got, 10000);
         got += n;
-        if (!n && (secure ? (tls_ended() || tcp_ended()) : tcp_ended())) break;
+        if (!n && (secure ? (tls_ended() || tcp_ended(h)) : tcp_ended(h))) break;
         if (!n) break;                     /* nothing in ten seconds */
     }
-    done(secure);
+    done(h, secure);
 
     if (got == 0) {
         if (secure) kprintf("tls: %s\n", tls_error());

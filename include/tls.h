@@ -1,9 +1,13 @@
 #pragma once
 #include "types.h"
 
-/* TLS 1.3, client side, over the TCP connection that is already open.
+/* TLS 1.3, client side, over a TCP connection that is already open.
  *
- * One connection at a time, like the stack underneath it.
+ * One session at a time, which the stack underneath is no longer: it holds
+ * several connections now, so a session is told which of them it is running
+ * over. What is still single is the session state in this file, so a
+ * machine can have one encrypted connection and several plain ones at
+ * once.
  *
  * Only version 1.3 and only one cipher suite: AES-128-GCM with SHA-256,
  * which every server is required to implement, agreed over X25519. That is
@@ -13,10 +17,11 @@
  * implementing them, not by preferring against them. A server too old for
  * 1.3 does not get a weaker connection here; it gets no connection. */
 
-/* Runs the whole handshake, including checking the certificate chain
-   against the host name asked for. False means no connection: the reason is
-   in tls_error and is meant to be shown to somebody. */
-bool tls_connect(const char *host);
+/* Runs the whole handshake over a connection that is already open, given
+   by handle, including checking the certificate chain against the host name
+   asked for. False means no connection: the reason is in tls_error and is
+   meant to be shown to somebody. */
+bool tls_connect(int tcp, const char *host);
 
 bool tls_send(const void *data, u32 len);
 u32  tls_recv(u8 *out, u32 cap, u32 timeout_ms);

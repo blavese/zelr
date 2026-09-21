@@ -444,8 +444,16 @@ static inline int wh_dechunk(char *body, int len) {
 static char ka_host[URL_HOST];
 static int  ka_port, ka_secure, ka_live;
 
+/* Which socket the kept connection is. It used to be unnecessary: there was
+   one socket on the machine and every call meant that one. A number has to
+   be carried now, and this file still keeps only one at a time -- what the
+   several are for is the browser asking for a page and its pictures at
+   once, which is a layer above this one. */
+static int  ka_sock = -1;
+
 static inline void web_drop(void) {
-    if (ka_live) { disconnect(); ka_live = 0; }
+    if (ka_live) { disconnect(ka_sock); ka_live = 0; }
+    ka_sock = -1;
 }
 
 static inline int ka_matches(const url_t *u) {
@@ -477,19 +485,21 @@ static inline int web_fetch_once(const url_t *u, const char *body,
            the next line means the bytes after it are going to the site that
            was asked for and not merely to whatever answered. */
         int rc = connect_tls(u->host, u->port);
-        if (rc != 0) {
+        if (rc < 0) {
             /* Only a handshake that was actually reached has a reason worth
                reading. Asking TLS why a machine with no address failed gets
                "no error", which is true and useless. */
             if (rc == NET_ERR_TLS) tls_why(r->how, sizeof(r->how));
             return web_err_from(rc);
         }
+        ka_sock = rc;
         r->secure = 1;
         tls_what(r->how, sizeof(r->how));
     } else {
         web_drop();
         int rc = connect(u->host, u->port);
-        if (rc != 0) return web_err_from(rc);
+        if (rc < 0) return web_err_from(rc);
+        ka_sock = rc;
     }
 
     char req[URL_PATH + URL_HOST + CK_VALUE + 512];
@@ -532,7 +542,7 @@ static inline int web_fetch_once(const url_t *u, const char *body,
         if (n >= 0) n = wh_add(req, sizeof(req), n, "\r\n");
     }
     if (n >= 0) n = wh_add(req, sizeof(req), n, "\r\n");
-    if (n < 0) { disconnect(); return WEB_ERR_SEND; }
+    if (n < 0) { web_drop(); return WEB_ERR_SEND; }
 
     /* The socket takes 1400 bytes at a time, and a long path can be more
        than that. */
@@ -540,7 +550,7 @@ static inline int web_fetch_once(const url_t *u, const char *body,
     while (sent < n) {
         int piece = n - sent;
         if (piece > 1400) piece = 1400;
-        if (send(req + sent, piece) < 0) { disconnect(); return WEB_ERR_SEND; }
+        if (send(ka_sock, req + sent, piece) < 0) { web_drop(); return WEB_ERR_SEND; }
         sent += piece;
     }
 
@@ -551,8 +561,8 @@ static inline int web_fetch_once(const url_t *u, const char *body,
         while (bs < blen) {
             int piece = blen - bs;
             if (piece > 1400) piece = 1400;
-            if (send(body + bs, piece) < 0) {
-                disconnect();
+            if (send(ka_sock, body + bs, piece) < 0) {
+                web_drop();
                 return WEB_ERR_SEND;
             }
             bs += piece;
@@ -567,7 +577,7 @@ static inline int web_fetch_once(const url_t *u, const char *body,
         if (room <= 0) { r->truncated = 1; break; }
         int piece = room > 32768 ? 32768 : room;
 
-        int got = recv(buf + total, piece);
+        int got = recv(ka_sock, buf + total, piece);
         if (got == NET_EOF) break;
         if (got < 0) break;
         if (got == 0) {
@@ -628,8 +638,9 @@ static inline int web_fetch_once(const url_t *u, const char *body,
         ka_secure = u->secure;
         w_copy(ka_host, sizeof(ka_host), u->host, sizeof(ka_host));
     } else {
-        disconnect();
+        disconnect(ka_sock);
         ka_live = 0;
+        ka_sock = -1;
     }
 
     buf[total < cap ? total : cap - 1] = 0;
