@@ -301,3 +301,17 @@ builtin_argvtest_end:
 builtin_sigtest_start:
 .incbin "build/user/sigtest.elf"
 builtin_sigtest_end:
+
+.balign 4
+.global builtin_faulttest_start
+.global builtin_faulttest_end
+builtin_faulttest_start:
+.incbin "build/user/faulttest.elf"
+builtin_faulttest_end:
+
+.balign 4
+.global builtin_maptest_start
+.global builtin_maptest_end
+builtin_maptest_start:
+.incbin "build/user/maptest.elf"
+builtin_maptest_end:

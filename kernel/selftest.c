@@ -3038,11 +3038,21 @@ static void test_blackbox(void) {
        that a real fault cannot be relied on to reach. */
     registers_t r;
     memset(&r, 0, sizeof(r));
-    r.int_no = 14; r.err_code = 2; r.rip = 0xDEAD1000; r.rsp = 0x7FF0;
+    /* An address that needs all sixty-four bits, because every address on
+       this machine does: a program lives above 0x8040000000 and the
+       kernel's own half starts at 0xFFFF800000000000.
+
+       %p used to cast to u32 and print eight digits, so every address in
+       every panic and every fault report was the bottom half of the real
+       one -- not a rounded answer but a different address, and usually a
+       plausible looking one. This check asked for `0xdead1000` and was
+       satisfied by exactly that truncation. */
+    r.int_no = 14; r.err_code = 2; r.rip = 0x804000DEAD1000ull; r.rsp = 0x7FF0;
     bb_fault(&r, "a test fault");
     ok("a fault names itself", bb_contains("!! a test fault"));
     ok("a fault records the vector", bb_contains("vec=14"));
-    ok("a fault records rip", bb_contains("0xdead1000"));
+    ok("a fault records rip, all of it",
+       bb_contains("0x00804000dead1000"));
 
     /* Overflow. What must survive is the end, because the end is the fault. */
     for (int i = 0; i < 400; i++)

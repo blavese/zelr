@@ -54,6 +54,26 @@ static void put_uint(sink_t *s, u32 v, u32 base, int upper,
     if (left) emit_pad(s, ' ', width - digits_len);
 }
 
+/* A pointer, all of it.
+ *
+ * %p took a void *, cast it to u32 and printed eight hex digits, on a
+ * kernel where nothing a pointer refers to fits in thirty-two bits: a
+ * program lives at 0x8040000000 and the kernel's own half starts at
+ * 0xFFFF800000000000. So every address in every panic, every black box
+ * entry and every fault report was the bottom half of the real one, which
+ * is not a rounded answer -- it is a different address, and one that
+ * usually looks plausible.
+ *
+ * Found by a fault report that named 0x00000000 as the address a program
+ * had read when the address it had read was 0xFFFF800000000000.
+ */
+static void put_ptr(sink_t *s, u64 v) {
+    const char *digits = "0123456789abcdef";
+    emit_str(s, "0x");
+    for (int shift = 60; shift >= 0; shift -= 4)
+        emit(s, digits[(v >> shift) & 0xF]);
+}
+
 static void put_int(sink_t *s, i32 v, int width, char pad, bool left) {
     if (v < 0) {
         emit(s, '-');
@@ -80,10 +100,7 @@ static void format(sink_t *s, const char *fmt, va_list ap) {
             case 'x': put_uint(s, va_arg(ap, u32), 16, 0, width, pad, left); break;
             case 'X': put_uint(s, va_arg(ap, u32), 16, 1, width, pad, left); break;
             case 'b': put_uint(s, va_arg(ap, u32), 2, 0, width, pad, left); break;
-            case 'p':
-                emit_str(s, "0x");
-                put_uint(s, (u32)(uintptr_t)va_arg(ap, void *), 16, 0, 8, '0', false);
-                break;
+            case 'p': put_ptr(s, (u64)(uintptr_t)va_arg(ap, void *)); break;
             case 'c': {
                 char c = (char)va_arg(ap, int);
                 if (!left) emit_pad(s, ' ', width - 1);

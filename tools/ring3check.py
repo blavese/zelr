@@ -43,6 +43,8 @@ SUITES = [
     ("cowtest",   "COWTEST_PASS",   "what a fork copies", 180),
     ("argvtest",  "ARGVTEST_PASS",  "what a program was started on", 120),
     ("sigtest",   "SIGTEST_PASS",   "being told about a signal", 180),
+    ("faulttest", "FAULTTEST_PASS", "a program that faults, and a machine that does not", 240),
+    ("maptest",   "MAPTEST_PASS",   "memory that costs what it is used", 180),
 ]
 
 
