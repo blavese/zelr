@@ -1,4 +1,5 @@
 #include "fd.h"
+#include "diskfs.h"
 #include "heap.h"
 #include "io.h"
 #include "keyboard.h"
@@ -386,6 +387,34 @@ bool fd_close(int fd) {
     int oi = t[fd];
     t[fd] = -1;
     return of_unref(oi);
+}
+
+/* What has been written, put where the power going will not take it.
+ *
+ * A file lives in memory until its last descriptor closes, which is fine
+ * for a program that writes something and stops and is no use at all to one
+ * that keeps a file open -- a log, a database, anything long running. For
+ * those, everything written since the file was opened is in memory and on
+ * the disk there is nothing.
+ *
+ * vfs_write goes through fat_write_file, which writes the new copy into
+ * clusters nothing points at, flushes, swings the directory entry in one
+ * sector write and flushes again. So this returning true means the bytes
+ * are on the drive and not in its cache.
+ *
+ * A pipe and the console have no disk behind them and are quietly fine.
+ */
+bool fd_sync(int fd) {
+    ofile_t *f = lookup(fd);
+    if (!f) return false;
+    if (f->kind != OF_FILE) return true;
+
+    if (!f->dirty) return diskfs_flush();   /* nothing of ours; still ask the drive */
+
+    if (!vfs_write(f->path, f->data ? f->data : (const u8 *)"", f->size))
+        return false;
+    f->dirty = false;
+    return true;
 }
 
 /* --- duplicating --------------------------------------------------------- */

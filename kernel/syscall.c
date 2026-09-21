@@ -352,6 +352,17 @@ static i64 sys_signal(registers_t *r) {
    interrupted at, so what comes out of the interrupt gate is the program
    carrying on where the signal found it -- which is why the value handed
    back is the rax that was saved rather than a result of anything. */
+static i64 sys_rename(registers_t *r) {
+    char from[VFS_PATH_MAX], to[VFS_PATH_MAX];
+    if (!copy_path(r->rbx, from, sizeof(from))) return -1;
+    if (!copy_path(r->rcx, to, sizeof(to))) return -1;
+    return vfs_rename(from, to) ? 0 : -1;
+}
+
+static i64 sys_fsync(registers_t *r) {
+    return fd_sync((int)r->rbx) ? 0 : -1;
+}
+
 static i64 sys_mmap(registers_t *r) {
     /* The length and what it may be used for. No address hint: the
        kernel picks, because a program that picks is a program that can
@@ -1039,6 +1050,8 @@ static const syscall_fn TABLE[] = {
     [SYS_SIGRETURN]   = sys_sigreturn,
     [SYS_MMAP]        = sys_mmap,
     [SYS_MUNMAP]      = sys_munmap,
+    [SYS_FSYNC]       = sys_fsync,
+    [SYS_RENAME]      = sys_rename,
 };
 
 #define N_SYSCALLS (sizeof(TABLE) / sizeof(TABLE[0]))

@@ -90,6 +90,12 @@ typedef long long          zelr_word;
 #define SYS_MMAP          59
 #define SYS_MUNMAP        60
 
+/* What has been written, put where the power going will not take it. */
+#define SYS_FSYNC         61
+
+/* A different name for a file, within one directory. */
+#define SYS_RENAME        62
+
 /* The same socket, encrypted. See connect_tls below. */
 #define SYS_TLS_CONNECT   45
 #define SYS_TLS_STATUS    46
@@ -605,6 +611,34 @@ static inline void *map(u64 len, int prot) {
    unmap that fails halfway has taken the pages and kept the promise. */
 static inline int unmap(void *at, u64 len) {
     return (int)syscall(SYS_MUNMAP, (zelr_word)at, (zelr_word)len, 0);
+}
+
+/* Puts what has been written to this file where the power going will not
+   take it, and does not return until it is there.
+
+   A file is held in memory until its last descriptor closes. That is fine
+   for a program that writes something and stops, and no use at all to one
+   that keeps a file open: everything written since is in memory and on
+   the disk there is nothing. This is how a program says now.
+
+   Returning 0 means the bytes are on the drive rather than in its cache.
+   A pipe and the console have no disk behind them and are quietly fine. */
+/* A different name for a file, within one directory on the disk.
+
+   One write of eleven bytes inside the directory entry that is already
+   there, so there is never a moment with two names for the file or none.
+   An existing destination is removed first.
+
+   Across directories is refused, and so is a name that does not fit 8.3,
+   because both would need a second entry and FAT has nowhere to say that
+   two entries are one rename in progress. Copy and delete instead: it is
+   slower, it is not atomic either, and it does not corrupt anything. */
+static inline int rename(const char *from, const char *to) {
+    return (int)syscall(SYS_RENAME, (zelr_word)from, (zelr_word)to, 0);
+}
+
+static inline int fsync(int fd) {
+    return (int)syscall(SYS_FSYNC, fd, 0, 0);
 }
 
 static inline void *sbrk(i64 delta) {

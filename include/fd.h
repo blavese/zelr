@@ -65,6 +65,13 @@ int  fd_seek(int fd, i32 offset, u32 whence);         /* 0 set, 1 cur, 2 end */
 int  fd_size(int fd);
 bool fd_close(int fd);
 
+/* Puts what has been written where it will survive the power going.
+
+   A file is held in memory until its last descriptor closes, so a
+   program that writes a log and keeps it open has nothing on the disk at
+   all. This is how it says now rather than at the end. */
+bool fd_sync(int fd);
+
 /* The lowest free number, pointing at the same description as `fd`. */
 int  fd_dup(int fd);
 
