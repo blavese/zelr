@@ -96,6 +96,9 @@ typedef long long          zelr_word;
 /* A different name for a file, within one directory. */
 #define SYS_RENAME        62
 
+/* Waiting on several descriptors at once. */
+#define SYS_POLL          63
+
 /* The same socket, encrypted. See connect_tls below. */
 #define SYS_TLS_CONNECT   45
 #define SYS_TLS_STATUS    46
@@ -633,6 +636,39 @@ static inline int unmap(void *at, u64 len) {
    because both would need a second entry and FAT has nowhere to say that
    two entries are one rename in progress. Copy and delete instead: it is
    slower, it is not atomic either, and it does not corrupt anything. */
+/* --- waiting on several descriptors at once ----------------------------
+ *
+ * Every read blocks, which is fine for a program doing one thing and
+ * impossible for one doing two: reading either descriptor is a commitment
+ * to it, and the other one is then not being watched.
+ *
+ * The bits are the ones every system uses, so code written elsewhere means
+ * what it says here.
+ *
+ *   pollfd_t w[2] = { { 0, POLLIN, 0 }, { fd, POLLIN, 0 } };
+ *   if (poll(w, 2, 1000) > 0) { ... }
+ *
+ * It looks again rather than being woken, so it can be up to a tick late.
+ * At most sixteen at once.
+ */
+#define POLLIN   0x001
+#define POLLOUT  0x004
+#define POLLERR  0x008
+#define POLLHUP  0x010
+#define POLLNVAL 0x020
+
+typedef struct {
+    int   fd;
+    short events;
+    short revents;
+} pollfd_t;
+
+/* How many have something to report, 0 if the wait ran out, -1 on a bad
+   ask. A negative timeout waits for as long as it takes. */
+static inline int poll(pollfd_t *fds, u32 n, int timeout_ms) {
+    return (int)syscall(SYS_POLL, (zelr_word)fds, (zelr_word)n, timeout_ms);
+}
+
 static inline int rename(const char *from, const char *to) {
     return (int)syscall(SYS_RENAME, (zelr_word)from, (zelr_word)to, 0);
 }

@@ -1537,12 +1537,23 @@ large range:
   matters and a guess in the ones that do not.
 - **No job control.** `cmd &` starts something and stops waiting for it, and
   nothing keeps a list; `jobs` says so rather than printing an empty one.
-- **Fifty-eight system calls.** Enough to print, walk directories, read and
-  write files, open a TCP connection, sleep, exit, fork, exec, wait on a
-  child, make a pipe, move a descriptor and own a window. There is no signal
-  handler and no memory mapping. The numbers are fixed: a program built
-  somewhere else has nothing but the number to go on, so a call that goes
-  away leaves a gap rather than having its number reused.
+- **Sixty-three system calls.** Enough to print, walk directories, read and
+  write files, rename one, say when it must be on the disk, open a TCP
+  connection, sleep, exit, fork, exec, wait on a child, make a pipe, wait
+  on several descriptors at once, map memory, catch a signal and own a
+  window. The numbers are fixed: a program built somewhere else has
+  nothing but the number to go on, so a call that goes away leaves a gap
+  rather than having its number reused.
+- **No `fcntl` and no `ioctl`.** `dup` and `dup2` are what `F_DUPFD`
+  would be for, and there are no file status flags to get or set: a
+  descriptor here has no non-blocking mode, because `poll` is how a
+  program avoids blocking. `ioctl` is a name for everything that did not
+  fit anywhere else, and nothing here has asked to be that yet.
+- **`rename` works inside one directory.** Across directories is refused
+  rather than done unsafely: FAT has nowhere to record that two entries
+  are one rename in progress, so a power cut between writing the second
+  and deleting the first leaves two names for one chain of clusters, and
+  then deleting either corrupts the other. Copy and delete instead.
 - **No environment.** A program is started on words and nothing else. `envp`
   is a terminator, present so that startup code walking past the end of
   `argv` finds what it expects.

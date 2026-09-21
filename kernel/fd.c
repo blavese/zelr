@@ -4,6 +4,7 @@
 #include "io.h"
 #include "keyboard.h"
 #include "pipe.h"
+#include "timer.h"
 #include "printf.h"
 #include "sched.h"
 #include "signal.h"
@@ -124,6 +125,17 @@ static bool of_unref(int oi) {
     memset(f, 0, sizeof(ofile_t));
     return ok;
 }
+
+/* What this descriptor could do right now, of the things being asked
+   about.
+
+   A file is always ready, the way it is everywhere: a read that reaches the
+   end returns nothing, and nothing is an answer rather than a wait. The
+   console is ready when a key is waiting. A pipe is ready when there are
+   bytes in it, or when the other end has gone -- and a read end whose
+   writers have all closed reports POLLIN as well as POLLHUP, so a program
+   that asked only about reading still wakes up and reads its zero. */
+static short fd_ready_now(int fd, short want);
 
 static ofile_t *lookup(int fd) {
     if (fd < 0 || fd >= FD_MAX) return 0;
@@ -404,6 +416,67 @@ bool fd_close(int fd) {
  *
  * A pipe and the console have no disk behind them and are quietly fine.
  */
+static short fd_ready_now(int fd, short want) {
+    ofile_t *f = lookup(fd);
+    if (!f) return POLLNVAL;
+
+    short got = 0;
+    if (f->kind == OF_CONSOLE) {
+        if (kbd_has_char()) got |= POLLIN;
+        got |= POLLOUT;                     /* the screen is always willing */
+    } else if (f->kind == OF_FILE) {
+        got |= POLLIN | POLLOUT;
+    } else if (f->kind == OF_PIPE && f->pipe) {
+        if (f->writing) {
+            if (!f->pipe->readers) got |= POLLERR;
+            else if (f->pipe->count < PIPE_SIZE) got |= POLLOUT;
+        } else {
+            if (f->pipe->count) got |= POLLIN;
+            else if (!f->pipe->writers) got |= POLLIN | POLLHUP;
+        }
+    } else {
+        return POLLNVAL;
+    }
+
+    /* What was asked about, plus the three that are reported whether they
+       were asked about or not. A program cannot decline to be told that the
+       other end has gone. */
+    return (short)(got & (want | POLLERR | POLLHUP | POLLNVAL));
+}
+
+int fd_poll(pollfd_t *fds, u32 n, int timeout_ms) {
+    if (n > POLL_MAX) return -1;
+
+    /* Looked at again rather than woken.
+     *
+       Every one of these has a wait queue behind it already -- a pipe has
+       two -- and waiting on several at once means being on several queues
+       and being taken off all of them when any one fires, which this
+       kernel's wait has no way to express. So this looks, and if nothing
+       has happened it sleeps a tick and looks again.
+
+       The cost is latency: up to one tick, ten milliseconds, later than a
+       queue would have been. The cost of the other one is a rewrite of
+       waiting, and this is honest about which it is rather than pretending
+       a tick is instant. */
+    u64 hz = timer_hz();
+    u64 deadline = 0;
+    if (timeout_ms > 0)
+        deadline = timer_ticks() + ((u64)timeout_ms * hz + 999u) / 1000u + 1;
+
+    for (;;) {
+        int ready = 0;
+        for (u32 i = 0; i < n; i++) {
+            fds[i].revents = fd_ready_now(fds[i].fd, fds[i].events);
+            if (fds[i].revents) ready++;
+        }
+        if (ready) return ready;
+        if (timeout_ms == 0) return 0;
+        if (timeout_ms > 0 && timer_ticks() >= deadline) return 0;
+        task_sleep(1000 / (u32)hz ? 1000 / (u32)hz : 1);
+    }
+}
+
 bool fd_sync(int fd) {
     ofile_t *f = lookup(fd);
     if (!f) return false;

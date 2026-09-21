@@ -46,6 +46,7 @@ SUITES = [
     ("faulttest", "FAULTTEST_PASS", "a program that faults, and a machine that does not", 240),
     ("maptest",   "MAPTEST_PASS",   "memory that costs what it is used", 180),
     ("durtest",   "DURTEST_PASS",   "saying now about a file, and renaming one", 180),
+    ("polltest",  "POLLTEST_PASS",  "waiting on several descriptors at once", 180),
 ]
 
 

@@ -169,6 +169,11 @@
    other. A caller that needs it can copy and delete. */
 #define SYS_RENAME        62
 
+/* Waiting on several descriptors at once, because every read here blocks
+   and a program doing two things cannot commit to either. The bits are
+   the ones every system uses: see include/fd.h. */
+#define SYS_POLL          63
+
 /* What a window is showing, in words, so the desktop's find can look
    through it; and what is being looked for, for a window that has just been
    told somebody is looking. */

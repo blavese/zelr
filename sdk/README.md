@@ -28,7 +28,7 @@ int main(int argc, char **argv) {
 }
 ```
 
-`zelr.h` is the whole interface: fifty-eight system calls and a little sugar
+`zelr.h` is the whole interface: sixty-three system calls and a little sugar
 over them. Every one is `int $0x80` with the number in `rax`, so there is
 nothing to link against and nothing to find at runtime.
 
@@ -110,7 +110,13 @@ target with nothing installed. Any clang and lld will do: set `CC`.
   on your own stack, and the same signal is held off until it returns.
 - **No environment.** `envp` is a terminator and nothing else.
 - **No threads.** `fork` makes a process; there is nothing smaller.
-- **No memory mapping.** `sbrk` moves a break, and that is the whole of it.
+- **No file mapping.** `map` is anonymous zeroed memory, given a page at a
+  time as you touch it. Mapping a file would mean holding it open behind
+  your back or reading a path inside the fault handler, and `read` reads
+  files.
+- **No `fcntl`, no `ioctl`.** `dup`/`dup2` cover `F_DUPFD`, and there are
+  no status flags: no non-blocking mode, because `poll` is how you avoid
+  blocking.
 - **No shared libraries**, which is why every program here is one `.c` file:
   what would be a library is a header included into it.
 

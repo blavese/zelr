@@ -72,6 +72,34 @@ bool fd_close(int fd);
    all. This is how it says now rather than at the end. */
 bool fd_sync(int fd);
 
+/* --- waiting on several descriptors at once -----------------------------
+ *
+ * Every read here blocks, which is fine for a program doing one thing and
+ * impossible for one doing two. A shell that wants to notice both a
+ * keystroke and a pipe filling up has, without this, no way to wait for
+ * whichever happens first: reading either one is a commitment to it.
+ *
+ * The bits are the ones every system uses, so that code written elsewhere
+ * means what it says.
+ */
+#define POLLIN   0x001
+#define POLLOUT  0x004
+#define POLLERR  0x008
+#define POLLHUP  0x010
+#define POLLNVAL 0x020
+
+#define POLL_MAX 16
+
+typedef struct {
+    int   fd;
+    short events;              /* what is being waited for */
+    short revents;             /* what happened */
+} pollfd_t;
+
+/* How many of them have something to report, or 0 if the wait ran out.
+   A negative timeout waits forever; zero asks and returns. */
+int fd_poll(pollfd_t *fds, u32 n, int timeout_ms);
+
 /* The lowest free number, pointing at the same description as `fd`. */
 int  fd_dup(int fd);
 
