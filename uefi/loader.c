@@ -380,8 +380,12 @@ static void take_the_machine(EFI_HANDLE image, handoff_t *h) {
 /* --- entry -------------------------------------------------------------- */
 
 /* Where the kernel is linked. The BIOS loader puts it here too, so the same
-   image works either way. */
-#define KERNEL_PHYS 0x100000ull
+   image works either way.
+
+   linker.ld decides this and tools/check_loader.py refuses a build where
+   this disagrees with it, because a loader that copies a kernel to the wrong
+   address does not fail: it jumps. */
+#define KERNEL_PHYS 0x1000000ull
 
 /* The handoff lives at a fixed low address rather than in firmware memory,
    because everything the firmware allocated stops being described the moment

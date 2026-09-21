@@ -52,7 +52,13 @@ BLOBS=$(cat build/user/*.elf build/trampoline.bin | cksum | cut -d' ' -f1)
 # The flat image is what both bootloaders copy into place, and what a
 # multiboot loader is given: the a.out kludge in boot/boot.S points at this
 # rather than at the ELF, because no multiboot loader will parse a 64-bit one.
-python tools/flatten.py build/zelr.elf build/zelr.bin 0x100000 >/dev/null
+#
+# Flattened to the address it was linked for, asked rather than repeated. A
+# flat image is just bytes and carries no record of where it belongs, so the
+# two numbers disagreeing produces a file that looks entirely correct and
+# jumps into the middle of itself.
+LOAD_AT=$(python tools/loadaddr.py)
+python tools/flatten.py build/zelr.elf build/zelr.bin "$LOAD_AT" >/dev/null
 
 echo "built build/zelr.elf ($(filesize build/zelr.elf) bytes)"
 echo "      build/zelr.bin ($(filesize build/zelr.bin) bytes)"

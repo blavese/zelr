@@ -38,6 +38,8 @@ import subprocess
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from loadaddr import load_address                        # noqa: E402
 BUILD = os.path.join(ROOT, "build")
 SECTOR = 2048
 
@@ -309,8 +311,9 @@ def main():
 
     kernel_elf = os.path.join(BUILD, "zelr.elf")
     payload_path = os.path.join(BUILD, "zelr.bin")
+    load_at = load_address()
     subprocess.run([sys.executable, os.path.join(ROOT, "tools", "flatten.py"),
-                    kernel_elf, payload_path, "0x100000"],
+                    kernel_elf, payload_path, "0x%X" % load_at],
                    cwd=ROOT, check=True, stdout=subprocess.DEVNULL)
 
     loader = open(os.path.join(BUILD, "cdboot.bin"), "rb").read()
@@ -347,7 +350,7 @@ def main():
     # failure is indistinguishable from a scratched disc.
     total_sectors = (total_sectors + 15) & ~15
 
-    loader = patch_loader(loader, payload_lba, len(payload), entry, 0x100000,
+    loader = patch_loader(loader, payload_lba, len(payload), entry, load_at,
                           LOADER_LBA)
 
     le_table, be_table, table_size = path_tables(ROOT_DIR_LBA)

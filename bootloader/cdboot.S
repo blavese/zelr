@@ -44,7 +44,7 @@ _start:
 patch_lba:      .long 0          /* first 2048 byte sector of the payload */
 patch_bytes:    .long 0          /* how many bytes of payload there are */
 patch_entry:    .long 0          /* where to jump once it is in memory */
-patch_load:     .long 0x100000   /* where the payload belongs */
+patch_load:     .long 0x1000000  /* where the payload belongs */
 patch_self:     .long 0          /* the sector this file itself came from */
 
 /* Where things go while we work.
@@ -258,7 +258,7 @@ real_start:
 
 /* --- real mode helpers -------------------------------------------------- */
 
-/* The first four bytes at 0x100000 against the first four of ZELRKRN. Read
+/* The first four bytes of the payload against the first four of ZELRKRN. Read
    through FS for the same reason the copy is: if the big limit is not there
    any more this is exactly as blind as the copy was, and says so. */
 check_payload:
@@ -676,7 +676,10 @@ zero_handoff:
     movl    $0x36344846, %es:H_MAGIC
     movl    $0x5A454C52, %es:H_MAGIC + 4
 
-    movl    $0x00100000, %es:H_KERNEL_BASE
+    /* Where the kernel went, which is whatever patch_load says and not a
+       number repeated here. */
+    movl    patch_load, %eax
+    movl    %eax, %es:H_KERNEL_BASE
     movl    $0, %es:H_KERNEL_BASE + 4
     movl    patch_bytes, %eax
     movl    %eax, %es:H_KERNEL_SIZE
@@ -708,8 +711,20 @@ protected:
 
     /* The kernel states its entry points in the first bytes of its own
        image rather than being loaded at a fixed one: the second is for a
-       loader still in 32-bit protected mode, which is what this is. */
-    movl    $0x00100000, %esi
+       loader still in 32-bit protected mode, which is what this is.
+
+       Read from patch_load, which is where the payload actually went. This
+       was a literal 0x00100000 and it was the one copy of the load address
+       that moving the kernel did not find, because it was spelled with the
+       leading zeroes. What it did was read the entry point out of memory
+       that now holds nothing, and jump there: #UD at 0x00000003, a triple
+       fault, and a machine that resets with the loader's last message still
+       on the screen. Still readable, still a lie.
+
+       The linker script decides this address and tools/check_loader.py
+       refuses a build where patch_load disagrees with it, so there is one
+       place to change and one place that checks. */
+    movl    patch_load, %esi
     movl    16(%esi), %ecx               /* entry32 */
 
     movl    $(HANDOFF_SEG * 16), %ebx    /* the handoff, in ebx */

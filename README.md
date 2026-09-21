@@ -1511,22 +1511,28 @@ large range:
 - **The system info window is still kernel code**, because it reports on the
   allocator, the scheduler and the clock, and no system call exposes those.
   Every other window on the desktop belongs to a ring 3 process.
-- **It does not boot under UEFI on firmware that puts something at eight
-  megabytes.** The kernel is linked to run at one megabyte and is a little
-  over nine, and the firmware this is tested against keeps its ACPI NVS at
-  eight — so the range the kernel needs is not the firmware's to give and
-  is not the loader's to take. The BIOS paths are unaffected, because
-  nothing else is down there.
+- **A machine needs more memory than it used to.** The kernel is linked at
+  sixteen megabytes rather than one, and the frame bitmap and the heap both
+  follow the image up. It boots and passes its own checks on a machine with
+  forty megabytes; the desktop wants more, for the compositor's two
+  full-screen buffers, and always did.
 
-  This is not new and it is not subtle: it has been true since the kernel
-  grew past seven megabytes, which was before the last release. What was
-  new was finding it, because the loader used to report the firmware's
-  status number and nothing else. It now loads the kernel wherever the
-  firmware will have it, moves it into place once boot services are gone,
-  and when it cannot, says what is in the way and where. The fix is to link
-  the kernel somewhere it fits, which is a change to both loaders and to
-  the identity map and is the next thing rather than a footnote to this
-  one.
+  Sixteen rather than one because of what one cost. The kernel grew past
+  seven megabytes some releases ago, and UEFI firmware keeps its ACPI
+  tables a little way up — the one tested against puts its NVS at eight.
+  A kernel linked at one megabyte and nine megabytes long therefore needed
+  a range with the firmware's tables in the middle of it, which is not the
+  firmware's to give and not the loader's to take, so both UEFI paths
+  stopped booting and stayed that way for two releases. The loader reported
+  a status number and nothing else, which is why nobody noticed.
+
+  The address now lives in `linker.ld` and everything that needs it either
+  reads it from there or is checked against it, because moving it turned up
+  seven copies and the seventh was spelled `0x00100000` and did not come up
+  in a search for `0x100000`. What that one did was read the kernel's entry
+  point out of memory that no longer held it and jump there: an invalid
+  opcode at address three, a triple fault, and a machine that reset with
+  the loader's last and most confident message still on the screen.
 - **Two processors cannot be inside the kernel at once.** They run programs
   in parallel, which is where programs spend their time, but one lock covers
   every system call and every fault. That is the coarsest lock there is and
