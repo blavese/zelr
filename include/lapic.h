@@ -26,6 +26,21 @@ void lapic_enable(void);
    be acknowledged or nothing at the same or lower priority arrives again. */
 void lapic_eoi(void);
 
+/* --- a clock of its own ---------------------------------------------------
+ *
+ * The 8254 sends its tick to one processor. That was enough while the other
+ * processors only ever ran a function handed to them and went back to sleep,
+ * and it is not enough for one that is running a task: without an interrupt
+ * of its own, whatever it picked up would run until it gave the processor
+ * back, and a program that never does would own that processor forever.
+ *
+ * So each one arms its own. The count is worked out against the 8254, which
+ * is the only clock this machine knows the rate of -- the local APIC counts
+ * at the bus frequency, and nothing says what that is. */
+void lapic_timer_calibrate(void);
+void lapic_timer_start(u8 vector);
+u32  lapic_timer_hz(void);
+
 /* For smp.c, which sends startup signals through registers this does not
    otherwise need to expose. Null before lapic_init succeeds. */
 volatile u8 *lapic_regs(void);

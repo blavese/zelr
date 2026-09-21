@@ -20,6 +20,7 @@
  * are given something, so there is nothing to race over.
  */
 #include "smp.h"
+#include "sched.h"
 #include "gdt.h"
 #include "idt.h"
 #include "acpi.h"
@@ -36,7 +37,11 @@
 extern const u8 trampoline_start[], trampoline_end[];
 
 #define TRAMPOLINE_PHYS 0x8000
-#define AP_STACK_SIZE   16384
+/* The same as every other kernel stack. It used to be half, which was
+   plenty for a processor that only ever ran a function handed to it -- and
+   is not a choice any more: this stack becomes a task's, and the scheduler
+   paints, guards and measures every task's stack assuming one size. */
+#define AP_STACK_SIZE   TASK_STACK_SIZE
 
 /* Local APIC registers, as offsets from the base. */
 #define LAPIC_ID     0x020
@@ -55,9 +60,26 @@ typedef struct {
     cpu_t info;
     void (*volatile fn)(void *);
     void *volatile arg;
+    u64  stack_base;            /* what it came up on, and its idle task's */
 } slot_t;
 
 static slot_t cpus[SMP_MAX_CPUS];
+
+void smp_note_lock_miss(u32 cpu) {
+    if (cpu < SMP_MAX_CPUS) cpus[cpu].info.lock_misses++;
+}
+
+void smp_note_tick(u32 cpu) {
+    if (cpu < SMP_MAX_CPUS) cpus[cpu].info.local_ticks++;
+}
+
+void sched_note_user_slice(u32 cpu) {
+    if (cpu < SMP_MAX_CPUS) cpus[cpu].info.user_slices++;
+}
+
+bool smp_work_pending(u32 cpu) {
+    return cpu < SMP_MAX_CPUS && cpus[cpu].fn != 0;
+}
 
 u32 smp_this_cpu(void) {
     if (!lapic_present()) return 0;
@@ -84,6 +106,10 @@ const cpu_t *smp_cpu(u32 i) {
 void spin_lock(spinlock_t *lock) {
     while (__sync_lock_test_and_set(lock, 1))
         while (*lock) __asm__ volatile ("pause");
+}
+
+bool spin_try(spinlock_t *lock) {
+    return __sync_lock_test_and_set(lock, 1) == 0;
 }
 
 void spin_unlock(spinlock_t *lock) {
@@ -146,7 +172,14 @@ static bool start_cpu(u32 index) {
 
     u8 *stack = (u8 *)kmalloc(AP_STACK_SIZE);
     if (!stack) return false;
-    memset(stack, 0, AP_STACK_SIZE);
+
+    /* Painted rather than cleared, because this becomes a task's stack and
+       the scheduler checks the bottom word of every task's stack on every
+       switch. A cleared one reads as a stack that has already been run off
+       the end of, and the machine stops on the first switch. */
+    sched_paint_stack((u64)stack);
+    cpus[index].stack_base = (u64)stack;
+
     u64 top = ((u64)stack + AP_STACK_SIZE) & ~0xFull;
 
     /* And the stack an interrupt from ring 3 will land on, which is the
@@ -245,6 +278,19 @@ static void ap_main(void *arg) {
 
     me->info.started = true;
 
+    /* From here this processor is a task like any other: the stack it came
+       up on is its idle task, so the first interrupt has somewhere to save
+       the context it interrupted. Under the lock, because the task ring is
+       the boot processor's to walk. */
+    kernel_lock_acquire();
+    sched_adopt_ap((u32)index, me->stack_base);
+    kernel_lock_release();
+
+    /* And a clock of its own, or nothing would ever take a program off it.
+       The 8254 tick goes to one processor and counts time for the machine;
+       this one only switches tasks. */
+    lapic_timer_start(VEC_LOCAL_TIMER);
+
     for (;;) {
         /* Checked with interrupts off, so a wake-up cannot arrive between
            finding no work and going to sleep and be lost. sti does not take
@@ -256,6 +302,12 @@ static void ap_main(void *arg) {
             __asm__ volatile ("sti");
             void *a = me->arg;
             me->fn = 0;
+            /* Without the kernel lock, deliberately. What is handed out
+               here is arithmetic over memory the caller owns -- half a
+               frame's worth of comparison -- and the caller is a kernel
+               task that is holding the lock while it waits for the answer.
+               Taking it here would be waiting for the processor that is
+               waiting for us. */
             fn(a);
             me->info.jobs++;
             continue;
@@ -333,6 +385,19 @@ void smp_init(void) {
     if (!lapic_init()) return;
     lapic = lapic_regs();
     if (!lapic) return;
+
+    /* How fast the local APIC counts, measured here and used by every
+       processor.
+     *
+       It belongs after lapic_init and before any other processor is
+       started: the registers have to be mapped for the counter to be read
+       at all, and the measurement needs the 8254 to itself, which it does
+       not have once something else is running. Calling it before the
+       registers were mapped is exactly what happened the first time, and
+       what it produced was a rate of zero -- so every processor armed
+       nothing, and the machine looked like one that had simply chosen not
+       to schedule anything on them. */
+    lapic_timer_calibrate();
 
     u8 self = lapic_id();
     cpus[0].info.apic_id = self;

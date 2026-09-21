@@ -1,4 +1,6 @@
 #include "idt.h"
+#include "sched.h"
+#include "smp.h"
 #include "paging.h"
 #include "printf.h"
 #include "string.h"
@@ -66,6 +68,9 @@ void idt_init(void) {
        a program asks through the system call gate, not through this. */
     set_gate(VEC_YIELD, (u64)isr_stub_table[50], GDT_KERNEL_CODE, 0x8E);
 
+    /* Every processor's own timer, delivered through its own local APIC. */
+    set_gate(VEC_LOCAL_TIMER, (u64)isr_stub_table[51], GDT_KERNEL_CODE, 0x8E);
+
     idt_flush((u64)&idtp);
 }
 
@@ -82,8 +87,54 @@ static const char *EXC[] = {
     "hypervisor injection", "VMM communication", "security", "reserved"
 };
 
+/* Whether a frame belongs to a program rather than to the kernel. The low
+   two bits of the saved code selector are the privilege it was running at,
+   and three is ring 3. */
+static inline bool from_user(const registers_t *r) { return (r->cs & 3) == 3; }
+
 /* Called from isr_common in isr.S */
 u64 isr_dispatch(registers_t *r) {
+    /* The door into the kernel.
+     *
+     * A processor holds the kernel lock whenever it is not running ring 3
+     * code, so arriving from a program is where it is taken and returning
+     * to one is where it is given back. Arriving from the kernel means this
+     * processor already has it and must not ask again -- there is no path
+     * that takes it twice, which is what lets it be a plain spinlock.
+     *
+     * Interrupts are off for all of this: every gate in this table is an
+     * interrupt gate, including the system call one, so nothing lands in
+     * the middle of a processor holding this. */
+    /* The signal that wakes a halted processor is answered before any of
+       that. It touches nothing the lock covers -- its whole purpose is to
+       end a halt -- and queueing for the lock here is a processor that has
+       stopped answering the one holding it. */
+    if (r->int_no == VEC_LOCAL_TIMER) smp_note_tick(smp_this_cpu());
+    if (r->int_no == VEC_AP_WAKE) { lapic_eoi(); return (u64)r; }
+
+    if (!kernel_lock_held_here()) {
+        /* A processor's own timer does not wait for it.
+         *
+         * Preemption is worth having and is not worth blocking for: the
+         * only thing this interrupt wants the lock for is to look through
+         * the task ring, and the ring will still be there a hundredth of a
+         * second later. Waiting here is worse than skipping, because the
+         * wait happens with interrupts off on a processor whose idle loop
+         * is also where work handed to it gets picked up -- so a processor
+         * queueing for the lock is a processor that has stopped answering
+         * the one holding it. That was not a theory: it deadlocked the
+         * compositor's half-a-frame handoff the first time this ran on
+         * four processors. */
+        if (r->int_no == VEC_LOCAL_TIMER) {
+            if (!kernel_lock_try()) {
+                smp_note_lock_miss(smp_this_cpu());
+                lapic_eoi();
+                return (u64)r;
+            }
+        } else {
+            kernel_lock_acquire();
+        }
+    }
     /* A write to a page that is present is the shape of a copy on write
      * fault and of nothing else here, so it is tried before anything else
      * is done about the fault.
@@ -123,7 +174,7 @@ u64 isr_dispatch(registers_t *r) {
     if (r->int_no >= 32 && r->int_no < 48) {
         if (ioapic_active()) lapic_eoi();
         else                 pic_eoi((u8)(r->int_no - 32));
-    } else if (r->int_no == VEC_AP_WAKE) {
+    } else if (r->int_no == VEC_LOCAL_TIMER || r->int_no == VEC_AP_WAKE) {
         /* Nothing outside the processor delivered this, so only its own
            local APIC has to be told. Forgetting leaves the in-service bit
            set and nothing at that priority is ever delivered again, which
@@ -133,7 +184,27 @@ u64 isr_dispatch(registers_t *r) {
 
     /* The scheduler may hand back a different task's frame. */
     u64 resume = (u64)r;
-    if (r->int_no == 32 || r->int_no == VEC_YIELD)
+    if (r->int_no == 32 || r->int_no == VEC_YIELD ||
+        r->int_no == VEC_LOCAL_TIMER)
         resume = scheduler_switch(resume);
+
+    /* And out of it. What decides is the frame this processor is about to
+       return through, not the one it arrived on: after a switch they belong
+       to different tasks.
+     *
+       Ring 3 is the only place that does not need the lock. Asking instead
+       whether the task is a program was wrong in a way that took three runs
+       in ten to show: a program preempted in the middle of a system call is
+       a program by that test, so it was resumed without the lock and went
+       on executing kernel code with nothing holding anybody else out. What
+       the saved frame says is where the task actually is, which is the
+       question.
+     *
+       The exception is a processor going to sleep. An idle task's frame is
+       in ring 0 like any other kernel task's, and a sleeping processor
+       holding the one lock is how it would stop every other one from making
+       a system call. */
+    const registers_t *back = (const registers_t *)resume;
+    if (from_user(back) || task_is_idle(task_current())) kernel_lock_release();
     return resume;
 }

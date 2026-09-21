@@ -4,6 +4,7 @@
  * interrupt frame sitting on that stack, so switching tasks is just a matter
  * of telling the interrupt return path to unwind a different one. */
 #include "sched.h"
+#include "smp.h"
 #include "fd.h"
 #include "signal.h"
 #include "winsrv.h"
@@ -36,6 +37,11 @@
  * which is the only honest way to pick a stack size. */
 #define STACK_PAINT 0xC5C5C5C5C5C5C5C5ull
 
+void sched_paint_stack(u64 base) {
+    u64 *w = (u64 *)base;
+    for (u32 i = 0; i < STACK_SIZE / 8; i++) w[i] = STACK_PAINT;
+}
+
 static void paint_stack(u8 *stack) {
     u64 *w = (u64 *)stack;
     for (u32 i = 0; i < STACK_SIZE / 8; i++) w[i] = STACK_PAINT;
@@ -65,7 +71,51 @@ u32 task_stack_headroom(const task_t *t) {
 #define REAP_GRACE (10u * 100u)      /* in ticks, at 100 Hz */
 
 static task_t *head;        /* circular list */
-static task_t *current;
+
+/* --- what each processor is running --------------------------------------
+ *
+ * There was one `current`, because there was one processor that ran tasks.
+ * Everything that asks "what is running" -- a system call working out whose
+ * files to look in, a fault deciding whose program to stop, the scheduler
+ * itself -- was asking about the machine, and now has to ask about the
+ * processor it is asking from.
+ *
+ * Indexed by the number smp_this_cpu gives back, which is the processor's
+ * local APIC id looked up in the table smp.c keeps. */
+static task_t *current_of[SMP_MAX_CPUS];
+
+static inline task_t *cur(void)          { return current_of[smp_this_cpu()]; }
+static inline void set_cur(task_t *t)    { current_of[smp_this_cpu()] = t; }
+
+/* --- one lock for the kernel ---------------------------------------------
+ *
+ * See the note in sched.h for what it covers. `holder` is which processor
+ * has it, and is written only by the one that holds it, so reading it is
+ * asking a question whose answer cannot change under the asker: either it
+ * is you, in which case nobody else can change it, or it is not, in which
+ * case the answer you want is already no. */
+static spinlock_t kernel_lock;
+static volatile int lock_holder = -1;
+
+void kernel_lock_acquire(void) {
+    spin_lock(&kernel_lock);
+    lock_holder = (int)smp_this_cpu();
+}
+
+bool kernel_lock_try(void) {
+    if (!spin_try(&kernel_lock)) return false;
+    lock_holder = (int)smp_this_cpu();
+    return true;
+}
+
+void kernel_lock_release(void) {
+    lock_holder = -1;
+    spin_unlock(&kernel_lock);
+}
+
+bool kernel_lock_held_here(void) {
+    return lock_holder == (int)smp_this_cpu();
+}
 
 /* --- somewhere to go when there is nothing to do -------------------------
  *
@@ -88,7 +138,10 @@ static task_t *current;
  * is. It halts, which is also the thing that lets the processor cool down
  * and a laptop stop spinning its fan, and it charges every tick it spends
  * there to itself as idle rather than as work. */
-static task_t *idle_task;
+/* One each. A processor with nothing to run has to have somewhere of its
+   own to be: sharing one idle task between two of them would be one task
+   running on two processors, which is the one thing a task cannot do. */
+static task_t *idle_of[SMP_MAX_CPUS];
 
 static void idle_entry(void) {
     for (;;) {
@@ -96,13 +149,21 @@ static void idle_entry(void) {
         /* Interrupts are already on -- the frame this task was built with
            sets IF -- so the halt ends at the next tick at the latest. */
         hlt();
-        if (idle_task) idle_task->idle_ticks += timer_ticks() - before;
+        task_t *me = cur();
+        if (me) me->idle_ticks += timer_ticks() - before;
     }
 }
+
+static bool is_idle(const task_t *t) {
+    for (u32 i = 0; i < SMP_MAX_CPUS; i++) if (idle_of[i] == t) return true;
+    return false;
+}
+
+bool task_is_idle(const task_t *t) { return is_idle(t); }
 static u32 next_pid = 1;
 static bool started = false;
 
-void sched_init(void) { head = current = 0; next_pid = 1; started = false; }
+void sched_init(void) { head = 0; next_pid = 1; started = false; }
 
 /* A task starts in the directory its creator was in, which is what makes
    `cd` then `exec` behave the way anyone would expect. */
@@ -124,6 +185,7 @@ task_t *task_create(const char *name, void (*entry)(void)) {
     t->pid = next_pid++;
     strncpy(t->name, name, sizeof(t->name) - 1);
     t->state = TASK_READY;
+    t->on_cpu = -1;
     fpu_blank(fpu_area_of(t));
     inherit_cwd(t);
     /* Started rather than forked, so it gets the three it is born with
@@ -182,6 +244,7 @@ task_t *task_fork(const char *name, u64 dir, const registers_t *frame,
     t->pid = next_pid++;
     strncpy(t->name, name, sizeof(t->name) - 1);
     t->state = TASK_READY;
+    t->on_cpu = -1;
     t->dir = dir;
     t->user = true;
 
@@ -236,6 +299,7 @@ task_t *task_create_user(const char *name, u64 dir, u64 entry, u64 stack_top) {
     t->pid = next_pid++;
     strncpy(t->name, name, sizeof(t->name) - 1);
     t->state = TASK_READY;
+    t->on_cpu = -1;
     t->dir = dir;
     t->user = true;
     fpu_blank(fpu_area_of(t));
@@ -269,7 +333,7 @@ task_t *task_create_user(const char *name, u64 dir, u64 entry, u64 stack_top) {
     return t;
 }
 
-task_t *task_current(void) { return current; }
+task_t *task_current(void) { return cur(); }
 task_t *task_list(void)    { return head; }
 
 task_t *task_by_pid(u32 pid) {
@@ -329,14 +393,35 @@ u32 task_count(void) {
 /* Exactly one lap of the ring, starting after whoever just ran, which is
    what makes this round robin rather than a search that favours the front
    of the list. The task that just ran is itself visited last, so a machine
-   with one runnable task keeps running it. */
+   with one runnable task keeps running it.
+
+   Two things make this a question about a processor rather than about the
+   machine. A task another processor is already running is not available,
+   whatever its state says -- state is about whether it wants to run and
+   on_cpu is about whether it already is. And a processor's idle task is
+   its own: picking somebody else's would be running one task twice.
+
+   Kernel tasks stay on the boot processor. Everything they touch -- the
+   heap, the task list, every driver -- is reached without a lock, and the
+   lock that will let a processor into the kernel is about system calls
+   coming in from ring 3. A kernel task migrating would be kernel code on
+   two processors with nothing between them. */
 static task_t *pick_next(task_t *from) {
     task_t *start = from ? from->next : head;
     if (!start) return 0;
 
+    u32 me = smp_this_cpu();
+
+    /* A processor with a piece of a frame waiting for it is not free. The
+       compositor hands one half out and spins for the answer, so giving
+       that processor a program instead turns a shared frame into a stall
+       the length of the spin. Its own idle loop is where the handed work
+       is picked up, so staying idle is how it gets done. */
+    if (me != 0 && smp_work_pending(me) && idle_of[me]) return idle_of[me];
+
     u64 now = timer_ticks();
     task_t *p = start;
-    task_t *idle_seen = 0;
+    task_t *idle_seen = idle_of[me];
 
     do {
         if (p->state == TASK_SLEEPING && now >= p->wake_at) p->state = TASK_READY;
@@ -354,10 +439,11 @@ static task_t *pick_next(task_t *from) {
 
         if (p->state == TASK_READY || p->state == TASK_RUNNING) {
             /* Idle is runnable by construction and must never be picked
-               over something with work to do, so it is remembered and
-               walked past. */
-            if (p == idle_task) idle_seen = p;
-            else return p;
+               over something with work to do, so it is walked past. */
+            if (is_idle(p))                          { p = p->next; continue; }
+            if (p->on_cpu >= 0 && (u32)p->on_cpu != me) { p = p->next; continue; }
+            if (me != 0 && !p->user)                 { p = p->next; continue; }
+            return p;
         }
         p = p->next;
     } while (p && p != start);
@@ -379,13 +465,13 @@ u64 scheduler_switch(u64 rsp) {
        another slice first. */
     signal_take_pending();
 
-    if (current) {
-        current->rsp = rsp;
+    if (cur()) {
+        cur()->rsp = rsp;
 
         /* The vector registers belong to whoever was running. Two tasks
            doing arithmetic at once read each other's operands without
            this, and the symptom is a wrong number rather than a crash. */
-        fpu_save(fpu_area_of(current));
+        fpu_save(fpu_area_of(cur()));
 
         /* Checked here because this is the one place every task passes
            through, and because the alternative is finding out from a fault
@@ -393,25 +479,34 @@ u64 scheduler_switch(u64 rsp) {
            stack that has already been run off the end of has written over
            whatever was underneath it, and carrying on would be carrying on
            with a heap that is no longer what it says it is. */
-        if (*(const volatile u64 *)current->stack_base != STACK_PAINT)
-            panic("the %s task ran off the end of its kernel stack", current->name);
+        if (*(const volatile u64 *)cur()->stack_base != STACK_PAINT)
+            panic("the %s task ran off the end of its kernel stack", cur()->name);
 
-        if (current->state == TASK_RUNNING) current->state = TASK_READY;
+        if (cur()->state == TASK_RUNNING) cur()->state = TASK_READY;
+
+        /* Let go of it before anything else can pick it up. Held across
+           the choice below, a task that this processor is putting down
+           would be invisible to every other processor for the length of
+           one decision -- which is not wrong, and is a processor idling
+           next to work it could have had. */
+        cur()->on_cpu = -1;
     }
 
-    task_t *next = pick_next(current);
+    task_t *next = pick_next(cur());
     if (!next) return rsp;
 
-    current = next;
-    current->state = TASK_RUNNING;
-    current->slices++;
-    fpu_restore(fpu_area_of(current));
+    set_cur(next);
+    cur()->on_cpu = (int)smp_this_cpu();
+    cur()->state = TASK_RUNNING;
+    cur()->slices++;
+    if (cur()->user) sched_note_user_slice(smp_this_cpu());
+    fpu_restore(fpu_area_of(cur()));
 
     /* The next interrupt taken in this task has to land on a stack the CPU
        can find, and in user mode it finds it here. */
-    tss_set_stack(current->stack_base + STACK_SIZE);
+    tss_set_stack(cur()->stack_base + STACK_SIZE);
 
-    u64 want = current->dir ? current->dir : paging_kernel_directory();
+    u64 want = cur()->dir ? cur()->dir : paging_kernel_directory();
     if (want != paging_current_directory()) paging_switch(want);
 
     /* Reap anything that finished, but never the task we are about to run.
@@ -430,7 +525,7 @@ u64 scheduler_switch(u64 rsp) {
             bool expired = n->died_at && timer_ticks() > n->died_at + REAP_GRACE;
             bool collectable = n->reaped || expired;
             if (n != p && n->state == TASK_DEAD && collectable &&
-                n != current && n != head) {
+                n != cur() && n != head) {
                 p->next = n->next;
                 if (n->dir) paging_free_directory(n->dir);
                 kfree((void *)n->stack_base);
@@ -440,16 +535,50 @@ u64 scheduler_switch(u64 rsp) {
         }
     }
 
-    return current->rsp;
+    return cur()->rsp;
+}
+
+void sched_adopt_ap(u32 cpu, u64 stack_base) {
+    if (cpu >= SMP_MAX_CPUS || idle_of[cpu]) return;
+
+    task_t *t = (task_t *)kcalloc(sizeof(task_t));
+    if (!t) panic("no room for a task record on processor %d", cpu);
+
+    /* The stack it is already standing on, rather than one of its own: this
+       task is not started, it is recognised. The first interrupt on this
+       processor saves the context it was in, and that context is here. */
+    t->stack_base = stack_base;
+    t->pid = next_pid++;
+    strncpy(t->name, "idle", sizeof(t->name) - 1);
+    t->state = TASK_RUNNING;
+    t->on_cpu = (int)cpu;
+    fpu_blank(fpu_area_of(t));
+    strncpy(t->cwd, "/", TASK_CWD_MAX - 1);
+    fd_table_init(t->fd);
+
+    /* Into the ring, behind the head. The list is walked by the scheduler
+       on the other processor, so this is done under the lock. */
+    if (head) { t->next = head->next; head->next = t; }
+    else      { t->next = t; head = t; }
+
+    idle_of[cpu] = t;
+    current_of[cpu] = t;
 }
 
 void sched_start(void) {
     if (!head) panic("sched_start with no tasks");
 
     /* Last, so that the count printed at boot is the number of tasks this
-       machine was asked to run rather than that plus one. */
-    idle_task = task_create("idle", idle_entry);
-    if (!idle_task) panic("no room for an idle task");
+       machine was asked to run rather than that plus one.
+     *
+       One per processor that came up. A processor with nothing to run has
+       to have somewhere of its own to be. */
+    idle_of[0] = task_create("idle", idle_entry);
+    if (!idle_of[0]) panic("no room for an idle task");
+
+    /* Held from here on. This processor is in the kernel and stays there
+       until the first task it picks turns out to be a program. */
+    kernel_lock_acquire();
 
     started = true;
     sti();
@@ -489,7 +618,7 @@ void task_idle_wait(void) {
 
     u64 before = timer_ticks();
     hlt();
-    if (current) current->idle_ticks += timer_ticks() - before;
+    if (cur()) cur()->idle_ticks += timer_ticks() - before;
 }
 
 /* Rounded up, and never to nothing.
@@ -506,31 +635,31 @@ void task_idle_wait(void) {
  * to be counted should still do that much, so anything above zero waits at
  * least one tick. */
 void task_sleep(u32 ms) {
-    if (!current) { sleep_ms(ms); return; }
+    if (!cur()) { sleep_ms(ms); return; }
 
     u32 hz = timer_hz() ? timer_hz() : 100;
     u64 t = ((u64)ms * hz + 999u) / 1000u;
     if (ms && !t) t = 1;
 
-    current->wake_at = timer_ticks() + t;
-    current->state = TASK_SLEEPING;
+    cur()->wake_at = timer_ticks() + t;
+    cur()->state = TASK_SLEEPING;
     task_yield();
 }
 
 void task_exit_with(int status) {
     /* Take back anything the task still holds. A graphical program that
        crashes must not leave its window on the desktop. */
-    if (current) {
-        winsrv_release(current->pid);
-        fd_table_release(current->fd);
-        syscall_release(current->pid);
+    if (cur()) {
+        winsrv_release(cur()->pid);
+        fd_table_release(cur()->fd);
+        syscall_release(cur()->pid);
 
-        current->exit_status = status;
-        current->died_at = timer_ticks();
-        current->state = TASK_DEAD;
+        cur()->exit_status = status;
+        cur()->died_at = timer_ticks();
+        cur()->state = TASK_DEAD;
 
         /* Anyone waiting on this task is waiting on its record. */
-        wake_all(current);
+        wake_all(cur());
     }
     for (;;) task_yield();
 }
