@@ -497,7 +497,10 @@ static void execute(char *buf) {
     }
     else if (!strcmp(c, "mem")) cmd_mem();
     else if (!strcmp(c, "uptime")) cmd_uptime();
-    else if (!strcmp(c, "uname")) kprintf("%s %s x86_64\n", KERNEL_NAME, KERNEL_VERSION);
+    else if (!strcmp(c, "uname"))
+        kprintf("%s %s x86_64\n(c) %s %s, %s\n",
+                KERNEL_NAME, KERNEL_VERSION,
+                KERNEL_YEARS, KERNEL_AUTHOR, KERNEL_LICENSE);
     else if (!strcmp(c, "clear")) vga_clear();
     else if (!strcmp(c, "echo")) {
         char text[LINE_MAX];

@@ -1,3 +1,13 @@
+/* zelr — the interface between a program and the kernel.
+ *
+ * Copyright (C) 2026 blavese
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * This file is the one most likely to be copied on its own, because it is
+ * the whole of what a program needs. It carries its own notice for that
+ * reason. See NOTICE in the repository this came from.
+ */
+
 /* The entire user-facing interface: forty-seven system calls and a little
    sugar. There is no libc here, and nothing is linked in from the kernel;
    every call below crosses the ring boundary through int 0x80. */

@@ -219,6 +219,8 @@ static void banner(void) {
     kprintf("\n  +--------------------------------+\n");
     kprintf("  |  %s %-25s|\n", KERNEL_NAME, KERNEL_VERSION);
     kprintf("  |  x86-64 long mode              |\n");
+    kprintf("  |  (c) %s %-21s|\n", KERNEL_YEARS, KERNEL_AUTHOR);
+    kprintf("  |  %-30s|\n", KERNEL_LICENSE);
     kprintf("  +--------------------------------+\n\n");
     vga_set_color(VGA_LGREY, VGA_BLACK);
 }

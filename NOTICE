@@ -1,0 +1,59 @@
+zelr — an operating system written from scratch for x86-64.
+
+Copyright (C) 2026 blavese
+SPDX-License-Identifier: GPL-3.0-or-later
+
+This program is free software: you can redistribute it and/or modify it
+under the terms of the GNU General Public License as published by the Free
+Software Foundation, either version 3 of the License, or (at your option)
+any later version.
+
+This program is distributed in the hope that it will be useful, but WITHOUT
+ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
+more details. You should have received a copy of it along with this
+program; see LICENSE, or <https://www.gnu.org/licenses/>.
+
+
+WHAT THE LICENCE ASKS OF YOU
+
+You may copy this, change it, and give it to other people. That is the
+point of it. Three things come with that, and they are not optional:
+
+  - keep this notice and the copyright line on it
+  - keep it under the GPL, version 3 or later
+  - give whoever receives it the source, including your changes
+
+A copy with the author taken off it, or a copy shipped without its source,
+is not a use of this licence. It is a copyright infringement, and the
+licence is what makes it one.
+
+
+WHAT IS ORIGINAL HERE
+
+All of it. There is no libc, no bootloader borrowed from elsewhere, no
+driver lifted from another kernel, no cryptography library, no font file, no
+image file. The TCP/IP stack, the TLS 1.3 implementation, the certificate
+checking, the FAT driver, the window server, the web browser, the JavaScript
+interpreter, both bootloaders and every device driver were written for this
+project from their specifications.
+
+Where a published document was implemented, it is named in the source at the
+point of implementation: RFC 7748 for X25519, RFC 8448 for the TLS key
+schedule, FIPS 180 for the hashes, the NIST vectors for AES-GCM, and so on.
+Those are specifications that were read, not code that was copied.
+
+The one exception is stated plainly rather than buried: the Windows launcher
+in launcher/ is a WPF application, and WPF is Microsoft's. Everything it
+does is start QEMU with the kernel that is inside it.
+
+
+THE RECORD
+
+The git history is the account of how this was written: 138 commits between
+29 August 2026 and 22 September 2026, each one saying what changed and why.
+
+Some of that work was done with the assistance of an AI model, recorded in
+the commits it touched by a Co-Authored-By trailer. The design, the
+direction and the decisions are the author's, and so is the copyright; the
+trailers are there because a record that leaves things out is not a record.
