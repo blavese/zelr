@@ -1,7 +1,14 @@
 #!/usr/bin/env bash
 # Builds each user program into a standalone ELF executable. These are not
 # linked against the kernel in any way: the only thing they share with it is
-# the system call numbers in zelr.h.
+# the system call numbers in the header.
+#
+# The header and the link script are in sdk/, not here, because they are the
+# interface rather than this directory's own code. Everything in sdk/ is what
+# a program written anywhere else needs, and these programs use exactly that
+# and nothing more, which is the only way to know it is enough.
+# sdk/README.md says how to build one from outside this repository, and
+# tools/sdkcheck.py does it and runs the result.
 set -e
 cd "$(dirname "$0")"
 
@@ -18,12 +25,13 @@ mkdir -p ../build/user
 for src in *.c; do
   name="${src%.c}"
   "$ZIG" cc -target x86_64-freestanding-none \
+    -I../sdk \
     -ffreestanding -nostdlib -static -O2 -std=gnu11 \
     -fno-sanitize=undefined -fno-stack-protector -fno-stack-check \
     -fno-builtin -fno-pic -fno-pie -mcmodel=large \
     -mno-red-zone \
     -Wall -Wextra \
-    -Wl,-T,link.ld -Wl,--build-id=none \
+    -Wl,-T,../sdk/zelr.ld -Wl,--build-id=none \
     -o "../build/user/$name.elf" "$src"
   echo "  $name.elf  $(filesize "../build/user/$name.elf") bytes"
 done

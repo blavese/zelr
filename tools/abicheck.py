@@ -1,7 +1,7 @@
 """Compares the two sides of the system call interface.
 
 Everything here is declared twice: once in include/syscall.h, which the
-kernel fills in, and once in userland/zelr.h, which a program hands to the
+kernel fills in, and once in sdk/zelr.h, which a program hands to the
 syscall. Nothing makes the two agree.
 
 For structs, the kernel copies sizeof(its own struct) into the address the
@@ -34,7 +34,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from harness import Checks, ROOT                         # noqa: E402
 
 KERNEL = os.path.join(ROOT, "include", "syscall.h")
-USER = os.path.join(ROOT, "userland", "zelr.h")
+USER = os.path.join(ROOT, "sdk", "zelr.h")
 
 # The kernel's name for each shared struct, and the program's name for it.
 PAIRS = [
@@ -115,7 +115,7 @@ def check_numbers(c, ktext, utext):
     c.add("and every name programs use is one the kernel serves",
           not only_user)
     if only_user:
-        print("  only in userland/zelr.h: %s" % ", ".join(only_user))
+        print("  only in sdk/zelr.h: %s" % ", ".join(only_user))
 
     disagree = sorted(n for n in set(kn) & set(un) if kn[n] != un[n])
     for n in disagree:

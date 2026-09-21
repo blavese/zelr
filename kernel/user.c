@@ -14,7 +14,7 @@
 #define USER_CODE_BASE  (USER_SPACE_BASE + 0x40000000ull)
 
 /* A program is entered with the stack pointer on a sixteen byte boundary,
- * which is what System V says and what the startup code in userland/zelr.h
+ * which is what System V says and what the startup code in sdk/zelr.h
  * is written against.
  *
  * It used to be eight below one, because every program's entry point was an
