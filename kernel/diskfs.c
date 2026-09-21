@@ -101,6 +101,17 @@ bool diskfs_format(void) {
 }
 
 static int finish_mount(void) {
+    /* Before anything else, because it is about whether this machine will
+       start at all rather than about the files. A disk formatted by an
+       earlier build carries the mark a BIOS acts on and nothing behind it,
+       and nothing would ever format it again: it mounts, so it is kept.
+       Saying so matters as much as doing it -- somebody whose machine died
+       every other boot gets to see the line that explains the last week. */
+    if (fat_boot_repair()) {
+        kprintf("  fs      boot sector repaired, this disk was made without one\n");
+        bb_log("fs boot sector repaired: the mark was there and no program behind it");
+    }
+
     u32 stranded = fat_reclaim();
     if (stranded)
         kprintf("  fs      reclaimed %d cluster(s) from an unclean shutdown\n", stranded);

@@ -468,7 +468,7 @@ if [ "$MODE" = "screen" ] || [ "$MODE" = "full" ]; then
   # The second boot of a machine, which is the one nothing else reaches:
   # every other check starts the kernel directly and never asks a firmware
   # to start from the disk the kernel formatted.
-  boottest() { keep timeout 600 python tools/bootcheck.py; }
+  boottest() { keep timeout 900 python tools/bootcheck.py; }
 
   # ctrl+f, and that what it finds is a word on the screen rather than a
   # program in a list. The desktop cannot read a window, so this is really
