@@ -70,6 +70,7 @@ PARK = (PAGE[0] - 60, PAGE[3] + 8)
 
 # What each control on the test page is painted, so it can be found.
 FIELD = (0x00, 0xA0, 0x00)
+ROUND = (0x00, 0xA0, 0xFF)      # the one the page gave a radius
 SPARE = (0x00, 0xC0, 0xC0)
 CHECK = (0xC0, 0x00, 0xC0)
 UNTICKED = (0x80, 0x80, 0x00)
@@ -124,6 +125,33 @@ def pairs_of(text):
     return set(p for p in text.split("&") if p)
 
 
+def extent_of(px, w, h, colour, within):
+    """The box around the first run of a colour, going down the page.
+
+    centre_of gives a point, which is enough to click and not enough to ask
+    about corners. This gives the rectangle, so a check can look at the four
+    pixels that tell a rounded field from a square one."""
+    x0, y0, x1, y1 = within
+    want = bytes(colour)
+    left = top = right = bottom = None
+    for y in range(y0, min(y1, h)):
+        row_hit = False
+        for x in range(x0, min(x1, w)):
+            if px[(y * w + x) * 3:(y * w + x) * 3 + 3] != want:
+                continue
+            row_hit = True
+            if left is None or x < left: left = x
+            if right is None or x > right: right = x
+            if top is None: top = y
+            bottom = y
+        # The first solid run only: stop once it has ended.
+        if top is not None and not row_hit:
+            break
+    if top is None:
+        return None
+    return (left, top, right + 1, bottom + 1)
+
+
 def main():
     keep = "--keep" in sys.argv
     build_once()
@@ -156,6 +184,34 @@ def main():
             c.add("a hidden field is not drawn at all",
                   centre_of(px, w, SCREEN_H, (0x00, 0x00, 0x01),
                             within=PAGE) is None, shot)
+
+            # --- a field the page rounded ----------------------------------
+            #
+            # Every search box written this decade has a border-radius, and a
+            # browser that draws them square does not look slightly wrong, it
+            # looks like a different era. This is checked at the corners
+            # rather than by asking: a square field of this colour fills its
+            # own corner pixels, and a rounded one leaves them to the page.
+            #
+            # It has a colour of its own and sits after the form, so it
+            # disturbs none of the checks above -- which it did when it was
+            # added in the same green as the others and became the first
+            # field they found.
+            bounds = extent_of(px, w, SCREEN_H, ROUND, within=PAGE)
+            c.add("a field the page rounded is drawn", bounds is not None, shot)
+            if bounds:
+                x0, y0, x1, y1 = bounds
+                corners = 0
+                for cx, cy in ((x0, y0), (x1 - 1, y0),
+                               (x0, y1 - 1), (x1 - 1, y1 - 1)):
+                    i = (cy * w + cx) * 3
+                    if px[i:i + 3] != bytes(ROUND):
+                        corners += 1
+                c.add("and its corners are knocked off rather than square",
+                      corners == 4, shot)
+                if corners != 4:
+                    print("      %d of 4 corners are rounded, box %r"
+                          % (corners, bounds))
 
             if spot is None or button is None or box is None:
                 return c.report(keep=keep)

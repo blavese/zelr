@@ -318,6 +318,12 @@ FORM = b"""<html><head><title>a form</title></head><body>
 #go{background:#E08000}
 #spare{background:#00C0C0}
 #off{background:#808000}
+/* A rounded field, because every search box written this decade is one
+   and a browser that draws them square does not look slightly wrong,
+   it looks like a different era. The corners are what the check counts:
+   a square box of this colour fills its corner pixels and a rounded one
+   leaves them to the page behind it. */
+#round{background:#00A0FF;border-radius:14px;width:260px}
 </style>
 <h1>Ask something</h1>
 <form action="/said" method="get">
@@ -328,6 +334,7 @@ FORM = b"""<html><head><title>a form</title></head><body>
 <input type="hidden" name="from" value="zelr">
 <input id="go" type="submit" value="Search">
 </form>
+<p><input type=text id=round name=round value=""></p>
 </body></html>"""
 
 POSTED = b"""<html><head><title>a form that posts</title></head><body>
