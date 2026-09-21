@@ -39,10 +39,12 @@ have been finished is worth a line saying so.
 - ~~Signals, or something like them: a way to interrupt a running program.~~
   Done, in the narrow sense: three signals and no handlers. The rest of it
   is the entry below.
-- **Signal handlers.** A program can be interrupted, killed or asked to end,
-  and it cannot be told and carry on. That means building a frame on the
-  program's own stack, pointing it at a function and arranging a way back.
-  The first thing a program written elsewhere will ask for that is not here.
+- ~~**Signal handlers.** A program can be interrupted, killed or asked to
+  end, and it cannot be told and carry on.~~ Done: `kernel/signal.c` builds
+  the frame, `sdk/zelr.h` carries the few instructions a handler returns
+  through, `userland/sigtest.c` checks it. What is still missing is
+  `sigaction`: no mask a program can set for itself, and no restarting of an
+  interrupted system call.
 - **Memory mapping.** `sbrk` moves a break and that is the whole of it. A
   compiler wants to map a file; so does anything that reads one large.
 - **Something to build zelr on zelr.** An assembler, then a compiler for a

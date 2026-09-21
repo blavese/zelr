@@ -294,3 +294,10 @@ builtin_cowtest_end:
 builtin_argvtest_start:
 .incbin "build/user/argvtest.elf"
 builtin_argvtest_end:
+
+.balign 4
+.global builtin_sigtest_start
+.global builtin_sigtest_end
+builtin_sigtest_start:
+.incbin "build/user/sigtest.elf"
+builtin_sigtest_end:

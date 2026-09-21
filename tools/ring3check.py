@@ -42,6 +42,7 @@ SUITES = [
     ("sleeptest", "SLEEPTEST_PASS", "a sleep that sleeps", 120),
     ("cowtest",   "COWTEST_PASS",   "what a fork copies", 180),
     ("argvtest",  "ARGVTEST_PASS",  "what a program was started on", 120),
+    ("sigtest",   "SIGTEST_PASS",   "being told about a signal", 180),
 ]
 
 

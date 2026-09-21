@@ -1507,13 +1507,18 @@ large range:
   page that does its work on a click does nothing at all here. What runs is
   what is in a `<script>` element at the moment the page is read; a script
   with a `src` is skipped rather than half honoured.
-- **Three signals, and no handlers.** A program can be interrupted, killed or
-  asked to end, and it can have the first two of those ignored — which is how
-  a shell survives the ctrl-C meant for the program it started. What it cannot
-  do is be told and carry on: a handler means building a frame on the
-  program's own stack, pointing it at a function and arranging a way back, and
-  that is a larger thing than what is here. A `signal()` that took a function
-  and never called it would be worse than one that says it cannot.
+- **Three signals.** A program can be interrupted, killed or asked to end.
+  It can have the first and the last ignored — which is how a shell
+  survives the ctrl-C meant for the program it started — or catch them and
+  carry on. SIGKILL can be neither, because something has to be final.
+
+  A handler runs on the program's own stack, between two of its own
+  instructions, and returns through a few instructions `sdk/zelr.h`
+  supplies, because the kernel has no code mapped in ring 3 for one to
+  return into. The same signal is held off until its handler returns
+  rather than arriving on top of itself. There is no `sigaction`, no mask
+  a program can set for itself, and no restarting of an interrupted
+  system call.
 - **No process groups.** Which program a ctrl-C is meant for is worked out
   from the parent chain instead: the console remembers which task last read
   from it, and the interrupt goes to that task's running children, or to the
@@ -1521,7 +1526,7 @@ large range:
   matters and a guess in the ones that do not.
 - **No job control.** `cmd &` starts something and stops waiting for it, and
   nothing keeps a list; `jobs` says so rather than printing an empty one.
-- **Fifty-seven system calls.** Enough to print, walk directories, read and
+- **Fifty-eight system calls.** Enough to print, walk directories, read and
   write files, open a TCP connection, sleep, exit, fork, exec, wait on a
   child, make a pipe, move a descriptor and own a window. There is no signal
   handler and no memory mapping. The numbers are fixed: a program built

@@ -204,7 +204,17 @@ u64 isr_dispatch(registers_t *r) {
        in ring 0 like any other kernel task's, and a sleeping processor
        holding the one lock is how it would stop every other one from making
        a system call. */
-    const registers_t *back = (const registers_t *)resume;
+    registers_t *back = (registers_t *)resume;
+
+    /* A signal with a handler is delivered here and nowhere else.
+     *
+       It means writing to the task's own stack, which is only mapped while
+       that task's address space is the current one -- which it is, exactly
+       here, and is not in the scheduler where the default action is taken.
+       After the switch above, so it is the task actually going back to ring
+       3 rather than the one this processor arrived on. */
+    if (from_user(back)) signal_deliver(back);
+
     if (from_user(back) || task_is_idle(task_current())) kernel_lock_release();
     return resume;
 }

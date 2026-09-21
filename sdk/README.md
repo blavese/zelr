@@ -28,7 +28,7 @@ int main(int argc, char **argv) {
 }
 ```
 
-`zelr.h` is the whole interface: fifty-seven system calls and a little sugar
+`zelr.h` is the whole interface: fifty-eight system calls and a little sugar
 over them. Every one is `int $0x80` with the number in `rax`, so there is
 nothing to link against and nothing to find at runtime.
 
@@ -104,9 +104,10 @@ target with nothing installed. Any clang and lld will do: set `CC`.
 
 ## What is not here
 
-- **No signal handlers.** Three signals, and a program can have two of them
-  ignored or take what they do by default, which is that it ends. It cannot
-  be told and carry on.
+- **No `sigaction`.** `signal()` takes a handler and that is the whole of
+  it: no mask a program can set for itself, no restarting of an
+  interrupted system call, no siginfo. A handler is `void f(int)`, it runs
+  on your own stack, and the same signal is held off until it returns.
 - **No environment.** `envp` is a terminator and nothing else.
 - **No threads.** `fork` makes a process; there is nothing smaller.
 - **No memory mapping.** `sbrk` moves a break, and that is the whole of it.
