@@ -2266,14 +2266,17 @@ static void test_x509(void) {
                != X509_OK);
         }
 
-        /* The chain without its top certificate still has to reach a
-           trusted root, and does not here, because the intermediate's
-           issuer is not itself an anchor. */
+        /* The chain without its top certificate, which is what a server
+           normally sends: the root is expected to be in the store already,
+           so leaving it out is the ordinary case rather than a short chain.
+           This used to expect a refusal, because the store did not hold the
+           anchor this intermediate leads to -- it does now, and expecting
+           the old answer would be a check asserting that https is broken. */
         {
             u32 two[2] = { sizeof(test_cert0), sizeof(test_cert1) };
-            ok("a chain that stops short of a trusted authority is refused",
+            ok("a chain whose root is in the store rather than sent verifies",
                x509_verify_chain(ders, two, 2, "www.google.com", when)
-               == X509_UNTRUSTED);
+               == X509_OK);
         }
 
         /* And a chain of just the leaf. */
@@ -2356,8 +2359,29 @@ static void test_x509(void) {
         const u8 *found; u32 found_len;
         ok("an authority nobody has heard of is not trusted",
            !roots_find((const u8 *)"not a name", 10, &found, &found_len));
-        ok("and the one that signed this chain is",
-           roots_find(root.issuer, root.issuer_len, &found, &found_len));
+
+        /* One the store does hold, asked for by its own name.
+         *
+           Taken from the store rather than from the captured chain above.
+           That chain's root is a certificate authority which has since been
+           retired and is no longer in any current store, so asking for it
+           by name was a check that the store was out of date -- and it
+           passed for as long as it was. */
+        const root_t *any = roots_at(0);
+        ok("and one the store does hold is found by its name",
+           any && roots_find(any->der + any->sub_off, any->sub_len,
+                             &found, &found_len));
+
+        /* Every one of them, so a store with a wrong offset in it is not
+           hidden by the first entry happening to be right. */
+        u32 missing = 0;
+        for (u32 r = 0; r < roots_count(); r++) {
+            const root_t *e = roots_at(r);
+            if (!e) { missing++; continue; }
+            if (!roots_find(e->der + e->sub_off, e->sub_len, &found, &found_len))
+                missing++;
+        }
+        ok("and so is every other one", missing == 0);
     }
 }
 

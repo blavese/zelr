@@ -104,6 +104,72 @@ static inline void url_text(const url_t *u, char *out, int cap) {
    redirected, and the first request, the one carrying the address, would
    already have been readable by then. A site that only does http is still
    reachable by saying so. */
+/* Whether what somebody typed is an address at all.
+ *
+ * A browser's address bar takes two completely different things and has to
+ * tell them apart with no more to go on than the characters: "example.com"
+ * is somewhere to go, "operating system" is something to look for. Getting
+ * it wrong in one direction asks a search engine about a website; getting
+ * it wrong in the other asks DNS about a sentence.
+ *
+ * The rule here is the one every browser settled on, in the order it
+ * matters:
+ *
+ *   it says its own scheme                     -> an address
+ *   it has a space in it                       -> a search
+ *   it starts with a slash, or is localhost    -> an address
+ *   it has a dot with something after it       -> an address
+ *   anything else                              -> a search
+ *
+ * So "zelr" is a search and "zelr.com" is a site, which is what somebody
+ * typing either one meant.
+ */
+static inline int url_looks_like_address(const char *in) {
+    while (*in == ' ') in++;
+    if (!*in) return 0;
+
+    if (w_starts_fold(in, "http://") || w_starts_fold(in, "https://")
+        || w_starts_fold(in, "//"))
+        return 1;
+
+    for (const char *p = in; *p; p++)
+        if (*p == ' ' || *p == '	') return 0;
+
+    if (*in == '/') return 1;
+    if (w_starts_fold(in, "localhost")) return 1;
+
+    /* A dot with a name on each side of it. A trailing dot is somebody
+       typing a sentence and stopping, not a host. */
+    const char *dot = 0;
+    for (const char *p = in; *p && *p != '/' && *p != '?' && *p != '#'; p++)
+        if (*p == '.') dot = p;
+    if (!dot || dot == in) return 0;
+    char after = dot[1];
+    return (after >= 'a' && after <= 'z') || (after >= 'A' && after <= 'Z')
+        || (after >= '0' && after <= '9');
+}
+
+/* A query, escaped so it survives being a path.
+ *
+ * Everything that is not plainly safe becomes a percent and two digits.
+ * A space could be a plus, which is shorter and is what a form sends, and
+ * %20 is right in both places -- so one rule rather than two. */
+static inline void url_escape(const char *in, char *out, int cap) {
+    static const char HEX[] = "0123456789ABCDEF";
+    int w = 0;
+    for (const char *p = in; *p && w < cap - 4; p++) {
+        unsigned char c = (unsigned char)*p;
+        int plain = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+                 || (c >= '0' && c <= '9')
+                 || c == '-' || c == '_' || c == '.' || c == '~';
+        if (plain) { out[w++] = (char)c; continue; }
+        out[w++] = '%';
+        out[w++] = HEX[c >> 4];
+        out[w++] = HEX[c & 15];
+    }
+    out[w] = 0;
+}
+
 static inline int url_parse(const char *in, url_t *out) {
     while (*in == ' ') in++;
 
