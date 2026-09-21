@@ -18,7 +18,7 @@ driver" is a task; "finish the operating system" is not.
 | rtc-clock | claude | Read the real time from the CMOS clock and expose it as /sys/time, so the desktop shows a clock rather than an uptime counter | blocked |
 | pipes | codex | Add pipes: a pipe syscall, a read and write end, blocking on the wait queues that already exist, so two ring 3 programs can talk to each other | blocked |
 | lfn-read | claude | Read VFAT long filenames, so a file saved as somethinglong.txt keeps its name instead of being truncated to 8.3 | blocked |
-| ap-tasks | codex | Let the other processors run scheduled tasks rather than only work handed to them, with the locking that needs, and a test that proves work really ran on another core | todo |
+| ap-tasks | codex | Let the other processors run scheduled tasks rather than only work handed to them, with the locking that needs, and a test that proves work really ran on another core | done |
 | editor | claude | A text editor for the desktop: open, edit, save, using the terminal's line editing and the window resize it already supports | todo |
 | nvme | codex | An NVMe block driver behind the existing block layer, so it works on a machine with no AHCI controller | todo |
 | demand-pages | claude | Map user pages on demand rather than all at once, so a program's address space costs what it uses | todo |
@@ -33,6 +33,10 @@ moving it up.
 - Signals, or something like them: a way to interrupt a running program.
 - A service model, so the desktop and the network come up as supervised
   things rather than calls in a row inside `kmain`.
-- Copy on write, so spawning does not copy an address space it may not need.
 - A packet filter, and something to look at traffic with.
 - Multiple users, which needs permissions, which needs a great deal else.
+- A lock finer than the one covering the whole kernel, so two processors can
+  be inside it at once. The coarse one is in; what it costs is that every
+  system call queues behind every other.
+- TLS as more than one session, so a page's pictures can come over https in
+  parallel the way they already do over http.
