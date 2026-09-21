@@ -266,8 +266,17 @@ static inline void inf_stored(inf_state *s) {
 
 /* --- the way in -----------------------------------------------------------
  *
- * Returns how many bytes came out, or one of the INF_ numbers. */
-static inline int inflate_raw(const u8 *in, int n, u8 *out, int cap) {
+ * The loop itself. Returns INF_OK or one of the other INF_ numbers, and
+ * says separately how much came out -- which matters when what went wrong
+ * was INF_FULL, because then the output is not rubbish, it is the front of
+ * the answer and the rest did not fit. A page read down to where the room
+ * ran out is worth more than no page.
+ *
+ * Not so for a picture: half a PNG is not half a picture, because the rows
+ * after the cut are the ones the decoder was told to copy from. So the
+ * callers that decode an image use inflate_raw below, which treats running
+ * out of room as the failure it is for them. */
+static inline int inf_run(const u8 *in, int n, u8 *out, int cap, int *out_len) {
     inf_state s;
     s.in = in; s.n = n; s.at = 0;
     s.bits = 0; s.nbits = 0;
@@ -277,17 +286,25 @@ static inline int inflate_raw(const u8 *in, int n, u8 *out, int cap) {
     for (;;) {
         int last = inf_bits(&s, 1);
         int kind = inf_bits(&s, 2);
-        if (s.err) return s.err;
+        if (s.err) break;
 
         if (kind == 0) inf_stored(&s);
         else if (kind == 1) inf_fixed(&s);
         else if (kind == 2) inf_dynamic(&s);
-        else { s.err = INF_BAD; return INF_BAD; }
+        else { s.err = INF_BAD; break; }
 
-        if (s.err) return s.err;
+        if (s.err) break;
         if (last) break;
     }
-    return s.len;
+    if (out_len) *out_len = s.len;
+    return s.err;
+}
+
+/* Returns how many bytes came out, or one of the INF_ numbers. */
+static inline int inflate_raw(const u8 *in, int n, u8 *out, int cap) {
+    int len = 0;
+    int err = inf_run(in, n, out, cap, &len);
+    return err ? err : len;
 }
 
 /* A zlib stream, which is deflate with two bytes in front saying how it was

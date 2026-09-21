@@ -45,9 +45,18 @@
  * because a browser that allocated per page would be a browser whose
  * failure to show one depended on which one it showed before. They are
  * sized for a real page: a few hundred kilobytes of source, a handful of
- * style sheets, a few thousand words on the screen. */
-#define SRC_MAX    (320 * 1024)
-#define CSS_MAX    (192 * 1024)
+ * style sheets, a few thousand words on the screen.
+ *
+ * "A real page" was measured rather than guessed, and it is larger than it
+ * sounds. An encyclopaedia article is six hundred and seventy kilobytes of
+ * html; an ordinary article on an ordinary site is two hundred and forty.
+ * At three hundred and twenty the first of those did not fit, and what it
+ * looked like was not a page cut short -- it was "the fetch failed",
+ * because the page arrives compressed and a decompression that runs out of
+ * room fails whole. So: a megabyte, and a decompression that runs out of
+ * room now keeps what it has. */
+#define SRC_MAX    (1024 * 1024)
+#define CSS_MAX    (512 * 1024)
 #define SHEETS_MAX 6
 
 /* A script the page did not bring with it. One buffer, reused: each is run
@@ -476,6 +485,8 @@ static const char *why(int rc) {
         case WEB_ERR_SEND:    return "the request could not be sent";
         case WEB_ERR_EMPTY:   return "the server said nothing";
         case WEB_ERR_HEADERS: return "the answer was not http";
+        case WEB_ERR_ENCODING: return "the answer was compressed in a way "
+                                      "this cannot undo";
         default:              return "the fetch failed";
     }
 }
@@ -643,10 +654,28 @@ static int do_request(const char *method, const char *url, const char *body,
     return r.len;
 }
 
+static int page_unhidden;      /* it was laid out a second time, shown anyway */
+
 static void relayout(int width) {
     match.hover = hover_node;
     match.visited_links = 0;
-    lay_run(&page, &doc, &sheet, &index_, &match, inl, pic_sizes, npic_sizes, width, root_px);
+    lay_show_hidden = 0;
+    lay_run(&page, &doc, &sheet, &index_, &match, inl, pic_sizes, npic_sizes,
+            width, root_px);
+
+    /* A page that hides its whole self until its script has rebuilt it.
+       Measured rather than guessed at: not a word came out of a document
+       with words in it, which is what `<div style="visibility:hidden">`
+       around everything does to a browser that is not going to run the
+       framework that takes it off again. */
+    page_unhidden = 0;
+    if (lay_words(&page) == 0 && dom_has_words(&doc)) {
+        lay_show_hidden = 1;
+        lay_run(&page, &doc, &sheet, &index_, &match, inl, pic_sizes,
+                npic_sizes, width, root_px);
+        lay_show_hidden = 0;
+        page_unhidden = lay_words(&page) > 0;
+    }
 }
 
 /* What this system thinks a link looks like, which is the accent the rest of
@@ -889,8 +918,19 @@ static void load(const char *address, int width, int keep_scroll) {
     number_into(shown, page.nlinks);
 
     if (rc >= 400) say("the server said this page is not there", 0);
-    else if (reply.truncated || page.overflowed || doc.overflowed)
-        say("shown as far as it fits: the page is bigger than this can hold", 0);
+    else if (page_unhidden)
+        say("this page hides itself until its own script rebuilds it; "
+            "shown as it arrived", 0);
+    /* Three different things, said differently: which one it was decides
+       what could be done about it, and one sentence for all three told
+       nobody anything -- including the person writing this, who spent an
+       afternoon working out which limit a page had reached. */
+    else if (reply.truncated)
+        say("shown as far as it fits: more page arrived than this can hold", 0);
+    else if (doc.overflowed)
+        say("shown as far as it fits: more markup than this can hold", 0);
+    else if (page.overflowed)
+        say("shown as far as it fits: more on the page than this can lay out", 0);
     else say(shown, page.nlinks == 1 ? " link on this page"
                                      : " links on this page");
 
@@ -1284,6 +1324,7 @@ int main(int argc, char **argv) {
 
     int laid_for = 0;
     int want_load = 1;
+    css_view_h = 600;                    /* until the window has been drawn */
     int want_width = 0;
     int last_mx = -1, last_my = -1, last_scroll = -1;
     int last_hover = -2;
@@ -1318,6 +1359,7 @@ int main(int argc, char **argv) {
         int view_h = h - view_y - UI_ROW - 3;
         if (view_w < 80) view_w = 80;
         if (view_h < 40) view_h = 40;
+        css_view_h = view_h;             /* what vh is a hundredth of */
 
         /* The page is laid out against the width it is shown at, so making
            the window wider reflows it rather than revealing more margin. */

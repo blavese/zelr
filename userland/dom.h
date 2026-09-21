@@ -29,9 +29,14 @@
 #include "web.h"
 #include "html.h"
 
-#define DOM_NODES   12000
-#define DOM_ATTRS   24000
-#define DOM_ARENA   (640 * 1024)
+/* Measured against real pages rather than picked. An encyclopaedia article
+   is six hundred and seventy kilobytes of html, fifty-six hundred elements
+   and fourteen thousand attributes; a news site is worse. Every string in
+   the page goes in the arena -- text, attribute names, attribute values --
+   so the arena has to be larger than the document, not the same size. */
+#define DOM_NODES   20000
+#define DOM_ATTRS   40000
+#define DOM_ARENA   (1536 * 1024)
 #define DOM_DEPTH   64
 
 enum { DN_ELEMENT = 1, DN_TEXT };
@@ -393,6 +398,35 @@ static inline int dom_closes(int open, int now) {
    that nobody wrote. */
 static inline int dom_raw(int t) {
     return t == T_SCRIPT || t == T_STYLE || t == T_TEXTAREA || t == T_TITLE;
+}
+
+/* Whether there is anything to read in here: a text node with a character
+   in it that is not a space, somewhere under the body, not counting the
+   elements whose contents are not text at all. Asked when a layout produced
+   no words, to tell a page that is empty from a page that was hidden. */
+static inline int dom_has_words(const ddoc *d) {
+    int start = d->body >= 0 ? d->body : d->root;
+    if (start < 0) return 0;
+
+    int at = start;
+    int depth = 0;
+    for (;;) {
+        const dnode *n = &d->nodes[at];
+        int descend = 1;
+        if (n->kind == DN_ELEMENT && dom_raw(n->tag)) descend = 0;
+        if (n->kind == DN_TEXT && n->text >= 0) {
+            for (const char *p = d->arena + n->text; *p; p++)
+                if (*p > 32) return 1;
+        }
+        if (descend && n->first >= 0) { at = n->first; depth++; continue; }
+        for (;;) {
+            if (depth == 0) return 0;
+            if (d->nodes[at].next >= 0) { at = d->nodes[at].next; break; }
+            at = d->nodes[at].parent;
+            depth--;
+            if (at < 0) return 0;
+        }
+    }
 }
 
 /* --- the parse ----------------------------------------------------------- */

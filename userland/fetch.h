@@ -148,7 +148,7 @@ static inline int wh_header_nth(const char *head, int hlen, const char *name,
  * this machine is the difference between a page arriving and a page
  * arriving eventually.
  */
-static inline int wh_gunzip(char *body, int len, int cap) {
+static inline int wh_gunzip(char *body, int len, int cap, int *cut) {
     if (len < 12) return -1;
     const u8 *p = (const u8 *)body;
     if (p[0] != 0x1F || p[1] != 0x8B || p[2] != 8) return -1;
@@ -167,8 +167,15 @@ static inline int wh_gunzip(char *body, int len, int cap) {
     u8 *out = (u8 *)malloc((u64)cap);
     if (!out) return -1;
 
-    int got = inflate_raw(p + at, len - at, out, cap);
-    if (got < 0) { free(out); return -1; }
+    /* Running out of room is not the same as not decoding. What has come
+       out by then is the front of the page, so it is kept and the caller is
+       told it is short -- which is the difference between reading the top
+       of an enormous page and being shown an error instead of it. */
+    int got = 0;
+    int err = inf_run(p + at, len - at, out, cap, &got);
+    if (err && err != INF_FULL) { free(out); return -1; }
+    if (err == INF_FULL && cut) *cut = 1;
+
     for (int i = 0; i < got; i++) body[i] = (char)out[i];
     free(out);
     return got;
@@ -680,11 +687,13 @@ static inline int web_fetch_once(const url_t *u, const char *body,
     if (wh_header(buf, hlen, "content-encoding", enc, sizeof(enc))
         && w_starts_fold(enc, "gzip")) {
         int room = cap - (int)(r->body - buf) - 1;
-        int got = wh_gunzip(r->body, r->len, room);
+        int cut = 0;
+        int got = wh_gunzip(r->body, r->len, room, &cut);
         if (got < 0) {
             web_drop();
             return WEB_ERR_ENCODING;
         }
+        if (cut) r->truncated = 1;
         r->len = got;
         r->body[r->len] = 0;
     }

@@ -22,10 +22,16 @@
 #include "web.h"
 #include "dom.h"
 
+/* Measured against what a real site sends rather than guessed. One
+   encyclopaedia article's two sheets are two hundred and seventeen
+   kilobytes and eleven hundred rules between them; the rule and selector
+   counts had room for that and the text did not, and a sheet whose text
+   ran out halfway is a page styled by the first half of its stylesheet --
+   which looks like a layout bug and is not one. */
 #define CSS_RULES   4000
 #define CSS_SELS    9000
 #define CSS_DECLS   16000
-#define CSS_TEXT    (160 * 1024)
+#define CSS_TEXT    (512 * 1024)
 #define CSS_MAXCLS  4
 
 /* --- what can be said about a box ---------------------------------------- */
@@ -77,10 +83,28 @@ enum { LS_DISC = 0, LS_DECIMAL, LS_NONE, LS_CIRCLE, LS_SQUARE };
    relative to is known. Resolving at parse time means guessing the font size
    and the containing width, and a guess that is wrong is a layout that is
    wrong everywhere the guess was used. */
-enum { U_PX = 0, U_EM, U_REM, U_PCT, U_AUTO };
+enum { U_PX = 0, U_EM, U_REM, U_PCT, U_VW, U_VH, U_AUTO };
+
+/* The window, for the units that are a fraction of it. Set by the layout
+   before it runs, because the page is measured against the window it is
+   being laid out in and nothing here can ask.
+
+   Without these, `width:100vw` is a hundred pixels: the unit is dropped and
+   the number is taken as it stands. An overlay meant to cover the window
+   comes out an inch wide, and everything the page put inside it is folded
+   into a column one word across. */
+static int css_view_w;
+static int css_view_h;
 
 typedef struct {
-    short v;                  /* in the unit's own terms, times 1 */
+    /* Hundredths of the unit, and an int rather than a short because a
+       short holds 327.67 of anything. Pages are full of `width:960px` and
+       `max-width:1140px`, which at a hundredth each are 96000 and 114000
+       and do not fit: the first came back as 304 and the second as a
+       negative number, so one box was a third of the width it asked for
+       and the other had no ceiling at all. Both on a page whose markup and
+       stylesheet were perfectly ordinary. */
+    int v;
     unsigned char unit;
 } clen;
 
@@ -299,7 +323,11 @@ static inline clen css_len(const char *s) {
     if (*s == '-') { sign = -1; s++; }
     else if (*s == '+') s++;
     int v = 0, any = 0;
-    while (*s >= '0' && *s <= '9') { v = v * 10 + (*s - '0'); s++; any = 1; }
+    while (*s >= '0' && *s <= '9') {
+        if (v < 1000000) v = v * 10 + (*s - '0');
+        s++;
+        any = 1;
+    }
     int frac = 0;
     if (*s == '.') {
         s++;
@@ -312,12 +340,17 @@ static inline clen css_len(const char *s) {
         any = 1;
     }
     if (!any) { L.unit = U_AUTO; return L; }
-    /* Hundredths, so half an em survives. */
-    L.v = (short)(sign * (v * 100 + frac));
+    /* Hundredths, so half an em survives. Ten thousand of any unit is far
+       past anything a page means and keeps the multiplications below in
+       range. */
+    if (v > 10000) v = 10000;
+    L.v = sign * (v * 100 + frac);
     if (w_starts_fold(s, "em")) L.unit = U_EM;
     else if (w_starts_fold(s, "rem")) L.unit = U_REM;
+    else if (w_starts_fold(s, "vw")) L.unit = U_VW;
+    else if (w_starts_fold(s, "vh")) L.unit = U_VH;
     else if (*s == '%') L.unit = U_PCT;
-    else if (w_starts_fold(s, "pt")) { L.v = (short)(L.v * 4 / 3); L.unit = U_PX; }
+    else if (w_starts_fold(s, "pt")) { L.v = L.v * 4 / 3; L.unit = U_PX; }
     else L.unit = U_PX;
     return L;
 }
@@ -328,6 +361,8 @@ static inline int css_px(clen L, int font_px, int root_px, int pct_of) {
         case U_EM:  return L.v * font_px / 100;
         case U_REM: return L.v * root_px / 100;
         case U_PCT: return pct_of >= 0 ? L.v * pct_of / 10000 : 0;
+        case U_VW:  return css_view_w > 0 ? L.v * css_view_w / 10000 : -1;
+        case U_VH:  return css_view_h > 0 ? L.v * css_view_h / 10000 : -1;
         case U_AUTO: return -1;
         default:    return L.v / 100;
     }
@@ -430,6 +465,17 @@ static inline int css_skip(const char *p, int len, int i) {
 /* One selector, up to a comma or the brace. Returns how many compound parts
    it had, or 0 when it is something this does not understand, in which case
    the rule is dropped rather than applied to the wrong elements. */
+/* Whether a run of `n` characters is this name, whatever the case. Used on
+   selector text, which is not terminated: it is a slice of the sheet. */
+static inline int css_named(const char *p, int n, const char *name) {
+    int i = 0;
+    for (; i < n; i++) {
+        if (!name[i]) return 0;
+        if (w_lower(p[i]) != w_lower(name[i])) return 0;
+    }
+    return name[i] == 0;
+}
+
 static inline int css_parse_selector(csheet *s, const char *p, int len,
                                      int *at, int *spec_out) {
     int i = *at, n = 0, spec = 0;
@@ -478,11 +524,35 @@ static inline int css_parse_selector(csheet *s, const char *p, int len,
             }
             if (ch == ':') {
                 i++;
-                if (i < len && p[i] == ':') i++;        /* an element, not a
-                                                           class: ignored */
+                int elem = 0;
+                if (i < len && p[i] == ':') { i++; elem = 1; }
                 int st = i;
                 while (i < len && css_ident(p[i])) i++;
                 int l = i - st;
+
+                /* The four that are written with one colon as often as two. */
+                if (!elem && (css_named(p + st, l, "before")
+                              || css_named(p + st, l, "after")
+                              || css_named(p + st, l, "first-line")
+                              || css_named(p + st, l, "first-letter")))
+                    elem = 1;
+
+                /* A pseudo-element is not an element in the tree. Nothing
+                   here draws a scrollbar or a ::before box, and a selector
+                   that names one must not quietly become a selector for the
+                   element it hangs off -- still less for everything.
+
+                   `::-webkit-scrollbar{width:6px}` was exactly that: after
+                   the two colons there is no tag, no class and no id left,
+                   which is the shape of `*`. Every box on the page came out
+                   six pixels wide, and a whole site's article was a column
+                   of one word per line. */
+                if (elem) {
+                    while (i < len && p[i] != ',' && p[i] != '{') i++;
+                    *at = i;
+                    return 0;
+                }
+
                 if (l == 5 && w_lower(p[st]) == 'h') c->pseudo = PS_HOVER;
                 else if (l == 4 && w_lower(p[st]) == 'l') c->pseudo = PS_LINK;
                 else if (l == 7 && w_lower(p[st]) == 'v') c->pseudo = PS_VISITED;
@@ -1164,6 +1234,28 @@ static inline void css_apply(const csheet *s, const cdecl *dcl, cstyle *st,
                 default: break;
             }
             if (!slot) break;
+
+            /* A percentage height is a percentage of the containing
+               block's height, and in one pass down the tree that height is
+               not known -- the box being measured is part of what decides
+               it. CSS says such a height is auto, and auto is also the only
+               answer available here.
+
+               Resolved against the width instead, which is what this did,
+               `.mw-logo{height:100%}` came out as tall as the column was
+               wide. The logo is at the top of the page, so everything after
+               it -- the whole article -- was laid out below the bottom of
+               the window, and what was on screen was a blank page with one
+               link at the top of it. */
+            if (L.unit == U_PCT) {
+                if (dcl->prop == P_HEIGHT || dcl->prop == P_MIN_HEIGHT
+                    || dcl->prop == P_MAX_HEIGHT) { *slot = -1; break; }
+                if (dcl->prop == P_TOP || dcl->prop == P_BOTTOM) {
+                    *slot = CSS_AUTO_OFF;
+                    break;
+                }
+            }
+
             if (dcl->prop >= P_BORDER_T && dcl->prop <= P_BORDER_L) {
                 /* border-top and friends carry a style and a colour too. */
                 if (w_starts_fold(v, "none") || w_starts_fold(v, "hidden")) px = 0;

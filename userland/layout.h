@@ -25,13 +25,44 @@
 #include "css.h"
 #include "facetext.h"
 
-#define LAY_ITEMS  20000
-#define LAY_TEXT   (192 * 1024)
-#define LAY_LINKS  1400
+/* One item per box and one per run of text on a line, and one entry per
+   link. Set against what a real page costs, measured: an encyclopaedia
+   article with sixteen hundred anchors in its markup came out of the
+   layout as forty-six thousand items and six and a half thousand link
+   entries, which is more than the markup holds and is a separate thing
+   to look into -- but until it is looked into, a limit set to the
+   markup's own size turns a page that renders into a page that says it
+   does not fit.
+
+   Running out is said out loud in the window rather than passed over,
+   and a link past the limit is drawn as words: not in the accent, and
+   not clickable. */
+#define LAY_ITEMS  96000
+#define LAY_TEXT   (1024 * 1024)
+#define LAY_LINKS  12000
 #define LAY_LINE   400
 #define LAY_DEPTH  DOM_DEPTH
 
 enum { LK_BOX = 1, LK_TEXT, LK_BULLET, LK_IMAGE, LK_FIELD };
+
+/* --- a page that hides itself until its script has run --------------------
+ *
+ * A framework-built page arrives as
+ * `<div style="visibility:hidden">` wrapped round the whole document, and
+ * is made visible from script once the framework has rebuilt the page in
+ * the browser. This one runs a page's own script; it does not run a
+ * framework that rebuilds the page, so the div stays hidden -- and what is
+ * on screen is nothing at all, for a document whose every word arrived in
+ * the html and is sitting in the tree.
+ *
+ * So the page is laid out, and if that produced no words at all, it is laid
+ * out again with this set and the window says why. Showing a page a moment
+ * before its author meant to is a smaller wrong than showing an empty one.
+ *
+ * It is not on by default: `visibility:hidden` on a menu that is not open
+ * means what it says, and a page that works is not improved by having its
+ * closed menus drawn over it. */
+static int lay_show_hidden;
 
 typedef struct {
     int x, y, w, h;               /* y is down the document, not the window */
@@ -561,7 +592,7 @@ static inline void lay_inline(lctx *L, int node, const cstyle *parent, int *y) {
 
         const dnode *n = &d->nodes[at];
         if (n->kind == DN_TEXT) {
-            if (stack[sp].visible && n->text >= 0)
+            if ((stack[sp].visible || lay_show_hidden) && n->text >= 0)
                 lay_text_run(L, d->arena + n->text, &stack[sp], y);
         } else {
             cstyle st;
@@ -838,6 +869,13 @@ static int lay_measure(lctx *L, int node, const cstyle *parent, int avail,
 
     int items = L->out->nitems, used = L->out->used, links = L->out->nlinks;
 
+    /* A trial that ran out of room is not a page that ran out of room. The
+       items this makes are thrown away a few lines down, so the mark saying
+       the page did not fit is thrown away with them -- otherwise a flex row
+       measuring a wide child reports the whole document as too big for a
+       layout that then fits perfectly well. */
+    int spilled = L->out->overflowed;
+
     int y = 0;
     lay_block(L, node, parent, 0, avail, &y);
 
@@ -861,6 +899,7 @@ static int lay_measure(lctx *L, int node, const cstyle *parent, int avail,
     L->out->nitems = items;
     L->out->used = used;
     L->out->nlinks = links;
+    L->out->overflowed = spilled;
     return right;
 }
 
@@ -1041,7 +1080,8 @@ static void lay_block(lctx *L, int node, const cstyle *parent, int x,
                       int avail, int *y) {
     cstyle probe;
     lay_style(L, node, parent, &probe, avail);
-    if (probe.display == D_NONE || !probe.visible) return;
+    if (probe.display == D_NONE) return;
+    if (!probe.visible && !lay_show_hidden) return;
 
     if (probe.position == POS_ABSOLUTE || probe.position == POS_FIXED) {
         int keep = *y;
@@ -1100,7 +1140,8 @@ static void lay_block_placed(lctx *L, int node, const cstyle *parent, int x,
     const ddoc *d = L->d;
     cstyle st;
     lay_style(L, node, parent, &st, avail);
-    if (st.display == D_NONE || !st.visible) return;
+    if (st.display == D_NONE) return;
+    if (!st.visible && !lay_show_hidden) return;
 
     int ml = st.ml < 0 ? 0 : st.ml;
     int mr = st.mr < 0 ? 0 : st.mr;
@@ -1313,6 +1354,8 @@ static inline void lay_run(ldoc *out, const ddoc *d, const csheet *s,
     out->nlinks = 0;
     out->overflowed = 0;
 
+    css_view_w = width;              /* what vw is a hundredth of */
+
     lctx L;
     L.d = d; L.s = s; L.x = x; L.m = m; L.inl = inl;
     L.imgs = imgs; L.nimgs = nimgs;
@@ -1336,6 +1379,15 @@ static inline void lay_run(ldoc *out, const ddoc *d, const csheet *s,
     if (start >= 0) lay_block(&L, start, &root, 0, width, &y);
     out->height = y;
     if (d->overflowed) out->overflowed = 1;
+}
+
+/* How many words came out of it. Zero from a document with words in it is
+   the page above: hidden by a style its script was going to undo. */
+static inline int lay_words(const ldoc *o) {
+    int n = 0;
+    for (int i = 0; i < o->nitems; i++)
+        if (o->items[i].kind == LK_TEXT) n++;
+    return n;
 }
 
 /* --- hit testing --------------------------------------------------------- */
