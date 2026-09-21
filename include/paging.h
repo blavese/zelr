@@ -5,6 +5,13 @@
 #define PTE_PRESENT  0x001
 #define PTE_RW       0x002
 #define PTE_USER     0x004
+
+/* Bits 9 to 11 of an entry are the processor's to ignore and ours to use.
+   This one says the page under it is shared with another address space and
+   was made read only for that reason rather than because the program asked
+   for read only memory -- so a write fault on it is a page to copy, not a
+   program to stop. */
+#define PTE_COW      0x200
 #define PTE_NOCACHE  0x018      /* write-through and cache-disable together */
 #define PTE_WC       0x080      /* in a 4 KiB entry this is the PAT bit, and
                                    the slot it selects is set to write
@@ -84,6 +91,17 @@ u64  paging_new_directory(void);
 /* A copy of an address space, with every user page duplicated and everything
    shared with the kernel left shared. What fork is built on. */
 u64  paging_clone_directory(u64 pml4_phys);
+
+/* A write that faulted because the page is shared. Gives this address space
+   its own copy, or takes the sharing off when nobody else is left, and says
+   whether it was able to. False means the fault was not about sharing and
+   belongs to whoever faults next. */
+bool paging_resolve_cow(u64 pml4_phys, u64 addr);
+
+/* How many pages this machine is not holding twice, for anything that
+   reports on it. */
+u64  paging_cow_saved(void);
+u64  paging_cow_copies(void);
 
 void paging_free_directory(u64 pml4_phys);
 void paging_switch(u64 pml4_phys);

@@ -280,3 +280,10 @@ builtin_sleeptest_end:
 builtin_halfdrawn_start:
 .incbin "build/user/halfdrawn.elf"
 builtin_halfdrawn_end:
+
+.balign 4
+.global builtin_cowtest_start
+.global builtin_cowtest_end
+builtin_cowtest_start:
+.incbin "build/user/cowtest.elf"
+builtin_cowtest_end:

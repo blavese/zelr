@@ -819,17 +819,34 @@ static void test_winsrv(void) {
         u64 phys = virt_to_phys(ua);
         ok("it aliases the window pixels", phys && *(volatile u32 *)phys == 0xDEADBEEF);
 
-        /* Pixel zero for the program has to be pixel zero for the window.
-           Mapping the page before it puts every row out by a fixed amount,
-           which draws a recognisable but wrong picture. */
+        /* What the program draws into is not what the desktop reads.
+           That is the whole of the double buffering: these two checks used
+           to assert the opposite, because there was one surface and the
+           window pointed straight at it. */
         window_t *win = winsrv_window(PID, h);
-        ok("and starts exactly where the window does", win && phys == (u64)win->canvas);
+        ok("and it is not the surface the desktop reads",
+           win && phys != (u64)win->canvas);
+        ok("which does not have it yet", win && win->canvas[0] != 0xDEADBEEF);
 
-        /* The last pixel must be inside the mapping too. */
+        /* The last pixel must be inside the mapping too. Written before the
+           commit, so one commit carries both. */
         u64 last = ua + (64ull * 48ull - 1) * 4;
         *(volatile u32 *)last = 0xFEEDFACE;
-        ok("the whole surface is mapped",
+
+        winsrv_commit(PID, h);
+        ok("committing hands the whole frame over",
+           win && win->canvas[0] == 0xDEADBEEF);
+        ok("including its last pixel, so the whole surface is mapped",
            win && win->canvas[64 * 48 - 1] == 0xFEEDFACE);
+
+        /* And a frame that has not been committed since does not appear.
+           Without this the two above pass against a server that copies on
+           every access rather than on commit, which is the same picture
+           and not the same guarantee. */
+        *(volatile u32 *)ua = 0xC0FFEE;
+        ok("and what is drawn after it does not, until the next one",
+           win && win->canvas[0] == 0xDEADBEEF);
+
         ok("asking again returns the same address",
            winsrv_surface(PID, h, paging_current_directory()) == ua);
     }

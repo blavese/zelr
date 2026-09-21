@@ -40,6 +40,7 @@ SUITES = [
     ("layouttest", "LAYOUTTEST_PASS", "where things end up", 120),
     ("cardtest",  "CARDTEST_PASS",  "what a poker hand is worth", 120),
     ("sleeptest", "SLEEPTEST_PASS", "a sleep that sleeps", 120),
+    ("cowtest",   "COWTEST_PASS",   "what a fork copies", 180),
 ]
 
 
