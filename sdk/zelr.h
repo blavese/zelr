@@ -20,6 +20,13 @@ typedef _Bool bool;
    argument that crosses into the kernel goes through one of these. */
 typedef long long          zelr_word;
 
+/* A system call number as a string, for the two places that need one
+   inside an asm block: the startup code and the signal trampoline.
+   Written out rather than repeated as a literal, because a number in
+   two places is a number that comes to disagree. */
+#define ZELR_STR2(x) #x
+#define ZELR_STR(x) ZELR_STR2(x)
+
 #define SYS_EXIT       0
 #define SYS_PUTC       1
 #define SYS_WRITE      2
@@ -73,6 +80,10 @@ typedef long long          zelr_word;
 /* A path, a vector of words and how many there are. 44 was SYS_GETARG and
    is retired: a program reads its words off its own stack now. */
 #define SYS_SPAWN_ARGV    43
+
+/* What the few instructions a handler returns into ask for. Never called
+   directly by a program. */
+#define SYS_SIGRETURN     58
 
 /* The same socket, encrypted. See connect_tls below. */
 #define SYS_TLS_CONNECT   45
@@ -493,19 +504,52 @@ static inline int getppid(void) {
 
 /* --- signals -------------------------------------------------------------
  *
- * Three of them, and no handlers: a program can have one ignored or take
- * what it does by default, which for all three is that it ends. A shell
- * ignores SIGINT so that ctrl-C reaches the program it started rather than
- * the shell waiting for it. */
+ * Three of them. A program can have one ignored, take what it does by
+ * default -- which for all three is that it ends -- or be told and carry
+ * on. A shell ignores SIGINT so that ctrl-C reaches the program it
+ * started rather than the shell waiting for it.
+ *
+ * SIGKILL can be neither caught nor ignored, because something has to be
+ * final. */
 #define SIGINT   2
 #define SIGKILL  9
 #define SIGTERM 15
 
-#define SIG_DFL 0
-#define SIG_IGN 1
+typedef void (*sighandler_t)(int);
 
-static inline int signal(int sig, int how) {
-    return (int)syscall(SYS_SIGNAL, sig, how, 0);
+#define SIG_DFL ((sighandler_t)0)
+#define SIG_IGN ((sighandler_t)1)
+
+/* Where a handler returns to.
+ *
+ * A handler is an ordinary function and ends in a ret, so something has to
+ * be under it to return to. The kernel cannot provide it: it has no code
+ * mapped in ring 3, and putting a few instructions on the stack for the
+ * program to run would mean a stack that can be executed. So the program
+ * carries them, and hands the address over when it asks for a handler.
+ *
+ * The call below does not come back. It puts the program where the signal
+ * found it, which may be in the middle of a completely different function,
+ * so the loop after it is unreachable and is there to say so.
+ */
+__attribute__((naked, used))
+static void __zelr_sigreturn(void) {
+    __asm__ volatile(
+        "movl $" ZELR_STR(SYS_SIGRETURN) ", %eax\n"
+        "int $0x80\n"
+        "1: jmp 1b\n");
+}
+
+/* SIG_DFL, SIG_IGN, or a function of yours.
+
+   A handler runs on the program's own stack, between two of its own
+   instructions, so everything it touches is the program's. It may not
+   return to its caller -- there isn't one -- and it may take as long as it
+   likes: the same signal is held off until it returns rather than
+   arriving on top of itself. */
+static inline int signal(int sig, sighandler_t how) {
+    return (int)syscall(SYS_SIGNAL, sig, (zelr_word)how,
+                        (zelr_word)&__zelr_sigreturn);
 }
 
 /* Raises one against another program. KILL cannot be ignored. */
@@ -754,8 +798,6 @@ static inline int win_resize(int handle, int w, int h) {
  * what it returns becomes the exit status, and what follows the call makes
  * sure it never comes back here.
  */
-#define ZELR_STR2(x) #x
-#define ZELR_STR(x) ZELR_STR2(x)
 
 __attribute__((naked, section(".text._start")))
 void _start(void) {

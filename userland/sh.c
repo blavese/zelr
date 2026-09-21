@@ -239,7 +239,21 @@ static void run(stage_t *stages, int count, int background) {
         if (pid == 0) {
             /* The child, arranging itself before it becomes anything.
                Everything here is undone by the exec except the descriptors,
-               which is exactly why it is done here. */
+               which is exactly why it is done here.
+
+               And the interrupt, which is not undone by it. This shell
+               ignores SIGINT so that ctrl-C reaches the program rather than
+               ending the session; a child inherits that, and exec keeps an
+               ignored signal ignored, which is the rule everywhere and is
+               there so a parent can start something deliberately immune.
+               What it means here is that the program would be immune too,
+               and the one thing a shell must be able to do is stop the
+               thing it started. So it is put back before the exec.
+
+               Measured, by leaving it out: `spin` could not be interrupted
+               and the shell sat waiting for it, which is the machine lost. */
+            signal(SIGINT, SIG_DFL);
+
             if (carried >= 0) { dup2(carried, 0); close(carried); }
             if (!last) {
                 close(ends[0]);

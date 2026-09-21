@@ -268,6 +268,11 @@ static i64 sys_exec(registers_t *r) {
     t->brk = 0;
     t->brk_base = 0;
 
+    /* So did every handler. An address that meant something in the old
+       program means whatever happens to be there in the new one, and a
+       signal arriving afterwards would jump into it. */
+    signal_forget_handlers(t->pid);
+
     /* A name is what `ps` shows, and a process that became something else
        should say what it became. */
     const char *base = path;
@@ -331,7 +336,26 @@ static i64 sys_kill(registers_t *r) {
 static i64 sys_signal(registers_t *r) {
     task_t *t = task_current();
     if (!t) return -1;
-    return signal_disposition(t->pid, (int)r->rbx, (int)r->rcx) ? 0 : -1;
+    /* The number, what to do with it, and -- when that is a handler -- the
+       address in ring 3 the handler returns into. The kernel cannot supply
+       the third, having no code mapped there. */
+    return signal_disposition(t->pid, (int)r->rbx, r->rcx, r->rdx) ? 0 : -1;
+}
+
+/* Asked for by a handler's return, and by nothing else.
+ *
+   It does not return to its caller. It puts back the frame the program was
+   interrupted at, so what comes out of the interrupt gate is the program
+   carrying on where the signal found it -- which is why the value handed
+   back is the rax that was saved rather than a result of anything. */
+static i64 sys_sigreturn(registers_t *r) {
+    if (signal_return(r)) return (i64)r->rax;
+
+    /* The frame was not one this kernel wrote, or the stack it was on has
+       gone. Either way the program cannot be put back, and carrying on from
+       a frame that failed its checks is the one thing not to do. */
+    task_exit_with(139);
+    return -1;
 }
 
 static i64 sys_sigsend(registers_t *r) {
@@ -997,6 +1021,7 @@ static const syscall_fn TABLE[] = {
     [SYS_PIPE]        = sys_pipe,
     [SYS_SIGNAL]      = sys_signal,
     [SYS_SIGSEND]     = sys_sigsend,
+    [SYS_SIGRETURN]   = sys_sigreturn,
 };
 
 #define N_SYSCALLS (sizeof(TABLE) / sizeof(TABLE[0]))

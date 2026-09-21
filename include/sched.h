@@ -2,6 +2,7 @@
 #include "fpu.h"
 #include "types.h"
 #include "idt.h"
+#include "signal.h"
 
 /* Matches VFS_PATH_MAX. Spelled out rather than included, because the
    scheduler has no other reason to know about the filesystem. */
@@ -98,12 +99,33 @@ typedef struct task {
        opened ninth on this machine. Copied by fork and kept by exec. */
     i16  fd[TASK_MAX_FD];
 
-    /* What has been raised against this task and what it wants ignored,
-       a bit per signal. Acted on by the scheduler rather than at the end
-       of a system call, because a program spinning in a loop makes no
-       system calls and is exactly the program somebody is interrupting. */
+    /* What has been raised against this task, a bit per signal. Acted on by
+       the scheduler rather than at the end of a system call, because a
+       program spinning in a loop makes no system calls and is exactly the
+       program somebody is interrupting. */
     u32  sig_pending;
-    u32  sig_ignored;
+
+    /* Which signals are inside their own handler. A second one of the same
+       kind is left pending until the first returns, which is what stops a
+       handler that is slow to finish from being entered on top of itself
+       until the stack runs out. */
+    u32  sig_running;
+
+    /* What this task wants done with each: SIG_DFL, SIG_IGN, or the address
+       of a function in ring 3. One array rather than a disposition bitmask
+       and a table, because two places saying what a signal means is how they
+       come to disagree.
+
+       Inherited across fork, because the child is the same program. Cleared
+       by exec, because the new one is not, and a handler address that
+       belonged to the old program is a jump into whatever is there now. */
+    u64  sig_handler[SIG_MAX];
+
+    /* Where a handler returns to: a few instructions in the program itself
+       that ask the kernel to put the frame back. The kernel cannot supply
+       this -- it has no code mapped in ring 3 -- so the program hands its
+       address over when it asks for a handler. */
+    u64  sig_trampoline;
 
     /* Which processor is running it, or -1. A task is one thread of
        execution and cannot be two, so a processor looking for something to

@@ -136,6 +136,12 @@
 #define SYS_SIGNAL        54
 #define SYS_SIGSEND       55
 
+/* Asked for by the few instructions a handler returns into, and by
+   nothing else. It puts back the frame the program was interrupted at,
+   so it does not return to its caller the way a call does -- it returns
+   to wherever the program was when the signal arrived. */
+#define SYS_SIGRETURN     58
+
 /* What a window is showing, in words, so the desktop's find can look
    through it; and what is being looked for, for a window that has just been
    told somebody is looking. */

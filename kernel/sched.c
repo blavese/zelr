@@ -258,6 +258,16 @@ task_t *task_fork(const char *name, u64 dir, const registers_t *frame,
        them. */
     if (parent) {
         for (u32 i = 0; i < sizeof(t->cwd); i++) t->cwd[i] = parent->cwd[i];
+
+        /* And what it wants done with each signal, because the child is
+           the same program at the same addresses. What is not inherited is
+           anything already raised: a signal was sent to the parent, and a
+           child that had not been born when it was sent is not part of
+           what it was about. */
+        for (int i = 0; i < SIG_MAX; i++) t->sig_handler[i] = parent->sig_handler[i];
+        t->sig_trampoline = parent->sig_trampoline;
+        t->sig_pending = 0;
+        t->sig_running = 0;
         t->brk = parent->brk;
         t->brk_base = parent->brk_base;
         t->parent_pid = parent->pid;
