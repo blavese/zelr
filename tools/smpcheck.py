@@ -36,6 +36,24 @@ def read_cpus(text):
     return out
 
 
+def cpu_table(vm, want):
+    """The table, waited for rather than read once.
+
+    A prompt can be recognised while the last line of what was asked for is
+    still coming down the serial line, so reading between two prompts on a
+    loaded host hands back a table with rows missing -- which reads as a
+    machine that has lost a processor."""
+    mark = len(vm.serial())
+    vm.type("cat /sys/cpu" + chr(10))
+    deadline = time.time() + 60
+    while time.time() < deadline:
+        got = read_cpus(vm.serial()[mark:])
+        if len(got) >= want:
+            return got
+        time.sleep(0.5)
+    return read_cpus(vm.serial()[mark:])
+
+
 def main():
     keep = "--keep" in sys.argv
     build_once()
@@ -45,7 +63,7 @@ def main():
     try:
         vm.wait_boot()
 
-        before = read_cpus(vm.fresh("cat /sys/cpu", timeout=30))
+        before = cpu_table(vm, 4)
         c.add("the machine describes four processors", len(before) == 4)
 
         # --- something for them to run ------------------------------------
@@ -56,7 +74,7 @@ def main():
             vm.run("bg /bin/spin", timeout=30)
         time.sleep(6)
 
-        after = read_cpus(vm.fresh("cat /sys/cpu", timeout=30))
+        after = cpu_table(vm, 4)
         c.add("and still describes four afterwards", len(after) == 4)
 
         if len(after) == 4:
@@ -84,18 +102,24 @@ def main():
         # The point of the check that comes last. A scheduler that hands
         # programs to other processors and then wedges the machine has done
         # the interesting half and not the useful one.
-        listed = vm.fresh("ps", timeout=30)
-        c.add("and can still be asked what is running", "spin" in listed)
-        if "spin" not in listed:
-            print("      ps said: %s" % listed.strip()[-300:])
+        # Waited for by what is said rather than by the prompt coming back.
+        #
+        # fresh() hands over everything between one prompt and the next, and
+        # on a loaded host the prompt can be recognised while the last line
+        # of a program's output is still coming down the serial line. That is
+        # exactly what happened under the gate: this reported that the
+        # machine would not run a program to completion, and the evidence it
+        # printed showed the program had run, had printed its first three
+        # lines, and printed the fourth a moment later. The machine was fine
+        # and the check was reading too early.
+        vm.type("ps" + chr(10))
+        c.add("and can still be asked what is running",
+              vm.wait_serial("spin", timeout=60))
 
-        out = vm.fresh("exec /bin/hello", timeout=60)
+        vm.type("exec /bin/hello" + chr(10))
         c.add("and the machine still runs a program to completion",
-              "5050" in out)
-        if "5050" not in out:
-            print("      exec said: %r" % out.strip()[-400:])
-            print("      cpus: %s" % vm.fresh("cat /sys/cpu", timeout=30)
-                  .strip().replace(chr(10), " | "))
+              vm.wait_serial("5050", timeout=120))
+
     finally:
         vm.stop()
         try:
