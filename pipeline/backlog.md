@@ -45,8 +45,12 @@ have been finished is worth a line saying so.
   through, `userland/sigtest.c` checks it. What is still missing is
   `sigaction`: no mask a program can set for itself, and no restarting of an
   interrupted system call.
-- **Memory mapping.** `sbrk` moves a break and that is the whole of it. A
-  compiler wants to map a file; so does anything that reads one large.
+- ~~**Memory mapping.** `sbrk` moves a break and that is the whole of it.~~
+  Done for anonymous memory: `mmap` reserves a range and the pages arrive as
+  they are touched, so an address space costs what it is used. Mapping a
+  *file* is still not there, and is what a page cache would be built on.
+- **A page cache, and swap.** Two pages of the same file mapped twice are
+  two copies; nothing is ever evicted. Both need file mapping first.
 - **Something to build zelr on zelr.** An assembler, then a compiler for a
   subset of C, then a linker. The threshold, and much the largest thing on
   this page. It needs the two above first, because a compiler is a program.

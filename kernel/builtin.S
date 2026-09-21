@@ -329,3 +329,10 @@ builtin_crashwrite_end:
 builtin_durtest_start:
 .incbin "build/user/durtest.elf"
 builtin_durtest_end:
+
+.balign 4
+.global builtin_polltest_start
+.global builtin_polltest_end
+builtin_polltest_start:
+.incbin "build/user/polltest.elf"
+builtin_polltest_end:

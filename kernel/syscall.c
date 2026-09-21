@@ -352,6 +352,27 @@ static i64 sys_signal(registers_t *r) {
    interrupted at, so what comes out of the interrupt gate is the program
    carrying on where the signal found it -- which is why the value handed
    back is the rax that was saved rather than a result of anything. */
+static i64 sys_poll(registers_t *r) {
+    u32 n = (u32)r->rcx;
+    if (n > POLL_MAX) return -1;
+
+    u64 bytes = (u64)n * sizeof(pollfd_t);
+    if (n && !user_range_ok(r->rbx, bytes)) return -1;
+
+    /* Copied in and back out rather than worked on where it lies. This
+       sleeps, and a program that is asleep can be forked or can have
+       another of its threads -- when there are threads -- change what is
+       under that pointer. */
+    pollfd_t set[POLL_MAX];
+    for (u32 i = 0; i < n; i++) set[i] = ((const pollfd_t *)r->rbx)[i];
+
+    int got = fd_poll(set, n, (int)(i32)r->rdx);
+
+    if (!user_range_ok(r->rbx, bytes)) return -1;   /* it may have gone */
+    for (u32 i = 0; i < n; i++) ((pollfd_t *)r->rbx)[i].revents = set[i].revents;
+    return got;
+}
+
 static i64 sys_rename(registers_t *r) {
     char from[VFS_PATH_MAX], to[VFS_PATH_MAX];
     if (!copy_path(r->rbx, from, sizeof(from))) return -1;
@@ -1052,6 +1073,7 @@ static const syscall_fn TABLE[] = {
     [SYS_MUNMAP]      = sys_munmap,
     [SYS_FSYNC]       = sys_fsync,
     [SYS_RENAME]      = sys_rename,
+    [SYS_POLL]        = sys_poll,
 };
 
 #define N_SYSCALLS (sizeof(TABLE) / sizeof(TABLE[0]))

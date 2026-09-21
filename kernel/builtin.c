@@ -57,6 +57,7 @@ extern const u8 builtin_faulttest_start[], builtin_faulttest_end[];
 extern const u8 builtin_maptest_start[], builtin_maptest_end[];
 extern const u8 builtin_crashwrite_start[], builtin_crashwrite_end[];
 extern const u8 builtin_durtest_start[], builtin_durtest_end[];
+extern const u8 builtin_polltest_start[], builtin_polltest_end[];
 
 typedef struct {
     const char *name;
@@ -112,6 +113,7 @@ static const program_t PROGRAMS[] = {
     { "maptest",  builtin_maptest_start,  builtin_maptest_end  },
     { "crashwrite", builtin_crashwrite_start, builtin_crashwrite_end },
     { "durtest",  builtin_durtest_start,  builtin_durtest_end  },
+    { "polltest", builtin_polltest_start, builtin_polltest_end },
 };
 
 #define N_PROGRAMS (sizeof(PROGRAMS) / sizeof(PROGRAMS[0]))
