@@ -34,11 +34,11 @@ When it fails it says why.
 <td align="center"><sub>the theme, which changes as you touch it</sub></td>
 </tr>
 <tr>
-<td width="50%"><img src="docs/wallpaper.png" alt="an animated wallpaper with the apps along the panel"></td>
+<td width="50%"><img src="docs/wallpaper.png" alt="an animated wallpaper with the windows along the panel"></td>
 <td width="50%"><img src="docs/maximised.png" alt="a terminal filling the whole screen with the panel gone"></td>
 </tr>
 <tr>
-<td align="center"><sub>one of the six wallpapers that move, and the apps kept on the panel</sub></td>
+<td align="center"><sub>one of the six wallpapers that move, with the windows swept off it</sub></td>
 <td align="center"><sub>and the panel tucked away for a window that wanted the screen</sub></td>
 </tr>
 <tr>
@@ -56,15 +56,22 @@ When it fails it says why.
 <sub>a web browser: that page came off a real web server, over this system's
 own TCP, and was parsed and laid out by the program showing it</sub>
 
+![ctrl and f, with the word it found lit on the page](docs/find.png)
+
+<sub>ctrl and f, which looks through what is on the screen rather than
+through a list of programs: there is no text in a picture of text, so the
+browser says what words it laid out, the desktop counts them, and the
+browser paints behind the one it was taken to</sub>
+
 Every one of those was photographed by `tools/shots.py`, which boots the
 machine, drives it, and saves what came out. They are not mockups and they do
 not go stale quietly.
 
-It is not a clone of anything. About 96,000 lines in all, of which 40,500 are
-generated data that nobody types: the font coverage, the root certificate
+It is not a clone of anything. About 119,500 lines in all, of which 39,700
+are generated data that nobody types: the font coverage, the root certificate
 store, the typeface at every size a browser might ask for. What is left is
-roughly 33,300 hand-written lines of kernel, bootloaders and headers, 10,700
-of ring 3 programs, and 10,500 of build and test tooling. No
+roughly 40,400 hand-written lines of kernel, bootloaders and headers, 25,600
+of ring 3 programs, and 13,800 of build and test tooling. No
 libc, no runtime dependencies, and nothing borrowed from another kernel:
 every driver, the filesystem, the bootloader, the image writer and the font
 are written here, from the specifications where there is one and from scratch
@@ -99,12 +106,13 @@ are driving it down a serial line or something has gone wrong.
 A terminal opens, over a desktop with icons down the left of it. Click the
 name at the left of the dock, or the wallpaper, for the launcher: the
 programs by kind -- a file manager, an editor, paint, settings, a system
-monitor, a music player, a calculator, a web browser, and what the machine
-is made of, with a field in it that narrows the list as you type. Press
+monitor, a music player, a calculator, a web browser, two card games, and
+what the machine is made of, with a field in it that narrows the list as
+you type. Press
 ctrl and f, or the magnifier in the tray, to look for a word that is on the
-screen rather than for a program to start.
-Drag a title bar to move a window; the three
-buttons at its right put it away, fill the screen, or close it.
+screen rather than for a program to start. Drag a title bar to move a
+window; the three buttons at its right put it away, fill the screen, or
+close it.
 Drag the bottom right corner to resize, or drag a title bar to an edge to
 snap. Alt and tab changes window, alt and an arrow snaps, alt and d clears
 the desktop, and shaking a window sends the others away. Escape returns to
@@ -117,7 +125,7 @@ the desktop's own menu.
 
 Everything the desktop is drawn from is a setting. Not the colours and the
 wallpaper alone: the dock's height, the gap it floats clear of the edge by,
-whether the name and the field and the clock are on it at all, a window's
+whether the name and the find button and the clock are on it at all, a window's
 title bar and frame and corner, the size of the icons, how long a fade
 takes, how close two clicks have to be. Thirty one of them, each a line in
 `/zelr.cfg`, and the settings window's Everything page is generated from the
@@ -146,11 +154,12 @@ PageUp scrolls back.
     write notes hello
     cat notes
 
-    fetch example.com / page.html
+    get example.com / page.html
     cat page.html
 
 That downloads a live web page over TCP and saves it to a disk that survives
-closing the window. A machine with a card asks for an address at startup, so
+closing the window. Over https unless the address says otherwise, which is
+the other way round from where this started. A machine with a card asks for an address at startup, so
 there is nothing to do first; `dhcp` asks again, for when there was nothing
 to answer the first time. `browser example.com`,
 or the browser in the launcher, shows the same page laid out rather than as
@@ -464,8 +473,11 @@ to ATA PIO on the primary bus, which moves every word through the CPU and needs
 no bus mastering setup. Whichever answers, the rest of the kernel sees the same
 four calls.
 
-**Filesystem.** FAT16, so the disk is not a sealed box: other tools can open
-the image and files move in both directions. Files are worked on in memory and
+**Filesystem.** FAT16 and FAT32, so the disk is not a sealed box: other
+tools can open the image and files move in both directions. The width is
+chosen by how many clusters the volume needs rather than named: past what
+FAT16 can describe at all, which is where an eight gigabyte disk lands, it
+is FAT32. Files are worked on in memory and
 written through on every change. Writes are ordered so that losing power part
 way through cannot destroy what was already there: the new cluster chain is
 written and flushed first, the directory entry is committed as a single sector,
@@ -562,7 +574,7 @@ processor still owns the kernel; the others own nothing until they are given
 something. What they are given is the frame: the compositor hands half of
 every screen comparison to whichever one is free.
 
-**Programs.** Ring 3, its own address space per process, and fifty-four
+**Programs.** Ring 3, its own address space per process, and fifty-eight
 system calls through int 0x80. A program can start another program, block
 until it finishes and read what it returned from `main`, so the terminal
 starting `paint` is one ring 3 process starting another with the kernel only
@@ -651,8 +663,9 @@ nothing, which is still most pages.
 What is bound is what a page can actually do. Reading and finding:
 `getElementById`, `getElementsByTagName`, `textContent`, `className`,
 `classList`, `id`, `tagName`, `value`, `checked`, `getAttribute`,
-`setAttribute`, `parentNode`, `firstChild`, `nextSibling`, `children` and
-`document.title`. Changing: `createElement`, `createTextNode`,
+`setAttribute`, `parentNode`, `parentElement`, `firstChild`, `lastChild`,
+`nextSibling`, `previousSibling`, `children`, `querySelector`,
+`querySelectorAll` and `document.title`. Changing: `createElement`, `createTextNode`,
 `appendChild`, `insertBefore`, `removeChild` and `remove`. Hearing:
 `addEventListener` and `removeEventListener`, `onclick` and its relatives,
 with an event that carries the element actually hit, `preventDefault` and
@@ -664,11 +677,45 @@ inside its own descendant is refused — that one is not a wrong answer but a
 ring, and everything that walks children until there are none walks it
 forever.
 
+The selectors are the ones the style sheets already use, rather than a
+second implementation of the same question. A page's idea of what
+`nav > a.current` picks out has to be the same whether it came from a sheet
+or from a script, and two of those agree until they do not -- and the day
+they stop is the day a page styles one element and scripts another.
+
+And the language has regular expressions. Literals and character classes,
+anchors, groups capturing and not, alternation, and the repetitions each
+greedy or lazy, with the g, i and m flags; `test` and `exec` with
+`lastIndex`, and `match`, `search`, `split` and `replace`, the last with
+`$1` and `$&` or with a function if the page would rather decide. No
+lookahead, no lookbehind, no backreferences and no named groups: those are
+refused when the pattern is compiled and the script is told which, because
+a page that says what is wrong can be fixed and a page that silently
+matches the wrong thing cannot.
+
+The interesting part of that is the slash, which is the same character as
+the one that divides. `a / b` and `/ab/` differ only in what came before,
+so the lexer carries whether the token it just read could end an
+expression -- after a number, a name, a string or a closing bracket a slash
+divides, and anywhere else it opens a pattern.
+
+Arrow functions, `instanceof` and labelled `break` and `continue` are here
+because google's front page asked for them and said so one script at a
+time. `instanceof` is not a walk up a prototype chain, because there is no
+chain a script can reach into; every object made with `new` remembers what
+made it instead. What is missing there is inheritance, and that is written
+down rather than left to be found, because a false where a page expected
+true is a branch not taken and the page looks like it decided something
+rather than like it broke.
+
 What is still absent is absent rather than approximated: no capture phase,
 because a listener registered for capture and run at bubble time is worse
-than one not run; no `querySelector`; no `innerHTML`, because that means
-running the parser over a fragment and this parser builds whole documents;
-and no regular expressions in the language itself. A property that is
+than one not run; no `innerHTML`, because that means running the parser
+over a fragment and this parser builds whole documents; and no classes, no
+generators and no `async`, which the parser refuses by name. A script that
+uses `class` is told this engine does not have classes, which is a fact
+somebody can act on, where treating it as an identifier would produce a
+syntax error four lines later about something unrelated. A property that is
 missing is better than one that quietly returns undefined and lets a page
 believe it worked.
 
@@ -734,10 +781,17 @@ second if the wallpaper is one that moves. Neither is drawn at all now.
 
 It used to keep a row of pinned apps, and no longer does. Six coloured
 letters in circles said which six programs somebody had chosen and nothing
-else: to reach a seventh you opened the launcher anyway. What is in the
-middle of the bar instead is a field that reaches all of them, is the same
-size whatever is installed, and takes text -- a substring rather than a
-prefix, so "ain" finds Paint and return runs it.
+else: to reach a seventh you opened the launcher anyway. What reaches all of
+them is the launcher's own field, the same size whatever is installed, and
+it takes text -- a substring rather than a prefix, so "ain" finds Paint and
+return runs it.
+
+For a while a second field sat in the middle of the dock, and all it did was
+open that launcher. It was a start menu for a desktop that had one, in the
+part of the bar the window chips grow into, so a machine with a few windows
+open had nowhere to put them. The middle of the bar is bare now and what is
+in the tray is a find, which looks for a word on the screen rather than for
+a program to start.
 
 There are no icon files anywhere in this project. The five on the desktop
 are drawn: flat shapes in a thirty two unit square, scaled to whatever size
@@ -805,9 +859,11 @@ frame, never a calculation per pixel of the screen. The curves come from a
 seventeen entry table, since the kernel is built with no floating point in it
 at all.
 
-**Eight programs.** The terminal, the file manager, the editor, paint,
-settings, a system monitor, a music player and a calculator, all ring 3 and
-all using nothing the kernel does not offer everybody.
+**Eleven programs.** The terminal, the file manager, the editor, paint,
+settings, a system monitor, a music player, a calculator, a web browser and
+two card games, all ring 3 and all using nothing the kernel does not offer
+everybody. The browser has a section of its own further down, because what
+is interesting about it is not that it is a program.
 
 The monitor is the one that says most about the machine, and the number it
 puts at the top took two goes. The scheduler counts slices, one for whichever
@@ -832,6 +888,54 @@ The hardware plays at one rate and in stereo and will not be argued with, so
 a file recorded at some other rate is stepped through at a ratio held in
 sixteen fixed point bits and a mono file has each sample written twice. Put
 one on a USB stick, plug it in, and it is under `/usb`.
+
+**Two card games**, which are one program each and a pile of shared rules.
+
+Blackjack is a six deck shoe reshuffled at three quarters, a dealer that
+stands on every seventeen including a soft one, blackjack at three to two,
+double on any two cards and after a split, splitting to four hands with
+split aces taking one card each, insurance against an ace, and late
+surrender. Every one of those is a decision a real table makes differently,
+so the ones this table made are written at the top of the file: a game that
+does not say which rules it is playing is one you cannot tell is wrong. The
+two that cost the player are in on purpose -- the dealer peeks under a ten
+or an ace so nobody doubles into a blackjack that was already there, and an
+odd bet paying three to two rounds down, the way a table does.
+
+Poker is no limit Texas hold'em against three opponents, with blinds, a
+button that moves, four betting rounds, and side pots. The side pots are the
+part that makes it a poker program rather than a program that deals cards:
+a player who is all in for less can only win the layer of the pot they paid
+for, and the rest goes on without them. The odd chip in a split pot goes to
+the first winner left of the button, because a chip cannot be halved and
+somebody has to have it. Heads up, the button posts the small blind and
+speaks first before the flop and last after it, which is the opposite of
+every other seat count and is where a game that just walks left from the
+button plays its last hands wrong.
+
+The opponents cannot see your cards. There is no function that takes another
+seat's hand: each of them is given its own two cards and the board, scores
+them, and decides against what the pot is offering. They bluff about one
+time in nine from a hand they would otherwise check, because an opponent
+that never bluffs is one you can fold against forever.
+
+None of that is drawn from a picture. There is no image file for a playing
+card any more than there is one for a desktop icon: the pips are discs and
+triangles sized from the card, so a bigger card is a bigger drawing. The
+shuffle is Fisher-Yates walking down, over a generator seeded from the clock
+and then stirred by every click and keystroke -- a generator seeded from the
+clock alone deals the same cards to a machine that boots and starts the game
+at the same moment, which on a machine that boots in four seconds is not a
+rare accident.
+
+And the two games draw into memory of their own and copy the finished frame
+over at the end, which is not tidiness. A window's surface is the pixels the
+desktop composites from; there is no second buffer and `win_commit` does not
+swap one. The first thing a frame does is paint the table over everything,
+and the compositor is a task like any other, so it runs in the gap before
+the cards go back on. What that looked like was a maximised poker game with
+no cards, no seats and no buttons in it -- a timing fault wearing a drawing
+fault's clothes.
 
 **Opening a file.** A program could be started and could not be told
 anything, so a file manager could offer to open a file in the editor and had
@@ -1132,20 +1236,20 @@ is still the kernel's own, on the console; the one in a window is a program.
 ## testing
 
 The kernel tests itself. `./run.sh -T` boots with selftest on the command line,
-runs 542 checks across every subsystem, then writes to QEMU's debug-exit port
+runs 543 checks across every subsystem, then writes to QEMU's debug-exit port
 so the host gets a real exit status.
 
     [string]                8 checks   [live tree]            19 checks
-    [the identity map]      6 checks   [layout]                9 checks
+    [the identity map]      2 checks   [layout]                9 checks
     [physical memory]       4 checks   [waiting]              16 checks
-    [paging]                4 checks   [trackpad]             25 checks
+    [paging]                5 checks   [trackpad]             25 checks
     [user access]           5 checks   [crypto]               22 checks
     [heap]                  5 checks   [sha-256]              15 checks
     [filesystem]            7 checks   [aes-gcm]              11 checks
     [paths]                11 checks   [x25519]                8 checks
     [directories]          12 checks   [rsa]                   8 checks
     [open files]           30 checks   [p-256]                13 checks
-    [timer]                 2 checks   [sha-512]               4 checks
+    [timer]                 3 checks   [sha-512]               4 checks
     [interrupts]            2 checks   [p-384]                 6 checks
     [disk]                 12 checks   [certificates]         39 checks
     [fat]                  14 checks   [randomness]            5 checks
@@ -1158,10 +1262,10 @@ so the host gets a real exit status.
     [windows]               7 checks   [interrupt routing]     9 checks
     [window server]        16 checks   [clipboard]            14 checks
     [built-in programs]     8 checks   [clock]                18 checks
-    [theme]                16 checks   [kernel stack]          2 checks
+    [theme]                19 checks   [kernel stack]          2 checks
     [taskbar]              18 checks
 
-    542 passed, 0 failed
+    543 passed, 0 failed
     SELFTEST_PASS
 
 The cryptographic sections are all known answers from published documents:
@@ -1175,10 +1279,10 @@ talk to anybody.
 
 The processor section is two checks on a machine with one CPU and eleven on
 a machine with several, where it hands work to each of them and requires the
-count they share to come back exact. `qemu-system-x86_64 -smp 4` reaches 531.
+count they share to come back exact. `qemu-system-x86_64 -smp 4` reaches 552.
 
 The same checks run again on `-machine q35`, which has PCIe and an AHCI
-controller rather than a 1996 chipset and a PIO disk, and reach 530 there.
+controller rather than a 1996 chipset and a PIO disk, and reach 551 there.
 Two bugs found the day that was added were invisible on the older machine:
 the block layer would not split a request past the eight sectors AHCI
 accepts, and the ACPI tables were never read on a UEFI machine at all.
@@ -1454,6 +1558,10 @@ orders of magnitude away from Linux, which is roughly 30 million lines.
     userland/monitor.c what the machine is doing, while it does it
     userland/music.c   wav files, resampled to whatever the card wants
     userland/calc.c    arithmetic in millionths, because there is no fpu
+    userland/cards.h   a deck, a shuffle, and a card drawn rather than stored
+    userland/poker.h   what five cards out of seven are worth
+    userland/blackjack.c  six decks, a dealer that stands on seventeen
+    userland/poker.c   no limit hold'em, side pots and all
     kernel/builtin.S   the user programs, pasted into the kernel image
     kernel/apps.c      the system info window
     kernel/vfs.c       one namespace over the live tree, the disk and memory

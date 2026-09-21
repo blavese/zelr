@@ -38,6 +38,7 @@ SUITES = [
     ("jpegtest",  "JPEGTEST_PASS",  "photographs", 180),
     ("svgtest",   "SVGTEST_PASS",   "drawings", 180),
     ("layouttest", "LAYOUTTEST_PASS", "where things end up", 120),
+    ("cardtest",  "CARDTEST_PASS",  "what a poker hand is worth", 120),
 ]
 
 

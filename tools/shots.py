@@ -22,8 +22,8 @@ import time
 import zlib
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from harness import (Guest, build_once, count_in, count_near,
-                     ROOT)                                # noqa: E402
+from harness import (Guest, build_once, count_near,
+                     ROOT)                                 # noqa: E402
 from webserver import Server                               # noqa: E402
 
 DISK = os.path.join(ROOT, "shots.%d.img" % os.getpid())
@@ -47,7 +47,7 @@ CHIPS_X = DOCK_SIDE + 16 + BADGE_W + 18
 MENU_ITEM, MENU_PAD = 32, 10
 MENU_RAIL, MENU_PANE = 132, 152
 MENU_W = MENU_PAD * 2 + MENU_RAIL + MENU_PANE
-MENU_ROWS = 5
+MENU_ROWS = 6
 MENU_H = MENU_PAD * 2 + MENU_ROWS * MENU_ITEM
 MENU_LEFT = DOCK_SIDE
 MENU_TOP = PANEL_Y - MENU_H - 8
@@ -76,27 +76,22 @@ HIGH = (1010, 300)
 # Everything above the panel, which is where windows are.
 ABOVE = (0, 0, SCREEN_W, PANEL_Y)
 
-# The part of the panel that says what is running: the pinned icons, which
-# get a bar under them while their program is up, and then the buttons for
-# every window that is not one of those. Stopping short of the tray, because
-# the clock in it changes on its own.
+# The part of the panel that says what is running: a chip for each window,
+# past the name at the left. Stopping short of the tray, because the clock
+# in it changes on its own.
 #
 # This, rather than counting how much window is on the screen, is what says
 # a program started. A window opening over another one of the same grey can
 # leave that count unchanged or lower, which is how the calculator opening
 # on top of the monitor read as the calculator not opening.
 #
-# The pins alone were not enough either: a machine starts with five of them
-# and the monitor and the calculator are not among them, so they arrive as
-# buttons further along and nothing under the icons moved at all. Both
-# programs were running the whole time the check was saying they had not
-# started. Compared as bytes, so it does not encode any colour.
+# Watching only the left of the bar was not enough either, back when the
+# dock kept pinned icons: the monitor and the calculator were not among
+# them, so they arrived as chips further along and nothing under the icons
+# moved at all. Both programs were running the whole time the check was
+# saying they had not started. Compared as bytes, so it does not encode any
+# colour.
 PANEL_BAND = (CHIPS_X - 6, PANEL_Y + 4, 840, PANEL_Y + TASKBAR_H - 1)
-
-# The terminal's own page, which is neither the wallpaper nor any window
-# this desktop draws, so counting it is a check that a terminal is up.
-SLATE = (0x10, 0x14, 0x1A)
-
 
 def write_png(path, w, h, pixels):
     """A PPM's worth of pixels, as a PNG.
@@ -128,11 +123,16 @@ def write_png(path, w, h, pixels):
 
 # What the launcher lists: which kind a thing is in, and where it is in
 # that kind. One number was enough when the menu was one list of thirteen.
+#
+# The kinds are in the order wm.c lists them, so adding one in the middle
+# moves everything below it: Games went in between Media and System, and
+# the two rows under System are two lower than they were.
 TERMINAL, FILES, NOTES, CALC = (0, 0), (0, 1), (0, 2), (0, 3)
 BROWSER = (1, 0)
 PAINT, MUSIC = (2, 0), (2, 1)
-SETTINGS, MONITOR, ABOUT = (3, 0), (3, 1), (3, 2)
-CLOSE_ALL = (4, 0)
+BLACKJACK, POKER = (3, 0), (3, 1)
+SETTINGS, MONITOR, ABOUT = (4, 0), (4, 1), (4, 2)
+CLOSE_ALL = (5, 0)
 
 
 def rail_row(i):
@@ -361,24 +361,22 @@ def main():
         time.sleep(1.2)
         shoot(mon, "calc")
 
-        # --- and the panel out of the way of a maximised window -----------
+        # --- a terminal again, which the last three pictures need ---------
         #
-        # Last, because a maximised window tucks the panel away, and the
-        # launcher lives on the panel: every shot that needs the launcher
-        # has to happen while there is still one to click.
+        # The browser is started by typing into one, and the maximised shot
+        # is of one. The last terminal went when everything did.
         #
-        # Nothing is running by now, so the terminal's icon on the panel
-        # starts one rather than raising one, and this waits for it the same
-        # way the launcher does.
-        # Waited for on the terminal's own dark page rather than on the
-        # panel, because the pointer ends up resting on the icon it just
-        # clicked and that alone changes the panel whatever happened.
-        _, _, _, _, ok = mon.click_for(
-            TERMINAL_ICON[0], TERMINAL_ICON[1], "terminal-again",
-            lambda w, h, px: count_in(px, w, ABOVE, SLATE) > 50000,
-            timeout=45)
-        if not ok:
-            raise SystemExit("the terminal did not come back")
+        # This clicked the first chip on the dock and waited for a terminal
+        # to appear behind it. There was no chip: the dock carries one per
+        # window, the monitor and the calculator were the windows, and the
+        # click landed on the monitor and raised it. A wait for something
+        # nobody had asked for then ran out, forty five seconds later, with
+        # a message about the terminal not coming back -- which was true and
+        # was not the fault. So the windows are closed and this asks the
+        # launcher, which is the only thing on an empty desktop that starts
+        # anything.
+        close_all(mon)
+        run_app(mon, TERMINAL, "terminal-again")
         time.sleep(1.5)
 
         # --- the browser, on a page off a real server ----------------------
@@ -390,12 +388,39 @@ def main():
         time.sleep(16)
         shoot(mon, "browser", park=HIGH)
 
-        before = panel_now(mon)
-        started(mon, TERMINAL_ICON[0], TERMINAL_ICON[1], "term-front", before)
+        # --- and ctrl+f, looking at the page the browser is showing --------
+        #
+        # Taken here because the find is about a window with words in it,
+        # and this is the window with the most words in it. What is being
+        # photographed is the bar in the corner and the mark behind the
+        # word it took us to, which is the whole of the feature: the
+        # desktop cannot read a window, so this only works because the
+        # browser said what it was showing.
+        vm.type(chr(6))
+        time.sleep(2)
+        vm.type("connection", gap=0.18)
+        time.sleep(3)
+        shoot(mon, "find", park=HIGH)
+        vm.type(chr(27))
         time.sleep(1.5)
-        vm.type("help\n")            # a fresh one, so give it something to say
+
+        # --- and the panel out of the way of a maximised window -----------
+        #
+        # The browser is closed first, and that is not tidiness. It spins
+        # between frames rather than sleeping, because a sleep from ring 3
+        # can return with no time passed and a browser that yielded would
+        # stop; so while it is up, every other program on this machine is
+        # starved. The terminal raised in front of it took neither the line
+        # typed at it nor the resize the window manager sent, and what came
+        # out was a picture of a terminal moved into the corner at its old
+        # size with nothing printed in it -- which reads as a broken
+        # maximise rather than as a program that never got a turn.
+        close_all(mon)
+        run_app(mon, TERMINAL, "term-last")
         time.sleep(1.5)
-        mon.send("sendkey alt-up", settle=1.8)
+        vm.type("help" + chr(10))    # a fresh one, so give it something to say
+        time.sleep(2.0)
+        mon.send("sendkey alt-up", settle=2.2)
         shoot(mon, "maximised", park=HIGH)
 
     finally:

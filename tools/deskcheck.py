@@ -40,7 +40,7 @@ MENU_PAD = 10
 MENU_RAIL = 132
 MENU_PANE = 152
 MENU_W = MENU_PAD * 2 + MENU_RAIL + MENU_PANE
-MENU_ROWS = 5            # five kinds, and no kind has more than four in it
+MENU_ROWS = 6            # six kinds, and no kind has more than four in it
 MENU_H = MENU_PAD * 2 + MENU_ROWS * MENU_ITEM
 
 # It opens from the badge against the left of the dock, eight pixels above

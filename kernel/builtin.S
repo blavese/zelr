@@ -245,3 +245,24 @@ builtin_wiretest_end:
 builtin_jsprobe_start:
 .incbin "build/user/jsprobe.elf"
 builtin_jsprobe_end:
+
+.balign 4
+.global builtin_blackjack_start
+.global builtin_blackjack_end
+builtin_blackjack_start:
+.incbin "build/user/blackjack.elf"
+builtin_blackjack_end:
+
+.balign 4
+.global builtin_poker_start
+.global builtin_poker_end
+builtin_poker_start:
+.incbin "build/user/poker.elf"
+builtin_poker_end:
+
+.balign 4
+.global builtin_cardtest_start
+.global builtin_cardtest_end
+builtin_cardtest_start:
+.incbin "build/user/cardtest.elf"
+builtin_cardtest_end:

@@ -475,6 +475,12 @@ if [ "$MODE" = "screen" ] || [ "$MODE" = "full" ]; then
   # a check that the programs say what they are showing.
   findtest() { keep timeout 600 python tools/findcheck.py; }
 
+  # The two card games on the screen. What the rules are worth is checked
+  # inside the machine by cardtest, which ring3test runs; this is the half
+  # that needs a window -- a Games row that opens onto something, cards
+  # that reach the cloth, and a dealer that plays its own hand out.
+  gametest() { keep timeout 900 python tools/gamecheck.py; }
+
   # https against the actual web. Everything else about TLS is checked
   # against fixed answers, which proves the arithmetic and cannot prove that
   # a real server will talk to it. This needs a working connection and fails
@@ -499,6 +505,7 @@ if [ "$MODE" = "screen" ] || [ "$MODE" = "full" ]; then
   par_start "bodies arrive compressed and connections are kept" wiretest
   par_start "a machine still starts once it has formatted its disk" boottest
   par_start "ctrl+f finds a word that is on the screen" findtest
+  par_start "a deal reaches the cloth and the dealer plays it out" gametest
   par_start "the programs it ships with do what they say" apptest
   par_start "a shell, with pipes and redirection" shtest
   par_start "a setting written by hand reaches the screen" settest

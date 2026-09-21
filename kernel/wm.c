@@ -408,16 +408,21 @@ static const mitem_t M_SYSTEM[] = {
     { "Monitor",      "/bin/monitor" },
     { "System info",  0 },
 };
+static const mitem_t M_GAMES[] = {
+    { "Blackjack",    "/bin/blackjack" },
+    { "Poker",        "/bin/poker" },
+};
 static const mitem_t M_SESSION[] = {
     { "Close all",    0 },
     { "Leave desktop", 0 },
     { "Shut down",    0 },
 };
 
-/* There is no Games here, and a category with nothing in it is a promise
-   the machine cannot keep: a row that opens onto an empty column reads as
-   something broken rather than as something not written yet. It goes in
-   the day there is a game to put in it. */
+/* Games went in the day there was a game to put in them. A category with
+   nothing in it is a promise the machine cannot keep -- a row that opens
+   onto an empty column reads as something broken rather than as something
+   not written yet -- which is why this row did not exist until it had two
+   things under it. */
 #define CAT(a) a, ((int)(sizeof(a) / sizeof((a)[0])))
 static const struct {
     const char *name;
@@ -427,6 +432,7 @@ static const struct {
     { "Productivity", CAT(M_WORK)    },
     { "Internet",     CAT(M_WEB)     },
     { "Media",        CAT(M_MEDIA)   },
+    { "Games",        CAT(M_GAMES)   },
     { "System",       CAT(M_SYSTEM)  },
     { "Session",      CAT(M_SESSION) },
 };
