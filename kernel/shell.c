@@ -222,6 +222,51 @@ static void enter_desktop(void) {
     kprintf("back at the shell\n");
 }
 
+/* A name on its own, looked for as a program.
+ *
+ * The console shell had no such path at all: anything that was not one of
+ * its own commands was "not found", and a program had to be started with
+ * `exec`. The kernel could always load an ELF off the disk -- every spawn
+ * here reads through the same VFS as `cat` -- so what was missing was never
+ * the loading, it was the looking, and it was missing in both shells.
+ *
+ * Here first, then a stick, then /bin. The working directory comes first
+ * because a program somebody has just downloaded or copied is the one they
+ * mean, and /bin is last so that a name in both runs the one in front of
+ * you rather than the one that shipped. */
+static bool run_by_name(u32 argc, char **argv) {
+    static const char *const where[] = { 0, "/usb", "/bin" };
+    char path[VFS_PATH_MAX];
+
+    for (u32 i = 0; i < sizeof(where) / sizeof(where[0]); i++) {
+        u32 n = 0;
+        if (where[i]) {
+            for (const char *p = where[i]; *p && n < sizeof(path) - 2; p++) path[n++] = *p;
+            path[n++] = '/';
+        }
+        /* The name as given covers both a path somebody typed and a bare
+           name in the directory the shell is in. */
+        for (const char *p = argv[0]; *p && n < sizeof(path) - 1; p++) path[n++] = *p;
+        path[n] = 0;
+
+        u32 size = 0;
+        u8 *img = vfs_slurp(path, &size);
+        if (!img) continue;
+
+        int rc = argc > 1 ? user_spawn_elf_arg(path, img, size, argv[1])
+                          : user_spawn_elf(path, img, size);
+        kfree(img);
+        if (rc > 0) { task_wait((u32)rc); return true; }
+
+        /* It was there and it is not a program. Saying so beats carrying on
+           to the next directory and then reporting that nothing of that
+           name exists, which is the opposite of what was found. */
+        kprintf("%s: %s\n", path, elf_error(rc));
+        return true;
+    }
+    return false;
+}
+
 static void execute(char *buf) {
     char *argv[ARG_MAX];
     u32 argc = split(buf, argv, ARG_MAX);
@@ -510,8 +555,9 @@ static void execute(char *buf) {
     } else if (!strcmp(c, "reboot")) {
         kprintf("rebooting\n");
         power_reboot();
-    } else {
-        kprintf("%s: not found (try help)\n", c);
+    } else if (!run_by_name(argc, argv)) {
+        kprintf("%s: not a command, and no program of that name here, "
+                "on a stick or in /bin\n", c);
     }
 }
 

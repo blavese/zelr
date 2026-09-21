@@ -1361,13 +1361,56 @@ static void cmd_help(int argc, char **argv) {
         say(work);
     }
     say("");
-    dim("A name on its own runs that program out of /bin.");
+    dim("A name on its own runs that program: here, then /usb, then /bin.");
     dim("Tab completes. Up and down walk through history.");
     dim("PageUp and PageDown scroll. Escape leaves the desktop.");
 }
 
-/* Runs one command line. Anything that is not a command is looked for in
-   /bin, so a program can be started by typing its name. */
+/* Where a name is looked for, in order.
+ *
+ * It used to be /bin and nothing else, which is the directory of programs
+ * pasted into the kernel image: a program had to be built into the machine
+ * to be run by typing its name. The kernel could always load an ELF off the
+ * disk -- spawn reads through the same VFS as everything else -- so what
+ * was missing was not the loading, it was the looking.
+ *
+ * The working directory comes first, because a program somebody has just
+ * downloaded or copied is the one they mean. /bin is last, so a name that
+ * exists in both runs the one in front of you rather than the one that
+ * shipped, which is the way round that makes a program replaceable. */
+static const char *const PROG_PATH[] = { 0, "/usb", "/bin" };
+#define PROG_PATH_N ((int)(sizeof(PROG_PATH) / sizeof(PROG_PATH[0])))
+
+/* Fills `out` with the first of those that holds `name`. */
+static bool find_program(const char *name, char *out, int cap) {
+    zelr_stat st;
+
+    /* A name with a slash in it is a path already and is not searched for:
+       "./mine" and "/home/mine" mean what they say. */
+    for (const char *p = name; *p; p++)
+        if (*p == '/') {
+            int n = 0;
+            while (name[n] && n < cap - 1) { out[n] = name[n]; n++; }
+            out[n] = 0;
+            return stat(out, &st) == 0 && !st.is_dir;
+        }
+
+    for (int i = 0; i < PROG_PATH_N; i++) {
+        const char *dir = PROG_PATH[i];
+        if (!dir) {
+            char here[VFS_PATH];
+            if (getcwd(here, sizeof(here)) < 0) continue;
+            path_join(here, name, out, cap);
+        } else {
+            path_join(dir, name, out, cap);
+        }
+        if (stat(out, &st) == 0 && !st.is_dir) return true;
+    }
+    return false;
+}
+
+/* Runs one command line. Anything that is not a command is looked for as a
+   program, so one can be started by typing its name. */
 static void run_line(char *cmdline) {
     char *argv[16];
     int argc = split(cmdline, argv, 16);
@@ -1377,9 +1420,7 @@ static void run_line(char *cmdline) {
     if (c) { c->fn(argc, argv); return; }
 
     char path[VFS_PATH];
-    path_join("/bin", argv[0], path, sizeof(path));
-    zelr_stat st;
-    if (stat(path, &st) == 0 && !st.is_dir) {
+    if (find_program(argv[0], path, sizeof(path))) {
         bool bg = argc > 1 && argv[argc - 1][0] == '&';
 
         /* Anything after the name is handed to the program as the one thing
@@ -1390,7 +1431,8 @@ static void run_line(char *cmdline) {
         return;
     }
 
-    w_reset(); w_str(argv[0]); w_str(": not a command and not a program in /bin");
+    w_reset(); w_str(argv[0]);
+    w_str(": not a command, and no program of that name here, on a stick or in /bin");
     err(work);
 }
 

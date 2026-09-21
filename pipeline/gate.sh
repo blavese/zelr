@@ -486,6 +486,11 @@ if [ "$MODE" = "screen" ] || [ "$MODE" = "full" ]; then
   # there was no moment at which a frame became finished.
   teartest() { keep timeout 600 python tools/tearcheck.py; }
 
+  # A program the kernel was not built with, run by typing its name. The
+  # loading was never the missing half: both shells looked in /bin and
+  # nowhere else, and /bin is what is pasted into the kernel image.
+  progtest() { keep timeout 600 python tools/progcheck.py; }
+
   # https against the actual web. Everything else about TLS is checked
   # against fixed answers, which proves the arithmetic and cannot prove that
   # a real server will talk to it. This needs a working connection and fails
@@ -512,6 +517,7 @@ if [ "$MODE" = "screen" ] || [ "$MODE" = "full" ]; then
   par_start "ctrl+f finds a word that is on the screen" findtest
   par_start "a deal reaches the cloth and the dealer plays it out" gametest
   par_start "what is on the screen is a frame that was finished" teartest
+  par_start "a program on the disk runs by typing its name" progtest
   par_start "the programs it ships with do what they say" apptest
   par_start "a shell, with pipes and redirection" shtest
   par_start "a setting written by hand reaches the screen" settest
