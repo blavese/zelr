@@ -50,6 +50,7 @@
 #include "theme.h"
 #include "pins.h"
 #include "smp.h"
+#include "gdt.h"
 #include "builtin.h"
 #include "blackbox.h"
 #include "pci.h"
@@ -1162,9 +1163,36 @@ static void smp_add_work(void *arg) {
     }
 }
 
+/* What one processor says about its own task state segment.
+ *
+ * Read from the task register rather than from the table: what is worth
+ * knowing is which segment the processor is actually using, and a table
+ * that was filled in correctly and never loaded looks identical from
+ * anywhere else. */
+typedef struct { u16 selector; u64 rsp0; } tss_report_t;
+static volatile tss_report_t tss_seen;
+
+static void report_tss(void *arg) {
+    (void)arg;
+    tss_seen.selector = tss_current_selector();
+    tss_seen.rsp0 = tss_stack_of(smp_this_cpu());
+}
+
 static void test_smp(void) {
     ok("the firmware described at least one processor", smp_cpu_count() >= 1);
     ok("this one is running", smp_cpu(0) && smp_cpu(0)->started);
+
+    /* --- a task state segment of its own ----------------------------------
+     *
+     * The processor finds the stack to switch to on an interrupt from ring
+     * 3 in here, so two processors sharing one would take their interrupts
+     * onto the same kernel stack at the same time -- two frames written
+     * over each other as they are pushed. There was one segment for the
+     * machine until the other processors had programs to run. */
+    ok("this processor is using the first task state segment",
+       tss_current_selector() == GDT_TSS(0));
+    ok("and it has a stack for an interrupt from ring 3",
+       tss_stack_of(0) != 0);
 
     if (smp_cpu_count() < 2) {
         kprintf("  SKIP  only one processor on this machine\n");
@@ -1177,6 +1205,20 @@ static void test_smp(void) {
     for (u32 i = 1; i < smp_cpu_count(); i++)
         if (smp_cpu(i)->started) helpers++;
     ok("at least one other processor came up", helpers > 0);
+
+    /* And the second one is not using the first one's. Asked of that
+       processor, by handing it the question, because a selector read here
+       is this processor's answer however many there are. */
+    tss_seen.selector = 0;
+    tss_seen.rsp0 = 0;
+    if (smp_run(1, report_tss, 0) && smp_wait(1, 1000)) {
+        ok("another processor is using a different one",
+           tss_seen.selector == GDT_TSS(1));
+        ok("and it has a kernel stack of its own",
+           tss_seen.rsp0 != 0 && tss_seen.rsp0 != tss_stack_of(0));
+    } else {
+        kprintf("  SKIP  the second processor did not answer\n");
+    }
 
     /* An idle processor should be asleep, not burning a core.
      *

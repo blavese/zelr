@@ -25,6 +25,18 @@ typedef struct {
 
 void smp_init(void);
 
+/* Which processor is asking, as an index into the table below.
+ *
+ * By its local APIC id, looked up rather than remembered: there is nowhere
+ * to remember it that is per processor until this exists, which is the
+ * shape of every chicken and egg in a kernel. The table is at most sixteen
+ * entries and the comparison is a byte, so the walk costs less than the
+ * machinery to avoid it.
+ *
+ * Zero before the local APIC is up, which is the boot processor, and is the
+ * right answer then. */
+u32  smp_this_cpu(void);
+
 u32  smp_cpu_count(void);       /* processors the firmware described */
 u32  smp_started(void);         /* how many actually came up, boot one included */
 const cpu_t *smp_cpu(u32 i);

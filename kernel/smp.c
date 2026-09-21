@@ -20,6 +20,7 @@
  * are given something, so there is nothing to race over.
  */
 #include "smp.h"
+#include "gdt.h"
 #include "idt.h"
 #include "acpi.h"
 #include "paging.h"
@@ -57,6 +58,14 @@ typedef struct {
 } slot_t;
 
 static slot_t cpus[SMP_MAX_CPUS];
+
+u32 smp_this_cpu(void) {
+    if (!lapic_present()) return 0;
+    u8 id = lapic_id();
+    for (u32 i = 0; i < SMP_MAX_CPUS; i++)
+        if (cpus[i].info.started && cpus[i].info.apic_id == id) return i;
+    return 0;
+}
 static u32 ncpus;              /* entries in `cpus`, boot processor first */
 static u32 nstarted = 1;       /* the one already running counts */
 static volatile u8 *lapic;
@@ -140,6 +149,14 @@ static bool start_cpu(u32 index) {
     memset(stack, 0, AP_STACK_SIZE);
     u64 top = ((u64)stack + AP_STACK_SIZE) & ~0xFull;
 
+    /* And the stack an interrupt from ring 3 will land on, which is the
+       reason this processor has a task state segment of its own. It is set
+       before the processor is started rather than by the processor itself,
+       because the window between arriving and setting it is a window in
+       which an interrupt would land on whatever the segment happened to
+       hold, which is nought. */
+    tss_set_stack_for((u32)index, top);
+
     if (!patch_trampoline(top, index)) { kfree(stack); return false; }
 
     /* INIT: assert, then deassert, then let it settle. */
@@ -196,9 +213,16 @@ static void ap_main(void *arg) {
        has only ever been thrown on the boot one. */
     lapic_enable();
 
-    /* The table is the one the boot processor built; this points at it. A
-       processor that halts with interrupts on and no table would triple
-       fault on the first one that arrived. */
+    /* The descriptor table is the one the boot processor built, and this
+       processor's own task state segment inside it. The trampoline brought
+       it up on a table of its own with no TSS in it at all, which is fine
+       for code that never leaves ring 0 and is not fine for a processor
+       that is going to run a program. */
+    gdt_load_cpu((u32)index);
+
+    /* The interrupt table is the one the boot processor built; this points
+       at it. A processor that halts with interrupts on and no table would
+       triple fault on the first one that arrived. */
     idt_load();
 
     /* The control registers are per processor, so this one has to be told
