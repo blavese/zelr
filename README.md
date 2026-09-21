@@ -1752,14 +1752,27 @@ orders of magnitude away from Linux, which is roughly 30 million lines.
                        running machine and wait for it
     launcher/          the Windows launcher (C#/WPF)
 
-## license
+## author and license
 
-GPLv3, see [LICENSE](LICENSE).
+**zelr was written by blavese. Copyright © 2026 blavese.**
+Licensed GPL-3.0-or-later — see [LICENSE](LICENSE) and [NOTICE](NOTICE).
 
 Free to read, run, change and share. The condition is that anything built from
 it stays that way: distribute a modified version and it carries the same
-license, with the source. Selling it is allowed, and always has been under
-this license. Closing it is not.
+license, with the source, and with this copyright line still on it. Selling it
+is allowed, and always has been under this license. Closing it is not, and
+neither is taking the author's name off it.
+
+Every part of this is original. No libc, no borrowed bootloader, no driver
+lifted from another kernel, no cryptography library, no font file. Where a
+published specification was implemented it is named in the source at the point
+of implementation — RFC 7748, RFC 8448, FIPS 180, the NIST vectors — because
+those were documents that were read, not code that was copied. The single
+exception is named in [NOTICE](NOTICE) rather than left for somebody to find.
+
+The machine says so itself: the author and the license are compiled into the
+kernel image, printed at boot and by `uname`. A copy with that removed is a
+copy somebody had to modify to make.
 
 Versions up to and including 0.16.1 went out under MIT and stay under MIT.
 Nothing here is retroactive.
