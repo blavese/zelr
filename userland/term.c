@@ -893,8 +893,9 @@ static void cmd_kill(int argc, char **argv) {
 /* Starts a program and waits for it, reporting what it returned. This is
    the whole point of having spawn: the terminal is a ring 3 program starting
    another ring 3 program, with the kernel only lending a hand. */
-static void start_program_on(const char *path, const char *arg, bool background) {
-    int pid = arg && arg[0] ? spawn_arg(path, arg) : spawn(path);
+static void start_program_on(const char *path, char *const *argv,
+                             bool background) {
+    int pid = argv ? spawnv(path, argv) : spawn(path);
     if (pid < 0) { w_reset(); w_str("cannot start "); w_str(path); err(work); return; }
 
     if (background) {
@@ -1423,11 +1424,14 @@ static void run_line(char *cmdline) {
     if (find_program(argv[0], path, sizeof(path))) {
         bool bg = argc > 1 && argv[argc - 1][0] == '&';
 
-        /* Anything after the name is handed to the program as the one thing
-           it was started on, which for every program here is a file. */
-        const char *arg = 0;
-        if (argc > 1 && argv[1][0] != '&') arg = argv[1];
-        start_program_on(path, arg, bg);
+        /* Every word, the name first, which is the line as typed. The
+           ampersand is this terminal's and not the program's, so it is
+           dropped; the vector is ended with a null because that is what
+           spawnv counts up to. */
+        int n = bg ? argc - 1 : argc;
+        if (n > 15) n = 15;
+        argv[n] = 0;
+        start_program_on(path, argv, bg);
         return;
     }
 
@@ -1737,12 +1741,6 @@ static void on_key(u32 key) {
 }
 
 /* --- the loop ----------------------------------------------------------- */
-
-int main(void);
-
-__attribute__((section(".text._start"))) void _start(void) {
-    exit(main());
-}
 
 /* Works out how much text the window holds now. Called at startup and
    again every time the desktop hands over a different size. */

@@ -204,7 +204,7 @@ static void press(char k) {
     }
 }
 
-void _start(void) {
+int main(void) {
     int win = win_create("Calculator", 280, 380);
     if (win < 0) exit(1);
     win_allow_resize(win);

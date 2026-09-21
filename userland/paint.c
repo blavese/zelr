@@ -201,13 +201,6 @@ static void on_key(u32 key) {
     else if (key == ']') { color = (color + 1) % 16; draw_toolbar(); }
 }
 
-int main(void);
-
-/* The kernel enters here with a fresh stack and nothing else set up. */
-__attribute__((section(".text._start"))) void _start(void) {
-    exit(main());
-}
-
 int main(void) {
     int win = win_create("paint", 640, 420);
     if (win < 0) { puts("paint: no window\n"); return 1; }

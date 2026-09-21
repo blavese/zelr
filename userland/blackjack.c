@@ -512,7 +512,7 @@ static const struct { int v; u32 face, edge; } CHIPS[] = {
 };
 #define N_CHIPS ((int)(sizeof(CHIPS) / sizeof(CHIPS[0])))
 
-void _start(void) {
+int main(void) {
     int win = win_create("Blackjack", 800, 560);
     if (win < 0) exit(1);
     win_allow_resize(win);

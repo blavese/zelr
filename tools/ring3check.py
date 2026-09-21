@@ -41,6 +41,7 @@ SUITES = [
     ("cardtest",  "CARDTEST_PASS",  "what a poker hand is worth", 120),
     ("sleeptest", "SLEEPTEST_PASS", "a sleep that sleeps", 120),
     ("cowtest",   "COWTEST_PASS",   "what a fork copies", 180),
+    ("argvtest",  "ARGVTEST_PASS",  "what a program was started on", 120),
 ]
 
 

@@ -21,12 +21,6 @@
 #include "cards.h"
 #include "poker.h"
 
-int main(void);
-
-__attribute__((section(".text._start"))) void _start(void) {
-    exit(main());
-}
-
 static int failed, ran;
 
 static void ok(const char *what, int good) {

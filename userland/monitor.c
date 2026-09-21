@@ -182,7 +182,7 @@ static void graph(surface *s, ui_theme *t, int x, int y, int w, int h) {
 
 /* --- the window ----------------------------------------------------------- */
 
-void _start(void) {
+int main(void) {
     int win = win_create("Monitor", 640, 560);
     if (win < 0) exit(1);
     win_allow_resize(win);

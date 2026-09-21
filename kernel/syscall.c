@@ -112,33 +112,77 @@ static i64 sys_spawn(registers_t *r) {
     return rc;
 }
 
-static i64 sys_spawn_arg(registers_t *r) {
-    char path[VFS_PATH_MAX], arg[TASK_ARG_MAX];
+/* --- the words a program is started on -----------------------------------
+ *
+ * A vector of pointers in the caller's address space, each pointing at a
+ * string in the same place. Both levels belong to ring 3, so both are
+ * checked, and everything is copied rather than pointed at: exec throws the
+ * caller's address space away while these are still needed, and a pointer
+ * into it would then be a pointer into memory that had stopped existing.
+ *
+ * One block holds every string, because what has to be bounded is the total
+ * and not the longest.
+ */
+#define ARGV_BYTES 2048
+
+typedef struct {
+    char       *store;
+    const char *word[USER_ARGV_MAX];
+    int         count;
+} argv_t;
+
+static void argv_drop(argv_t *a) {
+    if (a->store) kfree(a->store);
+    a->store = 0;
+    a->count = 0;
+}
+
+/* No vector at all is no words rather than a failure: that is what a
+   program started by something with nothing to say to it gets. */
+static bool argv_take(argv_t *a, u64 vec, i64 count) {
+    a->store = 0;
+    a->count = 0;
+    if (count <= 0 || !vec) return true;
+    if (count > USER_ARGV_MAX) return false;
+    if (!user_range_ok(vec, (u64)count * sizeof(u64))) return false;
+
+    a->store = (char *)kmalloc(ARGV_BYTES);
+    if (!a->store) return false;
+
+    const u64 *from = (const u64 *)vec;
+    u64 used = 0;
+    for (i64 i = 0; i < count; i++) {
+        if (used >= ARGV_BYTES || !copy_path(from[i], a->store + used,
+                                             ARGV_BYTES - used)) {
+            argv_drop(a);
+            return false;
+        }
+        a->word[i] = a->store + used;
+        used += strlen(a->store + used) + 1;
+    }
+    a->count = (int)count;
+    return true;
+}
+
+static i64 sys_spawn_argv(registers_t *r) {
+    char path[VFS_PATH_MAX];
     if (!copy_path(r->rbx, path, sizeof(path))) return -1;
-    if (!copy_path(r->rcx, arg, sizeof(arg))) return -1;
+
+    argv_t a;
+    if (!argv_take(&a, r->rcx, (i64)r->rdx)) return -1;
 
     u32 size = 0;
     u8 *image = vfs_slurp(path, &size);
-    if (!image) return -1;
+    if (!image) { argv_drop(&a); return -1; }
 
-    int rc = user_spawn_elf_arg(path, image, size, arg);
+    /* Its own name when the caller named nothing, so a program can always
+       read argv[0] and always find something. */
+    const char *self = path;
+    int rc = a.count ? user_spawn_elf_argv(path, image, size, a.count, a.word)
+                     : user_spawn_elf_argv(path, image, size, 1, &self);
     kfree(image);
+    argv_drop(&a);
     return rc;
-}
-
-static i64 sys_getarg(registers_t *r) {
-    u32 cap = (u32)r->rcx;
-    if (!cap) return 0;
-    if (!user_range_ok(r->rbx, cap)) return -1;
-
-    task_t *t = task_current();
-    const char *from = t ? t->arg : "";
-    char *out = (char *)r->rbx;
-
-    u32 i = 0;
-    for (; from[i] && i < cap - 1; i++) out[i] = from[i];
-    out[i] = 0;
-    return (i64)i;
 }
 
 /* --- fork ----------------------------------------------------------------
@@ -188,24 +232,29 @@ static i64 sys_exec(registers_t *r) {
     char path[VFS_PATH_MAX];
     if (!copy_path(r->rbx, path, sizeof(path))) return -1;
 
-    char arg[TASK_ARG_MAX];
-    arg[0] = 0;
-    if (r->rcx) {
-        if (!copy_path(r->rcx, arg, sizeof(arg))) return -1;
-    }
+    /* Taken before anything is torn down. These live in the address space
+       this call is about to replace. */
+    argv_t a;
+    if (!argv_take(&a, r->rcx, (i64)r->rdx)) return -1;
 
     u32 size = 0;
     u8 *image = vfs_slurp(path, &size);
-    if (!image) return -1;
+    if (!image) { argv_drop(&a); return -1; }
 
     u64 dir = paging_new_directory();
-    if (!dir) { kfree(image); return -1; }
+    if (!dir) { kfree(image); argv_drop(&a); return -1; }
 
     u64 entry = 0;
     int rc = elf_load(dir, image, size, &entry);
     kfree(image);
-    if (rc != ELF_OK) { paging_free_directory(dir); return rc; }
-    if (!user_build_stack(dir)) { paging_free_directory(dir); return -1; }
+    if (rc != ELF_OK) { paging_free_directory(dir); argv_drop(&a); return rc; }
+
+    const char *self = path;
+    u64 rsp = 0;
+    bool built = a.count ? user_build_stack(dir, a.count, a.word, &rsp)
+                         : user_build_stack(dir, 1, &self, &rsp);
+    argv_drop(&a);
+    if (!built) { paging_free_directory(dir); return -1; }
 
     u64 old = t->dir;
 
@@ -218,8 +267,6 @@ static i64 sys_exec(registers_t *r) {
     /* The heap belonged to the program that is being replaced. */
     t->brk = 0;
     t->brk_base = 0;
-    strncpy(t->arg, arg, sizeof(t->arg) - 1);
-    t->arg[sizeof(t->arg) - 1] = 0;
 
     /* A name is what `ps` shows, and a process that became something else
        should say what it became. */
@@ -235,7 +282,7 @@ static i64 sys_exec(registers_t *r) {
     r->rip = entry;
     r->cs = USER_CODE_SEL;
     r->ss = USER_DATA_SEL;
-    r->rsp = USER_STACK_START;
+    r->rsp = rsp;
     r->rflags = 0x202;
     r->int_no = 32;
 
@@ -940,8 +987,7 @@ static const syscall_fn TABLE[] = {
     [SYS_SOUND_INFO]  = sys_sound_info,
     [SYS_SOUND_WRITE] = sys_sound_write,
     [SYS_POWER]       = sys_power,
-    [SYS_SPAWN_ARG]   = sys_spawn_arg,
-    [SYS_GETARG]      = sys_getarg,
+    [SYS_SPAWN_ARGV]  = sys_spawn_argv,
     [SYS_SBRK]        = sys_sbrk,
     [SYS_FORK]        = sys_fork,
     [SYS_EXEC]        = sys_exec,

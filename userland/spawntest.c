@@ -3,12 +3,6 @@
    that, which is why anything that composed had to live inside it. */
 #include "zelr.h"
 
-int main(void);
-
-__attribute__((section(".text._start"))) void _start(void) {
-    exit(main());
-}
-
 int main(void) {
     puts("spawntest: starting hello.elf from ring 3\n");
 

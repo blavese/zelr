@@ -27,7 +27,7 @@
 #define HALF_GREEN 0x1E9632
 #define HALF_MINT  0x1EC864
 
-void _start(void) {
+int main(void) {
     int win = win_create("Half drawn", 360, 260);
     if (win < 0) exit(1);
 

@@ -287,3 +287,10 @@ builtin_halfdrawn_end:
 builtin_cowtest_start:
 .incbin "build/user/cowtest.elf"
 builtin_cowtest_end:
+
+.balign 4
+.global builtin_argvtest_start
+.global builtin_argvtest_end
+builtin_argvtest_start:
+.incbin "build/user/argvtest.elf"
+builtin_argvtest_end:

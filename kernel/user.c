@@ -13,22 +13,25 @@
 
 #define USER_CODE_BASE  (USER_SPACE_BASE + 0x40000000ull)
 
-/* Where a program's stack pointer starts, which is eight bytes below a
-   sixteen byte boundary and not on one.
+/* A program is entered with the stack pointer on a sixteen byte boundary,
+ * which is what System V says and what the startup code in userland/zelr.h
+ * is written against.
  *
- * That looks wrong and is not. A compiled function assumes it was reached by
- * a call, and a call has pushed a return address, so at the first
- * instruction of any function the stack pointer is eight past alignment and
- * the prologue is written to match. A program entered by an interrupt
- * return has had nothing pushed, so handing it an aligned pointer leaves
- * every sixteen byte slot in its frame eight bytes out.
+ * It used to be eight below one, because every program's entry point was an
+ * ordinary compiled function and a compiled function assumes a call pushed
+ * a return address for it. Handing such a function an aligned pointer put
+ * every sixteen byte slot in its frame eight bytes out, which nothing
+ * noticed until the vector instructions went on: then the first aligned
+ * move to one of those slots was a general protection fault, landing in
+ * whatever function happened to be complicated enough for the compiler to
+ * want a vector spill. The allocator test found it, and the same allocator
+ * running twenty thousand rounds on the host without complaint is what said
+ * the fault was not in the allocator at all.
  *
- * With the vector instructions off nothing noticed. With them on, the first
- * aligned move to one of those slots is a general protection fault, and it
- * lands in whatever function happened to be complicated enough for the
- * compiler to want a vector spill. The allocator test found it; the same
- * allocator ran twenty thousand rounds on the host without complaint,
- * which is what said the fault was not in the allocator at all. */
+ * The entry point is startup code now rather than a function, and it does
+ * its own aligning before it calls anything, which is how every other
+ * machine arranges this.
+ */
 /* Sixteen pages, which is sixty four kilobytes.
  *
  * Four was enough for a program that draws a window and reads a key. It is
@@ -61,9 +64,69 @@ static u64 alloc_user_page(u64 dir, u64 virt) {
     return frame;
 }
 
-bool user_build_stack(u64 dir) {
-    for (u64 i = 1; i <= USER_STACK_PAGES; i++)
-        if (!alloc_user_page(dir, USER_STACK_TOP - i * PAGE_SIZE)) return false;
+/* The stack a program starts on, and the words it starts with.
+ *
+ * System V says what is there when a process is entered, and this builds
+ * exactly that, from the top of the last stack page downward:
+ *
+ *     the strings, argv[0] last so argv[0] is highest
+ *     a null word            the environment, which is empty here
+ *     a null word            the end of the vector
+ *     argv[argc-1] .. argv[0]
+ *     argc                   <- the stack pointer, on a 16 byte boundary
+ *
+ * It is built here rather than handed over through a system call because a
+ * program's words have to be there before its first instruction runs. The
+ * old arrangement was a single string in the task, copied out by a call the
+ * program made at startup, and it needed interrupts off across creating the
+ * task and filling the field in -- a task is runnable the moment it is on
+ * the list, and a program that asked early enough would have found it empty.
+ * Memory that is already on the stack cannot lose that race.
+ *
+ * It also means a program built somewhere else, by a toolchain that has
+ * never heard of this kernel, finds its arguments where its startup code
+ * already looks for them.
+ */
+bool user_build_stack(u64 dir, int argc, const char *const *argv,
+                      u64 *rsp_out) {
+    u64 top = 0;
+    for (u64 i = 1; i <= USER_STACK_PAGES; i++) {
+        u64 f = alloc_user_page(dir, USER_STACK_TOP - i * PAGE_SIZE);
+        if (!f) return false;
+        if (i == 1) top = f;                  /* the page the block goes in */
+    }
+
+    if (argc < 0) argc = 0;
+    if (argc > USER_ARGV_MAX) return false;
+
+    u8 *page = (u8 *)top;
+    u64 at = PAGE_SIZE;                       /* an offset inside that page */
+    u64 ptr[USER_ARGV_MAX];
+
+    for (int i = argc - 1; i >= 0; i--) {
+        const char *w = argv && argv[i] ? argv[i] : "";
+        u64 n = strlen(w) + 1;
+        if (n > at) return false;
+        at -= n;
+        memcpy(page + at, w, n);
+        ptr[i] = USER_STACK_TOP - (PAGE_SIZE - at);
+    }
+
+    /* argc, the vector, and the two nulls that end the vector and the
+       environment. Rounded down to sixteen so the entry point is reached on
+       a boundary, which is what the ABI promises and what a compiler's
+       aligned vector stores depend on. */
+    u64 need = ((u64)argc + 3) * 8;
+    if (need > at) return false;
+    at = (at - need) & ~15ull;
+
+    u64 *block = (u64 *)(page + at);
+    block[0] = (u64)argc;
+    for (int i = 0; i < argc; i++) block[1 + i] = ptr[i];
+    block[1 + argc] = 0;                      /* the end of argv */
+    block[2 + argc] = 0;                      /* and of an empty environ */
+
+    if (rsp_out) *rsp_out = USER_STACK_TOP - (PAGE_SIZE - at);
     return true;
 }
 
@@ -135,12 +198,14 @@ int user_spawn_stub(const char *name) {
     if (!dir) return -1;
 
     u64 size = (u64)(user_stub_end - user_stub_start);
-    if (!load_flat(dir, USER_CODE_BASE, user_stub_start, size) || !user_build_stack(dir)) {
+    u64 rsp = 0;
+    if (!load_flat(dir, USER_CODE_BASE, user_stub_start, size) ||
+        !user_build_stack(dir, 1, &name, &rsp)) {
         paging_free_directory(dir);
         return -2;
     }
 
-    task_t *t = task_create_user(name, dir, USER_CODE_BASE, USER_STACK_START);
+    task_t *t = task_create_user(name, dir, USER_CODE_BASE, rsp);
     if (!t) { paging_free_directory(dir); return -3; }
     return (int)t->pid;
 }
@@ -151,22 +216,25 @@ int user_spawn_flat(const char *name, const u8 *image, u32 size) {
     u64 dir = paging_new_directory();
     if (!dir) return -1;
 
-    if (!load_flat(dir, USER_CODE_BASE, image, size) || !user_build_stack(dir)) {
+    u64 rsp = 0;
+    if (!load_flat(dir, USER_CODE_BASE, image, size) ||
+        !user_build_stack(dir, 1, &name, &rsp)) {
         paging_free_directory(dir);
         return -2;
     }
 
-    task_t *t = task_create_user(name, dir, USER_CODE_BASE, USER_STACK_START);
+    task_t *t = task_create_user(name, dir, USER_CODE_BASE, rsp);
     if (!t) { paging_free_directory(dir); return -3; }
     return (int)t->pid;
 }
 
 int user_spawn_elf(const char *name, const u8 *image, u32 size) {
-    return user_spawn_elf_arg(name, image, size, 0);
+    /* Started on its own name, which is what argv[0] is everywhere. */
+    return user_spawn_elf_argv(name, image, size, 1, &name);
 }
 
-int user_spawn_elf_arg(const char *name, const u8 *image, u32 size,
-                       const char *arg) {
+int user_spawn_elf_argv(const char *name, const u8 *image, u32 size,
+                        int argc, const char *const *argv) {
     u64 dir = paging_new_directory();
     if (!dir) return ELF_ERR_MEMORY;
 
@@ -174,21 +242,13 @@ int user_spawn_elf_arg(const char *name, const u8 *image, u32 size,
     int rc = elf_load(dir, image, size, &entry);
     if (rc != ELF_OK) { paging_free_directory(dir); return rc; }
 
-    if (!user_build_stack(dir)) { paging_free_directory(dir); return ELF_ERR_MEMORY; }
-
-    /* Interrupts off across the creation and the argument together: the
-       task is runnable the moment it is on the list, and a program that
-       reads its argument in its first instructions would otherwise find
-       the field still empty. */
-    bool were_on = interrupts_enabled();
-    cli();
-    task_t *t = task_create_user(name, dir, entry, USER_STACK_START);
-    if (t && arg) {
-        strncpy(t->arg, arg, sizeof(t->arg) - 1);
-        t->arg[sizeof(t->arg) - 1] = 0;
+    u64 rsp = 0;
+    if (!user_build_stack(dir, argc, argv, &rsp)) {
+        paging_free_directory(dir);
+        return ELF_ERR_MEMORY;
     }
-    if (were_on) sti();
 
+    task_t *t = task_create_user(name, dir, entry, rsp);
     if (!t) { paging_free_directory(dir); return ELF_ERR_MEMORY; }
     return (int)t->pid;
 }

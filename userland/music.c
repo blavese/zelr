@@ -288,7 +288,7 @@ static void tune_step(void) {
     tune_until = ticks();
 }
 
-void _start(void) {
+int main(int argc, char **argv) {
     int win = win_create("Music", 520, 420);
     if (win < 0) exit(1);
     win_allow_resize(win);
@@ -305,8 +305,8 @@ void _start(void) {
     rescan();
 
     /* Started on a file: play that one rather than waiting to be asked. */
-    char wanted[PATH_MAX];
-    if (getarg(wanted, sizeof(wanted)) > 0 && wanted[0]) {
+    const char *wanted = argc > 1 ? argv[1] : "";
+    if (wanted[0]) {
         song_t one;
         copy_str(one.path, PATH_MAX, wanted);
         const char *leaf = wanted;

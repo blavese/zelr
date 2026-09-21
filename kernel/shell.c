@@ -45,11 +45,31 @@ static u32 num(const char *s) {
     return v;
 }
 
+/* A line into words, taken apart where it lies.
+ *
+ * Double quotes hold a word together and are removed; there is no escaping
+ * and no single quote, which is what userland/args.h decided and this now
+ * matches. The two shells splitting a line differently is worse than either
+ * rule: it means the same command means two things depending on which one
+ * is in front of you.
+ *
+ * It mattered less when the words were glued back into a single string on
+ * the way to a program. They are handed over as words now, so where a word
+ * ends is the program's business and not just the shell's. */
 static u32 split(char *s, char **argv, u32 max) {
     u32 n = 0;
     while (*s && n < max) {
         while (*s == ' ') *s++ = 0;
         if (!*s) break;
+
+        if (*s == '"') {
+            *s++ = 0;
+            argv[n++] = s;
+            while (*s && *s != '"') s++;
+            if (*s) *s++ = 0;
+            continue;
+        }
+
         argv[n++] = s;
         while (*s && *s != ' ') s++;
     }
@@ -253,8 +273,10 @@ static bool run_by_name(u32 argc, char **argv) {
         u8 *img = vfs_slurp(path, &size);
         if (!img) continue;
 
-        int rc = argc > 1 ? user_spawn_elf_arg(path, img, size, argv[1])
-                          : user_spawn_elf(path, img, size);
+        /* Every word, the program's own name first, which is what the
+           line already is. */
+        int rc = user_spawn_elf_argv(path, img, size, (int)argc,
+                                     (const char *const *)argv);
         kfree(img);
         if (rc > 0) { task_wait((u32)rc); return true; }
 
@@ -280,25 +302,27 @@ static void execute(char *buf) {
         enter_desktop();
     }
     else if (!strcmp(c, "bg")) {
-        if (argc < 2) { kprintf("usage: bg PROGRAM" "\n"); return; }
+        if (argc < 2) { kprintf("usage: bg PROGRAM [ARG ...]" "\n"); return; }
         u32 size = 0;
         u8 *img = vfs_slurp(argv[1], &size);
         if (!img) { kprintf("bg: %s: no such file" "\n", argv[1]); return; }
-        int rc = user_spawn_elf(argv[1], img, size);
+        int rc = user_spawn_elf_argv(argv[1], img, size, (int)argc - 1,
+                                     (const char *const *)(argv + 1));
         kfree(img);
         if (rc > 0) kprintf("[%d] %s running in the background" "\n", rc, argv[1]);
         else kprintf("bg: %s: %s" "\n", argv[1], elf_error(rc));
     } else if (!strcmp(c, "exec")) {
-        if (argc < 2) { kprintf("usage: exec PROGRAM [ARG]" "\n" "e.g. exec hello" "\n"); return; }
+        if (argc < 2) { kprintf("usage: exec PROGRAM [ARG ...]" "\n" "e.g. exec hello" "\n"); return; }
         u32 size = 0;
         u8 *img = vfs_slurp(argv[1], &size);
         if (!img) { kprintf("exec: %s: no such file" "\n", argv[1]); return; }
-        /* And whatever followed it. A program that takes an address or a
-           file name could be started from the desktop's shell, which passes
-           one, and not from here, which did not -- so the same program
+        /* And everything that followed it. This used to hand over the
+           first word only, and before that nothing at all: a program that
+           takes a file name could be started from the desktop's shell,
+           which passed one, and not from here, so the same program
            behaved differently depending on which shell ran it. */
-        int rc = argc > 2 ? user_spawn_elf_arg(argv[1], img, size, argv[2])
-                          : user_spawn_elf(argv[1], img, size);
+        int rc = user_spawn_elf_argv(argv[1], img, size, (int)argc - 1,
+                                     (const char *const *)(argv + 1));
         kfree(img);
         if (rc > 0) {
             /* Wait for it, the way a shell does, so its output is not

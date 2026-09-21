@@ -68,10 +68,17 @@
    something this kernel does not do. */
 #define SYS_POWER         42
 
-/* Starting a program on something, and asking what this program was started
-   on. One string, which for everything that uses it is a path. */
-#define SYS_SPAWN_ARG     43
-#define SYS_GETARG        44
+/* Starting a program on a vector of words: a path, an array of pointers,
+   and how many. The words land on the new program's stack before its first
+   instruction, the way System V says, so there is no call for reading them
+   back and no moment when a program is running without them.
+
+   44 was SYS_GETARG, which is how a program used to ask for the single
+   string it was started on. It is retired rather than reused. These numbers
+   are the interface now -- a program compiled against them somewhere else
+   has nothing but the number to go on -- so from here they are kept, and a
+   call that goes is a gap. */
+#define SYS_SPAWN_ARGV    43
 
 /* The same one socket, with a TLS 1.3 handshake done on it before anything
    is sent. Afterwards SYS_SEND and SYS_RECV carry the same bytes they always
