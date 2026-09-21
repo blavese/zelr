@@ -2,6 +2,7 @@
 #include "sched.h"
 #include "smp.h"
 #include "paging.h"
+#include "user.h"
 #include "printf.h"
 #include "string.h"
 #include "io.h"
@@ -92,6 +93,56 @@ static const char *EXC[] = {
    and three is ring 3. */
 static inline bool from_user(const registers_t *r) { return (r->cs & 3) == 3; }
 
+/* A program that did something it cannot do ends. The machine does not.
+ *
+ * Until this, every exception went to panic, including one raised by a ring
+ * 3 program running off the end of its own memory. A program with a bad
+ * pointer took the whole machine with it -- the desktop, the other
+ * programs, the disk half written -- and the account of it was a panic
+ * screen naming the program, which is the right information attached to
+ * altogether the wrong outcome.
+ *
+ * The kernel's own faults still panic, and should. A program faulting means
+ * the program is wrong; the kernel faulting means the kernel's idea of its
+ * own memory is wrong, and carrying on from there writes that wrongness to
+ * a disk.
+ *
+ * task_exit_with does not return -- it ends in a yield that never comes
+ * back -- so this is the last thing the faulting task does, in the same way
+ * sys_exit is the last thing an exiting one does, and by the same path.
+ */
+static bool end_the_program(registers_t *r, u64 addr) {
+    if (!from_user(r)) return false;
+
+    task_t *t = task_current();
+    const char *name = t ? t->name : "a program";
+    const char *what = r->int_no < 32 ? EXC[r->int_no] : "fault";
+
+    /* One line, into the black box, which is also the serial log: on real
+       hardware that is the only account of a fault that survives it.
+
+       One line and not the register dump bb_fault writes. That dump is
+       for a fault that takes the machine down, where it is the last
+       thing anybody gets; this is an ordinary event that may happen a
+       hundred times in a row, and a hundred register dumps is a wall of
+       text with the one useful line buried in it. Measured: a hundred
+       faulting programs printed five hundred lines. */
+    if (r->int_no == 14)
+        bb_log("%s ended: %s at %p, rip %p [%s %s]", name, what,
+               (void *)addr, (void *)r->rip,
+               (r->err_code & 1) ? "protection" : "not-present",
+               (r->err_code & 2) ? "write" : "read");
+    else
+        bb_log("%s ended: %s, rip %p", name, what, (void *)r->rip);
+
+    /* 139 is what a shell prints for a program killed by a memory fault,
+       everywhere, and has since the seventies. There is no SIGSEGV to catch
+       here -- the default action is the whole of it -- so the number is the
+       convention rather than a signal that was delivered. */
+    task_exit_with(139);
+    return true;                       /* not reached */
+}
+
 /* Called from isr_common in isr.S */
 u64 isr_dispatch(registers_t *r) {
     /* The door into the kernel.
@@ -156,6 +207,24 @@ u64 isr_dispatch(registers_t *r) {
     else if (r->int_no < 32) {
         u64 cr2 = 0;
         if (r->int_no == 14) __asm__ volatile ("mov %%cr2, %0" : "=r"(cr2));
+
+        /* A page inside something the program asked to have mapped, handed
+         * over now that it has been reached for.
+         *
+           This is what makes a mapping cost what it is used rather than
+           what it asked for, and it has to be tried before the program is
+           blamed: from here, a program touching memory it was promised and
+           a program touching memory that was never its look identical, and
+           the list of what it asked for is the only thing that tells them
+           apart. */
+        if (r->int_no == 14 && from_user(r) && user_fault_fill(cr2, r->err_code))
+            return (u64)r;
+
+        /* A program's own fault is the program's problem. Everything from
+           a divide by zero to a bad jump arrives here, and none of it is a
+           reason to stop the machine. */
+        if (end_the_program(r, cr2)) return (u64)r;   /* does not return */
+
         /* Into the black box before anything else touches the machine: on
            real hardware this is the only account of the fault that survives
            it, and panic below never returns. */

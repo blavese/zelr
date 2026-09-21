@@ -438,16 +438,6 @@ bool virt_is_user_in(u64 pml4_phys, u64 virt) {
     return (pte & PTE_PRESENT) && (pte & PTE_USER);
 }
 
-static void page_fault(registers_t *r) {
-    u64 cr2;
-    __asm__ volatile ("mov %%cr2, %0" : "=r"(cr2));
-    panic("page fault at %p  rip=%p  [%s %s %s]",
-          (void *)cr2, (void *)r->rip,
-          (r->err_code & 1) ? "protection" : "not-present",
-          (r->err_code & 2) ? "write" : "read",
-          (r->err_code & 4) ? "user" : "kernel");
-}
-
 #define HUGE_SIZE (2ull * 1024 * 1024)
 
 /* How much of memory ended up identity mapped, for the boot log and for the
@@ -501,7 +491,14 @@ void paging_init(const handoff_t *h) {
         }
     }
 
-    register_interrupt_handler(14, page_fault);
+    /* No handler is registered for the page fault.
+     *
+       There is one path for faults and it is in idt.c: copy on write is
+       tried first, then a program that faulted is ended, and only a fault
+       the kernel itself took reaches panic. This used to register a second
+       handler that did nothing but panic, which meant the first two of
+       those never ran for a page fault -- the one exception where they
+       matter most. */
 
     __asm__ volatile ("mov %0, %%cr3" :: "r"((u64)kernel_pml4) : "memory");
 }
