@@ -1296,6 +1296,32 @@ decoder six ways to see that each break is caught.
 character first, so a person can type at it and a script can pipe into it. It
 is still the kernel's own, on the console; the one in a window is a program.
 
+## writing a program for it
+
+Four files in `sdk/` are everything a program needs: `zelr.h`, which is the
+fifty-seven system calls and a little sugar over them, `zelr.ld`, which says
+where a program is linked, a build line, and an example.
+
+```bash
+bash sdk/build.sh hello.c
+```
+
+That is a freestanding static ELF. Put it anywhere on a zelr disk and type
+its name. It does not have to be in `/bin` -- `/bin` is the directory of
+programs pasted into the kernel image, and a program does not have to be one
+of those any more than a file has to be.
+
+`sdk/README.md` is the interface written down: where a program begins and
+what is on its stack when it does, the address space it is given, and what
+each compiler flag is there to prevent.
+
+The programs in `userland/` are built with exactly those four files and
+nothing else, which is the only way to know they are enough. And
+`tools/sdkcheck.py` copies them into a directory outside this repository,
+builds there, writes the result onto a FAT volume, boots a machine with it
+and types the program's name -- because a header that quietly needs a sibling
+works perfectly until somebody takes it somewhere else.
+
 ## testing
 
 The kernel tests itself. `./run.sh -T` boots with selftest on the command line,
@@ -1495,15 +1521,19 @@ large range:
   matters and a guess in the ones that do not.
 - **No job control.** `cmd &` starts something and stops waiting for it, and
   nothing keeps a list; `jobs` says so rather than printing an empty one.
-- **Fifty-four system calls.** Enough to print, walk directories, read and
-  write files, open one TCP connection, sleep, exit, fork, exec, wait on a
+- **Fifty-seven system calls.** Enough to print, walk directories, read and
+  write files, open a TCP connection, sleep, exit, fork, exec, wait on a
   child, make a pipe, move a descriptor and own a window. There is no signal
-  and no memory mapping.
-- **One argument, not a vector.** `exec` carries a single string rather than an
-  argv, so a shell joins the words back together and the program splits them
-  again. It works and it is not what Unix does.
+  handler and no memory mapping. The numbers are fixed: a program built
+  somewhere else has nothing but the number to go on, so a call that goes
+  away leaves a gap rather than having its number reused.
+- **No environment.** A program is started on words and nothing else. `envp`
+  is a terminator, present so that startup code walking past the end of
+  `argv` finds what it expects.
 - **No shared libraries**, no dynamic linking, no relocation: programs are
-  static and loaded at a fixed address.
+  static and linked to run at one address. Which is why every program here
+  is a single `.c` file -- what would be a library is a header included into
+  it.
 - **Eight windows at once**, which is a fixed array and not a limit anybody
   reached. Resizing works, by the corner grip, by maximising and by snapping
   to an edge: the surface is reallocated and the program is told its new
@@ -1657,6 +1687,9 @@ orders of magnitude away from Linux, which is roughly 30 million lines.
     tools/smpcheck.py  programs on more than one processor
     tools/tearcheck.py that what is composited is a frame that was finished
     tools/progcheck.py a program on the disk, run by typing its name
+    sdk/               what a program written anywhere else needs: the
+                       header, the link script, and how to build one
+    tools/sdkcheck.py  builds sdk/hello.c outside the tree and runs it here
     kernel/builtin.S   the user programs, pasted into the kernel image
     kernel/apps.c      the system info window
     kernel/vfs.c       one namespace over the live tree, the disk and memory

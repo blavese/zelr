@@ -491,6 +491,11 @@ if [ "$MODE" = "screen" ] || [ "$MODE" = "full" ]; then
   # nowhere else, and /bin is what is pasted into the kernel image.
   progtest() { keep timeout 600 python tools/progcheck.py; }
 
+  # A program built outside this repository, from sdk/ alone, on a volume
+  # this repository wrote rather than one the kernel formatted. The one
+  # check that says whether zelr can run software it did not write.
+  sdktest() { keep timeout 600 python tools/sdkcheck.py; }
+
   # Programs on more than one processor. Invisible on a machine with one,
   # so this is the one check that asks for four.
   smptest() { keep timeout 600 python tools/smpcheck.py; }
@@ -522,6 +527,7 @@ if [ "$MODE" = "screen" ] || [ "$MODE" = "full" ]; then
   par_start "a deal reaches the cloth and the dealer plays it out" gametest
   par_start "what is on the screen is a frame that was finished" teartest
   par_start "a program on the disk runs by typing its name" progtest
+  par_start "a program built outside the tree runs on the machine" sdktest
   par_start "programs run on more than one processor" smptest
   par_start "the programs it ships with do what they say" apptest
   par_start "a shell, with pipes and redirection" shtest
