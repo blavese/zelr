@@ -50,7 +50,7 @@ static u16 split_port(const char *in, char *host, u32 cap, u16 fallback) {
 /* Shuts the connection down in the right order. The TLS close notification
    has to go out over a connection that is still up, so it goes first. */
 static void done(int h, bool secure) {
-    if (secure) tls_close();
+    if (secure) tls_close(h);
     tcp_close(h);
 }
 
@@ -87,11 +87,11 @@ int http_get(const char *spec, const char *path, const char *save_as) {
            be anybody's. A failed handshake closes the connection rather than
            leaving one open that the rest of this would happily use. */
         if (!tls_connect(h, host)) {
-            kprintf("tls: %s\n", tls_error());
+            kprintf("tls: %s\n", tls_error(h));
             tcp_close(h);
             return HTTP_ERR_TLS;
         }
-        kprintf("secure: %s\n", tls_describe());
+        kprintf("secure: %s\n", tls_describe(h));
     }
 
     /* HTTP/1.0 with an explicit close, so the server ends the body by
@@ -111,8 +111,8 @@ int http_get(const char *spec, const char *path, const char *save_as) {
                    "\r\nConnection: close\r\n\r\n");
     if (!fits) { done(h, secure); return HTTP_ERR_TOOLONG; }
 
-    if (!(secure ? tls_send(req, n) : tcp_send(h, req, (u16)n))) {
-        if (secure) kprintf("tls: %s\n", tls_error());
+    if (!(secure ? tls_send(h, req, n) : tcp_send(h, req, (u16)n))) {
+        if (secure) kprintf("tls: %s\n", tls_error(h));
         done(h, secure);
         return HTTP_ERR_SEND;
     }
@@ -126,16 +126,16 @@ int http_get(const char *spec, const char *path, const char *save_as) {
        missing. */
     u32 got = 0;
     while (got < BODY_CAP) {
-        u32 n = secure ? tls_recv(buf + got, BODY_CAP - got, 10000)
+        u32 n = secure ? tls_recv(h, buf + got, BODY_CAP - got, 10000)
                        : tcp_recv(h, buf + got, BODY_CAP - got, 10000);
         got += n;
-        if (!n && (secure ? (tls_ended() || tcp_ended(h)) : tcp_ended(h))) break;
+        if (!n && (secure ? (tls_ended(h) || tcp_ended(h)) : tcp_ended(h))) break;
         if (!n) break;                     /* nothing in ten seconds */
     }
     done(h, secure);
 
     if (got == 0) {
-        if (secure) kprintf("tls: %s\n", tls_error());
+        if (secure) kprintf("tls: %s\n", tls_error(h));
         kfree(buf);
         return HTTP_ERR_EMPTY;
     }
