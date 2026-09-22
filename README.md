@@ -163,7 +163,9 @@ the other way round from where this started. A machine with a card asks for an a
 there is nothing to do first; `dhcp` asks again, for when there was nothing
 to answer the first time. `browser example.com`,
 or the browser in the launcher, shows the same page laid out rather than as
-markup.
+markup. Anything typed at it that is not an address is something to look
+for, so `browser how an operating system boots` comes back with results, and
+clicking one goes to the page.
 
 ## running it on a real machine
 
