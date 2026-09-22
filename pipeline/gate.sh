@@ -551,6 +551,12 @@ if [ "$MODE" = "screen" ] || [ "$MODE" = "full" ]; then
   # check that says whether zelr can run software it did not write.
   sdktest() { keep timeout 600 python tools/sdkcheck.py; }
 
+  # And the same again in standard C, against sdk/libc, with no mention of
+  # zelr anywhere in the program. sdkcheck proves the SDK is enough;
+  # this proves a program nobody wrote for this machine can run on it, and
+  # checks what it printed rather than only that it printed.
+  libctest() { keep timeout 600 python tools/libccheck.py; }
+
   # Programs on more than one processor. Invisible on a machine with one,
   # so this is the one check that asks for four.
   smptest() { keep timeout 600 python tools/smpcheck.py; }
@@ -585,6 +591,7 @@ if [ "$MODE" = "screen" ] || [ "$MODE" = "full" ]; then
   par_start "a program on the disk runs by typing its name" progtest
   par_start "a file survives the power going out mid-write" crashtest
   par_start "a program built outside the tree runs on the machine" sdktest
+  par_start "and one written in nothing but standard C" libctest
   par_start "programs run on more than one processor" smptest
   par_start "the programs it ships with do what they say" apptest
   par_start "a shell, with pipes and redirection" shtest

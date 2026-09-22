@@ -9,8 +9,26 @@
  */
 
 /* The entire user-facing interface: forty-seven system calls and a little
-   sugar. There is no libc here, and nothing is linked in from the kernel;
-   every call below crosses the ring boundary through int 0x80. */
+   sugar. Nothing is linked in from the kernel; every call below crosses the
+   ring boundary through int 0x80.
+ *
+ * Two things here can be turned off, and sdk/libc turns both off:
+ *
+ *   ZELR_NO_SUGAR   leaves out strlen, memcpy, puts, exit and the rest of
+ *                   the convenience names. They are spelled the way this
+ *                   project spells them -- `int strlen`, `void strcpy` --
+ *                   rather than the way C standardised them, which is fine
+ *                   for a program with no libc and a collision for a
+ *                   program with one. The system calls are the same either
+ *                   way.
+ *
+ *   ZELR_NO_START   leaves out _start. A program built from one file wants
+ *                   the entry point in the header; a program built from
+ *                   several needs exactly one of them to have it, and the
+ *                   libc's crt0.c is that one.
+ *
+ * A program that includes nothing but this header and sets neither is what
+ * this header has always been, and still works unchanged. */
 #pragma once
 
 typedef unsigned int       u32;
@@ -192,13 +210,22 @@ static inline zelr_word syscall(zelr_word n, zelr_word a, zelr_word b, zelr_word
    return, and in a freestanding build main is not special enough to be
    excused it. The loop is unreachable and is what makes the promise
    true rather than merely claimed. */
+/* Ending, spelled so that the libc can end a program too without owning
+   the name `exit`: that one belongs to <stdlib.h> when there is one. */
 __attribute__((noreturn))
-static inline void exit(int code) {
+static inline void zelr_exit(int code) {
     syscall(SYS_EXIT, code, 0, 0);
     for (;;) { }
 }
 
+#ifndef ZELR_NO_SUGAR
+__attribute__((noreturn))
+static inline void exit(int code) { zelr_exit(code); }
+
 static inline void putc(char ch)         { syscall(SYS_PUTC, ch, 0, 0); }
+#endif
+
+static inline void zelr_putc(char ch)    { syscall(SYS_PUTC, ch, 0, 0); }
 static inline int  getpid(void)          { return syscall(SYS_GETPID, 0, 0, 0); }
 static inline int  ticks(void)           { return syscall(SYS_TICKS, 0, 0, 0); }
 static inline void sleep_ms(int ms)      { syscall(SYS_SLEEP, ms, 0, 0); }
@@ -213,9 +240,12 @@ static inline int read_file(const char *name, char *buf, int cap) {
 
 /* --- strings -------------------------------------------------------------
 
-   Enough of a string library to write a program with. There is no libc to
-   link against, so this is all of it. */
+   Enough of a string library to write a program with, for a program that
+   has no libc. One built against sdk/libc gets <string.h> instead, with the
+   signatures C actually specifies, and sets ZELR_NO_SUGAR so that these are
+   not also declared. */
 
+#ifndef ZELR_NO_SUGAR
 static inline int strlen(const char *s) {
     int n = 0;
     while (s[n]) n++;
@@ -279,6 +309,7 @@ static inline int utoa(u32 v, char *out) {
     out[n] = 0;
     return n;
 }
+#endif  /* ZELR_NO_SUGAR */
 
 /* --- files ---------------------------------------------------------------
 
@@ -306,12 +337,26 @@ static inline int open(const char *path, u32 flags) {
 }
 static inline int close(int fd)  { return syscall(SYS_CLOSE, fd, 0, 0); }
 
-static inline int fread(int fd, void *buf, int len) {
+/* Reading and writing a descriptor. Spelled twice: the zelr_ names are
+   always here, and the short ones only when there is no libc to argue
+   with -- <stdio.h> has an fread and an fwrite of its own, with four
+   arguments and a FILE, and two functions of one name is not a thing C
+   allows however different they are. */
+static inline int zelr_fread(int fd, void *buf, int len) {
     return syscall(SYS_FREAD, fd, (zelr_word)buf, len);
 }
-static inline int fwrite(int fd, const void *buf, int len) {
+static inline int zelr_fwrite(int fd, const void *buf, int len) {
     return syscall(SYS_FWRITE, fd, (zelr_word)buf, len);
 }
+
+#ifndef ZELR_NO_SUGAR
+static inline int fread(int fd, void *buf, int len) {
+    return zelr_fread(fd, buf, len);
+}
+static inline int fwrite(int fd, const void *buf, int len) {
+    return zelr_fwrite(fd, buf, len);
+}
+#endif
 static inline int seek(int fd, int off, int whence) {
     return syscall(SYS_SEEK, fd, off, whence);
 }
@@ -338,7 +383,7 @@ static inline int slurp(const char *path, char *buf, int cap) {
     if (fd < 0) return -1;
     int total = 0;
     for (;;) {
-        int n = fread(fd, buf + total, cap - total);
+        int n = zelr_fread(fd, buf + total, cap - total);
         if (n <= 0) break;
         total += n;
         if (total >= cap) break;
@@ -350,7 +395,7 @@ static inline int slurp(const char *path, char *buf, int cap) {
 static inline int spit(const char *path, const void *buf, int len) {
     int fd = open(path, O_WRITE | O_CREATE | O_TRUNC);
     if (fd < 0) return -1;
-    int n = fwrite(fd, buf, len);
+    int n = zelr_fwrite(fd, buf, len);
     close(fd);
     return n;
 }
@@ -679,9 +724,15 @@ static inline int poll(pollfd_t *fds, u32 n, int timeout_ms) {
     return (int)syscall(SYS_POLL, (zelr_word)fds, (zelr_word)n, timeout_ms);
 }
 
-static inline int rename(const char *from, const char *to) {
+static inline int zelr_rename(const char *from, const char *to) {
     return (int)syscall(SYS_RENAME, (zelr_word)from, (zelr_word)to, 0);
 }
+
+#ifndef ZELR_NO_SUGAR
+static inline int rename(const char *from, const char *to) {
+    return zelr_rename(from, to);
+}
+#endif
 
 static inline int fsync(int fd) {
     return (int)syscall(SYS_FSYNC, fd, 0, 0);
@@ -915,6 +966,7 @@ static inline int win_resize(int handle, int w, int h) {
  * sure it never comes back here.
  */
 
+#ifndef ZELR_NO_START
 __attribute__((naked, section(".text._start")))
 void _start(void) {
     __asm__ volatile(
@@ -928,3 +980,4 @@ void _start(void) {
         "int $0x80\n"
         "1: jmp 1b\n");                          /* exit does not return */
 }
+#endif  /* ZELR_NO_START */
