@@ -22,4 +22,4 @@ typedef uint64_t u64; typedef int64_t  i64;
 #define KERNEL_AUTHOR  "blavese"
 #define KERNEL_YEARS   "2026"
 #define KERNEL_LICENSE "GPL-3.0-or-later"
-#define KERNEL_VERSION "0.36.0"
+#define KERNEL_VERSION "0.37.0"
