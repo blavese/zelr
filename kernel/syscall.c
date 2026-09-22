@@ -724,7 +724,7 @@ static sock_t socks[SOCK_MAX];
    out over a connection that is still up, so it goes first. */
 static void sock_drop(int h) {
     if (h < 0 || h >= SOCK_MAX || !socks[h].open) return;
-    if (socks[h].secure) { tls_close(); socks[h].secure = false; }
+    if (socks[h].secure) { tls_close(socks[h].tcp); socks[h].secure = false; }
     tcp_close(socks[h].tcp);
     socks[h].open = false;
 }
@@ -808,13 +808,21 @@ static i64 sys_connect_tls(registers_t *r) {
     return h;
 }
 
-/* Why the last handshake failed, or what the open one agreed on. */
+/* Why the last handshake on this socket failed, or what its open one
+   agreed on. The socket is named now rather than assumed: there is a
+   session per connection, so "the last handshake" is no longer a thing the
+   machine has one of. */
 static i64 sys_tls_status(registers_t *r) {
     u64 buf = r->rbx, cap = r->rcx;
     if (cap == 0 || cap > 256) return -1;
     if (!user_range_ok(buf, cap)) return -1;
 
-    const char *s = r->rdx == TLS_WHAT ? tls_describe() : tls_error();
+    /* The last one, machine wide, which is what this call has always
+       meant and is what the asking program can still answer with: a
+       handshake that failed has already closed its socket, so there is no
+       handle left to name. Every session here agrees the same suite, so
+       what was agreed is the same answer whichever one is asked. */
+    const char *s = r->rdx == TLS_WHAT ? tls_describe(-1) : tls_error(-1);
     u32 n = (u32)strlen(s);
     if (n + 1 > cap) n = (u32)cap - 1;
     memcpy((void *)buf, s, n);
@@ -832,7 +840,7 @@ static i64 sys_send(registers_t *r) {
     if (len == 0 || len > (s->secure ? 8192u : 1400u)) return -1;
     if (!user_range_ok(buf, len)) return -1;
     if (s->secure)
-        return tls_send((const void *)buf, (u32)len) ? (i32)len : -1;
+        return tls_send(s->tcp, (const void *)buf, (u32)len) ? (i32)len : -1;
     return tcp_send(s->tcp, (const void *)buf, (u16)len) ? (i32)len : -1;
 }
 
@@ -849,13 +857,13 @@ static i64 sys_recv(registers_t *r) {
     if (!user_range_ok(buf, len)) return -1;
 
     if (s->secure) {
-        u32 n = tls_recv((u8 *)buf, len, 4000);
+        u32 n = tls_recv(s->tcp, (u8 *)buf, len, 4000);
         if (n) return (i32)n;
         /* A finished TLS connection is one that said so in an alert, or one
            whose carrier stopped. The second is not a clean ending and is
            reported the same way, because a caller can do nothing different
            about it and the alternative is waiting forever. */
-        return (tls_ended() || tcp_ended(s->tcp)) ? -2 : 0;
+        return (tls_ended(s->tcp) || tcp_ended(s->tcp)) ? -2 : 0;
     }
 
     u32 n = tcp_recv(s->tcp, (u8 *)buf, len, 4000);

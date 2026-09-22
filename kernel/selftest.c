@@ -63,6 +63,7 @@
 #include "rtc.h"
 #include "rng.h"
 #include "tls.h"
+#include "tcp.h"
 
 static int passed, failed;
 
@@ -1738,24 +1739,33 @@ static void test_stack(void) {
 static void test_tls(void) {
     u8 buf[16];
 
-    ok("nothing is connected to begin with", !tls_active());
+    ok("nothing is connected to begin with", !tls_any());
 
     /* No name means nothing to check a certificate against, which is a
        refusal rather than a connection with the check skipped. */
     /* -1 is not a connection, which is the point: a handshake is asked
        for over a connection that is already open, and there is none. */
     ok("a connection with no host name is refused", !tls_connect(-1, ""));
-    ok("and it says why", tls_error()[0] && strcmp(tls_error(), "no error") != 0);
-    ok("and nothing was opened by trying", !tls_active());
+    ok("and it says why",
+       tls_error(-1)[0] && strcmp(tls_error(-1), "no error") != 0);
+    ok("and nothing was opened by trying", !tls_any());
 
     ok("sending on a connection that is not open fails",
-       !tls_send("hello", 5));
-    ok("and reading from one gives nothing", tls_recv(buf, sizeof(buf), 0) == 0);
+       !tls_send(0, "hello", 5));
+    ok("and reading from one gives nothing",
+       tls_recv(0, buf, sizeof(buf), 0) == 0);
 
     /* Closing something that was never open is allowed and does nothing,
        because the alternative is every caller checking first. */
-    tls_close();
-    ok("closing a connection that was never open is harmless", !tls_active());
+    tls_close(0);
+    ok("closing a connection that was never open is harmless", !tls_any());
+
+    /* And the sessions are separate, which is the whole of this change: a
+       failure on one connection is not an answer about another. */
+    ok("a handle out of range is not somebody else's session",
+       !tls_active(-1) && !tls_active(TCP_MAX) && !tls_active(TCP_MAX + 99));
+    for (int i = 0; i < TCP_MAX; i++)
+        ok("every session starts closed", !tls_active(i));
 }
 
 /* --- AES-GCM, the NIST test vectors ---------------------------------- */
