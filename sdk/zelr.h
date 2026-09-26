@@ -8,7 +8,7 @@
  * reason. See NOTICE in the repository this came from.
  */
 
-/* The entire user-facing interface: forty-seven system calls and a little
+/* The entire user-facing interface: sixty-three system calls and a little
    sugar. Nothing is linked in from the kernel; every call below crosses the
    ring boundary through int 0x80.
  *

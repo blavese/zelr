@@ -64,7 +64,7 @@ bash run.sh                    # boot in a window (-t headless serial, -i throug
 python tools/mkiso.py          # build/zelr.iso: BIOS and UEFI, disc and stick, one image
 bash pipeline/gate.sh fast     # build + selftest (pc and q35) + ring 3 + serial shell + black box
 bash pipeline/gate.sh screen   # fast + the desktop/terminal/USB/input/sound/network/browser harnesses
-bash pipeline/gate.sh full     # everything: 53 steps, all passed at 6048716 (2026-09-26), in 8 min 44 s
+bash pipeline/gate.sh full     # everything: 47 steps, all passed at 6048716 and at 0.38.0 (~9-11 min)
 ```
 - **Selftest counts depend on the machine**: 556 (i440fx, 64 MiB), 560 (256 MiB, as in the gate), 568 (q35
   or NVMe), 571 with `-smp 4`. The README still says 552.

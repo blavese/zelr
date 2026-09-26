@@ -82,7 +82,7 @@ skimmed) and checking the results against a real build and test run.
   (9.97 MB). The only warnings are unused static functions in `jsrun.h` and `jsdom.h`.
 - **`bash run.sh -T`** (i440fx, `-m 64`, one CPU, rtl8139, IDE): **556 passed, 0 failed**. It skipped the SMP
   checks, MCFG and sound, which is expected on that machine.
-- **`bash pipeline/gate.sh full`**: **every one of its 53 steps passed, in 8 min 44 s** (GATE_EXIT=0). The
+- **`bash pipeline/gate.sh full`**: **every one of its 47 steps passed, in 8 min 44 s** (GATE_EXIT=0). The
   selftest reached 560 on the gate machine (`-m 256`) and 568 each on q35 and on NVMe. All four ISO boot
   paths passed, as did every desktop, USB, sound, network, https, browser, SMP, crash-safety, SDK and libc
   harness. QEMU 11.1 accepts the harness's `server,nowait` monitor syntax.
