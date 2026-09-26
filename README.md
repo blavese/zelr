@@ -67,19 +67,21 @@ Every one of those was photographed by `tools/shots.py`, which boots the
 machine, drives it, and saves what came out. They are not mockups and they do
 not go stale quietly.
 
-It is not a clone of anything. About 119,500 lines in all, of which 39,700
+It is not a clone of anything. About 139,600 lines in all, of which 47,200
 are generated data that nobody types: the font coverage, the root certificate
 store, the typeface at every size a browser might ask for. What is left is
-roughly 40,400 hand-written lines of kernel, bootloaders and headers, 25,600
-of ring 3 programs, and 13,800 of build and test tooling. No
-libc, no runtime dependencies, and nothing borrowed from another kernel:
+roughly 42,600 hand-written lines of kernel, bootloaders and headers, 33,300
+of ring 3 programs and the SDK they are built with, and 16,500 of build and
+test tooling. No borrowed libc -- the one in `sdk/libc` was written here like
+everything else -- no runtime dependencies, and nothing borrowed from another kernel:
 every driver, the filesystem, the bootloader, the image writer and the font
 are written here, from the specifications where there is one and from scratch
 where there is not.
 
 The one exception, since "from scratch" invites the question: `zelr.exe`, the
 Windows launcher, is a C# program that bundles the .NET runtime, which is
-most of its 162 MB. The kernel inside it is about 1.5 MB. Nothing third party
+most of its 172 MB. The kernel inside it is about 10 MB, most of that the
+programs pasted into it. Nothing third party
 runs on the machine zelr boots.
 
 ## running it on Windows
@@ -352,7 +354,8 @@ nothing and keeps working; the screen and serial routes are unaffected.
 
 ## running it from source
 
-You need QEMU and Zig. Zig is used only as a cross compiler, so there is no
+You need QEMU and Zig, and bash and Python to run the scripts. Zig is used
+only as a cross compiler, so there is no
 x86_64-elf toolchain to build first.
 
     ./run.sh          boot in a window
@@ -447,9 +450,10 @@ silently triple faulting.
 the firmware memory map. The kernel image and the bitmap itself are marked in
 use so they can never be handed out.
 
-**Virtual memory.** Two-level paging. The low 16 MiB is identity mapped so that
-enabling paging does not move the ground out from under the kernel, and
-map_page / unmap_page / virt_to_phys work for anything above that. Page faults
+**Virtual memory.** Four-level paging. The low 64 MiB is identity mapped a page
+at a time so that enabling paging does not move the ground out from under the
+kernel, the usable memory above it is mapped in 2 MiB pages, and
+map_page / unmap_page / virt_to_phys work for anything mapped. Page faults
 report the faulting address and whether it was a read or a write.
 
 **Heap.** First-fit free list with boundary tags, coalescing neighbours on
@@ -516,7 +520,8 @@ of them matches, the machine says which controller it found and that there is
 no driver for it, rather than saying there is no card. On top of any of them:
 ethernet, ARP with a cache, IPv4 with checksums,
 ICMP (it answers pings and sends them), UDP, a DHCP client, a DNS resolver, and
-a single-connection TCP client with a three way handshake, orderly close, and
+a TCP client that holds six connections at once, with a three way handshake,
+orderly close, and
 retransmission with exponential backoff. `fetch` uses all of it to do an
 HTTP GET.
 
@@ -616,11 +621,11 @@ whichever processor is free, and what it hands over is arithmetic over memory
 the caller owns rather than anything the kernel keeps. `cat /sys/cpu` says
 how many slices each processor has given to a program.
 
-**Programs.** Ring 3, its own address space per process, and fifty-eight
+**Programs.** Ring 3, its own address space per process, and sixty-three
 system calls through int 0x80. A program can start another program, block
 until it finishes and read what it returned from `main`, so the terminal
 starting `paint` is one ring 3 process starting another with the kernel only
-lending a hand. An ELF32 loader maps each PT_LOAD segment where the
+lending a hand. An ELF64 loader maps each PT_LOAD segment where the
 file asks and refuses anything that would land in kernel memory. `userland/`
 holds programs built entirely separately: the only thing they share with the
 kernel is the syscall numbers. They are then pasted whole into the kernel
@@ -905,14 +910,14 @@ executables in ring 3. The terminal is a shell that is not part of the kernel:
 listing a directory, reading a file, writing one, starting another program and
 fetching a page over TCP all go through int 0x80, and its `get` command does
 an HTTP GET from user space. It has a line editor, history kept in `/cfg`, tab
-completion over both commands and paths, and thirty-six commands of its own.
+completion over both commands and paths, and thirty-eight commands of its own.
 Settings is the interesting one, because it changes how the desktop
 looks without being able to reach the window manager at all. It writes
 `/zelr.cfg`, a plain "key value" file, and the window manager re-reads that four
 times a second. Anything the window can do can also be done with the shell's
 `write` command.
 
-Eleven wallpapers, six of which move: drifting stars, travelling waves,
+Twelve wallpapers, six of which move: drifting stars, travelling waves,
 aurora, rain, wandering orbs and rings going out from the middle. They are
 all cheap on purpose, because this has to stay smooth on a machine with no
 graphics acceleration of any kind: a column fill or a few thousand points a
@@ -939,10 +944,10 @@ processor figure means something, and the desktop stopped spinning its loop
 as fast as the processor would go when there was nothing on it to draw, which
 on a laptop is the difference between a warm machine and a cool one.
 
-The calculator is integer arithmetic, because there is no floating point
-anywhere in this system: the kernel is built with the vector registers turned
-off and a program that used a double would fault on the first instruction
-that touched one. Everything in it is a sixty four bit count of millionths.
+The calculator is integer arithmetic. It was written when a program that used
+a double faulted on the first instruction that touched one; programs have the
+vector registers now, saved with every task, and only the kernel is built
+without them. Everything in it is a sixty four bit count of millionths.
 
 The music player reads WAV files, which is a header and then the samples.
 The hardware plays at one rate and in stereo and will not be argued with, so
@@ -1301,7 +1306,7 @@ is still the kernel's own, on the console; the one in a window is a program.
 ## writing a program for it
 
 Four files in `sdk/` are everything a program needs: `zelr.h`, which is the
-fifty-seven system calls and a little sugar over them, `zelr.ld`, which says
+sixty-three system calls and a little sugar over them, `zelr.ld`, which says
 where a program is linked, a build line, and an example.
 
 ```bash
@@ -1324,14 +1329,22 @@ builds there, writes the result onto a FAT volume, boots a machine with it
 and types the program's name -- because a header that quietly needs a sibling
 works perfectly until somebody takes it somewhere else.
 
+A program written for some other system wants a C library, and `sdk/libc` is
+one, written here like the rest: the standard headers with the signatures C
+gives them, a heap over `sbrk`, `FILE` over a descriptor and a buffer, one
+formatter behind `printf` and `snprintf`, `qsort`, and `math.h` worked out as
+series. `tools/libccheck.py` builds a program that includes nothing but those
+headers, outside the tree, runs it here, and checks what it printed to the
+byte.
+
 ## testing
 
 The kernel tests itself. `./run.sh -T` boots with selftest on the command line,
-runs 552 checks across every subsystem, then writes to QEMU's debug-exit port
+runs 556 checks across every subsystem, then writes to QEMU's debug-exit port
 so the host gets a real exit status.
 
     [string]                8 checks   [live tree]            19 checks
-    [the identity map]      6 checks   [layout]                9 checks
+    [the identity map]      2 checks   [layout]                9 checks
     [physical memory]       4 checks   [waiting]              16 checks
     [paging]                5 checks   [trackpad]             25 checks
     [user access]           5 checks   [crypto]               22 checks
@@ -1342,9 +1355,9 @@ so the host gets a real exit status.
     [open files]           30 checks   [p-256]                13 checks
     [timer]                 3 checks   [sha-512]               4 checks
     [interrupts]            2 checks   [p-384]                 6 checks
-    [disk]                 12 checks   [certificates]         39 checks
+    [disk]                 12 checks   [certificates]         40 checks
     [fat]                  14 checks   [randomness]            5 checks
-    [network]               9 checks   [tls 1.3]              19 checks
+    [network]               9 checks   [tls 1.3]              26 checks
     [elf]                   7 checks   [wpa]                  19 checks
     [userspace]             4 checks   [wait timeouts]         3 checks
     [video]                 7 checks   [processors]            4 checks
@@ -1353,11 +1366,15 @@ so the host gets a real exit status.
     [windows]               7 checks   [interrupt routing]     9 checks
     [window server]        19 checks   [clipboard]            14 checks
     [built-in programs]     8 checks   [clock]                18 checks
-    [theme]                19 checks   [kernel stack]          2 checks
-    [taskbar]              18 checks
+    [theme]                19 checks   [sound]                  skipped
+    [taskbar]              18 checks   [kernel stack]          2 checks
 
-    552 passed, 0 failed
+    556 passed, 0 failed
     SELFTEST_PASS
+
+The sound section is skipped because `run.sh` attaches no sound card, and the
+identity map is checked in four more places when there is more memory to map:
+given 256 MiB, as the gate gives it, the same run is 560.
 
 The cryptographic sections are all known answers from published documents:
 the hashes against FIPS 180, AES-GCM against the NIST vectors, X25519
@@ -1370,10 +1387,11 @@ talk to anybody.
 
 The processor section is four checks on a machine with one CPU and fifteen
 on a machine with several, where it hands work to each of them and requires
-the count they share to come back exact. `qemu-system-x86_64 -smp 4` reaches 563.
+the count they share to come back exact. `qemu-system-x86_64 -smp 4` with
+256 MiB reaches 571.
 
 The same checks run again on `-machine q35`, which has PCIe and an AHCI
-controller rather than a 1996 chipset and a PIO disk, and reach 560 there.
+controller rather than a 1996 chipset and a PIO disk, and reach 568 there.
 Two bugs found the day that was added were invisible on the older machine:
 the block layer would not split a request past the eight sectors AHCI
 accepts, and the ACPI tables were never read on a UEFI machine at all.
@@ -1428,8 +1446,10 @@ fix was volatile pointers in the three byte movers.
 **The compiler emitted SSE.** Zig's default x86 target has SSE2 on, so clang
 used movd xmm0 for a 64-bit integer move. The CPU had never been told the FPU
 exists, so the first one raised an invalid opcode fault, far from anything that
-looked related. Fixed with -mcpu=i686, and tools/check_sse.py now fails the
-build if an SSE opcode reaches an executable section.
+looked related. Fixed with -mcpu=i686 at the time, and with -mno-sse and its
+relatives since the move to long mode. tools/check_sse.py was written to fail
+the build if an SSE opcode reached an executable section, and nothing runs it
+any more.
 
 **The TSS descriptor got an address where it wanted a length.** Passing
 base + size - 1 instead of size - 1 as the limit made ltr fault, which triple
@@ -1603,10 +1623,11 @@ large range:
   gives up after six tries, but the send window is one segment per
   connection, and there is no congestion control, no window scaling and no
   selective acknowledgement.
-- **TLS is one session at a time.** The stack underneath holds several
-  connections; the session state does not, so a machine can have one
-  encrypted connection and five plain ones. A second handshake is refused
-  rather than quietly taking the first one's keys.
+- **A program gets one encrypted connection at a time.** The kernel keeps a
+  TLS session per connection now, but the system call that opens one still
+  refuses a second while the first is open, so a program can have one
+  encrypted connection and five plain ones. Lifting that is what would let a
+  page's pictures come over https in parallel.
 - **TLS is 1.3 and one cipher suite**: AES-128-GCM with SHA-256 over X25519,
   which every 1.3 server must implement. There is no TLS 1.2 and no second
   suite, and that is the design rather than an unfinished part of it. Every
@@ -1684,7 +1705,7 @@ orders of magnitude away from Linux, which is roughly 30 million lines.
     tools/genface.py   the typeface: outlines, weights, and the rasteriser
     kernel/mouse.c     ps/2 mouse and the drawn pointer
     kernel/fat.c       fat16 and fat32
-    kernel/elf.c       elf32 loader
+    kernel/elf.c       elf64 loader
     kernel/syscall.c   the system call table
     kernel/user.c      building and launching ring 3 processes
     kernel/wm.c        the window manager and the launcher
@@ -1719,6 +1740,11 @@ orders of magnitude away from Linux, which is roughly 30 million lines.
     sdk/               what a program written anywhere else needs: the
                        header, the link script, and how to build one
     tools/sdkcheck.py  builds sdk/hello.c outside the tree and runs it here
+    sdk/libc/          a C library, for a program written for somewhere else
+    tools/libccheck.py builds one of those outside the tree and runs it here
+    tools/mkroots.py   builds kernel/roots.c from a published list of authorities
+    docs/atlas/        every part of the tree, written down, and what is wrong
+                       with it
     kernel/builtin.S   the user programs, pasted into the kernel image
     kernel/apps.c      the system info window
     kernel/vfs.c       one namespace over the live tree, the disk and memory
@@ -1746,12 +1772,13 @@ orders of magnitude away from Linux, which is roughly 30 million lines.
     kernel/welcome.c   the first-run text and the guided tour
     kernel/selftest.c  the boot-time test suite
     kernel/divide.c    64-bit division helpers libgcc would normally provide
-    userland/          programs, built separately from the kernel:
-                       a terminal, paint, settings and three small tests
-    tools/             build checks, the font generator, a FAT reader and
-                       a FAT writer, the image builder, the four test
-                       harnesses, and harness.py, which is how they drive a
-                       running machine and wait for it
+    userland/          programs, built separately from the kernel: the
+                       terminal, the desktop's programs, the browser and its
+                       engine, two card games, and the programs tests run
+    tools/             build checks, the font and typeface generators, a FAT
+                       reader and a FAT writer, the image builder, the
+                       harnesses the gate runs, and harness.py, which is how
+                       they drive a running machine and wait for it
     launcher/          the Windows launcher (C#/WPF)
 
 ## author and license
@@ -1765,7 +1792,7 @@ license, with the source, and with this copyright line still on it. Selling it
 is allowed, and always has been under this license. Closing it is not, and
 neither is taking the author's name off it.
 
-Every part of this is original. No libc, no borrowed bootloader, no driver
+Every part of this is original. No borrowed libc, no borrowed bootloader, no driver
 lifted from another kernel, no cryptography library, no font file. Where a
 published specification was implemented it is named in the source at the point
 of implementation — RFC 7748, RFC 8448, FIPS 180, the NIST vectors — because
