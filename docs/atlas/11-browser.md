@@ -90,7 +90,7 @@ main loop (browser.c:1350): events → keys → timers → one XHR → form navi
 - **Transparency composited against white** (css.h:213-219), since nothing composites.
 - **One-pass layout into a flat display list in document coordinates** (layout.h:1-20); drawing and scrolling are "a subtraction". Floats, grid, table column widths are deliberately absent ("a browser that does half of them puts things in places nobody chose"). (The same comments also still list positioning and flex as absent -- they are now implemented; see §10.)
 - **Inline boxes have left/right edges but not top/bottom** (layout.h:544-562): left/right padding/border/margin separate links; vertical padding "does not move the line it is on"; a box that wraps across lines draws nothing rather than a band.
-- **Flex by measure-then-lay-out** (layout.h:825-847): measure each child by laying it out and throwing that away -- "exactly right, because the thing being measured is the thing that will be drawn".
+- **Flex by measure-then-lay-out** (layout.h:825-847): measure each child by laying it out and throwing that away -- "exactly right, because the thing being measured is the thing that will be drawn". Since 0.50.0 a flex row that is itself being measured (`L->measuring`) does not lay its children out a second time: it reports how far right they reach (`measure_right`: each child's place plus the narrower of its measured and given width) and its height from the measured heights, which it used anyway. Nesting had doubled the work at every level (twelve rows deep laid out thousands of boxes; now 79, `ldoc.laid`); the reach is exact unless a child centres its content or sizes it by percentage.
 - **Positioned boxes** (layout.h:1055-1078): relative = lay out then shift items; absolute = from nearest positioned ancestor, takes no space; fixed = treated like absolute against the page ("the closer of the two wrong answers"); bottom-only boxes stay where the flow put them.
 - **Pages that hide themselves until a framework runs** (layout.h:48-64; browser.c:666-678): if a layout produced no words but the DOM has words, lay out again ignoring `visibility`/`opacity`, and say so.
 - **Form control values live in the DOM as attributes** (browser.c:149-158): layout, drawing, scripts and submission read the same place ("two answers that agree until somebody types").
@@ -270,7 +270,7 @@ Includes `zelr.h`, `web.h`, `dom.h` (20-23).
 - `csheet` (175-185): `rules[4000], nrules, sels[9000], nsels, decls[16000], ndecls, text[512K], used, overflowed` (~1 MB).
 - `cinline {int at, n}` (193-195): a node's `style=""` declarations, one per DOM node (parsed once per page, not per layout, 187-192).
 - `cmatch {int hover; int visited_links}` (935-938).
-- `cindex {by_tag[T_COUNT], by_key[CSS_BUCKETS], universal, next[CSS_RULES]}` (1308-1313); `chit {rule, spec, order}` (1346-1350).
+- `cindex {by_tag[T_COUNT], by_key[CSS_BUCKETS], universal, next[CSS_RULES]}` (1308-1313); `chit {rule, spec, order}` (1346-1350). Since 0.50.0 `cindex` also holds `need[CSS_RULES]`, a `cbloom` (128 bits, two per key) of the tags, ids and classes every part but the last insists on, and `css_collect` takes the element's ancestor `cbloom`: a rule wanting a bit the ancestors lack is skipped without `css_matches` (keys: `css_key_tag/id/cls`, raw bytes, exactly as `css_part_matches` compares; collisions only let a rule through to be walked).
 
 **Text arena**: `css_put` (197), `css_put_lower` (205, unused).
 
@@ -363,7 +363,7 @@ Includes `web.h`, `dom.h`, `css.h`, `facetext.h` (21-26).
 
 **Text**: `lay_word(L, s, n, st, *y, face)` (389): wraps when the word (plus a pending space measured in its own face) passes the right edge, the line is not empty and `white-space` is not `nowrap`; one LK_TEXT item per word (colour, underline, strike, `link = cur_link`). Long words are never broken. `lay_text_run(L, s, st, *y)` (423): `pre` → one item per source line, newlines end lines, spaces kept, no wrapping (and no underline/strike set); otherwise split on space/tab/CR/LF/FF into words with collapsing.
 
-**Style**: `lay_style(L, el, parent, out, pct_of)` (470): `css_inherit`, `css_collect`, apply every declaration of every hit in order, then the element's inline declarations (always last).
+**Style**: `lay_style(L, el, parent, out, pct_of)` (470): `css_inherit`, `css_collect`, apply every declaration of every hit in order, then the element's inline declarations (always last). Since 0.50.0 the matched rules are kept per element for the length of one `lay_run` (`lay_hit_pool`, 131072 rule numbers, stamped with `lay_gen`; past the pool they are matched every time), and each element's ancestor bits are built once a run from its parent's (`lay_ancestors`, `lay_keys_of`). `ldoc.matched` counts elements matched, `ldoc.laid` boxes laid out.
 
 **Inline layout** `lay_inline(L, node, parent, *y)` (563): iterative walk of `node`'s subtree with an explicit 64-entry style stack (`stack`, `stack_node`, `stack_x`, `stack_top`, `stack_slot`). For each node: pop styles whose element has been left; text ⇒ `lay_text_run` (if visible); element ⇒ `lay_style`; `display:none` ⇒ skip the subtree (600-609); `<br>` ⇒ end the line; `<img>` ⇒ if its picture arrived, size = attributes (`width`+`height`, or one of them scaling the other) else intrinsic, capped at the line width, wrapped like a tall word, LK_IMAGE carrying `link`, line fit at 100 % (a fix for `ih*ih/100`, 660-665); else its `alt` text in grey `0x6B6B6B`; controls ⇒ sized (check/radio: face+2 square; button: label width + 20 by face+10; textarea: `cols` (28) × width of `0` + 10 by `rows` (3) × (face+4) + 8; others: `size` (20) × `0` + 10), clamped to [8, line width], hidden controls take no room, LK_FIELD carrying face, colour, bg, radius, border colour and borders (≤ 8), `pen += fw + 2`, then the control's subtree is skipped (762-768); any other element ⇒ pushed (`lay_inline_open`), and an `<a href>` registers a link and sets `cur_link` (775-783). At the end remaining boxes are closed and `cur_link = -1`. Block-level descendants inside an inline run are flattened into the line.
 - `lay_inline_open` (501): reserves an LK_BOX slot if the element has a background or border; `pen += max(ml,0) + bl + pl`.
@@ -577,7 +577,7 @@ Three mutually exclusive destinations, tested in order: the address bar (`bar.fo
 ### 4.8 Hover, find and the display list
 - Hover: `hover_node` feeds `cmatch.hover`; only the exact element under the pointer matches `:hover` (not its ancestors), and only elements that produced a box/field/image/bullet can be "under" the pointer.
 - Find: `WIN_EV_FIND(n)` ⇒ `find_show(n)` ⇒ `find_item` (an index into `page.items`) + scroll; `draw_page` paints `0xFFE58F` behind that item; `n = -1` clears. `publish_text` runs on build and on width reflows only.
-- Relayout triggers: build; width change (deferred until the button is up); zoom; hover change; timers/XHR/clicks that changed the DOM. Each relayout re-runs the whole cascade for every element (style is computed up to three times per block element: `lay_is_block_node`, `lay_block`, `lay_block_placed`), and every flex level measures its children with a full throw-away layout.
+- Relayout triggers: build; width change (deferred until the button is up); zoom; hover change; timers/XHR/clicks that changed the DOM. Each relayout re-runs the whole cascade for every element (style is computed up to three times per block element: `lay_is_block_node`, `lay_block`, `lay_block_placed`; since 0.50.0 the selector matching is done once per element a run and the rest is applying declarations), and every flex level measures its children with a full throw-away layout (since 0.50.0 a row that is being measured only measures, so nesting no longer doubles the work).
 
 ---
 
@@ -617,7 +617,7 @@ Three mutually exclusive destinations, tested in order: the address bar (`bar.fo
   - Rules in each `cindex` chain are in source order (built backwards, css.h:1326-1339), and `css_collect`'s insertion sort is stable, so equal specificity resolves by order.
   - `page.items` is in paint order: a box's slot is reserved before its contents (layout.h:1189-1200, 497-500), so backgrounds are drawn under text and hit tests walk backwards to find the topmost item.
   - Item coordinates are document coordinates; drawing subtracts `scroll` and adds the view origin.
-  - `lay_measure` restores every piece of layout state it touches (including `overflowed`) -- any new field added to `lctx` or `ldoc` must be saved/restored there too.
+  - `lay_measure` restores every piece of layout state it touches (including `overflowed`) -- any new field added to `lctx` or `ldoc` must be saved/restored there too. (Except `ldoc.laid`, since 0.50.0, which counts trial boxes on purpose; `measuring` and `measure_right` are saved and restored.)
   - Selector queries from scripts append to the live sheet and are rolled back (`nsels`, `used`, `overflowed`) -- the index never references those temporary selectors.
 - **Stack**: the user stack is 64 KiB (`USER_STACK_PAGES 16`, kernel/user.c:35-49, sized "against what the work needs" for deep pages). Layout recursion depth follows the DOM depth of block elements (`lay_block` ↔ `lay_block_placed`, plus `lay_flex`/`lay_measure` frames); the parser caps that at 64, but scripts can nest deeper. `lay_inline` alone keeps ~7 KB of arrays; `lay_style` a 2.3 KB hit array per call.
 
@@ -649,6 +649,7 @@ Three mutually exclusive destinations, tested in order: the address bar (`bar.fo
 | `CSS_AUTO_OFF -32768` | css.h:64 | auto offset |
 | default colours 0x1A1A1A text, 0xFFFFFF background, 0xD0D0D0 border | css.h:1004-1006; layout.h:314 | |
 | `LAY_ITEMS 96000`, `LAY_TEXT 1 MiB`, `LAY_LINKS 12000`, `LAY_LINE 400` (unused), `LAY_DEPTH 64`, `LAY_FLEX_MAX 32` | layout.h:40-44, 849 | display list |
+| `LAY_HIT_POOL 131072` (512 KiB), per-node `lay_hit_*` and `lay_anc` (about 560 KiB for `DOM_NODES` 20000), ancestor walk up to 96 deep | layout.h, since 0.50.0 | matched rules and ancestor bits kept for one layout |
 | 33 faces: 11,12,13,14,15,16,17,19,21,24,28,34,42 (regular, bold); mono 12,13,14,15,17; mono bold 13,15 | facetext.h:26255-26289 | typefaces |
 | baseline 4/5 of height | layout.h:379; browser.c:1038 | text placement |
 | `3*cw` or 2000 | layout.h:948 | flex measuring width |

@@ -102,6 +102,7 @@ static const litem *box_of(int node) {
 
 static int by_id(const char *id) { return dom_by_id(&doc, id); }
 
+
 int main(void) {
     puts("where things end up\n");
 
@@ -256,6 +257,77 @@ int main(void) {
         if (a && e)
             okn("and the last of it is still on the page",
                 e->x + e->w <= 320, e->x + e->w);
+    }
+
+    /* --- a row inside a row -------------------------------------------------
+     *
+     * The inner row is measured before it is placed, and a row being measured
+     * no longer lays its children out a second time: it reports how far they
+     * reach instead. What comes after it has to start where it really ends. */
+    {
+        lay("<style>.row{display:flex}"
+            ".box{background:#ff0000;width:50px}"
+            ".wide{background:#00ff00;width:60px}</style>"
+            "<div class=row>"
+            "<div class=row><div class=box id=a>1</div><div class=box id=b>2</div></div>"
+            "<div class=wide id=c>3</div></div>", 600);
+
+        const litem *a = box_of(by_id("a"));
+        const litem *b = box_of(by_id("b"));
+        const litem *c = box_of(by_id("c"));
+        ok("a row inside a row lays out", a && b && c);
+        if (a && b && c) {
+            okn("with its boxes side by side", b->x == a->x + 50, b->x - a->x);
+            okn("and the next box where the inner row ends", c->x == a->x + 100, c->x - a->x);
+        }
+    }
+
+    /* --- and twelve of them -------------------------------------------------
+     *
+     * Each row measured its child by laying it out, then laid it out again,
+     * and every row inside did the same inside both: the work doubled at
+     * every level, and a page nested ten deep, which is an ordinary modern
+     * page, laid itself out a thousand times over. Counted rather than timed,
+     * because a count says the same thing on any machine. */
+    {
+        lay("<style>.r{display:flex}</style>"
+            "<div class=r><div class=r><div class=r><div class=r>"
+            "<div class=r><div class=r><div class=r><div class=r>"
+            "<div class=r><div class=r><div class=r><div class=r>deep"
+            "</div></div></div></div></div></div></div></div></div></div></div></div>",
+            600);
+        okn("rows nested twelve deep lay out in work that grows with the depth, not doubles",
+            page.laid > 12 && page.laid <= 400, page.laid);
+
+        /* And each element's rules are worked out once, however many times
+           its style is asked for: it was two or three times a layout, and
+           matching was nine tenths of what a layout cost. */
+        int elements = 0;
+        for (int i = 0; i < doc.count; i++) if (doc.nodes[i].kind == DN_ELEMENT) elements++;
+        okn("and each element is matched against the rules once", page.matched > 0 && page.matched <= elements,
+            page.matched);
+    }
+
+    /* --- rules that want something above the element ------------------------
+     *
+     * A rule is passed over without being walked when its other parts want an
+     * ancestor the element does not have, which is decided from a few bits per
+     * ancestor. So the ones that do match through ids, classes, element names
+     * and child joins have to go on matching, and one wanting an ancestor that
+     * is not there, written after them, must not paint over them. */
+    {
+        lay("<style>#top .mid div{background:#ff0000}"
+            "ul > li.c2 > div{background:#0000ff}"
+            ".other div{background:#00ff00}"
+            "ol div{background:#00ff00}</style>"
+            "<div id=top><div class=mid><div id=s>x</div></div></div>"
+            "<ul><li class=c2><div id=u>y</div></li></ul>", 600);
+        const litem *s = box_of(by_id("s"));
+        const litem *u = box_of(by_id("u"));
+        okn("a rule wanting an id and a class above matches through them",
+            s && s->has_bg && s->bg == 0xFF0000, s ? s->bg : -1);
+        okn("and one wanting names and a class by child joins",
+            u && u->has_bg && u->bg == 0x0000FF, u ? u->bg : -1);
     }
 
     /* --- a picture at the size the page asked for ---------------------------

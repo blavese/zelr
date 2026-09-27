@@ -1305,11 +1305,43 @@ static inline void css_apply(const csheet *s, const cdecl *dcl, cstyle *st,
 
 #define CSS_BUCKETS 512
 
+/* What an element's ancestors are, as a hundred and twenty eight bits: two
+ * for each tag, id and class above it.
+ *
+ * The index finds the rules whose last part could be this element, and for
+ * most pages that is enough. It is not enough for a sheet whose rules share
+ * a last part and differ in what they want above it -- forty rules of the
+ * form ".section-n .item .link" all filed under "link" -- because every link
+ * then walked up its ancestors forty times to find out which section it was
+ * in. Each rule carries the bits of everything its other parts insist on, and
+ * a rule wanting a bit the element's ancestors do not have cannot match and is
+ * not walked. Bits can collide, so a rule that passes is still walked; one
+ * that fails is certain to have failed. */
+typedef struct { unsigned long long w[2]; } cbloom;
+
+static inline unsigned css_fnv(const char *p, int n) {
+    unsigned h = 2166136261u;
+    for (int i = 0; i < n; i++) { h ^= (unsigned char)p[i]; h *= 16777619u; }
+    return h;
+}
+
+static inline void css_bloom_add(cbloom *b, unsigned h) {
+    unsigned a = h & 127, c = (h >> 7) & 127;
+    b->w[a >> 6] |= 1ull << (a & 63);
+    b->w[c >> 6] |= 1ull << (c & 63);
+}
+
+/* The keys, kept apart so a class named like a tag number is not the tag. */
+static inline unsigned css_key_tag(int tag)               { return (unsigned)(tag + 1) * 2654435761u; }
+static inline unsigned css_key_id(const char *p, int n)   { return css_fnv(p, n) ^ 0x5BD1E995u; }
+static inline unsigned css_key_cls(const char *p, int n)  { return css_fnv(p, n); }
+
 typedef struct {
     int by_tag[T_COUNT];
     int by_key[CSS_BUCKETS];
     int universal;
     int next[CSS_RULES];
+    cbloom need[CSS_RULES];   /* what a rule's other parts want above it */
 } cindex;
 
 static inline unsigned css_hash(const char *s) {
@@ -1336,6 +1368,24 @@ static inline void css_index(const csheet *s, cindex *x) {
         else head = &x->universal;
         x->next[r] = *head;
         *head = r;
+
+        /* Every part but the last has to be matched by an ancestor, by a
+           child or a descendant join alike. */
+        cbloom *b = &x->need[r];
+        b->w[0] = b->w[1] = 0;
+        for (int k = 0; k < rule->sel_n - 1; k++) {
+            const csel *p = &s->sels[rule->sel_at + k];
+            if (p->tag >= 0) css_bloom_add(b, css_key_tag(p->tag));
+            if (p->id >= 0) {
+                const char *v = s->text + p->id;
+                css_bloom_add(b, css_key_id(v, w_len(v)));
+            }
+            for (int i = 0; i < p->ncls; i++) {
+                if (p->cls[i] < 0) continue;          /* an attribute, not a class */
+                const char *v = s->text + p->cls[i];
+                css_bloom_add(b, css_key_cls(v, w_len(v)));
+            }
+        }
     }
 }
 
@@ -1351,9 +1401,12 @@ typedef struct {
 
 static inline void css_collect_chain(const csheet *s, const cindex *x,
                                      const ddoc *d, int el, int head,
-                                     const cmatch *m, chit *hits, int *n) {
+                                     const cmatch *m, const cbloom *anc,
+                                     chit *hits, int *n) {
     for (int r = head; r >= 0; r = x->next[r]) {
         if (*n >= CSS_HITS) return;
+        if (anc && ((x->need[r].w[0] & ~anc->w[0]) | (x->need[r].w[1] & ~anc->w[1])))
+            continue;                          /* wants an ancestor there is not */
         const crule *rule = &s->rules[r];
         if (!css_matches(s, d, el, rule, m)) continue;
         hits[*n].rule = r;
@@ -1367,16 +1420,17 @@ static inline void css_collect_chain(const csheet *s, const cindex *x,
    applied: weaker specificity first, and among equals the one written
    later wins, which is what "later in the sheet" means. */
 static inline int css_collect(const csheet *s, const cindex *x, const ddoc *d,
-                              int el, const cmatch *m, chit *hits) {
+                              int el, const cmatch *m, const cbloom *anc,
+                              chit *hits) {
     int n = 0;
-    css_collect_chain(s, x, d, el, x->universal, m, hits, &n);
+    css_collect_chain(s, x, d, el, x->universal, m, anc, hits, &n);
     int tag = d->nodes[el].tag;
     if (tag > 0 && tag < T_COUNT)
-        css_collect_chain(s, x, d, el, x->by_tag[tag], m, hits, &n);
+        css_collect_chain(s, x, d, el, x->by_tag[tag], m, anc, hits, &n);
 
     const char *id = dom_attr(d, el, "id");
     if (id && *id)
-        css_collect_chain(s, x, d, el, x->by_key[css_hash(id)], m, hits, &n);
+        css_collect_chain(s, x, d, el, x->by_key[css_hash(id)], m, anc, hits, &n);
 
     const char *cl = dom_attr(d, el, "class");
     if (cl) {
@@ -1394,7 +1448,7 @@ static inline int css_collect(const csheet *s, const cindex *x, const ddoc *d,
             }
             one[w] = 0;
             if (w) css_collect_chain(s, x, d, el, x->by_key[css_hash(one)],
-                                     m, hits, &n);
+                                     m, anc, hits, &n);
         }
     }
 

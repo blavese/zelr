@@ -98,6 +98,8 @@ typedef struct {
     int   nlinks;
     int   height;
     int   overflowed;
+    int   laid;          /* boxes laid out, trial ones included: the work done */
+    int   matched;       /* elements run through selector matching */
 } ldoc;
 
 /* --- picking a face ------------------------------------------------------
@@ -275,6 +277,11 @@ typedef struct {
        nothing to the element and makes it the thing its children are
        placed against. */
     int pos_x, pos_y, pos_w;
+
+    /* Inside lay_measure, how deep, and the furthest right that a flex row
+       being measured rather than laid out would have reached (see lay_flex). */
+    int measuring;
+    int measure_right;
 } lctx;
 
 static inline int lay_put(lctx *L, const char *s, int n) {
@@ -467,16 +474,96 @@ static inline void lay_text_run(lctx *L, const char *s, const cstyle *st,
 
 /* --- the walk ------------------------------------------------------------ */
 
+/* Which rules match each element, worked out once a layout.
+ *
+ * An element's style is asked for two or three times in one layout -- to ask
+ * whether it is a block, to lay it out, once more by its box -- and a flex
+ * row asks again while it measures. Each time went through the whole of
+ * selector matching, and matching was nine tenths of the time a layout took:
+ * every rule whose last part named one of the element's classes walked up its
+ * ancestors looking for the rest. Which rules match cannot change inside one
+ * layout (the document, the sheets and the hover are all fixed for it), so
+ * the answer is kept, by rule number in the order they apply, stamped with
+ * the layout it belongs to. When the pool is full the rest are worked out
+ * every time, as they always were. */
+#define LAY_HIT_POOL 131072
+static int            lay_hit_pool[LAY_HIT_POOL];
+static int            lay_hit_used;
+static int            lay_hit_at[DOM_NODES];
+static unsigned short lay_hit_n[DOM_NODES];
+static unsigned       lay_hit_gen[DOM_NODES];
+static unsigned       lay_gen;             /* moved on by every lay_run */
+
+/* Each element's ancestor bits (css.h, cbloom), worked out once a layout from
+   its parent's: the parent's own bits and the parent's keys. */
+static cbloom   lay_anc[DOM_NODES];
+static unsigned lay_anc_gen[DOM_NODES];
+
+/* The keys an element puts into its children's bits: its tag, its id and
+   each of its classes, exactly as css_part_matches compares them. */
+static inline void lay_keys_of(const ddoc *d, int el, cbloom *b) {
+    if (d->nodes[el].kind != DN_ELEMENT) return;
+    css_bloom_add(b, css_key_tag(d->nodes[el].tag));
+    const char *id = dom_attr(d, el, "id");
+    if (id && *id) css_bloom_add(b, css_key_id(id, w_len(id)));
+    const char *cl = dom_attr(d, el, "class");
+    if (!cl) return;
+    for (int i = 0; cl[i]; ) {
+        while (cl[i] == ' ' || cl[i] == '\t' || cl[i] == '\n' || cl[i] == '\r') i++;
+        if (!cl[i]) break;
+        int start = i;
+        while (cl[i] && cl[i] != ' ' && cl[i] != '\t' && cl[i] != '\n' && cl[i] != '\r') i++;
+        css_bloom_add(b, css_key_cls(cl + start, i - start));
+    }
+}
+
+/* Up to the nearest ancestor already worked out, then back down filling in.
+   Null past a depth this will not follow, which only means no filtering. */
+static inline const cbloom *lay_ancestors(const ddoc *d, int el) {
+    if (el < 0 || el >= DOM_NODES) return 0;
+    if (lay_anc_gen[el] == lay_gen) return &lay_anc[el];
+    int chain[96], n = 0;
+    for (int at = el; at >= 0 && lay_anc_gen[at] != lay_gen; at = d->nodes[at].parent) {
+        if (n == 96) return 0;
+        chain[n++] = at;
+    }
+    while (n--) {
+        int node = chain[n], p = d->nodes[node].parent;
+        cbloom *b = &lay_anc[node];
+        b->w[0] = b->w[1] = 0;
+        if (p >= 0) {
+            b->w[0] = lay_anc[p].w[0];
+            b->w[1] = lay_anc[p].w[1];
+            lay_keys_of(d, p, b);
+        }
+        lay_anc_gen[node] = lay_gen;
+    }
+    return &lay_anc[el];
+}
+
+static inline void lay_apply_rule(lctx *L, int rule, cstyle *out, int pct_of) {
+    const crule *r = &L->s->rules[rule];
+    for (int k = 0; k < r->decl_n; k++)
+        css_apply(L->s, &L->s->decls[r->decl_at + k], out, L->root_px, pct_of);
+}
+
 static inline void lay_style(lctx *L, int el, const cstyle *parent,
                              cstyle *out, int pct_of) {
     css_inherit(out, parent);
-    chit hits[CSS_HITS];
-    int n = css_collect(L->s, L->x, L->d, el, L->m, hits);
-    for (int i = 0; i < n; i++) {
-        const crule *r = &L->s->rules[hits[i].rule];
-        for (int k = 0; k < r->decl_n; k++)
-            css_apply(L->s, &L->s->decls[r->decl_at + k], out, L->root_px,
-                      pct_of);
+    if (el >= 0 && el < DOM_NODES && lay_hit_gen[el] == lay_gen) {
+        const int *rules = lay_hit_pool + lay_hit_at[el];
+        for (int i = 0; i < lay_hit_n[el]; i++) lay_apply_rule(L, rules[i], out, pct_of);
+    } else {
+        chit hits[CSS_HITS];
+        int n = css_collect(L->s, L->x, L->d, el, L->m, lay_ancestors(L->d, el), hits);
+        L->out->matched++;
+        if (el >= 0 && el < DOM_NODES && lay_hit_used + n <= LAY_HIT_POOL) {
+            lay_hit_at[el] = lay_hit_used;
+            lay_hit_n[el] = (unsigned short)n;
+            lay_hit_gen[el] = lay_gen;
+            for (int i = 0; i < n; i++) lay_hit_pool[lay_hit_used++] = hits[i].rule;
+        }
+        for (int i = 0; i < n; i++) lay_apply_rule(L, hits[i].rule, out, pct_of);
     }
 
     /* And last, what the element says about itself. A style attribute beats
@@ -876,14 +963,19 @@ static int lay_measure(lctx *L, int node, const cstyle *parent, int avail,
        layout that then fits perfectly well. */
     int spilled = L->out->overflowed;
 
+    int s_mright = L->measure_right;
+    L->measure_right = 0;
+    L->measuring++;
     int y = 0;
     lay_block(L, node, parent, 0, avail, &y);
+    L->measuring--;
 
-    int right = 0;
+    int right = L->measure_right;
     for (int i = items; i < L->out->nitems; i++) {
         int r = L->out->items[i].x + L->out->items[i].w;
         if (r > right) right = r;
     }
+    L->measure_right = s_mright;
 
     *height = y;
 
@@ -939,6 +1031,7 @@ static void lay_flex(lctx *L, int node, const cstyle *st, int cx, int cw,
 
     /* --- along the line ---------------------------------------------------- */
     int want[LAY_FLEX_MAX], high[LAY_FLEX_MAX], grow[LAY_FLEX_MAX];
+    int meas[LAY_FLEX_MAX];
     int total = 0, grows = 0;
 
     for (int i = 0; i < n; i++) {
@@ -953,6 +1046,7 @@ static void lay_flex(lctx *L, int node, const cstyle *st, int cx, int cw,
         lay_style(L, kid[i], st, &own, cw);
         if (own.width >= 0) w = own.width;
 
+        meas[i] = w;
         want[i] = w;
         high[i] = h;
         grow[i] = own.grow > 0 ? own.grow : 0;
@@ -1021,6 +1115,31 @@ static void lay_flex(lctx *L, int node, const cstyle *st, int cx, int cw,
     for (int i = 0; i < n; i++) if (high[i] > tallest) tallest = high[i];
 
     int top = *y;
+
+    /* Being measured rather than laid out, the row stops here.
+     *
+     * Its height is the tallest child's measured height either way, and what
+     * a measurement wants besides is how far right the row reaches, which is
+     * each child's place plus the narrower of what it measured and what it
+     * was given. Laying the children out again to find that out is what made
+     * nesting cost twice as much at every level: a row measured each child by
+     * laying it out and then laid it out again, and a row inside it did the
+     * same inside both of those, so ten rows deep was a thousand times the
+     * work of one. Measured, a row only measures, and the one real layout at
+     * the end is still the full one at the widths it settled on. The reach is
+     * exact unless a child centres its content or sizes it by percentage,
+     * where a measurement was already an estimate. */
+    if (L->measuring) {
+        for (int idx = 0; idx < n; idx++) {
+            int i = reverse ? n - 1 - idx : idx;
+            int reach = pen + (meas[i] < want[i] ? meas[i] : want[i]);
+            if (reach > L->measure_right) L->measure_right = reach;
+            pen += want[i] + between;
+        }
+        *y = top + tallest;
+        return;
+    }
+
     for (int idx = 0; idx < n; idx++) {
         int i = reverse ? n - 1 - idx : idx;
 
@@ -1078,6 +1197,7 @@ static void lay_block_placed(lctx *L, int node, const cstyle *parent, int x,
  */
 static void lay_block(lctx *L, int node, const cstyle *parent, int x,
                       int avail, int *y) {
+    L->out->laid++;
     cstyle probe;
     lay_style(L, node, parent, &probe, avail);
     if (probe.display == D_NONE) return;
@@ -1353,6 +1473,12 @@ static inline void lay_run(ldoc *out, const ddoc *d, const csheet *s,
     out->used = 0;
     out->nlinks = 0;
     out->overflowed = 0;
+    out->laid = 0;
+    out->matched = 0;
+
+    /* A new layout, so no element's rules are known yet. */
+    lay_gen++;
+    lay_hit_used = 0;
 
     css_view_w = width;              /* what vw is a hundredth of */
 
@@ -1370,6 +1496,7 @@ static inline void lay_run(ldoc *out, const ddoc *d, const csheet *s,
     /* With nothing positioned above it, an absolutely positioned box is
        measured from the page. */
     L.pos_x = 0; L.pos_y = 0; L.pos_w = width;
+    L.measuring = 0; L.measure_right = 0;
 
     cstyle root;
     css_default_style(&root, root_px);

@@ -95,6 +95,25 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.50.0: a layout seven times cheaper, and nesting that no longer doubles it
+
+Each change has a check that was run against a build broken for it alone and seen to fail there; the
+gains were measured in a scratch build of layouttest on a page of 2500 elements under 300 rules, 40 of
+them descendant rules sharing a last part.
+
+- **Nested flex (11 §2).** A row measured each child by laying it out and then laid it out again, and
+  a row inside did the same inside both. A row being measured now only measures and reports its reach.
+  Twelve rows deep: 4096 boxes laid out, now 79 (`ldoc.laid`).
+- **Matching once (11 §3).** Each element's matched rules are kept for the length of one layout; it
+  was matched about 2.4 times a layout, and matching was nine tenths of a relayout (`ldoc.matched`).
+- **Ancestor bits (11 §3).** A rule wanting an ancestor the element does not have is skipped without
+  being walked (`cbloom`, 128 bits; `cindex.need`).
+- Checks in layouttest: a row inside a row placed where its content ends, twelve rows deep within 400
+  boxes, each element matched once, and descendant and child rules through ids, classes and names
+  still matching while one wanting an absent ancestor does not.
+- Measured, one relayout of the page: 708 million cycles, 642 of them matching; with matching kept,
+  371 and 301; with the ancestor bits, about 105 and 35.
+
 ### 0.49.1: a power-cut check that tossed a coin
 
 - **crashcheck (14 §10 U, 04 §8).** "Both A and B turn up across six power cuts" was six coin tosses
