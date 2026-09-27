@@ -38,4 +38,7 @@ void wake_one(const void *channel);
    without ever blocking. The second number is the interesting one: it says
    how often the thing being waited for was already ready. */
 u32 wait_wakeups(void);
+
+/* Whether any wake has made a task runnable since this was last asked. */
+bool wait_take_woke(void);
 u32 wait_blocked_now(void);

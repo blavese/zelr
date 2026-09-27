@@ -12,6 +12,7 @@
 #include "ioapic.h"
 #include "lapic.h"
 #include "timer.h"
+#include "wait.h"
 
 u64 scheduler_switch(u64 rsp);
 
@@ -299,6 +300,16 @@ leave:
     u64 resume = (u64)r;
     if (r->int_no == 32 || r->int_no == VEC_YIELD ||
         r->int_no == VEC_LOCAL_TIMER)
+        resume = scheduler_switch(resume);
+
+    /* A device's interrupt that woke somebody while this processor sat in
+       its idle task hands over to them now, not at the next tick. The kernel
+       shell and the desktop used to halt waiting for input, so a key or the
+       mouse reached them the instant it arrived; blocked instead (input_wait),
+       they waited up to a tick for it, and a desktop answering the mouse late
+       missed the middle of a drag. */
+    else if (r->int_no > 32 && r->int_no < 48 && wait_take_woke() &&
+             task_is_idle(task_current()))
         resume = scheduler_switch(resume);
 
     /* And out of it. What decides is the frame this processor is about to

@@ -127,7 +127,7 @@ Each change has a check that was run against a build broken for it alone and see
   which exposed a path in it that had never worked; the gate runs the self test on four processors.
 
 Counts after 0.41.0:
-- selftest 608 (pc, 64 MiB), 612 (256 MiB), 620 (q35), 633 (`-smp 4`);
+- selftest 609 (pc, 64 MiB), 613 (256 MiB), 621 (q35), 634 (`-smp 4`);
 - gate full 52 steps.
 
 ### 0.40.0: multiprocessor memory, window lifetimes, JavaScript, and data loss

@@ -57,6 +57,17 @@ bool wait_on(const void *channel, u32 timeout_ms) {
     return woken;
 }
 
+/* Set when a wake makes a task runnable, and taken by the interrupt path,
+   which uses it to hand an idle processor straight to that task rather than
+   leave it idle until the next tick. */
+static volatile bool woke;
+
+bool wait_take_woke(void) {
+    bool w = woke;
+    woke = false;
+    return w;
+}
+
 static void wake(const void *channel, bool only_one) {
     if (!channel) return;
 
@@ -73,6 +84,7 @@ static void wake(const void *channel, bool only_one) {
             p->wake_at = 0;
             p->state = TASK_READY;
             wakeups++;
+            woke = true;
             if (blocked) blocked--;
             if (only_one) break;
         }

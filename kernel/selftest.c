@@ -66,6 +66,7 @@
 #include "tcp.h"
 #include "signal.h"
 #include "keyboard.h"
+#include "ps2.h"
 
 static int passed, failed;
 
@@ -934,6 +935,57 @@ static void test_console_wait(void) {
     }
     ok("and the key ends the wait", ended);
     if (ended) task_wait((u32)pid);
+}
+
+/* A key reaching a task that waits for input, while this processor is idle:
+   handed over on the way out of the keyboard's interrupt rather than at the
+   next tick. The key is a real one as far as the kernel can tell -- the 8042
+   is told to put a byte in its output buffer as though it had been typed
+   ("write keyboard output buffer"), which raises the keyboard's interrupt --
+   and it is queued with interrupts off just before this task goes to sleep,
+   so it lands in the idle task. */
+static volatile u64 key_woke_at;
+static volatile int key_state;
+
+static void key_waiter(void) {
+    key_state = 1;
+    input_wait(3000);
+    key_woke_at = timer_ticks();
+    key_state = 2;
+    task_exit();
+}
+
+static void ps2_wait_writable(void) {
+    for (u32 i = 0; i < 100000 && (inb(0x64) & 2); i++) { }
+}
+
+static void test_input_handover(void) {
+    if (!ps2_present()) { kprintf("  SKIP  no 8042 to type with\n"); return; }
+    bool prompt = false;
+    for (int attempt = 0; attempt < 5 && !prompt; attempt++) {
+        while (kbd_trygetchar() >= 0) { }
+        key_state = 0;
+        key_woke_at = 0;
+        task_t *w = task_create("selftest-keys", key_waiter);
+        if (!w) break;
+        for (int i = 0; i < 100 && !(key_state == 1 && w->state == TASK_BLOCKED); i++)
+            task_sleep(10);
+
+        bool was = interrupts_enabled();
+        cli();
+        ps2_wait_writable();
+        outb(0x64, 0xD2);
+        ps2_wait_writable();
+        outb(0x60, 0x1E);                     /* 'a' going down, scan set 1 */
+        u64 t0 = timer_ticks();
+        task_sleep(50);                       /* the idle task takes the key */
+        if (was) sti();
+
+        for (int i = 0; i < 100 && key_state != 2; i++) task_sleep(10);
+        if (key_state == 2 && key_woke_at == t0) prompt = true;
+    }
+    while (kbd_trygetchar() >= 0) { }
+    ok("a key reaches a task waiting for input before the next tick", prompt);
 }
 
 static void test_userspace(void) {
@@ -4251,7 +4303,7 @@ int selftest_run(void) {
     kprintf("[fat]\n");        test_fat(); test_fat_names();
     kprintf("[network]\n");    test_net();
     kprintf("[elf]\n");        test_elf();
-    kprintf("[userspace]\n");  test_userspace(); test_console_wait();
+    kprintf("[userspace]\n");  test_userspace(); test_console_wait(); test_input_handover();
     kprintf("[video]\n");      test_video();
     kprintf("[mouse]\n");      test_mouse(); test_mouse_edges();
     kprintf("[graphics]\n");   test_gfx();
