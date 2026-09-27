@@ -308,6 +308,9 @@ static u32 render_screen(char *b, u32 cap) {
        drawn, and millions of cycles spent drawing them. */
     put(&o, "draws %d\n", wm_draws());
     put(&o, "drawmc %d\n", wm_draw_mcycles());
+    /* Pointer moves that put the arrow somewhere else without drawing the
+       desktop again, which is most of them. */
+    put(&o, "pointeronly %d\n", wm_pointer_only_moves());
     return o.len;
 }
 

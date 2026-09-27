@@ -3020,6 +3020,33 @@ static void draw_cursor(int mx, int my) {
         }
 }
 
+/* What the pointer covers, kept each time a frame is drawn, so that a move
+   that changes nothing else can put it back and draw the pointer again
+   somewhere else instead of drawing the whole desktop (move_pointer_only). */
+#define CUR_W 12
+#define CUR_H 19
+static u32  under[CUR_H][CUR_W];
+static int  under_x, under_y;
+static bool under_kept;
+static u32  pointer_only_moves;           /* for /sys/screen */
+
+u32 wm_pointer_only_moves(void) { return pointer_only_moves; }
+
+static void keep_under(int mx, int my) {
+    for (int y = 0; y < CUR_H; y++)
+        for (int x = 0; x < CUR_W; x++)
+            under[y][x] = fb_get((u32)(mx + x), (u32)(my + y));
+    under_x = mx;
+    under_y = my;
+    under_kept = true;
+}
+
+static void put_back_under(void) {
+    for (int y = 0; y < CUR_H; y++)
+        for (int x = 0; x < CUR_W; x++)
+            fb_put((u32)(under_x + x), (u32)(under_y + y), under[y][x]);
+}
+
 /* What drawing the frames has cost, for /sys/screen: the drawing only, from
    the wallpaper to the pointer, not the sending, which fb.c reckons itself.
    A measurement that makes the next optimisation arguable rather than
@@ -3081,6 +3108,7 @@ static void composite(void) {
     draw_net_panel();
     draw_menu();
     draw_ctx();
+    keep_under(last_mx, last_my);
     draw_cursor(last_mx, last_my);
     draw_cycles += rdtsc() - started;
     draws++;
@@ -4193,6 +4221,67 @@ int wm_test_chip_at(int x) { return taskbar_chip_at(x, taskbar_y() + TASKBAR_H /
 int wm_test_chips_x(void) { return taskbar_chips_x(); }
 bool wm_test_find_open(void) { return find_open; }
 
+/* --- the pointer on its own ------------------------------------------------
+ *
+ * Every move of the mouse drew the whole desktop -- wallpaper, every window,
+ * the dock -- to put a twelve pixel arrow somewhere else, and sent the whole
+ * screen to be compared. Most moves change nothing but the arrow: over a
+ * window's contents the program hears the move and draws its own hover, and
+ * over bare desktop nothing is hovering. Those put back what the arrow
+ * covered, keep what it now covers, draw it and send the two patches.
+ *
+ * Anywhere the desktop itself draws something for the pointer -- a title
+ * bar's buttons, a window's border, the icons, the dock, a menu, a panel --
+ * and during anything the pointer is doing -- a drag, a resize, a capture,
+ * the selection band, alt+tab -- the move goes the whole way as before. So
+ * does any move while a frame is already wanted. The zones are wider than
+ * the things in them on purpose: a patch left drawn for a hover that ended
+ * would be wrong until the next frame, and a whole frame is only slower. */
+static bool pointer_is_quiet_at(int mx, int my) {
+    bool on_title;
+    button_t btn;
+    window_t *w = window_at(mx, my, &on_title, &btn);
+    if (w) {
+        int cx = w->x + WM_BORDER, cy = w->y + WM_TOP;
+        return !on_title && btn == BTN_NONE &&
+               mx >= cx && mx < cx + w->cw && my >= cy && my < cy + w->ch;
+    }
+    if (mx < wm_icons_right() + 16) return false;          /* the icons */
+    if (my >= panel_rest_y() - SHADOW - 40) return false;   /* the dock, and where it rises from */
+    return true;
+}
+
+static bool desktop_is_still(void) {
+    return under_kept && !needs_composite && !dragging && !resizing && !mouse_capture
+        && !band_on && !menu_open && !ctx_open && !volume_open && !net_open
+        && !find_open && cyc_at < 0;
+}
+
+/* What the dock shows that nothing announces: the clock, and whether there is
+   a link and an address. Kept from the last look, so the once a second pass
+   draws a frame only when one of them has changed. */
+static bool dock_changed(void) {
+    static char seen_clock[24];
+    static int seen_net = -1;
+    char clock[24];
+    clock_text(clock, sizeof(clock));
+    int net = (netdev_up() ? 1 : 0) | (net_ip() != 0 ? 2 : 0);
+    if (net == seen_net && strcmp(clock, seen_clock) == 0) return false;
+    seen_net = net;
+    memcpy(seen_clock, clock, sizeof(clock));
+    return true;
+}
+
+static void move_pointer_only(void) {
+    int ox = under_x, oy = under_y;
+    put_back_under();
+    keep_under(last_mx, last_my);
+    draw_cursor(last_mx, last_my);
+    fb_flush_rect((u32)ox, (u32)oy, CUR_W, CUR_H);
+    fb_flush_rect((u32)last_mx, (u32)last_my, CUR_W, CUR_H);
+    pointer_only_moves++;
+}
+
 void wm_run(void) {
     if (!fb_active()) { kprintf("the desktop needs a framebuffer\n"); return; }
 
@@ -4235,10 +4324,17 @@ void wm_run(void) {
         u8 buttons = mouse_buttons();
 
         if (mx != last_mx || my != last_my || buttons != last_buttons) {
+            int ox = last_mx, oy = last_my;
+            bool same_buttons = buttons == last_buttons;
             last_mx = mx; last_my = my;
             handle_mouse(mx, my, buttons);
             last_buttons = buttons;
-            need_frame();
+            /* After handle_mouse, which may itself have asked for a frame. */
+            if (same_buttons && desktop_is_still() &&
+                pointer_is_quiet_at(ox, oy) && pointer_is_quiet_at(mx, my))
+                move_pointer_only();
+            else
+                need_frame();
         }
 
         /* Asked every pass rather than only when the mouse moves: what the
@@ -4286,16 +4382,6 @@ void wm_run(void) {
         if (timer_ticks() - last_theme_check > timer_hz() / 4) {
             last_theme_check = timer_ticks();
             if (theme_reload()) { apply_screen_size(); need_frame(); }
-
-            /* The same arrangement for the taskbar's own list, which the
-               settings window writes and this side has to be told about.
-             *
-             * Not while an icon is being dragged. The list is reordered as
-             * the pointer crosses each slot and only written down when the
-             * button comes up, so re-reading the file in the middle of that
-             * puts the old order back under the hand moving it. Which is
-             * exactly what it did, and the check for dragging an icon is
-             * what said so. */
         }
 
         /* A window that has redrawn needs its own rectangle sent, not the
@@ -4304,22 +4390,30 @@ void wm_run(void) {
         for (int i = 0; i < nwin; i++) {
             window_t *w = stack[i];
             if (!w->dirty) continue;
-            if (w->minimized) { need_frame(); continue; }
+            /* Not on the screen, so there is nothing to draw: it is drawn as
+               it is when it comes back. This asked for a whole frame, and a
+               terminal put away went on blinking its cursor into one twice a
+               second. */
+            if (w->minimized) { w->dirty = false; continue; }
             need_frame_in(w->x - SHADOW - 2, w->y - SHADOW - 2,
                           wm_outer_w(w) + SHADOW * 4,
                           wm_outer_h(w) + SHADOW * 4);
         }
 
-        /* The taskbar clock ticks, so repaint at least once a second even
-           when nothing else changed. A wallpaper that moves needs it far
-           more often than that, but only while it is the one on. */
+        /* The dock's clock and network icon change without anything saying
+           so, and the network panel shows more of the same, so they are
+           looked at once a second. This drew the whole desktop every second,
+           to show a clock that moves once a minute -- and that frame also
+           tidied away, within the second, anything a quicker path had drawn
+           wrong. A wallpaper that moves needs a frame far more often, but
+           only while it is the one on. */
         static u64 last_tick;
-        u64 every = (wallpaper_moves(theme()->wallpaper) && covering_index() < 0)
-                    ? timer_hz() / 12 : timer_hz();
+        bool moving = wallpaper_moves(theme()->wallpaper) && covering_index() < 0;
+        u64 every = moving ? timer_hz() / 12 : timer_hz();
         if (!every) every = 1;
         if (timer_ticks() - last_tick >= every) {
             last_tick = timer_ticks();
-            need_frame();
+            if (moving || net_open || dock_changed()) need_frame();
         }
 
         if (still_moving(panel_since, PANEL_MS)) panel_frame();

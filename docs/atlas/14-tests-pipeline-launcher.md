@@ -64,7 +64,7 @@ For each of these I read the header and the assertion logic. Almost all were rea
 | tools/fat32_test.sh | 127 | A FAT32 volume built by mkfat (one file past cluster 65535): read, write, survive a reboot. FAT16 still works. |
 | tools/findcheck.py | 166 | Ctrl+F find bar over a browser page (highlight colour `#FFE58F`). |
 | tools/formcheck.py | 341 | HTML forms: GET and POST contents checked on the server side, and rounded corners. |
-| tools/framecheck.py | 92 | `/sys/screen` counters: a frame sends only the changed bands, and some comparisons are shared with the second CPU. |
+| tools/framecheck.py | 92 | `/sys/screen` counters: a frame sends only the changed bands, and some comparisons are shared with the second CPU. Since 0.54.0 also the pointer-only moves, the trail and icon hover they must not break, and an idle desktop drawing nothing (the kernel's own frame count, read through the monitor). |
 | tools/gamecheck.py | 276 | Blackjack and poker windows, counted by white card pixels. |
 | tools/gpt_test.sh | 101 | GPT from mkgpt: a good table, a bad header CRC, a bad entry CRC, and a bare disk. |
 | tools/inputcheck.py | 77 | Five boots with keys or mouse moves injected during boot. The PS/2 keyboard must still type. |
@@ -197,6 +197,7 @@ zelr's quality control has five layers, and this area owns the last four.
 | `FACE_BODY..FACE_HEAD_BOLD` | 222 | 1..5, matching include/gfx.h:82-87. 0 (`FACE_SMALL`, 13 px) is not named here. |
 | `face_width(text, which=FACE_BODY)` | 227-255 | Lazily parses include/face.h tables in `face_faces` order: `face_g_13, _15, _20, _26, _15b, _20b, _15m, _15bm`. It takes field 4 (`advance`) of each `face_glyph {w,h,left,top,advance,at}` and maps characters outside 32..126 to a space. Used by deskcheck, netcheck and volcheck for dock and clock geometry. |
 | `read_ppm(path)` | 258-281 | P6 only, skips `#` comments, returns `(w, h, px)`. Raises `ValueError("the picture is N bytes short")` if the file is truncated. |
+| `kernel_symbol(name, source)` | since 0.54.0 | The address of a kernel variable, read from build/zelr.elf's ELF64 symbol table. Only the local names listed after the `STT_FILE` entry for `source` (for example `"wm.c"`) are searched, because statics repeat across files. The kernel is identity mapped where it was linked, so the address is physical. Paired with `Monitor.read_u32(addr)` (HMP `xp /1wx`), it lets a check read a counter while the desktop is up and the shell is not there to print /sys. framecheck is the first user (wm.c `draws`). |
 
 **`class Monitor`** (286-589) wraps QEMU HMP on `tcp:127.0.0.1:<port>`.
 
@@ -1109,7 +1110,7 @@ Drive methods:
 | soundcheck.py | screen | G(q35,256) `-audiodev wav -device intel-hda -device hda-output` | S,A | hda found with a codec route; `beep 440 600` and `beep 880 600`; exactly 2 notes at ±6%; different; silent afterwards. | 9 | ~1 min |
 | enscheck.py | screen | G(pc,256) `-device ES1370,audiodev=a0` | S,A | `ensoniq es137`, `44100 Hz`, then the same 2-note checks. | 9 | ~1 min |
 | volcheck.py | screen | G(pc,256) + intel-hda | S,M,P,A | Speaker popover opens; slider drags produce at least 2 bursts; the loud one's peak is more than 1.5× the quiet one's. | 5 | 1-1.5 min |
-| framecheck.py | screen | G(pc,512) `-smp 2` | S,M | `/sys/screen`: fullkib > 1000; more than 10 frames drawn; average frame KiB less than half the full frame; `shared > 0`. | 5 | 1-2 min |
+| framecheck.py | screen | G(pc,512) `-smp 2` | S,M,K | `/sys/screen`: fullkib > 1000; more than 10 frames drawn; average frame KiB less than half the full frame; `shared > 0`. Since 0.54.0 also: pointer moves over a terminal's contents and bare desktop redraw only the pointer (`pointeronly`); after steps over bare desktop the arrow is where it was sent and nowhere it has been, with the kernel's `draws` (read through the monitor, `kernel_symbol`) unchanged across the walk; the first icon lights up under the pointer; a blinking terminal draws at least 4 frames in 4 s, and with every window put away no more than 1 in 8 s. | 11 | 2-3 min |
 | mountcheck.py | screen | G(q35,256) with xhci and usb-storage (mkfat 8 MiB FAT16) | S,H | Mounted; ls/cat on the stick; write joins the existing file; copy to /home; `usb/` in `/`; readfat confirms file and contents. | 8 | ~1 min |
 | namecheck.py | screen | G(q35,256), then a second boot of the same disk | S,H | Long and multi-dot names listed and opened; short name works; the name persists across reboots; delete removes the long entries; readfat agrees. | 11 | 1-1.5 min |
 | powercheck.py | screen | G(q35,256) | S | `shutdown`: QEMU exits within 20 s with code 0; `sleep type` logged; no "cannot power off". | 4 | <1 min |
@@ -1259,7 +1260,7 @@ All of the following were verified by reading. Anything that depends on runtime 
     - `done testing` (119).
   - iso_test.sh's fifth check per path, `$what` (69), matches the echoed `write booted.txt $what`, so it does not prove the write/cat round trip that its comment at 44-45 claims.
 - **O.** termcheck's last check (140-142) waits for AMBER, which was already on screen. It proves only that the terminal survived, not that `/cfg/term` was written or read.
-- **P. `vm.wait_prompt()` with the default `count=1` after pressing ESC** is a no-op, because the prompt count has been at least 1 since boot. This appears in framecheck.py:67-68, netcheck.py:101-104 (`leave_desktop`) and setcheck.py:263-265, which therefore rely on fixed sleeps. framecheck also names its `wait_screen` lambda `(px, w, h)` (56); this is harmless because it returns True.
+- **P. `vm.wait_prompt()` with the default `count=1` after pressing ESC** is a no-op, because the prompt count has been at least 1 since boot. This appears in framecheck.py:67-68, netcheck.py:101-104 (`leave_desktop`) and setcheck.py:263-265, which therefore rely on fixed sleeps. framecheck also names its `wait_screen` lambda `(px, w, h)` (56); this is harmless because it returns True. Both fixed in framecheck in 0.54.0 (`leave()` waits for one prompt more than there were); netcheck and setcheck still have it.
 - **Q.** tlscheck's "the body is really X's" (138-140) passes on `marker in out or body > 400`, so the marker is optional.
 - **R.** whereis.py asserts a 32-bit ELF (line 8). `build/zelr.elf` is x86-64 (built by build.sh with `-target x86_64-freestanding-none`), so the tool is unusable on the kernel.
 - **S. FIXED in 0.41.0: the gate runs it on build/zelr.elf after abicheck ("the kernel uses no vector instructions"). It had rotted into three false alarms (`mov esi, 0x100f` and two scale-index bytes); it now excuses the first byte of a B8-BF immediate and a 0F after a ModRM with rm 100 and mod 01/10, and still finds 912 SSE instructions in jstest.elf.** check_sse.py is not called by build.sh or by any `*/build.sh` (grep). README.md:1431 says it "now fails the build". The real protection is build.sh's `-mno-sse -mno-sse2 -mno-mmx -mno-80387` (build.sh:45).

@@ -605,9 +605,15 @@ directly in video memory over PCI is visibly slow. What is sent to the card is
 the part of that buffer which differs from what the card was last given: a copy
 of it is kept and compared a band of rows at a time, so moving the pointer
 costs two bands of forty eight rather than three megabytes. Half of that
-comparison goes to another processor when there is one to spare. The console is
-redrawn on top of it all with a bitmap font, so everything that already printed
-kept working.
+comparison goes to another processor when there is one to spare. And over a
+window's contents or bare desktop, where nothing on the desktop draws itself
+differently for the pointer being there, a move does not draw the desktop
+again at all: the patch the arrow covered is put back and the arrow drawn
+somewhere else, where it was a whole frame of wallpaper, windows and dock. A
+desktop left alone draws nothing: the dock's clock is looked at once a second
+and drawn when its minute changes, where it drew the whole screen every
+second. The console is redrawn on top of it all with a bitmap font, so
+everything that already printed kept working.
 
 **Other processors.** A PC boots with one CPU running and does not say the
 others exist, so `acpi.c` goes and reads the firmware tables to find them and

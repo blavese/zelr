@@ -23,10 +23,13 @@ The pieces:
   Monitor   QEMU's monitor, framed on its prompt, so a command is finished
             when QEMU says it is finished
   counting  finding a colour fast enough to be worth doing repeatedly
+  kernel_symbol  where one of the kernel's own counters is, for a check that
+            has to read it without leaving the desktop (Monitor.read_u32)
 """
 import os
 import re
 import socket
+import struct
 import subprocess
 import threading
 import time
@@ -281,6 +284,41 @@ def read_ppm(path):
     return w, h, px
 
 
+# --- the kernel's own variables --------------------------------------------
+
+def kernel_symbol(name, source):
+    """Where one of the kernel's variables is, out of build/zelr.elf.
+
+    For the counters /sys/screen and the like report, when a check needs one
+    of them while the desktop is up and the shell that would print it is not.
+    `source` is the file it is in, because a static's name is only unique
+    within its file: the symbol table lists each file's own names after an
+    entry naming the file. The kernel runs identity mapped where it was
+    linked, so this is also the address in the guest's memory."""
+    with open(os.path.join(BUILD, "zelr.elf"), "rb") as f:
+        elf = f.read()
+    shoff, = struct.unpack_from("<Q", elf, 0x28)
+    shentsize, shnum = struct.unpack_from("<HH", elf, 0x3A)
+    sections = [struct.unpack_from("<IIQQQQIIQQ", elf, shoff + i * shentsize)
+                for i in range(shnum)]
+    for sh in sections:
+        if sh[1] != 2:                              # SHT_SYMTAB
+            continue
+        names = sections[sh[6]][4]                  # its string table
+        inside = False
+        for at in range(sh[4], sh[4] + sh[5], 24):
+            st_name, st_info, _, _, st_value, _ = struct.unpack_from(
+                "<IBBHQQ", elf, at)
+            start = names + st_name
+            text = elf[start:elf.index(b"\0", start)].decode()
+            kind = st_info & 0xF
+            if kind == 4:                           # STT_FILE
+                inside = os.path.basename(text) == source
+            elif inside and kind == 1 and text == name:     # STT_OBJECT
+                return st_value
+    raise KeyError("%s is not among %s's names in build/zelr.elf" % (name, source))
+
+
 # --- the monitor -----------------------------------------------------------
 
 class Monitor:
@@ -336,6 +374,14 @@ class Monitor:
         if settle:
             time.sleep(settle)
         return out
+
+    def read_u32(self, addr):
+        """Four bytes of the guest's memory, read while it runs."""
+        out = self.send("xp /1wx 0x%x" % addr)
+        m = re.search(r"[0-9a-fA-F]+:\s+0x([0-9a-fA-F]+)", out)
+        if not m:
+            raise ValueError("the monitor did not show memory: %r" % out)
+        return int(m.group(1), 16)
 
     # --- the pointer -------------------------------------------------------
     def move_to(self, x, y):

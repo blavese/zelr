@@ -165,6 +165,7 @@ bool wm_test_maximize(window_t *w);
 /* What drawing the desktop's frames has cost, for /sys/screen. */
 u32  wm_draws(void);
 u32  wm_draw_mcycles(void);
+u32  wm_pointer_only_moves(void);   /* moves that redrew only the pointer */
 
 /* wm_test_wallpaper: the wallpaper a frame starts from (the cached copy when
    there is one), or drawn afresh, saved into a width * height buffer; true

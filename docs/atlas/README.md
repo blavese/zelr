@@ -95,6 +95,38 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.54.0: a pointer that moves without drawing the desktop, and a desktop left alone that draws nothing
+
+- **The pointer (07 §3.9.20).** Every move drew the whole desktop, wallpaper to dock, about 60 million
+  cycles, to put a twelve pixel arrow somewhere else. Over a window's contents or bare desktop, with nothing
+  open, held or already wanting a frame, a move now puts back the patch the arrow covered, keeps the new one
+  and draws the arrow there (`move_pointer_only`, /sys/screen `pointeronly`). Title bars, borders, the icons
+  and the dock still take whole frames, because the desktop draws hover there. framecheck: 51 moves redrew
+  only the pointer (0 with every move a whole frame); after six steps over bare desktop the arrow is where it
+  was sent and nowhere it has been, with no frame drawn across the walk (failed with the patch never put
+  back: 414 pixels of arrow left behind); the first icon lights up under the pointer (failed with the icons
+  counted as quiet).
+- **A desktop left alone (07 §4.2).** It drew the whole screen every second for the dock's clock, which moves
+  once a minute, and a window put away still drew one whenever it redrew -- a terminal does twice a second, to
+  blink its cursor. The once a second look draws only when `dock_changed()` (clock text, link, address) says
+  so or the network panel is open. A minimised window's commit only marks it (`winsrv_commit` called
+  `wm_invalidate`, which asks for a whole frame itself, so the loop's own minimised test never mattered), and
+  the loop marks it clean. framecheck, with the kernel's `draws` read through the monitor: nothing in eight
+  seconds with every window put away (at most 1 allowed, for the clock's minute); failed with 11 with the
+  loop drawing minimised windows, 11 with their commits through `wm_invalidate`, and 5 with the clock's frame
+  every second. That half-second and one-second frame is also what had hidden the trail and the hover: the
+  trail break passed framecheck until the frames were gone.
+- **The harness (14 §3.1).** `kernel_symbol(name, source)` reads an address out of build/zelr.elf's symbol table
+  and `Monitor.read_u32` reads it through `xp`, so a check can read a kernel counter while the desktop is up.
+  framecheck also waits properly for the prompt after leaving the desktop (14 §10 P).
+- Measured with `draws` over eight seconds against v0.53.0: a terminal showing, 14 frames before and 10 now;
+  every window put away, 17 before and 0 now.
+- Not checked: hover on a title bar's buttons under a zone drawn too wide there (framecheck passed with title
+  bars counted as quiet). An open terminal draws a whole frame twice a second, and that draws the hover anyway.
+- Found and not fixed: damage off the top or left edge sends nothing (07 §10 32).
+
+Counts after 0.54.0: unchanged from 0.53.0 below; framecheck has 11 checks.
+
 ### 0.53.0: photographs three times quicker to decode
 
 - **The JPEG transform (13).** Terms whose coefficient is zero -- most of every block -- are left out of

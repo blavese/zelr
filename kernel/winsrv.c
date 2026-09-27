@@ -423,7 +423,12 @@ bool winsrv_commit(u32 pid, int handle) {
     if (!s || !s->win) return false;
     apply_pending(s);
     publish(s);
-    wm_invalidate(s->win);
+    /* A window put away is not on the screen, so it is only marked, and the
+       desktop's loop marks it clean again. wm_invalidate asks for a whole
+       frame, and a terminal put away went on drawing the desktop twice a
+       second to blink a cursor nobody could see. */
+    if (s->win->minimized) s->win->dirty = true;
+    else wm_invalidate(s->win);
     return true;
 }
 
