@@ -72,6 +72,16 @@ def main():
         sent = after["sentkib"] - before["sentkib"]
         shared = after["shared"] - before["shared"]
 
+        # What drawing them cost, apart from sending them: a measurement for
+        # whoever changes the drawing next, and a check only that it is
+        # counted at all.
+        draws = after.get("draws", 0) - before.get("draws", 0)
+        spent = after.get("drawmc", 0) - before.get("drawmc", 0)
+        c.add("the screen says what drawing the frames cost", draws > 10 and spent > 0)
+        if draws > 0:
+            print("      %d frames drawn at %d thousand cycles each"
+                  % (draws, spent * 1000 // draws))
+
         c.add("the desktop drew frames", drew > 10)
         if drew > 0:
             each = sent // drew

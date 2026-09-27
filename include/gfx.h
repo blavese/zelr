@@ -32,6 +32,11 @@ void fb_vgradient(int x, int y, int w, int h, u32 top, u32 bottom);
  * of a pane, which is the one thing from that era of interfaces that still
  * reads as light. */
 void fb_round_rect_aa(int x, int y, int w, int h, int r, u32 rgb, int alpha);
+
+/* A frame's hairline: `edge` at `alpha` over the rounded rectangle and then
+   `fill` over the one a pixel inside it, as those two calls would draw it,
+   visiting only the pixels that change. The inside must already be `fill`. */
+void fb_round_ring_aa(int x, int y, int w, int h, int r, u32 edge, int alpha, u32 fill);
 void fb_glow(int cx, int cy, int rx, int ry, u32 rgb, int strength);
 
 /* Darkens toward the corners, which is what stops a gradient reading as a

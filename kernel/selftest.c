@@ -1213,6 +1213,121 @@ static void test_gfx(void) {
     kfree(px);
 }
 
+/* Something in every pixel that is not the colour about to be drawn, so a
+   mix over it shows up if it is wrong. */
+static void pattern_back(void) {
+    for (int y = 0; y < (int)fb_height(); y++) {
+        u32 *row = fb_row(y);
+        for (int x = 0; row && x < (int)fb_width(); x++)
+            row[x] = RGB((x * 7) & 0xFF, (y * 5) & 0xFF, ((x ^ y) * 3) & 0xFF);
+    }
+}
+
+static void test_frame_drawing(void) {
+    if (!fb_active()) { kprintf("  SKIP  no framebuffer\n"); return; }
+    u32 bytes = fb_width() * fb_height() * 4;
+    u32 *want = (u32 *)kmalloc(bytes), *got = (u32 *)kmalloc(bytes);
+    if (!want || !got) {
+        ok("room for two frames to compare", false);
+        kfree(want);
+        kfree(got);
+        return;
+    }
+
+    /* A window frame's hairline drawn as a ring is the same picture as the
+       two whole rounded rectangles it replaces, over a busy background,
+       for square and round corners, both alphas the desktop uses, and a
+       frame hanging off the top left and the bottom of the screen. */
+    {
+        static const int radii[] = { 0, 1, 6, 12 };
+        static const int alphas[] = { 235, 110 };
+        const u32 surf = RGB(0xF4, 0xF4, 0xF7), edge = RGB(0x50, 0x60, 0xC8);
+        int places[3][2] = { { 40, 30 }, { -20, -15 }, { 100, (int)fb_height() - 120 } };
+        bool same = true;
+        for (int p = 0; p < 3; p++)
+            for (int ri = 0; ri < 4; ri++)
+                for (int ai = 0; ai < 2; ai++) {
+                    int x = places[p][0], y = places[p][1], w = 300, h = 200;
+                    int r = radii[ri], a = alphas[ai];
+                    pattern_back();
+                    fb_round_rect_aa(x, y, w, h, r, surf, 255);
+                    fb_round_rect_aa(x, y, w, h, r, edge, a);
+                    fb_round_rect_aa(x + 1, y + 1, w - 2, h - 2, r > 0 ? r - 1 : 0, surf, 255);
+                    fb_back_save(want);
+                    pattern_back();
+                    fb_round_rect_aa(x, y, w, h, r, surf, 255);
+                    fb_round_ring_aa(x, y, w, h, r, edge, a, surf);
+                    fb_back_save(got);
+                    if (memcmp(want, got, bytes) != 0) same = false;
+                }
+        ok("a frame's hairline drawn as a ring is the same pixels as the passes it replaced",
+           same);
+
+        /* The solid runs every rounded rectangle is mostly made of, now
+           written through the row rather than a pixel call at a time,
+           against the answer worked out here a pixel at a time: square
+           corners, so every row is a run, solid and mixed, cut off at the
+           left and bottom of the screen. */
+        const u32 over = RGB(0x20, 0xA0, 0x60);
+        bool runs = true;
+        for (int a = 0; a < 2; a++) {
+            int alpha = a ? 140 : 255;
+            int x = -30, y = (int)fb_height() - 50, w = 200, h = 80;
+            pattern_back();
+            fb_back_save(want);
+            fb_round_rect_aa(x, y, w, h, 0, over, alpha);
+            for (int py = 0; py < (int)fb_height() && runs; py++)
+                for (int px = 0; px < (int)fb_width(); px++) {
+                    u32 was = want[py * fb_width() + px];
+                    bool in = px >= x && px < x + w && py >= y && py < y + h;
+                    u32 expect = !in ? was : alpha >= 255 ? over : gfx_mix(was, over, alpha);
+                    if (fb_get((u32)px, (u32)py) != expect) { runs = false; break; }
+                }
+        }
+        ok("and a rectangle's solid runs are the pixels worked out one at a time", runs);
+    }
+
+    /* The wallpaper a frame starts from is the one drawn from nothing, and
+       it follows the theme: a copy kept past a change of colour would be a
+       desktop that ignored its settings. */
+    {
+        char cfg[96];
+        int n = kformat(cfg, sizeof(cfg), "wallpaper %d\ndesktop 0x102030\n", WALLPAPER_BLOOM);
+        vfs_write(THEME_FILE, cfg, (u32)n);
+        theme_reload();
+        wm_test_wallpaper(want, true);
+        wm_test_wallpaper(got, false);                    /* draws it and keeps it */
+        bool kept = wm_test_wallpaper(got, false);        /* and now starts from it */
+        if (!kept) {
+            kprintf("  SKIP  no room to keep a copy of the wallpaper\n");
+        } else {
+            ok("the wallpaper a frame starts from is the one drawn afresh",
+               memcmp(want, got, bytes) == 0);
+
+            /* The gradient, which is drawn from the desktop colour: the
+               bloom above has colours of its own, and changing the desktop
+               under it proved nothing -- a copy that ignored the colour
+               passed. */
+            n = kformat(cfg, sizeof(cfg), "wallpaper %d\ndesktop 0x102030\n", WALLPAPER_GRADIENT);
+            vfs_write(THEME_FILE, cfg, (u32)n);
+            theme_reload();
+            wm_test_wallpaper(got, false);                /* kept, in the first colour */
+            n = kformat(cfg, sizeof(cfg), "desktop 0x405060\n");
+            vfs_write(THEME_FILE, cfg, (u32)n);
+            theme_reload();
+            wm_test_wallpaper(want, true);
+            wm_test_wallpaper(got, false);
+            ok("and when the desktop colour changes, it is the new one",
+               memcmp(want, got, bytes) == 0);
+        }
+        vfs_delete(THEME_FILE);
+        theme_init();
+    }
+
+    kfree(want);
+    kfree(got);
+}
+
 static void test_wm(void) {
     if (!fb_active()) { kprintf("  SKIP  no framebuffer\n"); return; }
 
@@ -4666,7 +4781,7 @@ int selftest_run(void) {
     kprintf("[userspace]\n");  test_userspace(); test_console_wait(); test_input_handover();
     kprintf("[video]\n");      test_video();
     kprintf("[mouse]\n");      test_mouse(); test_mouse_edges();
-    kprintf("[graphics]\n");   test_gfx();
+    kprintf("[graphics]\n");   test_gfx(); test_frame_drawing();
     kprintf("[windows]\n");    test_wm(); test_wm_keys();
     kprintf("[window server]\n"); test_winsrv(); test_window_lifetimes();
     kprintf("[built-in programs]\n"); test_builtin();

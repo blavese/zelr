@@ -38,6 +38,12 @@ u8  *fb_pixels(void);
 void fb_clear(u32 rgb);
 void fb_put(u32 x, u32 y, u32 rgb);
 u32  fb_get(u32 x, u32 y);
+
+/* One row of the back buffer, or zero off the screen; and the whole back
+   buffer saved to or restored from a width * height copy. */
+u32 *fb_row(int y);
+void fb_back_save(u32 *dst);
+void fb_back_restore(const u32 *src);
 void fb_rect(u32 x, u32 y, u32 w, u32 h, u32 rgb);
 void fb_frame(u32 x, u32 y, u32 w, u32 h, u32 rgb);
 

@@ -95,6 +95,28 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.46.0: drawing a frame ten times cheaper
+
+Each change has a check that was run against a build broken for it alone and seen to fail there; the
+gains were measured by switching each off in turn.
+
+- **A measurement (07).** `composite()` counts the cycles it spends drawing (`rdtsc`, not the send):
+  /sys/screen `draws` and `drawmc`, printed by framecheck.
+- **The wallpaper (07 §3.9.12).** A still wallpaper is drawn once into a copy, keyed by everything it is
+  drawn from, and frames start from the copy; the copy is taken only with four times its size free.
+  536 million cycles a frame without it, 51.5 million with it, for framecheck's pointer moves, and the
+  desktop drew 111 frames in the moves rather than 56.
+- **Window frames (07 §10 16).** The hairline and refill touch only the ring (`fb_round_ring_aa`); solid
+  runs of rounded rectangles are written through the row (`fb_row`). 70.8 million cycles a frame with the
+  old three passes, 51.5 with the ring.
+- Checks in `[graphics]`: the ring equals the old passes pixel for pixel; solid runs equal a per-pixel
+  reference; the copy equals a fresh draw; the copy follows a desktop colour change (first written
+  against bloom, which does not use that colour, where it could not fail: now against the gradient).
+
+Counts after 0.46.0:
+- selftest 642 (pc, 64 MiB; the wallpaper checks SKIP there), 648 (256 MiB), 656 (q35), 669 (`-smp 4`);
+- gate full 53 steps.
+
 ### 0.45.0: the file manager's harness, keys that arrive together, and checks that waited for time
 
 Each change has a check that was run against a build broken for it alone and seen to fail there.

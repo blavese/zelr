@@ -292,6 +292,27 @@ u32 fb_get(u32 x, u32 y) {
     return *(u32 *)(back + y * pitch + x * 4);
 }
 
+/* A row of the back buffer, for a drawer walking a span of it: through
+   fb_put a pixel costs a call and two bounds tests, and the solid rows of
+   every rounded rectangle on the desktop went that way. Zero off the
+   screen. */
+u32 *fb_row(int y) {
+    if (!active || y < 0 || y >= (int)height) return 0;
+    return (u32 *)(back + (u32)y * pitch);
+}
+
+/* The whole back buffer out to a copy of the same size, and back in: for a
+   picture that is drawn once and started from every frame. */
+void fb_back_save(u32 *dst) {
+    if (!active || !dst) return;
+    for (u32 y = 0; y < height; y++) memcpy(dst + y * width, back + y * pitch, width * 4);
+}
+
+void fb_back_restore(const u32 *src) {
+    if (!active || !src) return;
+    for (u32 y = 0; y < height; y++) memcpy(back + y * pitch, src + y * width, width * 4);
+}
+
 void fb_clear(u32 rgb) {
     if (!active) return;
     u32 *p = (u32 *)back;

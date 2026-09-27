@@ -162,6 +162,14 @@ bool wm_test_maximize(window_t *w);
    wm_test_nth: the window n from the front of the stack. wm_test_chip_at:
    which dock button is at x, or -1; wm_test_chips_x: where the first one
    starts. wm_test_find_open: whether the find bar is up. */
+/* What drawing the desktop's frames has cost, for /sys/screen. */
+u32  wm_draws(void);
+u32  wm_draw_mcycles(void);
+
+/* wm_test_wallpaper: the wallpaper a frame starts from (the cached copy when
+   there is one), or drawn afresh, saved into a width * height buffer; true
+   when it came from a copy that was already there. */
+bool wm_test_wallpaper(u32 *out, bool fresh);
 bool wm_test_key(int key);
 void wm_test_poll(void);
 window_t *wm_test_nth(int n);

@@ -371,17 +371,24 @@ static int corner_cover(int px, int py, int cx8, int cy8, int r8) {
 
 /* One row of a rounded rectangle, as the span it covers and the coverage of
    the pixel at each end. Rows away from the corners are simply full. */
+/* x0 to x1 of row y, solid or mixed over what is there, through the row
+   rather than a pixel call at a time: this is most of the pixels every
+   rounded rectangle on the desktop draws. */
+static void span(int x0, int x1, int y, u32 rgb, int alpha) {
+    u32 *row = fb_row(y);
+    if (!row) return;
+    if (x0 < 0) x0 = 0;
+    if (x1 > (int)fb_width()) x1 = (int)fb_width();
+    if (alpha >= 255) for (int px = x0; px < x1; px++) row[px] = rgb;
+    else              for (int px = x0; px < x1; px++) row[px] = gfx_mix(row[px], rgb, alpha);
+}
+
 static void round_row(int x, int y, int w, int r, int row_from_edge,
                       u32 rgb, int alpha) {
     if (y < 0 || y >= (int)fb_height()) return;
 
     if (row_from_edge >= r) {
-        for (int px = x; px < x + w; px++) {
-            if (px < 0 || px >= (int)fb_width()) continue;
-            fb_put((u32)px, (u32)y,
-                   alpha >= 255 ? rgb
-                                : gfx_mix(fb_get((u32)px, (u32)y), rgb, alpha));
-        }
+        span(x, x + w, y, rgb, alpha);
         return;
     }
 
@@ -397,12 +404,7 @@ static void round_row(int x, int y, int w, int r, int row_from_edge,
         if (right != left && right >= 0 && right < (int)fb_width())
             fb_put((u32)right, (u32)y, gfx_mix(fb_get((u32)right, (u32)y), rgb, a));
     }
-    for (int px = x + r; px < x + w - r; px++) {
-        if (px < 0 || px >= (int)fb_width()) continue;
-        fb_put((u32)px, (u32)y,
-               alpha >= 255 ? rgb
-                            : gfx_mix(fb_get((u32)px, (u32)y), rgb, alpha));
-    }
+    span(x + r, x + w - r, y, rgb, alpha);
 }
 
 void fb_round_rect_aa(int x, int y, int w, int h, int r, u32 rgb, int alpha) {
@@ -414,6 +416,81 @@ void fb_round_rect_aa(int x, int y, int w, int h, int r, u32 rgb, int alpha) {
     for (int j = 0; j < h; j++) {
         int from_edge = j < h - 1 - j ? j : h - 1 - j;
         round_row(x, y + j, w, r, from_edge, rgb, alpha);
+    }
+}
+
+/* How much of pixel px of a row falls inside a rounded rectangle x..x+w of
+   radius r, the row being from_edge rows in from its top or bottom: 255 for
+   all of it, as round_row reckons it. `corner` says the answer came from a
+   curve rather than a straight run, which round_row treats differently. */
+static int row_cover(int px, int x, int w, int r, int from_edge, bool *corner) {
+    *corner = false;
+    if (px < x || px >= x + w) return 0;
+    if (from_edge >= r) return 255;
+    int il = px - x, ir = x + w - 1 - px;
+    int i = il < ir ? il : ir;
+    if (i >= r) return 255;
+    *corner = true;
+    return corner_cover(i, 0, r * 8, (r - from_edge) * 8, r * 8);
+}
+
+/* What a window frame's hairline is: `edge` mixed at `alpha` over a rounded
+   rectangle, then `fill` put back over the one inside it a pixel smaller.
+ *
+ * Drawn that way, as two whole rounded rectangles, it touched every pixel of
+ * the window twice -- a mix and then an overwrite -- to change a ring one
+ * pixel wide and the corners. The pixels fully inside the inner rectangle
+ * end as `fill` whichever way it is done, and the caller has just filled
+ * them, so only the others are visited here, and each gets exactly the two
+ * steps it got before, in the same order and with the same arithmetic: the
+ * self test compares the two, pixel for pixel. */
+void fb_round_ring_aa(int x, int y, int w, int h, int r, u32 edge, int alpha, u32 fill) {
+    if (w <= 2 || h <= 2) return;
+    if (r * 2 > w) r = w / 2;
+    if (r * 2 > h) r = h / 2;
+    if (r < 0) r = 0;
+    int iw = w - 2, ih = h - 2, ir = r > 0 ? r - 1 : 0;
+    if (ir * 2 > iw) ir = iw / 2;
+    if (ir * 2 > ih) ir = ih / 2;
+
+    for (int j = 0; j < h; j++) {
+        int py = y + j;
+        u32 *row = fb_row(py);
+        if (!row) continue;
+        int fo = j < h - 1 - j ? j : h - 1 - j;
+
+        /* Where the inner rectangle is solid on this row, which is skipped. */
+        int ji = j - 1, s0 = x, s1 = x;
+        int fi = -1;
+        if (ji >= 0 && ji < ih) {
+            fi = ji < ih - 1 - ji ? ji : ih - 1 - ji;
+            if (fi >= ir) { s0 = x + 1;      s1 = x + 1 + iw; }
+            else          { s0 = x + 1 + ir; s1 = x + 1 + iw - ir; }
+        }
+
+        for (int px = x; px < x + w; px++) {
+            if (px == s0 && s1 > s0) { px = s1 - 1; continue; }
+            if (px < 0 || px >= (int)fb_width()) continue;
+            u32 c = row[px];
+
+            bool curve;
+            int cov = row_cover(px, x, w, r, fo, &curve);
+            if (curve) {
+                if (cov) c = gfx_mix(c, edge, alpha >= 255 ? cov : cov * alpha / 255);
+            } else if (cov) {
+                c = alpha >= 255 ? edge : gfx_mix(c, edge, alpha);
+            }
+
+            if (fi >= 0) {
+                int icov = row_cover(px, x + 1, iw, ir, fi, &curve);
+                if (curve) {
+                    if (icov) c = gfx_mix(c, fill, icov);
+                } else if (icov) {
+                    c = fill;
+                }
+            }
+            row[px] = c;
+        }
     }
 }
 

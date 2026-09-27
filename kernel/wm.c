@@ -1258,7 +1258,7 @@ static int desk_icon_at(int mx, int my) {
     return -1;
 }
 
-static void draw_wallpaper(void) {
+static void paint_wallpaper(void) {
     const theme_t *t = theme();
     /* All the way down, because the panel no longer covers the bottom of
        the screen and the wallpaper shows around it. */
@@ -1526,6 +1526,70 @@ static void draw_wallpaper(void) {
     }
 }
 
+/* --- the wallpaper, drawn once ---------------------------------------------
+ *
+ * Every frame started by drawing the wallpaper from nothing: for the default,
+ * a gradient, three soft lights and a vignette, two million pixels of
+ * arithmetic with a division in each, and a pointer that moved asked for all
+ * of it again. A still one is drawn once into a copy that frames start from,
+ * and drawn again when something it is drawn from changes. The six that move
+ * are drawn every frame, as they have to be, and so is the flat one, which a
+ * copy would only slow down.
+ *
+ * The copy is a whole screen of heap, and window surfaces come from the same
+ * heap, so it is taken only with plenty to spare. A program that could not
+ * open a window because the wallpaper had the last of the memory would have
+ * paid for a faster desktop with a broken one. */
+typedef struct {
+    int  wallpaper, vignette;
+    u32  desktop, w, h;
+    bool light, glows;
+} wall_key_t;
+
+static u32 *wall_cache;
+static u32 wall_cache_w, wall_cache_h;
+static wall_key_t wall_key;
+static bool wall_valid;
+
+static bool wall_still(int wp) {
+    return wp == WALLPAPER_GRADIENT || wp == WALLPAPER_BLOOM || wp == WALLPAPER_GRID
+        || wp == WALLPAPER_DOTS || wp == WALLPAPER_WEAVE;
+}
+
+static void draw_wallpaper(void) {
+    const theme_t *t = theme();
+    if (!wall_still(t->wallpaper)) { paint_wallpaper(); return; }
+
+    wall_key_t k;
+    memset(&k, 0, sizeof(k));             /* compared whole, padding included */
+    k.wallpaper = t->wallpaper; k.vignette = t->vignette;
+    k.desktop = t->desktop; k.light = t->light; k.glows = t->glows;
+    k.w = fb_width(); k.h = fb_height();
+
+    if (wall_cache && wall_valid && memcmp(&k, &wall_key, sizeof(k)) == 0) {
+        fb_back_restore(wall_cache);
+        return;
+    }
+
+    paint_wallpaper();
+    if (!wall_cache || wall_cache_w != k.w || wall_cache_h != k.h) {
+        if (wall_cache) kfree(wall_cache);
+        wall_cache = 0;
+        wall_valid = false;
+        u32 bytes = k.w * k.h * 4;
+        if (heap_total() - heap_used() > bytes * 4) {
+            wall_cache = (u32 *)kmalloc(bytes);
+            wall_cache_w = k.w;
+            wall_cache_h = k.h;
+        }
+    }
+    if (wall_cache) {
+        fb_back_save(wall_cache);
+        wall_key = k;
+        wall_valid = true;
+    }
+}
+
 /* The three buttons on a title bar, right to left: close, maximise,
    minimise. A window nobody said can be resized has no maximise button,
    because pressing it would do nothing.
@@ -1677,9 +1741,10 @@ static void draw_chrome(window_t *w, bool focused) {
            bar are two windows, and which one the keyboard is talking to is
            a question the screen has to answer. */
         u32 edge = focused ? gfx_mix(t->stroke, t->accent, 190) : t->stroke;
-        fb_round_rect_aa(w->x, w->y, ow, oh, r, edge, focused ? 235 : 110);
-        fb_round_rect_aa(w->x + 1, w->y + 1, ow - 2, oh - 2, r > 0 ? r - 1 : 0,
-                         t->surface, 255);
+        /* The same pixels as the hairline mixed over the whole frame and the
+           surface put back inside it, visiting only the ring: two passes
+           over the whole window, every frame, for a line a pixel wide. */
+        fb_round_ring_aa(w->x, w->y, ow, oh, r, edge, focused ? 235 : 110, t->surface);
     } else {
         fb_rect((u32)w->x, (u32)w->y, (u32)ow, (u32)oh, t->surface);
         raised(w->x, w->y, ow, oh);
@@ -2945,7 +3010,19 @@ static void draw_cursor(int mx, int my) {
         }
 }
 
+/* What drawing the frames has cost, for /sys/screen: the drawing only, from
+   the wallpaper to the pointer, not the sending, which fb.c reckons itself.
+   A measurement that makes the next optimisation arguable rather than
+   hoped for. */
+static u64 draw_cycles;
+static u32 draws;
+
+u32 wm_draws(void) { return draws; }
+u32 wm_draw_mcycles(void) { return (u32)(draw_cycles / 1000000); }
+
 static void composite(void) {
+    u64 started = rdtsc();
+
     /* Surfaces replaced since the last frame go back now, before anything
        here takes a pointer into one. */
     winsrv_reap_retired();
@@ -2995,6 +3072,8 @@ static void composite(void) {
     draw_menu();
     draw_ctx();
     draw_cursor(last_mx, last_my);
+    draw_cycles += rdtsc() - started;
+    draws++;
     if (frame_is_whole || dmg_x1 <= dmg_x0) {
         fb_flush();
     } else {
@@ -4082,6 +4161,22 @@ void wm_test_poll(void) {
 
 window_t *wm_test_nth(int n) {
     return n >= 0 && n < nwin ? stack[nwin - 1 - n] : 0;
+}
+
+/* The wallpaper as a frame would start from it, into `out`: the copy when
+   there is one, drawn when there is not. `fresh` draws it regardless, for the
+   self test to compare the two. */
+bool wm_test_wallpaper(u32 *out, bool fresh) {
+    bool from_copy = false;
+    if (fresh) {
+        paint_wallpaper();
+    } else {
+        from_copy = wall_cache && wall_valid;
+        draw_wallpaper();
+        from_copy = from_copy && wall_valid;
+    }
+    fb_back_save(out);
+    return from_copy;
 }
 
 int wm_test_chip_at(int x) { return taskbar_chip_at(x, taskbar_y() + TASKBAR_H / 2); }
