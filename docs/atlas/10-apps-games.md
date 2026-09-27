@@ -130,11 +130,11 @@ win_close(win); exit(0);
 
 **Filter** (`matches` :168-182): case-insensitive substring. It is re-applied (via `reload`) whenever the field length changes (:416-419). Esc clears and unfocuses it (:403-404). Any navigation (`go_to`) clears it (:210-212). Every reload also resets `selected=-1` and `first_row=0` (:188-189).
 
-**Keyboard** (:385-413; only `in.key`, the first key of the frame):
+**Keyboard** (:385-413; only `in.key`, the first key of the frame, until 0.45.0, which walks every key in `in.keys`):
 - While renaming: Enter commits, Esc cancels, everything else goes to the rename field.
 - While the filter is focused: Esc clears it, everything else goes to the filter (so Enter does not open anything).
 - Otherwise: Up/Down move the selection, Enter opens, Backspace goes to the parent directory, Delete calls `do_delete`.
-- There are no Ctrl shortcuts.
+- ~~There are no Ctrl shortcuts.~~ Since 0.45.0: ctrl+c and ctrl+x (`take`), ctrl+v (`do_paste`), and F2 (`begin_rename`). They are matched on `KEY_CODE` (3, 24, 22), so a serial line's bare control byte works too. The menus call the same `take`/`begin_rename`, and the rename state (`renaming`, `rename_buf`, `rename_field`) is file-scope. Escape reaches Files since 0.44.0 (`win_want_escape`). `tools/filescheck.py` drives all of this.
 
 **Menu bar** (:63-77, :426-438, :610-660).
 - Titles `File, Edit, View, Help`. Items and widths:
@@ -1046,7 +1046,7 @@ PS_OVER/PS_SHOWDOWN --Next hand/Enter/Space--> new_hand ; PS_GAMEOVER --New game
    - A click sets `sel_anchor = cursor` (:335). `insert_text` does not reset the anchor (:36-44).
    - Typing "a" after a click leaves `anchor ≠ cursor`, so "a" is now selected. Typing "b" deletes it (:245). Result: "b".
    - Arrow keys after a click likewise extend a selection that Backspace or typing then deletes. The `shifted` variable (:226, :249) is dead.
-9. **Notes and the other ui.h apps: keys beyond the first per frame are dropped.** Notes reads only `in.key` (:224). ui.h:349-356 says keys used to go missing ("the editor dropped characters out of sentences") and fixed it by adding `keys[]`. Only browser.c iterates `in.keys` (browser.c:1391-1412). The same applies to Files, Calc, Settings, Blackjack and Poker.
+9. **Partly FIXED in 0.45.0 (Files walks `in.keys`; the desktop now hands a program every waiting key each pass, rather than one a frame, which made this matter more). Notes and the other ui.h apps: keys beyond the first per frame are dropped.** Notes reads only `in.key` (:224). ui.h:349-356 says keys used to go missing ("the editor dropped characters out of sentences") and fixed it by adding `keys[]`. Only browser.c iterates `in.keys` (browser.c:1391-1412). The same applies to Files, Calc, Settings, Blackjack and Poker.
 10. **Notes and `ui_field_key`: Ctrl chords insert control bytes.** The WM passes `KEY_CODE|KEY_MOD_CTRL` (wm.c:3982) and ctrl+s arrives as `0x20013` (keyboard.c:156). notes.c:244 accepts `k >= 32 && !KEY_IS_SPECIAL(k)` and inserts `(char)k` = 0x13. ui.h:616-617 tests `key < 32` on the full value, so it inserts too. Ctrl+S, C, V, X and Z silently put invisible bytes into documents, the Files filter and the rename field. (Ctrl+C also raises SIGINT for forked children of the console reader, keyboard.c:44-47 / signal.c:262-287. Desktop-spawned apps have `parent_pid 0` and are not affected.)
 11. **Notes: loses data without warning.**
     - Open, or Enter in the path field, replaces the buffer without checking `dirty` (:260, :271).

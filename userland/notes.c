@@ -259,9 +259,12 @@ int main(int argc, char **argv) {
         int rows = text_h / MONO_H;
         int cols = (w - GUTTER_W - UI_PAD) / MONO_W;
 
-        /* --- keys ------------------------------------------------------- */
-        u32 k = in.key;
-        if (k && !name_field.focused) {
+        /* --- keys -------------------------------------------------------
+           Every key of the frame. It read the first alone, which was one key
+           a frame at most; the desktop now hands over every key that is
+           waiting at once, and a word typed quickly would have lost letters. */
+        for (int ki = 0; ki < in.nkeys && !name_field.focused; ki++) {
+            u32 k = in.keys[ki];
             int shifted = 0;                /* selection extends while shift-like keys move */
 
             if (k == KEY_LEFT)       { if (cursor > 0) cursor--; }
@@ -306,9 +309,9 @@ int main(int argc, char **argv) {
         bx += 64 + UI_GAP;
 
         ui_field_draw(&s, &in, &t, bx, by, w - bx - UI_PAD, &name_field, "path");
-        if (name_field.focused && in.key) {
-            if (in.key == '\n') { load(name_buf); name_field.focused = 0; }
-            else ui_field_key(&name_field, in.key);
+        for (int ki = 0; ki < in.nkeys && name_field.focused; ki++) {
+            if (in.keys[ki] == '\n') { load(name_buf); name_field.focused = 0; }
+            else ui_field_key(&name_field, in.keys[ki]);
         }
 
         /* Keep the cursor's line on screen. */

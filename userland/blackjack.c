@@ -709,9 +709,11 @@ int main(void) {
                          0xFFD9A0, UI_FACE_BODY);
         }
 
-        /* --- keys --------------------------------------------------------- */
-        if (in.key) {
-            u32 k = in.key;
+        /* --- keys ---------------------------------------------------------
+           Every key of the frame, not only the first: the desktop hands
+           over all that are waiting at once. */
+        for (int ki = 0; ki < in.nkeys; ki++) {
+            u32 k = in.keys[ki];
             if (k >= 'A' && k <= 'Z') k += 32;
             if (state == ST_BET || state == ST_OVER) {
                 if (k == '\n' || k == ' ') { if (wager > 0 && wager <= bank) deal_round(); }

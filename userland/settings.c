@@ -838,8 +838,12 @@ int main(void) {
         }
         if (closing) break;
 
-        if (in.key == KEY_UP && page > 0) page--;
-        if (in.key == KEY_DOWN && page < N_PAGES - 1) page++;
+        /* Every key of the frame: the desktop hands over all that are
+           waiting at once. */
+        for (int ki = 0; ki < in.nkeys; ki++) {
+            if (in.keys[ki] == KEY_UP && page > 0) page--;
+            if (in.keys[ki] == KEY_DOWN && page < N_PAGES - 1) page++;
+        }
         if (in.scroll) scroll += in.scroll;
 
         /* The volume can change from the dock while this window is open,

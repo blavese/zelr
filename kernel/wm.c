@@ -4166,8 +4166,14 @@ void wm_run(void) {
            down, which is somebody choosing a window another way. */
         if (cyc_at >= 0 && (!kbd_alt() || last_buttons)) cycle_end();
 
-        int c = kbd_trygetchar();
-        if (c >= 0 && !wm_key(c)) break;
+        /* Every key that is waiting, not one a pass. One pass ends in a
+           whole composite, so taking one key each time handed typing to a
+           program no faster than the desktop drew frames: a name typed into
+           a field arrived over a second or two, a letter at a time. */
+        bool leave = false;
+        for (int c; !leave && (c = kbd_trygetchar()) >= 0; )
+            leave = !wm_key(c);
+        if (leave) break;
 
         /* The settings window writes a file; this is what notices. Four
            times a second is well under what a person can perceive as lag

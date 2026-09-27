@@ -73,6 +73,17 @@ WHITE = (0xFF, 0xFF, 0xFF)
 CHIP_RED = (0xD6, 0x45, 0x45)
 
 
+TERMINAL = (0x10, 0x14, 0x1A)          # the terminal's default background
+
+
+def wait_desktop(mon, name):
+    """Until the desktop's terminal is on the screen: typed before then, a
+    command has no window to go to."""
+    mon.wait_screen(name, lambda w, h, px: count_in(px, w, (0, 0, 1024, 768), TERMINAL) > 50000,
+                    timeout=60)
+    time.sleep(1)
+
+
 def cards_in(px, rect):
     """How much card is inside a rectangle.
 
@@ -93,8 +104,9 @@ def main():
     try:
         vm.wait_boot()
         vm.type("desktop\n")
-        time.sleep(7)
         mon = vm.monitor()
+        mon.move_to(20, 20)
+        wait_desktop(mon, "gm-desk")
 
         # --- the launcher has somewhere to put them --------------------
         #
@@ -114,12 +126,15 @@ def main():
               count_near(px, w, pane, MENU_PANEL, 6) > 3000, shot)
 
         # --- blackjack ---------------------------------------------------
+        #
+        # Open once its chips are out, which it draws while it waits for a
+        # bet and at no other time: six seconds and a look was enough on an
+        # idle host and not always on the gate's.
         mon.click(*pane_row(0))
-        time.sleep(6)
         mon.move_to(20, 20)
-        time.sleep(1.5)
-
-        w, h, px, shot = mon.screen("bj-open")
+        w, h, px, shot, _ = mon.wait_screen(
+            "bj-open", lambda w, h, px: count_in(px, SCREEN_W, (180, 580, 980, 680), CHIP_RED) > 150,
+            timeout=60)
         table = (180, 120, 980, 600)
         before = cards_in(px, table)
         c.add("blackjack opens with no cards on the table", before < 200, shot)
@@ -222,18 +237,18 @@ def main():
         # alt+escape leaves the desktop. A plain one goes to blackjack now,
         # which has a use for it, and would clear the bet instead.
         mon.send("sendkey alt-esc")
-        time.sleep(2)
+        vm.wait_prompt(vm.prompts() + 1, timeout=30)
         vm.type("desktop\n")
-        time.sleep(6)
+        wait_desktop(mon, "pk-desk")
         vm.type("poker\n")
-        time.sleep(9)
         mon.move_to(20, 20)
-        time.sleep(1.5)
 
-        w, h, px, shot = mon.screen("pk-open")
         # Where the seat at the bottom of the table is dealt, in a window
-        # that opened at its own size in the middle of the screen.
+        # that opened at its own size in the middle of the screen; waited
+        # for, rather than nine seconds and a look.
         yours = (330, 380, 700, 560)
+        w, h, px, shot, _ = mon.wait_screen(
+            "pk-open", lambda w, h, px: cards_in(px, yours) > 1500, timeout=60)
         c.add("poker deals you two cards", cards_in(px, yours) > 1500, shot)
         if cards_in(px, yours) <= 1500:
             print("      %d white pixels in your hand" % cards_in(px, yours))

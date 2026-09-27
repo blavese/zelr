@@ -133,14 +133,22 @@ def main():
 
     if len(runs) >= 2:
         # The level is applied on the way into the buffer, so the note played
-        # after the slider was dragged down has to come out smaller than the
-        # one played after it was dragged up. That is the whole feature: the
-        # noise is not a notification, it is the setting.
-        first = peak_of(samples[runs[0][0]:runs[0][1]])
-        last = peak_of(samples[runs[-1][0]:runs[-1][1]])
-        print("      first burst peaks at %d, last at %d" % (first, last))
+        # with the slider at the quiet end has to come out smaller than the
+        # one played at the loud end. That is the whole feature: the noise is
+        # not a notification, it is the setting.
+        #
+        # The quietest burst against the loudest, not the first against the
+        # last. A drag plays a note wherever it passes, and on a busy host
+        # the note from where the first drag was pressed -- the middle of the
+        # track -- ran into the quiet one, so the first burst peaked at the
+        # middle level and the check failed a slider that worked. If the
+        # level were not applied every burst would peak alike, and this
+        # still fails.
+        peaks = [peak_of(samples[a:b]) for a, b in runs]
+        quiet, loud = min(peaks), max(peaks)
+        print("      bursts peak at %s" % ", ".join("%d" % p for p in peaks))
         c.add("and the one at the loud end is louder than the one at the "
-              "quiet end", last > first * 3 // 2)
+              "quiet end", loud > quiet * 3 // 2)
 
     try:
         os.remove(WAV)

@@ -230,9 +230,11 @@ int main(void) {
         if (closing) break;
 
         /* Typed as well as clicked. A calculator you cannot type at is a
-           picture of a calculator. */
-        if (in.key) {
-            u32 k = in.key;
+           picture of a calculator. Every key of the frame: the desktop hands
+           over all that are waiting at once, and "12+3" typed quickly lost
+           everything after the 1. */
+        for (int ki = 0; ki < in.nkeys; ki++) {
+            u32 k = in.keys[ki];
             if (k == '\n' || k == '=') press('=');
             else if (k == 27) press('C');
             else if (k == '\b') press(8);

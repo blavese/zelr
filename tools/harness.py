@@ -639,23 +639,27 @@ class Guest:
             cmd, cwd=ROOT, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT)
 
-        self._chunks = []
+        self._buf = bytearray()
         self._lock = threading.Lock()
         self._reader = threading.Thread(target=self._drain, daemon=True)
         self._reader.start()
         self._mon = None
 
     def _drain(self):
+        # Whatever has arrived, up to a block at a time, into one buffer. It
+        # read a byte per call into a list that every poll joined back up,
+        # which with seven machines going at once was a measurable share of a
+        # host whose load is what makes these harnesses late.
         while True:
-            chunk = self.proc.stdout.read(1)
+            chunk = self.proc.stdout.read1(4096)
             if not chunk:
                 return
             with self._lock:
-                self._chunks.append(chunk)
+                self._buf += chunk
 
     def serial(self):
         with self._lock:
-            return b"".join(self._chunks).decode("utf-8", "replace")
+            return self._buf.decode("utf-8", "replace")
 
     def alive(self):
         return self.proc.poll() is None

@@ -574,6 +574,12 @@ if [ "$MODE" = "screen" ] || [ "$MODE" = "full" ]; then
   # the end of the file without a word.
   bigfiletest() { keep timeout 600 python tools/bigfilecheck.py; }
 
+  # The file manager's own copy, cut and rename, driven from the keyboard
+  # and read back off the disk the same way. Files had no check of its own:
+  # its copy and rename were only ever tested through the terminal's cp and
+  # mv, which share nothing with it but the system calls.
+  filestest() { keep timeout 600 python tools/filescheck.py; }
+
   # The second boot of a machine, which is the one nothing else reaches:
   # every other check starts the kernel directly and never asks a firmware
   # to start from the disk the kernel formatted.
@@ -647,6 +653,7 @@ if [ "$MODE" = "screen" ] || [ "$MODE" = "full" ]; then
   par_start "bodies arrive compressed and connections are kept" wiretest
   par_start "a server that never answers does not stop the machine" hangtest
   par_start "big files are copied, moved and saved whole" bigfiletest
+  par_start "the file manager copies, moves and renames" filestest
   par_start "a machine still starts once it has formatted its disk" boottest
   par_start "ctrl+f finds a word that is on the screen" findtest
   par_start "a deal reaches the cloth and the dealer plays it out" gametest
@@ -681,7 +688,8 @@ rm -f gate.img gateq.img gatenv.img deskcheck.img termcheck.img shotcheck.img se
 for pat in 'gpttest.*.img' 'fat32test.*.img' 'nvmetest.*.img' 'clipcheck.*.img' \
            'shotcheck.*.img' 'termcheck.*.img' 'deskcheck.*.img' 'usbcheck.*.img' \
            'fat32probe.*.txt' 'fat32high.*.txt' 'hangcheck.*.img' 'mounttrace.*.log' \
-           'bigfile.*.img' 'bigfile.*.big' 'bigfile.*.huge'; do
+           'bigfile.*.img' 'bigfile.*.big' 'bigfile.*.huge' \
+           'files.*.img' 'files.*.letter' 'files.*.zeta' 'files.*.box'; do
   stale "$pat"
 done
 rm -f build/*.ppm 2>/dev/null

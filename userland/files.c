@@ -322,6 +322,31 @@ static void do_paste(void) {
     reload();
 }
 
+/* What Copy and Cut do, from the menus or the keyboard: remember the
+   selected file for the next Paste. */
+static void take(int cut) {
+    if (selected < 0) { say("nothing selected"); return; }
+    join(clip_path, cwd, entries[selected].name);
+    clip_is_cut = cut;
+    say(cut ? "cut" : "copied");
+}
+
+/* Rename happens in place: the row turns into a field rather than a dialog
+   appearing somewhere else on the screen. */
+static int renaming = -1;
+static char rename_buf[NAME_MAX];
+static ui_field rename_field;
+
+static void begin_rename(void) {
+    if (selected < 0) { say("nothing selected"); return; }
+    renaming = selected;
+    strncpy(rename_buf, entries[selected].name, sizeof(rename_buf) - 1);
+    rename_buf[sizeof(rename_buf) - 1] = 0;
+    rename_field.len = strlen(rename_buf);
+    rename_field.cursor = rename_field.len;
+    rename_field.focused = 1;
+}
+
 static void do_delete(void) {
     if (selected < 0) { say("nothing selected"); return; }
     char target[PATH_MAX];
@@ -389,11 +414,6 @@ int main(int argc, char **argv) {
     else reload();
     say("");
 
-    /* Rename happens in place: the row turns into a field rather than a
-       dialog appearing somewhere else on the screen. */
-    int renaming = -1;
-    char rename_buf[NAME_MAX];
-    ui_field rename_field;
     memset(&rename_field, 0, sizeof(rename_field));
     rename_field.buf = rename_buf;
     rename_field.cap = sizeof(rename_buf);
@@ -417,36 +437,49 @@ int main(int argc, char **argv) {
         }
         if (closing) break;
 
-        /* --- keys ------------------------------------------------------- */
-        if (renaming >= 0) {
-            if (in.key == '\n') {
-                char from[PATH_MAX], to[PATH_MAX];
-                join(from, cwd, entries[renaming].name);
-                join(to, cwd, rename_buf);
-                if (rename_buf[0] && strcmp(from, to)) {
-                    if (rename_file(from, to) == 0) say("renamed");
-                    else say("rename failed");
+        /* --- keys -------------------------------------------------------
+         *
+         * Every key that arrived this frame, not only the first: the rest
+         * used to be dropped, so a name typed faster than one key a frame
+         * lost letters. */
+        for (int ki = 0; ki < in.nkeys; ki++) {
+            int key = in.keys[ki];
+            int code = KEY_CODE(key);
+            if (renaming >= 0) {
+                if (code == '\n') {
+                    char from[PATH_MAX], to[PATH_MAX];
+                    join(from, cwd, entries[renaming].name);
+                    join(to, cwd, rename_buf);
+                    if (rename_buf[0] && strcmp(from, to)) {
+                        if (rename_file(from, to) == 0) say("renamed");
+                        else say("rename failed");
+                    }
+                    renaming = -1;
+                    reload();
+                } else if (code == 27) {
+                    renaming = -1;
+                } else {
+                    ui_field_key(&rename_field, key);
                 }
-                renaming = -1;
-                reload();
-            } else if (in.key == 27) {
-                renaming = -1;
-            } else {
-                ui_field_key(&rename_field, in.key);
-            }
-            in.key = 0;
-        } else if (filter_field.focused && in.key) {
-            if (in.key == 27) { filter_buf[0] = 0; filter_field.len = 0;
-                                filter_field.cursor = 0; filter_field.focused = 0; }
-            else ui_field_key(&filter_field, in.key);
-            in.key = 0;
-        } else if (in.key) {
-            if (in.key == KEY_UP && selected > 0) selected--;
-            else if (in.key == KEY_DOWN && selected < count - 1) selected++;
-            else if (in.key == '\n') open_entry(selected);
-            else if (in.key == '\b') go_up();
-            else if (in.key == KEY_DELETE) do_delete();
+            } else if (filter_field.focused) {
+                if (code == 27) { filter_buf[0] = 0; filter_field.len = 0;
+                                  filter_field.cursor = 0; filter_field.focused = 0; }
+                else ui_field_key(&filter_field, key);
+            } else if (code == KEY_UP && selected > 0) selected--;
+            else if (code == KEY_DOWN && selected < count - 1) selected++;
+            else if (code == '\n') open_entry(selected);
+            else if (code == '\b') go_up();
+            else if (code == KEY_DELETE) do_delete();
+            /* The chords every file manager has. Tested on the character
+               alone as well as with the control bit, because a serial line
+               sends the byte and no modifiers. */
+            else if (code == 3)  take(0);                /* ctrl+c */
+            else if (code == 24) take(1);                /* ctrl+x */
+            else if (code == 22) do_paste();             /* ctrl+v */
+            else if (code == KEY_F1 + 1) begin_rename(); /* F2 */
         }
+        in.key = 0;
+        in.nkeys = 0;
 
         /* Typing in the filter changes what is listed, as it is typed. */
         if (filter_field.len != last_filter_len) {
@@ -658,14 +691,8 @@ int main(int argc, char **argv) {
                         join(target, cwd, "new folder");
                         say(mkdir(target) < 0 ? "could not create" : "created");
                         reload();
-                    } else if (pick == 2 && selected >= 0) {
-                        renaming = selected;
-                        strncpy(rename_buf, entries[selected].name,
-                                sizeof(rename_buf) - 1);
-                        rename_buf[sizeof(rename_buf) - 1] = 0;
-                        rename_field.len = strlen(rename_buf);
-                        rename_field.cursor = rename_field.len;
-                        rename_field.focused = 1;
+                    } else if (pick == 2) {
+                        begin_rename();
                     } else if (pick == 3 && selected >= 0) {
                         char target[PATH_MAX];
                         join(target, cwd, entries[selected].name);
@@ -673,15 +700,9 @@ int main(int argc, char **argv) {
                         reload();
                     } else if (pick == 4) closing = 1;
                 } else if (which == 1) {                /* Edit */
-                    if (pick == 0 && selected >= 0) {
-                        join(clip_path, cwd, entries[selected].name);
-                        clip_is_cut = 0;
-                        say("copied");
-                    } else if (pick == 1 && selected >= 0) {
-                        join(clip_path, cwd, entries[selected].name);
-                        clip_is_cut = 1;
-                        say("cut");
-                    } else if (pick == 2) do_paste();
+                    if (pick == 0) take(0);
+                    else if (pick == 1) take(1);
+                    else if (pick == 2) do_paste();
                 } else if (which == 2) {                /* View */
                     if (pick == 0) reload();
                     else if (pick == 1) go_to("/home");
@@ -704,21 +725,13 @@ int main(int argc, char **argv) {
                 else if (pick == 1) open_with(selected, "/bin/notes");
                 else if (pick == 2) open_with(selected, "/bin/music");
                 else if (pick == 3 && selected >= 0) {
-                    join(clip_path, cwd, entries[selected].name);
-                    clip_is_cut = 0;
+                    take(0);
                     clip_set(clip_path, strlen(clip_path));
                     say("copied a path");
-                } else if (pick == 4 && selected >= 0) {
-                    join(clip_path, cwd, entries[selected].name);
-                    clip_is_cut = 1;
-                    say("cut");
-                } else if (pick == 5 && selected >= 0) {
-                    renaming = selected;
-                    strncpy(rename_buf, entries[selected].name, sizeof(rename_buf) - 1);
-                    rename_buf[sizeof(rename_buf) - 1] = 0;
-                    rename_field.len = strlen(rename_buf);
-                    rename_field.cursor = rename_field.len;
-                    rename_field.focused = 1;
+                } else if (pick == 4) {
+                    take(1);
+                } else if (pick == 5) {
+                    begin_rename();
                 } else if (pick == 6) {
                     do_delete();
                 }

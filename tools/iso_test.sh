@@ -66,10 +66,15 @@ run() {
         > "$out" 2>&1 || true
 
   echo "--- $what ---"
-  for want in "zelr $VERSION" "long mode" "progs" "zelr:/home>" "$what"; do
+  for want in "zelr $VERSION" "long mode" "progs" "zelr:/home>"; do
     if grep -qF "$want" "$out"; then echo "  PASS  $want"
     else echo "  FAIL  $want"; fails=$((fails+1)); fi
   done
+  # What cat printed, as a line of its own. Anywhere in the transcript, the
+  # words were also in the echo of the write that put them there, and that
+  # passed whether or not the file was written or read back.
+  if tr -d '\r' < "$out" | grep -qxF "$what"; then echo "  PASS  $what, read back"
+  else echo "  FAIL  $what, read back"; fails=$((fails+1)); fi
   rm -f "$out"
 }
 

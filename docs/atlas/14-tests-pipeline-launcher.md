@@ -253,7 +253,7 @@ zelr's quality control has five layers, and this area owns the last four.
   ```
 - `args=None` means `-append console`. `console` is the kernel command-line word that suppresses the auto-desktop (kernel/main.c:315, kernel/shell.c:598-608). `args=""` means no command line at all, i.e. the "booted from a disc" path.
 - On `q35`, an `if=ide` drive lands on the ICH9 AHCI controller.
-- Launches `Popen(cwd=ROOT, stdin=PIPE, stdout=PIPE, stderr=STDOUT)` and a daemon `_drain` thread that does `read(1)` into `_chunks` under `_lock`.
+- Launches `Popen(cwd=ROOT, stdin=PIPE, stdout=PIPE, stderr=STDOUT)` and a daemon `_drain` thread that did `read(1)` into `_chunks` under `_lock` (since 0.45.0: `read1(4096)` into one `bytearray`, `_buf`).
 
 Methods:
 
@@ -960,7 +960,7 @@ A note on the verified run: `bash run.sh -T` created `zelr.img` in the repositor
   - Screenshot names otherwise use a per-harness prefix: `desk-*`, `term-*`, `br-*`, `fm-*`, `fn-*`, `live-*`, `bj-*`/`pk-*`/`gm-menu`, `tear-*`, `fr-*`, `set-*`, `vol-*`, `net-*`, `calc-*`/`mon-*`, `clip-start`, and shotcheck's `desktop`/`launcher`/`menu`/`settings`/`recoloured`/`launcher-again`.
   - Fixed names that rely on one instance per gate: `gate.img`, `gateq.img`, `gatenv.img`, `build/isotest.img`, `build/zelr.iso`, `build/esp.img`, `build/bootcheck.ppm`.
   - `build/zelr.bin` must not be rewritten while machines are booting. **mkiso.py rewrites it anyway** (it flattens even under `ZELR_PREBUILT`), and in `full` it does so concurrently with the first screen harnesses (section 10, C).
-- **The Guest serial buffer**: the `_drain` thread appends one byte at a time to `_chunks` under `_lock`, and readers join the whole list. Memory grows for the life of the machine, which is fine for minutes-long runs.
+- **The Guest serial buffer**: the `_drain` thread appended one byte at a time to `_chunks` under `_lock`, and readers joined the whole list (0.45.0: blocks into one `bytearray`). Memory grows for the life of the machine, which is fine for minutes-long runs.
 - **Monitor**: one socket per Guest. It is not thread-safe and does not need to be (single-threaded use). Each `send` blocks until the prompt comes back. `quit` makes the monitor close mid-reply, which raises `Timeout` and is caught (soundcheck.py:184-187).
 - **The pipeline in the main checkout**: cycle.sh, batch.sh's integration phase and land.sh all switch branches in `$ROOT`. Nothing else may use that checkout while they run. The agents (and batch's fast gate, wrongly) run in the same place.
 - **The pipeline in worktrees**: each batch task has `../zelr-worktrees/<id>` on branch `pipeline/<id>`. Worktrees are created in parallel in the background.
@@ -1019,6 +1019,17 @@ A note on the verified run: `bash run.sh -T` created `zelr.img` in the repositor
 ## 8. Tests
 
 ### 8.1 The complete test catalogue
+
+Added in 0.45.0, not yet in the table below:
+- **`filescheck.py`** (gate `filestest`, full; 11 checks). Files driven from the keyboard on a mkfat
+  volume seeded with `/home/box/readme.txt`, a 40,000-byte `/home/letter.txt` (past Files' 16 KiB copy
+  buffer) and `/home/zeta.txt`. The first boot adds `/home/notes`, so the listing is box, letter.txt,
+  notes, zeta.txt.
+  - Waits for the terminal colour, types `/bin/files /home`, then waits for Files' list colour (FAFAFC).
+  - Arrows, Enter and Backspace move about; ctrl+c, ctrl+v into box; F2 and typed keys rename zeta.txt to
+    omega.txt; ctrl+x, ctrl+v move letter.txt into box.
+  - Every step is waited for on the disk image, read on the host with `readfat.py` while the guest runs,
+    byte for byte. It prints how long the rename took to land after F2 (a measurement, not a check).
 
 Added in 0.40.0, not yet in the table below:
 - **`bigfilecheck.py`** (gate `bigfiletest`, screen and full; 8 checks). Drive S+M+P+H on a mkfat volume
@@ -1089,7 +1100,7 @@ Drive methods:
 | nvme_test.sh | full | q35 `-m 256`, `-device nvme,serial=zelr0001`, 64 MiB, 3 boots | S | `via nvme`; writes survive; boot log recovered (request splitting); GPT on NVMe. | 12 | 1-1.5 min |
 | clipcheck.py | full | G(pc,128) | S,K,P | Terminal up; ctrl-c/ctrl-v paste reaches echo; ctrl-a copies the scrollback; `/sys/clipboard` has the marker and many lines. | 5 | ~1 min |
 | selftest_nvme | full | q35 NVMe 64 MiB | S | `SELFTEST_PASS`. | in-kernel | ~1 min |
-| iso_test.sh | full (in group C) | pc `-m 256`, no `-kernel`: `-cdrom` or ISO-as-IDE, BIOS or pflash edk2, plus a 32 MiB IDE index 1 | S | For each of 4 paths: `zelr VERSION`, `long mode`, `progs`, `zelr:/home>`, and the echoed tag. UEFI is skipped without firmware. | 20 | 1.5-2.5 min |
+| iso_test.sh | full (in group C) | pc `-m 256`, no `-kernel`: `-cdrom` or ISO-as-IDE, BIOS or pflash edk2, plus a 32 MiB IDE index 1 | S | For each of 4 paths: `zelr VERSION`, `long mode`, `progs`, `zelr:/home>`, and (0.45.0) the tag as a line of its own, which only `cat`'s output is (it matched the echoed `write` before). UEFI is skipped without firmware. | 20 | 1.5-2.5 min |
 | shotcheck.py | screen | G(pc,64) | S,M,P | Terminal drawn at 1024x768; launcher opens; Settings starts; 6 swatches; clicking teal moves more than 600 px of accent from indigo to teal. | 10 | 1-2 min |
 | termcheck.py | screen | G(pc,64) | S,K,P | Typed `theme paper`; tab completion; history; left+insert; backspace; home+delete; still alive. Everything is verified by the page colour. | 8 | 1-2 min |
 | deskcheck.py | screen | G(pc,64), then G(pc,512, `args=""`) | S,K,M,P | Min, restore, max (the panel tucks away and returns), unmax, corner resize, alt-left/right snap, 3 wallpapers, launcher → Paint, alt-tab, alt-d, wheel up and down, 800x600 and back, wallpaper-click launcher, right-click menu, close all, rubber band selects and releases icons, launcher search "ain" runs Paint, auto-desktop without a command line, ESC to shell, 1920x1080 layout. | 37 | 4-7 min |
@@ -1240,7 +1251,7 @@ All of the following were verified by reading. Anything that depends on runtime 
   - cycle.sh's clean check ignores untracked files (59-61), but `abandon` runs `git clean -qfd` (72), deleting a person's untracked, non-ignored files. The landing `git add -A` (200) commits them.
   - batch.sh's bookkeeping commits on main use `git add -A` (202, 229, 250) and would commit leftovers from the full gate, which runs in the main checkout.
   - `*.wav`, `mountseed.*.txt`, `fat32probe.*.txt` and `fat32high.*.txt` are **not** in .gitignore. They are left behind whenever `timeout` kills a harness, because Python `finally` blocks do not run on SIGTERM/TerminateProcess (runtime behaviour, inferred).
-- **N. FIXED in 0.41.0 for shell_test.sh (iso_test.sh's `$what` still open): the transcript loses its carriage returns, and the four checks, plus "cd moves into a directory" (the prompt says `/home/docs` too), match whole lines (`check_line`, `grep -qxF`) or the ls format (`check_re`). An echoed line starts with the prompt, so it never matches whole. Tests that cannot fail because of echo.**
+- **N. FIXED in 0.41.0 for shell_test.sh and in 0.45.0 for iso_test.sh (`grep -qxF` after removing carriage returns; it failed with the `cat` of the file removed): the transcript loses its carriage returns, and the four checks, plus "cd moves into a directory" (the prompt says `/home/docs` too), match whole lines (`check_line`, `grep -qxF`) or the ls format (`check_re`). An echoed line starts with the prompt, so it never matches whole. Tests that cannot fail because of echo.**
   - The console echoes typed characters (kernel/shell.c:626-628 → printf.c:16-24). In shell_test.sh these 4 of 17 checks match the **echo of the typed command** and cannot fail while echo works:
     - `notes` "ls shows the seeded files" (103-104; matched by `write notes.txt …`);
     - `shell wrote this` (106);
@@ -1256,7 +1267,7 @@ All of the following were verified by reading. Anything that depends on runtime 
   - `stale()` knows 10 patterns (618-620). Pid-named artifacts it never sweeps include `ring3.*.img`, `soundcheck.*.{img,wav}`, `enscheck.*`, `volcheck.*`, `apptone`/`apprec.*.wav`, `usbhub`/`usbhot`/`usbstick`/`stick.*.img`, `deskauto.*.img`, `mountseed.*.txt`, and others.
   - The `rm -f` of fixed names at 617 (`deskcheck.img`, `sel.img`, …) is mostly for names no longer produced.
 - **U.** crashcheck's "both versions turn up" check (129-131) is probabilistic: 6 random kill times between 0.15 and 2.5 s. If one write cycle ever takes longer than the kill window, every round reads `A` and the check fails with the machine working.
-- **V. Fixed sleeps remain** despite harness.py's philosophy. Examples: appcheck.py:171, 176, 220, 251 (12 s); setcheck.py:153 (8 s), 202; netcheck.py:135, 161 (9 s); browsercheck.py:229, 233 (14 s); livecheck.py:81, 86, 109 (16 s); formcheck.py:166, 170; findcheck.py:77, 81, 97, 110, 127; gamecheck.py:96, 118, 225, 227; tearcheck.py:45, 49. These harnesses are load-sensitive and rely on the gate's retry-alone.
+- **V. Partly FIXED in 0.45.0: livecheck and gamecheck wait for what they check (the terminal, the page's colours, the chips, the dealt cards), filescheck waits on the disk image, and volcheck compares the quietest burst with the loudest rather than the first with the last. Fixed sleeps remain** despite harness.py's philosophy. Examples: appcheck.py:171, 176, 220, 251 (12 s); setcheck.py:153 (8 s), 202; netcheck.py:135, 161 (9 s); browsercheck.py:229, 233 (14 s); livecheck.py:81, 86, 109 (16 s); formcheck.py:166, 170; findcheck.py:77, 81, 97, 110, 127; gamecheck.py:96, 118, 225, 227; tearcheck.py:45, 49. These harnesses are load-sensitive and rely on the gate's retry-alone.
 - **W. Launcher.**
   1. There is no hardware acceleration: pure TCG. zelr.bat:47-60 says this makes the selftest about 5× slower (44 s against 9 s).
   2. `EnsureDisk` **recreates an existing `disk.img` smaller than 32 MiB** (122, then `File.Create` at 132 or `FileMode.Create` at 140), despite the "An existing disk is never touched" comment (112-118).

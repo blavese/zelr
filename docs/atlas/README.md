@@ -95,6 +95,28 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.45.0: the file manager's harness, keys that arrive together, and checks that waited for time
+
+Each change has a check that was run against a build broken for it alone and seen to fail there.
+
+- **Files (10).** ctrl+c, ctrl+x, ctrl+v and F2, sharing `take`/`begin_rename` with the menus, and every
+  key of a frame rather than the first. `tools/filescheck.py` (gate `filestest`, 11 checks) copies,
+  renames and moves from the keyboard and reads the result off the disk image while the guest runs.
+  Failed with ctrl+c and F2 made to do nothing, and with Files taking only the first key of a frame.
+- **Keys to programs (07).** The desktop's loop takes every waiting key each pass rather than one, so
+  typing reaches a program at once rather than at the frame rate: eighteen keys typed quickly were acted
+  on 1.4 s after the first, against 8.9 s with one key a pass. That made the first-key-only programs
+  (Notes, the calculator, Settings, blackjack, poker) drop keys, so they walk `in.keys` too.
+- **Harnesses (14 §10 N, V).** iso_test.sh checks the line `cat` printed rather than the echoed command
+  (failed on all four paths with the file not read back). livecheck and gamecheck wait for what they
+  check. volcheck compares the quietest burst with the loudest. `Guest` reads the serial line in blocks.
+  The harness still types at 50 ms a character, deliberately: bursts would cut its tolerance for a
+  guest stall from 800 ms to tens of milliseconds.
+
+Counts after 0.45.0:
+- selftest unchanged (640, 644, 652, 665);
+- gate full 53 steps.
+
 ### 0.44.0: the window being used, alt+tab, and Escape
 
 Each change has a check that was run against a build broken for it alone and seen to fail there.

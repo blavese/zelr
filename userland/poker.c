@@ -865,10 +865,14 @@ int main(void) {
                 new_game();
         }
 
-        /* --- keys ------------------------------------------------------------ */
-        if (in.key) {
-            u32 k = in.key;
+        /* --- keys ------------------------------------------------------------
+           Every key of the frame: the desktop hands over all that are waiting
+           at once. Whose turn it is is asked again for each, because the key
+           before may have been the one that ended the turn. */
+        for (int ki = 0; ki < in.nkeys; ki++) {
+            u32 k = in.keys[ki];
             if (k >= 'A' && k <= 'Z') k += 32;
+            my_turn = (state == PS_ACT && turn == 0 && cards_landed());
             if (my_turn) {
                 if (k == 'f') act_fold(0);
                 else if (k == 'c' || k == '\n') act_call(0);

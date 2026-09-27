@@ -44,6 +44,7 @@ GREEN  = (0x00, 0xB0, 0x50)      # a click reached a listener
 ORANGE = (0xFF, 0x80, 0x00)      # a timer went off
 VIOLET = (0x80, 0x00, 0xFF)      # a script in a file of its own ran
 TEAL   = (0x00, 0xA0, 0xA0)      # an answer came back from the network
+TERMINAL = (0x10, 0x14, 0x1A)    # the terminal's default background
 
 # A band is about 43,000 pixels. Well under one, well over nothing.
 ENOUGH = 8000
@@ -78,17 +79,25 @@ def main():
             vm.wait_boot()
             vm.run("dhcp", timeout=25)
             vm.type("desktop\n")
-            time.sleep(7)
             mon = vm.monitor()
+            mon.move_to(20, 20)
+
+            # Every wait below is for what the check is about, not for a
+            # time. Fixed sleeps of seven, fourteen and sixteen seconds were
+            # enough on an idle host and not on the gate's, which failed all
+            # five checks at once when the page had simply not been drawn yet.
+            # The terminal first, because what is typed before it is up has
+            # no window to go to.
+            mon.wait_screen("live-desk",
+                            lambda w, h, px: count_in(px, w, (0, 0, 1024, 768), TERMINAL) > 50000,
+                            timeout=60)
+            time.sleep(1)
 
             # --- the control, with every script taken out ----------------
             vm.type("browser http://%s/live-quiet\n" % srv.host)
-            time.sleep(14)
-            mon.move_to(20, 20)
-            time.sleep(1.5)
-            w, h, px, shot = mon.screen("live-quiet")
-            c.add("a page with its scripts taken out is drawn",
-                  seen(px, w, BLUE) > ENOUGH, shot)
+            w, h, px, shot, drawn = mon.wait_screen(
+                "live-quiet", lambda w, h, px: seen(px, w, BLUE) > ENOUGH, timeout=90)
+            c.add("a page with its scripts taken out is drawn", drawn, shot)
             quiet = {n: seen(px, w, col) for n, col in
                      (("green", GREEN), ("orange", ORANGE),
                       ("violet", VIOLET), ("teal", TEAL))}
@@ -103,14 +112,17 @@ def main():
             # is being compared is two pictures of a whole window, and a
             # window in front of another one is not that. The first is
             # closed the way a person closes it.
-            mon.send("sendkey alt-q", settle=1.5)
-            time.sleep(2)
+            mon.send("sendkey alt-q", settle=0.5)
+            mon.wait_screen("live-closed", lambda w, h, px: seen(px, w, BLUE) < 200,
+                            timeout=30)
             vm.type("browser http://%s/live" % srv.host + chr(10))
-            time.sleep(16)
-            mon.move_to(20, 20)
-            time.sleep(2)
 
-            w, h, px, shot = mon.screen("live-open")
+            # Until all three have happened, or it is plain they are not
+            # going to: the checks below say which did not.
+            w, h, px, shot, _ = mon.wait_screen(
+                "live-open",
+                lambda w, h, px: all(seen(px, w, col) > ENOUGH for col in (ORANGE, VIOLET, TEAL)),
+                timeout=90)
             c.add("a timer the page set goes off",
                   seen(px, w, ORANGE) > ENOUGH, shot)
             if seen(px, w, ORANGE) <= ENOUGH:
