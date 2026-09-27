@@ -368,6 +368,38 @@ typedef struct {
     int  scroll;          /* wheel, in rows, positive is down */
 } ui_input;
 
+/* --- waiting for the next frame --------------------------------------------
+ *
+ * A program built on these draws its whole window every pass, and passes
+ * went round every sixteen milliseconds whether or not anything had
+ * happened: an open calculator committed sixty identical frames a second, and
+ * the desktop composited every one of them. ui_wait sleeps until an event
+ * arrives for the window instead, or until something drawn is due to change
+ * by the clock -- a text cursor's blink, a message that times out -- which is
+ * what ui_due says when it is drawn. A second at most either way. */
+static int ui_due_tick = -1;              /* ticks() when a drawn thing changes */
+static int ui_fed;                        /* the pass just drawn had input in it */
+
+static inline void ui_due(int tick) {
+    if (ui_due_tick < 0 || tick < ui_due_tick) ui_due_tick = tick;
+}
+
+static inline void ui_wait(int win) {
+    /* A pass with input in it goes round once more before sleeping. What a
+       click does is decided part way through drawing, after the parts above
+       it are already drawn -- a button's label that changes when it is
+       pressed -- so it only shows on the pass after, which used to be
+       sixteen milliseconds away and would now be a second. */
+    if (ui_fed) { ui_fed = 0; ui_due_tick = -1; return; }
+    int ms = 1000;
+    if (ui_due_tick >= 0) {
+        int left = (ui_due_tick - ticks()) * 10;
+        if (left < ms) ms = left;
+    }
+    ui_due_tick = -1;
+    if (ms > 0) win_wait(win, ms);
+}
+
 static inline void ui_begin(ui_input *in) {
     in->pressed = in->released = in->right_pressed = 0;
     in->key = 0;
@@ -377,6 +409,7 @@ static inline void ui_begin(ui_input *in) {
 
 /* Folds one window event into the frame's input. */
 static inline void ui_feed(ui_input *in, const win_event *ev) {
+    ui_fed = 1;
     if (ev->type == WIN_EV_MOUSE) {
         in->mx = ev->x;
         in->my = ev->y;
@@ -675,6 +708,7 @@ static inline int ui_field_draw(surface *s, ui_input *in, const ui_theme *t,
         if (f->focused && (ticks() / 30) % 2 == 0)
             rect(s, x + UI_PAD + upto - shift, ty, 2,
                  face_h(UI_FACE_BODY), t->accent);
+        if (f->focused) ui_due((ticks() / 30 + 1) * 30);   /* its next blink */
     }
 
     return clicked;

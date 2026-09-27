@@ -296,6 +296,11 @@ Insert, F2-F12 and DEL (127, as sent by a serial terminal) do nothing. Escape ne
    - `blink++`, and force a repaint every 12 iterations.
    - If anything changed: `draw_all` and `win_commit`.
    - `sleep_ms(20)`. The loop polls; there is no blocking wait for events.
+   - Since 0.51.0: the cursor blinks by the clock, `BLINK_TICKS` 50 (half a second a phase) from `blink_from`,
+     which a key resets so the cursor is lit while typing (`cursor_lit()`); a repaint happens when an event
+     changed something or the phase has changed since the last draw; and the loop ends in
+     `win_wait(win, time until the next phase)` instead of the sleep. termcheck counts the terminal's slices
+     over five idle seconds (27 against the old 250 or so; the check allows 120).
 
 #### 3.1.15 Themes (`term.c:1187-1255`)
 

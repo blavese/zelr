@@ -63,7 +63,7 @@ skimmed) and checking the results against a real build and test run.
   +-- crypto & tls ........ sha* gcm crypto x25519 rsa ec x509 roots tls wpa rng              (06b)
   +-- desktop ............. wm (runs inside the shell task) winsrv gfx theme                  (07)
   +-- console ............. shell welcome selftest blackbox                                  (08, 04)
-  ========================= int 0x80, 64 system calls (include/syscall.h = sdk/zelr.h) =========
+  ========================= int 0x80, 65 system calls (include/syscall.h = sdk/zelr.h) =========
   ring 3 (userland/, built only with sdk/)
     term sh coreutils | files notes paint settings monitor music calc | blackjack poker |       (09b, 10)
     browser = web fetch html dom css layout + js jsparse jsrun jsdom jsregex +                (11, 12)
@@ -94,6 +94,30 @@ skimmed) and checking the results against a real build and test run.
 
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
+
+### 0.51.0: programs that sleep until something happens
+
+Each change has a check that was run against a build broken for it alone and seen to fail there; the
+gain was measured by the scheduler's slices for each program over five idle seconds.
+
+- **win_wait, system call 65 (03 §4, 07).** Sleeps on the window record until `wm_push_event` wakes it
+  or the timeout passes, a second at most a call (a program being ended wakes on its own task, not its
+  window). `[windows]`: a task asleep on a window is woken by a pushed key, not its three-second clock
+  (failed with the wake taken out of `wm_push_event`).
+- **The terminal (09b §3.1.14).** Blinks by the clock (half a second) and sleeps until a key or the next
+  blink: 27 slices in five idle seconds and a reading, 207 with the old poll (termcheck, which allows 120).
+- **The toolkit (09a).** `ui_wait` replaces `sleep_ms(16)` in calc, notes, files and settings: once more
+  after a pass with input, then asleep until an event or a declared `ui_due` (a caret blink, a message's
+  timeout, settings' four reloads a second). The calculator behind the terminal: 4 to 6 slices in five
+  seconds, 206 with the old loop, each of which had been a whole frame committed. A missing extra pass
+  after input failed appcheck (the calculator showed the key before last).
+- Not converted: the card games, the browser, monitor and paint, which animate or poll the network.
+- Found on the way and flagged, not fixed: maptest's "the pages that arrived come back" fails on the first
+  run in every boot (v0.49.1 too), which failed ring3check twice.
+
+Counts after 0.51.0:
+- selftest 663 (pc, 64 MiB), 669 (256 MiB), 676 (q35), 690 (`-smp 4`), in 51 sections; 65 live system calls;
+- gate full 53 steps.
 
 ### 0.50.0: a layout seven times cheaper, and nesting that no longer doubles it
 

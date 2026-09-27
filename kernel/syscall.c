@@ -1027,6 +1027,29 @@ static i64 sys_win_poll(registers_t *r) {
     return 1;
 }
 
+/* Asleep until something arrives for this window, or the time runs out.
+ *
+ * Every program with a window polled it and slept twenty milliseconds, round
+ * and round, fifty wakes a second to find nothing there. This sleeps on the
+ * window record, which wm_push_event wakes. No event can be pushed between the
+ * look and the sleep: pushing one takes the kernel lock, which this call holds
+ * until wait_on gives the processor away. A second at most, whatever was
+ * asked, because a program being ended wakes on its own task, not on its
+ * window, and has to come back to the edge of the call to be ended. Returns 1
+ * when win_poll has something, 0 when the time ran out, -1 for a bad handle. */
+static i64 sys_win_wait(registers_t *r) {
+    u32 pid = caller_pid();
+    int handle = (int)r->rbx;
+    int ms = (int)r->rcx;
+    int ready = winsrv_pending(pid, handle);
+    if (ready != 0 || ms == 0) return ready;
+    if (ms < 0 || ms > 1000) ms = 1000;
+    window_t *w = winsrv_window(pid, handle);
+    if (!w) return 1;
+    wait_on(w, (u32)ms);
+    return winsrv_pending(pid, handle);
+}
+
 /* What a window is showing, as words, so the desktop's find can look
    through it. A window that never calls this is not searched and is not
    pretended to be: find says how many windows it could look in. */
@@ -1130,6 +1153,7 @@ static const syscall_fn TABLE[] = {
     [SYS_TASKS]       = sys_tasks,
     [SYS_WIN_RESIZABLE] = sys_win_resizable,
     [SYS_WIN_ESCAPE]    = sys_win_escape,
+    [SYS_WIN_WAIT]      = sys_win_wait,
     [SYS_WIN_RESIZE]    = sys_win_resize,
     [SYS_CLIP_SET]  = sys_clip_set,
     [SYS_CLIP_GET]  = sys_clip_get,

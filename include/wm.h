@@ -185,6 +185,10 @@ bool wm_active(void);
 void wm_push_event(window_t *w, const wm_event_t *ev);
 bool wm_pop_event(window_t *w, wm_event_t *out);
 
+/* Whether anything is queued for a window. A program waiting for its window
+   sleeps on the window record itself, and pushing an event wakes it. */
+bool wm_has_event(const window_t *w);
+
 int  wm_outer_w(const window_t *w);
 int  wm_outer_h(const window_t *w);
 

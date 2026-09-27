@@ -671,6 +671,7 @@ static int page_screen(surface *s, ui_input *in, ui_theme *t,
            somebody has made is a button they will hit once by accident and
            never trust again. */
         int armed = reset_at && ticks() - reset_at < 300;
+        if (armed) ui_due(reset_at + 300);     /* when it goes back to asking once */
         if (ui_button(s, in, t, x, y, 210,
                       armed ? "Yes, put it all back" : "Reset everything")) {
             if (armed) { reset_everything(); reset_at = 0; }
@@ -849,11 +850,14 @@ int main(void) {
         /* The volume can change from the dock while this window is open,
            and a knob table read once at startup would then be showing a
            number the machine has moved on from. Four times a second, which
-           is what the window manager gives the file. */
-        if (++since_reload > 15 && !dirty && !in.down) {
-            since_reload = 0;
+           is what the window manager gives the file -- by the clock now that
+           the loop only goes round when something happens, and the wait
+           below is told when the next one is due. */
+        if (ticks() - since_reload >= 25 && !dirty && !in.down) {
+            since_reload = ticks();
             knobs_load();
         }
+        ui_due(since_reload + 25);
 
         fill(&s, t.bg);
 
@@ -888,11 +892,11 @@ int main(void) {
         flush(in.down);
 
         const char *msg = "changes apply as you make them";
-        if (saved_at && ticks() - saved_at < 90) msg = "saved to /zelr.cfg";
+        if (saved_at && ticks() - saved_at < 90) { msg = "saved to /zelr.cfg"; ui_due(saved_at + 90); }
         ui_statusbar(&s, &t, w, h, msg, PAGES[page]);
 
         win_commit(win);
-        sleep_ms(16);
+        ui_wait(win);          /* until something happens or is due to */
     }
 
     win_close(win);

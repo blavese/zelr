@@ -741,7 +741,7 @@ int main(int argc, char **argv) {
         }
 
         win_commit(win);
-        sleep_ms(16);
+        ui_wait(win);          /* until something happens, not sixty times a second */
     }
 
     win_close(win);

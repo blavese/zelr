@@ -317,7 +317,7 @@ int main(void) {
         }
 
         win_commit(win);
-        sleep_ms(16);
+        ui_wait(win);          /* until a key or the pointer, not sixty times a second */
     }
 
     win_close(win);

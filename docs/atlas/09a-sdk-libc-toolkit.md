@@ -123,7 +123,7 @@ carries the 512-byte FXSAVE image and exec resets the state (§10, 18 and 21).
 * The syscall gate is an interrupt gate: interrupts are off during a call except where the kernel explicitly waits
   (`kernel/fd.c:192-212`).
 
-**Syscall number table** (all verified equal to `include/syscall.h:4-181`; 64 slots, 63 live at the atlas's writing; since 0.44.0 65 slots, 64 live, SYS_WIN_ESCAPE 64 = win_want_escape(h)):
+**Syscall number table** (all verified equal to `include/syscall.h:4-181`; 64 slots, 63 live at the atlas's writing; since 0.44.0 65 slots, 64 live, SYS_WIN_ESCAPE 64 = win_want_escape(h); since 0.51.0 66 slots, 65 live, SYS_WIN_WAIT 65 = win_wait(h, timeout_ms)):
 
 | # | Name | # | Name | # | Name | # | Name |
 |---|---|---|---|---|---|---|---|
@@ -600,6 +600,13 @@ drop; console FILEs flush on `\n` and at 4096.
 
 **Immediate-mode frame (ui.h).** Typical loop (`calc.c:215-229`): get size/surface → `ui_load_theme()` →
 `ui_begin(&in)` → `while (win_poll) ui_feed` → draw widgets (each reads `in`, consumes clicks) → `win_commit`.
+Since 0.51.0 the loop ends in `ui_wait(win)` rather than `sleep_ms(16)`: it goes round once more after a
+pass that had input (`ui_fed`, set by `ui_feed`: what a click changes is drawn on the pass after it), and
+otherwise sleeps in `win_wait` until an event, or until the earliest `ui_due(tick)` a widget or the program
+declared (a focused field's cursor blink, `ui_field_draw`; a timed message), a second at most. The old loop
+committed sixty identical frames a second, each one composited by the desktop. Converted: calc, notes, files,
+settings (which also reloads its knobs four times a second by the clock); the games, browser, monitor and
+paint still sleep and poll.
 
 **Signal handler lifecycle.** `signal(SIGTERM, h)` records `h` and the trampoline → `send_signal` sets pending →
 on the next return to ring 3 (syscall exit or timer tick) the kernel builds the frame and enters `h(sig)` → `ret` to

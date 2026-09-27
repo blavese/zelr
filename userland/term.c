@@ -123,7 +123,16 @@ static void sel_clear(void) { sel_active = 0; sel_dragging = 0; }
 static char input[COLS + 1];
 static int  in_off;                 /* the first column of it on screen */
 static int  in_len, in_pos;
-static int  blink;
+
+/* The cursor blinks half a second a phase, by the clock (ticks, a hundred a
+   second) rather than by counting passes of the loop: the loop used to go
+   round fifty times a second whether or not anything happened, and now it
+   sleeps until something does or the cursor is due to change. A key starts
+   the phase again, so the cursor is lit while somebody is typing. */
+#define BLINK_TICKS 50
+static int  blink_from;
+
+static int cursor_lit(void) { return ((ticks() - blink_from) / BLINK_TICKS) % 2 == 0; }
 
 /* What has been typed before. The newest is at the end; hist_at is where the
    up arrow has walked back to, counted from there. */
@@ -379,7 +388,7 @@ static void draw_all(void) {
 
     /* A block cursor sitting on the character it is in front of, so editing
        in the middle of a line is visible rather than guessed at. */
-    if (view == 0 && (blink / 12) % 2 == 0) {
+    if (view == 0 && cursor_lit()) {
         int cx = x + (in_pos - in_off) * MONO_W;
         if (in_pos < in_len) {
             rect(&scr, cx, py, MONO_W, MONO_H, pal.cursor);
@@ -1844,8 +1853,10 @@ int main(void) {
     dim("Tab completes, up and down are history, PageUp scrolls.");
     say("");
 
+    blink_from = ticks();
     draw_all();
     win_commit(win);
+    int lit = cursor_lit();
 
     for (;;) {
         win_event ev;
@@ -1877,7 +1888,7 @@ int main(void) {
                 if (view > max) view = max;
                 changed = 1;
             }
-            if (ev.type == WIN_EV_KEY) { on_key(ev.key); changed = 1; }
+            if (ev.type == WIN_EV_KEY) { on_key(ev.key); changed = 1; blink_from = ticks(); }
             if (ev.type == WIN_EV_MOUSE) {
                 int line, col;
                 point_to_cell(ev.x, ev.y, &line, &col);
@@ -1903,13 +1914,16 @@ int main(void) {
             }
         }
 
-        blink++;
-        if (blink % 12 == 0) changed = 1;      /* the cursor needs a repaint */
+        if (cursor_lit() != lit) changed = 1;  /* the cursor needs a repaint */
 
         if (changed) {
             draw_all();
             win_commit(win);
+            lit = cursor_lit();
         }
-        sleep_ms(20);
+
+        /* Asleep until something arrives or the cursor is due to change. */
+        int into = (ticks() - blink_from) % BLINK_TICKS;
+        win_wait(win, (BLINK_TICKS - into) * 10 + 5);
     }
 }

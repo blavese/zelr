@@ -273,6 +273,14 @@ bool winsrv_poll(u32 pid, int handle, wm_event_t *out) {
     return wm_pop_event(s->win, out);
 }
 
+int winsrv_pending(u32 pid, int handle) {
+    slot_t *s = lookup(pid, handle);
+    if (!s) return -1;
+    apply_pending(s);
+    if (!s->win) return 1;
+    return wm_has_event(s->win) ? 1 : 0;
+}
+
 /* Swaps a window's pixels for a new block of a different size.
  *
  * The mapping has to end up at the same user address, because the program

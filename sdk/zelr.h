@@ -8,7 +8,7 @@
  * reason. See NOTICE in the repository this came from.
  */
 
-/* The entire user-facing interface: sixty-four system calls and a little
+/* The entire user-facing interface: sixty-five system calls and a little
    sugar. Nothing is linked in from the kernel; every call below crosses the
    ring boundary through int 0x80.
  *
@@ -184,6 +184,9 @@ typedef long long          zelr_word;
 /* This window has a use for Escape: a plain Escape comes to it as a key,
    rather than taking the desktop away. */
 #define SYS_WIN_ESCAPE    64
+
+/* Asleep until something arrives for a window, or the time is up. */
+#define SYS_WIN_WAIT      65
 #define TLS_WHY   0
 #define TLS_WHAT  1
 
@@ -936,6 +939,21 @@ static inline int win_want_escape(int handle) {
 
 static inline int win_poll(int handle, win_event *ev) {
     return syscall(SYS_WIN_POLL, handle, (zelr_word)ev, 0);
+}
+
+/* Sleeps until win_poll has something for this window, or timeout_ms pass:
+   1 when it has, 0 when the time ran out, -1 for a handle that is not yours.
+   A second at most per call (and a negative timeout is a second), so a loop
+   round it that has nothing else to do wakes once a second rather than the
+   fifty times a poll and a twenty millisecond sleep did.
+
+     for (;;) {
+         while (win_poll(w, &ev) == 1) { ... }
+         redraw_if_needed();
+         win_wait(w, until_next_thing_ms);
+     } */
+static inline int win_wait(int handle, int timeout_ms) {
+    return syscall(SYS_WIN_WAIT, handle, timeout_ms, 0);
 }
 
 static inline int win_commit(int handle) {

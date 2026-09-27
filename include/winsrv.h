@@ -51,6 +51,11 @@ void winsrv_reap_retired(void);
 u64  winsrv_surface(u32 pid, int handle, u64 dir);   /* user address, or 0 */
 int  winsrv_size(u32 pid, int handle);               /* cw << 16 | ch, or -1 */
 bool winsrv_poll(u32 pid, int handle, wm_event_t *out);
+
+/* Whether win_poll would hand over something now: 1 if an event is queued or
+   the window has gone (that is a close waiting to be heard), 0 if not, -1 for
+   a handle that is not this program's. */
+int  winsrv_pending(u32 pid, int handle);
 bool winsrv_commit(u32 pid, int handle);
 bool winsrv_close(u32 pid, int handle);
 

@@ -185,6 +185,11 @@
 /* This window's program has a use for Escape, so a plain Escape goes to it
    rather than out of the desktop. */
 #define SYS_WIN_ESCAPE    64
+
+/* Until something arrives for this window, or so many milliseconds pass (at
+   most a second a call; a negative wait is a second). Programs used to poll
+   and sleep twenty milliseconds, fifty times a second, doing nothing. */
+#define SYS_WIN_WAIT      65
 #define TLS_WHY   0
 #define TLS_WHAT  1
 

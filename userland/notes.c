@@ -360,6 +360,7 @@ int main(int argc, char **argv) {
                 int cx = GUTTER_W + (cursor - at) * MONO_W;
                 rect(&s, cx, ry, 2, MONO_H, t.accent);
             }
+            if (cursor >= at && cursor <= end) ui_due((ticks() / 30 + 1) * 30);
 
             if (end >= len) break;
             at = end + 1;
@@ -395,7 +396,7 @@ int main(int argc, char **argv) {
         ui_statusbar(&s, &t, w, h, left, right);
 
         win_commit(win);
-        sleep_ms(16);
+        ui_wait(win);          /* until a key, the pointer, or the cursor's blink */
     }
 
     win_close(win);

@@ -1482,6 +1482,15 @@ static void test_frame_drawing(void) {
     kfree(got);
 }
 
+static window_t *winwait_win;
+static volatile int winwait_state;      /* 1 asleep, 2 woken, 3 timed out */
+
+static void winwait_task(void) {
+    winwait_state = 1;
+    winwait_state = wait_on(winwait_win, 3000) ? 2 : 3;
+    task_exit_with(0);
+}
+
 static void test_wm(void) {
     if (!fb_active()) { kprintf("  SKIP  no framebuffer\n"); return; }
 
@@ -1564,6 +1573,25 @@ static void test_wm(void) {
         }
         ok("the release stays where the button was let go",
            down_first && released_at == 52);
+    }
+
+    /* A program in win_wait sleeps on its window record until an event is
+       pushed for the window. A task put to sleep the same way has to be woken
+       by the push, not by its three seconds running out: without the wake the
+       programs still worked, a timeout late for every key. */
+    {
+        winwait_win = b;
+        winwait_state = 0;
+        task_t *t = task_create("winwait", winwait_task);
+        for (int i = 0; i < 100 && winwait_state == 0; i++) sleep_ms(10);
+        wm_event_t ev = { WM_EV_KEY, 0, 0, 0, 'k' };
+        wm_push_event(b, &ev);
+        for (int i = 0; i < 150 && winwait_state < 2; i++) sleep_ms(10);
+        ok("a program asleep on its window is woken by the event, not the clock",
+           t && winwait_state == 2);
+        wm_event_t out;
+        while (wm_pop_event(b, &out)) { }
+        if (t) task_wait(t->pid);
     }
 
     /* Closing must also drop the manager's reference, or the next composite

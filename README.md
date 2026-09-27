@@ -660,7 +660,7 @@ whichever processor is free, and what it hands over is arithmetic over memory
 the caller owns rather than anything the kernel keeps. `cat /sys/cpu` says
 how many slices each processor has given to a program.
 
-**Programs.** Ring 3, its own address space per process, and sixty-four
+**Programs.** Ring 3, its own address space per process, and sixty-five
 system calls through int 0x80. A program can start another program, block
 until it finishes and read what it returned from `main`, so the terminal
 starting `paint` is one ring 3 process starting another with the kernel only
@@ -672,6 +672,14 @@ image, so a fresh install already has something to run. They are deliberately
 never saved to the disk: if they were, the first boot would write them out and
 every later boot would run the written copies, so rebuilding the kernel would
 appear to change nothing.
+
+A program with nothing to do sleeps. `win_wait` blocks until something arrives
+for its window or a timeout passes, and the toolkit's loop uses it, so the
+calculator, the notes, the files window and the settings draw a frame when a
+key, the pointer or a blinking cursor asks for one, where they used to draw
+sixty a second for the desktop to composite. The terminal blinks its cursor by
+the clock and sleeps in between: left alone for five seconds it runs about
+twenty seven times rather than two hundred and fifty.
 
 That is what `/bin` is, and for a long time it was the only place a name was
 looked for -- so a program had to be built into the machine to be run by
@@ -1364,7 +1372,7 @@ is still the kernel's own, on the console; the one in a window is a program.
 ## writing a program for it
 
 Four files in `sdk/` are everything a program needs: `zelr.h`, which is the
-sixty-four system calls and a little sugar over them, `zelr.ld`, which says
+sixty-five system calls and a little sugar over them, `zelr.ld`, which says
 where a program is linked, a build line, and an example.
 
 ```bash
@@ -1398,7 +1406,7 @@ byte.
 ## testing
 
 The kernel tests itself. `./run.sh -T` boots with selftest on the command line,
-runs 662 checks across every subsystem, then writes to QEMU's debug-exit port
+runs 663 checks across every subsystem, then writes to QEMU's debug-exit port
 so the host gets a real exit status.
 
     [string]                8 checks   [live tree]            19 checks
@@ -1422,20 +1430,20 @@ so the host gets a real exit status.
     [video]                13 checks   [black box]            21 checks
     [mouse]                 4 checks   [acpi and pcie]         4 checks
     [graphics]             15 checks   [interrupt routing]    11 checks
-    [windows]              19 checks   [clipboard]            14 checks
+    [windows]              20 checks   [clipboard]            14 checks
     [window server]        33 checks   [clock]                18 checks
     [built-in programs]     8 checks   [sound]                  skipped
     [theme]                19 checks   [kernel stack]          3 checks
     [taskbar]              18 checks
 
-    662 passed, 0 failed
+    663 passed, 0 failed
     SELFTEST_PASS
 
 The sound section is skipped because `run.sh` attaches no sound card, the
 identity map is checked in four more places when there is more memory to map,
 and the desktop keeps a copy of its wallpaper only when the memory allows it,
 which two more checks need: given 256 MiB, as the gate gives it, the same run
-is 668.
+is 669.
 
 Two of the sections are about what happens when something goes wrong half
 way, which a machine that keeps its power cannot show. `[fat]` makes the
@@ -1466,10 +1474,10 @@ on a machine with several, where it hands work to each of them and requires
 the count they share to come back exact, and then starts more programs than
 there are processors to check that handed work is neither given to a busy
 one nor abandoned halfway for a program. `qemu-system-x86_64 -smp 4` with
-256 MiB reaches 689, and the gate runs it.
+256 MiB reaches 690, and the gate runs it.
 
 The same checks run again on `-machine q35`, which has PCIe and an AHCI
-controller rather than a 1996 chipset and a PIO disk, and reach 675 there.
+controller rather than a 1996 chipset and a PIO disk, and reach 676 there.
 Two bugs found the day that was added were invisible on the older machine:
 the block layer would not split a request past the eight sectors AHCI
 accepts, and the ACPI tables were never read on a UEFI machine at all.

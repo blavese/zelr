@@ -24,7 +24,9 @@ that takes four seconds under load is a repaint, not a failure.
   python tools/termcheck.py [--keep]
 """
 import os
+import re
 import sys
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from harness import Guest, Checks, build_once, count_in, ROOT      # noqa: E402
@@ -43,7 +45,7 @@ PAGE = (120, 120, 700, 460)
 # What the monitor calls the keys that are not letters.
 NAMED = {
     " ": "spc", "\n": "ret", "\t": "tab", "/": "slash", ".": "dot",
-    "-": "minus", "_": "shift-minus", ",": "comma",
+    "-": "minus", "_": "shift-minus", ",": "comma", "&": "shift-7",
 }
 
 
@@ -51,6 +53,26 @@ def keys(mon, text, settle=0.06):
     """Types a string one key at a time, the way a person would."""
     for ch in text:
         mon.send("sendkey %s" % NAMED.get(ch, ch), settle=settle)
+
+
+def slices_of(vm, mon, name, timeout=30):
+    """How many times the scheduler has run the task with this name, read
+    from /sys/tasks by /bin/cat. A program run by its path prints to the
+    kernel console, and that is the serial line, so the table can be read
+    back without reading the screen. None if it never turned up."""
+    start = len(vm.serial())
+    keys(mon, "/bin/cat /sys/tasks\n")
+    row = re.compile(r"^\s*\d+\s+\S+\s+\d\s+(\d+)\s+(\S+)\s*$")
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        text = vm.serial()[start:]
+        if "pid  state" in text:
+            for line in text.split("\n"):
+                m = row.match(line.strip("\r"))
+                if m and m.group(2).endswith(name):
+                    return int(m.group(1))
+        time.sleep(0.2)
+    return None
 
 
 def themed(rgb):
@@ -140,6 +162,44 @@ def main():
         keys(mon, "cat /cfg/term\n")
         _, _, _, shot, ok = mon.wait_screen("term-cfg", themed(AMBER))
         c.add("the terminal is still running after all of that", ok, shot)
+
+        # --- and left alone -----------------------------------------------
+        #
+        # It went round its loop every twenty milliseconds whether or not
+        # anything had happened, fifty wakes a second, and redrew the whole
+        # window for each blink of the cursor. Now it sleeps in win_wait until
+        # a key arrives or the cursor is due to change. Counted by the
+        # scheduler over five seconds of nothing, which is a rate and so a
+        # stretch of time rather than a condition; typing the second reading
+        # costs some wakes of its own, the same for any build. A slow host
+        # only makes the count smaller.
+        first = slices_of(vm, mon, "term")
+        time.sleep(5)
+        second = slices_of(vm, mon, "term")
+        woke = (second - first) if first is not None and second is not None else None
+        c.add("a terminal left alone wakes a few times a second, not fifty",
+              woke is not None and woke < 120)
+        print("      the terminal ran %s times in the five seconds and the reading" % (woke,))
+
+        # --- and a program built on the toolkit ---------------------------
+        #
+        # The calculator drew its whole window and committed it every sixteen
+        # milliseconds, sixty identical frames a second for the desktop to
+        # composite, whether or not anybody touched it. It sleeps in ui_wait
+        # now. Started in the background, since the terminal waits for
+        # anything started without the &, sent behind the terminal, the
+        # pointer parked where it is not, and counted the same way.
+        keys(mon, "run calc &\n")
+        time.sleep(3)
+        mon.send("sendkey alt-tab", settle=1.0)
+        mon.move_to(40, 740)
+        first = slices_of(vm, mon, "calc")
+        time.sleep(5)
+        second = slices_of(vm, mon, "calc")
+        woke = (second - first) if first is not None and second is not None else None
+        c.add("and a calculator nobody is using wakes a few times, not sixty a second",
+              woke is not None and woke < 60)
+        print("      the calculator ran %s times in the five seconds and the reading" % (woke,))
     finally:
         vm.stop()
 

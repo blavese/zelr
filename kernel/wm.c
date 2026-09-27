@@ -36,6 +36,7 @@
 #include "diskfs.h"
 #include "fbcon.h"
 #include "sched.h"
+#include "wait.h"
 #include "net.h"
 #include "netdev.h"
 #include "wifi.h"
@@ -625,6 +626,9 @@ void wm_close(window_t *w) {
        one kmalloc returned, and the server frees the real one when the owning
        program drops its handle. */
     if (w->canvas && !w->owned_by_user) kfree(w->canvas);
+    /* Anything asleep on this window finds it gone and hears a close, rather
+       than sleeping on a record that is about to be somebody else's. */
+    wake_all(w);
     kfree(w);
     need_frame();
 }
@@ -674,12 +678,13 @@ void wm_push_event(window_t *w, const wm_event_t *ev) {
         if (prev->type == WM_EV_MOUSE && prev->buttons == ev->buttons
             && w->q_prev_buttons == ev->buttons) {
             *prev = *ev;
+            wake_all(w);
             return;
         }
     }
 
     u32 next = (w->q_head + 1) % WM_EVENT_QUEUE;
-    if (next == w->q_tail) return;          /* full: drop this one, keep the backlog */
+    if (next == w->q_tail) { wake_all(w); return; }   /* full: drop this one, keep the backlog */
     w->queue[w->q_head] = *ev;
     w->q_head = next;
 
@@ -687,6 +692,7 @@ void wm_push_event(window_t *w, const wm_event_t *ev) {
         w->q_prev_buttons = w->q_last_buttons;
         w->q_last_buttons = ev->buttons;
     }
+    wake_all(w);                            /* a program in win_wait for this window */
 }
 
 bool wm_pop_event(window_t *w, wm_event_t *out) {
@@ -694,6 +700,10 @@ bool wm_pop_event(window_t *w, wm_event_t *out) {
     *out = w->queue[w->q_tail];
     w->q_tail = (w->q_tail + 1) % WM_EVENT_QUEUE;
     return true;
+}
+
+bool wm_has_event(const window_t *w) {
+    return w && w->q_head != w->q_tail;
 }
 
 /* --- compositing -------------------------------------------------------- */
