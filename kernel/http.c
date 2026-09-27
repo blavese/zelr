@@ -13,6 +13,7 @@
 #include "heap.h"
 #include "printf.h"
 #include "string.h"
+#include "timer.h"
 
 /* Bigger than the receive buffer underneath, on purpose: a page that fits
    in one is not a test of anything. */
@@ -78,6 +79,10 @@ int http_get(const char *spec, const char *path, const char *save_as) {
     net_format_ip(ip, addr);
     kprintf("connecting to %s (%s) port %d\n", host, addr, port);
 
+    /* Timed by the guest's own clock, because anything timing it from
+       outside also times whoever typed the command. The reads below give the
+       processor away while they wait, so the tick count keeps moving. */
+    u64 began = timer_ticks();
     int h = tcp_open(ip, port, 6000);
     if (h < 0) return HTTP_ERR_CONNECT;
 
@@ -133,6 +138,7 @@ int http_get(const char *spec, const char *path, const char *save_as) {
         if (!n) break;                     /* nothing in ten seconds */
     }
     done(h, secure);
+    u32 ms = (u32)((timer_ticks() - began) * 1000 / timer_hz());
 
     if (got == 0) {
         if (secure) kprintf("tls: %s\n", tls_error(h));
@@ -157,7 +163,8 @@ int http_get(const char *spec, const char *path, const char *save_as) {
     u32 blen = got - body;
     if (save_as && blen) fs_write(save_as, buf + body, blen);
 
-    kprintf("status %d, %d bytes of headers, %d bytes of body\n", status, body, blen);
+    kprintf("status %d, %d bytes of headers, %d bytes of body in %d ms\n",
+            status, body, blen, ms);
     if (save_as && blen) kprintf("saved to %s\n", save_as);
     else if (blen) {
         u32 show = blen < 400 ? blen : 400;

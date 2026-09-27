@@ -54,6 +54,12 @@
    than having its data thrown away. */
 #define RXCAP 65536
 
+/* Stretches that arrived past a hole and are kept, each in its place in the
+   receive buffer, until the hole is filled. A handful is plenty: one lost
+   frame leaves one stretch behind it, and a burst of losses leaves stretches
+   between them. */
+#define TCP_HELD 8
+
 typedef struct {
     u16 sport, dport;
     u32 seq, ack;
@@ -85,6 +91,15 @@ typedef struct {
 
     u8   *rxbuf;                  /* kept between connections on this slot */
     volatile u32 rxlen;
+
+    /* By sequence number, [lo, hi), all of them past rcv_nxt. Their bytes sit
+       in rxbuf at rxlen plus how far past rcv_nxt they start. */
+    u32  held_lo[TCP_HELD], held_hi[TCP_HELD];
+    u8   held;
+    bool fin_held;                /* a FIN arrived past a hole, at fin_at */
+    u32  fin_at;
+
+    bool quiet;                   /* the self test's: nothing goes on the wire */
 
     /* The task that opened it. A task ended while it waits inside one of the
        calls below never comes back to close what it opened, and six slots do
@@ -150,24 +165,37 @@ static u16 window_now(const tcpc *c) {
     return (u16)(free > 65535 ? 65535 : free);
 }
 
+/* The largest segment this end takes, said once in the SYN: a full Ethernet
+   frame less the IP and TCP headers. Unsaid, the other end has to assume
+   536, and a download came in pieces a third of the size they could be, each
+   one a frame, an interrupt and an acknowledgement. */
+#define TCP_MSS 1460
+
 /* Puts one segment on the wire. Does not touch the retransmit slot. */
 static bool emit(tcpc *c, u32 seq, u8 flags, const void *data, u16 dlen) {
+    if (c->quiet) return true;
     u8 seg[1500];
-    if (sizeof(tcp_t) + dlen > sizeof(seg)) return false;
+    u16 opts = (flags & TH_SYN) ? 4 : 0;
+    if (sizeof(tcp_t) + opts + dlen > sizeof(seg)) return false;
 
     tcp_t *t = (tcp_t *)seg;
     t->sport = np_hs(c->local_port);
     t->dport = np_hs(c->peer_port);
     t->seq = np_hl(seq);
     t->ack = np_hl(c->rcv_nxt);
-    t->offset = 5 << 4;
+    t->offset = (u8)((5 + opts / 4) << 4);
     t->flags = flags;
     t->window = np_hs(window_now(c));
     t->csum = 0;
     t->urgent = 0;
-    if (dlen) memcpy(seg + sizeof(tcp_t), data, dlen);
+    if (opts) {
+        u8 *o = seg + sizeof(tcp_t);
+        o[0] = 2; o[1] = 4;                         /* maximum segment size */
+        o[2] = (u8)(TCP_MSS >> 8); o[3] = (u8)TCP_MSS;
+    }
+    if (dlen) memcpy(seg + sizeof(tcp_t) + opts, data, dlen);
 
-    u16 total = (u16)(sizeof(tcp_t) + dlen);
+    u16 total = (u16)(sizeof(tcp_t) + opts + dlen);
     t->csum = np_hs(tcp_checksum(net_ip(), c->peer_ip, seg, total));
     return np_ip_send(c->peer_ip, 6, seg, total);
 }
@@ -256,6 +284,129 @@ static tcpc *demux(ipv4_t src, const tcp_t *t) {
     return 0;
 }
 
+/* How far past rcv_nxt the furthest held byte reaches, which is how much of
+   the buffer after rxlen is in use. */
+static u32 held_reach(const tcpc *c) {
+    u32 far = 0;
+    for (int i = 0; i < c->held; i++)
+        if (c->held_hi[i] - c->rcv_nxt > far) far = c->held_hi[i] - c->rcv_nxt;
+    return far;
+}
+
+static void unhold(tcpc *c, int i) {
+    c->held--;
+    c->held_lo[i] = c->held_lo[c->held];
+    c->held_hi[i] = c->held_hi[c->held];
+}
+
+/* Records [lo, hi) as arrived, merged with any stretch it touches. With every
+   slot taken the new stretch is forgotten: its bytes are in the buffer but
+   nothing counts them, so the peer sends them again, which is the old
+   behaviour and never wrong. */
+static void hold(tcpc *c, u32 lo, u32 hi) {
+    for (int i = 0; i < c->held; ) {
+        if ((i32)(lo - c->held_hi[i]) <= 0 && (i32)(c->held_lo[i] - hi) <= 0) {
+            if ((i32)(c->held_lo[i] - lo) < 0) lo = c->held_lo[i];
+            if ((i32)(c->held_hi[i] - hi) > 0) hi = c->held_hi[i];
+            unhold(c, i);
+            continue;                          /* the entry moved into i */
+        }
+        i++;
+    }
+    if (c->held < TCP_HELD) {
+        c->held_lo[c->held] = lo;
+        c->held_hi[c->held] = hi;
+        c->held++;
+    }
+}
+
+/* The hole in front of any held stretch that rcv_nxt has now reached is
+   filled, so its bytes, already in place, join what is ready to read. */
+static void absorb(tcpc *c) {
+    for (int i = 0; i < c->held; ) {
+        if ((i32)(c->held_lo[i] - c->rcv_nxt) > 0) { i++; continue; }
+        if ((i32)(c->held_hi[i] - c->rcv_nxt) > 0) {
+            u32 more = c->held_hi[i] - c->rcv_nxt;
+            c->rxlen += more;
+            c->rcv_nxt += more;
+        }
+        unhold(c, i);
+        i = 0;                                 /* rcv_nxt moved: look again */
+    }
+}
+
+/* Puts a segment's bytes where they belong and acknowledges what is now
+ * contiguous.
+ *
+ * Only a prefix that fits is taken, and only what is contiguous is
+ * acknowledged. Acknowledging the whole segment and keeping part of it told
+ * the peer the rest had arrived, so it was never sent again and the hole was
+ * never filled: the body came back with a piece missing out of the middle
+ * and nothing said so. A peer is allowed to be told a prefix was taken; it is
+ * not allowed to be told bytes arrived that were thrown away.
+ *
+ * Bytes past a hole used to be thrown away as well, and that was the slow
+ * part rather than the wrong part. A card whose ring overflowed on a burst
+ * lost the tail of a window; everything the peer sent after that landed past
+ * the hole and was dropped too, including its own quick resend of the first
+ * missing segment, and the transfer sat out the peer's retransmission timer,
+ * a second and a half of nothing, every time. Kept, one resend fills the
+ * hole and the acknowledgement jumps over everything behind it.
+ *
+ * How full the buffer is and what is in it are one fact and are changed
+ * together, with nothing else running. tcp_recv does the same on its side.
+ * Both of them are tasks now rather than one task and one interrupt handler,
+ * so neither is atomic against the other by construction, and the timer is
+ * what would come between them. */
+static void take(tcpc *c, u32 seq, const u8 *data, u16 dlen) {
+    i32 off = (i32)(seq - c->rcv_nxt);
+    if (off < 0) {
+        /* Sent again, and some or all of it is already here. */
+        if ((u32)-off >= dlen) { ooo_seen++; send_ack(c); return; }
+        data += -off;
+        dlen = (u16)(dlen - (u32)-off);
+        off = 0;
+    }
+
+    bool were_on = interrupts_enabled();
+    if (were_on) cli();
+    u32 room = RXCAP - c->rxlen;               /* the window, from rcv_nxt */
+    if ((u32)off < room) {
+        u32 n = dlen < room - (u32)off ? dlen : room - (u32)off;
+        memcpy(c->rxbuf + c->rxlen + (u32)off, data, n);
+        if (off == 0) {
+            c->rxlen += n;
+            c->rcv_nxt += n;
+            absorb(c);
+        } else {
+            u32 lo = c->rcv_nxt + (u32)off;
+            hold(c, lo, lo + n);
+        }
+    }
+    if (were_on) sti();
+
+    /* Out of order or past the window, the acknowledgement is repeated all
+       the same, so the peer learns which byte is actually wanted; three of
+       them are what sends it again at once. */
+    if (off) ooo_seen++;
+    send_ack(c);
+}
+
+static void fin_arrived(tcpc *c) {
+    c->rcv_nxt++;
+    c->got_fin = true;
+    c->fin_held = false;
+    send_ack(c);
+    if (c->state == T_OPEN) {
+        u32 ours = c->snd_nxt;                 /* not seq: that is the peer's */
+        c->snd_nxt = ours + 1;                 /* the FIN takes one */
+        c->state = T_CLOSING;
+        send_reliable(c, ours, TH_FIN | TH_ACK, 0, 0);
+    } else {
+        c->state = T_DONE;
+    }
+}
+
 void tcp_input(ipv4_t src, const u8 *p, u16 len) {
     if (len < sizeof(tcp_t)) return;
     const tcp_t *t = (const tcp_t *)p;
@@ -285,36 +436,7 @@ void tcp_input(ipv4_t src, const u8 *p, u16 len) {
 
     if (t->flags & TH_ACK) ack_arrived(c, np_nl(t->ack));
 
-    if (dlen) {
-        if (seq == c->rcv_nxt) {
-            /* Take what there is room for, and acknowledge only that.
-               Acknowledging the whole segment and keeping part of it told
-               the peer the rest had arrived, so it was never sent again and
-               the hole was never filled: the body came back with a piece
-               missing out of the middle and nothing said so. A peer is
-               allowed to be told a prefix was taken; it is not allowed to be
-               told bytes arrived that were thrown away.
-
-               How full the buffer is and what is in it are one fact and are
-               changed together, with nothing else running. tcp_recv does the
-               same on its side. Both of them are tasks now rather than one
-               task and one interrupt handler, so neither is atomic against
-               the other by construction, and the timer is what would come
-               between them. */
-            bool were_on = interrupts_enabled();
-            if (were_on) cli();
-            u32 room = RXCAP - c->rxlen;
-            u32 n = dlen < room ? dlen : room;
-            if (n) { memcpy(c->rxbuf + c->rxlen, data, n); c->rxlen += n; c->rcv_nxt += n; }
-            if (were_on) sti();
-            send_ack(c);
-        } else {
-            /* Out of order or already seen. Repeat the acknowledgement so the
-               peer learns which byte we are actually waiting for. */
-            ooo_seen++;
-            send_ack(c);
-        }
-    }
+    if (dlen) take(c, seq, data, dlen);
 
     /* A FIN is the end of the data, and it is only the end once the data
      * is all here.
@@ -333,22 +455,19 @@ void tcp_input(ipv4_t src, const u8 *p, u16 len) {
      * another inside the host's own network stack is all it takes, and the
      * last segment of a body is the one carrying the FIN.
      *
-     * Refusing it is enough on its own: the acknowledgement this end keeps
-     * repeating names the byte it is still waiting for, the peer sends it
-     * again, and the FIN that follows arrives in order. */
-    if ((t->flags & TH_FIN) && !c->got_fin && seq + dlen == c->rcv_nxt) {
-        c->rcv_nxt++;
-        c->got_fin = true;
-        send_ack(c);
-        if (c->state == T_OPEN) {
-            u32 ours = c->snd_nxt;             /* not seq: that is the peer's */
-            c->snd_nxt = ours + 1;             /* the FIN takes one */
-            c->state = T_CLOSING;
-            send_reliable(c, ours, TH_FIN | TH_ACK, 0, 0);
-        } else {
-            c->state = T_DONE;
+     * So one that arrives past a hole is remembered, not acted on, and it
+     * counts when the bytes before it are all in: rcv_nxt can only reach
+     * fin_at by every byte before it having arrived. Refusing it outright
+     * was correct too, but it cost the peer's whole retransmission timeout
+     * on every body whose last segment came in behind a loss. */
+    if ((t->flags & TH_FIN) && !c->got_fin) {
+        u32 at = seq + dlen;
+        if ((i32)(at - c->rcv_nxt) >= 0 && at - c->rcv_nxt <= RXCAP) {
+            c->fin_held = true;
+            c->fin_at = at;
         }
     }
+    if (c->fin_held && !c->got_fin && c->fin_at == c->rcv_nxt) fin_arrived(c);
 }
 
 /* A slot nobody is using, with its buffer allocated.
@@ -399,6 +518,7 @@ void tcp_abandon(u32 pid) {
         c->state = T_CLOSED;
         c->rt_pending = false;
         c->rxlen = 0;
+        c->held = 0;
         c->used = false;
     }
 }
@@ -445,6 +565,9 @@ int tcp_open(ipv4_t ip, u16 port, u32 timeout_ms) {
     c->snd_una = c->snd_nxt;
     c->rcv_nxt = 0;
     c->rxlen = 0;
+    c->held = 0;
+    c->fin_held = false;
+    c->quiet = false;
     c->got_fin = false;
     c->rt_pending = false;
     c->state = T_SYNSENT;
@@ -541,9 +664,12 @@ u32 tcp_recv(int h, u8 *out, u32 cap, u32 timeout_ms) {
 
     u32 n = c->rxlen < cap ? c->rxlen : cap;
     if (n) {
+        /* The held stretches move down with the rest: where they sit is
+           counted from rxlen. */
+        u32 end = c->rxlen + held_reach(c);
         memcpy(out, c->rxbuf, n);
         c->rxlen -= n;
-        if (c->rxlen) memmove(c->rxbuf, c->rxbuf + n, c->rxlen);
+        if (end > n) memmove(c->rxbuf, c->rxbuf + n, end - n);
     }
 
     if (were_on) sti();
@@ -586,6 +712,7 @@ void tcp_close(int h) {
        connection, because `used` is what a handle is checked against. */
     c->used = false;
     c->rxlen = 0;
+    c->held = 0;
 }
 
 bool tcp_connected(int h) {
@@ -596,4 +723,59 @@ bool tcp_connected(int h) {
 int tcp_state_code(int h) {
     const tcpc *c = slot(h);
     return c ? (int)c->state : (int)T_CLOSED;
+}
+
+/* Just short of the wrap, so the test's sequence numbers cross it and every
+   comparison above has to be the signed kind. */
+#define TEST_BASE 0xFFFFFFF8u
+
+int tcp_test_open(void) {
+    int h = take_slot();
+    if (h < 0) return -1;
+    tcpc *c = &conns[h];
+    c->quiet = true;                           /* before anything can send */
+    c->peer_ip = 0x0A0002FEu;
+    c->peer_port = 1;                          /* below any port tcp_open uses */
+    c->local_port = 1;
+    c->snd_nxt = c->snd_una = 0;
+    c->rcv_nxt = TEST_BASE;
+    c->rxlen = 0;
+    c->held = 0;
+    c->fin_held = false;
+    c->got_fin = false;
+    c->rt_pending = false;
+    c->state = T_OPEN;
+    return h;
+}
+
+void tcp_test_segment(int h, u32 off, const char *data, u16 len, bool fin) {
+    tcpc *c = slot(h);
+    if (!c || !c->quiet || len > 64) return;
+    u8 seg[sizeof(tcp_t) + 64];
+    tcp_t *t = (tcp_t *)seg;
+    memset(t, 0, sizeof(tcp_t));
+    t->sport = np_hs(c->peer_port);
+    t->dport = np_hs(c->local_port);
+    t->seq = np_hl(TEST_BASE + off);
+    t->offset = 5 << 4;
+    t->flags = (u8)(TH_PSH | (fin ? TH_FIN : 0));
+    if (len) memcpy(seg + sizeof(tcp_t), data, len);
+    tcp_input(c->peer_ip, seg, (u16)(sizeof(tcp_t) + len));
+}
+
+u32 tcp_test_next(int h) {
+    const tcpc *c = slot(h);
+    return c ? c->rcv_nxt - TEST_BASE : 0;
+}
+
+void tcp_test_close(int h) {
+    tcpc *c = slot(h);
+    if (!c || !c->quiet) return;
+    c->state = T_CLOSED;
+    c->rt_pending = false;
+    c->rxlen = 0;
+    c->held = 0;
+    c->fin_held = false;
+    c->quiet = false;
+    c->used = false;
 }

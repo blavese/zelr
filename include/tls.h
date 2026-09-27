@@ -51,6 +51,9 @@ int tls_flight_step(int step, u8 type, const char **why);
    the clear if it is null. */
 u32 tls_test_alert(const u8 *secret, u8 desc, u8 *out, u32 cap);
 
+/* How many writes to TCP the last of those took: one a record. */
+u32 tls_test_writes(void);
+
 /* A session in mid conversation under these application secrets, handed
    `in` as what arrived: what it gives back as data, what it sent, and the
    secrets it ended with. */

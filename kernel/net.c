@@ -15,6 +15,7 @@
 #include "io.h"
 #include "tcp.h"
 #include "sched.h"
+#include "wait.h"
 
 #define ETH_P_IP   0x0800
 #define ETH_P_ARP  0x0806
@@ -175,9 +176,19 @@ static void arp_send(u16 oper, const u8 *target_mac, ipv4_t target_ip) {
  * length of a timeout.
  *
  * Before there are tasks there is nobody to hand the processor to, and nothing
- * in the stack waits then; halting with interrupts on is the fallback. */
+ * in the stack waits then; halting with interrupts on is the fallback.
+ *
+ * Put down until the next frame arrives, or a tick at most, rather than for
+ * the tick whatever happens. The handshake, the answer to a request and every
+ * acknowledgement of a send are waited for here, and a wait that could have
+ * ended in a fraction of a millisecond sat out the rest of the tick: on the
+ * wire, connections that took 11 ms took 18 or 28 whenever one landed badly.
+ * The card's interrupt wakes the wait (net_receive); a card that is only
+ * polled wakes nobody and the tick is the limit, as it was. */
+static u8 net_arrived;               /* the address a waiter sleeps on */
+
 void net_wait(void) {
-    if (task_current()) { task_sleep(1); return; }
+    if (task_current()) { wait_on(&net_arrived, 10); return; }
     if (interrupts_enabled()) hlt();
 }
 
@@ -451,6 +462,7 @@ void net_receive(const u8 *frame, u16 len) {
 
     u32 depth = net_rx_queued();
     if (depth > rxq_deepest) rxq_deepest = depth;
+    wake_all(&net_arrived);          /* whoever is waiting has something to look at */
 }
 
 static u16 frame_type(const rxq_slot_t *slot) {

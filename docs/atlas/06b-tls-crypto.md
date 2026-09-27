@@ -690,7 +690,11 @@ Content signed = 64 × 0x20 ‖ `"TLS 1.3, server CertificateVerify"` ‖ 0x00 �
 ### 4.3 Record layer and data path
 
 **Write**: `tls_send` → ≤8192-byte chunks → `send_encrypted` (inner type 23) → `write_all`
-(header 5 bytes, then body+tag, each in ≤1400-byte TCP segments, each waiting for its ACK).
+(header 5 bytes, then body+tag, each in ≤1400-byte TCP segments, each waiting for its ACK). Since
+0.47.0 the header is built in front of the body in `z->rec` and the record goes in one `write_all`,
+in both `send_encrypted` and `send_plain_record` (which `memmove`s, because the ClientHello is built in
+`z->rec`). The header used to go as a segment of its own and wait for the server's delayed ACK before
+the body could follow. `[tls 1.3]` counts the writes a record takes (`tls_test_writes`).
 Nonces: `c_iv XOR c_seq`; `c_seq` reset to 0 by every `set_keys(…, true)`. No padding, no
 record size limit negotiation, no sequence-number wrap check. A KeyUpdate is sent only in
 answer to a server's `update_requested` (0.42.0), never on this end's own initiative.

@@ -95,6 +95,33 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.47.0: a download fifty times faster
+
+Each change has a check that was run against a build broken for it alone and seen to fail there; the
+gains were measured on the guest's own clock and on QEMU's capture of the card's traffic.
+
+- **A measurement (06a §3.10).** `fetch` prints how long the exchange took, timed with the guest's
+  ticks from `tcp_open` to the close: timing it from the host had measured the harness typing.
+- **The e1000 ring (06a §10 M2).** 128 descriptors rather than 32. slirp sends a whole 64 KiB window,
+  45 frames, in 0.37 ms, and 31 usable descriptors lost the last 13 of every burst; each loss then cost
+  slirp's retransmission timer, 1.5 s. 250,000 bytes took 800-1000 ms and take 10-20 ms (a 10 ms tick),
+  with nothing resent and nothing out of order. webcheck counts the server's resends in the capture: 73
+  with the old ring.
+- **Bytes past a hole are kept (06a §3.9).** `take`/`hold`/`absorb`: in place in the receive buffer, up
+  to 8 stretches, and a FIN past a hole waits for it. Measured honestly: with the old ring it made no
+  difference (780-990 ms), because the losses came 13 at a time and a sender without selective
+  acknowledgements repairs one a round; it is kept because a single loss then costs one resend rather
+  than a timer. New self test section `[tcp]`, 8 checks, fed by hand across the sequence wrap.
+- **Waiting for the network (06a §10 D1).** `net_wait` sleeps on a channel `net_receive` wakes rather
+  than for a whole tick. On the wire: with the tick wait two of five connections took 18.3 and 27.9 ms,
+  sitting out ticks; with the wake none of ten took more than 13.4 ms (4.5 ms of it the server).
+- **The send side (06a §10 M1, 06b).** A SYN offers MSS 1460 (webcheck reads it from the capture), and
+  a TLS record goes to TCP in one write, header and body together (two `[tls 1.3]` checks).
+
+Counts after 0.47.0:
+- selftest 652 (pc, 64 MiB), 658 (256 MiB), 666 (q35), 679 (`-smp 4`), in 51 sections;
+- gate full 53 steps.
+
 ### 0.46.0: drawing a frame ten times cheaper
 
 Each change has a check that was run against a build broken for it alone and seen to fail there; the

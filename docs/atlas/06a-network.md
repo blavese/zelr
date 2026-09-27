@@ -106,7 +106,15 @@ table in kernel/syscall.c that maps socket numbers to TCP handles and records th
   webserver.py's `instant_args` (guestfwd, 10.0.2.100) exists only to reproduce this.
 * **Only acknowledge what was stored; the window is the real free space** (tcp.c:139-145, 284-291).
 * **A FIN counts only in order** (tcp.c:313-332): acting on an out-of-order FIN ended 200 KB bodies with a hole
-  "about half the time".
+  "about half the time". Since 0.47.0 one past a hole is remembered (`fin_held`, `fin_at`) and counts when `rcv_nxt`
+  reaches it, which can only happen once every byte before it has arrived.
+* **Bytes past a hole are kept** (since 0.47.0; `take`, `hold`, `absorb` in tcp.c): each segment is copied to its place in
+  `rxbuf` (at `rxlen` plus how far past `rcv_nxt` it starts) and up to `TCP_HELD` 8 stretches are recorded by sequence
+  number; filling the hole absorbs them and the acknowledgement jumps over them. They used to be dropped, and a card that
+  lost the tail of a burst then cost the transfer slirp's whole retransmission timer (1.5 s by the capture).
+* **The e1000 ring holds more than a full window** (since 0.47.0, `RX_DESCS 128`): a peer sends a whole 64 KiB window
+  (45 frames) in one burst, and 32 descriptors (31 usable) lost the last 13 of every one before the guest looked at the
+  first. PCnet's 64 already held a window; the RTL8139's 8 KiB ring holds five frames and is still open (§10).
 * **Ports are walked and checked against live connections** (tcp.c:91-96, 378-395): clock-derived ports collided within
   one tick (a redirect closes and reopens in the same instant), and a wrapping counter alone can collide with a
   long-lived connection.
@@ -201,7 +209,7 @@ RCTL 0x0100, TCTL 0x0400, TIPG 0x0410, RDBAL/RDBAH/RDLEN/RDH/RDT 0x2800-0x2818, 
 MTA 0x5200, RAL 0x5400, RAH 0x5404. Bits: CTRL_SLU (1<<6, "set link up"), CTRL_ASDE (1<<5); RCTL_EN, SBP (unused),
 UPE, MPE, BAM (1<<15), SECRC (1<<26), SZ_2048 = 0; TCTL_EN, PSP, CT = 0x0F<<4, COLD = 0x40<<12; ICR_RXT0 (1<<7).
 
-Rings (68-89): `RX_DESCS 32`, `TX_DESCS 16`, `BUF_SIZE 2048`. `rx_desc_t {u64 addr; u16 length; u16 checksum; u8 status;
+Rings (68-89): `RX_DESCS 32` (128 since 0.47.0: more than the 45 frames of a full window), `TX_DESCS 16`, `BUF_SIZE 2048`. `rx_desc_t {u64 addr; u16 length; u16 checksum; u8 status;
 u8 errors; u16 special;}` and `tx_desc_t {u64 addr; u16 length; u8 cso; u8 cmd; u8 status; u8 css; u16 special;}`,
 both packed, 16 bytes. Rings are `volatile` because the card writes them (94-96).
 
@@ -212,8 +220,8 @@ Functions:
 * `alloc_aligned(bytes, align, &raw)` (115-122): `kmalloc(bytes+align)`, rounds up, zeroes; never freed.
 * `read_mac()` (124-151): RAL/RAH if non-zero (the card latches the EEPROM address at reset); otherwise EERD words 0..2
   with `start = 1`, address `<< 8`, done bit 4, 1,000,000-spin timeout each (82540-style EERD layout).
-* `rx_init()` (153-175): 32 descriptors, `kmalloc(2048)` buffers; RDBAL/RDBAH = ring (64-bit), RDLEN, RDH 0,
-  RDT 31 ("the card owns everything up to here"); RCTL = EN | BAM | SECRC | 2048 | UPE | MPE (promiscuous unicast and
+* `rx_init()` (153-175): `RX_DESCS` descriptors, `kmalloc(2048)` buffers; RDBAL/RDBAH = ring (64-bit), RDLEN, RDH 0,
+  RDT `RX_DESCS - 1` ("the card owns everything up to here"); RCTL = EN | BAM | SECRC | 2048 | UPE | MPE (promiscuous unicast and
   multicast; no reason given).
 * `tx_init()` (177-201): 16 descriptors with status DD=1 (free); TDH = TDT = 0; TCTL = EN | PSP | CT | COLD;
   TIPG 0x0060200A.
@@ -467,6 +475,9 @@ Types: `tcp_t` 20-byte header, packed (56-61). `tstate_t { T_CLOSED, T_SYNSENT, 
 | `bool rt_pending; u64 rt_sent_at; u32 rt_timeout_ms; int rt_tries` | retransmission timer |
 | `u8 *rxbuf` | 64 KiB receive buffer, allocated on first use of the slot and kept |
 | `volatile u32 rxlen` | bytes buffered |
+| `u32 held_lo[8], held_hi[8]; u8 held` | since 0.47.0: stretches past a hole, by sequence number, already in `rxbuf` |
+| `bool fin_held; u32 fin_at` | since 0.47.0: a FIN that arrived past a hole |
+| `bool quiet` | the self test's connection: `emit` sends nothing |
 
 Globals: `conns[TCP_MAX]` (89), `next_port` (96), `rst_seen, ooo_seen, rt_total` (101).
 
@@ -474,7 +485,7 @@ Functions:
 * `slot(h)` (117-121): range + `used` check (no generation counter).
 * `tcp_checksum(src, dst, seg, len)` (123-137): pseudo-header + segment. Used only for sending.
 * `window_now(c)` (142-145): `min(65535, RXCAP - rxlen)`.
-* `emit(c, seq, flags, data, dlen)` (148-167): builds a 20-byte header (data offset 5, **no options -- no MSS**), ack =
+* `emit(c, seq, flags, data, dlen)` (148-167): builds a 20-byte header (data offset 5, **no options -- no MSS**; since 0.47.0 a SYN carries MSS 1460, `TCP_MSS`, at data offset 6), ack =
   `rcv_nxt`, window, checksum; `np_ip_send(peer, 6, ...)`. Refuses `20 + dlen > 1500`.
 * `send_reliable(...)` (174-187): refuses dlen > 1400; records the segment, `rt_tries = 0`, `rt_timeout_ms = 400`,
   timestamp; `emit`.
@@ -491,7 +502,12 @@ Functions:
   processing; data: in-order (`seq == rcv_nxt`) -> copy what fits under `cli`, advance `rcv_nxt` by what was stored,
   ACK; anything else -> `ooo_seen++`, duplicate ACK (no reassembly queue); FIN only if `seq + dlen == rcv_nxt` and not
   already seen: `rcv_nxt++`, `got_fin`, ACK; if `T_OPEN` -> immediately send our FIN|ACK reliably and go `T_CLOSING`;
-  else (we had already closed) -> `T_DONE`. The peer's advertised window and options are ignored. Checksums are not verified.
+  else (we had already closed) -> `T_DONE`. **Since 0.47.0** data goes through `take()`: a resend overlapping `rcv_nxt`
+  is trimmed to its new bytes; anything inside the window is copied to its place and either advances `rcv_nxt` (then
+  `absorb()` swallows held stretches it reached) or is recorded by `hold()` (merged; with all 8 slots taken the stretch
+  is forgotten and resent by the peer); every data segment is acknowledged, out of order ones counting `ooo_seen`. A
+  FIN inside the window is remembered as `fin_at` and `fin_arrived()` runs when `rcv_nxt == fin_at`. `tcp_recv`'s
+  `memmove` carries the held bytes too (`held_reach`). The peer's advertised window and options are ignored. Checksums are not verified.
 * `take_slot()` (354-366): first unused slot, allocating its 64 KiB buffer once.
 * `tcp_open(ip, port, timeout)` (368-438): seed `next_port = 45000 + (ticks & 0xFFF)` once; take a slot; choose a local
   port by walking `next_port` in [45000, 61000) past ports used by live connections; **ISN = 0x5A4C5200 ^ (ticks x
@@ -525,7 +541,9 @@ Errors: `HTTP_ERR_RESOLVE -1`, `CONNECT -2`, `SEND -3`, `MEMORY -4`, `EMPTY -5`,
   read until the peer ends or a 10 s read returns nothing (`BODY_CAP` reached = silent truncation); `done()`;
   split headers at the first CRLFCRLF (none -> everything is "body"); status from bytes 9-11 when the reply starts with
   'H' (no digit validation); `fs_write(save_as, body)` when asked (**in-memory fs, see D3**); prints
-  "status S, H bytes of headers, B bytes of body" (webcheck.py parses this line) and either "saved to X" or the first
+  "status S, H bytes of headers, B bytes of body" (webcheck.py parses this line; since 0.47.0 followed by " in N ms",
+  timed on the guest's own clock from `tcp_open` to `done()`, because anything timing it from outside also times the
+  typing) and either "saved to X" or the first
   400 body bytes. No redirects, no chunked decoding, no gzip, no cookies -- those exist only in userland/fetch.h.
 
 ### 3.11 include/wifi.h (42) and kernel/wifi.c (64)
@@ -927,6 +945,12 @@ was set carried no cookie", "and one after it carried what was set".
 **tools/webcheck.py** (gate `webtest`, kernel `fetch`): /size/1000 status 200 and length, again, /size/200000 three times
 whole, /size/40000, /slow (2000 bytes), 404; the same on `model=pcnet` (1000 and 200000 bytes -- the ring-sizing check);
 `model=ne2k_pci` reported as "10ec:8029" and not "no network card" (netdev_undriven); guestfwd instant server (/size/1000).
+Since 0.47.0 the first machine's traffic is written by a QEMU `filter-dump`, and two checks read it: the guest's SYN
+offers MSS 1460, and no data segment of the server's was sent twice (the e1000 ring against a full window).
+
+**Self test `[tcp]`** (since 0.47.0): a quiet connection fed by hand across the sequence wrap -- bytes past a hole kept
+and not acknowledged, read around, absorbed when the hole fills; a FIN past a hole waits; a resend overlapping what
+arrived is trimmed.
 
 **tools/tlscheck.py** (kernel `fetch https://`, `model=rtl8139`, live internet): handshakes and statuses for real
 sites, a non-TLS server on :80 refused with a `tls:` message, plain http still works.
@@ -936,7 +960,8 @@ and sdk/zelr.h.
 
 Browser harnesses (browsercheck, formcheck, livecheck, findcheck, shots) exercise the socket path indirectly.
 
-**Not covered by any test**: TCP retransmission/timeout/RST paths, zero window, out-of-order handling (only incidentally),
+**Not covered by any test**: TCP retransmission/timeout/RST paths, zero window, out-of-order handling on the wire (the
+`[tcp]` section covers it fed by hand), running out of the eight held stretches,
 DHCP loss/NAK, DNS loss (slirp never drops), inbound pings, ARP eviction, USB TCP traffic (netcheck's USB machine only
 does DHCP), USB unplug/replug, `fetch ... SAVEAS`, pcnet beyond webcheck, rtl8139 outside tlscheck/selftest,
 the unused webserver endpoints, and anything that depends on network syscalls timing out (slirp answers instantly, so
@@ -984,7 +1009,7 @@ forwarding to the internet (README:1623-1627). run.sh uses rtl8139, zelr.bat use
 
 Severity: H = can hang or corrupt, M = wrong behaviour, L = minor. All items are from static reading unless noted.
 
-**D1 (H) FIXED in 0.39.0 (net_wait; see atlas README). Network system calls wait with interrupts off, so their timeouts and TCP retransmission cannot work, and the
+**D1 (H) FIXED in 0.39.0 (net_wait; see atlas README). Since 0.47.0 `net_wait` is `wait_on(&net_arrived, 10)` and `net_receive` wakes it, so a wait ends when a frame arrives rather than always after a whole tick; a polled card still waits the tick. Network system calls wait with interrupts off, so their timeouts and TCP retransmission cannot work, and the
 whole kernel stalls while they wait.** Chain: `int 0x80` is an interrupt gate (idt.c:62-63), so IF = 0 for the whole call
 (sched.h:180-183; fd.c:192-212 is the author's explicit workaround for console reads, and nothing equivalent exists for
 the network). `sys_connect/sys_connect_tls/sys_send/sys_recv/sys_disconnect/sys_resolve` (syscall.c:747-898) call
@@ -1052,9 +1077,24 @@ tests `net_up()`, which is the same function (net.c:836); the "no address yet" b
 checked (syscall.c:752, 784); with no address a program gets NET_ERR_RESOLVE or NET_ERR_CONNECT. `SYS_NETINFO.up` is also
 card presence.
 
-**M1 (M/L) No MSS option.** Every SYN has a bare 20-byte header (tcp.c:157). RFC-conforming peers (Linux, for example)
+**M1 FIXED in 0.47.0 (`emit` puts option 2 = 1460 on every SYN, data offset 6; webcheck reads the guest's SYN out of a QEMU `filter-dump` capture, and failed with the option taken out). No MSS option.** Every SYN has a bare 20-byte header (tcp.c:157). RFC-conforming peers (Linux, for example)
 then assume 536-byte segments, so a full 64 KiB window is about 122 segments, more than the 64-slot RX queue and the
 64-descriptor PCnet ring whose sizing comment (pcnet.c:72-75) assumes large segments. slirp uses 1460, so tests never see it.
+
+**M2 FIXED in 0.47.0 (e1000 `RX_DESCS 128`; `take`/`hold`/`absorb` keep bytes past a hole; `[tcp]` self test and webcheck's
+resend count, each seen failing with its part taken out). A download spent most of its time waiting for a timer.** Found
+by timing `fetch` on the guest's clock and capturing its traffic: slirp sends a whole 64 KiB window, 45 frames, in 0.37 ms;
+the e1000 ring had 31 usable descriptors, so the last 13 of every burst were lost before the guest had looked at the
+first (exactly 13 every time). Every segment after the hole was then dropped as out of order, the server's own fast
+resend of the first missing one included, and the connection sat out slirp's retransmission timer: 207 KB in the first
+11 ms, then 1.5 s of nothing. 250,000 bytes took 800-1000 ms; they now take 10-20 ms (the tick is 10 ms), with no resends
+and nothing out of order. The ring is sized for a single connection's burst plus a second; several connections bursting
+at once can still overflow it, and that now costs one resend rather than a timer.
+
+**M3 (L) The RTL8139's receive ring holds five frames.** `RX_BUF_SIZE 8192` (rtl8139.c:42) against a 45-frame window,
+so a fast peer overruns it on every window. The card's largest mode (64 KiB + 16, where WRAP no longer applies and a
+frame that wraps has to be copied out) still holds about 43. Kept bytes past a hole make each loss cost a resend rather
+than a timer; tlscheck, the only harness on this card, fetches small pages.
 
 **D13 (L) No receive-side verification.** IP header, ICMP, UDP and TCP checksums are never checked (net.c:311-331,
 tcp.c:253-346) although README:517 says "IPv4 with checksums"; IP fragments are not reassembled or even recognised.

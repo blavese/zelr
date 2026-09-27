@@ -16,6 +16,7 @@ to arrive at once.
   python tools/webcheck.py [--keep]
 """
 import os
+import struct
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -23,6 +24,87 @@ from harness import Guest, Checks, build_once, ROOT      # noqa: E402
 from webserver import Server, INSTANT_IP                 # noqa: E402
 
 DISK = os.path.join(ROOT, "webcheck.%d.img" % os.getpid())
+PCAP = os.path.join(ROOT, "webcheck.%d.pcap" % os.getpid())
+
+
+def syn_mss(path):
+    """The segment size the guest offered in its first SYN, read from the
+    capture QEMU wrote of the card's traffic: 0 for a SYN that offered none,
+    None if there was no SYN at all.
+
+    The MSS itself makes no difference here -- QEMU's user networking takes
+    1460 when none is offered -- which is exactly why it has to be read off
+    the wire: the transfers cannot show it, and a real server that assumed
+    536 would have sent a third of what it could in every segment."""
+    try:
+        data = open(path, "rb").read()
+    except OSError:
+        return None
+    at = 24                                   # past the file's own header
+    while at + 16 <= len(data):
+        incl = struct.unpack_from("<I", data, at + 8)[0]
+        frame = data[at + 16:at + 16 + incl]
+        at += 16 + incl
+        if len(frame) < 54 or frame[12:14] != b"\x08\x00":
+            continue
+        ip = frame[14:]
+        if ip[9] != 6:
+            continue
+        tcp = ip[(ip[0] & 15) * 4:]
+        if len(tcp) < 20 or not (tcp[13] & 0x02) or (tcp[13] & 0x10):
+            continue                          # a SYN, and not the answer to one
+        opts = tcp[20:(tcp[12] >> 4) * 4]
+        i = 0
+        while i < len(opts) and opts[i] != 0:
+            if opts[i] == 1:
+                i += 1
+                continue
+            if i + 1 >= len(opts) or opts[i + 1] < 2:
+                break
+            if opts[i] == 2 and opts[i + 1] == 4:
+                return struct.unpack(">H", opts[i + 2:i + 4])[0]
+            i += opts[i + 1]
+        return 0
+    return None
+
+
+def resent(path, port):
+    """How many data segments the server on this port sent more than once,
+    read from the same capture.
+
+    A burst is a whole window, 45 frames, and the card's receive ring held 31
+    of them: the rest were lost every time, and the downloads still came back
+    whole, only a second and a half late while the server's timer ran out.
+    Nothing in the transfers shows that except how long they take, which is
+    not a thing to assert on; the resends are. A host that stalls the guest
+    for longer than that timer would show here as well."""
+    try:
+        data = open(path, "rb").read()
+    except OSError:
+        return None
+    seen = set()
+    again = 0
+    at = 24
+    while at + 16 <= len(data):
+        incl = struct.unpack_from("<I", data, at + 8)[0]
+        frame = data[at + 16:at + 16 + incl]
+        at += 16 + incl
+        if len(frame) < 54 or frame[12:14] != b"\x08\x00":
+            continue
+        ip = frame[14:]
+        if ip[9] != 6:
+            continue
+        total = struct.unpack(">H", ip[2:4])[0]
+        tcp = ip[(ip[0] & 15) * 4:total]
+        if len(tcp) < 20 or struct.unpack(">H", tcp[0:2])[0] != port:
+            continue
+        if len(tcp) - (tcp[12] >> 4) * 4 <= 0:
+            continue                          # carries nothing to resend
+        key = (struct.unpack(">H", tcp[2:4])[0], struct.unpack(">I", tcp[4:8])[0])
+        if key in seen:
+            again += 1
+        seen.add(key)
+    return again
 
 
 def fetched(vm, host, path, timeout=90):
@@ -47,7 +129,12 @@ def main():
     c = Checks("the web")
 
     with Server() as srv:
-        vm = Guest(DISK, memory=192, extra=srv.qemu_args())
+        # The card named, so QEMU can be asked to write down its traffic.
+        wire = ["-netdev", "user,id=n0", "-device", "e1000,netdev=n0",
+                "-object", "filter-dump,id=d0,netdev=n0,file=%s" % PCAP.replace("\\", "/")]
+        if os.path.exists(PCAP):
+            os.remove(PCAP)
+        vm = Guest(DISK, memory=192, extra=wire)
         try:
             vm.wait_boot()
             vm.run("dhcp", timeout=25)
@@ -101,6 +188,21 @@ def main():
                   (fetched(vm, srv.host, "/nothing-here") or (0,))[0] == 404)
         finally:
             vm.stop()
+
+        mss = syn_mss(PCAP)
+        c.add("a connection offers a full segment size when it opens", mss == 1460)
+        if mss != 1460:
+            print("      the SYN offered %r" % (mss,))
+        again = resent(PCAP, srv.port)
+        c.add("a whole window arrives without the server sending any of it twice",
+              again == 0)
+        if again != 0:
+            print("      the server sent %r segments again" % (again,))
+        if not keep:
+            try:
+                os.remove(PCAP)
+            except OSError:
+                pass
 
         # --- and again on the other card ----------------------------------
         #

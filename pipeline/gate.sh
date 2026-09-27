@@ -689,7 +689,8 @@ for pat in 'gpttest.*.img' 'fat32test.*.img' 'nvmetest.*.img' 'clipcheck.*.img' 
            'shotcheck.*.img' 'termcheck.*.img' 'deskcheck.*.img' 'usbcheck.*.img' \
            'fat32probe.*.txt' 'fat32high.*.txt' 'hangcheck.*.img' 'mounttrace.*.log' \
            'bigfile.*.img' 'bigfile.*.big' 'bigfile.*.huge' \
-           'files.*.img' 'files.*.letter' 'files.*.zeta' 'files.*.box'; do
+           'files.*.img' 'files.*.letter' 'files.*.zeta' 'files.*.box' \
+           'webcheck.*.pcap'; do
   stale "$pat"
 done
 rm -f build/*.ppm 2>/dev/null

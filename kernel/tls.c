@@ -174,6 +174,9 @@ static const u8 *test_in;
 static u32 test_in_len, test_in_pos;
 static u8 *test_out;
 static u32 test_out_len, test_out_cap;
+static u32 test_writes;          /* how many writes a record took */
+
+u32 tls_test_writes(void) { return test_writes; }
 
 static bool read_exact(tls_t *z, u8 *out, u32 n, u32 timeout_ms) {
     if (test_in) {
@@ -199,6 +202,7 @@ static bool write_all(tls_t *z, const u8 *p, u32 n) {
         if (test_out_cap - test_out_len < n) return false;
         memcpy(test_out + test_out_len, p, n);
         test_out_len += n;
+        test_writes++;
         return true;
     }
     while (n) {
@@ -220,10 +224,22 @@ static void nonce_for(u8 out[12], const u8 iv[12], u64 seq) {
         out[11 - i] ^= (u8)(seq >> (i * 8));
 }
 
+/* A record goes to TCP in one write, its five byte header in front of its
+   body. They went as two, and with one segment in flight the header went
+   alone and waited for its acknowledgement -- which a server delays, 40 ms
+   on Linux and up to 200 elsewhere, in the hope of something to carry it
+   with -- before the body could follow: once for every record, the
+   ClientHello included. z->rec has room for the header in front.
+ *
+ * The data may be z->rec itself (the ClientHello is built there), so it is
+ * moved rather than copied. */
 static bool send_plain_record(tls_t *z, u8 type, const u8 *data, u32 len) {
-    u8 head[5] = { type, 0x03, 0x03, (u8)(len >> 8), (u8)len };
-    if (!write_all(z, head, 5)) return false;
-    return write_all(z, data, len);
+    if (len > REC_MAX) return false;
+    u8 *out = z->rec;
+    memmove(out + 5, data, len);
+    out[0] = type; out[1] = 0x03; out[2] = 0x03;
+    out[3] = (u8)(len >> 8); out[4] = (u8)len;
+    return write_all(z, out, len + 5);
 }
 
 /* An encrypted record hides what kind of record it is: the real type goes
@@ -231,13 +247,15 @@ static bool send_plain_record(tls_t *z, u8 type, const u8 *data, u32 len) {
 static bool send_encrypted(tls_t *z, u8 inner_type, const u8 *data, u32 len) {
     if (len + 1 + GCM_TAG > REC_MAX) return false;
 
-    u8 *buf = z->rec;
-    memcpy(buf, data, len);
+    u8 *head = z->rec;
+    u8 *buf = z->rec + 5;
+    memmove(buf, data, len);
     buf[len] = inner_type;
     u32 body = len + 1;
 
     u32 total = body + GCM_TAG;
-    u8 head[5] = { REC_APPDATA, 0x03, 0x03, (u8)(total >> 8), (u8)total };
+    head[0] = REC_APPDATA; head[1] = 0x03; head[2] = 0x03;
+    head[3] = (u8)(total >> 8); head[4] = (u8)total;
 
     u8 nonce[12];
     nonce_for(nonce, z->c_iv, z->c_seq);
@@ -246,8 +264,7 @@ static bool send_encrypted(tls_t *z, u8 inner_type, const u8 *data, u32 len) {
     z->c_seq++;
 
     memcpy(buf + body, tag, GCM_TAG);
-    if (!write_all(z, head, 5)) return false;
-    return write_all(z, buf, total);
+    return write_all(z, head, total + 5);
 }
 
 /* --- saying why ----------------------------------------------------------
@@ -1134,7 +1151,7 @@ u32 tls_test_alert(const u8 *secret, u8 desc, u8 *out, u32 cap) {
     if (!scratch_begin()) { scratch_end(); return 0; }
     u32 n = 0;
     if (!secret || set_keys(&scratch, secret, true)) {
-        test_out = out; test_out_len = 0; test_out_cap = cap;
+        test_out = out; test_out_len = 0; test_out_cap = cap; test_writes = 0;
         send_alert(&scratch, desc);
         n = test_out_len;
     }
@@ -1152,7 +1169,7 @@ u32 tls_test_recv(const u8 s_app[32], const u8 c_app[32], const u8 *in, u32 in_l
     if (set_keys(&scratch, s_app, false) && set_keys(&scratch, c_app, true)) {
         scratch.open = scratch.handshake_done = scratch.keys_are_app = true;
         test_in = in; test_in_len = in_len; test_in_pos = 0;
-        test_out = sent; test_out_len = 0; test_out_cap = sent_cap;
+        test_out = sent; test_out_len = 0; test_out_cap = sent_cap; test_writes = 0;
         n = recv_on(&scratch, got, got_cap, 1000);
         *sent_len = test_out_len;
         memcpy(s_after, scratch.s_app, 32);

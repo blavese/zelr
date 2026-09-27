@@ -56,3 +56,11 @@ u32  tcp_open_count(void);
 void tcp_pump(void);
 
 void tcp_input(ipv4_t src, const u8 *p, u16 len);
+
+/* For the self test: a connection with no wire under it, open and silent, and
+   segments handed to its receive side by hand at offsets from where it
+   starts. tcp_test_next says how far it has acknowledged. */
+int  tcp_test_open(void);
+void tcp_test_segment(int h, u32 off, const char *data, u16 len, bool fin);
+u32  tcp_test_next(int h);
+void tcp_test_close(int h);

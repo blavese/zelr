@@ -65,7 +65,13 @@ static const u16 SUPPORTED[] = { 0x100E, 0x1015, 0x1004, 0x100F, 0x10D3, 0x153A 
 
 #define ICR_RXT0    (1u << 7)
 
-#define RX_DESCS 32
+/* More frames than a full advertised window, with room for a second. A peer
+   sends a whole window in one burst, and that is 45 full frames against the
+   64 KiB this stack advertises; with 32 descriptors (31 usable, since a ring
+   whose tail meets its head is empty) the last 13 of every burst were lost
+   before this machine had looked at the first. A quarter of a megabyte of
+   buffers, against a heap of 24 MiB at the least. */
+#define RX_DESCS 128
 #define TX_DESCS 16
 #define BUF_SIZE 2048
 

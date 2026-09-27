@@ -616,6 +616,41 @@ static void test_net(void) {
     }
 }
 
+static void test_tcp(void) {
+    /* The receive side on its own, fed by hand, starting just short of the
+       wrap so the sequence numbers cross it. Bytes past a hole used to be
+       thrown away, and a card that lost the tail of a burst then cost a
+       download the peer's whole retransmission timer. */
+    int h = tcp_test_open();
+    ok("a connection with no wire under it can be opened", h >= 0);
+    if (h < 0) return;
+    u8 got[64];
+    u32 n;
+
+    tcp_test_segment(h, 0, "abc", 3, false);
+    tcp_test_segment(h, 5, "fgh", 3, false);
+    ok("bytes past a hole are kept and not acknowledged", tcp_test_next(h) == 3);
+    n = tcp_recv(h, got, 2, 0);
+    ok("and what came before the hole reads as usual", n == 2 && memcmp(got, "ab", 2) == 0);
+
+    tcp_test_segment(h, 3, "de", 2, false);
+    ok("the hole filled, the bytes past it are acknowledged with it", tcp_test_next(h) == 8);
+    n = tcp_recv(h, got, sizeof(got), 0);
+    ok("and read in their places, though a read came in between",
+       n == 6 && memcmp(got, "cdefgh", 6) == 0);
+
+    tcp_test_segment(h, 12, "mnop", 4, true);
+    ok("an end that arrives past a hole does not end the stream",
+       !tcp_ended(h) && tcp_test_next(h) == 8);
+    tcp_test_segment(h, 6, "ghijkl", 6, false);   /* g and h are here already */
+    n = tcp_recv(h, got, sizeof(got), 0);
+    ok("a resend overlapping what arrived adds only its new bytes",
+       n == 8 && memcmp(got, "ijklmnop", 8) == 0);
+    ok("and the end counts once every byte before it is in",
+       tcp_ended(h) && tcp_test_next(h) == 17);
+    tcp_test_close(h);
+}
+
 
 static void test_video(void) {
     if (!fb_active()) { kprintf("  SKIP  no framebuffer\n"); return; }
@@ -2530,6 +2565,10 @@ static void test_tls_alerts(void) {
     u32 n = tls_test_alert(0, 42, out, sizeof(out));
     ok("an alert before there is a key goes in the clear, fatal, saying why",
        n == 7 && is_hex(out, 7, "1503030002022a"));
+    /* In one write, header and body together. They went as two, and the
+       header waited alone for an acknowledgement the server was holding
+       back in the hope of something to carry it with. */
+    ok("and goes to TCP in one piece, header and all", tls_test_writes() == 1);
 
     u8 c_hs[32];
     from_hex("b3eddb126e067f35a780b3abf45e2d8f3b1a950738f52e9600746a0e27a55a21", c_hs, 32);
@@ -2537,6 +2576,7 @@ static void test_tls_alerts(void) {
     ok("and once there is one, sealed under it as the next record",
        n == 24 && is_hex(out, 5, "1703030013") &&
        open_record(c_hs, 0, out, n, plain, &pl) && pl == 3 && is_hex(plain, 3, "022a15"));
+    ok("a sealed record goes in one piece as well", tls_test_writes() == 1);
 
     /* A key update from the server, asking for one back, and then a record
        under its next key. It used to be skipped as if it were a ticket, and
@@ -4777,6 +4817,7 @@ int selftest_run(void) {
     kprintf("[disk]\n");       test_disk();
     kprintf("[fat]\n");        test_fat(); test_fat_names(); test_fat_big();
     kprintf("[network]\n");    test_net();
+    kprintf("[tcp]\n");        test_tcp();
     kprintf("[elf]\n");        test_elf();
     kprintf("[userspace]\n");  test_userspace(); test_console_wait(); test_input_handover();
     kprintf("[video]\n");      test_video();
