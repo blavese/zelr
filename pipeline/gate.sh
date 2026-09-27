@@ -608,7 +608,7 @@ if [ "$MODE" = "screen" ] || [ "$MODE" = "full" ]; then
 
   # The power going out in the middle of a write. kernel/fat.c claims
   # there is no moment where neither the old file nor the new one is
-  # live; this kills the machine to find out. Six boots, so it is not
+  # live; this kills the machine to find out. Fifteen boots, so it is not
   # cheap and it is the only check of a claim that otherwise fails once,
   # on somebody's real disk, months later.
   crashtest() { keep timeout 900 python tools/crashcheck.py; }

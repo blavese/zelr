@@ -20,18 +20,26 @@ same disk again and looks. Killing QEMU is a fair power cut for this: bytes
 the guest actually handed over survive in the host's file, and bytes it
 never wrote are gone, which is exactly what a drive does.
 
-The file is written full of A, then full of B, over and over. Whatever is on
-the disk afterwards has to be one of those two, whole and the right length.
-Half A and half B is the promise broken. Missing is worse than that.
+The file is rewritten over and over, each copy full of its own generation
+number, and the machine says which one it has just finished. Whatever is on
+the disk afterwards has to be one copy, whole and the right length, and no
+older than the last one the machine said it had finished. Half of one and
+half of another is the promise broken. Missing is worse than that. Older
+than a write reported done is a disk that was never written.
+
+That last part used to be "both of A and B turn up across the rounds". With a
+write taking milliseconds, which of two a random moment lands on is a coin,
+and six of them came up the same about one run in thirty two.
 
 The kill lands at a different moment each time, on purpose. A fixed delay
 tests one instant of a write that has many, and the interesting ones are the
 few milliseconds around the directory entry.
 
-  python tools/crashcheck.py [--keep] [--rounds N]
+  python tools/crashcheck.py [--keep] [--rounds=N]
 """
 import os
 import random
+import re
 import sys
 import time
 
@@ -42,13 +50,22 @@ DISK = os.path.join(ROOT, "crashcheck.%d.img" % os.getpid())
 
 
 def ask(vm, timeout=40):
-    """What is on the disk, according to the machine itself."""
+    """What is on the disk, according to the machine itself: the verdict, the
+    generation when it is one whole copy (else None), and what was said."""
     out = vm.fresh("exec /bin/crashwrite check", timeout=timeout)
-    for word in ("CRASH_WHOLE A", "CRASH_WHOLE B", "CRASH_TORN",
-                 "CRASH_SHORT", "CRASH_MISSING", "CRASH_WRONG"):
+    m = re.search(r"CRASH_WHOLE (\d+)", out)
+    if m:
+        return "CRASH_WHOLE", int(m.group(1)), out
+    for word in ("CRASH_TORN", "CRASH_SHORT", "CRASH_MISSING"):
         if word in out:
-            return word, out
-    return "CRASH_NOTHING", out
+            return word, None, out
+    return "CRASH_NOTHING", None, out
+
+
+def last_turn(text):
+    """The last generation the machine said it had finished, or None."""
+    turns = re.findall(r"CRASH_TURN (\d+)", text)
+    return int(turns[-1]) if turns else None
 
 
 def main():
@@ -66,9 +83,9 @@ def main():
         vm = Guest(DISK, size_mb=64, memory=256, keep=True)
         try:
             vm.wait_boot()
-            out = vm.fresh("exec /bin/crashwrite A", timeout=60)
-            c.add("a file can be written", "CRASH_WROTE A" in out)
-            if "CRASH_WROTE A" not in out:
+            out = vm.fresh("exec /bin/crashwrite start", timeout=60)
+            c.add("a file can be written", "CRASH_WROTE 0" in out)
+            if "CRASH_WROTE 0" not in out:
                 print("      got: %r" % out.strip()[-200:])
         finally:
             vm.stop()
@@ -77,16 +94,16 @@ def main():
         vm = Guest(DISK, size_mb=64, memory=256, keep=True, reuse=True)
         try:
             vm.wait_boot()
-            verdict, out = ask(vm)
+            verdict, gen, out = ask(vm)
             c.add("and is still there after a clean restart",
-                  verdict == "CRASH_WHOLE A")
-            if verdict != "CRASH_WHOLE A":
+                  verdict == "CRASH_WHOLE" and gen == 0)
+            if verdict != "CRASH_WHOLE" or gen != 0:
                 print("      %s" % out.strip()[-200:])
         finally:
             vm.stop()
 
         # --- now switch it off while it is writing ------------------------
-        survived = []
+        survived = []          # (verdict, generation, last one reported done)
         for i in range(rounds):
             vm = Guest(DISK, size_mb=64, memory=256, keep=True, reuse=True)
             try:
@@ -103,32 +120,37 @@ def main():
                 # Somewhere inside one of the rewrites, at a moment this side
                 # did not choose.
                 time.sleep(random.uniform(0.15, 2.5))
+
+                # What it had said it finished, read before the kill. Anything
+                # it said after this and before the power went is not held
+                # against it, so this is a floor on what must have survived.
+                done = last_turn(vm.serial())
             finally:
                 vm.stop()          # terminate, not poweroff: the power going
 
             vm = Guest(DISK, size_mb=64, memory=256, keep=True, reuse=True)
             try:
                 vm.wait_boot()
-                verdict, out = ask(vm)
-                survived.append(verdict)
-                if verdict not in ("CRASH_WHOLE A", "CRASH_WHOLE B"):
+                verdict, gen, out = ask(vm)
+                survived.append((verdict, gen, done))
+                if verdict != "CRASH_WHOLE":
                     print("      round %d: %s" % (i + 1, out.strip()[-300:]))
             finally:
                 vm.stop()
 
-        whole = [v for v in survived if v.startswith("CRASH_WHOLE")]
+        whole = [s for s in survived if s[0] == "CRASH_WHOLE"]
         c.add("every power cut leaves one whole version of the file",
               len(whole) == len(survived) and len(survived) == rounds)
         print("      %d of %d rounds: %s"
               % (len(whole), rounds,
-                 ", ".join(v.replace("CRASH_", "") for v in survived)))
+                 ", ".join("%s %s after %s" % (v.replace("CRASH_", "").lower(), g, d)
+                           for v, g, d in survived)))
 
-        # Both versions should turn up across the rounds. If every one came
-        # back A, the writes were never reaching the disk at all and this
-        # check would be passing on a machine that writes nothing.
-        c.add("and both versions turn up, so the writes were reaching the disk",
-              any(v == "CRASH_WHOLE A" for v in survived) and
-              any(v == "CRASH_WHOLE B" for v in survived))
+        # A machine whose writes never reached the disk leaves an older copy
+        # than one it reported finished, every time rather than by chance.
+        c.add("and none older than the last write the machine said it had finished",
+              len(whole) == rounds and
+              all(d is not None and g >= d for _, g, d in whole))
 
         # --- and the volume is still a volume ------------------------------
         vm = Guest(DISK, size_mb=64, memory=256, keep=True, reuse=True)

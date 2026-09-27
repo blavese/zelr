@@ -457,7 +457,7 @@ All of them:
   - Then it re-breaks the sector (old jump, zeroed code), boots the kernel with `reuse`, and checks that the sector was repaired and the file kept, then runs the BIOS test again. 11 checks.
 - **crashcheck.py**
   - Rounds: 6. The argument must be spelled `--rounds=N` (57-59).
-  - `/bin/crashwrite A` first. `crashwrite check` prints one of `CRASH_WHOLE A`, `CRASH_WHOLE B`, `CRASH_TORN`, `CRASH_SHORT`, `CRASH_MISSING` or `CRASH_WRONG`.
+  - `/bin/crashwrite A` first. `crashwrite check` prints one of `CRASH_WHOLE A`, `CRASH_WHOLE B`, `CRASH_TORN`, `CRASH_SHORT`, `CRASH_MISSING` or `CRASH_WRONG`. (Since 0.49.1: `crashwrite start`, then `CRASH_WHOLE n`, `CRASH_TORN`, `CRASH_SHORT` or `CRASH_MISSING`; see §10 U.)
   - Each round waits for `CRASH_TURN`, sleeps `random.uniform(0.15, 2.5)`, then `vm.stop()` (terminate, i.e. a power cut), reboots and asks.
   - Total boots: 2 + 2×6 + 1 = 15.
 - **sdkcheck.py / libccheck.py**
@@ -1125,7 +1125,7 @@ Drive methods:
 | gamecheck.py | screen | G(pc,256) | S,M,P | Games row in the launcher; blackjack deals, stands (the dealer plays), chips come back; poker deals 2 cards and a flop after calls. | 8 | 2-3 min |
 | tearcheck.py | screen | G(pc,256) | S,P | `halfdrawn` is on screen; red never appears in 14 samples; both green and mint are seen. | 3 | ~1 min |
 | progcheck.py | screen | G(pc,256), 64 MiB | S | `cp /bin/hello /home/mine` runs by name (prints 5050); unknown names are refused listing /bin; a non-ELF file is refused by name. | 8 | ~1 min |
-| crashcheck.py | screen | G(pc,256), 64 MiB, 15 boots | S | Every killed write leaves `CRASH_WHOLE A` or `B`; both appear across the rounds; the volume still lists `crash.dat` and is FAT. | 6 | 5-8 min |
+| crashcheck.py | screen | G(pc,256), 64 MiB, 15 boots | S | Every killed write leaves one whole copy (`CRASH_WHOLE n`), no older than the last `CRASH_TURN n` seen before the kill (since 0.49.1; it was "both A and B appear"); the volume still lists `crash.dat` and is FAT. | 6 | 5-8 min |
 | sdkcheck.py | screen | Host zig build, then mkfat 32 MiB, then G(pc,256) booting that image | S,H | Builds from 4 SDK files; size 4 KiB-200 KiB; `outside alpha beta` prints its pid, `1..100 5050` and `[outside] [alpha] [beta]`. | 7 | 1-2 min |
 | libccheck.py | screen | The same, with sdk/libc | S,H | printf padding and bases, argv, qsort, strtol, sqrt, pow, sin, fprintf/fgets round trip. | 16 | 1-2 min |
 | smpcheck.py | screen | G(pc,256) `-smp 4` | S | 4 CPUs in `/sys/cpu`; the BSP and at least one AP ran programs; 3 APs tick more than 200; `ps` and `exec /bin/hello` still work. | 7 | 1-2 min |
@@ -1266,7 +1266,7 @@ All of the following were verified by reading. Anything that depends on runtime 
 - **T. The gate's tidy step is incomplete.**
   - `stale()` knows 10 patterns (618-620). Pid-named artifacts it never sweeps include `ring3.*.img`, `soundcheck.*.{img,wav}`, `enscheck.*`, `volcheck.*`, `apptone`/`apprec.*.wav`, `usbhub`/`usbhot`/`usbstick`/`stick.*.img`, `deskauto.*.img`, `mountseed.*.txt`, and others.
   - The `rm -f` of fixed names at 617 (`deskcheck.img`, `sel.img`, …) is mostly for names no longer produced.
-- **U.** crashcheck's "both versions turn up" check (129-131) is probabilistic: 6 random kill times between 0.15 and 2.5 s. If one write cycle ever takes longer than the kill window, every round reads `A` and the check fails with the machine working.
+- **U. FIXED in 0.49.1.** crashcheck's "both versions turn up" check (129-131) is probabilistic: 6 random kill times between 0.15 and 2.5 s. If one write cycle ever takes longer than the kill window, every round reads `A` and the check fails with the machine working. (Once 0.48.0 made a write take milliseconds it was a fair coin each round, all six alike about once in 32, and it failed the 0.49.0 gate once. Each copy now carries a generation number and every survivor must be no older than the last one the guest reported finished, which a disk that is never written fails every time; seen failing with rewrites that skip the commit.)
 - **V. Partly FIXED in 0.45.0: livecheck and gamecheck wait for what they check (the terminal, the page's colours, the chips, the dealt cards), filescheck waits on the disk image, and volcheck compares the quietest burst with the loudest rather than the first with the last. Fixed sleeps remain** despite harness.py's philosophy. Examples: appcheck.py:171, 176, 220, 251 (12 s); setcheck.py:153 (8 s), 202; netcheck.py:135, 161 (9 s); browsercheck.py:229, 233 (14 s); livecheck.py:81, 86, 109 (16 s); formcheck.py:166, 170; findcheck.py:77, 81, 97, 110, 127; gamecheck.py:96, 118, 225, 227; tearcheck.py:45, 49. These harnesses are load-sensitive and rely on the gate's retry-alone.
 - **W. Launcher.**
   1. There is no hardware acceleration: pure TCG. zelr.bat:47-60 says this makes the selftest about 5× slower (44 s against 9 s).
@@ -1302,7 +1302,7 @@ All of the following were verified by reading. Anything that depends on runtime 
    - The `~5 min` for `screen` and `~17 min` for `full` are implausible for 32 or 33 harnesses at `PAR_MAX=4`.
    - Line 107 says "the last group starts thirteen"; it starts 32 or 33.
    - Lines 25-26 say "four of full's steps … all four are about disks"; full-only has 6 steps, including clipcheck.
-   - Line 544 says crashcheck is "Six boots"; it is 15.
+   - Line 544 says crashcheck is "Six boots"; it is 15. (Fixed in 0.49.1.)
 2. **pipeline/README.md**:
    - Lines 47-52 and 69: `batch.sh` is "three tasks at once"; `BATCH` defaults to 1.
    - Lines 58-63: the fast gate is "a build and two QEMU runs with no monitor port" and runs "in each worktree". It is five QEMU steps, Guests always open a monitor port, and it actually gates the main checkout (10.1 D).
@@ -1343,7 +1343,7 @@ All of the following were verified by reading. Anything that depends on runtime 
     - The window also promises a "FAT16 disk image". That is plausible for a 32 MiB disk, but it is decided by the kernel.
 19. **zelr.bat:111-112**: "zelr has no USB stack yet". xHCI, HID, storage and usb-net all exist (usbcheck, mountcheck, netcheck).
 20. **mkiso.py:31**: the kernel "loads at 1 MiB". It uses `load_address()`, which gives 16 MiB (linker.ld:33 `. = 16M;`).
-21. **crashcheck.py:31**: the usage says `[--rounds N]`, but the parser only accepts `--rounds=N` (57-59).
+21. **crashcheck.py:31**: the usage says `[--rounds N]`, but the parser only accepts `--rounds=N` (57-59). (Fixed in 0.49.1, as was gate.sh's "Six boots".)
 22. **gate.sh:16-18**: "Each boots its own machine and builds its own disk, named after its own process id". The gate's own selftests use the fixed names `gate.img`, `gateq.img` and `gatenv.img`, and iso_test uses `build/isotest.img`.
 
 ---
@@ -1359,4 +1359,4 @@ All of the following were verified by reading. Anything that depends on runtime 
 7. `zelr.bat test` runs the selftest on the user's persistent `zelr.img`, and `run.sh -T` does the same with the repo-root `zelr.img`. The gate insists on fresh disks. Can the selftest's disk and FAT sections damage a user's files on that image?
 8. Should defaultcheck.py be retired, or rewritten to compare `KNOBS` defaults with what Settings shows via `/sys/settings` (10.1 AB)?
 9. Are `spawntest` (`/bin/spawntest`, listed in the welcome text) and `jsprobe` meant to be covered by a harness? Neither is run anywhere.
-10. Would crashcheck's "both versions" check be deterministic if the kill window were derived from a measured write time (10.1 U)?
+10. Would crashcheck's "both versions" check be deterministic if the kill window were derived from a measured write time (10.1 U)? (Answered in 0.49.1 another way: generation numbers, see U.)

@@ -17,13 +17,21 @@
  * safety is worth nothing: the failure it describes happens once, on
  * somebody's real disk, months later.
  *
- * So this writes the file alternately full of A and full of B, forever, and
- * tools/crashcheck.py kills the machine at a moment it does not choose.
- * Whatever survives has to be one of those two, whole. A file that is half
- * A and half B is the promise broken; a file that is missing is worse.
+ * So this rewrites the file forever, each copy full of its own generation
+ * number, one more than the last, and tools/crashcheck.py kills the machine
+ * at a moment it does not choose. Whatever survives has to be one copy,
+ * whole, and no older than the last one this said it had finished. A file
+ * that is half one generation and half another is the promise broken; a file
+ * that is missing is worse; and one older than a write that was reported
+ * done is a disk that was never written.
+ *
+ * It was A and B in turn, and the check outside wanted to see both across six
+ * power cuts to know the writes were landing. Once a write took milliseconds
+ * that was a coin tossed six times, and it came up the same all six about
+ * once in thirty two runs.
  *
  *   crashwrite          rewrite it, over and over, until the power goes
- *   crashwrite A        write it once, full of A, and stop
+ *   crashwrite start    write generation 0 once, and stop
  *   crashwrite check    say what is on the disk
  */
 #include "zelr.h"
@@ -33,17 +41,17 @@
 
 /* Big enough to span many clusters, so the window in which the power can go
    mid-write is a real one rather than a coincidence. */
-static char buf[SIZE];
+static unsigned buf[SIZE / 4];
 
-static int write_all(char fill) {
-    for (int i = 0; i < SIZE; i++) buf[i] = fill;
+static int write_all(unsigned gen) {
+    for (int i = 0; i < SIZE / 4; i++) buf[i] = gen;
 
     int fd = open(PATH, O_WRITE | O_CREATE | O_TRUNC);
     if (fd < 0) return 0;
 
     int done = 0;
     while (done < SIZE) {
-        int n = fwrite(fd, buf + done, SIZE - done);
+        int n = fwrite(fd, (char *)buf + done, SIZE - done);
         if (n <= 0) { close(fd); return 0; }
         done += n;
     }
@@ -56,51 +64,52 @@ static int write_all(char fill) {
     return close(fd) == 0;
 }
 
-static int check(void) {
+/* What is on the disk: 0 and the generation when it is one whole copy, or 1
+   with the reason already said when it is not. */
+static int read_back(unsigned *gen, int say) {
     int fd = open(PATH, O_READ);
     if (fd < 0) {
         /* The one outcome the promise rules out. */
-        puts("CRASH_MISSING\n");
+        if (say) puts("CRASH_MISSING\n");
         return 1;
     }
 
     int n = 0;
     while (n < SIZE) {
-        int got = fread(fd, buf + n, SIZE - n);
+        int got = fread(fd, (char *)buf + n, SIZE - n);
         if (got <= 0) break;
         n += got;
     }
     close(fd);
 
     if (n != SIZE) {
-        puts("CRASH_SHORT ");
-        putn(n);
-        putc('\n');
+        if (say) { puts("CRASH_SHORT "); putn(n); putc('\n'); }
         return 1;
     }
 
-    char first = buf[0];
-    for (int i = 1; i < SIZE; i++) {
+    unsigned first = buf[0];
+    for (int i = 1; i < SIZE / 4; i++) {
         if (buf[i] == first) continue;
-        puts("CRASH_TORN at ");
-        putn(i);
-        puts(", ");
-        putc(first);
-        puts(" then ");
-        putc(buf[i]);
-        putc('\n');
+        if (say) {
+            puts("CRASH_TORN at ");
+            putn(i * 4);
+            puts(", ");
+            putn((int)first);
+            puts(" then ");
+            putn((int)buf[i]);
+            putc('\n');
+        }
         return 1;
     }
+    *gen = first;
+    return 0;
+}
 
-    if (first != 'A' && first != 'B') {
-        puts("CRASH_WRONG ");
-        putc(first);
-        putc('\n');
-        return 1;
-    }
-
+static int check(void) {
+    unsigned gen;
+    if (read_back(&gen, 1)) return 1;
     puts("CRASH_WHOLE ");
-    putc(first);
+    putn((int)gen);
     putc('\n');
     return 0;
 }
@@ -110,21 +119,24 @@ int main(int argc, char **argv) {
 
     if (what[0] == 'c') return check();
 
-    if (what[0] == 'A' || what[0] == 'B') {
-        if (!write_all(what[0])) { puts("CRASH_NOWRITE\n"); return 1; }
-        puts("CRASH_WROTE ");
-        putc(what[0]);
-        putc('\n');
+    if (what[0] == 's') {
+        if (!write_all(0)) { puts("CRASH_NOWRITE\n"); return 1; }
+        puts("CRASH_WROTE 0\n");
         return 0;
     }
 
-    /* Round and round until somebody stops the machine. The marker after
-       each one is how the check outside knows writing has really started
-       before it starts counting down to the kill. */
+    /* Round and round until somebody stops the machine, carrying on from
+       whatever the last power cut left, so the numbers only ever go up. The
+       marker after each one says which has been finished: the check outside
+       waits for the first before it starts counting down to the kill, and
+       holds what survives to the last it saw. */
+    unsigned gen = 0;
+    if (read_back(&gen, 0)) gen = 0;
     for (;;) {
-        if (!write_all('B')) { puts("CRASH_NOWRITE\n"); return 1; }
-        puts("CRASH_TURN\n");
-        if (!write_all('A')) { puts("CRASH_NOWRITE\n"); return 1; }
-        puts("CRASH_TURN\n");
+        gen++;
+        if (!write_all(gen)) { puts("CRASH_NOWRITE\n"); return 1; }
+        puts("CRASH_TURN ");
+        putn((int)gen);
+        putc('\n');
     }
 }

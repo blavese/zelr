@@ -767,6 +767,7 @@ pci.c (`pci_find_class`, `pci_read32`, `pci_enable_bus_master`); paging.c (`pagi
 - **tools/crashcheck.py** plus **userland/crashwrite.c** (full, :547). Default machine, i.e. i440fx and **ATA PIO**, 64 MiB.
   - `crashwrite A` then the file is whole A across a clean restart.
   - 6 rounds (`--rounds=N`) of `crashwrite` (endless B/A 64 KiB rewrites of /home/crash.dat, printing CRASH_TURN) killed 0.15-2.5 s after the first CRASH_TURN. After each, `crashwrite check` must print CRASH_WHOLE A or B (not TORN, SHORT, MISSING or WRONG). Both A and B must appear over the rounds. Finally `ls /home` shows crash.dat and `disk` output mentions fat.
+  - Since 0.49.1 each copy is full of a generation number (a 32-bit word repeated), carried on from whatever the file holds, and `CRASH_TURN n` names the one just finished; `crashwrite start` writes generation 0. Each survivor must be whole and no older than the last `CRASH_TURN` read before the kill, which replaces "both A and B appear": with writes taking milliseconds that was six coin tosses, all the same about one run in 32 (it failed the 0.49.0 gate once, passing on the retry).
   - crashwrite.c: `SIZE 64*1024`, `open(O_WRITE|O_CREATE|O_TRUNC)`, fwrite loop, `close` is the commit ("a file is held in memory until the last descriptor goes"). `check` reads through a fresh descriptor.
 - **tools/ring3check.py** runs userland/durtest.c ("saying now about a file, and renaming one", ring3check.py:48):
   - Data is not on disk before fsync. fsync writes it; a second fsync rewrites it; close afterwards keeps it.
@@ -928,7 +929,7 @@ Also, `start_port` in AHCI spins forever if CR never clears (ahci.c:131). `fat_m
 - **D9.** parts.c:21-23 speaks of a 16 KiB entry array; the code accepts up to 32 KiB.
 - **D10.** selftest.c:889-892 checks /bin/browser as "the last one in the list". builtin.c now ends with polltest (46 entries); the count comparison at :886-887 still catches the overflow.
 - **D11.** nvme_test.sh:92 greps the whole second-boot transcript for "== handing over to the scheduler". That boot mirrors its own marks to serial, so the check passes whether or not the record was recovered, which is exactly the pitfall blackbox_test.sh:11-17 describes. nvme_test.sh:74 ("written through nvme") is satisfied by the echoed command `write onnvme.txt written through nvme` itself.
-- **D12.** crashcheck.py:31 documents `[--rounds N]` but :57-59 only parses `--rounds=N`. gate.sh:544 says "Six boots"; it is 2 + 2×rounds + 1 = 15.
+- **D12. FIXED in 0.49.1.** crashcheck.py:31 documents `[--rounds N]` but :57-59 only parses `--rounds=N`. gate.sh:544 says "Six boots"; it is 2 + 2×rounds + 1 = 15.
 - **D13.** fd.c:404-418: the fsync explanation sits above `fd_ready_now` rather than `fd_sync` (fd.c area).
 - **D14.** `BB_MAGIC` spells "NYBX", a leftover of the pre-v0.11 "nyx" name.
 - **D15.** Unused API: `VFS_MAX_OPEN`, `fs_append`, `fat_selected`, `fat_mount`, `blk_count`, `blk_device_removable`, `diskfs_removable_mounted`. ahci.c includes pmm.h and timer.h without using them.

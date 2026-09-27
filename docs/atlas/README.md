@@ -95,6 +95,16 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.49.1: a power-cut check that tossed a coin
+
+- **crashcheck (14 §10 U, 04 §8).** "Both A and B turn up across six power cuts" was six coin tosses
+  once a write took milliseconds, all alike about one run in 32, and it failed the 0.49.0 gate once.
+  crashwrite fills each copy with a generation number, carried on across boots, and says which it
+  finished; every survivor must be no older than the last one it said. Three runs on the working
+  build left the last reported copy or the one after it every time; with rewrites that skip the
+  commit, every survivor was generation 0 against up to 106 reported. The usage line and gate.sh's
+  "Six boots" (it is fifteen) are corrected.
+
 ### 0.49.0: the console that cost a third of the self test
 
 Each change has a check that was run against a build broken for it alone and seen to fail there; the
