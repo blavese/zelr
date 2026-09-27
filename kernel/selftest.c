@@ -64,6 +64,7 @@
 #include "rng.h"
 #include "tls.h"
 #include "tcp.h"
+#include "signal.h"
 
 static int passed, failed;
 
@@ -1392,6 +1393,25 @@ static void report_tss(void *arg) {
     tss_seen.rsp0 = tss_stack_of(smp_this_cpu());
 }
 
+/* Work that holds its processor until told to let go, standing in for half
+   a frame that takes a while. */
+static volatile u32 held_started, held_release, held_finished;
+
+static void held_job(void *arg) {
+    (void)arg;
+    held_started = 1;
+    while (!held_release) __asm__ volatile ("pause");
+    held_finished = 1;
+}
+
+/* Work that is only ever meant to be taken back, and says if it ran. */
+static volatile u32 taken_ran;
+
+static void taken_job(void *arg) { (void)arg; taken_ran = 1; }
+
+/* A program that does nothing but run: two bytes, a jump to itself. */
+static const u8 spin_forever[] = { 0xEB, 0xFE };
+
 static void test_smp(void) {
     ok("the firmware described at least one processor", smp_cpu_count() >= 1);
     ok("this one is running", smp_cpu(0) && smp_cpu(0)->started);
@@ -1499,6 +1519,80 @@ static void test_smp(void) {
     spin_lock(&test_lock);
     spin_unlock(&test_lock);
     ok("the lock is free afterwards", true);
+
+    /* --- work under way keeps its processor ----------------------------
+     *
+     * Work is claimed by clearing the slot, and the slot was all the
+     * scheduler looked at to keep a processor idle for it. So the first
+     * tick that found the lock free gave a processor halfway through half
+     * a frame a program instead, and the half was never finished while
+     * there were programs to run (atlas 02 section 10, B12). Here: work
+     * that holds on until told, more programs than processors, and the lock
+     * let go for a while by sleeping. */
+    u32 target = 0;
+    for (u32 i = 1; i < smp_cpu_count() && !target; i++)
+        if (smp_cpu(i)->started) target = i;
+    held_started = held_release = held_finished = 0;
+    bool handed = false;
+    for (int try = 0; try < 50 && !handed; try++) {
+        handed = smp_run(target, held_job, 0);
+        if (!handed) task_sleep(10);
+    }
+    for (int w = 0; w < 100 && handed && !held_started; w++) task_sleep(10);
+
+    int spinners[SMP_MAX_CPUS + 1];
+    u32 nspin = 0;
+    for (u32 i = 0; i <= smp_cpu_count() && nspin < SMP_MAX_CPUS + 1; i++) {
+        int pid = user_spawn_flat("selftest-spin", spin_forever, sizeof(spin_forever));
+        if (pid > 0) spinners[nspin++] = pid;
+    }
+    task_sleep(300);
+
+    /* Every other processor has a program by now. One of them used to be
+       offered as a helper all the same, took the wake-up, went back to its
+       program, and left the frame that handed it half waiting out its whole
+       bound. */
+    ok("a processor running a program is not offered as a helper",
+       smp_helper() == 0);
+
+    /* And work handed to one of them can be had back before it starts. It
+       cannot start while this holds the lock, and taken back it must not
+       start afterwards either, when the sleep lets the lock go. */
+    u32 busy = 0;
+    for (u32 i = 1; i < smp_cpu_count() && !busy; i++)
+        if (i != target && smp_cpu(i)->started) busy = i;
+    if (busy) {
+        taken_ran = 0;
+        bool took = smp_run(busy, taken_job, 0) && smp_take_back(busy, taken_job);
+        task_sleep(50);
+        ok("work taken back before it started never runs", took && !taken_ran);
+    } else {
+        kprintf("  SKIP  no second processor to take work back from\n");
+    }
+
+    held_release = 1;
+    for (int w = 0; w < 100 && !held_finished; w++) task_sleep(10);
+    ok("a processor in the middle of handed work is not given a program",
+       handed && held_started && held_finished);
+
+    /* Ended by a signal, and collected only once no processor is still on
+       one: the collector frees a dead task's stack and tables without
+       asking whether another processor is still running it (atlas 02
+       section 10, B28), and a killed program runs on until its processor's
+       next tick. */
+    for (u32 i = 0; i < nspin; i++) signal_send((u32)spinners[i], SIGKILL);
+    bool gone = false;
+    for (int w = 0; w < 300 && !gone; w++) {
+        gone = true;
+        for (u32 i = 0; i < nspin; i++) {
+            task_t *t = task_by_pid((u32)spinners[i]);
+            if (t && (t->state != TASK_DEAD || t->on_cpu >= 0)) gone = false;
+        }
+        if (!gone) task_sleep(10);
+    }
+    ok("and the programs started for it end", nspin == smp_cpu_count() + 1 && gone);
+    if (gone) for (u32 i = 0; i < nspin; i++) task_wait((u32)spinners[i]);
+    smp_wait(target, 2000);
 }
 
 /* --- waiting --------------------------------------------------------------

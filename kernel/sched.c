@@ -160,6 +160,11 @@ static bool is_idle(const task_t *t) {
 }
 
 bool task_is_idle(const task_t *t) { return is_idle(t); }
+
+bool sched_cpu_idle(u32 cpu) {
+    return cpu < SMP_MAX_CPUS && idle_of[cpu] && current_of[cpu] == idle_of[cpu];
+}
+
 static u32 next_pid = 1;
 static bool started = false;
 
@@ -431,11 +436,11 @@ static task_t *pick_next(task_t *from) {
 
     u32 me = smp_this_cpu();
 
-    /* A processor with a piece of a frame waiting for it is not free. The
-       compositor hands one half out and spins for the answer, so giving
-       that processor a program instead turns a shared frame into a stall
-       the length of the spin. Its own idle loop is where the handed work
-       is picked up, so staying idle is how it gets done. */
+    /* A processor with a piece of a frame waiting for it, or halfway
+       through one, is not free. The compositor hands one half out and spins
+       for the answer, so giving that processor a program instead turns a
+       shared frame into a stall the length of the spin. Its own idle loop
+       is where the handed work runs, so staying idle is how it gets done. */
     if (me != 0 && smp_work_pending(me) && idle_of[me]) return idle_of[me];
 
     u64 now = timer_ticks();

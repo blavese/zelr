@@ -192,6 +192,11 @@ bool   kernel_lock_held_here(void);
    processor would stop every other one from making a system call. */
 bool   task_is_idle(const task_t *t);
 
+/* Whether a processor is in its own idle task right now, which is the only
+   place work handed to it (smp_run) is picked up. One running a program
+   takes the wake-up and goes straight back to the program. */
+bool   sched_cpu_idle(u32 cpu);
+
 /* Counted where the switch happens, and reported by /sys/cpu. */
 void   sched_note_user_slice(u32 cpu);
 

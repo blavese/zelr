@@ -1422,10 +1422,12 @@ only agrees with the thing it is testing proves nothing here, because an
 implementation that is wrong in a consistent way passes it and then cannot
 talk to anybody.
 
-The processor section is four checks on a machine with one CPU and fifteen
+The processor section is four checks on a machine with one CPU and nineteen
 on a machine with several, where it hands work to each of them and requires
-the count they share to come back exact. `qemu-system-x86_64 -smp 4` with
-256 MiB reaches 610.
+the count they share to come back exact, and then starts more programs than
+there are processors to check that handed work is neither given to a busy
+one nor abandoned halfway for a program. `qemu-system-x86_64 -smp 4` with
+256 MiB reaches 614, and the gate runs it.
 
 The same checks run again on `-machine q35`, which has PCIe and an AHCI
 controller rather than a 1996 chipset and a PIO disk, and reach 607 there.

@@ -1029,7 +1029,13 @@ Added in 0.40.0, not yet in the table below:
   - readfat compares every result byte for byte.
 - **ring3check**: `cputest` (8 checks) added. The jstest case minimum rose from 86 to 162, now that the count
   is printed at the end.
-- **smpcheck**: runs `cputest` on four processors with the spinners still going (1 check).
+- **smpcheck**: runs `cputest` on four processors with the spinners still going (1 check), and reads
+  `/sys/screen` before and after the spinners: frames were flushed with every processor busy, and none waited
+  out a helper that was running a program (2 checks, 02 §10 B12). 10 checks in all. It waits for cputest's
+  whole verdict, retyping the command once if the shell says it arrived garbled, and its `ps` check reads
+  only what `ps` printed (before, it matched the earlier `bg /bin/spin` echoes and could not fail).
+- **gate**: a new step, "the same checks on four processors", runs the self test with `-smp 4` (pc, 256 MiB).
+  Before it, the multiprocessor half of `[processors]` never ran in the gate.
 - **libccheck**: 6 more checks (22 in all).
   - atan and atan2.
   - fputc after a full buffer.

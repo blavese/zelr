@@ -112,6 +112,26 @@ committed old sources) and seen to fail there.
   - Checks:
     - `/bin/cputest` in ring3check and in smpcheck (four processors);
     - `[physical memory]` "every frame that can be handed out is mapped".
+- **Frames that waited for a busy processor (02 §10 B12).** Found when smpcheck's new cputest step lost its
+  typing under a loaded gate. `smp_helper` now also requires the AP to be in its idle task
+  (`sched_cpu_idle`); the AP claims a job with a compare-and-swap; `fb_flush` takes back a half nobody
+  claimed (`smp_take_back`) and does it itself instead of spinning up to 20,000,000 `pause`s with IF=0 and
+  the lock held. The slot also has `running`, from the claim until the job returns, because claiming cleared
+  the only thing the scheduler looked at: a flusher preempted mid-wait freed the lock and the helper was given
+  a program halfway through its half. `smp_work_pending`, `smp_run`, `smp_busy` and `smp_wait` include it,
+  so `smp_wait` means finished. `/sys/screen` gains `stalled`.
+  - Checks: smpcheck, with a spinner on every processor, "no flush waited out a processor that was running
+    a program"; and in `[processors]`, with a held job and more ring 3 spinners than processors, "a processor running
+    a program is not offered as a helper", "work taken back before it started never runs" and "a processor in
+    the middle of handed work is not given a program". Each of the three `[processors]` checks failed on a build
+    broken for it alone. smpcheck's counter caught the idle-test break only before `running` existed: with
+    it, a preempted flusher lets the helper reach idle and finish, so that break showed as a cputest failure
+    instead.
+  - The gate now runs the self test with `-smp 4` too ("the same checks on four processors"); before, the
+    multiprocessor half of `[processors]` ran only by hand.
+  - smpcheck also waits for cputest's whole verdict (it had read `CPUTEST_PA`), and its `ps` check looks at
+    what `ps` printed (it matched the earlier `bg /bin/spin` lines and could not fail).
+  - New finding by reading: 02 §10 B28, the collector does not check `on_cpu`.
 - **Window lifetimes (finding 6).**
   - `wm_close` clears `resizing`.
   - `held_button` records which button started a hold, and releasing that button ends it.
@@ -142,9 +162,9 @@ committed old sources) and seen to fail there.
 - **PNG (finding 10).** The chunk bound is checked in two steps. Check: pngtest.
 
 Counts after 0.40.0:
-- selftest 595 (pc, 64 MiB), 599 (256 MiB), 607 (q35), 610 (`-smp 4`);
+- selftest 595 (pc, 64 MiB), 599 (256 MiB), 607 (q35), 614 (`-smp 4`);
 - 48 ring 3 programs, which is `SYSFS_MAX_PROGRAMS`;
-- gate full 49 steps.
+- gate full 50 steps.
 
 ### 0.39.0: six of the findings below, fixed
 

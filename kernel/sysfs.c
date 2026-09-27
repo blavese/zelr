@@ -295,6 +295,7 @@ static u32 render_screen(char *b, u32 cap) {
     put(&o, "source %s\n", fb_backend());
     put(&o, "frames %d\n", (u32)fb_frames());
     put(&o, "shared %d\n", (u32)fb_shared_frames());
+    put(&o, "stalled %d\n", (u32)fb_stalled_frames());
     put(&o, "lastkib %d\n", (u32)(fb_last_sent() / 1024));
     put(&o, "fullkib %d\n", (u32)(fb_screen_bytes() / 1024));
     put(&o, "sentkib %d\n", (u32)(fb_total_sent() / 1024));

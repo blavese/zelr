@@ -45,9 +45,11 @@ u64 fb_flush_cycles(void);
 /* What frames actually cost. A frame sends the bands of the screen that
    differ from the last one, so last_sent against screen_bytes is the whole
    of the claim, and shared_frames is how many of them another processor
-   took half of. */
+   took half of. stalled_frames waited out their whole bound for that half
+   with interrupts off, and should be none. */
 u64 fb_frames(void);
 u64 fb_shared_frames(void);
+u64 fb_stalled_frames(void);
 u64 fb_last_sent(void);
 u64 fb_total_sent(void);
 u64 fb_screen_bytes(void);

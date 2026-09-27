@@ -328,6 +328,28 @@ selftest_q35() {
 }
 par_start "the same checks on q35, with pcie and ahci" selftest_q35
 
+# --- and on four processors ------------------------------------------------
+#
+# Both runs above have one, and the half of [processors] that needs another skips
+# itself there: a second processor coming up, work handed to it and joined,
+# a lock two of them contend for, and handed work keeping its processor
+# while there are programs to run. It ran only when somebody remembered to
+# pass -smp by hand, which is how a flush that waited seconds for a busy
+# processor went unnoticed by every check here.
+selftest_smp() {
+  rm -f gates.img
+  head -c 33554432 /dev/zero > gates.img
+  local out
+  out="$(timeout 300 "$QEMU" -kernel build/zelr.bin -m 256 -smp 4 -no-reboot \
+      -display none -serial stdio -append selftest \
+      -drive "file=gates.img,format=raw,if=ide,index=0" \
+      -device isa-debug-exit,iobase=0xf4,iosize=0x04 2>&1)"
+  rm -f gates.img
+  printf '%s\n' "$out" | grep -E 'FAIL|passed,' | tail -3
+  printf '%s' "$out" | grep -q SELFTEST_PASS
+}
+par_start "the same checks on four processors" selftest_smp
+
 # --- the shell, over the serial line --------------------------------------
 shelltest() { keep timeout 400 bash tools/shell_test.sh; }
 par_start "the shell answers over serial" shelltest

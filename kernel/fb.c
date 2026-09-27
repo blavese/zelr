@@ -374,8 +374,15 @@ static volatile bool flushing;
    /sys/screen says what actually happened. */
 static u64 frames, shared_frames, last_sent, total_sent;
 
+/* Frames that spun out the whole wait for another processor's half, with
+   interrupts off and the kernel lock held. Each one is a pause long enough
+   for the serial line to drop what is being typed, so this should stay at
+   nothing, and smpcheck says whether it does with every processor busy. */
+static u64 stalled_frames;
+
 u64 fb_frames(void)        { return frames; }
 u64 fb_shared_frames(void) { return shared_frames; }
+u64 fb_stalled_frames(void) { return stalled_frames; }
 u64 fb_last_sent(void)     { return last_sent; }
 u64 fb_total_sent(void)    { return total_sent; }
 u64 fb_screen_bytes(void)  { return (u64)pitch * height; }
@@ -453,14 +460,22 @@ void fb_flush(void) {
         bands_copy(mine, band_count - 1);
         __asm__ volatile ("sfence" ::: "memory");
 
-        if (helper) {
-            /* Bounded, because a processor that does not answer has to cost
-               a frame rather than the machine. Its half is then done here,
-               which writes the same bytes to the same addresses and is
-               therefore safe even if it does wake up later. */
+        if (helper && smp_take_back(helper, bands_helper)) {
+            /* Not started while this half was done, so it is done here too
+               rather than waited for. Nothing is left queued on the other
+               processor to run later against a frame that has moved on. */
+            bands_copy(helper_first, helper_last);
+            __asm__ volatile ("sfence" ::: "memory");
+        } else if (helper) {
+            /* It has the work and is doing it, so the wait is for half a
+               frame. Still bounded, because a processor that does not
+               answer has to cost a frame rather than the machine. Its half
+               is then done here, which writes the same bytes to the same
+               addresses and is therefore safe even if it finishes later. */
             u32 spin = 0;
             while (!helper_done && spin++ < 20000000u) __asm__ volatile ("pause");
             if (!helper_done) {
+                stalled_frames++;
                 bands_copy(helper_first, helper_last);
                 __asm__ volatile ("sfence" ::: "memory");
             } else {

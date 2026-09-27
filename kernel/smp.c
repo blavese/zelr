@@ -60,6 +60,10 @@ typedef struct {
     cpu_t info;
     void (*volatile fn)(void *);
     void *volatile arg;
+    /* Set from the moment work is claimed until it returns. Claiming
+       clears fn, so fn alone says nothing about a processor halfway through
+       a job. */
+    volatile u32 running;
     u64  stack_base;            /* what it came up on, and its idle task's */
 } slot_t;
 
@@ -87,8 +91,13 @@ void sched_note_user_slice(u32 cpu) {
     if (cpu < SMP_MAX_CPUS) cpus[cpu].info.user_slices++;
 }
 
+/* Queued or under way. The scheduler asks this to keep the processor in its
+   idle task, which is where the work runs, and it used to ask only about
+   queued: once the work was claimed the next tick that found the lock free
+   gave the processor a program, and the half-done job waited behind it for
+   as long as there were programs to run -- while fb_flush waited for it. */
 bool smp_work_pending(u32 cpu) {
-    return cpu < SMP_MAX_CPUS && cpus[cpu].fn != 0;
+    return cpu < SMP_MAX_CPUS && (cpus[cpu].fn != 0 || cpus[cpu].running);
 }
 
 u32 smp_this_cpu(void) {
@@ -314,9 +323,16 @@ static void ap_main(void *arg) {
         __asm__ volatile ("cli");
         void (*fn)(void *) = me->fn;
         if (fn) {
-            __asm__ volatile ("sti");
             void *a = me->arg;
-            me->fn = 0;
+            /* Claimed in one step, because the processor that handed it
+               over may be taking it back at this moment (smp_take_back):
+               exactly one of the two gets it. */
+            if (!__sync_bool_compare_and_swap(&me->fn, fn, (void (*)(void *))0))
+                continue;
+            /* Before interrupts are on, so no tick sees it claimed and not
+               yet running. */
+            me->running = 1;
+            __asm__ volatile ("sti");
             /* Without the kernel lock, deliberately. What is handed out
                here is arithmetic over memory the caller owns -- half a
                frame's worth of comparison -- and the caller is a kernel
@@ -325,6 +341,8 @@ static void ap_main(void *arg) {
                waiting for us. */
             fn(a);
             me->info.jobs++;
+            __sync_synchronize();
+            me->running = 0;
             continue;
         }
         me->info.spins++;
@@ -341,19 +359,34 @@ static void ap_main(void *arg) {
  * about right now. */
 u32 smp_helper(void) {
     if (!active) return 0;
+    /* In its idle task, not merely without work queued. This used to ask
+       only the second, and a processor running a program is not waiting for
+       anything: it took the wake-up, went back to the program, and the work
+       sat there until the scheduler next ran on it -- which needs the kernel
+       lock that the caller, a frame being flushed, was holding while it
+       spun for the answer. Every flush with the other processors busy spun
+       out its whole bound with interrupts off, and the serial line lost
+       what was typed meanwhile. An idle one cannot be given a program while
+       the caller holds the lock, so idle here stays idle until it has the
+       work. */
     for (u32 i = 1; i < ncpus; i++)
-        if (cpus[i].info.started && !cpus[i].fn) return i;
+        if (cpus[i].info.started && !smp_work_pending(i) && sched_cpu_idle(i)) return i;
     return 0;
+}
+
+bool smp_take_back(u32 cpu, void (*fn)(void *)) {
+    if (cpu == 0 || cpu >= ncpus) return false;
+    return __sync_bool_compare_and_swap(&cpus[cpu].fn, fn, (void (*)(void *))0);
 }
 
 bool smp_busy(u32 cpu) {
     if (cpu == 0 || cpu >= ncpus) return false;
-    return cpus[cpu].fn != 0;
+    return smp_work_pending(cpu);
 }
 
 bool smp_run(u32 cpu, void (*fn)(void *), void *arg) {
     if (cpu == 0 || cpu >= ncpus) return false;
-    if (!cpus[cpu].info.started || cpus[cpu].fn) return false;
+    if (!cpus[cpu].info.started || smp_work_pending(cpu)) return false;
 
     cpus[cpu].arg = arg;
     /* The function pointer is written last, because it is what the other
@@ -374,7 +407,9 @@ bool smp_run(u32 cpu, void (*fn)(void *), void *arg) {
 bool smp_wait(u32 cpu, u32 timeout_ms) {
     if (cpu == 0 || cpu >= ncpus) return false;
     u64 deadline = timer_ticks() + (timeout_ms * timer_hz()) / 1000u + 1;
-    while (cpus[cpu].fn) {
+    /* Until it has finished, not merely picked it up, which is what a
+       caller about to read the answer needs. */
+    while (smp_work_pending(cpu)) {
         if (timer_ticks() > deadline) return false;
         __asm__ volatile ("pause");
     }

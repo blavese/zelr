@@ -26,6 +26,7 @@ from harness import Guest, Checks, build_once, ROOT      # noqa: E402
 DISK = os.path.join(ROOT, "smpcheck.%d.img" % os.getpid())
 
 ROW = re.compile(r"cpu(\d+)\s+apic \d+, \w+\s+(\d+) slices, (\d+) ticks, (\d+) busy")
+SCREEN = re.compile(r"^(frames|shared|stalled|sentkib) (\d+)", re.M)
 
 
 def read_cpus(text):
@@ -54,6 +55,21 @@ def cpu_table(vm, want):
     return read_cpus(vm.serial()[mark:])
 
 
+def screen_table(vm):
+    """/sys/screen's counters, waited for the same way: sentkib is the last
+    line, so once it is here the rest are."""
+    mark = len(vm.serial())
+    vm.type("cat /sys/screen" + chr(10))
+    deadline = time.time() + 60
+    got = {}
+    while time.time() < deadline:
+        got = dict((k, int(v)) for k, v in SCREEN.findall(vm.serial()[mark:]))
+        if "sentkib" in got:
+            break
+        time.sleep(0.5)
+    return got
+
+
 def main():
     keep = "--keep" in sys.argv
     build_once()
@@ -65,6 +81,7 @@ def main():
 
         before = cpu_table(vm, 4)
         c.add("the machine describes four processors", len(before) == 4)
+        screen0 = screen_table(vm)
 
         # --- something for them to run ------------------------------------
         #
@@ -76,6 +93,25 @@ def main():
 
         after = cpu_table(vm, 4)
         c.add("and still describes four afterwards", len(after) == 4)
+
+        # --- and nothing waits for a processor that is running a program --
+        #
+        # Every line printed once the console is full scrolls the screen, and
+        # every scroll is a flush that hands half its bands to another
+        # processor. It used to hand them to one running a program, which
+        # never looked, and then spin out the whole wait with interrupts off
+        # and the kernel lock held: seconds under emulation, while the serial
+        # line dropped whatever was typed. That is how this harness lost
+        # "exec /bin/cputest" after everything before it had arrived. The
+        # table just printed, with the spinners going, was such a flush.
+        screen1 = screen_table(vm)
+        c.add("the screen was flushed while every processor was busy",
+              screen1.get("frames", 0) > screen0.get("frames", 0))
+        c.add("and no flush waited out a processor that was running a program",
+              screen1.get("stalled", -1) == 0)
+        if screen1.get("stalled", 0):
+            print("      %d flushes waited out the other processor"
+                  % screen1["stalled"])
 
         if len(after) == 4:
             ran = [i for i in after if after[i][0] > before.get(i, (0, 0, 0))[0]]
@@ -112,9 +148,17 @@ def main():
         # printed showed the program had run, had printed its first three
         # lines, and printed the fourth a moment later. The machine was fine
         # and the check was reading too early.
+        #
+        # In what came back after ps was typed. This used to wait for "spin"
+        # anywhere in the log, and the six "bg /bin/spin" lines above had
+        # already said it, so it could not fail.
+        mark = len(vm.serial())
         vm.type("ps" + chr(10))
+        deadline = time.time() + 60
+        while time.time() < deadline and "/bin/spin" not in vm.serial()[mark:]:
+            time.sleep(0.2)
         c.add("and can still be asked what is running",
-              vm.wait_serial("spin", timeout=60))
+              "/bin/spin" in vm.serial()[mark:])
 
         vm.type("exec /bin/hello" + chr(10))
         c.add("and the machine still runs a program to completion",
@@ -128,12 +172,31 @@ def main():
         # program on another processor had its pointers checked against the
         # wrong memory -- invisible with one processor, which is why this is
         # the harness that runs it.
+        #
+        # Waited for by the whole verdict. This used to wait for "CPUTEST_"
+        # and read at once, and under the gate it read "CPUTEST_PA" with
+        # every line above it ok, and reported a fault the program never had.
         mark = len(vm.serial())
         vm.type("exec /bin/cputest" + chr(10))
-        done = vm.wait_serial("CPUTEST_", timeout=300)
-        out = vm.serial()[mark:]
+        out = ""
+        retyped = False
+        deadline = time.time() + 300
+        while time.time() < deadline and vm.alive():
+            out = vm.serial()[mark:]
+            if "CPUTEST_PASS" in out or "CPUTEST_FAIL" in out:
+                break
+            # A letter of the command lost on the way in, which a busy host's
+            # stdio serial does to one character in a few hundred (see
+            # harness.type). Typed once more, because what is being checked
+            # here is the program; the stall that used to lose whole lines is
+            # the check on /sys/screen above.
+            if not retyped and ("not a command" in out or "no such file" in out):
+                retyped = True
+                mark = len(vm.serial())
+                vm.type("exec /bin/cputest" + chr(10))
+            time.sleep(0.2)
         c.add("every program's memory is its own on every processor",
-              done and "CPUTEST_PASS" in out)
+              "CPUTEST_PASS" in out)
         for line in out.splitlines():
             if "FAIL" in line or "went from" in line or "worker" in line:
                 print("      | %s" % line.strip())

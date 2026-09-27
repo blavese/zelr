@@ -82,18 +82,26 @@ const cpu_t *smp_cpu(u32 i);
 bool smp_active(void);
 
 /* Hands a function to another processor. Returns false if that one is not
-   running or is still busy. The function runs with interrupts off. */
+   running or is still busy. The function runs in that processor's idle
+   loop, with interrupts on and without the kernel lock. */
 bool smp_run(u32 cpu, void (*fn)(void *), void *arg);
 bool smp_busy(u32 cpu);
 
-/* Whether a function is waiting to be run on that processor. The scheduler
-   asks, so that a processor which has been handed a piece of a frame is not
-   given a program to run instead: the compositor is waiting on it, and a
-   frame's worth of spinning is a visible stall. */
+/* Whether a function is waiting to be run on that processor, or is running
+   there now. The scheduler asks, so that a processor which has been handed
+   a piece of a frame is not given a program to run instead: the compositor
+   is waiting on it, and a frame's worth of spinning is a visible stall. */
 bool smp_work_pending(u32 cpu);
 
 /* A processor other than this one that is up and idle, or zero. */
 u32  smp_helper(void);
+
+/* Takes back work handed to a processor that has not started it. True if it
+   was still waiting, and then it will never run there; false if that
+   processor already has it. */
+bool smp_take_back(u32 cpu, void (*fn)(void *));
+
+/* Until the function handed over has returned, or the time is up. */
 bool smp_wait(u32 cpu, u32 timeout_ms);
 
 /* A plain spinlock, for anything two processors might touch at once. */

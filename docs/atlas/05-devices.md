@@ -1567,9 +1567,13 @@ never opened. The PORTSC change bits other than PRC are never acknowledged.
    lock**, smp.c:300-311). This CPU takes `band_count/2 .. end`. If
    `smp_run` fails, this CPU does everything.
 7. `bands_copy(mine..end)`, then sfence.
-8. With a helper: spin on `helper_done`, at most 20,000,000 `pause`es. On
-   timeout, do the helper's half here (writing the same bytes to the same
-   place is harmless). Otherwise `shared_frames++`.
+8. With a helper: first `smp_take_back(helper, bands_helper)`. If the AP has
+   not claimed the job yet it never will, and its half is done here (since
+   0.40.0; before, a helper busy with a program left this spinning, 02 §10
+   B12). Otherwise spin on `helper_done`, at most 20,000,000 `pause`es. On
+   timeout, `stalled_frames++` (`/sys/screen` "stalled") and do the helper's
+   half here (writing the same bytes to the same place is harmless).
+   Otherwise `shared_frames++`.
 9. `sent_valid = true`, `flushing = false`.
 10. `last_sent` = the sum of the dirty band sizes. `total_sent += last_sent`.
 11. SVGA: one `svga_update(0, y, width, h)` per run of adjacent dirty bands.
@@ -2452,7 +2456,9 @@ D15. **Dead exports**: `kbd_getchar`, `kbd_alt/ctrl/shift`,
    next frame's wait before its own half has run. That half then runs late,
    concurrently with the BSP's next frame. It writes identical data, but the
    `band_dirty` and `sent` bookkeeping could mismatch. This needs a stalled
-   AP to happen at all.
+   AP to happen at all. Since 0.40.0 a job nobody claimed is taken back
+   rather than left queued, so only an AP that stalls *inside* the copy can
+   still cause this; `/sys/screen` "stalled" would count it.
 10. **Firmware USB-legacy emulation** (B12). On real machines, does anything
     PS/2-side (`ps2_present`, `mouse_present`, `packet_len`) go stale once
     `take_ownership` stops the SMI emulation? Nothing re-probes the 8042
