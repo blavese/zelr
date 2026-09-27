@@ -13,9 +13,17 @@
 static volatile u64 ticks = 0;
 static u32 frequency = 100;
 
+/* Counted by isr_dispatch before it asks for the kernel lock, not in on_tick
+   after it has one. With another processor holding the lock, the boot
+   processor used to wait for it with interrupts off, and every tick that
+   arrived meanwhile after the first was lost: this is the machine's only
+   clock, so sleeps and timeouts ran long by however long the other processor
+   stayed in the kernel. Only the boot processor takes this interrupt, so the
+   count has one writer. */
+void timer_count_tick(void) { ticks++; }
+
 static void on_tick(registers_t *r) {
     (void)r;
-    ticks++;
 
     /* The USB controller is not wired to an interrupt here, so this is what
        moves it along: a key pressed on a USB keyboard is noticed on the next
@@ -46,7 +54,13 @@ static void on_tick(registers_t *r) {
 void timer_init(u32 hz) {
     frequency = hz;
     u32 divisor = 1193182u / hz;
-    outb(0x43, 0x36);                       /* channel 0, lo/hi, square wave */
+    /* Channel 0, lo/hi, rate generator. The interrupt comes at the same rate
+       in either mode, but in the square wave mode this used to use the
+       counter steps by two and reloads twice a period, and lapic.c measures
+       time by counting reloads: the other processors' clocks came out
+       calibrated against half a period and ticked about twice as fast as
+       asked. In mode 2 one reload is one period. */
+    outb(0x43, 0x34);
     outb(0x40, (u8)(divisor & 0xFF));
     outb(0x40, (u8)((divisor >> 8) & 0xFF));
     register_interrupt_handler(32, on_tick);

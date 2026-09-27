@@ -203,8 +203,15 @@ void fd_table_release(i16 *slots) {
  * waiting is interruptible, which is what waiting ought to mean. It is also
  * what makes task_idle_wait work at all: it halts, and a halt with the flag
  * clear is a halt nothing ends.
+ *
+ * But a halt keeps the processor and the kernel lock with it, and the task
+ * stayed runnable, so the scheduler kept picking it: with a program waiting
+ * at the console, no other processor's system call got in until a key was
+ * pressed. A task now blocks until input arrives (input_wait), which lets go
+ * of both; the halt is only for before there are tasks.
  */
 static void console_pause(void) {
+    if (task_current()) { input_wait(250); return; }
     bool shut = !interrupts_enabled();
     if (shut) sti();
     task_idle_wait();

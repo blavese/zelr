@@ -224,9 +224,16 @@ echo "=== gate ($MODE) ==="
 # Nothing else runs if this fails. build/zelr.bin is whatever the last
 # successful build left there, so carrying on would test the previous version
 # and say something true about code that no longer exists.
+#
+# Decided by build.sh's exit status. It used to be decided by whether the
+# output contained the word "error", which a missing compiler, a missing file,
+# a failed command or a Python traceback does not say -- and each of those
+# went on to test the previous binary and pass.
 build_out="$(bash build.sh 2>&1)"
-if printf '%s' "$build_out" | grep -qE '\berror\b'; then
-  printf '%s\n' "$build_out" | grep -E '\berror\b' | head -5 | sed 's/^/        /'
+build_rc=$?
+if [ "$build_rc" -ne 0 ] || printf '%s' "$build_out" | grep -qE '\berror\b'; then
+  printf '%s\n' "$build_out" | tail -8 | sed 's/^/        /'
+  echo "        (build.sh exited $build_rc)"
   report "it builds" 1
   echo
   echo "gate ($MODE): it does not build, so nothing else was run"
@@ -263,6 +270,16 @@ run_step "the version is not behind the newest tag" vercheck
 # day each time. This reads both headers, and takes no time at all.
 abicheck() { python tools/abicheck.py; }
 run_step "the kernel and its programs agree on the structs" abicheck
+
+# --- and the kernel has no vector instructions in it -------------------------
+#
+# The kernel is compiled without SSE and keeps the vector registers for
+# programs alone (include/fpu.h). A compiler that slips one in anyway -- zig's
+# default target did, once -- corrupts whichever program's registers were
+# live when the kernel ran it. This scanner existed and nothing ran it, and it
+# had rotted into reporting three false alarms by then.
+ssecheck() { python tools/check_sse.py build/zelr.elf; }
+run_step "the kernel uses no vector instructions" ssecheck
 
 # --- and on what a machine with no settings file looks like ---------------
 #
@@ -353,6 +370,14 @@ par_start "the same checks on four processors" selftest_smp
 # --- the shell, over the serial line --------------------------------------
 shelltest() { keep timeout 400 bash tools/shell_test.sh; }
 par_start "the shell answers over serial" shelltest
+
+# --- and a line that arrives all at once ------------------------------------
+#
+# The receive FIFO's trigger was one byte, under which QEMU takes one byte
+# and drops the rest of a burst. Everything above types slowly because of
+# it; this types the way a paste does.
+serialtest() { keep timeout 300 python tools/serialcheck.py; }
+par_start "a line typed all at once arrives whole" serialtest
 
 # --- the black box, which needs two boots to check at all -----------------
 #

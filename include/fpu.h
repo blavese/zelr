@@ -50,3 +50,13 @@ void fpu_restore(const void *area);
    into the area rather than loaded, so making a task costs no instructions
    on the processor's floating point side at all. */
 void fpu_blank(void *area);
+
+/* Clears the MXCSR bits this processor does not implement, so an image from
+   somewhere untrusted -- a program's own stack -- cannot make FXRSTOR fault
+   in the kernel. */
+void fpu_sanitize(void *area);
+extern u32 mxcsr_mask;
+
+/* An aligned image of the blank state, for loading straight into the
+   registers: a signal handler starts from it. */
+const void *fpu_clean_state(void);

@@ -16,6 +16,9 @@ void pmm_reserve(u64 start, u64 size);
 
 u64  pmm_alloc_frame(void);        /* physical address, or 0 */
 
+/* For the self test: called between choosing a frame and claiming it. */
+extern void (*pmm_test_probe)(void);
+
 /* Gives a frame back. A shared one is only really given back by the last
    address space holding it; see below. */
 void pmm_free_frame(u64 addr);

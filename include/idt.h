@@ -57,3 +57,9 @@ void register_interrupt_handler(u8 n, isr_handler_t h);
    are worth routing through the IOAPIC: one pointing at a vector with no
    handler is an interrupt nothing will acknowledge. */
 bool idt_has_handler(u8 n);
+
+/* Whether vector n has a gate at all; one without is a not-present fault. */
+bool idt_gate_present(u8 n);
+
+/* Spurious interrupts taken on any processor (vector 0xFF, isr.S). */
+extern volatile u64 spurious_interrupts;

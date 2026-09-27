@@ -14,6 +14,7 @@
 #include "io.h"
 #include "printf.h"
 #include "string.h"
+#include "keyboard.h"
 
 #define PS2_DATA 0x60
 #define PS2_CMD  0x64
@@ -118,6 +119,7 @@ i32 mouse_take_scroll(void) {
 void mouse_inject_scroll(i32 steps) {
     wheel += steps;
     moves++;
+    input_wake();
 }
 
 static void mouse_cmd(u8 cmd) {
@@ -207,6 +209,9 @@ void mouse_inject(i32 dx, i32 dy, u8 btns) {
     /* After the move, not before it: a packet can carry both, and where the
        button went down is where the pointer ended up. */
     if (was != btns) edge_record();
+
+    /* The desktop waits on this between frames. */
+    input_wake();
 }
 
 static void on_packet(void) {

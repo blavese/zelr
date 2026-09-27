@@ -99,10 +99,11 @@ pixel drawing, text rendering and a consistent widget look.
 user programs are **not** (`sdk/build.sh:36-44`, `userland/build.sh:27-35`, `sdk/libc/build.sh:39-51` pass no
 `-mno-sse`). `kernel/fpu.c:40-66` clears CR0.EM/TS, sets CR0.MP and CR4.OSFXSR|OSXMMEXCPT on every CPU, `fninit`s;
 the scheduler FXSAVEs/FXRSTORs a per-task 512-byte area on every switch (`kernel/sched.c:493, 522`); a new task gets
-`fpu_blank` (x87 CW 0x037F, MXCSR 0x1F80, all exceptions masked, `kernel/fpu.c:87-110`); fork copies the parent's area
-(`kernel/sched.c:281`). So ring 3 may use x87 and SSE2 freely, and the libc's doubles are real SSE2 IEEE doubles.
-`userland/fptest.c` (run by `tools/ring3check.py:31`) checks this. Caveats: signal frames do not save FP state and
-exec does not reset it (§10).
+`fpu_blank` (x87 CW 0x037F, MXCSR 0x1F80, all exceptions masked, `kernel/fpu.c:87-110`); fork copies the parent's live
+state into the child's aligned area (since 0.41.0; it used to copy the raw buffers, which held the state at the
+parent's last switch and could be eight bytes off). So ring 3 may use x87 and SSE2 freely, and the libc's doubles are
+real SSE2 IEEE doubles. `userland/fptest.c` (run by `tools/ring3check.py:31`) checks this. Since 0.41.0 a signal frame
+carries the 512-byte FXSAVE image and exec resets the state (§10, 18 and 21).
 
 ---
 
@@ -645,7 +646,7 @@ until the first handler returns. fork inherits handlers; exec forgets them.
   caller's buffer -- the reason abicheck exists. Strings passed in are copied (paths ≤ 127 chars). `win_set_text`
   copies; `win_surface` memory is owned by the kernel and remapped on resize at the same address.
 * **Ownership across fork/exec.** fork: COW address space, shared open-file descriptions (shared positions), copied
-  handlers/VMAs/brk/FPU. exec: new address space and stack, heap/VMAs/handlers reset, fds kept, FPU state kept.
+  handlers/VMAs/brk/FPU. exec: new address space and stack, heap/VMAs/handlers reset, fds kept, FPU state reset (0.41.0).
   spawn: fresh fds 0-2.
 * **FILE buffers** are owned by the libc; data reaches the kernel on flush and the disk only when the kernel's last
   descriptor closes (or `fsync`, which the libc does not expose).
@@ -741,7 +742,7 @@ libc malloc alignment and `realloc`, `strtok`, printf edge cases (`%hd`, `%#x` w
 * **Pitfalls not written down** (by reasoning): zelr.h's `memcpy`/`memset` are `static inline`, so if clang emits a
   real `memcpy` call for a large aggregate copy, a zelr.h-only program fails to link; `-nostdlib` means no
   compiler-rt (`__int128` division etc.); `_Thread_local` is not supported (PT_TLS ignored, no FS base); a signal
-  handler must not use floating point or large struct copies (FP state is not saved); do not include `<stdbool.h>`
+  handler may use floating point since 0.41.0 (the frame saves and restores it); do not include `<stdbool.h>`
   before `zelr.h`.
 
 ---
@@ -851,7 +852,11 @@ libc malloc alignment and `realloc`, `strtok`, printf edge cases (`%hd`, `%#x` w
     any small block; `n ≥ 2^63` makes `al_grow` pass a negative delta to `sbrk`, which the kernel treats as a give-back
     and answers with the old break (`kernel/user.c:167-175`); `al_grow` then writes a footer ~2^63 bytes away (fault)
     after having lowered the break.
-18. **Signal handlers clobber FP/SSE state** -- the signal frame is `registers_t` only (`kernel/signal.c:201-213`);
+18. **FIXED in 0.41.0: the frame is now `registers_t`, then the FXSAVE image (16-byte aligned), then the trampoline
+    address; the handler starts from `fpu_clean_state()`, and `signal_return` copies the image into the kernel, clears
+    MXCSR bits outside the processor's `mxcsr_mask` (FXRSTOR would fault on them) and loads it. sigtest's "the vector
+    registers are the program's again afterwards" and "and so is its rounding mode" failed with the save and restore
+    removed. Signal handlers clobber FP/SSE state** -- the signal frame is `registers_t` only (`kernel/signal.c:201-213`);
     FXSAVE/FXRSTOR happen only on task switch (`kernel/sched.c:493, 522`). Since programs are built with SSE enabled and
     clang uses xmm registers for doubles and aggregate copies, a handler can corrupt the interrupted code's FP/vector
     registers and MXCSR. `sigtest.c` only checks integer registers.
@@ -860,7 +865,9 @@ libc malloc alignment and `realloc`, `strtok`, printf edge cases (`%hd`, `%#x` w
     returns (weakens `zelr.h:617-618`).
 20. **`<stdbool.h>` before `zelr.h` does not compile** -- `zelr.h:43` `typedef _Bool bool;` becomes `typedef _Bool _Bool;`
     once `bool` is a macro; `sdk/libc/README.md:84-87` recommends including zelr.h *after* the standard headers.
-21. **exec keeps the FPU state** -- `kernel/syscall.c:290-296` resets GPRs but not the FXSAVE area (no `fpu_blank`); an
+21. **FIXED in 0.41.0: `task_fpu_reset` (sched.c) blanks the area and loads it into the live registers; sigtest execs
+    itself with "fpu-probe" after setting MXCSR 0x3F80, and "exec gives the new program a fresh floating point state"
+    failed without the reset. exec keeps the FPU state** -- `kernel/syscall.c:290-296` resets GPRs but not the FXSAVE area (no `fpu_blank`); an
     exec'd program inherits MXCSR/x87 control words.
 22. **`sdk/build.sh` resolves paths against the sdk directory** (`:16-20`), unlike `sdk/libc/build.sh:20-24`;
     `bash sdk/build.sh prog.c` from elsewhere looks for `sdk/prog.c`.

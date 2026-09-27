@@ -55,6 +55,7 @@ static inline u8 *fpu_area_of(task_t *t) {
     return (u8 *)((a + 15) & ~(u64)15);
 }
 
+
 /* Bytes at the bottom that have never been written. A task that has used
    all of its stack reads zero here, and one that has used more than all of
    it does not get this far. */
@@ -86,6 +87,16 @@ static task_t *current_of[SMP_MAX_CPUS];
 
 static inline task_t *cur(void)          { return current_of[smp_this_cpu()]; }
 static inline void set_cur(task_t *t)    { current_of[smp_this_cpu()] = t; }
+
+/* Back to the state a new program starts in. The live registers too when it
+   is the task running here: blanking only the saved area would have the
+   next switch save the old registers straight over it. */
+void task_fpu_reset(task_t *t) {
+    if (!t) return;
+    u8 *a = fpu_area_of(t);
+    fpu_blank(a);
+    if (t == cur()) fpu_restore(a);
+}
 
 /* --- one lock for the kernel ---------------------------------------------
  *
@@ -161,6 +172,31 @@ static bool is_idle(const task_t *t) {
 
 bool task_is_idle(const task_t *t) { return is_idle(t); }
 
+void (*sched_test_probe)(void);
+
+/* Onto the end of the ring, with interrupts off.
+ *
+   A kernel task adding one -- the shell starting a program -- runs with
+   interrupts on, and a tick inside this used to see the ring half changed:
+   the tail pointing at the new task while its own next was still zero, or
+   the tail itself collected and freed while it was being walked to, so the
+   new task was joined to freed memory and never ran. Other processors only
+   walk the ring holding the kernel lock, which whoever gets here holds. */
+static void ring_insert(task_t *t) {
+    bool on = interrupts_enabled();
+    cli();
+    if (!head) { t->next = t; head = t; }
+    else {
+        task_t *p = head;
+        while (p->next != head) p = p->next;
+        /* Where a tick used to be able to land. */
+        if (sched_test_probe) sched_test_probe();
+        t->next = head;
+        p->next = t;
+    }
+    if (on) sti();
+}
+
 bool sched_cpu_idle(u32 cpu) {
     return cpu < SMP_MAX_CPUS && idle_of[cpu] && current_of[cpu] == idle_of[cpu];
 }
@@ -213,13 +249,7 @@ task_t *task_create(const char *name, void (*entry)(void)) {
     f->int_no = 32;
     t->rsp = (u64)f;
 
-    if (!head) { head = t; t->next = t; }
-    else {
-        task_t *p = head;
-        while (p->next != head) p = p->next;
-        p->next = t;
-        t->next = head;
-    }
+    ring_insert(t);
     return t;
 }
 
@@ -283,7 +313,16 @@ task_t *task_fork(const char *name, u64 dir, const registers_t *frame,
         t->brk = parent->brk;
         t->brk_base = parent->brk_base;
         t->parent_pid = parent->pid;
-        for (u32 i = 0; i < FPU_AREA + 16; i++) t->fpu[i] = parent->fpu[i];
+
+        /* The parent's floating point registers as they are now -- it is
+           the task making this call, so the live ones are its own -- into
+           the child's aligned area. This used to copy the raw buffers, which
+           held what the parent had at its last switch rather than now, and
+           two records need not sit the same way against a sixteen byte
+           boundary, so the child's state could come out eight bytes off. */
+        if (parent == cur()) fpu_save(fpu_area_of(parent));
+        u8 *from = fpu_area_of(parent), *to = fpu_area_of(t);
+        for (u32 i = 0; i < FPU_AREA; i++) to[i] = from[i];
     } else {
         fpu_blank(fpu_area_of(t));
         strncpy(t->cwd, "/", TASK_CWD_MAX - 1);
@@ -302,13 +341,7 @@ task_t *task_fork(const char *name, u64 dir, const registers_t *frame,
     f->rax = child_rax;
     t->rsp = (u64)f;
 
-    if (!head) { head = t; t->next = t; }
-    else {
-        task_t *p = head;
-        while (p->next != head) p = p->next;
-        p->next = t;
-        t->next = head;
-    }
+    ring_insert(t);
     return t;
 }
 
@@ -347,13 +380,7 @@ task_t *task_create_user(const char *name, u64 dir, u64 entry, u64 stack_top) {
     f->int_no = 32;
     t->rsp = (u64)f;
 
-    if (!head) { head = t; t->next = t; }
-    else {
-        task_t *p = head;
-        while (p->next != head) p = p->next;
-        p->next = t;
-        t->next = head;
-    }
+    ring_insert(t);
     return t;
 }
 
@@ -479,6 +506,33 @@ static task_t *pick_next(task_t *from) {
     return from;
 }
 
+/* Whether a finished task's record, kernel stack and address space can be
+   freed now.
+ *
+   A dead task is kept a little while after it finishes, so that whoever
+   started it can still ask what it returned. It goes as soon as the status
+   is collected, and anyway once the grace period is up, so a task nobody
+   waits for is not a leak. Freeing it immediately is how a wait comes back
+   with nothing.
+ *
+   And never while a processor is still on it. A program ended by a signal
+   from here goes on running on its own processor until that processor's
+   next tick, on this kernel stack and in this address space; collected in
+   between, that tick pushed its frame into freed memory and read the task
+   record back out of it. on_cpu is let go of at the switch, which is the
+   moment it stops using both. */
+static bool can_collect(const task_t *n) {
+    if (n->state != TASK_DEAD || n == cur() || n == head) return false;
+    if (n->on_cpu >= 0) return false;
+    bool expired = n->died_at && timer_ticks() > n->died_at + REAP_GRACE;
+    return n->reaped || expired;
+}
+
+bool sched_test_collectable(u32 pid) {
+    task_t *t = task_by_pid(pid);
+    return t && can_collect(t);
+}
+
 /* Called from the interrupt dispatcher on every timer tick. Returns the
    stack pointer the interrupt return path should unwind. */
 u64 scheduler_switch(u64 rsp) {
@@ -541,15 +595,7 @@ u64 scheduler_switch(u64 rsp) {
         task_t *p = head;
         for (u32 i = 0; i < 4096; i++) {
             task_t *n = p->next;
-            /* A dead task is kept a little while after it finishes, so
-               that whoever started it can still ask what it returned. It
-               goes as soon as the status is collected, and anyway once the
-               grace period is up, so a task nobody waits for is not a leak.
-               Freeing it immediately is how a wait comes back with nothing. */
-            bool expired = n->died_at && timer_ticks() > n->died_at + REAP_GRACE;
-            bool collectable = n->reaped || expired;
-            if (n != p && n->state == TASK_DEAD && collectable &&
-                n != cur() && n != head) {
+            if (n != p && can_collect(n)) {
                 p->next = n->next;
                 if (n->dir) paging_free_directory(n->dir);
                 kfree((void *)n->stack_base);

@@ -4118,9 +4118,12 @@ void wm_run(void) {
             /* Nothing to draw and nothing moved, so stop asking. This loop
                used to poll the mouse as fast as the processor would go,
                which on a laptop is a warm one for a desktop sitting still.
-               A halt ends on the next interrupt, and every reason to do
-               another pass is one: the timer, a key, the mouse. */
-            task_idle_wait();
+               Every reason to do another pass is the next tick, a key or
+               the mouse, and this waits for the first of them -- blocked
+               rather than halted, since a halt kept the kernel lock and no
+               program on another processor could reach the window server
+               until the desktop's own processor was interrupted. */
+            input_wait(1);
         }
     }
 

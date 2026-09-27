@@ -281,6 +281,11 @@ static i64 sys_exec(registers_t *r) {
        signal arriving afterwards would jump into it. */
     signal_forget_handlers(t->pid);
 
+    /* And the floating point state. The old program's rounding mode and
+       exception masks, and whatever it had left in the vector registers,
+       used to carry straight on into the new one. */
+    task_fpu_reset(t);
+
     /* And every mapping. They described the address space that is being
        thrown away; the new program's are its own to ask for. */
     user_drop_mappings();

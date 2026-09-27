@@ -65,6 +65,7 @@
 #include "tls.h"
 #include "tcp.h"
 #include "signal.h"
+#include "keyboard.h"
 
 static int passed, failed;
 
@@ -92,6 +93,114 @@ static void test_string(void) {
     ok("memmove overlap", strcmp(ov, "aabcde") == 0);
 }
 
+/* A second kernel task after the same block, and the pause that lets it in:
+   inside kmalloc, between one task choosing a block and claiming it, which is
+   exactly where a timer tick used to be able to switch tasks. */
+#define RIVAL_BYTES 2984
+static volatile int heap_rival_go, heap_rival_done;
+static void *volatile heap_rival_p;
+static task_t *probe_task;
+
+static void heap_rival(void) {
+    while (!heap_rival_go) task_yield();
+    heap_rival_p = kmalloc(RIVAL_BYTES);
+    heap_rival_done = 1;
+    task_exit();
+}
+
+static void heap_yield_once(void) {
+    if (task_current() != probe_task) return;
+    heap_test_probe = 0;
+    if (interrupts_enabled()) task_yield();      /* a tick, landing here */
+}
+
+/* The same pause inside the frame allocator, and a task after a frame. */
+static volatile int pmm_rival_go, pmm_rival_done;
+static volatile u64 pmm_rival_frame;
+
+static void pmm_rival(void) {
+    while (!pmm_rival_go) task_yield();
+    pmm_rival_frame = pmm_alloc_frame();
+    pmm_rival_done = 1;
+    task_exit();
+}
+
+static void pmm_yield_once(void) {
+    if (task_current() != probe_task) return;
+    pmm_test_probe = 0;
+    if (interrupts_enabled()) task_yield();
+}
+
+/* And in the middle of joining a task to the ring: the tail found and not
+   yet linked to, while the tail itself is due to be collected. */
+static void ring_idle(void) { for (;;) task_yield(); }
+
+static void ring_yield_once(void) {
+    if (task_current() != probe_task) return;
+    sched_test_probe = 0;
+    if (interrupts_enabled()) task_yield();
+}
+
+static void test_ring(void) {
+    probe_task = task_current();
+    task_t *tail = task_create("selftest-tail", ring_idle);
+    if (!tail || !probe_task) {
+        kprintf("  SKIP  no task to put at the end of the ring\n");
+        return;
+    }
+    /* Finished and collected, so the collector's next pass frees it -- and
+       it is the tail, which the next task is joined to. It cannot be
+       running: kernel tasks stay on this processor, which is running this. */
+    bool on = interrupts_enabled();
+    cli();
+    tail->state = TASK_DEAD;
+    tail->died_at = timer_ticks();
+    tail->reaped = true;
+    if (on) sti();
+
+    sched_test_probe = ring_yield_once;
+    task_t *next = task_create("selftest-next", ring_idle);
+    sched_test_probe = 0;
+    bool joined = next && task_by_pid(next->pid) == next;
+    ok("a task started while the last one is collected is in the ring", joined);
+    if (joined) {
+        cli();
+        next->state = TASK_DEAD;
+        next->died_at = timer_ticks();
+        next->reaped = true;
+        if (on) sti();
+    }
+}
+
+/* The heap from two processors at once, one of them without the kernel
+   lock -- which is how work handed out with smp_run runs, and how a
+   processor coming up at boot runs. Every block is filled with a pattern
+   and checked before it is freed. */
+static volatile u32 hammer_bad;
+
+static void heap_hammer(void *arg) {
+    u8 tag = (u8)(u64)arg;
+    u32 seed = 12345u + tag;
+    u8 *slot[16];
+    u32 size[16];
+    for (int k = 0; k < 16; k++) { slot[k] = 0; size[k] = 0; }
+    for (u32 i = 0; i < 20000; i++) {
+        seed = seed * 1103515245u + 12345u;
+        u32 k = (seed >> 16) & 15;
+        if (slot[k]) {
+            for (u32 j = 0; j < size[k]; j++)
+                if (slot[k][j] != (u8)(tag ^ k)) { hammer_bad++; break; }
+            kfree(slot[k]);
+            slot[k] = 0;
+        } else {
+            size[k] = 8 + ((seed >> 4) & 255);
+            slot[k] = (u8 *)kmalloc(size[k]);
+            if (slot[k]) for (u32 j = 0; j < size[k]; j++) slot[k][j] = (u8)(tag ^ k);
+        }
+    }
+    for (int k = 0; k < 16; k++) if (slot[k]) kfree(slot[k]);
+}
+
 static void test_heap(void) {
     u32 before = heap_used();
     void *a = kmalloc(64), *b = kmalloc(128), *c = kmalloc(32);
@@ -110,6 +219,32 @@ static void test_heap(void) {
     for (int i = 0; i < 16 && zeroed; i++) if (z[i]) zeroed = false;
     ok("kcalloc zeroes", zeroed);
     kfree(z);
+
+    ok("the heap adds up", heap_check());
+
+    /* Block sizes are 32 bits, and rounding used to cut anything from 4 GiB
+       up down to its low bits and hand back a small block. */
+    ok("an impossible size is refused rather than cut down",
+       kmalloc((size_t)1 << 32) == 0 && kmalloc(~(size_t)0) == 0);
+
+    heap_rival_go = heap_rival_done = 0;
+    heap_rival_p = 0;
+    probe_task = task_current();
+    task_t *rival = task_create("heap-rival", heap_rival);
+    if (!rival || !probe_task) {
+        kprintf("  SKIP  no second task to race the heap with\n");
+        return;
+    }
+    heap_rival_go = 1;
+    heap_test_probe = heap_yield_once;
+    void *mine = kmalloc(RIVAL_BYTES);
+    heap_test_probe = 0;
+    for (int w = 0; w < 200 && !heap_rival_done; w++) task_sleep(10);
+    ok("two tasks asking at once are given different blocks",
+       mine && heap_rival_p && mine != heap_rival_p);
+    ok("and the heap still adds up afterwards", heap_check());
+    kfree(mine);
+    if (heap_rival_p != mine) kfree(heap_rival_p);
 }
 
 /* The identity map, now that it covers whatever the machine has rather than
@@ -192,6 +327,26 @@ static void test_pmm(void) {
     }
     ok("every frame that can be handed out is mapped", unmapped == 0);
     if (unmapped) kprintf("        %d free frames have no mapping\n", (u32)unmapped);
+
+    /* Two tasks after a frame, with the pause a tick used to be able to
+       land in, between one choosing a frame and claiming it. */
+    pmm_rival_go = pmm_rival_done = 0;
+    pmm_rival_frame = 0;
+    probe_task = task_current();
+    task_t *rival = task_create("pmm-rival", pmm_rival);
+    if (!rival || !probe_task) {
+        kprintf("  SKIP  no second task to race the frames with\n");
+        return;
+    }
+    pmm_rival_go = 1;
+    pmm_test_probe = pmm_yield_once;
+    u64 mine = pmm_alloc_frame();
+    pmm_test_probe = 0;
+    for (int w = 0; w < 200 && !pmm_rival_done; w++) task_sleep(10);
+    ok("two tasks asking at once are given different frames",
+       mine && pmm_rival_frame && mine != pmm_rival_frame);
+    if (mine) pmm_free_frame(mine);
+    if (pmm_rival_frame && pmm_rival_frame != mine) pmm_free_frame(pmm_rival_frame);
 }
 
 static void test_paging(void) {
@@ -730,6 +885,55 @@ static void test_elf(void) {
        elf_load(dir, buf, sizeof(buf), &entry) == ELF_OK && entry == USER_SPACE_BASE + 0x40000000ull);
 
     paging_free_directory(dir);
+}
+
+/* A program waiting at the console, in machine code: read(0, buf, 16) into
+   the stack below it, then exit. */
+static const u8 console_reader[] = {
+    0xB8, SYS_FREAD, 0, 0, 0,       /* mov eax, SYS_FREAD */
+    0x31, 0xDB,                     /* xor ebx, ebx: descriptor 0 */
+    0x48, 0x8D, 0x4C, 0x24, 0xC0,   /* lea rcx, [rsp - 64] */
+    0xBA, 16, 0, 0, 0,              /* mov edx, 16 */
+    0xCD, 0x80,                     /* int 0x80 */
+    0xB8, SYS_EXIT, 0, 0, 0,        /* mov eax, SYS_EXIT */
+    0x31, 0xDB,                     /* xor ebx, ebx */
+    0xCD, 0x80,                     /* int 0x80 */
+    0xEB, 0xFE,                     /* and, in case, stay here */
+};
+
+/* It used to halt inside the read, holding the kernel lock and staying
+   runnable, so the scheduler kept handing it the processor and no other
+   processor's system call got in until a key came. Waiting should be
+   blocked, and cost nothing until the key. */
+static void test_console_wait(void) {
+    int pid = user_spawn_flat("selftest-reader", console_reader, sizeof(console_reader));
+    ok("a program that reads the console can be started", pid > 0);
+    if (pid <= 0) return;
+
+    task_t *t = 0;
+    for (int w = 0; w < 200; w++) {
+        t = task_by_pid((u32)pid);
+        if (!t || t->state == TASK_BLOCKED) break;
+        task_sleep(10);
+    }
+    t = task_by_pid((u32)pid);
+    ok("waiting for a key, it is blocked rather than running",
+       t && t->state == TASK_BLOCKED);
+
+    u32 slices = t ? t->slices : 0;
+    task_sleep(200);
+    t = task_by_pid((u32)pid);
+    ok("and is hardly given the processor while it waits",
+       t && t->slices - slices <= 2);
+
+    keyboard_inject('\n');
+    bool ended = false;
+    for (int w = 0; w < 200 && !ended; w++) {
+        if (!task_alive((u32)pid)) ended = true;
+        else task_sleep(10);
+    }
+    ok("and the key ends the wait", ended);
+    if (ended) task_wait((u32)pid);
 }
 
 static void test_userspace(void) {
@@ -1404,6 +1608,22 @@ static void held_job(void *arg) {
     held_finished = 1;
 }
 
+/* Another processor holding the kernel lock, with interrupts off, for about
+   thirty ticks' worth of cycles, and what the clock did meanwhile. */
+static volatile u64 hold_cycles, hold_t0, hold_t1;
+
+static void hold_lock_job(void *arg) {
+    (void)arg;
+    cli();
+    kernel_lock_acquire();
+    hold_t0 = timer_ticks();
+    u64 start = rdtsc();
+    while (rdtsc() - start < hold_cycles) __asm__ volatile ("pause");
+    hold_t1 = timer_ticks();
+    kernel_lock_release();
+    sti();
+}
+
 /* Work that is only ever meant to be taken back, and says if it ran. */
 static volatile u32 taken_ran;
 
@@ -1466,6 +1686,71 @@ static void test_smp(void) {
     sleep_ms(50);
     u64 moved = smp_cpu(1)->spins - spins_before;
     ok("an idle processor is asleep rather than spinning", moved < 100);
+
+    /* Its own clock ticks at the rate asked for. It is calibrated against the
+       8254 at boot, and the 8254 used to be in the mode that reloads twice a
+       period while the calibration counted reloads as periods, so these
+       ticked about twice as fast as the machine's clock. */
+    u64 lt0 = smp_cpu(1)->local_ticks, pt0 = timer_ticks();
+    task_sleep(500);
+    u64 dl = smp_cpu(1)->local_ticks - lt0, dp = timer_ticks() - pt0;
+    ok("another processor's clock keeps time with the machine's",
+       dp > 0 && dl * 4 >= dp * 3 && dl * 4 <= dp * 5);
+    if (!(dp > 0 && dl * 4 >= dp * 3 && dl * 4 <= dp * 5))
+        kprintf("        %d of its ticks against %d\n", (u32)dl, (u32)dp);
+
+    /* And the rate they were set from is the rate the counter really runs
+       at, measured a second way: over a second of the battery-backed clock.
+       Counting their ticks cannot show a clock that runs twice as fast -- an
+       emulator merges timer interrupts a busy host is slow to deliver, and
+       the old calibration, half the true rate, came out as 1.12 ticks per
+       tick rather than 2 -- and the machine's own tick is no better a ruler,
+       for the same reason. */
+    u32 measured = lapic_timer_measure();
+    u32 calibrated = lapic_timer_hz();
+    bool rate_ok = measured && calibrated &&
+                   (u64)calibrated * 10 >= (u64)measured * 9 &&
+                   (u64)calibrated * 10 <= (u64)measured * 11;
+    ok("their clocks were calibrated at the rate the counter really runs", rate_ok);
+    if (!rate_ok) kprintf("        calibrated %d, measured %d\n", calibrated, measured);
+
+    /* And the machine's clock keeps going while another processor holds the
+       kernel lock. The boot processor used to wait for the lock before
+       counting its tick, with interrupts off, so all but one of the ticks
+       that came meanwhile were lost. Measured in cycles first, then held for
+       thirty ticks' worth; the sleep is what lets the other processor have
+       the lock at all. */
+    u64 c0 = rdtsc(), tk0 = timer_ticks();
+    task_sleep(200);
+    u64 per_tick = (rdtsc() - c0) / ((timer_ticks() - tk0) ? (timer_ticks() - tk0) : 1);
+    hold_cycles = per_tick * 30;
+    hold_t0 = hold_t1 = 0;
+    bool held = false;
+    for (int try = 0; try < 50 && !held; try++) {
+        held = smp_run(1, hold_lock_job, 0);
+        if (!held) task_sleep(10);
+    }
+    task_sleep(600);
+    smp_wait(1, 3000);
+    ok("the clock keeps time while another processor holds the lock",
+       held && hold_t1 - hold_t0 >= 25);
+    if (held && hold_t1 - hold_t0 < 25)
+        kprintf("        %d ticks counted in thirty ticks' worth\n",
+                (u32)(hold_t1 - hold_t0));
+
+    /* The heap from here and from another processor at once. The other one
+       runs the work without the kernel lock, so only the heap's own lock
+       stands between the two. */
+    hammer_bad = 0;
+    bool hammering = false;
+    for (int try = 0; try < 50 && !hammering; try++) {
+        hammering = smp_run(1, heap_hammer, (void *)0xA5);
+        if (!hammering) task_sleep(10);
+    }
+    heap_hammer((void *)0x5A);
+    bool hammered = hammering && smp_wait(1, 20000);
+    ok("two processors using the heap at once, one without the kernel lock, keep it whole",
+       hammered && hammer_bad == 0 && heap_check());
 
     /* Hand the same job to all of them and join in.
      *
@@ -1569,6 +1854,39 @@ static void test_smp(void) {
     } else {
         kprintf("  SKIP  no second processor to take work back from\n");
     }
+
+    /* A program ended while another processor is running it is not freed
+       under that processor (atlas 02 section 10, B28). Ended the way a
+       signal ends it and collected the way a wait collects it, with
+       interrupts off so nothing switches in between; then again once that
+       processor has let go of it, which is what stops the first half from
+       passing on a collector that never collects anything. */
+    int victim = -1;
+    bool kept = false;
+    bool was = interrupts_enabled();
+    cli();
+    for (u32 i = 0; i < nspin && victim < 0; i++) {
+        task_t *t = task_by_pid((u32)spinners[i]);
+        if (t && t->state != TASK_DEAD && t->on_cpu > 0) {
+            victim = spinners[i];
+            signal_end_task((u32)victim, 128 + SIGKILL);
+            t->reaped = true;
+            kept = !sched_test_collectable((u32)victim);
+        }
+    }
+    if (was) sti();
+    ok("a program ended on another processor is not freed while it runs there",
+       victim > 0 && kept);
+    bool let_go = false;
+    for (int w = 0; w < 200 && victim > 0 && !let_go; w++) {
+        cli();
+        task_t *t = task_by_pid((u32)victim);
+        if (!t) let_go = true;                    /* collected once it stopped */
+        else if (t->on_cpu < 0) let_go = sched_test_collectable((u32)victim);
+        if (was) sti();
+        if (!let_go) task_sleep(10);
+    }
+    ok("and is freed once it has stopped", let_go);
 
     held_release = 1;
     for (int w = 0; w < 100 && !held_finished; w++) task_sleep(10);
@@ -3626,6 +3944,18 @@ static void test_pcie(void) {
  * clock is measured rather than assumed.
  */
 static void test_irqs(void) {
+    /* The local APIC's spurious vector is set to 0xFF on every processor,
+       and there was no gate for it: one delivered was a not-present fault,
+       which in the kernel is a panic. Only raised here if the gate is there,
+       so a machine without it reports that rather than stopping. */
+    ok("the spurious interrupt vector has a gate", idt_gate_present(0xFF));
+    if (idt_gate_present(0xFF)) {
+        u64 before = spurious_interrupts;
+        __asm__ volatile ("int $0xff");
+        ok("and one taken is counted and returned from",
+           spurious_interrupts == before + 1);
+    }
+
     if (!ioapic_active()) {
         kprintf("  SKIP  no ioapic on this machine, 8259 only\n");
         ok("the clock still runs on the 8259", timer_hz() > 0);
@@ -3910,7 +4240,7 @@ int selftest_run(void) {
     kprintf("[physical memory]\n"); test_pmm();
     kprintf("[paging]\n");     test_paging();
     kprintf("[user access]\n"); test_user_access();
-    kprintf("[heap]\n");       test_heap();
+    kprintf("[heap]\n");       test_heap(); test_ring();
     kprintf("[filesystem]\n"); test_fs();
     kprintf("[paths]\n");      test_paths();
     kprintf("[directories]\n"); test_directories();
@@ -3921,7 +4251,7 @@ int selftest_run(void) {
     kprintf("[fat]\n");        test_fat(); test_fat_names();
     kprintf("[network]\n");    test_net();
     kprintf("[elf]\n");        test_elf();
-    kprintf("[userspace]\n");  test_userspace();
+    kprintf("[userspace]\n");  test_userspace(); test_console_wait();
     kprintf("[video]\n");      test_video();
     kprintf("[mouse]\n");      test_mouse(); test_mouse_edges();
     kprintf("[graphics]\n");   test_gfx();
@@ -3956,6 +4286,9 @@ int selftest_run(void) {
     kprintf("[clock]\n"); test_clock();
     kprintf("[sound]\n"); test_sound();
     kprintf("[kernel stack]\n"); test_stack();
+    /* Last, after every section has allocated and freed with the other
+       tasks running beside it. */
+    ok("the heap still adds up after all of that", heap_check());
     kprintf("\n%d passed, %d failed\n", passed, failed);
     kprintf(failed ? "SELFTEST_FAIL\n" : "SELFTEST_PASS\n");
     return failed;

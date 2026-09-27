@@ -364,8 +364,20 @@ isr128:
     push $128
     jmp isr_common
 
+/* The local APIC's spurious vector, delivered when an interrupt was
+   withdrawn before the processor took it. There is nothing to do and,
+   unlike every other vector, nothing to acknowledge: an EOI here would
+   retire whatever real interrupt is in service instead. So it is counted
+   and returned from without touching a register or the kernel lock. It had
+   no gate at all, which made it a not-present fault -- the end of a
+   program, or in the kernel a panic. */
+.global isr255
+isr255:
+    lock incq spurious_interrupts(%rip)
+    iretq
+
 /* The table idt.c walks to install every gate, so it does not have to
-   name forty-nine symbols one at a time. */
+   name fifty-three symbols one at a time. */
 .section .rodata
 .align 8
 .global isr_stub_table
@@ -422,3 +434,4 @@ isr_stub_table:
     .quad isr240
     .quad isr241
     .quad isr242
+    .quad isr255

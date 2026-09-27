@@ -53,11 +53,12 @@ For each of these I read the header and the assertion logic. Almost all were rea
 | tools/bootcheck.py | 207 | The disk the kernel formats must boot from a plain BIOS, including repair of a disk formatted by the previous release. |
 | tools/browsercheck.py | 404 | The browser against tools/webserver.py: render comparisons, links, back, chunked, CSS, PNG, SVG, JS, redirect, 404, https refusal. |
 | tools/check_loader.py | 133 | Static, run by bootloader/build.sh:25. Checks the cdboot signature position, the handoff magic halves, and that the load address is the same in both loaders. |
-| tools/check_sse.py | 157 | Byte scanner for SSE/MMX opcodes in ELF executable sections. **Not wired into any build script** (section 10). |
+| tools/check_sse.py | 170 | Byte scanner for SSE/MMX opcodes in ELF executable sections. Run by the gate on build/zelr.elf since 0.41.0 (section 10, S). |
 | tools/check_version.py | 81 | Static. `KERNEL_VERSION` must not be behind the newest `vN.N.N` git tag. |
 | tools/clipcheck.py | 124 | Copy and paste inside the desktop terminal via sendkey ctrl-c/ctrl-v/ctrl-a, then reads `/sys/clipboard` over serial. |
 | tools/crashcheck.py | 154 | Power cut in the middle of a FAT write. Six killed rounds; each must leave the file whole as either A or B. |
-| tools/defaultcheck.py | 138 | Static. Kernel theme defaults against settings.c defaults. **Currently vacuous** (section 10). |
+| tools/defaultcheck.py | 150 | Static. The palette defaults in theme.c against settings.c, and the keys the kernel reads against what Settings writes or carries over. Rewritten in 0.41.0 (section 10, AB). |
+| tools/serialcheck.py | 100 | Types three 14-byte lines to the kernel shell in one write each and wants them back whole, and `mem` to report no dropped bytes (0.41.0; the FIFO trigger, kernel/serial.c). |
 | tools/deskcheck.py | 799 | The window manager: minimise, restore, maximise, panel hide, resize, snap, wallpapers, alt-tab, wheel, resolution change, launcher, context menu, rubber band, and auto-desktop at 1920x1080. |
 | tools/enscheck.py | 111 | Two notes from the ES1370 (Ensoniq), recorded with `-audiodev wav` and pitch-checked. |
 | tools/fat32_test.sh | 127 | A FAT32 volume built by mkfat (one file past cluster 65535): read, write, survive a reboot. FAT16 still works. |
@@ -1204,7 +1205,7 @@ All of the following were verified by reading. Anything that depends on runtime 
   - `boottest` is defined at gate.sh:401 as `iso_test.sh` and started at 402. It is then **redefined** at 519 as `bootcheck.py`.
   - `par_start` records only the function name (128), and `par_wait` re-runs failed steps as `${again_cmds[$i]}` (177).
   - So if "all four boot paths" fails in the parallel run, the "alone" retry runs **bootcheck.py**. A genuine ISO/UEFI boot regression can then be reported as `PASS  all four boot paths, alone`.
-- **B. Build failure is detected by a word, not an exit status** (gate.sh:227-235).
+- **B. FIXED in 0.41.0: gate.sh fails the build step on build.sh's exit status (or the word, as before), and build.sh runs with `set -eo pipefail` and deletes `build/zelr.elf` and `build/zelr.bin` before compiling, so a failed build leaves nothing to boot. Build failure is detected by a word, not an exit status** (gate.sh:227-235).
   - `grep -qE '\berror\b'` catches compiler and linker `error:` lines.
   - It misses build.sh failures that print no lowercase "error":
     - `zig not found; set ZIG=/path/to/zig` (build.sh:18, exit 1);
@@ -1239,7 +1240,7 @@ All of the following were verified by reading. Anything that depends on runtime 
   - cycle.sh's clean check ignores untracked files (59-61), but `abandon` runs `git clean -qfd` (72), deleting a person's untracked, non-ignored files. The landing `git add -A` (200) commits them.
   - batch.sh's bookkeeping commits on main use `git add -A` (202, 229, 250) and would commit leftovers from the full gate, which runs in the main checkout.
   - `*.wav`, `mountseed.*.txt`, `fat32probe.*.txt` and `fat32high.*.txt` are **not** in .gitignore. They are left behind whenever `timeout` kills a harness, because Python `finally` blocks do not run on SIGTERM/TerminateProcess (runtime behaviour, inferred).
-- **N. Tests that cannot fail because of echo.**
+- **N. FIXED in 0.41.0 for shell_test.sh (iso_test.sh's `$what` still open): the transcript loses its carriage returns, and the four checks, plus "cd moves into a directory" (the prompt says `/home/docs` too), match whole lines (`check_line`, `grep -qxF`) or the ls format (`check_re`). An echoed line starts with the prompt, so it never matches whole. Tests that cannot fail because of echo.**
   - The console echoes typed characters (kernel/shell.c:626-628 → printf.c:16-24). In shell_test.sh these 4 of 17 checks match the **echo of the typed command** and cannot fail while echo works:
     - `notes` "ls shows the seeded files" (103-104; matched by `write notes.txt …`);
     - `shell wrote this` (106);
@@ -1250,7 +1251,7 @@ All of the following were verified by reading. Anything that depends on runtime 
 - **P. `vm.wait_prompt()` with the default `count=1` after pressing ESC** is a no-op, because the prompt count has been at least 1 since boot. This appears in framecheck.py:67-68, netcheck.py:101-104 (`leave_desktop`) and setcheck.py:263-265, which therefore rely on fixed sleeps. framecheck also names its `wait_screen` lambda `(px, w, h)` (56); this is harmless because it returns True.
 - **Q.** tlscheck's "the body is really X's" (138-140) passes on `marker in out or body > 400`, so the marker is optional.
 - **R.** whereis.py asserts a 32-bit ELF (line 8). `build/zelr.elf` is x86-64 (built by build.sh with `-target x86_64-freestanding-none`), so the tool is unusable on the kernel.
-- **S.** check_sse.py is not called by build.sh or by any `*/build.sh` (grep). README.md:1431 says it "now fails the build". The real protection is build.sh's `-mno-sse -mno-sse2 -mno-mmx -mno-80387` (build.sh:45).
+- **S. FIXED in 0.41.0: the gate runs it on build/zelr.elf after abicheck ("the kernel uses no vector instructions"). It had rotted into three false alarms (`mov esi, 0x100f` and two scale-index bytes); it now excuses the first byte of a B8-BF immediate and a 0F after a ModRM with rm 100 and mod 01/10, and still finds 912 SSE instructions in jstest.elf.** check_sse.py is not called by build.sh or by any `*/build.sh` (grep). README.md:1431 says it "now fails the build". The real protection is build.sh's `-mno-sse -mno-sse2 -mno-mmx -mno-80387` (build.sh:45).
 - **T. The gate's tidy step is incomplete.**
   - `stale()` knows 10 patterns (618-620). Pid-named artifacts it never sweeps include `ring3.*.img`, `soundcheck.*.{img,wav}`, `enscheck.*`, `volcheck.*`, `apptone`/`apprec.*.wav`, `usbhub`/`usbhot`/`usbstick`/`stick.*.img`, `deskauto.*.img`, `mountseed.*.txt`, and others.
   - The `rm -f` of fixed names at 617 (`deskcheck.img`, `sel.img`, …) is mostly for names no longer produced.
@@ -1271,7 +1272,7 @@ All of the following were verified by reading. Anything that depends on runtime 
 - **Y.** review.md:17 tells the reviewer to run `git diff` on an **uncommitted** tree, which does not show new untracked files. New files are invisible to the review unless the reviewer uses `git status`.
 - **Z.** batch.sh:94 builds the prompt with `sed "s|{{TASK}}|$title|"`. A title containing `|`, `&` or `\` corrupts it. cycle.sh uses a Python replacement.
 - **AA. gate.sh's signal handling.** `trap 'rm -rf "$LOCK"' EXIT INT TERM` has no `exit` in the handler. In bash, a handled INT or TERM **resumes the script** after the handler runs. So Ctrl-C, or a TERM from an outer `timeout`, removes the lock and the gate keeps running remaining steps, now unlocked. This is inferred from bash semantics and was not run.
-- **AB. defaultcheck.py passes vacuously.**
+- **AB. FIXED in 0.41.0: rewritten to compare what is still in two places -- the palette defaults (look, light, preset, read from settings.c's comma-separated declaration) and the non-KNOBS keys the kernel reads against what `save()` writes by name -- and to assert it found both sides. Its first run failed on a real loss: `text_dim` is read by the kernel and never written by Settings, so a hand-written one vanished on the first save; Settings now carries over lines it does not manage (`keep_unmanaged`). defaultcheck.py passes vacuously.**
   - settings.c no longer holds per-setting defaults. It declares `static int light = 1, look = 0, preset = 1, custom = 0;` on one line (settings.c:54), which the per-line regex at defaultcheck.py:88 cannot match. `save()` writes through `line_num`/`line_hex` (settings.c:197-225), not `put_kv`.
   - kernel/theme.c's `theme_init` (324-342) sets only `look`, `light` and the preset; everything else comes from the `KNOBS` table (theme.c:88-131, `theme_defaults` at 351-353).
   - Result: `settings_defaults()` returns `{}` and `settings_saved_keys()` returns an empty set, so no key is compared. Of the 3 checks, only "the wallpaper enum could be read" tests anything.

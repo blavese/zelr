@@ -187,6 +187,57 @@ static int line_hex(char *out, int at, const char *key, u32 v) {
     return at;
 }
 
+/* Whether this window writes the key itself, which makes its line in the old
+   file one to replace rather than one to keep. */
+static int manages(const char *key, int len) {
+    static const char *const OWN[] = {
+        "look", "light", "preset", "accent", "desktop", "surface", "text",
+    };
+    for (u32 i = 0; i < sizeof(OWN) / sizeof(OWN[0]); i++) {
+        int k = 0;
+        while (k < len && OWN[i][k] == key[k]) k++;
+        if (k == len && OWN[i][k] == 0) return 1;
+    }
+    for (int i = 0; i < nknobs; i++) {
+        int k = 0;
+        while (k < len && knobs[i].key[k] == key[k]) k++;
+        if (k == len && knobs[i].key[k] == 0) return 1;
+    }
+    return 0;
+}
+
+/* Every line of the file as it stands whose key this window does not write,
+   after everything it does. The file is written whole, so a key the kernel
+   reads and this window has no control for used to be deleted by the first
+   save: text_dim, set by hand, was. Last, because the look, light and
+   preset lines rebuild the palette when the kernel reads them, and a colour
+   said before them would be overwritten. */
+static int keep_unmanaged(char *out, int n, int cap) {
+    static char old[2048];
+    int len = slurp(CFG, old, (int)sizeof(old) - 1);
+    if (len <= 0) return n;
+    int i = 0;
+    while (i < len) {
+        int s = i;
+        while (i < len && old[i] != '\n') i++;
+        int e = i;
+        if (i < len) i++;
+        if (e > s && old[e - 1] == '\r') e--;
+
+        int k = s;
+        while (k < e && (old[k] == ' ' || old[k] == '\t')) k++;
+        if (k >= e || old[k] == '#') continue;
+        int ke = k;
+        while (ke < e && old[ke] != ' ' && old[ke] != '\t') ke++;
+        if (manages(old + k, ke - k)) continue;
+
+        if (n + (e - s) + 1 > cap) break;
+        for (int j = s; j < e; j++) out[n++] = old[j];
+        out[n++] = '\n';
+    }
+    return n;
+}
+
 /* Written whole every time rather than edited in place. The file is a
    kilobyte and a partial rewrite is a way to end up with two values for one
    key.
@@ -217,6 +268,8 @@ static void save(void) {
 
     for (int i = 0; i < nknobs; i++)
         n = line_num(out, n, knobs[i].key, knobs[i].value);
+
+    n = keep_unmanaged(out, n, (int)sizeof(out) - 1);
 
     out[n] = 0;
     spit(CFG, out, n);

@@ -113,3 +113,24 @@ void spin_lock(spinlock_t *lock);
    wait at all. */
 bool spin_try(spinlock_t *lock);
 void spin_unlock(spinlock_t *lock);
+
+/* A spinlock taken with interrupts off, for state that an interrupt on the
+   same processor can also reach: the timer's collector frees memory, so a
+   heap lock held when the tick arrives would be asked for again by the tick
+   and spin forever. Interrupts off keeps this processor's own interrupts out
+   and the lock keeps the other processors out, with or without the kernel
+   lock. Returns whether interrupts were on, for the unlock to put back. */
+static inline bool spin_lock_irqsave(spinlock_t *lock) {
+    bool on;
+    u64 flags;
+    __asm__ volatile ("pushfq; pop %0" : "=r"(flags));
+    on = (flags & 0x200) != 0;
+    __asm__ volatile ("cli" ::: "memory");
+    spin_lock(lock);
+    return on;
+}
+
+static inline void spin_unlock_irqrestore(spinlock_t *lock, bool on) {
+    spin_unlock(lock);
+    if (on) __asm__ volatile ("sti" ::: "memory");
+}

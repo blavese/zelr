@@ -8,7 +8,11 @@
 # not set CR4.OSFXSR takes an invalid-opcode fault on the first one, long
 # before anything has a way to report it. Turning them off costs nothing here:
 # there is no floating point in this kernel.
-set -e
+#
+# pipefail as well as -e, so that a failure on the left of a pipe -- the cat
+# below that checksums the program blobs -- fails the build instead of being
+# swallowed by what it was piped into.
+set -eo pipefail
 cd "$(dirname "$0")"
 
 ZIG="${ZIG:-$(command -v zig || true)}"
@@ -37,6 +41,11 @@ SRC=$(find boot kernel -name '*.c' -o -name '*.S' | sort | tr '\n' ' ')
 # checksum of the blobs into the command line, which the cache key does cover,
 # is what makes a changed program actually reach the image.
 BLOBS=$(cat build/user/*.elf build/trampoline.bin | cksum | cut -d' ' -f1)
+
+# Gone before the compiler runs, so a build that fails leaves nothing behind
+# for a harness to boot. The previous image surviving a failed build is how
+# the gate used to test yesterday's kernel and report on today's.
+rm -f build/zelr.elf build/zelr.bin
 
 "$ZIG" cc -target x86_64-freestanding-none \
   -ffreestanding -nostdlib -static -O2 -std=gnu11 \

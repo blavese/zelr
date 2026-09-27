@@ -4,6 +4,7 @@
 #include "io.h"
 #include "acpi.h"
 #include "paging.h"
+#include "rtc.h"
 
 #define LAPIC_ID   0x020
 #define LAPIC_LVT_TIMER 0x320
@@ -91,6 +92,11 @@ u32 lapic_timer_hz(void) { return ticks_per_second; }
  * interrupt. It never moved and the machine stopped at "== smp": a
  * calibration loop is the worst place to learn that interrupts are not on
  * yet, because it does not fail, it waits. */
+/* Loops of three port reads each. Fifty milliseconds takes a few thousand of
+   them; this bound is a few seconds at the worst on a machine whose 8254 is
+   not running, where the old one of two hundred million was minutes. */
+#define CALIBRATE_GUARD 5000000u
+
 static u16 pit_count(void) {
     outb(0x43, 0x00);                  /* latch channel 0 */
     u8 lo = inb(0x40);
@@ -103,16 +109,26 @@ void lapic_timer_calibrate(void) {
 
     write(LAPIC_TIMER_DIV, DIV_16);
     write(LAPIC_LVT_TIMER, LVT_MASKED);      /* count, but deliver nothing */
-    write(LAPIC_TIMER_INIT, 0xFFFFFFFFu);
 
     /* Five reloads of the 8254, which at a hundred hertz is fifty
-       milliseconds. Bounded, because a machine whose 8254 is not running
-       must come up without a working measurement rather than not at all:
-       a rate of nought simply means no processor arms one of these, which
-       is where this machine was before any of it. */
+       milliseconds (timer_init puts it in the mode where a reload is a whole
+       period). Bounded, because a machine whose 8254 is not running must
+       come up without a working measurement rather than not at all: a rate
+       of nought simply means no processor arms one of these, which is where
+       this machine was before any of it.
+     *
+       Started on a reload rather than wherever the counter happened to be,
+       or the first period is only part of one. */
     u32 want = 5, wraps = 0;
     u16 prev = pit_count();
-    for (u32 guard = 0; guard < 200000000u && wraps < want; guard++) {
+    for (u32 guard = 0; guard < CALIBRATE_GUARD; guard++) {
+        u16 now = pit_count();
+        if (now > prev) break;
+        prev = now;
+    }
+    prev = pit_count();
+    write(LAPIC_TIMER_INIT, 0xFFFFFFFFu);
+    for (u32 guard = 0; guard < CALIBRATE_GUARD && wraps < want; guard++) {
         u16 now = pit_count();
         if (now > prev) wraps++;       /* counts down, so up is a reload */
         prev = now;
@@ -125,12 +141,42 @@ void lapic_timer_calibrate(void) {
 
     u32 counted = 0xFFFFFFFFu - left;
     u32 hz = timer_hz() ? timer_hz() : 100;
-    ticks_per_second = counted * (hz / want);
+    ticks_per_second = (u32)((u64)counted * hz / want);
 
     /* A number too small to divide into a tick would arm a timer that never
        fires, which is a processor that picks a program up and never puts it
        down. Nought is the honest answer and means no timer at all. */
     if (ticks_per_second < hz * 100) ticks_per_second = 0;
+}
+
+/* The same rate measured a second way, for the self test: this processor's
+   own counter over one second of the battery-backed clock, from one change
+   of its seconds to the next. Not against the machine's tick, which an
+   emulator on a busy host delivers late or merges -- measured that way this
+   came out half as fast again as the counter runs. The boot processor's
+   local timer is otherwise unused, so it can be borrowed. */
+u32 lapic_timer_measure(void) {
+    if (!regs || !rtc_present() || !interrupts_enabled()) return 0;
+    write(LAPIC_TIMER_DIV, DIV_16);
+    write(LAPIC_LVT_TIMER, LVT_MASKED);
+
+    u32 hz = timer_hz() ? timer_hz() : 100;
+    u64 give_up = timer_ticks() + 4 * (u64)hz;
+    rtc_time_t t;
+    if (!rtc_read(&t)) return 0;
+    u32 was = t.second;
+    while (t.second == was && timer_ticks() < give_up)
+        if (!rtc_read(&t)) return 0;
+    if (t.second == was) return 0;
+
+    was = t.second;
+    write(LAPIC_TIMER_INIT, 0xFFFFFFFFu);
+    while (t.second == was && timer_ticks() < give_up)
+        if (!rtc_read(&t)) break;
+    u32 left = read(LAPIC_TIMER_CUR);
+    write(LAPIC_TIMER_INIT, 0);
+    if (t.second == was) return 0;
+    return 0xFFFFFFFFu - left;
 }
 
 void lapic_timer_start(u8 vector) {

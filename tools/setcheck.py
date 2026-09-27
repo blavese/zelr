@@ -34,6 +34,10 @@ PANEL_Y = SCREEN_H - DOCK_H - DOCK_GAP
 TALL = 96
 TALL_Y = SCREEN_H - TALL - DOCK_GAP
 
+# A key the kernel reads (theme.c apply) that Settings has no control for,
+# written by hand, which a save from Settings must leave in the file.
+HAND_KEY = "text_dim 0x6a6a74"
+
 # Somewhere along the dock with nothing drawn on it: past the name badge and
 # well short of the field in the middle.
 PROBE_X = 260
@@ -187,6 +191,13 @@ def main():
                                                  PROBE_X, PROBE_X + 120)) > 60,
             timeout=20)
 
+        # Then a file holding only a key the kernel reads and Settings has no
+        # control for, which the save below has to keep: Settings writes the
+        # whole file, and used to delete it. The height stays where it is,
+        # because a key missing from the file keeps its value rather than
+        # going back to its default.
+        vm.run("write /zelr.cfg %s" % HAND_KEY, timeout=20)
+
         # --- and a switch in the window writes the same keys --------------
         #
         # The terminal the desktop opens with goes first. Where a window
@@ -268,6 +279,8 @@ def main():
         wrote = ("dock_brand 1" in cfg and "dock_h 44" in cfg
                  and "wallpaper 11" in cfg and "anim_ms 120" in cfg)
         c.add("and the file it wrote is the one the kernel reads", wrote)
+        c.add("and it kept the line it has no control for",
+              HAND_KEY in cfg)
         if not wrote:
             print("--- /zelr.cfg as the machine has it ---")
             print(cfg)

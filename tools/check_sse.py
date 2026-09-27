@@ -78,6 +78,21 @@ def main():
                 continue
 
             if bare and not prefixed:
+                # The first byte of a move-to-register's immediate, whatever
+                # it holds: `mov esi, 0x100f` is be 0f 10 00 00, and 0x100f
+                # is no address, so the test below never excused it.
+                if j > 0 and 0xB8 <= body[j - 1] <= 0xBF:
+                    filtered += 1
+                    continue
+
+                # A scale-index byte. The addressing byte in front says one
+                # follows (rm 100, with mod 01 or 10), and 0F is an ordinary
+                # value for it: `movzx ecx, word [rdi+rcx+0x10]` is
+                # 0f b7 4c 0f 10, with the second 0F as the index byte.
+                if j > 0 and (body[j - 1] & 0xC7) in (0x44, 0x84):
+                    filtered += 1
+                    continue
+
                 # Does this sit inside a 32-bit immediate holding an address?
                 # First handle an address at the start of a known immediate.
                 # This is common for `push $string`, where the first two bytes

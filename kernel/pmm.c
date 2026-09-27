@@ -14,8 +14,15 @@
 #include "string.h"
 #include "paging.h"
 #include "heap.h"
+#include "smp.h"
 
 extern u8 __kernel_start[], __kernel_end[];
+
+/* The same as the heap's (heap.c): a frame chosen and not yet marked used
+   was a frame a tick could hand to somebody else -- the collector frees
+   frames from inside the timer interrupt -- and a processor coming up at
+   boot allocates before anybody holds the kernel lock. */
+static spinlock_t pmm_lock;
 
 static u32 *bitmap;
 static u64  bitmap_bytes;
@@ -47,7 +54,9 @@ bool pmm_frame_free(u64 addr) { return !is_used(FRAME_IDX(addr)); }
 void pmm_reserve(u64 start, u64 size) {
     u64 first = start & ~(u64)(PAGE_SIZE - 1);
     u64 last = (start + size + PAGE_SIZE - 1) & ~(u64)(PAGE_SIZE - 1);
+    bool on = spin_lock_irqsave(&pmm_lock);
     for (u64 a = first; a < last; a += PAGE_SIZE) mark_used(FRAME_IDX(a));
+    spin_unlock_irqrestore(&pmm_lock, on);
 }
 
 void pmm_init(const handoff_t *h, u64 bitmap_limit) {
@@ -115,16 +124,23 @@ void pmm_init(const handoff_t *h, u64 bitmap_limit) {
  * carries on from where it left off instead, and wraps once. */
 static u64 next_hint;
 
+void (*pmm_test_probe)(void);
+
 u64 pmm_alloc_frame(void) {
+    bool on = spin_lock_irqsave(&pmm_lock);
     for (u64 n = 0; n < total_frames; n++) {
         u64 i = next_hint + n;
         if (i >= total_frames) i -= total_frames;
         if (is_used(i)) continue;
+        /* Chosen and not yet claimed: where a tick used to get in. */
+        if (pmm_test_probe) pmm_test_probe();
         mark_used(i);
         next_hint = i + 1;
         if (next_hint >= total_frames) next_hint = 0;
+        spin_unlock_irqrestore(&pmm_lock, on);
         return IDX_ADDR(i);
     }
+    spin_unlock_irqrestore(&pmm_lock, on);
     return 0;
 }
 
@@ -154,13 +170,17 @@ bool pmm_share(u64 addr) {
     if (!extra || !addr) return false;
     u64 f = FRAME_IDX(addr);
     if (f >= total_frames) return false;
+    bool on = spin_lock_irqsave(&pmm_lock);
     /* 255 holders of one frame is not a case that arises from forking; it
        is a case that arises from a counter that has stopped counting, and a
        count that wrapped would free a frame somebody still holds. */
-    if (extra[f] == 255) return false;
-    if (!extra[f]) shared_now++;
-    extra[f]++;
-    return true;
+    bool took = extra[f] != 255;
+    if (took) {
+        if (!extra[f]) shared_now++;
+        extra[f]++;
+    }
+    spin_unlock_irqrestore(&pmm_lock, on);
+    return took;
 }
 
 u32 pmm_holders(u64 addr) {
@@ -174,12 +194,14 @@ u32 pmm_holders(u64 addr) {
 void pmm_free_frame(u64 addr) {
     if (!addr) return;
     u64 f = FRAME_IDX(addr);
+    bool on = spin_lock_irqsave(&pmm_lock);
     if (extra && f < total_frames && extra[f]) {
         extra[f]--;
         if (!extra[f]) shared_now--;
-        return;
+    } else {
+        mark_free(f);
     }
-    mark_free(f);
+    spin_unlock_irqrestore(&pmm_lock, on);
 }
 
 u64 pmm_total_frames(void) { return total_frames; }

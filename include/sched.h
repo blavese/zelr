@@ -197,6 +197,18 @@ bool   task_is_idle(const task_t *t);
    takes the wake-up and goes straight back to the program. */
 bool   sched_cpu_idle(u32 cpu);
 
+/* For the self test: whether the collector would free this task's record,
+   stack and address space on its next pass. */
+bool   sched_test_collectable(u32 pid);
+
+/* For the self test: called while a new task is being joined to the ring,
+   between finding the tail and linking to it. */
+extern void (*sched_test_probe)(void);
+
+/* A task's floating point state back to what a new program starts with,
+   live registers included if it is running here. exec uses it. */
+void   task_fpu_reset(task_t *t);
+
 /* Counted where the switch happens, and reported by /sys/cpu. */
 void   sched_note_user_slice(u32 cpu);
 

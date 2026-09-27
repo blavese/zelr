@@ -74,8 +74,11 @@ feed() {
   type_line "pwd"
   type_line "write inner.txt nested file"
   type_line "cd /"
-  type_line "cat docs/inner.txt"
-  type_line "ls docs"
+  # From the root the file is under home: docs was made in /home, where the
+  # shell starts. This read docs/inner.txt, which does not exist, and passed
+  # for years on the echo of the write two lines up.
+  type_line "cat home/docs/inner.txt"
+  type_line "ls home/docs"
   type_line "ps"
   type_line "mem"
   type_line "spawn"
@@ -93,20 +96,40 @@ feed() {
 
 feed | run_with_timeout 90 "$QEMU" -kernel build/zelr.bin -m 64 -no-reboot -display none -serial stdio -append console > "$OUT" 2>&1 || true
 
+# Without the carriage returns the serial line puts on every line, so that a
+# line can be matched whole.
+tr -d '\r' < "$OUT" > "$OUT.lf" && mv "$OUT.lf" "$OUT"
+
 fails=0
 check() {
   if grep -qF "$1" "$OUT"; then echo "  PASS  $2"
   else echo "  FAIL  $2  (wanted: $1)"; fails=$((fails+1)); fi
 }
 
+# The whole of a line, for output that repeats words from the command that
+# asked for it. The shell echoes every character typed, so "write notes.txt
+# shell wrote this" put "shell wrote this" in the transcript whether or not
+# cat ever printed it; four checks here were passing on the echo alone. An
+# echoed line starts with the prompt, so it is never a whole-line match.
+check_line() {
+  if grep -qxF "$1" "$OUT"; then echo "  PASS  $2"
+  else echo "  FAIL  $2  (wanted a line: $1)"; fails=$((fails+1)); fi
+}
+
+check_re() {
+  if grep -qE "$1" "$OUT"; then echo "  PASS  $2"
+  else echo "  FAIL  $2  (wanted: $1)"; fails=$((fails+1)); fi
+}
+
 echo "=== shell test ==="
 check "zelr $VERSION x86_64"        "uname reports the kernel"
-check "notes"                    "ls shows the seeded files"
+check_re '^ +([0-9]+|<dir>)  notes/?$' "ls shows the seeded files"
 check "written from scratch"     "cat prints file contents"
-check "shell wrote this"         "write then cat round trips"
+check_line "shell wrote this"    "write then cat round trips"
 check "no such file"             "cat reports a deleted file as missing"
-check "/home/docs"               "cd moves into a directory"
-check "nested file"              "a file written inside one reads back by path"
+# pwd's answer on a line of its own; the prompt says /home/docs too.
+check_line "/home/docs"          "cd moves into a directory"
+check_line "nested file"         "a file written inside one reads back by path"
 check "PID"                      "ps prints the task table"
 check "running "                 "ps formats task state columns"
 check "physical:"                "mem reports physical memory"
@@ -116,7 +139,7 @@ check "wintest: surface at 0x0000008060000000" "a ring 3 program is handed a win
 check "wintest: wrote and read back 3072 pixels" "it can write every pixel of it"
 check "closed, handle is dead"  "the handle stops working once closed"
 check "wintest: ok"              "and it cannot reach another program's window"
-check "done testing"             "echo works"
+check_line "done testing"        "echo works"
 echo
 if [ $fails -eq 0 ]; then echo "shell test: all checks passed"; else echo "shell test: $fails failed"; fi
 echo "(transcript: $OUT)"

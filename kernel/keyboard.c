@@ -7,6 +7,8 @@
 #include "ps2.h"
 #include "serial.h"
 #include "signal.h"
+#include "sched.h"
+#include "wait.h"
 
 /* The buffer holds ints rather than chars, because a key is not always a
    character: an arrow or a page key has no letter to stand for it. */
@@ -57,6 +59,7 @@ static void push(int c) {
 
     interrupting(KEY_CODE(c));
     if (next != tail) { buf[head] = c; head = next; }
+    input_wake();
 }
 
 /* The scancodes that arrive behind a 0xE0 prefix. Everything here is a key
@@ -174,6 +177,22 @@ bool kbd_has_char(void) { return head != tail; }
 void keyboard_inject(int key) {
     u32 next = (head + 1) % BUFSZ;
     if (next != tail) { buf[head] = key; head = next; }
+    input_wake();
+}
+
+/* The channel is this variable's address; nothing is stored in it. */
+static int input_channel;
+
+void input_wake(void) { wake_all(&input_channel); }
+
+void input_wait(u32 timeout_ms) {
+    if (!task_current()) { task_idle_wait(); return; }
+    /* Checked and blocked with interrupts off, so input that arrives in
+       between cannot wake a task that has not started waiting yet. */
+    bool on = interrupts_enabled();
+    cli();
+    if (!kbd_has_char() && !serial_buffered()) wait_on(&input_channel, timeout_ms);
+    if (on) sti();
 }
 
 void keyboard_set_mods(bool a, bool c, bool s) {

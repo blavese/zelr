@@ -95,6 +95,41 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.41.0: memory and waiting under preemption, the clocks, FP state, and the checks themselves
+
+Each change has a check that was run against a build broken for it alone and seen to fail there.
+
+- **Heap, PMM, task ring (02 §10 B8, B9, B10, B28).**
+  - `spin_lock_irqsave` (smp.h) around every heap and PMM change: IF off for this processor's own ticks
+    (the collector frees memory inside the timer interrupt), a spinlock for processors without the kernel
+    lock (boot, `smp_run` work). `heap_check` walks and adds up the heap.
+  - `ring_insert` (sched.c) joins a task with IF off, `next` written before the link.
+  - `kmalloc` refuses sizes above 0xFFFFFF00 (B8). `can_collect` requires `on_cpu < 0` (B28).
+  - Checks: probes (`heap_test_probe`, `pmm_test_probe`, `sched_test_probe`) yield where a tick could land
+    while a rival task asks for the same thing; a two-processor heap hammer with one side off the kernel
+    lock; "the heap still adds up after all of that" at the end of the self test.
+- **Waiting for input (03, console_pause).** `input_wait`/`input_wake` (keyboard.c) block the waiting task
+  until a key, a serial byte or the mouse; console reads, the kernel shell and the desktop loop use it.
+  Check: `[userspace]` starts a flat ring 3 program that reads the console and wants it blocked and nearly
+  never scheduled until a key is injected.
+- **Clocks (02 §10 B5, B6, B27).** PIT mode 2 for the calibration, checked against one CMOS second; a gate
+  for vector 0xFF (`isr255`, counted, no EOI); the PIT tick counted before the lock and taking the try-lock
+  path.
+- **FP state (09a §10.2, 18 and 21).** The signal frame carries the FXSAVE image (MXCSR masked by
+  `mxcsr_mask` before FXRSTOR) and the handler starts clean; exec calls `task_fpu_reset`; fork copies the
+  parent's live state into the child's aligned area. Checks: sigtest, five new.
+- **Serial.** FCR 0xC7: a fourteen-byte trigger, because QEMU accepts only as many bytes as the trigger and
+  its stdio backend drops the rest. Check: `tools/serialcheck.py`, a gate step.
+- **The checks (14 §10 B, N, S, AB).** The gate's build step reads build.sh's exit status and build.sh runs
+  `set -eo pipefail` and deletes the old image first; check_sse is a gate step again with its false alarms
+  fixed; defaultcheck compares what is still duplicated and found Settings deleting `text_dim`, so Settings
+  keeps lines it does not manage (`keep_unmanaged`, and setcheck checks it); shell_test matches whole lines,
+  which exposed a path in it that had never worked; the gate runs the self test on four processors.
+
+Counts after 0.41.0:
+- selftest 608 (pc, 64 MiB), 612 (256 MiB), 620 (q35), 633 (`-smp 4`);
+- gate full 52 steps.
+
 ### 0.40.0: multiprocessor memory, window lifetimes, JavaScript, and data loss
 
 Each change has a check that was run against a deliberately broken build (or, for the ring 3 fixes, the
@@ -162,7 +197,7 @@ committed old sources) and seen to fail there.
 - **PNG (finding 10).** The chunk bound is checked in two steps. Check: pngtest.
 
 Counts after 0.40.0:
-- selftest 595 (pc, 64 MiB), 599 (256 MiB), 607 (q35), 614 (`-smp 4`);
+- selftest 595 (pc, 64 MiB), 599 (256 MiB), 607 (q35), 614 (`-smp 4`) -- as 0.40.0 shipped;
 - 48 ring 3 programs, which is `SYSFS_MAX_PROGRAMS`;
 - gate full 50 steps.
 

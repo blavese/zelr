@@ -62,7 +62,33 @@ void fpu_init(void) {
     /* A known state rather than whatever the firmware left. */
     __asm__ volatile ("fninit");
 
+    /* Which MXCSR bits this processor accepts, from its own FXSAVE image.
+       FXRSTOR faults on any other bit being set, and signal_return loads an
+       image the program had in its own memory to write whatever it liked
+       into. Nought there means the original default. */
+    static u8 probe[FPU_AREA] __attribute__((aligned(16)));
+    __asm__ volatile ("fxsave (%0)" :: "r"(probe) : "memory");
+    u32 mask = (u32)probe[28] | (u32)probe[29] << 8 |
+               (u32)probe[30] << 16 | (u32)probe[31] << 24;
+    mxcsr_mask = mask ? mask : 0xFFBF;
+
     ready = true;
+}
+
+u32 mxcsr_mask = 0xFFBF;
+
+const void *fpu_clean_state(void) {
+    static u8 clean[FPU_AREA] __attribute__((aligned(16)));
+    static bool made;
+    if (!made) { fpu_blank(clean); made = true; }
+    return clean;
+}
+
+void fpu_sanitize(void *area) {
+    u8 *a = (u8 *)area;
+    u32 m = (u32)a[24] | (u32)a[25] << 8 | (u32)a[26] << 16 | (u32)a[27] << 24;
+    m &= mxcsr_mask;
+    a[24] = (u8)m; a[25] = (u8)(m >> 8); a[26] = (u8)(m >> 16); a[27] = (u8)(m >> 24);
 }
 
 bool fpu_ready(void) { return ready; }

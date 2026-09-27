@@ -5,6 +5,7 @@
 #include "signal.h"
 #include "idt.h"
 #include "pic.h"
+#include "keyboard.h"
 
 #define COM1 0x3F8
 
@@ -14,7 +15,19 @@ void serial_init(void) {
     outb(COM1 + 0, 0x03);   /* 38400 baud, low byte */
     outb(COM1 + 1, 0x00);   /* high byte */
     outb(COM1 + 3, 0x03);   /* 8 bits, no parity, one stop bit */
-    outb(COM1 + 2, 0x07);   /* enable + clear FIFO, interrupt on every byte */
+    /* Enable and clear the FIFO, interrupting at fourteen bytes -- or at
+       the character timeout, four character times after the last byte,
+       which is what delivers anything shorter.
+     *
+       The trigger used to be one byte. A real 16550 buffers sixteen
+       whatever the trigger says, but QEMU's offers its backend only as
+       many as the trigger, and its stdio backend on Windows drops what it
+       cannot hand over. So with a trigger of one, the guest had to read
+       each byte before the next one arrived, and a pause of a character's
+       length anywhere in the kernel lost typing: the harnesses type at one
+       character every fifty milliseconds for that reason, and still lost
+       one now and then. */
+    outb(COM1 + 2, 0xC7);
     outb(COM1 + 4, 0x0B);   /* RTS/DSR set */
 }
 
@@ -35,6 +48,7 @@ u32 serial_isr_calls(void) { return rx_isr_calls; }
 static void serial_isr(registers_t *r) {
     (void)r;
     rx_isr_calls++;
+    u32 before = rx_isr_bytes;
     /* Service until the UART says it has nothing pending. Reading IIR is
        what acknowledges the interrupt on a 16550; only draining RBR can
        leave the line asserted and the next byte unreported. */
@@ -60,6 +74,8 @@ static void serial_isr(registers_t *r) {
             else rx_overruns++;             /* our ring was full */
         }
     }
+    /* Whoever is waiting for typing, now that there is some. */
+    if (rx_isr_bytes != before) input_wake();
 }
 
 void serial_enable_irq(void) {

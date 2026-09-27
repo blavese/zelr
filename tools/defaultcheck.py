@@ -15,6 +15,14 @@ It happened again the day the modern look went in: the kernel gained a `look`
 key and Settings did not, so saving anything deleted the key and left a
 machine half in one look and half in the other. That is what this is for.
 
+Most settings no longer exist twice: they are KNOBS[] in theme.c and reach
+Settings through /sys/settings with their defaults. What is still written in
+both places is the palette -- look, light and preset -- and what is still
+keyed by hand is the colours. This checks those, and checks that it found
+them: it used to look for knob defaults Settings no longer keeps and for a
+function save() no longer calls, found nothing on either side, and passed
+three checks that compared nothing at all.
+
 Reading the source rather than running anything, because this is a question
 about two files and not about a machine.
 
@@ -30,28 +38,24 @@ from harness import Checks, ROOT                                # noqa: E402
 THEME = os.path.join(ROOT, "kernel", "theme.c")
 SETTINGS = os.path.join(ROOT, "userland", "settings.c")
 
+PALETTE = ("look", "light", "preset")
+
 
 def read(path):
     with open(path, encoding="utf-8", errors="replace") as f:
         return f.read()
 
 
+def body_of(src, head):
+    body = src[src.index(head):]
+    return body[:body.index("\n}")]
+
+
 def kernel_defaults():
-    """What theme_init sets, which is what a machine with no file gets."""
-    src = read(THEME)
-    body = src[src.index("void theme_init(void)"):]
-    body = body[:body.index("\n}")]
-
+    """What theme_init sets for the palette, which is what a machine with no
+    file gets."""
+    body = body_of(read(THEME), "void theme_init(void)")
     out = {}
-    for name, key in (("wallpaper", "wallpaper"), ("corner", "corner"),
-                      ("shadows", "shadows"), ("animate", "animate"),
-                      ("quirks", "quirks"), ("autodesktop", "autodesktop"),
-                      ("volume", "volume")):
-        m = re.search(r"current\.%s\s*=\s*([A-Za-z0-9_]+)\s*;" % name, body)
-        if m:
-            v = m.group(1)
-            out[key] = {"true": "1", "false": "0"}.get(v, v)
-
     m = re.search(r"current\.look\s*=\s*(LOOK_[A-Z]+)\s*;", body)
     if m:
         out["look"] = "0" if m.group(1) == "LOOK_MODERN" else "1"
@@ -61,49 +65,45 @@ def kernel_defaults():
     m = re.search(r"theme_apply_preset\((\d+)\)", body)
     if m:
         out["preset"] = m.group(1)
-
-    # The wallpaper is named rather than numbered, so it has to be looked up
-    # in the enum the name comes from.
-    if out.get("wallpaper", "").startswith("WALLPAPER_"):
-        names = enum_order()
-        want = out["wallpaper"]
-        out["wallpaper"] = str(names.index(want)) if want in names else "?"
     return out
-
-
-def enum_order():
-    """The wallpaper enum, in order, which is what the numbers in the file
-    mean. Settings stores an index into this and so does the theme."""
-    src = read(os.path.join(ROOT, "include", "theme.h"))
-    body = src[src.index("} wallpaper_t;") - 800:src.index("} wallpaper_t;")]
-    return re.findall(r"(WALLPAPER_[A-Z]+)\s*[,=]", body)
 
 
 def settings_defaults():
-    """The initialisers at the top of settings.c."""
-    src = read(SETTINGS)
+    """The initialisers at file scope in settings.c, several to a line as
+    they are written there: `static int light = 1, look = 0, preset = 1`."""
     out = {}
-    for key in ("preset", "light", "look", "wallpaper", "corner", "shadows",
-                "animate", "quirks", "autodesktop"):
-        m = re.search(r"^static int %s\s*=\s*(-?\d+)\s*;" % key, src, re.M)
-        if m:
-            out[key] = m.group(1)
+    for decl in re.findall(r"^static int ([^;()]+);", read(SETTINGS), re.M):
+        for part in decl.split(","):
+            m = re.match(r"\s*([a-z_]+)\s*=\s*(-?\d+)\s*$", part)
+            if m and m.group(1) in PALETTE:
+                out[m.group(1)] = m.group(2)
     return out
 
 
-def settings_saved_keys():
-    """Every key the settings program writes. A key the kernel reads and this
-    never writes is a key that disappears the first time anything is saved."""
-    src = read(SETTINGS)
-    body = src[src.index("static void save(void)"):]
-    body = body[:body.index("\n}")]
-    return set(re.findall(r'put_kv\(out, n, "([a-z_]+)"', body))
+def knob_keys():
+    """The keys KNOBS[] describes. Settings writes every one of them from
+    what /sys/settings lists, so they cannot go missing on a save."""
+    src = read(THEME)
+    table = src[src.index("KNOBS[]"):]
+    table = table[:table.index("};")]
+    return set(re.findall(r'\{\s*"([a-z_]+)"', table))
 
 
 def kernel_read_keys():
-    """And every key the kernel will read back out of the file."""
-    src = read(THEME)
-    return set(re.findall(r'strcmp\(key, "([a-z_]+)"\)', src))
+    """Every other key the kernel reads back out of the file."""
+    return set(re.findall(r'strcmp\(key, "([a-z_]+)"\)', read(THEME))) - knob_keys()
+
+
+def settings_saved_keys():
+    """Every key save() writes by name."""
+    body = body_of(read(SETTINGS), "static void save(void)")
+    return set(re.findall(r'line_(?:num|hex)\(out, n, "([a-z_]+)"', body))
+
+
+def settings_keeps_the_rest():
+    """Whether save() carries over the lines it does not write itself, which
+    is what keeps a key the kernel reads and Settings has no control for."""
+    return "keep_unmanaged(" in body_of(read(SETTINGS), "static void save(void)")
 
 
 def main():
@@ -111,25 +111,25 @@ def main():
 
     k = kernel_defaults()
     s = settings_defaults()
+    c.add("the palette defaults were found on both sides",
+          set(k) == set(PALETTE) and set(s) == set(PALETTE))
+    for key in PALETTE:
+        if key in k and key in s:
+            c.add("%s: the kernel says %s and settings says %s"
+                  % (key, k[key], s[key]), k[key] == s[key])
 
-    c.add("the wallpaper enum could be read", len(enum_order()) > 4)
-
-    for key in sorted(set(k) & set(s)):
-        c.add("%s: the kernel says %s and settings says %s"
-              % (key, k[key], s[key]), k[key] == s[key])
-
-    missing = sorted(set(s) - set(k))
-    c.add("settings has no default the kernel does not"
-          + (" (%s)" % ", ".join(missing) if missing else ""), not missing)
-
-    # A key the kernel reads, that settings holds a value for, and that
-    # settings does not write, is silently reset on every save.
-    written = settings_saved_keys()
+    # A key the kernel reads and Settings neither writes nor carries over is
+    # deleted from the machine the first time anything is saved.
     read_back = kernel_read_keys()
-    dropped = sorted((read_back & set(s)) - written)
-    c.add("every setting it holds is a setting it writes"
-          + (" (drops %s)" % ", ".join(dropped) if dropped else ""),
-          not dropped)
+    written = settings_saved_keys()
+    c.add("the keys were found on both sides (%d read, %d written)"
+          % (len(read_back), len(written)),
+          len(read_back) >= 5 and len(written) >= 5)
+    dropped = sorted(read_back - written)
+    kept = settings_keeps_the_rest()
+    c.add("no key the kernel reads is lost when settings saves"
+          + (" (drops %s)" % ", ".join(dropped) if dropped and not kept else ""),
+          not dropped or kept)
 
     return c.report()
 

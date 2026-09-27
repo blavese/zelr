@@ -1365,7 +1365,7 @@ byte.
 ## testing
 
 The kernel tests itself. `./run.sh -T` boots with selftest on the command line,
-runs 595 checks across every subsystem, then writes to QEMU's debug-exit port
+runs 608 checks across every subsystem, then writes to QEMU's debug-exit port
 so the host gets a real exit status.
 
     [string]                8 checks   [live tree]            19 checks
@@ -1394,12 +1394,12 @@ so the host gets a real exit status.
     [theme]                19 checks   [sound]                  skipped
     [taskbar]              18 checks   [kernel stack]          2 checks
 
-    595 passed, 0 failed
+    608 passed, 0 failed
     SELFTEST_PASS
 
 The sound section is skipped because `run.sh` attaches no sound card, and the
 identity map is checked in four more places when there is more memory to map:
-given 256 MiB, as the gate gives it, the same run is 599.
+given 256 MiB, as the gate gives it, the same run is 612.
 
 Two of the sections are about what happens when something goes wrong half
 way, which a machine that keeps its power cannot show. `[fat]` makes the
@@ -1427,10 +1427,10 @@ on a machine with several, where it hands work to each of them and requires
 the count they share to come back exact, and then starts more programs than
 there are processors to check that handed work is neither given to a busy
 one nor abandoned halfway for a program. `qemu-system-x86_64 -smp 4` with
-256 MiB reaches 614, and the gate runs it.
+256 MiB reaches 633, and the gate runs it.
 
 The same checks run again on `-machine q35`, which has PCIe and an AHCI
-controller rather than a 1996 chipset and a PIO disk, and reach 607 there.
+controller rather than a 1996 chipset and a PIO disk, and reach 620 there.
 Two bugs found the day that was added were invisible on the older machine:
 the block layer would not split a request past the eight sectors AHCI
 accepts, and the ACPI tables were never read on a UEFI machine at all.
@@ -1487,8 +1487,9 @@ used movd xmm0 for a 64-bit integer move. The CPU had never been told the FPU
 exists, so the first one raised an invalid opcode fault, far from anything that
 looked related. Fixed with -mcpu=i686 at the time, and with -mno-sse and its
 relatives since the move to long mode. tools/check_sse.py was written to fail
-the build if an SSE opcode reached an executable section, and nothing runs it
-any more.
+the build if an SSE opcode reached an executable section; for a while nothing
+ran it, and by the time something did it had rotted into three false alarms.
+The gate runs it on the kernel again.
 
 **The TSS descriptor got an address where it wanted a length.** Passing
 base + size - 1 instead of size - 1 as the limit made ltr fault, which triple

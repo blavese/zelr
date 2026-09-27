@@ -8,6 +8,7 @@
 #include "timer.h"
 #include "wait.h"
 #include "winsrv.h"
+#include "fpu.h"
 
 /* See include/signal.h for what a signal is here and what it is not. */
 
@@ -184,14 +185,16 @@ void signal_deliver(registers_t *r) {
            of stack instead of doing its work. */
         if (t->sig_running & (1u << sig)) continue;
 
-        /* Room for the frame and the address under it, on a sixteen byte
-           boundary, which is what the handler is compiled expecting. The
-           red zone is not stepped over because these programs are built
-           with -mno-red-zone; sdk/README.md says why that flag is there and
-           this is the reason. */
+        /* Room for the frame, the floating point state under it and the
+           address under that, on a sixteen byte boundary, which is what the
+           handler is compiled expecting and what FXSAVE needs. The red zone
+           is not stepped over because these programs are built with
+           -mno-red-zone; sdk/README.md says why that flag is there and this
+           is the reason. */
         u64 sp = (r->rsp - sizeof(registers_t)) & ~15ull;
-        if (sp < sizeof(registers_t) + 16) continue;      /* would wrap */
-        if (!stack_is_there(sp - 16, r->rsp)) {
+        if (sp < sizeof(registers_t) + FPU_AREA + 16) continue;   /* would wrap */
+        u64 fx = sp - FPU_AREA;
+        if (!stack_is_there(fx - 16, r->rsp)) {
             /* No stack to build it on. A program that cannot be told is a
                program that gets the default, which is that it ends -- and
                saying so beats silently dropping the signal. */
@@ -203,7 +206,16 @@ void signal_deliver(registers_t *r) {
         registers_t *saved = (registers_t *)sp;
         *saved = *r;
 
-        u64 back = sp - 8;
+        /* The vector registers and MXCSR as the program had them. The
+           handler is ordinary compiled code and uses them freely, and
+           nothing used to put them back, so a program interrupted in the
+           middle of arithmetic carried on with whatever its handler had
+           left in them. The handler starts from the state a new program
+           gets, whatever rounding the interrupted code had chosen. */
+        fpu_save((void *)fx);
+        fpu_restore(fpu_clean_state());
+
+        u64 back = fx - 8;
         *(u64 *)back = t->sig_trampoline;
 
         t->sig_pending &= ~(1u << sig);
@@ -226,12 +238,13 @@ bool signal_return(registers_t *r) {
     if (!t) return false;
 
     /* The handler has returned, which popped the trampoline address, so the
-       stack pointer is back at the frame. */
+       stack pointer is back at the floating point state, with the frame
+       above it. */
     u64 at = r->rsp;
     if (at & 15) return false;
-    if (!stack_is_there(at, at + sizeof(registers_t))) return false;
+    if (!stack_is_there(at, at + FPU_AREA + sizeof(registers_t))) return false;
 
-    const registers_t *saved = (const registers_t *)at;
+    const registers_t *saved = (const registers_t *)(at + FPU_AREA);
 
     /* Checked rather than believed. This came off the program's own stack
        and the program could have written anything there; what it must not
@@ -244,6 +257,17 @@ bool signal_return(registers_t *r) {
     *r = *saved;
     r->int_no = int_no;
     r->err_code = err;
+
+    /* The registers the interrupted code had, copied out of the program's
+       memory before they are trusted, and with MXCSR's unimplemented bits
+       cleared: FXRSTOR faults on those, and a fault here would be the
+       kernel's. Loaded into the live registers, which are this task's all
+       the way back to ring 3 -- nothing switches inside a system call. */
+    u8 img[FPU_AREA] __attribute__((aligned(16)));
+    const u8 *from = (const u8 *)at;
+    for (u32 i = 0; i < FPU_AREA; i++) img[i] = from[i];
+    fpu_sanitize(img);
+    fpu_restore(img);
 
     /* The selectors are the kernel's answer and not the program's, and the
        flags are masked to the ones it is allowed to choose. Interrupts go

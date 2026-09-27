@@ -61,3 +61,16 @@ int  kbd_trygetchar(void);       /* -1 when empty */
 bool kbd_alt(void);
 bool kbd_ctrl(void);
 bool kbd_shift(void);
+
+/* Waiting for input without holding on to the processor.
+ *
+ * Everything that waited for a key used to halt: the kernel shell at its
+ * prompt, the desktop between frames, and a program reading the console.
+ * A halt keeps the kernel lock, and the waiting task stays runnable, so the
+ * scheduler kept choosing it and the boot processor never went idle --
+ * every other processor's system calls waited for a key to be pressed.
+ * input_wait blocks the task instead, until input_wake (a key, a byte on
+ * the serial line, the mouse) or the timeout, whichever is first. Before
+ * the scheduler runs it halts as it always did. */
+void input_wait(u32 timeout_ms);
+void input_wake(void);

@@ -611,7 +611,10 @@ void shell_task(void) {
     prompt();
     for (;;) {
         int ch = kbd_trygetchar();
-        if (ch < 0) { task_idle_wait(); continue; }  /* the timer, or a key */
+        /* Blocked until a key or the timeout, not halted: a halt kept the
+           kernel lock at the prompt and every other processor's program
+           waited for somebody to type. */
+        if (ch < 0) { input_wait(250); continue; }
         /* The console has no shortcuts, so a chord is just its character. */
         char c = (char)KEY_CODE(ch);
 

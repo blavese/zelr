@@ -236,7 +236,7 @@ Columns: **A** = real `run.sh -T` log (i440fx, -m 64, 1 CPU, rtl8139, fresh IDE 
 | 40 | [tls 1.3] | test_tls_schedule (1573-1657) + test_tls (1739-1769) | **26** | 26 | 19 | 12 + 8 + `TCP_MAX` (6) per-session checks |
 | 41 | [wpa] | test_wpa (2546-2683) | 19 | 19 | 19 | none |
 | 42 | [wait timeouts] | test_wait_timeout (2920-2933) | 3 | 3 | 3 | none |
-| 43 | [processors] | test_smp (1182-1289) | 4 | 4 | 4 | 4 then SKIP on 1 CPU; 15 with >= 2 CPUs (13 if CPU 1 does not answer the TSS query), 19 since 0.40.0 with >= 3 CPUs (the four B12 checks: a held job, more ring 3 spinners than CPUs; the take-back one SKIPs with 2) |
+| 43 | [processors] | test_smp (1182-1289) | 4 | 4 | 4 | 4 then SKIP on 1 CPU; 15 with >= 2 CPUs (13 if CPU 1 does not answer the TSS query), 19 in 0.40.0 with >= 3 CPUs (the four B12 checks: a held job, more ring 3 spinners than CPUs; the take-back one SKIPs with 2), 25 since 0.41.0 (the AP clock against the PIT, the calibration against one CMOS second, the PIT through an AP holding the lock, a two-processor heap hammer, and the collector against a program still on another CPU, two checks) |
 | 44 | [black box] | test_blackbox (3062-3174) | 21 | 21 | 21 | 9 without a disk or without a zelr volume at LBA 0 |
 | 45 | [acpi and pcie] | test_pcie (3191-3259) | 4 | 4 | 4 | 4 without MCFG (i440fx); up to 12 with ECAM (q35) |
 | 46 | [interrupt routing] | test_irqs (3271-3334) | 9 | 9 | 9 | 1 with only an 8259 |

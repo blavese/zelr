@@ -11,6 +11,7 @@
 #include "blackbox.h"
 #include "ioapic.h"
 #include "lapic.h"
+#include "timer.h"
 
 u64 scheduler_switch(u64 rsp);
 
@@ -72,8 +73,16 @@ void idt_init(void) {
     /* Every processor's own timer, delivered through its own local APIC. */
     set_gate(VEC_LOCAL_TIMER, (u64)isr_stub_table[51], GDT_KERNEL_CODE, 0x8E);
 
+    /* And the local APIC's spurious vector (SPIV is 0x1FF, lapic.c), which
+       is counted and returned from in isr.S without coming through here. */
+    set_gate(0xFF, (u64)isr_stub_table[52], GDT_KERNEL_CODE, 0x8E);
+
     idt_flush((u64)&idtp);
 }
+
+volatile u64 spurious_interrupts;
+
+bool idt_gate_present(u8 n) { return (idt[n].flags & 0x80) != 0; }
 
 void idt_load(void) { idt_flush((u64)&idtp); }
 
@@ -173,6 +182,10 @@ u64 isr_dispatch(registers_t *r) {
     if (r->int_no == VEC_LOCAL_TIMER) smp_note_tick(smp_this_cpu());
     if (r->int_no == VEC_AP_WAKE) { lapic_eoi(); return (u64)r; }
 
+    /* The machine's clock moves here, before the lock is asked for, so a
+       tick that has to wait for another processor is still a tick. */
+    if (r->int_no == 32) timer_count_tick();
+
     /* Arriving from a program while already holding the lock means the last
        way out of here returned to ring 3 without letting go of it, and every
        other processor was kept out of the kernel in the meantime. Nothing
@@ -192,10 +205,17 @@ u64 isr_dispatch(registers_t *r) {
          * the one holding it. That was not a theory: it deadlocked the
          * compositor's half-a-frame handoff the first time this ran on
          * four processors. */
-        if (r->int_no == VEC_LOCAL_TIMER) {
+        if (r->int_no == VEC_LOCAL_TIMER || r->int_no == 32) {
+            /* The 8254's tick likewise, now that it has been counted above:
+               what it wants the lock for -- a switch, and polling the USB
+               controller, the 8042 and the sound buffer -- is all as well
+               done a tick later. It only gets here from a program or an idle
+               task, never from inside the kernel, so skipping it leaves
+               nothing half done. */
             if (!kernel_lock_try()) {
                 smp_note_lock_miss(smp_this_cpu());
-                lapic_eoi();
+                if (r->int_no == 32 && !ioapic_active()) pic_eoi(0);
+                else lapic_eoi();
                 return (u64)r;
             }
         } else {

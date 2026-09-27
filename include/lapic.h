@@ -41,6 +41,11 @@ void lapic_timer_calibrate(void);
 void lapic_timer_start(u8 vector);
 u32  lapic_timer_hz(void);
 
+/* This processor's local timer rate measured over one second of the
+   battery-backed clock, with interrupts on; for the self test to hold the
+   boot-time calibration to. Nought if it cannot be measured here. */
+u32  lapic_timer_measure(void);
+
 /* For smp.c, which sends startup signals through registers this does not
    otherwise need to expose. Null before lapic_init succeeds. */
 volatile u8 *lapic_regs(void);

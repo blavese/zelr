@@ -60,6 +60,36 @@ static void on_signal(int sig) {
 
 static void quiet(int sig) { (void)sig; caught++; }
 
+/* A handler that does arithmetic, as any compiled handler may, and then
+   leaves the vector registers and the rounding mode as it pleases. */
+static volatile double spent;
+static void fp_handler(int sig) {
+    (void)sig;
+    caught++;
+    double x = 1.5;
+    for (int i = 0; i < 100; i++) x = x * 1.0001 + 0.5;
+    spent = x;
+    unsigned mode = 0x7F80;                    /* round toward zero */
+    __asm__ volatile ("ldmxcsr %0" :: "m"(mode));
+    __asm__ volatile ("xorps %%xmm0, %%xmm0" ::: "xmm0");
+}
+
+static unsigned read_mxcsr(void) {
+    unsigned m;
+    __asm__ volatile ("stmxcsr %0" : "=m"(m));
+    return m;
+}
+
+static void write_mxcsr(unsigned m) { __asm__ volatile ("ldmxcsr %0" :: "m"(m)); }
+
+/* Run with "fpu-probe" by a child that set an odd rounding mode and then
+   ran this program again: what a new program finds in the unit. */
+static int fpu_probe(void) {
+    unsigned short cw;
+    __asm__ volatile ("fnstcw %0" : "=m"(cw));
+    return read_mxcsr() == 0x1F80 && cw == 0x037F ? 0 : 1;
+}
+
 /* Arithmetic that uses enough registers at once that a kernel which lost
    one would get a different answer. Deliberately not a sum: a sum of a
    known run is a number that can be right by accident. */
@@ -72,7 +102,10 @@ static unsigned churn(unsigned rounds) {
     return a ^ b ^ c ^ d ^ e ^ f ^ g ^ h;
 }
 
-int main(void) {
+int main(int argc, char **argv) {
+    if (argc > 1 && argv[1][0] == 'f' && argv[1][1] == 'p' && argv[1][2] == 'u')
+        return fpu_probe();
+
     puts("sigtest\n");
 
     /* --- the same answer, with nothing interrupting it ------------------ */
@@ -142,6 +175,37 @@ int main(void) {
         puts(" interrupted "); putn((int)interrupted_answer); putc('\n');
     }
 
+    /* --- and the floating point registers across one ------------------- */
+    //
+    // Set, then the system call that raises the signal, then read back, all
+    // in one piece of assembly so the compiler has no chance to move either
+    // register in between. The handler runs on the way out of that call and
+    // leaves xmm0 zero and the rounding mode changed; nothing used to put
+    // them back.
+    ok("a handler can be installed for the vector registers",
+       signal(SIGTERM, fp_handler) == 0);
+    caught = 0;
+    static unsigned long long pattern[2] = { 0x0123456789ABCDEFull, 0xFEDCBA9876543210ull };
+    static unsigned long long after[2];
+    static unsigned mode_in = 0x3F80, mode_out;   /* round down */
+    long rax = SYS_SIGSEND;
+    __asm__ volatile (
+        "movdqu (%[pat]), %%xmm0\n\t"
+        "ldmxcsr (%[min])\n\t"
+        "int $0x80\n\t"
+        "stmxcsr (%[mout])\n\t"
+        "movdqu %%xmm0, (%[out])\n\t"
+        : "+a"(rax)
+        : "b"((long)getpid()), "c"((long)SIGTERM), "d"(0L),
+          [pat]"r"(pattern), [min]"r"(&mode_in), [mout]"r"(&mode_out), [out]"r"(after)
+        : "xmm0", "memory");
+    write_mxcsr(0x1F80);
+    ok("the handler ran", caught == 1);
+    ok("and the vector registers are the program's again afterwards",
+       after[0] == pattern[0] && after[1] == pattern[1]);
+    ok("and so is its rounding mode", mode_out == 0x3F80);
+    signal(SIGTERM, quiet);
+
     /* --- a child is the same program ------------------------------------- */
     //
     // Inherited across fork, because the child is running the same code at
@@ -179,6 +243,23 @@ int main(void) {
     if (status != 128 + SIGTERM) {
         puts("      it exited with "); putn(status); putc('\n');
     }
+
+    /* --- and exec starts the unit afresh --------------------------------- */
+    //
+    // The child rounds down, then becomes this program again with "fpu-probe",
+    // which exits 0 only if it finds the state every new program should:
+    // MXCSR 0x1F80 and the x87 control word 0x037F. exec used to carry the
+    // old program's rounding and masks straight into the new one.
+    int fresh = fork();
+    if (fresh == 0) {
+        write_mxcsr(0x3F80);
+        char *const v[] = { (char *)"/bin/sigtest", (char *)"fpu-probe", 0 };
+        execv("/bin/sigtest", v);
+        exit(70);
+    }
+    int probed = wait_for(fresh);
+    ok("exec gives the new program a fresh floating point state", probed == 0);
+    if (probed != 0) { puts("      the probe exited with "); putn(probed); putc('\n'); }
 
     puts(fails ? "SIGTEST_FAIL\n" : "SIGTEST_PASS\n");
     return fails ? 1 : 0;
