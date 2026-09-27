@@ -24,7 +24,7 @@ import sys
 import zlib
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from mkfat import Fat16Builder                                  # noqa: E402
+from mkfat import Fat16Builder, make_foreign                    # noqa: E402
 
 SECTOR = 512
 ENTRIES = 128
@@ -92,7 +92,8 @@ def protective_mbr(total_sectors):
     return bytes(m)
 
 
-def build(path, total_kb=65536, bad_header_crc=False, bad_entry_crc=False):
+def build(path, total_kb=65536, bad_header_crc=False, bad_entry_crc=False,
+          foreign=False):
     total_sectors = (total_kb * 1024) // SECTOR
 
     entry_sectors = (ENTRIES * ENTRY_SIZE) // SECTOR         # 32
@@ -151,7 +152,11 @@ def build(path, total_kb=65536, bad_header_crc=False, bad_entry_crc=False):
 
     data = Fat16Builder(data_sectors * SECTOR // 1024, label="ZELRDATA")
     data.add_file("HELLO.TXT", b"read from a gpt partition\n")
+    if foreign:
+        data.add_file("TMP/KEEP.TXT", b"somebody else's scratch file\n")
     data_img = data.build()
+    if foreign:
+        data_img = bytes(make_foreign(bytearray(data_img)))
     img[data_start * SECTOR:data_start * SECTOR + len(data_img)] = data_img
 
     open(path, "wb").write(bytes(img))
@@ -173,7 +178,8 @@ def main():
     return build(args[0],
                  total_kb=int(args[1]) if len(args) > 1 else 65536,
                  bad_header_crc="--bad-header-crc" in flags,
-                 bad_entry_crc="--bad-entry-crc" in flags)
+                 bad_entry_crc="--bad-entry-crc" in flags,
+                 foreign="--foreign" in flags)
 
 
 if __name__ == "__main__":

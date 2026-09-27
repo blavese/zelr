@@ -95,6 +95,42 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.42.0: other systems' disks, names past ASCII, TLS manners, SVG paint, the colour order
+
+Each change has a check that was run against a build broken for it alone and seen to fail there.
+
+- **Foreign FAT volumes (04 S20).** `fat_made_here()` (the OEM field says "ZELR"). On a volume without it
+  `finish_mount` skips the reclaim and `layout_init` makes, seeds and empties nothing; the shell starts in
+  `/` when there is no `/home`. Check: `gpt_test.sh`, a GPT partition and a whole disk made as "MSDOS5.0"
+  with a lost chain and `TMP/KEEP.TXT` (`mkfat.py --foreign`, `mkgpt.py foreign`): every byte outside the
+  written file unchanged.
+- **FAT S15, S16, S17.** `fat_free_bytes` is u64; `fat_list` copies the terminator; long names are UTF-8
+  above and UTF-16 on the disk both ways, any byte past ASCII makes a name long, invalid UTF-8 is refused.
+  Checks: `[fat]` mounts a 16 GiB FAT32 volume that exists only as answers to reads, lists a 63-byte name
+  into a filled buffer, writes and reads "café au lait.txt" and "大.txt" (first byte 0xE5).
+- **TLS (06b §10.4, 10.7, 10.8).** Fatal alerts on failure, in the clear before there is a key and sealed
+  after, never in answer to the server's own; KeyUpdate read, and answered when asked, under the old key;
+  a served copy of a store root is set aside before its dates are looked at. Checks: `[tls 1.3]` byte for
+  byte against traced keys and independently worked next secrets; `[x509]` an expired root copy passes and
+  an expired intermediate still fails.
+- **libc (09a §10.2 #3, #4).** `fseek(SEEK_CUR)` from the logical position; `ftell` counts buffered writes.
+  Checks: libccheck, two new.
+- **SVG (13 §10 3-6, 11).** Paint is inherited (fill, stroke, their widths, opacities and rule, up to the
+  root), opacity multiplies down; `rect` and `polygon` strokes close; `<defs>`, `<clipPath>`, `<mask>`,
+  `<symbol>`, `<pattern>`, `<marker>` are not drawn; `transparent` is no paint. Checks: svgtest, ten new.
+  The closing bug was found by one of the inheritance checks failing on the fixed build.
+- **DOM (11 §10 #34).** The end tag of an element the tag table does not know closes it
+  (`dp_pop_to_name`). It closed nothing, so after a custom element or an SVG `<g>` every sibling nested
+  inside; with inheritance in, a group's fill would have leaked into everything after it. Found by the
+  `<defs>` check failing on the fixed build. Checks: layouttest and svgtest.
+- **UEFI colour order (01 §10 #2, 05 B7).** `handoff_t.fb_format` at 3296 (the structure is now 3304 bytes),
+  set by the loader; fb.c swaps red and blue on the copy to the card only. Check: `[video]` through
+  `fb_test_orders`. Not run on a real RGB panel: QEMU's OVMF offers BGR modes only.
+
+Counts after 0.42.0:
+- selftest 626 (pc, 64 MiB), 630 (256 MiB), 638 (q35), 651 (`-smp 4`);
+- gate full 52 steps.
+
 ### 0.41.0: memory and waiting under preemption, the clocks, FP state, and the checks themselves
 
 Each change has a check that was run against a build broken for it alone and seen to fail there.
@@ -290,9 +326,9 @@ reasoning are in each file's §10.
    - Right-button capture sticks until a left release.
    - fork and exec treat window surface pages as user pages.
    [07 §10]
-7. **FP state is not isolated.** Signal handlers can clobber FP/SSE state, and exec keeps the FPU state
+7. **FIXED in 0.41.0. FP state is not isolated.** Signal handlers can clobber FP/SSE state, and exec keeps the FPU state
    (ring 3 is built with SSE on). [09a §10.2 #18, #21]
-8. **Tests that cannot fail.**
+8. **FIXED in 0.41.0 (defaultcheck and the build step; the others as each was touched). Tests that cannot fail.**
    - `tools/defaultcheck.py` matches nothing in settings.c and passes on three vacuous checks (confirmed
      by reading its output in the gate).
    - The gate's build step only fails on the literal word "error" [01 §10 #5].
@@ -300,9 +336,9 @@ reasoning are in each file's §10.
 9. **FIXED in 0.40.0. libc correctness.** `atan` is wrong, `fputc` can overflow into the next FILE, `stdin` is always EOF,
    and `clock()` is ten times too small. [09a §10.2]
 10. **Untrusted input in the browser's decoders.** The PNG chunk bounds check wraps (png.h:146; FIXED in 0.40.0), and
-    there are several SVG and JPEG conformance gaps. [13 §10]
-11. **UEFI.** The GOP pixel format (RGB vs BGR) is not carried in the handoff, and the handoff address
-    is fixed at 0x70000 with no fallback. [01 §10 #2, #8]
+    there are several SVG and JPEG conformance gaps (the SVG paint ones FIXED in 0.42.0). [13 §10]
+11. **UEFI.** The GOP pixel format (RGB vs BGR) is not carried in the handoff (FIXED in 0.42.0), and the handoff
+    address is fixed at 0x70000 with no fallback. [01 §10 #2, #8]
 12. **FIXED in 0.39.0. A network syscall whose peer never answers freezes the machine. REPRODUCED 2026-09-26**
     (`repro/nethang.py`, prints FROZEN and exits 1 while the bug stands).
     - **Cause.**

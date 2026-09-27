@@ -459,6 +459,21 @@ static inline void dp_pop_to(dparse *z, int tag) {
         if (z->d->nodes[z->stack[k]].tag == tag) { z->depth = k; return; }
 }
 
+/* The same for an element the tag table does not know, found by its name.
+   Such an end tag used to close nothing, so everything after a custom
+   element, or after an SVG <g> or <defs>, went inside it: the second of two
+   groups side by side took on the first one's transform and its paint. */
+static inline void dp_pop_to_name(dparse *z, const char *name, int len) {
+    for (int k = z->depth - 1; k >= 0; k--) {
+        const dnode *n = &z->d->nodes[z->stack[k]];
+        if (n->tag != T_OTHER || n->text < 0) continue;
+        const char *have = z->d->arena + n->text;
+        int i = 0;
+        while (i < len && have[i] && have[i] == w_lower(name[i])) i++;
+        if (i == len && !have[i]) { z->depth = k; return; }
+    }
+}
+
 /* Text, with entities and utf-8 turned into something this machine can
    draw. Undecoded for a script or a style sheet, where an ampersand is an
    operator rather than the start of an entity. */
@@ -560,10 +575,12 @@ static inline void dom_parse(ddoc *d, const char *p, int len) {
         if (i + 1 < len && p[i + 1] == '/') {
             int at = i + 2, start = at;
             while (at < len && p[at] != '>' && p[at] != ' ') at++;
-            int tag = html_tag_of(p + start, at - start);
+            int end = at;
+            int tag = html_tag_of(p + start, end - start);
             while (at < len && p[at] != '>') at++;
             i = at + 1;
             if (tag != T_OTHER) dp_pop_to(&z, tag);
+            else if (end > start) dp_pop_to_name(&z, p + start, end - start);
             continue;
         }
 

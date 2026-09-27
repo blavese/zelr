@@ -33,9 +33,10 @@
  * clipping, masks, patterns, and text. Each of those is a renderer of its
  * own — text alone means the font machinery, laid out along a path — and a
  * logo drawn with the shapes above and a flat fill is the overwhelming
- * majority of what a page actually carries. A gradient fill comes out as its
- * first stop rather than as nothing, because a shape in roughly the right
- * colour is closer than a hole.
+ * majority of what a page actually carries. A gradient fill comes out a flat
+ * middle grey rather than as nothing, because a shape in roughly the right
+ * place is closer than a hole; the shapes inside a clip path or a mask are
+ * not drawn at all.
  *
  * Curves are flattened to lines before anything is drawn. Filling is a
  * scanline: for every row, where does the outline cross it, and what is
@@ -481,38 +482,66 @@ static inline void sv_stroke(svcanvas *cv, const svpath *path, u32 colour,
  * it recognises.
  */
 
-/* A colour, from an attribute or from the style on the same element.
- * Returns whether there is one to draw at all: "none" is a real answer and
- * a different one from "not said", which inherits. */
-static inline int sv_paint(const ddoc *d, int el, const char *name, u32 *out) {
+/* A property as this element says it, in an attribute or in its style
+   attribute -- where a drawing program is at least as likely to have put
+   it -- or 0 when it says nothing about it. */
+static inline const char *sv_said(const ddoc *d, int el, const char *name) {
     const char *v = dom_attr(d, el, name);
+    if (v && *v) return v;
 
-    if (!v || !*v) {
-        /* Also look in a style attribute, where a drawing program is at
-           least as likely to have put it. */
-        const char *st = dom_attr(d, el, "style");
-        if (!st) return 0;
-
-        int nlen = 0;
-        while (name[nlen]) nlen++;
-        for (const char *q = st; *q; q++) {
-            if (w_lower(*q) != w_lower(name[0])) continue;
-            int i = 0;
-            while (i < nlen && q[i] && w_lower(q[i]) == w_lower(name[i])) i++;
-            if (i != nlen) continue;
-            const char *r = q + nlen;
-            while (*r == ' ') r++;
-            if (*r != ':') continue;
-            r++;
-            while (*r == ' ') r++;
-            v = r;
-            break;
-        }
-        if (!v || !*v) return 0;
+    const char *st = dom_attr(d, el, "style");
+    if (!st) return 0;
+    int nlen = 0;
+    while (name[nlen]) nlen++;
+    for (const char *q = st; *q; q++) {
+        if (w_lower(*q) != w_lower(name[0])) continue;
+        /* The start of a declaration, not the middle of another name:
+           "stroke-width" must not be found inside "fill-stroke-width". */
+        if (q > st && q[-1] != ';' && !sv_space(q[-1])) continue;
+        int i = 0;
+        while (i < nlen && q[i] && w_lower(q[i]) == w_lower(name[i])) i++;
+        if (i != nlen) continue;
+        const char *r = q + nlen;
+        while (*r == ' ') r++;
+        if (*r != ':') continue;
+        r++;
+        while (*r == ' ') r++;
+        return *r ? r : 0;
     }
+    return 0;
+}
 
+/* The way fill and stroke and their kin are inherited: from the nearest of
+   this element and its ancestors, up to and including the drawing's own
+   <svg>, that says anything. A group that set a fill used to colour none of
+   its shapes, which came out black -- the default -- and a logo drawn as one
+   <g fill="..."> round its paths came out as a black silhouette. */
+static inline const char *sv_inherit(const ddoc *d, int el, int root, const char *name) {
+    for (int a = el; a >= 0; a = d->nodes[a].parent) {
+        const char *v = sv_said(d, a, name);
+        if (v) return v;
+        if (a == root) break;
+    }
+    return 0;
+}
+
+static inline float sv_inherit_num(const ddoc *d, int el, int root, const char *name,
+                                   float dflt) {
+    const char *v = sv_inherit(d, el, root, name);
+    if (!v) return dflt;
+    const char *at = v;
+    return sv_number(&at);
+}
+
+/* Whether a paint that was said is one to draw, and its colour: "none" is a
+   real answer, and a different one from saying nothing. */
+static inline int sv_paint_value(const char *v, u32 *out) {
     while (*v == ' ') v++;
     if (w_starts_fold(v, "none")) return 0;
+    /* The style sheet's colour for "transparent" is white, which is right
+       for a page's background and wrong here: it drew a white shape over
+       whatever was under it. */
+    if (w_starts_fold(v, "transparent")) return 0;
 
     /* A gradient or a pattern is a reference to something this does not
        draw. Rather than leaving a hole where the shape was, it is filled
@@ -521,6 +550,16 @@ static inline int sv_paint(const ddoc *d, int el, const char *name, u32 *out) {
     if (w_starts_fold(v, "url(")) { *out = 0x9A9A9A; return 1; }
 
     return css_color(v, out) ? 1 : 0;
+}
+
+/* Elements whose contents are there to be referred to, not drawn where they
+   stand: a clip path, a mask, a pattern tile, a marker, a symbol waiting for
+   a <use>, and <defs>, which holds all of them. Their shapes used to be
+   painted like any other, black, over the drawing. */
+static inline int sv_unpainted(const ddoc *d, int el) {
+    const char *t = dom_tag_name(d, el);
+    return w_same_fold(t, "defs") || w_same_fold(t, "clippath") || w_same_fold(t, "mask")
+        || w_same_fold(t, "symbol") || w_same_fold(t, "pattern") || w_same_fold(t, "marker");
 }
 
 static inline float sv_attr_num(const ddoc *d, int el, const char *name,
@@ -621,6 +660,10 @@ static inline int sv_shape(const ddoc *d, int el, svmat m, svpath *path) {
         sv_add(path, m, x + w, y);
         sv_add(path, m, x + w, y + h);
         sv_add(path, m, x, y + h);
+        /* Back to the corner it started from. A fill closes a shape by
+           itself, but a stroke draws only the edges it is given, and a
+           stroked rectangle came out with no left side. */
+        sv_add(path, m, x, y);
         return 1;
     }
 
@@ -662,11 +705,16 @@ static inline int sv_shape(const ddoc *d, int el, svmat m, svpath *path) {
         const char *pts = dom_attr(d, el, "points");
         if (!pts || !*pts) return 0;
         sv_begin(path);
+        int first = path->n;
         while (sv_more(pts)) {
             float x = sv_number(&pts);
             float y = sv_number(&pts);
             sv_add(path, m, x, y);
         }
+        /* A polygon is closed and a polyline is not, which for a stroke is
+           the whole of the difference between them. */
+        if (w_same_fold(name, "polygon") && path->n > first + 1 && path->n < SVG_MAX_PTS)
+            path->pts[path->n++] = path->pts[first];
         return path->n > 1;
     }
 
@@ -759,38 +807,50 @@ static inline int svg_render(const char *xml, int len, int want_w, int want_h,
         int n = 0;
         for (int a = el; a > root && n < 32; a = doc->nodes[a].parent)
             chain[n++] = a;
+        int hidden = 0;
+        for (int i = 0; i < n && !hidden; i++) hidden = sv_unpainted(doc, chain[i]);
+        if (hidden) continue;
         for (int i = n - 1; i >= 0; i--) m = sv_transform(doc, chain[i], m);
 
         if (!sv_shape(doc, el, m, path)) continue;
 
         u32 fill = 0x000000;
-        int has_fill = sv_paint(doc, el, "fill", &fill);
-        /* Unsaid means black, which is what the format says and is why a
-           path with no fill attribute at all still draws. */
-        const char *fv = dom_attr(doc, el, "fill");
-        if (!has_fill && (!fv || !*fv)
-            && !w_same_fold(dom_tag_name(doc, el), "polyline")
-            && !w_same_fold(dom_tag_name(doc, el), "line")) {
-            has_fill = 1;
-            fill = 0x000000;
+        int has_fill;
+        const char *fv = sv_inherit(doc, el, root, "fill");
+        if (fv) {
+            has_fill = sv_paint_value(fv, &fill);
+        } else {
+            /* Unsaid all the way up means black, which is what the format
+               says and is why a path with no fill anywhere still draws. */
+            has_fill = !w_same_fold(dom_tag_name(doc, el), "polyline")
+                    && !w_same_fold(dom_tag_name(doc, el), "line");
         }
 
-        float opacity = sv_attr_num(doc, el, "opacity", 1.0f);
-        float fo = sv_attr_num(doc, el, "fill-opacity", 1.0f) * opacity;
+        /* Opacity is not inherited but a group's applies to everything in
+           it, which for shapes that do not overlap is the same as
+           multiplying down the chain. */
+        float opacity = 1.0f;
+        for (int a = el; a >= 0; a = doc->nodes[a].parent) {
+            const char *ov = sv_said(doc, a, "opacity");
+            if (ov) { const char *at = ov; opacity *= sv_number(&at); }
+            if (a == root) break;
+        }
+        float fo = sv_inherit_num(doc, el, root, "fill-opacity", 1.0f) * opacity;
         if (fo < 0) fo = 0;
         if (fo > 1) fo = 1;
 
         if (has_fill && fo > 0.004f) {
-            const char *rule = dom_attr(doc, el, "fill-rule");
+            const char *rule = sv_inherit(doc, el, root, "fill-rule");
             int evenodd = rule && w_starts_fold(rule, "evenodd");
             sv_fill(&cv, path, fill, evenodd, fo);
             drawn++;
         }
 
         u32 stroke = 0;
-        if (sv_paint(doc, el, "stroke", &stroke)) {
-            float sw = sv_attr_num(doc, el, "stroke-width", 1.0f) * sc;
-            float so = sv_attr_num(doc, el, "stroke-opacity", 1.0f) * opacity;
+        const char *sv = sv_inherit(doc, el, root, "stroke");
+        if (sv && sv_paint_value(sv, &stroke)) {
+            float sw = sv_inherit_num(doc, el, root, "stroke-width", 1.0f) * sc;
+            float so = sv_inherit_num(doc, el, root, "stroke-opacity", 1.0f) * opacity;
             if (so > 0.004f) {
                 sv_stroke(&cv, path, stroke, sw, so > 1 ? 1 : so);
                 drawn++;

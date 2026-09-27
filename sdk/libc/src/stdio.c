@@ -318,6 +318,14 @@ int fseek(FILE *f, long off, int whence) {
     if (f->interactive) { errno = ESPIPE; return -1; }
 
     fflush(f);
+
+    /* From where the program is, which is not where the descriptor is: a
+       read fills the buffer ahead of it by up to a buffer's worth, and a
+       character pushed back is one it has not read. This used to seek the
+       descriptor from where it stood, so after reading one byte of a file
+       a seek of two went to wherever the read-ahead had stopped, plus two. */
+    if (whence == SEEK_CUR) { off += f->pos; whence = SEEK_SET; }
+
     f->reading = f->writing = 0;
     f->len = f->at = 0;
     f->unget = -1;
@@ -332,7 +340,9 @@ int fseek(FILE *f, long off, int whence) {
 long ftell(FILE *f) {
     if (!f || !f->used) return -1;
     if (f->interactive) { errno = ESPIPE; return -1; }
-    return f->pos;
+    /* Bytes written into the buffer and not yet flushed are the program's
+       all the same; pos only moves when they go. */
+    return f->pos + (f->writing ? f->len : 0);
 }
 
 void rewind(FILE *f) { fseek(f, 0, SEEK_SET); }

@@ -510,6 +510,18 @@ int main(void) {
                    t->h > 0 && t->h < 100, t->h);
     }
 
+    /* --- an element the parser has never heard of ----------------------------
+     *
+     * Its end tag closes it, like any other. It used to close nothing, so
+     * everything after a custom element went inside it, and a page built of
+     * them was one element nested a hundred deep. */
+    {
+        lay("<my-card id=c>inside</my-card><p id=after>after</p>", 600);
+        int c = by_id("c"), after = by_id("after");
+        ok("the end tag of an unknown element closes it",
+           c >= 0 && after >= 0 && doc.nodes[after].parent == doc.nodes[c].parent);
+    }
+
     puts(failed ? "LAYOUTTEST_FAIL\n" : "LAYOUTTEST_PASS\n");
     return failed;
 }

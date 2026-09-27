@@ -75,6 +75,13 @@ typedef struct {
     u64 c_seq, s_seq;
     bool keys_are_app;
 
+    /* Whether a record of ours can be sealed yet, which decides whether an
+       alert goes in the clear or encrypted; and whether one has already gone
+       either way, or the server sent its own, after which nothing more is
+       said. */
+    bool can_seal;
+    bool alerted;
+
     /* Records come in whole; handshake messages do not line up with them,
        so they are reassembled here. */
     u8 *rec;          /* one record's worth */
@@ -160,7 +167,21 @@ bool tls_any(void) {
 
 /* --- reading and writing whole things over TCP --------------------------- */
 
+/* For the self test: bytes to read instead of the network, and a place to
+   put what would have been sent, so what this layer does with a record can be
+   checked to the byte without a server. */
+static const u8 *test_in;
+static u32 test_in_len, test_in_pos;
+static u8 *test_out;
+static u32 test_out_len, test_out_cap;
+
 static bool read_exact(tls_t *z, u8 *out, u32 n, u32 timeout_ms) {
+    if (test_in) {
+        if (test_in_len - test_in_pos < n) return false;
+        memcpy(out, test_in + test_in_pos, n);
+        test_in_pos += n;
+        return true;
+    }
     u32 have = 0;
     u64 deadline = timer_ticks() + (u64)timeout_ms * timer_hz() / 1000;
     while (have < n) {
@@ -174,6 +195,12 @@ static bool read_exact(tls_t *z, u8 *out, u32 n, u32 timeout_ms) {
 
 /* The stack underneath sends at most a segment at a time. */
 static bool write_all(tls_t *z, const u8 *p, u32 n) {
+    if (test_out) {
+        if (test_out_cap - test_out_len < n) return false;
+        memcpy(test_out + test_out_len, p, n);
+        test_out_len += n;
+        return true;
+    }
     while (n) {
         u16 take = n > 1400 ? 1400 : (u16)n;
         if (!tcp_send(z->tcp, p, take)) return false;
@@ -223,6 +250,50 @@ static bool send_encrypted(tls_t *z, u8 inner_type, const u8 *data, u32 len) {
     return write_all(z, buf, total);
 }
 
+/* --- saying why ----------------------------------------------------------
+ *
+ * A failure used to be kept to ourselves: the connection simply stopped, and
+ * the server's log said the client went away. TLS has a way to say why, and a
+ * server operator with a certificate that expired yesterday, or a chain with
+ * a link missing, is exactly who needs to hear it. One fatal alert, in the
+ * clear before this end has a key to seal with and sealed after, and never
+ * in answer to one of the server's own. Descriptions are RFC 8446 6.2. */
+#define ALERT_UNEXPECTED_MESSAGE   10
+#define ALERT_BAD_RECORD_MAC       20
+#define ALERT_RECORD_OVERFLOW      22
+#define ALERT_HANDSHAKE_FAILURE    40
+#define ALERT_BAD_CERTIFICATE      42
+#define ALERT_CERTIFICATE_EXPIRED  45
+#define ALERT_ILLEGAL_PARAMETER    47
+#define ALERT_UNKNOWN_CA           48
+#define ALERT_DECODE_ERROR         50
+#define ALERT_DECRYPT_ERROR        51
+#define ALERT_PROTOCOL_VERSION     70
+#define ALERT_INTERNAL_ERROR       80
+#define ALERT_MISSING_EXTENSION   109
+
+static void send_alert(tls_t *z, u8 desc) {
+    if (z->alerted) return;
+    z->alerted = true;
+    u8 a[2] = { 2, desc };                     /* fatal */
+    if (z->can_seal) send_encrypted(z, REC_ALERT, a, 2);
+    else             send_plain_record(z, REC_ALERT, a, 2);
+}
+
+/* A failure the server should be told about, as opposed to fail() on its own
+   for the ones it cannot be: the connection gone, or its own alert. */
+static void refuse(tls_t *z, const char *why, u8 desc) {
+    send_alert(z, desc);
+    fail(z, why);
+}
+
+/* Which alert a certificate chain's verdict is. */
+static u8 alert_for_chain(x509_result_t r) {
+    if (r == X509_EXPIRED || r == X509_NOT_YET_VALID) return ALERT_CERTIFICATE_EXPIRED;
+    if (r == X509_UNTRUSTED) return ALERT_UNKNOWN_CA;
+    return ALERT_BAD_CERTIFICATE;
+}
+
 /* Reads one record. When encryption is on, unwraps it and reports the type
    that was inside. Returns false on a broken connection or a record that
    does not authenticate, which are not distinguished on purpose. */
@@ -231,7 +302,7 @@ static bool read_record(tls_t *z, u8 *type, u32 *len, bool encrypted) {
     if (!read_exact(z, head, 5, 20000)) { fail(z, "the connection stopped"); return false; }
 
     u32 n = ((u32)head[3] << 8) | head[4];
-    if (n == 0 || n > REC_MAX) { fail(z, "the server sent a record of an impossible size"); return false; }
+    if (n == 0 || n > REC_MAX) { refuse(z, "the server sent a record of an impossible size", ALERT_RECORD_OVERFLOW); return false; }
     if (!read_exact(z, z->rec, n, 20000)) { fail(z, "the connection stopped mid record"); return false; }
 
     if (head[0] == REC_CHANGE_CIPHER) {
@@ -243,6 +314,7 @@ static bool read_record(tls_t *z, u8 *type, u32 *len, bool encrypted) {
     }
 
     if (head[0] == REC_ALERT && !encrypted) {
+        z->alerted = true;                     /* not answered */
         fail(z, "the server refused the connection");
         return false;
     }
@@ -253,20 +325,20 @@ static bool read_record(tls_t *z, u8 *type, u32 *len, bool encrypted) {
         return true;
     }
 
-    if (n < GCM_TAG + 1) { fail(z, "the server sent a record too short to be real"); return false; }
+    if (n < GCM_TAG + 1) { refuse(z, "the server sent a record too short to be real", ALERT_DECODE_ERROR); return false; }
 
     u32 body = n - GCM_TAG;
     u8 nonce[12];
     nonce_for(nonce, z->s_iv, z->s_seq);
     if (!gcm_open(&z->s_gcm, nonce, head, 5, z->rec, body, z->rec + body)) {
-        fail(z, "a record did not authenticate");
+        refuse(z, "a record did not authenticate", ALERT_BAD_RECORD_MAC);
         return false;
     }
     z->s_seq++;
 
     /* The real type is the last byte that is not padding. */
     while (body > 0 && z->rec[body - 1] == 0) body--;
-    if (body == 0) { fail(z, "a record had nothing in it"); return false; }
+    if (body == 0) { refuse(z, "a record had nothing in it", ALERT_UNEXPECTED_MESSAGE); return false; }
 
     *type = z->rec[body - 1];
     *len = body - 1;
@@ -274,6 +346,7 @@ static bool read_record(tls_t *z, u8 *type, u32 *len, bool encrypted) {
     if (*type == REC_ALERT) {
         /* A close is an alert and so is a refusal; the second byte says. */
         if (*len >= 2 && z->rec[0] == 1) { z->ended = true; *len = 0; return true; }
+        z->alerted = true;
         fail(z, "the server closed the connection with an alert");
         return false;
     }
@@ -291,10 +364,10 @@ static bool hs_fill(tls_t *z, bool encrypted) {
         if (!read_record(z, &type, &len, encrypted)) return false;
         if (type == REC_CHANGE_CIPHER) continue;
         if (type != REC_HANDSHAKE) {
-            fail(z, "the server sent something other than a handshake message");
+            refuse(z, "the server sent something other than a handshake message", ALERT_UNEXPECTED_MESSAGE);
             return false;
         }
-        if (z->hs_len + len > HS_MAX) { fail(z, "the handshake is too big to hold"); return false; }
+        if (z->hs_len + len > HS_MAX) { refuse(z, "the handshake is too big to hold", ALERT_INTERNAL_ERROR); return false; }
         memcpy(z->hs + z->hs_len, z->rec, len);
         z->hs_len += len;
         return true;
@@ -310,7 +383,7 @@ static bool hs_next(tls_t *z, bool encrypted, u8 *type, const u8 **body, u32 *le
         if (avail >= 4) {
             const u8 *p = z->hs + z->hs_pos;
             u32 n = ((u32)p[1] << 16) | ((u32)p[2] << 8) | p[3];
-            if (n > HS_MAX) { fail(z, "a handshake message claims an impossible size"); return false; }
+            if (n > HS_MAX) { refuse(z, "a handshake message claims an impossible size", ALERT_DECODE_ERROR); return false; }
             if (avail >= 4 + n) {
                 *type = p[0];
                 *body = p + 4;
@@ -343,6 +416,7 @@ static bool set_keys(tls_t *z, const u8 secret[32], bool ours) {
         if (!gcm_init(&z->c_gcm, key, 128)) return false;
         memcpy(z->c_iv, iv, 12);
         z->c_seq = 0;
+        z->can_seal = true;
     } else {
         if (!gcm_init(&z->s_gcm, key, 128)) return false;
         memcpy(z->s_iv, iv, 12);
@@ -446,29 +520,29 @@ static bool parse_server_hello(tls_t *z, const u8 *p, u32 len) {
         0x07,0x9e,0x09,0xe2,0xc8,0xa8,0x33,0x9c
     };
 
-    if (len < 38) { fail(z, "the server hello is too short"); return false; }
+    if (len < 38) { refuse(z, "the server hello is too short", ALERT_DECODE_ERROR); return false; }
     u32 i = 2;                                  /* the legacy version */
 
     if (memcmp(p + i, RETRY, 32) == 0) {
-        fail(z, "the server wants a key exchange group this does not have");
+        refuse(z, "the server wants a key exchange group this does not have", ALERT_ILLEGAL_PARAMETER);
         return false;
     }
     i += 32;
 
     u32 sid = p[i++];
-    if (i + sid + 3 > len) { fail(z, "the server hello is malformed"); return false; }
+    if (i + sid + 3 > len) { refuse(z, "the server hello is malformed", ALERT_DECODE_ERROR); return false; }
     i += sid;
 
     u32 suite = ((u32)p[i] << 8) | p[i + 1]; i += 2;
     if (suite != SUITE_AES128_GCM_SHA256) {
-        fail(z, "the server chose a cipher this does not have");
+        refuse(z, "the server chose a cipher this does not have", ALERT_ILLEGAL_PARAMETER);
         return false;
     }
     i++;                                        /* the compression byte */
 
-    if (i + 2 > len) { fail(z, "the server hello has no extensions"); return false; }
+    if (i + 2 > len) { refuse(z, "the server hello has no extensions", ALERT_DECODE_ERROR); return false; }
     u32 ext_len = ((u32)p[i] << 8) | p[i + 1]; i += 2;
-    if (i + ext_len > len) { fail(z, "the server hello is malformed"); return false; }
+    if (i + ext_len > len) { refuse(z, "the server hello is malformed", ALERT_DECODE_ERROR); return false; }
 
     bool got_version = false, got_share = false;
     u32 end = i + ext_len;
@@ -476,22 +550,22 @@ static bool parse_server_hello(tls_t *z, const u8 *p, u32 len) {
         u32 kind = ((u32)p[i] << 8) | p[i + 1];
         u32 n = ((u32)p[i + 2] << 8) | p[i + 3];
         i += 4;
-        if (i + n > end) { fail(z, "an extension runs past the message"); return false; }
+        if (i + n > end) { refuse(z, "an extension runs past the message", ALERT_DECODE_ERROR); return false; }
 
         if (kind == 0x002b) {
-            if (n != 2) { fail(z, "the version extension is malformed"); return false; }
+            if (n != 2) { refuse(z, "the version extension is malformed", ALERT_DECODE_ERROR); return false; }
             u32 v = ((u32)p[i] << 8) | p[i + 1];
             if (v != 0x0304) {
-                fail(z, "the server does not do TLS 1.3");
+                refuse(z, "the server does not do TLS 1.3", ALERT_PROTOCOL_VERSION);
                 return false;
             }
             got_version = true;
         } else if (kind == 0x0033) {
-            if (n < 4) { fail(z, "the key share is malformed"); return false; }
+            if (n < 4) { refuse(z, "the key share is malformed", ALERT_DECODE_ERROR); return false; }
             u32 group = ((u32)p[i] << 8) | p[i + 1];
             u32 klen = ((u32)p[i + 2] << 8) | p[i + 3];
             if (group != GROUP_X25519 || klen != 32 || n != klen + 4) {
-                fail(z, "the server chose a key exchange this does not have");
+                refuse(z, "the server chose a key exchange this does not have", ALERT_ILLEGAL_PARAMETER);
                 return false;
             }
             memcpy(z->peer_share, p + i + 4, 32);
@@ -503,10 +577,10 @@ static bool parse_server_hello(tls_t *z, const u8 *p, u32 len) {
     if (!got_version) {
         /* Without the extension this is an older server pretending, or an
            older server being honest. Either way it is not 1.3. */
-        fail(z, "the server did not agree to TLS 1.3");
+        refuse(z, "the server did not agree to TLS 1.3", ALERT_PROTOCOL_VERSION);
         return false;
     }
-    if (!got_share) { fail(z, "the server sent no key share"); return false; }
+    if (!got_share) { refuse(z, "the server sent no key share", ALERT_MISSING_EXTENSION); return false; }
     return true;
 }
 
@@ -514,10 +588,10 @@ static bool parse_server_hello(tls_t *z, const u8 *p, u32 len) {
 
 static bool check_cert_verify(tls_t *z, const u8 *p, u32 len, const x509_t *leaf,
                               const u8 hash_before[32]) {
-    if (len < 4) { fail(z, "the signature message is too short"); return false; }
+    if (len < 4) { refuse(z, "the signature message is too short", ALERT_DECODE_ERROR); return false; }
     u32 scheme = ((u32)p[0] << 8) | p[1];
     u32 sig_len = ((u32)p[2] << 8) | p[3];
-    if (4 + sig_len != len) { fail(z, "the signature message is malformed"); return false; }
+    if (4 + sig_len != len) { refuse(z, "the signature message is malformed", ALERT_DECODE_ERROR); return false; }
     const u8 *sig = p + 4;
 
     /* What is signed: a long run of spaces, a fixed sentence, a zero, and
@@ -573,11 +647,11 @@ static bool check_cert_verify(tls_t *z, const u8 *p, u32 len, const x509_t *leaf
             break;
 
         default:
-            fail(z, "the server signed with something this cannot check");
+            refuse(z, "the server signed with something this cannot check", ALERT_ILLEGAL_PARAMETER);
             return false;
     }
 
-    fail(z, "the server's signature over the handshake is wrong");
+    refuse(z, "the server's signature over the handshake is wrong", ALERT_DECRYPT_ERROR);
     return false;
 }
 
@@ -671,7 +745,7 @@ bool tls_connect(int tcp, const char *host) {
     {
         u8 type; const u8 *body, *whole; u32 len, whole_len;
         if (!hs_next(z, false, &type, &body, &len, &whole, &whole_len)) return false;
-        if (type != HS_SERVER_HELLO) { fail(z, "the server did not answer with a hello"); return false; }
+        if (type != HS_SERVER_HELLO) { refuse(z, "the server did not answer with a hello", ALERT_UNEXPECTED_MESSAGE); return false; }
         if (!parse_server_hello(z, body, len)) return false;
         sha256_update(&z->transcript, whole, whole_len);
     }
@@ -679,7 +753,7 @@ bool tls_connect(int tcp, const char *host) {
     /* --- the shared secret, and the keys for the rest of the handshake --- */
     u8 shared[32];
     if (!x25519(z->priv, z->peer_share, shared)) {
-        fail(z, "the server's key share is not usable");
+        refuse(z, "the server's key share is not usable", ALERT_ILLEGAL_PARAMETER);
         return false;
     }
 
@@ -689,16 +763,22 @@ bool tls_connect(int tcp, const char *host) {
         hkdf_extract(0, 0, zeros, 32, early);
         sha256("", 0, empty_hash);
         if (!tls13_derive_secret(early, "derived", empty_hash, 32, derived)) {
-            fail(z, "the key schedule failed"); return false;
+            refuse(z, "the key schedule failed", ALERT_INTERNAL_ERROR); return false;
         }
         hkdf_extract(derived, 32, shared, 32, z->hs_secret);
 
         transcript_hash(z, th);
         if (!tls13_derive_secret(z->hs_secret, "c hs traffic", th, 32, z->c_hs) ||
             !tls13_derive_secret(z->hs_secret, "s hs traffic", th, 32, z->s_hs)) {
-            fail(z, "the key schedule failed"); return false;
+            refuse(z, "the key schedule failed", ALERT_INTERNAL_ERROR); return false;
         }
-        if (!set_keys(z, z->s_hs, false)) { fail(z, "could not set up decryption"); return false; }
+        if (!set_keys(z, z->s_hs, false)) { refuse(z, "could not set up decryption", ALERT_INTERNAL_ERROR); return false; }
+
+        /* And ours, now rather than just before our finished: from here the
+           server expects anything we say sealed, and what we may have to say
+           before finished is why its flight was refused. Nothing else goes
+           out before finished, so it still goes as record nought. */
+        if (!set_keys(z, z->c_hs, true)) { refuse(z, "could not set up encryption", ALERT_INTERNAL_ERROR); return false; }
     }
 
     /* Everything from here is encrypted.
@@ -732,7 +812,7 @@ bool tls_connect(int tcp, const char *host) {
            arrives out of turn is refused unread. */
         const char *why = 0;
         int next = tls_flight_step(step, type, &why);
-        if (next < 0) { fail(z, why); return false; }
+        if (next < 0) { refuse(z, why, ALERT_UNEXPECTED_MESSAGE); return false; }
         step = next;
 
         if (type == HS_ENCRYPTED_EXT) {
@@ -741,21 +821,21 @@ bool tls_connect(int tcp, const char *host) {
         } else if (type == HS_CERTIFICATE) {
             /* certificate_request_context, then a list of certificates each
                with its own extensions. */
-            if (len < 1) { fail(z, "the certificate message is malformed"); return false; }
+            if (len < 1) { refuse(z, "the certificate message is malformed", ALERT_DECODE_ERROR); return false; }
             u32 p = 0;
             u32 ctx = body[p++];
-            if (p + ctx + 3 > len) { fail(z, "the certificate message is malformed"); return false; }
+            if (p + ctx + 3 > len) { refuse(z, "the certificate message is malformed", ALERT_DECODE_ERROR); return false; }
             p += ctx;
             u32 list = ((u32)body[p] << 16) | ((u32)body[p + 1] << 8) | body[p + 2];
             p += 3;
-            if (p + list > len) { fail(z, "the certificate list is malformed"); return false; }
+            if (p + list > len) { refuse(z, "the certificate list is malformed", ALERT_DECODE_ERROR); return false; }
 
             u32 end = p + list;
             while (p + 3 <= end && nchain < X509_MAX_CHAIN) {
                 u32 clen = ((u32)body[p] << 16) | ((u32)body[p + 1] << 8) | body[p + 2];
                 p += 3;
-                if (p + clen > end) { fail(z, "a certificate runs past the list"); return false; }
-                if (chain_used + clen > HS_MAX) { fail(z, "the certificates are too big"); return false; }
+                if (p + clen > end) { refuse(z, "a certificate runs past the list", ALERT_DECODE_ERROR); return false; }
+                if (chain_used + clen > HS_MAX) { refuse(z, "the certificates are too big", ALERT_INTERNAL_ERROR); return false; }
                 memcpy(z->chain + chain_used, body + p, clen);
                 z->ders[nchain] = z->chain + chain_used;
                 z->lens[nchain] = clen;
@@ -766,9 +846,9 @@ bool tls_connect(int tcp, const char *host) {
                 u32 ext = ((u32)body[p] << 8) | body[p + 1];
                 p += 2 + ext;
             }
-            if (nchain == 0) { fail(z, "the server sent no certificate"); return false; }
+            if (nchain == 0) { refuse(z, "the server sent no certificate", ALERT_DECODE_ERROR); return false; }
             if (!x509_parse(z->ders[0], z->lens[0], &z->leaf)) {
-                fail(z, "the server's certificate could not be read");
+                refuse(z, "the server's certificate could not be read", ALERT_BAD_CERTIFICATE);
                 return false;
             }
             sha256_update(&z->transcript, whole, whole_len);
@@ -790,11 +870,11 @@ bool tls_connect(int tcp, const char *host) {
 
             u8 fkey[32], mac[32];
             if (!hkdf_expand_label(z->s_hs, "finished", 0, 0, fkey, 32)) {
-                fail(z, "the key schedule failed"); return false;
+                refuse(z, "the key schedule failed", ALERT_INTERNAL_ERROR); return false;
             }
             hmac_sha256(fkey, 32, upto_here, 32, mac);
             if (len != 32 || memcmp(mac, body, 32) != 0) {
-                fail(z, "the server's finished message is wrong");
+                refuse(z, "the server's finished message is wrong", ALERT_DECRYPT_ERROR);
                 return false;
             }
             sha256_update(&z->transcript, whole, whole_len);
@@ -806,7 +886,7 @@ bool tls_connect(int tcp, const char *host) {
     {
         u64 now = x509_now();
         x509_result_t r = x509_verify_chain(z->ders, z->lens, nchain, z->host, now);
-        if (r != X509_OK) { fail(z, x509_reason(r)); return false; }
+        if (r != X509_OK) { refuse(z, x509_reason(r), alert_for_chain(r)); return false; }
     }
 
     /* --- our finished, and then the keys for the conversation proper ----- */
@@ -817,11 +897,9 @@ bool tls_connect(int tcp, const char *host) {
         u8 th[32];
         transcript_hash(z, th);
 
-        if (!set_keys(z, z->c_hs, true)) { fail(z, "could not set up encryption"); return false; }
-
         u8 fkey[32], mac[32], msg[36];
         if (!hkdf_expand_label(z->c_hs, "finished", 0, 0, fkey, 32)) {
-            fail(z, "the key schedule failed"); return false;
+            refuse(z, "the key schedule failed", ALERT_INTERNAL_ERROR); return false;
         }
         hmac_sha256(fkey, 32, th, 32, mac);
         msg[0] = HS_FINISHED;
@@ -836,7 +914,7 @@ bool tls_connect(int tcp, const char *host) {
         memset(zeros, 0, 32);
         sha256("", 0, empty_hash);
         if (!tls13_derive_secret(z->hs_secret, "derived", empty_hash, 32, derived)) {
-            fail(z, "the key schedule failed"); return false;
+            refuse(z, "the key schedule failed", ALERT_INTERNAL_ERROR); return false;
         }
         hkdf_extract(derived, 32, zeros, 32, master);
 
@@ -855,10 +933,10 @@ bool tls_connect(int tcp, const char *host) {
            selftest.c against RFC 8448 does. */
         if (!tls13_derive_secret(master, "c ap traffic", th, 32, z->c_app) ||
             !tls13_derive_secret(master, "s ap traffic", th, 32, z->s_app)) {
-            fail(z, "the key schedule failed"); return false;
+            refuse(z, "the key schedule failed", ALERT_INTERNAL_ERROR); return false;
         }
         if (!set_keys(z, z->c_app, true) || !set_keys(z, z->s_app, false)) {
-            fail(z, "could not set up the connection keys");
+            refuse(z, "could not set up the connection keys", ALERT_INTERNAL_ERROR);
             return false;
         }
         z->keys_are_app = true;
@@ -888,8 +966,78 @@ bool tls_send(int tcp, const void *data, u32 len) {
     return true;
 }
 
+/* The server's move to new keys (RFC 8446 4.6.3). Its secret moves on one
+   step, and so does its sequence number, back to nought; if it asks, ours
+   follows -- after we have said so under the old key, which is the one it is
+   still reading with.
+ *
+ * Before this, a KeyUpdate was skipped as if it were a session ticket, the
+ * next record came under a key this end did not have, and the connection
+ * ended as a record that did not authenticate. A long download from a
+ * server that rotates its keys every so many records simply stopped, and
+ * looked, to whoever was reading it, like a file that ended there. */
+static bool key_update(tls_t *z, u8 requested) {
+    u8 next[32];
+    if (!hkdf_expand_label(z->s_app, "traffic upd", 0, 0, next, 32)) return false;
+    memcpy(z->s_app, next, 32);
+    if (!set_keys(z, z->s_app, false)) return false;
+    if (requested) {
+        u8 msg[5] = { HS_KEY_UPDATE, 0, 0, 1, 0 };
+        if (!send_encrypted(z, REC_HANDSHAKE, msg, 5)) return false;
+        if (!hkdf_expand_label(z->c_app, "traffic upd", 0, 0, next, 32)) return false;
+        memcpy(z->c_app, next, 32);
+        if (!set_keys(z, z->c_app, true)) return false;
+    }
+    return true;
+}
+
+/* Handshake messages after the handshake: session tickets, which mean
+   nothing because nothing resumes a connection yet, and key updates, which
+   mean everything. Reassembled like the handshake's, since a message need
+   not line up with the record it came in. */
+static bool post_handshake(tls_t *z, const u8 *data, u32 len) {
+    if (z->hs_len + len > HS_MAX) {
+        refuse(z, "a message after the handshake is too big to hold", ALERT_INTERNAL_ERROR);
+        return false;
+    }
+    memcpy(z->hs + z->hs_len, data, len);
+    z->hs_len += len;
+
+    for (;;) {
+        u32 avail = z->hs_len - z->hs_pos;
+        if (avail < 4) break;
+        const u8 *p = z->hs + z->hs_pos;
+        u32 n = ((u32)p[1] << 16) | ((u32)p[2] << 8) | p[3];
+        if (n > HS_MAX) {
+            refuse(z, "a message after the handshake claims an impossible size", ALERT_DECODE_ERROR);
+            return false;
+        }
+        if (avail < 4 + n) break;
+        if (p[0] == HS_KEY_UPDATE) {
+            if (n != 1) { refuse(z, "a key update is malformed", ALERT_DECODE_ERROR); return false; }
+            if (p[4] > 1) { refuse(z, "a key update asks for something that does not exist", ALERT_ILLEGAL_PARAMETER); return false; }
+            if (!key_update(z, p[4])) {
+                refuse(z, "a key update could not be carried out", ALERT_INTERNAL_ERROR);
+                return false;
+            }
+        }
+        z->hs_pos += 4 + n;
+    }
+    if (z->hs_pos) {
+        memmove(z->hs, z->hs + z->hs_pos, z->hs_len - z->hs_pos);
+        z->hs_len -= z->hs_pos;
+        z->hs_pos = 0;
+    }
+    return true;
+}
+
+static u32 recv_on(tls_t *z, u8 *out, u32 cap, u32 timeout_ms);
+
 u32 tls_recv(int tcp, u8 *out, u32 cap, u32 timeout_ms) {
-    tls_t *z = tls_of(tcp);
+    return recv_on(tls_of(tcp), out, cap, timeout_ms);
+}
+
+static u32 recv_on(tls_t *z, u8 *out, u32 cap, u32 timeout_ms) {
     if (!z->open) return 0;
 
     /* Anything already decrypted and not yet handed over. */
@@ -915,8 +1063,7 @@ u32 tls_recv(int tcp, u8 *out, u32 cap, u32 timeout_ms) {
         if (type == REC_CHANGE_CIPHER) continue;
 
         if (type == REC_HANDSHAKE) {
-            /* Session tickets arrive after the handshake and mean nothing
-               here, because nothing resumes a connection yet. */
+            if (!post_handshake(z, z->rec, len)) { z->ended = true; return 0; }
             continue;
         }
         if (type != REC_APPDATA) continue;
@@ -958,4 +1105,59 @@ void tls_close(int tcp) {
     z->ended = false;
     z->app_len = z->app_pos = 0;
     z->hs_len = z->hs_pos = 0;
+}
+
+/* --- for the self test -----------------------------------------------------
+ *
+ * A session of its own, never joined to a connection, with the network
+ * swapped for buffers: what this layer writes, to the byte, and what it does
+ * with bytes it is given, without a server. */
+
+static tls_t scratch;
+
+static bool scratch_begin(void) {
+    memset(&scratch, 0, sizeof(scratch));
+    scratch.tcp = -1;
+    scratch.rec = (u8 *)kmalloc(REC_MAX + 64);
+    scratch.hs  = (u8 *)kmalloc(HS_MAX);
+    scratch.app = (u8 *)kmalloc(REC_MAX);
+    return scratch.rec && scratch.hs && scratch.app;
+}
+
+static void scratch_end(void) {
+    kfree(scratch.rec); kfree(scratch.hs); kfree(scratch.app);
+    memset(&scratch, 0, sizeof(scratch));
+    test_in = 0; test_out = 0;
+}
+
+u32 tls_test_alert(const u8 *secret, u8 desc, u8 *out, u32 cap) {
+    if (!scratch_begin()) { scratch_end(); return 0; }
+    u32 n = 0;
+    if (!secret || set_keys(&scratch, secret, true)) {
+        test_out = out; test_out_len = 0; test_out_cap = cap;
+        send_alert(&scratch, desc);
+        n = test_out_len;
+    }
+    scratch_end();
+    return n;
+}
+
+u32 tls_test_recv(const u8 s_app[32], const u8 c_app[32], const u8 *in, u32 in_len,
+                  u8 *got, u32 got_cap, u8 *sent, u32 sent_cap, u32 *sent_len,
+                  u8 s_after[32], u8 c_after[32]) {
+    if (!scratch_begin()) { scratch_end(); return 0; }
+    memcpy(scratch.s_app, s_app, 32);
+    memcpy(scratch.c_app, c_app, 32);
+    u32 n = 0;
+    if (set_keys(&scratch, s_app, false) && set_keys(&scratch, c_app, true)) {
+        scratch.open = scratch.handshake_done = scratch.keys_are_app = true;
+        test_in = in; test_in_len = in_len; test_in_pos = 0;
+        test_out = sent; test_out_len = 0; test_out_cap = sent_cap;
+        n = recv_on(&scratch, got, got_cap, 1000);
+        *sent_len = test_out_len;
+        memcpy(s_after, scratch.s_app, 32);
+        memcpy(c_after, scratch.c_app, 32);
+    }
+    scratch_end();
+    return n;
 }

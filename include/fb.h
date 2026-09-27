@@ -8,7 +8,12 @@ bool fb_init(u32 width, u32 height);
 
 /* Takes over a screen a bootloader already set up, which is the only option
    on a machine with no VBE to ask. */
-bool fb_adopt(u64 base, u32 width, u32 height, u32 pitch_pixels);
+/* `format` is the handoff's fb_format: HANDOFF_FB_BGRX or HANDOFF_FB_RGBX. */
+bool fb_adopt(u64 base, u32 width, u32 height, u32 pitch_pixels, u32 format);
+
+/* For the self test: the bytes one pixel arrives as on a card that takes red
+   first, and on one that takes blue first. */
+bool fb_test_orders(u8 rgbx[4], u8 bgrx[4]);
 bool fb_active(void);
 
 /* Changing the size while the machine is running.

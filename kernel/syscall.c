@@ -1071,7 +1071,7 @@ static i64 sys_sysinfo(registers_t *r) {
     info.screen_w = fb_active() ? fb_width() : 0;
     info.screen_h = fb_active() ? fb_height() : 0;
     info.syscalls = syscall_count();
-    info.disk_kb_free = fat_mounted() ? fat_free_bytes() / 1024 : 0;
+    info.disk_kb_free = fat_mounted() ? (u32)(fat_free_bytes() / 1024) : 0;
 
     memcpy((void *)r->rbx, &info, sizeof(info));
     return 0;

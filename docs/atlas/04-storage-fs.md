@@ -249,7 +249,7 @@ State: `table[16]`, `count`, `scheme`, `char gpt_error[64]` (parts.c:37-40).
 - `diskfs_unmount_removable` = `fat_forget_volume(FAT_VOL_USB)` (:80-82). `diskfs_removable_mounted` (:84) is unused.
 - `diskfs_available` = `blk_present()`; `diskfs_mounted` = `fat_mounted()` (**the selected volume**); `diskfs_flush` = `blk_flush()` (disk 0) (:86-88).
 - `bool diskfs_format(void)` (:90-101): refuses without disk 0 or if `parts_count() > 0` (kprintf "  fs      refusing to format: the disk is partitioned", bb_log "fs refused to format a partitioned disk"). Otherwise `fat_format("ZELR")`.
-- `finish_mount` (:103-119): `fat_boot_repair()` (kprintf "  fs      boot sector repaired, this disk was made without one" and bb_log "fs boot sector repaired: the mark was there and no program behind it"), then `fat_reclaim()` (kprintf only: "  fs      reclaimed %d cluster(s) from an unclean shutdown"). Returns `fat_count("/")`.
+- `finish_mount` (:103-119): `fat_boot_repair()` (kprintf "  fs      boot sector repaired, this disk was made without one" and bb_log "fs boot sector repaired: the mark was there and no program behind it"), then `fat_reclaim()` (kprintf only: "  fs      reclaimed %d cluster(s) from an unclean shutdown"). Returns `fat_count("/")`. Since 0.42.0, a volume that is not `fat_made_here()` skips the reclaim: kprintf "  fs      made by another system: mounted as it is, nothing swept" and bb_log "fs volume not made here: no reclaim, no seeding". The boot-sector repair still runs, because it needs the whole ours-mark anyway.
 - `int diskfs_mount(void)` (:121-174):
   - Returns -1 with no disk 0, which cannot happen from main.c because it is only called when `blk_init()` succeeded.
   - `parts_scan()`; if `parts_gpt_error()` is non-empty, bb_log "parts gpt rejected: %s".
@@ -365,15 +365,15 @@ It does not check that the FAT is large enough for `cluster_count`, and does not
   - Walks backwards from `index-1` while `(attr & 0x3F) == 0x0F`.
   - Each entry's checksum must match the short name (otherwise 0: "left over from another name").
   - `seq & 0x1F` must be non-zero. `at = (seq-1)*13`; `at ≥ 63` returns 0, so names over 63 characters fall back to 8.3.
-  - Code units 0x0000 and 0xFFFF are skipped. **Anything ≥ 0x80 becomes '?'** ("rather than half of a character nobody can type").
+  - Code units 0x0000 and 0xFFFF are skipped. ~~Anything ≥ 0x80 becomes '?'~~ (0.42.0) The units are collected as UTF-16 and turned into UTF-8 (`utf8_put`), with surrogate pairs joined. It returns 0, so the 8.3 name stands in, when a unit lies past 62, the UTF-8 would need more than 63 bytes, or half a surrogate pair is left over.
   - Stops at `LFN_LAST`. Returns 0 unless complete, non-empty and `len < cap`.
   - Sequence continuity is not verified.
 - `same_name(a,b)` (:1031-1037): case-insensitive ASCII compare.
-- `needs_long(name)` (:1046-1061): a base over 8 characters, an extension over 3, a space, or more than one dot. **Case alone is not a reason** ("making those long as well would change how existing volumes read"). Characters that are illegal in 8.3 (`+,;=[]`, bytes ≥ 0x80) are not considered.
+- `needs_long(name)` (:1046-1061): a base over 8 characters, an extension over 3, a space, or more than one dot. **Case alone is not a reason** ("making those long as well would change how existing volumes read"). Since 0.42.0 any byte ≥ 0x80 is a reason: UTF-8 in a short name is mojibake to every other system, and a first byte of 0xE5 marks the entry deleted. Characters that are illegal in 8.3 (`+,;=[]`) are still not considered.
 - `short_taken(d, name11)` (:1063-1073).
-- `make_alias(d, name, out)` (:1080-1114): up to 6 upcased characters of the base (spaces dropped, stopping at the first '.'), or 'X' if none. Then `~N` for N = 1..999, and up to 3 characters from the **last** dot. It checks `short_taken`. If all 999 are taken it returns a duplicate (the last candidate).
+- `make_alias(d, name, out)` (:1080-1114): up to 6 upcased characters of the base (spaces dropped, stopping at the first '.', and since 0.42.0 one '_' for each character past ASCII, in the extension too), or 'X' if none. Then `~N` for N = 1..999, and up to 3 characters from the **last** dot. It checks `short_taken`. If all 999 are taken it returns a duplicate (the last candidate).
 - `dir_free_run(d, want)` (:1117-1133): consecutive free or deleted slots; grows once.
-- `dir_put_name(d, name, e)` (:1139-1183): an 8.3 name takes `dir_free_slot` and `to_83`. A long name (`chars ≤ 63`) takes `n = ceil(chars/13)` LFN entries plus one short. It finds a free run of n+1, makes the alias and checksum, and writes the LFN entries **nearest-first as seq 1** (the furthest is `n | 0x40`). Characters are written as `(u16)(u8)name[pos]`, then 0x0000 and 0xFFFF padding. It returns the short slot, **which the caller writes** (the commit).
+- `dir_put_name(d, name, e)` (:1139-1183): an 8.3 name takes `dir_free_slot` and `to_83`. A long name (`chars ≤ 63`) takes `n = ceil(chars/13)` LFN entries plus one short. It finds a free run of n+1, makes the alias and checksum, and writes the LFN entries **nearest-first as seq 1** (the furthest is `n | 0x40`). ~~Characters are written as `(u16)(u8)name[pos]`~~ (0.42.0) The name is converted to UTF-16 code units first (`utf8_to_units`). Invalid UTF-8 (stray continuation, short or overlong sequence, surrogate, past U+10FFFF) returns -1, so the write is refused. The 63-byte limit is on the UTF-8. Then come 0x0000 and 0xFFFF padding. It returns the short slot, **which the caller writes** (the commit).
 - `dir_drop_long(d, index, shortent)` (:1187-1200): marks the preceding LFN entries with a matching checksum as 0xE5, down to LFN_LAST.
 - **`dir_find(d, name, out)`** (:1202-1222): for each real entry, first `memcmp(e.name, to_83(name))` (**truncating** 8.3), then the long name via `same_name`. It stops at the first 0x00 entry. See §10 for the aliasing bug.
 
@@ -383,12 +383,12 @@ It does not check that the FAT is large enough for `cluster_count`, and does not
 - `resolve_dir` (:1289-1313).
 
 #### File operations
-- `fat_list(path, index, name, size, dir)` (:1317-1351): returns -1 if unmounted or not a directory, 0 past the end, 1 on a hit. Skips non-real entries and names starting with '.'. The name is the long name if present, else `from_83` (lowercased). **`strncpy(name_out, real, 63)` does not terminate a 63-character name.**
+- `fat_list(path, index, name, size, dir)` (:1317-1351): returns -1 if unmounted or not a directory, 0 past the end, 1 on a hit. Skips non-real entries and names starting with '.'. The name is the long name if present, else `from_83` (lowercased). ~~`strncpy(name_out, real, 63)` does not terminate a 63-character name.~~ (0.42.0) It copies `len + 1` bytes, terminator included.
 - `fat_count(path)` (:1353-1357): calls `fat_list(i)` until it fails, which is O(n²) in directory size.
 - `fat_stat` (:1359-1377): "", "." and ".." report a directory.
 - `fat_read_file(path, buf, cap)` (:1381-1408): follows the chain for `min(size, cap)` bytes, sector by sector through `sec`. A directory gives -1.
 - **`fat_write_file(path, buf, size)`** (:1410-1479): the crash-safe protocol. See §4.3.
-- `fits_83(name)` (:1517-1523): the name survives to_83 then from_83 unchanged, case-insensitively.
+- `fits_83(name)` (:1517-1523): the name survives to_83 then from_83 unchanged, case-insensitively, and (0.42.0) holds no byte ≥ 0x80. `fat_rename` still only renames to names that fit.
 - **`fat_rename(from, to)`** (:1525-1571): both parents are resolved and must be identical (`cluster` and `root`). The destination leaf must `fits_83`. Finds the source; returns true if the names match case-insensitively. If the destination exists: refuses a directory, otherwise `fat_delete_file(to)` and re-finds the source. Then `dir_drop_long` (before the rename, "so a power cut here leaves the file under its 8.3 name"), `to_83(dst)` into `e.name`, one `dir_write`, `blk_flush()`. Directories may be renamed.
 - `fat_delete_file` (:1573-1590): refuses directories. **`free_chain` first**, then `dir_drop_long`, then `name[0]=0xE5` and `dir_write`, then `blk_flush`.
 - `fat_mkdir` (:1594-1640): allocates and zeroes a cluster, writes "." (itself) and ".." (the parent, **0 for the root even on FAT32**, per the spec), flushes, and only then `dir_put_name` plus the entry write (attr DIRECTORY, size 0), then flushes.
@@ -397,7 +397,8 @@ It does not check that the FAT is large enough for `cluster_count`, and does not
 
 #### Reclaim and statistics
 - **`fat_reclaim()`** (:1675-1755): allocates a byte map of `cluster_count+2` and a queue (64 entries, doubling). On FAT32 it marks the root chain first. The comment records that doing otherwise freed the root: "two files in the root, gone". It then walks the directories breadth-first with an explicit queue: every real non-dot entry's chain is marked (loop-guarded), and subdirectories are enqueued. The sweep frees every allocated, unmarked cluster (`fat_get(c) != 0`). If anything was freed it calls `blk_flush()` and resets the hint to 2. Returns the count. See §10 for the failure modes.
-- `fat_total_clusters`, `fat_cluster_bytes` (= spc×512), `fat_free_bytes` (:1757-1763, a full FAT scan with a **u32 byte result**).
+- `fat_total_clusters`, `fat_cluster_bytes` (= spc×512), `fat_free_bytes` (:1757-1763, a full FAT scan; ~~a **u32 byte result**~~ u64 since 0.42.0).
+- `fat_made_here()` (0.42.0): the mounted volume's OEM field is "ZELR    ", which both `fat_format` and `tools/mkfat.py` write. It is wider than `fat_is_zelr_volume`, which also wants the serial that only `fat_format` writes.
 
 ### 3.8 include/vfs.h + kernel/vfs.c: the namespace
 
@@ -479,7 +480,7 @@ Readers in userland include settings.c (settings, theme, screen, memory, cpu, de
 - `seed(gen, path, text)` (:42-46): skips if `gen <= seeded_through` ("already offered once") or if the path exists ("the user has their own"); otherwise `vfs_write` (the result is ignored).
 - `read_marker` (:48-58): leading decimal digits of /cfg/seeded, else 0. `write_marker` (:60-64): "%d\n".
 - `empty_tmp` (:68-77): up to 256 iterations of "list /tmp index 0, then `vfs_delete` or `vfs_rmdir`". It **breaks at the first entry it cannot remove**.
-- `layout_init` (:79-148): mkdir each missing DIR; `empty_tmp()`; read the marker; seed the three files; write the marker **last** only if `seeded_through < SEED_GENERATION` ("so a machine that loses power partway through seeding tries again next time").
+- `layout_init` (:79-148): since 0.42.0 it first returns at once on a disk-backed volume that is not `fat_made_here()`, making nothing, seeding nothing and emptying nothing, and `layout_home()` gives "/" there when that volume has no /home directory. Otherwise it goes on: mkdir each missing DIR; `empty_tmp()`; read the marker; seed the three files; write the marker **last** only if `seeded_through < SEED_GENERATION` ("so a machine that loses power partway through seeding tries again next time").
 - Seeded files, all generation 1:
   - **/doc/readme** (:87-108): what zelr is, prompt commands `guide`, `help`, `desktop`, and the terminal's `help`, `tree`, `sys`. It mentions "the FAT16 driver".
   - **/doc/filesystem** (:110-135): what each directory is. It says /cfg holds the desktop theme and that the directories are "on a FAT16 volume".
@@ -693,7 +694,7 @@ pci.c (`pci_find_class`, `pci_read32`, `pci_enable_bus_master`); paging.c (`pagi
 | Volume serial | 0x5A4C5200 ("ZLR\0") at 39 / 67 | fat.c:438,466 |
 | OEM name | "ZELR    " | fat.c:465,691 |
 | Timestamp | write_date 0x5A21 (2025-01-01), time 0 | fat.c:1465,1617,1637 |
-| LFN | ≤ 63 characters, 13 per entry, ≥ 0x80 read as '?' | fat.c:1007,1018,1149 |
+| LFN | ≤ 63 bytes of UTF-8, 13 UTF-16 units per entry (0.42.0; was ≥ 0x80 read as '?') | fat.c `utf8_to_units`, `long_name_of` |
 | Alias numbers | ~1..~999 | fat.c:1094 |
 | FSInfo | 0x41615252 / 0x61417272 / 0xFFFFFFFF×2 / 0xAA550000 | fat.c:749-753 |
 | Reclaim queue | 64, doubling | fat.c:1692 |
@@ -832,7 +833,7 @@ The chain is freed (FAT written through) *before* the entry is marked deleted. A
 - (c) Bad-cluster marks (0xFFF7 / 0x0FFFFFF7) are non-zero and unreachable, so they are "reclaimed" into the free pool (:1744-1748).
 - (d) A directory whose subdirectory points at an ancestor is enqueued repeatedly until the queue cannot grow. Corrupt volumes only, but it chains into (a).
 
-Reclaim runs on every mount, including foreign volumes (S20).
+Reclaim runs on every mount, including foreign volumes (S20; since 0.42.0 only on volumes made here).
 
 **S6. FIXED in 0.39.0 (see atlas README, since 6048716). Volume selection leaks out of the VFS** (vfs.c:163-171 with fat.c:123).
 `route()` leaves `current_volume` set to whatever the last VFS path chose. Every direct `fat_*` caller then acts on it:
@@ -865,12 +866,12 @@ usbdisk reports and transfers `count*sector_bytes` (usbdisk.c:193, 214). The blo
 **S14. FIXED in 0.39.0 (see atlas README, since 6048716). `fat_rmdir` leaves the directory's LFN entries behind** (fat.c:1658-1662).
 There is no `dir_drop_long`, unlike `fat_delete_file` (:1586). A long-named directory that is removed leaves orphan LFN entries: slots are lost for good, and chkdsk or fsck would flag them.
 
-**S15. `fat_free_bytes` overflows u32** (fat.c:1757-1763) above 4 GiB free. zelr formats FAT32 for disks over about 2 GiB, so this is reachable. Shell `mem` and `disk` print the wrapped value.
+**S15. FIXED in 0.42.0 (u64 result; `[fat]` mounts a 16 GiB FAT32 volume that exists only as answers to reads and checks the free count past 4 GiB). `fat_free_bytes` overflows u32** (fat.c:1757-1763) above 4 GiB free. zelr formats FAT32 for disks over about 2 GiB, so this is reachable. Shell `mem` and `disk` print the wrapped value.
 
-**S16. A 63-character long name is not NUL-terminated by `fat_list`** (fat.c:1340, `strncpy(name_out, real, 63)`, and string.c:103-108 does not terminate).
+**S16. FIXED in 0.42.0 (the copy includes the terminator; `[fat]` lists a 63-byte name into a buffer filled with 'X' first). A 63-character long name is not NUL-terminated by `fat_list`** (fat.c:1340, `strncpy(name_out, real, 63)`, and string.c:103-108 does not terminate).
 `sys_readdir` zeroes its buffer (syscall.c:659), so it is safe. The kernel shell `ls` (shell.c:131) and `empty_tmp` (layout.c:69) use uninitialised stack buffers and read garbage.
 
-**S17. Long names with non-ASCII bytes are write-only.**
+**S17. FIXED in 0.42.0 (UTF-8 to UTF-16 both ways, any byte past ASCII makes a name long, invalid UTF-8 is refused; `[fat]` writes, lists and reads back "café au lait.txt" and "大.txt", whose first byte is 0xE5). Long names with non-ASCII bytes are write-only.**
 `dir_put_name` stores raw bytes as UTF-16 code units (fat.c:1174). `long_name_of` turns anything ≥ 0x80 into '?' (fat.c:1018), so `dir_find` can never match the original name. The file lists as "caf??…" and cannot be opened by either spelling.
 
 **S18. ".." lookup inside fat.c can never succeed** (fat.c:231-241 with 1258-1266, 1296-1304).
@@ -879,7 +880,7 @@ There is no `dir_drop_long`, unlike `fat_delete_file` (:1586). A long-named dire
 **S19. `empty_tmp` gives up at the first non-empty subdirectory** (layout.c:71-75).
 It always looks at entry 0. If that entry is a non-empty directory, both delete and rmdir fail and the loop breaks, so nothing else in /tmp is removed. This contradicts "Files left there from last time are gone" (layout.c:66-67).
 
-**S20. Foreign FAT partitions are adopted read-write** (a stated design choice, diskfs.c:16-17), with side effects the comments do not discuss:
+**S20. FIXED in 0.42.0 (a volume without the "ZELR" OEM field is mounted as it is: no reclaim, no folders, no seed files, no emptying of TMP; `gpt_test.sh` has a GPT partition and an unpartitioned disk made by "MSDOS5.0", each with a lost chain and a TMP/KEEP.TXT, and checks that every byte outside the file it wrote is unchanged). It is still read-write: files written there are written. Foreign FAT partitions are adopted read-write** (a stated design choice, diskfs.c:16-17), with side effects the comments do not discuss:
 - `layout_init` creates /home, /doc, /cfg and /tmp on somebody else's partition and writes the seed files, /zelr.cfg and /zelr.pins.
 - `empty_tmp` deletes the contents of any existing TMP directory there (names compare case-insensitively).
 - `fat_reclaim` rewrites its FAT (S5).
@@ -937,7 +938,7 @@ Also, `start_port` in AHCI spins forever if CR never clears (ahci.c:131). `fat_m
 1. Does `xhci_bulk` (xhci.c) copy exactly `len` bytes into the caller's buffer, or does it bounce through a bounded buffer? This decides whether S13 is a stack overflow or a truncated or garbled read.
 2. Is the AHCI drive write cache ever disabled elsewhere (for example SET FEATURES), which would make S8 moot? I found no such code in ahci.c.
 3. Is heap memory guaranteed below 4 GiB? AHCI writes upper halves, so it is not strictly needed, but CAP.S64A is never checked.
-4. Intent of S20: is emptying /tmp and seeding on a foreign ("not ours") FAT partition deliberate, or was layout written assuming a zelr volume?
+4. ~~Intent of S20: is emptying /tmp and seeding on a foreign ("not ours") FAT partition deliberate, or was layout written assuming a zelr volume?~~ Settled in 0.42.0: not on a volume another system made.
 5. Should /sys/lastboot keep the tail (as /sys/boot does) or is the head intentional? Every comment suggests the tail.
 6. gpt_test.sh's corrupt-GPT cases: was the auto-format of those images noticed and accepted, or missed (S1)?
 7. The `usb` service task and the `init` task can both do filesystem work concurrently after boot. Is there any higher-level serialisation (a wait queue or similar) that I missed? None is visible in vfs.c or fat.c.

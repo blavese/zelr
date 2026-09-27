@@ -623,6 +623,22 @@ static void test_video(void) {
     ok("pitch matches the width", fb_pitch() == fb_width() * 4);
     ok("text grid derives from the font", fbcon_cols() == fb_width() / FONT_W);
 
+    /* A screen a UEFI firmware set up red first gets its pixels red first.
+       It used to get them blue first, like every other screen, and showed
+       everything with red and blue swapped. QEMU's firmware only offers
+       blue first, so the card here is a stand-in. */
+    {
+        u8 rgbx[4], bgrx[4];
+        if (fb_test_orders(rgbx, bgrx)) {
+            ok("a screen that takes red first is sent red first",
+               rgbx[0] == 0x12 && rgbx[1] == 0x34 && rgbx[2] == 0x56);
+            ok("and one that takes blue first is sent blue first",
+               bgrx[0] == 0x56 && bgrx[1] == 0x34 && bgrx[2] == 0x12);
+        } else {
+            kprintf("  SKIP  drawing goes straight to the card here\n");
+        }
+    }
+
     /* Write a pixel and read it back out of the back buffer. */
     u32 probe = RGB(0x12, 0x34, 0x56);
     u32 keep = fb_get(900, 700);
@@ -744,8 +760,139 @@ static bool reads_as(const char *path, const char *want) {
     return got == (int)n && memcmp(buf, want, n) == 0;
 }
 
+/* A 16 GiB FAT32 volume that exists only as the answers to reads: a boot
+   sector, the first sector of each FAT holding the reserved entries and an
+   empty root directory, and zeros everywhere else, which is every cluster
+   free. Nothing can be written to it. It is how free space past 4 GiB gets
+   counted without a 16 GiB image. */
+#define BIG_SECTORS 33554432u
+#define BIG_FAT     4096u
+#define BIG_RESERVED 32u
+
+static bool big_read(u32 lba, u32 count, void *buf) {
+    u8 *out = (u8 *)buf;
+    for (u32 i = 0; i < count; i++, out += 512) {
+        memset(out, 0, 512);
+        u32 s = lba + i;
+        if (s == 0) {
+            out[0] = 0xEB; out[1] = 0x58; out[2] = 0x90;
+            memcpy(out + 3, "MSDOS5.0", 8);
+            *(u16 *)(out + 11) = 512;
+            out[13] = 64;                             /* 32 KiB clusters */
+            *(u16 *)(out + 14) = BIG_RESERVED;
+            out[16] = 2;
+            out[21] = 0xF8;
+            *(u32 *)(out + 32) = BIG_SECTORS;
+            *(u32 *)(out + 36) = BIG_FAT;
+            *(u32 *)(out + 44) = 2;                   /* root directory cluster */
+            *(u16 *)(out + 48) = 1;
+            *(u16 *)(out + 50) = 6;
+            out[64] = 0x80; out[66] = 0x29;
+            *(u32 *)(out + 67) = 0x12345678;
+            memcpy(out + 71, "BIG        ", 11);
+            memcpy(out + 82, "FAT32   ", 8);
+            out[510] = 0x55; out[511] = 0xAA;
+        } else if (s == BIG_RESERVED || s == BIG_RESERVED + BIG_FAT) {
+            *(u32 *)(out + 0) = 0x0FFFFFF8;
+            *(u32 *)(out + 4) = 0x0FFFFFFF;
+            *(u32 *)(out + 8) = 0x0FFFFFFF;           /* the root, one cluster */
+        }
+    }
+    return true;
+}
+
+static bool big_write(u32 lba, u32 count, const void *buf) {
+    (void)lba; (void)count; (void)buf;
+    return false;
+}
+static bool big_flush(void) { return true; }
+static u32 big_sectors(void) { return BIG_SECTORS; }
+static u32 big_max_run(void) { return 128; }
+static const char *big_model(void) { return "selftest 16 GiB"; }
+static const blkdev_t big_dev = {
+    "selftest", big_read, big_write, big_flush, big_sectors, big_max_run, big_model, true,
+};
+
+static void test_fat_big(void) {
+    if (fat_mounted_on(FAT_VOL_USB)) { kprintf("  SKIP  a stick is using the second volume\n"); return; }
+    u32 id = blk_register(&big_dev);
+    if (id == BLK_NONE) { kprintf("  SKIP  no room for another disk\n"); return; }
+
+    u32 was = fat_selected();
+    bool mounted = fat_mount_on(FAT_VOL_USB, id, 0);
+    u64 free = 0, want = 0;
+    if (mounted) {
+        fat_select(FAT_VOL_USB);
+        free = fat_free_bytes();
+        want = (u64)(fat_total_clusters() - 1) * 32768ull;
+        fat_select(was);
+    }
+    ok("a 16 GiB volume can be mounted", mounted);
+    ok("and says how much of it is free, past 4 GiB",
+       mounted && free == want && free > 0x100000000ull);
+    fat_forget_volume(FAT_VOL_USB);
+    blk_unregister(id);
+    fat_select(was);
+}
+
+/* Whether a directory lists a name exactly as given. */
+static bool listed(const char *dir, const char *name) {
+    char buf[VFS_NAME_MAX];
+    for (u32 i = 0; ; i++) {
+        memset(buf, 'X', sizeof buf);
+        if (fat_list(dir, i, buf, 0, 0) != 1) return false;
+        if (strcmp(buf, name) == 0) return true;
+    }
+}
+
 static void test_fat_names(void) {
     if (!blk_present() || !fat_mounted()) { kprintf("  SKIP  no volume\n"); return; }
+
+    /* The longest name there is room for, sixty three bytes, comes back from
+       a listing with its terminator. strncpy with room for sixty three
+       wrote none at exactly that length, and the listing ran on into
+       whatever followed it. */
+    char name63[FAT_NAME_MAX], path63[FAT_NAME_MAX + 1];
+    for (u32 i = 0; i < 59; i++) name63[i] = (char)('a' + i % 26);
+    memcpy(name63 + 59, ".txt", 5);
+    path63[0] = '/';
+    memcpy(path63 + 1, name63, 64);
+    fat_delete_file(path63);
+    ok("a sixty three byte name can be written",
+       fat_write_file(path63, (const u8 *)"full", 4));
+    bool whole = false;
+    {
+        char buf[VFS_NAME_MAX];
+        for (u32 i = 0; ; i++) {
+            memset(buf, 'X', sizeof buf);
+            if (fat_list("/", i, buf, 0, 0) != 1) break;
+            if (memcmp(buf, name63, 59) == 0) {
+                whole = buf[63] == 0 && strcmp(buf, name63) == 0;
+                break;
+            }
+        }
+    }
+    ok("and lists whole, with its terminator", whole);
+    fat_delete_file(path63);
+
+    /* Names past ASCII, written as UTF-16 and read back as the UTF-8 they
+       were given in. Each byte used to go down as a character of its own
+       and come back as a question mark, so the file could not be opened by
+       its name again; and a name starting with 0xE5, as the UTF-8 for much
+       of CJK does, was written as a short entry marked deleted. */
+    fat_delete_file("/caf\xC3\xA9 au lait.txt");
+    fat_delete_file("/\xE5\xA4\xA7.txt");
+    ok("a name past ASCII can be written",
+       fat_write_file("/caf\xC3\xA9 au lait.txt", (const u8 *)"cup", 3));
+    ok("and read back by the same name", reads_as("/caf\xC3\xA9 au lait.txt", "cup"));
+    ok("and it lists as it was written", listed("/", "caf\xC3\xA9 au lait.txt"));
+    ok("a name whose first byte is 0xE5 is a file, not a deleted entry",
+       fat_write_file("/\xE5\xA4\xA7.txt", (const u8 *)"big", 3) &&
+       reads_as("/\xE5\xA4\xA7.txt", "big") && listed("/", "\xE5\xA4\xA7.txt"));
+    ok("a name that is not UTF-8 is refused rather than stored as something else",
+       !fat_write_file("/bad\xFF.txt", (const u8 *)"x", 1));
+    fat_delete_file("/caf\xC3\xA9 au lait.txt");
+    fat_delete_file("/\xE5\xA4\xA7.txt");
 
     fat_delete_file("/chapter1.txt");
     fat_delete_file("/chapter10.txt");
@@ -790,7 +937,7 @@ static void test_fat_names(void) {
        soon as anything else is written. */
     ok("a file to delete can be written",
        fat_write_file("/orderme.txt", (const u8 *)"doomed", 6));
-    u32 free_before = fat_free_bytes();
+    u64 free_before = fat_free_bytes();
     fat_test_writes_left(1);
     fat_delete_file("/orderme.txt");
     fat_test_writes_left(0xFFFFFFFFu);
@@ -806,7 +953,7 @@ static void test_fat_names(void) {
        counted as leaked and their clusters swept up. */
     ok("a directory with a file in it", fat_mkdir("/rcdir") &&
        fat_write_file("/rcdir/keep.txt", (const u8 *)"precious", 8));
-    u32 free_now = fat_free_bytes();
+    u64 free_now = fat_free_bytes();
     fat_test_subdirs_unreadable(true);
     u32 swept = fat_reclaim();
     fat_test_subdirs_unreadable(false);
@@ -2116,6 +2263,84 @@ static void from_hex(const char *s, u8 *out, u32 len) {
         out[i] = (u8)((hex_digit(s[i * 2]) << 4) | hex_digit(s[i * 2 + 1]));
 }
 
+/* --- telling a server why, and following it to new keys -------------------
+ *
+ * Records sealed and opened here with the same primitives the session uses,
+ * under the traced handshake's secrets from RFC 8448, so what the session
+ * sends can be read back and what it is sent is real. */
+static bool record_keys(const u8 secret[32], gcm_t *g, u8 iv[12]) {
+    u8 key[16];
+    return hkdf_expand_label(secret, "key", 0, 0, key, 16) &&
+           hkdf_expand_label(secret, "iv", 0, 0, iv, 12) && gcm_init(g, key, 128);
+}
+
+static u32 seal_record(const u8 secret[32], u64 seq, const u8 *plain, u32 len, u8 *out) {
+    gcm_t g; u8 iv[12];
+    if (!record_keys(secret, &g, iv)) return 0;
+    for (int i = 0; i < 8; i++) iv[11 - i] ^= (u8)(seq >> (i * 8));
+    u32 total = len + GCM_TAG;
+    out[0] = 0x17; out[1] = 3; out[2] = 3; out[3] = (u8)(total >> 8); out[4] = (u8)total;
+    memcpy(out + 5, plain, len);
+    gcm_seal(&g, iv, out, 5, out + 5, len, out + 5 + len);
+    return 5 + total;
+}
+
+static bool open_record(const u8 secret[32], u64 seq, const u8 *rec, u32 n,
+                        u8 *plain, u32 *plain_len) {
+    gcm_t g; u8 iv[12];
+    if (n < 5 + GCM_TAG + 1 || !record_keys(secret, &g, iv)) return false;
+    for (int i = 0; i < 8; i++) iv[11 - i] ^= (u8)(seq >> (i * 8));
+    u32 body = n - 5 - GCM_TAG;
+    memcpy(plain, rec + 5, body);
+    if (!gcm_open(&g, iv, rec, 5, plain, body, rec + 5 + body)) return false;
+    *plain_len = body;
+    return true;
+}
+
+static void test_tls_alerts(void) {
+    /* A failure used to be kept to ourselves: the connection just stopped.
+       Before this end has a key, an alert goes in the clear; after, sealed
+       as the next record. Fatal, and bad_certificate (42) here. */
+    u8 out[64], plain[32];
+    u32 pl = 0;
+    u32 n = tls_test_alert(0, 42, out, sizeof(out));
+    ok("an alert before there is a key goes in the clear, fatal, saying why",
+       n == 7 && is_hex(out, 7, "1503030002022a"));
+
+    u8 c_hs[32];
+    from_hex("b3eddb126e067f35a780b3abf45e2d8f3b1a950738f52e9600746a0e27a55a21", c_hs, 32);
+    n = tls_test_alert(c_hs, 42, out, sizeof(out));
+    ok("and once there is one, sealed under it as the next record",
+       n == 24 && is_hex(out, 5, "1703030013") &&
+       open_record(c_hs, 0, out, n, plain, &pl) && pl == 3 && is_hex(plain, 3, "022a15"));
+
+    /* A key update from the server, asking for one back, and then a record
+       under its next key. It used to be skipped as if it were a ticket, and
+       the record after it would not authenticate. The next secrets are
+       RFC 8446's "traffic upd" step from the traced ones, worked out apart
+       from this code. */
+    u8 s_app[32], c_app[32], s_next[32];
+    from_hex("a11af9f05531f856ad47116b45a950328204b4f44bfb6b3a4b4f1f3fcb631643", s_app, 32);
+    from_hex("9e40646ce79a7f9dc05af8889bce6552875afa0b06df0087f792ebb7c17504a5", c_app, 32);
+    from_hex("51921b8aa3001976eb401d0a4319a8516416a6c56001a357e5d162031e84f916", s_next, 32);
+    static const u8 update[6] = { 0x18, 0, 0, 1, 1, 0x16 };   /* requested; handshake */
+    static const u8 data[3] = { 'h', 'i', 0x17 };             /* application data */
+    u8 in[128];
+    u32 at = seal_record(s_app, 0, update, sizeof(update), in);
+    at += seal_record(s_next, 0, data, sizeof(data), in + at);
+
+    u8 got[16], sent[64], s_after[32], c_after[32];
+    u32 sent_len = 0;
+    u32 g = tls_test_recv(s_app, c_app, in, at, got, sizeof(got), sent, sizeof(sent),
+                          &sent_len, s_after, c_after);
+    ok("a key update from the server moves its key on, and what follows reads",
+       g == 2 && got[0] == 'h' && got[1] == 'i' && memcmp(s_after, s_next, 32) == 0);
+    ok("asked to, this end says so under its old key and moves its own key on",
+       sent_len == 27 && open_record(c_app, 0, sent, sent_len, plain, &pl) &&
+       pl == 6 && is_hex(plain, 6, "180000010016") &&
+       is_hex(c_after, 32, "fcdfcc72725aaee48bf64e4fd8b749cdbdbab39d90da0b26e2245ca6ea167207"));
+}
+
 /* --- SHA-256, FIPS 180-4 --------------------------------------------- */
 static void test_sha256(void) {
     u8 d[64];
@@ -3022,6 +3247,32 @@ static void test_x509(void) {
             ok("a lone leaf certificate proves nothing",
                x509_verify_chain(ders, one, 1, "www.google.com", when)
                != X509_OK);
+        }
+
+        /* The top of what was sent, a copy of a root the store trusts, past
+           its own expiry. google.com sends GTS Root R1 cross-signed by
+           GlobalSign, and that copy runs out in January 2028 while the root
+           goes on for another decade. The store's copy is what is trusted, so
+           the served one's dates are nothing to the chain. Bytes 154 and 155
+           are the tens and units of its expiry year. */
+        {
+            static u8 old_root[sizeof(test_cert2)];
+            memcpy(old_root, test_cert2, sizeof(test_cert2));
+            old_root[154] = '2';
+            old_root[155] = '5';
+            const u8 *with_old[3] = { test_cert0, test_cert1, old_root };
+            ok("an expired copy of a trusted root at the top does not fail the chain",
+               x509_verify_chain(with_old, lens, 3, "www.google.com", when) == X509_OK);
+
+            /* An intermediate is not a root, and its dates still count. */
+            static u8 old_mid[sizeof(test_cert1)];
+            memcpy(old_mid, test_cert1, sizeof(test_cert1));
+            old_mid[138] = '2';
+            old_mid[139] = '5';
+            const u8 *with_old_mid[3] = { test_cert0, old_mid, test_cert2 };
+            ok("but an expired intermediate still does",
+               x509_verify_chain(with_old_mid, lens, 3, "www.google.com", when)
+               == X509_EXPIRED);
         }
     }
 
@@ -4300,7 +4551,7 @@ int selftest_run(void) {
     kprintf("[timer]\n");      test_timer();
     kprintf("[interrupts]\n"); test_interrupts();
     kprintf("[disk]\n");       test_disk();
-    kprintf("[fat]\n");        test_fat(); test_fat_names();
+    kprintf("[fat]\n");        test_fat(); test_fat_names(); test_fat_big();
     kprintf("[network]\n");    test_net();
     kprintf("[elf]\n");        test_elf();
     kprintf("[userspace]\n");  test_userspace(); test_console_wait(); test_input_handover();
@@ -4327,7 +4578,7 @@ int selftest_run(void) {
     kprintf("[p-384]\n");      test_p384();
     kprintf("[certificates]\n"); test_x509();
     kprintf("[randomness]\n"); test_rng();
-    kprintf("[tls 1.3]\n");    test_tls_schedule(); test_tls(); test_tls_order();
+    kprintf("[tls 1.3]\n");    test_tls_schedule(); test_tls(); test_tls_order(); test_tls_alerts();
     kprintf("[wpa]\n");        test_wpa();
     kprintf("[wait timeouts]\n"); test_wait_timeout();
     kprintf("[processors]\n"); test_smp();

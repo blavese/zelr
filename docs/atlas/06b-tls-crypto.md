@@ -669,8 +669,14 @@ supplies its own time).
     aes-128-gcm"` (fixed string, `kformat`), copied to `nowhere.described`,
     `bb_log("tls %s to %s")` (822-828).
 
-On any failure the function returns false without sending an alert and without touching the
-TCP connection; callers close TCP (`syscall.c:802`, `http.c:89-93`).
+On any failure the function returns false without touching the TCP connection; callers close
+TCP (`syscall.c:802`, `http.c:89-93`). ~~It sends no alert.~~ Since 0.42.0, `refuse(z, why,
+desc)` sends one fatal alert first. It goes in the clear until `set_keys(…, true)` has run
+(`can_seal`), sealed after that. None is sent after the server's own alert (`alerted`), and
+none for a dead connection (plain `fail`). A chain verdict maps through `alert_for_chain`:
+expired or not yet valid → certificate_expired (45), untrusted → unknown_ca (48), anything else
+→ bad_certificate (42). The client handshake key is now installed right after the server's (at
+ServerHello), not just before our Finished, so failures in the encrypted flight are sealed.
 
 **`check_cert_verify`** (503-570): message = `u16 scheme ‖ u16 sig_len ‖ sig`, exact length.
 Content signed = 64 × 0x20 ‖ `"TLS 1.3, server CertificateVerify"` ‖ 0x00 ‖ transcript hash
@@ -686,7 +692,8 @@ Content signed = 64 × 0x20 ‖ `"TLS 1.3, server CertificateVerify"` ‖ 0x00 �
 **Write**: `tls_send` → ≤8192-byte chunks → `send_encrypted` (inner type 23) → `write_all`
 (header 5 bytes, then body+tag, each in ≤1400-byte TCP segments, each waiting for its ACK).
 Nonces: `c_iv XOR c_seq`; `c_seq` reset to 0 by every `set_keys(…, true)`. No padding, no
-record size limit negotiation, no KeyUpdate ever sent, no sequence-number wrap check.
+record size limit negotiation, no sequence-number wrap check. A KeyUpdate is sent only in
+answer to a server's `update_requested` (0.42.0), never on this end's own initiative.
 
 **Read** -- `read_record(z, &type, &len, encrypted)` (217-269):
 1. 5-byte header via `read_exact(…, 20000)` or "the connection stopped".
@@ -709,8 +716,14 @@ record size limit negotiation, no KeyUpdate ever sent, no sequence-number wrap c
 3. `ended` → 0.
 4. `deadline = now + timeout_ms`; loop: past deadline → 0; `read_record(encrypted)` -- this
    can itself block ~20 s per header or body; on failure `ended = true`, return 0 (the reason
-   is in `z->error`); if `ended` (close alert) → 0; CCS → continue; **any handshake record
-   (NewSessionTicket, KeyUpdate, CertificateRequest) is dropped** (872-876); other non-appdata
+   is in `z->error`); if `ended` (close alert) → 0; CCS → continue; ~~any handshake record
+   (NewSessionTicket, KeyUpdate, CertificateRequest) is dropped~~ (0.42.0) handshake records go
+   to `post_handshake`, which reassembles messages across records in `z->hs`. KeyUpdate
+   (length 1, request 0 or 1, otherwise decode_error or illegal_parameter) calls `key_update`:
+   `s_app` = HKDF-Expand-Label(s_app, "traffic upd", "", 32), then `set_keys(…, false)`. If
+   asked, it sends KeyUpdate(0) under the old client key, then rolls `c_app` the same way.
+   Tickets and anything else are skipped whole. The function is now `recv_on(tls_t *, …)`
+   behind `tls_recv`, so the selftest can drive a session that has no TCP. Other non-appdata
    types → continue; empty → continue; copy the record into `z->app` and return the first
    `min(len, cap)` bytes.
 5. Timeout semantics: `timeout_ms` is only checked between records, so with a silent peer the
@@ -764,6 +777,9 @@ application secrets.
    a. `roots_find(top->subject)` → stop: top is an anchor (617-618);
    b. subject == issuer (bytes) → stop: self-signed (630-632);
    c. first unused `k` with `chain[k].subject == top->issuer` (bytes); none → stop (634-643);
+   c2. (0.42.0) `roots_find(parent->subject)` → `below = top`, `top = parent`, stop, **before**
+      d: the served copy of a store root is set aside unexamined, and step 6 checks `below`
+      against the store's copy (§10.4);
    d. parent checks, in order: basicConstraints present and CA → else `X509_NOT_A_CA`;
       `path_len ≥ 0 && depth > path_len` → `X509_NOT_A_CA`; parent dates →
       `NOT_YET_VALID`/`EXPIRED`; `x509_signed_by(top, parent)` → else `X509_BAD_SIGNATURE`
@@ -1066,10 +1082,9 @@ CertificateVerify. The handshake logic is exercised only against live servers by
    `SYS_TLS_STATUS` per socket (a handshake that failed has no socket; keep `-1` for that);
    (d) update README 1606-1609, `syscall.c:775-778`, `sdk/zelr.h:439-442`,
    `include/syscall.h:83, 198`, `userland/fetch.h:29`, `userland/browser.c:481-482`.
-3. **KeyUpdate**: in `tls_recv` (`tls.c:872-876`) parse handshake messages instead of
-   dropping records; on type 24 derive `s_app' = Expand-Label(s_app, "traffic upd", "", 32)`,
-   `set_keys(…, false)`, and if `request_update == 1` send a KeyUpdate and roll `c_app`.
-   NewSessionTicket can keep being ignored.
+3. ~~**KeyUpdate**~~: done in 0.42.0 exactly this way (§4.3). What is left is sending one on
+   our own initiative, before `c_seq` gets anywhere near the AES-GCM limit, which no download
+   here comes close to.
 4. **HelloRetryRequest / P-256 ECDHE**: RFC 8446 makes secp256r1 the MUST-implement group.
    `ec.c` is verification-only and deliberately variable-time; ECDHE needs a constant-time
    scalar multiplication (a Montgomery ladder with masked selects) and point validation. HRR
@@ -1080,8 +1095,8 @@ CertificateVerify. The handshake logic is exercised only against live servers by
    exists; ChaCha20/Poly1305 do not.
 6. **Resumption**: needs the transcript through the client Finished (currently never added),
    `res master`, NewSessionTicket parsing, PSK + binder in the ClientHello.
-7. **X.509 hardening**: prefer store anchors before walking to a served parent (check
-   `roots_find(top->issuer)` and verify directly -- fixes §10.4); parse served certificates
+7. **X.509 hardening**: ~~prefer store anchors before walking to a served parent~~ (done in
+   0.42.0 as step 5c2, fixing §10.4); parse served certificates
    lazily so an unusable extra certificate does not fail the chain (§10.5); enforce EKU
    serverAuth, keyUsage keyCertSign on CAs / digitalSignature on the leaf, reject unknown
    critical extensions, add iPAddress SANs, nameConstraints; return `X509_UNSUPPORTED` for
@@ -1164,7 +1179,11 @@ certificates in `chain_store`/`ders` and another leaf in `leaf`. It becomes a re
 as §10.2's restriction is lifted. (Whether two *syscalls* can interleave depends on the
 interrupt/lock model -- see §11.)
 
-### 10.4 Likely bug -- an expired served copy of a trusted root fails the chain
+### 10.4 FIXED in 0.42.0 -- an expired served copy of a trusted root fails the chain
+(The walk now stops at a served parent whose subject is a store root, before that parent's own
+dates and signature are checked, and verifies the child against the store's copy. Selftest
+`[x509]` "an expired copy of a trusted root at the top does not fail the chain", with "but an
+expired intermediate still does" beside it. The original finding follows.)
 In the walk (`x509.c:601-657`) the served parent's CA flag, path length, **dates** and
 signature are checked (646-651) *before* the next iteration notices that the parent is a store
 anchor (617). A server that still sends an expired cross-signed copy of a root the store
@@ -1185,7 +1204,11 @@ at 578-581 acknowledges servers leave unrelated certificates in.
 ≈20 s, and a peer silent for 20 s marks the session `ended` with "the connection stopped"
 (`tls.c:865-867`) -- a slow server looks like a finished answer (`sys_recv` then returns −2).
 
-### 10.7 KeyUpdate unsupported; handshake records after the handshake are dropped
+### 10.7 FIXED in 0.42.0 -- KeyUpdate unsupported; handshake records after the handshake are dropped
+(`post_handshake` and `key_update`, §4.3. Selftest `[tls 1.3]` feeds a sealed KeyUpdate with
+update_requested, then a record under the next server key. It checks that the record reads, that
+both next secrets match values worked out apart from this code, and that the answer went out
+under the old client key. The original finding follows.)
 `HS_KEY_UPDATE` (48) and `HS_NEW_TICKET` (43) are never used; `tls_recv` drops every
 post-handshake handshake record (872-876). A server KeyUpdate makes every later record fail
 with "a record did not authenticate".
@@ -1198,7 +1221,8 @@ with "a record did not authenticate".
 - CCS accepted at any time, including after the handshake (`tls.c:225-231, 870`).
 - Any *warning*-level encrypted alert is treated as close_notify; the description byte is
   never read (`tls.c:264`), although the comment says "the second byte says" (263).
-- No alert is sent to the server on any failure.
+- ~~No alert is sent to the server on any failure.~~ FIXED in 0.42.0 (§4.2; `[tls 1.3]` checks
+  the clear and the sealed form byte for byte).
 - HRR refused even when it is only asking for a cookie.
 - SNI sent for IP literals (`tls.c:373-382`); IP SANs unsupported (`x509.c:529`), so
   `connect_tls("1.2.3.4")` can never succeed.

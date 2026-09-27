@@ -491,6 +491,18 @@ bool fat_is_zelr_volume(void) {
     return fat_boot_is_ours(boot);
 }
 
+/* Whether the mounted volume was made by this system at all: fat_format and
+   tools/mkfat.py both put "ZELR" in the boot sector's OEM field, and so does
+   nothing else. A volume without it was made by another system and holds
+   somebody else's data, which nothing here may sweep or seed. Wider than
+   fat_is_zelr_volume, which also wants the serial only fat_format writes. */
+bool fat_made_here(void) {
+    if (!mounted) return false;
+    u8 boot[SECTOR_SIZE];
+    if (!vol_read(0, 1, boot)) return false;
+    return memcmp(boot + 3, "ZELR    ", 8) == 0;
+}
+
 /* Whether a boot sector is one this kernel wrote, and where in its reserved
    area the log goes. Both are asked of a sector that has been read but not
    mounted, because the log is read before anything is decided and written
@@ -1038,17 +1050,81 @@ static void lfn_put(lfn_t *l, const u16 in[LFN_CHARS]) {
     }
 }
 
+/* --- names in UTF-8 above, UTF-16 on the disk ------------------------------
+ *
+ * A long name is stored as UTF-16 code units, and every name above this file
+ * is UTF-8. They used to be treated as the same thing: each byte of the UTF-8
+ * written as a unit of its own, so "café" went down as five characters
+ * another system shows as "cafÃ©", and on the way back every unit past ASCII
+ * became a question mark, so the file could never be opened by its name
+ * again. Converted both ways now, and a name that is not valid UTF-8 is
+ * refused rather than stored as something else. */
+
+/* The code units of a UTF-8 name, or (u32)-1 if it is not valid UTF-8: a
+   stray continuation byte, a sequence cut short, an overlong form, a
+   surrogate, or past U+10FFFF. */
+static u32 utf8_to_units(const char *s, u16 *units, u32 cap) {
+    u32 n = 0;
+    for (u32 i = 0; s[i]; ) {
+        u8 c = (u8)s[i];
+        u32 cp, more;
+        if (c < 0x80)                 { cp = c;        more = 0; }
+        else if ((c & 0xE0) == 0xC0)  { cp = c & 0x1F; more = 1; }
+        else if ((c & 0xF0) == 0xE0)  { cp = c & 0x0F; more = 2; }
+        else if ((c & 0xF8) == 0xF0)  { cp = c & 0x07; more = 3; }
+        else return (u32)-1;
+        i++;
+        for (u32 k = 0; k < more; k++, i++) {
+            u8 t = (u8)s[i];
+            if ((t & 0xC0) != 0x80) return (u32)-1;
+            cp = (cp << 6) | (t & 0x3F);
+        }
+        static const u32 least[4] = { 0, 0x80, 0x800, 0x10000 };
+        if (cp < least[more] || cp > 0x10FFFF || (cp >= 0xD800 && cp <= 0xDFFF))
+            return (u32)-1;
+        if (cp >= 0x10000) {
+            if (n + 2 > cap) return (u32)-1;
+            cp -= 0x10000;
+            units[n++] = (u16)(0xD800 + (cp >> 10));
+            units[n++] = (u16)(0xDC00 + (cp & 0x3FF));
+        } else {
+            if (n + 1 > cap) return (u32)-1;
+            units[n++] = (u16)cp;
+        }
+    }
+    return n;
+}
+
+/* One code point as UTF-8, into at least four bytes. */
+static u32 utf8_put(u32 cp, char *out) {
+    if (cp < 0x80)    { out[0] = (char)cp; return 1; }
+    if (cp < 0x800)   { out[0] = (char)(0xC0 | (cp >> 6));
+                        out[1] = (char)(0x80 | (cp & 0x3F)); return 2; }
+    if (cp < 0x10000) { out[0] = (char)(0xE0 | (cp >> 12));
+                        out[1] = (char)(0x80 | ((cp >> 6) & 0x3F));
+                        out[2] = (char)(0x80 | (cp & 0x3F)); return 3; }
+    out[0] = (char)(0xF0 | (cp >> 18));
+    out[1] = (char)(0x80 | ((cp >> 12) & 0x3F));
+    out[2] = (char)(0x80 | ((cp >> 6) & 0x3F));
+    out[3] = (char)(0x80 | (cp & 0x3F));
+    return 4;
+}
+
 /* The real name of the entry at `index`, assembled from whatever sits in
    front of it. Returns 0 when there is nothing there, which is every file
-   written by something that only ever wrote short names. */
+   written by something that only ever wrote short names -- and when the name
+   will not fit in FAT_NAME_MAX bytes of UTF-8, or is not a name at all, in
+   which case the short name stands in for it rather than the long one being
+   cut short without anybody saying so. */
 static u32 long_name_of(const dir_t *d, u32 index, const dirent_t *shortent,
                         char *out, u32 cap) {
     if (index == 0) return 0;
     u8 want = short_checksum(shortent->name);
 
-    char buf[FAT_NAME_MAX];
-    memset(buf, 0, sizeof buf);
-    u32 len = 0;
+    /* A name that fits in FAT_NAME_MAX - 1 bytes of UTF-8 is never more
+       units than that. */
+    u16 units[FAT_NAME_MAX];
+    memset(units, 0, sizeof units);
     bool complete = false;
 
     for (int i = (int)index - 1; i >= 0; i--) {
@@ -1063,26 +1139,35 @@ static u32 long_name_of(const dir_t *d, u32 index, const dirent_t *shortent,
         if (seq == 0) return 0;
 
         u32 at = (seq - 1) * LFN_CHARS;
-        if (at >= FAT_NAME_MAX - 1) return 0;
-
         u16 chars[LFN_CHARS];
         lfn_get(l, chars);
         for (u32 k = 0; k < LFN_CHARS; k++) {
-            u32 pos = at + k;
-            if (pos >= FAT_NAME_MAX - 1) break;
             u16 ch = chars[k];
             if (ch == 0x0000 || ch == 0xFFFF) continue;
-            /* Anything outside ASCII becomes a question mark rather than
-               half of a character nobody can type. */
-            buf[pos] = (ch < 0x80) ? (char)ch : '?';
-            if (pos + 1 > len) len = pos + 1;
+            if (at + k >= FAT_NAME_MAX - 1) return 0;   /* longer than a name here */
+            units[at + k] = ch;
         }
 
         if (l->seq & LFN_LAST) { complete = true; break; }
     }
+    if (!complete) return 0;
 
-    if (!complete || !len || len >= cap) return 0;
-    memcpy(out, buf, len);
+    u32 len = 0;
+    for (u32 i = 0; i < FAT_NAME_MAX && units[i]; i++) {
+        u32 cp = units[i];
+        if (cp >= 0xD800 && cp <= 0xDBFF && i + 1 < FAT_NAME_MAX &&
+            units[i + 1] >= 0xDC00 && units[i + 1] <= 0xDFFF) {
+            cp = 0x10000 + ((cp - 0xD800) << 10) + (units[i + 1] - 0xDC00);
+            i++;
+        } else if (cp >= 0xD800 && cp <= 0xDFFF) {
+            return 0;                          /* half of a pair */
+        }
+        char enc[4];
+        u32 n = utf8_put(cp, enc);
+        if (len + n >= cap || len + n > FAT_NAME_MAX - 1) return 0;
+        for (u32 k = 0; k < n; k++) out[len++] = enc[k];
+    }
+    if (!len) return 0;
     out[len] = 0;
     return len;
 }
@@ -1101,12 +1186,17 @@ static bool same_name(const char *a, const char *b) {
  * read back folded, which is what every file in this system has always done,
  * and making those long as well would change how existing volumes read. The
  * reasons are the ones that genuinely cannot be written in eight and three:
- * length, spaces, and more than one dot. */
+ * length, spaces, more than one dot, and anything past ASCII. A short name
+ * holds bytes in whatever code page the reader assumes, so UTF-8 there was
+ * mojibake to every other system -- and a name whose first byte is 0xE5, as
+ * the UTF-8 for much of CJK is, was an entry marked deleted the moment it
+ * was written. */
 static bool needs_long(const char *name) {
     u32 base = 0, ext = 0;
     bool dot = false, in_ext = false;
     for (u32 i = 0; name[i]; i++) {
         char c = name[i];
+        if ((u8)c >= 0x80) return true;
         if (c == '.') {
             if (dot) return true;
             dot = true;
@@ -1143,6 +1233,12 @@ static void make_alias(const dir_t *d, const char *name, u8 out[11]) {
         char c = name[i];
         if (c == '.') break;
         if (c == ' ') continue;
+        /* A character past ASCII is an underscore in the short name, one
+           for the whole character rather than one per byte of it. */
+        if ((u8)c >= 0x80) {
+            if (((u8)c & 0xC0) != 0x80) base[b++] = '_';
+            continue;
+        }
         base[b++] = upcase(c);
     }
     if (!b) base[b++] = 'X';
@@ -1164,9 +1260,17 @@ static void make_alias(const dir_t *d, const char *name, u8 out[11]) {
         memset(out, ' ', 11);
         for (u32 i = 0; i < keep; i++) out[i] = (u8)base[i];
         for (u32 i = 0; i < t; i++) out[keep + i] = (u8)tail[i];
-        if (dot)
-            for (u32 j = 0; j < 3 && dot[1 + j]; j++)
-                out[8 + j] = (u8)upcase(dot[1 + j]);
+        if (dot) {
+            u32 x = 0;
+            for (u32 j = 1; dot[j] && x < 3; j++) {
+                u8 c = (u8)dot[j];
+                if (c >= 0x80) {
+                    if ((c & 0xC0) != 0x80) out[8 + x++] = '_';
+                    continue;
+                }
+                out[8 + x++] = (u8)upcase((char)c);
+            }
+        }
 
         if (!short_taken(d, out)) return;
     }
@@ -1203,9 +1307,13 @@ static int dir_put_name(const dir_t *d, const char *name, dirent_t *e) {
         return slot;
     }
 
-    u32 chars = 0;
-    while (name[chars]) chars++;
-    if (chars >= FAT_NAME_MAX) return -1;
+    u32 bytes = 0;
+    while (name[bytes]) bytes++;
+    if (bytes >= FAT_NAME_MAX) return -1;
+
+    u16 units[FAT_NAME_MAX];
+    u32 chars = utf8_to_units(name, units, FAT_NAME_MAX);
+    if (chars == (u32)-1 || chars == 0) return -1;
 
     u32 n = (chars + LFN_CHARS - 1) / LFN_CHARS;
     int start = dir_free_run(d, n + 1);
@@ -1230,7 +1338,7 @@ static int dir_put_name(const dir_t *d, const char *name, dirent_t *e) {
         u32 at = (n - i - 1) * LFN_CHARS;
         for (u32 k = 0; k < LFN_CHARS; k++) {
             u32 pos = at + k;
-            if (pos < chars)       chunk[k] = (u16)(u8)name[pos];
+            if (pos < chars)       chunk[k] = units[pos];
             else if (pos == chars) chunk[k] = 0x0000;
             else                   chunk[k] = 0xFFFF;
         }
@@ -1406,10 +1514,13 @@ int fat_list(const char *path, u32 index, char *name_out, u32 *size_out, bool *d
                    A caller's buffer is VFS_NAME_MAX, which is what the cap
                    passed here protects. */
                 char real[FAT_NAME_MAX];
-                if (long_name_of(&d, i, &e, real, FAT_NAME_MAX))
-                    strncpy(name_out, real, FAT_NAME_MAX - 1);
-                else
-                    from_83(e.name, name_out);
+                u32 len = long_name_of(&d, i, &e, real, FAT_NAME_MAX);
+                /* With its terminator. This used strncpy with room for
+                   sixty three, which writes no terminator at all when the
+                   name is exactly that long, and every caller went on to
+                   read past the end of it. */
+                if (len) memcpy(name_out, real, len + 1);
+                else     from_83(e.name, name_out);
             }
             if (size_out) *size_out = e.size;
             if (dir_out)  *dir_out = (e.attr & ATTR_DIRECTORY) != 0;
@@ -1585,6 +1696,8 @@ bool fat_write_file(const char *path, const u8 *buf, u32 size) {
 /* Whether a name survives the trip through 8.3 unchanged, which is the
    condition for the short entry being the whole of what names this file. */
 static bool fits_83(const char *name) {
+    /* Never past ASCII: such a name is always written long (needs_long). */
+    for (u32 i = 0; name[i]; i++) if ((u8)name[i] >= 0x80) return false;
     u8 packed[11];
     char back[FAT_NAME_MAX];
     to_83(name, packed);
@@ -1879,10 +1992,13 @@ u32 fat_reclaim(void) {
     return freed;
 }
 
-u32 fat_free_bytes(void) {
+/* Sixty four bits, because the product is: it was thirty two, and a volume
+   with 4 GiB or more free reported whatever was left over past a multiple of
+   4 GiB -- a new 16 GiB stick said it had next to nothing. */
+u64 fat_free_bytes(void) {
     if (!mounted) return 0;
-    u32 free_clusters = 0;
+    u64 free_clusters = 0;
     for (u32 c = 2; c < cluster_count + 2; c++)
         if (fat_get(c) == 0) free_clusters++;
-    return free_clusters * fat_cluster_bytes();
+    return free_clusters * (u64)fat_cluster_bytes();
 }

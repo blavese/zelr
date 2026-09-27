@@ -8,7 +8,10 @@ implements FAT16 from the specification and so does the host-side reader, so
 this is the third implementation of the same document and the one that has to
 create a volume rather than read it.
 
-  python tools/mkfat.py [--fat32] [--at-cluster=N] OUT.img SIZE_KB FILE[:PATH] ...
+  python tools/mkfat.py [--fat32] [--at-cluster=N] [--foreign] OUT.img SIZE_KB FILE[:PATH] ...
+
+--foreign (FAT16 only) stamps the volume as another system's, with a lost
+chain of clusters in it, for the checks that such a disk is left alone.
 
 A path may name a directory, which is created as needed:
 
@@ -461,6 +464,32 @@ class Fat32Builder:
         return bytes(img)
 
 
+def make_foreign(img):
+    """Restamps a FAT16 volume built here as one another system made, in
+    place: its OEM name and serial say Windows, and a chain of three clusters
+    that no directory reaches sits in both tables, which is what a stick
+    pulled out in the middle of a write leaves and what chkdsk would save as
+    FOUND.000. The kernel must leave every byte of it alone."""
+    img[3:11] = b"MSDOS5.0"
+    struct.pack_into("<I", img, 39, 0x1234ABCD)
+    reserved = struct.unpack_from("<H", img, 14)[0]
+    nfats = img[16]
+    fat_sectors = struct.unpack_from("<H", img, 22)[0]
+    entries = fat_sectors * SECTOR // 2
+    first = reserved * SECTOR
+    last = 2
+    for c in range(2, entries):
+        if struct.unpack_from("<H", img, first + c * 2)[0]:
+            last = c
+    lost = last + 10
+    for f in range(nfats):
+        base = (reserved + f * fat_sectors) * SECTOR
+        struct.pack_into("<H", img, base + lost * 2, lost + 1)
+        struct.pack_into("<H", img, base + (lost + 1) * 2, lost + 2)
+        struct.pack_into("<H", img, base + (lost + 2) * 2, 0xFFFF)
+    return img
+
+
 def main():
     if len(sys.argv) < 4:
         print(__doc__)
@@ -468,6 +497,7 @@ def main():
 
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     want32 = "--fat32" in sys.argv
+    foreign = "--foreign" in sys.argv
     # Where to put the next file, so a test can place one past cluster 65535.
     skip = 0
     for a in sys.argv[1:]:
@@ -494,9 +524,13 @@ def main():
               % (dest, os.path.getsize(src),
                  "  at cluster %d" % first if first else ""))
 
-    open(out, "wb").write(fs.build())
-    print("wrote %s (%d KiB, FAT%d, %d clusters)"
-          % (out, size_kb, 32 if want32 else 16, fs.clusters))
+    img = bytearray(fs.build())
+    if foreign and not want32:
+        make_foreign(img)
+    open(out, "wb").write(bytes(img))
+    print("wrote %s (%d KiB, FAT%d, %d clusters%s)"
+          % (out, size_kb, 32 if want32 else 16, fs.clusters,
+             ", made to look made elsewhere" if foreign else ""))
     return 0
 
 

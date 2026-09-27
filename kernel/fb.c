@@ -19,6 +19,7 @@
 #include "printf.h"
 #include "string.h"
 #include "smp.h"
+#include "handoff.h"
 
 #define VBE_INDEX 0x01CE
 #define VBE_DATA  0x01CF
@@ -66,6 +67,7 @@ static u8    *back;         /* back buffer we actually draw into */
    be, so a machine too small for this one still works. */
 static u8    *sent;
 static bool   sent_valid;
+static bool   rgb_card;      /* the card takes red first (to_card) */
 
 /* Drawing goes through a back buffer so that a half drawn frame is never on
    the screen. When there is not enough memory for one, drawing straight into
@@ -116,11 +118,12 @@ u8  *fb_pixels(void) { return back; }
  * firmware is gone, so whatever the loader chose is what there is. The
  * aperture is wherever the firmware put it, which on a real machine is
  * usually a long way above where the kernel identity maps. */
-bool fb_adopt(u64 base, u32 w, u32 h, u32 pitch_pixels) {
+bool fb_adopt(u64 base, u32 w, u32 h, u32 pitch_pixels, u32 format) {
     active = false;
     via_svga = false;
     adopted = true;
     if (!base || !w || !h) return false;
+    rgb_card = format == HANDOFF_FB_RGBX;
 
     width = w;
     height = h;
@@ -387,6 +390,21 @@ u64 fb_last_sent(void)     { return last_sent; }
 u64 fb_total_sent(void)    { return total_sent; }
 u64 fb_screen_bytes(void)  { return (u64)pitch * height; }
 
+/* Pixels onto the card, in the order the card wants. Everything here draws
+   blue first (fb.h RGB), and a UEFI firmware may have set up a screen that
+   takes red first; that screen used to show every picture with red and blue
+   swapped. The back buffer and the mirror stay in our order, so nothing that
+   draws has to know: only this copy turns them round. */
+static void to_card(u8 *dst, const u8 *src, u64 n) {
+    if (!rgb_card) { memcpy(dst, src, n); return; }
+    u32 *d = (u32 *)dst;
+    const u32 *s = (const u32 *)src;
+    for (u64 i = 0; i < n / 4; i++) {
+        u32 v = s[i];
+        d[i] = (v & 0xFF00FF00u) | ((v >> 16) & 0xFFu) | ((v & 0xFFu) << 16);
+    }
+}
+
 static void bands_copy(u32 first, u32 last) {
     for (u32 i = first; i <= last && i < band_count; i++) {
         u32 y = i * BAND_ROWS;
@@ -398,7 +416,7 @@ static void bands_copy(u32 first, u32 last) {
             band_dirty[i] = 0;
             continue;
         }
-        memcpy(lfb + off, back + off, n);
+        to_card(lfb + off, back + off, n);
         memcpy(sent + off, back + off, n);
         band_dirty[i] = 1;
     }
@@ -415,7 +433,7 @@ static void bands_helper(void *arg) {
 }
 
 static void whole_screen(void) {
-    memcpy(lfb, back, (u64)pitch * height);
+    to_card(lfb, back, (u64)pitch * height);
     __asm__ volatile ("sfence" ::: "memory");
     last_sent = (u64)pitch * height;
     total_sent += last_sent;
@@ -520,6 +538,39 @@ done:
     if (!flush_cycles) flush_cycles = rdtsc() - t0;
 }
 
+/* For the self test: one pixel sent to a stand-in for the card in each order,
+   and the bytes that arrived. QEMU's firmware only ever offers blue first, so
+   the red-first path cannot be seen any other way. False when there is no
+   back buffer, where drawing goes straight at the card. */
+bool fb_test_orders(u8 rgbx[4], u8 bgrx[4]) {
+    if (!active || back == lfb) return false;
+    u8 *mem = (u8 *)kmalloc((u64)pitch * height);
+    if (!mem) return false;
+
+    bool on = interrupts_enabled();
+    cli();
+    u8 *keep = lfb;
+    bool keep_rgb = rgb_card;
+    u32 was = ((u32 *)back)[0];
+
+    fb_put(0, 0, RGB(0x12, 0x34, 0x56));
+    lfb = mem;
+    rgb_card = true;
+    fb_flush_rect(0, 0, 1, 1);
+    memcpy(rgbx, mem, 4);
+    rgb_card = false;
+    fb_flush_rect(0, 0, 1, 1);
+    memcpy(bgrx, mem, 4);
+
+    lfb = keep;
+    rgb_card = keep_rgb;
+    ((u32 *)back)[0] = was;
+    fb_flush_rect(0, 0, 1, 1);
+    if (on) sti();
+    kfree(mem);
+    return true;
+}
+
 void fb_flush_rect(u32 x, u32 y, u32 w, u32 h) {
     if (!active) return;
     if (x >= width || y >= height) return;
@@ -528,7 +579,7 @@ void fb_flush_rect(u32 x, u32 y, u32 w, u32 h) {
     if (back != lfb) {
         for (u32 j = 0; j < h; j++) {
             u32 off = (y + j) * pitch + x * 4;
-            memcpy(lfb + off, back + off, w * 4);
+            to_card(lfb + off, back + off, w * 4);
             /* The mirror has to learn about this too, or the next whole
                frame will decide these rows are already on the screen and
                they will be, and the two will agree about the wrong thing

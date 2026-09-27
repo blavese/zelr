@@ -293,12 +293,12 @@ Includes `zelr.h`, `alloc.h`, `dom.h` (the HTML parser: `ddoc`, `dom_parse`, `do
 * **`sv_stroke(cv, path, colour, width, alpha)`** (`:439-474`):
   * Minimum width is 0.6.
   * For each consecutive pair of points within a subpath it fills a quad offset by the normal. The segment length comes from a Heron/Newton square root with 12 iterations.
-  * There are no joins or caps, and no wrap from the last point back to the first.
-* **`sv_paint(d, el, name, &out)`** (`:487-524`):
-  * Reads the attribute first, and otherwise searches the `style` attribute for `name:` (case-folded).
-  * `none` returns 0.
-  * `url(...)` (a gradient or pattern) gives flat grey `0x9A9A9A`.
-  * Anything else goes to `css_color`, which supports #rgb, #rrggbb, rgb()/rgba() and about 60 names. `transparent` maps to white (`css.h:231`).
+  * There are no joins or caps, and no wrap from the last point back to the first. (Since 0.42.0 `rect` and `polygon` add their start point again, so they close anyway.)
+* ~~**`sv_paint(d, el, name, &out)`**~~ Since 0.42.0 this is split in three:
+  * `sv_said(d, el, name)`: the attribute, or else `name:` in the `style` attribute (case-folded, matched only at the start of a declaration). Returns 0 when the element says nothing.
+  * `sv_inherit(d, el, root, name)`: the nearest of the element and its ancestors, up to and including the root `<svg>`, that says anything. `sv_inherit_num` is the numeric form, with a default.
+  * `sv_paint_value(v, &out)`: `none` and (since 0.42.0) `transparent` return 0. `url(...)` (a gradient or pattern) gives flat grey `0x9A9A9A`. Anything else goes to `css_color`, which supports #rgb, #rrggbb, rgb()/rgba() and about 60 names.
+* `sv_unpainted(d, el)` (0.42.0): true for `defs`, `clipPath`, `mask`, `symbol`, `pattern` and `marker`.
 * **`sv_attr_num`** (`:526-532`) reads the attribute only, never `style`, with units ignored.
 * **`sv_transform(d, el, parent)`** (`:535-599`):
   * Supports `translate`, `scale`, `matrix` (6 numbers) and `rotate(deg [cx cy])`.
@@ -308,10 +308,10 @@ Includes `zelr.h`, `alloc.h`, `dom.h` (the HTML parser: `ddoc`, `dom_parse`, `do
   * `translate()` or `scale()` with no numbers reads the uninitialised `a[0]`.
 * **`sv_shape(d, el, m, path)`** (`:602-674`) handles:
   * `path` (from `d`).
-  * `rect`: 4 points, no closing point, `rx`/`ry` ignored.
+  * `rect`: 4 points and (0.42.0) the first again, `rx`/`ry` ignored.
   * `circle`/`ellipse`: 4 cubics with k=0.5522847, and closed.
   * `line`.
-  * `polygon`/`polyline` (from `points`, no closing point). The tag is matched case-insensitively.
+  * `polygon`/`polyline` (from `points`). Since 0.42.0 a polygon repeats its first point and a polyline does not. The tag is matched case-insensitively.
 * **`svg_render(xml, len, want_w, want_h, out, bg)`** (`:682-812`):
   1. `malloc(sizeof(ddoc))`, about 2.6 MB given `DOM_NODES 20000`, `DOM_ATTRS 40000` and `DOM_ARENA 1.5 MB` (`dom.h:37-39`), then `dom_parse`. The first element named `svg` is the root; if there is none, `SVG_NOT_SVG`.
   2. `viewBox` is read with `dom_attr_fold`, because the parser lower-cases attribute names (`svgtest.c:223-233`, `dom.h:214-234`).
@@ -319,12 +319,12 @@ Includes `zelr.h`, `alloc.h`, `dom.h` (the HTML parser: `ddoc`, `dom_parse`, `do
   4. The canvas is filled with `bg`. The base transform is uniform scale `min(w/vw, h/vh)`, centred (the xMidYMid meet default; `preserveAspectRatio` is ignored).
   5. `malloc(svpath)`.
   6. Every element in document order is visited with `dom_next`. For each one:
-     * The transform chain is built from the element up to, but excluding, the root, at most 32 levels, relying on node indices increasing in document order. The root's own `transform` is not applied.
+     * The transform chain is built from the element up to, but excluding, the root, at most 32 levels, relying on node indices increasing in document order. The root's own `transform` is not applied. Since 0.42.0, an element with an `sv_unpainted` element anywhere in that chain is skipped.
      * `sv_shape` builds the path.
-     * **Fill:** if `sv_paint` gives no colour, no `fill` attribute exists, and the element is not a `line` or `polyline`, the fill defaults to black. This is how `style="fill:none"` wrongly becomes black; see §10.
-     * `opacity` and `fill-opacity` are multiplied; `fill-rule="evenodd"` is honoured.
-     * The stroke uses `stroke-width × sc` (the viewBox scale only) and `stroke-opacity × opacity`.
-     * There is **no inheritance** of fill, stroke or opacity from ancestors such as `<g>`. There is **no skipping** of `<defs>`, `<clipPath>`, `<mask>`, `<symbol>`, `<pattern>` or `<marker>` subtrees. `<use>`, `<text>` and `<image>` are not drawn.
+     * **Fill** (0.42.0): `sv_inherit(…, "fill")`. When it finds nothing all the way up, the fill is black unless the element is a `line` or `polyline`. A `fill:none` in `style` is now honoured.
+     * `opacity` is multiplied down the chain from the element to the root; `fill-opacity` and `stroke-opacity` are inherited, then multiplied by that. `fill-rule` is inherited; `evenodd` is honoured.
+     * The stroke is `sv_inherit(…, "stroke")`, with `stroke-width` (inherited) `× sc` (the viewBox scale only).
+     * ~~There is **no inheritance** of fill, stroke or opacity~~ (0.42.0: fill, stroke, stroke-width, fill-opacity, stroke-opacity and fill-rule inherit; opacity multiplies). ~~There is **no skipping** of `<defs>` …~~ (0.42.0: skipped). `<use>`, `<text>` and `<image>` are not drawn.
      * `depth` and `stack[32]` are dead (`:746-748`, `:800-801`).
   7. Frees `path` and `doc`. If nothing was drawn, frees `rgb` and returns `SVG_NOTHING_IN_IT`.
 * `svg_why` (`:814-821`) is unused.
@@ -375,6 +375,8 @@ All three follow the same pattern:
 | 161-169 | `fill='none'` gives `SVG_NOTHING_IN_IT`. |
 | 176-187 | An even-odd ring with a hole. |
 | 190-200 | A stroked `line`. |
+| (0.42.0) | Paint said once for many: a `<g fill>`, a stroke and `fill='none'` on the root `<svg>` (which also catches an unclosed rect), a `style` fill two groups down, and a shape's own paint beating its group's. |
+| (0.42.0) | `<defs>` and `<clipPath>` contents not drawn; `fill='transparent'` leaves what is under it; a stroked polygon is closed. |
 | 203-208 | HTML without `<svg>` gives `SVG_NOT_SVG`. |
 | 211-221 | Leak check. |
 | 234-260 | `viewBox` with a capital B at 200×120 must fill more than 90% of the pixels with `#e11d48`. This is the regression for `dom_attr_fold`. |
@@ -382,7 +384,7 @@ All three follow the same pattern:
 **Not covered by any test:**
 * PNG: 2- and 4-bit depths, 8-bit greyscale, grey+alpha, multiple IDAT chunks.
 * JPEG: restart markers, greyscale, other chroma subsamplings, 16-bit DQT. All four test JPEGs are 3-component 4:2:0 (Y 0x22, Cb/Cr 0x11) with no DRI; checked by parsing `jpegdata.h`.
-* SVG: style-attribute paint, group inheritance, arcs, stroked rects or polygons, `<defs>`, transforms other than translate.
+* SVG: arcs, transforms other than translate. (Style-attribute paint, group inheritance, stroked rects and polygons and `<defs>` are covered since 0.42.0.)
 * Deflate: the PNG data covers stored blocks (`PNG_STORED`), fixed blocks (`PNG_FILTERS`, `GREY1`, `ALPHA`: first byte `0x63`, BTYPE=01) and a dynamic block (`PNG_PALETTE`: first byte `0x05`, BTYPE=10), as read from `pngdata.h`.
 
 ### 3.6 Test data and its generators
@@ -867,16 +869,16 @@ Then rebuild with `bash build.sh`, which builds userland first and embeds the te
   * EXIF orientation.
   * Adobe APP14 RGB/CMYK.
   * A faster IDCT can be tested against the current one's output (`jpeg.h:177-179`).
-* **SVG** (roughly in order of real-world impact):
-  1. Paint inheritance from ancestors.
-  2. `style` fill:none, opacity and stroke-width.
-  3. Skip `<defs>`, `<clipPath>`, `<mask>`, `<symbol>`, `<pattern>` and `<marker>`.
-  4. Close rect and polygon strokes.
+* **SVG** (roughly in order of real-world impact; 1-4 and 9 done in 0.42.0):
+  1. ~~Paint inheritance from ancestors.~~
+  2. ~~`style` fill:none, opacity and stroke-width.~~
+  3. ~~Skip `<defs>`, `<clipPath>`, `<mask>`, `<symbol>`, `<pattern>` and `<marker>`.~~
+  4. ~~Close rect and polygon strokes.~~
   5. True elliptical arcs.
   6. `<use>`.
   7. Rounded `rect` (`rx`/`ry`).
   8. Stroke width under transforms.
-  9. Treat `transparent` as no paint instead of white.
+  9. ~~Treat `transparent` as no paint instead of white.~~
 * **GIF:** `png.h:8` names GIF as one of the four web formats, but there is no decoder. It would need an LZW decoder plus sniffing (`GIF8`) in `browser.c:735-757`.
 * **Inflate:** a table-driven decode would be much faster. Optionally verify Adler-32 and CRC-32. The existing contract must be kept: `inf_run` reports partial length on `INF_FULL`.
 * **Pitfalls the comments warn about:**
@@ -901,10 +903,10 @@ Then rebuild with `bash build.sh`, which builds userland first and embeds the te
 
 1. **PNG chunk bounds check wraps: `png.h:146`.** `if (clen > (u32)(n - at - 12))`. When 8 ≤ `n - at` < 12 the right-hand side is a negative int cast to about 0xFFFFFFFC, so nearly any `clen` passes. The code then reads the chunk body past `data + n`: IHDR 13 bytes, PLTE up to 768, tRNS up to 256, and IDAT up to `n - zlen` bytes (`:178`). If `clen >= 0x80000000`, `at += 12 + (int)clen` (`:183`) makes `at` negative, and the next iteration reads before the buffer. Triggers are a PNG truncated within the first 12 bytes of its last chunk, or crafted input. The impact is an over-read or crash of the ring-3 browser. The existing truncation test (`pngtest.c:164-165`, n=20) does not reach this case.
 2. **Truncation misreported as damage: `inflate.h:163-164`.** When the input ends while reading a length's extra bits or the distance code, `err` is already `INF_TRUNCATED`, but the combined test `if (s->err || dsym < 0 || dsym >= 30) s->err = INF_BAD` overwrites it. `png.h:204` then reports `PNG_BAD` instead of `PNG_TRUNCATED`. The effect is limited to the error code.
-3. **`style="fill:none"` fills black: `svg.h:766-776`.** `sv_paint` correctly returns 0 for `none` found in `style`, but the default-black rule only checks for a `fill` *attribute* (`fv`). A stroke-only shape with its fill in `style`, which is typical of Inkscape and Illustrator output, therefore gets a solid black fill.
-4. **Rect and polygon strokes miss their closing edge: `svg.h:614-625`, `661-671`, `448`.** `sv_shape` adds no closing point for `rect` or `polygon`. `sv_stroke` only strokes consecutive pairs (`for (i = from; i + 1 < to; i++)`). A stroked rect loses its left edge, and a polygon loses its last-to-first edge. Circles and ellipses are closed because their last cubic ends at the start point.
-5. **No paint inheritance, and `<defs>`/`<clipPath>`/`<mask>` content drawn: `svg_render`, `svg.h:750-799`.** Only transforms are gathered from ancestors. `<g fill="#4285F4"><path/></g>` draws the path black. Shapes inside `<clipPath>`, `<mask>`, `<defs>`, `<symbol>` or `<pattern>` are painted as ordinary shapes, black by default. The header claims clipping and masks are "skipped" (`svg.h:32-33`), and the `sv_paint` comment says "not said … inherits" (`svg.h:485-486`).
-6. **`fill="transparent"` paints white.** `sv_paint` passes the value to `css_color`, which maps `transparent` to `0xFFFFFF` (`css.h:231`). The result is a white shape drawn over whatever is below it.
+3. **FIXED in 0.42.0 (the fill is `sv_inherit`, which reads `style`). `style="fill:none"` fills black: `svg.h:766-776`.** `sv_paint` correctly returns 0 for `none` found in `style`, but the default-black rule only checks for a `fill` *attribute* (`fv`). A stroke-only shape with its fill in `style`, which is typical of Inkscape and Illustrator output, therefore gets a solid black fill.
+4. **FIXED in 0.42.0 (svgtest: "a stroke said on the drawing itself outlines the shapes in it" failed on the left edge until the rect closed; "a stroked polygon is closed"). Rect and polygon strokes miss their closing edge: `svg.h:614-625`, `661-671`, `448`.** `sv_shape` adds no closing point for `rect` or `polygon`. `sv_stroke` only strokes consecutive pairs (`for (i = from; i + 1 < to; i++)`). A stroked rect loses its left edge, and a polygon loses its last-to-first edge. Circles and ellipses are closed because their last cubic ends at the start point.
+5. **FIXED in 0.42.0 (svgtest: a group's fill, the root's stroke, a style fill two groups down, a shape's own paint winning; "a shape inside <defs> or a clip path is not drawn where it stands"). No paint inheritance, and `<defs>`/`<clipPath>`/`<mask>` content drawn: `svg_render`, `svg.h:750-799`.** Only transforms are gathered from ancestors. `<g fill="#4285F4"><path/></g>` draws the path black. Shapes inside `<clipPath>`, `<mask>`, `<defs>`, `<symbol>` or `<pattern>` are painted as ordinary shapes, black by default. The header claims clipping and masks are "skipped" (`svg.h:32-33`), and the `sv_paint` comment says "not said … inherits" (`svg.h:485-486`).
+6. **FIXED in 0.42.0 (svgtest: "a transparent fill leaves what is under it showing"). `fill="transparent"` paints white.** `sv_paint` passes the value to `css_color`, which maps `transparent` to `0xFFFFFF` (`css.h:231`). The result is a white shape drawn over whatever is below it.
 7. **Single-component JPEG with sampling factors other than 1×1: `jpeg.h:288-337`, `409-418`.** MCUs of `h×v` blocks are decoded. Per ITU T.81 A.2.2 (quoted from memory), a one-component scan is non-interleaved, with one block per MCU in raster order, so such files decode scrambled. This is uncommon but does occur.
 8. **JPEG fill bytes: `jpeg.h:366-377`.** `FF FF <marker>` makes `marker=0xFF` read as a segment with a length, which misparses the file. The spec allows any number of `FF` fill bytes before a marker.
 9. **Minor undefined behaviour:**
@@ -927,7 +929,7 @@ Then rebuild with `bash build.sh`, which builds userland first and embeds the te
 
 ### Doc drift
 
-11. **`svg.h:36-38`** says a gradient fill "comes out as its first stop". The code (`:517-521`) uses flat grey `0x9A9A9A`, and the local comment at `:517-520` says grey.
+11. FIXED in 0.42.0 (the header now says grey). **`svg.h:36-38`** says a gradient fill "comes out as its first stop". The code (`:517-521`) uses flat grey `0x9A9A9A`, and the local comment at `:517-520` says grey.
 12. **`svg.h:42-43` and `:54`** say edges are sampled "four times a pixel each way". In fact there are 4 vertical sub-scanlines and horizontal coverage is exact (`sv_span`). `genface.py:159-163` makes the same "sixteen samples" claim for the same scheme.
 13. **`svg.h:435-438`** says a stroke is "a filled quadrilateral per segment plus a square at each joint". No joint squares are drawn.
 14. **`svg.h:455-457`** says "One over the length, by Newton's method … Three rounds". The code computes the square root (Heron) with 12 rounds, then divides.

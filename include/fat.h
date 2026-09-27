@@ -41,6 +41,11 @@ bool fat_mounted(void);
    our own volume over one that is merely FAT. */
 bool fat_is_zelr_volume(void);
 
+/* Whether the mounted volume was made by this system, the kernel or its
+   tools ("ZELR" in the boot sector's OEM field). One that was not is left
+   exactly as it is at mount: no sweep of lost clusters, no folders seeded. */
+bool fat_made_here(void);
+
 /* The same question, and where the log lives, asked of a boot sector that
    has been read rather than of the volume that is mounted. The black box
    needs both before anything is mounted and from the fault path, and the
@@ -91,7 +96,7 @@ bool fat_rmdir(const char *path);          /* only when empty */
 
 u32  fat_total_clusters(void);
 u32  fat_cluster_bytes(void);
-u32  fat_free_bytes(void);
+u64  fat_free_bytes(void);
 
 /* Releases clusters no directory entry points at, which is what a crash
    between writing a file and committing it leaves behind. Returns the

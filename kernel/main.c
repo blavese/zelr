@@ -390,7 +390,7 @@ void kmain(handoff_t *h) {
 
     bb_mark("video");
     bool have_screen = h->fb_base
-        ? fb_adopt(h->fb_base, h->fb_width, h->fb_height, h->fb_pitch)
+        ? fb_adopt(h->fb_base, h->fb_width, h->fb_height, h->fb_pitch, h->fb_format)
         : fb_init(1024, 768);
 
     if (have_screen) {

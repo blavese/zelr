@@ -2090,9 +2090,8 @@ path), `-display none`, serial on stdio, a TCP monitor, `-append console`
 * **WC for VBE and SVGA.** Map with `paging_map_wc` instead of
   `map_page(..PTE_PRESENT|PTE_RW)` (fb.c:208-213) or `paging_map_device`
   (svga.c:183). Then the boot-log claim (main.c:406) becomes true.
-* **GOP pixel formats.** Pass the GOP `pixel_format` through the handoff and
-  swap channels in fb.c (or restrict the loader to BGR modes,
-  uefi/loader.c:102-103).
+* ~~**GOP pixel formats.**~~ Done in 0.42.0 (B7): `fb_format` in the handoff,
+  swapped on copy to the card.
 * **Pitfalls**
   - Every drawer writes only to `fb_pixels()` (the back buffer) and then
     flushes. Code that writes to the lfb directly bypasses the mirror.
@@ -2213,7 +2212,13 @@ B6. **Boot log claims write combining that is not in effect** (verified;
    `paging_wc_ready()`. Only `fb_adopt` maps with `paging_map_wc`. The VBE
    aperture uses `map_page(..PTE_PRESENT|PTE_RW)` (PAT slot 0, write-back,
    fb.c:208-213) and SVGA uses `paging_map_device` (uncached, svga.c:183).
-B7. **GOP RGB modes get red and blue swapped.** Verified. The UEFI loader
+B7. **FIXED in 0.42.0.** `handoff_t.fb_format` (offset 3296; `HANDOFF_FB_BGRX` 0, `HANDOFF_FB_RGBX` 1) is set by
+   the loader: RGB modes, and PixelBitMask modes whose red mask is 0xFF, give RGBX. The BIOS loader zeroes it and
+   the multiboot path leaves it 0. `fb_adopt` records it in `rgb_card`, and `to_card()` swaps red and blue on the
+   way to the card in `bands_copy`, the whole-screen copy and `fb_flush_rect`. The back buffer stays `0x00RRGGBB`
+   everywhere, so nothing that draws had to change. Checked by `[video]` "a screen that takes red first is sent
+   red first" through `fb_test_orders`. QEMU's OVMF only offers BGR modes, so this has not run on a real RGB
+   panel. The original finding follows. **GOP RGB modes get red and blue swapped.** Verified. The UEFI loader
    accepts both `PixelRedGreenBlueReserved8BitPerColor` and `...BlueGreenRed...`
    (uefi/loader.c:102-103). The handoff has no pixel-format field
    (handoff.h:39-44), and fb.c always writes `0x00RRGGBB` (BGRX in memory).

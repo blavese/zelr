@@ -101,7 +101,7 @@ Everything between "power on" (or "QEMU started") and `kmain(handoff_t *)`. That
 - `mem_region_t { u64 base; u64 len; u32 type; u32 pad; }`, 24 bytes (L27-32).
 - `HANDOFF_MAX_REGIONS 128` (L34).
 
-**`handoff_t` layout** (natural alignment, no padding holes; 3296 = 0xCE0 bytes, fits in one page):
+**`handoff_t` layout** (natural alignment, no padding holes before the end; 3304 = 0xCE8 bytes since 0.42.0, was 3296, fits in one page):
 
 | Offset | Size | Field | Meaning | cdboot `.set` |
 |---|---|---|---|---|
@@ -118,6 +118,7 @@ Everything between "power on" (or "QEMU started") and `kmain(handoff_t *)`. That
 | 64 | 3072 | `regions[128]` | memory map, 24 B each | `H_REGIONS 64`, `REGION_SIZE 24`, `MAX_REGIONS 128` |
 | 3136 | 32 | `loader[32]` | "bios" / "uefi" / "multiboot" (printed in the boot log) | `H_LOADER 3136` |
 | 3168 | 128 | `cmdline[128]` | only the multiboot path fills it | -- |
+| 3296 | 4 (+4 tail padding) | `fb_format` (0.42.0) | `HANDOFF_FB_BGRX` 0 or `HANDOFF_FB_RGBX` 1; only UEFI sets 1 | `H_FB_FORMAT` (zeroed only) |
 
 **Who writes and who reads each field** (verified by grep):
 
@@ -213,7 +214,7 @@ The header comment (L22) says "four values"; there are five.
    - `kbc_a20`: KBC 0xAD disable, 0xD0 read output port, 0xD1 write back with bit 1, 0xAE enable, with bounded waits of 0xFFFF polls (L363-413).
    If all fail, `die("the a20 gate will not open")`.
 2. `probe_geometry` (L454-483): AH=48h again. Sets `sector_size` (default 2048), `lba_scale = 2048/sector_size`, `chunk_sectors = 32768/sector_size`. It does **not** reuse what stage 1 proved (see §10).
-3. `zero_handoff` (L661-698): byte-zero `H_LOADER+160` = 3296 bytes at 0x70000, then:
+3. `zero_handoff` (L661-698): byte-zero `H_FB_FORMAT+8` = 3304 bytes at 0x70000 (0.42.0; was `H_LOADER+160` = 3296), then:
    - magic as two dwords, `0x36344846` at +0 and `0x5A454C52` at +4 (the format `check_loader.py` checks);
    - `kernel_base = patch_load`, `kernel_size = patch_bytes` (high dwords 0);
    - `loader = "bios"`.
@@ -682,7 +683,7 @@ loadaddr.py (0x1000000) ; flatten.py -> build/zelr.bin        (16 MiB .. __kerne
 | 0x08000–~0x080C8 | ~200 (estimate) | SMP trampoline and parameter block | `smp.c` |
 | 0x09000–0x097FF | 2048 | `S1_SCRATCH` reload buffer | cdboot stage 1 |
 | 0x10000–0x17FFF | 32 KiB | INT 13h read buffer (`BUFFER_SEG`) | cdboot |
-| 0x70000–0x70CDF | 3296 (1 page reserved on UEFI) | `handoff_t` | cdboot, loader.c |
+| 0x70000–0x70CE7 | 3304 (1 page reserved on UEFI) | `handoff_t` | cdboot, loader.c |
 | 0xB8000 | text | "needs a 64-bit processor" | boot.S |
 | 0x1000000 (16 MiB) | = zelr.bin | kernel, `.bss` included | all |
 | 0x1000000+8 / +16 | 8 / 8 | `_start64` / `_start32` pointers | UEFI loader / cdboot |
@@ -752,7 +753,7 @@ loadaddr.py (0x1000000) ; flatten.py -> build/zelr.bin        (16 MiB .. __kerne
 | `0x1000000` (16 MiB) | `linker.ld:33` (`16M`), `loader.c:388`, `cdboot.S:47` | kernel physical load and link address |
 | `HANDOFF_MAGIC 0x5A454C5236344846` | `handoff.h:19`; cdboot `0x36344846`/`0x5A454C52` (L676-677) | handoff validity |
 | `HANDOFF_MAX_REGIONS 128` | `handoff.h:34` | memory map entries (silent truncation on all paths) |
-| handoff size 3296 (0xCE0) | derived; `cdboot.S:667` `H_LOADER+160` | zero range |
+| handoff size 3304 (0xCE8) | derived; `cdboot.S` `H_FB_FORMAT+8`, with `H_FB_FORMAT` checked against handoff.h by a `_Static_assert` | zero range |
 | `0x70000` | `cdboot.S:59` (`HANDOFF_SEG 0x7000`), `loader.c:393` | handoff physical address |
 | `"ZELRKRN\0"` + `_start64`@+8 + `_start32`@+16 | `boot.S:24-29` | kernel image header |
 | `0x1BADB002`, flags `0x00010003`, checksum `0xE4514FFB` | `boot.S:31-36` | multiboot v1 header (a.out kludge) |
@@ -902,7 +903,11 @@ loadaddr.py (0x1000000) ; flatten.py -> build/zelr.bin        (16 MiB .. __kerne
 
 ### Likely bugs and latent defects
 1. **Stage 2 discards the sector size stage 1 proved** (`cdboot.S:125-172` vs `454-483`). Stage 1 falls back through {reported, 2048, 512} and validates by signature. `probe_geometry` then re-asks INT 13h AH=48h and trusts any value from 1 to 2048. On firmware that misreports (the exact case stage 1 guards against), stage 1 succeeds on a fallback while stage 2 reads the payload with the wrong `lba_scale` and chunk size, and halts with "the kernel did not reach 1 MiB". Stage 1's result cannot survive: its variables live in the region overwritten by the self-copy, and only `DRIVE_STASH` is kept outside.
-2. **The UEFI pixel format is lost.** `setup_graphics` accepts both `PixelRedGreenBlueReserved8BitPerColor` and `PixelBlueGreenRedReserved8BitPerColor` (`loader.c:102-103`), but `handoff_t` has no format field and `fb_adopt(base,w,h,pitch)` (`fb.c:119`) assumes one layout. On an RGB-only GOP the red and blue channels will be swapped. Also, if no 32-bit mode exists at all, the loader keeps the current mode and reports it as 32 bpp with that mode's `frame_buffer_base`, whatever its format (`loader.c:121-135`); for a BltOnly mode that base may be meaningless.
+2. **FIXED in 0.42.0.** `handoff_t.fb_format` (u32 at 3296, after `cmdline`, so nothing above moved; a
+   `_Static_assert` ties it to cdboot.S's `H_FB_FORMAT`). The loader sets RGBX for
+   `PixelRedGreenBlueReserved8BitPerColor` and for `PixelBitMask` with red in the low byte, BGRX otherwise, and
+   for a BltOnly mode it passes `fb_base = 0` (no screen) rather than a meaningless base. fb.c swaps on the copy
+   to the card (atlas 05 B7). The original finding follows. **The UEFI pixel format is lost.** `setup_graphics` accepts both `PixelRedGreenBlueReserved8BitPerColor` and `PixelBlueGreenRedReserved8BitPerColor` (`loader.c:102-103`), but `handoff_t` has no format field and `fb_adopt(base,w,h,pitch)` (`fb.c:119`) assumes one layout. On an RGB-only GOP the red and blue channels will be swapped. Also, if no 32-bit mode exists at all, the loader keeps the current mode and reports it as 32 bpp with that mode's `frame_buffer_base`, whatever its format (`loader.c:121-135`); for a BltOnly mode that base may be meaningless.
 3. **Multiboot fallback region is 1 MiB too long** (`main.c:287-290`). It uses `base = 0x100000`, `len = (mem_upper + 1024) * 1024`. `mem_upper` is KiB above 1 MiB, so the length should be `mem_upper*1024`; as written the region ends 1 MiB past RAM. `flags` bit 0 (mem_* valid) is not checked either. It only matters for a multiboot loader that supplies no mmap.
 4. **El Torito EFI sector count is masked, not saturated** (`mkiso.py:184`). Once the ESP exceeds 65535 virtual sectors (about 32 MiB, i.e. a kernel image of about 31 MiB) the count wraps to a small number. It is latent today.
 5. **The gate's build step ignores `build.sh`'s exit status** (`pipeline/gate.sh:227-228`, run with `set -uo pipefail` and no `-e`). Only the literal word `error` in the output fails "it builds". None of the failure messages of `check_loader.py`, `loadaddr.py`, `flatten.py` or "zig not found" contain it. Such a failure aborts `build.sh` (`set -e`) before the kernel is compiled; the gate reports success and then tests the **previous** `build/zelr.bin`, because `ZELR_PREBUILT=1` blocks rebuilds.

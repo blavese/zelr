@@ -21,6 +21,7 @@
  */
 #include "layout.h"
 #include "vfs.h"
+#include "fat.h"
 #include "printf.h"
 #include "string.h"
 
@@ -76,7 +77,22 @@ static void empty_tmp(void) {
     }
 }
 
+/* Where the shell starts. /home, unless the disk is one another system made
+   and has no such folder, in which case the root: a shell sitting in a
+   directory that does not exist is a shell every relative path fails in. */
+static const char *home_dir = "/home";
+
 void layout_init(void) {
+    /* On a disk another system made, nothing: no folders, no seed files and
+       above all no emptying of whatever it keeps in a folder called TMP,
+       which names compare to without regard to case. Its files are its own,
+       and this system uses them where they are. */
+    if (vfs_disk_backed() && !fat_made_here()) {
+        bool dir = false;
+        if (!vfs_stat("/home", 0, &dir) || !dir) home_dir = "/";
+        return;
+    }
+
     for (u32 i = 0; i < N_DIRS; i++)
         if (!vfs_stat(DIRS[i], 0, 0)) vfs_mkdir(DIRS[i]);
 
@@ -147,4 +163,4 @@ void layout_init(void) {
     }
 }
 
-const char *layout_home(void) { return "/home"; }
+const char *layout_home(void) { return home_dir; }

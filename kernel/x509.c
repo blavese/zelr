@@ -643,6 +643,22 @@ x509_result_t x509_verify_chain(const u8 *const *ders, const u32 *lens, u32 n,
         if (found < 0) break;
 
         const x509_t *parent = &chain[found];
+
+        /* A parent the store holds its own copy of is where the chain ends,
+           and the copy that was sent is set aside before anything about it
+           is looked at: its dates, its constraints, its self-signature.
+           Below, the certificate under it is checked against the store's
+           key, which is all that trusting a root means. A served copy that
+           had expired used to fail the whole chain here, with the root this
+           machine trusts one step away -- and GTS Root R1 as cross-signed by
+           GlobalSign, which google.com sends, expires in January 2028, a
+           decade before the root does. */
+        if (roots_find(parent->subject, parent->subject_len, &root, &root_len)) {
+            below = top;
+            top = parent;
+            break;
+        }
+
         if (!parent->has_basic_constraints || !parent->is_ca)
             return X509_NOT_A_CA;
         if (parent->path_len >= 0 && depth > parent->path_len)

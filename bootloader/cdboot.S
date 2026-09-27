@@ -65,6 +65,7 @@ patch_self:     .long 0          /* the sector this file itself came from */
 .set H_REGION_COUNT,   56
 .set H_REGIONS,        64
 .set H_LOADER,         64 + 128 * 24
+.set H_FB_FORMAT,      H_LOADER + 160   /* after the 32 byte name and 128 byte line */
 .set REGION_SIZE,      24
 .set MAX_REGIONS,      128
 
@@ -664,7 +665,7 @@ zero_handoff:
     movw    %ax, %es
 
     xorw    %di, %di
-    movw    $(H_LOADER + 160), %cx    /* the whole structure, in bytes */
+    movw    $(H_FB_FORMAT + 8), %cx   /* the whole structure, in bytes */
     xorb    %al, %al
 1:  movb    %al, %es:(%di)
     incw    %di

@@ -510,7 +510,10 @@ the entry goes first and its clusters after, so an interruption leaks space
 rather than leaving an entry pointing at clusters something else is given.
 Anything an interruption stranded is found and reclaimed at the next mount,
 and the reclaim frees nothing at all unless it managed to read every
-directory. The flushes that order all this go to the disk the file is on,
+directory. That is on a volume this system made. One another system made is
+used as it is found: nothing swept, no folders made, no scratch folder
+emptied, because clusters no entry reaches are what that system's own
+repair tool would have saved, and its TMP is its own. The flushes that order all this go to the disk the file is on,
 and reach the drive: FLUSH CACHE on AHCI and ATA, FLUSH on NVMe,
 SYNCHRONIZE CACHE on a USB stick. A name too long for eight and three is
 found by its long name only, never by the short name it truncates to, so
@@ -1365,7 +1368,7 @@ byte.
 ## testing
 
 The kernel tests itself. `./run.sh -T` boots with selftest on the command line,
-runs 609 checks across every subsystem, then writes to QEMU's debug-exit port
+runs 626 checks across every subsystem, then writes to QEMU's debug-exit port
 so the host gets a real exit status.
 
     [string]                8 checks   [live tree]            19 checks
@@ -1380,12 +1383,12 @@ so the host gets a real exit status.
     [open files]           30 checks   [p-256]                13 checks
     [timer]                 3 checks   [sha-512]               4 checks
     [interrupts]            2 checks   [p-384]                 6 checks
-    [disk]                 12 checks   [certificates]         40 checks
-    [fat]                  32 checks   [randomness]            5 checks
-    [network]               9 checks   [tls 1.3]              34 checks
+    [disk]                 12 checks   [certificates]         42 checks
+    [fat]                  41 checks   [randomness]            5 checks
+    [network]               9 checks   [tls 1.3]              38 checks
     [elf]                   7 checks   [wpa]                  19 checks
     [userspace]             4 checks   [wait timeouts]         3 checks
-    [video]                 7 checks   [processors]            4 checks
+    [video]                 9 checks   [processors]            4 checks
     [mouse]                 4 checks   [black box]            21 checks
     [graphics]             13 checks   [acpi and pcie]         4 checks
     [windows]               7 checks   [interrupt routing]     9 checks
@@ -1394,12 +1397,12 @@ so the host gets a real exit status.
     [theme]                19 checks   [sound]                  skipped
     [taskbar]              18 checks   [kernel stack]          2 checks
 
-    609 passed, 0 failed
+    626 passed, 0 failed
     SELFTEST_PASS
 
 The sound section is skipped because `run.sh` attaches no sound card, and the
 identity map is checked in four more places when there is more memory to map:
-given 256 MiB, as the gate gives it, the same run is 613.
+given 256 MiB, as the gate gives it, the same run is 630.
 
 Two of the sections are about what happens when something goes wrong half
 way, which a machine that keeps its power cannot show. `[fat]` makes the
@@ -1408,7 +1411,10 @@ leaves a leak rather than an entry pointing at free space, and hides a
 directory from the reclaim to check it then frees nothing. `[tls 1.3]`
 holds the order of the server's handshake to account: a finished message
 with no signature before it, which is a server that has not shown it holds
-the certificate's key, is refused by name. `[window server]` closes a window
+the certificate's key, is refused by name, and the alert that tells the
+server so is checked byte for byte, as is the answer to a key update.
+`[fat]` also mounts a 16 GiB volume that exists only as answers to reads, to
+count free space past 4 GiB without a 16 GiB image. `[window server]` closes a window
 in the middle of a resize, lets go of the right button, forks a process with
 a window and tears down one whose window is still mapped, and maximises a
 program's window on a screen switched to 1920 wide.
@@ -1427,10 +1433,10 @@ on a machine with several, where it hands work to each of them and requires
 the count they share to come back exact, and then starts more programs than
 there are processors to check that handed work is neither given to a busy
 one nor abandoned halfway for a program. `qemu-system-x86_64 -smp 4` with
-256 MiB reaches 634, and the gate runs it.
+256 MiB reaches 651, and the gate runs it.
 
 The same checks run again on `-machine q35`, which has PCIe and an AHCI
-controller rather than a 1996 chipset and a PIO disk, and reach 621 there.
+controller rather than a 1996 chipset and a PIO disk, and reach 638 there.
 Two bugs found the day that was added were invisible on the older machine:
 the block layer would not split a request past the eight sectors AHCI
 accepts, and the ACPI tables were never read on a UEFI machine at all.
@@ -1683,7 +1689,11 @@ large range:
   with ECDSA on P-256 and P-384.** Not SHA-1, which is broken for signatures
   and is not worth accepting to read a page. A root that signs itself with
   it is not a problem: a self-signature proves nothing, and the copy in the
-  store is the one believed.
+  store is the one believed. The same goes for a served copy of a root the
+  store holds, which is set aside unread, so a server still sending one that
+  expired does not fail a chain the store's own copy completes. A failure is
+  told to the server as an alert saying why, and a server that rotates its
+  keys partway through a long download is followed rather than lost.
 - **Ping only reaches the local network.** ICMP is implemented in both
   directions and pinging the gateway works. QEMU's user mode networking does
   not forward ICMP to the wider internet without elevated privileges, so
@@ -1696,9 +1706,12 @@ large range:
   interrupt, which costs up to ten milliseconds of latency on a key press.
 - **Two volumes at a time.** The disk the machine booted from, and one
   removable. A second stick is a disk with a number and no way to mount it.
-- **Names are ASCII.** The entries that carry a long name hold sixteen bit
-  characters, and anything above 127 comes back as a question mark rather
-  than as half of something nobody can type.
+- **Names are UTF-8, but the screen is ASCII.** A long name is written as the
+  UTF-16 the format wants and read back as the UTF-8 it was given, so
+  "café" is café on another system too, and a name that is not valid UTF-8
+  is refused. The kernel's faces draw only ASCII, so such a name is stored
+  and opened correctly but drawn with boxes. A rename still only renames to
+  a name that fits eight and three.
 - **Memory is capped at 64 GiB.** What the machine actually has is what gets
   mapped: the bottom 64 MiB a page at a time, and everything the firmware
   called usable above that in 2 MiB pages. The gaps between are left alone,

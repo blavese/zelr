@@ -123,6 +123,33 @@ boot
 check_not "new disk prepared"   "a disk with something written on it is not formatted"
 unchanged                       "and is left exactly as it was"
 
+# --- a volume another system made -----------------------------------------
+#
+# A Windows-formatted partition, with a chain of clusters no directory
+# reaches -- what a stick pulled out mid-write leaves, and what chkdsk would
+# save -- and a folder called TMP with a file in it. The kernel used to sweep
+# the chain away, write the first FAT over the second, create its own four
+# folders and empty TMP, because names compare without case. It may read
+# from such a volume and nothing more at boot.
+echo "--- a gpt partition another system made ---"
+python tools/mkgpt.py "$IMG" 65536 --foreign > /dev/null
+remember
+boot
+check     "made by another system"    "it is seen to be another system's"
+check     "read from a gpt partition" "and a file on it can still be read"
+check_not "reclaimed"                 "nothing on it is swept up"
+unchanged                             "and not one byte of it was written"
+
+echo "--- an unpartitioned disk another system made ---"
+printf 'read from a disk made elsewhere\n' > "$IMG.hello"
+printf 'kept\n' > "$IMG.keep"
+python tools/mkfat.py --foreign "$IMG" 32768 "$IMG.hello:HELLO.TXT" "$IMG.keep:TMP/KEEP.TXT" > /dev/null
+rm -f "$IMG.hello" "$IMG.keep"
+remember
+boot
+check     "read from a disk made elsewhere" "a file on the whole-disk volume can be read"
+unchanged                                   "and not one byte of it was written either"
+
 # --- no table at all, which is every other test in this project -----------
 echo "--- an unpartitioned image ---"
 rm -f "$IMG"

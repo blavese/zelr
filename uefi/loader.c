@@ -134,6 +134,19 @@ static void setup_graphics(handoff_t *h) {
     h->fb_pitch  = gop->mode->info->pixels_per_scan_line;
     h->fb_bpp    = 32;
 
+    /* Which way round the colours are, which the firmware chooses. Red first
+       used to be drawn as though it were blue first, so everything came out
+       with red and blue swapped. A mode described by masks is told apart by
+       where red is; one with no framebuffer at all is no screen. */
+    EFI_GRAPHICS_OUTPUT_MODE_INFORMATION *now = gop->mode->info;
+    if (now->pixel_format == PixelRedGreenBlueReserved8BitPerColor ||
+        (now->pixel_format == PixelBitMask && now->red_mask == 0x000000FFu))
+        h->fb_format = HANDOFF_FB_RGBX;
+    else if (now->pixel_format == PixelBltOnly)
+        h->fb_base = 0;
+    else
+        h->fb_format = HANDOFF_FB_BGRX;
+
     print(u"  screen  ");
     print_dec(h->fb_width);
     print(u"x");

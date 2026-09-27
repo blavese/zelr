@@ -199,6 +199,104 @@ int main(void) {
         }
     }
 
+    /* --- paint said once, for everything in a group -------------------------
+     *
+     * Fill and stroke are inherited: said on a <g>, or on the <svg> itself,
+     * they apply to every shape inside that says nothing of its own. They
+     * were read off each shape alone, so a logo drawn as one filled group
+     * came out as a black silhouette. */
+    {
+        int rc = draw("<svg width='40' height='40'><g fill='red'>"
+                      "<rect x='10' y='10' width='20' height='20'/>"
+                      "</g></svg>", 40, 40);
+        okn("a group's fill renders", rc == SVG_OK, rc);
+        if (rc == SVG_OK) {
+            ok("and colours the shape inside it", isred(at(20, 20)));
+            picture_free(&p);
+        }
+
+        rc = draw("<svg width='40' height='40' fill='none' stroke='red' stroke-width='4'>"
+                  "<rect x='10' y='10' width='20' height='20'/></svg>", 40, 40);
+        if (rc == SVG_OK) {
+            ok("a stroke said on the drawing itself outlines the shapes in it",
+               isred(at(10, 20)));
+            ok("and its fill of none leaves them hollow", iswhite(at(20, 20)));
+            picture_free(&p);
+        } else {
+            okn("a drawing with its paint on the root renders", 0, rc);
+        }
+
+        rc = draw("<svg width='40' height='40'><g style='fill:red'>"
+                  "<g><circle cx='20' cy='20' r='10'/></g></g></svg>", 40, 40);
+        if (rc == SVG_OK) {
+            ok("a fill in a group's style reaches a shape two groups down",
+               isred(at(20, 20)));
+            picture_free(&p);
+        } else {
+            okn("a drawing with nested groups renders", 0, rc);
+        }
+
+        rc = draw("<svg width='40' height='40'><g fill='red'>"
+                  "<rect x='10' y='10' width='20' height='20' fill='none' stroke='red'/>"
+                  "</g></svg>", 40, 40);
+        if (rc == SVG_OK) {
+            ok("and a shape's own paint still wins over its group's",
+               iswhite(at(20, 20)));
+            picture_free(&p);
+        } else {
+            okn("a shape overriding its group renders", 0, rc);
+        }
+    }
+
+    /* --- what is there to be referred to, and paint that is not there -------- */
+    {
+        int rc = draw("<svg width='40' height='40'><defs>"
+                      "<rect x='0' y='0' width='40' height='40' fill='red'/></defs>"
+                      "<clipPath id='c'><rect x='0' y='0' width='40' height='40'/></clipPath>"
+                      "<circle cx='20' cy='20' r='6' fill='red'/></svg>", 40, 40);
+        if (rc == SVG_OK) {
+            ok("a shape inside <defs> or a clip path is not drawn where it stands",
+               iswhite(at(3, 3)) && isred(at(20, 20)));
+            picture_free(&p);
+        } else {
+            okn("a drawing with <defs> in it renders", 0, rc);
+        }
+
+        /* Two groups side by side: the second is not inside the first, so
+           it takes neither its paint nor its move. The parser used to let
+           an end tag it had no name for close nothing. */
+        rc = draw("<svg width='40' height='40'>"
+                  "<g fill='red' transform='translate(0 0)'><rect x='0' y='0' width='20' height='40'/></g>"
+                  "<g transform='translate(20 0)'><rect x='0' y='0' width='20' height='40'/></g>"
+                  "</svg>", 40, 40);
+        if (rc == SVG_OK) {
+            ok("a group's paint stops at its end tag", isred(at(10, 20)) && at(30, 20) == 0);
+            picture_free(&p);
+        } else {
+            okn("two groups side by side render", 0, rc);
+        }
+
+        rc = draw("<svg width='40' height='40'>"
+                  "<rect x='0' y='0' width='40' height='40' fill='red'/>"
+                  "<rect x='10' y='10' width='20' height='20' fill='transparent'/></svg>", 40, 40);
+        if (rc == SVG_OK) {
+            ok("a transparent fill leaves what is under it showing", isred(at(20, 20)));
+            picture_free(&p);
+        } else {
+            okn("a drawing with a transparent fill renders", 0, rc);
+        }
+
+        rc = draw("<svg width='40' height='40'><polygon points='10,10 30,10 30,30 10,30' "
+                  "fill='none' stroke='red' stroke-width='4'/></svg>", 40, 40);
+        if (rc == SVG_OK) {
+            ok("a stroked polygon is closed, its last corner joined to its first",
+               isred(at(10, 20)));
+            picture_free(&p);
+        } else {
+            okn("a stroked polygon renders", 0, rc);
+        }
+    }
+
     /* --- and what it refuses ---------------------------------------------------- */
     {
         okn("something that is not a drawing says so",

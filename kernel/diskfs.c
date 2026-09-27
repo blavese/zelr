@@ -170,6 +170,16 @@ static int finish_mount(void) {
         bb_log("fs boot sector repaired: the mark was there and no program behind it");
     }
 
+    /* Only on a volume this system made. The sweep frees every cluster no
+       directory reaches, which on another system's volume is exactly what
+       its own repair tool would have saved -- the chains left behind when a
+       stick was pulled out, which chkdsk turns into FOUND.000 -- and it
+       writes the first FAT over the second while it is at it. */
+    if (!fat_made_here()) {
+        kprintf("  fs      made by another system: mounted as it is, nothing swept\n");
+        bb_log("fs volume not made here: no reclaim, no seeding");
+        return (int)fat_count("/");
+    }
     u32 stranded = fat_reclaim();
     if (stranded)
         kprintf("  fs      reclaimed %d cluster(s) from an unclean shutdown\n", stranded);

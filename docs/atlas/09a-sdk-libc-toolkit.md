@@ -344,8 +344,9 @@ prints `file:line: assertion failed: expr` to stderr and `abort()`s (status 134,
 * Writing: `fputc` (`:248-260`; line-flush on console `\n`, flush at `len >= FBUF` *after* storing), `putc`, `putchar`,
   `fwrite` (`:265-289`; fills buffer in chunks, flushes when full *before* filling; console flushes if the chunk has a
   `\n`), `fputs` (via fwrite), `puts` (adds `\n`).
-* Position: `fseek` (`:306-320`; flush, drop buffer and unget, `seek(fd,(int)off,whence)`), `ftell` (`:322-326`;
-  returns `pos`), `rewind`, `feof`, `ferror`, `clearerr`.
+* Position: `fseek` (`:306-320`; flush, then (0.42.0) `SEEK_CUR` becomes `SEEK_SET` from the logical `pos`, then
+  drop buffer and unget, `seek(fd,(int)off,whence)`), `ftell` (`:322-326`; returns `pos`, plus (0.42.0) the
+  buffered bytes when writing), `rewind`, `feof`, `ferror`, `clearerr`.
 * `remove` = `unlink` (no directories), `rename` = `zelr_rename` (kernel limits apply), `perror` (`what: strerror\n`
   to stderr).
 * Formatter (`:346-579`): `sink {FILE *f; char *mem; size_t cap; size_t count;}`; `emit` → `fputc` for a FILE or
@@ -704,7 +705,8 @@ until the first handler returns. fork inherits handlers; exec forgets them.
 | Screenshot harnesses (`tools/shotcheck.py`, `setcheck.py`, `browsercheck.py`, …) | ui.h colours in practice | accent colours such as TEAL/INDIGO appear |
 | Kernel selftest | -- | none of this area (ring 3 only) |
 
-Untested here: stdin/stderr behaviour, `atan/atan2`, `strtod`, `fseek(SEEK_CUR)`/`ftell` while buffered, `clock()`,
+Untested here: stdin/stderr behaviour, `atan/atan2`, `strtod`, `clock()` (`fseek(SEEK_CUR)`/`ftell` while buffered
+are covered by libccheck since 0.42.0),
 libc malloc alignment and `realloc`, `strtok`, printf edge cases (`%hd`, `%#x` with padding, zero-padded negative
 `%f`), ui.h keyboard handling with ctrl.
 
@@ -724,8 +726,8 @@ libc malloc alignment and `realloc`, `strtok`, printf edge cases (`%hd`, `%#x` w
 * **Cheap, high-value libc fixes** (see §10 for evidence): give `stdin/stdout/stderr` real fds 0/1/2
   (`raw_read` → `zelr_fread(0,…)`, stdout → `zelr_fwrite(1,…)`, stderr → `zelr_fwrite(2,…)`); `clock()` →
   `ticks()*10` (or read the rate from `/sys/uptime` "at N Hz"); `atan` → `z2 = x*z` (i.e. `x²/(1+x²)`); flush in
-  `fputc` *before* storing when `len == FBUF`; call `leave_read` (and account for `unget`) in `fseek` before
-  `SEEK_CUR`; `ftell` = `pos + (writing ? len : 0)`; pad the libc block header to 32 bytes for 16-byte payloads; check
+  `fputc` *before* storing when `len == FBUF`; ~~call `leave_read` (and account for `unget`) in `fseek` before
+  `SEEK_CUR`; `ftell` = `pos + (writing ? len : 0)`~~ (done in 0.42.0); pad the libc block header to 32 bytes for 16-byte payloads; check
   `close()` in `fclose`; `time()` could parse `/sys/time` (`now YYYY-MM-DD HH:MM:SS`, local CMOS time, no timezone).
 * **A new widget.** Follow the immediate-mode pattern in ui.h: take `(surface*, ui_input*, const ui_theme*, geometry,
   caller-owned state)`, draw both a `t->modern` branch (rounded, `stroke`/`raised`) and a bevel branch
@@ -817,10 +819,12 @@ libc malloc alignment and `realloc`, `strtok`, printf edge cases (`%hd`, `%#x` w
    `buf` ends the struct (sizeof 4144), so the byte lands on the next FILE's `fd` low byte (e.g. stdout overflow turns
    stderr's fd from -1 into 0xFFFFFF78 → all stderr output then fails). Trigger: exactly 4096 buffered bytes via
    `fwrite`/`fputs` (no `\n` on the console), then `fputc`/`putchar`/`printf`.
-3. **`fseek(f, off, SEEK_CUR)` while reading** -- `stdio.c:306-320` discards the buffer without seeking back, so the
+3. **FIXED in 0.42.0 (`SEEK_CUR` from the logical position; libccheck "a seek from here goes from where the program
+   is"). `fseek(f, off, SEEK_CUR)` while reading** -- `stdio.c:306-320` discards the buffer without seeking back, so the
    offset is applied to the kernel position, which is ahead by the read-ahead (`len-at`) and by a pending `ungetc`.
    `fseek(f, 0, SEEK_CUR)` after reading 10 bytes of a 100-byte file lands at 100.
-4. **`ftell` ignores pending writes** -- `stdio.c:322-326` returns `pos`, which only advances in `fflush` (`:94`);
+4. **FIXED in 0.42.0 (libccheck "and where it is counts what is waiting to be written"). `ftell` ignores pending
+   writes** -- `stdio.c:322-326` returns `pos`, which only advances in `fflush` (`:94`);
    `fopen("w"); fputs("hello"); ftell()` → 0.
 5. **`freopen` cannot redirect a standard stream** -- `stdio.c:150-153` returns a new slot; `stdout` stays the console.
 6. **`fclose` hides write failures** -- `stdio.c:158` ignores `close()`, but the kernel writes a file to disk only at

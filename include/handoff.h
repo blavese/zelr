@@ -56,4 +56,20 @@ typedef struct {
 
     char loader[32];                /* which one, for the boot banner */
     char cmdline[128];
+
+    /* The order of the colours in a pixel of the framebuffer above. UEFI
+       lets the firmware choose red first or blue first, and a GOP that chose
+       red first had every picture on this machine drawn with red and blue
+       swapped. Nought is blue first, which is what the BIOS path and VBE
+       give and what every loader that predates this field left here by
+       zeroing the structure. Last, so no offset above it moved. */
+    unsigned int fb_format;
 } handoff_t;
+
+#define HANDOFF_FB_BGRX 0
+#define HANDOFF_FB_RGBX 1
+
+/* Where cdboot.S writes it, as a number that file repeats; this keeps the two
+   in step. */
+_Static_assert(__builtin_offsetof(handoff_t, fb_format) == 3296,
+               "handoff_t.fb_format has moved; bootloader/cdboot.S H_FB_FORMAT must follow");

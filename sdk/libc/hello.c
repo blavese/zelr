@@ -87,6 +87,26 @@ int main(int argc, char **argv) {
     remove("fill.txt");
     remove("next.txt");
 
+    /* A seek from where the program is, after one byte of a file has been
+       read and the buffer has read the rest; and where it is while writing,
+       before anything has been flushed. */
+    f = fopen("seek.txt", "w");
+    if (f) {
+        fputs("abc", f);
+        printf("tell while writing: %ld\n", ftell(f));
+        fputs("defghij", f);
+        fclose(f);
+    }
+    f = fopen("seek.txt", "r");
+    if (f) {
+        fgetc(f);
+        fseek(f, 2, SEEK_CUR);
+        int c = fgetc(f);
+        printf("seek from here: %c at %ld\n", c, ftell(f));
+        fclose(f);
+    }
+    remove("seek.txt");
+
     /* A line typed at the program. */
     printf("type a line:\n");
     if (fgets(line, sizeof(line), stdin)) printf("stdin said: %s", line);

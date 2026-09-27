@@ -156,6 +156,14 @@ def main():
               "next: the next file is intact" in out)
         c.add("and arrives in its own", "fill: 4097 bytes" in out)
 
+        # fseek(SEEK_CUR) went from the descriptor, which the read-ahead had
+        # carried to the end of the file, so this read past the end.
+        c.add("a seek from here goes from where the program is",
+              "seek from here: d at 4" in out)
+        # ftell ignored what was buffered and not yet flushed.
+        c.add("and where it is counts what is waiting to be written",
+              "tell while writing: 3" in out)
+
         # stdin was a console that read nothing, so this got end of file.
         c.add("stdin reads what was typed", asked and "stdin said: a line for stdin" in out)
 

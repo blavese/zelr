@@ -183,7 +183,7 @@ static void cmd_mem(void) {
     kprintf("physical: %d KiB total, %d KiB used, %d KiB free\n",
             pmm_total_frames() * 4, pmm_used_frames() * 4, pmm_free_frames() * 4);
     kprintf("heap:     %d KiB total, %d bytes used\n", heap_total() / 1024, heap_used());
-    if (vfs_disk_backed()) kprintf("files:    on disk, %d KiB free\n", fat_free_bytes() / 1024);
+    if (vfs_disk_backed()) kprintf("files:    on disk, %u KiB free\n", (u32)(fat_free_bytes() / 1024));
     else                   kprintf("files:    %d in memory using %d bytes\n", fs_count(), fs_bytes_used());
     kprintf("serial:   irqs=%d got=%d read=%d dropped=%d\n",
             serial_isr_calls(), serial_isr_bytes(), serial_read_bytes(), serial_overruns());
@@ -360,7 +360,7 @@ static void execute(char *buf) {
         if (fat_mounted()) {
             kprintf("format   FAT16, %d clusters of %d bytes\n",
                     fat_total_clusters(), fat_cluster_bytes());
-            kprintf("free     %d KiB\n", fat_free_bytes() / 1024);
+            kprintf("free     %u KiB\n", (u32)(fat_free_bytes() / 1024));
         }
     }    else if (!strcmp(c, "net")) {
         if (!net_up()) {
