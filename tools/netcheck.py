@@ -39,6 +39,13 @@ DOCK_RIGHT = DOCK_SIDE + (SCREEN_W - DOCK_SIDE * 2)
 # set in the head face and everything derived from this moved thirteen
 # pixels while the number went on saying thirty six.
 CLOCK_W = face_width("12:54", FACE_HEAD)
+
+# And the machine is told it is that time, so the width measured is the width
+# drawn. Its digits are not all one width, so with the real time on the dock
+# the icons sat a few pixels from where this worked them out at some hours
+# and not others, and a minute turning over between two pictures of the icon
+# moved it between them. See volcheck.py, where it failed every run at 07:00.
+RTC = ["-rtc", "base=2026-01-01T12:54:05"]
 VOL_W, NET_W = 30, 26
 VOLUME_X = DOCK_RIGHT - 20 - CLOCK_W - 16 - VOL_W
 NET_X = VOLUME_X - NET_W - 6
@@ -183,7 +190,7 @@ def main():
     icons = {}
 
     # --- a machine with a card ---------------------------------------------
-    vm = Guest(DISK, memory=128)
+    vm = Guest(DISK, memory=128, extra=RTC)
     try:
         mon, icons["wired"], _, shot = use_desktop(vm, c, True)
         leave_desktop(vm, mon)
@@ -205,7 +212,7 @@ def main():
         vm.stop()
 
     # --- and one with none --------------------------------------------------
-    vm2 = Guest(DISK, memory=128, extra=["-nic", "none"])
+    vm2 = Guest(DISK, memory=128, extra=RTC + ["-nic", "none"])
     try:
         mon, icons["bare"], bare_after, _ = use_desktop(vm2, c, False)
         leave_desktop(vm2, mon)
@@ -226,7 +233,7 @@ def main():
     # the pci bus at all here, so an address arriving proves the frames went
     # through the usb stack and nothing else.
     vm3 = Guest(DISK, memory=192, machine="q35",
-                extra=["-nic", "none",
+                extra=RTC + ["-nic", "none",
                        "-device", "qemu-xhci",
                        "-device", "usb-net,netdev=u1",
                        "-netdev", "user,id=u1"])

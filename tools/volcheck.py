@@ -26,6 +26,16 @@ WAV = os.path.join(ROOT, "volcheck.%d.wav" % os.getpid())
 AUDIO = ["-audiodev", "wav,id=a0,path=" + WAV.replace("\\", "/"),
          "-device", "intel-hda", "-device", "hda-output,audiodev=a0"]
 
+# The machine's clock, set to the time the arithmetic below measures. The
+# clock on the dock is drawn in a face whose digits are not all one width,
+# and everything to the left of it -- the speaker, the panel, the track --
+# moves with it. Measuring "12:54" while the machine showed the real time
+# put every click a few pixels from where it was aimed at some hours of the
+# day and not others: the press meant for the middle of the track landed
+# off the current level, played a note there, and that note was taken for
+# the quiet end. A check that passed at noon and failed at seven.
+RTC = ["-rtc", "base=2026-01-01T12:54:05"]
+
 # The dock, worked out the way wm.c works it out. The same arithmetic as
 # tools/netcheck.py, and for the same reason: the clock is measured rather
 # than assumed, because everything to the left of it moves when the face
@@ -71,7 +81,7 @@ def main():
         if os.path.exists(stale):
             os.remove(stale)
 
-    vm = Guest(DISK, memory=256, extra=AUDIO)
+    vm = Guest(DISK, memory=256, extra=AUDIO + RTC)
     try:
         vm.wait_boot()
         c.add("the machine has a sound controller", "sound   " in vm.serial())
