@@ -1315,6 +1315,7 @@ int main(int argc, char **argv) {
     if (win < 0) exit(1);
     browser_win = win;
     win_allow_resize(win);
+    win_want_escape(win);                   /* it has a use for Escape */
 
     ui_input in;
     memset(&in, 0, sizeof(in));

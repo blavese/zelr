@@ -441,6 +441,11 @@ static i64 sys_win_resizable(registers_t *r) {
     return winsrv_allow_resize(t ? t->pid : 0, (int)r->rbx) ? 0 : -1;
 }
 
+static i64 sys_win_escape(registers_t *r) {
+    task_t *t = task_current();
+    return winsrv_want_escape(t ? t->pid : 0, (int)r->rbx) ? 0 : -1;
+}
+
 static i64 sys_win_resize(registers_t *r) {
     task_t *t = task_current();
     return winsrv_resize(t ? t->pid : 0, (int)r->rbx,
@@ -1124,6 +1129,7 @@ static const syscall_fn TABLE[] = {
     [SYS_KILL]        = sys_kill,
     [SYS_TASKS]       = sys_tasks,
     [SYS_WIN_RESIZABLE] = sys_win_resizable,
+    [SYS_WIN_ESCAPE]    = sys_win_escape,
     [SYS_WIN_RESIZE]    = sys_win_resize,
     [SYS_CLIP_SET]  = sys_clip_set,
     [SYS_CLIP_GET]  = sys_clip_get,

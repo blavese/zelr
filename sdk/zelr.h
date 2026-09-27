@@ -8,7 +8,7 @@
  * reason. See NOTICE in the repository this came from.
  */
 
-/* The entire user-facing interface: sixty-three system calls and a little
+/* The entire user-facing interface: sixty-four system calls and a little
    sugar. Nothing is linked in from the kernel; every call below crosses the
    ring boundary through int 0x80.
  *
@@ -180,6 +180,10 @@ typedef long long          zelr_word;
 /* What a window is showing, in words, and what is being looked for. */
 #define SYS_WIN_TEXT      56
 #define SYS_WIN_FIND      57
+
+/* This window has a use for Escape: a plain Escape comes to it as a key,
+   rather than taking the desktop away. */
+#define SYS_WIN_ESCAPE    64
 #define TLS_WHY   0
 #define TLS_WHAT  1
 
@@ -919,6 +923,15 @@ static inline int win_set_text(int handle, const char *s, int len) {
 /* And what is being looked for, once WIN_EV_FIND says somebody is. */
 static inline int win_find_query(char *out, int cap) {
     return syscall(SYS_WIN_FIND, (zelr_word)out, cap, 0);
+}
+
+/* Says this program has a use for Escape -- cancelling an edit, clearing a
+   field -- so a plain Escape arrives as a WIN_EV_KEY of 27 while this window
+   is the one being used. Without it Escape leaves the desktop, which is what
+   it does for a program that has never heard of it. alt+Escape leaves
+   either way, so no program can keep anybody in. */
+static inline int win_want_escape(int handle) {
+    return syscall(SYS_WIN_ESCAPE, handle, 0, 0);
 }
 
 static inline int win_poll(int handle, win_event *ev) {

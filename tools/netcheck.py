@@ -106,8 +106,10 @@ def address_of(vm):
 
 
 def leave_desktop(vm, mon):
-    """Back to the console, so the serial line reaches the shell again."""
-    mon.send("sendkey esc", settle=1.5)
+    """Back to the console, so the serial line reaches the shell again.
+    alt+escape, which leaves whatever is open: a plain escape puts the
+    network panel away first, if it is up, and stays."""
+    mon.send("sendkey alt-esc", settle=1.5)
     vm.wait_prompt()
 
 

@@ -63,7 +63,7 @@ skimmed) and checking the results against a real build and test run.
   +-- crypto & tls ........ sha* gcm crypto x25519 rsa ec x509 roots tls wpa rng              (06b)
   +-- desktop ............. wm (runs inside the shell task) winsrv gfx theme                  (07)
   +-- console ............. shell welcome selftest blackbox                                  (08, 04)
-  ========================= int 0x80, 63 system calls (include/syscall.h = sdk/zelr.h) =========
+  ========================= int 0x80, 64 system calls (include/syscall.h = sdk/zelr.h) =========
   ring 3 (userland/, built only with sdk/)
     term sh coreutils | files notes paint settings monitor music calc | blackjack poker |       (09b, 10)
     browser = web fetch html dom css layout + js jsparse jsrun jsdom jsregex +                (11, 12)
@@ -94,6 +94,29 @@ skimmed) and checking the results against a real build and test run.
 
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
+
+### 0.44.0: the window being used, alt+tab, and Escape
+
+Each change has a check that was run against a build broken for it alone and seen to fail there.
+
+- **The window being used (07 §10 6).** `focus_index()`/`focused_window()`, the frontmost non-minimised
+  window, is what is drawn focused, highlighted on the dock, typed into and acted on by alt+m/f/q/arrows
+  and by a click on its own chip. alt+m on a minimised top window used to minimise it again.
+- **alt+tab (7).** A walk over a snapshot of the stack while alt is held, ended by letting go
+  (`kbd_alt()` every loop pass), a button, another key, or the window closing; the one reached ends in
+  front with the previous front behind it. It raised the window behind the front one, so three windows
+  could never all be reached.
+- **Escape (14).** `wm_key`: Escape closes find, the launcher, the context menu, the volume or network
+  panel; then goes to the focused window if it asked (`SYS_WIN_ESCAPE` 64, `win_want_escape`: the
+  browser, Files, the calculator, blackjack); else leaves. alt+Escape always leaves. gamecheck and
+  netcheck leave with alt+Escape.
+- **The dock (5).** Drawing and hit test share `chip_width`. The disagreement was latent: the regular and
+  bold 15 px faces have identical advances.
+- **Leaving (13, partly).** The find bar and network panel are closed on the way out.
+
+Counts after 0.44.0:
+- selftest 640 (pc, 64 MiB), 644 (256 MiB), 652 (q35), 665 (`-smp 4`); 64 live system calls;
+- gate full 52 steps.
 
 ### 0.43.0: the JavaScript engine's numbers, `new`, key order, errors and memory
 

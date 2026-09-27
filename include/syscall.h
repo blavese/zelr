@@ -181,6 +181,10 @@
    told somebody is looking. */
 #define SYS_WIN_TEXT      56
 #define SYS_WIN_FIND      57
+
+/* This window's program has a use for Escape, so a plain Escape goes to it
+   rather than out of the desktop. */
+#define SYS_WIN_ESCAPE    64
 #define TLS_WHY   0
 #define TLS_WHAT  1
 

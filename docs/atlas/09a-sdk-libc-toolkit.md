@@ -123,7 +123,7 @@ carries the 512-byte FXSAVE image and exec resets the state (§10, 18 and 21).
 * The syscall gate is an interrupt gate: interrupts are off during a call except where the kernel explicitly waits
   (`kernel/fd.c:192-212`).
 
-**Syscall number table** (all verified equal to `include/syscall.h:4-181`; 64 slots, 63 live):
+**Syscall number table** (all verified equal to `include/syscall.h:4-181`; 64 slots, 63 live at the atlas's writing; since 0.44.0 65 slots, 64 live, SYS_WIN_ESCAPE 64 = win_want_escape(h)):
 
 | # | Name | # | Name | # | Name | # | Name |
 |---|---|---|---|---|---|---|---|
@@ -143,6 +143,7 @@ carries the 512-byte FXSAVE image and exec resets the state (§10, 18 and 21).
 | 13 | OPEN | 29 | RESOLVE | 45 | TLS_CONNECT | 61 | FSYNC |
 | 14 | CLOSE | 30 | NETINFO | 46 | TLS_STATUS | 62 | RENAME |
 | 15 | FREAD | 31 | SYSINFO | 47 | SBRK | 63 | POLL |
+|  |  |  |  |  |  | 64 | WIN_ESCAPE (0.44.0) |
 
 Note the defines are not in numeric order in the header (45/46 at `:131-132`, 47 at `:141`, 56/57 at `:180-181`,
 58-63 at `:114-128`).

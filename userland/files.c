@@ -375,6 +375,7 @@ int main(int argc, char **argv) {
     int win = win_create("Files", 780, 520);
     if (win < 0) exit(1);
     win_allow_resize(win);
+    win_want_escape(win);                   /* it has a use for Escape */
 
     ui_input in;
     memset(&in, 0, sizeof(in));

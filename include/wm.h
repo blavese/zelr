@@ -107,6 +107,11 @@ struct window {
        alone by the edges, the corner grip and the maximise button. */
     bool resizable;
 
+    /* Set by the owner too: this program has a use for Escape (cancelling
+       an edit, clearing a field), so a plain Escape goes to it rather than
+       out of the desktop. alt+Escape leaves either way. */
+    bool wants_escape;
+
     /* A size the desktop has asked for but the program has not taken up.
        The swap cannot happen when the desktop decides it, because the
        program may be part way through drawing into the surface at that
@@ -150,6 +155,19 @@ bool wm_test_holds(const window_t *w);
 void wm_test_pointer(int mx, int my, u8 buttons);
 void wm_test_begin_resize(window_t *w);
 bool wm_test_maximize(window_t *w);
+
+/* wm_test_key: one key as the desktop takes it, answering false when the
+   key says to leave the desktop. wm_test_poll: what the desktop does on
+   every pass whatever the input (an alt+tab walk ends when alt is let go).
+   wm_test_nth: the window n from the front of the stack. wm_test_chip_at:
+   which dock button is at x, or -1; wm_test_chips_x: where the first one
+   starts. wm_test_find_open: whether the find bar is up. */
+bool wm_test_key(int key);
+void wm_test_poll(void);
+window_t *wm_test_nth(int n);
+int  wm_test_chip_at(int x);
+int  wm_test_chips_x(void);
+bool wm_test_find_open(void);
 
 /* Runs the desktop until the user leaves it. */
 void wm_run(void);

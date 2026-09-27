@@ -116,9 +116,13 @@ screen rather than for a program to start. Drag a title bar to move a
 window; the three buttons at its right put it away, fill the screen, or
 close it.
 Drag the bottom right corner to resize, or drag a title bar to an edge to
-snap. Alt and tab changes window, alt and an arrow snaps, alt and d clears
-the desktop, and shaking a window sends the others away. Escape returns to
-the shell.
+snap. Alt and tab walks the windows while alt is held and leaves you on the
+one you let go at, alt and an arrow snaps, alt and m puts the window away,
+alt and f fills the screen with it, alt and q closes it, alt and d clears
+the desktop, and shaking a window sends the others away. Escape puts away
+whatever the desktop has open, then goes to a program that has a use for it
+-- the browser, the file manager, the calculator, blackjack -- and otherwise
+returns to the shell; alt and Escape returns to the shell from anywhere.
 
 The wheel scrolls whatever is under the pointer, the speaker by the clock
 sets the volume, and the launcher can switch the machine off. Drag on the
@@ -649,7 +653,7 @@ whichever processor is free, and what it hands over is arithmetic over memory
 the caller owns rather than anything the kernel keeps. `cat /sys/cpu` says
 how many slices each processor has given to a program.
 
-**Programs.** Ring 3, its own address space per process, and sixty-three
+**Programs.** Ring 3, its own address space per process, and sixty-four
 system calls through int 0x80. A program can start another program, block
 until it finishes and read what it returned from `main`, so the terminal
 starting `paint` is one ring 3 process starting another with the kernel only
@@ -1346,7 +1350,7 @@ is still the kernel's own, on the console; the one in a window is a program.
 ## writing a program for it
 
 Four files in `sdk/` are everything a program needs: `zelr.h`, which is the
-sixty-three system calls and a little sugar over them, `zelr.ld`, which says
+sixty-four system calls and a little sugar over them, `zelr.ld`, which says
 where a program is linked, a build line, and an example.
 
 ```bash
@@ -1380,7 +1384,7 @@ byte.
 ## testing
 
 The kernel tests itself. `./run.sh -T` boots with selftest on the command line,
-runs 626 checks across every subsystem, then writes to QEMU's debug-exit port
+runs 640 checks across every subsystem, then writes to QEMU's debug-exit port
 so the host gets a real exit status.
 
     [string]                8 checks   [live tree]            19 checks
@@ -1403,18 +1407,18 @@ so the host gets a real exit status.
     [video]                 9 checks   [processors]            4 checks
     [mouse]                 4 checks   [black box]            21 checks
     [graphics]             13 checks   [acpi and pcie]         4 checks
-    [windows]               7 checks   [interrupt routing]     9 checks
-    [window server]        31 checks   [clipboard]            14 checks
+    [windows]              19 checks   [interrupt routing]     9 checks
+    [window server]        33 checks   [clipboard]            14 checks
     [built-in programs]     8 checks   [clock]                18 checks
     [theme]                19 checks   [sound]                  skipped
     [taskbar]              18 checks   [kernel stack]          2 checks
 
-    626 passed, 0 failed
+    640 passed, 0 failed
     SELFTEST_PASS
 
 The sound section is skipped because `run.sh` attaches no sound card, and the
 identity map is checked in four more places when there is more memory to map:
-given 256 MiB, as the gate gives it, the same run is 630.
+given 256 MiB, as the gate gives it, the same run is 644.
 
 Two of the sections are about what happens when something goes wrong half
 way, which a machine that keeps its power cannot show. `[fat]` makes the
@@ -1445,10 +1449,10 @@ on a machine with several, where it hands work to each of them and requires
 the count they share to come back exact, and then starts more programs than
 there are processors to check that handed work is neither given to a busy
 one nor abandoned halfway for a program. `qemu-system-x86_64 -smp 4` with
-256 MiB reaches 651, and the gate runs it.
+256 MiB reaches 665, and the gate runs it.
 
 The same checks run again on `-machine q35`, which has PCIe and an AHCI
-controller rather than a 1996 chipset and a PIO disk, and reach 638 there.
+controller rather than a 1996 chipset and a PIO disk, and reach 652 there.
 Two bugs found the day that was added were invisible on the older machine:
 the block layer would not split a request past the eight sectors AHCI
 accepts, and the ACPI tables were never read on a UEFI machine at all.
@@ -1620,7 +1624,7 @@ large range:
   matters and a guess in the ones that do not.
 - **No job control.** `cmd &` starts something and stops waiting for it, and
   nothing keeps a list; `jobs` says so rather than printing an empty one.
-- **Sixty-three system calls.** Enough to print, walk directories, read and
+- **Sixty-four system calls.** Enough to print, walk directories, read and
   write files, rename one, say when it must be on the disk, open a TCP
   connection, sleep, exit, fork, exec, wait on a child, make a pipe, wait
   on several descriptors at once, map memory, catch a signal and own a

@@ -381,6 +381,13 @@ bool winsrv_allow_resize(u32 pid, int handle) {
     return true;
 }
 
+bool winsrv_want_escape(u32 pid, int handle) {
+    slot_t *s = lookup(pid, handle);
+    if (!s || !s->win) return false;
+    s->win->wants_escape = true;
+    return true;
+}
+
 /* What the window manager calls when it is the one doing the resizing.
    It only writes down the size and tells the program; the surface is left
    exactly as it is until the program next calls in. */

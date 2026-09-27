@@ -192,7 +192,7 @@ Handlers (each `static i64 sys_*(registers_t *r)`), arguments come in rbx/rcx/rd
 
 **Dispatch table** `TABLE[]` (syscall.c:1021-1085), designated-initializer array indexed by number. `N_SYSCALLS = sizeof(TABLE)/sizeof(TABLE[0])`. `syscall_handler(r)` (syscall.c:1089): `served++`; reads `n = r->rax`; if `n >= N_SYSCALLS || !TABLE[n]` → `r->rax = -1`; else `r->rax = TABLE[n](r)`. `syscall_init` registers it on vector 0x80. `served`/`syscall_count()`.
 
-`N_SYSCALLS` = size of the array = highest index + 1. Highest number in the table is 63 (SYS_POLL), so `N_SYSCALLS == 64`. Retired 44 and the never-populated slots 56/57 are NULL entries → return -1 (see §10 for the 56/57 subtlety -- they ARE populated).
+`N_SYSCALLS` = size of the array = highest index + 1. Highest number in the table is 63 (SYS_POLL), so `N_SYSCALLS == 64` (since 0.44.0 the highest is 64, SYS_WIN_ESCAPE, and `N_SYSCALLS == 65`). Retired 44 and the never-populated slots 56/57 are NULL entries → return -1 (see §10 for the 56/57 subtlety -- they ARE populated).
 
 ### kernel/user.c
 
@@ -400,6 +400,7 @@ Complete table (number, kernel handler, sdk wrapper, args → return):
 | 61 | sys_fsync | fsync | rbx=fd | 0/-1 |
 | 62 | sys_rename | zelr_rename/rename | rbx=from, rcx=to | 0/-1 |
 | 63 | sys_poll | poll | rbx=pollfd[], rcx=n, rdx=timeout_ms | ready count / 0 / -1 (n≤POLL_MAX 16) |
+| 64 | sys_win_escape (0.44.0) | win_want_escape | rbx=handle | 0 / -1 (not the caller's window); sets `window_t.wants_escape` through `winsrv_want_escape` |
 
 **Count reconciliation**: 63 distinct populated numbers (0–43, 45–63). 44 retired. `N_SYSCALLS = 64` (highest index 63 + 1). sdk/zelr.h line 11 says "forty-seven system calls" and line 31 of README says "sixty-three system calls" -- see §10. abicheck.py confirms both headers define the same SYS_* names and values (they do -- I verified all 63 match between include/syscall.h and sdk/zelr.h, including the out-of-order block 56/57 placed after 55 in both files, and 58/45/46 defined before the 48–57 block in both).
 

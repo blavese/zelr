@@ -38,6 +38,9 @@ int  winsrv_create(u32 pid, const char *title, int cw, int ch);
 bool winsrv_resize(u32 pid, int handle, int cw, int ch);
 bool winsrv_allow_resize(u32 pid, int handle);
 
+/* The window's program has a use for Escape (SYS_WIN_ESCAPE). */
+bool winsrv_want_escape(u32 pid, int handle);
+
 /* The window manager's way in, for a window it is resizing itself. This
    only records the size; see the note on want_cw in wm.h. */
 bool winsrv_resize_window(window_t *w, int cw, int ch);

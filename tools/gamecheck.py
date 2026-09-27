@@ -219,7 +219,9 @@ def main():
         # Started from the shell rather than the launcher, because the
         # launcher lives on the dock and a maximised blackjack window is in
         # front of it; the row above already proved the launcher offers it.
-        vm.type("\x1b")                    # escape leaves the desktop
+        # alt+escape leaves the desktop. A plain one goes to blackjack now,
+        # which has a use for it, and would clear the bet instead.
+        mon.send("sendkey alt-esc")
         time.sleep(2)
         vm.type("desktop\n")
         time.sleep(6)

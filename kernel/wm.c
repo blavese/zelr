@@ -188,6 +188,32 @@ static window_t *stack[WM_MAX_WINDOWS];   /* index 0 is the bottom */
 static int  nwin;
 static bool running;
 
+/* The window being used: the frontmost one on screen, or -1 when every one
+   is put away. Putting a window away leaves it where it was in the stack,
+   so the top of the stack is not always it -- and keys went to this one
+   while alt+q closed the one on top, which could not be seen. */
+static int focus_index(void) {
+    for (int i = nwin - 1; i >= 0; i--)
+        if (!stack[i]->minimized) return i;
+    return -1;
+}
+
+static window_t *focused_window(void) {
+    int i = focus_index();
+    return i >= 0 ? stack[i] : 0;
+}
+
+static void cycle_forget(window_t *w);
+
+/* How wide a window's button on the dock is. Asked by the drawing and by the
+   hit test both, which measured the front window's title in bold while it
+   was drawn in the regular weight, so the edge of that button, and of every
+   one after it, was somewhere other than where it could be seen. */
+static int chip_width(const window_t *w) {
+    int tw = face_width(w->title, FACE_BODY) + 22;
+    return tw > 160 ? 160 : tw;
+}
+
 static window_t *dragging;
 static int drag_off_x, drag_off_y;
 static window_t *mouse_capture;           /* gets moves until the button lifts */
@@ -593,6 +619,7 @@ void wm_close(window_t *w) {
     if (mouse_capture == w) mouse_capture = 0;
     if (resizing == w) resizing = 0;
     if (!dragging && !mouse_capture && !resizing && !volume_drag) held_button = 0;
+    cycle_forget(w);
     /* A surface the window server handed out is not ours to release: it was
        carved page aligned out of a larger allocation, so this pointer is not
        one kmalloc returned, and the server frees the real one when the owning
@@ -2740,12 +2767,12 @@ static void draw_taskbar(void) {
      * is the button that is down. */
     int x = taskbar_chips_x();
     int room_end = taskbar_chips_end();
+    int front = focus_index();
     for (int i = 0; i < nwin; i++) {
         window_t *w = stack[i];
-        bool focused = (i == nwin - 1) && !w->minimized;
+        bool focused = i == front;
 
-        int tw = face_width(w->title, FACE_BODY) + 22;
-        if (tw > 160) tw = 160;
+        int tw = chip_width(w);
         if (x + tw > room_end) break;
 
         bool over = last_mx >= x && last_mx < x + tw
@@ -2937,11 +2964,12 @@ static void composite(void) {
         draw_band();            /* and the band over the icons it catches */
     }
 
+    int front = focus_index();
     for (int i = cover > 0 ? cover : 0; i < nwin; i++) {
         window_t *w = stack[i];
         w->dirty = false;
         if (w->minimized) continue;         /* still a window, just not here */
-        draw_chrome(w, i == nwin - 1);
+        draw_chrome(w, i == front);
 
         /* The surface and its dimensions are taken together. A program
            swapping its own surface changes all three at once, and reading
@@ -3247,14 +3275,7 @@ static int taskbar_chip_at(int mx, int my) {
 
     int x = taskbar_chips_x();
     for (int i = 0; i < nwin; i++) {
-        /* Measured in the face it is drawn in. The window in front carries
-           a heavier title, so measuring every chip in the regular weight
-           puts the edge of the widest one in the wrong place and a click
-           near it lands on the neighbour. */
-        bool focused = (i == nwin - 1) && !stack[i]->minimized;
-        int face = focused ? FACE_BODY_BOLD : FACE_BODY;
-        int tw = face_width(stack[i]->title, face) + 22;
-        if (tw > 160) tw = 160;
+        int tw = chip_width(stack[i]);
         if (x + tw > taskbar_chips_end()) break;
         if (mx >= x && mx < x + tw) return i;
         x += tw + 6;
@@ -3736,7 +3757,7 @@ static void handle_mouse(int mx, int my, u8 buttons) {
             /* Clicking the window already in front puts it away; clicking
                anything else brings it back and raises it. */
             if (c->minimized)                 set_minimized(c, false);
-            else if (chip == nwin - 1)        set_minimized(c, true);
+            else if (chip == focus_index())   set_minimized(c, true);
             else                              wm_raise(c);
             return;
         }
@@ -3836,21 +3857,75 @@ static void handle_mouse(int mx, int my, u8 buttons) {
    keyboard buffer; the modifier is read directly at the moment the key
    comes out. Anything not claimed here goes on to the focused window. */
 
-/* Brings the window behind the front one forward, so pressing it
-   repeatedly walks the stack. */
-static void cycle_windows(void) {
-    if (nwin < 2) return;
+/* alt+tab, walked.
+ *
+ * Each tab while alt is held brings the next window forward, in the order
+ * the windows were in when the first tab was pressed; letting go of alt
+ * leaves the one reached in front, with the one that was in front before
+ * it straight behind. It used to raise the window behind the front one,
+ * so a second tab raised the first again and with three windows the third
+ * could never be reached.
+ *
+ * The order is taken once, because each step raises what it reaches and
+ * the stack itself changes under the walk. A window put away is brought
+ * back while it is being shown, and put away again if the walk goes on
+ * past it. */
+static window_t *cyc[WM_MAX_WINDOWS];
+static bool cyc_was_min[WM_MAX_WINDOWS];
+static int  ncyc, cyc_at = -1;
 
-    /* Skip past anything put away: cycling to a window that is not on
-       screen looks like nothing happened. */
-    for (int i = nwin - 2; i >= 0; i--) {
-        if (stack[i]->minimized) continue;
-        wm_raise(stack[i]);
-        need_frame();
-        return;
+static void cycle_show(int k, bool yes) {
+    window_t *w = cyc[k];
+    if (!w) return;
+    if (yes) {
+        if (w->minimized) set_minimized(w, false);
+        else wm_raise(w);
+    } else if (cyc_was_min[k]) {
+        set_minimized(w, true);
     }
-    /* Everything else is minimised, so bring the nearest one back. */
-    set_minimized(stack[nwin - 2], false);
+    need_frame();
+}
+
+static void cycle_windows(void) {
+    if (cyc_at < 0) {
+        ncyc = 0;
+        for (int i = nwin - 1; i >= 0; i--) {
+            cyc[ncyc] = stack[i];
+            cyc_was_min[ncyc] = stack[i]->minimized;
+            ncyc++;
+        }
+        if (ncyc < 2) { ncyc = 0; return; }
+        /* It starts from the window being used, which is not the top of
+           the stack when the top is put away. With every window put away,
+           the first tab brings back the one on top. */
+        cyc_at = -1;
+        for (int k = 0; k < ncyc && cyc_at < 0; k++)
+            if (!cyc_was_min[k]) cyc_at = k;
+        if (cyc_at < 0) { cyc_at = 0; cycle_show(0, true); return; }
+    }
+    int next = (cyc_at + 1) % ncyc;
+    cycle_show(cyc_at, false);
+    cyc_at = next;
+    cycle_show(cyc_at, true);
+}
+
+/* Alt let go: the window reached stays in front and the rest go back to the
+   order they had, so the one that was in front is next behind it. */
+static void cycle_end(void) {
+    if (cyc_at < 0) return;
+    window_t *chosen = cyc[cyc_at];
+    for (int k = ncyc - 1; k >= 0; k--)
+        if (cyc[k] && cyc[k] != chosen && !cyc[k]->minimized) wm_raise(cyc[k]);
+    if (chosen) wm_raise(chosen);
+    cyc_at = -1;
+    ncyc = 0;
+    need_frame();
+}
+
+/* A window closed in the middle of a walk is not walked to. */
+static void cycle_forget(window_t *w) {
+    for (int k = 0; k < ncyc; k++) if (cyc[k] == w) cyc[k] = 0;
+    if (cyc_at >= 0 && !cyc[cyc_at]) cycle_end();
 }
 
 static void minimize_all(void) {
@@ -3880,26 +3955,32 @@ static bool handle_shortcut(int key) {
     if (!(key & KEY_MOD_ALT)) return false;
     int c = KEY_CODE(key);
 
+    /* Anything but another tab ends a walk first, so the chord acts on the
+       window the walk left in front. */
+    if (c != '\t') cycle_end();
+
+    /* The rest act on the window being used, not the top of the stack,
+       which may be put away. */
+    window_t *top = focused_window();
     switch (c) {
     case '\t': cycle_windows(); return true;      /* alt+tab */
     case 'd': case 'D':                            /* alt+d, show the desktop */
         minimize_all();
         return true;
     case 'm': case 'M':
-        if (nwin) set_minimized(stack[nwin - 1], true);
+        if (top) set_minimized(top, true);
         return true;
     case 'f': case 'F':
-        if (nwin) toggle_maximize(stack[nwin - 1]);
+        if (top) toggle_maximize(top);
         return true;
     case 'q': case 'Q':
-        if (nwin) wm_close(stack[nwin - 1]);
+        if (top) wm_close(top);
         return true;
     }
 
     /* Alt with an arrow snaps the front window to that side, which is the
        same thing dragging it there does. */
-    if (nwin) {
-        window_t *top = stack[nwin - 1];
+    if (top) {
         if (c == KEY_LEFT)  { apply_snap(top, SNAP_LEFT);  return true; }
         if (c == KEY_RIGHT) { apply_snap(top, SNAP_RIGHT); return true; }
         if (c == KEY_UP)    { apply_snap(top, SNAP_FULL);  return true; }
@@ -3910,6 +3991,61 @@ static bool handle_shortcut(int key) {
         }
     }
     return false;
+}
+
+/* A key for the window being used. Programs get the key plus the control
+   bit and nothing else. Shift is already folded into the character, so
+   passing it on would mean every capital letter arrived as a chord and no
+   program's comparison against a letter would match. Alt is the desktop's
+   own and a chord using it never reaches here. What is left is control,
+   which is what a program needs to tell copy from the letter c. */
+static void deliver_key(window_t *top, int c) {
+    if (!top) return;
+    u32 out = (u32)KEY_CODE(c) | (u32)(c & KEY_MOD_CTRL);
+    if (top->owned_by_user) {
+        wm_event_t ev = { WM_EV_KEY, 0, 0, 0, out };
+        wm_push_event(top, &ev);
+    } else if (top->on_key) {
+        top->on_key(top, (char)KEY_CODE(c));
+    }
+}
+
+/* One key, as the desktop takes it. False when it says to leave.
+ *
+ * Escape is taken in turn by whatever the desktop has open -- the find bar,
+ * the launcher, a menu, the volume or network panel -- then by the window
+ * being used if its program has said it has a use for it, and only then
+ * leaves. It used to leave with a menu still open over the desktop, and it
+ * never reached a program at all, so Escape in the browser's address bar or
+ * the calculator did nothing but end the session. alt+Escape leaves from
+ * anywhere, which is how a program that wants Escape cannot trap anybody. */
+static bool wm_key(int c) {
+    if (KEY_CODE(c) == 27) {
+        if (c & KEY_MOD_ALT) return false;
+        cycle_end();
+        if (find_open)   { find_close(); return true; }
+        if (menu_open)   { menu_open = false; need_frame(); return true; }
+        if (ctx_open)    { ctx_open = false; need_frame(); return true; }
+        if (volume_open) { volume_open = false; volume_drag = false; need_frame(); return true; }
+        if (net_open)    { net_open = false; need_frame(); return true; }
+        window_t *top = focused_window();
+        if (top && top->wants_escape) { deliver_key(top, c); return true; }
+        return false;
+    }
+    if (handle_shortcut(c)) return true;          /* claimed by the desktop */
+
+    /* The find bar has the keyboard while it is up. It is one line in the
+       corner rather than a window, so nothing else would give it back. */
+    if (find_key(c)) return true;
+
+    /* Typed into the field on the dock. Tried after the chords, so alt and
+       tab still walks the stack with the launcher up, and before the
+       windows, so a letter does not arrive in the terminal behind it. */
+    if (menu_open && menu_key(c)) return true;
+
+    cycle_end();
+    deliver_key(focused_window(), c);
+    return true;
 }
 
 void wm_quit(void) { running = false; }
@@ -3937,6 +4073,20 @@ bool wm_test_maximize(window_t *w) {
     toggle_maximize(w);
     return w->maximized;
 }
+
+bool wm_test_key(int key) { return wm_key(key); }
+
+void wm_test_poll(void) {
+    if (cyc_at >= 0 && (!kbd_alt() || last_buttons)) cycle_end();
+}
+
+window_t *wm_test_nth(int n) {
+    return n >= 0 && n < nwin ? stack[nwin - 1 - n] : 0;
+}
+
+int wm_test_chip_at(int x) { return taskbar_chip_at(x, taskbar_y() + TASKBAR_H / 2); }
+int wm_test_chips_x(void) { return taskbar_chips_x(); }
+bool wm_test_find_open(void) { return find_open; }
 
 void wm_run(void) {
     if (!fb_active()) { kprintf("the desktop needs a framebuffer\n"); return; }
@@ -4012,44 +4162,12 @@ void wm_run(void) {
             }
         }
 
-        int c = kbd_trygetchar();
-        if (c >= 0 && KEY_CODE(c) == 27) {         /* escape */
-            if (find_open) find_close();
-            else if (menu_open) { menu_open = false; need_frame(); }
-            else break;
-        } else if (c >= 0 && handle_shortcut(c)) {
-            /* Claimed by the desktop. */
-        } else if (c >= 0 && find_key(c)) {
-            /* The find bar has the keyboard while it is up. It is one line
-               in the corner rather than a window, so nothing else would
-               give it back. */
-        } else if (c >= 0 && menu_open && menu_key(c)) {
-            /* Typed into the field on the dock. Tried after the chords,
-               so alt and tab still walks the stack with the launcher up,
-               and before the windows, so a letter does not arrive in the
-               terminal behind it. */
-        } else if (c >= 0 && nwin > 0) {
-            /* A window that is put away is not the one being typed at, so
-               find the front one that is actually on screen. */
-            window_t *top = 0;
-            for (int i = nwin - 1; i >= 0 && !top; i--)
-                if (!stack[i]->minimized) top = stack[i];
+        /* An alt+tab walk ends when alt is let go -- or when a button goes
+           down, which is somebody choosing a window another way. */
+        if (cyc_at >= 0 && (!kbd_alt() || last_buttons)) cycle_end();
 
-            /* Programs get the key, plus the control bit and nothing else.
-               Shift is already folded into the character, so passing it on
-               would mean every capital letter arrived as a chord and no
-               program's comparison against a letter would match. Alt is the
-               desktop's own and a chord using it never reaches here. What is
-               left is control, which is what a program needs to tell copy
-               from the letter c. */
-            u32 out = (u32)KEY_CODE(c) | (u32)(c & KEY_MOD_CTRL);
-            if (top && top->owned_by_user) {
-                wm_event_t ev = { WM_EV_KEY, 0, 0, 0, out };
-                wm_push_event(top, &ev);
-            } else if (top && top->on_key) {
-                top->on_key(top, (char)KEY_CODE(c));
-            }
-        }
+        int c = kbd_trygetchar();
+        if (c >= 0 && !wm_key(c)) break;
 
         /* The settings window writes a file; this is what notices. Four
            times a second is well under what a person can perceive as lag
@@ -4131,6 +4249,12 @@ void wm_run(void) {
     running = false;
     menu_open = false;
     ctx_open = false;
+    /* The find bar and the network panel as well: left open, they were
+       back on the next `desktop` as if nothing had happened. */
+    if (find_open) find_close();
+    net_open = false;
+    cyc_at = -1;
+    ncyc = 0;
     band_on = false;
     desk_sel = 0;
     dragging = resizing = mouse_capture = 0;

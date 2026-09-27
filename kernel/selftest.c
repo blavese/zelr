@@ -1304,6 +1304,105 @@ static void test_wm(void) {
     ok("windows can be closed", true);
 }
 
+/* What reached a kernel window's key handler, for the checks below. */
+static int keys_seen[8], nkeys_seen;
+static void record_key(window_t *w, char c) {
+    (void)w;
+    if (nkeys_seen < 8) keys_seen[nkeys_seen++] = (u8)c;
+}
+
+static void test_wm_keys(void) {
+    if (!fb_active()) { kprintf("  SKIP  no framebuffer\n"); return; }
+
+    /* The dock's buttons answer where they are drawn. The hit test measured
+       the front window's title in bold and the drawing in the regular
+       weight; the two faces happen to have the same advances today, so it
+       was right by luck, and one width is now asked of one function. The
+       widths here are worked out apart from it. */
+    {
+        window_t *a = wm_create("a", 10, 10, 120, 80);
+        window_t *b = wm_create("WWWWWWWWWW", 60, 60, 120, 80);
+        if (a && b) {
+            int wa = face_width("a", FACE_BODY) + 22;
+            int wb = face_width("WWWWWWWWWW", FACE_BODY) + 22;
+            int bx = wm_test_chips_x() + wa + 6;
+            ok("a dock button answers across the width it is drawn",
+               wm_test_chip_at(bx) == 1 && wm_test_chip_at(bx + wb - 1) == 1);
+            ok("and not past it", wm_test_chip_at(bx + wb + 1) != 1);
+        }
+        wm_close(a);
+        wm_close(b);
+    }
+
+    /* The chords act on the window being used. Putting the front window
+       away leaves it on top of the stack, and alt+m went on minimising it
+       rather than the window that was now in front. */
+    {
+        window_t *a = wm_create("under", 10, 10, 120, 80);
+        window_t *b = wm_create("over", 60, 60, 120, 80);
+        if (a && b) {
+            wm_test_key(KEY_MOD_ALT | 'm');
+            ok("alt+m puts away the window in front", b->minimized && !a->minimized);
+            wm_test_key(KEY_MOD_ALT | 'm');
+            ok("and a second puts away the one being used now", a->minimized);
+        }
+        wm_close(a);
+        wm_close(b);
+    }
+
+    /* alt+tab walks the stack while alt is held. It raised the window
+       behind the front one, so a second tab raised the first again and a
+       third window could never be reached. */
+    {
+        window_t *a = wm_create("one", 10, 10, 120, 80);
+        window_t *b = wm_create("two", 30, 30, 120, 80);
+        window_t *c = wm_create("three", 50, 50, 120, 80);
+        if (a && b && c) {
+            keyboard_set_mods(true, false, false);
+            wm_test_key(KEY_MOD_ALT | '\t');
+            wm_test_poll();
+            wm_test_key(KEY_MOD_ALT | '\t');
+            wm_test_poll();
+            ok("two tabs with alt held reach the third window", wm_test_nth(0) == a);
+            keyboard_set_mods(false, false, false);
+            wm_test_poll();
+            ok("letting go leaves it in front, the one that was in front behind it",
+               wm_test_nth(0) == a && wm_test_nth(1) == c && wm_test_nth(2) == b);
+            wm_test_key(KEY_MOD_ALT | '\t');
+            wm_test_poll();
+            ok("and one tab on its own swaps the front two",
+               wm_test_nth(0) == c && wm_test_nth(1) == a);
+        }
+        keyboard_set_mods(false, false, false);
+        wm_close(a);
+        wm_close(b);
+        wm_close(c);
+    }
+
+    /* Escape. It never reached a program, so Escape in a field did nothing
+       but end the session; now a program that says it has a use for it
+       gets it, whatever the desktop has open is put away first, and
+       alt+Escape always leaves. */
+    {
+        window_t *w = wm_create("wants", 20, 20, 120, 80);
+        if (w) {
+            w->on_key = record_key;
+            nkeys_seen = 0;
+            ok("escape leaves when nothing wants it", !wm_test_key(27));
+            w->wants_escape = true;
+            ok("to a window with a use for it, escape stays", wm_test_key(27));
+            ok("and arrives there as a key", nkeys_seen == 1 && keys_seen[0] == 27);
+            ok("alt+escape leaves all the same", !wm_test_key(KEY_MOD_ALT | 27));
+            wm_test_key(6);                                  /* ctrl+f */
+            bool opened = wm_test_find_open();
+            nkeys_seen = 0;
+            ok("with the find bar up, escape puts it away and goes no further",
+               opened && wm_test_key(27) && !wm_test_find_open() && nkeys_seen == 0);
+        }
+        wm_close(w);
+    }
+}
+
 static void winsrv_checks(void);
 
 /* In an address space of its own, loaded for the length of the checks.
@@ -1382,6 +1481,16 @@ static void winsrv_checks(void) {
     ok("a foreign program cannot map it", winsrv_surface(OTHER, h, paging_current_directory()) == 0);
     ok("commit is accepted", winsrv_commit(PID, h));
     ok("a foreign commit is not", !winsrv_commit(OTHER, h));
+
+    /* SYS_WIN_ESCAPE's half in here: the owner can say its window wants
+       Escape, and nobody else can say it for them. */
+    {
+        window_t *win = winsrv_window(PID, h);
+        ok("a window does not want escape until its program says so",
+           win && !win->wants_escape && !winsrv_want_escape(OTHER, h) && !win->wants_escape);
+        ok("and its program can say so",
+           winsrv_want_escape(PID, h) && win && win->wants_escape);
+    }
 
     /* Closing goes through wm_close, which must not release a surface the
        server carved out of a larger allocation: that pointer is not one
@@ -4558,7 +4667,7 @@ int selftest_run(void) {
     kprintf("[video]\n");      test_video();
     kprintf("[mouse]\n");      test_mouse(); test_mouse_edges();
     kprintf("[graphics]\n");   test_gfx();
-    kprintf("[windows]\n");    test_wm();
+    kprintf("[windows]\n");    test_wm(); test_wm_keys();
     kprintf("[window server]\n"); test_winsrv(); test_window_lifetimes();
     kprintf("[built-in programs]\n"); test_builtin();
     kprintf("[theme]\n");      test_theme();

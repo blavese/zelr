@@ -516,6 +516,7 @@ int main(void) {
     int win = win_create("Blackjack", 800, 560);
     if (win < 0) exit(1);
     win_allow_resize(win);
+    win_want_escape(win);                   /* it has a use for Escape */
 
     rng_start(&r);
     reshuffle();
