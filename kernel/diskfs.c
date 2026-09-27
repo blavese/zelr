@@ -85,8 +85,54 @@ bool diskfs_removable_mounted(void) { return fat_mounted_on(FAT_VOL_USB); }
 
 bool diskfs_available(void) { return blk_present(); }
 bool diskfs_mounted(void)   { return fat_mounted(); }
-bool diskfs_flush(void)     { return blk_flush(); }
+/* Every disk with something mounted on it, not only the one the machine
+   booted from. `sync`, fsync and switching off all come through here, and a
+   stick is the disk most likely to be pulled out straight afterwards. */
+bool diskfs_flush(void) {
+    bool ok = blk_flush();
+    if (fat_mounted_on(FAT_VOL_USB)) ok = fat_flush_volume(FAT_VOL_USB) && ok;
+    return ok;
+}
 
+/* Whether anything has ever been written at the front or the back of the disk.
+ *
+ * "No partitions" was taken to mean a blank disk, and it does not. It is also
+ * what a disk looks like when its table was there and was refused: a GPT
+ * whose checksum does not add up, a header that could not be read, a
+ * protective MBR with nothing this kernel trusts behind it. On a laptop
+ * started from a stick, the disk being asked about is the internal drive, so
+ * the first boot formatted somebody's drive because this kernel could not
+ * read its table.
+ *
+ * So a disk is blank only when it looks blank. The first 128 KiB holds every
+ * mark anything puts at the front -- an MBR or a boot sector, a GPT header
+ * and its entries, the superblocks of the usual Linux filesystems, a volume
+ * descriptor on a disc image -- and the last sector is where a GPT keeps its
+ * spare header. All of it zero is a disk nobody has used. Anything else is
+ * somebody's, whether or not this kernel can say whose. */
+#define BLANK_SCAN_SECTORS 256
+
+static bool disk_is_blank(void) {
+    u8 sec[SECTOR_SIZE];
+    u32 total = blk_sectors();
+    u32 scan = total < BLANK_SCAN_SECTORS ? total : BLANK_SCAN_SECTORS;
+    for (u32 s = 0; s < scan; s++) {
+        if (!blk_read(s, 1, sec)) return false;
+        for (u32 i = 0; i < SECTOR_SIZE; i++) if (sec[i]) return false;
+    }
+    if (total > scan) {
+        if (!blk_read(total - 1, 1, sec)) return false;
+        for (u32 i = 0; i < SECTOR_SIZE; i++) if (sec[i]) return false;
+    }
+    return true;
+}
+
+/* Formats the disk the machine booted from, when that cannot cost anybody
+ * anything: it is blank, or what is on it is a volume this kernel has
+ * mounted across the whole disk and so can already read -- somebody asking
+ * for their zelr disk to be emptied. A partitioned disk, a table that was
+ * refused, and a disk holding something unreadable are all left alone, and
+ * the reason is said and logged. */
 bool diskfs_format(void) {
     if (!blk_present()) return false;
 
@@ -95,6 +141,18 @@ bool diskfs_format(void) {
     if (parts_count() > 0) {
         kprintf("  fs      refusing to format: the disk is partitioned\n");
         bb_log("fs refused to format a partitioned disk");
+        return false;
+    }
+
+    /* With no partitions, a mounted volume can only be one across the whole
+       disk (diskfs_mount mounts nothing else then). */
+    bool ours = fat_mounted_on(FAT_VOL_DISK);
+    if (!ours && !disk_is_blank()) {
+        const char *why = parts_gpt_error()[0]
+            ? "it has a partition table this kernel could not trust"
+            : "something is written on it that this kernel cannot read";
+        kprintf("  fs      refusing to format: the disk is not blank, %s\n", why);
+        bb_log("fs refused to format a disk that is not blank: %s", why);
         return false;
     }
     return fat_format("ZELR");

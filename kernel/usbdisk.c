@@ -52,6 +52,9 @@ typedef struct {
 #define SCSI_READ_CAPACITY10  0x25
 #define SCSI_READ10           0x28
 #define SCSI_WRITE10          0x2A
+#define SCSI_SYNC_CACHE10     0x35
+
+#define SENSE_ILLEGAL_REQUEST 0x05
 
 #define SENSE_LEN   18
 #define INQUIRY_LEN 36
@@ -242,8 +245,27 @@ bool usbdisk_write(u32 lba, u32 count, const void *buf) {
    keep the buffer a command needs small. */
 static u32 usbdisk_max_run(void) { return 8; }
 
-/* Nothing is held back, so there is nothing to push out. */
-static bool usbdisk_flush(void) { return attached; }
+/* Whatever the stick is still holding, written down.
+ *
+ * This used to say nothing is held back, which is true of this driver and
+ * not of the stick: a write the stick has acknowledged may still be in its
+ * controller's cache, and pulling it out then loses it. SYNCHRONIZE CACHE
+ * with no range is "all of it".
+ *
+ * A stick with no cache is allowed to refuse the command as one it does not
+ * have, and plenty do. That refusal is ILLEGAL REQUEST in the sense data and
+ * means there was nothing to push out, so it counts as done. Any other
+ * refusal is a flush that did not happen, and says so. */
+static bool usbdisk_flush(void) {
+    if (!usbdisk_present()) return false;
+    u8 cmd[10] = { SCSI_SYNC_CACHE10, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+    if (transact(cmd, sizeof cmd, 0, 0, false)) return true;
+
+    u8 req[6] = { SCSI_REQUEST_SENSE, 0, 0, 0, SENSE_LEN, 0 };
+    memset(stage, 0, SENSE_LEN);
+    if (!transact(req, sizeof req, stage, SENSE_LEN, true)) return false;
+    return (stage[2] & 0x0F) == SENSE_ILLEGAL_REQUEST;
+}
 
 static const blkdev_t USB_DEV = {
     "usb", usbdisk_read, usbdisk_write, usbdisk_flush,

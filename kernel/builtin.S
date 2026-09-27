@@ -240,6 +240,13 @@ builtin_wiretest_start:
 .incbin "build/user/wiretest.elf"
 builtin_wiretest_end:
 
+.balign 4
+.global builtin_hangtest_start
+.global builtin_hangtest_end
+builtin_hangtest_start:
+.incbin "build/user/hangtest.elf"
+builtin_hangtest_end:
+
 .global builtin_jsprobe_start
 .global builtin_jsprobe_end
 builtin_jsprobe_start:

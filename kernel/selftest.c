@@ -563,6 +563,93 @@ static void test_fat(void) {
     kfree(in);
 }
 
+/* --- names that are not quite each other, and the order of a delete --------
+ *
+ * Four faults that each hit the wrong file or lose one, and none of which a
+ * test that only ever uses one short name at a time could see. */
+static bool reads_as(const char *path, const char *want) {
+    char buf[32];
+    u32 n = (u32)strlen(want);
+    int got = fat_read_file(path, (u8 *)buf, sizeof(buf));
+    return got == (int)n && memcmp(buf, want, n) == 0;
+}
+
+static void test_fat_names(void) {
+    if (!blk_present() || !fat_mounted()) { kprintf("  SKIP  no volume\n"); return; }
+
+    fat_delete_file("/chapter1.txt");
+    fat_delete_file("/chapter10.txt");
+    fat_delete_file("/longername.txt");
+    fat_delete_file("/longer~1.txt");
+    fat_delete_file("/orderme.txt");
+    fat_delete_file("/x.txt");
+    fat_delete_file("/y.txt");
+    fat_delete_file("/rcdir/keep.txt");
+    fat_rmdir("/rcdir");
+
+    /* A long name that packs down to another file's short one: chapter10
+       truncates to CHAPTER1TXT, which is chapter1.txt. */
+    ok("chapter1.txt can be written", fat_write_file("/chapter1.txt", (const u8 *)"one", 3));
+    ok("and chapter10.txt beside it", fat_write_file("/chapter10.txt", (const u8 *)"ten", 3));
+    ok("chapter1.txt still says one", reads_as("/chapter1.txt", "one"));
+    ok("and chapter10.txt reads back what was written to it", reads_as("/chapter10.txt", "ten"));
+    ok("a name that was never written is not found by its truncation",
+       !fat_stat("/chapter100.txt", 0, 0));
+    ok("deleting chapter10.txt", fat_delete_file("/chapter10.txt"));
+    ok("leaves chapter1.txt where it was", reads_as("/chapter1.txt", "one"));
+
+    /* A file renamed to its own short name. The destination was found, it
+       was the file itself, and it was deleted as being in the way. */
+    ok("a file with a long name can be written",
+       fat_write_file("/longername.txt", (const u8 *)"kept", 4));
+    ok("renaming it to its own short name succeeds",
+       fat_rename("/longername.txt", "/longer~1.txt"));
+    ok("and the file is still there, whole", reads_as("/longer~1.txt", "kept"));
+
+    /* A rename from one volume to another. Nothing is mounted at /usb here,
+       which is the point: the disk's own /x.txt must not be what moves. */
+    fat_write_file("/x.txt", (const u8 *)"disk", 4);
+    ok("a rename between the stick and the disk is refused",
+       !vfs_rename("/usb/x.txt", "/y.txt"));
+    ok("and the disk's file of the same name was not moved instead",
+       reads_as("/x.txt", "disk") && !fat_stat("/y.txt", 0, 0));
+
+    /* A delete that the power interrupts, after the first write. The entry
+       has to be what went: the other order frees the clusters first, and an
+       entry left pointing at free clusters is two files sharing a disk as
+       soon as anything else is written. */
+    ok("a file to delete can be written",
+       fat_write_file("/orderme.txt", (const u8 *)"doomed", 6));
+    u32 free_before = fat_free_bytes();
+    fat_test_writes_left(1);
+    fat_delete_file("/orderme.txt");
+    fat_test_writes_left(0xFFFFFFFFu);
+    ok("a delete cut short after one write has removed the entry",
+       !fat_stat("/orderme.txt", 0, 0));
+    ok("and left its clusters allocated rather than free",
+       fat_free_bytes() == free_before);
+    ok("which the next reclaim gives back", fat_reclaim() >= 1 &&
+       fat_free_bytes() > free_before);
+
+    /* A reclaim that cannot see everything must free nothing. A directory
+       it cannot read used to be taken as empty, so the files in it were
+       counted as leaked and their clusters swept up. */
+    ok("a directory with a file in it", fat_mkdir("/rcdir") &&
+       fat_write_file("/rcdir/keep.txt", (const u8 *)"precious", 8));
+    u32 free_now = fat_free_bytes();
+    fat_test_subdirs_unreadable(true);
+    u32 swept = fat_reclaim();
+    fat_test_subdirs_unreadable(false);
+    ok("a reclaim that cannot read every directory frees nothing",
+       swept == 0 && fat_free_bytes() == free_now);
+
+    fat_delete_file("/chapter1.txt");
+    fat_delete_file("/longer~1.txt");
+    fat_delete_file("/x.txt");
+    fat_delete_file("/rcdir/keep.txt");
+    fat_rmdir("/rcdir");
+}
+
 
 /* Builds a minimal but structurally valid ELF32 header in a caller supplied
    buffer, so individual fields can then be corrupted one at a time. */
@@ -1766,6 +1853,56 @@ static void test_tls(void) {
        !tls_active(-1) && !tls_active(TCP_MAX) && !tls_active(TCP_MAX + 99));
     for (int i = 0; i < TCP_MAX; i++)
         ok("every session starts closed", !tls_active(i));
+}
+
+/* --- the order the server's encrypted messages must come in ----------------
+ *
+ * The signature over the handshake is the only message a server cannot make
+ * without the site's private key; the chain is public and the finished MAC is
+ * keyed from a secret agreed with whoever answered. So a handshake that can
+ * reach finished without a signature authenticates nobody. It could, until
+ * this rule existed: the loop took the messages in any order, stopped at the
+ * first finished, and never asked whether a signature had come. */
+static int flight(const u8 *types, u32 n, const char **why) {
+    int step = TLS_FLIGHT_START;
+    for (u32 i = 0; i < n; i++) {
+        step = tls_flight_step(step, types[i], why);
+        if (step < 0) return -1;
+    }
+    return step;
+}
+
+static void test_tls_order(void) {
+    enum { EXT = 8, CERT = 11, VERIFY = 15, FINISHED = 20 };
+    const char *why = 0;
+
+    static const u8 whole[] = { EXT, CERT, VERIFY, FINISHED };
+    ok("extensions, certificate, signature, finished is a whole handshake",
+       flight(whole, 4, &why) == TLS_FLIGHT_DONE);
+
+    static const u8 unsigned_[] = { EXT, CERT, FINISHED };
+    why = 0;
+    ok("finished without a signature is refused", flight(unsigned_, 3, &why) < 0);
+    ok("and the reason says the key was never proved",
+       why && strcmp(why, "the server never proved it holds the certificate's key") == 0);
+
+    static const u8 bare[] = { EXT, FINISHED };
+    ok("finished with no certificate at all is refused", flight(bare, 2, &why) < 0);
+
+    static const u8 early[] = { EXT, VERIFY };
+    ok("a signature before the certificate is refused", flight(early, 2, &why) < 0);
+
+    static const u8 twice[] = { EXT, CERT, CERT };
+    why = 0;
+    ok("a second certificate is refused as out of order",
+       flight(twice, 3, &why) < 0 &&
+       why && strcmp(why, "the server sent its handshake out of order") == 0);
+
+    static const u8 first[] = { CERT };
+    ok("a certificate before the extensions is refused", flight(first, 1, &why) < 0);
+
+    ok("nothing is allowed after finished",
+       tls_flight_step(TLS_FLIGHT_DONE, FINISHED, &why) < 0);
 }
 
 /* --- AES-GCM, the NIST test vectors ---------------------------------- */
@@ -3561,7 +3698,7 @@ int selftest_run(void) {
     kprintf("[timer]\n");      test_timer();
     kprintf("[interrupts]\n"); test_interrupts();
     kprintf("[disk]\n");       test_disk();
-    kprintf("[fat]\n");        test_fat();
+    kprintf("[fat]\n");        test_fat(); test_fat_names();
     kprintf("[network]\n");    test_net();
     kprintf("[elf]\n");        test_elf();
     kprintf("[userspace]\n");  test_userspace();
@@ -3588,7 +3725,7 @@ int selftest_run(void) {
     kprintf("[p-384]\n");      test_p384();
     kprintf("[certificates]\n"); test_x509();
     kprintf("[randomness]\n"); test_rng();
-    kprintf("[tls 1.3]\n");    test_tls_schedule(); test_tls();
+    kprintf("[tls 1.3]\n");    test_tls_schedule(); test_tls(); test_tls_order();
     kprintf("[wpa]\n");        test_wpa();
     kprintf("[wait timeouts]\n"); test_wait_timeout();
     kprintf("[processors]\n"); test_smp();

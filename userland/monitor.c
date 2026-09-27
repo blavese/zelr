@@ -337,7 +337,13 @@ int main(void) {
         }
 
         /* --- and the one thing it can do ------------------------------------ */
-        if (selected >= 0 && selected < nrows) {
+        /* Only to a program. The kernel's own tasks refuse to be ended, and a
+           button that did nothing when pressed would be a lie about that. */
+        if (selected >= 0 && selected < nrows && !rows[selected].user) {
+            int by = h - UI_ROW - UI_PAD + 2;
+            face_draw(&s, pad, by - UI_BTN_H + UI_ROW + 6,
+                      "part of the kernel, so it cannot be stopped", t.dim, UI_FACE_BODY);
+        } else if (selected >= 0 && selected < nrows) {
             int by = h - UI_ROW - UI_PAD + 2;
             char label[48];
             int ln = 0;

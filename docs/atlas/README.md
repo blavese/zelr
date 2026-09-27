@@ -90,18 +90,85 @@ skimmed) and checking the results against a real build and test run.
   - the network freeze (finding 12);
   - JS `call`/`apply`/`bind` (finding 13).
 
+## Since 6048716
+
+What has changed in the tree since the atlas was written, newest first. File:line references in the
+numbered files are still to 6048716; where they disagree with this list, this list and the code win.
+
+### 0.39.0: six of the findings below, fixed
+
+Each change has a check that was run against a deliberately broken build and seen to fail there.
+
+- **The network freeze (finding 12).**
+  - `net_wait()` in `net.c` sleeps a tick (`task_sleep(1)`) where every wait in `net.c` and `tcp.c` used
+    to spin, so ticks advance inside a system call and other tasks run.
+  - Because a network call can now be interleaved with another:
+    - sockets are reserved before the wait (`sock_take` in `syscall.c`);
+    - DNS is taken one asker at a time (`dns_take`);
+    - `take_slot` in `tcp.c` claims atomically;
+    - the chain and leaf in `tls.c` are per session (they were statics).
+  - A task ended from outside -- `sys_kill`, or a signal's default action, which runs inside the scheduler
+    -- goes through `syscall_abandon`. It drops sockets, TLS sessions, half-open connections (`tcp_abandon`
+    by owner pid) and its turn at delivery or DNS (`net_abandon`), all without waiting.
+  - Retransmission inside calls works now, since `pump_one` sees time pass.
+  - Check: `tools/hangcheck.py` (gate `hangtest`), with `/bin/hangtest`. `repro/nethang.py` now reports
+    NOT FROZEN.
+- **TLS CertificateVerify (finding 1).**
+  - `tls_flight_step` enforces extensions, certificate, signature, finished, each once and in that order.
+  - A finished message with no signature before it fails as "the server never proved it holds the
+    certificate's key".
+  - Check: `[tls 1.3]` `test_tls_order`, 8 checks.
+- **Auto-format (finding 2).**
+  - `diskfs_format` formats only a blank disk (the first 128 KiB and the last sector all zero) or the volume
+    already mounted across the whole disk.
+  - A refused table is left alone and the refusal is logged.
+  - Check: `tools/gpt_test.sh` now compares the whole image before and after, and has a
+    Linux-style unpartitioned disk case.
+- **FAT (finding 3).**
+  - `dir_find` compares 8.3 names only for names that fit 8.3.
+  - A rename to a file's own alias keeps the file.
+  - `vfs_rename` refuses two volumes.
+  - The volume selection lasts one VFS call (`unroute`).
+  - `fat_format` always means the boot disk.
+  - Delete and rmdir write the entry and flush before freeing, and rmdir now drops its long name entries
+    too (S14).
+  - `fat_reclaim` frees nothing unless the walk read every directory and every table sector, never frees a
+    bad-cluster mark, and queues each directory once.
+  - The mount bound uses the volume's own disk size (S10).
+  - Check: `[fat]` `test_fat_names`, 18 checks, using two self-test fault hooks: `fat_test_writes_left`
+    and `fat_test_subdirs_unreadable`.
+- **Flushes (finding 4).**
+  - `ahci_flush` issues FLUSH CACHE EXT (a command with no PRDT).
+  - `usbdisk_flush` issues SYNCHRONIZE CACHE(10), and accepts only ILLEGAL REQUEST as "no cache".
+  - `vol_flush` in fat.c flushes the volume's own disk.
+  - `diskfs_flush` flushes the stick as well.
+  - Check: `tools/mountcheck.py` watches QEMU's own trace of `ide_bus_exec_cmd` (cmd 0xea) and
+    `scsi_req_parsed` (command 53).
+- **Kill and signal (finding 5).**
+  - `may_end` in `syscall.c`: only tasks with `user` set, and never idle.
+  - Monitor offers Stop only for programs.
+  - Check: in `hangcheck.py`.
+
+Counts after 0.39.0:
+- selftest 582 (pc, 64 MiB), 586 (256 MiB), 594 (q35), 597 (`-smp 4`), still 50 sections;
+- 47 ring 3 programs;
+- gate full 48 steps.
+
+Findings 1-5 and 12 below are kept as they were written, for the reasoning. The ones still open are 6
+onward, except 12.
+
 ## Most important findings, across all areas
 
 These are the verified-by-reading defects that matter most, most severe first. The details and the
 reasoning are in each file's §10.
 
-1. **TLS server authentication can be bypassed.** CertificateVerify is never required
+1. **FIXED in 0.39.0. TLS server authentication can be bypassed.** CertificateVerify is never required
    (`kernel/tls.c:681-758`), so a man in the middle holding a real site's public chain can intercept any
    https connection. [06b §10.1]
-2. **The first-boot auto-format can wipe a disk that is not blank.** Any disk whose partition table the
+2. **FIXED in 0.39.0. The first-boot auto-format can wipe a disk that is not blank.** Any disk whose partition table the
    kernel rejects (a bad GPT CRC, an unreadable header, a protective MBR only) is formatted as disk 0. On a
    laptop booted from a stick, disk 0 is the internal drive. [04 §10 S1]
-3. **FAT name handling can hit the wrong file.**
+3. **FIXED in 0.39.0. FAT name handling can hit the wrong file.**
    - The 8.3 alias compare makes `chapter10.txt` resolve to `chapter1.txt` (fat.c:1202-1211).
    - Renaming a file to its own alias deletes it.
    - A cross-volume rename is not rejected; this is reachable from ring 3.
@@ -109,9 +176,9 @@ reasoning are in each file's §10.
    - Deletes are not crash-ordered.
    - Reclaim can free live data under memory pressure.
    [04 §10 S2-S7]
-4. **The crash-safety promise is weaker on real hardware than stated.** The AHCI and USB-stick "flush"
+4. **FIXED in 0.39.0. The crash-safety promise is weaker on real hardware than stated.** The AHCI and USB-stick "flush"
    are no-ops, and every flush goes to disk 0. [04 §10 S8, S9]
-5. **Any program can kill or signal any task, including kernel services** (`sys_kill`, `sys_sigsend`
+5. **FIXED in 0.39.0. Any program can kill or signal any task, including kernel services** (`sys_kill`, `sys_sigsend`
    have no ownership check). [03 §10.5]
 6. **Window manager lifetime bugs.**
    - Closing a window while it is being resized leaves a dangling `resizing` pointer.
@@ -131,7 +198,7 @@ reasoning are in each file's §10.
     there are several SVG and JPEG conformance gaps. [13 §10]
 11. **UEFI.** The GOP pixel format (RGB vs BGR) is not carried in the handoff, and the handoff address
     is fixed at 0x70000 with no fallback. [01 §10 #2, #8]
-12. **A network syscall whose peer never answers freezes the machine. REPRODUCED 2026-09-26**
+12. **FIXED in 0.39.0. A network syscall whose peer never answers freezes the machine. REPRODUCED 2026-09-26**
     (`repro/nethang.py`, prints FROZEN and exits 1 while the bug stands).
     - **Cause.**
       - int 0x80 is an interrupt gate (`idt.c:63`, flags 0xEE), so interrupts are off for the whole
@@ -149,6 +216,10 @@ reasoning are in each file's §10.
         gives up after 2.6 s with "could not connect".
     - **Real-world trigger.** On a real network, a firewalled port, a silent DNS server or a dead
       neighbour is enough. Any ring 3 program, the browser included, can then freeze zelr.
+    - **Reproduced again on an ordinary network** (with the gateway set):
+      - Setup: a host server accepted the connection and never sent a byte, like a hung web server.
+      - `wiretest` then waited in `tcp_recv`.
+      - Result: ticks frozen (877 -> 877), CPL 0 with IF clear, and the shell dead.
     - Atlas 06a also notes that a kernel task preempted while it owns frame delivery can leave a
       syscall spinning. [06a §10]
 13. **JavaScript `call`, `apply` and `bind` do not work. REPRODUCED 2026-09-26** (`repro/callbind.py`, prints BROKEN and exits 1 while the bug stands).

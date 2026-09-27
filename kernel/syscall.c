@@ -315,16 +315,29 @@ static i64 sys_wait(registers_t *r) {
     return task_wait((u32)r->rbx);
 }
 
-/* Ends another task. Only what this program started, which for now means any
-   task other than the one asking: there is no parent to check against yet,
-   and the alternative is not being able to stop anything at all. */
+/* Whether a program may end or signal this task.
+ *
+ * A program, yes -- any program, because there are no users here to own one
+ * rather than another, and the monitor and the terminal's kill exist to stop
+ * programs they did not start. The kernel's own tasks, never. They were
+ * reachable by pid like anything else, so the monitor's stop button ended
+ * "idle" as readily as a game, and any program could end the network task,
+ * the USB poller or the shell that runs the desktop by counting upwards from
+ * one. A signal is the same question, since its default action is the end of
+ * the task. What decides is the kernel's own record of which tasks are
+ * programs, not anything the caller can say. */
+static bool may_end(u32 pid) {
+    task_t *t = task_by_pid(pid);
+    return t && t->state != TASK_DEAD && t->user && !task_is_idle(t);
+}
+
+/* Ends another program. Not itself: that is what exit is for, and a program
+   that ended itself here would never return from the call to find out. */
 static i64 sys_kill(registers_t *r) {
     u32 pid = (u32)r->rbx;
     task_t *me = task_current();
     if (me && me->pid == pid) return -1;
-
-    task_t *t = task_by_pid(pid);
-    if (!t || t->state == TASK_DEAD) return -1;
+    if (!may_end(pid)) return -1;
 
     /* Everything it holds goes back, exactly as if it had exited. One copy
        of that, in kernel/signal.c, because there are three ways to end a
@@ -406,6 +419,7 @@ static i64 sys_sigreturn(registers_t *r) {
 }
 
 static i64 sys_sigsend(registers_t *r) {
+    if (!may_end((u32)r->rbx)) return -1;
     return signal_send((u32)r->rbx, (int)r->rcx) ? 0 : -1;
 }
 
@@ -739,9 +753,30 @@ static sock_t *sock_of(u64 raw) {
     return s;
 }
 
-static int sock_take(void) {
-    for (int i = 0; i < SOCK_MAX; i++) if (!socks[i].open) return i;
+/* Taken before anything is waited for, and handed back if the connection
+   does not happen.
+ *
+   A wait on the network gives the processor away now, so another program's
+   connect can run in the middle of this one. The slot used to be marked open
+   only once the connection was up, and two connects in flight together were
+   handed the same slot; whichever finished second took it over, and the
+   first program's socket number then read the second one's connection. */
+static int sock_take(bool secure) {
+    for (int i = 0; i < SOCK_MAX; i++) {
+        if (socks[i].open) continue;
+        socks[i].open = true;
+        socks[i].secure = secure;
+        socks[i].owner = caller_pid();
+        socks[i].tcp = -1;
+        return i;
+    }
     return -1;
+}
+
+static void sock_give_back(int h) {
+    socks[h].open = false;
+    socks[h].secure = false;
+    socks[h].tcp = -1;
 }
 
 static i64 sys_connect(registers_t *r) {
@@ -751,19 +786,16 @@ static i64 sys_connect(registers_t *r) {
     if (!port) return -1;
     if (!net_up()) return NET_ERR_DOWN;
 
-    int h = sock_take();
+    int h = sock_take(false);
     if (h < 0) return NET_ERR_BUSY;          /* every socket is in use */
 
     ipv4_t ip = net_parse_ip(host);
-    if (!ip && !net_resolve(host, &ip, 6000)) return NET_ERR_RESOLVE;
+    if (!ip && !net_resolve(host, &ip, 6000)) { sock_give_back(h); return NET_ERR_RESOLVE; }
 
     int t = tcp_open(ip, port, 6000);
-    if (t < 0) return NET_ERR_CONNECT;
+    if (t < 0) { sock_give_back(h); return NET_ERR_CONNECT; }
 
     socks[h].tcp = t;
-    socks[h].owner = caller_pid();
-    socks[h].open = true;
-    socks[h].secure = false;
     return h;
 }
 
@@ -772,10 +804,12 @@ static i64 sys_connect(registers_t *r) {
    the address, and to check that the certificate at the other end is for the
    site that was asked for rather than merely for whoever answered.
 
-   Only one of these at a time. The stack holds several connections but the
-   TLS session state in kernel/tls.c is still single, so a machine can have
-   one encrypted connection and the rest plain. Said out loud rather than
-   discovered: a second handshake would quietly take the first one's keys. */
+   Only one of these at a time, machine wide. kernel/tls.c holds a session
+   per connection, so this is no longer about keys being shared; it is a
+   limit nothing has yet been shown to need lifted. The slot is marked secure
+   the moment it is taken, so a second handshake started while the first is
+   still waiting on the network is refused too, rather than only a second one
+   started after the first has finished. */
 static i64 sys_connect_tls(registers_t *r) {
     char host[128];
     if (!copy_path(r->rbx, host, sizeof(host))) return -1;
@@ -786,25 +820,21 @@ static i64 sys_connect_tls(registers_t *r) {
     for (int i = 0; i < SOCK_MAX; i++)
         if (socks[i].open && socks[i].secure) return NET_ERR_BUSY;
 
-    int h = sock_take();
+    int h = sock_take(true);
     if (h < 0) return NET_ERR_BUSY;
 
     ipv4_t ip = net_parse_ip(host);
-    if (!ip && !net_resolve(host, &ip, 6000)) return NET_ERR_RESOLVE;
+    if (!ip && !net_resolve(host, &ip, 6000)) { sock_give_back(h); return NET_ERR_RESOLVE; }
 
     int t = tcp_open(ip, port, 6000);
-    if (t < 0) return NET_ERR_CONNECT;
+    if (t < 0) { sock_give_back(h); return NET_ERR_CONNECT; }
 
     /* A handshake that fails takes the connection with it. Leaving the TCP
        side open after a certificate was refused would let a caller that
        ignored the return value carry on and send the request in the clear,
        to the machine that just failed to prove who it was. */
-    if (!tls_connect(t, host)) { tcp_close(t); return NET_ERR_TLS; }
-
     socks[h].tcp = t;
-    socks[h].owner = caller_pid();
-    socks[h].open = true;
-    socks[h].secure = true;
+    if (!tls_connect(t, host)) { tcp_close(t); sock_give_back(h); return NET_ERR_TLS; }
     return h;
 }
 
@@ -883,6 +913,27 @@ static i64 sys_disconnect(registers_t *r) {
 void syscall_release(u32 pid) {
     for (int i = 0; i < SOCK_MAX; i++)
         if (socks[i].open && socks[i].owner == pid) sock_drop(i);
+}
+
+/* The same for a program ended from outside, and without a word to anybody.
+ *
+ * sock_drop says goodbye properly, which means sending and waiting to hear
+ * back. That is right for a program that exits, which is running its own
+ * exit. It is wrong here: this is reached from sys_kill and from a signal's
+ * default action, and the second of those runs inside the scheduler, where a
+ * wait would be the scheduler calling itself. And the program being ended may
+ * be asleep in the middle of a connect or a read, holding things that only its
+ * own return would have let go of. So everything it held is dropped where it
+ * stands: its sockets, the sessions on them, any connection it had half
+ * opened, and its turn at the stack. */
+void syscall_abandon(u32 pid) {
+    for (int i = 0; i < SOCK_MAX; i++) {
+        if (!socks[i].open || socks[i].owner != pid) continue;
+        if (socks[i].secure && socks[i].tcp >= 0) tls_abandon(socks[i].tcp);
+        sock_give_back(i);
+    }
+    tcp_abandon(pid);
+    net_abandon(task_by_pid(pid));
 }
 
 static i64 sys_resolve(registers_t *r) {

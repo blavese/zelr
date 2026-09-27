@@ -44,6 +44,7 @@ extern const u8 builtin_jpegtest_start[], builtin_jpegtest_end[];
 extern const u8 builtin_svgtest_start[], builtin_svgtest_end[];
 extern const u8 builtin_layouttest_start[], builtin_layouttest_end[];
 extern const u8 builtin_wiretest_start[], builtin_wiretest_end[];
+extern const u8 builtin_hangtest_start[], builtin_hangtest_end[];
 extern const u8 builtin_jsprobe_start[], builtin_jsprobe_end[];
 extern const u8 builtin_blackjack_start[], builtin_blackjack_end[];
 extern const u8 builtin_poker_start[], builtin_poker_end[];
@@ -100,6 +101,7 @@ static const program_t PROGRAMS[] = {
     { "svgtest",   builtin_svgtest_start,   builtin_svgtest_end   },
     { "layouttest", builtin_layouttest_start, builtin_layouttest_end },
     { "wiretest", builtin_wiretest_start, builtin_wiretest_end },
+    { "hangtest", builtin_hangtest_start, builtin_hangtest_end },
     { "jsprobe", builtin_jsprobe_start, builtin_jsprobe_end },
     { "blackjack", builtin_blackjack_start, builtin_blackjack_end },
     { "poker",   builtin_poker_start,   builtin_poker_end   },

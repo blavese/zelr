@@ -174,7 +174,7 @@ Handlers (each `static i64 sys_*(registers_t *r)`), arguments come in rbx/rcx/rd
 - `sys_getppid` → parent_pid.
 - `sys_sbrk` → `user_sbrk((i64)r->rbx)`.
 - `sys_wait` → `task_wait((u32)r->rbx)`.
-- `sys_kill` (syscall.c:321): refuses killing self; requires target exists & not DEAD; calls `signal_end_task(pid, -1)`. Comment: "any task other than the one asking" -- no parent check yet.
+- `sys_kill` (syscall.c:321; since 0.39.0 also `may_end`: only tasks with `user` set and never idle, the same for `sys_sigsend`): refuses killing self; requires target exists & not DEAD; calls `signal_end_task(pid, -1)`. Comment: "any task other than the one asking" -- no parent check yet.
 - `sys_signal` → `signal_disposition(pid, rbx, rcx how, rdx trampoline)`.
 - `sys_poll` (syscall.c:355): rejects n > POLL_MAX (16); validates buffer; copies pollfds into a kernel `set[POLL_MAX]`; `fd_poll`; re-validates buffer (it sleeps, could vanish); copies revents back. **Note: this is the SYS_POLL handler even though the surrounding comment block at 349-354 describes sigreturn -- a stale/misplaced comment (see §10).**
 - `sys_rename` → two paths, `vfs_rename`.
@@ -534,7 +534,7 @@ No bugs found in the fork/COW/exec core, the signal frame validation, or the poi
 
 ## 11. Open questions
 
-1. Is the unguarded `sys_kill`/`sys_sigsend` (any pid, including kernel service tasks) intended to be tightened before the lead engineer builds multi-user features? It's the biggest security gap in this area.
+1. (Answered in 0.39.0: kernel tasks now refuse both.) Is the unguarded `sys_kill`/`sys_sigsend` (any pid, including kernel service tasks) intended to be tightened before the lead engineer builds multi-user features? It's the biggest security gap in this area.
 2. `USER_MMAP_MAX == USER_CODE_BASE` (both base+0x40000000): the mmap window's ceiling is exactly the program image base. A program linked at 0x8040000000 with a large image could in principle collide with the top of the mmap window; is there any check that the ELF image plus mmap don't overlap? (elf.c allows segments up to base+0x4FF00000, well above the image base, so an unusual ELF could load into the stack region -- only entry and per-segment ranges are bounded, not overlap with stack/mmap.)
 3. `winsrv_surface` rollback (finding #7) -- confirm no future caller passes a non-current dir.
 4. The "forty-seven system calls" vs "sixty-three" wording: which is the intended canonical number for docs going forward (live calls = 63, table slots = 64)?

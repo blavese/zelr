@@ -32,7 +32,9 @@ void signal_end_task(u32 pid, int status) {
 
     winsrv_release(pid);
     fd_table_release(t->fd);
-    syscall_release(pid);
+    /* Not syscall_release: that closes connections politely, which waits,
+       and this can be running inside the scheduler. See syscall.c. */
+    syscall_abandon(pid);
 
     t->exit_status = status;
     t->died_at = timer_ticks();

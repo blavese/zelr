@@ -55,6 +55,17 @@ fails=0
 check()     { if grep -qF "$1" "$OUT"; then echo "  PASS  $2"; else echo "  FAIL  $2  (wanted: $1)"; fails=$((fails+1)); fi; }
 check_not() { if grep -qF "$1" "$OUT"; then echo "  FAIL  $2  (found: $1)"; fails=$((fails+1)); else echo "  PASS  $2"; fi; }
 
+# Whether the machine wrote to the disk at all, by comparing the whole image
+# before and after. The strongest thing that can be said about a disk the
+# kernel had no business touching, and the only check here that does not
+# depend on the kernel's own account of what it did.
+sum_before=""
+remember() { sum_before=$(cksum < "$IMG"); }
+unchanged() {
+  if [ "$(cksum < "$IMG")" = "$sum_before" ]; then echo "  PASS  $1"
+  else echo "  FAIL  $1  (the image changed)"; fails=$((fails+1)); fi
+}
+
 echo "=== partition tables ==="
 
 # --- a table that is correct ----------------------------------------------
@@ -75,17 +86,42 @@ check     "read from a gpt partition"   "a file in it can be read"
 # to prevent, so the fallback has to skip it and end with no partitions.
 echo "--- a corrupt gpt header ---"
 python tools/mkgpt.py "$IMG" 65536 --bad-header-crc > /dev/null
+remember
 boot
 check     "gpt rejected: header checksum" "a bad header checksum is caught"
 check_not "fs mounted partition"          "nothing is mounted from it"
 check_not "read from a gpt partition"     "no file is served from it"
+# And the part that matters most. A refused table leaves no partitions, and
+# no partitions used to be read as a blank disk and formatted -- on a laptop
+# started from a stick, that disk is the internal drive.
+check_not "new disk prepared"             "a disk whose table was refused is not formatted"
+check     "refusing to format"            "and the machine says why it left it alone"
+unchanged                                 "not one byte of that disk was written"
 
 # --- an entry array that does not match its checksum ----------------------
 echo "--- a corrupt gpt entry array ---"
 python tools/mkgpt.py "$IMG" 65536 --bad-entry-crc > /dev/null
+remember
 boot
 check     "gpt rejected: entry array checksum" "a bad entry checksum is caught"
 check_not "fs mounted partition"               "nothing is mounted from it"
+check_not "new disk prepared"                  "and it is not formatted either"
+unchanged                                      "nor written to at all"
+
+# --- no table, and something on the disk this kernel cannot read ----------
+#
+# A filesystem written across the whole disk that is not FAT, which is how a
+# Linux disk without a partition table looks: nothing at sector zero, and a
+# superblock a kilobyte in. It has no table to refuse, so only the look at
+# the disk itself can tell it from a blank one.
+echo "--- an unpartitioned disk with something on it ---"
+rm -f "$IMG"
+head -c 33554432 /dev/zero > "$IMG"
+printf 'SOMEBODY ELSES FILESYSTEM' | dd of="$IMG" bs=1 seek=1080 conv=notrunc 2>/dev/null
+remember
+boot
+check_not "new disk prepared"   "a disk with something written on it is not formatted"
+unchanged                       "and is left exactly as it was"
 
 # --- no table at all, which is every other test in this project -----------
 echo "--- an unpartitioned image ---"

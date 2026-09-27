@@ -33,6 +33,7 @@
 #define ATA_CMD_READ_DMA_EX  0x25
 #define ATA_CMD_WRITE_DMA_EX 0x35
 #define ATA_CMD_IDENTIFY     0xEC
+#define ATA_CMD_FLUSH_EXT    0xEA
 
 #define ATA_DEV_BUSY 0x80
 #define ATA_DEV_DRQ  0x08
@@ -160,7 +161,10 @@ static bool run_command(u8 command, u64 lba, u16 count, bool write, u32 bytes) {
     hba_cmd_header_t *hdr = &cmd_list[slot];
     hdr->cfl_a_w_p = (u8)((sizeof(fis_reg_h2d_t) / 4) & 0x1F);
     if (write) hdr->cfl_a_w_p |= (1 << 6);             /* W: host to device */
-    hdr->prdtl = 1;
+    /* A command that moves no data has no descriptor at all. One with a
+       length of nothing is not the same thing: the count is stored as n-1,
+       so zero bytes would be read as four megabytes. */
+    hdr->prdtl = bytes ? 1 : 0;
     hdr->prdbc = 0;
     /* The controller reads these as one 64-bit address, so the upper half
        has to be right even when it happens to be zero. */
@@ -168,9 +172,11 @@ static bool run_command(u8 command, u64 lba, u16 count, bool write, u32 bytes) {
     hdr->ctbau = (u32)((u64)cmd_tbl >> 32);
 
     memset(cmd_tbl, 0, sizeof(hba_cmd_tbl_t));
-    cmd_tbl->prdt[0].dba = (u32)(u64)dma_buf;
-    cmd_tbl->prdt[0].dbau = (u32)((u64)dma_buf >> 32);
-    cmd_tbl->prdt[0].dbc_i = (bytes - 1) | (1u << 31); /* byte count is n-1 */
+    if (bytes) {
+        cmd_tbl->prdt[0].dba = (u32)(u64)dma_buf;
+        cmd_tbl->prdt[0].dbau = (u32)((u64)dma_buf >> 32);
+        cmd_tbl->prdt[0].dbc_i = (bytes - 1) | (1u << 31); /* byte count is n-1 */
+    }
 
     fis_reg_h2d_t *fis = (fis_reg_h2d_t *)cmd_tbl->cfis;
     fis->fis_type = FIS_TYPE_REG_H2D;
@@ -213,7 +219,21 @@ bool ahci_write(u32 lba, u32 count, const void *buf) {
     return run_command(ATA_CMD_WRITE_DMA_EX, lba, (u16)count, true, bytes);
 }
 
-bool ahci_flush(void) { return present; }   /* DMA writes are already through */
+/* The drive's own write cache, emptied onto the platters or the flash.
+ *
+ * This said that DMA writes are already through, and they are not: a write
+ * completing means the drive has the data, which on nearly every SATA drive
+ * made means it is in the drive's cache. The crash-safe writes in fat.c are
+ * built on this call meaning what it says -- write the new clusters, flush,
+ * swing the directory entry, flush -- and with it answering true without a
+ * word to the drive, the order they depend on was an order in which the
+ * drive might or might not choose to write things down. QEMU hid it: its
+ * disk writes through, so the power-cut test passed on a promise the real
+ * hardware was never given. */
+bool ahci_flush(void) {
+    if (!present) return false;
+    return run_command(ATA_CMD_FLUSH_EXT, 0, 0, false, 0);
+}
 
 static bool identify(void) {
     if (!run_command(ATA_CMD_IDENTIFY, 0, 1, false, 512)) return false;

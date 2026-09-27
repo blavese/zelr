@@ -170,6 +170,15 @@ static const char *route(const char *abs) {
     return abs;
 }
 
+/* And back, once the call that needed it is over.
+ *
+ * The selection used to stay wherever the last path left it, and everything
+ * that calls fat.c directly then acted on that: after any look at /usb, the
+ * shell's disk and mem described the stick, the black box looked for its log
+ * on the stick, and format formatted it. A selection that lasts for one call
+ * is the only kind the rest of the kernel can ignore. */
+static void unroute(void) { fat_select(FAT_VOL_DISK); }
+
 int vfs_list(const char *path, u32 index, char *name_out, u32 *size_out, bool *dir_out) {
     char abs[VFS_PATH_MAX];
     if (!vfs_resolve(path ? path : ".", abs, sizeof(abs))) return -1;
@@ -193,7 +202,12 @@ int vfs_list(const char *path, u32 index, char *name_out, u32 *size_out, bool *d
     }
 
     const char *on = route(abs);
-    if (fat_mounted()) return fat_list(on, index, name_out, size_out, dir_out);
+    if (fat_mounted()) {
+        int r = fat_list(on, index, name_out, size_out, dir_out);
+        unroute();
+        return r;
+    }
+    unroute();
     return ram_list(abs, index, name_out, size_out, dir_out);
 }
 
@@ -216,7 +230,12 @@ bool vfs_stat(const char *path, u32 *size_out, bool *dir_out) {
     if (vfs_generated(abs)) return sysfs_stat(abs, size_out, dir_out);
 
     const char *on = route(abs);
-    if (fat_mounted()) return fat_stat(on, size_out, dir_out);
+    if (fat_mounted()) {
+        bool r = fat_stat(on, size_out, dir_out);
+        unroute();
+        return r;
+    }
+    unroute();
 
     file_t *f = fs_find(abs);
     if (!f) return false;
@@ -234,7 +253,12 @@ int vfs_read(const char *path, void *buf, u32 cap) {
     if (vfs_generated(abs)) return sysfs_read(abs, buf, cap);
 
     const char *on = route(abs);
-    if (fat_mounted()) return fat_read_file(on, (u8 *)buf, cap);
+    if (fat_mounted()) {
+        int r = fat_read_file(on, (u8 *)buf, cap);
+        unroute();
+        return r;
+    }
+    unroute();
 
     file_t *f = fs_find(abs);
     if (!f || f->is_dir) return -1;
@@ -249,7 +273,12 @@ bool vfs_write(const char *path, const void *buf, u32 len) {
     if (vfs_generated(abs)) return false;   /* generated, or the kernel's own copy */
 
     const char *on = route(abs);
-    if (fat_mounted()) return fat_write_file(on, (const u8 *)buf, len);
+    if (fat_mounted()) {
+        bool r = fat_write_file(on, (const u8 *)buf, len);
+        unroute();
+        return r;
+    }
+    unroute();
     return fs_write(abs, buf, len);
 }
 
@@ -276,7 +305,12 @@ bool vfs_delete(const char *path) {
     if (vfs_generated(abs)) return false;
 
     const char *on = route(abs);
-    if (fat_mounted()) return fat_delete_file(on);
+    if (fat_mounted()) {
+        bool r = fat_delete_file(on);
+        unroute();
+        return r;
+    }
+    unroute();
     return fs_delete(abs);
 }
 
@@ -289,8 +323,22 @@ bool vfs_rename(const char *from, const char *to) {
        disk to rename and nowhere to record a new name. */
     if (vfs_generated(a) || vfs_generated(b)) return false;
 
-    if (!fat_mounted()) return false;   /* the live tree has no rename */
-    return fat_rename(route(a), route(b));
+    /* One volume, or nothing. fat_rename works within whichever volume is
+       selected, and the two routes below each select one: this used to hand
+       it both paths and let the second route decide, so renaming
+       /usb/x.txt to /y.txt renamed an unrelated /x.txt on the disk to /y.txt
+       -- deleting any /y.txt already there first. Moving a file between the
+       disk and a stick is a copy and a delete, which is a different job. */
+    const char *on_a = route(a);
+    u32 vol_a = fat_selected();
+    const char *on_b = route(b);
+    bool same_volume = fat_selected() == vol_a;
+
+    /* The live tree has no rename. Asked after routing, so it is the
+       volume these paths are on that has to be there. */
+    bool r = same_volume && fat_mounted() && fat_rename(on_a, on_b);
+    unroute();
+    return r;
 }
 
 bool vfs_mkdir(const char *path) {
@@ -300,7 +348,12 @@ bool vfs_mkdir(const char *path) {
     if (vfs_generated(abs)) return false;
 
     const char *on = route(abs);
-    if (fat_mounted()) return fat_mkdir(on);
+    if (fat_mounted()) {
+        bool r = fat_mkdir(on);
+        unroute();
+        return r;
+    }
+    unroute();
     return fs_mkdir(abs);
 }
 
@@ -312,7 +365,12 @@ bool vfs_rmdir(const char *path) {
     if (vfs_count(abs) > 0) return false;
 
     const char *on = route(abs);
-    if (fat_mounted()) return fat_rmdir(on);
+    if (fat_mounted()) {
+        bool r = fat_rmdir(on);
+        unroute();
+        return r;
+    }
+    unroute();
     return fs_delete(abs);
 }
 

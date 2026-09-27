@@ -905,7 +905,7 @@ static void cmd_kill(int argc, char **argv) {
     int pid = parse_num(argv[1], -1);
     if (pid < 0) { err("that is not a pid"); return; }
     if (pid == getpid()) { err("not this one"); return; }
-    if (kill(pid) != 0) { err("no such task"); return; }
+    if (kill(pid) != 0) { err("no program with that pid (the kernel's own tasks cannot be stopped)"); return; }
     w_reset(); w_str("killed "); w_num((u32)pid); dim(work);
 }
 
@@ -1337,7 +1337,7 @@ static const command COMMANDS[] = {
     { "rmdir",   cmd_rmdir,   "NAME",          "remove an empty one" },
     { "run",     cmd_run,     "PROGRAM [&]",   "start a program, & to not wait" },
     { "ps",      cmd_ps,      "",              "what is running" },
-    { "kill",    cmd_kill,    "PID",           "stop a task" },
+    { "kill",    cmd_kill,    "PID",           "stop a program" },
     { "sys",     cmd_sys,     "[NAME]",        "the machine, as files" },
     { "watch",   cmd_watch,   "FILE [TIMES]",  "read it again and again" },
     { "time",    cmd_time,    "COMMAND...",    "how long something takes" },

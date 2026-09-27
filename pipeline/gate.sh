@@ -513,6 +513,14 @@ if [ "$MODE" = "screen" ] || [ "$MODE" = "full" ]; then
   # opened one connection per request looks the same from inside itself.
   wiretest() { keep timeout 600 python tools/wirecheck.py; }
 
+  # A server that takes the connection and never answers, and a network
+  # where nothing outside answers at all. Either one used to stop the whole
+  # machine for good: a network wait inside a system call spun on a clock
+  # that only moves with interrupts on, and interrupts are off in there. The
+  # same run checks that the program left waiting can be stopped, and that a
+  # program cannot stop the kernel's own tasks.
+  hangtest() { keep timeout 900 python tools/hangcheck.py; }
+
   # The second boot of a machine, which is the one nothing else reaches:
   # every other check starts the kernel directly and never asks a firmware
   # to start from the disk the kernel formatted.
@@ -584,6 +592,7 @@ if [ "$MODE" = "screen" ] || [ "$MODE" = "full" ]; then
   par_start "a page does its work on a click, a timer and an answer" livetest
   par_start "a form is filled in and arrives as it was filled in" formtest
   par_start "bodies arrive compressed and connections are kept" wiretest
+  par_start "a server that never answers does not stop the machine" hangtest
   par_start "a machine still starts once it has formatted its disk" boottest
   par_start "ctrl+f finds a word that is on the screen" findtest
   par_start "a deal reaches the cloth and the dealer plays it out" gametest
@@ -617,7 +626,7 @@ stale() {
 rm -f gate.img gateq.img gatenv.img deskcheck.img termcheck.img shotcheck.img sel.img blackbox.img 2>/dev/null
 for pat in 'gpttest.*.img' 'fat32test.*.img' 'nvmetest.*.img' 'clipcheck.*.img' \
            'shotcheck.*.img' 'termcheck.*.img' 'deskcheck.*.img' 'usbcheck.*.img' \
-           'fat32probe.*.txt' 'fat32high.*.txt'; do
+           'fat32probe.*.txt' 'fat32high.*.txt' 'hangcheck.*.img' 'mounttrace.*.log'; do
   stale "$pat"
 done
 rm -f build/*.ppm 2>/dev/null

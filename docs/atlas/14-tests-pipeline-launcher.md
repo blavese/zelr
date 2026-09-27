@@ -1019,6 +1019,24 @@ A note on the verified run: `bash run.sh -T` created `zelr.img` in the repositor
 
 ### 8.1 The complete test catalogue
 
+Added in 0.39.0, not yet in the table below:
+- **`hangcheck.py`** (gate `hangtest`, screen and full; 16 checks). Drive S+H, 256 MiB.
+  - Network one: webserver.Server, plus a host socket that accepts and never sends. It runs
+    `/bin/hangtest HOST SILENT LIVE`: a child waits in `recv` on the silent server while the parent runs.
+    The clock must move, the child must be killable mid-call, a page and six sockets must work afterwards,
+    and `kill`/`send_signal` on net, idle and usb must be refused.
+  - Network two: `restrict=on` with `bg /bin/wiretest http://93.184.216.34:80`. The shell must still answer
+    and the program must give up.
+- **`mountcheck.py`** gained 7 checks (14 in all).
+  - It passes `-trace enable=ide_bus_exec_cmd -trace enable=scsi_req_parsed -D mounttrace.<pid>.log` and
+    counts FLUSH CACHE EXT (`cmd 0xea`) and SYNCHRONIZE CACHE (`command 53`) after a save to each disk.
+  - Then `format` after `ls /usb` must format the boot disk and leave the stick's files, checked with
+    readfat.
+- **`gpt_test.sh`** gained 7 checks.
+  - The corrupt-header and corrupt-entries cases must not format, and the image must be byte-identical
+    (cksum) after the boot.
+  - A new case: a zero image with bytes at offset 1080, which must be left alone.
+
 Machine notation is as in 3.1. Every Guest adds `-kernel build/zelr.bin -no-reboot -display none -serial stdio`, an IDE disk named by pid (32 MiB unless noted), a free-port monitor, and `-append console` unless noted.
 
 Drive methods:

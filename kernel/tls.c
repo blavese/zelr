@@ -93,6 +93,18 @@ typedef struct {
        holds several now, so "the connection" is no longer a thing that can
        be assumed: a session has to carry the one it was handed. */
     int  tcp;
+
+    /* The chain the server sent and its first certificate, read.
+     *
+       These were statics inside tls_connect, shared by every session. A
+       handshake waits on the network between receiving the chain and
+       checking it, and a wait gives the processor away now, so a second
+       handshake could run in that gap and leave the first one checking
+       another site's certificates against its own host name. */
+    x509_t    leaf;
+    const u8 *ders[X509_MAX_CHAIN];
+    u32       lens[X509_MAX_CHAIN];
+    u8       *chain;          /* the certificates, copied out of the handshake */
 } tls_t;
 
 /* One per connection underneath, indexed by the handle the stack gave out.
@@ -569,13 +581,37 @@ static bool check_cert_verify(tls_t *z, const u8 *p, u32 len, const x509_t *leaf
     return false;
 }
 
+/* --- the order of the server's encrypted messages ------------------------- */
+
+/* One step at a time, each allowing exactly one message: encrypted extensions,
+   the certificate, the signature, finished. A function of its own so that the
+   self test can hold the rule to account without a server. */
+int tls_flight_step(int step, u8 type, const char **why) {
+    static const u8 NEXT[] = { HS_ENCRYPTED_EXT, HS_CERTIFICATE, HS_CERT_VERIFY, HS_FINISHED };
+    if (step < TLS_FLIGHT_START || step >= TLS_FLIGHT_DONE) {
+        if (why) *why = "the server kept talking after its handshake was over";
+        return -1;
+    }
+    if (type != NEXT[step]) {
+        /* Named apart from any other slip, because it is the one that
+           matters: a finished message with no signature before it is a
+           server that has not shown it holds the certificate's key. */
+        if (why) *why = type == HS_FINISHED
+                          ? "the server never proved it holds the certificate's key"
+                          : "the server sent its handshake out of order";
+        return -1;
+    }
+    return step + 1;
+}
+
 /* --- the handshake -------------------------------------------------------- */
 
 static bool alloc_buffers(tls_t *z) {
-    if (!z->rec) z->rec = (u8 *)kmalloc(REC_MAX + 64);
-    if (!z->hs)  z->hs  = (u8 *)kmalloc(HS_MAX);
-    if (!z->app) z->app = (u8 *)kmalloc(REC_MAX);
-    return z->rec && z->hs && z->app;
+    if (!z->rec)   z->rec   = (u8 *)kmalloc(REC_MAX + 64);
+    if (!z->hs)    z->hs    = (u8 *)kmalloc(HS_MAX);
+    if (!z->app)   z->app   = (u8 *)kmalloc(REC_MAX);
+    if (!z->chain) z->chain = (u8 *)kmalloc(HS_MAX);
+    return z->rec && z->hs && z->app && z->chain;
 }
 
 bool tls_connect(int tcp, const char *host) {
@@ -583,9 +619,9 @@ bool tls_connect(int tcp, const char *host) {
 
     /* Everything resets except the buffers, which are kept and reused:
        clearing those pointers would leak them and allocate again. */
-    u8 *keep_rec = z->rec, *keep_hs = z->hs, *keep_app = z->app;
+    u8 *keep_rec = z->rec, *keep_hs = z->hs, *keep_app = z->app, *keep_chain = z->chain;
     memset(z, 0, sizeof(*z));
-    z->rec = keep_rec; z->hs = keep_hs; z->app = keep_app;
+    z->rec = keep_rec; z->hs = keep_hs; z->app = keep_app; z->chain = keep_chain;
     z->tcp = tcp;
 
     if (!alloc_buffers(z)) { fail(z, "not enough memory for a connection"); return false; }
@@ -665,22 +701,39 @@ bool tls_connect(int tcp, const char *host) {
         if (!set_keys(z, z->s_hs, false)) { fail(z, "could not set up decryption"); return false; }
     }
 
-    /* Everything from here is encrypted. */
-    static x509_t leaf;
-    bool have_leaf = false;
+    /* Everything from here is encrypted.
+     *
+     * The server's messages have one order and every one of them is required:
+     * encrypted extensions, its certificate, its signature over the handshake,
+     * then finished. Any other sequence is refused.
+     *
+     * This loop used to take the four in any order and stop at the first
+     * finished, and nothing after it asked whether a signature had ever
+     * arrived. Leaving the signature out was therefore a handshake that
+     * passed, and that is the whole of server authentication gone. The
+     * certificate chain is public -- anybody can fetch a site's -- and the
+     * finished message is keyed from a secret the server agreed with us, so
+     * whoever sits in the middle can compute it. The signature is the only
+     * step that needs the site's private key. Someone on the path between
+     * this machine and a bank could present the bank's real chain, skip the
+     * signature, and read and rewrite the whole conversation, and the address
+     * bar would have said it was the bank. */
+    int step = TLS_FLIGHT_START;
     u8 hash_before_verify[32];
 
-    static const u8 *ders[X509_MAX_CHAIN];
-    static u32 lens[X509_MAX_CHAIN];
     u32 nchain = 0;
-    static u8 *chain_store;
-    if (!chain_store) chain_store = (u8 *)kmalloc(HS_MAX);
-    if (!chain_store) { fail(z, "not enough memory"); return false; }
     u32 chain_used = 0;
 
     for (;;) {
         u8 type; const u8 *body, *whole; u32 len, whole_len;
         if (!hs_next(z, true, &type, &body, &len, &whole, &whole_len)) return false;
+
+        /* Asked before anything in the message is looked at, so one that
+           arrives out of turn is refused unread. */
+        const char *why = 0;
+        int next = tls_flight_step(step, type, &why);
+        if (next < 0) { fail(z, why); return false; }
+        step = next;
 
         if (type == HS_ENCRYPTED_EXT) {
             sha256_update(&z->transcript, whole, whole_len);
@@ -703,9 +756,9 @@ bool tls_connect(int tcp, const char *host) {
                 p += 3;
                 if (p + clen > end) { fail(z, "a certificate runs past the list"); return false; }
                 if (chain_used + clen > HS_MAX) { fail(z, "the certificates are too big"); return false; }
-                memcpy(chain_store + chain_used, body + p, clen);
-                ders[nchain] = chain_store + chain_used;
-                lens[nchain] = clen;
+                memcpy(z->chain + chain_used, body + p, clen);
+                z->ders[nchain] = z->chain + chain_used;
+                z->lens[nchain] = clen;
                 chain_used += clen;
                 nchain++;
                 p += clen;
@@ -714,22 +767,20 @@ bool tls_connect(int tcp, const char *host) {
                 p += 2 + ext;
             }
             if (nchain == 0) { fail(z, "the server sent no certificate"); return false; }
-            if (!x509_parse(ders[0], lens[0], &leaf)) {
+            if (!x509_parse(z->ders[0], z->lens[0], &z->leaf)) {
                 fail(z, "the server's certificate could not be read");
                 return false;
             }
-            have_leaf = true;
             sha256_update(&z->transcript, whole, whole_len);
 
         } else if (type == HS_CERT_VERIFY) {
-            if (!have_leaf) { fail(z, "a signature arrived before the certificate"); return false; }
             /* Over everything up to and including the certificate, so the
                hash is taken before this message joins the transcript. */
             transcript_hash(z, hash_before_verify);
-            if (!check_cert_verify(z, body, len, &leaf, hash_before_verify)) return false;
+            if (!check_cert_verify(z, body, len, &z->leaf, hash_before_verify)) return false;
             sha256_update(&z->transcript, whole, whole_len);
 
-        } else if (type == HS_FINISHED) {
+        } else {
             /* The server's finished message is a MAC over everything before
                it, so the hash has to be taken before it joins the
                transcript. What comes after it, including the keys for the
@@ -737,30 +788,24 @@ bool tls_connect(int tcp, const char *host) {
             u8 upto_here[32];
             transcript_hash(z, upto_here);
 
-            u8 fkey[32], want[32];
+            u8 fkey[32], mac[32];
             if (!hkdf_expand_label(z->s_hs, "finished", 0, 0, fkey, 32)) {
                 fail(z, "the key schedule failed"); return false;
             }
-            hmac_sha256(fkey, 32, upto_here, 32, want);
-            if (len != 32 || memcmp(want, body, 32) != 0) {
+            hmac_sha256(fkey, 32, upto_here, 32, mac);
+            if (len != 32 || memcmp(mac, body, 32) != 0) {
                 fail(z, "the server's finished message is wrong");
                 return false;
             }
             sha256_update(&z->transcript, whole, whole_len);
             break;
-
-        } else {
-            fail(z, "the server sent an unexpected handshake message");
-            return false;
         }
     }
-
-    if (!have_leaf) { fail(z, "the server never sent a certificate"); return false; }
 
     /* --- who it actually is ---------------------------------------------- */
     {
         u64 now = x509_now();
-        x509_result_t r = x509_verify_chain(ders, lens, nchain, z->host, now);
+        x509_result_t r = x509_verify_chain(z->ders, z->lens, nchain, z->host, now);
         if (r != X509_OK) { fail(z, x509_reason(r)); return false; }
     }
 
@@ -886,6 +931,18 @@ u32 tls_recv(int tcp, u8 *out, u32 cap, u32 timeout_ms) {
         z->app_pos = take;
         return take;
     }
+}
+
+/* The session on a connection whose program was ended from outside. No close
+   notification: sending one waits on the network, and this runs where nothing
+   may wait (see syscall_abandon). */
+void tls_abandon(int tcp) {
+    tls_t *z = tls_of(tcp);
+    z->open = false;
+    z->handshake_done = false;
+    z->ended = false;
+    z->app_len = z->app_pos = 0;
+    z->hs_len = z->hs_pos = 0;
 }
 
 void tls_close(int tcp) {

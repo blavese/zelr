@@ -984,7 +984,7 @@ forwarding to the internet (README:1623-1627). run.sh uses rtl8139, zelr.bat use
 
 Severity: H = can hang or corrupt, M = wrong behaviour, L = minor. All items are from static reading unless noted.
 
-**D1 (H) Network system calls wait with interrupts off, so their timeouts and TCP retransmission cannot work, and the
+**D1 (H) FIXED in 0.39.0 (net_wait; see atlas README). Network system calls wait with interrupts off, so their timeouts and TCP retransmission cannot work, and the
 whole kernel stalls while they wait.** Chain: `int 0x80` is an interrupt gate (idt.c:62-63), so IF = 0 for the whole call
 (sched.h:180-183; fd.c:192-212 is the author's explicit workaround for console reads, and nothing equivalent exists for
 the network). `sys_connect/sys_connect_tls/sys_send/sys_recv/sys_disconnect/sys_resolve` (syscall.c:747-898) call
@@ -999,7 +999,7 @@ lock held (desktop and other CPUs frozen). The documented 4 s `recv` timeout and
 cannot trigger. Hidden in tests because slirp always answers. Kernel-task callers (shell `fetch`, selftest, dhcp task)
 are unaffected.
 
-**D2 (H) Delivery-ownership deadlock between a preempted kernel task and a syscall.** `net_deliver` turns away every
+**D2 (H) FIXED in 0.39.0: a waiting call now sleeps, so the owner runs again. Delivery-ownership deadlock between a preempted kernel task and a syscall.** `net_deliver` turns away every
 non-owner (net.c:486-489), assuming the owner will run again. Kernel tasks (net task, dhcp task, kernel shell) run with
 interrupts on and can be preempted inside the delivery loop (ownership is held with interrupts on, 491-512). If a ring-3
 program then makes a network syscall, its wait loop calls `net_poll`, gets turned away, and spins with IF = 0 (D1): the

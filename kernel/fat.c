@@ -132,6 +132,11 @@ bool fat_mounted_on(u32 vol) {
     return vol < FAT_VOLUMES && volumes[vol].mounted;
 }
 
+bool fat_flush_volume(u32 vol) {
+    if (vol >= FAT_VOLUMES || !volumes[vol].mounted) return false;
+    return blk_flush_on(volumes[vol].dev);
+}
+
 void fat_forget_volume(u32 vol) {
     if (vol >= FAT_VOLUMES) return;
     volumes[vol].mounted = false;
@@ -171,11 +176,38 @@ static bool vol_read(u32 lba, u32 count, void *buf) {
     return blk_read_on(CUR.dev, part_base + lba, count, buf);
 }
 
+/* Faults on demand, for the self test and nothing else.
+ *
+ * The orders in this file -- what is written before what, and what is
+ * flushed in between -- exist for the moment the power goes, and on a machine
+ * that keeps its power the right order and the wrong one leave exactly the
+ * same disk behind. These make that moment happen at a chosen point: every
+ * write from the nth on failing, the way a disk that has just lost power
+ * fails them, or a directory that cannot be read. */
+static u32  test_writes_left = 0xFFFFFFFFu;
+static bool test_subdirs_unreadable;
+
+void fat_test_writes_left(u32 n)          { test_writes_left = n; }
+void fat_test_subdirs_unreadable(bool on) { test_subdirs_unreadable = on; }
+
 static bool vol_write(u32 lba, u32 count, const void *buf) {
     if (part_sectors && (lba >= part_sectors || count > part_sectors - lba))
         return false;
+    if (test_writes_left != 0xFFFFFFFFu) {
+        if (!test_writes_left) return false;
+        test_writes_left--;
+    }
     return blk_write_on(CUR.dev, part_base + lba, count, buf);
 }
+
+/* The disk this volume is on, told to write down what it holds.
+ *
+ * Every flush in this file used to be blk_flush(), which is the disk the
+ * machine booted from. The reads and writes went to the right disk and the
+ * flushes that order them went to a different one, so a file saved to a
+ * stick was committed in whatever order the stick liked while the internal
+ * drive was told, twice per file, to flush nothing. */
+static bool vol_flush(void) { return blk_flush_on(CUR.dev); }
 
 u32 fat_base(void) { return part_base; }
 
@@ -206,9 +238,18 @@ static void fat_forget(void) {
     alloc_hint = 2;
 }
 
+/* How many reads of the table have failed since boot. fat_get has no way to
+   say it failed -- it answers end of chain -- so anything that must not act on
+   a chain cut short by a bad read compares this before and after. */
+static u32 fat_read_failures;
+
 static bool fat_cache_load(u32 lba) {
     if (fat_cache_valid && fat_cache_lba == lba) return true;
-    if (!vol_read(lba, 1, fat_cache)) { fat_cache_valid = false; return false; }
+    if (!vol_read(lba, 1, fat_cache)) {
+        fat_cache_valid = false;
+        fat_read_failures++;
+        return false;
+    }
     fat_cache_lba = lba;
     fat_cache_valid = true;
     return true;
@@ -418,7 +459,10 @@ bool fat_mount_at(u32 base_lba) {
     if (total_sectors == 0) return false;
     part_sectors = total_sectors;
 
-    u32 disk = blk_sectors();
+    /* The disk this volume is on. This was the boot disk's size for every
+       volume, so a stick larger than the boot disk was refused as corrupt
+       and one claiming more than the stick holds was not caught at all. */
+    u32 disk = blk_device_sectors(CUR.dev);
     if (disk && (part_base >= disk || total_sectors > disk - part_base)) {
         part_sectors = 0;
         return false;
@@ -627,13 +671,13 @@ bool fat_boot_repair(void) {
 }
 
 bool fat_format_at(u32 base_lba, u32 sectors, const char *label) {
-    if (!blk_present()) return false;
+    if (!blk_device_present(CUR.dev)) return false;
     fat_forget();
 
     part_base = base_lba;
     part_sectors = sectors;
 
-    u32 total = sectors ? sectors : blk_sectors() - base_lba;
+    u32 total = sectors ? sectors : blk_device_sectors(CUR.dev) - base_lba;
     if (total < 8192) return false;
 
     u8  fats = 2;
@@ -782,12 +826,26 @@ bool fat_format_at(u32 base_lba, u32 sectors, const char *label) {
     for (u32 s = 0; s < root_len; s++)
         if (!vol_write(root_lba + s, 1, sec)) return false;
 
-    blk_flush();
+    vol_flush();
     (void)clusters;
     return fat_mount_at(base_lba);
 }
 
-bool fat_format(const char *label) { return fat_format_at(0, 0, label); }
+/* The disk the machine booted from, whatever path was touched last.
+ *
+ * Which volume the calls in this file are about is chosen by the last path
+ * that went through vfs.c, and nothing put it back. So `format` after any
+ * look at /usb formatted the stick -- with a layout worked out from the size
+ * of the internal disk, which is to say a volume larger than the stick it
+ * was written on. */
+bool fat_format(const char *label) {
+    u32 was = current_volume;
+    current_volume = FAT_VOL_DISK;
+    volumes[FAT_VOL_DISK].dev = BLK_BOOT;
+    bool ok = fat_format_at(0, 0, label);
+    current_volume = was;
+    return ok;
+}
 
 /* --- directories -------------------------------------------------------- */
 
@@ -855,6 +913,7 @@ static bool dir_locate(const dir_t *d, u32 index, u32 *lba_out, u32 *off_out) {
 }
 
 static bool dir_read(const dir_t *d, u32 index, dirent_t *out) {
+    if (test_subdirs_unreadable && !d->root) return false;
     u32 lba, off;
     if (!dir_locate(d, index, &lba, &off)) return false;
     if (!vol_read(lba, 1, dsec)) return false;
@@ -1199,16 +1258,27 @@ static void dir_drop_long(const dir_t *d, u32 index, const dirent_t *shortent) {
     }
 }
 
+static bool fits_83(const char *name);
+
 static int dir_find(const dir_t *d, const char *name, dirent_t *out) {
+    /* By the short name only when the name really is one.
+     *
+     * to_83 truncates, so a name too long for eight and three packs down to
+     * the short name of some other file: "chapter10.txt" to CHAPTER1TXT,
+     * which is chapter1.txt. This compared that first, so opening chapter10
+     * opened chapter1, saving chapter10 overwrote chapter1, and deleting it
+     * deleted chapter1. A name that does not survive the trip through 8.3 is
+     * found by its long name or not at all. */
     u8 want[11];
     to_83(name, want);
+    bool is_short = fits_83(name);
     u32 cap = dir_capacity(d);
     dirent_t e;
     for (u32 i = 0; i < cap; i++) {
         if (!dir_read(d, i, &e)) break;
         if (e.name[0] == ENT_FREE) break;
         if (!entry_is_real(&e)) continue;
-        if (memcmp(e.name, want, 11) == 0) { if (out) *out = e; return (int)i; }
+        if (is_short && memcmp(e.name, want, 11) == 0) { if (out) *out = e; return (int)i; }
 
         /* And by the name somebody actually gave it, which is not the one
            stored in this entry when it did not fit. */
@@ -1458,7 +1528,7 @@ bool fat_write_file(const char *path, const u8 *buf, u32 size) {
     }
 
     /* Make sure the data is on the platter before anything points at it. */
-    blk_flush();
+    vol_flush();
 
     set_ent_cluster(&e, first);
     e.size = size;
@@ -1469,12 +1539,12 @@ bool fat_write_file(const char *path, const u8 *buf, u32 size) {
        This is the commit: before it the old file is live, after it the new
        one is, and there is no moment where neither is. */
     if (!dir_write(&parent, (u32)slot, &e)) { if (first) free_chain(first); return false; }
-    if (!blk_flush()) return false;
+    if (!vol_flush()) return false;
 
     /* Only now is the old chain unreachable and safe to release. A crash
        before this point leaks clusters, which fat_reclaim recovers; it never
        loses the file. */
-    if (old_chain >= 2) { free_chain(old_chain); blk_flush(); }
+    if (old_chain >= 2) { free_chain(old_chain); vol_flush(); }
     return true;
 }
 
@@ -1550,6 +1620,14 @@ bool fat_rename(const char *from, const char *to) {
        files would be the worst call in the system. */
     dirent_t existing;
     int taken = dir_find(&dst_dir, dst_leaf, &existing);
+
+    /* The file itself, under its short name: `rename longname.txt
+       LONGNA~1.TXT`. What is "in the way" is the file being renamed, and
+       deleting it first -- which is what happened -- left nothing to rename
+       and the call reporting failure over a file that no longer existed. The
+       rename is only a matter of dropping the long name, below. */
+    if (taken == slot) taken = -1;
+
     if (taken >= 0) {
         if (existing.attr & ATTR_DIRECTORY) return false;
         if (!fat_delete_file(to)) return false;
@@ -1567,7 +1645,7 @@ bool fat_rename(const char *from, const char *to) {
 
     to_83(dst_leaf, e.name);
     if (!dir_write(&src_dir, (u32)slot, &e)) return false;
-    return blk_flush();
+    return vol_flush();
 }
 
 bool fat_delete_file(const char *path) {
@@ -1582,11 +1660,23 @@ bool fat_delete_file(const char *path) {
     if (slot < 0) return false;
     if (e.attr & ATTR_DIRECTORY) return false;      /* rmdir is a different job */
 
-    if (ent_cluster(&e) >= 2) free_chain(ent_cluster(&e));
+    /* The entry first, then the clusters, with a flush between.
+     *
+     * It was the other way round, and a power cut between the two left an
+     * entry that still named clusters the table said were free. The next
+     * file to be written was given them, and two files then shared one run
+     * of the disk -- a corruption fat_reclaim cannot see, let alone mend.
+     * This order turns the same power cut into clusters nothing points at,
+     * which is a leak, and fat_reclaim gives leaks back at the next mount.
+     * It is the rule fat_write_file already follows: never free what
+     * something still points to. */
+    u32 chain = ent_cluster(&e);
     dir_drop_long(&parent, (u32)slot, &e);
     e.name[0] = ENT_DELETED;
     if (!dir_write(&parent, (u32)slot, &e)) return false;
-    return blk_flush();
+    if (!vol_flush()) return false;
+    if (chain >= 2) free_chain(chain);
+    return vol_flush();
 }
 
 /* --- making and removing directories ------------------------------------ */
@@ -1624,7 +1714,7 @@ bool fat_mkdir(const char *path) {
     set_ent_cluster(&dot, parent.root ? 0 : parent.cluster);
     if (!dir_write(&self, 1, &dot)) { free_chain(c); return false; }
 
-    blk_flush();
+    vol_flush();
 
     /* Only once the directory is a valid one does anything point at it. */
     dirent_t e;
@@ -1636,7 +1726,7 @@ bool fat_mkdir(const char *path) {
     e.size = 0;                       /* directories report zero, by the spec */
     e.write_date = 0x5A21;
     if (!dir_write(&parent, (u32)slot, &e)) { free_chain(c); return false; }
-    return blk_flush();
+    return vol_flush();
 }
 
 bool fat_rmdir(const char *path) {
@@ -1655,11 +1745,14 @@ bool fat_rmdir(const char *path) {
     /* Refuse while anything is still inside, rather than orphaning it. */
     if (fat_count(path) > 0) return false;
 
+    /* In the same order as a file, for the same reason: see fat_delete_file. */
     u32 ec = ent_cluster(&e);
-    if (ec >= 2) free_chain(ec);
+    dir_drop_long(&parent, (u32)slot, &e);
     e.name[0] = ENT_DELETED;
     if (!dir_write(&parent, (u32)slot, &e)) return false;
-    return blk_flush();
+    if (!vol_flush()) return false;
+    if (ec >= 2) free_chain(ec);
+    return vol_flush();
 }
 
 /* --- reclaiming leaked clusters ----------------------------------------- */
@@ -1705,16 +1798,30 @@ u32 fat_reclaim(void) {
 
     dir_t d = ROOT;
 
+    /* The sweep below frees everything the walk did not reach, so a walk
+     * that missed anything turns what it missed into free space -- somebody's
+     * files, handed to the next thing that asks for room. It could miss in
+     * three ways, and in each it used to carry on and sweep anyway: a queue
+     * that could not grow stopped only the current directory's loop, a
+     * directory that could not be read was taken as ending there, and a bad
+     * read of the table cut a chain short (fat_get answers end of chain when
+     * it cannot read). So the walk now says whether it saw everything, and
+     * when it did not, nothing at all is freed. A leak waits for the next
+     * mount; freed data does not come back. */
+    bool whole = true;
+    u32 failures_before = fat_read_failures;
+
     for (;;) {
         u32 cap = dir_capacity(&d);
         dirent_t e;
         for (u32 i = 0; i < cap; i++) {
-            if (!dir_read(&d, i, &e)) break;
+            if (!dir_read(&d, i, &e)) { whole = false; break; }
             if (e.name[0] == ENT_FREE) break;
             if (!entry_is_real(&e)) continue;
             if (e.name[0] == '.') continue;   /* "." and ".." lead in circles */
 
-            u32 c = ent_cluster(&e);
+            u32 first = ent_cluster(&e);
+            u32 c = first;
             u32 guard = 0;
             while (c >= 2 && c < eoc_min() && c < total && guard++ < total) {
                 if (reachable[c]) break;      /* a loop; stop rather than spin */
@@ -1722,32 +1829,50 @@ u32 fat_reclaim(void) {
                 c = fat_get(c);
             }
 
-            if ((e.attr & ATTR_DIRECTORY) && ent_cluster(&e) >= 2) {
+            /* Each directory is walked once. Marked 2 when queued, so a
+               directory pointing back at an ancestor -- which only a damaged
+               volume has -- is not queued again and again until memory runs
+               out, which is how it used to end. */
+            if ((e.attr & ATTR_DIRECTORY) && first >= 2 && first < total &&
+                reachable[first] != 2) {
                 if (tail == queue_cap) {
                     u32 *bigger = (u32 *)kmalloc(queue_cap * 8);
-                    if (!bigger) break;       /* stop widening, do not lose data */
+                    if (!bigger) { whole = false; break; }
                     memcpy(bigger, queue, queue_cap * 4);
                     kfree(queue);
                     queue = bigger;
                     queue_cap *= 2;
                 }
-                queue[tail++] = ent_cluster(&e);
+                reachable[first] = 2;
+                queue[tail++] = first;
             }
         }
 
-        if (head == tail) break;
+        if (!whole || head == tail) break;
         d.root = false;
         d.cluster = queue[head++];
     }
 
+    if (!whole || fat_read_failures != failures_before) {
+        kfree(queue);
+        kfree(reachable);
+        return 0;
+    }
+
+    /* A cluster marked bad is non-zero and belongs to no chain, which is
+       exactly what a leaked one looks like. Freeing it hands a damaged
+       sector back to the allocator. */
+    u32 bad = fat_bits == 32 ? 0x0FFFFFF7u : 0xFFF7u;
+
     u32 freed = 0;
     for (u32 c = 2; c < total; c++) {
         if (reachable[c]) continue;
-        if (fat_get(c) == 0) continue;        /* already free */
+        u32 v = fat_get(c);
+        if (v == 0 || v == bad) continue;     /* already free, or not ours to give */
         fat_set(c, 0);
         freed++;
     }
-    if (freed) { blk_flush(); alloc_hint = 2; }
+    if (freed) { vol_flush(); alloc_hint = 2; }
 
     kfree(queue);
     kfree(reachable);

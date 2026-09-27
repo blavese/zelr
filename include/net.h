@@ -9,6 +9,17 @@ void  net_init(void);
 void  net_receive(const u8 *frame, u16 len);
 void  net_poll(void);
 
+/* One turn of a wait that found nothing yet. Gives the processor away for a
+   tick, so that the clock the wait is measured by keeps moving: inside a
+   system call interrupts are off, and a loop that only polled never saw its
+   deadline arrive. Every wait on the network goes through this. */
+void  net_wait(void);
+
+/* Lets go of anything a task that has been ended was holding inside the
+   stack. Called with the task record, not the pid, because that is what the
+   stack remembers. */
+void  net_abandon(const void *task);
+
 /* The task that runs the stack when nothing else is waiting on it. Started
    once the scheduler exists, because it is a task. */
 void  net_start_service(void);

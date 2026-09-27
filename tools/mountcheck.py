@@ -29,9 +29,31 @@ SEED = os.path.join(ROOT, "mountseed.%d.txt" % os.getpid())
 ON_STICK = "a file that was already on the stick"
 FROM_ZELR = "written from inside the machine"
 
+TRACE = os.path.join(ROOT, "mounttrace.%d.log" % os.getpid())
+
 USB = ["-device", "qemu-xhci,id=xhci",
        "-drive", "if=none,id=stick,format=raw,file=" + STICK.replace("\\", "/"),
        "-device", "usb-storage,bus=xhci.0,drive=stick"]
+
+# What each disk was actually told, from QEMU's side of the wire. A flush
+# cannot be seen from inside the machine -- the call returns true either way,
+# and it returned true for years while doing nothing -- and QEMU's disks write
+# through, so no amount of pulling the plug here would show one missing. The
+# trace is the one witness that is not the kernel's own word: every ATA
+# command the AHCI disk executes, and every SCSI command the stick parses.
+WATCH = ["-trace", "enable=ide_bus_exec_cmd", "-trace", "enable=scsi_req_parsed",
+         "-D", TRACE.replace("\\", "/")]
+
+ATA_FLUSH_EXT = "cmd 0xea"          # FLUSH CACHE EXT, as QEMU prints it
+SCSI_SYNC_CACHE = "command 53"      # SYNCHRONIZE CACHE(10) is 0x35
+
+
+def trace_now():
+    try:
+        with open(TRACE, encoding="utf-8", errors="replace") as f:
+            return f.read()
+    except OSError:
+        return ""
 
 
 def make_stick():
@@ -66,7 +88,7 @@ def main():
         c.add("a fat volume can be built for the stick", False)
         return c.report()
 
-    vm = Guest(DISK, memory=256, machine="q35", extra=USB)
+    vm = Guest(DISK, memory=256, machine="q35", extra=USB + WATCH)
     try:
         vm.wait_boot()
         boot = vm.serial()
@@ -89,10 +111,17 @@ def main():
         # the in-memory filesystem and the file is written and read there
         # quite happily. Seeing it next to the file that was already on the
         # volume is what cannot happen unless the volume is really there.
+        before = trace_now().count(SCSI_SYNC_CACHE)
         vm.run("write /usb/MADE.TXT %s" % FROM_ZELR.replace(" ", "_"))
         out = vm.fresh("ls /usb").upper()
         c.add("a file written to it joins the one already there",
               "MADE.TXT" in out and "HELLO.TXT" in out)
+
+        # The writes that make a save crash-safe are ordered by flushes, and
+        # those flushes went to the disk the machine booted from whichever
+        # disk the file was on, and to the stick went nothing at all.
+        c.add("saving a file on the stick tells the stick to write it down",
+              trace_now().count(SCSI_SYNC_CACHE) > before)
 
         # And between the two volumes, which is the whole point of there
         # being more than one.
@@ -102,6 +131,27 @@ def main():
 
         out = vm.fresh("ls /")
         c.add("the root shows usb alongside bin and sys", "usb/" in out)
+
+        # And the boot disk, which on this machine is AHCI: its flush was a
+        # function that returned true and told the drive nothing.
+        before = trace_now().count(ATA_FLUSH_EXT)
+        vm.run("write /home/FLUSHED.TXT on_the_boot_disk")
+        c.add("saving a file on the boot disk sends the drive a flush",
+              trace_now().count(ATA_FLUSH_EXT) > before)
+
+        # format means the disk the machine booted from. It used to mean
+        # whichever volume the last path had touched, so after the look at
+        # /usb above it would have written a fresh volume -- sized for the
+        # boot disk -- over the stick.
+        vm.run("ls /usb")
+        out = vm.fresh("format", timeout=60)
+        c.add("format after a look at the stick formats the boot disk",
+              "disk formatted" in out)
+        out = vm.fresh("ls /usb").upper()
+        c.add("and the stick still holds its files afterwards",
+              "HELLO.TXT" in out and "MADE.TXT" in out)
+        out = vm.fresh("cat /home/COPIED.TXT")
+        c.add("while the boot disk really was emptied", ON_STICK not in out)
     finally:
         vm.stop()
 
@@ -112,7 +162,10 @@ def main():
     c.add("and its contents are what was written",
           "written_from_inside" in file_on_stick("MADE.TXT"))
 
-    for junk in (STICK, DISK, SEED):
+    c.add("and the stick's own volume is still intact, read from outside",
+          "HELLO.TXT" in listing.upper())
+
+    for junk in (STICK, DISK, SEED, TRACE):
         try:
             os.remove(junk)
         except OSError:

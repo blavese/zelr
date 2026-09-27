@@ -171,8 +171,9 @@ typedef long long          zelr_word;
 /* --- signals -----------------------------------------------------------
  *
  * SYS_SIGNAL says what this program wants done with one; SYS_SIGSEND raises
- * one against another program. There are three signals and no handlers; see
- * include/signal.h, which says what that leaves out and why. */
+ * one against another program -- a program, never one of the kernel's own
+ * tasks, the same rule SYS_KILL keeps. See include/signal.h for the three
+ * signals and their handlers. */
 #define SYS_SIGNAL        54
 #define SYS_SIGSEND       55
 
@@ -436,10 +437,9 @@ static inline int connect(const char *host, int port) {
    might use anyway. tls_why() says what went wrong, and is meant to be shown
    to somebody rather than logged.
 
-   One of these at a time on the machine. The stack holds several
-   connections; the TLS session state in the kernel is still single, so a
-   second encrypted connection is refused rather than quietly taking the
-   first one's keys. Plain ones alongside it are fine. */
+   One of these at a time on the machine: a second is refused with
+   NET_ERR_BUSY, including while the first is still being set up. Plain ones
+   alongside it are fine. */
 static inline int connect_tls(const char *host, int port) {
     return syscall(SYS_TLS_CONNECT, (zelr_word)host, port, 0);
 }
@@ -621,7 +621,8 @@ static inline int signal(int sig, sighandler_t how) {
                         (zelr_word)&__zelr_sigreturn);
 }
 
-/* Raises one against another program. KILL cannot be ignored. */
+/* Raises one against another program. KILL cannot be ignored. The kernel's
+   own tasks are not programs and refuse: -1. */
 static inline int send_signal(int pid, int sig) {
     return (int)syscall(SYS_SIGSEND, pid, sig, 0);
 }
@@ -748,6 +749,9 @@ static inline int spawn(const char *path) {
 static inline int wait_for(int pid) {
     return syscall(SYS_WAIT, pid, 0, 0);
 }
+/* Ends another program, even one in the middle of a system call; what it
+   held goes back. -1 for this program itself, for a pid that is not running,
+   and for any of the kernel's own tasks. */
 static inline int kill(int pid) {
     return syscall(SYS_KILL, pid, 0, 0);
 }

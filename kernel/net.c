@@ -153,6 +153,34 @@ static void arp_send(u16 oper, const u8 *target_mac, ipv4_t target_ip) {
     eth_send(oper == 1 ? BCAST : target_mac, ETH_P_ARP, &a, sizeof(a));
 }
 
+/* One turn of a wait that found nothing yet: the processor goes to somebody
+ * else for a tick.
+ *
+ * Every wait in this file and in tcp.c used to be a loop around net_poll that
+ * ended when timer_ticks() passed a deadline. From a kernel task that works.
+ * From a system call it never ends: int 0x80 is an interrupt gate, so the whole
+ * call runs with interrupts off, the timer never ticks, and a deadline counted
+ * in ticks never comes. Answers that did arrive still worked, because net_poll
+ * asks the card directly, and that is why it went unnoticed. A peer that never
+ * answered -- a firewalled port, a silent name server, a web server that took
+ * the connection and then hung -- stopped the machine for good: the clock
+ * frozen, the shell gone, nothing left but the power button.
+ *
+ * Sleeping instead of spinning is what lets the clock move. The task is put
+ * down for a tick, something else runs -- the idle task at worst, which runs
+ * with interrupts on -- and the scheduler hands the processor back once the
+ * tick has passed. Every other program now runs while one waits on the
+ * network, which none could before, and on a machine with several processors
+ * the kernel lock is given back rather than held against all of them for the
+ * length of a timeout.
+ *
+ * Before there are tasks there is nobody to hand the processor to, and nothing
+ * in the stack waits then; halting with interrupts on is the fallback. */
+void net_wait(void) {
+    if (task_current()) { task_sleep(1); return; }
+    if (interrupts_enabled()) hlt();
+}
+
 static bool resolve_mac(ipv4_t ip, u8 *out, u32 timeout_ms) {
     /* Anything off our subnet goes via the gateway. */
     if (my_mask && ((ip & my_mask) != (my_ip & my_mask)) && my_gw) ip = my_gw;
@@ -167,6 +195,7 @@ static bool resolve_mac(ipv4_t ip, u8 *out, u32 timeout_ms) {
             net_poll();
             if (arp_get(ip, out)) return true;
             if (timer_ticks() > deadline) return false;
+            net_wait();
         }
         if (timer_ticks() > deadline) break;
     }
@@ -620,13 +649,19 @@ bool net_dhcp(u32 timeout_ms) {
     udp_send_to(0xFFFFFFFFu, 68, 67, &d, sizeof(d), true);
 
     u64 deadline = timer_ticks() + (timeout_ms * timer_hz()) / 1000u;
-    while (!dhcp_offer_got && timer_ticks() < deadline) net_poll();
+    while (!dhcp_offer_got && timer_ticks() < deadline) {
+        net_poll();
+        if (!dhcp_offer_got) net_wait();
+    }
     if (!dhcp_offer_got) return false;
 
     dhcp_build(&d, 3, dhcp_offer_ip, dhcp_server_ip);   /* REQUEST */
     udp_send_to(0xFFFFFFFFu, 68, 67, &d, sizeof(d), true);
 
-    while (!dhcp_ack_got && timer_ticks() < deadline) net_poll();
+    while (!dhcp_ack_got && timer_ticks() < deadline) {
+        net_poll();
+        if (!dhcp_ack_got) net_wait();
+    }
     if (!dhcp_ack_got) return false;
 
     my_ip   = dhcp_offer_ip;
@@ -681,7 +716,10 @@ int net_ping(ipv4_t dst, u32 timeout_ms) {
     if (!ip_send(dst, IP_ICMP, buf, sizeof(buf))) return -1;
 
     u64 deadline = start + (timeout_ms * timer_hz()) / 1000u;
-    while (!ping_got && timer_ticks() < deadline) net_poll();
+    while (!ping_got && timer_ticks() < deadline) {
+        net_poll();
+        if (!ping_got) net_wait();
+    }
     if (!ping_got) return -1;
 
     u64 elapsed = timer_ticks() - start;
@@ -723,9 +761,58 @@ static void handle_dns_reply(const u8 *p, u16 len) {
     dns_result = 0;
 }
 
+/* One question at a time.
+ *
+ * The answer is matched against an id kept in this file, and a wait now gives
+ * the processor away. So a second program asking while the first waits would
+ * take the id over, and the first would be handed the second one's answer:
+ * a page from one site fetched from another site's address, with nothing
+ * anywhere saying so. The one asking is remembered rather than just a flag,
+ * so that a program ended while it waits can be let go of (net_abandon). */
+static void *volatile dns_asker;
+
+static bool dns_take(u32 timeout_ms) {
+    void *me = (void *)task_current();
+    if (!me) me = (void *)&dns_asker;          /* before there are tasks */
+    u64 deadline = timer_ticks() + (timeout_ms * timer_hz()) / 1000u;
+    for (;;) {
+        bool were_on = interrupts_enabled();
+        if (were_on) cli();
+        bool mine = !dns_asker;
+        if (mine) dns_asker = me;
+        if (were_on) sti();
+        if (mine) return true;
+        if (timer_ticks() >= deadline) return false;
+        net_wait();
+    }
+}
+
+static bool ask_dns(const char *host, ipv4_t *out, u32 timeout_ms);
+
 bool net_resolve(const char *host, ipv4_t *out, u32 timeout_ms) {
     if (!netdev_up() || !my_dns) return false;
+    if (!dns_take(timeout_ms)) return false;
+    bool ok = ask_dns(host, out, timeout_ms);
+    dns_asker = 0;
+    return ok;
+}
 
+/* A task that ends while it is inside the stack -- killed from another
+   program, or by an interrupt from the keyboard -- never comes back to let go
+   of what it held. Before a wait gave the processor away that could not
+   happen; now it is the usual way a hung download is stopped. What it can
+   hold is the one-at-a-time turn at delivery and the one-at-a-time question
+   above, and either left held stops the network for everybody. */
+void net_abandon(const void *task) {
+    if (!task) return;
+    bool were_on = interrupts_enabled();
+    if (were_on) cli();
+    if (deliver_owner == task) { deliver_depth = 0; deliver_owner = 0; }
+    if (dns_asker == task) dns_asker = 0;
+    if (were_on) sti();
+}
+
+static bool ask_dns(const char *host, ipv4_t *out, u32 timeout_ms) {
     static u16 next_id = 0x1234;
     dns_id = next_id++;
     dns_got = false;
@@ -775,7 +862,10 @@ bool net_resolve(const char *host, ipv4_t *out, u32 timeout_ms) {
 
         u64 until = timer_ticks() + gap;
         if (until > deadline) until = deadline;
-        while (!dns_got && timer_ticks() < until) net_poll();
+        while (!dns_got && timer_ticks() < until) {
+            net_poll();
+            if (!dns_got) net_wait();
+        }
 
         if (timer_ticks() >= deadline) break;
         gap *= 2;
@@ -826,6 +916,7 @@ void net_init(void) {
     rxq_dropped = rxq_deepest = 0;
     deliver_depth = 0;
     deliver_owner = 0;
+    dns_asker = 0;
 
     memset(arp_cache, 0, sizeof(arp_cache));
     my_ip = my_mask = my_gw = my_dns = 0;

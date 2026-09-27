@@ -80,10 +80,11 @@
    call that goes is a gap. */
 #define SYS_SPAWN_ARGV    43
 
-/* The same one socket, with a TLS 1.3 handshake done on it before anything
-   is sent. Afterwards SYS_SEND and SYS_RECV carry the same bytes they always
-   did and the encryption is not the caller's business, which is the point:
-   a program should not be able to get this wrong by forgetting a step.
+/* A socket like SYS_CONNECT's, with a TLS 1.3 handshake done on it before
+   anything is sent. Afterwards SYS_SEND and SYS_RECV carry the same bytes
+   they always did and the encryption is not the caller's business, which is
+   the point: a program should not be able to get this wrong by forgetting a
+   step. One of these at a time on the machine.
  *
    SYS_TLS_STATUS says what happened, because "it did not connect" is not
    worth showing anybody. Which one it answers is in rdx: TLS_WHY for the
@@ -131,8 +132,9 @@
 /* --- signals -----------------------------------------------------------
  *
  * SYS_SIGNAL says what this program wants done with one; SYS_SIGSEND raises
- * one against another program. There are three signals and no handlers; see
- * include/signal.h, which says what that leaves out and why. */
+ * one against another program -- a program, never one of the kernel's own
+ * tasks, the same rule SYS_KILL keeps. See include/signal.h for the three
+ * signals and their handlers. */
 #define SYS_SIGNAL        54
 #define SYS_SIGSEND       55
 
@@ -251,8 +253,14 @@ typedef struct {
 
 void syscall_init(void);
 
-/* Drops anything a dead task was holding, such as the one TCP socket. */
+/* Drops the sockets a task that is exiting still holds, closing each one
+   properly. Waits on the network, so only a task ending itself may call it. */
 void syscall_release(u32 pid);
+
+/* The same for a task ended from outside, dropping everything without
+   waiting: safe inside the scheduler, and it also lets go of anything the
+   task was in the middle of when it was stopped. */
+void syscall_abandon(u32 pid);
 
 /* How many system calls have been served since boot. */
 u32 syscall_count(void);

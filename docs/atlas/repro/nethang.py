@@ -1,9 +1,10 @@
 """A network system call whose peer never answers freezes the whole machine.
 
 Found by reading (docs/atlas/06a-network.md section 10) and reproduced here on
-2026-09-26 against commit 6048716. Not a gate step: this is the evidence and
-the starting point for a fix, and it is expected to report FROZEN until the
-fix lands.
+2026-09-26 against commit 6048716. Fixed in 0.39.0, after which this reports
+NOT FROZEN and exits 0 (ticks keep moving and the shell answers). Not a gate
+step: the gate's check for the same fault is tools/hangcheck.py, which also
+covers a server that takes the connection and never answers.
 
 Why it happens. Every gate in the IDT is an interrupt gate, int 0x80
 included (kernel/idt.c:63), so a system call runs with interrupts off, and

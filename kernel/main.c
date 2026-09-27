@@ -432,8 +432,8 @@ void kmain(handoff_t *h) {
                someone to run a command they have never heard of. */
             if (diskfs_format()) { kprintf("  fs      new disk prepared\n");
                                    bb_log("fs new disk prepared"); }
-            else                 { kprintf("  fs      could not prepare the disk\n");
-                                   bb_log("fs could not prepare the disk"); }
+            else                 { kprintf("  fs      disk left as it is, files will not persist\n");
+                                   bb_log("fs disk left as it is, memory only"); }
         }
         else              { kprintf("  fs      disk unreadable, using memory only\n");
                             bb_log("fs disk unreadable, memory only"); }

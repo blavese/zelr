@@ -36,6 +36,11 @@ int  tcp_state_code(int h);
 void tcp_close(int h);
 bool tcp_connected(int h);
 
+/* Every connection the task with this pid opened, given back without waiting
+   for the other end. For a task that has been ended from outside, which will
+   never close them itself. */
+void tcp_abandon(u32 pid);
+
 /* Totals since boot across every connection, which is what /sys/net is
    about: a count that resets when a connection closes says nothing about a
    machine's link. */

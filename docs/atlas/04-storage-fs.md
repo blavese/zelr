@@ -801,7 +801,7 @@ Ordered by severity. Every item was checked against the code as cited.
 
 ### Likely bugs / hazards
 
-**S1. Auto-format can wipe a disk that is not blank.**
+**S1. FIXED in 0.39.0 (see atlas README, since 6048716). Auto-format can wipe a disk that is not blank.**
 main.c:430-434 formats whenever `diskfs_mount()` returns -2. `diskfs_format` refuses only if `parts_count() > 0` (diskfs.c:95). `parts_count()==0` covers much more than a blank image:
 - a GPT rejected by any check (bad header or entry CRC, unreadable header or array, `entry_count > 256`, and so on; parts.c:143-200);
 - a *valid* GPT whose entries were all skipped (unused, past 2 TiB, out of range), since `read_gpt` still returns true with count 0;
@@ -812,7 +812,7 @@ In each case diskfs.c:135-141 tries `fat_mount_at(0)`. It fails on a protective 
 
 tools/gpt_test.sh:76-88 drives exactly this path, a corrupt header or entry CRC on a 64 MiB image with an ESP and a data partition. It only asserts that nothing is mounted or served, so the format (which prints "fs new disk prepared") passes unnoticed. The fix would be to auto-format only when sector 0 has no 0x55AA signature and no partitions were found, or only when the disk is all zeros.
 
-**S2. `dir_find` 8.3 aliasing: one name can resolve to a different file** (fat.c:1202-1211).
+**S2. FIXED in 0.39.0 (see atlas README, since 6048716). `dir_find` 8.3 aliasing: one name can resolve to a different file** (fat.c:1202-1211).
 The truncating `to_83(name)` is compared against every short entry *before* long names are checked. A name that needs LFN therefore matches an existing file whose short name equals its truncated form:
 - "chapter10.txt" matches "chapter1.txt" (CHAPTER1TXT);
 - "index.html" matches "index.htm";
@@ -820,13 +820,13 @@ The truncating `to_83(name)` is compared against every short entry *before* long
 
 `fat_write_file` then overwrites the other file, and `fat_stat`, `fat_read_file`, `fat_delete_file`, `fat_rename` and `fat_mkdir` ("already there") all act on the wrong entry. The 8.3 compare should only run when `!needs_long(name)` (or `fits_83(name)`).
 
-**S3. `fat_rename` to a file's own alias deletes the file** (fat.c:1539-1560).
+**S3. FIXED in 0.39.0 (see atlas README, since 6048716). `fat_rename` to a file's own alias deletes the file** (fat.c:1539-1560).
 Take `rename longname.txt LONGNA~1.TXT`. The destination fits 8.3; `same_name` is false; `dir_find(dst)` finds the *source* entry by its short name; `fat_delete_file(to)` deletes it; re-finding the source fails and the call returns false. The file is gone.
 
-**S4. Delete and rmdir are not crash-ordered** (fat.c:1585-1588, 1658-1661).
+**S4. FIXED in 0.39.0 (see atlas README, since 6048716). Delete and rmdir are not crash-ordered** (fat.c:1585-1588, 1658-1661).
 The chain is freed (FAT written through) *before* the entry is marked deleted. A power cut in between leaves a live entry pointing at free clusters. The next allocation reuses them, which cross-links two files. `fat_reclaim` only frees reachable-but-unreferenced space and cannot repair this. Doing the entry write first would reduce the failure to a leak, which is what the file's own philosophy prescribes.
 
-**S5. `fat_reclaim` can free live data** (fat.c:1675-1755).
+**S5. FIXED in 0.39.0 (see atlas README, since 6048716). `fat_reclaim` can free live data** (fat.c:1675-1755).
 - (a) If the queue cannot grow (`kmalloc` fails), `break` at :1728 leaves only the *entry loop*. The rest of that directory's entries stay unmarked and the sweep frees their clusters, despite the comment "stop widening, do not lose data".
 - (b) A `dir_read` failure (:1712), or a chain cut short by a failed FAT read inside `dir_capacity` (`fat_get` returns EOC on error, :265), likewise leaves entries unmarked and freed.
 - (c) Bad-cluster marks (0xFFF7 / 0x0FFFFFF7) are non-zero and unreachable, so they are "reclaimed" into the free pool (:1744-1748).
@@ -834,23 +834,23 @@ The chain is freed (FAT written through) *before* the entry is marked deleted. A
 
 Reclaim runs on every mount, including foreign volumes (S20).
 
-**S6. Volume selection leaks out of the VFS** (vfs.c:163-171 with fat.c:123).
+**S6. FIXED in 0.39.0 (see atlas README, since 6048716). Volume selection leaks out of the VFS** (vfs.c:163-171 with fat.c:123).
 `route()` leaves `current_volume` set to whatever the last VFS path chose. Every direct `fat_*` caller then acts on it:
 - `diskfs_mounted` and `vfs_disk_backed` (used by /sys/devices "storage" and shell `mem`);
 - shell `disk` and `mem` (they print the USB volume's clusters and free space after an `ls /usb`);
 - blackbox `volume_base()` (it reads disk 0 at the USB partition's LBA; the ours-check makes it refuse, so the log is lost rather than misplaced);
 - **`fat_format_at`**. It sizes the layout from `blk_sectors()` (disk 0) but writes through `vol_write` to `CUR.dev`. So the kernel shell's `format` typed after any /usb access writes a disk-0-sized FAT layout onto the **USB stick** (fat.c:630-636, 733).
 
-**S7. Cross-volume rename is not rejected** (vfs.c:293).
+**S7. FIXED in 0.39.0 (see atlas README, since 6048716). Cross-volume rename is not rejected** (vfs.c:293).
 `fat_rename(route(a), route(b))` runs on whichever volume the *second* `route` call selected. clang evaluates the arguments left to right, but the order is unspecified in C anyway. The other path is interpreted on the wrong volume. Example: `rename("/usb/x.txt", "/y.txt")` becomes a disk-volume rename of "/x.txt" to "/y.txt", which deletes an existing disk /y.txt first and renames an unrelated disk /x.txt. It can also return true when nothing was moved (`/usb/a` to `/a` when disk /a exists hits the same-name case). Reachable from ring 3 through SYS_RENAME (62).
 
-**S8. AHCI "flush" is a no-op** (ahci.c:216, "DMA writes are already through").
+**S8. FIXED in 0.39.0 (see atlas README, since 6048716). AHCI "flush" is a no-op** (ahci.c:216, "DMA writes are already through").
 DMA completion does not mean the drive's volatile write cache reached the media. On AHCI, which is the default on real machines and on q35, both flush barriers in the crash-safe protocol (§4.3 steps 4 and 7) and the black-box flush do nothing. The data-before-commit ordering can be lost on a real power cut. ATA sends FLUSH CACHE after every write (ata.c:154) and NVMe sends FLUSH (nvme.c:359-366). crashcheck.py runs on i440fx (ATA) and a QEMU kill does not model a drive cache, so it cannot catch this. usbdisk_flush is also a no-op (usbdisk.c:246, no SYNCHRONIZE CACHE).
 
-**S9. Every fat.c flush goes to disk 0.**
+**S9. FIXED in 0.39.0 (see atlas README, since 6048716). Every fat.c flush goes to disk 0.**
 fat.c calls `blk_flush()` = `blk_flush_on(BLK_BOOT)` at :785, 1461, 1472, 1477, 1570, 1589, 1627, 1639, 1662 and 1750. `blk_flush_on` has no other callers. Writes to /usb flush the internal disk, not the stick. With no disk 0 the stick itself is id 0, so it is correct by accident.
 
-**S10. The mount bound uses the boot disk's size for every volume** (fat.c:421, `u32 disk = blk_sectors();`).
+**S10. FIXED in 0.39.0 (see atlas README, since 6048716). The mount bound uses the boot disk's size for every volume** (fat.c:421, `u32 disk = blk_sectors();`).
 A USB volume larger than disk 0 is refused as corrupt. A USB volume claiming more sectors than the stick has is not caught. It should be `blk_device_sectors(CUR.dev)`. mountcheck.py passes because its 8 MiB stick is smaller than the 32 MiB boot disk.
 
 **S11. /sys/lastboot shows the head of the previous log, not the tail** (blackbox.c:320-326 via sysfs.c:248-250, with `SYSFS_MAX` 4096).
@@ -862,7 +862,7 @@ Deadlines are computed from `timer_ticks()`, which does not advance until `timer
 **S13. A USB stick with non-512-byte sectors overruns kernel buffers** (cross-area, likely).
 usbdisk reports and transfers `count*sector_bytes` (usbdisk.c:193, 214). The block layer has no sector size, and `diskfs_mount_removable` reads one "sector" into `u8 sec[512]` on the stack (diskfs.c:55-56), as do `fat_mount_at` and every `vol_read`. A 4096-byte-sector stick would write 4096 bytes into 512-byte buffers. (Whether `xhci_bulk` bounds the copy is an open question, §11.)
 
-**S14. `fat_rmdir` leaves the directory's LFN entries behind** (fat.c:1658-1662).
+**S14. FIXED in 0.39.0 (see atlas README, since 6048716). `fat_rmdir` leaves the directory's LFN entries behind** (fat.c:1658-1662).
 There is no `dir_drop_long`, unlike `fat_delete_file` (:1586). A long-named directory that is removed leaves orphan LFN entries: slots are lost for good, and chkdsk or fsck would flag them.
 
 **S15. `fat_free_bytes` overflows u32** (fat.c:1757-1763) above 4 GiB free. zelr formats FAT32 for disks over about 2 GiB, so this is reachable. Shell `mem` and `disk` print the wrapped value.

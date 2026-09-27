@@ -21,6 +21,10 @@ u32  fat_selected(void);
 bool fat_mounted_on(u32 vol);
 void fat_forget_volume(u32 vol);
 
+/* Tells the disk this volume lives on to write down what it holds. False
+   when nothing is mounted there or the disk refused. */
+bool fat_flush_volume(u32 vol);
+
 /* Mounts a volume of a given disk at a given sector. */
 bool fat_mount_on(u32 vol, u32 dev, u32 base_lba);
 
@@ -93,3 +97,9 @@ u32  fat_free_bytes(void);
    between writing a file and committing it leaves behind. Returns the
    number recovered. */
 u32  fat_reclaim(void);
+
+/* For the self test only: every write from the nth on fails, as on a disk
+   that has just lost power (0xFFFFFFFF puts it back), and directories other
+   than the root cannot be read. */
+void fat_test_writes_left(u32 n);
+void fat_test_subdirs_unreadable(bool on);

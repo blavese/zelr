@@ -1125,7 +1125,7 @@ Pitfalls the comments warn about (keep these in mind when touching the code):
 
 ## 10. Doc drift and suspicious code (verified; ordered by severity)
 
-### 10.1 CRITICAL -- CertificateVerify is optional: server authentication can be bypassed
+### 10.1 FIXED in 0.39.0 (tls_flight_step) -- CRITICAL -- CertificateVerify is optional: server authentication can be bypassed
 `tls.c:681-756`: the encrypted-flight loop accepts EncryptedExtensions, Certificate,
 CertificateVerify and Finished in any order and breaks out on Finished; after the loop only
 `have_leaf` is checked (758). There is no flag recording that a CertificateVerify was received
@@ -1155,7 +1155,7 @@ always send CertificateVerify).
 - The busy check looks only at *established* secure sockets (`secure` is set at
   `syscall.c:807` after the handshake), so it does not stop two handshakes that overlap.
 
-### 10.3 Latent race -- shared statics inside the per-session design
+### 10.3 FIXED in 0.39.0 for tls.c (x509.c's static chain remains) -- Latent race -- shared statics inside the per-session design
 `tls.c:669-679` (`static x509_t leaf`, `ders[]`, `lens[]`, `chain_store`) and `x509.c:564`
 (`static x509_t chain[8]`) are shared by all sessions. If a preemptible kernel task (the shell's
 `fetch https://…` → `http_get` → `tls_connect`) is preempted mid-handshake and a user process
@@ -1273,7 +1273,7 @@ all of `wpa.c` are used only by selftest; `tls_describe` always returns the same
 ≡ 0 mod 8 (emBits = modBits − 1 needs more masked bits, or emLen = n_len − 1), valid signatures
 are rejected. Rare in practice (servers use 2048/3072/4096-bit keys).
 
-### 10.17 Cross-area: socket slot not reserved before blocking
+### 10.17 FIXED in 0.39.0 -- Cross-area: socket slot not reserved before blocking
 `syscall.c:754-767, 789-808`: `sock_take()` returns the first non-open slot, which is marked
 open only after `tcp_open` (and `tls_connect`) return. Two overlapping connects could pick the
 same `h`. (Owned by the syscall/network area; noted because it matters for §9 item 2.)

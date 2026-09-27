@@ -34,6 +34,18 @@ bool tls_ended(int tcp);
 void tls_close(int tcp);
 bool tls_active(int tcp);
 
+/* Forgets the session without telling the other end, for a connection whose
+   program has been ended from outside. Does not wait. */
+void tls_abandon(int tcp);
+
+/* The order the server's encrypted handshake must come in: extensions,
+   certificate, signature, finished, each once. Given the step reached and the
+   type of the next message, returns the step after it, or -1 with the reason
+   in *why. TLS_FLIGHT_DONE means finished has arrived. */
+#define TLS_FLIGHT_START 0
+#define TLS_FLIGHT_DONE  4
+int tls_flight_step(int step, u8 type, const char **why);
+
 /* Whether anything at all is encrypted just now. A question about the
    machine rather than about one connection, which is what a self test
    asking "is anything open" wants to know. */

@@ -37,6 +37,7 @@
 #include "string.h"
 #include "io.h"
 #include "heap.h"
+#include "sched.h"
 
 #define TH_FIN 0x01
 #define TH_SYN 0x02
@@ -84,6 +85,11 @@ typedef struct {
 
     u8   *rxbuf;                  /* kept between connections on this slot */
     volatile u32 rxlen;
+
+    /* The task that opened it. A task ended while it waits inside one of the
+       calls below never comes back to close what it opened, and six slots do
+       not survive many of those; tcp_abandon finds them by this. */
+    u32  owner;
 } tcpc;
 
 static tcpc conns[TCP_MAX];
@@ -352,17 +358,49 @@ void tcp_input(ipv4_t src, const u8 *p, u16 len) {
  * connections one after another would otherwise take it from the heap six
  * times over. */
 static int take_slot(void) {
+    /* Finding a free one and taking it are one step. A kernel task can be
+       preempted between the two, and a program opening a connection in that
+       gap would be handed the same slot. */
+    bool were_on = interrupts_enabled();
+    if (were_on) cli();
+    int got = -1;
+    for (int i = 0; i < TCP_MAX; i++) {
+        if (conns[i].used) continue;
+        conns[i].used = true;
+        got = i;
+        break;
+    }
+    if (were_on) sti();
+    if (got < 0) return -1;
+
+    tcpc *c = &conns[got];
+    if (!c->rxbuf) {
+        c->rxbuf = (u8 *)kmalloc(RXCAP);
+        if (!c->rxbuf) { c->used = false; return -1; }
+    }
+    task_t *me = task_current();
+    c->owner = me ? me->pid : 0;
+    return got;
+}
+
+/* Every connection a task that has been ended still held, let go of without a
+ * word to the other end.
+ *
+ * Closing politely means sending and then waiting for an answer, and this runs
+ * where nothing may wait: inside the scheduler, when a signal's default action
+ * ends a program. The peer finds out when its own timers give up, which is
+ * what it would have found out if the cable had been pulled. The slot comes
+ * back now, which is the part that matters here. */
+void tcp_abandon(u32 pid) {
+    if (!pid) return;
     for (int i = 0; i < TCP_MAX; i++) {
         tcpc *c = &conns[i];
-        if (c->used) continue;
-        if (!c->rxbuf) {
-            c->rxbuf = (u8 *)kmalloc(RXCAP);
-            if (!c->rxbuf) return -1;
-        }
-        c->used = true;
-        return i;
+        if (!c->used || c->owner != pid) continue;
+        c->state = T_CLOSED;
+        c->rt_pending = false;
+        c->rxlen = 0;
+        c->used = false;
     }
-    return -1;
 }
 
 int tcp_open(ipv4_t ip, u16 port, u32 timeout_ms) {
@@ -427,6 +465,7 @@ int tcp_open(ipv4_t ip, u16 port, u32 timeout_ms) {
     while (c->state == T_SYNSENT && timer_ticks() < deadline) {
         net_poll();
         tcp_pump();                            /* resends the SYN if needed */
+        if (c->state == T_SYNSENT) net_wait();
     }
 
     if (c->state != T_OPEN) {
@@ -454,6 +493,7 @@ bool tcp_send(int h, const void *data, u16 len) {
     while (c->rt_pending && c->state == T_OPEN && timer_ticks() < deadline) {
         net_poll();
         tcp_pump();
+        if (c->rt_pending) net_wait();
     }
     return !c->rt_pending;
 }
@@ -491,6 +531,7 @@ u32 tcp_recv(int h, u8 *out, u32 cap, u32 timeout_ms) {
         net_poll();
         tcp_pump();
         if (c->got_fin || c->state == T_DONE || c->state == T_CLOSED) break;
+        if (c->rxlen == 0) net_wait();
     }
 
     /* The receive side appends to this buffer, so taking from the front and
@@ -534,6 +575,7 @@ void tcp_close(int h) {
         while (c->state == T_CLOSING && timer_ticks() < deadline) {
             net_poll();
             tcp_pump();
+            if (c->state == T_CLOSING) net_wait();
         }
     }
     c->state = T_CLOSED;

@@ -191,8 +191,11 @@ xorriso. The EFI system partition inside it is a FAT16 filesystem built by
 
 It runs entirely from the disc and writes nothing unless there is a hard disk
 attached, in which case it will use it. **Be careful with that on a machine
-whose disk you care about**: a blank or unformatted one gets formatted on
-first boot.
+whose disk you care about.** A blank disk -- nothing at all in its first 128
+KiB or its last sector -- is formatted on first boot. A disk with anything on
+it is left alone, including one whose partition table zelr could not read;
+it used to treat that one as blank, and on a laptop started from a stick that
+disk is the internal drive. The boot log says which it decided and why.
 
 ### what to expect on a laptop made this decade
 
@@ -386,7 +389,7 @@ instead.
     python tools/enscheck.py    the same, out of the other sound card
     python tools/volcheck.py    drag the volume slider, listen to the result
     python tools/framecheck.py  move the pointer, ask what the frames cost
-    python tools/mountcheck.py  mount a usb stick and copy files off it
+    python tools/mountcheck.py  mount a usb stick, copy files, watch the flushes
     python tools/namecheck.py   save long names and read them back
     python tools/powercheck.py  tell it to shut down, see if it does
     python tools/appcheck.py    make the calculator divide, play a file
@@ -394,6 +397,7 @@ instead.
     python tools/piccheck.py    the decoders and the layout, with no screen
     python tools/abicheck.py    the structs the kernel writes and programs read
     python tools/netcheck.py    click for an address, see if one arrives
+    python tools/hangcheck.py   wait on a server that never answers, carry on
     python tools/shots.py       retake the screenshots in this readme
 
 The Windows launcher lives in `launcher/` and is built with
@@ -500,9 +504,17 @@ is FAT32. Files are worked on in memory and
 written through on every change. Writes are ordered so that losing power part
 way through cannot destroy what was already there: the new cluster chain is
 written and flushed first, the directory entry is committed as a single sector,
-and only then is the old chain released. Anything an interruption stranded is
-found and reclaimed at the next mount. A blank disk is formatted automatically
-on first boot. `tools/readfat.py` parses the image straight from the
+and only then is the old chain released. A delete runs the same way round:
+the entry goes first and its clusters after, so an interruption leaks space
+rather than leaving an entry pointing at clusters something else is given.
+Anything an interruption stranded is found and reclaimed at the next mount,
+and the reclaim frees nothing at all unless it managed to read every
+directory. The flushes that order all this go to the disk the file is on,
+and reach the drive: FLUSH CACHE on AHCI and ATA, FLUSH on NVMe,
+SYNCHRONIZE CACHE on a USB stick. A name too long for eight and three is
+found by its long name only, never by the short name it truncates to, so
+`chapter10.txt` cannot open `chapter1.txt`. A blank disk is formatted
+automatically on first boot, and only a blank one. `tools/readfat.py` parses the image straight from the
 specification, sharing no code with the kernel, and can copy a file in from the
 host.
 
@@ -614,6 +626,18 @@ program looked right and was wrong: a program preempted in the middle of a
 system call is a program by that test, so it was resumed without the lock
 and carried on in the kernel with nothing holding anybody else out. It
 failed about one run in three, somewhere different each time.
+
+The same gate means a system call must never wait by watching the clock:
+the clock moves on the timer interrupt, and inside a call interrupts are off.
+Every wait in the network stack did exactly that, a loop polling the card
+until a deadline in ticks went by, and inside a call the deadline never came.
+Answers that arrived still worked, which is how it hid, but a peer that never
+answered -- a firewalled port, a silent name server, a web server that took
+the connection and hung -- stopped the whole machine for good. A network wait
+now sleeps a tick at a time instead, so the clock moves, every other program
+runs while one waits, and a program stuck waiting can be killed; what it held
+inside the stack is let go of when it is. `tools/hangcheck.py` points a
+program at a server that never answers and checks all of that.
 
 Kernel tasks stay on the boot processor. The handing out of functions is
 still there, because the compositor gives half of every screen comparison to
@@ -1340,7 +1364,7 @@ byte.
 ## testing
 
 The kernel tests itself. `./run.sh -T` boots with selftest on the command line,
-runs 556 checks across every subsystem, then writes to QEMU's debug-exit port
+runs 582 checks across every subsystem, then writes to QEMU's debug-exit port
 so the host gets a real exit status.
 
     [string]                8 checks   [live tree]            19 checks
@@ -1356,8 +1380,8 @@ so the host gets a real exit status.
     [timer]                 3 checks   [sha-512]               4 checks
     [interrupts]            2 checks   [p-384]                 6 checks
     [disk]                 12 checks   [certificates]         40 checks
-    [fat]                  14 checks   [randomness]            5 checks
-    [network]               9 checks   [tls 1.3]              26 checks
+    [fat]                  32 checks   [randomness]            5 checks
+    [network]               9 checks   [tls 1.3]              34 checks
     [elf]                   7 checks   [wpa]                  19 checks
     [userspace]             4 checks   [wait timeouts]         3 checks
     [video]                 7 checks   [processors]            4 checks
@@ -1369,12 +1393,21 @@ so the host gets a real exit status.
     [theme]                19 checks   [sound]                  skipped
     [taskbar]              18 checks   [kernel stack]          2 checks
 
-    556 passed, 0 failed
+    582 passed, 0 failed
     SELFTEST_PASS
 
 The sound section is skipped because `run.sh` attaches no sound card, and the
 identity map is checked in four more places when there is more memory to map:
-given 256 MiB, as the gate gives it, the same run is 560.
+given 256 MiB, as the gate gives it, the same run is 586.
+
+Two of the sections are about what happens when something goes wrong half
+way, which a machine that keeps its power cannot show. `[fat]` makes the
+disk fail every write after a chosen one and checks a delete cut short
+leaves a leak rather than an entry pointing at free space, and hides a
+directory from the reclaim to check it then frees nothing. `[tls 1.3]`
+holds the order of the server's handshake to account: a finished message
+with no signature before it, which is a server that has not shown it holds
+the certificate's key, is refused by name.
 
 The cryptographic sections are all known answers from published documents:
 the hashes against FIPS 180, AES-GCM against the NIST vectors, X25519
@@ -1388,10 +1421,10 @@ talk to anybody.
 The processor section is four checks on a machine with one CPU and fifteen
 on a machine with several, where it hands work to each of them and requires
 the count they share to come back exact. `qemu-system-x86_64 -smp 4` with
-256 MiB reaches 571.
+256 MiB reaches 597.
 
 The same checks run again on `-machine q35`, which has PCIe and an AHCI
-controller rather than a 1996 chipset and a PIO disk, and reach 568 there.
+controller rather than a 1996 chipset and a PIO disk, and reach 594 there.
 Two bugs found the day that was added were invisible on the older machine:
 the block layer would not split a request past the eight sectors AHCI
 accepts, and the ACPI tables were never read on a UEFI machine at all.
@@ -1544,6 +1577,9 @@ large range:
   It can have the first and the last ignored — which is how a shell
   survives the ctrl-C meant for the program it started — or catch them and
   carry on. SIGKILL can be neither, because something has to be final.
+  Any program can signal or kill any other program, and none of them can
+  signal or kill the kernel's own tasks: those used to answer to their pid
+  like anything else, so the monitor's stop button could end "idle".
 
   A handler runs on the program's own stack, between two of its own
   instructions, and returns through a few instructions `sdk/zelr.h`
