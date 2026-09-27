@@ -17,6 +17,11 @@
 
 static const blkdev_t *devices[BLK_MAX];
 
+static blk_io_t io;
+
+void blk_io(blk_io_t *out) { *out = io; }
+u32  blk_writes(void)      { return io.writes; }
+
 u32 blk_register(const blkdev_t *dev) {
     if (!dev) return BLK_NONE;
     for (u32 i = 0; i < BLK_MAX; i++) {
@@ -85,6 +90,8 @@ bool blk_read_on(u32 id, u32 lba, u32 count, void *buf) {
     u8 *p = (u8 *)buf;
     while (count) {
         u32 n = count < run ? count : run;
+        io.reads++;
+        io.sectors_read += n;
         if (!d->read(lba, n, p)) return false;
         lba += n;
         p += (u64)n * SECTOR_SIZE;
@@ -103,6 +110,10 @@ bool blk_write_on(u32 id, u32 lba, u32 count, const void *buf) {
     const u8 *p = (const u8 *)buf;
     while (count) {
         u32 n = count < run ? count : run;
+        /* Counted before the command rather than after it succeeds: a write
+           that failed half way may still have changed the sector. */
+        io.writes++;
+        io.sectors_written += n;
         if (!d->write(lba, n, p)) return false;
         lba += n;
         p += (u64)n * SECTOR_SIZE;
@@ -113,7 +124,9 @@ bool blk_write_on(u32 id, u32 lba, u32 count, const void *buf) {
 
 bool blk_flush_on(u32 id) {
     const blkdev_t *d = dev_at(id);
-    return d && d->flush ? d->flush() : false;
+    if (!d || !d->flush) return false;
+    io.flushes++;
+    return d->flush();
 }
 
 /* --- the disk the machine booted from ------------------------------------ */

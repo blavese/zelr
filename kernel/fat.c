@@ -109,6 +109,7 @@ typedef struct {
     u32  alloc_hint;
     u32  fat_cache_lba;
     bool fat_cache_valid;
+    bool fat_cache_dirty;               /* changed and not yet written; see fat_defer */
     u8   fat_cache[SECTOR_SIZE];
 } fatvol_t;
 
@@ -137,10 +138,42 @@ bool fat_flush_volume(u32 vol) {
     return blk_flush_on(volumes[vol].dev);
 }
 
+/* Directory sectors, kept.
+ *
+ * Directories are walked an entry at a time -- listing, finding a name, the
+ * long name in front of it, a free slot -- and each entry read its sector
+ * from the disk again: sixteen reads of one sector to get through it, and
+ * listing a directory of forty files, which asks for each entry by its
+ * number and finds the directory from the root each time, was two thousand
+ * reads. Eight sectors are kept, each with where it came from.
+ *
+ * This file's own writes are followed exactly: vol_write drops any kept
+ * sector it writes over, and dir_write puts back the one it wrote. Anyone
+ * else's write -- the self test's, the boot log's -- could have been to a
+ * directory, so the whole cache goes when blk_writes has moved past what this
+ * file expected. And a mount forgets it, because a different stick in the same
+ * slot has sectors of the same numbers. */
+#define DCACHE 8
+typedef struct {
+    bool valid;
+    u32  vol, lba;
+    u8   data[SECTOR_SIZE];
+} dslot_t;
+static dslot_t dcache[DCACHE];
+static u32 dcache_next;                 /* the slot the next miss takes */
+static u32 dcache_gen;                  /* blk_writes() after this file's last write */
+
+static void dcache_forget(void) {
+    for (u32 i = 0; i < DCACHE; i++) dcache[i].valid = false;
+    dcache_gen = blk_writes();
+}
+
 void fat_forget_volume(u32 vol) {
     if (vol >= FAT_VOLUMES) return;
     volumes[vol].mounted = false;
     volumes[vol].fat_cache_valid = false;
+    volumes[vol].fat_cache_dirty = false;
+    dcache_forget();
     volumes[vol].fat_bits = 16;
     volumes[vol].alloc_hint = 2;
 }
@@ -167,6 +200,7 @@ void fat_forget_volume(u32 vol) {
 #define fat_cache           (CUR.fat_cache)
 #define fat_cache_lba       (CUR.fat_cache_lba)
 #define fat_cache_valid     (CUR.fat_cache_valid)
+#define fat_cache_dirty     (CUR.fat_cache_dirty)
 
 
 
@@ -197,7 +231,14 @@ static bool vol_write(u32 lba, u32 count, const void *buf) {
         if (!test_writes_left) return false;
         test_writes_left--;
     }
-    return blk_write_on(CUR.dev, part_base + lba, count, buf);
+    bool known = blk_writes() == dcache_gen;   /* nobody else has written since */
+    bool ok = blk_write_on(CUR.dev, part_base + lba, count, buf);
+    for (u32 i = 0; i < DCACHE; i++)
+        if (dcache[i].valid && dcache[i].vol == current_volume &&
+            dcache[i].lba >= lba && dcache[i].lba - lba < count)
+            dcache[i].valid = false;
+    if (known) dcache_gen = blk_writes();
+    return ok;
 }
 
 /* The disk this volume is on, told to write down what it holds.
@@ -221,8 +262,21 @@ static u32 eoc(void)     { return fat_bits == 32 ? EOC32     : EOC16; }
    two of them sharing one would overwrite each other. A directory operation
    consults the allocation table part way through, and following a chain
    happens while a caller is part way through a data sector. */
-static u8 sec[SECTOR_SIZE];      /* file data and the boot sector */
-static u8 dsec[SECTOR_SIZE];     /* directory entries */
+static u8 sec[SECTOR_SIZE];      /* the boot sector; directories are in dcache */
+
+/* File data, a run of sectors at a time.
+ *
+ * It went through `sec` a sector per command, and a file of 256 KiB was 512
+ * commands to read and more to write. A run of clusters that sit together on
+ * the disk goes as one request now, staged here rather than handed to the
+ * driver in the caller's own buffer: that is often a program's memory, which
+ * a controller moving data by itself cannot reach (xhci_bulk refuses it),
+ * and a fault on it half way through a transfer would leave the drive in the
+ * middle of a command. Aligned so no driver's piece of it (eight sectors for
+ * AHCI, NVMe and USB) crosses a 64 KiB line, which a USB controller's
+ * transfer must not. */
+#define RUN_SECTORS 64
+static u8 runbuf[RUN_SECTORS * SECTOR_SIZE] __attribute__((aligned(4096)));
 
 /* One sector of the table, held in memory.
  *
@@ -235,6 +289,8 @@ static u8 dsec[SECTOR_SIZE];     /* directory entries */
 
 static void fat_forget(void) {
     fat_cache_valid = false;
+    fat_cache_dirty = false;
+    dcache_forget();
     alloc_hint = 2;
 }
 
@@ -243,8 +299,43 @@ static void fat_forget(void) {
    a chain cut short by a bad read compares this before and after. */
 static u32 fat_read_failures;
 
+/* Changes to the table held back, and whether writing them failed.
+ *
+ * The table is written through, a sector to each copy for every entry that
+ * changes, and that is what the order of everything else in this file is
+ * built on. But a file of 128 clusters changes 128 entries, 256 to a sector,
+ * and was four writes a cluster -- one to mark it taken and one to link it,
+ * each to both copies. So the two places that change a run of entries at
+ * once, allocating a file's chain and freeing one, hold their changes in the
+ * cached sector and write it when they move to another sector or finish.
+ * Nothing else is written in between (neither loop writes anything but the
+ * table), so what reaches the disk is the same and in the same order, fewer
+ * times; and the one that finishes is told if any of it failed. */
+static bool fat_deferring, fat_defer_failed;
+
+static bool fat_writeback(void) {
+    if (!fat_cache_dirty) return true;
+    fat_cache_dirty = false;
+    for (u32 copy = 0; copy < num_fats; copy++) {
+        if (!vol_write(fat_cache_lba + copy * fat_sectors, 1, fat_cache)) {
+            fat_cache_valid = false;           /* what is on the disk is unknown */
+            return false;
+        }
+    }
+    return true;
+}
+
+static void fat_defer(void) { fat_deferring = true; fat_defer_failed = false; }
+
+static bool fat_undefer(void) {
+    fat_deferring = false;
+    if (!fat_writeback()) fat_defer_failed = true;
+    return !fat_defer_failed;
+}
+
 static bool fat_cache_load(u32 lba) {
     if (fat_cache_valid && fat_cache_lba == lba) return true;
+    if (fat_cache_dirty && !fat_writeback()) fat_defer_failed = true;
     if (!vol_read(lba, 1, fat_cache)) {
         fat_cache_valid = false;
         fat_read_failures++;
@@ -327,14 +418,11 @@ static bool fat_set(u32 cluster, u32 value) {
        depends on the new chain really reaching the disk before the directory
        entry that points at it. Both copies of the table have to agree or
        other readers will object, and since they are byte for byte the same,
-       the one sector goes to each of them. */
-    for (u32 copy = 0; copy < num_fats; copy++) {
-        if (!vol_write(lba + copy * fat_sectors, 1, fat_cache)) {
-            fat_cache_valid = false;
-            return false;
-        }
-    }
-    return true;
+       the one sector goes to each of them. Held back only inside fat_defer,
+       whose caller writes it before anything else. */
+    fat_cache_dirty = true;
+    if (fat_deferring) return true;
+    return fat_writeback();
 }
 
 static u32 alloc_cluster(void) {
@@ -351,6 +439,7 @@ static u32 alloc_cluster(void) {
 }
 
 static void free_chain(u32 cluster) {
+    fat_defer();
     while (cluster >= 2 && cluster < eoc_min()) {
         u32 next = fat_get(cluster);
         fat_set(cluster, 0);
@@ -358,18 +447,28 @@ static void free_chain(u32 cluster) {
         if (cluster < alloc_hint) alloc_hint = cluster;
         cluster = next;
     }
+    fat_undefer();         /* a failure leaks clusters, which the reclaim finds */
 }
 
 static u32 cluster_lba(u32 cluster) {
     return data_start + (cluster - 2) * sectors_per_cluster;
 }
 
+/* Zeros over a run of sectors, as few requests as the run allows. */
+static bool zero_sectors(u32 lba, u32 count) {
+    u32 most = count < RUN_SECTORS ? count : RUN_SECTORS;
+    memset(runbuf, 0, most * SECTOR_SIZE);
+    while (count) {
+        u32 n = count < most ? count : most;
+        if (!vol_write(lba, n, runbuf)) return false;
+        lba += n;
+        count -= n;
+    }
+    return true;
+}
+
 static u32 zero_cluster(u32 cluster) {
-    memset(sec, 0, SECTOR_SIZE);
-    u32 lba = cluster_lba(cluster);
-    for (u32 s = 0; s < sectors_per_cluster; s++)
-        if (!vol_write(lba + s, 1, sec)) return 0;
-    return cluster;
+    return zero_sectors(cluster_lba(cluster), sectors_per_cluster) ? cluster : 0;
 }
 
 /* --- mounting ----------------------------------------------------------- */
@@ -792,9 +891,7 @@ bool fat_format_at(u32 base_lba, u32 sectors, const char *label) {
        black box writes, and it will not write over anything it does not
        recognise; leaving a previous volume's log there would either be read
        back as this volume's own history or block the log entirely. */
-    memset(sec, 0, SECTOR_SIZE);
-    for (u32 s = 1; s < reserved; s++)
-        if (!vol_write(s, 1, sec)) return false;
+    if (reserved > 1 && !zero_sectors(1, reserved - 1)) return false;
 
     if (bits == 32) {
         /* The information sector: a count of free clusters and a hint at
@@ -813,10 +910,8 @@ bool fat_format_at(u32 base_lba, u32 sectors, const char *label) {
     }
 
     /* both tables, cleared, with the reserved entries at the front */
-    memset(sec, 0, SECTOR_SIZE);
     for (u32 copy = 0; copy < fats; copy++)
-        for (u32 s = 0; s < fsize; s++)
-            if (!vol_write(reserved + copy * fsize + s, 1, sec)) return false;
+        if (!zero_sectors(reserved + copy * fsize, fsize)) return false;
 
     memset(sec, 0, SECTOR_SIZE);
     if (bits == 32) {
@@ -832,11 +927,9 @@ bool fat_format_at(u32 base_lba, u32 sectors, const char *label) {
 
     /* empty root directory: a fixed run of sectors on FAT16, one cluster of
        the data area on FAT32 */
-    memset(sec, 0, SECTOR_SIZE);
     u32 root_lba = reserved + (u32)fats * fsize;
     u32 root_len = (bits == 32) ? spc : root_secs;
-    for (u32 s = 0; s < root_len; s++)
-        if (!vol_write(root_lba + s, 1, sec)) return false;
+    if (!zero_sectors(root_lba, root_len)) return false;
 
     vol_flush();
     (void)clusters;
@@ -924,21 +1017,41 @@ static bool dir_locate(const dir_t *d, u32 index, u32 *lba_out, u32 *off_out) {
     return true;
 }
 
+/* A directory sector, from the cache (see dcache) or the disk. */
+static dslot_t *dsec_load(u32 lba) {
+    if (blk_writes() != dcache_gen) dcache_forget();
+    for (u32 i = 0; i < DCACHE; i++)
+        if (dcache[i].valid && dcache[i].vol == current_volume && dcache[i].lba == lba)
+            return &dcache[i];
+    dslot_t *s = &dcache[dcache_next];
+    dcache_next = (dcache_next + 1) % DCACHE;
+    s->valid = false;
+    if (!vol_read(lba, 1, s->data)) return 0;
+    s->vol = current_volume;
+    s->lba = lba;
+    s->valid = true;
+    return s;
+}
+
 static bool dir_read(const dir_t *d, u32 index, dirent_t *out) {
     if (test_subdirs_unreadable && !d->root) return false;
     u32 lba, off;
     if (!dir_locate(d, index, &lba, &off)) return false;
-    if (!vol_read(lba, 1, dsec)) return false;
-    memcpy(out, dsec + off, 32);
+    dslot_t *s = dsec_load(lba);
+    if (!s) return false;
+    memcpy(out, s->data + off, 32);
     return true;
 }
 
 static bool dir_write(const dir_t *d, u32 index, const dirent_t *in) {
     u32 lba, off;
     if (!dir_locate(d, index, &lba, &off)) return false;
-    if (!vol_read(lba, 1, dsec)) return false;
-    memcpy(dsec + off, in, 32);
-    return vol_write(lba, 1, dsec);
+    dslot_t *s = dsec_load(lba);
+    if (!s) return false;
+    memcpy(s->data + off, in, 32);
+    if (!vol_write(lba, 1, s->data)) return false;    /* which dropped it */
+    s->valid = true;                           /* what the disk holds now */
+    return true;
 }
 
 /* Adds one cluster to a directory and zeroes it, so the new entries read as
@@ -1573,19 +1686,47 @@ int fat_read_file(const char *path, u8 *buf, u32 cap) {
     u32 want = e.size < cap ? e.size : cap;
     u32 done = 0;
     u32 cluster = ent_cluster(&e);
+    u32 per = fat_cluster_bytes();
 
     while (done < want && cluster >= 2 && cluster < eoc_min()) {
-        u32 lba = cluster_lba(cluster);
-        for (u32 s = 0; s < sectors_per_cluster && done < want; s++) {
-            if (!vol_read(lba + s, 1, sec)) return -1;
-            u32 n = want - done;
-            if (n > SECTOR_SIZE) n = SECTOR_SIZE;
-            memcpy(buf + done, sec, n);
-            done += n;
+        /* This cluster and every one after it that sits next to it on the
+           disk, as far as the file is wanted: one run, read as such. */
+        u32 last = cluster, next = fat_get(cluster), run = 1;
+        while (next == last + 1 && done + run * per < want) {
+            last = next;
+            next = fat_get(last);
+            run++;
         }
-        cluster = fat_get(cluster);
+        u32 bytes = run * per < want - done ? run * per : want - done;
+        u32 lba = cluster_lba(cluster);
+        u32 left = (bytes + SECTOR_SIZE - 1) / SECTOR_SIZE;
+        while (left) {
+            u32 n = left < RUN_SECTORS ? left : RUN_SECTORS;
+            if (!vol_read(lba, n, runbuf)) return -1;
+            u32 take = n * SECTOR_SIZE < want - done ? n * SECTOR_SIZE : want - done;
+            memcpy(buf + done, runbuf, take);
+            done += take;
+            lba += n;
+            left -= n;
+        }
+        cluster = next;
     }
     return (int)done;
+}
+
+u32 fat_test_runs(const char *path) {
+    if (!mounted) return 0;
+    dir_t parent;
+    char leaf[FAT_NAME_MAX];
+    dirent_t e;
+    if (!resolve_parent(path, &parent, leaf, sizeof(leaf))) return 0;
+    if (dir_find(&parent, leaf, &e) < 0) return 0;
+    u32 runs = 0, prev = 0, guard = 0;
+    for (u32 c = ent_cluster(&e); c >= 2 && c < eoc_min() && guard++ <= cluster_count; c = fat_get(c)) {
+        if (c != prev + 1) runs++;
+        prev = c;
+    }
+    return runs;
 }
 
 bool fat_write_file(const char *path, const u8 *buf, u32 size) {
@@ -1614,28 +1755,48 @@ bool fat_write_file(const char *path, const u8 *buf, u32 size) {
     /* Write the new copy first, into clusters nothing points at yet. Losing
        power during this stage leaves the directory still describing the old
        file, so the old contents survive intact. */
-    u32 first = 0, prev = 0, written = 0;
+    u32 first = 0, prev = 0, got = 0;
     u32 per_cluster = fat_cluster_bytes();
+    u32 need = (size + per_cluster - 1) / per_cluster;
 
-    while (written < size) {
+    /* The chain first, its changes to the table written once a sector
+       rather than twice a cluster. */
+    fat_defer();
+    while (got < need) {
         u32 c = alloc_cluster();
-        if (!c) { if (first) free_chain(first); return false; }
+        if (!c) break;
         if (prev) fat_set(prev, c);
         else first = c;
         prev = c;
+        got++;
+    }
+    if (!fat_undefer() || got < need) { if (first) free_chain(first); return false; }
 
-        u32 lba = cluster_lba(c);
-        for (u32 s = 0; s < sectors_per_cluster; s++) {
-            memset(sec, 0, SECTOR_SIZE);
-            u32 off = written + s * SECTOR_SIZE;
-            if (off < size) {
-                u32 n = size - off;
-                if (n > SECTOR_SIZE) n = SECTOR_SIZE;
-                memcpy(sec, buf + off, n);
-            }
-            if (!vol_write(lba + s, 1, sec)) { if (first) free_chain(first); return false; }
+    /* Then the data, a run of neighbouring clusters to a request. The last
+       cluster's unused end is written as zeros, as it always was. */
+    u32 c = first, off = 0;
+    while (off < size) {
+        if (c < 2 || c >= eoc_min()) { free_chain(first); return false; }
+        u32 last = c, next = fat_get(c), run = 1;
+        while (next == last + 1 && off + run * per_cluster < size) {
+            last = next;
+            next = fat_get(last);
+            run++;
         }
-        written += per_cluster;
+        u32 lba = cluster_lba(c);
+        u32 left = run * sectors_per_cluster;
+        while (left) {
+            u32 n = left < RUN_SECTORS ? left : RUN_SECTORS;
+            u32 bytes = n * SECTOR_SIZE;
+            u32 have = off < size ? size - off : 0;
+            if (have >= bytes) memcpy(runbuf, buf + off, bytes);
+            else { memcpy(runbuf, buf + off, have); memset(runbuf + have, 0, bytes - have); }
+            if (!vol_write(lba, n, runbuf)) { free_chain(first); return false; }
+            off += bytes;
+            lba += n;
+            left -= n;
+        }
+        c = next;
     }
 
     /* Make sure the data is on the platter before anything points at it. */

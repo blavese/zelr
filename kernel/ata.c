@@ -151,12 +151,25 @@ bool ata_write(u32 lba, u32 count, const void *buf) {
         for (int i = 0; i < SECTOR_SIZE / 2; i++) outw(DATA, *in++);
         delay400();
     }
-    return ata_flush();
+
+    /* Finished when the drive stops being busy and says nothing went wrong.
+       It used to flush the drive's cache here too, after every command, which
+       made every write wait for the platter -- on QEMU a host fsync each, and
+       a file of 256 KiB took thirty times as long as on AHCI, which has never
+       flushed per command. Ordering is the caller's to ask for, and the
+       callers that need it do: the filesystem around each commit, the boot
+       log after its record. */
+    if (!wait_not_busy()) return false;
+    return !(inb(STATUS) & (ST_ERR | ST_DF));
 }
+
+static u32 flushes;
+u32 ata_flushes(void) { return flushes; }
 
 bool ata_flush(void) {
     if (!present) return false;
     if (!wait_not_busy()) return false;
+    flushes++;
     outb(DRIVE, 0xE0);
     outb(COMMAND, CMD_FLUSH);
     delay400();

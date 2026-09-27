@@ -11,3 +11,4 @@ const char *ata_model(void);
 bool ata_read(u32 lba, u32 count, void *buf);
 bool ata_write(u32 lba, u32 count, const void *buf);
 bool ata_flush(void);
+u32  ata_flushes(void);                 /* cache flushes sent to the drive since boot */

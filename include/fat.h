@@ -108,3 +108,7 @@ u32  fat_reclaim(void);
    than the root cannot be read. */
 void fat_test_writes_left(u32 n);
 void fat_test_subdirs_unreadable(bool on);
+
+/* How many runs of neighbouring clusters a file's chain is in, 0 if it has
+   none or is not there: what reading or writing it in runs is measured by. */
+u32  fat_test_runs(const char *path);

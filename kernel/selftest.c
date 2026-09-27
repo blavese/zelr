@@ -31,6 +31,7 @@
 #include "syscall.h"
 #include "idt.h"
 #include "blockdev.h"
+#include "ata.h"
 #include "diskfs.h"
 #include "fat.h"
 #include "elf.h"
@@ -616,6 +617,75 @@ static void test_net(void) {
     }
 }
 
+/* What the filesystem asks of the disk, counted, so a return to a sector a
+   request cannot quietly pass. Bounded by the file's own runs of clusters,
+   so a disk whose free space is in pieces does not make it fail: it was 1023
+   writes to write 256 KiB and 513 reads to read it, 2045 reads to list a
+   directory of forty files, and a cache flush after every write on ATA. */
+static void test_fat_io(void) {
+    if (!fat_mounted()) { kprintf("  SKIP  no disk mounted\n"); return; }
+    u32 big = 256 * 1024, sectors = big / SECTOR_SIZE;
+    u8 *p = (u8 *)kmalloc(big), *q = (u8 *)kmalloc(big);
+    if (!p || !q) { kfree(p); kfree(q); kprintf("  SKIP  no memory\n"); return; }
+    for (u32 i = 0; i < big; i++) p[i] = (u8)(i * 7 + (i >> 9));
+    bool ata = strcmp(blk_driver(), "ata") == 0;
+    blk_io_t a, b;
+
+    blk_io(&a);
+    u32 ata_before = ata_flushes();
+    bool wrote = fat_write_file("/runs.bin", p, big);
+    blk_io(&b);
+    u32 runs = fat_test_runs("/runs.bin");
+    ok("a file of 256 KiB is written a run of sectors to a request",
+       wrote && runs && b.writes - a.writes <= 5 * runs + sectors / 8 + 4);
+    if (ata)
+        ok("and the ata disk flushes only when it is asked to",
+           ata_flushes() - ata_before == b.flushes - a.flushes);
+
+    blk_io(&a);
+    int got = fat_read_file("/runs.bin", q, big);
+    blk_io(&b);
+    ok("and it reads back whole", got == (int)big && memcmp(p, q, big) == 0);
+    ok("a run of sectors to a request",
+       b.reads - a.reads <= 2 * runs + sectors / 8 + 4);
+    fat_delete_file("/runs.bin");
+    kfree(p);
+    kfree(q);
+
+    char name[32], nm[64];
+    u32 sz;
+    bool dir;
+    fat_mkdir("/iodir");
+    for (int i = 0; i < 40; i++) {
+        kformat(name, sizeof name, "/iodir/file%d.txt", i);
+        fat_write_file(name, (const u8 *)"x", 1);
+    }
+    u32 n = fat_count("/iodir");
+    for (u32 i = 0; i < n; i++) fat_list("/iodir", i, nm, &sz, &dir);
+    blk_io(&a);
+    u32 again = fat_count("/iodir");
+    for (u32 i = 0; i < again; i++) fat_list("/iodir", i, nm, &sz, &dir);
+    blk_io(&b);
+    ok("a directory of forty files listed twice is read once",
+       n == 40 && again == 40 && b.reads == a.reads);
+
+    /* A write from outside the filesystem -- here the same bytes put back
+       where the disk check keeps its probe -- could have been to a directory,
+       so what is kept goes. */
+    u8 keep[SECTOR_SIZE];
+    u32 lba = blk_sectors() - 4;
+    if (blk_read(lba, 1, keep)) blk_write(lba, 1, keep);
+    blk_io(&a);
+    fat_count("/iodir");
+    blk_io(&b);
+    ok("and read again once anybody else has written to the disk", b.reads > a.reads);
+
+    for (int i = 0; i < 40; i++) {
+        kformat(name, sizeof name, "/iodir/file%d.txt", i);
+        fat_delete_file(name);
+    }
+    fat_rmdir("/iodir");
+}
 static void test_tcp(void) {
     /* The receive side on its own, fed by hand, starting just short of the
        wrap so the sequence numbers cross it. Bytes past a hole used to be
@@ -4815,7 +4885,7 @@ int selftest_run(void) {
     kprintf("[timer]\n");      test_timer();
     kprintf("[interrupts]\n"); test_interrupts();
     kprintf("[disk]\n");       test_disk();
-    kprintf("[fat]\n");        test_fat(); test_fat_names(); test_fat_big();
+    kprintf("[fat]\n");        test_fat(); test_fat_names(); test_fat_big(); test_fat_io();
     kprintf("[network]\n");    test_net();
     kprintf("[tcp]\n");        test_tcp();
     kprintf("[elf]\n");        test_elf();

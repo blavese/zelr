@@ -84,7 +84,8 @@ fd.c (whole-file buffers) ───┤              │
 - **Volume rules are "deliberately timid"** (diskfs.c:13-24): use a partition zelr formatted; also use any other FAT partition that is not the ESP; never touch the ESP; never format an existing partition, only "an unpartitioned disk with no filesystem on it". Section 10 shows that the last rule is enforced by `parts_count()==0`, which is weaker than the comment claims.
 - **FAT is used for interoperability** (fat.c:3-8). Every field sits where the specification puts it.
 - **FAT width is decided by cluster count, never by the label** (fat.c:15-22, 387-392).
-- **FAT updates are written through** (fat.c:285-289). The crash-safety of `fat_write_file` needs the new chain on disk before the directory entry points at it. Both FAT copies are written.
+- **FAT updates are written through** (fat.c:285-289). The crash-safety of `fat_write_file` needs the new chain on disk before the directory entry points at it. Both FAT copies are written. Since 0.48.0 the two loops that change a run of entries and write nothing else in between, allocating a file's chain and `free_chain`, hold changes in the cached sector (`fat_defer`/`fat_undefer`, `fat_cache_dirty`) and write it when they move to another sector or finish; the issue order of writes is unchanged, and `fat_undefer` reports any failure.
+- **Data moves a run at a time** (since 0.48.0): neighbouring clusters are one request, staged through `runbuf` (64 sectors, 4 KiB aligned), never the caller's buffer (a program's memory, which the xHCI cannot reach). Directory sectors are kept in `dcache` (8 sectors), trusted while `blk_writes()` has not moved past what fat.c itself wrote; `vol_write` drops sectors it overwrites, `dir_write` keeps the one it wrote, and a mount forgets all of it.
 - **Crash-safe replace** (fat.c:1433-1477): new chain first, flush, one-sector directory entry commit, flush, then release the old chain. Clusters stranded by a crash are recovered by `fat_reclaim` at mount (fat.c:1665-1674).
 - **LFN** (fat.c:918-935). Short names are still written for anything that fits 8.3, "so every file this system wrote before today reads back exactly as it did". The short-name checksum stops stale long entries from being believed.
 - **Rename only changes the name inside the existing entry** (fat.c:1481-1513). A second entry would briefly give one chain two names, and deleting either would free the other's clusters. Hence same directory only, and the new name must fit 8.3.
@@ -142,7 +143,7 @@ USB registration (other area, for context): usbdisk.c:248-251 has `USB_DEV = {"u
 - `ata_max_run` returns 255 (:111): an 8-bit count where 0 would mean 256, which is not used.
 - `select_lba` (:114-120): DRIVE = 0xE0 | lba[27:24].
 - `ata_read` (:122-137): checks count 1..255 and `lba+count <= total_sectors`. One READ command, then per sector `wait_drq`, 256 `inw`, `delay400`.
-- `ata_write` (:139-155): per-word `outw` ("No rep outsw here: some controllers need a moment between words"), then **`return ata_flush()`**, so every write command is followed by FLUSH CACHE.
+- `ata_write` (:139-155): per-word `outw` ("No rep outsw here: some controllers need a moment between words"), then **`return ata_flush()`**, so every write command is followed by FLUSH CACHE. Since 0.48.0 it waits for !BSY and checks ERR/DF instead, like AHCI, which never flushed per command; callers flush where order matters (fat.c commits, the boot log). `ata_flushes()` counts the flushes sent.
 - `ata_flush` (:157-164): DRIVE=0xE0, CMD 0xE7, waits for !BSY.
 
 ### 3.3 include/ahci.h + kernel/ahci.c: AHCI
@@ -299,7 +300,7 @@ State: `table[16]`, `count`, `scheme`, `char gpt_error[64]` (parts.c:37-40).
 
 - `static fatvol_t volumes[2] = {{.fat_bits=16,.alloc_hint=2}, …}` (:115-118).
 - `static u32 current_volume = FAT_VOL_DISK` (:123). Macros (:143-164) map the old global names (`part_base`, `mounted`, `fat_cache`, …) onto `volumes[current_volume]`, so the rest of the file "did not have to change".
-- Two shared static buffers (:192-193): `u8 sec[512]` (file data and boot sector) and `u8 dsec[512]` (directory entries). The comment says "Three buffers"; the third is the per-volume `fat_cache`.
+- Two shared static buffers (:192-193): `u8 sec[512]` (file data and boot sector) and `u8 dsec[512]` (directory entries). The comment says "Three buffers"; the third is the per-volume `fat_cache`. Since 0.48.0 `sec` holds only the boot sector, file data goes through `runbuf`, and `dsec` is replaced by the eight-slot `dcache`.
 
 #### Volume selection
 - `fat_select(vol)` (:125-127): sets `current_volume` if valid. `fat_selected` (:129) is unused. `fat_mounted_on(vol)` (:131-133).
@@ -312,7 +313,7 @@ State: `table[16]`, `count`, `scheme`, `char gpt_error[64]` (parts.c:37-40).
 - `fat_set(cluster, value)` (:271-297): loads the sector and updates it (FAT32 keeps the top 4 bits). It then writes that one sector to **every FAT copy** (`lba + copy*fat_sectors`). On failure it invalidates the cache and returns false.
 - `alloc_cluster()` (:299-310): next-fit from `alloc_hint`, wrapping once over `cluster_count`. Marks EOC through `fat_set` and advances the hint. Returns 0 when the volume is full.
 - `free_chain(c)` (:312-320): walks and zeroes entries (the `fat_set` result is ignored) and moves the hint back.
-- `cluster_lba(c) = data_start + (c-2)*spc` (:322-324). `zero_cluster(c)` (:326-332) uses `sec`.
+- `cluster_lba(c) = data_start + (c-2)*spc` (:322-324). `zero_cluster(c)` (:326-332) uses `sec` (since 0.48.0 `zero_sectors` over `runbuf`, which `fat_format` also uses for the reserved area, both tables and the root).
 
 #### Mount
 `bool fat_mount_at(u32 base_lba)` (:349-429), on the selected volume:
@@ -354,7 +355,7 @@ It does not check that the FAT is large enough for `cluster_count`, and does not
 - `entries_per_cluster` (:794). `dir_capacity(d)` (:798-806): FAT16 root gives `root_entries`; otherwise the chain length × entries per cluster, loop-guarded.
 - `ent_cluster/set_ent_cluster` (:816-825): FAT32 combines hi and lo; FAT16 writes hi = 0.
 - `dir_locate(d, index)` (:827-855): FAT16 root is a fixed region; otherwise it walks the chain (guarded).
-- `dir_read` (:857-863) reads into `dsec`. `dir_write` (:865-871) is a read-modify-write of one sector through `dsec`.
+- `dir_read` (:857-863) reads into `dsec`. `dir_write` (:865-871) is a read-modify-write of one sector through `dsec`. Since 0.48.0 both go through `dsec_load` and the `dcache`.
 - `dir_grow(d)` (:876-892): the FAT16 root cannot grow. Finds the last cluster, allocates, zeroes and links it.
 - `dir_free_slot(d)` (:895-908): the first entry whose `name[0]` is 0x00 or 0xE5; grows once.
 - `entry_is_real(e)` (:911-916): not free or deleted, not LFN, not a volume ID.
@@ -386,7 +387,7 @@ It does not check that the FAT is large enough for `cluster_count`, and does not
 - `fat_list(path, index, name, size, dir)` (:1317-1351): returns -1 if unmounted or not a directory, 0 past the end, 1 on a hit. Skips non-real entries and names starting with '.'. The name is the long name if present, else `from_83` (lowercased). ~~`strncpy(name_out, real, 63)` does not terminate a 63-character name.~~ (0.42.0) It copies `len + 1` bytes, terminator included.
 - `fat_count(path)` (:1353-1357): calls `fat_list(i)` until it fails, which is O(n²) in directory size.
 - `fat_stat` (:1359-1377): "", "." and ".." report a directory.
-- `fat_read_file(path, buf, cap)` (:1381-1408): follows the chain for `min(size, cap)` bytes, sector by sector through `sec`. A directory gives -1.
+- `fat_read_file(path, buf, cap)` (:1381-1408): follows the chain for `min(size, cap)` bytes, sector by sector through `sec`. A directory gives -1. Since 0.48.0 a run of neighbouring clusters at a time through `runbuf`.
 - **`fat_write_file(path, buf, size)`** (:1410-1479): the crash-safe protocol. See §4.3.
 - `fits_83(name)` (:1517-1523): the name survives to_83 then from_83 unchanged, case-insensitively, and (0.42.0) holds no byte ≥ 0x80. `fat_rename` still only renames to names that fit.
 - **`fat_rename(from, to)`** (:1525-1571): both parents are resolved and must be identical (`cluster` and `root`). The destination leaf must `fits_83`. Finds the source; returns true if the names match case-insensitively. If the destination exists: refuses a directory, otherwise `fat_delete_file(to)` and re-finds the source. Then `dir_drop_long` (before the rename, "so a power cut here leaves the file under its 8.3 name"), `to_83(dst)` into `e.name`, one `dir_write`, `blk_flush()`. Directories may be renamed.
@@ -452,7 +453,7 @@ Programs: `program_t {name, data, size}`, `programs[48]`, `n_programs`. `sysfs_a
 | /sys/tasks | `render_tasks` :108 | header `pid  state     ring  slices  name`, then per task `%-4d %-9s %-5s %-7d %s` (ring "3"/"0") |
 | /sys/uptime | `render_uptime` :124 | `ticks     N at HZ Hz`; `uptime    Hh Mm Ss`; `tasks     N, B of them blocked`; `wakeups   W, B blocked now` |
 | /sys/cpu | `render_cpu` :137 | `described N`; `started   N`; `apictimer N counts per second`; per CPU `cpu%-6d apic A, running/halted S slices, T ticks, L busy` (lock misses) |
-| /sys/devices | `render_devices` :153 | `disk      MODEL via DRIVER, N MiB` or `disk      none`; `sound …` (position "timed here"/"from the controller") or none; `network   NAME MAC` or none; `video     WxH 32bpp` or `vga text`; `usb       DESC, N report(s)` or `no controller`; `keyboard  ps/2[ and usb]`; `storage   fat16 on disk` or `memory only` (via `vfs_disk_backed`, the selected volume); optional `usbdisk   MODEL, N sector(s) of B bytes` |
+| /sys/devices | `render_devices` :153 | `disk      MODEL via DRIVER, N MiB` or `disk      none`; since 0.48.0 `disk io   R reads of S sectors, W writes of S, F flushes` (commands since boot, `blk_io`); `sound …` (position "timed here"/"from the controller") or none; `network   NAME MAC` or none; `video     WxH 32bpp` or `vga text`; `usb       DESC, N report(s)` or `no controller`; `keyboard  ps/2[ and usb]`; `storage   fat16 on disk` or `memory only` (via `vfs_disk_backed`, the selected volume); optional `usbdisk   MODEL, N sector(s) of B bytes` |
 | /sys/net | `render_net` :194 | `no network card`, or address/netmask/gateway/dns, `state configured` or `no address yet`, `packets`, `queue N waiting, D deepest, X dropped`, `tcp R resent, O out of order, S reset` |
 | /sys/programs | `render_programs` :215 | `%-16s %d bytes` per program |
 | /sys/boot | `render_boot` :232 | this boot's log (`bb_text`), **tail** kept if over cap-1 (4095) |
@@ -566,7 +567,7 @@ count > 0   -> pass 0: first non-ESP FAT-looking partition that is ours
 ### 4.3 Crash-safe write (`fat_write_file`, fat.c:1410-1479)
 1. `resolve_parent`; refuse an empty leaf.
 2. `dir_find(parent, leaf)`. If it exists: refuse a directory and remember `old_chain`. If not: `dir_put_name` reserves the short slot and **writes the LFN entries now**; `attr = ARCHIVE`.
-3. For each cluster: `alloc_cluster` (writes EOC to both FATs), link from the previous cluster (`fat_set`), write `spc` sectors of data with the last sector zero-padded. On any failure: `free_chain(first)` and return false.
+3. For each cluster: `alloc_cluster` (writes EOC to both FATs), link from the previous cluster (`fat_set`), write `spc` sectors of data with the last sector zero-padded. On any failure: `free_chain(first)` and return false. Since 0.48.0 the whole chain is allocated first under `fat_defer` (its table sectors written once each, before any data), then the data goes a run of neighbouring clusters to a request through `runbuf`, the last cluster's end as zeros.
 4. **`blk_flush()`** (disk 0): "Make sure the data is on the platter before anything points at it."
 5. Set cluster (hi and lo), size, `write_date 0x5A21`, `write_time 0`.
 6. **`dir_write(parent, slot, &e)`**: a one-sector read-modify-write. **This is the commit.**
@@ -580,7 +581,7 @@ Crash outcomes. Before 6: the old file is intact, and new clusters leak until `f
 - The last close (`of_unref`, fd.c:109-127) calls `vfs_write(path, data, size)` if dirty: one full crash-safe rewrite.
 - `fd_sync` (fd.c:480-491, `SYS_FSYNC` = 61): a dirty file is written through `vfs_write` and then marked clean. A clean file only gets `diskfs_flush()` (disk 0).
 - Two opens of one file get independent copies.
-- The VFS and FAT layers keep no cache except one FAT sector per volume. Every stat, read or list re-reads directory sectors, and FAT updates are written through immediately.
+- The VFS and FAT layers keep no cache except one FAT sector per volume. Every stat, read or list re-reads directory sectors, and FAT updates are written through immediately. (Since 0.48.0: eight directory sectors are kept, see §2.)
 - `sys_power` (syscall.c:463-475) and the desktop's Shut down (wm.c:2975-2979) call only `diskfs_flush()`. Dirty open descriptions are not written back.
 
 ### 4.5 USB stick lifecycle
@@ -724,6 +725,7 @@ pci.c (`pci_find_class`, `pci_read32`, `pci_enable_bus_master`); paging.c (`pagi
 - **[open files]** `test_open_files` (:918-…), 30 checks in total. The file part covers fd 3 first, overwrite in place, close writes it out, chunked reads, seek, dup/dup2 sharing a position; the rest is pipes (fd.c area).
 - **[disk]** `test_disk` (:368-418), 12 checks: read/write/restore of sector `blk_sectors()-4`, then a 16-sector run at `blk_sectors()-24` (which forces splitting on AHCI, NVMe and USB), and count 0 refused.
 - **[fat]** `test_fat` (:521-564), 14 checks: mounted; cluster count in range for the width; cluster bytes ≥ 512; a multi-cluster file (2 clusters + 137 bytes) written, read back byte for byte, listed, deleted; mkdir /sub, the same file inside it, `fat_count("/sub")==1`, cleanup.
+- **[fat]** `test_fat_io` (since 0.48.0; 6 checks on ATA, 5 elsewhere), counting commands with `blk_io`: a 256 KiB file written in at most `5 x runs + sectors/8 + 4` writes and read back whole in at most `2 x runs + sectors/8 + 4` reads (`fat_test_runs` gives the chain's runs, so a fragmented disk does not fail it; the old code took 1023 and 513); on ATA, drive flushes equal the flushes asked for; forty files listed a second time with no reads (2045 before); and read again after a raw `blk_write` elsewhere.
 - **[built-in programs]** `test_builtin` (:878-916), 8 checks: every program registered, /bin/browser present (the comment calls it "the last"; it is no longer), /bin/paint is an ELF, cannot be written or deleted, not present on disk.
 - **[live tree]** `test_live_tree` (:2948-3010): /sys and /bin are directories and listed in "/"; /sys/version content and stat size equal to the read size; memory, tasks, devices content; /sys/uptime changes over 60 ms; read-only through vfs_write, delete, fd_open(O_WRITE) and mkdir; readable through fd; missing files fail.
 - **[layout]** `test_layout` (:3012-3040): the 4 directories exist; /doc/readme is over 100 bytes; re-running does not restore a deleted /home/notes and keeps user files; /tmp is emptied by a re-run.

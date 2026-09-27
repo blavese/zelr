@@ -51,6 +51,17 @@ bool blk_read_on(u32 id, u32 lba, u32 count, void *buf);
 bool blk_write_on(u32 id, u32 lba, u32 count, const void *buf);
 bool blk_flush_on(u32 id);
 
+/* Commands handed to the drivers since boot, every disk together. What a
+   change to the filesystem costs is counted here rather than guessed at, and
+   `writes` doubles as a generation: a cache of what a sector holds is good
+   only while it has not moved. */
+typedef struct {
+    u32 reads, writes, flushes;
+    u64 sectors_read, sectors_written;
+} blk_io_t;
+void blk_io(blk_io_t *out);
+u32  blk_writes(void);
+
 /* The disk the machine booted from, which is what everything above this
    meant before there was more than one. */
 bool blk_init(void);

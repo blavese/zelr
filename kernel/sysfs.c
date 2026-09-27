@@ -158,6 +158,10 @@ static u32 render_devices(char *b, u32 cap) {
             blk_model(), blk_driver(), blk_sectors() / 2048);
     else
         put(&o, "disk      none\n");
+    blk_io_t io;
+    blk_io(&io);
+    put(&o, "disk io   %d reads of %d sectors, %d writes of %d, %d flushes\n",
+        io.reads, (u32)io.sectors_read, io.writes, (u32)io.sectors_written, io.flushes);
 
     /* Where the play position comes from, which is worth reporting rather
        than hiding: some controllers read the buffer perfectly well and never

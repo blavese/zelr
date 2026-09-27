@@ -95,6 +95,32 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.48.0: the disk asked for a sector at a time
+
+Each change has a check that was run against a build broken for it alone and seen to fail there; the
+gains were measured by counting the commands each operation hands the drivers (`blk_io`, shown in
+`/sys/devices`) and the cycles it takes, on the ATA machine (pc) and the AHCI one (q35).
+
+- **ATA flushed after every write (04 §3).** `ata_write` ended in FLUSH CACHE, a host fsync each on
+  QEMU; it waits for the drive and checks ERR/DF now, as AHCI always did. Callers flush where the
+  order matters. `[fat]` compares the drive's flushes (`ata_flushes`) with the ones asked for.
+- **Runs of clusters (04 §4.3).** File data is read and written a run of neighbouring clusters to a
+  request through a 4 KiB-aligned 32 KiB staging buffer, never the caller's (a program's memory, which
+  the xHCI refuses). `fat_format` zeroes its areas the same way.
+- **The table (04 §2).** Allocating a file's chain and freeing one hold their changes in the cached
+  sector and write it once a sector (`fat_defer`); the order of writes is unchanged.
+- **Directory sectors (04 §2).** Eight kept (`dcache`); fat.c's own writes are followed exactly, and
+  anyone else's write (`blk_writes` moving) drops them all. Not checked: that `vol_write` drops a kept
+  sector it overwrites, which cannot be seen through the calls (a directory must be empty to go).
+- Measured, before and after: writing 256 KiB, 1023 writes and 3761 Mcycles on ATA (116 on AHCI), now
+  11 writes and 120 Mcycles (16 on AHCI, 67 writes); reading it, 513 reads, now 8 (64 on AHCI);
+  listing forty files, 2045 reads and 559 Mcycles, now none and 2; writing forty small files, 2740
+  reads and 1775 Mcycles, now 2 reads and 334; deleting them, 1151 reads, now none.
+
+Counts after 0.48.0:
+- selftest 658 (pc, 64 MiB), 664 (256 MiB), 671 (q35), 685 (`-smp 4`), in 51 sections;
+- gate full 53 steps.
+
 ### 0.47.0: a download fifty times faster
 
 Each change has a check that was run against a build broken for it alone and seen to fail there; the
