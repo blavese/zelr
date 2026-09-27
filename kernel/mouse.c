@@ -155,13 +155,24 @@ static bool enable_wheel(void) {
     return id == 3;
 }
 
+static u32 hides;
+u32 mouse_hides(void) { return hides; }
+
 void mouse_hide(void) {
     if (!drawn || !fb_active()) return;
+    hides++;
     for (u32 y = 0; y < CUR_H; y++)
         for (u32 x = 0; x < CUR_W; x++)
             fb_put((u32)(saved_x + (i32)x), (u32)(saved_y + (i32)y), saved[y][x]);
     fb_flush_rect((u32)saved_x, (u32)saved_y, CUR_W, CUR_H);
     drawn = false;
+}
+
+bool mouse_over(u32 x, u32 y, u32 w, u32 h) {
+    if (!drawn) return false;
+    i64 px = saved_x, py = saved_y;
+    return px < (i64)x + w && px + CUR_W > (i64)x &&
+           py < (i64)y + h && py + CUR_H > (i64)y;
 }
 
 void mouse_set_autodraw(bool on) {

@@ -95,6 +95,30 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.49.0: the console that cost a third of the self test
+
+Each change has a check that was run against a build broken for it alone and seen to fail there; the
+cost was measured by counting the cycles `kputc` spends drawing, over a whole selftest run, in a
+scratch build.
+
+- **Scrolling (05 §3.14).** Once the text reached the bottom, every line moved the 3 MB back buffer
+  up and sent the whole screen. It jumps by a quarter of the rows now.
+- **Characters.** Glyphs are drawn a back-buffer row at a time rather than through 128 `fb_put`
+  calls, and the cells a character touches go to the card as one rect rather than three.
+- **The pointer.** It came off and went back for every character, wherever it was; now only when it
+  overlaps the cursor's rows or the character scrolls (`mouse_over`).
+- Checks in `[video]` (`test_console`, 4): whole-screen sends over two screens of newlines
+  (`fb_frames`), one rect a character (`fb_rect_flushes`), the pointer left alone by text far from it
+  (`mouse_hides`), and a drawn 'A' against the font. The first version of the pointer check read its
+  count after a PASS line had been printed, which can scroll, so it depended on where the cursor
+  happened to be; it reads both counts before reporting now.
+- Measured: the console took 12.4 billion of a selftest run's 36.8 billion cycles, a third; now 1.5
+  billion of 26.3 billion.
+
+Counts after 0.49.0:
+- selftest 662 (pc, 64 MiB), 668 (256 MiB), 675 (q35), 689 (`-smp 4`), in 51 sections;
+- gate full 53 steps.
+
 ### 0.48.0: the disk asked for a sector at a time
 
 Each change has a check that was run against a build broken for it alone and seen to fail there; the

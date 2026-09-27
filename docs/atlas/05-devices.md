@@ -1226,16 +1226,28 @@ cursor `cx`, `cy`, `fg` (7), `bg` (0), `cursor_shown`.
   change (wm.c:3189).
 * `draw_cell(col, row, ch, f, b)` (51-65): glyphs 32..126 come from
   `font8x16`, drawn pixel by pixel with `fb_put`. Anything else (including
-  signed bytes above 127) is a background block.
+  signed bytes above 127) is a background block. Since 0.49.0 a back-buffer
+  row at a time through `fb_row`.
 * `flush_cell` flushes one 8x16 rect. `hide_cursor` / `show_cursor` draw a
-  2-pixel underline in fg or bg.
+  2-pixel underline in fg or bg. Since 0.49.0 the cells a character touches
+  are gathered (`touched`) and sent as one rect at the end (`send_touched`),
+  one flush a character rather than three.
 * `scroll()` (84-94): memmove the back buffer up by one text line
   (`16 * pitch` bytes), clear the last line, `fb_flush()` (the band diff
-  sends only what changed).
+  sends only what changed). Since 0.49.0 it jumps by a quarter of the rows
+  (12 at 1024x768), so the move and the whole-screen send happen once in
+  twelve lines; after a scroll everything differs, so the band diff sent all
+  of it each line.
 * `fbcon_putc(c)` (96-122): `mouse_hide()` and `hide_cursor()` first,
   because the sprite saves pixels under itself. Handles
   `\n \r \t \b`, draws and flushes the cell, wraps, scrolls, then
-  `show_cursor()` and `mouse_show()`.
+  `show_cursor()` and `mouse_show()`. Since 0.49.0 the pointer comes off only
+  when it overlaps the cursor's row or the ones either side (`mouse_over`),
+  or when this character scrolls; `mouse_show()` is still called every time,
+  so a pointer something else took off comes back as it did.
+* Measured by counting `kputc`'s cycles over a selftest run (a scratch
+  build): 12.4 billion of the run's 36.8 billion before 0.49.0, a third of
+  it; 1.5 billion of 26.3 billion after.
 * `fbcon_clear()`, `fbcon_set_color()`, `fbcon_cols()`, `fbcon_rows()`.
 
 While the desktop runs, kernel prints still draw over the desktop through
@@ -1900,7 +1912,11 @@ hda: no pci class 4/3/0 / ens: no ensoniq audiopci on the bus / sound none
 | `[live tree]` | 1 of 19 | "devices reports the video mode" (`/sys/devices`) |
 
 The xHCI, USB, PS/2 bring-up, HDA/Ensoniq (except `[sound]`), SVGA, fbcon
-and VGA code has no selftest coverage.
+and VGA code has no selftest coverage. (Since 0.49.0 `[video]`'s
+`test_console` covers fbcon: whole-screen sends over two screens of newlines
+(`fb_frames`, at most 12), one rect a character (`fb_rect_flushes`), the
+pointer left alone by text far from it (`mouse_hides`), and a drawn 'A'
+against the font.)
 
 ### 8.2 Python harnesses (need QEMU; I read them but did not run them)
 

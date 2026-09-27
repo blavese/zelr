@@ -1391,7 +1391,7 @@ byte.
 ## testing
 
 The kernel tests itself. `./run.sh -T` boots with selftest on the command line,
-runs 658 checks across every subsystem, then writes to QEMU's debug-exit port
+runs 662 checks across every subsystem, then writes to QEMU's debug-exit port
 so the host gets a real exit status.
 
     [string]                8 checks   [live tree]            19 checks
@@ -1412,7 +1412,7 @@ so the host gets a real exit status.
     [tcp]                   8 checks   [wpa]                  19 checks
     [elf]                   7 checks   [wait timeouts]         3 checks
     [userspace]             9 checks   [processors]            4 checks
-    [video]                 9 checks   [black box]            21 checks
+    [video]                13 checks   [black box]            21 checks
     [mouse]                 4 checks   [acpi and pcie]         4 checks
     [graphics]             15 checks   [interrupt routing]    11 checks
     [windows]              19 checks   [clipboard]            14 checks
@@ -1421,14 +1421,14 @@ so the host gets a real exit status.
     [theme]                19 checks   [kernel stack]          3 checks
     [taskbar]              18 checks
 
-    658 passed, 0 failed
+    662 passed, 0 failed
     SELFTEST_PASS
 
 The sound section is skipped because `run.sh` attaches no sound card, the
 identity map is checked in four more places when there is more memory to map,
 and the desktop keeps a copy of its wallpaper only when the memory allows it,
 which two more checks need: given 256 MiB, as the gate gives it, the same run
-is 664.
+is 668.
 
 Two of the sections are about what happens when something goes wrong half
 way, which a machine that keeps its power cannot show. `[fat]` makes the
@@ -1459,10 +1459,10 @@ on a machine with several, where it hands work to each of them and requires
 the count they share to come back exact, and then starts more programs than
 there are processors to check that handed work is neither given to a busy
 one nor abandoned halfway for a program. `qemu-system-x86_64 -smp 4` with
-256 MiB reaches 685, and the gate runs it.
+256 MiB reaches 689, and the gate runs it.
 
 The same checks run again on `-machine q35`, which has PCIe and an AHCI
-controller rather than a 1996 chipset and a PIO disk, and reach 671 there.
+controller rather than a 1996 chipset and a PIO disk, and reach 675 there.
 Two bugs found the day that was added were invisible on the older machine:
 the block layer would not split a request past the eight sectors AHCI
 accepts, and the ACPI tables were never read on a UEFI machine at all.

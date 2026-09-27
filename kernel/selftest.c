@@ -801,6 +801,55 @@ static void test_mouse_edges(void) {
     mouse_inject(-16, 0, 0);                    /* put it back */
 }
 
+/* The console, counted. Once the text reached the bottom, every line moved
+   the whole screen up a line and sent all of it to the card, and every
+   character took the pointer off and put it back wherever it was: a third of
+   this test's own time went on printing it. Driven through fbcon_putc, so
+   none of it reaches the serial log. */
+static void test_console(void) {
+    if (!fb_double_buffered()) { kprintf("  SKIP  no back buffer\n"); return; }
+    u32 rows = fbcon_rows();
+    u64 f0 = fb_frames();
+    for (u32 i = 0; i < 2 * rows; i++) fbcon_putc('\n');
+    ok("text past the bottom sends the whole screen now and then, not every line",
+       fb_frames() - f0 <= 12);
+
+    /* The pointer into the top left corner, far from the text at the bottom. */
+    bool pointer = mouse_present();
+    i32 x0 = mouse_x(), y0 = mouse_y();
+    u8 b = mouse_buttons();
+    if (pointer) mouse_inject(-100000, 100000, b);
+    /* Both counted before either is reported: reporting prints a line, and a
+       line can scroll, which takes the pointer off wherever it is. */
+    u32 h0 = mouse_hides();
+    u64 r0 = fb_rect_flushes();
+    for (int i = 0; i < 8; i++) fbcon_putc('.');
+    u64 rects = fb_rect_flushes() - r0;
+    u32 hides = mouse_hides() - h0;
+    bool far = pointer && mouse_over(0, 0, 1, 1);
+    ok("a character sends its cells once", rects == 8);
+    if (far) ok("and leaves a pointer far from it where it is", hides == 0);
+
+    /* What a character looks like, against the font: one colour where the
+       glyph has a bit and another where it has none. After a clear it is in
+       the corner, and the cursor it leaves is in the next cell along; the
+       pointer goes to the opposite corner, out of its way. */
+    if (pointer) mouse_inject(100000, -100000, b);
+    fbcon_clear();
+    fbcon_putc('A');
+    const u8 *g = font8x16['A' - FONT_FIRST];
+    u32 ink = 0, paper = 0;
+    bool seen_ink = false, seen_paper = false, same = true;
+    for (u32 y = 0; y < FONT_H; y++)
+        for (u32 x = 0; x < FONT_W; x++) {
+            u32 px = fb_get(x, y);
+            if (g[y] & (0x80 >> x)) { if (!seen_ink) { ink = px; seen_ink = true; } same &= px == ink; }
+            else { if (!seen_paper) { paper = px; seen_paper = true; } same &= px == paper; }
+        }
+    ok("and draws it as the font has it", same && seen_ink && seen_paper && ink != paper);
+    if (pointer) mouse_inject(x0 - mouse_x(), mouse_y() - y0, b);   /* back where it was */
+}
+
 static void test_mouse(void) {
     if (!mouse_present()) { kprintf("  SKIP  no mouse\n"); return; }
     ok("pointer starts on screen",
@@ -4890,7 +4939,7 @@ int selftest_run(void) {
     kprintf("[tcp]\n");        test_tcp();
     kprintf("[elf]\n");        test_elf();
     kprintf("[userspace]\n");  test_userspace(); test_console_wait(); test_input_handover();
-    kprintf("[video]\n");      test_video();
+    kprintf("[video]\n");      test_video(); test_console();
     kprintf("[mouse]\n");      test_mouse(); test_mouse_edges();
     kprintf("[graphics]\n");   test_gfx(); test_frame_drawing();
     kprintf("[windows]\n");    test_wm(); test_wm_keys();

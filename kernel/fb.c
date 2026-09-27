@@ -592,8 +592,12 @@ bool fb_test_orders(u8 rgbx[4], u8 bgrx[4]) {
     return true;
 }
 
+static u64 rect_flushes;
+u64 fb_rect_flushes(void) { return rect_flushes; }
+
 void fb_flush_rect(u32 x, u32 y, u32 w, u32 h) {
     if (!active) return;
+    rect_flushes++;
     if (x >= width || y >= height) return;
     if (x + w > width)  w = width - x;
     if (y + h > height) h = height - y;

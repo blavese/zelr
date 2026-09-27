@@ -69,5 +69,6 @@ u64 fb_screen_bytes(void);
    screen, which is visible as tearing and as every draw costing bus time. */
 bool fb_double_buffered(void);
 void fb_flush_rect(u32 x, u32 y, u32 w, u32 h);
+u64  fb_rect_flushes(void);   /* how many of those since boot */
 
 #define RGB(r, g, b) (((u32)(r) << 16) | ((u32)(g) << 8) | (u32)(b))

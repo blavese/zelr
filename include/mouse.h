@@ -23,6 +23,11 @@ u32  mouse_moves(void);
 void mouse_hide(void);
 void mouse_set_autodraw(bool on);
 
+/* Whether the pointer is drawn and overlaps this part of the screen, so
+   something about to draw elsewhere can leave it where it is. */
+bool mouse_over(u32 x, u32 y, u32 w, u32 h);
+u32  mouse_hides(void);        /* times the drawn pointer has been taken off */
+
 /* Movement from a pointer that is not the PS/2 one. dy counts the way a PS/2
    mouse counts it, upward, which is the opposite of the way the screen does
    and the opposite of the way USB reports it. */
