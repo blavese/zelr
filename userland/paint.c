@@ -230,6 +230,10 @@ int main(void) {
         }
 
         if (changed) win_commit(win);
-        sleep_ms(10);      /* the window manager runs while this one waits */
+
+        /* Nothing here changes by itself, so asleep until the pointer or a
+           key: it looked a hundred times a second. The window manager runs
+           while this one waits, as it did while it slept. */
+        win_wait(win, 1000);
     }
 }

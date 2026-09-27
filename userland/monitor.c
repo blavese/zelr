@@ -363,7 +363,13 @@ int main(void) {
 
         ui_statusbar(&s, &t, w, h, "updated four times a second", "Monitor");
         win_commit(win);
-        sleep_ms(60);
+
+        /* Asleep until the next sample is due or somebody does something.
+           It drew sixteen frames a second to show numbers that change four
+           times, and a monitor showing the machine busy with drawing the
+           monitor is not much use. */
+        ui_due(next + SAMPLE_MS / 10);
+        ui_wait(win);
     }
 
     win_close(win);

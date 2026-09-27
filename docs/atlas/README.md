@@ -95,6 +95,21 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.52.0: the rest of the programs that polled
+
+- **The browser (11 §5).** It drew only when something changed but looked sixty times a second, for the
+  page's timers and requests. `browser_wait` sleeps until an event, the page's next timer or a waiting
+  request (`jsdom_next_due`), a tick at the least. termcheck: 4 or 5 slices in five idle seconds, 206 with
+  the old loop.
+- **The card games, monitor and paint (10, 09a).** Blackjack draws a frame a tick while a card is still
+  sliding in and sleeps once they are down; poker the same, and wakes when an opponent has finished
+  thinking; monitor wakes for its samples (four a second, where it drew sixteen frames); paint waits in
+  `win_wait` for the pointer or a key, where it looked a hundred times a second.
+- Checked: the browser, which failed termcheck with its old sleep put back. Not checked: that the games draw
+  while cards move. gamecheck passed with blackjack's frames taken out, because every wait ends within a
+  second, so the cards still arrive -- in jumps rather than sliding. The same is true of poker's thinking
+  time and the monitor's samples.
+
 ### 0.51.0: programs that sleep until something happens
 
 Each change has a check that was run against a build broken for it alone and seen to fail there; the

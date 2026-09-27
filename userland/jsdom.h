@@ -884,6 +884,23 @@ static int jsdom_requests(void) {
     return 0;
 }
 
+/* How long until the page has something to do, in ticks: 0 when a request is
+   waiting or a timer is already due, the time to the earliest timer
+   otherwise, and -1 when it has asked for nothing. The browser sleeps that
+   long rather than looking sixty times a second. */
+static int jsdom_next_due(void) {
+    if (!jd_open) return -1;
+    for (int i = 0; i < jd_nreq; i++) if (jd_req[i].waiting) return 0;
+    int now = ticks(), best = -1;
+    for (int i = 0; i < jd_ntimer; i++) {
+        if (!jd_timer[i].fn) continue;
+        int left = jd_timer[i].due - now;
+        if (left < 0) left = 0;
+        if (best < 0 || left < best) best = left;
+    }
+    return best;
+}
+
 /* Whatever is due, run once. The browser calls this on every pass of its
    loop; the answer is how many ran, so it knows whether to ask whether the
    document changed.

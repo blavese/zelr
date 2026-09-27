@@ -679,7 +679,10 @@ calculator, the notes, the files window and the settings draw a frame when a
 key, the pointer or a blinking cursor asks for one, where they used to draw
 sixty a second for the desktop to composite. The terminal blinks its cursor by
 the clock and sleeps in between: left alone for five seconds it runs about
-twenty seven times rather than two hundred and fifty.
+twenty seven times rather than two hundred and fifty. The card games draw
+while cards are moving and sleep once they are down, the monitor wakes for
+its four samples a second, paint for the pointer, and the browser for a key,
+the pointer or whatever the page's scripts asked to have done next.
 
 That is what `/bin` is, and for a long time it was the only place a name was
 looked for -- so a program had to be built into the machine to be run by

@@ -1310,6 +1310,18 @@ static void go_or_search(const char *typed) {
     else set_search(typed);
 }
 
+/* Asleep until something arrives for the window, the page has a timer due or
+   a request waiting, or something drawn is due to change -- rather than
+   looking sixty times a second at a page nobody is touching. */
+static void browser_wait(int win) {
+    /* A tick at the least, even for a timer already due: a page that sets
+       a zero timeout from inside one would otherwise have the processor to
+       itself, where the old sixteen milliseconds held it to sixty a second. */
+    int due = jsdom_next_due();
+    if (due >= 0) ui_due(ticks() + (due > 0 ? due : 1));
+    ui_wait(win);
+}
+
 int main(int argc, char **argv) {
     int win = win_create("Browser", 860, 620);
     if (win < 0) exit(1);
@@ -1535,7 +1547,7 @@ int main(int argc, char **argv) {
         last_my = in.my;
         last_scroll = scroll;
 
-        if (!dirty) { sleep_ms(16); continue; }
+        if (!dirty) { browser_wait(win); continue; }
         dirty = 0;
 
         /* The theme comes off the disk, so it is read on a frame that is
@@ -1739,7 +1751,7 @@ int main(int argc, char **argv) {
                      page.height < view_h ? view_h : page.height);
 
         win_commit(win);
-        sleep_ms(16);
+        browser_wait(win);
     }
 
     win_close(win);

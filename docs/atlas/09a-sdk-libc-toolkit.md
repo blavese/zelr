@@ -605,8 +605,11 @@ pass that had input (`ui_fed`, set by `ui_feed`: what a click changes is drawn o
 otherwise sleeps in `win_wait` until an event, or until the earliest `ui_due(tick)` a widget or the program
 declared (a focused field's cursor blink, `ui_field_draw`; a timed message), a second at most. The old loop
 committed sixty identical frames a second, each one composited by the desktop. Converted: calc, notes, files,
-settings (which also reloads its knobs four times a second by the clock); the games, browser, monitor and
-paint still sleep and poll.
+settings (which also reloads its knobs four times a second by the clock); since 0.52.0 also blackjack (a
+frame a tick while a card is still sliding in), poker (the same while cards land, and `think_until` while an
+opponent thinks), monitor (`ui_due` at its next sample, four a second, where it drew sixteen) and the browser
+(`browser_wait`: the page's next timer or waiting request from `jsdom_next_due`, a tick at least). paint is
+not built on the toolkit and waits in `win_wait(win, 1000)` directly.
 
 **Signal handler lifecycle.** `signal(SIGTERM, h)` records `h` and the trampoline → `send_signal` sets pending →
 on the next return to ring 3 (syscall exit or timer tick) the kernel builds the frame and enters `h(sig)` → `ret` to

@@ -922,8 +922,13 @@ int main(void) {
             win_set_text(win, buf, n);
         }
 
+        /* Frames while cards are landing, the next pass when an opponent
+           has finished thinking, and otherwise asleep until somebody does
+           something: it drew sixty a second over a table nobody was at. */
+        if (!cards_landed()) ui_due(ticks() + 1);
+        else if (state == PS_ACT && turn > 0) ui_due(think_until);
         win_commit(win);
-        sleep_ms(16);
+        ui_wait(win);
     }
 
     win_close(win);

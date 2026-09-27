@@ -742,8 +742,12 @@ int main(void) {
             publish(win);
         }
 
+        /* Frames while a card is still sliding onto the felt, and otherwise
+           asleep until somebody does something: it drew sixty a second over
+           a table where nothing was moving. */
+        if (!settled_on_screen()) ui_due(ticks() + 1);
         win_commit(win);
-        sleep_ms(16);
+        ui_wait(win);
     }
 
     win_close(win);

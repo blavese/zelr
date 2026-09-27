@@ -521,7 +521,7 @@ The engine (js.h) runs a language and knows nothing of pages; its `jctx` has two
 6. `jsdom_requests()` (at most one XHR, blocking); if one ran and changed the DOM ⇒ relayout (1495-1498).
 7. `want_go` (form submission or meta refresh) ⇒ `load_post = go_is_post`, `set_address(go_to)`, `push_history(go_to)`, `want_load = 1` (1502-1509).
 8. `scroll -= scrolled * 48`; clamp to `[0, page.height - view_h]` (1511-1516).
-9. Dirty check: pointer moved, keys, press/release, wheel, scroll changed or a load pending ⇒ draw; else `sleep_ms(16)` and loop (1530-1538). Timers and XHRs (steps 5-6) run even when idle.
+9. Dirty check: pointer moved, keys, press/release, wheel, scroll changed or a load pending ⇒ draw; else `sleep_ms(16)` and loop (1530-1538). Timers and XHRs (steps 5-6) run even when idle. Since 0.52.0 both sleeps are `browser_wait(win)`: `ui_due` at the page's next timer or waiting request (`jsdom_next_due`, a tick at the least so a zero timeout set from inside one cannot take the processor), then `ui_wait`; an idle page wakes about once a second (termcheck: 5 slices in five seconds).
 10. `ui_load_theme()` (reads the config from disk on drawn frames).
 11. If `want_load`: reset the refresh counter unless this load was the page's own refresh; draw a "fetching..." frame and `win_commit`; `load(address, view_w - 16, 0)` (blocking); put the landed URL (after redirects) in the bar and in the current history entry (1544-1569).
 12. `fill` the window; hit-test the pointer if it is inside the view: `over_link = lay_link_at`, `node_under = lay_node_at` (1571-1580).
@@ -532,7 +532,7 @@ The engine (js.h) runs a language and knows nothing of pages; its `jctx` has two
 17. Link: release over a link ⇒ `url_join(here, href)` ⇒ bar, history, `want_load` (1668-1678).
 18. Chrome: toolbar, `<`/`>` (history, re-fetch), `Reload` (`want_load` with whatever is in the bar), the address field (`ui_field_draw`; a click into it sets `bar_fresh`), `Go` (`push_history(address)` + load, **without** `go_or_search`) (1681-1710).
 19. Status bar (hovered link URL overrides the status text) (1713-1724).
-20. Page: `ui_well`, `draw_page` into a surface cut at the well's bottom, `ui_sunken` (bevel back on top), `ui_scrollbar` (1727-1738); `win_commit`; `sleep_ms(16)`.
+20. Page: `ui_well`, `draw_page` into a surface cut at the well's bottom, `ui_sunken` (bevel back on top), `ui_scrollbar` (1727-1738); `win_commit`; `sleep_ms(16)` (`browser_wait` since 0.52.0).
 
 ### 4.3 Navigation state
 Flags: `want_load` (fetch `address` on the next drawn frame), `want_go` (take `go_to` next pass), `load_post` (the next load is a POST of `post_body`; consumed by that load), `go_is_refresh` (the next load came from a meta refresh; keeps `refreshes`), `want_width`/`laid_for` (reflow when the width changed and the mouse is up).
@@ -666,7 +666,7 @@ Three mutually exclusive destinations, tested in order: the address bar (`bar.fo
 | scroll: arrows 40 px; page = view_h − 40; wheel 48 px/step | browser.c:1458-1465, 1511 | |
 | zoom `root_px` 16, step 2, range 10..28 | browser.c:109, 1466-1469 | |
 | find highlight 0xFFE58F; hovered link 0x0842A0; field edge 0x3B6FD6 focused / 0xA9A9A9; button face 0xE6E6EA; field text 0x1A1A1A; alt text 0x6B6B6B | browser.c:1111-1118, 1211, 1221; layout.h:677 | colours |
-| frame sleep 16 ms | browser.c:1537, 1741 | ~60 Hz loop |
+| frame sleep 16 ms | browser.c:1537, 1741 | ~60 Hz loop (since 0.52.0 `browser_wait`: until an event, a timer or a request) |
 | `SEARCH_PREFIX "https://lite.duckduckgo.com/lite/?q="` | browser.c:1291 | search |
 | default page `https://example.com/` | browser.c:1346 | |
 | `JD_LISTENERS 256`, `JD_TYPE_MAX 24`, `JD_TIMERS 64`, `JD_HZ 100`, `JD_REQUESTS 8`, handler source ≤ 4096 | jsdom.h:219-220, 685-686, 766, 311 | script bindings |

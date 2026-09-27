@@ -200,6 +200,24 @@ def main():
         c.add("and a calculator nobody is using wakes a few times, not sixty a second",
               woke is not None and woke < 60)
         print("      the calculator ran %s times in the five seconds and the reading" % (woke,))
+
+        # --- and the browser -----------------------------------------------
+        #
+        # It drew only when something changed, but looked sixty times a second
+        # to find out, for the page's timers. It sleeps until its window has
+        # something, the page's next timer or a request is due, now. The page
+        # it opens on has no scripts; this machine has no network.
+        keys(mon, "run browser &\n")
+        time.sleep(6)
+        mon.send("sendkey alt-tab", settle=1.0)
+        mon.move_to(40, 740)
+        first = slices_of(vm, mon, "browser")
+        time.sleep(5)
+        second = slices_of(vm, mon, "browser")
+        woke = (second - first) if first is not None and second is not None else None
+        c.add("and so does a browser with a page open that nobody is reading",
+              woke is not None and woke < 60)
+        print("      the browser ran %s times in the five seconds and the reading" % (woke,))
     finally:
         vm.stop()
 
