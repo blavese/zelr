@@ -98,7 +98,8 @@ struct jstr {
 typedef struct jprop {
     jstr *key;
     jval  v;
-    struct jprop *next;
+    struct jprop *next;       /* in its bucket */
+    struct jprop *onext;      /* in the order the properties were made */
     int   enumerable;
 } jprop;
 
@@ -116,6 +117,11 @@ struct jobj {
     jprop **buckets;
     u32     nbuckets, count;
 
+    /* The same properties again, in the order they were made, which is the
+       order a script walking them is owed. Walked by bucket they came out
+       in hash order, so {x, y, z} listed its keys as y, z, x. */
+    jprop  *ofirst, *olast;
+
     /* Arrays keep their elements out of the property table, because a page
        that walks a thousand element array through a hash of decimal strings
        is a page that takes a second to do nothing. */
@@ -126,6 +132,7 @@ struct jobj {
        scope the function was made in, which is the whole of what a closure
        is. */
     int     body, params, nparams;
+    int     uses_args;        /* its text names `arguments` */
     jscope *closure;
     jnative fn;
     jstr   *name;
@@ -152,6 +159,12 @@ typedef struct jchunk {
 struct jscope {
     jobj   *vars;
     jscope *parent;
+
+    /* Whether anything can reach this scope once the call that made it is
+       over: set, on it and on every scope it sits in, when a function value
+       is made inside it. One that is never set is given back at the end of
+       its call. */
+    int     escaped;
 };
 
 /* --- what the reader produces -------------------------------------------- */
@@ -196,9 +209,11 @@ typedef struct jctx {
     jstr  *label;
     jstr  *pending_label;
 
-    /* the region */
+    /* the region, and what has been given back to it: a list for each size
+       up to 256 bytes, in steps of sixteen */
     jchunk *chunks;
     u32     allocated;
+    void   *free_list[16];
 
     jscope *global;
     jobj   *global_obj;
@@ -218,6 +233,22 @@ typedef struct jctx {
        it first thing: any call the native makes changes it. */
     jobj   *callee;
 
+    /* The error constructors as the engine made them, for the errors it
+       raises itself: a script that assigns over TypeError does not change
+       what reading a property of null throws. In the order of JS_ERR_*. */
+    jobj   *err_ctor[6];
+
+    /* Names the engine looks up on every call, made once. Each lookup used
+       to make its own copy of the string, and a page that called a function
+       in a loop ran out of memory on the copies. */
+    jstr   *s_this, *s_fn, *s_ctor, *s_bound, *s_args, *s_arguments;
+
+    /* The string and array methods, one native each, for a method called
+       where it is fetched -- s.charAt(i) -- which gets its receiver from the
+       call. Set while the call fetches it. */
+    jobj   *str_methods[24], *arr_methods[16];
+    int     for_call;
+
     /* the host's hook: how a property on a host object is read and written,
        and what happens when one is called. Null in a program that has no
        host objects, which is how this file is testable on its own. */
@@ -232,6 +263,15 @@ typedef struct jctx {
 
 static void *js_alloc(jctx *J, u32 n) {
     n = (n + 15u) & ~15u;
+    if (n && n <= 256) {
+        void **slot = &J->free_list[n / 16 - 1];
+        if (*slot) {
+            void *p = *slot;
+            *slot = *(void **)p;
+            memset(p, 0, (int)n);
+            return p;
+        }
+    }
     if (J->allocated + n > JS_MEM_CAP) {
         if (J->sig != JS_FAILED) {
             J->sig = JS_FAILED;
@@ -268,6 +308,17 @@ static void *js_alloc(jctx *J, u32 n) {
     return p;
 }
 
+/* Gives a block back, for the next js_alloc of the same size. Only for a
+   block nothing can reach any more: the region never had to know, and what
+   is given back here is used again. */
+static void js_free(jctx *J, void *p, u32 n) {
+    n = (n + 15u) & ~15u;
+    if (!p || !n || n > 256) return;
+    void **slot = &J->free_list[n / 16 - 1];
+    *(void **)p = *slot;
+    *slot = p;
+}
+
 static void js_free_all(jctx *J) {
     jchunk *c = J->chunks;
     while (c) {
@@ -277,6 +328,7 @@ static void js_free_all(jctx *J) {
     }
     J->chunks = 0;
     J->allocated = 0;
+    for (int i = 0; i < 16; i++) J->free_list[i] = 0;
 }
 
 /* --- strings ------------------------------------------------------------- */
@@ -380,30 +432,48 @@ static void js_rehash(jctx *J, jobj *o) {
             p = nxt;
         }
     }
+    js_free(J, o->buckets, (u32)sizeof(jprop *) * o->nbuckets);
     o->buckets = fresh;
     o->nbuckets = want;
 }
 
-static void js_set_prop(jctx *J, jobj *o, jstr *key, jval v) {
-    if (!o || !key) return;
+static jprop *js_put_prop(jctx *J, jobj *o, jstr *key, jval v) {
+    if (!o || !key) return 0;
     jprop *p = js_find(o, key);
-    if (p) { p->v = v; return; }
+    if (p) { p->v = v; return p; }
 
     if (o->count + 1 > (o->nbuckets * 3) / 4) js_rehash(J, o);
 
     p = (jprop *)js_alloc(J, (u32)sizeof(jprop));
-    if (!p) return;
+    if (!p) return 0;
     p->key = key;
     p->v = v;
     p->enumerable = 1;
     u32 i = key->hash & (o->nbuckets - 1);
     p->next = o->buckets[i];
     o->buckets[i] = p;
+    if (o->olast) o->olast->onext = p;
+    else o->ofirst = p;
+    o->olast = p;
     o->count++;
+    return p;
+}
+
+static void js_set_prop(jctx *J, jobj *o, jstr *key, jval v) {
+    js_put_prop(J, o, key, v);
 }
 
 static void js_set(jctx *J, jobj *o, const char *name, jval v) {
     js_set_prop(J, o, js_str(J, name), v);
+}
+
+/* A property the engine keeps for itself: what made an object, what a bound
+   function is bound to. A script can still read it by name, but walking the
+   object's keys does not turn it up, and neither does JSON. They were
+   ordinary properties, and Object.keys(new Thing()) listed __ctor__. */
+static void js_set_hidden(jctx *J, jobj *o, const char *name, jval v) {
+    jprop *p = js_put_prop(J, o, js_str(J, name), v);
+    if (p) p->enumerable = 0;
 }
 
 static jval js_get_prop(jobj *o, const jstr *key) {
@@ -417,13 +487,71 @@ static int js_delete_prop(jobj *o, const jstr *key) {
     jprop **link = &o->buckets[i];
     while (*link) {
         if (js_str_eq((*link)->key, key)) {
-            *link = (*link)->next;
+            jprop *gone = *link;
+            *link = gone->next;
+            /* And out of the order, which has no way back, so it is walked:
+               a delete is rare next to everything else done to a property. */
+            jprop *prev = 0;
+            for (jprop *q = o->ofirst; q; prev = q, q = q->onext) {
+                if (q != gone) continue;
+                if (prev) prev->onext = q->onext;
+                else o->ofirst = q->onext;
+                if (o->olast == q) o->olast = prev;
+                break;
+            }
             o->count--;
             return 1;
         }
         link = &(*link)->next;
     }
     return 0;
+}
+
+/* Whether a key names an array index, the digits of a whole number below
+   2^32 - 1 with no nought in front, and which. */
+static int js_index_key(const jstr *k, u32 *out) {
+    if (!k || !k->len || k->len > 10) return 0;
+    if (k->len > 1 && k->s[0] == '0') return 0;
+    u64 v = 0;
+    for (u32 i = 0; i < k->len; i++) {
+        if (k->s[i] < '0' || k->s[i] > '9') return 0;
+        v = v * 10 + (u64)(k->s[i] - '0');
+    }
+    if (v >= 0xFFFFFFFFull) return 0;
+    if (out) *out = (u32)v;
+    return 1;
+}
+
+/* An object's own enumerable properties, in the order the standard gives
+   them: those named by an array index first, smallest first, then the rest
+   in the order they were made. How many, with the list in *out; it lives as
+   long as everything else the script made. */
+static u32 js_own_keys(jctx *J, jobj *o, jprop ***out) {
+    *out = 0;
+    if (!o) return 0;
+    u32 n = 0;
+    for (jprop *p = o->ofirst; p; p = p->onext) if (p->enumerable) n++;
+    if (!n) return 0;
+    jprop **list = (jprop **)js_alloc(J, (u32)sizeof(jprop *) * n);
+    if (!list) return 0;
+
+    /* The indices, each put in its place from the end, so a run of them made
+       in order -- which is nearly always how they are made -- costs one
+       comparison each. */
+    u32 at = 0, v, w;
+    for (jprop *p = o->ofirst; p; p = p->onext) {
+        if (!p->enumerable || !js_index_key(p->key, &v)) continue;
+        u32 k = at++;
+        while (k > 0 && js_index_key(list[k - 1]->key, &w) && w > v) {
+            list[k] = list[k - 1];
+            k--;
+        }
+        list[k] = p;
+    }
+    for (jprop *p = o->ofirst; p; p = p->onext)
+        if (p->enumerable && !js_index_key(p->key, 0)) list[at++] = p;
+    *out = list;
+    return n;
 }
 
 /* --- arrays -------------------------------------------------------------- */

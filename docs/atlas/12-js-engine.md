@@ -42,7 +42,7 @@ jstest.c, jsprobe.c include js.h + jsparse.h + jsrun.h
 
 ### 2.3 Design decisions and the reasons the comments give
 
-1. **A region allocator and no garbage collector** (`js.h:38-53`). The comment: "A collector needs to know every live value, and in a tree-walking interpreter half of them are in local variables of the C functions doing the walking … A region has none of that: nothing is ever freed early because nothing is ever freed at all." The whole region is freed when the world is torn down (page left). The cap `JS_MEM_CAP` = 24 MiB is meant to stop a runaway script "and say so".
+1. **A region allocator and no garbage collector** (`js.h:38-53`). The comment: "A collector needs to know every live value, and in a tree-walking interpreter half of them are in local variables of the C functions doing the walking … A region has none of that: nothing is ever freed early because nothing is ever freed at all." The whole region is freed when the world is torn down (page left). The cap `JS_MEM_CAP` = 24 MiB is meant to stop a runaway script "and say so". Since 0.43.0 there is one exception to "nothing is ever freed": a finished call's scope that no function value captured goes back to size-class free lists (§3.4 Scopes). That is the case the comment's reasoning covers, a scope that nothing can reach, and not a collector.
 2. **Refuse by name rather than approximate** (`js.h:33-36`, `jsparse.h:105-111`). `class` gets "this engine does not have class" rather than a confusing syntax error. In practice several features are approximated silently anyway (§10).
 3. **The engine knows nothing about pages.** Two host hooks (`host_get`/`host_set`, `js.h:214-219`) keep it testable on its own (jstest), and `jsdom.h` fills them in (`jsdom.h:9-24`).
 4. **Built-ins are written in C**, not bootstrapped in JS, because a JS bootstrap would cost "a parse and a tree walk on every page load" (`jsrun.h:624-629`).
@@ -152,7 +152,7 @@ jstest.c, jsprobe.c include js.h + jsparse.h + jsrun.h
 - `js_arr_set` `:435-441`: reserves `i+1`, then guards with `if (i + 1 > a->cap) return;`, fills holes with `undefined`, and extends `len`.
 - `js_arr_push` `:443-445`, `js_array` `:447`.
 
-**Property iteration order is hash-bucket order**, and newest-first within a bucket; it is not insertion order. Computed FNV-1a buckets (mod 8):
+**Since 0.43.0 properties also sit on an insertion-order list** (`jprop.onext`, `jobj.ofirst`/`olast`; appended by `js_put_prop`, unlinked by walking in `js_delete_prop`). `js_own_keys` returns the enumerable ones in the standard's order: array-index keys (`js_index_key`: digits, no leading zero, below 2^32-1) ascending, then the rest in insertion order. for-in, `Object.keys`/`values` and `JSON.stringify` all use it. `js_set_hidden` makes a property non-enumerable; the engine's own `__ctor__`, `__this__`, `__fn__`, `__bound__`, `__args__` and jsdom's XHR `__method__`/`__url__`/`__body__` are set that way. `js_rehash` gives the old bucket array back to the free lists. What follows is the order before 0.43.0. **Property iteration order was hash-bucket order**, and newest-first within a bucket; it was not insertion order. Computed FNV-1a buckets (mod 8):
 
 | Key | Bucket |
 |---|---|
@@ -252,7 +252,8 @@ All binary operators are left-associative. `&&`/`||` produce `N_LOGICAL` nodes; 
   - `[expr]`, `(args)`, and postfix `++`/`--` (not after a newline).
 - **`js_parse_unary` `:737-800`**
   - `typeof`, `delete`, `void` (→ `N_UNARY` with `OP_NONE`), `new`, and `! ~ - +` (→ `OP_NOT`, `OP_BNOT`, `OP_NEG`, `OP_POS`), prefix `++`/`--`.
-  - `new` (`:759-774`) parses a **full postfix chain** and then borrows the arguments of the outermost call. This is wrong for `new X().y` (§10 B3).
+  - `new` (0.43.0, `js_parse_new`): the constructor is a member expression (`js_parse_chain(..., member_only = 1)`: dots and brackets, or another `new`), then its arguments if a `(` follows (`js_parse_arglist`), and then `js_parse_postfix` continues on the result. Before 0.43.0 it parsed a **full postfix chain** and borrowed the arguments of the outermost call, which was wrong for `new X().y` (§10 B3).
+  - Every operand is read into a local before it is stored in `J->nodes[n]` (`js_parse_prefix` for the unary operators; §10 B19).
 - **`js_parse_cond` `:827-842`**: `test ? assign : assign`.
 - **Arrow functions** (`:844-933`)
   - `js_try_arrow` saves the lexer by value, then tries `NAME =>` or `( [NAME {, NAME}] ) =>` (at most `JS_ARROW_PARAMS` = 16 names). On failure it restores the lexer exactly.
@@ -397,22 +398,20 @@ All binary operators are left-associative. `&&`/`||` produce `N_LOGICAL` nodes; 
 
 #### Errors and numbers
 
-**`js_throw(J, what, line)` `:24-33`** sets `JS_THROWN`, `error`, `error_line`, and `ret = js_str(what)`. **Engine errors are therefore thrown as strings**: `catch (e) { e.message }` gives undefined.
+**`js_throw(J, kind, what, line)`** (0.43.0) sets `JS_THROWN`, `error` = "Kind: what", `error_line`, and `ret` = an error object made by `js_error_obj` with the engine's own constructor for that kind (`J->err_ctor`, so a script that assigns over `TypeError` does not change what the engine throws). Kinds are `JS_ERR_ERROR`, `_TYPE`, `_RANGE`, `_REFERENCE`, `_SYNTAX`, `_EVAL`. The sites: reads, calls and `instanceof` on the wrong thing are TypeError; too deep is RangeError; a regex that does not compile, an operator the engine lacks and a bad assignment target are SyntaxError; `Function(text)` is EvalError. ReferenceError exists but the engine never raises it, because an undeclared name still reads as undefined. `nat_error_make` backs all six globals and works with or without `new`. It reads its name from `J->callee`, and `name` and `message` are hidden own properties. `js_is_error` tests `__ctor__`'s native function. `js_to_str` gives "Name: message". `instanceof Error` is true for all six. Before 0.43.0 engine errors were thrown as strings, `e.message` was undefined, and there was no `Error`.
 
-**`js_num_text(d, out, cap)` `:47-135`** (`cap` must be at least 32):
-- NaN → `"NaN"`.
-- `|d| > 1.7e308` → `"±Infinity"` (note 1.7e308 is below DBL_MAX).
-- Whole numbers with `|d| < 2^53` → exact integer text.
-- `|d| >= 1e21` or `|d| < 1e-6` → exponent form: a lead digit and up to 9 more digits, truncated.
-- Otherwise the whole part via `(long long)` plus **10 fraction digits, truncated, trailing zeros trimmed**.
-- The comment (`:41-45`) says "ten significant places"; the code prints ten fraction digits (§10 B5).
+**Numbers** (0.43.0, `jsnum.h`):
+- `js_decimal(s, n, &used)` reads a decimal correctly rounded. Fifteen significant digits or fewer with a power of ten up to 22 take one multiplication or division (exact operands, one rounding). Anything else goes through `jn_from_digits`, which uses exact big integers (`jbig`, 128 × 32-bit limbs): D × 10^k, or D × 2^s / 10^k by bitwise long division to 66 or 67 bits, then `jn_round` (ties to even, subnormals, overflow to infinity). Up to 780 significant digits are kept, and past that only whether any is non-zero.
+- The lexer, `js_str_to_num`, `parseFloat` (now the longest decimal at the front: `parseFloat('1-2')` is 1) and JSON numbers all read through it. `js_str_to_num` and `parseFloat` also take `Infinity`, and `js_str_to_num` trims `\r`.
+- `js_shortest(d, dig, &e)` works out every digit of d exactly (m × 5^-e2, or m << e2). It then tries 1 to 17 digits, each rounded half-even, plus the neighbour on the other side for the doubles just above a power of two, and keeps the first that reads back as d.
+- **`js_num_text(d, out, cap)`** (`cap` at least 32): NaN and ±Infinity by name; whole numbers below 2^53 as integers; everything else from `js_shortest`, in the standard's layout (exponent form when the exponent is 21 or more, or below -6). So 0.1 + 0.2 prints as 0.30000000000000004 and 2^60 as 1152921504606847000. Before 0.43.0 it printed fifteen digits and the lexer read `0.3` as `3 × 0.1`.
 
 #### Conversions
 
 | Conversion | Rule |
 |---|---|
 | `js_to_bool` `:141-150` | undefined, null, false, 0, NaN, `""` → false; objects → true |
-| `js_str_to_num` `:152-197` | Trims space, tab, `\n` (not `\r`); empty string → 0; optional sign, decimal digits, fraction, exponent; any trailing junk → NaN. No hex, no `"Infinity"` |
+| `js_str_to_num` | Trims space, tab, `\n`, `\r`; empty string → 0; optional sign, then `Infinity` or a decimal read by `js_decimal`; any trailing junk → NaN. No hex |
 | `js_to_num` `:199-220` | number; bool → 0/1; null → 0; string as above; array `[]` → 0; `[x]` → ToNumber(x) (so `[undefined]` → NaN, where JS gives 0); other objects and undefined → NaN |
 | `js_to_i32` `:224-229` | `|d| > 1e18` or NaN → 0; otherwise `(int)(u32)((long long)d & 0xFFFFFFFF)`. `js_to_u32` `:231` |
 | `js_to_str` `:233-276` | undefined, null, bool text; numbers via `js_num_text`; functions → `"function"`; arrays → comma-joined, with null/undefined elements empty, **recursive with no cycle guard**; every other object (regex included) → `"[object Object]"`. No user `toString` is ever called |
@@ -430,7 +429,7 @@ All binary operators are left-associative. `&&`/`||` produce `N_LOGICAL` nodes; 
 
 #### Scopes (`:323-350`)
 
-- `js_scope` allocates a scope plus a variable object (176 bytes). **If allocation fails it returns `parent`.**
+- `js_scope` allocates a scope plus a variable object. **If allocation fails it returns `parent`.** `jscope.escaped` (0.43.0) is set on a scope and all its ancestors when a function value is made in it (`N_FUNC`, including hoisted declarations). `js_call` and the catch clause give a scope that did not escape back to the free lists with `js_scope_free`: its properties, bucket array, variable object and itself, not the values. The global scope is marked escaped at `js_init`.
 - `js_lookup` walks the scope chain.
 - `js_declare` writes into the given scope.
 - `js_assign_name` assigns to the nearest binding, or creates a global if there is none.
@@ -462,8 +461,8 @@ All binary operators are left-associative. `&&`/`||` produce `N_LOGICAL` nodes; 
 3. A native is called directly as `f->fn(J, this, argv, argc)`. Natives do not count toward the depth, and **their `__this__` is not consulted here**.
 4. For a JS function, an own `__this__` property (set on arrows) overrides `this`.
 5. A new scope is created with the closure as parent. Each parameter is declared from `argv`, or undefined.
-6. **`arguments` is a real array of all the passed arguments**, declared in the call scope, arrows included.
-7. The body runs with `depth++`.
+6. **`arguments` is a real array of all the passed arguments**, declared in the call scope, arrows included, and since 0.43.0 only when the function's text (inner functions included) names `arguments` (`jobj.uses_args`, from the parser's `arguments_seen` count into the function node's `d`).
+7. The body runs with `depth++`; then, since 0.43.0, the scope is given back unless it escaped.
 8. `JS_RETURN` → the return value, and `sig` is reset to OK. Anything else gives undefined with `sig` left as it was, so a stray `JS_BREAK` escapes into the caller (§10 B25).
 
 **`call` / `apply` / `bind`** `:561-622`
@@ -584,7 +583,7 @@ Plus `.length` (get and set) and `a[i]`. Missing: `unshift`, `splice`, `concat`,
 | `N_VAR` `:1799-1806` | Declares in the current scope at execution time; `var x;` **resets** an existing x to undefined |
 | `N_IF` | |
 | `N_WHILE` / `N_DO` / `N_FOR` | Each takes `mine = pending_label` and clears it. On break/continue: if the label matches (`js_label_mine` `:1346-1349`; an unlabelled one always matches) it is consumed, otherwise the signal propagates. An extra `js_tick` per iteration |
-| `N_FORIN` `:1878-1916` | Collects the keys first (array indices as strings, then enumerable own properties in bucket order); assigns or declares each; **always consumes break/continue and ignores labels and `pending_label`** (§10 B4) |
+| `N_FORIN` `:1878-1916` | Collects the keys first (array indices as strings, then `js_own_keys`: since 0.43.0 indices ascending then insertion order, in bucket order before); assigns or declares each; **always consumes break/continue and ignores labels and `pending_label`** (§10 B4) |
 | `N_RETURN` | Sets `ret` and `JS_RETURN` |
 | `N_BREAK` / `N_CONTINUE` | `label = str` |
 | `N_LABEL` `:1937-1947` | Sets `pending_label`; afterwards catches a break carrying its own name |
@@ -607,20 +606,21 @@ Plus `.length` (get and set) and `a[i]`. Missing: `unshift`, `splice`, `concat`,
 | `Math.PI`, `Math.E` | |
 | `JSON.stringify` | `:2217-2276` (see below) |
 | `JSON.parse` | `:2285-2376` (see below) |
-| `Object` | A **plain object**, not callable, with `name = "Object"`. Methods `keys` `:2380` and `values` `:2399` ignore `enumerable` and use bucket order; arrays give index strings / elements. `new Object()` → "this is not a function" |
+| `Object` | A **plain object**, not callable, with `name = "Object"`. Methods `keys` and `values` use `js_own_keys` (0.43.0: enumerable only, indices first, then insertion order; they ignored `enumerable` and used bucket order before); arrays give index strings / elements. `new Object()` → "this is not a function" |
 | `Array(n)` / `Array(a, b, …)` | `nat_array_make` `:2419-2432`. `n` is capped at 100000 **silently**; `Array.isArray` |
-| `Function` | Throws "a function built out of text is not here" |
+| `Function` | Throws an EvalError "a function built out of text is not here" |
+| `Error`, `TypeError`, `RangeError`, `ReferenceError`, `SyntaxError`, `EvalError` | 0.43.0: `nat_error_make`, with or without `new`; hidden `name` and `message`, `instanceof Error` true for all six |
 | `parseInt(s, r)` `:2047-2080` | Skips spaces and tabs; sign; `0x` stripped **only when the radix is explicitly 16** (so `parseInt("0x1F")` is 0); radix outside 2–36 → 10 |
-| `parseFloat` `:2082-2095` | Takes the longest prefix of `[0-9.+-eE]`, then applies the strict converter (`"1-2"` → NaN) |
+| `parseFloat` | Since 0.43.0 the longest decimal (or `Infinity`) at the front after spaces, through `js_signed_decimal` (`"1-2"` → 1; it was NaN) |
 | `isNaN` | |
 | `String`, `Number`, `Boolean` | Return primitives. With `new` they return the empty fresh object |
 | `NaN`, `Infinity` | |
 
 `JSON.stringify` details:
 - Escapes only `" \ \n \t`.
-- `undefined` is written as the text `undefined`, and NaN/Infinity as `NaN`/`Infinity`.
-- Functions become `null`.
-- Object keys come in bucket order and non-enumerable internal properties are included.
+- A property whose value is `undefined` or a function is left out (0.43.0). An array element that is `undefined` is still written as the text `undefined`, and NaN/Infinity as `NaN`/`Infinity`.
+- Array elements that are functions become `null`.
+- Object keys come from `js_own_keys` (0.43.0; bucket order with internal properties included before).
 - No replacer or indent.
 - **One `js_concat` per character**, so the cost is O(S²).
 - No cycle guard.
@@ -632,7 +632,7 @@ Plus `.length` (get and set) and `a[i]`. Missing: `unshift`, `splice`, `concat`,
 
 jsdom.h adds: `document`, `setTimeout`, `setInterval`, `clearTimeout`, `clearInterval`, `XMLHttpRequest`, `window`.
 
-**Absent** (a reference gives undefined; a call gives "X is not a function" or, with `new`, "this is not a function"): `Date`, `Error` and its relatives, `Promise`, `Map`, `Set`, `Symbol`, `encodeURIComponent`/`decodeURIComponent`, `escape`, `isFinite`, `Number.*`, `Math` trig/log/exp/trunc/sign, `Object.assign/create/defineProperty/entries/freeze/getPrototypeOf`, `Array.from/of`, `globalThis`, `self`, `location`, `navigator`, `localStorage`, `alert`, `requestAnimationFrame`, `getComputedStyle`.
+**Absent** (a reference gives undefined; a call gives "X is not a function" or, with `new`, "this is not a function"): `Date`, `Promise`, `Map`, `Set`, `Symbol`, `encodeURIComponent`/`decodeURIComponent`, `escape`, `isFinite`, `Number.*`, `Math` trig/log/exp/trunc/sign, `Object.assign/create/defineProperty/entries/freeze/getPrototypeOf`, `Array.from/of`, `globalThis`, `self`, `location`, `navigator`, `localStorage`, `alert`, `requestAnimationFrame`, `getComputedStyle`.
 
 #### Entry points
 
@@ -755,7 +755,7 @@ jsdom.h adds: `document`, `setTimeout`, `setInterval`, `clearTimeout`, `clearInt
 - `expect(what, src, want)` `:24-60` runs `js_init`, then `js_eval_text` on one expression, then compares `js_to_str(result)` with `want`. `script(what, src, want)` `:64-101` runs `js_run` and reads the global `result`. Every case uses a fresh `jctx`.
 - Three refusal blocks follow (`:264-300`): `class Foo {}` must set an error; `var x = ;` must fail; `while (true) {}` must hit the step cap.
 - The summary line "N of M passed" is printed at `:302-306`, **before** the last 58 cases (regex 41, arrows 8, instanceof 6, labels 3), so it reports 86.
-- The final marker is `JSTEST_PASS` or `JSTEST_FAIL` (`:446`), and the program returns the failure count. Total: 144 cases.
+- The final marker is `JSTEST_PASS` or `JSTEST_FAIL` (`:446`), and the program returns the failure count. Total: 202 cases at 0.43.0.
 - Several expected strings encode the engine's non-standard number printing: `"1 / 3"` → `"0.3333333333"` `:108` and `"0.1 + 0.2"` → `"0.3"` `:109`. The latter only passes because printing truncates (real JS prints `0.30000000000000004`).
 
 ### 3.7 `userland/jsprobe.c` (226 lines)
@@ -808,7 +808,7 @@ Leaving the page (the next `build`) calls `jsdom_close`, which frees everything.
    2. Look up `__this__` on `f`, which allocates the string `"__this__"`.
    3. Make a scope (176 bytes).
    4. Declare the parameters (48 bytes each).
-   5. Build `arguments` (a 160-byte array, 128 bytes of items, plus the name and property).
+   5. Build `arguments` (a 160-byte array, 128 bytes of items, plus the name and property), since 0.43.0 only for a function whose text names it.
    6. `js_exec(body)`: this hoists the body block's functions and runs its statements.
    7. On `JS_RETURN`, fetch `ret` and reset `sig`.
 
@@ -924,9 +924,9 @@ No path today dispatches an event from inside a script (there is no `el.click()`
 1. **Node indices are stable, but `jnode*` pointers are not.** Any `js_node` call can `realloc` the array.
    - `js_eval`/`js_exec` hold `jnode *n` across recursion (`jsrun.h:1481`, `:1780`). This is safe only because nothing parses during evaluation today.
    - Adding `eval`, `new Function`, synchronous script insertion, or compiling an attribute handler from inside a running script would create use-after-free bugs.
-   - The parser writes `J->nodes[n].a = js_parse_x(P)` (§10 B19).
+   - The parser wrote `J->nodes[n].a = js_parse_x(P)` (§10 B19, fixed in 0.43.0: into a local first).
 2. Nodes must outlive every function that references them, so they are never freed per script.
-3. The region never shrinks. Everything the interpreter does allocates, and the 24 MiB cap is a **lifetime budget per page**, not a live-memory limit (§7).
+3. The region never shrinks, but since 0.43.0 blocks up to 256 bytes can be given back (`js_free`) to a free list per sixteen-byte size and are used again before the region grows. Only what provably nothing reaches is given back: a finished call's or catch's scope that did not escape, and a bucket array replaced by a rehash. Everything else still stays until the page is left, so the 24 MiB cap remains a **lifetime budget** for objects, strings and arrays (§7).
 4. After an allocation fails, `js_str` returns NULL, and several callers pass that straight to `js_find` (§10 B8). The code is not safe to run on after the cap is reached, yet jsdom keeps calling into it.
 5. Wrapper identity comes from `jd_wrap[node]`.
 6. `enumerable` is always 1. The internal properties (`__ctor__`, `__this__`, `__fn__`, `__bound__`, `__method__`, `__url__`, `__body__`) are ordinary visible properties.
@@ -975,7 +975,7 @@ No path today dispatches an event from inside a script (there is no `el.click()`
 
 | Operation | Region cost |
 |---|---|
-| One JS function call | about 624 B before the body allocates anything: `"__this__"` 32 + scope 176 + 48 per parameter + `arguments` 160 + items 128 + name 32 + property 48 |
+| One JS function call | 0.43.0: nothing kept once it returns, unless a function value was made in it (then its scope, about 210 B plus 48 per variable, stays) or it names `arguments` (the array stays). Before: about 624 B every call |
 | One built-in method call (`s.charAt(i)`, `a.push(x)`) | about 304 B |
 | `a[i] = v` | 16–32 B for the index string |
 | Array growth | about 32 B per final element (abandoned doubling copies) |
@@ -987,17 +987,17 @@ No path today dispatches an event from inside a script (there is no `el.click()`
 | `join`, and `+=` string building | quadratic |
 
 What that means in practice:
-- About 40,000 JS function calls, or about 80,000 built-in method calls, per page.
-- Sorting a few hundred elements with a JS comparator: about n²/4 calls, so roughly 400 elements exhaust the region.
+- Before 0.43.0: about 40,000 JS function calls, or about 80,000 built-in method calls, per page. Since then a call keeps nothing, and a string or array method called where it is fetched uses one shared native (`J->str_methods`, `arr_methods`, chosen while `J->for_call` is set). jstest makes 200,000 of each.
+- Sorting a few hundred elements with a JS comparator: about n²/4 calls, so roughly 400 elements exhausted the region before 0.43.0; the calls now keep nothing.
 - `JSON.stringify` output of about 7 KB.
 - Building a string of about 30 KB with `+=` in 20-byte pieces.
-- A `setInterval` that runs every 10–100 ms exhausts the region in minutes to hours, and the next callback then crashes the browser (§10 B8).
+- A `setInterval` that runs every 10–100 ms exhausts the region in minutes to hours if its callback makes objects or strings (calls alone no longer count), and the next callback then crashes the browser (§10 B8).
 
 ---
 
 ## 8. Tests
 
-### 8.1 jstest.c -- 144 cases, fresh context per case
+### 8.1 jstest.c -- 144 cases at the atlas's writing, 202 at 0.43.0, fresh context per case
 
 Run by `tools/ring3check.py` (suite entry `("jstest", "JSTEST_PASS", "javascript", 180)` at `:33`). It checks the marker, runs jstest a second time, parses "N of M passed" and requires M ≥ 86 (`:84-97`). That line is printed before the last 58 cases, so the count guard only covers the first 86 (§10 D16). `ring3check.py` runs on every gate (`pipeline/gate.sh:302-303`). The kernel selftest (`-append selftest`) covers **none** of this area, because it is all ring 3 (`gate.sh:296-301`).
 
@@ -1062,7 +1062,7 @@ A manual diagnostic only. It prints `JSPROBE_DONE` and asserts nothing.
 
 - `call`/`apply`/`bind` (broken, B1);
 - `for (x in o)` without `var` (broken, B2);
-- `new X().y` (B3);
+- ~~`new X().y` (B3)~~ covered since 0.43.0;
 - labelled blocks, labelled for-in, labelled break through a switch (B4);
 - printing everyday decimals such as `0.57` (B5);
 - `Math.min()`, and floor/round of NaN;
@@ -1103,7 +1103,7 @@ A manual diagnostic only. It prints `JSPROBE_DONE` and asserts nothing.
 
 ### Pitfalls the comments and code point to
 
-- **Memory.** Every feature allocates from a region that is never reclaimed, so per-call allocations multiply over a page's life. Avoid calling `js_str()` for fixed keys on hot paths: `js_call`, `N_CALL` and `fn_held` each make a new `"__this__"`/`"__fn__"` string per call. Intern these once in `jctx` instead.
+- **Memory.** Every feature allocates from a region that is never reclaimed, so per-call allocations multiply over a page's life. Avoid calling `js_str()` for fixed keys on hot paths; the engine's own are interned in `jctx` (`s_this`, `s_fn`, `s_ctor`, `s_bound`, `s_args`, `s_arguments`) since 0.43.0. Anything that makes a function value must go through `N_FUNC`, which marks the scopes it captures as escaped; a function value made any other way would let a scope be given back while it can still be reached.
 - **Check for NULL.** Always check `js_str`/`js_array`/`js_object` for NULL before passing the result to `js_find`/`js_arr_push` (B8).
 - **Never parse while evaluating** unless you stop holding `jnode *` across calls (§6).
 - **Scratch state.** A native that calls back into JS must assume `js_rx` and any static buffer were clobbered.
@@ -1129,14 +1129,14 @@ A manual diagnostic only. It prints `JSPROBE_DONE` and asserts nothing.
 
 **B2. FIXED in 0.40.0 (see atlas README). `for (k in o)` without `var`/`let`/`const` does not parse.** In `js_parse_stmt`'s for branch, `init = js_parse_expr(P)` (`jsparse.h:1221`) lets `js_parse_binary` consume `in` as a binary operator (`:809`). The check `js_at_word(P,"in")` at `:1222` is therefore never true, and parsing ends with "expected ;, not )". The `N_FORIN.c` target form (`:1229`, and `jsrun.h:1906-1909`) is dead code. Minified code uses `var k; for (k in o)` often.
 
-**B3. `new X(args).more` is mis-parsed** (`jsparse.h:759-774`). The operand is parsed with the full postfix loop, so `new Foo().bar()` becomes `new (Foo().bar)()`: `Foo` is called without `new` (with `this` undefined), then `new` is applied to the result's `bar`. For example, `new RegExp("a").test("xyz")` becomes `new (RegExp("a").test)("xyz")`, which returns the fresh plain object (truthy) instead of `false`.
+**B3. FIXED in 0.43.0 (`js_parse_new`; jstest "a member of something just made", "a method called on something just made", "a constructor found through a namespace"). `new X(args).more` is mis-parsed** (`jsparse.h:759-774`). The operand is parsed with the full postfix loop, so `new Foo().bar()` becomes `new (Foo().bar)()`: `Foo` is called without `new` (with `this` undefined), then `new` is applied to the result's `bar`. For example, `new RegExp("a").test("xyz")` becomes `new (RegExp("a").test)("xyz")`, which returns the fresh plain object (truthy) instead of `false`.
 
 **B4. Label handling has three holes.**
 - (a) `N_LABEL` (`jsrun.h:1937-1947`) on a block or `if` leaves `pending_label` set, and the first loop inside takes it (`:1815`, `:1835`, `:1854`). `lbl: { for(;;){ break lbl; } after(); }` then runs `after()`.
 - (b) `N_FORIN` (`:1878-1916`) never takes `pending_label` and consumes every break/continue whatever its label. `lbl: for (k in o) { for(;;) continue lbl; }` hands the label to the inner `for`, which loops until the step cap. `break lbl` exits only the inner loop.
 - (c) `N_SWITCH` (`:2011`) swallows `break outer` inside `outer: for (...) { switch (x) { case 1: break outer; } }`.
 
-**B5. FIXED in 0.40.0 (see atlas README). Number printing is wrong for everyday decimals** (`jsrun.h:111-133`). The code emits 10 fraction digits by **truncation**, so doubles that sit just below a decimal print as a run of 9s: `0.57` → `"0.5699999999"`, `19.99` → `"19.9899999999"`, `1.15` → `"1.1499999999"`. For 2^63 ≤ |d| < 1e21, `(long long)d` overflows (cvttsd2si gives INT64_MIN) and the digit loop emits non-digit bytes (for example `String(1e20)`). Values between 1.7e308 and DBL_MAX print as "Infinity" (`:59`). Parsing is also not correctly rounded (the literal `0.3` becomes `3*0.1`), so `0.1 + 0.2 === 0.3` is **true** here.
+**B5. FIXED in 0.40.0 (see atlas README). Number printing is wrong for everyday decimals** (`jsrun.h:111-133`). The code emits 10 fraction digits by **truncation**, so doubles that sit just below a decimal print as a run of 9s: `0.57` → `"0.5699999999"`, `19.99` → `"19.9899999999"`, `1.15` → `"1.1499999999"`. For 2^63 ≤ |d| < 1e21, `(long long)d` overflows (cvttsd2si gives INT64_MIN) and the digit loop emits non-digit bytes (for example `String(1e20)`). Values between 1.7e308 and DBL_MAX print as "Infinity" (`:59`). Parsing is also not correctly rounded (the literal `0.3` becomes `3*0.1`), so `0.1 + 0.2 === 0.3` is **true** here. (That half, and the fifteen-digit printing 0.40.0 left, FIXED in 0.43.0: `jsnum.h`, correctly rounded reading and shortest round-trip printing; jstest "a sum of tenths is not three tenths", "a halfway case read to even" and eleven more.)
 
 **B6. Math edge cases.**
 - `Math.floor`/`ceil`/`round` of NaN, ±Infinity or |x| ≥ 2^63 return -9223372036854775808 (`jsrun.h:2122-2130`: an undefined-behaviour cast, which becomes cvttsd2si in practice). Printing that value then hits B5.
@@ -1176,12 +1176,12 @@ A manual diagnostic only. It prints `JSPROBE_DONE` and asserts nothing.
 - `+` on arrays is numeric (`jsrun.h:1370-1374`): `[1,2]+3` → NaN, `[]+[]` → 0, `[1]+[2]` → 3.
 - Loose equality between an object and a primitive compares strings (`:313-316`): `[1]==true`, `[0]==false` and `[]==false` are all false here.
 
-**B13. Internal bookkeeping leaks into what scripts see.**
+**B13. FIXED in 0.43.0 (`js_set_hidden`, `js_own_keys`; jstest "and the engine's own bookkeeping is not among them", "JSON leaves out a key it cannot write"). Internal bookkeeping leaks into what scripts see.**
 - `__ctor__` (on every object made by `new`), `__this__`, `__fn__`, `__bound__`, and the XHR `__method__`/`__url__`/`__body__` are enumerable own properties (`js.h:391`).
 - `Object.keys`/`values` and `JSON.stringify` do not look at `enumerable` at all (`jsrun.h:2253-2261`, `2393-2395`, `2408-2410`).
 - So `JSON.stringify(new Foo())` contains `"__ctor__":null`.
 
-**B14. Key order is hash-bucket order**, not insertion order, for for-in, `Object.keys`/`values` and `JSON.stringify` (§3.1 has examples).
+**B14. FIXED in 0.43.0 (insertion-order list; jstest, six cases). Key order is hash-bucket order**, not insertion order, for for-in, `Object.keys`/`values` and `JSON.stringify` (§3.1 has examples).
 
 **B15. JSON problems.**
 - `stringify`: emits raw `\r` and control characters, writes `undefined`/`NaN`/`Infinity` as text, and is O(S²) in region memory, so about 7 KB of output exhausts the page.
@@ -1218,11 +1218,11 @@ A manual diagnostic only. It prints `JSPROBE_DONE` and asserts nothing.
 
 **B18. Uninitialised token read.** `jparse P;` is not initialised, and the first `js_next` calls `js_tok_ends_expr(&L->tok)` on garbage (`jsparse.h:148`, `1371-1379`; `jsrun.h:2562-2570`). This is undefined behaviour. When the garbage type is `T_KEYWORD` or `T_PUNCT` with a matching length, it dereferences a garbage `text` pointer. Low probability.
 
-**B19. Stores whose ordering depends on the compiler.** `J->nodes[n].a = js_parse_x(P)`, with `js_parse_x` able to `realloc` `J->nodes`, occurs at `jsparse.h:744, 750, 756, 784, 793, 882, 1016, 1046, 1105, 1262, 1289, 1297, 1306, 1308`. It works only because clang evaluates the right-hand side of a scalar assignment before the left-hand lvalue; C leaves the order unspecified. A hazard for any other compiler.
+**B19. FIXED in 0.43.0 (every operand read into a local first; not checkable by a test, since it depends on the order the compiler chose). Stores whose ordering depends on the compiler.** `J->nodes[n].a = js_parse_x(P)`, with `js_parse_x` able to `realloc` `J->nodes`, occurs at `jsparse.h:744, 750, 756, 784, 793, 882, 1016, 1046, 1105, 1262, 1289, 1297, 1306, 1308`. It works only because clang evaluates the right-hand side of a scalar assignment before the left-hand lvalue; C leaves the order unspecified. A hazard for any other compiler.
 
 **B20. Silent truncation to 24 arguments.** Calls evaluate at most 24 argument expressions, so side effects in the rest are lost (`jsrun.h:1602-1606`, `1640-1644`). `apply` truncates its array to 24 (`Math.max.apply(null, big)` is wrong).
 
-**B21. Poor diagnostics for errors.** Engine errors are thrown as strings, so `e.message` is undefined. `throw new Error("x")` reports "this is not a function" (Error is undefined, and `N_NEW` never names the callee) (`jsrun.h:1636-1654`).
+**B21. FIXED in 0.43.0 (error objects, six constructors; jstest, seven cases). Poor diagnostics for errors.** Engine errors are thrown as strings, so `e.message` is undefined. `throw new Error("x")` reports "this is not a function" (Error is undefined, and `N_NEW` never names the callee) (`jsrun.h:1636-1654`).
 
 **B22. var, let and const semantics.**
 - `var x;` resets `x` to undefined (`jsrun.h:1799-1806`).
@@ -1231,7 +1231,9 @@ A manual diagnostic only. It prints `JSPROBE_DONE` and asserts nothing.
 
 **B23. `this` is undefined at top level and in plain calls** (`jsrun.h:2547`). UMD wrappers `(function(root){…})(this)` therefore fail with "cannot set X of undefined".
 
-**B24. Dead or unused state.** `js_bound_this` (`jsrun.h:645`) is dead. `js_print_hook` (`:2034`) is never set, so console output is dropped everywhere. `host_data` is unused. The `rep == -1` path in `rx_cont_do` (`jsregex.h:490`) is unreachable.
+**B24. Dead or unused state.** `js_bound_this` (`jsrun.h:645`) was dead (removed in 0.43.0). `js_print_hook` (`:2034`) is never set, so console output is dropped everywhere. `host_data` is unused. The `rep == -1` path in `rx_cont_do` (`jsregex.h:490`) is unreachable.
+
+**B26. FIXED in 0.43.0 (found by the RangeError case failing). A throw through `return` arrived as undefined.** `N_RETURN` assigned the evaluation's result to `J->ret` before checking for a throw, so the undefined that a failed evaluation returns overwrote the thrown value: `function f(){ return g(); }` with `g` throwing gave the catch `undefined`. jstest "and what is thrown through a return reaches the catch".
 
 **B25. break/continue placement is not checked.** A `break` inside a function body but outside any loop escapes `js_call` as `JS_BREAK` (`:551-558`) and breaks the caller's loop. Top-level `return` silently ends the script.
 
@@ -1241,7 +1243,7 @@ A manual diagnostic only. It prints `JSPROBE_DONE` and asserts nothing.
 
 **D2.** `js.h:67` says "Eight kinds"; `jtype` has 6.
 
-**D3.** `js.h:88-91` says "Interned lengths"; there is no interning.
+**D3.** `js.h:88-91` says "Interned lengths"; there is no interning of strings in general (since 0.43.0 six fixed names are made once, `jctx.s_*`).
 
 **D4.** `jsparse.h:5-6` says "sixteen levels" of binary operator; there are 10. The arrow-function refusal at `jsparse.h:413-419` is dead code.
 
@@ -1267,7 +1269,7 @@ A manual diagnostic only. It prints `JSPROBE_DONE` and asserts nothing.
 
 **D15.** The README does not mention `call`/`apply`/`bind`. The code comment claims them (`jsrun.h:438-449`), and they are broken (B1).
 
-**D16.** `jstest.c:302-306` prints the summary before 58 more cases, so the `total >= 86` check at `ring3check.py:96-97` guards only the first 86 of 144. Two expected results (`jstest.c:108-109`) encode non-standard printing.
+**D16.** `jstest.c:302-306` prints the summary before 58 more cases, so the `total >= 86` check at `ring3check.py:96-97` guards only the first 86 of 144. Two expected results (`jstest.c:108-109`) encode non-standard printing (corrected in 0.43.0).
 
 ---
 

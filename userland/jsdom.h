@@ -793,8 +793,8 @@ static jval nat_xhr_open(jctx *J, jval t, jval *a, int n) {
     if (t.t != JS_OBJ || !t.obj) return js_undef();
     jstr *m = js_to_str(J, js_arg(a, n, 0));
     jstr *u = js_to_str(J, js_arg(a, n, 1));
-    js_set(J, t.obj, "__method__", js_from_str(m));
-    js_set(J, t.obj, "__url__", js_from_str(u));
+    js_set_hidden(J, t.obj, "__method__", js_from_str(m));
+    js_set_hidden(J, t.obj, "__url__", js_from_str(u));
     js_set(J, t.obj, "readyState", js_num(1));
     return js_undef();
 }
@@ -812,7 +812,7 @@ static jval nat_xhr_send(jctx *J, jval t, jval *a, int n) {
     if (n > 0) {
         jval b = js_arg(a, n, 0);
         if (b.t != JS_UNDEF && b.t != JS_NULL)
-            js_set(J, t.obj, "__body__", js_from_str(js_to_str(J, b)));
+            js_set_hidden(J, t.obj, "__body__", js_from_str(js_to_str(J, b)));
     }
 
     int slot = -1;

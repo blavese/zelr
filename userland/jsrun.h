@@ -13,86 +13,73 @@
  */
 #pragma once
 #include "js.h"
+#include "jsnum.h"
 #include "jsparse.h"
 #include "jsregex.h"
 
 static jval js_eval(jctx *J, int node, jscope *sc, jval this_val);
 static jsignal js_exec(jctx *J, int node, jscope *sc, jval this_val);
 
-/* --- saying what went wrong ---------------------------------------------- */
+/* --- saying what went wrong ----------------------------------------------
+ *
+ * An error is an object with a name and a message, made by one of six
+ * constructors, and `e instanceof TypeError` is how a page tells a mistake
+ * it expected from one it did not. The engine threw strings, so e.message
+ * was undefined, `instanceof Error` was false for everything it raised, and
+ * there was no Error for a page to throw one of its own. */
+enum { JS_ERR_ERROR, JS_ERR_TYPE, JS_ERR_RANGE, JS_ERR_REFERENCE, JS_ERR_SYNTAX, JS_ERR_EVAL };
+static const char *const JS_ERR_NAMES[6] = {
+    "Error", "TypeError", "RangeError", "ReferenceError", "SyntaxError", "EvalError"
+};
 
-static jval js_throw(jctx *J, const char *what, int line) {
+static jval nat_error_make(jctx *J, jval t, jval *a, int n);
+
+static jobj *js_error_obj(jctx *J, jobj *ctor, jstr *name, jstr *message) {
+    jobj *e = js_object(J, JO_PLAIN);
+    if (!e) return 0;
+    if (ctor) js_set_hidden(J, e, "__ctor__", js_from_obj(ctor));
+    /* Kept out of a walk over its keys, where the standard keeps them. */
+    js_set_hidden(J, e, "name", js_from_str(name));
+    js_set_hidden(J, e, "message", js_from_str(message));
+    return e;
+}
+
+/* Whether an object was made by one of the six. */
+static int js_is_error(jctx *J, jobj *o) {
+    jprop *p = o ? js_find(o, J->s_ctor) : 0;
+    return p && p->v.t == JS_OBJ && p->v.obj && p->v.obj->kind == JO_NATIVE
+        && p->v.obj->fn == nat_error_make;
+}
+
+static jval js_throw(jctx *J, int kind, const char *what, int line) {
     if (J->sig == JS_FAILED) return js_undef();
     J->sig = JS_THROWN;
     J->error_line = line;
+    /* What the page's error line shows, if nothing catches it. */
+    const char *nm = JS_ERR_NAMES[kind];
     int i = 0;
-    while (what[i] && i < (int)sizeof(J->error) - 1) { J->error[i] = what[i]; i++; }
+    for (; nm[i] && i < (int)sizeof(J->error) - 3; i++) J->error[i] = nm[i];
+    J->error[i++] = ':';
+    J->error[i++] = ' ';
+    for (int k = 0; what[k] && i < (int)sizeof(J->error) - 1; k++) J->error[i++] = what[k];
     J->error[i] = 0;
-    J->ret = js_from_str(js_str(J, what));
+    jobj *e = js_error_obj(J, J->err_ctor[kind], js_str(J, nm), js_str(J, what));
+    J->ret = e ? js_from_obj(e) : js_from_str(js_str(J, what));
     return js_undef();
 }
 
 /* --- numbers as text -----------------------------------------------------
  *
- * The part of this language that is hardest to do exactly. The standard asks
- * for the shortest decimal that reads back as the same double, which needs
- * arbitrary precision arithmetic to get right in every case.
+ * The shortest decimal that reads back as the same double, which is what the
+ * standard asks for: 0.1 + 0.2 is 0.30000000000000004, because that is the
+ * number it is, and 0.3 is 0.3. The digits come from jsnum.h; this is only
+ * where the point goes.
  *
- * What is here is the practical version: whole numbers inside the range a
- * double represents exactly are printed as integers, and everything else
- * gets fifteen significant digits, rounded, with the trailing zeros removed
- * -- seventeen for a whole number too large to be exact, so that it prints
- * in full. Fifteen is the most a double always carries, so a decimal that
- * was written with fewer comes back as it was written.
- *
- * It used to cut after ten places rather than round, and a double sits a
- * hair below most decimals: 0.57 printed as 0.5699999999, 19.99 as
- * 19.9899999999, on every page that showed a price. Whole numbers between
- * 2^63 and 10^21 went through a cast that overflowed and printed bytes that
- * were not digits.
- *
- * Where this still differs from the standard is where the shortest exact
- * form needs sixteen or seventeen digits: 0.1 + 0.2 prints as 0.3.
+ * It printed fifteen digits, rounded, which made 0.1 + 0.2 look like 0.3
+ * to a script that was being told the two were different. Before that it
+ * cut after ten places rather than rounding, and 0.57 came out as
+ * 0.5699999999 on every page that showed a price.
  */
-static const double JS_POW10[23] = {
-    1e0,  1e1,  1e2,  1e3,  1e4,  1e5,  1e6,  1e7,  1e8,  1e9,  1e10, 1e11,
-    1e12, 1e13, 1e14, 1e15, 1e16, 1e17, 1e18, 1e19, 1e20, 1e21, 1e22
-};
-
-/* d times ten to the k. Each step is one multiplication or division by a
-   power of ten a double holds exactly, so it is rounded once per step. */
-static double js_scale10(double d, int k) {
-    while (k > 22)  { d *= 1e22; k -= 22; }
-    while (k < -22) { d /= 1e22; k += 22; }
-    return k >= 0 ? d * JS_POW10[k] : d / JS_POW10[-k];
-}
-
-/* The first `sig` significant digits of d, which is positive and finite,
-   rounded to nearest, into dig; how many are left once trailing zeros go;
-   and in *exp10 the power of ten of the first. */
-static int js_sig_digits(double d, int sig, char *dig, int *exp10) {
-    int e = 0;
-    double t = d;
-    while (t >= 10.0) { t /= 10.0; e++; }
-    while (t < 1.0)   { t *= 10.0; e--; }
-
-    /* The estimate above can be one out either way; the scaled value says
-       which, since it has to have exactly `sig` digits before the point. */
-    double lo = JS_POW10[sig - 1], hi = JS_POW10[sig];
-    double s = js_scale10(d, sig - 1 - e);
-    if (s >= hi)     { e++; s = js_scale10(d, sig - 1 - e); }
-    else if (s < lo) { e--; s = js_scale10(d, sig - 1 - e); }
-
-    long long v = (long long)(s + 0.5);
-    if ((double)v >= hi) { v /= 10; e++; }          /* 9.99... rounded to 10 */
-    for (int i = sig - 1; i >= 0; i--) { dig[i] = (char)('0' + (int)(v % 10)); v /= 10; }
-
-    int n = sig;
-    while (n > 1 && dig[n - 1] == '0') n--;
-    *exp10 = e;
-    return n;
-}
-
 static u32 js_num_text(double d, char *out, u32 cap) {
     u32 w = 0;
     if (cap < 32) { if (cap) out[0] = 0; return 0; }
@@ -128,12 +115,9 @@ static u32 js_num_text(double d, char *out, u32 cap) {
         return w;
     }
 
-    /* Seventeen digits for a whole number too big to be held exactly, so it
-       prints in full the way the standard prints it; fifteen otherwise. */
     char dig[18];
     int e = 0;
-    int big_whole = d >= 9007199254740992.0 && d < 1e21;
-    int n = js_sig_digits(d, big_whole ? 17 : 15, dig, &e);
+    int n = js_shortest(d, dig, &e);
 
     if (neg) out[w++] = '-';
 
@@ -189,51 +173,47 @@ static int js_to_bool(jval v) {
     }
 }
 
+static int js_blank(char c) { return c == ' ' || c == '\t' || c == '\n' || c == '\r'; }
+
+/* A sign, then Infinity or a decimal, at the start of s; how much of s that
+   was in *used, nought if it was neither. */
+static double js_signed_decimal(const char *s, u32 n, u32 *used) {
+    u32 i = 0;
+    int neg = 0;
+    if (i < n && (s[i] == '-' || s[i] == '+')) neg = s[i++] == '-';
+    double v;
+    int inf = n - i >= 8;
+    for (int k = 0; inf && k < 8; k++) if (s[i + k] != "Infinity"[k]) inf = 0;
+    if (inf) {
+        v = jn_bits(JN_INF);
+        i += 8;
+    } else {
+        u32 k = 0;
+        v = js_decimal(s + i, n - i, &k);
+        if (!k) { *used = 0; return 0.0; }
+        i += k;
+    }
+    *used = i;
+    return neg ? -v : v;
+}
+
 static double js_str_to_num(const char *s, u32 n) {
     u32 i = 0;
-    while (i < n && (s[i] == ' ' || s[i] == '\t' || s[i] == '\n')) i++;
+    while (i < n && js_blank(s[i])) i++;
     if (i >= n) return 0;                       /* an empty string is zero */
 
-    int neg = 0;
-    if (s[i] == '-') { neg = 1; i++; }
-    else if (s[i] == '+') i++;
-
-    int any = 0;
-    double v = 0;
-    while (i < n && s[i] >= '0' && s[i] <= '9') {
-        v = v * 10.0 + (double)(s[i] - '0');
-        i++;
-        any = 1;
-    }
-    if (i < n && s[i] == '.') {
-        i++;
-        double scale = 0.1;
-        while (i < n && s[i] >= '0' && s[i] <= '9') {
-            v += (double)(s[i] - '0') * scale;
-            scale *= 0.1;
-            i++;
-            any = 1;
-        }
-    }
-    if (any && i < n && (s[i] == 'e' || s[i] == 'E')) {
-        i++;
-        int eneg = 0;
-        if (i < n && (s[i] == '+' || s[i] == '-')) eneg = s[i++] == '-';
-        int e = 0;
-        while (i < n && s[i] >= '0' && s[i] <= '9') e = e * 10 + (s[i++] - '0');
-        double p = 1.0;
-        for (int k = 0; k < e; k++) p *= 10.0;
-        v = eneg ? v / p : v * p;
-    }
-    while (i < n && (s[i] == ' ' || s[i] == '\t' || s[i] == '\n')) i++;
+    u32 k = 0;
+    double v = js_signed_decimal(s + i, n - i, &k);
+    i += k;
+    while (i < n && js_blank(s[i])) i++;
 
     /* Trailing rubbish makes the whole thing not a number, which is the rule
        and is why "12px" is NaN while parseInt("12px") is 12. */
-    if (!any || i != n) {
+    if (!k || i != n) {
         double zero = 0.0;
         return zero / zero;
     }
-    return neg ? -v : v;
+    return v;
 }
 
 static double js_to_num(jctx *J, jval v) {
@@ -270,6 +250,8 @@ static int js_to_i32(jctx *J, jval v) {
 
 static u32 js_to_u32(jctx *J, jval v) { return (u32)js_to_i32(J, v); }
 
+static jstr *js_concat(jctx *J, jstr *a, jstr *b);
+
 static jstr *js_to_str(jctx *J, jval v) {
     char buf[64];
     switch (v.t) {
@@ -286,6 +268,14 @@ static jstr *js_to_str(jctx *J, jval v) {
             if (!o) return js_str(J, "null");
             if (o->kind == JO_FUNC || o->kind == JO_NATIVE)
                 return js_str(J, "function");
+            if (js_is_error(J, o)) {
+                /* "TypeError: message", or whichever half there is. */
+                jstr *nm = js_to_str(J, js_get_prop(o, js_str(J, "name")));
+                jstr *msg = js_to_str(J, js_get_prop(o, js_str(J, "message")));
+                if (!msg || !msg->len) return nm;
+                if (!nm || !nm->len) return msg;
+                return js_concat(J, js_concat(J, nm, js_str(J, ": ")), msg);
+            }
             if (o->kind == JO_ARRAY) {
                 /* Joined with commas, which is what an array becomes when
                    something asks it for text. */
@@ -368,6 +358,23 @@ static jscope *js_scope(jctx *J, jscope *parent) {
     return s;
 }
 
+/* A scope nothing can reach any more, back to the free lists: its variables'
+   properties, their table, the object holding them, and itself. What the
+   variables held is not touched -- a value outlives the name it had. */
+static void js_scope_free(jctx *J, jscope *sc) {
+    jobj *v = sc->vars;
+    if (v) {
+        for (jprop *p = v->ofirst; p; ) {
+            jprop *next = p->onext;
+            js_free(J, p, (u32)sizeof(jprop));
+            p = next;
+        }
+        js_free(J, v->buckets, (u32)sizeof(jprop *) * v->nbuckets);
+        js_free(J, v, (u32)sizeof(jobj));
+    }
+    js_free(J, sc, (u32)sizeof(jscope));
+}
+
 static jprop *js_lookup(jscope *sc, const jstr *name) {
     for (jscope *s = sc; s; s = s->parent) {
         jprop *p = js_find(s->vars, name);
@@ -438,7 +445,7 @@ static jval js_nothing(jctx *J, const char *verb, jstr *name, jval target) {
     const char *tail = target.t == JS_NULL ? " of null" : " of undefined";
     for (const char *p = tail; *p && n < 95; p++) msg[n++] = *p;
     msg[n] = 0;
-    return js_throw(J, msg, J->error_line);
+    return js_throw(J, JS_ERR_TYPE, msg, J->error_line);
 }
 
 static jval js_get(jctx *J, jval target, jstr *name) {
@@ -494,7 +501,7 @@ static jval js_get(jctx *J, jval target, jstr *name) {
                                 js_str_is(name, "call")  ? nat_fn_call :
                                 js_str_is(name, "apply") ? nat_fn_apply
                                                          : nat_fn_bind);
-            if (m) js_set(J, m, "__fn__", target);
+            if (m) js_set_hidden(J, m, "__fn__", target);
             return js_from_obj(m);
         }
     }
@@ -551,10 +558,10 @@ static void js_put(jctx *J, jval target, jstr *name, jval v) {
 static jval js_call(jctx *J, jval fn, jval this_val, jval *argv, int argc) {
     if (fn.t != JS_OBJ || !fn.obj
         || (fn.obj->kind != JO_FUNC && fn.obj->kind != JO_NATIVE))
-        return js_throw(J, "this is not a function", J->error_line);
+        return js_throw(J, JS_ERR_TYPE, "this is not a function", J->error_line);
 
     if (J->depth >= JS_DEPTH_CAP)
-        return js_throw(J, "too many nested calls", J->error_line);
+        return js_throw(J, JS_ERR_RANGE, "too many nested calls", J->error_line);
 
     jobj *f = fn.obj;
     if (f->kind == JO_NATIVE) {
@@ -564,7 +571,7 @@ static jval js_call(jctx *J, jval fn, jval this_val, jval *argv, int argc) {
 
     /* An arrow function carries the receiver it was written under. */
     {
-        jprop *lex = js_find(f, js_str(J, "__this__"));
+        jprop *lex = js_find(f, J->s_this);
         if (lex) this_val = lex->v;
     }
 
@@ -580,16 +587,22 @@ static jval js_call(jctx *J, jval fn, jval this_val, jval *argv, int argc) {
         i++;
     }
 
-    /* `arguments`, as an array, because pages use it. */
-    {
+    /* `arguments`, as an array, because pages use it -- when this one does. */
+    if (f->uses_args) {
         jobj *a = js_array(J);
         for (int k = 0; k < argc; k++) js_arr_push(J, a, argv[k]);
-        js_declare(J, sc, js_str(J, "arguments"), js_from_obj(a));
+        js_declare(J, sc, J->s_arguments, js_from_obj(a));
     }
 
     J->depth++;
     jsignal s = js_exec(J, f->body, sc, this_val);
     J->depth--;
+
+    /* Nothing made during the call can reach its scope, so the scope is
+       given back for the next call to use. It never was, and a page that
+       called a small function in a loop ran out of memory in about forty
+       thousand calls. */
+    if (!sc->escaped) js_scope_free(J, sc);
 
     if (s == JS_RETURN) {
         J->sig = JS_OK;
@@ -622,7 +635,7 @@ static jval js_call(jctx *J, jval fn, jval this_val, jval *argv, int argc) {
  */
 static jval fn_held(jctx *J, jval self) {
     if (self.t != JS_OBJ || !self.obj) return js_undef();
-    jprop *p = js_find(self.obj, js_str(J, "__fn__"));
+    jprop *p = js_find(self.obj, J->s_fn);
     return p ? p->v : js_undef();
 }
 
@@ -665,15 +678,15 @@ static jval nat_fn_apply(jctx *J, jval t, jval *a, int n) {
 static jval nat_fn_bound(jctx *J, jval t, jval *a, int n) {
     (void)t;
     jobj *self = J->callee;
-    if (!self) return js_throw(J, "this is not a function", J->error_line);
+    if (!self) return js_throw(J, JS_ERR_TYPE, "this is not a function", J->error_line);
     jval fn = fn_held(J, js_from_obj(self));
-    jprop *p = js_find(self, js_str(J, "__bound__"));
+    jprop *p = js_find(self, J->s_bound);
     jval who = p ? p->v : js_undef();
 
     /* The arguments given to bind, then the ones given now. */
     jval all[JS_ARGS_MAX];
     int m = 0;
-    jprop *pre = js_find(self, js_str(J, "__args__"));
+    jprop *pre = js_find(self, J->s_args);
     if (pre && pre->v.t == JS_OBJ && pre->v.obj && pre->v.obj->kind == JO_ARRAY) {
         jobj *arr = pre->v.obj;
         for (u32 i = 0; i < arr->len && m < JS_ARGS_MAX; i++) all[m++] = arr->items[i];
@@ -684,16 +697,16 @@ static jval nat_fn_bound(jctx *J, jval t, jval *a, int n) {
 
 static jval nat_fn_bind(jctx *J, jval t, jval *a, int n) {
     jval fn = fn_target(J, t, J->callee);
-    if (fn.t != JS_OBJ) return js_throw(J, "bind needs a function", J->error_line);
+    if (fn.t != JS_OBJ) return js_throw(J, JS_ERR_TYPE, "bind needs a function", J->error_line);
     jobj *out = js_native(J, "bound", nat_fn_bound);
     if (!out) return js_undef();
-    js_set(J, out, "__fn__", fn);
-    js_set(J, out, "__bound__", n > 0 ? a[0] : js_undef());
+    js_set_hidden(J, out, "__fn__", fn);
+    js_set_hidden(J, out, "__bound__", n > 0 ? a[0] : js_undef());
     if (n > 1) {
         jobj *pre = js_array(J);
         if (pre) {
             for (int i = 1; i < n; i++) js_arr_push(J, pre, a[i]);
-            js_set(J, out, "__args__", js_from_obj(pre));
+            js_set_hidden(J, out, "__args__", js_from_obj(pre));
         }
     }
     return js_from_obj(out);
@@ -717,10 +730,6 @@ static jobj *js_native(jctx *J, const char *name, jnative fn) {
 static jval js_arg(jval *argv, int argc, int i) {
     return i < argc ? argv[i] : js_undef();
 }
-
-/* The receiver of a string method is carried on the native object, because
-   a method fetched off a value has to remember which value it came from. */
-static jval js_bound_this;
 
 /* --- regular expressions --------------------------------------------------
  *
@@ -758,7 +767,7 @@ static int js_rx_load(jctx *J, jval v, int line) {
     flags[i] = 0;
 
     if (!rx_compile(&js_rx, ss->s, (int)ss->len, flags)) {
-        js_throw(J, js_rx.why[0] ? js_rx.why : "a pattern this cannot read",
+        js_throw(J, JS_ERR_SYNTAX, js_rx.why[0] ? js_rx.why : "a pattern this cannot read",
                  line);
         return 0;
     }
@@ -1174,7 +1183,6 @@ static jval nat_str_search(jctx *J, jval t, jval *a, int n) {
 }
 
 static jval js_string_method(jctx *J, jval target, jstr *name) {
-    js_bound_this = target;
     struct { const char *n; jnative f; } M[] = {
         { "charAt", nat_str_charat }, { "charCodeAt", nat_str_charcode },
         { "indexOf", nat_str_indexof }, { "includes", nat_str_includes },
@@ -1190,12 +1198,18 @@ static jval js_string_method(jctx *J, jval target, jstr *name) {
     };
     for (int i = 0; M[i].n; i++) {
         if (!js_str_is(name, M[i].n)) continue;
+        /* Called where it is fetched, the call supplies the receiver and one
+           native for each method will do. Every s.charAt(i) in a loop used
+           to make a native of its own, three hundred bytes that were never
+           given back. */
+        if (J->for_call && i < 24) {
+            if (!J->str_methods[i]) J->str_methods[i] = js_native(J, M[i].n, M[i].f);
+            return J->str_methods[i] ? js_from_obj(J->str_methods[i]) : js_undef();
+        }
         jobj *o = js_native(J, M[i].n, M[i].f);
         if (!o) return js_undef();
-        /* The receiver travels with the method. Fetching one and calling it
-           later on something else is not something a page does, and doing it
-           this way costs one field instead of a bound-function object. */
-        js_set(J, o, "__this__", target);
+        /* Taken away to be called later, the receiver travels with it. */
+        js_set_hidden(J, o, "__this__", target);
         return js_from_obj(o);
     }
     return js_undef();
@@ -1358,9 +1372,13 @@ static jval js_array_method(jctx *J, jval target, jstr *name) {
     };
     for (int i = 0; M[i].n; i++) {
         if (!js_str_is(name, M[i].n)) continue;
+        if (J->for_call && i < 16) {             /* as for strings, above */
+            if (!J->arr_methods[i]) J->arr_methods[i] = js_native(J, M[i].n, M[i].f);
+            return J->arr_methods[i] ? js_from_obj(J->arr_methods[i]) : js_undef();
+        }
         jobj *o = js_native(J, M[i].n, M[i].f);
         if (!o) return js_undef();
-        js_set(J, o, "__this__", target);
+        js_set_hidden(J, o, "__this__", target);
         return js_from_obj(o);
     }
     return js_undef();
@@ -1518,11 +1536,16 @@ static jval js_binary(jctx *J, jop op, jval l, jval r, int line) {
         case OP_INSTANCEOF: {
             if (l.t != JS_OBJ || !l.obj) return js_bool(0);
             if (r.t != JS_OBJ || !r.obj)
-                return js_throw(J, "the right of instanceof is not a "
+                return js_throw(J, JS_ERR_TYPE, "the right of instanceof is not a "
                                    "constructor", line);
 
-            jprop *made_by = js_find(l.obj, js_str(J, "__ctor__"));
+            jprop *made_by = js_find(l.obj, J->s_ctor);
             if (made_by && made_by->v.t == JS_OBJ && made_by->v.obj == r.obj)
+                return js_bool(1);
+
+            /* Every error is an Error, whichever of the six made it: the
+               one piece of inheritance a page leans on. */
+            if (r.obj == J->err_ctor[JS_ERR_ERROR] && js_is_error(J, l.obj))
                 return js_bool(1);
 
             jstr *nm = r.obj->name;
@@ -1550,7 +1573,7 @@ static jval js_binary(jctx *J, jop op, jval l, jval r, int line) {
         }
 
         default:
-            return js_throw(J, "this operator is not one this engine has", line);
+            return js_throw(J, JS_ERR_SYNTAX, "this operator is not one this engine has", line);
     }
 }
 
@@ -1612,12 +1635,17 @@ static jval js_eval(jctx *J, int node, jscope *sc, jval this_val) {
             f->body = n->a;
             f->params = n->b;
             f->nparams = n->c;
+            f->uses_args = n->d > 0;
             f->closure = sc;
             f->name = n->str;
+            /* The function can be called after the call it was made in is
+               over, so that call's scope, and every scope around it, has to
+               stay. */
+            for (jscope *s = sc; s && !s->escaped; s = s->parent) s->escaped = 1;
             /* An arrow takes `this` from where it was written rather than
                from wherever it is later called, so it is caught here, at
                the moment the function value is made. */
-            if (n->op) js_set(J, f, "__this__", this_val);
+            if (n->op) js_set_hidden(J, f, "__this__", this_val);
             return js_from_obj(f);
         }
 
@@ -1633,7 +1661,7 @@ static jval js_eval(jctx *J, int node, jscope *sc, jval this_val) {
                 const char *b = " of nothing";
                 while (*b) msg[w++] = *b++;
                 msg[w] = 0;
-                return js_throw(J, msg, n->line);
+                return js_throw(J, JS_ERR_TYPE, msg, n->line);
             }
             return js_get(J, target, n->str);
         }
@@ -1661,8 +1689,11 @@ static jval js_eval(jctx *J, int node, jscope *sc, jval this_val) {
                     ? J->nodes[callee].str
                     : js_to_str(J, js_eval(J, J->nodes[callee].b, sc, this_val));
                 if (self.t == JS_UNDEF || self.t == JS_NULL)
-                    return js_throw(J, "cannot call a method on nothing", n->line);
+                    return js_throw(J, JS_ERR_TYPE, "cannot call a method on nothing", n->line);
+                int was = J->for_call;
+                J->for_call = 1;
                 fn = js_get(J, self, name);
+                J->for_call = was;
             } else {
                 fn = js_eval(J, callee, sc, this_val);
             }
@@ -1671,7 +1702,7 @@ static jval js_eval(jctx *J, int node, jscope *sc, jval this_val) {
             /* A method carries the value it was fetched from, so a native
                that was bound gets its receiver back. */
             if (fn.t == JS_OBJ && fn.obj && fn.obj->kind == JO_NATIVE) {
-                jprop *b = js_find(fn.obj, js_str(J, "__this__"));
+                jprop *b = js_find(fn.obj, J->s_this);
                 if (b) self = b->v;
             }
 
@@ -1705,7 +1736,7 @@ static jval js_eval(jctx *J, int node, jscope *sc, jval this_val) {
                     for (int i = 0; tail[i] && w < (int)sizeof(said) - 1; i++)
                         said[w++] = tail[i];
                     said[w] = 0;
-                    return js_throw(J, said, n->line);
+                    return js_throw(J, JS_ERR_TYPE, said, n->line);
                 }
             }
             return js_call(J, fn, self, argv, argc);
@@ -1723,7 +1754,7 @@ static jval js_eval(jctx *J, int node, jscope *sc, jval this_val) {
             jobj *fresh = js_object(J, JO_PLAIN);
             if (!fresh) return js_undef();
             /* So that instanceof has something exact to answer with. */
-            if (fn.t == JS_OBJ && fn.obj) js_set(J, fresh, "__ctor__", fn);
+            if (fn.t == JS_OBJ && fn.obj) js_set_hidden(J, fresh, "__ctor__", fn);
             jval self = js_from_obj(fresh);
             jval out = js_call(J, fn, self, argv, argc);
             /* A constructor that returns an object returns that; one that
@@ -1794,7 +1825,7 @@ static jval js_eval(jctx *J, int node, jscope *sc, jval this_val) {
         case N_ASSIGN: {
             jplace p = js_place(J, n->a, sc, this_val);
             if (J->sig != JS_OK) return js_undef();
-            if (p.kind == 2) return js_throw(J, "this cannot be assigned to",
+            if (p.kind == 2) return js_throw(J, JS_ERR_SYNTAX, "this cannot be assigned to",
                                              n->line);
             jval r = js_eval(J, n->b, sc, this_val);
             if (J->sig != JS_OK) return js_undef();
@@ -1974,9 +2005,9 @@ static jsignal js_exec(jctx *J, int node, jscope *sc, jval this_val) {
                     js_arr_push(J, keys, js_from_str(js_str_n(J, tmp, w)));
                 }
             }
-            for (u32 b = 0; b < o->nbuckets; b++)
-                for (jprop *p = o->buckets[b]; p; p = p->next)
-                    if (p->enumerable) js_arr_push(J, keys, js_from_str(p->key));
+            jprop **own;
+            u32 nown = js_own_keys(J, o, &own);
+            for (u32 i = 0; i < nown; i++) js_arr_push(J, keys, js_from_str(own[i]->key));
 
             for (u32 i = 0; i < keys->len; i++) {
                 if (n->d) js_declare(J, sc, n->str, keys->items[i]);
@@ -1993,11 +2024,17 @@ static jsignal js_exec(jctx *J, int node, jscope *sc, jval this_val) {
             return J->sig;
         }
 
-        case N_RETURN:
-            J->ret = n->a >= 0 ? js_eval(J, n->a, sc, this_val) : js_undef();
+        case N_RETURN: {
+            /* Into a local first: when the value throws, J->ret is what was
+               thrown, and writing the failed evaluation's undefined over it
+               made every error that passed through `return f()` arrive in
+               the catch as undefined. */
+            jval v = n->a >= 0 ? js_eval(J, n->a, sc, this_val) : js_undef();
             if (J->sig != JS_OK) return J->sig;
+            J->ret = v;
             J->sig = JS_RETURN;
             return JS_RETURN;
+        }
 
         case N_BREAK:
             J->label = n->str;
@@ -2047,6 +2084,8 @@ static jsignal js_exec(jctx *J, int node, jscope *sc, jval this_val) {
                 jscope *cs = js_scope(J, sc);
                 if (n->str) js_declare(J, cs, n->str, thrown);
                 s = js_exec(J, n->b, cs, this_val);
+                /* Given back like a call's, and for the same reason. */
+                if (cs != sc && !cs->escaped) js_scope_free(J, cs);
             }
             if (n->c >= 0) {
                 jsignal keep = s;
@@ -2161,15 +2200,14 @@ static jval nat_parsefloat(jctx *J, jval t, jval *a, int n) {
     (void)t;
     jstr *s = js_to_str(J, js_arg(a, n, 0));
     if (!s) { double z = 0.0; return js_num(z / z); }
-    u32 end = 0;
-    while (end < s->len) {
-        char c = s->s[end];
-        if ((c >= '0' && c <= '9') || c == '.' || c == '-' || c == '+'
-            || c == 'e' || c == 'E') end++;
-        else break;
-    }
-    if (!end) { double z = 0.0; return js_num(z / z); }
-    return js_num(js_str_to_num(s->s, end));
+    /* The longest decimal at the front, after any spaces. It took every
+       character that could be in a number and then asked whether they made
+       one, so "1-2" was not 1 but nothing at all. */
+    u32 i = 0, used = 0;
+    while (i < s->len && js_blank(s->s[i])) i++;
+    double v = js_signed_decimal(s->s + i, s->len - i, &used);
+    if (!used) { double z = 0.0; return js_num(z / z); }
+    return js_num(v);
 }
 
 static jval nat_isnan(jctx *J, jval t, jval *a, int n) {
@@ -2328,14 +2366,20 @@ static void js_json_write(jctx *J, jval v, jstr **out) {
             }
             *out = js_concat(J, *out, js_str(J, "{"));
             int first = 1;
-            for (u32 b = 0; b < o->nbuckets; b++) {
-                for (jprop *p = o->buckets[b]; p; p = p->next) {
-                    if (!first) *out = js_concat(J, *out, js_str(J, ","));
-                    first = 0;
-                    js_json_write(J, js_from_str(p->key), out);
-                    *out = js_concat(J, *out, js_str(J, ":"));
-                    js_json_write(J, p->v, out);
-                }
+            jprop **own;
+            u32 nown = js_own_keys(J, o, &own);
+            for (u32 i = 0; i < nown; i++) {
+                jprop *p = own[i];
+                /* A key whose value JSON has no way to write is left out
+                   rather than written as something that does not parse. */
+                if (p->v.t == JS_UNDEF) continue;
+                if (p->v.t == JS_OBJ && p->v.obj &&
+                    (p->v.obj->kind == JO_FUNC || p->v.obj->kind == JO_NATIVE)) continue;
+                if (!first) *out = js_concat(J, *out, js_str(J, ","));
+                first = 0;
+                js_json_write(J, js_from_str(p->key), out);
+                *out = js_concat(J, *out, js_str(J, ":"));
+                js_json_write(J, p->v, out);
             }
             *out = js_concat(J, *out, js_str(J, "}"));
             return;
@@ -2468,9 +2512,9 @@ static jval nat_obj_keys(jctx *J, jval t, jval *a, int n) {
         }
         return js_from_obj(out);
     }
-    for (u32 b = 0; b < v.obj->nbuckets; b++)
-        for (jprop *p = v.obj->buckets[b]; p; p = p->next)
-            js_arr_push(J, out, js_from_str(p->key));
+    jprop **own;
+    u32 nown = js_own_keys(J, v.obj, &own);
+    for (u32 i = 0; i < nown; i++) js_arr_push(J, out, js_from_str(own[i]->key));
     return js_from_obj(out);
 }
 
@@ -2483,9 +2527,9 @@ static jval nat_obj_values(jctx *J, jval t, jval *a, int n) {
         for (u32 i = 0; i < v.obj->len; i++) js_arr_push(J, out, v.obj->items[i]);
         return js_from_obj(out);
     }
-    for (u32 b = 0; b < v.obj->nbuckets; b++)
-        for (jprop *p = v.obj->buckets[b]; p; p = p->next)
-            js_arr_push(J, out, p->v);
+    jprop **own;
+    u32 nown = js_own_keys(J, v.obj, &own);
+    for (u32 i = 0; i < nown; i++) js_arr_push(J, out, own[i]->v);
     return js_from_obj(out);
 }
 
@@ -2520,12 +2564,29 @@ static jval nat_array_is(jctx *J, jval t, jval *a, int n) {
    and that is refused here by name like the rest of it. */
 static jval nat_function_make(jctx *J, jval t, jval *a, int n) {
     (void)t; (void)a; (void)n;
-    return js_throw(J, "a function built out of text is not here",
+    return js_throw(J, JS_ERR_EVAL, "a function built out of text is not here",
                     J->error_line);
+}
+
+/* Error and its five kinds, called with or without new: whichever of them
+   is being called is the name the error gets. */
+static jval nat_error_make(jctx *J, jval t, jval *a, int n) {
+    (void)t;
+    jobj *ctor = J->callee;
+    jstr *name = ctor && ctor->name ? ctor->name : js_str(J, "Error");
+    jval m = js_arg(a, n, 0);
+    jstr *msg = m.t == JS_UNDEF ? js_str(J, "") : js_to_str(J, m);
+    jobj *e = js_error_obj(J, ctor, name, msg);
+    return e ? js_from_obj(e) : js_undef();
 }
 
 static void js_globals(jctx *J) {
     jscope *g = J->global;
+
+    for (int k = 0; k < 6; k++) {
+        J->err_ctor[k] = js_native(J, JS_ERR_NAMES[k], nat_error_make);
+        js_declare(J, g, js_str(J, JS_ERR_NAMES[k]), js_from_obj(J->err_ctor[k]));
+    }
 
     jobj *console = js_object(J, JO_PLAIN);
     js_set(J, console, "log", js_from_obj(js_native(J, "log", nat_log)));
@@ -2599,8 +2660,15 @@ static void js_globals(jctx *J) {
 static void js_init(jctx *J) {
     memset(J, 0, (int)sizeof(*J));
     J->sig = JS_OK;
+    J->s_this = js_str(J, "__this__");
+    J->s_fn = js_str(J, "__fn__");
+    J->s_ctor = js_str(J, "__ctor__");
+    J->s_bound = js_str(J, "__bound__");
+    J->s_args = js_str(J, "__args__");
+    J->s_arguments = js_str(J, "arguments");
     J->global = js_scope(J, 0);
     if (!J->global) return;
+    J->global->escaped = 1;                   /* never given back */
     J->global_obj = J->global->vars;
     js_globals(J);
 }

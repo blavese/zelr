@@ -23,6 +23,7 @@
  */
 #pragma once
 #include "js.h"
+#include "jsnum.h"
 
 typedef enum {
     T_EOF = 0, T_NUM, T_STRING, T_REGEX, T_NAME, T_PUNCT, T_KEYWORD
@@ -202,31 +203,12 @@ static void js_next(jlex *L) {
                 L->at++;
             }
         } else {
-            while (L->at < L->n && js_digit(L->src[L->at])) {
-                v = v * 10.0 + (double)(L->src[L->at] - '0');
-                L->at++;
-            }
-            if (L->at < L->n && L->src[L->at] == '.') {
-                L->at++;
-                double scale = 0.1;
-                while (L->at < L->n && js_digit(L->src[L->at])) {
-                    v += (double)(L->src[L->at] - '0') * scale;
-                    scale *= 0.1;
-                    L->at++;
-                }
-            }
-            if (L->at < L->n && (L->src[L->at] == 'e' || L->src[L->at] == 'E')) {
-                L->at++;
-                int neg = 0;
-                if (L->at < L->n && (L->src[L->at] == '+' || L->src[L->at] == '-'))
-                    neg = L->src[L->at++] == '-';
-                int e = 0;
-                while (L->at < L->n && js_digit(L->src[L->at]))
-                    e = e * 10 + (L->src[L->at++] - '0');
-                double p = 1.0;
-                for (int i = 0; i < e; i++) p *= 10.0;
-                v = neg ? v / p : v * p;
-            }
+            /* The nearest double, read exactly (jsnum.h). A digit at a time
+               against a scale that was itself rounded made 0.3 the double
+               above it. */
+            u32 used = 0;
+            v = js_decimal(L->src + L->at, (u32)(L->n - L->at), &used);
+            L->at += used;
         }
 
         L->tok.type = T_NUM;
@@ -480,6 +462,11 @@ typedef struct {
      * clause put the operator back, because an `in` inside them cannot be
      * the for-in's. */
     int   no_in;
+
+    /* How many times the name `arguments` has been read so far. A function
+       whose body did not add to it never looks at its arguments object,
+       and a call to it need not make one. */
+    int   arguments_seen;
 } jparse;
 
 #define JS_NESTED(P, stmt) do { int keep_in_ = (P)->no_in; (P)->no_in = 0; \
@@ -488,6 +475,7 @@ typedef struct {
 static int js_parse_expr(jparse *P);
 static int js_parse_assign(jparse *P);
 static int js_parse_stmt(jparse *P);
+static int js_parse_unary(jparse *P);
 
 static int js_at_punct(jparse *P, char c) {
     return P->L.tok.type == T_PUNCT && P->L.tok.len == 1
@@ -595,6 +583,7 @@ static int js_parse_primary(jparse *P) {
     if (P->L.tok.type == T_NAME) {
         int n = js_node(J, N_IDENT, line);
         if (n >= 0) J->nodes[n].str = js_str_n(J, P->L.tok.text, P->L.tok.len);
+        if (js_is_word(P->L.tok.text, P->L.tok.len, "arguments")) P->arguments_seen++;
         js_next(&P->L);
         return n;
     }
@@ -685,9 +674,30 @@ static int js_parse_primary(jparse *P) {
     return -1;
 }
 
+/* The arguments of a call, its '(' already read, as a chain of N_SEQ cells:
+   -1 for none. */
+static int js_parse_arglist(jparse *P, int line) {
+    jctx *J = P->J;
+    int head = -1, tail = -1;
+    while (!js_at_punct(P, ')') && P->L.tok.type != T_EOF) {
+        int e;
+        JS_NESTED(P, e = js_parse_assign(P));
+        int cell = js_node(J, N_SEQ, line);
+        if (cell < 0 || e < 0) break;
+        J->nodes[cell].a = e;
+        if (tail < 0) head = cell;
+        else J->nodes[tail].b = cell;
+        tail = cell;
+        if (!js_eat_punct(P, ',')) break;
+    }
+    js_expect(P, ')');
+    return head;
+}
+
 /* Calls, member access and indexing, which all bind tighter than any
-   operator and chain left to right. */
-static int js_parse_postfix(jparse *P, int left) {
+   operator and chain left to right. With `member_only`, dots and brackets
+   and nothing else, which is what may follow `new` before its arguments. */
+static int js_parse_chain(jparse *P, int left, int member_only) {
     jctx *J = P->J;
     for (;;) {
         int line = P->L.tok.line;
@@ -717,24 +727,14 @@ static int js_parse_postfix(jparse *P, int left) {
             left = n;
             continue;
         }
+        if (member_only) return left;
         if (js_at_punct(P, '(')) {
             js_next(&P->L);
             int n = js_node(J, N_CALL, line);
             if (n < 0) return left;
             J->nodes[n].a = left;
-            int tail = -1;
-            while (!js_at_punct(P, ')') && P->L.tok.type != T_EOF) {
-                int e;
-                JS_NESTED(P, e = js_parse_assign(P));
-                int cell = js_node(J, N_SEQ, line);
-                if (cell < 0 || e < 0) break;
-                J->nodes[cell].a = e;
-                if (tail < 0) J->nodes[n].b = cell;
-                else J->nodes[tail].b = cell;
-                tail = cell;
-                if (!js_eat_punct(P, ',')) break;
-            }
-            js_expect(P, ')');
+            int args = js_parse_arglist(P, line);
+            J->nodes[n].b = args;
             left = n;
             continue;
         }
@@ -753,65 +753,76 @@ static int js_parse_postfix(jparse *P, int left) {
     }
 }
 
-static int js_parse_unary(jparse *P) {
+static int js_parse_postfix(jparse *P, int left) { return js_parse_chain(P, left, 0); }
+
+/* What follows `new`: the constructor, which is names, dots and brackets
+   or another `new`, and never a call; then its arguments, if it has any.
+   The whole chain used to be read first and the last call in it taken as
+   the arguments, so `new X().y` was new of X().y rather than the y of
+   new X(), and new RegExp('a').test(s) constructed the test. */
+static int js_parse_new(jparse *P, int line) {
     jctx *J = P->J;
+    int callee;
+    if (js_at_word(P, "new")) {
+        int inner = P->L.tok.line;
+        js_next(&P->L);
+        callee = js_parse_new(P, inner);
+    } else {
+        callee = js_parse_chain(P, js_parse_primary(P), 1);
+    }
+    int n = js_node(J, N_NEW, line);
+    if (n < 0) return callee;
+    J->nodes[n].a = callee;
+    if (js_eat_punct(P, '(')) {
+        int args = js_parse_arglist(P, line);
+        J->nodes[n].b = args;
+    }
+    return n;
+}
+
+/* An operator and what it applies to. The operand is read into a local
+   before it is stored: reading it can grow the node array, which moves it,
+   and an assignment straight into J->nodes[n] may have worked out where
+   J->nodes[n] was before the move. */
+static int js_parse_prefix(jparse *P, ntype kind, int op, int line) {
+    jctx *J = P->J;
+    int n = js_node(J, kind, line);
+    int a = js_parse_unary(P);
+    if (n >= 0) { J->nodes[n].op = op; J->nodes[n].a = a; }
+    return n;
+}
+
+static int js_parse_unary(jparse *P) {
     int line = P->L.tok.line;
 
     if (js_at_word(P, "typeof")) {
         js_next(&P->L);
-        int n = js_node(J, N_TYPEOF, line);
-        if (n >= 0) J->nodes[n].a = js_parse_unary(P);
-        return n;
+        return js_parse_prefix(P, N_TYPEOF, OP_NONE, line);
     }
     if (js_at_word(P, "delete")) {
         js_next(&P->L);
-        int n = js_node(J, N_DELETE, line);
-        if (n >= 0) J->nodes[n].a = js_parse_unary(P);
-        return n;
+        return js_parse_prefix(P, N_DELETE, OP_NONE, line);
     }
     if (js_at_word(P, "void")) {
         js_next(&P->L);
-        int n = js_node(J, N_UNARY, line);
-        if (n >= 0) { J->nodes[n].op = OP_NONE; J->nodes[n].a = js_parse_unary(P); }
-        return n;
+        return js_parse_prefix(P, N_UNARY, OP_NONE, line);
     }
     if (js_at_word(P, "new")) {
         js_next(&P->L);
-        int callee = js_parse_postfix(P, js_parse_primary(P));
-        int n = js_node(J, N_NEW, line);
-        if (n >= 0) {
-            /* `new X(a, b)` parses as a call; the arguments are already on
-               it, so the node borrows them. */
-            if (callee >= 0 && J->nodes[callee].kind == N_CALL) {
-                J->nodes[n].a = J->nodes[callee].a;
-                J->nodes[n].b = J->nodes[callee].b;
-            } else {
-                J->nodes[n].a = callee;
-            }
-        }
-        return js_parse_postfix(P, n);
+        return js_parse_postfix(P, js_parse_new(P, line));
     }
 
     if (P->L.tok.type == T_PUNCT) {
         jop op = P->L.tok.op;
         if (op == OP_NOT || op == OP_BNOT || op == OP_SUB || op == OP_ADD) {
             js_next(&P->L);
-            int n = js_node(J, N_UNARY, line);
-            if (n >= 0) {
-                J->nodes[n].op = op == OP_SUB ? OP_NEG
-                               : (op == OP_ADD ? OP_POS : op);
-                J->nodes[n].a = js_parse_unary(P);
-            }
-            return n;
+            return js_parse_prefix(P, N_UNARY,
+                                   op == OP_SUB ? OP_NEG : (op == OP_ADD ? OP_POS : op),
+                                   line);
         }
         if (op == OP_INC || op == OP_DEC) {
             js_next(&P->L);
-            int n = js_node(J, N_PREINC, line);
-            if (n >= 0) {
-                J->nodes[n].op = op;
-                J->nodes[n].a = js_parse_unary(P);
-            }
-            return n;
+            return js_parse_prefix(P, N_PREINC, op, line);
         }
     }
 
@@ -897,8 +908,10 @@ static int js_finish_arrow(jparse *P, jstr **names, int count) {
     }
     J->nodes[n].c = count;
 
+    int seen = P->arguments_seen;
     if (js_at_punct(P, '{')) {
-        J->nodes[n].a = js_parse_stmt(P);
+        int body = js_parse_stmt(P);
+        J->nodes[n].a = body;
     } else {
         /* A body that is one expression is that expression returned, which
            is the whole reason anybody writes one of these. */
@@ -908,6 +921,7 @@ static int js_finish_arrow(jparse *P, jstr **names, int count) {
         J->nodes[r].a = e;
         J->nodes[n].a = r;
     }
+    J->nodes[n].d = P->arguments_seen > seen;
     return n;
 }
 
@@ -1032,7 +1046,13 @@ static int js_parse_func(jparse *P, int want_name) {
         P->L.failed = 1;
         return n;
     }
-    J->nodes[n].a = js_parse_stmt(P);
+    int seen = P->arguments_seen;
+    int body = js_parse_stmt(P);
+    J->nodes[n].a = body;
+    /* Whether anything in the body, a function inside it included, names
+       `arguments`. Counting the inner ones too only ever makes one that is
+       not needed. */
+    J->nodes[n].d = P->arguments_seen > seen;
     return n;
 }
 
@@ -1062,7 +1082,8 @@ static int js_parse_var_list(jparse *P, int line) {
         js_next(&P->L);
         if (js_at_punct(P, '=') && P->L.tok.op == OP_ASSIGN) {
             js_next(&P->L);
-            J->nodes[cell].a = js_parse_assign(P);
+            int init = js_parse_assign(P);
+            J->nodes[cell].a = init;
         }
         if (tail < 0) J->nodes[head].a = cell;
         else J->nodes[tail].b = cell;
@@ -1121,7 +1142,8 @@ static int js_try_label(jparse *P) {
     int n = js_node(J, N_LABEL, line);
     if (n < 0) return -1;
     J->nodes[n].str = name;
-    J->nodes[n].a = js_parse_stmt(P);
+    int body = js_parse_stmt(P);
+    J->nodes[n].a = body;
     return n;
 }
 
@@ -1293,8 +1315,10 @@ static int js_parse_stmt_in(jparse *P) {
         /* The one place the optional semicolon rule is not a convenience.
            A newline after return ends the statement, whatever is below. */
         if (!js_at_punct(P, ';') && !js_at_punct(P, '}')
-            && P->L.tok.type != T_EOF && !P->L.tok.nl_before)
-            J->nodes[n].a = js_parse_expr(P);
+            && P->L.tok.type != T_EOF && !P->L.tok.nl_before) {
+            int value = js_parse_expr(P);
+            J->nodes[n].a = value;
+        }
         js_semicolon(P);
         return n;
     }
@@ -1321,7 +1345,8 @@ static int js_parse_stmt_in(jparse *P) {
     }
     if (js_eat_word(P, "throw")) {
         int n = js_node(J, N_THROW, line);
-        if (n >= 0) J->nodes[n].a = js_parse_expr(P);
+        int value = js_parse_expr(P);
+        if (n >= 0) J->nodes[n].a = value;
         js_semicolon(P);
         return n;
     }
@@ -1329,7 +1354,8 @@ static int js_parse_stmt_in(jparse *P) {
     if (js_eat_word(P, "try")) {
         int n = js_node(J, N_TRY, line);
         if (n < 0) return -1;
-        J->nodes[n].a = js_parse_block(P);
+        int block = js_parse_block(P);
+        J->nodes[n].a = block;
         if (js_eat_word(P, "catch")) {
             if (js_eat_punct(P, '(')) {
                 if (P->L.tok.type == T_NAME) {
@@ -1338,9 +1364,13 @@ static int js_parse_stmt_in(jparse *P) {
                 }
                 js_expect(P, ')');
             }
-            J->nodes[n].b = js_parse_block(P);
+            block = js_parse_block(P);
+            J->nodes[n].b = block;
         }
-        if (js_eat_word(P, "finally")) J->nodes[n].c = js_parse_block(P);
+        if (js_eat_word(P, "finally")) {
+            block = js_parse_block(P);
+            J->nodes[n].c = block;
+        }
         return n;
     }
 
@@ -1406,6 +1436,7 @@ static int js_parse(jctx *J, const char *src, u32 len) {
     jparse P;
     P.J = J;
     P.no_in = 0;
+    P.arguments_seen = 0;
     P.L.J = J;
     P.L.src = src;
     P.L.n = len;

@@ -95,6 +95,35 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.43.0: the JavaScript engine's numbers, `new`, key order, errors and memory
+
+Each change has a check that was run against a build broken for it alone and seen to fail there
+(jstest, 202 cases, 58 new).
+
+- **Numbers (12 §10 B5).** `userland/jsnum.h`: correctly rounded reading (one exact operation for
+  fifteen digits and a small power of ten, exact big integers otherwise) and shortest round-trip
+  printing. The lexer, `Number()`, `parseFloat` (now the longest decimal at the front) and JSON read
+  through it. 0.1 + 0.2 prints 0.30000000000000004; 0.3 reads as the double nearest it.
+- **`new X().y` (B3).** `js_parse_new`: the constructor is a member expression and its arguments are
+  the first parentheses. The parser's `J->nodes[n].x = parse(...)` stores now go through a local
+  (B19), because parsing can move the node array.
+- **Key order and hidden properties (B13, B14).** An insertion-order list on every object;
+  `js_own_keys` gives indices ascending then insertion order, enumerable only, to for-in,
+  `Object.keys`/`values` and JSON. The engine's `__ctor__` and the like are non-enumerable
+  (`js_set_hidden`). JSON leaves out properties whose value is undefined or a function.
+- **Errors (B21).** Error, TypeError, RangeError, ReferenceError, SyntaxError and EvalError; the
+  engine throws them rather than strings; `instanceof Error` holds for all six. Found on the way:
+  `return f()` replaced a throw from f with undefined (B26).
+- **Memory.** A finished call's scope that no function value captured goes back to size-class free
+  lists; `arguments` is built only for a function whose text names it; string and array methods
+  called where they are fetched share one native each; the names looked up on every call are
+  interned. Before, each call kept about 600 bytes and a page ran out at about 40,000 calls; jstest
+  now makes 200,000 calls, string method calls and pushes.
+
+Counts after 0.43.0:
+- selftest unchanged (626, 630, 638, 651); jstest 202;
+- gate full 52 steps.
+
 ### 0.42.0: other systems' disks, names past ASCII, TLS manners, SVG paint, the colour order
 
 Each change has a check that was run against a build broken for it alone and seen to fail there.

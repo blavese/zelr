@@ -105,8 +105,8 @@ int main(void) {
 
     /* --- numbers, which are doubles ------------------------------------- */
     expect("arithmetic", "1 + 2 * 3", "7");
-    expect("a third is not zero", "1 / 3", "0.333333333333333");
-    expect("and neither is a tenth", "0.1 + 0.2", "0.3");
+    expect("a third is not zero", "1 / 3", "0.3333333333333333");
+    expect("and neither is a tenth", "0.1 + 0.2", "0.30000000000000004");
     expect("division is not integer division", "7 / 2", "3.5");
     expect("the remainder keeps its sign", "-7 % 3", "-1");
     expect("precedence and brackets", "(1 + 2) * 3", "9");
@@ -475,12 +475,125 @@ int main(void) {
     expect("a price prints as it was written", "0.57", "0.57");
     expect("another", "19.99", "19.99");
     expect("and one that sits just below its decimal", "1.15", "1.15");
-    expect("a long fraction is rounded, not cut", "100 / 3", "33.3333333333333");
+    expect("a long fraction is rounded, not cut", "100 / 3", "33.333333333333336");
     expect("a negative one", "-2.5", "-2.5");
     expect("a millionth is still a decimal", "0.000001", "0.000001");
     expect("a ten millionth is not", "1.5e-7", "1.5e-7");
     expect("a large whole number prints in full", "1e20", "100000000000000000000");
     expect("and one past that gets an exponent", "1e21", "1e+21");
+
+    /* --- decimals, read and written exactly -------------------------------
+       The shortest text that reads back as the same double, and a literal
+       read as the double nearest it. Both were done in doubles: 0.3 read as
+       the one above it, fifteen digits hid that, and 0.1 + 0.2 printed as
+       0.3 while comparing unequal to it. */
+    expect("a sum of tenths is not three tenths", "0.1 + 0.2 === 0.3", "false");
+    expect("but three tenths is", "0.3", "0.3");
+    expect("and reads as the double nearest it", "0.3 === 3 / 10", "true");
+    expect("two thirds", "2 / 3", "0.6666666666666666");
+    expect("seventeen digits where it takes seventeen",
+           "0.1234567890123456789", "0.12345678901234568");
+    expect("the smallest number there is", "5e-324", "5e-324");
+    expect("and the largest", "1.7976931348623157e308", "1.7976931348623157e+308");
+    expect("past that is infinity", "1.8e308", "Infinity");
+    expect("a whole number past two to the fifty three",
+           "Math.pow(2, 60)", "1152921504606847000");
+    expect("a halfway case read to even", "9007199254740993", "9007199254740992");
+    expect("and one a hair past halfway read up",
+           "9007199254740993.0000000001", "9007199254740994");
+    expect("a string reads the same way", "Number('0.1') + Number('0.2')",
+           "0.30000000000000004");
+    expect("parseFloat takes the decimal at the front", "parseFloat('1-2')", "1");
+    expect("and knows infinity", "parseFloat('-Infinity')", "-Infinity");
+
+    /* --- new, and what follows it -----------------------------------------
+       The constructor after `new` is names, dots and brackets; the first
+       parentheses are its arguments and anything after belongs to the
+       object made. The whole chain was read first, so new X().y was new of
+       X().y. */
+    expect("a member of something just made",
+           "(function(){ function X(){ this.y = 7; } return new X().y; })()", "7");
+    expect("a method called on something just made",
+           "new RegExp('a').test('xyz')", "false");
+    expect("a constructor found through a namespace",
+           "(function(){ var ns = { K: function(){ this.v = 3; } }; return new ns.K().v; })()",
+           "3");
+    expect("and new with no arguments at all",
+           "(function(){ function X(){ this.y = 2; } var o = new X; return o.y; })()", "2");
+
+    /* --- keys, in the order they were made --------------------------------
+       Walked by hash bucket they came out in any order, so a page that
+       built a menu from an object's keys shuffled it. The index-like keys
+       come first, smallest first, as the standard says. */
+    expect("keys in the order they were made", "Object.keys({ x: 1, y: 2, z: 3 }).join()",
+           "x,y,z");
+    expect("and JSON writes them that way", "JSON.stringify({ b: 1, a: 2 })", "{\"b\":1,\"a\":2}");
+    expect("and for-in walks them that way",
+           "(function(){ var s = ''; for (var k in { b: 1, a: 2, c: 3 }) s += k; return s; })()",
+           "bac");
+    expect("with the numbered ones first, in number order",
+           "Object.keys({ b: 1, 2: 1, 1: 1, a: 1 }).join()", "1,2,b,a");
+    expect("in number order, not text order", "Object.keys({ 10: 1, 2: 1 }).join()", "2,10");
+    expect("a key deleted and made again goes to the end",
+           "(function(){ var o = { a: 1, b: 2 }; delete o.a; o.a = 3; return Object.keys(o).join(); })()",
+           "b,a");
+    expect("and the engine's own bookkeeping is not among them",
+           "(function(){ function X(){ this.v = 1; } return Object.keys(new X()).join(); })()", "v");
+    expect("JSON leaves out a key it cannot write",
+           "JSON.stringify({ a: 1, b: undefined, c: function(){} })", "{\"a\":1}");
+
+    /* --- errors are objects -----------------------------------------------
+       The engine threw strings, so e.message was undefined, nothing it
+       raised was an Error, and there was no Error for a page to throw. */
+    expect("reading a property of null throws a TypeError, which is an Error",
+           "(function(){ try { null.x; } catch (e) {"
+           " return (e instanceof TypeError) + ':' + (e instanceof Error) + ':' + e.name; } })()",
+           "true:true:TypeError");
+    expect("a page's own Error has a message and prints with its name",
+           "(function(){ try { throw new Error('boom'); } catch (e) {"
+           " return String(e) + '|' + e.message; } })()", "Error: boom|boom");
+    expect("Error works without new", "Error('x').message", "x");
+    expect("and what is thrown through a return reaches the catch",
+           "(function(){ function g(){ throw new Error('deep'); } function f(){ return g(); }"
+           " try { f(); } catch (e) { return e.message; } })()", "deep");
+    expect("a call too deep is a RangeError",
+           "(function(){ function r(){ return r(); } try { r(); } catch (e) {"
+           " return e instanceof RangeError; } })()", "true");
+    expect("calling what is not a function says which, as a TypeError",
+           "(function(){ var o = {}; try { o.nope(); } catch (e) {"
+           " return e.name + ': ' + e.message; } })()", "TypeError: nope is not a function");
+    expect("an error's name and message are not among its keys",
+           "Object.keys(new TypeError('t')).length", "0");
+
+    /* --- memory a call gives back -----------------------------------------
+       A call's scope, its variables and its arguments object were never
+       given back, six hundred bytes a call, and a page that called a small
+       function in a loop ran out of memory in about forty thousand calls.
+       The later cases are what must not be given back: each makes the
+       thing to keep and then a thousand calls that would reuse it. */
+    expect("two hundred thousand calls to a small function",
+           "(function(){ function f(x){ return x + 1; } var n = 0;"
+           " for (var i = 0; i < 200000; i++) n = f(n); return n; })()", "200000");
+    expect("and a string method called as many times",
+           "(function(){ var s = 'abc', n = 0;"
+           " for (var i = 0; i < 200000; i++) n += s.charCodeAt(i % 3); return n; })()",
+           "19599999");
+    expect("and an array method",
+           "(function(){ var a = []; for (var i = 0; i < 200000; i++) a.push(i);"
+           " return a.length; })()", "200000");
+    expect("a closure still sees the call that made it",
+           "(function(){ function mk(v){ return function(){ return v; }; }"
+           " var c = mk('kept'); for (var i = 0; i < 1000; i++) mk('other' + i);"
+           " return c(); })()", "kept");
+    expect("arguments handed back outlive the call",
+           "(function(){ function a(){ return arguments; } var x = a(1, 2, 3);"
+           " for (var i = 0; i < 1000; i++) a(9, 9, 9); return x.join(); })()", "1,2,3");
+    expect("a closure made in a catch keeps what it caught",
+           "(function(){ var f; try { throw 7; } catch (e) { f = function(){ return e; }; }"
+           " for (var i = 0; i < 1000; i++) { try { throw i; } catch (e) {} }"
+           " return f(); })()", "7");
+    expect("and a method taken away to call later keeps its receiver",
+           "(function(){ var s = 'xyz'; var at = s.charAt; return at(1); })()", "y");
 
     /* The count, at the end. It used to be printed half way down, so every
        case after the regular expressions ran without being counted, and a

@@ -94,10 +94,10 @@ def main():
                 except (ValueError, IndexError):
                     total = 0
         print("      javascript: %d cases" % total)
-        # 162 since the count moved to the end of jstest; it was printed half
-        # way down before, and 86 was the half above it.
+        # 202 since the numbers, errors, key order and memory cases of 0.43.0;
+        # 162 before, and 86 when the count was printed half way down.
         c.add("and there are as many javascript cases as there were",
-              total >= 162)
+              total >= 202)
     finally:
         vm.stop()
         if not keep and os.path.exists(DISK):

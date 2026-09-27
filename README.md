@@ -813,6 +813,18 @@ syntax error four lines later about something unrelated. A property that is
 missing is better than one that quietly returns undefined and lets a page
 believe it worked.
 
+What it does have, it does the way every other engine does, because a page
+tested somewhere else relies on the details. A number reads as the double
+nearest its decimal and prints as the shortest decimal that reads back the
+same, so 0.1 + 0.2 is 0.30000000000000004 and not 0.3 -- the hard cases are
+worked out in whole numbers as large as they need to be. An object's keys
+come back in the order they were made, the numbered ones first. A mistake is
+an Error, a TypeError or a RangeError, with a name and a message a catch can
+look at, and `new Error('x')` is a page's own. And a call gives back what it
+used once it returns, unless a function made inside it can still reach it,
+so a loop can call a small function as often as it likes: it used to run
+out of memory in about forty thousand calls.
+
 **And the forms work.** An `<input>` used to be laid out as nothing at all:
 the layout had a name for a field and never made one, so there was no box to
 click, nothing to type into and no path from a filled in form to a request —
