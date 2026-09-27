@@ -143,7 +143,7 @@ Read from `/zelr.cfg` (preset default 1, light default 1, look default 0), with 
 | raised | `#FFFFFF` | `#2F323B` | 0 | 0 |
 | well | `#FFFFFF` | `#1B1D23` | `#FFFFFF` | `#1A1C20` |
 | edge_hi / light / shadow / dark | (= raised, raised, stroke, stroke) | same | `#FFFFFF` / `#E8E6E1` / `#868480` / `#3C3B39` | `#5A5F68` / `#3C4048` / `#1C1E22` / `#0C0D10` |
-| accent_fg | white | white | (computed) | (computed) |
+| accent_fg | white | white | white | white |
 | soft | mix(bg, accent, 40) | mix(bg, accent, 48) | same rule | same rule |
 | warn | `#E06C60` | `#E06C60` | `#E06C60` | `#E06C60` |
 
