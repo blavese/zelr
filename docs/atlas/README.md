@@ -95,6 +95,29 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.53.0: photographs three times quicker to decode
+
+- **The JPEG transform (13).** Terms whose coefficient is zero -- most of every block -- are left out of
+  both passes, exactly: jpegtest holds it to the whole formula byte for byte on 400 random blocks (it failed
+  with negative coefficients dropped). The colour conversion looks its samples up rather than dividing six
+  times a pixel (jpegtest's colour pictures failed with every plane given the brightness plane's columns).
+- Measured in a scratch jpegtest: fifty decodes of the gradient picture, 109 to 126 million cycles before,
+  37 to 38 after.
+- Tried and not kept, with the numbers: a lookup table for inflate's codes and eight-byte back-reference
+  copies, neither faster than the run-to-run spread on 179 KiB of text (13).
+- **Pipes (03 §5).** 64 KiB rather than 4, copied in one or two pieces rather than a byte at a time.
+  `[open files]`: 256 KiB between two tasks, whole, with the writer stopping for room at most 16 times
+  (failed at 4 KiB); and bytes written and read across the end of the ring in one task, in order (failed
+  with either half of the wrap's copy misplaced -- the two-task version could not see that, because on one
+  processor it keeps every copy lined up with the end of the ring).
+- **maptest (03 §4).** "The pages that arrived come back" waits up to two seconds for the collector rather
+  than reading free memory once: it failed the first run after every boot (v0.49.1 too), which failed the
+  0.53.0 gate on its first try. Still fails with unmap's pages never freed.
+
+Counts after 0.53.0:
+- selftest 666 (pc, 64 MiB), 672 (256 MiB), 679 (q35), 693 (`-smp 4`), in 51 sections;
+- gate full 53 steps.
+
 ### 0.52.0: the rest of the programs that polled
 
 - **The browser (11 §5).** It drew only when something changed but looked sixty times a second, for the

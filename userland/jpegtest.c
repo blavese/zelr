@@ -231,6 +231,54 @@ int main(void) {
             heap_live() <= before, (int)(heap_live() - before));
     }
 
+    /* --- the transform with the zeroes left out ------------------------------
+     *
+     * jpg_idct skips the terms whose coefficient is zero, which is most of
+     * them, and says every byte is what the whole formula gives. So it is
+     * held to that: the whole formula, written out here as it was, against
+     * the decoder's, on blocks as sparse as a photograph's and on full ones,
+     * byte for byte. */
+    {
+        jpg_cos_init();
+        u32 seed = 12345;
+        int same = 1, blocks = 0;
+        for (int b = 0; b < 400 && same; b++) {
+            int coef[64];
+            int keep = b % 5 == 4 ? 64 : 1 + b % 12;   /* mostly sparse, some full */
+            for (int i = 0; i < 64; i++) coef[i] = 0;
+            for (int i = 0; i < keep; i++) {
+                seed = seed * 1103515245u + 12345u;
+                int at = (int)((seed >> 16) % 64);
+                seed = seed * 1103515245u + 12345u;
+                coef[at] = (int)((seed >> 16) % 2001) - 1000;
+            }
+            u8 fast[64], whole[64];
+            jpg_idct(coef, fast, 8);
+
+            float tmp[64];
+            for (int y = 0; y < 8; y++)
+                for (int x = 0; x < 8; x++) {
+                    float sum = 0;
+                    for (int u = 0; u < 8; u++) sum += JPG_COS[u][x] * (float)coef[y * 8 + u];
+                    tmp[y * 8 + x] = sum;
+                }
+            for (int x = 0; x < 8; x++)
+                for (int y = 0; y < 8; y++) {
+                    float sum = 0;
+                    for (int v = 0; v < 8; v++) sum += JPG_COS[v][y] * tmp[v * 8 + x];
+                    int val = (int)(sum + 128.5f);
+                    if (val < 0) val = 0;
+                    if (val > 255) val = 255;
+                    whole[y * 8 + x] = (u8)val;
+                }
+            for (int i = 0; i < 64; i++) if (fast[i] != whole[i]) same = 0;
+            blocks++;
+        }
+        okn("the transform without its zero terms is the whole formula, byte for byte",
+            same && blocks == 400, blocks);
+    }
+
+
     puts(failed ? "JPEGTEST_FAIL\n" : "JPEGTEST_PASS\n");
     return failed;
 }

@@ -18,7 +18,25 @@
  * empty again and go back to sleep.
  */
 
-static u32 live;
+static u32 live, stalls;
+
+u32 pipe_stalls(void) { return stalls; }
+
+/* In one or two pieces, because the ring wraps once at most between where it
+   is and where it ends. It went a byte at a time, with a division for each. */
+static void ring_in(pipe_t *p, const u8 *in, u32 n) {
+    u32 first = PIPE_SIZE - p->tail < n ? PIPE_SIZE - p->tail : n;
+    memcpy(p->buf + p->tail, in, first);
+    if (n > first) memcpy(p->buf, in + first, n - first);
+    p->tail = (p->tail + n) % PIPE_SIZE;
+}
+
+static void ring_out(pipe_t *p, u8 *out, u32 n) {
+    u32 first = PIPE_SIZE - p->head < n ? PIPE_SIZE - p->head : n;
+    memcpy(out, p->buf + p->head, first);
+    if (n > first) memcpy(out + first, p->buf, n - first);
+    p->head = (p->head + n) % PIPE_SIZE;
+}
 
 /* A wait that has gone on this long has almost certainly deadlocked — a
  * program on both ends of its own pipe, writing more than fits before it
@@ -60,11 +78,7 @@ int pipe_read(pipe_t *p, void *dst, u32 len) {
     }
 
     u32 n = p->count < len ? p->count : len;
-    u8 *out = (u8 *)dst;
-    for (u32 i = 0; i < n; i++) {
-        out[i] = p->buf[p->head];
-        p->head = (p->head + 1) % PIPE_SIZE;
-    }
+    ring_out(p, (u8 *)dst, n);
     p->count -= n;
 
     /* Room appeared, so anything that stopped for want of it can go on. */
@@ -86,6 +100,7 @@ int pipe_write(pipe_t *p, const void *src, u32 len) {
         if (p->readers == 0) return done ? (int)done : -1;
 
         if (p->count == PIPE_SIZE) {
+            stalls++;
             if (!wait_on(&p->has_space, PIPE_POLL_MS)) {
                 waited += PIPE_POLL_MS;
                 if (waited >= PIPE_GIVE_UP_MS) return done ? (int)done : -1;
@@ -97,10 +112,7 @@ int pipe_write(pipe_t *p, const void *src, u32 len) {
         u32 room = PIPE_SIZE - p->count;
         u32 n = len - done;
         if (n > room) n = room;
-        for (u32 i = 0; i < n; i++) {
-            p->buf[p->tail] = in[done + i];
-            p->tail = (p->tail + 1) % PIPE_SIZE;
-        }
+        ring_in(p, in + done, n);
         p->count += n;
         done += n;
 

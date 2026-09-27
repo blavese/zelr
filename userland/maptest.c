@@ -117,7 +117,20 @@ int main(void) {
 
     /* --- giving it back -------------------------------------------------- */
     ok("a mapping can be given back", unmap(p, BIG) == 0);
+
+    /* Waited for, rather than read once. The two children above have ended,
+       and what they held comes back when the kernel collects them, which it
+       does on its own time rather than the moment wait_for returns: measured,
+       about sixty kilobytes were still out just after the second one, and
+       none three tenths of a second later. Read at once, the first run after
+       a boot came out sixty eight kilobytes short and failed, on a kernel
+       giving everything back. So it looks again for up to two seconds: pages
+       that never come back still fail it. */
     u32 after_unmap = free_kb();
+    for (int i = 0; i < 40 && (int)after_unmap - (int)after_touch < 48; i++) {
+        sleep_ms(50);
+        after_unmap = free_kb();
+    }
     ok("and the pages that arrived come back",
        (int)after_unmap - (int)after_touch >= 48);
     puts("      giving it back moved memory by ");

@@ -218,15 +218,32 @@ static inline void jpg_cos_init(void) {
     JPG_COS_READY = 1;
 }
 
+/* Still the formula, with the terms that are nothing left out.
+ *
+ * After quantisation most of a block's sixty four coefficients are zero --
+ * a flat patch of sky is one number and sixty three zeroes -- and the
+ * formula multiplied every one of them by its cosine and added the zero in,
+ * a thousand multiplications a block for a handful that mattered. Adding a
+ * zero, of either sign, to a sum leaves the sum as it was, and the terms that
+ * are left are added in the same order as before, so every byte that comes
+ * out is the byte that came out of the whole formula. A row with no
+ * coefficients at all is zero across and is not walked in the second pass. */
 static inline void jpg_idct(const int *in, u8 *out, int stride) {
     float tmp[64];
+    int live[8];
 
     /* rows */
     for (int y = 0; y < 8; y++) {
+        const int *row = in + y * 8;
+        live[y] = row[0] | row[1] | row[2] | row[3] | row[4] | row[5] | row[6] | row[7];
+        if (!live[y]) {
+            for (int x = 0; x < 8; x++) tmp[y * 8 + x] = 0.0f;
+            continue;
+        }
         for (int x = 0; x < 8; x++) {
             float sum = 0;
             for (int u = 0; u < 8; u++)
-                sum += JPG_COS[u][x] * (float)in[y * 8 + u];
+                if (row[u]) sum += JPG_COS[u][x] * (float)row[u];
             tmp[y * 8 + x] = sum;
         }
     }
@@ -236,7 +253,7 @@ static inline void jpg_idct(const int *in, u8 *out, int stride) {
         for (int y = 0; y < 8; y++) {
             float sum = 0;
             for (int v = 0; v < 8; v++)
-                sum += JPG_COS[v][y] * tmp[v * 8 + x];
+                if (live[v]) sum += JPG_COS[v][y] * tmp[v * 8 + x];
 
             int val = (int)(sum + 128.5f);
             if (val < 0) val = 0;
@@ -503,7 +520,30 @@ done:
         return JPG_TOO_BIG;
     }
 
+    /* Where along its row each plane's sample for a column is. It was worked
+       out with a division per plane per pixel, six divisions a pixel between
+       the rows and the columns; the columns are the same on every row, so
+       they are worked out once, and the rows once a row. */
+    int *xs = (int *)malloc((u32)(s.w * 3) * sizeof(int));
+    if (!xs) {
+        free(rgb);
+        for (int i = 0; i < JPG_COMPONENTS; i++)
+            if (s.comp[i].pix) free(s.comp[i].pix);
+        return JPG_TOO_BIG;
+    }
+    if (s.ncomp != 1)
+        for (int c = 0; c < 3; c++)
+            for (int x = 0; x < s.w; x++)
+                xs[c * s.w + x] = x * s.comp[c].h / s.hmax;
+
     for (int y = 0; y < s.h; y++) {
+        const u8 *ry = 0, *rb = 0, *rr = 0;
+        if (s.ncomp != 1) {
+            jcomp *cy = &s.comp[0], *cb = &s.comp[1], *cr = &s.comp[2];
+            ry = cy->pix + (y * cy->v / s.vmax) * (cy->bw * 8);
+            rb = cb->pix + (y * cb->v / s.vmax) * (cb->bw * 8);
+            rr = cr->pix + (y * cr->v / s.vmax) * (cr->bw * 8);
+        }
         for (int x = 0; x < s.w; x++) {
             int r, g, b;
 
@@ -511,14 +551,9 @@ done:
                 jcomp *c = &s.comp[0];
                 r = g = b = c->pix[y * (c->bw * 8) + x];
             } else {
-                jcomp *cy = &s.comp[0], *cb = &s.comp[1], *cr = &s.comp[2];
-
-                int yy = cy->pix[(y * cy->v / s.vmax) * (cy->bw * 8)
-                                 + (x * cy->h / s.hmax)];
-                int u = cb->pix[(y * cb->v / s.vmax) * (cb->bw * 8)
-                                + (x * cb->h / s.hmax)] - 128;
-                int v = cr->pix[(y * cr->v / s.vmax) * (cr->bw * 8)
-                                + (x * cr->h / s.hmax)] - 128;
+                int yy = ry[xs[x]];
+                int u = rb[xs[s.w + x]] - 128;
+                int v = rr[xs[2 * s.w + x]] - 128;
 
                 /* The conversion the format specifies, in whole numbers
                    scaled by 1024 so no rounding creeps in per pixel. */
@@ -535,6 +570,7 @@ done:
             px[0] = (u8)r; px[1] = (u8)g; px[2] = (u8)b;
         }
     }
+    free(xs);
 
     for (int i = 0; i < JPG_COMPONENTS; i++)
         if (s.comp[i].pix) free(s.comp[i].pix);

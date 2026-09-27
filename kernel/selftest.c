@@ -1482,6 +1482,94 @@ static void test_frame_drawing(void) {
     kfree(got);
 }
 
+/* A quarter of a megabyte through a pipe, a task at each end.
+ *
+ * Whole, first, since the ring now goes in and out in one or two copies
+ * rather than a byte at a time with a division each. And without the writer
+ * stopping more than a few times: every time it finds the pipe full it
+ * stops and the reader has to be scheduled to empty it, and at four
+ * kilobytes that was sixty four stops for this. */
+static pipe_t *pt_pipe;
+static volatile u32 pt_got, pt_sum;
+static volatile int pt_done;
+
+static void pipe_reader_task(void) {
+    /* Odd sizes at both ends, so reads and writes land across the end of the
+       ring and back to its start: sizes that divide the ring never take the
+       second copy, so a check written with them could not see it broken. */
+    static u8 buf[1500];
+    for (;;) {
+        int n = pipe_read(pt_pipe, buf, sizeof buf);
+        if (n <= 0) break;
+        for (int i = 0; i < n; i++) pt_sum = pt_sum * 31 + buf[i];
+        pt_got += (u32)n;
+    }
+    pipe_close(pt_pipe, false);
+    pt_done = 1;
+    task_exit_with(0);
+}
+
+static u8 pipe_pattern(u32 k) { return (u8)(k * 13 + (k >> 7)); }
+
+static void test_pipe_big(void) {
+    /* Round the end of the ring and back, in one task. Two tasks cannot be
+       relied on for it: on one processor the reader runs only once the pipe
+       is full, empties all of it, and the writer starts again from the top,
+       so every copy stays lined up with the end of the ring -- a check done
+       that way passed with the wrap's second copy put in the wrong place.
+       So: forty thousand in, thirty thousand out, forty thousand more in
+       across the end, and fifty thousand out across it again. */
+    {
+        pipe_t *r = pipe_new();
+        u8 *buf = (u8 *)kmalloc(50000);
+        bool whole = r && buf;
+        u32 at = 0, got_at = 0;
+        for (int step = 0; whole && step < 4; step++) {
+            u32 n = step == 0 || step == 2 ? 40000 : (step == 1 ? 30000 : 50000);
+            if (step % 2 == 0) {
+                for (u32 i = 0; i < n; i++) buf[i] = pipe_pattern(at + i);
+                whole = pipe_write(r, buf, n) == (int)n;
+                at += n;
+            } else {
+                whole = pipe_read(r, buf, n) == (int)n;
+                for (u32 i = 0; whole && i < n; i++) whole = buf[i] == pipe_pattern(got_at + i);
+                got_at += n;
+            }
+        }
+        ok("bytes that go round the end of a pipe's ring come out in order", whole && got_at == 80000);
+        if (r) { pipe_close(r, true); pipe_close(r, false); }
+        kfree(buf);
+    }
+
+    u32 total = 256 * 1024, chunk = 10007;
+    u8 *src = (u8 *)kmalloc(chunk);
+    pt_pipe = pipe_new();
+    if (!src || !pt_pipe) { kfree(src); kprintf("  SKIP  no memory for a pipe\n"); return; }
+    pt_got = pt_sum = 0;
+    pt_done = 0;
+    task_t *t = task_create("pipereader", pipe_reader_task);
+    if (!t) { kfree(src); pipe_close(pt_pipe, true); pipe_close(pt_pipe, false); return; }
+
+    u32 want = 0, sent = 0, s0 = pipe_stalls();
+    while (sent < total) {
+        u32 n = total - sent < chunk ? total - sent : chunk;
+        for (u32 i = 0; i < n; i++) {
+            src[i] = (u8)((sent + i) * 7 + ((sent + i) >> 9));
+            want = want * 31 + src[i];
+        }
+        if (pipe_write(pt_pipe, src, n) != (int)n) break;
+        sent += n;
+    }
+    u32 stopped = pipe_stalls() - s0;
+    pipe_close(pt_pipe, true);
+    for (int i = 0; i < 500 && !pt_done; i++) sleep_ms(10);
+    ok("a quarter of a megabyte goes through a pipe whole",
+       sent == total && pt_done && pt_got == total && pt_sum == want);
+    ok("and the writer stops for room only a few times, not sixty four", stopped <= 16);
+    task_wait(t->pid);
+    kfree(src);
+}
+
 static window_t *winwait_win;
 static volatile int winwait_state;      /* 1 asleep, 2 woken, 3 timed out */
 
@@ -4958,7 +5046,7 @@ int selftest_run(void) {
     kprintf("[filesystem]\n"); test_fs();
     kprintf("[paths]\n");      test_paths();
     kprintf("[directories]\n"); test_directories();
-    kprintf("[open files]\n");  test_open_files();
+    kprintf("[open files]\n");  test_open_files(); test_pipe_big();
     kprintf("[timer]\n");      test_timer();
     kprintf("[interrupts]\n"); test_interrupts();
     kprintf("[disk]\n");       test_disk();

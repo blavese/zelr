@@ -14,13 +14,17 @@
  * program already spells end of file, and a pipeline whose left hand side
  * has finished must not hang its right hand side forever.
  *
- * The buffer is fixed and small. A pipe is not storage: anything that wants
- * to hold four kilobytes of output is holding it in its own memory, and a
- * pipe that grew to fit whatever was poured into it would turn a program
- * that forgot to read into a machine that ran out of memory.
+ * The buffer is fixed. A pipe is not storage: a pipe that grew to fit
+ * whatever was poured into it would turn a program that forgot to read into
+ * a machine that ran out of memory. It is sixty four kilobytes rather than
+ * the four it was, because every time a writer fills it the writer stops and
+ * the reader has to be scheduled to empty it: at four kilobytes a megabyte
+ * through `a | b` was two hundred and fifty of those turns, and at sixty four
+ * it is sixteen. What that costs is heap, per pipe, and a program holds at
+ * most a handful.
  */
 
-#define PIPE_SIZE 4096u
+#define PIPE_SIZE 65536u
 
 typedef struct pipe {
     u8  buf[PIPE_SIZE];
@@ -62,3 +66,7 @@ u32 pipe_count(const pipe_t *p);
 /* How many pipes exist right now, which is a leak check: a shell that ran a
    thousand pipelines should be back at zero. */
 u32 pipe_live(void);
+
+/* How many times since boot a writer found a pipe full and had to stop, which
+   is how many turns a big write took. */
+u32 pipe_stalls(void);

@@ -209,7 +209,9 @@ Includes `zelr.h`, `alloc.h` and `png.h` (for `picture`, which also pulls in `in
 **IDCT**
 * `static float JPG_COS[8][8]` and `JPG_COS_READY` (`:181-182`) form a process-global table initialised lazily.
 * `jpg_cos_init` (`:184-219`) computes `cos((2x+1)uπ/16)` as a double Taylor series with 11 terms, after reducing the angle into [−π, π]. The comment `:194-203` records the bug this fixed: without the reduction, the series at 20 rad produced noise for every frequency above the first two. The table is pre-scaled by `1/√8` for u=0 and `1/2` otherwise.
-* `jpg_idct(in, out, stride)` (`:221-247`) is a separable 8-point IDCT in float, rows then columns, about 1024 multiply-adds per block. It adds the level shift and rounds with `(int)(sum + 128.5f)`, then clamps to 0..255.
+* `jpg_idct(in, out, stride)` (`:221-247`) is a separable 8-point IDCT in float, rows then columns, about 1024 multiply-adds per block. It adds the level shift and rounds with `(int)(sum + 128.5f)`, then clamps to 0..255. Since 0.53.0 it leaves out the terms whose coefficient is zero (a row with none is zero across and skipped in the column pass); adding a signed zero leaves a float sum unchanged and the remaining terms keep their order, so every byte is the formula's. jpegtest compares it with the whole formula on 400 random blocks, byte for byte. Fifty decodes of `JPG_GRADIENT` took 109-126 million cycles and take 37-38 million.
+* Since 0.53.0 the colour conversion finds each plane's sample column from a table built once (`xs`, `x * h / hmax` per plane) and each plane's row once a row, where it did six integer divisions a pixel.
+* Tried for 0.53.0 and not kept: a nine-bit lookup table for inflate's Huffman codes, and copying back-references eight bytes at a time. Inflating 179 KiB of text (a zlib -9 stream made on the host) took 121 million cycles before and 122-144 with either, within the run-to-run spread, and the table made the tests' small pictures slower to build. Where inflate's time goes is not yet known; state kept behind a pointer that every output byte may alias is the next thing to look at.
 
 **Blocks and scan**
 * `jpg_block` (`:250-283`) decodes one block:

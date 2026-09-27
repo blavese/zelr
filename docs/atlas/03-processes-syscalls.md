@@ -204,7 +204,7 @@ Constants: `USER_CODE_BASE = USER_SPACE_BASE + 0x40000000` (=0x8040000000, where
 
 **`user_sbrk(delta)`** (user.c:156): lazily sets brk_base=brk=USER_HEAP_BASE on first call. delta==0 returns current. Negative: just lowers brk (never unmaps -- "the saving is a page"). Positive: reject wrap, reject > USER_HEAP_MAX; maps each new page with alloc_user_page; returns the old break. Returns 0 on failure (out of frames / over the ceiling).
 
-**mmap** (user.c:230): `user_mmap(len, prot)` rounds len up to pages, rejects > MMAP window size, finds a free vma slot (reuses base==0 slots, else grows nvma up to VMA_MAX), then walks USER_MMAP_BASE upward a page at a time to the lowest gap that fits (via `vma_clear`), records base/len/prot, returns base. Nothing is mapped. `user_munmap(at, len)` -- whole ranges only (matches base && len exactly); frees the pages that arrived (via virt_to_phys_in), clears the vma, `paging_switch` to flush.
+**mmap** (user.c:230): `user_mmap(len, prot)` rounds len up to pages, rejects > MMAP window size, finds a free vma slot (reuses base==0 slots, else grows nvma up to VMA_MAX), then walks USER_MMAP_BASE upward a page at a time to the lowest gap that fits (via `vma_clear`), records base/len/prot, returns base. Nothing is mapped. `user_munmap(at, len)` -- whole ranges only (matches base && len exactly); frees the pages that arrived (via virt_to_phys_in), clears the vma, `paging_switch` to flush. It does not free the page-table pages over the range, which stay until the address space goes (measured in maptest: about 8 KiB for 16 pages a megabyte apart, and reused by the next mapping there). A child's memory comes back when the collector reaches it, not when `wait_for` returns: maptest saw 56-64 KiB still out just after two children ended and none 300 ms later, and its "pages that arrived come back" failed on the first run after every boot until 0.53.0, when it began waiting up to two seconds for them.
 
 **`user_fault_fill(addr, err)`** (user.c:286) -- called from the page-fault path in isr_dispatch:
 - `if (err & 1) return false` -- present page = not a missing page (COW already had its chance).
@@ -265,7 +265,7 @@ Constants: `USER_CODE_BASE = USER_SPACE_BASE + 0x40000000` (=0x8040000000, where
 
 ### kernel/pipe.c
 
-`PIPE_SIZE 4096` (fixed, small -- "a pipe is not storage"). `PIPE_GIVE_UP_MS 10000` (deadlock escape), `PIPE_POLL_MS 200` (safety-net re-check under the wakeups). `pipe_t` (pipe.h:25): `u8 buf[4096]`, `u32 head/tail/count`, `u16 readers/writers`, `u8 has_data, has_space` (distinct wait-channel addresses).
+`PIPE_SIZE 4096` (fixed, small -- "a pipe is not storage"; 65536 since 0.53.0: at 4096 every 4 KiB of `a | b` stopped the writer and needed the reader scheduled, and the ring is copied in and out in one or two `memcpy` pieces (`ring_in`, `ring_out`) where it went a byte at a time with a modulo each; `pipe_stalls()` counts a writer finding it full, and `[open files]` sends 256 KiB through between two tasks, whole and with at most 16 stalls, and separately writes and reads 40000/30000/40000/50000 bytes in one task so both halves of each copy across the end of the ring are taken -- two tasks on one processor keep every copy lined up with the end, and that version passed with the wrap's second copy misplaced). `PIPE_GIVE_UP_MS 10000` (deadlock escape), `PIPE_POLL_MS 200` (safety-net re-check under the wakeups). `pipe_t` (pipe.h:25): `u8 buf[4096]`, `u32 head/tail/count`, `u16 readers/writers`, `u8 has_data, has_space` (distinct wait-channel addresses).
 
 - `pipe_new()`: kcalloc, readers=1, writers=1, `live++`.
 - `pipe_read(p, dst, len)`: loop while count==0 -- if writers==0 return 0 (EOF); else `wait_on(&has_data, 200)`, giving up after 10 s (returns 0). Copies min(count,len), advances head, `count -= n`, `wake_all(&has_space)`. Never returns less than available.
@@ -452,7 +452,7 @@ Complete table (number, kernel handler, sdk wrapper, args → return):
 | USER_ARGV_MAX | 64 | user.h:25 | max argv words |
 | ARGV_BYTES | 2048 | syscall.c:126 | argv string store |
 | OF_MAX | 32 | fd.c:30 | open file descriptions |
-| PIPE_SIZE | 4096 | pipe.h:23 | pipe ring buffer |
+| PIPE_SIZE | 4096 (65536 since 0.53.0) | pipe.h:23 | pipe ring buffer |
 | PIPE_GIVE_UP_MS | 10000 | pipe.c:28 | pipe deadlock escape |
 | PIPE_POLL_MS | 200 | pipe.c:33 | pipe wakeup safety net |
 | POLL_MAX | 16 | fd.h:91 | fds per poll |
