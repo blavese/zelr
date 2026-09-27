@@ -24,9 +24,39 @@
 #include "zelr.h"
 
 /* Milliseconds since this machine started, which is what CLOCKS_PER_SEC of
-   1000 promises. */
+   1000 promises.
+ *
+ * ticks() counts the timer, which runs at a hundred a second, and this
+ * returned it as it was: every duration a program measured came out a tenth
+ * of its length. The rate is read from /sys/uptime rather than written down
+ * here, so a kernel that changes it does not quietly break this again. */
+static long tick_hz;
+
+static long hz_now(void) {
+    if (tick_hz) return tick_hz;
+    char buf[256];
+    int n = slurp("/sys/uptime", buf, (int)sizeof(buf) - 1);
+    long hz = 0;
+    if (n > 0) {
+        buf[n] = 0;
+        /* "... at N Hz" */
+        for (int i = 0; i + 3 < n; i++) {
+            if (buf[i] != 'a' || buf[i + 1] != 't' || buf[i + 2] != ' ') continue;
+            long v = 0;
+            int j = i + 3;
+            while (j < n && buf[j] >= '0' && buf[j] <= '9') v = v * 10 + (buf[j++] - '0');
+            if (v > 0 && j + 3 <= n && buf[j] == ' ' && buf[j + 1] == 'H' && buf[j + 2] == 'z') {
+                hz = v;
+                break;
+            }
+        }
+    }
+    tick_hz = hz > 0 ? hz : 100;
+    return tick_hz;
+}
+
 clock_t clock(void) {
-    return (clock_t)ticks();
+    return (clock_t)((long long)ticks() * 1000 / hz_now());
 }
 
 /* The standard's answer for "this machine cannot tell you" is (time_t)-1,

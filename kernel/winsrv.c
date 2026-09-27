@@ -154,7 +154,7 @@ static void free_slot(slot_t *s) {
 }
 
 int winsrv_create(u32 pid, const char *title, int cw, int ch) {
-    if (cw < 32 || ch < 32 || cw > 1600 || ch > 1200) return -1;
+    if (cw < 32 || ch < 32 || cw > WINSRV_MAX_W || ch > WINSRV_MAX_H) return -1;
 
     int handle = -1;
     for (int i = 0; i < WINSRV_MAX; i++)
@@ -241,8 +241,8 @@ u64 winsrv_surface(u32 pid, int handle, u64 dir) {
     u64 base = WINSRV_SURFACE_BASE + (u64)handle * WINSRV_SURFACE_STEP;
     for (u64 off = 0; off < s->bytes; off += PAGE_SIZE) {
         u64 phys = (u64)s->pixels + off;      /* identity mapped, so this is it */
-        if (!map_page_in(dir, base + off, phys, PTE_PRESENT | PTE_RW | PTE_USER)) {
-            for (u64 back = 0; back < off; back += PAGE_SIZE) unmap_page(base + back);
+        if (!map_page_in(dir, base + off, phys, PTE_PRESENT | PTE_RW | PTE_USER | PTE_BORROWED)) {
+            for (u64 back = 0; back < off; back += PAGE_SIZE) unmap_page_in(dir, base + back);
             return 0;
         }
     }
@@ -281,7 +281,7 @@ bool winsrv_poll(u32 pid, int handle, wm_event_t *out) {
  * which is only safe because nothing else can run in that address space
  * while this is happening. */
 static bool resize_slot(slot_t *s, int cw, int ch) {
-    if (cw < 32 || ch < 32 || cw > 1600 || ch > 1200) return false;
+    if (cw < 32 || ch < 32 || cw > WINSRV_MAX_W || ch > WINSRV_MAX_H) return false;
     if (!s->win) return false;
     if (s->win->cw == cw && s->win->ch == ch) return true;
 
@@ -316,14 +316,14 @@ static bool resize_slot(slot_t *s, int cw, int ch) {
 
         for (u64 off = 0; off < bytes; off += PAGE_SIZE) {
             if (map_page_in(s->dir, s->user_addr + off, (u64)pixels + off,
-                            PTE_PRESENT | PTE_RW | PTE_USER)) continue;
+                            PTE_PRESENT | PTE_RW | PTE_USER | PTE_BORROWED)) continue;
             /* Out of frames partway through. Put the old pages back rather
                than leaving the program with half a surface. */
             for (u64 back = 0; back < off; back += PAGE_SIZE)
                 unmap_page_in(s->dir, s->user_addr + back);
             for (u64 old = 0; old < s->bytes; old += PAGE_SIZE)
                 map_page_in(s->dir, s->user_addr + old, (u64)s->pixels + old,
-                            PTE_PRESENT | PTE_RW | PTE_USER);
+                            PTE_PRESENT | PTE_RW | PTE_USER | PTE_BORROWED);
             kfree(raw);
             kfree(shown_raw);
             return false;
@@ -386,7 +386,7 @@ bool winsrv_allow_resize(u32 pid, int handle) {
    exactly as it is until the program next calls in. */
 bool winsrv_resize_window(window_t *w, int cw, int ch) {
     if (!w) return false;
-    if (cw < 32 || ch < 32 || cw > 1600 || ch > 1200) return false;
+    if (cw < 32 || ch < 32 || cw > WINSRV_MAX_W || ch > WINSRV_MAX_H) return false;
     if (w->cw == cw && w->ch == ch) return true;
 
     w->want_cw = cw;

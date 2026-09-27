@@ -40,10 +40,59 @@ static jval js_throw(jctx *J, const char *what, int line) {
  *
  * What is here is the practical version: whole numbers inside the range a
  * double represents exactly are printed as integers, and everything else
- * gets up to ten significant places with the trailing zeros removed. That is
- * exact for every integer a page is likely to hold and close for the rest,
- * and where it differs it differs in the last place rather than the first.
+ * gets fifteen significant digits, rounded, with the trailing zeros removed
+ * -- seventeen for a whole number too large to be exact, so that it prints
+ * in full. Fifteen is the most a double always carries, so a decimal that
+ * was written with fewer comes back as it was written.
+ *
+ * It used to cut after ten places rather than round, and a double sits a
+ * hair below most decimals: 0.57 printed as 0.5699999999, 19.99 as
+ * 19.9899999999, on every page that showed a price. Whole numbers between
+ * 2^63 and 10^21 went through a cast that overflowed and printed bytes that
+ * were not digits.
+ *
+ * Where this still differs from the standard is where the shortest exact
+ * form needs sixteen or seventeen digits: 0.1 + 0.2 prints as 0.3.
  */
+static const double JS_POW10[23] = {
+    1e0,  1e1,  1e2,  1e3,  1e4,  1e5,  1e6,  1e7,  1e8,  1e9,  1e10, 1e11,
+    1e12, 1e13, 1e14, 1e15, 1e16, 1e17, 1e18, 1e19, 1e20, 1e21, 1e22
+};
+
+/* d times ten to the k. Each step is one multiplication or division by a
+   power of ten a double holds exactly, so it is rounded once per step. */
+static double js_scale10(double d, int k) {
+    while (k > 22)  { d *= 1e22; k -= 22; }
+    while (k < -22) { d /= 1e22; k += 22; }
+    return k >= 0 ? d * JS_POW10[k] : d / JS_POW10[-k];
+}
+
+/* The first `sig` significant digits of d, which is positive and finite,
+   rounded to nearest, into dig; how many are left once trailing zeros go;
+   and in *exp10 the power of ten of the first. */
+static int js_sig_digits(double d, int sig, char *dig, int *exp10) {
+    int e = 0;
+    double t = d;
+    while (t >= 10.0) { t /= 10.0; e++; }
+    while (t < 1.0)   { t *= 10.0; e--; }
+
+    /* The estimate above can be one out either way; the scaled value says
+       which, since it has to have exactly `sig` digits before the point. */
+    double lo = JS_POW10[sig - 1], hi = JS_POW10[sig];
+    double s = js_scale10(d, sig - 1 - e);
+    if (s >= hi)     { e++; s = js_scale10(d, sig - 1 - e); }
+    else if (s < lo) { e--; s = js_scale10(d, sig - 1 - e); }
+
+    long long v = (long long)(s + 0.5);
+    if ((double)v >= hi) { v /= 10; e++; }          /* 9.99... rounded to 10 */
+    for (int i = sig - 1; i >= 0; i--) { dig[i] = (char)('0' + (int)(v % 10)); v /= 10; }
+
+    int n = sig;
+    while (n > 1 && dig[n - 1] == '0') n--;
+    *exp10 = e;
+    return n;
+}
+
 static u32 js_num_text(double d, char *out, u32 cap) {
     u32 w = 0;
     if (cap < 32) { if (cap) out[0] = 0; return 0; }
@@ -56,7 +105,7 @@ static u32 js_num_text(double d, char *out, u32 cap) {
         out[w] = 0;
         return w;
     }
-    if (d > 1.7e308 || d < -1.7e308) {
+    if ((d - d) != (d - d)) {                    /* infinite: inf - inf is NaN */
         const char *s = d < 0 ? "-Infinity" : "Infinity";
         while (*s) out[w++] = *s++;
         out[w] = 0;
@@ -79,23 +128,22 @@ static u32 js_num_text(double d, char *out, u32 cap) {
         return w;
     }
 
-    /* Very large or very small, where a plain decimal would be all zeros. */
-    if (d >= 1e21 || (d > 0 && d < 1e-6)) {
-        int e = 0;
-        while (d >= 10.0) { d /= 10.0; e++; }
-        while (d < 1.0)   { d *= 10.0; e--; }
-        if (neg) out[w++] = '-';
-        long long lead = (long long)d;
-        out[w++] = (char)('0' + (int)lead);
-        d -= (double)lead;
-        if (d > 1e-10) {
+    /* Seventeen digits for a whole number too big to be held exactly, so it
+       prints in full the way the standard prints it; fifteen otherwise. */
+    char dig[18];
+    int e = 0;
+    int big_whole = d >= 9007199254740992.0 && d < 1e21;
+    int n = js_sig_digits(d, big_whole ? 17 : 15, dig, &e);
+
+    if (neg) out[w++] = '-';
+
+    /* Very large or very small, where a plain decimal would be mostly
+       zeros: one digit, the rest after a point, and the power of ten. */
+    if (e >= 21 || e < -6) {
+        out[w++] = dig[0];
+        if (n > 1) {
             out[w++] = '.';
-            for (int i = 0; i < 9 && d > 1e-10; i++) {
-                d *= 10.0;
-                int dig = (int)d;
-                out[w++] = (char)('0' + dig);
-                d -= (double)dig;
-            }
+            for (int i = 1; i < n; i++) out[w++] = dig[i];
         }
         out[w++] = 'e';
         if (e < 0) { out[w++] = '-'; e = -e; } else out[w++] = '+';
@@ -108,27 +156,19 @@ static u32 js_num_text(double d, char *out, u32 cap) {
         return w;
     }
 
-    if (neg) out[w++] = '-';
-    long long whole = (long long)d;
-    double frac = d - (double)whole;
-    char rev[24];
-    int r = 0;
-    if (!whole) rev[r++] = '0';
-    long long t = whole;
-    while (t) { rev[r++] = (char)('0' + (int)(t % 10)); t /= 10; }
-    while (r) out[w++] = rev[--r];
-
-    if (frac > 0) {
-        u32 dot = w;
-        out[w++] = '.';
-        for (int i = 0; i < 10; i++) {
-            frac *= 10.0;
-            int dig = (int)frac;
-            out[w++] = (char)('0' + dig);
-            frac -= (double)dig;
+    if (e >= 0) {
+        /* e + 1 digits before the point, padded with zeros if the number
+           ran out of significant ones first. */
+        for (int i = 0; i <= e; i++) out[w++] = i < n ? dig[i] : '0';
+        if (n > e + 1) {
+            out[w++] = '.';
+            for (int i = e + 1; i < n; i++) out[w++] = dig[i];
         }
-        while (w > dot + 1 && out[w - 1] == '0') w--;
-        if (w == dot + 1) w = dot;
+    } else {
+        out[w++] = '0';
+        out[w++] = '.';
+        for (int i = 0; i < -e - 1; i++) out[w++] = '0';
+        for (int i = 0; i < n; i++) out[w++] = dig[i];
     }
     out[w] = 0;
     return w;
@@ -517,7 +557,10 @@ static jval js_call(jctx *J, jval fn, jval this_val, jval *argv, int argc) {
         return js_throw(J, "too many nested calls", J->error_line);
 
     jobj *f = fn.obj;
-    if (f->kind == JO_NATIVE) return f->fn(J, this_val, argv, argc);
+    if (f->kind == JO_NATIVE) {
+        J->callee = f;
+        return f->fn(J, this_val, argv, argc);
+    }
 
     /* An arrow function carries the receiver it was written under. */
     {
@@ -560,15 +603,22 @@ static jval js_call(jctx *J, jval fn, jval this_val, jval *argv, int argc) {
 
 /* --- what you can do to a function ----------------------------------------
  *
- * The function itself is on the wrapper as __fn__, put there by js_get when
- * the method was fetched; the object to treat as `this` is the first
- * argument for call and apply, and the rest are the arguments.
+ * In `f.call(x, 1)` the function to run is `this`: the method was fetched
+ * from f, so f is what the call hands over as the receiver, exactly as it
+ * would for any other method. The object to treat as `this` inside f is the
+ * first argument, and the rest are the arguments.
  *
- * bind returns a fresh native holding both, so calling it later runs the
- * original with the receiver it was bound to. What it does not do is keep
- * the arguments bound alongside the receiver, which is the other half of
- * bind and is rarer; it says so rather than dropping them silently, by
- * passing on whatever it is called with.
+ * All four of these used to look for the function on `this` under __fn__,
+ * which is where js_get puts it on the wrapper -- and `this` is not the
+ * wrapper, it is f, which has no __fn__. So every call, apply and bind threw
+ * "this is not a function", on every page that used them, Google's front
+ * page included. The wrapper's own __fn__ is still consulted, through
+ * J->callee, when the method was taken off the function and called on its
+ * own, which is lenient rather than standard.
+ *
+ * bind returns a fresh native holding the function, the receiver and any
+ * arguments given after it, so calling it later runs the original with the
+ * receiver it was bound to and those arguments in front of its own.
  */
 static jval fn_held(jctx *J, jval self) {
     if (self.t != JS_OBJ || !self.obj) return js_undef();
@@ -576,8 +626,15 @@ static jval fn_held(jctx *J, jval self) {
     return p ? p->v : js_undef();
 }
 
+/* The function a call, apply or bind is about: `this`, when it is one. */
+static jval fn_target(jctx *J, jval t, jobj *wrapper) {
+    if (t.t == JS_OBJ && t.obj && (t.obj->kind == JO_FUNC || t.obj->kind == JO_NATIVE))
+        return t;
+    return wrapper ? fn_held(J, js_from_obj(wrapper)) : js_undef();
+}
+
 static jval nat_fn_call(jctx *J, jval t, jval *a, int n) {
-    jval fn = fn_held(J, t);
+    jval fn = fn_target(J, t, J->callee);
     jval who = n > 0 ? a[0] : js_undef();
     jval rest[JS_ARGS_MAX];
     int m = 0;
@@ -586,7 +643,7 @@ static jval nat_fn_call(jctx *J, jval t, jval *a, int n) {
 }
 
 static jval nat_fn_apply(jctx *J, jval t, jval *a, int n) {
-    jval fn = fn_held(J, t);
+    jval fn = fn_target(J, t, J->callee);
     jval who = n > 0 ? a[0] : js_undef();
 
     /* The second argument is an array of them, which is the whole
@@ -602,22 +659,43 @@ static jval nat_fn_apply(jctx *J, jval t, jval *a, int n) {
     return js_call(J, fn, who, rest, m);
 }
 
+/* A bound function being called: what it holds is on itself, which only
+   J->callee can say -- `this` here is whatever the caller supplied, and is
+   exactly what a bound function ignores. */
 static jval nat_fn_bound(jctx *J, jval t, jval *a, int n) {
-    jval fn = fn_held(J, t);
-    jval who = js_undef();
-    if (t.t == JS_OBJ && t.obj) {
-        jprop *p = js_find(t.obj, js_str(J, "__bound__"));
-        if (p) who = p->v;
+    (void)t;
+    jobj *self = J->callee;
+    if (!self) return js_throw(J, "this is not a function", J->error_line);
+    jval fn = fn_held(J, js_from_obj(self));
+    jprop *p = js_find(self, js_str(J, "__bound__"));
+    jval who = p ? p->v : js_undef();
+
+    /* The arguments given to bind, then the ones given now. */
+    jval all[JS_ARGS_MAX];
+    int m = 0;
+    jprop *pre = js_find(self, js_str(J, "__args__"));
+    if (pre && pre->v.t == JS_OBJ && pre->v.obj && pre->v.obj->kind == JO_ARRAY) {
+        jobj *arr = pre->v.obj;
+        for (u32 i = 0; i < arr->len && m < JS_ARGS_MAX; i++) all[m++] = arr->items[i];
     }
-    return js_call(J, fn, who, a, n);
+    for (int i = 0; i < n && m < JS_ARGS_MAX; i++) all[m++] = a[i];
+    return js_call(J, fn, who, all, m);
 }
 
 static jval nat_fn_bind(jctx *J, jval t, jval *a, int n) {
-    jval fn = fn_held(J, t);
+    jval fn = fn_target(J, t, J->callee);
+    if (fn.t != JS_OBJ) return js_throw(J, "bind needs a function", J->error_line);
     jobj *out = js_native(J, "bound", nat_fn_bound);
     if (!out) return js_undef();
     js_set(J, out, "__fn__", fn);
     js_set(J, out, "__bound__", n > 0 ? a[0] : js_undef());
+    if (n > 1) {
+        jobj *pre = js_array(J);
+        if (pre) {
+            for (int i = 1; i < n; i++) js_arr_push(J, pre, a[i]);
+            js_set(J, out, "__args__", js_from_obj(pre));
+        }
+    }
     return js_from_obj(out);
 }
 
@@ -2561,6 +2639,7 @@ static int js_eval_text(jctx *J, const char *src, u32 len, jval *out) {
 
     jparse P;
     P.J = J;
+    P.no_in = 0;
     P.L.J = J;
     P.L.src = src;
     P.L.n = len;

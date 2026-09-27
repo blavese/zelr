@@ -26,6 +26,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from harness import Guest, Checks, build_once, ROOT      # noqa: E402
@@ -85,7 +86,23 @@ def main():
         vm = Guest(image, memory=256, reuse=True)
         vm.wait_boot()
 
-        out = vm.fresh("foreign one two", timeout=60)
+        # Driven rather than run to the prompt, because the program stops
+        # half way to read a line and then counts a second by clock(); the
+        # second is timed here, by this machine's clock rather than the
+        # guest's.
+        mark = len(vm.serial())
+        want = vm.prompts() + 1
+        vm.type("foreign one two\n")
+        asked = vm.wait_serial("type a line:", timeout=60)
+        if asked:
+            vm.type("a line for stdin\n")
+        started = vm.wait_serial("clock start", timeout=30)
+        t0 = time.time()
+        finished = vm.wait_serial("clock done", timeout=40)
+        took = time.time() - t0
+        vm.wait_prompt(want, timeout=30)
+        out = vm.serial()[mark:]
+
         c.add("typing its name runs it", "LIBC_HELLO_OK" in out)
         if "LIBC_HELLO_OK" not in out:
             print("      got: %r" % out.strip()[-800:])
@@ -128,6 +145,25 @@ def main():
         c.add("a file written with fprintf reads back with fgets",
               "read back: written by a foreign program" in out
               and "read back: second line" in out)
+
+        # atan used another series and came out 0.6046 for atan(1).
+        c.add("atan is right to six places", "atan(1)*4 = 3.141593" in out)
+        c.add("and atan2 knows its quadrant", "atan2(1,-1) = 2.356194" in out)
+
+        # fputc stored into a buffer fwrite had left full, one byte past its
+        # end, which is the descriptor of the FILE next to it.
+        c.add("a character after a full buffer does not spill into the next file",
+              "next: the next file is intact" in out)
+        c.add("and arrives in its own", "fill: 4097 bytes" in out)
+
+        # stdin was a console that read nothing, so this got end of file.
+        c.add("stdin reads what was typed", asked and "stdin said: a line for stdin" in out)
+
+        # clock() counted ticks as milliseconds, ten times too slow, so a
+        # second by it took ten.
+        c.add("a second by clock() is about a second",
+              started and finished and 0.4 < took < 5.0)
+        print("      a second by clock() took %.1f s here" % took)
     finally:
         if vm:
             vm.stop()

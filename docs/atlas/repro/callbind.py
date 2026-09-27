@@ -1,8 +1,9 @@
 """Function.prototype.call, apply and bind do not work in the JS engine.
 
 Found by reading (docs/atlas/12-js-engine.md section 10) and reproduced here
-on 2026-09-26 against commit 6048716. Not a gate step: it is the evidence and
-the starting point for a fix, and it is expected to report BROKEN until then.
+on 2026-09-26 against commit 6048716. Fixed in 0.40.0, after which this
+reports WORKS and exits 0. Not a gate step: jstest checks the same three
+methods, and bind's partial arguments, on every gate run.
 
 Why it happens. Reading `f.call` returns a native wrapper with the target
 stored on it as `__fn__` (userland/jsrun.h:450-460). When the wrapper is then

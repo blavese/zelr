@@ -47,6 +47,7 @@ SUITES = [
     ("maptest",   "MAPTEST_PASS",   "memory that costs what it is used", 180),
     ("durtest",   "DURTEST_PASS",   "saying now about a file, and renaming one", 180),
     ("polltest",  "POLLTEST_PASS",  "waiting on several descriptors at once", 180),
+    ("cputest",   "CPUTEST_PASS",   "a process's memory stays its own", 240),
 ]
 
 
@@ -93,8 +94,10 @@ def main():
                 except (ValueError, IndexError):
                     total = 0
         print("      javascript: %d cases" % total)
+        # 162 since the count moved to the end of jstest; it was printed half
+        # way down before, and 86 was the half above it.
         c.add("and there are as many javascript cases as there were",
-              total >= 86)
+              total >= 162)
     finally:
         vm.stop()
         if not keep and os.path.exists(DISK):

@@ -469,7 +469,21 @@ static int js_node(jctx *J, ntype kind, int line) {
 typedef struct {
     jlex  L;
     jctx *J;
+
+    /* Set while reading the first clause of a `for`, where `in` is not the
+     * operator but the word that makes it a for-in.
+     *
+     * Without it the clause was read as an expression, `k in o` became a
+     * test of whether o has a property k, and `for (k in o)` failed with
+     * "expected ;, not )" -- the form a minifier produces whenever the
+     * variable was declared earlier. Brackets and function bodies inside the
+     * clause put the operator back, because an `in` inside them cannot be
+     * the for-in's. */
+    int   no_in;
 } jparse;
+
+#define JS_NESTED(P, stmt) do { int keep_in_ = (P)->no_in; (P)->no_in = 0; \
+                                stmt; (P)->no_in = keep_in_; } while (0)
 
 static int js_parse_expr(jparse *P);
 static int js_parse_assign(jparse *P);
@@ -593,7 +607,8 @@ static int js_parse_primary(jparse *P) {
     if (js_at_word(P, "function")) return js_parse_func(P, 0);
 
     if (js_eat_punct(P, '(')) {
-        int e = js_parse_expr(P);
+        int e;
+        JS_NESTED(P, e = js_parse_expr(P));
         js_expect(P, ')');
         return e;
     }
@@ -605,7 +620,8 @@ static int js_parse_primary(jparse *P) {
         int head = js_node(J, N_ARRAY, line);
         int tail = -1;
         while (!js_at_punct(P, ']') && P->L.tok.type != T_EOF) {
-            int e = js_parse_assign(P);
+            int e;
+            JS_NESTED(P, e = js_parse_assign(P));
             int cell = js_node(J, N_SEQ, line);
             if (cell < 0 || e < 0) break;
             J->nodes[cell].a = e;
@@ -648,7 +664,8 @@ static int js_parse_primary(jparse *P) {
             }
             js_next(&P->L);
             js_expect(P, ':');
-            int v = js_parse_assign(P);
+            int v;
+            JS_NESTED(P, v = js_parse_assign(P));
 
             int cell = js_node(J, N_SEQ, line);
             if (cell < 0 || v < 0) break;
@@ -690,7 +707,8 @@ static int js_parse_postfix(jparse *P, int left) {
             continue;
         }
         if (js_eat_punct(P, '[')) {
-            int idx = js_parse_expr(P);
+            int idx;
+            JS_NESTED(P, idx = js_parse_expr(P));
             js_expect(P, ']');
             int n = js_node(J, N_INDEX, line);
             if (n < 0) return left;
@@ -706,7 +724,8 @@ static int js_parse_postfix(jparse *P, int left) {
             J->nodes[n].a = left;
             int tail = -1;
             while (!js_at_punct(P, ')') && P->L.tok.type != T_EOF) {
-                int e = js_parse_assign(P);
+                int e;
+                JS_NESTED(P, e = js_parse_assign(P));
                 int cell = js_node(J, N_SEQ, line);
                 if (cell < 0 || e < 0) break;
                 J->nodes[cell].a = e;
@@ -806,7 +825,7 @@ static int js_parse_binary(jparse *P, int min_prec) {
     for (;;) {
         jop op = OP_NONE;
         if (P->L.tok.type == T_PUNCT) op = P->L.tok.op;
-        else if (js_at_word(P, "in")) op = OP_IN;
+        else if (!P->no_in && js_at_word(P, "in")) op = OP_IN;
         else if (js_at_word(P, "instanceof")) op = OP_INSTANCEOF;
 
         int prec = js_prec(op);
@@ -1106,7 +1125,17 @@ static int js_try_label(jparse *P) {
     return n;
 }
 
+static int js_parse_stmt_in(jparse *P);
+
+/* A statement is outside the reach of any for clause around it: a function
+   body written inside one has the `in` operator back. */
 static int js_parse_stmt(jparse *P) {
+    int r;
+    JS_NESTED(P, r = js_parse_stmt_in(P));
+    return r;
+}
+
+static int js_parse_stmt_in(jparse *P) {
     jctx *J = P->J;
     {
         int lab = js_try_label(P);
@@ -1218,7 +1247,9 @@ static int js_parse_stmt(jparse *P) {
         (void)declared;
 
         if (!js_at_punct(P, ';')) {
+            P->no_in = 1;
             init = js_parse_expr(P);
+            P->no_in = 0;
             if (js_at_word(P, "in")) {
                 js_next(&P->L);
                 int obj = js_parse_expr(P);
@@ -1229,6 +1260,10 @@ static int js_parse_stmt(jparse *P) {
                 J->nodes[n].c = init;       /* the target, as an expression */
                 J->nodes[n].a = obj;
                 J->nodes[n].b = body;
+                /* Not declared. js_node starts every field at -1, which the
+                   loop reads as true; this form was unreachable until the
+                   clause stopped swallowing `in`, so nothing had noticed. */
+                J->nodes[n].d = 0;
                 return n;
             }
             int wrap = js_node(J, N_EXPRSTMT, line);
@@ -1370,6 +1405,7 @@ static int js_parse_stmt(jparse *P) {
 static int js_parse(jctx *J, const char *src, u32 len) {
     jparse P;
     P.J = J;
+    P.no_in = 0;
     P.L.J = J;
     P.L.src = src;
     P.L.n = len;

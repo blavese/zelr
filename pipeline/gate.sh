@@ -521,6 +521,12 @@ if [ "$MODE" = "screen" ] || [ "$MODE" = "full" ]; then
   # program cannot stop the kernel's own tasks.
   hangtest() { keep timeout 900 python tools/hangcheck.py; }
 
+  # Files bigger than the buffers three programs used to read them into: a
+  # copy and a move in the terminal, and an edit saved in Notes, each read
+  # back off the disk image on this side byte for byte. Each used to lose
+  # the end of the file without a word.
+  bigfiletest() { keep timeout 600 python tools/bigfilecheck.py; }
+
   # The second boot of a machine, which is the one nothing else reaches:
   # every other check starts the kernel directly and never asks a firmware
   # to start from the disk the kernel formatted.
@@ -593,6 +599,7 @@ if [ "$MODE" = "screen" ] || [ "$MODE" = "full" ]; then
   par_start "a form is filled in and arrives as it was filled in" formtest
   par_start "bodies arrive compressed and connections are kept" wiretest
   par_start "a server that never answers does not stop the machine" hangtest
+  par_start "big files are copied, moved and saved whole" bigfiletest
   par_start "a machine still starts once it has formatted its disk" boottest
   par_start "ctrl+f finds a word that is on the screen" findtest
   par_start "a deal reaches the cloth and the dealer plays it out" gametest
@@ -626,7 +633,8 @@ stale() {
 rm -f gate.img gateq.img gatenv.img deskcheck.img termcheck.img shotcheck.img sel.img blackbox.img 2>/dev/null
 for pat in 'gpttest.*.img' 'fat32test.*.img' 'nvmetest.*.img' 'clipcheck.*.img' \
            'shotcheck.*.img' 'termcheck.*.img' 'deskcheck.*.img' 'usbcheck.*.img' \
-           'fat32probe.*.txt' 'fat32high.*.txt' 'hangcheck.*.img' 'mounttrace.*.log'; do
+           'fat32probe.*.txt' 'fat32high.*.txt' 'hangcheck.*.img' 'mounttrace.*.log' \
+           'bigfile.*.img' 'bigfile.*.big' 'bigfile.*.huge'; do
   stale "$pat"
 done
 rm -f build/*.ppm 2>/dev/null

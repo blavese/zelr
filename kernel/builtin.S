@@ -247,6 +247,13 @@ builtin_hangtest_start:
 .incbin "build/user/hangtest.elf"
 builtin_hangtest_end:
 
+.balign 4
+.global builtin_cputest_start
+.global builtin_cputest_end
+builtin_cputest_start:
+.incbin "build/user/cputest.elf"
+builtin_cputest_end:
+
 .global builtin_jsprobe_start
 .global builtin_jsprobe_end
 builtin_jsprobe_start:

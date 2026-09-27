@@ -164,6 +164,15 @@ int main(void) {
         okn("and one that stops part way says that instead",
             png_decode(PNG_FILTERS, 20, &p, 0) == PNG_TRUNCATED, PNG_TRUNCATED);
 
+        /* Cut off just after a chunk's header, claiming a body that is not
+           there. The bounds check went negative with fewer than twelve bytes
+           left and let the claim through, so the decoder walked on past the
+           end of the file instead of saying it had stopped. */
+        static const u8 CUT[16] = { 0x89, 'P', 'N', 'G', '\r', '\n', 0x1A, '\n',
+                                    0, 0, 1, 0, 't', 'E', 'X', 't' };
+        okn("and one cut off at a chunk header is truncated, not read past",
+            png_decode(CUT, 16, &p, 0) == PNG_TRUNCATED, PNG_TRUNCATED);
+
         /* An interlaced file is refused rather than drawn wrongly: it
            arrives in seven passes and this reads one. */
         static u8 lace[sizeof(PNG_FILTERS)];

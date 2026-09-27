@@ -398,6 +398,7 @@ instead.
     python tools/abicheck.py    the structs the kernel writes and programs read
     python tools/netcheck.py    click for an address, see if one arrives
     python tools/hangcheck.py   wait on a server that never answers, carry on
+    python tools/bigfilecheck.py  copy, move and save files past the old buffers
     python tools/shots.py       retake the screenshots in this readme
 
 The Windows launcher lives in `launcher/` and is built with
@@ -1364,12 +1365,12 @@ byte.
 ## testing
 
 The kernel tests itself. `./run.sh -T` boots with selftest on the command line,
-runs 582 checks across every subsystem, then writes to QEMU's debug-exit port
+runs 595 checks across every subsystem, then writes to QEMU's debug-exit port
 so the host gets a real exit status.
 
     [string]                8 checks   [live tree]            19 checks
     [the identity map]      2 checks   [layout]                9 checks
-    [physical memory]       4 checks   [waiting]              16 checks
+    [physical memory]       5 checks   [waiting]              16 checks
     [paging]                5 checks   [trackpad]             25 checks
     [user access]           5 checks   [crypto]               22 checks
     [heap]                  5 checks   [sha-256]              15 checks
@@ -1388,17 +1389,17 @@ so the host gets a real exit status.
     [mouse]                 4 checks   [black box]            21 checks
     [graphics]             13 checks   [acpi and pcie]         4 checks
     [windows]               7 checks   [interrupt routing]     9 checks
-    [window server]        19 checks   [clipboard]            14 checks
+    [window server]        31 checks   [clipboard]            14 checks
     [built-in programs]     8 checks   [clock]                18 checks
     [theme]                19 checks   [sound]                  skipped
     [taskbar]              18 checks   [kernel stack]          2 checks
 
-    582 passed, 0 failed
+    595 passed, 0 failed
     SELFTEST_PASS
 
 The sound section is skipped because `run.sh` attaches no sound card, and the
 identity map is checked in four more places when there is more memory to map:
-given 256 MiB, as the gate gives it, the same run is 586.
+given 256 MiB, as the gate gives it, the same run is 599.
 
 Two of the sections are about what happens when something goes wrong half
 way, which a machine that keeps its power cannot show. `[fat]` makes the
@@ -1407,7 +1408,10 @@ leaves a leak rather than an entry pointing at free space, and hides a
 directory from the reclaim to check it then frees nothing. `[tls 1.3]`
 holds the order of the server's handshake to account: a finished message
 with no signature before it, which is a server that has not shown it holds
-the certificate's key, is refused by name.
+the certificate's key, is refused by name. `[window server]` closes a window
+in the middle of a resize, lets go of the right button, forks a process with
+a window and tears down one whose window is still mapped, and maximises a
+program's window on a screen switched to 1920 wide.
 
 The cryptographic sections are all known answers from published documents:
 the hashes against FIPS 180, AES-GCM against the NIST vectors, X25519
@@ -1421,10 +1425,10 @@ talk to anybody.
 The processor section is four checks on a machine with one CPU and fifteen
 on a machine with several, where it hands work to each of them and requires
 the count they share to come back exact. `qemu-system-x86_64 -smp 4` with
-256 MiB reaches 597.
+256 MiB reaches 610.
 
 The same checks run again on `-machine q35`, which has PCIe and an AHCI
-controller rather than a 1996 chipset and a PIO disk, and reach 594 there.
+controller rather than a 1996 chipset and a PIO disk, and reach 607 there.
 Two bugs found the day that was added were invisible on the older machine:
 the block layer would not split a request past the eight sectors AHCI
 accepts, and the ACPI tables were never read on a UEFI machine at all.

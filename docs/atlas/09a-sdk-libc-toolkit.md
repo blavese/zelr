@@ -807,11 +807,11 @@ libc malloc alignment and `realloc`, `strtok`, printf edge cases (`%hd`, `%#x` w
     connection" (kernel-side contradiction; the single-TLS limit is enforced at `:786-787`, matching `zelr.h:439-442`).
 
 ### 10.2 Suspected bugs (verified by reading; consequences by reasoning)
-1. **`atan` is mathematically wrong** -- `math.c:215-223`. The loop computes `Σ (2i)!!/(2i+1)!! · z^(2i+1)` with
+1. **FIXED in 0.40.0 (see atlas README). `atan` is mathematically wrong** -- `math.c:215-223`. The loop computes `Σ (2i)!!/(2i+1)!! · z^(2i+1)` with
    `z = x/(1+x²)`, `z2 = z*z`. Euler's series needs the ratio `x²/(1+x²)` (= `x*z`), not `z²`. The code's sum equals
    `asin(z)/sqrt(1-z²)`: `atan(1)` → 0.6046 (true 0.7854), `atan(0.5)` → 0.4490 (true 0.4636); agrees with atan only to
    O(x⁵) (`x - x³/3 - 7x⁵/15` vs `+x⁵/5`). `atan2` inherits it. Fix: `double z2 = x * z;`.
-2. **`fputc` buffer overflow** -- `stdio.c:253`. `fwrite` can leave `len == FBUF` (`:274-284` flushes only when a chunk
+2. **FIXED in 0.40.0 (see atlas README). `fputc` buffer overflow** -- `stdio.c:253`. `fwrite` can leave `len == FBUF` (`:274-284` flushes only when a chunk
    finds the buffer already full), then `fputc` stores `buf[4096]` before flushing. `files[]` is contiguous and
    `buf` ends the struct (sizeof 4144), so the byte lands on the next FILE's `fd` low byte (e.g. stdout overflow turns
    stderr's fd from -1 into 0xFFFFFF78 → all stderr output then fails). Trigger: exactly 4096 buffered bytes via

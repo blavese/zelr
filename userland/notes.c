@@ -12,16 +12,26 @@
  */
 #include "zelr.h"
 #include "ui.h"
+#include "alloc.h"
 
-#define BUF_MAX   65536
 #define PATH_MAX  256
 
-static char buf[BUF_MAX];
+/* As big as the file needs, grown as it is typed into.
+ *
+ * It was a fixed 64 KiB. A longer file opened with its end missing and no
+ * word said, and saving it -- which is what anybody does after opening a
+ * file -- wrote the shortened copy over the whole one. */
+static char *buf;
+static int  cap;
 static int  len;
 static int  cursor;
 static int  dirty;
 static char path[PATH_MAX];
 static char status[128];
+
+/* A file that could not be read whole. Saving is refused for it, because
+   what is in the buffer is not what is on the disk. */
+static int  partial;
 
 static int  scroll_line;          /* first line drawn */
 static int  sel_anchor = -1;      /* where a selection started, -1 for none */
@@ -33,8 +43,26 @@ static void say(const char *m) {
     status[sizeof(status) - 1] = 0;
 }
 
+/* Room for `need` characters and the terminator, or false with the buffer
+   untouched. Doubled rather than grown to fit, so typing one character at
+   a time does not reallocate on every key. */
+static int reserve(int need) {
+    if (need < 0) return 0;
+    if (need + 1 <= cap) return 1;
+    int n = cap ? cap : 4096;
+    while (n < need + 1) {
+        if (n > 0x40000000) return 0;
+        n *= 2;
+    }
+    char *bigger = (char *)realloc(buf, (u64)n);
+    if (!bigger) return 0;
+    buf = bigger;
+    cap = n;
+    return 1;
+}
+
 static void insert_text(const char *text, int n) {
-    if (len + n >= BUF_MAX) { say("file is full"); return; }
+    if (!reserve(len + n)) { say("not enough memory for that"); return; }
     for (int i = len; i >= cursor; i--) buf[i + n] = buf[i];
     for (int i = 0; i < n; i++) buf[cursor + i] = text[i];
     len += n;
@@ -110,14 +138,21 @@ static void move_line(int delta) {
 /* --- files ---------------------------------------------------------------- */
 
 static void load(const char *from) {
-    int n = slurp(from, buf, BUF_MAX - 1);
-    if (n < 0) {
+    partial = 0;
+    zelr_stat st;
+    if (stat(from, &st) != 0 || st.is_dir) {
         len = 0; buf[0] = 0;
         say("new file");
+    } else if (!reserve((int)st.size)) {
+        len = 0; buf[0] = 0;
+        partial = 1;
+        say("too big to open here");
     } else {
-        len = n;
+        int n = slurp(from, buf, (int)st.size);
+        len = n > 0 ? n : 0;
         buf[len] = 0;
-        say("opened");
+        if (n != (int)st.size) { partial = 1; say("could not read all of it, so it cannot be saved"); }
+        else say("opened");
     }
     cursor = 0;
     scroll_line = 0;
@@ -129,6 +164,7 @@ static void load(const char *from) {
 
 static void save(void) {
     if (!path[0]) { say("no filename"); return; }
+    if (partial) { say("not saved: this is not the whole file"); return; }
     if (spit(path, buf, len) < 0) { say("could not save"); return; }
     dirty = 0;
     say("saved");
@@ -151,14 +187,16 @@ static void copy_selection(int cut) {
 static void paste(void) {
     int n = clip_len();
     if (n <= 0) { say("clipboard is empty"); return; }
-    if (n > BUF_MAX - len - 1) { say("too much to paste"); return; }
 
-    static char incoming[BUF_MAX];
-    n = clip_get(incoming, sizeof(incoming));
-    if (n <= 0) return;
-    if (has_selection()) { delete_range(sel_low(), sel_high()); sel_anchor = -1; }
-    insert_text(incoming, n);
-    say("pasted");
+    char *incoming = (char *)malloc((u64)n + 1);
+    if (!incoming) { say("not enough memory for that"); return; }
+    n = clip_get(incoming, n + 1);
+    if (n > 0) {
+        if (has_selection()) { delete_range(sel_low(), sel_high()); sel_anchor = -1; }
+        insert_text(incoming, n);
+        say("pasted");
+    }
+    free(incoming);
 }
 
 /* --- the window ----------------------------------------------------------- */
@@ -167,6 +205,7 @@ static void paste(void) {
 #define GUTTER_W  (5 * MONO_W)
 
 int main(int argc, char **argv) {
+    if (!reserve(0)) exit(1);                 /* somewhere for the terminator */
     int win = win_create("Notes", 700, 520);
     if (win < 0) exit(1);
     win_allow_resize(win);

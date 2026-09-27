@@ -142,10 +142,10 @@ static u32 render_cpu(char *b, u32 cap) {
     for (u32 i = 0; i < smp_cpu_count(); i++) {
         const cpu_t *c = smp_cpu(i);
         if (!c) continue;
-        put(&o, "cpu%-6d apic %d, %-8s %d slices, %d ticks, %d busy\n",
+        put(&o, "cpu%-6d apic %d, %-8s %d slices, %d ticks, %d busy, %d kept\n",
             i, c->apic_id, c->started ? "running" : "halted",
             (u32)c->user_slices, (u32)c->local_ticks,
-            (u32)c->lock_misses);
+            (u32)c->lock_misses, (u32)c->lock_kept);
     }
     return o.len;
 }

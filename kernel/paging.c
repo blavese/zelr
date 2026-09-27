@@ -30,7 +30,22 @@
 #define ENTRIES 512
 
 static u64 *kernel_pml4;
-static u64 *current_pml4;
+
+/* The address space this processor is in, which is whatever CR3 says.
+ *
+ * It was one variable for the machine, set by every paging_switch on every
+ * processor, while CR3 is per processor. On one processor the two agreed.
+ * With four, a program running on one of the others was told the live
+ * directory was the kernel's, or some other program's, whichever processor
+ * had switched last: its system call pointers were checked against the
+ * wrong memory, a copy on write fault was looked up in the wrong table, and
+ * a fork skipped the TLB flush it needed. The register cannot be wrong about
+ * the processor reading it. */
+static inline u64 *live_pml4(void) {
+    u64 cr3;
+    __asm__ volatile ("mov %%cr3, %0" : "=r"(cr3));
+    return (u64 *)(cr3 & PTE_ADDR_MASK);
+}
 
 static inline u64 index_of(u64 virt, int level) {
     /* level 4 is the PML4, 1 is the page table */
@@ -145,13 +160,13 @@ static bool map_in(u64 *pml4, u64 virt, u64 phys, u64 flags) {
     u64 *pt = table_for(pml4, virt, true, flags);
     if (!pt) return false;
     pt[index_of(virt, 1)] = (phys & PTE_ADDR_MASK) | (flags & 0xFFF) | PTE_PRESENT;
-    if (pml4 == current_pml4)
+    if (pml4 == live_pml4())
         __asm__ volatile ("invlpg (%0)" :: "r"(virt) : "memory");
     return true;
 }
 
 bool map_page(u64 virt, u64 phys, u64 flags) {
-    return map_in(current_pml4, virt, phys, flags);
+    return map_in(live_pml4(), virt, phys, flags);
 }
 
 bool map_page_in(u64 pml4_phys, u64 virt, u64 phys, u64 flags) {
@@ -172,11 +187,11 @@ void unmap_page_in(u64 pml4_phys, u64 virt) {
     u64 *pt = table_for((u64 *)pml4_phys, virt, false, 0);
     if (!pt) return;
     pt[index_of(virt, 1)] = 0;
-    if (pml4_phys == (u64)current_pml4)
+    if (pml4_phys == (u64)live_pml4())
         __asm__ volatile ("invlpg (%0)" :: "r"(virt) : "memory");
 }
 
-void unmap_page(u64 virt) { unmap_page_in((u64)current_pml4, virt); }
+void unmap_page(u64 virt) { unmap_page_in((u64)live_pml4(), virt); }
 
 /* How many top-level entries the kernel's own mappings occupy. Each covers
    512 GiB, so in practice this is one, and sharing it shares everything the
@@ -209,7 +224,7 @@ static void free_table(u64 *table, int level) {
         if (level > 1) {
             free_table((u64 *)below, level - 1);
             pmm_free_frame(below);
-        } else if (e & PTE_USER) {
+        } else if ((e & PTE_USER) && !(e & PTE_BORROWED)) {
             pmm_free_frame(below);
         }
     }
@@ -270,6 +285,11 @@ static bool copy_table(u64 *dst, u64 *src, int level) {
         }
 
         if (!(e & PTE_USER)) { dst[i] = e; continue; }
+
+        /* A window's surface stays the parent's alone: the child has no
+           window, and the parent must keep writing to the frame the desktop
+           reads. See PTE_BORROWED. */
+        if (e & PTE_BORROWED) { dst[i] = 0; continue; }
 
         /* Shared, when the machine can keep count of it. Both entries lose
            the write bit. */
@@ -381,7 +401,7 @@ u64 paging_clone_directory(u64 src_phys) {
        writes through to a page it is now sharing and the child sees the
        change -- which is a fork that did not fork, and would show up as
        one program's memory being quietly edited by another. */
-    if (src_phys == (u64)current_pml4) paging_switch(src_phys);
+    if (src_phys == (u64)live_pml4()) paging_switch(src_phys);
     return fresh;
 }
 
@@ -405,11 +425,10 @@ void paging_free_directory(u64 pml4_phys) {
 
 void paging_switch(u64 pml4_phys) {
     if (!pml4_phys) return;
-    current_pml4 = (u64 *)pml4_phys;
     __asm__ volatile ("mov %0, %%cr3" :: "r"(pml4_phys) : "memory");
 }
 
-u64 paging_current_directory(void) { return (u64)current_pml4; }
+u64 paging_current_directory(void) { return (u64)live_pml4(); }
 u64 paging_kernel_directory(void)  { return (u64)kernel_pml4; }
 
 u64 virt_to_phys_in(u64 pml4_phys, u64 virt) {
@@ -418,7 +437,7 @@ u64 virt_to_phys_in(u64 pml4_phys, u64 virt) {
 }
 
 u64 virt_to_phys(u64 virt) {
-    return virt_to_phys_in((u64)current_pml4, virt);
+    return virt_to_phys_in((u64)live_pml4(), virt);
 }
 
 /* Checks every level. A table shared with the kernel can carry the user bit
@@ -438,6 +457,16 @@ bool virt_is_user_in(u64 pml4_phys, u64 virt) {
     return (pte & PTE_PRESENT) && (pte & PTE_USER);
 }
 
+/* Whether the last level lets the page be written, which copy on write takes
+   away. Only the leaf is asked: every table above a user page is writable. */
+bool paging_entry_writable(u64 pml4_phys, u64 virt) {
+    if (!pml4_phys) return false;
+    u64 *pt = table_for((u64 *)pml4_phys, virt, false, 0);
+    if (!pt) return false;
+    u64 pte = pt[index_of(virt, 1)];
+    return (pte & PTE_PRESENT) && (pte & PTE_RW);
+}
+
 #define HUGE_SIZE (2ull * 1024 * 1024)
 
 /* How much of memory ended up identity mapped, for the boot log and for the
@@ -449,7 +478,6 @@ void paging_init(const handoff_t *h) {
     u64 frame = pmm_alloc_frame();
     if (!frame) panic("paging: no frame for the top level table");
     kernel_pml4 = (u64 *)frame;
-    current_pml4 = kernel_pml4;
     memset(kernel_pml4, 0, PAGE_SIZE);
 
     /* The bottom, a page at a time, whatever the firmware thinks is there.
@@ -460,8 +488,10 @@ void paging_init(const handoff_t *h) {
        this replaces that with something the rest of the kernel can change a
        page at a time. */
     u64 low = KERNEL_LOW_MB * 1024ull * 1024ull;
+    /* Into the kernel's table by name: CR3 is still the loader's until the
+       end of this function, and map_page means the live one. */
     for (u64 a = 0; a < low; a += PAGE_SIZE) {
-        if (!map_page(a, a, PTE_PRESENT | PTE_RW))
+        if (!map_in(kernel_pml4, a, a, PTE_PRESENT | PTE_RW))
             panic("paging: identity map failed at %p", (void *)a);
     }
     mapped_bytes = low;
@@ -483,6 +513,27 @@ void paging_init(const handoff_t *h) {
         if (a < low) a = low;
         if (end > ceiling) end = ceiling;
 
+        /* And what rounding inward left out goes back to nobody.
+         *
+         * The frame allocator was told about every page of this region, and
+         * this maps only its whole 2 MiB pieces, so the ragged ends were free
+         * frames with no mapping behind them. The allocator walks upward and
+         * eventually hands one out; the first write to it is a fault in the
+         * kernel, and that is a panic. QEMU's low memory ends 128 KiB short
+         * of a 2 MiB boundary, so on a machine given 256 MiB there were 480
+         * of them waiting. */
+        u64 lo = r->base > low ? r->base : low;
+        u64 hi = r->base + r->len;
+        if (hi > ceiling) hi = ceiling;
+        if (hi > lo) {
+            if (a < end) {                       /* [a, end) is mapped below */
+                if (a > lo)   pmm_reserve(lo, a - lo);
+                if (hi > end) pmm_reserve(end, hi - end);
+            } else {
+                pmm_reserve(lo, hi - lo);        /* none of it is */
+            }
+        }
+
         for (; a < end; a += HUGE_SIZE) {
             if (resolve(kernel_pml4, a)) continue;         /* already there */
             if (!map_huge_in(kernel_pml4, a, a, PTE_PRESENT | PTE_RW))
@@ -501,6 +552,25 @@ void paging_init(const handoff_t *h) {
        matter most. */
 
     __asm__ volatile ("mov %0, %%cr3" :: "r"((u64)kernel_pml4) : "memory");
+    paging_protect_writes();
+}
+
+/* The kernel's own writes obey read-only pages. Once per processor.
+ *
+ * With CR0.WP clear, a write from ring 0 to a page mapped read-only simply
+ * happens. Copy on write depends on that write faulting: after a fork both
+ * processes map the same frame read-only, and a system call writing its
+ * answer into the child's buffer -- a read, a getcwd, a signal frame -- went
+ * straight into the frame the parent was still using. The parent's memory
+ * changed under it with no fault anywhere. No loader here set the bit: the
+ * multiboot and BIOS paths never touched it, and INIT clears it on every
+ * other processor, so only a UEFI machine whose firmware happened to set it
+ * behaved. */
+void paging_protect_writes(void) {
+    u64 cr0;
+    __asm__ volatile ("mov %%cr0, %0" : "=r"(cr0));
+    cr0 |= 1ull << 16;                                   /* WP */
+    __asm__ volatile ("mov %0, %%cr0" :: "r"(cr0) : "memory");
 }
 
 /* Maps a physical range that sits above the identity mapped region, which is

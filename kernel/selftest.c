@@ -178,6 +178,19 @@ static void test_pmm(void) {
     ok("free count dropped", pmm_free_frames() == free_before - 2);
     pmm_free_frame(f1); pmm_free_frame(f2);
     ok("free count restored", pmm_free_frames() == free_before);
+
+    /* Every frame the allocator could hand out is one the kernel can reach
+       at its own address. The ragged ends of memory regions above 64 MiB
+       were free and unmapped, so the first write to one was a panic; on a
+       machine with 256 MiB there were 480 of them. */
+    u64 unmapped = 0;
+    for (u64 f = 0; f < pmm_total_frames(); f++) {
+        u64 a = f * PAGE_SIZE;
+        if (pmm_frame_free(a) && virt_to_phys_in(paging_kernel_directory(), a) != a)
+            unmapped++;
+    }
+    ok("every frame that can be handed out is mapped", unmapped == 0);
+    if (unmapped) kprintf("        %d free frames have no mapping\n", (u32)unmapped);
 }
 
 static void test_paging(void) {
@@ -887,7 +900,29 @@ static void test_wm(void) {
     ok("windows can be closed", true);
 }
 
+static void winsrv_checks(void);
+
+/* In an address space of its own, loaded for the length of the checks.
+ *
+ * These used to map the surface into whatever directory was live, which for
+ * the self test task is the kernel's -- and the kernel's top level table is
+ * copied into every address space made afterwards, so the user half it grew
+ * here was then shared by all of them. Interrupts stay off while the scratch
+ * space is loaded, because a switch back to this task would load the
+ * kernel's again under the writes below. */
 static void test_winsrv(void) {
+    u64 space = paging_new_directory();
+    if (!space) { ok("a scratch address space for the window server", false); return; }
+    bool were_on = interrupts_enabled();
+    cli();
+    paging_switch(space);
+    winsrv_checks();
+    paging_switch(paging_kernel_directory());
+    if (were_on) sti();
+    paging_free_directory(space);
+}
+
+static void winsrv_checks(void) {
     const u32 PID = 4242, OTHER = 4243;
 
     int h = winsrv_create(PID, "selftest", 64, 48);
@@ -960,6 +995,97 @@ static void test_winsrv(void) {
     ok("a program can hold more than one window", a >= 0 && b >= 0 && a != b);
     winsrv_release(PID);
     ok("its windows go when the program does", winsrv_size(PID, a) == -1 && winsrv_size(PID, b) == -1);
+}
+
+/* --- what the pointer holds, and a window's pixels across fork and exit ---
+ *
+ * Four faults in how windows are owned. None shows while everything goes in
+ * the expected order, which is why the checks force the unexpected one. */
+static void test_window_lifetimes(void) {
+    const u32 PID = 4244;
+
+    /* A window closed while it is being resized by its corner. */
+    window_t *a = wm_create("held", 40, 40, 200, 120);
+    ok("a window for the pointer to hold", a != 0);
+    if (a) {
+        wm_test_begin_resize(a);
+        ok("it can be the one being resized", wm_test_holds(a));
+        wm_close(a);
+        ok("closing it mid-resize lets go of it", !wm_test_holds(a));
+    }
+
+    /* The right button, pressed in a window and let go. */
+    window_t *b = wm_create("right", 60, 60, 200, 120);
+    if (b) {
+        wm_raise(b);
+        int cx = b->x + WM_BORDER + 20, cy = b->y + WM_TOP + 20;
+        wm_test_pointer(cx, cy, 0);
+        wm_test_pointer(cx, cy, 2);
+        ok("a right press in a window captures the pointer", wm_test_holds(b));
+        wm_test_pointer(cx, cy, 0);
+        ok("and letting go of the right button releases it", !wm_test_holds(b));
+        wm_close(b);
+    }
+
+    /* A window's surface in a process that forks, and in one that goes. Done
+       in a scratch address space: the kernel's own is shared into every
+       process and must not grow a user half. */
+    u64 dir = paging_new_directory();
+    int h = dir ? winsrv_create(PID, "owned", 64, 48) : -1;
+    u64 ua = h >= 0 ? winsrv_surface(PID, h, dir) : 0;
+    ok("a surface mapped into a program's space", ua == WINSRV_SURFACE_BASE);
+    if (ua) {
+        u64 child = paging_clone_directory(dir);
+        ok("a fork is made", child != 0);
+        ok("the child is not given the parent's window pixels",
+           child && virt_to_phys_in(child, ua) == 0);
+        ok("and the parent's surface stays writable, so its window keeps drawing",
+           virt_is_user_in(dir, ua) && paging_entry_writable(dir, ua));
+        if (child) paging_free_directory(child);
+    }
+    if (h >= 0) winsrv_release(PID);
+    if (dir) paging_free_directory(dir);
+
+    /* An address space torn down with a kernel-owned page still mapped in it,
+       which is what exec did to a program's surfaces. The frame belongs to
+       the heap and must not come back from the frame allocator as free. */
+    u64 scratch = paging_new_directory();
+    u8 *raw = (u8 *)kmalloc(PAGE_SIZE * 2);
+    u64 page = raw ? (((u64)raw + PAGE_SIZE - 1) & ~(u64)(PAGE_SIZE - 1)) : 0;
+    if (scratch && page &&
+        map_page_in(scratch, WINSRV_SURFACE_BASE, page,
+                    PTE_PRESENT | PTE_RW | PTE_USER | PTE_BORROWED)) {
+        paging_free_directory(scratch);
+        scratch = 0;
+        ok("tearing down a space leaves a kernel-owned page to its owner",
+           !pmm_frame_free(page));
+    } else {
+        ok("a scratch space for the teardown check", false);
+    }
+    if (scratch) paging_free_directory(scratch);
+    if (raw) kfree(raw);
+
+    /* Maximising a program's window on a screen wider than 1600. Only where
+       the mode can be set, which is every machine this runs on but a UEFI
+       one; the machine goes back to its own mode afterwards. */
+    if (fb_mode_settable()) {
+        u32 ow = fb_width(), oh = fb_height();
+        if (fb_set_mode(1920, 1080)) {
+            int wide = winsrv_create(PID, "wide", 400, 300);
+            window_t *w = wide >= 0 ? winsrv_window(PID, wide) : 0;
+            if (w) winsrv_allow_resize(PID, wide);
+            ok("on a 1920 wide screen a program's window maximises",
+               w && wm_test_maximize(w) && w->want_cw > 1600);
+            ok("and says it is maximised only because it is",
+               w && w->maximized == (w->want_cw > 1600));
+            winsrv_release(PID);
+            fb_set_mode(ow, oh);
+        } else {
+            kprintf("  SKIP  the screen cannot be made 1920 wide here\n");
+        }
+    } else {
+        kprintf("  SKIP  the screen mode is the firmware's\n");
+    }
 }
 
 static void test_builtin(void) {
@@ -3706,7 +3832,7 @@ int selftest_run(void) {
     kprintf("[mouse]\n");      test_mouse(); test_mouse_edges();
     kprintf("[graphics]\n");   test_gfx();
     kprintf("[windows]\n");    test_wm();
-    kprintf("[window server]\n"); test_winsrv();
+    kprintf("[window server]\n"); test_winsrv(); test_window_lifetimes();
     kprintf("[built-in programs]\n"); test_builtin();
     kprintf("[theme]\n");      test_theme();
     kprintf("[taskbar]\n");    test_pins();

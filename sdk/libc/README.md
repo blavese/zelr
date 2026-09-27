@@ -42,6 +42,12 @@ the standard's own answer for a machine that cannot tell you. The kernel
 counts ticks since it started and does not know what year it is; a program
 told it is 1970 behaves worse than one told nobody knows.
 
+**`stdin`, `stdout` and `stderr` are descriptors 0, 1 and 2**, the console
+unless the program was started with something else there, so a shell's
+redirection and pipes reach a C program. `stdin` arrives a line at a time,
+edited by the kernel before the program sees it. (They were a console that
+was not a descriptor at all until 0.40.0, and stdin read nothing.)
+
 **No environment.** `getenv` returns `NULL` for every name, because nothing
 sets one and nothing passes one on. `system()` sets `ENOSYS`.
 

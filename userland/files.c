@@ -260,12 +260,47 @@ static void open_entry(int index) {
 /* --- moving files around --------------------------------------------------- */
 
 /* Copying is a read and a write, because there is no syscall that does it in
-   one and adding one would put a loop in the kernel that belongs here. */
+ * one and adding one would put a loop in the kernel that belongs here.
+ *
+ * A buffer at a time, and checked. It used to read at most 64 KiB into one
+ * buffer and write that, so a bigger file was copied short without a word --
+ * and cut and rename then deleted the original. The size that arrived is
+ * compared with the size that was there before the copy counts. */
 static int copy_file(const char *from, const char *to) {
-    static char buf[65536];
-    int n = slurp(from, buf, sizeof(buf));
-    if (n < 0) return -1;
-    return spit(to, buf, n) < 0 ? -1 : 0;
+    static char buf[16384];
+    zelr_stat src;
+    if (stat(from, &src) != 0 || src.is_dir) return -1;
+
+    int in = open(from, O_READ);
+    if (in < 0) return -1;
+    int out = open(to, O_WRITE | O_CREATE | O_TRUNC);
+    if (out < 0) { close(in); return -1; }
+
+    u32 total = 0;
+    int broke = 0;
+    for (;;) {
+        int n = zelr_fread(in, buf, (int)sizeof(buf));
+        if (n < 0) { broke = 1; break; }
+        if (n == 0) break;
+        if (zelr_fwrite(out, buf, n) != n) { broke = 1; break; }
+        total += (u32)n;
+    }
+    close(in);
+    close(out);
+
+    zelr_stat got;
+    if (broke || stat(to, &got) != 0 || got.size != src.size || total != src.size)
+        return -1;
+    return 0;
+}
+
+/* Renaming is the file system's job when it can do it -- within one
+   directory, which is every rename this window makes -- and moves no data,
+   so it cannot lose any. The copy is for what it refuses. */
+static int rename_file(const char *from, const char *to) {
+    if (zelr_rename(from, to) == 0) return 0;
+    if (copy_file(from, to) < 0) return -1;
+    return unlink(from) < 0 ? -1 : 0;
 }
 
 static void do_paste(void) {
@@ -388,7 +423,7 @@ int main(int argc, char **argv) {
                 join(from, cwd, entries[renaming].name);
                 join(to, cwd, rename_buf);
                 if (rename_buf[0] && strcmp(from, to)) {
-                    if (copy_file(from, to) == 0) { unlink(from); say("renamed"); }
+                    if (rename_file(from, to) == 0) say("renamed");
                     else say("rename failed");
                 }
                 renaming = -1;

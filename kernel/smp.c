@@ -73,6 +73,16 @@ void smp_note_tick(u32 cpu) {
     if (cpu < SMP_MAX_CPUS) cpus[cpu].info.local_ticks++;
 }
 
+void smp_note_lock_kept(u32 cpu) {
+    if (cpu < SMP_MAX_CPUS) cpus[cpu].info.lock_kept++;
+}
+
+u64 smp_lock_kept_total(void) {
+    u64 n = 0;
+    for (u32 i = 0; i < SMP_MAX_CPUS; i++) n += cpus[i].info.lock_kept;
+    return n;
+}
+
 void sched_note_user_slice(u32 cpu) {
     if (cpu < SMP_MAX_CPUS) cpus[cpu].info.user_slices++;
 }
@@ -275,6 +285,11 @@ static void ap_main(void *arg) {
        evicted. Nothing used to write to the screen from here, which is why
        it never showed. */
     paging_init_pat();
+
+    /* And write protection, which INIT cleared. Without it a system call
+       running here writes straight through a copy on write page into the
+       frame another process still shares (paging.c). */
+    paging_protect_writes();
 
     me->info.started = true;
 

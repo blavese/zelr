@@ -12,6 +12,15 @@
    for read only memory -- so a write fault on it is a page to copy, not a
    program to stop. */
 #define PTE_COW      0x200
+
+/* A page a program can reach whose frame belongs to the kernel -- a window's
+   surface, carved out of the kernel heap. fork does not share it (the child
+   has no window) and tearing down an address space does not free it (the
+   heap frees it, when the window goes). Without the mark it looked like any
+   other user page: a fork made the parent's own surface copy on write, so its
+   window stopped updating, and exit or exec handed a heap page to the frame
+   allocator while the heap still owned it. */
+#define PTE_BORROWED 0x400
 #define PTE_NOCACHE  0x018      /* write-through and cache-disable together */
 #define PTE_WC       0x080      /* in a 4 KiB entry this is the PAT bit, and
                                    the slot it selects is set to write
@@ -66,6 +75,11 @@
    is memory, rather than a fixed span that happens to be big enough. */
 void paging_init(const handoff_t *h);
 
+/* Makes ring 0 writes obey read-only pages (CR0.WP), which copy on write
+   depends on. paging_init does it for the boot processor; every other
+   processor calls it as it starts. */
+void paging_protect_writes(void);
+
 /* How much memory ended up identity mapped. */
 u64  paging_mapped_bytes(void);
 
@@ -84,6 +98,9 @@ u64  virt_to_phys_in(u64 pml4_phys, u64 virt);
 /* True only if ring 3 could reach this address itself, which is a stricter
    question than whether it is mapped. */
 bool virt_is_user_in(u64 pml4_phys, u64 virt);
+
+/* Whether the page at virt is mapped writable in that space. */
+bool paging_entry_writable(u64 pml4_phys, u64 virt);
 
 /* A fresh address space sharing the kernel's mappings. Returns the physical
    address of the top level table, or 0. */

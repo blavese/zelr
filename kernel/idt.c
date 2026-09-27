@@ -111,8 +111,18 @@ static inline bool from_user(const registers_t *r) { return (r->cs & 3) == 3; }
  * back -- so this is the last thing the faulting task does, in the same way
  * sys_exit is the last thing an exiting one does, and by the same path.
  */
+/* A fault the kernel took inside a program's own memory, on its behalf: a
+   system call writing its answer into a page the program could not have
+   written itself. The pointer was the program's, so the program pays for it
+   and not the machine. Possible only since ring 0 writes obey read-only
+   pages (paging_protect_writes); before that they quietly landed. */
+static bool on_behalf_of_program(const registers_t *r, u64 addr) {
+    task_t *t = task_current();
+    return r->int_no == 14 && addr >= USER_SPACE_BASE && t && t->user;
+}
+
 static bool end_the_program(registers_t *r, u64 addr) {
-    if (!from_user(r)) return false;
+    if (!from_user(r) && !on_behalf_of_program(r, addr)) return false;
 
     task_t *t = task_current();
     const char *name = t ? t->name : "a program";
@@ -163,6 +173,12 @@ u64 isr_dispatch(registers_t *r) {
     if (r->int_no == VEC_LOCAL_TIMER) smp_note_tick(smp_this_cpu());
     if (r->int_no == VEC_AP_WAKE) { lapic_eoi(); return (u64)r; }
 
+    /* Arriving from a program while already holding the lock means the last
+       way out of here returned to ring 3 without letting go of it, and every
+       other processor was kept out of the kernel in the meantime. Nothing
+       should do that; this counts it if something does, in /sys/cpu. */
+    if (from_user(r) && kernel_lock_held_here()) smp_note_lock_kept(smp_this_cpu());
+
     if (!kernel_lock_held_here()) {
         /* A processor's own timer does not wait for it.
          *
@@ -196,11 +212,17 @@ u64 isr_dispatch(registers_t *r) {
      * any other; requiring the bit would turn the first such call after a
      * fork into an unhandled exception in the kernel.
      */
+    /* A fault that is resolved here leaves by the same way out as everything
+       else, at `leave` below. It used to return on the spot, which skipped
+       the only place the lock is let go of: the processor went back to the
+       program still holding it, and every other one was kept out of the
+       kernel until this one next took an interrupt. It skipped signal
+       delivery too. */
     if (r->int_no == 14 && (r->err_code & 0x3) == 0x3) {
         u64 cr2;
         __asm__ volatile ("mov %%cr2, %0" : "=r"(cr2));
         if (paging_resolve_cow(paging_current_directory(), cr2))
-            return (u64)r;
+            goto leave;
     }
 
     if (handlers[r->int_no]) handlers[r->int_no](r);
@@ -218,7 +240,7 @@ u64 isr_dispatch(registers_t *r) {
            the list of what it asked for is the only thing that tells them
            apart. */
         if (r->int_no == 14 && from_user(r) && user_fault_fill(cr2, r->err_code))
-            return (u64)r;
+            goto leave;
 
         /* A program's own fault is the program's problem. Everything from
            a divide by zero to a bad jump arrives here, and none of it is a
@@ -251,6 +273,8 @@ u64 isr_dispatch(registers_t *r) {
         lapic_eoi();
     }
 
+leave:
+    ;
     /* The scheduler may hand back a different task's frame. */
     u64 resume = (u64)r;
     if (r->int_no == 32 || r->int_no == VEC_YIELD ||

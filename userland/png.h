@@ -143,7 +143,12 @@ static inline int png_decode(const u8 *data, int n, picture *out, u32 bg) {
         u32 clen = png_be32(data + at);
         const u8 *name = data + at + 4;
         const u8 *body = data + at + 8;
-        if (clen > (u32)(n - at - 12)) { rc = PNG_TRUNCATED; goto done; }
+        /* Length, name, body and check are 12 bytes plus the body. Asked in
+           two steps: with fewer than 12 bytes left, n - at - 12 is negative,
+           and turned unsigned it let any length through -- a file cut off
+           just after a chunk header could claim a body of four gigabytes and
+           have it read from past the end of the file. */
+        if (n - at < 12 || clen > (u32)(n - at - 12)) { rc = PNG_TRUNCATED; goto done; }
 
         if (png_is(name, "IHDR")) {
             if (clen < 13) { rc = PNG_BAD; goto done; }

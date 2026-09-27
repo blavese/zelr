@@ -38,6 +38,7 @@ struct _zfile {
     int  eof;
     int  err;
     int  no_close;               /* stdin, stdout and stderr outlive main */
+    int  interactive;            /* one of those three: a line at a time, and no seeking */
     int  unget;                  /* a pushed-back character, or -1 */
     long pos;                    /* where the descriptor is, for ftell */
     int  len;                    /* bytes in the buffer */
@@ -52,28 +53,33 @@ FILE *stdin  = &files[0];
 FILE *stdout = &files[1];
 FILE *stderr = &files[2];
 
-/* The console rather than a file: the kernel writes a descriptor with
-   fwrite and writes the screen with write(), and 0/1/2 are not descriptors
-   this machine hands out. -1 here means "the console". */
-#define FD_CONSOLE (-1)
-
+/* Descriptors 0, 1 and 2, which every program is born with: the console,
+ * unless whoever started it put something else there.
+ *
+ * These used to be a special "console" that was not a descriptor at all,
+ * on the understanding that this machine did not hand out 0, 1 and 2. It
+ * does, and has since shells got pipes. So stdin read nothing -- a program
+ * asking for input got end of file at once, in a pipeline or at the
+ * keyboard -- and a C program's output could not be redirected, because it
+ * never went through the descriptor a shell redirects. */
 void _zstdio_start(void) {
     for (int i = 0; i < FOPEN_MAX; i++) files[i].unget = -1;
 
-    files[0].used = 1; files[0].fd = FD_CONSOLE; files[0].no_close = 1;
-    files[1].used = 1; files[1].fd = FD_CONSOLE; files[1].no_close = 1;
-    files[2].used = 1; files[2].fd = FD_CONSOLE; files[2].no_close = 1;
+    for (int i = 0; i < 3; i++) {
+        files[i].used = 1;
+        files[i].fd = i;
+        files[i].no_close = 1;
+        files[i].interactive = 1;
+    }
 }
 
 /* --- the descriptor underneath ------------------------------------------- */
 
 static int raw_write(FILE *f, const unsigned char *p, int n) {
-    if (f->fd == FD_CONSOLE) return write((const char *)p, n);
     return zelr_fwrite(f->fd, p, n);
 }
 
 static int raw_read(FILE *f, unsigned char *p, int n) {
-    if (f->fd == FD_CONSOLE) return 0;      /* nothing reads the console yet */
     return zelr_fread(f->fd, p, n);
 }
 
@@ -103,7 +109,7 @@ void _zflush_all(void) { fflush(NULL); }
 static void leave_read(FILE *f) {
     if (!f->reading) return;
     int ahead = f->len - f->at;
-    if (ahead > 0 && f->fd != FD_CONSOLE) seek(f->fd, -ahead, SEEK_CUR);
+    if (ahead > 0 && !f->interactive) seek(f->fd, -ahead, SEEK_CUR);
     f->reading = 0;
     f->len = f->at = 0;
 }
@@ -250,11 +256,15 @@ int fputc(int c, FILE *f) {
     leave_read(f);
     f->writing = 1;
 
+    /* Room first. fwrite can leave the buffer exactly full, and this used to
+       store the character and only then look: one byte past the end of the
+       buffer, which is the first byte of the next FILE in the table. */
+    if (f->len >= FBUF && fflush(f) != 0) return EOF;
     f->buf[f->len++] = (unsigned char)c;
 
     /* A line at a time to the console, so a program that prints and then
        works for a second is read as it goes rather than all at the end. */
-    if (f->len >= FBUF || (f->fd == FD_CONSOLE && c == '\n'))
+    if (f->len >= FBUF || (f->interactive && c == '\n'))
         if (fflush(f) != 0) return EOF;
     return (unsigned char)c;
 }
@@ -283,7 +293,7 @@ size_t fwrite(const void *p, size_t size, size_t count, FILE *f) {
         done += take;
     }
 
-    if (f->fd == FD_CONSOLE && memchr(in, '\n', want))
+    if (f->interactive && memchr(in, '\n', want))
         fflush(f);
     return done / size;
 }
@@ -305,7 +315,7 @@ int puts(const char *s) {
 
 int fseek(FILE *f, long off, int whence) {
     if (!f || !f->used) return -1;
-    if (f->fd == FD_CONSOLE) { errno = ESPIPE; return -1; }
+    if (f->interactive) { errno = ESPIPE; return -1; }
 
     fflush(f);
     f->reading = f->writing = 0;
@@ -321,7 +331,7 @@ int fseek(FILE *f, long off, int whence) {
 
 long ftell(FILE *f) {
     if (!f || !f->used) return -1;
-    if (f->fd == FD_CONSOLE) { errno = ESPIPE; return -1; }
+    if (f->interactive) { errno = ESPIPE; return -1; }
     return f->pos;
 }
 

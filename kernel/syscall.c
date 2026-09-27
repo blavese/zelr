@@ -256,6 +256,14 @@ static i64 sys_exec(registers_t *r) {
     argv_drop(&a);
     if (!built) { paging_free_directory(dir); return -1; }
 
+    /* The windows belonged to the program being replaced, and their surfaces
+       are mapped in the address space about to be freed. They are closed
+       while that space still exists: the slot remembers the directory to
+       unmap from, and freeing the directory first left it unmapping through
+       page tables that had already been handed back. Only now, once nothing
+       can fail, so an exec that goes wrong leaves the windows alone. */
+    winsrv_release(t->pid);
+
     u64 old = t->dir;
 
     bool were_on = interrupts_enabled();

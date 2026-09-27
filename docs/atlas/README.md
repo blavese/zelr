@@ -95,6 +95,57 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.40.0: multiprocessor memory, window lifetimes, JavaScript, and data loss
+
+Each change has a check that was run against a deliberately broken build (or, for the ring 3 fixes, the
+committed old sources) and seen to fail there.
+
+- **Multiprocessor memory (finding 14 and 02 §10 B1-B4).**
+  - `paging_current_directory()` reads CR3; the global `current_pml4` is gone. `paging_init` builds the
+    kernel tables by name, since CR3 is still the loader's then.
+  - Resolved copy-on-write and demand faults leave through `leave:` in `isr_dispatch`, which releases the
+    lock and delivers signals. A lock still held on entry from ring 3 is counted as `kept` in `/sys/cpu`.
+  - `paging_protect_writes()` sets CR0.WP on the boot processor (end of `paging_init`) and every AP
+    (`ap_main`). A ring 0 fault at a user address that copy on write cannot resolve ends the calling program
+    (`on_behalf_of_program`).
+  - The ragged ends of usable regions above 64 MiB are `pmm_reserve`d; there were 480 such frames at 256 MiB.
+  - Checks:
+    - `/bin/cputest` in ring3check and in smpcheck (four processors);
+    - `[physical memory]` "every frame that can be handed out is mapped".
+- **Window lifetimes (finding 6).**
+  - `wm_close` clears `resizing`.
+  - `held_button` records which button started a hold, and releasing that button ends it.
+  - Surfaces are mapped `PTE_BORROWED`: `copy_table` leaves them out of a fork and `free_table` never frees
+    their frames. `sys_exec` calls `winsrv_release` before freeing the old space.
+  - `apply_snap` sets `maximized` only when the resize went through.
+  - Surfaces go up to 2560x1600 with a 16 MiB step (`WINSRV_MAX_W/H`).
+  - Checks: `[window server]` `test_window_lifetimes`, 12 checks, through hooks `wm_test_holds`,
+    `wm_test_pointer`, `wm_test_begin_resize` and `wm_test_maximize`. The existing window-server checks now
+    run in a scratch address space, answering open question 2 in 07.
+- **JavaScript (finding 13, 12 §10 B1, B2, B5).**
+  - call/apply/bind take the target from `this`. Natives can read `J->callee`, which is how a bound function
+    finds its own record; bound arguments are kept.
+  - The for clause parses with `no_in`, and the target form sets `d = 0`.
+  - `js_num_text` prints 15 significant digits, rounded (17 for whole numbers of 2^53 or more below 10^21).
+  - jstest now counts every case: 162.
+- **Data loss in programs (09b, 10 §10).**
+  - The terminal's cp copies in chunks and checks the size; mv renames when it can.
+  - Files copies and renames the same way.
+  - Notes' buffer grows, and a file it could not read whole cannot be saved.
+  - Check: `tools/bigfilecheck.py`.
+- **libc (finding 9).**
+  - atan uses y = x^2/(1+x^2).
+  - fputc flushes a full buffer before storing.
+  - stdin, stdout and stderr are descriptors 0, 1 and 2.
+  - `clock()` scales ticks by the rate in `/sys/uptime`.
+  - Check: libccheck, 22 checks.
+- **PNG (finding 10).** The chunk bound is checked in two steps. Check: pngtest.
+
+Counts after 0.40.0:
+- selftest 595 (pc, 64 MiB), 599 (256 MiB), 607 (q35), 610 (`-smp 4`);
+- 48 ring 3 programs, which is `SYSFS_MAX_PROGRAMS`;
+- gate full 49 steps.
+
 ### 0.39.0: six of the findings below, fixed
 
 Each change has a check that was run against a deliberately broken build and seen to fail there.
@@ -154,8 +205,7 @@ Counts after 0.39.0:
 - 47 ring 3 programs;
 - gate full 48 steps.
 
-Findings 1-5 and 12 below are kept as they were written, for the reasoning. The ones still open are 6
-onward, except 12.
+Findings 1-5 and 12 below are kept as they were written, for the reasoning.
 
 ## Most important findings, across all areas
 
@@ -180,7 +230,7 @@ reasoning are in each file's §10.
    are no-ops, and every flush goes to disk 0. [04 §10 S8, S9]
 5. **FIXED in 0.39.0. Any program can kill or signal any task, including kernel services** (`sys_kill`, `sys_sigsend`
    have no ownership check). [03 §10.5]
-6. **Window manager lifetime bugs.**
+6. **FIXED in 0.40.0. Window manager lifetime bugs.**
    - Closing a window while it is being resized leaves a dangling `resizing` pointer.
    - Right-button capture sticks until a left release.
    - fork and exec treat window surface pages as user pages.
@@ -192,9 +242,9 @@ reasoning are in each file's §10.
      by reading its output in the gate).
    - The gate's build step only fails on the literal word "error" [01 §10 #5].
    - Several checks pass for other reasons than their comments say [04 D11, 06b §10.10].
-9. **libc correctness.** `atan` is wrong, `fputc` can overflow into the next FILE, `stdin` is always EOF,
+9. **FIXED in 0.40.0. libc correctness.** `atan` is wrong, `fputc` can overflow into the next FILE, `stdin` is always EOF,
    and `clock()` is ten times too small. [09a §10.2]
-10. **Untrusted input in the browser's decoders.** The PNG chunk bounds check wraps (png.h:146), and
+10. **Untrusted input in the browser's decoders.** The PNG chunk bounds check wraps (png.h:146; FIXED in 0.40.0), and
     there are several SVG and JPEG conformance gaps. [13 §10]
 11. **UEFI.** The GOP pixel format (RGB vs BGR) is not carried in the handoff, and the handoff address
     is fixed at 0x70000 with no fallback. [01 §10 #2, #8]
@@ -222,14 +272,14 @@ reasoning are in each file's §10.
       - Result: ticks frozen (877 -> 877), CPL 0 with IF clear, and the shell dead.
     - Atlas 06a also notes that a kernel task preempted while it owns frame delivery can leave a
       syscall spinning. [06a §10]
-13. **JavaScript `call`, `apply` and `bind` do not work. REPRODUCED 2026-09-26** (`repro/callbind.py`, prints BROKEN and exits 1 while the bug stands).
+13. **FIXED in 0.40.0. JavaScript `call`, `apply` and `bind` do not work. REPRODUCED 2026-09-26** (`repro/callbind.py`, prints BROKEN and exits 1 while the bug stands).
     - `jsprobe` against a page with one script per method: the control script ran, and all three stopped
       with "this is not a function".
     - Cause: the wrappers look up `__fn__` on the receiver `t` (the target function) instead of on the
       wrapper itself (`jsrun.h:450-460, 573-622`).
     - This is the feature commit 3f4cdb5b says it added for Google's front page, and nothing tests it.
       [12 §10]
-14. **SMP: the big lock stays held into ring 3 after a copy-on-write or demand fault** (verified by
+14. **FIXED in 0.40.0 (with 02 B1, B3, B4). SMP: the big lock stays held into ring 3 after a copy-on-write or demand fault** (verified by
     reading).
     - `isr_dispatch` returns early at `idt.c:202-203` and `220-221`, skipping `kernel_lock_release()`
       at `:287`, and it skips signal delivery on those returns too.

@@ -12,6 +12,7 @@
 #include <string.h>
 #include <ctype.h>
 #include <math.h>
+#include <time.h>
 
 static int by_value(const void *a, const void *b) {
     int x = *(const int *)a, y = *(const int *)b;
@@ -57,6 +58,45 @@ int main(int argc, char **argv) {
     while (fgets(line, sizeof(line), f)) printf("read back: %s", line);
     fclose(f);
     remove("libctest.txt");
+
+    /* atan, and atan2 in the second quadrant. */
+    printf("atan(1)*4 = %.6f\n", atan(1.0) * 4);
+    printf("atan2(1,-1) = %.6f\n", atan2(1.0, -1.0));
+
+    /* A buffer filled to the byte by fwrite, one more character after it,
+       and a second file open beside it that must not notice. */
+    FILE *a = fopen("fill.txt", "w");
+    FILE *b = fopen("next.txt", "w");
+    if (a && b) {
+        static char block[4096];
+        memset(block, 'a', sizeof(block));
+        fwrite(block, 1, sizeof(block), a);
+        fputc('!', a);
+        fputs("the next file is intact\n", b);
+    }
+    if (a) fclose(a);
+    if (b) fclose(b);
+    b = fopen("next.txt", "r");
+    if (b && fgets(line, sizeof(line), b)) printf("next: %s", line);
+    else printf("next: missing\n");
+    if (b) fclose(b);
+    long filled = -1;
+    a = fopen("fill.txt", "r");
+    if (a) { fseek(a, 0, SEEK_END); filled = ftell(a); fclose(a); }
+    printf("fill: %ld bytes\n", filled);
+    remove("fill.txt");
+    remove("next.txt");
+
+    /* A line typed at the program. */
+    printf("type a line:\n");
+    if (fgets(line, sizeof(line), stdin)) printf("stdin said: %s", line);
+    else printf("stdin said nothing\n");
+
+    /* One second by clock(), which the harness times with its own. */
+    printf("clock start\n");
+    clock_t c0 = clock();
+    while (clock() - c0 < CLOCKS_PER_SEC) { }
+    printf("clock done\n");
 
     printf("LIBC_HELLO_OK\n");
     return 0;

@@ -217,6 +217,18 @@ static u8  last_buttons;
 static int last_mx, last_my;
 static bool needs_composite = true;
 
+/* Which button started whatever the pointer is holding -- a drag, a resize,
+ * a capture, the volume slider -- so that letting go of that button is what
+ * ends it.
+ *
+ * Only the left button's release used to count. A right press in a window's
+ * content captured the pointer, a right press on the grip started a resize,
+ * and letting go of the right button ended neither: every event after that
+ * went to the captured window until somebody happened to click and release
+ * the left button, and that click was itself delivered to the captured
+ * window as a plain move rather than to whatever was under the pointer. */
+static u8 held_button;
+
 /* What of the screen has to reach video memory this frame.
  *
  * Drawing is into ordinary memory and costs almost nothing. Copying the
@@ -570,8 +582,17 @@ void wm_close(window_t *w) {
         nwin--;
         break;
     }
+    /* Every hold the pointer can have on a window goes with the window.
+       `resizing` was missing from this, so a window closed in the middle of
+       a corner drag -- its program exited, or alt+q -- went on being drawn
+       as an outline every frame from freed memory, and letting go of the
+       button resized it: a queue push into the freed record for a program's
+       window, and a kfree of whatever its canvas pointer had become for the
+       kernel's own. */
     if (dragging == w) dragging = 0;
     if (mouse_capture == w) mouse_capture = 0;
+    if (resizing == w) resizing = 0;
+    if (!dragging && !mouse_capture && !resizing && !volume_drag) held_button = 0;
     /* A surface the window server handed out is not ours to release: it was
        carved page aligned out of a larger allocation, so this pointer is not
        one kmalloc returned, and the server frees the real one when the owning
@@ -1758,11 +1779,12 @@ static void remember_place(window_t *w) {
     w->restore_ch = w->ch;
 }
 
-static void place(window_t *w, int x, int y, int cw, int ch) {
-    if (!wm_resize(w, cw, ch)) return;
+static bool place(window_t *w, int x, int y, int cw, int ch) {
+    if (!wm_resize(w, cw, ch)) return false;
     w->x = x;
     w->y = y;
     need_frame();
+    return true;
 }
 
 /* The rectangle a snap zone corresponds to, in outer coordinates. */
@@ -1781,20 +1803,25 @@ static void snap_rect(snap_t zone, int *x, int *y, int *cw, int *ch) {
     *ch = fh - WM_TOP - WM_BORDER;
 }
 
+/* The flag follows what happened, not what was asked for. It used to be set
+   whether or not the resize went through, and the window server refused
+   anything wider than 1600: on a 1920 screen every maximise left the window
+   at its old size flagged as maximised, so the panel tucked itself away,
+   the grip vanished and the button offered to restore a window that had
+   never moved. */
 static void apply_snap(window_t *w, snap_t zone) {
     if (!w->resizable || zone == SNAP_NONE) return;
     remember_place(w);
     int x, y, cw, ch;
     snap_rect(zone, &x, &y, &cw, &ch);
-    place(w, x, y, cw, ch);
-    w->maximized = (zone == SNAP_FULL);
+    if (place(w, x, y, cw, ch)) w->maximized = (zone == SNAP_FULL);
 }
 
 static void toggle_maximize(window_t *w) {
     if (!w->resizable) return;
     if (w->maximized) {
-        w->maximized = false;
-        place(w, w->restore_x, w->restore_y, w->restore_cw, w->restore_ch);
+        if (place(w, w->restore_x, w->restore_y, w->restore_cw, w->restore_ch))
+            w->maximized = false;
     } else {
         apply_snap(w, SNAP_FULL);
     }
@@ -3143,7 +3170,10 @@ static void screen_changed(void) {
                would go back to is still where it came from. */
             int x, y, cw, ch;
             snap_rect(SNAP_FULL, &x, &y, &cw, &ch);
-            place(w, x, y, cw, ch);
+            /* A new screen it cannot be made to fill leaves it an ordinary
+               window rather than one flagged as filling a screen it does
+               not. */
+            if (!place(w, x, y, cw, ch)) w->maximized = false;
         } else {
             int cw = w->cw, ch = w->ch;
             if (cw > (int)fb_width() - 8) cw = (int)fb_width() - 8;
@@ -3434,7 +3464,11 @@ static bool on_find_button(int mx, int my) {
 static void handle_mouse(int mx, int my, u8 buttons) {
     bool pressed_now = (buttons & 1) && !(last_buttons & 1);
     bool right_now   = (buttons & 2) && !(last_buttons & 2);
-    bool released    = !(buttons & 1) && (last_buttons & 1);
+
+    /* The button that started the hold, or the left one when nothing is
+       held, which is what a release meant before there was a choice. */
+    u8 hold = held_button ? held_button : 1;
+    bool released    = !(buttons & hold) && (last_buttons & hold);
 
     if (menu_open) {
         int over = menu_item_at(mx, my);
@@ -3483,7 +3517,7 @@ static void handle_mouse(int mx, int my, u8 buttons) {
         }
     }
 
-    if (volume_drag && (buttons & 1)) { volume_from_pointer(mx); return; }
+    if (volume_drag && (buttons & hold)) { volume_from_pointer(mx); return; }
 
     if (net_open && (pressed_now || right_now)) {
         int px, py;
@@ -3508,6 +3542,7 @@ static void handle_mouse(int mx, int my, u8 buttons) {
         int px = tx - 16, py = taskbar_y() - VOLPOP_H - 8;
         if (mx >= px && mx < px + VOLPOP_W && my >= py && my < py + VOLPOP_H) {
             volume_drag = true;
+            held_button = pressed_now ? 1 : 2;
             volume_from_pointer(mx);
             return;
         }
@@ -3590,6 +3625,7 @@ static void handle_mouse(int mx, int my, u8 buttons) {
         dragging = 0;
         resizing = 0;
         mouse_capture = 0;
+        held_button = 0;
         need_frame();
     }
 
@@ -3761,6 +3797,7 @@ static void handle_mouse(int mx, int my, u8 buttons) {
 
     if (on_grip(w, mx, my)) {
         resizing = w;
+        held_button = pressed_now ? 1 : 2;
         resize_off_x = (w->x + wm_outer_w(w)) - mx;
         resize_off_y = (w->y + wm_outer_h(w)) - my;
         resize_cw = w->cw;
@@ -3773,6 +3810,7 @@ static void handle_mouse(int mx, int my, u8 buttons) {
         if (right_now) { toggle_maximize(w); return; }
 
         dragging = w;
+        held_button = 1;
         drag_off_x = mx - w->x;
         drag_off_y = my - w->y;
         shake_reset();
@@ -3780,6 +3818,7 @@ static void handle_mouse(int mx, int my, u8 buttons) {
     }
 
     mouse_capture = w;
+    held_button = pressed_now ? 1 : 2;
     {
         int lx = mx - (w->x + WM_BORDER), ly = my - (w->y + WM_TOP);
         if (w->owned_by_user) {
@@ -3874,6 +3913,30 @@ static bool handle_shortcut(int key) {
 }
 
 void wm_quit(void) { running = false; }
+
+/* For the self test, which has no mouse: whether anything the pointer can
+   hold still names this window, the pointer handler fed by hand, and a
+   corner drag started on a window without finding its grip. */
+bool wm_test_holds(const window_t *w) {
+    return dragging == w || resizing == w || mouse_capture == w;
+}
+
+void wm_test_pointer(int mx, int my, u8 buttons) {
+    handle_mouse(mx, my, buttons);
+    last_buttons = buttons;
+}
+
+void wm_test_begin_resize(window_t *w) {
+    resizing = w;
+    held_button = 1;
+    resize_cw = w->cw;
+    resize_ch = w->ch;
+}
+
+bool wm_test_maximize(window_t *w) {
+    toggle_maximize(w);
+    return w->maximized;
+}
 
 void wm_run(void) {
     if (!fb_active()) { kprintf("the desktop needs a framebuffer\n"); return; }
@@ -4068,6 +4131,7 @@ void wm_run(void) {
     band_on = false;
     desk_sel = 0;
     dragging = resizing = mouse_capture = 0;
+    held_button = 0;
     volume_open = false;
     volume_drag = false;
     panel_shown = true;

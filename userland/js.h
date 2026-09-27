@@ -211,6 +211,13 @@ typedef struct jctx {
     char    error[192];
     int     error_line;
 
+    /* The native being called, for the length of the call into it. A native
+       is handed `this` and its arguments and nothing that says which object
+       it is, which is all most of them need; a bound function is the one
+       that has to find what it was bound to, and that lives on itself. Read
+       it first thing: any call the native makes changes it. */
+    jobj   *callee;
+
     /* the host's hook: how a property on a host object is read and written,
        and what happens when one is called. Null in a program that has no
        host objects, which is how this file is testable on its own. */

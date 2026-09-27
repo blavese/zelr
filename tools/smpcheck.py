@@ -120,6 +120,24 @@ def main():
         c.add("and the machine still runs a program to completion",
               vm.wait_serial("5050", timeout=120))
 
+        # --- and each program's memory is its own, wherever it runs --------
+        #
+        # With the spinners still going, so the four workers cputest starts
+        # land on whichever processors are free. The kernel used to keep one
+        # record of the address space in use for the whole machine, so a
+        # program on another processor had its pointers checked against the
+        # wrong memory -- invisible with one processor, which is why this is
+        # the harness that runs it.
+        mark = len(vm.serial())
+        vm.type("exec /bin/cputest" + chr(10))
+        done = vm.wait_serial("CPUTEST_", timeout=300)
+        out = vm.serial()[mark:]
+        c.add("every program's memory is its own on every processor",
+              done and "CPUTEST_PASS" in out)
+        for line in out.splitlines():
+            if "FAIL" in line or "went from" in line or "worker" in line:
+                print("      | %s" % line.strip())
+
     finally:
         vm.stop()
         try:

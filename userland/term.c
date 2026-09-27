@@ -806,11 +806,18 @@ static void cmd_rmdir(int argc, char **argv) {
     if (rmdir(argv[1]) != 0) err("not empty, or not a directory"); else dim("ok");
 }
 
-/* Copy, and move built out of it. Whole file at a time, like everything
-   else here. */
+/* Copy, and move built out of it.
+ *
+ * A buffer's worth at a time, however big the file is. This used to read
+ * the whole file into the sixteen kilobytes cat uses and write that back,
+ * so anything larger arrived cut off at 16 KiB with nothing said -- and mv
+ * then deleted the original, which was the only whole copy there was. What
+ * reached the target is now checked against the size of the source before
+ * the copy is called done, and mv deletes nothing until it is. */
 static bool copy_file(const char *src, const char *dst) {
-    int total = read_all(src);
-    if (total < 0) return false;
+    zelr_stat from;
+    if (stat(src, &from) != 0) { err("no such file"); return false; }
+    if (from.is_dir) { err("that is a directory"); return false; }
 
     /* A directory as the target means the same name inside it. */
     char target[VFS_PATH];
@@ -824,8 +831,33 @@ static bool copy_file(const char *src, const char *dst) {
         target[sizeof(target) - 1] = 0;
     }
 
-    if (spit(target, io, total) < 0) { err("cannot write it"); return false; }
-    w_reset(); w_num((u32)total); w_str(" bytes to "); w_str(target); dim(work);
+    /* Opening the target empties it, so a file copied onto itself would be
+       emptied before a byte of it was read. */
+    if (strcmp(src, target) == 0) { err("that is the same file"); return false; }
+
+    int in = open(src, O_READ);
+    if (in < 0) { err("cannot open it"); return false; }
+    int out = open(target, O_WRITE | O_CREATE | O_TRUNC);
+    if (out < 0) { close(in); err("cannot write it"); return false; }
+
+    u32 total = 0;
+    bool broke = false;
+    for (;;) {
+        int n = fread(in, io, (int)sizeof(io));
+        if (n < 0) { broke = true; break; }
+        if (n == 0) break;
+        if (fwrite(out, io, n) != n) { broke = true; break; }
+        total += (u32)n;
+    }
+    close(in);
+    close(out);
+
+    zelr_stat got;
+    if (broke || stat(target, &got) != 0 || got.size != from.size || total != from.size) {
+        err("the copy did not arrive whole");
+        return false;
+    }
+    w_reset(); w_num(total); w_str(" bytes to "); w_str(target); dim(work);
     return true;
 }
 
@@ -834,8 +866,16 @@ static void cmd_cp(int argc, char **argv) {
     copy_file(argv[1], argv[2]);
 }
 
+/* A rename where the file system can do one, which moves nothing and so
+   cannot lose anything; a copy, checked, and then the delete otherwise. */
 static void cmd_mv(int argc, char **argv) {
     if (argc < 3) { need("mv SRC DST"); return; }
+    zelr_stat st;
+    bool into_dir = stat(argv[2], &st) == 0 && st.is_dir;
+    if (!into_dir && zelr_rename(argv[1], argv[2]) == 0) {
+        w_reset(); w_str("renamed to "); w_str(argv[2]); dim(work);
+        return;
+    }
     if (copy_file(argv[1], argv[2])) unlink(argv[1]);
 }
 

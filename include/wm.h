@@ -141,6 +141,16 @@ void wm_raise(window_t *w);
    own their pixels, and a program's are the window server's to replace. */
 bool wm_resize(window_t *w, int cw, int ch);
 
+/* For the self test only, which has no mouse. wm_test_holds: whether a drag,
+   resize or capture still names this window. wm_test_pointer: one pointer
+   event, as the desktop loop would hand it over. wm_test_begin_resize: a
+   corner drag under way on this window. wm_test_maximize: the maximise
+   button, answering whether the window says it is now maximised. */
+bool wm_test_holds(const window_t *w);
+void wm_test_pointer(int mx, int my, u8 buttons);
+void wm_test_begin_resize(window_t *w);
+bool wm_test_maximize(window_t *w);
+
 /* Runs the desktop until the user leaves it. */
 void wm_run(void);
 void wm_quit(void);

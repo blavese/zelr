@@ -201,9 +201,16 @@ double tan(double x) {
     return sin(x) / c;
 }
 
-/* atan by the series in x/(1+x^2), which converges everywhere, with the
-   argument folded into [0, 1] first because near 1 the plain series needs
-   hundreds of terms. */
+/* atan by Euler's series, which converges everywhere, with the argument
+   folded into [0, 1] first because near 1 the plain series needs hundreds of
+   terms:
+
+       atan x = z * sum (2n)!! / (2n+1)!! * y^n,   z = x/(1+x^2), y = x^2/(1+x^2)
+
+   The ratio between terms is y, not z squared. It was z squared, which is
+   another series altogether -- asin(z)/sqrt(1-z^2) -- and agrees with atan
+   only to the cube term: atan(1) came out as 0.6046 against 0.7854, and
+   atan2 and every angle built on it inherited the error. */
 double atan(double x) {
     if (isnan(x)) return x;
     int neg = x < 0;
@@ -213,7 +220,7 @@ double atan(double x) {
     if (x > 1) { x = 1 / x; folded = 1; }
 
     double z = x / (1 + x * x);
-    double z2 = z * z;
+    double z2 = x * z;                           /* y = x^2 / (1 + x^2) */
     double term = z, sum = z, num = 1, den = 1;
     for (int i = 1; i < 40; i++) {
         num *= 2.0 * i;

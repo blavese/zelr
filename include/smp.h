@@ -47,6 +47,11 @@ typedef struct {
        processor that looks asleep for a reason nothing else shows. */
     volatile u64 local_ticks;
     volatile u64 lock_misses;   /* ticks that found the kernel busy */
+
+    /* Times it came back into the kernel from a program still holding the
+       kernel lock, which means some way out returned to ring 3 without
+       letting go. Should stay zero; the self test says whether it does. */
+    volatile u64 lock_kept;
 } cpu_t;
 
 void smp_init(void);
@@ -66,6 +71,10 @@ u32  smp_this_cpu(void);
 /* Counted where the interrupt lands. */
 void smp_note_tick(u32 cpu);
 void smp_note_lock_miss(u32 cpu);
+void smp_note_lock_kept(u32 cpu);
+
+/* Every processor's lock_kept added up. */
+u64  smp_lock_kept_total(void);
 
 u32  smp_cpu_count(void);       /* processors the firmware described */
 u32  smp_started(void);         /* how many actually came up, boot one included */

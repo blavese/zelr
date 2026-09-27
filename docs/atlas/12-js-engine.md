@@ -1117,7 +1117,7 @@ A manual diagnostic only. It prints `JSPROBE_DONE` and asserts nothing.
 
 ### Bugs
 
-**B1. `call`, `apply` and `bind` do not work.** This is the headline bug of the most recent JS commit.
+**B1. FIXED in 0.40.0 (see atlas README). `call`, `apply` and `bind` do not work.** This is the headline bug of the most recent JS commit.
 - `js_get` (`jsrun.h:450-460`) returns a wrapper native `W` with `W.__fn__ = f`.
 - `N_CALL` then calls `js_call(W, self = f, …)`. `W` has no `__this__`, so `self` stays `f` (`:1581`, `:1595-1598`).
 - `js_call` invokes `nat_fn_call(J, t = f, …)` (`:520`).
@@ -1127,7 +1127,7 @@ A manual diagnostic only. It prints `JSPROBE_DONE` and asserts nothing.
 - Only `f.call.call(g, x)` works -- one level off.
 - No test covers any of this. The comment at `:438-449` says Google's page needed `call`.
 
-**B2. `for (k in o)` without `var`/`let`/`const` does not parse.** In `js_parse_stmt`'s for branch, `init = js_parse_expr(P)` (`jsparse.h:1221`) lets `js_parse_binary` consume `in` as a binary operator (`:809`). The check `js_at_word(P,"in")` at `:1222` is therefore never true, and parsing ends with "expected ;, not )". The `N_FORIN.c` target form (`:1229`, and `jsrun.h:1906-1909`) is dead code. Minified code uses `var k; for (k in o)` often.
+**B2. FIXED in 0.40.0 (see atlas README). `for (k in o)` without `var`/`let`/`const` does not parse.** In `js_parse_stmt`'s for branch, `init = js_parse_expr(P)` (`jsparse.h:1221`) lets `js_parse_binary` consume `in` as a binary operator (`:809`). The check `js_at_word(P,"in")` at `:1222` is therefore never true, and parsing ends with "expected ;, not )". The `N_FORIN.c` target form (`:1229`, and `jsrun.h:1906-1909`) is dead code. Minified code uses `var k; for (k in o)` often.
 
 **B3. `new X(args).more` is mis-parsed** (`jsparse.h:759-774`). The operand is parsed with the full postfix loop, so `new Foo().bar()` becomes `new (Foo().bar)()`: `Foo` is called without `new` (with `this` undefined), then `new` is applied to the result's `bar`. For example, `new RegExp("a").test("xyz")` becomes `new (RegExp("a").test)("xyz")`, which returns the fresh plain object (truthy) instead of `false`.
 
@@ -1136,7 +1136,7 @@ A manual diagnostic only. It prints `JSPROBE_DONE` and asserts nothing.
 - (b) `N_FORIN` (`:1878-1916`) never takes `pending_label` and consumes every break/continue whatever its label. `lbl: for (k in o) { for(;;) continue lbl; }` hands the label to the inner `for`, which loops until the step cap. `break lbl` exits only the inner loop.
 - (c) `N_SWITCH` (`:2011`) swallows `break outer` inside `outer: for (...) { switch (x) { case 1: break outer; } }`.
 
-**B5. Number printing is wrong for everyday decimals** (`jsrun.h:111-133`). The code emits 10 fraction digits by **truncation**, so doubles that sit just below a decimal print as a run of 9s: `0.57` → `"0.5699999999"`, `19.99` → `"19.9899999999"`, `1.15` → `"1.1499999999"`. For 2^63 ≤ |d| < 1e21, `(long long)d` overflows (cvttsd2si gives INT64_MIN) and the digit loop emits non-digit bytes (for example `String(1e20)`). Values between 1.7e308 and DBL_MAX print as "Infinity" (`:59`). Parsing is also not correctly rounded (the literal `0.3` becomes `3*0.1`), so `0.1 + 0.2 === 0.3` is **true** here.
+**B5. FIXED in 0.40.0 (see atlas README). Number printing is wrong for everyday decimals** (`jsrun.h:111-133`). The code emits 10 fraction digits by **truncation**, so doubles that sit just below a decimal print as a run of 9s: `0.57` → `"0.5699999999"`, `19.99` → `"19.9899999999"`, `1.15` → `"1.1499999999"`. For 2^63 ≤ |d| < 1e21, `(long long)d` overflows (cvttsd2si gives INT64_MIN) and the digit loop emits non-digit bytes (for example `String(1e20)`). Values between 1.7e308 and DBL_MAX print as "Infinity" (`:59`). Parsing is also not correctly rounded (the literal `0.3` becomes `3*0.1`), so `0.1 + 0.2 === 0.3` is **true** here.
 
 **B6. Math edge cases.**
 - `Math.floor`/`ceil`/`round` of NaN, ±Infinity or |x| ≥ 2^63 return -9223372036854775808 (`jsrun.h:2122-2130`: an undefined-behaviour cast, which becomes cvttsd2si in practice). Printing that value then hits B5.

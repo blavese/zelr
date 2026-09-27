@@ -49,5 +49,8 @@ u32  pmm_holders(u64 addr);
 /* How much sharing there is, for anything that reports on the machine. */
 u64  pmm_shared_frames(void);
 u64  pmm_total_frames(void);
+
+/* Whether the allocator could hand this frame out next. */
+bool pmm_frame_free(u64 addr);
 u64  pmm_used_frames(void);
 u64  pmm_free_frames(void);

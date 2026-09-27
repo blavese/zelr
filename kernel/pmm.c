@@ -42,6 +42,8 @@ static bool is_used(u64 frame) {
     return (bitmap[frame / 32] & (1u << (frame % 32))) != 0;
 }
 
+bool pmm_frame_free(u64 addr) { return !is_used(FRAME_IDX(addr)); }
+
 void pmm_reserve(u64 start, u64 size) {
     u64 first = start & ~(u64)(PAGE_SIZE - 1);
     u64 last = (start + size + PAGE_SIZE - 1) & ~(u64)(PAGE_SIZE - 1);

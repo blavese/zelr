@@ -14,10 +14,15 @@
 
    The step has to be at least as large as the biggest surface, or one
    window's pages would run into the next window's base. The largest this
-   accepts is 1600x1200, which is 7.5 MiB, so eight covers it with room for
-   a window to be resized larger than it opened. */
+   accepts is 2560x1600, 15.6 MiB, so sixteen covers it; eight windows take
+   128 MiB of a program's address space, above everything else in it.
+
+   It was 1600x1200 in 8 MiB, which is smaller than the 1920x1080 screen
+   Settings offers: maximising a program's window there was refused. */
+#define WINSRV_MAX_W 2560
+#define WINSRV_MAX_H 1600
 #define WINSRV_SURFACE_BASE (USER_SPACE_BASE + 0x60000000ull)
-#define WINSRV_SURFACE_STEP 0x00800000ull
+#define WINSRV_SURFACE_STEP 0x01000000ull
 
 void winsrv_init(void);
 

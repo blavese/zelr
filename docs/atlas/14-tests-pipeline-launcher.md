@@ -1019,6 +1019,23 @@ A note on the verified run: `bash run.sh -T` created `zelr.img` in the repositor
 
 ### 8.1 The complete test catalogue
 
+Added in 0.40.0, not yet in the table below:
+- **`bigfilecheck.py`** (gate `bigfiletest`, screen and full; 8 checks). Drive S+M+P+H on a mkfat volume
+  seeded with a 40,000-byte and a 100,000-byte file.
+  - It uses the desktop terminal for `cp` and a cross-directory `mv`, each followed by a `theme` sentinel
+    that is waited for, because typing into a busy terminal drops characters.
+  - Then Notes on the big file: an `x` is typed and Save is clicked. The Save button is found by the accent
+    colour.
+  - readfat compares every result byte for byte.
+- **ring3check**: `cputest` (8 checks) added. The jstest case minimum rose from 86 to 162, now that the count
+  is printed at the end.
+- **smpcheck**: runs `cputest` on four processors with the spinners still going (1 check).
+- **libccheck**: 6 more checks (22 in all).
+  - atan and atan2.
+  - fputc after a full buffer.
+  - stdin, fed by typing a line when the program asks.
+  - A second by `clock()`, timed on the host.
+
 Added in 0.39.0, not yet in the table below:
 - **`hangcheck.py`** (gate `hangtest`, screen and full; 16 checks). Drive S+H, 256 MiB.
   - Network one: webserver.Server, plus a host socket that accepts and never sends. It runs

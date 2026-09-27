@@ -105,7 +105,7 @@ int main(void) {
 
     /* --- numbers, which are doubles ------------------------------------- */
     expect("arithmetic", "1 + 2 * 3", "7");
-    expect("a third is not zero", "1 / 3", "0.3333333333");
+    expect("a third is not zero", "1 / 3", "0.333333333333333");
     expect("and neither is a tenth", "0.1 + 0.2", "0.3");
     expect("division is not integer division", "7 / 2", "3.5");
     expect("the remainder keeps its sign", "-7 % 3", "-1");
@@ -299,11 +299,6 @@ int main(void) {
         js_done(&J);
     }
 
-    puts("\n");
-    putn(ran - failed);
-    puts(" of ");
-    putn(ran);
-    puts(" passed\n");
     /* --- regular expressions -------------------------------------------
      *
      * The first two are the ones that decide whether any of the rest can be
@@ -443,6 +438,58 @@ int main(void) {
            "   for (var j = 0; j < 3; j++) { n++; break; }"
            " } return n; })()", "3");
 
+    /* --- call, apply and bind ---------------------------------------------
+       All three threw "this is not a function" until the target was taken
+       from `this`, where the call hands it over, rather than looked for on
+       it under a name only the wrapper had. */
+    expect("call runs a function with the receiver it is given",
+           "(function(){ function f(a, b){ return this.v + a + b; }"
+           " return f.call({ v: 1 }, 2, 3); })()", "6");
+    expect("apply does the same with the arguments in an array",
+           "(function(){ function f(a, b){ return this.v + a + b; }"
+           " return f.apply({ v: 1 }, [2, 3]); })()", "6");
+    expect("bind keeps the receiver for later",
+           "(function(){ function f(a, b){ return this.v + a + b; }"
+           " var g = f.bind({ v: 10 }); return g(2, 3); })()", "15");
+    expect("and the arguments given with it, in front of the later ones",
+           "(function(){ function f(a, b){ return this.v + a + b; }"
+           " var g = f.bind({ v: 10 }, 5); return g(1); })()", "16");
+    expect("a built-in can be applied too", "Math.max.apply(null, [3, 7, 5])", "7");
+    expect("and a method borrowed from one object runs on another",
+           "(function(){ var a = { n: 'a', who: function(){ return this.n; } };"
+           " return a.who.call({ n: 'b' }); })()", "b");
+
+    /* --- for-in over a name declared earlier ------------------------------ */
+    expect("for (k in o) with k declared before the loop",
+           "(function(){ var o = { a: 1, b: 2 }, k, n = 0;"
+           " for (k in o) n += o[k]; return n; })()", "3");
+    expect("and in is still an operator inside brackets in a for clause",
+           "(function(){ var o = { a: 1 }, n = 0;"
+           " for (var i = ('a' in o) ? 1 : 0; i < 3; i++) n++; return n; })()",
+           "2");
+    expect("and inside a function written there",
+           "(function(){ var n = 0; for (var f = function(o){ return 'a' in o; };"
+           " n < 1; n++) {} return f({ a: 1 }); })()", "true");
+
+    /* --- decimals, printed as they were written -------------------------- */
+    expect("a price prints as it was written", "0.57", "0.57");
+    expect("another", "19.99", "19.99");
+    expect("and one that sits just below its decimal", "1.15", "1.15");
+    expect("a long fraction is rounded, not cut", "100 / 3", "33.3333333333333");
+    expect("a negative one", "-2.5", "-2.5");
+    expect("a millionth is still a decimal", "0.000001", "0.000001");
+    expect("a ten millionth is not", "1.5e-7", "1.5e-7");
+    expect("a large whole number prints in full", "1e20", "100000000000000000000");
+    expect("and one past that gets an exponent", "1e21", "1e+21");
+
+    /* The count, at the end. It used to be printed half way down, so every
+       case after the regular expressions ran without being counted, and a
+       suite that lost them would have reported the same total. */
+    puts("\n");
+    putn(ran - failed);
+    puts(" of ");
+    putn(ran);
+    puts(" passed\n");
     puts(failed ? "JSTEST_FAIL\n" : "JSTEST_PASS\n");
     return failed;
 }

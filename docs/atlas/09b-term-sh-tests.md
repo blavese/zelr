@@ -914,7 +914,7 @@ Everything here was verified by reading, with the file:line evidence given.
 
 ### 10.2 Suspicious code and likely bugs in term.c
 
-1. **Data loss in `mv`, truncation in `cp`** (`term.c:811-840`). `copy_file` copies at most 16383 bytes and prints the truncated count as success. `mv` then `unlink`s the source, so moving any file larger than 16 KiB destroys the rest of it. `mv` also does not use `rename()`, which durtest shows exists.
+1. **FIXED in 0.40.0 (see atlas README). Data loss in `mv`, truncation in `cp`** (`term.c:811-840`). `copy_file` copies at most 16383 bytes and prints the truncated count as success. `mv` then `unlink`s the source, so moving any file larger than 16 KiB destroys the rest of it. `mv` also does not use `rename()`, which durtest shows exists.
 2. **Tab expansion is off by one** (`term.c:164-167`). Tab stops land on columns 1, 5, 9…: a tab at column 0 gives one space and a tab at column 3 gives two.
 3. **Out-of-bounds read in `head_tail`** (`term.c:639`). With an empty file (total 0) it reads `io[-1]`; `head` and `tail` of an empty file then print one blank line. `cmd_wc` guards the same test (`term.c:683`); `head_tail` does not.
 4. **`ls` on a missing path says "(empty)"** (`term.c:488-512`). `stat` fails, the readdir error −1 is treated as "end of directory", and no error is printed.
