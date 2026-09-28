@@ -95,6 +95,16 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.59.0: more than one secure connection at a time
+
+- **TLS (06b §10.2, §10.3).** `sys_connect_tls` refused a secure socket while any other was open, a limit left
+  from when tls.c had one session; so every program got `NET_ERR_BUSY` while the browser sat on an https page. The
+  loop is gone. x509.c's chain was the last static a second handshake could share (a kernel task such as the
+  shell's fetch can be preempted mid-check); each check allocates its own now. tlscheck: a program opens two secure
+  sockets at once and both answer (failed with the loop back). Not checked: the preemption race itself.
+- Not done: the browser still fetches a page's pictures one at a time; doing them at once needs sockets a program
+  can wait on together.
+
 ### 0.58.0: a machine that sleeps when nothing is happening
 
 - **poll (03 §4).** `fd_poll` slept a tick and looked again, so a program waiting in poll ran a hundred times a

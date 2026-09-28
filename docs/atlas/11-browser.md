@@ -566,7 +566,7 @@ keep = headers found && (Content-Length || chunked) && !Connection: close
 parse status, Location, Content-Type, Set-Cookie; dechunk / trim; gunzip
 ```
 
-Keep-alive is a single slot: any request to another host/port/scheme closes it first. Because the kernel allows only one TLS socket on the whole machine (kernel/syscall.c:786-787) and the browser keeps its TLS socket open between requests, other programs' `connect_tls` get `NET_ERR_BUSY` while the browser idles on an https page.
+Keep-alive is a single slot: any request to another host/port/scheme closes it first. Until 0.59.0 the kernel allowed only one TLS socket on the whole machine, so while the browser idled on an https page holding its kept one, other programs' `connect_tls` got `NET_ERR_BUSY`; any socket can be secure now. The browser still fetches one thing at a time.
 
 ### 4.6 The script world
 Opened in `build` (only if the page has a `<script>` or an `on*` attribute), lives until the next `build` (any navigation, including error pages). Scripts run synchronously during `build` (external ones fetched at their position), then `DOMContentLoaded` and `load` go to document listeners. Afterwards, each main-loop pass runs due timers and at most one queued XHR; clicks are delivered on release. After each of these, `jsdom_changed()` decides whether to relayout. A handler error is reported once per page on the status line (`said_script_err`).

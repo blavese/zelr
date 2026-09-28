@@ -66,8 +66,50 @@ static int body_has(const char *want) {
     return 0;
 }
 
+/* Asks a secure socket for the site's front page and says whether an HTTP
+   answer came back on it. */
+static int answers(int sock, const char *host) {
+    char req[256];
+    int n = 0;
+    const char *parts[] = { "GET / HTTP/1.1\r\nHost: ", host,
+                            "\r\nConnection: close\r\n\r\n" };
+    for (int p = 0; p < 3; p++)
+        for (const char *c = parts[p]; *c && n < (int)sizeof(req) - 1; c++) req[n++] = *c;
+    if (send(sock, req, n) != n) return 0;
+    static char head[512];
+    int got = 0;
+    for (int tries = 0; tries < 8 && got < 12; tries++) {
+        int r = recv(sock, head + got, (int)sizeof(head) - 1 - got);
+        if (r < 0) break;                 /* NET_EOF or an error */
+        got += r;
+    }
+    head[got] = 0;
+    return got >= 12 && head[0] == 'H' && holds(head, "HTTP/1.");
+}
+
+/* Two encrypted connections at once, to two sites. There was one on the
+   whole machine: a second was refused with NET_ERR_BUSY while the first was
+   open, which is also what every other program got while the browser sat on
+   an https page. Each is asked for its page with the other still open, the
+   second first. Only for tlscheck, which reaches the real web. */
+static int two_secure(const char *a, const char *b) {
+    int s1 = connect_tls(a, 443);
+    ok("a secure connection opens", s1 >= 0);
+    int s2 = connect_tls(b, 443);
+    ok("and a second opens while the first is still open", s2 >= 0);
+    if (s1 >= 0 && s2 >= 0) {
+        ok("the second answers", answers(s2, b));
+        ok("and so does the first, which was waiting all that time", answers(s1, a));
+    }
+    if (s1 >= 0) disconnect(s1);
+    if (s2 >= 0) disconnect(s2);
+    puts(failed ? "WIRETEST_FAIL\n" : "WIRETEST_PASS\n");
+    return failed;
+}
+
 int main(int argc, char **argv) {
     const char *base = argc > 1 ? argv[1] : "";
+    if (!strcmp(base, "two-secure") && argc > 3) return two_secure(argv[2], argv[3]);
     if (!base[0]) {
         puts("wiretest needs an address to ask\nWIRETEST_FAIL\n");
         return 1;

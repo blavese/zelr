@@ -1158,7 +1158,7 @@ contradicts `tls.c:1-7` ("A connection with the first two and not the third is e
 stranger") and README 1192-1195. No selftest or `tlscheck.py` case covers it (real servers
 always send CertificateVerify).
 
-### 10.2 Drift -- "one session at a time" is still enforced one layer up
+### 10.2 FIXED in 0.59.0 (the busy loop is gone; tlscheck opens two secure sockets from a program at once, and failed with the loop back) -- Drift -- "one session at a time" is still enforced one layer up
 - `tls.c`/`tls.h` now hold `sessions[TCP_MAX]` (6), one per TCP handle.
 - `kernel/syscall.c:775-778` still says "the TLS session state in kernel/tls.c is still
   single ... a second handshake would quietly take the first one's keys", and
@@ -1174,7 +1174,7 @@ always send CertificateVerify).
 - The busy check looks only at *established* secure sockets (`secure` is set at
   `syscall.c:807` after the handshake), so it does not stop two handshakes that overlap.
 
-### 10.3 FIXED in 0.39.0 for tls.c (x509.c's static chain remains) -- Latent race -- shared statics inside the per-session design
+### 10.3 FIXED in 0.39.0 for tls.c, and in 0.59.0 for x509.c (`x509_verify_chain` now allocates the chain for each check and hands it to `verify_with`; no check reproduces the race itself) -- Latent race -- shared statics inside the per-session design
 `tls.c:669-679` (`static x509_t leaf`, `ders[]`, `lens[]`, `chain_store`) and `x509.c:564`
 (`static x509_t chain[8]`) are shared by all sessions. If a preemptible kernel task (the shell's
 `fetch https://…` → `http_get` → `tls_connect`) is preempted mid-handshake and a user process

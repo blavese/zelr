@@ -155,6 +155,22 @@ def main():
                 for line in out.splitlines()[1:6]:
                     print("      | %s" % line)
 
+        # Two secure connections at once, from a program rather than the
+        # kernel's own fetch, since the limit was in the system call: there
+        # was one on the whole machine, and every program got NET_ERR_BUSY
+        # while another -- the browser, sitting on an https page -- held it.
+        if resolved(vm, "example.com") and resolved(vm, "www.google.com"):
+            out = vm.fresh("exec /bin/wiretest two-secure example.com www.google.com",
+                           timeout=180)
+            c.add("a program opens a second secure connection while its first is open",
+                  "PASS  and a second opens while the first is still open" in out)
+            c.add("and both answer",
+                  "PASS  the second answers" in out
+                  and "PASS  and so does the first, which was waiting all that time" in out)
+            if "WIRETEST_PASS" not in out:
+                for line in out.splitlines()[1:8]:
+                    print("      | %s" % line)
+
         # http still works, because breaking it to add https would be a
         # strange way to finish.
         plain = vm.fresh("fetch http://example.com /", timeout=90)

@@ -10,6 +10,7 @@
  * caller cannot accidentally treat a failure as a success. There is no
  * "mostly valid". */
 #include "x509.h"
+#include "heap.h"
 #include "printf.h"
 #include "sha256.h"
 #include "sha512.h"
@@ -557,11 +558,8 @@ static bool dates_ok(const x509_t *c, u64 now, x509_result_t *why) {
     return true;
 }
 
-x509_result_t x509_verify_chain(const u8 *const *ders, const u32 *lens, u32 n,
-                                const char *host, u64 now) {
-    if (n == 0 || n > X509_MAX_CHAIN) return X509_BAD_PARSE;
-
-    static x509_t chain[X509_MAX_CHAIN];
+static x509_result_t verify_with(x509_t *chain, const u8 *const *ders, const u32 *lens,
+                                 u32 n, const char *host, u64 now) {
     for (u32 i = 0; i < n; i++)
         if (!x509_parse(ders[i], lens[i], &chain[i])) return X509_BAD_PARSE;
 
@@ -717,4 +715,23 @@ x509_result_t x509_verify_chain(const u8 *const *ders, const u32 *lens, u32 n,
     if (!x509_signed_by(top, &anchor)) return X509_BAD_SIGNATURE;
 
     return X509_OK;
+}
+
+/* The chain, parsed into memory of its own for each check.
+ *
+ * It was one static shared by every check, which was safe only while no
+ * check could run in the middle of another. One can: the shell's own fetch
+ * runs in a kernel task, which the timer can take the processor from part
+ * way through, and a program's handshake can then check its chain in the
+ * gap -- over the first one's, which would then be checking another site's
+ * certificates against its own name. More than one secure connection at a
+ * time makes that the ordinary case rather than a rare one. */
+x509_result_t x509_verify_chain(const u8 *const *ders, const u32 *lens, u32 n,
+                                const char *host, u64 now) {
+    if (n == 0 || n > X509_MAX_CHAIN) return X509_BAD_PARSE;
+    x509_t *chain = (x509_t *)kmalloc(sizeof(x509_t) * X509_MAX_CHAIN);
+    if (!chain) return X509_BAD_PARSE;
+    x509_result_t r = verify_with(chain, ders, lens, n, host, now);
+    kfree(chain);
+    return r;
 }

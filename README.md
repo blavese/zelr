@@ -1739,11 +1739,12 @@ large range:
   gives up after six tries, but the send window is one segment per
   connection, and there is no congestion control, no window scaling and no
   selective acknowledgement.
-- **A program gets one encrypted connection at a time.** The kernel keeps a
-  TLS session per connection now, but the system call that opens one still
-  refuses a second while the first is open, so a program can have one
-  encrypted connection and five plain ones. Lifting that is what would let a
-  page's pictures come over https in parallel.
+- **The browser fetches one thing at a time.** Encrypted connections are no
+  longer limited to one on the machine -- any of the six sockets can be one,
+  so a program can have several and another program can have its own while
+  the browser holds one -- but the browser still asks for a page's pictures
+  one after another over its kept connection. Asking for them at once needs
+  sockets a program can wait on together, which `poll` does not cover.
 - **TLS is 1.3 and one cipher suite**: AES-128-GCM with SHA-256 over X25519,
   which every 1.3 server must implement. There is no TLS 1.2 and no second
   suite, and that is the design rather than an unfinished part of it. Every

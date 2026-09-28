@@ -26,7 +26,7 @@
 #define WEB_ERR_TLS      -6     /* the connection would not prove who it was */
 #define WEB_ERR_DOWN     -7     /* no card, or no address on it */
 #define WEB_ERR_RESOLVE  -8     /* the name did not turn into an address */
-#define WEB_ERR_BUSY     -9     /* the one connection is already in use */
+#define WEB_ERR_BUSY     -9     /* every connection the machine has is in use */
 #define WEB_ERR_ENCODING -10    /* compressed in a way this cannot undo */
 
 /* The kernel answers with a reason; this is the same reason in this file's

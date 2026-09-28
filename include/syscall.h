@@ -84,7 +84,7 @@
    anything is sent. Afterwards SYS_SEND and SYS_RECV carry the same bytes
    they always did and the encryption is not the caller's business, which is
    the point: a program should not be able to get this wrong by forgetting a
-   step. One of these at a time on the machine.
+   step. As many of these at once as there are sockets.
  *
    SYS_TLS_STATUS says what happened, because "it did not connect" is not
    worth showing anybody. Which one it answers is in rdx: TLS_WHY for the
@@ -213,7 +213,7 @@
 #define NET_ERR_RESOLVE  -3     /* the name did not turn into an address */
 #define NET_ERR_CONNECT  -4     /* the address did not answer */
 #define NET_ERR_TLS      -5     /* it answered and would not prove who it was */
-#define NET_ERR_BUSY     -6     /* the one connection is already in use */
+#define NET_ERR_BUSY     -6     /* every socket the machine has is in use */
 
 #define POWER_OFF     0
 #define POWER_REBOOT  1

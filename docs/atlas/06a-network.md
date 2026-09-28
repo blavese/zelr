@@ -572,7 +572,7 @@ Sockets are **not** file descriptors: `SYS_POLL` (63) goes to `fd_poll` and know
 | Call | No. | Args (rbx, rcx, rdx) | Behaviour | Returns |
 |---|---|---|---|---|
 | SYS_CONNECT | 25 | host str (<=128), port | port 0 refused; `net_up()` (card only) else NET_ERR_DOWN; free socket else NET_ERR_BUSY; dotted or `net_resolve(6000)` else NET_ERR_RESOLVE; `tcp_open(6000)` else NET_ERR_CONNECT | socket 0..5 |
-| SYS_TLS_CONNECT | 45 | host, port (0 -> 443) | as above, but refuses (NET_ERR_BUSY) if **any** secure socket is open; `tls_connect` failure closes TCP -> NET_ERR_TLS | socket |
+| SYS_TLS_CONNECT | 45 | host, port (0 -> 443) | as above (until 0.59.0 it also refused with NET_ERR_BUSY if **any** secure socket was open); `tls_connect` failure closes TCP -> NET_ERR_TLS | socket |
 | SYS_TLS_STATUS | 46 | buf, cap (1..256), which | TLS_WHY 0 -> `tls_error(-1)`, TLS_WHAT 1 -> `tls_describe(-1)` (machine-wide last) | length |
 | SYS_SEND | 26 | sock, buf, len | owner-checked; len 1..1400 plain (one segment), 1..8192 TLS | len or -1 |
 | SYS_RECV | 27 | sock, buf, len (1..65536) | 4000 ms `tcp_recv`/`tls_recv` | bytes; 0 = nothing in time; **-2 = NET_EOF**; -1 bad |

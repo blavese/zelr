@@ -447,9 +447,8 @@ static inline int connect(const char *host, int port) {
    might use anyway. tls_why() says what went wrong, and is meant to be shown
    to somebody rather than logged.
 
-   One of these at a time on the machine: a second is refused with
-   NET_ERR_BUSY, including while the first is still being set up. Plain ones
-   alongside it are fine. */
+   As many at once as there are sockets, plain or secure: NET_ERR_BUSY means
+   every socket on the machine is in use. */
 static inline int connect_tls(const char *host, int port) {
     return syscall(SYS_TLS_CONNECT, (zelr_word)host, port, 0);
 }

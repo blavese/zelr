@@ -822,21 +822,20 @@ static i64 sys_connect(registers_t *r) {
    the address, and to check that the certificate at the other end is for the
    site that was asked for rather than merely for whoever answered.
 
-   Only one of these at a time, machine wide. kernel/tls.c holds a session
-   per connection, so this is no longer about keys being shared; it is a
-   limit nothing has yet been shown to need lifted. The slot is marked secure
-   the moment it is taken, so a second handshake started while the first is
-   still waiting on the network is refused too, rather than only a second one
-   started after the first has finished. */
+   As many at once as there are sockets. There was one on the whole machine,
+   a limit left from when kernel/tls.c had one session; it holds one per
+   connection, and the chain a handshake checks is its own (x509.c), so a
+   second handshake -- another program's, or one started while the first is
+   still waiting on the network -- has nothing of the first's to take. What
+   the limit did do was refuse every other program a secure connection while
+   the browser sat on an https page holding its kept one. The slot is taken
+   before the handshake waits, so two handshakes cannot take the same one. */
 static i64 sys_connect_tls(registers_t *r) {
     char host[128];
     if (!copy_path(r->rbx, host, sizeof(host))) return -1;
     u16 port = (u16)r->rcx;
     if (!port) port = 443;
     if (!net_up()) return NET_ERR_DOWN;
-
-    for (int i = 0; i < SOCK_MAX; i++)
-        if (socks[i].open && socks[i].secure) return NET_ERR_BUSY;
 
     int h = sock_take(true);
     if (h < 0) return NET_ERR_BUSY;

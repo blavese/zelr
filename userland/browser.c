@@ -478,8 +478,8 @@ static const char *why(int rc) {
         case WEB_ERR_RESOLVE: return "that name did not turn into an address. "
                                      "Either it does not exist, or the name "
                                      "server is not answering.";
-        case WEB_ERR_BUSY:    return "something else is using the one "
-                                     "connection this machine has";
+        case WEB_ERR_BUSY:    return "every connection this machine has "
+                                     "is in use";
         case WEB_ERR_TLS:     return "the connection would not prove who it was";
         case WEB_ERR_CONNECT: return "could not connect to that host";
         case WEB_ERR_SEND:    return "the request could not be sent";
