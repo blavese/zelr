@@ -617,7 +617,9 @@ routine keeps to a clip rectangle, and a frame whose damage is one window's
 contents starts from that window, because nothing under an opaque surface
 shows. A program can say which part of its window changed
 (`win_commit_rect`), and the terminal's blinking cursor is its bottom row,
-where it was the whole desktop twice a second. The console is redrawn on top
+where it was the whole desktop twice a second. Whatever a program commits,
+the kernel copies only the pixels that differ from what is on the screen, so
+a caret blinking in any program is a few hundred bytes and a few pixels. The console is redrawn on top
 of it all with a bitmap font, so everything that already printed kept
 working.
 
@@ -1421,7 +1423,7 @@ byte.
 ## testing
 
 The kernel tests itself. `./run.sh -T` boots with selftest on the command line,
-runs 672 checks across every subsystem, then writes to QEMU's debug-exit port
+runs 678 checks across every subsystem, then writes to QEMU's debug-exit port
 so the host gets a real exit status.
 
     [string]                8 checks   [live tree]            19 checks
@@ -1451,7 +1453,7 @@ so the host gets a real exit status.
     [theme]                19 checks   [kernel stack]          3 checks
     [taskbar]              18 checks
 
-    672 passed, 0 failed
+    678 passed, 0 failed
     SELFTEST_PASS
 
 The sound section is skipped because `run.sh` attaches no sound card, the
@@ -1489,7 +1491,7 @@ on a machine with several, where it hands work to each of them and requires
 the count they share to come back exact, and then starts more programs than
 there are processors to check that handed work is neither given to a busy
 one nor abandoned halfway for a program. `qemu-system-x86_64 -smp 4` with
-256 MiB reaches 699, and the gate runs it.
+256 MiB reaches 705, and the gate runs it.
 
 The same checks run again on `-machine q35`, which has PCIe and an AHCI
 controller rather than a 1996 chipset and a PIO disk, and reach 679 there.

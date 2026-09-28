@@ -64,42 +64,70 @@ typedef struct {
     u64       dir;             /* the address space it was mapped into */
 } slot_t;
 
-/* What a frame costs to publish, counted so /sys can be asked. */
-static u64 published_frames, published_bytes;
+/* What a frame costs to publish, counted so /sys can be asked: commits, the
+   bytes they copied, and the bytes looked at to find what to copy. */
+static u64 published_frames, published_bytes, compared_bytes;
 
 u64 winsrv_frames(void)  { return published_frames; }
 u64 winsrv_bytes(void)   { return published_bytes; }
 
-/* The copy itself.
+/* The copy, of what changed and nothing else.
  *
- * A word at a time through volatile pointers, because at -O2 clang
- * recognises this loop and replaces it with a call to memcpy -- which
- * exists here, so it would link, and would then be a call the kernel makes
- * several hundred times a second into a byte mover. The word loop is what
- * is wanted and the volatile is what keeps it. */
-static void publish(slot_t *s) {
-    if (!s->shown || !s->pixels) return;
-    volatile u32 *d = (volatile u32 *)s->shown;
-    const volatile u32 *b = (const volatile u32 *)s->pixels;
-    u64 n = s->bytes / 4;
-    for (u64 i = 0; i < n; i++) d[i] = b[i];
-    published_frames++;
-    published_bytes += s->bytes;
+ * Every program here draws the whole of its surface and commits the whole
+ * of it, whatever it changed: a caret blinking in a text field, one digit of
+ * the calculator, a character typed at the terminal. So the copy compares
+ * each row of x0..x1, y0..y1 with what the desktop is showing, copies the run
+ * of it that differs, and says where all of that was, in out[4] as x0, y0,
+ * x1, y1; false when nothing did, which is a commit with nothing to draw. The
+ * desktop then draws that box and no more, whichever program it was and
+ * however it drew.
+ *
+ * A row the same is one memcmp. The run is copied a word at a time through
+ * volatile pointers, because at -O2 clang recognises a copy loop and would
+ * make it a call. */
+static bool publish_diff(u32 *shown, const u32 *pixels, int cw,
+                         int x0, int y0, int x1, int y1, int out[4]) {
+    bool any = false;
+    int bx0 = x1, by0 = y1, bx1 = x0, by1 = y0;
+    for (int y = y0; y < y1; y++) {
+        u32 *d = shown + (u64)y * (u64)cw;
+        const u32 *b = pixels + (u64)y * (u64)cw;
+        compared_bytes += (u64)(x1 - x0) * 4;
+        if (memcmp(d + x0, b + x0, (u32)(x1 - x0) * 4) == 0) continue;
+        int l = x0, r = x1 - 1;
+        while (d[l] == b[l]) l++;                 /* a difference stops both */
+        while (d[r] == b[r]) r--;
+        volatile u32 *vd = d;
+        const volatile u32 *vb = b;
+        for (int i = l; i <= r; i++) vd[i] = vb[i];
+        published_bytes += (u64)(r - l + 1) * 4;
+        if (l < bx0) bx0 = l;
+        if (r + 1 > bx1) bx1 = r + 1;
+        if (y < by0) by0 = y;
+        by1 = y + 1;
+        any = true;
+    }
+    out[0] = bx0; out[1] = by0; out[2] = bx1; out[3] = by1;
+    return any;
 }
 
-/* Rows x..x+w of y..y+h only, for a commit of part of the surface. The
-   surface is cw pixels to a row, which is how the desktop reads it. */
-static void publish_rect(slot_t *s, int x, int y, int w, int h) {
+/* Rows x..x+w of y..y+h of a slot's surface, which is cw pixels to a row
+   (how the desktop reads it), and the window marked where they changed. */
+static void publish(slot_t *s, int x, int y, int w, int h) {
     if (!s->shown || !s->pixels || !s->win) return;
-    int cw = s->win->cw;
-    for (int j = y; j < y + h; j++) {
-        volatile u32 *d = (volatile u32 *)s->shown + (u64)j * (u64)cw + (u64)x;
-        const volatile u32 *b = (const volatile u32 *)s->pixels + (u64)j * (u64)cw + (u64)x;
-        for (int i = 0; i < w; i++) d[i] = b[i];
-    }
+    int box[4];
     published_frames++;
-    published_bytes += (u64)w * (u64)h * 4;
+    if (publish_diff(s->shown, s->pixels, s->win->cw, x, y, x + w, y + h, box))
+        wm_mark_dirty(s->win, box[0], box[1], box[2] - box[0], box[3] - box[1]);
 }
+
+/* For the self test, which gives it two buffers of its own. */
+bool winsrv_test_diff(u32 *shown, const u32 *pixels, int cw, int x0, int y0,
+                      int x1, int y1, int out[4]) {
+    return publish_diff(shown, pixels, cw, x0, y0, x1, y1, out);
+}
+
+u64 winsrv_compared(void) { return compared_bytes; }
 
 static slot_t slots[WINSRV_MAX];
 
@@ -436,13 +464,13 @@ bool winsrv_commit(u32 pid, int handle) {
     slot_t *s = lookup(pid, handle);
     if (!s || !s->win) return false;
     apply_pending(s);
-    publish(s);
-    /* Only marked: the desktop's next pass, a tick away at most, draws this
-       window's contents and nothing else, or nothing at all while it is put
-       away. wm_invalidate asks for the whole screen, and every blink of a
-       terminal's cursor drew the whole desktop. A new size (apply_pending,
-       above) still asks for the whole screen, since the old one was bigger. */
-    wm_mark_dirty(s->win, 0, 0, s->win->cw, s->win->ch);
+    /* Only marked, and only where it changed: the desktop's next pass, a
+       tick away at most, draws that and nothing else, or nothing at all
+       while the window is put away. wm_invalidate asks for the whole screen,
+       and every blink of a terminal's cursor drew the whole desktop. A new
+       size (apply_pending, above) still asks for the whole screen, since
+       the old one was bigger. */
+    publish(s, 0, 0, s->win->cw, s->win->ch);
     return true;
 }
 
@@ -463,8 +491,7 @@ bool winsrv_commit_rect(u32 pid, int handle, int x, int y, int w, int h) {
     if (y1 > ch) y1 = ch;
     if (x1 <= x0 || y1 <= y0) return true;        /* nothing, which is allowed */
 
-    publish_rect(s, (int)x0, (int)y0, (int)(x1 - x0), (int)(y1 - y0));
-    wm_mark_dirty(s->win, (int)x0, (int)y0, (int)(x1 - x0), (int)(y1 - y0));
+    publish(s, (int)x0, (int)y0, (int)(x1 - x0), (int)(y1 - y0));
     return true;
 }
 

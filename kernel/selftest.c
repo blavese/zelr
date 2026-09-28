@@ -1942,7 +1942,51 @@ static void winsrv_checks(void);
  * here was then shared by all of them. Interrupts stay off while the scratch
  * space is loaded, because a switch back to this task would load the
  * kernel's again under the writes below. */
+/* A commit copies only what differs from what the desktop is showing, and
+   says where that was: tried on two buffers of its own, for nothing changed,
+   one pixel, the two far corners, and a change outside the rectangle asked
+   about, which has to be left where it is. */
+static void test_commit_diff(void) {
+    enum { CW = 40, CH = 30 };
+    u32 *shown = (u32 *)kmalloc(CW * CH * 4), *drawn = (u32 *)kmalloc(CW * CH * 4);
+    if (!shown || !drawn) {
+        ok("room for two small surfaces", false);
+        kfree(shown); kfree(drawn);
+        return;
+    }
+    int box[4];
+    for (int i = 0; i < CW * CH; i++) shown[i] = drawn[i] = RGB(i & 0xFF, 0x20, 0x40);
+
+    ok("a commit that changed nothing copies nothing",
+       !winsrv_test_diff(shown, drawn, CW, 0, 0, CW, CH, box));
+
+    drawn[7 * CW + 5] = RGB(0xFF, 0, 0);
+    bool one = winsrv_test_diff(shown, drawn, CW, 0, 0, CW, CH, box);
+    ok("one pixel changed is a box one pixel big, where it was",
+       one && box[0] == 5 && box[1] == 7 && box[2] == 6 && box[3] == 8);
+    ok("and it is copied", shown[7 * CW + 5] == RGB(0xFF, 0, 0));
+
+    drawn[0] = RGB(1, 2, 3);
+    drawn[CW * CH - 1] = RGB(4, 5, 6);
+    bool corners = winsrv_test_diff(shown, drawn, CW, 0, 0, CW, CH, box);
+    ok("the two far corners are the whole of it",
+       corners && box[0] == 0 && box[1] == 0 && box[2] == CW && box[3] == CH
+       && memcmp(shown, drawn, CW * CH * 4) == 0);
+
+    drawn[2 * CW + 2] = RGB(9, 9, 9);            /* outside what is asked about */
+    drawn[20 * CW + 30] = RGB(8, 8, 8);          /* inside it */
+    bool part = winsrv_test_diff(shown, drawn, CW, 10, 10, CW, CH, box);
+    ok("a rectangle's commit copies what changed inside it",
+       part && box[0] == 30 && box[1] == 20 && box[2] == 31 && box[3] == 21
+       && shown[20 * CW + 30] == RGB(8, 8, 8));
+    ok("and leaves what changed outside it", shown[2 * CW + 2] != RGB(9, 9, 9));
+
+    kfree(shown);
+    kfree(drawn);
+}
+
 static void test_winsrv(void) {
+    test_commit_diff();
     u64 space = paging_new_directory();
     if (!space) { ok("a scratch address space for the window server", false); return; }
     bool were_on = interrupts_enabled();

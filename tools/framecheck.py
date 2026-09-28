@@ -233,21 +233,40 @@ def main():
         # A blinking cursor is the frame an idle desktop draws most, and it
         # drew the whole desktop, wallpaper to dock, while the terminal
         # copied its whole surface out to change one bar. Now the terminal
-        # commits its bottom row (win_commit_rect) and the frame draws only
-        # that: the kernel counts frames that drew only what changed, and
-        # the bytes commits copied out.
+        # hands over its bottom row (win_commit_rect), the kernel copies out
+        # of that only the pixels that differ from what is shown, and the
+        # frame draws only those: the kernel counts frames that drew only
+        # what changed, the bytes commits looked at and the bytes they
+        # copied.
         part_at = kernel_symbol("partial_draws", "wm.c")
         commits_at = kernel_symbol("published_frames", "winsrv.c")
         copied_at = kernel_symbol("published_bytes", "winsrv.c")
+        compared_at = kernel_symbol("compared_bytes", "winsrv.c")
         first = mon.read_u32(drawn_at)
         part0 = mon.read_u32(part_at)
         commits0 = mon.read_u32(commits_at)
         copied0 = mon.read_u32(copied_at)
+        compared0 = mon.read_u32(compared_at)
         time.sleep(4)
         showing = mon.read_u32(drawn_at) - first
         partial = mon.read_u32(part_at) - part0
         commits = mon.read_u32(commits_at) - commits0
         copied = mon.read_u32(copied_at) - copied0
+        compared = mon.read_u32(compared_at) - compared0
+
+        # A character typed at it, which is a whole commit: every program
+        # but the terminal's blink commits the whole of its surface, and
+        # what that copies is now what changed -- the letter and the cursor
+        # moving on. Waited for as the commit arriving.
+        typed_c0 = mon.read_u32(commits_at)
+        typed_b0 = mon.read_u32(copied_at)
+        mon.send("sendkey x")
+        end = time.time() + 10
+        while mon.read_u32(commits_at) == typed_c0 and time.time() < end:
+            time.sleep(0.1)
+        typed_commits = mon.read_u32(commits_at) - typed_c0
+        typed_copied = mon.read_u32(copied_at) - typed_b0
+        mon.send("sendkey backspace")
 
         # And it still blinks where it can be seen: the pixels of its colour
         # go up by the bar's worth and back again. The colour is also the
@@ -279,13 +298,19 @@ def main():
         # Measured: eight or nine on an idle host, five or six on a busy
         # one. Anything at all says the count is being read.
         c.add("the desktop's count of frames can be read while it is up", showing >= 2)
-        print("      %d of those drew only what changed; %d commits copied %d KiB"
-              % (partial, commits, copied // 1024))
+        print("      %d of those drew only what changed; %d commits looked at %d KiB"
+              " and copied %d bytes" % (partial, commits, compared // 1024, copied))
         c.add("a blinking cursor draws only what changed", showing >= 2 and partial == showing)
-        # Measured: 1428 KiB a commit for the whole surface, 118 for the
-        # bottom row and what is under it.
-        c.add("and the terminal sends its bottom row, not all of itself",
-              commits >= 2 and copied // commits < 256 * 1024)
+        # A bar two pixels wide is a hundred and some bytes; the whole
+        # surface is 1428 KiB.
+        c.add("a blink copies only the pixels that changed",
+              commits >= 2 and copied // commits < 8 * 1024)
+        # Measured: 118 KiB for the bottom row and what is under it.
+        c.add("and the terminal hands over its bottom row, not all of itself",
+              commits >= 2 and compared // commits < 256 * 1024)
+        print("      a typed character: %d commits copying %d bytes" % (typed_commits, typed_copied))
+        c.add("a character typed, a whole commit, copies only what it changed",
+              typed_commits >= 1 and typed_copied // typed_commits < 32 * 1024)
         c.add("and the cursor still blinks on the screen", blinked, blink_shot)
         # One allowed, for the clock's minute.
         c.add("a desktop with every window put away draws nothing", idle <= 1)

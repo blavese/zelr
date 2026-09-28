@@ -218,6 +218,24 @@ def main():
         c.add("and so does a browser with a page open that nobody is reading",
               woke is not None and woke < 60)
         print("      the browser ran %s times in the five seconds and the reading" % (woke,))
+
+        # --- and the music player, playing nothing ----------------------------
+        #
+        # It looked every thirty milliseconds whether or not it was playing,
+        # and drew and committed its window each time. Playing nothing, it
+        # sleeps in ui_wait now; this machine has no sound card, so it plays
+        # nothing.
+        keys(mon, "run music &\n")
+        time.sleep(3)
+        mon.send("sendkey alt-tab", settle=1.0)
+        mon.move_to(40, 740)
+        first = slices_of(vm, mon, "music")
+        time.sleep(5)
+        second = slices_of(vm, mon, "music")
+        woke = (second - first) if first is not None and second is not None else None
+        c.add("and so does a music player playing nothing",
+              woke is not None and woke < 60)
+        print("      the music player ran %s times in the five seconds and the reading" % (woke,))
     finally:
         vm.stop()
 

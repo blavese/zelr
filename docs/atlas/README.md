@@ -95,6 +95,22 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.56.0: commits that copy only what changed, and a music player that sleeps
+
+- **Commits (07 §3.7).** Every program draws its whole surface and commits the whole of it. The kernel now
+  compares each committed row with what the desktop shows, copies only the run that differs and marks only the
+  box round it (`publish_diff`); a commit that changed nothing draws no frame. framecheck: a blink copies 144
+  bytes where a commit was 1428 KiB, a typed character 412 bytes (failed with everything copied: 608000 and
+  1459200); `[window server]`: nothing, one pixel, the far corners and a rectangle's commit (failed with
+  everything copied, and with the box a row short). The terminal's row commit is now checked by the bytes
+  compared (`compared_bytes`: failed at 7125 KiB with the blink committing the whole window).
+- **The music player (10).** It went round every 30 ms whether or not it was playing, drawing and committing its
+  window each time. Playing nothing, it waits in `ui_wait` now. termcheck: 4 wakes in five idle seconds, 138
+  with the old loop.
+
+Counts after 0.56.0: selftest 678 (pc, 64 MiB), 684 (256 MiB), 691 (q35), 705 (`-smp 4`); framecheck 16 checks,
+termcheck 12; gate full 53 steps.
+
 ### 0.55.0: a desktop that draws only the part of the screen that changed
 
 - **Partial frames (07 §3.9.20, 05 §3.11).** Every frame drew the whole desktop and then sent only what

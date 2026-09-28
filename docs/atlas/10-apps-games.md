@@ -946,7 +946,7 @@ PS_OVER/PS_SHOWDOWN --Next hand/Enter/Space--> new_hand ; PS_GAMEOVER --New game
 | music.c:19-22 | 64 / 64 / 128 / 2048 | files, name, path, frames per block |
 | music.c:40 | 48000 / 2 | default device rate and channels |
 | syscall.c:456 | 4096 | frames per sound_write call |
-| music.c:440 | 4 / 30 ms | loop sleep while playing / idle |
+| music.c:440 | 4 / 30 ms | loop sleep while playing / idle (since 0.56.0 idle is `ui_wait`, with `ui_due(tune_until)` while the tune plays: termcheck, 4 wakes in five idle seconds where it was 138) |
 | music.c:292 | 520×420 | window |
 | calc.c:17-18 | 1e6 / 24 | scale, entry length |
 | calc.c | ~9.22e6 | real-valued limit of \|a·b\| and of a dividend before i64 overflow |

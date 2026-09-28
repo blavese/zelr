@@ -437,7 +437,17 @@ int main(int argc, char **argv) {
         ui_statusbar(&s, &t, w, h, status,
                      playing ? "playing" : (tune_at >= 0 ? "tune" : "ready"));
         win_commit(win);
-        sleep_ms(playing ? 4 : 30);
+        /* Playing, the card's buffer wants feeding every few milliseconds,
+           so the loop keeps looking. Otherwise nothing changes until a key,
+           the pointer or the next note of the tune: it looked every thirty
+           milliseconds all the same, and drew and committed the window each
+           time, thirty three frames a second of a player nobody was using. */
+        if (playing) {
+            sleep_ms(4);
+        } else {
+            if (tune_at >= 0) ui_due(tune_until);
+            ui_wait(win);
+        }
     }
 
     if (fd >= 0) close(fd);

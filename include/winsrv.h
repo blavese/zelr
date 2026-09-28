@@ -59,6 +59,14 @@ int  winsrv_pending(u32 pid, int handle);
 bool winsrv_commit(u32 pid, int handle);
 /* Only x, y, w, h of the surface, clipped to it; nothing at all is still true. */
 bool winsrv_commit_rect(u32 pid, int handle, int x, int y, int w, int h);
+
+/* Both commits copy only what differs from what the desktop shows, and mark
+   only that. winsrv_test_diff is that copy on two buffers of cw pixels to a
+   row, over x0..x1, y0..y1: false if nothing differed, else the box round it
+   in out[4] as x0, y0, x1, y1. winsrv_compared counts the bytes looked at. */
+bool winsrv_test_diff(u32 *shown, const u32 *pixels, int cw, int x0, int y0,
+                      int x1, int y1, int out[4]);
+u64  winsrv_compared(void);
 bool winsrv_close(u32 pid, int handle);
 
 /* The window behind a handle, for kernel-side callers. Null if the handle is
