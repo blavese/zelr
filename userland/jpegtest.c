@@ -14,6 +14,7 @@
 #include "alloc.h"
 #include "jpeg.h"
 #include "jpegdata.h"
+#include "jpegprog.h"
 
 static int failed;
 
@@ -192,6 +193,69 @@ int main(void) {
         }
     }
 
+    /* --- progressive ------------------------------------------------------------
+     *
+     * Each picture twice from the same quantised coefficients, by an encoder
+     * that is not this decoder (tools/genjpegprog.py): a progressive file is
+     * the same numbers sent in another order, so it has to come out as the
+     * same pixels as its baseline twin, byte for byte. Between them they carry
+     * every kind of progressive scan -- DC first and refined, AC in bands, AC
+     * refined, runs of empty blocks -- and a picture whose sides are not whole
+     * blocks (tall), one with no subsampling (ramp), one halved across only
+     * (rings), one component (grey), and restart markers (restarts). */
+    {
+        struct { const u8 *b; int bn; const u8 *p; int pn; int w, h; } pairs[] = {
+            { JPB_QUARTERS, sizeof(JPB_QUARTERS), JPP_QUARTERS, sizeof(JPP_QUARTERS), JP_QUARTERS_W, JP_QUARTERS_H },
+            { JPB_TALL, sizeof(JPB_TALL), JPP_TALL, sizeof(JPP_TALL), JP_TALL_W, JP_TALL_H },
+            { JPB_RAMP, sizeof(JPB_RAMP), JPP_RAMP, sizeof(JPP_RAMP), JP_RAMP_W, JP_RAMP_H },
+            { JPB_RINGS, sizeof(JPB_RINGS), JPP_RINGS, sizeof(JPP_RINGS), JP_RINGS_W, JP_RINGS_H },
+            { JPB_GREY, sizeof(JPB_GREY), JPP_GREY, sizeof(JPP_GREY), JP_GREY_W, JP_GREY_H },
+            { JPB_RESTARTS, sizeof(JPB_RESTARTS), JPP_RESTARTS, sizeof(JPP_RESTARTS), JP_RESTARTS_W, JP_RESTARTS_H },
+        };
+        int n = (int)(sizeof(pairs) / sizeof(pairs[0]));
+        int decoded = 0, sized = 1, same = 1;
+        for (int i = 0; i < n; i++) {
+            picture b, pr;
+            int rb = jpeg_decode(pairs[i].b, pairs[i].bn, &b);
+            int rp = jpeg_decode(pairs[i].p, pairs[i].pn, &pr);
+            if (rb == JPG_OK && rp == JPG_OK) {
+                decoded++;
+                if (b.w != pairs[i].w || b.h != pairs[i].h || pr.w != b.w || pr.h != b.h) sized = 0;
+                else
+                    for (int k = 0; k < b.w * b.h * 3; k++)
+                        if (b.rgb[k] != pr.rgb[k]) { same = 0; break; }
+            } else {
+                same = 0;
+            }
+            if (rb == JPG_OK) picture_free(&b);
+            if (rp == JPG_OK) picture_free(&pr);
+        }
+        okn("every progressive picture decodes, and its baseline twin", decoded == n, decoded);
+        ok("and each is the size it said", sized);
+        ok("and is the same pixels as the same picture sent baseline, byte for byte", same);
+
+        picture q;
+        int rc = jpeg_decode(JPP_QUARTERS, sizeof(JPP_QUARTERS), &q);
+        if (rc == JPG_OK) {
+            ok("and a progressive picture of four colours has them in their places",
+               red(&q, 8, 8) > 200 && green(&q, 8, 8) < 60
+               && green(&q, q.w - 8, 8) > 200 && red(&q, q.w - 8, 8) < 60
+               && blue(&q, 8, q.h - 8) > 200 && red(&q, 8, q.h - 8) < 60
+               && red(&q, q.w - 8, q.h - 8) > 200 && blue(&q, q.w - 8, q.h - 8) > 200);
+            picture_free(&q);
+        }
+
+        /* A progressive picture is sent the way it is so that it can be shown
+           before it has all arrived, and a page that stops loading part way
+           through one is ordinary: what came is shown. */
+        picture cut;
+        int cn = (int)sizeof(JPP_RINGS) * 3 / 5;
+        rc = jpeg_decode(JPP_RINGS, cn, &cut);
+        okn("and one that stops part way is shown from what arrived",
+            rc == JPG_OK && cut.w == JP_RINGS_W && cut.h == JP_RINGS_H, rc);
+        if (rc == JPG_OK) picture_free(&cut);
+    }
+
     /* --- and what it refuses --------------------------------------------------- */
     {
         picture p;
@@ -202,8 +266,9 @@ int main(void) {
         okn("and one that stops part way says that instead",
             jpeg_decode(JPG_FLAT, 40, &p) < 0, 1);
 
-        /* A progressive file is a different decoder, not a variation on
-           this one, and is refused by name. */
+        /* A baseline scan in a frame that says it is progressive: a DC scan
+           that runs on to the sixty fourth frequency is no scan the format
+           has, and is refused as broken rather than half decoded. */
         static u8 prog[sizeof(JPG_QUARTERS)];
         for (u32 i = 0; i < sizeof(JPG_QUARTERS); i++) prog[i] = JPG_QUARTERS[i];
         int found = 0;
@@ -213,9 +278,8 @@ int main(void) {
                 found = 1;
                 break;
             }
-        okn("and a progressive one is refused rather than half decoded",
-            !found || jpeg_decode(prog, (int)sizeof(prog), &p) == JPG_PROGRESSIVE,
-            JPG_PROGRESSIVE);
+        okn("and a baseline scan labelled progressive is refused as broken",
+            found && jpeg_decode(prog, (int)sizeof(prog), &p) == JPG_BAD, JPG_BAD);
 
         ok("and a refusal leaves nothing to free", p.rgb == 0);
     }

@@ -3,7 +3,7 @@
 #include "alloc.h"
 #include "png.h"
 
-/* JPEG, from the specification, baseline sequential.
+/* JPEG, from the specification, baseline sequential and progressive.
  *
  * The other half of the pictures on the web. A PNG is what a logo is; a JPEG
  * is what a photograph is, and a browser that reads one and not the other
@@ -30,10 +30,15 @@
  * stretched back afterwards. That is what the sampling factors are for and
  * it is most of why the format is small.
  *
- * What is not here: progressive JPEG, which sends the same picture in
- * several passes of increasing detail and is a different decoder rather than
- * a variation on this one; arithmetic coding, which almost nothing uses;
- * and twelve bit samples. Each is refused by name.
+ * Progressive JPEG sends the same coefficients in several passes -- the
+ * lowest frequency of every block first, then bands of the others, then the
+ * low bits the first passes held back -- so that a picture can be shown blurry
+ * and sharpened as it arrives. A large share of the photographs on the web are
+ * sent that way. It is decoded into every block's coefficients, one scan at a
+ * time, and turned into pixels once they have all arrived (jpg_progressive).
+ *
+ * What is not here: arithmetic coding, which almost nothing uses, and twelve
+ * bit samples. Each is refused by name.
  */
 
 #define JPG_OK           0
@@ -75,6 +80,7 @@ typedef struct {
     int dc;                  /* the running DC predictor */
     u8 *pix;                 /* its own plane, blocks * 8 across */
     int bw, bh;              /* in blocks */
+    short *coef;             /* progressive: every block's 64, in block order */
 } jcomp;
 
 typedef struct {
@@ -92,6 +98,10 @@ typedef struct {
     jcomp comp[JPG_COMPONENTS];
     int hmax, vmax;
     int restart;             /* MCUs between restart markers, or 0 */
+
+    int progressive;         /* the frame was SOF2 */
+    int ss, se, ah, al;      /* this scan: the band, and the bits held back */
+    int eobrun;              /* blocks left with nothing more in this band */
 
     int err;
 } jstate;
@@ -299,6 +309,184 @@ static inline void jpg_block(jstate *s, jcomp *c, u8 *dst, int stride) {
     jpg_idct(coef, dst, stride);
 }
 
+/* --- progressive ---------------------------------------------------------------
+ *
+ * Annex G. A scan carries either the DC of its components or one band of one
+ * component's AC, and either the first pass at those (with al low bits held
+ * back) or a refinement that sends the next bit down (ah is the bit it was
+ * sent to before). Everything goes into the block's coefficients as read;
+ * they are multiplied out and transformed at the end, when all of it is in. */
+
+/* The first pass at the DC: the difference from the last block of the
+   component, as in a baseline block, shifted up past the bits held back. */
+static inline void jpg_dc_first(jstate *s, jcomp *c, short *blk) {
+    int t = jpg_decode(s, &s->hdc[c->td & 3]);
+    if (s->err) return;
+    int diff = t ? jpg_extend(jpg_bits(s, t), t) : 0;
+    c->dc += diff;
+    blk[0] = (short)(c->dc * (1 << s->al));
+}
+
+/* A refinement of the DC is one bit, sent as it is. */
+static inline void jpg_dc_refine(jstate *s, short *blk) {
+    if (jpg_bit(s)) blk[0] = (short)(blk[0] | (1 << s->al));
+}
+
+/* The first pass at a band of AC: runs and values as in a baseline block,
+   and an end of band that can say how many of the following blocks have
+   nothing in this band either (eobrun), which is most of what makes a
+   progressive file small. */
+static inline void jpg_ac_first(jstate *s, jcomp *c, short *blk) {
+    if (s->eobrun) { s->eobrun--; return; }
+    for (int k = s->ss; k <= s->se; k++) {
+        int rs = jpg_decode(s, &s->hac[c->ta & 3]);
+        if (s->err) return;
+        int r = rs >> 4, size = rs & 15;
+        if (size == 0) {
+            if (r < 15) {                       /* this block and eobrun more */
+                s->eobrun = (1 << r) - 1;
+                if (r) s->eobrun += jpg_bits(s, r);
+                return;
+            }
+            k += 15;                            /* sixteen zeroes */
+            continue;
+        }
+        k += r;
+        if (k > 63) { s->err = JPG_BAD; return; }
+        blk[JPG_ZIGZAG[k]] = (short)(jpg_extend(jpg_bits(s, size), size) * (1 << s->al));
+    }
+}
+
+/* One more bit of every coefficient in a band. A coefficient that was not
+ * zero gets its bit as it is passed (a correction bit, raising it by one step
+ * away from zero if set); one that was zero and becomes one step from zero
+ * is written as a run of zero coefficients to skip -- counting only those
+ * still zero -- and its sign. The run of blocks with nothing new in them is
+ * the same eobrun as the first pass, and those blocks still take correction
+ * bits for what they had. */
+static inline void jpg_refine_one(jstate *s, short *co, int p1) {
+    if (jpg_bit(s) && (*co & p1) == 0)
+        *co = (short)(*co >= 0 ? *co + p1 : *co - p1);
+}
+
+static inline void jpg_ac_refine(jstate *s, jcomp *c, short *blk) {
+    int p1 = 1 << s->al;
+    int k = s->ss;
+    if (!s->eobrun) {
+        for (; k <= s->se; k++) {
+            int rs = jpg_decode(s, &s->hac[c->ta & 3]);
+            if (s->err) return;
+            int r = rs >> 4, size = rs & 15, value = 0;
+            if (size) {
+                if (size != 1) { s->err = JPG_BAD; return; }
+                value = jpg_bit(s) ? p1 : -p1;
+            } else if (r != 15) {
+                s->eobrun = 1 << r;
+                if (r) s->eobrun += jpg_bits(s, r);
+                break;                          /* the rest of the band, below */
+            }
+            /* Past r coefficients that are still zero, refining the others on
+               the way, to where the new one goes. */
+            for (; k <= s->se; k++) {
+                short *co = &blk[JPG_ZIGZAG[k]];
+                if (*co) {
+                    jpg_refine_one(s, co, p1);
+                } else {
+                    if (r == 0) break;
+                    r--;
+                }
+                if (s->err) return;
+            }
+            if (value && k <= s->se) blk[JPG_ZIGZAG[k]] = (short)value;
+        }
+    }
+    if (s->eobrun) {
+        for (; k <= s->se; k++) {
+            short *co = &blk[JPG_ZIGZAG[k]];
+            if (*co) jpg_refine_one(s, co, p1);
+            if (s->err) return;
+        }
+        s->eobrun--;
+    }
+}
+
+/* One scan. With several components it is MCU by MCU, as a baseline one is;
+   with one, which every band of AC is, it is that component's own blocks
+   row by row -- only those that cover the picture, not the ones an MCU
+   rounds out to, which a scan of one never sends. */
+static inline int jpg_prog_scan(jstate *s, const int *which, int ns) {
+    int mcux = (s->w + s->hmax * 8 - 1) / (s->hmax * 8);
+    int mcuy = (s->h + s->vmax * 8 - 1) / (s->vmax * 8);
+    int units_x = mcux, units_y = mcuy;
+    if (ns == 1) {
+        jcomp *c = &s->comp[which[0]];
+        int cw = (s->w * c->h + s->hmax - 1) / s->hmax;
+        int ch = (s->h * c->v + s->vmax - 1) / s->vmax;
+        units_x = (cw + 7) / 8;
+        units_y = (ch + 7) / 8;
+    }
+
+    int since_restart = 0;
+    s->eobrun = 0;
+    for (int i = 0; i < s->ncomp; i++) s->comp[i].dc = 0;
+
+    for (int uy = 0; uy < units_y; uy++) {
+        for (int ux = 0; ux < units_x; ux++) {
+            if (s->restart && since_restart == s->restart) {
+                s->nbits = 0;
+                s->marker_hit = 0;
+                while (s->at + 1 < s->n) {
+                    if (s->in[s->at] == 0xFF && s->in[s->at + 1] >= 0xD0
+                        && s->in[s->at + 1] <= 0xD7) { s->at += 2; break; }
+                    s->at++;
+                }
+                for (int i = 0; i < s->ncomp; i++) s->comp[i].dc = 0;
+                s->eobrun = 0;
+                since_restart = 0;
+            }
+
+            for (int w = 0; w < ns; w++) {
+                jcomp *c = &s->comp[which[w]];
+                int bh = ns == 1 ? 1 : c->v, bwn = ns == 1 ? 1 : c->h;
+                for (int by = 0; by < bh; by++) {
+                    for (int bx = 0; bx < bwn; bx++) {
+                        int col = ns == 1 ? ux : ux * c->h + bx;
+                        int row = ns == 1 ? uy : uy * c->v + by;
+                        short *blk = c->coef + ((u32)row * (u32)c->bw + (u32)col) * 64u;
+                        if (s->ss == 0) {
+                            if (s->ah == 0) jpg_dc_first(s, c, blk);
+                            else            jpg_dc_refine(s, blk);
+                        } else {
+                            if (s->ah == 0) jpg_ac_first(s, c, blk);
+                            else            jpg_ac_refine(s, c, blk);
+                        }
+                        if (s->err) return s->err;
+                    }
+                }
+            }
+            since_restart++;
+        }
+    }
+    return JPG_OK;
+}
+
+/* And once it is all in: each block multiplied by its table, in the order
+   the table is written in, and transformed into its plane. */
+static inline void jpg_progressive(jstate *s) {
+    for (int i = 0; i < s->ncomp; i++) {
+        jcomp *c = &s->comp[i];
+        const u16 *q = s->quant[c->tq & 3];
+        for (int by = 0; by < c->bh; by++)
+            for (int bx = 0; bx < c->bw; bx++) {
+                const short *blk = c->coef + ((u32)by * (u32)c->bw + (u32)bx) * 64u;
+                int coef[64];
+                for (int k = 0; k < 64; k++)
+                    coef[JPG_ZIGZAG[k]] = blk[JPG_ZIGZAG[k]] * q[k];
+                jpg_idct(coef, c->pix + by * 8 * (c->bw * 8) + bx * 8, c->bw * 8);
+            }
+    }
+}
+
 /* --- markers -------------------------------------------------------------- */
 static inline int jpg_u16(const u8 *p) { return (p[0] << 8) | p[1]; }
 
@@ -369,12 +557,14 @@ static inline int jpeg_decode(const u8 *data, int n, picture *out) {
         s.hac[i].present = 0;
         for (int k = 0; k < 64; k++) s.quant[i][k] = 1;
     }
-    for (int i = 0; i < JPG_COMPONENTS; i++) s.comp[i].pix = 0;
+    for (int i = 0; i < JPG_COMPONENTS; i++) { s.comp[i].pix = 0; s.comp[i].coef = 0; }
     s.in = data; s.n = n; s.at = 2;
     s.bits = 0; s.nbits = 0; s.marker_hit = 0;
     s.w = s.h = s.ncomp = 0;
     s.hmax = s.vmax = 1;
     s.restart = 0;
+    s.progressive = 0;
+    s.eobrun = 0;
     s.err = JPG_OK;
 
     int rc = JPG_BAD;
@@ -395,7 +585,9 @@ static inline int jpeg_decode(const u8 *data, int n, picture *out) {
         const u8 *body = data + s.at + 2;
         int blen = len - 2;
 
-        if (marker == 0xC0 || marker == 0xC1) {          /* baseline */
+        if (marker == 0xC0 || marker == 0xC1 || marker == 0xC2) {
+            if (s.w) { rc = JPG_BAD; goto done; }        /* a second frame */
+            s.progressive = marker == 0xC2;
             if (blen < 6) { rc = JPG_BAD; goto done; }
             if (body[0] != 8) { rc = JPG_UNSUPPORTED; goto done; }
             s.h = jpg_u16(body + 1);
@@ -432,9 +624,13 @@ static inline int jpeg_decode(const u8 *data, int n, picture *out) {
                 c->pix = (u8 *)malloc((u32)(c->bw * 8 * c->bh * 8));
                 if (!c->pix) { rc = JPG_TOO_BIG; goto done; }
                 for (int k = 0; k < c->bw * 8 * c->bh * 8; k++) c->pix[k] = 128;
+                if (s.progressive) {
+                    u32 n64 = (u32)c->bw * (u32)c->bh * 64u;
+                    c->coef = (short *)malloc(n64 * sizeof(short));
+                    if (!c->coef) { rc = JPG_TOO_BIG; goto done; }
+                    for (u32 k = 0; k < n64; k++) c->coef[k] = 0;
+                }
             }
-        } else if (marker == 0xC2) {
-            rc = JPG_PROGRESSIVE; goto done;
         } else if (marker == 0xC9 || marker == 0xCA || marker == 0xCB) {
             rc = JPG_UNSUPPORTED; goto done;             /* arithmetic coded */
         } else if (marker == 0xC4) {                     /* Huffman tables */
@@ -479,34 +675,65 @@ static inline int jpeg_decode(const u8 *data, int n, picture *out) {
             if (blen < 1) { rc = JPG_BAD; goto done; }
 
             int ns = body[0];
-            if (ns != s.ncomp) { rc = JPG_UNSUPPORTED; goto done; }
-            for (int i = 0; i < ns && 1 + i * 2 + 1 < blen; i++) {
+            if (ns < 1 || ns > s.ncomp || blen < 1 + ns * 2 + 3) { rc = JPG_BAD; goto done; }
+            if (!s.progressive && ns != s.ncomp) { rc = JPG_UNSUPPORTED; goto done; }
+            int which[JPG_COMPONENTS];
+            for (int i = 0; i < ns; i++) {
                 int id = body[1 + i * 2];
                 int tt = body[2 + i * 2];
+                which[i] = -1;
                 for (int k = 0; k < s.ncomp; k++)
                     if (s.comp[k].id == id) {
                         s.comp[k].td = tt >> 4;
                         s.comp[k].ta = tt & 15;
+                        which[i] = k;
                     }
+                if (which[i] < 0) { rc = JPG_BAD; goto done; }
             }
 
             s.at += len;
             s.nbits = 0;
-            rc = jpg_scan(&s);
+            s.marker_hit = 0;
+
+            if (!s.progressive) {
+                rc = jpg_scan(&s);
+                scanned = 1;
+                goto done;
+            }
+
+            /* A band of AC is of one component, a DC scan goes no further
+               than the DC, and a refinement is one bit below the last. */
+            const u8 *sp = body + 1 + ns * 2;
+            s.ss = sp[0]; s.se = sp[1]; s.ah = sp[2] >> 4; s.al = sp[2] & 15;
+            if ((s.ss == 0 ? s.se != 0 : (s.se < s.ss || s.se > 63 || ns != 1))
+                || s.al > 13 || (s.ah && s.ah != s.al + 1)) { rc = JPG_BAD; goto done; }
+
+            rc = jpg_prog_scan(&s, which, ns);
+            if (rc == JPG_TRUNCATED && scanned) break;   /* show what came */
+            if (rc != JPG_OK) goto done;
             scanned = 1;
-            goto done;
+            continue;
         }
 
         s.at += len;
     }
 
+    /* The end of the file, or of what arrived of it: a progressive picture
+       is shown from the scans that came. */
+    if (s.progressive && scanned) rc = JPG_OK;
+
 done:
     if (!scanned || rc != JPG_OK) {
         if (rc == JPG_OK) rc = JPG_TRUNCATED;
-        for (int i = 0; i < JPG_COMPONENTS; i++)
+        for (int i = 0; i < JPG_COMPONENTS; i++) {
             if (s.comp[i].pix) free(s.comp[i].pix);
+            if (s.comp[i].coef) free(s.comp[i].coef);
+        }
         return rc;
     }
+    if (s.progressive) jpg_progressive(&s);
+    for (int i = 0; i < JPG_COMPONENTS; i++)
+        if (s.comp[i].coef) { free(s.comp[i].coef); s.comp[i].coef = 0; }
 
     /* --- and out as pixels ------------------------------------------------
      *

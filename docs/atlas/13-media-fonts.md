@@ -53,7 +53,7 @@ Two unrelated clusters that share the "generated data plus tools" style:
 * **Inflate is mandatory.** "a browser that cannot do this cannot show a picture at all" (`inflate.h:7-9`). The same inflate later served HTTP gzip (`fetch.h:137-150`): "Three to five times less to move".
 * **Checksums are not verified.** zlib Adler-32 (`inflate.h:310-313`), gzip CRC-32 (`fetch.h:142-145`) and PNG chunk CRCs (never read) are all skipped. The stated reason is "what it would catch -- a corrupted download -- the transport has already checked, and a picture that decodes is a picture."
 * **Output is always RGB888 with no alpha.** "carrying an alpha channel through the layout for the few images that have one would mean every drawing path had to know about it". Transparent PNG pixels are composited onto `bg` at decode time (`png.h:40-44`, `112-115`).
-* **Refuse by name rather than decode wrongly.** This covers interlaced and 16-bit PNG (`png.h:27-30`), and progressive, arithmetic-coded and 12-bit JPEG (`jpeg.h:33-36`).
+* **Refuse by name rather than decode wrongly.** This covers interlaced and 16-bit PNG (`png.h:27-30`), and progressive, arithmetic-coded and 12-bit JPEG (`jpeg.h:33-36`; progressive is decoded since 0.60.0).
 * **Partial output.** `inf_run` reports how much came out even on `INF_FULL`, because "A page read down to where the room ran out is worth more than no page". Images must not use that, because "half a PNG is not half a picture" (`inflate.h:267-278`).
 * **The JPEG IDCT is the textbook formula in float.** It is not a fast factorisation, so that it stays readable (`jpeg.h:170-180`). The cosine table comes from a Taylor series because "there is no cosine in this system to ask" (`jpeg.h:187-189`). Ring-3 programs are built without `-mno-sse` (`userland/build.sh:27-35`), unlike the kernel (`build.sh:45`), so float and double are legal here.
 * **SVG is a renderer, not a decoder** (`svg.h:8-18`). The motivation was the Google logo. Unsupported features are "skipped rather than approximated", except gradients (see drift §10). Curves are flattened (16 steps per cubic). The fill is a scanline with 4 sub-scanlines per pixel and exact horizontal span coverage.
@@ -239,7 +239,7 @@ Includes `zelr.h`, `alloc.h` and `png.h` (for `picture`, which also pulls in `in
      * `ncomp` must be 1 or 3, otherwise `JPG_UNSUPPORTED`. This excludes CMYK and YCCK.
      * Sampling factors must be 1..4.
      * Each plane is `(mcux*h*8)×(mcuy*v*8)` bytes, filled with 128.
-   * **SOF2** gives `JPG_PROGRESSIVE`.
+   * **SOF2** gives `JPG_PROGRESSIVE`. Since 0.60.0 SOF2 is decoded: the frame is parsed as SOF0 is and each component also gets `coef`, every block's 64 coefficients as shorts. Each SOS is checked (a DC scan ends at the DC; a band of AC is of one component and within 1..63; `al <= 13`; a refinement is one bit below the last) and run by `jpg_prog_scan`: MCU by MCU for several components, the component's own blocks inside the picture (not the MCU padding) for one; restarts reset the DC predictors and `eobrun`. `jpg_dc_first`, `jpg_dc_refine`, `jpg_ac_first` (end of band runs, `eobrun`) and `jpg_ac_refine` (correction bits, new coefficients placed after r still-zero ones) follow Annex G. After the last scan, or when the file stops part way after at least one whole scan, `jpg_progressive` multiplies each block by its table and transforms it into its plane, and the colour conversion follows as for baseline. `JPG_PROGRESSIVE` is no longer returned; a baseline scan in a frame labelled progressive is `JPG_BAD`.
    * **SOF9/10/11** (arithmetic coding) give `JPG_UNSUPPORTED`.
    * SOF3, SOF5-7 and SOF13-15 are not recognised. They are skipped like any other segment, and then SOS fails with `JPG_BAD` because `w == 0`.
    * **DHT** (`C4`): several tables per segment; `th>3` gives `JPG_BAD`; no more than 256 values.
@@ -360,7 +360,7 @@ All three follow the same pattern:
 | 91-116 | `JPG_QUARTERS` | 64×64 quadrants red/green/blue/white. Thresholds detect Cb/Cr swaps. |
 | 123-168 | `JPG_GRADIENT` | 48×24 grey ramp. Dark end below 40, bright end above 215, middle 128±24. The average of every 8-pixel block must increase (`rising == blocks-1`). No step between pixels larger than 40. |
 | 175-193 | `JPG_TALL` | 21×37, a size that is not a multiple of 8. Size, and the far corner is white. |
-| 196-221 | Refusals | PNG bytes give `JPG_NOT_JPEG`. 40 bytes gives any negative result. The first `FF C0` patched to `FF C2` gives `JPG_PROGRESSIVE`. `p.rgb == 0`. |
+| 196-221 | Refusals | PNG bytes give `JPG_NOT_JPEG`. 40 bytes gives any negative result. The first `FF C0` patched to `FF C2` gives `JPG_PROGRESSIVE` (since 0.60.0 `JPG_BAD`: a DC scan to 63 is no progressive scan). `p.rgb == 0`. Since 0.60.0 also: six pictures from `userland/jpegprog.h` (tools/genjpegprog.py, an encoder of its own written from Annex G and K, checked once against Windows' decoder), each baseline and progressive from the same coefficients, must decode to the same pixels byte for byte; their colours; and a progressive file cut at three fifths is shown from what arrived. |
 | 224-232 | Leak check | 20 cycles. |
 
 **`svgtest.c`** (37 checks):

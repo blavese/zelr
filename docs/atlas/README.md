@@ -95,6 +95,28 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.60.0: progressive photographs
+
+- **JPEG (13).** Progressive files were refused, and a large share of the photographs on the web are sent that way.
+  They are decoded now: every block's coefficients are kept, each scan is decoded into them (DC first and
+  refined, AC bands with end-of-band runs, AC refined by successive approximation), and they are multiplied out
+  and transformed at the end. A file that stops part way is shown from the scans that arrived.
+- **Test pictures.** Nothing on the host writes a progressive JPEG, so `tools/genjpegprog.py` is an encoder of its
+  own from the specification, writing each picture baseline and progressive from the same quantised coefficients
+  (`userland/jpegprog.h`). Windows' decoder gave the same pixels for every pair when it was written. jpegtest wants
+  the same pixels from both, byte for byte, for six pictures between them carrying every kind of scan, odd sizes,
+  three samplings, one component and restart markers; it failed with the refinement's sign swapped, an end-of-band
+  run one too long, a one-component scan walking the MCU grid, the DC refinement ignored, correction bits
+  ignored, and a cut file refused. Not checked: resetting `eobrun` at a restart, which passed broken because a
+  valid file never carries a run across a restart marker (the encoder ends every run before one); it matters only
+  to a damaged file.
+- **framecheck, under load.** Two of its checks were tried with three harnesses at once: the stars check wanted 20
+  frames in four seconds, which a loaded host does not draw, and now wants 4; and "no commit drawn late" is now
+  an average (`lag_ticks` over `lag_count`, at most 3 ticks a commit), because a count of late ones swung with
+  where the blinks fell -- the loop that nothing wakes drew 2 of 5 late in one run, which a looser count passed.
+  With the average it failed at 21 ticks over 4 commits; the fixed build waited 1 tick over 5. deskcheck's snap and
+  screen size checks also failed once each under that load and pass alone, as the gate retries them.
+
 ### 0.59.0: more than one secure connection at a time
 
 - **TLS (06b §10.2, §10.3).** `sys_connect_tls` refused a secure socket while any other was open, a limit left

@@ -441,6 +441,7 @@ static u64 last_dock_look;                /* the once a second look at the clock
 static u32 passes;                        /* of the loop, for the self test and framecheck */
 static u64 marked_at;                     /* the tick a commit was first waiting */
 static u32 late_commits;                  /* drawn more than five ticks after */
+static u32 lag_ticks, lag_count;          /* and the ticks each waited, added up */
 
 /* What the launcher offers. A null program means the kernel handles it. */
 typedef struct {
@@ -3252,7 +3253,10 @@ static void composite(void) {
     draw_cycles += rdtsc() - started;
     draws++;
     if (marked_at) {
-        if (timer_ticks() - marked_at > 5) late_commits++;
+        u64 lag = timer_ticks() - marked_at;
+        if (lag > 5) late_commits++;
+        lag_ticks += (u32)lag;
+        lag_count++;
         marked_at = 0;
     }
     if (part) {
