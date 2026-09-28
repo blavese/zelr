@@ -131,7 +131,7 @@ static int corner_inset(int r, int i) {
 }
 
 void fb_round_rect(int x, int y, int w, int h, int r, u32 rgb) {
-    if (w <= 0 || h <= 0) return;
+    if (w <= 0 || h <= 0 || fb_clip_misses(x, y, w, h)) return;
     if (r <= 0) { fb_rect((u32)x, (u32)y, (u32)w, (u32)h, rgb); return; }
     if (r * 2 > w) r = w / 2;
     if (r * 2 > h) r = h / 2;
@@ -145,7 +145,7 @@ void fb_round_rect(int x, int y, int w, int h, int r, u32 rgb) {
 }
 
 void fb_round_frame(int x, int y, int w, int h, int r, u32 rgb) {
-    if (w <= 0 || h <= 0) return;
+    if (w <= 0 || h <= 0 || fb_clip_misses(x, y, w, h)) return;
     if (r <= 0) { fb_frame((u32)x, (u32)y, (u32)w, (u32)h, rgb); return; }
     if (r * 2 > w) r = w / 2;
     if (r * 2 > h) r = h / 2;
@@ -167,12 +167,12 @@ void fb_round_frame(int x, int y, int w, int h, int r, u32 rgb) {
    rings that fade outward. Reading the framebuffer back is what makes this
    work over any wallpaper without knowing what it is. */
 /* One horizontal run of the shadow, darkened in place. */
-static void shadow_span(int px0, int px1, int py, int alpha) {
-    if (py < 0 || py >= (int)fb_height()) return;
-    if (px0 < 0) px0 = 0;
-    if (px1 > (int)fb_width()) px1 = (int)fb_width();
-    for (int px = px0; px < px1; px++)
-        fb_put((u32)px, (u32)py, gfx_mix(fb_get((u32)px, (u32)py), 0, alpha));
+static void shadow_span(int px0, int px1, int py, int alpha, int cx0, int cx1) {
+    u32 *row = fb_row(py);
+    if (!row) return;
+    if (px0 < cx0) px0 = cx0;
+    if (px1 > cx1) px1 = cx1;
+    for (int px = px0; px < px1; px++) row[px] = gfx_mix(row[px], 0, alpha);
 }
 
 /*
@@ -186,12 +186,21 @@ static void shadow_span(int px0, int px1, int py, int alpha) {
  * walked directly instead. What is drawn is identical.
  */
 void fb_shadow(int x, int y, int w, int h, int r, int spread) {
+    if (fb_clip_misses(x - spread, y - spread + 2, w + spread * 2, h + spread * 2)) return;
+    int cx0, cy0, cx1, cy1;
+    fb_clip_get(&cx0, &cy0, &cx1, &cy1);
+
     for (int s = spread; s >= 1; s--) {
         int alpha = 70 / (s + 1);
         int rx = x - s, ry = y - s + 2, rw = w + s * 2, rh = h + s * 2;
         int rr = r + s;
 
-        for (int j = 0; j < rh; j++) {
+        /* Only the rows inside the clip: a window's shadow is two edges
+           the height of the window, and a frame redrawing a strip across
+           it needs the few rows of them in the strip. */
+        int j0 = cy0 - ry > 0 ? cy0 - ry : 0;
+        int j1 = cy1 - ry < rh ? cy1 - ry : rh;
+        for (int j = j0; j < j1; j++) {
             int py = ry + j;
 
             int inset = 0;
@@ -204,33 +213,41 @@ void fb_shadow(int x, int y, int w, int h, int r, int spread) {
 
             /* The top and bottom two rows are solid across. */
             if (j < 2 || j >= rh - 2) {
-                shadow_span(left, right, py, alpha);
+                shadow_span(left, right, py, alpha, cx0, cx1);
                 continue;
             }
 
             /* Everything between is two vertical edges, two pixels wide,
                unless the row is so narrow that they meet. */
             if (right - left <= 4) {
-                shadow_span(left, right, py, alpha);
+                shadow_span(left, right, py, alpha, cx0, cx1);
             } else {
-                shadow_span(left, left + 2, py, alpha);
-                shadow_span(right - 2, right, py, alpha);
+                shadow_span(left, left + 2, py, alpha, cx0, cx1);
+                shadow_span(right - 2, right, py, alpha, cx0, cx1);
             }
         }
     }
 }
 
 void fb_vgradient(int x, int y, int w, int h, u32 top, u32 bottom) {
-    if (h <= 0) return;
-    for (int j = 0; j < h; j++) {
+    if (h <= 0 || fb_clip_misses(x, y, w, h)) return;
+    int cx0, cy0, cx1, cy1;
+    fb_clip_get(&cx0, &cy0, &cx1, &cy1);
+    int j0 = cy0 - y > 0 ? cy0 - y : 0;
+    int j1 = cy1 - y < h ? cy1 - y : h;
+    for (int j = j0; j < j1; j++) {
         u32 c = gfx_mix(top, bottom, j * 255 / (h > 1 ? h - 1 : 1));
         fb_rect((u32)x, (u32)(y + j), (u32)w, 1, c);
     }
 }
 
 void fb_hgradient(int x, int y, int w, int h, u32 left, u32 right) {
-    if (w <= 0) return;
-    for (int i = 0; i < w; i++) {
+    if (w <= 0 || fb_clip_misses(x, y, w, h)) return;
+    int cx0, cy0, cx1, cy1;
+    fb_clip_get(&cx0, &cy0, &cx1, &cy1);
+    int i0 = cx0 - x > 0 ? cx0 - x : 0;
+    int i1 = cx1 - x < w ? cx1 - x : w;
+    for (int i = i0; i < i1; i++) {
         u32 c = gfx_mix(left, right, i * 255 / (w > 1 ? w - 1 : 1));
         fb_rect((u32)(x + i), (u32)y, 1, (u32)h, c);
     }
@@ -286,6 +303,8 @@ int face_width(const char *s, int which) {
 void face_text(int x, int y, const char *s, u32 fg, int which) {
     const face_t *f = face_for(which);
     int baseline = y + (f->size * 4) / 5;
+    int cx0, cy0, cx1, cy1;
+    fb_clip_get(&cx0, &cy0, &cx1, &cy1);
 
     for (; *s; s++) {
         unsigned char c = (unsigned char)*s;
@@ -293,16 +312,23 @@ void face_text(int x, int y, const char *s, u32 fg, int which) {
         const face_glyph *g = &f->glyphs[c - FACE_FIRST];
         const unsigned char *px = f->pixels + g->at;
 
+        /* A glyph wholly outside the clip is only its advance. */
+        int top = baseline - g->top, left = x + g->left;
+        if (top >= cy1 || top + g->h <= cy0 || left >= cx1 || left + g->w <= cx0) {
+            x += g->advance;
+            continue;
+        }
+
         for (int gy = 0; gy < g->h; gy++) {
-            int sy = baseline - g->top + gy;
-            if (sy < 0 || sy >= (int)fb_height()) continue;
+            int sy = top + gy;
+            u32 *row = fb_row(sy);
+            if (!row) continue;
             for (int gx = 0; gx < g->w; gx++) {
                 unsigned char a = px[gy * g->w + gx];
                 if (!a) continue;
-                int sx = x + g->left + gx;
-                if (sx < 0 || sx >= (int)fb_width()) continue;
-                fb_put((u32)sx, (u32)sy,
-                       a == 255 ? fg : gfx_mix(fb_get((u32)sx, (u32)sy), fg, a));
+                int sx = left + gx;
+                if (sx < cx0 || sx >= cx1) continue;
+                row[sx] = a == 255 ? fg : gfx_mix(row[sx], fg, a);
             }
         }
         x += g->advance;
@@ -377,43 +403,55 @@ static int corner_cover(int px, int py, int cx8, int cy8, int r8) {
 static void span(int x0, int x1, int y, u32 rgb, int alpha) {
     u32 *row = fb_row(y);
     if (!row) return;
-    if (x0 < 0) x0 = 0;
-    if (x1 > (int)fb_width()) x1 = (int)fb_width();
+    int cx0, cy0, cx1, cy1;
+    fb_clip_get(&cx0, &cy0, &cx1, &cy1);
+    if (x0 < cx0) x0 = cx0;
+    if (x1 > cx1) x1 = cx1;
     if (alpha >= 255) for (int px = x0; px < x1; px++) row[px] = rgb;
     else              for (int px = x0; px < x1; px++) row[px] = gfx_mix(row[px], rgb, alpha);
 }
 
 static void round_row(int x, int y, int w, int r, int row_from_edge,
                       u32 rgb, int alpha) {
-    if (y < 0 || y >= (int)fb_height()) return;
+    u32 *row = fb_row(y);
+    if (!row) return;
 
     if (row_from_edge >= r) {
         span(x, x + w, y, rgb, alpha);
         return;
     }
 
-    /* Inside a corner row: the two ends are curved and the middle is full. */
+    /* Inside a corner row: the two ends are curved and the middle is full.
+       A corner pixel outside the clip is not measured, which is sixteen
+       samples saved for each. */
+    int cx0, cy0, cx1, cy1;
+    fb_clip_get(&cx0, &cy0, &cx1, &cy1);
     int cy8 = (r - row_from_edge) * 8;            /* distance up to the centre */
     for (int i = 0; i < r; i++) {
+        int left = x + i, right = x + w - 1 - i;
+        bool lin = left >= cx0 && left < cx1;
+        bool rin = right != left && right >= cx0 && right < cx1;
+        if (!lin && !rin) continue;
         int cov = corner_cover(i, 0, r * 8, cy8, r * 8);
         if (!cov) continue;
         int a = alpha >= 255 ? cov : cov * alpha / 255;
-        int left = x + i, right = x + w - 1 - i;
-        if (left >= 0 && left < (int)fb_width())
-            fb_put((u32)left, (u32)y, gfx_mix(fb_get((u32)left, (u32)y), rgb, a));
-        if (right != left && right >= 0 && right < (int)fb_width())
-            fb_put((u32)right, (u32)y, gfx_mix(fb_get((u32)right, (u32)y), rgb, a));
+        if (lin) row[left] = gfx_mix(row[left], rgb, a);
+        if (rin) row[right] = gfx_mix(row[right], rgb, a);
     }
     span(x + r, x + w - r, y, rgb, alpha);
 }
 
 void fb_round_rect_aa(int x, int y, int w, int h, int r, u32 rgb, int alpha) {
-    if (w <= 0 || h <= 0 || alpha <= 0) return;
+    if (w <= 0 || h <= 0 || alpha <= 0 || fb_clip_misses(x, y, w, h)) return;
     if (r * 2 > w) r = w / 2;
     if (r * 2 > h) r = h / 2;
     if (r < 0) r = 0;
 
-    for (int j = 0; j < h; j++) {
+    int cx0, cy0, cx1, cy1;
+    fb_clip_get(&cx0, &cy0, &cx1, &cy1);
+    int j0 = cy0 - y > 0 ? cy0 - y : 0;
+    int j1 = cy1 - y < h ? cy1 - y : h;
+    for (int j = j0; j < j1; j++) {
         int from_edge = j < h - 1 - j ? j : h - 1 - j;
         round_row(x, y + j, w, r, from_edge, rgb, alpha);
     }
@@ -452,8 +490,14 @@ void fb_round_ring_aa(int x, int y, int w, int h, int r, u32 edge, int alpha, u3
     int iw = w - 2, ih = h - 2, ir = r > 0 ? r - 1 : 0;
     if (ir * 2 > iw) ir = iw / 2;
     if (ir * 2 > ih) ir = ih / 2;
+    if (fb_clip_misses(x, y, w, h)) return;
+    int cx0, cy0, cx1, cy1;
+    fb_clip_get(&cx0, &cy0, &cx1, &cy1);
+    int px0 = x > cx0 ? x : cx0, px1 = x + w < cx1 ? x + w : cx1;
+    int j0 = cy0 - y > 0 ? cy0 - y : 0;
+    int j1 = cy1 - y < h ? cy1 - y : h;
 
-    for (int j = 0; j < h; j++) {
+    for (int j = j0; j < j1; j++) {
         int py = y + j;
         u32 *row = fb_row(py);
         if (!row) continue;
@@ -468,9 +512,10 @@ void fb_round_ring_aa(int x, int y, int w, int h, int r, u32 edge, int alpha, u3
             else          { s0 = x + 1 + ir; s1 = x + 1 + iw - ir; }
         }
 
-        for (int px = x; px < x + w; px++) {
-            if (px == s0 && s1 > s0) { px = s1 - 1; continue; }
-            if (px < 0 || px >= (int)fb_width()) continue;
+        /* Only the columns inside the clip; the walk may start past s0, so
+           the solid middle is skipped by range rather than on arrival. */
+        for (int px = px0; px < px1; px++) {
+            if (px >= s0 && px < s1) { px = s1 - 1; continue; }
             u32 c = row[px];
 
             bool curve;
@@ -510,11 +555,13 @@ void fb_vignette(int strength) {
     int w = (int)fb_width(), h = (int)fb_height();
     int cx = w / 2, cy = h / 2;
     if (w <= 0 || h <= 0) return;
+    int cx0, cy0, cx1, cy1;
+    fb_clip_get(&cx0, &cy0, &cx1, &cy1);
 
-    for (int py = 0; py < h; py++) {
+    for (int py = cy0; py < cy1; py++) {
         int dy = ((py - cy) * 1000) / (h / 2 ? h / 2 : 1);
         int dy2 = (dy * dy) / 1000;
-        for (int px = 0; px < w; px++) {
+        for (int px = cx0; px < cx1; px++) {
             int dx = ((px - cx) * 1000) / (w / 2 ? w / 2 : 1);
             /* Halved, so the two together reach a thousand at a corner
                rather than two thousand. */
@@ -533,10 +580,12 @@ void fb_vignette(int strength) {
 void fb_glow(int cx, int cy, int rx, int ry, u32 rgb, int strength) {
     if (rx <= 0 || ry <= 0 || strength <= 0) return;
     int x0 = cx - rx, x1 = cx + rx, y0 = cy - ry, y1 = cy + ry;
-    if (x0 < 0) x0 = 0;
-    if (y0 < 0) y0 = 0;
-    if (x1 > (int)fb_width()) x1 = (int)fb_width();
-    if (y1 > (int)fb_height()) y1 = (int)fb_height();
+    int kx0, ky0, kx1, ky1;
+    fb_clip_get(&kx0, &ky0, &kx1, &ky1);
+    if (x0 < kx0) x0 = kx0;
+    if (y0 < ky0) y0 = ky0;
+    if (x1 > kx1) x1 = kx1;
+    if (y1 > ky1) y1 = ky1;
 
     for (int py = y0; py < y1; py++) {
         int dy = py - cy;
@@ -567,7 +616,7 @@ void fb_glow(int cx, int cy, int rx, int ry, u32 rgb, int strength) {
  * light rather than as decoration, so it is worth having and worth keeping
  * quiet: the strength here is a tenth of what those interfaces used. */
 void fb_sheen(int x, int y, int w, int h, int r, int strength) {
-    if (w <= 0 || h <= 0) return;
+    if (w <= 0 || h <= 0 || fb_clip_misses(x, y, w, h / 2)) return;
     int band = h / 2;
     if (band < 1) return;
     for (int j = 0; j < band; j++) {

@@ -28,7 +28,7 @@ int main(int argc, char **argv) {
 }
 ```
 
-`zelr.h` is the whole interface: sixty-five system calls and a little sugar
+`zelr.h` is the whole interface: sixty-six system calls and a little sugar
 over them. Every one is `int $0x80` with the number in `rax`, so there is
 nothing to link against and nothing to find at runtime.
 

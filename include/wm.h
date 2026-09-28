@@ -87,6 +87,9 @@ struct window {
     u32  *canvas;             /* cw * ch pixels, owned by the window */
     bool  open;
     bool  dirty;              /* content changed since the last composite */
+    /* Which part of the content, in the surface's own pixels, x0 to x1 and
+       y0 to y1; empty means all of it (wm_mark_dirty). */
+    int   dirty_x0, dirty_y0, dirty_x1, dirty_y1;
     wm_mouse_fn on_mouse;
     wm_key_fn   on_key;
     void (*on_close)(window_t *w);   /* lets an app drop its handle */
@@ -140,6 +143,9 @@ int  wm_find_query(char *out, int cap);
 window_t *wm_create(const char *title, int x, int y, int cw, int ch);
 void wm_close(window_t *w);
 void wm_invalidate(window_t *w);
+/* Part of a window's content changed: x, y, w, h in its surface. The
+   desktop's next pass draws that much of the screen and nothing more. */
+void wm_mark_dirty(window_t *w, int x, int y, int cw, int ch);
 void wm_raise(window_t *w);
 
 /* Changes a window's size. Works for both kinds: the kernel's own windows
@@ -166,6 +172,18 @@ bool wm_test_maximize(window_t *w);
 u32  wm_draws(void);
 u32  wm_draw_mcycles(void);
 u32  wm_pointer_only_moves(void);   /* moves that redrew only the pointer */
+u32  wm_partial_draws(void);        /* frames that drew only what changed */
+
+/* For the self test. wm_test_draw_scene draws a frame's scene without the
+   pointer, the whole of it or only inside x, y, w, h, as a frame drawing only
+   its damage does; wm_test_damage says what damage() keeps of a rectangle,
+   into out[4] as x0, y0, x1, y1, and false when it keeps nothing. */
+void wm_test_draw_scene(int x, int y, int w, int h, bool clip);
+/* Drops the kept wallpaper, so the next frame paints it; says whether there
+   was one. And where the dock is, as x, y, w, h. */
+bool wm_test_forget_wallpaper(void);
+void wm_test_dock(int out[4]);
+bool wm_test_damage(int x, int y, int w, int h, int out[4]);
 
 /* wm_test_wallpaper: the wallpaper a frame starts from (the cached copy when
    there is one), or drawn afresh, saved into a width * height buffer; true

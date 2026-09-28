@@ -324,6 +324,8 @@ static void publish_text(void) {
     win_set_text(win, buf, n);
 }
 
+static int draw_prompt(void);
+
 static void draw_all(void) {
     fill(&scr, pal.bg);
     publish_text();
@@ -359,6 +361,25 @@ static void draw_all(void) {
     /* The prompt sits on the bottom row, always visible. */
     int py = PAD + text_rows * MONO_H;
     rect(&scr, 0, py - 3, scr.w, 1, pal.dim);
+    draw_prompt();
+
+    if (view > 0) {
+        w_reset();
+        w_str(" "); w_num((u32)view); w_str(" lines back, End returns ");
+        int tw = strlen(work) * MONO_W;
+        rect(&scr, scr.w - tw - PAD, PAD - 2, tw, MONO_H + 2, pal.dim);
+        face_draw(&scr, scr.w - tw - PAD, PAD, work, pal.bg, UI_FACE_MONO);
+    }
+}
+
+/* The bottom row: where the shell is, the line being typed and the cursor.
+ * Everything from the top of it to the bottom of the window belongs to it,
+ * so a blink of the cursor draws only this and commits only this
+ * (win_commit_rect), where it drew and sent the whole window twice a second.
+ * Returns the row's top. */
+static int draw_prompt(void) {
+    int py = PAD + (rows - 1) * MONO_H;
+    rect(&scr, 0, py, scr.w, scr.h - py, pal.bg);
 
     char cwd[128];
     if (getcwd(cwd, sizeof(cwd)) < 0) strcpy(cwd, "/");
@@ -398,14 +419,7 @@ static void draw_all(void) {
             rect(&scr, cx, py, 2, MONO_H, pal.cursor);
         }
     }
-
-    if (view > 0) {
-        w_reset();
-        w_str(" "); w_num((u32)view); w_str(" lines back, End returns ");
-        int tw = strlen(work) * MONO_W;
-        rect(&scr, scr.w - tw - PAD, PAD - 2, tw, MONO_H + 2, pal.dim);
-        face_draw(&scr, scr.w - tw - PAD, PAD, work, pal.bg, UI_FACE_MONO);
-    }
+    return py;
 }
 
 /* --- paths -------------------------------------------------------------- */
@@ -1914,9 +1928,19 @@ int main(void) {
             }
         }
 
+        /* Only the cursor due to change: its row alone is drawn and sent,
+           and nothing at all while the view is scrolled back, where no
+           cursor is shown. */
+        int blink = !changed && cursor_lit() != lit;
         if (cursor_lit() != lit) changed = 1;  /* the cursor needs a repaint */
 
-        if (changed) {
+        if (blink) {
+            if (view == 0) {
+                int py = draw_prompt();
+                win_commit_rect(win, 0, py, scr.w, scr.h - py);
+            }
+            lit = cursor_lit();
+        } else if (changed) {
             draw_all();
             win_commit(win);
             lit = cursor_lit();

@@ -301,6 +301,12 @@ Insert, F2-F12 and DEL (127, as sent by a serial terminal) do nothing. Escape ne
      changed something or the phase has changed since the last draw; and the loop ends in
      `win_wait(win, time until the next phase)` instead of the sleep. termcheck counts the terminal's slices
      over five idle seconds (27 against the old 250 or so; the check allows 120).
+   - Since 0.55.0 a blink with nothing else changed draws only the bottom row (`draw_prompt()`, which owns
+     everything from the row's top to the bottom of the window and returns that top) and commits only it
+     (`win_commit_rect`), and nothing at all while the view is scrolled back, where no cursor is drawn.
+     `draw_all` draws the prompt through the same function. framecheck checks that a commit then copies
+     less than 256 KiB (measured: 118 KiB for the row and what is under it, 1428 KiB for the whole surface) and that the cursor still
+     visibly blinks.
 
 #### 3.1.15 Themes (`term.c:1187-1255`)
 

@@ -57,6 +57,8 @@ bool winsrv_poll(u32 pid, int handle, wm_event_t *out);
    a handle that is not this program's. */
 int  winsrv_pending(u32 pid, int handle);
 bool winsrv_commit(u32 pid, int handle);
+/* Only x, y, w, h of the surface, clipped to it; nothing at all is still true. */
+bool winsrv_commit_rect(u32 pid, int handle, int x, int y, int w, int h);
 bool winsrv_close(u32 pid, int handle);
 
 /* The window behind a handle, for kernel-side callers. Null if the handle is

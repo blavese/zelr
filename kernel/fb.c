@@ -69,6 +69,42 @@ static u8    *sent;
 static bool   sent_valid;
 static bool   rgb_card;      /* the card takes red first (to_card) */
 
+/* The part of the back buffer drawing may change: all of it, except while
+   the desktop draws only the part of a frame that changed (fb_clip). Every
+   writer here keeps to it, and so does every drawer in gfx.c, which is what
+   lets a cursor blinking in one window cost that window rather than the
+   whole desktop, wallpaper to dock. */
+static bool   clipped;
+static int    clip_x0, clip_y0, clip_x1, clip_y1;
+
+void fb_clip(int x, int y, int w, int h) {
+    int x1 = x + w, y1 = y + h;
+    if (x < 0) x = 0;
+    if (y < 0) y = 0;
+    if (x1 > (int)width)  x1 = (int)width;
+    if (y1 > (int)height) y1 = (int)height;
+    /* Nothing at all, rather than a rectangle turned inside out. */
+    if (x1 < x) x1 = x;
+    if (y1 < y) y1 = y;
+    clip_x0 = x; clip_y0 = y; clip_x1 = x1; clip_y1 = y1;
+    clipped = true;
+}
+
+void fb_unclip(void) { clipped = false; }
+
+void fb_clip_get(int *x0, int *y0, int *x1, int *y1) {
+    if (clipped) { *x0 = clip_x0; *y0 = clip_y0; *x1 = clip_x1; *y1 = clip_y1; }
+    else         { *x0 = 0; *y0 = 0; *x1 = (int)width; *y1 = (int)height; }
+}
+
+/* True when nothing of x, y, w, h is inside the clip, so whatever it is can
+   be skipped without drawing a pixel of it. */
+bool fb_clip_misses(int x, int y, int w, int h) {
+    int x0, y0, x1, y1;
+    fb_clip_get(&x0, &y0, &x1, &y1);
+    return w <= 0 || h <= 0 || x >= x1 || y >= y1 || x + w <= x0 || y + h <= y0;
+}
+
 /* Drawing goes through a back buffer so that a half drawn frame is never on
    the screen. When there is not enough memory for one, drawing straight into
    video memory is still worth doing: it tears, and tearing is the difference
@@ -251,6 +287,7 @@ bool fb_mode_settable(void) { return active && !adopted && !via_svga; }
 
 bool fb_set_mode(u32 w, u32 h) {
     if (!fb_mode_settable()) return false;
+    clipped = false;               /* a clip is in the old mode's pixels */
     if (w < 640 || h < 480 || w > 4096 || h > 4096) return false;
     if (w == width && h == height) return true;
 
@@ -284,6 +321,8 @@ bool fb_set_mode(u32 w, u32 h) {
 
 void fb_put(u32 x, u32 y, u32 rgb) {
     if (!active || x >= width || y >= height) return;
+    if (clipped && ((int)x < clip_x0 || (int)x >= clip_x1 ||
+                    (int)y < clip_y0 || (int)y >= clip_y1)) return;
     *(u32 *)(back + y * pitch + x * 4) = rgb;
 }
 
@@ -295,9 +334,11 @@ u32 fb_get(u32 x, u32 y) {
 /* A row of the back buffer, for a drawer walking a span of it: through
    fb_put a pixel costs a call and two bounds tests, and the solid rows of
    every rounded rectangle on the desktop went that way. Zero off the
-   screen. */
+   screen, and above or below the clip; a drawer walking the row keeps to
+   the clip's columns itself (fb_clip_get). */
 u32 *fb_row(int y) {
     if (!active || y < 0 || y >= (int)height) return 0;
+    if (clipped && (y < clip_y0 || y >= clip_y1)) return 0;
     return (u32 *)(back + (u32)y * pitch);
 }
 
@@ -308,9 +349,16 @@ void fb_back_save(u32 *dst) {
     for (u32 y = 0; y < height; y++) memcpy(dst + y * width, back + y * pitch, width * 4);
 }
 
+/* Within the clip only, so a frame that redraws a rectangle starts from the
+   picture there and leaves the rest of the last frame where it is. */
 void fb_back_restore(const u32 *src) {
     if (!active || !src) return;
-    for (u32 y = 0; y < height; y++) memcpy(back + y * pitch, src + y * width, width * 4);
+    int x0, y0, x1, y1;
+    fb_clip_get(&x0, &y0, &x1, &y1);
+    if (x1 <= x0) return;
+    for (int y = y0; y < y1; y++)
+        memcpy(back + (u32)y * pitch + (u32)x0 * 4, src + (u32)y * width + (u32)x0,
+               (u32)(x1 - x0) * 4);
 }
 
 void fb_clear(u32 rgb) {
@@ -323,11 +371,18 @@ void fb_clear(u32 rgb) {
 void fb_rect(u32 x, u32 y, u32 w, u32 h, u32 rgb) {
     if (!active) return;
     if (x >= width || y >= height) return;
-    if (x + w > width)  w = width - x;
-    if (y + h > height) h = height - y;
-    for (u32 j = 0; j < h; j++) {
-        u32 *row = (u32 *)(back + (y + j) * pitch) + x;
-        for (u32 i = 0; i < w; i++) row[i] = rgb;
+    int x0, y0, x1, y1;
+    fb_clip_get(&x0, &y0, &x1, &y1);
+    /* In 64 bits, because x + w in 32 can wrap past the edge and back. */
+    u64 l = x, t = y, r = (u64)x + w, b = (u64)y + h;
+    if (l < (u64)x0) l = (u64)x0;
+    if (t < (u64)y0) t = (u64)y0;
+    if (r > (u64)x1) r = (u64)x1;
+    if (b > (u64)y1) b = (u64)y1;
+    if (l >= r || t >= b) return;
+    for (u64 j = t; j < b; j++) {
+        u32 *row = (u32 *)(back + (u32)j * pitch);
+        for (u64 i = l; i < r; i++) row[i] = rgb;
     }
 }
 
@@ -573,6 +628,11 @@ bool fb_test_orders(u8 rgbx[4], u8 bgrx[4]) {
     u8 *keep = lfb;
     bool keep_rgb = rgb_card;
     u32 was = ((u32 *)back)[0];
+    /* The same pixel is sent three times, and a rectangle flush leaves out a
+       row the mirror says the card already has: with the mirror trusted,
+       only the first would go. */
+    bool keep_valid = sent_valid;
+    sent_valid = false;
 
     fb_put(0, 0, RGB(0x12, 0x34, 0x56));
     lfb = mem;
@@ -587,6 +647,7 @@ bool fb_test_orders(u8 rgbx[4], u8 bgrx[4]) {
     rgb_card = keep_rgb;
     ((u32 *)back)[0] = was;
     fb_flush_rect(0, 0, 1, 1);
+    sent_valid = keep_valid;
     if (on) sti();
     kfree(mem);
     return true;
@@ -604,6 +665,13 @@ void fb_flush_rect(u32 x, u32 y, u32 w, u32 h) {
     if (back != lfb) {
         for (u32 j = 0; j < h; j++) {
             u32 off = (y + j) * pitch + x * 4;
+            /* A row the card already has is not sent again. A frame that
+               redraws one window sends this whole rectangle, and most of
+               its rows are what they were: a blinking cursor is a few of
+               them. Reading the mirror is far cheaper than writing the
+               card, which is uncached. */
+            if (sent && sent_valid && memcmp(sent + off, back + off, w * 4) == 0)
+                continue;
             to_card(lfb + off, back + off, w * 4);
             /* The mirror has to learn about this too, or the next whole
                frame will decide these rows are already on the screen and

@@ -1145,7 +1145,19 @@ helper_done`. `volatile bool flushing`. Counters `frames`, `shared_frames`,
 * `fb_flush()` (418-506): see section 4.12.
 * `fb_flush_rect(x, y, w, h)` (508-526): copies the rows to lfb **and** the
   mirror (so the mirror never lies about those rows), sfence, then
-  `svga_update(rect)`.
+  `svga_update(rect)`. Since 0.55.0 a row the mirror already holds is left
+  out (`memcmp` against `sent` while `sent_valid`), because a frame that
+  redraws one window sends that window's whole rectangle and a blinking
+  cursor changes a few of its rows. `fb_test_orders` clears `sent_valid`
+  while it sends one pixel three ways, or only the first would go.
+* **The clip** (since 0.55.0): `fb_clip(x, y, w, h)` (kept to the screen,
+  empty rather than inside out), `fb_unclip()`, `fb_clip_get(&x0, &y0, &x1,
+  &y1)` (the screen when unclipped) and `fb_clip_misses(x, y, w, h)`.
+  `fb_put`, `fb_row` (0 for rows outside it), `fb_rect` (clamped in 64 bits)
+  and `fb_back_restore` keep to it; `fb_get` reads anywhere; `fb_set_mode`
+  drops it. Every drawer in gfx.c keeps to it too (07 section 3.8). The
+  desktop sets it for a frame that draws only its damage (07 section
+  3.9.20) and nothing else does.
 * `fb_flush_cycles()` returns the TSC cycles of the first full flush.
   `fb_double_buffered()` is `active && back != lfb`.
 * Accessors: `fb_active`, `fb_width`, `fb_height`, `fb_pitch`, `fb_pixels`

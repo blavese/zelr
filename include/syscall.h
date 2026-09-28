@@ -190,6 +190,13 @@
    most a second a call; a negative wait is a second). Programs used to poll
    and sleep twenty milliseconds, fifty times a second, doing nothing. */
 #define SYS_WIN_WAIT      65
+
+/* Commit only a rectangle of the surface: rbx the window, rcx x and y and rdx
+   the width and height, each a low and a high 32 bits. What is outside it
+   must be as the last commit left it. The desktop then copies and draws that
+   much and no more, where a whole commit is the whole window: a terminal's
+   cursor blinking twice a second used to be the whole of it both times. */
+#define SYS_WIN_COMMIT_RECT 66
 #define TLS_WHY   0
 #define TLS_WHAT  1
 

@@ -47,6 +47,16 @@ void fb_back_restore(const u32 *src);
 void fb_rect(u32 x, u32 y, u32 w, u32 h, u32 rgb);
 void fb_frame(u32 x, u32 y, u32 w, u32 h, u32 rgb);
 
+/* A frame that redraws only what changed draws inside this rectangle and
+   nowhere else: fb_put, fb_row, fb_rect, fb_back_restore and every drawer in
+   gfx.c keep to it (fb_get reads anywhere). fb_unclip gives back the whole
+   screen, which is what there is the rest of the time. fb_clip_get says what
+   the clip is now, and fb_clip_misses whether a box is wholly outside it. */
+void fb_clip(int x, int y, int w, int h);
+void fb_unclip(void);
+void fb_clip_get(int *x0, int *y0, int *x1, int *y1);
+bool fb_clip_misses(int x, int y, int w, int h);
+
 /* Everything is drawn into a back buffer; this pushes it to the card. */
 void fb_flush(void);
 
@@ -68,6 +78,7 @@ u64 fb_screen_bytes(void);
 /* False when the back buffer would not fit and drawing goes straight at the
    screen, which is visible as tearing and as every draw costing bus time. */
 bool fb_double_buffered(void);
+/* One rectangle to the card, row by row, leaving out the rows it already has. */
 void fb_flush_rect(u32 x, u32 y, u32 w, u32 h);
 u64  fb_rect_flushes(void);   /* how many of those since boot */
 

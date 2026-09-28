@@ -273,16 +273,25 @@ static bool frame_is_whole = true;
    Empty when x1 is not past x0. */
 static int dmg_x0, dmg_y0, dmg_x1, dmg_y1;
 
+/* Kept to the screen. A menu near the left edge or a window against the top
+   damages from a negative place, and fb_flush_rect takes unsigned numbers:
+   it read one as far past the edge and sent nothing at all, so a context
+   menu opened at the left stayed half faded on the screen. */
 static void damage(int x, int y, int w, int h) {
-    if (w <= 0 || h <= 0) return;
+    int x1 = x + w, y1 = y + h;
+    if (x < 0) x = 0;
+    if (y < 0) y = 0;
+    if (x1 > (int)fb_width())  x1 = (int)fb_width();
+    if (y1 > (int)fb_height()) y1 = (int)fb_height();
+    if (x1 <= x || y1 <= y) return;
     if (dmg_x1 <= dmg_x0) {                 /* first of this frame */
-        dmg_x0 = x; dmg_y0 = y; dmg_x1 = x + w; dmg_y1 = y + h;
+        dmg_x0 = x; dmg_y0 = y; dmg_x1 = x1; dmg_y1 = y1;
         return;
     }
     if (x < dmg_x0) dmg_x0 = x;
     if (y < dmg_y0) dmg_y0 = y;
-    if (x + w > dmg_x1) dmg_x1 = x + w;
-    if (y + h > dmg_y1) dmg_y1 = y + h;
+    if (x1 > dmg_x1) dmg_x1 = x1;
+    if (y1 > dmg_y1) dmg_y1 = y1;
 }
 
 /* One rectangle rather than a list. Two windows redrawing in opposite
@@ -574,7 +583,24 @@ bool wm_active(void) { return running; }
 int wm_outer_w(const window_t *w) { return w->cw + WM_BORDER * 2; }
 int wm_outer_h(const window_t *w) { return w->ch + WM_TOP + WM_BORDER; }
 
-void wm_invalidate(window_t *w) { if (w) w->dirty = true; need_frame(); }
+void wm_invalidate(window_t *w) {
+    if (w) { w->dirty = true; w->dirty_x0 = w->dirty_x1 = 0; }   /* all of it */
+    need_frame();
+}
+
+void wm_mark_dirty(window_t *w, int x, int y, int cw, int ch) {
+    if (!w || cw <= 0 || ch <= 0) return;
+    if (w->dirty && w->dirty_x1 <= w->dirty_x0) return;      /* all of it already */
+    if (!w->dirty) {
+        w->dirty_x0 = x; w->dirty_y0 = y; w->dirty_x1 = x + cw; w->dirty_y1 = y + ch;
+    } else {
+        if (x < w->dirty_x0) w->dirty_x0 = x;
+        if (y < w->dirty_y0) w->dirty_y0 = y;
+        if (x + cw > w->dirty_x1) w->dirty_x1 = x + cw;
+        if (y + ch > w->dirty_y1) w->dirty_y1 = y + ch;
+    }
+    w->dirty = true;
+}
 
 window_t *wm_create(const char *title, int x, int y, int cw, int ch) {
     if (nwin >= WM_MAX_WINDOWS) return 0;
@@ -708,13 +734,17 @@ bool wm_has_event(const window_t *w) {
 
 /* --- compositing -------------------------------------------------------- */
 
+/* Into the clip only (fb_clip), which is the screen unless the frame is
+   drawing just what changed. */
 static void blit_surface(const u32 *px, int sw, int sh, int dx, int dy) {
+    int cx0, cy0, cx1, cy1;
+    fb_clip_get(&cx0, &cy0, &cx1, &cy1);
     int sx = 0, sy = 0;
     int w = sw, h = sh;
-    if (dx < 0) { sx = -dx; w += dx; dx = 0; }
-    if (dy < 0) { sy = -dy; h += dy; dy = 0; }
-    if (dx + w > (int)fb_width())  w = (int)fb_width() - dx;
-    if (dy + h > (int)fb_height()) h = (int)fb_height() - dy;
+    if (dx < cx0) { sx = cx0 - dx; w -= sx; dx = cx0; }
+    if (dy < cy0) { sy = cy0 - dy; h -= sy; dy = cy0; }
+    if (dx + w > cx1) w = cx1 - dx;
+    if (dy + h > cy1) h = cy1 - dy;
     if (w <= 0 || h <= 0) return;
 
     u8 *dst = fb_pixels();
@@ -1188,6 +1218,11 @@ static void draw_desk_icon(int i, int x, int y, bool selected) {
 
 static void draw_desk_icons(void) {
     if (!theme()->desk_icons) return;
+    /* The column, from the top of the screen (the tile behind an icon rises
+       above its cell) to the last label, and past the cell's right edge for
+       a label wider than it. Outside the clip, none of it is walked. */
+    if (fb_clip_misses(0, 0, ICON_LEFT + ICON_CELL_W + 16,
+                       ICON_TOP + DESK_N * ICON_CELL_H + 16)) return;
     int y = ICON_TOP;
     for (int i = 0; i < DESK_N; i++) {
         draw_desk_icon(i, ICON_LEFT, y, desk_is_sel(i));
@@ -1582,6 +1617,13 @@ static void draw_wallpaper(void) {
     }
 
     paint_wallpaper();
+
+    /* A frame drawing only a rectangle painted only that much of it, so
+       there is no whole picture to keep. The next whole frame keeps one. */
+    int cx0, cy0, cx1, cy1;
+    fb_clip_get(&cx0, &cy0, &cx1, &cy1);
+    if (cx0 != 0 || cy0 != 0 || cx1 != (int)k.w || cy1 != (int)k.h) return;
+
     if (!wall_cache || wall_cache_w != k.w || wall_cache_h != k.h) {
         if (wall_cache) kfree(wall_cache);
         wall_cache = 0;
@@ -2783,6 +2825,11 @@ static void draw_taskbar(void) {
     int y = taskbar_y();
     int W = (int)fb_width();
 
+    /* Everything below its shadow, which rises eight rows above it: a frame
+       drawing only a window's contents higher up leaves all of this alone
+       rather than walking every chip, button and clock to clip them away. */
+    if (fb_clip_misses(0, y - 12, W, (int)fb_height() - (y - 12))) return;
+
     /* Flush to the bottom edge and the full width of it, because a panel is
        part of the machine rather than a card lying on the desktop. A
        floating rounded one was tried here once and read as an app.
@@ -3057,9 +3104,30 @@ static u32 draws;
 u32 wm_draws(void) { return draws; }
 u32 wm_draw_mcycles(void) { return (u32)(draw_cycles / 1000000); }
 
-static void composite(void) {
-    u64 started = rdtsc();
+/* The topmost window whose contents hold the whole of the clip, or -1.
+ *
+ * A surface is copied, not blended, so where it is nothing under it shows:
+ * a frame drawing only the line a terminal's cursor is on started from the
+ * wallpaper and the terminal's own frame, every pixel of which that line
+ * then covered. The wallpaper, everything under the window and its frame
+ * are left out, and the frame starts from the window. The whole screen
+ * never fits inside one, so a whole frame is drawn as ever. */
+static int contents_holding_clip(void) {
+    int x0, y0, x1, y1;
+    fb_clip_get(&x0, &y0, &x1, &y1);
+    if (x1 <= x0 || y1 <= y0) return -1;
+    for (int i = nwin - 1; i >= 0; i--) {
+        window_t *w = stack[i];
+        if (w->minimized) continue;
+        int cx = w->x + WM_BORDER, cy = w->y + WM_TOP;
+        if (x0 >= cx && y0 >= cy && x1 <= cx + w->cw && y1 <= cy + w->ch) return i;
+    }
+    return -1;
+}
 
+/* Everything a frame shows but the pointer, drawn inside the clip: the whole
+   screen, or only what changed (composite). */
+static void draw_scene(void) {
     /* Surfaces replaced since the last frame go back now, before anything
        here takes a pointer into one. */
     winsrv_reap_retired();
@@ -3070,7 +3138,10 @@ static void composite(void) {
        what is beneath it and what is beneath it would otherwise be the
        last frame, blended again, every frame. */
     int cover = covering_index();
-    if (cover >= 0) {
+    int held = contents_holding_clip();
+    if (held >= 0) {
+        /* Nothing under that window's contents: see above. */
+    } else if (cover >= 0) {
         fb_rect(0, 0, fb_width(), fb_height(), theme()->desktop);
     } else {
         draw_wallpaper();
@@ -3079,11 +3150,16 @@ static void composite(void) {
     }
 
     int front = focus_index();
-    for (int i = cover > 0 ? cover : 0; i < nwin; i++) {
+    int from = held >= 0 ? held : cover > 0 ? cover : 0;
+    for (int i = from; i < nwin; i++) {
         window_t *w = stack[i];
-        w->dirty = false;
+        w->dirty = false; w->dirty_x0 = w->dirty_x1 = 0;
         if (w->minimized) continue;         /* still a window, just not here */
-        draw_chrome(w, i == front);
+        /* The window and its shadow, which is at most seven wide and sits
+           two low: outside the clip there is nothing of it to draw. */
+        if (fb_clip_misses(w->x - 10, w->y - 10, wm_outer_w(w) + 20, wm_outer_h(w) + 20))
+            continue;
+        if (i != held) draw_chrome(w, i == front);   /* its contents cover all of it here */
 
         /* The surface and its dimensions are taken together. A program
            swapping its own surface changes all three at once, and reading
@@ -3098,7 +3174,7 @@ static void composite(void) {
         blit_surface(px, cw, ch, w->x + WM_BORDER, w->y + WM_TOP);
     }
 
-    for (int i = 0; i < cover; i++) stack[i]->dirty = false;
+    for (int i = 0; i < from; i++) { stack[i]->dirty = false; stack[i]->dirty_x0 = stack[i]->dirty_x1 = 0; }
 
     draw_snap_preview();
     draw_resize_preview();
@@ -3108,14 +3184,57 @@ static void composite(void) {
     draw_net_panel();
     draw_menu();
     draw_ctx();
+}
+
+/* Frames that drew only what changed, for /sys/screen. */
+static u32 partial_draws;
+u32 wm_partial_draws(void) { return partial_draws; }
+
+/* Whether this frame can draw only its damage.
+ *
+ * Every frame drew the whole desktop, wallpaper to dock, and then sent only
+ * the part that differed: a cursor blinking in one window cost everything
+ * the screen shows, twice a second. A frame that knows what changed now
+ * draws only that, inside a clip every drawer keeps to, and what is outside
+ * it is left as the last frame drew it -- which is exactly what a whole
+ * frame would have drawn there again.
+ *
+ * Not with a wallpaper that moves, which is different everywhere every
+ * frame and would show a seam at the edge of the clip; not without a kept
+ * patch under the pointer, which the frame has to take off first; and not
+ * when anything asked for the whole screen. */
+static bool frame_is_partial(void) {
+    if (frame_is_whole || dmg_x1 <= dmg_x0 || !under_kept) return false;
+    return covering_index() >= 0 || !wallpaper_moves(theme()->wallpaper);
+}
+
+static void composite(void) {
+    u64 started = rdtsc();
+
+    /* The arrow comes off the last frame first, since the part of the
+       screen left alone keeps whatever was drawn there; it goes back on at
+       the end, wherever the pointer is now, outside the clip. */
+    bool part = frame_is_partial();
+    int ox = under_x, oy = under_y;
+    if (part) {
+        put_back_under();
+        fb_clip(dmg_x0, dmg_y0, dmg_x1 - dmg_x0, dmg_y1 - dmg_y0);
+    }
+    draw_scene();
+    fb_unclip();
+
     keep_under(last_mx, last_my);
     draw_cursor(last_mx, last_my);
     draw_cycles += rdtsc() - started;
     draws++;
-    if (frame_is_whole || dmg_x1 <= dmg_x0) {
-        fb_flush();
+    if (part) {
+        partial_draws++;
+        fb_flush_rect((u32)dmg_x0, (u32)dmg_y0, (u32)(dmg_x1 - dmg_x0),
+                      (u32)(dmg_y1 - dmg_y0));
+        fb_flush_rect((u32)ox, (u32)oy, CUR_W, CUR_H);
+        fb_flush_rect((u32)last_mx, (u32)last_my, CUR_W, CUR_H);
     } else {
-        fb_flush_rect(dmg_x0, dmg_y0, dmg_x1 - dmg_x0, dmg_y1 - dmg_y0);
+        fb_flush();
     }
     /* Cleared, not set: the next frame sends only what asks to be sent, and
        everything that changes the whole screen already calls need_frame. */
@@ -4217,6 +4336,32 @@ bool wm_test_wallpaper(u32 *out, bool fresh) {
     return from_copy;
 }
 
+void wm_test_draw_scene(int x, int y, int w, int h, bool clip) {
+    if (clip) fb_clip(x, y, w, h);
+    draw_scene();
+    fb_unclip();
+}
+
+bool wm_test_forget_wallpaper(void) {
+    bool had = wall_cache && wall_valid;
+    wall_valid = false;
+    return had;
+}
+
+void wm_test_dock(int out[4]) {
+    out[0] = dock_x(); out[1] = taskbar_y(); out[2] = dock_w(); out[3] = TASKBAR_H;
+}
+
+bool wm_test_damage(int x, int y, int w, int h, int out[4]) {
+    int k0 = dmg_x0, k1 = dmg_y0, k2 = dmg_x1, k3 = dmg_y1;
+    dmg_x0 = dmg_y0 = dmg_x1 = dmg_y1 = 0;
+    damage(x, y, w, h);
+    out[0] = dmg_x0; out[1] = dmg_y0; out[2] = dmg_x1; out[3] = dmg_y1;
+    bool kept = dmg_x1 > dmg_x0;
+    dmg_x0 = k0; dmg_y0 = k1; dmg_x1 = k2; dmg_y1 = k3;
+    return kept;
+}
+
 int wm_test_chip_at(int x) { return taskbar_chip_at(x, taskbar_y() + TASKBAR_H / 2); }
 int wm_test_chips_x(void) { return taskbar_chips_x(); }
 bool wm_test_find_open(void) { return find_open; }
@@ -4384,9 +4529,11 @@ void wm_run(void) {
             if (theme_reload()) { apply_screen_size(); need_frame(); }
         }
 
-        /* A window that has redrawn needs its own rectangle sent, not the
-           whole screen. With a terminal on the desktop this fired on nearly
-           every pass, which is why no frame was ever a partial one. */
+        /* A window that has redrawn needs its contents drawn again, not the
+           desktop: what a program commits is its surface, and its frame,
+           shadow and title are the desktop's and have not changed. A
+           program's commit used to ask for the whole screen instead
+           (winsrv_commit), so this was never the frame anyone saw. */
         for (int i = 0; i < nwin; i++) {
             window_t *w = stack[i];
             if (!w->dirty) continue;
@@ -4394,10 +4541,12 @@ void wm_run(void) {
                it is when it comes back. This asked for a whole frame, and a
                terminal put away went on blinking its cursor into one twice a
                second. */
-            if (w->minimized) { w->dirty = false; continue; }
-            need_frame_in(w->x - SHADOW - 2, w->y - SHADOW - 2,
-                          wm_outer_w(w) + SHADOW * 4,
-                          wm_outer_h(w) + SHADOW * 4);
+            if (w->minimized) { w->dirty = false; w->dirty_x0 = w->dirty_x1 = 0; continue; }
+            if (w->dirty_x1 > w->dirty_x0)           /* only part of it (win_commit_rect) */
+                need_frame_in(w->x + WM_BORDER + w->dirty_x0, w->y + WM_TOP + w->dirty_y0,
+                              w->dirty_x1 - w->dirty_x0, w->dirty_y1 - w->dirty_y0);
+            else
+                need_frame_in(w->x + WM_BORDER, w->y + WM_TOP, w->cw, w->ch);
         }
 
         /* The dock's clock and network icon change without anything saying
@@ -4424,14 +4573,14 @@ void wm_run(void) {
         if (ctx_open && (still_moving(ctx_since, MENU_MS)
                          || still_moving(ctx_hover_since, HOVER_MS))) {
             need_frame_in(ctx_x - 14, ctx_y - 14, CTX_W + 28, CTX_H + 28);
-            need_frame_in(last_mx - 2, last_my - 2, 20, 28);
         }
 
+        /* The pointer is not in these any more: a frame that draws only
+           its damage puts the pointer back on and sends it by itself. */
         if (menu_open && (still_moving(menu_since, MENU_MS)
                           || still_moving(menu_hover_since, HOVER_MS))) {
             need_frame_in(menu_x - 14, menu_y - 14,
                           MENU_W + 28, menu_full_h() + 28);
-            need_frame_in(last_mx - 2, last_my - 2, 20, 28);
         }
 
         if (needs_composite) {

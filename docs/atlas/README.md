@@ -63,7 +63,7 @@ skimmed) and checking the results against a real build and test run.
   +-- crypto & tls ........ sha* gcm crypto x25519 rsa ec x509 roots tls wpa rng              (06b)
   +-- desktop ............. wm (runs inside the shell task) winsrv gfx theme                  (07)
   +-- console ............. shell welcome selftest blackbox                                  (08, 04)
-  ========================= int 0x80, 65 system calls (include/syscall.h = sdk/zelr.h) =========
+  ========================= int 0x80, 66 system calls (include/syscall.h = sdk/zelr.h) =========
   ring 3 (userland/, built only with sdk/)
     term sh coreutils | files notes paint settings monitor music calc | blackjack poker |       (09b, 10)
     browser = web fetch html dom css layout + js jsparse jsrun jsdom jsregex +                (11, 12)
@@ -94,6 +94,38 @@ skimmed) and checking the results against a real build and test run.
 
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
+
+### 0.55.0: a desktop that draws only the part of the screen that changed
+
+- **Partial frames (07 §3.9.20, 05 §3.11).** Every frame drew the whole desktop and then sent only what
+  differed. Now fb.c has a clip (`fb_clip`) that every writer there and every drawer in gfx.c keeps to, and a
+  frame with damage (and no moving wallpaper) puts the pointer's patch back, clips to the damage, draws, and
+  sends the damage and the two pointer patches; `fb_flush_rect` leaves out rows the card already has. A clip
+  inside one window's contents starts the frame from that window; the icon column, each window with its
+  shadow and the dock are skipped whole when the clip misses them. /sys/screen `partial` counts these frames.
+- **Commits (07 §3.7).** `winsrv_commit` marks the window's contents rather than asking for the whole screen,
+  and `win_commit_rect` (syscall 66) copies and damages only a rectangle of a surface. The terminal's blink
+  draws and commits only its bottom row (09b).
+- **The drawers (07 §3.8).** Shadow spans, glyphs and corner pixels go through `fb_row` rather than
+  `fb_get`/`fb_put` a pixel at a time, which is most of why a whole frame costs a third of what it did.
+- **Damage kept to the screen (07 §10 32, fixed).** A menu at the left edge stayed half faded.
+- Checked: `[windows]` draws a scene whole and then through 110 rectangles over a pattern, from the kept
+  wallpaper and painted afresh, and wants the whole frame's pixels inside and the pattern outside; it failed
+  with a span, a corner or the wallpaper restore ignoring the clip, a window's or the dock's box drawn without
+  its shadow, the held window found by overlap rather than containment, a glyph left out a row early, and the
+  damage clamp gone. framecheck: every frame of a blinking terminal is partial (failed with frames never
+  partial), a commit copies under 256 KiB (failed with the blink committing the whole window: 1428 KiB each),
+  and the cursor still visibly blinks (failed with the rectangle committed in the wrong place). The `[video]`
+  colour order check failed once the rectangle flush skipped rows, since it sends one pixel three ways; its hook
+  now clears `sent_valid` while it does.
+- Measured with the kernel's counters over eight seconds of a blinking terminal, against v0.54.0 on the same
+  host: 51.5 to 53.5 million cycles a frame drawing before, 0.4 now; 1428 KiB copied a commit before, 118 now.
+  Ten moves along the dock, which are whole frames: 52 million cycles a frame before, 16 now.
+- Not done: the toolkit, the browser and the other programs still commit whole windows; a moving wallpaper
+  still means whole frames; hover over a title bar, the dock or a menu is still a whole frame.
+
+Counts after 0.55.0: selftest 672 (pc, 64 MiB), 678 (256 MiB), 685 (q35), 699 (`-smp 4`), in 51 sections;
+framecheck 14 checks; 66 live system calls; gate full 53 steps.
 
 ### 0.54.0: a pointer that moves without drawing the desktop, and a desktop left alone that draws nothing
 

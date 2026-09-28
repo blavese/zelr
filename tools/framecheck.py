@@ -27,6 +27,7 @@ from harness import (Guest, Checks, build_once, count_in, kernel_symbol,
 DISK = os.path.join(ROOT, "framecheck.%d.img" % os.getpid())
 
 PAGE = (0x10, 0x14, 0x1A)          # the terminal's default background
+TERM_CURSOR = (0x5E, 0xD1, 0xA0)   # and its cursor (term.c, "slate")
 
 # The rounded square behind the first desktop icon, which is lighter while
 # the pointer is over the icon's cell (draw_desk_icon: the cell starts at
@@ -228,9 +229,36 @@ def main():
                         timeout=60)
         # These are measurements of how much happens in a length of time, so
         # they are the one place a length of time is what is waited for.
+        #
+        # A blinking cursor is the frame an idle desktop draws most, and it
+        # drew the whole desktop, wallpaper to dock, while the terminal
+        # copied its whole surface out to change one bar. Now the terminal
+        # commits its bottom row (win_commit_rect) and the frame draws only
+        # that: the kernel counts frames that drew only what changed, and
+        # the bytes commits copied out.
+        part_at = kernel_symbol("partial_draws", "wm.c")
+        commits_at = kernel_symbol("published_frames", "winsrv.c")
+        copied_at = kernel_symbol("published_bytes", "winsrv.c")
         first = mon.read_u32(drawn_at)
+        part0 = mon.read_u32(part_at)
+        commits0 = mon.read_u32(commits_at)
+        copied0 = mon.read_u32(copied_at)
         time.sleep(4)
         showing = mon.read_u32(drawn_at) - first
+        partial = mon.read_u32(part_at) - part0
+        commits = mon.read_u32(commits_at) - commits0
+        copied = mon.read_u32(copied_at) - copied0
+
+        # And it still blinks where it can be seen: the pixels of its colour
+        # go up by the bar's worth and back again. The colour is also the
+        # prompt's, which is why it is a difference rather than a count.
+        counts = []
+
+        def blinking(w, h, px):
+            counts.append(count_in(px, w, (0, 0, w, h), TERM_CURSOR))
+            return len(counts) > 1 and max(counts) - min(counts) >= 20
+        _, _, _, blink_shot, blinked = mon.wait_screen("fr-blink", blinking,
+                                                       timeout=10, interval=0.1)
         mon.send("sendkey alt-d")
         mon.wait_screen("fr-away",
                         lambda w, h, px: count_in(px, w, (0, 0, w, h), PAGE) < 1000,
@@ -251,6 +279,14 @@ def main():
         # Measured: eight or nine on an idle host, five or six on a busy
         # one. Anything at all says the count is being read.
         c.add("the desktop's count of frames can be read while it is up", showing >= 2)
+        print("      %d of those drew only what changed; %d commits copied %d KiB"
+              % (partial, commits, copied // 1024))
+        c.add("a blinking cursor draws only what changed", showing >= 2 and partial == showing)
+        # Measured: 1428 KiB a commit for the whole surface, 118 for the
+        # bottom row and what is under it.
+        c.add("and the terminal sends its bottom row, not all of itself",
+              commits >= 2 and copied // commits < 256 * 1024)
+        c.add("and the cursor still blinks on the screen", blinked, blink_shot)
         # One allowed, for the clock's minute.
         c.add("a desktop with every window put away draws nothing", idle <= 1)
     finally:

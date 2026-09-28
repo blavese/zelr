@@ -612,8 +612,14 @@ again at all: the patch the arrow covered is put back and the arrow drawn
 somewhere else, where it was a whole frame of wallpaper, windows and dock. A
 desktop left alone draws nothing: the dock's clock is looked at once a second
 and drawn when its minute changes, where it drew the whole screen every
-second. The console is redrawn on top of it all with a bitmap font, so
-everything that already printed kept working.
+second. And a frame that knows what changed draws only that: every drawing
+routine keeps to a clip rectangle, and a frame whose damage is one window's
+contents starts from that window, because nothing under an opaque surface
+shows. A program can say which part of its window changed
+(`win_commit_rect`), and the terminal's blinking cursor is its bottom row,
+where it was the whole desktop twice a second. The console is redrawn on top
+of it all with a bitmap font, so everything that already printed kept
+working.
 
 **Other processors.** A PC boots with one CPU running and does not say the
 others exist, so `acpi.c` goes and reads the firmware tables to find them and
@@ -666,7 +672,7 @@ whichever processor is free, and what it hands over is arithmetic over memory
 the caller owns rather than anything the kernel keeps. `cat /sys/cpu` says
 how many slices each processor has given to a program.
 
-**Programs.** Ring 3, its own address space per process, and sixty-five
+**Programs.** Ring 3, its own address space per process, and sixty-six
 system calls through int 0x80. A program can start another program, block
 until it finishes and read what it returned from `main`, so the terminal
 starting `paint` is one ring 3 process starting another with the kernel only
@@ -1381,7 +1387,7 @@ is still the kernel's own, on the console; the one in a window is a program.
 ## writing a program for it
 
 Four files in `sdk/` are everything a program needs: `zelr.h`, which is the
-sixty-five system calls and a little sugar over them, `zelr.ld`, which says
+sixty-six system calls and a little sugar over them, `zelr.ld`, which says
 where a program is linked, a build line, and an example.
 
 ```bash
@@ -1415,7 +1421,7 @@ byte.
 ## testing
 
 The kernel tests itself. `./run.sh -T` boots with selftest on the command line,
-runs 666 checks across every subsystem, then writes to QEMU's debug-exit port
+runs 672 checks across every subsystem, then writes to QEMU's debug-exit port
 so the host gets a real exit status.
 
     [string]                8 checks   [live tree]            19 checks
@@ -1445,7 +1451,7 @@ so the host gets a real exit status.
     [theme]                19 checks   [kernel stack]          3 checks
     [taskbar]              18 checks
 
-    666 passed, 0 failed
+    672 passed, 0 failed
     SELFTEST_PASS
 
 The sound section is skipped because `run.sh` attaches no sound card, the
@@ -1483,7 +1489,7 @@ on a machine with several, where it hands work to each of them and requires
 the count they share to come back exact, and then starts more programs than
 there are processors to check that handed work is neither given to a busy
 one nor abandoned halfway for a program. `qemu-system-x86_64 -smp 4` with
-256 MiB reaches 693, and the gate runs it.
+256 MiB reaches 699, and the gate runs it.
 
 The same checks run again on `-machine q35`, which has PCIe and an AHCI
 controller rather than a 1996 chipset and a PIO disk, and reach 679 there.

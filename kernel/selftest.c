@@ -1696,6 +1696,150 @@ static void record_key(window_t *w, char c) {
     if (nkeys_seen < 8) keys_seen[nkeys_seen++] = (u8)c;
 }
 
+/* After a scene drawn only inside x0..x1, y0..y1: 1 if a pixel inside is not
+   the whole frame's, 2 if a pixel outside is not the pattern it was left as. */
+static int partial_differs(const u32 *want, const u32 *pat, int x0, int y0, int x1, int y1) {
+    int W = (int)fb_width(), H = (int)fb_height(), bad = 0;
+    for (int y = 0; y < H; y++) {
+        const u32 *row = fb_row(y), *w = want + y * W, *p = pat + y * W;
+        if (y < y0 || y >= y1) {
+            if (memcmp(row, p, (u32)W * 4)) bad |= 2;
+            continue;
+        }
+        if (x0 > 0 && memcmp(row, p, (u32)x0 * 4)) bad |= 2;
+        if (x1 > x0 && memcmp(row + x0, w + x0, (u32)(x1 - x0) * 4)) bad |= 1;
+        if (x1 < W && memcmp(row + x1, p + x1, (u32)(W - x1) * 4)) bad |= 2;
+    }
+    return bad;
+}
+
+/* A frame that draws only what changed, against one that draws everything.
+ *
+ * The desktop is drawn whole once. Then, for each rectangle, a pattern goes
+ * over every pixel and only that rectangle of the same scene is drawn: inside
+ * it every pixel must be the whole frame's, and outside it the pattern must be
+ * untouched. The rectangles are every tile of a grid across the screen, so
+ * every pixel of the scene is drawn through a clip, and then the awkward
+ * ones: wholly inside a window's contents (where the frame starts from that
+ * window), inside one window's contents but under another's frame and
+ * shadow, on nothing but a shadow (a window's or the dock's, which is where
+ * a box drawn too tight around them would leave them out), across the icons
+ * and the dock, off each edge, and one pixel. All of it twice: once with the
+ * wallpaper coming from its kept copy and once painted afresh, which are
+ * two different ways into a clip. */
+static void test_partial_frames(void) {
+    if (!fb_active()) { kprintf("  SKIP  no framebuffer\n"); return; }
+    int W = (int)fb_width(), H = (int)fb_height();
+
+    int d[4];
+    ok("damage off the top and the left is kept to the screen",
+       wm_test_damage(-10, -20, 50, 60, d) && d[0] == 0 && d[1] == 0 && d[2] == 40 && d[3] == 40);
+    ok("and off the right and the bottom",
+       wm_test_damage(W - 10, H - 10, 50, 50, d) && d[0] == W - 10 && d[1] == H - 10
+       && d[2] == W && d[3] == H);
+    ok("and damage wholly off the screen is none", !wm_test_damage(-60, 10, 40, 10, d));
+
+    /* Drawn whole before the two copies below are taken, so the wallpaper
+       is kept while there is still room for it. */
+    window_t *a = wm_create("under", 150, 120, 300, 200);
+    window_t *b = wm_create("over, and in front", 330, 220, 360, 240);
+    wm_test_draw_scene(0, 0, 0, 0, false);
+    bool kept = wm_test_forget_wallpaper();
+    wm_test_draw_scene(0, 0, 0, 0, false);
+    u32 bytes = (u32)W * (u32)H * 4;
+    u32 *want = (u32 *)kmalloc(bytes), *pat = (u32 *)kmalloc(bytes);
+    if (!want || !pat || !a || !b) {
+        ok("room for a scene and two frames to compare", false);
+        kfree(want); kfree(pat);
+        if (a) wm_close(a);
+        if (b) wm_close(b);
+        return;
+    }
+    /* Contents that are nothing like the desktop, so a surface drawn in the
+       wrong place or not at all cannot pass for right. */
+    for (int i = 0; i < a->cw * a->ch; i++) a->canvas[i] = RGB(i & 0xFF, (i >> 3) & 0xFF, 0x40);
+    for (int i = 0; i < b->cw * b->ch; i++) b->canvas[i] = RGB(0x30, i & 0xFF, (i >> 5) & 0xFF);
+
+    pattern_back();
+    fb_back_save(pat);
+
+    int ax = a->x + WM_BORDER, ay = a->y + WM_TOP;
+    int bx = b->x + WM_BORDER, by = b->y + WM_TOP;
+    int rects[128][4], n = 0;
+    for (int ty = 0; ty < 8; ty++)
+        for (int tx = 0; tx < 8; tx++) {
+            rects[n][0] = tx * W / 8; rects[n][1] = ty * H / 8;
+            rects[n][2] = (tx + 1) * W / 8 - rects[n][0];
+            rects[n][3] = (ty + 1) * H / 8 - rects[n][1];
+            n++;
+        }
+    int dock[4];
+    wm_test_dock(dock);
+    int bw = wm_outer_w(b), bh = wm_outer_h(b);
+    int odd[][4] = {
+        { b->x - 7, b->y + 50, 7, 30 },          /* the front window's shadow, left */
+        { b->x + bw, b->y + 50, 7, 30 },         /* and right */
+        { b->x + 40, b->y + bh, 60, 9 },         /* and below, where it sits two low */
+        { a->x - 7, a->y + 40, 7, 30 },          /* the back window's */
+        { dock[0] + 10, dock[1] - 8, dock[2] - 20, 8 },   /* the dock's, above it */
+        { bx + 20, by + 30, 200, 20 },           /* inside the front window's contents */
+        { ax + 10, ay + 10, 100, 40 },           /* inside the back one's, clear of the front */
+        { b->x - 12, ay + 60, 30, 40 },          /* the back one's contents, the front one's edge and shadow */
+        { 0, 0, 140, H },                        /* down the icons */
+        { 0, H - 80, W, 80 },                    /* along the dock */
+        { -20, -20, 60, 60 },                    /* off the top left */
+        { W - 30, H - 30, 80, 80 },              /* off the bottom right */
+        { b->x + 3, b->y + 3, 1, 1 },            /* one pixel of a frame */
+    };
+    for (u32 i = 0; i < sizeof(odd) / sizeof(odd[0]); i++, n++)
+        for (int k = 0; k < 4; k++) rects[n][k] = odd[i][k];
+    /* And the front window's title bar a row at a time, so that some row is
+       the last or the first of a letter: a glyph left out a row too soon at
+       the edge of a clip shows there and nowhere else. */
+    for (int y = b->y; y < b->y + WM_TOP && n < 128; y++, n++) {
+        rects[n][0] = b->x; rects[n][1] = y; rects[n][2] = bw; rects[n][3] = 1;
+    }
+
+    /* Tried again if the scene itself changed while it was being compared:
+       the dock's clock turning a minute over is the one thing that can. */
+    int bad = 0;
+    for (int pass = 0; pass < 2; pass++) {
+        int got = 0;
+        for (int attempt = 0; attempt < 3; attempt++) {
+            wm_test_draw_scene(0, 0, 0, 0, false);
+            fb_back_save(want);
+            got = 0;
+            for (int i = 0; i < n; i++) {
+                int x0 = rects[i][0], y0 = rects[i][1];
+                int x1 = x0 + rects[i][2], y1 = y0 + rects[i][3];
+                pattern_back();
+                if (pass) wm_test_forget_wallpaper();     /* painted afresh, through the clip */
+                wm_test_draw_scene(rects[i][0], rects[i][1], rects[i][2], rects[i][3], true);
+                if (x0 < 0) x0 = 0;
+                if (y0 < 0) y0 = 0;
+                if (x1 > W) x1 = W;
+                if (y1 > H) y1 = H;
+                got |= partial_differs(want, pat, x0, y0, x1, y1);
+            }
+            wm_test_draw_scene(0, 0, 0, 0, false);
+            bool still = true;
+            for (int y = 0; y < H && still; y++)
+                still = memcmp(fb_row(y), want + y * W, (u32)W * 4) == 0;
+            if (still) break;
+        }
+        bad |= got;
+    }
+    ok("the wallpaper is kept, so frames from its copy are compared too", kept);
+    ok("a frame drawn only inside a rectangle is the whole frame's pixels there",
+       !(bad & 1));
+    ok("and leaves every pixel outside it as it was", !(bad & 2));
+
+    wm_close(b);
+    wm_close(a);
+    kfree(want);
+    kfree(pat);
+}
+
 static void test_wm_keys(void) {
     if (!fb_active()) { kprintf("  SKIP  no framebuffer\n"); return; }
 
@@ -5058,7 +5202,7 @@ int selftest_run(void) {
     kprintf("[video]\n");      test_video(); test_console();
     kprintf("[mouse]\n");      test_mouse(); test_mouse_edges();
     kprintf("[graphics]\n");   test_gfx(); test_frame_drawing();
-    kprintf("[windows]\n");    test_wm(); test_wm_keys();
+    kprintf("[windows]\n");    test_wm(); test_wm_keys(); test_partial_frames();
     kprintf("[window server]\n"); test_winsrv(); test_window_lifetimes();
     kprintf("[built-in programs]\n"); test_builtin();
     kprintf("[theme]\n");      test_theme();

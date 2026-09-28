@@ -8,7 +8,7 @@
  * reason. See NOTICE in the repository this came from.
  */
 
-/* The entire user-facing interface: sixty-five system calls and a little
+/* The entire user-facing interface: sixty-six system calls and a little
    sugar. Nothing is linked in from the kernel; every call below crosses the
    ring boundary through int 0x80.
  *
@@ -187,6 +187,9 @@ typedef long long          zelr_word;
 
 /* Asleep until something arrives for a window, or the time is up. */
 #define SYS_WIN_WAIT      65
+
+/* Commit only part of the surface (win_commit_rect). */
+#define SYS_WIN_COMMIT_RECT 66
 #define TLS_WHY   0
 #define TLS_WHAT  1
 
@@ -958,6 +961,15 @@ static inline int win_wait(int handle, int timeout_ms) {
 
 static inline int win_commit(int handle) {
     return syscall(SYS_WIN_COMMIT, handle, 0, 0);
+}
+
+/* Only the rectangle x, y, w, h of the surface has changed since the last
+   commit, so only it is copied out and drawn. Everything outside it must be
+   as that commit left it: what is not committed is not shown. */
+static inline int win_commit_rect(int handle, int x, int y, int w, int h) {
+    return syscall(SYS_WIN_COMMIT_RECT, handle,
+                   (zelr_word)((unsigned long long)(unsigned)x | ((unsigned long long)(unsigned)y << 32)),
+                   (zelr_word)((unsigned long long)(unsigned)w | ((unsigned long long)(unsigned)h << 32)));
 }
 
 static inline int win_close(int handle) {

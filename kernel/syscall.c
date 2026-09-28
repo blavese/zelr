@@ -1079,6 +1079,12 @@ static i64 sys_win_commit(registers_t *r) {
     return winsrv_commit(caller_pid(), (int)r->rbx) ? 0 : -1;
 }
 
+static i64 sys_win_commit_rect(registers_t *r) {
+    int x = (int)(u32)r->rcx, y = (int)(u32)(r->rcx >> 32);
+    int w = (int)(u32)r->rdx, h = (int)(u32)(r->rdx >> 32);
+    return winsrv_commit_rect(caller_pid(), (int)r->rbx, x, y, w, h) ? 0 : -1;
+}
+
 static i64 sys_win_close(registers_t *r) {
     return winsrv_close(caller_pid(), (int)r->rbx) ? 0 : -1;
 }
@@ -1154,6 +1160,7 @@ static const syscall_fn TABLE[] = {
     [SYS_WIN_RESIZABLE] = sys_win_resizable,
     [SYS_WIN_ESCAPE]    = sys_win_escape,
     [SYS_WIN_WAIT]      = sys_win_wait,
+    [SYS_WIN_COMMIT_RECT] = sys_win_commit_rect,
     [SYS_WIN_RESIZE]    = sys_win_resize,
     [SYS_CLIP_SET]  = sys_clip_set,
     [SYS_CLIP_GET]  = sys_clip_get,

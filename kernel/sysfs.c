@@ -311,6 +311,9 @@ static u32 render_screen(char *b, u32 cap) {
     /* Pointer moves that put the arrow somewhere else without drawing the
        desktop again, which is most of them. */
     put(&o, "pointeronly %d\n", wm_pointer_only_moves());
+    /* Of the draws, the ones that drew only the part of the screen that
+       changed rather than the whole desktop. */
+    put(&o, "partial %d\n", wm_partial_draws());
     return o.len;
 }
 

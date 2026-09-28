@@ -87,6 +87,20 @@ static void publish(slot_t *s) {
     published_bytes += s->bytes;
 }
 
+/* Rows x..x+w of y..y+h only, for a commit of part of the surface. The
+   surface is cw pixels to a row, which is how the desktop reads it. */
+static void publish_rect(slot_t *s, int x, int y, int w, int h) {
+    if (!s->shown || !s->pixels || !s->win) return;
+    int cw = s->win->cw;
+    for (int j = y; j < y + h; j++) {
+        volatile u32 *d = (volatile u32 *)s->shown + (u64)j * (u64)cw + (u64)x;
+        const volatile u32 *b = (const volatile u32 *)s->pixels + (u64)j * (u64)cw + (u64)x;
+        for (int i = 0; i < w; i++) d[i] = b[i];
+    }
+    published_frames++;
+    published_bytes += (u64)w * (u64)h * 4;
+}
+
 static slot_t slots[WINSRV_MAX];
 
 /* Surfaces that have been swapped out and are waiting to be freed.
@@ -423,12 +437,34 @@ bool winsrv_commit(u32 pid, int handle) {
     if (!s || !s->win) return false;
     apply_pending(s);
     publish(s);
-    /* A window put away is not on the screen, so it is only marked, and the
-       desktop's loop marks it clean again. wm_invalidate asks for a whole
-       frame, and a terminal put away went on drawing the desktop twice a
-       second to blink a cursor nobody could see. */
-    if (s->win->minimized) s->win->dirty = true;
-    else wm_invalidate(s->win);
+    /* Only marked: the desktop's next pass, a tick away at most, draws this
+       window's contents and nothing else, or nothing at all while it is put
+       away. wm_invalidate asks for the whole screen, and every blink of a
+       terminal's cursor drew the whole desktop. A new size (apply_pending,
+       above) still asks for the whole screen, since the old one was bigger. */
+    wm_mark_dirty(s->win, 0, 0, s->win->cw, s->win->ch);
+    return true;
+}
+
+bool winsrv_commit_rect(u32 pid, int handle, int x, int y, int w, int h) {
+    slot_t *s = lookup(pid, handle);
+    if (!s || !s->win) return false;
+    /* A new size waiting is a new surface, and a rectangle of the old one
+       means nothing in it: the whole of it is committed instead. */
+    if (s->win->want_cw && s->win->want_ch) return winsrv_commit(pid, handle);
+
+    /* In 64 bits: the numbers are the program's, and x + w can be made to
+       wrap in 32. */
+    i64 cw = s->win->cw, ch = s->win->ch;
+    i64 x0 = x, y0 = y, x1 = x0 + w, y1 = y0 + h;
+    if (x0 < 0) x0 = 0;
+    if (y0 < 0) y0 = 0;
+    if (x1 > cw) x1 = cw;
+    if (y1 > ch) y1 = ch;
+    if (x1 <= x0 || y1 <= y0) return true;        /* nothing, which is allowed */
+
+    publish_rect(s, (int)x0, (int)y0, (int)(x1 - x0), (int)(y1 - y0));
+    wm_mark_dirty(s->win, (int)x0, (int)y0, (int)(x1 - x0), (int)(y1 - y0));
     return true;
 }
 

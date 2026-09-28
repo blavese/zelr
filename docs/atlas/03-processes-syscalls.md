@@ -192,7 +192,7 @@ Handlers (each `static i64 sys_*(registers_t *r)`), arguments come in rbx/rcx/rd
 
 **Dispatch table** `TABLE[]` (syscall.c:1021-1085), designated-initializer array indexed by number. `N_SYSCALLS = sizeof(TABLE)/sizeof(TABLE[0])`. `syscall_handler(r)` (syscall.c:1089): `served++`; reads `n = r->rax`; if `n >= N_SYSCALLS || !TABLE[n]` → `r->rax = -1`; else `r->rax = TABLE[n](r)`. `syscall_init` registers it on vector 0x80. `served`/`syscall_count()`.
 
-`N_SYSCALLS` = size of the array = highest index + 1. Highest number in the table is 63 (SYS_POLL), so `N_SYSCALLS == 64` (since 0.44.0 the highest is 64, SYS_WIN_ESCAPE, and `N_SYSCALLS == 65`; since 0.51.0 65, SYS_WIN_WAIT, and 66). Retired 44 and the never-populated slots 56/57 are NULL entries → return -1 (see §10 for the 56/57 subtlety -- they ARE populated).
+`N_SYSCALLS` = size of the array = highest index + 1. Highest number in the table is 63 (SYS_POLL), so `N_SYSCALLS == 64` (since 0.44.0 the highest is 64, SYS_WIN_ESCAPE, and `N_SYSCALLS == 65`; since 0.51.0 65, SYS_WIN_WAIT, and 66; since 0.55.0 66, SYS_WIN_COMMIT_RECT, and 67). Retired 44 and the never-populated slots 56/57 are NULL entries → return -1 (see §10 for the 56/57 subtlety -- they ARE populated).
 
 ### kernel/user.c
 
