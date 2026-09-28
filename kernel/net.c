@@ -569,11 +569,15 @@ void net_poll(void) {
  *
  * A hundredth of a second between passes is far below what a round trip
  * costs, and a caller that is waiting is spinning on net_poll anyway and
- * does not depend on this. */
+ * does not depend on this. But it was a hundred passes a second on a machine
+ * with nothing arriving. A card with an interrupt hands each frame over from
+ * it (net_receive), which wakes this, so for one of those the task sleeps
+ * until a frame comes, a second at most; a card that is only heard when it is
+ * asked -- the USB one -- is still asked a hundred times a second. */
 static void net_task(void) {
     for (;;) {
         net_poll();
-        task_sleep(10);
+        wait_on(&net_arrived, netdev_interrupts() ? 1000 : 10);
     }
 }
 

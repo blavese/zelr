@@ -55,6 +55,8 @@ bool vfs_chdir(const char *path);
 /* True for a path the filesystem makes up as it goes, or holds its own copy
    of: /sys, and /bin. Nothing may be written to one. */
 bool vfs_generated(const char *abs);
+/* How many times anything has been written, deleted, renamed or made. */
+u32  vfs_changes(void);
 
 /* Open files are in include/fd.h. They are a process's business rather than
    the filesystem's, which is why they left this header. */

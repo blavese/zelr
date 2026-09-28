@@ -415,7 +415,7 @@ dropped); copy, `__sync_synchronize()`, publish head; track high-water mark. Cal
   immediately ("it will get its turn"). Owner: up to 64 frames, each copied to a 1536-byte stack buffer before the slot is
   released, then `deliver()`; zero-length slots (taken by `arp_only`) are skipped; release ownership.
 * `net_poll()` (518-521) = `netdev_poll(); net_deliver();`.
-* `net_task()` (532-537): forever `net_poll(); task_sleep(10);`. `net_start_service()` (539-544) creates task "net" once.
+* `net_task()` (532-537): forever `net_poll(); task_sleep(10);`. Since 0.58.0 `wait_on(&net_arrived, netdev_interrupts() ? 1000 : 10)`: `net_receive` (which the e1000, PCnet and RTL8139 call from their interrupts) already wakes `net_arrived`, so on those cards the task sleeps until a frame comes, a second at most; the USB card, which is only heard when polled, is still polled a hundred times a second. netcheck: 5 runs in five idle seconds with an e1000, 576 with the tick sleep back. `net_start_service()` (539-544) creates task "net" once.
 
 **UDP** (547-582): `udp_send_to(dst, sport, dport, data, len, broadcast)`: staging `pkt[1400]` (so payload <= 1392);
 checksum 0 ("optional in IPv4, left off"); broadcast builds its own IP header (src `my_ip`, possibly 0) and sends to

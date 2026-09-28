@@ -267,10 +267,17 @@ int vfs_read(const char *path, void *buf, u32 cap) {
     return (int)n;
 }
 
+/* Every change to a file or a directory anywhere, counted, so that what
+   reads a file again by the clock -- the theme, four times a second -- can
+   leave the disk alone when nothing has been written since it last looked. */
+static u32 changes;
+u32 vfs_changes(void) { return changes; }
+
 bool vfs_write(const char *path, const void *buf, u32 len) {
     char abs[VFS_PATH_MAX];
     if (!vfs_resolve(path, abs, sizeof(abs))) return false;
     if (vfs_generated(abs)) return false;   /* generated, or the kernel's own copy */
+    changes++;
 
     const char *on = route(abs);
     if (fat_mounted()) {
@@ -303,6 +310,7 @@ bool vfs_delete(const char *path) {
     char abs[VFS_PATH_MAX];
     if (!vfs_resolve(path, abs, sizeof(abs))) return false;
     if (vfs_generated(abs)) return false;
+    changes++;
 
     const char *on = route(abs);
     if (fat_mounted()) {
@@ -322,6 +330,7 @@ bool vfs_rename(const char *from, const char *to) {
     /* /bin and /sys are made up as they are read. There is nothing on a
        disk to rename and nowhere to record a new name. */
     if (vfs_generated(a) || vfs_generated(b)) return false;
+    changes++;
 
     /* One volume, or nothing. fat_rename works within whichever volume is
        selected, and the two routes below each select one: this used to hand
@@ -346,6 +355,7 @@ bool vfs_mkdir(const char *path) {
     if (!vfs_resolve(path, abs, sizeof(abs))) return false;
     if (abs[0] == '/' && abs[1] == 0) return false;
     if (vfs_generated(abs)) return false;
+    changes++;
 
     const char *on = route(abs);
     if (fat_mounted()) {
@@ -363,6 +373,7 @@ bool vfs_rmdir(const char *path) {
     if (abs[0] == '/' && abs[1] == 0) return false;
     if (vfs_generated(abs)) return false;
     if (vfs_count(abs) > 0) return false;
+    changes++;
 
     const char *on = route(abs);
     if (fat_mounted()) {

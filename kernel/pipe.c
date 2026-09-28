@@ -2,6 +2,7 @@
 #include "heap.h"
 #include "string.h"
 #include "wait.h"
+#include "fd.h"
 
 /* See include/pipe.h for what a pipe is for. What is here is the ring and
  * the waiting, and the waiting is the part worth reading.
@@ -83,6 +84,7 @@ int pipe_read(pipe_t *p, void *dst, u32 len) {
 
     /* Room appeared, so anything that stopped for want of it can go on. */
     wake_all(&p->has_space);
+    fd_poll_wake();
     return (int)n;
 }
 
@@ -119,6 +121,7 @@ int pipe_write(pipe_t *p, const void *src, u32 len) {
         /* Wake after every chunk rather than at the end, so a reader waiting
            on a large write does not sit idle until the whole of it is in. */
         wake_all(&p->has_data);
+        fd_poll_wake();
     }
     return (int)done;
 }
@@ -135,6 +138,7 @@ void pipe_close(pipe_t *p, bool write_end) {
         if (p->readers) p->readers--;
         if (p->readers == 0) wake_all(&p->has_space);
     }
+    fd_poll_wake();                      /* an end gone is an answer to a poll */
 
     if (p->readers == 0 && p->writers == 0) {
         if (live) live--;

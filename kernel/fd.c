@@ -10,6 +10,7 @@
 #include "signal.h"
 #include "string.h"
 #include "vfs.h"
+#include "wait.h"
 
 /* See include/fd.h for why there are two layers here rather than one. This
  * file is both of them: the table of open file descriptions, which is the
@@ -136,6 +137,9 @@ static bool of_unref(int oi) {
    writers have all closed reports POLLIN as well as POLLHUP, so a program
    that asked only about reading still wakes up and reads its zero. */
 static short fd_ready_now(int fd, short want);
+
+/* What a poll with nothing ready sleeps on (fd_poll, fd_poll_wake). */
+static int poll_channel;
 
 static ofile_t *lookup(int fd) {
     if (fd < 0 || fd >= FD_MAX) return 0;
@@ -454,18 +458,18 @@ static short fd_ready_now(int fd, short want) {
 int fd_poll(pollfd_t *fds, u32 n, int timeout_ms) {
     if (n > POLL_MAX) return -1;
 
-    /* Looked at again rather than woken.
+    /* Woken, then looked at again.
      *
        Every one of these has a wait queue behind it already -- a pipe has
-       two -- and waiting on several at once means being on several queues
-       and being taken off all of them when any one fires, which this
-       kernel's wait has no way to express. So this looks, and if nothing
-       has happened it sleeps a tick and looks again.
-
-       The cost is latency: up to one tick, ten milliseconds, later than a
-       queue would have been. The cost of the other one is a rewrite of
-       waiting, and this is honest about which it is rather than pretending
-       a tick is instant. */
+       two -- and waiting on several at once would mean being on several
+       queues, which this kernel's wait cannot express. It slept a tick and
+       looked again instead: a program waiting in poll with nothing coming
+       ran a hundred times a second, and what did come arrived up to a tick
+       late. So there is one more queue, which everything that can make a
+       descriptor ready wakes (fd_poll_wake): a pipe written, read or closed
+       and a key arriving. A poll wakes for all of them and looks; that it
+       wakes for other programs' pipes too costs a look, where the tick cost
+       a hundred of them a second. */
     u64 hz = timer_hz();
     u64 deadline = 0;
     if (timeout_ms > 0)
@@ -479,10 +483,18 @@ int fd_poll(pollfd_t *fds, u32 n, int timeout_ms) {
         }
         if (ready) return ready;
         if (timeout_ms == 0) return 0;
-        if (timeout_ms > 0 && timer_ticks() >= deadline) return 0;
-        task_sleep(1000 / (u32)hz ? 1000 / (u32)hz : 1);
+        u32 wait_ms = 0;                   /* until something wakes it */
+        if (timeout_ms > 0) {
+            u64 now = timer_ticks();
+            if (now >= deadline) return 0;
+            wait_ms = (u32)((deadline - now) * 1000u / hz);
+            if (!wait_ms) wait_ms = 1;
+        }
+        wait_on(&poll_channel, wait_ms);
     }
 }
+
+void fd_poll_wake(void) { wake_all(&poll_channel); }
 
 bool fd_sync(int fd) {
     ofile_t *f = lookup(fd);

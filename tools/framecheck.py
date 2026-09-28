@@ -73,6 +73,23 @@ def stats(vm):
     return got
 
 
+def enter_desktop(vm, mon, name):
+    """Into the desktop, waited for as its terminal being on the screen, and
+    typed again once if it never came. On a busy host a character of the
+    command can be lost on the serial line and the desktop never starts;
+    everything after that then measured a shell prompt, and failed as a
+    desktop that drew nothing. Typed into a desktop that was only slow, the
+    word goes to the terminal, which does not know it."""
+    for _ in range(2):
+        vm.type("desktop\n")
+        _, _, _, _, up = mon.wait_screen(
+            name, lambda w, h, px: count_in(px, w, (0, 0, w, h), PAGE) > 250000,
+            timeout=90)
+        if up:
+            return True
+    return False
+
+
 def leave(vm):
     """Out of the desktop and back at the shell. Waited for as one prompt
     more than there were: there has been at least one since boot, so
@@ -114,10 +131,7 @@ def main():
         full = before.get("fullkib", 0)
         c.add("the screen says how big a whole frame is", full > 1000)
 
-        vm.type("desktop\n")
-        mon.wait_screen("fr-desktop",
-                        lambda w, h, px: count_in(px, w, (0, 0, w, h), PAGE) > 250000,
-                        timeout=60)
+        c.add("the desktop comes up with its terminal", enter_desktop(vm, mon, "fr-desktop"))
 
         # Whole frames: a click asks for the whole screen, whatever it
         # changes, and on bare desktop -- right of the terminal, which opens
@@ -174,8 +188,10 @@ def main():
 
         print("      %d frames drawn over the moves along the dock, %d of them only"
               " what they were over (%d as a hover)" % (dock_draws, dock_partial, dock_hover))
+        # One whole frame allowed: the dock's clock turning a minute over
+        # during the twenty seconds of moves draws one, and it has.
         c.add("a move along the dock or across a title bar draws only what it is over",
-              dock_draws > 10 and dock_partial == dock_draws and dock_hover > 10)
+              dock_draws > 10 and dock_partial >= dock_draws - 1 and dock_hover > 10)
 
         # --- and over a window's contents ----------------------------------
         #
@@ -194,10 +210,7 @@ def main():
         # and the dock's clock, which drew one every second and now draws
         # one a minute.
         before = stats(vm)
-        vm.type("desktop\n")
-        mon.wait_screen("fr-desktop2",
-                        lambda w, h, px: count_in(px, w, (0, 0, w, h), PAGE) > 250000,
-                        timeout=60)
+        enter_desktop(vm, mon, "fr-desktop2")
 
         # A title bar's button under the pointer, which is now drawn as the
         # title bar alone: all of the button has to light, down to its lower
@@ -280,10 +293,12 @@ def main():
         # dozen frames of its own. The desktop opens with a new terminal,
         # which is waited for, counted while it blinks -- which says the
         # count is being read at all -- and put away.
-        vm.type("desktop\n")
-        mon.wait_screen("fr-desktop3",
-                        lambda w, h, px: count_in(px, w, (0, 0, w, h), PAGE) > 250000,
-                        timeout=60)
+        # A theme file that says nothing (a comment line), so that there is a
+        # file for the desktop's looks at it to read: with none there, a look
+        # finds nothing in the directory it already holds and reads nothing,
+        # whether or not it was asked to.
+        vm.run("write /zelr.cfg # framecheck")
+        enter_desktop(vm, mon, "fr-desktop3")
         # These are measurements of how much happens in a length of time, so
         # they are the one place a length of time is what is waited for.
         #
@@ -303,12 +318,15 @@ def main():
         commits0 = mon.read_u32(commits_at)
         copied0 = mon.read_u32(copied_at)
         compared0 = mon.read_u32(compared_at)
+        late_at = kernel_symbol("late_commits", "wm.c")
+        late0 = mon.read_u32(late_at)
         time.sleep(4)
         showing = mon.read_u32(drawn_at) - first
         partial = mon.read_u32(part_at) - part0
         commits = mon.read_u32(commits_at) - commits0
         copied = mon.read_u32(copied_at) - copied0
         compared = mon.read_u32(compared_at) - compared0
+        late = mon.read_u32(late_at) - late0
 
         # A character typed at it, which is a whole commit: every program
         # but the terminal's blink commits the whole of its surface, and
@@ -373,8 +391,16 @@ def main():
             if seen == last:
                 break
             last = seen
+        # And how many times the desktop's loop went round and how many reads
+        # the disk was asked for: it looked every tick, and read the theme
+        # file off the disk four times a second, for a desktop nobody touched.
+        passes_at = kernel_symbol("passes", "wm.c")
+        reads_at = kernel_symbol("io", "blockdev.c")      # blk_io_t: reads first
+        passes0, reads0 = mon.read_u32(passes_at), mon.read_u32(reads_at)
         time.sleep(8)
         idle = mon.read_u32(drawn_at) - last
+        passes = mon.read_u32(passes_at) - passes0
+        reads = mon.read_u32(reads_at) - reads0
         leave(vm)
         print("      %d frames in four seconds with a terminal showing, %d in eight with"
               " every window put away" % (showing, idle))
@@ -398,6 +424,15 @@ def main():
         c.add("the dock lights under the pointer over a maximised window", badge_lit, badge_shot)
         # One allowed, for the clock's minute.
         c.add("a desktop with every window put away draws nothing", idle <= 1)
+        print("      in those eight seconds the loop went round %d times and the disk"
+              " was read %d times" % (passes, reads))
+        # Seven a second: the theme four times, the clock once, and the
+        # terminal put away still blinking twice.
+        c.add("and its loop sleeps until something is due, not every tick", passes < 100)
+        c.add("and it reads nothing off the disk", reads == 0)
+        # Now that the loop sleeps, a commit has to wake it.
+        c.add("a commit is drawn at once, not at the next look at the clock", late <= 1)
+        print("      %d commits of the blinking terminal were drawn late" % late)
 
         # --- under a wallpaper that moves -----------------------------------
         #
@@ -407,10 +442,7 @@ def main():
         # the moment of the last whole frame now (wall_now), so a blink is a
         # rectangle again; the selftest compares the pixels. The stars.
         vm.run("write /zelr.cfg wallpaper 4")
-        vm.type("desktop\n")
-        mon.wait_screen("fr-stars",
-                        lambda w, h, px: count_in(px, w, (0, 0, w, h), PAGE) > 250000,
-                        timeout=60)
+        enter_desktop(vm, mon, "fr-stars")
         part_at = kernel_symbol("partial_draws", "wm.c")
         first, part0 = mon.read_u32(drawn_at), mon.read_u32(part_at)
         time.sleep(4)

@@ -39,6 +39,39 @@ static void say_ms(const char *what, int ms) {
 /* Ticks are hundredths here; sysinfo is not needed for a rough elapsed. */
 static int ms_since(int began) { return (ticks() - began) * 10; }
 
+/* How many times the scheduler has run this program, from its row of
+   /sys/tasks ("pid state ring slices name"), found by its pid because a
+   child forked from it has the same name. -1 if it is not there. */
+static int my_slices(void) {
+    static char buf[4096];
+    int fd = open("/sys/tasks", O_READ);
+    if (fd < 0) return -1;
+    int n = fread(fd, buf, (int)sizeof(buf) - 1);
+    close(fd);
+    if (n <= 0) return -1;
+    buf[n] = 0;
+    int me = getpid();
+    for (char *line = buf; *line; ) {
+        char *p = line;
+        while (*p == ' ') p++;
+        int pid = 0, digits = 0;
+        while (*p >= '0' && *p <= '9') { pid = pid * 10 + (*p - '0'); p++; digits++; }
+        if (digits && pid == me) {
+            for (int field = 0; field < 2; field++) {      /* the state and the ring */
+                while (*p == ' ') p++;
+                while (*p && *p != ' ' && *p != '\n') p++;
+            }
+            while (*p == ' ') p++;
+            int slices = 0;
+            while (*p >= '0' && *p <= '9') { slices = slices * 10 + (*p - '0'); p++; }
+            return slices;
+        }
+        while (*line && *line != '\n') line++;
+        if (*line) line++;
+    }
+    return -1;
+}
+
 int main(void) {
     puts("polltest\n");
 
@@ -101,18 +134,32 @@ int main(void) {
         close(ends[0]);
         sleep_ms(250);
         fwrite(ends[1], "y", 1);
+        /* And still here for a second afterwards, holding its end open: a
+           writer going away also wakes a poll, so a child that wrote and
+           left at once would hide a write that woke nobody. */
+        sleep_ms(1000);
         exit(0);
     }
     close(ends[1]);            /* so the only writer is the child */
 
     w[0].fd = ends[0]; w[0].events = POLLIN; w[0].revents = 0;
+    int ran = my_slices();
     began = ticks();
     n = poll(w, 1, 5000);
     waited = ms_since(began);
+    ran = ran >= 0 ? my_slices() - ran : -1;
     ok("a wait ends when something happens", n == 1 &&
                                              (w[0].revents & POLLIN));
     ok("and not when the time runs out", waited >= 150 && waited < 2000);
+    ok("and it was the write that woke it, not the writer going", waited < 800);
     say_ms("came back after ", waited);
+
+    // And it slept through the wait rather than looking every tick, which
+    // was a hundred times a second: twenty five runs for a quarter second
+    // of nothing. Woken by the write, it runs a few times -- the look that
+    // found nothing, the one that found the byte, and reading this table.
+    ok("and it slept rather than looking every tick", ran >= 0 && ran < 10);
+    puts("      ran "); putn(ran); puts(" times while it waited\n");
 
     fread(ends[0], &got, 1);
     wait_for(kid);

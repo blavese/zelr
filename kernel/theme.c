@@ -412,6 +412,16 @@ bool theme_reload(void) {
        A short read here is not an error anywhere: it simply stops part way
        down the file, and what it stops before is whatever happens to be at
        the bottom of it. */
+    /* Only when something has been written since the last look. The desktop
+       looks four times a second, and each look was a read of the file off
+       the disk whether or not anybody had touched it. */
+    static u32 seen;
+    static bool looked;
+    u32 now = vfs_changes();
+    if (looked && now == seen) return false;
+    looked = true;
+    seen = now;
+
     char buf[2048];
     int n = vfs_read(THEME_FILE, buf, sizeof(buf) - 1);
     if (n <= 0) return false;

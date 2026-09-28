@@ -99,6 +99,9 @@ typedef struct {
 /* How many of them have something to report, or 0 if the wait ran out.
    A negative timeout waits forever; zero asks and returns. */
 int fd_poll(pollfd_t *fds, u32 n, int timeout_ms);
+/* Something a descriptor could be waiting for may have happened -- a pipe
+   written, read or closed, a key arriving -- so every poll looks again. */
+void fd_poll_wake(void);
 
 /* The lowest free number, pointing at the same description as `fd`. */
 int  fd_dup(int fd);

@@ -13,6 +13,7 @@ way is a panel that is not reading anything.
   python tools/netcheck.py [--keep]
 """
 import os
+import re
 import sys
 import time
 
@@ -81,6 +82,19 @@ def region(px, w, rect):
     for y in range(y0, y1):
         out += px[(y * w + x0) * 3:(y * w + x1) * 3]
     return bytes(out)
+
+
+def task_slices(vm, name):
+    """How many times the scheduler has run the kernel task with this name,
+    from the last /sys/tasks the shell printed ("pid state ring slices
+    name"). None if it is not there."""
+    out = vm.run("cat /sys/tasks", timeout=20)
+    rows = re.findall(r"^\s*\d+\s+\S+\s+\d\s+(\d+)\s+(\S+)\s*$", out, re.M)
+    found = None
+    for slices, who in rows:
+        if who == name:
+            found = int(slices)
+    return found
 
 
 def address_of(vm):
@@ -210,6 +224,20 @@ def main():
         # ordinary case now rather than the only one.
         c.add("and pressing the button anyway does not lose it",
               got == "10.0.2.15", shot)
+
+        # The network's own task, which takes in frames nobody is waiting
+        # for, went round a hundred times a second with nothing arriving. The
+        # card hands each frame over from its interrupt, which now wakes it,
+        # so on a machine with nothing coming in it sleeps -- a second at a
+        # time. Counted over five seconds, which is a rate and so a stretch
+        # of time; the reading costs a few of its own.
+        first = task_slices(vm, "net")
+        time.sleep(5)
+        second = task_slices(vm, "net")
+        woke = (second - first) if first is not None and second is not None else None
+        print("      the network task ran %s times in five idle seconds" % (woke,))
+        c.add("and the network's task sleeps until a frame arrives",
+              woke is not None and woke < 100)
     finally:
         vm.stop()
 

@@ -6,6 +6,9 @@ bool netdev_init(void);
 bool netdev_up(void);
 bool netdev_send(const void *data, u16 len);
 void netdev_poll(void);
+/* Whether the card hands frames over from an interrupt of its own, rather than
+   only when netdev_poll asks. */
+bool netdev_interrupts(void);
 const u8 *netdev_mac(void);
 u32  netdev_rx_count(void);
 u32  netdev_tx_count(void);

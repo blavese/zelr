@@ -95,6 +95,29 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.58.0: a machine that sleeps when nothing is happening
+
+- **poll (03 §4).** `fd_poll` slept a tick and looked again, so a program waiting in poll ran a hundred times a
+  second and heard of a write up to a tick late. It sleeps on one channel now, which `fd_poll_wake` wakes from
+  every pipe read, write and close and from `input_wake`. polltest: a quarter second waiting on a pipe is 1 slice
+  (26 with the tick sleep back), and the write, not the writer's leaving, is what wakes it (1250 ms with the
+  write's wake removed). Not checked: the console's wake, which no program polls for.
+- **The network's task (06a).** It went round every 10 ms with nothing arriving. A card that interrupts already
+  wakes `net_arrived` for each frame, so the task sleeps on that now, a second at most (USB networking is still
+  polled). netcheck: 5 runs in five idle seconds, 576 with the tick sleep back.
+- **The desktop's loop (07 §4.2).** It went round every tick. It sleeps until the next look at the theme or the
+  clock, or a tick while anything moves, and whatever asks it for a frame from outside wakes it. framecheck: 52
+  passes in eight idle seconds (failed with the tick wait back), and no commit drawn more than five ticks late
+  (failed with commits not waking it).
+- **The theme (07 §3.6).** Its four looks a second each read `/zelr.cfg` off the disk. It reads only when
+  `vfs_changes()` has moved. framecheck: no disk reads in eight idle seconds (failed with the check removed).
+- **framecheck** enters the desktop through `enter_desktop`, which waits 90 seconds for the terminal and types the
+  command again once: the 0.57.0 gate's first framecheck on the busy host measured a shell prompt for a desktop
+  that never started. Its first check says whether the desktop came up (failed with the shell's `desktop`
+  renamed).
+
+Counts after 0.58.0: selftest unchanged from 0.57.0; framecheck 24 checks, netcheck 18.
+
 ### 0.57.0: hover that draws only what it touches, and partial frames under a moving wallpaper
 
 - **Hover zones (07 §3.9.20).** A pointer move that is not quiet but changes nothing else damages only where it

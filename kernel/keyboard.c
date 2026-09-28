@@ -1,6 +1,7 @@
 /* PS/2 keyboard, scancode set 1, with a small ring buffer so keystrokes
    taken during an interrupt survive until someone reads them. */
 #include "keyboard.h"
+#include "fd.h"
 #include "idt.h"
 #include "pic.h"
 #include "io.h"
@@ -183,7 +184,10 @@ void keyboard_inject(int key) {
 /* The channel is this variable's address; nothing is stored in it. */
 static int input_channel;
 
-void input_wake(void) { wake_all(&input_channel); }
+void input_wake(void) {
+    wake_all(&input_channel);
+    fd_poll_wake();                      /* the console may be what a poll is waiting for */
+}
 
 void input_wait(u32 timeout_ms) {
     if (!task_current()) { task_idle_wait(); return; }

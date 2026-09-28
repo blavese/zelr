@@ -185,7 +185,7 @@ abichecked).
 | `spit(path, buf, len)` | 395-401 | open(W\|C\|T)+write+close | |
 | `zelr_rename(from,to)` / `rename` [sugar] | 727-735 | 62 | same directory, 8.3 names only (`zelr.h:684-693`) |
 | `fsync(fd)` | 737-739 | 61 | bytes on the drive when 0 |
-| `poll(pollfd_t*, u32 n, timeout_ms)` | 723-725 | 63 | n ≤ 16; re-checks every tick; `POLLIN 1, POLLOUT 4, POLLERR 8, POLLHUP 0x10, POLLNVAL 0x20`; `pollfd_t {int fd; short events, revents;}` (`:709-719`, matches `include/fd.h:85-97`, not abichecked) |
+| `poll(pollfd_t*, u32 n, timeout_ms)` | 723-725 | 63 | n ≤ 16; re-checks every tick (since 0.58.0 sleeps until a pipe or input wakes it); `POLLIN 1, POLLOUT 4, POLLERR 8, POLLHUP 0x10, POLLNVAL 0x20`; `pollfd_t {int fd; short events, revents;}` (`:709-719`, matches `include/fd.h:85-97`, not abichecked) |
 | `dup(fd)` / `dup2(fd, to)` / `pipe(int[2])` | 630-641 | 51/52/53 | pipe buffer 4096 (`PIPE_SIZE`; 65536 since 0.53.0) |
 
 *Network* (`:403-474`). `zelr_netinfo {u32 up, ip, gateway, netmask, dns; u8 mac[6]; u16 pad;}`.

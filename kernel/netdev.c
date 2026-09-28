@@ -57,6 +57,13 @@ bool netdev_send(const void *data, u16 len) {
     }
 }
 
+bool netdev_interrupts(void) {
+    switch (current()) {
+        case NIC_E1000: case NIC_PCNET: case NIC_RTL8139: return true;
+        default: return false;                  /* the USB one is polled */
+    }
+}
+
 void netdev_poll(void) {
     switch (current()) {
         case NIC_E1000:   e1000_poll(); break;

@@ -612,7 +612,12 @@ again at all: the patch the arrow covered is put back and the arrow drawn
 somewhere else, where it was a whole frame of wallpaper, windows and dock. A
 desktop left alone draws nothing: the dock's clock is looked at once a second
 and drawn when its minute changes, where it drew the whole screen every
-second. And a frame that knows what changed draws only that: every drawing
+second. Nor does it wake for nothing: its loop sleeps until the next thing it
+reads by the clock, the theme file is read again only after something has
+been written, the network's task sleeps until a frame arrives, and a program
+waiting in `poll` sleeps until a pipe or a key wakes it, where each of those
+looked a hundred times a second. And a frame that knows what changed draws
+only that: every drawing
 routine keeps to a clip rectangle, and a frame whose damage is one window's
 contents starts from that window, because nothing under an opaque surface
 shows. A program can say which part of its window changed

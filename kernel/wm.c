@@ -297,15 +297,21 @@ static void damage(int x, int y, int w, int h) {
 /* One rectangle rather than a list. Two windows redrawing in opposite
    corners therefore cost the whole screen, which is the price of not
    keeping a list, and the case that matters is one thing moving. */
+/* The desktop's loop sleeps until something is due (idle_ms), so anything
+   that asks it for a frame from outside it -- a program's window opening,
+   closing or redrawing -- wakes it; from inside it this costs a wake of
+   nobody. */
 static void need_frame(void) {
     needs_composite = true;
     frame_is_whole = true;
+    input_wake();
 }
 
 /* Another frame, but only this much of it has to be sent. */
 static void need_frame_in(int x, int y, int w, int h) {
     needs_composite = true;
     damage(x, y, w, h);
+    input_wake();
 }
 
 /* --- things that move ----------------------------------------------------
@@ -431,6 +437,10 @@ static const struct {
 #define CTX_H (CTX_N * CTX_ITEM + CTX_PAD * 2)
 
 static u64 last_theme_check;
+static u64 last_dock_look;                /* the once a second look at the clock */
+static u32 passes;                        /* of the loop, for the self test and framecheck */
+static u64 marked_at;                     /* the tick a commit was first waiting */
+static u32 late_commits;                  /* drawn more than five ticks after */
 
 /* What the launcher offers. A null program means the kernel handles it. */
 typedef struct {
@@ -600,6 +610,10 @@ void wm_mark_dirty(window_t *w, int x, int y, int cw, int ch) {
         if (y + ch > w->dirty_y1) w->dirty_y1 = y + ch;
     }
     w->dirty = true;
+    /* When it was asked for, for the count of commits drawn late; and the
+       loop woken, which may be asleep until the next look at the clock. */
+    if (!w->minimized && !marked_at) marked_at = timer_ticks();
+    input_wake();
 }
 
 window_t *wm_create(const char *title, int x, int y, int cw, int ch) {
@@ -3237,6 +3251,10 @@ static void composite(void) {
     draw_cursor(last_mx, last_my);
     draw_cycles += rdtsc() - started;
     draws++;
+    if (marked_at) {
+        if (timer_ticks() - marked_at > 5) late_commits++;
+        marked_at = 0;
+    }
     if (part) {
         partial_draws++;
         fb_flush_rect((u32)dmg_x0, (u32)dmg_y0, (u32)(dmg_x1 - dmg_x0),
@@ -4294,7 +4312,7 @@ static bool wm_key(int c) {
     return true;
 }
 
-void wm_quit(void) { running = false; }
+void wm_quit(void) { running = false; input_wake(); }
 
 /* For the self test, which has no mouse: whether anything the pointer can
    hold still names this window, the pointer handler fed by hand, and a
@@ -4504,6 +4522,28 @@ static void move_pointer_only(void) {
     pointer_only_moves++;
 }
 
+/* How long the loop may sleep with nothing to draw.
+ *
+ * It looked every tick, a hundred passes a second of a desktop nobody was
+ * touching, for the few things it reads by the clock: the theme file four
+ * times a second and the dock's clock and network once. It sleeps until the
+ * next of those now, woken sooner by a key, the pointer (input_wake) or a
+ * program asking for a frame (need_frame, wm_mark_dirty). Anything moving
+ * -- an animation, a drag, alt+tab waiting for alt to come up, a moving
+ * wallpaper, an open menu or panel -- still takes a tick. */
+static u32 idle_ms(void) {
+    bool moving = wallpaper_moves(theme()->wallpaper) && covering_index() < 0;
+    if (moving || still_moving(panel_since, PANEL_MS) || menu_open || ctx_open
+        || volume_open || net_open || find_open || cyc_at >= 0 || dragging
+        || resizing || mouse_capture || band_on || volume_drag || held_button)
+        return 1;
+    u64 hz = timer_hz(), now = timer_ticks();
+    u64 next = last_theme_check + hz / 4 + 1;
+    if (last_dock_look + hz < next) next = last_dock_look + hz;
+    u64 left = next > now ? next - now : 1;
+    return (u32)(left * 1000 / hz);
+}
+
 void wm_run(void) {
     if (!fb_active()) { kprintf("the desktop needs a framebuffer\n"); return; }
 
@@ -4524,6 +4564,8 @@ void wm_run(void) {
     last_theme_check = timer_ticks();
 
     while (running) {
+        passes++;
+
         /* Every change of the buttons first, in the order they happened and
            at the position each happened at.
          *
@@ -4645,12 +4687,11 @@ void wm_run(void) {
            tidied away, within the second, anything a quicker path had drawn
            wrong. A wallpaper that moves needs a frame far more often, but
            only while it is the one on. */
-        static u64 last_tick;
         bool moving = wallpaper_moves(theme()->wallpaper) && covering_index() < 0;
         u64 every = moving ? timer_hz() / 12 : timer_hz();
         if (!every) every = 1;
-        if (timer_ticks() - last_tick >= every) {
-            last_tick = timer_ticks();
+        if (timer_ticks() - last_dock_look >= every) {
+            last_dock_look = timer_ticks();
             if (moving || net_open || dock_changed()) need_frame();
         }
 
@@ -4684,7 +4725,7 @@ void wm_run(void) {
                rather than halted, since a halt kept the kernel lock and no
                program on another processor could reach the window server
                until the desktop's own processor was interrupted. */
-            input_wait(1);
+            input_wait(idle_ms());
         }
     }
 
