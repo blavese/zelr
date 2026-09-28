@@ -350,3 +350,10 @@ builtin_durtest_end:
 builtin_polltest_start:
 .incbin "build/user/polltest.elf"
 builtin_polltest_end:
+
+.balign 4
+.global builtin_sitetest_start
+.global builtin_sitetest_end
+builtin_sitetest_start:
+.incbin "build/user/sitetest.elf"
+builtin_sitetest_end:

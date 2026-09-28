@@ -1,0 +1,955 @@
+#pragma once
+#include "zelr.h"
+#include "web.h"
+#include "fetch.h"
+
+/* Sites whose pages are applications, read another way.
+ *
+ * YouTube and Twitch do not send pages. They send a few kilobytes of markup
+ * and megabytes of script, and the script builds the page -- out of custom
+ * elements, shadow roots and a player that plays H.264 through Media Source
+ * Extensions. A browser that cannot run that application sees an empty page,
+ * which is what this one saw.
+ *
+ * But what the page would show is there to be read. YouTube puts it in the
+ * page as data -- ytInitialData, a megabyte and a half of JSON with every
+ * result in it, and ytInitialPlayerResponse for a video -- and Twitch answers
+ * it from an API anybody may ask. So for these two the browser reads that and
+ * draws a plain page of its own from it: the results, the titles, who made
+ * them, how many watched, the pictures, and links that come back here. It is
+ * said on the page that this is what happened.
+ *
+ * What it cannot do is play the video. That is H.264 inside MP4 or MPEG
+ * transport streams, delivered in pieces chosen by the site's own script, and
+ * there is no video decoder on this machine to hand it to. The page says that
+ * too, rather than showing a player that does nothing.
+ *
+ * Google is not here, because there is nothing to read: its results page is
+ * an anti-automation program whose output is the page, and a browser that
+ * cannot run it is told that its browser is not supported (browser.c,
+ * SEARCH_PREFIX). */
+
+/* --- a little JSON, read where it lies -------------------------------------
+ *
+ * The data is a megabyte and more, and all that is wanted is a few fields of
+ * a few dozen objects in it, so nothing is parsed into a tree: a value is
+ * skipped by matching its brackets, and a key is found by looking for it,
+ * quoted and followed by a colon, inside the value that holds it. A quote
+ * inside a string is always written escaped, so an unescaped one is always
+ * the start or the end of a string, and a string followed by a colon is a
+ * key. */
+
+/* Just past the value that starts at `at`: a string, an object or an array
+   (with the strings inside skipped, escapes and all), or a bare word. */
+static inline int sj_skip(const char *s, int at, int n) {
+    if (at < 0 || at >= n) return n;
+    char c = s[at];
+    if (c == '"') {
+        for (int i = at + 1; i < n; i++) {
+            if (s[i] == '\\') { i++; continue; }
+            if (s[i] == '"') return i + 1;
+        }
+        return n;
+    }
+    if (c == '{' || c == '[') {
+        int depth = 0;
+        for (int i = at; i < n; i++) {
+            char d = s[i];
+            if (d == '"') {
+                for (i++; i < n; i++) {
+                    if (s[i] == '\\') { i++; continue; }
+                    if (s[i] == '"') break;
+                }
+                continue;
+            }
+            if (d == '{' || d == '[') depth++;
+            else if ((d == '}' || d == ']') && --depth == 0) return i + 1;
+        }
+        return n;
+    }
+    int i = at;
+    while (i < n && s[i] != ',' && s[i] != '}' && s[i] != ']') i++;
+    return i;
+}
+
+/* Where the value of "key" starts, anywhere inside from..to, or -1. */
+static inline int sj_find(const char *s, int from, int to, const char *key) {
+    int kl = 0;
+    while (key[kl]) kl++;
+    for (int i = from; i + kl + 2 < to; i++) {
+        if (s[i] != '"') continue;
+        int bs = 0;
+        for (int j = i - 1; j >= from && s[j] == '\\'; j--) bs++;
+        if (bs & 1) continue;
+        int k = 0;
+        while (k < kl && s[i + 1 + k] == key[k]) k++;
+        if (k < kl || s[i + 1 + kl] != '"') continue;
+        int v = i + kl + 2;
+        while (v < to && s[v] == ' ') v++;
+        if (v >= to || s[v] != ':') continue;
+        v++;
+        while (v < to && s[v] == ' ') v++;
+        return v < to ? v : -1;
+    }
+    return -1;
+}
+
+/* A code point as UTF-8. */
+static inline int sj_utf8(u32 cp, char *out, int room) {
+    if (cp < 0x80) { if (room < 1) return 0; out[0] = (char)cp; return 1; }
+    if (cp < 0x800) {
+        if (room < 2) return 0;
+        out[0] = (char)(0xC0 | (cp >> 6)); out[1] = (char)(0x80 | (cp & 63));
+        return 2;
+    }
+    if (cp < 0x10000) {
+        if (room < 3) return 0;
+        out[0] = (char)(0xE0 | (cp >> 12)); out[1] = (char)(0x80 | ((cp >> 6) & 63));
+        out[2] = (char)(0x80 | (cp & 63));
+        return 3;
+    }
+    if (room < 4) return 0;
+    out[0] = (char)(0xF0 | (cp >> 18)); out[1] = (char)(0x80 | ((cp >> 12) & 63));
+    out[2] = (char)(0x80 | ((cp >> 6) & 63)); out[3] = (char)(0x80 | (cp & 63));
+    return 4;
+}
+
+static inline int sj_hex4(const char *s, int at, int n) {
+    if (at + 4 > n) return -1;
+    int v = 0;
+    for (int i = 0; i < 4; i++) {
+        char c = s[at + i];
+        int d = (c >= '0' && c <= '9') ? c - '0' : (c >= 'a' && c <= 'f') ? c - 'a' + 10
+              : (c >= 'A' && c <= 'F') ? c - 'A' + 10 : -1;
+        if (d < 0) return -1;
+        v = v * 16 + d;
+    }
+    return v;
+}
+
+/* The string at `at`, its escapes undone, as UTF-8 into out; its length.
+   A number or a word is copied as it is written, which is how a count that
+   one site sends quoted and another does not comes out the same. */
+static inline int sj_str(const char *s, int at, int n, char *out, int cap) {
+    int o = 0;
+    if (cap <= 0) return 0;
+    out[0] = 0;
+    if (at < 0 || at >= n) return 0;
+    if (s[at] != '"') {
+        int e = sj_skip(s, at, n);
+        for (int i = at; i < e && o < cap - 1; i++) out[o++] = s[i];
+        out[o] = 0;
+        return o;
+    }
+    for (int i = at + 1; i < n && o < cap - 1; i++) {
+        char c = s[i];
+        if (c == '"') break;
+        if (c != '\\') { out[o++] = c; continue; }
+        if (++i >= n) break;
+        char e = s[i];
+        u32 cp;
+        switch (e) {
+        case 'n': cp = '\n'; break;
+        case 't': cp = '\t'; break;
+        case 'r': cp = '\r'; break;
+        case 'b': cp = 8; break;
+        case 'f': cp = 12; break;
+        case 'u': {
+            int h = sj_hex4(s, i + 1, n);
+            if (h < 0) { cp = '?'; break; }
+            i += 4;
+            cp = (u32)h;
+            /* A character past the first sixty five thousand comes as two. */
+            if (cp >= 0xD800 && cp < 0xDC00 && i + 6 < n && s[i + 1] == '\\' && s[i + 2] == 'u') {
+                int lo = sj_hex4(s, i + 3, n);
+                if (lo >= 0xDC00 && lo < 0xE000) {
+                    cp = 0x10000 + ((cp - 0xD800) << 10) + (u32)(lo - 0xDC00);
+                    i += 6;
+                }
+            }
+            break;
+        }
+        default: cp = (u8)e;                  /* a quote, a backslash, a slash */
+        }
+        o += sj_utf8(cp, out + o, cap - 1 - o);
+    }
+    out[o] = 0;
+    return o;
+}
+
+/* What YouTube writes as text: a string, {"simpleText": ...}, {"content":
+   ...}, or {"runs": [{"text": ...}, ...]} with the pieces run together. A
+   number or a word comes out as it is written. */
+static inline int sj_text(const char *s, int at, int n, char *out, int cap) {
+    if (cap <= 0) return 0;
+    out[0] = 0;
+    if (at < 0 || at >= n) return 0;
+    if (s[at] != '{') return sj_str(s, at, n, out, cap);
+    int end = sj_skip(s, at, n);
+    int v = sj_find(s, at, end, "simpleText");
+    if (v >= 0) return sj_str(s, v, n, out, cap);
+    v = sj_find(s, at, end, "runs");
+    if (v >= 0 && s[v] == '[') {
+        int re = sj_skip(s, v, n), o = 0;
+        for (int p = v; p < re && o < cap - 1;) {
+            int t = sj_find(s, p, re, "text");
+            if (t < 0) break;
+            o += sj_str(s, t, n, out + o, cap - o);
+            p = sj_skip(s, t, n);
+        }
+        return o;
+    }
+    v = sj_find(s, at, end, "content");
+    if (v >= 0) return sj_str(s, v, n, out, cap);
+    return 0;
+}
+
+/* The field's text inside the object that starts at `obj`. */
+static inline int sj_field(const char *s, int obj, int n, const char *key, char *out, int cap) {
+    if (cap > 0) out[0] = 0;
+    int end = sj_skip(s, obj, n);
+    int v = sj_find(s, obj, end, key);
+    return v < 0 ? 0 : sj_text(s, v, n, out, cap);
+}
+
+/* Where a piece of text first appears, from `from`, or -1. */
+static inline int site_search(const char *s, int from, int n, const char *what) {
+    int wl = 0;
+    while (what[wl]) wl++;
+    for (int i = from; i + wl <= n; i++) {
+        int k = 0;
+        while (k < wl && s[i + k] == what[k]) k++;
+        if (k == wl) return i;
+    }
+    return -1;
+}
+
+/* --- writing the page -------------------------------------------------------- */
+
+typedef struct {
+    char *out;
+    int n, cap;
+} site_page;
+
+static inline void sp_raw(site_page *p, const char *t) {
+    while (*t && p->n < p->cap - 1) p->out[p->n++] = *t++;
+    p->out[p->n] = 0;
+}
+
+/* Text, with what markup would read as markup written so that it does not. */
+static inline void sp_text(site_page *p, const char *t) {
+    for (; *t && p->n < p->cap - 8; t++) {
+        char c = *t;
+        if (c == '&') sp_raw(p, "&amp;");
+        else if (c == '<') sp_raw(p, "&lt;");
+        else if (c == '>') sp_raw(p, "&gt;");
+        else if (c == '"') sp_raw(p, "&quot;");
+        else if (c == '\n') sp_raw(p, "<br>");
+        else if (c != '\r') { p->out[p->n++] = c; p->out[p->n] = 0; }
+    }
+}
+
+static inline void sp_num(site_page *p, long long v) {
+    char b[24];
+    int i = 0;
+    if (v < 0) { sp_raw(p, "-"); v = -v; }
+    do { b[i++] = (char)('0' + v % 10); v /= 10; } while (v && i < 22);
+    char r[24];
+    int k = 0;
+    /* With commas, the way a count is read. */
+    for (int j = i - 1; j >= 0; j--) {
+        r[k++] = b[j];
+        if (j && j % 3 == 0) r[k++] = ',';
+    }
+    r[k] = 0;
+    sp_raw(p, r);
+}
+
+/* Only the characters an identifier from these sites is made of, so that one
+   written into a link or a query cannot close it and say something else. */
+static inline int site_ident(const char *in, char *out, int cap, const char *also) {
+    int o = 0;
+    for (; *in && o < cap - 1; in++) {
+        char c = *in;
+        int fine = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9');
+        for (const char *a = also; *a && !fine; a++) if (c == *a) fine = 1;
+        if (!fine) break;
+        out[o++] = c;
+    }
+    out[o] = 0;
+    return o;
+}
+
+static inline int site_hexval(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+/* %xx undone, and + as a space when it is a query's. */
+static inline int site_unescape(const char *in, int n, char *out, int cap, int plus) {
+    int o = 0;
+    for (int i = 0; i < n && in[i] && o < cap - 1; i++) {
+        if (plus && in[i] == '+') { out[o++] = ' '; continue; }
+        if (in[i] == '%' && i + 2 < n && site_hexval(in[i + 1]) >= 0 && site_hexval(in[i + 2]) >= 0) {
+            out[o++] = (char)(site_hexval(in[i + 1]) * 16 + site_hexval(in[i + 2]));
+            i += 2;
+            continue;
+        }
+        out[o++] = in[i];
+    }
+    out[o] = 0;
+    return o;
+}
+
+/* A query string's value for a name, decoded (%xx and +). */
+static inline int site_param(const char *path, const char *name, char *out, int cap) {
+    out[0] = 0;
+    const char *q = path;
+    while (*q && *q != '?') q++;
+    if (!*q) return 0;
+    q++;
+    int nl = 0;
+    while (name[nl]) nl++;
+    while (*q) {
+        int k = 0;
+        while (k < nl && q[k] == name[k]) k++;
+        if (k == nl && q[k] == '=') {
+            q += nl + 1;
+            int len = 0;
+            while (q[len] && q[len] != '&') len++;
+            return site_unescape(q, len, out, cap, 1);
+        }
+        while (*q && *q != '&') q++;
+        if (*q == '&') q++;
+    }
+    return 0;
+}
+
+static inline int site_host_is(const url_t *u, const char *const *hosts) {
+    for (int i = 0; hosts[i]; i++)
+        if (w_same_fold(u->host, hosts[i])) return 1;
+    return 0;
+}
+
+/* A row: a picture on the left and words beside it. A flex row, because
+   this layout lays tables out as blocks, one cell under the next. The words
+   ask for half the width and grow into the rest, so a long title does not
+   squeeze the picture: a flex row shrinks what is in it in proportion to
+   what each asked for, and words ask for the whole line. */
+static inline void sp_row_open(site_page *p, int pic_w) {
+    sp_raw(p, "<div class=\"row\" style=\"display:flex;margin:10px 0\"><div style=\"width:");
+    sp_num(p, pic_w + 12);
+    sp_raw(p, "px\">");
+}
+
+static inline void sp_row_words(site_page *p) {
+    sp_raw(p, "</div><div style=\"width:50%;flex:1\">");
+}
+
+static inline void sp_row_close(site_page *p) {
+    sp_raw(p, "</div></div>\n");
+}
+
+/* --- Google ------------------------------------------------------------------
+ *
+ * Its home page is a page, with a form on it, and the form asks for
+ * /search?q=. What comes back from there to a browser that does not run
+ * Google's script is "please click here if you are not redirected": the
+ * results are made by a program that decides first whether a person is
+ * asking, and that program is not something to get round. So a search
+ * asked of Google is asked of DuckDuckGo instead, which answers with a page,
+ * and the page says that it was (browser.c). The words that were typed are
+ * all that goes. */
+
+static inline int site_is_google(const url_t *u) {
+    const char *h = u->host;
+    if (w_starts_fold(h, "www.")) h += 4;
+    /* google.com, google.co.uk, google.de: the name, then one or two short
+       parts that say which country -- and not google.example.org, which is
+       somebody else's. */
+    if (!w_starts_fold(h, "google.")) return 0;
+    int parts = 0, run = 0;
+    for (const char *t = h + 7;; t++) {
+        if (*t == '.' || !*t) {
+            if (run < 2 || run > 3) return 0;
+            parts++;
+            run = 0;
+            if (!*t) break;
+            continue;
+        }
+        if (!((*t >= 'a' && *t <= 'z') || (*t >= 'A' && *t <= 'Z'))) return 0;
+        run++;
+    }
+    return parts <= 2;
+}
+
+/* The words of a Google search, or 0 when the address is not one. */
+static inline int site_google_search(const url_t *u, char *q, int cap) {
+    if (cap > 0) q[0] = 0;
+    if (!site_is_google(u)) return 0;
+    if (!w_starts_fold(u->path, "/search?") && !w_same(u->path, "/search")) return 0;
+    return site_param(u->path, "q", q, cap);
+}
+
+/* --- YouTube ----------------------------------------------------------------- */
+
+static inline int site_is_youtube(const url_t *u) {
+    static const char *const H[] = { "www.youtube.com", "youtube.com", "m.youtube.com", 0 };
+    return site_host_is(u, H);
+}
+
+#define YT_FIELD 512
+
+/* Where a channel's page is, from the object that names it: the address
+   YouTube gives it, or failing that /channel/ and its id. Only the characters
+   such an address is made of, all of them or none, since it is written into
+   a link. */
+static inline int yt_channel_href(const char *s, int at, int n, char *out, int cap) {
+    static char raw[256];
+    out[0] = 0;
+    if (at < 0 || at >= n || s[at] != '{') return 0;
+    int end = sj_skip(s, at, n);
+    int v = sj_find(s, at, end, "canonicalBaseUrl");
+    if (v >= 0) {
+        int rl = sj_str(s, v, n, raw, sizeof(raw));
+        if (raw[0] == '/' && site_ident(raw + 1, out + 1, cap - 1, "/@_.-%") == rl - 1) {
+            out[0] = '/';
+            return rl;
+        }
+    }
+    v = sj_find(s, at, end, "browseId");
+    if (v < 0) return 0;
+    char id[64];
+    int il = sj_str(s, v, n, raw, sizeof(raw));
+    if (site_ident(raw, id, sizeof(id), "_-") != il || id[0] != 'U' || id[1] != 'C') return 0;
+    int o = 0;
+    for (const char *q = "/channel/"; *q && o < cap - 1; q++) out[o++] = *q;
+    for (const char *q = id; *q && o < cap - 1; q++) out[o++] = *q;
+    out[o] = 0;
+    return o;
+}
+
+/* Who, linked to their channel when there is a channel to link to. */
+static inline void yt_who(site_page *p, const char *who, const char *href) {
+    if (!href[0]) { sp_text(p, who); return; }
+    sp_raw(p, "<a href=\"");
+    sp_raw(p, href);
+    sp_raw(p, "\">");
+    sp_text(p, who);
+    sp_raw(p, "</a>");
+}
+
+/* One video as a row: its picture, which links to it, its title, who made it
+   and what the site says about it. */
+static inline void yt_row(site_page *p, const char *id, const char *title, const char *who,
+                          const char *who_href, const char *a, const char *b, const char *c,
+                          const char *snippet) {
+    sp_row_open(p, 240);
+    sp_raw(p, "<a href=\"/watch?v=");
+    sp_raw(p, id);
+    sp_raw(p, "\"><img src=\"https://i.ytimg.com/vi/");
+    sp_raw(p, id);
+    sp_raw(p, "/mqdefault.jpg\" width=\"240\" height=\"135\" alt=\"\"></a>");
+    sp_row_words(p);
+    sp_raw(p, "<a href=\"/watch?v=");
+    sp_raw(p, id);
+    sp_raw(p, "\"><b>");
+    sp_text(p, title[0] ? title : id);
+    sp_raw(p, "</b></a><br><small>");
+    yt_who(p, who, who_href);
+    const char *bits[3] = { a, b, c };
+    int first = 1;
+    for (int i = 0; i < 3; i++) {
+        if (!bits[i][0]) continue;
+        sp_raw(p, first ? "<br>" : " &middot; ");
+        sp_text(p, bits[i]);
+        first = 0;
+    }
+    if (snippet && snippet[0]) {
+        sp_raw(p, "<br>");
+        sp_text(p, snippet);
+    }
+    sp_raw(p, "</small>");
+    sp_row_close(p);
+}
+
+/* Every video the data lists, in the order it lists them, once each: the
+   renderer a search or a channel uses, the one the side of a watch page used
+   to, and the view model that has replaced them in places. */
+static inline int yt_videos(site_page *p, const char *s, int n, int limit) {
+    static char seen[64][16];
+    int nseen = 0, shown = 0;
+    static char id[64], title[YT_FIELD], who[YT_FIELD], views[128], age[128], len[64], snip[YT_FIELD];
+    static char href[256];
+
+    const char *const kinds[] = { "\"videoRenderer\":{", "\"compactVideoRenderer\":{",
+                                  "\"gridVideoRenderer\":{", "\"lockupViewModel\":{", 0 };
+    for (int kind = 0; kinds[kind] && shown < limit; kind++) {
+        for (int at = site_search(s, 0, n, kinds[kind]); at >= 0 && shown < limit;
+             at = site_search(s, at + 1, n, kinds[kind])) {
+            int obj = at;
+            while (obj < n && s[obj] != '{') obj++;
+            int end = sj_skip(s, obj, n);
+            id[0] = title[0] = who[0] = views[0] = age[0] = len[0] = snip[0] = href[0] = 0;
+
+            if (kind == 3) {
+                /* The view model says what it holds; only videos are wanted. */
+                int ct = sj_find(s, obj, end, "contentType");
+                char type[64];
+                sj_str(s, ct, n, type, sizeof(type));
+                if (ct < 0 || !w_same(type, "LOCKUP_CONTENT_TYPE_VIDEO")) continue;
+                sj_str(s, sj_find(s, obj, end, "contentId"), n, id, sizeof(id));
+                int meta = sj_find(s, obj, end, "lockupMetadataViewModel");
+                if (meta >= 0) {
+                    int me = sj_skip(s, meta, n);
+                    int t = sj_find(s, meta, me, "title");
+                    if (t >= 0) sj_text(s, t, n, title, sizeof(title));
+                    /* The rows under it: who, then how many and how long ago. */
+                    int rows = sj_find(s, meta, me, "metadataRows");
+                    if (rows >= 0) {
+                        int re = sj_skip(s, rows, n), part = 0;
+                        for (int q = rows; q < re && part < 3;) {
+                            int c = sj_find(s, q, re, "content");
+                            if (c < 0) break;
+                            char *dst = part == 0 ? who : part == 1 ? views : age;
+                            sj_str(s, c, n, dst, part == 0 ? (int)sizeof(who) : 128);
+                            part++;
+                            q = sj_skip(s, c, n);
+                        }
+                    }
+                }
+            } else {
+                sj_str(s, sj_find(s, obj, end, "videoId"), n, id, sizeof(id));
+                sj_field(s, obj, n, "title", title, sizeof(title));
+                int by = sj_find(s, obj, end, "longBylineText");
+                if (by < 0) by = sj_find(s, obj, end, "ownerText");
+                if (by < 0) by = sj_find(s, obj, end, "shortBylineText");
+                if (by >= 0) {
+                    sj_text(s, by, n, who, sizeof(who));
+                    yt_channel_href(s, by, n, href, sizeof(href));
+                }
+                if (!sj_field(s, obj, n, "viewCountText", views, sizeof(views)))
+                    sj_field(s, obj, n, "shortViewCountText", views, sizeof(views));
+                sj_field(s, obj, n, "publishedTimeText", age, sizeof(age));
+                sj_field(s, obj, n, "lengthText", len, sizeof(len));
+                int sn = sj_find(s, obj, end, "snippetText");
+                if (sn >= 0) sj_text(s, sn, n, snip, sizeof(snip));
+            }
+
+            char clean[16];
+            if (!site_ident(id, clean, sizeof(clean), "-_") || w_len(clean) != 11) continue;
+            int dup = 0;
+            for (int k = 0; k < nseen; k++) if (w_same(seen[k], clean)) dup = 1;
+            if (dup) continue;
+            if (nseen < 64) w_copy(seen[nseen++], 16, clean, 16);
+
+            yt_row(p, clean, title, who, href, views, age, len, snip);
+            shown++;
+        }
+    }
+    return shown;
+}
+
+/* A number of seconds as hours, minutes and seconds. */
+static inline void yt_duration(site_page *p, long long secs) {
+    long long h = secs / 3600, m = (secs / 60) % 60, s = secs % 60;
+    if (h) { sp_num(p, h); sp_raw(p, ":"); }
+    if (h && m < 10) sp_raw(p, "0");
+    sp_num(p, m);
+    sp_raw(p, ":");
+    if (s < 10) sp_raw(p, "0");
+    sp_num(p, s);
+}
+
+static inline long long site_atoll(const char *t) {
+    long long v = 0;
+    while (*t >= '0' && *t <= '9') v = v * 10 + (*t++ - '0');
+    return v;
+}
+
+/* The page, from YouTube's own. 0 when there is nothing in it to read. */
+static inline int site_youtube(const url_t *u, const char *s, int n, char *out, int cap) {
+    if (!site_is_youtube(u) || n <= 0) return 0;
+    if (site_search(s, 0, n, "ytInitialData") < 0
+        && site_search(s, 0, n, "ytInitialPlayerResponse") < 0) return 0;
+
+    site_page p = { out, 0, cap };
+    static char q[256], title[YT_FIELD], who[YT_FIELD], text[8192], num[64];
+    site_param(u->path, "search_query", q, sizeof(q));
+
+    int watch = w_starts_fold(u->path, "/watch");
+    int vd = watch ? site_search(s, 0, n, "\"videoDetails\":{") : -1;
+    if (vd >= 0) vd = sj_find(s, vd, n, "videoDetails");
+    int meta = vd < 0 ? site_search(s, 0, n, "\"channelMetadataRenderer\":{") : -1;
+    if (meta >= 0) meta = sj_find(s, meta, n, "channelMetadataRenderer");
+
+    title[0] = 0;
+    if (vd >= 0) sj_field(s, vd, n, "title", title, sizeof(title));
+    else if (meta >= 0) sj_field(s, meta, n, "title", title, sizeof(title));
+    sp_raw(&p, "<html><head><title>");
+    if (title[0] || q[0]) {
+        sp_text(&p, title[0] ? title : q);
+        sp_raw(&p, " - ");
+    }
+    sp_raw(&p, "YouTube</title></head><body>\n");
+
+    sp_raw(&p, "<form action=\"/results\" method=\"get\"><b>YouTube</b> "
+               "<input type=\"text\" name=\"search_query\" size=\"40\" value=\"");
+    sp_text(&p, q);
+    sp_raw(&p, "\"> <input type=\"submit\" value=\"search\"></form>\n"
+               "<p><small>Read by zelr from the data in YouTube's page, because the page "
+               "itself is an application this browser cannot run.</small></p>\n");
+
+    if (vd >= 0) {
+        char id[64], clean[16];
+        sj_field(s, vd, n, "videoId", id, sizeof(id));
+        site_ident(id, clean, sizeof(clean), "-_");
+        sj_field(s, vd, n, "author", who, sizeof(who));
+        /* The channel, by its id: the details carry no address for it. */
+        char chan[64], href[80];
+        sj_field(s, vd, n, "channelId", text, sizeof(text));
+        href[0] = 0;
+        if (site_ident(text, chan, sizeof(chan), "_-") == w_len(text) && chan[0] == 'U' && chan[1] == 'C') {
+            int o = 0;
+            for (const char *q = "/channel/"; *q; q++) href[o++] = *q;
+            for (const char *q = chan; *q && o < (int)sizeof(href) - 1; q++) href[o++] = *q;
+            href[o] = 0;
+        }
+
+        sp_raw(&p, "<h1>");
+        sp_text(&p, title);
+        sp_raw(&p, "</h1>\n<p><img src=\"https://i.ytimg.com/vi/");
+        sp_raw(&p, clean);
+        sp_raw(&p, "/hqdefault.jpg\" width=\"480\" height=\"360\" alt=\"\"></p>\n<p><b>");
+        yt_who(&p, who, href);
+        sp_raw(&p, "</b>");
+        sj_field(s, vd, n, "viewCount", num, sizeof(num));
+        if (num[0]) { sp_raw(&p, " &middot; "); sp_num(&p, site_atoll(num)); sp_raw(&p, " views"); }
+        /* Live now, rather than a stream that has ended, whose length is
+           real however long it ran. */
+        sj_field(s, vd, n, "isLive", text, sizeof(text));
+        int live = w_same(text, "true");
+        sj_field(s, vd, n, "lengthSeconds", num, sizeof(num));
+        if (!live && num[0] && site_atoll(num) > 0) { sp_raw(&p, " &middot; "); yt_duration(&p, site_atoll(num)); }
+        if (live) sp_raw(&p, " &middot; live");
+        sp_raw(&p, "</p>\n<p><small>The video itself is H.264, sent in pieces chosen by YouTube's "
+                   "own player; this browser has no video decoder to play it.</small></p>\n");
+
+        sj_field(s, vd, n, "shortDescription", text, sizeof(text));
+        if (text[0]) { sp_raw(&p, "<p>"); sp_text(&p, text); sp_raw(&p, "</p>\n"); }
+
+        sp_raw(&p, "<h2>more like it</h2>\n");
+        if (!yt_videos(&p, s, n, 20)) sp_raw(&p, "<p>nothing else was listed</p>\n");
+    } else {
+        if (meta >= 0) {
+            sj_field(s, meta, n, "description", text, sizeof(text));
+            sp_raw(&p, "<h1>");
+            sp_text(&p, title);
+            sp_raw(&p, "</h1>\n");
+            if (text[0]) { sp_raw(&p, "<p>"); sp_text(&p, text); sp_raw(&p, "</p>\n"); }
+        } else if (q[0]) {
+            sp_raw(&p, "<h2>");
+            sp_text(&p, q);
+            sp_raw(&p, "</h2>\n");
+        }
+        if (!yt_videos(&p, s, n, 24))
+            sp_raw(&p, "<p>YouTube did not list any videos here. It shows nothing on its front page "
+                       "to somebody who is not signed in: search for something above.</p>\n");
+    }
+    sp_raw(&p, "</body></html>\n");
+    return p.n;
+}
+
+/* --- Twitch -------------------------------------------------------------------- */
+
+static inline int site_is_twitch(const url_t *u) {
+    static const char *const H[] = { "www.twitch.tv", "twitch.tv", "m.twitch.tv", 0 };
+    return site_host_is(u, H);
+}
+
+/* The Client-Id Twitch's own web page sends. The API answers ordinary
+   public questions -- who is live, what is being played -- to any client that
+   gives one. */
+#define TWITCH_CLIENT "Client-Id: kimne78kx3ncx6brgo4mv6wki5h1ko\r\n"
+#define TWITCH_REPLY (128 * 1024)
+
+/* What a Twitch address is a page of. */
+enum { TW_NONE, TW_LIVE, TW_CATEGORIES, TW_CATEGORY, TW_CHANNEL };
+
+/* The path without its query or a slash at the end. */
+static inline void twitch_path(const url_t *u, char *path, int cap) {
+    int pl = 0;
+    for (const char *t = u->path; *t && *t != '?' && pl < cap - 1; t++) path[pl++] = *t;
+    path[pl] = 0;
+    while (pl > 1 && path[pl - 1] == '/') path[--pl] = 0;
+}
+
+/* A GraphQL string, with nothing in it that could end it early. */
+static inline void twitch_quote(const char *in, char *out, int cap) {
+    int o = 0;
+    for (; *in && o < cap - 1; in++)
+        if (*in != '"' && *in != '\\' && (u8)*in >= 32) out[o++] = *in;
+    out[o] = 0;
+}
+
+/* Three pieces run together: the question around a name. */
+static inline void twitch_join(char *out, int cap, const char *a, const char *b, const char *c) {
+    int k = 0;
+    for (const char *t = a; *t && k < cap - 1; t++) out[k++] = *t;
+    for (const char *t = b; *t && k < cap - 1; t++) out[k++] = *t;
+    for (const char *t = c; *t && k < cap - 1; t++) out[k++] = *t;
+    out[k] = 0;
+}
+
+/* The question an address asks of the API, and what kind of page the answer
+   makes; TW_NONE for an address that is not a page this knows. `name` is the
+   category or the channel, as it will be shown. */
+static inline int twitch_query(const url_t *u, char *query, int cap, char *name, int ncap) {
+    static char path[URL_PATH], decoded[256];
+    query[0] = 0;
+    name[0] = 0;
+    if (!site_is_twitch(u)) return TW_NONE;
+    twitch_path(u, path, sizeof(path));
+    int pl = w_len(path);
+
+    if (pl <= 1) {
+        twitch_join(query, cap, "query{streams(first:24){edges{node{title viewersCount broadcaster{login "
+            "displayName} game{name} previewImageURL(width:320,height:180)}}}}", "", "");
+        return TW_LIVE;
+    }
+    if (w_same_fold(path, "/directory")) {
+        twitch_join(query, cap, "query{games(first:30){edges{node{name viewersCount "
+            "boxArtURL(width:144,height:192)}}}}", "", "");
+        return TW_CATEGORIES;
+    }
+    if (w_starts_fold(path, "/directory/game/") || w_starts_fold(path, "/directory/category/")) {
+        const char *raw = path + (w_starts_fold(path, "/directory/game/") ? 16 : 20);
+        site_unescape(raw, w_len(raw), decoded, sizeof(decoded), 0);
+        twitch_quote(decoded, name, ncap);
+        if (!name[0]) return TW_NONE;
+        twitch_join(query, cap, "query{game(name:\"", name, "\"){displayName streams(first:24){edges{node{"
+            "title viewersCount broadcaster{login displayName} game{name} "
+            "previewImageURL(width:320,height:180)}}}}}");
+        return TW_CATEGORY;
+    }
+    /* A channel, and whatever page of it: its name is the first part. Only
+       what a login is made of, so a name cannot close the quotes it is
+       written into and ask something else. */
+    if (!site_ident(path + 1, name, ncap, "_")) return TW_NONE;
+    twitch_join(query, cap, "query{user(login:\"", name, "\"){displayName description stream{title "
+        "viewersCount game{name} previewImageURL(width:640,height:360)} "
+        "lastBroadcast{title}}}");
+    return TW_CHANNEL;
+}
+
+/* A path segment, with anything but what needs no escaping escaped. */
+static inline void sp_path(site_page *p, const char *t) {
+    static const char HEX[] = "0123456789ABCDEF";
+    for (; *t; t++) {
+        char c = *t;
+        if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
+            || c == '-' || c == '.' || c == '_') {
+            char one[2] = { c, 0 };
+            sp_raw(p, one);
+        } else {
+            char esc[4] = { '%', HEX[(u8)c >> 4], HEX[(u8)c & 15], 0 };
+            sp_raw(p, esc);
+        }
+    }
+}
+
+/* A picture only from Twitch's own picture server: the address is written
+   into the page, and it came from an answer. */
+static inline void twitch_picture(site_page *p, const char *url, int w, int h) {
+    if (!w_starts_fold(url, "https://static-cdn.jtvnw.net/")) return;
+    sp_raw(p, "<img src=\"");
+    sp_text(p, url);
+    sp_raw(p, "\" width=\"");
+    sp_num(p, w);
+    sp_raw(p, "\" height=\"");
+    sp_num(p, h);
+    sp_raw(p, "\" alt=\"\">");
+}
+
+static inline int twitch_streams(site_page *p, const char *s, int n) {
+    static char title[YT_FIELD], login[64], raw[64], name[128], game[128], pic[256], viewers[32];
+    int shown = 0;
+    for (int at = site_search(s, 0, n, "\"node\":{"); at >= 0;
+         at = site_search(s, at + 1, n, "\"node\":{")) {
+        int obj = sj_find(s, at, n, "node");
+        int end = sj_skip(s, obj, n);
+        int b = sj_find(s, obj, end, "broadcaster");
+        if (b < 0 || s[b] != '{') continue;
+        sj_field(s, b, n, "login", raw, sizeof(raw));
+        if (!site_ident(raw, login, sizeof(login), "_")) continue;
+        sj_field(s, b, n, "displayName", name, sizeof(name));
+        sj_field(s, obj, n, "title", title, sizeof(title));
+        sj_field(s, obj, n, "viewersCount", viewers, sizeof(viewers));
+        game[0] = 0;
+        int g = sj_find(s, obj, end, "game");
+        if (g >= 0 && s[g] == '{') sj_field(s, g, n, "name", game, sizeof(game));
+        sj_field(s, obj, n, "previewImageURL", pic, sizeof(pic));
+
+        sp_row_open(p, 240);
+        sp_raw(p, "<a href=\"/");
+        sp_raw(p, login);
+        sp_raw(p, "\">");
+        twitch_picture(p, pic, 240, 135);
+        sp_raw(p, "</a>");
+        sp_row_words(p);
+        sp_raw(p, "<a href=\"/");
+        sp_raw(p, login);
+        sp_raw(p, "\"><b>");
+        sp_text(p, title[0] ? title : login);
+        sp_raw(p, "</b></a><br><small>");
+        sp_text(p, name[0] ? name : login);
+        if (game[0]) { sp_raw(p, " &middot; "); sp_text(p, game); }
+        if (viewers[0]) { sp_raw(p, "<br>"); sp_num(p, site_atoll(viewers)); sp_raw(p, " watching"); }
+        sp_raw(p, "</small>");
+        sp_row_close(p);
+        shown++;
+    }
+    if (!shown) sp_raw(p, "<p>nobody is live here just now</p>\n");
+    return shown;
+}
+
+/* The page, from the API's answer to twitch_query's question. */
+static inline int twitch_page(int kind, const char *name, const char *s, int n, char *out, int cap) {
+    site_page p = { out, 0, cap };
+    const char *NOTE = "<p><small>Read by zelr from Twitch's public API, because Twitch's page is "
+                       "an application this browser cannot run. A stream itself is H.264 video in "
+                       "pieces (HLS), and this browser has no video decoder to play it.</small></p>\n";
+    const char *NAV = "<p><a href=\"/\">live now</a> &middot; <a href=\"/directory\">categories</a></p>\n";
+
+    sp_raw(&p, "<html><head><title>");
+    if (kind == TW_LIVE) sp_raw(&p, "Twitch");
+    else if (kind == TW_CATEGORIES) sp_raw(&p, "Categories - Twitch");
+    else { sp_text(&p, name); sp_raw(&p, " - Twitch"); }
+    sp_raw(&p, "</title></head><body>\n<h1>");
+    if (kind == TW_LIVE) sp_raw(&p, "Twitch: live now");
+    else if (kind == TW_CATEGORIES) sp_raw(&p, "Twitch: categories");
+    else if (kind == TW_CATEGORY) sp_text(&p, name);
+
+    if (kind == TW_LIVE || kind == TW_CATEGORY) {
+        sp_raw(&p, "</h1>\n");
+        sp_raw(&p, NAV);
+        sp_raw(&p, NOTE);
+        /* A category Twitch has no record of answers null, which lists
+           nobody. */
+        twitch_streams(&p, s, n);
+    } else if (kind == TW_CATEGORIES) {
+        sp_raw(&p, "</h1>\n");
+        sp_raw(&p, NAV);
+        sp_raw(&p, NOTE);
+        static char game[128], art[256], viewers[32];
+        int shown = 0;
+        for (int at = site_search(s, 0, n, "\"node\":{"); at >= 0;
+             at = site_search(s, at + 1, n, "\"node\":{")) {
+            int obj = sj_find(s, at, n, "node");
+            sj_field(s, obj, n, "name", game, sizeof(game));
+            if (!game[0]) continue;
+            sj_field(s, obj, n, "viewersCount", viewers, sizeof(viewers));
+            sj_field(s, obj, n, "boxArtURL", art, sizeof(art));
+            sp_row_open(&p, 72);
+            sp_raw(&p, "<a href=\"/directory/game/");
+            sp_path(&p, game);
+            sp_raw(&p, "\">");
+            twitch_picture(&p, art, 72, 96);
+            sp_raw(&p, "</a>");
+            sp_row_words(&p);
+            sp_raw(&p, "<a href=\"/directory/game/");
+            sp_path(&p, game);
+            sp_raw(&p, "\"><b>");
+            sp_text(&p, game);
+            sp_raw(&p, "</b></a><br><small>");
+            sp_num(&p, site_atoll(viewers));
+            sp_raw(&p, " watching</small>");
+            sp_row_close(&p);
+            shown++;
+        }
+        if (!shown) sp_raw(&p, "<p>Twitch listed no categories</p>\n");
+    } else {
+        static char shown_as[128], desc[1024], title[YT_FIELD], game[128], pic[256], viewers[32];
+        int user = sj_find(s, 0, n, "user");
+        if (user < 0 || s[user] != '{') {
+            sp_text(&p, name);
+            sp_raw(&p, "</h1>\n");
+            sp_raw(&p, NAV);
+            sp_raw(&p, "<p>Twitch knows nobody by that name.</p>\n");
+        } else {
+            sj_field(s, user, n, "displayName", shown_as, sizeof(shown_as));
+            sj_field(s, user, n, "description", desc, sizeof(desc));
+            sp_text(&p, shown_as[0] ? shown_as : name);
+            sp_raw(&p, "</h1>\n");
+            sp_raw(&p, NAV);
+            int ue = sj_skip(s, user, n);
+            int st = sj_find(s, user, ue, "stream");
+            if (st >= 0 && s[st] == '{') {
+                int se = sj_skip(s, st, n);
+                sj_field(s, st, n, "title", title, sizeof(title));
+                sj_field(s, st, n, "viewersCount", viewers, sizeof(viewers));
+                sj_field(s, st, n, "previewImageURL", pic, sizeof(pic));
+                game[0] = 0;
+                int g = sj_find(s, st, se, "game");
+                if (g >= 0 && s[g] == '{') sj_field(s, g, n, "name", game, sizeof(game));
+                sp_raw(&p, "<p><b>live:</b> ");
+                sp_text(&p, title);
+                sp_raw(&p, "</p>\n<p>");
+                twitch_picture(&p, pic, 640, 360);
+                sp_raw(&p, "</p>\n<p>");
+                if (game[0]) { sp_text(&p, game); sp_raw(&p, " &middot; "); }
+                sp_num(&p, site_atoll(viewers));
+                sp_raw(&p, " watching</p>\n");
+            } else {
+                int lb = sj_find(s, user, ue, "lastBroadcast");
+                title[0] = 0;
+                if (lb >= 0 && s[lb] == '{') sj_field(s, lb, n, "title", title, sizeof(title));
+                sp_raw(&p, "<p>offline");
+                if (title[0]) { sp_raw(&p, "; last streamed: "); sp_text(&p, title); }
+                sp_raw(&p, "</p>\n");
+            }
+            if (desc[0]) { sp_raw(&p, "<p>"); sp_text(&p, desc); sp_raw(&p, "</p>\n"); }
+        }
+        sp_raw(&p, NOTE);
+    }
+    sp_raw(&p, "</body></html>\n");
+    return p.n;
+}
+
+/* The question, as the JSON body the API takes. */
+static inline void twitch_body(const char *query, char *json, int cap) {
+    int o = 0;
+    for (const char *t = "{\"query\":\""; *t && o < cap - 1; t++) json[o++] = *t;
+    for (const char *t = query; *t && o < cap - 4; t++) {
+        if (*t == '"' || *t == '\\') json[o++] = '\\';
+        json[o++] = *t;
+    }
+    json[o++] = '"';
+    json[o++] = '}';
+    json[o] = 0;
+}
+
+/* The page for a Twitch address, asked of the API: its length, 0 for an
+   address that is not one of these pages, or a WEB_ERR_ when the API could
+   not be asked. */
+static inline int site_twitch(const url_t *u, char *out, int cap) {
+    static char query[1024], json[2048], name[256];
+    static char reply_buf[TWITCH_REPLY];
+    int kind = twitch_query(u, query, sizeof(query), name, sizeof(name));
+    if (kind == TW_NONE) return 0;
+    twitch_body(query, json, sizeof(json));
+
+    url_t api;
+    if (!url_parse("https://gql.twitch.tv/gql", &api)) return WEB_ERR_SCHEME;
+    response_t r;
+    web_body_type = "text/plain;charset=UTF-8";
+    web_extra = TWITCH_CLIENT;
+    int rc = web_post(&api, json, reply_buf, TWITCH_REPLY, &r);
+    web_body_type = 0;
+    web_extra = 0;
+    if (rc < 0) return rc;
+    if (rc != 200) return WEB_ERR_EMPTY;
+    return twitch_page(kind, name, r.body, r.len, out, cap);
+}

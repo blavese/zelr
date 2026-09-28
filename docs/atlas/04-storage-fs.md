@@ -701,7 +701,7 @@ pci.c (`pci_find_class`, `pci_read32`, `pci_enable_bus_master`); paging.c (`pagi
 | Reclaim queue | 64, doubling | fat.c:1692 |
 | VFS resolve | depth 32, work buffer 256, component truncated at 63 | vfs.c:67,80,93 |
 | RAM fs | 64 entries, 128-character names, 64-byte initial buffer | fs.h:11-12, fs.c:38 |
-| /bin programs | 48 (46 used) | sysfs.h:30, builtin.c |
+| /bin programs | 48 (46 used); 64 (49 used) since 0.61.0 | sysfs.h:30, builtin.c |
 | /sys render buffer | 4096 (content ≤ 4095), line 255 | sysfs.h:34, sysfs.c:80 |
 | /sys nodes | 15 | sysfs.c:353-369 |
 | Seed generation | 1, marker /cfg/seeded | layout.c:37-38 |

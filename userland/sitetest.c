@@ -1,0 +1,416 @@
+/* The sites read another way (sites.h), against pages of their shape.
+ *
+ * What YouTube and Twitch send changes when they like, so nothing here is a
+ * copy of what they sent once. These are pages written to the shapes the
+ * reader looks for -- a search, a watch page, a channel, the API's answers
+ * -- with the awkward parts put in on purpose: escaped quotes, keys written
+ * inside strings, characters past the first sixty five thousand, ids that
+ * would close the link they are written into, names that would close the
+ * query, a video listed twice and a playlist among the videos.
+ *
+ * Whether the real sites still have those shapes is tools/sitecheck.py's
+ * question, asked of the real sites. This one is whether the reader does
+ * what it should with them, and it is asked with no network at all.
+ *
+ *   sitetest              the checks
+ *   sitetest live URL     reads one real page and says what it found
+ */
+#include "zelr.h"
+#include "alloc.h"
+#include "sites.h"
+
+static int failed;
+
+static void ok(const char *what, int cond) {
+    puts(cond ? "  PASS  " : "  FAIL  ");
+    puts(what);
+    putc('\n');
+    if (!cond) failed++;
+}
+
+static void okn(const char *what, int cond, int n) {
+    puts(cond ? "  PASS  " : "  FAIL  ");
+    puts(what);
+    puts("  ");
+    putn(n);
+    putc('\n');
+    if (!cond) failed++;
+}
+
+static int has(const char *s, const char *what) {
+    return site_search(s, 0, w_len(s), what) >= 0;
+}
+
+static int count(const char *s, const char *what) {
+    int n = 0, len = w_len(s), wl = w_len(what);
+    for (int at = site_search(s, 0, len, what); at >= 0; at = site_search(s, at + wl, len, what)) n++;
+    return n;
+}
+
+static int at_url(const char *text, url_t *u) {
+    return url_parse(text, u);
+}
+
+static char page[64 * 1024];
+
+static int yt(const char *address, const char *data) {
+    url_t u;
+    if (!at_url(address, &u)) return -1;
+    return site_youtube(&u, data, w_len(data), page, (int)sizeof(page));
+}
+
+/* --- pages of the shapes YouTube sends ---------------------------------------- */
+
+static const char YT_SEARCH[] =
+    "<!DOCTYPE html><html><head><title>YouTube</title></head><body><script>"
+    "var ytInitialData = {\"contents\":{\"sectionListRenderer\":{\"contents\":[{\"itemSectionRenderer\":{\"contents\":["
+    "{\"videoRenderer\":{\"videoId\":\"AAAAAAAAAA1\","
+    "\"thumbnail\":{\"thumbnails\":[{\"url\":\"https://i.ytimg.com/vi/AAAAAAAAAA1/hq720.jpg\",\"width\":720}]},"
+    "\"title\":{\"runs\":[{\"text\":\"Cats \"},{\"text\":\"\\\"and\\\" dogs \\u0026 more\"}],"
+    "\"accessibility\":{\"accessibilityData\":{\"label\":\"not this\"}}},"
+    "\"longBylineText\":{\"runs\":[{\"text\":\"Animal Channel\",\"navigationEndpoint\":{\"browseEndpoint\":"
+    "{\"browseId\":\"UC1\",\"canonicalBaseUrl\":\"/@animals\"}}}]},"
+    "\"publishedTimeText\":{\"simpleText\":\"2 days ago\"},"
+    "\"lengthText\":{\"accessibility\":{\"accessibilityData\":{\"label\":\"3 minutes\"}},\"simpleText\":\"3:21\"},"
+    "\"viewCountText\":{\"simpleText\":\"1,234 views\"},"
+    "\"detailedMetadataSnippets\":[{\"snippetText\":{\"runs\":[{\"text\":\"A line about \"},{\"text\":\"cats\",\"bold\":true}]}}]}},"
+    "{\"videoRenderer\":{\"videoId\":\"BBBBBBBBBB2\",\"title\":{\"runs\":[{\"text\":\"Smile \\ud83d\\ude00 <script>\"}]},"
+    "\"ownerText\":{\"runs\":[{\"text\":\"Second\",\"navigationEndpoint\":{\"browseEndpoint\":"
+    "{\"browseId\":\"UC2second\",\"canonicalBaseUrl\":\"/@x\\\"><script>\"}}}]},"
+    "\"viewCountText\":{\"simpleText\":\"12 views\"}}},"
+    "{\"videoRenderer\":{\"videoId\":\"AAAAAAAAAA1\",\"title\":{\"runs\":[{\"text\":\"the same again\"}]}}},"
+    "{\"videoRenderer\":{\"videoId\":\"\\\"><img src=x>\",\"title\":{\"runs\":[{\"text\":\"a bad id\"}]}}},"
+    "{\"videoRenderer\":{\"videoId\":\"short\",\"title\":{\"runs\":[{\"text\":\"too short\"}]}}},"
+    "{\"channelRenderer\":{\"title\":{\"simpleText\":\"\\\"videoRenderer\\\":{\\\"videoId\\\":\\\"FAKEFAKEFAK\\\"}\"}}}"
+    "]}}]}}};</script></body></html>";
+
+static const char YT_WATCH[] =
+    "<html><body><script>var ytInitialPlayerResponse = {\"playabilityStatus\":{\"status\":\"OK\"},"
+    "\"streamingData\":{\"formats\":[{\"itag\":18}]},"
+    "\"videoDetails\":{\"videoId\":\"CCCCCCCCCC3\",\"title\":\"A <b>bold</b> title\",\"lengthSeconds\":\"3725\","
+    "\"keywords\":[\"x\"],\"channelId\":\"UC3\","
+    "\"shortDescription\":\"line one\\nline two \\u2192 https://example.com/?a=1\\u0026b=2\","
+    "\"isCrawlable\":true,\"thumbnail\":{\"thumbnails\":[]},\"viewCount\":\"1234567\",\"author\":\"Maker\","
+    "\"isLiveContent\":true,\"isLive\":false}};</script>"
+    "<script>var ytInitialData = {\"contents\":{\"twoColumnWatchNextResults\":{\"secondaryResults\":"
+    "{\"secondaryResults\":{\"results\":["
+    "{\"lockupViewModel\":{\"contentImage\":{},\"metadata\":{\"lockupMetadataViewModel\":"
+    "{\"title\":{\"content\":\"Related \\\"one\\\"\"},\"metadata\":{\"contentMetadataViewModel\":{\"metadataRows\":["
+    "{\"metadataParts\":[{\"text\":{\"content\":\"Other Maker\"}}]},"
+    "{\"metadataParts\":[{\"text\":{\"content\":\"5K views\"}},{\"text\":{\"content\":\"1 year ago\"}}]}]}}}},"
+    "\"contentId\":\"DDDDDDDDDD4\",\"contentType\":\"LOCKUP_CONTENT_TYPE_VIDEO\"}},"
+    "{\"lockupViewModel\":{\"metadata\":{\"lockupMetadataViewModel\":{\"title\":{\"content\":\"A playlist\"}}},"
+    "\"contentId\":\"PLxxxxxxxxxxxxxxxx\",\"contentType\":\"LOCKUP_CONTENT_TYPE_PLAYLIST\"}},"
+    "{\"compactVideoRenderer\":{\"videoId\":\"EEEEEEEEEE5\",\"title\":{\"simpleText\":\"Older kind\"},"
+    "\"longBylineText\":{\"runs\":[{\"text\":\"Old Maker\"}]},\"viewCountText\":{\"simpleText\":\"9 views\"}}}"
+    "]}}}}};</script></body></html>";
+
+static const char YT_LIVE[] =
+    "<script>var ytInitialPlayerResponse = {\"videoDetails\":{\"videoId\":\"GGGGGGGGGG7\",\"title\":\"On air\","
+    "\"lengthSeconds\":\"0\",\"author\":\"Station\",\"viewCount\":\"10\",\"isLive\":true}};</script>";
+
+static const char YT_CHANNEL[] =
+    "<script>var ytInitialData = {\"metadata\":{\"channelMetadataRenderer\":{\"title\":\"Some \\u0026 One\","
+    "\"description\":\"About us.\",\"externalId\":\"UC9\"}},\"contents\":{\"tabs\":[{\"richGridRenderer\":{\"contents\":["
+    "{\"lockupViewModel\":{\"contentId\":\"FFFFFFFFFF6\",\"contentType\":\"LOCKUP_CONTENT_TYPE_VIDEO\","
+    "\"metadata\":{\"lockupMetadataViewModel\":{\"title\":{\"content\":\"Upload\"},\"metadata\":"
+    "{\"contentMetadataViewModel\":{\"metadataRows\":[{\"metadataParts\":[{\"text\":{\"content\":\"3 views\"}},"
+    "{\"text\":{\"content\":\"1 day ago\"}}]}]}}}}}}]}}]}};</script>";
+
+static const char YT_FRONT[] = "<script>var ytInitialData = {\"contents\":{}};</script>";
+
+/* --- answers of the shapes Twitch's API gives ---------------------------------- */
+
+static const char TW_STREAMS[] =
+    "{\"data\":{\"streams\":{\"edges\":["
+    "{\"node\":{\"title\":\"First <live>\",\"viewersCount\":12345,\"broadcaster\":{\"login\":\"first_one\","
+    "\"displayName\":\"FirstOne\"},\"game\":{\"name\":\"Chess\"},"
+    "\"previewImageURL\":\"https://static-cdn.jtvnw.net/previews-ttv/live_user_first_one-320x180.jpg\"}},"
+    "{\"node\":{\"title\":\"Second\",\"viewersCount\":7,\"broadcaster\":{\"login\":\"second\",\"displayName\":\"\"},"
+    "\"game\":null,\"previewImageURL\":\"https://evil.example/x.jpg\"}},"
+    "{\"node\":{\"title\":\"nobody\",\"viewersCount\":1,\"broadcaster\":null}}"
+    "]}},\"extensions\":{\"durationMilliseconds\":30}}";
+
+static const char TW_GAMES[] =
+    "{\"data\":{\"games\":{\"edges\":["
+    "{\"node\":{\"name\":\"Just Chatting\",\"viewersCount\":511959,"
+    "\"boxArtURL\":\"https://static-cdn.jtvnw.net/ttv-boxart/509658-144x192.jpg\"}},"
+    "{\"node\":{\"name\":\"Rock & Roll\",\"viewersCount\":1000,\"boxArtURL\":\"\"}}]}}}";
+
+static const char TW_LIVE_USER[] =
+    "{\"data\":{\"user\":{\"displayName\":\"Some\\u00e9One\",\"description\":\"hi <there>\","
+    "\"stream\":{\"title\":\"live now\",\"viewersCount\":42,\"game\":{\"name\":\"Chess\"},"
+    "\"previewImageURL\":\"https://static-cdn.jtvnw.net/previews-ttv/live_user_x-640x360.jpg\"},"
+    "\"lastBroadcast\":{\"title\":\"old\"}}}}";
+
+static const char TW_OFF_USER[] =
+    "{\"data\":{\"user\":{\"displayName\":\"Quiet\",\"description\":\"\",\"stream\":null,"
+    "\"lastBroadcast\":{\"title\":\"yesterday's\"}}}}";
+
+static const char TW_NO_USER[] = "{\"data\":{\"user\":null},\"extensions\":{}}";
+static const char TW_NO_GAME[] = "{\"data\":{\"game\":null}}";
+
+static int tw(int kind, const char *name, const char *data) {
+    return twitch_page(kind, name, data, w_len(data), page, (int)sizeof(page));
+}
+
+static int twq(const char *address, char *query, int cap, char *name, int ncap) {
+    url_t u;
+    if (!at_url(address, &u)) return -1;
+    return twitch_query(&u, query, cap, name, ncap);
+}
+
+static void checks(void) {
+    char out[256];
+
+    /* --- the JSON underneath --------------------------------------------------- */
+    {
+        const char *s = "\"a\\\"b\" rest";
+        okn("a string is skipped past its end, escaped quote and all", sj_skip(s, 0, w_len(s)) == 6,
+            sj_skip(s, 0, w_len(s)));
+        const char *o = "{\"x\":\"}\",\"y\":[1,{\"z\":\"]\"}]} tail";
+        okn("an object is skipped past its end, brackets inside strings and all",
+            sj_skip(o, 0, w_len(o)) == 27, sj_skip(o, 0, w_len(o)));
+        /* A key whose own name has a quote in it, written escaped, ends in
+           what looks like another key; and a string ending in a backslash
+           ends at a quote that is not escaped. */
+        const char *k = "{\"x\\\"b\":1,\"a\":\"y\\\\\",\"b\":2}";
+        int v = sj_find(k, 0, w_len(k), "b");
+        ok("a key written inside another is not taken for one", v >= 0 && k[v] == '2');
+        const char *e = "\"\\u00e9\\ud83d\\ude00\\n\\\\\\/\"";
+        int n = sj_str(e, 0, w_len(e), out, sizeof(out));
+        ok("escapes come out as UTF-8, a pair of halves as one character",
+           n == 9 && (u8)out[0] == 0xC3 && (u8)out[1] == 0xA9 && (u8)out[2] == 0xF0 && (u8)out[3] == 0x9F
+           && (u8)out[4] == 0x98 && (u8)out[5] == 0x80 && out[6] == '\n' && out[7] == '\\' && out[8] == '/');
+        const char *r = "{\"runs\":[{\"text\":\"one \"},{\"text\":\"two\",\"bold\":true}]}";
+        sj_text(r, 0, w_len(r), out, sizeof(out));
+        ok("text in runs is run together", w_same(out, "one two"));
+        const char *bare = "{\"n\":12345,\"t\":true}";
+        sj_field(bare, 0, w_len(bare), "n", out, sizeof(out));
+        int num = w_same(out, "12345");
+        sj_field(bare, 0, w_len(bare), "t", out, sizeof(out));
+        ok("and a number or a word comes out as it is written", num && w_same(out, "true"));
+
+        site_page p = { out, 0, (int)sizeof(out) };
+        sp_num(&p, 0); sp_raw(&p, " "); sp_num(&p, 999); sp_raw(&p, " ");
+        sp_num(&p, 1000); sp_raw(&p, " "); sp_num(&p, 1234567);
+        ok("counts are written with commas", w_same(out, "0 999 1,000 1,234,567"));
+    }
+
+    /* --- a search ---------------------------------------------------------------- */
+    {
+        int n = yt("https://www.youtube.com/results?search_query=cats+%26+dogs", YT_SEARCH);
+        okn("a YouTube search is read into a page", n > 0, n);
+        okn("with each video once, and none with an id that is not one", count(page, "class=\"row\"") == 2,
+            count(page, "class=\"row\""));
+        ok("linked to its own watch page, with its picture",
+           has(page, "<a href=\"/watch?v=AAAAAAAAAA1\">")
+           && has(page, "src=\"https://i.ytimg.com/vi/AAAAAAAAAA1/mqdefault.jpg\""));
+        ok("its title is the runs of its title, escaped for the page",
+           has(page, "<b>Cats &quot;and&quot; dogs &amp; more</b>"));
+        ok("and who made it, linked to their channel, how many watched, when, and how long",
+           has(page, "<a href=\"/@animals\">Animal Channel</a><br>1,234 views &middot; 2 days ago &middot; 3:21"));
+        ok("and what the search found in it", has(page, "A line about cats"));
+        ok("a byline in the other place it is kept is found", has(page, "Second</a><br>12 views"));
+        ok("and a channel address that would close its link is not used, the channel's id is",
+           has(page, "<a href=\"/channel/UC2second\">Second</a>"));
+        ok("a character past the first sixty five thousand arrives whole",
+           has(page, "Smile \xF0\x9F\x98\x80 &lt;script&gt;"));
+        ok("and markup in a title is shown, never obeyed", !has(page, "<script") && !has(page, "<img src=x"));
+        ok("a key written inside a string is not a video", !has(page, "FAKEFAKEFAK"));
+        ok("the words searched for are in the title, the heading and the box",
+           has(page, "<title>cats &amp; dogs - YouTube</title>") && has(page, "<h2>cats &amp; dogs</h2>")
+           && has(page, "value=\"cats &amp; dogs\""));
+        ok("and the box searches YouTube again", has(page, "<form action=\"/results\" method=\"get\"")
+           && has(page, "name=\"search_query\""));
+        ok("and the page says what was done", has(page, "Read by zelr from the data in YouTube's page"));
+    }
+
+    /* --- a video ----------------------------------------------------------------- */
+    {
+        int n = yt("https://www.youtube.com/watch?v=CCCCCCCCCC3", YT_WATCH);
+        okn("a watch page is read into a page", n > 0, n);
+        ok("headed by its title, escaped", has(page, "<h1>A &lt;b&gt;bold&lt;/b&gt; title</h1>")
+           && has(page, "<title>A &lt;b&gt;bold&lt;/b&gt; title - YouTube</title>"));
+        ok("with its large picture", has(page, "https://i.ytimg.com/vi/CCCCCCCCCC3/hqdefault.jpg"));
+        ok("who made it, how many watched and how long it is",
+           has(page, "<b><a href=\"/channel/UC3\">Maker</a></b> &middot; 1,234,567 views &middot; 1:02:05"));
+        ok("its description, lines kept and escapes undone",
+           has(page, "line one<br>line two \xE2\x86\x92 https://example.com/?a=1&amp;b=2"));
+        ok("and that it cannot be played here, said", has(page, "no video decoder"));
+        ok("the videos beside it, from the view model YouTube uses now",
+           has(page, "/watch?v=DDDDDDDDDD4") && has(page, "Related &quot;one&quot;")
+           && has(page, "Other Maker<br>5K views &middot; 1 year ago"));
+        ok("and from the renderer it used before", has(page, "/watch?v=EEEEEEEEEE5")
+           && has(page, "Old Maker<br>9 views"));
+        ok("but not a playlist among them", !has(page, "A playlist") && !has(page, "PLxxxx"));
+        okn("so two beside it", count(page, "class=\"row\"") == 2, count(page, "class=\"row\""));
+
+        n = yt("https://www.youtube.com/watch?v=GGGGGGGGGG7", YT_LIVE);
+        ok("a stream that is on now says live rather than a length",
+           n > 0 && has(page, "<b>Station</b> &middot; 10 views &middot; live") && !has(page, "0:00"));
+        ok("and has nothing beside it to list, said", has(page, "nothing else was listed"));
+    }
+
+    /* --- a channel, and the front page --------------------------------------------- */
+    {
+        int n = yt("https://www.youtube.com/@someone", YT_CHANNEL);
+        ok("a channel is read into a page, named and described",
+           n > 0 && has(page, "<title>Some &amp; One - YouTube</title>")
+           && has(page, "<h1>Some &amp; One</h1>") && has(page, "<p>About us.</p>"));
+        ok("with its videos", has(page, "/watch?v=FFFFFFFFFF6") && has(page, "<b>Upload</b>"));
+        n = yt("https://www.youtube.com/", YT_FRONT);
+        ok("the front page, which lists nothing to a stranger, says so and offers the search",
+           n > 0 && has(page, "did not list any videos") && has(page, "search_query"));
+        n = yt("https://www.example.com/results?search_query=x", YT_SEARCH);
+        okn("the same data on another site is not read", n == 0, n);
+        n = yt("https://www.youtube.com/about", "<html><body>about us</body></html>");
+        okn("nor a YouTube page with no data in it", n == 0, n);
+    }
+
+    /* --- Twitch: the questions ------------------------------------------------------ */
+    {
+        static char q[1024], name[256];
+        int k = twq("https://www.twitch.tv/", q, sizeof(q), name, sizeof(name));
+        ok("Twitch's front page asks who is live", k == TW_LIVE && has(q, "streams(first:24)"));
+        k = twq("https://www.twitch.tv/directory/", q, sizeof(q), name, sizeof(name));
+        ok("its directory asks for the categories", k == TW_CATEGORIES && has(q, "games(first:30)"));
+        k = twq("https://www.twitch.tv/directory/category/Just%20Chatting", q, sizeof(q), name, sizeof(name));
+        ok("a category asks for that category's streams, by its name",
+           k == TW_CATEGORY && w_same(name, "Just Chatting") && has(q, "game(name:\"Just Chatting\")"));
+        k = twq("https://www.twitch.tv/directory/game/x%22)%7Buser", q, sizeof(q), name, sizeof(name));
+        okn("a category's name cannot close the quotes it is written into",
+            k == TW_CATEGORY && count(q, "\"") == 2 && w_same(name, "x){user"), count(q, "\""));
+        k = twq("https://twitch.tv/some_one/videos", q, sizeof(q), name, sizeof(name));
+        ok("a channel, from any page of it, asks about that channel",
+           k == TW_CHANNEL && w_same(name, "some_one") && has(q, "user(login:\"some_one\")"));
+        k = twq("https://www.twitch.tv/a%22b", q, sizeof(q), name, sizeof(name));
+        ok("and a login is only what logins are made of", k == TW_CHANNEL && w_same(name, "a"));
+        k = twq("https://www.twitch.tv/%22", q, sizeof(q), name, sizeof(name));
+        okn("so one made of nothing else asks nothing", k == TW_NONE, k);
+        k = twq("https://www.example.com/", q, sizeof(q), name, sizeof(name));
+        okn("and another site is not Twitch", k == TW_NONE, k);
+
+        static char body[2048];
+        twitch_body("query{game(name:\"a\\b\")}", body, sizeof(body));
+        ok("the question is sent as JSON, its quotes escaped",
+           w_same(body, "{\"query\":\"query{game(name:\\\"a\\\\b\\\")}\"}"));
+    }
+
+    /* --- Twitch: the pages -------------------------------------------------------- */
+    {
+        int n = tw(TW_LIVE, "", TW_STREAMS);
+        okn("who is live is written as a page", n > 0, n);
+        okn("one row a stream, and none for a stream with nobody streaming it",
+            count(page, "class=\"row\"") == 2, count(page, "class=\"row\""));
+        ok("linked to the channel, with its picture and its title escaped",
+           has(page, "<a href=\"/first_one\">") && has(page, "live_user_first_one-320x180.jpg")
+           && has(page, "<b>First &lt;live&gt;</b>"));
+        ok("who, what, and how many watching", has(page, "FirstOne &middot; Chess<br>12,345 watching"));
+        ok("a stream with no category and no display name still shows", has(page, "second<br>7 watching"));
+        ok("and a picture from anywhere but Twitch's own server is left out", !has(page, "evil.example"));
+        ok("and the page says it cannot play them", has(page, "no video decoder"));
+
+        n = tw(TW_CATEGORIES, "", TW_GAMES);
+        ok("the categories are written as a page, each linked by its name",
+           n > 0 && count(page, "class=\"row\"") == 2
+           && has(page, "href=\"/directory/game/Just%20Chatting\"") && has(page, "511,959 watching"));
+        ok("with anything in a name that means something in an address escaped",
+           has(page, "href=\"/directory/game/Rock%20%26%20Roll\"") && has(page, "<b>Rock &amp; Roll</b>"));
+
+        n = tw(TW_CHANNEL, "somename", TW_LIVE_USER);
+        ok("a live channel shows what it is streaming, to how many",
+           n > 0 && has(page, "<h1>Some\xC3\xA9One</h1>") && has(page, "<b>live:</b> live now")
+           && has(page, "Chess &middot; 42 watching") && has(page, "live_user_x-640x360.jpg"));
+        ok("and what it says about itself, escaped", has(page, "<p>hi &lt;there&gt;</p>"));
+        n = tw(TW_CHANNEL, "quiet", TW_OFF_USER);
+        ok("a channel that is not live says so, and what it last streamed",
+           n > 0 && has(page, "offline; last streamed: yesterday's") && !has(page, "watching"));
+        n = tw(TW_CHANNEL, "nobody_here", TW_NO_USER);
+        ok("a name Twitch has never heard of says that",
+           n > 0 && has(page, "<h1>nobody_here</h1>") && has(page, "knows nobody by that name"));
+        n = tw(TW_CATEGORY, "Nothing", TW_NO_GAME);
+        ok("and a category with nobody in it says that", n > 0 && has(page, "nobody is live here just now"));
+    }
+
+    /* --- Google ------------------------------------------------------------------ */
+    {
+        url_t u;
+        static char q[256];
+        at_url("https://www.google.com/search?q=cats+%26+dogs&hl=en", &u);
+        int n = site_google_search(&u, q, sizeof(q));
+        ok("a Google search gives up its words", n > 0 && w_same(q, "cats & dogs"));
+        at_url("https://www.google.co.uk/search?hl=en&q=x", &u);
+        ok("from a country's Google too", site_google_search(&u, q, sizeof(q)) && w_same(q, "x"));
+        at_url("https://google.com.au/search?q=a", &u);
+        ok("and a country written in two parts", site_google_search(&u, q, sizeof(q)) && w_same(q, "a"));
+        at_url("https://google.example.org/search?q=a", &u);
+        int no1 = site_google_search(&u, q, sizeof(q));
+        at_url("https://notgoogle.com/search?q=a", &u);
+        int no2 = site_google_search(&u, q, sizeof(q));
+        ok("but not from a site with Google in its name", !no1 && !no2);
+        at_url("https://www.google.com/", &u);
+        int no3 = site_google_search(&u, q, sizeof(q));
+        at_url("https://www.google.com/searchbyimage?q=a", &u);
+        int no4 = site_google_search(&u, q, sizeof(q));
+        ok("nor from a Google page that is not its search", !no3 && !no4);
+    }
+}
+
+/* One real page, read, and what was found in it said on the console, for
+   tools/sitecheck.py to hold against the real sites. */
+static int live(const char *address) {
+    url_t u;
+    if (!url_parse(address, &u)) { puts("SITETEST_LIVE not an address\n"); return 1; }
+    int n = 0;
+    if (site_is_twitch(&u)) {
+        n = site_twitch(&u, page, (int)sizeof(page));
+    } else if (site_is_youtube(&u)) {
+        int cap = 4 * 1024 * 1024;
+        char *buf = (char *)malloc((u64)cap);
+        if (!buf) { puts("SITETEST_LIVE no memory\n"); return 1; }
+        response_t r;
+        int rc = web_get(&u, buf, cap, &r);
+        puts("SITETEST_LIVE status ");
+        putn(rc);
+        puts(" bytes ");
+        putn(rc >= 0 ? r.len : 0);
+        putc('\n');
+        n = rc == 200 ? site_youtube(&u, r.body, r.len, page, (int)sizeof(page)) : rc;
+        free(buf);
+    }
+    puts("SITETEST_LIVE page ");
+    putn(n);
+    puts(" rows ");
+    putn(n > 0 ? count(page, "class=\"row\"") : 0);
+    puts(" pictures ");
+    putn(n > 0 ? count(page, "<img ") : 0);
+    putc('\n');
+    /* The first few titles, so a run can be read by a person as well. */
+    int shown = 0, len = n > 0 ? n : 0;
+    for (int at = site_search(page, 0, len, "<b>"); at >= 0 && shown < 3;
+         at = site_search(page, at + 3, len, "<b>")) {
+        int e = site_search(page, at, len, "</b>");
+        if (e < 0) break;
+        puts("SITETEST_LIVE title ");
+        for (int i = at + 3; i < e && i < at + 83; i++) putc(page[i]);
+        putc('\n');
+        shown++;
+    }
+    return n > 0 ? 0 : 1;
+}
+
+int main(int argc, char **argv) {
+    if (argc > 2 && w_same(argv[1], "live")) exit(live(argv[2]));
+
+    puts("sites read another way\n");
+    checks();
+    if (failed) {
+        puts("SITETEST_FAIL ");
+        putn(failed);
+        putc('\n');
+        exit(1);
+    }
+    puts("SITETEST_PASS\n");
+    exit(0);
+}

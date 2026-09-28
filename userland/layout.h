@@ -282,6 +282,11 @@ typedef struct {
        being measured rather than laid out would have reached (see lay_flex). */
     int measuring;
     int measure_right;
+
+    /* The flex item being laid out at the width its row settled on, which
+       is its width whatever its own width says: that was only where the row
+       started from (lay_flex). -1 when there is none. */
+    int flex_sized;
 } lctx;
 
 static inline int lay_put(lctx *L, const char *s, int n) {
@@ -647,6 +652,19 @@ static inline void lay_inline_close(lctx *L, const cstyle *st, int x0,
  * rectangle from where it started to where it ended would be a band across
  * everything in between, which is worse than the gap.
  */
+/* Where the walk goes after skipping everything under `at`: the next thing
+   after it in the document, but never past the end of the run. `at` can be
+   the run itself -- a form field or a hidden element laid out on its own --
+   and when it was the last thing in its parent, climbing to find what came
+   next went up out of the run and on into the rest of the document, which
+   was then laid out twice: once flowed on to the line after the field, and
+   again where it belonged. Every search form ending in a button did it. */
+static inline int lay_past(const ddoc *d, int at, int node) {
+    for (int s = at; s >= 0 && s != node; s = d->nodes[s].parent)
+        if (d->nodes[s].next >= 0) return d->nodes[s].next;
+    return -1;
+}
+
 static inline void lay_inline(lctx *L, int node, const cstyle *parent, int *y) {
     const ddoc *d = L->d;
     cstyle stack[LAY_DEPTH];
@@ -686,12 +704,7 @@ static inline void lay_inline(lctx *L, int node, const cstyle *parent, int *y) {
             lay_style(L, at, &stack[sp], &st, L->line_width);
             if (st.display == D_NONE) {
                 /* Skip the subtree entirely. */
-                int skip = at;
-                while (skip >= 0 && d->nodes[skip].next < 0
-                       && d->nodes[skip].parent != node)
-                    skip = d->nodes[skip].parent;
-                at = skip >= 0 ? d->nodes[skip].next : -1;
-                if (skip == node) at = -1;
+                at = lay_past(d, at, node);
                 continue;
             }
             if (n->tag == T_BR) {
@@ -846,12 +859,7 @@ static inline void lay_inline(lctx *L, int node, const cstyle *parent, int *y) {
                    to the page: the text in a button is its label and the
                    text in a textarea is its value, and the box draws both
                    rather than letting them flow out after it. */
-                int skip = at;
-                while (skip >= 0 && d->nodes[skip].next < 0
-                       && d->nodes[skip].parent != node)
-                    skip = d->nodes[skip].parent;
-                at = skip >= 0 ? d->nodes[skip].next : -1;
-                if (skip == node) at = -1;
+                at = lay_past(d, at, node);
                 continue;
             } else if (sp + 1 < LAY_DEPTH) {
                 sp++;
@@ -1145,7 +1153,9 @@ static void lay_flex(lctx *L, int node, const cstyle *st, int cx, int cw,
 
         int before = L->out->nitems;
         int child_y = top;
+        L->flex_sized = kid[i];
         lay_block(L, kid[i], st, pen, want[i], &child_y);
+        L->flex_sized = -1;
 
         /* Slid down the cross axis afterwards, which is cheaper than laying
            it out somewhere else and gives the same answer. Stretch is left
@@ -1282,6 +1292,15 @@ static void lay_block_placed(lctx *L, int node, const cstyle *parent, int x,
        and a border-box one exactly its frame too wide. */
     int frame = st.pl + st.pr + st.bl + st.br;
     int want = st.width;
+    /* A flex item's width is where its row began, not where it ended: the
+       row grew it or shrank it from there and hands over the result as
+       avail. Taking the width again undid that -- an item that asked to
+       grow stayed its own size, and one shrunk to fit ran over the next --
+       and a percentage was a percentage of the share it had been given. */
+    if (L->flex_sized == node) {
+        want = -1;
+        L->flex_sized = -1;
+    }
     if (want >= 0 && !st.border_box) want += frame;
     int cap = st.max_width;
     if (cap >= 0 && !st.border_box) cap += frame;
@@ -1497,6 +1516,7 @@ static inline void lay_run(ldoc *out, const ddoc *d, const csheet *s,
        measured from the page. */
     L.pos_x = 0; L.pos_y = 0; L.pos_w = width;
     L.measuring = 0; L.measure_right = 0;
+    L.flex_sized = -1;
 
     cstyle root;
     css_default_style(&root, root_px);

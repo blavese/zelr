@@ -463,6 +463,13 @@ static inline void web_drop(void) {
     ka_sock = -1;
 }
 
+/* A request that is not a page or a form. Everything else this file sends it
+   sends without being told how; the few that are different -- an API that
+   wants its own type of body, or a header saying which client is asking
+   (sites.h) -- set these for the one call and put them back to nothing. */
+static const char *web_body_type;      /* nothing: a form */
+static const char *web_extra;          /* whole header lines, each ending \r\n */
+
 static inline int ka_matches(const url_t *u) {
     return ka_live && u->port == ka_port && u->secure == ka_secure
         && w_same_fold(u->host, ka_host);
@@ -539,12 +546,14 @@ static inline int web_fetch_once(const url_t *u, const char *body,
         if (n >= 0) n = wh_add(req, sizeof(req), n, cookies);
         if (n >= 0) n = wh_add(req, sizeof(req), n, "\r\n");
     }
+    if (web_extra && n >= 0) n = wh_add(req, sizeof(req), n, web_extra);
     /* A server is entitled to read exactly this many bytes and not one
        more, so the length has to be the body's and not the buffer's. */
     if (body) {
-        if (n >= 0) n = wh_add(req, sizeof(req), n,
-                               "Content-Type: application/x-www-form-"
-                               "urlencoded\r\nContent-Length: ");
+        if (n >= 0) n = wh_add(req, sizeof(req), n, "Content-Type: ");
+        if (n >= 0) n = wh_add(req, sizeof(req), n, web_body_type ? web_body_type
+                                                     : "application/x-www-form-urlencoded");
+        if (n >= 0) n = wh_add(req, sizeof(req), n, "\r\nContent-Length: ");
         if (n >= 0) n = wh_add_num(req, sizeof(req), n, w_len(body));
         if (n >= 0) n = wh_add(req, sizeof(req), n, "\r\n");
     }

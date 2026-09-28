@@ -48,6 +48,7 @@ SUITES = [
     ("durtest",   "DURTEST_PASS",   "saying now about a file, and renaming one", 180),
     ("polltest",  "POLLTEST_PASS",  "waiting on several descriptors at once", 180),
     ("cputest",   "CPUTEST_PASS",   "a process's memory stays its own", 240),
+    ("sitetest",  "SITETEST_PASS",  "YouTube and Twitch read from their data", 120),
 ]
 
 

@@ -29,6 +29,7 @@
 #include "ui.h"
 #include "web.h"
 #include "fetch.h"
+#include "sites.h"
 #include "dom.h"
 #include "css.h"
 #include "layout.h"
@@ -862,6 +863,55 @@ static void number_into(char *out, int v) {
     out[w] = 0;
 }
 
+/* --- looking something up ------------------------------------------------
+ *
+ * Where a search goes, and why it is not Google.
+ *
+ * Google's results are not in the page it sends. Asked for
+ * /search?q=anything it returns ninety kilobytes with no result in it at
+ * all -- no headings, no outbound links -- and builds the page from script
+ * afterwards. Measured across three user agents and four sets of
+ * parameters, including the ones that used to mean "no script": every one
+ * came back the same way. It is not a check on what this browser is, it is
+ * that the answer is not sent.
+ *
+ * So a search here goes somewhere that sends its answers. DuckDuckGo's lite
+ * endpoint is HTML -- a table of links and snippets, nothing to run to read
+ * it -- and it renders in this browser as it stands.
+ *
+ * That is a limitation stated rather than a preference. A browser that
+ * cannot run a search engine's application cannot use that search engine,
+ * and naming the one it can use is more useful than failing at the one it
+ * cannot. A search asked of Google -- from its own home page, whose form
+ * still works, or typed as an address -- is sent here too, and the page says
+ * so at the top (sites.h, site_google_search).
+ */
+#define SEARCH_PREFIX "https://lite.duckduckgo.com/lite/?q="
+
+/* What a page read another way (sites.h) is built from: YouTube's pages are
+   a megabyte and a half of data around a few kilobytes of page, more than
+   src holds, and they are the only pages that big worth reading whole, so
+   the room for them is asked for only when one is fetched. */
+#define SITE_SRC_MAX (4 * 1024 * 1024)
+
+/* A page with a line of our own at the top, saying what was done to get it.
+   Written into a buffer of its own, because the page is in src. */
+static void build_noted(const char *note, const char *html, int len, int width,
+                        int *fetched, int *skipped) {
+    int nl = w_len(note);
+    char *both = (char *)malloc((u64)(nl + len + 1));
+    if (!both) {
+        build(html, len, width, 1, fetched, skipped);
+        return;
+    }
+    volatile char *d = both;
+    for (int i = 0; i < nl; i++) d[i] = note[i];
+    for (int i = 0; i < len; i++) d[nl + i] = html[i];
+    d[nl + len] = 0;
+    build(both, nl + len, width, 1, fetched, skipped);
+    free(both);
+}
+
 static void load(const char *address, int width, int keep_scroll) {
     url_t u;
     if (!url_parse(address, &u)) {
@@ -871,8 +921,52 @@ static void load(const char *address, int width, int keep_scroll) {
         return;
     }
 
+    /* A search asked of Google is asked where the answer comes as a page
+       (sites.h). The address shown stays the one that was asked for. */
+    static char words[URL_TEXT];
+    int from_google = 0;
+    if (!load_post && site_google_search(&u, words, (int)sizeof(words))) {
+        char q[URL_TEXT], full[URL_TEXT];
+        url_escape(words, q, (int)sizeof(q));
+        int w = 0;
+        for (const char *p = SEARCH_PREFIX; *p && w < (int)sizeof(full) - 1; p++) full[w++] = *p;
+        for (const char *p = q; *p && w < (int)sizeof(full) - 1; p++) full[w++] = *p;
+        full[w] = 0;
+        if (url_parse(full, &u)) from_google = 1;
+    }
+
     url_copy(&here, &u);
     say("fetching ", address);
+
+    /* Twitch sends no page worth fetching, only its application; what it
+       would show comes from its API, and is written as a page here. */
+    if (!load_post && site_is_twitch(&here)) {
+        say("asking Twitch who is live", 0);
+        int n = site_twitch(&here, src, SRC_MAX);
+        if (n > 0) {
+            int fetched, skipped;
+            build(src, n, width, 1, &fetched, &skipped);
+            if (!keep_scroll) scroll = 0;
+            say("read from Twitch's API: it cannot play the streams", 0);
+            return;
+        }
+        if (n < 0) {
+            show_message(why_heading(n), why(n), width);
+            say(why(n), 0);
+            title[0] = 0;
+            return;
+        }
+    }
+
+    /* A YouTube page is fetched into room of its own (SITE_SRC_MAX), freed
+       once it has been read. */
+    char *into = src;
+    int room = SRC_MAX;
+    char *big = 0;
+    if (!load_post && site_is_youtube(&here)) {
+        big = (char *)malloc(SITE_SRC_MAX);
+        if (big) { into = big; room = SITE_SRC_MAX; }
+    }
 
     /* A form sent with POST is the one fetch that carries something, and
        it is spent once: going back to it afterwards asks again with GET
@@ -880,11 +974,12 @@ static void load(const char *address, int width, int keep_scroll) {
     int rc;
     if (load_post) {
         load_post = 0;
-        rc = web_post(&here, post_body, src, SRC_MAX, &reply);
+        rc = web_post(&here, post_body, into, room, &reply);
     } else {
-        rc = web_get(&here, src, SRC_MAX, &reply);
+        rc = web_get(&here, into, room, &reply);
     }
     if (rc < 0) {
+        if (big) free(big);
         /* A refused certificate has a reason worth reading, and it is the
            one kind of failure where the difference between "expired" and
            "for a different site" is the whole story. Anything that failed
@@ -905,12 +1000,23 @@ static void load(const char *address, int width, int keep_scroll) {
              || w_starts_fold(reply.ctype, "application/json");
 
     int fetched = 0, skipped = 0;
+    int read_site = 0;
     if (plain) {
         show_plain(reply.body, reply.len, width);
         w_copy(title, sizeof(title), here.path, sizeof(title));
+    } else if (big && rc < 400
+               && (read_site = site_youtube(&here, reply.body, reply.len, src, SRC_MAX)) > 0) {
+        build(src, read_site, width, 1, &fetched, &skipped);
+    } else if (from_google) {
+        build_noted("<p style=\"background:#fff4d6;padding:6px 10px\">Google shows its results "
+                    "only to its own script, which this browser cannot run, so these are "
+                    "DuckDuckGo's for the same words.</p>",
+                    reply.body, reply.len, width, &fetched, &skipped);
     } else {
         build(reply.body, reply.len, width, 1, &fetched, &skipped);
     }
+    if (big) free(big);
+    big = 0;
 
     if (!keep_scroll) scroll = 0;
 
@@ -918,6 +1024,8 @@ static void load(const char *address, int width, int keep_scroll) {
     number_into(shown, page.nlinks);
 
     if (rc >= 400) say("the server said this page is not there", 0);
+    else if (read_site > 0)
+        say("read from the data in YouTube's page: it cannot play the videos", 0);
     else if (page_unhidden)
         say("this page hides itself until its own script rebuilds it; "
             "shown as it arrived", 0);
@@ -942,6 +1050,7 @@ static void load(const char *address, int width, int keep_scroll) {
         say_more(fetched == 1 ? " style sheet" : " style sheets");
     }
     if (skipped) say_more(" (more were not read)");
+    if (from_google) say_more(", DuckDuckGo's answer to a Google search");
 
     /* And what the page's own scripts did. A script that threw is worth
        saying out loud: the page will look like the one it was before it
@@ -1267,29 +1376,6 @@ static void set_address(const char *s) {
     bar.cursor = bar.len;
 }
 
-/* --- looking something up ------------------------------------------------
- *
- * Where a search goes, and why it is not Google.
- *
- * Google's results are not in the page it sends. Asked for
- * /search?q=anything it returns ninety kilobytes with no result in it at
- * all -- no headings, no outbound links -- and builds the page from script
- * afterwards. Measured across three user agents and four sets of
- * parameters, including the ones that used to mean "no script": every one
- * came back the same way. It is not a check on what this browser is, it is
- * that the answer is not sent.
- *
- * So a search here goes somewhere that sends its answers. DuckDuckGo's lite
- * endpoint is HTML -- a table of links and snippets, nothing to run to read
- * it -- and it renders in this browser as it stands.
- *
- * That is a limitation stated rather than a preference. A browser that
- * cannot run a search engine's application cannot use that search engine,
- * and naming the one it can use is more useful than failing at the one it
- * cannot.
- */
-#define SEARCH_PREFIX "https://lite.duckduckgo.com/lite/?q="
-
 static void set_search(const char *what) {
     char q[URL_TEXT];
     url_escape(what, q, (int)sizeof(q));
@@ -1577,6 +1663,17 @@ int main(int argc, char **argv) {
             set_address(landed);
             if (hist_at >= 0) w_copy(hist[hist_at].text, URL_TEXT, landed,
                                      URL_TEXT);
+
+            /* And what it came to, on the console, where nobody on the
+               desktop sees it: a machine driven over its serial line has no
+               other way to know what a page turned into (sitecheck.py). */
+            puts("browser: ");
+            puts(landed);
+            puts(" -- ");
+            puts(title);
+            puts(" -- ");
+            puts(status);
+            putc('\n');
             laid_for = view_w;
             want_width = 0;
         }

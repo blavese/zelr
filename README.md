@@ -1291,6 +1291,24 @@ It means the bytes came from whoever holds the name that was typed, because
 a signature chains from that name to an authority this machine was built
 trusting. It does not mean the site is honest or the page is safe.
 
+**YouTube, Twitch and a Google search.** None of the three sends a page.
+YouTube and Twitch send a few kilobytes of markup and megabytes of script,
+and the script builds the page, so what a browser that cannot run that
+application used to show was nothing. But what the page would show is
+there to be read: YouTube puts it in the page as data, a megabyte and a half
+of it, and Twitch answers it from a public API. So for those two the browser
+reads that and draws a plain page of its own (`userland/sites.h`): searches,
+a video with its description and the ones beside it, channels, who is live
+on Twitch, its categories and the streams in each, every row with its
+picture and a link back to the site's own address. The JSON is read where
+it lies rather than parsed into a tree, and everything taken from it is
+escaped before it goes into the page, since it came from somebody else. What
+it cannot do is play anything: the video is H.264 sent in pieces chosen by
+the site's own player, and there is no video decoder here. Each page says
+so. Google's results are made by a program that first decides whether a
+person is asking, which is not something to get round, so a search asked of
+Google is asked of DuckDuckGo, and the page says that too.
+
 **The network, and being straight about it.** There is an icon on the panel
 next to the speaker, and it says three things apart rather than two: no
 link, a link with no address, and a link that can reach something. The

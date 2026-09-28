@@ -112,6 +112,18 @@ static inline int html_fold_cp(unsigned cp, char *out) {
     if (cp < 0x80) { out[0] = (char)cp; return 1; }
     if (cp >= 0xC0 && cp <= 0xFF) { out[0] = LATIN[cp - 0xC0]; return 1; }
 
+    /* Pictures in the text -- emoji, the symbols and dingbats before them,
+       flags -- and the invisible marks that join, colour or space them.
+       There is no ASCII for a picture, and a question mark for each made
+       every title on a video site read as a question, twice over for an emoji
+       followed by its colour mark. They are left out, which loses the
+       picture and keeps the words. */
+    if ((cp >= 0x1F000 && cp <= 0x1FAFF) || (cp >= 0x2600 && cp <= 0x27BF)
+        || (cp >= 0x2B00 && cp <= 0x2BFF) || (cp >= 0xFE00 && cp <= 0xFE0F)
+        || (cp >= 0x200B && cp <= 0x200F) || cp == 0x2060 || cp == 0xFEFF
+        || cp == 0x20E3 || (cp >= 0xE0000 && cp <= 0xE007F))
+        return 0;
+
     const char *s = 0;
     switch (cp) {
         case 0x00A0: s = " ";    break;         /* a space that does not break */

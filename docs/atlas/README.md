@@ -95,6 +95,39 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.61.0: YouTube and Twitch, read another way
+
+- **Sites (11, new `userland/sites.h`).** YouTube and Twitch send an application rather than a page, and the
+  browser showed nothing (YouTube: "shown as far as it fits", a script stopped) or Google's "please click here if
+  you are not redirected". YouTube's pages carry what they would show as data (`ytInitialData`,
+  `ytInitialPlayerResponse`); `site_youtube` reads it where it lies (`sj_skip`/`sj_find`/`sj_str`/`sj_text`, no tree)
+  into a plain page: searches, watch pages (title, channel, views, length, description, the videos beside it from
+  `videoRenderer`, `compactVideoRenderer`, `gridVideoRenderer` and video `lockupViewModel`s), channels, each row a
+  thumbnail from `i.ytimg.com`, links back to YouTube's own addresses, the channel linked by its canonical address
+  or `/channel/<id>`. Twitch's pages come from its public GraphQL API (`gql.twitch.tv`, the Client-Id its own page
+  sends): who is live, the categories, a category's streams, a channel live or offline. A Google search
+  (`google.<country>/search?q=`) is sent to DuckDuckGo's lite page with a line at the top saying so. Video is not
+  played (H.264 in pieces chosen by the site's script; no decoder here), and each page says so. The browser fetches a
+  YouTube page into 4 MiB of its own (`SITE_SRC_MAX`, freed after), since the data is 1.5-2.3 MB; `SRC_MAX` is
+  unchanged. fetch.h gained `web_body_type` and `web_extra` for the API request. The browser prints
+  `browser: <address> -- <title> -- <status>` on the console after each page, for the harness.
+- **Layout (11).** Two faults found drawing those pages. A form field or a hidden element that was the last thing
+  in its parent climbed out of it when skipped (`lay_inline`), so the rest of the document was laid out twice, once
+  flowed on to the field's line: every search form ending in a button did it (`lay_past`). And a flex item was
+  laid out at its own `width` rather than the width its row gave it, so `flex:1` with a width never grew and a
+  percentage was of its share (`flex_sized`). Pictures in text (emoji, dingbats, flags) and the marks that join
+  or colour them are left out rather than drawn as `?` (`html_fold_cp`).
+- **Checks.** `sitetest` (ring3check, 66 checks on pages of the sites' shapes, no network) failed with: escaped
+  quotes not counted in `sj_find`, surrogate halves not paired, the duplicate video kept, a login not limited to
+  login characters, a quote left in a category name, `google.example.org` taken for Google, `<` not escaped, and a
+  channel address accepted part way. layouttest: the words after a form ending in a button and after a hidden last
+  child are laid out once (both 2 with the old climb), a growing flex item takes the rest of its row (250 of 500
+  with the width taken again), pictures left out of the text (failed with the fold removed); the shrink check passed
+  with the width taken again (a block never grows past what it is given) and stays as a guard. `tools/sitecheck.py`
+  (gate full, outward, like tlscheck): the reader on a real YouTube search and watch page and Twitch's front page
+  and directory, and the browser on YouTube, Twitch and a Google search; it failed with the YouTube hook, the
+  Google redirect and the Twitch stream rows broken. `/bin` holds 64 programs now (49 used).
+
 ### 0.60.0: progressive photographs
 
 - **JPEG (13).** Progressive files were refused, and a large share of the photographs on the web are sent that way.

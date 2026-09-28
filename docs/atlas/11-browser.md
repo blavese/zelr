@@ -496,6 +496,24 @@ The engine (js.h) runs a language and knows nothing of pages; its `jctx` has two
 
 **Limits**: `JD_LISTENERS 256`, `JD_TYPE_MAX 24` (event-type name), `JD_TIMERS 64`, `JD_REQUESTS 8` pending (a ninth `send` is silently dropped, 821), `JD_WRAPS = DOM_NODES`, host numbers `JD_DOCUMENT 0x1000000`, `JD_CLASSLIST 0x2000000` (+ node).
 
+### 3.8a `userland/sites.h` (since 0.61.0) -- sites read another way
+
+YouTube and Twitch send an application, not a page. `site_youtube(u, src, n, out, cap)` reads a YouTube page's own
+data (`ytInitialData`, `ytInitialPlayerResponse`) and writes a plain HTML page into `out`; `site_twitch(u, out,
+cap)` asks `https://gql.twitch.tv/gql` (Client-Id `kimne78kx3ncx6brgo4mv6wki5h1ko`, body type
+`text/plain;charset=UTF-8`, through fetch.h's `web_body_type`/`web_extra`) and writes the page from the answer
+(`twitch_query` picks the question, `twitch_page` writes the answer, so both are testable offline).
+`site_google_search(u, q, cap)` gives the words of a `google.<country>/search?q=` address, which browser.c sends to
+`SEARCH_PREFIX` with a note (`build_noted`). JSON is read in place: `sj_skip` (past a value, strings and escapes
+respected), `sj_find` (a key's value inside a range; a quote preceded by an odd run of backslashes is not a string
+edge), `sj_str` (escapes to UTF-8, surrogate pairs joined), `sj_text` (string, `simpleText`, `runs`, `content`).
+Everything written into markup goes through `sp_text` (`& < > "` escaped); ids and logins through `site_ident`
+(only their own characters, so a value cannot close its attribute or GraphQL string); pictures only from
+`i.ytimg.com` and `static-cdn.jtvnw.net`. Rows are flex rows (`sp_row_open`), since tables lay out as blocks.
+browser.c: `load()` runs the Twitch reader instead of a fetch; fetches a YouTube page into `SITE_SRC_MAX` (4 MiB,
+malloc'd and freed) and builds `site_youtube`'s page when it returns one; prints `browser: <address> -- <title> --
+<status>` after each page.
+
 ### 3.9 Test programs in scope
 
 - **`userland/layouttest.c`** (515): builds pages like the browser minus fetching -- `dom_parse`, `CSS_UA`, `<style>` sheets, zeroed `inl`, `css_index`, `lay_run(width, 16)` (56-83) -- and asserts on `litem` coordinates found via `box_of(node)` (LK_BOX with that node) or LK_IMAGE items; `picture_at(id, w, h)` fakes a decoded picture (51-92). No accent sheet, no linked sheets, `css_view_h` never set. Ends `LAYOUTTEST_PASS`/`LAYOUTTEST_FAIL`, exit status = failures. About 46 assertions (listed in §8).
@@ -737,7 +755,7 @@ Ctrl+F, type `connection` (a word on the test server's `/` page): > 60 pixels of
 `ThreadingHTTPServer` on 127.0.0.1:0, HTTP/1.1, reached from the guest as `10.0.2.2:<port>` through slirp (`HOST_IP`, line 27); `instant_args` uses `guestfwd` to `10.0.2.100:80` (one connection only). Routes (do_GET 432-560): `/`, `/index.html` (PAGE with one link to `/second`), `/gz` (gzip only if the client sent `Accept-Encoding: gzip`), `/one`, `/two`, `/setcookie` (two Set-Cookie), `/whoami` (echo Cookie), `/bye` (`sid=; Max-Age=0`), `/form`, `/posts`, `/said` (GET echo; POST at do_POST 406-413), `/second`, `/styled`, `/style.css`, `/bare`, `/logo.svg`, `/drawn`, `/logo.png`, `/picture`, `/missing-picture`, `/scripted`, `/unscripted`, `/live`, `/live.js`, `/live.txt` ("teal"), `/live-quiet`, `/big` (200 000 bytes), `/size/N`, `/framed` (chunked `SAMPLE`), `/measured`, `/chunked` (50 000 bytes in 4000-byte chunks), `/close` (no length, `Connection: close`), `/redirect` (302 → `/second`), `/redirect-relative` (301 → `second`), `/loop` (302 → itself), `/slow`, else 404. Server-side records: `COUNTS` (connections, GET requests), `COOKIES` (per GET), `RECEIVED` (forms).
 
 ### 8.10 Not covered by any test
-https inside the browser (no TLS test server; `tlscheck.py` uses the kernel `fetch` against the real web), redirect method rules (307/308, POST→GET), `/redirect-relative`, `/loop`, `/close`, `/chunked`, `/big` in the browser, meta refresh, the retry-once rule, truncation paths, gzip truncation, cookie domain/path/secure rules, the cascade (specificity ties, `!important`, media queries, pseudo-classes, attribute selectors), inline edges and wrapping, lists, tables, `<select>`, radio groups, textareas, keyboard scrolling, the wheel, zoom, history scroll, hover, clicks on text, multi-word find, script `type`, the hidden-page fallback.
+https inside the browser (no TLS test server; `tlscheck.py` uses the kernel `fetch` against the real web; since 0.61.0 `sitecheck.py` loads YouTube, Twitch and a Google search over https in the browser), redirect method rules (307/308, POST→GET), `/redirect-relative`, `/loop`, `/close`, `/chunked`, `/big` in the browser, meta refresh, the retry-once rule, truncation paths, gzip truncation, cookie domain/path/secure rules, the cascade (specificity ties, `!important`, media queries, pseudo-classes, attribute selectors), inline edges and wrapping, lists, tables, `<select>`, radio groups, textareas, keyboard scrolling, the wheel, zoom, history scroll, hover, clicks on text, multi-word find, script `type`, the hidden-page fallback.
 
 ---
 

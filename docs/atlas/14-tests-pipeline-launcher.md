@@ -89,6 +89,7 @@ For each of these I read the header and the assertion logic. Almost all were rea
 | tools/tearcheck.py | 103 | `halfdrawn`: no uncommitted (red) frame is ever composited. |
 | tools/termcheck.py | 150 | The ring-3 terminal driven with sendkey: typing, tab completion, history, cursor editing, verified by theme colours. |
 | tools/tlscheck.py | 173 | HTTPS against 5 real internet sites (needs internet access), a non-TLS port refused, plain http. |
+| tools/sitecheck.py | 150 | Since 0.61.0: `sitetest live` on a real YouTube search and watch page and Twitch's front page and directory; the browser on YouTube, Twitch and a Google search (needs internet access). |
 | tools/usbcheck.py | 331 | xHCI keyboard and mouse, a hub, hot-plug, and a USB stick sector read and write verified on the host. |
 | tools/volcheck.py | 143 | Drags the dock volume slider; the loud note must be louder than the quiet one (WAV). |
 | tools/webcheck.py | 170 | TCP/HTTP against the host server: large bodies, keep-alive, slow bodies, 404, pcnet, ne2k_pci, and an instant guestfwd reply. |
@@ -662,6 +663,7 @@ Then `par_wait`.
 | C13 | an address is asked for and arrives | netcheck.py | 900 |
 | C14 | pages come back off a real web server | webcheck.py | 900 |
 | C15 | https works against the real web | tlscheck.py (**internet required**) | 900 |
+| C15a | youtube and twitch are read, and a google search answered | sitecheck.py (**internet required**, since 0.61.0) | 900 |
 | C16 | the browser shows a page and follows a link | browsercheck.py | 600 |
 | C17 | a page does its work on a click, a timer and an answer | livecheck.py | 700 |
 | C18 | a form is filled in and arrives as it was filled in | formcheck.py | 600 |

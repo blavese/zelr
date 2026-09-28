@@ -634,6 +634,13 @@ if [ "$MODE" = "screen" ] || [ "$MODE" = "full" ]; then
   # without one, on purpose: a machine that cannot reach the web should not
   # be reporting that its https works.
   tlstest() { keep timeout 900 python tools/tlscheck.py; }
+
+  # YouTube and Twitch, read from the data in their pages and from Twitch's
+  # API, and a Google search answered by DuckDuckGo, against the real sites.
+  # sitetest checks the reader against pages of their shape; only the sites
+  # can say whether they still send that shape. Outward, like tlscheck, and
+  # failing without a connection for the same reason.
+  sitetest() { keep timeout 900 python tools/sitecheck.py; }
   par_start "the windows go where they are told" desktest
   par_start "a usb keyboard and mouse are found and used" usbtest
   par_start "input survives being touched during boot" inputtest
@@ -647,6 +654,7 @@ if [ "$MODE" = "screen" ] || [ "$MODE" = "full" ]; then
   par_start "an address is asked for and arrives" nettest
   par_start "pages come back off a real web server" webtest
   par_start "https works against the real web" tlstest
+  par_start "youtube and twitch are read, and a google search answered" sitetest
   par_start "the browser shows a page and follows a link" browsertest
   par_start "a page does its work on a click, a timer and an answer" livetest
   par_start "a form is filled in and arrives as it was filled in" formtest
@@ -690,7 +698,7 @@ for pat in 'gpttest.*.img' 'fat32test.*.img' 'nvmetest.*.img' 'clipcheck.*.img' 
            'fat32probe.*.txt' 'fat32high.*.txt' 'hangcheck.*.img' 'mounttrace.*.log' \
            'bigfile.*.img' 'bigfile.*.big' 'bigfile.*.huge' \
            'files.*.img' 'files.*.letter' 'files.*.zeta' 'files.*.box' \
-           'webcheck.*.pcap'; do
+           'webcheck.*.pcap' 'sitecheck.*.img'; do
   stale "$pat"
 done
 rm -f build/*.ppm 2>/dev/null

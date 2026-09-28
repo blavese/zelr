@@ -594,6 +594,80 @@ int main(void) {
            c >= 0 && after >= 0 && doc.nodes[after].parent == doc.nodes[c].parent);
     }
 
+    /* --- pictures in the text -------------------------------------------------
+     *
+     * An emoji, a symbol with the mark that asks for it in colour, and a
+     * joiner: none has an ASCII spelling, and each used to be a question
+     * mark. They are left out; a letter the font lacks is still one. */
+    {
+        lay("<p id=t>a\xF0\x9F\x98\x80" "b\xE2\x98\x95\xEF\xB8\x8F" "c\xE2\x80\x8D" "d"
+            "&#x1F600;e\xE4\xB8\x80</p>", 600);
+        int t = by_id("t");
+        int c = t >= 0 ? doc.nodes[t].first : -1;
+        const char *s = c >= 0 && doc.nodes[c].text >= 0 ? doc.arena + doc.nodes[c].text : "";
+        ok("pictures and the marks that join them are left out of the text, other letters are not",
+           s[0] == 'a' && s[1] == 'b' && s[2] == 'c' && s[3] == 'd' && s[4] == 'e' && s[5] == '?'
+           && s[6] == 0);
+    }
+
+    /* --- a flex item's width is where it starts --------------------------------
+     *
+     * The row grows or shrinks each item from its width and lays it out at
+     * the result. Laying it out took the width again: an item that asked to
+     * grow stayed the size it started, and items shrunk to fit ran over each
+     * other, each drawn at its full width from where the row put it. */
+    {
+        lay("<style>.row{display:flex}#a{width:100px;background:#f00}"
+            "#b{width:50%;flex:1;background:#0f0}</style>"
+            "<div class=row><div id=a>x</div><div id=b>y</div></div>", 600);
+        const litem *a = box_of(by_id("a"));
+        const litem *b = box_of(by_id("b"));
+        ok("a row of a fixed item and a growing one lays out", a && b);
+        if (a && b) {
+            okn("the fixed one keeps its width", a->w == 100, a->w);
+            okn("and the growing one takes the rest of the row", b->w == 500, b->w);
+        }
+        lay("<style>.row{display:flex}#a{width:400px;background:#f00}"
+            "#b{width:400px;background:#0f0}</style>"
+            "<div class=row><div id=a>x</div><div id=b>y</div></div>", 600);
+        a = box_of(by_id("a"));
+        b = box_of(by_id("b"));
+        if (a && b)
+            okn("two too wide for the row share it, neither over the other",
+                a->w == 300 && b->w == 300 && b->x >= a->x + a->w, a->w);
+    }
+
+    /* --- what follows a field that ends its parent ---------------------------
+     *
+     * A form field, or an element nobody is to see, laid out on its own and
+     * last in its parent: skipping past it climbed out of the parent and
+     * went on laying out the rest of the page on the field's line, and then
+     * the page laid it out again where it belonged. Every search form that
+     * ends in a button showed its whole page twice. */
+    {
+        static const char *const PAGES[] = {
+            "<form><b>find</b> <input type=text name=q> <input type=submit value=go></form>"
+            "<p id=after>after the form</p>",
+            "<style>.gone{display:none}</style>"
+            "<div>words <span class=gone>hidden</span></div><p id=after>after the div</p>",
+        };
+        static const char *const SAID[] = {
+            "the words after a form that ends in a button are laid out once",
+            "and the words after a hidden element that ends its parent",
+        };
+        for (int k = 0; k < 2; k++) {
+            lay(PAGES[k], 600);
+            int words = 0;
+            for (int i = 0; i < page.nitems; i++) {
+                const litem *it = &page.items[i];
+                if (it->kind != LK_TEXT || it->at < 0) continue;
+                const char *s = page.text + it->at;
+                if (s[0] == 'a' && s[1] == 'f' && s[2] == 't') words++;
+            }
+            okn(SAID[k], words == 1, words);
+        }
+    }
+
     puts(failed ? "LAYOUTTEST_FAIL\n" : "LAYOUTTEST_PASS\n");
     return failed;
 }
