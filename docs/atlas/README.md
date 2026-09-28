@@ -95,6 +95,18 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.65.0: YouTube playlists and Shorts
+
+- **Sites (11).** `yt_videos` reads `shortsLockupViewModel` (the id from its `reelWatchEndpoint`, the words from
+  its `accessibilityText` with " - play Short" and its dash taken off) as rows linked to the ordinary watch page,
+  and a playlist `lockupViewModel` as a row linked to `/playlist?list=<id>` with its first video's picture; a
+  playlist's own page is headed from `playlistMetadataRenderer`, as a channel's is. `yt_row` takes the address
+  and the picture's video separately.
+- **Checks.** sitetest 97 (5 new, and the watch page now wants its playlist as a third row): failed with Shorts
+  left out, playlists left out, the playlist heading not read, a list id of anything accepted, and the first
+  trimming of a Short's words, which also took an accented letter before the dash. sitecheck 23: a YouTube chart
+  playlist read from the real site.
+
 ### 0.64.0: page scripts that wait for the window, set handlers as properties, and break out of loops
 
 - **jsdom (12 §10 B17).** `el.onclick = f`, `document.onclick = f` and `window.onload = f` are called

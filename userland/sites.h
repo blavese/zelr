@@ -453,20 +453,24 @@ static inline void yt_who(site_page *p, const char *who, const char *href) {
 
 /* One video as a row: its picture, which links to it, its title, who made it
    and what the site says about it. */
-static inline void yt_row(site_page *p, const char *id, const char *title, const char *who,
-                          const char *who_href, const char *a, const char *b, const char *c,
-                          const char *snippet) {
+static inline void yt_row(site_page *p, const char *href, const char *pic, const char *title,
+                          const char *who, const char *who_href, const char *a, const char *b,
+                          const char *c, const char *snippet) {
     sp_row_open(p, 240);
-    sp_raw(p, "<a href=\"/watch?v=");
-    sp_raw(p, id);
-    sp_raw(p, "\"><img src=\"https://i.ytimg.com/vi/");
-    sp_raw(p, id);
-    sp_raw(p, "/mqdefault.jpg\" width=\"240\" height=\"135\" alt=\"\"></a>");
+    sp_raw(p, "<a href=\"");
+    sp_raw(p, href);
+    sp_raw(p, "\">");
+    if (pic[0]) {
+        sp_raw(p, "<img src=\"https://i.ytimg.com/vi/");
+        sp_raw(p, pic);
+        sp_raw(p, "/mqdefault.jpg\" width=\"240\" height=\"135\" alt=\"\">");
+    }
+    sp_raw(p, "</a>");
     sp_row_words(p);
-    sp_raw(p, "<a href=\"/watch?v=");
-    sp_raw(p, id);
+    sp_raw(p, "<a href=\"");
+    sp_raw(p, href);
     sp_raw(p, "\"><b>");
-    sp_text(p, title[0] ? title : id);
+    sp_text(p, title[0] ? title : href);
     sp_raw(p, "</b></a><br><small>");
     yt_who(p, who, who_href);
     const char *bits[3] = { a, b, c };
@@ -495,7 +499,9 @@ static inline int yt_videos(site_page *p, const char *s, int n, int limit) {
     static char href[256];
 
     const char *const kinds[] = { "\"videoRenderer\":{", "\"compactVideoRenderer\":{",
-                                  "\"gridVideoRenderer\":{", "\"lockupViewModel\":{", 0 };
+                                  "\"gridVideoRenderer\":{", "\"lockupViewModel\":{",
+                                  "\"shortsLockupViewModel\":{", 0 };
+    static char list[64], link[96], pic[16];
     for (int kind = 0; kinds[kind] && shown < limit; kind++) {
         for (int at = site_search(s, 0, n, kinds[kind]); at >= 0 && shown < limit;
              at = site_search(s, at + 1, n, kinds[kind])) {
@@ -504,13 +510,52 @@ static inline int yt_videos(site_page *p, const char *s, int n, int limit) {
             int end = sj_skip(s, obj, n);
             id[0] = title[0] = who[0] = views[0] = age[0] = len[0] = snip[0] = href[0] = 0;
 
-            if (kind == 3) {
-                /* The view model says what it holds; only videos are wanted. */
+            list[0] = pic[0] = 0;
+            if (kind == 4) {
+                /* A Short: its id in the command that opens it, and what it
+                   is and how many watched in the words read out for it,
+                   "Title, 1.3 million views - play Short". Linked to the
+                   ordinary watch page, which this reads; the Shorts page is
+                   another application. */
+                int re = sj_find(s, obj, end, "reelWatchEndpoint");
+                if (re < 0) continue;
+                sj_str(s, sj_find(s, re, sj_skip(s, re, n), "videoId"), n, id, sizeof(id));
+                sj_field(s, obj, n, "accessibilityText", title, sizeof(title));
+                int tl = w_len(title);
+                const char *tail = " play Short";
+                int kl = w_len(tail);
+                if (tl > kl && w_same(title + tl - kl, tail)) {
+                    title[tl - kl] = 0;
+                    tl -= kl;
+                    /* and the dash before it, an en dash or a hyphen, and
+                       the spaces round it -- no more, so a title ending in
+                       an accented letter keeps it */
+                    while (tl > 0 && title[tl - 1] == ' ') title[--tl] = 0;
+                    if (tl >= 3 && (u8)title[tl - 3] == 0xE2 && (u8)title[tl - 2] == 0x80
+                        && (u8)title[tl - 1] == 0x93) { tl -= 3; title[tl] = 0; }
+                    else if (tl > 0 && title[tl - 1] == '-') title[--tl] = 0;
+                    while (tl > 0 && title[tl - 1] == ' ') title[--tl] = 0;
+                }
+                w_copy(age, sizeof(age), "Short", sizeof(age));
+            } else if (kind == 3) {
+                /* The view model says what it holds: a video, or a playlist,
+                   which is linked to its own page with the picture of the
+                   first video in it. */
                 int ct = sj_find(s, obj, end, "contentType");
                 char type[64];
                 sj_str(s, ct, n, type, sizeof(type));
-                if (ct < 0 || !w_same(type, "LOCKUP_CONTENT_TYPE_VIDEO")) continue;
-                sj_str(s, sj_find(s, obj, end, "contentId"), n, id, sizeof(id));
+                if (ct < 0) continue;
+                if (w_same(type, "LOCKUP_CONTENT_TYPE_PLAYLIST")) {
+                    char raw[64];
+                    sj_str(s, sj_find(s, obj, end, "contentId"), n, raw, sizeof(raw));
+                    if (!site_ident(raw, list, sizeof(list), "-_") || w_len(list) != w_len(raw)) continue;
+                    int at_pic = site_search(s, obj, end, "https://i.ytimg.com/vi/");
+                    if (at_pic >= 0) site_ident(s + at_pic + 23, pic, sizeof(pic), "-_");
+                    if (w_len(pic) != 11) pic[0] = 0;
+                } else if (!w_same(type, "LOCKUP_CONTENT_TYPE_VIDEO")) {
+                    continue;
+                }
+                if (!list[0]) sj_str(s, sj_find(s, obj, end, "contentId"), n, id, sizeof(id));
                 int meta = sj_find(s, obj, end, "lockupMetadataViewModel");
                 if (meta >= 0) {
                     int me = sj_skip(s, meta, n);
@@ -549,13 +594,28 @@ static inline int yt_videos(site_page *p, const char *s, int n, int limit) {
             }
 
             char clean[16];
+            if (list[0]) {
+                /* A playlist: its own address, and the first video's picture. */
+                int o = 0;
+                for (const char *q = "/playlist?list="; *q; q++) link[o++] = *q;
+                for (const char *q = list; *q && o < (int)sizeof(link) - 1; q++) link[o++] = *q;
+                link[o] = 0;
+                if (!views[0]) w_copy(views, sizeof(views), "playlist", sizeof(views));
+                yt_row(p, link, pic, title, who, href, views, age, len, snip);
+                shown++;
+                continue;
+            }
             if (!site_ident(id, clean, sizeof(clean), "-_") || w_len(clean) != 11) continue;
             int dup = 0;
             for (int k = 0; k < nseen; k++) if (w_same(seen[k], clean)) dup = 1;
             if (dup) continue;
             if (nseen < 64) w_copy(seen[nseen++], 16, clean, 16);
 
-            yt_row(p, clean, title, who, href, views, age, len, snip);
+            int o = 0;
+            for (const char *q = "/watch?v="; *q; q++) link[o++] = *q;
+            for (const char *q = clean; *q && o < (int)sizeof(link) - 1; q++) link[o++] = *q;
+            link[o] = 0;
+            yt_row(p, link, clean, title, who, href, views, age, len, snip);
             shown++;
         }
     }
@@ -694,6 +754,11 @@ static inline int site_youtube(const url_t *u, const char *s, int n, char *out, 
     if (vd >= 0) vd = sj_find(s, vd, n, "videoDetails");
     int meta = vd < 0 ? site_search(s, 0, n, "\"channelMetadataRenderer\":{") : -1;
     if (meta >= 0) meta = sj_find(s, meta, n, "channelMetadataRenderer");
+    /* A playlist's page names itself the same way, in its own renderer. */
+    if (vd < 0 && meta < 0) {
+        meta = site_search(s, 0, n, "\"playlistMetadataRenderer\":{");
+        if (meta >= 0) meta = sj_find(s, meta, n, "playlistMetadataRenderer");
+    }
 
     title[0] = 0;
     if (vd >= 0) sj_field(s, vd, n, "title", title, sizeof(title));

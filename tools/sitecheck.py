@@ -39,6 +39,8 @@ DISK = os.path.join(ROOT, "sitecheck.%d.img" % os.getpid())
 LIVE = [
     ("a YouTube search", "https://www.youtube.com/results?search_query=lofi+music", 5, 0),
     ("a YouTube video, with the ones beside it", "https://www.youtube.com/watch?v=dQw4w9WgXcQ", 3, 1),
+    # One of YouTube's own weekly charts, which it keeps.
+    ("a YouTube playlist", "https://www.youtube.com/playlist?list=PL4fGSI1pDJn6jXS_Tv_N9B8Z0HTRVJE0m", 5, 0),
     ("who is live on Twitch", "https://www.twitch.tv/", 5, 0),
     ("Twitch's categories", "https://www.twitch.tv/directory", 5, 0),
 ]

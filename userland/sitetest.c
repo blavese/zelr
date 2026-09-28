@@ -134,6 +134,30 @@ static const char YT_CHANNEL[] =
 
 static const char YT_FRONT[] = "<script>var ytInitialData = {\"contents\":{}};</script>";
 
+/* A Short and a playlist in a search, and a playlist's own page. */
+static const char YT_MIXED[] =
+    "<script>var ytInitialData = {\"contents\":["
+    "{\"shortsLockupViewModel\":{\"entityId\":\"shorts-shelf-item-SSSSSSSSSS1\","
+    "\"accessibilityText\":\"Tiny <tune>, 1.3 million views \\u2013 play Short\","
+    "\"onTap\":{\"innertubeCommand\":{\"reelWatchEndpoint\":{\"videoId\":\"SSSSSSSSSS1\"}}}}},"
+    "{\"shortsLockupViewModel\":{\"accessibilityText\":\"Caf\\u00e9 \\u2013 play Short\","
+    "\"onTap\":{\"innertubeCommand\":{\"reelWatchEndpoint\":{\"videoId\":\"SSSSSSSSSS2\"}}}}},"
+    "{\"lockupViewModel\":{\"contentImage\":{\"thumbnailViewModel\":{\"image\":{\"sources\":["
+    "{\"url\":\"https://i.ytimg.com/vi/FIRSTVIDEO1/hqdefault.jpg?sqp=x\"}]}}},"
+    "\"metadata\":{\"lockupMetadataViewModel\":{\"title\":{\"content\":\"Best of\"},"
+    "\"metadata\":{\"contentMetadataViewModel\":{\"metadataRows\":[{\"metadataParts\":"
+    "[{\"text\":{\"content\":\"Someone\"}}]}]}}}},"
+    "\"contentId\":\"PLgoodlist-_123\",\"contentType\":\"LOCKUP_CONTENT_TYPE_PLAYLIST\"}},"
+    "{\"lockupViewModel\":{\"metadata\":{\"lockupMetadataViewModel\":{\"title\":{\"content\":\"Bad\"}}},"
+    "\"contentId\":\"PL\\\"><x\",\"contentType\":\"LOCKUP_CONTENT_TYPE_PLAYLIST\"}}"
+    "]};</script>";
+
+static const char YT_PLAYLIST[] =
+    "<script>var ytInitialData = {\"metadata\":{\"playlistMetadataRenderer\":{\"title\":\"Top 100\","
+    "\"description\":\"This week's songs.\"}},\"contents\":["
+    "{\"lockupViewModel\":{\"contentId\":\"PPPPPPPPPP1\",\"contentType\":\"LOCKUP_CONTENT_TYPE_VIDEO\","
+    "\"metadata\":{\"lockupMetadataViewModel\":{\"title\":{\"content\":\"Number one\"}}}}}]};</script>";
+
 /* --- answers of the shapes Twitch's API gives ---------------------------------- */
 
 static const char TW_STREAMS[] =
@@ -298,8 +322,9 @@ static void checks(void) {
            && has(page, "Other Maker<br>5K views &middot; 1 year ago"));
         ok("and from the renderer it used before", has(page, "/watch?v=EEEEEEEEEE5")
            && has(page, "Old Maker<br>9 views"));
-        ok("but not a playlist among them", !has(page, "A playlist") && !has(page, "PLxxxx"));
-        okn("so two beside it", count(page, "class=\"row\"") == 2, count(page, "class=\"row\""));
+        ok("and a playlist among them, linked to its own page",
+           has(page, "<a href=\"/playlist?list=PLxxxxxxxxxxxxxxxx\"><b>A playlist</b>"));
+        okn("so three beside it", count(page, "class=\"row\"") == 3, count(page, "class=\"row\""));
 
         ok("frames from the video, from its storyboards",
            has(page, "<h2>frames from the video</h2>") && has(page, "One every 2 seconds"));
@@ -329,6 +354,21 @@ static void checks(void) {
            n > 0 && has(page, "<title>Some &amp; One - YouTube</title>")
            && has(page, "<h1>Some &amp; One</h1>") && has(page, "<p>About us.</p>"));
         ok("with its videos", has(page, "/watch?v=FFFFFFFFFF6") && has(page, "<b>Upload</b>"));
+        n = yt("https://www.youtube.com/results?search_query=tunes", YT_MIXED);
+        ok("a Short in a search is a row, linked to its ordinary watch page",
+           n > 0 && has(page, "<a href=\"/watch?v=SSSSSSSSSS1\"><b>Tiny &lt;tune&gt;, 1.3 million views</b>")
+           && has(page, "SSSSSSSSSS1/mqdefault.jpg") && has(page, "Short"));
+        ok("and a title ending in an accented letter keeps it when the words after it go",
+           has(page, "<b>Caf\xC3\xA9</b>"));
+        ok("a playlist in a search is linked to its own page, with its first video's picture",
+           has(page, "<a href=\"/playlist?list=PLgoodlist-_123\"><b>Best of</b>")
+           && has(page, "FIRSTVIDEO1/mqdefault.jpg"));
+        ok("but not one whose list would close its link", !has(page, "Bad") && !has(page, "<x"));
+        n = yt("https://www.youtube.com/playlist?list=PLabc", YT_PLAYLIST);
+        ok("a playlist's own page is headed by its name, with its videos",
+           n > 0 && has(page, "<title>Top 100 - YouTube</title>") && has(page, "<h1>Top 100</h1>")
+           && has(page, "This week's songs.") && has(page, "/watch?v=PPPPPPPPPP1"));
+
         n = yt("https://www.youtube.com/", YT_FRONT);
         ok("the front page, which lists nothing to a stranger, says so and offers the search",
            n > 0 && has(page, "did not list any videos") && has(page, "search_query"));
