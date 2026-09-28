@@ -59,6 +59,7 @@
 /* How much one page's scripts may have at once, and how long they may run.
    Both are refusals with a message rather than limits that corrupt. */
 #define JS_MEM_CAP   (24u * 1024 * 1024)
+#define JS_MEM_SPARE (1u * 1024 * 1024)
 #define JS_STEP_CAP  40000000u
 #define JS_DEPTH_CAP 160
 
@@ -284,7 +285,14 @@ static void *js_alloc(jctx *J, u32 n) {
             }
             J->error[i] = 0;
         }
-        return 0;
+        /* The script is stopped from here, but the C already on its way
+           through a statement is not: it asked for a string or a property and
+           a great many places use what they were given without asking whether
+           they were given anything, and a NULL there took the whole browser
+           down. So what is already running is given a little more, from a
+           spare that nothing reaches but this, to get back out; the page's
+           handlers and timers do not run again (jsdom.h, jd_spent). */
+        if (J->allocated + n > JS_MEM_CAP + JS_MEM_SPARE) return 0;
     }
 
     jchunk *c = J->chunks;
@@ -408,7 +416,7 @@ static jobj *js_object(jctx *J, jokind kind) {
 }
 
 static jprop *js_find(jobj *o, const jstr *key) {
-    if (!o || !o->buckets) return 0;
+    if (!o || !o->buckets || !key) return 0;
     u32 i = key->hash & (o->nbuckets - 1);
     for (jprop *p = o->buckets[i]; p; p = p->next)
         if (js_str_eq(p->key, key)) return p;

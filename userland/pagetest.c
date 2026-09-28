@@ -698,6 +698,29 @@ int main(void) {
             content_of(dom_by_id(&page, "who")), "true");
     }
 
+    /* --- a page that uses up its memory ---------------------------------------
+     *
+     * At the cap a string or a property came back as nothing, and places that
+     * used it without asking took the browser down with the page. The script
+     * stops and says why; the browser goes on; and the page's handlers do not
+     * run again, each of which would only have run out again. */
+    {
+        load("<body><p id=out>no</p><script>"
+             "document.addEventListener('click', function(){"
+             " document.getElementById('out').textContent = 'ran ' + {}.a; });"
+             "var o = {}; for (var i = 0; ; i++) o['key number ' + i] = 'value ' + i;"
+             "</script></body>");
+        char err[128];
+        run_scripts(&page, err, (int)sizeof(err), 0);
+        int said = 0;
+        for (int i = 0; err[i]; i++)
+            if (err[i] == 'm' && err[i + 1] == 'e' && err[i + 2] == 'm') said = 1;
+        ok("a page whose script uses up its memory stops it, and says so, and this is still here", said);
+        jsdom_click(dom_by_id(&page, "out"));
+        oks("and its handlers do not run again", content_of(dom_by_id(&page, "out")), "no");
+        ok("nor is it woken for timers", jsdom_next_due() < 0);
+    }
+
     puts(failed ? "PAGETEST_FAIL\n" : "PAGETEST_PASS\n");
     return failed;
 }

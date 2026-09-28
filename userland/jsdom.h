@@ -239,6 +239,12 @@ static int     jd_nlisten;
 static int jd_prevented;
 static int jd_stopped;
 
+/* Whether the page's scripts have used all the memory they are allowed. Once
+   they have, none of its handlers, timers or requests is run again: each one
+   would stop at its first allocation anyway, having used a little more of the
+   spare the one that ran out is getting out on (js.h, js_alloc). */
+static int jd_spent(void) { return jd_J.allocated >= JS_MEM_CAP; }
+
 static jval nat_ev_prevent(jctx *J, jval t, jval *a, int n) {
     (void)J; (void)t; (void)a; (void)n;
     jd_prevented = 1;
@@ -391,7 +397,7 @@ static void jd_fire(int host, const char *type, jobj *ev) {
 /* Up the tree from whatever was hit, and then the document. Returns whether
    the page asked for the ordinary consequence not to follow. */
 static int jd_dispatch(int node, const char *type) {
-    if (!jd_open || !jd_doc) return 0;
+    if (!jd_open || !jd_doc || jd_spent()) return 0;
 
     jd_prevented = 0;
     jd_stopped = 0;
@@ -902,7 +908,7 @@ static jval nat_xhr_new(jctx *J, jval t, jval *a, int n) {
    browser while it happens and a page that sent six would otherwise stop
    for all six at once. */
 static int jsdom_requests(void) {
-    if (!jd_open || !jd_do_request) return 0;
+    if (!jd_open || !jd_do_request || jd_spent()) return 0;
 
     for (int i = 0; i < jd_nreq; i++) {
         if (!jd_req[i].waiting) continue;
@@ -946,7 +952,7 @@ static int jsdom_requests(void) {
    otherwise, and -1 when it has asked for nothing. The browser sleeps that
    long rather than looking sixty times a second. */
 static int jsdom_next_due(void) {
-    if (!jd_open) return -1;
+    if (!jd_open || jd_spent()) return -1;
     for (int i = 0; i < jd_nreq; i++) if (jd_req[i].waiting) return 0;
     int now = ticks(), best = -1;
     for (int i = 0; i < jd_ntimer; i++) {
@@ -966,7 +972,7 @@ static int jsdom_next_due(void) {
  * due, so a page whose interval is shorter than the work in it falls behind
  * rather than accumulating a backlog it can never run down. */
 static int jsdom_timers(void) {
-    if (!jd_open) return 0;
+    if (!jd_open || jd_spent()) return 0;
 
     int now = ticks();
     int ran = 0;

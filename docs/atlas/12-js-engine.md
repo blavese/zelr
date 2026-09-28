@@ -1151,7 +1151,7 @@ A manual diagnostic only. It prints `JSPROBE_DONE` and asserts nothing.
 - `a.length = N` reaches the same code for the same ranges. Growing `length` never updates `len`.
 - `js_index_of` accepts up to 10 digits and wraps indices modulo 2^32.
 
-**B8. After the memory cap, NULL dereferences crash the browser.**
+**B8. After the memory cap, NULL dereferences crash the browser.** (FIXED in 0.66.0: a 1 MiB spare past the cap for the statement already running, `js_find` with no key, and no more of the page's callbacks once it is spent. An allocation larger than the spare after the cap still returns NULL.)
 - `js_str` returns 0 at the cap, and `js_find` dereferences `key->hash` (`js.h:353`).
 - Unchecked call sites: `js_call` `jsrun.h:524` (the first thing every JS-function call does), `N_CALL` `:1596`, `instanceof` `:1446`, `js_rx_load` `:671-672`, `fn_held` `:575`, `nat_re_exec` `:725`, and `jd_prop_str` → `js_get` → `jd_host_get` (`name->len`).
 - `js_call`'s `arguments` array can be NULL and is passed to `js_arr_push` (`:542-543` → `js.h:425`).

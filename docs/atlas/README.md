@@ -95,6 +95,18 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.66.0: a page that uses up its memory no longer takes the browser with it
+
+- **JavaScript (12 §10 B8).** At the 24 MiB cap `js_alloc` returned NULL, and the places that use a string or a
+  property without asking (js_find's `key->hash` first) took the browser down. It still stops the script at the
+  cap, but lets the C already in a statement draw on a 1 MiB spare (`JS_MEM_SPARE`) to get back out, and
+  `js_find` takes a missing key as not found. jsdom then runs none of that page's handlers, timers or requests
+  (`jd_spent`), and does not wake the browser for them. Not covered: a single allocation after the cap larger
+  than the spare still returns NULL (the big ones, js_concat and friends, already check).
+- **Checks.** pagetest 85 (3 new): a page whose script fills an object until the cap stops with the memory message
+  and the program is still there, its click handler does not run, and it asks for no timer. With the spare, the
+  key guard and `jd_spent` taken out, pagetest itself was killed: "page fault at 0x4".
+
 ### 0.65.0: YouTube playlists and Shorts
 
 - **Sites (11).** `yt_videos` reads `shortsLockupViewModel` (the id from its `reelWatchEndpoint`, the words from
