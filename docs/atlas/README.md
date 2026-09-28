@@ -95,6 +95,23 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.63.0: Twitch's past broadcasts, their frames, and its search
+
+- **Twitch (11, sites.h).** A channel's page lists its last ten past broadcasts (`videos(first:10)`), each linked
+  to `/videos/<id>`, which is now a page of its own (`TW_VIDEO`): title, channel, category, views, length, day,
+  picture, and frames from it. Twitch's answer names a list of storyboard sheets (`seekPreviewsURL`, on
+  `*.cloudfront.net`); `site_twitch` fetches it into a buffer of its own and `twitch_frames` shows the smaller
+  quality's first, middle and last sheets, captioned. Every Twitch page carries a search box (`/search?term=`,
+  `TW_SEARCH`, `searchFor` channels): live ones as rows with what they stream, the rest as offline, with
+  followers. Only numbers for a broadcast id, only login characters for a login, only file-name characters for a
+  sheet, and only Twitch's servers for a list or a picture.
+- **Checks.** sitetest 92 (16 new): failed with the list's host check, the sheet-name check (alone: with the
+  quality choice also broken the high list, which has no bad name, was used), the choice of the smaller frames,
+  the broadcast id and login checks, a broadcast number made of anything, and a search term's quotes kept. The
+  base address's off-by-one (a character past its last slash) was caught by the first run. Not in sitecheck: a
+  broadcast's number does not last, and a search may find nobody live; both were read from the real Twitch by
+  hand (10 past broadcasts for a channel, 7 channels for "chess", a broadcast page with its sheet).
+
 ### 0.62.0: frames from a video, a start page, and JavaScript's strings and JSON
 
 - **Frames (11, sites.h `yt_frames`).** A watch page shows frames from the video from YouTube's storyboards

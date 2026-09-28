@@ -165,8 +165,48 @@ static const char TW_OFF_USER[] =
 static const char TW_NO_USER[] = "{\"data\":{\"user\":null},\"extensions\":{}}";
 static const char TW_NO_GAME[] = "{\"data\":{\"game\":null}}";
 
+/* A past broadcast, a channel with past broadcasts, a search, and the list
+   of a broadcast's frames. */
+static const char TW_VIDEO_ANSWER[] =
+    "{\"data\":{\"video\":{\"title\":\"Long <night>\",\"lengthSeconds\":7384,\"viewCount\":1234,"
+    "\"publishedAt\":\"2026-09-27T18:24:59Z\",\"owner\":{\"login\":\"some_one\",\"displayName\":\"SomeOne\"},"
+    "\"game\":{\"name\":\"Chess\"},"
+    "\"previewThumbnailURL\":\"https://static-cdn.jtvnw.net/cf_vods/x/thumb/thumb0-640x360.jpg\","
+    "\"seekPreviewsURL\":\"https://d2abc.cloudfront.net/abc_some_one_1/storyboards/99-info.json\"}}}";
+
+static const char TW_VIDEO_ELSEWHERE[] =
+    "{\"data\":{\"video\":{\"title\":\"x\",\"lengthSeconds\":60,\"viewCount\":1,"
+    "\"seekPreviewsURL\":\"https://evil.example/storyboards/99-info.json\"}}}";
+
+/* The larger frames listed first, so choosing the smaller is a choice. */
+static const char TW_SEEK_INFO[] =
+    "[{\"count\":120,\"width\":220,\"rows\":10,\"images\":[\"99-high-0.jpg\"],\"interval\":60,"
+    "\"quality\":\"high\",\"cols\":5,\"height\":124},"
+    "{\"count\":120,\"width\":160,\"rows\":10,\"images\":[\"99-low-0.jpg\",\"99-low-1.jpg\","
+    "\"../../evil.jpg\",\"99-low-2.jpg\"],\"interval\":60,\"quality\":\"low\",\"cols\":5,\"height\":90}]";
+
+static const char TW_CHANNEL_VIDEOS[] =
+    "{\"data\":{\"user\":{\"displayName\":\"Quiet\",\"description\":\"\",\"stream\":null,"
+    "\"lastBroadcast\":{\"title\":\"yesterday's\"},\"videos\":{\"edges\":["
+    "{\"node\":{\"id\":\"111\",\"title\":\"First VOD\",\"lengthSeconds\":3600,\"viewCount\":42,"
+    "\"publishedAt\":\"2026-09-20T10:00:00Z\","
+    "\"previewThumbnailURL\":\"https://static-cdn.jtvnw.net/cf_vods/y/thumb0-320x180.jpg\",\"game\":{\"name\":\"Go\"}}},"
+    "{\"node\":{\"id\":\"22\\\"x\",\"title\":\"bad id\",\"lengthSeconds\":1,\"viewCount\":1}},"
+    "{\"node\":{\"id\":\"333\",\"title\":\"Processing\",\"lengthSeconds\":60,\"viewCount\":0,"
+    "\"previewThumbnailURL\":\"https://vod-secure.twitch.tv/_404/404_processing_320x180.png\",\"game\":null}}"
+    "]}}}}";
+
+static const char TW_FOUND[] =
+    "{\"data\":{\"searchFor\":{\"channels\":{\"items\":["
+    "{\"login\":\"chess\",\"displayName\":\"Chess\",\"followers\":{\"totalCount\":1274052},\"stream\":null},"
+    "{\"login\":\"blitz\",\"displayName\":\"Blitz\",\"followers\":{\"totalCount\":241133},"
+    "\"stream\":{\"viewersCount\":1037,\"title\":\"games <live>\",\"game\":{\"name\":\"Chess\"},"
+    "\"previewImageURL\":\"https://static-cdn.jtvnw.net/previews-ttv/live_user_blitz-320x180.jpg\"}},"
+    "{\"login\":\"bad\\\"login\",\"displayName\":\"x\",\"followers\":{\"totalCount\":1},\"stream\":null}"
+    "]}}}}";
+
 static int tw(int kind, const char *name, const char *data) {
-    return twitch_page(kind, name, data, w_len(data), page, (int)sizeof(page));
+    return twitch_page(kind, name, data, w_len(data), 0, 0, page, (int)sizeof(page));
 }
 
 static int twq(const char *address, char *query, int cap, char *name, int ncap) {
@@ -320,6 +360,18 @@ static void checks(void) {
         okn("so one made of nothing else asks nothing", k == TW_NONE, k);
         k = twq("https://www.example.com/", q, sizeof(q), name, sizeof(name));
         okn("and another site is not Twitch", k == TW_NONE, k);
+        k = twq("https://www.twitch.tv/videos/2885710155", q, sizeof(q), name, sizeof(name));
+        ok("a past broadcast asks for that broadcast and its frames",
+           k == TW_VIDEO && has(q, "video(id:\"2885710155\")") && has(q, "seekPreviewsURL"));
+        k = twq("https://www.twitch.tv/videos/12%22x", q, sizeof(q), name, sizeof(name));
+        okn("and only by a number made of what numbers are made of", k == TW_NONE, k);
+        k = twq("https://www.twitch.tv/search?term=chess+%22club%22", q, sizeof(q), name, sizeof(name));
+        ok("a search asks for channels by the words, with nothing that could close them",
+           k == TW_SEARCH && has(q, "searchFor(userQuery:\"chess club\"") && count(q, "\"") == 4);
+        k = twq("https://www.twitch.tv/search", q, sizeof(q), name, sizeof(name));
+        ok("and with no words asks nothing", k == TW_SEARCH && !q[0]);
+        k = twq("https://www.twitch.tv/some_one", q, sizeof(q), name, sizeof(name));
+        ok("a channel asks for its past broadcasts too", k == TW_CHANNEL && has(q, "videos(first:10)"));
 
         static char body[2048];
         twitch_body("query{game(name:\"a\\b\")}", body, sizeof(body));
@@ -359,6 +411,44 @@ static void checks(void) {
         n = tw(TW_CHANNEL, "nobody_here", TW_NO_USER);
         ok("a name Twitch has never heard of says that",
            n > 0 && has(page, "<h1>nobody_here</h1>") && has(page, "knows nobody by that name"));
+        ok("every Twitch page has a search box that searches Twitch",
+           has(page, "<form action=\"/search\" method=\"get\">") && has(page, "name=\"term\""));
+
+        n = tw(TW_CHANNEL, "quiet", TW_CHANNEL_VIDEOS);
+        ok("a channel lists its past broadcasts, linked to their own pages",
+           n > 0 && has(page, "<h2>past broadcasts</h2>") && has(page, "<a href=\"/videos/111\">")
+           && has(page, "Go &middot; 42 views &middot; 1:00:00 &middot; 2026-09-20"));
+        ok("but not one whose number would close its link, nor a picture from elsewhere",
+           !has(page, "bad id") && has(page, "/videos/333") && !has(page, "vod-secure"));
+
+        n = twitch_page(TW_VIDEO, "99", TW_VIDEO_ANSWER, w_len(TW_VIDEO_ANSWER),
+                        TW_SEEK_INFO, w_len(TW_SEEK_INFO), page, (int)sizeof(page));
+        ok("a past broadcast has a page of its own",
+           n > 0 && has(page, "<h1>Long &lt;night&gt;</h1>") && has(page, "thumb0-640x360.jpg")
+           && has(page, "<b><a href=\"/some_one\">SomeOne</a></b> &middot; Chess &middot; 1,234 views"
+                        " &middot; 2:03:04 &middot; 2026-09-27"));
+        ok("with frames from it, from the smaller of Twitch's storyboards",
+           has(page, "<h2>frames from the broadcast</h2>") && has(page, "One every 60 seconds")
+           && has(page, "https://d2abc.cloudfront.net/abc_some_one_1/storyboards/99-low-0.jpg")
+           && !has(page, "99-high-0.jpg"));
+        ok("the first, middle and last sheets, each with the stretch it covers",
+           has(page, "99-low-1.jpg") && has(page, "99-low-2.jpg") && count(page, "storyboards/") == 3
+           && has(page, "0:00 to 49:00") && has(page, "50:00 to 1:39:00") && has(page, "1:40:00 to 1:59:00"));
+        ok("and never a sheet whose name climbs out of the list's own place", !has(page, "evil"));
+        n = twitch_page(TW_VIDEO, "98", TW_VIDEO_ELSEWHERE, w_len(TW_VIDEO_ELSEWHERE),
+                        TW_SEEK_INFO, w_len(TW_SEEK_INFO), page, (int)sizeof(page));
+        ok("nor frames listed anywhere but Twitch's own video servers",
+           n > 0 && !has(page, "frames from the broadcast") && !has(page, "evil.example"));
+
+        n = tw(TW_SEARCH, "chess", TW_FOUND);
+        ok("a search lists the channels it found, live ones with what they are streaming",
+           n > 0 && has(page, "<a href=\"/blitz\"><b>Blitz</b></a><br><small>live: games &lt;live&gt;"
+                            " &middot; Chess<br>1,037 watching &middot; 241,133 followers")
+           && has(page, "live_user_blitz-320x180.jpg"));
+        ok("and the others as offline", has(page, "<a href=\"/chess\"><b>Chess</b></a> <small>offline"
+                                                  " &middot; 1,274,052 followers"));
+        ok("but none whose login would close its link", !has(page, "bad"));
+
         n = tw(TW_CATEGORY, "Nothing", TW_NO_GAME);
         ok("and a category with nobody in it says that", n > 0 && has(page, "nobody is live here just now"));
     }
@@ -455,7 +545,7 @@ static int live(const char *address) {
     puts(" pictures ");
     putn(n > 0 ? count(page, "<img ") : 0);
     puts(" frames ");
-    putn(n > 0 ? count(page, "/sb/") : 0);
+    putn(n > 0 ? count(page, "/sb/") + count(page, "/storyboards/") : 0);
     putc('\n');
     /* The first few titles, so a run can be read by a person as well. */
     int shown = 0, len = n > 0 ? n : 0;

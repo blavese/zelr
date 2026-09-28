@@ -787,7 +787,7 @@ static inline int site_is_twitch(const url_t *u) {
 #define TWITCH_REPLY (128 * 1024)
 
 /* What a Twitch address is a page of. */
-enum { TW_NONE, TW_LIVE, TW_CATEGORIES, TW_CATEGORY, TW_CHANNEL };
+enum { TW_NONE, TW_LIVE, TW_CATEGORIES, TW_CATEGORY, TW_CHANNEL, TW_VIDEO, TW_SEARCH };
 
 /* The path without its query or a slash at the end. */
 static inline void twitch_path(const url_t *u, char *path, int cap) {
@@ -845,13 +845,37 @@ static inline int twitch_query(const url_t *u, char *query, int cap, char *name,
             "previewImageURL(width:320,height:180)}}}}}");
         return TW_CATEGORY;
     }
+    /* Twitch's own address for a search. With nothing to look for there is
+       nothing to ask, and the page is only the box. */
+    if (w_same_fold(path, "/search")) {
+        static char term[256];
+        site_param(u->path, "term", term, sizeof(term));
+        twitch_quote(term, name, ncap);
+        if (name[0])
+            twitch_join(query, cap, "query{searchFor(userQuery:\"", name, "\",platform:\"web\"){channels{"
+                "items{login displayName followers{totalCount} stream{viewersCount title game{name} "
+                "previewImageURL(width:320,height:180)}}}}}");
+        return TW_SEARCH;
+    }
+    /* A past broadcast, by its number. */
+    if (w_starts_fold(path, "/videos/")) {
+        char id[24];
+        int il = w_len(path + 8);
+        if (il <= 0 || il >= (int)sizeof(id) || site_ident(path + 8, id, sizeof(id), "") != il)
+            return TW_NONE;
+        w_copy(name, ncap, id, ncap);
+        twitch_join(query, cap, "query{video(id:\"", id, "\"){title lengthSeconds viewCount publishedAt "
+            "owner{login displayName} game{name} previewThumbnailURL(width:640,height:360) seekPreviewsURL}}");
+        return TW_VIDEO;
+    }
     /* A channel, and whatever page of it: its name is the first part. Only
        what a login is made of, so a name cannot close the quotes it is
        written into and ask something else. */
     if (!site_ident(path + 1, name, ncap, "_")) return TW_NONE;
     twitch_join(query, cap, "query{user(login:\"", name, "\"){displayName description stream{title "
         "viewersCount game{name} previewImageURL(width:640,height:360)} "
-        "lastBroadcast{title}}}");
+        "lastBroadcast{title} videos(first:10){edges{node{id title lengthSeconds viewCount publishedAt "
+        "previewThumbnailURL(width:320,height:180) game{name}}}}}}");
     return TW_CHANNEL;
 }
 
@@ -926,24 +950,291 @@ static inline int twitch_streams(site_page *p, const char *s, int n) {
     return shown;
 }
 
-/* The page, from the API's answer to twitch_query's question. */
-static inline int twitch_page(int kind, const char *name, const char *s, int n, char *out, int cap) {
+/* The next object in an array, from `at` (just inside the bracket or just
+   after the last one): its start, with `at` moved past it; -1 at the end. */
+static inline int sj_next_item(const char *s, int *at, int n) {
+    int i = *at;
+    while (i < n && (s[i] == ' ' || s[i] == ',' || s[i] == '\n' || s[i] == '\r' || s[i] == '\t')) i++;
+    if (i >= n || s[i] != '{') return -1;
+    *at = sj_skip(s, i, n);
+    return i;
+}
+
+/* A date as its day, which is the part of 2026-09-27T18:24:59Z worth reading. */
+static inline void sp_day(site_page *p, const char *iso) {
+    char day[12];
+    int k = 0;
+    while (k < 10 && ((iso[k] >= '0' && iso[k] <= '9') || iso[k] == '-')) { day[k] = iso[k]; k++; }
+    day[k] = 0;
+    sp_raw(p, day);
+}
+
+/* A channel's past broadcasts, one row each, linked to their own pages. */
+static inline int twitch_videos(site_page *p, const char *s, int from, int to) {
+    static char id[32], raw[32], title[YT_FIELD], len[24], views[24], when[40], pic[256], game[128];
+    int shown = 0;
+    for (int at = site_search(s, from, to, "\"node\":{"); at >= 0 && at < to;
+         at = site_search(s, at + 1, to, "\"node\":{")) {
+        int obj = sj_find(s, at, to, "node");
+        int end = sj_skip(s, obj, to);
+        sj_field(s, obj, to, "id", raw, sizeof(raw));
+        if (!site_ident(raw, id, sizeof(id), "") || w_len(id) != w_len(raw)) continue;
+        sj_field(s, obj, to, "title", title, sizeof(title));
+        sj_field(s, obj, to, "lengthSeconds", len, sizeof(len));
+        sj_field(s, obj, to, "viewCount", views, sizeof(views));
+        sj_field(s, obj, to, "publishedAt", when, sizeof(when));
+        sj_field(s, obj, to, "previewThumbnailURL", pic, sizeof(pic));
+        game[0] = 0;
+        int g = sj_find(s, obj, end, "game");
+        if (g >= 0 && s[g] == '{') sj_field(s, g, to, "name", game, sizeof(game));
+
+        sp_row_open(p, 240);
+        sp_raw(p, "<a href=\"/videos/");
+        sp_raw(p, id);
+        sp_raw(p, "\">");
+        twitch_picture(p, pic, 240, 135);
+        sp_raw(p, "</a>");
+        sp_row_words(p);
+        sp_raw(p, "<a href=\"/videos/");
+        sp_raw(p, id);
+        sp_raw(p, "\"><b>");
+        sp_text(p, title[0] ? title : id);
+        sp_raw(p, "</b></a><br><small>");
+        if (game[0]) { sp_text(p, game); sp_raw(p, " &middot; "); }
+        sp_num(p, site_atoll(views));
+        sp_raw(p, " views &middot; ");
+        yt_duration(p, site_atoll(len));
+        if (when[0]) { sp_raw(p, " &middot; "); sp_day(p, when); }
+        sp_raw(p, "</small>");
+        sp_row_close(p);
+        shown++;
+    }
+    return shown;
+}
+
+/* Frames from a past broadcast. Twitch keeps them for scrubbing too: its
+   answer names a list (seekPreviewsURL) of sheets of frames beside it, each
+   so many columns and rows of frames an interval apart. The list is fetched
+   by site_twitch and handed in here as `info`; the sheets are named relative
+   to it. Only a list on Twitch's own video servers is used, only sheet names
+   made of what file names are made of, and three sheets at most -- the
+   first, the middle and the last. */
+static inline int twitch_seek_base(const char *url, char *base, int cap) {
+    base[0] = 0;
+    if (!w_starts_fold(url, "https://")) return 0;
+    const char *host = url + 8, *slash = host;
+    while (*slash && *slash != '/') slash++;
+    int hl = (int)(slash - host);
+    const char *tail = ".cloudfront.net";
+    int tl = w_len(tail);
+    if (hl <= tl || !w_starts_fold(host + hl - tl, tail)) return 0;
+    int last = -1;
+    for (int i = 0; url[i]; i++) if (url[i] == '/') last = i;
+    if (last < 8 + hl || last + 1 >= cap) return 0;
+    w_copy(base, cap, url, last + 1);           /* up to and with the slash */
+    return last + 1;
+}
+
+static inline void twitch_frames(site_page *p, const char *base, const char *info, int n) {
+    if (!info || n <= 0 || !base[0]) return;
+    /* The list is one entry per quality; the smaller frames are wanted. */
+    int at = 0;
+    while (at < n && info[at] != '[') at++;
+    at++;
+    int pick = -1, first = -1;
+    for (int obj; (obj = sj_next_item(info, &at, n)) >= 0;) {
+        char q[16];
+        if (first < 0) first = obj;
+        sj_field(info, obj, n, "quality", q, sizeof(q));
+        if (w_same(q, "low")) { pick = obj; break; }
+    }
+    if (pick < 0) pick = first;
+    if (pick < 0) return;
+    char num[24];
+    sj_field(info, pick, n, "count", num, sizeof(num));
+    int count = (int)site_atoll(num);
+    sj_field(info, pick, n, "cols", num, sizeof(num));
+    int cols = (int)site_atoll(num);
+    sj_field(info, pick, n, "rows", num, sizeof(num));
+    int rows = (int)site_atoll(num);
+    sj_field(info, pick, n, "interval", num, sizeof(num));
+    int every = (int)site_atoll(num);
+    int end = sj_skip(info, pick, n);
+    int imgs = sj_find(info, pick, end, "images");
+    if (count <= 0 || cols <= 0 || rows <= 0 || every <= 0 || imgs < 0 || info[imgs] != '[') return;
+
+    /* The sheet names, in order. */
+    static char names[64][96];
+    int nn = 0, ie = sj_skip(info, imgs, n);
+    for (int q = imgs + 1; q < ie && nn < 64;) {
+        while (q < ie && info[q] != '"') q++;
+        if (q >= ie) break;
+        char raw[96];
+        int rl = sj_str(info, q, n, raw, sizeof(raw));
+        if (rl > 0 && site_ident(raw, names[nn], 96, "-_.") == rl && raw[0] != '.') nn++;
+        q = sj_skip(info, q, n);
+    }
+    if (!nn) return;
+    int per = cols * rows;
+    int pickn[3] = { 0, nn / 2, nn - 1 };
+    sp_raw(p, "<h2>frames from the broadcast</h2>\n<p><small>One every ");
+    sp_num(p, every);
+    sp_raw(p, every == 1 ? " second" : " seconds");
+    sp_raw(p, ", from Twitch's storyboards.</small></p>\n");
+    for (int k = 0; k < 3; k++) {
+        if (k && pickn[k] == pickn[k - 1]) continue;
+        int sheet = pickn[k];
+        int f0 = sheet * per, f1 = f0 + per - 1;
+        if (f1 > count - 1) f1 = count - 1;
+        sp_raw(p, "<p><img src=\"");
+        sp_text(p, base);
+        sp_raw(p, names[sheet]);
+        sp_raw(p, "\" alt=\"\"><br><small>");
+        yt_duration(p, (long long)f0 * every);
+        sp_raw(p, " to ");
+        yt_duration(p, (long long)f1 * every);
+        sp_raw(p, "</small></p>\n");
+    }
+}
+
+/* The page, from the API's answer to twitch_query's question, and for a past
+   broadcast the list of its frames (`info`, or nothing). */
+static inline int twitch_page(int kind, const char *name, const char *s, int n,
+                              const char *info, int info_n, char *out, int cap) {
     site_page p = { out, 0, cap };
     const char *NOTE = "<p><small>Read by zelr from Twitch's public API, because Twitch's page is "
                        "an application this browser cannot run. A stream itself is H.264 video in "
                        "pieces (HLS), and this browser has no video decoder to play it.</small></p>\n";
-    const char *NAV = "<p><a href=\"/\">live now</a> &middot; <a href=\"/directory\">categories</a></p>\n";
+    const char *NAV = "<form action=\"/search\" method=\"get\"><p><a href=\"/\">live now</a> &middot; "
+                      "<a href=\"/directory\">categories</a> &middot; <input type=\"text\" name=\"term\" "
+                      "size=\"24\"> <input type=\"submit\" value=\"search\"></p></form>\n";
 
     sp_raw(&p, "<html><head><title>");
     if (kind == TW_LIVE) sp_raw(&p, "Twitch");
     else if (kind == TW_CATEGORIES) sp_raw(&p, "Categories - Twitch");
-    else { sp_text(&p, name); sp_raw(&p, " - Twitch"); }
+    else if (kind == TW_SEARCH) { sp_text(&p, name[0] ? name : "search"); sp_raw(&p, " - Twitch"); }
+    else if (kind != TW_VIDEO) { sp_text(&p, name); sp_raw(&p, " - Twitch"); }
+    else {
+        static char vt[YT_FIELD];
+        int v = sj_find(s, 0, n, "video");
+        vt[0] = 0;
+        if (v >= 0 && s[v] == '{') sj_field(s, v, n, "title", vt, sizeof(vt));
+        sp_text(&p, vt[0] ? vt : name);
+        sp_raw(&p, " - Twitch");
+    }
     sp_raw(&p, "</title></head><body>\n<h1>");
     if (kind == TW_LIVE) sp_raw(&p, "Twitch: live now");
     else if (kind == TW_CATEGORIES) sp_raw(&p, "Twitch: categories");
     else if (kind == TW_CATEGORY) sp_text(&p, name);
 
-    if (kind == TW_LIVE || kind == TW_CATEGORY) {
+    if (kind == TW_SEARCH) {
+        sp_raw(&p, "Twitch: search</h1>\n");
+        sp_raw(&p, NAV);
+        int items = n > 0 ? sj_find(s, 0, n, "items") : -1;
+        int shown = 0;
+        if (items >= 0 && s[items] == '[') {
+            static char raw[64], login[64], who[128], fol[24], title[YT_FIELD], game[128], pic[256], viewers[24];
+            int at = items + 1, ie = sj_skip(s, items, n);
+            for (int obj; (obj = sj_next_item(s, &at, ie)) >= 0;) {
+                int oe = sj_skip(s, obj, ie);
+                sj_field(s, obj, oe, "login", raw, sizeof(raw));
+                if (!site_ident(raw, login, sizeof(login), "_") || w_len(login) != w_len(raw)) continue;
+                sj_field(s, obj, oe, "displayName", who, sizeof(who));
+                int f = sj_find(s, obj, oe, "followers");
+                fol[0] = 0;
+                if (f >= 0 && s[f] == '{') sj_field(s, f, oe, "totalCount", fol, sizeof(fol));
+                int st = sj_find(s, obj, oe, "stream");
+                if (st >= 0 && s[st] == '{') {
+                    int se = sj_skip(s, st, oe);
+                    sj_field(s, st, se, "title", title, sizeof(title));
+                    sj_field(s, st, se, "viewersCount", viewers, sizeof(viewers));
+                    sj_field(s, st, se, "previewImageURL", pic, sizeof(pic));
+                    game[0] = 0;
+                    int g = sj_find(s, st, se, "game");
+                    if (g >= 0 && s[g] == '{') sj_field(s, g, se, "name", game, sizeof(game));
+                    sp_row_open(&p, 240);
+                    sp_raw(&p, "<a href=\"/");
+                    sp_raw(&p, login);
+                    sp_raw(&p, "\">");
+                    twitch_picture(&p, pic, 240, 135);
+                    sp_raw(&p, "</a>");
+                    sp_row_words(&p);
+                    sp_raw(&p, "<a href=\"/");
+                    sp_raw(&p, login);
+                    sp_raw(&p, "\"><b>");
+                    sp_text(&p, who[0] ? who : login);
+                    sp_raw(&p, "</b></a><br><small>live: ");
+                    sp_text(&p, title);
+                    if (game[0]) { sp_raw(&p, " &middot; "); sp_text(&p, game); }
+                    sp_raw(&p, "<br>");
+                    sp_num(&p, site_atoll(viewers));
+                    sp_raw(&p, " watching &middot; ");
+                    sp_num(&p, site_atoll(fol));
+                    sp_raw(&p, " followers</small>");
+                    sp_row_close(&p);
+                } else {
+                    sp_raw(&p, "<p><a href=\"/");
+                    sp_raw(&p, login);
+                    sp_raw(&p, "\"><b>");
+                    sp_text(&p, who[0] ? who : login);
+                    sp_raw(&p, "</b></a> <small>offline &middot; ");
+                    sp_num(&p, site_atoll(fol));
+                    sp_raw(&p, " followers</small></p>\n");
+                }
+                shown++;
+            }
+        }
+        if (!name[0]) sp_raw(&p, "<p>Type what to look for in the box above.</p>\n");
+        else if (!shown) sp_raw(&p, "<p>Twitch found no channel by that name.</p>\n");
+        sp_raw(&p, NOTE);
+    } else if (kind == TW_VIDEO) {
+        static char vt[YT_FIELD], raw[64], login[64], who[128], game[128], pic[256], len[24], views[24];
+        static char when[40], seek[512], base[512];
+        int v = sj_find(s, 0, n, "video");
+        if (v < 0 || s[v] != '{') {
+            sp_raw(&p, "a past broadcast</h1>\n");
+            sp_raw(&p, NAV);
+            sp_raw(&p, "<p>Twitch has no past broadcast by that number.</p>\n");
+        } else {
+            int ve = sj_skip(s, v, n);
+            sj_field(s, v, ve, "title", vt, sizeof(vt));
+            sj_field(s, v, ve, "lengthSeconds", len, sizeof(len));
+            sj_field(s, v, ve, "viewCount", views, sizeof(views));
+            sj_field(s, v, ve, "publishedAt", when, sizeof(when));
+            sj_field(s, v, ve, "previewThumbnailURL", pic, sizeof(pic));
+            sj_field(s, v, ve, "seekPreviewsURL", seek, sizeof(seek));
+            login[0] = who[0] = game[0] = 0;
+            int o = sj_find(s, v, ve, "owner");
+            if (o >= 0 && s[o] == '{') {
+                sj_field(s, o, ve, "login", raw, sizeof(raw));
+                if (site_ident(raw, login, sizeof(login), "_") != w_len(raw)) login[0] = 0;
+                sj_field(s, o, ve, "displayName", who, sizeof(who));
+            }
+            int g = sj_find(s, v, ve, "game");
+            if (g >= 0 && s[g] == '{') sj_field(s, g, ve, "name", game, sizeof(game));
+            sp_text(&p, vt[0] ? vt : name);
+            sp_raw(&p, "</h1>\n");
+            sp_raw(&p, NAV);
+            sp_raw(&p, "<p>");
+            twitch_picture(&p, pic, 640, 360);
+            sp_raw(&p, "</p>\n<p>");
+            if (login[0]) {
+                sp_raw(&p, "<b><a href=\"/");
+                sp_raw(&p, login);
+                sp_raw(&p, "\">");
+                sp_text(&p, who[0] ? who : login);
+                sp_raw(&p, "</a></b> &middot; ");
+            }
+            if (game[0]) { sp_text(&p, game); sp_raw(&p, " &middot; "); }
+            sp_num(&p, site_atoll(views));
+            sp_raw(&p, " views &middot; ");
+            yt_duration(&p, site_atoll(len));
+            if (when[0]) { sp_raw(&p, " &middot; "); sp_day(&p, when); }
+            sp_raw(&p, "</p>\n");
+            sp_raw(&p, NOTE);
+            if (twitch_seek_base(seek, base, sizeof(base))) twitch_frames(&p, base, info, info_n);
+        }
+    } else if (kind == TW_LIVE || kind == TW_CATEGORY) {
         sp_raw(&p, "</h1>\n");
         sp_raw(&p, NAV);
         sp_raw(&p, NOTE);
@@ -1022,6 +1313,15 @@ static inline int twitch_page(int kind, const char *name, const char *s, int n, 
                 sp_raw(&p, "</p>\n");
             }
             if (desc[0]) { sp_raw(&p, "<p>"); sp_text(&p, desc); sp_raw(&p, "</p>\n"); }
+            int vids = sj_find(s, user, ue, "videos");
+            if (vids >= 0 && s[vids] == '{') {
+                int at = p.n;
+                sp_raw(&p, "<h2>past broadcasts</h2>\n");
+                if (!twitch_videos(&p, s, vids, sj_skip(s, vids, n))) {
+                    p.n = at;                       /* a heading over nothing says nothing */
+                    p.out[p.n] = 0;
+                }
+            }
         }
         sp_raw(&p, NOTE);
     }
@@ -1050,6 +1350,7 @@ static inline int site_twitch(const url_t *u, char *out, int cap) {
     static char reply_buf[TWITCH_REPLY];
     int kind = twitch_query(u, query, sizeof(query), name, sizeof(name));
     if (kind == TW_NONE) return 0;
+    if (!query[0]) return twitch_page(kind, name, "", 0, 0, 0, out, cap);
     twitch_body(query, json, sizeof(json));
 
     url_t api;
@@ -1062,5 +1363,25 @@ static inline int site_twitch(const url_t *u, char *out, int cap) {
     web_extra = 0;
     if (rc < 0) return rc;
     if (rc != 200) return WEB_ERR_EMPTY;
-    return twitch_page(kind, name, r.body, r.len, out, cap);
+
+    /* A past broadcast's list of frames, which is a second question to a
+       second server: asked only when the list is where it should be. */
+    static char info_buf[32 * 1024], seek[512], base[512];
+    const char *info = 0;
+    int info_n = 0;
+    if (kind == TW_VIDEO) {
+        int v = sj_find(r.body, 0, r.len, "video");
+        if (v >= 0 && r.body[v] == '{') {
+            sj_field(r.body, v, r.len, "seekPreviewsURL", seek, sizeof(seek));
+            url_t su;
+            response_t sr;
+            if (twitch_seek_base(seek, base, sizeof(base)) && url_parse(seek, &su)) {
+                /* The answer so far is in reply_buf, which this fetch must
+                   not touch: it goes into a buffer of its own. */
+                int src = web_get(&su, info_buf, (int)sizeof(info_buf), &sr);
+                if (src == 200) { info = sr.body; info_n = sr.len; }
+            }
+        }
+    }
+    return twitch_page(kind, name, r.body, r.len, info, info_n, out, cap);
 }
