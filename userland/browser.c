@@ -888,6 +888,47 @@ static void number_into(char *out, int v) {
  */
 #define SEARCH_PREFIX "https://lite.duckduckgo.com/lite/?q="
 
+/* --- where it starts ------------------------------------------------------
+ *
+ * A page of its own. The browser used to open on example.com, which is a page
+ * about being an example, and on a machine with no network it opened on an
+ * error saying so. This one needs nothing from outside: a search box, and the
+ * sites this browser does well, each said plainly -- YouTube and Twitch are
+ * listed and not played, and that is written next to them rather than found
+ * out. */
+#define START_ADDRESS "about:start"
+
+static void show_start(int width) {
+    static const char PAGE_START[] =
+        "<html><head><title>start</title><style>"
+        "body{padding:22px 30px;max-width:760px}"
+        "h1{font-size:1.7em;color:#333;margin-bottom:0.5em}"
+        "h2{font-size:1.15em;color:#444;margin-top:1.4em}"
+        "li{margin:0.45em 0}small{color:#666}"
+        "</style></head><body>"
+        "<h1>where to?</h1>"
+        "<form action=\"https://lite.duckduckgo.com/lite/\" method=\"get\">"
+        "<input type=\"text\" name=\"q\" size=\"44\"> <input type=\"submit\" value=\"search\"></form>"
+        "<p><small>or type an address, or words to look for, into the bar above</small></p>"
+        "<h2>sites</h2><ul>"
+        "<li><a href=\"https://www.youtube.com/results?search_query=music\">YouTube</a> "
+        "<small>searches, videos and channels, read from YouTube's own data; videos are "
+        "listed with frames from them, not played</small></li>"
+        "<li><a href=\"https://www.twitch.tv/\">Twitch</a> "
+        "<small>who is live, the categories and the channels, from Twitch's API; streams "
+        "are listed, not played</small></li>"
+        "<li><a href=\"https://en.wikipedia.org/wiki/Special:Random\">Wikipedia</a> "
+        "<small>an article at random</small></li>"
+        "<li><a href=\"https://news.ycombinator.com/\">Hacker News</a></li>"
+        "<li><a href=\"https://lite.duckduckgo.com/lite/\">DuckDuckGo</a> "
+        "<small>where searches go, Google's included</small></li>"
+        "<li><a href=\"https://example.com/\">example.com</a></li>"
+        "</ul></body></html>";
+    int fetched, skipped;
+    build(PAGE_START, (int)sizeof(PAGE_START) - 1, width, 0, &fetched, &skipped);
+    scroll = 0;
+}
+
 /* What a page read another way (sites.h) is built from: YouTube's pages are
    a megabyte and a half of data around a few kilobytes of page, more than
    src holds, and they are the only pages that big worth reading whole, so
@@ -913,6 +954,15 @@ static void build_noted(const char *note, const char *html, int len, int width,
 }
 
 static void load(const char *address, int width, int keep_scroll) {
+    if (w_same_fold(address, START_ADDRESS)) {
+        show_start(width);
+        char shown[16];
+        number_into(shown, page.nlinks);
+        say("the start page, which needs no network: ", shown);
+        say_more(" links");
+        return;
+    }
+
     url_t u;
     if (!url_parse(address, &u)) {
         show_message("Not an address", "That is not something this can go to.",
@@ -1392,7 +1442,8 @@ static void set_search(const char *what) {
 
 /* What was typed: somewhere to go, or something to look for. */
 static void go_or_search(const char *typed) {
-    if (url_looks_like_address(typed)) set_address(typed);
+    if (w_same_fold(typed, START_ADDRESS)) set_address(START_ADDRESS);
+    else if (url_looks_like_address(typed)) set_address(typed);
     else set_search(typed);
 }
 
@@ -1442,7 +1493,7 @@ int main(int argc, char **argv) {
         joined[w] = 0;
         go_or_search(joined);
     } else {
-        set_address("https://example.com/");
+        set_address(START_ADDRESS);
     }
     push_history(address);
 
@@ -1659,7 +1710,10 @@ int main(int argc, char **argv) {
                every relative link on the page is resolved against a page
                nobody is looking at. */
             char landed[URL_TEXT];
-            url_text(&here, landed, sizeof(landed));
+            if (w_same_fold(address, START_ADDRESS))
+                w_copy(landed, sizeof(landed), START_ADDRESS, sizeof(landed));
+            else
+                url_text(&here, landed, sizeof(landed));
             set_address(landed);
             if (hist_at >= 0) w_copy(hist[hist_at].text, URL_TEXT, landed,
                                      URL_TEXT);

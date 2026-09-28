@@ -510,7 +510,7 @@ edge), `sj_str` (escapes to UTF-8, surrogate pairs joined), `sj_text` (string, `
 Everything written into markup goes through `sp_text` (`& < > "` escaped); ids and logins through `site_ident`
 (only their own characters, so a value cannot close its attribute or GraphQL string); pictures only from
 `i.ytimg.com` and `static-cdn.jtvnw.net`. Rows are flex rows (`sp_row_open`), since tables lay out as blocks.
-browser.c: `load()` runs the Twitch reader instead of a fetch; fetches a YouTube page into `SITE_SRC_MAX` (4 MiB,
+Since 0.62.0 a watch page also shows storyboard sheets (`yt_frames`), and the browser opens on `about:start` (`show_start`, no network). browser.c: `load()` runs the Twitch reader instead of a fetch; fetches a YouTube page into `SITE_SRC_MAX` (4 MiB,
 malloc'd and freed) and builds `site_youtube`'s page when it returns one; prints `browser: <address> -- <title> --
 <status>` after each page.
 

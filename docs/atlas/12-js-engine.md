@@ -1157,7 +1157,7 @@ A manual diagnostic only. It prints `JSPROBE_DONE` and asserts nothing.
 - `js_call`'s `arguments` array can be NULL and is passed to `js_arr_push` (`:542-543` → `js.h:425`).
 - jsdom resets `sig` to OK before every timer, listener and onload (`jsdom.h:339`, `356`, `877`, `907`). A long-running page that has used its 24 MiB therefore crashes the browser process on its next callback instead of reporting the error.
 
-**B9. Unbounded C recursion overflows the 1 MiB stack.**
+**B9. Unbounded C recursion overflows the 1 MiB stack.** (Cyclic arrays and JSON FIXED in 0.62.0: a guard of the arrays being joined, and JSON's own stack of open objects; the parser's depth is still open.)
 - `js_to_str` on a cyclic array recurses before allocating anything (`jsrun.h:252-265`): `var a=[1]; a[0]=a; ""+a`.
 - `JSON.stringify` of a cyclic object (`:2217-2269`) keeps recursing once memory is exhausted, because `js_concat` returns the old string on failure.
 - Parser recursion has no depth limit.
@@ -1166,7 +1166,7 @@ A manual diagnostic only. It prints `JSPROBE_DONE` and asserts nothing.
 - Truncates results silently at 16,383 bytes.
 - Is not reentrant: a replacement callback that itself does a regex replace overwrites the outer call's prefix.
 
-**B11. String methods with wrong semantics.**
+**B11. String methods with wrong semantics.** (FIXED in 0.62.0, jstest "substring takes its ends in either order" and 16 more: all four items below, plus lastIndexOf, endsWith, padStart/padEnd, trimStart/trimEnd, at and concat added.)
 - `replaceAll` is mapped to `replace` (`jsrun.h:1108`), so with a string pattern it replaces only the first match.
 - `substring` and `substr` are both `slice` (`:850-852`, `:1105`): `"hello".substring(3,1)` → `""` (JS `"el"`); `"hello".substr(1,3)` → `"el"` (JS `"ell"`).
 - `indexOf`, `includes` and `startsWith` ignore their position argument.
@@ -1183,7 +1183,7 @@ A manual diagnostic only. It prints `JSPROBE_DONE` and asserts nothing.
 
 **B14. FIXED in 0.43.0 (insertion-order list; jstest, six cases). Key order is hash-bucket order**, not insertion order, for for-in, `Object.keys`/`values` and `JSON.stringify` (§3.1 has examples).
 
-**B15. JSON problems.**
+**B15. JSON problems.** (FIXED in 0.62.0: a growing buffer, every control character escaped, NaN and the infinities as null; parse strict, with `\u` and surrogate pairs, throwing SyntaxError.)
 - `stringify`: emits raw `\r` and control characters, writes `undefined`/`NaN`/`Infinity` as text, and is O(S²) in region memory, so about 7 KB of output exhausts the page.
 - `parse`: does not decode `\u`, never throws on malformed input, and accepts any word starting with t/f/n (`jsrun.h:2217-2376`).
 
@@ -1225,11 +1225,11 @@ A manual diagnostic only. It prints `JSPROBE_DONE` and asserts nothing.
 **B21. FIXED in 0.43.0 (error objects, six constructors; jstest, seven cases). Poor diagnostics for errors.** Engine errors are thrown as strings, so `e.message` is undefined. `throw new Error("x")` reports "this is not a function" (Error is undefined, and `N_NEW` never names the callee) (`jsrun.h:1636-1654`).
 
 **B22. var, let and const semantics.**
-- `var x;` resets `x` to undefined (`jsrun.h:1799-1806`).
+- `var x;` resets `x` to undefined (`jsrun.h:1799-1806`). FIXED in 0.62.0 (`N_VAR.d` marks `var`).
 - There is no `var` hoisting, so assigning before the declaration from a nested function creates a global.
 - `let`/`const` are not block-scoped, and `const` can be reassigned. The comment at `jsparse.h:1020-1022` admits this; the header at `js.h:17` implies full support.
 
-**B23. `this` is undefined at top level and in plain calls** (`jsrun.h:2547`). UMD wrappers `(function(root){…})(this)` therefore fail with "cannot set X of undefined".
+**B23. `this` is undefined at top level and in plain calls** (`jsrun.h:2547`). Top level FIXED in 0.62.0 (the global object); a plain call's is still undefined. UMD wrappers `(function(root){…})(this)` therefore fail with "cannot set X of undefined".
 
 **B24. Dead or unused state.** `js_bound_this` (`jsrun.h:645`) was dead (removed in 0.43.0). `js_print_hook` (`:2034`) is never set, so console output is dropped everywhere. `host_data` is unused. The `rep == -1` path in `rx_cont_do` (`jsregex.h:490`) is unreachable.
 

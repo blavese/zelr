@@ -37,11 +37,12 @@ DISK = os.path.join(ROOT, "sitecheck.%d.img" % os.getpid())
 # sites give (twenty or so videos, twenty four streams, thirty categories),
 # so a busy day or a smaller answer is not a failure and an empty one is.
 LIVE = [
-    ("a YouTube search", "https://www.youtube.com/results?search_query=lofi+music", 5),
-    ("a YouTube video, with the ones beside it", "https://www.youtube.com/watch?v=dQw4w9WgXcQ", 3),
-    ("who is live on Twitch", "https://www.twitch.tv/", 5),
-    ("Twitch's categories", "https://www.twitch.tv/directory", 5),
+    ("a YouTube search", "https://www.youtube.com/results?search_query=lofi+music", 5, 0),
+    ("a YouTube video, with the ones beside it", "https://www.youtube.com/watch?v=dQw4w9WgXcQ", 3, 1),
+    ("who is live on Twitch", "https://www.twitch.tv/", 5, 0),
+    ("Twitch's categories", "https://www.twitch.tv/directory", 5, 0),
 ]
+LIVE_LINE = r"SITETEST_LIVE page (-?\d+) rows (\d+) pictures (\d+) frames (\d+)"
 
 
 def resolved(vm, host, tries=4):
@@ -55,19 +56,19 @@ def resolved(vm, host, tries=4):
 
 def live(vm, url, tries=2):
     """What sitetest made of one real page: (page bytes, rows, pictures,
-    everything it printed). Tried twice when nothing came back at all, and
-    only then: a page that came back and read as nothing is the failure this
-    is here to catch."""
+    storyboard sheets, everything it printed). Tried twice when nothing came
+    back at all, and only then: a page that came back and read as nothing is
+    the failure this is here to catch."""
     out = ""
     for _ in range(tries):
         out = vm.fresh("exec /bin/sitetest live %s" % url, timeout=240)
-        m = re.search(r"SITETEST_LIVE page (-?\d+) rows (\d+) pictures (\d+)", out)
+        m = re.search(LIVE_LINE, out)
         if m and int(m.group(1)) > 0:
-            return int(m.group(1)), int(m.group(2)), int(m.group(3)), out
-    m = re.search(r"SITETEST_LIVE page (-?\d+) rows (\d+) pictures (\d+)", out)
+            break
+    m = re.search(LIVE_LINE, out)
     if m:
-        return int(m.group(1)), int(m.group(2)), int(m.group(3)), out
-    return None, 0, 0, out
+        return int(m.group(1)), int(m.group(2)), int(m.group(3)), int(m.group(4)), out
+    return None, 0, 0, 0, out
 
 
 def said(vm, before, timeout=240):
@@ -96,11 +97,13 @@ def main():
             c.add("%s resolves, so there is something to ask" % host, resolved(vm, host))
 
         # --- the reader, on its own ------------------------------------------
-        for label, url, floor in LIVE:
-            size, rows, pics, out = live(vm, url)
+        for label, url, floor, sheets in LIVE:
+            size, rows, pics, frames, out = live(vm, url)
             c.add("%s is read into a page" % label, size is not None and size > 0)
             c.add("with at least %d in it" % floor, rows >= floor)
             c.add("and a picture for each", size is not None and pics >= rows > 0)
+            if sheets:
+                c.add("and frames from the video, from its storyboards", frames >= sheets)
             if size is None or size <= 0 or rows < floor:
                 for line in out.splitlines()[1:8]:
                     print("      | %s" % line)
@@ -110,15 +113,24 @@ def main():
         time.sleep(6)
         mon = vm.monitor()
 
-        vm.type("browser https://www.youtube.com/results?search_query=lofi+music\n")
+        # Started with nothing to go to, it opens on a page of its own.
+        vm.type("browser\n")
         line = said(vm, 0) or ""
         print("      | %s" % line[:160])
-        c.add("the browser shows a YouTube search as the reader's page",
-              "read from the data in YouTube's page" in line and "lofi music - YouTube" in line)
-        m = re.search(r"(\d+) pictures", line)
-        c.add("with its pictures", m is not None and int(m.group(1)) >= 5)
+        m = re.search(r"(\d+) links", line)
+        c.add("the browser opens on its start page, with the sites on it",
+              line.startswith("browser: about:start -- start --") and m is not None
+              and int(m.group(1)) >= 6)
 
         steps = [
+            ("https://www.youtube.com/results?search_query=lofi+music",
+             lambda l: "read from the data in YouTube's page" in l and "lofi music - YouTube" in l
+             and int((re.search(r"(\d+) pictures", l) or [0, 0])[1]) >= 5,
+             "the browser shows a YouTube search as the reader's page, with its pictures"),
+            ("https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+             lambda l: "read from the data in YouTube's page" in l
+             and int((re.search(r"(\d+) pictures", l) or [0, 0])[1]) >= 10,
+             "and a video's page, its picture, its frames and the ones beside it"),
             ("https://www.twitch.tv/directory",
              lambda l: "read from Twitch's API" in l and "Categories - Twitch" in l,
              "and Twitch's categories, from its API"),

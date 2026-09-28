@@ -1300,7 +1300,9 @@ of it, and Twitch answers it from a public API. So for those two the browser
 reads that and draws a plain page of its own (`userland/sites.h`): searches,
 a video with its description and the ones beside it, channels, who is live
 on Twitch, its categories and the streams in each, every row with its
-picture and a link back to the site's own address. The JSON is read where
+picture and a link back to the site's own address. A video's page shows
+frames from it too, taken from the storyboards YouTube keeps for scrubbing:
+sheets of small pictures at a fixed interval all the way through. The JSON is read where
 it lies rather than parsed into a tree, and everything taken from it is
 escaped before it goes into the page, since it came from somebody else. What
 it cannot do is play anything: the video is H.264 sent in pieces chosen by

@@ -18,6 +18,7 @@
 #include "zelr.h"
 #include "alloc.h"
 #include "sites.h"
+#include "ui.h"
 
 static int failed;
 
@@ -91,7 +92,11 @@ static const char YT_WATCH[] =
     "\"keywords\":[\"x\"],\"channelId\":\"UC3\","
     "\"shortDescription\":\"line one\\nline two \\u2192 https://example.com/?a=1\\u0026b=2\","
     "\"isCrawlable\":true,\"thumbnail\":{\"thumbnails\":[]},\"viewCount\":\"1234567\",\"author\":\"Maker\","
-    "\"isLiveContent\":true,\"isLive\":false}};</script>"
+    "\"isLiveContent\":true,\"isLive\":false},"
+    "\"storyboards\":{\"playerStoryboardSpecRenderer\":{\"spec\":"
+    "\"https://i.ytimg.com/sb/CCCCCCCCCC3/storyboard3_L$L/$N.jpg?sqp=abc"
+    "|48#27#100#10#10#0#default#rs$AAA|80#45#60#10#10#2000#M$M#rs$BBB"
+    "|160#90#60#5#5#2000#M$M#rs$CCC|320#180#60#3#3#2000#M$M#rs$DDD\"}}};</script>"
     "<script>var ytInitialData = {\"contents\":{\"twoColumnWatchNextResults\":{\"secondaryResults\":"
     "{\"secondaryResults\":{\"results\":["
     "{\"lockupViewModel\":{\"contentImage\":{},\"metadata\":{\"lockupMetadataViewModel\":"
@@ -107,7 +112,17 @@ static const char YT_WATCH[] =
 
 static const char YT_LIVE[] =
     "<script>var ytInitialPlayerResponse = {\"videoDetails\":{\"videoId\":\"GGGGGGGGGG7\",\"title\":\"On air\","
-    "\"lengthSeconds\":\"0\",\"author\":\"Station\",\"viewCount\":\"10\",\"isLive\":true}};</script>";
+    "\"lengthSeconds\":\"0\",\"author\":\"Station\",\"viewCount\":\"10\",\"isLive\":true},"
+    "\"storyboards\":{\"playerStoryboardSpecRenderer\":{\"spec\":"
+    "\"https://i.ytimg.com/sb/GGGGGGGGGG7/storyboard3_L$L/$N.jpg?sqp=x|160#90#60#5#5#2000#M$M#rs$G\"}}};</script>";
+
+/* Storyboards whose address is somewhere other than YouTube's picture
+   server: the address is written into the page, so it is not used. */
+static const char YT_ELSEWHERE[] =
+    "<script>var ytInitialPlayerResponse = {\"videoDetails\":{\"videoId\":\"HHHHHHHHHH8\",\"title\":\"Else\","
+    "\"lengthSeconds\":\"60\",\"author\":\"Where\",\"viewCount\":\"1\",\"isLive\":false},"
+    "\"storyboards\":{\"playerStoryboardSpecRenderer\":{\"spec\":"
+    "\"https://evil.example/sb/HHHHHHHHHH8/L$L/$N.jpg?x|160#90#30#5#5#2000#M$M#rs$H\"}}};</script>";
 
 static const char YT_CHANNEL[] =
     "<script>var ytInitialData = {\"metadata\":{\"channelMetadataRenderer\":{\"title\":\"Some \\u0026 One\","
@@ -246,9 +261,24 @@ static void checks(void) {
         ok("but not a playlist among them", !has(page, "A playlist") && !has(page, "PLxxxx"));
         okn("so two beside it", count(page, "class=\"row\"") == 2, count(page, "class=\"row\""));
 
+        ok("frames from the video, from its storyboards",
+           has(page, "<h2>frames from the video</h2>") && has(page, "One every 2 seconds"));
+        ok("from the level whose frames are the largest no wider than 160",
+           has(page, "https://i.ytimg.com/sb/CCCCCCCCCC3/storyboard3_L2/M0.jpg?sqp=abc&amp;sigh=rs$CCC")
+           && !has(page, "storyboard3_L1") && !has(page, "storyboard3_L3"));
+        ok("the first, middle and last sheets, each with the stretch of the video it covers",
+           has(page, "L2/M1.jpg") && has(page, "L2/M2.jpg") && count(page, "/sb/") == 3
+           && has(page, "0:00 to 0:48") && has(page, "0:50 to 1:38") && has(page, "1:40 to 1:58"));
+
+        n = yt("https://www.youtube.com/watch?v=HHHHHHHHHH8", YT_ELSEWHERE);
+        ok("but no frames from anywhere but YouTube's picture server",
+           n > 0 && !has(page, "evil.example") && !has(page, "frames from the video"));
+
         n = yt("https://www.youtube.com/watch?v=GGGGGGGGGG7", YT_LIVE);
         ok("a stream that is on now says live rather than a length",
            n > 0 && has(page, "<b>Station</b> &middot; 10 views &middot; live") && !has(page, "0:00"));
+        ok("and has no frames, since a stream still going has no storyboard to stand for it",
+           !has(page, "frames from the video"));
         ok("and has nothing beside it to list, said", has(page, "nothing else was listed"));
     }
 
@@ -333,6 +363,45 @@ static void checks(void) {
         ok("and a category with nobody in it says that", n > 0 && has(page, "nobody is live here just now"));
     }
 
+    /* --- the foot of the window ---------------------------------------------------
+     *
+     * These pages have long titles and the browser says long things about
+     * them, and the status bar drew the two halves through each other. */
+    {
+        const char *long_status = "read from the data in YouTube's page: it cannot play the videos, "
+                                  "24 pictures, encrypted";
+        const char *long_title = "Rick Astley - Never Gonna Give You Up (Official Video) (4K Remaster) - YouTube";
+        const char *l = long_status, *r = long_title;
+        ui_status_fit(600, 1, &l, &r);
+        int lw = face_w(l, UI_FACE_BODY), rw = face_w(r, UI_FACE_BODY);
+        okn("a long status and a long title fit beside each other in the bar",
+            lw + rw <= 600 - 44, lw + rw);
+        int n = w_len(r);
+        ok("the title giving way, cut where a character ends and saying it was cut",
+           n > 3 && r[n - 1] == '.' && r[n - 2] == '.' && r[n - 3] == '.'
+           && r[0] == 'R' && lw >= rw);
+        l = long_status;
+        r = long_title;
+        ui_status_fit(600, 0, &l, &r);
+        ok("and in the classic look, each inside its own panel",
+           face_w(r, UI_FACE_BODY) <= UI_STATUS_RIGHT_W && face_w(l, UI_FACE_BODY) <= 600 - 154);
+        l = "3 links on this page";
+        r = "a page";
+        ui_status_fit(860, 1, &l, &r);
+        ok("while short ones are left alone", w_same(l, "3 links on this page") && w_same(r, "a page"));
+        /* Cut at every width from 20 to 120, so wherever the cut falls it
+           falls somewhere next to a character of two bytes. */
+        static char fit[64];
+        int halves = 0;
+        for (int wide = 20; wide <= 120; wide++) {
+            ui_fit_text("caf\xC3\xA9\xC3\xA9\xC3\xA9 caf\xC3\xA9\xC3\xA9\xC3\xA9 caf\xC3\xA9\xC3\xA9\xC3\xA9",
+                        wide, UI_FACE_BODY, fit, (int)sizeof(fit));
+            int m = w_len(fit);
+            if (m < 4 || (u8)fit[m - 4] >= 0xC0) halves++;
+        }
+        okn("and a cut never leaves half a character", halves == 0, halves);
+    }
+
     /* --- Google ------------------------------------------------------------------ */
     {
         url_t u;
@@ -385,6 +454,8 @@ static int live(const char *address) {
     putn(n > 0 ? count(page, "class=\"row\"") : 0);
     puts(" pictures ");
     putn(n > 0 ? count(page, "<img ") : 0);
+    puts(" frames ");
+    putn(n > 0 ? count(page, "/sb/") : 0);
     putc('\n');
     /* The first few titles, so a run can be read by a person as well. */
     int shown = 0, len = n > 0 ? n : 0;

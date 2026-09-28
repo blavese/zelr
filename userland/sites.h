@@ -265,6 +265,16 @@ static inline void sp_num(site_page *p, long long v) {
     sp_raw(p, r);
 }
 
+/* A number as its digits and nothing else, for an address. */
+static inline void sp_digits(site_page *p, long long v) {
+    char b[24];
+    int i = 0;
+    if (v < 0) v = 0;
+    do { b[i++] = (char)('0' + v % 10); v /= 10; } while (v && i < 22);
+    char r[2] = { 0, 0 };
+    while (i) { r[0] = b[--i]; sp_raw(p, r); }
+}
+
 /* Only the characters an identifier from these sites is made of, so that one
    written into a link or a query cannot close it and say something else. */
 static inline int site_ident(const char *in, char *out, int cap, const char *also) {
@@ -569,6 +579,106 @@ static inline long long site_atoll(const char *t) {
     return v;
 }
 
+/* Frames from the video, which is as near to watching it as this comes.
+ *
+ * YouTube keeps storyboards for scrubbing along a video: sheets of small
+ * frames taken at a fixed interval all the way through, as ordinary JPEGs
+ * any page may fetch. The spec is a template address and a level per size:
+ *
+ *   https://i.ytimg.com/sb/ID/storyboard3_L$L/$N.jpg?sqp=...|w#h#count#cols#rows#ms#name#sig|...
+ *
+ * A sheet is the template with $L the level's number and $N its name with $M
+ * the sheet's number in it, and &sigh= and the signature after it. The level
+ * used is the one with the largest frames no wider than 160, and three
+ * sheets at most are shown -- the first, the middle and the last -- each
+ * captioned with the stretch of the video it covers. */
+static inline void yt_frames(site_page *p, const char *s, int n) {
+    static char spec[2048], base[1024], url[1400], f[8][96];
+    int at = site_search(s, 0, n, "\"playerStoryboardSpecRenderer\":{");
+    if (at < 0) return;
+    at = sj_find(s, at, n, "playerStoryboardSpecRenderer");
+    int sl = sj_field(s, at, n, "spec", spec, sizeof(spec));
+    if (sl <= 0) return;
+
+    /* The template, and the level to use. */
+    int i = 0, bl = 0;
+    while (i < sl && spec[i] != '|' && bl < (int)sizeof(base) - 1) base[bl++] = spec[i++];
+    base[bl] = 0;
+    if (!w_starts_fold(base, "https://i.ytimg.com/sb/")) return;
+    int best = -1, best_w = 0, count = 0, cols = 0, rows = 0, ms = 0;
+    static char name[96], sig[96];
+    for (int level = 0; i < sl && spec[i] == '|'; level++) {
+        i++;
+        int k = 0, o = 0;
+        for (int j = 0; j < 8; j++) f[j][0] = 0;
+        while (i < sl && spec[i] != '|' && k < 8) {
+            if (spec[i] == '#') { f[k][o] = 0; k++; o = 0; i++; continue; }
+            if (o < 95) f[k][o++] = spec[i];
+            i++;
+        }
+        if (k < 8) f[k][o] = 0;
+        int w = (int)site_atoll(f[0]), iv = (int)site_atoll(f[5]);
+        if (k < 7 || iv <= 0 || w <= 0 || w > 160 || w <= best_w) continue;
+        best = level;
+        best_w = w;
+        count = (int)site_atoll(f[2]);
+        cols = (int)site_atoll(f[3]);
+        rows = (int)site_atoll(f[4]);
+        ms = iv;
+        w_copy(name, sizeof(name), f[6], sizeof(name));
+        w_copy(sig, sizeof(sig), f[7], sizeof(sig));
+    }
+    if (best < 0 || count <= 0 || cols <= 0 || rows <= 0) return;
+    int per = cols * rows, sheets = (count + per - 1) / per;
+    int pick[3] = { 0, sheets / 2, sheets - 1 };
+
+    sp_raw(p, "<h2>frames from the video</h2>\n<p><small>One every ");
+    sp_num(p, ms / 1000);
+    sp_raw(p, ms / 1000 == 1 ? " second" : " seconds");
+    sp_raw(p, ", from YouTube's storyboards.</small></p>\n");
+    for (int k = 0; k < 3; k++) {
+        if (k && pick[k] == pick[k - 1]) continue;
+        int sheet = pick[k];
+        /* The address: the template with the level and the sheet put in. */
+        int o = 0;
+        char num[16];
+        site_page np = { num, 0, (int)sizeof(num) };
+        num[0] = 0;
+        sp_digits(&np, sheet);
+        for (const char *t = base; *t && o < (int)sizeof(url) - 1; t++) {
+            if (t[0] == '$' && t[1] == 'L') {
+                url[o++] = (char)('0' + best % 10);
+                t++;
+            } else if (t[0] == '$' && t[1] == 'N') {
+                for (const char *m = name; *m && o < (int)sizeof(url) - 1; m++) {
+                    if (m[0] == '$' && m[1] == 'M') {
+                        for (const char *d = num; *d && o < (int)sizeof(url) - 1; d++) url[o++] = *d;
+                        m++;
+                    } else {
+                        url[o++] = *m;
+                    }
+                }
+                t++;
+            } else {
+                url[o++] = *t;
+            }
+        }
+        for (const char *t = "&sigh="; *t && o < (int)sizeof(url) - 1; t++) url[o++] = *t;
+        for (const char *t = sig; *t && o < (int)sizeof(url) - 1; t++) url[o++] = *t;
+        url[o] = 0;
+
+        int first = sheet * per, last = first + per - 1;
+        if (last > count - 1) last = count - 1;
+        sp_raw(p, "<p><img src=\"");
+        sp_text(p, url);
+        sp_raw(p, "\" alt=\"\"><br><small>");
+        yt_duration(p, (long long)first * ms / 1000);
+        sp_raw(p, " to ");
+        yt_duration(p, (long long)last * ms / 1000);
+        sp_raw(p, "</small></p>\n");
+    }
+}
+
 /* The page, from YouTube's own. 0 when there is nothing in it to read. */
 static inline int site_youtube(const url_t *u, const char *s, int n, char *out, int cap) {
     if (!site_is_youtube(u) || n <= 0) return 0;
@@ -636,6 +746,7 @@ static inline int site_youtube(const url_t *u, const char *s, int n, char *out, 
         if (live) sp_raw(&p, " &middot; live");
         sp_raw(&p, "</p>\n<p><small>The video itself is H.264, sent in pieces chosen by YouTube's "
                    "own player; this browser has no video decoder to play it.</small></p>\n");
+        if (!live) yt_frames(&p, s, n);
 
         sj_field(s, vd, n, "shortDescription", text, sizeof(text));
         if (text[0]) { sp_raw(&p, "<p>"); sp_text(&p, text); sp_raw(&p, "</p>\n"); }

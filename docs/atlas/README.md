@@ -95,6 +95,38 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.62.0: frames from a video, a start page, and JavaScript's strings and JSON
+
+- **Frames (11, sites.h `yt_frames`).** A watch page shows frames from the video from YouTube's storyboards
+  (`playerStoryboardSpecRenderer`): the level whose frames are the largest no wider than 160, and its first,
+  middle and last sheets, each captioned with the stretch it covers. Only from `https://i.ytimg.com/sb/`;
+  none for a stream that is live. sitetest live prints `frames N`; sitecheck wants at least one for a video.
+- **Start page (11, browser.c `show_start`).** The browser opens on `about:start` (typed or started with no
+  address): a search box and links to YouTube, Twitch, Wikipedia, Hacker News, DuckDuckGo and example.com, each
+  said plainly. It needs no network, where example.com was an error on a machine without one.
+- **Status bar (09a, ui.h `ui_status_fit`, `ui_fit_text`).** A long status and a long title were drawn through
+  each other. The left keeps its room and the right gives way, down to a third of the bar (or its 128-pixel
+  panel in the classic look), cut with "..." and never through a character.
+- **JavaScript (12 §10).** B11: `substring` and `substr` are no longer `slice`; `indexOf`, `includes` and
+  `startsWith` take their position; `lastIndexOf`, `endsWith`, `padStart`, `padEnd`, `trimStart`, `trimEnd`,
+  `at` and `concat` are there; `replaceAll` replaces them all; a string pattern's replacement knows `$&`, `$$`,
+  `` $` `` and `$'` and a function replacement is called. B22: `var x;` leaves a value x already has (`let x;` still
+  starts again). B23: top-level `this` is the global object (a plain call's is still undefined). B9: an array
+  inside itself becomes text empty where it comes round again, and each element is made text once (it was
+  twice, doubling per level of nesting); `JSON.stringify` of an object inside itself is a TypeError. B15:
+  `JSON.stringify` writes into a growing buffer (it concatenated a character at a time and ran a page out of
+  memory at about 7 KB), escapes control characters, writes NaN and the infinities as null and returns
+  undefined for undefined; `JSON.parse` undoes `\u` escapes and surrogate pairs and throws SyntaxError on
+  anything that is not JSON.
+- **Checks.** jstest 234 (33 new): failed with substring and substr as slice, indexOf's position ignored,
+  replaceAll as replace, `$&` ignored, `var x;` resetting, top-level this undefined, the join's cycle guard
+  removed, JSON's cycle check, control escapes and NaN rule removed, and trailing text accepted by parse (17
+  checks). Not run against the old code: the twice-made join (a 200-deep array would not end) and the old
+  concatenating JSON writer, which the rewrite replaced. sitetest 76: the frames checks failed with the level
+  choice, the host check and the live skip removed; the status bar checks with `ui_status_fit` doing nothing
+  and the cut going through a character (24 of 101 widths). sitecheck 20: the start page check failed with the
+  start page replaced by a message.
+
 ### 0.61.0: YouTube and Twitch, read another way
 
 - **Sites (11, new `userland/sites.h`).** YouTube and Twitch send an application rather than a page, and the

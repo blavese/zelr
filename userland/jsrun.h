@@ -278,22 +278,37 @@ static jstr *js_to_str(jctx *J, jval v) {
             }
             if (o->kind == JO_ARRAY) {
                 /* Joined with commas, which is what an array becomes when
-                   something asks it for text. */
+                   something asks it for text.
+                 *
+                 * An array that holds itself, somewhere down, is written as
+                 * nothing where it comes round again, which is what the
+                 * language says; it recursed until the stack ran out, and
+                 * the browser went with it. And each element is made into
+                 * text once: it was twice, once to measure and once to copy,
+                 * so each level of arrays in arrays doubled the work. */
+                static jobj *joining[256];
+                static int njoining;
+                for (int k = 0; k < njoining; k++)
+                    if (joining[k] == o) return js_str(J, "");
+                if (njoining >= 256) return js_str(J, "");
+                jstr **part = o->len ? (jstr **)js_alloc(J, o->len * (u32)sizeof(jstr *)) : 0;
+                if (o->len && !part) return js_str(J, "");
+                joining[njoining++] = o;
                 u32 total = 0;
                 for (u32 i = 0; i < o->len; i++) {
-                    jstr *p = js_to_str(J, o->items[i]);
-                    total += (p ? p->len : 0) + 1;
+                    jval e = o->items[i];
+                    part[i] = e.t == JS_UNDEF || e.t == JS_NULL ? 0 : js_to_str(J, e);
+                    total += (part[i] ? part[i]->len : 0) + 1;
                 }
+                njoining--;
                 jstr *out = (jstr *)js_alloc(J, (u32)sizeof(jstr) + total + 1);
                 if (!out) return js_str(J, "");
                 u32 w = 0;
                 for (u32 i = 0; i < o->len; i++) {
                     if (i) out->s[w++] = ',';
-                    jval e = o->items[i];
-                    if (e.t == JS_UNDEF || e.t == JS_NULL) continue;
-                    jstr *p = js_to_str(J, e);
-                    for (u32 k = 0; p && k < p->len; k++) out->s[w++] = p->s[k];
+                    for (u32 k = 0; part[i] && k < part[i]->len; k++) out->s[w++] = part[i]->s[k];
                 }
+                js_free(J, part, o->len * (u32)sizeof(jstr *));
                 out->s[w] = 0;
                 out->len = w;
                 out->hash = js_hash(out->s, w);
@@ -903,20 +918,61 @@ static int js_find_sub(const jstr *h, const jstr *n, u32 from) {
     return -1;
 }
 
+/* A position in a string, as the methods that take one read it: missing is
+   `dflt`, not a number is 0, and anything else is held inside the string.
+   Every one of them used to ignore it, so indexOf(x, from) found the first x
+   wherever from said to start, and a loop walking a string by its matches
+   went round the first one for ever. */
+static int js_str_pos(jctx *J, jval *a, int n, int i, int len, int dflt) {
+    if (i >= n || a[i].t == JS_UNDEF) return dflt;
+    double d = js_to_num(J, a[i]);
+    if (d != d || d < 0) return 0;
+    if (d > (double)len) return len;
+    return (int)d;
+}
+
 static jval nat_str_indexof(jctx *J, jval t, jval *a, int n) {
     jstr *h = js_to_str(J, t), *nd = js_to_str(J, js_arg(a, n, 0));
-    return js_num((double)js_find_sub(h, nd, 0));
+    if (!h) return js_num(-1);
+    return js_num((double)js_find_sub(h, nd, (u32)js_str_pos(J, a, n, 1, (int)h->len, 0)));
+}
+
+static jval nat_str_lastindexof(jctx *J, jval t, jval *a, int n) {
+    jstr *h = js_to_str(J, t), *nd = js_to_str(J, js_arg(a, n, 0));
+    if (!h || !nd || nd->len > h->len) return js_num(-1);
+    int from = js_str_pos(J, a, n, 1, (int)h->len, (int)h->len);
+    if (from > (int)(h->len - nd->len)) from = (int)(h->len - nd->len);
+    for (int i = from; i >= 0; i--) {
+        u32 k = 0;
+        while (k < nd->len && h->s[i + k] == nd->s[k]) k++;
+        if (k == nd->len) return js_num((double)i);
+    }
+    return js_num(-1);
 }
 
 static jval nat_str_includes(jctx *J, jval t, jval *a, int n) {
     jstr *h = js_to_str(J, t), *nd = js_to_str(J, js_arg(a, n, 0));
-    return js_bool(js_find_sub(h, nd, 0) >= 0);
+    if (!h) return js_bool(0);
+    return js_bool(js_find_sub(h, nd, (u32)js_str_pos(J, a, n, 1, (int)h->len, 0)) >= 0);
 }
 
 static jval nat_str_startswith(jctx *J, jval t, jval *a, int n) {
     jstr *h = js_to_str(J, t), *nd = js_to_str(J, js_arg(a, n, 0));
-    if (!h || !nd || nd->len > h->len) return js_bool(0);
-    for (u32 i = 0; i < nd->len; i++) if (h->s[i] != nd->s[i]) return js_bool(0);
+    if (!h || !nd) return js_bool(0);
+    u32 at = (u32)js_str_pos(J, a, n, 1, (int)h->len, 0);
+    if (nd->len > h->len - at) return js_bool(0);
+    for (u32 i = 0; i < nd->len; i++) if (h->s[at + i] != nd->s[i]) return js_bool(0);
+    return js_bool(1);
+}
+
+/* Ends with, where the end is the second argument when there is one. */
+static jval nat_str_endswith(jctx *J, jval t, jval *a, int n) {
+    jstr *h = js_to_str(J, t), *nd = js_to_str(J, js_arg(a, n, 0));
+    if (!h || !nd) return js_bool(0);
+    u32 end = (u32)js_str_pos(J, a, n, 1, (int)h->len, (int)h->len);
+    if (nd->len > end) return js_bool(0);
+    for (u32 i = 0; i < nd->len; i++)
+        if (h->s[end - nd->len + i] != nd->s[i]) return js_bool(0);
     return js_bool(1);
 }
 
@@ -934,9 +990,68 @@ static jval nat_str_slice(jctx *J, jval t, jval *a, int n) {
     return js_from_str(js_str_n(J, s->s + from, (u32)(to - from)));
 }
 
+/* Not slice. substring clamps a negative to nothing rather than counting it
+   from the end, and takes its two ends in either order; substr is a start
+   and a length. All three were slice, so "hello".substring(3, 1) was empty
+   and substr(1, 3) was two letters. */
 static jval nat_str_substring(jctx *J, jval t, jval *a, int n) {
-    return nat_str_slice(J, t, a, n);
+    jstr *s = js_to_str(J, t);
+    if (!s) return js_from_str(js_str(J, ""));
+    int len = (int)s->len;
+    int from = js_str_pos(J, a, n, 0, len, 0);
+    int to = js_str_pos(J, a, n, 1, len, len);
+    if (from > to) { int k = from; from = to; to = k; }
+    return js_from_str(js_str_n(J, s->s + from, (u32)(to - from)));
 }
+
+static jval nat_str_substr(jctx *J, jval t, jval *a, int n) {
+    jstr *s = js_to_str(J, t);
+    if (!s) return js_from_str(js_str(J, ""));
+    int len = (int)s->len;
+    double d = n > 0 ? js_to_num(J, a[0]) : 0;
+    int from = d != d ? 0 : (d < 0 ? (d < -len ? 0 : len + (int)d) : (d > len ? len : (int)d));
+    int want = len - from;
+    if (n > 1 && a[1].t != JS_UNDEF) {
+        double w = js_to_num(J, a[1]);
+        want = w != w || w < 0 ? 0 : (w > want ? want : (int)w);
+    }
+    return js_from_str(js_str_n(J, s->s + from, (u32)want));
+}
+
+/* One character, counted from the end when the index is negative. */
+static jval nat_str_at(jctx *J, jval t, jval *a, int n) {
+    jstr *s = js_to_str(J, t);
+    double d = n > 0 ? js_to_num(J, a[0]) : 0;
+    if (!s || d != d) d = 0;
+    int i = (int)d;
+    if (i < 0) i += s ? (int)s->len : 0;
+    if (!s || i < 0 || i >= (int)s->len) return js_undef();
+    return js_from_str(js_str_n(J, s->s + i, 1));
+}
+
+static jval nat_str_concat(jctx *J, jval t, jval *a, int n) {
+    jstr *s = js_to_str(J, t);
+    for (int i = 0; i < n && s; i++) s = js_concat(J, s, js_to_str(J, a[i]));
+    return js_from_str(s ? s : js_str(J, ""));
+}
+
+/* Padded to a length with a filler, at the front or the back. */
+static jval js_str_pad(jctx *J, jval t, jval *a, int n, int front) {
+    jstr *s = js_to_str(J, t);
+    if (!s) return js_from_str(js_str(J, ""));
+    double w = n > 0 ? js_to_num(J, a[0]) : 0;
+    jstr *fill = n > 1 && a[1].t != JS_UNDEF ? js_to_str(J, a[1]) : js_str(J, " ");
+    if (w != w || w <= (double)s->len || !fill || !fill->len || w > 65536) return js_from_str(s);
+    u32 need = (u32)w - s->len;
+    char *buf = (char *)js_alloc(J, need + 1);
+    if (!buf) return js_from_str(s);
+    for (u32 i = 0; i < need; i++) buf[i] = fill->s[i % fill->len];
+    jstr *pad = js_str_n(J, buf, need);
+    return js_from_str(front ? js_concat(J, pad, s) : js_concat(J, s, pad));
+}
+
+static jval nat_str_padstart(jctx *J, jval t, jval *a, int n) { return js_str_pad(J, t, a, n, 1); }
+static jval nat_str_padend(jctx *J, jval t, jval *a, int n) { return js_str_pad(J, t, a, n, 0); }
 
 static jval nat_str_upper(jctx *J, jval t, jval *a, int n) {
     (void)a; (void)n;
@@ -960,16 +1075,33 @@ static jval nat_str_lower(jctx *J, jval t, jval *a, int n) {
     return js_from_str(o);
 }
 
-static jval nat_str_trim(jctx *J, jval t, jval *a, int n) {
-    (void)a; (void)n;
+static int js_str_blank(char c) {
+    return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f' || c == '\v';
+}
+
+/* Blanks off both ends, or one: `which` is 1 for the front, 2 the back. */
+static jval js_str_trim_ends(jctx *J, jval t, int which) {
     jstr *s = js_to_str(J, t);
     if (!s) return js_from_str(js_str(J, ""));
     u32 from = 0, to = s->len;
-    while (from < to && (s->s[from] == ' ' || s->s[from] == '\t'
-                         || s->s[from] == '\n' || s->s[from] == '\r')) from++;
-    while (to > from && (s->s[to - 1] == ' ' || s->s[to - 1] == '\t'
-                         || s->s[to - 1] == '\n' || s->s[to - 1] == '\r')) to--;
+    if (which & 1) while (from < to && js_str_blank(s->s[from])) from++;
+    if (which & 2) while (to > from && js_str_blank(s->s[to - 1])) to--;
     return js_from_str(js_str_n(J, s->s + from, to - from));
+}
+
+static jval nat_str_trim(jctx *J, jval t, jval *a, int n) {
+    (void)a; (void)n;
+    return js_str_trim_ends(J, t, 3);
+}
+
+static jval nat_str_trimstart(jctx *J, jval t, jval *a, int n) {
+    (void)a; (void)n;
+    return js_str_trim_ends(J, t, 1);
+}
+
+static jval nat_str_trimend(jctx *J, jval t, jval *a, int n) {
+    (void)a; (void)n;
+    return js_str_trim_ends(J, t, 2);
 }
 
 static jval nat_str_split(jctx *J, jval t, jval *a, int n) {
@@ -1123,17 +1255,73 @@ static jval nat_str_replace_re(jctx *J, jval t, jval *a, int n) {
     return js_from_str(js_str_n(J, out, (u32)w));
 }
 
-static jval nat_str_replace(jctx *J, jval t, jval *a, int n) {
-    if (js_is_regex(js_arg(a, n, 0))) return nat_str_replace_re(J, t, a, n);
+/* A string pattern, replaced once or everywhere. The replacement is what it
+   is with a regular expression: a function is called with the match, where
+   it was and the whole string, and in text $& is the match, $` and $' what
+   came before and after it, and $$ a dollar. Written as the text
+   "function" and with the dollars left in, a page's rewrite came out as
+   nonsense; and replaceAll was replace, so it replaced the first one. */
+static jval js_str_replace_text(jctx *J, jval t, jval *a, int n, int every) {
     jstr *s = js_to_str(J, t);
     jstr *find = js_to_str(J, js_arg(a, n, 0));
-    jstr *with = js_to_str(J, js_arg(a, n, 1));
-    int hit = js_find_sub(s, find, 0);
-    if (hit < 0 || !s) return js_from_str(s);
-    jstr *head = js_str_n(J, s->s, (u32)hit);
-    jstr *tail = js_str_n(J, s->s + hit + find->len,
-                          s->len - (u32)hit - find->len);
-    return js_from_str(js_concat(J, js_concat(J, head, with), tail));
+    jval rep = js_arg(a, n, 1);
+    int call = rep.t == JS_OBJ && rep.obj
+             && (rep.obj->kind == JO_FUNC || rep.obj->kind == JO_NATIVE);
+    jstr *with = call ? 0 : js_to_str(J, rep);
+    if (!s || !find) return js_from_str(s);
+
+    jstr *out = js_str(J, "");
+    u32 at = 0;
+    for (;;) {
+        int hit = js_find_sub(s, find, at);
+        if (hit < 0 || !out) break;
+        out = js_concat(J, out, js_str_n(J, s->s + at, (u32)hit - at));
+        if (call) {
+            jval args[3] = { js_from_str(js_str_n(J, s->s + hit, find->len)),
+                             js_num((double)hit), js_from_str(s) };
+            jval got = js_call(J, rep, js_undef(), args, 3);
+            if (J->sig != JS_OK) return js_from_str(s);
+            out = js_concat(J, out, js_to_str(J, got));
+        } else {
+            for (u32 i = 0; with && i < with->len && out; i++) {
+                char c = with->s[i], d = i + 1 < with->len ? with->s[i + 1] : 0;
+                if (c == '$' && d == '$') { out = js_concat(J, out, js_str(J, "$")); i++; }
+                else if (c == '$' && d == '&') {
+                    out = js_concat(J, out, find);
+                    i++;
+                } else if (c == '$' && d == '`') {
+                    out = js_concat(J, out, js_str_n(J, s->s, (u32)hit));
+                    i++;
+                } else if (c == '$' && d == '\'') {
+                    out = js_concat(J, out, js_str_n(J, s->s + hit + find->len,
+                                                     s->len - (u32)hit - find->len));
+                    i++;
+                } else {
+                    out = js_concat(J, out, js_str_n(J, with->s + i, 1));
+                }
+            }
+        }
+        at = (u32)hit + find->len;
+        if (!every) break;
+        if (find->len == 0) {
+            /* An empty pattern matches between every character. */
+            if (at >= s->len) break;
+            out = js_concat(J, out, js_str_n(J, s->s + at, 1));
+            at++;
+        }
+    }
+    if (out) out = js_concat(J, out, js_str_n(J, s->s + at, s->len - at));
+    return js_from_str(out ? out : s);
+}
+
+static jval nat_str_replace(jctx *J, jval t, jval *a, int n) {
+    if (js_is_regex(js_arg(a, n, 0))) return nat_str_replace_re(J, t, a, n);
+    return js_str_replace_text(J, t, a, n, 0);
+}
+
+static jval nat_str_replaceall(jctx *J, jval t, jval *a, int n) {
+    if (js_is_regex(js_arg(a, n, 0))) return nat_str_replace_re(J, t, a, n);
+    return js_str_replace_text(J, t, a, n, 1);
 }
 
 static jval nat_str_repeat(jctx *J, jval t, jval *a, int n) {
@@ -1183,15 +1371,21 @@ static jval nat_str_search(jctx *J, jval t, jval *a, int n) {
 }
 
 static jval js_string_method(jctx *J, jval target, jstr *name) {
-    struct { const char *n; jnative f; } M[] = {
+    /* Static, because a table this size built on the stack at every call is
+       a copy the compiler makes with memcpy, and there is none to call. */
+    static const struct { const char *n; jnative f; } M[] = {
         { "charAt", nat_str_charat }, { "charCodeAt", nat_str_charcode },
         { "indexOf", nat_str_indexof }, { "includes", nat_str_includes },
-        { "startsWith", nat_str_startswith },
+        { "lastIndexOf", nat_str_lastindexof },
+        { "startsWith", nat_str_startswith }, { "endsWith", nat_str_endswith },
         { "slice", nat_str_slice }, { "substring", nat_str_substring },
-        { "substr", nat_str_slice },
+        { "substr", nat_str_substr }, { "at", nat_str_at }, { "concat", nat_str_concat },
+        { "padStart", nat_str_padstart }, { "padEnd", nat_str_padend },
         { "toUpperCase", nat_str_upper }, { "toLowerCase", nat_str_lower },
         { "trim", nat_str_trim }, { "split", nat_str_split },
-        { "replace", nat_str_replace }, { "replaceAll", nat_str_replace },
+        { "trimStart", nat_str_trimstart }, { "trimEnd", nat_str_trimend },
+        { "trimLeft", nat_str_trimstart }, { "trimRight", nat_str_trimend },
+        { "replace", nat_str_replace }, { "replaceAll", nat_str_replaceall },
         { "repeat", nat_str_repeat },
         { "match", nat_str_match }, { "search", nat_str_search },
         { 0, 0 }
@@ -1907,6 +2101,12 @@ static jsignal js_exec(jctx *J, int node, jscope *sc, jval this_val) {
 
         case N_VAR:
             for (int cell = n->a; cell >= 0; cell = J->nodes[cell].b) {
+                /* `var x;` declares x and does nothing to a value it already
+                   has. It used to set it to undefined, and minified code
+                   declares the same name again all the time -- a counter
+                   declared at the top of each loop went back to nothing. */
+                if (n->d && J->nodes[cell].a < 0 && js_find(sc->vars, J->nodes[cell].str))
+                    continue;
                 jval v = J->nodes[cell].a >= 0
                     ? js_eval(J, J->nodes[cell].a, sc, this_val) : js_undef();
                 if (J->sig != JS_OK) return J->sig;
@@ -2328,173 +2528,342 @@ static jval nat_m_random(jctx *J, jval t, jval *a, int n) {
     return js_num((double)(js_rand_state >> 8) / 16777216.0);
 }
 
-/* --- JSON ---------------------------------------------------------------- */
+/* --- JSON ----------------------------------------------------------------
+ *
+ * Written into a buffer that grows and made a string once at the end. It was
+ * built a character at a time by concatenation, and each concatenation
+ * copied everything so far into the page's memory, which never gives any
+ * back: seven kilobytes of output used up the whole of it. */
 
-static void js_json_write(jctx *J, jval v, jstr **out) {
+typedef struct {
+    char *b;
+    u32 n, cap;
+    int full;
+} jbuf;
+
+static void jb_put(jbuf *o, const char *s, u32 n) {
+    if (o->full) return;
+    if (o->n + n + 1 > o->cap) {
+        u32 cap = o->cap ? o->cap : 256;
+        while (cap < o->n + n + 1) cap *= 2;
+        /* The same ceiling a page's memory has: past it, the answer is
+           refused rather than the machine's heap taken. */
+        if (cap > JS_MEM_CAP) { o->full = 1; return; }
+        char *nb = (char *)malloc(cap);
+        if (!nb) { o->full = 1; return; }
+        volatile char *d = nb;
+        for (u32 i = 0; i < o->n; i++) d[i] = o->b[i];
+        free(o->b);
+        o->b = nb;
+        o->cap = cap;
+    }
+    volatile char *d = o->b + o->n;
+    for (u32 i = 0; i < n; i++) d[i] = s[i];
+    o->n += n;
+}
+
+static void jb_str(jbuf *o, const char *s) {
+    u32 n = 0;
+    while (s[n]) n++;
+    jb_put(o, s, n);
+}
+
+/* A string, quoted, with everything JSON does not allow raw escaped: the
+   quote, the backslash, and every control character, which used to go out
+   as they were and made text JSON.parse elsewhere refuses. */
+static void js_json_quote(jbuf *o, const jstr *s) {
+    static const char HEX[] = "0123456789abcdef";
+    jb_put(o, "\"", 1);
+    for (u32 i = 0; s && i < s->len; i++) {
+        unsigned char c = (unsigned char)s->s[i];
+        if (c == '"') jb_put(o, "\\\"", 2);
+        else if (c == '\\') jb_put(o, "\\\\", 2);
+        else if (c == '\n') jb_put(o, "\\n", 2);
+        else if (c == '\r') jb_put(o, "\\r", 2);
+        else if (c == '\t') jb_put(o, "\\t", 2);
+        else if (c == 8) jb_put(o, "\\b", 2);
+        else if (c == 12) jb_put(o, "\\f", 2);
+        else if (c < 32) {
+            char u[6] = { '\\', 'u', '0', '0', HEX[c >> 4], HEX[c & 15] };
+            jb_put(o, u, 6);
+        } else jb_put(o, (const char *)&s->s[i], 1);
+    }
+    jb_put(o, "\"", 1);
+}
+
+/* What JSON has no way to write, and leaves out of an object or writes as
+   null in an array: undefined and functions. */
+static int js_json_unwritable(jval v) {
+    return v.t == JS_UNDEF
+        || (v.t == JS_OBJ && v.obj && (v.obj->kind == JO_FUNC || v.obj->kind == JO_NATIVE));
+}
+
+#define JS_JSON_DEPTH 128
+
+/* Writes v; 0 when it cannot be written (a cycle, or nested too deep), with
+   the reason thrown. `open` is the objects being written round this one. */
+static int js_json_write(jctx *J, jval v, jbuf *o, jobj **open, int depth) {
     switch (v.t) {
-        case JS_STR: {
-            *out = js_concat(J, *out, js_str(J, "\""));
-            jstr *s = v.str;
-            for (u32 i = 0; s && i < s->len; i++) {
-                char c = s->s[i];
-                if (c == '"' || c == '\\') {
-                    char esc[3];
-                    esc[0] = '\\'; esc[1] = c; esc[2] = 0;
-                    *out = js_concat(J, *out, js_str(J, esc));
-                } else if (c == '\n') *out = js_concat(J, *out, js_str(J, "\\n"));
-                else if (c == '\t') *out = js_concat(J, *out, js_str(J, "\\t"));
-                else *out = js_concat(J, *out, js_str_n(J, &c, 1));
-            }
-            *out = js_concat(J, *out, js_str(J, "\""));
-            return;
+        case JS_STR:
+            js_json_quote(o, v.str);
+            return 1;
+        case JS_NUM: {
+            /* NaN and the infinities are not numbers JSON has. */
+            if (v.num != v.num || v.num - v.num != 0) { jb_str(o, "null"); return 1; }
+            jstr *t = js_to_str(J, v);
+            if (t) jb_put(o, t->s, t->len);
+            return 1;
         }
+        case JS_BOOL:
+            jb_str(o, v.b ? "true" : "false");
+            return 1;
         case JS_OBJ: {
-            jobj *o = v.obj;
-            if (!o) { *out = js_concat(J, *out, js_str(J, "null")); return; }
-            if (o->kind == JO_FUNC || o->kind == JO_NATIVE) {
-                *out = js_concat(J, *out, js_str(J, "null"));
-                return;
-            }
-            if (o->kind == JO_ARRAY) {
-                *out = js_concat(J, *out, js_str(J, "["));
-                for (u32 i = 0; i < o->len; i++) {
-                    if (i) *out = js_concat(J, *out, js_str(J, ","));
-                    js_json_write(J, o->items[i], out);
+            jobj *ob = v.obj;
+            if (!ob) { jb_str(o, "null"); return 1; }
+            if (ob->kind == JO_FUNC || ob->kind == JO_NATIVE) { jb_str(o, "null"); return 1; }
+            /* An object inside itself has no end to write, and writing it
+               anyway recursed until the stack ran out. */
+            for (int k = 0; k < depth; k++)
+                if (open[k] == ob) {
+                    js_throw(J, JS_ERR_TYPE, "JSON cannot write an object that contains itself",
+                             J->error_line);
+                    return 0;
                 }
-                *out = js_concat(J, *out, js_str(J, "]"));
-                return;
+            if (depth >= JS_JSON_DEPTH) {
+                js_throw(J, JS_ERR_RANGE, "JSON nested too deeply to write", J->error_line);
+                return 0;
             }
-            *out = js_concat(J, *out, js_str(J, "{"));
+            open[depth] = ob;
+            if (ob->kind == JO_ARRAY) {
+                jb_put(o, "[", 1);
+                for (u32 i = 0; i < ob->len; i++) {
+                    if (i) jb_put(o, ",", 1);
+                    jval e = ob->items[i];
+                    if (js_json_unwritable(e)) jb_str(o, "null");
+                    else if (!js_json_write(J, e, o, open, depth + 1)) return 0;
+                }
+                jb_put(o, "]", 1);
+                return 1;
+            }
+            jb_put(o, "{", 1);
             int first = 1;
             jprop **own;
-            u32 nown = js_own_keys(J, o, &own);
+            u32 nown = js_own_keys(J, ob, &own);
             for (u32 i = 0; i < nown; i++) {
                 jprop *p = own[i];
-                /* A key whose value JSON has no way to write is left out
-                   rather than written as something that does not parse. */
-                if (p->v.t == JS_UNDEF) continue;
-                if (p->v.t == JS_OBJ && p->v.obj &&
-                    (p->v.obj->kind == JO_FUNC || p->v.obj->kind == JO_NATIVE)) continue;
-                if (!first) *out = js_concat(J, *out, js_str(J, ","));
+                if (js_json_unwritable(p->v)) continue;
+                if (!first) jb_put(o, ",", 1);
                 first = 0;
-                js_json_write(J, js_from_str(p->key), out);
-                *out = js_concat(J, *out, js_str(J, ":"));
-                js_json_write(J, p->v, out);
+                js_json_quote(o, p->key);
+                jb_put(o, ":", 1);
+                if (!js_json_write(J, p->v, o, open, depth + 1)) return 0;
             }
-            *out = js_concat(J, *out, js_str(J, "}"));
-            return;
+            jb_put(o, "}", 1);
+            return 1;
         }
         default:
-            *out = js_concat(J, *out, js_to_str(J, v));
-            return;
+            jb_str(o, "null");
+            return 1;
     }
 }
 
 static jval nat_json_stringify(jctx *J, jval t, jval *a, int n) {
     (void)t;
-    jstr *out = js_str(J, "");
-    js_json_write(J, js_arg(a, n, 0), &out);
-    return js_from_str(out);
+    jval v = js_arg(a, n, 0);
+    if (js_json_unwritable(v)) return js_undef();
+    static jobj *open[JS_JSON_DEPTH];
+    jbuf o = { 0, 0, 0, 0 };
+    int ok = js_json_write(J, v, &o, open, 0);
+    jval out = js_undef();
+    if (ok && o.full) js_throw(J, JS_ERR_RANGE, "JSON too long to write", J->error_line);
+    else if (ok) out = js_from_str(js_str_n(J, o.b ? o.b : "", o.n));
+    free(o.b);
+    return out;
 }
 
-static jval js_json_read(jctx *J, const char *s, u32 len, u32 *at);
+/* --- and read ---------------------------------------------------------------
+ *
+ * Strictly. It used to take any word beginning with t, f or n for true, false
+ * or null, leave \u escapes undone, and answer something for text that was
+ * not JSON at all; a page that tries JSON.parse inside try to find out
+ * whether it has JSON was told it always had. Now anything that is not JSON
+ * is a SyntaxError, as it is everywhere else. */
 
-static void js_json_space(const char *s, u32 len, u32 *at) {
-    while (*at < len && (s[*at] == ' ' || s[*at] == '\t' || s[*at] == '\n'
-                         || s[*at] == '\r')) (*at)++;
+typedef struct {
+    const char *s;
+    u32 len, at;
+    int bad;
+    int depth;
+} jread;
+
+static void jr_space(jread *r) {
+    while (r->at < r->len && (r->s[r->at] == ' ' || r->s[r->at] == '\t'
+                              || r->s[r->at] == '\n' || r->s[r->at] == '\r')) r->at++;
 }
 
-static jval js_json_read(jctx *J, const char *s, u32 len, u32 *at) {
-    js_json_space(s, len, at);
-    if (*at >= len) return js_undef();
-    char c = s[*at];
+static int jr_hex4(jread *r, u32 at) {
+    if (at + 4 > r->len) return -1;
+    int v = 0;
+    for (int i = 0; i < 4; i++) {
+        char c = r->s[at + i];
+        int d = (c >= '0' && c <= '9') ? c - '0' : (c >= 'a' && c <= 'f') ? c - 'a' + 10
+              : (c >= 'A' && c <= 'F') ? c - 'A' + 10 : -1;
+        if (d < 0) return -1;
+        v = v * 16 + d;
+    }
+    return v;
+}
 
-    if (c == '{') {
-        (*at)++;
-        jobj *o = js_object(J, JO_PLAIN);
-        js_json_space(s, len, at);
-        if (*at < len && s[*at] == '}') { (*at)++; return js_from_obj(o); }
+/* A code point as UTF-8, which is what this engine's strings hold. */
+static u32 jr_utf8(u32 cp, char *out) {
+    if (cp < 0x80) { out[0] = (char)cp; return 1; }
+    if (cp < 0x800) { out[0] = (char)(0xC0 | (cp >> 6)); out[1] = (char)(0x80 | (cp & 63)); return 2; }
+    if (cp < 0x10000) {
+        out[0] = (char)(0xE0 | (cp >> 12)); out[1] = (char)(0x80 | ((cp >> 6) & 63));
+        out[2] = (char)(0x80 | (cp & 63));
+        return 3;
+    }
+    out[0] = (char)(0xF0 | (cp >> 18)); out[1] = (char)(0x80 | ((cp >> 12) & 63));
+    out[2] = (char)(0x80 | ((cp >> 6) & 63)); out[3] = (char)(0x80 | (cp & 63));
+    return 4;
+}
+
+static jstr *jr_string(jctx *J, jread *r) {
+    r->at++;                                   /* the opening quote */
+    u32 scan = r->at;
+    while (scan < r->len && r->s[scan] != '"') {
+        if (r->s[scan] == '\\') scan++;
+        else if ((unsigned char)r->s[scan] < 32) { r->bad = 1; return 0; }
+        scan++;
+    }
+    if (scan >= r->len) { r->bad = 1; return 0; }
+    /* No escape makes more bytes than it was written in. */
+    char *buf = (char *)js_alloc(J, scan - r->at + 1);
+    if (!buf) { r->bad = 1; return 0; }
+    u32 w = 0, i = r->at;
+    while (i < scan) {
+        if (r->s[i] != '\\') { buf[w++] = r->s[i++]; continue; }
+        char e = r->s[i + 1];
+        i += 2;
+        switch (e) {
+            case '"': buf[w++] = '"'; break;
+            case '\\': buf[w++] = '\\'; break;
+            case '/': buf[w++] = '/'; break;
+            case 'b': buf[w++] = 8; break;
+            case 'f': buf[w++] = 12; break;
+            case 'n': buf[w++] = '\n'; break;
+            case 'r': buf[w++] = '\r'; break;
+            case 't': buf[w++] = '\t'; break;
+            case 'u': {
+                int h = jr_hex4(r, i);
+                if (h < 0) { r->bad = 1; return 0; }
+                i += 4;
+                u32 cp = (u32)h;
+                /* A character past the first sixty five thousand comes as two. */
+                if (cp >= 0xD800 && cp < 0xDC00 && i + 6 <= scan && r->s[i] == '\\' && r->s[i + 1] == 'u') {
+                    int lo = jr_hex4(r, i + 2);
+                    if (lo >= 0xDC00 && lo < 0xE000) {
+                        cp = 0x10000 + ((cp - 0xD800) << 10) + (u32)(lo - 0xDC00);
+                        i += 6;
+                    }
+                }
+                w += jr_utf8(cp, buf + w);
+                break;
+            }
+            default: r->bad = 1; return 0;
+        }
+    }
+    r->at = scan + 1;
+    return js_str_n(J, buf, w);
+}
+
+static jval jr_value(jctx *J, jread *r) {
+    jr_space(r);
+    if (r->at >= r->len || r->bad) { r->bad = 1; return js_undef(); }
+    char c = r->s[r->at];
+
+    if (c == '{' || c == '[') {
+        if (++r->depth > JS_JSON_DEPTH) { r->bad = 1; return js_undef(); }
+        int obj = c == '{';
+        r->at++;
+        jobj *o = obj ? js_object(J, JO_PLAIN) : js_array(J);
+        if (!o) { r->bad = 1; return js_undef(); }
+        jr_space(r);
+        char end = obj ? '}' : ']';
+        if (r->at < r->len && r->s[r->at] == end) { r->at++; r->depth--; return js_from_obj(o); }
         for (;;) {
-            js_json_space(s, len, at);
-            jval k = js_json_read(J, s, len, at);
-            js_json_space(s, len, at);
-            if (*at < len && s[*at] == ':') (*at)++;
-            jval v = js_json_read(J, s, len, at);
-            js_set_prop(J, o, js_to_str(J, k), v);
-            js_json_space(s, len, at);
-            if (*at < len && s[*at] == ',') { (*at)++; continue; }
-            if (*at < len && s[*at] == '}') (*at)++;
+            jr_space(r);
+            if (obj) {
+                if (r->at >= r->len || r->s[r->at] != '"') { r->bad = 1; break; }
+                jstr *k = jr_string(J, r);
+                jr_space(r);
+                if (r->bad || r->at >= r->len || r->s[r->at] != ':') { r->bad = 1; break; }
+                r->at++;
+                jval v = jr_value(J, r);
+                if (r->bad) break;
+                js_set_prop(J, o, k, v);
+            } else {
+                jval v = jr_value(J, r);
+                if (r->bad) break;
+                js_arr_push(J, o, v);
+            }
+            jr_space(r);
+            if (r->at < r->len && r->s[r->at] == ',') { r->at++; continue; }
+            if (r->at < r->len && r->s[r->at] == end) { r->at++; break; }
+            r->bad = 1;
             break;
         }
+        r->depth--;
         return js_from_obj(o);
     }
-
-    if (c == '[') {
-        (*at)++;
-        jobj *a = js_array(J);
-        js_json_space(s, len, at);
-        if (*at < len && s[*at] == ']') { (*at)++; return js_from_obj(a); }
-        for (;;) {
-            js_arr_push(J, a, js_json_read(J, s, len, at));
-            js_json_space(s, len, at);
-            if (*at < len && s[*at] == ',') { (*at)++; continue; }
-            if (*at < len && s[*at] == ']') (*at)++;
-            break;
-        }
-        return js_from_obj(a);
-    }
-
     if (c == '"') {
-        (*at)++;
-        u32 start = *at;
-        u32 count = 0;
-        u32 scan = *at;
-        while (scan < len && s[scan] != '"') {
-            if (s[scan] == '\\') scan++;
-            scan++;
-            count++;
-        }
-        char *buf = (char *)js_alloc(J, count + 1);
-        if (!buf) return js_undef();
-        u32 w = 0, i = start;
-        while (i < len && s[i] != '"') {
-            if (s[i] == '\\' && i + 1 < len) {
-                i++;
-                switch (s[i]) {
-                    case 'n': buf[w++] = '\n'; break;
-                    case 't': buf[w++] = '\t'; break;
-                    case 'r': buf[w++] = '\r'; break;
-                    default:  buf[w++] = s[i]; break;
-                }
-                i++;
-            } else buf[w++] = s[i++];
-        }
-        buf[w] = 0;
-        *at = i + 1;
-        return js_from_str(js_str_n(J, buf, w));
+        jstr *s = jr_string(J, r);
+        return s ? js_from_str(s) : js_undef();
     }
 
-    if (c == 't' && *at + 3 < len) { *at += 4; return js_bool(1); }
-    if (c == 'f' && *at + 4 < len) { *at += 5; return js_bool(0); }
-    if (c == 'n' && *at + 3 < len) { *at += 4; return js_null(); }
-
-    u32 start = *at;
-    while (*at < len) {
-        char d = s[*at];
-        if ((d >= '0' && d <= '9') || d == '-' || d == '+' || d == '.'
-            || d == 'e' || d == 'E') (*at)++;
-        else break;
+    /* The three words, whole. */
+    static const struct { const char *w; int n; } WORDS[] = { { "true", 4 }, { "false", 5 }, { "null", 4 } };
+    for (int k = 0; k < 3; k++) {
+        int m = 0;
+        while (m < WORDS[k].n && r->at + (u32)m < r->len && r->s[r->at + m] == WORDS[k].w[m]) m++;
+        if (m == WORDS[k].n) {
+            r->at += (u32)m;
+            return k == 2 ? js_null() : js_bool(k == 0);
+        }
     }
-    if (*at == start) { (*at)++; return js_undef(); }
-    return js_num(js_str_to_num(s + start, *at - start));
+
+    /* A number, in JSON's own shape: a minus, digits with no leading zero,
+       then a fraction and an exponent if they are there. */
+    u32 start = r->at;
+    if (r->at < r->len && r->s[r->at] == '-') r->at++;
+    u32 digits = r->at;
+    while (r->at < r->len && r->s[r->at] >= '0' && r->s[r->at] <= '9') r->at++;
+    if (r->at == digits || (r->s[digits] == '0' && r->at - digits > 1)) { r->bad = 1; return js_undef(); }
+    if (r->at < r->len && r->s[r->at] == '.') {
+        u32 f = ++r->at;
+        while (r->at < r->len && r->s[r->at] >= '0' && r->s[r->at] <= '9') r->at++;
+        if (r->at == f) { r->bad = 1; return js_undef(); }
+    }
+    if (r->at < r->len && (r->s[r->at] == 'e' || r->s[r->at] == 'E')) {
+        r->at++;
+        if (r->at < r->len && (r->s[r->at] == '+' || r->s[r->at] == '-')) r->at++;
+        u32 e = r->at;
+        while (r->at < r->len && r->s[r->at] >= '0' && r->s[r->at] <= '9') r->at++;
+        if (r->at == e) { r->bad = 1; return js_undef(); }
+    }
+    return js_num(js_str_to_num(r->s + start, r->at - start));
 }
 
 static jval nat_json_parse(jctx *J, jval t, jval *a, int n) {
     (void)t;
     jstr *s = js_to_str(J, js_arg(a, n, 0));
     if (!s) return js_undef();
-    u32 at = 0;
-    return js_json_read(J, s->s, s->len, &at);
+    jread r = { s->s, s->len, 0, 0, 0 };
+    jval v = jr_value(J, &r);
+    jr_space(&r);
+    if (r.bad || r.at != r.len)
+        return js_throw(J, JS_ERR_SYNTAX, "JSON.parse was given text that is not JSON", J->error_line);
+    return v;
 }
 
 /* --- Object -------------------------------------------------------------- */
@@ -2690,7 +3059,11 @@ static int js_run(jctx *J, const char *src, u32 len) {
     int prog = js_parse(J, src, len);
     if (prog < 0 || J->sig == JS_FAILED) return 0;
 
-    js_exec(J, prog, J->global, js_undef());
+    /* At the top of a script `this` is the global object. It was undefined,
+       so the wrapper nearly every library ships in -- (function(root){
+       root.lib = ...; })(this) -- stopped at its first line with "cannot set
+       lib of undefined". */
+    js_exec(J, prog, J->global, js_from_obj(J->global->vars));
 
     if (J->sig == JS_THROWN) return 0;
     if (J->sig == JS_FAILED) return 0;

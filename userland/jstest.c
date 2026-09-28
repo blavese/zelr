@@ -595,6 +595,74 @@ int main(void) {
     expect("and a method taken away to call later keeps its receiver",
            "(function(){ var s = 'xyz'; var at = s.charAt; return at(1); })()", "y");
 
+    /* --- string methods as the language has them ---------------------------
+     *
+     * substring, substr and slice were one function, positions were ignored,
+     * replaceAll replaced once, and a string pattern's replacement was taken
+     * as plain text. */
+    expect("substring takes its ends in either order", "'hello'.substring(3, 1)", "el");
+    expect("and holds a negative at the start", "'hello'.substring(-2, 2)", "he");
+    expect("substr is a start and a length", "'hello'.substr(1, 3)", "ell");
+    expect("counted from the end when the start is negative", "'hello'.substr(-3, 2)", "ll");
+    expect("indexOf starts where it is told", "'abcabc'.indexOf('b', 2)", "4");
+    expect("and lastIndexOf looks back from where it is told",
+           "'abcabc'.lastIndexOf('b') + ',' + 'abcabc'.lastIndexOf('b', 3)", "4,1");
+    expect("includes and startsWith take a position",
+           "'abcabc'.includes('a', 4) + ',' + 'abcabc'.startsWith('ca', 2)", "false,true");
+    expect("endsWith, with and without an end",
+           "'hello.txt'.endsWith('.txt') + ',' + 'hello.txt'.endsWith('lo', 5)", "true,true");
+    expect("padStart and padEnd", "'5'.padStart(3, '0') + '|' + 'ab'.padEnd(5, '.-')", "005|ab.-.");
+    expect("trimStart and trimEnd", "'[' + '  x  '.trimStart() + '][' + '  x  '.trimEnd() + ']'",
+           "[x  ][  x]");
+    expect("at counts from the end", "'hello'.at(-1) + 'hello'.at(0)", "oh");
+    expect("concat", "'a'.concat('b', 1, true)", "ab1true");
+    expect("replaceAll with a string replaces them all", "'a-b-c'.replaceAll('-', '+')", "a+b+c");
+    expect("and replace still replaces the first", "'a-b-c'.replace('-', '+')", "a+b-c");
+    expect("a string pattern's replacement knows $& and $$",
+           "'cost 5'.replace('5', '[$&] $$')", "cost [5] $");
+    expect("and a function replacement is called with the match and where it was",
+           "'a-b'.replaceAll('-', function(m, at){ return '(' + m + at + ')'; })", "a(-1)b");
+    expect("var with no value leaves a value that is there",
+           "(function(){ var n = 5; var n; return n; })()", "5");
+    expect("so a total declared again inside a loop keeps adding up",
+           "(function(){ var t = 0; for (var i = 0; i < 3; i++) { var acc; acc = (acc || 0) + 1;"
+           " t = acc; } return t; })()", "3");
+    expect("but let with no value starts again each time round",
+           "(function(){ var r = ''; for (var i = 0; i < 2; i++) { let x; r += x + ';'; x = 1; }"
+           " return r; })()", "undefined;undefined;");
+    script("this at the top of a script is the global object",
+           "var g = this; g.seen = 5; var result = typeof g + ',' + seen;", "object,5");
+    script("so the wrapper a library ships in works",
+           "(function(root){ root.lib = { v: 7 }; })(this); var result = lib.v;", "7");
+    /* --- things that ran the stack out, and JSON as it is written -------------- */
+    expect("an array inside itself becomes text, empty where it comes round again",
+           "(function(){ var a = [1, 2]; a.push(a); return String(a); })()", "1,2,");
+    expect("and an array two hundred deep becomes text at once",
+           "(function(){ var a = [1]; for (var i = 0; i < 200; i++) a = [a]; return String(a); })()", "1");
+    expect("JSON refuses an object inside itself rather than running out of stack",
+           "(function(){ var o = {}; o.me = o; try { JSON.stringify(o); return 'wrote it'; }"
+           " catch (e) { return e.name; } })()", "TypeError");
+    expect("JSON escapes control characters",
+           "JSON.stringify('a\\u0001b\\r\\n')", "\"a\\u0001b\\r\\n\"");
+    expect("and writes what is not a number as null",
+           "JSON.stringify([NaN, 1/0, undefined, function(){}, 2])", "[null,null,null,null,2]");
+    expect("and nothing at all for undefined", "typeof JSON.stringify(undefined)", "undefined");
+    expect("and a long answer without using up the page",
+           "(function(){ var a = []; for (var i = 0; i < 20000; i++) a.push({ n: i, s: 'text' });"
+           " return JSON.stringify(a).length; })()", "448891");
+    expect("JSON.parse undoes \\u escapes, a pair of halves as one character",
+           "(function(){ var s = JSON.parse('\"\\\\u00e9\\\\ud83d\\\\ude00\"'); return s.length; })()", "6");
+    expect("and refuses what is not JSON",
+           "(function(){ var bad = ['tru', '{a:1}', '[1,]', '01', '\"x', 'nul', '1 2'], n = 0;"
+           " for (var i = 0; i < bad.length; i++) { try { JSON.parse(bad[i]); } catch (e) { n++; } }"
+           " return n; })()", "7");
+    expect("but reads what is",
+           "JSON.stringify(JSON.parse(' {\"a\": [1, -2.5e3, true, null], \"b\": \"x\\\\ny\"} '))",
+           "{\"a\":[1,-2500,true,null],\"b\":\"x\\ny\"}");
+    expect("a loop walking a string by its matches ends",
+           "(function(){ var s = 'x.y.z', n = 0, at = s.indexOf('.');"
+           " while (at >= 0 && n < 10) { n++; at = s.indexOf('.', at + 1); } return n; })()", "2");
+
     /* The count, at the end. It used to be printed half way down, so every
        case after the regular expressions ran without being counted, and a
        suite that lost them would have reported the same total. */

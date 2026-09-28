@@ -794,10 +794,55 @@ static inline int ui_menubar(surface *s, ui_input *in, const ui_theme *t,
     return hot;
 }
 
+/* As much of s as fits in maxw pixels, with "..." where it was cut, and never
+   cut through the middle of a character. */
+static inline void ui_fit_text(const char *s, int maxw, int face, char *out, int cap) {
+    int n = 0;
+    while (s[n] && n < cap - 4) { out[n] = s[n]; n++; }
+    out[n] = 0;
+    if (!s[n] && face_w(out, face) <= maxw) return;
+    int dots = face_w("...", face);
+    while (n > 0) {
+        out[--n] = 0;
+        if (face_w(out, face) + dots <= maxw) break;
+    }
+    while (n > 0 && ((unsigned char)s[n] & 0xC0) == 0x80) out[--n] = 0;
+    out[n++] = '.'; out[n++] = '.'; out[n++] = '.';
+    out[n] = 0;
+}
+
+/* The two halves of a status bar w wide, shortened to fit beside each other
+   when together they do not: the left says what is happening and keeps its
+   room first, and the right gives way, down to a third of the bar (or its
+   panel, in the classic look). They used to be drawn whole, and a long
+   status and a long page title were drawn through each other. */
+#define UI_STATUS_RIGHT_W 128
+
+static inline void ui_status_fit(int w, int modern, const char **left, const char **right) {
+    static char lfit[512], rfit[256];
+    int room = modern ? w - 44 : w - 26;
+    int lw = *left ? face_w(*left, UI_FACE_BODY) : 0;
+    int rw = *right ? face_w(*right, UI_FACE_BODY) : 0;
+    int rmax = modern ? room - lw : UI_STATUS_RIGHT_W;
+    if (rmax < room / 3) rmax = room / 3;
+    if (!modern && rmax > UI_STATUS_RIGHT_W) rmax = UI_STATUS_RIGHT_W;
+    if (*right && rw > rmax) {
+        ui_fit_text(*right, rmax, UI_FACE_BODY, rfit, (int)sizeof(rfit));
+        *right = rfit;
+        rw = face_w(rfit, UI_FACE_BODY);
+    }
+    int lmax = modern ? room - rw : (*right ? w - 154 : w - 17);
+    if (*left && lw > lmax && lmax > 0) {
+        ui_fit_text(*left, lmax, UI_FACE_BODY, lfit, (int)sizeof(lfit));
+        *left = lfit;
+    }
+}
+
 static inline void ui_statusbar(surface *s, const ui_theme *t,
                                 int w, int h, const char *left, const char *right) {
     int y = h - UI_ROW;
     rect(s, 0, y, w, UI_ROW, t->panel);
+    ui_status_fit(w, t->modern, &left, &right);
 
     /* Two sunk panels rather than a strip of text, which is what a status
        bar has always been: the text sits in something, so an empty one

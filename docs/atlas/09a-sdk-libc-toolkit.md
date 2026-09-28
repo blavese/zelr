@@ -519,7 +519,7 @@ cannot both claim one click.
 | `ui_well(…, &ix,&iy,&iw,&ih)` | 687-699 | sunk/rounded content area, returns the 2-px-inset interior | yes |
 | `ui_toolbar(s,t,w,h)`, `ui_toolbar_gap` | 704-722 | panel strip with line (modern) or groove | yes |
 | `ui_menubar(s,in,t,w,titles,count,open,x_out)` | 736-761 | draws titles, open one in accent; returns hovered index or -1; program owns which is open | no (uses `ui_raised`) |
-| `ui_statusbar(s,t,w,h,left,right)` | 763-798 | bottom `UI_ROW` strip; bevel mode = two sunk panels | yes |
+| `ui_statusbar(s,t,w,h,left,right)` | 763-798 | bottom `UI_ROW` strip; bevel mode = two sunk panels; since 0.62.0 both halves pass through `ui_status_fit` (the right gives way to a third of the bar, or 128 px in the classic look, cut by `ui_fit_text` with "...") | yes |
 | `ui_menu(s,in,t,x,y,w,items,count)` | 805-832 | popup clamped into the surface, 3-step darkened "shadow", returns chosen index on release | no |
 All text is drawn with `face.h` (BODY 15px; BOLD for `ui_section`); the bitmap font is not used by `ui.h`.
 Users: `blackjack.c, calc.c, browser.c, files.c, monitor.c, music.c, notes.c, poker.c, settings.c`, `cards.h`.

@@ -1095,8 +1095,12 @@ static int js_parse_var_list(jparse *P, int line) {
 
 static int js_parse_var(jparse *P) {
     int line = P->L.tok.line;
+    /* Which word it was, because `var x;` with no value leaves an x that
+       already has one alone, and let and const do not (N_VAR). */
+    int is_var = P->L.tok.len == 3 && P->L.tok.text[0] == 'v';
     js_next(&P->L);                       /* the var, let or const */
     int n = js_parse_var_list(P, line);
+    if (n >= 0) P->J->nodes[n].d = is_var;
     js_semicolon(P);
     return n;
 }
