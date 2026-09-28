@@ -1298,8 +1298,8 @@ application used to show was nothing. But what the page would show is
 there to be read: YouTube puts it in the page as data, a megabyte and a half
 of it, and Twitch answers it from a public API. So for those two the browser
 reads that and draws a plain page of its own (`userland/sites.h`): on
-YouTube, searches, a video with its description and the ones beside it,
-channels, playlists and Shorts; on Twitch, who is live, its categories and
+YouTube, searches, a video with its description, the ones beside it and its
+comments, channels, playlists and Shorts; on Twitch, who is live, its categories and
 the streams in each, a channel's past broadcasts, and a search for
 channels; every row with its picture and a link back to the site's own
 address. A video's page shows

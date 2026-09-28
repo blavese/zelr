@@ -1056,6 +1056,13 @@ static void load(const char *address, int width, int keep_scroll) {
         w_copy(title, sizeof(title), here.path, sizeof(title));
     } else if (big && rc < 400
                && (read_site = site_youtube(&here, reply.body, reply.len, src, SRC_MAX)) > 0) {
+        /* A video's comments are a second question, asked with the token the
+           page carries for them, while the page is still in hand. */
+        if (w_starts_fold(here.path, "/watch")) {
+            static char comments[64 * 1024];
+            int cn = site_youtube_comments(reply.body, reply.len, comments, (int)sizeof(comments));
+            if (cn > 0) read_site = site_append(src, read_site, SRC_MAX, comments, cn);
+        }
         build(src, read_site, width, 1, &fetched, &skipped);
     } else if (from_google) {
         build_noted("<p style=\"background:#fff4d6;padding:6px 10px\">Google shows its results "
@@ -1890,11 +1897,14 @@ int main(int argc, char **argv) {
         /* --- and the page under it ------------------------------------------ */
         ui_well(&s, &t, view_x, view_y, view_w + UI_SCROLL_W, view_h, 0, 0, 0, 0);
         {
-            /* Clipped at the bottom by drawing into a surface that stops
-               where the well does, and at the top by putting the bevel back
-               afterwards. */
-            surface pg = { px, w, view_y + view_h - 2 };
-            draw_page(&pg, view_x + UI_PAD, view_y + 2, view_w, view_h - 4);
+            /* Drawn into a surface that is only the rows inside the well, so
+               everything is clipped at both edges by the surface's own. It
+               used to start at the top of the window and stop at the bottom
+               of the well, with the bevel put back over the top afterwards --
+               but a line or a box half scrolled off the top, which is always
+               drawn, landed on the toolbar above the bevel. */
+            surface pg = { px + (u32)(view_y + 2) * (u32)w, w, view_h - 4 };
+            draw_page(&pg, view_x + UI_PAD, 0, view_w, view_h - 4);
         }
         ui_sunken(&s, &t, view_x, view_y, view_w + UI_SCROLL_W, view_h);
         ui_scrollbar(&s, &t, view_x + view_w + 2, view_y + 2, view_h - 4,

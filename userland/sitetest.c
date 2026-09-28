@@ -134,6 +134,43 @@ static const char YT_CHANNEL[] =
 
 static const char YT_FRONT[] = "<script>var ytInitialData = {\"contents\":{}};</script>";
 
+/* A watch page's comments section, with its token and the client it names,
+   and the API's answer to it. */
+/* Another section with a token of its own comes first, so taking the right
+   one is a choice. */
+static const char YT_WITH_COMMENTS[] =
+    "<script>ytcfg.set({\"INNERTUBE_CLIENT_VERSION\":\"2.20260925.08.00\"});</script>"
+    "<script>var ytInitialData = {\"contents\":{\"results\":["
+    "{\"itemSectionRenderer\":{\"contents\":[{\"continuationItemRenderer\":{\"continuationEndpoint\":"
+    "{\"continuationCommand\":{\"token\":\"NOTTHISONE\"}}}}],\"sectionIdentifier\":\"other\"}},"
+    "{\"itemSectionRenderer\":{\"contents\":["
+    "{\"continuationItemRenderer\":{\"continuationEndpoint\":{\"continuationCommand\":"
+    "{\"token\":\"Eg0SC2RR-_x%3D\",\"request\":\"CONTINUATION_REQUEST_TYPE_WATCH_NEXT\"}}}}],"
+    "\"sectionIdentifier\":\"comment-item-section\"}}]}};</script>";
+
+static const char YT_BAD_TOKEN[] =
+    "<script>var ytInitialData = {\"contents\":{\"results\":[{\"itemSectionRenderer\":{\"contents\":["
+    "{\"continuationItemRenderer\":{\"continuationEndpoint\":{\"continuationCommand\":"
+    "{\"token\":\"abc\\\",\\\"x\\\":\\\"y\"}}}}],\"sectionIdentifier\":\"comment-item-section\"}}]}};</script>";
+
+static const char YT_NO_COMMENTS[] =
+    "<script>var ytInitialData = {\"contents\":{\"results\":[{\"itemSectionRenderer\":{\"contents\":"
+    "[{\"messageRenderer\":{\"text\":{\"simpleText\":\"Comments are turned off.\"}}}],"
+    "\"sectionIdentifier\":\"comment-item-section\"}}]}};</script>";
+
+static const char YT_COMMENTS_ANSWER[] =
+    "{\"frameworkUpdates\":{\"entityBatchUpdate\":{\"mutations\":["
+    "{\"payload\":{\"commentEntityPayload\":{\"properties\":{\"commentId\":\"a\","
+    "\"content\":{\"content\":\"never <gave> us up\\nsecond line\"},\"publishedTime\":\"1 year ago\"},"
+    "\"author\":{\"displayName\":\"@YouTube\",\"channelId\":\"UC1\"},"
+    "\"toolbar\":{\"likeCountNotliked\":\"321K\",\"replyCount\":\"963\"}}}},"
+    "{\"payload\":{\"commentEntityPayload\":{\"properties\":{\"content\":{\"content\":\"one\"},"
+    "\"publishedTime\":\"2 days ago\"},\"author\":{\"displayName\":\"@b\"},"
+    "\"toolbar\":{\"likeCountNotliked\":\"1\",\"replyCount\":\"0\"}}}},"
+    "{\"payload\":{\"commentEntityPayload\":{\"properties\":{\"publishedTime\":\"now\"},"
+    "\"author\":{\"displayName\":\"@empty\"}}}}"
+    "]}}}";
+
 /* A Short and a playlist in a search, and a playlist's own page. */
 static const char YT_MIXED[] =
     "<script>var ytInitialData = {\"contents\":["
@@ -369,6 +406,34 @@ static void checks(void) {
            n > 0 && has(page, "<title>Top 100 - YouTube</title>") && has(page, "<h1>Top 100</h1>")
            && has(page, "This week's songs.") && has(page, "/watch?v=PPPPPPPPPP1"));
 
+        {
+            static char tok[512], ver[48];
+            int got = yt_comments_token(YT_WITH_COMMENTS, w_len(YT_WITH_COMMENTS), tok, sizeof(tok),
+                                        ver, sizeof(ver));
+            ok("a watch page's comments are asked for with the token of its comments section",
+               got && w_same(tok, "Eg0SC2RR-_x%3D") && w_same(ver, "2.20260925.08.00"));
+            got = yt_comments_token(YT_NO_COMMENTS, w_len(YT_NO_COMMENTS), tok, sizeof(tok),
+                                    ver, sizeof(ver));
+            ok("and not at all when the section has none", !got && !tok[0]);
+            got = yt_comments_token(YT_BAD_TOKEN, w_len(YT_BAD_TOKEN), tok, sizeof(tok), ver, sizeof(ver));
+            ok("nor with a token that would close the quotes it is sent in", !got && !tok[0]);
+            site_page cp = { page, 0, (int)sizeof(page) };
+            page[0] = 0;
+            int c = yt_comments_write(&cp, YT_COMMENTS_ANSWER, w_len(YT_COMMENTS_ANSWER), 20);
+            okn("the answer's comments are written, one each, and none for a comment with no words",
+                c == 2 && count(page, "class=\"comment\"") == 2, c);
+            ok("who, when, how liked, how many replies, and what they said, escaped",
+               has(page, "<b>@YouTube</b> <small>1 year ago &middot; 321K likes &middot; 963 replies"
+                         "</small><br>never &lt;gave&gt; us up<br>second line"));
+            ok("with one like said as one, and no replies not said at all",
+               has(page, "<b>@b</b> <small>2 days ago &middot; 1 like</small><br>one"));
+            static char doc[256];
+            w_copy(doc, sizeof(doc), "<html><body><p>x</p></body></html>\n", sizeof(doc));
+            int dn = site_append(doc, w_len(doc), (int)sizeof(doc), "<h2>c</h2>", 10);
+            ok("and they go at the end of the page, inside it",
+               dn == w_len(doc) && w_same(doc, "<html><body><p>x</p><h2>c</h2></body></html>\n"));
+        }
+
         n = yt("https://www.youtube.com/", YT_FRONT);
         ok("the front page, which lists nothing to a stranger, says so and offers the search",
            n > 0 && has(page, "did not list any videos") && has(page, "search_query"));
@@ -576,6 +641,11 @@ static int live(const char *address) {
         putn(rc >= 0 ? r.len : 0);
         putc('\n');
         n = rc == 200 ? site_youtube(&u, r.body, r.len, page, (int)sizeof(page)) : rc;
+        if (n > 0 && w_starts_fold(u.path, "/watch")) {
+            static char comments[64 * 1024];
+            int cn = site_youtube_comments(r.body, r.len, comments, (int)sizeof(comments));
+            if (cn > 0) n = site_append(page, n, (int)sizeof(page), comments, cn);
+        }
         free(buf);
     }
     puts("SITETEST_LIVE page ");
@@ -586,6 +656,8 @@ static int live(const char *address) {
     putn(n > 0 ? count(page, "<img ") : 0);
     puts(" frames ");
     putn(n > 0 ? count(page, "/sb/") + count(page, "/storyboards/") : 0);
+    puts(" comments ");
+    putn(n > 0 ? count(page, "class=\"comment\"") : 0);
     putc('\n');
     /* The first few titles, so a run can be read by a person as well. */
     int shown = 0, len = n > 0 ? n : 0;

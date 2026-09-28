@@ -739,6 +739,137 @@ static inline void yt_frames(site_page *p, const char *s, int n) {
     }
 }
 
+/* --- comments ----------------------------------------------------------------
+ *
+ * A watch page does not carry its comments. It carries a token that asks for
+ * them, in the section named comment-item-section, and YouTube's own page
+ * sends the token to /youtubei/v1/next once the comments scroll into view;
+ * the answer is JSON, a payload per comment. This asks the same question with
+ * the same token, naming the client the page names, and writes the comments
+ * from the answer. */
+
+/* The token and the client version, from a watch page; 0 when it has no
+   comments to ask for (turned off, or a stream that is live). */
+static inline int yt_comments_token(const char *s, int n, char *tok, int tcap, char *ver, int vcap) {
+    tok[0] = ver[0] = 0;
+    int at = site_search(s, 0, n, "\"sectionIdentifier\":\"comment-item-section\"");
+    if (at < 0) return 0;
+    /* The token comes before the name, inside the same section. */
+    const char *open = "\"itemSectionRenderer\":{";
+    int ol = w_len(open), from = -1;
+    for (int k = at - ol; k >= 0 && k > at - 16384; k--) {
+        int m = 0;
+        while (m < ol && s[k + m] == open[m]) m++;
+        if (m == ol) { from = k + ol - 1; break; }
+    }
+    if (from < 0) return 0;
+    int v = sj_find(s, from, at, "token");
+    if (v < 0) return 0;
+    static char raw[512];
+    int rl = sj_str(s, v, n, raw, sizeof(raw));
+    if (rl <= 0 || site_ident(raw, tok, tcap, "-_%") != rl) { tok[0] = 0; return 0; }
+    int cv = site_search(s, 0, n, "\"INNERTUBE_CLIENT_VERSION\":");
+    char vraw[48];
+    vraw[0] = 0;
+    if (cv >= 0) sj_str(s, sj_find(s, cv, cv + 64 < n ? cv + 64 : n, "INNERTUBE_CLIENT_VERSION"), n,
+                        vraw, sizeof(vraw));
+    if (!vraw[0] || site_ident(vraw, ver, vcap, ".") != w_len(vraw))
+        w_copy(ver, vcap, "2.20260101.00.00", vcap);
+    return 1;
+}
+
+/* The comments in an answer, each a paragraph: who, how long ago, how liked,
+   how many replies, and what they said. */
+static inline int yt_comments_write(site_page *p, const char *s, int n, int limit) {
+    static char text[4096], when[64], who[128], likes[32], replies[32];
+    int shown = 0;
+    for (int at = site_search(s, 0, n, "\"commentEntityPayload\":{"); at >= 0 && shown < limit;
+         at = site_search(s, at + 1, n, "\"commentEntityPayload\":{")) {
+        int obj = sj_find(s, at, n, "commentEntityPayload");
+        int end = sj_skip(s, obj, n);
+        text[0] = when[0] = who[0] = likes[0] = replies[0] = 0;
+        int pr = sj_find(s, obj, end, "properties");
+        if (pr >= 0 && s[pr] == '{') {
+            int pe = sj_skip(s, pr, end);
+            int c = sj_find(s, pr, pe, "content");
+            if (c >= 0) sj_text(s, c, n, text, sizeof(text));
+            sj_field(s, pr, pe, "publishedTime", when, sizeof(when));
+        }
+        int au = sj_find(s, obj, end, "author");
+        if (au >= 0 && s[au] == '{') sj_field(s, au, end, "displayName", who, sizeof(who));
+        int tb = sj_find(s, obj, end, "toolbar");
+        if (tb >= 0 && s[tb] == '{') {
+            sj_field(s, tb, end, "likeCountNotliked", likes, sizeof(likes));
+            sj_field(s, tb, end, "replyCount", replies, sizeof(replies));
+        }
+        if (!text[0]) continue;
+        if (!shown) sp_raw(p, "<h2>comments</h2>\n");
+        sp_raw(p, "<div class=\"comment\"><p><b>");
+        sp_text(p, who[0] ? who : "someone");
+        sp_raw(p, "</b> <small>");
+        sp_text(p, when);
+        if (likes[0] && !w_same(likes, "0")) {
+            sp_raw(p, " &middot; ");
+            sp_text(p, likes);
+            sp_raw(p, w_same(likes, "1") ? " like" : " likes");
+        }
+        if (replies[0] && !w_same(replies, "0")) {
+            sp_raw(p, " &middot; ");
+            sp_text(p, replies);
+            sp_raw(p, w_same(replies, "1") ? " reply" : " replies");
+        }
+        sp_raw(p, "</small><br>");
+        sp_text(p, text);
+        sp_raw(p, "</p></div>\n");
+        shown++;
+    }
+    return shown;
+}
+
+/* A page with something added before its end. */
+static inline int site_append(char *out, int n, int cap, const char *extra, int en) {
+    const char *tail = "</body></html>\n";
+    int tl = w_len(tail);
+    if (n < tl || !w_same(out + n - tl, tail) || n - tl + en + tl >= cap) return n;
+    volatile char *d = out + n - tl;
+    for (int i = 0; i < en; i++) d[i] = extra[i];
+    for (int i = 0; i < tl; i++) d[en + i] = tail[i];
+    out[n - tl + en + tl] = 0;
+    return n - tl + en + tl;
+}
+
+/* The comments for a watch page, asked of YouTube, as HTML to add to the
+   page: its length, 0 when there are none to ask for, or a WEB_ERR_. */
+static inline int site_youtube_comments(const char *s, int n, char *out, int cap) {
+    static char tok[512], ver[48], json[1024];
+    if (!yt_comments_token(s, n, tok, sizeof(tok), ver, sizeof(ver))) return 0;
+    site_page b = { json, 0, (int)sizeof(json) };
+    sp_raw(&b, "{\"context\":{\"client\":{\"clientName\":\"WEB\",\"clientVersion\":\"");
+    sp_raw(&b, ver);
+    sp_raw(&b, "\"}},\"continuation\":\"");
+    sp_raw(&b, tok);
+    sp_raw(&b, "\"}");
+
+    url_t api;
+    if (!url_parse("https://www.youtube.com/youtubei/v1/next?prettyPrint=false", &api)) return WEB_ERR_SCHEME;
+    int rcap = 768 * 1024;
+    char *rbuf = (char *)malloc((u64)rcap);
+    if (!rbuf) return 0;
+    response_t r;
+    web_body_type = "application/json";
+    int rc = web_post(&api, json, rbuf, rcap, &r);
+    web_body_type = 0;
+    int written = 0;
+    if (rc == 200) {
+        site_page p = { out, 0, cap };
+        out[0] = 0;
+        if (yt_comments_write(&p, r.body, r.len, 20)) written = p.n;
+    }
+    free(rbuf);
+    if (rc < 0) return rc;
+    return written;
+}
+
 /* The page, from YouTube's own. 0 when there is nothing in it to read. */
 static inline int site_youtube(const url_t *u, const char *s, int n, char *out, int cap) {
     if (!site_is_youtube(u) || n <= 0) return 0;

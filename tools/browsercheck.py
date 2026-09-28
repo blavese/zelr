@@ -87,6 +87,9 @@ VIEW_W = WIN_CW - 6 - UI_SCROLL_W
 VIEW_H = WIN_CH - (TOOLBAR_H + 3) - UI_ROW - 3
 PAGE = (VIEW_X + 2, VIEW_Y + 2, VIEW_X + VIEW_W - 2, VIEW_Y + VIEW_H - 2)
 
+# The toolbar, down to the top of the page: nothing the page draws belongs in it.
+TOOLBAR = (INNER_X, INNER_Y, INNER_X + WIN_CW, VIEW_Y + 2)
+
 # Where the pointer goes to be out of the way.
 #
 # Two checks here compare one rendering of a page against another and want
@@ -390,6 +393,26 @@ def main():
             secure, _, _, shots = page_settled(mon, "br-https")
             c.add("https says it cannot do that rather than failing quietly",
                   secure != missing, shots)
+
+            # --- a page scrolled up under the toolbar ------------------------
+            #
+            # A line half off the top of the page was drawn whole, over the
+            # bottom of the toolbar, because the page was drawn into a surface
+            # that started at the top of the window. The toolbar has to come
+            # out the same whatever the page under it is scrolled to.
+            go(vm, mon, "http://%s/size/40000" % srv.host, was=secure,
+               name="br-going-long")
+            _, pxa, wa, shota = page_settled(mon, "br-long-top")
+            above = region(pxa, wa, TOOLBAR)
+            same = True
+            for step in range(6):
+                mon.send("sendkey down", settle=0.4)
+                _, pxb, wb, shotb = page_settled(mon, "br-long-%d" % step)
+                if region(pxb, wb, TOOLBAR) != above:
+                    same = False
+                    shota = shotb
+                    break
+            c.add("a page scrolled up under the toolbar stays under it", same, shota)
         finally:
             vm.stop()
             try:

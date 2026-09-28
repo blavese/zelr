@@ -37,14 +37,14 @@ DISK = os.path.join(ROOT, "sitecheck.%d.img" % os.getpid())
 # sites give (twenty or so videos, twenty four streams, thirty categories),
 # so a busy day or a smaller answer is not a failure and an empty one is.
 LIVE = [
-    ("a YouTube search", "https://www.youtube.com/results?search_query=lofi+music", 5, 0),
-    ("a YouTube video, with the ones beside it", "https://www.youtube.com/watch?v=dQw4w9WgXcQ", 3, 1),
+    ("a YouTube search", "https://www.youtube.com/results?search_query=lofi+music", 5, 0, 0),
+    ("a YouTube video, with the ones beside it", "https://www.youtube.com/watch?v=dQw4w9WgXcQ", 3, 1, 5),
     # One of YouTube's own weekly charts, which it keeps.
-    ("a YouTube playlist", "https://www.youtube.com/playlist?list=PL4fGSI1pDJn6jXS_Tv_N9B8Z0HTRVJE0m", 5, 0),
-    ("who is live on Twitch", "https://www.twitch.tv/", 5, 0),
-    ("Twitch's categories", "https://www.twitch.tv/directory", 5, 0),
+    ("a YouTube playlist", "https://www.youtube.com/playlist?list=PL4fGSI1pDJn6jXS_Tv_N9B8Z0HTRVJE0m", 5, 0, 0),
+    ("who is live on Twitch", "https://www.twitch.tv/", 5, 0, 0),
+    ("Twitch's categories", "https://www.twitch.tv/directory", 5, 0, 0),
 ]
-LIVE_LINE = r"SITETEST_LIVE page (-?\d+) rows (\d+) pictures (\d+) frames (\d+)"
+LIVE_LINE = r"SITETEST_LIVE page (-?\d+) rows (\d+) pictures (\d+) frames (\d+) comments (\d+)"
 
 
 def resolved(vm, host, tries=4):
@@ -69,8 +69,9 @@ def live(vm, url, tries=2):
             break
     m = re.search(LIVE_LINE, out)
     if m:
-        return int(m.group(1)), int(m.group(2)), int(m.group(3)), int(m.group(4)), out
-    return None, 0, 0, 0, out
+        return (int(m.group(1)), int(m.group(2)), int(m.group(3)), int(m.group(4)),
+                int(m.group(5)), out)
+    return None, 0, 0, 0, 0, out
 
 
 def said(vm, before, timeout=240):
@@ -99,13 +100,15 @@ def main():
             c.add("%s resolves, so there is something to ask" % host, resolved(vm, host))
 
         # --- the reader, on its own ------------------------------------------
-        for label, url, floor, sheets in LIVE:
-            size, rows, pics, frames, out = live(vm, url)
+        for label, url, floor, sheets, talk in LIVE:
+            size, rows, pics, frames, comments, out = live(vm, url)
             c.add("%s is read into a page" % label, size is not None and size > 0)
             c.add("with at least %d in it" % floor, rows >= floor)
             c.add("and a picture for each", size is not None and pics >= rows > 0)
             if sheets:
                 c.add("and frames from the video, from its storyboards", frames >= sheets)
+            if talk:
+                c.add("and at least %d of its comments" % talk, comments >= talk)
             if size is None or size <= 0 or rows < floor:
                 for line in out.splitlines()[1:8]:
                     print("      | %s" % line)

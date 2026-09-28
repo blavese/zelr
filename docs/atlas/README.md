@@ -95,6 +95,24 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.67.0: a video's comments, and a page kept out of the toolbar
+
+- **Comments (11, sites.h).** A watch page carries a token for its comments in the section named
+  `comment-item-section` (`yt_comments_token`, with the page's `INNERTUBE_CLIENT_VERSION`); `site_youtube_comments`
+  posts it to `https://www.youtube.com/youtubei/v1/next` as YouTube's own page does, into 768 KiB of its own, and
+  `yt_comments_write` writes the first twenty `commentEntityPayload`s: who, when, likes, replies and the words.
+  The browser adds them to the end of the page (`site_append`). Only a token of token characters is sent.
+- **Browser (11).** The page was drawn into a surface starting at the window's top row, with the bevel put back
+  afterwards, so a line or box half scrolled off the top (always drawn, since items within 8 pixels above are)
+  landed on the toolbar. It is drawn into a surface of only the well's rows now.
+- **Checks.** sitetest 104 (7 new): the token of the comments section and not another section's first (that
+  section is listed first in the test), none when comments are off, none for a token that would close its quotes,
+  the answer's comments with nothing for one with no words, the counts said right, and the end of the page. They
+  failed with the first token in the page taken, comments with no words kept, "likes" for one, the token taken
+  whole, and the addition put after the end. sitecheck 24: at least five comments on a real video. browsercheck 23:
+  a long page scrolled down six times under the toolbar leaves the toolbar's pixels as they were; failed with the
+  old surface.
+
 ### 0.66.0: a page that uses up its memory no longer takes the browser with it
 
 - **JavaScript (12 §10 B8).** At the 24 MiB cap `js_alloc` returned NULL, and the places that use a string or a
