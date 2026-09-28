@@ -95,6 +95,18 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.68.0: arrays that cannot be made to write past themselves
+
+- **JavaScript (12 §10 B7).** An element index is kept among the elements only up to `JS_ARR_MAX` (4M), with the
+  arithmetic in 64 bits; one further out is kept as a named property (read back the same, no length), where it
+  used to wrap the size to nothing and write past it, or loop for ever doubling to zero. `js_index_of` refuses a
+  leading zero and anything past 4294967294 (they are names), where "4294967296" wrapped to 0. Setting `length`
+  to something that is not a whole number up to 2^32-1 throws RangeError, and a longer length becomes the
+  length, filled with undefined. The numeric index fast path falls through to a property past the elements.
+- **Checks.** jstest 248 (6 new): failed six with the index, length and fast-path changes undone; with only the
+  size guards undone, jstest itself was killed by a write to an unmapped page (the corruption the atlas
+  described), so the test program is the check there.
+
 ### 0.67.0: a video's comments, and a page kept out of the toolbar
 
 - **Comments (11, sites.h).** A watch page carries a token for its comments in the section named

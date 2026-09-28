@@ -675,6 +675,19 @@ int main(void) {
     expect("while a plain break in a switch leaves only the switch",
            "(function(){ var n = 0; for (var i = 0; i < 3; i++) { switch (i) { case 1: break;"
            " default: n++; } } return n; })()", "2");
+    expect("an index too far out to keep among the elements is kept all the same, and nothing written past",
+           "(function(){ var a = [1]; a[150000000] = 5; return a[150000000] + ',' + a[0] + ',' + a.length; })()",
+           "5,1,1");
+    expect("the last name that is not an index is a property, not an element",
+           "(function(){ var a = []; a[4294967295] = 1; return a[4294967295] + ',' + a.length; })()", "1,0");
+    expect("and one past four billion does not wrap round to the first element",
+           "(function(){ var a = [9]; a['4294967296'] = 2; return a[0] + ',' + a['4294967296']; })()", "9,2");
+    expect("and a name with a leading zero is a name",
+           "(function(){ var a = [0, 1]; a['01'] = 7; return a[1] + ',' + a['01']; })()", "1,7");
+    expect("a longer length becomes the length, filled with nothing",
+           "(function(){ var a = [1]; a.length = 3; return a.length + ',' + a[2]; })()", "3,undefined");
+    expect("and a length that is not one is refused",
+           "(function(){ try { [].length = -1; return 'kept'; } catch (e) { return e.name; } })()", "RangeError");
     expect("a loop walking a string by its matches ends",
            "(function(){ var s = 'x.y.z', n = 0, at = s.indexOf('.');"
            " while (at >= 0 && n < 10) { n++; at = s.indexOf('.', at + 1); } return n; })()", "2");

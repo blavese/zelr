@@ -429,14 +429,19 @@ static jval js_length_of(jctx *J, jval target) {
 }
 
 /* Turns a property name into an array index, or says it is not one. */
+/* Whether a name is an array index: digits, no leading zero, at most
+   4294967294. "4294967296" wrapped round to 0 and "01" was 1, so either wrote
+   over an element that was never named. */
 static int js_index_of(const jstr *key, u32 *out) {
     if (!key || !key->len || key->len > 10) return 0;
-    u32 v = 0;
+    if (key->len > 1 && key->s[0] == '0') return 0;
+    u64 v = 0;
     for (u32 i = 0; i < key->len; i++) {
         if (key->s[i] < '0' || key->s[i] > '9') return 0;
-        v = v * 10 + (u32)(key->s[i] - '0');
+        v = v * 10 + (u64)(key->s[i] - '0');
     }
-    *out = v;
+    if (v > 4294967294ull) return 0;
+    *out = (u32)v;
     return 1;
 }
 
@@ -498,8 +503,9 @@ static jval js_get(jctx *J, jval target, jstr *name) {
 
     if (o->kind == JO_ARRAY) {
         u32 idx;
-        if (js_index_of(name, &idx))
-            return idx < o->len ? o->items[idx] : js_undef();
+        /* An index past the elements may have been kept as a named
+           property, when it was too far out to keep among them. */
+        if (js_index_of(name, &idx) && idx < o->len) return o->items[idx];
         jval m = js_array_method(J, target, name);
         if (m.t != JS_UNDEF) return m;
     }
@@ -553,11 +559,23 @@ static void js_put(jctx *J, jval target, jstr *name, jval v) {
 
     if (o->kind == JO_ARRAY) {
         u32 idx;
-        if (js_index_of(name, &idx)) { js_arr_set(J, o, idx, v); return; }
+        /* Too far out to keep among the elements, it is kept as a named
+           property: read back the same, and no length. */
+        if (js_index_of(name, &idx) && js_arr_set(J, o, idx, v)) return;
         if (js_str_is(name, "length")) {
-            u32 want = (u32)js_to_num(J, v);
+            /* A length is a whole number up to four billion, and anything
+               else is refused, as the language refuses it. A longer one
+               fills with undefined; one too long to keep is left as it
+               was. It used to wrap whatever it was given, and a longer one
+               never became the length. */
+            double d = js_to_num(J, v);
+            if (!(d >= 0) || d > 4294967295.0 || (double)(u32)d != d) {
+                js_throw(J, JS_ERR_RANGE, "that is not a length an array can have", J->error_line);
+                return;
+            }
+            u32 want = (u32)d;
             if (want < o->len) o->len = want;
-            else js_arr_reserve(J, o, want);
+            else if (want > o->len) js_arr_set(J, o, want - 1, js_undef());
             return;
         }
     }
@@ -1877,7 +1895,8 @@ static jval js_eval(jctx *J, int node, jscope *sc, jval this_val) {
                 double d = idx.num;
                 if (d >= 0 && d < (double)target.obj->len && d == (double)(int)d)
                     return target.obj->items[(u32)d];
-                return js_undef();
+                /* Past the elements it may be a property kept by name, when
+                   it was too far out to keep among them. */
             }
             return js_get(J, target, js_to_str(J, idx));
         }

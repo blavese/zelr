@@ -1144,7 +1144,7 @@ A manual diagnostic only. It prints `JSPROBE_DONE` and asserts nothing.
 - `Math.sqrt` is wrong outside roughly [1e-36, 1e36] (60 Newton iterations from `max(x, 1)`; `:2137-2143`).
 - `Math.min`/`max` ignore a NaN that is not the first argument.
 
-**B7. Array index and length can corrupt the heap or hang the browser** (`js.h:424-441`, `jsrun.h:487-491`).
+**B7. Array index and length can corrupt the heap or hang the browser** (FIXED in 0.68.0: `JS_ARR_MAX`, 64-bit sums, far indices kept by name, `js_index_of` bounded, length checked and grown) (`js.h:424-441`, `jsrun.h:487-491`).
 - If `i+1` is in (2^27, 2^31], `(u32)(16*cap)` wraps to 0, so `js_alloc(0)` returns a zero-length block while `cap` becomes huge. The fill loop then writes past the chunk: `var a=[]; a[150000000]=0` corrupts the region or faults the process.
 - If `i+1 > 2^31`, `cap *= 2` wraps to 0 and `js_arr_reserve` loops forever (natives do not tick).
 - If `i = 4294967295`, `i+1` wraps to 0 and the guard is bypassed.

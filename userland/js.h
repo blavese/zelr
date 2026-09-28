@@ -564,8 +564,15 @@ static u32 js_own_keys(jctx *J, jobj *o, jprop ***out) {
 
 /* --- arrays -------------------------------------------------------------- */
 
+/* The most elements an array keeps side by side. Past it the size in bytes
+   wrapped round: an index of 150 million asked for sixteen times that in a
+   32-bit sum, got a block of nothing, and the fill wrote past it; past two
+   billion the doubling reached zero and went round for ever. A page's memory
+   runs out long before this, so it costs nothing to say. */
+#define JS_ARR_MAX (1u << 22)
+
 static void js_arr_reserve(jctx *J, jobj *a, u32 want) {
-    if (want <= a->cap) return;
+    if (want <= a->cap || want > JS_ARR_MAX) return;
     u32 cap = a->cap ? a->cap * 2 : 8;
     while (cap < want) cap *= 2;
     jval *fresh = (jval *)js_alloc(J, (u32)sizeof(jval) * cap);
@@ -575,12 +582,16 @@ static void js_arr_reserve(jctx *J, jobj *a, u32 want) {
     a->cap = cap;
 }
 
-static void js_arr_set(jctx *J, jobj *a, u32 i, jval v) {
+/* 1 when it was kept among the elements; 0 when it is too far out for that,
+   and the caller keeps it some other way or not at all. */
+static int js_arr_set(jctx *J, jobj *a, u32 i, jval v) {
+    if ((u64)i + 1 > JS_ARR_MAX) return 0;
     js_arr_reserve(J, a, i + 1);
-    if (i + 1 > a->cap) return;
+    if ((u64)i + 1 > a->cap) return 0;
     for (u32 k = a->len; k < i; k++) a->items[k] = js_undef();
     a->items[i] = v;
     if (i + 1 > a->len) a->len = i + 1;
+    return 1;
 }
 
 static void js_arr_push(jctx *J, jobj *a, jval v) {
