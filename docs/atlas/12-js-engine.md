@@ -1131,7 +1131,7 @@ A manual diagnostic only. It prints `JSPROBE_DONE` and asserts nothing.
 
 **B3. FIXED in 0.43.0 (`js_parse_new`; jstest "a member of something just made", "a method called on something just made", "a constructor found through a namespace"). `new X(args).more` is mis-parsed** (`jsparse.h:759-774`). The operand is parsed with the full postfix loop, so `new Foo().bar()` becomes `new (Foo().bar)()`: `Foo` is called without `new` (with `this` undefined), then `new` is applied to the result's `bar`. For example, `new RegExp("a").test("xyz")` becomes `new (RegExp("a").test)("xyz")`, which returns the fresh plain object (truthy) instead of `false`.
 
-**B4. Label handling has three holes.**
+**B4. Label handling has three holes.** (All three FIXED in 0.64.0: a label goes only to a loop, for-in takes its label, a switch passes a labelled break on.)
 - (a) `N_LABEL` (`jsrun.h:1937-1947`) on a block or `if` leaves `pending_label` set, and the first loop inside takes it (`:1815`, `:1835`, `:1854`). `lbl: { for(;;){ break lbl; } after(); }` then runs `after()`.
 - (b) `N_FORIN` (`:1878-1916`) never takes `pending_label` and consumes every break/continue whatever its label. `lbl: for (k in o) { for(;;) continue lbl; }` hands the label to the inner `for`, which loops until the step cap. `break lbl` exits only the inner loop.
 - (c) `N_SWITCH` (`:2011`) swallows `break outer` inside `outer: for (...) { switch (x) { case 1: break outer; } }`.
@@ -1172,7 +1172,7 @@ A manual diagnostic only. It prints `JSPROBE_DONE` and asserts nothing.
 - `indexOf`, `includes` and `startsWith` ignore their position argument.
 - A string-pattern `replace` ignores `$&` and turns a function replacement into the text "function".
 
-**B12. Coercions that differ from JS.**
+**B12. Coercions that differ from JS.** (Both FIXED in 0.64.0.)
 - `+` on arrays is numeric (`jsrun.h:1370-1374`): `[1,2]+3` → NaN, `[]+[]` → 0, `[1]+[2]` → 3.
 - Loose equality between an object and a primitive compares strings (`:313-316`): `[1]==true`, `[0]==false` and `[]==false` are all false here.
 
@@ -1197,7 +1197,7 @@ A manual diagnostic only. It prints `JSPROBE_DONE` and asserts nothing.
 - `\k` and `\c` match the literal letter.
 - `test()` ignores `lastIndex` (`jsrun.h:711-715`).
 
-**B17. jsdom gaps.**
+**B17. jsdom gaps.** (FIXED in 0.64.0: property handlers, the window's listeners, body onload, `return false`, `this` in document listeners, script types. Still open: capture, stopPropagation on one node, removed nodes, `el.id =`, innerHTML, tagName case, select.value, XHR events, created scripts, attribute recompiling, costs.)
 - `el.onclick = fn` and `window.onload = fn` never fire: dispatch looks only at attributes and the listener table (`jsdom.h:350-370`).
 - `window` (the global variable object, `:1209-1211`) has no `addEventListener`.
 - `load` and `DOMContentLoaded` reach document listeners only; `<body onload>` never fires.

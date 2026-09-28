@@ -634,6 +634,70 @@ int main(void) {
             page.title >= 0 ? page.arena + page.title : "", "t");
     }
 
+    /* --- handlers set as properties, the window, and what is not script ------
+     *
+     * el.onclick = f and window.onload = f were stored and never called; the
+     * window had no addEventListener, so the line that asked for one threw and
+     * the rest of its script never ran; `return false` did not refuse the
+     * default; and a script element holding data was run as a script. */
+    {
+        load("<body><p id=b>x</p><p id=out>no</p>"
+             "<script>document.getElementById('b').onclick = function(){"
+             " document.getElementById('out').textContent = 'yes ' + this.id; };</script></body>");
+        char err[128];
+        run_scripts(&page, err, (int)sizeof(err), 0);
+        jsdom_click(dom_by_id(&page, "b"));
+        oks("a handler set as a property runs, with the element as this",
+            content_of(dom_by_id(&page, "out")), "yes b");
+    }
+    {
+        load("<body><p id=out>none</p><p id=two>none</p><p id=three>none</p>"
+             "<script>window.addEventListener('load', function(){"
+             " document.getElementById('out').textContent = 'loaded'; });"
+             "addEventListener('DOMContentLoaded', function(){"
+             " document.getElementById('two').textContent = 'ready'; });"
+             "window.onload = function(){ document.getElementById('three').textContent = 'onload'; };"
+             "</script></body>");
+        char err[128];
+        run_scripts(&page, err, (int)sizeof(err), 0);
+        oks("the window takes a listener for load", content_of(dom_by_id(&page, "out")), "loaded");
+        oks("and so does a bare addEventListener, which is the window's",
+            content_of(dom_by_id(&page, "two")), "ready");
+        oks("and window.onload runs", content_of(dom_by_id(&page, "three")), "onload");
+        ok("and nothing threw on the way", err[0] == 0);
+    }
+    {
+        load("<body onload=\"document.getElementById('out').textContent = 'body'\"><p id=out>no</p></body>");
+        char err[128];
+        run_scripts(&page, err, (int)sizeof(err), 0);
+        oks("the body's onload runs when the page has loaded", content_of(dom_by_id(&page, "out")), "body");
+    }
+    {
+        load("<body><a id=a href='/next' onclick='return false'>go</a>"
+             "<a id=c href='/next'>go</a>"
+             "<script>document.getElementById('c').onclick = function(){ return false; };</script></body>");
+        char err[128];
+        run_scripts(&page, err, (int)sizeof(err), 0);
+        ok("returning false from an onclick attribute refuses the default",
+           jsdom_click(dom_by_id(&page, "a")) == 1);
+        ok("and from a handler set as a property", jsdom_click(dom_by_id(&page, "c")) == 1);
+    }
+    {
+        load("<body><p id=out>no</p><p id=who>?</p>"
+             "<script type=\"application/ld+json\">{\"@context\": \"https://schema.org\"}</script>"
+             "<script type=\"module\">import x from './x.js';</script>"
+             "<script type=\"text/javascript\">document.getElementById('out').textContent = 'ran';"
+             "document.addEventListener('click', function(){"
+             " document.getElementById('who').textContent = String(this === document); });</script></body>");
+        char err[128];
+        int ran = run_scripts(&page, err, (int)sizeof(err), 0);
+        ok("data in a script element is not run as script, nor a module", ran == 1 && err[0] == 0);
+        oks("while a script that says it is JavaScript is", content_of(dom_by_id(&page, "out")), "ran");
+        jsdom_click(dom_by_id(&page, "out"));
+        oks("and a listener on the document has the document as this",
+            content_of(dom_by_id(&page, "who")), "true");
+    }
+
     puts(failed ? "PAGETEST_FAIL\n" : "PAGETEST_PASS\n");
     return failed;
 }

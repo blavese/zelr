@@ -95,6 +95,25 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.64.0: page scripts that wait for the window, set handlers as properties, and break out of loops
+
+- **jsdom (12 §10 B17).** `el.onclick = f`, `document.onclick = f` and `window.onload = f` are called
+  (`jd_run_prop`; they were stored and never read). The window has `addEventListener` and
+  `removeEventListener`, and a bare `addEventListener(...)` is the window's (`JD_WINDOW`, `jd_listener_host`);
+  it had none, so the first line of many scripts threw and the rest of it never ran. Events reach the window
+  after the document, and `load` also runs the body's `onload` attribute. `return false` from an attribute or a
+  property handler refuses the default. A listener on the document or the window has it as `this`. Script
+  elements run only with no type or one of JavaScript's names (`jd_script_type_runs`): JSON-LD, templates and
+  modules are left alone, where their parse error had become the page's only reported error.
+- **JavaScript (B12, B4).** `+` with any object is text (`[1,2] + 3` is "1,23", `[] + []` is ""); `==` between
+  an object and a primitive compares the object's text by the primitive's rules (`[1] == true`, `[] == false`).
+  A label goes only to a loop (a label on a block no longer lands on the first loop inside it); for-in takes its
+  label and passes other labels' break and continue on; a switch passes a labelled break on.
+- **Checks.** jstest 242 (8 new), pagetest 82 (11 new): they failed with property handlers never run, the window's
+  listeners not declared, the body's onload skipped, `return false` ignored, every script type run, `this` on
+  the document undefined, arrays added as numbers, loose equality as text, labels handed to any statement,
+  for-in's old break and continue, and the switch's old break (16 checks).
+
 ### 0.63.0: Twitch's past broadcasts, their frames, and its search
 
 - **Twitch (11, sites.h).** A channel's page lists its last ten past broadcasts (`videos(first:10)`), each linked

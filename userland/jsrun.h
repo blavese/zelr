@@ -355,9 +355,16 @@ static int js_loose_eq(jctx *J, jval a, jval b) {
         || (a.t == JS_UNDEF && b.t == JS_NULL)) return 1;
     if (a.t == JS_NULL || a.t == JS_UNDEF
         || b.t == JS_NULL || b.t == JS_UNDEF) return 0;
+    /* An object against something that is not one is its text against that,
+       compared by the rules for the two of them -- as numbers when the other
+       is a number or true or false. It was compared as text whatever the
+       other was, so [1] == true and [] == false were both false. */
     if (a.t == JS_OBJ || b.t == JS_OBJ) {
-        jstr *sa = js_to_str(J, a), *sb = js_to_str(J, b);
-        return js_str_eq(sa, sb);
+        jval pa = a.t == JS_OBJ ? js_from_str(js_to_str(J, a)) : a;
+        jval pb = b.t == JS_OBJ ? js_from_str(js_to_str(J, b)) : b;
+        if (pa.t == JS_STR && pb.t == JS_STR) return js_str_eq(pa.str, pb.str);
+        double x = js_to_num(J, pa), y = js_to_num(J, pb);
+        return x == y;
     }
     double x = js_to_num(J, a), y = js_to_num(J, b);
     return x == y;
@@ -1656,10 +1663,12 @@ static jval js_binary(jctx *J, jop op, jval l, jval r, int line) {
     switch (op) {
         case OP_ADD:
             /* The one operator that is two operators. If either side is a
-               string the result is text; otherwise it is arithmetic. */
+               string, or an object -- which becomes text when it is added,
+               an array as its elements with commas -- the result is text;
+               otherwise it is arithmetic. Arrays were left out and added up
+               as numbers, so [1,2] + 3 was NaN and [] + [] was 0. */
             if (l.t == JS_STR || r.t == JS_STR
-                || (l.t == JS_OBJ && l.obj && l.obj->kind != JO_ARRAY)
-                || (r.t == JS_OBJ && r.obj && r.obj->kind != JO_ARRAY))
+                || (l.t == JS_OBJ && l.obj) || (r.t == JS_OBJ && r.obj))
                 return js_from_str(js_concat(J, js_to_str(J, l), js_to_str(J, r)));
             return js_num(js_to_num(J, l) + js_to_num(J, r));
 
@@ -2185,6 +2194,11 @@ static jsignal js_exec(jctx *J, int node, jscope *sc, jval this_val) {
         }
 
         case N_FORIN: {
+            /* A label on it is its own, as a label on any loop is. It took
+               none, and caught every break and continue whatever label it
+               carried, so `break outer` from inside one stopped only it. */
+            jstr *mine = J->pending_label;
+            J->pending_label = 0;
             jval target = js_eval(J, n->a, sc, this_val);
             if (J->sig != JS_OK) return J->sig;
             if (target.t != JS_OBJ || !target.obj) return JS_OK;
@@ -2217,8 +2231,14 @@ static jsignal js_exec(jctx *J, int node, jscope *sc, jval this_val) {
                     js_place_put(J, &p, sc, keys->items[i]);
                 }
                 jsignal s = js_exec(J, n->b, sc, this_val);
-                if (s == JS_BREAK) { J->sig = JS_OK; break; }
-                if (s == JS_CONTINUE) { J->sig = JS_OK; continue; }
+                if (s == JS_BREAK) {
+                    if (!js_label_mine(J, mine)) return s;
+                    J->label = 0; J->sig = JS_OK; break;
+                }
+                if (s == JS_CONTINUE) {
+                    if (!js_label_mine(J, mine)) return s;
+                    J->label = 0; J->sig = JS_OK; continue;
+                }
                 if (s != JS_OK) return s;
             }
             return J->sig;
@@ -2250,7 +2270,12 @@ static jsignal js_exec(jctx *J, int node, jscope *sc, jval this_val) {
            inside. A labelled thing that is not a loop -- a block, which is
            the other common one -- catches its own break here. */
         case N_LABEL: {
-            J->pending_label = n->str;
+            /* Handed on only to a loop. A label on a block or an if was left
+               waiting, and the first loop inside took it for its own, so
+               `lbl: { for (;;) { break lbl; } after(); }` ran after(). */
+            int kind = n->a >= 0 ? J->nodes[n->a].kind : -1;
+            J->pending_label = kind == N_WHILE || kind == N_DO || kind == N_FOR || kind == N_FORIN
+                             ? n->str : 0;
             jsignal s = js_exec(J, n->a, sc, this_val);
             J->pending_label = 0;
             if (s == JS_BREAK && J->label && js_str_eq(J->label, n->str)) {
@@ -2325,7 +2350,10 @@ static jsignal js_exec(jctx *J, int node, jscope *sc, jval this_val) {
                     for (int cell = J->nodes[arm].b; cell >= 0;
                          cell = J->nodes[cell].b) {
                         jsignal s = js_exec(J, J->nodes[cell].a, sc, this_val);
-                        if (s == JS_BREAK) { J->sig = JS_OK; return JS_OK; }
+                        /* A break with a label is for something outside the
+                           switch; it caught those too, so `break outer` in a
+                           case stopped only the switch. */
+                        if (s == JS_BREAK && !J->label) { J->sig = JS_OK; return JS_OK; }
                         if (s != JS_OK) return s;
                     }
                 }

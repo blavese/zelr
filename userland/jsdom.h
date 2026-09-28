@@ -47,6 +47,12 @@
    thousand, and the hooks only fire for a host of zero or more. */
 #define JD_DOCUMENT 0x1000000
 
+/* And the window, which events reach after the document: a page listening
+   for load on the window, or setting window.onload, is the commonest way a
+   page waits to start. */
+#define JD_WINDOW (JD_DOCUMENT + 1)
+static jobj *jd_document_obj;
+
 static ddoc  *jd_doc;            /* what these bindings are bound to */
 static csheet *jd_sheet;         /* borrowed, for asking about selectors */
 static jobj **jd_wrap;           /* one object per node, so identity holds */
@@ -245,8 +251,16 @@ static jval nat_ev_stop(jctx *J, jval t, jval *a, int n) {
     return js_undef();
 }
 
+/* Who a listener is registered on: an element, the document, or the window
+   -- which is the global object, and also what a bare addEventListener(...)
+   with nothing before the dot is called on. */
+static int jd_listener_host(jctx *J, jval t) {
+    if (t.t != JS_OBJ || !t.obj || t.obj == J->global_obj) return JD_WINDOW;
+    return t.obj->host;
+}
+
 static jval nat_add_listener(jctx *J, jval t, jval *a, int n) {
-    if (n < 2 || t.t != JS_OBJ || !t.obj) return js_undef();
+    if (n < 2) return js_undef();
 
     jval fn = js_arg(a, n, 1);
     if (fn.t != JS_OBJ || !fn.obj) return js_undef();
@@ -256,7 +270,7 @@ static jval nat_add_listener(jctx *J, jval t, jval *a, int n) {
     if (!ty || jd_nlisten >= JD_LISTENERS) return js_undef();
 
     jlisten *L = &jd_listen[jd_nlisten++];
-    L->node = t.obj->host;
+    L->node = jd_listener_host(J, t);
     L->fn = fn.obj;
     u32 w = 0;
     while (w < ty->len && w < JD_TYPE_MAX - 1) { L->type[w] = ty->s[w]; w++; }
@@ -265,14 +279,15 @@ static jval nat_add_listener(jctx *J, jval t, jval *a, int n) {
 }
 
 static jval nat_remove_listener(jctx *J, jval t, jval *a, int n) {
-    if (n < 2 || t.t != JS_OBJ || !t.obj) return js_undef();
+    if (n < 2) return js_undef();
 
     jstr *ty = js_to_str(J, js_arg(a, n, 0));
     jval fn = js_arg(a, n, 1);
     if (!ty || fn.t != JS_OBJ) return js_undef();
 
+    int host = jd_listener_host(J, t);
     for (int i = 0; i < jd_nlisten; i++)
-        if (jd_listen[i].fn == fn.obj && jd_listen[i].node == t.obj->host
+        if (jd_listen[i].fn == fn.obj && jd_listen[i].node == host
             && js_str_is(ty, jd_listen[i].type))
             jd_listen[i].fn = 0;
     return js_undef();
@@ -323,8 +338,33 @@ static void jd_run_attr(int node, const char *type, jobj *ev) {
     if (!js_eval_text(&jd_J, wrapped, (u32)n, &fn)) { jd_note_error(); return; }
 
     jval arg = ev ? js_from_obj(ev) : js_undef();
-    js_call(&jd_J, fn, jd_el_value(&jd_J, node), &arg, 1);
+    jval got = js_call(&jd_J, fn, jd_el_value(&jd_J, node), &arg, 1);
     if (jd_J.sig != JS_OK) { jd_note_error(); jd_J.sig = JS_OK; }
+    /* An attribute handler that returns false has refused the default, which
+       is how pages said so before there was preventDefault, and still do. */
+    else if (got.t == JS_BOOL && !got.b) jd_prevented = 1;
+}
+
+/* A handler set as a property -- el.onclick = function(){...}, or
+   window.onload -- which was stored on the object and never called: the
+   dispatch looked only at attributes and listeners. `o` is the object it
+   would be set on; nothing if none was ever made for it. */
+static void jd_run_prop(jobj *o, const char *type, jval self, jobj *ev) {
+    if (!o) return;
+    char name[JD_TYPE_MAX + 4];
+    int w = 0;
+    name[w++] = 'o';
+    name[w++] = 'n';
+    for (int i = 0; type[i] && w < (int)sizeof(name) - 1; i++) name[w++] = type[i];
+    name[w] = 0;
+    jprop *pr = js_find(o, js_str(&jd_J, name));
+    if (!pr || pr->v.t != JS_OBJ || !pr->v.obj
+        || (pr->v.obj->kind != JO_FUNC && pr->v.obj->kind != JO_NATIVE)) return;
+    jd_J.steps = 0;
+    jval arg = ev ? js_from_obj(ev) : js_undef();
+    jval got = js_call(&jd_J, pr->v, self, &arg, 1);
+    if (jd_J.sig != JS_OK) { jd_note_error(); jd_J.sig = JS_OK; }
+    else if (got.t == JS_BOOL && !got.b) jd_prevented = 1;
 }
 
 /* Everything registered against one node, for one kind of event. The count
@@ -338,8 +378,11 @@ static void jd_fire(int host, const char *type, jobj *ev) {
 
         jd_J.steps = 0;
         jval arg = ev ? js_from_obj(ev) : js_undef();
-        jval self = host >= 0 && host < JD_DOCUMENT
-                  ? jd_el_value(&jd_J, host) : js_undef();
+        /* `this` is whatever the listener is on. */
+        jval self = host >= 0 && host < JD_DOCUMENT ? jd_el_value(&jd_J, host)
+                  : host == JD_DOCUMENT && jd_document_obj ? js_from_obj(jd_document_obj)
+                  : host == JD_WINDOW && jd_J.global_obj ? js_from_obj(jd_J.global_obj)
+                  : js_undef();
         js_call(&jd_J, js_from_obj(jd_listen[i].fn), self, &arg, 1);
         if (jd_J.sig != JS_OK) { jd_note_error(); jd_J.sig = JS_OK; }
     }
@@ -361,10 +404,24 @@ static int jd_dispatch(int node, const char *type) {
     while (at >= 0 && !jd_stopped) {
         jd_run_attr(at, type, ev);
         if (jd_stopped) break;
+        if (jd_wrap && at < JD_WRAPS && jd_wrap[at])
+            jd_run_prop(jd_wrap[at], type, js_from_obj(jd_wrap[at]), ev);
+        if (jd_stopped) break;
         jd_fire(at, type, ev);
         at = jd_doc->nodes[at].parent;
     }
+    if (!jd_stopped && jd_document_obj)
+        jd_run_prop(jd_document_obj, type, js_from_obj(jd_document_obj), ev);
     if (!jd_stopped) jd_fire(JD_DOCUMENT, type, ev);
+
+    /* And then the window: window.onload, a listener on the window, and the
+       body's onload attribute, which is the window's handler written in the
+       markup. */
+    if (!jd_stopped && jd_J.global_obj)
+        jd_run_prop(jd_J.global_obj, type, js_from_obj(jd_J.global_obj), ev);
+    if (!jd_stopped && w_same(type, "load") && node < 0 && jd_doc->body >= 0)
+        jd_run_attr(jd_doc->body, type, ev);
+    if (!jd_stopped) jd_fire(JD_WINDOW, type, ev);
 
     return jd_prevented;
 }
@@ -1177,6 +1234,7 @@ static int jsdom_open(ddoc *d, csheet *sheet) {
         for (int i = 0; i < JD_WRAPS; i++) jd_wrap[i] = 0;
 
     jobj *document = js_object(&jd_J, JO_PLAIN);
+    jd_document_obj = document;
     if (document) {
         document->host = JD_DOCUMENT;
         js_set(&jd_J, document, "getElementById",
@@ -1223,9 +1281,18 @@ static int jsdom_open(ddoc *d, csheet *sheet) {
 
     /* `window` is the global object, which is what it is in a browser, so a
        page that writes window.x and reads x gets the same thing. */
-    if (jd_J.global_obj)
+    if (jd_J.global_obj) {
         js_declare(&jd_J, jd_J.global, js_str(&jd_J, "window"),
                    js_from_obj(jd_J.global_obj));
+        /* And the window listens, as the element and the document do. There
+           was no addEventListener on it, so a page's first line --
+           window.addEventListener('load', start) -- threw, and nothing after
+           it in that script ran. */
+        js_declare(&jd_J, jd_J.global, js_str(&jd_J, "addEventListener"),
+                   js_from_obj(js_native(&jd_J, "addEventListener", nat_add_listener)));
+        js_declare(&jd_J, jd_J.global, js_str(&jd_J, "removeEventListener"),
+                   js_from_obj(js_native(&jd_J, "removeEventListener", nat_remove_listener)));
+    }
     return 1;
 }
 
@@ -1242,6 +1309,29 @@ static int jsdom_open(ddoc *d, csheet *sheet) {
  * The text it hands back stays valid until the next call, which is all it
  * has to be -- it is run immediately. */
 static int (*jd_get_script)(const char *src, const char **out);
+
+/* Whether a script element is a script. A page carries data in them too --
+   application/ld+json describing the article, text/template, importmap --
+   and every one was run: the data did not parse, and its error became the
+   only thing the page said. Nothing, or one of the names JavaScript goes by,
+   runs; a module does not, since its first line is an import this engine
+   does not have. */
+static int jd_script_type_runs(const char *type) {
+    if (!type) return 1;
+    while (*type == ' ') type++;
+    if (!*type) return 1;
+    static const char *const RUN[] = { "text/javascript", "application/javascript",
+                                       "text/ecmascript", "application/ecmascript",
+                                       "application/x-javascript", "text/jscript", 0 };
+    for (int i = 0; RUN[i]; i++) {
+        const char *r = RUN[i];
+        int k = 0;
+        while (r[k] && w_lower(type[k]) == r[k]) k++;
+        /* The name, and then nothing, or a parameter after a semicolon. */
+        if (!r[k] && (!type[k] || type[k] == ';' || type[k] == ' ')) return 1;
+    }
+    return 0;
+}
 
 void jsdom_fetch_with(int (*fn)(const char *, const char **)) {
     jd_get_script = fn;
@@ -1265,6 +1355,7 @@ static int jsdom_scripts(char *err, int errcap) {
     for (int i = 0; i < d->count; i++) {
         if (d->nodes[i].kind != DN_ELEMENT || d->nodes[i].tag != T_SCRIPT)
             continue;
+        if (!jd_script_type_runs(dom_attr(d, i, "type"))) continue;
 
         const char *text = 0;
         u32 len = 0;

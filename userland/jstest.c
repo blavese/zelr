@@ -659,6 +659,22 @@ int main(void) {
     expect("but reads what is",
            "JSON.stringify(JSON.parse(' {\"a\": [1, -2.5e3, true, null], \"b\": \"x\\\\ny\"} '))",
            "{\"a\":[1,-2500,true,null],\"b\":\"x\\ny\"}");
+    expect("an array added to a number is its text and the number", "[1, 2] + 3", "1,23");
+    expect("two arrays added are their texts", "([] + []) === '' && [1] + [2] === '12'", "true");
+    expect("an array loosely equal to true, false and a number, as numbers",
+           "[1] == true && [0] == false && [] == false && [2] == 2", "true");
+    expect("and to its own text", "[1, 2] == '1,2' && ({}) == '[object Object]'", "true");
+    expect("a label on a block is the block's, not the first loop's inside it",
+           "(function(){ var r = 'none'; lbl: { for (;;) { break lbl; } r = 'after'; } return r; })()", "none");
+    expect("break with a label leaves a for-in and what it is inside",
+           "(function(){ var n = 0; outer: for (var i = 0; i < 3; i++) { for (var k in {a:1, b:2}) {"
+           " n++; continue outer; } } return n; })()", "3");
+    expect("and a labelled break in a switch leaves the loop round it",
+           "(function(){ var n = 0; outer: for (var i = 0; i < 5; i++) { switch (i) {"
+           " case 2: break outer; default: n++; } } return n; })()", "2");
+    expect("while a plain break in a switch leaves only the switch",
+           "(function(){ var n = 0; for (var i = 0; i < 3; i++) { switch (i) { case 1: break;"
+           " default: n++; } } return n; })()", "2");
     expect("a loop walking a string by its matches ends",
            "(function(){ var s = 'x.y.z', n = 0, at = s.indexOf('.');"
            " while (at >= 0 && n < 10) { n++; at = s.indexOf('.', at + 1); } return n; })()", "2");
