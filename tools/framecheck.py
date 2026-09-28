@@ -398,6 +398,29 @@ def main():
         c.add("the dock lights under the pointer over a maximised window", badge_lit, badge_shot)
         # One allowed, for the clock's minute.
         c.add("a desktop with every window put away draws nothing", idle <= 1)
+
+        # --- under a wallpaper that moves -----------------------------------
+        #
+        # One that moves is painted afresh twelve times a second, and every
+        # frame under one was the whole desktop, since a rectangle of it
+        # painted at another moment would not meet the rest. It is painted at
+        # the moment of the last whole frame now (wall_now), so a blink is a
+        # rectangle again; the selftest compares the pixels. The stars.
+        vm.run("write /zelr.cfg wallpaper 4")
+        vm.type("desktop\n")
+        mon.wait_screen("fr-stars",
+                        lambda w, h, px: count_in(px, w, (0, 0, w, h), PAGE) > 250000,
+                        timeout=60)
+        part_at = kernel_symbol("partial_draws", "wm.c")
+        first, part0 = mon.read_u32(drawn_at), mon.read_u32(part_at)
+        time.sleep(4)
+        starry = mon.read_u32(drawn_at) - first
+        starry_part = mon.read_u32(part_at) - part0
+        leave(vm)
+        print("      under the stars: %d frames in four seconds, %d of them only what changed"
+              % (starry, starry_part))
+        c.add("under a wallpaper that moves, a blink still draws only what changed",
+              starry >= 20 and starry_part >= 2)
     finally:
         vm.stop()
 

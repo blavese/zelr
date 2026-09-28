@@ -1713,6 +1713,39 @@ static int partial_differs(const u32 *want, const u32 *pat, int x0, int y0, int 
     return bad;
 }
 
+/* One scene drawn whole, then only inside each of the rectangles over a
+   pattern, as partial_differs reckons it. Tried again if the scene itself
+   changed while it was being compared: the dock's clock turning a minute over
+   is the one thing that can. `fresh` drops the kept wallpaper before each
+   rectangle, so it is painted through the clip rather than copied. */
+static int partial_pass(u32 *want, const u32 *pat, int rects[][4], int n, bool fresh) {
+    int W = (int)fb_width(), H = (int)fb_height();
+    int got = 0;
+    for (int attempt = 0; attempt < 3; attempt++) {
+        wm_test_draw_scene(0, 0, 0, 0, false);
+        fb_back_save(want);
+        got = 0;
+        for (int i = 0; i < n; i++) {
+            int x0 = rects[i][0], y0 = rects[i][1];
+            int x1 = x0 + rects[i][2], y1 = y0 + rects[i][3];
+            pattern_back();
+            if (fresh) wm_test_forget_wallpaper();
+            wm_test_draw_scene(rects[i][0], rects[i][1], rects[i][2], rects[i][3], true);
+            if (x0 < 0) x0 = 0;
+            if (y0 < 0) y0 = 0;
+            if (x1 > W) x1 = W;
+            if (y1 > H) y1 = H;
+            got |= partial_differs(want, pat, x0, y0, x1, y1);
+        }
+        wm_test_draw_scene(0, 0, 0, 0, false);
+        bool still = true;
+        for (int y = 0; y < H && still; y++)
+            still = memcmp(fb_row(y), want + y * W, (u32)W * 4) == 0;
+        if (still) break;
+    }
+    return got;
+}
+
 /* A frame that draws only what changed, against one that draws everything.
  *
  * The desktop is drawn whole once. Then, for each rectangle, a pattern goes
@@ -1800,39 +1833,29 @@ static void test_partial_frames(void) {
         rects[n][0] = b->x; rects[n][1] = y; rects[n][2] = bw; rects[n][3] = 1;
     }
 
-    /* Tried again if the scene itself changed while it was being compared:
-       the dock's clock turning a minute over is the one thing that can. */
-    int bad = 0;
-    for (int pass = 0; pass < 2; pass++) {
-        int got = 0;
-        for (int attempt = 0; attempt < 3; attempt++) {
-            wm_test_draw_scene(0, 0, 0, 0, false);
-            fb_back_save(want);
-            got = 0;
-            for (int i = 0; i < n; i++) {
-                int x0 = rects[i][0], y0 = rects[i][1];
-                int x1 = x0 + rects[i][2], y1 = y0 + rects[i][3];
-                pattern_back();
-                if (pass) wm_test_forget_wallpaper();     /* painted afresh, through the clip */
-                wm_test_draw_scene(rects[i][0], rects[i][1], rects[i][2], rects[i][3], true);
-                if (x0 < 0) x0 = 0;
-                if (y0 < 0) y0 = 0;
-                if (x1 > W) x1 = W;
-                if (y1 > H) y1 = H;
-                got |= partial_differs(want, pat, x0, y0, x1, y1);
-            }
-            wm_test_draw_scene(0, 0, 0, 0, false);
-            bool still = true;
-            for (int y = 0; y < H && still; y++)
-                still = memcmp(fb_row(y), want + y * W, (u32)W * 4) == 0;
-            if (still) break;
-        }
-        bad |= got;
-    }
+    int bad = partial_pass(want, pat, rects, n, false)
+            | partial_pass(want, pat, rects, n, true);   /* painted afresh, through the clip */
     ok("the wallpaper is kept, so frames from its copy are compared too", kept);
     ok("a frame drawn only inside a rectangle is the whole frame's pixels there",
        !(bad & 1));
     ok("and leaves every pixel outside it as it was", !(bad & 2));
+
+    /* And under each wallpaper that moves. Every frame under one used to be
+       the whole desktop, because a rectangle of it painted at another moment
+       would not meet the rest; a frame paints it at the moment of the last
+       whole one now (wall_now), which is the same for all of these. */
+    int moving = 0;
+    for (int wp = 0; wp < WALLPAPER_COUNT; wp++) {
+        if (!wallpaper_moves((wallpaper_t)wp)) continue;
+        char cfg[40];
+        int len = kformat(cfg, sizeof(cfg), "wallpaper %d\n", wp);
+        vfs_write(THEME_FILE, cfg, (u32)len);
+        theme_reload();
+        moving |= partial_pass(want, pat, rects, n, false);
+    }
+    vfs_delete(THEME_FILE);
+    theme_init();
+    ok("and so is one under every wallpaper that moves", moving == 0);
 
     wm_close(b);
     wm_close(a);

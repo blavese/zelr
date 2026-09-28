@@ -1303,6 +1303,12 @@ static int desk_icon_at(int mx, int my) {
     return -1;
 }
 
+/* The moment a moving wallpaper is drawn at: the tick of the last whole
+   frame. A frame that draws only a rectangle paints it at the same moment,
+   so what it draws meets what it leaves without a seam, and the wallpaper
+   moves on at the next whole frame, a twelfth of a second away at most. */
+static u64 wall_now;
+
 static void paint_wallpaper(void) {
     const theme_t *t = theme();
     /* All the way down, because the panel no longer covers the bottom of
@@ -1388,7 +1394,7 @@ static void paint_wallpaper(void) {
            and costs nothing to keep. Drift comes from the clock, so the
            whole thing is a function of the time and the star's number. */
         fb_rect(0, 0, fb_width(), (u32)h, t->desktop);
-        u32 drift = (u32)(timer_ticks() / 3);
+        u32 drift = (u32)(wall_now / 3);
 
         for (u32 i = 0; i < 240; i++) {
             u32 hx = i * 2654435761u;
@@ -1415,7 +1421,7 @@ static void paint_wallpaper(void) {
            being a still picture of something that should be moving.
            A thousand columns of two pixels, five times, and nothing else. */
         fb_rect(0, 0, fb_width(), (u32)h, t->desktop);
-        u32 drift = (u32)(timer_ticks() / 4);
+        u32 drift = (u32)(wall_now / 4);
 
         for (u32 x = 0; x < fb_width(); x++) {
             for (int band = 0; band < 5; band++) {
@@ -1456,7 +1462,7 @@ static void paint_wallpaper(void) {
            anywhere in it, which is what keeps it affordable. */
         fb_vgradient(0, 0, (int)fb_width(), h, paper(18),
                      t->desktop);
-        u32 drift = (u32)(timer_ticks() / 6);
+        u32 drift = (u32)(wall_now / 6);
         const int REACH = 17;
 
         for (int band = 0; band < 3; band++) {
@@ -1486,7 +1492,7 @@ static void paint_wallpaper(void) {
            Where a drop is comes from its number and the clock, so none of
            them is stored anywhere. */
         fb_rect(0, 0, fb_width(), (u32)h, t->desktop);
-        u32 now = (u32)timer_ticks();
+        u32 now = (u32)wall_now;
 
         for (u32 i = 0; i < 170; i++) {
             u32 hx = i * 2654435761u;
@@ -1513,7 +1519,7 @@ static void paint_wallpaper(void) {
            edge to them. */
         fb_vgradient(0, 0, (int)fb_width(), h, paper(12),
                      t->desktop);
-        u32 now = (u32)timer_ticks();
+        u32 now = (u32)wall_now;
 
         for (int i = 0; i < 5; i++) {
             int r = 44 + i * 9;
@@ -1550,7 +1556,7 @@ static void paint_wallpaper(void) {
            screen is. */
         fb_rect(0, 0, fb_width(), (u32)h, t->desktop);
         int reach = ((int)fb_width() + h) / 2;
-        u32 now = (u32)(timer_ticks() * 3);
+        u32 now = (u32)(wall_now * 3);
 
         for (int k = 0; k < 7; k++) {
             int r = (int)((now + (u32)(k * reach / 7)) % (u32)reach);
@@ -3201,13 +3207,13 @@ u32 wm_partial_draws(void) { return partial_draws; }
  * it is left as the last frame drew it -- which is exactly what a whole
  * frame would have drawn there again.
  *
- * Not with a wallpaper that moves, which is different everywhere every
- * frame and would show a seam at the edge of the clip; not without a kept
- * patch under the pointer, which the frame has to take off first; and not
- * when anything asked for the whole screen. */
+ * Not without a kept patch under the pointer, which the frame has to take
+ * off first, and not when anything asked for the whole screen. A wallpaper
+ * that moves is no reason any more: it is painted at the moment of the last
+ * whole frame (wall_now), so a rectangle of it meets the rest without a
+ * seam, where every frame under one used to be the whole desktop. */
 static bool frame_is_partial(void) {
-    if (frame_is_whole || dmg_x1 <= dmg_x0 || !under_kept) return false;
-    return covering_index() >= 0 || !wallpaper_moves(theme()->wallpaper);
+    return !frame_is_whole && dmg_x1 > dmg_x0 && under_kept;
 }
 
 static void composite(void) {
@@ -3221,6 +3227,8 @@ static void composite(void) {
     if (part) {
         put_back_under();
         fb_clip(dmg_x0, dmg_y0, dmg_x1 - dmg_x0, dmg_y1 - dmg_y0);
+    } else {
+        wall_now = timer_ticks();          /* a moving wallpaper moves on */
     }
     draw_scene();
     fb_unclip();

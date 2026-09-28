@@ -95,6 +95,25 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.57.0: hover that draws only what it touches, and partial frames under a moving wallpaper
+
+- **Hover zones (07 §3.9.20).** A pointer move that is not quiet but changes nothing else damages only where it
+  was and where it is: a title bar (its buttons), the icon column, the dock band, an open menu
+  (`hover_zone_at`, /sys/screen `hover`). framecheck: the moves along the dock all partial, 72 of 86 as hover
+  (failed with the zones off: 16 partial, none as hover); the close button lights down to its lower corner
+  (failed with the title bar's zone half as tall).
+- **The dock over a maximised window (07 §10 33, fixed).** From 0.54.0 its hover was never drawn there, because
+  `pointer_is_quiet_at` found the window's contents under the dock before the dock. framecheck lights the badge
+  from one point of the contents under the dock to another (failed with the dock tested after the windows; the
+  first version started on the bottom border and passed broken).
+- **Moving wallpapers.** Painted at `wall_now`, the last whole frame's tick, so partial frames happen under them
+  too. `[windows]` compares clipped and whole frames under all six (failed with the stars painted from the live
+  clock); framecheck counts partial frames under the stars (failed with moving wallpapers excluded again).
+- framecheck's first session now makes its whole frames by clicking bare desktop, since moves along the dock are
+  no longer whole frames.
+
+Counts after 0.57.0: selftest 679 (pc, 64 MiB); framecheck 20 checks.
+
 ### 0.56.0: commits that copy only what changed, and a music player that sleeps
 
 - **Commits (07 §3.7).** Every program draws its whole surface and commits the whole of it. The kernel now

@@ -619,7 +619,9 @@ shows. A program can say which part of its window changed
 (`win_commit_rect`), and the terminal's blinking cursor is its bottom row,
 where it was the whole desktop twice a second. The pointer moving over a title
 bar's buttons, the dock or the icons draws that title bar, the dock or the
-icon column, not the desktop. Whatever a program commits,
+icon column, not the desktop. Even under a wallpaper that moves, a frame between
+its twelve a second draws only what changed, painting it at the moment the
+rest of the screen shows. Whatever a program commits,
 the kernel copies only the pixels that differ from what is on the screen, so
 a caret blinking in any program is a few hundred bytes and a few pixels. The console is redrawn on top
 of it all with a bitmap font, so everything that already printed kept
