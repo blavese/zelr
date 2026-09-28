@@ -37,6 +37,30 @@ TERM_CURSOR = (0x5E, 0xD1, 0xA0)   # and its cursor (term.c, "slate")
 ICON_SQUARE = (38, 10, 90, 62)
 ICON_POINT = (100, 40)
 
+# The dock's "zelr" badge, against the left of the dock (deskcheck's DOCK_BADGE:
+# 76 wide from x 32, 30 tall from y 717), measured left of where the pointer
+# is put on it.
+BADGE_SEEN = (34, 719, 94, 745)
+BADGE_POINT = (98, 722)
+
+# The terminal's close button (deskcheck's BTN_CLOSE: 30 by 24 from x 853, y
+# 41), and the corner of it below and right of where the pointer is put, which
+# is the part a title bar redrawn too short would leave unlit.
+CLOSE_POINT = (858, 42)
+CLOSE_LOW = (872, 54, 882, 64)
+
+
+def reddish(px, w, rect):
+    """Pixels in a rectangle that are the close button's red over a title bar."""
+    left, top, right, bottom = rect
+    n = 0
+    for y in range(top, bottom):
+        for x in range(left, right):
+            i = (y * w + x) * 3
+            if px[i] > 170 and px[i + 1] < 120 and px[i + 2] < 120:
+                n += 1
+    return n
+
 
 def stats(vm):
     """The numbers /sys/screen reports, as a dictionary."""
@@ -92,14 +116,33 @@ def main():
 
         vm.type("desktop\n")
         mon.wait_screen("fr-desktop",
-                        lambda w, h, px: True, timeout=30)
+                        lambda w, h, px: count_in(px, w, (0, 0, w, h), PAGE) > 250000,
+                        timeout=60)
+
+        # Whole frames: a click asks for the whole screen, whatever it
+        # changes, and on bare desktop -- right of the terminal, which opens
+        # past the icons and is 762 wide -- it changes next to nothing. So
+        # each is the whole desktop drawn and compared, and a band or two
+        # sent, which is the claim about sending.
+        for i in range(12):
+            mon.click(950, 150 + (i % 3) * 60)
 
         # The pointer, moved along the dock. The dock draws a highlight under
-        # the pointer, so every one of these is a whole frame, and each one
-        # differs from the last only along the bottom of the screen.
+        # the pointer, and every one of these moves was a whole frame. The
+        # dock draws its hover inside itself, so each now draws only the dock
+        # -- and on the way there the icons and the terminal's title bar,
+        # which the walk to the corner crosses, only themselves. Counted by
+        # the kernel over the moves alone.
+        drawn_at = kernel_symbol("draws", "wm.c")
+        part_at = kernel_symbol("partial_draws", "wm.c")
+        hover_at = kernel_symbol("hover_frames", "wm.c")
+        dock_d0, dock_p0, dock_h0 = (mon.read_u32(drawn_at), mon.read_u32(part_at),
+                                     mon.read_u32(hover_at))
         for x in range(300, 900, 60):
             mon.move_to(x, 735)
-        mon.screen("fr-moved")
+        dock_draws = mon.read_u32(drawn_at) - dock_d0
+        dock_partial = mon.read_u32(part_at) - dock_p0
+        dock_hover = mon.read_u32(hover_at) - dock_h0
 
         leave(vm)
         after = stats(vm)
@@ -129,6 +172,11 @@ def main():
             c.add("and well under half of it", each * 2 < full)
             c.add("the other processor took half of some of them", shared > 0)
 
+        print("      %d frames drawn over the moves along the dock, %d of them only"
+              " what they were over (%d as a hover)" % (dock_draws, dock_partial, dock_hover))
+        c.add("a move along the dock or across a title bar draws only what it is over",
+              dock_draws > 10 and dock_partial == dock_draws and dock_hover > 10)
+
         # --- and over a window's contents ----------------------------------
         #
         # There nothing on the desktop draws anything for the pointer, and a
@@ -147,7 +195,16 @@ def main():
         # one a minute.
         before = stats(vm)
         vm.type("desktop\n")
-        mon.wait_screen("fr-desktop2", lambda w, h, px: True, timeout=30)
+        mon.wait_screen("fr-desktop2",
+                        lambda w, h, px: count_in(px, w, (0, 0, w, h), PAGE) > 250000,
+                        timeout=60)
+
+        # A title bar's button under the pointer, which is now drawn as the
+        # title bar alone: all of the button has to light, down to its lower
+        # corner, not only the part a shorter strip would cover.
+        mon.move_to(*CLOSE_POINT)
+        _, _, _, close_shot, close_lit = mon.wait_screen(
+            "fr-close", lambda w, h, px: reddish(px, w, CLOSE_LOW) >= 60, timeout=5)
         path = ((300, 300), (360, 320), (420, 340), (480, 360), (540, 380),
                 (600, 400), (540, 380), (480, 360), (420, 340), (360, 320))
         for x, y in path:                  # over the terminal's contents
@@ -159,7 +216,6 @@ def main():
         # And the kernel's own count of frames drawn, read through the
         # monitor, says whether one came along in the middle: a picture that
         # a whole frame has tidied proves nothing, so the walk is tried again.
-        drawn_at = kernel_symbol("draws", "wm.c")
         steps = 6
         been = [(300 + 20 * i, 300 + 10 * i) for i in range(steps)]
         for _ in range(3):
@@ -208,6 +264,7 @@ def main():
                   % (now, left, "no frame in between" if untidied
                      else "and a whole frame was drawn in between, three times"))
         c.add("an icon still lights up under the pointer", lit, icon_shot)
+        c.add("and a title bar's button lights all the way down", close_lit, close_shot)
 
         # --- and with every window put away --------------------------------
         #
@@ -238,7 +295,6 @@ def main():
         # frame draws only those: the kernel counts frames that drew only
         # what changed, the bytes commits looked at and the bytes they
         # copied.
-        part_at = kernel_symbol("partial_draws", "wm.c")
         commits_at = kernel_symbol("published_frames", "winsrv.c")
         copied_at = kernel_symbol("published_bytes", "winsrv.c")
         compared_at = kernel_symbol("compared_bytes", "winsrv.c")
@@ -278,6 +334,33 @@ def main():
             return len(counts) > 1 and max(counts) - min(counts) >= 20
         _, _, _, blink_shot, blinked = mon.wait_screen("fr-blink", blinking,
                                                        timeout=10, interval=0.1)
+
+        # --- the dock over a maximised window -------------------------------
+        #
+        # A maximised window has the whole screen, and the dock comes back
+        # over it when the pointer reaches the bottom. A move along the dock
+        # then counted as a move over that window's contents, which draws
+        # nothing for the pointer, so the dock's hover was never drawn: the
+        # pointer sat on the badge and the badge stayed as it was.
+        #
+        # The bottom row is the window's border, not its contents, so the
+        # pointer is brought up into the dock first: the move that matters is
+        # from one point of the window's contents under the dock to another.
+        mon.send("sendkey alt-f", settle=1.0)
+        mon.move_to(200, 767)
+        mon.wait_screen(
+            "fr-dock-up", lambda w, h, px: count_in(px, w, BADGE_SEEN, PAGE) < 50,
+            timeout=15)
+        mon.send("mouse_move 0 -27", settle=MOUSE_GAP)
+        w, h, px, _, _ = mon.wait_screen(
+            "fr-dock-in", lambda w, h, px: arrow_pixels(px, w, 200, 740) > 20, timeout=15)
+        dark = light(px, w, BADGE_SEEN)
+        mon.send("mouse_move %d %d" % (BADGE_POINT[0] - 200, BADGE_POINT[1] - 740),
+                 settle=MOUSE_GAP)
+        _, _, _, badge_shot, badge_lit = mon.wait_screen(
+            "fr-badge", lambda w, h, px: abs(light(px, w, BADGE_SEEN) - dark) > 3000,
+            timeout=5)
+        mon.send("sendkey alt-f", settle=1.0)
         mon.send("sendkey alt-d")
         mon.wait_screen("fr-away",
                         lambda w, h, px: count_in(px, w, (0, 0, w, h), PAGE) < 1000,
@@ -312,6 +395,7 @@ def main():
         c.add("a character typed, a whole commit, copies only what it changed",
               typed_commits >= 1 and typed_copied // typed_commits < 32 * 1024)
         c.add("and the cursor still blinks on the screen", blinked, blink_shot)
+        c.add("the dock lights under the pointer over a maximised window", badge_lit, badge_shot)
         # One allowed, for the clock's minute.
         c.add("a desktop with every window put away draws nothing", idle <= 1)
     finally:

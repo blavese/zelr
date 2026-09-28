@@ -173,6 +173,7 @@ u32  wm_draws(void);
 u32  wm_draw_mcycles(void);
 u32  wm_pointer_only_moves(void);   /* moves that redrew only the pointer */
 u32  wm_partial_draws(void);        /* frames that drew only what changed */
+u32  wm_hover_frames(void);         /* pointer moves drawn as their hover zones only */
 
 /* For the self test. wm_test_draw_scene draws a frame's scene without the
    pointer, the whole of it or only inside x, y, w, h, as a frame drawing only

@@ -617,7 +617,9 @@ routine keeps to a clip rectangle, and a frame whose damage is one window's
 contents starts from that window, because nothing under an opaque surface
 shows. A program can say which part of its window changed
 (`win_commit_rect`), and the terminal's blinking cursor is its bottom row,
-where it was the whole desktop twice a second. Whatever a program commits,
+where it was the whole desktop twice a second. The pointer moving over a title
+bar's buttons, the dock or the icons draws that title bar, the dock or the
+icon column, not the desktop. Whatever a program commits,
 the kernel copies only the pixels that differ from what is on the screen, so
 a caret blinking in any program is a few hundred bytes and a few pixels. The console is redrawn on top
 of it all with a bitmap font, so everything that already printed kept

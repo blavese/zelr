@@ -314,6 +314,9 @@ static u32 render_screen(char *b, u32 cap) {
     /* Of the draws, the ones that drew only the part of the screen that
        changed rather than the whole desktop. */
     put(&o, "partial %d\n", wm_partial_draws());
+    /* Pointer moves drawn as the title bar, dock, icons or menu they were
+       over rather than as the whole desktop. */
+    put(&o, "hover %d\n", wm_hover_frames());
     return o.len;
 }
 

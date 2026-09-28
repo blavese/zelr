@@ -3076,8 +3076,10 @@ static u32  under[CUR_H][CUR_W];
 static int  under_x, under_y;
 static bool under_kept;
 static u32  pointer_only_moves;           /* for /sys/screen */
+static u32  hover_frames;                 /* and moves drawn as their hover zones */
 
 u32 wm_pointer_only_moves(void) { return pointer_only_moves; }
+u32 wm_hover_frames(void) { return hover_frames; }
 
 static void keep_under(int mx, int my) {
     for (int y = 0; y < CUR_H; y++)
@@ -4382,7 +4384,20 @@ bool wm_test_find_open(void) { return find_open; }
  * does any move while a frame is already wanted. The zones are wider than
  * the things in them on purpose: a patch left drawn for a hover that ended
  * would be wrong until the next frame, and a whole frame is only slower. */
+/* The top of the band the dock's hover is drawn in: its shadow, or where it
+   rises from when it is away. Below this, whatever is under the pointer, the
+   dock is on top of it -- a maximised window is under the dock when it comes
+   back, and the point on the dock is inside that window's contents. */
+static int dock_zone_top(void) {
+    int a = taskbar_y() - 12, b = panel_rest_y() - SHADOW - 40;
+    return a < b ? a : b;
+}
+
 static bool pointer_is_quiet_at(int mx, int my) {
+    /* First, before any window: a window under the dock is not what the
+       pointer is over. Tested after the windows, a move along the dock over
+       a maximised window counted as quiet and its hover was never drawn. */
+    if (my >= dock_zone_top()) return false;
     bool on_title;
     button_t btn;
     window_t *w = window_at(mx, my, &on_title, &btn);
@@ -4400,6 +4415,60 @@ static bool desktop_is_still(void) {
     return under_kept && !needs_composite && !dragging && !resizing && !mouse_capture
         && !band_on && !menu_open && !ctx_open && !volume_open && !net_open
         && !find_open && cyc_at < 0;
+}
+
+/* The same, but with a menu allowed open: a move over one is drawn as that
+   menu (hover_zone_at). The panels with a hover of their own still are not. */
+static bool desktop_is_steady(void) {
+    return under_kept && !needs_composite && !dragging && !resizing && !mouse_capture
+        && !band_on && !volume_open && !net_open && !find_open && cyc_at < 0;
+}
+
+/* What a pointer at mx, my draws for being there, as a rectangle holding all
+ * of it, into z[4] as x, y, w, h: empty where nothing is drawn for it.
+ *
+ * A move that was not quiet drew the whole desktop, and most such moves are
+ * across a title bar's buttons, along the dock or down the icons, each of
+ * which draws its hover inside itself. Such a move draws where the pointer
+ * was and where it is -- the title bar, the icon column, the dock, the open
+ * menu -- and nothing else; anything drawn for the pointer outside these
+ * would go stale, and a place not listed here is false, which is a whole
+ * frame as before. The menus' own hover animations damage their menus
+ * already. */
+static bool hover_zone_at(int mx, int my, int z[4]) {
+    z[0] = z[1] = z[2] = z[3] = 0;
+    if (ctx_open && mx >= ctx_x - 14 && mx < ctx_x + CTX_W + 14
+                 && my >= ctx_y - 14 && my < ctx_y + CTX_H + 14) {
+        z[0] = ctx_x - 14; z[1] = ctx_y - 14; z[2] = CTX_W + 28; z[3] = CTX_H + 28;
+        return true;
+    }
+    if (menu_open && mx >= menu_x - 14 && mx < menu_x + MENU_W + 14
+                  && my >= menu_y - 14 && my < menu_y + menu_full_h() + 14) {
+        z[0] = menu_x - 14; z[1] = menu_y - 14; z[2] = MENU_W + 28; z[3] = menu_full_h() + 28;
+        return true;
+    }
+    int top = dock_zone_top();
+    if (my >= top) {                        /* the dock, over whatever is under it */
+        z[0] = 0; z[1] = top; z[2] = (int)fb_width(); z[3] = (int)fb_height() - top;
+        return true;
+    }
+    if (pointer_is_quiet_at(mx, my)) return true;
+    bool on_title;
+    button_t btn;
+    window_t *w = window_at(mx, my, &on_title, &btn);
+    if (w) {
+        /* The title bar, where the buttons are; a border draws nothing. */
+        if (on_title || btn != BTN_NONE) {
+            z[0] = w->x; z[1] = w->y; z[2] = wm_outer_w(w); z[3] = WM_TOP;
+        }
+        return true;
+    }
+    if (mx < wm_icons_right() + 16) {       /* the icons, from the top down */
+        z[0] = 0; z[1] = 0; z[2] = ICON_LEFT + ICON_CELL_W + 16;
+        z[3] = ICON_TOP + DESK_N * ICON_CELL_H + 16;
+        return true;
+    }
+    return false;
 }
 
 /* What the dock shows that nothing announces: the clock, and whether there is
@@ -4475,11 +4544,23 @@ void wm_run(void) {
             handle_mouse(mx, my, buttons);
             last_buttons = buttons;
             /* After handle_mouse, which may itself have asked for a frame. */
+            int za[4], zb[4];
             if (same_buttons && desktop_is_still() &&
-                pointer_is_quiet_at(ox, oy) && pointer_is_quiet_at(mx, my))
+                pointer_is_quiet_at(ox, oy) && pointer_is_quiet_at(mx, my)) {
                 move_pointer_only();
-            else
+            } else if (same_buttons && desktop_is_steady() &&
+                       hover_zone_at(ox, oy, za) && hover_zone_at(mx, my, zb)) {
+                /* What draws something for the pointer where it was and
+                   where it is, and nothing else; the frame puts the pointer
+                   back on by itself. Neither of them drawing anything is a
+                   move of the pointer alone. */
+                if (za[2] > 0) need_frame_in(za[0], za[1], za[2], za[3]);
+                if (zb[2] > 0) need_frame_in(zb[0], zb[1], zb[2], zb[3]);
+                if (!needs_composite) move_pointer_only();
+                else hover_frames++;
+            } else {
                 need_frame();
+            }
         }
 
         /* Asked every pass rather than only when the mouse moves: what the
