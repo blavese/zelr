@@ -112,7 +112,8 @@ numbered files are still to 6048716; where they disagree with this list, this li
 - framecheck's first session now makes its whole frames by clicking bare desktop, since moves along the dock are
   no longer whole frames.
 
-Counts after 0.57.0: selftest 679 (pc, 64 MiB); framecheck 20 checks.
+Counts after 0.57.0: selftest 679 (pc, 64 MiB), 685 (256 MiB), 692 (q35), 706 (`-smp 4`); framecheck 20
+checks; gate full 53 steps.
 
 ### 0.56.0: commits that copy only what changed, and a music player that sleeps
 

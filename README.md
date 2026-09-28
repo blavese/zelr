@@ -1427,7 +1427,7 @@ byte.
 ## testing
 
 The kernel tests itself. `./run.sh -T` boots with selftest on the command line,
-runs 678 checks across every subsystem, then writes to QEMU's debug-exit port
+runs 679 checks across every subsystem, then writes to QEMU's debug-exit port
 so the host gets a real exit status.
 
     [string]                8 checks   [live tree]            19 checks
@@ -1457,7 +1457,7 @@ so the host gets a real exit status.
     [theme]                19 checks   [kernel stack]          3 checks
     [taskbar]              18 checks
 
-    678 passed, 0 failed
+    679 passed, 0 failed
     SELFTEST_PASS
 
 The sound section is skipped because `run.sh` attaches no sound card, the
@@ -1495,7 +1495,7 @@ on a machine with several, where it hands work to each of them and requires
 the count they share to come back exact, and then starts more programs than
 there are processors to check that handed work is neither given to a busy
 one nor abandoned halfway for a program. `qemu-system-x86_64 -smp 4` with
-256 MiB reaches 705, and the gate runs it.
+256 MiB reaches 706, and the gate runs it.
 
 The same checks run again on `-machine q35`, which has PCIe and an AHCI
 controller rather than a 1996 chipset and a PIO disk, and reach 679 there.
