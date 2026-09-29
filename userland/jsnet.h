@@ -873,10 +873,24 @@ __attribute__((unused)) static int jsdom_requests(void) {
             }
         }
         jd_reply rp = { 0, 0, 0, 0, 0 };
-        if (url[0] && jd_do_request && (kind != JQ_XHR || jd_method_ok(method)))
+        char *data = 0, mime[96];
+        if (jd_is_data_url(url)) {
+            /* Answered here, from the address itself; one that does not
+               decode is a failure to fetch, as the standard has it. */
+            u32 n = jd_data_url(url, &data, mime, (int)sizeof(mime));
+            if (data) {
+                rp.body = data;
+                rp.len = (int)n;
+                rp.status = 200;
+                rp.type = mime;
+                rp.url = url;
+            }
+        } else if (url[0] && jd_do_request && (kind != JQ_XHR || jd_method_ok(method))) {
             jd_do_request(method, url, body, type, &rp);
+        }
         if (kind == JQ_FETCH) jd_fetch_done(o, &rp);
         else jd_xhr_done(o, &rp);
+        free(data);
         /* A promise settled from here, outside any call into the page, has
            its reactions run now, as they would be at the end of a task. */
         js_drain(&jd_J);

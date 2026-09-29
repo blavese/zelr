@@ -5282,6 +5282,93 @@ static int jd_run_text(int node, const char *src, const char *text, u32 len) {
     return good;
 }
 
+/* --- data: addresses ------------------------------------------------------------------------
+ *
+ * An address that carries what it names: data:[type][;base64],text, read
+ * by the fetch standard's steps -- the text's percent escapes undone, then
+ * base64 read (forgivingly, as atob reads it) when the type ends in
+ * ";base64". Nothing goes to the network. Instagram writes nearly every
+ * script it has as one, and a page may fetch one. */
+
+static int jd_is_data_url(const char *s) {
+    return s && w_lower(s[0]) == 'd' && w_lower(s[1]) == 'a' && w_lower(s[2]) == 't'
+           && w_lower(s[3]) == 'a' && s[4] == ':';
+}
+
+static int jd_hex_digit(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+/* The bytes, in memory of their own that the caller frees (*out), and how
+   many; the type into mime when asked for. 0 with *out left null when the
+   address has no comma or its base64 is not base64. */
+static u32 jd_data_url(const char *src, char **out, char *mime, int mcap) {
+    *out = 0;
+    const char *p = src + 5, *comma = p;
+    while (*comma && *comma != ',') comma++;
+    if (!*comma) return 0;
+    const char *te = comma;
+    while (te > p && (te[-1] == ' ' || te[-1] == '\t')) te--;
+    int b64 = 0;
+    if (te - p >= 7) {
+        const char *q = te - 7, *want = ";base64";
+        b64 = 1;
+        for (int k = 0; k < 7; k++) if (w_lower(q[k]) != want[k]) b64 = 0;
+        if (b64) te = q;
+    }
+    if (mime && mcap > 0) {
+        while (p < te && *p == ' ') p++;
+        int m = 0;
+        if (p < te && *p != ';') {
+            for (const char *q = p; q < te && m < mcap - 1; q++) mime[m++] = *q;
+        } else {
+            const char *dflt = "text/plain;charset=US-ASCII";
+            for (; dflt[m] && m < mcap - 1; m++) mime[m] = dflt[m];
+        }
+        mime[m] = 0;
+    }
+    const char *body = comma + 1;
+    u32 len = (u32)w_len(body);
+    char *buf = (char *)malloc(len + 1);
+    if (!buf) return 0;
+    u32 n = 0;
+    for (u32 i = 0; i < len; i++) {
+        int h1, h2;
+        if (body[i] == '%' && i + 2 < len && (h1 = jd_hex_digit(body[i + 1])) >= 0
+            && (h2 = jd_hex_digit(body[i + 2])) >= 0) {
+            buf[n++] = (char)(h1 * 16 + h2);
+            i += 2;
+        } else {
+            buf[n++] = body[i];
+        }
+    }
+    if (b64) {
+        u32 m = 0;
+        for (u32 i = 0; i < n; i++) {
+            char c = buf[i];
+            if (c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == 12) continue;
+            buf[m++] = c;
+        }
+        if (m % 4 == 0 && m && buf[m - 1] == '=') { m--; if (buf[m - 1] == '=') m--; }
+        int ok = m % 4 != 1;
+        for (u32 i = 0; ok && i < m; i++) if (tx_b64((u8)buf[i]) < 0) ok = 0;
+        if (!ok) { free(buf); return 0; }
+        u32 bits = 0, have = 0, w = 0;
+        for (u32 i = 0; i < m; i++) {
+            bits = (bits << 6) | (u32)tx_b64((u8)buf[i]);
+            have += 6;
+            if (have >= 8) { have -= 8; buf[w++] = (char)(bits >> have); }
+        }
+        n = w;
+    }
+    buf[n] = 0;
+    *out = buf;
+    return n;
+}
+
 /* A script element's text, from its src or from inside it. 0 for none. An
    inline one is gathered into memory of its own, which *owned says the
    caller frees once it has run: the text of a script inserted while another
@@ -5293,6 +5380,19 @@ static u32 jd_script_text(int i, const char **text, const char **src, char **own
     if (*src && **src) {
         /* A script element with a src ignores anything written inside it,
            which is what every browser does. */
+        if (jd_is_data_url(*src)) {
+            char *buf;
+            u32 n = jd_data_url(*src, &buf, 0, 0);
+            if (!buf) {
+                jd_outside_failed++;
+                if (jd_script_done) jd_script_done(i, *src, 0, "its data: address does not decode");
+                return 0;
+            }
+            jd_outside++;
+            *owned = buf;
+            *text = buf;
+            return n;
+        }
         if (!jd_get_script) { jd_outside_failed++; return 0; }
         int n = jd_get_script(*src, text);
         if (n <= 0 || !*text) {

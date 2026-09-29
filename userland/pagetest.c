@@ -1724,6 +1724,35 @@ int main(void) {
             page.title >= 0 ? page.arena + page.title : "", "early,one:true mark,measure");
     }
 
+    /* --- data: addresses -------------------------------------------------------------
+     *
+     * What they name is in them. Instagram writes nearly every script as one,
+     * and none ran. */
+    oks("a script whose src is a data: address runs what it carries, in base64 or escaped",
+        titled("<body><script src='data:text/javascript;base64,d2luZG93LmEgPSAxOw=='></script>"
+               "<script src='data:,window.b%20%3D%202%3B'></script>"
+               "<script src='data:text/javascript;base64,@@@'>window.c = 3;</script>"
+               "<script>document.title = [window.a, window.b, typeof window.c].join(' ');</script></body>"),
+        "1 2 undefined");
+    {
+        jsdom_at("https://site.test/");
+        jsdom_request_with(fake_request);
+        asked[0] = 0;
+        load("<body><p id=x>none</p><script>"
+             "fetch('data:application/json,%7B%22n%22%3A5%7D').then(function(r){"
+             " return r.json().then(function(j){ document.getElementById('x').textContent ="
+             "  [r.status, r.ok, r.headers.get('content-type'), j.n].join(' '); }); });"
+             "</script></body>");
+        char err[128];
+        run_scripts(&page, err, (int)sizeof(err), 0);
+        for (int k = 0; k < 4; k++) jsdom_requests();
+        oks("and a fetch of one is answered from the address itself", content_of(dom_by_id(&page, "x")),
+            "200 true application/json 5");
+        oks("without asking the network", asked, "");
+        jsdom_request_with(0);
+        jsdom_at("");
+    }
+
     /* --- a page that uses up its memory ---------------------------------------
      *
      * At the cap a string or a property came back as nothing, and places that
