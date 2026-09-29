@@ -190,6 +190,9 @@ typedef long long          zelr_word;
 
 /* Commit only part of the surface (win_commit_rect). */
 #define SYS_WIN_COMMIT_RECT 66
+
+/* Bytes from the kernel's random number generator (random_bytes). */
+#define SYS_RANDOM        67
 #define TLS_WHY   0
 #define TLS_WHAT  1
 
@@ -496,6 +499,14 @@ typedef struct {
 
 static inline int sysinfo(zelr_sysinfo *out) {
     return syscall(SYS_SYSINFO, (zelr_word)out, 0, 0);
+}
+
+/* Bytes nobody can guess, from the generator the kernel's TLS keys come
+   from. Answers how many it wrote, which is fewer than asked for past a
+   call's limit (ask again for the rest), or -1 while the kernel has found
+   no source of randomness yet: there is no second best to fall back on. */
+static inline long random_bytes(void *buf, long len) {
+    return (long)syscall(SYS_RANDOM, (zelr_word)buf, (zelr_word)len, 0);
 }
 
 /* --- other programs ------------------------------------------------------

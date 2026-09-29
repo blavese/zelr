@@ -76,6 +76,8 @@ int main(int argc, char **argv) {
 
     src = (char *)map(SRC_MAX, PROT_READ | PROT_WRITE);
     cssbuf = (char *)map(CSS_MAX, PROT_READ | PROT_WRITE);
+    scriptbuf = (char *)map(SCRIPT_MAX, PROT_READ | PROT_WRITE);
+    replybuf = (char *)map(REPLY_MAX, PROT_READ | PROT_WRITE);
     doc_mem = (ddoc *)map(sizeof(ddoc), PROT_READ | PROT_WRITE);
     sheet_mem = (csheet *)map(sizeof(csheet), PROT_READ | PROT_WRITE);
     page_mem = (ldoc *)map(sizeof(ldoc), PROT_READ | PROT_WRITE);

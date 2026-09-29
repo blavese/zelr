@@ -123,6 +123,10 @@ LOGO = (0xE1, 0x1D, 0x48)
 # this colour, so counting it is the same question as "was the sheet read".
 BAND = (0x1D, 0x4E, 0xD8)
 
+# The colour a page's script turns a band that starts as BAND (/restyled,
+# /big-script): the script ran, all of it, and what it wrote was drawn.
+GREEN = (0x00, 0xB0, 0x50)
+
 
 def region(px, w, rect):
     x0, y0, x1, y1 = rect
@@ -514,8 +518,30 @@ def main():
             c.add("a sheet the server was too busy for is asked for again",
                   count_in(pxf, wf, PAGE, BAND) > 3000, shotf)
 
+
+            # --- a style a script writes ------------------------------------
+            #
+            # The style attributes were read once, before any script ran, so
+            # a script's el.style.background changed the attribute and not
+            # the screen. The band starts blue and the script makes it green.
+            go(vm, mon, "http://%s/restyled" % srv.host, settle=12.0,
+               was=flaky, name="br-going-restyled")
+            restyled, pxy, wy, shoty = page_settled(mon, "br-restyled")
+            c.add("a style a page's script writes is drawn",
+                  count_in(pxy, wy, PAGE, GREEN) > 3000 and count_in(pxy, wy, PAGE, BAND) < 200, shoty)
+
+            # --- a script file past the old limit ---------------------------
+            #
+            # 600 kilobytes, where a file was cut off at 128 and run anyway;
+            # the last line of it turns the band green.
+            go(vm, mon, "http://%s/big-script/600" % srv.host, settle=60.0,
+               was=restyled, name="br-going-big-script")
+            bigs, pxz, wz, shotz = page_settled(mon, "br-big-script")
+            c.add("a script file of 600 kilobytes is fetched and run to its end",
+                  count_in(pxz, wz, PAGE, GREEN) > 3000, shotz)
+
             go(vm, mon, "https://%s/" % srv.host, settle=5.0,
-               was=flaky, name="br-going-https")
+               was=bigs, name="br-going-https")
             secure, _, _, shots = page_settled(mon, "br-https")
             c.add("https says it cannot do that rather than failing quietly",
                   secure != missing, shots)

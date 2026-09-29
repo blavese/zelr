@@ -11,6 +11,13 @@
 #define URL_PATH 640
 #define URL_TEXT (URL_HOST + URL_PATH + 24)
 
+/* What this browser calls itself: in every request it makes (fetch.h) and
+   to every page that asks (jsdom.h, navigator.userAgent). One name in one
+   place, so that what a page is told and what a server is sent cannot come
+   apart; a browser that says one thing to the server and another to the
+   page's script is dressing up as something, which this does not. */
+#define WEB_USER_AGENT "zelr"
+
 typedef struct {
     char host[URL_HOST];
     char path[URL_PATH];

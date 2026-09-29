@@ -197,6 +197,15 @@
    much and no more, where a whole commit is the whole window: a terminal's
    cursor blinking twice a second used to be the whole of it both times. */
 #define SYS_WIN_COMMIT_RECT 66
+
+/* Bytes from the kernel's random number generator (rng.c), for a program
+   that has to be unpredictable -- a browser's crypto.getRandomValues: rbx
+   the buffer, rcx how many, at most RANDOM_CALL_MAX a call. Answers how
+   many it wrote, or -1 while the generator has found no source of
+   randomness yet, since bytes from a pool that nothing unpredictable went
+   into look exactly like good ones. */
+#define SYS_RANDOM        67
+#define RANDOM_CALL_MAX   65536
 #define TLS_WHY   0
 #define TLS_WHAT  1
 

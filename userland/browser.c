@@ -72,14 +72,31 @@
 /* A script the page did not bring with it. One buffer, reused: each is run
    the moment it arrives, so there is never more than one in hand. The limit
    on how many are followed is the same argument as for sheets -- every one
-   is another round trip -- and it is said out loud when it is reached. */
-#define SCRIPT_MAX  (128 * 1024)
-#define SCRIPTS_MAX 8
+   is another round trip -- and it is said out loud when it is reached.
+ *
+ * It was 128 kilobytes and eight files, and a site's bundle is not that: The
+ * Verge's two largest are 940 and 890 kilobytes, Instagram's is 3.9
+ * megabytes, and fifty files is ordinary. A script cut off at the limit was
+ * run anyway and stopped on a syntax error in its middle, which is what
+ * Microsoft, Instagram, Yahoo, ESPN, IMDb and Spotify reported. Now the buffer
+ * is mapped, so a page pays for the size of what it fetched, and one that
+ * does not fit is not run at all. What running one costs is many times its
+ * size again, in the engine's tree of it, which lives as long as the page:
+ * whether the machine has that is asked before each one runs (jsdom.h,
+ * jd_room_for), which on a 64 megabyte machine is about a quarter of a
+ * megabyte of script and on a 256 megabyte one several; SCRIPTS_BYTES is a
+ * ceiling on what a page's files come to together whatever the machine. */
+#define SCRIPT_MAX    (4 * 1024 * 1024)
+#define SCRIPTS_MAX   64
+#define SCRIPTS_BYTES (6 * 1024 * 1024)
 
 /* And what a script asks for while the page is up. Its own buffer, because
    a reply arriving must not write over the text of the script that asked
-   for it -- which is exactly what sharing one would do. */
-#define REPLY_MAX   (128 * 1024)
+   for it -- which is exactly what sharing one would do. Mapped, and as large
+   as a script file, because what a page's fetch asks for is as often a
+   megabyte of JSON as a line of text, and a reply cut short is JSON that
+   will not parse. */
+#define REPLY_MAX   (4 * 1024 * 1024)
 
 /* How many a page may make. A page in a loop asking forever is a page
    that holds the machine on the network rather than on the processor,
@@ -97,9 +114,10 @@
    and the browser did not start at all. */
 static char *src;
 static char *cssbuf;
-static char scriptbuf[SCRIPT_MAX];
-static char replybuf[REPLY_MAX];
+static char *scriptbuf;              /* mapped, SCRIPT_MAX */
+static char *replybuf;               /* mapped, REPLY_MAX */
 static int  scripts_outside;
+static int  scripts_bytes;           /* what they came to, for SCRIPTS_BYTES */
 static int  asks_made;
 
 static ddoc   *doc_mem;
@@ -121,6 +139,7 @@ static response_t reply;
 
 static char  title[160];
 static char  status[URL_TEXT + 96];
+static char  address[URL_TEXT];       /* what the bar says; the window's, below */
 static int   scroll;
 static int   over_link = -1;
 static int   hover_node = -1;
@@ -975,13 +994,13 @@ static const char *why_heading(int rc) {
    once here instead of on every layout. A resize lays the page out again,
    and re-parsing the same declarations on every frame of a window drag is
    the difference between a reflow and a stutter. */
-static void gather_inline_styles(void) {
-    for (int i = 0; i < doc.count; i++) {
+static void inline_style_of(int i) {
+    {
         inl[i].at = 0;
         inl[i].n = 0;
-        if (doc.nodes[i].kind != DN_ELEMENT) continue;
+        if (doc.nodes[i].kind != DN_ELEMENT) return;
         const char *st = dom_attr(&doc, i, "style");
-        if (!st || !*st) continue;
+        if (!st || !*st) return;
         int at = sheet.ndecls;
         /* The same reader as a block between braces, given a run with no
            braces around it. */
@@ -1011,6 +1030,21 @@ static void gather_inline_styles(void) {
         inl[i].at = at;
         inl[i].n = sheet.ndecls - at;
     }
+}
+
+static void gather_inline_styles(void) {
+    for (int i = 0; i < doc.count; i++) inline_style_of(i);
+}
+
+/* The style attributes a script changed since the page was last laid out,
+   read again (jsdom.h, jsdom_next_restyled). They were read once, before
+   any script ran, so el.style.display = 'none' changed the attribute and
+   nothing on the screen. Each reading adds to the sheet's declarations;
+   a page that restyles forever runs them out and its later changes are
+   not seen, which the sheet's own overflow already stands for. */
+static void restyle_changed(void) {
+    for (int i; (i = jsdom_next_restyled()) >= 0; )
+        if (i < doc.count) inline_style_of(i);
 }
 
 /* What a link or style element's media attribute allows: 0 when the sheet
@@ -1192,8 +1226,19 @@ static int gather_linked_sheets(int *fetched, int *skipped) {
    Relative to the page, the way every other address on it is: a page at
    /a/b.html asking for c.js means /a/c.js, and resolving that is url_join's
    job and not this one's. */
+/* How much memory the machine has free, for jsdom.h to ask before it runs a
+   script (jd_room_for): running one costs many times its size, and a
+   program that touches a page the machine does not have is ended (a one
+   megabyte script did that to the browser on a 64 megabyte machine). The
+   host build's kernel cannot say. */
+static long long free_memory(void) {
+    zelr_sysinfo si;
+    if (sysinfo(&si) < 0 || si.mem_total_kb == 0) return -1;
+    return (long long)si.mem_free_kb * 1024;
+}
+
 static int fetch_script(const char *src, const char **out) {
-    if (scripts_outside >= SCRIPTS_MAX) return 0;
+    if (scripts_outside >= SCRIPTS_MAX || scripts_bytes >= SCRIPTS_BYTES || !scriptbuf) return 0;
 
     url_t u;
     if (!url_join(&here, src, &u)) return 0;
@@ -1201,46 +1246,203 @@ static int fetch_script(const char *src, const char **out) {
     response_t r;
     int rc = web_get(&u, scriptbuf, SCRIPT_MAX, &r);
     if (rc < 200 || rc >= 300 || r.len <= 0) return 0;
+    /* Half a script is a syntax error somewhere in its middle, and the page
+       is better told the file would not come. */
+    if (r.truncated || scripts_bytes + r.len > SCRIPTS_BYTES) return 0;
 
     scripts_outside++;
+    scripts_bytes += r.len;
     *out = r.body;
     return r.len;
 }
 
 /* What a script asked the network for.
  *
- * Same origin is not enforced, because there is nothing here for it to
- * protect: no cookies are sent with it, there is no credential store, and a
- * page that reads another site's public text through this learns what
- * anybody could learn by asking for it. Saying that is better than a check
- * that looks like a security boundary and is not one.
+ * Same origin is not enforced. The request carries the jar's cookies for
+ * the address it goes to, as every request this browser makes does
+ * (fetch.h), so a page can ask another site for what that site would show
+ * the reader anyway, and read the answer -- which a browser with CORS
+ * refuses. This one has no CORS: it is said here rather than pretended, and
+ * it is a gap, not a boundary.
  *
  * The address is resolved against the page, so a script may ask for a path
  * the way it would write one in a link. */
 static int do_request(const char *method, const char *url, const char *body,
-                      const char **out, int *status) {
-    *out = 0;
-    *status = 0;
-    if (asks_made >= ASKS_MAX) return 0;
+                      const char *type, jd_reply *out) {
+    static char landed[URL_TEXT];
+    static char ctype[64];
+    out->body = 0;
+    out->len = 0;
+    out->status = 0;
+    out->type = 0;
+    out->url = 0;
+    if (asks_made >= ASKS_MAX || !replybuf) return 0;
 
     url_t u;
     if (!url_join(&here, url, &u)) return 0;
 
     response_t r;
     int post = method && (method[0] == 'P' || method[0] == 'p');
+    web_body_type = type;
     int rc = post ? web_post(&u, body ? body : "", replybuf, REPLY_MAX, &r)
                   : web_get(&u, replybuf, REPLY_MAX, &r);
+    web_body_type = 0;
 
     asks_made++;
-    *status = rc;
-    if (rc <= 0 || r.len <= 0) return 0;
-    *out = r.body;
+    out->status = rc;
+    if (rc <= 0) return 0;
+    /* Where it ended up, after any redirect (web_send follows them in u),
+       and what the server said it was. */
+    url_text(&u, landed, sizeof(landed));
+    w_copy(ctype, sizeof(ctype), r.ctype, sizeof(ctype));
+    out->url = landed;
+    out->type = ctype;
+    if (r.len <= 0) return 0;
+    out->body = r.body;
+    out->len = r.len;
     return r.len;
 }
+
+/* --- what a page's scripts may ask the browser -----------------------------
+ *
+ * Where the layout put an element, which is every box it drew for the
+ * element or for anything inside it, run together: what
+ * getBoundingClientRect answers with. In the page's own terms, down the
+ * document; jsdom.h takes the scroll off. An element nothing was drawn for
+ * has no box, and says so. */
+static u8 box_mark[DOM_NODES / 8];
+
+/* What the layout drew at a point of the page, for elementFromPoint. */
+static int node_at_point(int x, int y) { return lay_node_at(&page, x, y); }
+
+static int box_of(int node, int *x, int *y, int *w, int *h) {
+    if (node < 0 || node >= doc.count) return 0;
+    for (int i = node; i >= 0; i = dom_next(&doc, i, node)) box_mark[i >> 3] |= (u8)(1 << (i & 7));
+    int x0 = 0, y0 = 0, x1 = 0, y1 = 0, any = 0;
+    for (int k = 0; k < page.nitems; k++) {
+        const litem *it = &page.items[k];
+        int n = it->node;
+        if (n < 0 || n >= doc.count || !(box_mark[n >> 3] & (1 << (n & 7)))) continue;
+        if (!any || it->x < x0) x0 = it->x;
+        if (!any || it->y < y0) y0 = it->y;
+        if (!any || it->x + it->w > x1) x1 = it->x + it->w;
+        if (!any || it->y + it->h > y1) y1 = it->y + it->h;
+        any = 1;
+    }
+    for (int i = node; i >= 0; i = dom_next(&doc, i, node)) box_mark[i >> 3] &= (u8)~(1 << (i & 7));
+    *x = x0; *y = y0; *w = x1 - x0; *h = y1 - y0;
+    return any;
+}
+
+/* An element's style as the layout works it out: the browser's rules, the
+   page's, the style attribute, and what it inherits, from the root down to
+   it, with the layout's own lay_style (getComputedStyle, jsdom.h). The
+   layout's per-element caches are for the page as it was last laid out,
+   which a script may have changed since, so they are started again first;
+   the next layout starts them again anyway. A percentage is taken of the
+   window's width, where the layout would take it of the containing
+   block's: the one way this differs. */
+static void restyle_changed(void);
+
+static int computed_style(int node, cstyle *out) {
+    if (node < 0 || node >= doc.count || doc.nodes[node].kind != DN_ELEMENT) return 0;
+    int chain[256], n = 0;
+    for (int p = node; p >= 0; p = doc.nodes[p].parent) {
+        if (n >= (int)(sizeof(chain) / sizeof(chain[0]))) return 0;
+        chain[n++] = p;
+    }
+    if (chain[n - 1] != doc.root) return 0;             /* not in the page */
+    restyle_changed();
+    lay_gen++;
+    lay_hit_used = 0;
+    lay_var_used = 0;
+    lay_arena_used = 0;
+
+    static lctx L;
+    volatile u8 *z = (volatile u8 *)&L;
+    for (u32 i = 0; i < sizeof(L); i++) z[i] = 0;
+    L.d = &doc; L.s = &sheet; L.x = &index_; L.m = &match; L.inl = inl;
+    L.imgs = pic_sizes; L.nimgs = npic_sizes;
+    L.out = &page; L.root_px = root_px;
+    L.cur_link = -1; L.flex_sized = -1; L.floating = -1;
+    int width = css_view_w > 0 ? css_view_w : 800;
+    L.line_width = width; L.pos_w = width; L.cont_width = width;
+
+    static cstyle a, b;
+    css_default_style(&a, root_px);
+    cstyle *cur = &a, *next = &b;
+    for (int i = n - 1; i >= 0; i--) {
+        lay_style(&L, chain[i], cur, next, width);
+        cstyle *t = cur; cur = next; next = t;
+    }
+    lay_cs(out, cur);
+    return 1;
+}
+
+/* How big a picture was when it was decoded. */
+static int picture_size(int node, int *w, int *h) {
+    for (int i = 0; i < npics; i++)
+        if (pics[i].node == node && pics[i].pic.rgb) { *w = pics[i].pic.w; *h = pics[i].pic.h; return 1; }
+    *w = *h = 0;
+    return 0;
+}
+
+static void script_scroll(int y) { scroll = y < 0 ? 0 : y; }
+
+/* document.cookie, from the jar and into it, for the page's address: what a
+   request there would send, less what is HttpOnly (fetch.h). */
+static int script_cookies(char *out, int cap) { return ck_cookies_for(&here, out, cap, 1); }
+static void script_set_cookie(const char *line) { ck_take_line(&here, line, 1); }
+
+/* A page sending the browser somewhere: a link a script clicked, and
+   location once it is here. Taken on the loop's next pass, as a form's
+   address is. `replace` takes the place of the page in the history rather
+   than adding to it. */
+static int go_replace;
+
+static void script_navigate(const char *url, int replace) {
+    w_copy(go_to, sizeof(go_to), url, sizeof(go_to));
+    go_is_post = 0;
+    post_body[0] = 0;
+    go_replace = replace;
+    want_go = 1;
+}
+
+/* The address the page says it is at now, without loading anything:
+   history.pushState and replaceState, and a move to another place on the
+   same page (jsdom.h, jd_location_go). The bar shows it, the history keeps
+   it, and relative addresses on the page are taken against it, as they are
+   in any browser once a page has moved itself. `push` adds it to the
+   history rather than taking the place of the entry there. */
+static int address_moved;             /* the bar is owed a redraw */
+
+static void push_history(const char *address);
+static void set_address(const char *s);
+
+static void script_address(const char *url, int push) {
+    url_t u;
+    if (!url_parse(url, &u) || !w_same_fold(u.host, here.host) || u.secure != here.secure) return;
+    url_copy(&here, &u);
+    set_address(url);
+    if (push) push_history(url);
+    else if (hist_at >= 0) w_copy(hist[hist_at].text, URL_TEXT, url, URL_TEXT);
+    address_moved = 1;
+}
+
+/* history.back, forward and go: the browser's own buttons, pressed on the
+   next pass (want_hist). */
+static int want_hist;                 /* how far to move, when hist_go is set */
+static int hist_go;
+
+static void script_history_go(int delta) { want_hist = delta; hist_go = 1; }
+static int script_history_length(void) { return hist_n > 0 ? hist_n : 1; }
 
 static int page_unhidden;      /* it was laid out a second time, shown anyway */
 
 static void relayout(int width) {
+    restyle_changed();
+    /* And the title, which a script may have written. */
+    if (doc.title >= 0) w_copy(title, sizeof(title), doc.arena + doc.title, sizeof(title));
     drawings_drop();                 /* made for the sizes of the last one */
     match.hover = hover_node;
     match.visited_links = 0;
@@ -1261,6 +1463,9 @@ static void relayout(int width) {
         lay_show_hidden = 0;
         page_unhidden = lay_words(&page) > 0;
     }
+    /* Sizes may have changed, which a page's ResizeObserver hears of on the
+       next pass (jsdom.h). */
+    jsdom_laid_out();
 }
 
 /* What this system thinks a link looks like, which is the accent the rest of
@@ -1503,10 +1708,34 @@ static void build(const char *html, int len, int width, int want_sheets,
     scripts_ran = 0;
     scripts_changed = 0;
     scripts_outside = 0;
+    scripts_bytes = 0;
     asks_made = 0;
+    /* The page's address for its scripts, with the fragment the reader asked
+       for, which is never sent and so is not in `here`. */
+    char at[URL_TEXT];
+    url_text(&here, at, sizeof(at));
+    {
+        int h = 0, n = w_len(at);
+        while (address[h] && address[h] != '#') h++;
+        if (address[h] == '#' && n + w_len(address + h) < (int)sizeof(at))
+            w_copy(at + n, (int)sizeof(at) - n, address + h, (int)sizeof(at) - n);
+    }
+    jsdom_at(at);
+    jsdom_view(width, css_view_h, 0);
     if (jsdom_open(&doc, &sheet)) {
         jsdom_fetch_with(fetch_script);
         jsdom_request_with(do_request);
+        jsdom_boxes_with(box_of);
+        jsdom_points_with(node_at_point);
+        jsdom_pictures_with(picture_size);
+        jsdom_scroll_with(script_scroll);
+        jsdom_navigate_with(script_navigate);
+        jsdom_submit_with(submit_form);
+        jsdom_cookies_with(script_cookies, script_set_cookie);
+        jsdom_address_with(script_address);
+        jsdom_history_with(script_history_go, script_history_length);
+        jsdom_styles_with(computed_style);
+        jsdom_memory_with(free_memory);
         scripts_ran = jsdom_scripts(script_err, (int)sizeof(script_err));
         jsdom_loaded();
         scripts_changed = jsdom_changed();
@@ -2245,6 +2474,8 @@ static void browser_wait(int win) {
 int main(int argc, char **argv) {
     src = (char *)map(SRC_MAX, PROT_READ | PROT_WRITE);
     cssbuf = (char *)map(CSS_MAX, PROT_READ | PROT_WRITE);
+    scriptbuf = (char *)map(SCRIPT_MAX, PROT_READ | PROT_WRITE);
+    replybuf = (char *)map(REPLY_MAX, PROT_READ | PROT_WRITE);
     doc_mem = (ddoc *)map(sizeof(ddoc), PROT_READ | PROT_WRITE);
     sheet_mem = (csheet *)map(sizeof(csheet), PROT_READ | PROT_WRITE);
     page_mem = (ldoc *)map(sizeof(ldoc), PROT_READ | PROT_WRITE);
@@ -2332,6 +2563,10 @@ int main(int argc, char **argv) {
         }
         if (closing) break;
 
+        /* What a script asking about the window is told this pass. */
+        jsdom_view(view_w - UI_PAD * 2, view_h, scroll);
+        jsdom_window(w, h);
+
         /* A reflow costs a pass over the whole page, so it happens once the
            dragging has stopped rather than on every frame of it. */
         if (want_width && !in.down) {
@@ -2384,14 +2619,19 @@ int main(int argc, char **argv) {
                        to use one that has no button beside it. */
                     int f = form_of(focus_node);
                     focus_control(-1);
-                    submit_form(f);
+                    /* The page hears of it first, and may send it its own
+                       way instead (jsdom.h, jsdom_submitting). */
+                    if (!jsdom_submitting(f)) submit_form(f);
                 } else if (ck == CTL_CHECK || ck == CTL_RADIO) {
-                    if (k == ' ')
+                    if (k == ' ') {
                         field_set_checked(focus_node,
                                           !field_checked(focus_node));
+                        jsdom_toggled(focus_node);
+                    }
                 } else {
                     ui_field_key(&focus_field, raw);
                     field_set_value(focus_node, focus_buf);
+                    jsdom_typed(focus_node);
                 }
                 dirty = 1;
             } else {
@@ -2421,6 +2661,12 @@ int main(int argc, char **argv) {
             }
         }
 
+        /* A handler for what was typed may have changed the page. */
+        if (jsdom_live() && jsdom_changed()) {
+            relayout(view_w - UI_PAD * 2);
+            dirty = 1;
+        }
+
         /* Anything the page asked to have done later. A page that calls
            setTimeout and is never called back is not slow: it is stopped
            part of the way through whatever it was doing. */
@@ -2439,11 +2685,29 @@ int main(int argc, char **argv) {
 
         /* Where a form asked to go, once the click or the key that sent
            it has been dealt with. */
+        /* The history buttons, pressed by a script. */
+        if (hist_go) {
+            hist_go = 0;
+            int to = hist_at + want_hist;
+            if (want_hist == 0) {
+                want_load = 1;
+            } else if (to >= 0 && to < hist_n) {
+                hist[hist_at].scroll = scroll;
+                hist_at = to;
+                set_address(hist[hist_at].text);
+                want_load = 1;
+            }
+            dirty = 1;
+        }
+        if (address_moved) { address_moved = 0; dirty = 1; }
+
         if (want_go) {
             want_go = 0;
             load_post = go_is_post;
             set_address(go_to);
-            push_history(go_to);
+            if (go_replace && hist_at >= 0) w_copy(hist[hist_at].text, URL_TEXT, go_to, URL_TEXT);
+            else push_history(go_to);
+            go_replace = 0;
             want_load = 1;
             dirty = 1;
         }
@@ -2561,7 +2825,7 @@ int main(int argc, char **argv) {
          * navigated first would run the handler on a page that was already
          * leaving. */
         if (in.released && node_under >= 0 && jsdom_live()) {
-            int stop = jsdom_click(node_under);
+            int stop = jsdom_click_at(node_under, dx, in.my - view_y);
 
             /* A handler that changed the document changed what is on the
                screen, and nothing else in this loop would notice: the
@@ -2597,6 +2861,7 @@ int main(int argc, char **argv) {
                 if (ck == CTL_CHECK) {
                     field_set_checked(node_under, !field_checked(node_under));
                     focus_control(node_under);
+                    jsdom_toggled(node_under);
                 } else if (ck == CTL_RADIO) {
                     /* One of a name at a time, which is the only thing that
                        makes a radio button different from a checkbox. */
@@ -2611,16 +2876,22 @@ int main(int argc, char **argv) {
                         }
                     field_set_checked(node_under, 1);
                     focus_control(node_under);
+                    jsdom_toggled(node_under);
                 } else if (ck == CTL_BUTTON) {
                     const char *t = dom_attr(&doc, node_under, "type");
                     focus_control(-1);
-                    /* type="button" is the page's own control -- a menu, a
-                       clear button -- whose click is its script's, and it
-                       sent the form. A <button> with no type submits. */
-                    if (!(t && (lay_same_fold(t, "reset") || lay_same_fold(t, "button"))))
-                        submit_form(form_of(node_under));
+                    /* A plain button is the page's; only a submit button
+                       sends its form, once the page has heard of it. */
+                    int f = form_of(node_under);
+                    if (!(t && (lay_same_fold(t, "reset") || lay_same_fold(t, "button")))
+                        && !jsdom_submitting(f))
+                        submit_form(f);
                 } else {
                     focus_control(node_under);
+                }
+                if (jsdom_live() && jsdom_changed()) {
+                    relayout(view_w - UI_PAD * 2);
+                    over_link = lay_link_at(&page, dx, dy);
                 }
             }
         }

@@ -205,6 +205,7 @@ typedef struct {
     char domain[CK_DOMAIN];
     char path[CK_PATH];
     int  secure;
+    int  httponly;               /* sent to the server, never shown to a script */
     int  used;
 } cookie_t;
 
@@ -239,11 +240,16 @@ static inline int ck_same(const cookie_t *k, const char *name,
         && w_same(k->path, path);
 }
 
-/* One Set-Cookie line. */
-static inline void ck_take_one(const url_t *u, const char *line) {
+/* One Set-Cookie line, from the server, or the same syntax written to
+   document.cookie by a page's script (from_script). A script is the one
+   writer that may not touch an HttpOnly cookie: it cannot make one, and it
+   cannot change or delete one the server made -- which is the whole of what
+   HttpOnly is for, keeping a session's cookie out of reach of whatever
+   script got into the page (RFC 6265, 5.3, and 6265bis on overwriting). */
+static inline void ck_take_line(const url_t *u, const char *line, int from_script) {
     char name[CK_NAME], value[CK_VALUE];
     char domain[CK_DOMAIN], path[CK_PATH];
-    int secure = 0, drop = 0;
+    int secure = 0, drop = 0, httponly = 0;
 
     int i = 0;
     int n = 0;
@@ -291,6 +297,7 @@ static inline void ck_take_one(const url_t *u, const char *line) {
         val[n] = 0;
 
         if (w_same_fold(key, "secure")) secure = 1;
+        else if (w_same_fold(key, "httponly")) httponly = 1;
         else if (w_same_fold(key, "domain")) {
             const char *d = val[0] == '.' ? val + 1 : val;
             /* A server may only widen a cookie to a domain it is inside. */
@@ -309,12 +316,21 @@ static inline void ck_take_one(const url_t *u, const char *line) {
         }
     }
 
+    /* A script may not write an HttpOnly cookie, nor a secure one from a
+       page that did not arrive encrypted. */
+    if (from_script && (httponly || (secure && !u->secure))) return;
+
     int free_slot = -1;
     for (int k = 0; k < CK_MAX; k++) {
         if (!ck_jar[k].used) { if (free_slot < 0) free_slot = k; continue; }
         if (ck_same(&ck_jar[k], name, domain, path)) {
+            if (from_script && ck_jar[k].httponly) return;
             if (drop) ck_jar[k].used = 0;
-            else w_copy(ck_jar[k].value, CK_VALUE, value, CK_VALUE);
+            else {
+                w_copy(ck_jar[k].value, CK_VALUE, value, CK_VALUE);
+                ck_jar[k].secure = secure;
+                ck_jar[k].httponly = httponly;
+            }
             return;
         }
     }
@@ -326,7 +342,12 @@ static inline void ck_take_one(const url_t *u, const char *line) {
     w_copy(k->domain, CK_DOMAIN, domain, CK_DOMAIN);
     w_copy(k->path, CK_PATH, path, CK_PATH);
     k->secure = secure;
+    k->httponly = httponly;
     k->used = 1;
+}
+
+static inline void ck_take_one(const url_t *u, const char *line) {
+    ck_take_line(u, line, 0);
 }
 
 static inline void ck_take(const url_t *u, const char *head, int hlen) {
@@ -338,13 +359,16 @@ static inline void ck_take(const url_t *u, const char *head, int hlen) {
     }
 }
 
-/* What to send with this request, as "a=1; b=2", or nothing. */
-static inline int ck_header(const url_t *u, char *out, int cap) {
+/* What to send with this request, as "a=1; b=2", or nothing -- and what a
+   page's script reading document.cookie is shown, which is the same less
+   every HttpOnly cookie (for_script). */
+static inline int ck_cookies_for(const url_t *u, char *out, int cap, int for_script) {
     int w = 0;
     out[0] = 0;
     for (int i = 0; i < CK_MAX; i++) {
         cookie_t *k = &ck_jar[i];
         if (!k->used) continue;
+        if (for_script && k->httponly) continue;
         if (k->secure && !u->secure) continue;
         if (!ck_domain_ok(u->host, k->domain)) continue;
         if (!ck_path_ok(u->path, k->path)) continue;
@@ -358,6 +382,10 @@ static inline int ck_header(const url_t *u, char *out, int cap) {
     }
     out[w] = 0;
     return w;
+}
+
+static inline int ck_header(const url_t *u, char *out, int cap) {
+    return ck_cookies_for(u, out, cap, 0);
 }
 
 static inline int wh_number(const char *s) {
@@ -538,7 +566,7 @@ static inline int web_fetch_once(const url_t *u, const char *body,
        connection and a server holding the socket open afterwards is a wait
        for nothing. */
     if (n >= 0) n = wh_add(req, sizeof(req), n,
-                           "\r\nUser-Agent: zelr\r\nAccept: ");
+                           "\r\nUser-Agent: " WEB_USER_AGENT "\r\nAccept: ");
     if (n >= 0) n = wh_add(req, sizeof(req), n, web_accept ? web_accept
                                                   : "text/html,text/plain,*/*");
     if (n >= 0) n = wh_add(req, sizeof(req), n,

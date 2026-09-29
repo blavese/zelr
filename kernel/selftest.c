@@ -3311,6 +3311,77 @@ static void test_rng(void) {
        memcmp(a, a + 32, 32) != 0);
 }
 
+/* The same generator reached from ring 3 (SYS_RANDOM), by a program in
+ * machine code that asks and checks what it was given, and exits with 100
+ * when all of it held or with the number of the first thing that did not:
+ * 1, 64 bytes into its stack are 64 bytes; 2, they are not all zeros; 3, a
+ * second 64 are not the first again; 4, a buffer in kernel memory is
+ * refused; 5, asking for more than RANDOM_CALL_MAX is given that many. Its
+ * stack is lowered by 136 KB first, which the last request writes into:
+ * pages the program was promised and has not touched are its own. */
+static const u8 random_asker[] = {
+    0x48, 0x81, 0xEC, 0x00, 0x20, 0x02, 0x00,       /* sub rsp, 0x22000 */
+    0xB8, SYS_RANDOM, 0, 0, 0,                      /* mov eax, SYS_RANDOM */
+    0x48, 0x89, 0xE3,                               /* mov rbx, rsp */
+    0xB9, 0x40, 0, 0, 0,                            /* mov ecx, 64 */
+    0xCD, 0x80,                                     /* int 0x80 */
+    0x48, 0x83, 0xF8, 0x40,                         /* cmp rax, 64 */
+    0x75, 0x71,                                     /* jne fail1 */
+    0x31, 0xD2,                                     /* xor edx, edx */
+    0x48, 0x89, 0xE6,                               /* mov rsi, rsp */
+    0xB9, 0x08, 0, 0, 0,                            /* mov ecx, 8 */
+    0x48, 0x0B, 0x16,                               /* 1: or rdx, [rsi] */
+    0x48, 0x83, 0xC6, 0x08,                         /* add rsi, 8 */
+    0xFF, 0xC9,                                     /* dec ecx */
+    0x75, 0xF5,                                     /* jnz 1b */
+    0x48, 0x85, 0xD2,                               /* test rdx, rdx */
+    0x74, 0x5E,                                     /* jz fail2 */
+    0xB8, SYS_RANDOM, 0, 0, 0,                      /* mov eax, SYS_RANDOM */
+    0x48, 0x8D, 0x5C, 0x24, 0x40,                   /* lea rbx, [rsp + 64] */
+    0xB9, 0x40, 0, 0, 0,                            /* mov ecx, 64 */
+    0xCD, 0x80,                                     /* int 0x80 */
+    0x48, 0x89, 0xE6,                               /* mov rsi, rsp */
+    0x48, 0x8D, 0x7C, 0x24, 0x40,                   /* lea rdi, [rsp + 64] */
+    0xB9, 0x40, 0, 0, 0,                            /* mov ecx, 64 */
+    0xF3, 0xA6,                                     /* repe cmpsb */
+    0x74, 0x43,                                     /* je fail3 */
+    0xB8, SYS_RANDOM, 0, 0, 0,                      /* mov eax, SYS_RANDOM */
+    0xBB, 0x00, 0x00, 0x10, 0x00,                   /* mov ebx, 0x100000: the kernel */
+    0xB9, 0x10, 0, 0, 0,                            /* mov ecx, 16 */
+    0xCD, 0x80,                                     /* int 0x80 */
+    0x48, 0x83, 0xF8, 0xFF,                         /* cmp rax, -1 */
+    0x75, 0x33,                                     /* jne fail4 */
+    0xB8, SYS_RANDOM, 0, 0, 0,                      /* mov eax, SYS_RANDOM */
+    0x48, 0x89, 0xE3,                               /* mov rbx, rsp */
+    0xB9, 0x00, 0x00, 0x02, 0x00,                   /* mov ecx, 0x20000 */
+    0xCD, 0x80,                                     /* int 0x80 */
+    0x48, 0x3D, 0x00, 0x00, 0x01, 0x00,             /* cmp rax, 0x10000 */
+    0x75, 0x23,                                     /* jne fail5 */
+    0xBB, 100, 0, 0, 0,                             /* mov ebx, 100 */
+    0xEB, 0x21,                                     /* jmp out */
+    0xBB, 1, 0, 0, 0, 0xEB, 0x1A,                   /* fail1: mov ebx, 1; jmp out */
+    0xBB, 2, 0, 0, 0, 0xEB, 0x13,                   /* fail2 */
+    0xBB, 3, 0, 0, 0, 0xEB, 0x0C,                   /* fail3 */
+    0xBB, 4, 0, 0, 0, 0xEB, 0x05,                   /* fail4 */
+    0xBB, 5, 0, 0, 0,                               /* fail5 */
+    0xB8, SYS_EXIT, 0, 0, 0,                        /* out: mov eax, SYS_EXIT */
+    0xCD, 0x80,                                     /* int 0x80 */
+    0xEB, 0xFE,                                     /* and, in case, stay here */
+};
+
+static void test_rng_call(void) {
+    /* The cap in the machine code is 0x10000; if the header moves, so must
+       this program. */
+    ok("a program's call is capped where the program expects", RANDOM_CALL_MAX == 0x10000);
+    int pid = user_spawn_flat("selftest-random", random_asker, sizeof(random_asker));
+    ok("a program that asks for random bytes can be started", pid > 0);
+    if (pid <= 0) return;
+    int status = task_wait((u32)pid);
+    if (status != 100) kprintf("        it stopped at step %d\n", status);
+    ok("a program is given random bytes, never kernel memory, and no more than a call gives",
+       status == 100);
+}
+
 /* --- the kernel stack this is all running on --------------------------
  *
  * Every check above has run on one kernel stack, and the deepest path
@@ -5288,7 +5359,7 @@ int selftest_run(void) {
     kprintf("[sha-512]\n");    test_sha512();
     kprintf("[p-384]\n");      test_p384();
     kprintf("[certificates]\n"); test_x509();
-    kprintf("[randomness]\n"); test_rng();
+    kprintf("[randomness]\n"); test_rng(); test_rng_call();
     kprintf("[tls 1.3]\n");    test_tls_schedule(); test_tls(); test_tls_order(); test_tls_alerts();
     kprintf("[wpa]\n");        test_wpa();
     kprintf("[wait timeouts]\n"); test_wait_timeout();
