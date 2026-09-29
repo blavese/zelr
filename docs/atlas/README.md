@@ -95,6 +95,23 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.72.0 (in progress)
+
+- **Grid tracks (11).** A flexible track (fr, auto) is never narrower than the least its items can be
+  drawn in (`lay_grid_least`: the width an item asks for, else its min-width, else its narrowest content;
+  nothing for one that clips), and one held at that leaves the sharing to the others (`lay_grid_share`);
+  `grid-auto-flow: column` makes a column per item along one row, at `grid-auto-columns`
+  (`lay_grid_tracks`); a grid that would scroll sideways wraps to the columns that fit, as a scrolling
+  flex row already did. The Guardian's strip of 280 pixel cards in six 1fr columns was six slivers; it is
+  two cards a row. A box being measured is as wide as it asks to be, up to the page (laid out it is still
+  kept to its room), and a flex item's floor is measured with its own width set aside, as the rules have
+  it for flex and not for grid.
+- **Checks.** layouttest 166 (five new: a 1fr column as wide as its item, the other column taking what that
+  leaves, a sideways grid wrapping, auto-flow column, auto-columns), each seen failing on its own broken
+  build.
+- **Host tools (14).** `laydump` prints where every item of a real page was laid out and, through
+  layout.h's `LAY_TRACE` hook (compiled only there), every block's box, drawn or not.
+
 ### 0.71.0: custom properties, calc(), every style sheet a page links, and GitHub
 
 - **Style sheets (11).** Up to 40 linked sheets (`SHEETS_MAX`, was 12), each address read once

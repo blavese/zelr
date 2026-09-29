@@ -2075,10 +2075,14 @@ static void lay_flex(lctx *L, int node, const cstyle *st, int cx, int cw,
                 w = own.width + (own.border_box ? 0 : own.pl + own.pr + own.bl + own.br)
                   + (own.ml > 0 ? own.ml : 0) + (own.mr > 0 ? own.mr : 0);
 
+            /* A flex item's own width is not a floor, as a grid item's is:
+               it shrinks to the narrowest its contents allow, so it is
+               measured with its own width set aside (and its children's
+               kept: a card of 280 pixels inside it cannot go narrower). */
             int lo;
             if (own.min_width >= 0) lo = own.min_width;
             else if (own.clip) lo = 8;
-            else lo = lay_measure(L, kid[i], st, 1, &h2);
+            else { L->flex_sized = kid[i]; lo = lay_measure(L, kid[i], st, 1, &h2); L->flex_sized = -1; }
             if (lo > w) lo = w;
             if (lo < 1) lo = 1;
 
@@ -2606,9 +2610,11 @@ static const char *lay_grid_track(const char *p, const cstyle *st, int root_px, 
     return p;
 }
 
-/* The column widths for a grid `cw` wide; how many there are. */
-static int lay_grid_columns(lctx *L, const cstyle *st, int cw, int gap, int *width) {
-    int kind[LAY_GRID_COLS], val[LAY_GRID_COLS], mins[LAY_GRID_COLS];
+/* A grid's tracks, from grid-template-columns: each one's kind, amount and
+   least width; how many there are. With grid-auto-flow: column, `items`
+   items make a column each past the ones written, at grid-auto-columns. */
+static int lay_grid_tracks(lctx *L, const cstyle *st, int cw, int gap, int items,
+                           int *kind, int *val, int *mins) {
     int n = 0;
     const char *p = st->grid_cols ? st->grid_cols : "";
     while (*p && n < LAY_GRID_COLS) {
@@ -2656,26 +2662,87 @@ static int lay_grid_columns(lctx *L, const cstyle *st, int cw, int gap, int *wid
         n++;
         if (p == was) p++;
     }
-    if (n == 0) { width[0] = cw; return 1; }
+    if (st->gflow_col && items > n) {
+        int ak = GT_FR, av = 100, am = 0;
+        if (st->grid_auto) lay_grid_track(st->grid_auto, st, L->root_px, cw, &ak, &av, &am);
+        while (n < items && n < LAY_GRID_COLS) { kind[n] = ak; val[n] = av; mins[n] = am; n++; }
+    }
+    return n;
+}
 
-    int fixed = gap * (n - 1), frs = 0;
+/* The widths of `n` tracks in `cw`, gaps between them. A flexible track
+ * (fr, auto) shares what the fixed ones leave, but never comes out narrower
+ * than `base`, the least its items can be drawn in: that is what 1fr means,
+ * minmax(auto, 1fr), and a strip of 280 pixel cards in six 1fr columns is
+ * six columns of 280 that overflow, not six slivers with the cards
+ * squeezed into them. A track held at its least leaves the sharing, and the
+ * others share again. */
+static void lay_grid_share(int cw, int gap, int n, const int *kind, const int *val,
+                           const int *base, int *width) {
+    int fixed = gap * (n - 1);
+    unsigned char held[LAY_GRID_COLS];
     for (int i = 0; i < n; i++) {
+        held[i] = 0;
         if (kind[i] == GT_PX) fixed += val[i];
         else if (kind[i] == GT_PCT) fixed += val[i] * cw / 100;
-        else frs += val[i];
     }
-    int room = cw - fixed;
-    if (room < 0) room = 0;
+    int left = 0, frs = 0;
+    for (int pass = 0; pass <= n; pass++) {
+        left = cw - fixed;
+        frs = 0;
+        for (int i = 0; i < n; i++) {
+            if (kind[i] != GT_FR) continue;
+            if (held[i]) left -= base[i];
+            else frs += val[i];
+        }
+        int again = 0;
+        for (int i = 0; i < n && frs > 0; i++) {
+            if (kind[i] != GT_FR || held[i]) continue;
+            long long share = left > 0 ? (long long)left * val[i] / frs : 0;
+            if (share < base[i]) { held[i] = 1; again = 1; }
+        }
+        if (!again) break;
+    }
     for (int i = 0; i < n; i++) {
         if (kind[i] == GT_PX) width[i] = val[i];
         else if (kind[i] == GT_PCT) width[i] = val[i] * cw / 100;
+        else if (held[i] || frs <= 0) width[i] = base[i];
         else {
-            width[i] = frs > 0 ? (int)((long long)room * val[i] / frs) : 0;
-            if (width[i] < mins[i]) width[i] = mins[i];
+            width[i] = left > 0 ? (int)((long long)left * val[i] / frs) : 0;
+            if (width[i] < base[i]) width[i] = base[i];
         }
         if (width[i] < 1) width[i] = 1;
     }
+}
+
+/* The column widths for a grid `cw` wide, from what is written alone; how
+   many there are. */
+static int lay_grid_columns(lctx *L, const cstyle *st, int cw, int gap, int *width) {
+    int kind[LAY_GRID_COLS], val[LAY_GRID_COLS], mins[LAY_GRID_COLS];
+    int n = lay_grid_tracks(L, st, cw, gap, 0, kind, val, mins);
+    if (n == 0) { width[0] = cw; return 1; }
+    lay_grid_share(cw, gap, n, kind, val, mins, width);
     return n;
+}
+
+/* The least an item can be drawn in, as a grid track sees it: the width it
+   asks for, else its min-width, else its narrowest content (measured at no
+   room at all); nothing for one that hides what overflows, which is what
+   the rules say such an item may be squeezed to. Margins count. */
+static int lay_grid_least(lctx *L, int k, const cstyle *st, const cstyle *own, int cw) {
+    int m;
+    if (own->clip) m = 0;
+    else if (own->width >= 0)
+        m = own->width + (own->border_box ? 0 : own->pl + own->pr + own->bl + own->br);
+    else if (own->min_width >= 0)
+        m = own->min_width + (own->border_box ? 0 : own->pl + own->pr + own->bl + own->br);
+    else {
+        int h;
+        m = lay_measure(L, k, st, 1, &h);
+    }
+    m += (own->ml > 0 ? own->ml : 0) + (own->mr > 0 ? own->mr : 0);
+    (void)cw;
+    return m > 0 ? m : 0;
 }
 
 
@@ -2814,7 +2881,59 @@ static void lay_grid(lctx *L, int node, const cstyle *st, int cx, int cw, int *y
     const ddoc *d = L->d;
     int gap = st->gap > 0 ? st->gap : 0;
     int width[LAY_GRID_COLS];
-    int ncols = lay_grid_columns(L, st, cw, gap, width);
+
+    /* The items, counted, for a grid that makes a column for each; then
+       the least each column's items can be drawn in. */
+    int nitems = 0;
+    for (int k = d->nodes[node].first; k >= 0; k = d->nodes[k].next) {
+        if (d->nodes[k].kind != DN_ELEMENT) continue;
+        cstyle own;
+        lay_style(L, k, st, &own, cw);
+        if (own.display != D_NONE) nitems++;
+    }
+    int kind[LAY_GRID_COLS], val[LAY_GRID_COLS], base[LAY_GRID_COLS];
+    int ncols = lay_grid_tracks(L, st, cw, gap, nitems, kind, val, base);
+    if (ncols == 0) { ncols = 1; kind[0] = GT_PX; val[0] = cw; base[0] = 0; }
+    if (ncols > 1) {
+        int col = 0, most = 0;
+        for (int k = d->nodes[node].first; k >= 0; k = d->nodes[k].next) {
+            if (d->nodes[k].kind != DN_ELEMENT) continue;
+            cstyle own;
+            lay_style(L, k, st, &own, cw);
+            if (own.display == D_NONE) continue;
+            int span = own.gspan < 0 ? ncols : own.gspan > 0 ? own.gspan : 1;
+            if (span > ncols) span = ncols;
+            if (col + span > ncols) col = 0;
+            if (span == 1) {
+                int m = lay_grid_least(L, k, st, &own, cw);
+                if (kind[col] == GT_FR && m > base[col]) base[col] = m;
+                if (m > most) most = m;
+            }
+            col += span;
+        }
+        lay_grid_share(cw, gap, ncols, kind, val, base, width);
+
+        /* One that would scroll sideways cannot be scrolled inside a page
+           here, so, like a scrolling flex row, it wraps: as many columns
+           as fit, each at least as wide as its widest item, and the rest
+           of the items on the rows below. */
+        if (st->clip == 2) {
+            int k = ncols;
+            while (k > 1) {
+                int t = gap * (k - 1);
+                for (int c = 0; c < k; c++) t += width[c];
+                if (t <= cw) break;
+                k--;
+            }
+            if (k < ncols) {
+                for (int c = 0; c < k; c++) if (kind[c] == GT_FR && base[c] < most) base[c] = most;
+                ncols = k;
+                lay_grid_share(cw, gap, ncols, kind, val, base, width);
+            }
+        }
+    } else {
+        lay_grid_share(cw, gap, ncols, kind, val, base, width);
+    }
     int colx[LAY_GRID_COLS + 1];
     colx[0] = cx;
     for (int c = 0; c < ncols; c++) colx[c + 1] = colx[c] + width[c] + gap;
@@ -3046,7 +3165,12 @@ static void lay_block_placed(lctx *L, int node, const cstyle *parent, int x,
        measured is not centred: it reached halfway across whatever it was
        measured in, and that was taken for its width. */
     int centre = st.ml == CSS_AUTO_OFF && st.mr == CSS_AUTO_OFF && !L->measuring;
-    if (want >= 0 && want < box_w) {
+    /* Laid out, a box is kept to the room it is given, so nothing runs off
+       the side of a page that cannot be scrolled sideways. Measured, it is
+       as wide as it asks to be, up to the page: the narrowest a card of 280
+       pixels can be drawn in is 280, and measured as the room it was given
+       it came out as narrow as that, and the grid holding it with it. */
+    if (want >= 0 && (want < box_w || (L->measuring && want <= css_view_w))) {
         /* A width with auto margins is centred, which is how most pages put
            their content in the middle of a wide window. */
         if (centre) ml += (box_w - want) / 2;
@@ -3279,6 +3403,12 @@ static void lay_block_placed(lctx *L, int node, const cstyle *parent, int x,
     /* A horizontal rule is a border on a box with nothing in it, and a box
        with nothing in it is no height at all. */
     if (tag == T_HR && box_h <= 0) box_h = st.bt ? st.bt : 1;
+
+#ifdef LAY_TRACE
+    /* Every box as it came out, drawn or not: the host's laydump defines
+       this to find which box made a page the shape it is. */
+    LAY_TRACE(L, node, x + ml, box_top, shrunk >= 0 ? shrunk : box_w, box_h);
+#endif
 
     if (slot >= 0) {
         litem *bg = &L->out->items[slot];

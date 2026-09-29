@@ -50,7 +50,7 @@ enum {
     P_MIN_WIDTH, P_MIN_HEIGHT, P_MAX_HEIGHT, P_BOX_SIZING,
     P_POSITION, P_TOP, P_RIGHT, P_BOTTOM, P_LEFT,
     P_VALIGN, P_SPACING, P_COLLAPSE, P_OVERFLOW, P_CLIP, P_FLOAT, P_CLEAR, P_TRANSFORM,
-    P_GRID_COLS, P_GRID_COLUMN, P_GRID_AREAS, P_GRID_AREA,
+    P_GRID_COLS, P_GRID_COLUMN, P_GRID_AREAS, P_GRID_AREA, P_GRID_FLOW, P_GRID_AUTO_COLS,
     P_MASK,
     P_CUSTOM,        /* --name: value, kept as the text "--name:value" */
     P_DEFER,         /* a shorthand whose value has var() in it: "name:value" */
@@ -187,6 +187,12 @@ typedef struct {
        the sheet's text, -1 for none), read by lay_grid; and how many columns
        an item spans (0 one, -1 all of them). */
     const char *grid_cols, *grid_areas, *garea;  /* the texts, or null; the layout keeps them alive */
+
+    /* grid-auto-columns, the size of a column the items make for
+       themselves (null: auto); and whether grid-auto-flow is column, which
+       lays the items out along one row, a new column each. */
+    const char *grid_auto;
+    unsigned char gflow_col;
 
     /* The custom properties in force, as the head of a chain the layout
        keeps (layout.h, lay_var_*); inherited, as custom properties are.
@@ -553,6 +559,8 @@ static const cprop CSS_PROPS[] = {
     { "grid-column", P_GRID_COLUMN },
     { "grid-template-areas", P_GRID_AREAS },
     { "grid-area", P_GRID_AREA },
+    { "grid-auto-flow", P_GRID_FLOW },
+    { "grid-auto-columns", P_GRID_AUTO_COLS },
     { "mask", P_MASK },
     { "mask-image", P_MASK },
     { "-webkit-mask", P_MASK },
@@ -1712,7 +1720,8 @@ static inline void css_default_style(cstyle *st, int root_px) {
     st->masked = 0;
     st->ink_none = 0;
     st->tx_px = st->ty_px = st->tx_pct = st->ty_pct = 0;
-    st->grid_cols = st->grid_areas = st->garea = 0;
+    st->grid_cols = st->grid_areas = st->garea = st->grid_auto = 0;
+    st->gflow_col = 0;
     st->vars = -1;
     st->gspan = 0;
 }
@@ -2089,6 +2098,12 @@ static inline void css_apply_v(int prop, const char *v, cstyle *st, int root_px,
             break;
         case P_GRID_COLS:
             st->grid_cols = w_starts_fold(v, "none") ? 0 : v;
+            break;
+        case P_GRID_FLOW:
+            st->gflow_col = (unsigned char)w_starts_fold(v, "column");
+            break;
+        case P_GRID_AUTO_COLS:
+            st->grid_auto = w_starts_fold(v, "auto") ? 0 : v;
             break;
         case P_GRID_COLUMN: {
             /* span N, or 1 / -1 for the whole row; a line number alone is

@@ -1016,6 +1016,55 @@ int main(void) {
         c = box_of(by_id("c"));
         d = box_of(by_id("d"));
         ok("auto-fill makes as many columns as fit", a && c && d && c->y == a->y && d->y > a->y && a->w == 160);
+
+        /* A 1fr column is never narrower than what is in it: 1fr is
+           minmax(auto, 1fr). Six of them holding 280 pixel cards were six
+           slivers with the cards squeezed into them. */
+        lay("<style>.g{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;width:400px}"
+            ".g div{width:200px;background:#eeeeee}</style>"
+            "<div class=g><div id=a>1</div><div id=b>2</div><div id=c>3</div></div>", 600);
+        a = box_of(by_id("a"));
+        b = box_of(by_id("b"));
+        okn("a 1fr column is as wide as the item in it", a && b && b->x - a->x == 210,
+            a && b ? b->x - a->x : -1);
+
+        lay("<style>.g{display:grid;grid-template-columns:1fr 1fr;width:400px}"
+            ".g div{background:#eeeeee}#a{width:300px}</style>"
+            "<div class=g><div id=a>1</div><div id=b>2</div></div>", 600);
+        a = box_of(by_id("a"));
+        b = box_of(by_id("b"));
+        okn("and the other column has what that one leaves", a && b && b->x - a->x == 300 && b->w == 100,
+            b ? b->w : -1);
+
+        /* And one that would scroll sideways, which nothing inside a page
+           does here, wraps to the columns that fit instead. */
+        lay("<style>.g{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;width:400px;"
+            "overflow-x:auto}.g div{width:150px;background:#eeeeee}</style>"
+            "<div class=g><div id=a>1</div><div id=b>2</div><div id=c>3</div></div>", 600);
+        a = box_of(by_id("a"));
+        b = box_of(by_id("b"));
+        c = box_of(by_id("c"));
+        ok("a grid that would scroll sideways wraps to the columns that fit",
+           a && b && c && b->y == a->y && b->x > a->x && c->y > a->y && c->x == a->x);
+
+        /* grid-auto-flow: column, the other way a strip of cards is made:
+           each item a column of its own along one row. It was one column,
+           the items stacked. */
+        lay("<style>.g{display:grid;grid-auto-flow:column;gap:10px}.g div{background:#eeeeee}</style>"
+            "<div class=g><div id=a>one</div><div id=b>two</div><div id=c>three</div></div>", 600);
+        a = box_of(by_id("a"));
+        b = box_of(by_id("b"));
+        c = box_of(by_id("c"));
+        ok("grid-auto-flow: column lays the items along one row",
+           a && b && c && a->y == b->y && b->y == c->y && b->x > a->x && c->x > b->x);
+
+        lay("<style>.g{display:grid;grid-auto-flow:column;grid-auto-columns:120px;gap:10px}"
+            ".g div{background:#eeeeee}</style>"
+            "<div class=g><div id=a>one</div><div id=b>two</div></div>", 600);
+        a = box_of(by_id("a"));
+        b = box_of(by_id("b"));
+        okn("each as wide as grid-auto-columns says", a && b && a->w == 120 && b->x - a->x == 130,
+            a ? a->w : -1);
     }
 
     /* --- a grid of named areas ------------------------------------------------ */
