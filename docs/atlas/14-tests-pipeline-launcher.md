@@ -18,21 +18,8 @@ Conventions used below:
 |---|---|---|
 | tools/harness.py | 825 | Shared library for every QEMU-driving Python harness. It contains `Guest` (boot plus serial), `Monitor` (HMP over TCP: mouse, keys, screendump), `Checks` (reporting and exit code), fast colour counting, `face_width`, `read_ppm` and `build_once`. |
 | tools/shell_test.sh | 123 | Types 20 commands at the kernel console shell over serial and greps the transcript (fast tier). |
-| pipeline/README.md | 219 | Design document for the two-agent pipeline (partly stale, see section 10). |
-| pipeline/backlog.md | 65 | The markdown task table the scripts consume (`id / author / title / state`), plus a list of ideas. |
-| pipeline/batch.sh | 259 | N tasks at once in git worktrees, then one full gate for the merged batch, falling back to one gate per task. |
-| pipeline/cycle.sh | 223 | One task end to end in the main checkout: author, fast gate, review, answer, full gate, merge. |
 | pipeline/gate.sh | 632 | **The gate**, the only arbiter. It has three modes: `fast`, `screen` and `full`. |
-| pipeline/land.sh | 57 | Merges an already written branch onto a try branch, runs the full gate and fast-forwards main. |
-| pipeline/loop.sh | 66 | Runs `cycle.sh` repeatedly with a budget (`MAX_CYCLES`) and stops after 2 consecutive failures. |
-| pipeline/models.sh | 91 | `PROFILE` (`thrifty`, `balanced` (the default), `max`) selects models, reasoning effort and role overrides. |
-| pipeline/parse_review.py | 78 | Pulls the first balanced JSON object out of a reviewer's reply and normalises severities. |
-| pipeline/preflight.sh | 85 | Checks before a run: both agents answer, qemu, python, a clean tree, on main, `todo` tasks exist. |
 | pipeline/release.sh | 67 | Builds `build/zelr.iso` and `build/launcher/zelr.exe`, checks the version against the tag, then runs `gh release create/edit/upload`. |
-| pipeline/selftest.sh | 155 | Tests the pipeline itself: 6 scenarios and 17 checks of `cycle.sh`, with scripted agents and a stub gate. |
-| pipeline/prompts/implement.md | 60 | The author's prompt (`{{TASK}}`). |
-| pipeline/prompts/review.md | 73 | The reviewer's prompt (`{{TASK}}`, `{{REPORT}}`) and the JSON answer schema. |
-| pipeline/prompts/address.md | 40 | The author's answer-the-findings prompt (`{{TASK}}`, `{{FINDINGS}}`). |
 | launcher/App.xaml | 72 | WPF application resources: 7 brushes and the `Primary` and `Ghost` button styles. `StartupUri=MainWindow.xaml`. |
 | launcher/App.xaml.cs | 7 | Empty `partial class App : Application`. |
 | launcher/Emulator.cs | 185 | `FindQemu`, `ExtractKernel`, `DiskPath`, `EnsureDisk`, `Start` (the QEMU command line) and `InstallQemu` (winget). |
@@ -158,12 +145,8 @@ zelr's quality control has five layers, and this area owns the last four.
 - **One retry, alone** (gate.sh:155-172). Measured: 1-2 random failures per run, never the same check, each passing alone. "This forgives a busy host and nothing else."
 - **A global lock** (gate.sh:41-56). Two gates at once "get half as much done twice".
 - **A VM warning** (gate.sh:58-65). An open VM made screen harnesses miss their timing.
-- **The pipeline** (pipeline/README.md:12-25):
   - One model writes and the other reviews. "Every serious bug found here so far was found by someone other than the author, or by a test failing."
   - The gate is the only judge (gate.sh:2-7).
-  - There is an explicit tool allowlist that includes Bash (README.md:165-179, lib.sh:86-92). An author without Bash wrote code it could never build.
-  - Worktrees let batch tasks run concurrently (batch.sh:10-20).
-  - `PUSH` is off by default because landing locally is reversible and pushing is not (README.md:74-76; cycle.sh:26).
 - **Release** (release.sh:1-15). For 15 releases neither the exe nor the ISO was attached. The tag and the compiled version must agree.
 - **Launcher** (csproj:14-33). It is a single-file, self-contained WPF app with native libraries extracted. Without extraction, WPF throws `DllNotFoundException` before any code runs. It carries the flat image because multiboot loaders do not accept a 64-bit ELF.
 
@@ -481,86 +464,6 @@ All of them:
 | check_loader.py | bootloader/build.sh:25 | Signature `ZLR1` at an offset of at least 512 and within 2048 bytes. `HANDOFF_MAGIC` (include/handoff.h) equals the two `movl` halves in cdboot.S. `KERNEL_PHYS` (uefi/loader.c) and cdboot `patch_load` equal `loadaddr.load_address()`. |
 | check_sse.py | nobody | `66 0F {6E,7E,D6,6F,7F,28,29}` always counts. Bare `0F {10,11,28,29,58,59,6E,7E}` is filtered when it looks like an address immediate, a RIP displacement or a rel32. |
 
-### 3.6 The pipeline scripts
-
-**lib.sh**
-- `set -uo pipefail`. `ROOT` is the absolute repo root, `PIPE=$ROOT/pipeline`, `STATE=$PIPE/state` (created with `mkdir -p`; gitignored), `BACKLOG=$PIPE/backlog.md`.
-  - `LOCALAPPDATA` is converted from `C:\…` to `/c/…` with sed (29-30).
-- `log`, `warn` and `die` tee to `${CYCLE_LOG:-/dev/null}`.
-- `fake_agent role out` (53-63): copies `$FAKE_AGENTS/<role>.txt` to `out`, then runs `<role>.sh` in `$ROOT` if the file exists. It tests with `-f`, not `-x`, because the exec bit does not survive on Windows filesystems.
-  ```
-  ```
-  ```
-  ```
-  The prompt goes on stdin because `--allowedTools` takes a list and would swallow a positional prompt.
-- `backlog_next` (107-114): awk over lines matching `^\| *[a-z0-9-]+ *\|`, with fields 2-5 trimmed. Prints `id|author|title` of the first `todo`. The header and separator rows also match the regex but never have state `todo`.
-- `backlog_set id state` (121-137): rebuilds the matching row as `| id | author | title | state |` through a `mktemp` file and `mv`. Titles containing `|` would break this.
-- `backlog_count_todo` (139-141).
-
-**models.sh**
-
-|---|---|---|---|---|
-| `max` | opus | gpt-5.6-sol | high / high / medium | none (backlog author; the other model reviews) |
-
-- Every value can be overridden through the environment (`: "${VAR:=…}"`).
-- `author_for` and `reviewer_for` apply `FORCE_*`. Without an override, the reviewer is the other model.
-- `ANSWER_FINDINGS=1` (74) is **never read** anywhere.
-
-**parse_review.py**
-- `first_object(text)` finds the first `{` and scans for the matching brace, skipping strings and escapes, then tries `json.loads` on that span. It returns `None` on failure. It never tries a later `{`.
-- `main(raw, out)`:
-  - A reply that is not a dict with `findings` becomes `{"verdict":"unreadable","findings":[]}`.
-  - `findings` that is not a list is treated the same way.
-  - A missing or unknown severity becomes `high`.
-  - Non-dict findings are dropped.
-  - Writes indented JSON and prints `<verdict>, N finding(s), M serious`. Always exits 0.
-
-**cycle.sh** (the step sequence is in 4.3). Tunables: `MAX_REPAIRS=2` (effectively 1) and `PUSH=0`.
-- `prompt_from tpl out k=v…` (82-95) copies the template and substitutes each `{{KEY}}` through an inline Python heredoc, so any characters are safe.
-- The commit message on landing is the title, the first 1200 bytes of the author's report, and the text "Written by X, reviewed by Y, N finding(s) answered. Passed the full gate: build, 234 kernel checks, …three harnesses…" (200-210). That text is stale.
-
-**batch.sh** (4.4). Tunables: `BATCH=1` (sic), `PUSH=0`, and `WORKTREES=$ROOT/../zelr-worktrees`.
-- Per-task files: `log.txt`, `implement.prompt` (filled by **sed**), `author-report.txt`, `author-stdout.txt`, `gate-fast.txt`, `review.prompt`, `review.json`, `review-stdout.txt`, `findings.json`, `verdict.txt`, `address.prompt`, `address.txt`, `gate-fast-2.txt`.
-- Batch-level files: `pipeline/state/gate-full-batch.txt` and `pipeline/state/gate-full-<id>.txt`.
-
-**land.sh** (4.5): `bash pipeline/land.sh pipeline/<id>`, optionally with `PUSH=1`.
-
-**loop.sh** (4.5): `MAX_CYCLES=6`. It runs `preflight.sh` first and does not start if that fails.
-
-**preflight.sh**
-- It also checks: `qemu is there`, `python is there` (`command -v python`), a clean tracked tree, being on `main`, and that at least one `todo` exists.
-- `ok` and `BAD` lines are counted as problems. Exits 0 with `preflight: ready`, else 1.
-
-**selftest.sh**
-- Builds a sandbox repo with `git init`. It copies `lib.sh, cycle.sh, models.sh, parse_review.py` and the prompts, and writes a **stub `gate.sh`** that exits `${GATE_RESULT:-0}`.
-- Canned replies go in `$FAKES/<role>.txt`, and optional edits in `<role>.sh`. Roles are `author`, `review` and `address`.
-- Scenarios and checks:
-
-| # | Scenario | Checks |
-|---|---|---|
-| 1 | Happy path | rc 0, marked done, on main, branch gone, change on main (5) |
-| 2 | Gate fails | rc 1, blocked, 1 commit only, branch gone, tree clean (5) |
-| 3 | Author does nothing | rc 1, blocked (2) |
-| 4 | High-severity finding answered | lands, answer in HEAD, "answering findings" logged once (3) |
-| 5 | Non-JSON review | "unreadable" appears in the output (1) |
-| 6 | JSON wrapped in prose | task ends `done` (1) |
-
-- 17 checks in total. The last line is `pipeline self test: all N checks passed` or `N failed`. Only cycle.sh is exercised.
-
-**release.sh** (4.7), with `set -euo pipefail`.
-
-**Prompts**
-- `implement.md`: nothing third-party; add tests; break a test once on purpose to prove it can fail; comment style (no em-dashes); never claim something passed without running it; run `bash pipeline/gate.sh fast`; leave changes **uncommitted**; the report has 4 bullets.
-- `review.md`: run `git diff`; focus on memory lifetime, two tasks touching one thing, QEMU-only assumptions, arithmetic, and tests that cannot fail; do not restyle or suggest libraries. Answer with **JSON only**: `{"verdict":"sound"|"needs-work","findings":[{"severity":"high"|"medium"|"low","where":"file.c:123","what","why","fix"}]}`.
-- `address.md`: every finding is fixed (with a check added) or rejected with a specific reason; run the fast gate; leave changes uncommitted; report one line per finding.
-
-**backlog.md**
-
-| id | author | state |
-|---|---|---|
-
-It is followed by an "Ideas not yet tasks" list: page cache and swap, self-hosting, a service model, a packet filter, multiple users, a finer lock, parallel TLS sessions, and some entries struck through as done.
-
 ### 3.7 The launcher (launcher/)
 
 - **ZelrLauncher.csproj**
@@ -715,96 +618,6 @@ How failures show up in the log:
 7. Host-side verification where it applies: readfat.py on disk images, WAV analysis, webserver records.
 8. `sys.exit(c.report(keep=--keep))`.
 
-### 4.3 `cycle.sh`: one task, in the main checkout
-
-1. Source lib.sh and models.sh.
-2. `backlog_next`. If there is nothing to do, print `backlog: nothing to do` and exit 0.
-4. `mkdir pipeline/state/<id>` and truncate `log.txt`.
-5. `cd $ROOT`. If `git diff --quiet` or `git diff --cached --quiet` fails, `die` with "uncommitted changes". **Untracked files are not checked.**
-6. `BRANCH=pipeline/<id>`: delete it if it exists, then `git checkout -q -b $BRANCH`. `backlog_set <id> doing` modifies backlog.md on the branch.
-8. Non-zero rc: `abandon`. Empty report: `abandon`.
-9. `CHANGED=$(git status --porcelain -- . ':!pipeline/backlog.md' ':!pipeline/state')`. If empty, `abandon "changed no files"`.
-10. `bash pipeline/gate.sh fast > gate-fast.txt`. On failure, print tail -12 and `abandon`.
-11. `FAKE_ROLE=review`. Fill `review.prompt` with TASK and REPORT. Run the reviewer into `review.json`.
-12. `parse_review.py review.json findings.json`. Read `VERDICT` and `N_FIND` (**all** severities).
-13. While `N_FIND > 0` and `repairs < MAX_REPAIRS`:
-    - `repairs++`, `FAKE_ROLE=address`;
-    - fill `address-N.prompt` with TASK and FINDINGS (the whole findings.json);
-    - run the author **without model or effort args** (167-171);
-    - fast gate into `gate-fast-N.txt`; on failure, `abandon`;
-    - `N_FIND` = number of high findings in the **same old** findings.json;
-    - `break` unconditionally after the first round (186).
-14. `bash pipeline/gate.sh full > gate-full.txt`. On failure, print tail -16 and `abandon`.
-15. `git add -A` and commit with the message described in 3.6.
-16. `git checkout -q main`, then `git merge -q --no-ff $BRANCH -m "$TITLE"` (on failure, `abandon`), then `git branch -d`. `backlog_set <id> done` leaves backlog.md **modified and uncommitted on main**.
-17. If `PUSH=1`: `git push -q origin main`.
-
-`abandon(reason)` (68-78) does, in order: log; `cd ROOT`; `git checkout -q -- .`; `git clean -qfd`; `git checkout -q main`; `git branch -D`; `backlog_set <id> blocked` (again uncommitted on main); exit 1.
-
-### 4.4 `batch.sh`: several tasks, worktrees, one full gate
-
-1. Source lib and models. The tree must be clean (tracked files) and on `main`.
-2. **Claim**: up to `BATCH` (default **1**) times, run `backlog_next` and `backlog_set <id> doing`.
-3. If nothing was claimed, print `backlog: nothing to do` and exit 0.
-4. Print the batch. The printed author and reviewer come from the backlog column and **ignore `PROFILE` overrides** (57).
-5. `git add pipeline/backlog.md` and `git commit -qm "pipeline: claim <ids>"`.
-6. For each task, run `one_task id author title &` in the background:
-   1. `wt=$ROOT/../zelr-worktrees/<id>`. Run `git worktree remove --force`, `git branch -D pipeline/<id>`, then `git worktree add -q -b pipeline/<id> $wt main`.
-   2. Set `ROOT=$wt` so the agents run in the worktree. Fill `implement.prompt` with **sed** `s|{{TASK}}|$title|`. Run the author, then restore `ROOT`.
-   3. If rc is non-zero, fail. `(cd $wt && git diff --quiet) && fail "changed nothing"`. This **misses new untracked files**.
-   4. **Fast gate:** `( cd "$wt" && bash "$PIPE/gate.sh" fast ) > gate-fast.txt`. `PIPE` is the main repo's pipeline directory, and gate.sh `cd`s to its own parent, so **this gates the main checkout, not the worktree**. It also takes the global gate lock (section 10, D).
-   5. Review in the worktree. Fill `review.prompt` through a Python heredoc. Write `review.json`, run `parse_review.py` into findings.json and verdict.txt, and count the high findings into `n_high`.
-   7. `(cd $wt && git add -A && git commit -q -F -)` with the title, the first 1000 bytes of the report, and "Written by X, reviewed by Y."
-   8. Return 0.
-7. `wait` for each job. For every failure, `backlog_set <id> blocked` (uncommitted on main).
-8. If none is ready: `git add -A`, commit "pipeline: nothing landed", exit 1.
-9. **Integrate**: `git branch -D pipeline/integration`, then `git checkout -q -b pipeline/integration main`. For each ready id, `git merge -q --no-ff pipeline/<id> -m <id>`. A merge that conflicts is aborted and the task goes back to `todo`.
-10. **Full gate once**: `bash $PIPE/gate.sh full > pipeline/state/gate-full-batch.txt`. This runs in the main checkout, which now has the integration branch, so it is correct here.
-    - **Pass**: `git checkout main`, `git merge --ff-only pipeline/integration`, mark the landed tasks `done`, `git add -A && git commit -m "pipeline: <ids> landed"`, and push if `PUSH=1`.
-    - **Fail** (fallback): print tail -14, `git checkout main`. For each landed id:
-      - `git checkout -q -b pipeline/solo-<id> main`;
-      - `git merge -q --no-ff pipeline/<id>` (the result is not checked);
-      - `gate.sh full > gate-full-<id>.txt`;
-      - pass: `checkout main` and `merge --ff-only solo`, then mark `done`;
-      - fail: `checkout main`, delete the solo branch, mark `blocked`.
-      - Finally `git add -A && git commit -m "pipeline: after splitting the batch"`.
-11. **Tidy**: `git worktree remove --force` for each worktree, then `git worktree prune`. Print "left to do: N".
-
-The branches `pipeline/<id>`, `pipeline/integration` and a passing `pipeline/solo-<id>` are left in place.
-
-### 4.5 `land.sh` and `loop.sh`
-
-**land.sh**:
-1. A `BRANCH` argument is required and must exist.
-2. The tree must be clean and on main.
-3. `n = git log main..BRANCH | wc -l` must be greater than 0.
-4. Print the diff stat.
-5. Create `TRY=pipeline/try-<basename>` from main and merge BRANCH into it with `--no-ff`. If that fails: abort, go back to main, delete TRY, `die`.
-6. `bash gate.sh full`, output to the terminal.
-   - Pass: checkout main, `merge --ff-only TRY`, delete TRY, `backlog_set <basename> done`, `git add -A && commit "pipeline: <id> landed"`, push if `PUSH=1`.
-   - Fail: checkout main, delete TRY, exit 1 ("main is untouched").
-
-**loop.sh**:
-1. Run `preflight.sh`; if it fails, print "not starting" and exit 1.
-2. For `i` in `1..MAX_CYCLES` (6):
-   - stop if `backlog_count_todo == 0`;
-   - run `bash cycle.sh`;
-   - success: `landed++`, reset the failure streak;
-   - failure: `blocked++`, `consecutive_failures++`, and stop at 2.
-3. Print the landed, blocked and left counts. Always exits 0.
-
-Because cycle.sh leaves backlog.md dirty (4.3, steps 16 and abandon), **the second cycle dies at step 5**. loop.sh therefore lands at most one task per run (section 10, F).
-
-### 4.6 The backlog state machine
-
-- `todo` → `doing`: cycle.sh step 6, or batch.sh's claim.
-- `doing` → `done`: the full gate passed and the task was merged.
-- `doing` → `blocked`: any abandon or failed gate.
-- `doing` → `todo`: only in batch.sh, when the task conflicts with the batch.
-- `blocked` → `todo`: a person edits the row (README.md:161-163).
-
-The scripts write only the `state` column. Rows are rebuilt with single spaces, so any column alignment a person made is lost.
-
 ### 4.7 `release.sh <tag> [notes.md]`
 
 1. `VER=${TAG#v}`. `have=$(grep KERNEL_VERSION include/types.h | cut -d'"' -f2)`. If they differ, print "the kernel says X and the tag says Y" and exit 1.
@@ -852,23 +665,15 @@ It does **not**:
 | `mkfat.Fat16Builder` | mkgpt.py. mkfat.py itself is run as a subprocess by mountcheck, appcheck, sdkcheck, libccheck, fat32_test.sh and mkiso.py. |
 | `loadaddr.load_address` | check_loader.py, mkiso.py, build.sh (`python tools/loadaddr.py`). |
 | `readfat.py` (subprocess) | mountcheck, namecheck. |
-| `gate.sh` | cycle.sh, batch.sh, land.sh, humans, and agents (prompts tell them to run `bash pipeline/gate.sh fast`). |
-| `lib.sh` functions | cycle, batch, land, loop, preflight. selftest.sh copies lib.sh. |
 | `build/zelr.bin` → the launcher | csproj `EmbeddedResource`. release.sh runs `dotnet publish`. |
 
 ### 5.2 Environment variables
 
 | Variable | Read by | Effect |
 |---|---|---|
-| `QEMU` | harness.qemu_path, gate.sh, preflight.sh, every tools/*.sh, run.sh | Path to qemu-system-x86_64. There is a PATH fallback everywhere except the launcher and zelr.bat, which have their own searches. |
 | `ZELR_PREBUILT=1` | harness.build_once, shell_test.sh, mkiso.py | Skip rebuilding. gate.sh exports it after its build (243). |
 | `ZELR_UEFI_FW` | iso_test.sh | Path of the edk2 code firmware. Without it: `/c/Program Files/qemu/share/edk2-x86_64-code.fd`, else the UEFI paths are skipped. |
 | `PAR_MAX` (4), `TMPDIR` | gate.sh | Parallel width, and where the lock lives. |
-| `BATCH` (1), `PUSH` (0) | batch.sh | Number of tasks; whether to push. |
-| `PUSH` | cycle.sh, land.sh, loop.sh (via cycle) | Whether to push. |
-| `MAX_REPAIRS` (2, effectively 1), `MAX_CYCLES` (6) | cycle.sh, loop.sh | Repair rounds; cycle budget. |
-| `AGENT_TIMEOUT` (3600) | lib.sh | Timeout for each agent run. |
-| `FAKE_AGENTS`, `FAKE_ROLE`, `GATE_RESULT` | lib.sh, selftest.sh, the stub gate | Test seam. |
 | `ZIG` | build.sh (+ sub-builds), sdk/build.sh, sdk/libc/build.sh | Zig path. **The gate does not export it to harnesses**, so sdkcheck and libccheck need zig on PATH. |
 
 ### 5.3 Contracts with the kernel and userland that the tests depend on
@@ -908,7 +713,6 @@ If you change any of these, the named harnesses break.
 
 | Requirement | Why and where | Notes |
 |---|---|---|
-| bash + GNU userland (Git for Windows / MSYS2) | Every .sh file. Uses `timeout`, `mktemp`, `head -c`, `date +%s`, GNU `find -newermt @epoch` (gate tidy), `awk`, `sed` with `\L` (lib.sh:30), `cksum`, `stat -c`, `ps -W` (gate.sh:61; MSYS-only, errors are ignored elsewhere), `tee`, `wc`. | Present (Git for Windows 2.55). |
 | Python ≥ 3.7, runnable as **`python`** | gate.sh, build.sh, pipeline scripts. `http.server.ThreadingHTTPServer` and `capture_output=` need 3.7; f-strings need 3.6. shell_test.sh only needs `python3` when there is no `timeout` command. | 3.11.8 present, and `python` works in Git Bash since `bash build.sh` passed. **Standard library only** for every test. `mkroots.py` needs third-party **`certifi`** when no PEM bundle is passed (mkroots.py:242-247). |
 | QEMU qemu-system-x86_64 | Every boot. The machines, devices and backends used are listed below this table. | 11.1.0 present, per user. See 5.5 for which scripts find it. |
 | UEFI firmware `edk2-x86_64-code.fd` | iso_test.sh UEFI paths; zelr.bat `modern`. | Present, per user. iso_test.sh needs `ZELR_UEFI_FW`. |
@@ -933,7 +737,6 @@ How each launcher of QEMU behaves with QEMU only at `%LocalAppData%\Programs\qem
 | Script or program | Finds QEMU? | Finds firmware? | Why |
 |---|---|---|---|
 | harness.py (all Python harnesses, bootcheck) | Yes | n/a | The default `C:/Program Files/…` is missing, so it uses `shutil.which` (harness.py:38-43). This needs the user PATH in the process environment. |
-| gate.sh, preflight.sh | Yes | n/a | `[ -x "$QEMU" ] || QEMU=$(command -v qemu-system-x86_64 …)` (gate.sh:38-39; preflight.sh:60-61). |
 | shell_test, blackbox, gpt, fat32, nvme, iso_test, run.sh | Yes | -- | `command -v` before the Program Files default. |
 | iso_test.sh firmware | -- | **Only via `ZELR_UEFI_FW`** | The default is `/c/Program Files/qemu/share/…` (iso_test.sh:25-26). If the variable is unset, both UEFI paths are **silently skipped** and the gate still passes (`boot test: the bios paths passed, uefi skipped`). |
 | zelr.bat | Yes | **No** | QEMU is found with `%%~$PATH:I` (zelr.bat:23-25). `modern` hard-codes `%ProgramFiles%\qemu\share\edk2-x86_64-code.fd` (113) with no env override, so it prints "Falling back to BIOS" and boots `plain`. |
@@ -946,7 +749,6 @@ Other Windows assumptions:
   - `ZELR_PREBUILT` (harness.py:817-821; gate.sh:237-243; mkiso.py:301-305);
   - disk images named by pid.
 - Paths passed to QEMU are converted with `.replace("\\", "/")` (harness screen, soundcheck/appcheck/mountcheck audio and drive arguments).
-- fake_agent tests with `-f` because the exec bit is lost on Windows filesystems (lib.sh:58-61).
 - `ps -W` (gate.sh:61).
 - genjpeg uses PowerShell and System.Drawing.
 - The launcher, zelr.bat and run.sh all keep a persistent disk and migrate an old `nyx` one: `%LocalAppData%\zelr\disk.img` (migrated from `…\nyx\disk.img`), or `zelr.img` in the repo root (migrated from `nyx.img`).
@@ -957,7 +759,6 @@ A note on the verified run: `bash run.sh -T` created `zelr.img` in the repositor
 
 ## 6. Concurrency, locking, memory ownership, invariants
 
-- **Only one gate per machine.** `mkdir ${TMPDIR:-/tmp}/zelr-gate.lock` is atomic, and a second gate exits 2. The lock is shared by every checkout and worktree using the same TMPDIR. That includes gates an agent starts inside a worktree, and the per-task gates in batch.sh. A lock left by SIGKILL has to be removed by hand. The trap handles INT and TERM but does **not exit** (section 10, AA).
 - **Parallel steps inside a gate**: at most `PAR_MAX=4` background subshells, counted with `jobs -rp`. Each writes to its own `stepN.txt`, and results are read back in start order. A retry runs serially after the whole group finishes.
 - **Shared files inside a gate**:
   - Everything a Guest creates is named by pid: `<name>.<pid>.img` and `.wav`, `mountseed.<pid>.txt`, and `build/pointer-<pid>.ppm`.
@@ -966,7 +767,6 @@ A note on the verified run: `bash run.sh -T` created `zelr.img` in the repositor
   - `build/zelr.bin` must not be rewritten while machines are booting. **mkiso.py rewrites it anyway** (it flattens even under `ZELR_PREBUILT`), and in `full` it does so concurrently with the first screen harnesses (section 10, C).
 - **The Guest serial buffer**: the `_drain` thread appended one byte at a time to `_chunks` under `_lock`, and readers joined the whole list (0.45.0: blocks into one `bytearray`). Memory grows for the life of the machine, which is fine for minutes-long runs.
 - **Monitor**: one socket per Guest. It is not thread-safe and does not need to be (single-threaded use). Each `send` blocks until the prompt comes back. `quit` makes the monitor close mid-reply, which raises `Timeout` and is caught (soundcheck.py:184-187).
-- **The pipeline in the main checkout**: cycle.sh, batch.sh's integration phase and land.sh all switch branches in `$ROOT`. Nothing else may use that checkout while they run. The agents (and batch's fast gate, wrongly) run in the same place.
 - **The pipeline in worktrees**: each batch task has `../zelr-worktrees/<id>` on branch `pipeline/<id>`. Worktrees are created in parallel in the background.
 - **Invariants the scripts try to keep**:
   1. Nothing reaches `main` without passing `gate.sh full`. The exception is bookkeeping commits: claim, landed, nothing-landed and after-splitting use `git add -A` on main.
@@ -1003,10 +803,6 @@ A note on the verified run: `bash run.sh -T` created `zelr.img` in the repositor
 | `wait_screen` | 30 s, every 0.25 s | harness.py:570 | |
 | `count_near` default tolerance | 8 (callers use 6-8) | harness.py:135 | Translucent panels. |
 | `centre_of` `min_pixels` | 200 | harness.py:176 | formcheck uses 60 for link text. |
-| `AGENT_TIMEOUT` | 3600 s | lib.sh:71, 93 | Each agent run. |
-| Preflight probe timeout | 180 s | preflight.sh:31, 46 | |
-| `MAX_REPAIRS`, `MAX_CYCLES`, `BATCH` | 2 (effectively 1), 6, 1 | cycle.sh:25, loop.sh:17, batch.sh:29 | |
-| Commit report excerpt | 1200 bytes (cycle), 1000 bytes (batch) | cycle.sh:204, batch.sh:169 | |
 | ring3check JS cases | ≥ 86 | ring3check.py:96-97 | |
 | crashcheck | 6 rounds, kill delay 0.15-2.5 s, 15 boots | crashcheck.py:56, 105 | |
 | soundcheck | 440 and 880 Hz, 600 ms, pitch ±6%, floor 2000, ≥120 ms runs | soundcheck.py:26-28, 81, 150 | appcheck allows ±8%. |
@@ -1141,7 +937,6 @@ Drive methods:
 | check_sse.py | **none** | none | n/a | No SSE opcodes in executable sections. Not run by anything. | exit code | -- |
 | shots.py | **none** (manual) | G(pc,192) e1000 + Server | S,K,M,P | Not a test. Writes 12 `docs/*.png`. | -- | 3-5 min |
 | whereis.py | none (manual) | -- | -- | Address-to-symbol lookup; broken on the 64-bit ELF. | -- | -- |
-| pipeline/selftest.sh | none (manual) | none | n/a | The cycle.sh state machine with fake agents. | 17 | seconds |
 
 ### 8.2 Verified run on this host (coordinator)
 
@@ -1157,8 +952,6 @@ README.md says 552 checks and lists 49 sections with no `[sound]`, so it has dri
 
 ### 8.3 What tests this area itself
 
-- `pipeline/selftest.sh` covers only `cycle.sh`, with 17 checks (3.6). batch.sh, land.sh, loop.sh, preflight.sh, release.sh and models.sh have no tests. batch.sh cannot even run in fake-agent mode (section 10, J).
-- `gate.sh` was checked by hand three ways, according to pipeline/README.md:141-145: a failing kernel check, a syntax error, and a known-good tree. There is no automated test of the gate.
 - `harness.py` has no tests of its own. Its behaviour is exercised by every harness.
 - The launcher has no tests at all. release.sh's `grep "$VER"` is the only automated check on the exe.
 
@@ -1191,9 +984,7 @@ README.md says 552 checks and lists 49 sections with no `[sound]`, so it has dri
 **Adding a gate tier step with no machine** (a static check): use `run_step "<label>" <fn>` next to vercheck, abicheck and defaultcheck.
 
 **Pipeline**
-- Add backlog rows as `| id | author | title | todo |`. The id must match `[a-z0-9-]+`, and the title must not contain `|`. batch.sh's sed also cannot handle `&` or `\`.
 - **Prune the stale todo rows first** (section 10). Pick `PROFILE` and models through the environment.
-- Update the check counts and descriptions in `prompts/*.md` and `cycle.sh`'s commit template when the tests change.
 - To test the pipeline, extend `selftest.sh` scenarios. They run in seconds.
 
 **Release**
@@ -1231,29 +1022,15 @@ All of the following were verified by reading. Anything that depends on runtime 
   - In `full`, `iso_test.sh` (and so mkiso) is the first step of group C. shotcheck, termcheck and deskcheck start at almost the same moment and boot QEMU with `-kernel build/zelr.bin`.
   - The rewrite is byte-identical, but `open(dst,"wb")` truncates first, so a QEMU loading during that window can read a short image. mkiso's own comment says this is a Windows permission error.
   - This is a likely source of flaky first-run failures, and the retry-alone would mask it. It cannot be confirmed without running.
-- **D. batch.sh's per-task fast gate gates the wrong tree.**
-  - `( cd "$wt" && bash "$PIPE/gate.sh" fast )` (batch.sh:110, 161): `PIPE=$ROOT/pipeline` was fixed at lib.sh:12 to the main checkout, and gate.sh:31 `cd`s to its own parent. So the **main checkout** is built and tested, not the task's worktree.
   - With `BATCH>1`, overlapping fast gates (and agents running the gate in their worktrees, as the prompts tell them) hit the global lock, **exit 2**, and the task is marked `blocked`.
   - This is probably why `BATCH` defaults to 1, while the header and README still say three.
-- **E. batch.sh cannot see an author who only added files** (batch.sh:106). It uses `git diff --quiet`, which ignores untracked files. This is the exact bug cycle.sh fixed and documented at cycle.sh:112-118.
-- **F. `loop.sh` can land at most one task per run.**
-  - cycle.sh finishes with `backlog_set … done` (215) or, in `abandon`, `backlog_set … blocked` (75). Both leave pipeline/backlog.md **modified and uncommitted on main**; nothing commits it.
-  - The next `cycle.sh` dies at 59-61 ("uncommitted changes"). loop.sh counts that as "blocked" and stops after two of them.
   - selftest.sh does not catch this because each scenario uses a fresh repo and a single cycle.
-- **G. cycle.sh's review-answer step.**
   - `MAX_REPAIRS=2` is dead because the loop always breaks after one round (186).
   - The high-finding recount reads the unchanged findings.json (180-185), and the commit message's "N finding(s) answered" uses that number.
-  - cycle.sh answers findings of **any** severity (158); batch.sh answers only `high` (141).
-- **H.** `ANSWER_FINDINGS` (models.sh:74) is never read.
-- **J.** batch.sh never exports `FAKE_ROLE`. With `FAKE_AGENTS` set, `lib.sh:68/83` would reference an unset variable under `set -u`, so batch.sh cannot be run with scripted agents. Only cycle.sh is covered by selftest.sh.
 - **K. An unreadable review still lands.**
-  - parse_review produces `{"verdict":"unreadable","findings":[]}`. `N_FIND` becomes 0, there is no answer round, and the full gate lands the change (cycle.sh:149-196; batch.sh:133-141).
   - selftest scenario 5 only checks that the word `unreadable` was logged.
-  - This contradicts parse_review.py's intent (lines 3-6, 58-61: "a review that cannot be read is not a pass").
   - Also, `first_object` gives up if the first `{` in the text is not the JSON object (for example braces in prose before it).
 - **L. Untracked files in the main checkout.**
-  - cycle.sh's clean check ignores untracked files (59-61), but `abandon` runs `git clean -qfd` (72), deleting a person's untracked, non-ignored files. The landing `git add -A` (200) commits them.
-  - batch.sh's bookkeeping commits on main use `git add -A` (202, 229, 250) and would commit leftovers from the full gate, which runs in the main checkout.
   - `*.wav`, `mountseed.*.txt`, `fat32probe.*.txt` and `fat32high.*.txt` are **not** in .gitignore. They are left behind whenever `timeout` kills a harness, because Python `finally` blocks do not run on SIGTERM/TerminateProcess (runtime behaviour, inferred).
 - **N. FIXED in 0.41.0 for shell_test.sh and in 0.45.0 for iso_test.sh (`grep -qxF` after removing carriage returns; it failed with the `cat` of the file removed): the transcript loses its carriage returns, and the four checks, plus "cd moves into a directory" (the prompt says `/home/docs` too), match whole lines (`check_line`, `grep -qxF`) or the ls format (`check_re`). An echoed line starts with the prompt, so it never matches whole. Tests that cannot fail because of echo.**
   - The console echoes typed characters (kernel/shell.c:626-628 → printf.c:16-24). In shell_test.sh these 4 of 17 checks match the **echo of the typed command** and cannot fail while echo works:
@@ -1285,7 +1062,6 @@ All of the following were verified by reading. Anything that depends on runtime 
   3. `grep -q "$VER"` treats the version as a regex.
   4. Upload uses `--clobber`, so existing assets are replaced silently.
 - **Y.** review.md:17 tells the reviewer to run `git diff` on an **uncommitted** tree, which does not show new untracked files. New files are invisible to the review unless the reviewer uses `git status`.
-- **Z.** batch.sh:94 builds the prompt with `sed "s|{{TASK}}|$title|"`. A title containing `|`, `&` or `\` corrupts it. cycle.sh uses a Python replacement.
 - **AA. gate.sh's signal handling.** `trap 'rm -rf "$LOCK"' EXIT INT TERM` has no `exit` in the handler. In bash, a handled INT or TERM **resumes the script** after the handler runs. So Ctrl-C, or a TERM from an outer `timeout`, removes the lock and the gate keeps running remaining steps, now unlocked. This is inferred from bash semantics and was not run.
 - **AB. FIXED in 0.41.0: rewritten to compare what is still in two places -- the palette defaults (look, light, preset, read from settings.c's comma-separated declaration) and the non-KNOBS keys the kernel reads against what `save()` writes by name -- and to assert it found both sides. Its first run failed on a real loss: `text_dim` is read by the kernel and never written by Settings, so a hand-written one vanished on the first save; Settings now carries over lines it does not manage (`keep_unmanaged`). defaultcheck.py passes vacuously.**
   - settings.c no longer holds per-setting defaults. It declares `static int light = 1, look = 0, preset = 1, custom = 0;` on one line (settings.c:54), which the per-line regex at defaultcheck.py:88 cannot match. `save()` writes through `line_num`/`line_hex` (settings.c:197-225), not `put_kv`.
@@ -1307,19 +1083,13 @@ All of the following were verified by reading. Anything that depends on runtime 
    - Line 107 says "the last group starts thirteen"; it starts 32 or 33.
    - Lines 25-26 say "four of full's steps … all four are about disks"; full-only has 6 steps, including clipcheck.
    - Line 544 says crashcheck is "Six boots"; it is 15. (Fixed in 0.49.1.)
-2. **pipeline/README.md**:
-   - Lines 47-52 and 69: `batch.sh` is "three tasks at once"; `BATCH` defaults to 1.
    - Lines 58-63: the fast gate is "a build and two QEMU runs with no monitor port" and runs "in each worktree". It is five QEMU steps, Guests always open a monitor port, and it actually gates the main checkout (10.1 D).
    - Line 82: "234 self checks … About five minutes"; the selftest is about 556 checks.
    - Lines 89-91: full is "three harnesses … About thirty-five minutes"; the gate header says 17 minutes, and it is about 30 harnesses.
-   - The Files list (202-219) omits `land.sh` and the `screen` mode.
    - Lines 54-56: the cycle "takes about forty minutes, thirty-five of which is the full gate".
-3. **batch.sh header**: lines 22-24 ("three tasks"); lines 16-18 ("shotcheck, termcheck and deskcheck each drive QEMU's monitor on a fixed port", which is no longer true since `free_port`).
-4. **cycle.sh**: the commit template (207-209) says "234 kernel checks … the three harnesses that drive the desktop".
 5. **Prompts**:
    - implement.md says "FAT16 driver" (4), "213 checks" and "three harnesses" (19-21, 41), and "about five minutes" (42).
    - review.md says "213 self checks" (21) and "The window manager runs in one task and programs run in others, with no locks" (31-33). The kernel is now SMP with a big kernel lock.
-6. **backlog.md**. Rows marked blocked or todo describe things that exist:
    - `rtc-clock` (blocked): kernel/rtc.c exists.
    - `pipes` (blocked): kernel/pipe.c exists.
    - `lfn-read` (blocked): LFN works, and namecheck tests it.

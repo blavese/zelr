@@ -919,7 +919,6 @@ Everything here was verified by reading, with the file:line evidence given.
 13. **termcheck.py:135-142** is labelled "the theme is remembered", but it only checks that the window is still amber after `cat /cfg/term`. It checks neither the file's contents nor persistence across a restart.
 14. **deskcheck.py:177,181** computes chip positions for a window called "zelr terminal". term.c names its window **"terminal"** (`term.c:1783`), and chips are drawn from `w->title` (`wm.c:549`, `wm.c:2720-2750`). The test still works because the computed point happens to fall inside the real chip.
 15. **kernel/selftest.c:889-892** claims to check "the last one in the list by name" using `/bin/browser`. The last registered program is `polltest` (`builtin.c:116`). The count comparison at `selftest.c:886-887` still covers what it is meant to catch.
-16. **pipeline/backlog.md:19,22,24** lists "pipes" as blocked, "editor" as todo and "demand-pages" as todo. All three exist: fdtest and polltest exercise pipes, notes.c is the editor, and maptest exercises demand paging.
 17. **sdk/zelr.h:429-433** says of `connect_tls`: "Zero means the connection is open". The kernel returns a socket handle (`syscall.c:779-808`). term.c already treats the value as a handle, correctly.
 18. Minor: "sixty lines" of history (`term.c:1476`) against MAX_HIST 64.
 

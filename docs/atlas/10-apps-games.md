@@ -27,7 +27,6 @@ The PIT runs at 100 Hz (`kernel/main.c:459 timer_init(100)`), so **1 tick = 10 m
 
 Context files, summarised in §3.15 only (other agents document them): `userland/ui.h` (832), `userland/draw.h` (231), `sdk/zelr.h` (983).
 
-I also read, without documenting them in depth: `tools/setcheck.py`, `tools/defaultcheck.py`, `tools/shotcheck.py`, `tools/ring3check.py`, `tools/deskcheck.py` (Paint part), `kernel/theme.c`, `kernel/sysfs.c` (render_settings/theme/screen), `kernel/wm.c` (launcher, desktop icons, key delivery, theme reload, apply_screen_size), `kernel/sound.c`, `kernel/syscall.c` (kill/tasks/sound/win_text/sysinfo), `kernel/sched.c` (slices/idle), `kernel/idt.c`, `kernel/builtin.{S,c}`, `kernel/pins.c`, `kernel/keyboard.c`, `kernel/signal.c`, `kernel/vfs.c`, `kernel/fat.c` (delete), `kernel/layout.c`, `pipeline/backlog.md`, and README.md.
 
 (Line counts are physical lines. PowerShell's `Measure-Object -Line` skips blank lines and reports smaller numbers.)
 
@@ -1112,7 +1111,6 @@ PS_OVER/PS_SHOWDOWN --Next hand/Enter/Space--> new_hand ; PS_GAMEOVER --New game
 33. **Stale leftovers.**
     - `/cfg/notes-open` (notes.c:178-188): nothing in the tree writes it any more.
     - `/music` (music.c:108): no such directory is created (`layout.c:27` makes `/home /doc /cfg /tmp`).
-    - `pipeline/backlog.md:22`: "editor" is still `todo`, but Notes exists, and it does not use "the terminal's line editing" as that entry specifies.
 34. **ui.h "Read once at startup"** (ui.h:183): files, settings, music, calc, monitor, blackjack and poker call `ui_load_theme()` every frame, which is two slurps per frame each. Notes is the only app that reads it once.
 35. **gate.sh:527** calls the cardtest runner "ring3test"; the tool is `tools/ring3check.py`.
 

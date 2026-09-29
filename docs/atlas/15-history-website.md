@@ -187,8 +187,6 @@ Each entry gives the tag commit, a paraphrase of the headline content, and every
 - 08-31 09:31 `fa574d5c` Add a pipeline that runs both models against a gate neither can pass
 - 09:41 `43105911` Check both agents answer before starting a run
 - 09-02 06:16 `406ad564` Let the agents run things, and run several tasks at once
-- 06:17 `22c2a8cd` pipeline: claim rtc-clock pipes lfn-read (written by `batch.sh`)
-- 07:36 `97048348` pipeline: after splitting the batch (written by `batch.sh`)
 - 09-03 06:01 `62c1fb0b` Make the pipeline cheap by default
 - 07:41 `5e7d0904` Fix the launcher crashing before it opens
 
@@ -904,9 +902,6 @@ Each row gives the symptom, the root cause, the fix and the commit.
    - failures are deleted and marked blocked, with logs kept under `pipeline/state/` (gitignored).
 
    The backlog held eight tasks. What happened when it ran:
-   - The first real cycle wrote a CMOS driver but could not run the build, because it had edit permission only. That led to the tool allowlist, worktree batches (`batch.sh`) and matched models (`406ad564`).
-   - `batch.sh` itself committed `22c2a8cd` (claiming rtc-clock, pipes and lfn-read) and `97048348` (after the batch failed together and was split).
-   - `62c1fb0b` added the `thrifty`, `balanced` and `max` profiles and `land.sh`, because agent turns were the binding cost.
 3. **The pipeline stops.** There is no pipeline commit after 09-03.
    - There is no `pipeline: X landed` commit.
    - No commit carries the pipeline's landing trailer (`Written by X, reviewed by Y`).
@@ -1238,7 +1233,6 @@ Figures on the site that are still true: 64 GiB memory cap; external-hub hot-plu
 |---|---|
 | `README.md` | "TLS is one session at a time"; "runs 552 checks" (560 now); SDK section "fifty-seven system calls" (63); "No libc" in two places; layout omits `sdk/libc`, `tools/libccheck.py`, `tools/mkroots.py`; "kernel/elf.c elf32 loader" (it is ELF64); "userland/ ... a terminal, paint, settings and three small tests" (dozens of programs); kernel "about 1.5 MB" and exe "162 MB" |
 | `NOTICE` | "138 commits" (150); "There is no libc"; its date span (29 Aug to 22 Sep) is local time, while the first commit is 2026-08-28 14:12 UTC |
-| `pipeline/backlog.md` | Five tasks shown as todo or blocked although done by hand (see 5.3); the TLS idea is done |
 | `include/syscall.h` | Comment says three signals and no handlers (handlers since `a49f2614`); the TLS comment speaks of "the same one socket" |
 | zelr.org | Everything in 8.3 |
 
