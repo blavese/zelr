@@ -373,7 +373,7 @@ typedef struct jctx {
            *p_weakset, *p_promise, *p_iterator, *p_array_iter, *p_map_iter,
            *p_set_iter, *p_string_iter, *p_generator, *p_async_generator,
            *p_async_iterator, *p_regexp_iter, *p_gen_function, *p_async_function,
-           *p_async_gen_function, *p_buffer, *p_view, *p_typed[9];
+           *p_async_gen_function, *p_buffer, *p_view, *p_typed[9], *p_domexc;
     jobj   *c_promise, *c_object, *c_array, *c_function;
     jobj   *err_ctor[8], *err_proto[8];
     jobj   *eval_fn;          /* the original eval, which is the direct one */

@@ -1223,6 +1223,12 @@ int main(void) {
            "[/\\s/.test('\\u2003'), /\\S/.test('\\u2003'), /\\W/.test('\\u00e9'), /\\p{L}+/u.exec('h\\u00e9llo w')[0] === 'h\\u00e9llo',"
            " /\\uD83D\\uDE00/.test('\\ud83d\\ude00'), /[\\x80-\\xff]/.test(atob('gA==')), /[\\x80-\\xbf]/.test('\\u00e9')].join()",
            "true,false,true,true,true,true,false");
+    expect("DOMException is an Error with a name, a message and the old code, and atob throws one",
+           "(function(){ var e = new DOMException('gone', 'NotFoundError'), r = [e.name, e.message, e.code,"
+           " e instanceof Error, String(e), Object.prototype.toString.call(e), DOMException.DATA_CLONE_ERR,"
+           " new DOMException().name]; try { atob('*'); } catch (x) { r.push(x instanceof DOMException, x.code); }"
+           " return r.join(); })()",
+           "NotFoundError,gone,8,true,NotFoundError: gone,[object DOMException],25,Error,true,5");
     expect("while two hundred nested brackets are an ordinary array",
            "(function(){ var s = ''; for (var i = 0; i < 200; i++) s += '['; s += '1';"
            " for (var i = 0; i < 200; i++) s += ']'; var a = eval(s);"

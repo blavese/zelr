@@ -478,13 +478,52 @@ static jval nat_view_byteoffset(jctx *J, jval t, jval *a, int n) {
  * is then the i-th byte, and length is the count of bytes, which is what the
  * code that calls atob does with it. */
 
-/* A thrown error with a DOMException's name, which is what these throw in a
-   browser; there is no DOMException here, and code that catches one reads
-   its name or nothing. */
+/* DOMException: an Error with a name that says which, and the old number
+   for it. Nothing about it needs a document, and core-js takes it for
+   granted: WordPress's wp-polyfill read DOMException.prototype on its
+   seventh line and stopped there. */
+static const char *const DOMEXC_NAMES[] = {
+    0, "IndexSizeError", 0, "HierarchyRequestError", "WrongDocumentError", "InvalidCharacterError", 0,
+    "NoModificationAllowedError", "NotFoundError", "NotSupportedError", 0, "InvalidStateError",
+    "SyntaxError", "InvalidModificationError", "NamespaceError", "InvalidAccessError", 0,
+    "TypeMismatchError", "SecurityError", "NetworkError", "AbortError", "URLMismatchError",
+    "QuotaExceededError", "TimeoutError", "InvalidNodeTypeError", "DataCloneError"
+};
+#define DOMEXC_N ((int)(sizeof(DOMEXC_NAMES) / sizeof(DOMEXC_NAMES[0])))
+static const char *const DOMEXC_CONSTS[] = {
+    0, "INDEX_SIZE_ERR", "DOMSTRING_SIZE_ERR", "HIERARCHY_REQUEST_ERR", "WRONG_DOCUMENT_ERR",
+    "INVALID_CHARACTER_ERR", "NO_DATA_ALLOWED_ERR", "NO_MODIFICATION_ALLOWED_ERR", "NOT_FOUND_ERR",
+    "NOT_SUPPORTED_ERR", "INUSE_ATTRIBUTE_ERR", "INVALID_STATE_ERR", "SYNTAX_ERR",
+    "INVALID_MODIFICATION_ERR", "NAMESPACE_ERR", "INVALID_ACCESS_ERR", "VALIDATION_ERR",
+    "TYPE_MISMATCH_ERR", "SECURITY_ERR", "NETWORK_ERR", "ABORT_ERR", "URL_MISMATCH_ERR",
+    "QUOTA_EXCEEDED_ERR", "TIMEOUT_ERR", "INVALID_NODE_TYPE_ERR", "DATA_CLONE_ERR"
+};
+
+static jobj *js_domexc_new(jctx *J, jobj *proto, jstr *message, jstr *name) {
+    jobj *e = js_error_with(J, proto ? proto : J->p_domexc, name, message);
+    if (!e) return 0;
+    int code = 0;
+    for (int i = 1; i < DOMEXC_N; i++)
+        if (DOMEXC_NAMES[i] && js_str_eq(name, js_str(J, DOMEXC_NAMES[i]))) { code = i; break; }
+    js_put_prop_flags(J, e, J->s_name, js_from_str(name), JP_WRITE | JP_CONF);
+    js_put_prop_flags(J, e, js_str(J, "code"), js_num(code), JP_WRITE | JP_CONF);
+    return e;
+}
+
+static jval nat_domexc_make(jctx *J, jval t, jval *a, int n) {
+    if (J->new_target.t == JS_UNDEF) return js_throw(J, JS_ERR_TYPE, "a DOMException is made with new", J->error_line);
+    jstr *msg = n > 0 && a[0].t != JS_UNDEF ? js_to_str(J, a[0]) : js_str(J, "");
+    if (J->sig != JS_OK) return js_undef();
+    jstr *name = n > 1 && a[1].t != JS_UNDEF ? js_to_str(J, a[1]) : js_str(J, "Error");
+    if (J->sig != JS_OK) return js_undef();
+    jobj *e = js_domexc_new(J, js_is_obj(t) ? t.obj->proto : 0, msg, name);
+    return e ? js_from_obj(e) : js_undef();
+}
+
+/* A DOMException thrown, as atob and the decoders throw one. */
 static jval js_throw_dom(jctx *J, const char *name, const char *what) {
-    jobj *e = js_error_with(J, J->p_error, js_str(J, name), js_str(J, what));
+    jobj *e = js_domexc_new(J, 0, js_str(J, what), js_str(J, name));
     if (!e) return js_undef();
-    js_put_prop_flags(J, e, J->s_name, js_from_str(js_str(J, name)), JP_WRITE | JP_CONF);
     J->ret = js_from_obj(e);
     J->sig = JS_THROWN;
     js_note_thrown(J, J->ret, J->error_line);
@@ -879,6 +918,14 @@ static jval nat_textdec_decode(jctx *J, jval t, jval *a, int n) {
 }
 
 static void js_setup_text(jctx *J) {
+    J->p_domexc = js_object_with(J, JO_PLAIN, J->p_error);
+    jobj *dc = js_ctor(J, "DOMException", nat_domexc_make, 0, J->p_domexc);
+    js_tag(J, J->p_domexc, "DOMException");
+    for (int i = 1; i < (int)(sizeof(DOMEXC_CONSTS) / sizeof(DOMEXC_CONSTS[0])); i++) {
+        if (dc) js_const_prop(J, dc, DOMEXC_CONSTS[i], js_num(i));
+        js_const_prop(J, J->p_domexc, DOMEXC_CONSTS[i], js_num(i));
+    }
+
     struct { const char *n; jnative f; } G[] = { { "atob", nat_atob }, { "btoa", nat_btoa }, { 0, 0 } };
     for (int i = 0; G[i].n; i++) {
         jobj *f = js_method(J, 0, G[i].n, G[i].f, 1);
