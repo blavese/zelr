@@ -162,8 +162,6 @@ static SOCKET tcp_to(const char *host, int port) {
     SOCKET s = socket(AF_INET, SOCK_STREAM, 0);
     if (connect(s, res->ai_addr, (int)res->ai_addrlen)) { closesocket(s); freeaddrinfo(res); return INVALID_SOCKET; }
     freeaddrinfo(res);
-    DWORD tmo = 4000;
-    setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, (const char *)&tmo, sizeof(tmo));
     return s;
 }
 
@@ -210,7 +208,7 @@ zw host_syscall(zw n, zw a, zw b, zw c) {
         setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, (const char *)&tmo, sizeof(tmo));
         char ok = 0;
         if (recv(s, &ok, 1, 0) != 1 || ok != '1') { closesocket(s); return -5; }
-        tmo = 4000;
+        tmo = 0;                               /* case 27 waits with select */
         setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, (const char *)&tmo, sizeof(tmo));
         return sock_new(s);
     }
@@ -224,6 +222,16 @@ zw host_syscall(zw n, zw a, zw b, zw c) {
     }
     case 27: {
         if (a <= 0 || a >= 64 || !sock_used[a]) return -1;
+        /* Waited for with select rather than a receive timeout: after
+           SO_RCVTIMEO fires, Windows leaves the socket in no defined state,
+           and a page whose server was slow for four seconds under load lost
+           the rest of its answer (Wikipedia's style sheet, run beside three
+           other pages). Quiet for four seconds is 0, as the kernel says. */
+        fd_set rd;
+        FD_ZERO(&rd);
+        FD_SET(socks[a], &rd);
+        struct timeval tv = { 4, 0 };
+        if (select(0, &rd, 0, 0, &tv) == 0) return 0;
         int k = recv(socks[a], (char *)b, (int)c, 0);
         if (getenv("HOST_NETLOG") && k <= 0) fprintf(stderr, "HOST_RECV %d -> %d (%lu ms)\n", (int)a, k, GetTickCount() - start_ms);
         if (k > 0) return k;
