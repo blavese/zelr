@@ -59,7 +59,7 @@
  * room now keeps what it has. */
 #define SRC_MAX    (3 * 1024 * 1024)
 #define CSS_MAX    (1024 * 1024)
-#define SHEETS_MAX 12
+#define SHEETS_MAX 40
 
 /* A script the page did not bring with it. One buffer, reused: each is run
    the moment it arrives, so there is never more than one in hand. The limit
@@ -122,7 +122,7 @@ static int   root_px = 16;
  * its alt text, which is what that text is for. Only the count of what was
  * skipped is worth saying.
  */
-#define PICS_MAX 24
+#define PICS_MAX 48
 
 typedef struct {
     int     node;                /* which img element */
@@ -590,8 +590,43 @@ static void gather_inline_sheets(void) {
  * one is another round trip, so there is a limit on how many are followed
  * and the limit is said out loud when it is reached rather than leaving
  * somebody wondering why one part of a page is styled and the rest is not. */
+/* The sheets a sheet imports, fetched and read before it, which is where
+   @import puts them in the cascade. One level: an import's own imports are
+   not followed. They were skipped, and a site that keeps its whole style in
+   one file imported by a small one had none. */
+static void gather_imports(const url_t *base, const char *css, int len, int *fetched) {
+    int at = 0, lo, hi, got;
+    char href[URL_TEXT];
+    char *buf = 0;
+    while (*fetched < SHEETS_MAX && (got = css_next_import(css, len, &at, href, (int)sizeof(href), &lo, &hi))) {
+        if (got < 0) continue;
+        url_t u;
+        if (!url_join(base, href, &u)) continue;
+        if (!buf && !(buf = (char *)malloc(CSS_MAX))) return;
+        response_t r;
+        int rc = web_get(&u, buf, CSS_MAX, &r);
+        if (rc < 200 || rc >= 300 || r.len <= 0) continue;
+        css_parse_in(&sheet, r.body, r.len, lo, hi);
+        (*fetched)++;
+    }
+    if (buf) free(buf);
+}
+
+/* Whether this address was already read for this page: a page that links
+   the same sheet five times (one does) spent five of its slots on it. */
+#define SHEETS_SEEN 64
+static char sheets_seen[SHEETS_SEEN][URL_TEXT];
+static int nsheets_seen;
+
+static int sheet_seen(const char *url) {
+    for (int k = 0; k < nsheets_seen; k++) if (w_same(sheets_seen[k], url)) return 1;
+    if (nsheets_seen < SHEETS_SEEN) w_copy(sheets_seen[nsheets_seen++], URL_TEXT, url, URL_TEXT);
+    return 0;
+}
+
 static int gather_linked_sheets(int *fetched, int *skipped) {
     *fetched = *skipped = 0;
+    nsheets_seen = 0;
     for (int i = 0; i < doc.count; i++) {
         if (doc.nodes[i].kind != DN_ELEMENT || doc.nodes[i].tag != T_LINK)
             continue;
@@ -609,10 +644,14 @@ static int gather_linked_sheets(int *fetched, int *skipped) {
 
         url_t u;
         if (!url_join(&here, href, &u)) { (*skipped)++; continue; }
+        char whole[URL_TEXT];
+        url_text(&u, whole, (int)sizeof(whole));
+        if (sheet_seen(whole)) continue;
 
         response_t r;
         int rc = web_get(&u, cssbuf, CSS_MAX, &r);
         if (rc < 200 || rc >= 300 || r.len <= 0) { (*skipped)++; continue; }
+        gather_imports(&u, r.body, r.len, fetched);
         css_parse_in(&sheet, r.body, r.len, lo, hi);
         (*fetched)++;
     }

@@ -51,6 +51,9 @@ enum {
     P_POSITION, P_TOP, P_RIGHT, P_BOTTOM, P_LEFT,
     P_VALIGN, P_SPACING, P_COLLAPSE, P_OVERFLOW, P_CLIP, P_FLOAT, P_CLEAR, P_TRANSFORM,
     P_GRID_COLS, P_GRID_COLUMN, P_GRID_AREAS, P_GRID_AREA,
+    P_MASK,
+    P_CUSTOM,        /* --name: value, kept as the text "--name:value" */
+    P_DEFER,         /* a shorthand whose value has var() in it: "name:value" */
     P_COUNT
 };
 
@@ -167,6 +170,11 @@ typedef struct {
        2 right, 3 both). See layout.h, lay_float. */
     unsigned char floated, clear;
 
+    /* Painted through a mask this cannot draw: an icon is often a square of
+       the text colour with the icon's shape as its mask, and drawn without
+       the mask it is a black square. Its background is left out. */
+    unsigned char masked;
+
     /* A transform's translation: pixels, plus a percentage of the box's own
        width or height (layout.h, lay_translate). Nothing else a transform
        does is drawn. */
@@ -175,7 +183,12 @@ typedef struct {
     /* A grid's columns, as the text of grid-template-columns (an offset into
        the sheet's text, -1 for none), read by lay_grid; and how many columns
        an item spans (0 one, -1 all of them). */
-    int grid_cols, grid_areas, garea;   /* and the areas' text, and an item's area */
+    const char *grid_cols, *grid_areas, *garea;  /* the texts, or null; the layout keeps them alive */
+
+    /* The custom properties in force, as the head of a chain the layout
+       keeps (layout.h, lay_var_*); inherited, as custom properties are.
+       -1 for none. */
+    int vars;
     short gspan;
 } cstyle;
 
@@ -464,6 +477,10 @@ static const cprop CSS_PROPS[] = {
     { "grid-column", P_GRID_COLUMN },
     { "grid-template-areas", P_GRID_AREAS },
     { "grid-area", P_GRID_AREA },
+    { "mask", P_MASK },
+    { "mask-image", P_MASK },
+    { "-webkit-mask", P_MASK },
+    { "-webkit-mask-image", P_MASK },
     { "top", P_TOP },
     { "right", P_RIGHT },
     { "bottom", P_BOTTOM },
@@ -836,10 +853,16 @@ static inline void css_parse_block(csheet *s, const char *p, int len, int *at,
 /* Expands the shorthands that matter, because a page that writes
    `margin: 0 auto` and nothing else is a page whose whole layout is in a
    shorthand. */
+/* Set on a declaration whose value uses var(), so the layout knows to put
+   the variables in before applying it without looking at every value. */
+#define CSS_HAS_VAR 0x4000
+
 static inline void css_add(csheet *s, int prop, const char *v, int vlen) {
     if (s->ndecls >= CSS_DECLS) { s->overflowed = 1; return; }
     int t = css_put(s, v, vlen);
     if (t < 0) return;
+    for (int i = 0; i + 3 < vlen; i++)
+        if (v[i] == 'v' && v[i + 1] == 'a' && v[i + 2] == 'r' && v[i + 3] == '(') { prop |= CSS_HAS_VAR; break; }
     s->decls[s->ndecls].prop = (short)prop;
     s->decls[s->ndecls].value = t;
     s->ndecls++;
@@ -899,6 +922,37 @@ static inline void css_declare(csheet *s, const char *name, int nlen,
     int n = nlen < 39 ? nlen : 39;
     for (int i = 0; i < n; i++) lower[i] = w_lower(name[i]);
     lower[n] = 0;
+
+    /* A custom property, kept whole as "--name:value" for the layout to
+       gather (custom properties are case-sensitive, so the name as written). */
+    if (nlen > 2 && name[0] == '-' && name[1] == '-') {
+        char both[2048];
+        int k = 0;
+        for (int i = 0; i < nlen && k < 200; i++) both[k++] = name[i];
+        both[k++] = ':';
+        for (int i = 0; i < vlen && k < (int)sizeof(both) - 1; i++) both[k++] = v[i];
+        css_add(s, P_CUSTOM, both, k);
+        return;
+    }
+    /* A shorthand whose parts are in a variable cannot be split until the
+       variable is known, which is when the page is laid out. */
+    int has_var = 0;
+    for (int i = 0; i + 3 < vlen; i++)
+        if (v[i] == 'v' && v[i + 1] == 'a' && v[i + 2] == 'r' && v[i + 3] == '(') { has_var = 1; break; }
+    if (has_var && (w_same(lower, "margin") || w_same(lower, "padding") || w_same(lower, "border")
+                    || w_same(lower, "border-width") || w_same(lower, "border-top")
+                    || w_same(lower, "border-right") || w_same(lower, "border-bottom")
+                    || w_same(lower, "border-left") || w_same(lower, "background")
+                    || w_same(lower, "font") || w_same(lower, "inset") || w_same(lower, "flex")
+                    || w_same(lower, "border-radius") || w_same(lower, "list-style"))) {
+        char both[2048];
+        int k = 0;
+        for (int i = 0; lower[i] && k < 40; i++) both[k++] = lower[i];
+        both[k++] = ':';
+        for (int i = 0; i < vlen && k < (int)sizeof(both) - 1; i++) both[k++] = v[i];
+        css_add(s, P_DEFER, both, k);
+        return;
+    }
 
     if (w_same(lower, "margin")) {
         css_shorthand4(s, v, vlen, P_MARGIN_T, P_MARGIN_R, P_MARGIN_B, P_MARGIN_L);
@@ -1319,6 +1373,55 @@ static inline void css_parse(csheet *s, const char *p, int len) {
     css_parse_in(s, p, len, -1, -1);
 }
 
+/* The next @import at the head of a sheet, from *at: its address into href
+   and the window widths its media query allows; 0 when the imports are
+   over (they can only come first, after @charset and comments), -1 for one
+   whose media can never apply, which the caller skips. */
+static inline int css_next_import(const char *css, int len, int *at, char *href, int cap,
+                                  int *lo, int *hi) {
+    int i = *at;
+    for (;;) {
+        while (i < len && css_space(css[i])) i++;
+        if (i + 1 < len && css[i] == '/' && css[i + 1] == '*') {
+            i += 2;
+            while (i + 1 < len && !(css[i] == '*' && css[i + 1] == '/')) i++;
+            i += 2;
+            continue;
+        }
+        if (i + 8 < len && w_starts_fold(css + i, "@charset")) {
+            while (i < len && css[i] != ';') i++;
+            i++;
+            continue;
+        }
+        break;
+    }
+    if (!(i + 7 < len && w_starts_fold(css + i, "@import"))) { *at = i; return 0; }
+    i += 7;
+    while (i < len && css_space(css[i])) i++;
+    int wrapped = 0;
+    if (i + 4 < len && w_starts_fold(css + i, "url(")) { i += 4; wrapped = 1; }
+    while (i < len && css_space(css[i])) i++;
+    char q = (i < len && (css[i] == '"' || css[i] == '\'')) ? css[i++] : 0;
+    int n = 0;
+    while (i < len && n < cap - 1 && css[i] != ';'
+           && (q ? css[i] != q : (css[i] != ')' && !css_space(css[i]))))
+        href[n++] = css[i++];
+    href[n] = 0;
+    if (q && i < len && css[i] == q) i++;
+    while (i < len && css_space(css[i])) i++;
+    if (wrapped && i < len && css[i] == ')') i++;
+    int st = i;
+    while (i < len && css[i] != ';') i++;
+    *lo = *hi = -1;
+    int keep = 1;
+    int m = st;
+    while (m < i && css_space(css[m])) m++;
+    if (m < i) keep = css_mq(css + m, i - m, lo, hi);
+    *at = i < len ? i + 1 : i;
+    if (!n) return css_next_import(css, len, at, href, cap, lo, hi);
+    return keep ? 1 : -1;
+}
+
 /* --- matching ------------------------------------------------------------
  *
  * One compound part against one element, then the parts right to left up the
@@ -1530,8 +1633,10 @@ static inline void css_default_style(cstyle *st, int root_px) {
     st->valign = VA_BASELINE;
     st->clip = st->gone = 0;
     st->floated = st->clear = 0;
+    st->masked = 0;
     st->tx_px = st->ty_px = st->tx_pct = st->ty_pct = 0;
-    st->grid_cols = st->grid_areas = st->garea = -1;
+    st->grid_cols = st->grid_areas = st->garea = 0;
+    st->vars = -1;
     st->gspan = 0;
 }
 
@@ -1554,6 +1659,7 @@ static inline void css_inherit(cstyle *child, const cstyle *parent) {
     child->background = parent->background;
     child->has_bg = 0;
     child->spacing = parent->spacing;
+    child->vars = parent->vars;
 }
 
 /* One length of a translation: pixels and a percentage of the box, from a
@@ -1612,10 +1718,132 @@ static inline void css_translate(const char *v, cstyle *st, int root_px) {
     }
 }
 
+/* --- calc() and its kin ---------------------------------------------------
+ *
+ * A length worked out when the page is laid out: calc() of sums and
+ * products of lengths and numbers, and min(), max() and clamp(), which is
+ * how a modern page says "as wide as the window but no wider than 1200px"
+ * and "this big, growing with the window between these two". Each read as
+ * nothing at all before, so the box took its default. */
+typedef struct { const char *p; int font_px, root_px, pct_of, bad; } ccalc;
+
+static inline int css_calc_sum(ccalc *c, int *is_num);
+
+static inline void css_calc_space(ccalc *c) { while (*c->p == ' ') c->p++; }
+
+/* One operand; its value in pixels (hundredths of one), or a plain number
+   (hundredths) when *is_num. */
+static inline int css_calc_atom(ccalc *c, int *is_num) {
+    css_calc_space(c);
+    *is_num = 0;
+    int fn = w_starts_fold(c->p, "calc(") ? 5 : w_starts_fold(c->p, "min(") ? 4
+           : w_starts_fold(c->p, "max(") ? 4 : w_starts_fold(c->p, "clamp(") ? 6 : 0;
+    if (fn || *c->p == '(') {
+        int kind = fn == 5 || !fn ? 0 : w_lower(c->p[1]) == 'i' ? 1 : w_lower(c->p[1]) == 'a' ? 2 : 3;
+        c->p += fn ? fn : 1;
+        int n = 0, vals[3] = { 0, 0, 0 }, nums = 1;
+        for (;;) {
+            int in;
+            int v = css_calc_sum(c, &in);
+            if (n < 3) vals[n] = v;
+            n++;
+            if (!in) nums = 0;
+            css_calc_space(c);
+            if (*c->p == ',') { c->p++; continue; }
+            break;
+        }
+        if (*c->p == ')') c->p++; else c->bad = 1;
+        *is_num = nums;
+        if (kind == 0) return vals[0];
+        if (kind == 3) {                           /* clamp(lo, want, hi) */
+            int v = vals[1];
+            if (v > vals[2]) v = vals[2];
+            if (v < vals[0]) v = vals[0];
+            return v;
+        }
+        int m = vals[0];
+        for (int i = 1; i < n && i < 3; i++) m = kind == 1 ? (vals[i] < m ? vals[i] : m) : (vals[i] > m ? vals[i] : m);
+        return m;
+    }
+    char tok[32];
+    int k = 0;
+    if (*c->p == '-' || *c->p == '+') tok[k++] = *c->p++;
+    while (*c->p && k < 31 && ((*c->p >= '0' && *c->p <= '9') || *c->p == '.'
+                               || (*c->p >= 'a' && *c->p <= 'z') || (*c->p >= 'A' && *c->p <= 'Z')
+                               || *c->p == '%'))
+        tok[k++] = *c->p++;
+    tok[k] = 0;
+    if (!k) { c->bad = 1; return 0; }
+    clen L = css_len(tok);
+    int unitless = 1;
+    for (int i = 0; tok[i]; i++) if ((tok[i] >= 'a' && tok[i] <= 'z') || (tok[i] >= 'A' && tok[i] <= 'Z') || tok[i] == '%') unitless = 0;
+    if (unitless) { *is_num = 1; return L.v; }
+    if (L.unit == U_PCT) return c->pct_of >= 0 ? (int)((long long)L.v * c->pct_of / 100) : 0;
+    if (L.unit == U_AUTO) { c->bad = 1; return 0; }
+    if (L.unit == U_PX) return L.v;
+    return css_px(L, c->font_px, c->root_px, c->pct_of) * 100;
+}
+
+static inline int css_calc_product(ccalc *c, int *is_num) {
+    int v = css_calc_atom(c, is_num);
+    for (;;) {
+        css_calc_space(c);
+        char op = *c->p;
+        if (op != '*' && op != '/') return v;
+        c->p++;
+        int n2;
+        int w = css_calc_atom(c, &n2);
+        if (op == '*') {
+            if (n2) v = (int)((long long)v * w / 100);
+            else if (*is_num) { v = (int)((long long)w * v / 100); *is_num = 0; }
+            else c->bad = 1;
+        } else {
+            if (n2 && w) v = (int)((long long)v * 100 / w);
+            else c->bad = 1;
+        }
+    }
+}
+
+static inline int css_calc_sum(ccalc *c, int *is_num) {
+    int v = css_calc_product(c, is_num);
+    for (;;) {
+        css_calc_space(c);
+        char op = *c->p;
+        if (op != '+' && op != '-') return v;
+        c->p++;
+        int n2;
+        int w = css_calc_product(c, &n2);
+        v = op == '+' ? v + w : v - w;
+    }
+}
+
+/* A length, with calc(), min(), max() and clamp() worked out: as a clen in
+   pixels, or whatever css_len made of anything else. */
+static inline clen css_len_at(const char *v, int font_px, int root_px, int pct_of) {
+    while (*v == ' ') v++;
+    if (w_starts_fold(v, "calc(") || w_starts_fold(v, "min(") || w_starts_fold(v, "max(")
+        || w_starts_fold(v, "clamp(")) {
+        ccalc c = { v, font_px, root_px, pct_of, 0 };
+        int is_num;
+        int px = css_calc_atom(&c, &is_num);
+        clen L;
+        if (c.bad) { L.v = 0; L.unit = U_AUTO; return L; }
+        L.v = px;
+        L.unit = U_PX;
+        return L;
+    }
+    return css_len(v);
+}
+
+static inline void css_apply_v(int prop, const char *v, cstyle *st, int root_px, int pct_of);
+
 static inline void css_apply(const csheet *s, const cdecl *dcl, cstyle *st,
                              int root_px, int pct_of) {
-    const char *v = s->text + dcl->value;
-    switch (dcl->prop) {
+    css_apply_v(dcl->prop & ~CSS_HAS_VAR, s->text + dcl->value, st, root_px, pct_of);
+}
+
+static inline void css_apply_v(int prop, const char *v, cstyle *st, int root_px, int pct_of) {
+    switch (prop) {
         case P_COLOR: css_color(v, &st->color); break;
         case P_BACKGROUND:
             if (css_color(v, &st->background)) st->has_bg = 1;
@@ -1675,7 +1903,7 @@ static inline void css_apply(const csheet *s, const cdecl *dcl, cstyle *st,
             break;
 
         case P_GAP: {
-            clen L = css_len(v);
+            clen L = css_len_at(v, st->font_px, root_px, pct_of);
             st->gap = (short)css_px(L, st->font_px, root_px, pct_of);
             if (st->gap < 0) st->gap = 0;
             break;
@@ -1698,7 +1926,7 @@ static inline void css_apply(const csheet *s, const cdecl *dcl, cstyle *st,
         case P_FONT_SIZE: {
             if (w_starts_fold(v, "smaller")) { st->font_px = (short)(st->font_px * 5 / 6); break; }
             if (w_starts_fold(v, "larger")) { st->font_px = (short)(st->font_px * 6 / 5); break; }
-            clen L = css_len(v);
+            clen L = css_len_at(v, st->font_px, root_px, st->font_px);
             int px = css_px(L, st->font_px, root_px, st->font_px);
             if (px > 0) st->font_px = (short)(px > 96 ? 96 : (px < 7 ? 7 : px));
             break;
@@ -1758,15 +1986,18 @@ static inline void css_apply(const csheet *s, const cdecl *dcl, cstyle *st,
             else if (w_starts_fold(v, "right") || w_starts_fold(v, "inline-end")) st->clear = 2;
             else st->clear = 0;
             break;
+        case P_MASK:
+            st->masked = !w_starts_fold(v, "none");
+            break;
         case P_GRID_AREAS:
-            st->grid_areas = w_starts_fold(v, "none") ? -1 : dcl->value;
+            st->grid_areas = w_starts_fold(v, "none") ? 0 : v;
             break;
         case P_GRID_AREA:
             /* A name; a placement by line numbers is left to the flow. */
-            st->garea = (v[0] >= '0' && v[0] <= '9') || w_starts_fold(v, "auto") ? -1 : dcl->value;
+            st->garea = (v[0] >= '0' && v[0] <= '9') || w_starts_fold(v, "auto") ? 0 : v;
             break;
         case P_GRID_COLS:
-            st->grid_cols = w_starts_fold(v, "none") ? -1 : dcl->value;
+            st->grid_cols = w_starts_fold(v, "none") ? 0 : v;
             break;
         case P_GRID_COLUMN: {
             /* span N, or 1 / -1 for the whole row; a line number alone is
@@ -1879,10 +2110,10 @@ static inline void css_apply(const csheet *s, const cdecl *dcl, cstyle *st,
             break;
         }
         default: {
-            clen L = css_len(v);
+            clen L = css_len_at(v, st->font_px, root_px, pct_of);
             int px = css_px(L, st->font_px, root_px, pct_of);
             short *slot = 0;
-            switch (dcl->prop) {
+            switch (prop) {
                 case P_MARGIN_T: slot = &st->mt; break;
                 case P_MARGIN_R: slot = &st->mr; break;
                 case P_MARGIN_B: slot = &st->mb; break;
@@ -1924,15 +2155,15 @@ static inline void css_apply(const csheet *s, const cdecl *dcl, cstyle *st,
                the window, and what was on screen was a blank page with one
                link at the top of it. */
             if (L.unit == U_PCT) {
-                if (dcl->prop == P_HEIGHT || dcl->prop == P_MIN_HEIGHT
-                    || dcl->prop == P_MAX_HEIGHT) { *slot = -1; break; }
-                if (dcl->prop == P_TOP || dcl->prop == P_BOTTOM) {
+                if (prop == P_HEIGHT || prop == P_MIN_HEIGHT
+                    || prop == P_MAX_HEIGHT) { *slot = -1; break; }
+                if (prop == P_TOP || prop == P_BOTTOM) {
                     *slot = CSS_AUTO_OFF;
                     break;
                 }
             }
 
-            if (dcl->prop >= P_BORDER_T && dcl->prop <= P_BORDER_L) {
+            if (prop >= P_BORDER_T && prop <= P_BORDER_L) {
                 /* border-top and friends carry a style and a colour too. */
                 if (w_starts_fold(v, "none") || w_starts_fold(v, "hidden")) px = 0;
                 else if (px < 0) px = 1;
@@ -1955,8 +2186,8 @@ static inline void css_apply(const csheet *s, const cdecl *dcl, cstyle *st,
                pulled back over the column it floated after, and clamping it
                to nothing put both somewhere else. Auto is kept apart from
                every number, which is what centring needs. */
-            if ((dcl->prop >= P_TOP && dcl->prop <= P_LEFT)
-                || (dcl->prop >= P_MARGIN_T && dcl->prop <= P_MARGIN_L)) {
+            if ((prop >= P_TOP && prop <= P_LEFT)
+                || (prop >= P_MARGIN_T && prop <= P_MARGIN_L)) {
                 if (L.unit == U_AUTO) { *slot = CSS_AUTO_OFF; break; }
                 if (px < -4000) px = -4000;
                 if (px > 4000) px = 4000;

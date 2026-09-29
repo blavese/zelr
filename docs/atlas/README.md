@@ -95,6 +95,32 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.71.0: custom properties, calc(), every style sheet a page links, and GitHub
+
+- **Style sheets (11).** Up to 40 linked sheets (`SHEETS_MAX`, was 12), each address read once
+  (`sheet_seen`), and each sheet's `@import`s read before it (`css_next_import`, `gather_imports`, one
+  level, with their media queries). GitHub links 31, the same one five times, and the rule that hides its
+  menu was in the 27th: its repository pages now show as its header, tabs and file list.
+- **Custom properties (11).** `--name: value` is kept (`P_CUSTOM`, as the text "--name:value"); each element's
+  are gathered before anything else about it is applied into an inherited chain (`cstyle.vars`,
+  `lay_var_push`/`lay_var_find`, cached per element and parent chain); a declaration using var()
+  (`CSS_HAS_VAR`) has it substituted (`lay_var_subst`, fallbacks, nesting to eight, cycles to nothing) into
+  `lay_arena`, which lasts the layout; a shorthand with var() in it is split once known (`P_DEFER`,
+  `lay_apply_short`). The `<html>` element's style is now computed and is the body's parent, so `:root`'s
+  properties, colours and size reach the page.
+- **calc() (11).** `css_len_at`: calc() of sums and products of lengths, percentages and numbers, and min(),
+  max() and clamp(), in lengths, font sizes and gaps. Grid templates and areas are kept as pointers now
+  (they can come from a resolved var()).
+- **Masks and missing pictures (11).** A box with a `mask`/`mask-image` draws no background (an icon made of
+  a square of the text colour and a mask was a black square); a picture that did not arrive but has a
+  size keeps its room as an empty frame instead of its alt text poured into a narrow column. Pictures per
+  page: 48 (was 24).
+- **Checks.** layouttest 155 (16 new: :root variables, the nearest one inherited, fallback, a length from a
+  variable, a variable made of another, calc less, min, clamp, calc products, masks, @import past @charset,
+  print imports skipped, an import's media, the missing picture's frame and its alt text, one without a
+  size), each seen failing on its own broken build; the :root check needed a page with a real `<body>` and
+  the min() check its smaller value second before their breaks showed.
+
 ### 0.70.0: grids, GIF pictures, and pages that ask what the browser can do
 
 - **Grid (11).** `display:grid` is laid out (`lay_grid`): columns from `grid-template-columns` (lengths,

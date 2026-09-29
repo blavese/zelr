@@ -108,7 +108,11 @@ int main(int argc, char **argv) {
     css_index(&sheet, &index_);
     match.hover = -1;
 
-    puts("sheets ");
+    puts("page ");
+    putn(r.len);
+    puts(" bytes, ");
+    putn(doc.count);
+    puts(doc.overflowed ? " nodes (the document overflowed), sheets " : " nodes, sheets ");
     putn(sheets);
     puts(", rules ");
     putn(sheet.nrules);

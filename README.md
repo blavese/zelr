@@ -1266,6 +1266,10 @@ page's header, sidebar and article go where its `grid-template-areas` draws
 them; placing an item by line number is left to the flow. `@supports` is
 answered as this browser would, so a page's fallback for a browser without
 something is the one it gets. GIF pictures are drawn (the first frame).
+Custom properties (`--brand` and `var(--brand, fallback)`, inherited from
+`:root`), `calc()`, `min()`, `max()` and `clamp()` are worked out, which is how
+most sites written this decade give every colour and size. Up to forty style
+sheets are read, each address once, with their `@import`s.
 
 **What travels, and how often.** The body is asked for compressed and put
 back together on arrival, using the deflate that was written for PNG with a

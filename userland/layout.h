@@ -660,10 +660,174 @@ static inline const cbloom *lay_ancestors(const ddoc *d, int el) {
     return &lay_anc[el];
 }
 
+
+/* --- custom properties ------------------------------------------------------
+ *
+ * `--brand: #0969da` on :root and `color: var(--brand)` everywhere below is
+ * how most sites written this decade say every colour, space and size they
+ * use. None of it was read: a var() was a value nothing understood, so a
+ * page lost its colours to the browser's defaults and its spacing to
+ * nothing.
+ *
+ * Custom properties are inherited, so each element's are a chain: its own,
+ * then its parent's, down to :root's (cstyle.vars is the chain's head). They
+ * are gathered before anything else about the element is applied, because
+ * var() refers to the element's final custom properties whatever order they
+ * were written in; then each declaration that uses var() has the values put
+ * in (lay_var_subst) and is applied as though it had been written that way.
+ * Resolved text lives for the whole layout (lay_arena), since a grid's
+ * template is read long after it was applied. A cycle, or nesting past
+ * eight deep, resolves to nothing. */
+#define LAY_VARS 65536
+static const char *lay_var_text[LAY_VARS];   /* "--name:value" */
+static int lay_var_nlen[LAY_VARS], lay_var_next[LAY_VARS];
+static int lay_var_used;
+static int lay_var_in[DOM_NODES], lay_var_out[DOM_NODES];
+static unsigned lay_var_gen[DOM_NODES];
+#define LAY_ARENA (1024 * 1024)
+static char lay_arena[LAY_ARENA];
+static int lay_arena_used;
+
+static inline int lay_var_push(int head, const char *txt) {
+    if (lay_var_used >= LAY_VARS) return head;
+    int n = 0;
+    while (txt[n] && txt[n] != ':') n++;
+    int k = lay_var_used++;
+    lay_var_text[k] = txt;
+    lay_var_nlen[k] = n;
+    lay_var_next[k] = head;
+    return k;
+}
+
+static inline const char *lay_var_find(int head, const char *name, int n) {
+    for (int k = head; k >= 0; k = lay_var_next[k]) {
+        if (lay_var_nlen[k] != n) continue;
+        const char *t = lay_var_text[k];
+        int i = 0;
+        while (i < n && t[i] == name[i]) i++;
+        if (i == n) return t + n + 1;
+    }
+    return 0;
+}
+
+/* v with every var() replaced, into out; how long it came to. */
+static int lay_var_subst(int head, const char *v, int vlen, char *out, int cap, int depth) {
+    int o = 0;
+    for (int i = 0; i < vlen && o < cap - 1; ) {
+        if (!(v[i] == 'v' && i + 3 < vlen && v[i + 1] == 'a' && v[i + 2] == 'r' && v[i + 3] == '(')) {
+            out[o++] = v[i++];
+            continue;
+        }
+        int j = i + 4;
+        while (j < vlen && v[j] == ' ') j++;
+        int ns = j;
+        while (j < vlen && v[j] != ',' && v[j] != ')' && v[j] != ' ') j++;
+        int nlen = j - ns;
+        while (j < vlen && v[j] == ' ') j++;
+        int fb = -1, fe = -1;
+        if (j < vlen && v[j] == ',') {
+            fb = ++j;
+            int d = 0;
+            while (j < vlen && (d || v[j] != ')')) {
+                if (v[j] == '(') d++;
+                else if (v[j] == ')') d--;
+                j++;
+            }
+            fe = j;
+        } else {
+            while (j < vlen && v[j] != ')') j++;
+        }
+        if (j < vlen) j++;                            /* past the ')' */
+        const char *val = depth < 8 ? lay_var_find(head, v + ns, nlen) : 0;
+        if (val) o += lay_var_subst(head, val, w_len(val), out + o, cap - o, depth + 1);
+        else if (fb >= 0 && depth < 8) o += lay_var_subst(head, v + fb, fe - fb, out + o, cap - o, depth + 1);
+        i = j;
+    }
+    out[o] = 0;
+    return o;
+}
+
+/* Resolved text that lasts the whole layout. */
+static inline const char *lay_var_keep(int head, const char *v) {
+    static char spill[4096];
+    char *dst = LAY_ARENA - lay_arena_used > 4096 ? lay_arena + lay_arena_used : spill;
+    int n = lay_var_subst(head, v, w_len(v), dst, 4096, 0);
+    if (dst != spill) lay_arena_used += n + 1;
+    return dst;
+}
+
+/* A shorthand whose value had var() in it, split now that it is known. */
+static void lay_apply_short(lctx *L, cstyle *st, const char *nv, int pct_of) {
+    char name[48];
+    int k = 0;
+    while (nv[k] && nv[k] != ':' && k < 47) { name[k] = nv[k]; k++; }
+    name[k] = 0;
+    const char *v = nv[k] == ':' ? nv + k + 1 : "";
+    int ps[4], pl[4];
+    int n = css_parts(v, w_len(v), ps, pl, 4);
+    char part[4][96];
+    for (int i = 0; i < n; i++) {
+        int m = pl[i] < 95 ? pl[i] : 95;
+        for (int c = 0; c < m; c++) part[i][c] = v[ps[i] + c];
+        part[i][m] = 0;
+    }
+    int four = -1;
+    if (lay_same_fold(name, "margin")) four = P_MARGIN_T;
+    else if (lay_same_fold(name, "padding")) four = P_PADDING_T;
+    else if (lay_same_fold(name, "border-width")) four = P_BORDER_T;
+    else if (lay_same_fold(name, "inset")) four = P_TOP;
+    if (four >= 0 && n > 0) {
+        /* top, right, bottom, left, from one to four values */
+        const char *t = part[0], *r = n > 1 ? part[1] : part[0];
+        const char *b = n > 2 ? part[2] : part[0], *l = n > 3 ? part[3] : r;
+        const char *side[4] = { t, r, b, l };
+        for (int i = 0; i < 4; i++) css_apply_v(four + i, side[i], st, L->root_px, pct_of);
+        return;
+    }
+    if (lay_same_fold(name, "background")) {
+        u32 c;
+        for (int i = 0; i < n; i++)
+            if (css_color(part[i], &c)) { css_apply_v(P_BACKGROUND, part[i], st, L->root_px, pct_of); break; }
+        return;
+    }
+    if (w_starts_fold(name, "border")) {
+        int sides[4] = { P_BORDER_T, P_BORDER_R, P_BORDER_B, P_BORDER_L }, first = 0, count = 4;
+        if (lay_same_fold(name, "border-top")) count = 1;
+        else if (lay_same_fold(name, "border-right")) { first = 1; count = 1; }
+        else if (lay_same_fold(name, "border-bottom")) { first = 2; count = 1; }
+        else if (lay_same_fold(name, "border-left")) { first = 3; count = 1; }
+        else if (lay_same_fold(name, "border-radius")) { if (n) css_apply_v(P_RADIUS, part[0], st, L->root_px, pct_of); return; }
+        for (int s2 = first; s2 < first + count; s2++) css_apply_v(sides[s2], v, st, L->root_px, pct_of);
+        return;
+    }
+    if (lay_same_fold(name, "font")) {
+        for (int i = 0; i < n; i++) {
+            clen F = css_len(part[i]);
+            if (F.unit != U_AUTO && F.v > 0 && F.unit != U_PX) { css_apply_v(P_FONT_SIZE, part[i], st, L->root_px, pct_of); break; }
+            if (F.unit == U_PX && F.v > 100 * 4) { css_apply_v(P_FONT_SIZE, part[i], st, L->root_px, pct_of); break; }
+            if (w_starts_fold(part[i], "bold")) css_apply_v(P_FONT_WEIGHT, "bold", st, L->root_px, pct_of);
+            if (w_starts_fold(part[i], "italic")) css_apply_v(P_FONT_STYLE, "italic", st, L->root_px, pct_of);
+        }
+        return;
+    }
+    if (lay_same_fold(name, "flex")) { css_apply_v(P_FLEX_GROW, v, st, L->root_px, pct_of); return; }
+    if (lay_same_fold(name, "list-style")) { css_apply_v(P_LIST_STYLE, v, st, L->root_px, pct_of); return; }
+}
+
+/* One declaration, with its variables put in first when it has any. */
+static inline void lay_apply_decl(lctx *L, const cdecl *dc, cstyle *out, int pct_of) {
+    int prop = dc->prop & ~CSS_HAS_VAR;
+    if (prop == P_CUSTOM) return;                 /* gathered already */
+    const char *v = L->s->text + dc->value;
+    if (dc->prop & CSS_HAS_VAR) v = lay_var_keep(out->vars, v);
+    if (prop == P_DEFER) { lay_apply_short(L, out, v, pct_of); return; }
+    css_apply_v(prop, v, out, L->root_px, pct_of);
+}
+
 static inline void lay_apply_rule(lctx *L, int rule, cstyle *out, int pct_of) {
     const crule *r = &L->s->rules[rule];
     for (int k = 0; k < r->decl_n; k++)
-        css_apply(L->s, &L->s->decls[r->decl_at + k], out, L->root_px, pct_of);
+        lay_apply_decl(L, &L->s->decls[r->decl_at + k], out, pct_of);
 }
 
 /* --- what the markup says about its own look -------------------------------
@@ -843,6 +1007,18 @@ static inline void lay_hints(lctx *L, int el, cstyle *st, int pct_of) {
     }
 }
 
+/* A whole style copied. Written out, because a struct assignment of this
+   size is a call to memcpy and a ring 3 program has no memcpy to call: the
+   compiler is within its rights and the linker says so. */
+static inline void lay_cs(cstyle *d, const cstyle *s) {
+    volatile unsigned long long *a = (volatile unsigned long long *)(void *)d;
+    const unsigned long long *b = (const unsigned long long *)(const void *)s;
+    for (unsigned k = 0; k < sizeof(cstyle) / 8; k++) a[k] = b[k];
+    volatile unsigned char *ac = (volatile unsigned char *)(void *)d;
+    const unsigned char *bc = (const unsigned char *)(const void *)s;
+    for (unsigned k = sizeof(cstyle) / 8 * 8; k < sizeof(cstyle); k++) ac[k] = bc[k];
+}
+
 static inline void lay_style(lctx *L, int el, const cstyle *parent,
                              cstyle *out, int pct_of) {
     css_inherit(out, parent);
@@ -872,6 +1048,36 @@ static inline void lay_style(lctx *L, int el, const cstyle *parent,
             rules = loose;
         }
     }
+    /* The custom properties first, in the order the cascade applies them,
+       worked out once per element for the chain it inherits. */
+    int head = out->vars;
+    if (el >= 0 && el < DOM_NODES && lay_var_gen[el] == lay_gen && lay_var_in[el] == head) {
+        head = lay_var_out[el];
+    } else {
+        int h = head;
+        for (int pass = 0; pass < 2; pass++)
+            for (int i = 0; i < n; i++) {
+                if ((rules[i] < ua) != (pass == 0)) continue;
+                const crule *r = &L->s->rules[rules[i]];
+                for (int k = 0; k < r->decl_n; k++) {
+                    const cdecl *dc = &L->s->decls[r->decl_at + k];
+                    if ((dc->prop & ~CSS_HAS_VAR) == P_CUSTOM) h = lay_var_push(h, L->s->text + dc->value);
+                }
+            }
+        if (L->inl && el >= 0 && L->inl[el].n > 0)
+            for (int k = 0; k < L->inl[el].n; k++) {
+                const cdecl *dc = &L->s->decls[L->inl[el].at + k];
+                if ((dc->prop & ~CSS_HAS_VAR) == P_CUSTOM) h = lay_var_push(h, L->s->text + dc->value);
+            }
+        if (el >= 0 && el < DOM_NODES) {
+            lay_var_gen[el] = lay_gen;
+            lay_var_in[el] = head;
+            lay_var_out[el] = h;
+        }
+        head = h;
+    }
+    out->vars = head;
+
     for (int i = 0; i < n; i++) if (rules[i] < ua) lay_apply_rule(L, rules[i], out, pct_of);
     lay_hints(L, el, out, pct_of);
     for (int i = 0; i < n; i++) if (rules[i] >= ua) lay_apply_rule(L, rules[i], out, pct_of);
@@ -881,8 +1087,7 @@ static inline void lay_style(lctx *L, int el, const cstyle *parent,
        part of the cascade that needs no comparison to decide. */
     if (L->inl && L->inl[el].n > 0)
         for (int k = 0; k < L->inl[el].n; k++)
-            css_apply(L->s, &L->s->decls[L->inl[el].at + k], out, L->root_px,
-                      pct_of);
+            lay_apply_decl(L, &L->s->decls[L->inl[el].at + k], out, pct_of);
 }
 
 static void lay_block(lctx *L, int node, const cstyle *parent, int x,
@@ -1227,7 +1432,7 @@ static inline void lay_inline(lctx *L, int node, const cstyle *parent, int *y) {
     int stack_top[LAY_DEPTH];      /* and on which line */
     int stack_slot[LAY_DEPTH];     /* its background, taken now, filled later */
     int sp = 0;
-    stack[0] = *parent;
+    lay_cs(&stack[0], parent);
     stack_node[0] = -1;
     stack_x[0] = 0;
     stack_top[0] = 0;
@@ -1374,12 +1579,43 @@ static inline void lay_inline(lctx *L, int node, const cstyle *parent, int *y) {
                         L->pending_space = 0;
                     }
                 } else {
-                    /* Nothing arrived, so it is the words it came with,
-                       which is what alt text is for and a great deal more
-                       use than a gap. */
+                    /* Nothing arrived. A picture whose size the page gave
+                       keeps that room, as an empty frame: its alt text poured
+                       into a column the width of a thumbnail was a stack of
+                       single words down the page. One whose size is not known
+                       is the words it came with, which is what alt text is
+                       for and a great deal more use than a gap. */
+                    const char *aw = dom_attr(d, at, "width");
+                    const char *ah = dom_attr(d, at, "height");
+                    int fw = st.width >= 0 ? st.width : aw ? lay_number(aw) : 0;
+                    int fh = st.height >= 0 ? st.height : ah ? lay_number(ah) : 0;
+                    if (fw > L->line_width) { if (fh > 0) fh = fh * L->line_width / fw; fw = L->line_width; }
                     const char *alt = dom_attr(d, at, "alt");
-                    if (alt && *alt) {
-                        cstyle s2 = st;
+                    if (fw >= 24 && fh >= 16) {
+                        if (L->pen + fw > L->line_left + L->line_width && L->pen > L->line_left) {
+                            int left = L->cont_left, width = L->cont_width, al = L->align;
+                            lay_line_end(L, y);
+                            lay_line_start(L, *y, left, width, al);
+                        }
+                        litem *it = lay_item(L);
+                        if (it) {
+                            it->kind = LK_BOX;
+                            it->node = at;
+                            it->x = L->pen;
+                            it->y = L->line_top;
+                            it->w = fw;
+                            it->h = fh;
+                            it->bt = it->br = it->bb = it->bl = 1;
+                            it->border = 0xDDDDDD;
+                            it->link = L->cur_link;
+                            L->pen += fw;
+                            lay_line_fit(L, fh, 100);
+                            L->line_started = 1;
+                            L->pending_space = 0;
+                        }
+                    } else if (alt && *alt) {
+                        cstyle s2;
+                        lay_cs(&s2, &st);
                         s2.color = 0x6B6B6B;
                         s2.italic = 1;
                         lay_text_run(L, alt, &s2, y);
@@ -1473,7 +1709,7 @@ static inline void lay_inline(lctx *L, int node, const cstyle *parent, int *y) {
                 continue;
             } else if (sp + 1 < LAY_DEPTH) {
                 sp++;
-                stack[sp] = st;
+                lay_cs(&stack[sp], &st);
                 stack_node[sp] = at;
                 lay_inline_open(L, at, &st, &stack_x[sp], &stack_top[sp],
                                 &stack_slot[sp]);
@@ -2011,12 +2247,13 @@ static void lay_row_style(lctx *L, int table, const cstyle *tst, int row, cstyle
     const ddoc *d = L->d;
     int chain[6], n = 0;
     for (int at = row; at >= 0 && at != table && n < 6; at = d->nodes[at].parent) chain[n++] = at;
-    cstyle up = *tst, st;
+    cstyle up, st;
+    lay_cs(&up, tst);
     while (n--) {
         lay_style(L, chain[n], &up, &st, L->line_width);
-        up = st;
+        lay_cs(&up, &st);
     }
-    *out = up;
+    lay_cs(out, &up);
 }
 
 /* The columns: how many, and how wide. `avail` is the room inside the
@@ -2371,7 +2608,7 @@ static const char *lay_grid_track(const char *p, const cstyle *st, int root_px, 
 static int lay_grid_columns(lctx *L, const cstyle *st, int cw, int gap, int *width) {
     int kind[LAY_GRID_COLS], val[LAY_GRID_COLS], mins[LAY_GRID_COLS];
     int n = 0;
-    const char *p = st->grid_cols >= 0 ? L->s->text + st->grid_cols : "";
+    const char *p = st->grid_cols ? st->grid_cols : "";
     while (*p && n < LAY_GRID_COLS) {
         while (*p == ' ') p++;
         if (!*p) break;
@@ -2501,7 +2738,7 @@ static void lay_grid_named(lctx *L, int node, const cstyle *st, int cx, int cw, 
     const ddoc *d = L->d;
     larea a[LAY_AREAS];
     int rows, cols;
-    int na = lay_grid_areas(L->s->text + st->grid_areas, a, &rows, &cols);
+    int na = lay_grid_areas(st->grid_areas, a, &rows, &cols);
     int gap = st->gap > 0 ? st->gap : 0;
     int width[LAY_GRID_COLS];
     int n = lay_grid_columns(L, st, cw, gap, width);
@@ -2509,7 +2746,7 @@ static void lay_grid_named(lctx *L, int node, const cstyle *st, int cx, int cw, 
     if (n < cols) {
         int used = gap * (cols - 1);
         for (int c = 0; c < n; c++) used += width[c];
-        if (st->grid_cols < 0) { used = gap * (cols - 1); n = 0; }
+        if (!st->grid_cols) { used = gap * (cols - 1); n = 0; }
         int each = (cw - used) / (cols - n);
         for (int c = n; c < cols; c++) width[c] = each > 1 ? each : 1;
         n = cols;
@@ -2526,10 +2763,10 @@ static void lay_grid_named(lctx *L, int node, const cstyle *st, int cx, int cw, 
             if (d->nodes[k].kind != DN_ELEMENT) continue;
             cstyle own;
             lay_style(L, k, st, &own, cw);
-            if (own.display == D_NONE || own.garea < 0) continue;
+            if (own.display == D_NONE || !own.garea) continue;
             char name[24];
             int q = 0;
-            for (const char *t = L->s->text + own.garea; *t && *t != ' ' && *t != '/' && q < 23; t++)
+            for (const char *t = own.garea; *t && *t != ' ' && *t != '/' && q < 23; t++)
                 name[q++] = *t;
             name[q] = 0;
             int f = -1;
@@ -2555,10 +2792,10 @@ static void lay_grid_named(lctx *L, int node, const cstyle *st, int cx, int cw, 
         lay_style(L, k, st, &own, cw);
         if (own.display == D_NONE) continue;
         int f = -1;
-        if (own.garea >= 0) {
+        if (own.garea) {
             char name[24];
             int q = 0;
-            for (const char *t = L->s->text + own.garea; *t && *t != ' ' && *t != '/' && q < 23; t++)
+            for (const char *t = own.garea; *t && *t != ' ' && *t != '/' && q < 23; t++)
                 name[q++] = *t;
             name[q] = 0;
             for (int i = 0; i < na; i++) if (w_same(a[i].name, name)) f = i;
@@ -2571,7 +2808,7 @@ static void lay_grid_named(lctx *L, int node, const cstyle *st, int cx, int cw, 
 }
 
 static void lay_grid(lctx *L, int node, const cstyle *st, int cx, int cw, int *y) {
-    if (st->grid_areas >= 0) { lay_grid_named(L, node, st, cx, cw, y); return; }
+    if (st->grid_areas) { lay_grid_named(L, node, st, cx, cw, y); return; }
     const ddoc *d = L->d;
     int gap = st->gap > 0 ? st->gap : 0;
     int width[LAY_GRID_COLS];
@@ -2846,6 +3083,7 @@ static void lay_block_placed(lctx *L, int node, const cstyle *parent, int x,
        not known until they are laid out, so its slot is taken now and
        filled in at the end. */
     int slot = -1;
+    if (st.masked) st.has_bg = 0;
     if (st.has_bg || st.bt || st.br || st.bb || st.bl) {
         litem *bg = lay_item(L);
         if (bg) {
@@ -3096,8 +3334,18 @@ static inline void lay_run(ldoc *out, const ddoc *d, const csheet *s,
     L.fl_seq = 0;
     L.floating = -1;
 
-    cstyle root;
-    css_default_style(&root, root_px);
+    lay_var_used = 0;
+    lay_arena_used = 0;
+
+    /* The <html> element's style, which the body inherits from: :root is
+       where a page keeps its custom properties and often its colours and
+       base size, and the layout started at the body with the browser's
+       defaults as its parent, as though :root said nothing. */
+    cstyle base, root;
+    css_default_style(&base, root_px);
+    if (d->root >= 0 && d->body >= 0) lay_style(&L, d->root, &base, &root, width);
+    else lay_cs(&root, &base);
+    root.display = D_BLOCK;
 
     int y = 0;
     int start = d->body >= 0 ? d->body : d->root;

@@ -1037,6 +1037,66 @@ int main(void) {
         }
     }
 
+    /* --- custom properties, calc(), masks and @import --------------------------- */
+    {
+        lay("<style>:root{--brand:#ff0000;--pad:12px}.box{--brand:#00ff00}"
+            "#a{color:var(--brand)}#b{color:var(--brand)}#c{color:var(--missing, #0000ff)}"
+            "#d{background:#eeeeee;padding-left:var(--pad)}"
+            "#e{--x:var(--brand);color:var(--x)}</style>"
+            "<body><p id=a>root</p><div class=box><p id=b>inner</p><p id=e>chain</p></div>"
+            "<p id=c>fallback</p><p id=d>padded</p></body>", 600);
+        const litem *a = word("root"), *b = word("inner"), *c = word("fallback"), *e = word("chain");
+        const litem *d = box_of(by_id("d")), *dw = word("padded");
+        ok("a custom property on :root reaches the page", a && a->color == 0xFF0000);
+        ok("and the nearest one wins, inherited from an ancestor", b && b->color == 0x00FF00);
+        ok("var() with nothing set takes its fallback", c && c->color == 0x0000FF);
+        ok("a length from a custom property is a length", d && dw && dw->x - d->x == 12);
+        ok("and a custom property made of another resolves through it", e && e->color == 0x00FF00);
+
+        lay("<style>#w{width:calc(100% - 100px);background:#eeeeee}"
+            "#m{width:min(90%, 300px);background:#eeeeee}"
+            "#cl{width:clamp(100px, 10%, 200px);background:#eeeeee}"
+            "#x{width:calc(2 * 50px + 10%);background:#eeeeee}</style>"
+            "<div id=w>w</div><div id=m>m</div><div id=cl>c</div><div id=x>x</div>", 600);
+        const litem *w = box_of(by_id("w")), *m = box_of(by_id("m")), *cl = box_of(by_id("cl"));
+        const litem *x = box_of(by_id("x"));
+        ok("calc() of a percentage less pixels", w && w->w == 500);
+        ok("min() takes the smaller", m && m->w == 300);
+        ok("clamp() keeps a value between its bounds", cl && cl->w == 100);
+        ok("calc() multiplies and adds", x && x->w == 160);
+
+        lay("<style>#i{mask-image:url(x.svg);background:#000000;width:20px;height:20px}"
+            "#j{background:#000000;width:20px;height:20px}</style><div id=i></div><div id=j></div>", 600);
+        const litem *ib = box_of(by_id("i")), *jb = box_of(by_id("j"));
+        ok("a box painted through a mask does not draw its background", !(ib && ib->has_bg) && jb && jb->has_bg);
+
+        const char *imp = "@charset \"utf-8\"; /* a note */ @import url(\"base.css\");"
+                          "@import 'print.css' print; @import url(wide.css) (min-width: 900px); p{color:red}";
+        int at = 0, lo, hi, n = 0, got;
+        char href[256], first[256] = "", third[256] = "";
+        int third_lo = 0, skipped = 0;
+        while ((got = css_next_import(imp, w_len(imp), &at, href, (int)sizeof(href), &lo, &hi))) {
+            if (got < 0) { skipped++; continue; }
+            if (n == 0) w_copy(first, sizeof(first), href, sizeof(first));
+            if (n == 1) { w_copy(third, sizeof(third), href, sizeof(third)); third_lo = lo; }
+            n++;
+        }
+        ok("@import is read past @charset and comments", w_same(first, "base.css"));
+        ok("one for print is left out", skipped == 1);
+        ok("and one for wide windows keeps its width", w_same(third, "wide.css") && third_lo == 900 && n == 2);
+    }
+
+    /* --- a picture that did not arrive ----------------------------------------- */
+    {
+        nfake = 0;
+        lay("<p><img id=f src=x width=200 height=100 alt=\"astronauts on a runway at dawn\"> after</p>"
+            "<p><img src=y alt=\"words instead\"></p>", 600);
+        const litem *f = box_of(by_id("f"));
+        ok("a missing picture with a size keeps its room, as a frame", f && f->w == 200 && f->h == 100);
+        ok("and its alt text is not poured into it", !word("astronauts") && word("after"));
+        ok("one with no size is still its words", word("words") != 0);
+    }
+
     puts(failed ? "LAYOUTTEST_FAIL\n" : "LAYOUTTEST_PASS\n");
     return failed;
 }
