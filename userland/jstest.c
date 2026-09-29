@@ -265,7 +265,7 @@ int main(void) {
         ran++;
         jctx J;
         js_init(&J);
-        int ok = js_run(&J, "class Foo {}", 12);
+        int ok = js_run(&J, "export default 1", 16);
         int said = !ok && J.error[0];
         puts(said ? "  PASS  " : "  FAIL  ");
         puts("a word this engine does not have is refused by name");
@@ -587,13 +587,13 @@ int main(void) {
            " return c(); })()", "kept");
     expect("arguments handed back outlive the call",
            "(function(){ function a(){ return arguments; } var x = a(1, 2, 3);"
-           " for (var i = 0; i < 1000; i++) a(9, 9, 9); return x.join(); })()", "1,2,3");
+           " for (var i = 0; i < 1000; i++) a(9, 9, 9); return Array.prototype.join.call(x); })()", "1,2,3");
     expect("a closure made in a catch keeps what it caught",
            "(function(){ var f; try { throw 7; } catch (e) { f = function(){ return e; }; }"
            " for (var i = 0; i < 1000; i++) { try { throw i; } catch (e) {} }"
            " return f(); })()", "7");
     expect("and a method taken away to call later keeps its receiver",
-           "(function(){ var s = 'xyz'; var at = s.charAt; return at(1); })()", "y");
+           "(function(){ var s = 'xyz'; var at = s.charAt; return at.call(s, 1); })()", "y");
 
     /* --- string methods as the language has them ---------------------------
      *
@@ -691,6 +691,135 @@ int main(void) {
     expect("a loop walking a string by its matches ends",
            "(function(){ var s = 'x.y.z', n = 0, at = s.indexOf('.');"
            " while (at >= 0 && n < 10) { n++; at = s.indexOf('.', at + 1); } return n; })()", "2");
+
+    /* --- the language of 2015 to 2021 ---------------------------------------
+     *
+     * Pages stopped at their first line on every one of these: a minified
+     * bundle is arrow functions, let, spread and destructuring from one end to
+     * the other. */
+    expect("an arrow's arguments are the ones of the function round it",
+           "(function(){ return (() => arguments[1])(); })(4, 5)", "5");
+    expect("an arrow's body can be an object in brackets", "(() => ({ a: 1 }))().a", "1");
+    expect("a template puts its values in",
+           "(function(){ var n = 'w'; return `a${n}b${1 + 2}c`; })()", "awb3c");
+    expect("and one template can sit inside another",
+           "(function(){ var n = 'w'; return `x${`y${n}`}z`; })()", "xywz");
+    expect("a tag gets the pieces as they were written and the values",
+           "(function(){ function tag(s, ...v) { return s.raw.join('|') + ':' + v.join(','); }"
+           " return tag`a\\n${1}b${2}`; })()", "a\\n|b|:1,2");
+    expect("and the same pieces every time that place runs",
+           "(function(){ var seen = []; function t(s) { seen.push(s); } for (var i = 0; i < 2; i++) t`x`;"
+           " return seen[0] === seen[1]; })()", "true");
+    expect("String.raw leaves escapes alone", "String.raw`a\\tb${1}`", "a\\tb1");
+    expect("let inside a block is the block's own",
+           "(function(){ let x = 1; { let x = 2; } return x; })()", "1");
+    expect("each turn of a for loop has a let of its own",
+           "(function(){ var fs = []; for (let i = 0; i < 3; i++) fs.push(() => i);"
+           " return fs.map(f => f()).join(); })()", "0,1,2");
+    expect("while var is one for the whole function",
+           "(function(){ var fs = []; for (var i = 0; i < 3; i++) fs.push(() => i);"
+           " return fs.map(f => f()).join(); })()", "3,3,3");
+    expect("and for-of and for-in with const and let each have their own too",
+           "(function(){ var fs = []; for (const k of [1, 2]) fs.push(() => k);"
+           " for (let k in { a: 1 }) fs.push(() => k); return fs.map(f => f()).join(); })()", "1,2,a");
+    expect("a const cannot be assigned to",
+           "(function(){ const c = 1; try { c = 2; } catch (e) { return e.name + ':' + c; } })()",
+           "TypeError:1");
+    expect("a let cannot be used before its line",
+           "(function(){ try { x; } catch (e) { return e.name; } let x = 1; })()", "ReferenceError");
+    expect("a var is declared from the top of its function, so a closure finds it",
+           "(function(){ function set() { v = 7; } set(); var v; return typeof globalThis.v + ':' + v; })()",
+           "undefined:7");
+    expect("a function declared in a block is there after the block",
+           "(function(){ if (true) { function f() { return 3; } } return f(); })()", "3");
+    expect("reading a name never declared is a ReferenceError",
+           "(function(){ try { return neverWasDeclared; } catch (e) { return e.name; } })()",
+           "ReferenceError");
+    expect("undefined is a name that can be a parameter",
+           "(function(window, undefined){ return typeof undefined; })(1)", "undefined");
+    expect("a default fills a parameter that was not given",
+           "(function(a, b = a + 1){ return a + b; })(1)", "3");
+    expect("rest parameters collect what is left",
+           "(function(a, ...r){ return r.length + ':' + r.join(); })(1, 2, 3)", "2:2,3");
+    expect("spread hands an array over as the arguments", "Math.max(...[1, 5, 3])", "5");
+    expect("spread in an array literal, of a string too",
+           "[0, ...[1, 2], ...'ab'].join()", "0,1,2,a,b");
+    expect("spread in an object literal",
+           "JSON.stringify({ a: 1, ...{ b: 2 }, c: 3 })", "{\"a\":1,\"b\":2,\"c\":3}");
+    expect("a call with a hundred and fifty arguments gets all of them",
+           "(function(){ var a = []; for (var i = 0; i < 150; i++) a.push(i);"
+           " return ((...r) => r.length + ':' + r[149])(...a) + ',' + Math.max.apply(null, a); })()",
+           "150:149,149");
+    expect("destructuring with defaults, rest and nesting",
+           "(function(){ var { a, b: { c = 5 } = {}, ...more } = { a: 1, d: 4 };"
+           " var [p, [q, r = 9] = [], ...t] = [1, [2], 3, 4];"
+           " return [a, c, Object.keys(more), p, q, r, t.join('|')].join(); })()", "1,5,d,1,2,9,3|4");
+    expect("a parameter can be a pattern, with a default of its own",
+           "(function({ a = 1, b } = {}, [c] = [7]){ return a + (b || 0) + c; })()", "8");
+    expect("destructuring assignment swaps two names",
+           "(function(){ var x = 1, y = 2; [x, y] = [y, x]; return '' + x + y; })()", "21");
+    expect("and puts values into properties",
+           "(function(){ var o = {}; ({ a: o.x, b: o['y'] } = { a: 1, b: 2 }); return o.x + o.y; })()", "3");
+    expect("shorthand properties, methods and computed keys",
+           "(function(){ var a = 1, k = 'dyn'; var o = { a, [k + 1]: 2, m() { return 3; } };"
+           " return o.a + o.dyn1 + o.m(); })()", "6");
+    expect("a getter and a setter in an object literal",
+           "(function(){ var o = { get g() { return 4; }, set s(v) { this.t = v * 2; } };"
+           " o.s = 5; return o.g + o.t; })()", "14");
+    expect("Object.defineProperty makes an accessor that keys leave out",
+           "(function(){ var o = {}; Object.defineProperty(o, 'x', { get() { return 42; } });"
+           " return o.x + ':' + Object.keys(o).length; })()", "42:0");
+    expect("?. stops at null and undefined, and the rest of the chain with it",
+           "(function(){ var n = null, d = { a: { b: 1 } };"
+           " return [n?.x, n?.a.b.c, d?.a?.b, d?.['a'].b].join(); })()", ",,1,1");
+    expect("?.() calls only a function that is there",
+           "(function(){ var o = { f() { return 5; } }; return [o.g?.(), o.f?.()].join(); })()", ",5");
+    expect("?? keeps nought and replaces only null and undefined",
+           "[0 ?? 1, '' ?? 1, null ?? 2, undefined ?? 3].join()", "0,,2,3");
+    expect("?\?=, ||= and &&= assign only when they have to",
+           "(function(){ var a = null, b = 0, c = 1, d = 5; a ?\?= 1; b ||= 2; c &&= 3; d ?\?= 9;"
+           " return [a, b, c, d].join(); })()", "1,2,3,5");
+    expect("** raises, from the right", "2 ** 3 ** 2", "512");
+    expect("numbers with underscores, 0b and 0o", "1_000 + 0b101 + 0o17", "1020");
+    expect("a plain call's this is the global object, and undefined in strict code",
+           "(function(){ function p() { return this; } function s() { 'use strict'; return this; }"
+           " return (p() === globalThis) + ',' + s(); })()", "true,undefined");
+    expect("\\u escapes are the characters they name", "'\\u00e9' === 'é' && '\\u{1F600}'.length === 4",
+           "true");
+    expect("eval sees the variables round it, and Function builds at the top level",
+           "(function(){ var v = 4; return eval('v * 2') + Function('a', 'b', 'return a + b')(1, 2); })()",
+           "11");
+    expect("a pattern right after a block's closing brace",
+           "(function(){ var r; try {} catch (e) {} /a+/.test('xaa') ? r = 'yes' : r = 'no'; return r; })()",
+           "yes");
+    script("with makes an object's properties names",
+           "var o = { a: 1 }; with (o) { a = a + 1; } var result = o.a;", "2");
+    {
+        /* Nested past what the machine's stack can walk: refused with a
+           message, where it used to run the program off the end of its
+           stack. */
+        ran++;
+        static char deep[40010];
+        int w = 0;
+        for (int i = 0; i < 20000; i++) deep[w++] = '[';
+        for (int i = 0; i < 20000; i++) deep[w++] = ']';
+        deep[w] = 0;
+        jctx J;
+        js_init(&J);
+        int ok = js_run(&J, deep, (u32)w);
+        const char *want = "this script is nested too deeply to read";
+        int said = !ok;
+        for (int i = 0; said && want[i]; i++) if (J.error[i] != want[i]) said = 0;
+        puts(said ? "  PASS  " : "  FAIL  ");
+        puts("twenty thousand nested brackets are refused, not the end of the program");
+        putc('\n');
+        if (!said) failed++;
+        js_done(&J);
+    }
+    expect("while two hundred nested brackets are an ordinary array",
+           "(function(){ var s = ''; for (var i = 0; i < 200; i++) s += '['; s += '1';"
+           " for (var i = 0; i < 200; i++) s += ']'; var a = eval(s);"
+           " for (var i = 0; i < 199; i++) a = a[0]; return a[0]; })()", "1");
 
     /* The count, at the end. It used to be printed half way down, so every
        case after the regular expressions ran without being counted, and a

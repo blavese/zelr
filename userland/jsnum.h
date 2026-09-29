@@ -383,3 +383,95 @@ static int js_shortest(double d, char *out, int *exp10) {
     *exp10 = first;
     return n;
 }
+
+/* --- numbers as text -----------------------------------------------------
+ *
+ * The shortest decimal that reads back as the same double, which is what the
+ * standard asks for: 0.1 + 0.2 is 0.30000000000000004, because that is the
+ * number it is, and 0.3 is 0.3. The digits come from js_shortest; this is
+ * only where the point goes. Here rather than with the evaluator because the
+ * parser needs it too: a number written as a property's name is the text of
+ * the number, {1.5: x} is the key "1.5".
+ *
+ * It printed fifteen digits, rounded, which made 0.1 + 0.2 look like 0.3
+ * to a script that was being told the two were different. Before that it
+ * cut after ten places rather than rounding, and 0.57 came out as
+ * 0.5699999999 on every page that showed a price.
+ */
+static u32 js_num_text(double d, char *out, u32 cap) {
+    u32 w = 0;
+    if (cap < 32) { if (cap) out[0] = 0; return 0; }
+
+    /* Not a number and the infinities, which compare false against
+       themselves and against everything else. */
+    if (d != d) {
+        const char *s = "NaN";
+        while (*s) out[w++] = *s++;
+        out[w] = 0;
+        return w;
+    }
+    if ((d - d) != (d - d)) {                    /* infinite: inf - inf is NaN */
+        const char *s = d < 0 ? "-Infinity" : "Infinity";
+        while (*s) out[w++] = *s++;
+        out[w] = 0;
+        return w;
+    }
+
+    int neg = d < 0;
+    if (neg) d = -d;
+
+    /* Whole, and small enough that a double holds it exactly. */
+    if (d < 9007199254740992.0 && d == (double)(long long)d) {
+        long long v = (long long)d;
+        char rev[24];
+        int r = 0;
+        if (!v) rev[r++] = '0';
+        while (v) { rev[r++] = (char)('0' + (int)(v % 10)); v /= 10; }
+        if (neg) out[w++] = '-';
+        while (r) out[w++] = rev[--r];
+        out[w] = 0;
+        return w;
+    }
+
+    char dig[18];
+    int e = 0;
+    int n = js_shortest(d, dig, &e);
+
+    if (neg) out[w++] = '-';
+
+    /* Very large or very small, where a plain decimal would be mostly
+       zeros: one digit, the rest after a point, and the power of ten. */
+    if (e >= 21 || e < -6) {
+        out[w++] = dig[0];
+        if (n > 1) {
+            out[w++] = '.';
+            for (int i = 1; i < n; i++) out[w++] = dig[i];
+        }
+        out[w++] = 'e';
+        if (e < 0) { out[w++] = '-'; e = -e; } else out[w++] = '+';
+        char rev[8];
+        int r = 0;
+        if (!e) rev[r++] = '0';
+        while (e) { rev[r++] = (char)('0' + e % 10); e /= 10; }
+        while (r) out[w++] = rev[--r];
+        out[w] = 0;
+        return w;
+    }
+
+    if (e >= 0) {
+        /* e + 1 digits before the point, padded with zeros if the number
+           ran out of significant ones first. */
+        for (int i = 0; i <= e; i++) out[w++] = i < n ? dig[i] : '0';
+        if (n > e + 1) {
+            out[w++] = '.';
+            for (int i = e + 1; i < n; i++) out[w++] = dig[i];
+        }
+    } else {
+        out[w++] = '0';
+        out[w++] = '.';
+        for (int i = 0; i < -e - 1; i++) out[w++] = '0';
+        for (int i = 0; i < n; i++) out[w++] = dig[i];
+    }
+    out[w] = 0;
+    return w;
+}
