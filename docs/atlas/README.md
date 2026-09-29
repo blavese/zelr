@@ -123,7 +123,15 @@ numbered files are still to 6048716; where they disagree with this list, this li
   mapped at start (`map`, paid for a page at a time) instead of declared: the browser's loaded size went
   from 26.8 MB to 5.9 MB, after it had stopped starting on termcheck's 64 MB machine with other programs
   open (the gate failed twice on that).
-- **Checks.** layouttest 161 (six more for the colours and hiding). layouttest 155 (16 new: :root variables, the nearest one inherited, fallback, a length from a
+- **Promised pages (03).** A system call given a buffer in a page the program was promised but has not
+  touched -- a mapping, or the stack below where it has grown to -- is handed the page (`user_range_ok` calls
+  `user_fault_fill`), as touching it would have; it was refused as a bad pointer, and with the browser's
+  buffers mapped every network read into a fresh page failed (five browser steps of the gate). A signal
+  frame that reaches below the last touched stack page is filled the same way (`stack_is_there`); the
+  program was ended instead.
+- **Checks.** maptest and sigtest one more each (a call writing into an untouched mapped page; a signal
+  raised with the stack at the top of an untouched mapping), each seen failing with its fix taken out.
+  layouttest 161 (six more for the colours and hiding). layouttest 155 (16 new: :root variables, the nearest one inherited, fallback, a length from a
   variable, a variable made of another, calc less, min, clamp, calc products, masks, @import past @charset,
   print imports skipped, an import's media, the missing picture's frame and its alt text, one without a
   size), each seen failing on its own broken build; the :root check needed a page with a real `<body>` and

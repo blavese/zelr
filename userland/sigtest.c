@@ -261,6 +261,36 @@ int main(int argc, char **argv) {
     ok("exec gives the new program a fresh floating point state", probed == 0);
     if (probed != 0) { puts("      the probe exited with "); putn(probed); putc('\n'); }
 
+    /* --- delivered onto a stack page not yet touched ---------------------- */
+    //
+    // The frame goes below the stack pointer, so a signal that arrives with
+    // the stack at the foot of its last touched page needs the next one
+    // down, which the program was promised but has not reached. It was
+    // refused as no stack at all, and the program ended. The child moves
+    // its stack to the top of a fresh mapping, where nothing is touched,
+    // and raises one against itself from there.
+    int low = fork();
+    if (low == 0) {
+        signal(SIGTERM, on_signal);
+        caught = 0;
+        resend = 0;
+        char *m = (char *)map(64 * 1024, PROT_READ | PROT_WRITE);
+        if (!m) exit(71);
+        zelr_word top = (zelr_word)(m + 64 * 1024);
+        zelr_word r = SYS_SIGSEND;
+        __asm__ volatile ("mov %%rsp, %%r12\n"
+                          "mov %[top], %%rsp\n"
+                          "int $0x80\n"
+                          "mov %%r12, %%rsp\n"
+                          : "+a"(r)
+                          : "b"((zelr_word)getpid()), "c"((zelr_word)SIGTERM), [top] "d"(top)
+                          : "r12", "memory");
+        exit(caught == 1 ? 0 : 72);
+    }
+    int lowst = wait_for(low);
+    ok("a signal can be delivered onto a stack page not yet touched", lowst == 0);
+    if (lowst != 0) { puts("      the child exited with "); putn(lowst); putc('\n'); }
+
     puts(fails ? "SIGTEST_FAIL\n" : "SIGTEST_PASS\n");
     return fails ? 1 : 0;
 }

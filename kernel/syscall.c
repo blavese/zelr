@@ -60,7 +60,14 @@ static bool user_range_ok(u64 addr, u64 len) {
 
     u64 dir = paging_current_directory();
     for (u64 a = addr & ~0xFFFull; a < addr + len; a += PAGE_SIZE) {
-        if (!virt_is_user_in(dir, a)) return false;
+        if (virt_is_user_in(dir, a)) continue;
+        /* A page the program was promised and has not touched yet -- a
+           mapping, or the stack below where it has grown to -- is its own
+           all the same: handed over now, as it would have been had the
+           program touched it first. Refused, a buffer the program mapped
+           and gave straight to a call (a page's worth of network data
+           received into it) failed as if it were a bad pointer. */
+        if (!user_fault_fill(a, 0) || !virt_is_user_in(dir, a)) return false;
     }
     return true;
 }

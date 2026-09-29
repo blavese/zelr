@@ -87,6 +87,20 @@ int main(void) {
         if (p[i * MEG] != (char)(i + 1)) kept = 0;
     ok("and what was written to it stays written", kept);
 
+    /* --- a call writing into a page not yet touched ---------------------- */
+    //
+    // A page the program was promised is its own before it touches it, so
+    // a system call can write its answer there. It was refused as a bad
+    // pointer: the browser maps its page buffer and receives the network's
+    // bytes straight into it.
+    char here[128];
+    int hl = getcwd(here, (int)sizeof(here));
+    char *fresh = p + 50 * MEG + 123;          /* never touched */
+    int fl = getcwd(fresh, 128);
+    int same = hl > 0 && fl == hl;
+    for (int i = 0; same && i <= hl; i++) if (fresh[i] != here[i]) same = 0;
+    ok("a call can write into a mapped page the program has not touched", same);
+
     /* --- the end of it is the end of it --------------------------------- */
     //
     // One page past the mapping. A kernel that answers every fault by

@@ -1,4 +1,5 @@
 #include "signal.h"
+#include "user.h"
 #include "fd.h"
 #include "gdt.h"
 #include "paging.h"
@@ -161,11 +162,17 @@ void signal_take_pending(void) {
    kernel can report against the program that caused it.
 
    A program that has run its stack down to the last page is the case this
-   is about, and the answer for it is that the signal cannot be delivered. */
+   is about, and the answer for it is that the signal cannot be delivered.
+   A page below where the stack has grown to so far is not that case: the
+   program was promised it, and would have had it by touching it, so it is
+   filled here. Refused, a signal that arrived with the stack near the foot
+   of its last touched page ended the program. */
 static bool stack_is_there(u64 lo, u64 hi) {
     u64 dir = paging_current_directory();
-    for (u64 a = lo & ~0xFFFull; a < hi; a += PAGE_SIZE)
-        if (!virt_is_user_in(dir, a)) return false;
+    for (u64 a = lo & ~0xFFFull; a < hi; a += PAGE_SIZE) {
+        if (virt_is_user_in(dir, a)) continue;
+        if (!user_fault_fill(a, 2) || !virt_is_user_in(dir, a)) return false;
+    }
     return true;
 }
 
