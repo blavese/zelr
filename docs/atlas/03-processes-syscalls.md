@@ -192,7 +192,7 @@ Handlers (each `static i64 sys_*(registers_t *r)`), arguments come in rbx/rcx/rd
 
 **Dispatch table** `TABLE[]` (syscall.c:1021-1085), designated-initializer array indexed by number. `N_SYSCALLS = sizeof(TABLE)/sizeof(TABLE[0])`. `syscall_handler(r)` (syscall.c:1089): `served++`; reads `n = r->rax`; if `n >= N_SYSCALLS || !TABLE[n]` → `r->rax = -1`; else `r->rax = TABLE[n](r)`. `syscall_init` registers it on vector 0x80. `served`/`syscall_count()`.
 
-`N_SYSCALLS` = size of the array = highest index + 1. Highest number in the table is 63 (SYS_POLL), so `N_SYSCALLS == 64` (since 0.44.0 the highest is 64, SYS_WIN_ESCAPE, and `N_SYSCALLS == 65`; since 0.51.0 65, SYS_WIN_WAIT, and 66; since 0.55.0 66, SYS_WIN_COMMIT_RECT, and 67). Retired 44 and the never-populated slots 56/57 are NULL entries → return -1 (see §10 for the 56/57 subtlety -- they ARE populated).
+`N_SYSCALLS` = size of the array = highest index + 1. Highest number in the table is 63 (SYS_POLL), so `N_SYSCALLS == 64` (since 0.44.0 the highest is 64, SYS_WIN_ESCAPE, and `N_SYSCALLS == 65`; since 0.51.0 65, SYS_WIN_WAIT, and 66; since 0.55.0 66, SYS_WIN_COMMIT_RECT, and 67; since 0.76.0 67, SYS_RANDOM, and 68). Retired 44 and the never-populated slots 56/57 are NULL entries → return -1 (see §10 for the 56/57 subtlety -- they ARE populated).
 
 ### kernel/user.c
 
@@ -401,6 +401,7 @@ Complete table (number, kernel handler, sdk wrapper, args → return):
 | 62 | sys_rename | zelr_rename/rename | rbx=from, rcx=to | 0/-1 |
 | 63 | sys_poll | poll | rbx=pollfd[], rcx=n, rdx=timeout_ms | ready count / 0 / -1 (n≤POLL_MAX 16) |
 | 64 | sys_win_escape (0.44.0) | win_want_escape | rbx=handle | 0 / -1 (not the caller's window); sets `window_t.wants_escape` through `winsrv_want_escape` |
+| 67 | sys_random (0.76.0) | random_bytes | rbx=buf, rcx=len | bytes written (at most 64 KiB, `RANDOM_CALL_MAX`) / -1; from the kernel's generator |
 | 65 | sys_win_wait (0.51.0) | win_wait | rbx=handle, rcx=timeout ms | 1 an event is queued (or the window is gone: a close), 0 timed out, -1 not the caller's window. Returns at once when something is queued or the timeout is 0; otherwise `wait_on(window record, ms)`, a negative or longer timeout being 1000 ms, because a signal wakes the task's own channel and the call has to come back to be ended. `wm_push_event` wakes the window record (every path, the folded move and the full queue included) and `wm_remove` wakes it before freeing. No lost wakeup: pushing an event takes the kernel lock, which the call holds until `wait_on` yields. |
 
 **Count reconciliation**: 63 distinct populated numbers (0–43, 45–63). 44 retired. `N_SYSCALLS = 64` (highest index 63 + 1). sdk/zelr.h line 11 says "forty-seven system calls" and line 31 of README says "sixty-three system calls" -- see §10. abicheck.py confirms both headers define the same SYS_* names and values (they do -- I verified all 63 match between include/syscall.h and sdk/zelr.h, including the out-of-order block 56/57 placed after 55 in both files, and 58/45/46 defined before the 48–57 block in both).

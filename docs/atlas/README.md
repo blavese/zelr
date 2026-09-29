@@ -95,6 +95,23 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.76.0 (in progress)
+
+- **The document and window layer (11, 12; jsdom.h and the new jsnet.h, jsobs.h, jsurl.h, jswalk.h,
+  jswin.h).** A page's nodes as the standard's objects (Node, Element, the interface prototypes, custom
+  elements), events that capture and bubble, navigator as this browser is (user agent "zelr"), cookies
+  through the browser's jar (HttpOnly hidden), URL and URLSearchParams, location and history, the
+  window's clock (performance, requestAnimationFrame), sizes, scroll, matchMedia and getComputedStyle,
+  localStorage and sessionStorage (in memory, per origin), fetch with Headers, Request, Response,
+  FormData and AbortController (XMLHttpRequest in jsnet.h, replies to 4 MB), the Mutation, Intersection
+  and Resize observers, crypto.getRandomValues and randomUUID on the new system call 67
+  (`SYS_RANDOM`, `random_bytes`, capped at 64 KiB a call; a self test through a ring 3 program), TreeWalker
+  and NodeIterator, DOMParser for HTML, data: and blob: addresses, Blob and File. Scripts see the page's own
+  `<html>` as the document element (the parser keeps a root of its own above it, which the layout styles
+  once). Script files to 4 MB (mapped), 64 a page, 6 MB in all, run only when the machine has room.
+  pagetest 211 (was 87). Not there: XML documents, SubtleCrypto, attachShadow, request headers a page
+  sets, methods other than GET and POST, FileReader. The page's 24 MB script memory with nothing freed is
+  now the most common stop on big sites (js.h, `JS_MEM_CAP`).
 ### 0.75.0
 
 - **Auto margins, and columns lined up (11).** In a row, auto margins take the room left after growing and
