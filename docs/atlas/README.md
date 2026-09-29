@@ -118,6 +118,23 @@ numbered files are still to 6048716; where they disagree with this list, this li
   `lay_flex_line`); the `flex` shorthand read whole (`P_FLEX`: `flex: 1` is 1 1 0, so columns come out of
   one width) with `flex-basis` and `flex-shrink` (0 holds its width); `aspect-ratio` (a box with no height
   as tall as its width says). layouttest: each.
+- **Flex items sized as CSS sizes them (11).** A basis is where an item starts, not a floor or a ceiling: an
+  item stops at its contents' width however small its basis (`flex: 1 1 0` beside a long menu had left
+  Nature's logo a stripe), and whether a line grows or shrinks is decided by where the items would stop
+  (`lay_flex_line`: one whose share of the room leaves it below its floor is held there and the rest shared
+  again). A row being measured reports its items and gaps, not the room it would justify them across (a
+  row pushed to its end measured as wide as whatever held it). A box without a width measured as narrow as
+  it goes keeps its padding round what is in it, past the room it was measured in. A percentage of a width
+  still being worked out is auto (`lay_pct_cyclic`, CSS's cyclic percentages): a width while measuring,
+  unless it is the element asked about (`lctx.measure_root`, set by `lay_measure` only when the room is
+  known) or its parent has a width of its own; a percentage basis likewise (`cstyle.basis_pct`). MDN's
+  sidebar button (width: 100% in a host as wide as its contents) had taken half of every breadcrumb bar,
+  and Spotify's cards (a column of basis 100%) the whole page each. layouttest: each, seen failing.
+- **Words straight inside a flex row or a grid (11).** An item of their own, as CSS has them
+  (`lay_items_next` returns a text node that is not only space; `lay_block` lays one out as a line;
+  `lay_style` gives a text node its parent's inherited style). They were dropped: `<a style="display:
+  flex">Sign in</a>` drew nothing, and W3C's, Mozilla's and Microsoft's menus had no words (atlas 11 §10
+  12). layouttest: a row, a row of words alone, a grid.
 
 ### 0.73.0
 

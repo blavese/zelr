@@ -1505,6 +1505,51 @@ int main(void) {
             e && e->x >= 500 && e->x + e->w <= 800 && e->w >= 250, e ? e->x * 1000 + e->w : -1);
     }
 
+    /* --- a row pushed to its end, measured ------------------------------------ */
+    {
+        lay("<style>.ib{display:inline-block;background:#000}.row{display:flex;justify-content:flex-end;gap:10px}"
+            ".s{width:50px;height:10px;background:#fff}</style>"
+            "<div class=ib id=ib><div class=row><div class=s></div><div class=s></div></div></div>", 800);
+        const litem *ib = box_of(by_id("ib"));
+        okn("a row pushed to its end is as wide as its items when measured", ib && ib->w == 110, ib ? ib->w : -1);
+    }
+
+    /* --- a percentage of a width worked out from the contents --------------- */
+    {
+        lay("<style>.bar{display:flex}.host{display:inline-flex}.b{width:100%;padding:4px;background:#000}"
+            ".i{display:block;width:20px;height:20px;background:#fff}.rest{flex:1;background:#888;height:10px}</style>"
+            "<div class=bar><div><span class=host><span class=b id=pb><span class=i></span></span></span></div>"
+            "<div class=rest id=pr></div></div>", 800);
+        const litem *pb = box_of(by_id("pb")), *pr = box_of(by_id("pr"));
+        okn("width: 100% inside a box sized by its contents counts as auto",
+            pb && pb->w == 28 && pr && pr->x < 100, pb ? pb->w : -1);
+        lay("<style>.w{width:400px}.p{width:150%;height:10px;background:#000}.ib{display:inline-block;background:#888}</style>"
+            "<div class=ib id=qb><div class=w><div class=p id=pq></div></div></div>", 800);
+        const litem *pq = box_of(by_id("pq")), *qb = box_of(by_id("qb"));
+        okn("a percentage inside a width of its own still counts", pq && qb && qb->w == 600,
+            qb ? qb->w : -1);
+    }
+
+    /* --- a box squeezed keeps its padding ---------------------------------------- */
+    {
+        lay("<style>.r{display:flex;width:300px}.w{width:400px;height:10px;background:#000}"
+            ".b{padding:6px;background:#888}.g{display:block;width:24px;height:24px;background:#fff}</style>"
+            "<div class=r><div class=w></div><div class=b id=pb2><span class=g></span></div></div>", 800);
+        const litem *pb2 = box_of(by_id("pb2"));
+        okn("squeezed, a box keeps its padding round what is in it", pb2 && pb2->w == 36, pb2 ? pb2->w : -1);
+    }
+
+    /* --- words straight inside a row ------------------------------------------ */
+    {
+        lay("<style>.l{display:flex;align-items:center}.g{display:grid}.k{width:10px;height:10px;background:#000}</style>"
+            "<a class=l href=x>Standards <span class=k id=ar></span></a><div class=l>alone</div>"
+            "<div class=g>gridded</div>", 600);
+        const litem *st1 = word("Standards"), *ar = box_of(by_id("ar"));
+        ok("words straight inside a flex row are an item", st1 && ar && ar->x >= st1->x + st1->w);
+        ok("and a row of nothing but words shows them", word("alone") != 0);
+        ok("and so does a grid", word("gridded") != 0);
+    }
+
     /* --- a percentage basis in a row sized by its contents ---------------------- */
     {
         lay("<style>.row{display:flex}.card{display:inline-flex;background:#888}.main{display:flex}"

@@ -315,6 +315,10 @@ typedef struct {
        started from (lay_flex). -1 when there is none. */
     int flex_sized;
 
+    /* The element the innermost lay_measure was asked about, which is sized
+       from the room it was measured in (lay_pct_cyclic). -1 outside one. */
+    int measure_root;
+
     /* Boxes sitting on the line being built as one piece -- an inline-block,
        laid out as a block and placed like a word -- which the end of the line
        moves together rather than dropping each thing inside onto the
@@ -1059,6 +1063,9 @@ static inline void lay_style(lctx *L, int el, const cstyle *parent,
     css_inherit(out, parent);
     css_parent_h = parent->height < 0 ? -1
                  : parent->height - (parent->border_box ? parent->pt + parent->pb + parent->bt + parent->bb : 0);
+    /* Words have no rules of their own: what they inherit is their style
+       (words that are a flex or grid item, lay_items_next). */
+    if (el < 0 || el >= L->d->count || L->d->nodes[el].kind != DN_ELEMENT) return;
     /* The browser's own rules, then what the markup says about itself, then
        the page's sheets: an author's rule beats the browser's whatever
        either's specificity, which is the order the cascade has always had
@@ -1149,6 +1156,18 @@ static void lay_block(lctx *L, int node, const cstyle *parent, int x,
 static int lay_measure(lctx *L, int node, const cstyle *parent, int avail,
                        int *height);
 
+/* A percentage of a width that is being worked out from what is inside it
+   cannot be taken, and counts as auto, as pictures' already did: MDN's
+   sidebar button is width: 100% inside a host as wide as its contents, and
+   measured as 100% of the row it was in it took half of every page's
+   breadcrumb bar. What was asked about is sized from the room it was
+   measured in, so its own percentage still counts, and so does one inside
+   a parent with a width of its own. */
+static inline int lay_pct_cyclic(const lctx *L, int node, const cstyle *st, const cstyle *parent) {
+    return L->measuring && st->width_pct && node != L->measure_root
+        && (!parent || parent->width < 0 || parent->width_pct);
+}
+
 /* Something written for a screen reader and not for the eye: clipped to
    nothing, or a box a pixel or two across whose overflow is hidden. */
 static inline int lay_unseen(const cstyle *st) {
@@ -1173,6 +1192,7 @@ static void lay_inline_piece(lctx *L, int at, const cstyle *parent, int pin, int
     if (!pin) {
         int frame = st.pl + st.pr + st.bl + st.br;
         int mw = (st.ml > 0 ? st.ml : 0) + (st.mr > 0 ? st.mr : 0);
+        if (lay_pct_cyclic(L, at, &st, parent)) st.width = -1;
         if (st.width >= 0) {
             w = st.width + (st.border_box ? 0 : frame) + mw;
         } else if (L->measuring) {
@@ -1989,6 +2009,19 @@ static int lay_items_next(lctx *L, litems *it, int cw, int *par, int *positioned
         int c = it->at[it->depth];
         if (c < 0) { it->depth--; continue; }
         it->at[it->depth] = d->nodes[c].next;
+        /* Words written straight into the row are an item of their own, as
+           CSS has them: `<a style="display: flex">Sign in</a>` and W3C's
+           menu, words beside an arrow, were dropped whole, the words never
+           being an element. Only space between the elements is nothing. */
+        if (d->nodes[c].kind == DN_TEXT) {
+            const char *t = d->nodes[c].text >= 0 ? d->arena + d->nodes[c].text : "";
+            while (*t && css_space(*t)) t++;
+            if (!*t) continue;
+            *par = it->from[it->depth];
+            *positioned = 0;
+            it->order = 0;
+            return c;
+        }
         if (d->nodes[c].kind != DN_ELEMENT) continue;
         cstyle own;
         lay_style(L, c, &it->wrap[it->depth], &own, cw);
@@ -2096,12 +2129,16 @@ static int lay_measure(lctx *L, int node, const cstyle *parent, int avail,
        layout that then fits perfectly well. */
     int spilled = L->out->overflowed;
 
-    int s_mright = L->measure_right;
+    int s_mright = L->measure_right, s_root = L->measure_root;
     L->measure_right = 0;
+    /* Unless the room it is measured in is itself being worked out: a flex
+       item measured while its row is. */
+    L->measure_root = L->measuring == 0 || (parent && parent->width >= 0 && !parent->width_pct) ? node : -1;
     L->measuring++;
     int y = 0;
     lay_block(L, node, parent, 0, avail, &y);
     L->measuring--;
+    L->measure_root = s_root;
 
     int right = L->measure_right;
     for (int i = items; i < L->out->nitems; i++) {
@@ -2268,6 +2305,11 @@ static void lay_flex_line(lctx *L, const cstyle *st, const int *kid, const int *
     if (L->measuring) {
         int tallest = 0;
         for (int i = 0; i < n; i++) if (high[i] > tallest) tallest = high[i];
+        /* And without the room it would be spread over: a row pushed to its
+           end reached the end of whatever it was measured in, and Nature's
+           menu, measured so, took the logo's place beside it. */
+        pen = cx;
+        between = gap;
         for (int idx = 0; idx < n; idx++) {
             int i = reverse ? n - 1 - idx : idx;
             int reach = pen + (meas[i] < want[i] ? meas[i] : want[i]);
@@ -2378,6 +2420,7 @@ static void lay_flex(lctx *L, int node, const cstyle *st, int cx, int cw,
 
             cstyle own;
             lay_style(L, kid[i], ps, &own, cw);
+            if (lay_pct_cyclic(L, kid[i], &own, st)) own.width = -1;
             if (own.width >= 0)
                 w = own.width + (own.border_box ? 0 : own.pl + own.pr + own.bl + own.br)
                   + (own.ml > 0 ? own.ml : 0) + (own.mr > 0 ? own.mr : 0);
@@ -3757,6 +3800,14 @@ static void lay_translate(lctx *L, int node, const cstyle *st, int first) {
 static void lay_block(lctx *L, int node, const cstyle *parent, int x,
                       int avail, int *y) {
     L->out->laid++;
+    /* Words that are an item of a row or a grid: a line of them, as wide as
+       the item was made. */
+    if (L->d->nodes[node].kind != DN_ELEMENT) {
+        lay_line_start(L, *y, x, avail, parent->align);
+        lay_inline(L, node, parent, y);
+        lay_line_end(L, y);
+        return;
+    }
     cstyle probe;
     lay_style(L, node, parent, &probe, avail);
     if (probe.display == D_NONE) return;
@@ -3870,6 +3921,7 @@ static void lay_block_placed(lctx *L, int node, const cstyle *parent, int x,
        and a border-box one exactly its frame too wide. */
     int frame = st.pl + st.pr + st.bl + st.br;
     int want = st.width;
+    if (lay_pct_cyclic(L, node, &st, parent)) want = -1;
     /* A flex item's width is where its row began, not where it ended: the
        row grew it or shrank it from there and hands over the result as
        avail. Taking the width again undid that -- an item that asked to
@@ -4083,7 +4135,12 @@ static void lay_block_placed(lctx *L, int node, const cstyle *parent, int x,
             if (r > right) right = r;
         }
         int edge = want >= 0 || is_table ? x + ml + box_w : right + st.pr + st.br;
-        if (edge > x + ml + box_w) edge = x + ml + box_w;
+        /* A box with a width of its own ends there; one without ends where
+           what is in it ends, and its padding after that, even past the room
+           it was measured in: measured as narrow as it goes, a button round
+           an icon of 24 pixels is 24 and its padding, and cut to the room it
+           lost its padding and was squeezed by that much. */
+        if (edge > x + ml + box_w && (want >= 0 || is_table)) edge = x + ml + box_w;
         if (edge < cx) edge = cx + st.pr + st.br;
         shrunk = edge - (x + ml);
         int reach = edge + (st.mr > 0 ? st.mr : 0);
@@ -4198,6 +4255,7 @@ static inline void lay_run(ldoc *out, const ddoc *d, const csheet *s,
     L.pos_x = 0; L.pos_y = 0; L.pos_w = width;
     L.measuring = 0; L.measure_right = 0;
     L.flex_sized = -1;
+    L.measure_root = -1;
     L.ngroups = 0;
     L.cont_left = 0; L.cont_width = width;
     L.fl_seq = 0;
