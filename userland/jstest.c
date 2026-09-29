@@ -816,6 +816,55 @@ int main(void) {
         if (!said) failed++;
         js_done(&J);
     }
+    /* --- classes ----------------------------------------------------------- */
+    expect("a class with a constructor, a method and a static method",
+           "(function(){ class P { constructor(x) { this.x = x; } twice() { return this.x * 2; }"
+           " static make() { return new P(4); } } return P.make().twice(); })()", "8");
+    expect("extends, super() and super.method()",
+           "(function(){ class A { constructor(v) { this.v = v; } m() { return 'a' + this.v; } }"
+           " class B extends A { constructor(v) { super(v + 1); } m() { return super.m() + 'b'; } }"
+           " return new B(1).m(); })()", "a2b");
+    expect("a static method is inherited, and super reaches the parent's",
+           "(function(){ class A { static who() { return 'A'; } }"
+           " class B extends A { static who() { return super.who() + 'B'; } } return B.who(); })()", "AB");
+    expect("fields, on each instance and on the class",
+           "(function(){ class C { a = 1; b = this.a + 1; static s = 5; }"
+           " var c = new C(); return [c.a, c.b, C.s, Object.keys(c)].join(); })()", "1,2,5,a,b");
+    expect("a subclass's fields come after super() returns",
+           "(function(){ class A { x = 1; } class B extends A { y = this.x + 1; constructor() { super(); this.z = this.y + 1; } }"
+           " var b = new B(); return [b.x, b.y, b.z].join(); })()", "1,2,3");
+    expect("getters and setters in a class",
+           "(function(){ class T { get v() { return this._v * 10; } set v(x) { this._v = x; } }"
+           " var t = new T(); t.v = 4; return t.v; })()", "40");
+    expect("#private fields and methods, seen only from inside, and #x in",
+           "(function(){ class K { #n = 3; #dbl() { return this.#n * 2; } get() { return this.#dbl(); }"
+           " static has(o) { return #n in o; } }"
+           " var k = new K(); return [k.get(), K.has(k), K.has({}), Object.keys(k).length, k['#n']].join(); })()",
+           "6,true,false,0,");
+    expect("a static block runs once, with the class as this",
+           "(function(){ class S { static n = 1; static { this.n += 1; } } return S.n; })()", "2");
+    expect("new.target is the class new was given",
+           "(function(){ class A { constructor() { this.t = new.target === B; } } class B extends A {}"
+           " return new B().t; })()", "true");
+    expect("instanceof walks the whole chain",
+           "(function(){ class A {} class B extends A {} class C extends B {} var c = new C();"
+           " return [c instanceof A, c instanceof B, new A() instanceof C].join(); })()", "true,true,false");
+    expect("a class cannot be called without new",
+           "(function(){ class A {} try { A(); return 'called'; } catch (e) { return e.name; } })()", "TypeError");
+    expect("a class that extends Error is an Error with its message",
+           "(function(){ class E extends Error { constructor(m) { super(m); this.name = 'E'; } }"
+           " var e = new E('boom'); return [e instanceof Error, e instanceof E, e.message, String(e)].join(); })()",
+           "true,true,boom,E: boom");
+    expect("a class expression, and a class's name",
+           "(function(){ var K = class { f() { return 1; } }; class N {} return new K().f() + N.name + K.name; })()",
+           "1NK");
+    expect("a derived constructor that never calls super is an error",
+           "(function(){ class A {} class B extends A { constructor() {} }"
+           " try { new B(); return 'made'; } catch (e) { return e.name; } })()", "ReferenceError");
+    expect("an old-style constructor's prototype is shared by what it makes",
+           "(function(){ function F() {} F.prototype.hi = function(){ return 'hi'; };"
+           " var f = new F(); return f.hi() + (f.constructor === F) + (Object.getPrototypeOf(f) === F.prototype); })()",
+           "hitruetrue");
     expect("while two hundred nested brackets are an ordinary array",
            "(function(){ var s = ''; for (var i = 0; i < 200; i++) s += '['; s += '1';"
            " for (var i = 0; i < 200; i++) s += ']'; var a = eval(s);"
