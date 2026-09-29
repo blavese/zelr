@@ -92,8 +92,11 @@
 
 /* And what a script asks for while the page is up. Its own buffer, because
    a reply arriving must not write over the text of the script that asked
-   for it -- which is exactly what sharing one would do. */
-#define REPLY_MAX   (128 * 1024)
+   for it -- which is exactly what sharing one would do. Mapped, and as large
+   as a script file, because what a page's fetch asks for is as often a
+   megabyte of JSON as a line of text, and a reply cut short is JSON that
+   will not parse. */
+#define REPLY_MAX   (4 * 1024 * 1024)
 
 /* How many a page may make. A page in a loop asking forever is a page
    that holds the machine on the network rather than on the processor,
@@ -112,7 +115,7 @@
 static char *src;
 static char *cssbuf;
 static char *scriptbuf;              /* mapped, SCRIPT_MAX */
-static char replybuf[REPLY_MAX];
+static char *replybuf;               /* mapped, REPLY_MAX */
 static int  scripts_outside;
 static int  scripts_bytes;           /* what they came to, for SCRIPTS_BYTES */
 static int  asks_made;
@@ -825,10 +828,15 @@ static int fetch_script(const char *src, const char **out) {
  * The address is resolved against the page, so a script may ask for a path
  * the way it would write one in a link. */
 static int do_request(const char *method, const char *url, const char *body,
-                      const char *type, const char **out, int *status) {
-    *out = 0;
-    *status = 0;
-    if (asks_made >= ASKS_MAX) return 0;
+                      const char *type, jd_reply *out) {
+    static char landed[URL_TEXT];
+    static char ctype[64];
+    out->body = 0;
+    out->len = 0;
+    out->status = 0;
+    out->type = 0;
+    out->url = 0;
+    if (asks_made >= ASKS_MAX || !replybuf) return 0;
 
     url_t u;
     if (!url_join(&here, url, &u)) return 0;
@@ -841,9 +849,17 @@ static int do_request(const char *method, const char *url, const char *body,
     web_body_type = 0;
 
     asks_made++;
-    *status = rc;
-    if (rc <= 0 || r.len <= 0) return 0;
-    *out = r.body;
+    out->status = rc;
+    if (rc <= 0) return 0;
+    /* Where it ended up, after any redirect (web_send follows them in u),
+       and what the server said it was. */
+    url_text(&u, landed, sizeof(landed));
+    w_copy(ctype, sizeof(ctype), r.ctype, sizeof(ctype));
+    out->url = landed;
+    out->type = ctype;
+    if (r.len <= 0) return 0;
+    out->body = r.body;
+    out->len = r.len;
     return r.len;
 }
 
@@ -1946,6 +1962,7 @@ int main(int argc, char **argv) {
     src = (char *)map(SRC_MAX, PROT_READ | PROT_WRITE);
     cssbuf = (char *)map(CSS_MAX, PROT_READ | PROT_WRITE);
     scriptbuf = (char *)map(SCRIPT_MAX, PROT_READ | PROT_WRITE);
+    replybuf = (char *)map(REPLY_MAX, PROT_READ | PROT_WRITE);
     doc_mem = (ddoc *)map(sizeof(ddoc), PROT_READ | PROT_WRITE);
     sheet_mem = (csheet *)map(sizeof(csheet), PROT_READ | PROT_WRITE);
     page_mem = (ldoc *)map(sizeof(ldoc), PROT_READ | PROT_WRITE);

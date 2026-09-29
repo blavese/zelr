@@ -131,10 +131,8 @@ static void jd_beacon_due(jval arg) {
     if (!js_is_obj(arg) || arg.obj->kind != JO_ARRAY || arg.obj->len < 3 || !jd_do_request) return;
     jval u = arg.obj->items[0], b = arg.obj->items[1], ty = arg.obj->items[2];
     if (u.t != JS_STR) return;
-    const char *out = 0;
-    int status = 0;
-    jd_do_request("POST", u.str->s, b.t == JS_STR ? b.str->s : "", ty.t == JS_STR ? ty.str->s : 0,
-                  &out, &status);
+    jd_reply rp = { 0, 0, 0, 0, 0 };
+    jd_do_request("POST", u.str->s, b.t == JS_STR ? b.str->s : "", ty.t == JS_STR ? ty.str->s : 0, &rp);
 }
 
 static jval nat_nav_beacon(jctx *J, jval t, jval *a, int n) {

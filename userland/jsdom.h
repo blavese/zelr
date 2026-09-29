@@ -4585,6 +4585,9 @@ static void jd_run_timer(jtimer *t) {
         jval arg = t->arg;
         t->used = 0;
         fn(arg);
+        /* The browser's own work may settle a promise from outside any call
+           into the page, and its reactions are owed now. */
+        js_drain(&jd_J);
         return;
     }
     jval fn = t->fn;
@@ -4633,151 +4636,6 @@ static int jsdom_timers(void) {
         if (jd_spent()) break;
     }
     return ran;
-}
-
-/* --- asking the network from a script ---------------------------------------------------------
- *
- * XMLHttpRequest. The request is made on the browser's next pass rather than
- * inside send(), so the code after send() runs before onload does. That is
- * the contract a page is written against, and a request that called back
- * before it returned would break every page that sets its handler after
- * sending. The fetch itself blocks the browser while it happens, which is a
- * stall rather than a lie: nothing is told it finished before it did. */
-#define JD_REQUESTS 16
-
-typedef struct {
-    jobj *self;                  /* the request, which holds its own state */
-    int   waiting;
-} jxhr;
-
-static jxhr jd_req[JD_REQUESTS];
-static int  jd_nreq;
-
-/* How one is actually made. Set by the browser, for the same reason the
-   script fetch is: the network and the page's address are its business.
-   `type` is what the body is, when there is one and it is not a form. */
-static int (*jd_do_request)(const char *method, const char *url, const char *body,
-                            const char *type, const char **out, int *status);
-
-void jsdom_request_with(int (*fn)(const char *, const char *, const char *, const char *,
-                                  const char **, int *)) {
-    jd_do_request = fn;
-}
-
-static int jd_requests_waiting(void) {
-    for (int i = 0; i < jd_nreq; i++) if (jd_req[i].waiting) return 1;
-    return 0;
-}
-
-static const char *jd_prop_str(jobj *o, jstr *key, const char *fallback) {
-    jprop *p = js_find(o, key);
-    if (!p || p->v.t != JS_STR) return fallback;
-    return p->v.str->s;
-}
-
-static jstr *jd_k_method, *jd_k_url, *jd_k_body;
-
-static jval nat_xhr_ctor(jctx *J, jval t, jval *a, int n) {
-    (void)a; (void)n;
-    if (J->new_target.t == JS_UNDEF || !js_is_obj(t))
-        return js_throw(J, JS_ERR_TYPE, "XMLHttpRequest is made with new", J->error_line);
-    jobj *o = t.obj;
-    js_set(J, o, "readyState", js_num(0));
-    js_set(J, o, "status", js_num(0));
-    js_set(J, o, "statusText", jd_str(""));
-    js_set(J, o, "responseText", jd_str(""));
-    js_set(J, o, "response", jd_str(""));
-    js_set(J, o, "responseType", jd_str(""));
-    js_set(J, o, "responseURL", jd_str(""));
-    js_set(J, o, "timeout", js_num(0));
-    js_set(J, o, "withCredentials", js_bool(0));
-    return js_undef();
-}
-
-static void jd_xhr_event(jobj *o, const char *type) {
-    jobj *ev = jd_new_event(jd_evkind("ProgressEvent"), type, 0, 0);
-    if (ev) jd_dispatch_to(ev, js_from_obj(o), js_from_obj(o));
-}
-
-static jval nat_xhr_open(jctx *J, jval t, jval *a, int n) {
-    if (!js_is_obj(t)) return jd_illegal(J);
-    jstr *m = jd_arg_str(J, a, n, 0);
-    jstr *u = jd_arg_str(J, a, n, 1);
-    js_put_prop_flags(J, t.obj, jd_k_method, js_from_str(m), JP_WRITE);
-    js_put_prop_flags(J, t.obj, jd_k_url, js_from_str(u), JP_WRITE);
-    js_set(J, t.obj, "readyState", js_num(1));
-    jd_xhr_event(t.obj, "readystatechange");
-    return js_undef();
-}
-
-/* Accepted and dropped. A header this browser does not send is better than a
-   method that refuses a page for asking. */
-static jval nat_xhr_header(jctx *J, jval t, jval *a, int n) {
-    (void)J; (void)t; (void)a; (void)n;
-    return js_undef();
-}
-
-static jval nat_xhr_send(jctx *J, jval t, jval *a, int n) {
-    if (!js_is_obj(t)) return jd_illegal(J);
-    if (n > 0 && a[0].t != JS_UNDEF && a[0].t != JS_NULL)
-        js_put_prop_flags(J, t.obj, jd_k_body, js_from_str(js_to_str(J, a[0])), JP_WRITE);
-    int slot = -1;
-    for (int i = 0; i < jd_nreq; i++) if (!jd_req[i].waiting) { slot = i; break; }
-    if (slot < 0 && jd_nreq < JD_REQUESTS) slot = jd_nreq++;
-    if (slot < 0) return js_undef();      /* too many at once; silently not sent */
-    jd_req[slot].self = t.obj;
-    jd_req[slot].waiting = 1;
-    return js_undef();
-}
-
-static jval nat_xhr_abort(jctx *J, jval t, jval *a, int n) {
-    (void)J; (void)a; (void)n;
-    for (int i = 0; i < jd_nreq; i++)
-        if (jd_req[i].waiting && js_is_obj(t) && jd_req[i].self == t.obj) jd_req[i].waiting = 0;
-    return js_undef();
-}
-
-static jval nat_xhr_get_header(jctx *J, jval t, jval *a, int n) {
-    (void)J; (void)t; (void)a; (void)n;
-    return js_null();
-}
-
-static jval nat_xhr_all_headers(jctx *J, jval t, jval *a, int n) {
-    (void)J; (void)t; (void)a; (void)n;
-    return jd_str("");
-}
-
-/* Whatever was sent, made. One per pass, because each one blocks the
-   browser while it happens and a page that sent six would otherwise stop
-   for all six at once. */
-__attribute__((unused)) static int jsdom_requests(void) {
-    if (!jd_open || !jd_do_request || jd_spent()) return 0;
-    for (int i = 0; i < jd_nreq; i++) {
-        if (!jd_req[i].waiting) continue;
-        jobj *o = jd_req[i].self;
-        jd_req[i].waiting = 0;
-        if (!o) continue;
-        const char *method = jd_prop_str(o, jd_k_method, "GET");
-        const char *url = jd_prop_str(o, jd_k_url, "");
-        const char *body = jd_prop_str(o, jd_k_body, 0);
-        if (!url[0]) continue;
-        const char *text = 0;
-        int status = 0;
-        int len = jd_do_request(method, url, body, 0, &text, &status);
-        jval resp = len > 0 && text ? js_from_str(js_str_n(&jd_J, text, (u32)len)) : jd_str("");
-        js_set(&jd_J, o, "status", js_num(status > 0 ? status : 0));
-        js_set(&jd_J, o, "readyState", js_num(4));
-        js_set(&jd_J, o, "responseText", resp);
-        js_set(&jd_J, o, "response", resp);
-        jd_xhr_event(o, "readystatechange");
-        /* load either way when the server answered. A page that asked for
-           something it did not get is entitled to find out, and status is
-           where it looks; no answer at all is an error. */
-        jd_xhr_event(o, status > 0 ? "load" : "error");
-        jd_xhr_event(o, "loadend");
-        return 1;
-    }
-    return 0;
 }
 
 /* --- document ----------------------------------------------------------------------------------- */
@@ -5369,8 +5227,10 @@ __attribute__((unused)) static void jsdom_at(const char *address) {
 
 static jobj *jd_interface(jctx *J, const char *name, jobj *parent_proto, jnative ctor, int arity);
 static jobj *jd_ctor_of(jobj *proto);
+static void jd_consts(jctx *J, jobj *on, const char *const *names, int from);
 
 #include "jsurl.h"
+#include "jsnet.h"
 #include "jswin.h"
 
 /* --- the hooks -----------------------------------------------------------------------------------
@@ -6060,8 +5920,6 @@ static void jd_setup(jctx *J) {
     jd_p[JI_NAMEDNODEMAP] = jd_interface(J, "NamedNodeMap", 0, 0, 0);
     jd_p[JI_ATTR] = jd_interface(J, "Attr", jd_p[JI_NODE], 0, 0);
     jd_p[JI_WINDOW] = jd_interface(J, "Window", jd_p[JI_EVENTTARGET], 0, 0);
-    jd_p[JI_XHR] = jd_interface(J, "XMLHttpRequestEventTarget", jd_p[JI_EVENTTARGET], 0, 0);
-    jd_p[JI_XHR] = jd_interface(J, "XMLHttpRequest", jd_p[JI_XHR], nat_xhr_ctor, 0);
     jd_p[JI_DOMRECT] = jd_interface(J, "DOMRectReadOnly", 0, nat_domrect_ctor, 0);
     jd_p[JI_DOMRECT] = jd_interface(J, "DOMRect", jd_p[JI_DOMRECT], nat_domrect_ctor, 0);
 
@@ -6101,17 +5959,6 @@ static void jd_setup(jctx *J) {
     jd_setup_node(J);
     jd_setup_html(J);
 
-    jobj *xp = jd_p[JI_XHR];
-    jd_method(J, xp, "open", nat_xhr_open, 2);
-    jd_method(J, xp, "send", nat_xhr_send, 0);
-    jd_method(J, xp, "setRequestHeader", nat_xhr_header, 2);
-    jd_method(J, xp, "abort", nat_xhr_abort, 0);
-    jd_method(J, xp, "getResponseHeader", nat_xhr_get_header, 1);
-    jd_method(J, xp, "getAllResponseHeaders", nat_xhr_all_headers, 0);
-    jd_method(J, xp, "overrideMimeType", nat_nothing_js, 1);
-    static const char *const XS[] = { "UNSENT", "OPENED", "HEADERS_RECEIVED", "LOADING", "DONE", 0 };
-    jd_consts(J, xp, XS, 0);
-    jd_consts(J, jd_ctor_of(xp), XS, 0);
 
     /* The two element constructors a page may call itself. */
     jobj *img = js_native_n(J, "Image", nat_image_ctor, 0);
@@ -6127,6 +5974,7 @@ static void jd_setup(jctx *J) {
 
     jd_setup_window(J);
     jd_setup_url(J);
+    jd_setup_net(J);
     jd_setup_navigator(J);
     jd_setup_location(J);
     jd_setup_window_more(J);
@@ -6231,9 +6079,6 @@ static int jsdom_open(ddoc *d, csheet *sheet) {
     jd_k_evflags = js_sym_new(&jd_J, "event", 5);
     jd_k_evpath = js_sym_new(&jd_J, "path", 4);
     jd_k_signal = js_sym_new(&jd_J, "signal", 6);
-    jd_k_method = js_sym_new(&jd_J, "method", 6);
-    jd_k_url = js_sym_new(&jd_J, "url", 3);
-    jd_k_body = js_sym_new(&jd_J, "body", 4);
 
     jd_setup(&jd_J);
 

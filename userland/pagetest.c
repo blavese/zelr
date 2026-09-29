@@ -121,10 +121,12 @@ static url_t jar_at;
 static int jar_get(char *out, int cap) { return ck_cookies_for(&jar_at, out, cap, 1); }
 static void jar_set(const char *line) { ck_take_line(&jar_at, line, 1); }
 
-/* Requests a page makes, written down instead of sent. */
+/* Requests a page makes, written down instead of sent, and answered: JSON
+   for an address with "json" in it, a failure for one with "down", and "ok"
+   for the rest. */
 static char asked[512];
 static int fake_request(const char *method, const char *url, const char *body, const char *type,
-                        const char **out, int *status) {
+                        jd_reply *out) {
     int w = 0;
     const char *parts[4] = { method, url, body ? body : "", type ? type : "-" };
     for (int k = 0; k < 4; k++) {
@@ -132,9 +134,17 @@ static int fake_request(const char *method, const char *url, const char *body, c
         for (const char *p = parts[k]; *p && w < (int)sizeof(asked) - 2; p++) asked[w++] = *p;
     }
     asked[w] = 0;
-    *out = "ok";
-    *status = 200;
-    return 2;
+    int json = 0, down = 0;
+    for (const char *p = url; *p; p++) {
+        if (p[0] == 'j' && p[1] == 's' && p[2] == 'o' && p[3] == 'n') json = 1;
+        if (p[0] == 'd' && p[1] == 'o' && p[2] == 'w' && p[3] == 'n') down = 1;
+    }
+    out->url = url;
+    out->type = json ? "application/json" : "text/plain";
+    out->status = down ? 0 : 200;
+    out->body = json ? "{\"n\": 7, \"list\": [1, 2]}" : "ok";
+    out->len = w_len(out->body);
+    return out->len;
 }
 
 /* Where the page sent the browser, and what address it said it was at. */
@@ -1304,6 +1314,80 @@ int main(void) {
                    " s.getPropertyValue('flex-wrap'), s.transition].join(' ');</script></body>"),
             "flex rgb(16, 32, 48) 700 12px nowrap ");
         jsdom_styles_with(0);
+    }
+
+    /* --- asking the network ------------------------------------------------------------
+     *
+     * fetch, Headers, Request, Response, AbortController and FormData, and
+     * XMLHttpRequest's headers and kinds of reply, through the same door. */
+    {
+        jsdom_request_with(fake_request);
+        jsdom_at("https://site.test/page");
+        load("<body><p id=a>none</p><p id=b>none</p><p id=c>none</p><p id=d>none</p><script>"
+             "var put = function(id, v){ document.getElementById(id).textContent = v; };"
+             "fetch('/api/json?x=1').then(function(r){ put('a', [r.status, r.ok, r.headers.get('Content-Type'), r.url].join(' '));"
+             " return r.json(); }).then(function(j){ put('b', j.n + ' ' + j.list.length); });"
+             "fetch('/down').catch(function(e){ put('c', e.name); });"
+             "var ac = new AbortController(); fetch('/slow', { signal: ac.signal })"
+             ".catch(function(e){ put('d', e.name + ' ' + ac.signal.aborted); }); ac.abort();"
+             "document.title = 'sent';</script></body>");
+        char err[128];
+        run_scripts(&page, err, (int)sizeof(err), 0);
+        oks("fetch hands back a promise and asks nothing until the next pass",
+            content_of(dom_by_id(&page, "a")), "none");
+        oks("an abort before it is made refuses it at once, as AbortError",
+            content_of(dom_by_id(&page, "d")), "AbortError true");
+        for (int k = 0; k < 4; k++) jsdom_requests();
+        oks("then the reply comes as a Response", content_of(dom_by_id(&page, "a")),
+            "200 true application/json https://site.test/api/json?x=1");
+        oks("whose body reads as JSON", content_of(dom_by_id(&page, "b")), "7 2");
+        oks("and a request that got no answer is a failed fetch, a TypeError",
+            content_of(dom_by_id(&page, "c")), "TypeError");
+
+        asked[0] = 0;
+        load("<body><script>"
+             "var fd = new FormData(); fd.append('q', 'a b'); fd.append('n', 1);"
+             "fetch('/post', { method: 'POST', body: fd });"
+             "</script></body>");
+        run_scripts(&page, err, (int)sizeof(err), 0);
+        jsdom_requests();
+        oks("a POST's body and its type go out with it", asked,
+            "POST https://site.test/post q=a+b&n=1 application/x-www-form-urlencoded;charset=UTF-8");
+        asked[0] = 0;
+        oks("a method this browser cannot send is refused, not sent as another",
+            titled("<script>fetch('/x', { method: 'PUT' }).catch(function(e){ document.title = e.name + ': ' + e.message; });"
+                   "</script>"),
+            "TypeError: this browser sends only GET and POST");
+        oks("and nothing was sent", asked, "");
+
+        oks("Headers keep names in lower case and join a name given twice",
+            titled("<script>var h = new Headers({ 'X-One': 'a' }); h.append('x-one', 'b'); h.set('Accept', 'text/html');"
+                   "var keys = []; for (var e of h) keys.push(e[0] + '=' + e[1]);"
+                   "var r = new Request('/r', { method: 'post', headers: h });"
+                   "var s = new Response('hi', { status: 201 });"
+                   "document.title = [h.get('X-ONE'), h.has('accept'), keys.join(','), r.method, r.url,"
+                   " r.headers.get('accept'), s.status, s.ok].join(' ');</script>"),
+            "a, b true accept=text/html,x-one=a, b POST https://site.test/r text/html 201 true");
+
+        load("<body><p id=x>none</p><script>"
+             "var q = new XMLHttpRequest(); q.open('GET', '/api/json'); q.responseType = 'json';"
+             "q.setRequestHeader('X-Test', '1');"
+             "q.onload = function(){ document.getElementById('x').textContent ="
+             " [q.status, q.readyState, q.response.n, q.getResponseHeader('content-type'), q.responseURL].join(' '); };"
+             "q.send();</script></body>");
+        run_scripts(&page, err, (int)sizeof(err), 0);
+        jsdom_requests();
+        oks("XMLHttpRequest gives its reply as the kind asked for, with its type and address",
+            content_of(dom_by_id(&page, "x")), "200 4 7 application/json https://site.test/api/json");
+
+        oks("an AbortSignal of its own says it was aborted, and why",
+            titled("<script>var s = AbortSignal.abort(); var heard = 0;"
+                   "var ac = new AbortController(); ac.signal.addEventListener('abort', function(){ heard++; });"
+                   "ac.abort('stop'); ac.abort('again');"
+                   "document.title = [s.aborted, s.reason.name, ac.signal.reason, heard].join(' ');</script>"),
+            "true AbortError stop 1");
+        jsdom_request_with(0);
+        jsdom_at("");
     }
 
     /* --- a script the machine has no room for -------------------------------------
