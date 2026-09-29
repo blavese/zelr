@@ -212,6 +212,26 @@ static int jd_connected(int n) {
     return 0;
 }
 
+/* The page's own <html> element, which is the document element to a
+   script. The parser puts every page under a root html element of its own
+   (dom.h, dom_parse), so a page that wrote <html lang="en" class="no-js">
+   has that element as the root's child, with the attributes on it; a
+   script reading documentElement.lang or changing its class got the root,
+   which has neither. To a script the root is not there: its place is the
+   document's. A page that wrote no <html> has only the root, which is then
+   its document element. */
+static int jd_top(void) {
+    int r = jd_doc->root;
+    if (r < 0) return r;
+    for (int c = jd_doc->nodes[r].first; c >= 0; c = jd_doc->nodes[c].next)
+        if (jd_doc->nodes[c].kind == DN_ELEMENT && jd_doc->nodes[c].tag == T_HTML) return c;
+    return r;
+}
+
+/* Whether a node is where the document's own children are: the document
+   element, or the root in its place. */
+static int jd_is_top(int n) { return n >= 0 && (n == jd_doc->root || n == jd_top()); }
+
 static int jd_has_ancestor_tag(int n, int tag, const char *name) {
     for (int p = jd_doc->nodes[n].parent; p >= 0; p = jd_doc->nodes[p].parent) {
         if (jd_doc->nodes[p].kind != DN_ELEMENT) continue;
@@ -829,7 +849,7 @@ static int jd_walk_next(int i, int top) {
 
 /* The first node of a walk under top, or of the whole page for -1. */
 static int jd_walk_first(int top) {
-    return top < 0 ? jd_doc->root : jd_walk_next(top, top);
+    return top < 0 ? jd_top() : jd_walk_next(top, top);
 }
 
 /* --- finding by selector ---------------------------------------------------------------
@@ -886,9 +906,16 @@ static int jd_sel_test(const jd_selq *q, int el) {
     cmatch m;
     m.hover = -1;
     m.visited_links = 0;
-    for (int i = 0; i < q->n; i++)
-        if (css_matches(jd_sheet, jd_doc, el, &q->r[i], &m)) return 1;
-    return 0;
+    /* :root is the document element to a script (jd_top). The matcher is
+       the style sheets' own (css.h), which knows the root by the document's
+       record, so the record names the document element while a script asks
+       and the root again after. */
+    int root = jd_doc->root, hit = 0;
+    jd_doc->root = jd_top();
+    for (int i = 0; i < q->n && !hit; i++)
+        if (css_matches(jd_sheet, jd_doc, el, &q->r[i], &m)) hit = 1;
+    jd_doc->root = root;
+    return hit;
 }
 
 static void jd_sel_close(jd_selq *q) {
@@ -1008,7 +1035,7 @@ static void jd_list_gather(jlist *L) {
     L->n = 0;
     L->fresh = 1;
     L->version = jd_version;
-    if (L->kind == JL_DOCKIDS) { if (jd_doc->root >= 0) jd_list_add(L, jd_doc->root); return; }
+    if (L->kind == JL_DOCKIDS) { if (jd_top() >= 0) jd_list_add(L, jd_top()); return; }
     int top = L->root;
     if (L->kind == JL_CHILDREN || L->kind == JL_CHILDNODES) {
         if (top < 0) return;
@@ -1986,10 +2013,9 @@ static jval nat_parent_node(jctx *J, jval t, jval *a, int n) {
     (void)a; (void)n;
     int x = jd_node_of(t);
     if (x < 0) return js_null();
+    if (jd_is_top(x)) return jd_document_obj ? js_from_obj(jd_document_obj) : js_null();
     int p = jd_doc->nodes[x].parent;
-    if (p >= 0) return jd_el_value(J, p);
-    if (x == jd_doc->root && jd_document_obj) return js_from_obj(jd_document_obj);
-    return js_null();
+    return p >= 0 ? jd_el_value(J, p) : js_null();
 }
 
 static jval nat_parent_element(jctx *J, jval t, jval *a, int n) {
@@ -1997,7 +2023,7 @@ static jval nat_parent_element(jctx *J, jval t, jval *a, int n) {
     int x = jd_node_of(t);
     if (x < 0) return js_null();
     int p = jd_doc->nodes[x].parent;
-    return jd_is_element(p) ? jd_el_value(J, p) : js_null();
+    return jd_is_element(p) && !jd_is_top(x) ? jd_el_value(J, p) : js_null();
 }
 
 static jval nat_child_nodes(jctx *J, jval t, jval *a, int n) {
@@ -2038,7 +2064,7 @@ static int jd_step(int x, int which, int elements) {
 }
 
 static jval jd_neighbour(jctx *J, jval t, int which, int elements) {
-    if (jd_is_doc(t)) return which < 2 ? jd_node_or_doc(J, jd_doc->root) : js_null();
+    if (jd_is_doc(t)) return which < 2 ? jd_node_or_doc(J, jd_top()) : js_null();
     int x = jd_node_of(t);
     if (x < 0) return js_null();
     int c = jd_step(x, which, elements);
@@ -2056,7 +2082,7 @@ static jval nat_prev_el(jctx *J, jval t, jval *a, int n) { (void)a; (void)n; ret
 
 static jval nat_child_el_count(jctx *J, jval t, jval *a, int n) {
     (void)J; (void)a; (void)n;
-    if (jd_is_doc(t)) return js_num(jd_doc->root >= 0);
+    if (jd_is_doc(t)) return js_num(jd_top() >= 0);
     int x = jd_node_of(t);
     if (x < 0) return js_undef();
     int k = 0;
@@ -2821,7 +2847,7 @@ static jval nat_client_rects(jctx *J, jval t, jval *a, int n) {
 /* The sizes a page reads to measure things: a box's, from the layout, and
    for the document's element the window's, which is what
    documentElement.clientWidth is asked for. */
-static int jd_is_root_box(int x) { return x == jd_doc->root; }
+static int jd_is_root_box(int x) { return jd_is_top(x); }
 
 static jval jd_measure(jval t, int what) {
     int x = jd_node_of(t);
@@ -2855,7 +2881,7 @@ static jval nat_scroll_height(jctx *J, jval t, jval *a, int n) {
 static jval nat_offset_parent(jctx *J, jval t, jval *a, int n) {
     (void)a; (void)n;
     int x = jd_el_of(t);
-    if (x < 0 || !jd_connected(x) || x == jd_doc->body || x == jd_doc->root) return js_null();
+    if (x < 0 || !jd_connected(x) || x == jd_doc->body || jd_is_top(x)) return js_null();
     return jd_el_value(J, jd_doc->body);
 }
 
@@ -2866,7 +2892,7 @@ static jval nat_scroll_top(jctx *J, jval t, jval *a, int n) {
     (void)J; (void)a; (void)n;
     int x = jd_el_of(t);
     if (x < 0) return js_undef();
-    return js_num(x == jd_doc->root || x == jd_doc->body ? jd_scroll_y : 0);
+    return js_num(jd_is_top(x) || x == jd_doc->body ? jd_scroll_y : 0);
 }
 
 static jval nat_zero(jctx *J, jval t, jval *a, int n) {
@@ -4280,9 +4306,9 @@ static int jd_dispatch_to(jobj *ev, jval target, jval as_target) {
             if (!o) break;
             path[np] = o;
             nodes[np++] = at;
-            if (at == jd_doc->root) break;
+            if (jd_is_top(at)) break;
         }
-        if (at == jd_doc->root && jd_document_obj) {
+        if (jd_is_top(at) && jd_document_obj) {
             path[np] = jd_document_obj; nodes[np++] = -1;
             if (jd_J.global_obj && !js_str_is(js_to_str(&jd_J, jd_ev_get(ev, "type")), "load")) {
                 path[np] = jd_J.global_obj; nodes[np++] = -1;
@@ -4719,17 +4745,17 @@ static jval nat_doc_adopt(jctx *J, jval t, jval *a, int n) {
 
 static jval nat_doc_element(jctx *J, jval t, jval *a, int n) {
     (void)t; (void)a; (void)n;
-    return jd_node_or_doc(J, jd_doc->root);
+    return jd_node_or_doc(J, jd_top());
 }
 
 /* The head is always there to a script, which appends its styles and
    scripts to it without asking; a page that wrote none gets one. */
 static jval nat_doc_head(jctx *J, jval t, jval *a, int n) {
     (void)t; (void)a; (void)n;
-    if (jd_doc->head < 0 && jd_doc->root >= 0) {
+    if (jd_doc->head < 0 && jd_top() >= 0) {
         int h = dom_create_element(jd_doc, "head", 4);
         if (h >= 0) {
-            dom_insert_before(jd_doc, jd_doc->root, h, jd_doc->nodes[jd_doc->root].first);
+            dom_insert_before(jd_doc, jd_top(), h, jd_doc->nodes[jd_top()].first);
             jd_doc->head = h;
         }
     }

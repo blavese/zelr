@@ -871,6 +871,20 @@ int main(void) {
                " document.documentElement.parentNode === document, u.childElementCount].join(' ');"
                "</script></body>"),
         "3 2 B 3 b #text u true 2");
+    /* The page's own <html>, with what it wrote on it, is the document
+       element: the parser keeps every page under a root of its own, which a
+       script reading documentElement.lang or swapping no-js for js got
+       instead, and which has neither. */
+    oks("the document element is the page's own html, and nothing stands between it and the document",
+        titled("<!doctype html><html lang=en class=no-js><head><title>t</title></head><body><p>x</p><script>"
+               "var r = document.documentElement; r.className = r.className.replace('no-js', 'js');"
+               "var up = 0; document.body.addEventListener('click', function(e){ up = e.composedPath().length; });"
+               "document.body.click();"
+               "document.title = [r.lang, r.className, r.firstElementChild.nodeName, document.head.parentNode === r,"
+               " r.parentNode === document, r.parentElement, document.querySelectorAll('html').length,"
+               " document.querySelector(':root') === r, document.getElementsByTagName('*')[0] === r,"
+               " document.firstElementChild === r, document.children[0] === r, up].join(' ');</script></body></html>"),
+        "en js HEAD true true  1 true true true true 4");
     oks("children and getElementsByClassName follow the document",
         titled("<body><div id=d><p class='a b'>1</p></div><script>var d = document.getElementById('d');"
                "var kids = d.children, found = document.getElementsByClassName('b a');"
