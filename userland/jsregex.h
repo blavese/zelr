@@ -17,13 +17,21 @@
  * lazy. The flags `g`, `i`, `m`, `s` (a dot matches a newline) and `y`
  * (only where lastIndex says); `u` and `d` are accepted.
  *
+ * The text is UTF-8, and a dot, a class or a character in the pattern takes
+ * a whole character of it, whatever its length; a byte that is not part of a
+ * whole character (the strings atob makes) counts as the character with its
+ * value. Classes hold code points, not bytes.
+ *
  * --- what is not -----------------------------------------------------------
  *
- * The text is bytes of UTF-8, so a dot is one byte, not one character, and a
- * case is folded only in ASCII. Unicode property escapes, \p{...}, are known
- * for the handful of classes pages use (letters, digits, spaces, punctuation)
- * and answered for ASCII, with every byte past it counted a letter; anything
- * else is refused when the pattern is compiled, and the script is told.
+ * A character past U+FFFF is one character, as it is with the u flag; without
+ * it the language would see two halves, and a pattern that matches the halves
+ * one at a time does not match it here. A case is folded only in ASCII and
+ * Latin-1. Unicode property escapes, \p{...}, are known for the classes pages
+ * use (letters, cases, numbers, punctuation, spaces, symbols, emoji) as ranges
+ * holding the common scripts rather than the whole of the Unicode tables;
+ * anything else is refused when the pattern is compiled, and the script is
+ * told.
  *
  * --- how it matches --------------------------------------------------------
  *
@@ -49,6 +57,7 @@
 
 #define RX_NODES   1024
 #define RX_CLASSES 96
+#define RX_RANGES  512           /* class ranges past U+00FF, all classes together */
 #define RX_CONTS   1024
 #define RX_CAPS    50
 #define RX_NAME    32
@@ -90,7 +99,11 @@ typedef struct {
 typedef struct {
     rxnode nodes[RX_NODES];
     int    nnodes;
-    u8     classes[RX_CLASSES][32];
+    u8     classes[RX_CLASSES][32];  /* code points 0 to 255, a bit each */
+    u8     cneg[RX_CLASSES];         /* the class is turned inside out */
+    u32    rlo[RX_RANGES], rhi[RX_RANGES];   /* and past 255, ranges, */
+    u8     rcls[RX_RANGES];                  /* each with its class */
+    int    nranges;
     int    nclasses;
     int    ncaps;
     char   names[RX_CAPS][RX_NAME];  /* a named group's name, or empty */
@@ -138,10 +151,58 @@ static void rx_fail(rx *R, const char *why) {
     R->why[i] = 0;
 }
 
-static void rx_cls_add(rx *R, int c, int lo, int hi) {
-    if (c < 0 || c >= RX_CLASSES) return;
-    for (int i = lo; i <= hi && i < 256; i++)
+/* Code points into a class: up to 255 as bits, past it as a range. They
+   were bits only, and \uD800 was taken for its low byte, so [\uD800-\uDBFF]
+   became every byte there is -- which is how core-js's JSON.stringify came
+   to escape the brackets of every array it wrote. */
+static void rx_cls_add(rx *R, int c, u32 lo, u32 hi) {
+    if (c < 0 || c >= RX_CLASSES || hi < lo) return;
+    for (u32 i = lo; i <= hi && i < 256; i++)
         R->classes[c][i >> 3] |= (u8)(1 << (i & 7));
+    if (hi < 256) return;
+    if (lo < 256) lo = 256;
+    if (R->nranges >= RX_RANGES) { rx_fail(R, "too many ranges in its classes"); return; }
+    R->rlo[R->nranges] = lo;
+    R->rhi[R->nranges] = hi;
+    R->rcls[R->nranges] = (u8)c;
+    R->nranges++;
+}
+
+static int rx_cls_has(const rx *R, int c, u32 cp) {
+    int in = 0;
+    if (cp < 256) in = (R->classes[c][cp >> 3] >> (cp & 7)) & 1;
+    else
+        for (int i = 0; i < R->nranges && !in; i++)
+            if (R->rcls[i] == c && cp >= R->rlo[i] && cp <= R->rhi[i]) in = 1;
+    return in != R->cneg[c];
+}
+
+/* One character of UTF-8 at p, n bytes there: its code point, and its
+   length in *k. A byte that does not begin a whole character is taken as
+   itself, one byte long -- the strings atob makes are bytes like that. The
+   half of a surrogate pair on its own, which this engine keeps as the three
+   bytes it would be, is read as that half. */
+static u32 rx_utf8(const char *p, int n, int *k) {
+    u8 c = (u8)p[0];
+    *k = 1;
+    if (c < 0x80) return c;
+    int need = c >= 0xF0 && c <= 0xF4 ? 3 : c >= 0xE0 && c <= 0xEF ? 2 : c >= 0xC2 && c <= 0xDF ? 1 : 0;
+    if (!need || need >= n) return c;
+    u32 v = c & (need == 1 ? 0x1Fu : need == 2 ? 0x0Fu : 0x07u);
+    for (int i = 1; i <= need; i++) {
+        u8 d = (u8)p[i];
+        if ((d & 0xC0) != 0x80) return c;
+        v = (v << 6) | (d & 0x3Fu);
+    }
+    if ((need == 2 && v < 0x800) || (need == 3 && (v < 0x10000 || v > 0x10FFFF))) return c;
+    *k = need + 1;
+    return v;
+}
+
+/* A case folded for matching: ASCII and Latin-1. */
+static u32 rx_fold(u32 c) {
+    if ((c >= 'A' && c <= 'Z') || (c >= 0xC0 && c <= 0xDE && c != 0xD7)) return c + 32;
+    return c;
 }
 
 static int rx_digit(int c) { return c >= '0' && c <= '9'; }
@@ -165,10 +226,9 @@ static int rx_hexval(int c) {
     return -1;
 }
 
-/* One escape, as the character it stands for, or -1 when it is a class
-   rather than a character (\d and friends). A code point past one byte is
-   taken for its low byte: a character is a byte here, and the page is
-   usually matching text this machine cannot hold either way. */
+/* One escape, as the code point it stands for. 😀, the two halves
+   of a pair written one after the other, is the one character they make,
+   which is the only way this engine's text can hold it. */
 static int rx_escape_char(const char *p, int len, int *at) {
     int c = (*at) < len ? p[(*at)++] : 0;
     switch (c) {
@@ -197,8 +257,8 @@ static int rx_escape_char(const char *p, int len, int *at) {
             int h = 0;
             if (*at < len && p[*at] == '{') {
                 int k = *at + 1;
-                while (k < len && rx_hexval(p[k]) >= 0) h = h * 16 + rx_hexval(p[k++]);
-                if (k < len && p[k] == '}') { *at = k + 1; return h & 0xFF; }
+                while (k < len && rx_hexval(p[k]) >= 0 && h <= 0x10FFFF) h = h * 16 + rx_hexval(p[k++]);
+                if (k < len && p[k] == '}' && h <= 0x10FFFF) { *at = k + 1; return h; }
                 return 'u';
             }
             int k = 0;
@@ -208,7 +268,19 @@ static int rx_escape_char(const char *p, int len, int *at) {
                 h = h * 16 + v;
                 (*at)++;
             }
-            return k ? (h & 0xFF) : 'u';
+            if (!k) return 'u';
+            if (k == 4 && h >= 0xD800 && h < 0xDC00 && *at + 6 <= len && p[*at] == '\\' && p[*at + 1] == 'u') {
+                int lo = 0, ok = 1;
+                for (int i = 2; i < 6 && ok; i++) {
+                    int v = rx_hexval(p[*at + i]);
+                    if (v < 0) ok = 0; else lo = lo * 16 + v;
+                }
+                if (ok && lo >= 0xDC00 && lo < 0xE000) {
+                    *at += 6;
+                    return 0x10000 + ((h - 0xD800) << 10) + (lo - 0xDC00);
+                }
+            }
+            return h;
         }
         default: return c;
     }
@@ -219,51 +291,126 @@ static int rx_is_class_escape(int c) {
         || c == 's' || c == 'S';
 }
 
+/* The spaces \s means past U+00FF, as the language lists them. */
+static const u32 RX_WIDE_SPACES[][2] = {
+    { 0x1680, 0x1680 }, { 0x2000, 0x200A }, { 0x2028, 0x2029 }, { 0x202F, 0x202F },
+    { 0x205F, 0x205F }, { 0x3000, 0x3000 }, { 0xFEFF, 0xFEFF }
+};
+#define RX_NWIDE ((int)(sizeof(RX_WIDE_SPACES) / sizeof(RX_WIDE_SPACES[0])))
+
 static void rx_fill_class_escape(rx *R, int c, int which) {
     int neg = (which == 'D' || which == 'W' || which == 'S');
     int kind = rx_lower(which);
-    /* The spaces past ASCII (a no-break space, a byte order mark) arrive as
-       UTF-8 whose bytes a class of bytes cannot tell from letters; \s leaves
-       them out and \S takes them in, which is right for everything but the
-       spaces themselves. */
-    for (int i = 0; i < 256; i++) {
-        int in = kind == 'd' ? rx_digit(i)
-               : kind == 'w' ? rx_word(i)
-               : rx_space(i);
+    for (u32 i = 0; i < 256; i++) {
+        int in = kind == 'd' ? rx_digit((int)i)
+               : kind == 'w' ? rx_word((int)i)
+               : rx_space((int)i) || i == 0xA0;
         if (in != neg) rx_cls_add(R, c, i, i);
     }
+    /* Past U+00FF: digits and word characters are ASCII only, so \D and \W
+       take in everything there; \s has its listed spaces and \S the rest. */
+    if (kind != 's') {
+        if (neg) rx_cls_add(R, c, 0x100, 0x10FFFF);
+        return;
+    }
+    if (!neg) {
+        for (int i = 0; i < RX_NWIDE; i++) rx_cls_add(R, c, RX_WIDE_SPACES[i][0], RX_WIDE_SPACES[i][1]);
+        return;
+    }
+    u32 from = 0x100;
+    for (int i = 0; i < RX_NWIDE; i++) {
+        if (RX_WIDE_SPACES[i][0] > from) rx_cls_add(R, c, from, RX_WIDE_SPACES[i][0] - 1);
+        from = RX_WIDE_SPACES[i][1] + 1;
+    }
+    rx_cls_add(R, c, from, 0x10FFFF);
 }
 
-/* \p{Name} and \P{Name}: the few Unicode classes pages use, answered for
-   ASCII, with every byte past it counted a letter. 0 when the name is not
-   one of them. */
+/* \p{Name} and \P{Name}: the Unicode classes pages use, as ranges that hold
+   the scripts a page is likely to be written in -- Latin, Greek, Cyrillic,
+   Armenian, Hebrew, Arabic, Devanagari, Thai, Georgian, Hangul, the kana and
+   the CJK ideographs -- rather than the whole of the Unicode tables, which
+   would be most of this file. Each list is in order and does not overlap. */
+static const u32 RXP_L[][2] = {
+    { 'A', 'Z' }, { 'a', 'z' }, { 0xAA, 0xAA }, { 0xB5, 0xB5 }, { 0xBA, 0xBA }, { 0xC0, 0xD6 },
+    { 0xD8, 0xF6 }, { 0xF8, 0x2C1 }, { 0x2C6, 0x2D1 }, { 0x2E0, 0x2E4 }, { 0x370, 0x373 },
+    { 0x376, 0x377 }, { 0x37B, 0x37D }, { 0x386, 0x386 }, { 0x388, 0x3F5 }, { 0x3F7, 0x481 },
+    { 0x48A, 0x52F }, { 0x531, 0x556 }, { 0x561, 0x587 }, { 0x5D0, 0x5EA }, { 0x620, 0x64A },
+    { 0x671, 0x6D3 }, { 0x904, 0x939 }, { 0xE01, 0xE30 }, { 0x10A0, 0x10FF }, { 0x1100, 0x11FF },
+    { 0x1E00, 0x1FFF }, { 0x3041, 0x3096 }, { 0x30A1, 0x30FA }, { 0x3105, 0x312F }, { 0x3131, 0x318E },
+    { 0x3400, 0x4DBF }, { 0x4E00, 0x9FFF }, { 0xA000, 0xA48C }, { 0xAC00, 0xD7A3 }, { 0xF900, 0xFAFF },
+    { 0xFB00, 0xFB06 }, { 0xFF21, 0xFF3A }, { 0xFF41, 0xFF5A }, { 0xFF66, 0xFFDC }, { 0x10000, 0x1EFFF },
+    { 0x20000, 0x3134F }
+};
+static const u32 RXP_LU[][2] = {
+    { 'A', 'Z' }, { 0xC0, 0xD6 }, { 0xD8, 0xDE }, { 0x391, 0x3A1 }, { 0x3A3, 0x3A9 }, { 0x400, 0x42F },
+    { 0x531, 0x556 }, { 0xFF21, 0xFF3A }
+};
+static const u32 RXP_LL[][2] = {
+    { 'a', 'z' }, { 0xB5, 0xB5 }, { 0xDF, 0xF6 }, { 0xF8, 0xFF }, { 0x3AC, 0x3CE }, { 0x430, 0x45F },
+    { 0x561, 0x587 }, { 0xFF41, 0xFF5A }
+};
+static const u32 RXP_N[][2] = {
+    { '0', '9' }, { 0xB2, 0xB3 }, { 0xB9, 0xB9 }, { 0xBC, 0xBE }, { 0x660, 0x669 }, { 0x6F0, 0x6F9 },
+    { 0x966, 0x96F }, { 0x2070, 0x2070 }, { 0x2074, 0x2079 }, { 0x2080, 0x2089 }, { 0x2150, 0x2189 },
+    { 0x2460, 0x249B }, { 0x3007, 0x3007 }, { 0x3021, 0x3029 }, { 0xFF10, 0xFF19 }
+};
+static const u32 RXP_ND[][2] = {
+    { '0', '9' }, { 0x660, 0x669 }, { 0x6F0, 0x6F9 }, { 0x966, 0x96F }, { 0xFF10, 0xFF19 }
+};
+static const u32 RXP_P[][2] = {
+    { '!', '#' }, { '%', '*' }, { ',', '/' }, { ':', ';' }, { '?', '@' }, { '[', ']' }, { '_', '_' },
+    { '{', '{' }, { '}', '}' }, { 0xA1, 0xA1 }, { 0xA7, 0xA7 }, { 0xAB, 0xAB }, { 0xB6, 0xB7 },
+    { 0xBB, 0xBB }, { 0xBF, 0xBF }, { 0x2010, 0x2027 }, { 0x2030, 0x2043 }, { 0x2045, 0x2051 },
+    { 0x2053, 0x205E }, { 0x3001, 0x3003 }, { 0x3008, 0x3011 }, { 0x3014, 0x301F }, { 0xFE10, 0xFE19 },
+    { 0xFE30, 0xFE4F }, { 0xFF01, 0xFF03 }, { 0xFF05, 0xFF0A }, { 0xFF0C, 0xFF0F }
+};
+static const u32 RXP_Z[][2] = {
+    { '\t', '\r' }, { ' ', ' ' }, { 0x85, 0x85 }, { 0xA0, 0xA0 }, { 0x1680, 0x1680 }, { 0x2000, 0x200A },
+    { 0x2028, 0x2029 }, { 0x202F, 0x202F }, { 0x205F, 0x205F }, { 0x3000, 0x3000 }
+};
+static const u32 RXP_S[][2] = {
+    { '$', '$' }, { '+', '+' }, { '<', '>' }, { '^', '^' }, { '`', '`' }, { '|', '|' }, { '~', '~' },
+    { 0xA2, 0xA6 }, { 0xA8, 0xA9 }, { 0xAC, 0xAC }, { 0xAE, 0xB1 }, { 0xB4, 0xB4 }, { 0xB8, 0xB8 },
+    { 0xD7, 0xD7 }, { 0xF7, 0xF7 }, { 0x2044, 0x2044 }, { 0x20A0, 0x20C0 }, { 0x2100, 0x214F },
+    { 0x2190, 0x23FF }, { 0x2500, 0x27BF }, { 0x2900, 0x2BFF }, { 0x1F000, 0x1FAFF }
+};
+static const u32 RXP_EMOJI[][2] = {
+    { 0xA9, 0xA9 }, { 0xAE, 0xAE }, { 0x203C, 0x203C }, { 0x2049, 0x2049 }, { 0x2122, 0x2122 },
+    { 0x2139, 0x2139 }, { 0x2194, 0x21AA }, { 0x231A, 0x23FF }, { 0x24C2, 0x24C2 }, { 0x25AA, 0x27BF },
+    { 0x2934, 0x2935 }, { 0x2B05, 0x2B55 }, { 0x3030, 0x3030 }, { 0x303D, 0x303D }, { 0x3297, 0x3297 },
+    { 0x3299, 0x3299 }, { 0x1F000, 0x1FAFF }
+};
+
+/* A list into a class, or everything outside it. */
+static void rx_add_list(rx *R, int c, const u32 (*t)[2], int n, int neg) {
+    if (!neg) {
+        for (int i = 0; i < n; i++) rx_cls_add(R, c, t[i][0], t[i][1]);
+        return;
+    }
+    u32 from = 0;
+    for (int i = 0; i < n; i++) {
+        if (t[i][0] > from) rx_cls_add(R, c, from, t[i][0] - 1);
+        from = t[i][1] + 1;
+    }
+    if (from <= 0x10FFFF) rx_cls_add(R, c, from, 0x10FFFF);
+}
+
+/* 0 when the name is not one of those. */
 static int rx_fill_property(rx *R, int c, const char *nm, int n, int neg) {
     #define IS(w) (n == (int)sizeof(w) - 1 && !strncmp(nm, w, n))
-    int kind = IS("L") || IS("Letter") || IS("Alphabetic") || IS("Alpha") ? 1
-             : IS("Lu") || IS("Uppercase_Letter") || IS("Uppercase") ? 2
-             : IS("Ll") || IS("Lowercase_Letter") || IS("Lowercase") ? 3
-             : IS("N") || IS("Nd") || IS("Number") || IS("Decimal_Number") ? 4
-             : IS("P") || IS("Punctuation") ? 5
-             : IS("Z") || IS("Zs") || IS("White_Space") || IS("Space_Separator") ? 6
-             : IS("S") || IS("Symbol") ? 7
-             : IS("Emoji") || IS("Extended_Pictographic") ? 8 : 0;
+    #define LIST(t) rx_add_list(R, c, t, (int)(sizeof(t) / sizeof(t[0])), neg)
+    if (IS("L") || IS("Letter") || IS("Alphabetic") || IS("Alpha")) LIST(RXP_L);
+    else if (IS("Lu") || IS("Uppercase_Letter") || IS("Uppercase")) LIST(RXP_LU);
+    else if (IS("Ll") || IS("Lowercase_Letter") || IS("Lowercase")) LIST(RXP_LL);
+    else if (IS("N") || IS("Number")) LIST(RXP_N);
+    else if (IS("Nd") || IS("Decimal_Number") || IS("digit")) LIST(RXP_ND);
+    else if (IS("P") || IS("Punctuation")) LIST(RXP_P);
+    else if (IS("Z") || IS("Zs") || IS("White_Space") || IS("Space_Separator")) LIST(RXP_Z);
+    else if (IS("S") || IS("Symbol")) LIST(RXP_S);
+    else if (IS("Emoji") || IS("Extended_Pictographic") || IS("Emoji_Presentation")) LIST(RXP_EMOJI);
+    else return 0;
+    #undef LIST
     #undef IS
-    if (!kind) return 0;
-    for (int i = 0; i < 256; i++) {
-        int in;
-        switch (kind) {
-            case 1: in = (i >= 'a' && i <= 'z') || (i >= 'A' && i <= 'Z') || i >= 0x80; break;
-            case 2: in = i >= 'A' && i <= 'Z'; break;
-            case 3: in = i >= 'a' && i <= 'z'; break;
-            case 4: in = rx_digit(i); break;
-            case 5: in = (i >= '!' && i <= '/' && i != '$' && i != '+') || (i >= ':' && i <= '@' && i != '<' && i != '=' && i != '>')
-                       || (i >= '[' && i <= '`' && i != '^' && i != '`') || i == '{' || i == '}'; break;
-            case 6: in = rx_space(i); break;
-            case 7: in = i == '$' || i == '+' || i == '<' || i == '=' || i == '>' || i == '^' || i == '`' || i == '|' || i == '~'; break;
-            default: in = i >= 0xF0; break;
-        }
-        if (in != neg) rx_cls_add(R, c, i, i);
-    }
     return 1;
 }
 
@@ -271,6 +418,7 @@ static int rx_new_class(rx *R) {
     if (R->nclasses >= RX_CLASSES) { rx_fail(R, "too many classes"); return -1; }
     int c = R->nclasses++;
     for (int i = 0; i < 32; i++) R->classes[c][i] = 0;
+    R->cneg[c] = 0;
     return c;
 }
 
@@ -303,7 +451,7 @@ static int rx_parse_class(rx *R, const char *p, int len, int *at) {
     if (*at < len && p[*at] == '^') { neg = 1; (*at)++; }
 
     while (*at < len && p[*at] != ']') {
-        int lo;
+        int lo, k;
         if (p[*at] == '\\') {
             (*at)++;
             int e = *at < len ? p[*at] : 0;
@@ -321,7 +469,8 @@ static int rx_parse_class(rx *R, const char *p, int len, int *at) {
             else if (e == '-') { (*at)++; lo = '-'; }
             else lo = rx_escape_char(p, len, at);
         } else {
-            lo = (unsigned char)p[(*at)++];
+            lo = (int)rx_utf8(p + *at, len - *at, &k);
+            *at += k;
         }
 
         int hi = lo;
@@ -340,29 +489,33 @@ static int rx_parse_class(rx *R, const char *p, int len, int *at) {
                 }
                 hi = rx_escape_char(p, len, at);
             } else {
-                hi = (unsigned char)p[(*at)++];
+                hi = (int)rx_utf8(p + *at, len - *at, &k);
+                *at += k;
             }
         }
         if (hi < lo) { rx_fail(R, "a range that runs backwards"); return -1; }
-        rx_cls_add(R, c, lo, hi);
+        rx_cls_add(R, c, (u32)lo, (u32)hi);
     }
     if (*at >= len || p[*at] != ']') { rx_fail(R, "a class with no ]"); return -1; }
     (*at)++;
 
-    /* Folding is done once, here, rather than on every character tested. */
+    /* Folding is done once, here, rather than on every character tested:
+       ASCII and Latin-1, each small letter with its capital. */
     if (R->icase) {
-        for (int i = 'a'; i <= 'z'; i++) {
+        for (int i = 'a'; i <= 0xFE; i++) {
+            if (i > 'z' && i < 0xE0) continue;
+            if (i == 0xF7) continue;
             int lower = (R->classes[c][i >> 3] >> (i & 7)) & 1;
             int upper = (R->classes[c][(i - 32) >> 3] >> ((i - 32) & 7)) & 1;
             if (lower || upper) {
-                rx_cls_add(R, c, i, i);
-                rx_cls_add(R, c, i - 32, i - 32);
+                rx_cls_add(R, c, (u32)i, (u32)i);
+                rx_cls_add(R, c, (u32)(i - 32), (u32)(i - 32));
             }
         }
     }
     /* A negated class matches a newline, as it does everywhere else; it was
        kept from crossing one, so [^"]* stopped at the end of a line. */
-    if (neg) for (int i = 0; i < 32; i++) R->classes[c][i] = (u8)~R->classes[c][i];
+    R->cneg[c] = (u8)neg;
     return c;
 }
 
@@ -551,7 +704,7 @@ static int rx_parse_term(rx *R, const char *p, int len, int *at, int depth) {
             int ch = rx_escape_char(p, len, at);
             n = rx_new(R, RXN_CHAR);
             if (n < 0) { rx_fail(R, "pattern too big"); return -1; }
-            R->nodes[n].ch = R->icase ? rx_lower(ch) : ch;
+            R->nodes[n].ch = R->icase ? (int)rx_fold((u32)ch) : ch;
         }
     } else if (c == ')' || c == '|') {
         return -1;                          /* the caller's business */
@@ -559,11 +712,13 @@ static int rx_parse_term(rx *R, const char *p, int len, int *at, int depth) {
         rx_fail(R, "a quantifier with nothing before it");
         return -1;
     } else {
-        (*at)++;
+        /* A character, all of it: é in a pattern is one thing to match. */
+        int k;
+        u32 cp = rx_utf8(p + *at, len - *at, &k);
+        *at += k;
         n = rx_new(R, RXN_CHAR);
         if (n < 0) { rx_fail(R, "pattern too big"); return -1; }
-        R->nodes[n].ch = R->icase ? rx_lower((unsigned char)c)
-                                  : (unsigned char)c;
+        R->nodes[n].ch = (int)(R->icase ? rx_fold(cp) : cp);
     }
 
     if (n < 0) { rx_fail(R, "pattern too big"); return -1; }
@@ -659,7 +814,7 @@ static int rx_compile(rx *R, const char *pat, int len, const char *flags) {
     for (u32 i = 0; i < sizeof(R->classes); i++) z[i] = 0;
     z = (volatile char *)R->names;
     for (u32 i = 0; i < sizeof(R->names); i++) z[i] = 0;
-    R->nnodes = R->nclasses = R->named = 0;
+    R->nnodes = R->nclasses = R->named = R->nranges = 0;
     R->icase = R->multiline = R->global = R->dotall = R->sticky = R->unicode = 0;
     R->ok = 1;
     R->why[0] = 0;
@@ -735,15 +890,30 @@ static int rx_push(rx *R, int node, int parent, int rep, int at) {
     return f;
 }
 
-/* Whether one character atom matches the byte at pos. */
+/* How many bytes one character atom takes at pos -- the whole of a UTF-8
+   character -- or 0 when it does not match there. */
 static int rx_one(rx *R, rxnode *x, int pos) {
     if (pos >= R->len) return 0;
-    int c = (unsigned char)R->s[pos];
+    int k = 1;
+    u32 c = (u8)R->s[pos];
+    if (c >= 0x80) c = rx_utf8(R->s + pos, R->len - pos, &k);
     switch (x->kind) {
-        case RXN_CHAR: return (R->icase ? rx_lower(c) : c) == x->ch;
-        case RXN_ANY: return R->dotall || (c != '\n' && c != '\r');
-        default: return (R->classes[x->cls][c >> 3] >> (c & 7)) & 1;
+        case RXN_CHAR: return (R->icase ? rx_fold(c) : c) == (u32)x->ch ? k : 0;
+        case RXN_ANY: return R->dotall || (c != '\n' && c != '\r' && c != 0x2028 && c != 0x2029) ? k : 0;
+        default: return rx_cls_has(R, x->cls, c) ? k : 0;
     }
+}
+
+/* The start of the character that ends at q, no further back than lo: the
+   longest whole one there is, as reading forward would have found it. */
+static int rx_back(rx *R, int lo, int q) {
+    for (int b = 4; b >= 2; b--) {
+        if (q - b < lo) continue;
+        int k;
+        rx_utf8(R->s + q - b, R->len - (q - b), &k);
+        if (k == b) return q - b;
+    }
+    return q - 1;
 }
 
 /* The atom once, and then whatever comes after it. */
@@ -752,9 +922,11 @@ static int rx_atom(rx *R, int n, int pos, int cont) {
 
     rxnode *x = &R->nodes[n];
     switch (x->kind) {
-        case RXN_CHAR: case RXN_ANY: case RXN_CLASS:
-            if (!rx_one(R, x, pos)) return 0;
-            return rx_cont_do(R, cont, pos + 1);
+        case RXN_CHAR: case RXN_ANY: case RXN_CLASS: {
+            int k = rx_one(R, x, pos);
+            if (!k) return 0;
+            return rx_cont_do(R, cont, pos + k);
+        }
         case RXN_BOL:
             if (pos == 0) return rx_cont_do(R, cont, pos);
             if (R->multiline && (R->s[pos - 1] == '\n' || R->s[pos - 1] == '\r'))
@@ -803,8 +975,10 @@ static int rx_atom(rx *R, int n, int pos, int cont) {
                     if (rx_run(R, a, pos, f)) matched = 1;
                 }
             } else {
+                /* The widths are in characters, and a character is one to
+                   four bytes. */
                 int from = pos - x->wmin;
-                int to = x->wmax < 0 ? 0 : pos - x->wmax;
+                int to = x->wmax < 0 ? 0 : pos - 4 * x->wmax;
                 if (to < 0) to = 0;
                 for (int k = from; k >= to && !matched; k--)
                     for (int a = x->alt; a >= 0 && !matched; a = R->nodes[a].alt_next) {
@@ -842,21 +1016,28 @@ static int rx_rep(rx *R, int n, int pos, int cont, int done) {
 
     rxnode *x = &R->nodes[n];
 
-    /* One character, repeated: counted and given back in a loop. */
+    /* One character, repeated: counted and given back in a loop, a whole
+       character at a time. */
     if (done == 0 && (x->kind == RXN_CHAR || x->kind == RXN_ANY || x->kind == RXN_CLASS)) {
         int most = x->max < 0 ? R->len - pos : x->max;
-        int k = 0;
-        while (k < most && rx_one(R, x, pos + k)) k++;
-        if (k < x->min) return 0;
+        int k = 0, q = pos, w;
         if (x->greedy) {
+            while (k < most && (w = rx_one(R, x, q))) { q += w; k++; }
+            if (k < x->min) return 0;
             for (int i = k; i >= x->min; i--) {
-                if (rx_run(R, x->next, pos + i, cont)) return 1;
+                if (rx_run(R, x->next, q, cont)) return 1;
                 if (!rx_budget(R)) return 0;
+                if (i > x->min) q = rx_back(R, pos, q);
             }
         } else {
-            for (int i = x->min; i <= k; i++) {
-                if (rx_run(R, x->next, pos + i, cont)) return 1;
+            while (k < x->min && (w = rx_one(R, x, q))) { q += w; k++; }
+            if (k < x->min) return 0;
+            for (;;) {
+                if (rx_run(R, x->next, q, cont)) return 1;
                 if (!rx_budget(R)) return 0;
+                if (k >= most || !(w = rx_one(R, x, q))) break;
+                q += w;
+                k++;
             }
         }
         return 0;
@@ -893,7 +1074,10 @@ static int rx_search(rx *R, const char *s, int len, int from) {
     R->len = len;
     R->total = 0;
 
-    for (int start = from < 0 ? 0 : from; start <= len; start++) {
+    /* Tried at the start of each character, not in the middle of one. */
+    for (int start = from < 0 ? 0 : from, k = 1; start <= len; start += k) {
+        k = 1;
+        if (start < len && (u8)s[start] >= 0x80) rx_utf8(s + start, len - start, &k);
         R->ncont = 0;
         R->steps = 0;
         for (int i = 0; i < RX_CAPS; i++) {

@@ -1190,6 +1190,39 @@ int main(void) {
            "TypeError,RangeError,true,true,windows-1252");
     expect("self is the global object",
            "[self === globalThis, self.Math === Math, typeof self].join()", "true,true,object");
+    /* --- what core-js asks of an engine, and what its answers broke ----------- */
+    expect("Reflect.set writes on the receiver, runs a setter with it, and says when it could not",
+           "(function(){ var m = Object.defineProperty({}, 'a', { configurable: true });"
+           " var r = [Reflect.set(Object.getPrototypeOf(m), 'a', 1, m)];"
+           " var k = []; for (var x in {}) k.push(x); r.push(k.length);"
+           " var o = {}, recv = {}; r.push(Reflect.set(o, 'x', 5, recv), o.x, recv.x);"
+           " r.push(Reflect.set(Object.freeze({ z: 1 }), 'z', 2));"
+           " var seen; r.push(Reflect.set({ set s(v) { seen = this; } }, 's', 1, recv) && seen === recv);"
+           " r.push(Reflect.set({ get g() { return 1; } }, 'g', 2)); return r.join(); })()",
+           "false,0,true,,5,false,true,false");
+    expect("JSON.stringify writes a lone half of a pair as its escape, and a boxed symbol as an object",
+           "[JSON.stringify('\\uDF06\\uD834'), JSON.stringify('\\uDEAD'),"
+           " JSON.stringify('\\ud83d' + '\\ude00') === JSON.stringify('\\ud83d\\ude00'),"
+           " JSON.stringify([Symbol()]) + JSON.stringify({ a: Symbol() }) + JSON.stringify(Object(Symbol()))].join(' ')",
+           "\"\\udf06\\ud834\" \"\\udead\" true [null]{}{}");
+    expect("a class holds code points past U+00FF, not their low bytes",
+           "[/[\\uD800-\\uDBFF]/.test('['), /[\\u0080-\\uFFFF]/.test('\\u00e9'), /[\\u0080-\\uFFFF]/.test('a'),"
+           " 'x\\u65e5\\u672cy'.match(/[\\u4e00-\\u9fff]+/)[0] === '\\u65e5\\u672c',"
+           " '\\u00a0 \\u00e0 \\ufeff'.replace(/^[\\s\\uFEFF\\xA0]+|[\\s\\uFEFF\\xA0]+$/g, '') === '\\u00e0'].join()",
+           "false,true,false,true,true");
+    expect("a dot, a literal and a repeat take whole characters",
+           "[/^.$/.test('\\u00e9'), 'a\\u00e9b'.match(/./g).length, /caf\\u00e9/.test('un caf\\u00e9'),"
+           " '\\u00e9'.replace(/[^a-z]/g, '-'), '\\u00e9\\u00e9\\u00e9'.match(/^(.+)(.)$/)[2] === '\\u00e9',"
+           " '\\u00e9\\u00e9'.match(/.+?/)[0] === '\\u00e9', /\\u00e9/i.test('\\u00c9')].join()",
+           "true,3,true,-,true,true,true");
+    expect("an empty match steps over a whole character",
+           "['a\\u00e9'.split(/(?:)/).length, '\\u00e9'.replace(/(?:)/g, '-') === '-\\u00e9-',"
+           " [...'a\\u00e9'.matchAll(/(?:)/g)].length, 'a\\u00e9'.match(/(?:)/g).length].join()",
+           "2,true,3,3");
+    expect("\\s knows the wide spaces, \\p{L} the scripts, and a byte from atob is itself",
+           "[/\\s/.test('\\u2003'), /\\S/.test('\\u2003'), /\\W/.test('\\u00e9'), /\\p{L}+/u.exec('h\\u00e9llo w')[0] === 'h\\u00e9llo',"
+           " /\\uD83D\\uDE00/.test('\\ud83d\\ude00'), /[\\x80-\\xff]/.test(atob('gA==')), /[\\x80-\\xbf]/.test('\\u00e9')].join()",
+           "true,false,true,true,true,true,false");
     expect("while two hundred nested brackets are an ordinary array",
            "(function(){ var s = ''; for (var i = 0; i < 200; i++) s += '['; s += '1';"
            " for (var i = 0; i < 200; i++) s += ']'; var a = eval(s);"

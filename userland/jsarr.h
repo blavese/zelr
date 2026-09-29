@@ -1166,6 +1166,15 @@ static jval js_rx_result(jctx *J, jstr *s) {
     return js_from_obj(out);
 }
 
+/* How far an empty match moves on from at: one character, read the way the
+   matcher reads them, so that the next try does not start inside one. */
+static int js_rx_step(const jstr *s, int at) {
+    if (at >= (int)s->len) return 1;
+    int k;
+    rx_utf8(s->s + at, (int)s->len - at, &k);
+    return k;
+}
+
 static double js_last_index(jctx *J, jobj *re) {
     jval li = js_get(J, js_from_obj(re), J->s_lastIndex);
     double d = js_trunc(js_to_num(J, li));
@@ -1418,7 +1427,7 @@ static jval js_str_replace_re(jctx *J, jstr *s, jval re, jval rep) {
         int next = end;
         if (next == start) {
             if (next < (int)s->len) {
-                u32 k = js_utf8_len((u8)s->s[next]);
+                u32 k = (u32)js_rx_step(s, next);
                 jt_put(J, &out, s->s + next, k);
                 copied = (u32)next + k;
                 next += (int)k;
@@ -1533,7 +1542,7 @@ static jval nat_str_split(jctx *J, jval t, jval *a, int n) {
             if (hit < 0 || hit >= len) break;
             int e = js_rx.cap_end[0];
             if (e == p) {
-                q = hit + (int)js_utf8_len((u8)s->s[hit]);
+                q = hit + js_rx_step(s, hit);
                 continue;
             }
             js_arr_push(J, out, js_from_str(js_str_n(J, s->s + p, (u32)(hit - p))));
@@ -1584,7 +1593,7 @@ static jval nat_str_match(jctx *J, jval t, jval *a, int n) {
         js_arr_push(J, out, js_from_str(js_str_n(J, s->s + js_rx.cap_start[0],
                                                  (u32)(js_rx.cap_end[0] - js_rx.cap_start[0]))));
         from = js_rx.cap_end[0];
-        if (from == js_rx.cap_start[0]) from++;
+        if (from == js_rx.cap_start[0]) from += js_rx_step(s, from);
     }
     js_set_last_index(J, re.obj, 0);
     return out->len ? js_from_obj(out) : js_null();
@@ -1632,7 +1641,7 @@ static jval nat_regexpiter_next(jctx *J, jval t, jval *a, int n) {
         return js_iter_result(J, js_undef(), 1);
     }
     /* An empty match would otherwise stand still for ever. */
-    if (js_last_index(J, re) == before) js_set_last_index(J, re, before + 1);
+    if (js_last_index(J, re) == before) js_set_last_index(J, re, before + js_rx_step(s, (int)before));
     return js_iter_result(J, m, 0);
 }
 

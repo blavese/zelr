@@ -1783,13 +1783,36 @@ static jval nat_m_random(jctx *J, jval t, jval *a, int n) {
  * copied everything so far into the page's memory, which never gives any
  * back: seven kilobytes of output used up the whole of it. */
 
-/* A string, quoted, with everything JSON does not allow raw escaped. */
+/* A string, quoted, with everything JSON does not allow raw escaped. The
+   half of a surrogate pair with no other half (kept here as the three bytes
+   it would be on its own) is written as its escape, as the standard has
+   had it since 2019: core-js tests for exactly that, and finding it missing
+   put its own JSON.stringify in place, whose pattern this engine then read
+   wrongly. Two halves that do make a pair are written as the character. */
 static void js_json_quote(jctx *J, jtext *o, const jstr *s) {
     static const char HEX[] = "0123456789abcdef";
     jt_put(J, o, "\"", 1);
     u32 from = 0;
     for (u32 i = 0; s && i < s->len; i++) {
         unsigned char c = (unsigned char)s->s[i];
+        if (c == 0xED && i + 2 < s->len && (u8)s->s[i + 1] >= 0xA0) {
+            u32 hi = 0xD000u | (((u32)s->s[i + 1] & 0x3F) << 6) | ((u32)s->s[i + 2] & 0x3F);
+            jt_put(J, o, s->s + from, i - from);
+            if (hi < 0xDC00 && i + 5 < s->len && (u8)s->s[i + 3] == 0xED && (u8)s->s[i + 4] >= 0xB0) {
+                u32 lo = 0xD000u | (((u32)s->s[i + 4] & 0x3F) << 6) | ((u32)s->s[i + 5] & 0x3F);
+                u32 cp = 0x10000 + ((hi - 0xD800) << 10) + (lo - 0xDC00);
+                char b[4] = { (char)(0xF0 | (cp >> 18)), (char)(0x80 | ((cp >> 12) & 63)),
+                              (char)(0x80 | ((cp >> 6) & 63)), (char)(0x80 | (cp & 63)) };
+                jt_put(J, o, b, 4);
+                i += 5;
+            } else {
+                char u[6] = { '\\', 'u', HEX[hi >> 12], HEX[(hi >> 8) & 15], HEX[(hi >> 4) & 15], HEX[hi & 15] };
+                jt_put(J, o, u, 6);
+                i += 2;
+            }
+            from = i + 1;
+            continue;
+        }
         if (c != '"' && c != '\\' && c >= 32) continue;
         jt_put(J, o, s->s + from, i - from);
         from = i + 1;
@@ -1846,7 +1869,9 @@ static int js_json_value(jctx *J, jjson *S, jval holder, jstr *key, jval v) {
         v = js_call(J, S->replacer, holder, args, 2);
         if (J->sig != JS_OK) return -1;
     }
-    if (js_is_obj(v) && v.obj->kind == JO_BOXED) v = v.obj->ival;
+    /* A boxed number, string or boolean is written as what it holds; a boxed
+       symbol is an object like any other, and is written as one. */
+    if (js_is_obj(v) && v.obj->kind == JO_BOXED && v.obj->ival.t != JS_SYM) v = v.obj->ival;
     switch (v.t) {
         case JS_NULL: jt_put(J, &S->out, "null", 4); return 1;
         case JS_BOOL: jt_put(J, &S->out, v.b ? "true" : "false", v.b ? 4 : 5); return 1;
@@ -2202,12 +2227,46 @@ static jval nat_reflect_get(jctx *J, jval t, jval *a, int n) {
     return js_getv(J, o, js_to_key(J, js_arg(a, n, 1)), n > 2 ? a[2] : o);
 }
 
+/* Reflect.set, as the standard's OrdinarySet has it: the property is looked
+   for from the target up; a setter found there runs with the receiver as
+   this; a writable data property found there, or none at all, is written on
+   the receiver, not where it was found; and the answer is whether it was
+   done. It wrote on the target: core-js asks Reflect.set(proto, "a", 1, obj)
+   to test for an old browser's bug, and that put an enumerable "a" on
+   Object.prototype, which every for-in on the page then walked. */
 static jval nat_reflect_set(jctx *J, jval t, jval *a, int n) {
     (void)t;
     jval o = js_arg(a, n, 0);
     if (!js_is_obj(o)) return js_throw(J, JS_ERR_TYPE, "Reflect.set needs an object", J->error_line);
-    js_putv(J, o, js_to_key(J, js_arg(a, n, 1)), js_arg(a, n, 2), n > 3 ? a[3] : o);
-    return js_bool(J->sig == JS_OK);
+    jstr *key = js_to_key(J, js_arg(a, n, 1));
+    if (J->sig != JS_OK || !key) return js_undef();
+    jval v = js_arg(a, n, 2);
+    jval recv = n > 3 ? a[3] : o;
+
+    jval found = js_undef();
+    int fl = 0, have = 0, depth = 0;
+    for (jobj *q = o.obj; q && !have && depth < 10000; q = q->proto, depth++)
+        if (js_get_own(J, q, key, &found, &fl)) have = 1;
+    if (have && found.t == JS_ACC) {
+        if (!js_callable(found.acc->set)) return js_bool(0);
+        js_call(J, found.acc->set, recv, &v, 1);
+        return J->sig == JS_OK ? js_bool(1) : js_undef();
+    }
+    if (have && !(fl & JP_WRITE)) return js_bool(0);
+    if (!js_is_obj(recv)) return js_bool(0);
+
+    jobj *r = recv.obj;
+    jval mine;
+    int mfl;
+    if (js_get_own(J, r, key, &mine, &mfl)) {
+        if (mine.t == JS_ACC || !(mfl & JP_WRITE)) return js_bool(0);
+        js_putv(J, recv, key, v, recv);
+    } else {
+        if (r->flags & JOF_NOEXT) return js_bool(0);
+        if (r == o.obj) js_putv(J, recv, key, v, recv);
+        else js_define(J, r, key, v, JP_PLAIN);
+    }
+    return J->sig == JS_OK ? js_bool(1) : js_undef();
 }
 
 static jval nat_reflect_has(jctx *J, jval t, jval *a, int n) {
