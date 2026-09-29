@@ -41,7 +41,11 @@
  * Both are tried, in that order, and fat_mount_on decides: a sector that is
  * not a boot sector fails the checks it already makes.
  */
-static const u8 FAT_TYPES[] = { 0x01, 0x04, 0x06, 0x0B, 0x0C, 0x0E, 0xEF };
+/* Not 0xEF, the EFI System Partition: a stick that starts a computer keeps
+   its loader there, and mounted at /usb and written like any other volume it
+   could stop starting it. The rule above held only for the disk the machine
+   started from. */
+static const u8 FAT_TYPES[] = { 0x01, 0x04, 0x06, 0x0B, 0x0C, 0x0E };
 
 static bool type_is_fat(u8 t) {
     for (u32 i = 0; i < sizeof FAT_TYPES; i++)

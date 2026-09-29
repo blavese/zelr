@@ -25,6 +25,9 @@ TOOLS = os.path.dirname(os.path.abspath(__file__))
 STICK = os.path.join(ROOT, "mountcheck.%d.img" % os.getpid())
 DISK = os.path.join(ROOT, "mountdisk.%d.img" % os.getpid())
 SEED = os.path.join(ROOT, "mountseed.%d.txt" % os.getpid())
+ESP_STICK = os.path.join(ROOT, "mountesp.%d.img" % os.getpid())
+ESP_DISK = os.path.join(ROOT, "mountespdisk.%d.img" % os.getpid())
+ESP_VOL = os.path.join(ROOT, "mountespvol.%d.img" % os.getpid())
 
 ON_STICK = "a file that was already on the stick"
 FROM_ZELR = "written from inside the machine"
@@ -65,6 +68,31 @@ def make_stick():
                         STICK, "8192", SEED + ":HELLO.TXT"],
                        capture_output=True, text=True)
     return r.returncode == 0
+
+
+def make_esp_stick():
+    """A stick laid out as one that starts a computer: a partition table whose
+    only entry is an EFI System Partition (type 0xEF) holding a FAT volume."""
+    r = subprocess.run([sys.executable, os.path.join(TOOLS, "mkfat.py"),
+                        ESP_VOL, "4096", SEED + ":BOOT.TXT"],
+                       capture_output=True, text=True)
+    if r.returncode != 0:
+        return False
+    with open(ESP_VOL, "rb") as f:
+        vol = f.read()
+    start = 2048
+    count = len(vol) // 512
+    mbr = bytearray(512)
+    e = 446
+    mbr[e + 4] = 0xEF
+    mbr[e + 8:e + 12] = start.to_bytes(4, "little")
+    mbr[e + 12:e + 16] = count.to_bytes(4, "little")
+    mbr[510], mbr[511] = 0x55, 0xAA
+    with open(ESP_STICK, "wb") as f:
+        f.write(bytes(mbr))
+        f.write(bytes(512 * (start - 1)))
+        f.write(vol)
+    return True
 
 
 def on_stick_now():
@@ -165,7 +193,32 @@ def main():
     c.add("and the stick's own volume is still intact, read from outside",
           "HELLO.TXT" in listing.upper())
 
-    for junk in (STICK, DISK, SEED, TRACE):
+    # --- a stick that starts a computer ----------------------------------------
+    #
+    # Its FAT volume is an EFI System Partition, which is never to be touched:
+    # that held for the disk the machine started from, and a stick's was
+    # mounted at /usb and written like any other.
+    esp_ok = make_esp_stick()
+    c.add("a stick whose only volume is its efi partition can be built", esp_ok)
+    if esp_ok:
+        esp_usb = ["-device", "qemu-xhci,id=xhci",
+                   "-drive", "if=none,id=stick,format=raw,file=" + ESP_STICK.replace("\\", "/"),
+                   "-device", "usb-storage,bus=xhci.0,drive=stick"]
+        vm = Guest(ESP_DISK, memory=256, machine="q35", extra=esp_usb)
+        try:
+            vm.wait_boot()
+            seen = vm.wait_serial("usb disk on slot", timeout=60)
+            c.add("the stick is found", seen)
+            vm.wait_serial("usb disk has no filesystem", timeout=20)
+            boot = vm.serial()
+            c.add("but its efi partition is not mounted",
+                  "usb disk has no filesystem" in boot and "usb volume mounted" not in boot)
+            out = vm.fresh("ls /")
+            c.add("and there is no /usb to write to", "usb/" not in out)
+        finally:
+            vm.stop()
+
+    for junk in (STICK, DISK, SEED, TRACE, ESP_STICK, ESP_DISK, ESP_VOL):
         try:
             os.remove(junk)
         except OSError:

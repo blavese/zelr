@@ -888,7 +888,7 @@ It always looks at entry 0. If that entry is a non-empty directory, both delete 
 - `empty_tmp` deletes the contents of any existing TMP directory there (names compare case-insensitively).
 - `fat_reclaim` rewrites its FAT (S5).
 
-**S21. USB MBR scan accepts type 0xEF** (diskfs.c:44).
+**S21. FIXED in 0.76.0 (0xEF is not among a stick's types; mountcheck). USB MBR scan accepts type 0xEF** (diskfs.c:44).
 The "never touch the ESP" rule is only enforced for disk 0, so a bootable stick's ESP can be mounted at /usb and written. GPT-formatted sticks cannot be mounted at all (§3.6).
 
 **S22. FIXED in 0.76.0 (`on_usb`, `vfs_volume_missing`, `fd_open`; the live tree self test). `/usb` with nothing mounted falls through to the RAM fs** (vfs.c:195-197, 246-253, 296-305).

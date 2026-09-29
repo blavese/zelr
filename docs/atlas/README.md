@@ -116,6 +116,9 @@ numbered files are still to 6048716; where they disagree with this list, this li
   under /usb fails (`on_usb`, `vfs_volume_missing`, and `fd_open` refusing it up front) instead of going to
   the files kept in memory, where a file copied to the stick was gone at the next start. [userspace]'s live
   tree section: four checks.
+- **A stick's EFI partition left alone (04 S21, diskfs.c).** Partition type 0xEF is no longer one a stick's
+  volume is mounted from. mountcheck: a stick whose only partition is an EFI System Partition is found and
+  not mounted.
 ### 0.75.0
 
 - **Auto margins, and columns lined up (11).** In a row, auto margins take the room left after growing and
