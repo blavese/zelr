@@ -531,7 +531,7 @@ static inline void lay_word(lctx *L, const char *s, int n, const cstyle *st,
     litem *it = lay_item(L);
     if (!it) return;
     it->kind = LK_TEXT;
-    it->at = lay_put(L, s, n);
+    it->at = st->ink_none ? -1 : lay_put(L, s, n);
     it->x = L->pen;
     it->w = w;
     it->h = tface_h(face);
@@ -548,6 +548,7 @@ static inline void lay_word(lctx *L, const char *s, int n, const cstyle *st,
 
 static inline void lay_text_run(lctx *L, const char *s, const cstyle *st,
                                 int *y) {
+    if (st->font_px <= 0) return;                 /* font-size: 0 */
     int face = face_pick(st->font_px, st->bold, st->mono);
     if (st->white == WS_PRE) {
         int i = 0;
@@ -685,7 +686,7 @@ static int lay_var_used;
 static int lay_var_in[DOM_NODES], lay_var_out[DOM_NODES];
 static unsigned lay_var_gen[DOM_NODES];
 #define LAY_ARENA (1024 * 1024)
-static char lay_arena[LAY_ARENA];
+static char *lay_arena;               /* mapped on first use (map, sdk/zelr.h) */
 static int lay_arena_used;
 
 static inline int lay_var_push(int head, const char *txt) {
@@ -750,7 +751,8 @@ static int lay_var_subst(int head, const char *v, int vlen, char *out, int cap, 
 /* Resolved text that lasts the whole layout. */
 static inline const char *lay_var_keep(int head, const char *v) {
     static char spill[4096];
-    char *dst = LAY_ARENA - lay_arena_used > 4096 ? lay_arena + lay_arena_used : spill;
+    if (!lay_arena) lay_arena = (char *)map(LAY_ARENA, PROT_READ | PROT_WRITE);
+    char *dst = lay_arena && LAY_ARENA - lay_arena_used > 4096 ? lay_arena + lay_arena_used : spill;
     int n = lay_var_subst(head, v, w_len(v), dst, 4096, 0);
     if (dst != spill) lay_arena_used += n + 1;
     return dst;
@@ -3188,8 +3190,11 @@ static void lay_block_placed(lctx *L, int node, const cstyle *parent, int x,
             lay_block(L, child, &st, cx, cw, y);
         } else {
             if (!inline_open) {
-                lay_line_start(L, *y, cx + (st.indent > 0 ? st.indent : 0),
-                               cw, st.align);
+                /* The indent is the first line's only, and a negative one
+                   -- -9999px, the way text is hidden behind a logo drawn in
+                   its place -- takes the words off the page. */
+                lay_line_start(L, *y, cx, cw, st.align);
+                if (st.indent != CSS_AUTO_OFF) L->pen += st.indent;
                 inline_open = 1;
             }
             if (d->nodes[child].kind == DN_TEXT) {

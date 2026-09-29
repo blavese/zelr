@@ -115,7 +115,15 @@ numbered files are still to 6048716; where they disagree with this list, this li
   a square of the text colour and a mask was a black square); a picture that did not arrive but has a
   size keeps its room as an empty frame instead of its alt text poured into a narrow column. Pictures per
   page: 48 (was 24).
-- **Checks.** layouttest 155 (16 new: :root variables, the nearest one inherited, fallback, a length from a
+- **Colours and hiding (11).** `css_last_alpha`: a background under 5% opaque is none, text under 5% is laid
+  out and not drawn (`cstyle.ink_none`); `.5` alphas are read (they were lost, and a faint colour drawn
+  solid); hsl()/hsla(), `currentColor` backgrounds, `#rrggbbaa`. `font-size: 0` lays out no words;
+  `text-indent` keeps its sign and moves the first line only (it moved every line).
+- **Memory (11).** The page's and a sheet's source, the tree, the style sheet and the laid out page are
+  mapped at start (`map`, paid for a page at a time) instead of declared: the browser's loaded size went
+  from 26.8 MB to 5.9 MB, after it had stopped starting on termcheck's 64 MB machine with other programs
+  open (the gate failed twice on that).
+- **Checks.** layouttest 161 (six more for the colours and hiding). layouttest 155 (16 new: :root variables, the nearest one inherited, fallback, a length from a
   variable, a variable made of another, calc less, min, clamp, calc products, masks, @import past @charset,
   print imports skipped, an import's media, the missing picture's frame and its alt text, one without a
   size), each seen failing on its own broken build; the :root check needed a page with a real `<body>` and

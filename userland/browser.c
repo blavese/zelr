@@ -79,17 +79,28 @@
 #define ASKS_MAX    64
 #define HIST_MAX   40
 
-static char src[SRC_MAX];
-static char cssbuf[CSS_MAX];
+/* The five big things -- the page's source, a sheet's, the tree, the style
+   sheet and the laid out page, twenty megabytes between them -- are mapped
+   when the browser starts rather than declared, because a declared array
+   is memory the loader hands over whole before the first instruction, and a
+   mapping is paid for a page at a time as it is used (map, sdk/zelr.h). A
+   small page touches a small part of each. Declared, they grew past what
+   a 64 megabyte machine had left with a terminal and a calculator open,
+   and the browser did not start at all. */
+static char *src;
+static char *cssbuf;
 static char scriptbuf[SCRIPT_MAX];
 static char replybuf[REPLY_MAX];
 static int  scripts_outside;
 static int  asks_made;
 
-static ddoc   doc;
-static csheet sheet;
+static ddoc   *doc_mem;
+static csheet *sheet_mem;
 static cindex index_;
-static ldoc   page;
+static ldoc   *page_mem;
+#define doc   (*doc_mem)
+#define sheet (*sheet_mem)
+#define page  (*page_mem)
 static cmatch match;
 static cinline inl[DOM_NODES];
 
@@ -1646,6 +1657,13 @@ static void browser_wait(int win) {
 }
 
 int main(int argc, char **argv) {
+    src = (char *)map(SRC_MAX, PROT_READ | PROT_WRITE);
+    cssbuf = (char *)map(CSS_MAX, PROT_READ | PROT_WRITE);
+    doc_mem = (ddoc *)map(sizeof(ddoc), PROT_READ | PROT_WRITE);
+    sheet_mem = (csheet *)map(sizeof(csheet), PROT_READ | PROT_WRITE);
+    page_mem = (ldoc *)map(sizeof(ldoc), PROT_READ | PROT_WRITE);
+    if (!src || !cssbuf || !doc_mem || !sheet_mem || !page_mem) exit(1);
+
     int win = win_create("Browser", 860, 620);
     if (win < 0) exit(1);
     browser_win = win;

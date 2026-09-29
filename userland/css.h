@@ -175,6 +175,9 @@ typedef struct {
        the mask it is a black square. Its background is left out. */
     unsigned char masked;
 
+    /* Text in a colour that cannot be seen: laid out, not drawn. Inherited. */
+    unsigned char ink_none;
+
     /* A transform's translation: pixels, plus a percentage of the box's own
        width or height (layout.h, lay_translate). Nothing else a transform
        does is drawn. */
@@ -318,8 +321,75 @@ static inline int css_hex(char c) {
 }
 
 /* Returns 1 and writes the colour, or 0 when the text is not one. */
+/* How opaque the last colour read was, 0 to 255: a background that is
+   (nearly) transparent is no background, and text in a transparent colour
+   is text nobody is meant to see, where both used to be drawn white. */
+static int css_last_alpha = 255;
+
+/* hsl(h, s%, l%) as RGB, in whole numbers: h in degrees, s and l in
+   hundredths of one. */
+static inline u32 css_hsl(int h, int s, int l) {
+    h %= 360;
+    if (h < 0) h += 360;
+    int c = (100 - (2 * l - 100 < 0 ? 100 - 2 * l : 2 * l - 100)) * s / 100;   /* chroma, % */
+    int hp = h * 100 / 60;                                                   /* h' in hundredths */
+    int m2 = hp % 200 - 100;
+    int x = c * (100 - (m2 < 0 ? -m2 : m2)) / 100;
+    int r = 0, g = 0, b = 0;
+    if (hp < 100) { r = c; g = x; }
+    else if (hp < 200) { r = x; g = c; }
+    else if (hp < 300) { g = c; b = x; }
+    else if (hp < 400) { g = x; b = c; }
+    else if (hp < 500) { r = x; b = c; }
+    else { r = c; b = x; }
+    int m = l - c / 2;
+    r = (r + m) * 255 / 100; g = (g + m) * 255 / 100; b = (b + m) * 255 / 100;
+    if (r < 0) r = 0;
+    if (g < 0) g = 0;
+    if (b < 0) b = 0;
+    if (r > 255) r = 255;
+    if (g > 255) g = 255;
+    if (b > 255) b = 255;
+    return (u32)((r << 16) | (g << 8) | b);
+}
+
 static inline int css_color(const char *s, u32 *out) {
     while (*s == ' ') s++;
+    css_last_alpha = 255;
+    if (w_starts_fold(s, "hsl")) {
+        while (*s && *s != '(') s++;
+        if (*s) s++;
+        int c[4] = { 0, 0, 0, 255 }, n = 0;
+        while (*s && *s != ')' && n < 4) {
+            while (*s == ' ' || *s == ',' || *s == '/') s++;
+            int v = 0, any = 0, frac = 0, fdiv = 1, neg = 0;
+            if (*s == '-') { neg = 1; s++; }
+            while (*s >= '0' && *s <= '9') { v = v * 10 + (*s - '0'); s++; any = 1; }
+            if (*s == '.') {
+                s++;
+                while (*s >= '0' && *s <= '9') {
+                    if (fdiv < 1000) { frac = frac * 10 + (*s - '0'); fdiv *= 10; }
+                    s++; any = 1;
+                }
+            }
+            if (!any) break;
+            if (n == 3) v = *s == '%' ? v * 255 / 100 : v * 255 + frac * 255 / fdiv;
+            if (*s == '%') s++;
+            while (*s && *s != ' ' && *s != ',' && *s != '/' && *s != ')') s++;   /* deg */
+            c[n++] = neg ? -v : v;
+        }
+        if (n < 3) return 0;
+        css_last_alpha = c[3] < 0 ? 0 : (c[3] > 255 ? 255 : c[3]);
+        u32 rgb = css_hsl(c[0], c[1], c[2]);
+        int a = css_last_alpha;
+        int r = (int)((rgb >> 16) & 255), g = (int)((rgb >> 8) & 255), b = (int)(rgb & 255);
+        r = (r * a + 255 * (255 - a)) / 255;
+        g = (g * a + 255 * (255 - a)) / 255;
+        b = (b * a + 255 * (255 - a)) / 255;
+        *out = (u32)((r << 16) | (g << 8) | b);
+        return 1;
+    }
+    if (w_same_fold(s, "transparent")) { *out = 0xFFFFFF; css_last_alpha = 0; return 1; }
     if (*s == '#') {
         s++;
         int d[8], n = 0;
@@ -331,6 +401,7 @@ static inline int css_color(const char *s, u32 *out) {
         if (n >= 6) {
             *out = (u32)((d[0] << 20) | (d[1] << 16) | (d[2] << 12)
                        | (d[3] << 8) | (d[4] << 4) | d[5]);
+            if (n == 8) css_last_alpha = d[6] * 16 + d[7];
             return 1;
         }
         if (n >= 3) {
@@ -348,11 +419,15 @@ static inline int css_color(const char *s, u32 *out) {
             while (*s == ' ' || *s == ',') s++;
             int v = 0, any = 0, frac = 0, fdiv = 1;
             while (*s >= '0' && *s <= '9') { v = v * 10 + (*s - '0'); s++; any = 1; }
+            /* `.5` with no nought in front is how most sheets write a half:
+               read as no number, the alpha was lost and a faint shadow
+               colour was drawn solid black. */
             if (*s == '.') {
                 s++;
                 while (*s >= '0' && *s <= '9') {
                     if (fdiv < 1000) { frac = frac * 10 + (*s - '0'); fdiv *= 10; }
                     s++;
+                    any = 1;
                 }
             }
             if (*s == '%') { v = v * 255 / 100; s++; }
@@ -363,6 +438,7 @@ static inline int css_color(const char *s, u32 *out) {
         }
         if (n < 3) return 0;
         int a = c[3] < 0 ? 0 : (c[3] > 255 ? 255 : c[3]);
+        css_last_alpha = a;
         /* Over white, because nothing below composites. */
         int r = (c[0] * a + 255 * (255 - a)) / 255;
         int g = (c[1] * a + 255 * (255 - a)) / 255;
@@ -1634,6 +1710,7 @@ static inline void css_default_style(cstyle *st, int root_px) {
     st->clip = st->gone = 0;
     st->floated = st->clear = 0;
     st->masked = 0;
+    st->ink_none = 0;
     st->tx_px = st->ty_px = st->tx_pct = st->ty_pct = 0;
     st->grid_cols = st->grid_areas = st->garea = 0;
     st->vars = -1;
@@ -1660,6 +1737,7 @@ static inline void css_inherit(cstyle *child, const cstyle *parent) {
     child->has_bg = 0;
     child->spacing = parent->spacing;
     child->vars = parent->vars;
+    child->ink_none = parent->ink_none;
 }
 
 /* One length of a translation: pixels and a percentage of the box, from a
@@ -1844,10 +1922,20 @@ static inline void css_apply(const csheet *s, const cdecl *dcl, cstyle *st,
 
 static inline void css_apply_v(int prop, const char *v, cstyle *st, int root_px, int pct_of) {
     switch (prop) {
-        case P_COLOR: css_color(v, &st->color); break;
-        case P_BACKGROUND:
-            if (css_color(v, &st->background)) st->has_bg = 1;
+        case P_COLOR:
+            if (w_same_fold(v, "currentcolor") || w_same_fold(v, "inherit")) break;
+            if (css_color(v, &st->color)) st->ink_none = css_last_alpha < 13;
             break;
+        case P_BACKGROUND: {
+            u32 c;
+            if (w_same_fold(v, "currentcolor")) { st->background = st->color; st->has_bg = 1; break; }
+            if (!css_color(v, &c)) break;
+            /* (Nearly) transparent is no background at all. */
+            if (css_last_alpha < 13) { st->has_bg = 0; break; }
+            st->background = c;
+            st->has_bg = 1;
+            break;
+        }
         case P_BORDER_COLOR: css_color(v, &st->border_color); break;
         case P_DISPLAY:
             if (w_starts_fold(v, "none")) st->display = D_NONE;
@@ -1929,6 +2017,9 @@ static inline void css_apply_v(int prop, const char *v, cstyle *st, int root_px,
             clen L = css_len_at(v, st->font_px, root_px, st->font_px);
             int px = css_px(L, st->font_px, root_px, st->font_px);
             if (px > 0) st->font_px = (short)(px > 96 ? 96 : (px < 7 ? 7 : px));
+            /* Nought is how a page hides the words in something it draws
+               another way, and the gaps between inline-blocks. */
+            else if (px == 0 && L.unit != U_AUTO) st->font_px = 0;
             break;
         }
         case P_FONT_WEIGHT: {
@@ -2103,7 +2194,7 @@ static inline void css_apply_v(int prop, const char *v, cstyle *st, int root_px,
             clen L = css_len(v);
             if (L.unit == U_PCT) st->line_h = (short)(L.v / 100);
             else if (L.unit == U_PX && L.v > 400)
-                st->line_h = (short)(L.v * 100 / (st->font_px * 100));
+                st->line_h = (short)(st->font_px > 0 ? L.v * 100 / (st->font_px * 100) : 145);
             else if (L.unit != U_AUTO) st->line_h = (short)(L.v);   /* a number */
             if (st->line_h < 90) st->line_h = 90;
             if (st->line_h > 300) st->line_h = 300;
@@ -2186,7 +2277,7 @@ static inline void css_apply_v(int prop, const char *v, cstyle *st, int root_px,
                pulled back over the column it floated after, and clamping it
                to nothing put both somewhere else. Auto is kept apart from
                every number, which is what centring needs. */
-            if ((prop >= P_TOP && prop <= P_LEFT)
+            if ((prop >= P_TOP && prop <= P_LEFT) || prop == P_TEXT_INDENT
                 || (prop >= P_MARGIN_T && prop <= P_MARGIN_L)) {
                 if (L.unit == U_AUTO) { *slot = CSS_AUTO_OFF; break; }
                 if (px < -4000) px = -4000;

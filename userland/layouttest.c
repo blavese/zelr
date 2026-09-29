@@ -1097,6 +1097,23 @@ int main(void) {
         ok("one with no size is still its words", word("words") != 0);
     }
 
+    /* --- colours that cannot be seen, and text put out of sight ------------------ */
+    {
+        lay("<style>#t{background:transparent}#h{background:rgba(0,0,0,.1)}#z{background:rgba(0,0,0,0)}"
+            "#l{color:hsl(0, 100%, 50%)}#i{color:transparent}#f{font-size:0}"
+            "#x{text-indent:-9999px}#t,#h,#z{width:50px;height:10px}</style>"
+            "<div id=t></div><div id=h></div><div id=z></div><p id=l>hue</p><p id=i>ghost</p>"
+            "<p id=f>hidden</p><p id=x>offpage</p><p>shown</p>", 600);
+        const litem *t = box_of(by_id("t")), *h = box_of(by_id("h")), *z = box_of(by_id("z"));
+        const litem *l = word("hue"), *x = word("offpage");
+        ok("a transparent background is no background", !(t && t->has_bg) && !(z && z->has_bg));
+        ok("and a faint one written .1 is faint, not black", h && h->has_bg && h->bg == 0xE6E6E6);
+        ok("hsl() is a colour", l && l->color == 0xFF0000);
+        ok("text in a transparent colour is not drawn", !word("ghost") && word("shown"));
+        ok("nor text at font-size 0", !word("hidden"));
+        ok("and text indented by -9999px is off the page", x && x->x + x->w < 0);
+    }
+
     puts(failed ? "LAYOUTTEST_FAIL\n" : "LAYOUTTEST_PASS\n");
     return failed;
 }
