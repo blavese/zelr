@@ -95,6 +95,14 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.75.0 (in progress)
+
+- **Auto margins, and columns lined up (11).** In a row, auto margins take the room left after growing and
+  before justify-content, shared evenly (`lay_flex_line`, `amarg`): `margin-left: auto` pushes an item to
+  the far end, `margin: auto` centres one. In a column, an item lined up by align-items or its align-self
+  (start, centre, end) or with an auto margin is as wide as what is in it (its width, else measured) and
+  placed across the column; stretch still fills it. layouttest: four checks, each seen failing.
+
 ### 0.74.0
 
 - **Pictures sized by the page's rules (11).** An `<img>` takes the CSS width and height (a percentage left

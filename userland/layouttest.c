@@ -1663,6 +1663,29 @@ int main(void) {
         ok("and what it reaches is worked out", nr == 1 && doc.nodes[reach[0]].tag == T_DIV);
     }
 
+    /* --- auto margins in a row, and a column lined up -------------------------- */
+    {
+        lay("<style>.r{display:flex;width:600px}.a{width:100px;height:10px;background:#000}"
+            ".b{width:100px;height:10px;background:#888;margin-left:auto}</style>"
+            "<div class=r><div class=a id=ra></div><div class=b id=rb></div></div>", 800);
+        const litem *ra = box_of(by_id("ra")), *rb = box_of(by_id("rb"));
+        okn("margin-left: auto pushes an item to the far end of its row",
+            ra && rb && rb->x - ra->x == 500, ra && rb ? rb->x - ra->x : -1);
+        lay("<style>.r{display:flex;width:600px;background:#eee}.m{width:100px;height:10px;background:#000;margin:0 auto}</style>"
+            "<div class=r id=rr><div class=m id=rm></div></div>", 800);
+        const litem *rm = box_of(by_id("rm")), *rr = box_of(by_id("rr"));
+        okn("and margin: auto centres one", rm && rr && rm->x - rr->x == 250, rm && rr ? rm->x - rr->x : -1);
+        lay("<style>.c{display:flex;flex-direction:column;align-items:center;width:600px;background:#eee}"
+            ".t{background:#000}.e{align-self:flex-end;background:#888}</style>"
+            "<div class=c id=cc><p class=t id=ct>short</p><p class=e id=ce>end</p></div>", 800);
+        const litem *ct = box_of(by_id("ct")), *ce = box_of(by_id("ce")), *cc = box_of(by_id("cc"));
+        int mid = ct && cc ? (ct->x - cc->x) * 2 + ct->w - cc->w : 99;
+        okn("a centred column centres what is in it, as wide as it is",
+            ct && cc && ct->w < 200 && mid >= -2 && mid <= 2, ct && cc ? (ct->x - cc->x) * 1000 + ct->w : -1);
+        okn("and align-self: flex-end puts one at the end", ce && cc && ce->x + ce->w == cc->x + cc->w && ce->w < 200,
+            ce && cc ? ce->x * 1000 + ce->w : -1);
+    }
+
     puts(failed ? "LAYOUTTEST_FAIL\n" : "LAYOUTTEST_PASS\n");
     return failed;
 }

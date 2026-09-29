@@ -2224,7 +2224,8 @@ static int lay_measure(lctx *L, int node, const cstyle *parent, int avail,
    go (low), its measured height and how much it grows. */
 static void lay_flex_line(lctx *L, const cstyle *st, const int *kid, const int *par, int n,
                           const int *meas, int *want, const int *low,
-                          const int *high, const int *grow, const int *aself, int cx, int cw,
+                          const int *high, const int *grow, const int *aself,
+                          const unsigned char *amarg, int cx, int cw,
                           int gap, int reverse, int *y) {
     int total = 0, grows = 0, hyp = 0;
     for (int i = 0; i < n; i++) {
@@ -2317,6 +2318,24 @@ static void lay_flex_line(lctx *L, const cstyle *st, const int *kid, const int *
         if (spare < 0) spare = 0;
     }
 
+    /* Auto margins take what room is left before justify-content does,
+       shared evenly among them: margin-left: auto is how a page pushes its
+       sign-in link to the far end of its bar, and margin: auto centres an
+       item. Read as nothing, the link sat beside the rest. */
+    int before[LAY_FLEX_MAX], after[LAY_FLEX_MAX], autos = 0;
+    for (int i = 0; i < n; i++) {
+        before[i] = after[i] = 0;
+        autos += (amarg[i] & 1) + ((amarg[i] >> 1) & 1);
+    }
+    if (autos > 0 && spare > 0) {
+        int share = spare / autos;
+        for (int i = 0; i < n; i++) {
+            if (amarg[i] & 1) before[i] = share;
+            if (amarg[i] & 2) after[i] = share;
+        }
+        spare = 0;
+    }
+
     /* Where the first one starts and what goes between them. */
     int pen = cx;
     int between = gap;
@@ -2379,12 +2398,13 @@ static void lay_flex_line(lctx *L, const cstyle *st, const int *kid, const int *
         int child_y = top;
         cstyle pbuf;
         const cstyle *ps = lay_item_parent(L, st, par[i], cw, &pbuf);
+        pen += before[i];
         L->flex_sized = kid[i];
         lay_block(L, kid[i], ps, pen, want[i], &child_y);
         L->flex_sized = -1;
         got[idx] = child_y - top;
         if (got[idx] > tallest) tallest = got[idx];
-        pen += want[i] + between;
+        pen += want[i] + after[i] + between;
     }
     first[n] = L->out->nitems;
 
@@ -2445,12 +2465,44 @@ static void lay_flex(lctx *L, int node, const cstyle *st, int cx, int cw,
             cstyle pbuf;
             const cstyle *ps = lay_item_parent(L, st, par[ki], cw, &pbuf);
             if (i) *y += gap;
-            lay_block(L, kid[ki], ps, cx, cw, y);
+            /* Down the page an item is as wide as the column, unless it is
+               lined up otherwise -- start, centre or end, by align-items or
+               its own align-self -- or has an auto margin: then it is as
+               wide as what is in it, placed across the width. A column of
+               centred things, a sign-in form or a heading over a button, was
+               a stack of blocks the width of the page. */
+            cstyle own;
+            lay_style(L, kid[ki], ps, &own, cw);
+            int al = own.align_self >= 0 ? own.align_self : st->align_items;
+            int aml = own.ml == CSS_AUTO_OFF, amr = own.mr == CSS_AUTO_OFF;
+            if (d->nodes[kid[ki]].kind == DN_ELEMENT
+                && (al == AI_START || al == AI_CENTER || al == AI_END || aml || amr)) {
+                int h = 0, w;
+                if (own.width >= 0 && !lay_pct_cyclic(L, kid[ki], &own, st))
+                    w = own.width + (own.border_box ? 0 : own.pl + own.pr + own.bl + own.br)
+                      + (own.ml > 0 ? own.ml : 0) + (own.mr > 0 ? own.mr : 0);
+                else
+                    w = lay_measure(L, kid[ki], ps, cw, &h);
+                if (w > cw) w = cw;
+                if (w < 1) w = 1;
+                int off = 0;
+                if (aml && amr) off = (cw - w) / 2;
+                else if (aml) off = cw - w;
+                else if (amr) off = 0;
+                else if (al == AI_CENTER) off = (cw - w) / 2;
+                else if (al == AI_END) off = cw - w;
+                L->flex_sized = kid[ki];
+                lay_block(L, kid[ki], ps, cx + off, w, y);
+                L->flex_sized = -1;
+            } else {
+                lay_block(L, kid[ki], ps, cx, cw, y);
+            }
         }
     } else {
         /* --- along the line ------------------------------------------------ */
         int want[LAY_FLEX_MAX], high[LAY_FLEX_MAX], grow[LAY_FLEX_MAX];
         int meas[LAY_FLEX_MAX], low[LAY_FLEX_MAX], aself[LAY_FLEX_MAX];
+        unsigned char amarg[LAY_FLEX_MAX];
 
         for (int i = 0; i < n; i++) {
             int h = 0, h2 = 0;
@@ -2509,13 +2561,14 @@ static void lay_flex(lctx *L, int node, const cstyle *st, int cx, int cw,
             high[i] = h;
             grow[i] = own.grow > 0 ? own.grow : 0;
             aself[i] = own.align_self;
+            amarg[i] = (unsigned char)((own.ml == CSS_AUTO_OFF) | ((own.mr == CSS_AUTO_OFF) << 1));
         }
 
         /* A row that would scroll sideways -- a shelf of cards, a strip of
            albums -- cannot be scrolled inside a page here, and squeezed onto
            one line its cards were written over each other. It wraps. */
         if (!st->flex_wrap && st->clip != 2) {
-            lay_flex_line(L, st, kid, par, n, meas, want, low, high, grow, aself, cx, cw, gap, reverse, y);
+            lay_flex_line(L, st, kid, par, n, meas, want, low, high, grow, aself, amarg, cx, cw, gap, reverse, y);
         } else {
             /* Wrapping: as many as fit on each line, each line a row of its
                own. Card grids are built this way, and one row of every card
@@ -2533,7 +2586,7 @@ static void lay_flex(lctx *L, int node, const cstyle *st, int cx, int cw,
                 }
                 if (i0) *y += gap;
                 lay_flex_line(L, st, kid + i0, par + i0, i1 - i0, meas + i0, want + i0, low + i0,
-                              high + i0, grow + i0, aself + i0, cx, cw, gap, reverse, y);
+                              high + i0, grow + i0, aself + i0, amarg + i0, cx, cw, gap, reverse, y);
                 i0 = i1;
             }
         }
