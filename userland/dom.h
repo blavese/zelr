@@ -441,10 +441,11 @@ typedef struct {
     ddoc *d;
     int stack[DOM_DEPTH];
     int depth;
+    int base;                    /* what the outermost elements go into */
 } dparse;
 
 static inline int dp_top(dparse *z) {
-    return z->depth > 0 ? z->stack[z->depth - 1] : z->d->root;
+    return z->depth > 0 ? z->stack[z->depth - 1] : z->base;
 }
 
 static inline int dp_tag_top(dparse *z) {
@@ -504,15 +505,13 @@ static inline int dp_all_space(const char *s) {
     return 1;
 }
 
-static inline void dom_parse(ddoc *d, const char *p, int len) {
-    d->count = 0; d->nattrs = 0; d->used = 0;
-    d->title = -1; d->overflowed = 0;
-    d->root = d->body = d->head = -1;
-    d->standards = 0;
-    d->root = dom_new(d, DN_ELEMENT, T_HTML);
-
+/* Markup read into a document that already exists, under `parent`: what a
+   whole page is (dom_parse, below, with the root as the parent) and what a
+   script writing innerHTML is. One reader for both, so a fragment a script
+   writes is read by the same rules as the page it lands in. */
+static inline void dom_parse_into(ddoc *d, const char *p, int len, int parent) {
     dparse z;
-    z.d = d; z.depth = 0;
+    z.d = d; z.depth = 0; z.base = parent;
 
     int i = 0;
     while (i < len) {
@@ -693,6 +692,16 @@ static inline void dom_parse(ddoc *d, const char *p, int len) {
             }
         }
     }
+}
+
+static inline void dom_parse(ddoc *d, const char *p, int len) {
+    d->count = 0; d->nattrs = 0; d->used = 0;
+    d->title = -1; d->overflowed = 0;
+    d->root = d->body = d->head = -1;
+    d->standards = 0;
+    d->root = dom_new(d, DN_ELEMENT, T_HTML);
+
+    dom_parse_into(d, p, len, d->root);
 
     /* A page with no body element still has content, and everything that
        looks for one has to find something. */

@@ -28,6 +28,9 @@ static void ok(const char *what, int cond) {
 }
 
 static void oks(const char *what, const char *got, const char *want) {
+    /* An attribute that is not there is nothing, and a check that met one
+       took the whole program down instead of failing. */
+    if (!got) got = "(nothing)";
     int same = 1;
     for (int i = 0;; i++) {
         if (got[i] != want[i]) { same = 0; break; }
@@ -84,6 +87,38 @@ static int pump_until(int want, int ms) {
     int until = ticks() + (ms * 100 + 999) / 1000;
     while (ran < want && ticks() - until < 0) ran += jsdom_timers();
     return ran;
+}
+
+/* A page run, and what its scripts left in the title -- or, when one of
+   them stopped, what stopped it, so a failure says why rather than showing
+   the title it never got to write. */
+static char said[256];
+
+static const char *titled(const char *html) {
+    load(html);
+    char err[128];
+    run_scripts(&page, err, (int)sizeof(err), 0);
+    const char *t = page.title >= 0 ? page.arena + page.title : "";
+    const char *from = err[0] ? err : t;
+    int i = 0;
+    for (; from[i] && i < (int)sizeof(said) - 1; i++) said[i] = from[i];
+    said[i] = 0;
+    return said;
+}
+
+/* Scripts from a src, for the checks that insert one: whatever address is
+   asked for, the text it names after "#". */
+static int fake_script(const char *src, const char **out) {
+    for (const char *p = src; *p; p++)
+        if (*p == '#') { *out = p + 1; int n = 0; while (p[1 + n]) n++; return n; }
+    return 0;
+}
+
+/* Where a pretend layout put everything: one box, for every element. */
+static int fake_box(int node, int *x, int *y, int *w, int *h) {
+    (void)node;
+    *x = 10; *y = 100; *w = 50; *h = 20;
+    return 1;
 }
 
 int main(void) {
@@ -720,6 +755,247 @@ int main(void) {
         jsdom_click(dom_by_id(&page, "out"));
         oks("and a listener on the document has the document as this",
             content_of(dom_by_id(&page, "who")), "true");
+    }
+
+    /* --- the standard's objects -------------------------------------------------
+     *
+     * An element is an HTMLDivElement, an HTMLElement, an Element, a Node
+     * and an EventTarget, and the document is a Document: that is how
+     * libraries tell a node from anything else, and jQuery stopped on
+     * document.nodeType, GOV.UK on HTMLScriptElement, Reddit on HTMLElement. */
+    oks("an element is an instance of every interface above it",
+        titled("<body><div id=d></div><script>var d = document.getElementById('d');"
+               "document.title = [d instanceof HTMLDivElement, d instanceof HTMLElement,"
+               " d instanceof Element, d instanceof Node, d instanceof EventTarget,"
+               " document instanceof Document, document.nodeType, d.nodeType,"
+               " document.body.firstChild.nodeType, d.tagName, document.documentElement.nodeName,"
+               " Object.prototype.toString.call(d), typeof HTMLScriptElement].join(' ');"
+               "</script></body>"),
+        "true true true true true true 9 1 1 DIV HTML [object HTMLDivElement] function");
+    oks("and a page can add a method to Element.prototype that every element has",
+        titled("<body><p id=p>x</p><script>Element.prototype.hi = function(){ return 'hi ' + this.id; };"
+               "document.title = document.getElementById('p').hi();</script></body>"),
+        "hi p");
+    oks("the tree walks the way the standard's does, text nodes and all",
+        titled("<body><p id=u><b>a</b> <i id=b>b</i></p><script>var u = document.getElementById('u');"
+               "document.title = [u.childNodes.length, u.children.length, u.firstChild.nodeName,"
+               " u.firstChild.nextSibling.nodeType, u.firstElementChild.nextElementSibling.id,"
+               " u.lastChild.previousSibling.nodeName, document.getElementById('b').parentElement.id,"
+               " document.documentElement.parentNode === document, u.childElementCount].join(' ');"
+               "</script></body>"),
+        "3 2 B 3 b #text u true 2");
+    oks("children and getElementsByClassName follow the document",
+        titled("<body><div id=d><p class='a b'>1</p></div><script>var d = document.getElementById('d');"
+               "var kids = d.children, found = document.getElementsByClassName('b a');"
+               "var before = kids.length + ',' + found.length;"
+               "var p = document.createElement('p'); p.className = 'b a'; d.appendChild(p);"
+               "document.title = before + ' ' + kids.length + ',' + found.length + ' '"
+               " + (found.item(1) === p) + ' ' + (d.children === kids);</script></body>"),
+        "1,1 2,2 true true");
+    oks("closest, matches and contains",
+        titled("<body><nav class=menu><a id=a href=#><b id=b>x</b></a></nav><script>"
+               "var b = document.getElementById('b');"
+               "document.title = [b.closest('nav.menu').tagName, b.closest('a').id,"
+               " b.matches('a > b'), b.matches('nav > b'), document.body.contains(b),"
+               " b.contains(document.body), document.contains(b)].join(' ');</script></body>"),
+        "NAV a true false true false true");
+    oks("textContent written replaces what was there, and what was there is taken out",
+        titled("<body><div id=d><span id=s>old</span></div><script>var d = document.getElementById('d');"
+               "var s = document.getElementById('s'); d.textContent = 'new';"
+               "document.title = d.textContent + ' ' + (s.parentNode === null) + ' ' + d.childNodes.length;"
+               "</script></body>"),
+        "new true 1");
+    oks("innerHTML reads as markup and writes elements a script can find",
+        titled("<body><div id=d><b class=x>a &amp; b</b><br></div><script>var d = document.getElementById('d');"
+               "var before = d.innerHTML;"
+               "d.innerHTML = '<p id=made title=\"q&quot;\">made <i>here</i></p><script>window.bad = 1<\\/script>';"
+               "document.title = before + ' | ' + document.getElementById('made').textContent + ' | '"
+               " + document.getElementById('made').title + ' | ' + d.querySelectorAll('i').length"
+               " + ' ' + typeof bad;</script></body>"),
+        "<b class=\"x\">a &amp; b</b><br> | made here | q\" | 1 undefined");
+    oks("outerHTML and insertAdjacentHTML put markup where they say",
+        titled("<body><div id=d><p id=p>p</p></div><script>var p = document.getElementById('p');"
+               "p.insertAdjacentHTML('beforebegin', '<i>1</i>');"
+               "p.insertAdjacentHTML('afterbegin', '<i>2</i>');"
+               "p.insertAdjacentHTML('beforeend', '<i>3</i>');"
+               "p.insertAdjacentHTML('afterend', '<i>4</i>');"
+               "var d = document.getElementById('d'); var s = d.innerHTML;"
+               "p.outerHTML = '<em>gone</em>';"
+               "document.title = s + ' ' + d.textContent;</script></body>"),
+        "<i>1</i><p id=\"p\"><i>2</i>p<i>3</i></p><i>4</i> 1gone4");
+    oks("a copy is a copy: its attributes are its own, and deep takes the children",
+        titled("<body><div id=d class=one><span>x</span></div><script>var d = document.getElementById('d');"
+               "var c = d.cloneNode(true), s = d.cloneNode(false);"
+               "c.className = 'two'; c.id = 'c';"
+               "document.title = d.className + ' ' + c.className + ' ' + c.innerHTML + ' ['"
+               " + s.innerHTML + '] ' + d.id;</script></body>"),
+        "one two <span>x</span> [] d");
+    oks("dataset, hidden and attributes are views of the attributes",
+        titled("<body><div id=d data-user-id=7 hidden></div><script>var d = document.getElementById('d');"
+               "var a = d.dataset.userId + ' ' + d.hidden; d.dataset.fooBar = 'z'; d.hidden = false;"
+               "var names = []; for (var i = 0; i < d.attributes.length; i++) names.push(d.attributes[i].name);"
+               "document.title = a + ' ' + d.getAttribute('data-foo-bar') + ' ' + d.hasAttribute('hidden')"
+               " + ' ' + names.join(',');</script></body>"),
+        "7 true z false id,data-user-id,data-foo-bar");
+    oks("style is an object that writes the style attribute",
+        titled("<body><div id=d style='color: red'></div><script>var d = document.getElementById('d');"
+               "d.style.display = 'none'; d.style.backgroundColor = 'blue'; d.style.color = '';"
+               "var r = d.style.display + ' ' + d.style.getPropertyValue('background-color');"
+               "d.style.transition = 'x';"
+               "document.title = r + ' | ' + d.getAttribute('style') + ' | ' + ('transition' in d.style)"
+               " + ' ' + d.style.length;</script></body>"),
+        "none blue | display: none; background-color: blue; | true 2");
+    {
+        /* And the browser is told which elements' styles to read again. */
+        load("<body><div id=d></div><p id=q style='color:red'></p>"
+             "<script>document.getElementById('d').style.display = 'none';</script></body>");
+        char err[128];
+        run_scripts(&page, err, (int)sizeof(err), 0);
+        int first = jsdom_next_restyled();
+        ok("an element whose style a script wrote is handed back to be read again, once",
+           first == dom_by_id(&page, "d") && jsdom_next_restyled() < 0);
+    }
+    oks("an element taken out of the page is not found in it",
+        titled("<body><p id=gone class=g>x</p><script>var p = document.getElementById('gone'); p.remove();"
+               "document.title = [document.getElementById('gone'), document.querySelector('.g'),"
+               " document.getElementsByClassName('g').length, p.isConnected].join(' ');</script></body>"),
+        "  0 false");
+    oks("a form's controls are properties of it by name, and a select says what is chosen",
+        titled("<body><form id=f><input name=q value=zelr><select id=s><option value=a>A"
+               "<option value=b selected>B</select></form><script>var f = document.getElementById('f');"
+               "var s = document.getElementById('s');"
+               "var r = f.q.value + ' ' + s.value + ' ' + s.selectedIndex + ' ' + f.elements.length;"
+               "s.selectedIndex = 0;"
+               "document.title = r + ' ' + s.value + ' ' + s.options[1].selected;</script></body>"),
+        "zelr b 1 2 a false");
+    {
+        /* getBoundingClientRect from where the layout put the element, in the
+           window's terms: the page scrolled by thirty is thirty higher. */
+        jsdom_boxes_with(fake_box);
+        jsdom_view(800, 600, 30);
+        oks("a box is where the layout put it, less the scroll",
+            titled("<body><div id=d></div><script>var r = document.getElementById('d').getBoundingClientRect();"
+                   "document.title = [r.left, r.top, r.width, r.height, r.bottom,"
+                   " document.documentElement.clientWidth].join(' ');</script></body>"),
+            "10 70 50 20 90 800");
+        jsdom_boxes_with(0);
+        jsdom_view(0, 0, 0);
+        oks("and with nothing laid out it is nowhere, with no size",
+            titled("<body><div id=d></div><script>var r = document.getElementById('d').getBoundingClientRect();"
+                   "document.title = [r.left, r.top, r.width, r.height].join(' ');</script></body>"),
+            "0 0 0 0");
+    }
+
+    /* --- scripts a page adds, and ones it must not run ----------------------------- */
+    oks("a script inside a template does not run",
+        titled("<body><template><script>document.title = 'ran';</script></template>"
+               "<script>document.title = document.title || 'kept';</script></body>"),
+        "kept");
+    oks("a template's content is a fragment a script can stamp out",
+        titled("<body><template id=t><li class=row>x</li></template><ul id=u></ul><script>"
+               "var t = document.getElementById('t'), u = document.getElementById('u');"
+               "u.appendChild(t.content.cloneNode(true)); u.appendChild(document.importNode(t.content, true));"
+               "document.title = u.querySelectorAll('.row').length + ' ' + t.content.nodeType + ' '"
+               " + document.querySelectorAll('template .row').length;</script></body>"),
+        "2 11 0");
+    oks("a script a page makes and appends runs when it is put in the page",
+        titled("<body><script>var s = document.createElement('script');"
+               "s.textContent = 'document.title = \"inserted \" + (document.currentScript === s);';"
+               "document.body.appendChild(s);</script></body>"),
+        "inserted true");
+    {
+        jsdom_fetch_with(fake_script);
+        load("<body><p id=out>no</p><script>var s = document.createElement('script');"
+             "s.src = 'x.js#document.getElementById(\"out\").textContent = \"fetched\";';"
+             "s.onload = function(){ document.title = 'loaded'; };"
+             "document.head.appendChild(s);</script></body>");
+        char err[128];
+        run_scripts(&page, err, (int)sizeof(err), 0);
+        oks("and one with a src waits for the next pass rather than running inside appendChild",
+            content_of(dom_by_id(&page, "out")), "no");
+        pump_until(1, 2000);
+        oks("then runs", content_of(dom_by_id(&page, "out")), "fetched");
+        oks("and is told it loaded", page.title >= 0 ? page.arena + page.title : "", "loaded");
+        jsdom_fetch_with(0);
+    }
+    oks("document.write while the page is read puts its markup after the script",
+        titled("<body><div id=d><script>document.write('<b id=w>written</b>');</script><i>after</i></div>"
+               "<script>var d = document.getElementById('d');"
+               "document.title = d.children[1].id + ' ' + d.lastChild.textContent;</script></body>"),
+        "w after");
+
+    /* --- custom elements ------------------------------------------------------------ */
+    oks("a custom element defined after it is in the page is upgraded and told it is connected",
+        titled("<body><my-thing id=t name=a></my-thing><script>var log = [];"
+               "class Thing extends HTMLElement {"
+               " static get observedAttributes(){ return ['name']; }"
+               " constructor(){ super(); log.push('made'); }"
+               " connectedCallback(){ log.push('in'); }"
+               " attributeChangedCallback(n, o, v){ log.push(n + ':' + o + '>' + v); } }"
+               "customElements.define('my-thing', Thing);"
+               "var t = document.getElementById('t'); t.setAttribute('name', 'b');"
+               "var made = new Thing(); document.body.appendChild(made);"
+               "document.title = log.join(' ') + ' ' + (t instanceof Thing) + ' ' + made.tagName"
+               " + ' ' + (customElements.get('my-thing') === Thing);</script></body>"),
+        "made name:null>a in name:a>b made in true MY-THING true");
+
+    /* --- events ----------------------------------------------------------------------- */
+    oks("an event a page makes goes where it is sent, bubbling when it asks to",
+        titled("<body><div id=o><p id=i>x</p></div><script>var log = [];"
+               "var o = document.getElementById('o'), i = document.getElementById('i');"
+               "o.addEventListener('ping', function(e){ log.push('o:' + e.detail + ':' + (e.target === i) + ':' + e.eventPhase); });"
+               "document.addEventListener('ping', function(e){ log.push('doc'); });"
+               "var ok = i.dispatchEvent(new CustomEvent('ping', { bubbles: true, detail: 5 }));"
+               "i.dispatchEvent(new Event('ping'));"
+               "document.title = log.join(' ') + ' ' + ok + ' ' + (new Event('x') instanceof Event);</script></body>"),
+        "o:5:true:3 doc true true");
+    oks("capture listeners run on the way down, before the target's",
+        titled("<body><div id=o><p id=i>x</p></div><script>var log = [];"
+               "var o = document.getElementById('o'), i = document.getElementById('i');"
+               "o.addEventListener('go', function(){ log.push('bubble'); });"
+               "o.addEventListener('go', function(){ log.push('capture'); }, true);"
+               "i.addEventListener('go', function(){ log.push('target'); });"
+               "i.dispatchEvent(new Event('go', { bubbles: true }));"
+               "document.title = log.join(' ');</script></body>"),
+        "capture target bubble");
+    oks("once, stopImmediatePropagation, preventDefault and a listener object",
+        titled("<body><p id=i>x</p><script>var n = 0, log = [];"
+               "var i = document.getElementById('i');"
+               "i.addEventListener('t', function(){ n++; }, { once: true });"
+               "i.addEventListener('t', { handleEvent: function(e){ log.push('obj'); e.preventDefault(); } });"
+               "i.addEventListener('t', function(e){ e.stopImmediatePropagation(); log.push('stop'); });"
+               "i.addEventListener('t', function(){ log.push('never'); });"
+               "var r1 = i.dispatchEvent(new Event('t', { cancelable: true }));"
+               "i.dispatchEvent(new Event('t'));"
+               "document.title = n + ' ' + log.join(' ') + ' ' + r1;</script></body>"),
+        "1 obj stop obj stop false");
+    oks("a passive listener cannot refuse the default",
+        titled("<body><p id=i>x</p><script>var i = document.getElementById('i');"
+               "i.addEventListener('t', function(e){ e.preventDefault(); }, { passive: true });"
+               "var e = new Event('t', { cancelable: true });"
+               "document.title = i.dispatchEvent(e) + ' ' + e.defaultPrevented;</script></body>"),
+        "true false");
+    oks("click() runs the handlers and, for a box, ticks it",
+        titled("<body><input id=c type=checkbox><script>var c = document.getElementById('c'), log = [];"
+               "c.addEventListener('click', function(e){ log.push('click:' + e.isTrusted); });"
+               "c.addEventListener('change', function(){ log.push('change'); });"
+               "c.click();"
+               "document.title = log.join(' ') + ' ' + c.checked;</script></body>"),
+        "click:false change true");
+    oks("the old way of making an event still works",
+        titled("<body><p id=i>x</p><script>var i = document.getElementById('i'), got = '';"
+               "i.addEventListener('old', function(e){ got = e.type + ' ' + e.bubbles; });"
+               "var e = document.createEvent('Event'); e.initEvent('old', true, true); i.dispatchEvent(e);"
+               "document.title = got;</script></body>"),
+        "old true");
+    {
+        load("<body><form id=f action=/next><input id=q name=q></form><p id=out>no</p>"
+             "<script>document.getElementById('f').addEventListener('submit', function(e){"
+             " e.preventDefault(); document.getElementById('out').textContent = 'mine'; });</script></body>");
+        char err[128];
+        run_scripts(&page, err, (int)sizeof(err), 0);
+        ok("a form the reader sends is the page's to cancel", jsdom_submitting(dom_by_id(&page, "f")) == 1);
+        oks("and its handler ran", content_of(dom_by_id(&page, "out")), "mine");
     }
 
     /* --- a page that uses up its memory ---------------------------------------

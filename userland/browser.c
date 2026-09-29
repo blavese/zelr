@@ -590,13 +590,13 @@ static const char *why_heading(int rc) {
    once here instead of on every layout. A resize lays the page out again,
    and re-parsing the same declarations on every frame of a window drag is
    the difference between a reflow and a stutter. */
-static void gather_inline_styles(void) {
-    for (int i = 0; i < doc.count; i++) {
+static void inline_style_of(int i) {
+    {
         inl[i].at = 0;
         inl[i].n = 0;
-        if (doc.nodes[i].kind != DN_ELEMENT) continue;
+        if (doc.nodes[i].kind != DN_ELEMENT) return;
         const char *st = dom_attr(&doc, i, "style");
-        if (!st || !*st) continue;
+        if (!st || !*st) return;
         int at = sheet.ndecls;
         /* The same reader as a block between braces, given a run with no
            braces around it. */
@@ -626,6 +626,21 @@ static void gather_inline_styles(void) {
         inl[i].at = at;
         inl[i].n = sheet.ndecls - at;
     }
+}
+
+static void gather_inline_styles(void) {
+    for (int i = 0; i < doc.count; i++) inline_style_of(i);
+}
+
+/* The style attributes a script changed since the page was last laid out,
+   read again (jsdom.h, jsdom_next_restyled). They were read once, before
+   any script ran, so el.style.display = 'none' changed the attribute and
+   nothing on the screen. Each reading adds to the sheet's declarations;
+   a page that restyles forever runs them out and its later changes are
+   not seen, which the sheet's own overflow already stands for. */
+static void restyle_changed(void) {
+    for (int i; (i = jsdom_next_restyled()) >= 0; )
+        if (i < doc.count) inline_style_of(i);
 }
 
 /* What a link or style element's media attribute allows: 0 when the sheet
@@ -798,9 +813,64 @@ static int do_request(const char *method, const char *url, const char *body,
     return r.len;
 }
 
+/* --- what a page's scripts may ask the browser -----------------------------
+ *
+ * Where the layout put an element, which is every box it drew for the
+ * element or for anything inside it, run together: what
+ * getBoundingClientRect answers with. In the page's own terms, down the
+ * document; jsdom.h takes the scroll off. An element nothing was drawn for
+ * has no box, and says so. */
+static u8 box_mark[DOM_NODES / 8];
+
+static int box_of(int node, int *x, int *y, int *w, int *h) {
+    if (node < 0 || node >= doc.count) return 0;
+    for (int i = node; i >= 0; i = dom_next(&doc, i, node)) box_mark[i >> 3] |= (u8)(1 << (i & 7));
+    int x0 = 0, y0 = 0, x1 = 0, y1 = 0, any = 0;
+    for (int k = 0; k < page.nitems; k++) {
+        const litem *it = &page.items[k];
+        int n = it->node;
+        if (n < 0 || n >= doc.count || !(box_mark[n >> 3] & (1 << (n & 7)))) continue;
+        if (!any || it->x < x0) x0 = it->x;
+        if (!any || it->y < y0) y0 = it->y;
+        if (!any || it->x + it->w > x1) x1 = it->x + it->w;
+        if (!any || it->y + it->h > y1) y1 = it->y + it->h;
+        any = 1;
+    }
+    for (int i = node; i >= 0; i = dom_next(&doc, i, node)) box_mark[i >> 3] &= (u8)~(1 << (i & 7));
+    *x = x0; *y = y0; *w = x1 - x0; *h = y1 - y0;
+    return any;
+}
+
+/* How big a picture was when it was decoded. */
+static int picture_size(int node, int *w, int *h) {
+    for (int i = 0; i < npics; i++)
+        if (pics[i].node == node && pics[i].pic.rgb) { *w = pics[i].pic.w; *h = pics[i].pic.h; return 1; }
+    *w = *h = 0;
+    return 0;
+}
+
+static void script_scroll(int y) { scroll = y < 0 ? 0 : y; }
+
+/* A page sending the browser somewhere: a link a script clicked, and
+   location once it is here. Taken on the loop's next pass, as a form's
+   address is. `replace` takes the place of the page in the history rather
+   than adding to it. */
+static int go_replace;
+
+static void script_navigate(const char *url, int replace) {
+    w_copy(go_to, sizeof(go_to), url, sizeof(go_to));
+    go_is_post = 0;
+    post_body[0] = 0;
+    go_replace = replace;
+    want_go = 1;
+}
+
 static int page_unhidden;      /* it was laid out a second time, shown anyway */
 
 static void relayout(int width) {
+    restyle_changed();
+    /* And the title, which a script may have written. */
+    if (doc.title >= 0) w_copy(title, sizeof(title), doc.arena + doc.title, sizeof(title));
     drawings_drop();                 /* made for the sizes of the last one */
     match.hover = hover_node;
     match.visited_links = 0;
@@ -1046,9 +1116,18 @@ static void build(const char *html, int len, int width, int want_sheets,
     scripts_changed = 0;
     scripts_outside = 0;
     asks_made = 0;
+    char at[URL_TEXT];
+    url_text(&here, at, sizeof(at));
+    jsdom_at(at);
+    jsdom_view(width, css_view_h, 0);
     if (jsdom_open(&doc, &sheet)) {
         jsdom_fetch_with(fetch_script);
         jsdom_request_with(do_request);
+        jsdom_boxes_with(box_of);
+        jsdom_pictures_with(picture_size);
+        jsdom_scroll_with(script_scroll);
+        jsdom_navigate_with(script_navigate);
+        jsdom_submit_with(submit_form);
         scripts_ran = jsdom_scripts(script_err, (int)sizeof(script_err));
         jsdom_loaded();
         scripts_changed = jsdom_changed();
@@ -1826,6 +1905,9 @@ int main(int argc, char **argv) {
         }
         if (closing) break;
 
+        /* What a script asking about the window is told this pass. */
+        jsdom_view(view_w - UI_PAD * 2, view_h, scroll);
+
         /* A reflow costs a pass over the whole page, so it happens once the
            dragging has stopped rather than on every frame of it. */
         if (want_width && !in.down) {
@@ -1878,14 +1960,19 @@ int main(int argc, char **argv) {
                        to use one that has no button beside it. */
                     int f = form_of(focus_node);
                     focus_control(-1);
-                    submit_form(f);
+                    /* The page hears of it first, and may send it its own
+                       way instead (jsdom.h, jsdom_submitting). */
+                    if (!jsdom_submitting(f)) submit_form(f);
                 } else if (ck == CTL_CHECK || ck == CTL_RADIO) {
-                    if (k == ' ')
+                    if (k == ' ') {
                         field_set_checked(focus_node,
                                           !field_checked(focus_node));
+                        jsdom_toggled(focus_node);
+                    }
                 } else {
                     ui_field_key(&focus_field, raw);
                     field_set_value(focus_node, focus_buf);
+                    jsdom_typed(focus_node);
                 }
                 dirty = 1;
             } else {
@@ -1915,6 +2002,12 @@ int main(int argc, char **argv) {
             }
         }
 
+        /* A handler for what was typed may have changed the page. */
+        if (jsdom_live() && jsdom_changed()) {
+            relayout(view_w - UI_PAD * 2);
+            dirty = 1;
+        }
+
         /* Anything the page asked to have done later. A page that calls
            setTimeout and is never called back is not slow: it is stopped
            part of the way through whatever it was doing. */
@@ -1937,7 +2030,9 @@ int main(int argc, char **argv) {
             want_go = 0;
             load_post = go_is_post;
             set_address(go_to);
-            push_history(go_to);
+            if (go_replace && hist_at >= 0) w_copy(hist[hist_at].text, URL_TEXT, go_to, URL_TEXT);
+            else push_history(go_to);
+            go_replace = 0;
             want_load = 1;
             dirty = 1;
         }
@@ -2048,7 +2143,7 @@ int main(int argc, char **argv) {
          * navigated first would run the handler on a page that was already
          * leaving. */
         if (in.released && node_under >= 0 && jsdom_live()) {
-            int stop = jsdom_click(node_under);
+            int stop = jsdom_click_at(node_under, dx, in.my - view_y);
 
             /* A handler that changed the document changed what is on the
                screen, and nothing else in this loop would notice: the
@@ -2080,6 +2175,7 @@ int main(int argc, char **argv) {
                 if (ck == CTL_CHECK) {
                     field_set_checked(node_under, !field_checked(node_under));
                     focus_control(node_under);
+                    jsdom_toggled(node_under);
                 } else if (ck == CTL_RADIO) {
                     /* One of a name at a time, which is the only thing that
                        makes a radio button different from a checkbox. */
@@ -2094,13 +2190,22 @@ int main(int argc, char **argv) {
                         }
                     field_set_checked(node_under, 1);
                     focus_control(node_under);
+                    jsdom_toggled(node_under);
                 } else if (ck == CTL_BUTTON) {
                     const char *t = dom_attr(&doc, node_under, "type");
                     focus_control(-1);
-                    if (!(t && lay_same_fold(t, "reset")))
-                        submit_form(form_of(node_under));
+                    /* A plain button is the page's; only a submit button
+                       sends its form, once the page has heard of it. */
+                    int f = form_of(node_under);
+                    if (!(t && (lay_same_fold(t, "reset") || lay_same_fold(t, "button")))
+                        && !jsdom_submitting(f))
+                        submit_form(f);
                 } else {
                     focus_control(node_under);
+                }
+                if (jsdom_live() && jsdom_changed()) {
+                    relayout(view_w - UI_PAD * 2);
+                    over_link = lay_link_at(&page, dx, dy);
                 }
             }
         }
