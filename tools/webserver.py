@@ -380,6 +380,15 @@ TEMPLATED = b"""<!doctype html>
 </body></html>
 """
 
+# A page longer than three megabytes, most of it a comment (which the
+# document keeps nothing of), with the band after it: a browser that read
+# only its first three megabytes never reached the band.
+LONG_PAGE = (b"<!doctype html><html><head><title>a long page</title><style>"
+             b"body { font-family: sans-serif; padding: 24px } "
+             b".band { background: #1d4ed8; color: #ffffff; padding: 30px }</style></head>"
+             b"<body><h1>the end of a long page</h1><!--" + b"x" * (3300 * 1024) +
+             b"--><div class=\"band\">past three megabytes</div></body></html>\n")
+
 # The same page pointing at something that is not there, so the words it
 # carries are what shows instead. That is what alt text is for, and a
 # browser that drew nothing at all would look identical to one that drew
@@ -655,6 +664,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(filler(30000))
             self.close_connection = True
+        elif path == "/long-page":
+            self._send(LONG_PAGE)
         elif path == "/templated":
             self._send(TEMPLATED)
         elif path == "/meta-refresh":

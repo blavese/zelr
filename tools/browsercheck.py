@@ -449,8 +449,15 @@ def main():
             c.add("what is in a template is neither drawn nor applied",
                   count_in(pxt, wt, PAGE, BAND) < 200 and templ != still, shott)
 
+            # --- a page past three megabytes -------------------------------
+            go(vm, mon, "http://%s/long-page" % srv.host, settle=60.0,
+               was=templ, name="br-going-long-page")
+            longp, pxl, wl, shotl = page_settled(mon, "br-long-page")
+            c.add("a page past three megabytes is read to its end",
+                  count_in(pxl, wl, PAGE, BAND) > 3000, shotl)
+
             go(vm, mon, "https://%s/" % srv.host, settle=5.0,
-               was=templ, name="br-going-https")
+               was=longp, name="br-going-https")
             secure, _, _, shots = page_settled(mon, "br-https")
             c.add("https says it cannot do that rather than failing quietly",
                   secure != missing, shots)

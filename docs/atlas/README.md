@@ -125,6 +125,10 @@ numbered files are still to 6048716; where they disagree with this list, this li
   spaces) applied. Closed menus, fixed bars, floats and centring on Python's docs and home page, W3C,
   arXiv, WordPress, Wikipedia and Ars Technica now come out as written. Every layouttest check used
   compact CSS, which is why none saw it; four now use a sheet written by hand. layouttest 188.
+- **Pages to eight megabytes (11).** `SRC_MAX` 8 MB (was 3; mapped, paid for as used): Netflix's front
+  page is 3.2 MB unpacked. It then overflows the document's text store (`DOM_ARENA`, 3 MB), which is left
+  as it is because `svg_render` and the test programs hold a whole `ddoc` each. browsercheck 30 (a page
+  with 3.3 MB of comment before its band).
 
 ### 0.72.0
 

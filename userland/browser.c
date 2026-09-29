@@ -57,8 +57,11 @@
  * looked like was not a page cut short -- it was "the fetch failed",
  * because the page arrives compressed and a decompression that runs out of
  * room fails whole. So: a megabyte, and a decompression that runs out of
- * room now keeps what it has. */
-#define SRC_MAX    (3 * 1024 * 1024)
+ * room now keeps what it has. Then three, and now eight: a streaming
+ * service's front page is 3.2 megabytes of html once unpacked, most of it
+ * the data its script draws from, and the buffer is mapped, so a page pays
+ * only for what it uses (the comment above `src`). */
+#define SRC_MAX    (8 * 1024 * 1024)
 #define CSS_MAX    (1024 * 1024)
 /* Style sheets a page may link. A site built in pieces links one per
    piece: The Verge links sixty-six, and the rule that keeps its menu drawer
