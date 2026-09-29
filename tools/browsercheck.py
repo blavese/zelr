@@ -468,6 +468,45 @@ def main():
             c.add("a shadow tree written into a page is drawn, its sheet on it alone",
                   3000 < banded < 3000 + (PAGE[2] - PAGE[0]) * 90, shoth)
 
+            # --- background pictures -----------------------------------------
+            #
+            # 160 by 90 of rose from a sheet that names it relative to itself,
+            # and the 40 by 40 rose half of a half-clear picture twice, as a
+            # background and as an <img>: 17600. The clear halves show the
+            # blue and the green boxes behind them, 1600 each, and a mask
+            # paints teal in a disc of radius 30: about 2830, where a square
+            # would be 3600 and no mask at all nothing.
+            go(vm, mon, "http://%s/bg/page" % srv.host,
+               was=shadow, name="br-going-bg")
+            bgd, pxb, wb, shotb = page_settled(mon, "br-bg")
+            rose = count_in(pxb, wb, PAGE, LOGO)
+            teal = count_in(pxb, wb, PAGE, (0x00, 0xB0, 0xB0))
+            blue = count_in(pxb, wb, PAGE, (0x20, 0x60, 0xC0))
+            green = count_in(pxb, wb, PAGE, (0x20, 0xA0, 0x40))
+            print("      rose %d, teal %d, blue %d, green %d" % (rose, teal, blue, green))
+            c.add("background pictures are drawn, named relative to their sheet",
+                  16500 < rose < 18700, shotb)
+            c.add("a mask paints its colour in the shape of its picture",
+                  2300 < teal < 3300, shotb)
+            c.add("and a clear part of a background picture shows the box behind it",
+                  1300 < blue < 1900, shotb)
+            c.add("as a clear part of a picture on the page does",
+                  1300 < green < 1900, shotb)
+            # a gradient from orange to azure with no blend between: half each
+            orange = count_in(pxb, wb, PAGE, (0xFF, 0x80, 0x00))
+            azure = count_in(pxb, wb, PAGE, (0x00, 0x80, 0xFF))
+            print("      orange %d, azure %d" % (orange, azure))
+            c.add("a linear gradient is drawn across its box",
+                  2600 < orange < 3200 and 2600 < azure < 3200, shotb)
+            # 160 by 90 of purple fitted whole into 90 by 90 is 90 by 50,
+            # where stretched it would fill all 8100; 60 by 60 of olive with
+            # corners of 30 is a disc of about 2830, where square is 3600.
+            purple = count_in(pxb, wb, PAGE, (0x70, 0x30, 0xA0))
+            olive = count_in(pxb, wb, PAGE, (0x80, 0x80, 0x00))
+            print("      purple %d, olive %d" % (purple, olive))
+            c.add("a picture fitted into its box keeps its shape", 4000 < purple < 5000, shotb)
+            c.add("and one with round corners is round", 2400 < olive < 3200, shotb)
+
             go(vm, mon, "https://%s/" % srv.host, settle=5.0,
                was=shadow, name="br-going-https")
             secure, _, _, shots = page_settled(mon, "br-https")

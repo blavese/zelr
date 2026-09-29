@@ -71,7 +71,28 @@ typedef struct {
     unsigned char kind, under, strike, radius;
     unsigned char bt, br, bb, bl;
     unsigned char has_bg;
+    unsigned char ofit;           /* LK_IMAGE: its object-fit (css.h, cstyle.obj_fit) */
+    short bgi;                    /* LK_BOX: its background picture in bgs, or -1 */
 } litem;
+
+/* A box's background picture, or the mask its colour is painted through:
+   where it is (url, into the text arena, as written) and how it is drawn,
+   which is the browser's to do (css.h, cstyle.bg_img). */
+#define LAY_BGS 2048
+#define LAY_STOPS 6
+typedef struct {
+    int url;                      /* -1 for a gradient alone */
+    unsigned char mask, fit, rep, swp, shp, ppx, ppy;
+    short sw, sh, px, py;
+    /* A linear gradient: how many stops (0 for none), whether it goes under
+       the picture, its angle in degrees (0 up, 90 to the right, as CSS
+       has them), and each stop's colour, alpha and place in hundredths of
+       the gradient's length. */
+    unsigned char nstops, under;
+    short angle;
+    u32 stop_c[LAY_STOPS];
+    unsigned char stop_a[LAY_STOPS], stop_p[LAY_STOPS];
+} lbg;
 
 typedef struct {
     int node;                     /* the anchor */
@@ -93,6 +114,8 @@ typedef struct {
     int   used;
     llink links[LAY_LINKS];
     int   nlinks;
+    lbg   bgs[LAY_BGS];
+    int   nbgs;
     int   height;
     int   overflowed;
     int   laid;          /* boxes laid out, trial ones included: the work done */
@@ -395,6 +418,8 @@ static inline litem *lay_item(lctx *L) {
     it->kind = LK_TEXT; it->under = it->strike = it->radius = 0;
     it->bt = it->br = it->bb = it->bl = 0;
     it->has_bg = 0;
+    it->ofit = 0;
+    it->bgi = -1;
     return it;
 }
 
@@ -1438,6 +1463,139 @@ static int lay_cleared(const lctx *L, int y, int clear, int x, int w) {
    before any of its words are laid down. The background's slot is taken
    here and filled in when the box closes, so that it lands in the display
    list behind what is written on top of it. */
+/* A box's background picture kept for the browser to draw: the address out
+   of url("..."), and how it is placed. -1 when there is none or no room. */
+/* A linear-gradient()'s direction and stops into b: nstops stays 0 when it
+   cannot be read. */
+static inline void lay_gradient(lbg *b, const char *g) {
+    b->nstops = 0;
+    b->angle = 180;
+    int webkit = w_starts_fold(g, "-webkit-");
+    while (*g && *g != '(') g++;
+    if (!*g) return;
+    g++;
+    /* The arguments, split at the commas not inside a colour's own. */
+    char arg[LAY_STOPS + 2][64];
+    int na = 0, depth = 0, k = 0;
+    for (; *g && na < LAY_STOPS + 2; g++) {
+        if (*g == '(') depth++;
+        else if (*g == ')') { if (!depth) break; depth--; }
+        if (*g == ',' && !depth) { arg[na][k] = 0; na++; k = 0; continue; }
+        if (k < 63) arg[na][k++] = *g;
+    }
+    if (k && na < LAY_STOPS + 2) { arg[na][k] = 0; na++; }
+    int first = 0;
+    const char *a0 = arg[0];
+    while (*a0 == ' ') a0++;
+    if (w_starts_fold(a0, "to ")) {
+        int up = 0, down = 0, left = 0, right = 0;
+        for (const char *q = a0 + 3; *q; q++) {
+            if (w_starts_fold(q, "top")) up = 1;
+            if (w_starts_fold(q, "bottom")) down = 1;
+            if (w_starts_fold(q, "left")) left = 1;
+            if (w_starts_fold(q, "right")) right = 1;
+        }
+        int x = right - left, y = down - up;
+        b->angle = (short)(x == 0 ? (y < 0 ? 0 : 180)
+                         : y == 0 ? (x > 0 ? 90 : 270)
+                         : x > 0 ? (y < 0 ? 45 : 135) : (y < 0 ? 315 : 225));
+        first = 1;
+    } else if ((*a0 >= '0' && *a0 <= '9') || *a0 == '-' || *a0 == '.') {
+        clen A = css_len(a0);
+        int v = A.v;                              /* hundredths */
+        const char *u = a0;
+        while (*u && ((*u >= '0' && *u <= '9') || *u == '-' || *u == '.' || *u == '+')) u++;
+        if (w_starts_fold(u, "turn")) v = v * 360;
+        else if (w_starts_fold(u, "rad")) v = v * 180 * 100 / 314159;
+        else if (w_starts_fold(u, "grad")) v = v * 9 / 10;
+        b->angle = (short)(((v / 100) % 360 + 360) % 360);
+        first = 1;
+    } else if (webkit && (w_starts_fold(a0, "top") || w_starts_fold(a0, "left")
+                          || w_starts_fold(a0, "bottom") || w_starts_fold(a0, "right"))) {
+        /* The old prefixed form names where it starts, not where it goes. */
+        b->angle = (short)(w_starts_fold(a0, "top") ? 180 : w_starts_fold(a0, "left") ? 90
+                         : w_starts_fold(a0, "bottom") ? 0 : 270);
+        first = 1;
+    }
+    int n = 0, placed[LAY_STOPS];
+    for (int i = first; i < na && n < LAY_STOPS; i++) {
+        char *t = arg[i];
+        while (*t == ' ') t++;
+        /* the colour, then a place if one is written */
+        char col[48];
+        int c = 0, d2 = 0;
+        while (t[c] && c < 47 && (d2 || t[c] != ' ')) {
+            if (t[c] == '(') d2++;
+            else if (t[c] == ')') d2--;
+            col[c] = t[c];
+            c++;
+        }
+        col[c] = 0;
+        u32 rgb;
+        if (!css_color(col, &rgb)) continue;
+        b->stop_c[n] = css_last_raw;
+        b->stop_a[n] = (unsigned char)css_last_alpha;
+        placed[n] = 0;
+        const char *p = t + c;
+        while (*p == ' ') p++;
+        if (*p) {
+            clen P = css_len(p);
+            if (P.unit == U_PCT) {
+                int pc = P.v / 100;
+                b->stop_p[n] = (unsigned char)(pc < 0 ? 0 : pc > 100 ? 100 : pc);
+                placed[n] = 1;
+            }
+        }
+        n++;
+    }
+    if (n < 2) return;
+    /* Unplaced stops: the first at the start, the last at the end, the rest
+       spread evenly between the placed ones round them. */
+    if (!placed[0]) { b->stop_p[0] = 0; placed[0] = 1; }
+    if (!placed[n - 1]) { b->stop_p[n - 1] = 100; placed[n - 1] = 1; }
+    for (int i = 1; i < n; i++) {
+        if (placed[i]) {
+            if (b->stop_p[i] < b->stop_p[i - 1]) b->stop_p[i] = b->stop_p[i - 1];
+            continue;
+        }
+        int j = i;
+        while (!placed[j]) j++;
+        int from = b->stop_p[i - 1], to = b->stop_p[j];
+        for (int m = i; m < j; m++)
+            b->stop_p[m] = (unsigned char)(from + (to - from) * (m - i + 1) / (j - i + 1));
+        i = j - 1;
+    }
+    b->nstops = (unsigned char)n;
+}
+
+static inline int lay_bg(lctx *L, const cstyle *st) {
+    if ((!st->bg_img && !st->bg_grad) || L->out->nbgs >= LAY_BGS) return -1;
+    int at = -1;
+    if (st->bg_img) {
+        const char *u = st->bg_img + 4;              /* past url( */
+        while (*u == ' ') u++;
+        char q = 0;
+        if (*u == '"' || *u == '\'') q = *u++;
+        int n = 0;
+        while (u[n] && (q ? u[n] != q : (u[n] != ')' && u[n] != ' '))) n++;
+        if (n > 0) at = lay_put(L, u, n);
+    }
+    lbg *b = &L->out->bgs[L->out->nbgs];
+    b->nstops = 0;
+    b->under = st->bg_grad_under;
+    if (st->bg_grad && !st->bg_mask) lay_gradient(b, st->bg_grad);
+    if (at < 0 && !b->nstops) return -1;
+    b->url = at;
+    b->mask = st->bg_mask;
+    b->fit = st->bg_fit;
+    b->rep = st->bg_rep;
+    b->sw = st->bg_sw; b->swp = st->bg_swp;
+    b->sh = st->bg_sh; b->shp = st->bg_shp;
+    b->px = st->bg_px; b->ppx = st->bg_ppx;
+    b->py = st->bg_py; b->ppy = st->bg_ppy;
+    return L->out->nbgs++;
+}
+
 /* A link: its address kept, and everything laid out inside it until it is
    left carries it. */
 static inline void lay_link_open(lctx *L, int at) {
@@ -1789,6 +1947,10 @@ static inline void lay_inline(lctx *L, int node, const cstyle *parent, int *y) {
                         it->node = at;
                         it->at = -1;
                         it->link = L->cur_link;
+                        /* How it fills a box of another shape, and its
+                           corners: the browser draws both. */
+                        it->ofit = st.obj_fit;
+                        it->radius = (unsigned char)(st.radius > 255 ? 255 : st.radius < 0 ? 0 : st.radius);
                         L->pen += iw;
                         /* A hundred per cent of its own height. The second
                            argument is a percentage of the first, so passing
@@ -2167,6 +2329,7 @@ static int lay_measure(lctx *L, int node, const cstyle *parent, int avail,
     int s_groups = L->ngroups, s_floats = L->fl_seq;
 
     int items = L->out->nitems, used = L->out->used, links = L->out->nlinks;
+    int bgs = L->out->nbgs;
 
     /* A trial that ran out of room is not a page that ran out of room. The
        items this makes are thrown away a few lines down, so the mark saying
@@ -2208,6 +2371,7 @@ static int lay_measure(lctx *L, int node, const cstyle *parent, int avail,
     L->out->nitems = items;
     L->out->used = used;
     L->out->nlinks = links;
+    L->out->nbgs = bgs;
     L->out->overflowed = spilled;
     L->ngroups = s_groups;
     L->fl_seq = s_floats;
@@ -4091,14 +4255,17 @@ static void lay_block_placed(lctx *L, int node, const cstyle *parent, int x,
     if (d->nodes[node].tag == T_A) lay_link_open(L, node);
 
     int slot = -1;
-    if (st.masked) st.has_bg = 0;
-    if (st.has_bg || st.bt || st.br || st.bb || st.bl) {
+    /* A mask that is a picture keeps the colour to paint through it; any
+       other mask leaves the box's colour out (css.h, masked). */
+    if (st.masked && !(st.bg_img && st.bg_mask)) st.has_bg = 0;
+    if (st.has_bg || st.bt || st.br || st.bb || st.bl || st.bg_img || st.bg_grad) {
         litem *bg = lay_item(L);
         if (bg) {
             slot = L->out->nitems - 1;
             bg->kind = LK_BOX;
             bg->node = node;
             bg->link = L->cur_link;
+            bg->bgi = (short)lay_bg(L, &st);
         }
     }
     int inside_at = L->out->nitems;
@@ -4338,6 +4505,7 @@ static inline void lay_run(ldoc *out, const ddoc *d, const csheet *s,
     out->nitems = 0;
     out->used = 0;
     out->nlinks = 0;
+    out->nbgs = 0;
     out->overflowed = 0;
     out->laid = 0;
     out->matched = 0;

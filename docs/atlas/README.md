@@ -102,6 +102,33 @@ numbered files are still to 6048716; where they disagree with this list, this li
   the far end, `margin: auto` centres one. In a column, an item lined up by align-items or its align-self
   (start, centre, end) or with an auto margin is as wide as what is in it (its width, else measured) and
   placed across the column; stretch still fills it. layouttest: four checks, each seen failing.
+- **Background pictures and masks (11, css.h, browser.c).** `background-image`, the `background`
+  shorthand's picture, `background-size` (lengths, percentages, cover, contain), `-position` and `-repeat`
+  are read (`cstyle.bg_*`, `css_bg_layer`, from the layer the picture is in), and `mask`/`mask-image` with
+  their size, position and repeat as a picture the box's colour is painted through. A box with one keeps
+  it in `ldoc.bgs` (`lay_bg`, the url as written), and the browser fetches each once the page is laid out
+  (`gather_backgrounds`, 32 a page, 16 MB), decodes it twice, over black and over white, keeping colour
+  times alpha and the alpha (`pic_merge`: what differs between the two is what shows through), keeps a
+  drawing as markup made at the size it is drawn, and draws it under the box's contents
+  (`draw_background`, nearest neighbour). A linked sheet's url()s are written out against the sheet's own
+  address before it is read (`css_urls_from`, `css_parse_sheet`, imports too). Not drawn: several
+  pictures in one box, a picture clipped to a rounded box, `background-attachment`, `mask-mode:
+  luminance`. layouttest: five checks; browsercheck: a sheet-relative picture, a mask's shape, a clear
+  part showing the box behind.
+- **Linear gradients (11, css.h, browser.c).** `linear-gradient()` in any layer, over or under the picture
+  as the layers order them (`cstyle.bg_grad`, `bg_grad_under`): its direction (`to` a side or a corner, an
+  angle in deg, turn, rad or grad, the old prefixed form naming where it starts) and up to six stops with
+  their places, unplaced ones spread as CSS spreads them (`lay_gradient`, `lbg.stop_*`), drawn along the
+  gradient line with colour and alpha interpolated together (`draw_gradient`, `sin65536`). `css_last_raw`
+  is a colour before it is laid over white. Not drawn: radial and conic gradients, repeating ones as
+  repeating. layouttest: three checks; browsercheck: a two-colour gradient's halves.
+- **Pictures with clear parts, fitted and rounded (browser.c, 11).** An `<img>` whose file says it may
+  have clear parts (PNG colour types 4 and 6 or tRNS, WebP's alpha flags, any GIF or drawing:
+  `pic_may_be_clear`) is decoded over black and over white and drawn over what is behind it
+  (`shown.alpha`): flattened onto white, a logo on a dark header sat in a white box. `object-fit`
+  (contain, cover, none, scale-down; `litem.ofit`) centres the picture in its box at its own shape instead
+  of stretching it, and `border-radius` rounds its corners. layouttest: one check; browsercheck: a clear
+  half showing green, a picture fitted whole, one with round corners.
 
 ### 0.74.0
 

@@ -56,6 +56,7 @@ enum {
     P_GRID_COL_START, P_GRID_COL_END, P_GRID_ROW, P_GRID_ROW_START, P_GRID_ROW_END,
     P_TEXT_TRANSFORM, P_ORDER, P_ALIGN_SELF, P_FLEX, P_FLEX_BASIS, P_FLEX_SHRINK, P_ASPECT,
     P_MASK,
+    P_BG_IMAGE, P_BG_LAYER, P_BG_SIZE, P_BG_POS, P_BG_REPEAT, P_MASK_LAYER, P_OBJECT_FIT,
     P_CUSTOM,        /* --name: value, kept as the text "--name:value" */
     P_DEFER,         /* a shorthand whose value has var() in it: "name:value" */
     P_COUNT
@@ -182,8 +183,29 @@ typedef struct {
 
     /* Painted through a mask this cannot draw: an icon is often a square of
        the text colour with the icon's shape as its mask, and drawn without
-       the mask it is a black square. Its background is left out. */
+       the mask it is a black square. Its background is left out, unless the
+       mask is a picture (bg_mask). */
     unsigned char masked;
+
+    /* A background picture: the url(...) as written, or null. With bg_mask
+       it is a mask instead, the background colour painted through it (an
+       icon drawn as a square of colour in the shape of a picture). How big
+       it is drawn (bg_fit: 0 by bg_sw and bg_sh, pixels or with bg_swp and
+       bg_shp percentages of the box, -1 for auto; 1 cover; 2 contain), where
+       (bg_px and bg_py, percentages when bg_ppx and bg_ppy are set, else
+       pixels) and whether it repeats (0 both ways, 1 not, 2 across, 3 down):
+       the drawing is the browser's (browser.c, draw_background). */
+    /* How a picture fills its box when their shapes differ (object-fit): 0
+       stretched to it, 1 contain, 2 cover, 3 its own size, 4 scale-down. */
+    unsigned char obj_fit;
+
+    const char *bg_img;
+    /* And a linear-gradient() among the layers: its text, or null, and
+       whether it is under the picture (written after it) or over it. */
+    const char *bg_grad;
+    unsigned char bg_grad_under;
+    unsigned char bg_mask, bg_fit, bg_rep, bg_swp, bg_shp, bg_ppx, bg_ppy;
+    short bg_sw, bg_sh, bg_px, bg_py;
 
     /* Text in a colour that cannot be seen: laid out, not drawn. Inherited. */
     unsigned char ink_none;
@@ -367,6 +389,7 @@ static inline int css_hex(char c) {
    (nearly) transparent is no background, and text in a transparent colour
    is text nobody is meant to see, where both used to be drawn white. */
 static int css_last_alpha = 255;
+static u32 css_last_raw;         /* the last colour read, before it was laid over white */
 
 /* hsl(h, s%, l%) as RGB, in whole numbers: h in degrees, s and l in
    hundredths of one. */
@@ -423,6 +446,7 @@ static inline int css_color(const char *s, u32 *out) {
         if (n < 3) return 0;
         css_last_alpha = c[3] < 0 ? 0 : (c[3] > 255 ? 255 : c[3]);
         u32 rgb = css_hsl(c[0], c[1], c[2]);
+        css_last_raw = rgb;
         int a = css_last_alpha;
         int r = (int)((rgb >> 16) & 255), g = (int)((rgb >> 8) & 255), b = (int)(rgb & 255);
         r = (r * a + 255 * (255 - a)) / 255;
@@ -431,7 +455,7 @@ static inline int css_color(const char *s, u32 *out) {
         *out = (u32)((r << 16) | (g << 8) | b);
         return 1;
     }
-    if (w_same_fold(s, "transparent")) { *out = 0xFFFFFF; css_last_alpha = 0; return 1; }
+    if (w_same_fold(s, "transparent")) { *out = 0xFFFFFF; css_last_alpha = 0; css_last_raw = 0; return 1; }
     if (*s == '#') {
         s++;
         int d[8], n = 0;
@@ -454,6 +478,7 @@ static inline int css_color(const char *s, u32 *out) {
             return 0;
         }
         /* Over white, as rgba() is, because nothing below composites. */
+        css_last_raw = (u32)((r << 16) | (g << 8) | b);
         int a = css_last_alpha;
         r = (r * a + 255 * (255 - a)) / 255;
         g = (g * a + 255 * (255 - a)) / 255;
@@ -489,6 +514,8 @@ static inline int css_color(const char *s, u32 *out) {
         if (n < 3) return 0;
         int a = c[3] < 0 ? 0 : (c[3] > 255 ? 255 : c[3]);
         css_last_alpha = a;
+        for (int k = 0; k < 3; k++) c[k] = c[k] < 0 ? 0 : c[k] > 255 ? 255 : c[k];
+        css_last_raw = (u32)((c[0] << 16) | (c[1] << 8) | c[2]);
         /* Over white, because nothing below composites. */
         int r = (c[0] * a + 255 * (255 - a)) / 255;
         int g = (c[1] * a + 255 * (255 - a)) / 255;
@@ -497,7 +524,7 @@ static inline int css_color(const char *s, u32 *out) {
         return 1;
     }
     for (int i = 0; CSS_NAMES[i].name; i++)
-        if (w_same_fold(s, CSS_NAMES[i].name)) { *out = CSS_NAMES[i].rgb; return 1; }
+        if (w_same_fold(s, CSS_NAMES[i].name)) { *out = css_last_raw = CSS_NAMES[i].rgb; return 1; }
     return 0;
 }
 
@@ -616,10 +643,21 @@ static const cprop CSS_PROPS[] = {
     { "grid-row", P_GRID_ROW },
     { "grid-row-start", P_GRID_ROW_START },
     { "grid-row-end", P_GRID_ROW_END },
-    { "mask", P_MASK },
+    { "mask", P_MASK_LAYER },
     { "mask-image", P_MASK },
-    { "-webkit-mask", P_MASK },
+    { "-webkit-mask", P_MASK_LAYER },
     { "-webkit-mask-image", P_MASK },
+    { "background-image", P_BG_IMAGE },
+    { "object-fit", P_OBJECT_FIT },
+    { "background-size", P_BG_SIZE },
+    { "background-position", P_BG_POS },
+    { "background-repeat", P_BG_REPEAT },
+    { "mask-size", P_BG_SIZE },
+    { "-webkit-mask-size", P_BG_SIZE },
+    { "mask-position", P_BG_POS },
+    { "-webkit-mask-position", P_BG_POS },
+    { "mask-repeat", P_BG_REPEAT },
+    { "-webkit-mask-repeat", P_BG_REPEAT },
     { "top", P_TOP },
     { "right", P_RIGHT },
     { "bottom", P_BOTTOM },
@@ -1195,9 +1233,12 @@ static inline void css_declare(csheet *s, const char *name, int nlen,
        drawn here. A gradient or an image is not one, and taking the first
        word of it as a colour paints panels black. */
     if (prop == P_BACKGROUND && !w_same(lower, "background-color")) {
+        /* The picture, its size, place and repeat are reset by the
+           shorthand whether it names them or not, as CSS has it. */
+        css_add(s, P_BG_LAYER, v, vlen);
         u32 c;
-        int st[6], ln[6];
-        int np = css_parts(v, vlen, st, ln, 6);
+        int st[12], ln[12];
+        int np = css_parts(v, vlen, st, ln, 12);
         int found = -1;
         for (int i = 0; i < np; i++)
             if (css_color(v + st[i], &c)) { found = i; break; }
@@ -2041,6 +2082,14 @@ static inline void css_default_style(cstyle *st, int root_px) {
     st->clip = st->gone = 0;
     st->floated = st->clear = 0;
     st->masked = 0;
+    st->obj_fit = 0;
+    st->bg_img = 0;
+    st->bg_grad = 0;
+    st->bg_grad_under = 0;
+    st->bg_mask = st->bg_fit = st->bg_rep = st->bg_swp = st->bg_shp = 0;
+    st->bg_sw = st->bg_sh = -1;
+    st->bg_px = st->bg_py = 0;
+    st->bg_ppx = st->bg_ppy = 1;
     st->ink_none = 0;
     st->tx_px = st->ty_px = st->tx_pct = st->ty_pct = 0;
     st->grid_cols = st->grid_areas = st->garea = st->grid_auto = 0;
@@ -2109,6 +2158,187 @@ static inline const char *css_tlen(const char *v, int font_px, int root_px, int 
         break;
     }
     return v;
+}
+
+/* --- background pictures ------------------------------------------------------
+ *
+ * One layer of a background (or a mask): its url, its position and size, and
+ * whether it repeats. Only the first layer of several is read; the last would
+ * be the one drawn underneath, and the first is the one on top. */
+
+static inline clen css_len_at(const char *v, int font_px, int root_px, int pct_of);
+
+/* Where linear-gradient( starts in a value, any layer, or null. */
+static inline const char *css_grad_in(const char *v) {
+    int depth = 0;
+    for (const char *q = v; *q; q++) {
+        if (*q == '(') depth++;
+        else if (*q == ')') depth--;
+        else if (!depth && (q == v || q[-1] == ' ' || q[-1] == ',')
+                 && (w_starts_fold(q, "linear-gradient(") || w_starts_fold(q, "-webkit-linear-gradient(")))
+            return q;
+    }
+    return 0;
+}
+
+/* Where url( starts in a value, any layer, or null (none, gradients alone). */
+static inline const char *css_url_in(const char *v) {
+    for (const char *q = v; *q; q++) {
+        if (*q == '(') {                      /* a gradient's insides are not a url */
+            if (q - v >= 3 && w_starts_fold(q - 3, "url")) return q - 3;
+            int d = 1;
+            q++;
+            while (*q && d) { if (*q == '(') d++; else if (*q == ')') d--; if (d) q++; }
+            if (!*q) return 0;
+        }
+    }
+    return 0;
+}
+
+static inline int css_bg_repeat_of(const char *t) {
+    if (w_starts_fold(t, "no-repeat")) return 1;
+    if (w_starts_fold(t, "repeat-x")) return 2;
+    if (w_starts_fold(t, "repeat-y")) return 3;
+    return 0;
+}
+
+static inline int css_bg_is_repeat(const char *t) {
+    return w_starts_fold(t, "no-repeat") || w_starts_fold(t, "repeat") || w_starts_fold(t, "space")
+        || w_starts_fold(t, "round");
+}
+
+/* One position: a keyword or a length. Sets *v and *pct; 1 for x, 2 for y,
+   3 for either (centre, a length), 0 for none of these. */
+static inline int css_bg_one_pos(const char *t, int font_px, int root_px, short *v, unsigned char *pct) {
+    if (w_starts_fold(t, "left")) { *v = 0; *pct = 1; return 1; }
+    if (w_starts_fold(t, "right")) { *v = 100; *pct = 1; return 1; }
+    if (w_starts_fold(t, "top")) { *v = 0; *pct = 1; return 2; }
+    if (w_starts_fold(t, "bottom")) { *v = 100; *pct = 1; return 2; }
+    if (w_starts_fold(t, "center")) { *v = 50; *pct = 1; return 3; }
+    clen L = css_len_at(t, font_px, root_px, -1);
+    if (L.unit == U_AUTO) return 0;
+    if (L.unit == U_PCT) { *v = (short)(L.v / 100); *pct = 1; return 3; }
+    int px = css_px(L, font_px, root_px, 0);
+    *v = (short)(px < -4000 ? -4000 : px > 4000 ? 4000 : px);
+    *pct = 0;
+    return 3;
+}
+
+static inline void css_bg_pos(char tok[][48], int n, cstyle *st, int root_px) {
+    short x = 50, y = 50;
+    unsigned char xp = 1, yp = 1;
+    if (n == 0) { st->bg_px = st->bg_py = 0; st->bg_ppx = st->bg_ppy = 1; return; }
+    short a = 0, b = 0;
+    unsigned char ap = 1, bp = 1;
+    int ka = css_bg_one_pos(tok[0], st->font_px, root_px, &a, &ap);
+    int kb = n > 1 ? css_bg_one_pos(tok[1], st->font_px, root_px, &b, &bp) : 0;
+    if (n == 1) {
+        if (ka == 2) { y = a; yp = ap; }
+        else if (ka) { x = a; xp = ap; }
+    } else if (ka == 2 || kb == 1) {           /* written y first: top left */
+        y = a; yp = ap;
+        if (kb) { x = b; xp = bp; }
+    } else {
+        if (ka) { x = a; xp = ap; }
+        if (kb) { y = b; yp = bp; }
+    }
+    st->bg_px = x; st->bg_ppx = xp;
+    st->bg_py = y; st->bg_ppy = yp;
+}
+
+static inline void css_bg_size(char tok[][48], int n, cstyle *st, int root_px) {
+    st->bg_fit = 0;
+    st->bg_sw = st->bg_sh = -1;
+    st->bg_swp = st->bg_shp = 0;
+    if (n == 0) return;
+    if (w_starts_fold(tok[0], "cover")) { st->bg_fit = 1; return; }
+    if (w_starts_fold(tok[0], "contain")) { st->bg_fit = 2; return; }
+    for (int k = 0; k < n && k < 2; k++) {
+        clen L = css_len_at(tok[k], st->font_px, root_px, -1);
+        short val = -1;
+        unsigned char pct = 0;
+        if (L.unit == U_PCT) { val = (short)(L.v / 100); pct = 1; }
+        else if (L.unit != U_AUTO) {
+            int px = css_px(L, st->font_px, root_px, 0);
+            val = (short)(px < 0 ? -1 : px > 4000 ? 4000 : px);
+        }
+        if (k == 0) { st->bg_sw = val; st->bg_swp = pct; }
+        else { st->bg_sh = val; st->bg_shp = pct; }
+    }
+}
+
+/* The pieces of a value up to its first layer's end, with a '/' a piece of
+   its own however it was written ("center/cover"). */
+static inline int css_bg_tokens(const char *v, char tok[][48], int max) {
+    int n = 0, i = 0, depth = 0;
+    while (v[i] && n < max) {
+        while (v[i] == ' ' || v[i] == '\t' || v[i] == '\n' || v[i] == '\r') i++;
+        if (!v[i] || (v[i] == ',' && !depth)) break;
+        int k = 0;
+        if (v[i] == '/') { tok[n][0] = '/'; tok[n][1] = 0; n++; i++; continue; }
+        while (v[i] && (depth || (v[i] != ' ' && v[i] != '\t' && v[i] != '\n' && v[i] != '\r'
+                                  && v[i] != ',' && v[i] != '/'))) {
+            if (v[i] == '(') depth++;
+            else if (v[i] == ')') depth--;
+            if (k < 47) tok[n][k++] = v[i];
+            i++;
+        }
+        tok[n][k] = 0;
+        n++;
+    }
+    return n;
+}
+
+/* A whole layer: background (the picture part of it) or mask. Its size,
+   place and repeat are read from the layer the picture is in, which under a
+   gradient laid over it is not the first. */
+static inline void css_bg_layer(const char *v, cstyle *st, int mask, int root_px) {
+    char tok[12][48];
+    const char *from = v, *u0 = css_url_in(v);
+    if (u0) {
+        int depth = 0;
+        for (const char *q = v; q < u0; q++) {
+            if (*q == '(') depth++;
+            else if (*q == ')') depth--;
+            else if (*q == ',' && !depth) from = q + 1;
+        }
+    }
+    int n = css_bg_tokens(from, tok, 12);
+    char pos[4][48], size[2][48];
+    int np = 0, ns = 0, in_size = 0, rep = 0;
+    for (int i = 0; i < n; i++) {
+        const char *t = tok[i];
+        u32 c;
+        if (t[0] == '/' && !t[1]) { in_size = 1; continue; }
+        if (w_starts_fold(t, "url(") || w_starts_fold(t, "none") || w_starts_fold(t, "linear-gradient")
+            || w_starts_fold(t, "radial-gradient") || w_starts_fold(t, "repeating-")
+            || w_starts_fold(t, "conic-gradient") || w_starts_fold(t, "image-set")
+            || w_starts_fold(t, "-webkit-")) continue;
+        if (css_bg_is_repeat(t)) { rep = css_bg_repeat_of(t); continue; }
+        if (w_starts_fold(t, "fixed") || w_starts_fold(t, "scroll") || w_starts_fold(t, "local")
+            || w_starts_fold(t, "border-box") || w_starts_fold(t, "padding-box")
+            || w_starts_fold(t, "content-box") || w_starts_fold(t, "text")
+            || w_starts_fold(t, "no-clip") || w_starts_fold(t, "alpha")
+            || w_starts_fold(t, "luminance") || w_starts_fold(t, "add")
+            || w_starts_fold(t, "subtract") || w_starts_fold(t, "intersect")
+            || w_starts_fold(t, "exclude") || w_starts_fold(t, "match-source")) continue;
+        if (css_color(t, &c)) continue;
+        if (in_size) { if (ns < 2) w_copy(size[ns++], 48, t, 48); }
+        else if (np < 4) w_copy(pos[np++], 48, t, 48);
+    }
+    const char *u = css_url_in(v);
+    if (mask) {
+        st->masked = u || !w_starts_fold(v, "none");
+        if (u) { st->bg_img = u; st->bg_mask = 1; }
+        else if (st->bg_mask) { st->bg_img = 0; st->bg_mask = 0; }
+    } else {
+        if (!st->bg_mask) st->bg_img = u;
+        st->bg_grad = css_grad_in(v);
+        st->bg_grad_under = (unsigned char)(st->bg_grad && u && st->bg_grad > u);
+    }
+    st->bg_rep = (unsigned char)rep;
+    css_bg_pos(pos, np, st, root_px);
+    css_bg_size(size, ns, st, root_px);
 }
 
 /* translate, translateX, translateY and translate3d, anywhere in the list. */
@@ -2522,8 +2752,39 @@ static inline void css_apply_v(int prop, const char *v, cstyle *st, int root_px,
             else if (w_starts_fold(v, "right") || w_starts_fold(v, "inline-end")) st->clear = 2;
             else st->clear = 0;
             break;
-        case P_MASK:
-            st->masked = !w_starts_fold(v, "none");
+        case P_MASK: {
+            const char *u = css_url_in(v);
+            st->masked = u || !w_starts_fold(v, "none");
+            if (u) { st->bg_img = u; st->bg_mask = 1; }
+            else if (st->bg_mask) { st->bg_img = 0; st->bg_mask = 0; }
+            break;
+        }
+        case P_MASK_LAYER: css_bg_layer(v, st, 1, root_px); break;
+        case P_BG_LAYER: css_bg_layer(v, st, 0, root_px); break;
+        case P_BG_IMAGE: {
+            /* A mask's picture is the one a masked box draws. */
+            const char *u = css_url_in(v);
+            if (!st->bg_mask) st->bg_img = u;
+            st->bg_grad = css_grad_in(v);
+            st->bg_grad_under = (unsigned char)(st->bg_grad && u && st->bg_grad > u);
+            break;
+        }
+        case P_BG_SIZE: {
+            char tok[4][48];
+            int n = css_bg_tokens(v, tok, 4);
+            css_bg_size(tok, n, st, root_px);
+            break;
+        }
+        case P_BG_POS: {
+            char tok[4][48];
+            int n = css_bg_tokens(v, tok, 4);
+            css_bg_pos(tok, n, st, root_px);
+            break;
+        }
+        case P_BG_REPEAT: st->bg_rep = (unsigned char)css_bg_repeat_of(v); break;
+        case P_OBJECT_FIT:
+            st->obj_fit = w_starts_fold(v, "contain") ? 1 : w_starts_fold(v, "cover") ? 2
+                        : w_starts_fold(v, "none") ? 3 : w_starts_fold(v, "scale-down") ? 4 : 0;
             break;
         case P_GRID_AREAS:
             st->grid_areas = w_starts_fold(v, "none") ? 0 : v;

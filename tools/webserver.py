@@ -246,6 +246,58 @@ def _logo(w, h, rgb):
 LOGO = _logo(160, 90, (225, 29, 72))
 
 
+# A picture with an alpha channel: its left half clear, its right half rose.
+# Laid over a blue box, the left half has to show the blue: flattened onto
+# white when decoded, as pictures were, it showed white.
+def _half(w, h, rgb):
+    import struct
+    import zlib
+
+    def chunk(name, body):
+        return (struct.pack(">I", len(body)) + name + body
+                + struct.pack(">I", zlib.crc32(name + body) & 0xFFFFFFFF))
+
+    raw = bytearray()
+    for _ in range(h):
+        raw.append(0)
+        raw += bytes((0, 0, 0, 0)) * (w // 2)
+        raw += bytes(tuple(rgb) + (255,)) * (w - w // 2)
+    return (b"\x89PNG\r\n\x1a\n"
+            + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 6, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(bytes(raw), 9))
+            + chunk(b"IEND", b""))
+
+
+HALF = _half(80, 40, (225, 29, 72))
+PURPLE = _logo(160, 90, (0x70, 0x30, 0xA0))
+OLIVE = _logo(160, 90, (0x80, 0x80, 0x00))
+
+# Background pictures, from a sheet in a directory of its own that names them
+# relative to itself (../img/, which from the page would be the wrong place),
+# a mask that paints teal in the shape of a disc, the half-clear picture as a
+# background over blue, and as an <img> over green.
+BG_PAGE = b"""<html><head><title>backgrounds</title>
+<link rel="stylesheet" href="/bg/css/bg.css"></head><body>
+<div class="hero"></div>
+<div class="shelf"><span class="icon"></span></div>
+<div class="half"></div>
+<div class="imgbox"><img src="/bg/img/half.png"></div>
+<div class="stripes"></div>
+<img class="fit" src="/bg/img/purple.png"><img class="round" src="/bg/img/olive.png">
+</body></html>"""
+BG_SHEET = (b".hero{width:320px;height:90px;background:#ffffff url(../img/rose.png) no-repeat 0 0 / 160px 90px}"
+            b".shelf{padding:10px}"
+            b".icon{display:block;width:60px;height:60px;background-color:#00b0b0;"
+            b"mask:url(../img/disc.svg) no-repeat center / contain}"
+            b".half{width:80px;height:40px;background:#2060c0 url('../img/half.png') no-repeat}"
+            b".imgbox{width:80px;background:#20a040}.imgbox img{display:block}"
+            b".stripes{width:200px;height:30px;background:linear-gradient(to right,#ff8000 50%,#0080ff 50%)}"
+            b".fit{display:block;width:90px;height:90px;object-fit:contain}"
+            b".round{display:block;width:60px;height:60px;border-radius:30px}")
+DISC = (b'<svg xmlns="http://www.w3.org/2000/svg" width="60" height="60" viewBox="0 0 60 60">'
+        b'<circle cx="30" cy="30" r="30" fill="#000"/></svg>')
+
+
 # The same picture as a WebP, which is what image servers send a browser that
 # says it takes one. Written bit by bit as RFC 9649 lays out a lossless one:
 # the header, no transforms, no colour cache, one group of codes, and five
@@ -642,6 +694,20 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._send(PICTURE)
         elif path == "/logo.webp":
             self._send(LOGO_WEBP, ctype="image/webp")
+        elif path == "/bg/page":
+            self._send(BG_PAGE)
+        elif path == "/bg/css/bg.css":
+            self._send(BG_SHEET, ctype="text/css")
+        elif path == "/bg/img/rose.png":
+            self._send(LOGO, ctype="image/png")
+        elif path == "/bg/img/half.png":
+            self._send(HALF, ctype="image/png")
+        elif path == "/bg/img/purple.png":
+            self._send(PURPLE, ctype="image/png")
+        elif path == "/bg/img/olive.png":
+            self._send(OLIVE, ctype="image/png")
+        elif path == "/bg/img/disc.svg":
+            self._send(DISC, ctype="image/svg+xml")
         elif path == "/webp-picture":
             self._send(WEBP_PICTURE)
         elif path == "/inline-drawing":

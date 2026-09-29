@@ -1276,7 +1276,10 @@ WebP ones, lossless and lossy, with transparency and the first frame of an
 animation. An SVG written into the page, the way most sites draw their logos
 and icons, is drawn at the size the page gives it and in the colour of the
 text around it, and a strip of cards in a grid that would scroll sideways is
-laid out as rows of the cards that fit.
+laid out as rows of the cards that fit. Backgrounds are drawn as their sheets
+give them: pictures sized, placed and repeated, icons painted through a mask,
+and linear gradients; a picture's clear parts show what is behind it, and a
+picture can be fitted into its box and rounded at its corners.
 Custom properties (`--brand` and `var(--brand, fallback)`, inherited from
 `:root`), `calc()`, `min()`, `max()` and `clamp()` are worked out, which is how
 most sites written this decade give every colour and size. Up to forty style

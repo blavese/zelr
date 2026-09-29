@@ -1125,9 +1125,13 @@ int main(void) {
         ok("calc() multiplies and adds", x && x->w == 160);
 
         lay("<style>#i{mask-image:url(x.svg);background:#000000;width:20px;height:20px}"
-            "#j{background:#000000;width:20px;height:20px}</style><div id=i></div><div id=j></div>", 600);
-        const litem *ib = box_of(by_id("i")), *jb = box_of(by_id("j"));
-        ok("a box painted through a mask does not draw its background", !(ib && ib->has_bg) && jb && jb->has_bg);
+            "#k{mask-image:linear-gradient(#000,#0000);background:#000000;width:20px;height:20px}"
+            "#j{background:#000000;width:20px;height:20px}</style><div id=i></div><div id=k></div><div id=j></div>", 600);
+        const litem *ib = box_of(by_id("i")), *jb = box_of(by_id("j")), *kb = box_of(by_id("k"));
+        ok("a box painted through a mask it cannot draw does not draw its background",
+           !(kb && kb->has_bg) && jb && jb->has_bg);
+        ok("and one painted through a picture keeps its colour for the picture's shape",
+           ib && ib->has_bg && ib->bgi >= 0 && page.bgs[ib->bgi].mask);
 
         const char *imp = "@charset \"utf-8\"; /* a note */ @import url(\"base.css\");"
                           "@import 'print.css' print; @import url(wide.css) (min-width: 900px); p{color:red}";
@@ -1684,6 +1688,57 @@ int main(void) {
             ct && cc && ct->w < 200 && mid >= -2 && mid <= 2, ct && cc ? (ct->x - cc->x) * 1000 + ct->w : -1);
         okn("and align-self: flex-end puts one at the end", ce && cc && ce->x + ce->w == cc->x + cc->w && ce->w < 200,
             ce && cc ? ce->x * 1000 + ce->w : -1);
+    }
+
+    /* --- background pictures and masks ------------------------------------------ */
+    {
+        lay("<style>.h{height:40px;background:#123 url('/img/hero.png') no-repeat center / cover}"
+            ".i{width:20px;height:20px;background-color:#f00;mask:url(icon.svg) no-repeat 0 100% / 16px auto}"
+            ".p{height:10px;background-image:url(a.png);background-position:right 5px;background-size:50%}"
+            ".n{height:10px;background:url(x.png);background:#fff}</style>"
+            "<div class=h id=bh></div><div class=i id=bi></div><div class=p id=bp></div><div class=n id=bn></div>", 600);
+        const litem *bh = box_of(by_id("bh")), *bi = box_of(by_id("bi")), *bp = box_of(by_id("bp"));
+        const litem *bn = box_of(by_id("bn"));
+        const lbg *h = bh && bh->bgi >= 0 ? &page.bgs[bh->bgi] : 0;
+        const lbg *i = bi && bi->bgi >= 0 ? &page.bgs[bi->bgi] : 0;
+        const lbg *p = bp && bp->bgi >= 0 ? &page.bgs[bp->bgi] : 0;
+        ok("a background picture is kept with its box, placed and sized",
+           h && w_same(page.text + h->url, "/img/hero.png") && h->fit == 1 && h->rep == 1
+           && h->px == 50 && h->ppx && h->py == 50 && !h->mask && bh->has_bg);
+        ok("a mask is a picture the colour is painted through",
+           i && i->mask && w_same(page.text + i->url, "icon.svg") && i->px == 0 && i->py == 100
+           && i->sw == 16 && !i->swp && i->sh == -1 && bi->has_bg && bi->bg == 0xFF0000);
+        ok("and the longhands are read", p && w_same(page.text + p->url, "a.png") && p->px == 100 && p->ppx
+           && p->py == 5 && !p->ppy && p->sw == 50 && p->swp);
+        ok("a background shorthand with no picture takes the picture away", bn && bn->bgi < 0);
+
+        lay("<style>.g{height:10px;background:linear-gradient(to right,#f00,rgba(0,0,255,.5) 30%,transparent)}"
+            ".o{height:10px;background:linear-gradient(rgba(0,0,0,.5),rgba(0,0,0,.5)),url(h.jpg) center/cover}"
+            ".w{height:10px;background-image:-webkit-linear-gradient(left,#000,#fff)}</style>"
+            "<div class=g id=gg></div><div class=o id=go></div><div class=w id=gw></div>", 600);
+        const litem *gg = box_of(by_id("gg")), *go = box_of(by_id("go")), *gw = box_of(by_id("gw"));
+        const lbg *g1 = gg && gg->bgi >= 0 ? &page.bgs[gg->bgi] : 0;
+        const lbg *g2 = go && go->bgi >= 0 ? &page.bgs[go->bgi] : 0;
+        const lbg *g3 = gw && gw->bgi >= 0 ? &page.bgs[gw->bgi] : 0;
+        ok("a linear gradient is kept with its direction and its stops",
+           g1 && g1->url < 0 && g1->nstops == 3 && g1->angle == 90 && g1->stop_p[0] == 0
+           && g1->stop_p[1] == 30 && g1->stop_p[2] == 100 && g1->stop_c[1] == 0x0000FF
+           && g1->stop_a[1] > 120 && g1->stop_a[1] < 135 && g1->stop_a[2] == 0);
+        ok("and one over a picture keeps both, the gradient on top",
+           g2 && g2->nstops == 2 && g2->angle == 180 && !g2->under && g2->url >= 0
+           && w_same(page.text + g2->url, "h.jpg") && g2->fit == 1);
+        ok("and the prefixed form names where it starts", g3 && g3->nstops == 2 && g3->angle == 90);
+    }
+
+    /* --- a picture's fit and corners ------------------------------------------- */
+    {
+        lay("<style>img{width:90px;height:90px;object-fit:cover;border-radius:12px}</style><p><img id=of src=x></p>", 600);
+        picture_at("of", 160, 90);
+        lay("<style>img{width:90px;height:90px;object-fit:cover;border-radius:12px}</style><p><img id=of src=x></p>", 600);
+        nfake = 0;
+        const litem *of = image_of(by_id("of"));
+        ok("a picture keeps its object-fit and its corners for the drawing",
+           of && of->w == 90 && of->h == 90 && of->ofit == 2 && of->radius == 12);
     }
 
     puts(failed ? "LAYOUTTEST_FAIL\n" : "LAYOUTTEST_PASS\n");

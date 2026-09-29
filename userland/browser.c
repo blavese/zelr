@@ -146,7 +146,9 @@ static int   root_px = 16;
 
 typedef struct {
     int     node;                /* which img element */
-    picture pic;                 /* its pixels, or nothing */
+    picture pic;                 /* its pixels, or nothing: colour times alpha */
+    u8     *alpha;               /* how much of it covers what is behind, or null
+                                    for a picture with no clear parts (pic_merge) */
 } shown;
 
 static shown  pics[PICS_MAX];
@@ -198,17 +200,399 @@ static const picture *drawing_of(const litem *it) {
     return dr->pic.rgb ? &dr->pic : 0;
 }
 
+/* --- background pictures ------------------------------------------------------
+ *
+ * A box's background-image, or the mask its colour is painted through
+ * (layout.h, lbg): fetched once the page is laid out, since they take no
+ * room, and drawn under the box's contents (draw_background). Each is decoded
+ * twice, over black and over white, and what differs between the two is how
+ * much of whatever is behind shows through: kept as the colour already
+ * multiplied by that and the amount itself, a transparent icon lands on what
+ * is behind it rather than on a white square. A drawing is kept as its markup
+ * and made at the size it is drawn at, the last size kept. One that will not
+ * decode is kept as a failure, so it is not fetched again every frame. */
+#define BGPICS_MAX 32
+#define BGPICS_BYTES (16 * 1024 * 1024)
+
+typedef struct {
+    u32 key;
+    int keylen;                  /* the url as the page wrote it, hashed */
+    int ok;
+    int w, h;                    /* the picture's size, or the drawing's own */
+    u8 *rgb, *a;                 /* colour times alpha, and alpha (null when opaque) */
+    char *svg;                   /* a drawing's markup */
+    int svglen, dw, dh;          /* and the size its pixels were made at */
+} bgpic;
+
+static bgpic bgpics[BGPICS_MAX];
+static int nbgpics, bgpics_bytes;
+
+static u32 bg_hash(const char *s, int *len) {
+    u32 h = 2166136261u;
+    int n = 0;
+    for (; s[n]; n++) h = (h ^ (u8)s[n]) * 16777619u;
+    *len = n;
+    return h;
+}
+
+static bgpic *bg_find(const char *url) {
+    int len;
+    u32 k = bg_hash(url, &len);
+    for (int i = 0; i < nbgpics; i++)
+        if (bgpics[i].key == k && bgpics[i].keylen == len) return &bgpics[i];
+    return 0;
+}
+
+static void bg_pixels_free(bgpic *b) {
+    if (b->rgb) free(b->rgb);
+    if (b->a) free(b->a);
+    b->rgb = b->a = 0;
+}
+
+static void bgpics_drop(void) {
+    for (int i = 0; i < nbgpics; i++) {
+        bg_pixels_free(&bgpics[i]);
+        if (bgpics[i].svg) free(bgpics[i].svg);
+        bgpics[i].svg = 0;
+    }
+    nbgpics = 0;
+    bgpics_bytes = 0;
+}
+
+/* The same picture over black and over white, made into colour times alpha
+   (left in black) and alpha, how much of what is behind it shows: null when
+   none does. What differs between the two is exactly what shows through.
+   Takes white's pixels; on failure, black's too. */
+static int pic_merge(picture *black, picture *white, u8 **alpha) {
+    *alpha = 0;
+    int ok = black->rgb && white->rgb && black->w == white->w && black->h == white->h;
+    int n = ok ? black->w * black->h : 0;
+    u8 *a = ok ? (u8 *)malloc((u32)n) : 0;
+    if (!a) {
+        picture_free(black);
+        picture_free(white);
+        return 0;
+    }
+    int opaque = 1;
+    for (int i = 0; i < n; i++) {
+        int al = 255 - ((int)white->rgb[i * 3 + 1] - (int)black->rgb[i * 3 + 1]);
+        if (al < 0) al = 0;
+        if (al > 255) al = 255;
+        a[i] = (u8)al;
+        if (al != 255) opaque = 0;
+    }
+    picture_free(white);
+    if (opaque) free(a);
+    else *alpha = a;
+    return 1;
+}
+
+static int bg_merge(picture *black, picture *white, bgpic *b) {
+    u8 *a;
+    if (!pic_merge(black, white, &a)) return 0;
+    b->rgb = black->rgb;
+    black->rgb = 0;
+    b->a = a;
+    b->w = b->dw = black->w;
+    b->h = b->dh = black->h;
+    return 1;
+}
+
+/* Whether a picture's file says it has clear parts, so that only those are
+   decoded the second time pic_merge needs. */
+static int pic_may_be_clear(const u8 *b, int n) {
+    if (n > 26 && b[0] == 137 && b[1] == 'P') {
+        if (b[25] == 4 || b[25] == 6) return 1;            /* grey or colour with alpha */
+        for (int i = 8; i + 8 < n; ) {                      /* or a tRNS before the pixels */
+            u32 len = ((u32)b[i] << 24) | ((u32)b[i + 1] << 16) | ((u32)b[i + 2] << 8) | b[i + 3];
+            if (b[i + 4] == 't' && b[i + 5] == 'R' && b[i + 6] == 'N' && b[i + 7] == 'S') return 1;
+            if (b[i + 4] == 'I' && b[i + 5] == 'D' && b[i + 6] == 'A' && b[i + 7] == 'T') return 0;
+            if (len > (u32)n) return 0;
+            i += 12 + (int)len;
+        }
+        return 0;
+    }
+    if (n > 25 && b[0] == 'R' && b[8] == 'W') {
+        if (b[12] == 'V' && b[13] == 'P' && b[14] == '8' && b[15] == 'X') return (b[20] & 0x10) != 0;
+        if (b[12] == 'V' && b[13] == 'P' && b[14] == '8' && b[15] == 'L') {
+            u32 bits = (u32)b[21] | ((u32)b[22] << 8) | ((u32)b[23] << 16) | ((u32)b[24] << 24);
+            return (bits >> 28) & 1;
+        }
+        return 0;
+    }
+    return 1;                                           /* a GIF or a drawing: see */
+}
+
+/* A drawing's pixels at w by h, made now if they were made at another size. */
+static int bg_svg_at(bgpic *b, int w, int h) {
+    if (b->rgb && b->dw == w && b->dh == h) return 1;
+    if ((long long)w * h > 1024 * 1024) return 0;
+    int had = b->rgb ? b->dw * b->dh * 4 : 0;
+    bg_pixels_free(b);
+    bgpics_bytes -= had;
+    if (bgpics_bytes + w * h * 4 > BGPICS_BYTES) return 0;
+    picture k, wh;
+    int ww = b->w, hh = b->h;
+    b->ok = 0;                                  /* until it is made */
+    if (svg_render(b->svg, b->svglen, w, h, &k, 0x000000) != SVG_OK) return 0;
+    if (svg_render(b->svg, b->svglen, w, h, &wh, 0xFFFFFF) != SVG_OK) { picture_free(&k); return 0; }
+    if (!bg_merge(&k, &wh, b)) return 0;
+    b->ok = 1;
+    b->dw = b->w;
+    b->dh = b->h;
+    b->w = ww;
+    b->h = hh;
+    bgpics_bytes += b->dw * b->dh * 4;
+    return 1;
+}
+
+/* One picture over a backdrop, by what its bytes say it is. */
+static int bg_raster(const u8 *body, int len, u32 bg, picture *out) {
+    if (len > 8 && body[0] == 137 && body[1] == 'P' && body[2] == 'N' && body[3] == 'G')
+        return png_decode(body, len, out, bg) == PNG_OK;
+    if (len > 6 && body[0] == 'G' && body[1] == 'I' && body[2] == 'F')
+        return gif_decode(body, len, out, bg) == GIF_OK;
+    if (len > 12 && body[0] == 'R' && body[1] == 'I' && body[2] == 'F' && body[3] == 'F'
+        && body[8] == 'W' && body[9] == 'E' && body[10] == 'B' && body[11] == 'P')
+        return webp_decode(body, len, out, bg) == WEBP_OK;
+    return 0;
+}
+
+static int pic_data_uri(const char *src, char *out, int cap);
+
+static void gather_backgrounds(void) {
+    for (int i = 0; i < page.nitems && nbgpics < BGPICS_MAX; i++) {
+        const litem *it = &page.items[i];
+        if (it->kind != LK_BOX || it->bgi < 0 || it->w <= 0 || it->h <= 0) continue;
+        if (page.bgs[it->bgi].url < 0) continue;              /* a gradient alone */
+        const char *src = page.text + page.bgs[it->bgi].url;
+        if (bg_find(src)) continue;
+        bgpic *b = &bgpics[nbgpics++];
+        b->key = bg_hash(src, &b->keylen);
+        b->ok = 0;
+        b->w = b->h = b->dw = b->dh = 0;
+        b->rgb = b->a = 0;
+        b->svg = 0;
+        b->svglen = 0;
+
+        response_t r;
+        if (w_starts_fold(src, "data:")) {
+            int dn = pic_data_uri(src, cssbuf, CSS_MAX);
+            if (dn <= 0) continue;
+            r.body = cssbuf;
+            r.len = dn;
+        } else {
+            url_t u;
+            if (!url_join(&here, src, &u)) continue;
+            web_accept = "image/webp,image/png,image/jpeg,image/gif,image/svg+xml;q=0.9,*/*;q=0.1";
+            int rc = web_get(&u, cssbuf, CSS_MAX, &r);
+            web_accept = 0;
+            if (rc < 0 || rc >= 400 || r.len <= 0) continue;
+        }
+        const u8 *body = (const u8 *)r.body;
+        if (r.len > 3 && body[0] == 0xFF && body[1] == 0xD8) {
+            picture p;
+            if (jpeg_decode(body, r.len, &p) != JPG_OK) continue;
+            b->rgb = p.rgb;
+            b->w = b->dw = p.w;
+            b->h = b->dh = p.h;
+            b->ok = 1;
+        } else {
+            picture k, wh;
+            if (bg_raster(body, r.len, 0x000000, &k)) {
+                if (!bg_raster(body, r.len, 0xFFFFFF, &wh)) { picture_free(&k); continue; }
+                b->ok = bg_merge(&k, &wh, b);
+            } else {
+                int at = 0;
+                while (at < r.len && (body[at] == ' ' || body[at] == '\n' || body[at] == '\r'
+                                      || body[at] == '\t')) at++;
+                if (at >= r.len || body[at] != '<') continue;
+                b->svg = (char *)malloc((u32)r.len + 1);
+                if (!b->svg) continue;
+                for (int c = 0; c < r.len; c++) b->svg[c] = r.body[c];
+                b->svg[r.len] = 0;
+                b->svglen = r.len;
+                /* Made once at its own size, which is its size. */
+                picture own;
+                if (svg_render(b->svg, b->svglen, 0, 0, &own, 0xFFFFFF) != SVG_OK) continue;
+                b->w = own.w;
+                b->h = own.h;
+                picture_free(&own);
+                b->ok = b->w > 0 && b->h > 0;
+            }
+        }
+        if (b->ok && !b->svg) {
+            bgpics_bytes += b->dw * b->dh * 4;
+            if (bgpics_bytes > BGPICS_BYTES) { bg_pixels_free(b); b->ok = 0; }
+        }
+    }
+}
+
+/* Sine of a whole number of degrees, in 65536ths: enough to point a
+   gradient, with no library under this program to ask. */
+static int sin65536(int deg) {
+    static const int q[91] = {
+        0, 1144, 2287, 3430, 4572, 5712, 6850, 7987, 9121, 10252, 11380, 12505, 13626, 14742,
+        15855, 16962, 18064, 19161, 20252, 21336, 22415, 23486, 24550, 25607, 26656, 27697,
+        28729, 29753, 30767, 31772, 32768, 33754, 34729, 35693, 36647, 37590, 38521, 39441,
+        40348, 41243, 42126, 42995, 43852, 44695, 45525, 46341, 47143, 47930, 48703, 49461,
+        50203, 50931, 51643, 52339, 53020, 53684, 54332, 54963, 55578, 56175, 56756, 57319,
+        57865, 58393, 58903, 59396, 59870, 60326, 60764, 61183, 61584, 61966, 62328, 62672,
+        62997, 63303, 63589, 63856, 64104, 64332, 64540, 64729, 64898, 65048, 65177, 65287,
+        65376, 65446, 65496, 65526, 65536 };
+    deg = ((deg % 360) + 360) % 360;
+    if (deg <= 90) return q[deg];
+    if (deg <= 180) return q[180 - deg];
+    if (deg <= 270) return -q[deg - 180];
+    return -q[360 - deg];
+}
+
+/* A linear gradient across a box: each pixel's place along the gradient's
+   line (as long as the box is across in that direction, as CSS has it)
+   picks a colour between the stops round it, colour and alpha interpolated
+   together, laid over what is there. */
+static void draw_gradient(surface *s, const litem *it, const lbg *g, int x, int sy, int ox, int oy, int vw, int vh) {
+    int bw = it->w, bh = it->h;
+    int sn = sin65536(g->angle), cs = sin65536(g->angle + 90);
+    long long len = ((long long)bw * (sn < 0 ? -sn : sn) + (long long)bh * (cs < 0 ? -cs : cs)) >> 16;
+    if (len < 1) len = 1;
+    int n = g->nstops;
+    for (int row = 0; row < bh; row++) {
+        int dy = sy + row;
+        if (dy < oy || dy >= oy + vh || dy < 0 || dy >= s->h) continue;
+        long long yy = 2 * row + 1 - bh;              /* twice, from the centre */
+        for (int col = 0; col < bw; col++) {
+            int dx = x + col;
+            if (dx < ox || dx >= ox + vw || dx < 0 || dx >= s->w) continue;
+            long long xx = 2 * col + 1 - bw;
+            /* along the direction, 0 at the start and 10000 at the end */
+            long long along = (xx * sn - yy * cs) >> 16;      /* twice the distance */
+            long long t = 5000 + along * 5000 / len;
+            if (t < 0) t = 0;
+            if (t > 10000) t = 10000;
+            int k = 0;
+            while (k < n - 1 && t > g->stop_p[k + 1] * 100) k++;
+            int p0 = g->stop_p[k] * 100, p1 = k < n - 1 ? g->stop_p[k + 1] * 100 : p0;
+            int f = p1 > p0 ? (int)((t - p0) * 256 / (p1 - p0)) : 0;
+            if (f < 0) f = 0;
+            if (f > 256) f = 256;
+            int k1 = k < n - 1 ? k + 1 : k;
+            u32 c0 = g->stop_c[k], c1 = g->stop_c[k1];
+            int a0 = g->stop_a[k], a1 = g->stop_a[k1];
+            int al = (a0 * (256 - f) + a1 * f) >> 8;
+            if (!al) continue;
+            /* premultiplied, so a stop that is clear adds no colour of its own */
+            int pr = ((int)((c0 >> 16) & 255) * a0 * (256 - f) + (int)((c1 >> 16) & 255) * a1 * f) >> 8;
+            int pg = ((int)((c0 >> 8) & 255) * a0 * (256 - f) + (int)((c1 >> 8) & 255) * a1 * f) >> 8;
+            int pb = ((int)(c0 & 255) * a0 * (256 - f) + (int)(c1 & 255) * a1 * f) >> 8;
+            u32 *d = &s->px[(u32)dy * s->w + dx];
+            int back = 255 - al;
+            int r2 = (pr + (int)((*d >> 16) & 255) * back) / 255;
+            int g2 = (pg + (int)((*d >> 8) & 255) * back) / 255;
+            int b2 = (pb + (int)(*d & 255) * back) / 255;
+            *d = ((u32)(r2 > 255 ? 255 : r2) << 16) | ((u32)(g2 > 255 ? 255 : g2) << 8)
+               | (u32)(b2 > 255 ? 255 : b2);
+        }
+    }
+}
+
+/* A box's background picture or mask, inside the box and the view: sized,
+   placed and repeated as its sheet said. */
+static void draw_picture_layer(surface *s, const litem *it, int x, int sy, int ox, int oy, int vw, int vh);
+
+static void draw_background(surface *s, const litem *it, int x, int sy, int ox, int oy, int vw, int vh) {
+    const lbg *g = &page.bgs[it->bgi];
+    if (g->nstops && g->under) draw_gradient(s, it, g, x, sy, ox, oy, vw, vh);
+    if (g->url >= 0) draw_picture_layer(s, it, x, sy, ox, oy, vw, vh);
+    if (g->nstops && !g->under) draw_gradient(s, it, g, x, sy, ox, oy, vw, vh);
+}
+
+static void draw_picture_layer(surface *s, const litem *it, int x, int sy, int ox, int oy, int vw, int vh) {
+    const lbg *g = &page.bgs[it->bgi];
+    bgpic *b = bg_find(page.text + g->url);
+    if (!b || !b->ok || b->w <= 0 || b->h <= 0) return;
+    int bw = it->w, bh = it->h, nw = b->w, nh = b->h, tw, th;
+    if (g->fit) {
+        long long fx = (long long)bw * 65536 / nw, fy = (long long)bh * 65536 / nh;
+        long long f = g->fit == 1 ? (fx > fy ? fx : fy) : (fx < fy ? fx : fy);
+        tw = (int)((nw * f) >> 16);
+        th = (int)((nh * f) >> 16);
+    } else {
+        int sw = g->sw < 0 ? -1 : g->swp ? bw * g->sw / 100 : g->sw;
+        int sh = g->sh < 0 ? -1 : g->shp ? bh * g->sh / 100 : g->sh;
+        if (sw < 0 && sh < 0) { tw = nw; th = nh; }
+        else if (sh < 0) { tw = sw; th = (int)((long long)nh * sw / nw); }
+        else if (sw < 0) { th = sh; tw = (int)((long long)nw * sh / nh); }
+        else { tw = sw; th = sh; }
+    }
+    if (tw < 1 || th < 1) return;
+    if (b->svg && !bg_svg_at(b, tw, th)) return;
+    if (!b->rgb) return;
+    int pw = b->dw, ph = b->dh;
+    int x0 = g->ppx ? (bw - tw) * g->px / 100 : g->px;
+    int y0 = g->ppy ? (bh - th) * g->py / 100 : g->py;
+    int across = g->rep == 0 || g->rep == 2, down = g->rep == 0 || g->rep == 3;
+    u32 c = it->bg;
+    int cr = (int)((c >> 16) & 255), cg = (int)((c >> 8) & 255), cb = (int)(c & 255);
+    for (int row = 0; row < bh; row++) {
+        int dy = sy + row;
+        if (dy < oy || dy >= oy + vh || dy < 0 || dy >= s->h) continue;
+        int ty = row - y0;
+        if (down) { ty %= th; if (ty < 0) ty += th; }
+        else if (ty < 0 || ty >= th) continue;
+        int src_y = ty * ph / th;
+        for (int col = 0; col < bw; col++) {
+            int dx = x + col;
+            if (dx < ox || dx >= ox + vw || dx < 0 || dx >= s->w) continue;
+            int tx = col - x0;
+            if (across) { tx %= tw; if (tx < 0) tx += tw; }
+            else if (tx < 0 || tx >= tw) continue;
+            int at = src_y * pw + tx * pw / tw;
+            int al = b->a ? b->a[at] : 255;
+            if (!al) continue;
+            u32 *d = &s->px[(u32)dy * s->w + dx];
+            int dr = (int)((*d >> 16) & 255), dgn = (int)((*d >> 8) & 255), db = (int)(*d & 255);
+            int r2, g2, b2;
+            if (g->mask) {
+                r2 = (cr * al + dr * (255 - al)) / 255;
+                g2 = (cg * al + dgn * (255 - al)) / 255;
+                b2 = (cb * al + db * (255 - al)) / 255;
+            } else {
+                const u8 *q = b->rgb + at * 3;
+                r2 = q[0] + dr * (255 - al) / 255;
+                g2 = q[1] + dgn * (255 - al) / 255;
+                b2 = q[2] + db * (255 - al) / 255;
+                if (r2 > 255) r2 = 255;
+                if (g2 > 255) g2 = 255;
+                if (b2 > 255) b2 = 255;
+            }
+            *d = ((u32)r2 << 16) | ((u32)g2 << 8) | (u32)b2;
+        }
+    }
+}
+
 static void pics_drop(void) {
-    for (int i = 0; i < npics; i++) picture_free(&pics[i].pic);
+    for (int i = 0; i < npics; i++) {
+        picture_free(&pics[i].pic);
+        if (pics[i].alpha) free(pics[i].alpha);
+        pics[i].alpha = 0;
+    }
     npics = 0;
     npic_sizes = 0;
     pics_skipped = 0;
     drawings_drop();
+    bgpics_drop();
 }
 
 static const picture *pic_of(int node) {
     for (int i = 0; i < npics; i++)
         if (pics[i].node == node && pics[i].pic.rgb) return &pics[i].pic;
+    return 0;
+}
+
+static const u8 *pic_alpha_of(int node) {
+    for (int i = 0; i < npics; i++)
+        if (pics[i].node == node && pics[i].pic.rgb) return pics[i].alpha;
     return 0;
 }
 
@@ -679,6 +1063,56 @@ static void gather_inline_sheets(void) {
  * one is another round trip, so there is a limit on how many are followed
  * and the limit is said out loud when it is reached rather than leaving
  * somebody wondering why one part of a page is styled and the rest is not. */
+/* A linked sheet's url()s are relative to the sheet, and the layout knows
+   only the page: each is written out against the sheet's own address before
+   the sheet is read, into out. Its length, or -1 when it will not fit. A
+   picture's own data: address and a drawing's #fragment are left alone. */
+static int css_urls_from(const url_t *base, const char *in, int n, char *out, int cap) {
+    int w = 0, i = 0;
+    while (i < n) {
+        if (i + 4 <= n && (in[i] == 'u' || in[i] == 'U') && w_lower(in[i + 1]) == 'r'
+            && w_lower(in[i + 2]) == 'l' && in[i + 3] == '(' && (i == 0 || !css_ident(in[i - 1]))) {
+            for (int k = 0; k < 4; k++) { if (w >= cap - 1) return -1; out[w++] = in[i++]; }
+            while (i < n && in[i] == ' ') { if (w >= cap - 1) return -1; out[w++] = in[i++]; }
+            char q = 0;
+            if (i < n && (in[i] == '"' || in[i] == '\'')) { q = in[i]; if (w >= cap - 1) return -1; out[w++] = in[i++]; }
+            int s0 = i;
+            while (i < n && (q ? in[i] != q : (in[i] != ')' && in[i] != ' '))) i++;
+            int len = i - s0;
+            char rel[URL_TEXT], whole[URL_TEXT];
+            const char *put = in + s0;
+            int plen = len;
+            if (len > 0 && len < (int)sizeof(rel) && !w_starts_fold(in + s0, "data:") && in[s0] != '#') {
+                for (int k = 0; k < len; k++) rel[k] = in[s0 + k];
+                rel[len] = 0;
+                url_t u;
+                if (url_join(base, rel, &u)) {
+                    url_text(&u, whole, (int)sizeof(whole));
+                    put = whole;
+                    plen = w_len(whole);
+                }
+            }
+            if (w + plen >= cap - 1) return -1;
+            for (int k = 0; k < plen; k++) out[w++] = put[k];
+            continue;
+        }
+        if (w >= cap - 1) return -1;
+        out[w++] = in[i++];
+    }
+    out[w] = 0;
+    return w;
+}
+
+/* A sheet read with its urls made whole (css_urls_from), or as it is when
+   there is no room to. */
+static char *sheet_abs;
+static void css_parse_sheet(const url_t *base, const char *css, int len, int lo, int hi) {
+    if (!sheet_abs) sheet_abs = (char *)malloc(CSS_MAX + CSS_MAX / 4);
+    int n = sheet_abs ? css_urls_from(base, css, len, sheet_abs, CSS_MAX + CSS_MAX / 4) : -1;
+    if (n >= 0) css_parse_in(&sheet, sheet_abs, n, lo, hi);
+    else css_parse_in(&sheet, css, len, lo, hi);
+}
+
 /* The sheets a sheet imports, fetched and read before it, which is where
    @import puts them in the cascade. One level: an import's own imports are
    not followed. They were skipped, and a site that keeps its whole style in
@@ -695,7 +1129,7 @@ static void gather_imports(const url_t *base, const char *css, int len, int *fet
         response_t r;
         int rc = web_get(&u, buf, CSS_MAX, &r);
         if (rc < 200 || rc >= 300 || r.len <= 0) continue;
-        css_parse_in(&sheet, r.body, r.len, lo, hi);
+        css_parse_sheet(&u, r.body, r.len, lo, hi);
         (*fetched)++;
     }
     if (buf) free(buf);
@@ -742,7 +1176,7 @@ static int gather_linked_sheets(int *fetched, int *skipped) {
         int rc = web_get(&u, cssbuf, CSS_MAX, &r);
         if (rc < 200 || rc >= 300 || r.len <= 0) { (*skipped)++; continue; }
         gather_imports(&u, r.body, r.len, fetched);
-        css_parse_in(&sheet, r.body, r.len, lo, hi);
+        css_parse_sheet(&u, r.body, r.len, lo, hi);
         (*fetched)++;
     }
     return *fetched;
@@ -967,27 +1401,39 @@ static void gather_pictures(void) {
 
         shown *s = &pics[npics];
         s->node = i;
+        s->alpha = 0;
 
         /* Which kind it is, from the bytes rather than from what the
            server said it was. A server that labels a PNG as an octet stream
            is common; a PNG that does not start with the PNG signature is
-           not, so the bytes are the better authority. */
+           not, so the bytes are the better authority. One whose file says
+           it may have clear parts is decoded twice, over black and over
+           white, so they show what is behind them (pic_merge): flattened
+           onto white, a logo on a dark header sat in a white box. */
         const u8 *body = (const u8 *)r.body;
         int ok = 0;
+        int clear = pic_may_be_clear(body, r.len);
+        u32 under = clear ? 0x000000 : 0xFFFFFF;
+        picture white;
+        white.rgb = 0;
 
         if (r.len > 8 && body[0] == 137 && body[1] == 'P'
             && body[2] == 'N' && body[3] == 'G') {
-            ok = png_decode(body, r.len, &s->pic, 0xFFFFFF) == PNG_OK;
+            ok = png_decode(body, r.len, &s->pic, under) == PNG_OK;
+            if (ok && clear) ok = png_decode(body, r.len, &white, 0xFFFFFF) == PNG_OK;
         } else if (r.len > 3 && body[0] == 0xFF && body[1] == 0xD8) {
             ok = jpeg_decode(body, r.len, &s->pic) == JPG_OK;
+            clear = 0;
         } else if (r.len > 6 && body[0] == 'G' && body[1] == 'I' && body[2] == 'F') {
-            ok = gif_decode(body, r.len, &s->pic, 0xFFFFFF) == GIF_OK;
+            ok = gif_decode(body, r.len, &s->pic, under) == GIF_OK;
+            if (ok && clear) ok = gif_decode(body, r.len, &white, 0xFFFFFF) == GIF_OK;
         } else if (r.len > 12 && body[0] == 'R' && body[1] == 'I' && body[2] == 'F'
                    && body[3] == 'F' && body[8] == 'W' && body[9] == 'E'
                    && body[10] == 'B' && body[11] == 'P') {
             /* What a server sends a browser that says it takes WebP, and
                what some send whatever the browser says. */
-            ok = webp_decode(body, r.len, &s->pic, 0xFFFFFF) == WEBP_OK;
+            ok = webp_decode(body, r.len, &s->pic, under) == WEBP_OK;
+            if (ok && clear) ok = webp_decode(body, r.len, &white, 0xFFFFFF) == WEBP_OK;
         } else {
             /* A drawing, which is markup and so can start with an XML
                declaration, a comment, or the element itself. */
@@ -1003,11 +1449,16 @@ static void gather_pictures(void) {
                 int want_w = aw ? lay_number(aw) : 0;
                 int want_h = ah ? lay_number(ah) : 0;
                 ok = svg_render((const char *)body, r.len, want_w, want_h,
-                                &s->pic, 0xFFFFFF) == SVG_OK;
+                                &s->pic, 0x000000) == SVG_OK
+                  && svg_render((const char *)body, r.len, want_w, want_h,
+                                &white, 0xFFFFFF) == SVG_OK;
+                clear = 1;
             }
         }
 
-        if (!ok) { pics_skipped++; continue; }
+        if (ok && clear && white.rgb) ok = pic_merge(&s->pic, &white, &s->alpha);
+        else if (white.rgb) picture_free(&white);
+        if (!ok) { picture_free(&s->pic); pics_skipped++; continue; }
 
         pic_sizes[npic_sizes].node = i;
         pic_sizes[npic_sizes].w = s->pic.w;
@@ -1060,6 +1511,7 @@ static void build(const char *html, int len, int width, int want_sheets,
     hover_node = -1;
     hover_n = 0;
     relayout(width);
+    if (want_sheets) gather_backgrounds();
     find_item = -1;
     publish_text();
 
@@ -1506,10 +1958,13 @@ static void draw_page(surface *s, int ox, int oy, int vw, int vh) {
         if (it->kind == LK_BOX) {
             int w = it->w, h = it->h;
             if (w > vw) w = vw;
-            if (it->has_bg) {
+            /* A mask's colour is painted only through its picture. */
+            int masked = it->bgi >= 0 && page.bgs[it->bgi].mask;
+            if (it->has_bg && !masked) {
                 if (it->radius) round_rect(s, x, sy, w, h, it->radius, it->bg);
                 else rect(s, x, sy, w, h, it->bg);
             }
+            if (it->bgi >= 0) draw_background(s, it, x, sy, ox, oy, vw, vh);
             if (it->bt) rect(s, x, sy, w, it->bt, it->border);
             if (it->bb) rect(s, x, sy + h - it->bb, w, it->bb, it->border);
             if (it->bl) rect(s, x, sy, it->bl, h, it->border);
@@ -1519,6 +1974,7 @@ static void draw_page(surface *s, int ox, int oy, int vw, int vh) {
 
         if (it->kind == LK_IMAGE) {
             const picture *p = pic_of(it->node);
+            const u8 *alpha = p ? pic_alpha_of(it->node) : 0;
             if (!p && it->node >= 0 && it->node < doc.count && doc.nodes[it->node].tag == T_SVG)
                 p = drawing_of(it);
             if (p && p->rgb && it->w > 0 && it->h > 0) {
@@ -1526,19 +1982,61 @@ static void draw_page(surface *s, int ox, int oy, int vw, int vh) {
                    picture on a page is usually drawn at or near its own
                    size, where every filter agrees; where it is not, the
                    difference is a page that draws now against one that
-                   draws in a moment. */
+                   draws in a moment.
+
+                   Drawn at tw by th inside the box, centred, as object-fit
+                   says: stretched to it; its shape kept and all of it
+                   showing (contain) or all of the box covered (cover); its
+                   own size; or the smaller of that and contain. Stretched,
+                   every card's thumbnail was a squashed picture. */
+                int tw = it->w, th = it->h;
+                if (it->ofit && p->w > 0 && p->h > 0) {
+                    long long fx = (long long)it->w * 65536 / p->w, fy = (long long)it->h * 65536 / p->h;
+                    long long f = it->ofit == 2 ? (fx > fy ? fx : fy) : (fx < fy ? fx : fy);
+                    if (it->ofit == 3 || (it->ofit == 4 && f > 65536)) f = 65536;
+                    tw = (int)((p->w * f) >> 16);
+                    th = (int)((p->h * f) >> 16);
+                    if (tw < 1) tw = 1;
+                    if (th < 1) th = 1;
+                }
+                int x0 = (it->w - tw) / 2, y0 = (it->h - th) / 2;
+                int rad = it->radius;
+                if (rad * 2 > it->w) rad = it->w / 2;
+                if (rad * 2 > it->h) rad = it->h / 2;
                 for (int row = 0; row < it->h; row++) {
                     int dy = sy + row;
                     if (dy < oy || dy >= oy + vh) continue;
-                    int src_y = row * p->h / it->h;
+                    int ty = row - y0;
+                    if (ty < 0 || ty >= th) continue;
+                    int src_y = ty * p->h / th;
                     for (int col = 0; col < it->w; col++) {
                         int dx = x + col;
                         if (dx < ox || dx >= ox + vw) continue;
                         if (dx < 0 || dx >= s->w) continue;
-                        const u8 *q = p->rgb + ((src_y * p->w)
-                                                + (col * p->w / it->w)) * 3;
-                        s->px[(u32)dy * s->w + dx] =
-                            ((u32)q[0] << 16) | ((u32)q[1] << 8) | q[2];
+                        int tx = col - x0;
+                        if (tx < 0 || tx >= tw) continue;
+                        if (rad > 0) {
+                            /* Outside a rounded corner is not the picture. */
+                            int cx = col < rad ? rad - col : col >= it->w - rad ? col - (it->w - rad - 1) : 0;
+                            int cy = row < rad ? rad - row : row >= it->h - rad ? row - (it->h - rad - 1) : 0;
+                            if (cx && cy && cx * cx + cy * cy > rad * rad) continue;
+                        }
+                        int at = src_y * p->w + tx * p->w / tw;
+                        const u8 *q = p->rgb + at * 3;
+                        u32 *d = &s->px[(u32)dy * s->w + dx];
+                        int al = alpha ? alpha[at] : 255;
+                        if (al == 255) {
+                            *d = ((u32)q[0] << 16) | ((u32)q[1] << 8) | q[2];
+                        } else if (al) {
+                            /* Colour times alpha, and what is behind
+                               through what it does not cover. */
+                            int back = 255 - al;
+                            int r2 = q[0] + (int)((*d >> 16) & 255) * back / 255;
+                            int g2 = q[1] + (int)((*d >> 8) & 255) * back / 255;
+                            int b2 = q[2] + (int)(*d & 255) * back / 255;
+                            *d = ((u32)(r2 > 255 ? 255 : r2) << 16)
+                               | ((u32)(g2 > 255 ? 255 : g2) << 8) | (u32)(b2 > 255 ? 255 : b2);
+                        }
                     }
                 }
             }
