@@ -865,6 +865,101 @@ int main(void) {
            "(function(){ function F() {} F.prototype.hi = function(){ return 'hi'; };"
            " var f = new F(); return f.hi() + (f.constructor === F) + (Object.getPrototypeOf(f) === F.prototype); })()",
            "hitruetrue");
+    /* --- symbols, iteration and collections --------------------------------- */
+    expect("a symbol is a key of its own, that keys and JSON leave out",
+           "(function(){ var s = Symbol('d'), t = Symbol('d'); var o = { [s]: 1, a: 2 };"
+           " return [o[s], o[t], Object.keys(o), JSON.stringify(o), typeof s, s.description, String(s)].join(); })()",
+           "1,,a,{\"a\":2},symbol,d,Symbol(d)");
+    expect("Symbol.for gives the same symbol for the same name",
+           "Symbol.for('app') === Symbol.for('app') && Symbol.keyFor(Symbol.for('app')) === 'app'", "true");
+    expect("for-of walks an array, a string, arguments, a Map and a Set",
+           "(function(){ var r = []; for (var x of [1, 2]) r.push(x); for (var c of 'ab') r.push(c);"
+           " (function(){ for (var a of arguments) r.push(a); })(3);"
+           " for (var [k, v] of new Map([['m', 4]])) r.push(k + v); for (var s of new Set([5, 5])) r.push(s);"
+           " return r.join(); })()", "1,2,a,b,3,m4,5");
+    expect("and anything with a Symbol.iterator",
+           "(function(){ var it = { [Symbol.iterator]() { var i = 0;"
+           " return { next: () => ({ value: i, done: i++ >= 3 }) }; } }; return [...it].join(); })()", "0,1,2");
+    expect("a loop left early tells the iterator",
+           "(function(){ var closed = 0; var it = { [Symbol.iterator]() { return { next: () => ({ value: 1, done: false }),"
+           " return() { closed++; return {}; } }; } }; for (var x of it) break; return closed; })()", "1");
+    expect("a Map keeps any key in the order it was set, NaN included",
+           "(function(){ var o = {}, m = new Map(); m.set(o, 'obj').set('1', 's').set(1, 'n').set(NaN, 'nan');"
+           " m.set('1', 's2'); m.delete(1); return [m.get(o), m.get('1'), m.get(NaN), m.size, [...m.keys()].length].join(); })()",
+           "obj,s2,nan,3,3");
+    expect("a Set keeps each value once",
+           "(function(){ var s = new Set([1, 2, 2, '2']); s.add(1); s.delete(2);"
+           " return [...s].join() + ':' + s.size + ':' + s.has('2'); })()", "1,2:2:true");
+    expect("WeakMap and WeakSet take objects",
+           "(function(){ var k = {}, m = new WeakMap(), s = new WeakSet(); m.set(k, 1); s.add(k);"
+           " try { m.set('x', 1); } catch (e) { return m.get(k) + ',' + s.has(k) + ',' + e.name; } })()",
+           "1,true,TypeError");
+    expect("Array.from and Array.of",
+           "Array.from(new Set('aab')).join('') + Array.from({ length: 3 }, (_, i) => i * 2).join('') + Array.of(7).length",
+           "ab0241");
+    expect("includes, find, findIndex, findLast and findLastIndex",
+           "[[NaN].includes(NaN), [1, 2, 3].find(x => x > 1), [1, 2, 3].findIndex(x => x > 1),"
+           " [1, 2, 3].findLast(x => x < 3), [1, 2, 3].findLastIndex(x => x > 5)].join()", "true,2,1,2,-1");
+    expect("flat, flatMap and fill",
+           "[1, [2, [3, [4]]]].flat(2).length + ':' + [1, 2].flatMap(x => [x, x * 10]).join('') + new Array(3).fill(0).join('')",
+           "4:110220000");
+    expect("entries, keys and values of an array",
+           "[...['a', 'b'].entries()].join('|') + ';' + [...['a', 'b'].keys()].join() + ';' + [...['a'].values()]",
+           "0,a|1,b;0,1;a");
+    expect("splice, unshift, some, every and reduce",
+           "(function(){ var a = [1, 2, 3, 4], r = a.splice(1, 2, 9); a.unshift(0);"
+           " return [a.join(''), r.join(''), a.some(x => x > 8), a.every(x => x > 0), a.reduce((s, x) => s + x)].join(); })()",
+           "0194,23,true,false,14");
+    expect("array methods borrowed for something that is only like an array",
+           "Array.prototype.map.call({ length: 2, 0: 'a', 1: 'b' }, x => x.toUpperCase()).join('')", "AB");
+    expect("sort is stable, and sorts more than a handful",
+           "(function(){ var a = []; for (var i = 0; i < 50; i++) a.push({ k: i % 3, i: i });"
+           " a.sort((x, y) => x.k - y.k); for (var i = 1; i < 50; i++) if (a[i - 1].k === a[i].k && a[i - 1].i > a[i].i) return 'unstable';"
+           " return a[0].i + ',' + a[49].i; })()", "0,47");
+    expect("Object.assign, entries, values and fromEntries",
+           "JSON.stringify(Object.assign({}, { a: 1 }, null, { b: 2 })) + JSON.stringify(Object.entries({ c: 3 }))"
+           " + Object.values({ d: 4 }) + JSON.stringify(Object.fromEntries([['e', 5]]))",
+           "{\"a\":1,\"b\":2}[[\"c\",3]]4{\"e\":5}");
+    expect("Object.freeze, and isFrozen",
+           "(function(){ var o = Object.freeze({ a: 1 }); o.a = 2; o.b = 3; var a = Object.freeze([1]); a[0] = 5;"
+           " return [o.a, o.b, a[0], Object.isFrozen(o)].join(); })()", "1,,1,true");
+    expect("Object.create, getPrototypeOf and setPrototypeOf",
+           "(function(){ var base = { hi: 1 }, o = Object.create(base, { own: { value: 2, enumerable: true } });"
+           " var p = Object.setPrototypeOf({}, base);"
+           " return [o.hi + o.own, Object.keys(o), Object.getPrototypeOf(o) === base, p.hi].join(); })()",
+           "3,own,true,1");
+    expect("getOwnPropertyNames and getOwnPropertyDescriptor",
+           "(function(){ var o = { a: 1 }; Object.defineProperty(o, 'h', { value: 2 });"
+           " var d = Object.getOwnPropertyDescriptor(o, 'h');"
+           " return Object.getOwnPropertyNames(o).join() + ':' + [d.value, d.writable, d.enumerable].join(); })()",
+           "a,h:2,false,false");
+    expect("hasOwnProperty and in see the difference between own and inherited",
+           "(function(){ var o = Object.create({ inh: 1 }); o.own = 2;"
+           " return [o.hasOwnProperty('own'), o.hasOwnProperty('inh'), 'inh' in o, Object.hasOwn(o, 'own')].join(); })()",
+           "true,false,true,true");
+    expect("String methods: includes, startsWith, endsWith, repeat, matchAll, replaceAll",
+           "['abc'.includes('b'), 'abc'.startsWith('ab'), 'abc'.endsWith('bc'), 'ab'.repeat(2),"
+           " [...'a1b2'.matchAll(/\\d/g)].map(m => m[0] + m.index).join(''), 'a.b.c'.replaceAll('.', '-')].join()",
+           "true,true,true,abab,1123,a-b-c");
+    expect("Number.isInteger, isFinite and parseFloat, and toFixed rounding the exact value",
+           "[Number.isInteger(5), Number.isInteger(5.5), Number.isFinite('5'), Number.parseFloat('1.5x'),"
+           " (1.005).toFixed(2), (1234.5678).toFixed(1), (255).toString(16)].join()",
+           "true,false,false,1.5,1.00,1234.6,ff");
+    expect("globalThis is the global object", "(function(){ globalThis.gt = 3; return gt; })()", "3");
+    expect("Object.prototype.toString names what a thing is",
+           "[[], null, new Map(), function(){}, 1].map(x => Object.prototype.toString.call(x)).join()",
+           "[object Array],[object Null],[object Map],[object Function],[object Number]");
+    expect("a Date made from its parts, read back as ISO text and parsed again",
+           "(function(){ var d = new Date(Date.UTC(2020, 1, 29, 12, 30, 15, 250));"
+           " return d.toISOString() + ',' + (Date.parse(d.toISOString()) === d.getTime()) + ',' + d.getUTCDay(); })()",
+           "2020-02-29T12:30:15.250Z,true,6");
+    expect("Math has its functions, to the last place where it counts",
+           "[Math.trunc(-4.7), Math.sign(-3), Math.hypot(3, 4), Math.cbrt(27), Math.log2(8), Math.exp(1) === Math.E,"
+           " Math.log(Math.E), Math.atan2(1, 1) === Math.PI / 4, Math.round(-2.5), 2 ** 0.5 === Math.SQRT2].join()",
+           "-4,-1,5,3,3,true,1,true,-2,true");
+    expect("JSON.stringify indents, and JSON.parse revives",
+           "JSON.stringify({ a: [1] }, null, 1) + JSON.parse('{\"b\":2}', (k, v) => typeof v === 'number' ? v * 10 : v).b",
+           "{\n \"a\": [\n  1\n ]\n}20");
     expect("while two hundred nested brackets are an ordinary array",
            "(function(){ var s = ''; for (var i = 0; i < 200; i++) s += '['; s += '1';"
            " for (var i = 0; i < 200; i++) s += ']'; var a = eval(s);"
