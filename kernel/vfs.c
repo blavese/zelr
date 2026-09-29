@@ -170,6 +170,23 @@ static const char *route(const char *abs) {
     return abs;
 }
 
+/* A path under /usb, whose volume is the stick's.
+ *
+ * With no stick mounted such a path used to fall through to the files kept in
+ * memory, like any path on a machine with no disk: a file copied to /usb went
+ * into memory and was gone at the next start, with nothing said, and mkdir
+ * /usb made a directory there that listed as though it were the stick. The
+ * memory's files are for a machine with no disk at all. On the stick's path
+ * with no stick, every operation fails instead. */
+static bool on_usb(const char *abs) {
+    return abs[0] == '/' && abs[1] == 'u' && abs[2] == 's' && abs[3] == 'b'
+        && (abs[4] == '/' || abs[4] == 0);
+}
+
+bool vfs_volume_missing(const char *abs) {
+    return on_usb(abs) && !fat_mounted_on(FAT_VOL_USB);
+}
+
 /* And back, once the call that needed it is over.
  *
  * The selection used to stay wherever the last path left it, and everything
@@ -208,6 +225,7 @@ int vfs_list(const char *path, u32 index, char *name_out, u32 *size_out, bool *d
         return r;
     }
     unroute();
+    if (on_usb(abs)) return -1;
     return ram_list(abs, index, name_out, size_out, dir_out);
 }
 
@@ -236,6 +254,7 @@ bool vfs_stat(const char *path, u32 *size_out, bool *dir_out) {
         return r;
     }
     unroute();
+    if (on_usb(abs)) return false;
 
     file_t *f = fs_find(abs);
     if (!f) return false;
@@ -259,6 +278,7 @@ int vfs_read(const char *path, void *buf, u32 cap) {
         return r;
     }
     unroute();
+    if (on_usb(abs)) return -1;
 
     file_t *f = fs_find(abs);
     if (!f || f->is_dir) return -1;
@@ -286,6 +306,7 @@ bool vfs_write(const char *path, const void *buf, u32 len) {
         return r;
     }
     unroute();
+    if (on_usb(abs)) return false;
     return fs_write(abs, buf, len);
 }
 
@@ -319,6 +340,7 @@ bool vfs_delete(const char *path) {
         return r;
     }
     unroute();
+    if (on_usb(abs)) return false;
     return fs_delete(abs);
 }
 
@@ -364,6 +386,7 @@ bool vfs_mkdir(const char *path) {
         return r;
     }
     unroute();
+    if (on_usb(abs)) return false;
     return fs_mkdir(abs);
 }
 
@@ -382,6 +405,7 @@ bool vfs_rmdir(const char *path) {
         return r;
     }
     unroute();
+    if (on_usb(abs)) return false;
     return fs_delete(abs);
 }
 

@@ -69,3 +69,7 @@ void vfs_add_builtin(const char *name, const u8 *data, u32 size);
 u32  vfs_builtin_count(void);
 
 bool vfs_disk_backed(void);
+
+/* Whether a path is on a volume that is not there: under /usb with no stick
+   mounted. Nothing may be read or written there -- not even into memory. */
+bool vfs_volume_missing(const char *abs);

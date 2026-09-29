@@ -891,7 +891,7 @@ It always looks at entry 0. If that entry is a non-empty directory, both delete 
 **S21. USB MBR scan accepts type 0xEF** (diskfs.c:44).
 The "never touch the ESP" rule is only enforced for disk 0, so a bootable stick's ESP can be mounted at /usb and written. GPT-formatted sticks cannot be mounted at all (§3.6).
 
-**S22. `/usb` with nothing mounted falls through to the RAM fs** (vfs.c:195-197, 246-253, 296-305).
+**S22. FIXED in 0.76.0 (`on_usb`, `vfs_volume_missing`, `fd_open`; the live tree self test). `/usb` with nothing mounted falls through to the RAM fs** (vfs.c:195-197, 246-253, 296-305).
 Writes silently succeed into memory and are lost at reboot. `mkdir /usb` creates a RAM directory, which then lists and chdirs as if it were the stick. A file opened on /usb and closed after the stick was pulled is written to RAM (fd.c:120). mountcheck.py:87-91 acknowledges this.
 
 **S23. The black-box boot counter increments on every `bb_flush`** (blackbox.c:268-275).

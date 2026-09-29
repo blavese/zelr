@@ -4766,6 +4766,15 @@ static void test_live_tree(void) {
 
     ok("something that is not there says so", vfs_read("/sys/nothing", buf, 16) < 0);
     ok("and does not stat", !vfs_stat("/sys/nothing", 0, 0));
+
+    /* With no stick, /usb is nowhere: a file written there went into memory
+       and was gone at the next start. */
+    if (fat_mounted_on(FAT_VOL_USB)) { kprintf("  SKIP  a stick is mounted at /usb\n"); return; }
+    ok("with no stick, nothing can be written under /usb", !vfs_write("/usb/lost.txt", "x", 1));
+    ok("nor a directory made there", !vfs_mkdir("/usb") && !vfs_mkdir("/usb/d"));
+    ok("nor a file opened there to be written", fd_open("/usb/lost.txt", O_WRITE | O_CREATE) < 0);
+    ok("and nothing is found there", !vfs_stat("/usb/lost.txt", 0, 0) && !vfs_stat("/usb", 0, 0)
+       && vfs_read("/usb/lost.txt", buf, 16) < 0);
 }
 
 static void test_layout(void) {

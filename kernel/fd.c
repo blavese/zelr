@@ -301,6 +301,9 @@ static bool grow_to(ofile_t *f, u32 need) {
 int fd_open(const char *path, u32 flags) {
     char abs[VFS_PATH_MAX];
     if (!vfs_resolve(path, abs, sizeof(abs))) return -1;
+    /* Refused now rather than at the close, which is when it would be
+       written, and to memory (vfs.c, on_usb). */
+    if (vfs_volume_missing(abs)) return -1;
 
     u32 size = 0;
     bool is_dir = false;

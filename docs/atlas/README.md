@@ -112,6 +112,10 @@ numbered files are still to 6048716; where they disagree with this list, this li
   pagetest 211 (was 87). Not there: XML documents, SubtleCrypto, attachShadow, request headers a page
   sets, methods other than GET and POST, FileReader. The page's 24 MB script memory with nothing freed is
   now the most common stop on big sites (js.h, `JS_MEM_CAP`).
+- **Nothing lost to a missing stick (04 S22, vfs.c, fd.c).** With no stick mounted, every operation on a path
+  under /usb fails (`on_usb`, `vfs_volume_missing`, and `fd_open` refusing it up front) instead of going to
+  the files kept in memory, where a file copied to the stick was gone at the next start. [userspace]'s live
+  tree section: four checks.
 ### 0.75.0
 
 - **Auto margins, and columns lined up (11).** In a row, auto margins take the room left after growing and
