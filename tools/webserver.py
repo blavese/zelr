@@ -332,6 +332,21 @@ INLINE_DRAWING = b"""<!doctype html>
 </body></html>
 """
 
+# A page built from sixty style sheets, as sites made of many pieces are, with
+# the band's colour only in the last: the browser read forty and stopped, so
+# a rule past the fortieth never applied.
+MANY_SHEETS = (b"<!doctype html><html><head><title>many sheets</title>"
+               + b"".join(b'<link rel="stylesheet" href="/sheet/%d.css">' % i for i in range(1, 61))
+               + b"</head><body><h1>sixty style sheets</h1>"
+               + b'<div class="many">a band, if the sixtieth sheet was read</div></body></html>\n')
+
+
+def _sheet(n):
+    if n == 60:
+        return b".many { background: #1d4ed8; color: #ffffff; padding: 30px; }\n"
+    return b".unused%d { color: #000000; }\n" % n
+
+
 # The same page pointing at something that is not there, so the words it
 # carries are what shows instead. That is what alt text is for, and a
 # browser that drew nothing at all would look identical to one that drew
@@ -527,6 +542,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._said("get", query)
         elif path == "/second":
             self._send(SECOND)
+        elif path == "/many-sheets":
+            self._send(MANY_SHEETS)
+        elif path.startswith("/sheet/") and path.endswith(".css") and path[7:-4].isdigit():
+            self._send(_sheet(int(path[7:-4])), ctype="text/css")
         elif path == "/styled":
             self._send(STYLED)
         elif path == "/bare":

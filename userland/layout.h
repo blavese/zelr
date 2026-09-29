@@ -2137,12 +2137,28 @@ static void lay_flex(lctx *L, int node, const cstyle *st, int cx, int cw,
     /* Past this many the rest are laid out as a column under the row, which
        is where they would have wrapped to on a page that let them. They used
        to be dropped: a list of fifty links in a flex row showed thirty-two. */
-    int kid[LAY_FLEX_MAX];
-    int n = 0, extra = -1;
+    /* A child that is not drawn is not an item, and one positioned
+       absolutely is out of the row altogether, placed from its own offsets
+       once the row is done. Counted in, a closed menu written as
+       `hidden` with width: 100% took a whole line of the row and pushed
+       what came after it onto the next. */
+    int kid[LAY_FLEX_MAX], placed[LAY_FLEX_MAX];
+    int n = 0, nplaced = 0, extra = -1, top = *y;
     for (int c = d->nodes[node].first; c >= 0; c = d->nodes[c].next) {
         if (d->nodes[c].kind != DN_ELEMENT) continue;
+        cstyle own;
+        lay_style(L, c, st, &own, cw);
+        if (own.display == D_NONE || lay_unseen(&own)) continue;
+        if (own.position == POS_ABSOLUTE || own.position == POS_FIXED) {
+            if (nplaced < LAY_FLEX_MAX) placed[nplaced++] = c;
+            continue;
+        }
         if (n < LAY_FLEX_MAX) kid[n++] = c;
         else { extra = c; break; }
+    }
+    for (int i = 0; i < nplaced; i++) {
+        int yy = top;
+        lay_block(L, placed[i], st, cx, cw, &yy);
     }
     if (n == 0) return;
 

@@ -111,6 +111,12 @@ numbered files are still to 6048716; where they disagree with this list, this li
 - **Checks.** layouttest 176 (ten for drawings and pictures in rows), svgtest 51 (four for drawings in a
   page), webptest 136 in ring3check (47), browsercheck 25 (a drawing in the page, a WebP picture); each
   seen failing on a broken build.
+- **Rows and sheets (11).** A flex row's items are its children that are drawn and in the flow: one not
+  drawn (display: none, `hidden`) is no item, and one positioned absolutely is laid out on its own from the
+  row's top, once (`lay_flex`). GOV.UK's closed menu, `hidden` with width: 100%, took a line of the row and
+  pushed the search button under the logo. Up to 96 linked sheets (`SHEETS_MAX`, was 40; 128 addresses
+  remembered): The Verge links 66 and the rule that keeps its drawer shut was past the fortieth.
+  layouttest 178, browsercheck 26 (a rule in the sixtieth sheet), each seen failing on a broken build.
 - **Grid tracks (11).** A flexible track (fr, auto) is never narrower than the least its items can be
   drawn in (`lay_grid_least`: the width an item asks for, else its min-width, else its narrowest content;
   nothing for one that clips), and one held at that leaves the sharing to the others (`lay_grid_share`);

@@ -60,7 +60,11 @@
  * room now keeps what it has. */
 #define SRC_MAX    (3 * 1024 * 1024)
 #define CSS_MAX    (1024 * 1024)
-#define SHEETS_MAX 40
+/* Style sheets a page may link. A site built in pieces links one per
+   piece: The Verge links sixty-six, and the rule that keeps its menu drawer
+   shut until it is opened was in one past the fortieth, so the drawer and
+   the logo inside it were drawn across the page. */
+#define SHEETS_MAX 96
 
 /* A script the page did not bring with it. One buffer, reused: each is run
    the moment it arrives, so there is never more than one in hand. The limit
@@ -670,7 +674,7 @@ static void gather_imports(const url_t *base, const char *css, int len, int *fet
 
 /* Whether this address was already read for this page: a page that links
    the same sheet five times (one does) spent five of its slots on it. */
-#define SHEETS_SEEN 64
+#define SHEETS_SEEN 128
 static char sheets_seen[SHEETS_SEEN][URL_TEXT];
 static int nsheets_seen;
 

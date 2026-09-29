@@ -1240,6 +1240,26 @@ int main(void) {
         nfake = 0;
     }
 
+    /* --- what a row leaves out ------------------------------------------------
+     *
+     * A closed menu (hidden, width: 100%) and something positioned over the
+     * row are not items of it: counted in, the menu took a line of its own
+     * and pushed the search button under GOV.UK's logo. */
+    {
+        lay("<style>.row{display:flex;flex-wrap:wrap}.dd{width:100%}</style>"
+            "<div class=row><div>one</div><div class=dd hidden>gone</div><div>two</div></div>", 600);
+        const litem *a = word("one"), *b = word("two");
+        ok("a hidden child takes no room in a row", a && b && a->y == b->y && !word("gone"));
+
+        lay("<style>.row{display:flex;flex-wrap:wrap;position:relative}"
+            ".ab{position:absolute;top:0;left:0;width:100%}</style>"
+            "<div class=row><div>alpha</div><div class=ab>over</div><div>beta</div></div>", 600);
+        a = word("alpha");
+        b = word("beta");
+        const litem *o = word("over");
+        ok("nor does one positioned over it, which is still drawn", a && b && o && a->y == b->y && b->x < 200);
+    }
+
     puts(failed ? "LAYOUTTEST_FAIL\n" : "LAYOUTTEST_PASS\n");
     return failed;
 }

@@ -314,13 +314,23 @@ def main():
             c.add("and has no band on it at all",
                   count_in(pxb, wb, PAGE, BAND) < 200, shotb)
 
+            # --- sixty style sheets ----------------------------------------
+            #
+            # A site made of many pieces links a sheet per piece, and the
+            # rule that mattered was in one the browser never read.
+            go(vm, mon, "http://%s/many-sheets" % srv.host, settle=15.0,
+               was=bare, name="br-going-many")
+            many, pxm, wm, shotm = page_settled(mon, "br-many-sheets")
+            c.add("a rule in the sixtieth style sheet a page links applies",
+                  count_in(pxm, wm, PAGE, BAND) > 3000, shotm)
+
             # --- a picture -------------------------------------------------
             #
             # The whole way through: fetched over http as a second request,
             # inflated, unfiltered, turned into pixels and drawn at the size
             # the layout left for it.
             go(vm, mon, "http://%s/picture" % srv.host, settle=12.0,
-               was=bare, name="br-going-picture")
+               was=many, name="br-going-picture")
             withpic, pxp, wp, shotp = page_settled(mon, "br-picture")
             c.add("a picture on a page is fetched, decoded and drawn",
                   count_in(pxp, wp, PAGE, LOGO) > 10000, shotp)
