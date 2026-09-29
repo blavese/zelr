@@ -1020,6 +1020,9 @@ static void relayout(int width) {
         lay_show_hidden = 0;
         page_unhidden = lay_words(&page) > 0;
     }
+    /* Sizes may have changed, which a page's ResizeObserver hears of on the
+       next pass (jsdom.h). */
+    jsdom_laid_out();
 }
 
 /* What this system thinks a link looks like, which is the accent the rest of

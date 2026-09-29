@@ -184,10 +184,24 @@ static int fake_style(int node, cstyle *out) {
     return 1;
 }
 
-/* Where a pretend layout put everything: one box, for every element. */
+/* Where a pretend layout put everything: one box, for every element, as
+   wide as box_w (a layout that changes it is a check's to make). */
+static int box_w = 50;
 static int fake_box(int node, int *x, int *y, int *w, int *h) {
     (void)node;
-    *x = 10; *y = 100; *w = 50; *h = 20;
+    *x = 10; *y = 100; *w = box_w; *h = 20;
+    return 1;
+}
+
+/* A style with padding and borders: 4 and 2 of padding across and down, a
+   border of 1 at each side. */
+static int padded_style(int node, cstyle *out) {
+    (void)node;
+    css_default_style(out, 16);
+    out->display = D_BLOCK;
+    out->pl = out->pr = 4;
+    out->pt = out->pb = 2;
+    out->bl = out->br = 1;
     return 1;
 }
 
@@ -1438,6 +1452,89 @@ int main(void) {
         jsdom_at("https://site.test/three");
         titled("<script>localStorage.removeItem('n'); localStorage.clear();</script>");
         jsdom_at("");
+    }
+
+    /* --- watching the page --------------------------------------------------------
+     *
+     * MutationObserver hears of each change once the script that made it has
+     * finished; IntersectionObserver reports what the layout drew as in view,
+     * once, on the next pass; ResizeObserver reports sizes, and again when a
+     * layout changes one. */
+    oks("a MutationObserver hears of each change once the script has finished, with the old values",
+        titled("<body><div id=d class=a><span id=s>t</span></div><script>"
+               "var log = [], d = document.getElementById('d');"
+               "var mo = new MutationObserver(function(recs, o){"
+               " recs.forEach(function(r){ log.push([r.type, r.target.id || r.target.nodeName,"
+               "  r.addedNodes.length, r.removedNodes.length, r.attributeName, r.oldValue].join(':')); });"
+               " document.title = log.join(' ') + ' ' + (o === mo) + ' ' + early; });"
+               "mo.observe(d, { childList: true, attributes: true, attributeOldValue: true, subtree: true,"
+               " characterDataOldValue: true });"
+               "d.className = 'b';"
+               "d.appendChild(document.createElement('p'));"
+               "document.getElementById('s').firstChild.data = 'u';"
+               "d.removeChild(document.getElementById('s'));"
+               "var early = log.length;</script></body>"),
+        "attributes:d:0:0:class:a childList:d:1:0:: characterData:#text:0:0::t childList:d:0:1:: true 0");
+    oks("and only what it asked for: a filter, records taken, and nothing after disconnect",
+        titled("<body><div id=d></div><script>"
+               "var d = document.getElementById('d'), heard = 0;"
+               "var mo = new MutationObserver(function(){ heard++; });"
+               "mo.observe(d, { attributeFilter: ['title'] });"
+               "d.setAttribute('class', 'x'); d.setAttribute('title', 'y'); d.appendChild(document.createElement('i'));"
+               "var taken = mo.takeRecords();"
+               "d.setAttribute('title', 'z'); mo.disconnect(); d.setAttribute('title', 'w');"
+               "var bad = 'none'; try { mo.observe(d, {}); } catch (e) { bad = e.name; }"
+               "</script><script>"
+               "document.title = [taken.length, taken[0].attributeName, String(taken[0].oldValue), heard, bad].join(' ');"
+               "</script></body>"),
+        "1 title null 0 TypeError");
+    {
+        jsdom_boxes_with(fake_box);
+        jsdom_view(800, 600, 0);
+        load("<body><div id=a></div><div id=b></div><script>"
+             "var seen = [];"
+             "var io = new IntersectionObserver(function(es){"
+             " es.forEach(function(e){ seen.push(e.target.id + ' ' + e.isIntersecting + ' ' + e.intersectionRatio"
+             "  + ' ' + e.boundingClientRect.top + ' ' + e.boundingClientRect.width); });"
+             " document.title = seen.join(', '); });"
+             "io.observe(document.getElementById('a')); io.observe(document.getElementById('b'));"
+             "document.title = 'waiting ' + seen.length;</script></body>");
+        char err[128];
+        run_scripts(&page, err, (int)sizeof(err), 0);
+        oks("an IntersectionObserver says nothing while the script runs",
+            page.title >= 0 ? page.arena + page.title : "", "waiting 0");
+        pump_until(1, 1000);
+        oks("and on the next pass reports what the layout drew as in view, where it drew it",
+            page.title >= 0 ? page.arena + page.title : "", "a true 1 100 50, b true 1 100 50");
+        pump_until(1, 300);
+        oks("once", page.title >= 0 ? page.arena + page.title : "", "a true 1 100 50, b true 1 100 50");
+
+        /* Inside its padding and borders: 50 by 20 less 4 and 1 each side
+           across, 2 each side down. */
+        jsdom_styles_with(padded_style);
+        load("<body><div id=a></div><script>"
+             "var n = 0;"
+             "new ResizeObserver(function(es){ n++; var e = es[0];"
+             " document.title = [n, e.contentRect.left, e.contentRect.width, e.contentRect.height,"
+             "  e.borderBoxSize[0].inlineSize].join(' ');"
+             "}).observe(document.getElementById('a'));</script></body>");
+        run_scripts(&page, err, (int)sizeof(err), 0);
+        pump_until(1, 1000);
+        oks("a ResizeObserver reports the size the layout gave, inside the padding, on the next pass",
+            page.title >= 0 ? page.arena + page.title : "", "1 4 40 16 50");
+        jsdom_laid_out();
+        pump_until(1, 1000);
+        oks("and not again while it stays that size", page.title >= 0 ? page.arena + page.title : "", "1 4 40 16 50");
+        box_w = 70;
+        jsdom_laid_out();
+        oks("but again when a layout changes it, on the pass after the layout",
+            page.title >= 0 ? page.arena + page.title : "", "1 4 40 16 50");
+        pump_until(1, 1000);
+        box_w = 50;
+        oks("which says the new size", page.title >= 0 ? page.arena + page.title : "", "2 4 60 16 70");
+        jsdom_styles_with(0);
+        jsdom_boxes_with(0);
+        jsdom_view(0, 0, 0);
     }
 
     /* --- a page that uses up its memory ---------------------------------------

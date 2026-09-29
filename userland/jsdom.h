@@ -4424,22 +4424,6 @@ static int jd_fire_click(int node, int trusted, int x, int y) {
     return 0;
 }
 
-/* --- watching the tree ----------------------------------------------------------------------
- *
- * Where a MutationObserver will hear of each change (jsobs.h). Nothing
- * listens yet. */
-static void jd_record_children(int target, int added, int removed, int prev, int next) {
-    (void)target; (void)added; (void)removed; (void)prev; (void)next;
-}
-
-static void jd_record_attr(int target, const char *name, const char *old) {
-    (void)target; (void)name; (void)old;
-}
-
-static void jd_record_text(int target, const char *old) {
-    (void)target; (void)old;
-}
-
 /* --- later ------------------------------------------------------------------------------------
  *
  * setTimeout is the only way a page can arrange for something to happen that
@@ -5232,6 +5216,7 @@ static void jd_consts(jctx *J, jobj *on, const char *const *names, int from);
 #include "jsurl.h"
 #include "jsnet.h"
 #include "jswin.h"
+#include "jsobs.h"
 
 /* --- the hooks -----------------------------------------------------------------------------------
  *
@@ -5979,6 +5964,7 @@ static void jd_setup(jctx *J) {
     jd_setup_location(J);
     jd_setup_window_more(J);
     jd_setup_storage(J);
+    jd_setup_observers(J);
 }
 
 /* --- opening and closing the world -----------------------------------------------------------
