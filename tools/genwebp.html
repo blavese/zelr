@@ -1,0 +1,128 @@
+<!doctype html>
+<!-- The pictures userland/webptest.c decodes, drawn here pixel by pixel and
+     encoded by the browser's own WebP encoder (canvas.toDataURL), so that the
+     files come from an encoder that is not this project's. tools/genwebp.ps1
+     opens this page in headless Edge, reads the files out of the page, and
+     writes userland/webpdata.h. Each line of #out is "name quality data-url".
+
+     Every pixel is computed with integer arithmetic from its position (and a
+     fixed pseudo-random sequence), and put into the canvas with putImageData,
+     so nothing depends on how a browser draws lines or smooths edges. A
+     quality of 1 makes the encoder write lossless (VP8L); anything under it,
+     lossy (VP8), with an ALPH chunk when the canvas has transparency. -->
+<html><head><meta charset="utf-8"><title>webp test pictures</title></head>
+<body><pre id="out"></pre>
+<script>
+"use strict";
+
+/* The same sequence every time: a linear congruential generator, its
+   multiply done in 32 bits by Math.imul. */
+function sequence(seed) {
+  return function () { seed = (Math.imul(seed, 1103515245) + 12345) >>> 0; return seed >>> 16; };
+}
+
+/* Lossy: a gradient behind hard-edged shapes, stripes, a square of noise, a
+   flat block and checks. 208 wide, a whole number of macroblocks, so the
+   last one's right-hand subblocks are in the picture; 157 high, odd, so the
+   colour samples do not come out even. */
+function scene(x, y, rnd) {
+  var r = (x * 255 / 207) | 0, g = (y * 255 / 156) | 0, b = ((x + y) * 255 / 363) | 0;
+  if (x >= 130 && x < 190 && y >= 10 && y < 60) { r = 40; g = 160; b = 90; }
+  var dx = x - 60, dy = y - 50;
+  if (dx * dx + dy * dy < 900) { r = 30; g = 60; b = 220; }
+  if (x >= 10 && x < 90 && y >= 100 && y < 150) {
+    if (((x / 5) | 0) % 2) { r = 250; g = 250; b = 240; } else { r = 200; g = 30; b = 30; }
+  }
+  if (x >= 100 && x < 140 && y >= 95 && y < 135) { r = rnd() & 255; g = (r + (rnd() & 63)) & 255; b = rnd() & 255; }
+  if (x >= 150 && x < 198 && y >= 100 && y < 150) { var c = ((x >> 3) + (y >> 3)) & 1 ? 230 : 20; r = g = b = c; }
+  return [r, g, b, 255];
+}
+
+/* Lossless: four quarters that want different codes -- tinted grey with a
+   little noise, forty colours in blocks, a smooth ramp, and checks -- big
+   enough that the encoder gives the quarters codes of their own. */
+function photo(x, y, rnd, w, h) {
+  var n = rnd(), hx = w >> 1, hy = h >> 1;
+  if (y < hy && x < hx) {
+    var g = (x * 3 + y * 2 + (n & 3)) & 255;
+    return [(g + 20 + (g >> 3)) & 255, g, (g * 3 >> 2) & 255, 255];
+  }
+  if (y < hy) {
+    var k = ((x >> 2) * 7 + (y >> 2) * 13) % 40;
+    return [(k * 37) & 255, (k * 91) & 255, (k * 53 + 17) & 255, 255];
+  }
+  if (x < hx) return [(x * 2 + (n & 1)) & 255, (y * 2) & 255, (x + y) & 255, 255];
+  var c = ((x >> 2) + (y >> 2)) & 1 ? 200 : 60;
+  return [c, c >> 1, 255 - c, 255];
+}
+
+/* Lossless with few colours, so the encoder uses a colour table: four
+   colours (four indices to a pixel), two (eight) and twelve (two). The
+   widths are not multiples of those, so the last packed pixel of a row is
+   part empty. */
+var FOUR = [[29, 53, 87], [230, 57, 70], [241, 250, 238], [168, 218, 220]];
+function few4(x, y) {
+  var ax = x > 74 ? x - 74 : 74 - x, ay = y > 45 ? y - 45 : 45 - y;
+  var i = ax + ay < 30 ? 1 : ((x / 7 + y / 5) | 0) % 2 ? 2 : 0;
+  if (y >= 80 && y < 84) i = 3;
+  return FOUR[i].concat([255]);
+}
+function few2(x, y) { return ((x * x + y * 3) >> 4) & 1 ? [250, 245, 230, 255] : [20, 20, 60, 255]; }
+function few12(x, y) {
+  var i = ((x >> 3) + (y >> 2) * 3) % 12;
+  return [(i * 23) & 255, (i * 71 + 30) & 255, (i * 131 + 60) & 255, 255];
+}
+
+/* Transparency with soft edges (a disc fading out) and hard ones (a block
+   and a triangle), and a band half transparent. */
+function alpha(x, y) {
+  var r = (x * 5 / 2) | 0, g = 255 - y * 3, b = (x * y) & 255, a = 0;
+  var dx = x - 30, dy = y - 40, d2 = dx * dx + dy * dy;
+  if (x < 55) a = d2 < 400 ? 255 : d2 < 900 ? 255 - (((d2 - 400) * 255 / 500) | 0) : 0;
+  else {
+    if (x >= 60 && x < 90 && y >= 10 && y < 30) a = 255;
+    if (y >= 35 && y < 75 && x - 60 < y - 35 && x < 95) a = 255;
+    if (y >= 50 && y < 60) a = 128;
+  }
+  return [r, g, b, a];
+}
+
+/* Alpha shaped so the encoder picks each ALPH filter: the same down each
+   column (it guesses from above), a smooth bump (the gradient) and a plane
+   (none: the lossless stream predicts it well enough by itself). The soft
+   and hard edges above get the filter from the left. */
+function acols(x, y) { return [x * 5, 200 - y * 4, 90, (x * 29 + (x >> 3) * 7) & 255]; }
+function abump(x, y) {
+  var dx = x - 24, dy = y - 20, d2 = dx * dx + dy * dy;
+  return [x * 5, 200 - y * 4, 90, d2 > 510 ? 0 : 255 - (d2 >> 1)];
+}
+function aplane(x, y) { return [x * 5, 200 - y * 4, 90, x * 2 + y * 3]; }
+
+var PICTURES = [
+  ['scene', 208, 157, scene, [0.9, 0.3, 0.05]],
+  ['photo', 192, 144, photo, [1]],
+  ['few4', 149, 90, few4, [1]],
+  ['few2', 101, 40, few2, [1]],
+  ['few12', 90, 60, few12, [1]],
+  ['alpha', 100, 80, alpha, [0.8, 1]],
+  ['acols', 48, 40, acols, [0.5]],
+  ['abump', 48, 40, abump, [0.5]],
+  ['aplane', 48, 40, aplane, [0.5]],
+];
+
+var out = ['encoder ' + navigator.userAgent];
+PICTURES.forEach(function (p) {
+  var w = p[1], h = p[2], c = document.createElement('canvas');
+  c.width = w;
+  c.height = h;
+  var ctx = c.getContext('2d'), im = ctx.createImageData(w, h), rnd = sequence(12345);
+  for (var y = 0; y < h; y++)
+    for (var x = 0; x < w; x++) {
+      var v = p[3](x, y, rnd, w, h), i = (y * w + x) * 4;
+      for (var k = 0; k < 4; k++) im.data[i + k] = v[k];
+    }
+  ctx.putImageData(im, 0, 0);
+  p[4].forEach(function (q) { out.push(p[0] + ' ' + q + ' ' + c.toDataURL('image/webp', q)); });
+});
+document.getElementById('out').textContent = out.join('\n');
+</script></body></html>

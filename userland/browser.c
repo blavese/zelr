@@ -37,6 +37,7 @@
 #include "png.h"
 #include "jpeg.h"
 #include "gif.h"
+#include "webp.h"
 #include "svg.h"
 
 /* --- how much room there is ----------------------------------------------
@@ -779,9 +780,7 @@ static void accent_sheet(void) {
  * A page that loads its pictures as they scroll into view puts a
  * placeholder in src -- nothing, or a one-pixel image written into the
  * address itself -- and the real one in data-src or one of its spellings,
- * for its script to swap in. A responsive one may have only a srcset. And a
- * picture server that names its files photo.jpg.webp hands out the JPEG at
- * photo.jpg, which is the one of the two this can decode. */
+ * for its script to swap in. A responsive one may have only a srcset. */
 static const char *pic_source(int el) {
     static char pick[URL_TEXT];
     const char *src = dom_attr(&doc, el, "src");
@@ -813,11 +812,6 @@ static const char *pic_source(int el) {
         if (n >= URL_TEXT) return 0;
         w_copy(pick, sizeof(pick), src, sizeof(pick));
     }
-    if (n > 9 && w_same_fold(pick + n - 5, ".webp")
-        && (w_starts_fold(pick + n - 9, ".jpg") || w_starts_fold(pick + n - 9, ".png")))
-        pick[n - 5] = 0;
-    else if (n > 10 && w_same_fold(pick + n - 5, ".webp") && w_starts_fold(pick + n - 10, ".jpeg"))
-        pick[n - 5] = 0;
     return pick;
 }
 
@@ -885,7 +879,7 @@ static void gather_pictures(void) {
         } else {
             url_t u;
             if (!url_join(&here, src, &u)) { pics_skipped++; continue; }
-            web_accept = "image/png,image/jpeg,image/gif,image/svg+xml;q=0.9,*/*;q=0.1";
+            web_accept = "image/webp,image/png,image/jpeg,image/gif,image/svg+xml;q=0.9,*/*;q=0.1";
             int rc = web_get(&u, cssbuf, CSS_MAX, &r);
             web_accept = 0;
             if (rc < 0 || rc >= 400 || r.len <= 0) { pics_skipped++; continue; }
@@ -894,7 +888,7 @@ static void gather_pictures(void) {
         shown *s = &pics[npics];
         s->node = i;
 
-        /* Which of the three it is, from the bytes rather than from what the
+        /* Which kind it is, from the bytes rather than from what the
            server said it was. A server that labels a PNG as an octet stream
            is common; a PNG that does not start with the PNG signature is
            not, so the bytes are the better authority. */
@@ -908,6 +902,12 @@ static void gather_pictures(void) {
             ok = jpeg_decode(body, r.len, &s->pic) == JPG_OK;
         } else if (r.len > 6 && body[0] == 'G' && body[1] == 'I' && body[2] == 'F') {
             ok = gif_decode(body, r.len, &s->pic, 0xFFFFFF) == GIF_OK;
+        } else if (r.len > 12 && body[0] == 'R' && body[1] == 'I' && body[2] == 'F'
+                   && body[3] == 'F' && body[8] == 'W' && body[9] == 'E'
+                   && body[10] == 'B' && body[11] == 'P') {
+            /* What a server sends a browser that says it takes WebP, and
+               what some send whatever the browser says. */
+            ok = webp_decode(body, r.len, &s->pic, 0xFFFFFF) == WEBP_OK;
         } else {
             /* A drawing, which is markup and so can start with an XML
                declaration, a comment, or the element itself. */

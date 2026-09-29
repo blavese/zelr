@@ -364,3 +364,10 @@ builtin_sitetest_end:
 builtin_giftest_start:
 .incbin "build/user/giftest.elf"
 builtin_giftest_end:
+
+.balign 4
+.global builtin_webptest_start
+.global builtin_webptest_end
+builtin_webptest_start:
+.incbin "build/user/webptest.elf"
+builtin_webptest_end:

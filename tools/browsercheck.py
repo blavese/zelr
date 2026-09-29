@@ -351,6 +351,16 @@ def main():
             c.add("a drawing on a page is rendered and drawn",
                   count_in(pxd, wd, PAGE, LOGO) > 10000, shotd)
 
+            # --- a webp picture --------------------------------------------
+            #
+            # Asked for as image/webp first, sent as one, and decoded: the
+            # 160 by 90 of rose the PNG is, as a lossless WebP.
+            go(vm, mon, "http://%s/webp-picture" % srv.host, settle=12.0,
+               was=drawn, name="br-going-webp")
+            webpd, pxw, ww, shotw = page_settled(mon, "br-webp")
+            c.add("a webp picture on a page is fetched, decoded and drawn",
+                  count_in(pxw, ww, PAGE, LOGO) > 10000, shotw)
+
             # --- a page that runs its own script ---------------------------
             #
             # The band is the whole check, and it asks a lot at once: nothing
@@ -360,7 +370,7 @@ def main():
             # document rather than a copy of it, and the cascade had to match
             # a class that was not there when the sheet was indexed.
             go(vm, mon, "http://%s/scripted" % srv.host, settle=12.0,
-               was=drawn, name="br-going-scripted")
+               was=webpd, name="br-going-scripted")
             scripted, pxc, wc, shotc = page_settled(mon, "br-scripted")
             c.add("a page's own script runs, and changes the page",
                   count_in(pxc, wc, PAGE, BAND) > 3000, shotc)

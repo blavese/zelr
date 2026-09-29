@@ -245,6 +245,48 @@ def _logo(w, h, rgb):
 
 LOGO = _logo(160, 90, (225, 29, 72))
 
+
+# The same picture as a WebP, which is what image servers send a browser that
+# says it takes one. Written bit by bit as RFC 9649 lays out a lossless one:
+# the header, no transforms, no colour cache, one group of codes, and five
+# prefix codes of a single symbol each, which cost no bits per pixel -- so
+# every pixel is that colour and the stream ends there. Windows' own WebP
+# decoder reads it as 160 by 90 of the colour, as zelr's does.
+def _webp_logo(w, h, rgb):
+    import struct
+
+    bits = []
+
+    def put(v, n):
+        for i in range(n):
+            bits.append((v >> i) & 1)
+
+    put(w - 1, 14)
+    put(h - 1, 14)
+    put(0, 1)                   # alpha is not used
+    put(0, 3)                   # version 0
+    put(0, 1)                   # no transform
+    put(0, 1)                   # no colour cache
+    put(0, 1)                   # one group of codes for the whole picture
+    r, g, b = rgb
+    for sym in (g, r, b, 255, 0):
+        put(1, 1)               # a simple code
+        put(0, 1)               # of one symbol
+        put(1, 1)               # eight bits wide
+        put(sym, 8)
+    data = bytearray()
+    for i in range(0, len(bits), 8):
+        byte = 0
+        for j, bit in enumerate(bits[i:i + 8]):
+            byte |= bit << j
+        data.append(byte)
+    vp8l = b"\x2f" + bytes(data)
+    chunk = b"VP8L" + struct.pack("<I", len(vp8l)) + vp8l + (b"\0" if len(vp8l) & 1 else b"")
+    return b"RIFF" + struct.pack("<I", 4 + len(chunk)) + b"WEBP" + chunk
+
+
+LOGO_WEBP = _webp_logo(160, 90, (225, 29, 72))
+
 # A drawing rather than a picture: the same colour, described as shapes. This
 # is what a logo on a real page is now, and it is why the browser could show
 # the word Google and no Google.
@@ -272,6 +314,9 @@ PICTURE = b"""<!doctype html>
 <img src="/logo.png" alt="this is what it says when it cannot be shown">
 </body></html>
 """
+
+WEBP_PICTURE = PICTURE.replace(b"/logo.png", b"/logo.webp").replace(
+    b"<h1>a picture</h1>", b"<h1>a webp picture</h1>")
 
 # The same page pointing at something that is not there, so the words it
 # carries are what shows instead. That is what alt text is for, and a
@@ -480,6 +525,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._send(LOGO, ctype="image/png")
         elif path == "/picture":
             self._send(PICTURE)
+        elif path == "/logo.webp":
+            self._send(LOGO_WEBP, ctype="image/webp")
+        elif path == "/webp-picture":
+            self._send(WEBP_PICTURE)
         elif path == "/missing-picture":
             self._send(MISSING)
         elif path == "/scripted":

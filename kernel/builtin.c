@@ -62,6 +62,7 @@ extern const u8 builtin_durtest_start[], builtin_durtest_end[];
 extern const u8 builtin_polltest_start[], builtin_polltest_end[];
 extern const u8 builtin_sitetest_start[], builtin_sitetest_end[];
 extern const u8 builtin_giftest_start[], builtin_giftest_end[];
+extern const u8 builtin_webptest_start[], builtin_webptest_end[];
 
 typedef struct {
     const char *name;
@@ -122,6 +123,7 @@ static const program_t PROGRAMS[] = {
     { "polltest", builtin_polltest_start, builtin_polltest_end },
     { "sitetest", builtin_sitetest_start, builtin_sitetest_end },
     { "giftest",  builtin_giftest_start,  builtin_giftest_end  },
+    { "webptest", builtin_webptest_start, builtin_webptest_end },
 };
 
 #define N_PROGRAMS (sizeof(PROGRAMS) / sizeof(PROGRAMS[0]))
