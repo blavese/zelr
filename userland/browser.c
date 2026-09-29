@@ -659,11 +659,12 @@ static void gather_inline_sheets(void) {
         if (in_template(i)) continue;
         int lo, hi;
         if (!sheet_media(i, &lo, &hi)) continue;
+        const char *scope = dom_attr(&doc, i, "data-zs");      /* dom_shadows */
         int t = doc.nodes[i].first;
         while (t >= 0) {
             if (doc.nodes[t].kind == DN_TEXT && doc.nodes[t].text >= 0) {
                 const char *s = doc.arena + doc.nodes[t].text;
-                css_parse_in(&sheet, s, w_len(s), lo, hi);
+                css_parse_style(&sheet, s, w_len(s), lo, hi, scope);
             }
             t = doc.nodes[t].next;
         }
@@ -1020,6 +1021,7 @@ static void build(const char *html, int len, int width, int want_sheets,
     /* Before the tree it is bound to is taken apart under it. */
     jsdom_close();
     dom_parse(&doc, html, len);
+    dom_shadows(&doc);
 
     css_init(&sheet);
     css_parse(&sheet, CSS_UA, (int)sizeof(CSS_UA) - 1);

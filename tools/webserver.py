@@ -389,6 +389,19 @@ LONG_PAGE = (b"<!doctype html><html><head><title>a long page</title><style>"
              b"<body><h1>the end of a long page</h1><!--" + b"x" * (3300 * 1024) +
              b"--><div class=\"band\">past three megabytes</div></body></html>\n")
 
+# A page whose band is inside a shadow tree written into it, its colour in
+# the tree's own sheet: drawn only by a browser that puts the tree in the
+# page, and only on the tree's paragraph, not the one outside it.
+SHADOWED = b"""<!doctype html>
+<html><head><title>a shadow tree</title>
+<style>body { font-family: sans-serif; padding: 24px }</style></head>
+<body><h1>a shadow tree written into the page</h1>
+<div><template shadowrootmode="open"><style>p { background: #1d4ed8; color: #ffffff; padding: 30px }</style>
+<p>inside the tree</p><slot></slot></template><span>put into its slot</span></div>
+<p>outside it, and plain</p>
+</body></html>
+"""
+
 # The same page pointing at something that is not there, so the words it
 # carries are what shows instead. That is what alt text is for, and a
 # browser that drew nothing at all would look identical to one that drew
@@ -664,6 +677,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(filler(30000))
             self.close_connection = True
+        elif path == "/shadowed":
+            self._send(SHADOWED)
         elif path == "/long-page":
             self._send(LONG_PAGE)
         elif path == "/templated":

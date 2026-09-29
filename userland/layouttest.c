@@ -58,6 +58,7 @@ static void lay(const char *html, int width) {
     int n = 0;
     while (html[n]) n++;
     dom_parse(&doc, html, n);
+    dom_shadows(&doc);
 
     css_init(&sheet);
     css_parse(&sheet, CSS_UA, (int)sizeof(CSS_UA) - 1);
@@ -71,7 +72,7 @@ static void lay(const char *html, int width) {
         if (child >= 0 && doc.nodes[child].kind == DN_TEXT
             && doc.nodes[child].text >= 0) {
             const char *t = doc.arena + doc.nodes[child].text;
-            css_parse(&sheet, t, w_len(t));
+            css_parse_style(&sheet, t, w_len(t), -1, -1, dom_attr(&doc, i, "data-zs"));
         }
     }
 
@@ -1413,6 +1414,36 @@ int main(void) {
         p = image_of(by_id("p"));
         okn("and max-width holds one back", p && p->w == 100 && p->h == 50, p ? p->w : -1);
         nfake = 0;
+    }
+
+    /* --- a shadow tree written into the page ------------------------------------
+     *
+     * The element is drawn from the template's tree, its own children in the
+     * tree's slots, and the tree's sheet reaches the tree alone. MDN closes
+     * its menus with a rule inside one; without the tree the menus were
+     * drawn open over the page. */
+    {
+        lay("<style>p{color:#00ff00}</style>"
+            "<div id=h><template shadowrootmode=open><style>p{background:#1d4ed8}:host{background:#ff0000}</style>"
+            "<p id=sp>shadow</p><slot name=top></slot><slot name=none>fallback</slot><slot>unused</slot>"
+            "</template><span slot=top>first</span><b>light</b></div><p id=out>outside</p>", 600);
+        const litem *sh = word("shadow"), *fi = word("first"), *li = word("light");
+        ok("a shadow tree written into the page is drawn", sh != 0);
+        ok("with the element's children in its slots, by name, in the tree's order",
+           sh && fi && li && fi->y > sh->y && (li->y > fi->y || li->x > fi->x));
+        ok("a slot's own contents only where nothing was put into it", word("fallback") && !word("unused"));
+        const litem *sp = box_of(by_id("sp")), *out = box_of(by_id("out")), *h = box_of(by_id("h"));
+        ok("the tree's sheet reaches the tree", sp && sp->has_bg && sp->bg == 0x1D4ED8);
+        ok("and nothing outside it", !(out && out->has_bg));
+        ok("and :host is the element the tree belongs to", h && h->has_bg && h->bg == 0xFF0000);
+    }
+
+    /* --- :not() with a list --------------------------------------------------- */
+    {
+        lay("<style>.h:not([loaded],.open) .s{display:none}</style>"
+            "<div class=h><p class=s>shut</p></div><div class='h open'><p class=s>ajar</p></div>"
+            "<div class=h loaded><p class=s>loaded</p></div>", 600);
+        ok(":not() with a list matches none of them", !word("shut") && word("ajar") && word("loaded"));
     }
 
     puts(failed ? "LAYOUTTEST_FAIL\n" : "LAYOUTTEST_PASS\n");

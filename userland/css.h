@@ -236,6 +236,7 @@ typedef struct {
     short pseudo;
     short nth_a, nth_b;       /* :nth-child(An+B) and its kin */
     int   neg;                /* a compound it must not match (:not), or -1 */
+    short nneg;               /* and how many in a row there, :not(a, b, c) */
 } csel;
 
 enum { CB_FIRST = 0, CB_DESC, CB_CHILD, CB_NEXT, CB_LATER };
@@ -715,7 +716,7 @@ static inline int css_parse_compound(csheet *s, const char *p, int len, int *at,
                                      csel *c, int *spec, int inner) {
     int i = *at, any = 0;
     c->tag = -1; c->tname = -1; c->id = -1; c->ncls = 0; c->pseudo = PS_NONE;
-    c->neg = -1; c->nth_a = c->nth_b = 0;
+    c->neg = -1; c->nneg = 0; c->nth_a = c->nth_b = 0;
     for (;;) {
         if (i >= len) break;
         char ch = p[i];
@@ -775,17 +776,31 @@ static inline int css_parse_compound(csheet *s, const char *p, int len, int *at,
                     c->pseudo = css_named(nm, l, "nth-child") ? PS_NTH_CHILD
                               : css_named(nm, l, "nth-of-type") ? PS_NTH_OF_TYPE : PS_NTH_LAST_CHILD;
                 } else if (css_named(nm, l, "not") && !inner && c->neg < 0) {
-                    /* One simple compound inside: :not(.open), :not(:last-child),
-                       :not([hidden]). A list or anything more is not guessed at. */
-                    if (s->nnegs >= CSS_NEGS) return -1;
-                    csel *ng = &s->negs[s->nnegs];
-                    int q = open, sp2 = 0;
-                    while (q < close && css_space(p[q])) q++;
-                    int got = css_parse_compound(s, p, close, &q, ng, &sp2, 1);
-                    while (q < close && css_space(p[q])) q++;
-                    if (got <= 0 || q != close) return -1;
-                    c->neg = s->nnegs++;
-                    *spec += sp2;
+                    /* Simple compounds inside, one or a list of them:
+                       :not(.open), :not([hidden], :focus-within) -- matching
+                       none of them. A list was dropped whole, and MDN's menus,
+                       closed by :host(:not([loaded],:focus-within)), were
+                       drawn open. Anything more than compounds is not guessed
+                       at. They sit side by side in negs. */
+                    int first = s->nnegs, count = 0, q = open, best = 0;
+                    for (;;) {
+                        if (s->nnegs >= CSS_NEGS) return -1;
+                        csel *ng = &s->negs[s->nnegs];
+                        int sp2 = 0;
+                        while (q < close && css_space(p[q])) q++;
+                        int got = css_parse_compound(s, p, close, &q, ng, &sp2, 1);
+                        while (q < close && css_space(p[q])) q++;
+                        if (got <= 0) return -1;
+                        s->nnegs++;
+                        count++;
+                        if (sp2 > best) best = sp2;
+                        if (q < close && p[q] == ',') { q++; continue; }
+                        break;
+                    }
+                    if (q != close) return -1;
+                    c->neg = first;
+                    c->nneg = (short)count;
+                    *spec += best;
                 } else if ((css_named(nm, l, "is") || css_named(nm, l, "where")) && !inner) {
                     /* :is(X) and :where(X) with one compound are that compound. */
                     int q = open, sp2 = 0;
@@ -1403,6 +1418,159 @@ static inline int css_at_rule(const char *p, int len, int i, int *open_body,
     return i;
 }
 
+static inline void css_parse_in(csheet *s, const char *p, int len, int lo, int hi);
+
+/* --- a sheet for one shadow tree ---------------------------------------------
+ *
+ * A style element inside a shadow tree written into the page applies to
+ * that tree alone, and the page's sheets do not reach into it. The page is
+ * rearranged so that the tree is part of it (dom.h, dom_shadows), and the
+ * tree's sheets are written again so that they reach only the tree: every
+ * compound of every selector asks for [data-zs="n"], the mark its elements
+ * carry; :host is the element the tree belongs to, [data-zh="n"], and
+ * ::slotted(x) is x among the children put into its slots, [data-zl="n"].
+ * At-rules that hold rules have theirs written again too; the rest (fonts,
+ * keyframes) are kept as they are. The page's own sheets are not kept out
+ * of the tree, which a browser with shadow trees would do. Into `out`; its
+ * length. */
+static inline int css_scope_put(char *out, int cap, int w, const char *s, int n) {
+    for (int i = 0; i < n && w < cap - 1; i++) out[w++] = s[i];
+    return w;
+}
+
+static inline int css_scope_mark(char *out, int cap, int w, const char *attr, const char *id) {
+    w = css_scope_put(out, cap, w, "[", 1);
+    w = css_scope_put(out, cap, w, attr, w_len(attr));
+    w = css_scope_put(out, cap, w, "=\"", 2);
+    w = css_scope_put(out, cap, w, id, w_len(id));
+    return css_scope_put(out, cap, w, "\"]", 2);
+}
+
+/* One compound: `a.b:hover`, `:host(.x)`, `::slotted(p)`. */
+static inline int css_scope_compound(const char *p, int n, char *out, int cap, int w, const char *id) {
+    if (n >= 5 && w_starts_fold(p, ":host")) {
+        int i = 5;
+        if (i + 8 <= n && w_starts_fold(p + i, "-context")) i += 8;
+        w = css_scope_mark(out, cap, w, "data-zh", id);
+        if (i < n && p[i] == '(') {
+            int depth = 0, start = i + 1, end = i;
+            for (; end < n; end++) {
+                if (p[end] == '(') depth++;
+                else if (p[end] == ')' && --depth == 0) break;
+            }
+            if (!w_starts_fold(p + 5, "-context")) w = css_scope_put(out, cap, w, p + start, end - start);
+            i = end < n ? end + 1 : n;
+        }
+        return css_scope_put(out, cap, w, p + i, n - i);
+    }
+    for (int i = 0; i + 10 <= n; i++) {
+        if (!w_starts_fold(p + i, "::slotted(")) continue;
+        int depth = 0, start = i + 10, end = i + 9;
+        for (; end < n; end++) {
+            if (p[end] == '(') depth++;
+            else if (p[end] == ')' && --depth == 0) break;
+        }
+        w = css_scope_put(out, cap, w, p + start, end - start);
+        return css_scope_mark(out, cap, w, "data-zl", id);
+    }
+    /* After the element's name, if it has one, and before anything else:
+       where an attribute test can always stand. */
+    int at = 0;
+    while (at < n && p[at] != '.' && p[at] != '#' && p[at] != '[' && p[at] != ':') at++;
+    w = css_scope_put(out, cap, w, p, at);
+    w = css_scope_mark(out, cap, w, "data-zs", id);
+    return css_scope_put(out, cap, w, p + at, n - at);
+}
+
+static inline int css_scope_selectors(const char *p, int n, char *out, int cap, int w, const char *id) {
+    int i = 0;
+    while (i < n) {
+        char c = p[i];
+        if (c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '>' || c == '+' || c == '~' || c == ',') {
+            w = css_scope_put(out, cap, w, &p[i], 1);
+            i++;
+            continue;
+        }
+        int start = i, depth = 0;
+        while (i < n) {
+            char e = p[i];
+            if (e == '(' || e == '[') depth++;
+            else if (e == ')' || e == ']') depth--;
+            else if (!depth && (e == ' ' || e == '\t' || e == '\n' || e == '\r' || e == '>'
+                                || e == '+' || e == '~' || e == ',')) break;
+            i++;
+        }
+        w = css_scope_compound(p + start, i - start, out, cap, w, id);
+    }
+    return w;
+}
+
+static inline int css_scope(const char *p, int n, char *out, int cap, const char *id) {
+    int w = 0, i = 0;
+    while (i < n && w < cap - 1) {
+        if (p[i] == '/' && i + 1 < n && p[i + 1] == '*') {
+            i += 2;
+            while (i + 1 < n && !(p[i] == '*' && p[i + 1] == '/')) i++;
+            i += 2;
+            continue;
+        }
+        if (p[i] == '}' || p[i] == ' ' || p[i] == '\n' || p[i] == '\t' || p[i] == '\r') {
+            w = css_scope_put(out, cap, w, &p[i], 1);
+            i++;
+            continue;
+        }
+        /* The prelude, up to its block or its semicolon. */
+        int start = i, depth = 0;
+        while (i < n && !(depth == 0 && (p[i] == '{' || p[i] == ';'))) {
+            if (p[i] == '(') depth++;
+            else if (p[i] == ')') depth--;
+            i++;
+        }
+        if (p[start] == '@') {
+            int holds_rules = w_starts_fold(p + start, "@media") || w_starts_fold(p + start, "@supports")
+                           || w_starts_fold(p + start, "@layer") || w_starts_fold(p + start, "@container");
+            if (holds_rules || i >= n || p[i] == ';') {
+                w = css_scope_put(out, cap, w, p + start, i - start + (i < n ? 1 : 0));
+                if (i < n) i++;
+                continue;
+            }
+            /* A block kept as it is. */
+            int b = i, d2 = 0;
+            while (b < n) {
+                if (p[b] == '{') d2++;
+                else if (p[b] == '}' && --d2 == 0) { b++; break; }
+                b++;
+            }
+            w = css_scope_put(out, cap, w, p + start, b - start);
+            i = b;
+            continue;
+        }
+        w = css_scope_selectors(p + start, i - start, out, cap, w, id);
+        /* And the block, as it is. */
+        int b = i, d2 = 0;
+        while (b < n) {
+            if (p[b] == '{') d2++;
+            else if (p[b] == '}' && --d2 == 0) { b++; break; }
+            b++;
+        }
+        w = css_scope_put(out, cap, w, p + i, b - i);
+        i = b;
+    }
+    out[w] = 0;
+    return w;
+}
+
+/* A style element's sheet: as written, or made to reach one shadow tree
+   alone when the element is inside one (`scope`, its data-zs). */
+#define CSS_SCOPED_MAX (96 * 1024)
+static char css_scoped_buf[CSS_SCOPED_MAX];
+
+static inline void css_parse_style(csheet *s, const char *p, int len, int lo, int hi, const char *scope) {
+    if (!scope || !*scope) { css_parse_in(s, p, len, lo, hi); return; }
+    int n = css_scope(p, len, css_scoped_buf, CSS_SCOPED_MAX, scope);
+    css_parse_in(s, css_scoped_buf, n, lo, hi);
+}
+
 /* A sheet, all of it for the window widths lo to hi (-1 for no bound):
    what the media attribute of the link or style element that carried it
    said, since a sheet can be meant for print or for a phone as a whole. */
@@ -1673,7 +1841,9 @@ static inline int css_part_matches(const csheet *s, const ddoc *d, int el,
         }
         default: break;
     }
-    if (c->neg >= 0 && css_part_matches(s, d, el, &s->negs[c->neg], m)) return 0;
+    if (c->neg >= 0)
+        for (int k = 0; k < (c->nneg > 0 ? c->nneg : 1); k++)
+            if (css_part_matches(s, d, el, &s->negs[c->neg + k], m)) return 0;
     return 1;
 }
 
@@ -2614,6 +2784,7 @@ static const char CSS_UA[] =
     "mark{background:#fff2a8}"
     "details,summary{display:block}"
     "head,script,style,title,meta,link,noscript,template{display:none}"
+    "slot{display:contents}"
     "button{display:inline-block;padding:5px 12px;background:#f2f3f5;"
         "border:1px #c9ccd1;border-radius:6px}"
     "input,textarea,select{display:inline-block;padding:4px 8px;"

@@ -725,3 +725,86 @@ static inline const char *dom_tag_name(const ddoc *d, int el) {
     if (d->nodes[el].tag != T_OTHER) return HTML_TAGS[d->nodes[el].tag];
     return d->nodes[el].text >= 0 ? d->arena + d->nodes[el].text : "";
 }
+
+/* --- shadow trees written into the page ------------------------------------
+ *
+ * <template shadowrootmode="open"> as an element's child is, in a browser
+ * with shadow trees, what that element is drawn from: the template's
+ * contents, with the element's own children put into the tree's <slot>s by
+ * name (slot="x" into <slot name="x">, the rest into the slot with no name).
+ * Lit and the component libraries write their pages this way, and MDN's
+ * menus are closed only by a rule inside such a tree.
+ *
+ * This browser has no shadow trees, so the page is rearranged into what
+ * would be drawn: the template's contents become the element's children,
+ * and a slot takes the children assigned to it in place of its own (which
+ * stay only when nothing was assigned). The tree's elements are marked with
+ * its number (data-zs), its element with data-zh and the children put into
+ * its slots with data-zl, so that its style sheets can be made to apply to
+ * it alone (css.h, css_scope). Innermost first, so a tree inside a tree is
+ * in place before the tree around it moves. How many there were. */
+#define DOM_SLOTTED 256
+
+static inline void dom_mark(ddoc *d, int top, const char *name, const char *value) {
+    for (int i = top; i >= 0; i = dom_next(d, i, top))
+        if (d->nodes[i].kind == DN_ELEMENT) dom_attr_set(d, i, name, value);
+}
+
+static inline int dom_shadows(ddoc *d) {
+    int count = 0;
+    for (int t = d->count - 1; t >= 0; t--) {
+        if (d->nodes[t].kind != DN_ELEMENT || d->nodes[t].tag != T_OTHER) continue;
+        if (!w_same_fold(dom_tag_name(d, t), "template")) continue;
+        if (!dom_attr_fold(d, t, "shadowrootmode") && !dom_attr_fold(d, t, "shadowroot")) continue;
+        int host = d->nodes[t].parent;
+        if (host < 0 || d->nodes[host].kind != DN_ELEMENT) continue;
+        count++;
+        char num[12];
+        int k = 0, v = count;
+        char rev[12];
+        while (v > 0 && k < 11) { rev[k++] = (char)('0' + v % 10); v /= 10; }
+        for (int i = 0; i < k; i++) num[i] = rev[k - 1 - i];
+        num[k] = 0;
+
+        int light[DOM_SLOTTED], nl = 0;
+        for (int c = d->nodes[host].first; c >= 0; c = d->nodes[c].next)
+            if (c != t && nl < DOM_SLOTTED) light[nl++] = c;
+        for (int i = 0; i < nl; i++) dom_unlink(d, light[i]);
+        dom_unlink(d, t);
+
+        int moved[DOM_SLOTTED], nm = 0;
+        for (int c = d->nodes[t].first; c >= 0; c = d->nodes[c].next)
+            if (nm < DOM_SLOTTED) moved[nm++] = c;
+        for (int i = 0; i < nm; i++) {
+            dom_append(d, host, moved[i]);
+            dom_mark(d, moved[i], "data-zs", num);
+        }
+        dom_attr_set(d, host, "data-zh", num);
+
+        int slots[64], ns = 0;
+        for (int i = d->nodes[host].first; i >= 0 && ns < 64; i = dom_next(d, i, host))
+            if (d->nodes[i].kind == DN_ELEMENT && d->nodes[i].tag == T_OTHER
+                && w_same_fold(dom_tag_name(d, i), "slot")) slots[ns++] = i;
+        for (int si = 0; si < ns; si++) {
+            int sl = slots[si];
+            const char *name = dom_attr(d, sl, "name");
+            int named = name && *name;
+            int got = 0;
+            for (int i = 0; i < nl; i++) {
+                int c = light[i];
+                if (c < 0) continue;
+                const char *want = d->nodes[c].kind == DN_ELEMENT ? dom_attr(d, c, "slot") : 0;
+                int fits = named ? (want && w_same(want, name)) : !(want && *want);
+                if (!fits) continue;
+                if (!got) {
+                    while (d->nodes[sl].first >= 0) dom_unlink(d, d->nodes[sl].first);
+                    got = 1;
+                }
+                dom_append(d, sl, c);
+                if (d->nodes[c].kind == DN_ELEMENT) dom_attr_set(d, c, "data-zl", num);
+                light[i] = -1;
+            }
+        }
+    }
+    return count;
+}

@@ -456,8 +456,20 @@ def main():
             c.add("a page past three megabytes is read to its end",
                   count_in(pxl, wl, PAGE, BAND) > 3000, shotl)
 
+            # --- a shadow tree --------------------------------------------
+            #
+            # One band's worth, from the tree's sheet on the tree's
+            # paragraph; a sheet let loose on the page would band the other
+            # paragraph too.
+            go(vm, mon, "http://%s/shadowed" % srv.host,
+               was=longp, name="br-going-shadow")
+            shadow, pxh, wh, shoth = page_settled(mon, "br-shadow")
+            banded = count_in(pxh, wh, PAGE, BAND)
+            c.add("a shadow tree written into a page is drawn, its sheet on it alone",
+                  3000 < banded < 3000 + (PAGE[2] - PAGE[0]) * 90, shoth)
+
             go(vm, mon, "https://%s/" % srv.host, settle=5.0,
-               was=longp, name="br-going-https")
+               was=shadow, name="br-going-https")
             secure, _, _, shots = page_settled(mon, "br-https")
             c.add("https says it cannot do that rather than failing quietly",
                   secure != missing, shots)

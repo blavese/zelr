@@ -101,6 +101,17 @@ numbered files are still to 6048716; where they disagree with this list, this li
   out while measured, `cstyle.width_pct`), the other side from the attributes' proportions when both are
   given, else the file's, and `max-width`; attributes and then the file's size only when the rules say
   nothing. layouttest: a picture 100% wide, a height alone, max-width.
+- **Shadow trees written into the page (11, dom.h, css.h).** `dom_shadows` (called after every parse)
+  rearranges `<template shadowrootmode>` into what would be drawn: its contents become the host's children
+  and each `<slot>` takes the children assigned to it by name (its own contents only when none were); the
+  tree's elements are marked `data-zs`, the host `data-zh`, slotted children `data-zl`. `css_parse_style`
+  parses a style element inside a tree through `css_scope`, which writes every compound of every selector
+  again to ask for the tree's mark, `:host` as the host and `::slotted(x)` as x among the slotted, leaving
+  fonts and keyframes as they are; `slot` is `display: contents`. The page's own sheets still reach into a
+  tree. `:not()` takes a list of compounds (`csel.nneg` of them side by side in `negs`), which MDN's
+  `:host(:not([loaded],:focus-within))` needs. layouttest: the tree drawn, slots by name, fallback
+  contents, the sheet reaching the tree and not outside it, `:host`, `:not()` with a list; browsercheck 31
+  (a page whose only band is inside a tree).
 
 ### 0.73.0
 
