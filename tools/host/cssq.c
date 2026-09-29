@@ -1,11 +1,12 @@
 /* Which style rules reach an element on a real page, and what they say.
  *
- *   cssq ADDRESS CLASS-OR-#ID [WIDTH]
+ *   cssq ADDRESS CLASS-OR-#ID-OR-@NODE [WIDTH]
  *
  * Fetches the page and its style sheets the way the browser does (the
  * browser's own rules, the page's style elements and linked sheets, media
  * attributes and queries read for WIDTH, 826 by default), then for every
- * element with that class (or id, written #id) prints its tag, and each
+ * element with that class (or id, written #id, or node number from laydump,
+ * written @n) prints its tag and attributes, and each
  * rule that matches it in the order they apply: the browser's own marked
  * UA, then the page's, with each declaration's property and value.
  *
@@ -120,10 +121,17 @@ int main(int argc, char **argv) {
 
     const char *want = argv[2];
     int by_id = want[0] == '#';
+    int by_node = -1;
+    if (want[0] == '@') {
+        by_node = 0;
+        for (const char *q = want + 1; *q >= '0' && *q <= '9'; q++) by_node = by_node * 10 + (*q - '0');
+    }
     int shown = 0;
     for (int el = 0; el < doc.count && shown < 8; el++) {
         if (doc.nodes[el].kind != DN_ELEMENT) continue;
-        if (by_id) {
+        if (by_node >= 0) {
+            if (el != by_node) continue;
+        } else if (by_id) {
             const char *id = dom_attr(&doc, el, "id");
             if (!id || !w_same(id, want + 1)) continue;
         } else if (!dom_has_class(&doc, el, want, w_len(want))) {
@@ -135,7 +143,14 @@ int main(int argc, char **argv) {
         puts(" <");
         puts(doc.nodes[el].tag == T_OTHER && doc.nodes[el].text >= 0 ? doc.arena + doc.nodes[el].text
                                                                        : HTML_TAGS[doc.nodes[el].tag]);
-        puts(">\n");
+        puts(">");
+        for (int a = 0; a < doc.nodes[el].attr_n; a++) {
+            const dattr *at = &doc.attrs[doc.nodes[el].attr_at + a];
+            puts(" ");
+            puts(doc.arena + at->name);
+            if (at->value >= 0) { puts("=\""); puts(doc.arena + at->value); puts("\""); }
+        }
+        puts("\n");
         chit hits[CSS_HITS];
         int n = css_collect(&sheet, &index_, &doc, el, &match, 0, hits);
         for (int pass = 0; pass < 2; pass++) {

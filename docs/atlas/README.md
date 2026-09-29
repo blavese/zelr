@@ -166,6 +166,7 @@ numbered files are still to 6048716; where they disagree with this list, this li
 - **Hex colours with an alpha (css.h).** Four digits are the short form with an alpha (`#0000` is
   transparent: normalize.css's `a { background-color: #0000 }` had put every link on GitHub on a black
   box), and four and eight digits are composited over white as rgba() is. layouttest: three.
+- **Host tools.** cssq takes a node number (`@n`, from laydump) and prints each element's attributes.
 
 ### 0.73.0
 
