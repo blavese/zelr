@@ -998,7 +998,13 @@ static inline void css_shorthand4(csheet *s, const char *v, int vlen,
 
 static inline void css_declare(csheet *s, const char *name, int nlen,
                                const char *v, int vlen) {
-    /* Trim, so a value with a trailing !important or space compares. */
+    /* Trim, so a value with a trailing !important or space compares -- and
+       the space after the colon, which is how nearly every sheet written
+       by hand puts it (`display: none`). Kept, every keyword read by its
+       first letters missed: display, position, float, text-align and the
+       rest were ignored on any sheet that was not minified, and a page's
+       closed menus, fixed bars and floats were laid out as plain blocks. */
+    while (vlen > 0 && css_space(v[0])) { v++; vlen--; }
     while (vlen > 0 && css_space(v[vlen - 1])) vlen--;
     if (vlen > 10) {
         int k = vlen - 10;

@@ -119,6 +119,12 @@ numbered files are still to 6048716; where they disagree with this list, this li
   `lay_items_next`, `lay_items`, and each item's parent style from `lay_item_parent`, so what the wrapper
   passes down still reaches them); elsewhere it is laid out as inline. `@supports` says yes to it now.
   layouttest 184.
+- **The space after the colon (11).** `css_declare` kept it, so on any sheet not minified every keyword
+  read by its first letters missed: `display: none`, `position`, `float`, `clear`, `text-align`,
+  `font-weight`, `list-style` and the rest were ignored, while colours and lengths (whose readers skip
+  spaces) applied. Closed menus, fixed bars, floats and centring on Python's docs and home page, W3C,
+  arXiv, WordPress, Wikipedia and Ars Technica now come out as written. Every layouttest check used
+  compact CSS, which is why none saw it; four now use a sheet written by hand. layouttest 188.
 
 ### 0.72.0
 

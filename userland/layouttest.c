@@ -1305,6 +1305,24 @@ int main(void) {
         ok("and @supports says so", y && y->color == 0x00FF00);
     }
 
+    /* --- a sheet written by hand ------------------------------------------------
+     *
+     * With a space after each colon, as nearly every sheet not put through a
+     * minifier is written. Every check above is written without one, and so
+     * none of them saw that the space was kept and every keyword after it
+     * missed. */
+    {
+        lay("<style>\n.a { display: none; }\n.c { float: right; width: 100px; }\n"
+            ".d { text-align: center; }\n.e { font-weight: bold; }\n</style>"
+            "<p class=a>gone</p><div class=c>floated</div><p class=d>centred</p>"
+            "<p class=e>strong</p><p>plain</p>", 600);
+        const litem *f = word("floated"), *c = word("centred"), *e = word("strong"), *pl = word("plain");
+        ok("display: none with a space after the colon hides", !word("gone") && pl);
+        ok("and float: right floats", f && f->x > 400);
+        ok("and text-align: center centres", c && c->x > 200);
+        ok("and font-weight: bold is bold", e && pl && e->face != pl->face);
+    }
+
     puts(failed ? "LAYOUTTEST_FAIL\n" : "LAYOUTTEST_PASS\n");
     return failed;
 }
