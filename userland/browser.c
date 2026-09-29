@@ -845,6 +845,51 @@ static int box_of(int node, int *x, int *y, int *w, int *h) {
     return any;
 }
 
+/* An element's style as the layout works it out: the browser's rules, the
+   page's, the style attribute, and what it inherits, from the root down to
+   it, with the layout's own lay_style (getComputedStyle, jsdom.h). The
+   layout's per-element caches are for the page as it was last laid out,
+   which a script may have changed since, so they are started again first;
+   the next layout starts them again anyway. A percentage is taken of the
+   window's width, where the layout would take it of the containing
+   block's: the one way this differs. */
+static void restyle_changed(void);
+
+static int computed_style(int node, cstyle *out) {
+    if (node < 0 || node >= doc.count || doc.nodes[node].kind != DN_ELEMENT) return 0;
+    int chain[256], n = 0;
+    for (int p = node; p >= 0; p = doc.nodes[p].parent) {
+        if (n >= (int)(sizeof(chain) / sizeof(chain[0]))) return 0;
+        chain[n++] = p;
+    }
+    if (chain[n - 1] != doc.root) return 0;             /* not in the page */
+    restyle_changed();
+    lay_gen++;
+    lay_hit_used = 0;
+    lay_var_used = 0;
+    lay_arena_used = 0;
+
+    static lctx L;
+    volatile u8 *z = (volatile u8 *)&L;
+    for (u32 i = 0; i < sizeof(L); i++) z[i] = 0;
+    L.d = &doc; L.s = &sheet; L.x = &index_; L.m = &match; L.inl = inl;
+    L.imgs = pic_sizes; L.nimgs = npic_sizes;
+    L.out = &page; L.root_px = root_px;
+    L.cur_link = -1; L.flex_sized = -1; L.floating = -1;
+    int width = css_view_w > 0 ? css_view_w : 800;
+    L.line_width = width; L.pos_w = width; L.cont_width = width;
+
+    static cstyle a, b;
+    css_default_style(&a, root_px);
+    cstyle *cur = &a, *next = &b;
+    for (int i = n - 1; i >= 0; i--) {
+        lay_style(&L, chain[i], cur, next, width);
+        cstyle *t = cur; cur = next; next = t;
+    }
+    lay_cs(out, cur);
+    return 1;
+}
+
 /* How big a picture was when it was decoded. */
 static int picture_size(int node, int *w, int *h) {
     for (int i = 0; i < npics; i++)
@@ -1177,6 +1222,7 @@ static void build(const char *html, int len, int width, int want_sheets,
         jsdom_cookies_with(script_cookies, script_set_cookie);
         jsdom_address_with(script_address);
         jsdom_history_with(script_history_go, script_history_length);
+        jsdom_styles_with(computed_style);
         scripts_ran = jsdom_scripts(script_err, (int)sizeof(script_err));
         jsdom_loaded();
         scripts_changed = jsdom_changed();
@@ -1956,6 +2002,7 @@ int main(int argc, char **argv) {
 
         /* What a script asking about the window is told this pass. */
         jsdom_view(view_w - UI_PAD * 2, view_h, scroll);
+        jsdom_window(w, h);
 
         /* A reflow costs a pass over the whole page, so it happens once the
            dragging has stopped rather than on every frame of it. */

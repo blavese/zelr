@@ -66,6 +66,7 @@
 #define JD_ATTRS     0x5000000               /* + node: its attributes */
 #define JD_LIST      0x6000000               /* + index: a list of nodes */
 #define JD_STORAGE   0x7000000               /* localStorage; + 1 sessionStorage */
+#define JD_COMPUTED  (JD_STORAGE + 2)        /* a getComputedStyle answer */
 
 static jobj  *jd_document_obj;
 static ddoc  *jd_doc;            /* what these bindings are bound to */
@@ -5308,11 +5309,16 @@ void jsdom_navigate_with(void (*fn)(const char *, int)) { jd_navigate = fn; }
 void jsdom_submit_with(void (*fn)(int)) { jd_submit = fn; }
 
 /* The window as it is now: how wide and tall the page's view is and how far
-   it is scrolled. Told before anything runs that might ask. */
+   it is scrolled. Told before anything runs that might ask; a new width
+   asks the page's media query lists again (jswin.h). */
+static void jd_mql_recheck(void);
+
 __attribute__((unused)) static void jsdom_view(int w, int h, int scroll) {
+    int wider = jd_view_w != w;
     jd_view_w = w;
     jd_view_h = h;
     jd_scroll_y = scroll;
+    if (wider && jd_open) jd_mql_recheck();
 }
 
 /* Where the page is, before it is opened. */
@@ -5401,6 +5407,7 @@ static int jd_host_get(jctx *J, jobj *o, const char *name, jval *out) {
     if (h < JD_ATTRS) return jd_dataset_get(J, o, name, out);
     if (h < JD_LIST) return jd_attrs_get(J, o, name, out);
     if (h < JD_STORAGE) return jd_list_get(J, o, name, out);
+    if (h == JD_COMPUTED) return jd_computed_host(J, o, name, out);
     return jd_storage_get(J, o, name, out);
 }
 
@@ -6090,6 +6097,7 @@ static void jd_setup(jctx *J) {
     jd_setup_url(J);
     jd_setup_navigator(J);
     jd_setup_location(J);
+    jd_setup_window_more(J);
 }
 
 /* --- opening and closing the world -----------------------------------------------------------

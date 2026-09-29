@@ -64,30 +64,27 @@ static jval nat_nav_true(jctx *J, jval t, jval *a, int n) { (void)J; (void)t; (v
 static jval nat_nav_false(jctx *J, jval t, jval *a, int n) { (void)J; (void)t; (void)a; (void)n; return js_bool(0); }
 static jval nat_nav_zero(jctx *J, jval t, jval *a, int n) { (void)J; (void)t; (void)a; (void)n; return js_num(0); }
 
-/* The processors running, as the kernel reports them (/sys/cpu, "started").
-   Read once, the first time a page asks; where the file cannot be read the
-   property is not there at all rather than a number made up. */
-static int jd_cpus = -2;
+/* What the machine is, as the kernel tells a program (sdk: sysinfo): the
+   processors running and the screen's size. Asked once. */
+static zelr_sysinfo jd_sys;
+static int jd_sys_asked, jd_sys_ok;
 
-static int jd_cpu_count(void) {
-    if (jd_cpus != -2) return jd_cpus;
-    jd_cpus = -1;
-    int fd = open("/sys/cpu", O_READ);
-    if (fd < 0) return -1;
-    char buf[256];
-    int got = zelr_fread(fd, buf, (int)sizeof(buf) - 1);
-    close(fd);
-    if (got <= 0) return -1;
-    buf[got] = 0;
-    for (int i = 0; buf[i]; i++) {
-        if ((i && buf[i - 1] != '\n') || !w_starts_fold(buf + i, "started")) continue;
-        int k = i + 7, v = 0, any = 0;
-        while (buf[k] == ' ') k++;
-        while (buf[k] >= '0' && buf[k] <= '9') { v = v * 10 + (buf[k++] - '0'); any = 1; }
-        if (any && v > 0) jd_cpus = v;
-        break;
+static const zelr_sysinfo *jd_machine(void) {
+    if (!jd_sys_asked) {
+        jd_sys_asked = 1;
+        volatile u8 *z = (volatile u8 *)&jd_sys;
+        for (u32 i = 0; i < sizeof(jd_sys); i++) z[i] = 0;
+        jd_sys_ok = sysinfo(&jd_sys) >= 0;
     }
-    return jd_cpus;
+    return jd_sys_ok ? &jd_sys : 0;
+}
+
+/* The processors running, or -1 where the kernel does not say (the host
+   build), in which case the property is not there at all rather than a
+   number made up. */
+static int jd_cpu_count(void) {
+    const zelr_sysinfo *m = jd_machine();
+    return m && m->cpus_started > 0 ? (int)m->cpus_started : -1;
 }
 
 static jval nat_nav_cpus(jctx *J, jval t, jval *a, int n) {
@@ -501,4 +498,656 @@ static jval nat_doc_set_cookie(jctx *J, jval t, jval *a, int n) {
     jstr *s = js_to_str(J, js_arg(a, n, 0));
     if (s && jd_cookie_set) jd_cookie_set(s->s);
     return js_undef();
+}
+
+/* --- time -----------------------------------------------------------------------------------
+ *
+ * performance.now() is milliseconds since the page began, from the kernel's
+ * tick, which is ten milliseconds long: that is the resolution a page gets,
+ * and it is the truth of this machine rather than a finer clock pretended.
+ * timeOrigin is when that was, by the same wall clock Date reads. Marks and
+ * measures are kept as a page makes them; the browser records no timings of
+ * its own, so there are no other entries. */
+static jobj *jd_perf_entries;
+static double jd_time_origin;
+
+static jval nat_perf_now(jctx *J, jval t, jval *a, int n) {
+    (void)J; (void)t; (void)a; (void)n;
+    return js_num(jd_now_ms());
+}
+
+static jval nat_perf_origin(jctx *J, jval t, jval *a, int n) {
+    (void)J; (void)t; (void)a; (void)n;
+    return js_num(jd_time_origin);
+}
+
+static jobj *jd_perf_entry(jctx *J, jstr *name, const char *type, double start, double dur) {
+    jobj *e = js_object(J, JO_PLAIN);
+    if (!e) return 0;
+    js_set(J, e, "name", js_from_str(name));
+    js_set(J, e, "entryType", jd_str(type));
+    js_set(J, e, "startTime", js_num(start));
+    js_set(J, e, "duration", js_num(dur));
+    js_set(J, e, "detail", js_null());
+    if (jd_perf_entries) js_arr_push(J, jd_perf_entries, js_from_obj(e));
+    return e;
+}
+
+static double jd_perf_find(const jstr *name) {
+    for (u32 i = jd_perf_entries ? jd_perf_entries->len : 0; i > 0; i--) {
+        jval e = jd_perf_entries->items[i - 1];
+        jval nm = jd_ev_get(e.obj, "name");
+        if (nm.t == JS_STR && js_str_eq(nm.str, name)) return js_to_num(&jd_J, jd_ev_get(e.obj, "startTime"));
+    }
+    return -1;
+}
+
+static jval nat_perf_mark(jctx *J, jval t, jval *a, int n) {
+    (void)t;
+    jobj *e = jd_perf_entry(J, jd_arg_str(J, a, n, 0), "mark", jd_now_ms(), 0);
+    return e ? js_from_obj(e) : js_undef();
+}
+
+static jval nat_perf_measure(jctx *J, jval t, jval *a, int n) {
+    (void)t;
+    double start = 0, end = jd_now_ms();
+    jval s = js_arg(a, n, 1), f = js_arg(a, n, 2);
+    if (js_is_obj(s)) {
+        jval st = js_get(J, s, js_str(J, "start")), en = js_get(J, s, js_str(J, "end"));
+        if (st.t == JS_STR) start = jd_perf_find(st.str); else if (st.t == JS_NUM) start = st.num;
+        if (en.t == JS_STR) end = jd_perf_find(en.str); else if (en.t == JS_NUM) end = en.num;
+    } else {
+        if (s.t == JS_STR) start = jd_perf_find(s.str);
+        if (f.t == JS_STR) end = jd_perf_find(f.str);
+    }
+    if (start < 0 || end < 0) return js_throw_dom(J, "SyntaxError", "there is no mark of that name");
+    jobj *e = jd_perf_entry(J, jd_arg_str(J, a, n, 0), "measure", start, end - start);
+    return e ? js_from_obj(e) : js_undef();
+}
+
+static jval jd_perf_list(jctx *J, const jstr *name, const jstr *type) {
+    jobj *out = js_array(J);
+    for (u32 i = 0; out && jd_perf_entries && i < jd_perf_entries->len; i++) {
+        jobj *e = jd_perf_entries->items[i].obj;
+        jval nm = jd_ev_get(e, "name"), ty = jd_ev_get(e, "entryType");
+        if (name && !(nm.t == JS_STR && js_str_eq(nm.str, name))) continue;
+        if (type && !(ty.t == JS_STR && js_str_eq(ty.str, type))) continue;
+        js_arr_push(J, out, js_from_obj(e));
+    }
+    return js_from_obj(out);
+}
+
+static jval nat_perf_entries(jctx *J, jval t, jval *a, int n) { (void)t; (void)a; (void)n; return jd_perf_list(J, 0, 0); }
+
+static jval nat_perf_by_name(jctx *J, jval t, jval *a, int n) {
+    (void)t;
+    return jd_perf_list(J, jd_arg_str(J, a, n, 0), n > 1 && a[1].t != JS_UNDEF ? jd_arg_str(J, a, n, 1) : 0);
+}
+
+static jval nat_perf_by_type(jctx *J, jval t, jval *a, int n) {
+    (void)t;
+    return jd_perf_list(J, 0, jd_arg_str(J, a, n, 0));
+}
+
+static jval jd_perf_clear(jctx *J, jval *a, int n, const char *type) {
+    if (!jd_perf_entries) return js_undef();
+    jstr *name = n > 0 && a[0].t != JS_UNDEF ? js_to_str(J, a[0]) : 0;
+    u32 w = 0;
+    for (u32 i = 0; i < jd_perf_entries->len; i++) {
+        jobj *e = jd_perf_entries->items[i].obj;
+        jval nm = jd_ev_get(e, "name"), ty = jd_ev_get(e, "entryType");
+        int gone = ty.t == JS_STR && js_str_is(ty.str, type) && (!name || (nm.t == JS_STR && js_str_eq(nm.str, name)));
+        if (!gone) jd_perf_entries->items[w++] = jd_perf_entries->items[i];
+    }
+    jd_perf_entries->len = w;
+    return js_undef();
+}
+
+static jval nat_perf_clear_marks(jctx *J, jval t, jval *a, int n) { (void)t; return jd_perf_clear(J, a, n, "mark"); }
+static jval nat_perf_clear_measures(jctx *J, jval t, jval *a, int n) { (void)t; return jd_perf_clear(J, a, n, "measure"); }
+
+static jval nat_perf_json(jctx *J, jval t, jval *a, int n) {
+    (void)t; (void)a; (void)n;
+    jobj *o = js_object(J, JO_PLAIN);
+    if (o) js_set(J, o, "timeOrigin", js_num(jd_time_origin));
+    return js_from_obj(o);
+}
+
+/* requestAnimationFrame: called back before the next frame, about sixty a
+   second, with the time; frames are the same timers setTimeout makes, and
+   cancelAnimationFrame is clearTimeout by another name. */
+static jval nat_raf(jctx *J, jval t, jval *a, int n) {
+    (void)t;
+    if (!js_callable(js_arg(a, n, 0))) return js_throw(J, JS_ERR_TYPE, "requestAnimationFrame needs a function", J->error_line);
+    return jd_add_timer(J, a, n, 0, 1);
+}
+
+/* --- the window's size, scroll and screen -------------------------------------------------- */
+
+static int jd_win_w, jd_win_h;          /* the browser's whole window */
+
+/* The browser's window, toolbar and all: what outerWidth is. */
+__attribute__((unused)) static void jsdom_window(int w, int h) { jd_win_w = w; jd_win_h = h; }
+
+static jval nat_win_inner_w(jctx *J, jval t, jval *a, int n) { (void)J; (void)t; (void)a; (void)n; return js_num(jd_view_w); }
+static jval nat_win_inner_h(jctx *J, jval t, jval *a, int n) { (void)J; (void)t; (void)a; (void)n; return js_num(jd_view_h); }
+static jval nat_win_outer_w(jctx *J, jval t, jval *a, int n) { (void)J; (void)t; (void)a; (void)n; return js_num(jd_win_w ? jd_win_w : jd_view_w); }
+static jval nat_win_outer_h(jctx *J, jval t, jval *a, int n) { (void)J; (void)t; (void)a; (void)n; return js_num(jd_win_h ? jd_win_h : jd_view_h); }
+static jval nat_win_scroll_y(jctx *J, jval t, jval *a, int n) { (void)J; (void)t; (void)a; (void)n; return js_num(jd_scroll_y); }
+static jval nat_win_one(jctx *J, jval t, jval *a, int n) { (void)J; (void)t; (void)a; (void)n; return js_num(1); }
+
+/* scrollTo(x, y), scrollTo({ top }), scrollBy: the page scrolls as a whole,
+   downwards; across, nothing here scrolls. */
+static jval jd_win_scroll(jctx *J, jval *a, int n, int by) {
+    double y = 0;
+    int have = 0;
+    if (n > 0 && js_is_obj(a[0])) {
+        jval top = js_get(J, a[0], js_str(J, "top"));
+        if (top.t != JS_UNDEF) { y = js_to_num(J, top); have = 1; }
+    } else if (n > 1) {
+        y = js_to_num(J, a[1]);
+        have = 1;
+    }
+    if (!have || !(y == y) || !jd_scroll_to) return js_undef();
+    int to = (int)(by ? jd_scroll_y + y : y);
+    if (to < 0) to = 0;
+    jd_scroll_to(to);
+    jd_scroll_y = to;
+    return js_undef();
+}
+
+static jval nat_win_scroll_to(jctx *J, jval t, jval *a, int n) { (void)t; return jd_win_scroll(J, a, n, 0); }
+static jval nat_win_scroll_by(jctx *J, jval t, jval *a, int n) { (void)t; return jd_win_scroll(J, a, n, 1); }
+
+/* The screen, as the kernel reports its size (sysinfo); the window can take
+   all of it, and it shows 24 bits of colour. Where the kernel does not say,
+   the screen is the window, which the standard allows a browser to answer. */
+static jval nat_screen_w(jctx *J, jval t, jval *a, int n) {
+    (void)J; (void)t; (void)a; (void)n;
+    const zelr_sysinfo *m = jd_machine();
+    return js_num(m && m->screen_w ? (double)m->screen_w : jd_view_w);
+}
+
+static jval nat_screen_h(jctx *J, jval t, jval *a, int n) {
+    (void)J; (void)t; (void)a; (void)n;
+    const zelr_sysinfo *m = jd_machine();
+    return js_num(m && m->screen_h ? (double)m->screen_h : jd_view_h);
+}
+
+static jval nat_screen_depth(jctx *J, jval t, jval *a, int n) { (void)J; (void)t; (void)a; (void)n; return js_num(24); }
+
+/* --- media queries ----------------------------------------------------------------------------
+ *
+ * matchMedia answers with the style sheets' own reading of a query (css.h,
+ * css_mq), against the window's width now, so a page's script and its
+ * sheet cannot disagree about which layout is in force. A list a page is
+ * listening to is asked again when the window's width changes, and hears
+ * "change" when its answer did. */
+static jstr *jd_k_media, *jd_k_was;
+static jobj *jd_mqls;                   /* the lists with listeners, to ask again */
+
+static int jd_mq_matches(const jstr *q) {
+    int lo, hi;
+    if (!css_mq(q->s, (int)q->len, &lo, &hi)) return 0;
+    if (lo >= 0 && jd_view_w < lo) return 0;
+    if (hi >= 0 && jd_view_w > hi) return 0;
+    return 1;
+}
+
+static jval nat_mql_matches(jctx *J, jval t, jval *a, int n) {
+    (void)J; (void)a; (void)n;
+    jval q = js_is_obj(t) ? jd_kept(t.obj, jd_k_media) : js_undef();
+    return q.t == JS_STR ? js_bool(jd_mq_matches(q.str)) : js_undef();
+}
+
+static jval nat_mql_media(jctx *J, jval t, jval *a, int n) {
+    (void)J; (void)a; (void)n;
+    jval q = js_is_obj(t) ? jd_kept(t.obj, jd_k_media) : js_undef();
+    return q.t == JS_STR ? q : js_undef();
+}
+
+static void jd_mql_watch(jctx *J, jval t) {
+    if (!js_is_obj(t)) return;
+    if (!jd_mqls) jd_mqls = js_array(J);
+    for (u32 i = 0; jd_mqls && i < jd_mqls->len; i++) if (jd_mqls->items[i].obj == t.obj) return;
+    if (jd_mqls) {
+        js_arr_push(J, jd_mqls, t);
+        jd_keep(t.obj, jd_k_was, js_bool(nat_mql_matches(J, t, 0, 0).b));
+    }
+}
+
+/* addListener and removeListener, the old names, are addEventListener and
+   removeEventListener for "change". */
+static jval nat_mql_add(jctx *J, jval t, jval *a, int n) {
+    jd_mql_watch(J, t);
+    jval args[2] = { jd_str("change"), js_arg(a, n, 0) };
+    return nat_add_listener(J, t, args, 2);
+}
+
+static jval nat_mql_remove(jctx *J, jval t, jval *a, int n) {
+    jval args[2] = { jd_str("change"), js_arg(a, n, 0) };
+    return nat_remove_listener(J, t, args, 2);
+}
+
+static jval nat_mql_add_event(jctx *J, jval t, jval *a, int n) {
+    jd_mql_watch(J, t);
+    return nat_add_listener(J, t, a, n);
+}
+
+static jobj *jd_p_mql;
+
+static jval nat_match_media(jctx *J, jval t, jval *a, int n) {
+    (void)t;
+    jstr *q = jd_arg_str(J, a, n, 0);
+    jobj *o = js_object_with(J, JO_PLAIN, jd_p_mql);
+    if (!o) return js_undef();
+    jd_keep(o, jd_k_media, js_from_str(q));
+    return js_from_obj(o);
+}
+
+/* After the window's width changed: every watched list asked again. */
+static void jd_mql_recheck(void) {
+    if (!jd_open || !jd_mqls || jd_spent()) return;
+    for (u32 i = 0; i < jd_mqls->len; i++) {
+        jval m = jd_mqls->items[i];
+        jval q = jd_kept(m.obj, jd_k_media);
+        if (q.t != JS_STR) continue;
+        int now = jd_mq_matches(q.str);
+        jval was = jd_kept(m.obj, jd_k_was);
+        if (was.t == JS_BOOL && was.b == now) continue;
+        jd_keep(m.obj, jd_k_was, js_bool(now));
+        jobj *ev = jd_new_event(0, "change", 0, 0);
+        if (!ev) continue;
+        js_set(&jd_J, ev, "isTrusted", js_bool(1));
+        js_set(&jd_J, ev, "matches", js_bool(now));
+        js_set(&jd_J, ev, "media", q);
+        jd_dispatch_to(ev, m, m);
+    }
+}
+
+/* --- CSS ------------------------------------------------------------------------------------ */
+
+/* CSS.supports: what an @supports rule would be told (css.h,
+   css_supports), for one property and value or a whole condition. */
+static jval nat_css_supports(jctx *J, jval t, jval *a, int n) {
+    (void)t;
+    jtext tx = { 0, 0, 0, 0 };
+    if (n >= 2) {
+        jd_putc(&tx, '(');
+        jstr *p = jd_arg_str(J, a, n, 0), *v = jd_arg_str(J, a, n, 1);
+        jt_put(J, &tx, p->s, p->len);
+        jd_put(&tx, ": ");
+        jt_put(J, &tx, v->s, v->len);
+        jd_putc(&tx, ')');
+    } else {
+        jstr *c = jd_arg_str(J, a, n, 0);
+        jt_put(J, &tx, c->s, c->len);
+    }
+    int yes = css_supports(tx.b ? tx.b : "", (int)tx.n);
+    free(tx.b);
+    return js_bool(yes);
+}
+
+/* CSS.escape: an identifier written so a selector reads it as one. */
+static jval nat_css_escape(jctx *J, jval t, jval *a, int n) {
+    (void)t;
+    static const char HEX[] = "0123456789abcdef";
+    jstr *s = jd_arg_str(J, a, n, 0);
+    jtext tx = { 0, 0, 0, 0 };
+    for (u32 i = 0; i < s->len; i++) {
+        u8 c = (u8)s->s[i];
+        int first = i == 0, dash_first = s->s[0] == '-';
+        if (c == 0) { jd_put(&tx, "\xef\xbf\xbd"); continue; }
+        if ((c >= 1 && c <= 0x1F) || c == 0x7F || (c >= '0' && c <= '9' && (first || (i == 1 && dash_first)))) {
+            jd_putc(&tx, '\\');
+            if (c >= 16) jd_putc(&tx, HEX[c >> 4]);
+            jd_putc(&tx, HEX[c & 15]);
+            jd_putc(&tx, ' ');
+            continue;
+        }
+        if (first && c == '-' && s->len == 1) { jd_put(&tx, "\\-"); continue; }
+        if (c >= 0x80 || c == '-' || c == '_' || (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'))
+            jd_putc(&tx, (char)c);
+        else { jd_putc(&tx, '\\'); jd_putc(&tx, (char)c); }
+    }
+    return js_from_str(jt_done(J, &tx));
+}
+
+/* --- what the window does for a page ---------------------------------------------------------
+ *
+ * There are no dialogs: alert returns at once, confirm answers no and prompt
+ * nothing, which is what the standard has a browser do when it cannot show
+ * them. There is one window, so open() gives null, as it does when a
+ * browser blocks one. */
+static jval nat_alert(jctx *J, jval t, jval *a, int n) {
+    (void)J; (void)t; (void)a; (void)n;
+    return js_undef();
+}
+
+static jval nat_confirm(jctx *J, jval t, jval *a, int n) {
+    (void)J; (void)t; (void)a; (void)n;
+    return js_bool(0);
+}
+
+/* postMessage: a message to this window, delivered afterwards as a message
+   event from this window's own origin. */
+static void jd_message_due(jval arg) {
+    if (!js_is_obj(arg) || arg.obj->kind != JO_ARRAY || arg.obj->len < 3) return;
+    jval target = arg.obj->items[0], data = arg.obj->items[1], origin = arg.obj->items[2];
+    if (!js_is_obj(target)) return;
+    jobj *ev = jd_new_event(jd_evkind("MessageEvent"), "message", 0, 0);
+    if (!ev) return;
+    js_set(&jd_J, ev, "isTrusted", js_bool(1));
+    js_set(&jd_J, ev, "data", data);
+    js_set(&jd_J, ev, "origin", origin);
+    js_set(&jd_J, ev, "source", arg.obj->len > 3 ? arg.obj->items[3] : js_null());
+    js_set(&jd_J, ev, "ports", js_from_obj(js_array(&jd_J)));
+    jd_dispatch_to(ev, target, target);
+}
+
+static jstr *jd_page_origin(jctx *J) {
+    jurl *u = (jurl *)malloc(sizeof(jurl));
+    jstr *o = u && ju_page(u) ? ju_origin(J, u) : js_str(J, "null");
+    free(u);
+    return o;
+}
+
+static jval nat_post_message(jctx *J, jval t, jval *a, int n) {
+    (void)t;
+    jobj *job = js_array(J);
+    if (!job) return js_undef();
+    js_arr_push(J, job, js_from_obj(J->global_obj));
+    js_arr_push(J, job, js_arg(a, n, 0));
+    js_arr_push(J, job, js_from_str(jd_page_origin(J)));
+    js_arr_push(J, job, js_from_obj(J->global_obj));
+    jd_later_native(jd_message_due, js_from_obj(job), 1);
+    return js_undef();
+}
+
+/* MessageChannel: two ports, each posting to the other, the message
+   arriving afterwards. React's scheduler takes its turns this way when it
+   can, which is why it is here. */
+static jstr *jd_k_other;
+static jobj *jd_p_port;
+
+static jval nat_port_post(jctx *J, jval t, jval *a, int n) {
+    jval other = js_is_obj(t) ? jd_kept(t.obj, jd_k_other) : js_undef();
+    if (!js_is_obj(other)) return js_undef();
+    jobj *job = js_array(J);
+    if (!job) return js_undef();
+    js_arr_push(J, job, other);
+    js_arr_push(J, job, js_arg(a, n, 0));
+    js_arr_push(J, job, jd_str(""));
+    jd_later_native(jd_message_due, js_from_obj(job), 1);
+    return js_undef();
+}
+
+static jval nat_port_close(jctx *J, jval t, jval *a, int n) {
+    (void)J; (void)a; (void)n;
+    if (js_is_obj(t)) jd_keep(t.obj, jd_k_other, js_undef());
+    return js_undef();
+}
+
+static jval nat_channel_ctor(jctx *J, jval t, jval *a, int n) {
+    (void)a; (void)n;
+    if (J->new_target.t == JS_UNDEF || !js_is_obj(t))
+        return js_throw(J, JS_ERR_TYPE, "MessageChannel is made with new", J->error_line);
+    jobj *p1 = js_object_with(J, JO_PLAIN, jd_p_port), *p2 = js_object_with(J, JO_PLAIN, jd_p_port);
+    if (!p1 || !p2) return js_undef();
+    jd_keep(p1, jd_k_other, js_from_obj(p2));
+    jd_keep(p2, jd_k_other, js_from_obj(p1));
+    js_const_prop(J, t.obj, "port1", js_from_obj(p1));
+    js_const_prop(J, t.obj, "port2", js_from_obj(p2));
+    return js_undef();
+}
+
+/* --- the computed style ------------------------------------------------------------------------
+ *
+ * getComputedStyle, from the style the layout works out for the element --
+ * the browser's rules, the page's, the style attribute, and what the element
+ * inherits -- reached through the browser, which holds the sheet
+ * (jsdom_styles_with; browser.c, computed_style). Answered for the
+ * properties the layout knows; one it does not is "", which is what a
+ * browser answers for a property it does not have. Width and height are
+ * where the layout drew the element when it was drawn. */
+static int (*jd_style_of)(int node, cstyle *out);
+
+void jsdom_styles_with(int (*fn)(int, cstyle *)) { jd_style_of = fn; }
+
+static void jd_css_colour(jtext *t, u32 c) {
+    jd_put(t, "rgb(");
+    jd_put_num(t, (int)((c >> 16) & 255));
+    jd_put(t, ", ");
+    jd_put_num(t, (int)((c >> 8) & 255));
+    jd_put(t, ", ");
+    jd_put_num(t, (int)(c & 255));
+    jd_putc(t, ')');
+}
+
+static void jd_css_px(jtext *t, int v) { jd_put_num(t, v); jd_put(t, "px"); }
+
+static int jd_computed_value(int node, const cstyle *s, const char *prop, jtext *t) {
+    static const char *const DISPLAY[] = { "inline", "block", "inline-block", "list-item", "none",
+        "table-cell", "flex", "table", "table-row", "table-row-group", "inline-flex", "grid", "contents" };
+    static const char *const POSITION[] = { "static", "relative", "absolute", "fixed" };
+    static const char *const ALIGN[] = { "left", "center", "right", "justify" };
+    static const char *const WHITE[] = { "normal", "pre", "nowrap" };
+    static const char *const FLEXDIR[] = { "row", "row-reverse", "column", "column-reverse" };
+    static const char *const JUSTIFY[] = { "flex-start", "center", "flex-end", "space-between", "space-around", "space-evenly" };
+    static const char *const ALIGNITEMS[] = { "stretch", "flex-start", "center", "flex-end", "baseline" };
+    int bx, by, bw, bh;
+    if (w_same(prop, "display")) {
+        jd_put(t, s->display < sizeof(DISPLAY) / sizeof(DISPLAY[0]) ? DISPLAY[s->display] : "block");
+    } else if (w_same(prop, "visibility")) jd_put(t, s->visible ? "visible" : "hidden");
+    else if (w_same(prop, "color")) jd_css_colour(t, s->color);
+    else if (w_same(prop, "background-color")) {
+        if (s->has_bg) jd_css_colour(t, s->background);
+        else jd_put(t, "rgba(0, 0, 0, 0)");
+    } else if (w_same(prop, "border-color") || w_same(prop, "border-top-color")) jd_css_colour(t, s->border_color);
+    else if (w_same(prop, "font-size")) jd_css_px(t, s->font_px);
+    else if (w_same(prop, "font-weight")) jd_put(t, s->bold ? "700" : "400");
+    else if (w_same(prop, "font-style")) jd_put(t, s->italic ? "italic" : "normal");
+    else if (w_same(prop, "text-decoration") || w_same(prop, "text-decoration-line"))
+        jd_put(t, s->underline ? "underline" : s->strike ? "line-through" : "none");
+    else if (w_same(prop, "text-align")) jd_put(t, s->align < 4 ? ALIGN[s->align] : "left");
+    else if (w_same(prop, "white-space")) jd_put(t, s->white < 3 ? WHITE[s->white] : "normal");
+    else if (w_same(prop, "position")) jd_put(t, s->position < 4 ? POSITION[s->position] : "static");
+    else if (w_same(prop, "float")) jd_put(t, s->floated == 1 ? "left" : s->floated == 2 ? "right" : "none");
+    else if (w_same(prop, "box-sizing")) jd_put(t, s->border_box ? "border-box" : "content-box");
+    else if (w_same(prop, "flex-direction")) jd_put(t, s->flex_dir < 4 ? FLEXDIR[s->flex_dir] : "row");
+    else if (w_same(prop, "flex-wrap")) jd_put(t, s->flex_wrap ? "wrap" : "nowrap");
+    else if (w_same(prop, "justify-content")) jd_put(t, s->justify < 6 ? JUSTIFY[s->justify] : "normal");
+    else if (w_same(prop, "align-items")) jd_put(t, s->align_items < 5 ? ALIGNITEMS[s->align_items] : "normal");
+    else if (w_same(prop, "margin-top")) jd_css_px(t, s->mt);
+    else if (w_same(prop, "margin-right")) jd_css_px(t, s->mr);
+    else if (w_same(prop, "margin-bottom")) jd_css_px(t, s->mb);
+    else if (w_same(prop, "margin-left")) jd_css_px(t, s->ml);
+    else if (w_same(prop, "padding-top")) jd_css_px(t, s->pt);
+    else if (w_same(prop, "padding-right")) jd_css_px(t, s->pr);
+    else if (w_same(prop, "padding-bottom")) jd_css_px(t, s->pb);
+    else if (w_same(prop, "padding-left")) jd_css_px(t, s->pl);
+    else if (w_same(prop, "border-top-width")) jd_css_px(t, s->bt);
+    else if (w_same(prop, "border-right-width")) jd_css_px(t, s->br);
+    else if (w_same(prop, "border-bottom-width")) jd_css_px(t, s->bb);
+    else if (w_same(prop, "border-left-width")) jd_css_px(t, s->bl);
+    else if (w_same(prop, "width") || w_same(prop, "height")) {
+        int wide = prop[0] == 'w';
+        if (jd_box(node, &bx, &by, &bw, &bh)) jd_css_px(t, wide ? bw : bh);
+        else if ((wide ? s->width : s->height) >= 0) jd_css_px(t, wide ? s->width : s->height);
+        else jd_put(t, "auto");
+    } else if (w_same(prop, "line-height")) {
+        if (s->line_h > 0) jd_css_px(t, s->font_px * s->line_h / 100);
+        else jd_put(t, "normal");
+    } else return 0;
+    return 1;
+}
+
+static jstr *jd_k_computed;
+static jobj *jd_p_computed;
+
+static int jd_computed_node(jobj *o) {
+    jval v = jd_kept(o, jd_k_computed);
+    return v.t == JS_NUM ? (int)v.num : -1;
+}
+
+static jval jd_computed_get_value(jctx *J, int node, const char *prop) {
+    if (node < 0 || !jd_style_of || !jd_is_element(node)) return jd_str("");
+    cstyle *s = (cstyle *)malloc(sizeof(cstyle));
+    if (!s) return jd_str("");
+    jval r = jd_str("");
+    if (jd_style_of(node, s)) {
+        jtext t = { 0, 0, 0, 0 };
+        if (jd_computed_value(node, s, prop, &t)) r = js_from_str(jt_done(J, &t));
+        else free(t.b);
+    }
+    free(s);
+    return r;
+}
+
+static jval nat_computed_get(jctx *J, jval t, jval *a, int n) {
+    if (!js_is_obj(t)) return jd_illegal(J);
+    jstr *p = jd_arg_str(J, a, n, 0);
+    char low[64];
+    int k = 0;
+    for (; k < (int)p->len && k < 63; k++) low[k] = w_lower(p->s[k]);
+    low[k] = 0;
+    return jd_computed_get_value(J, jd_computed_node(t.obj), low);
+}
+
+/* The properties by their camelCase names, as a page reads them. */
+static int jd_computed_host(jctx *J, jobj *o, const char *name, jval *out) {
+    int node = jd_computed_node(o);
+    if (node < 0 || name[0] < 'a' || name[0] > 'z') return 0;
+    char prop[64];
+    jd_css_name(name, prop, (int)sizeof(prop));
+    if (!jd_css_known(prop) && !w_same(prop, "visibility") && !w_same(prop, "border-top-color")) return 0;
+    *out = jd_computed_get_value(J, node, prop);
+    return 1;
+}
+
+static jval nat_get_computed_style(jctx *J, jval t, jval *a, int n) {
+    (void)t;
+    int x = jd_el_of(js_arg(a, n, 0));
+    if (x < 0) return js_throw(J, JS_ERR_TYPE, "getComputedStyle needs an element", J->error_line);
+    jobj *o = js_object_with(J, JO_PLAIN, jd_p_computed);
+    if (!o) return js_undef();
+    o->host = JD_COMPUTED;
+    jd_keep(o, jd_k_computed, js_num(x));
+    return js_from_obj(o);
+}
+
+static void jd_setup_window_more(jctx *J) {
+    jscope *g = J->global;
+    jobj *w = J->global_obj;
+
+    /* performance */
+    jd_perf_entries = js_array(J);
+    jd_time_origin = js_now(J) - jd_now_ms();
+    jobj *pp = jd_interface(J, "Performance", jd_p[JI_EVENTTARGET], 0, 0);
+    jd_method(J, pp, "now", nat_perf_now, 0);
+    jd_accessor(J, pp, "timeOrigin", nat_perf_origin, 0);
+    jd_method(J, pp, "mark", nat_perf_mark, 1);
+    jd_method(J, pp, "measure", nat_perf_measure, 1);
+    jd_method(J, pp, "getEntries", nat_perf_entries, 0);
+    jd_method(J, pp, "getEntriesByName", nat_perf_by_name, 1);
+    jd_method(J, pp, "getEntriesByType", nat_perf_by_type, 1);
+    jd_method(J, pp, "clearMarks", nat_perf_clear_marks, 0);
+    jd_method(J, pp, "clearMeasures", nat_perf_clear_measures, 0);
+    jd_method(J, pp, "toJSON", nat_perf_json, 0);
+    jobj *perf = js_object_with(J, JO_PLAIN, pp);
+    if (perf) js_declare(J, g, js_str(J, "performance"), js_from_obj(perf));
+
+    js_declare(J, g, js_str(J, "requestAnimationFrame"), js_from_obj(js_native_n(J, "requestAnimationFrame", nat_raf, 1)));
+    js_declare(J, g, js_str(J, "cancelAnimationFrame"), js_from_obj(js_native_n(J, "cancelAnimationFrame", nat_clear_timer, 1)));
+
+    /* sizes and scrolling, as the window's own accessors */
+    static const struct { const char *name; jnative get; } SIZES[] = {
+        { "innerWidth", nat_win_inner_w }, { "innerHeight", nat_win_inner_h },
+        { "outerWidth", nat_win_outer_w }, { "outerHeight", nat_win_outer_h },
+        { "scrollX", nat_zero }, { "scrollY", nat_win_scroll_y },
+        { "pageXOffset", nat_zero }, { "pageYOffset", nat_win_scroll_y },
+        { "screenX", nat_zero }, { "screenY", nat_zero }, { "screenLeft", nat_zero }, { "screenTop", nat_zero },
+        { "devicePixelRatio", nat_win_one }, { 0, 0 }
+    };
+    for (int i = 0; SIZES[i].name && w; i++) jd_accessor(J, w, SIZES[i].name, SIZES[i].get, 0);
+    js_declare(J, g, js_str(J, "scrollTo"), js_from_obj(js_native_n(J, "scrollTo", nat_win_scroll_to, 2)));
+    js_declare(J, g, js_str(J, "scroll"), js_from_obj(js_native_n(J, "scroll", nat_win_scroll_to, 2)));
+    js_declare(J, g, js_str(J, "scrollBy"), js_from_obj(js_native_n(J, "scrollBy", nat_win_scroll_by, 2)));
+
+    jobj *sp = jd_interface(J, "Screen", jd_p[JI_EVENTTARGET], 0, 0);
+    jd_accessor(J, sp, "width", nat_screen_w, 0);
+    jd_accessor(J, sp, "height", nat_screen_h, 0);
+    jd_accessor(J, sp, "availWidth", nat_screen_w, 0);
+    jd_accessor(J, sp, "availHeight", nat_screen_h, 0);
+    jd_accessor(J, sp, "availLeft", nat_zero, 0);
+    jd_accessor(J, sp, "availTop", nat_zero, 0);
+    jd_accessor(J, sp, "colorDepth", nat_screen_depth, 0);
+    jd_accessor(J, sp, "pixelDepth", nat_screen_depth, 0);
+    jobj *scr = js_object_with(J, JO_PLAIN, sp);
+    if (scr) js_declare(J, g, js_str(J, "screen"), js_from_obj(scr));
+
+    /* matchMedia */
+    jd_k_media = js_sym_new(J, "media", 5);
+    jd_k_was = js_sym_new(J, "matched", 7);
+    jd_mqls = 0;
+    jd_p_mql = jd_interface(J, "MediaQueryList", jd_p[JI_EVENTTARGET], 0, 0);
+    jd_accessor(J, jd_p_mql, "matches", nat_mql_matches, 0);
+    jd_accessor(J, jd_p_mql, "media", nat_mql_media, 0);
+    jd_method(J, jd_p_mql, "addListener", nat_mql_add, 1);
+    jd_method(J, jd_p_mql, "removeListener", nat_mql_remove, 1);
+    jd_method(J, jd_p_mql, "addEventListener", nat_mql_add_event, 2);
+    js_declare(J, g, js_str(J, "matchMedia"), js_from_obj(js_native_n(J, "matchMedia", nat_match_media, 1)));
+
+    /* CSS */
+    jobj *css = js_object(J, JO_PLAIN);
+    if (css) {
+        js_method(J, css, "supports", nat_css_supports, 1);
+        js_method(J, css, "escape", nat_css_escape, 1);
+        js_declare(J, g, js_str(J, "CSS"), js_from_obj(css));
+    }
+
+    /* dialogs, windows, messages */
+    js_declare(J, g, js_str(J, "alert"), js_from_obj(js_native_n(J, "alert", nat_alert, 0)));
+    js_declare(J, g, js_str(J, "confirm"), js_from_obj(js_native_n(J, "confirm", nat_confirm, 0)));
+    js_declare(J, g, js_str(J, "prompt"), js_from_obj(js_native_n(J, "prompt", nat_null_getter, 0)));
+    js_declare(J, g, js_str(J, "open"), js_from_obj(js_native_n(J, "open", nat_null_getter, 0)));
+    static const char *const QUIET[] = { "close", "focus", "blur", "print", "stop", 0 };
+    for (int i = 0; QUIET[i]; i++) js_declare(J, g, js_str(J, QUIET[i]), js_from_obj(js_native_n(J, QUIET[i], nat_nothing_js, 0)));
+    js_declare(J, g, js_str(J, "postMessage"), js_from_obj(js_native_n(J, "postMessage", nat_post_message, 1)));
+    jd_k_other = js_sym_new(J, "other", 5);
+    jd_p_port = jd_interface(J, "MessagePort", jd_p[JI_EVENTTARGET], 0, 0);
+    jd_method(J, jd_p_port, "postMessage", nat_port_post, 1);
+    jd_method(J, jd_p_port, "start", nat_nothing_js, 0);
+    jd_method(J, jd_p_port, "close", nat_port_close, 0);
+    jd_interface(J, "MessageChannel", 0, nat_channel_ctor, 0);
+
+    /* The window's own family: it is its own frames, parent and top, and
+       nothing opened it. */
+    if (w) {
+        js_declare(J, g, js_str(J, "frames"), js_from_obj(w));
+        js_declare(J, g, js_str(J, "parent"), js_from_obj(w));
+        js_declare(J, g, js_str(J, "top"), js_from_obj(w));
+    }
+    js_declare(J, g, js_str(J, "opener"), js_null());
+    js_declare(J, g, js_str(J, "frameElement"), js_null());
+    js_declare(J, g, js_str(J, "closed"), js_bool(0));
+    js_declare(J, g, js_str(J, "length"), js_num(0));
+    js_declare(J, g, js_str(J, "name"), jd_str(""));
+    js_declare(J, g, js_str(J, "status"), jd_str(""));
+    {
+        jurl *u = (jurl *)malloc(sizeof(jurl));
+        int secure = u && ju_page(u) && w_same(u->scheme, "https");
+        free(u);
+        js_declare(J, g, js_str(J, "isSecureContext"), js_bool(secure));
+        js_declare(J, g, js_str(J, "origin"), js_from_str(jd_page_origin(J)));
+    }
+
+    /* getComputedStyle */
+    jd_k_computed = js_sym_new(J, "computed", 8);
+    jd_p_computed = js_object_with(J, JO_PLAIN, jd_p[JI_STYLEDECL]);
+    if (jd_p_computed) {
+        jd_method(J, jd_p_computed, "getPropertyValue", nat_computed_get, 1);
+        js_tag(J, jd_p_computed, "CSSStyleDeclaration");
+    }
+    js_declare(J, g, js_str(J, "getComputedStyle"), js_from_obj(js_native_n(J, "getComputedStyle", nat_get_computed_style, 1)));
 }

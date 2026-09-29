@@ -155,6 +155,21 @@ static int history_moved;
 static void fake_history_go(int d) { history_moved = d; }
 static int fake_history_length(void) { return 4; }
 
+/* Where the page asked to be scrolled to. */
+static int scrolled_to = -1;
+static void fake_scroll(int y) { scrolled_to = y; }
+
+/* A style as a pretend layout worked it out: a flex row in a colour, bold. */
+static int fake_style(int node, cstyle *out) {
+    (void)node;
+    css_default_style(out, 16);
+    out->display = D_FLEX;
+    out->color = 0x102030;
+    out->bold = 1;
+    out->mt = 12;
+    return 1;
+}
+
 /* Where a pretend layout put everything: one box, for every element. */
 static int fake_box(int node, int *x, int *y, int *w, int *h) {
     (void)node;
@@ -1207,6 +1222,84 @@ int main(void) {
         jsdom_address_with(0);
         jsdom_history_with(0, 0);
         jsdom_at("");
+    }
+
+    /* --- the window ----------------------------------------------------------------------
+     *
+     * Its clock, frames, size, media queries, screen and messages: Apple
+     * stopped on matchMedia. */
+    oks("performance counts from the page's start by the machine's clock, and keeps marks",
+        titled("<script>var t = performance.now(); performance.mark('a');"
+               "performance.measure('m', 'a');"
+               "document.title = [typeof t, t >= 0, performance.timeOrigin > 1.7e12,"
+               " performance.getEntriesByName('a').length, performance.getEntriesByType('measure')[0].name,"
+               " performance.getEntries().length].join(' ');</script>"),
+        "number true true 1 m 2");
+    {
+        load("<body><p id=out>none</p><script>var n = 0;"
+             "requestAnimationFrame(function(t){ document.getElementById('out').textContent = typeof t + ' ' + (t >= 0); });"
+             "var gone = requestAnimationFrame(function(){ n++; }); cancelAnimationFrame(gone);</script></body>");
+        char err[128];
+        run_scripts(&page, err, (int)sizeof(err), 0);
+        oks("an animation frame has not come merely for being asked", content_of(dom_by_id(&page, "out")), "none");
+        pump_until(1, 2000);
+        oks("and comes, with the time", content_of(dom_by_id(&page, "out")), "number true");
+        ok("and one cancelled does not", pump_until(1, 200) == 0);
+    }
+    {
+        jsdom_view(800, 600, 40);
+        jsdom_scroll_with(fake_scroll);
+        scrolled_to = -1;
+        oks("matchMedia is the style sheets' reading of a query against the window's width",
+            titled("<script>document.title = [matchMedia('(min-width: 600px)').matches,"
+                   " matchMedia('(max-width: 500px)').matches, matchMedia('print').matches,"
+                   " matchMedia('(prefers-color-scheme: dark)').matches, matchMedia('screen and (min-width:40em)').media,"
+                   " innerWidth, innerHeight, devicePixelRatio, scrollY, screen.colorDepth, screen.width > 0].join(' ');"
+                   "scrollTo({ top: 250 });</script>"),
+            "true false false false screen and (min-width:40em) 800 600 1 40 24 true");
+        ok("and scrollTo asks the browser to scroll there", scrolled_to == 250);
+        load("<body><p id=out>none</p><script>var m = matchMedia('(min-width: 1000px)');"
+             "m.addListener(function(e){ document.getElementById('out').textContent = 'now ' + e.matches; });"
+             "</script></body>");
+        char err[128];
+        run_scripts(&page, err, (int)sizeof(err), 0);
+        jsdom_view(1200, 600, 0);
+        oks("a list being listened to hears when the window's width changes its answer",
+            content_of(dom_by_id(&page, "out")), "now true");
+        jsdom_view(0, 0, 0);
+        jsdom_scroll_with(0);
+    }
+    oks("CSS.supports says what @supports would, and CSS.escape writes an identifier",
+        titled("<script>document.title = [CSS.supports('display', 'flex'), CSS.supports('display: grid'),"
+               " CSS.escape('1a b')].join(' ');</script>"),
+        "true false \\31 a\\ b");
+    oks("there are no dialogs and one window, and each says so the standard's way",
+        titled("<script>document.title = [alert('x'), confirm('y'), prompt('z'), open('/w'),"
+               " window.top === window, window.parent === window, opener].join(' ');</script>"),
+        " false   true true ");
+    {
+        jsdom_at("https://site.test/p");
+        load("<body><p id=out>none</p><p id=two>none</p><script>"
+             "addEventListener('message', function(e){ document.getElementById('out').textContent = e.data + ' ' + e.origin + ' ' + (e.source === window); });"
+             "postMessage('hello', '*');"
+             "var ch = new MessageChannel(); ch.port1.onmessage = function(e){ document.getElementById('two').textContent = 'port ' + e.data; };"
+             "ch.port2.postMessage(7);</script></body>");
+        char err[128];
+        run_scripts(&page, err, (int)sizeof(err), 0);
+        oks("postMessage is delivered afterwards", content_of(dom_by_id(&page, "out")), "none");
+        pump_until(2, 2000);
+        oks("from this page's origin", content_of(dom_by_id(&page, "out")), "hello https://site.test true");
+        oks("and a MessageChannel's port hears the other", content_of(dom_by_id(&page, "two")), "port 7");
+        jsdom_at("");
+    }
+    {
+        jsdom_styles_with(fake_style);
+        oks("getComputedStyle is the style the layout worked out for the element",
+            titled("<body><div id=d></div><script>var s = getComputedStyle(document.getElementById('d'));"
+                   "document.title = [s.display, s.color, s.getPropertyValue('font-weight'), s.marginTop,"
+                   " s.getPropertyValue('flex-wrap'), s.transition].join(' ');</script></body>"),
+            "flex rgb(16, 32, 48) 700 12px nowrap ");
+        jsdom_styles_with(0);
     }
 
     /* --- a page that uses up its memory ---------------------------------------
