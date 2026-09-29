@@ -1174,6 +1174,10 @@ static int gather_linked_sheets(int *fetched, int *skipped) {
 
         response_t r;
         int rc = web_get(&u, cssbuf, CSS_MAX, &r);
+        /* Asked for again, once, when the answer was no answer or the server
+           said it was busy: one sheet that failed on the way is a page drawn
+           with none of its style (Wikipedia's, after a burst of fetching). */
+        if (rc < 0 || rc == 429 || rc >= 500) rc = web_get(&u, cssbuf, CSS_MAX, &r);
         if (rc < 200 || rc >= 300 || r.len <= 0) { (*skipped)++; continue; }
         gather_imports(&u, r.body, r.len, fetched);
         css_parse_sheet(&u, r.body, r.len, lo, hi);

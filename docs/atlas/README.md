@@ -129,6 +129,9 @@ numbered files are still to 6048716; where they disagree with this list, this li
   (contain, cover, none, scale-down; `litem.ofit`) centres the picture in its box at its own shape instead
   of stretching it, and `border-radius` rounds its corners. layouttest: one check; browsercheck: a clear
   half showing green, a picture fitted whole, one with round corners.
+- **A style sheet asked for twice (browser.c).** A linked sheet whose fetch gets no answer, 429 or a 5xx is
+  asked for once more; Wikipedia's lost its sheet this way after a burst of fetching. browsercheck: a
+  sheet that answers 503 the first time.
 
 ### 0.74.0
 

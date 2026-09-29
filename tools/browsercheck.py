@@ -507,8 +507,15 @@ def main():
             c.add("a picture fitted into its box keeps its shape", 4000 < purple < 5000, shotb)
             c.add("and one with round corners is round", 2400 < olive < 3200, shotb)
 
+            # --- a sheet that fails once ---------------------------------------
+            go(vm, mon, "http://%s/flaky-sheet" % srv.host,
+               was=bgd, name="br-going-flaky")
+            flaky, pxf, wf, shotf = page_settled(mon, "br-flaky")
+            c.add("a sheet the server was too busy for is asked for again",
+                  count_in(pxf, wf, PAGE, BAND) > 3000, shotf)
+
             go(vm, mon, "https://%s/" % srv.host, settle=5.0,
-               was=shadow, name="br-going-https")
+               was=flaky, name="br-going-https")
             secure, _, _, shots = page_settled(mon, "br-https")
             c.add("https says it cannot do that rather than failing quietly",
                   secure != missing, shots)

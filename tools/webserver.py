@@ -444,6 +444,16 @@ LONG_PAGE = (b"<!doctype html><html><head><title>a long page</title><style>"
 # A page whose band is inside a shadow tree written into it, its colour in
 # the tree's own sheet: drawn only by a browser that puts the tree in the
 # page, and only on the tree's paragraph, not the one outside it.
+# A sheet that fails the first time it is asked for, as a busy server does,
+# and is there the second time: the band is drawn only if it was asked for
+# again.
+FLAKY_PAGE = b"""<html><head><title>a sheet asked for twice</title>
+<link rel="stylesheet" href="/flaky.css"></head><body>
+<p class="band">the band comes from a sheet that failed once</p>
+</body></html>"""
+FLAKY_SHEET = b".band{background:#1d4ed8;color:#ffffff;padding:30px}"
+FLAKY_ASKED = {"n": 0}
+
 SHADOWED = b"""<!doctype html>
 <html><head><title>a shadow tree</title>
 <style>body { font-family: sans-serif; padding: 24px }</style></head>
@@ -694,6 +704,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._send(PICTURE)
         elif path == "/logo.webp":
             self._send(LOGO_WEBP, ctype="image/webp")
+        elif path == "/flaky-sheet":
+            FLAKY_ASKED["n"] = 0
+            self._send(FLAKY_PAGE)
+        elif path == "/flaky.css":
+            FLAKY_ASKED["n"] += 1
+            if FLAKY_ASKED["n"] == 1:
+                self._send(b"busy", ctype="text/plain", status=503)
+            else:
+                self._send(FLAKY_SHEET, ctype="text/css")
         elif path == "/bg/page":
             self._send(BG_PAGE)
         elif path == "/bg/css/bg.css":
