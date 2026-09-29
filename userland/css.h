@@ -52,6 +52,7 @@ enum {
     P_VALIGN, P_SPACING, P_COLLAPSE, P_OVERFLOW, P_CLIP, P_FLOAT, P_CLEAR, P_TRANSFORM,
     P_GRID_COLS, P_GRID_COLUMN, P_GRID_AREAS, P_GRID_AREA, P_GRID_FLOW, P_GRID_AUTO_COLS,
     P_GRID_COL_START, P_GRID_COL_END, P_GRID_ROW, P_GRID_ROW_START, P_GRID_ROW_END,
+    P_TEXT_TRANSFORM, P_ORDER, P_ALIGN_SELF, P_FLEX, P_FLEX_BASIS, P_FLEX_SHRINK, P_ASPECT,
     P_MASK,
     P_CUSTOM,        /* --name: value, kept as the text "--name:value" */
     P_DEFER,         /* a shorthand whose value has var() in it: "name:value" */
@@ -207,6 +208,16 @@ typedef struct {
     /* And along its rows, and grid-area written as lines (1 / 2 / 3 / 4)
        rather than a name. */
     const char *grid_row, *grid_row_s, *grid_row_e, *gplace;
+
+    /* text-transform (1 upper, 2 lower, 3 capitalise), inherited; a flex or
+       grid item's order; its align-self (-1 for the container's); its flex
+       basis in pixels (-1 for auto) and shrink; and aspect-ratio as a
+       width and a height in hundredths (0 for none). */
+    unsigned char ttrans;
+    signed char align_self;
+    short order, basis, shrink;
+    unsigned char basis_pct;  /* the basis was a percentage of the row (lay_flex) */
+    int ratio_w, ratio_h;
 
     /* Whether width was a percentage, which a box being measured for how
        wide its contents want to be cannot resolve: it is auto there, as the
@@ -549,7 +560,13 @@ static const cprop CSS_PROPS[] = {
     { "column-gap", P_GAP },
     { "row-gap", P_GAP },
     { "flex-grow", P_FLEX_GROW },
-    { "flex", P_FLEX_GROW },
+    { "flex-basis", P_FLEX_BASIS },
+    { "flex-shrink", P_FLEX_SHRINK },
+    { "order", P_ORDER },
+    { "align-self", P_ALIGN_SELF },
+    { "text-transform", P_TEXT_TRANSFORM },
+    { "aspect-ratio", P_ASPECT },
+    { "flex", P_FLEX },
     { "font-size", P_FONT_SIZE },
     { "font-weight", P_FONT_WEIGHT },
     { "font-style", P_FONT_STYLE },
@@ -1089,6 +1106,12 @@ static inline void css_declare(csheet *s, const char *name, int nlen,
     }
     if (w_same(lower, "padding")) {
         css_shorthand4(s, v, vlen, P_PADDING_T, P_PADDING_R, P_PADDING_B, P_PADDING_L);
+        return;
+    }
+    if (w_same(lower, "inset")) {
+        /* top, right, bottom and left in one, as position: absolute; inset:
+           0 is written for an overlay. */
+        css_shorthand4(s, v, vlen, P_TOP, P_RIGHT, P_BOTTOM, P_LEFT);
         return;
     }
     if (w_same(lower, "border") || w_same(lower, "border-width")) {
@@ -1923,6 +1946,13 @@ static inline void css_default_style(cstyle *st, int root_px) {
     st->gflow_col = 0;
     st->gcol = st->gcol_s = st->gcol_e = 0;
     st->grid_row = st->grid_row_s = st->grid_row_e = st->gplace = 0;
+    st->ttrans = 0;
+    st->align_self = -1;
+    st->order = 0;
+    st->basis = -1;
+    st->basis_pct = 0;
+    st->shrink = 1;
+    st->ratio_w = st->ratio_h = 0;
     st->width_pct = 0;
     st->vars = -1;
     st->gspan = 0;
@@ -1949,6 +1979,7 @@ static inline void css_inherit(cstyle *child, const cstyle *parent) {
     child->spacing = parent->spacing;
     child->vars = parent->vars;
     child->ink_none = parent->ink_none;
+    child->ttrans = parent->ttrans;
 }
 
 /* One length of a translation: pixels and a percentage of the box, from a
@@ -2209,11 +2240,112 @@ static inline void css_apply_v(int prop, const char *v, cstyle *st, int root_px,
             break;
         }
 
+        case P_FLEX: {
+            /* grow, shrink and basis in one. flex: 1 is 1 1 0 -- every item
+               starting from nothing and growing alike, which is how a page
+               asks for columns of one width -- and read as flex-grow alone,
+               each started from its own width and they came out as wide as
+               what was in them. auto is 1 1 auto, none 0 0 auto, a length
+               alone 1 1 that length. */
+            const char *p = v;
+            while (*p == ' ') p++;
+            if (w_starts_fold(p, "none")) { st->grow = 0; st->shrink = 0; st->basis = -1; break; }
+            if (w_starts_fold(p, "auto")) { st->grow = 1; st->shrink = 1; st->basis = -1; break; }
+            if (w_starts_fold(p, "initial")) { st->grow = 0; st->shrink = 1; st->basis = -1; break; }
+            int ps[3], pl[3];
+            int np = css_parts(v, w_len(v), ps, pl, 3);
+            int nums = 0, grow = 1, shrink = 1, basis = -2;
+            for (int k = 0; k < np; k++) {
+                const char *t = v + ps[k];
+                int unitless = 1;
+                for (int q = 0; q < pl[k]; q++)
+                    if (!((t[q] >= '0' && t[q] <= '9') || t[q] == '.')) unitless = 0;
+                if (unitless && nums < 2) {
+                    int n = 0;
+                    for (int q = 0; q < pl[k] && t[q] >= '0' && t[q] <= '9'; q++) n = n * 10 + (t[q] - '0');
+                    if (nums == 0) grow = n; else shrink = n;
+                    nums++;
+                } else if (w_starts_fold(t, "auto") || w_starts_fold(t, "content")) {
+                    basis = -1;
+                } else {
+                    char tmp[48];
+                    int m = pl[k] < 47 ? pl[k] : 47;
+                    for (int q = 0; q < m; q++) tmp[q] = t[q];
+                    tmp[m] = 0;
+                    clen L = css_len_at(tmp, st->font_px, root_px, pct_of);
+                    int px = css_px(L, st->font_px, root_px, pct_of);
+                    basis = px >= 0 ? px : -1;
+                    st->basis_pct = (unsigned char)(L.unit == U_PCT);
+                }
+            }
+            if (!nums && basis == -2) break;
+            st->grow = (short)grow;
+            st->shrink = (short)shrink;
+            st->basis = (short)(basis == -2 ? 0 : basis);
+            break;
+        }
+        case P_FLEX_BASIS: {
+            const char *p = v;
+            while (*p == ' ') p++;
+            if (w_starts_fold(p, "auto") || w_starts_fold(p, "content")) { st->basis = -1; break; }
+            clen L = css_len_at(p, st->font_px, root_px, pct_of);
+            int px = css_px(L, st->font_px, root_px, pct_of);
+            st->basis = (short)(px >= 0 ? px : -1);
+            st->basis_pct = (unsigned char)(L.unit == U_PCT);
+            break;
+        }
+        case P_FLEX_SHRINK: {
+            int n = 0;
+            for (const char *p = v; *p >= '0' && *p <= '9'; p++) n = n * 10 + (*p - '0');
+            st->shrink = (short)n;
+            break;
+        }
+        case P_ORDER: {
+            const char *p = v;
+            int neg = *p == '-', n = 0;
+            if (neg) p++;
+            while (*p >= '0' && *p <= '9') n = n * 10 + (*p++ - '0');
+            st->order = (short)(neg ? -n : n);
+            break;
+        }
+        case P_ALIGN_SELF:
+            if (w_starts_fold(v, "center")) st->align_self = AI_CENTER;
+            else if (w_starts_fold(v, "flex-end") || w_starts_fold(v, "end")) st->align_self = AI_END;
+            else if (w_starts_fold(v, "flex-start") || w_starts_fold(v, "start")) st->align_self = AI_START;
+            else if (w_starts_fold(v, "stretch")) st->align_self = AI_STRETCH;
+            else if (w_starts_fold(v, "baseline")) st->align_self = AI_BASELINE;
+            else st->align_self = -1;
+            break;
+        case P_TEXT_TRANSFORM:
+            st->ttrans = (unsigned char)(w_starts_fold(v, "uppercase") ? 1 : w_starts_fold(v, "lowercase") ? 2
+                       : w_starts_fold(v, "capitalize") ? 3 : 0);
+            break;
+        case P_ASPECT: {
+            /* width / height, or one number over 1; auto alone is none. */
+            const char *p = v;
+            st->ratio_w = st->ratio_h = 0;
+            while (*p && !(*p >= '0' && *p <= '9')) p++;
+            if (!*p) break;
+            int a = 0, b = 100, fa = 0, fd = 0;
+            while (*p >= '0' && *p <= '9') a = a * 10 + (*p++ - '0');
+            if (*p == '.') { p++; while (*p >= '0' && *p <= '9') { if (fd < 2) { fa = fa * 10 + (*p - '0'); fd++; } p++; } }
+            while (fd < 2) { fa *= 10; fd++; }
+            a = a * 100 + fa;
+            while (*p == ' ') p++;
+            if (*p == '/') {
+                p++;
+                while (*p == ' ') p++;
+                int bb = 0, fb = 0, fe = 0;
+                while (*p >= '0' && *p <= '9') bb = bb * 10 + (*p++ - '0');
+                if (*p == '.') { p++; while (*p >= '0' && *p <= '9') { if (fe < 2) { fb = fb * 10 + (*p - '0'); fe++; } p++; } }
+                while (fe < 2) { fb *= 10; fe++; }
+                b = bb * 100 + fb;
+            }
+            if (a > 0 && b > 0) { st->ratio_w = a; st->ratio_h = b; }
+            break;
+        }
         case P_FLEX_GROW: {
-            /* `flex: 1` and `flex-grow: 1` mean the same thing here. The
-               shorthand's other two parts — how it shrinks and what it
-               starts from — are read past: an item that grows is the whole
-               of what a page uses this for. */
+            /* flex-grow alone. */
             const char *p = v;
             while (*p == ' ') p++;
             if (w_starts_fold(p, "none")) { st->grow = 0; break; }

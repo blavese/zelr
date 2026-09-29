@@ -1446,6 +1446,76 @@ int main(void) {
         ok(":not() with a list matches none of them", !word("shut") && word("ajar") && word("loaded"));
     }
 
+    /* --- text-transform, inset, order, align-self, flex basis, aspect-ratio ---- */
+    {
+        lay("<style>.u{text-transform:uppercase}.c{text-transform:capitalize}</style>"
+            "<p class=u>shout <span>this</span></p><p class=c>each word</p>", 600);
+        ok("text-transform: uppercase, and its children with it", word("SHOUT") && word("THIS") && !word("shout"));
+        ok("and capitalize", word("Each") && word("Word"));
+
+        lay("<style>.p{position:relative;width:400px;height:100px}"
+            ".a{position:absolute;inset:10px 20px;background:#eeeeee}</style>"
+            "<div class=p id=p><div class=a id=a>x</div></div>", 600);
+        const litem *a = box_of(by_id("a"));
+        okn("inset gives all four sides, and a box between them", a && a->x == 20 && a->y == 10 && a->w == 360,
+            a ? a->w : -1);
+
+        lay("<style>.row{display:flex}#x{order:2}#y{order:1}</style>"
+            "<div class=row><div id=x>ex</div><div id=y>why</div><div id=z>zed</div></div>", 600);
+        const litem *ex = word("ex"), *wy = word("why"), *ze = word("zed");
+        ok("order puts a row's items in the order they ask for", ex && wy && ze && ze->x < wy->x && wy->x < ex->x);
+
+        lay("<style>.row{display:flex;align-items:flex-start}.t{height:100px;background:#eeeeee}"
+            ".s{align-self:flex-end;background:#dddddd}</style>"
+            "<div class=row><div class=t id=t>tall</div><div class=s id=s>short</div></div>", 600);
+        const litem *tb = box_of(by_id("t")), *sb = box_of(by_id("s"));
+        ok("align-self puts one item at the end of the row", tb && sb && sb->y + sb->h == tb->y + tb->h && sb->y > tb->y);
+
+        lay("<style>.row{display:flex;width:600px}.row div{flex:1;background:#eeeeee}</style>"
+            "<div class=row><div id=f>a</div><div id=g>a much longer piece of text than the other</div></div>", 600);
+        const litem *f = box_of(by_id("f")), *g = box_of(by_id("g"));
+        okn("flex: 1 makes columns of one width, whatever is in them", f && g && f->w == g->w && f->w == 300,
+            f ? f->w : -1);
+
+        lay("<style>.row{display:flex;width:300px}.row div{width:200px;background:#eeeeee}"
+            "#k{flex-shrink:0}</style><div class=row><div id=k>keep</div><div id=o>give</div></div>", 600);
+        const litem *kb = box_of(by_id("k")), *ob = box_of(by_id("o"));
+        okn("flex-shrink: 0 keeps its width, and the other gives way", kb && ob && kb->w == 200 && ob->w == 100,
+            ob ? ob->w : -1);
+
+        lay("<style>.b{width:200px;aspect-ratio:2 / 1;background:#eeeeee}.v{width:160px;aspect-ratio:16/9;"
+            "background:#eeeeee}</style><div class=b id=b></div><div class=v id=v></div>", 600);
+        const litem *bb = box_of(by_id("b")), *vb = box_of(by_id("v"));
+        okn("aspect-ratio makes a box as tall as its width says", bb && vb && bb->h == 100 && vb->h == 90,
+            bb ? bb->h : -1);
+    }
+
+    /* --- a basis below the contents ------------------------------------------ */
+    {
+        lay("<style>.r{display:flex;justify-content:space-between}.a{flex:1 1 0}"
+            ".b{flex:0 1 auto;display:flex;background:#000}.k{width:200px;height:10px;background:#000}.m{width:150px;height:10px}</style>"
+            "<div class=r><div class=a id=a1><div id=k class=k></div></div>"
+            "<div class=b id=b1><div class=m></div><div class=m></div><div class=m></div><div class=m></div><div class=m></div></div></div>", 800);
+        const litem *k = box_of(by_id("k")), *b1 = box_of(by_id("b1"));
+        okn("a basis of 0 still keeps its contents' width", k && k->w == 200 && b1 && b1->x >= 200 && b1->x + b1->w <= 800, b1 ? b1->x * 1000 + b1->w : -1);
+        lay("<style>.r{display:flex}.a{flex:1 1 0;background:#000}.w{width:500px;height:10px;background:#fff}</style>"
+            "<div class=r><div class=a><div id=w1 class=w></div></div><div class=a id=e2>x</div></div>", 800);
+        const litem *e = box_of(by_id("e2"));
+        okn("the rest of the room goes to the others when one is held at its floor",
+            e && e->x >= 500 && e->x + e->w <= 800 && e->w >= 250, e ? e->x * 1000 + e->w : -1);
+    }
+
+    /* --- a percentage basis in a row sized by its contents ---------------------- */
+    {
+        lay("<style>.row{display:flex}.card{display:inline-flex;background:#888}.main{display:flex}"
+            ".col{flex-basis:100%;display:flex}.pic{width:50px;height:50px;background:#000}</style>"
+            "<div class=row><div class=card id=cd><div class=main><div class=col><div class=pic></div></div></div></div>"
+            "<div class=card id=cd2><div class=main><div class=col><div class=pic></div></div></div></div></div>", 800);
+        const litem *cd = box_of(by_id("cd")), *cd2 = box_of(by_id("cd2"));
+        okn("a basis of 100% inside a card as wide as its contents is its contents",
+            cd && cd2 && cd->w == 50 && cd2->x == cd->x + 50, cd ? cd->w : -1);
+    }
+
     puts(failed ? "LAYOUTTEST_FAIL\n" : "LAYOUTTEST_PASS\n");
     return failed;
 }

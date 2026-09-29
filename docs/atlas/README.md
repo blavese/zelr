@@ -112,6 +112,12 @@ numbered files are still to 6048716; where they disagree with this list, this li
   `:host(:not([loaded],:focus-within))` needs. layouttest: the tree drawn, slots by name, fallback
   contents, the sheet reaching the tree and not outside it, `:host`, `:not()` with a list; browsercheck 31
   (a page whose only band is inside a tree).
+- **Six properties (11).** `text-transform` (inherited; ASCII and Latin-1 letters, in `lay_word`); `inset`
+  (the four offsets in one), and an absolute box with a left and a right and no width as wide as lies
+  between them; `order` (flex items sorted in `lay_items`, stably); `align-self` (per item in
+  `lay_flex_line`); the `flex` shorthand read whole (`P_FLEX`: `flex: 1` is 1 1 0, so columns come out of
+  one width) with `flex-basis` and `flex-shrink` (0 holds its width); `aspect-ratio` (a box with no height
+  as tall as its width says). layouttest: each.
 
 ### 0.73.0
 

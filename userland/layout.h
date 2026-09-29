@@ -515,6 +515,24 @@ static inline int lay_space(char c) {
 static inline void lay_word(lctx *L, const char *s, int n, const cstyle *st,
                             int *y, int face) {
     if (n <= 0) return;
+    /* text-transform: the word measured and kept as it is shown. ASCII and
+       the accented letters of Latin-1, which is where the pairs are. */
+    char tt[256];
+    if (st->ttrans && n < (int)sizeof(tt)) {
+        for (int i = 0; i < n; i++) {
+            unsigned char c = (unsigned char)s[i];
+            int first = i == 0 || (i == 1 && (unsigned char)s[0] == 0xC3);
+            int up = st->ttrans == 1 || (st->ttrans == 3 && first);
+            int down = st->ttrans == 2;
+            if (i > 0 && (unsigned char)s[i - 1] == 0xC3) {
+                if (up && c >= 0xA0 && c <= 0xBE && c != 0xB7) c = (unsigned char)(c - 0x20);
+                else if (down && c >= 0x80 && c <= 0x9E && c != 0x97) c = (unsigned char)(c + 0x20);
+            } else if (up && c >= 'a' && c <= 'z') c = (unsigned char)(c - 32);
+            else if (down && c >= 'A' && c <= 'Z') c = (unsigned char)(c + 32);
+            tt[i] = (char)c;
+        }
+        s = tt;
+    }
     int w = tface_wn(s, n, face);
     int sp = L->pending_space && L->pen > L->line_left
              ? tface_wn(" ", 1, face) : 0;
@@ -1952,6 +1970,7 @@ static inline int lay_is_block_node(lctx *L, int n, const cstyle *parent) {
 typedef struct {
     int at[LAY_WRAPS], from[LAY_WRAPS], depth;
     cstyle wrap[LAY_WRAPS];
+    int order;                     /* the last item's order */
 } litems;
 
 static void lay_items_start(lctx *L, litems *it, int node, const cstyle *st) {
@@ -1983,6 +2002,7 @@ static int lay_items_next(lctx *L, litems *it, int cw, int *par, int *positioned
         }
         *par = it->from[it->depth];
         *positioned = own.position == POS_ABSOLUTE || own.position == POS_FIXED;
+        it->order = own.order;
         return c;
     }
     return -1;
@@ -1990,7 +2010,7 @@ static int lay_items_next(lctx *L, litems *it, int cw, int *par, int *positioned
 
 static int lay_items(lctx *L, int node, const cstyle *st, int cw, int *kid, int *par,
                      int *placed, int *nplaced, int *extra) {
-    int n = 0;
+    int n = 0, ord[LAY_FLEX_MAX], any = 0;
     *extra = -1;
     *nplaced = 0;
     litems it;
@@ -2004,8 +2024,19 @@ static int lay_items(lctx *L, int node, const cstyle *st, int cw, int *kid, int 
         if (n >= LAY_FLEX_MAX) { if (*extra < 0) *extra = c; continue; }
         kid[n] = c;
         par[n] = from;
+        ord[n] = it.order;
+        if (it.order) any = 1;
         n++;
     }
+    /* In the order they ask for, those asking alike in the order written:
+       how a page moves its sidebar after its article on a narrow window. */
+    if (any)
+        for (int i = 1; i < n; i++)
+            for (int j = i; j > 0 && ord[j - 1] > ord[j]; j--) {
+                int t = ord[j]; ord[j] = ord[j - 1]; ord[j - 1] = t;
+                t = kid[j]; kid[j] = kid[j - 1]; kid[j - 1] = t;
+                t = par[j]; par[j] = par[j - 1]; par[j - 1] = t;
+            }
     return n;
 }
 
@@ -2110,11 +2141,23 @@ static int lay_measure(lctx *L, int node, const cstyle *parent, int avail,
    go (low), its measured height and how much it grows. */
 static void lay_flex_line(lctx *L, const cstyle *st, const int *kid, const int *par, int n,
                           const int *meas, int *want, const int *low,
-                          const int *high, const int *grow, int cx, int cw,
+                          const int *high, const int *grow, const int *aself, int cx, int cw,
                           int gap, int reverse, int *y) {
-    int total = 0, grows = 0;
-    for (int i = 0; i < n; i++) { total += want[i]; grows += grow[i]; }
+    int total = 0, grows = 0, hyp = 0;
+    for (int i = 0; i < n; i++) {
+        total += want[i]; grows += grow[i];
+        hyp += want[i] > low[i] ? want[i] : low[i];
+    }
     total += gap * (n - 1);
+    hyp += gap * (n - 1);
+
+    /* An item can start below the narrowest it goes (a basis of 0 with
+       words in it). Whether the line grows or shrinks is decided by where
+       they would stop, and a shrinking line starts those at their floor. */
+    if (hyp > cw && hyp > total) {
+        for (int i = 0; i < n; i++) if (want[i] < low[i]) want[i] = low[i];
+        total = hyp;
+    }
 
     /* Too wide: everything shrinks in proportion to its size, but nothing
        below the narrowest it can go -- its longest word, its picture. Down
@@ -2147,21 +2190,48 @@ static void lay_flex_line(lctx *L, const cstyle *st, const int *kid, const int *
 
     /* Anything that asked to grow takes the spare room first, and then
        there is none left to justify with — which is what `flex: 1` is for
-       and why a page that uses it does not also use space-between. */
+       and why a page that uses it does not also use space-between. The room
+       is shared from where each starts; one whose share leaves it below its
+       floor is held there and the rest shared again among the others. */
     if (grows > 0 && spare > 0) {
-        int left = spare;
+        int base[LAY_FLEX_MAX];
+        unsigned char held[LAY_FLEX_MAX];
         for (int i = 0; i < n; i++) {
-            if (!grow[i]) continue;
-            int add = spare * grow[i] / grows;
-            if (add > left) add = left;
-            want[i] += add;
-            left -= add;
+            base[i] = want[i];
+            held[i] = !grow[i];
+            if (held[i] && want[i] < low[i]) want[i] = low[i];
         }
-        if (left > 0) {
-            for (int i = n - 1; i >= 0; i--)
-                if (grow[i]) { want[i] += left; break; }
+        for (int round = 0; round <= n; round++) {
+            int left = cw - gap * (n - 1), g = 0, last = -1;
+            for (int i = 0; i < n; i++) {
+                if (held[i]) left -= want[i];
+                else { left -= base[i]; g += grow[i]; last = i; }
+            }
+            if (g == 0) break;
+            if (left < 0) left = 0;
+            int rest = left;
+            for (int i = 0; i < n; i++) {
+                if (held[i]) continue;
+                int add = (int)((long long)left * grow[i] / g);
+                if (add > rest) add = rest;
+                want[i] = base[i] + add;
+                rest -= add;
+            }
+            want[last] += rest;
+            int again = 0;
+            for (int i = 0; i < n; i++)
+                if (!held[i] && want[i] < low[i]) { want[i] = low[i]; held[i] = 1; again = 1; }
+            if (!again) break;
         }
-        spare = 0;
+        total = gap * (n - 1);
+        for (int i = 0; i < n; i++) total += want[i];
+        spare = cw - total;
+        if (spare < 0) spare = 0;
+    } else {
+        int raised = 0;
+        for (int i = 0; i < n; i++) if (want[i] < low[i]) { raised += low[i] - want[i]; want[i] = low[i]; }
+        spare -= raised;
+        if (spare < 0) spare = 0;
     }
 
     /* Where the first one starts and what goes between them. */
@@ -2237,8 +2307,10 @@ static void lay_flex_line(lctx *L, const cstyle *st, const int *kid, const int *
        like when everything in it is the same height anyway. */
     for (int idx = 0; idx < n; idx++) {
         int dy = 0;
-        if (st->align_items == AI_CENTER) dy = (tallest - got[idx]) / 2;
-        else if (st->align_items == AI_END) dy = tallest - got[idx];
+        int i = reverse ? n - 1 - idx : idx;
+        int al = aself[i] >= 0 ? aself[i] : st->align_items;
+        if (al == AI_CENTER) dy = (tallest - got[idx]) / 2;
+        else if (al == AI_END) dy = tallest - got[idx];
         if (dy > 0)
             for (int k = first[idx]; k < first[idx + 1]; k++)
                 L->out->items[k].y += dy;
@@ -2290,7 +2362,7 @@ static void lay_flex(lctx *L, int node, const cstyle *st, int cx, int cw,
     } else {
         /* --- along the line ------------------------------------------------ */
         int want[LAY_FLEX_MAX], high[LAY_FLEX_MAX], grow[LAY_FLEX_MAX];
-        int meas[LAY_FLEX_MAX], low[LAY_FLEX_MAX];
+        int meas[LAY_FLEX_MAX], low[LAY_FLEX_MAX], aself[LAY_FLEX_MAX];
 
         for (int i = 0; i < n; i++) {
             int h = 0, h2 = 0;
@@ -2309,6 +2381,15 @@ static void lay_flex(lctx *L, int node, const cstyle *st, int cx, int cw,
             if (own.width >= 0)
                 w = own.width + (own.border_box ? 0 : own.pl + own.pr + own.bl + own.br)
                   + (own.ml > 0 ? own.ml : 0) + (own.mr > 0 ? own.mr : 0);
+            /* A basis is where it starts from, whatever its width says. A
+               percentage of a row whose width is still being worked out is
+               its contents, as a width's is (lay_pct_cyclic): Spotify's
+               cards hold a column of basis 100%, and measured as the whole
+               row each card took the width of the page. */
+            if (own.basis_pct && L->measuring && (st->width < 0 || st->width_pct)) own.basis = -1;
+            if (own.basis >= 0)
+                w = own.basis + (own.border_box ? 0 : own.pl + own.pr + own.bl + own.br)
+                  + (own.ml > 0 ? own.ml : 0) + (own.mr > 0 ? own.mr : 0);
 
             /* A flex item's own width is not a floor, as a grid item's is:
                it shrinks to the narrowest its contents allow, so it is
@@ -2318,7 +2399,19 @@ static void lay_flex(lctx *L, int node, const cstyle *st, int cx, int cw,
             if (own.min_width >= 0) lo = own.min_width;
             else if (own.clip) lo = 8;
             else { L->flex_sized = kid[i]; lo = lay_measure(L, kid[i], ps, 1, &h2); L->flex_sized = -1; }
-            if (lo > w) lo = w;
+            /* The narrowest is never more than the width it was given; but a
+               basis is only where it starts, not a width, and `flex: 1 1 0`
+               beside a long menu left Nature's logo at 0 and then squeezed
+               it to a stripe. Such an item starts at its basis and stops at
+               its contents (lay_flex_line). */
+            if (own.basis < 0 && lo > w) lo = w;
+            else if (own.basis >= 0 && own.width >= 0 && own.min_width < 0) {
+                int cap = own.width + (own.border_box ? 0 : own.pl + own.pr + own.bl + own.br)
+                        + (own.ml > 0 ? own.ml : 0) + (own.mr > 0 ? own.mr : 0);
+                if (lo > cap) lo = cap;
+            }
+            /* One that does not shrink holds its starting width. */
+            if (own.shrink == 0 && w > lo) lo = w;
             if (lo < 1) lo = 1;
 
             meas[i] = w;
@@ -2326,13 +2419,14 @@ static void lay_flex(lctx *L, int node, const cstyle *st, int cx, int cw,
             low[i] = lo;
             high[i] = h;
             grow[i] = own.grow > 0 ? own.grow : 0;
+            aself[i] = own.align_self;
         }
 
         /* A row that would scroll sideways -- a shelf of cards, a strip of
            albums -- cannot be scrolled inside a page here, and squeezed onto
            one line its cards were written over each other. It wraps. */
         if (!st->flex_wrap && st->clip != 2) {
-            lay_flex_line(L, st, kid, par, n, meas, want, low, high, grow, cx, cw, gap, reverse, y);
+            lay_flex_line(L, st, kid, par, n, meas, want, low, high, grow, aself, cx, cw, gap, reverse, y);
         } else {
             /* Wrapping: as many as fit on each line, each line a row of its
                own. Card grids are built this way, and one row of every card
@@ -2350,7 +2444,7 @@ static void lay_flex(lctx *L, int node, const cstyle *st, int cx, int cw,
                 }
                 if (i0) *y += gap;
                 lay_flex_line(L, st, kid + i0, par + i0, i1 - i0, meas + i0, want + i0, low + i0,
-                              high + i0, grow + i0, cx, cw, gap, reverse, y);
+                              high + i0, grow + i0, aself + i0, cx, cw, gap, reverse, y);
                 i0 = i1;
             }
         }
@@ -3701,6 +3795,10 @@ static void lay_block(lctx *L, int node, const cstyle *parent, int x,
         if (probe.top != CSS_AUTO_OFF) ay = L->pos_y + probe.top;
 
         int room = probe.width >= 0 ? probe.width : (L->pos_x + aw) - ax;
+        /* Both sides given and no width: as wide as lies between them, as an
+           overlay written inset: 0 is. */
+        if (probe.width < 0 && probe.left != CSS_AUTO_OFF && probe.right_off != CSS_AUTO_OFF)
+            room -= probe.right_off;
         if (room < 16) room = 16;
 
         int sub = ay;
@@ -4000,6 +4098,15 @@ static void lay_block_placed(lctx *L, int node, const cstyle *parent, int x,
     /* And the same way round: box_h is the border box too. */
     int vframe = st.pt + st.pb + st.bt + st.bb;
     int want_h = st.height, floor_h = st.min_height, cap_h = st.max_height;
+    /* aspect-ratio: with no height of its own, as tall as its width makes
+       it -- how a page keeps the room for a picture or a video before
+       anything is in it. Taller if what is in it needs more. */
+    if (want_h < 0 && st.ratio_w > 0 && st.ratio_h > 0) {
+        int bw = shrunk >= 0 ? shrunk : box_w;
+        want_h = (int)((long long)bw * st.ratio_h / st.ratio_w);
+        if (!st.border_box) want_h -= vframe;
+        if (want_h < 0) want_h = 0;
+    }
     if (!st.border_box) {
         if (want_h >= 0)  want_h  += vframe;
         if (floor_h >= 0) floor_h += vframe;
