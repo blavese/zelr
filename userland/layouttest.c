@@ -958,6 +958,85 @@ int main(void) {
         if (c) okn("and calc() of a share and pixels is both", c->x == -210, c->x);
     }
 
+    /* --- @supports, a row that would scroll, and an icon's name ------------- */
+    {
+        lay("<style>@supports (display:grid){#g{color:#ff0000}}"
+            "@supports not (display:grid){#n{color:#00ff00}}"
+            "@supports (display:flex){#f{color:#0000ff}}</style>"
+            "<p id=g>grid</p><p id=n>nogrid</p><p id=f>flex</p>", 600);
+        const litem *g = word("grid"), *n = word("nogrid"), *f = word("flex");
+        ok("@supports for grid is refused, since grid is laid out as blocks", g && g->color != 0xFF0000);
+        ok("and @supports not (grid) is taken", n && n->color == 0x00FF00);
+        ok("and @supports for anything read is taken", f && f->color == 0x0000FF);
+
+        lay("<style>.shelf{display:flex;overflow-x:auto}.shelf div{width:150px;flex-shrink:0;"
+            "background:#eeeeee}</style>"
+            "<div class=shelf><div id=a>1</div><div>2</div><div>3</div><div id=d>4</div></div>", 500);
+        const litem *a = box_of(by_id("a")), *d = box_of(by_id("d"));
+        ok("a row that would scroll sideways wraps instead", a && d && d->y > a->y && d->x == a->x);
+
+        lay("<button id=b><svg><title>Chevron Left</title></svg> Back</button>", 600);
+        int b = by_id("b");
+        const char *label = b >= 0 ? lay_control_label(&doc, b, CTL_BUTTON) : "";
+        ok("an icon's own title is not taken for the button's words", w_same(label, " Back"));
+    }
+
+    /* --- grid -----------------------------------------------------------------
+     *
+     * Columns from grid-template-columns and the items poured into them a
+     * row at a time. It was a block, so three columns of cards were one card
+     * a row. */
+    {
+        lay("<style>.g{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}"
+            ".g div{background:#eeeeee}</style>"
+            "<div class=g><div id=a>1</div><div id=b>2</div><div id=c>3</div><div id=d>4</div></div>", 620);
+        const litem *a = box_of(by_id("a")), *b = box_of(by_id("b")), *c = box_of(by_id("c"));
+        const litem *d = box_of(by_id("d"));
+        ok("a grid's items are laid out", a && b && c && d);
+        if (a && b && c && d) {
+            okn("three to a row, side by side", a->y == b->y && b->y == c->y && b->x > a->x && c->x > b->x, c->x);
+            okn("each a third of the row, less the gaps", a->w == 200, a->w);
+            okn("with the gap between them", b->x - (a->x + a->w) == 10, b->x - (a->x + a->w));
+            okn("and the fourth starts the next row", d->y > a->y && d->x == a->x, d->y - a->y);
+        }
+
+        lay("<style>.g{display:grid;grid-template-columns:200px 1fr}.g div{background:#eeeeee}"
+            "#w{grid-column:1 / -1}</style>"
+            "<div class=g><div id=a>side</div><div id=b>main</div><div id=w>wide</div></div>", 600);
+        a = box_of(by_id("a"));
+        b = box_of(by_id("b"));
+        const litem *w = box_of(by_id("w"));
+        ok("a fixed column and one taking the rest", a && b && a->w == 200 && b->w == 400 && b->x == a->x + 200);
+        ok("and an item spanning the whole row", w && a && w->w == 600 && w->y > a->y);
+
+        lay("<style>.g{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr))}"
+            ".g div{background:#eeeeee}</style>"
+            "<div class=g><div id=a>1</div><div id=b>2</div><div id=c>3</div><div id=d>4</div></div>", 480);
+        a = box_of(by_id("a"));
+        c = box_of(by_id("c"));
+        d = box_of(by_id("d"));
+        ok("auto-fill makes as many columns as fit", a && c && d && c->y == a->y && d->y > a->y && a->w == 160);
+    }
+
+    /* --- a grid of named areas ------------------------------------------------ */
+    {
+        lay("<style>.g{display:grid;grid-template-columns:150px 1fr;"
+            "grid-template-areas:\"head head\" \"side main\" \"foot foot\"}"
+            ".g div{background:#eeeeee}#h{grid-area:head}#s{grid-area:side}#m{grid-area:main}"
+            "#f{grid-area:foot}</style>"
+            "<div class=g><div id=f>foot</div><div id=m>main</div><div id=s>side</div>"
+            "<div id=h>head</div></div>", 600);
+        const litem *h = box_of(by_id("h")), *sd = box_of(by_id("s")), *m = box_of(by_id("m"));
+        const litem *f = box_of(by_id("f"));
+        ok("a grid of named areas lays out", h && sd && m && f);
+        if (h && sd && m && f) {
+            ok("each item where its area is, whatever order it was written in",
+               h->y < sd->y && sd->y == m->y && f->y > m->y);
+            okn("an area across both columns is as wide as both", h->w == 600 && f->w == 600, h->w);
+            okn("and the side and the main have their columns", sd->w == 150 && m->x == 150 && m->w == 450, m->w);
+        }
+    }
+
     puts(failed ? "LAYOUTTEST_FAIL\n" : "LAYOUTTEST_PASS\n");
     return failed;
 }

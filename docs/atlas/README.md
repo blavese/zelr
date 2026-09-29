@@ -95,6 +95,34 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.70.0: grids, GIF pictures, and pages that ask what the browser can do
+
+- **Grid (11).** `display:grid` is laid out (`lay_grid`): columns from `grid-template-columns` (lengths,
+  percentages, `fr`, `auto` as 1fr, `minmax()`, `fit-content()`, `repeat(N, ...)` and
+  `repeat(auto-fill|auto-fit, ...)`, `LAY_GRID_COLS` 32), items poured in a row at a time in document order,
+  `grid-column: span N` and `1 / -1`, rows as tall as their tallest item, `align-items`, the one gap for both.
+  Named areas (`lay_grid_named`): `grid-template-areas` read into rectangles, items placed by `grid-area`
+  whatever order they were written in, items naming no area on rows of their own below. Not done: placement
+  by line number, `grid-template-rows`, dense packing.
+- **@supports (11).** `css_supports` answers as this browser would: no for grid (so a page's no-grid fallback
+  is what it gets -- an encyclopaedia's grid put its contents list first and its article after), `display:
+  contents`, container queries and `:has()`; `not` turns it round.
+- **Rows that would scroll (11).** A flex row with `overflow: auto` or `scroll` (`cstyle.clip` 2) wraps: it
+  cannot be scrolled inside a page here, and one line of cards drew them over each other. `max-height` still
+  only cuts a box that hides its overflow (`clip` 1).
+- **Icon buttons (11).** A button's label leaves out the text of any `<svg>` inside it (`lay_words_of`): an
+  icon's `<title>` ("Chevron Left") is for a screen reader, not the button's words.
+- **GIF (13).** `gif.h`: the first frame, variable-width LZW with clears and the one-past-the-table case,
+  local and global colour tables, the transparent index over `bg`, interlaced rows put back in order, and
+  pixels a short file never delivered left as `bg`. The browser decodes GIFs by their bytes. giftest
+  checks every pixel of four GIFs made by Windows' GDI+ encoder (`tools/gengif.ps1`), so the decoder is
+  not checked against itself.
+- **Checks.** layouttest 139 (17 new: @supports three ways, the scrolling row, the icon's title, grid tracks,
+  gaps, spans, auto-fill and fr, named areas), each targeted one seen failing on a broken build; giftest 16,
+  each decoding feature seen failing on its own break (the one-past case, code widths, clears,
+  interlacing, transparency, reading past the end, pixels that never arrived). The first cut-off check
+  found that missing pixels were drawn as colour 0, which was fixed.
+
 ### 0.69.0: pages laid out the ways pages are laid out, and readers that survive a change of names
 
 - **Layout (11).** Tables are laid out as tables (`lay_table_plan`, `lay_table_rows`): each cell measured

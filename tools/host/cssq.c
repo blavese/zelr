@@ -31,6 +31,34 @@ static const char *prop_name(int p) {
     return "?";
 }
 
+/* A rule's selector, written back out from its compound parts. */
+static void put_selector(const crule *r) {
+    static const char *const JOIN[] = { "", " ", " > ", " + ", " ~ " };
+    for (int k = 0; k < r->sel_n; k++) {
+        const csel *c = &sheet.sels[r->sel_at + k];
+        if (k) puts(JOIN[c->combinator < 5 ? c->combinator : 1]);
+        int any = 0;
+        if (c->tag > 0) { puts(HTML_TAGS[c->tag]); any = 1; }
+        if (c->tname >= 0) { puts(sheet.text + c->tname); any = 1; }
+        if (c->id >= 0) { puts("#"); puts(sheet.text + c->id); any = 1; }
+        for (int i = 0; i < c->ncls; i++) {
+            if (c->cls[i] >= 0) { puts("."); puts(sheet.text + c->cls[i]); }
+            else {
+                const char *nm = sheet.text + (-c->cls[i] - 2);
+                puts("[");
+                puts(nm);
+                const char *tv = nm + w_len(nm) + 1;
+                if (tv[0] != '?') { char op[2] = { tv[0], 0 }; puts(op); puts("="); puts(tv + 2); }
+                puts("]");
+            }
+            any = 1;
+        }
+        if (c->pseudo) { puts(":"); putn(c->pseudo); any = 1; }
+        if (c->neg >= 0) { puts(":not(...)"); any = 1; }
+        if (!any) puts("*");
+    }
+}
+
 static int media_of(int el, int *lo, int *hi) {
     *lo = *hi = -1;
     const char *m = dom_attr(&doc, el, "media");
@@ -121,7 +149,9 @@ int main(int argc, char **argv) {
                     putn(cr->mq_hi);
                     puts("]");
                 }
-                puts(":");
+                puts("  ");
+                put_selector(cr);
+                puts("  {");
                 for (int dd = 0; dd < cr->decl_n; dd++) {
                     const cdecl *dc = &sheet.decls[cr->decl_at + dd];
                     puts(" ");

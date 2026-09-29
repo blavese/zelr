@@ -50,6 +50,7 @@ enum {
     P_MIN_WIDTH, P_MIN_HEIGHT, P_MAX_HEIGHT, P_BOX_SIZING,
     P_POSITION, P_TOP, P_RIGHT, P_BOTTOM, P_LEFT,
     P_VALIGN, P_SPACING, P_COLLAPSE, P_OVERFLOW, P_CLIP, P_FLOAT, P_CLEAR, P_TRANSFORM,
+    P_GRID_COLS, P_GRID_COLUMN, P_GRID_AREAS, P_GRID_AREA,
     P_COUNT
 };
 
@@ -67,7 +68,7 @@ enum { POS_STATIC = 0, POS_RELATIVE, POS_ABSOLUTE, POS_FIXED };
 
 enum { D_INLINE = 0, D_BLOCK, D_INLINE_BLOCK, D_LIST_ITEM, D_NONE,
        D_TABLE_CELL, D_FLEX, D_TABLE, D_TABLE_ROW, D_TABLE_GROUP,
-       D_INLINE_FLEX };
+       D_INLINE_FLEX, D_GRID };
 
 /* Where a table cell's contents sit when the row is taller than they are.
    Baseline is what nothing asked for, and a cell treats it as the middle,
@@ -170,6 +171,12 @@ typedef struct {
        width or height (layout.h, lay_translate). Nothing else a transform
        does is drawn. */
     short tx_px, ty_px, tx_pct, ty_pct;
+
+    /* A grid's columns, as the text of grid-template-columns (an offset into
+       the sheet's text, -1 for none), read by lay_grid; and how many columns
+       an item spans (0 one, -1 all of them). */
+    int grid_cols, grid_areas, garea;   /* and the areas' text, and an item's area */
+    short gspan;
 } cstyle;
 
 /* --- the text of a sheet -------------------------------------------------
@@ -453,6 +460,10 @@ static const cprop CSS_PROPS[] = {
     { "float", P_FLOAT },
     { "clear", P_CLEAR },
     { "transform", P_TRANSFORM },
+    { "grid-template-columns", P_GRID_COLS },
+    { "grid-column", P_GRID_COLUMN },
+    { "grid-template-areas", P_GRID_AREAS },
+    { "grid-area", P_GRID_AREA },
     { "top", P_TOP },
     { "right", P_RIGHT },
     { "bottom", P_BOTTOM },
@@ -1169,9 +1180,31 @@ static inline int css_mq(const char *p, int n, int *lo, int *hi) {
     return 1;
 }
 
+/* Whether @supports would say yes here. Nearly everything a page asks
+   about is read or harmlessly ignored, so the answer is yes -- except what
+   this browser lays out differently or not at all: grid (and subgrid),
+   display: contents, container queries and :has(). A page asks precisely so
+   that it can do something else where the answer is no, and opening the
+   block anyway gave an encyclopaedia's grid layout, whose columns are never
+   made, instead of the one it writes for a browser without grid. A leading
+   `not` turns the answer round; `and` and `or` are taken as a whole. */
+static inline int css_supports(const char *p, int n) {
+    int i = 0;
+    while (i < n && css_space(p[i])) i++;
+    int negate = i + 3 < n && css_named(p + i, 3, "not") && (css_space(p[i + 3]) || p[i + 3] == '(');
+    int no = 0;
+    for (int k = 0; k < n; k++) {
+        if (css_named(p + k, (k + 4 <= n ? 4 : n - k), "grid")) no = 1;
+        if (css_named(p + k, (k + 8 <= n ? 8 : n - k), "contents")) no = 1;
+        if (css_named(p + k, (k + 9 <= n ? 9 : n - k), "container")) no = 1;
+        if (k + 4 <= n && p[k] == ':' && css_named(p + k + 1, 3, "has")) no = 1;
+    }
+    return negate ? no : !no;
+}
+
 /* Skips an at-rule. Media queries are opened rather than skipped when they
    can apply to this screen, and the widths they are for are handed back
-   (css_mq); @supports is opened as it stands. */
+   (css_mq); @supports is opened when it would say yes (css_supports). */
 static inline int css_at_rule(const char *p, int len, int i, int *open_body,
                               int *lo, int *hi) {
     int start = i;
@@ -1187,7 +1220,7 @@ static inline int css_at_rule(const char *p, int len, int i, int *open_body,
     if (i < len && p[i] == ';') { *open_body = 0; return i + 1; }
 
     *lo = *hi = -1;
-    if (supports) { *open_body = 1; return i + 1; }
+    if (supports && css_supports(p + qstart, i - qstart)) { *open_body = 1; return i + 1; }
     if (media && css_mq(p + qstart, i - qstart, lo, hi)) { *open_body = 1; return i + 1; }
 
     /* Everything else with a body is skipped whole: keyframes, font faces,
@@ -1498,6 +1531,8 @@ static inline void css_default_style(cstyle *st, int root_px) {
     st->clip = st->gone = 0;
     st->floated = st->clear = 0;
     st->tx_px = st->ty_px = st->tx_pct = st->ty_pct = 0;
+    st->grid_cols = st->grid_areas = st->garea = -1;
+    st->gspan = 0;
 }
 
 /* What passes from a parent to a child, which is a short list and not the
@@ -1604,7 +1639,8 @@ static inline void css_apply(const csheet *s, const cdecl *dcl, cstyle *st,
             else if (w_starts_fold(v, "table") || w_starts_fold(v, "inline-table"))
                 st->display = D_TABLE;
             else if (w_starts_fold(v, "flex")) st->display = D_FLEX;
-            else st->display = D_BLOCK;   /* block, grid: a box */
+            else if (w_starts_fold(v, "grid")) st->display = D_GRID;
+            else st->display = D_BLOCK;
             break;
 
         case P_FLEX_DIR:
@@ -1722,6 +1758,51 @@ static inline void css_apply(const csheet *s, const cdecl *dcl, cstyle *st,
             else if (w_starts_fold(v, "right") || w_starts_fold(v, "inline-end")) st->clear = 2;
             else st->clear = 0;
             break;
+        case P_GRID_AREAS:
+            st->grid_areas = w_starts_fold(v, "none") ? -1 : dcl->value;
+            break;
+        case P_GRID_AREA:
+            /* A name; a placement by line numbers is left to the flow. */
+            st->garea = (v[0] >= '0' && v[0] <= '9') || w_starts_fold(v, "auto") ? -1 : dcl->value;
+            break;
+        case P_GRID_COLS:
+            st->grid_cols = w_starts_fold(v, "none") ? -1 : dcl->value;
+            break;
+        case P_GRID_COLUMN: {
+            /* span N, or 1 / -1 for the whole row; a line number alone is
+               one column, placed where the next free one is. */
+            st->gspan = 0;
+            const char *q = v;
+            while (*q == ' ') q++;
+            if (w_starts_fold(q, "span")) {
+                q += 4;
+                while (*q == ' ') q++;
+                int k = 0;
+                while (*q >= '0' && *q <= '9') k = k * 10 + (*q++ - '0');
+                st->gspan = (short)(k > 1 ? (k > 64 ? 64 : k) : 0);
+                break;
+            }
+            for (const char *r = q; *r; r++) {
+                if (*r != '/') continue;
+                r++;
+                while (*r == ' ') r++;
+                if (r[0] == '-' && r[1] == '1') st->gspan = -1;
+                else if (w_starts_fold(r, "span")) {
+                    r += 4;
+                    while (*r == ' ') r++;
+                    int k = 0;
+                    while (*r >= '0' && *r <= '9') k = k * 10 + (*r++ - '0');
+                    st->gspan = (short)(k > 1 ? (k > 64 ? 64 : k) : 0);
+                } else {
+                    int a = 0, b = 0;
+                    while (*q >= '0' && *q <= '9') a = a * 10 + (*q++ - '0');
+                    while (*r >= '0' && *r <= '9') b = b * 10 + (*r++ - '0');
+                    if (a > 0 && b > a + 1) st->gspan = (short)(b - a > 64 ? 64 : b - a);
+                }
+                break;
+            }
+            break;
+        }
         case P_TRANSFORM:
             st->tx_px = st->ty_px = st->tx_pct = st->ty_pct = 0;
             css_translate(v, st, root_px);
@@ -1756,7 +1837,10 @@ static inline void css_apply(const csheet *s, const cdecl *dcl, cstyle *st,
             if (w_starts_fold(v, "collapse")) st->spacing = 0;
             break;
         case P_OVERFLOW:
-            st->clip = (unsigned char)(w_starts_fold(v, "hidden") || w_starts_fold(v, "clip"));
+            /* 1 hides what overflows; 2 would scroll it, which nothing
+               inside a page does here (layout.h wraps a scrolling row). */
+            st->clip = (unsigned char)(w_starts_fold(v, "hidden") || w_starts_fold(v, "clip") ? 1
+                     : w_starts_fold(v, "auto") || w_starts_fold(v, "scroll") ? 2 : 0);
             break;
         case P_CLIP: {
             /* clip: rect(0 0 0 0), rect(1px, 1px, 1px, 1px) and clip-path:

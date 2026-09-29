@@ -7,12 +7,10 @@
  * That is the part of CSS layout that decides whether a page is readable.
  *
  * Around that, the arrangements that turn a page from one column into
- * several: flex rows (which wrap), tables with column widths, floats that
- * lines flow round, inline-blocks placed like words, and absolute and
- * relative positioning -- each the short honest version described where it
- * is done. What is still not here is grid, whose containers are laid out
- * as ordinary blocks, which is the arrangement their markup describes and
- * reads top to bottom in the order it was written.
+ * several: flex rows (which wrap), grids of tracks and named areas, tables
+ * with column widths, floats that lines flow round, inline-blocks placed
+ * like words, and absolute and relative positioning -- each the short
+ * honest version described where it is done, with what it leaves out.
  *
  * The output is a flat display list in document coordinates. Drawing is
  * somebody else's problem and so is scrolling: both are a subtraction.
@@ -205,13 +203,37 @@ static inline int lay_control_kind(const ddoc *d, int el) {
 
 /* The words on a control, which are not what it submits: a button carries a
    label and sends a value, and a password shows none of what it holds. */
+/* An element's words, leaving out any drawing inside it: an icon's <title>
+   ("Chevron Left", "Hamburger") is a name for a screen reader, and written
+   as a button's label it read as the button's words. */
+static inline void lay_words_of(const ddoc *d, int el, char *out, int cap) {
+    int w = 0;
+    for (int i = el; i >= 0 && w < cap - 1; ) {
+        if (d->nodes[i].kind == DN_ELEMENT && d->nodes[i].tag == T_SVG && i != el) {
+            int nx = -1;
+            for (int up = i; up >= 0 && up != el; up = d->nodes[up].parent)
+                if (d->nodes[up].next >= 0) { nx = d->nodes[up].next; break; }
+            i = nx;
+            continue;
+        }
+        if (d->nodes[i].kind == DN_TEXT && d->nodes[i].text >= 0) {
+            const char *s = d->arena + d->nodes[i].text;
+            int any = 0;
+            for (const char *q = s; *q; q++) if (*q > ' ') any = 1;
+            if (any) while (*s && w < cap - 1) out[w++] = *s++;
+        }
+        i = dom_next(d, i, el);
+    }
+    out[w] = 0;
+}
+
 static inline const char *lay_control_label(const ddoc *d, int el, int kind) {
     static char buf[256];
     if (kind == CTL_BUTTON) {
         const char *v = dom_attr(d, el, "value");
         if (v && *v) return v;
         if (d->nodes[el].tag == T_BUTTON) {
-            dom_text_content(d, el, buf, (int)sizeof(buf));
+            lay_words_of(d, el, buf, (int)sizeof(buf));
             if (buf[0]) return buf;
             /* A button that is only an icon has its name in aria-label or
                title, which is what a screen reader says for it; with neither
@@ -1251,7 +1273,8 @@ static inline void lay_inline(lctx *L, int node, const cstyle *parent, int *y) {
             }
             int blockish = st.display == D_BLOCK || st.display == D_FLEX
                         || st.display == D_LIST_ITEM || st.display == D_TABLE
-                        || st.display == D_TABLE_ROW || st.display == D_TABLE_GROUP;
+                        || st.display == D_TABLE_ROW || st.display == D_TABLE_GROUP
+                        || st.display == D_GRID;
             if (n->tag != T_BR && n->tag != T_IMG && lay_control_kind(d, at) == CTL_NONE) {
                 if (st.position == POS_ABSOLUTE || st.position == POS_FIXED) {
                     lay_inline_piece(L, at, &stack[sp], 1, y);
@@ -1501,7 +1524,8 @@ static inline int lay_is_block_node(lctx *L, int n, const cstyle *parent) {
        that knows what a row is. */
     return st.display == D_BLOCK || st.display == D_LIST_ITEM
         || st.display == D_FLEX || st.display == D_TABLE
-        || st.display == D_TABLE_ROW || st.display == D_TABLE_GROUP;
+        || st.display == D_TABLE_ROW || st.display == D_TABLE_GROUP
+        || st.display == D_GRID;
 }
 
 
@@ -1827,7 +1851,10 @@ static void lay_flex(lctx *L, int node, const cstyle *st, int cx, int cw,
             grow[i] = own.grow > 0 ? own.grow : 0;
         }
 
-        if (!st->flex_wrap) {
+        /* A row that would scroll sideways -- a shelf of cards, a strip of
+           albums -- cannot be scrolled inside a page here, and squeezed onto
+           one line its cards were written over each other. It wraps. */
+        if (!st->flex_wrap && st->clip != 2) {
             lay_flex_line(L, st, kid, n, meas, want, low, high, grow, cx, cw, gap, reverse, y);
         } else {
             /* Wrapping: as many as fit on each line, each line a row of its
@@ -2273,6 +2300,333 @@ static int lay_centres_table(const ddoc *d, int table) {
     return a && lay_same_fold(a, "center");
 }
 
+/* --- grid -----------------------------------------------------------------
+ *
+ * Columns from grid-template-columns, and the items poured into them a row
+ * at a time in the order they are written. Grid used to be laid out as a
+ * block, so a page of cards in three columns came out as one card a row.
+ *
+ * The columns understood: pixels and the other lengths, percentages, fr,
+ * auto (taken as 1fr), minmax(a, b) (as b, or its a when b is fr and the
+ * room is short), and repeat(N, ...) including repeat(auto-fill, ...) and
+ * auto-fit, which make as many as fit at their smallest. An item spans more
+ * than one column with grid-column: span N, or 1 / -1 for the whole row.
+ * Rows are as tall as their tallest item, with row gap and column gap the
+ * one gap there is. What is not here: named areas and placement by line
+ * number (items go where the next free place is), rows sized by
+ * grid-template-rows, and dense packing. */
+#define LAY_GRID_COLS 32
+
+enum { GT_PX = 0, GT_PCT, GT_FR };
+
+/* One track, from `p`: its kind and amount, and the smallest it may be
+   (for minmax); where it ended. */
+static const char *lay_grid_track(const char *p, const cstyle *st, int root_px, int cw,
+                                  int *kind, int *v, int *min) {
+    while (*p == ' ' || *p == ',') p++;
+    *min = 0;
+    if (w_starts_fold(p, "minmax(")) {
+        int k2, v2, m2;
+        p = lay_grid_track(p + 7, st, root_px, cw, &k2, &v2, &m2);
+        *min = k2 == GT_PX ? v2 : k2 == GT_PCT ? v2 * cw / 100 : 0;
+        p = lay_grid_track(p, st, root_px, cw, kind, v, &m2);
+        while (*p && *p != ')') p++;
+        if (*p) p++;
+        return p;
+    }
+    if (w_starts_fold(p, "fit-content(")) {
+        p += 12;
+        *kind = GT_FR;
+        *v = 100;
+        while (*p && *p != ')') p++;
+        if (*p) p++;
+        return p;
+    }
+    char tok[32];
+    int n = 0;
+    while (*p && *p != ' ' && *p != ',' && *p != ')' && n < 31) tok[n++] = *p++;
+    tok[n] = 0;
+    int tl = n;
+    if (tl > 2 && w_lower(tok[tl - 2]) == 'f' && w_lower(tok[tl - 1]) == 'r') {
+        clen L = css_len(tok);                      /* 1fr reads as 1 of no unit */
+        *kind = GT_FR;
+        *v = L.v > 0 ? L.v : 100;                   /* hundredths */
+        return p;
+    }
+    if (lay_same_fold(tok, "auto") || lay_same_fold(tok, "min-content")
+        || lay_same_fold(tok, "max-content")) {
+        *kind = GT_FR;
+        *v = 100;
+        return p;
+    }
+    clen L = css_len(tok);
+    if (L.unit == U_PCT) { *kind = GT_PCT; *v = L.v / 100; return p; }
+    *kind = GT_PX;
+    *v = css_px(L, st->font_px, root_px, cw);
+    if (*v < 0) *v = 0;
+    return p;
+}
+
+/* The column widths for a grid `cw` wide; how many there are. */
+static int lay_grid_columns(lctx *L, const cstyle *st, int cw, int gap, int *width) {
+    int kind[LAY_GRID_COLS], val[LAY_GRID_COLS], mins[LAY_GRID_COLS];
+    int n = 0;
+    const char *p = st->grid_cols >= 0 ? L->s->text + st->grid_cols : "";
+    while (*p && n < LAY_GRID_COLS) {
+        while (*p == ' ') p++;
+        if (!*p) break;
+        if (w_starts_fold(p, "repeat(")) {
+            p += 7;
+            while (*p == ' ') p++;
+            int count = 0, fill = 0;
+            if (w_starts_fold(p, "auto-fill") || w_starts_fold(p, "auto-fit")) {
+                fill = 1;
+                while (*p && *p != ',') p++;
+            } else {
+                while (*p >= '0' && *p <= '9') count = count * 10 + (*p++ - '0');
+                while (*p && *p != ',') p++;
+            }
+            if (*p == ',') p++;
+            /* The tracks inside, once. */
+            int rk[8], rv[8], rm[8], rn = 0;
+            while (*p && *p != ')' && rn < 8) {
+                while (*p == ' ') p++;
+                if (*p == ')') break;
+                p = lay_grid_track(p, st, L->root_px, cw, &rk[rn], &rv[rn], &rm[rn]);
+                rn++;
+            }
+            if (*p == ')') p++;
+            if (!rn) continue;
+            if (fill) {
+                /* As many as fit, each at the least it may be. */
+                int one = 0;
+                for (int i = 0; i < rn; i++)
+                    one += rk[i] == GT_PX ? rv[i] : rk[i] == GT_PCT ? rv[i] * cw / 100 : (rm[i] > 0 ? rm[i] : 0);
+                if (one <= 0) one = 1;
+                count = (cw + gap) / (one + gap * rn);
+                if (count < 1) count = 1;
+            }
+            for (int c = 0; c < count && n < LAY_GRID_COLS; c++)
+                for (int i = 0; i < rn && n < LAY_GRID_COLS; i++) {
+                    kind[n] = rk[i]; val[n] = rv[i]; mins[n] = rm[i]; n++;
+                }
+            continue;
+        }
+        const char *was = p;
+        p = lay_grid_track(p, st, L->root_px, cw, &kind[n], &val[n], &mins[n]);
+        n++;
+        if (p == was) p++;
+    }
+    if (n == 0) { width[0] = cw; return 1; }
+
+    int fixed = gap * (n - 1), frs = 0;
+    for (int i = 0; i < n; i++) {
+        if (kind[i] == GT_PX) fixed += val[i];
+        else if (kind[i] == GT_PCT) fixed += val[i] * cw / 100;
+        else frs += val[i];
+    }
+    int room = cw - fixed;
+    if (room < 0) room = 0;
+    for (int i = 0; i < n; i++) {
+        if (kind[i] == GT_PX) width[i] = val[i];
+        else if (kind[i] == GT_PCT) width[i] = val[i] * cw / 100;
+        else {
+            width[i] = frs > 0 ? (int)((long long)room * val[i] / frs) : 0;
+            if (width[i] < mins[i]) width[i] = mins[i];
+        }
+        if (width[i] < 1) width[i] = 1;
+    }
+    return n;
+}
+
+
+/* --- named areas ---------------------------------------------------------
+ *
+ * grid-template-areas draws the page as words, a row of names per string:
+ * "head head" "side main" "foot foot". Each name is the rectangle its cells
+ * make, and an item with that grid-area goes there, whatever order it was
+ * written in. It is how a page's header, sidebar, article and footer are put
+ * in their places, and poured into columns one each instead, an article
+ * found itself in a column the width of a date. Items that name no area
+ * follow on rows of their own, across the whole grid. */
+#define LAY_AREAS 24
+#define LAY_AREA_ROWS 16
+
+typedef struct { char name[24]; int r0, r1, c0, c1; } larea;
+
+/* The areas, from their text; how many there are, and the rows and columns
+   the text has. */
+static int lay_grid_areas(const char *p, larea *a, int *rows, int *cols) {
+    int n = 0, r = 0;
+    *rows = *cols = 0;
+    while (*p && r < LAY_AREA_ROWS) {
+        while (*p && *p != '"' && *p != '\'') p++;
+        if (!*p) break;
+        char q = *p++;
+        int c = 0;
+        while (*p && *p != q) {
+            while (*p == ' ' || *p == '\t') p++;
+            if (!*p || *p == q) break;
+            char name[24];
+            int k = 0;
+            while (*p && *p != q && *p != ' ' && *p != '\t') { if (k < 23) name[k++] = *p; p++; }
+            name[k] = 0;
+            if (c < LAY_GRID_COLS && !(k == 1 && name[0] == '.') && name[0] != '.') {
+                int f = -1;
+                for (int i = 0; i < n; i++) if (w_same(a[i].name, name)) f = i;
+                if (f < 0 && n < LAY_AREAS) {
+                    f = n++;
+                    w_copy(a[f].name, 24, name, 24);
+                    a[f].r0 = a[f].r1 = r;
+                    a[f].c0 = a[f].c1 = c;
+                }
+                if (f >= 0) {
+                    if (r < a[f].r0) a[f].r0 = r;
+                    if (r > a[f].r1) a[f].r1 = r;
+                    if (c < a[f].c0) a[f].c0 = c;
+                    if (c > a[f].c1) a[f].c1 = c;
+                }
+            }
+            c++;
+        }
+        if (*p) p++;
+        if (c > *cols) *cols = c;
+        r++;
+    }
+    *rows = r;
+    return n;
+}
+
+static void lay_grid_named(lctx *L, int node, const cstyle *st, int cx, int cw, int *y) {
+    const ddoc *d = L->d;
+    larea a[LAY_AREAS];
+    int rows, cols;
+    int na = lay_grid_areas(L->s->text + st->grid_areas, a, &rows, &cols);
+    int gap = st->gap > 0 ? st->gap : 0;
+    int width[LAY_GRID_COLS];
+    int n = lay_grid_columns(L, st, cw, gap, width);
+    /* Fewer columns given than the areas draw: the rest share what is left. */
+    if (n < cols) {
+        int used = gap * (cols - 1);
+        for (int c = 0; c < n; c++) used += width[c];
+        if (st->grid_cols < 0) { used = gap * (cols - 1); n = 0; }
+        int each = (cw - used) / (cols - n);
+        for (int c = n; c < cols; c++) width[c] = each > 1 ? each : 1;
+        n = cols;
+    }
+    int colx[LAY_GRID_COLS + 1];
+    colx[0] = cx;
+    for (int c = 0; c < n; c++) colx[c + 1] = colx[c] + width[c] + gap;
+
+    int rowtop[LAY_AREA_ROWS + 1], endbot[LAY_AREA_ROWS];
+    rowtop[0] = *y;
+    for (int r = 0; r < rows; r++) endbot[r] = -1;
+    for (int r = 0; r < rows; r++) {
+        for (int k = d->nodes[node].first; k >= 0; k = d->nodes[k].next) {
+            if (d->nodes[k].kind != DN_ELEMENT) continue;
+            cstyle own;
+            lay_style(L, k, st, &own, cw);
+            if (own.display == D_NONE || own.garea < 0) continue;
+            char name[24];
+            int q = 0;
+            for (const char *t = L->s->text + own.garea; *t && *t != ' ' && *t != '/' && q < 23; t++)
+                name[q++] = *t;
+            name[q] = 0;
+            int f = -1;
+            for (int i = 0; i < na; i++) if (w_same(a[i].name, name)) f = i;
+            if (f < 0 || a[f].r0 != r) continue;
+            /* Laid out on the row it starts on; it holds up the row it ends on. */
+            int c1 = a[f].c1 < n ? a[f].c1 : n - 1;
+            int x = colx[a[f].c0], w = colx[c1 + 1] - gap - x, cy = rowtop[r];
+            L->flex_sized = k;
+            lay_block(L, k, st, x, w, &cy);
+            L->flex_sized = -1;
+            if (cy > endbot[a[f].r1]) endbot[a[f].r1] = cy;
+        }
+        rowtop[r + 1] = endbot[r] > rowtop[r] ? endbot[r] + gap : rowtop[r];
+    }
+    int yy = rowtop[rows];
+    if (yy > *y) yy -= gap;
+
+    /* What names no area, on rows of its own below. */
+    for (int k = d->nodes[node].first; k >= 0; k = d->nodes[k].next) {
+        if (d->nodes[k].kind != DN_ELEMENT) continue;
+        cstyle own;
+        lay_style(L, k, st, &own, cw);
+        if (own.display == D_NONE) continue;
+        int f = -1;
+        if (own.garea >= 0) {
+            char name[24];
+            int q = 0;
+            for (const char *t = L->s->text + own.garea; *t && *t != ' ' && *t != '/' && q < 23; t++)
+                name[q++] = *t;
+            name[q] = 0;
+            for (int i = 0; i < na; i++) if (w_same(a[i].name, name)) f = i;
+        }
+        if (f >= 0) continue;
+        if (yy > *y) yy += gap;
+        lay_block(L, k, st, cx, cw, &yy);
+    }
+    *y = yy;
+}
+
+static void lay_grid(lctx *L, int node, const cstyle *st, int cx, int cw, int *y) {
+    if (st->grid_areas >= 0) { lay_grid_named(L, node, st, cx, cw, y); return; }
+    const ddoc *d = L->d;
+    int gap = st->gap > 0 ? st->gap : 0;
+    int width[LAY_GRID_COLS];
+    int ncols = lay_grid_columns(L, st, cw, gap, width);
+    int colx[LAY_GRID_COLS + 1];
+    colx[0] = cx;
+    for (int c = 0; c < ncols; c++) colx[c + 1] = colx[c] + width[c] + gap;
+
+    struct { int first, end, h; } row[LAY_GRID_COLS];
+    int nrow = 0, col = 0, top = *y, rowh = 0, any = 0;
+    for (int k = d->nodes[node].first; ; k = d->nodes[k].next) {
+        int last = k < 0;
+        int span = 1;
+        cstyle own;
+        if (!last) {
+            if (d->nodes[k].kind != DN_ELEMENT) continue;
+            lay_style(L, k, st, &own, cw);
+            if (own.display == D_NONE) continue;
+            span = own.gspan < 0 ? ncols : own.gspan > 0 ? own.gspan : 1;
+            if (span > ncols) span = ncols;
+        }
+        /* A row is finished by the item that will not fit on it, or by the
+           end: every item on it is then lined up against the tallest. */
+        if (nrow && (last || col + span > ncols)) {
+            for (int i = 0; i < nrow; i++) {
+                int dy = st->align_items == AI_CENTER ? (rowh - row[i].h) / 2
+                       : st->align_items == AI_END ? rowh - row[i].h : 0;
+                if (dy > 0)
+                    for (int j = row[i].first; j < row[i].end; j++) L->out->items[j].y += dy;
+            }
+            top += rowh + gap;
+            rowh = 0;
+            nrow = 0;
+            col = 0;
+        }
+        if (last) break;
+        int x = colx[col];
+        int w = colx[col + span] - gap - x;
+        int first = L->out->nitems, cy = top;
+        L->flex_sized = k;
+        lay_block(L, k, st, x, w, &cy);
+        L->flex_sized = -1;
+        if (nrow < LAY_GRID_COLS) {
+            row[nrow].first = first;
+            row[nrow].end = L->out->nitems;
+            row[nrow].h = cy - top;
+            nrow++;
+        }
+        if (cy - top > rowh) rowh = cy - top;
+        col += span;
+        any = 1;
+    }
+    *y = any ? top - gap : top;
+}
+
 /* The body: a box laid out where it was told, in the flow. */
 static void lay_block_placed(lctx *L, int node, const cstyle *parent, int x,
                              int avail, int *y);
@@ -2568,6 +2922,8 @@ static void lay_block_placed(lctx *L, int node, const cstyle *parent, int x,
        the page, so it does not use the walk below at all. */
     if (st.display == D_FLEX || st.display == D_INLINE_FLEX) {
         lay_flex(L, node, &st, cx, cw, y);
+    } else if (st.display == D_GRID) {
+        lay_grid(L, node, &st, cx, cw, y);
     } else if (is_table) {
         lay_table_rows(L, node, &st, cx, &T, y);
     } else {
@@ -2669,7 +3025,7 @@ static void lay_block_placed(lctx *L, int node, const cstyle *parent, int x,
        whatever came next: a sidebar capped at the window's height put an
        encyclopaedia's contents on top of the article's title. Hidden, the
        box is cut and what was below the cut is not drawn. */
-    if (cap_h >= 0 && cap_h < box_h && st.clip) {
+    if (cap_h >= 0 && cap_h < box_h && st.clip == 1) {
         int cut = box_top + cap_h;
         for (int i = inside_at; i < L->out->nitems; i++)
             if (L->out->items[i].y >= cut) L->out->items[i].kind = 0;

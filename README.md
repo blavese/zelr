@@ -1260,7 +1260,12 @@ width, so a page gets the layout written for its size, and a style sheet for
 print or a dark scheme is not taken for the page's. Selectors can ask about
 attribute values, siblings, `:nth-child`, `:not` and elements the browser has
 no name for, and states nothing is in when a page is drawn, such as `:focus`,
-no longer match everything. Grid is still laid out as blocks.
+no longer match everything. Grids have their columns (lengths, percentages,
+`fr`, `repeat()` with `auto-fill` and `minmax()`) and their named areas, so a
+page's header, sidebar and article go where its `grid-template-areas` draws
+them; placing an item by line number is left to the flow. `@supports` is
+answered as this browser would, so a page's fallback for a browser without
+something is the one it gets. GIF pictures are drawn (the first frame).
 
 **What travels, and how often.** The body is asked for compressed and put
 back together on arrival, using the deflate that was written for PNG with a
