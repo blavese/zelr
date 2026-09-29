@@ -121,6 +121,7 @@ static response_t reply;
 
 static char  title[160];
 static char  status[URL_TEXT + 96];
+static char  address[URL_TEXT];       /* what the bar says; the window's, below */
 static int   scroll;
 static int   over_link = -1;
 static int   hover_node = -1;
@@ -873,6 +874,35 @@ static void script_navigate(const char *url, int replace) {
     want_go = 1;
 }
 
+/* The address the page says it is at now, without loading anything:
+   history.pushState and replaceState, and a move to another place on the
+   same page (jsdom.h, jd_location_go). The bar shows it, the history keeps
+   it, and relative addresses on the page are taken against it, as they are
+   in any browser once a page has moved itself. `push` adds it to the
+   history rather than taking the place of the entry there. */
+static int address_moved;             /* the bar is owed a redraw */
+
+static void push_history(const char *address);
+static void set_address(const char *s);
+
+static void script_address(const char *url, int push) {
+    url_t u;
+    if (!url_parse(url, &u) || !w_same_fold(u.host, here.host) || u.secure != here.secure) return;
+    url_copy(&here, &u);
+    set_address(url);
+    if (push) push_history(url);
+    else if (hist_at >= 0) w_copy(hist[hist_at].text, URL_TEXT, url, URL_TEXT);
+    address_moved = 1;
+}
+
+/* history.back, forward and go: the browser's own buttons, pressed on the
+   next pass (want_hist). */
+static int want_hist;                 /* how far to move, when hist_go is set */
+static int hist_go;
+
+static void script_history_go(int delta) { want_hist = delta; hist_go = 1; }
+static int script_history_length(void) { return hist_n > 0 ? hist_n : 1; }
+
 static int page_unhidden;      /* it was laid out a second time, shown anyway */
 
 static void relayout(int width) {
@@ -1124,8 +1154,16 @@ static void build(const char *html, int len, int width, int want_sheets,
     scripts_changed = 0;
     scripts_outside = 0;
     asks_made = 0;
+    /* The page's address for its scripts, with the fragment the reader asked
+       for, which is never sent and so is not in `here`. */
     char at[URL_TEXT];
     url_text(&here, at, sizeof(at));
+    {
+        int h = 0, n = w_len(at);
+        while (address[h] && address[h] != '#') h++;
+        if (address[h] == '#' && n + w_len(address + h) < (int)sizeof(at))
+            w_copy(at + n, (int)sizeof(at) - n, address + h, (int)sizeof(at) - n);
+    }
     jsdom_at(at);
     jsdom_view(width, css_view_h, 0);
     if (jsdom_open(&doc, &sheet)) {
@@ -1137,6 +1175,8 @@ static void build(const char *html, int len, int width, int want_sheets,
         jsdom_navigate_with(script_navigate);
         jsdom_submit_with(submit_form);
         jsdom_cookies_with(script_cookies, script_set_cookie);
+        jsdom_address_with(script_address);
+        jsdom_history_with(script_history_go, script_history_length);
         scripts_ran = jsdom_scripts(script_err, (int)sizeof(script_err));
         jsdom_loaded();
         scripts_changed = jsdom_changed();
@@ -2035,6 +2075,22 @@ int main(int argc, char **argv) {
 
         /* Where a form asked to go, once the click or the key that sent
            it has been dealt with. */
+        /* The history buttons, pressed by a script. */
+        if (hist_go) {
+            hist_go = 0;
+            int to = hist_at + want_hist;
+            if (want_hist == 0) {
+                want_load = 1;
+            } else if (to >= 0 && to < hist_n) {
+                hist[hist_at].scroll = scroll;
+                hist_at = to;
+                set_address(hist[hist_at].text);
+                want_load = 1;
+            }
+            dirty = 1;
+        }
+        if (address_moved) { address_moved = 0; dirty = 1; }
+
         if (want_go) {
             want_go = 0;
             load_post = go_is_post;

@@ -198,6 +198,274 @@ static void jd_setup_navigator(jctx *J) {
     if (nav) js_declare(J, J->global, js_str(J, "navigator"), js_from_obj(nav));
 }
 
+/* --- location and history ----------------------------------------------------------------
+ *
+ * location is the page's address, read by the URL reader (jsurl.h): its
+ * parts, and setting one of them, or href, or calling assign or replace,
+ * sends the browser there on its next pass (jd_navigate). An address that
+ * differs from the page's only after the # is the same page: the browser's
+ * address changes, the page scrolls to what it names, and hashchange is
+ * sent, but nothing is fetched.
+ *
+ * history.pushState and replaceState change the address the browser shows
+ * and keeps, without loading anything (jd_address_changed), as the standard
+ * has them; an address on another origin is refused. back, forward and go
+ * are the browser's own buttons (jd_history_go), which load the page they
+ * land on: a page that pushed states is loaded again at that address rather
+ * than sent popstate, which is the one way this differs. */
+static void (*jd_address_changed)(const char *url, int push);
+static void (*jd_history_go)(int delta);
+static int  (*jd_history_length)(void);
+static jval jd_state;
+static jobj *jd_location_obj;
+
+void jsdom_address_with(void (*fn)(const char *, int)) { jd_address_changed = fn; }
+void jsdom_history_with(void (*go)(int), int (*length)(void)) {
+    jd_history_go = go;
+    jd_history_length = length;
+}
+
+/* The page's address as a string without its fragment, to tell whether
+   another is the same page. */
+static int jd_same_but_fragment(const jurl *a, const jurl *b) {
+    jtext ta = { 0, 0, 0, 0 }, tb = { 0, 0, 0, 0 };
+    ju_text(a, &ta, 0);
+    ju_text(b, &tb, 0);
+    int same = ta.n == tb.n && (!ta.n || jd_same_n(ta.b, tb.b, (int)ta.n));
+    free(ta.b);
+    free(tb.b);
+    return same;
+}
+
+static void jd_hashchange_due(jval arg) {
+    if (!js_is_obj(arg) || arg.obj->kind != JO_ARRAY || arg.obj->len < 2 || !jd_J.global_obj) return;
+    jobj *ev = jd_new_event(jd_evkind("HashChangeEvent"), "hashchange", 0, 0);
+    if (!ev) return;
+    js_set(&jd_J, ev, "isTrusted", js_bool(1));
+    js_set(&jd_J, ev, "oldURL", arg.obj->items[0]);
+    js_set(&jd_J, ev, "newURL", arg.obj->items[1]);
+    jd_dispatch_to(ev, js_from_obj(jd_J.global_obj), js_from_obj(jd_J.global_obj));
+}
+
+/* The page going somewhere, by a script's hand: to another page, or to
+   another place on this one. */
+static void jd_location_go(jctx *J, const jurl *to, int replace) {
+    jurl *here = (jurl *)malloc(sizeof(jurl));
+    if (!here) return;
+    int have = ju_page(here);
+    jstr *href = ju_href(J, to);
+    if (have && to->has_frag && jd_same_but_fragment(here, to)) {
+        jval old = jd_str(jd_address);
+        w_copy(jd_address, (int)sizeof(jd_address), href->s, (int)sizeof(jd_address));
+        if (jd_address_changed) jd_address_changed(jd_address, !replace);
+        /* What the fragment names, brought into view. */
+        int el = to->frag[0] ? jd_by_id(to->frag) : -1;
+        int bx, by, bw, bh;
+        if (el >= 0 && jd_scroll_to && jd_box(el, &bx, &by, &bw, &bh)) jd_scroll_to(by + jd_scroll_y);
+        if (!here->has_frag || !w_same(here->frag, to->frag)) {
+            jobj *arg = js_array(J);
+            if (arg) {
+                js_arr_push(J, arg, old);
+                js_arr_push(J, arg, js_from_str(href));
+                jd_later_native(jd_hashchange_due, js_from_obj(arg), 1);
+            }
+        }
+    } else if (jd_navigate) {
+        jd_navigate(href->s, replace);
+    }
+    free(here);
+}
+
+static void jd_location_to_text(jctx *J, jstr *s, int replace) {
+    jurl *base = (jurl *)malloc(sizeof(jurl));
+    jurl *to = (jurl *)malloc(sizeof(jurl));
+    if (base && to) {
+        int have = ju_page(base);
+        if (ju_parse(s->s, have ? base : 0, to)) jd_location_go(J, to, replace);
+        else js_throw_dom(J, "SyntaxError", "that is not an address to go to");
+    }
+    free(base);
+    free(to);
+}
+
+static jval nat_loc_get(jctx *J, jval t, jval *a, int n) {
+    (void)t; (void)a; (void)n;
+    int which = J->callee ? J->callee->spare : 0;
+    jurl *u = (jurl *)malloc(sizeof(jurl));
+    if (!u) return js_undef();
+    jval r = ju_page(u) ? jd_url_part(J, u, which) : jd_str(which == JUP_HREF ? jd_address : "");
+    free(u);
+    return r;
+}
+
+static jval nat_loc_set(jctx *J, jval t, jval *a, int n) {
+    (void)t;
+    int which = J->callee ? J->callee->spare : 0;
+    jstr *v = js_to_str(J, js_arg(a, n, 0));
+    if (!v) return js_undef();
+    if (which == JUP_HREF) { jd_location_to_text(J, v, 0); return js_undef(); }
+    jurl *u = (jurl *)malloc(sizeof(jurl));
+    if (!u) return js_undef();
+    if (ju_page(u) && jd_url_set_part(J, u, which, v)) jd_location_go(J, u, 0);
+    free(u);
+    return js_undef();
+}
+
+static jval nat_loc_assign(jctx *J, jval t, jval *a, int n) {
+    (void)t;
+    jstr *v = js_to_str(J, js_arg(a, n, 0));
+    if (v) jd_location_to_text(J, v, 0);
+    return js_undef();
+}
+
+static jval nat_loc_replace(jctx *J, jval t, jval *a, int n) {
+    (void)t;
+    jstr *v = js_to_str(J, js_arg(a, n, 0));
+    if (v) jd_location_to_text(J, v, 1);
+    return js_undef();
+}
+
+static jval nat_loc_reload(jctx *J, jval t, jval *a, int n) {
+    (void)J; (void)t; (void)a; (void)n;
+    if (jd_navigate && jd_address[0]) jd_navigate(jd_address, 1);
+    return js_undef();
+}
+
+static jval nat_loc_tostring(jctx *J, jval t, jval *a, int n) {
+    (void)J; (void)t; (void)a; (void)n;
+    return jd_str(jd_address);
+}
+
+/* window.location and document.location: the one object, and assigning
+   either is going somewhere. */
+static jval nat_location(jctx *J, jval t, jval *a, int n) {
+    (void)J; (void)t; (void)a; (void)n;
+    return jd_location_obj ? js_from_obj(jd_location_obj) : js_null();
+}
+
+static jval nat_set_location(jctx *J, jval t, jval *a, int n) {
+    (void)t;
+    jstr *v = js_to_str(J, js_arg(a, n, 0));
+    if (v) jd_location_to_text(J, v, 0);
+    return js_undef();
+}
+
+static jval jd_history_change(jctx *J, jval *a, int n, int push) {
+    jval url = js_arg(a, n, 2);
+    if (url.t != JS_UNDEF && url.t != JS_NULL) {
+        jstr *s = js_to_str(J, url);
+        if (!s) return js_undef();
+        jurl *base = (jurl *)malloc(sizeof(jurl));
+        jurl *to = (jurl *)malloc(sizeof(jurl));
+        int ok = 0;
+        if (base && to && ju_page(base) && ju_parse(s->s, base, to)) {
+            jstr *o1 = ju_origin(J, base), *o2 = ju_origin(J, to);
+            if (!js_str_eq(o1, o2)) {
+                free(base);
+                free(to);
+                return js_throw_dom(J, "SecurityError", "a page cannot put another site's address in its history");
+            }
+            jstr *href = ju_href(J, to);
+            w_copy(jd_address, (int)sizeof(jd_address), href->s, (int)sizeof(jd_address));
+            ok = 1;
+        }
+        free(base);
+        free(to);
+        if (!ok) return js_throw_dom(J, "SyntaxError", "that is not an address");
+    }
+    jd_state = js_arg(a, n, 0);
+    if (jd_address_changed) jd_address_changed(jd_address, push);
+    return js_undef();
+}
+
+static jval nat_hist_push(jctx *J, jval t, jval *a, int n) { (void)t; return jd_history_change(J, a, n, 1); }
+static jval nat_hist_replace(jctx *J, jval t, jval *a, int n) { (void)t; return jd_history_change(J, a, n, 0); }
+
+static jval nat_hist_state(jctx *J, jval t, jval *a, int n) {
+    (void)J; (void)t; (void)a; (void)n;
+    return jd_state.t == JS_UNDEF ? js_null() : jd_state;
+}
+
+static jval nat_hist_length(jctx *J, jval t, jval *a, int n) {
+    (void)J; (void)t; (void)a; (void)n;
+    return js_num(jd_history_length ? jd_history_length() : 1);
+}
+
+static jval nat_hist_go(jctx *J, jval t, jval *a, int n) {
+    (void)t;
+    int d = n > 0 ? (int)js_to_num(J, a[0]) : 0;
+    if (jd_history_go) jd_history_go(d);
+    return js_undef();
+}
+
+static jval nat_hist_back(jctx *J, jval t, jval *a, int n) {
+    (void)J; (void)t; (void)a; (void)n;
+    if (jd_history_go) jd_history_go(-1);
+    return js_undef();
+}
+
+static jval nat_hist_forward(jctx *J, jval t, jval *a, int n) {
+    (void)J; (void)t; (void)a; (void)n;
+    if (jd_history_go) jd_history_go(1);
+    return js_undef();
+}
+
+static jval jd_scroll_restoration;
+
+static jval nat_hist_restoration(jctx *J, jval t, jval *a, int n) {
+    (void)J; (void)t; (void)a; (void)n;
+    return jd_scroll_restoration.t == JS_STR ? jd_scroll_restoration : jd_str("auto");
+}
+
+static jval nat_hist_set_restoration(jctx *J, jval t, jval *a, int n) {
+    (void)t;
+    jstr *s = jd_arg_str(J, a, n, 0);
+    if (js_str_is(s, "auto") || js_str_is(s, "manual")) jd_scroll_restoration = js_from_str(s);
+    return js_undef();
+}
+
+static void jd_setup_location(jctx *J) {
+    jd_state = js_null();
+    jd_scroll_restoration = js_undef();
+    jobj *lp = jd_interface(J, "Location", 0, 0, 0);
+    static const struct { const char *name; int which, set; } PARTS[] = {
+        { "href", JUP_HREF, 1 }, { "origin", JUP_ORIGIN, 0 }, { "protocol", JUP_PROTOCOL, 1 },
+        { "host", JUP_HOST, 1 }, { "hostname", JUP_HOSTNAME, 1 }, { "port", JUP_PORT, 1 },
+        { "pathname", JUP_PATHNAME, 1 }, { "search", JUP_SEARCH, 1 }, { "hash", JUP_HASH, 1 },
+        { 0, 0, 0 }
+    };
+    for (int i = 0; PARTS[i].name; i++)
+        jd_url_accessor(J, lp, PARTS[i].name, PARTS[i].which, nat_loc_get, PARTS[i].set ? nat_loc_set : 0);
+    jd_method(J, lp, "assign", nat_loc_assign, 1);
+    jd_method(J, lp, "replace", nat_loc_replace, 1);
+    jd_method(J, lp, "reload", nat_loc_reload, 0);
+    jd_method(J, lp, "toString", nat_loc_tostring, 0);
+    jd_location_obj = js_object_with(J, JO_PLAIN, lp);
+
+    /* On the window as an accessor, so `location = '/x'` goes there. */
+    jobj *lg = js_native(J, "location", nat_location);
+    jobj *ls = js_native(J, "location", nat_set_location);
+    if (lg && ls && J->global_obj) {
+        lg->flags |= JOF_NOCTOR;
+        ls->flags |= JOF_NOCTOR;
+        js_define_accessor(J, J->global_obj, js_str(J, "location"), js_from_obj(lg), js_from_obj(ls),
+                           JP_ENUM | JP_CONF);
+    }
+    jd_accessor(J, jd_p[JI_DOCUMENT], "location", nat_location, nat_set_location);
+
+    jobj *hp = jd_interface(J, "History", 0, 0, 0);
+    jd_method(J, hp, "pushState", nat_hist_push, 2);
+    jd_method(J, hp, "replaceState", nat_hist_replace, 2);
+    jd_method(J, hp, "go", nat_hist_go, 0);
+    jd_method(J, hp, "back", nat_hist_back, 0);
+    jd_method(J, hp, "forward", nat_hist_forward, 0);
+    jd_accessor(J, hp, "state", nat_hist_state, 0);
+    jd_accessor(J, hp, "length", nat_hist_length, 0);
+    jd_accessor(J, hp, "scrollRestoration", nat_hist_restoration, nat_hist_set_restoration);
+    jobj *hist = js_object_with(J, JO_PLAIN, hp);
+    if (hist) js_declare(J, J->global, js_str(J, "history"), js_from_obj(hist));
+}
+
 /* --- cookies -----------------------------------------------------------------------------
  *
  * document.cookie is the browser's own jar (fetch.h), not a copy: what a

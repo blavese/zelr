@@ -137,6 +137,24 @@ static int fake_request(const char *method, const char *url, const char *body, c
     return 2;
 }
 
+/* Where the page sent the browser, and what address it said it was at. */
+static char went[512], moved[512];
+static void fake_navigate(const char *url, int replace) {
+    int w = 0;
+    for (const char *p = replace ? "replace " : "go "; *p; p++) went[w++] = *p;
+    for (const char *p = url; *p && w < (int)sizeof(went) - 1; p++) went[w++] = *p;
+    went[w] = 0;
+}
+static void fake_address(const char *url, int push) {
+    int w = 0;
+    for (const char *p = push ? "push " : "replace "; *p; p++) moved[w++] = *p;
+    for (const char *p = url; *p && w < (int)sizeof(moved) - 1; p++) moved[w++] = *p;
+    moved[w] = 0;
+}
+static int history_moved;
+static void fake_history_go(int d) { history_moved = d; }
+static int fake_history_length(void) { return 4; }
+
 /* Where a pretend layout put everything: one box, for every element. */
 static int fake_box(int node, int *x, int *y, int *w, int *h) {
     (void)node;
@@ -1126,6 +1144,68 @@ int main(void) {
                    "document.title = r.join(' ');</script></body>"),
             "https://site.test/p?x=1#h /p ?x=1 #h site.test https://site.test https://site.test/dir/pic.png"
             " https://site.test/p?y=2#h https://site.test/dir/page?here=1");
+        jsdom_at("");
+    }
+
+    /* --- where the page is, and going somewhere ------------------------------------
+     *
+     * location and history: python.org, Stack Overflow, CSS-Tricks and The
+     * Verge stopped on location. */
+    {
+        jsdom_at("https://site.test/dir/page?x=1#top");
+        jsdom_navigate_with(fake_navigate);
+        jsdom_address_with(fake_address);
+        jsdom_history_with(fake_history_go, fake_history_length);
+        oks("location is the page's address in parts, the one object on window and document",
+            titled("<script>var l = location;"
+                   "document.title = [l.href, l.protocol, l.host, l.pathname, l.search, l.hash, l.origin,"
+                   " String(l), document.location === l, window.location === l, l instanceof Location,"
+                   " history.length, history.state].join(' ');</script>"),
+            "https://site.test/dir/page?x=1#top https: site.test /dir/page ?x=1 #top https://site.test"
+            " https://site.test/dir/page?x=1#top true true true 4 ");
+        went[0] = 0;
+        titled("<script>location.href = 'next?y=2';</script>");
+        oks("setting href sends the browser there, made whole", went, "go https://site.test/dir/next?y=2");
+        went[0] = 0;
+        titled("<script>location.replace('/other');</script>");
+        oks("replace sends it there in the page's place", went, "replace https://site.test/other");
+        went[0] = 0;
+        titled("<script>location = '/bare';</script>");
+        oks("and so does assigning location itself", went, "go https://site.test/bare");
+        went[0] = 0;
+        titled("<script>location.search = 'q=zelr';</script>");
+        oks("a part set goes to the address with that part changed", went, "go https://site.test/dir/page?q=zelr#top");
+
+        went[0] = moved[0] = 0;
+        load("<body><p id=out>no</p><script>"
+             "window.addEventListener('hashchange', function(e){"
+             " document.getElementById('out').textContent = e.oldURL.split('#')[1] + '>' + e.newURL.split('#')[1]; });"
+             "location.hash = 'sec'; document.title = location.hash;</script></body>");
+        char err[128];
+        run_scripts(&page, err, (int)sizeof(err), 0);
+        oks("a new fragment is the same page: nothing is fetched", went, "");
+        oks("the address shown is the new one, kept in the history", moved,
+            "push https://site.test/dir/page?x=1#sec");
+        pump_until(1, 2000);
+        oks("and hashchange is sent afterwards", content_of(dom_by_id(&page, "out")), "top>sec");
+
+        moved[0] = went[0] = 0;
+        oks("pushState changes the address and the state without loading anything",
+            titled("<script>history.pushState({ n: 1 }, '', '/pushed?y');"
+                   "var a = location.pathname + location.search + ' ' + history.state.n;"
+                   "history.replaceState({ n: 2 }, '');"
+                   "var e = 'none'; try { history.pushState(null, '', 'https://elsewhere.test/'); }"
+                   " catch (x) { e = x.name; }"
+                   "document.title = a + ' ' + history.state.n + ' ' + e;</script>"),
+            "/pushed?y 1 2 SecurityError");
+        oks("and tells the browser the address to show", moved, "replace https://site.test/pushed?y");
+        oks("with nothing fetched", went, "");
+        history_moved = 0;
+        titled("<script>history.back();</script>");
+        ok("history.back is the browser's back button", history_moved == -1);
+        jsdom_navigate_with(0);
+        jsdom_address_with(0);
+        jsdom_history_with(0, 0);
         jsdom_at("");
     }
 

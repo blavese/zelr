@@ -6089,6 +6089,7 @@ static void jd_setup(jctx *J) {
     jd_setup_window(J);
     jd_setup_url(J);
     jd_setup_navigator(J);
+    jd_setup_location(J);
 }
 
 /* --- opening and closing the world -----------------------------------------------------------
