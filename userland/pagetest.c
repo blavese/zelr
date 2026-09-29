@@ -1071,6 +1071,64 @@ int main(void) {
         ck_forget_all();
     }
 
+    /* --- addresses ----------------------------------------------------------------------
+     *
+     * URL and URLSearchParams as the URL standard reads them: X, python.org
+     * and LinkedIn stopped on URL, Reddit and Ars Technica on
+     * URLSearchParams. */
+    oks("a URL is read into its parts, with the host in lower case and the dots gone",
+        titled("<script>var u = new URL('HTTPS://User:Pw@Example.COM:443/a/./b/../c?x=1#f');"
+               "document.title = [u.href, u.protocol, u.username, u.host, u.port, u.pathname, u.search,"
+               " u.hash, u.origin].join(' ');</script>"),
+        "https://User:Pw@example.com/a/c?x=1#f https: User example.com  /a/c ?x=1 #f https://example.com");
+    oks("and one written against a base keeps as much of the base as it says",
+        titled("<script>var b = 'https://h.test/a/b/c?x#f';"
+               "document.title = [new URL('../d?q', b), new URL('//o.test/x', 'http://h.test/'),"
+               " new URL('?y', b), new URL('#g', b), new URL('/r', b), new URL('e', b),"
+               " new URL('http://h.test:8080/p').host, new URL('mailto:a@b.c').pathname,"
+               " new URL('mailto:a@b.c').origin].join(' ');</script>"),
+        "https://h.test/a/d?q http://o.test/x https://h.test/a/b/c?y https://h.test/a/b/c?x#g"
+        " https://h.test/r https://h.test/a/b/e h.test:8080 a@b.c null");
+    oks("an address that is not one is refused, as the standard refuses it",
+        titled("<script>var r = 'no';"
+               "try { new URL('not an address'); } catch (e) { r = e instanceof TypeError; }"
+               "document.title = r + ' ' + URL.canParse('x') + ' ' + URL.canParse('x', 'https://h/');</script>"),
+        "true false true");
+    oks("a part set writes the whole address, escaped as that part is",
+        titled("<script>var u = new URL('https://h.test/p');"
+               "u.pathname = 'a b'; u.search = 'q=1 2'; u.hash = 'top'; u.port = '8080';"
+               "var one = u.href; u.port = '443'; u.protocol = 'http';"
+               "document.title = one + ' ' + u.href;</script>"),
+        "https://h.test:8080/a%20b?q=1%202#top http://h.test/a%20b?q=1%202#top");
+    oks("searchParams is the URL's query, and writing one writes the other",
+        titled("<script>var u = new URL('https://h/?a=1&b=2&a=3');"
+               "var p = u.searchParams, all = p.getAll('a').join(',');"
+               "p.append('c', 'x y'); var s1 = u.search; p.delete('a');"
+               "u.search = '?z=9'; document.title = [all, s1, p.get('z'), p.has('b'), u.searchParams === p].join(' ');"
+               "</script>"),
+        "1,3 ?a=1&b=2&a=3&c=x+y 9 false true");
+    oks("URLSearchParams from a record, pairs and text, sorted and walked",
+        titled("<script>var r = [];"
+               "r.push(new URLSearchParams({ x: '1', y: 'two words' }).toString());"
+               "r.push(new URLSearchParams([['a', 'b']]).get('a'));"
+               "var q = new URLSearchParams('?q=%20a+b&k=&z=1&b=2'); r.push('[' + q.get('q') + ']' + q.get('k') + q.size);"
+               "q.sort(); r.push([...q.keys()].join(''));"
+               "var seen = ''; q.forEach(function(v, k){ seen += k + v; }); r.push(seen);"
+               "document.title = r.join(' | ');</script>"),
+        "x=1&y=two+words | b | [ a b]4 | bkqz | b2kq a bz1");
+    {
+        jsdom_at("https://site.test/dir/page?here=1");
+        oks("a link's parts are its address made whole against the page's, and setting one writes href",
+            titled("<body><a id=a href='/p?x=1#h'>a</a><img id=i src='pic.png'><script>"
+                   "var a = document.getElementById('a');"
+                   "var r = [a.href, a.pathname, a.search, a.hash, a.host, a.origin, document.getElementById('i').src];"
+                   "a.search = '?y=2'; r.push(a.getAttribute('href')); r.push(document.URL);"
+                   "document.title = r.join(' ');</script></body>"),
+            "https://site.test/p?x=1#h /p ?x=1 #h site.test https://site.test https://site.test/dir/pic.png"
+            " https://site.test/p?y=2#h https://site.test/dir/page?here=1");
+        jsdom_at("");
+    }
+
     /* --- a page that uses up its memory ---------------------------------------
      *
      * At the cap a string or a property came back as nothing, and places that

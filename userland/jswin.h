@@ -11,9 +11,6 @@
  * browser sends it down that browser's path.
  */
 
-/* Whether a value is a URLSearchParams, whose text is a form's. */
-static int jd_is_search_params(jval v) { (void)v; return 0; }
-
 static jval nat_list_values_empty(jctx *J, jval t, jval *a, int n) {
     (void)t; (void)a; (void)n;
     return jd_array_iter(J, js_array(J), "values");
@@ -159,7 +156,7 @@ static jval nat_nav_beacon(jctx *J, jval t, jval *a, int n) {
             jstr *s = js_to_str(J, data);
             if (!s) return js_undef();
             body = js_from_str(s);
-            type = jd_str(jd_is_search_params(data) ? "application/x-www-form-urlencoded;charset=UTF-8"
+            type = jd_str(jd_is_search_params_obj(data) ?"application/x-www-form-urlencoded;charset=UTF-8"
                                                     : "text/plain;charset=UTF-8");
         }
     }

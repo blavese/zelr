@@ -5320,16 +5320,10 @@ __attribute__((unused)) static void jsdom_at(const char *address) {
     w_copy(jd_address, (int)sizeof(jd_address), address ? address : "", (int)sizeof(jd_address));
 }
 
-static int jd_resolve(const char *href, char *out, int cap) {
-    url_t base, u;
-    if (!url_parse(jd_address, &base)) return 0;
-    if (!url_join(&base, href, &u)) return 0;
-    url_text(&u, out, cap);
-    return 1;
-}
-
 static jobj *jd_interface(jctx *J, const char *name, jobj *parent_proto, jnative ctor, int arity);
+static jobj *jd_ctor_of(jobj *proto);
 
+#include "jsurl.h"
 #include "jswin.h"
 
 /* --- the hooks -----------------------------------------------------------------------------------
@@ -6093,6 +6087,7 @@ static void jd_setup(jctx *J) {
     }
 
     jd_setup_window(J);
+    jd_setup_url(J);
     jd_setup_navigator(J);
 }
 
