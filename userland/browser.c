@@ -56,9 +56,9 @@
  * because the page arrives compressed and a decompression that runs out of
  * room fails whole. So: a megabyte, and a decompression that runs out of
  * room now keeps what it has. */
-#define SRC_MAX    (1024 * 1024)
-#define CSS_MAX    (512 * 1024)
-#define SHEETS_MAX 6
+#define SRC_MAX    (3 * 1024 * 1024)
+#define CSS_MAX    (1024 * 1024)
+#define SHEETS_MAX 12
 
 /* A script the page did not bring with it. One buffer, reused: each is run
    the moment it arrives, so there is never more than one in hand. The limit
@@ -553,16 +553,29 @@ static void gather_inline_styles(void) {
     }
 }
 
+/* What a link or style element's media attribute allows: 0 when the sheet
+   is not for this screen at all (print, a dark scheme), else the window
+   widths it is for. A sheet for dark mode was read as though it were the
+   page's, and a documentation site came out white on black. */
+static int sheet_media(int el, int *lo, int *hi) {
+    *lo = *hi = -1;
+    const char *m = dom_attr(&doc, el, "media");
+    if (!m || !*m) return 1;
+    return css_mq(m, w_len(m), lo, hi);
+}
+
 /* The sheets the page carries itself: every style element, in order. */
 static void gather_inline_sheets(void) {
     for (int i = 0; i < doc.count; i++) {
         if (doc.nodes[i].kind != DN_ELEMENT || doc.nodes[i].tag != T_STYLE)
             continue;
+        int lo, hi;
+        if (!sheet_media(i, &lo, &hi)) continue;
         int t = doc.nodes[i].first;
         while (t >= 0) {
             if (doc.nodes[t].kind == DN_TEXT && doc.nodes[t].text >= 0) {
                 const char *s = doc.arena + doc.nodes[t].text;
-                css_parse(&sheet, s, w_len(s));
+                css_parse_in(&sheet, s, w_len(s), lo, hi);
             }
             t = doc.nodes[t].next;
         }
@@ -588,6 +601,8 @@ static int gather_linked_sheets(int *fetched, int *skipped) {
         /* rel can be a list, and "stylesheet alternate" is one this should
            not take: an alternate sheet is one the reader has not chosen. */
         if (!w_same_fold(rel, "stylesheet")) continue;
+        int lo, hi;
+        if (!sheet_media(i, &lo, &hi)) continue;
 
         if (*fetched >= SHEETS_MAX) { (*skipped)++; continue; }
 
@@ -597,7 +612,7 @@ static int gather_linked_sheets(int *fetched, int *skipped) {
         response_t r;
         int rc = web_get(&u, cssbuf, CSS_MAX, &r);
         if (rc < 200 || rc >= 300 || r.len <= 0) { (*skipped)++; continue; }
-        css_parse(&sheet, r.body, r.len);
+        css_parse_in(&sheet, r.body, r.len, lo, hi);
         (*fetched)++;
     }
     return *fetched;
@@ -708,20 +723,122 @@ static void accent_sheet(void) {
  * been parsed into the cascade and what is in it is no longer needed, and a
  * second buffer of this size is a megabyte that is idle on every page
  * without a picture on it. */
+/* Which address a picture is really at.
+ *
+ * A page that loads its pictures as they scroll into view puts a
+ * placeholder in src -- nothing, or a one-pixel image written into the
+ * address itself -- and the real one in data-src or one of its spellings,
+ * for its script to swap in. A responsive one may have only a srcset. And a
+ * picture server that names its files photo.jpg.webp hands out the JPEG at
+ * photo.jpg, which is the one of the two this can decode. */
+static const char *pic_source(int el) {
+    static char pick[URL_TEXT];
+    const char *src = dom_attr(&doc, el, "src");
+    int placeholder = !src || !*src || w_starts_fold(src, "data:");
+    static const char *const LAZY[] = { "data-src", "data-lazy-src", "data-original",
+                                        "data-url", "data-hi-res-src", 0 };
+    if (placeholder) {
+        for (int k = 0; LAZY[k]; k++) {
+            const char *v = dom_attr(&doc, el, LAZY[k]);
+            if (v && *v && !w_starts_fold(v, "data:")) { src = v; placeholder = 0; break; }
+        }
+    }
+    if (placeholder) {
+        /* The first candidate of a srcset: up to its first space or comma. */
+        const char *ss = dom_attr(&doc, el, "srcset");
+        if (!ss) ss = dom_attr(&doc, el, "data-srcset");
+        if (ss) {
+            while (*ss == ' ') ss++;
+            int k = 0;
+            while (ss[k] && ss[k] != ' ' && ss[k] != ',' && k < URL_TEXT - 1) { pick[k] = ss[k]; k++; }
+            pick[k] = 0;
+            if (k) { src = pick; placeholder = 0; }
+        }
+    }
+    if (placeholder && (!src || !*src)) return 0;
+    if (w_starts_fold(src, "data:")) return src;       /* decoded where it is */
+    int n = w_len(src);
+    if (src != pick) {
+        if (n >= URL_TEXT) return 0;
+        w_copy(pick, sizeof(pick), src, sizeof(pick));
+    }
+    if (n > 9 && w_same_fold(pick + n - 5, ".webp")
+        && (w_starts_fold(pick + n - 9, ".jpg") || w_starts_fold(pick + n - 9, ".png")))
+        pick[n - 5] = 0;
+    else if (n > 10 && w_same_fold(pick + n - 5, ".webp") && w_starts_fold(pick + n - 10, ".jpeg"))
+        pick[n - 5] = 0;
+    return pick;
+}
+
+/* A picture written into its own address: data:image/png;base64,... or an
+   SVG with its markup escaped. Decoded into `out`; its length, or 0. */
+static int pic_data_uri(const char *src, char *out, int cap) {
+    const char *comma = src;
+    while (*comma && *comma != ',') comma++;
+    if (!*comma) return 0;
+    int b64 = 0;
+    for (const char *q = src; q < comma; q++)
+        if (w_starts_fold(q, ";base64")) b64 = 1;
+    const char *p = comma + 1;
+    int n = 0;
+    if (!b64) {
+        while (*p && n < cap - 1) {
+            if (p[0] == '%' && p[1] && p[2]) {
+                int hi = p[1] <= '9' ? p[1] - '0' : (w_lower(p[1]) - 'a' + 10);
+                int lo = p[2] <= '9' ? p[2] - '0' : (w_lower(p[2]) - 'a' + 10);
+                out[n++] = (char)(hi * 16 + lo);
+                p += 3;
+            } else {
+                out[n++] = *p++;
+            }
+        }
+        out[n] = 0;
+        return n;
+    }
+    unsigned acc = 0;
+    int bits = 0;
+    for (; *p && n < cap - 1; p++) {
+        char c = *p;
+        int v;
+        if (c >= 'A' && c <= 'Z') v = c - 'A';
+        else if (c >= 'a' && c <= 'z') v = c - 'a' + 26;
+        else if (c >= '0' && c <= '9') v = c - '0' + 52;
+        else if (c == '+' || c == '-') v = 62;
+        else if (c == '/' || c == '_') v = 63;
+        else if (c == '=') break;
+        else continue;
+        acc = (acc << 6) | (unsigned)v;
+        bits += 6;
+        if (bits >= 8) { bits -= 8; out[n++] = (char)((acc >> bits) & 0xFF); }
+    }
+    out[n] = 0;
+    return n;
+}
+
 static void gather_pictures(void) {
     for (int i = 0; i < doc.count && npics < PICS_MAX; i++) {
         if (doc.nodes[i].kind != DN_ELEMENT || doc.nodes[i].tag != T_IMG)
             continue;
 
-        const char *src = dom_attr(&doc, i, "src");
-        if (!src || !*src) continue;
-
-        url_t u;
-        if (!url_join(&here, src, &u)) { pics_skipped++; continue; }
+        const char *src = pic_source(i);
+        if (!src) continue;
 
         response_t r;
-        int rc = web_get(&u, cssbuf, CSS_MAX, &r);
-        if (rc < 0 || rc >= 400 || r.len <= 0) { pics_skipped++; continue; }
+        if (w_starts_fold(src, "data:")) {
+            /* A one-pixel placeholder is not worth a slot; anything else is
+               decoded where it lies, with no fetch at all. */
+            int dn = pic_data_uri(src, cssbuf, CSS_MAX);
+            if (dn < 100) continue;
+            r.body = cssbuf;
+            r.len = dn;
+        } else {
+            url_t u;
+            if (!url_join(&here, src, &u)) { pics_skipped++; continue; }
+            web_accept = "image/png,image/jpeg,image/gif,image/svg+xml;q=0.9,*/*;q=0.1";
+            int rc = web_get(&u, cssbuf, CSS_MAX, &r);
+            web_accept = 0;
+            if (rc < 0 || rc >= 400 || r.len <= 0) { pics_skipped++; continue; }
+        }
 
         shown *s = &pics[npics];
         s->node = i;
@@ -776,6 +893,7 @@ static void build(const char *html, int len, int width, int want_sheets,
     css_init(&sheet);
     css_parse(&sheet, CSS_UA, (int)sizeof(CSS_UA) - 1);
     accent_sheet();
+    sheet.ua_rules = sheet.nrules;        /* the page's own count for more */
     gather_inline_sheets();
     if (want_sheets) gather_linked_sheets(fetched, skipped);
     else { *fetched = 0; *skipped = 0; }

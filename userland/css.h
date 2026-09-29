@@ -28,11 +28,12 @@
    counts had room for that and the text did not, and a sheet whose text
    ran out halfway is a page styled by the first half of its stylesheet --
    which looks like a layout bug and is not one. */
-#define CSS_RULES   4000
-#define CSS_SELS    9000
-#define CSS_DECLS   16000
-#define CSS_TEXT    (512 * 1024)
+#define CSS_RULES   16000
+#define CSS_SELS    40000
+#define CSS_DECLS   64000
+#define CSS_TEXT    (2048 * 1024)
 #define CSS_MAXCLS  4
+#define CSS_NEGS    2048
 
 /* --- what can be said about a box ---------------------------------------- */
 
@@ -48,6 +49,7 @@ enum {
     P_FLEX_DIR, P_JUSTIFY, P_ALIGN_ITEMS, P_FLEX_WRAP, P_GAP, P_FLEX_GROW,
     P_MIN_WIDTH, P_MIN_HEIGHT, P_MAX_HEIGHT, P_BOX_SIZING,
     P_POSITION, P_TOP, P_RIGHT, P_BOTTOM, P_LEFT,
+    P_VALIGN, P_SPACING, P_COLLAPSE, P_OVERFLOW, P_CLIP, P_FLOAT, P_CLEAR, P_TRANSFORM,
     P_COUNT
 };
 
@@ -64,7 +66,13 @@ enum { POS_STATIC = 0, POS_RELATIVE, POS_ABSOLUTE, POS_FIXED };
 #define CSS_AUTO_OFF ((short)-32768)
 
 enum { D_INLINE = 0, D_BLOCK, D_INLINE_BLOCK, D_LIST_ITEM, D_NONE,
-       D_TABLE_CELL, D_FLEX };
+       D_TABLE_CELL, D_FLEX, D_TABLE, D_TABLE_ROW, D_TABLE_GROUP,
+       D_INLINE_FLEX };
+
+/* Where a table cell's contents sit when the row is taller than they are.
+   Baseline is what nothing asked for, and a cell treats it as the middle,
+   which is what a row does for its cells unless told otherwise. */
+enum { VA_BASELINE = 0, VA_TOP, VA_MIDDLE, VA_BOTTOM };
 
 /* A flex container's own settings, and a flex item's one of them.
  *
@@ -141,6 +149,27 @@ typedef struct {
     unsigned char flex_dir, justify, align_items, flex_wrap;
     short gap;
     short grow;                          /* this element's own flex-grow */
+
+    /* A table's: the room between its cells (-1 when nothing said, which is
+       two pixels, or cellspacing), inherited the way border-spacing is; and
+       a cell's own vertical-align. */
+    short spacing;
+    unsigned char valign;
+
+    /* Something written to be read aloud and not seen: clipped to nothing,
+       or a box a pixel across with its overflow hidden. Screen readers get
+       "skip to content" and the rest of a page's labels from these, and
+       drawn they are words scattered over the top of every page. */
+    unsigned char clip, gone;
+
+    /* Floated to one side (1 left, 2 right) and cleared past floats (1 left,
+       2 right, 3 both). See layout.h, lay_float. */
+    unsigned char floated, clear;
+
+    /* A transform's translation: pixels, plus a percentage of the box's own
+       width or height (layout.h, lay_translate). Nothing else a transform
+       does is drawn. */
+    short tx_px, ty_px, tx_pct, ty_pct;
 } cstyle;
 
 /* --- the text of a sheet -------------------------------------------------
@@ -150,15 +179,22 @@ typedef struct {
 
 typedef struct {
     short tag;                /* a T_* tag, or -1 for any */
+    int   tname;              /* an element this has no T_ for, by name
+                                 (lower case, into the text), or -1 */
     int   id;                 /* into the text, or -1 */
     int   cls[CSS_MAXCLS];
     short ncls;
     short combinator;         /* how it joins the part to its left */
     short pseudo;
+    short nth_a, nth_b;       /* :nth-child(An+B) and its kin */
+    int   neg;                /* a compound it must not match (:not), or -1 */
 } csel;
 
-enum { CB_FIRST = 0, CB_DESC, CB_CHILD };
-enum { PS_NONE = 0, PS_HOVER, PS_LINK, PS_VISITED, PS_FIRST_CHILD, PS_ROOT };
+enum { CB_FIRST = 0, CB_DESC, CB_CHILD, CB_NEXT, CB_LATER };
+enum { PS_NONE = 0, PS_HOVER, PS_LINK, PS_VISITED, PS_FIRST_CHILD, PS_ROOT,
+       PS_LAST_CHILD, PS_ONLY_CHILD, PS_FIRST_OF_TYPE, PS_LAST_OF_TYPE, PS_ONLY_OF_TYPE,
+       PS_EMPTY, PS_CHECKED, PS_DISABLED, PS_ENABLED, PS_NEVER,
+       PS_NTH_CHILD, PS_NTH_OF_TYPE, PS_NTH_LAST_CHILD };
 
 typedef struct {
     short prop;
@@ -170,15 +206,21 @@ typedef struct {
     int decl_at, decl_n;
     int spec;                 /* ids, then classes, then element names */
     int order;
+    /* The window widths the rule is for, from the media queries round it:
+       at least mq_lo and at most mq_hi pixels, -1 for no bound. */
+    short mq_lo, mq_hi;
 } crule;
 
 typedef struct {
     crule rules[CSS_RULES];
     int   nrules;
+    int   ua_rules;           /* how many of them are the browser's own */
     csel  sels[CSS_SELS];
     int   nsels;
     cdecl decls[CSS_DECLS];
     int   ndecls;
+    csel  negs[CSS_NEGS];     /* the insides of :not(...) */
+    int   nnegs;
     char  text[CSS_TEXT];
     int   used;
     int   overflowed;
@@ -408,6 +450,9 @@ static const cprop CSS_PROPS[] = {
     { "max-height", P_MAX_HEIGHT },
     { "box-sizing", P_BOX_SIZING },
     { "position", P_POSITION },
+    { "float", P_FLOAT },
+    { "clear", P_CLEAR },
+    { "transform", P_TRANSFORM },
     { "top", P_TOP },
     { "right", P_RIGHT },
     { "bottom", P_BOTTOM },
@@ -421,6 +466,13 @@ static const cprop CSS_PROPS[] = {
     { "text-indent", P_TEXT_INDENT },
     { "visibility", P_VISIBILITY },
     { "opacity", P_OPACITY },
+    { "vertical-align", P_VALIGN },
+    { "border-spacing", P_SPACING },
+    { "border-collapse", P_COLLAPSE },
+    { "overflow", P_OVERFLOW },
+    { "overflow-x", P_OVERFLOW },
+    { "clip", P_CLIP },
+    { "clip-path", P_CLIP },
     { 0, 0 }
 };
 
@@ -443,6 +495,8 @@ static inline int css_ident(char c) {
 
 static inline void css_init(csheet *s) {
     s->nrules = s->nsels = s->ndecls = s->used = 0;
+    s->nnegs = 0;
+    s->ua_rules = 0;
     s->overflowed = 0;
 }
 
@@ -476,154 +530,289 @@ static inline int css_named(const char *p, int n, const char *name) {
     return name[i] == 0;
 }
 
+/* An attribute selector's test, written after its name in the text as one
+   character and the value: '?' is only that the attribute is there. */
+static inline int css_attr_op(const char *p, int len, int i, char *op) {
+    *op = '?';
+    if (i < len && p[i] == '=') { *op = '='; return i + 1; }
+    if (i + 1 < len && p[i + 1] == '=' && (p[i] == '~' || p[i] == '|' || p[i] == '^'
+                                           || p[i] == '$' || p[i] == '*')) {
+        *op = p[i];
+        return i + 2;
+    }
+    return i;
+}
+
+/* An+B from the inside of :nth-child(...): odd, even, 3, 2n+1, -n+3, n. */
+static inline int css_nth(const char *p, int len, int i, short *a, short *b) {
+    while (i < len && css_space(p[i])) i++;
+    if (css_named(p + i, (i + 3 <= len ? 3 : len - i), "odd")) { *a = 2; *b = 1; return 1; }
+    if (css_named(p + i, (i + 4 <= len ? 4 : len - i), "even")) { *a = 2; *b = 0; return 1; }
+    int sign = 1, num = 0, have = 0;
+    if (i < len && (p[i] == '-' || p[i] == '+')) { if (p[i] == '-') sign = -1; i++; }
+    while (i < len && p[i] >= '0' && p[i] <= '9') { num = num * 10 + (p[i++] - '0'); have = 1; }
+    if (i < len && (p[i] == 'n' || p[i] == 'N')) {
+        *a = (short)(sign * (have ? num : 1));
+        i++;
+        while (i < len && css_space(p[i])) i++;
+        int bs = 1, bn = 0;
+        if (i < len && (p[i] == '+' || p[i] == '-')) {
+            if (p[i] == '-') bs = -1;
+            i++;
+            while (i < len && css_space(p[i])) i++;
+            while (i < len && p[i] >= '0' && p[i] <= '9') bn = bn * 10 + (p[i++] - '0');
+        }
+        *b = (short)(bs * bn);
+    } else {
+        if (!have) return 0;
+        *a = 0;
+        *b = (short)(sign * num);
+    }
+    while (i < len && css_space(p[i])) i++;
+    return i < len && p[i] == ')';
+}
+
+/* One compound -- a tag, classes, an id, attributes and pseudo-classes run
+   together -- into `c`. Returns whether it had anything in it, or -1 when it
+   uses something that cannot be matched here and the selector must go. */
+static inline int css_parse_compound(csheet *s, const char *p, int len, int *at,
+                                     csel *c, int *spec, int inner) {
+    int i = *at, any = 0;
+    c->tag = -1; c->tname = -1; c->id = -1; c->ncls = 0; c->pseudo = PS_NONE;
+    c->neg = -1; c->nth_a = c->nth_b = 0;
+    for (;;) {
+        if (i >= len) break;
+        char ch = p[i];
+        if (ch == '*') { i++; any = 1; continue; }
+        if (ch == '#' || ch == '.') {
+            i++;
+            int st = i;
+            while (i < len && css_ident(p[i])) i++;
+            if (i == st) break;
+            int t = css_put(s, p + st, i - st);
+            if (ch == '#') { c->id = t; *spec += 1 << 20; }
+            else if (c->ncls < CSS_MAXCLS) {
+                c->cls[c->ncls++] = t;
+                *spec += 1 << 10;
+            }
+            any = 1;
+            continue;
+        }
+        if (ch == ':') {
+            i++;
+            int elem = 0;
+            if (i < len && p[i] == ':') { i++; elem = 1; }
+            int st = i;
+            while (i < len && css_ident(p[i])) i++;
+            int l = i - st;
+            const char *nm = p + st;
+
+            /* The four that are written with one colon as often as two. */
+            if (!elem && (css_named(nm, l, "before") || css_named(nm, l, "after")
+                          || css_named(nm, l, "first-line") || css_named(nm, l, "first-letter")))
+                elem = 1;
+
+            /* A pseudo-element is not an element in the tree. Nothing here
+               draws a scrollbar or a ::before box, and a selector that names
+               one must not quietly become a selector for the element it
+               hangs off -- still less for everything.
+
+               `::-webkit-scrollbar{width:6px}` was exactly that: after the
+               two colons there is no tag, no class and no id left, which is
+               the shape of `*`. Every box on the page came out six pixels
+               wide, and a whole site's article was a column of one word per
+               line. */
+            if (elem) return -1;
+
+            if (i < len && p[i] == '(') {
+                int open = i + 1, d = 0;
+                while (i < len) {
+                    if (p[i] == '(') d++;
+                    else if (p[i] == ')') { d--; i++; if (!d) break; continue; }
+                    i++;
+                }
+                int close = i - 1;                    /* at the ')' */
+                if (css_named(nm, l, "nth-child") || css_named(nm, l, "nth-of-type")
+                    || css_named(nm, l, "nth-last-child")) {
+                    if (c->pseudo != PS_NONE) return -1;
+                    if (!css_nth(p, close + 1, open, &c->nth_a, &c->nth_b)) return -1;
+                    c->pseudo = css_named(nm, l, "nth-child") ? PS_NTH_CHILD
+                              : css_named(nm, l, "nth-of-type") ? PS_NTH_OF_TYPE : PS_NTH_LAST_CHILD;
+                } else if (css_named(nm, l, "not") && !inner && c->neg < 0) {
+                    /* One simple compound inside: :not(.open), :not(:last-child),
+                       :not([hidden]). A list or anything more is not guessed at. */
+                    if (s->nnegs >= CSS_NEGS) return -1;
+                    csel *ng = &s->negs[s->nnegs];
+                    int q = open, sp2 = 0;
+                    while (q < close && css_space(p[q])) q++;
+                    int got = css_parse_compound(s, p, close, &q, ng, &sp2, 1);
+                    while (q < close && css_space(p[q])) q++;
+                    if (got <= 0 || q != close) return -1;
+                    c->neg = s->nnegs++;
+                    *spec += sp2;
+                } else if ((css_named(nm, l, "is") || css_named(nm, l, "where")) && !inner) {
+                    /* :is(X) and :where(X) with one compound are that compound. */
+                    int q = open, sp2 = 0;
+                    csel tmp;
+                    while (q < close && css_space(p[q])) q++;
+                    int got = css_parse_compound(s, p, close, &q, &tmp, &sp2, 1);
+                    while (q < close && css_space(p[q])) q++;
+                    if (got <= 0 || q != close) return -1;
+                    if (tmp.tag >= 0) { if (c->tag >= 0 && c->tag != tmp.tag) return -1; c->tag = tmp.tag; }
+                    if (tmp.tname >= 0) c->tname = tmp.tname;
+                    if (tmp.id >= 0) c->id = tmp.id;
+                    for (int k = 0; k < tmp.ncls && c->ncls < CSS_MAXCLS; k++) c->cls[c->ncls++] = tmp.cls[k];
+                    if (tmp.pseudo != PS_NONE) {
+                        if (c->pseudo != PS_NONE) return -1;
+                        c->pseudo = tmp.pseudo; c->nth_a = tmp.nth_a; c->nth_b = tmp.nth_b;
+                    }
+                    if (css_named(nm, l, "is")) *spec += sp2;
+                } else {
+                    return -1;
+                }
+                any = 1;
+                continue;
+            }
+
+            int ps = -1;
+            if (css_named(nm, l, "hover")) ps = PS_HOVER;
+            else if (css_named(nm, l, "link") || css_named(nm, l, "any-link")) ps = PS_LINK;
+            else if (css_named(nm, l, "visited")) ps = PS_VISITED;
+            else if (css_named(nm, l, "root")) ps = PS_ROOT;
+            else if (css_named(nm, l, "first-child")) ps = PS_FIRST_CHILD;
+            else if (css_named(nm, l, "last-child")) ps = PS_LAST_CHILD;
+            else if (css_named(nm, l, "only-child")) ps = PS_ONLY_CHILD;
+            else if (css_named(nm, l, "first-of-type")) ps = PS_FIRST_OF_TYPE;
+            else if (css_named(nm, l, "last-of-type")) ps = PS_LAST_OF_TYPE;
+            else if (css_named(nm, l, "only-of-type")) ps = PS_ONLY_OF_TYPE;
+            else if (css_named(nm, l, "empty")) ps = PS_EMPTY;
+            else if (css_named(nm, l, "checked")) ps = PS_CHECKED;
+            else if (css_named(nm, l, "disabled")) ps = PS_DISABLED;
+            else if (css_named(nm, l, "enabled")) ps = PS_ENABLED;
+            else if (css_named(nm, l, "defined") || css_named(nm, l, "scope")) ps = PS_NONE;
+            /* Everything else is a state nothing is in when a page is first
+               drawn -- focused, pressed, the target of the address, invalid,
+               open, full screen -- or one this cannot know. They were read
+               past as if they were not there, so `:focus` outlines and
+               `:checked ~ .menu {display:block}` applied all the time. */
+            else ps = PS_NEVER;
+            if (ps != PS_NONE) {
+                if (c->pseudo != PS_NONE && c->pseudo != ps) {
+                    /* Two states on one compound: the second is only kept
+                       when it can never be true, which decides the matter. */
+                    if (ps == PS_NEVER) c->pseudo = PS_NEVER;
+                    else if (c->pseudo != PS_NEVER) return -1;
+                } else {
+                    c->pseudo = (short)ps;
+                }
+            }
+            *spec += 1 << 10;
+            any = 1;
+            continue;
+        }
+        if (ch == '[') {
+            /* [name], [name=value], [name~=value] and the rest, with the value
+               quoted or not and an i after it for case not mattering. The
+               name and the test go into the text one after the other. */
+            i++;
+            while (i < len && css_space(p[i])) i++;
+            int st = i;
+            while (i < len && (css_ident(p[i]) || p[i] == ':')) i++;
+            int nl = i - st;
+            while (i < len && css_space(p[i])) i++;
+            char op;
+            i = css_attr_op(p, len, i, &op);
+            char val[256];
+            int vl = 0, fold = 0;
+            if (op != '?') {
+                while (i < len && css_space(p[i])) i++;
+                if (i < len && (p[i] == '"' || p[i] == '\'')) {
+                    char q = p[i++];
+                    while (i < len && p[i] != q) {
+                        if (p[i] == '\\' && i + 1 < len) i++;
+                        if (vl < 255) val[vl++] = p[i];
+                        i++;
+                    }
+                    if (i < len) i++;
+                } else {
+                    while (i < len && p[i] != ']' && !css_space(p[i])) {
+                        if (vl < 255) val[vl++] = p[i];
+                        i++;
+                    }
+                }
+                while (i < len && css_space(p[i])) i++;
+                if (i < len && (p[i] == 'i' || p[i] == 'I')) { fold = 1; i++; }
+                else if (i < len && (p[i] == 's' || p[i] == 'S')) i++;
+                while (i < len && css_space(p[i])) i++;
+            }
+            if (i >= len || p[i] != ']' || nl == 0) return -1;
+            i++;
+            int t = css_put_lower(s, p + st, nl);
+            char tv[258];
+            tv[0] = op;
+            tv[1] = fold ? 'i' : 's';
+            for (int k = 0; k < vl; k++) tv[2 + k] = val[k];
+            if (t < 0 || css_put(s, tv, 2 + vl) < 0) return -1;
+            if (c->ncls < CSS_MAXCLS) {
+                /* Held as a class with a marker, so matching has one loop
+                   rather than two lists. */
+                c->cls[c->ncls++] = -t - 2;
+                *spec += 1 << 10;
+            }
+            any = 1;
+            continue;
+        }
+        if (css_ident(ch)) {
+            int st = i;
+            while (i < len && css_ident(p[i])) i++;
+            int tg = html_tag_of(p + st, i - st);
+            c->tag = (short)(tg == T_OTHER ? -1 : tg);
+            /* An element this has no number for -- tbody, sup, a page's own
+               custom elements -- is matched by its name. These rules used to
+               be dropped whole, so `tbody tr` and every rule for a custom
+               element never applied. */
+            if (tg == T_OTHER) c->tname = css_put_lower(s, p + st, i - st);
+            *spec += 1;
+            any = 1;
+            continue;
+        }
+        break;
+    }
+    *at = i;
+    return any;
+}
+
 static inline int css_parse_selector(csheet *s, const char *p, int len,
                                      int *at, int *spec_out) {
     int i = *at, n = 0, spec = 0;
     int combinator = CB_FIRST;
-    int started = 0;
 
     for (;;) {
         i = css_skip(p, len, i);
         if (i >= len || p[i] == ',' || p[i] == '{') break;
 
-        if (p[i] == '>') { combinator = CB_CHILD; i++; started = 1; continue; }
-        if (p[i] == '+' || p[i] == '~') {
-            /* Sibling combinators are not matched here, and a rule that uses
-               one is dropped rather than applied as a descendant, which is
-               how a style meant for the element after a heading ends up on
-               everything inside one. */
+        if (p[i] == '>') { combinator = CB_CHILD; i++; continue; }
+        /* The element straight after (+) and any after (~): how a page
+           hides a menu until the box before it is ticked, and styles the
+           paragraph after a heading. They used to drop the rule. */
+        if (p[i] == '+') { combinator = CB_NEXT; i++; continue; }
+        if (p[i] == '~') { combinator = CB_LATER; i++; continue; }
+
+        if (s->nsels >= CSS_SELS) { s->overflowed = 1; return 0; }
+        csel *c = &s->sels[s->nsels];
+        int got = css_parse_compound(s, p, len, &i, c, &spec, 0);
+        if (got < 0) {
             while (i < len && p[i] != ',' && p[i] != '{') i++;
             *at = i;
             return 0;
         }
-
-        if (s->nsels >= CSS_SELS) { s->overflowed = 1; return 0; }
-        csel *c = &s->sels[s->nsels];
-        c->tag = -1; c->id = -1; c->ncls = 0; c->pseudo = PS_NONE;
         c->combinator = (short)(n == 0 ? CB_FIRST : combinator);
         combinator = CB_DESC;
-
-        int any = 0;
-        for (;;) {
-            if (i >= len) break;
-            char ch = p[i];
-            if (ch == '*') { i++; any = 1; continue; }
-            if (ch == '#' || ch == '.') {
-                i++;
-                int st = i;
-                while (i < len && css_ident(p[i])) i++;
-                if (i == st) break;
-                int t = css_put(s, p + st, i - st);
-                if (ch == '#') { c->id = t; spec += 1 << 20; }
-                else if (c->ncls < CSS_MAXCLS) {
-                    c->cls[c->ncls++] = t;
-                    spec += 1 << 10;
-                }
-                any = 1;
-                continue;
-            }
-            if (ch == ':') {
-                i++;
-                int elem = 0;
-                if (i < len && p[i] == ':') { i++; elem = 1; }
-                int st = i;
-                while (i < len && css_ident(p[i])) i++;
-                int l = i - st;
-
-                /* The four that are written with one colon as often as two. */
-                if (!elem && (css_named(p + st, l, "before")
-                              || css_named(p + st, l, "after")
-                              || css_named(p + st, l, "first-line")
-                              || css_named(p + st, l, "first-letter")))
-                    elem = 1;
-
-                /* A pseudo-element is not an element in the tree. Nothing
-                   here draws a scrollbar or a ::before box, and a selector
-                   that names one must not quietly become a selector for the
-                   element it hangs off -- still less for everything.
-
-                   `::-webkit-scrollbar{width:6px}` was exactly that: after
-                   the two colons there is no tag, no class and no id left,
-                   which is the shape of `*`. Every box on the page came out
-                   six pixels wide, and a whole site's article was a column
-                   of one word per line. */
-                if (elem) {
-                    while (i < len && p[i] != ',' && p[i] != '{') i++;
-                    *at = i;
-                    return 0;
-                }
-
-                if (l == 5 && w_lower(p[st]) == 'h') c->pseudo = PS_HOVER;
-                else if (l == 4 && w_lower(p[st]) == 'l') c->pseudo = PS_LINK;
-                else if (l == 7 && w_lower(p[st]) == 'v') c->pseudo = PS_VISITED;
-                else if (l == 4 && w_lower(p[st]) == 'r') c->pseudo = PS_ROOT;
-                else if (l == 11) c->pseudo = PS_FIRST_CHILD;
-                /* Anything with an argument is more than this understands,
-                   and a rule that is guessed at is worse than one dropped. */
-                if (i < len && p[i] == '(') {
-                    int d = 0;
-                    while (i < len) {
-                        if (p[i] == '(') d++;
-                        else if (p[i] == ')') { d--; i++; if (!d) break; continue; }
-                        i++;
-                    }
-                    while (i < len && p[i] != ',' && p[i] != '{') i++;
-                    *at = i;
-                    return 0;
-                }
-                spec += 1 << 10;
-                any = 1;
-                continue;
-            }
-            if (ch == '[') {
-                /* Attribute selectors: presence only, which is the common
-                   case, and the rest are dropped. */
-                int st = ++i;
-                while (i < len && p[i] != ']' && p[i] != '=' ) i++;
-                if (i < len && p[i] == '=') {
-                    while (i < len && p[i] != ']') i++;
-                    if (i < len) i++;
-                    while (i < len && p[i] != ',' && p[i] != '{') i++;
-                    *at = i;
-                    return 0;
-                }
-                int t = css_put(s, p + st, i - st);
-                if (c->ncls < CSS_MAXCLS) {
-                    /* Held as a class with a marker, so matching has one
-                       loop rather than two lists. */
-                    c->cls[c->ncls++] = -t - 2;
-                    spec += 1 << 10;
-                }
-                if (i < len) i++;
-                any = 1;
-                continue;
-            }
-            if (css_ident(ch)) {
-                int st = i;
-                while (i < len && css_ident(p[i])) i++;
-                int tg = html_tag_of(p + st, i - st);
-                c->tag = (short)(tg == T_OTHER ? -1 : tg);
-                if (tg != T_OTHER) spec += 1;
-                else {
-                    /* An element this does not know about cannot be matched
-                       by name, and matching everything instead is worse. */
-                    while (i < len && p[i] != ',' && p[i] != '{') i++;
-                    *at = i;
-                    return 0;
-                }
-                any = 1;
-                continue;
-            }
-            break;
-        }
-
-        if (!any) break;
+        if (!got) break;
         s->nsels++;
         n++;
-        started = 1;
     }
 
-    (void)started;
     *at = i;
     *spec_out = spec;
     return n;
@@ -822,10 +1011,169 @@ static inline void css_parse_block(csheet *s, const char *p, int len, int *at,
     *at = i;
 }
 
+/* --- media queries -------------------------------------------------------
+ *
+ * Every query for a screen used to be opened whatever it asked, so a page's
+ * rules for a phone, a tablet and a wide desktop all applied at once and the
+ * last one written won -- usually the desktop's, at widths this window does
+ * not have, with the phone's rules for hiding things mixed in. Now the widths
+ * are kept with each rule and compared with the window's when the page is
+ * laid out (css_collect_chain), so a page gets the layout written for its
+ * size, and a resize changes which that is.
+ *
+ * What a query can ask besides width is answered once, here, as this machine
+ * would: a screen, not print; light, not dark; a mouse that hovers; one pixel
+ * to a pixel; wider than tall. Anything not known applies. */
+#define CSS_MQ_BIG 30000
+
+static inline int css_mq_px(const char *v, int n) {
+    char tmp[32];
+    int k = 0;
+    while (n > 0 && css_space(*v)) { v++; n--; }
+    for (; k < n && k < 31; k++) tmp[k] = v[k];
+    tmp[k] = 0;
+    clen L = css_len(tmp);
+    if (L.unit == U_EM || L.unit == U_REM) return L.v * 16 / 100;
+    if (L.unit == U_AUTO) return -1;
+    return L.v / 100;
+}
+
+static inline int css_mq_word(const char *p, int n, const char *w) {
+    for (int k = 0; w[k]; k++) if (k >= n || w_lower(p[k]) != w[k]) return 0;
+    return 1;
+}
+
+/* One comma-separated part: whether it can apply at all, and its bounds. */
+static inline int css_mq_part(const char *p, int n, int *lo, int *hi) {
+    *lo = -1; *hi = -1;
+    int never = 0, negate = 0, first = 1;
+    int i = 0;
+    while (i < n) {
+        while (i < n && css_space(p[i])) i++;
+        if (i >= n) break;
+        if (p[i] == '(') {
+            int depth = 1, st = ++i;
+            while (i < n && depth) { if (p[i] == '(') depth++; else if (p[i] == ')') depth--; i++; }
+            int en = depth ? i : i - 1;                  /* the closing bracket */
+            const char *f = p + st;
+            int fl = en - st;
+            int colon = -1, cmp = -1;
+            for (int k = 0; k < fl; k++) {
+                if (f[k] == ':' && colon < 0) colon = k;
+                if ((f[k] == '<' || f[k] == '>') && cmp < 0) cmp = k;
+            }
+            if (colon >= 0) {
+                const char *v = f + colon + 1;
+                int vl = fl - colon - 1;
+                int px = css_mq_px(v, vl);
+                while (vl > 0 && css_space(*v)) { v++; vl--; }
+                if (css_mq_word(f, colon, "min-width") || css_mq_word(f, colon, "min-device-width")) {
+                    if (px > *lo) *lo = px;
+                } else if (css_mq_word(f, colon, "max-width") || css_mq_word(f, colon, "max-device-width")) {
+                    if (px >= 0 && (*hi < 0 || px < *hi)) *hi = px;
+                } else if (css_mq_word(f, colon, "prefers-color-scheme")) {
+                    if (css_mq_word(v, vl, "dark")) never = 1;
+                } else if (css_mq_word(f, colon, "hover") || css_mq_word(f, colon, "any-hover")) {
+                    if (css_mq_word(v, vl, "none")) never = 1;
+                } else if (css_mq_word(f, colon, "pointer") || css_mq_word(f, colon, "any-pointer")) {
+                    if (css_mq_word(v, vl, "coarse") || css_mq_word(v, vl, "none")) never = 1;
+                } else if (css_mq_word(f, colon, "orientation")) {
+                    if (css_mq_word(v, vl, "portrait")) never = 1;
+                } else if (css_mq_word(f, colon, "min-resolution")
+                           || css_mq_word(f, colon, "-webkit-min-device-pixel-ratio")
+                           || css_mq_word(f, colon, "min--moz-device-pixel-ratio")) {
+                    /* 2dppx, 192dpi, 1.5: anything past one pixel a pixel. */
+                    int whole = 0, k = 0;
+                    while (k < vl && v[k] >= '0' && v[k] <= '9') whole = whole * 10 + (v[k++] - '0');
+                    int frac = k + 1 < vl && v[k] == '.' && v[k + 1] > '0';
+                    int dpi = 0;
+                    for (int q = 0; q + 3 <= vl; q++) if (css_mq_word(v + q, 3, "dpi")) dpi = 1;
+                    if (dpi) { if (whole > 96) never = 1; }
+                    else if (whole > 1 || (whole == 1 && frac)) never = 1;
+                } else if (css_mq_word(f, colon, "display-mode")) {
+                    if (!css_mq_word(v, vl, "browser")) never = 1;
+                } else if (css_mq_word(f, colon, "forced-colors") || css_mq_word(f, colon, "prefers-contrast")) {
+                    if (css_mq_word(v, vl, "active") || css_mq_word(v, vl, "more")) never = 1;
+                }
+            } else if (cmp >= 0) {
+                /* width >= 600px, width < 40em, 600px <= width */
+                int wat = -1;
+                for (int k = 0; k + 5 <= fl; k++)
+                    if (css_mq_word(f + k, 5, "width") && (k == 0 || (!css_ident(f[k - 1]) && f[k - 1] != '-'))) {
+                        wat = k;
+                        break;
+                    }
+                if (wat >= 0) {
+                    int gt = f[cmp] == '>', eq = cmp + 1 < fl && f[cmp + 1] == '=';
+                    int left = wat < cmp;
+                    const char *v = left ? f + cmp + 1 + eq : f;
+                    int vl = left ? fl - (cmp + 1 + eq) : cmp;
+                    int px = css_mq_px(v, vl);
+                    if (px >= 0) {
+                        /* width > v is a floor; v > width is a ceiling. */
+                        int floor = left ? gt : !gt;
+                        if (floor) { int b = px + (eq ? 0 : 1); if (b > *lo) *lo = b; }
+                        else { int b = px - (eq ? 0 : 1); if (*hi < 0 || b < *hi) *hi = b; }
+                    }
+                }
+            }
+            first = 0;
+            continue;
+        }
+        int st = i;
+        while (i < n && !css_space(p[i]) && p[i] != '(') i++;
+        const char *w = p + st;
+        int wl = i - st;
+        if (first && wl == 3 && css_mq_word(w, 3, "not")) negate = 1;
+        else if (wl == 3 && css_mq_word(w, 3, "and")) { }
+        else if (wl == 4 && css_mq_word(w, 4, "only")) { }
+        else if ((wl == 6 && css_mq_word(w, 6, "screen")) || (wl == 3 && css_mq_word(w, 3, "all"))) { }
+        else if (wl > 0 && css_ident(w[0])) never = 1;    /* print, speech, tv... */
+        first = 0;
+    }
+    if (negate) {
+        if (never) { *lo = *hi = -1; return 1; }
+        if (*lo >= 0 && *hi < 0) { *hi = *lo - 1; *lo = -1; return 1; }
+        if (*hi >= 0 && *lo < 0) { *lo = *hi + 1; *hi = -1; return 1; }
+        return 0;
+    }
+    return !never;
+}
+
+/* A whole query: 0 when it can never apply, else the widths it covers. A
+   list of several is taken as the span of them all, which is exact for the
+   lists pages write (a phone query and a narrow-window query together). */
+static inline int css_mq(const char *p, int n, int *lo, int *hi) {
+    int any = 0, unbounded = 0, ulo = CSS_MQ_BIG, uhi = -1;
+    int i = 0;
+    while (i <= n) {
+        int st = i, depth = 0;
+        while (i < n && (p[i] != ',' || depth)) {
+            if (p[i] == '(') depth++;
+            else if (p[i] == ')') depth--;
+            i++;
+        }
+        int plo, phi;
+        if (css_mq_part(p + st, i - st, &plo, &phi)) {
+            any = 1;
+            if (plo < 0 && phi < 0) unbounded = 1;
+            if ((plo < 0 ? 0 : plo) < ulo) ulo = plo < 0 ? 0 : plo;
+            if ((phi < 0 ? CSS_MQ_BIG : phi) > uhi) uhi = phi < 0 ? CSS_MQ_BIG : phi;
+        }
+        i++;
+    }
+    if (!any) return 0;
+    if (unbounded) { *lo = *hi = -1; return 1; }
+    *lo = ulo > 0 ? ulo : -1;
+    *hi = uhi < CSS_MQ_BIG ? uhi : -1;
+    return 1;
+}
+
 /* Skips an at-rule. Media queries are opened rather than skipped when they
-   are the kind that applies to a screen, because most of a modern page's
-   layout is inside one and dropping them drops the page. */
-static inline int css_at_rule(const char *p, int len, int i, int *open_body) {
+   can apply to this screen, and the widths they are for are handed back
+   (css_mq); @supports is opened as it stands. */
+static inline int css_at_rule(const char *p, int len, int i, int *open_body,
+                              int *lo, int *hi) {
     int start = i;
     i++;
     int nstart = i;
@@ -838,18 +1186,9 @@ static inline int css_at_rule(const char *p, int len, int i, int *open_body) {
     while (i < len && p[i] != '{' && p[i] != ';') i++;
     if (i < len && p[i] == ';') { *open_body = 0; return i + 1; }
 
-    if (media || supports) {
-        /* A query for print is not for this screen; one for a minimum width
-           this window may not have is still opened, because a page whose
-           desktop layout is behind min-width and whose mobile layout is the
-           default reads better wide than narrow. What is refused is print. */
-        int is_print = 0;
-        for (int k = qstart; k + 4 < i; k++)
-            if (w_lower(p[k]) == 'p' && w_lower(p[k + 1]) == 'r'
-                && w_lower(p[k + 2]) == 'i' && w_lower(p[k + 3]) == 'n'
-                && w_lower(p[k + 4]) == 't') { is_print = 1; break; }
-        if (!is_print) { *open_body = 1; return i + 1; }
-    }
+    *lo = *hi = -1;
+    if (supports) { *open_body = 1; return i + 1; }
+    if (media && css_mq(p + qstart, i - qstart, lo, hi)) { *open_body = 1; return i + 1; }
 
     /* Everything else with a body is skipped whole: keyframes, font faces,
        and the rest, none of which this draws. */
@@ -864,9 +1203,16 @@ static inline int css_at_rule(const char *p, int len, int i, int *open_body) {
     return i;
 }
 
-static inline void css_parse(csheet *s, const char *p, int len) {
+/* A sheet, all of it for the window widths lo to hi (-1 for no bound):
+   what the media attribute of the link or style element that carried it
+   said, since a sheet can be meant for print or for a phone as a whole. */
+static inline void css_parse_in(csheet *s, const char *p, int len, int lo, int hi) {
     int i = 0;
     int nested = 0;
+    /* The widths each open query allows, the outer ones included. */
+    short mlo[17], mhi[17];
+    mlo[0] = (short)lo;
+    mhi[0] = (short)hi;
 
     while (i < len) {
         i = css_skip(p, len, i);
@@ -874,9 +1220,18 @@ static inline void css_parse(csheet *s, const char *p, int len) {
 
         if (p[i] == '}') { if (nested > 0) nested--; i++; continue; }
         if (p[i] == '@') {
-            int open_body = 0;
-            i = css_at_rule(p, len, i, &open_body);
-            if (open_body) nested++;
+            int open_body = 0, lo = -1, hi = -1;
+            i = css_at_rule(p, len, i, &open_body, &lo, &hi);
+            if (open_body) {
+                int up = nested < 16 ? nested : 16;
+                nested++;
+                int at = nested < 16 ? nested : 16;
+                short plo = mlo[up], phi = mhi[up];
+                if (lo > plo) plo = (short)lo;
+                if (hi >= 0 && (phi < 0 || hi < phi)) phi = (short)hi;
+                mlo[at] = plo;
+                mhi[at] = phi;
+            }
             continue;
         }
 
@@ -919,10 +1274,16 @@ static inline void css_parse(csheet *s, const char *p, int len) {
             r->decl_n = decl_n;
             r->spec = specs[k];
             r->order = s->nrules;
+            r->mq_lo = mlo[nested < 16 ? nested : 16];
+            r->mq_hi = mhi[nested < 16 ? nested : 16];
             s->nrules++;
         }
         (void)first_rule;
     }
+}
+
+static inline void css_parse(csheet *s, const char *p, int len) {
+    css_parse_in(s, p, len, -1, -1);
 }
 
 /* --- matching ------------------------------------------------------------
@@ -937,11 +1298,67 @@ typedef struct {
     int visited_links;        /* whether :visited should match at all */
 } cmatch;
 
+/* How many element siblings come before this one (or after it), of its
+   own type only when asked. */
+static inline int css_sibling_count(const ddoc *d, int el, int same_type, int after) {
+    int n = 0;
+    const dnode *me = &d->nodes[el];
+    for (int k = after ? me->next : me->prev; k >= 0; k = after ? d->nodes[k].next : d->nodes[k].prev) {
+        const dnode *o = &d->nodes[k];
+        if (o->kind != DN_ELEMENT) continue;
+        if (same_type) {
+            if (o->tag != me->tag) continue;
+            if (me->tag == T_OTHER && (o->text < 0 || me->text < 0
+                || !w_same(d->arena + o->text, d->arena + me->text))) continue;
+        }
+        n++;
+    }
+    return n;
+}
+
+/* An attribute's value against a selector's test (css_parse_compound). */
+static inline int css_attr_test(const char *have, const char *tv) {
+    char op = tv[0];
+    int fold = tv[1] == 'i';
+    const char *want = tv + 2;
+    if (op == '?') return 1;
+    int hl = w_len(have), wl = w_len(want);
+#define CSS_EQ(a, b) (fold ? w_lower(a) == w_lower(b) : (a) == (b))
+    if (op == '=' || op == '|') {
+        int k = 0;
+        while (k < wl && k < hl && CSS_EQ(have[k], want[k])) k++;
+        if (k != wl) return 0;
+        return hl == wl || (op == '|' && have[wl] == '-');
+    }
+    if (!wl) return 0;
+    if (op == '^' || op == '$') {
+        if (hl < wl) return 0;
+        const char *h = op == '^' ? have : have + hl - wl;
+        for (int k = 0; k < wl; k++) if (!CSS_EQ(h[k], want[k])) return 0;
+        return 1;
+    }
+    for (int st = 0; st + wl <= hl; st++) {
+        if (op == '~' && st > 0 && !css_space(have[st - 1])) continue;
+        int k = 0;
+        while (k < wl && CSS_EQ(have[st + k], want[k])) k++;
+        if (k == wl && (op != '~' || st + wl == hl || css_space(have[st + wl]))) return 1;
+    }
+    return 0;
+#undef CSS_EQ
+}
+
 static inline int css_part_matches(const csheet *s, const ddoc *d, int el,
                                    const csel *c, const cmatch *m) {
     const dnode *n = &d->nodes[el];
     if (n->kind != DN_ELEMENT) return 0;
     if (c->tag >= 0 && n->tag != c->tag) return 0;
+    if (c->tname >= 0) {
+        if (n->tag != T_OTHER || n->text < 0) return 0;
+        const char *have = d->arena + n->text, *want = s->text + c->tname;
+        int k = 0;
+        for (; have[k] && want[k]; k++) if (w_lower(have[k]) != want[k]) return 0;
+        if (have[k] || want[k]) return 0;
+    }
     if (c->id >= 0) {
         const char *v = dom_attr(d, el, "id");
         if (!v || !w_same(v, s->text + c->id)) return 0;
@@ -949,7 +1366,10 @@ static inline int css_part_matches(const csheet *s, const ddoc *d, int el,
     for (int i = 0; i < c->ncls; i++) {
         int t = c->cls[i];
         if (t < 0) {
-            if (!dom_attr(d, el, s->text + (-t - 2))) return 0;
+            const char *name = s->text + (-t - 2);
+            const char *have = dom_attr(d, el, name);
+            if (!have) return 0;
+            if (!css_attr_test(have, name + w_len(name) + 1)) return 0;
         } else {
             const char *want = s->text + t;
             if (!dom_has_class(d, el, want, w_len(want))) return 0;
@@ -969,8 +1389,42 @@ static inline int css_part_matches(const csheet *s, const ddoc *d, int el,
             break;
         }
         case PS_ROOT: if (el != d->root) return 0; break;
+        case PS_LAST_CHILD: if (css_sibling_count(d, el, 0, 1) != 0) return 0; break;
+        case PS_ONLY_CHILD:
+            if (css_sibling_count(d, el, 0, 0) || css_sibling_count(d, el, 0, 1)) return 0;
+            break;
+        case PS_FIRST_OF_TYPE: if (css_sibling_count(d, el, 1, 0) != 0) return 0; break;
+        case PS_LAST_OF_TYPE: if (css_sibling_count(d, el, 1, 1) != 0) return 0; break;
+        case PS_ONLY_OF_TYPE:
+            if (css_sibling_count(d, el, 1, 0) || css_sibling_count(d, el, 1, 1)) return 0;
+            break;
+        case PS_EMPTY:
+            for (int k = n->first; k >= 0; k = d->nodes[k].next) {
+                if (d->nodes[k].kind == DN_ELEMENT) return 0;
+                if (d->nodes[k].text >= 0 && d->arena[d->nodes[k].text]) return 0;
+            }
+            break;
+        case PS_CHECKED:
+            if (!dom_attr(d, el, "checked") && !dom_attr(d, el, "selected")) return 0;
+            break;
+        case PS_DISABLED: if (!dom_attr(d, el, "disabled")) return 0; break;
+        case PS_ENABLED:
+            if (dom_attr(d, el, "disabled")) return 0;
+            if (n->tag != T_INPUT && n->tag != T_BUTTON && n->tag != T_SELECT
+                && n->tag != T_TEXTAREA && n->tag != T_OPTION) return 0;
+            break;
+        case PS_NEVER: return 0;
+        case PS_NTH_CHILD: case PS_NTH_OF_TYPE: case PS_NTH_LAST_CHILD: {
+            int pos = 1 + css_sibling_count(d, el, c->pseudo == PS_NTH_OF_TYPE,
+                                            c->pseudo == PS_NTH_LAST_CHILD);
+            int a = c->nth_a, b = c->nth_b;
+            if (a == 0) { if (pos != b) return 0; }
+            else { int k = pos - b; if (k % a != 0 || k / a < 0) return 0; }
+            break;
+        }
         default: break;
     }
+    if (c->neg >= 0 && css_part_matches(s, d, el, &s->negs[c->neg], m)) return 0;
     return 1;
 }
 
@@ -987,6 +1441,16 @@ static inline int css_matches(const csheet *s, const ddoc *d, int el,
         if (join == CB_CHILD) {
             at = d->nodes[at].parent;
             if (at < 0 || !css_part_matches(s, d, at, want, m)) return 0;
+        } else if (join == CB_NEXT || join == CB_LATER) {
+            int q = d->nodes[at].prev;
+            for (;;) {
+                while (q >= 0 && d->nodes[q].kind != DN_ELEMENT) q = d->nodes[q].prev;
+                if (q < 0) return 0;
+                if (css_part_matches(s, d, q, want, m)) break;
+                if (join == CB_NEXT) return 0;
+                q = d->nodes[q].prev;
+            }
+            at = q;
         } else {
             int p = d->nodes[at].parent;
             while (p >= 0 && !css_part_matches(s, d, p, want, m))
@@ -1029,6 +1493,11 @@ static inline void css_default_style(cstyle *st, int root_px) {
     st->line_h = 145;
     st->radius = 0;
     st->indent = 0;
+    st->spacing = -1;
+    st->valign = VA_BASELINE;
+    st->clip = st->gone = 0;
+    st->floated = st->clear = 0;
+    st->tx_px = st->ty_px = st->tx_pct = st->ty_pct = 0;
 }
 
 /* What passes from a parent to a child, which is a short list and not the
@@ -1049,6 +1518,63 @@ static inline void css_inherit(cstyle *child, const cstyle *parent) {
     child->underline = parent->underline;
     child->background = parent->background;
     child->has_bg = 0;
+    child->spacing = parent->spacing;
+}
+
+/* One length of a translation: pixels and a percentage of the box, from a
+   length, a percentage, or calc() of a sum of them. */
+static inline const char *css_tlen(const char *v, int font_px, int root_px, int *px, int *pct) {
+    *px = *pct = 0;
+    while (*v == ' ') v++;
+    int calc = w_starts_fold(v, "calc(");
+    if (calc) v += 5;
+    int sign = 1;
+    for (;;) {
+        while (*v == ' ') v++;
+        if (*v == '-' && (v[1] < '0' || v[1] > '9') && v[1] != '.') { sign = -sign; v++; continue; }
+        char tmp[32];
+        int k = 0;
+        while (*v && *v != ',' && *v != ')' && *v != ' ' && k < 31) tmp[k++] = *v++;
+        tmp[k] = 0;
+        clen L = css_len(tmp);
+        if (L.unit == U_PCT) *pct += sign * L.v / 100;
+        else if (L.unit != U_AUTO) *px += sign * css_px(L, font_px, root_px, 0);
+        while (*v == ' ') v++;
+        if (!calc) break;
+        if (*v == '+') { sign = 1; v++; continue; }
+        if (*v == '-') { sign = -1; v++; continue; }
+        if (*v == ')') v++;
+        break;
+    }
+    return v;
+}
+
+/* translate, translateX, translateY and translate3d, anywhere in the list. */
+static inline void css_translate(const char *v, cstyle *st, int root_px) {
+    for (const char *q = v; *q; q++) {
+        if (!w_starts_fold(q, "translate")) continue;
+        const char *a = q + 9;
+        int which = 0;                                 /* both, x only, y only */
+        if (w_lower(*a) == 'x') { which = 1; a++; }
+        else if (w_lower(*a) == 'y') { which = 2; a++; }
+        else if (w_starts_fold(a, "3d")) a += 2;
+        if (*a != '(') continue;
+        a++;
+        int px, pct;
+        a = css_tlen(a, st->font_px, root_px, &px, &pct);
+        if (which == 2) { st->ty_px = (short)px; st->ty_pct = (short)pct; }
+        else { st->tx_px = (short)px; st->tx_pct = (short)pct; }
+        if (which == 0) {
+            while (*a == ' ') a++;
+            if (*a == ',') {
+                a = css_tlen(a + 1, st->font_px, root_px, &px, &pct);
+                st->ty_px = (short)px;
+                st->ty_pct = (short)pct;
+            }
+        }
+        q = a;
+        if (!*q) break;
+    }
 }
 
 static inline void css_apply(const csheet *s, const cdecl *dcl, cstyle *st,
@@ -1063,12 +1589,22 @@ static inline void css_apply(const csheet *s, const cdecl *dcl, cstyle *st,
         case P_DISPLAY:
             if (w_starts_fold(v, "none")) st->display = D_NONE;
             else if (w_starts_fold(v, "inline-block")) st->display = D_INLINE_BLOCK;
-            else if (w_starts_fold(v, "inline-flex")) st->display = D_INLINE_BLOCK;
+            else if (w_starts_fold(v, "inline-flex")) st->display = D_INLINE_FLEX;
+            else if (w_starts_fold(v, "inline-table")) st->display = D_TABLE;
+            else if (w_starts_fold(v, "inline-grid")) st->display = D_INLINE_BLOCK;
             else if (w_starts_fold(v, "inline")) st->display = D_INLINE;
             else if (w_starts_fold(v, "list-item")) st->display = D_LIST_ITEM;
             else if (w_starts_fold(v, "table-cell")) st->display = D_TABLE_CELL;
+            else if (w_starts_fold(v, "table-row-group")
+                     || w_starts_fold(v, "table-header-group")
+                     || w_starts_fold(v, "table-footer-group")) st->display = D_TABLE_GROUP;
+            else if (w_starts_fold(v, "table-row")) st->display = D_TABLE_ROW;
+            else if (w_starts_fold(v, "table-column")) st->display = D_NONE;
+            else if (w_starts_fold(v, "table-caption")) st->display = D_BLOCK;
+            else if (w_starts_fold(v, "table") || w_starts_fold(v, "inline-table"))
+                st->display = D_TABLE;
             else if (w_starts_fold(v, "flex")) st->display = D_FLEX;
-            else st->display = D_BLOCK;   /* block, grid, table: a box */
+            else st->display = D_BLOCK;   /* block, grid: a box */
             break;
 
         case P_FLEX_DIR:
@@ -1175,6 +1711,21 @@ static inline void css_apply(const csheet *s, const cdecl *dcl, cstyle *st,
             st->border_box = (unsigned char)w_starts_fold(v, "border-box");
             break;
 
+        case P_FLOAT:
+            if (w_starts_fold(v, "left") || w_starts_fold(v, "inline-start")) st->floated = 1;
+            else if (w_starts_fold(v, "right") || w_starts_fold(v, "inline-end")) st->floated = 2;
+            else st->floated = 0;
+            break;
+        case P_CLEAR:
+            if (w_starts_fold(v, "both")) st->clear = 3;
+            else if (w_starts_fold(v, "left") || w_starts_fold(v, "inline-start")) st->clear = 1;
+            else if (w_starts_fold(v, "right") || w_starts_fold(v, "inline-end")) st->clear = 2;
+            else st->clear = 0;
+            break;
+        case P_TRANSFORM:
+            st->tx_px = st->ty_px = st->tx_pct = st->ty_pct = 0;
+            css_translate(v, st, root_px);
+            break;
         case P_POSITION:
             if (w_starts_fold(v, "absolute")) st->position = POS_ABSOLUTE;
             else if (w_starts_fold(v, "fixed")) st->position = POS_FIXED;
@@ -1186,6 +1737,47 @@ static inline void css_apply(const csheet *s, const cdecl *dcl, cstyle *st,
         case P_VISIBILITY:
             st->visible = (unsigned char)(!w_starts_fold(v, "hidden"));
             break;
+        case P_VALIGN:
+            if (w_starts_fold(v, "top") || w_starts_fold(v, "text-top")) st->valign = VA_TOP;
+            else if (w_starts_fold(v, "middle")) st->valign = VA_MIDDLE;
+            else if (w_starts_fold(v, "bottom") || w_starts_fold(v, "text-bottom"))
+                st->valign = VA_BOTTOM;
+            else st->valign = VA_BASELINE;
+            break;
+        case P_SPACING: {
+            clen L = css_len(v);
+            int px = css_px(L, st->font_px, root_px, pct_of);
+            st->spacing = (short)(px < 0 ? 0 : (px > 64 ? 64 : px));
+            break;
+        }
+        case P_COLLAPSE:
+            /* Collapsed borders share the line between two cells, which is
+               no room between them; separate is the default's two pixels. */
+            if (w_starts_fold(v, "collapse")) st->spacing = 0;
+            break;
+        case P_OVERFLOW:
+            st->clip = (unsigned char)(w_starts_fold(v, "hidden") || w_starts_fold(v, "clip"));
+            break;
+        case P_CLIP: {
+            /* clip: rect(0 0 0 0), rect(1px, 1px, 1px, 1px) and clip-path:
+               inset(50%) are the three spellings of the visually hidden
+               pattern; anything else is a shape this does not draw anyway. */
+            const char *q = v;
+            while (*q == ' ') q++;
+            if (w_starts_fold(q, "inset(50%") || w_starts_fold(q, "inset(100%")) st->gone = 1;
+            if (w_starts_fold(q, "rect(")) {
+                int big = 0;
+                for (const char *r = q + 5; *r && *r != ')'; r++) {
+                    if (*r < '0' || *r > '9') continue;
+                    int num = 0;
+                    while (*r >= '0' && *r <= '9') { if (num < 1000) num = num * 10 + (*r - '0'); r++; }
+                    if (num > 1) big = 1;
+                    r--;
+                }
+                if (!big) st->gone = 1;
+            }
+            break;
+        }
         case P_OPACITY:
             /* Nothing composites, so anything close to invisible is treated
                as hidden and everything else as drawn. */
@@ -1274,7 +1866,13 @@ static inline void css_apply(const csheet *s, const cdecl *dcl, cstyle *st,
                half the centring on the web is `left: 50%` with a negative
                margin to match. So they keep their sign and their auto,
                where every other length here clamps both away. */
-            if (dcl->prop >= P_TOP && dcl->prop <= P_LEFT) {
+            /* And margins the same way: a negative margin is how a row
+               reaches into its container's padding and how a sidebar is
+               pulled back over the column it floated after, and clamping it
+               to nothing put both somewhere else. Auto is kept apart from
+               every number, which is what centring needs. */
+            if ((dcl->prop >= P_TOP && dcl->prop <= P_LEFT)
+                || (dcl->prop >= P_MARGIN_T && dcl->prop <= P_MARGIN_L)) {
                 if (L.unit == U_AUTO) { *slot = CSS_AUTO_OFF; break; }
                 if (px < -4000) px = -4000;
                 if (px > 4000) px = 4000;
@@ -1375,6 +1973,16 @@ static inline void css_index(const csheet *s, cindex *x) {
         b->w[0] = b->w[1] = 0;
         for (int k = 0; k < rule->sel_n - 1; k++) {
             const csel *p = &s->sels[rule->sel_at + k];
+            /* Only a part that is an ancestor of the element: one with a
+               child or descendant join somewhere to its right. A sibling is
+               not one, and requiring it among the ancestors refused every
+               element the rule was for. */
+            int anc = 0;
+            for (int j = k + 1; j < rule->sel_n; j++) {
+                int cb = s->sels[rule->sel_at + j].combinator;
+                if (cb == CB_DESC || cb == CB_CHILD) anc = 1;
+            }
+            if (!anc) continue;
             if (p->tag >= 0) css_bloom_add(b, css_key_tag(p->tag));
             if (p->id >= 0) {
                 const char *v = s->text + p->id;
@@ -1408,6 +2016,8 @@ static inline void css_collect_chain(const csheet *s, const cindex *x,
         if (anc && ((x->need[r].w[0] & ~anc->w[0]) | (x->need[r].w[1] & ~anc->w[1])))
             continue;                          /* wants an ancestor there is not */
         const crule *rule = &s->rules[r];
+        if (rule->mq_lo >= 0 && css_view_w > 0 && css_view_w < rule->mq_lo) continue;
+        if (rule->mq_hi >= 0 && css_view_w > 0 && css_view_w > rule->mq_hi) continue;
         if (!css_matches(s, d, el, rule, m)) continue;
         hits[*n].rule = r;
         hits[*n].spec = rule->spec;
@@ -1504,11 +2114,20 @@ static const char CSS_UA[] =
     "small{font-size:0.86em}"
     "a{color:#0b5ed7;text-decoration:underline}"
     "hr{display:block;margin:1.1em 0;border-top:1px #dcdcdc}"
-    "table{display:block;margin:0.8em 0}"
-    "tr{display:block}"
-    "td,th{display:table-cell;padding:4px 10px 4px 0}"
-    "th{font-weight:bold;text-align:left}"
-    "caption{display:block;font-style:italic;margin:0.3em 0}"
+    "table{display:table}"
+    "tr{display:table-row}"
+    "thead,tbody,tfoot{display:table-row-group}"
+    "col,colgroup{display:none}"
+    "td,th{display:table-cell;padding:1px}"
+    "th{font-weight:bold;text-align:center}"
+    "caption{display:block;text-align:center}"
+    "[hidden]{display:none}"
+    "sup,sub{font-size:0.8em}"
+    "u,ins{text-decoration:underline}"
+    "s,del,strike{text-decoration:line-through}"
+    "cite,dfn,var,address{font-style:italic}"
+    "mark{background:#fff2a8}"
+    "details,summary{display:block}"
     "head,script,style,title,meta,link,noscript{display:none}"
     "button{display:inline-block;padding:5px 12px;background:#f2f3f5;"
         "border:1px #c9ccd1;border-radius:6px}"

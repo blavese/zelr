@@ -34,9 +34,9 @@
    and fourteen thousand attributes; a news site is worse. Every string in
    the page goes in the arena -- text, attribute names, attribute values --
    so the arena has to be larger than the document, not the same size. */
-#define DOM_NODES   20000
-#define DOM_ATTRS   40000
-#define DOM_ARENA   (1536 * 1024)
+#define DOM_NODES   40000
+#define DOM_ATTRS   80000
+#define DOM_ARENA   (3 * 1024 * 1024)
 #define DOM_DEPTH   64
 
 enum { DN_ELEMENT = 1, DN_TEXT };
@@ -70,6 +70,12 @@ typedef struct {
     int   head;
     int   title;                 /* into the arena, or -1 */
     int   overflowed;
+
+    /* Whether the page said <!DOCTYPE html>. One without is laid out the
+       way pages were before there was a standard to follow ("quirks"), and
+       some very large sites still depend on it: a table there does not
+       take the centring of a <center> it sits in (layout.h, lay_hints). */
+    int   standards;
 } ddoc;
 
 /* --- the arena ----------------------------------------------------------- */
@@ -502,6 +508,7 @@ static inline void dom_parse(ddoc *d, const char *p, int len) {
     d->count = 0; d->nattrs = 0; d->used = 0;
     d->title = -1; d->overflowed = 0;
     d->root = d->body = d->head = -1;
+    d->standards = 0;
     d->root = dom_new(d, DN_ELEMENT, T_HTML);
 
     dparse z;
@@ -566,6 +573,11 @@ static inline void dom_parse(ddoc *d, const char *p, int len) {
             continue;
         }
         if (i + 1 < len && (p[i + 1] == '!' || p[i + 1] == '?')) {
+            if (i + 9 < len && p[i + 1] == '!' && w_lower(p[i + 2]) == 'd'
+                && w_lower(p[i + 3]) == 'o' && w_lower(p[i + 4]) == 'c'
+                && w_lower(p[i + 5]) == 't' && w_lower(p[i + 6]) == 'y'
+                && w_lower(p[i + 7]) == 'p' && w_lower(p[i + 8]) == 'e')
+                d->standards = 1;
             while (i < len && p[i] != '>') i++;
             i++;
             continue;

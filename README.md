@@ -1216,9 +1216,10 @@ defensible answer for a document and the wrong one for the web as it is,
 where the difference between a menu and a list of links, or between a
 sidebar and the article, exists only in a style sheet. Without one a page is
 not simplified — it is read in the wrong order, and nobody is told that is
-what is happening. So there is a style sheet reader now: selectors with the
-three combinators that matter, the cascade in specificity then source order,
-inheritance, the box model, and block, inline and flex layout.
+what is happening. So there is a style sheet reader now: selectors with every
+combinator, the cascade (the browser's own rules, then what the markup says
+about itself, then the page's, each in specificity then source order),
+inheritance, the box model, and block, inline, flex and table layout.
 
 Laying a page out works out which rules match each element once, however
 often its style is asked for, and passes over a rule that wants an ancestor
@@ -1243,11 +1244,23 @@ refreshes to itself is a loop every browser has had to stop.
 
 And the page can be used rather than only read. A click goes to the page
 before it goes to the browser, so a page that says the ordinary consequence
-should not follow is obeyed; forms are drawn, typed into and sent. What is
-still absent is named in the source rather than guessed at: floats,
-positioned boxes, table column widths and grid, each of which turns a page
-from one column into several, and a browser that does half of them puts
-things where nobody chose.
+should not follow is obeyed; forms are drawn, typed into and sent.
+
+Pages laid out the ways pages are laid out. Tables have columns: each as wide
+as its widest cell needs, the table as wide as its columns or as it was told,
+cells spanning rows and columns, and the attributes old markup still says it
+all with -- `bgcolor`, `width`, `align`, `valign`, `cellpadding`, `border`,
+`<font>` -- counted for less than any style sheet and more than the browser's
+own. Floats go to their side and the lines beside them are shortened, so a
+sidebar is beside the page and a picture has the text round it. Flex rows
+wrap, and never squeeze an item narrower than its longest word. An
+inline-block is laid out as a block and placed like a word, and a block
+inside a link is still a block. Media queries are read for the window's
+width, so a page gets the layout written for its size, and a style sheet for
+print or a dark scheme is not taken for the page's. Selectors can ask about
+attribute values, siblings, `:nth-child`, `:not` and elements the browser has
+no name for, and states nothing is in when a page is drawn, such as `:focus`,
+no longer match everything. Grid is still laid out as blocks.
 
 **What travels, and how often.** The body is asked for compressed and put
 back together on arrival, using the deflate that was written for PNG with a

@@ -469,6 +469,10 @@ static inline void web_drop(void) {
    (sites.h) -- set these for the one call and put them back to nothing. */
 static const char *web_body_type;      /* nothing: a form */
 static const char *web_extra;          /* whole header lines, each ending \r\n */
+/* What to ask for, when it is not a page: a picture is asked for as the
+   kinds this can decode. Asking for anything let a picture server choose WebP or AVIF,
+   which nothing here reads, over the JPEG it would otherwise have sent. */
+static const char *web_accept;
 
 static inline int ka_matches(const url_t *u) {
     return ka_live && u->port == ka_port && u->secure == ka_secure
@@ -534,9 +538,11 @@ static inline int web_fetch_once(const url_t *u, const char *body,
        connection and a server holding the socket open afterwards is a wait
        for nothing. */
     if (n >= 0) n = wh_add(req, sizeof(req), n,
-                           "\r\nUser-Agent: zelr\r\n"
-                           "Accept: text/html,text/plain,*/*\r\n"
-                           "Accept-Encoding: gzip\r\n"
+                           "\r\nUser-Agent: zelr\r\nAccept: ");
+    if (n >= 0) n = wh_add(req, sizeof(req), n, web_accept ? web_accept
+                                                  : "text/html,text/plain,*/*");
+    if (n >= 0) n = wh_add(req, sizeof(req), n,
+                           "\r\nAccept-Encoding: gzip\r\n"
                            "Connection: keep-alive\r\n");
 
     /* Whatever this site has already said to remember about itself. */

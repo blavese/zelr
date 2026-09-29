@@ -61,6 +61,7 @@ static void lay(const char *html, int width) {
 
     css_init(&sheet);
     css_parse(&sheet, CSS_UA, (int)sizeof(CSS_UA) - 1);
+    sheet.ua_rules = sheet.nrules;
 
     /* Style sheets written in the page itself. */
     for (int i = 0; i < doc.count; i++) {
@@ -101,6 +102,15 @@ static const litem *box_of(int node) {
 }
 
 static int by_id(const char *id) { return dom_by_id(&doc, id); }
+
+/* The first run of text that is exactly this word. */
+static const litem *word(const char *w) {
+    for (int i = 0; i < page.nitems; i++) {
+        const litem *it = &page.items[i];
+        if (it->kind == LK_TEXT && it->at >= 0 && w_same(page.text + it->at, w)) return it;
+    }
+    return 0;
+}
 
 
 int main(void) {
@@ -666,6 +676,286 @@ int main(void) {
             }
             okn(SAID[k], words == 1, words);
         }
+    }
+
+    nfake = 0;
+
+    /* --- tables ------------------------------------------------------------
+     *
+     * Rows under rows and cells in columns. They were blocks with the cells
+     * run together as words, which reads for one row and for nothing else:
+     * a table inside a cell ran all its rows into one paragraph. */
+    {
+        lay("<table><tr><td>short</td><td>x</td></tr>"
+            "<tr><td>a much longer cell</td><td>y</td></tr></table>", 600);
+        const litem *x = word("x"), *y = word("y"), *cell = word("cell");
+        ok("a table's cells are laid out", x && y && cell);
+        if (x && y && cell) {
+            okn("the second row is below the first", y->y > x->y, y->y - x->y);
+            okn("and its cells are in the same columns", y->x == x->x, y->x - x->x);
+            okn("a column is as wide as the widest thing in it", x->x >= cell->x + cell->w,
+                x->x - (cell->x + cell->w));
+        }
+
+        lay("<table><tr><td><table><tr><td>n1</td></tr><tr><td>n2</td></tr></table>"
+            "</td><td>side</td></tr></table>", 600);
+        const litem *n1 = word("n1"), *n2 = word("n2"), *side = word("side");
+        ok("a table inside a cell keeps its rows", n1 && n2 && side && n2->y > n1->y && n2->x == n1->x);
+        if (n1 && side) okn("and the cell beside it is beside it", side->x > n1->x, side->x - n1->x);
+
+        lay("<style>table{background:#eeeeee}#uc{background:#dddddd}</style>"
+            "<table id=t><tr><td>a</td><td>b</td></tr></table>"
+            "<table id=u width=\"100%\"><tr><td id=uc>a</td></tr></table>", 600);
+        const litem *t = box_of(by_id("t")), *u = box_of(by_id("u")), *uc = box_of(by_id("uc"));
+        ok("tables with backgrounds have boxes", t && u && uc);
+        if (t && u && uc) {
+            okn("a table not given a width is as wide as its columns", t->w < 100, t->w);
+            okn("and one given width=100% fills the line with its cells", uc->w >= 590, uc->w);
+        }
+
+        lay("<table><tr><td id=a bgcolor=ff6600>a</td><td>b<br>b<br>b</td></tr>"
+            "<tr><td colspan=2 id=wide>both</td></tr></table><style>#wide{background:#00ff00}</style>", 600);
+        const litem *a = box_of(by_id("a")), *w = box_of(by_id("wide")), *b = word("b");
+        ok("a cell with bgcolor has a box of that colour", a && a->has_bg && a->bg == 0xFF6600);
+        if (a) okn("stretched to the height of its row", a->h >= 3 * 16, a->h);
+        const litem *aw = word("a");
+        if (aw && a) okn("and its words are in the middle of it", aw->y > a->y + 8, aw->y - a->y);
+        if (w && a && b) okn("a cell across two columns is as wide as both", w->w >= b->x + b->w - a->x - 4, w->w);
+
+        lay("<table><tr><td rowspan=2>tall</td><td>r1</td></tr><tr><td>r2</td></tr></table>", 600);
+        const litem *r1 = word("r1"), *r2 = word("r2");
+        ok("a cell spanning two rows keeps its column clear below it",
+           r1 && r2 && r1->x == r2->x && r2->y > r1->y);
+
+        lay("<style>#p{background:#eeeeee}</style><table cellpadding=10><tr><td id=p>pad</td></tr></table>", 600);
+        const litem *pb = box_of(by_id("p")), *pw = word("pad");
+        ok("cellpadding pads every cell", pb && pw && pw->x - pb->x >= 10 && pw->y - pb->y >= 10);
+    }
+
+    /* --- a page with no doctype -------------------------------------------
+     *
+     * A table's text starts from the left whatever centres it, which is the
+     * quirk a centred page of tables is written for; with a doctype the
+     * centring carries in. */
+    {
+        lay("<center><table><tr><td>left</td></tr>"
+            "<tr><td>a longer line of words</td></tr></table></center>", 600);
+        const litem *l1 = word("left"), *l2 = word("a");
+        ok("without a doctype a table's rows read from the left", l1 && l2 && l1->x == l2->x);
+        lay("<!DOCTYPE html><center><table><tr><td>left</td></tr>"
+            "<tr><td>a longer line of words</td></tr></table></center>", 600);
+        l1 = word("left");
+        l2 = word("a");
+        ok("and with one they are centred", l1 && l2 && l1->x > l2->x);
+    }
+
+    /* --- inline-blocks and blocks inside inline things ---------------------- */
+    {
+        lay("<style>#ib{display:inline-block;width:100px;background:#00ff00}</style>"
+            "<p>before <span id=ib>in</span> after</p>", 600);
+        const litem *ib = box_of(by_id("ib")), *af = word("after");
+        ok("an inline-block has its own box", ib != 0);
+        if (ib) okn("as wide as it asked", ib->w == 100, ib->w);
+        if (ib && af) okn("and what follows starts after it", af->x >= ib->x + 100, af->x - ib->x);
+
+        lay("<a href=#><div>top</div><div>bottom</div></a>", 600);
+        const litem *tp = word("top"), *bt = word("bottom");
+        ok("blocks inside a link are still stacked", tp && bt && bt->y > tp->y && bt->x == tp->x);
+    }
+
+    /* --- measuring does not take centring for width ------------------------- */
+    {
+        lay("<style>#t{background:#eeeeee}td{text-align:center}</style>"
+            "<table id=t><tr><td>mid</td></tr></table>", 600);
+        const litem *t = box_of(by_id("t"));
+        ok("a centred cell does not make its table as wide as the page", t && t->w < 100);
+    }
+
+    /* --- media queries ------------------------------------------------------ */
+    {
+        int lo, hi;
+        ok("a query for a wide window is kept as a floor",
+           css_mq("(min-width: 2000px)", 19, &lo, &hi) && lo == 2000 && hi == -1);
+        ok("one in ems is in pixels", css_mq("screen and (max-width: 40em)", 28, &lo, &hi) && hi == 640);
+        ok("a range is kept too", css_mq("(width >= 600px)", 16, &lo, &hi) && lo == 600);
+        ok("print never applies", !css_mq("print", 5, &lo, &hi));
+        ok("nor a dark scheme", !css_mq("(prefers-color-scheme: dark)", 28, &lo, &hi));
+        ok("nor a second pixel to the pixel", !css_mq("(min-resolution: 2dppx)", 23, &lo, &hi));
+
+        lay("<style>@media (min-width:2000px){#m{color:#ff0000}}"
+            "@media (max-width:2000px){#n{color:#ff0000}}</style>"
+            "<p id=m>wide</p><p id=n>narrow</p>", 600);
+        const litem *m = word("wide"), *n = word("narrow");
+        ok("rules for a window wider than this one do not apply", m && m->color != 0xFF0000);
+        ok("and rules for this one do", n && n->color == 0xFF0000);
+    }
+
+    /* --- selectors ----------------------------------------------------------- */
+    {
+        lay("<style>[data-x=a]{color:#ff0000}[title^=pre]{color:#00ff00}"
+            "[title$=end]{color:#0000ff}[class~=two]{color:#ff00ff}</style>"
+            "<p data-x=a>aa</p><p data-x=b>bb</p><p title=prefix>pp</p>"
+            "<p title=theend>ee</p><p class=\"one two\">ww</p><p class=twofold>ff</p>", 600);
+        const litem *aa = word("aa"), *bb = word("bb"), *pp = word("pp"), *ee = word("ee");
+        const litem *ww = word("ww"), *ff = word("ff");
+        ok("an attribute selector with a value matches that value", aa && aa->color == 0xFF0000);
+        ok("and not another", bb && bb->color != 0xFF0000);
+        ok("^= and $= match the start and the end", pp && pp->color == 0x00FF00 && ee && ee->color == 0x0000FF);
+        ok("~= matches a whole word only", ww && ww->color == 0xFF00FF && ff && ff->color != 0xFF00FF);
+
+        lay("<style>p:focus{color:#ff0000}li:last-child{color:#00ff00}"
+            "li:nth-child(2n){color:#0000ff}p:not(.x){color:#ff00ff}</style>"
+            "<p class=x>focus</p><ul><li>l1</li><li>l2</li><li>l3</li></ul><p>other</p>", 600);
+        const litem *fo = word("focus"), *l1 = word("l1"), *l2 = word("l2"), *l3 = word("l3");
+        const litem *ot = word("other");
+        ok("a state nothing is in when a page is drawn does not apply", fo && fo->color != 0xFF0000);
+        ok(":last-child is the last", l3 && l3->color == 0x00FF00 && l1 && l1->color != 0x00FF00);
+        ok(":nth-child(2n) is every second", l2 && l2->color == 0x0000FF && l1->color != 0x0000FF);
+        ok(":not() refuses what it names", ot && ot->color == 0xFF00FF && fo->color != 0xFF00FF);
+
+        lay("<style>tbody td{color:#ff0000}my-el{display:block}h2+p{color:#00ff00}"
+            "h2~p{font-weight:bold}</style>"
+            "<table><tbody><tr><td>cell</td></tr></tbody></table>"
+            "<span>one</span><my-el>two</my-el>"
+            "<h2>h</h2><p>next</p><p>later</p>", 600);
+        const litem *ce = word("cell"), *o1 = word("one"), *t2 = word("two");
+        const litem *nx = word("next"), *lt = word("later");
+        ok("a selector naming an element with no number of its own applies", ce && ce->color == 0xFF0000);
+        ok("and a page's own element can be a block", o1 && t2 && t2->y > o1->y);
+        ok("+ takes the element straight after", nx && nx->color == 0x00FF00 && lt && lt->color != 0x00FF00);
+        ok("~ takes every one after", nx && lt && nx->face == lt->face && tface_of(lt->face)->bold);
+    }
+
+    /* --- the browser's own rules lose to the page's ------------------------- */
+    {
+        lay("<style>*{margin:0}#d{background:#eeeeee}</style><div id=d><p>first</p></div>", 600);
+        const litem *d = box_of(by_id("d")), *f = word("first");
+        ok("a page's rule beats the browser's own, however specific", d && f && f->y - d->y < 6);
+    }
+
+    /* --- what old markup says about itself ---------------------------------- */
+    {
+        lay("<font color=red size=6>big</font> <span>small</span>", 600);
+        const litem *bg = word("big"), *sm = word("small");
+        ok("<font> gives its colour and its size", bg && sm && bg->color == 0xFF0000
+           && tface_h(bg->face) > tface_h(sm->face));
+        lay("<p hidden>gone</p><p>kept</p>", 600);
+        ok("the hidden attribute hides", !word("gone") && word("kept"));
+    }
+
+    /* --- flex rows that wrap, and that cannot shrink past their words ------- */
+    {
+        lay("<style>.r{display:flex;flex-wrap:wrap}.r div{width:150px;background:#eeeeee}</style>"
+            "<div class=r><div id=a>1</div><div>2</div><div>3</div><div id=d>4</div></div>", 500);
+        const litem *a = box_of(by_id("a")), *d = box_of(by_id("d"));
+        ok("a wrapping row puts what does not fit on the next line", a && d && d->y > a->y && d->x == a->x);
+
+        lay("<style>.f{display:flex}</style><div class=f><div>abcdefghijklmnopqrstu</div>"
+            "<div>vwxyzabcdefghijklmnop</div><div>qrstuvwxyzabcdefghij</div></div>", 200);
+        const litem *w1 = word("abcdefghijklmnopqrstu"), *w2 = word("vwxyzabcdefghijklmnop");
+        ok("a row too narrow for its words does not write them over each other",
+           w1 && w2 && w2->x >= w1->x + w1->w);
+
+        static char many[4096];
+        int n = 0;
+        const char *head = "<style>.f{display:flex;flex-wrap:wrap}</style><div class=f>";
+        for (const char *p = head; *p; p++) many[n++] = *p;
+        for (int i = 0; i < 150; i++) {
+            const char *cell = "<div>k</div>";
+            for (const char *p = cell; *p; p++) many[n++] = *p;
+        }
+        const char *tail = "<div>last</div></div>";
+        for (const char *p = tail; *p; p++) many[n++] = *p;
+        many[n] = 0;
+        lay(many, 600);
+        ok("a flex row of more than a hundred and fifty keeps every one", word("last") != 0);
+    }
+
+    /* --- floats ---------------------------------------------------------------- */
+    {
+        lay("<style>#f{float:right;width:100px;background:#0000ff}#c{clear:both;background:#eeeeee}</style>"
+            "<div id=f>F</div>"
+            "<p>one two three four five six seven eight nine ten eleven twelve thirteen "
+            "fourteen fifteen sixteen seventeen eighteen nineteen twenty</p>"
+            "<div id=c>below</div>", 400);
+        const litem *f0 = box_of(by_id("f"));
+        lay("<style>#f{float:right;width:100px;height:200px;background:#0000ff}"
+            "#c{clear:both;background:#eeeeee}</style>"
+            "<div id=f>F</div><p>short</p><div id=c>below</div>", 400);
+        const litem *fc = box_of(by_id("f")), *cc = box_of(by_id("c"));
+        ok("a box that clears goes below the float", fc && cc && cc->y >= fc->y + fc->h);
+        lay("<style>#f{float:right;width:100px;background:#0000ff}#c{clear:both;background:#eeeeee}</style>"
+            "<div id=f>F</div>"
+            "<p>one two three four five six seven eight nine ten eleven twelve thirteen "
+            "fourteen fifteen sixteen seventeen eighteen nineteen twenty</p>"
+            "<div id=c>below</div>", 400);
+        (void)f0;
+        const litem *f = box_of(by_id("f")), *one = word("one"), *c = box_of(by_id("c"));
+        ok("a float to the right is at the right", f && f->x == 300 && f->w == 100);
+        int beside = 1;
+        for (int i = 0; f && i < page.nitems; i++) {
+            const litem *it = &page.items[i];
+            if (it->kind == LK_TEXT && it->y < f->y + f->h && it->x + it->w > f->x && it->node != by_id("f")
+                && page.text[it->at] != 'F')
+                beside = 0;
+        }
+        ok("and the words beside it keep out of its way", one && beside);
+        ok("and one after a long paragraph is below it too", f && c && c->y >= f->y + f->h);
+
+        lay("<style>.o{padding:0 40px}#n{margin:0 -20px;background:#ff0000}</style>"
+            "<div class=o><div id=n>x</div></div>", 400);
+        const litem *nb = box_of(by_id("n"));
+        ok("a negative margin reaches into its container", nb && nb->x == 20 && nb->w == 360);
+    }
+
+    /* --- words for a screen reader and not for the eye ---------------------- */
+    {
+        lay("<style>.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)}</style>"
+            "<p>shown <span class=sr>unseen</span></p>", 600);
+        ok("text clipped to nothing is not drawn", word("shown") && !word("unseen"));
+        lay("<style>.cap{max-height:20px}</style><div class=cap><p>p1</p><p>p2</p><p>p3</p></div><p>after</p>", 600);
+        const litem *p3 = word("p3"), *af = word("after");
+        ok("a box capped in height but not hiding its overflow does not put what follows over it",
+           p3 && af && af->y > p3->y);
+    }
+
+    /* --- a picture made a block is still a picture ------------------------- */
+    {
+        lay("<style>#pic{display:block}</style><div><img id=pic src=x></div>", 600);
+        picture_at("pic", 40, 30);
+        lay("<style>#pic{display:block}</style><div><img id=pic src=x></div>", 600);
+        int found = 0;
+        for (int i = 0; i < page.nitems; i++)
+            if (page.items[i].kind == LK_IMAGE) found = 1;
+        nfake = 0;
+        ok("a picture with display:block is drawn", found);
+    }
+
+    /* --- a button that is only an icon ------------------------------------- */
+    {
+        lay("<button id=b aria-label=\"search\"><svg></svg></button>", 600);
+        int b = by_id("b");
+        const char *label = b >= 0 ? lay_control_label(&doc, b, CTL_BUTTON) : "";
+        ok("a button with no words is named by its label, not called Button", w_same(label, "search"));
+    }
+
+    /* --- a transform's translation ------------------------------------------
+     *
+     * Moved by pixels and by a share of the box's own size, once the box is
+     * laid out: the dialog centred by going back half itself, the menu kept
+     * out of sight by going back all of itself. */
+    {
+        lay("<style>#m{position:absolute;left:0;top:0;width:200px;transform:translateX(-100%);"
+            "background:#ff0000}#d{position:absolute;left:300px;top:100px;width:100px;height:40px;"
+            "transform:translate(-50%, -50%);background:#00ff00}"
+            "#c{position:absolute;left:0;top:300px;width:200px;"
+            "transform:translateX(calc(-100% - 10px));background:#0000ff}</style>"
+            "<div id=m>menu</div><div id=d>dialog</div><div id=c>calc</div>", 600);
+        const litem *m = box_of(by_id("m")), *dg = box_of(by_id("d")), *c = box_of(by_id("c"));
+        ok("translated boxes are laid out", m && dg && c);
+        if (m) okn("translateX(-100%) moves a box back its own width", m->x == -200, m->x);
+        if (dg) okn("translate(-50%, -50%) centres a box on its point", dg->x == 250 && dg->y == 80, dg->x);
+        if (c) okn("and calc() of a share and pixels is both", c->x == -210, c->x);
     }
 
     puts(failed ? "LAYOUTTEST_FAIL\n" : "LAYOUTTEST_PASS\n");

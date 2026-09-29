@@ -6,14 +6,13 @@
  * block contains it, and a line is as tall as the tallest thing on it.
  * That is the part of CSS layout that decides whether a page is readable.
  *
- * What is deliberately not here is the part that decides whether a page is
- * pixel for pixel what its author saw: floats, absolute and fixed
- * positioning, flex and grid tracks, and tables with column widths. Every
- * one of those turns a page from one column into several, and a browser
- * that does half of them puts things in places nobody chose. Elements that
- * ask for them are laid out as ordinary blocks, which is the arrangement
- * their markup describes, and it reads top to bottom in the order it was
- * written.
+ * Around that, the arrangements that turn a page from one column into
+ * several: flex rows (which wrap), tables with column widths, floats that
+ * lines flow round, inline-blocks placed like words, and absolute and
+ * relative positioning -- each the short honest version described where it
+ * is done. What is still not here is grid, whose containers are laid out
+ * as ordinary blocks, which is the arrangement their markup describes and
+ * reads top to bottom in the order it was written.
  *
  * The output is a flat display list in document coordinates. Drawing is
  * somebody else's problem and so is scrolling: both are a subtraction.
@@ -213,7 +212,13 @@ static inline const char *lay_control_label(const ddoc *d, int el, int kind) {
         if (v && *v) return v;
         if (d->nodes[el].tag == T_BUTTON) {
             dom_text_content(d, el, buf, (int)sizeof(buf));
-            return buf[0] ? buf : "Button";
+            if (buf[0]) return buf;
+            /* A button that is only an icon has its name in aria-label or
+               title, which is what a screen reader says for it; with neither
+               it is an empty button rather than one that says "Button". */
+            v = dom_attr(d, el, "aria-label");
+            if (!v || !*v) v = dom_attr(d, el, "title");
+            return v ? v : "";
         }
         const char *t = dom_attr(d, el, "type");
         if (t && lay_same_fold(t, "reset")) return "Reset";
@@ -287,6 +292,29 @@ typedef struct {
        is its width whatever its own width says: that was only where the row
        started from (lay_flex). -1 when there is none. */
     int flex_sized;
+
+    /* Boxes sitting on the line being built as one piece -- an inline-block,
+       laid out as a block and placed like a word -- which the end of the line
+       moves together rather than dropping each thing inside onto the
+       baseline on its own. Items grp_first[i] up to grp_end[i]; a pinned one
+       (something absolutely positioned inside a run of text) is not moved at
+       all. The line's own are the last ones: those at or past line_at. */
+#define LAY_GROUPS 256
+    int grp_first[LAY_GROUPS], grp_end[LAY_GROUPS], grp_h[LAY_GROUPS];
+    unsigned char grp_pin[LAY_GROUPS];
+    int ngroups;
+
+    /* The room a line was offered before any float took some of it, which is
+       what the next line starts from (lay_line_start). */
+    int cont_left, cont_width;
+
+    /* Floats placed so far, the last LAY_FLOATS of them, in page
+       coordinates: a line that starts beside one is shortened by it. */
+#define LAY_FLOATS 64
+    int fl_x[LAY_FLOATS], fl_y[LAY_FLOATS], fl_w[LAY_FLOATS], fl_h[LAY_FLOATS];
+    unsigned char fl_side[LAY_FLOATS];
+    int fl_seq;                   /* how many ever placed */
+    int floating;                 /* the float being laid out, not floated again */
 } lctx;
 
 static inline int lay_put(lctx *L, const char *s, int n) {
@@ -348,11 +376,28 @@ static inline void lay_line_end(lctx *L, int *y) {
     int slack = L->line_width - used;
     if (slack < 0) slack = 0;
     int shift = 0;
-    if (L->align == A_CENTER) shift = slack / 2;
+    /* Being measured, a line is as wide as its words wherever they would
+       sit: centred, it reached halfway across whatever it was measured in,
+       and a table column holding a centred heading asked for the whole page. */
+    if (L->measuring) shift = 0;
+    else if (L->align == A_CENTER) shift = slack / 2;
     else if (L->align == A_RIGHT) shift = slack;
 
+    int g0 = L->ngroups;
+    while (g0 > 0 && L->grp_first[g0 - 1] >= L->line_at) g0--;
+    int gi = g0;
     for (int i = L->line_at; i < o->nitems; i++) {
         litem *it = &o->items[i];
+        while (gi < L->ngroups && L->grp_end[gi] <= i) gi++;
+        if (gi < L->ngroups && i >= L->grp_first[gi]) {
+            /* One piece: laid out from the top of the line, and moved down
+               together so that its bottom sits on the baseline. */
+            if (L->grp_pin[gi]) continue;
+            it->x += shift;
+            int dy = L->line_base - L->grp_h[gi];
+            if (dy > 0) it->y += dy;
+            continue;
+        }
         it->x += shift;
         /* Sit on the baseline rather than on the top of the line. */
         if (it->kind == LK_TEXT)
@@ -361,6 +406,7 @@ static inline void lay_line_end(lctx *L, int *y) {
             it->y = L->line_top + L->line_base - it->h;
         if (it->y < L->line_top) it->y = L->line_top;
     }
+    L->ngroups = g0;
 
     *y = L->line_top + L->line_h;
     L->line_started = 0;
@@ -368,8 +414,54 @@ static inline void lay_line_end(lctx *L, int *y) {
     L->pending_space = 0;
 }
 
+/* The room at height y inside left..left+width once the floats beside it
+   have taken theirs: moved in from the side each float is on. */
+static inline void lay_float_room(const lctx *L, int y, int *l, int *r) {
+    int first = L->fl_seq > LAY_FLOATS ? L->fl_seq - LAY_FLOATS : 0;
+    for (int s = first; s < L->fl_seq; s++) {
+        int k = s % LAY_FLOATS;
+        if (y < L->fl_y[k] || y >= L->fl_y[k] + L->fl_h[k]) continue;
+        int fx = L->fl_x[k], fr = L->fl_x[k] + L->fl_w[k];
+        if (fr <= *l || fx >= *r) continue;
+        if (L->fl_side[k] == 1) { if (fr > *l) *l = fr; }
+        else { if (fx < *r) *r = fx; }
+    }
+}
+
+/* The lowest bottom above which a float still stands at height y, or -1. */
+static inline int lay_float_next(const lctx *L, int y, int l, int r) {
+    int best = -1;
+    int first = L->fl_seq > LAY_FLOATS ? L->fl_seq - LAY_FLOATS : 0;
+    for (int s = first; s < L->fl_seq; s++) {
+        int k = s % LAY_FLOATS;
+        int b = L->fl_y[k] + L->fl_h[k];
+        if (y < L->fl_y[k] || y >= b) continue;
+        if (L->fl_x[k] + L->fl_w[k] <= l || L->fl_x[k] >= r) continue;
+        if (best < 0 || b < best) best = b;
+    }
+    return best;
+}
+
 static inline void lay_line_start(lctx *L, int y, int left, int width,
                                   int align) {
+    L->cont_left = left;
+    L->cont_width = width;
+    /* Beside a float the line is shorter; and where what is left is too
+       narrow for a word, the line goes below the float instead. */
+    if (L->fl_seq) {
+        for (int tries = 0; tries < 8; tries++) {
+            int l = left, r = left + width;
+            lay_float_room(L, y, &l, &r);
+            if (r - l >= 48 || (l == left && r == left + width)) {
+                left = l;
+                width = r - l;
+                break;
+            }
+            int nb = lay_float_next(L, y, left, left + width);
+            if (nb < 0) break;
+            y = nb;
+        }
+    }
     L->line_at = L->out->nitems;
     L->line_n = 0;
     L->line_top = y;
@@ -407,7 +499,7 @@ static inline void lay_word(lctx *L, const char *s, int n, const cstyle *st,
 
     if (L->pen + sp + w > L->line_left + L->line_width
         && L->pen > L->line_left && st->white != WS_NOWRAP) {
-        int left = L->line_left, width = L->line_width, al = L->align;
+        int left = L->cont_left, width = L->cont_width, al = L->align;
         lay_line_end(L, y);
         lay_line_start(L, *y, left, width, al);
         sp = 0;
@@ -461,7 +553,7 @@ static inline void lay_text_run(lctx *L, const char *s, const cstyle *st,
             }
             if (!s[i]) break;
             i++;
-            int left = L->line_left, width = L->line_width, al = L->align;
+            int left = L->cont_left, width = L->cont_width, al = L->align;
             lay_line_end(L, y);
             lay_line_start(L, *y, left, width, al);
         }
@@ -552,24 +644,215 @@ static inline void lay_apply_rule(lctx *L, int rule, cstyle *out, int pct_of) {
         css_apply(L->s, &L->s->decls[r->decl_at + k], out, L->root_px, pct_of);
 }
 
+/* --- what the markup says about its own look -------------------------------
+ *
+ * Before style sheets there were attributes: bgcolor, width, align, valign,
+ * cellpadding, border, and <font>. Half the old web and some of the biggest
+ * sites' plainest pages still say everything that way -- a news aggregator's
+ * orange bar is a bgcolor on a table cell, and its centred column is a table
+ * with width="85%" inside a <center>. None of it was read.
+ *
+ * They count for less than any style sheet a page has and for more than the
+ * browser's own, which is where lay_style puts them. */
+
+/* An element this has no T_ for, by name: tbody and font are among them. */
+static inline int lay_named(const ddoc *d, int el, const char *name) {
+    const dnode *n = &d->nodes[el];
+    if (n->kind != DN_ELEMENT || n->tag != T_OTHER || n->text < 0) return 0;
+    return lay_same_fold(d->arena + n->text, name);
+}
+
+/* A colour as old markup writes one, which is with or without its #. */
+static inline int lay_attr_color(const char *v, u32 *out) {
+    if (!v) return 0;
+    while (*v == ' ') v++;
+    if (css_color(v, out)) return 1;
+    char with[16];
+    int k = 0;
+    with[k++] = '#';
+    for (; v[k - 1] && k < 15; k++) with[k] = v[k - 1];
+    with[k] = 0;
+    return css_color(with, out);
+}
+
+/* A width or height attribute: pixels, or a percentage of `pct_of`. */
+static inline int lay_attr_len(const char *v, int pct_of) {
+    if (!v) return -1;
+    int n = lay_number(v);
+    const char *q = v;
+    while (*q == ' ') q++;
+    while (*q >= '0' && *q <= '9') q++;
+    if (*q == '.') { q++; while (*q >= '0' && *q <= '9') q++; }
+    if (*q == '%') return pct_of > 0 ? n * pct_of / 100 : -1;
+    if (q == v) return -1;
+    return n;
+}
+
+static inline int lay_attr_align(const char *v) {
+    if (!v) return -1;
+    if (lay_same_fold(v, "center") || lay_same_fold(v, "middle")) return A_CENTER;
+    if (lay_same_fold(v, "right")) return A_RIGHT;
+    if (lay_same_fold(v, "left")) return A_LEFT;
+    if (lay_same_fold(v, "justify")) return A_JUSTIFY;
+    return -1;
+}
+
+/* The table a cell, row or group belongs to, within a few levels. */
+static inline int lay_table_of(const ddoc *d, int el) {
+    int at = d->nodes[el].parent;
+    for (int k = 0; k < 4 && at >= 0; k++, at = d->nodes[at].parent)
+        if (d->nodes[at].kind == DN_ELEMENT && d->nodes[at].tag == T_TABLE) return at;
+    return -1;
+}
+
+static inline void lay_hints(lctx *L, int el, cstyle *st, int pct_of) {
+    const ddoc *d = L->d;
+    if (el < 0 || d->nodes[el].kind != DN_ELEMENT) return;
+    if (d->nodes[el].attr_n == 0) {
+        if (d->nodes[el].tag == T_TABLE && !d->standards) st->align = A_LEFT;
+        if (lay_named(d, el, "tbody") || lay_named(d, el, "thead") || lay_named(d, el, "tfoot"))
+            st->display = D_TABLE_GROUP;
+        return;
+    }
+    int tag = d->nodes[el].tag;
+    u32 c;
+    const char *v;
+
+    if (tag == T_BODY || tag == T_TABLE || tag == T_TR || tag == T_TD || tag == T_TH) {
+        if (lay_attr_color(dom_attr(d, el, "bgcolor"), &c)) { st->background = c; st->has_bg = 1; }
+    }
+    if (tag == T_BODY && lay_attr_color(dom_attr(d, el, "text"), &c)) st->color = c;
+
+    if (tag == T_TABLE || tag == T_TD || tag == T_TH || tag == T_HR) {
+        int w = lay_attr_len(dom_attr(d, el, "width"), pct_of);
+        if (w > 0) st->width = (short)(w > 4000 ? 4000 : w);
+    }
+    if (tag == T_TABLE || tag == T_TD || tag == T_TH || tag == T_TR) {
+        int h = lay_attr_len(dom_attr(d, el, "height"), -1);
+        if (h > 0) st->height = (short)(h > 4000 ? 4000 : h);
+    }
+
+    if (tag == T_IMG || tag == T_TABLE) {
+        /* align="left" on a picture or a table is a float. */
+        v = dom_attr(d, el, "align");
+        if (v && lay_same_fold(v, "left")) st->floated = 1;
+        else if (v && lay_same_fold(v, "right")) st->floated = 2;
+    }
+
+    if (tag == T_TABLE) {
+        /* Without a doctype a table starts its text from the left whatever
+           it sits in -- the quirk a centred page of tables relies on to have
+           its rows read from the left. */
+        if (!d->standards) st->align = A_LEFT;
+        v = dom_attr(d, el, "align");
+        if (v && lay_same_fold(v, "center")) st->ml = st->mr = CSS_AUTO_OFF;
+        v = dom_attr(d, el, "cellspacing");
+        if (v) { int n = lay_number(v); st->spacing = (short)(n > 64 ? 64 : n); }
+        v = dom_attr(d, el, "border");
+        if (v) {
+            int n = *v ? lay_number(v) : 1;
+            if (n > 8) n = 8;
+            if (n > 0) {
+                st->bt = st->br = st->bb = st->bl = (short)n;
+                st->border_color = 0x808080;
+            }
+        }
+    }
+
+    if (tag == T_TD || tag == T_TH) {
+        int t = lay_table_of(d, el);
+        if (t >= 0) {
+            v = dom_attr(d, t, "cellpadding");
+            if (v) {
+                int n = lay_number(v);
+                if (n > 64) n = 64;
+                st->pt = st->pr = st->pb = st->pl = (short)n;
+            }
+            v = dom_attr(d, t, "border");
+            if (v && (!*v || lay_number(v) > 0)) {
+                st->bt = st->br = st->bb = st->bl = 1;
+                st->border_color = 0x808080;
+            }
+        }
+        if (dom_attr(d, el, "nowrap")) st->white = WS_NOWRAP;
+    }
+
+    if (tag == T_TD || tag == T_TH || tag == T_TR) {
+        v = dom_attr(d, el, "valign");
+        if (v) {
+            if (lay_same_fold(v, "top")) st->valign = VA_TOP;
+            else if (lay_same_fold(v, "bottom")) st->valign = VA_BOTTOM;
+            else if (lay_same_fold(v, "middle") || lay_same_fold(v, "center")) st->valign = VA_MIDDLE;
+        }
+    }
+
+    if (tag == T_TD || tag == T_TH || tag == T_TR || tag == T_DIV || tag == T_P
+        || (tag >= T_H1 && tag <= T_H6) || tag == T_CAPTION) {
+        int a = lay_attr_align(dom_attr(d, el, "align"));
+        if (a >= 0) st->align = (unsigned char)a;
+    }
+
+    if (lay_named(d, el, "tbody") || lay_named(d, el, "thead") || lay_named(d, el, "tfoot"))
+        st->display = D_TABLE_GROUP;
+
+    if (lay_named(d, el, "font")) {
+        if (lay_attr_color(dom_attr(d, el, "color"), &c)) st->color = c;
+        v = dom_attr(d, el, "size");
+        if (v) {
+            /* One to seven, or a step from three written with a sign. */
+            static const short PX[8] = { 0, 10, 13, 16, 18, 24, 32, 48 };
+            const char *q = v;
+            while (*q == ' ') q++;
+            int step = *q == '+' || *q == '-';
+            int n = lay_number(step ? q + 1 : q);
+            if (step) n = *q == '+' ? 3 + n : 3 - n;
+            if (n < 1) n = 1;
+            if (n > 7) n = 7;
+            st->font_px = PX[n];
+        }
+        v = dom_attr(d, el, "face");
+        if (v) {
+            for (const char *q = v; q[0] && q[1] && q[2] && q[3]; q++) {
+                char a = w_lower(q[0]), b = w_lower(q[1]), e = w_lower(q[2]), f = w_lower(q[3]);
+                if ((a == 'm' && b == 'o' && e == 'n' && f == 'o')
+                    || (a == 'c' && b == 'o' && e == 'u' && f == 'r')) { st->mono = 1; break; }
+            }
+        }
+    }
+}
+
 static inline void lay_style(lctx *L, int el, const cstyle *parent,
                              cstyle *out, int pct_of) {
     css_inherit(out, parent);
+    /* The browser's own rules, then what the markup says about itself, then
+       the page's sheets: an author's rule beats the browser's whatever
+       either's specificity, which is the order the cascade has always had
+       and which a sorted list of both had lost. */
+    int ua = L->s->ua_rules;
+    const int *rules;
+    int n;
+    chit hits[CSS_HITS];
     if (el >= 0 && el < DOM_NODES && lay_hit_gen[el] == lay_gen) {
-        const int *rules = lay_hit_pool + lay_hit_at[el];
-        for (int i = 0; i < lay_hit_n[el]; i++) lay_apply_rule(L, rules[i], out, pct_of);
+        rules = lay_hit_pool + lay_hit_at[el];
+        n = lay_hit_n[el];
     } else {
-        chit hits[CSS_HITS];
-        int n = css_collect(L->s, L->x, L->d, el, L->m, lay_ancestors(L->d, el), hits);
+        n = css_collect(L->s, L->x, L->d, el, L->m, lay_ancestors(L->d, el), hits);
         L->out->matched++;
         if (el >= 0 && el < DOM_NODES && lay_hit_used + n <= LAY_HIT_POOL) {
             lay_hit_at[el] = lay_hit_used;
             lay_hit_n[el] = (unsigned short)n;
             lay_hit_gen[el] = lay_gen;
             for (int i = 0; i < n; i++) lay_hit_pool[lay_hit_used++] = hits[i].rule;
+            rules = lay_hit_pool + lay_hit_at[el];
+        } else {
+            static int loose[CSS_HITS];
+            for (int i = 0; i < n; i++) loose[i] = hits[i].rule;
+            rules = loose;
         }
-        for (int i = 0; i < n; i++) lay_apply_rule(L, hits[i].rule, out, pct_of);
     }
+    for (int i = 0; i < n; i++) if (rules[i] < ua) lay_apply_rule(L, rules[i], out, pct_of);
+    lay_hints(L, el, out, pct_of);
+    for (int i = 0; i < n; i++) if (rules[i] >= ua) lay_apply_rule(L, rules[i], out, pct_of);
 
     /* And last, what the element says about itself. A style attribute beats
        every rule in every sheet no matter how specific, which is the one
@@ -582,6 +865,255 @@ static inline void lay_style(lctx *L, int el, const cstyle *parent,
 
 static void lay_block(lctx *L, int node, const cstyle *parent, int x,
                       int avail, int *y);
+static int lay_measure(lctx *L, int node, const cstyle *parent, int avail,
+                       int *height);
+
+/* Something written for a screen reader and not for the eye: clipped to
+   nothing, or a box a pixel or two across whose overflow is hidden. */
+static inline int lay_unseen(const cstyle *st) {
+    if (st->gone) return 1;
+    return st->clip && ((st->width >= 0 && st->width <= 2)
+                        || (st->height >= 0 && st->height <= 2));
+}
+
+/* An inline-block, or something absolutely positioned inside a run of
+ * text, laid out as a block of its own from the top of the line it lands
+ * on and placed on the line as one piece (lctx grp_*).
+ *
+ * Both used to be walked as though they were inline: an inline-block's
+ * width, padding and background were ignored and whatever blocks were in it
+ * were run into the words around it, which is how a row of buttons or tabs
+ * became one long sentence; and an absolutely positioned label was written
+ * into the text it was meant to float over. */
+static void lay_inline_piece(lctx *L, int at, const cstyle *parent, int pin, int *y) {
+    cstyle st;
+    lay_style(L, at, parent, &st, L->line_width);
+    int w = L->line_width;
+    if (!pin) {
+        int frame = st.pl + st.pr + st.bl + st.br;
+        int mw = (st.ml > 0 ? st.ml : 0) + (st.mr > 0 ? st.mr : 0);
+        if (st.width >= 0) {
+            w = st.width + (st.border_box ? 0 : frame) + mw;
+        } else if (L->measuring) {
+            /* Inside a measurement already, and a box being measured comes
+               out as wide as what is in it (lay_block_placed): laying it out
+               once in all the room left says how wide it is. Measuring it
+               first and then laying it out, at every level of nesting, was
+               twice the work per level -- a page header of inline-blocks
+               fifteen deep took minutes. */
+            w = L->line_left + L->line_width - L->pen;
+            if (w < 1) w = 1;
+            int first = L->out->nitems, s_mr = L->measure_right, yy = L->line_top;
+            int s_line_at = L->line_at, s_line_n = L->line_n, s_pen = L->pen;
+            int s_top = L->line_top, s_h = L->line_h, s_base = L->line_base;
+            int s_cl = L->cont_left, s_cw = L->cont_width;
+            int s_left = L->line_left, s_width = L->line_width, s_align = L->align;
+            int s_link = L->cur_link, s_space = L->pending_space;
+            L->measure_right = 0;
+            L->line_started = 0;
+            L->flex_sized = at;
+            lay_block(L, at, parent, L->pen, w, &yy);
+            L->flex_sized = -1;
+            int right = L->measure_right;
+            for (int i = first; i < L->out->nitems; i++) {
+                int r = L->out->items[i].x + L->out->items[i].w;
+                if (r > right) right = r;
+            }
+            L->measure_right = s_mr > right ? s_mr : right;
+            L->line_at = s_line_at; L->line_n = s_line_n; L->pen = s_pen;
+            L->line_top = s_top; L->line_h = s_h; L->line_base = s_base;
+            L->line_left = s_left; L->line_width = s_width;
+    L->cont_left = s_cl; L->cont_width = s_cw; L->align = s_align;
+            L->cur_link = s_link; L->pending_space = s_space;
+            L->line_started = 1;
+            int pw = right - s_pen;
+            if (pw < 1) pw = 1;
+            int h = yy - s_top;
+            if (L->ngroups < LAY_GROUPS && L->out->nitems > first) {
+                L->grp_first[L->ngroups] = first;
+                L->grp_end[L->ngroups] = L->out->nitems;
+                L->grp_h[L->ngroups] = h;
+                L->grp_pin[L->ngroups] = 0;
+                L->ngroups++;
+            }
+            L->pen += pw;
+            L->line_n++;
+            lay_line_fit(L, h > 0 ? h : 1, 100);
+            L->pending_space = 0;
+            return;
+        } else {
+            int h0;
+            w = lay_measure(L, at, parent, L->line_width, &h0);
+        }
+        if (w > L->line_width) w = L->line_width;
+        if (w < 1) w = 1;
+
+        int sp = 0;
+        if (L->pending_space && L->pen > L->line_left)
+            sp = tface_wn(" ", 1, face_pick(parent->font_px, parent->bold, parent->mono));
+        if (L->pen + sp + w > L->line_left + L->line_width && L->pen > L->line_left) {
+            int left = L->cont_left, width = L->cont_width, al = L->align;
+            lay_line_end(L, y);
+            lay_line_start(L, *y, left, width, al);
+            sp = 0;
+        }
+        L->pen += sp;
+    }
+
+    int s_line_at = L->line_at, s_line_n = L->line_n;
+    int s_pen = L->pen, s_top = L->line_top;
+    int s_h = L->line_h, s_base = L->line_base;
+    int s_cl = L->cont_left, s_cw = L->cont_width;
+            int s_left = L->line_left, s_width = L->line_width;
+    int s_align = L->align, s_link = L->cur_link, s_space = L->pending_space;
+
+    int first = L->out->nitems;
+    int yy = L->line_top;
+    L->line_started = 0;
+    if (!pin) L->flex_sized = at;          /* its width was settled here */
+    lay_block(L, at, parent, pin ? L->line_left : L->pen, w, &yy);
+    L->flex_sized = -1;
+
+    L->line_at = s_line_at; L->line_n = s_line_n;
+    L->pen = s_pen; L->line_top = s_top;
+    L->line_h = s_h; L->line_base = s_base;
+    L->line_left = s_left; L->line_width = s_width;
+    L->cont_left = s_cl; L->cont_width = s_cw;
+    L->align = s_align; L->cur_link = s_link;
+    L->pending_space = s_space;
+    L->line_started = 1;
+
+    int h = yy - s_top;
+    if (L->out->nitems > first && L->ngroups < LAY_GROUPS) {
+        L->grp_first[L->ngroups] = first;
+        L->grp_end[L->ngroups] = L->out->nitems;
+        L->grp_h[L->ngroups] = h;
+        L->grp_pin[L->ngroups] = (unsigned char)pin;
+        L->ngroups++;
+    }
+    if (pin) return;
+    L->pen += w;
+    L->line_n++;
+    lay_line_fit(L, h > 0 ? h : 1, 100);
+    L->pending_space = 0;
+}
+
+/* --- floats ---------------------------------------------------------------
+ *
+ * A float goes to one side of what it is in and the lines beside it are
+ * shortened to leave it room (lay_line_start): a sidebar, a picture with the
+ * text round it, the box of facts at the top of an encyclopaedia article.
+ * They were laid out as blocks in the flow, so every sidebar came above the
+ * page it was beside and every picture sat alone on a line.
+ *
+ * What is here: a float is as wide as it was told or as its contents want,
+ * goes as far to its side as the floats already there allow, and down past
+ * them when there is no room; lines beside it are shorter, and a block that
+ * clears goes below it. What is not: blocks do not move aside for floats
+ * (only their lines do, which is what a block that is not its own
+ * formatting context does anyway), and a block always grows to hold the
+ * floats inside it, as though every one were cleared at its end -- the
+ * clearfix nearly every page applies, which this cannot see because it is
+ * written as an ::after box. */
+static void lay_inline(lctx *L, int node, const cstyle *parent, int *y);
+
+static void lay_float(lctx *L, int node, const cstyle *parent, int cleft, int cwidth, int y0) {
+    const ddoc *d = L->d;
+    cstyle st;
+    lay_style(L, node, parent, &st, cwidth);
+    int tag = d->nodes[node].tag;
+    int replaced = tag == T_IMG || lay_control_kind(d, node) != CTL_NONE;
+    int ml = st.ml == CSS_AUTO_OFF ? 0 : st.ml, mr = st.mr == CSS_AUTO_OFF ? 0 : st.mr;
+
+    /* The box's own width, margins apart. */
+    int w;
+    if (st.width >= 0) {
+        w = st.width + (st.border_box ? 0 : st.pl + st.pr + st.bl + st.br);
+    } else if (tag == T_IMG) {
+        const limage *pic = lay_image_of(L, node);
+        const char *aw = dom_attr(d, node, "width");
+        w = aw ? lay_number(aw) : pic ? pic->w : 0;
+        if (w <= 0) return;                  /* nothing arrived and no size */
+    } else {
+        /* Measured as itself, not as a float: measuring lays it out, and
+           laid out it would be floated again, and measured again. */
+        int h, was = L->floating;
+        L->floating = node;
+        w = lay_measure(L, node, parent, cwidth, &h) - (ml > 0 ? ml : 0) - (mr > 0 ? mr : 0);
+        L->floating = was;
+    }
+    if (w > cwidth) w = cwidth;
+    if (w < 1) w = 1;
+
+    /* The room it needs is its margin box, which a negative margin makes
+       smaller than the box -- to nothing, for a sidebar pulled back across
+       the column floated before it with margin-left: -100%. */
+    int need = w + ml + mr;
+    if (need < 0) need = 0;
+
+    /* As far to its side as it goes, and down past floats when there is not
+       the room beside them. */
+    int y = y0, l = cleft, r = cleft + cwidth;
+    for (int tries = 0; tries < 16; tries++) {
+        l = cleft; r = cleft + cwidth;
+        lay_float_room(L, y, &l, &r);
+        if (r - l >= need) break;
+        int nb = lay_float_next(L, y, cleft, cleft + cwidth);
+        if (nb < 0) { l = cleft; r = cleft + cwidth; break; }
+        y = nb;
+    }
+    int mx = st.floated == 2 ? r - need : l;       /* the margin box */
+    int x = mx + ml;                              /* the box */
+
+    int s_line_at = L->line_at, s_line_n = L->line_n, s_pen = L->pen;
+    int s_top = L->line_top, s_h = L->line_h, s_base = L->line_base;
+    int s_left = L->line_left, s_width = L->line_width, s_align = L->align;
+    int s_cl = L->cont_left, s_cw = L->cont_width, s_started = L->line_started;
+    int s_link = L->cur_link, s_space = L->pending_space, s_groups = L->ngroups;
+
+    int yy = y, was = L->floating;
+    L->line_started = 0;
+    L->floating = node;
+    if (replaced) {
+        lay_line_start(L, yy, x, w, A_LEFT);
+        lay_inline(L, node, parent, &yy);
+        lay_line_end(L, &yy);
+    } else {
+        /* Given room that its own margins take back off to leave exactly
+           the box decided here. */
+        L->flex_sized = node;
+        lay_block(L, node, parent, x - ml, w + ml + mr, &yy);
+        L->flex_sized = -1;
+    }
+    L->floating = was;
+
+    L->line_at = s_line_at; L->line_n = s_line_n; L->pen = s_pen;
+    L->line_top = s_top; L->line_h = s_h; L->line_base = s_base;
+    L->line_left = s_left; L->line_width = s_width; L->align = s_align;
+    L->cont_left = s_cl; L->cont_width = s_cw; L->line_started = s_started;
+    L->cur_link = s_link; L->pending_space = s_space; L->ngroups = s_groups;
+
+    int k = L->fl_seq % LAY_FLOATS;
+    L->fl_x[k] = mx;
+    L->fl_y[k] = y;
+    L->fl_w[k] = need;
+    L->fl_h[k] = yy - y + (st.mb > 0 && st.mb != CSS_AUTO_OFF ? st.mb : 0);
+    L->fl_side[k] = st.floated;
+    L->fl_seq++;
+}
+
+/* Below every float on the side a box clears, within its width. */
+static int lay_cleared(const lctx *L, int y, int clear, int x, int w) {
+    int first = L->fl_seq > LAY_FLOATS ? L->fl_seq - LAY_FLOATS : 0;
+    for (int s = first; s < L->fl_seq; s++) {
+        int k = s % LAY_FLOATS;
+        if (!(clear & L->fl_side[k])) continue;
+        if (L->fl_x[k] + L->fl_w[k] <= x || L->fl_x[k] >= x + w) continue;
+        int b = L->fl_y[k] + L->fl_h[k];
+        if (b > y) y = b;
+    }
+    return y;
+}
 
 /* Inline content, which is everything between two blocks. Walked with an
    explicit style stack rather than by recursion, because an inline run can
@@ -702,15 +1234,62 @@ static inline void lay_inline(lctx *L, int node, const cstyle *parent, int *y) {
         } else {
             cstyle st;
             lay_style(L, at, &stack[sp], &st, L->line_width);
-            if (st.display == D_NONE) {
+            if (st.display == D_NONE || lay_unseen(&st)) {
                 /* Skip the subtree entirely. */
                 at = lay_past(d, at, node);
                 continue;
             }
+            if (st.floated && at != L->floating && st.position != POS_ABSOLUTE
+                && st.position != POS_FIXED) {
+                /* To the side, from the line it came in on; a line with nothing
+                   on it yet is started again beside it. */
+                lay_float(L, at, &stack[sp], L->cont_left, L->cont_width, L->line_top);
+                if (L->line_n == 0)
+                    lay_line_start(L, L->line_top, L->cont_left, L->cont_width, L->align);
+                at = lay_past(d, at, node);
+                continue;
+            }
+            int blockish = st.display == D_BLOCK || st.display == D_FLEX
+                        || st.display == D_LIST_ITEM || st.display == D_TABLE
+                        || st.display == D_TABLE_ROW || st.display == D_TABLE_GROUP;
+            if (n->tag != T_BR && n->tag != T_IMG && lay_control_kind(d, at) == CTL_NONE) {
+                if (st.position == POS_ABSOLUTE || st.position == POS_FIXED) {
+                    lay_inline_piece(L, at, &stack[sp], 1, y);
+                    at = lay_past(d, at, node);
+                    continue;
+                }
+                if (blockish && at != node) {
+                    /* A block inside something inline -- a card that is a
+                       link round a div, a div inside a span -- ends the line,
+                       takes the whole width as a block does, and the words
+                       after it start a line of their own. It was run into
+                       the text instead, so a card's heading, its picture and
+                       its summary came out as one sentence. */
+                    int left = L->cont_left, width = L->cont_width, al = L->align;
+                    lay_line_end(L, y);
+                    lay_block(L, at, &stack[sp], left, width, y);
+                    lay_line_start(L, *y, left, width, al);
+                    at = lay_past(d, at, node);
+                    continue;
+                }
+                if (st.display == D_INLINE_BLOCK || st.display == D_INLINE_FLEX
+                    || st.display == D_TABLE_CELL) {
+                    lay_inline_piece(L, at, &stack[sp], 0, y);
+                    at = lay_past(d, at, node);
+                    continue;
+                }
+            }
             if (n->tag == T_BR) {
-                int left = L->line_left, width = L->line_width, al = L->align;
+                int left = L->cont_left, width = L->cont_width, al = L->align;
                 lay_line_fit(L, st.font_px, st.line_h);
                 lay_line_end(L, y);
+                /* <br clear="all">, the old way of going on below a picture. */
+                const char *cl = dom_attr(d, at, "clear");
+                if (cl) {
+                    int side = lay_same_fold(cl, "left") ? 1 : lay_same_fold(cl, "right") ? 2
+                             : lay_same_fold(cl, "none") ? 0 : 3;
+                    if (side) *y = lay_cleared(L, *y, side, left, width);
+                }
                 lay_line_start(L, *y, left, width, al);
             } else if (n->tag == T_IMG) {
                 const limage *pic = lay_image_of(L, at);
@@ -740,13 +1319,17 @@ static inline void lay_inline(lctx *L, int node, const cstyle *parent, int *y) {
                        beside it flows the way text beside a picture does. */
                     if (L->pen + iw > L->line_left + L->line_width
                         && L->pen > L->line_left) {
-                        int left = L->line_left, width = L->line_width;
+                        int left = L->cont_left, width = L->cont_width;
                         int al = L->align;
                         lay_line_end(L, y);
                         lay_line_start(L, *y, left, width, al);
                     }
 
-                    litem *it = lay_item(L);
+                    litem *it = (st.visible || lay_show_hidden) ? lay_item(L) : 0;
+                    if (!it) {
+                        L->pen += iw;
+                        lay_line_fit(L, ih, 100);
+                    }
                     if (it) {
                         it->kind = LK_IMAGE;
                         it->x = L->pen;
@@ -811,10 +1394,14 @@ static inline void lay_inline(lctx *L, int node, const cstyle *parent, int *y) {
                    whole point of it. Drawn as nothing rather than as an
                    empty box, because an empty box is a field somebody will
                    try to type into. */
+                /* An invisible control -- a checkbox made transparent so that
+                   a label drawn over it can be clicked instead -- takes no
+                   room either: it is always positioned out of the way too. */
+                if (!st.visible && !lay_show_hidden) ck = CTL_HIDDEN;
                 if (ck != CTL_HIDDEN) {
                     if (L->pen + fw > L->line_left + L->line_width
                         && L->pen > L->line_left) {
-                        int left = L->line_left, width = L->line_width;
+                        int left = L->cont_left, width = L->cont_width;
                         int al = L->align;
                         lay_line_end(L, y);
                         lay_line_start(L, *y, left, width, al);
@@ -913,7 +1500,8 @@ static inline int lay_is_block_node(lctx *L, int n, const cstyle *parent) {
        out of here, it was treated as inline and never reached the code
        that knows what a row is. */
     return st.display == D_BLOCK || st.display == D_LIST_ITEM
-        || st.display == D_FLEX;
+        || st.display == D_FLEX || st.display == D_TABLE
+        || st.display == D_TABLE_ROW || st.display == D_TABLE_GROUP;
 }
 
 
@@ -941,12 +1529,30 @@ static inline int lay_is_block_node(lctx *L, int n, const cstyle *parent) {
  * second implementation of it that can disagree.
  */
 
-#define LAY_FLEX_MAX 32
+#define LAY_FLEX_MAX 128
 
 /* Lays a node out and forgets it, returning how wide its content came out
    and how tall. Everything the layout was in the middle of is put back. */
+/* What a measurement came to, kept for the rest of the layout: which
+   element, at what width, and whether as a flex item or a table cell whose
+   own width does not count. The answer cannot change inside one layout, and
+   a table inside a table inside a table measured each cell again at every
+   level -- three times over per level -- where once is enough. */
+#define LAY_MCACHE 8192
+typedef struct { int node, avail, right, h; unsigned gen; unsigned char sized; } lmcache;
+static lmcache lay_mcache[LAY_MCACHE];
+
 static int lay_measure(lctx *L, int node, const cstyle *parent, int avail,
                        int *height) {
+    unsigned char sized = (unsigned char)(L->flex_sized == node);
+    unsigned slot = ((unsigned)node * 2654435761u ^ (unsigned)avail * 40503u ^ sized) % LAY_MCACHE;
+    lmcache *mc = &lay_mcache[slot];
+    if (mc->gen == lay_gen && mc->node == node && mc->avail == avail && mc->sized == sized) {
+        if (sized) L->flex_sized = -1;
+        *height = mc->h;
+        return mc->right;
+    }
+
     /* Field by field rather than by copying the whole context.
      *
      * A struct assignment of something this size is a call to memcpy, and
@@ -955,12 +1561,14 @@ static int lay_measure(lctx *L, int node, const cstyle *parent, int avail,
     int s_line_at = L->line_at, s_line_n = L->line_n;
     int s_pen = L->pen, s_top = L->line_top;
     int s_h = L->line_h, s_base = L->line_base;
-    int s_left = L->line_left, s_width = L->line_width;
+    int s_cl = L->cont_left, s_cw = L->cont_width;
+            int s_left = L->line_left, s_width = L->line_width;
     int s_align = L->align, s_space = L->pending_space;
     int s_started = L->line_started, s_link = L->cur_link;
     int s_depth = L->list_depth;
     int s_count[LAY_DEPTH];
     for (int i = 0; i < LAY_DEPTH; i++) s_count[i] = L->list_count[i];
+    int s_groups = L->ngroups, s_floats = L->fl_seq;
 
     int items = L->out->nitems, used = L->out->used, links = L->out->nlinks;
 
@@ -991,6 +1599,7 @@ static int lay_measure(lctx *L, int node, const cstyle *parent, int avail,
     L->pen = s_pen; L->line_top = s_top;
     L->line_h = s_h; L->line_base = s_base;
     L->line_left = s_left; L->line_width = s_width;
+    L->cont_left = s_cl; L->cont_width = s_cw;
     L->align = s_align; L->pending_space = s_space;
     L->line_started = s_started; L->cur_link = s_link;
     L->list_depth = s_depth;
@@ -1000,83 +1609,51 @@ static int lay_measure(lctx *L, int node, const cstyle *parent, int avail,
     L->out->used = used;
     L->out->nlinks = links;
     L->out->overflowed = spilled;
+    L->ngroups = s_groups;
+    L->fl_seq = s_floats;
+
+    mc->gen = lay_gen; mc->node = node; mc->avail = avail; mc->sized = sized;
+    mc->right = right; mc->h = *height;
     return right;
 }
 
 /* A flex container. `cx` and `cw` are inside its own padding and border, and
    `y` is where its contents start and where they are finished. */
-static void lay_flex(lctx *L, int node, const cstyle *st, int cx, int cw,
-                     int *y) {
-    const ddoc *d = L->d;
-
-    int kid[LAY_FLEX_MAX];
-    int n = 0;
-    for (int c = d->nodes[node].first; c >= 0 && n < LAY_FLEX_MAX;
-         c = d->nodes[c].next) {
-        if (d->nodes[c].kind == DN_ELEMENT) kid[n++] = c;
-    }
-    if (n == 0) return;
-
-    int column = st->flex_dir == FD_COLUMN || st->flex_dir == FD_COLUMN_REVERSE;
-    int reverse = st->flex_dir == FD_ROW_REVERSE
-               || st->flex_dir == FD_COLUMN_REVERSE;
-    int gap = st->gap > 0 ? st->gap : 0;
-
-    /* --- down the page is nearly what already happens ---------------------
-     *
-     * A column of flex items is a stack of blocks with a gap between them
-     * and a chance to be reversed. The one thing worth doing properly is
-     * the gap, because a page that asked for one and did not get it has
-     * everything touching. */
-    if (column) {
-        for (int i = 0; i < n; i++) {
-            int k = kid[reverse ? n - 1 - i : i];
-            if (i) *y += gap;
-            lay_block(L, k, st, cx, cw, y);
-        }
-        return;
-    }
-
-    /* --- along the line ---------------------------------------------------- */
-    int want[LAY_FLEX_MAX], high[LAY_FLEX_MAX], grow[LAY_FLEX_MAX];
-    int meas[LAY_FLEX_MAX];
+/* One line of flex items along the row: kid[0..n), with what each would
+   like (want, which this changes to what each gets), the narrowest each can
+   go (low), its measured height and how much it grows. */
+static void lay_flex_line(lctx *L, const cstyle *st, const int *kid, int n,
+                          const int *meas, int *want, const int *low,
+                          const int *high, const int *grow, int cx, int cw,
+                          int gap, int reverse, int *y) {
     int total = 0, grows = 0;
-
-    for (int i = 0; i < n; i++) {
-        int h = 0;
-        /* Measured with room to spare, so the answer is how wide the child
-           would like to be rather than how wide it was squeezed into. */
-        int w = lay_measure(L, kid[i], st, cw > 0 ? cw * 3 : 2000, &h);
-        if (w < 1) w = 1;
-        if (w > cw && cw > 0) w = cw;
-
-        cstyle own;
-        lay_style(L, kid[i], st, &own, cw);
-        if (own.width >= 0) w = own.width;
-
-        meas[i] = w;
-        want[i] = w;
-        high[i] = h;
-        grow[i] = own.grow > 0 ? own.grow : 0;
-        grows += grow[i];
-        total += w;
-    }
+    for (int i = 0; i < n; i++) { total += want[i]; grows += grow[i]; }
     total += gap * (n - 1);
 
-    /* Too wide: everything shrinks in proportion, down to a floor, because
-       a row that overflows takes the page with it. */
+    /* Too wide: everything shrinks in proportion to its size, but nothing
+       below the narrowest it can go -- its longest word, its picture. Down
+       to eight pixels, as it was, set a row of links in overlapping letters
+       wherever the row was longer than the window. What will not fit then
+       runs over the end, as it does anywhere else. */
     if (total > cw && total > 0) {
-        int room = cw - gap * (n - 1);
-        if (room < n) room = n;
-        int sum = 0;
-        for (int i = 0; i < n; i++) sum += want[i];
-        for (int i = 0; i < n; i++) {
-            want[i] = sum > 0 ? want[i] * room / sum : room / n;
-            if (want[i] < 8) want[i] = 8;
+        int over = total - cw;
+        for (int round = 0; round < 3 && over > 0; round++) {
+            int give = 0;
+            for (int i = 0; i < n; i++) if (want[i] > low[i]) give += want[i];
+            if (give <= 0) break;
+            int took = 0;
+            for (int i = 0; i < n; i++) {
+                if (want[i] <= low[i]) continue;
+                int cut = (int)((long long)over * want[i] / give);
+                if (cut > want[i] - low[i]) cut = want[i] - low[i];
+                want[i] -= cut;
+                took += cut;
+            }
+            over -= took;
+            if (took == 0) break;
         }
-        total = 0;
+        total = gap * (n - 1);
         for (int i = 0; i < n; i++) total += want[i];
-        total += gap * (n - 1);
     }
 
     int spare = cw - total;
@@ -1117,11 +1694,6 @@ static void lay_flex(lctx *L, int node, const cstyle *st, int cx, int cw,
         }
     }
 
-    /* The row is as tall as its tallest child, which is what the ones that
-       are shorter are aligned within. */
-    int tallest = 0;
-    for (int i = 0; i < n; i++) if (high[i] > tallest) tallest = high[i];
-
     int top = *y;
 
     /* Being measured rather than laid out, the row stops here.
@@ -1138,6 +1710,8 @@ static void lay_flex(lctx *L, int node, const cstyle *st, int cx, int cw,
      * exact unless a child centres its content or sizes it by percentage,
      * where a measurement was already an estimate. */
     if (L->measuring) {
+        int tallest = 0;
+        for (int i = 0; i < n; i++) if (high[i] > tallest) tallest = high[i];
         for (int idx = 0; idx < n; idx++) {
             int i = reverse ? n - 1 - idx : idx;
             int reach = pen + (meas[i] < want[i] ? meas[i] : want[i]);
@@ -1148,33 +1722,555 @@ static void lay_flex(lctx *L, int node, const cstyle *st, int cx, int cw,
         return;
     }
 
+    /* Laid out at the widths they settled on, and then lined up against the
+       tallest as it actually came out: the height a child measured at the
+       width it would have liked is not its height at the one it got, and
+       aligning to the first put text that wrapped once more through the row
+       under it. */
+    int first[LAY_FLEX_MAX + 1], got[LAY_FLEX_MAX];
+    int tallest = 0;
     for (int idx = 0; idx < n; idx++) {
         int i = reverse ? n - 1 - idx : idx;
-
-        int before = L->out->nitems;
+        first[idx] = L->out->nitems;
         int child_y = top;
         L->flex_sized = kid[i];
         lay_block(L, kid[i], st, pen, want[i], &child_y);
         L->flex_sized = -1;
-
-        /* Slid down the cross axis afterwards, which is cheaper than laying
-           it out somewhere else and gives the same answer. Stretch is left
-           where it is: making a child taller means laying it out again with
-           a height it did not ask for, and a box at the top of its row is
-           what stretch looks like when everything in it is the same height
-           anyway. */
-        int mine = high[i] > 0 ? high[i] : child_y - top;
-        int dy = 0;
-        if (st->align_items == AI_CENTER) dy = (tallest - mine) / 2;
-        else if (st->align_items == AI_END) dy = tallest - mine;
-        if (dy > 0)
-            for (int k = before; k < L->out->nitems; k++)
-                L->out->items[k].y += dy;
-
+        got[idx] = child_y - top;
+        if (got[idx] > tallest) tallest = got[idx];
         pen += want[i] + between;
+    }
+    first[n] = L->out->nitems;
+
+    /* Slid down the cross axis afterwards, which is cheaper than laying it
+       out somewhere else and gives the same answer. Stretch is left where it
+       is: making a child taller means laying it out again with a height it
+       did not ask for, and a box at the top of its row is what stretch looks
+       like when everything in it is the same height anyway. */
+    for (int idx = 0; idx < n; idx++) {
+        int dy = 0;
+        if (st->align_items == AI_CENTER) dy = (tallest - got[idx]) / 2;
+        else if (st->align_items == AI_END) dy = tallest - got[idx];
+        if (dy > 0)
+            for (int k = first[idx]; k < first[idx + 1]; k++)
+                L->out->items[k].y += dy;
     }
 
     *y = top + tallest;
+}
+
+static void lay_flex(lctx *L, int node, const cstyle *st, int cx, int cw,
+                     int *y) {
+    const ddoc *d = L->d;
+
+    /* Past this many the rest are laid out as a column under the row, which
+       is where they would have wrapped to on a page that let them. They used
+       to be dropped: a list of fifty links in a flex row showed thirty-two. */
+    int kid[LAY_FLEX_MAX];
+    int n = 0, extra = -1;
+    for (int c = d->nodes[node].first; c >= 0; c = d->nodes[c].next) {
+        if (d->nodes[c].kind != DN_ELEMENT) continue;
+        if (n < LAY_FLEX_MAX) kid[n++] = c;
+        else { extra = c; break; }
+    }
+    if (n == 0) return;
+
+    int column = st->flex_dir == FD_COLUMN || st->flex_dir == FD_COLUMN_REVERSE;
+    int reverse = st->flex_dir == FD_ROW_REVERSE
+               || st->flex_dir == FD_COLUMN_REVERSE;
+    int gap = st->gap > 0 ? st->gap : 0;
+
+    /* --- down the page is nearly what already happens ---------------------
+     *
+     * A column of flex items is a stack of blocks with a gap between them
+     * and a chance to be reversed. The one thing worth doing properly is
+     * the gap, because a page that asked for one and did not get it has
+     * everything touching. */
+    if (column) {
+        for (int i = 0; i < n; i++) {
+            int k = kid[reverse ? n - 1 - i : i];
+            if (i) *y += gap;
+            lay_block(L, k, st, cx, cw, y);
+        }
+    } else {
+        /* --- along the line ------------------------------------------------ */
+        int want[LAY_FLEX_MAX], high[LAY_FLEX_MAX], grow[LAY_FLEX_MAX];
+        int meas[LAY_FLEX_MAX], low[LAY_FLEX_MAX];
+
+        for (int i = 0; i < n; i++) {
+            int h = 0, h2 = 0;
+            /* Measured with room to spare, so the answer is how wide the
+               child would like to be rather than how wide it was squeezed
+               into; and as narrow as it will go, which is as far as it
+               shrinks. */
+            int w = lay_measure(L, kid[i], st, cw > 0 ? cw : 2000, &h);
+            if (w < 1) w = 1;
+            if (w > cw && cw > 0) w = cw;
+
+            cstyle own;
+            lay_style(L, kid[i], st, &own, cw);
+            if (own.width >= 0)
+                w = own.width + (own.border_box ? 0 : own.pl + own.pr + own.bl + own.br)
+                  + (own.ml > 0 ? own.ml : 0) + (own.mr > 0 ? own.mr : 0);
+
+            int lo;
+            if (own.min_width >= 0) lo = own.min_width;
+            else if (own.clip) lo = 8;
+            else lo = lay_measure(L, kid[i], st, 1, &h2);
+            if (lo > w) lo = w;
+            if (lo < 1) lo = 1;
+
+            meas[i] = w;
+            want[i] = w;
+            low[i] = lo;
+            high[i] = h;
+            grow[i] = own.grow > 0 ? own.grow : 0;
+        }
+
+        if (!st->flex_wrap) {
+            lay_flex_line(L, st, kid, n, meas, want, low, high, grow, cx, cw, gap, reverse, y);
+        } else {
+            /* Wrapping: as many as fit on each line, each line a row of its
+               own. Card grids are built this way, and one row of every card
+               squeezed to a sliver was the same page with nothing readable
+               in it. */
+            int i0 = 0;
+            while (i0 < n) {
+                int i1 = i0, used = 0;
+                while (i1 < n) {
+                    int wi = want[i1] > low[i1] ? want[i1] : low[i1];
+                    int add = wi + (i1 > i0 ? gap : 0);
+                    if (i1 > i0 && used + add > cw) break;
+                    used += add;
+                    i1++;
+                }
+                if (i0) *y += gap;
+                lay_flex_line(L, st, kid + i0, i1 - i0, meas + i0, want + i0, low + i0,
+                              high + i0, grow + i0, cx, cw, gap, reverse, y);
+                i0 = i1;
+            }
+        }
+    }
+
+    for (int c = extra; c >= 0; c = d->nodes[c].next)
+        if (d->nodes[c].kind == DN_ELEMENT) lay_block(L, c, st, cx, cw, y);
+}
+
+/* --- tables ---------------------------------------------------------------
+ *
+ * Rows of cells in columns, each column as wide as the widest thing in it
+ * needs and the table as wide as its columns, or as wide as it was told.
+ * Tables were laid out as blocks with their cells run together as words,
+ * which is readable for one row and wrong for everything else: a table
+ * inside a cell -- which is how the old web and some of the biggest sites'
+ * plainest pages are built -- ran every row of it into one paragraph.
+ *
+ * This is the automatic layout, shortened:
+ *
+ *   each cell is measured twice, as narrow as it will go (its longest word)
+ *   and as wide as it would like (nothing wrapped), and each column takes
+ *   the most any of its cells asks for; a cell across several columns
+ *   shares what it asks for out among them
+ *   a table given a width fills it; one that was not is as wide as its
+ *   columns would like, or as wide as there is room for when that is less
+ *   between the two, the room over the narrowest is handed out in
+ *   proportion to how much more each column would like
+ *   then each row is laid out cell by cell at those widths, is as tall as
+ *   its tallest cell, and each cell's background is stretched to the row
+ *
+ * Cells spanning rows keep their column clear below them, and a row grows
+ * to fit one that ends in it. What is left out: fixed layout (it is treated
+ * as automatic), borders collapsing into one line (they are drawn per cell
+ * with no room between), and captions anywhere but the top. */
+#define LAY_TCOLS 64
+#define LAY_TSPANS 128
+
+typedef struct {
+    int ncols;
+    int col_w[LAY_TCOLS];
+    int width;                  /* all the columns and the room around them */
+    int spacing;
+} ltable;
+
+enum { TR_ROW = 0, TR_CELLS, TR_BLOCK };
+
+/* How a child of a table is taken: its display, asked with the table's
+   style for a parent (display is not inherited, so that is enough). */
+static int lay_display_of(lctx *L, int el, const cstyle *parent) {
+    cstyle st;
+    lay_style(L, el, parent, &st, L->line_width);
+    return st.display;
+}
+
+/* Whether an element directly holds rows or cells, which is what makes a
+   form or a div between a table and its rows something to look through. */
+static int lay_holds_rows(const ddoc *d, int el) {
+    for (int c = d->nodes[el].first; c >= 0; c = d->nodes[c].next) {
+        int t = d->nodes[c].tag;
+        if (d->nodes[c].kind == DN_ELEMENT && (t == T_TR || t == T_TD || t == T_TH
+            || lay_named(d, c, "tbody") || lay_named(d, c, "thead") || lay_named(d, c, "tfoot")))
+            return 1;
+    }
+    return 0;
+}
+
+/* The row after `at` (-1 for the first) and what kind it is: a tr, a run of
+   cells written with no tr round them, or something that is neither, laid
+   out across the whole table. Groups and anything holding rows are looked
+   through; captions are laid out before the rows and skipped here. */
+static int lay_table_next(lctx *L, int table, const cstyle *tst, int at, int *kind) {
+    const ddoc *d = L->d;
+    int n;
+    if (at < 0) {
+        n = d->nodes[table].first;
+    } else if (*kind == TR_CELLS) {
+        n = d->nodes[at].next;
+        while (n >= 0 && (d->nodes[n].kind != DN_ELEMENT
+                          || lay_display_of(L, n, tst) == D_TABLE_CELL))
+            n = d->nodes[n].next;
+        if (n < 0) {
+            /* The run was the last thing in its parent: on past the parent. */
+            int p = d->nodes[at].parent;
+            n = p == table ? -1 : lay_past(d, p, table);
+        }
+    } else {
+        n = lay_past(d, at, table);
+    }
+    while (n >= 0) {
+        if (d->nodes[n].kind != DN_ELEMENT) { n = lay_past(d, n, table); continue; }
+        if (d->nodes[n].tag == T_CAPTION) { n = lay_past(d, n, table); continue; }
+        int disp = lay_display_of(L, n, tst);
+        if (disp == D_NONE) { n = lay_past(d, n, table); continue; }
+        if (disp == D_TABLE_ROW) { *kind = TR_ROW; return n; }
+        if (disp == D_TABLE_CELL) { *kind = TR_CELLS; return n; }
+        if ((disp == D_TABLE_GROUP || lay_holds_rows(d, n)) && d->nodes[n].first >= 0) {
+            n = d->nodes[n].first;
+            continue;
+        }
+        if (disp == D_TABLE_GROUP) { n = lay_past(d, n, table); continue; }
+        *kind = TR_BLOCK;
+        return n;
+    }
+    return -1;
+}
+
+/* The cells of a row, in order: the first after `at` (-1 for the first). */
+static int lay_row_cell(lctx *L, int row, int kind, const cstyle *rst, int at) {
+    const ddoc *d = L->d;
+    if (kind == TR_BLOCK) return at < 0 ? row : -1;
+    int n;
+    if (kind == TR_CELLS) n = at < 0 ? row : d->nodes[at].next;
+    else n = at < 0 ? d->nodes[row].first : d->nodes[at].next;
+    for (; n >= 0; n = d->nodes[n].next) {
+        if (d->nodes[n].kind != DN_ELEMENT) continue;
+        int disp = lay_display_of(L, n, rst);
+        if (disp == D_NONE) continue;
+        if (kind == TR_CELLS && disp != D_TABLE_CELL) return -1;
+        return n;
+    }
+    return -1;
+}
+
+static int lay_span_attr(const ddoc *d, int el, const char *name, int most) {
+    const char *v = dom_attr(d, el, name);
+    int n = v ? lay_number(v) : 1;
+    if (n < 1) n = 1;
+    if (n > most) n = most;
+    return n;
+}
+
+/* A row's style, from the table's through whatever lies between. */
+static void lay_row_style(lctx *L, int table, const cstyle *tst, int row, cstyle *out) {
+    const ddoc *d = L->d;
+    int chain[6], n = 0;
+    for (int at = row; at >= 0 && at != table && n < 6; at = d->nodes[at].parent) chain[n++] = at;
+    cstyle up = *tst, st;
+    while (n--) {
+        lay_style(L, chain[n], &up, &st, L->line_width);
+        up = st;
+    }
+    *out = up;
+}
+
+/* The columns: how many, and how wide. `avail` is the room inside the
+   table's own padding and border; `fill` says the table was given a width
+   and fills it rather than shrinking to its columns. */
+static void lay_table_plan(lctx *L, int table, const cstyle *tst, int avail, int fill,
+                           ltable *T) {
+    const ddoc *d = L->d;
+    int spacing = tst->spacing >= 0 ? tst->spacing : 2;
+    T->spacing = spacing;
+    T->ncols = 0;
+    T->width = 0;
+
+    int mn[LAY_TCOLS], mx[LAY_TCOLS], fixed[LAY_TCOLS], busy[LAY_TCOLS];
+    for (int c = 0; c < LAY_TCOLS; c++) { mn[c] = mx[c] = busy[c] = 0; fixed[c] = -1; }
+    struct { int col, span, lo, hi; } sp[LAY_TSPANS];
+    int nsp = 0, ncols = 0, whole = 0;
+
+    /* Past this many cells the rest are laid out at the widths the first
+       ones settled, which is what a long listing wants anyway. */
+    int budget = 1500;
+    int kind = 0;
+    for (int row = lay_table_next(L, table, tst, -1, &kind); row >= 0 && budget > 0;
+         row = lay_table_next(L, table, tst, row, &kind)) {
+        cstyle rst;
+        if (kind == TR_ROW) lay_row_style(L, table, tst, row, &rst);
+        else lay_row_style(L, table, tst, d->nodes[row].parent, &rst);
+        int col = 0;
+        for (int cell = lay_row_cell(L, row, kind, &rst, -1); cell >= 0;
+             cell = lay_row_cell(L, row, kind, &rst, cell)) {
+            while (col < LAY_TCOLS && busy[col]) col++;
+            if (col >= LAY_TCOLS) break;
+            int span = kind == TR_BLOCK ? LAY_TCOLS : lay_span_attr(d, cell, "colspan", LAY_TCOLS);
+            int rows = kind == TR_BLOCK ? 1 : lay_span_attr(d, cell, "rowspan", 1000);
+            if (kind == TR_BLOCK) col = 0;
+            if (col + span > LAY_TCOLS) span = LAY_TCOLS - col;
+
+            cstyle cst;
+            lay_style(L, cell, &rst, &cst, avail);
+            int h;
+            L->flex_sized = cell;
+            int lo = lay_measure(L, cell, &rst, 1, &h);
+            L->flex_sized = cell;
+            int hi = lay_measure(L, cell, &rst, avail, &h);
+            L->flex_sized = -1;
+            if (hi < lo) hi = lo;
+            budget--;
+            int want = -1;
+            if (cst.width >= 0 && kind != TR_BLOCK)
+                want = cst.width + (cst.border_box ? 0 : cst.pl + cst.pr + cst.bl + cst.br);
+
+            if (kind == TR_BLOCK) {
+                whole = 1;
+                if (nsp < LAY_TSPANS) {
+                    sp[nsp].col = 0; sp[nsp].span = LAY_TCOLS; sp[nsp].lo = lo; sp[nsp].hi = hi;
+                    nsp++;
+                }
+                break;
+            }
+            if (span == 1) {
+                if (lo > mn[col]) mn[col] = lo;
+                if (hi > mx[col]) mx[col] = hi;
+                if (want > fixed[col]) fixed[col] = want;
+            } else if (nsp < LAY_TSPANS) {
+                sp[nsp].col = col; sp[nsp].span = span; sp[nsp].lo = lo; sp[nsp].hi = hi;
+                nsp++;
+            }
+            for (int k = col; k < col + span && k < LAY_TCOLS; k++) busy[k] = rows;
+            col += span;
+            if (col > ncols) ncols = col;
+        }
+        for (int k = 0; k < LAY_TCOLS; k++) if (busy[k] > 0) busy[k]--;
+    }
+    /* Nothing but rows laid across the whole table: one column. */
+    if (ncols == 0 && whole) ncols = 1;
+    if (ncols == 0) return;
+
+    /* A width asked for is also what the column would like. */
+    for (int c = 0; c < ncols; c++) {
+        if (fixed[c] >= 0) mx[c] = fixed[c] > mn[c] ? fixed[c] : mn[c];
+        if (mx[c] < mn[c]) mx[c] = mn[c];
+    }
+    /* Cells across columns: whatever they need beyond what the columns
+       already give is shared out evenly. */
+    for (int i = 0; i < nsp; i++) {
+        int c0 = sp[i].col, span = sp[i].span;
+        if (c0 + span > ncols) span = ncols - c0;
+        if (span <= 0) continue;
+        int slo = spacing * (span - 1);
+        for (int c = c0; c < c0 + span; c++) slo += mn[c];
+        if (sp[i].lo > slo) {
+            int more = sp[i].lo - slo;
+            for (int c = c0; c < c0 + span; c++) {
+                int add = more / (c0 + span - c);
+                mn[c] += add; more -= add;
+                if (mx[c] < mn[c]) mx[c] = mn[c];
+            }
+        }
+        int shi = spacing * (span - 1);
+        for (int c = c0; c < c0 + span; c++) shi += mx[c];
+        if (sp[i].hi > shi) {
+            int more = sp[i].hi - shi;
+            for (int c = c0; c < c0 + span; c++) {
+                int add = more / (c0 + span - c);
+                mx[c] += add; more -= add;
+            }
+        }
+    }
+
+    int room = avail - spacing * (ncols + 1);
+    if (room < ncols) room = ncols;
+    int summin = 0, summax = 0;
+    for (int c = 0; c < ncols; c++) { summin += mn[c]; summax += mx[c]; }
+    int target = fill ? room : (summax < room ? summax : room);
+    if (target < summin) target = summin;
+
+    if (target >= summax) {
+        /* Room over: to the columns nobody gave a width, in proportion. */
+        int extra = target - summax, share = 0;
+        for (int c = 0; c < ncols; c++) if (fixed[c] < 0) share += mx[c] > 0 ? mx[c] : 1;
+        int all = share == 0;
+        if (all) for (int c = 0; c < ncols; c++) share += mx[c] > 0 ? mx[c] : 1;
+        int left = extra;
+        for (int c = 0; c < ncols; c++) {
+            int wgt = mx[c] > 0 ? mx[c] : 1;
+            int add = (all || fixed[c] < 0) && share > 0 ? (int)((long long)extra * wgt / share) : 0;
+            T->col_w[c] = mx[c] + add;
+            left -= add;
+        }
+        for (int c = ncols - 1; c >= 0 && left > 0; c--)
+            if (all || fixed[c] < 0) { T->col_w[c] += left; left = 0; }
+    } else {
+        int over = target - summin, want = summax - summin;
+        for (int c = 0; c < ncols; c++)
+            T->col_w[c] = mn[c] + (want > 0 ? (int)((long long)over * (mx[c] - mn[c]) / want) : 0);
+    }
+    T->ncols = ncols;
+    int w = spacing * (ncols + 1);
+    for (int c = 0; c < ncols; c++) w += T->col_w[c];
+    T->width = w;
+}
+
+/* Where a cell's contents sit in a row taller than they are. */
+static int lay_cell_valign(lctx *L, int cell, const cstyle *rst) {
+    cstyle cst;
+    lay_style(L, cell, rst, &cst, L->line_width);
+    if (cst.valign != VA_BASELINE) return cst.valign;
+    if (rst->valign != VA_BASELINE) return rst->valign;
+    return VA_MIDDLE;
+}
+
+/* A cell laid out, then moved down inside its row and its background made
+   as tall as the row. */
+static void lay_cell_fit(lctx *L, int cell, int first, int end, int h, int rowh, int va) {
+    int dy = va == VA_MIDDLE ? (rowh - h) / 2 : va == VA_BOTTOM ? rowh - h : 0;
+    for (int i = first; i < end; i++) {
+        litem *it = &L->out->items[i];
+        if (i == first && it->kind == LK_BOX && it->node == cell) {
+            it->h = rowh;
+            continue;
+        }
+        if (dy > 0) it->y += dy;
+    }
+}
+
+static void lay_table_rows(lctx *L, int table, const cstyle *tst, int cx, const ltable *T,
+                           int *y) {
+    const ddoc *d = L->d;
+    int spacing = T->spacing;
+    int colx[LAY_TCOLS + 1];
+    colx[0] = cx + spacing;
+    for (int c = 0; c < T->ncols; c++) colx[c + 1] = colx[c] + T->col_w[c] + spacing;
+
+    for (int c = d->nodes[table].first; c >= 0; c = d->nodes[c].next)
+        if (d->nodes[c].kind == DN_ELEMENT && d->nodes[c].tag == T_CAPTION)
+            lay_block(L, c, tst, cx, T->width, y);
+    if (T->ncols == 0) return;
+    *y += spacing;
+
+    int busy[LAY_TCOLS];
+    for (int c = 0; c < LAY_TCOLS; c++) busy[c] = 0;
+    /* Cells still spanning down into rows not laid out yet. */
+    struct { int cell, first, end, top, rows, h, va; } tall[LAY_TCOLS];
+    int ntall = 0;
+
+    int kind = 0;
+    for (int row = lay_table_next(L, table, tst, -1, &kind); row >= 0;
+         row = lay_table_next(L, table, tst, row, &kind)) {
+        cstyle rst;
+        if (kind == TR_ROW) lay_row_style(L, table, tst, row, &rst);
+        else lay_row_style(L, table, tst, d->nodes[row].parent, &rst);
+        int top = *y;
+
+        int row_slot = -1;
+        if (kind == TR_ROW && rst.has_bg && !L->measuring) {
+            litem *bg = lay_item(L);
+            if (bg) { row_slot = L->out->nitems - 1; bg->kind = LK_BOX; bg->node = row; }
+        }
+
+        struct { int cell, first, end, h; } got[LAY_TCOLS];
+        int ngot = 0, rowh = 0, col = 0;
+        for (int cell = lay_row_cell(L, row, kind, &rst, -1); cell >= 0;
+             cell = lay_row_cell(L, row, kind, &rst, cell)) {
+            while (col < T->ncols && busy[col]) col++;
+            int span, rows;
+            if (kind == TR_BLOCK) { col = 0; span = T->ncols; rows = 1; }
+            else {
+                span = lay_span_attr(d, cell, "colspan", LAY_TCOLS);
+                rows = lay_span_attr(d, cell, "rowspan", 1000);
+            }
+            /* A row with more cells than the table has columns (past the
+               cells that were measured) puts the rest in the last one. */
+            if (col >= T->ncols) col = T->ncols - 1;
+            if (col + span > T->ncols) span = T->ncols - col;
+            int x = colx[col];
+            int w = colx[col + span] - spacing - x;
+
+            int first = L->out->nitems;
+            int cy = top;
+            L->flex_sized = cell;
+            lay_block(L, cell, &rst, x, w, &cy);
+            L->flex_sized = -1;
+            int h = cy - top;
+
+            if (rows > 1 && ntall < LAY_TCOLS) {
+                tall[ntall].cell = cell; tall[ntall].first = first;
+                tall[ntall].end = L->out->nitems; tall[ntall].top = top;
+                tall[ntall].rows = rows; tall[ntall].h = h;
+                tall[ntall].va = lay_cell_valign(L, cell, &rst);
+                ntall++;
+            } else if (ngot < LAY_TCOLS) {
+                got[ngot].cell = cell; got[ngot].first = first;
+                got[ngot].end = L->out->nitems; got[ngot].h = h;
+                ngot++;
+                if (h > rowh) rowh = h;
+            }
+            for (int k = col; k < col + span && k < LAY_TCOLS; k++) busy[k] = rows;
+            col += span;
+            if (kind == TR_BLOCK) break;
+        }
+        if (rst.height > rowh && kind == TR_ROW) rowh = rst.height;
+
+        /* A cell spanning down to this row makes it as tall as it needs. */
+        for (int i = 0; i < ntall; i++) {
+            if (tall[i].rows != 1) continue;
+            int have = top + rowh - tall[i].top;
+            if (tall[i].h > have) rowh += tall[i].h - have;
+        }
+
+        for (int i = 0; i < ngot; i++)
+            lay_cell_fit(L, got[i].cell, got[i].first, got[i].end, got[i].h, rowh,
+                         lay_cell_valign(L, got[i].cell, &rst));
+        for (int i = 0; i < ntall; ) {
+            if (--tall[i].rows > 0) { i++; continue; }
+            lay_cell_fit(L, tall[i].cell, tall[i].first, tall[i].end, tall[i].h,
+                         top + rowh - tall[i].top, tall[i].va);
+            tall[i] = tall[--ntall];
+        }
+
+        if (row_slot >= 0) {
+            litem *bg = &L->out->items[row_slot];
+            bg->x = colx[0];
+            bg->y = top;
+            bg->w = colx[T->ncols] - spacing - colx[0];
+            bg->h = rowh;
+            bg->bg = rst.background;
+            bg->has_bg = 1;
+        }
+        *y = top + rowh + spacing;
+        for (int k = 0; k < LAY_TCOLS; k++) if (busy[k] > 0) busy[k]--;
+    }
+}
+
+/* Old markup centres a table by what is round it: <center>, or align on
+   the element it is in. Neither centres a block; both centre a table. */
+static int lay_centres_table(const ddoc *d, int table) {
+    int p = d->nodes[table].parent;
+    if (p < 0 || d->nodes[p].kind != DN_ELEMENT) return 0;
+    if (d->nodes[p].tag == T_CENTER) return 1;
+    const char *a = dom_attr(d, p, "align");
+    return a && lay_same_fold(a, "center");
 }
 
 /* The body: a box laid out where it was told, in the flow. */
@@ -1205,6 +2301,39 @@ static void lay_block_placed(lctx *L, int node, const cstyle *parent, int x,
  * the two wrong answers: the other is to leave it in the flow, which puts a
  * navigation bar in the middle of the text it was meant to sit above.
  */
+/* A transform's translation, done once the box is laid out and its size
+ * is known: its items moved together, by pixels and by a share of its own
+ * width and height. It is how a dialog is centred (left: 50% and then back
+ * by half itself) and how a menu that slides in is kept out of sight
+ * (translateX(-100%)); read past, the dialog sat half off its place and the
+ * closed menu lay over the page. */
+static void lay_translate(lctx *L, int node, const cstyle *st, int first) {
+    if (!st->tx_px && !st->ty_px && !st->tx_pct && !st->ty_pct) return;
+    int w = 0, h = 0;
+    if (first < L->out->nitems && L->out->items[first].node == node
+        && L->out->items[first].kind == LK_BOX) {
+        w = L->out->items[first].w;
+        h = L->out->items[first].h;
+    } else {
+        int x0 = 1 << 30, y0 = 1 << 30, x1 = -(1 << 30), y1 = -(1 << 30);
+        for (int i = first; i < L->out->nitems; i++) {
+            const litem *it = &L->out->items[i];
+            if (it->x < x0) x0 = it->x;
+            if (it->y < y0) y0 = it->y;
+            if (it->x + it->w > x1) x1 = it->x + it->w;
+            if (it->y + it->h > y1) y1 = it->y + it->h;
+        }
+        if (x1 > x0) { w = x1 - x0; h = y1 - y0; }
+    }
+    int dx = st->tx_px + st->tx_pct * w / 100;
+    int dy = st->ty_px + st->ty_pct * h / 100;
+    if (!dx && !dy) return;
+    for (int i = first; i < L->out->nitems; i++) {
+        L->out->items[i].x += dx;
+        L->out->items[i].y += dy;
+    }
+}
+
 static void lay_block(lctx *L, int node, const cstyle *parent, int x,
                       int avail, int *y) {
     L->out->laid++;
@@ -1212,6 +2341,14 @@ static void lay_block(lctx *L, int node, const cstyle *parent, int x,
     lay_style(L, node, parent, &probe, avail);
     if (probe.display == D_NONE) return;
     if (!probe.visible && !lay_show_hidden) return;
+    if (lay_unseen(&probe)) return;
+    int moved_from = L->out->nitems;
+
+    if (probe.floated && L->floating != node && probe.position != POS_ABSOLUTE
+        && probe.position != POS_FIXED) {
+        lay_float(L, node, parent, x, avail, *y);
+        return;
+    }
 
     if (probe.position == POS_ABSOLUTE || probe.position == POS_FIXED) {
         int keep = *y;
@@ -1243,6 +2380,7 @@ static void lay_block(lctx *L, int node, const cstyle *parent, int x,
         int sub = ay;
         lay_block_placed(L, node, parent, ax, room, &sub);
         *y = keep;                             /* it took no space */
+        if (!L->measuring) lay_translate(L, node, &probe, moved_from);
         return;
     }
 
@@ -1259,10 +2397,12 @@ static void lay_block(lctx *L, int node, const cstyle *parent, int x,
                 L->out->items[i].x += dx;
                 L->out->items[i].y += dy;
             }
+        if (!L->measuring) lay_translate(L, node, &probe, moved_from);
         return;
     }
 
     lay_block_placed(L, node, parent, x, avail, y);
+    if (!L->measuring) lay_translate(L, node, &probe, moved_from);
 }
 
 static void lay_block_placed(lctx *L, int node, const cstyle *parent, int x,
@@ -1273,8 +2413,10 @@ static void lay_block_placed(lctx *L, int node, const cstyle *parent, int x,
     if (st.display == D_NONE) return;
     if (!st.visible && !lay_show_hidden) return;
 
-    int ml = st.ml < 0 ? 0 : st.ml;
-    int mr = st.mr < 0 ? 0 : st.mr;
+    if (st.clear) *y = lay_cleared(L, *y, st.clear, x, avail);
+
+    int ml = st.ml == CSS_AUTO_OFF ? 0 : st.ml;
+    int mr = st.mr == CSS_AUTO_OFF ? 0 : st.mr;
     int box_w = avail - ml - mr;
 
     /* What a width means.
@@ -1307,14 +2449,18 @@ static void lay_block_placed(lctx *L, int node, const cstyle *parent, int x,
     int floor_w = st.min_width;
     if (floor_w >= 0 && !st.border_box) floor_w += frame;
 
+    /* Centring is where a box sits, not how wide it is, so a box being
+       measured is not centred: it reached halfway across whatever it was
+       measured in, and that was taken for its width. */
+    int centre = st.ml == CSS_AUTO_OFF && st.mr == CSS_AUTO_OFF && !L->measuring;
     if (want >= 0 && want < box_w) {
         /* A width with auto margins is centred, which is how most pages put
            their content in the middle of a wide window. */
-        if (st.ml < 0 && st.mr < 0) ml += (box_w - want) / 2;
+        if (centre) ml += (box_w - want) / 2;
         box_w = want;
     }
     if (cap >= 0 && cap < box_w) {
-        if (st.ml < 0 && st.mr < 0) ml += (box_w - cap) / 2;
+        if (centre) ml += (box_w - cap) / 2;
         box_w = cap;
     }
     /* A floor beats a ceiling, which is what every implementation does and
@@ -1322,7 +2468,24 @@ static void lay_block_placed(lctx *L, int node, const cstyle *parent, int x,
     if (floor_w >= 0 && box_w < floor_w) box_w = floor_w;
     if (box_w < 16) box_w = 16;
 
-    *y += st.mt < 0 ? 0 : st.mt;
+    /* A table not given a width is as wide as its columns, so its columns
+       are worked out before anything else; and centred the way old markup
+       centres one (lay_centres_table). */
+    ltable T;
+    int is_table = st.display == D_TABLE;
+    if (is_table) {
+        int fr = st.bl + st.br + st.pl + st.pr;
+        lay_table_plan(L, node, &st, box_w - fr, want >= 0, &T);
+        if (want < 0 && T.width + fr < box_w) {
+            int spare = box_w - (T.width + fr);
+            if (!L->measuring && ((st.ml == CSS_AUTO_OFF && st.mr == CSS_AUTO_OFF)
+                                  || lay_centres_table(d, node)))
+                ml += spare / 2;
+            box_w = T.width + fr;
+        }
+    }
+
+    *y += st.mt == CSS_AUTO_OFF ? 0 : st.mt;
     int box_top = *y;
 
     /* The background goes in the list before the contents and its size is
@@ -1337,6 +2500,10 @@ static void lay_block_placed(lctx *L, int node, const cstyle *parent, int x,
             bg->node = node;
         }
     }
+    int inside_at = L->out->nitems;
+    int floats_at = L->fl_seq;
+    int held_right = L->measure_right;
+    if (L->measuring) L->measure_right = 0;
 
     int cx = x + ml + st.bl + st.pl;
     int cw = box_w - st.bl - st.br - st.pl - st.pr;
@@ -1399,8 +2566,10 @@ static void lay_block_placed(lctx *L, int node, const cstyle *parent, int x,
 
     /* A flex container lays its children along a line rather than down
        the page, so it does not use the walk below at all. */
-    if (st.display == D_FLEX) {
+    if (st.display == D_FLEX || st.display == D_INLINE_FLEX) {
         lay_flex(L, node, &st, cx, cw, y);
+    } else if (is_table) {
+        lay_table_rows(L, node, &st, cx, &T, y);
     } else {
 
     /* The children: consecutive inline ones share a line, each block one
@@ -1410,7 +2579,17 @@ static void lay_block_placed(lctx *L, int node, const cstyle *parent, int x,
     while (child >= 0) {
         int next = d->nodes[child].next;
         int is_block = lay_is_block_node(L, child, &st);
-        if (is_block) {
+        if (is_block && (d->nodes[child].tag == T_IMG || lay_control_kind(d, child) != CTL_NONE)) {
+            /* A picture or a field made a block is still a picture or a
+               field: on a line of its own, drawn by the code that draws
+               them, which is the inline code. As a block it had no children
+               and came out as nothing. */
+            if (inline_open) lay_line_end(L, y);
+            lay_line_start(L, *y, cx, cw, st.align);
+            lay_inline(L, child, &st, y);
+            lay_line_end(L, y);
+            inline_open = 0;
+        } else if (is_block) {
             if (inline_open) { lay_line_end(L, y); inline_open = 0; }
             lay_block(L, child, &st, cx, cw, y);
         } else {
@@ -1436,6 +2615,33 @@ static void lay_block_placed(lctx *L, int node, const cstyle *parent, int x,
     L->pos_y = held_y;
     L->pos_w = held_w;
 
+    /* Tall enough for the floats inside it (lay_float). */
+    for (int s2 = floats_at > L->fl_seq - LAY_FLOATS ? floats_at : L->fl_seq - LAY_FLOATS;
+         s2 < L->fl_seq; s2++) {
+        int k = s2 % LAY_FLOATS;
+        if (s2 < 0) continue;
+        if (L->fl_y[k] + L->fl_h[k] > *y) *y = L->fl_y[k] + L->fl_h[k];
+    }
+
+    /* Measured, a box that was not given a width is as wide as what is in
+       it and its own padding and border, not as wide as the room it was
+       measured in: that is what a table column or a flex item or an
+       inline-block holding it wants to know. */
+    int shrunk = -1;
+    if (L->measuring) {
+        int right = L->measure_right;
+        for (int i = inside_at; i < L->out->nitems; i++) {
+            int r = L->out->items[i].x + L->out->items[i].w;
+            if (r > right) right = r;
+        }
+        int edge = want >= 0 || is_table ? x + ml + box_w : right + st.pr + st.br;
+        if (edge > x + ml + box_w) edge = x + ml + box_w;
+        if (edge < cx) edge = cx + st.pr + st.br;
+        shrunk = edge - (x + ml);
+        int reach = edge + (st.mr > 0 ? st.mr : 0);
+        L->measure_right = held_right > reach ? held_right : reach;
+    }
+
     *y += st.pb + st.bb;
     int box_h = *y - box_top;
 
@@ -1457,7 +2663,19 @@ static void lay_block_placed(lctx *L, int node, const cstyle *parent, int x,
        here clips, so the box stops and whatever was under it moves up. That
        is what max-height does on a page that uses it to cap a banner, and it
        is not what it does on one that uses it with overflow. */
-    if (cap_h >= 0 && cap_h < box_h) { *y -= box_h - cap_h; box_h = cap_h; }
+    /* Unless the box hides what overflows it, what is in it is shown whole
+       and what follows comes after it. A box that scrolls cannot be
+       scrolled here, and one whose overflow shows would have it drawn over
+       whatever came next: a sidebar capped at the window's height put an
+       encyclopaedia's contents on top of the article's title. Hidden, the
+       box is cut and what was below the cut is not drawn. */
+    if (cap_h >= 0 && cap_h < box_h && st.clip) {
+        int cut = box_top + cap_h;
+        for (int i = inside_at; i < L->out->nitems; i++)
+            if (L->out->items[i].y >= cut) L->out->items[i].kind = 0;
+        *y -= box_h - cap_h;
+        box_h = cap_h;
+    }
 
     /* A horizontal rule is a border on a box with nothing in it, and a box
        with nothing in it is no height at all. */
@@ -1467,7 +2685,7 @@ static void lay_block_placed(lctx *L, int node, const cstyle *parent, int x,
         litem *bg = &L->out->items[slot];
         bg->x = x + ml;
         bg->y = box_top;
-        bg->w = box_w;
+        bg->w = shrunk >= 0 ? shrunk : box_w;
         bg->h = box_h;
         bg->bg = st.background;
         bg->has_bg = st.has_bg;
@@ -1479,7 +2697,7 @@ static void lay_block_placed(lctx *L, int node, const cstyle *parent, int x,
         bg->radius = (unsigned char)(st.radius > 40 ? 40 : st.radius);
     }
 
-    *y += st.mb < 0 ? 0 : st.mb;
+    *y += st.mb == CSS_AUTO_OFF ? 0 : st.mb;
 }
 
 /* --- the whole page ------------------------------------------------------ */
@@ -1517,6 +2735,10 @@ static inline void lay_run(ldoc *out, const ddoc *d, const csheet *s,
     L.pos_x = 0; L.pos_y = 0; L.pos_w = width;
     L.measuring = 0; L.measure_right = 0;
     L.flex_sized = -1;
+    L.ngroups = 0;
+    L.cont_left = 0; L.cont_width = width;
+    L.fl_seq = 0;
+    L.floating = -1;
 
     cstyle root;
     css_default_style(&root, root_px);

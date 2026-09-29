@@ -95,6 +95,63 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.69.0: pages laid out the ways pages are laid out, and readers that survive a change of names
+
+- **Layout (11).** Tables are laid out as tables (`lay_table_plan`, `lay_table_rows`): each cell measured
+  narrowest and widest, columns sized from them, the table as wide as its columns or as told (`width`),
+  colspan and rowspan, rows as tall as their tallest cell, cells middle-aligned unless `valign` or
+  `vertical-align` says otherwise, cell backgrounds stretched to the row, captions first. They were blocks
+  with the cells run together as words, so a table in a cell ran its rows into a paragraph. Presentational
+  attributes (`lay_hints`: `bgcolor`, `width`, `height`, `align`, `valign`, `cellpadding`, `cellspacing`,
+  `border`, `nowrap`, `<font color size face>`, `<body text>`, `<img align>`) sit between the browser's own
+  rules and the page's in the cascade, which now applies the browser's rules first whatever their
+  specificity (`csheet.ua_rules`). Without a doctype (`ddoc.standards`) a table resets `text-align`, the
+  quirk a `<center>`ed page of tables relies on; `<center>` and `align=center` round a table centre it.
+- **Inline-blocks and blocks in inline (11).** An inline-block (and inline-flex, and a stray table cell) is
+  laid out as a block and placed on its line as one piece (`lay_inline_piece`, `lctx grp_*`); something
+  absolutely positioned in a run of text is laid out where it is and takes no room. A block inside an inline
+  element ends the line and is laid out as a block. A measurement is one pass: a box measured is as wide
+  as its content and frame (`shrunk`), not the room it was measured in; lines are not centred and auto
+  margins not applied while measuring. Measurements are kept for the layout (`lay_mcache`).
+- **Flex (11).** `lay_flex_line`: items shrink in proportion but never below their narrowest
+  (`lay_measure` at 1), `flex-wrap` wraps, alignment uses the heights the items came out at, and past
+  `LAY_FLEX_MAX` (128, was 32) the rest are laid out below instead of dropped.
+- **Floats (11).** `lay_float` puts a float at its side, past the floats there, down past them when there is
+  no room; `lay_line_start` shortens a line beside a float (`lay_float_room`) or moves it below when too
+  little is left; `clear` and `<br clear>` go below (`lay_cleared`); a block always grows to hold its floats.
+  Negative margins are kept (auto is `CSS_AUTO_OFF` for margins too), so a float pulled back with
+  `margin-left:-100%` goes where it was meant to.
+- **CSS (11).** Media queries are evaluated (`css_mq`): widths kept per rule (`mq_lo`, `mq_hi`) and compared
+  with `css_view_w` in `css_collect_chain`; print, dark schemes, more than one pixel a pixel, portrait and
+  touch never apply; a `<link>` or `<style>` `media` attribute is read the same way (`sheet_media`,
+  `css_parse_in`). Selectors: attribute values (`= ~= |= ^= $= *=`, with `i`), `+` and `~`, `:last-child`,
+  `:only-child`, `:*-of-type`, `:empty`, `:nth-child`/`-of-type`/`-last-child(An+B)`, `:checked`,
+  `:disabled`, `:enabled`, `:not(one compound)`, `:is`/`:where(one compound)`, and elements with no `T_`
+  by name (`csel.tname`); any other state (`:focus`, `:target` ...) never matches, where it used to be read
+  past and match always. `vertical-align`, `border-spacing`, `border-collapse`, `overflow`, `clip`,
+  `clip-path: inset(50%)`, `float`, `clear` are read; a box clipped to nothing, or a pixel or two across
+  with its overflow hidden, is not drawn (`lay_unseen`); `max-height` only cuts a box that hides its
+  overflow; `[hidden]` hides. A transform's translation (`translate`, `translateX/Y`, `translate3d`, with
+  `calc()` of a percentage and pixels) moves a box once it is laid out (`lay_translate`), which is how a
+  dialog is centred and an off-canvas menu kept off. Limits: 16000 rules, 40000 selectors, 64000
+  declarations, 2 MiB of text.
+- **Browser (11).** 12 style sheets (was 6), 3 MiB pages (was 1), 40000 elements; a picture's address
+  from `data-src` and its kin when `src` is a placeholder, from `srcset` when there is no `src`, from
+  `photo.jpg` for `photo.jpg.webp`, and from the address itself for a `data:` picture; pictures are asked
+  for as PNG, JPEG, GIF or SVG (`web_accept`), not anything. An icon button is named by `aria-label` or
+  `title`, not "Button".
+- **Sites (11, sites.h).** Every reader falls back when the name it keys on is changed: videos found by shape
+  (`yt_videos_any`), details by the watched id (`yt_details_any`) or the head tags (`yt_meta_video`),
+  storyboards by address, the comments token in any comments section, a channel's uploads from its feed,
+  Twitch's Client-Id learned from its page, a minimal question when a field is renamed, and a channel
+  card from its page when the API gives nothing.
+- **Host tools (14).** `tools/host/`: any ring 3 program built for Windows on a system-call shim, TLS by a
+  local proxy, pages rendered and tiled by `render.py`. Not part of the gate.
+- **Checks.** layouttest 122 (60 new), each targeted check seen failing on a broken build (tables; table
+  parts one at a time; inline-blocks, blocks in inline, measuring, the cascade, `<font>`, `[hidden]`;
+  media queries; selectors; flex; floats, negative margins, unseen text, max-height, block pictures,
+  button names; translation and calc). sitetest 144 (40 new), each seen failing.
+
 ### 0.68.1: the line that says a Google search was answered by DuckDuckGo, shown
 
 - **Browser (11).** `build_noted` put its line in front of the whole page, before DuckDuckGo's `<html>`, and the
