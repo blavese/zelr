@@ -347,6 +347,39 @@ def _sheet(n):
     return b".unused%d { color: #000000; }\n" % n
 
 
+# A page that asks to be somewhere else, the old way, in its own markup.
+META_REFRESH = b"""<!doctype html>
+<html><head><title>moving on</title>
+<meta http-equiv="refresh" content="0;url=/second"></head>
+<body><p>this page moves on at once</p></body></html>
+"""
+
+# And one that asks only inside <noscript>, which is for a browser that does
+# not run scripts. Google's search page says there to go to a page asking for
+# scripts to be turned on; a browser that runs them stays, and so the band.
+NOSCRIPT_REFRESH = b"""<!doctype html>
+<html><head><title>scripts run here</title>
+<style>body { font-family: sans-serif; padding: 24px }
+.band { background: #1d4ed8; color: #ffffff; padding: 30px }</style></head>
+<body><noscript><meta http-equiv="refresh" content="0;url=/second"></noscript>
+<div class="band">a browser that runs scripts stays on this page</div></body></html>
+"""
+
+# A page with a <template>, which is markup for a script to stamp out and not
+# part of the page. The band's colour is only inside it -- a style element in
+# the template, and a band element in the template that an outside rule
+# colours -- so a browser that takes neither draws no band.
+TEMPLATED = b"""<!doctype html>
+<html><head><title>a template</title>
+<style>body { font-family: sans-serif; padding: 24px } .inside { background: #1d4ed8; padding: 30px }</style>
+</head><body>
+<h1>a page with a template in it</h1>
+<div class="outside">no band should be drawn on this page</div>
+<template><style>.outside { background: #1d4ed8; padding: 30px }</style>
+<div class="inside">a band that belongs to a template</div></template>
+</body></html>
+"""
+
 # The same page pointing at something that is not there, so the words it
 # carries are what shows instead. That is what alt text is for, and a
 # browser that drew nothing at all would look identical to one that drew
@@ -622,6 +655,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(filler(30000))
             self.close_connection = True
+        elif path == "/templated":
+            self._send(TEMPLATED)
+        elif path == "/meta-refresh":
+            self._send(META_REFRESH)
+        elif path == "/noscript-refresh":
+            self._send(NOSCRIPT_REFRESH)
         elif path == "/redirect":
             self._send(b"moved", status=302, extra=[("Location", "/second")])
         elif path == "/redirect-relative":

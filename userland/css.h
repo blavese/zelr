@@ -2570,7 +2570,7 @@ static const char CSS_UA[] =
     "cite,dfn,var,address{font-style:italic}"
     "mark{background:#fff2a8}"
     "details,summary{display:block}"
-    "head,script,style,title,meta,link,noscript{display:none}"
+    "head,script,style,title,meta,link,noscript,template{display:none}"
     "button{display:inline-block;padding:5px 12px;background:#f2f3f5;"
         "border:1px #c9ccd1;border-radius:6px}"
     "input,textarea,select{display:inline-block;padding:4px 8px;"

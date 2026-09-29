@@ -420,9 +420,37 @@ def main():
             c.add("a page that is not there says so rather than showing the "
                   "last one", missing != moved_to, shotn)
 
+            # --- a page that asks to be somewhere else ---------------------
+            go(vm, mon, "http://%s/meta-refresh" % srv.host,
+               was=missing, name="br-going-refresh")
+            refreshed, _, _, shotf = page_settled(mon, "br-refresh")
+            c.add("a page's own refresh is followed to where it points",
+                  refreshed == second, shotf)
+
+            # And one that asks only inside <noscript>: a browser that runs
+            # scripts stays. Looked at twice, three seconds apart, so a
+            # refresh that was only slow to happen is still caught.
+            go(vm, mon, "http://%s/noscript-refresh" % srv.host,
+               was=refreshed, name="br-going-noscript")
+            stayed, pxs2, ws2, shotq = page_settled(mon, "br-noscript")
+            time.sleep(3.0)
+            still, pxs3, ws3, shotq2 = page_settled(mon, "br-noscript-later")
+            c.add("and a refresh inside <noscript> is not, since scripts run here",
+                  count_in(pxs2, ws2, PAGE, BAND) > 3000
+                  and count_in(pxs3, ws3, PAGE, BAND) > 3000 and still != second, shotq2)
+
             # --- and an address it cannot speak ----------------------------
+            # --- a template ----------------------------------------------
+            #
+            # Neither its style element nor its markup is the page's.
+            go(vm, mon, "http://%s/templated" % srv.host,
+               was=still, name="br-going-template")
+            templ, pxt, wt, shott = page_settled(mon, "br-template")
+            c.add("what is in a template is neither drawn nor applied",
+                  count_in(pxt, wt, PAGE, BAND) < 200 and templ != still, shott)
+
             go(vm, mon, "https://%s/" % srv.host, settle=5.0,
-               was=missing, name="br-going-https")
+               was=templ, name="br-going-https")
             secure, _, _, shots = page_settled(mon, "br-https")
             c.add("https says it cannot do that rather than failing quietly",
                   secure != missing, shots)

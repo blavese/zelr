@@ -1260,6 +1260,16 @@ int main(void) {
         ok("nor does one positioned over it, which is still drawn", a && b && o && a->y == b->y && b->x < 200);
     }
 
+    /* --- a template is not the page ---------------------------------------------
+     *
+     * Markup kept for a script to stamp out later. GitHub keeps menus and
+     * dialogs in <template>, and they were drawn down the page. */
+    {
+        lay("<p>shown</p><template><p>inert</p><div><a href=/x>stamped</a></div></template><p>after</p>", 600);
+        ok("what is in a template is not drawn", word("shown") && word("after") && !word("inert")
+           && !word("stamped"));
+    }
+
     puts(failed ? "LAYOUTTEST_FAIL\n" : "LAYOUTTEST_PASS\n");
     return failed;
 }

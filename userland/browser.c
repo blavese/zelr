@@ -375,10 +375,21 @@ static int  load_post;
 static int refreshes;
 static int go_is_refresh;      /* this load was the page's idea, not a reader's */
 
+/* Whether an element is inside <noscript>, which is for a browser that does
+   not run scripts. This one does: Google's search page says there to go to
+   a page asking for scripts to be turned on, and following it left the page
+   the page's own script was about to work on. */
+static int in_noscript(int el) {
+    for (int p = doc.nodes[el].parent; p >= 0; p = doc.nodes[p].parent)
+        if (doc.nodes[p].kind == DN_ELEMENT && doc.nodes[p].tag == T_NOSCRIPT) return 1;
+    return 0;
+}
+
 static int meta_refresh(char *out, int cap) {
     for (int i = 0; i < doc.count; i++) {
         if (doc.nodes[i].kind != DN_ELEMENT) continue;
         if (doc.nodes[i].tag != T_META) continue;
+        if (in_noscript(i)) continue;
 
         const char *eq = dom_attr(&doc, i, "http-equiv");
         if (!eq || !lay_same_fold(eq, "refresh")) continue;
@@ -626,10 +637,23 @@ static int sheet_media(int el, int *lo, int *hi) {
 }
 
 /* The sheets the page carries itself: every style element, in order. */
+/* Whether an element is inside a <template>, which holds markup a script
+   may stamp out later and is otherwise not part of the page: not drawn, and
+   its style sheets, links and pictures not the page's. GitHub keeps whole
+   menus and dialogs in them, style elements included, and those rules were
+   applied to the page. */
+static int in_template(int el) {
+    for (int p = doc.nodes[el].parent; p >= 0; p = doc.nodes[p].parent)
+        if (doc.nodes[p].kind == DN_ELEMENT && doc.nodes[p].tag == T_OTHER
+            && w_same_fold(dom_tag_name(&doc, p), "template")) return 1;
+    return 0;
+}
+
 static void gather_inline_sheets(void) {
     for (int i = 0; i < doc.count; i++) {
         if (doc.nodes[i].kind != DN_ELEMENT || doc.nodes[i].tag != T_STYLE)
             continue;
+        if (in_template(i)) continue;
         int lo, hi;
         if (!sheet_media(i, &lo, &hi)) continue;
         int t = doc.nodes[i].first;
@@ -690,6 +714,7 @@ static int gather_linked_sheets(int *fetched, int *skipped) {
     for (int i = 0; i < doc.count; i++) {
         if (doc.nodes[i].kind != DN_ELEMENT || doc.nodes[i].tag != T_LINK)
             continue;
+        if (in_template(i)) continue;
         const char *rel = dom_attr(&doc, i, "rel");
         const char *href = dom_attr(&doc, i, "href");
         if (!rel || !href || !*href) continue;
@@ -913,6 +938,7 @@ static void gather_pictures(void) {
     for (int i = 0; i < doc.count && npics < PICS_MAX; i++) {
         if (doc.nodes[i].kind != DN_ELEMENT || doc.nodes[i].tag != T_IMG)
             continue;
+        if (in_template(i)) continue;          /* a slot for one that is drawn */
 
         const char *src = pic_source(i);
         if (!src) continue;
