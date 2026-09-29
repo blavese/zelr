@@ -481,8 +481,9 @@ void jsdom_cookies_with(int (*get)(char *, int), void (*set)(const char *)) {
 #define JD_COOKIES_MAX (64 * 1024)
 
 static jval nat_doc_cookie(jctx *J, jval t, jval *a, int n) {
-    (void)t; (void)a; (void)n;
-    if (!jd_cookie_get) return jd_str("");
+    (void)a; (void)n;
+    /* A document of its own has no address, and so no cookies. */
+    if (!jd_cookie_get || jd_inert_of(t) >= 0) return jd_str("");
     char *buf = (char *)malloc(JD_COOKIES_MAX);
     if (!buf) return jd_str("");
     int got = jd_cookie_get(buf, JD_COOKIES_MAX);
@@ -492,9 +493,8 @@ static jval nat_doc_cookie(jctx *J, jval t, jval *a, int n) {
 }
 
 static jval nat_doc_set_cookie(jctx *J, jval t, jval *a, int n) {
-    (void)t;
     jstr *s = js_to_str(J, js_arg(a, n, 0));
-    if (s && jd_cookie_set) jd_cookie_set(s->s);
+    if (s && jd_cookie_set && jd_inert_of(t) < 0) jd_cookie_set(s->s);
     return js_undef();
 }
 

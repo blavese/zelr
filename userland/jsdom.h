@@ -180,8 +180,13 @@ enum { JN_ELEMENT = 1, JN_TEXT = 3, JN_COMMENT = 8, JN_DOCUMENT = 9, JN_FRAGMENT
 static int jd_kind(int n) {
     const dnode *x = &jd_doc->nodes[n];
     if (x->kind == DN_TEXT) return JN_TEXT;
-    if (x->tag == T_OTHER && x->text >= 0 && jd_doc->arena[x->text] == '#')
-        return jd_doc->arena[x->text + 1] == 'c' ? JN_COMMENT : JN_FRAGMENT;
+    if (x->tag == T_OTHER && x->text >= 0 && jd_doc->arena[x->text] == '#') {
+        /* "#comment", "#document-fragment", or "#document" (jd_new_document),
+           which is nine letters long. */
+        const char *nm = jd_doc->arena + x->text;
+        if (nm[1] == 'c') return JN_COMMENT;
+        return nm[9] == 0 ? JN_DOCUMENT : JN_FRAGMENT;
+    }
     return JN_ELEMENT;
 }
 
@@ -226,6 +231,12 @@ static int jd_top(void) {
     for (int c = jd_doc->nodes[r].first; c >= 0; c = jd_doc->nodes[c].next)
         if (jd_doc->nodes[c].kind == DN_ELEMENT && jd_doc->nodes[c].tag == T_HTML) return c;
     return r;
+}
+
+/* A document that is not the page (jd_new_document), when this is one. */
+static int jd_inert_of(jval t) {
+    int x = jd_node_of(t);
+    return x >= 0 && jd_kind(x) == JN_DOCUMENT ? x : -1;
 }
 
 /* Whether a node is where the document's own children are: the document
@@ -375,6 +386,7 @@ static jobj *jd_proto_for(int node) {
         case JN_TEXT: return jd_p[JI_TEXT];
         case JN_COMMENT: return jd_p[JI_COMMENT];
         case JN_FRAGMENT: return jd_p[JI_FRAGMENT];
+        case JN_DOCUMENT: return jd_p[JI_HTMLDOCUMENT];
         default: break;
     }
     const dnode *x = &jd_doc->nodes[node];
@@ -622,7 +634,7 @@ static int jd_can_insert(jctx *J, int parent, int child) {
         js_throw(J, JS_ERR_TYPE, "that is not a node", J->error_line);
         return 0;
     }
-    if (jd_kind(parent) == JN_TEXT || jd_kind(parent) == JN_COMMENT
+    if (jd_kind(parent) == JN_TEXT || jd_kind(parent) == JN_COMMENT || jd_kind(child) == JN_DOCUMENT
         || dom_contains(jd_doc, child, parent)) {
         js_throw_dom(J, "HierarchyRequestError", "a node cannot be put there");
         return 0;
@@ -731,7 +743,7 @@ static void jd_serialise(int n, jtext *t, int self) {
         jd_put(t, "-->");
         return;
     }
-    if (k == JN_FRAGMENT || !self) { jd_serialise_children(n, t); return; }
+    if (k == JN_FRAGMENT || k == JN_DOCUMENT || !self) { jd_serialise_children(n, t); return; }
     const char *nm = dom_tag_name(jd_doc, n);
     jd_putc(t, '<');
     jd_put(t, nm);
@@ -773,7 +785,15 @@ static int jd_parse_fragment(const char *html, int len) {
     int f = jd_new_fragment();
     if (f < 0) return -1;
     int from = jd_doc->count;
+    /* The parser takes the first head, body and title it meets for the
+       page's (dom.h), and a fragment's are not: a page with no title whose
+       script read a whole page into a DOMParser took that page's title. */
+    int head = jd_doc->head, body = jd_doc->body, title = jd_doc->title, std = jd_doc->standards;
     dom_parse_into(jd_doc, html, len, f);
+    jd_doc->head = head;
+    jd_doc->body = body;
+    jd_doc->title = title;
+    jd_doc->standards = std;
     for (int i = from; i < jd_doc->count; i++) {
         if (jd_doc->nodes[i].kind != DN_ELEMENT) continue;
         if (jd_doc->nodes[i].tag == T_SCRIPT) jd_mark_started(i);
@@ -1949,6 +1969,7 @@ static jval jd_name_of(int x) {
         case JN_TEXT: return jd_str("#text");
         case JN_COMMENT: return jd_str("#comment");
         case JN_FRAGMENT: return jd_str("#document-fragment");
+        case JN_DOCUMENT: return jd_str("#document");
         default: break;
     }
     char buf[64];
@@ -1966,13 +1987,13 @@ static jval nat_node_name(jctx *J, jval t, jval *a, int n) {
 static jval nat_node_value(jctx *J, jval t, jval *a, int n) {
     (void)J; (void)a; (void)n;
     int x = jd_node_of(t);
-    if (x < 0 || jd_kind(x) == JN_ELEMENT || jd_kind(x) == JN_FRAGMENT) return js_null();
+    if (x < 0 || jd_kind(x) == JN_ELEMENT || jd_kind(x) == JN_FRAGMENT || jd_kind(x) == JN_DOCUMENT) return js_null();
     return jd_str(jd_text_of(x));
 }
 
 static jval nat_node_set_value(jctx *J, jval t, jval *a, int n) {
     int x = jd_node_of(t);
-    if (x < 0 || jd_kind(x) == JN_ELEMENT || jd_kind(x) == JN_FRAGMENT) return js_undef();
+    if (x < 0 || jd_kind(x) == JN_ELEMENT || jd_kind(x) == JN_FRAGMENT || jd_kind(x) == JN_DOCUMENT) return js_undef();
     jval v = js_arg(a, n, 0);
     jstr *s = v.t == JS_NULL ? js_str(J, "") : js_to_str(J, v);
     if (s) jd_set_data(x, s->s, (int)s->len);
@@ -1984,6 +2005,7 @@ static jval nat_text_content(jctx *J, jval t, jval *a, int n) {
     int x = jd_node_of(t);
     if (x < 0) return js_null();
     int k = jd_kind(x);
+    if (k == JN_DOCUMENT) return js_null();
     if (k == JN_TEXT || k == JN_COMMENT) return jd_str(jd_text_of(x));
     return jd_text_value(x);
 }
@@ -2004,6 +2026,7 @@ static jval nat_set_text_content(jctx *J, jval t, jval *a, int n) {
     jstr *s = v.t == JS_NULL || v.t == JS_UNDEF ? js_str(J, "") : js_to_str(J, v);
     if (!s) return js_undef();
     int k = jd_kind(x);
+    if (k == JN_DOCUMENT) return js_undef();
     if (k == JN_TEXT || k == JN_COMMENT) jd_set_data(x, s->s, (int)s->len);
     else jd_replace_with_text(x, s);
     return js_undef();
@@ -2091,8 +2114,14 @@ static jval nat_child_el_count(jctx *J, jval t, jval *a, int n) {
 }
 
 static jval nat_owner_document(jctx *J, jval t, jval *a, int n) {
-    (void)J; (void)a; (void)n;
-    if (jd_is_doc(t) || !jd_document_obj) return js_null();
+    (void)a; (void)n;
+    if (jd_is_doc(t) || jd_inert_of(t) >= 0 || !jd_document_obj) return js_null();
+    /* One inside a document of its own (jd_new_document) belongs to that. */
+    int x = jd_node_of(t);
+    for (int k = 0; x >= 0 && k < DOM_NODES; k++) {
+        if (jd_kind(x) == JN_DOCUMENT) return jd_el_value(J, x);
+        x = jd_doc->nodes[x].parent;
+    }
     return js_from_obj(jd_document_obj);
 }
 
@@ -4677,8 +4706,7 @@ static jval nat_doc_by_id(jctx *J, jval t, jval *a, int n) {
 }
 
 static jval nat_doc_by_name(jctx *J, jval t, jval *a, int n) {
-    (void)t;
-    return jd_list_value(J, JL_NAME, 0, -1, jd_arg_str(J, a, n, 0));
+    return jd_list_value(J, JL_NAME, 0, jd_inert_of(t), jd_arg_str(J, a, n, 0));
 }
 
 static jval nat_doc_create_el(jctx *J, jval t, jval *a, int n) {
@@ -4743,15 +4771,24 @@ static jval nat_doc_adopt(jctx *J, jval t, jval *a, int n) {
     return js_arg(a, n, 0);
 }
 
+static int jd_inert_element(int d);
+static int jd_inert_part(int d, int tag);
+static jval jd_inert_title(jctx *J, int d);
+static void jd_inert_set_title(int d, jstr *s);
+
 static jval nat_doc_element(jctx *J, jval t, jval *a, int n) {
-    (void)t; (void)a; (void)n;
+    (void)a; (void)n;
+    int d = jd_inert_of(t);
+    if (d >= 0) return jd_node_or_doc(J, jd_inert_element(d));
     return jd_node_or_doc(J, jd_top());
 }
 
 /* The head is always there to a script, which appends its styles and
    scripts to it without asking; a page that wrote none gets one. */
 static jval nat_doc_head(jctx *J, jval t, jval *a, int n) {
-    (void)t; (void)a; (void)n;
+    (void)a; (void)n;
+    int d = jd_inert_of(t);
+    if (d >= 0) return jd_node_or_doc(J, jd_inert_part(d, T_HEAD));
     if (jd_doc->head < 0 && jd_top() >= 0) {
         int h = dom_create_element(jd_doc, "head", 4);
         if (h >= 0) {
@@ -4763,25 +4800,35 @@ static jval nat_doc_head(jctx *J, jval t, jval *a, int n) {
 }
 
 static jval nat_doc_body(jctx *J, jval t, jval *a, int n) {
-    (void)t; (void)a; (void)n;
+    (void)a; (void)n;
+    int d = jd_inert_of(t);
+    if (d >= 0) return jd_node_or_doc(J, jd_inert_part(d, T_BODY));
     return jd_doc->body >= 0 ? jd_el_value(J, jd_doc->body) : js_null();
 }
 
 static jval nat_doc_title(jctx *J, jval t, jval *a, int n) {
-    (void)J; (void)t; (void)a; (void)n;
+    (void)a; (void)n;
+    int d = jd_inert_of(t);
+    if (d >= 0) return jd_inert_title(J, d);
     return jd_str(jd_doc->title >= 0 ? jd_doc->arena + jd_doc->title : "");
 }
 
 static jval nat_doc_set_title(jctx *J, jval t, jval *a, int n) {
-    (void)t;
     jstr *s = jd_arg_str(J, a, n, 0);
+    int d = jd_inert_of(t);
+    if (d >= 0) { jd_inert_set_title(d, s); return js_undef(); }
     jd_doc->title = dom_str(jd_doc, s->s, (int)s->len);
     jd_touched();
     return js_undef();
 }
 
 static jval nat_doc_url(jctx *J, jval t, jval *a, int n) {
-    (void)J; (void)t; (void)a; (void)n;
+    (void)J; (void)a; (void)n;
+    int d = jd_inert_of(t);
+    if (d >= 0) {
+        const char *u = dom_attr(jd_doc, d, "url");
+        return jd_str(u ? u : "about:blank");
+    }
     return jd_str(jd_address);
 }
 
@@ -4806,44 +4853,55 @@ static jval nat_doc_content_type(jctx *J, jval t, jval *a, int n) {
 }
 
 static jval nat_doc_compat(jctx *J, jval t, jval *a, int n) {
-    (void)J; (void)t; (void)a; (void)n;
+    (void)J; (void)a; (void)n;
+    if (jd_inert_of(t) >= 0) return jd_str("CSS1Compat");
     return jd_str(jd_doc->standards ? "CSS1Compat" : "BackCompat");
 }
 
 static int jd_ready;                     /* 0 loading, 1 interactive, 2 complete */
 
 static jval nat_doc_ready(jctx *J, jval t, jval *a, int n) {
-    (void)J; (void)t; (void)a; (void)n;
+    (void)J; (void)a; (void)n;
+    if (jd_inert_of(t) >= 0) return jd_str("complete");
     return jd_str(jd_ready == 0 ? "loading" : jd_ready == 1 ? "interactive" : "complete");
 }
 
 /* The page is on the screen whenever it is loaded: the browser has one page
-   and draws it. */
+   and draws it. A document of its own is never drawn. */
 static jval nat_doc_visibility(jctx *J, jval t, jval *a, int n) {
-    (void)J; (void)t; (void)a; (void)n;
-    return jd_str("visible");
+    (void)J; (void)a; (void)n;
+    return jd_str(jd_inert_of(t) >= 0 ? "hidden" : "visible");
+}
+
+static jval nat_doc_hidden(jctx *J, jval t, jval *a, int n) {
+    (void)J; (void)a; (void)n;
+    return js_bool(jd_inert_of(t) >= 0);
 }
 
 static jval nat_doc_view(jctx *J, jval t, jval *a, int n) {
-    (void)t; (void)a; (void)n;
+    (void)a; (void)n;
+    if (jd_inert_of(t) >= 0) return js_null();
     return js_from_obj(J->global_obj);
 }
 
 static jval nat_doc_active(jctx *J, jval t, jval *a, int n) {
-    (void)t; (void)a; (void)n;
+    (void)a; (void)n;
+    int d = jd_inert_of(t);
+    if (d >= 0) return jd_node_or_doc(J, jd_inert_part(d, T_BODY));
     if (jd_active >= 0 && jd_connected(jd_active)) return jd_el_value(J, jd_active);
     return jd_doc->body >= 0 ? jd_el_value(J, jd_doc->body) : js_null();
 }
 
-static jval nat_doc_forms(jctx *J, jval t, jval *a, int n) { (void)t; (void)a; (void)n; return jd_list_value(J, JL_FORMS, 1, -1, 0); }
-static jval nat_doc_images(jctx *J, jval t, jval *a, int n) { (void)t; (void)a; (void)n; return jd_list_value(J, JL_IMAGES, 1, -1, 0); }
-static jval nat_doc_links(jctx *J, jval t, jval *a, int n) { (void)t; (void)a; (void)n; return jd_list_value(J, JL_LINKS, 1, -1, 0); }
-static jval nat_doc_scripts(jctx *J, jval t, jval *a, int n) { (void)t; (void)a; (void)n; return jd_list_value(J, JL_SCRIPTS, 1, -1, 0); }
+static jval nat_doc_forms(jctx *J, jval t, jval *a, int n) { (void)a; (void)n; return jd_list_value(J, JL_FORMS, 1, jd_inert_of(t), 0); }
+static jval nat_doc_images(jctx *J, jval t, jval *a, int n) { (void)a; (void)n; return jd_list_value(J, JL_IMAGES, 1, jd_inert_of(t), 0); }
+static jval nat_doc_links(jctx *J, jval t, jval *a, int n) { (void)a; (void)n; return jd_list_value(J, JL_LINKS, 1, jd_inert_of(t), 0); }
+static jval nat_doc_scripts(jctx *J, jval t, jval *a, int n) { (void)a; (void)n; return jd_list_value(J, JL_SCRIPTS, 1, jd_inert_of(t), 0); }
 
 static int jd_current_script = -1;
 
 static jval nat_doc_current_script(jctx *J, jval t, jval *a, int n) {
-    (void)t; (void)a; (void)n;
+    (void)a; (void)n;
+    if (jd_inert_of(t) >= 0) return js_null();
     return jd_current_script >= 0 ? jd_el_value(J, jd_current_script) : js_null();
 }
 
@@ -4880,13 +4938,231 @@ static jval jd_doc_write(jctx *J, jval *a, int n, int newline) {
     return js_undef();
 }
 
-static jval nat_doc_write(jctx *J, jval t, jval *a, int n) { (void)t; return jd_doc_write(J, a, n, 0); }
-static jval nat_doc_writeln(jctx *J, jval t, jval *a, int n) { (void)t; return jd_doc_write(J, a, n, 1); }
+/* Into the page only: a document of its own is written to by nobody here,
+   and writing its markup after the running script would put it in the
+   page instead. */
+static jval nat_doc_write(jctx *J, jval t, jval *a, int n) {
+    return jd_inert_of(t) >= 0 ? js_undef() : jd_doc_write(J, a, n, 0);
+}
+static jval nat_doc_writeln(jctx *J, jval t, jval *a, int n) {
+    return jd_inert_of(t) >= 0 ? js_undef() : jd_doc_write(J, a, n, 1);
+}
 
 static jval nat_doc_has_focus(jctx *J, jval t, jval *a, int n) {
+    (void)J; (void)a; (void)n;
+    return js_bool(jd_inert_of(t) < 0);
+}
+
+/* --- documents that are not the page ------------------------------------------------------
+ *
+ * document.implementation.createHTMLDocument and DOMParser make documents
+ * of their own: jQuery makes one to read markup into before it will load
+ * at all, and a page reads the parts of a fetched page out of one. Here
+ * such a document is a node of the page's tree that is in no part of the
+ * page -- an element named "#document", as a fragment is one named
+ * "#document-fragment" -- so every search, walk and change works under it
+ * as it does under any node, and nothing in it is drawn, run or connected.
+ * The Document methods above answer for it (jd_inert_of): its own element,
+ * head, body and title, no cookies, no window, and writes that go nowhere. */
+
+static jobj *jd_interface(jctx *J, const char *name, jobj *parent_proto, jnative ctor, int arity);
+
+static int jd_inert_element(int d) {
+    for (int c = jd_doc->nodes[d].first; c >= 0; c = jd_doc->nodes[c].next)
+        if (jd_is_element(c)) return c;
+    return -1;
+}
+
+/* The document element's head or body. */
+static int jd_inert_part(int d, int tag) {
+    int html = jd_inert_element(d);
+    if (html < 0) return -1;
+    for (int c = jd_doc->nodes[html].first; c >= 0; c = jd_doc->nodes[c].next)
+        if (jd_doc->nodes[c].kind == DN_ELEMENT && jd_doc->nodes[c].tag == tag) return c;
+    return -1;
+}
+
+static int jd_inert_title_el(int d) {
+    for (int i = jd_walk_first(d); i >= 0; i = jd_walk_next(i, d))
+        if (jd_doc->nodes[i].kind == DN_ELEMENT && jd_doc->nodes[i].tag == T_TITLE) return i;
+    return -1;
+}
+
+/* The first title's text, with its white space run together and trimmed,
+   as the standard reads a title. */
+static jval jd_inert_title(jctx *J, int d) {
+    int ti = jd_inert_title_el(d);
+    if (ti < 0) return jd_str("");
+    jtext raw = { 0, 0, 0, 0 };
+    jd_text_content(ti, &raw);
+    jtext out = { 0, 0, 0, 0 };
+    int gap = 0;
+    for (u32 i = 0; i < raw.n; i++) {
+        char c = raw.b[i];
+        if (c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f') { gap = out.n > 0; continue; }
+        if (gap) jd_putc(&out, ' ');
+        gap = 0;
+        jd_putc(&out, c);
+    }
+    free(raw.b);
+    return js_from_str(jt_done(J, &out));
+}
+
+static void jd_inert_set_title(int d, jstr *s) {
+    int ti = jd_inert_title_el(d);
+    if (ti < 0) {
+        int head = jd_inert_part(d, T_HEAD);
+        if (head < 0) return;
+        ti = dom_create_element(jd_doc, "title", 5);
+        if (ti < 0) return;
+        jd_insert(head, ti, -1);
+    }
+    jd_replace_with_text(ti, s);
+}
+
+/* A document of its own: html, with a head and a body, under a node that
+   stands for the document. The address, when it has one, is kept on that
+   node, where nothing reads it but document.URL. */
+static int jd_new_document(const char *url, int with_parts) {
+    int d = jd_new_named("#document");
+    if (d < 0) return -1;
+    if (url) dom_attr_set(jd_doc, d, "url", url);
+    if (!with_parts) return d;
+    int html = dom_create_element(jd_doc, "html", 4);
+    int head = dom_create_element(jd_doc, "head", 4);
+    int body = dom_create_element(jd_doc, "body", 4);
+    if (html < 0 || head < 0 || body < 0) return -1;
+    dom_append(jd_doc, d, html);
+    dom_append(jd_doc, html, head);
+    dom_append(jd_doc, html, body);
+    return d;
+}
+
+static jval nat_impl_create_html(jctx *J, jval t, jval *a, int n) {
+    (void)t;
+    int d = jd_new_document(0, 1);
+    if (d < 0) return js_throw_dom(J, "NotSupportedError", "the document is full");
+    if (n > 0 && a[0].t != JS_UNDEF) {
+        jstr *s = js_to_str(J, a[0]);
+        int head = jd_inert_part(d, T_HEAD);
+        int ti = dom_create_element(jd_doc, "title", 5);
+        int tx = s ? jd_new_text(s->s, (int)s->len) : -1;
+        if (head >= 0 && ti >= 0 && tx >= 0) {
+            dom_append(jd_doc, ti, tx);
+            dom_append(jd_doc, head, ti);
+        }
+    }
+    return jd_el_value(J, d);
+}
+
+/* The standard now says this is true whatever is asked. */
+static jval nat_impl_has_feature(jctx *J, jval t, jval *a, int n) {
     (void)J; (void)t; (void)a; (void)n;
     return js_bool(1);
 }
+
+/* What goes in a head when a page's markup came without one: the parts a
+   head holds, up to the first thing that is content. */
+static int jd_head_part(int c) {
+    if (jd_doc->nodes[c].kind != DN_ELEMENT) return 0;
+    int tag = jd_doc->nodes[c].tag;
+    if (tag == T_TITLE || tag == T_META || tag == T_LINK || tag == T_STYLE || tag == T_SCRIPT) return 1;
+    return tag == T_OTHER && w_same(dom_tag_name(jd_doc, c), "base");
+}
+
+static int jd_blank_text(int c) {
+    if (jd_doc->nodes[c].kind != DN_TEXT) return 0;
+    for (const char *p = jd_text_of(c); *p; p++)
+        if (*p != ' ' && *p != '\t' && *p != '\n' && *p != '\r') return 0;
+    return 1;
+}
+
+static jval nat_parser_ctor(jctx *J, jval t, jval *a, int n) {
+    (void)a; (void)n;
+    if (J->new_target.t == JS_UNDEF || !js_is_obj(t))
+        return js_throw(J, JS_ERR_TYPE, "DOMParser is made with new", J->error_line);
+    return js_undef();
+}
+
+/* HTML read the way the page was, into a document of its own with the
+   page's address: the markup's html, head and body where it wrote them,
+   and made where it did not -- a head's parts before any content go in the
+   head, and the rest in the body, in the order written. The scripts in it
+   never run (jd_parse_fragment). XML is not read: this browser has no XML
+   parser, and reading it as HTML would change what it says. */
+static jval nat_parser_parse(jctx *J, jval t, jval *a, int n) {
+    (void)t;
+    jstr *src = jd_arg_str(J, a, n, 0), *type = jd_arg_str(J, a, n, 1);
+    if (!js_str_is(type, "text/html")) {
+        if (js_str_is(type, "text/xml") || js_str_is(type, "application/xml")
+            || js_str_is(type, "application/xhtml+xml") || js_str_is(type, "image/svg+xml"))
+            return js_throw_dom(J, "NotSupportedError", "this browser reads HTML, and has no XML parser");
+        return js_throw(J, JS_ERR_TYPE, "parseFromString needs text/html or an XML type", J->error_line);
+    }
+    int d = jd_new_document(jd_address, 0);
+    int f = d >= 0 ? jd_parse_fragment(src->s, (int)src->len) : -1;
+    if (f < 0) return js_throw_dom(J, "NotSupportedError", "the document is full");
+
+    int html = -1;
+    for (int c = jd_doc->nodes[f].first; c >= 0 && html < 0; c = jd_doc->nodes[c].next)
+        if (jd_doc->nodes[c].kind == DN_ELEMENT && jd_doc->nodes[c].tag == T_HTML) html = c;
+    if (html >= 0) dom_unlink(jd_doc, html);
+    else if ((html = dom_create_element(jd_doc, "html", 4)) < 0) return js_null();
+    dom_append(jd_doc, d, html);
+    /* Anything written outside <html> goes inside it, in order. */
+    while (jd_doc->nodes[f].first >= 0) {
+        int c = jd_doc->nodes[f].first;
+        dom_unlink(jd_doc, c);
+        dom_append(jd_doc, html, c);
+    }
+    int head = -1, body = -1;
+    for (int c = jd_doc->nodes[html].first; c >= 0; c = jd_doc->nodes[c].next) {
+        if (jd_doc->nodes[c].kind != DN_ELEMENT) continue;
+        if (jd_doc->nodes[c].tag == T_HEAD && head < 0) head = c;
+        if (jd_doc->nodes[c].tag == T_BODY && body < 0) body = c;
+    }
+    if (head < 0) {
+        if ((head = dom_create_element(jd_doc, "head", 4)) < 0) return js_null();
+        dom_insert_before(jd_doc, html, head, jd_doc->nodes[html].first);
+    }
+    if (body < 0) {
+        if ((body = dom_create_element(jd_doc, "body", 4)) < 0) return js_null();
+        dom_append(jd_doc, html, body);
+    }
+    /* What is left beside them: before the body, into the start of it (or
+       the head, while it is a head's part); after it, onto its end. */
+    int before = jd_doc->nodes[body].first, past_body = 0, content = 0;
+    for (int c = jd_doc->nodes[html].first, next; c >= 0; c = next) {
+        next = jd_doc->nodes[c].next;
+        if (c == head) continue;
+        if (c == body) { past_body = 1; continue; }
+        dom_unlink(jd_doc, c);
+        if (!content && !past_body && jd_blank_text(c)) continue;
+        if (!content && !past_body && jd_head_part(c)) { dom_append(jd_doc, head, c); continue; }
+        content = 1;
+        if (!past_body && before >= 0) dom_insert_before(jd_doc, body, c, before);
+        else dom_append(jd_doc, body, c);
+    }
+    return jd_el_value(J, d);
+}
+
+static jobj *jd_implementation;
+
+static jval nat_doc_implementation(jctx *J, jval t, jval *a, int n) {
+    (void)J; (void)t; (void)a; (void)n;
+    return jd_implementation ? js_from_obj(jd_implementation) : js_null();
+}
+
+static void jd_setup_documents(jctx *J, jobj *docproto) {
+    jobj *ip = jd_interface(J, "DOMImplementation", 0, 0, 0);
+    jd_method(J, ip, "createHTMLDocument", nat_impl_create_html, 0);
+    jd_method(J, ip, "hasFeature", nat_impl_has_feature, 0);
+    jd_implementation = js_object_with(J, JO_PLAIN, ip);
+    jd_accessor(J, docproto, "implementation", nat_doc_implementation, 0);
+    jobj *pp = jd_interface(J, "DOMParser", 0, nat_parser_ctor, 0);
+    jd_method(J, pp, "parseFromString", nat_parser_parse, 2);
+}
+
 
 /* --- running scripts ---------------------------------------------------------------------------
  *
@@ -5866,8 +6142,9 @@ static void jd_setup_document(jctx *J, jobj *document) {
     jd_accessor(J, d, "compatMode", nat_doc_compat, 0);
     jd_accessor(J, d, "readyState", nat_doc_ready, 0);
     jd_accessor(J, d, "visibilityState", nat_doc_visibility, 0);
-    jd_accessor(J, d, "hidden", nat_false_getter, 0);
+    jd_accessor(J, d, "hidden", nat_doc_hidden, 0);
     jd_accessor(J, d, "defaultView", nat_doc_view, 0);
+    jd_setup_documents(J, d);
     jd_accessor(J, d, "activeElement", nat_doc_active, 0);
     jd_accessor(J, d, "forms", nat_doc_forms, 0);
     jd_accessor(J, d, "images", nat_doc_images, 0);

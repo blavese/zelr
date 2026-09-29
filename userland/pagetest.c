@@ -1594,6 +1594,55 @@ int main(void) {
         jsdom_at("");
     }
 
+    /* --- documents that are not the page ----------------------------------------------
+     *
+     * jQuery makes one with document.implementation.createHTMLDocument before
+     * it will load at all, and Ars Technica, CSS-Tricks and Microsoft stopped
+     * there; DOMParser reads a fetched page into one. */
+    {
+        jsdom_at("https://site.test/page");
+        oks("createHTMLDocument makes a document of its own, as jQuery asks for one",
+            titled("<body><script>var d = document.implementation.createHTMLDocument('made');"
+                   "d.body.innerHTML = '<form></form><form></form>';"
+                   "var base = d.createElement('base'); base.href = document.location.href; d.head.appendChild(base);"
+                   "document.title = [d.body.childNodes.length, d.nodeType, d instanceof Document, d.nodeName,"
+                   " d.documentElement.nodeName, d.title, d.head.lastChild.nodeName, d.body.parentNode.parentNode === d,"
+                   " d.body.firstChild.ownerDocument === d, document.forms.length, d.forms.length,"
+                   " document.implementation.hasFeature('anything', '1.0')].join(' ');</script></body>"),
+            "2 9 true #document HTML made BASE true true 0 2 true");
+        oks("DOMParser reads a whole page into one, with its head, body and title, and runs none of it",
+            titled("<body><script>var p = new DOMParser().parseFromString('<!doctype html><html lang=fr><head>"
+                   "<title> A  page </title><meta name=x content=y></head><body><p id=q>hi"
+                   "<script>window.ran = 1<\\/script></p></body></html>', 'text/html');"
+                   "document.title = [p.title, p.documentElement.lang, p.head.children.length, p.body.children.length,"
+                   " p.querySelector('meta').getAttribute('content'), p.getElementById('q').firstChild.data,"
+                   " typeof window.ran, document.getElementById('q'), p.URL].join('|');</script></body>"),
+            "A page|fr|2|1|y|hi|undefined||https://site.test/page");
+        oks("and markup with no head or body goes where a page's would",
+            titled("<body><script>var s = new DOMParser().parseFromString('<title>t</title><p>x</p>', 'text/html');"
+                   "document.title = [s.title, s.head.children.length, s.body.innerHTML, s.documentElement.children.length].join('|');"
+                   "</script></body>"),
+            "t|1|<p>x</p>|2");
+        oks("a document of its own has no window, and what is written to it does not reach the page",
+            titled("<body><script>var d = document.implementation.createHTMLDocument();"
+                   "d.write('<p id=w>written</p>');"
+                   "document.title = [d.defaultView, d.readyState, d.hasFocus(), d.cookie === '', d.currentScript,"
+                   " d.URL, document.getElementById('w'), d.title === ''].join('|');</script></body>"),
+            "|complete|false|true||about:blank||true");
+        oks("XML is refused rather than read as HTML, and a type nobody knows is an error",
+            titled("<body><script>var r = [];"
+                   "try { new DOMParser().parseFromString('<a/>', 'text/xml'); } catch (e) { r.push(e.name); }"
+                   "try { new DOMParser().parseFromString('x', 'text/plain'); } catch (e) { r.push(e.name); }"
+                   "document.title = r.join(' ');</script></body>"),
+            "NotSupportedError TypeError");
+        oks("and a page with no title does not take one from markup its script reads",
+            titled("<body><p id=o></p><script>new DOMParser().parseFromString('<title>X</title>', 'text/html');"
+                   "document.getElementById('o').innerHTML = '<title>Y</title>';"
+                   "var t = document.title; document.title = '[' + t + ']';</script></body>"),
+            "[]");
+        jsdom_at("");
+    }
+
     /* --- a page that uses up its memory ---------------------------------------
      *
      * At the cap a string or a property came back as nothing, and places that
