@@ -1323,6 +1323,39 @@ int main(void) {
         jsdom_memory_with(0);
     }
 
+    /* --- storage --------------------------------------------------------------------
+     *
+     * Strings by name for the page's origin, kept in the browser's memory
+     * across pages for as long as it runs. MDN stopped on localStorage. */
+    {
+        jsdom_at("https://site.test/one");
+        oks("localStorage keeps strings by name, and they are strings",
+            titled("<script>localStorage.clear(); localStorage.setItem('n', 5); localStorage.theme = 'dark';"
+                   "sessionStorage.setItem('n', 'other');"
+                   "document.title = [typeof localStorage.getItem('n'), localStorage.getItem('n'), localStorage.theme,"
+                   " localStorage.length, localStorage.key(1), localStorage.getItem('none'), sessionStorage.getItem('n'),"
+                   " typeof localStorage.getItem, localStorage instanceof Storage].join(' ');</script>"),
+            "string 5 dark 2 theme  other function true");
+        /* A page later, the world long gone: what it kept is still there. */
+        jsdom_at("https://site.test/two");
+        oks("and what a page kept is there for the next page of the same site",
+            titled("<script>document.title = localStorage.getItem('theme') + ' ' + localStorage.length;</script>"),
+            "dark 2");
+        jsdom_at("https://elsewhere.test/");
+        oks("but not for another site's",
+            titled("<script>document.title = localStorage.getItem('theme') + ' ' + localStorage.length;</script>"),
+            "null 0");
+        oks("and a site may keep a megabyte and is told when it tries to keep more",
+            titled("<script>var big = new Array(300001).join('x'), r = 'kept';"
+                   "try { for (var i = 0; i < 5; i++) localStorage.setItem('k' + i, big); }"
+                   " catch (e) { r = e.name + ' at ' + i; }"
+                   "localStorage.clear(); document.title = r + ' ' + localStorage.length;</script>"),
+            "QuotaExceededError at 3 0");
+        jsdom_at("https://site.test/three");
+        titled("<script>localStorage.removeItem('n'); localStorage.clear();</script>");
+        jsdom_at("");
+    }
+
     /* --- a page that uses up its memory ---------------------------------------
      *
      * At the cap a string or a property came back as nothing, and places that

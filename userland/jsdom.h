@@ -5403,16 +5403,6 @@ static int jd_form_get(jctx *J, int form, const char *name, jval *out) {
     return 0;
 }
 
-static int jd_storage_get(jctx *J, jobj *o, const char *name, jval *out) {
-    (void)J; (void)o; (void)name; (void)out;
-    return 0;
-}
-
-static int jd_storage_put(jctx *J, jobj *o, const char *name, jval v) {
-    (void)J; (void)o; (void)name; (void)v;
-    return 0;
-}
-
 static jval nat_option_set_selected(jctx *J, jval t, jval *a, int n) {
     (void)J;
     int x = jd_el_of(t);
@@ -5449,7 +5439,8 @@ static int jd_host_get(jctx *J, jobj *o, const char *name, jval *out) {
     if (h < JD_LIST) return jd_attrs_get(J, o, name, out);
     if (h < JD_STORAGE) return jd_list_get(J, o, name, out);
     if (h == JD_COMPUTED) return jd_computed_host(J, o, name, out);
-    return jd_storage_get(J, o, name, out);
+    if (h == JD_STORAGE || h == JD_STORAGE + 1) return jd_storage_get(J, o, name, out);
+    return 0;
 }
 
 static int jd_host_set(jctx *J, jobj *o, const char *name, jval v) {
@@ -5458,8 +5449,8 @@ static int jd_host_set(jctx *J, jobj *o, const char *name, jval v) {
     if (h < JD_STYLE) return 0;
     if (h < JD_DATASET) return jd_style_put(J, o, name, v);
     if (h < JD_ATTRS) return jd_dataset_put(J, o, name, v);
-    if (h < JD_STORAGE) return 0;
-    return jd_storage_put(J, o, name, v);
+    if (h == JD_STORAGE || h == JD_STORAGE + 1) return jd_storage_put(J, o, name, v);
+    return 0;
 }
 
 /* --- building the interfaces --------------------------------------------------------------------- */
@@ -6139,6 +6130,7 @@ static void jd_setup(jctx *J) {
     jd_setup_navigator(J);
     jd_setup_location(J);
     jd_setup_window_more(J);
+    jd_setup_storage(J);
 }
 
 /* --- opening and closing the world -----------------------------------------------------------

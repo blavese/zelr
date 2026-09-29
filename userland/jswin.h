@@ -500,6 +500,231 @@ static jval nat_doc_set_cookie(jctx *J, jval t, jval *a, int n) {
     return js_undef();
 }
 
+/* --- storage ----------------------------------------------------------------------------------
+ *
+ * localStorage and sessionStorage: strings by name, kept for the page's
+ * origin in the browser's memory -- not the page's region, which goes when
+ * the page does -- for as long as the browser runs, and never written to
+ * disk, where they would be something a reader had to be able to find and
+ * delete. This browser has one window, so a session lasts as long as the
+ * browser and the two differ only in being two stores. Each origin may keep
+ * a megabyte in each, and a write past that is refused with the standard's
+ * QuotaExceededError; the storage event goes to other windows, of which there
+ * are none. MDN stopped on localStorage. */
+#define JD_STORE_QUOTA (1024 * 1024)
+#define JD_STORE_ALL   (8 * 1024 * 1024)
+
+static jstr *jd_page_origin(jctx *J);
+
+typedef struct {
+    char *origin, *key, *value;
+    u32   klen, vlen;
+} jstore_item;
+
+typedef struct {
+    jstore_item *items;
+    int n, cap;
+    u32 bytes;
+} jstore;
+
+static jstore jd_stores[2];              /* local, session */
+
+static int jd_store_find(jstore *s, const char *origin, const jstr *key) {
+    for (int i = 0; i < s->n; i++)
+        if (w_same(s->items[i].origin, origin) && s->items[i].klen == key->len
+            && jd_same_n(s->items[i].key, key->s, (int)key->len)) return i;
+    return -1;
+}
+
+static u32 jd_store_used(jstore *s, const char *origin) {
+    u32 used = 0;
+    for (int i = 0; i < s->n; i++)
+        if (w_same(s->items[i].origin, origin)) used += s->items[i].klen + s->items[i].vlen;
+    return used;
+}
+
+static char *jd_dup(const char *p, u32 n) {
+    char *d = (char *)malloc((u64)n + 1);
+    if (!d) return 0;
+    for (u32 i = 0; i < n; i++) d[i] = p[i];
+    d[n] = 0;
+    return d;
+}
+
+static void jd_store_drop(jstore *s, int i) {
+    s->bytes -= s->items[i].klen + s->items[i].vlen;
+    free(s->items[i].origin);
+    free(s->items[i].key);
+    free(s->items[i].value);
+    s->items[i] = s->items[--s->n];
+}
+
+/* Which store an object is, and the page's origin to keep it under; an
+   opaque origin has no storage, as the standard has it. */
+static jstore *jd_store_of(jctx *J, jval t, jstr **origin) {
+    if (!js_is_obj(t) || (t.obj->host != JD_STORAGE && t.obj->host != JD_STORAGE + 1)) {
+        jd_illegal(J);
+        return 0;
+    }
+    *origin = jd_page_origin(J);
+    if (js_str_is(*origin, "null")) {
+        js_throw_dom(J, "SecurityError", "a page with no origin has no storage");
+        return 0;
+    }
+    return &jd_stores[t.obj->host - JD_STORAGE];
+}
+
+static jval jd_store_get(jctx *J, jstore *s, const char *origin, const jstr *key) {
+    int i = jd_store_find(s, origin, key);
+    return i < 0 ? js_null() : js_from_str(js_str_n(J, s->items[i].value, s->items[i].vlen));
+}
+
+static void jd_store_set(jctx *J, jstore *s, const char *origin, const jstr *key, const jstr *val) {
+    int i = jd_store_find(s, origin, key);
+    u32 was = i >= 0 ? s->items[i].klen + s->items[i].vlen : 0;
+    u32 want = key->len + val->len;
+    if (jd_store_used(s, origin) - was + want > JD_STORE_QUOTA || s->bytes - was + want > JD_STORE_ALL) {
+        js_throw_dom(J, "QuotaExceededError", "this site has used all the storage it is allowed");
+        return;
+    }
+    char *v = jd_dup(val->s, val->len);
+    if (!v) { js_throw_dom(J, "QuotaExceededError", "the browser has no room to keep that"); return; }
+    if (i >= 0) {
+        free(s->items[i].value);
+        s->items[i].value = v;
+        s->items[i].vlen = val->len;
+        s->bytes = s->bytes - was + want;
+        return;
+    }
+    if (s->n >= s->cap) {
+        int cap = s->cap ? s->cap * 2 : 32;
+        jstore_item *more = (jstore_item *)malloc((u64)cap * sizeof(jstore_item));
+        if (!more) { free(v); js_throw_dom(J, "QuotaExceededError", "the browser has no room to keep that"); return; }
+        volatile u8 *d = (volatile u8 *)more;
+        const u8 *src = (const u8 *)s->items;
+        for (u64 k = 0; k < (u64)s->n * sizeof(jstore_item); k++) d[k] = src[k];
+        if (s->items) free(s->items);
+        s->items = more;
+        s->cap = cap;
+    }
+    jstore_item *it = &s->items[s->n];
+    it->origin = jd_dup(origin, (u32)w_len(origin));
+    it->key = jd_dup(key->s, key->len);
+    it->value = v;
+    it->klen = key->len;
+    it->vlen = val->len;
+    if (!it->origin || !it->key) { free(it->origin); free(it->key); free(v); return; }
+    s->n++;
+    s->bytes += want;
+}
+
+static jval nat_store_get(jctx *J, jval t, jval *a, int n) {
+    jstr *origin;
+    jstore *s = jd_store_of(J, t, &origin);
+    if (!s) return js_undef();
+    return jd_store_get(J, s, origin->s, jd_arg_str(J, a, n, 0));
+}
+
+static jval nat_store_set(jctx *J, jval t, jval *a, int n) {
+    jstr *origin;
+    jstore *s = jd_store_of(J, t, &origin);
+    if (!s) return js_undef();
+    jstr *k = jd_arg_str(J, a, n, 0), *v = js_to_str(J, js_arg(a, n, 1));
+    if (v) jd_store_set(J, s, origin->s, k, v);
+    return js_undef();
+}
+
+static jval nat_store_remove(jctx *J, jval t, jval *a, int n) {
+    jstr *origin;
+    jstore *s = jd_store_of(J, t, &origin);
+    if (!s) return js_undef();
+    int i = jd_store_find(s, origin->s, jd_arg_str(J, a, n, 0));
+    if (i >= 0) jd_store_drop(s, i);
+    return js_undef();
+}
+
+static jval nat_store_clear(jctx *J, jval t, jval *a, int n) {
+    (void)a; (void)n;
+    jstr *origin;
+    jstore *s = jd_store_of(J, t, &origin);
+    if (!s) return js_undef();
+    for (int i = s->n - 1; i >= 0; i--)
+        if (w_same(s->items[i].origin, origin->s)) jd_store_drop(s, i);
+    return js_undef();
+}
+
+/* The nth key of this origin's, in the order they were first kept. */
+static int jd_store_nth(jstore *s, const char *origin, int nth) {
+    for (int i = 0, k = 0; i < s->n; i++)
+        if (w_same(s->items[i].origin, origin) && k++ == nth) return i;
+    return -1;
+}
+
+static jval nat_store_key(jctx *J, jval t, jval *a, int n) {
+    jstr *origin;
+    jstore *s = jd_store_of(J, t, &origin);
+    if (!s) return js_undef();
+    double d = n > 0 ? js_to_num(J, a[0]) : 0;
+    int i = d >= 0 && d < 1e9 ? jd_store_nth(s, origin->s, (int)d) : -1;
+    return i < 0 ? js_null() : js_from_str(js_str_n(J, s->items[i].key, s->items[i].klen));
+}
+
+static jval nat_store_length(jctx *J, jval t, jval *a, int n) {
+    (void)a; (void)n;
+    jstr *origin;
+    jstore *s = jd_store_of(J, t, &origin);
+    if (!s) return js_undef();
+    int k = 0;
+    for (int i = 0; i < s->n; i++) if (w_same(s->items[i].origin, origin->s)) k++;
+    return js_num(k);
+}
+
+/* localStorage.name, read and written as though it were getItem and
+   setItem, for any name the prototype does not have. */
+static int jd_store_named(jctx *J, jobj *o, const char *name) {
+    for (jobj *p = o->proto; p; p = p->proto)
+        if (js_find(p, js_str(J, name))) return 0;
+    return 1;
+}
+
+static int jd_storage_get(jctx *J, jobj *o, const char *name, jval *out) {
+    if (!jd_store_named(J, o, name)) return 0;
+    jstr *origin;
+    jstore *s = jd_store_of(J, js_from_obj(o), &origin);
+    if (!s) { J->sig = JS_OK; return 0; }
+    jval v = jd_store_get(J, s, origin->s, js_str(J, name));
+    if (v.t != JS_STR) return 0;
+    *out = v;
+    return 1;
+}
+
+static int jd_storage_put(jctx *J, jobj *o, const char *name, jval v) {
+    if (!jd_store_named(J, o, name)) return 0;
+    jstr *origin;
+    jstore *s = jd_store_of(J, js_from_obj(o), &origin);
+    if (!s) return 1;
+    jstr *val = js_to_str(J, v);
+    if (val) jd_store_set(J, s, origin->s, js_str(J, name), val);
+    return 1;
+}
+
+static void jd_setup_storage(jctx *J) {
+    jobj *sp = jd_interface(J, "Storage", 0, 0, 0);
+    jd_method(J, sp, "getItem", nat_store_get, 1);
+    jd_method(J, sp, "setItem", nat_store_set, 2);
+    jd_method(J, sp, "removeItem", nat_store_remove, 1);
+    jd_method(J, sp, "clear", nat_store_clear, 0);
+    jd_method(J, sp, "key", nat_store_key, 1);
+    jd_accessor(J, sp, "length", nat_store_length, 0);
+    const char *names[2] = { "localStorage", "sessionStorage" };
+    for (int k = 0; k < 2; k++) {
+        jobj *o = js_object_with(J, JO_PLAIN, sp);
+        if (!o) continue;
+        o->host = JD_STORAGE + k;
+        js_declare(J, J->global, js_str(J, names[k]), js_from_obj(o));
+    }
+}
+
 /* --- time -----------------------------------------------------------------------------------
  *
  * performance.now() is milliseconds since the page began, from the kernel's
