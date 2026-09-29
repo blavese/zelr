@@ -1044,6 +1044,37 @@ int main(void) {
         if (!said) failed++;
         js_done(&J);
     }
+    /* --- patterns: lookaround, backreferences, names, flags ------------------ */
+    expect("lookahead, and one that must not match",
+           "'100em 200px'.match(/\\d+(?=px)/)[0] + ',' + '100px 200em'.match(/\\d+(?!px|\\d)/)[0]", "200,200");
+    expect("lookbehind, and one that must not match",
+           "'$10 20'.match(/(?<=\\$)\\d+/)[0] + ',' + '$10 20'.match(/(?<!\\$)\\b\\d+/)[0]", "10,20");
+    expect("a backreference, and one written before its group",
+           "[/(\\w)\\1/.test('hello'), /(\\w)\\1/.test('helo'), /(a)\\1/i.test('aA')].join()", "true,false,true");
+    expect("named groups on the match, in \\k and in $<name>",
+           "(function(){ var m = '2024-05-17'.match(/(?<y>\\d{4})-(?<m>\\d\\d)-(?<d>\\d\\d)/);"
+           " return m.groups.m + ',' + /(?<q>[\"'])x\\k<q>/.test(\"'x'\") + ','"
+           " + '2024-05-17'.replace(/(?<y>\\d{4})-(?<m>\\d\\d)-(?<d>\\d\\d)/, '$<d>/$<m>/$<y>'); })()",
+           "05,true,17/05/2024");
+    expect("a replacement function is handed the named groups last",
+           "'a1'.replace(/(?<n>\\d)/, (m, p1, at, s, g) => g.n + at)", "a11");
+    expect("s makes a dot match a newline, and y matches only at lastIndex",
+           "(function(){ var y = /\\d/y; y.lastIndex = 1;"
+           " return [/a.b/s.test('a\\nb'), /a.b/.test('a\\nb'), y.test('a1'), y.lastIndex, /\\d/y.test('a1')].join(); })()",
+           "true,false,true,2,false");
+    expect("u reads \\u{...} and knows \\p{L}",
+           "[/\\u{61}/u.test('a'), /^\\p{L}+$/u.test('abc'), /^\\p{L}+$/u.test('a1')].join()", "true,true,false");
+    expect("a star runs past five hundred characters",
+           "/^.*$/.test('x'.repeat(5000)) + ',' + '1'.repeat(3000).match(/\\d+/)[0].length", "true,3000");
+    expect("a class turned inside out matches a newline, and [] and [^]",
+           "[/[^a]/.test('\\n'), /[]/.test('a'), /[^]/.test('\\n')].join()", "true,false,true");
+    expect("more than nine groups all capture",
+           "/(a)(b)(c)(d)(e)(f)(g)(h)(i)(j)(k)(l)/.exec('abcdefghijkl')[12]", "l");
+    expect("split on a pattern keeps its groups and stops at the limit",
+           "'a1b2c'.split(/(\\d)/).join('|') + ';' + 'abc'.split(/(?:)/).join('|') + ';' + 'a,b,c'.split(/,/, 2).join('|')",
+           "a|1|b|2|c;a|b|c;a|b");
+    expect("flags, source and a pattern as text",
+           "/a/gimsuy.flags + ' ' + /a\\/b/.source + ' ' + String(/x/g) + ' ' + new RegExp(/a/g).global", "gimsuy a\\/b /x/g true");
     expect("while two hundred nested brackets are an ordinary array",
            "(function(){ var s = ''; for (var i = 0; i < 200; i++) s += '['; s += '1';"
            " for (var i = 0; i < 200; i++) s += ']'; var a = eval(s);"

@@ -1113,11 +1113,14 @@ static rx js_rx;
 static int js_rx_load(jctx *J, jval v) {
     if (!js_is_regex(v)) return 0;
     jobj *o = v.obj;
-    char flags[8];
+    char flags[10];
     int w = 0;
     if (o->spare & RXF_G) flags[w++] = 'g';
     if (o->spare & RXF_I) flags[w++] = 'i';
     if (o->spare & RXF_M) flags[w++] = 'm';
+    if (o->spare & RXF_S) flags[w++] = 's';
+    if (o->spare & RXF_Y) flags[w++] = 'y';
+    if (o->spare & (RXF_U | RXF_V)) flags[w++] = 'u';
     flags[w] = 0;
     jstr *src = o->name;
     if (!rx_compile(&js_rx, src ? src->s : "", src ? (int)src->len : 0, flags)) {
@@ -1135,22 +1138,31 @@ static int js_rx_search(jobj *re, jstr *s, int from) {
     return at;
 }
 
+static jval js_rx_cap(jctx *J, jstr *s, int g) {
+    if (js_rx.cap_start[g] < 0 || js_rx.cap_end[g] < js_rx.cap_start[g]) return js_undef();
+    return js_from_str(js_str_n(J, s->s + js_rx.cap_start[g], (u32)(js_rx.cap_end[g] - js_rx.cap_start[g])));
+}
+
+/* The named groups' values, as the object a match's `groups` is; undefined
+   when the pattern names none. */
+static jval js_rx_groups(jctx *J, jstr *s) {
+    if (!js_rx.named) return js_undef();
+    jobj *g = js_object_with(J, JO_PLAIN, 0);
+    if (!g) return js_undef();
+    for (int i = 1; i < js_rx.ncaps; i++)
+        if (js_rx.names[i][0]) js_put_prop(J, g, js_str(J, js_rx.names[i]), js_rx_cap(J, s, i));
+    return js_from_obj(g);
+}
+
 /* The array exec and match hand back: the whole match at nought, then each
    group, with where it was found and what it was found in. */
 static jval js_rx_result(jctx *J, jstr *s) {
     jobj *out = js_array(J);
     if (!out) return js_null();
-    for (int i = 0; i < js_rx.ncaps; i++) {
-        if (js_rx.cap_start[i] < 0 || js_rx.cap_end[i] < js_rx.cap_start[i])
-            js_arr_set(J, out, (u32)i, js_undef());
-        else
-            js_arr_set(J, out, (u32)i,
-                       js_from_str(js_str_n(J, s->s + js_rx.cap_start[i],
-                                            (u32)(js_rx.cap_end[i] - js_rx.cap_start[i]))));
-    }
+    for (int i = 0; i < js_rx.ncaps; i++) js_arr_set(J, out, (u32)i, js_rx_cap(J, s, i));
     js_put_prop(J, out, J->s_index, js_num((double)js_rx.cap_start[0]));
     js_put_prop(J, out, J->s_input, js_from_str(s));
-    js_put_prop(J, out, J->s_groups, js_undef());
+    js_put_prop(J, out, J->s_groups, js_rx_groups(J, s));
     return js_from_obj(out);
 }
 
@@ -1325,6 +1337,18 @@ static void js_rx_expand(jctx *J, jstr *with, jstr *s, jtext *out) {
                 continue;
             }
             if (d == '`') { jt_put(J, out, s->s, (u32)js_rx.cap_start[0]); i++; continue; }
+            if (d == '<' && js_rx.named) {
+                /* $<name>: what the named group caught. */
+                u32 k = i + 2;
+                while (k < with->len && with->s[k] != '>') k++;
+                if (k < with->len) {
+                    int g = rx_name_index(&js_rx, with->s + i + 2, (int)(k - i - 2));
+                    if (g > 0 && js_rx.cap_start[g] >= 0)
+                        jt_put(J, out, s->s + js_rx.cap_start[g], (u32)(js_rx.cap_end[g] - js_rx.cap_start[g]));
+                    i = k;
+                    continue;
+                }
+            }
             if (d == '\'') {
                 jt_put(J, out, s->s + js_rx.cap_end[0], s->len - (u32)js_rx.cap_end[0]);
                 i++;
@@ -1379,6 +1403,7 @@ static jval js_str_replace_re(jctx *J, jstr *s, jval re, jval rep) {
                              : js_from_str(js_str_n(J, s->s + cs[g], (u32)(ce[g] - cs[g]))));
             js_args_push(J, &A, js_num((double)start));
             js_args_push(J, &A, js_from_str(s));
+            if (js_rx.named) js_args_push(J, &A, js_rx_groups(J, s));
             jval got = js_call(J, rep, js_undef(), A.v, A.n);
             js_args_free(&A);
             if (J->sig != JS_OK) { free(out.b); return js_undef(); }
@@ -1492,35 +1517,32 @@ static jval nat_str_split(jctx *J, jval t, jval *a, int n) {
         return js_from_obj(out);
     }
     if (js_is_regex(a[0])) {
+        /* The standard's walk: p is where the last piece ended and q where
+           a match is looked for; an empty match where a piece would be
+           empty moves q on by one character instead. */
         if (!js_rx_load(J, a[0])) return js_from_obj(out);
-        jobj *ro = a[0].obj;
-        if (!s->len) {
+        js_rx.sticky = 0;
+        int len = (int)s->len;
+        if (!len) {
             if (rx_search(&js_rx, s->s, 0, 0) < 0) js_arr_push(J, out, js_from_str(s));
             return js_from_obj(out);
         }
-        int from = 0, at = 0;
-        (void)ro;
-        while (from < (int)s->len && out->len < limit) {
-            int hit = rx_search(&js_rx, s->s, (int)s->len, from);
-            if (hit < 0) break;
-            int end = js_rx.cap_end[0];
-            if (end == hit) {
-                /* A pattern that matches nothing splits between characters. */
-                if (hit >= (int)s->len) break;
-                if (hit == at) { from = hit + (int)js_utf8_len((u8)s->s[hit]); if (from > at) {
-                        js_arr_push(J, out, js_from_str(js_str_n(J, s->s + at, (u32)(from - at))));
-                        at = from; } continue; }
+        int p = 0, q = 0;
+        while (q < len && out->len < limit) {
+            int hit = rx_search(&js_rx, s->s, len, q);
+            if (hit < 0 || hit >= len) break;
+            int e = js_rx.cap_end[0];
+            if (e == p) {
+                q = hit + (int)js_utf8_len((u8)s->s[hit]);
+                continue;
             }
-            if (end == at && hit == at) { from++; continue; }
-            js_arr_push(J, out, js_from_str(js_str_n(J, s->s + at, (u32)(hit - at))));
+            js_arr_push(J, out, js_from_str(js_str_n(J, s->s + p, (u32)(hit - p))));
             /* And whatever the groups caught, in between. */
             for (int g = 1; g < js_rx.ncaps && out->len < limit; g++)
-                js_arr_push(J, out, js_rx.cap_start[g] < 0 ? js_undef()
-                            : js_from_str(js_str_n(J, s->s + js_rx.cap_start[g],
-                                                   (u32)(js_rx.cap_end[g] - js_rx.cap_start[g]))));
-            at = from = end > hit ? end : hit + 1;
+                js_arr_push(J, out, js_rx_cap(J, s, g));
+            p = q = e;
         }
-        if (out->len < limit) js_arr_push(J, out, js_from_str(js_str_n(J, s->s + at, s->len - (u32)at)));
+        if (out->len < limit) js_arr_push(J, out, js_from_str(js_str_n(J, s->s + p, s->len - (u32)p)));
         return js_from_obj(out);
     }
 
