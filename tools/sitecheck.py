@@ -29,7 +29,8 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from harness import Guest, Checks, build_once, ROOT              # noqa: E402
-from browsercheck import BAR, PARK                               # noqa: E402
+from browsercheck import BAR, PARK, PAGE                         # noqa: E402
+from harness import count_in                                     # noqa: E402
 
 DISK = os.path.join(ROOT, "sitecheck.%d.img" % os.getpid())
 
@@ -153,6 +154,15 @@ def main():
             print("      | %s" % line[:160])
             c.add(label, good(line))
             mon.move_to(*PARK)
+
+        # And the page says so, at its top, in the pale yellow of the note:
+        # the note came before DuckDuckGo's <html> and went into the head,
+        # where nothing is drawn, so the status said it and the page did not.
+        time.sleep(1.5)
+        w, h, px, shot = mon.screen("site-google")
+        yellow = count_in(px, w, PAGE, (0xFF, 0xF4, 0xD6))
+        c.add("and the page says at its top that it is DuckDuckGo's", yellow > 2000, shot)
+        print("      the note's colour covers %d pixels" % yellow)
     finally:
         vm.stop()
         if not keep and os.path.exists(DISK):

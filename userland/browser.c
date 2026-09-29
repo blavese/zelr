@@ -945,9 +945,24 @@ static void build_noted(const char *note, const char *html, int len, int width,
         build(html, len, width, 1, fetched, skipped);
         return;
     }
+    /* Just inside the page's body. Put in front of everything, it came before
+       the page's <html>, and the reader put it in the head, which is never
+       shown: the page was right and the line saying why was not there. */
+    int at = 0;
+    for (int i = 0; i + 5 < len; i++) {
+        if (html[i] == '<' && w_lower(html[i + 1]) == 'b' && w_lower(html[i + 2]) == 'o'
+            && w_lower(html[i + 3]) == 'd' && w_lower(html[i + 4]) == 'y'
+            && (html[i + 5] == '>' || html[i + 5] == ' ' || html[i + 5] == '\t' || html[i + 5] == '\n')) {
+            int k = i + 5;
+            while (k < len && html[k] != '>') k++;
+            if (k < len) at = k + 1;
+            break;
+        }
+    }
     volatile char *d = both;
-    for (int i = 0; i < nl; i++) d[i] = note[i];
-    for (int i = 0; i < len; i++) d[nl + i] = html[i];
+    for (int i = 0; i < at; i++) d[i] = html[i];
+    for (int i = 0; i < nl; i++) d[at + i] = note[i];
+    for (int i = at; i < len; i++) d[nl + i] = html[i];
     d[nl + len] = 0;
     build(both, nl + len, width, 1, fetched, skipped);
     free(both);

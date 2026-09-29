@@ -95,6 +95,13 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.68.1: the line that says a Google search was answered by DuckDuckGo, shown
+
+- **Browser (11).** `build_noted` put its line in front of the whole page, before DuckDuckGo's `<html>`, and the
+  reader put it in the head, which is never drawn: the status said so and the page did not. It goes just inside
+  the page's `<body>` now. sitecheck 25: the note's colour covers more than 2000 pixels of the page after a Google
+  search (41,100 when it ran); 0 with the old placement.
+
 ### 0.68.0: arrays that cannot be made to write past themselves
 
 - **JavaScript (12 §10 B7).** An element index is kept among the elements only up to `JS_ARR_MAX` (4M), with the
