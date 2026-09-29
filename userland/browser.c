@@ -1072,11 +1072,15 @@ static void load(const char *address, int width, int keep_scroll) {
     } else if (big && rc < 400
                && (read_site = site_youtube(&here, reply.body, reply.len, src, SRC_MAX)) > 0) {
         /* A video's comments are a second question, asked with the token the
-           page carries for them, while the page is still in hand. */
+           page carries for them, while the page is still in hand; and a
+           channel whose page listed none of its videos has them in its feed. */
+        static char extra[64 * 1024];
         if (w_starts_fold(here.path, "/watch")) {
-            static char comments[64 * 1024];
-            int cn = site_youtube_comments(reply.body, reply.len, comments, (int)sizeof(comments));
-            if (cn > 0) read_site = site_append(src, read_site, SRC_MAX, comments, cn);
+            int cn = site_youtube_comments(reply.body, reply.len, extra, (int)sizeof(extra));
+            if (cn > 0) read_site = site_append(src, read_site, SRC_MAX, extra, cn);
+        } else if (site_youtube_feed_for[0]) {
+            int fn = site_youtube_feed(site_youtube_feed_for, extra, (int)sizeof(extra));
+            if (fn > 0) read_site = site_append(src, read_site, SRC_MAX, extra, fn);
         }
         build(src, read_site, width, 1, &fetched, &skipped);
     } else if (from_google) {
