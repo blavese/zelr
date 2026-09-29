@@ -95,7 +95,7 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
-### 0.74.0 (in progress)
+### 0.74.0
 
 - **Pictures sized by the page's rules (11).** An `<img>` takes the CSS width and height (a percentage left
   out while measured, `cstyle.width_pct`), the other side from the attributes' proportions when both are
