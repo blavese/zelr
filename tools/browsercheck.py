@@ -511,9 +511,22 @@ def main():
             c.add("a picture fitted into its box keeps its shape", 4000 < purple < 5000, shotb)
             c.add("and one with round corners is round", 2400 < olive < 3200, shotb)
 
+            # --- a page's own background --------------------------------------
+            #
+            # A body coloured and three lines of words: the window behind
+            # them is the body's colour all the way down, where it was that
+            # colour for the height of the words and white under them.
+            go(vm, mon, "http://%s/dark-page" % srv.host,
+               was=bgd, name="br-going-dark")
+            dark, pxd, wd, shotd = page_settled(mon, "br-dark")
+            area = (PAGE[2] - PAGE[0]) * (PAGE[3] - PAGE[1])
+            ground = count_in(pxd, wd, PAGE, BAND)
+            print("      the ground is %d of %d pixels" % (ground, area))
+            c.add("a page's background fills the window behind it", ground > area * 8 // 10, shotd)
+
             # --- a sheet that fails once ---------------------------------------
             go(vm, mon, "http://%s/flaky-sheet" % srv.host,
-               was=bgd, name="br-going-flaky")
+               was=dark, name="br-going-flaky")
             flaky, pxf, wf, shotf = page_settled(mon, "br-flaky")
             c.add("a sheet the server was too busy for is asked for again",
                   count_in(pxf, wf, PAGE, BAND) > 3000, shotf)

@@ -116,6 +116,11 @@ typedef struct {
     int   nlinks;
     lbg   bgs[LAY_BGS];
     int   nbgs;
+    /* The page's own background, which fills the whole window behind it:
+       the html element's, or failing that the body's, as CSS carries it to
+       the canvas. has_canvas is 0 for none (the window's own colour). */
+    u32   canvas;
+    int   has_canvas;
     int   height;
     int   overflowed;
     int   laid;          /* boxes laid out, trial ones included: the work done */
@@ -4551,6 +4556,20 @@ static inline void lay_run(ldoc *out, const ddoc *d, const csheet *s,
     if (d->root >= 0 && d->body >= 0) lay_style(&L, d->root, &base, &root, width);
     else lay_cs(&root, &base);
     root.display = D_BLOCK;
+
+    /* The window behind the page takes the page's background: a dark page
+       whose body was shorter than the window was dark down to the end of
+       its words and white below, and one that coloured html was not
+       coloured at all, the html element having no box of its own here. */
+    out->has_canvas = 0;
+    if (root.has_bg) {
+        out->canvas = root.background;
+        out->has_canvas = 1;
+    } else if (d->body >= 0 && d->body != d->root) {
+        cstyle bst;
+        lay_style(&L, d->body, &root, &bst, width);
+        if (bst.has_bg) { out->canvas = bst.background; out->has_canvas = 1; }
+    }
 
     int y = 0;
     int start = d->body >= 0 ? d->body : d->root;

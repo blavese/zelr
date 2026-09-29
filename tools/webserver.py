@@ -454,6 +454,12 @@ FLAKY_PAGE = b"""<html><head><title>a sheet asked for twice</title>
 FLAKY_SHEET = b".band{background:#1d4ed8;color:#ffffff;padding:30px}"
 FLAKY_ASKED = {"n": 0}
 
+# A page whose only colour is its body's, and a few words: the window behind
+# it has to be that colour all the way down, as it is in other browsers.
+DARK_PAGE = b"""<html><head><title>a dark page</title>
+<style>body{background:#1d4ed8;color:#ffffff}</style></head>
+<body><p>a short page on a dark ground</p></body></html>"""
+
 SHADOWED = b"""<!doctype html>
 <html><head><title>a shadow tree</title>
 <style>body { font-family: sans-serif; padding: 24px }</style></head>
@@ -740,6 +746,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._send(PICTURE)
         elif path == "/logo.webp":
             self._send(LOGO_WEBP, ctype="image/webp")
+        elif path == "/dark-page":
+            self._send(DARK_PAGE)
         elif path == "/flaky-sheet":
             FLAKY_ASKED["n"] = 0
             self._send(FLAKY_PAGE)

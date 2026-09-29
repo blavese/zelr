@@ -129,6 +129,11 @@ numbered files are still to 6048716; where they disagree with this list, this li
   without the debug information the compiler added by default, which was two thirds of the kernel image
   (27 MB, now 9 MB): on the 64 MiB machine the heap came out 20 MiB instead of 24 and programs had almost
   no memory. A gate step fails on any program carrying a .debug section or an image past 16 MiB.
+- **The page's own background (11, layout.h, browser.c).** The html element's background, or else the
+  body's, fills the whole window behind the page (`ldoc.canvas`), as CSS carries it to the canvas: a dark
+  page was dark for the height of its words and white below. layouttest: three checks; browsercheck: a
+  short dark page dark all the way down.
+
 ### 0.75.0
 
 - **Auto margins, and columns lined up (11).** In a row, auto margins take the room left after growing and

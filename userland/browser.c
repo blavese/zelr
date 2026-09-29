@@ -2964,6 +2964,13 @@ int main(int argc, char **argv) {
 
         /* --- and the page under it ------------------------------------------ */
         ui_well(&s, &t, view_x, view_y, view_w + UI_SCROLL_W, view_h, 0, 0, 0, 0);
+        if (page.has_canvas) {
+            /* The page's own background, behind everything on it, inside
+               the well's edge. */
+            if (t.modern) ui_round(&s, view_x + 1, view_y + 1, view_w + UI_SCROLL_W - 2, view_h - 2, 7,
+                                   page.canvas, 255);
+            else rect(&s, view_x + 2, view_y + 2, view_w + UI_SCROLL_W - 4, view_h - 4, page.canvas);
+        }
         {
             /* Drawn into a surface that is only the rows inside the well, so
                everything is clipped at both edges by the surface's own. It

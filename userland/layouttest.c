@@ -1741,6 +1741,16 @@ int main(void) {
            of && of->w == 90 && of->h == 90 && of->ofit == 2 && of->radius == 12);
     }
 
+    /* --- the page's own background ---------------------------------------------- */
+    {
+        lay("<html><head><style>html{background:#123456}</style></head><body><p>x</p></body></html>", 600);
+        ok("a background on html is the page's", page.has_canvas && page.canvas == 0x123456);
+        lay("<html><head><style>body{background:#202020}</style></head><body><p>x</p></body></html>", 600);
+        ok("and one on the body is, when html has none", page.has_canvas && page.canvas == 0x202020);
+        lay("<p>plain</p>", 600);
+        ok("and a page with neither has none", !page.has_canvas);
+    }
+
     puts(failed ? "LAYOUTTEST_FAIL\n" : "LAYOUTTEST_PASS\n");
     return failed;
 }
