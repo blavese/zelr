@@ -2557,9 +2557,14 @@ static void js_globals(jctx *J) {
     js_setup_generators(J);
     js_setup_dates(J);
     js_setup_typed(J);
+    js_setup_text(J);
 
     js_declare_flags(J, g, js_str(J, "NaN"), js_num(js_nan()), 0);
     js_declare_flags(J, g, js_str(J, "Infinity"), js_num(1e308 * 10), 0);
     js_declare_flags(J, g, js_str(J, "undefined"), js_undef(), 0);
     js_declare_flags(J, g, js_str(J, "globalThis"), js_from_obj(J->global_obj), JP_WRITE | JP_CONF);
+    /* self is the global object in a window and in a worker alike, and the
+       bundles that must run in both reach it that way first: the BBC's
+       stopped at its first line without it. */
+    js_declare_flags(J, g, js_str(J, "self"), js_from_obj(J->global_obj), JP_WRITE | JP_CONF);
 }

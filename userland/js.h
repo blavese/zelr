@@ -164,7 +164,8 @@ typedef enum {
     JO_ARGS,                  /* an arguments object: elements like an array */
     JO_BOXED,                 /* new String(...), new Number(...) and the like */
     JO_ERROR, JO_DATE, JO_MAP, JO_SET, JO_WEAKMAP, JO_WEAKSET,
-    JO_PROMISE, JO_GEN, JO_ITER, JO_BUFFER, JO_TYPED, JO_VIEW
+    JO_PROMISE, JO_GEN, JO_ITER, JO_BUFFER, JO_TYPED, JO_VIEW,
+    JO_CODEC                  /* a TextDecoder, which remembers half a character */
 } jokind;
 
 /* What an object allows. */

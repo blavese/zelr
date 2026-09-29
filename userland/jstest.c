@@ -1157,6 +1157,39 @@ int main(void) {
            "for (var i = 0; i < a.length; i++) { a[i] += 1; a[i]++; t[i] = a[i] * 3; }"
            " var s = 0; for (var i = 0; i < t.length; i++) s += t[i]; result = a[99999] + ',' + s;",
            "100001,15000450000", 1u << 18);
+    /* --- text: atob, btoa, TextEncoder, TextDecoder, self --------------------- */
+    expect("atob and btoa, with and without padding, and what they refuse",
+           "[btoa('hello'), btoa('a'), atob('aGVsbG8'), atob(' aGVs\\nbG8= '),"
+           " (function(){ try { atob('a'); } catch (e) { return e.name; } })(),"
+           " (function(){ try { btoa('\\u20ac'); } catch (e) { return e.name; } })()].join()",
+           "aGVsbG8=,YQ==,hello,hello,InvalidCharacterError,InvalidCharacterError");
+    expect("every byte through btoa and back as a string of bytes",
+           "(function(){ var s = ''; for (var i = 0; i < 256; i++) s += String.fromCharCode(i);"
+           " var b = btoa(s), d = atob(b); for (var i = 0; i < 256; i++) if (d.charCodeAt(i) !== i) return 'byte ' + i;"
+           " return b.length + ',' + d.length + ',' + b.slice(-8) + ',' + btoa(atob('AAECA/7/gIE=')); })()",
+           "344,256,/P3+/w==,AAECA/7/gIE=");
+    expect("TextEncoder writes UTF-8, and encodeInto stops at a whole character",
+           "(function(){ var te = new TextEncoder(), into = new Uint8Array(5), r = te.encodeInto('a\\u20ac\\u20ac', into);"
+           " return [te.encoding, Array.from(te.encode('a\\u00e9\\u20ac\\ud83d\\ude00')).join(' '), r.read, r.written,"
+           " into[4]].join(); })()",
+           "utf-8,97 195 169 226 130 172 240 159 152 128,2,4,0");
+    expect("TextDecoder replaces what is not UTF-8, drops a BOM and keeps half a character for the next call",
+           "(function(){ var d = new TextDecoder(), s = new TextDecoder();"
+           " return [d.decode(new Uint8Array([0x61, 0xff, 0x62, 0xe2, 0x82])) === 'a\\ufffdb\\ufffd',"
+           " d.decode(new Uint8Array([0xef, 0xbb, 0xbf, 0x61]).buffer),"
+           " s.decode(new Uint8Array([0x61, 0xe2, 0x82]), { stream: true }) + '|' + s.decode(new Uint8Array([0xac])) === 'a|\\u20ac',"
+           " d.decode(new DataView(new Uint8Array([0x61, 0x62, 0x63]).buffer, 1))].join(); })()",
+           "true,a,true,bc");
+    expect("other encodings, a fatal decoder and a label nobody knows",
+           "(function(){ var r = [];"
+           " try { new TextDecoder('utf-8', { fatal: true }).decode(new Uint8Array([0xff])); } catch (e) { r.push(e.name); }"
+           " try { new TextDecoder('klingon'); } catch (e) { r.push(e.name); }"
+           " r.push(new TextDecoder('latin1').decode(new Uint8Array([0x41, 0xe9, 0x80])) === 'A\\u00e9\\u20ac');"
+           " r.push(new TextDecoder('utf-16le').decode(new Uint8Array([0x41, 0, 0x3d, 0xd8, 0, 0xde])) === 'A\\ud83d\\ude00');"
+           " r.push(new TextDecoder('ascii').encoding); return r.join(); })()",
+           "TypeError,RangeError,true,true,windows-1252");
+    expect("self is the global object",
+           "[self === globalThis, self.Math === Math, typeof self].join()", "true,true,object");
     expect("while two hundred nested brackets are an ordinary array",
            "(function(){ var s = ''; for (var i = 0; i < 200; i++) s += '['; s += '1';"
            " for (var i = 0; i < 200; i++) s += ']'; var a = eval(s);"

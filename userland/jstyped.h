@@ -6,10 +6,12 @@
  * order, which on this machine is little end first, as it is everywhere a
  * page is likely to run. Hashing, decoding pictures and text, reading binary
  * formats, the loaders big sites ship: all of it is written with these, and a
- * page that met Uint8Array here stopped at its first line.
+ * page that met Uint8Array here stopped at its first line. And what turns
+ * bytes into text and back: atob, btoa, TextEncoder and TextDecoder.
  *
  * What is not here: the BigInt kinds, a buffer that can be resized or handed
- * to another thread, and Atomics.
+ * to another thread, Atomics, and text in encodings other than UTF-8,
+ * windows-1252 and UTF-16LE.
  */
 #pragma once
 
@@ -460,6 +462,443 @@ static jval nat_view_byteoffset(jctx *J, jval t, jval *a, int n) {
     (void)a; (void)n;
     if (!js_is_obj(t) || t.obj->kind != JO_VIEW) return js_throw(J, JS_ERR_TYPE, "this is not a DataView", J->error_line);
     return js_num(((jtyped *)t.obj->internal)->off);
+}
+
+/* --- text and base64 -----------------------------------------------------------
+ *
+ * atob and btoa, TextEncoder and TextDecoder. Nothing in them needs a
+ * document, and the browsers and their workers all have them on the global
+ * object, which is where pages look: Google's search page decodes the
+ * program it runs with atob, and without it that program stopped where
+ * nothing said so.
+ *
+ * This engine's strings are UTF-8 bytes, indexed by byte. A "binary string"
+ * -- a character for each byte, which is what atob gives and btoa takes -- is
+ * therefore kept as those bytes themselves: charCodeAt(i) over what atob gave
+ * is then the i-th byte, and length is the count of bytes, which is what the
+ * code that calls atob does with it. */
+
+/* A thrown error with a DOMException's name, which is what these throw in a
+   browser; there is no DOMException here, and code that catches one reads
+   its name or nothing. */
+static jval js_throw_dom(jctx *J, const char *name, const char *what) {
+    jobj *e = js_error_with(J, J->p_error, js_str(J, name), js_str(J, what));
+    if (!e) return js_undef();
+    js_put_prop_flags(J, e, J->s_name, js_from_str(js_str(J, name)), JP_WRITE | JP_CONF);
+    J->ret = js_from_obj(e);
+    J->sig = JS_THROWN;
+    js_note_thrown(J, J->ret, J->error_line);
+    return js_undef();
+}
+
+/* One character of UTF-8 at p, n bytes there: its length and *cp when it is
+   well formed, 0 when it is cut short by the end, and minus the number of
+   bytes one replacement character stands for when it is not UTF-8 (the
+   standard's "maximal subpart": the lead and whatever continued it). */
+static int tx_char(const u8 *p, u32 n, u32 *cp) {
+    u8 c = p[0];
+    if (c < 0x80) { *cp = c; return 1; }
+    int need;
+    u8 lo = 0x80, hi = 0xBF;
+    u32 v;
+    if (c >= 0xC2 && c <= 0xDF) { need = 1; v = c & 0x1Fu; }
+    else if (c >= 0xE0 && c <= 0xEF) {
+        need = 2; v = c & 0x0Fu;
+        if (c == 0xE0) lo = 0xA0;
+        if (c == 0xED) hi = 0x9F;         /* not the halves of a pair */
+    } else if (c >= 0xF0 && c <= 0xF4) {
+        need = 3; v = c & 0x07u;
+        if (c == 0xF0) lo = 0x90;
+        if (c == 0xF4) hi = 0x8F;
+    } else return -1;
+    for (int k = 1; k <= need; k++) {
+        if ((u32)k >= n) return 0;
+        u8 d = p[k];
+        if (d < lo || d > hi) return -k;
+        lo = 0x80; hi = 0xBF;
+        v = (v << 6) | (d & 0x3Fu);
+    }
+    *cp = v;
+    return need + 1;
+}
+
+static int tx_b64(u8 c) {
+    if (c >= 'A' && c <= 'Z') return c - 'A';
+    if (c >= 'a' && c <= 'z') return c - 'a' + 26;
+    if (c >= '0' && c <= '9') return c - '0' + 52;
+    if (c == '+') return 62;
+    if (c == '/') return 63;
+    return -1;
+}
+
+/* atob: the standard's forgiving decode -- spaces anywhere, the padding
+   optional, and anything else outside the alphabet refused. */
+static jval nat_atob(jctx *J, jval t, jval *a, int n) {
+    (void)t;
+    if (n < 1) return js_throw(J, JS_ERR_TYPE, "atob needs something to decode", J->error_line);
+    jstr *s = js_to_str(J, a[0]);
+    if (J->sig != JS_OK || !s) return js_undef();
+    u8 *clean = (u8 *)malloc(s->len + 1);
+    if (!clean) { js_out_of_memory(J); return js_undef(); }
+    u32 m = 0;
+    for (u32 i = 0; i < s->len; i++) {
+        u8 c = (u8)s->s[i];
+        if (c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == 12) continue;
+        clean[m++] = c;
+    }
+    if (m % 4 == 0 && m && clean[m - 1] == '=') { m--; if (clean[m - 1] == '=') m--; }
+    int ok = m % 4 != 1;
+    for (u32 i = 0; ok && i < m; i++) if (tx_b64(clean[i]) < 0) ok = 0;
+    if (!ok) {
+        free(clean);
+        return js_throw_dom(J, "InvalidCharacterError", "that is not base64");
+    }
+    u32 bits = 0, have = 0, w = 0;
+    for (u32 i = 0; i < m; i++) {
+        bits = (bits << 6) | (u32)tx_b64(clean[i]);
+        have += 6;
+        if (have >= 8) { have -= 8; clean[w++] = (u8)(bits >> have); }
+    }
+    jstr *r = js_str_n(J, (const char *)clean, w);
+    free(clean);
+    return r ? js_from_str(r) : js_undef();
+}
+
+/* btoa. A string that is UTF-8 with every character at or under U+00FF is
+   those characters, one byte each, as String.fromCharCode made them; one
+   that is not UTF-8 at all is taken as the bytes it is, as atob gave them;
+   a character past U+00FF cannot be said in a byte and is refused. */
+static jval nat_btoa(jctx *J, jval t, jval *a, int n) {
+    (void)t;
+    if (n < 1) return js_throw(J, JS_ERR_TYPE, "btoa needs something to encode", J->error_line);
+    jstr *s = js_to_str(J, a[0]);
+    if (J->sig != JS_OK || !s) return js_undef();
+    const u8 *p = (const u8 *)s->s;
+    int whole = 1, wide = 0;
+    for (u32 i = 0; i < s->len;) {
+        u32 cp;
+        int k = tx_char(p + i, s->len - i, &cp);
+        if (k <= 0) { whole = 0; break; }
+        if (cp > 0xFF) wide = 1;
+        i += (u32)k;
+    }
+    if (whole && wide)
+        return js_throw_dom(J, "InvalidCharacterError", "btoa takes characters up to U+00FF only");
+    u8 *bytes = (u8 *)malloc(s->len + 1);
+    char *out = (char *)malloc((s->len + 2) / 3 * 4 + 4);
+    if (!bytes || !out) { free(bytes); free(out); js_out_of_memory(J); return js_undef(); }
+    u32 nb = 0;
+    if (whole) {
+        for (u32 i = 0; i < s->len;) {
+            u32 cp;
+            i += (u32)tx_char(p + i, s->len - i, &cp);
+            bytes[nb++] = (u8)cp;
+        }
+    } else {
+        for (u32 i = 0; i < s->len; i++) bytes[nb++] = p[i];
+    }
+    static const char AL[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    u32 w = 0;
+    for (u32 i = 0; i < nb; i += 3) {
+        u32 v = (u32)bytes[i] << 16;
+        if (i + 1 < nb) v |= (u32)bytes[i + 1] << 8;
+        if (i + 2 < nb) v |= bytes[i + 2];
+        out[w++] = AL[(v >> 18) & 63];
+        out[w++] = AL[(v >> 12) & 63];
+        out[w++] = i + 1 < nb ? AL[(v >> 6) & 63] : '=';
+        out[w++] = i + 2 < nb ? AL[v & 63] : '=';
+    }
+    jstr *r = js_str_n(J, out, w);
+    free(bytes);
+    free(out);
+    return r ? js_from_str(r) : js_undef();
+}
+
+/* The bytes a buffer, a typed array or a DataView looks at; 0 when the value
+   is none of them. */
+static int tx_bytes_of(jval v, const u8 **p, u32 *n) {
+    if (!js_is_obj(v)) return 0;
+    jobj *o = v.obj;
+    if (o->kind == JO_BUFFER) { *p = ta_bytes(o); *n = ta_buflen(o); return 1; }
+    if ((o->kind == JO_TYPED || o->kind == JO_VIEW) && o->internal) {
+        jtyped *x = (jtyped *)o->internal;
+        *p = ta_bytes(x->buf) + x->off;
+        *n = o->kind == JO_TYPED ? x->len * TA_SIZE[x->type] : x->len;
+        return 1;
+    }
+    return 0;
+}
+
+static jval nat_textenc_make(jctx *J, jval t, jval *a, int n) {
+    (void)a; (void)n;
+    if (J->new_target.t == JS_UNDEF) return js_throw(J, JS_ERR_TYPE, "a TextEncoder is made with new", J->error_line);
+    return t;
+}
+
+static jval nat_utf8_name(jctx *J, jval t, jval *a, int n) {
+    (void)t; (void)a; (void)n;
+    return js_from_str(js_str(J, "utf-8"));
+}
+
+/* Copies a string's UTF-8 to d, whole characters only, as far as cap
+   allows, with the lone half of a pair (kept here as the three bytes it
+   would be) written as U+FFFD, as the standard's encoder does. *units is
+   how many UTF-16 units were read, which encodeInto reports. */
+static u32 tx_encode(const jstr *s, u8 *d, u32 cap, u32 *units) {
+    u32 w = 0, i = 0, u = 0;
+    const u8 *p = (const u8 *)s->s;
+    while (i < s->len) {
+        u32 k = js_utf8_len(p[i]);
+        if (i + k > s->len) k = s->len - i;
+        if (w + k > cap) break;
+        if (k == 3 && p[i] == 0xED && i + 1 < s->len && p[i + 1] >= 0xA0) {
+            d[w] = 0xEF; d[w + 1] = 0xBF; d[w + 2] = 0xBD;
+        } else {
+            for (u32 j = 0; j < k; j++) d[w + j] = p[i + j];
+        }
+        w += k;
+        i += k;
+        u += k == 4 ? 2 : 1;
+    }
+    if (units) *units = u;
+    return w;
+}
+
+static jval nat_textenc_encode(jctx *J, jval t, jval *a, int n) {
+    (void)t;
+    jstr *s = n > 0 && a[0].t != JS_UNDEF ? js_to_str(J, a[0]) : js_str(J, "");
+    if (J->sig != JS_OK || !s) return js_undef();
+    jobj *r = ta_alloc(J, TA_U8, s->len);
+    if (!r) return js_undef();
+    tx_encode(s, ta_bytes(((jtyped *)r->internal)->buf), s->len, 0);
+    return js_from_obj(r);
+}
+
+static jval nat_textenc_into(jctx *J, jval t, jval *a, int n) {
+    (void)t;
+    jstr *s = js_to_str(J, js_arg(a, n, 0));
+    if (J->sig != JS_OK || !s) return js_undef();
+    jval d = js_arg(a, n, 1);
+    if (!js_is_obj(d) || d.obj->kind != JO_TYPED || d.obj->spare != TA_U8)
+        return js_throw(J, JS_ERR_TYPE, "encodeInto writes into a Uint8Array", J->error_line);
+    jtyped *x = (jtyped *)d.obj->internal;
+    u32 units = 0;
+    u32 w = tx_encode(s, ta_bytes(x->buf) + x->off, x->len, &units);
+    jobj *r = js_object(J, JO_PLAIN);
+    if (!r) return js_undef();
+    js_set(J, r, "read", js_num(units));
+    js_set(J, r, "written", js_num(w));
+    return js_from_obj(r);
+}
+
+/* A decoder's settings, and the start of a character a streamed decode
+   ended in the middle of. */
+enum { TX_UTF8, TX_1252, TX_UTF16LE };
+typedef struct {
+    u8 kind, fatal, ignore_bom, started, npend;
+    u8 pend[4];
+} jcodec;
+
+/* windows-1252's 0x80 to 0x9F, which is what "latin1" and "ascii" mean to a
+   browser; the rest of its bytes are the code points they look like. */
+static const u16 TX_1252_HIGH[32] = {
+    0x20AC, 0x81, 0x201A, 0x192, 0x201E, 0x2026, 0x2020, 0x2021, 0x2C6, 0x2030, 0x160, 0x2039,
+    0x152, 0x8D, 0x17D, 0x8F, 0x90, 0x2018, 0x2019, 0x201C, 0x201D, 0x2022, 0x2013, 0x2014,
+    0x2DC, 0x2122, 0x161, 0x203A, 0x153, 0x9D, 0x17E, 0x178
+};
+
+static int tx_label(const jstr *s) {
+    char b[24];
+    u32 w = 0, i = 0, e = s->len;
+    while (i < e && (s->s[i] == ' ' || s->s[i] == '\t' || s->s[i] == '\n')) i++;
+    while (e > i && (s->s[e - 1] == ' ' || s->s[e - 1] == '\t' || s->s[e - 1] == '\n')) e--;
+    for (; i < e && w < sizeof(b) - 1; i++) {
+        char c = s->s[i];
+        b[w++] = c >= 'A' && c <= 'Z' ? (char)(c + 32) : c;
+    }
+    b[w] = 0;
+    static const char *const U8[] = { "utf-8", "utf8", "unicode-1-1-utf-8", "unicode11utf8",
+                                      "unicode20utf8", "x-unicode20utf8", 0 };
+    static const char *const L1[] = { "windows-1252", "latin1", "iso-8859-1", "iso8859-1",
+                                      "iso_8859-1", "l1", "ascii", "us-ascii", "cp1252",
+                                      "x-cp1252", "cp819", "ibm819", "iso-ir-100", 0 };
+    static const char *const U16[] = { "utf-16le", "utf-16", "ucs-2", "unicode", "csunicode",
+                                       "iso-10646-ucs-2", "unicodefeff", 0 };
+    for (int k = 0; U8[k]; k++) if (!strcmp(b, U8[k])) return TX_UTF8;
+    for (int k = 0; L1[k]; k++) if (!strcmp(b, L1[k])) return TX_1252;
+    for (int k = 0; U16[k]; k++) if (!strcmp(b, U16[k])) return TX_UTF16LE;
+    return -1;
+}
+
+static jval nat_textdec_make(jctx *J, jval t, jval *a, int n) {
+    if (J->new_target.t == JS_UNDEF) return js_throw(J, JS_ERR_TYPE, "a TextDecoder is made with new", J->error_line);
+    int kind = TX_UTF8;
+    if (n > 0 && a[0].t != JS_UNDEF) {
+        jstr *label = js_to_str(J, a[0]);
+        if (J->sig != JS_OK || !label) return js_undef();
+        kind = tx_label(label);
+        if (kind < 0) return js_throw_named(J, JS_ERR_RANGE, "", label, " is not an encoding this browser reads");
+    }
+    jcodec *c = (jcodec *)js_alloc(J, (u32)sizeof(jcodec));
+    if (!c || !js_is_obj(t)) return js_undef();
+    c->kind = (u8)kind;
+    jval opts = js_arg(a, n, 1);
+    if (js_is_obj(opts)) {
+        c->fatal = (u8)js_to_bool(js_get(J, opts, js_str(J, "fatal")));
+        c->ignore_bom = (u8)js_to_bool(js_get(J, opts, js_str(J, "ignoreBOM")));
+    }
+    t.obj->kind = JO_CODEC;
+    t.obj->internal = c;
+    return t;
+}
+
+static jcodec *tx_this_codec(jctx *J, jval t) {
+    if (js_is_obj(t) && t.obj->kind == JO_CODEC && t.obj->internal) return (jcodec *)t.obj->internal;
+    js_throw(J, JS_ERR_TYPE, "this is not a TextDecoder", J->error_line);
+    return 0;
+}
+
+static jval nat_textdec_encoding(jctx *J, jval t, jval *a, int n) {
+    (void)a; (void)n;
+    jcodec *c = tx_this_codec(J, t);
+    static const char *const NAMES[] = { "utf-8", "windows-1252", "utf-16le" };
+    return c ? js_from_str(js_str(J, NAMES[c->kind])) : js_undef();
+}
+static jval nat_textdec_fatal(jctx *J, jval t, jval *a, int n) {
+    (void)a; (void)n;
+    jcodec *c = tx_this_codec(J, t);
+    return c ? js_bool(c->fatal) : js_undef();
+}
+static jval nat_textdec_ignorebom(jctx *J, jval t, jval *a, int n) {
+    (void)a; (void)n;
+    jcodec *c = tx_this_codec(J, t);
+    return c ? js_bool(c->ignore_bom) : js_undef();
+}
+
+/* decode(bytes, { stream }): the bytes as text, a malformed one as U+FFFD
+   (or a TypeError when the decoder was made fatal), and, while streaming,
+   an unfinished character kept for the next call rather than replaced. */
+static jval nat_textdec_decode(jctx *J, jval t, jval *a, int n) {
+    jcodec *c = tx_this_codec(J, t);
+    if (!c) return js_undef();
+    const u8 *src = 0;
+    u32 len = 0;
+    jval in = js_arg(a, n, 0);
+    if (in.t != JS_UNDEF && !tx_bytes_of(in, &src, &len))
+        return js_throw(J, JS_ERR_TYPE, "decode reads an ArrayBuffer, a typed array or a DataView", J->error_line);
+    jval opts = js_arg(a, n, 1);
+    int stream = js_is_obj(opts) && js_to_bool(js_get(J, opts, js_str(J, "stream")));
+    if (J->sig != JS_OK) return js_undef();
+
+    /* What was held back, then the new bytes, in one run. */
+    u32 total = c->npend + len;
+    u8 *p = (u8 *)malloc(total + 1);
+    char *out = (char *)malloc((u64)total * 3 + 8);
+    if (!p || !out) { free(p); free(out); js_out_of_memory(J); return js_undef(); }
+    for (u32 i = 0; i < c->npend; i++) p[i] = c->pend[i];
+    for (u32 i = 0; i < len; i++) p[c->npend + i] = src[i];
+    c->npend = 0;
+
+    u32 i = 0, w = 0;
+    int bad = 0;
+    if (!c->started && !c->ignore_bom) {
+        if (c->kind == TX_UTF8 && total >= 3 && p[0] == 0xEF && p[1] == 0xBB && p[2] == 0xBF) i = 3;
+        if (c->kind == TX_UTF16LE && total >= 2 && p[0] == 0xFF && p[1] == 0xFE) i = 2;
+    }
+    /* A BOM cut in half by the stream is waited for, not decoded. */
+    int held = 0;
+    if (!c->started && !c->ignore_bom && stream && i == 0 && total < 3
+        && ((c->kind == TX_UTF8 && total && p[0] == 0xEF && (total < 2 || p[1] == 0xBB))
+            || (c->kind == TX_UTF16LE && total == 1 && p[0] == 0xFF))) {
+        for (u32 k = 0; k < total; k++) c->pend[k] = p[k];
+        c->npend = (u8)total;
+        held = 1;
+        i = total;
+    }
+    if (!held && total) c->started = 1;
+
+    while (i < total) {
+        u32 cp;
+        if (c->kind == TX_1252) {
+            u8 b = p[i++];
+            cp = b >= 0x80 && b < 0xA0 ? TX_1252_HIGH[b - 0x80] : b;
+        } else if (c->kind == TX_UTF16LE) {
+            if (i + 1 >= total) {
+                if (stream) { c->pend[0] = p[i]; c->npend = 1; break; }
+                i++;
+                bad = 1;
+                cp = 0xFFFD;
+            } else {
+                u32 unit = (u32)p[i] | ((u32)p[i + 1] << 8);
+                if (unit >= 0xD800 && unit < 0xDC00) {
+                    if (i + 3 >= total) {
+                        if (stream) {
+                            for (u32 k = i; k < total; k++) c->pend[c->npend++] = p[k];
+                            break;
+                        }
+                        i = total;
+                        bad = 1;
+                        cp = 0xFFFD;
+                    } else {
+                        u32 lo = (u32)p[i + 2] | ((u32)p[i + 3] << 8);
+                        if (lo >= 0xDC00 && lo < 0xE000) {
+                            cp = 0x10000 + ((unit - 0xD800) << 10) + (lo - 0xDC00);
+                            i += 4;
+                        } else { cp = 0xFFFD; bad = 1; i += 2; }
+                    }
+                } else if (unit >= 0xDC00 && unit < 0xE000) { cp = 0xFFFD; bad = 1; i += 2; }
+                else { cp = unit; i += 2; }
+            }
+        } else {
+            int k = tx_char(p + i, total - i, &cp);
+            if (k > 0) i += (u32)k;
+            else if (k == 0) {
+                if (stream) {
+                    for (u32 q = i; q < total; q++) c->pend[c->npend++] = p[q];
+                    break;
+                }
+                i = total;
+                cp = 0xFFFD;
+                bad = 1;
+            } else { i += (u32)-k; cp = 0xFFFD; bad = 1; }
+        }
+        if (bad && c->fatal) break;
+        w += js_utf8(cp, out + w);
+    }
+    free(p);
+    if (!stream && !c->npend) c->started = 0;
+    if (bad && c->fatal) {
+        free(out);
+        c->npend = 0;
+        c->started = 0;
+        return js_throw(J, JS_ERR_TYPE, "the data is not well-formed text in that encoding", J->error_line);
+    }
+    jstr *r = js_str_n(J, out, w);
+    free(out);
+    return r ? js_from_str(r) : js_undef();
+}
+
+static void js_setup_text(jctx *J) {
+    struct { const char *n; jnative f; } G[] = { { "atob", nat_atob }, { "btoa", nat_btoa }, { 0, 0 } };
+    for (int i = 0; G[i].n; i++) {
+        jobj *f = js_method(J, 0, G[i].n, G[i].f, 1);
+        js_declare_flags(J, J->global, js_str(J, G[i].n), js_from_obj(f), JP_WRITE | JP_CONF);
+    }
+
+    jobj *ep = js_object_with(J, JO_PLAIN, J->p_object);
+    js_ctor(J, "TextEncoder", nat_textenc_make, 0, ep);
+    js_getter(J, ep, "encoding", nat_utf8_name);
+    js_method(J, ep, "encode", nat_textenc_encode, 0);
+    js_method(J, ep, "encodeInto", nat_textenc_into, 2);
+    js_tag(J, ep, "TextEncoder");
+
+    jobj *dp = js_object_with(J, JO_PLAIN, J->p_object);
+    js_ctor(J, "TextDecoder", nat_textdec_make, 0, dp);
+    js_getter(J, dp, "encoding", nat_textdec_encoding);
+    js_getter(J, dp, "fatal", nat_textdec_fatal);
+    js_getter(J, dp, "ignoreBOM", nat_textdec_ignorebom);
+    js_method(J, dp, "decode", nat_textdec_decode, 0);
+    js_tag(J, dp, "TextDecoder");
 }
 
 static void js_setup_typed(jctx *J) {
