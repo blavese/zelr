@@ -5130,12 +5130,53 @@ static u32 jd_script_text(int i, const char **text, const char **src, char **own
     return tx.n;
 }
 
+/* Whether the machine has the memory to run a script this long, from what
+ * the browser says is free (jsdom_memory_with; -1 when the kernel does not
+ * say, as on the host build). A machine without the memory ends the browser
+ * for want of a page rather than saying no, so this says no first.
+ *
+ * What running one costs, measured: the engine's tree of it (jsparse.h,
+ * js_node) is about 0.4 nodes of 32 bytes for each byte of a bundle, and it
+ * grows by doubling, so the doubling that makes room holds a new array the
+ * size of the whole tree while the old one is still there; what the script
+ * makes when it runs was about twice its size again; and the page still has
+ * to be laid out after it. A 64 megabyte machine has about nine and a half
+ * megabytes free with the browser up: a 256 kilobyte bundle ran there and a
+ * 512 kilobyte one ended the browser. */
+#define JD_ROOM_RESERVE (4 * 1024 * 1024)
+
+static long long (*jd_free_memory)(void);
+
+void jsdom_memory_with(long long (*fn)(void)) { jd_free_memory = fn; }
+
+static int jd_room_for(u32 len) {
+    long long free_b = jd_free_memory ? jd_free_memory() : -1;
+    if (free_b < 0) return 1;
+    long long nodes = (long long)jd_J.nnodes + (long long)len * 2 / 5 + 1024;
+    long long cap = jd_J.ncap ? jd_J.ncap : 1024, peak = 0;
+    while (cap < nodes) { cap *= 2; peak = cap * (long long)sizeof(jnode); }
+    return peak + (long long)len * 2 + JD_ROOM_RESERVE <= free_b;
+}
+
+/* A message of the browser's own on the page's error line, as the first
+   thing that went wrong when nothing went wrong before it. */
+static void jd_note_text(const char *msg) {
+    if (jd_on_error) jd_on_error(msg, 0);
+    if (jd_err[0]) return;
+    w_copy(jd_err, (int)sizeof(jd_err), msg, (int)sizeof(jd_err));
+}
+
 /* A script element run, from wherever its text comes. 0 when there was no
    text to run. */
 static int jd_run_script_el(int i) {
     const char *text, *src;
     char *owned;
     u32 len = jd_script_text(i, &text, &src, &owned);
+    if (len && !jd_room_for(len)) {
+        jd_note_text("a script too large for this machine's memory was not run");
+        if (jd_script_done) jd_script_done(i, src, 0, "too large for this machine's memory");
+        len = 0;
+    }
     if (len) jd_run_text(i, src, text, len);
     if (owned) free(owned);
     return len != 0;

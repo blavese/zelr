@@ -155,6 +155,10 @@ static int history_moved;
 static void fake_history_go(int d) { history_moved = d; }
 static int fake_history_length(void) { return 4; }
 
+/* A machine with a little memory free, and one with plenty. */
+static long long little_memory(void) { return 2 * 1024 * 1024; }
+static long long much_memory(void) { return 512LL * 1024 * 1024; }
+
 /* Where the page asked to be scrolled to. */
 static int scrolled_to = -1;
 static void fake_scroll(int y) { scrolled_to = y; }
@@ -1300,6 +1304,23 @@ int main(void) {
                    " s.getPropertyValue('flex-wrap'), s.transition].join(' ');</script></body>"),
             "flex rgb(16, 32, 48) 700 12px nowrap ");
         jsdom_styles_with(0);
+    }
+
+    /* --- a script the machine has no room for -------------------------------------
+     *
+     * Running one costs many times its size, and a machine without the
+     * memory ended the browser; now it is not run, and the page says so. */
+    {
+        jsdom_memory_with(little_memory);
+        char err[128];
+        load("<body><p id=out>no</p><script>document.getElementById('out').textContent = 'ran';</script></body>");
+        run_scripts(&page, err, (int)sizeof(err), 0);
+        oks("a script is not run on a machine without the memory for it", content_of(dom_by_id(&page, "out")), "no");
+        oks("and the page says why", err, "a script too large for this machine's memory was not run");
+        jsdom_memory_with(much_memory);
+        oks("while one with the memory runs it",
+            titled("<script>document.title = 'ran';</script>"), "ran");
+        jsdom_memory_with(0);
     }
 
     /* --- a page that uses up its memory ---------------------------------------

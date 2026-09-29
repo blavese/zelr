@@ -72,9 +72,23 @@
 /* A script the page did not bring with it. One buffer, reused: each is run
    the moment it arrives, so there is never more than one in hand. The limit
    on how many are followed is the same argument as for sheets -- every one
-   is another round trip -- and it is said out loud when it is reached. */
-#define SCRIPT_MAX  (128 * 1024)
-#define SCRIPTS_MAX 8
+   is another round trip -- and it is said out loud when it is reached.
+ *
+ * It was 128 kilobytes and eight files, and a site's bundle is not that: The
+ * Verge's two largest are 940 and 890 kilobytes, Instagram's is 3.9
+ * megabytes, and fifty files is ordinary. A script cut off at the limit was
+ * run anyway and stopped on a syntax error in its middle, which is what
+ * Microsoft, Instagram, Yahoo, ESPN, IMDb and Spotify reported. Now the buffer
+ * is mapped, so a page pays for the size of what it fetched, and one that
+ * does not fit is not run at all. What running one costs is many times its
+ * size again, in the engine's tree of it, which lives as long as the page:
+ * whether the machine has that is asked before each one runs (jsdom.h,
+ * jd_room_for), which on a 64 megabyte machine is about a quarter of a
+ * megabyte of script and on a 256 megabyte one several; SCRIPTS_BYTES is a
+ * ceiling on what a page's files come to together whatever the machine. */
+#define SCRIPT_MAX    (4 * 1024 * 1024)
+#define SCRIPTS_MAX   64
+#define SCRIPTS_BYTES (6 * 1024 * 1024)
 
 /* And what a script asks for while the page is up. Its own buffer, because
    a reply arriving must not write over the text of the script that asked
@@ -97,9 +111,10 @@
    and the browser did not start at all. */
 static char *src;
 static char *cssbuf;
-static char scriptbuf[SCRIPT_MAX];
+static char *scriptbuf;              /* mapped, SCRIPT_MAX */
 static char replybuf[REPLY_MAX];
 static int  scripts_outside;
+static int  scripts_bytes;           /* what they came to, for SCRIPTS_BYTES */
 static int  asks_made;
 
 static ddoc   *doc_mem;
@@ -768,8 +783,19 @@ static int gather_linked_sheets(int *fetched, int *skipped) {
    Relative to the page, the way every other address on it is: a page at
    /a/b.html asking for c.js means /a/c.js, and resolving that is url_join's
    job and not this one's. */
+/* How much memory the machine has free, for jsdom.h to ask before it runs a
+   script (jd_room_for): running one costs many times its size, and a
+   program that touches a page the machine does not have is ended (a one
+   megabyte script did that to the browser on a 64 megabyte machine). The
+   host build's kernel cannot say. */
+static long long free_memory(void) {
+    zelr_sysinfo si;
+    if (sysinfo(&si) < 0 || si.mem_total_kb == 0) return -1;
+    return (long long)si.mem_free_kb * 1024;
+}
+
 static int fetch_script(const char *src, const char **out) {
-    if (scripts_outside >= SCRIPTS_MAX) return 0;
+    if (scripts_outside >= SCRIPTS_MAX || scripts_bytes >= SCRIPTS_BYTES || !scriptbuf) return 0;
 
     url_t u;
     if (!url_join(&here, src, &u)) return 0;
@@ -777,8 +803,12 @@ static int fetch_script(const char *src, const char **out) {
     response_t r;
     int rc = web_get(&u, scriptbuf, SCRIPT_MAX, &r);
     if (rc < 200 || rc >= 300 || r.len <= 0) return 0;
+    /* Half a script is a syntax error somewhere in its middle, and the page
+       is better told the file would not come. */
+    if (r.truncated || scripts_bytes + r.len > SCRIPTS_BYTES) return 0;
 
     scripts_outside++;
+    scripts_bytes += r.len;
     *out = r.body;
     return r.len;
 }
@@ -1198,6 +1228,7 @@ static void build(const char *html, int len, int width, int want_sheets,
     scripts_ran = 0;
     scripts_changed = 0;
     scripts_outside = 0;
+    scripts_bytes = 0;
     asks_made = 0;
     /* The page's address for its scripts, with the fragment the reader asked
        for, which is never sent and so is not in `here`. */
@@ -1223,6 +1254,7 @@ static void build(const char *html, int len, int width, int want_sheets,
         jsdom_address_with(script_address);
         jsdom_history_with(script_history_go, script_history_length);
         jsdom_styles_with(computed_style);
+        jsdom_memory_with(free_memory);
         scripts_ran = jsdom_scripts(script_err, (int)sizeof(script_err));
         jsdom_loaded();
         scripts_changed = jsdom_changed();
@@ -1913,6 +1945,7 @@ static void browser_wait(int win) {
 int main(int argc, char **argv) {
     src = (char *)map(SRC_MAX, PROT_READ | PROT_WRITE);
     cssbuf = (char *)map(CSS_MAX, PROT_READ | PROT_WRITE);
+    scriptbuf = (char *)map(SCRIPT_MAX, PROT_READ | PROT_WRITE);
     doc_mem = (ddoc *)map(sizeof(ddoc), PROT_READ | PROT_WRITE);
     sheet_mem = (csheet *)map(sizeof(csheet), PROT_READ | PROT_WRITE);
     page_mem = (ldoc *)map(sizeof(ldoc), PROT_READ | PROT_WRITE);

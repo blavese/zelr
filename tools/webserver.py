@@ -416,6 +416,42 @@ def filler(n):
 BIG = filler(200000)
 
 
+# A script file of about `kb` kilobytes, written the way a bundle is: one
+# object and a great many small functions on it, each with a little of
+# everything in it, so the engine's cost of reading it is a bundle's and not
+# a comment's. The last line turns the band green, so a browser that did not
+# run all of it -- cut it off at a limit, or ran out of room reading it --
+# leaves the band blue.
+def bundle(kb):
+    out = [b"var M = {};\n"]
+    size, i = 12, 0
+    while size < kb * 1024:
+        line = (b"M.f%d = function (a, b) { var c = a + b * %d; if (c > 10) { return [c, 'k%d',"
+                b" { x: a, y: b }]; } for (var i = 0; i < 3; i++) c += i; return c; };\n" % (i, i % 97, i))
+        out.append(line)
+        size += len(line)
+        i += 1
+    out.append(b"document.getElementById('band').style.background = '#00B050';\n")
+    return b"".join(out)
+
+
+def big_script_page(kb):
+    return (b"<!doctype html><html><head><title>a big script</title></head><body>"
+            b"<div id=band style=\"background:#1D4ED8;height:200px\">a big script</div>"
+            b"<script src=\"/bundle/%d.js\"></script></body></html>" % kb)
+
+
+# A page whose script writes a style, which the browser read once, before any
+# script ran, and so drew as written: the band stays blue on a browser that
+# does not read a style attribute again when a script changes it.
+RESTYLED = b"""<!doctype html><html><head><title>restyled</title></head><body>
+<div id=band style="background:#1D4ED8;height:200px">restyled</div>
+<script>
+var b = document.getElementById('band');
+b.style.background = '#00B050';
+</script></body></html>"""
+
+
 
 # A form, and a page that says back exactly what arrived. The value of this
 # one is that it is the server deciding what was received rather than the
@@ -666,6 +702,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.close_connection = True
         elif path == "/long-page":
             self._send(LONG_PAGE)
+        elif path.startswith("/big-script/") and path[12:].isdigit():
+            self._send(big_script_page(int(path[12:])))
+        elif path.startswith("/bundle/") and path.endswith(".js") and path[8:-3].isdigit():
+            self._send(bundle(int(path[8:-3])), ctype="text/javascript")
+        elif path == "/restyled":
+            self._send(RESTYLED)
         elif path == "/templated":
             self._send(TEMPLATED)
         elif path == "/meta-refresh":

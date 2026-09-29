@@ -234,7 +234,11 @@ zw host_syscall(zw n, zw a, zw b, zw c) {
     case 28: if (a > 0 && a < 64 && sock_used[a]) { closesocket(socks[a]); sock_used[a] = 0; } return 0;
     case 29: return -1;
     case 30: { memset((void *)a, 0, 24); *(unsigned *)a = 1; return 0; }
-    case 31: { memset((void *)a, 0, 64); ((unsigned *)a)[8] = 1024; ((unsigned *)a)[9] = 768; return 0; }
+    /* sysinfo: twelve words (sdk/zelr.h, zelr_sysinfo) and no more, all
+       nought but the screen. It cleared sixty-four bytes, past the end of
+       the caller's, which a program keeping one on its stack did not
+       survive. */
+    case 31: { memset((void *)a, 0, 12 * 4); ((unsigned *)a)[8] = 1024; ((unsigned *)a)[9] = 768; return 0; }
     case 47: {
         char *was = heap_brk;
         if (a == 0) return (zw)was;

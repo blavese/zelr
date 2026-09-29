@@ -69,6 +69,7 @@ int main(int argc, char **argv) {
 
     src = (char *)map(SRC_MAX, PROT_READ | PROT_WRITE);
     cssbuf = (char *)map(CSS_MAX, PROT_READ | PROT_WRITE);
+    scriptbuf = (char *)map(SCRIPT_MAX, PROT_READ | PROT_WRITE);
     doc_mem = (ddoc *)map(sizeof(ddoc), PROT_READ | PROT_WRITE);
     sheet_mem = (csheet *)map(sizeof(csheet), PROT_READ | PROT_WRITE);
     page_mem = (ldoc *)map(sizeof(ldoc), PROT_READ | PROT_WRITE);
@@ -119,9 +120,13 @@ int main(int argc, char **argv) {
     putn((int)(jd_J.allocated / 1024));
     puts(" KB, tree ");
     putn(jd_J.nnodes);
-    puts(" nodes, ");
+    puts(" nodes (");
+    putn((int)((long long)jd_J.ncap * (long long)sizeof(jnode) / 1024));
+    puts(" KB held), ");
     putn((t1 - t0) * 10);
-    puts(" ms\n");
+    puts(" ms, script files ");
+    putn(scripts_bytes / 1024);
+    puts(" KB\n");
     puts("status: ");
     puts(status);
     putc('\n');
