@@ -119,6 +119,12 @@ numbered files are still to 6048716; where they disagree with this list, this li
 - **A stick's EFI partition left alone (04 S21, diskfs.c).** Partition type 0xEF is no longer one a stick's
   volume is mounted from. mountcheck: a stick whose only partition is an EFI System Partition is found and
   not mounted.
+- **One task in the filesystem at a time (04 S25, fat.c).** A sleeping, re-entrant lock (`fat_enter`,
+  `fat_leave`): every public fat.c call takes it, vfs.c holds it for the whole of an operation including
+  its choice of volume, and `syscall_abandon` gives back what a killed task held (`fat_abandon`). The USB
+  task mounting a stick could be preempted half way and the disk selected under it, writing the stick's
+  geometry into the disk's record. [fat]: six checks (a rival waits and does not change the selection, a
+  killed holder gives it back).
 ### 0.75.0
 
 - **Auto margins, and columns lined up (11).** In a row, auto margins take the room left after growing and

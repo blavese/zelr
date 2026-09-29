@@ -899,7 +899,7 @@ It reads back this boot's own header. A boot that reaches the scheduler and late
 
 **S24. `region_is_free` checks only the first of the 32 log sectors** (blackbox.c:251-258), not the whole region the comment at :243-250 promises to protect.
 
-**S25. Preemptible kernel tasks can interleave inside fat.c** (§6).
+**S25. FIXED in 0.76.0 (a sleeping re-entrant filesystem lock, `fat_enter`/`fat_leave`, held by vfs.c for a whole operation and released for a killed task by `fat_abandon`; [fat]). Preemptible kernel tasks can interleave inside fat.c** (§6).
 In particular, the hot-plug mount in the `usb` service task (`fat_mount_on` saves and restores `current_volume`, fat.c:339-347) could write USB geometry into `volumes[DISK]` if another kernel task calls `route()` in between. Low probability, high impact.
 
 **S26. Unreachable branch in main.c:438** ("disk unreadable, using memory only"). `diskfs_mount` returns -1 only when `!blk_present()`, which is impossible inside `if (blk_init())`.

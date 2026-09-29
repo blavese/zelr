@@ -17,6 +17,15 @@
 /* Which volume the calls below are about. Selected at the edge, in
    kernel/vfs.c, from the path. */
 void fat_select(u32 vol);
+
+/* Holding the filesystem, one task at a time (fat.c): taken by every call in
+   fat.c and by vfs.c for the whole of an operation; a task may take it again.
+   fat_abandon gives back what a killed task held. */
+struct task;
+void fat_enter(void);
+void fat_leave(void);
+void fat_abandon(struct task *t);
+bool fat_held_by_nobody(void);
 u32  fat_selected(void);
 bool fat_mounted_on(u32 vol);
 void fat_forget_volume(u32 vol);

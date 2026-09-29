@@ -959,6 +959,8 @@ void syscall_abandon(u32 pid) {
     }
     tcp_abandon(pid);
     net_abandon(task_by_pid(pid));
+    /* A task killed inside a file operation still holds the filesystem. */
+    fat_abandon(task_by_pid(pid));
 }
 
 static i64 sys_resolve(registers_t *r) {

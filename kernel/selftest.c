@@ -999,6 +999,62 @@ static bool listed(const char *dir, const char *name) {
     }
 }
 
+/* The filesystem is held by one task at a time: a rival asking about a path
+   while the self test holds it, with the stick's volume chosen, has to wait
+   and must not choose the disk under it. */
+static volatile int fs_rival_done;
+static void fs_rival(void) {
+    u32 size = 0;
+    bool dir = false;
+    vfs_stat("/", &size, &dir);
+    vfs_stat("/zelr.cfg", &size, &dir);
+    fs_rival_done = 1;
+    task_exit();
+}
+
+static volatile int fs_holder_in, fs_holder_stop;
+static void fs_holder(void) {
+    fat_enter();
+    fs_holder_in = 1;
+    /* Held until told to stop, and then gone without giving it back: what a
+       task killed in the middle of a file operation leaves behind. */
+    while (!fs_holder_stop) task_sleep(10);
+    task_exit();
+}
+
+static void test_fs_lock(void) {
+    ok("nobody holds the filesystem to begin with", fat_held_by_nobody());
+    fs_rival_done = 0;
+    fat_enter();
+    u32 was = fat_selected();
+    fat_select(FAT_VOL_USB);
+    task_t *rival = task_create("fs-rival", fs_rival);
+    if (!rival) {
+        fat_select(was);
+        fat_leave();
+        kprintf("  SKIP  no second task to race the filesystem with\n");
+        return;
+    }
+    task_sleep(150);
+    ok("a second task waits while one holds the filesystem", !fs_rival_done);
+    ok("and does not choose the other volume under it", fat_selected() == FAT_VOL_USB);
+    fat_select(was);
+    fat_leave();
+    for (int w = 0; w < 200 && !fs_rival_done; w++) task_sleep(10);
+    ok("and goes on when it is given back", fs_rival_done && fat_held_by_nobody());
+
+    fs_holder_in = fs_holder_stop = 0;
+    task_t *holder = task_create("fs-holder", fs_holder);
+    for (int w = 0; w < 200 && holder && !fs_holder_in; w++) task_sleep(10);
+    ok("a task can hold it", holder && fs_holder_in && !fat_held_by_nobody());
+    if (holder) syscall_abandon(holder->pid);
+    ok("and a task killed holding it gives it back", fat_held_by_nobody());
+    /* Given back here if it was not, or every call after this would wait
+       for it for ever. */
+    if (holder && !fat_held_by_nobody()) fat_abandon(holder);
+    fs_holder_stop = 1;
+}
+
 static void test_fat_names(void) {
     if (!blk_present() || !fat_mounted()) { kprintf("  SKIP  no volume\n"); return; }
 
@@ -5341,7 +5397,7 @@ int selftest_run(void) {
     kprintf("[timer]\n");      test_timer();
     kprintf("[interrupts]\n"); test_interrupts();
     kprintf("[disk]\n");       test_disk();
-    kprintf("[fat]\n");        test_fat(); test_fat_names(); test_fat_big(); test_fat_io();
+    kprintf("[fat]\n");        test_fat(); test_fat_names(); test_fat_big(); test_fat_io(); test_fs_lock();
     kprintf("[network]\n");    test_net();
     kprintf("[tcp]\n");        test_tcp();
     kprintf("[elf]\n");        test_elf();

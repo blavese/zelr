@@ -31,6 +31,9 @@
 #include "heap.h"
 #include "printf.h"
 #include "string.h"
+#include "sched.h"
+#include "smp.h"
+#include "wait.h"
 
 #define ATTR_READONLY  0x01
 #define ATTR_HIDDEN    0x02
@@ -133,7 +136,7 @@ bool fat_mounted_on(u32 vol) {
     return vol < FAT_VOLUMES && volumes[vol].mounted;
 }
 
-bool fat_flush_volume(u32 vol) {
+static bool fat_flush_volume_held(u32 vol) {
     if (vol >= FAT_VOLUMES || !volumes[vol].mounted) return false;
     return blk_flush_on(volumes[vol].dev);
 }
@@ -168,7 +171,7 @@ static void dcache_forget(void) {
     dcache_gen = blk_writes();
 }
 
-void fat_forget_volume(u32 vol) {
+static void fat_forget_volume_held(u32 vol) {
     if (vol >= FAT_VOLUMES) return;
     volumes[vol].mounted = false;
     volumes[vol].fat_cache_valid = false;
@@ -250,7 +253,7 @@ static bool vol_write(u32 lba, u32 count, const void *buf) {
  * drive was told, twice per file, to flush nothing. */
 static bool vol_flush(void) { return blk_flush_on(CUR.dev); }
 
-u32 fat_base(void) { return part_base; }
+static u32 fat_base_held(void) { return part_base; }
 
 /* 16 or 32. Decided by the cluster count at mount, never by the label. */
 
@@ -346,7 +349,7 @@ static bool fat_cache_load(u32 lba) {
     return true;
 }
 
-bool fat_mounted(void) { return mounted; }
+static bool fat_mounted_held(void) { return mounted; }
 u32  fat_total_clusters(void) { return cluster_count; }
 u32  fat_cluster_bytes(void) { return (u32)sectors_per_cluster * SECTOR_SIZE; }
 
@@ -476,7 +479,7 @@ static u32 zero_cluster(u32 cluster) {
 /* Mounts a volume of a particular disk. The selection is put back
    afterwards, so mounting something does not change what the next call is
    about. */
-bool fat_mount_on(u32 vol, u32 dev, u32 base_lba) {
+static bool fat_mount_on_held(u32 vol, u32 dev, u32 base_lba) {
     if (vol >= FAT_VOLUMES) return false;
     u32 was = current_volume;
     current_volume = vol;
@@ -486,7 +489,7 @@ bool fat_mount_on(u32 vol, u32 dev, u32 base_lba) {
     return ok;
 }
 
-bool fat_mount_at(u32 base_lba) {
+static bool fat_mount_at_held(u32 base_lba) {
     mounted = false;
     fat_forget();
     if (!blk_device_present(CUR.dev)) return false;
@@ -573,7 +576,7 @@ bool fat_mount_at(u32 base_lba) {
 
 bool fat_mount(void) { return fat_mount_at(0); }
 
-u32 fat_type(void) { return mounted ? fat_bits : 0; }
+static u32 fat_type_held(void) { return mounted ? fat_bits : 0; }
 
 /* The serial this kernel stamps on a volume it made. It is the ASCII "ZLR"
    with a zero under it, which is not a number anything else would land on
@@ -583,7 +586,7 @@ u32 fat_type(void) { return mounted ? fat_bits : 0; }
 /* The two fields fat_format writes and nothing else does. Checked against
    the boot sector rather than remembered from the mount, so it is still
    right if something else rewrote the volume underneath us. */
-bool fat_is_zelr_volume(void) {
+static bool fat_is_zelr_volume_held(void) {
     if (!mounted) return false;
     u8 boot[SECTOR_SIZE];
     if (!vol_read(0, 1, boot)) return false;
@@ -595,7 +598,7 @@ bool fat_is_zelr_volume(void) {
    nothing else. A volume without it was made by another system and holds
    somebody else's data, which nothing here may sweep or seed. Wider than
    fat_is_zelr_volume, which also wants the serial only fat_format writes. */
-bool fat_made_here(void) {
+static bool fat_made_here_held(void) {
     if (!mounted) return false;
     u8 boot[SECTOR_SIZE];
     if (!vol_read(0, 1, boot)) return false;
@@ -754,7 +757,7 @@ static void fat_boot_stub(u8 *sec, u32 at) {
  * The last of those is also what makes this safe to run on every mount:
  * a sector already carrying the stub fails it and is left alone.
  */
-bool fat_boot_repair(void) {
+static bool fat_boot_repair_held(void) {
     if (!mounted) return false;
 
     u8 boot[SECTOR_SIZE];
@@ -781,7 +784,7 @@ bool fat_boot_repair(void) {
     return true;
 }
 
-bool fat_format_at(u32 base_lba, u32 sectors, const char *label) {
+static bool fat_format_at_held(u32 base_lba, u32 sectors, const char *label) {
     if (!blk_device_present(CUR.dev)) return false;
     fat_forget();
 
@@ -943,7 +946,7 @@ bool fat_format_at(u32 base_lba, u32 sectors, const char *label) {
  * look at /usb formatted the stick -- with a layout worked out from the size
  * of the internal disk, which is to say a volume larger than the stick it
  * was written on. */
-bool fat_format(const char *label) {
+static bool fat_format_held(const char *label) {
     u32 was = current_volume;
     current_volume = FAT_VOL_DISK;
     volumes[FAT_VOL_DISK].dev = BLK_BOOT;
@@ -1605,7 +1608,7 @@ static bool resolve_dir(const char *path, dir_t *out) {
 
 /* --- listing ------------------------------------------------------------ */
 
-int fat_list(const char *path, u32 index, char *name_out, u32 *size_out, bool *dir_out) {
+static int fat_list_held(const char *path, u32 index, char *name_out, u32 *size_out, bool *dir_out) {
     if (!mounted) return -1;
     dir_t d;
     if (!resolve_dir(path ? path : "/", &d)) return -1;
@@ -1644,13 +1647,13 @@ int fat_list(const char *path, u32 index, char *name_out, u32 *size_out, bool *d
     return 0;
 }
 
-u32 fat_count(const char *path) {
+static u32 fat_count_held(const char *path) {
     u32 n = 0;
     while (fat_list(path, n, 0, 0, 0) == 1) n++;
     return n;
 }
 
-bool fat_stat(const char *path, u32 *size_out, bool *dir_out) {
+static bool fat_stat_held(const char *path, u32 *size_out, bool *dir_out) {
     if (!mounted) return false;
 
     dir_t parent;
@@ -1672,7 +1675,7 @@ bool fat_stat(const char *path, u32 *size_out, bool *dir_out) {
 
 /* --- files -------------------------------------------------------------- */
 
-int fat_read_file(const char *path, u8 *buf, u32 cap) {
+static int fat_read_file_held(const char *path, u8 *buf, u32 cap) {
     if (!mounted) return -1;
 
     dir_t parent;
@@ -1714,7 +1717,7 @@ int fat_read_file(const char *path, u8 *buf, u32 cap) {
     return (int)done;
 }
 
-u32 fat_test_runs(const char *path) {
+static u32 fat_test_runs_held(const char *path) {
     if (!mounted) return 0;
     dir_t parent;
     char leaf[FAT_NAME_MAX];
@@ -1729,7 +1732,7 @@ u32 fat_test_runs(const char *path) {
     return runs;
 }
 
-bool fat_write_file(const char *path, const u8 *buf, u32 size) {
+static bool fat_write_file_held(const char *path, const u8 *buf, u32 size) {
     if (!mounted) return false;
 
     dir_t parent;
@@ -1866,7 +1869,7 @@ static bool fits_83(const char *name) {
     return same_name(back, name);
 }
 
-bool fat_rename(const char *from, const char *to) {
+static bool fat_rename_held(const char *from, const char *to) {
     if (!mounted) return false;
 
     dir_t src_dir, dst_dir;
@@ -1922,7 +1925,7 @@ bool fat_rename(const char *from, const char *to) {
     return vol_flush();
 }
 
-bool fat_delete_file(const char *path) {
+static bool fat_delete_file_held(const char *path) {
     if (!mounted) return false;
 
     dir_t parent;
@@ -1955,7 +1958,7 @@ bool fat_delete_file(const char *path) {
 
 /* --- making and removing directories ------------------------------------ */
 
-bool fat_mkdir(const char *path) {
+static bool fat_mkdir_held(const char *path) {
     if (!mounted) return false;
 
     dir_t parent;
@@ -2003,7 +2006,7 @@ bool fat_mkdir(const char *path) {
     return vol_flush();
 }
 
-bool fat_rmdir(const char *path) {
+static bool fat_rmdir_held(const char *path) {
     if (!mounted) return false;
 
     dir_t parent;
@@ -2039,7 +2042,7 @@ bool fat_rmdir(const char *path) {
  *
  * Directories are walked with an explicit queue rather than by recursion:
  * the depth is whatever the disk says it is, and a kernel stack is small. */
-u32 fat_reclaim(void) {
+static u32 fat_reclaim_held(void) {
     if (!mounted) return 0;
 
     u32 total = cluster_count + 2;
@@ -2156,10 +2159,100 @@ u32 fat_reclaim(void) {
 /* Sixty four bits, because the product is: it was thirty two, and a volume
    with 4 GiB or more free reported whatever was left over past a multiple of
    4 GiB -- a new 16 GiB stick said it had next to nothing. */
-u64 fat_free_bytes(void) {
+static u64 fat_free_bytes_held(void) {
     if (!mounted) return 0;
     u64 free_clusters = 0;
     for (u32 c = 2; c < cluster_count + 2; c++)
         if (fat_get(c) == 0) free_clusters++;
     return free_clusters * (u64)fat_cluster_bytes();
 }
+
+/* --- one task in the filesystem at a time ------------------------------------
+ *
+ * Which volume the calls in this file are about is one record for the whole
+ * machine, and a kernel task can be preempted anywhere. So the USB task
+ * mounting a stick -- the stick selected, its boot sector being read --
+ * could be stopped half way, and the desktop reading its settings or a
+ * program's call reading the disk would select the disk underneath it: the
+ * rest of the mount then wrote the stick's geometry into the disk's record,
+ * and the next write to the disk went to the wrong sectors. Two operations on
+ * one volume interleaved the same way would each have half a FAT sector.
+ *
+ * So the filesystem is held by one task at a time: every call below, and
+ * vfs.c for the whole of a path's operation (its choice of volume included),
+ * takes it, and a task already holding it takes it again. One that finds it
+ * held sleeps until it is given back. A task killed while holding it is
+ * released by syscall_abandon (fat_abandon), or the whole filesystem would
+ * stay held by a task that no longer exists. */
+static task_t *volatile fs_owner;
+static volatile u32 fs_depth;
+static spinlock_t fs_spin;
+
+void fat_enter(void) {
+    task_t *me = task_current();
+    for (;;) {
+        bool on = spin_lock_irqsave(&fs_spin);
+        if (fs_depth == 0 || fs_owner == me) {
+            fs_owner = me;
+            fs_depth++;
+            spin_unlock_irqrestore(&fs_spin, on);
+            return;
+        }
+        spin_unlock_irqrestore(&fs_spin, on);
+        wait_on((const void *)&fs_depth, 20);
+    }
+}
+
+void fat_leave(void) {
+    bool on = spin_lock_irqsave(&fs_spin);
+    bool freed = false;
+    if (fs_depth > 0 && --fs_depth == 0) {
+        fs_owner = 0;
+        freed = true;
+    }
+    spin_unlock_irqrestore(&fs_spin, on);
+    if (freed) wake_all((const void *)&fs_depth);
+}
+
+void fat_abandon(task_t *t) {
+    if (!t) return;
+    bool on = spin_lock_irqsave(&fs_spin);
+    bool freed = false;
+    if (fs_depth > 0 && fs_owner == t) {
+        fs_depth = 0;
+        fs_owner = 0;
+        /* and the selection it may have left on the stick put back */
+        current_volume = FAT_VOL_DISK;
+        freed = true;
+    }
+    spin_unlock_irqrestore(&fs_spin, on);
+    if (freed) wake_all((const void *)&fs_depth);
+}
+
+bool fat_held_by_nobody(void) { return fs_depth == 0; }
+
+/* Each call, holding the filesystem (fat_enter). */
+bool fat_flush_volume(u32 vol) { fat_enter(); bool r = fat_flush_volume_held(vol); fat_leave(); return r; }
+void fat_forget_volume(u32 vol) { fat_enter(); fat_forget_volume_held(vol); fat_leave(); }
+u32 fat_base(void) { fat_enter(); u32 r = fat_base_held(); fat_leave(); return r; }
+bool fat_mounted(void) { fat_enter(); bool r = fat_mounted_held(); fat_leave(); return r; }
+bool fat_mount_on(u32 vol, u32 dev, u32 base_lba) { fat_enter(); bool r = fat_mount_on_held(vol, dev, base_lba); fat_leave(); return r; }
+bool fat_mount_at(u32 base_lba) { fat_enter(); bool r = fat_mount_at_held(base_lba); fat_leave(); return r; }
+u32 fat_type(void) { fat_enter(); u32 r = fat_type_held(); fat_leave(); return r; }
+bool fat_is_zelr_volume(void) { fat_enter(); bool r = fat_is_zelr_volume_held(); fat_leave(); return r; }
+bool fat_made_here(void) { fat_enter(); bool r = fat_made_here_held(); fat_leave(); return r; }
+bool fat_boot_repair(void) { fat_enter(); bool r = fat_boot_repair_held(); fat_leave(); return r; }
+bool fat_format_at(u32 base_lba, u32 sectors, const char *label) { fat_enter(); bool r = fat_format_at_held(base_lba, sectors, label); fat_leave(); return r; }
+bool fat_format(const char *label) { fat_enter(); bool r = fat_format_held(label); fat_leave(); return r; }
+int fat_list(const char *path, u32 index, char *name_out, u32 *size_out, bool *dir_out) { fat_enter(); int r = fat_list_held(path, index, name_out, size_out, dir_out); fat_leave(); return r; }
+u32 fat_count(const char *path) { fat_enter(); u32 r = fat_count_held(path); fat_leave(); return r; }
+bool fat_stat(const char *path, u32 *size_out, bool *dir_out) { fat_enter(); bool r = fat_stat_held(path, size_out, dir_out); fat_leave(); return r; }
+int fat_read_file(const char *path, u8 *buf, u32 cap) { fat_enter(); int r = fat_read_file_held(path, buf, cap); fat_leave(); return r; }
+u32 fat_test_runs(const char *path) { fat_enter(); u32 r = fat_test_runs_held(path); fat_leave(); return r; }
+bool fat_write_file(const char *path, const u8 *buf, u32 size) { fat_enter(); bool r = fat_write_file_held(path, buf, size); fat_leave(); return r; }
+bool fat_rename(const char *from, const char *to) { fat_enter(); bool r = fat_rename_held(from, to); fat_leave(); return r; }
+bool fat_delete_file(const char *path) { fat_enter(); bool r = fat_delete_file_held(path); fat_leave(); return r; }
+bool fat_mkdir(const char *path) { fat_enter(); bool r = fat_mkdir_held(path); fat_leave(); return r; }
+bool fat_rmdir(const char *path) { fat_enter(); bool r = fat_rmdir_held(path); fat_leave(); return r; }
+u32 fat_reclaim(void) { fat_enter(); u32 r = fat_reclaim_held(); fat_leave(); return r; }
+u64 fat_free_bytes(void) { fat_enter(); u64 r = fat_free_bytes_held(); fat_leave(); return r; }

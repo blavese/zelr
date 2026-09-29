@@ -161,6 +161,9 @@ static int ram_list(const char *dir, u32 index, char *name_out, u32 *size_out, b
 #define USB_MOUNT "/usb"
 
 static const char *route(const char *abs) {
+    /* Held from the choice of volume to the end of the operation, so another
+       task cannot choose the other one in between (fat.c, fat_enter). */
+    fat_enter();
     if (abs[0] == '/' && abs[1] == 'u' && abs[2] == 's' && abs[3] == 'b'
         && (abs[4] == '/' || abs[4] == 0)) {
         fat_select(FAT_VOL_USB);
@@ -194,7 +197,7 @@ bool vfs_volume_missing(const char *abs) {
  * shell's disk and mem described the stick, the black box looked for its log
  * on the stick, and format formatted it. A selection that lasts for one call
  * is the only kind the rest of the kernel can ignore. */
-static void unroute(void) { fat_select(FAT_VOL_DISK); }
+static void unroute(void) { fat_select(FAT_VOL_DISK); fat_leave(); }
 
 int vfs_list(const char *path, u32 index, char *name_out, u32 *size_out, bool *dir_out) {
     char abs[VFS_PATH_MAX];
@@ -369,6 +372,7 @@ bool vfs_rename(const char *from, const char *to) {
        volume these paths are on that has to be there. */
     bool r = same_volume && fat_mounted() && fat_rename(on_a, on_b);
     unroute();
+    fat_leave();                     /* routed twice */
     return r;
 }
 
