@@ -784,16 +784,17 @@ static int fetch_script(const char *src, const char **out) {
 
 /* What a script asked the network for.
  *
- * Same origin is not enforced, because there is nothing here for it to
- * protect: no cookies are sent with it, there is no credential store, and a
- * page that reads another site's public text through this learns what
- * anybody could learn by asking for it. Saying that is better than a check
- * that looks like a security boundary and is not one.
+ * Same origin is not enforced. The request carries the jar's cookies for
+ * the address it goes to, as every request this browser makes does
+ * (fetch.h), so a page can ask another site for what that site would show
+ * the reader anyway, and read the answer -- which a browser with CORS
+ * refuses. This one has no CORS: it is said here rather than pretended, and
+ * it is a gap, not a boundary.
  *
  * The address is resolved against the page, so a script may ask for a path
  * the way it would write one in a link. */
 static int do_request(const char *method, const char *url, const char *body,
-                      const char **out, int *status) {
+                      const char *type, const char **out, int *status) {
     *out = 0;
     *status = 0;
     if (asks_made >= ASKS_MAX) return 0;
@@ -803,8 +804,10 @@ static int do_request(const char *method, const char *url, const char *body,
 
     response_t r;
     int post = method && (method[0] == 'P' || method[0] == 'p');
+    web_body_type = type;
     int rc = post ? web_post(&u, body ? body : "", replybuf, REPLY_MAX, &r)
                   : web_get(&u, replybuf, REPLY_MAX, &r);
+    web_body_type = 0;
 
     asks_made++;
     *status = rc;
@@ -850,6 +853,11 @@ static int picture_size(int node, int *w, int *h) {
 }
 
 static void script_scroll(int y) { scroll = y < 0 ? 0 : y; }
+
+/* document.cookie, from the jar and into it, for the page's address: what a
+   request there would send, less what is HttpOnly (fetch.h). */
+static int script_cookies(char *out, int cap) { return ck_cookies_for(&here, out, cap, 1); }
+static void script_set_cookie(const char *line) { ck_take_line(&here, line, 1); }
 
 /* A page sending the browser somewhere: a link a script clicked, and
    location once it is here. Taken on the loop's next pass, as a form's
@@ -1128,6 +1136,7 @@ static void build(const char *html, int len, int width, int want_sheets,
         jsdom_scroll_with(script_scroll);
         jsdom_navigate_with(script_navigate);
         jsdom_submit_with(submit_form);
+        jsdom_cookies_with(script_cookies, script_set_cookie);
         scripts_ran = jsdom_scripts(script_err, (int)sizeof(script_err));
         jsdom_loaded();
         scripts_changed = jsdom_changed();

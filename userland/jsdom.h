@@ -4653,11 +4653,12 @@ static jxhr jd_req[JD_REQUESTS];
 static int  jd_nreq;
 
 /* How one is actually made. Set by the browser, for the same reason the
-   script fetch is: the network and the page's address are its business. */
-static int (*jd_do_request)(const char *method, const char *url,
-                            const char *body, const char **out, int *status);
+   script fetch is: the network and the page's address are its business.
+   `type` is what the body is, when there is one and it is not a form. */
+static int (*jd_do_request)(const char *method, const char *url, const char *body,
+                            const char *type, const char **out, int *status);
 
-void jsdom_request_with(int (*fn)(const char *, const char *, const char *,
+void jsdom_request_with(int (*fn)(const char *, const char *, const char *, const char *,
                                   const char **, int *)) {
     jd_do_request = fn;
 }
@@ -4761,7 +4762,7 @@ __attribute__((unused)) static int jsdom_requests(void) {
         if (!url[0]) continue;
         const char *text = 0;
         int status = 0;
-        int len = jd_do_request(method, url, body, &text, &status);
+        int len = jd_do_request(method, url, body, 0, &text, &status);
         jval resp = len > 0 && text ? js_from_str(js_str_n(&jd_J, text, (u32)len)) : jd_str("");
         js_set(&jd_J, o, "status", js_num(status > 0 ? status : 0));
         js_set(&jd_J, o, "readyState", js_num(4));
@@ -5326,6 +5327,10 @@ static int jd_resolve(const char *href, char *out, int cap) {
     url_text(&u, out, cap);
     return 1;
 }
+
+static jobj *jd_interface(jctx *J, const char *name, jobj *parent_proto, jnative ctor, int arity);
+
+#include "jswin.h"
 
 /* --- the hooks -----------------------------------------------------------------------------------
  *
@@ -5945,6 +5950,7 @@ static void jd_setup_document(jctx *J, jobj *document) {
     jd_accessor(J, d, "head", nat_doc_head, 0);
     jd_accessor(J, d, "body", nat_doc_body, 0);
     jd_accessor(J, d, "title", nat_doc_title, nat_doc_set_title);
+    jd_accessor(J, d, "cookie", nat_doc_cookie, nat_doc_set_cookie);
     jd_accessor(J, d, "URL", nat_doc_url, 0);
     jd_accessor(J, d, "documentURI", nat_doc_url, 0);
     jd_accessor(J, d, "domain", nat_doc_domain, 0);
@@ -6087,6 +6093,7 @@ static void jd_setup(jctx *J) {
     }
 
     jd_setup_window(J);
+    jd_setup_navigator(J);
 }
 
 /* --- opening and closing the world -----------------------------------------------------------

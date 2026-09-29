@@ -16,6 +16,7 @@
 #include "alloc.h"
 #include "dom.h"
 #include "css.h"
+#include "fetch.h"
 #include "jsdom.h"
 
 static int failed;
@@ -112,6 +113,28 @@ static int fake_script(const char *src, const char **out) {
     for (const char *p = src; *p; p++)
         if (*p == '#') { *out = p + 1; int n = 0; while (p[1 + n]) n++; return n; }
     return 0;
+}
+
+/* The browser's own cookie jar (fetch.h), for a page at one address, which
+   is what browser.c hands a page too. */
+static url_t jar_at;
+static int jar_get(char *out, int cap) { return ck_cookies_for(&jar_at, out, cap, 1); }
+static void jar_set(const char *line) { ck_take_line(&jar_at, line, 1); }
+
+/* Requests a page makes, written down instead of sent. */
+static char asked[512];
+static int fake_request(const char *method, const char *url, const char *body, const char *type,
+                        const char **out, int *status) {
+    int w = 0;
+    const char *parts[4] = { method, url, body ? body : "", type ? type : "-" };
+    for (int k = 0; k < 4; k++) {
+        if (k) asked[w++] = ' ';
+        for (const char *p = parts[k]; *p && w < (int)sizeof(asked) - 2; p++) asked[w++] = *p;
+    }
+    asked[w] = 0;
+    *out = "ok";
+    *status = 200;
+    return 2;
 }
 
 /* Where a pretend layout put everything: one box, for every element. */
@@ -996,6 +1019,56 @@ int main(void) {
         run_scripts(&page, err, (int)sizeof(err), 0);
         ok("a form the reader sends is the page's to cancel", jsdom_submitting(dom_by_id(&page, "f")) == 1);
         oks("and its handler ran", content_of(dom_by_id(&page, "out")), "mine");
+    }
+
+    /* --- what the browser says it is ------------------------------------------------
+     *
+     * Exactly what it sends, and true of this browser: the BBC, Apple and
+     * Google stopped at navigator. */
+    oks("navigator.userAgent is what every request says (web.h, WEB_USER_AGENT)",
+        titled("<script>document.title = navigator.userAgent;</script>"), WEB_USER_AGENT);
+    oks("and the rest of navigator is this browser's own",
+        titled("<script>var n = navigator;"
+               "document.title = [n.platform, n.language, n.languages.length, n.cookieEnabled, n.onLine,"
+               " n.webdriver, n.plugins.length, n.mimeTypes.length, n.maxTouchPoints, n.pdfViewerEnabled,"
+               " n.javaEnabled(), 'userAgentData' in n, 'serviceWorker' in n, 'geolocation' in n,"
+               " n instanceof Navigator, Object.getOwnPropertyNames(n).length,"
+               " typeof n.hardwareConcurrency == 'undefined' || n.hardwareConcurrency > 0].join(' ');</script>"),
+        "zelr en-GB 1 true true false 0 0 0 false false false false false true 0 true");
+    {
+        jsdom_request_with(fake_request);
+        asked[0] = 0;
+        load("<script>document.title = navigator.sendBeacon('/log', 'left at 3');</script>");
+        char err[128];
+        run_scripts(&page, err, (int)sizeof(err), 0);
+        oks("sendBeacon takes the request", page.title >= 0 ? page.arena + page.title : "", "true");
+        pump_until(1, 2000);
+        oks("and makes it on the next pass, as a POST of plain text",
+            asked, "POST /log left at 3 text/plain;charset=UTF-8");
+        jsdom_request_with(0);
+    }
+    {
+        /* The server's cookies, one of them HttpOnly, then the page's go at
+           them. */
+        ck_forget_all();
+        url_parse("https://shop.example/basket", &jar_at);
+        ck_take_one(&jar_at, "sid=s3cret; Path=/; HttpOnly");
+        ck_take_one(&jar_at, "theme=dark; Path=/");
+        jsdom_cookies_with(jar_get, jar_set);
+        oks("document.cookie shows the jar's cookies but not an HttpOnly one",
+            titled("<script>var before = document.cookie;"
+                   "document.cookie = 'seen=1; path=/';"
+                   "document.cookie = 'sid=stolen';"
+                   "document.cookie = 'fake=1; HttpOnly';"
+                   "document.cookie = 'theme=; expires=Thu, 01 Jan 1970 00:00:00 GMT';"
+                   "document.title = before + ' | ' + document.cookie;</script>"),
+            "theme=dark | seen=1");
+        char sent[512];
+        ck_header(&jar_at, sent, (int)sizeof(sent));
+        oks("and a script can neither change an HttpOnly cookie nor make one",
+            sent, "sid=s3cret; seen=1");
+        jsdom_cookies_with(0, 0);
+        ck_forget_all();
     }
 
     /* --- a page that uses up its memory ---------------------------------------
