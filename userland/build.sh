@@ -21,6 +21,9 @@ fi
 # GNU stat and BSD stat spell this differently, and macOS ships the BSD one.
 filesize() { stat -c %s "$1" 2>/dev/null || stat -f %z "$1" 2>/dev/null || echo '?'; }
 
+# Without the debug information the compiler adds by default: nothing reads
+# it, and pasted into the kernel image it was two thirds of it, leaving a 64
+# MiB machine too little room (tools/check_image.py).
 mkdir -p ../build/user
 for src in *.c; do
   name="${src%.c}"
@@ -32,6 +35,7 @@ for src in *.c; do
     -mno-red-zone \
     -Wall -Wextra \
     -Wl,-T,../sdk/zelr.ld -Wl,--build-id=none \
+    -Wl,--strip-debug \
     -o "../build/user/$name.elf" "$src"
   echo "  $name.elf  $(filesize "../build/user/$name.elf") bytes"
 done

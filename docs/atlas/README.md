@@ -125,6 +125,10 @@ numbered files are still to 6048716; where they disagree with this list, this li
   task mounting a stick could be preempted half way and the disk selected under it, writing the stick's
   geometry into the disk's record. [fat]: six checks (a rival waits and does not change the selection, a
   killed holder gives it back).
+- **An image a small machine can hold (userland/build.sh, tools/check_image.py).** Programs are built
+  without the debug information the compiler added by default, which was two thirds of the kernel image
+  (27 MB, now 9 MB): on the 64 MiB machine the heap came out 20 MiB instead of 24 and programs had almost
+  no memory. A gate step fails on any program carrying a .debug section or an image past 16 MiB.
 ### 0.75.0
 
 - **Auto margins, and columns lined up (11).** In a row, auto margins take the room left after growing and

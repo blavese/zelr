@@ -281,6 +281,15 @@ run_step "the kernel and its programs agree on the structs" abicheck
 ssecheck() { python tools/check_sse.py build/zelr.elf; }
 run_step "the kernel uses no vector instructions" ssecheck
 
+# --- and leaves a small machine room for its programs -----------------------
+#
+# Every program is pasted into the image, and the image is loaded whole at 16
+# MiB. It had grown to 27 MB, two thirds of it debug information nothing
+# reads, and on the 64 MiB machine run.sh starts the heap came out short and
+# programs had almost no memory. Reads the programs and the image's size.
+imagecheck() { python tools/check_image.py; }
+run_step "the image leaves a small machine room for its programs" imagecheck
+
 # --- and on what a machine with no settings file looks like ---------------
 #
 # The other half of the same problem. The kernel holds the defaults because
