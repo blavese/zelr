@@ -1816,7 +1816,14 @@ static inline int css_part_matches(const csheet *s, const ddoc *d, int el,
         }
     }
     switch (c->pseudo) {
-        case PS_HOVER: if (!m || m->hover != el) return 0; break;
+        case PS_HOVER: {
+            /* The element under the pointer and each one it is inside, as
+               CSS has it: a card's :hover is for a pointer anywhere on it. */
+            int h = m ? m->hover : -1;
+            while (h >= 0 && h != el) h = d->nodes[h].parent;
+            if (h != el) return 0;
+            break;
+        }
         case PS_LINK:
         case PS_VISITED: if (n->tag != T_A || !dom_attr(d, el, "href")) return 0;
                          break;
@@ -1868,6 +1875,26 @@ static inline int css_part_matches(const csheet *s, const ddoc *d, int el,
         for (int k = 0; k < (c->nneg > 0 ? c->nneg : 1); k++)
             if (css_part_matches(s, d, el, &s->negs[c->neg + k], m)) return 0;
     return 1;
+}
+
+/* Which of an element and those it is inside some :hover rule reaches with
+   the pointer on it: what changes on the page when the pointer moves there.
+   The browser lays the page out again only when this changes, not whenever
+   the element under the pointer does -- which, once words belong to their
+   element, is every paragraph the pointer crosses. Into out; how many. */
+static inline int css_hover_reach(const csheet *s, const ddoc *d, int el, int *out, int cap) {
+    int n = 0;
+    for (int e = el; e >= 0 && e < d->count && n < cap; e = d->nodes[e].parent) {
+        if (d->nodes[e].kind != DN_ELEMENT) continue;
+        cmatch m;
+        m.hover = e;
+        m.visited_links = 0;
+        for (int k = 0; k < s->nsels; k++) {
+            if (s->sels[k].pseudo != PS_HOVER) continue;
+            if (css_part_matches(s, d, e, &s->sels[k], &m)) { out[n++] = e; break; }
+        }
+    }
+    return n;
 }
 
 static inline int css_matches(const csheet *s, const ddoc *d, int el,

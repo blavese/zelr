@@ -124,6 +124,7 @@ static char  status[URL_TEXT + 96];
 static int   scroll;
 static int   over_link = -1;
 static int   hover_node = -1;
+static int   hover_reach[16], hover_n;   /* what :hover reaches there (css_hover_reach) */
 
 /* The size everything relative is relative to. A page that says 1.2em means
    twenty per cent more than this, and a page that says nothing gets it. */
@@ -1057,6 +1058,7 @@ static void build(const char *html, int len, int width, int want_sheets,
     }
 
     hover_node = -1;
+    hover_n = 0;
     relayout(width);
     find_item = -1;
     publish_text();
@@ -2037,8 +2039,15 @@ int main(int argc, char **argv) {
         if (node_under != last_hover) {
             last_hover = node_under;
             hover_node = node_under;
-            relayout(view_w - UI_PAD * 2);
-            over_link = lay_link_at(&page, dx, dy);
+            int reach[16], nr = css_hover_reach(&sheet, &doc, node_under, reach, 16);
+            int same = nr == hover_n;
+            for (int k = 0; same && k < nr; k++) same = reach[k] == hover_reach[k];
+            if (!same) {
+                hover_n = nr;
+                for (int k = 0; k < nr; k++) hover_reach[k] = reach[k];
+                relayout(view_w - UI_PAD * 2);
+                over_link = lay_link_at(&page, dx, dy);
+            }
         }
 
         /* A click goes to the page before it goes to the browser.
@@ -2072,6 +2081,10 @@ int main(int argc, char **argv) {
            page has had it, so a handler that says the ordinary thing should
            not happen has already cleared the release and neither the field
            nor the link sees it. */
+        /* What is drawn inside a button -- its icon, its words -- is the
+           button as far as a click goes. */
+        for (int up = node_under; up >= 0; up = doc.nodes[up].parent)
+            if (lay_button_box(&doc, up)) { node_under = up; break; }
         if (in.released && node_under >= 0) {
             int ck = lay_control_kind(&doc, node_under);
             if (ck != CTL_NONE && ck != CTL_HIDDEN) {
@@ -2099,7 +2112,10 @@ int main(int argc, char **argv) {
                 } else if (ck == CTL_BUTTON) {
                     const char *t = dom_attr(&doc, node_under, "type");
                     focus_control(-1);
-                    if (!(t && lay_same_fold(t, "reset")))
+                    /* type="button" is the page's own control -- a menu, a
+                       clear button -- whose click is its script's, and it
+                       sent the form. A <button> with no type submits. */
+                    if (!(t && (lay_same_fold(t, "reset") || lay_same_fold(t, "button"))))
                         submit_form(form_of(node_under));
                 } else {
                     focus_control(node_under);

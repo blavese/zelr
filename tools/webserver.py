@@ -475,6 +475,23 @@ POSTED = b"""<html><head><title>a form that posts</title></head><body>
 </form>
 </body></html>"""
 
+# A search bar as sites write one: a flex row with a field that is 100% of it
+# and a button that is only a magnifying glass. The field was laid out as an
+# empty box, so what was typed into it was never drawn, and a click on the
+# glass was a click on the glass, not on the button, and sent nothing. The
+# clear button is type="button", which sent the form.
+SEARCH_BAR = b"""<html><head><title>a search bar</title></head><body>
+<style>
+.bar{display:flex;width:420px;background:#EEEEEE}
+.bar input{width:100%;border:0;background:#00A000;height:36px}
+.bar button{background:#E08000;border:0;padding:6px}
+.bar .glass{display:block;width:24px;height:24px;background:#6000C0}
+.bar .clear{background:#006060;border:0;width:30px}
+</style>
+<h1>Find something</h1>
+<form class="bar" action="/said" method="get"><input name="find"><button type="button" class="clear"></button><button type="submit"><span class="glass"></span></button></form>
+</body></html>"""
+
 # What the server was actually sent, which is the only account of a form that
 # is not the client marking its own work.
 RECEIVED = []
@@ -525,11 +542,19 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if not pair:
                 continue
             out.append(b"<li>" + pair.encode() + b"</li>")
-        # A way on to the form that posts, so a check does not have to type
-        # an address: typing one goes through the serial port a character at
-        # a time and the guest drops what it cannot drain in time.
-        out.append(b"</ul><p><a href=\"/posts\">post one</a></p>"
-                   b"</body></html>")
+        # A way on to the form that posts, and from there to the search bar,
+        # so a check does not have to type an address: typing one goes
+        # through the serial port a character at a time and the guest drops
+        # what it cannot drain in time.
+        if how == "post":
+            # A menu of links laid out as a flex row, which is how sites
+            # write one: a link that was a flex item was not a link.
+            out.append(b"</ul><nav style=\"display:flex;gap:12px\">"
+                       b"<a href=\"/search-bar\" style=\"padding:4px\">search bar</a>"
+                       b"<span>here</span></nav></body></html>")
+        else:
+            out.append(b"</ul><p><a href=\"/posts\">post one</a></p>"
+                       b"</body></html>")
         self._send(b"".join(out))
 
     def do_POST(self):
@@ -593,6 +618,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._send(FORM)
         elif path == "/posts":
             self._send(POSTED)
+        elif path == "/search-bar":
+            self._send(SEARCH_BAR)
         elif path == "/said":
             self._said("get", query)
         elif path == "/second":

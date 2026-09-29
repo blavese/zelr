@@ -135,6 +135,27 @@ numbered files are still to 6048716; where they disagree with this list, this li
   `lay_style` gives a text node its parent's inherited style). They were dropped: `<a style="display:
   flex">Sign in</a>` drew nothing, and W3C's, Mozilla's and Microsoft's menus had no words (atlas 11 §10
   12). layouttest: a row, a row of words alone, a grid.
+- **Fields and buttons (11).** A field that is a flex item or a grid item is a field (`lay_block_placed`
+  sends controls other than `<button>` to the inline code): it was an empty box, so what was typed into
+  NHS's search box, or any search box in a flex row, was never drawn. A field takes the CSS width
+  (auto while measuring, as a percentage of a width being worked out), height, min-width and max-width,
+  and the width its row gave it (`flex_sized`). A `<button>` with elements in it is laid out as the box it
+  is with them in it (`lay_button_box`), not as its words: GOV.UK's and Bloomberg's magnifying glasses and
+  Ars Technica's menu icons are drawn; a click on anything inside a button is the button's (browser.c).
+  layouttest: a field in a row, one that grew, a field's width and height, a button round an icon;
+  formcheck (a search bar: a field 100% of a flex row, typed into, sent by a click on the button's icon).
+- **Links, words and buttons that can be used (11, css.h, browser.c).** A link that is a block or a flex or
+  grid item is a link (`lay_link_open` from `lay_block_placed` as well as `lay_inline`; each box and
+  picture inside it carries it, and the link in force outside is put back on the way out, `stack_link`,
+  `entry_link`): only links inside a line were, so no menu of block or flex links could be followed
+  (python.org had 48 links and has 139). A picture or a box in a link can be clicked (`lay_link_at` takes
+  LK_IMAGE and LK_BOX, words with their 2 pixels of slack): a site's logo could not be. Words belong to
+  the element they are in (`lctx.word_node` into each text item's node), so a click on them reaches a
+  handler on it. `:hover` matches the element under the pointer and each one it is inside, as CSS has it,
+  and the browser lays the page out again only when what the :hover rules reach changes
+  (`css_hover_reach`), not whenever the element under the pointer does. A `<button type="button">` no
+  longer sends its form. layouttest: nine checks; formcheck 27 (the way to the search bar is a link in a
+  flex row, and the bar's type="button" button sends nothing).
 
 ### 0.73.0
 

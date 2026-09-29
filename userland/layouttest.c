@@ -52,6 +52,7 @@ static limage fake[4];
 static int nfake;
 
 static void picture_at(const char *id, int w, int h);
+static const char *hover_id;     /* the element under the pointer, for :hover */
 
 /* The same three steps the browser takes, without the fetching. */
 static void lay(const char *html, int width) {
@@ -78,7 +79,7 @@ static void lay(const char *html, int width) {
 
     for (int i = 0; i < doc.count; i++) { inl[i].at = 0; inl[i].n = 0; }
     css_index(&sheet, &index_);
-    match.hover = -1;
+    match.hover = hover_id ? dom_by_id(&doc, hover_id) : -1;
     match.visited_links = 0;
     lay_run(&page, &doc, &sheet, &index_, &match, inl, fake, nfake,
             width, 16);
@@ -1530,6 +1531,28 @@ int main(void) {
             qb ? qb->w : -1);
     }
 
+    /* --- fields sized by the page ---------------------------------------------- */
+    {
+        lay("<style>.f{display:flex;width:600px}.f input{width:100%}.f .g{width:80px;flex-shrink:0;height:20px;background:#000}</style>"
+            "<form class=f><input id=q><div class=g></div></form>", 800);
+        const litem *q = 0;
+        for (int i = 0; i < page.nitems; i++)
+            if (page.items[i].node == by_id("q") && page.items[i].kind == LK_FIELD) q = &page.items[i];
+        okn("a field in a flex row is a field, as wide as the row lets it be", q && q->w == 520, q ? q->w : -1);
+        lay("<style>.f{display:flex;width:600px}.f input{width:100px;flex:1}.f .g{width:80px;flex-shrink:0;height:20px;background:#000}</style>"
+            "<form class=f><input id=q2><div class=g></div></form>", 800);
+        const litem *q2 = 0;
+        for (int i = 0; i < page.nitems; i++)
+            if (page.items[i].node == by_id("q2") && page.items[i].kind == LK_FIELD) q2 = &page.items[i];
+        okn("a field that grows in its row is as wide as it grew", q2 && q2->w == 520, q2 ? q2->w : -1);
+        lay("<style>input{width:300px;height:30px;box-sizing:border-box}</style><p><input id=r></p>", 800);
+        const litem *r = 0;
+        for (int i = 0; i < page.nitems; i++)
+            if (page.items[i].node == by_id("r") && page.items[i].kind == LK_FIELD) r = &page.items[i];
+        okn("a field takes the width and height its rules give it", r && r->w == 300 && r->h == 30,
+            r ? r->w * 1000 + r->h : -1);
+    }
+
     /* --- a box squeezed keeps its padding ---------------------------------------- */
     {
         lay("<style>.r{display:flex;width:300px}.w{width:400px;height:10px;background:#000}"
@@ -1537,6 +1560,16 @@ int main(void) {
             "<div class=r><div class=w></div><div class=b id=pb2><span class=g></span></div></div>", 800);
         const litem *pb2 = box_of(by_id("pb2"));
         okn("squeezed, a box keeps its padding round what is in it", pb2 && pb2->w == 36, pb2 ? pb2->w : -1);
+    }
+
+    /* --- a button with things in it -------------------------------------------- */
+    {
+        lay("<style>.i{display:block;width:24px;height:24px;background:#000}</style>"
+            "<div><button id=bt><span class=i id=ic></span><span>find</span></button></div>", 800);
+        const litem *bt = box_of(by_id("bt")), *ic = box_of(by_id("ic"));
+        okn("a button with an icon in it is a box with the icon drawn",
+            bt && ic && ic->w == 24 && ic->x >= bt->x && ic->x + ic->w <= bt->x + bt->w && word("find") != 0,
+            bt ? bt->w : -1);
     }
 
     /* --- words straight inside a row ------------------------------------------ */
@@ -1559,6 +1592,49 @@ int main(void) {
         const litem *cd = box_of(by_id("cd")), *cd2 = box_of(by_id("cd2"));
         okn("a basis of 100% inside a card as wide as its contents is its contents",
             cd && cd2 && cd->w == 50 && cd2->x == cd->x + 50, cd ? cd->w : -1);
+    }
+
+    /* --- links that are blocks, items and pictures ------------------------------ */
+    {
+        lay("<style>a.b{display:block}.r{display:flex}</style><a class=b href=x>blocky</a>"
+            "<div class=r><a href=y>flexed</a><a href=z>second</a></div><p>plain</p>", 600);
+        const litem *bl = word("blocky"), *fl = word("flexed"), *sc = word("second"), *pl = word("plain");
+        ok("a link that is a block is a link", bl && bl->link >= 0);
+        ok("and so is one that is a flex item, each its own",
+           fl && sc && fl->link >= 0 && sc->link >= 0 && fl->link != sc->link);
+        ok("and what comes after them is not", pl && pl->link < 0);
+        lay("<style>a.b{display:block}</style><a class=b href=x>one <b>two</b> three</a>", 600);
+        const litem *w3 = word("three"), *w1 = word("one");
+        ok("words after something inline in a block link are still the link",
+           w1 && w3 && w1->link >= 0 && w3->link == w1->link);
+        picture_at("lg", 80, 40);
+        lay("<style>a.c{display:block;background:#eee;padding:10px}</style>"
+            "<a class=c href=home><img id=lg src=x></a><p><a href=q>in <b>line</b></a> after</p>", 600);
+        picture_at("lg", 80, 40);
+        lay("<style>a.c{display:block;background:#eee;padding:10px}</style>"
+            "<a class=c href=home><img id=lg src=x></a><p><a href=q>in <b>line</b></a> after</p>", 600);
+        nfake = 0;
+        const litem *lg = image_of(by_id("lg")), *af = word("after"), *ln = word("line");
+        ok("a picture in a link can be clicked", lg && lay_link_at(&page, lg->x + 5, lg->y + 5) >= 0);
+        ok("and so can the box round it", lg && lay_link_at(&page, lg->x + lg->w + 20, lg->y + 5) >= 0);
+        ok("a link inside a line ends where it ends", ln && af && ln->link >= 0 && af->link < 0);
+    }
+
+    /* --- words belong to their element, and :hover to what is round it ---------- */
+    {
+        lay("<div id=wd><span id=sp>inner</span> outer</div>", 600);
+        const litem *inr = word("inner"), *out = word("outer");
+        okn("a word's element is the one it is in",
+            inr && out && inr->node == by_id("sp") && out->node == by_id("wd")
+            && lay_node_at(&page, inr->x + 2, inr->y + 2) == by_id("sp"),
+            inr && out ? inr->node * 1000 + out->node : -1);
+        hover_id = "deep";
+        lay("<style>.card:hover .t{display:none}</style><div class=card><p class=t>gone</p><p><b id=deep>here</b></p></div>", 600);
+        hover_id = 0;
+        ok(":hover reaches an element with the pointer on something inside it", !word("gone") && word("here"));
+        int reach[8];
+        int nr = css_hover_reach(&sheet, &doc, by_id("deep"), reach, 8);
+        ok("and what it reaches is worked out", nr == 1 && doc.nodes[reach[0]].tag == T_DIV);
     }
 
     puts(failed ? "LAYOUTTEST_FAIL\n" : "LAYOUTTEST_PASS\n");

@@ -201,6 +201,18 @@ static inline int lay_control_kind(const ddoc *d, int el) {
     return CTL_TEXT;
 }
 
+/* A <button> with elements in it -- an icon, a span of words -- is laid out
+   as the box it is, with what is in it, as it already was as a flex item.
+   Drawn as a control it showed only its words, and GOV.UK's search button,
+   a magnifying glass with its words hidden, was an empty square. */
+static inline int lay_button_box(const ddoc *d, int el) {
+    if (el < 0 || el >= d->count || d->nodes[el].kind != DN_ELEMENT || d->nodes[el].tag != T_BUTTON)
+        return 0;
+    for (int c = d->nodes[el].first; c >= 0; c = d->nodes[c].next)
+        if (d->nodes[c].kind == DN_ELEMENT) return 1;
+    return 0;
+}
+
 /* The words on a control, which are not what it submits: a button carries a
    label and sends a value, and a password shows none of what it holds. */
 /* An element's words, leaving out any drawing inside it: an icon's <title>
@@ -293,6 +305,7 @@ typedef struct {
     int line_started;
 
     int cur_link;                 /* into links, or -1 */
+    int word_node;                /* the element the words being laid out are in */
     int list_depth;
     int list_count[LAY_DEPTH];
 
@@ -562,6 +575,7 @@ static inline void lay_word(lctx *L, const char *s, int n, const cstyle *st,
     it->under = st->underline;
     it->strike = st->strike;
     it->link = L->cur_link;
+    it->node = L->word_node;
     L->pen += w;
     L->line_n++;
     lay_line_fit(L, tface_h(face), st->line_h);
@@ -590,6 +604,7 @@ static inline void lay_text_run(lctx *L, const char *s, const cstyle *st,
                 it->face = (short)face;
                 it->color = st->color;
                 it->link = L->cur_link;
+                it->node = L->word_node;
                 L->pen += w;
                 L->line_n++;
                 lay_line_fit(L, tface_h(face), st->line_h);
@@ -1423,6 +1438,17 @@ static int lay_cleared(const lctx *L, int y, int clear, int x, int w) {
    before any of its words are laid down. The background's slot is taken
    here and filled in when the box closes, so that it lands in the display
    list behind what is written on top of it. */
+/* A link: its address kept, and everything laid out inside it until it is
+   left carries it. */
+static inline void lay_link_open(lctx *L, int at) {
+    const char *href = dom_attr(L->d, at, "href");
+    if (href && *href && L->out->nlinks < LAY_LINKS) {
+        L->out->links[L->out->nlinks].node = at;
+        L->out->links[L->out->nlinks].href = lay_put(L, href, w_len(href));
+        L->cur_link = L->out->nlinks++;
+    }
+}
+
 static inline void lay_inline_open(lctx *L, int node, const cstyle *st,
                                    int *x0, int *top, int *slot) {
     *x0 = L->pen;
@@ -1435,6 +1461,7 @@ static inline void lay_inline_open(lctx *L, int node, const cstyle *st,
             *slot = L->out->nitems - 1;
             bg->kind = LK_BOX;
             bg->node = node;
+            bg->link = L->cur_link;
             bg->w = 0;
             bg->h = 0;
         }
@@ -1587,6 +1614,8 @@ static inline void lay_inline(lctx *L, int node, const cstyle *parent, int *y) {
     const ddoc *d = L->d;
     cstyle stack[LAY_DEPTH];
     int stack_node[LAY_DEPTH];
+    int stack_link[LAY_DEPTH];     /* the link in force outside each */
+    int entry_link = L->cur_link;
     int stack_x[LAY_DEPTH];        /* where the box began */
     int stack_top[LAY_DEPTH];      /* and on which line */
     int stack_slot[LAY_DEPTH];     /* its background, taken now, filled later */
@@ -1607,7 +1636,7 @@ static inline void lay_inline(lctx *L, int node, const cstyle *parent, int *y) {
             for (int p = at; p >= 0; p = d->nodes[p].parent)
                 if (p == owner) { still_inside = 1; break; }
             if (still_inside) break;
-            if (d->nodes[owner].tag == T_A) L->cur_link = -1;
+            L->cur_link = stack_link[sp];
             lay_inline_close(L, &stack[sp], stack_x[sp], stack_top[sp],
                              stack_slot[sp]);
             sp--;
@@ -1615,6 +1644,11 @@ static inline void lay_inline(lctx *L, int node, const cstyle *parent, int *y) {
 
         const dnode *n = &d->nodes[at];
         if (n->kind == DN_TEXT) {
+            /* Words belong to the element they are in: a click on them is a
+               click on it, and it is what is under the pointer for :hover.
+               They had no element, so a handler on a <div> round some words
+               was never reached by clicking the words. */
+            L->word_node = n->parent;
             if ((stack[sp].visible || lay_show_hidden) && n->text >= 0)
                 lay_text_run(L, d->arena + n->text, &stack[sp], y);
         } else {
@@ -1639,7 +1673,8 @@ static inline void lay_inline(lctx *L, int node, const cstyle *parent, int *y) {
                         || st.display == D_LIST_ITEM || st.display == D_TABLE
                         || st.display == D_TABLE_ROW || st.display == D_TABLE_GROUP
                         || st.display == D_GRID;
-            if (n->tag != T_BR && n->tag != T_IMG && lay_control_kind(d, at) == CTL_NONE) {
+            if (n->tag != T_BR && n->tag != T_IMG
+                && (lay_control_kind(d, at) == CTL_NONE || lay_button_box(d, at))) {
                 if ((st.position == POS_ABSOLUTE || st.position == POS_FIXED)
                     && (n->tag != T_SVG || at != node)) {
                     lay_inline_piece(L, at, &stack[sp], 1, y);
@@ -1805,6 +1840,7 @@ static inline void lay_inline(lctx *L, int node, const cstyle *parent, int *y) {
                         lay_cs(&s2, &st);
                         s2.color = 0x6B6B6B;
                         s2.italic = 1;
+                        L->word_node = at;
                         lay_text_run(L, alt, &s2, y);
                     }
                 }
@@ -1831,6 +1867,23 @@ static inline void lay_inline(lctx *L, int node, const cstyle *parent, int *y) {
                     int nc = size ? lay_number(size) : 0;
                     if (nc < 1) nc = 20;
                     fw = tface_wn("0", 1, face) * nc + 10;
+                }
+
+                /* The page's width and height for it, as for a picture: a
+                   search box is width: 100% of its form nearly everywhere,
+                   and twenty letters wide it left the rest of the bar empty.
+                   A percentage of a width still being worked out is the
+                   twenty letters; one in a flex row takes what the row gave
+                   it. */
+                if (ck != CTL_CHECK && ck != CTL_RADIO) {
+                    int frame = st.border_box ? 0 : st.pl + st.pr + st.bl + st.br;
+                    int vframe = st.border_box ? 0 : st.pt + st.pb + st.bt + st.bb;
+                    int sw = lay_pct_cyclic(L, at, &st, &stack[sp]) ? -1 : st.width;
+                    if (sw >= 0) fw = sw + frame;
+                    if (st.max_width >= 0 && fw > st.max_width + frame) fw = st.max_width + frame;
+                    if (st.min_width >= 0 && fw < st.min_width + frame) fw = st.min_width + frame;
+                    if (L->flex_sized == at) fw = L->line_width;
+                    if (st.height > 0) fh = st.height + vframe;
                 }
 
                 if (fw > L->line_width) fw = L->line_width;
@@ -1898,17 +1951,10 @@ static inline void lay_inline(lctx *L, int node, const cstyle *parent, int *y) {
                 sp++;
                 lay_cs(&stack[sp], &st);
                 stack_node[sp] = at;
+                stack_link[sp] = L->cur_link;
+                if (n->tag == T_A) lay_link_open(L, at);
                 lay_inline_open(L, at, &st, &stack_x[sp], &stack_top[sp],
                                 &stack_slot[sp]);
-                if (n->tag == T_A) {
-                    const char *href = dom_attr(d, at, "href");
-                    if (href && *href && L->out->nlinks < LAY_LINKS) {
-                        L->out->links[L->out->nlinks].node = at;
-                        L->out->links[L->out->nlinks].href =
-                            lay_put(L, href, w_len(href));
-                        L->cur_link = L->out->nlinks++;
-                    }
-                }
             }
         }
 
@@ -1932,7 +1978,7 @@ static inline void lay_inline(lctx *L, int node, const cstyle *parent, int *y) {
                          stack_slot[sp]);
         sp--;
     }
-    L->cur_link = -1;
+    L->cur_link = entry_link;
 }
 
 /* True when a node starts a new block rather than flowing into a line. */
@@ -3895,7 +3941,8 @@ static void lay_block_placed(lctx *L, int node, const cstyle *parent, int x,
        that draws them, on a line of its own. As a box it had no children
        to lay out and came out as nothing, or, for a drawing, as its shapes
        laid out as though they were the page. */
-    if (d->nodes[node].tag == T_IMG || d->nodes[node].tag == T_SVG) {
+    if (d->nodes[node].tag == T_IMG || d->nodes[node].tag == T_SVG
+        || (d->nodes[node].tag != T_BUTTON && lay_control_kind(d, node) != CTL_NONE)) {
         lay_line_start(L, *y, x, avail, A_LEFT);
         lay_inline(L, node, parent, y);
         lay_line_end(L, y);
@@ -3984,6 +4031,12 @@ static void lay_block_placed(lctx *L, int node, const cstyle *parent, int x,
     /* The background goes in the list before the contents and its size is
        not known until they are laid out, so its slot is taken now and
        filled in at the end. */
+    /* A link that is a block -- a card, an item of a menu laid out as a flex
+       row -- is a link as one inside a line is: only those were, and every
+       menu of block or flex links on the web could not be followed. */
+    int held_link = L->cur_link;
+    if (d->nodes[node].tag == T_A) lay_link_open(L, node);
+
     int slot = -1;
     if (st.masked) st.has_bg = 0;
     if (st.has_bg || st.bt || st.br || st.bb || st.bl) {
@@ -3992,6 +4045,7 @@ static void lay_block_placed(lctx *L, int node, const cstyle *parent, int x,
             slot = L->out->nitems - 1;
             bg->kind = LK_BOX;
             bg->node = node;
+            bg->link = L->cur_link;
         }
     }
     int inside_at = L->out->nitems;
@@ -4076,7 +4130,7 @@ static void lay_block_placed(lctx *L, int node, const cstyle *parent, int x,
         int next = d->nodes[child].next;
         int is_block = lay_is_block_node(L, child, &st);
         if (is_block && (d->nodes[child].tag == T_IMG || d->nodes[child].tag == T_SVG
-                         || lay_control_kind(d, child) != CTL_NONE)) {
+                         || (lay_control_kind(d, child) != CTL_NONE && !lay_button_box(d, child)))) {
             /* A picture or a field made a block is still a picture or a
                field: on a line of its own, drawn by the code that draws
                them, which is the inline code. As a block it had no children
@@ -4099,6 +4153,7 @@ static void lay_block_placed(lctx *L, int node, const cstyle *parent, int x,
                 inline_open = 1;
             }
             if (d->nodes[child].kind == DN_TEXT) {
+                L->word_node = node;
                 if (d->nodes[child].text >= 0)
                     lay_text_run(L, d->arena + d->nodes[child].text, &st, y);
             } else {
@@ -4217,6 +4272,7 @@ static void lay_block_placed(lctx *L, int node, const cstyle *parent, int x,
         bg->radius = (unsigned char)(st.radius > 40 ? 40 : st.radius);
     }
 
+    L->cur_link = held_link;
     *y += st.mb == CSS_AUTO_OFF ? 0 : st.mb;
 }
 
@@ -4244,6 +4300,7 @@ static inline void lay_run(ldoc *out, const ddoc *d, const csheet *s,
     L.imgs = imgs; L.nimgs = nimgs;
     L.out = out; L.root_px = root_px;
     L.line_started = 0; L.pending_space = 0; L.cur_link = -1;
+    L.word_node = -1;
     L.line_at = 0; L.line_n = 0; L.pen = 0;
     L.line_top = 0; L.line_h = 0; L.line_base = 0;
     L.line_left = 0; L.line_width = width; L.align = A_LEFT;
@@ -4297,9 +4354,14 @@ static inline int lay_words(const ldoc *o) {
 static inline int lay_link_at(const ldoc *o, int x, int y) {
     for (int i = o->nitems - 1; i >= 0; i--) {
         const litem *it = &o->items[i];
-        if (it->link < 0 || it->kind != LK_TEXT) continue;
+        if (it->link < 0) continue;
+        /* Words a little generously; a picture or a box inside a link (a
+           logo, a card) exactly: only words were, and a site's logo could
+           not be clicked. */
+        int slop = it->kind == LK_TEXT ? 2 : 0;
+        if (it->kind != LK_TEXT && it->kind != LK_IMAGE && it->kind != LK_BOX) continue;
         if (x >= it->x && x < it->x + it->w
-            && y >= it->y - 2 && y < it->y + it->h + 2) return it->link;
+            && y >= it->y - slop && y < it->y + it->h + slop) return it->link;
     }
     return -1;
 }

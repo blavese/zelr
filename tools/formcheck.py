@@ -75,6 +75,8 @@ SPARE = (0x00, 0xC0, 0xC0)
 CHECK = (0xC0, 0x00, 0xC0)
 UNTICKED = (0x80, 0x80, 0x00)
 BUTTON = (0xE0, 0x80, 0x00)
+GLASS = (0x60, 0x00, 0xC0)      # the icon that is all of the search bar's button
+CLEAR = (0x00, 0x60, 0x60)      # its type="button" button, which must not send it
 LINK = (0x6E, 0x8A, 0xE8)
 
 
@@ -327,6 +329,72 @@ def main():
                     print("      the server was sent %r" % (text,))
                 c.add("with what was typed in the body rather than the address",
                       whole)
+            if got is None:
+                return c.report(keep=keep)
+
+            # --- a search bar as sites write one -----------------------------
+            #
+            # A flex row, a field 100% of it and a button that is only an
+            # icon. The field was an empty box that showed nothing typed
+            # into it, and the icon took the click for itself.
+            posted = typed4 = None
+            mon.wait_screen("fm-posted-wait",
+                            lambda w, h, px: centre_of(px, w, h, FIELD, within=PAGE) is None,
+                            timeout=30)
+            mon.move_to(*PARK)
+            time.sleep(1.2)
+            posted, px5, w5, shot5 = page_now(mon, "fm-posted")
+            link = centre_of(px5, w5, SCREEN_H, LINK, min_pixels=60, within=PAGE)
+            c.add("the answer to a post has a way on to a search bar, a link in a flex row",
+                  link is not None, shot5)
+            if link is None:
+                return c.report(keep=keep)
+            went = mon.click_for(link[0], link[1], "fm-bar",
+                                 lambda w, h, px: centre_of(px, w, h, GLASS, min_pixels=100,
+                                                            within=PAGE) is not None,
+                                 timeout=30)
+            c.add("and a click on that link goes there", went[4], went[3])
+            mon.move_to(*PARK)
+            time.sleep(1.2)
+            bar_shot, px6, w6, shot6 = page_now(mon, "fm-bar-page")
+            field = extent_of(px6, w6, SCREEN_H, FIELD, within=PAGE)
+            glass = centre_of(px6, w6, SCREEN_H, GLASS, min_pixels=100, within=PAGE)
+            wide = field is not None and field[2] - field[0] > 300
+            if field is not None and not wide:
+                print("      the field is %d pixels wide" % (field[2] - field[0]))
+            c.add("a field 100% of a flex row fills what the button leaves", wide, shot6)
+            c.add("and the button's icon is drawn", glass is not None, shot6)
+            if field is None or glass is None:
+                return c.report(keep=keep)
+            # A button of type="button" first: it is the page's, and sends
+            # nothing. Had it sent the form, the page would have gone and the
+            # server's first request would be an empty find= before owls.
+            clear = centre_of(px6, w6, SCREEN_H, CLEAR, min_pixels=100, within=PAGE)
+            c.add("the bar's own button is drawn", clear is not None, shot6)
+            srv.forget()
+            if clear is not None:
+                mon.click(*clear)
+                time.sleep(0.6)
+            mon.click((field[0] + field[2]) // 2, (field[1] + field[3]) // 2)
+            time.sleep(0.6)
+            vm.type("owls", gap=0.18)
+            time.sleep(1.2)
+            mon.move_to(*PARK)
+            time.sleep(0.6)
+            typed4, px7, w7, shot7 = page_now(mon, "fm-bar-typed")
+            c.add("what is typed into it appears in it", typed4 != bar_shot, shot7)
+            c.add("and a button of type button sent nothing", not srv.received())
+            mon.click(*glass)
+            got = None
+            for _ in range(60):
+                if srv.received():
+                    got = srv.received()[0]
+                    break
+                time.sleep(0.5)
+            c.add("a click on the icon inside the button sends the form",
+                  got is not None and "find=owls" in pairs_of(got[1]))
+            if got is not None and "find=owls" not in pairs_of(got[1]):
+                print("      the server was sent %r" % (got,))
         finally:
             vm.stop()
             try:
