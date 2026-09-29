@@ -1664,6 +1664,27 @@ static inline void lay_inline(lctx *L, int node, const cstyle *parent, int *y) {
                     else if (want_w > 0) { ih = ih * want_w / iw; iw = want_w; }
                     else if (want_h > 0) { iw = iw * want_h / ih; ih = want_h; }
 
+                    /* And the page's rules beat the attributes: nearly every
+                       site sizes its pictures in its sheet -- width: 100% of
+                       the card, a height and the other side from the
+                       picture's proportions -- and drawn at the size of the
+                       file instead, a card's picture ran over the next card.
+                       The proportions are the attributes' when both are
+                       given, as other browsers take them, else the file's.
+                       A percentage cannot be resolved while the picture is
+                       measured for how wide it wants to be, and is left out
+                       there. */
+                    int rw = iw, rh = ih;
+                    int cw_ = (L->measuring && st.width_pct) ? -1 : st.width;
+                    int ch_ = st.height;
+                    if (cw_ > 0 && ch_ > 0) { iw = cw_; ih = ch_; }
+                    else if (cw_ > 0) { ih = (int)((long long)rh * cw_ / (rw > 0 ? rw : 1)); iw = cw_; }
+                    else if (ch_ > 0) { iw = (int)((long long)rw * ch_ / (rh > 0 ? rh : 1)); ih = ch_; }
+                    if (st.max_width >= 0 && iw > st.max_width && !(L->measuring && st.width_pct)) {
+                        ih = (int)((long long)ih * st.max_width / (iw > 0 ? iw : 1));
+                        iw = st.max_width;
+                    }
+
                     if (iw > L->line_width && iw > 0) {
                         ih = ih * L->line_width / iw;
                         iw = L->line_width;

@@ -95,6 +95,13 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.74.0 (in progress)
+
+- **Pictures sized by the page's rules (11).** An `<img>` takes the CSS width and height (a percentage left
+  out while measured, `cstyle.width_pct`), the other side from the attributes' proportions when both are
+  given, else the file's, and `max-width`; attributes and then the file's size only when the rules say
+  nothing. layouttest: a picture 100% wide, a height alone, max-width.
+
 ### 0.73.0
 
 - **JavaScript (12).** The engine is JavaScript of 2015 to 2021: prototypes and lexical scopes (`let`/`const`

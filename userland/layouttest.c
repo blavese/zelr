@@ -1389,6 +1389,32 @@ int main(void) {
            tl && b && c && b->x == 100 && c->x == 100 && b->y == tl->y && c->y > b->y);
     }
 
+    /* --- pictures sized by the page's rules -------------------------------------- */
+    {
+        nfake = 0;
+        lay("<style>.c{width:300px}.c img{width:100%}</style><div class=c><img id=p src=x></div>", 600);
+        picture_at("p", 100, 50);
+        lay("<style>.c{width:300px}.c img{width:100%}</style><div class=c><img id=p src=x></div>", 600);
+        const litem *p = image_of(by_id("p"));
+        okn("a picture 100% wide is as wide as its box, and in proportion", p && p->w == 300 && p->h == 150,
+            p ? p->w : -1);
+
+        nfake = 0;
+        lay("<style>img{height:40px}</style><p><img id=p src=x></p>", 600);
+        picture_at("p", 200, 100);
+        lay("<style>img{height:40px}</style><p><img id=p src=x></p>", 600);
+        p = image_of(by_id("p"));
+        okn("a height alone makes the width from the picture", p && p->h == 40 && p->w == 80, p ? p->w : -1);
+
+        nfake = 0;
+        lay("<style>img{max-width:100px}</style><p><img id=p src=x></p>", 600);
+        picture_at("p", 400, 200);
+        lay("<style>img{max-width:100px}</style><p><img id=p src=x></p>", 600);
+        p = image_of(by_id("p"));
+        okn("and max-width holds one back", p && p->w == 100 && p->h == 50, p ? p->w : -1);
+        nfake = 0;
+    }
+
     puts(failed ? "LAYOUTTEST_FAIL\n" : "LAYOUTTEST_PASS\n");
     return failed;
 }
