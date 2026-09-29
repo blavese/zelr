@@ -6200,6 +6200,11 @@ static void jd_setup(jctx *J) {
     jd_p[JI_DOCUMENT] = jd_interface(J, "Document", jd_p[JI_NODE], 0, 0);
     jd_p[JI_HTMLDOCUMENT] = jd_interface(J, "HTMLDocument", jd_p[JI_DOCUMENT], 0, 0);
     jd_p[JI_FRAGMENT] = jd_interface(J, "DocumentFragment", jd_p[JI_NODE], nat_fragment_ctor, 0);
+    /* The interface, with nothing that is one: this browser makes no shadow
+       trees for a script (there is no attachShadow, and shadowRoot is
+       null). Alpine.js asks `parentNode instanceof ShadowRoot` of every
+       element it walks, and Ars Technica stopped on the name. */
+    jd_interface(J, "ShadowRoot", jd_p[JI_FRAGMENT], 0, 0);
     jd_p[JI_NODELIST] = jd_interface(J, "NodeList", 0, 0, 0);
     jd_p[JI_HTMLCOLLECTION] = jd_interface(J, "HTMLCollection", 0, 0, 0);
     jd_p[JI_TOKENLIST] = jd_interface(J, "DOMTokenList", 0, 0, 0);

@@ -859,6 +859,11 @@ int main(void) {
                " Object.prototype.toString.call(d), typeof HTMLScriptElement].join(' ');"
                "</script></body>"),
         "true true true true true true 9 1 1 DIV HTML [object HTMLDivElement] function");
+    oks("ShadowRoot is there to be asked about, and nothing is one",
+        titled("<body><script>document.title = [typeof ShadowRoot, document.body.parentNode instanceof ShadowRoot,"
+               " document.body.shadowRoot, 'attachShadow' in Element.prototype,"
+               " ShadowRoot.prototype instanceof DocumentFragment].join(' ');</script></body>"),
+        "function false  false true");
     oks("and a page can add a method to Element.prototype that every element has",
         titled("<body><p id=p>x</p><script>Element.prototype.hi = function(){ return 'hi ' + this.id; };"
                "document.title = document.getElementById('p').hi();</script></body>"),
