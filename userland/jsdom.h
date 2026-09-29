@@ -664,6 +664,7 @@ static int jd_sel_matches(int el, const jstr *sel) {
             r.decl_n = 0;
             r.spec = spec;
             r.order = 0;
+            r.layer = CSS_UNLAYERED;
 
             cmatch m;
             m.hover = -1;

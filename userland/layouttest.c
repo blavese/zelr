@@ -1572,6 +1572,32 @@ int main(void) {
             bt ? bt->w : -1);
     }
 
+    /* --- layers --------------------------------------------------------------- */
+    {
+        lay("<style>@layer base{.a{display:none}}</style><p class=a>hidden</p><p>shown</p>", 600);
+        ok("a rule inside @layer applies", !word("hidden") && word("shown"));
+        lay("<style>@layer x{#b{display:none}}p{display:block}</style><p id=b>kept</p>", 600);
+        ok("a rule in no layer beats a more specific one in a layer", word("kept") != 0);
+        lay("<style>@layer one, two;@layer two{.c{display:block}}@layer one{p.c.d{display:none}}</style>"
+            "<p class='c d'>later</p>", 600);
+        ok("a layer named later beats one named first", word("later") != 0);
+        lay("<style>@layer{.e{display:none}}@media (min-width:1px){@layer m{.f{display:none}}}</style>"
+            "<p class=e>anon</p><p class=f>inner</p><p>after</p>", 600);
+        ok("layers with no name and inside a query apply too", !word("anon") && !word("inner") && word("after"));
+    }
+
+    /* --- hex colours with an alpha ---------------------------------------------- */
+    {
+        u32 c = 0;
+        int got = css_color("#0000", &c);
+        okn("four hex digits are a colour and its alpha", got && css_last_alpha == 0, (int)css_last_alpha);
+        got = css_color("#ff000080", &c);
+        okn("eight hex digits are composited over white as rgba() is", got && css_last_alpha == 128 && c == 0xFF7F7F,
+            (int)c);
+        lay("<style>a{background-color:#0000}</style><p><a id=ln href=x>link</a></p>", 600);
+        ok("a link with a transparent short hex background has no box", box_of(by_id("ln")) == 0);
+    }
+
     /* --- words straight inside a row ------------------------------------------ */
     {
         lay("<style>.l{display:flex;align-items:center}.g{display:grid}.k{width:10px;height:10px;background:#000}</style>"

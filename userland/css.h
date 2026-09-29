@@ -34,6 +34,8 @@
 #define CSS_TEXT    (2048 * 1024)
 #define CSS_MAXCLS  4
 #define CSS_NEGS    2048
+#define CSS_LAYERS  64
+#define CSS_UNLAYERED 0x7FFF      /* a rule in no layer, stronger than any in one */
 
 /* --- what can be said about a box ---------------------------------------- */
 
@@ -269,6 +271,7 @@ typedef struct {
     /* The window widths the rule is for, from the media queries round it:
        at least mq_lo and at most mq_hi pixels, -1 for no bound. */
     short mq_lo, mq_hi;
+    short layer;              /* its @layer's rank (css_layer), or CSS_UNLAYERED */
 } crule;
 
 typedef struct {
@@ -284,6 +287,8 @@ typedef struct {
     char  text[CSS_TEXT];
     int   used;
     int   overflowed;
+    char  layers[CSS_LAYERS][48];  /* @layer names, in the order they were first named */
+    int   nlayers;
 } csheet;
 
 /* Where an element's own style attribute landed.
@@ -435,18 +440,26 @@ static inline int css_color(const char *s, u32 *out) {
             if (v < 0) break;
             d[n++] = v;
         }
+        int r, g, b;
         if (n >= 6) {
-            *out = (u32)((d[0] << 20) | (d[1] << 16) | (d[2] << 12)
-                       | (d[3] << 8) | (d[4] << 4) | d[5]);
+            r = d[0] * 16 + d[1]; g = d[2] * 16 + d[3]; b = d[4] * 16 + d[5];
             if (n == 8) css_last_alpha = d[6] * 16 + d[7];
-            return 1;
+        } else if (n >= 3) {
+            /* Four digits are the short form with an alpha: normalize.css's
+               a { background-color: #0000 } is transparent, and read as #000
+               it drew every link on GitHub on a black box. */
+            r = d[0] * 17; g = d[1] * 17; b = d[2] * 17;
+            if (n == 4) css_last_alpha = d[3] * 17;
+        } else {
+            return 0;
         }
-        if (n >= 3) {
-            *out = (u32)((d[0] << 20) | (d[0] << 16) | (d[1] << 12)
-                       | (d[1] << 8) | (d[2] << 4) | d[2]);
-            return 1;
-        }
-        return 0;
+        /* Over white, as rgba() is, because nothing below composites. */
+        int a = css_last_alpha;
+        r = (r * a + 255 * (255 - a)) / 255;
+        g = (g * a + 255 * (255 - a)) / 255;
+        b = (b * a + 255 * (255 - a)) / 255;
+        *out = (u32)((r << 16) | (g << 8) | b);
+        return 1;
     }
     if (w_starts_fold(s, "rgb")) {
         while (*s && *s != '(') s++;
@@ -652,6 +665,7 @@ static inline void css_init(csheet *s) {
     s->nnegs = 0;
     s->ua_rules = 0;
     s->overflowed = 0;
+    s->nlayers = 0;
 }
 
 /* Skips comments and whitespace together, because between two selectors
@@ -1443,6 +1457,36 @@ static inline int css_at_rule(const char *p, int len, int i, int *open_body,
 
 static inline void css_parse_in(csheet *s, const char *p, int len, int lo, int hi);
 
+/* --- layers ------------------------------------------------------------------
+ *
+ * @layer puts rules in named layers: a rule in a layer is weaker than every
+ * rule in none, whatever the specificities, and between layers the one named
+ * first is the weakest. Primer's components on GitHub and everything Tailwind
+ * 4 writes are in layers, and a layer's block was skipped whole as an at-rule
+ * this did not draw, so those pages had none of their own styles. A layer's
+ * rank is where its name was first seen, in @layer a, b; or at its block; one
+ * inside another is named after both ("a.b"). A layer with no name is one of
+ * its own. Not kept: that a layer's own rules beat its sublayers', and the
+ * reversal of all this for !important, which this does not read. */
+static inline int css_layer(csheet *s, int parent, const char *name, int n) {
+    char full[48];
+    int w = 0;
+    if (parent != CSS_UNLAYERED && parent >= 0 && parent < s->nlayers) {
+        for (const char *q = s->layers[parent]; *q && w < 46; q++) full[w++] = *q;
+        if (w < 46) full[w++] = '.';
+    }
+    /* No name: nothing can name it again, so it is never looked up. */
+    if (n <= 0 && w < 47) full[w++] = 1;
+    for (int i = 0; i < n && w < 47; i++) full[w++] = name[i];
+    full[w] = 0;
+    if (n > 0)
+        for (int k = 0; k < s->nlayers; k++)
+            if (w_same(s->layers[k], full)) return k;
+    if (s->nlayers >= CSS_LAYERS) return CSS_LAYERS - 1;
+    for (int i = 0; i <= w; i++) s->layers[s->nlayers][i] = full[i];
+    return s->nlayers++;
+}
+
 /* --- a sheet for one shadow tree ---------------------------------------------
  *
  * A style element inside a shadow tree written into the page applies to
@@ -1600,16 +1644,44 @@ static inline void css_parse_style(csheet *s, const char *p, int len, int lo, in
 static inline void css_parse_in(csheet *s, const char *p, int len, int lo, int hi) {
     int i = 0;
     int nested = 0;
-    /* The widths each open query allows, the outer ones included. */
-    short mlo[17], mhi[17];
+    /* The widths each open query allows, the outer ones included, and the
+       layer each is in. */
+    short mlo[17], mhi[17], mlayer[17];
     mlo[0] = (short)lo;
     mhi[0] = (short)hi;
+    mlayer[0] = CSS_UNLAYERED;
 
     while (i < len) {
         i = css_skip(p, len, i);
         if (i >= len) break;
 
         if (p[i] == '}') { if (nested > 0) nested--; i++; continue; }
+        if (p[i] == '@' && i + 6 <= len && w_starts_fold(p + i, "@layer")
+            && (i + 6 == len || !css_ident(p[i + 6]))) {
+            int up = nested < 16 ? nested : 16, j = i + 6, rank = -1;
+            for (;;) {
+                j = css_skip(p, len, j);
+                int ns = j;
+                while (j < len && (css_ident(p[j]) || p[j] == '.')) j++;
+                if (j > ns) rank = css_layer(s, mlayer[up], p + ns, j - ns);
+                j = css_skip(p, len, j);
+                if (j < len && p[j] == ',') { j++; continue; }
+                break;
+            }
+            if (j < len && p[j] == '{') {
+                if (rank < 0) rank = css_layer(s, mlayer[up], 0, 0);
+                nested++;
+                int at = nested < 16 ? nested : 16;
+                mlo[at] = mlo[up];
+                mhi[at] = mhi[up];
+                mlayer[at] = (short)rank;
+                i = j + 1;
+            } else {
+                while (j < len && p[j] != ';' && p[j] != '}') j++;
+                i = j < len && p[j] == ';' ? j + 1 : j;
+            }
+            continue;
+        }
         if (p[i] == '@') {
             int open_body = 0, lo = -1, hi = -1;
             i = css_at_rule(p, len, i, &open_body, &lo, &hi);
@@ -1622,6 +1694,7 @@ static inline void css_parse_in(csheet *s, const char *p, int len, int lo, int h
                 if (hi >= 0 && (phi < 0 || hi < phi)) phi = (short)hi;
                 mlo[at] = plo;
                 mhi[at] = phi;
+                mlayer[at] = mlayer[up];
             }
             continue;
         }
@@ -1667,6 +1740,7 @@ static inline void css_parse_in(csheet *s, const char *p, int len, int lo, int h
             r->order = s->nrules;
             r->mq_lo = mlo[nested < 16 ? nested : 16];
             r->mq_hi = mhi[nested < 16 ? nested : 16];
+            r->layer = mlayer[nested < 16 ? nested : 16];
             s->nrules++;
         }
         (void)first_rule;
@@ -2819,7 +2893,16 @@ typedef struct {
     int rule;
     int spec;
     int order;
+    int layer;
 } chit;
+
+/* Whether a applies after b, so wins: a later layer (or none), then more
+   specific, then written later. */
+static inline int css_hit_after(const chit *a, const chit *b) {
+    if (a->layer != b->layer) return a->layer > b->layer;
+    if (a->spec != b->spec) return a->spec > b->spec;
+    return a->order > b->order;
+}
 
 static inline void css_collect_chain(const csheet *s, const cindex *x,
                                      const ddoc *d, int el, int head,
@@ -2836,6 +2919,7 @@ static inline void css_collect_chain(const csheet *s, const cindex *x,
         hits[*n].rule = r;
         hits[*n].spec = rule->spec;
         hits[*n].order = rule->order;
+        hits[*n].layer = rule->layer;
         (*n)++;
     }
 }
@@ -2881,8 +2965,7 @@ static inline int css_collect(const csheet *s, const cindex *x, const ddoc *d,
     for (int i = 1; i < n; i++) {
         chit h = hits[i];
         int j = i - 1;
-        while (j >= 0 && (hits[j].spec > h.spec
-                          || (hits[j].spec == h.spec && hits[j].order > h.order))) {
+        while (j >= 0 && css_hit_after(&hits[j], &h)) {
             hits[j + 1] = hits[j];
             j--;
         }

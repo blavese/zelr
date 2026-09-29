@@ -156,6 +156,16 @@ numbered files are still to 6048716; where they disagree with this list, this li
   (`css_hover_reach`), not whenever the element under the pointer does. A `<button type="button">` no
   longer sends its form. layouttest: nine checks; formcheck 27 (the way to the search bar is a link in a
   flex row, and the bar's type="button" button sends nothing).
+- **`@layer` (11, css.h).** Rules in a layer are read (a layer's block was skipped whole as an at-rule not
+  drawn: Primer's components on GitHub and everything Tailwind 4 writes, and weather.com and cloudflare.com
+  came out unstyled). A rule in a layer is weaker than one in none, and a layer named earlier than one named
+  later (`crule.layer`, the rank from `css_layer` in the order names are first seen, in `@layer a, b;` or at
+  a block; nested ones named "a.b"; one with no name a layer of its own), which `css_hit_after` puts before
+  specificity. Not kept: a layer's own rules beating its sublayers', and the reversal for `!important`,
+  which is not read. layouttest: four checks.
+- **Hex colours with an alpha (css.h).** Four digits are the short form with an alpha (`#0000` is
+  transparent: normalize.css's `a { background-color: #0000 }` had put every link on GitHub on a black
+  box), and four and eight digits are composited over white as rgba() is. layouttest: three.
 
 ### 0.73.0
 

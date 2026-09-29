@@ -1223,8 +1223,9 @@ sidebar and the article, exists only in a style sheet. Without one a page is
 not simplified — it is read in the wrong order, and nobody is told that is
 what is happening. So there is a style sheet reader now: selectors with every
 combinator, the cascade (the browser's own rules, then what the markup says
-about itself, then the page's, each in specificity then source order),
-inheritance, the box model, and block, inline, flex and table layout.
+about itself, then the page's, each by `@layer`, then specificity, then
+source order), inheritance, the box model, and block, inline, flex and table
+layout.
 
 Laying a page out works out which rules match each element once, however
 often its style is asked for, and passes over a rule that wants an ancestor
