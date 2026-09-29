@@ -97,6 +97,20 @@ numbered files are still to 6048716; where they disagree with this list, this li
 
 ### 0.72.0 (in progress)
 
+- **WebP (13).** `webp.h`: lossless and lossy WebP, transparency, the first frame of an animation, from RFC
+  9649 and RFC 6386, tables taken from the RFC texts (`tools/genwebptab.py`). webptest (136) decodes twelve
+  pictures zelr draws (`tools/genwebp.html`) that Edge's encoder made, against Windows' decoder. The browser
+  asks for image/webp first and knows it by its bytes.
+- **Drawings in the page (11, 13).** An `<svg>` in the markup is a picture (`lay_drawing`, `drawing_of`,
+  `svg_render_tree`), sized by the page's rules, then its attributes (in any unit), then its viewBox, drawn
+  on the backdrop behind it with currentColor the text's colour; the browser's sheet no longer hides them.
+  Logos and icons appear on GOV.UK, the BBC, Ars Technica, MDN, GitHub and The Verge; GOV.UK's header no
+  longer squeezes its buttons. A percentage height resolves against a parent with a height of its own
+  (the BBC's wordmark was drawn the width of the page); a percentage width is auto while measured, and a
+  drawing with no size is 300 wide there (The Verge's). A picture that is a flex item is drawn.
+- **Checks.** layouttest 176 (ten for drawings and pictures in rows), svgtest 51 (four for drawings in a
+  page), webptest 136 in ring3check (47), browsercheck 25 (a drawing in the page, a WebP picture); each
+  seen failing on a broken build.
 - **Grid tracks (11).** A flexible track (fr, auto) is never narrower than the least its items can be
   drawn in (`lay_grid_least`: the width an item asks for, else its min-width, else its narrowest content;
   nothing for one that clips), and one held at that leaves the sharing to the others (`lay_grid_share`);

@@ -147,11 +147,55 @@ static limage pic_sizes[PICS_MAX];
 static int    npic_sizes;
 static int    pics_skipped;
 
+/* Drawings written into the page, <svg> in the markup: made from the page's
+ * own tree the first time each is shown, at the size the layout gave it and
+ * on the backdrop behind it, in its colour (layout.h, lay_drawing; svg.h,
+ * svg_render_tree). Kept until the page is laid out again. One that draws
+ * nothing is kept as nothing, so it is not tried again every frame. */
+#define DRAWINGS_MAX 256
+#define DRAWINGS_BYTES (12 * 1024 * 1024)
+
+typedef struct {
+    int node, w, h;
+    u32 bg, ink;
+    picture pic;
+} drawn;
+
+static drawn drawings[DRAWINGS_MAX];
+static int   ndrawings, drawings_bytes;
+
+static void drawings_drop(void) {
+    for (int i = 0; i < ndrawings; i++) picture_free(&drawings[i].pic);
+    ndrawings = 0;
+    drawings_bytes = 0;
+}
+
+static const picture *drawing_of(const litem *it) {
+    for (int i = 0; i < ndrawings; i++) {
+        const drawn *dr = &drawings[i];
+        if (dr->node == it->node && dr->w == it->w && dr->h == it->h
+            && dr->bg == it->bg && dr->ink == it->color)
+            return dr->pic.rgb ? &dr->pic : 0;
+    }
+    int bytes = it->w * it->h * 3;
+    if (ndrawings >= DRAWINGS_MAX || drawings_bytes + bytes > DRAWINGS_BYTES) return 0;
+    drawn *dr = &drawings[ndrawings++];
+    dr->node = it->node;
+    dr->w = it->w;
+    dr->h = it->h;
+    dr->bg = it->bg;
+    dr->ink = it->color;
+    svg_render_tree(&doc, it->node, it->w, it->h, &dr->pic, it->bg, it->color);
+    if (dr->pic.rgb) drawings_bytes += bytes;
+    return dr->pic.rgb ? &dr->pic : 0;
+}
+
 static void pics_drop(void) {
     for (int i = 0; i < npics; i++) picture_free(&pics[i].pic);
     npics = 0;
     npic_sizes = 0;
     pics_skipped = 0;
+    drawings_drop();
 }
 
 static const picture *pic_of(int node) {
@@ -725,6 +769,7 @@ static int do_request(const char *method, const char *url, const char *body,
 static int page_unhidden;      /* it was laid out a second time, shown anyway */
 
 static void relayout(int width) {
+    drawings_drop();                 /* made for the sizes of the last one */
     match.hover = hover_node;
     match.visited_links = 0;
     lay_show_hidden = 0;
@@ -1437,6 +1482,8 @@ static void draw_page(surface *s, int ox, int oy, int vw, int vh) {
 
         if (it->kind == LK_IMAGE) {
             const picture *p = pic_of(it->node);
+            if (!p && it->node >= 0 && it->node < doc.count && doc.nodes[it->node].tag == T_SVG)
+                p = drawing_of(it);
             if (p && p->rgb && it->w > 0 && it->h > 0) {
                 /* Nearest neighbour, chosen rather than settled for. A
                    picture on a page is usually drawn at or near its own

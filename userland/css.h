@@ -108,6 +108,12 @@ enum { U_PX = 0, U_EM, U_REM, U_PCT, U_VW, U_VH, U_AUTO };
 static int css_view_w;
 static int css_view_h;
 
+/* What a percentage height is a percentage of: the parent's content height
+   when the parent was given a height of its own, -1 when it was not. The
+   layout sets it before an element's rules are applied (layout.h,
+   lay_style), since nothing here can see the parent. */
+static int css_parent_h = -1;
+
 typedef struct {
     /* Hundredths of the unit, and an int rather than a short because a
        short holds 327.67 of anything. Pages are full of `width:960px` and
@@ -193,6 +199,11 @@ typedef struct {
        lays the items out along one row, a new column each. */
     const char *grid_auto;
     unsigned char gflow_col;
+
+    /* Whether width was a percentage, which a box being measured for how
+       wide its contents want to be cannot resolve: it is auto there, as the
+       rules have it (layout.h, lay_drawing). */
+    unsigned char width_pct;
 
     /* The custom properties in force, as the head of a chain the layout
        keeps (layout.h, lay_var_*); inherited, as custom properties are.
@@ -1722,6 +1733,7 @@ static inline void css_default_style(cstyle *st, int root_px) {
     st->tx_px = st->ty_px = st->tx_pct = st->ty_pct = 0;
     st->grid_cols = st->grid_areas = st->garea = st->grid_auto = 0;
     st->gflow_col = 0;
+    st->width_pct = 0;
     st->vars = -1;
     st->gspan = 0;
 }
@@ -2247,6 +2259,7 @@ static inline void css_apply_v(int prop, const char *v, cstyle *st, int root_px,
                 default: break;
             }
             if (!slot) break;
+            if (prop == P_WIDTH) st->width_pct = (unsigned char)(L.unit == U_PCT);
 
             /* A percentage height is a percentage of the containing
                block's height, and in one pass down the tree that height is
@@ -2259,10 +2272,18 @@ static inline void css_apply_v(int prop, const char *v, cstyle *st, int root_px,
                wide. The logo is at the top of the page, so everything after
                it -- the whole article -- was laid out below the bottom of
                the window, and what was on screen was a blank page with one
-               link at the top of it. */
+               link at the top of it.
+
+               Except where the parent was given a height of its own, which
+               is then known before anything inside it is laid out: a logo
+               at 100% of a 26 pixel heading is 26 pixels, and as auto it was
+               drawn as wide as the page and as tall as its proportions made
+               that. */
             if (L.unit == U_PCT) {
-                if (prop == P_HEIGHT || prop == P_MIN_HEIGHT
-                    || prop == P_MAX_HEIGHT) { *slot = -1; break; }
+                if (prop == P_HEIGHT || prop == P_MIN_HEIGHT || prop == P_MAX_HEIGHT) {
+                    *slot = css_parent_h > 0 ? (short)(L.v / 100 * css_parent_h / 100) : -1;
+                    break;
+                }
                 if (prop == P_TOP || prop == P_BOTTOM) {
                     *slot = CSS_AUTO_OFF;
                     break;
@@ -2559,4 +2580,4 @@ static const char CSS_UA[] =
        center is a block that centres what is in it, and it is how the
        plain version of more than one homepage is laid out to this day. */
     "center{display:block;text-align:center}"
-    "iframe,svg{display:none}";
+    "iframe{display:none}";

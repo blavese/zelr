@@ -915,6 +915,21 @@ static inline void lay_hints(lctx *L, int el, cstyle *st, int pct_of) {
         int w = lay_attr_len(dom_attr(d, el, "width"), pct_of);
         if (w > 0) st->width = (short)(w > 4000 ? 4000 : w);
     }
+    if (tag == T_SVG) {
+        /* A drawing's width and height say how big it is drawn unless the
+           page's rules say otherwise, the way an image's do (lay_drawing);
+           in any unit, since icons say 1em to be the size of their text. */
+        v = dom_attr(d, el, "width");
+        clen wl = css_len(v ? v : "");
+        int w = v ? css_px(wl, st->font_px, L->root_px, pct_of) : -1;
+        if (w > 0) {
+            st->width = (short)(w > 4000 ? 4000 : w);
+            st->width_pct = (unsigned char)(wl.unit == U_PCT);
+        }
+        v = dom_attr(d, el, "height");
+        int h = v ? css_px(css_len(v), st->font_px, L->root_px, -1) : -1;
+        if (h > 0) st->height = (short)(h > 4000 ? 4000 : h);
+    }
     if (tag == T_TABLE || tag == T_TD || tag == T_TH || tag == T_TR) {
         int h = lay_attr_len(dom_attr(d, el, "height"), -1);
         if (h > 0) st->height = (short)(h > 4000 ? 4000 : h);
@@ -1024,6 +1039,8 @@ static inline void lay_cs(cstyle *d, const cstyle *s) {
 static inline void lay_style(lctx *L, int el, const cstyle *parent,
                              cstyle *out, int pct_of) {
     css_inherit(out, parent);
+    css_parent_h = parent->height < 0 ? -1
+                 : parent->height - (parent->border_box ? parent->pt + parent->pb + parent->bt + parent->bb : 0);
     /* The browser's own rules, then what the markup says about itself, then
        the page's sheets: an author's rule beats the browser's whatever
        either's specificity, which is the order the cascade has always had
@@ -1251,7 +1268,7 @@ static void lay_float(lctx *L, int node, const cstyle *parent, int cleft, int cw
     cstyle st;
     lay_style(L, node, parent, &st, cwidth);
     int tag = d->nodes[node].tag;
-    int replaced = tag == T_IMG || lay_control_kind(d, node) != CTL_NONE;
+    int replaced = tag == T_IMG || tag == T_SVG || lay_control_kind(d, node) != CTL_NONE;
     int ml = st.ml == CSS_AUTO_OFF ? 0 : st.ml, mr = st.mr == CSS_AUTO_OFF ? 0 : st.mr;
 
     /* The box's own width, margins apart. */
@@ -1420,6 +1437,91 @@ static inline void lay_inline_close(lctx *L, const cstyle *st, int x0,
    next went up out of the run and on into the rest of the document, which
    was then laid out twice: once flowed on to the line after the field, and
    again where it belonged. Every search form ending in a button did it. */
+/* A drawing's proportions, from its viewBox: its width and height in
+   hundredths, or nothing when it has none. */
+static inline void lay_viewbox(const ddoc *d, int el, int *vw, int *vh) {
+    *vw = *vh = 0;
+    const char *v = dom_attr_fold(d, el, "viewBox");
+    if (!v) return;
+    int n[4] = { 0, 0, 0, 0 }, k = 0;
+    while (*v && k < 4) {
+        while (*v == ' ' || *v == ',' || *v == '\t' || *v == '\n' || *v == '\r') v++;
+        int neg = *v == '-';
+        if (neg) v++;
+        int ip = 0, fp = 0, fd = 0, any = 0;
+        while (*v >= '0' && *v <= '9') { if (ip < 1000000) ip = ip * 10 + (*v - '0'); v++; any = 1; }
+        if (*v == '.') {
+            v++;
+            while (*v >= '0' && *v <= '9') { if (fd < 2) { fp = fp * 10 + (*v - '0'); fd++; } v++; any = 1; }
+        }
+        if (!any) break;
+        while (fd < 2) { fp *= 10; fd++; }
+        n[k++] = (neg ? -1 : 1) * (ip * 100 + fp);
+    }
+    if (k == 4 && n[2] > 0 && n[3] > 0) { *vw = n[2]; *vh = n[3]; }
+}
+
+/* An SVG written into the page: a picture, which the browser draws from the
+ * page's own tree at the size given here (svg.h, svg_render_tree). That is
+ * the width and height the page's rules or its attributes give it; either
+ * one alone and its viewBox's proportions make the other; neither, and it is
+ * as wide as the line, which is what other browsers do. Kept to the line,
+ * like a picture. Its children are shapes, not the page's, and are never
+ * laid out. Carried with it: the backdrop behind it, since the drawing is
+ * made opaque on that, and its colour, which is what currentColor means.
+ * Laid out as boxes instead, an icon's shapes each took a line and a logo
+ * took the whole width of its header, and a row that held one wrapped. */
+static void lay_drawing(lctx *L, int at, const cstyle *st, int *y) {
+    const ddoc *d = L->d;
+    int vw, vh;
+    lay_viewbox(d, at, &vw, &vh);
+    int w = st->width, h = st->height;
+    /* Measured for how wide it wants to be -- a flex item, an inline-block,
+       a float -- a percentage cannot be resolved and is auto, and a drawing
+       with no size at all is 300 pixels wide, the size every browser gives
+       a picture that has none. Laid out in a block, it fills the line. */
+    if (L->measuring && st->width_pct) w = -1;
+    if (w < 0 && h < 0) {
+        w = L->measuring ? 300 : L->line_width;
+        h = vw > 0 ? (int)((long long)w * vh / vw) : 150;
+    } else if (w < 0) {
+        w = vw > 0 ? (int)((long long)h * vw / vh) : 300;
+    } else if (h < 0) {
+        h = vw > 0 ? (int)((long long)w * vh / vw) : 150;
+    }
+    if (w > L->line_width && L->line_width > 0) {
+        h = (int)((long long)h * L->line_width / w);
+        w = L->line_width;
+    }
+    if (w < 1 || h < 1) return;                /* a sprite sheet, or nothing */
+    int ml = st->ml == CSS_AUTO_OFF ? 0 : st->ml;
+    int mr = st->mr == CSS_AUTO_OFF ? 0 : st->mr;
+
+    if (L->pen + ml + w > L->line_left + L->line_width && L->pen > L->line_left) {
+        int left = L->cont_left, width = L->cont_width, al = L->align;
+        lay_line_end(L, y);
+        lay_line_start(L, *y, left, width, al);
+    }
+    L->pen += ml;
+    litem *it = (st->visible || lay_show_hidden) ? lay_item(L) : 0;
+    if (it) {
+        it->kind = LK_IMAGE;
+        it->x = L->pen;
+        it->y = L->line_top;
+        it->w = w;
+        it->h = h;
+        it->node = at;
+        it->at = -1;
+        it->link = L->cur_link;
+        it->color = st->color;
+        it->bg = st->background;
+    }
+    L->pen += w + mr;
+    lay_line_fit(L, h, 100);
+    L->line_started = 1;
+    L->pending_space = 0;
+}
+
 static inline int lay_past(const ddoc *d, int at, int node) {
     for (int s = at; s >= 0 && s != node; s = d->nodes[s].parent)
         if (d->nodes[s].next >= 0) return d->nodes[s].next;
@@ -1483,8 +1585,15 @@ static inline void lay_inline(lctx *L, int node, const cstyle *parent, int *y) {
                         || st.display == D_TABLE_ROW || st.display == D_TABLE_GROUP
                         || st.display == D_GRID;
             if (n->tag != T_BR && n->tag != T_IMG && lay_control_kind(d, at) == CTL_NONE) {
-                if (st.position == POS_ABSOLUTE || st.position == POS_FIXED) {
+                if ((st.position == POS_ABSOLUTE || st.position == POS_FIXED)
+                    && (n->tag != T_SVG || at != node)) {
                     lay_inline_piece(L, at, &stack[sp], 1, y);
+                    at = lay_past(d, at, node);
+                    continue;
+                }
+                if (n->tag == T_SVG) {
+                    /* A drawing is a picture whatever its display says. */
+                    lay_drawing(L, at, &st, y);
                     at = lay_past(d, at, node);
                     continue;
                 }
@@ -3127,6 +3236,18 @@ static void lay_block_placed(lctx *L, int node, const cstyle *parent, int x,
 
     if (st.clear) *y = lay_cleared(L, *y, st.clear, x, avail);
 
+    /* A picture or a drawing given a box of its own -- a flex item, a grid
+       cell, something positioned -- is still a picture, drawn by the code
+       that draws them, on a line of its own. As a box it had no children
+       to lay out and came out as nothing, or, for a drawing, as its shapes
+       laid out as though they were the page. */
+    if (d->nodes[node].tag == T_IMG || d->nodes[node].tag == T_SVG) {
+        lay_line_start(L, *y, x, avail, A_LEFT);
+        lay_inline(L, node, parent, y);
+        lay_line_end(L, y);
+        return;
+    }
+
     int ml = st.ml == CSS_AUTO_OFF ? 0 : st.ml;
     int mr = st.mr == CSS_AUTO_OFF ? 0 : st.mr;
     int box_w = avail - ml - mr;
@@ -3299,7 +3420,8 @@ static void lay_block_placed(lctx *L, int node, const cstyle *parent, int x,
     while (child >= 0) {
         int next = d->nodes[child].next;
         int is_block = lay_is_block_node(L, child, &st);
-        if (is_block && (d->nodes[child].tag == T_IMG || lay_control_kind(d, child) != CTL_NONE)) {
+        if (is_block && (d->nodes[child].tag == T_IMG || d->nodes[child].tag == T_SVG
+                         || lay_control_kind(d, child) != CTL_NONE)) {
             /* A picture or a field made a block is still a picture or a
                field: on a line of its own, drawn by the code that draws
                them, which is the inline code. As a block it had no children

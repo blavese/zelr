@@ -103,6 +103,14 @@ static const litem *box_of(int node) {
 
 static int by_id(const char *id) { return dom_by_id(&doc, id); }
 
+/* The picture an element was laid out as: an <img>, or a drawing. */
+static const litem *image_of(int node) {
+    for (int i = 0; i < page.nitems; i++)
+        if (page.items[i].node == node && page.items[i].kind == LK_IMAGE)
+            return &page.items[i];
+    return 0;
+}
+
 /* The first run of text that is exactly this word. */
 static const litem *word(const char *w) {
     for (int i = 0; i < page.nitems; i++) {
@@ -1161,6 +1169,75 @@ int main(void) {
         ok("text in a transparent colour is not drawn", !word("ghost") && word("shown"));
         ok("nor text at font-size 0", !word("hidden"));
         ok("and text indented by -9999px is off the page", x && x->x + x->w < 0);
+    }
+
+    /* --- drawings written into the page ------------------------------------------
+     *
+     * An <svg> in the markup is a picture the browser draws from the tree,
+     * at the size the page gives it. Laid out as boxes instead, its shapes
+     * each took a line, a logo took its header's whole width and the row
+     * holding it wrapped, and most were hidden by the browser's own sheet. */
+    {
+        nfake = 0;
+        lay("<p>a <svg id=s width=40 height=20 viewBox=\"0 0 4 2\"><text x=0 y=1>words</text>"
+            "<rect width=4 height=2 fill=red /></svg> b</p>", 600);
+        const litem *s = image_of(by_id("s"));
+        okn("an svg in the page is a picture of the size it says", s && s->w == 40 && s->h == 20,
+            s ? s->w : -1);
+        ok("on the line with the words around it", s && word("a") && word("b")
+           && word("a")->x < s->x && s->x < word("b")->x);
+        ok("and what is inside it is not laid out as the page", !word("words"));
+
+        lay("<style>.i{width:24px;height:24px}</style>"
+            "<svg id=s class=i width=100 height=100 viewBox=\"0 0 10 10\"></svg>", 600);
+        s = image_of(by_id("s"));
+        okn("the page's rules beat what it says", s && s->w == 24 && s->h == 24, s ? s->w : -1);
+
+        lay("<svg id=s height=30 viewBox=\"0 0 324 60\"></svg>", 600);
+        s = image_of(by_id("s"));
+        okn("a height alone and its viewBox make the width", s && s->w == 162 && s->h == 30,
+            s ? s->w : -1);
+
+        lay("<style>p{font-size:20px}</style><p><svg id=s width=1em height=1em></svg></p>", 600);
+        s = image_of(by_id("s"));
+        okn("and 1em is the size of the text around it", s && s->w == 20 && s->h == 20,
+            s ? s->w : -1);
+
+        lay("<style>.h{height:26px}.s{width:auto;height:100%}</style>"
+            "<div class=h><svg id=s class=s viewBox=\"0 0 104 27\"></svg></div>", 600);
+        s = image_of(by_id("s"));
+        okn("a height of 100% in a parent 26 pixels tall is 26 pixels", s && s->h == 26 && s->w == 100,
+            s ? s->h : -1);
+
+        /* A logo beside a menu in a row: measured as the whole row, it
+           squeezed the menu and pushed the rest onto a second line. */
+        lay("<style>.row{display:flex;flex-wrap:wrap}.logo{flex-grow:1}.lt{display:inline-block}"
+            ".link{display:inline-block;padding:20px;background:#eeeeee}</style>"
+            "<div class=row><div class=logo><a href=/><svg id=s class=lt width=162 height=30><title>home</title>"
+            "<circle cx=20 cy=17 r=3></circle><path d=\"M0 0h9v9z\"></path></svg></a></div>"
+            "<div><a class=link href=/m>menu</a></div><div><a class=link id=f href=/f>find</a></div></div>", 600);
+        s = image_of(by_id("s"));
+        const litem *m = word("menu"), *f = word("find");
+        ok("a row holding a drawing does not wrap",
+           s && m && f && m->y == f->y && m->y < s->y + s->h && f->x > m->x);
+
+        /* width="100%" in something sized to its contents cannot be
+           resolved there, and is the 300 pixels every browser gives a
+           picture with no size. */
+        lay("<style>.row{display:flex}</style><div class=row><a href=/ id=a>"
+            "<svg id=s width=100% height=100% viewBox=\"0 0 309 70\"></svg></a><span>x</span></div>", 600);
+        s = image_of(by_id("s"));
+        okn("a drawing 100% wide in a row is 300 pixels, not the row", s && s->w == 300,
+            s ? s->w : -1);
+
+        /* A picture given a box of its own, a flex item, was a box with
+           nothing in it. */
+        lay("<style>.row{display:flex}</style><div class=row><img id=p src=x><span>y</span></div>", 600);
+        picture_at("p", 40, 30);
+        lay("<style>.row{display:flex}</style><div class=row><img id=p src=x><span>y</span></div>", 600);
+        const litem *p = image_of(by_id("p"));
+        okn("a picture that is a flex item is drawn", p && p->w == 40 && p->h == 30, p ? p->w : -1);
+        nfake = 0;
     }
 
     puts(failed ? "LAYOUTTEST_FAIL\n" : "LAYOUTTEST_PASS\n");

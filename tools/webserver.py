@@ -318,6 +318,20 @@ PICTURE = b"""<!doctype html>
 WEBP_PICTURE = PICTURE.replace(b"/logo.png", b"/logo.webp").replace(
     b"<h1>a picture</h1>", b"<h1>a webp picture</h1>")
 
+# A drawing written into the page rather than fetched: drawn from the page's
+# own tree, in the colour of the link around it (currentColor), which is the
+# rose nothing else on the screen is.
+INLINE_DRAWING = b"""<!doctype html>
+<html><head><title>a drawing in the page</title>
+<style>body { font-family: sans-serif; padding: 24px } a.logo { color: #e11d48 }</style></head>
+<body>
+<h1>a drawing written into the page</h1>
+<p>below this line there should be one</p>
+<a class="logo" href="/"><svg width="240" height="100" viewBox="0 0 120 50"><title>a logo</title>
+<rect x="0" y="0" width="120" height="50" fill="currentColor"/></svg></a>
+</body></html>
+"""
+
 # The same page pointing at something that is not there, so the words it
 # carries are what shows instead. That is what alt text is for, and a
 # browser that drew nothing at all would look identical to one that drew
@@ -529,6 +543,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._send(LOGO_WEBP, ctype="image/webp")
         elif path == "/webp-picture":
             self._send(WEBP_PICTURE)
+        elif path == "/inline-drawing":
+            self._send(INLINE_DRAWING)
         elif path == "/missing-picture":
             self._send(MISSING)
         elif path == "/scripted":

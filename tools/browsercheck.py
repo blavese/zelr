@@ -351,12 +351,25 @@ def main():
             c.add("a drawing on a page is rendered and drawn",
                   count_in(pxd, wd, PAGE, LOGO) > 10000, shotd)
 
+            # --- a drawing written into the page ---------------------------
+            #
+            # Not fetched at all: the <svg> is in the markup, drawn from the
+            # page's own tree at the size it says, in the colour of the link
+            # it is in (fill="currentColor"). The browser's own sheet hid
+            # every one of these, and a page that showed one laid its shapes
+            # out as though they were the page.
+            go(vm, mon, "http://%s/inline-drawing" % srv.host, settle=12.0,
+               was=drawn, name="br-going-inline")
+            inlined, pxi, wi, shoti = page_settled(mon, "br-inline")
+            c.add("a drawing written into a page is drawn, in its link's colour",
+                  count_in(pxi, wi, PAGE, LOGO) > 15000, shoti)
+
             # --- a webp picture --------------------------------------------
             #
             # Asked for as image/webp first, sent as one, and decoded: the
             # 160 by 90 of rose the PNG is, as a lossless WebP.
             go(vm, mon, "http://%s/webp-picture" % srv.host, settle=12.0,
-               was=drawn, name="br-going-webp")
+               was=inlined, name="br-going-webp")
             webpd, pxw, ww, shotw = page_settled(mon, "br-webp")
             c.add("a webp picture on a page is fetched, decoded and drawn",
                   count_in(pxw, ww, PAGE, LOGO) > 10000, shotw)

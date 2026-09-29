@@ -1265,7 +1265,12 @@ no longer match everything. Grids have their columns (lengths, percentages,
 page's header, sidebar and article go where its `grid-template-areas` draws
 them; placing an item by line number is left to the flow. `@supports` is
 answered as this browser would, so a page's fallback for a browser without
-something is the one it gets. GIF pictures are drawn (the first frame).
+something is the one it gets. GIF pictures are drawn (the first frame), and
+WebP ones, lossless and lossy, with transparency and the first frame of an
+animation. An SVG written into the page, the way most sites draw their logos
+and icons, is drawn at the size the page gives it and in the colour of the
+text around it, and a strip of cards in a grid that would scroll sideways is
+laid out as rows of the cards that fit.
 Custom properties (`--brand` and `var(--brand, fallback)`, inherited from
 `:root`), `calc()`, `min()`, `max()` and `clamp()` are worked out, which is how
 most sites written this decade give every colour and size. Up to forty style

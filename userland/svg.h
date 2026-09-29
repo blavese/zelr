@@ -535,9 +535,16 @@ static inline float sv_inherit_num(const ddoc *d, int el, int root, const char *
 
 /* Whether a paint that was said is one to draw, and its colour: "none" is a
    real answer, and a different one from saying nothing. */
+/* What currentColor is while a drawing is drawn: the colour of the words
+   around a drawing written into a page (svg_render_tree), black for one
+   that arrived as a file of its own. An icon that says fill="currentColor"
+   is drawn in its link's colour, which is the point of saying it. */
+static u32 sv_ink;
+
 static inline int sv_paint_value(const char *v, u32 *out) {
     while (*v == ' ') v++;
     if (w_starts_fold(v, "none")) return 0;
+    if (w_starts_fold(v, "currentcolor")) { *out = sv_ink; return 1; }
     /* The style sheet's colour for "transparent" is white, which is right
        for a page's background and wrong here: it drew a white shape over
        whatever was under it. */
@@ -727,20 +734,14 @@ static inline int sv_shape(const ddoc *d, int el, svmat m, svpath *path) {
  * drawing's own size. The viewBox is what makes that possible: it says what
  * range of coordinates the shapes use, and everything else is a scale.
  */
-static inline int svg_render(const char *xml, int len, int want_w, int want_h,
-                             picture *out, u32 bg) {
+/* The drawing whose <svg> element is `root` in `doc`, which may be a page's
+ * own tree: an SVG written into the page is drawn from the elements already
+ * read, with nothing parsed twice. `ink` is what currentColor means. */
+static inline int svg_render_tree(const ddoc *doc, int root, int want_w, int want_h,
+                                  picture *out, u32 bg, u32 ink) {
     out->w = out->h = 0;
     out->rgb = 0;
-
-    ddoc *doc = (ddoc *)malloc((u32)sizeof(ddoc));
-    if (!doc) return SVG_TOO_BIG;
-    dom_parse(doc, xml, len);
-
-    int root = -1;
-    for (int i = 0; i < doc->count; i++)
-        if (doc->nodes[i].kind == DN_ELEMENT
-            && w_same_fold(dom_tag_name(doc, i), "svg")) { root = i; break; }
-    if (root < 0) { free(doc); return SVG_NOT_SVG; }
+    sv_ink = ink;
 
     /* What the drawing thinks its own coordinates are. */
     float vx = 0, vy = 0, vw = 0, vh = 0;
@@ -760,10 +761,10 @@ static inline int svg_render(const char *xml, int len, int want_w, int want_h,
     if (h <= 0) h = (int)vh;
     if (w > SVG_MAX_SIDE) w = SVG_MAX_SIDE;
     if (h > SVG_MAX_SIDE) h = SVG_MAX_SIDE;
-    if (w < 1 || h < 1) { free(doc); return SVG_TOO_BIG; }
+    if (w < 1 || h < 1) return SVG_TOO_BIG;
 
     u8 *rgb = (u8 *)malloc((u32)(w * h * 3));
-    if (!rgb) { free(doc); return SVG_TOO_BIG; }
+    if (!rgb) return SVG_TOO_BIG;
     for (int i = 0; i < w * h; i++) {
         rgb[i * 3] = (u8)((bg >> 16) & 0xFF);
         rgb[i * 3 + 1] = (u8)((bg >> 8) & 0xFF);
@@ -785,7 +786,7 @@ static inline int svg_render(const char *xml, int len, int want_w, int want_h,
     base.f = -vy * sc + ((float)h - vh * sc) / 2;
 
     svpath *path = (svpath *)malloc((u32)sizeof(svpath));
-    if (!path) { free(doc); free(rgb); return SVG_TOO_BIG; }
+    if (!path) { free(rgb); return SVG_TOO_BIG; }
 
     /* Depth first, in document order, which is also paint order: what comes
        later in the file is drawn on top, and that is the whole of what an
@@ -861,7 +862,6 @@ static inline int svg_render(const char *xml, int len, int want_w, int want_h,
     (void)stack;
 
     free(path);
-    free(doc);
 
     if (!drawn) { free(rgb); return SVG_NOTHING_IN_IT; }
 
@@ -869,6 +869,27 @@ static inline int svg_render(const char *xml, int len, int want_w, int want_h,
     out->h = h;
     out->rgb = rgb;
     return SVG_OK;
+}
+
+/* A drawing that arrived as a file of its own: its markup read, then drawn. */
+static inline int svg_render(const char *xml, int len, int want_w, int want_h,
+                             picture *out, u32 bg) {
+    out->w = out->h = 0;
+    out->rgb = 0;
+
+    ddoc *doc = (ddoc *)malloc((u32)sizeof(ddoc));
+    if (!doc) return SVG_TOO_BIG;
+    dom_parse(doc, xml, len);
+
+    int root = -1;
+    for (int i = 0; i < doc->count; i++)
+        if (doc->nodes[i].kind == DN_ELEMENT
+            && w_same_fold(dom_tag_name(doc, i), "svg")) { root = i; break; }
+    if (root < 0) { free(doc); return SVG_NOT_SVG; }
+
+    int rc = svg_render_tree(doc, root, want_w, want_h, out, bg, 0x000000);
+    free(doc);
+    return rc;
 }
 
 static inline const char *svg_why(int rc) {

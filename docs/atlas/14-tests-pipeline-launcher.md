@@ -65,7 +65,7 @@ For each of these I read the header and the assertion logic. Almost all were rea
 | tools/piccheck.py | 79 | Runs pngtest, jpegtest, svgtest, layouttest and pagetest in ring 3 (all five are also in ring3check). |
 | tools/powercheck.py | 65 | `shutdown` must make QEMU exit with code 0 (ACPI S5 from the `_S5` AML object). |
 | tools/progcheck.py | 98 | A program copied to /home runs by typing its name, and not-a-program files are refused. |
-| tools/ring3check.py | 107 | 19 ring-3 test programs, run by their `*_PASS` markers (21 since 0.69.0: sitetest, giftest). The JS suite must have at least 86 cases. |
+| tools/ring3check.py | 107 | 19 ring-3 test programs, run by their `*_PASS` markers (21 since 0.69.0: sitetest, giftest; 22 since 0.72.0: webptest). The JS suite must have at least 86 cases. |
 | tools/host/ | -- | Since 0.69.0: ring 3 programs built for the Windows host on a system-call shim, TLS by a local proxy, `render.py` for many pages at once, `cssq` for the rules reaching an element, `laydump` (since 0.72.0) for where every item and block of a page was laid out. A host tool, not in the gate. |
 | tools/sdkcheck.py | 143 | `sdk/hello.c` built outside the tree with sdk/build.sh, put on a mkfat volume and run with arguments. |
 | tools/setcheck.py | 292 | `/sys/settings` table, a hand-written `dock_h`, and a settings-window toggle that rewrites `/zelr.cfg`. |

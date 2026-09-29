@@ -357,6 +357,38 @@ int main(void) {
         }
     }
 
+    /* --- a drawing written into a page ------------------------------------
+     *
+     * Drawn from the page's own tree rather than from markup of its own, on
+     * the backdrop behind it (the picture is opaque), with currentColor the
+     * colour of the words around it: an icon in a link is the link's colour,
+     * and on a dark header a white logo drawn on white was a white box. */
+    {
+        static const char PAGE[] =
+            "<html><body><p>before <svg width=20 height=20 viewBox=\"0 0 20 20\">"
+            "<rect x=0 y=0 width=10 height=20 fill=\"currentColor\"/></svg> after</p></body></html>";
+        ddoc *d = (ddoc *)malloc((u32)sizeof(ddoc));
+        int root = -1;
+        if (d) {
+            dom_parse(d, PAGE, (int)sizeof(PAGE) - 1);
+            for (int i = 0; i < d->count; i++)
+                if (d->nodes[i].kind == DN_ELEMENT && d->nodes[i].tag == T_SVG) { root = i; break; }
+        }
+        int rc = root >= 0 ? svg_render_tree(d, root, 20, 20, &p, 0x123456, 0xFF0000) : -99;
+        okn("an svg in a page is drawn from the page's tree", rc == SVG_OK && p.w == 20 && p.h == 20, rc);
+        okn("currentColor is the colour it was given", isred(at(5, 10)), at(5, 10));
+        okn("and the rest is the backdrop behind it", at(15, 10) == 0x123456, at(15, 10));
+        picture_free(&p);
+
+        /* One that arrived as a file of its own has no words around it:
+           currentColor is black, as it was. */
+        rc = draw("<svg width=\"20\" height=\"20\"><rect width=\"20\" height=\"20\" fill=\"currentColor\"/></svg>",
+                  20, 20);
+        okn("in a file of its own currentColor is black", rc == SVG_OK && at(10, 10) == 0x000000, at(10, 10));
+        picture_free(&p);
+        free(d);
+    }
+
     puts(failed ? "SVGTEST_FAIL\n" : "SVGTEST_PASS\n");
     return failed;
 }
