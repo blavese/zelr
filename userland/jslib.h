@@ -353,15 +353,17 @@ static jobj *js_own_enum(jctx *J, jval v, int what) {
     }
     if (!js_is_obj(src)) return out;
     jobj *o = src.obj;
-    if (o->kind == JO_ARRAY || o->kind == JO_ARGS) {
-        for (u32 i = 0; i < o->len; i++) {
+    if (o->kind == JO_ARRAY || o->kind == JO_ARGS || o->kind == JO_TYPED) {
+        u32 len = o->kind == JO_TYPED ? js_ta_length(o) : o->len;
+        for (u32 i = 0; i < len; i++) {
             jval k = js_from_str(js_to_key(J, js_num(i)));
+            jval v = o->kind == JO_TYPED ? js_ta_get(J, o, i) : o->items[i];
             if (what == 0) js_arr_push(J, out, k);
-            else if (what == 1) js_arr_push(J, out, o->items[i]);
+            else if (what == 1) js_arr_push(J, out, v);
             else {
                 jobj *pair = js_array(J);
                 js_arr_push(J, pair, k);
-                js_arr_push(J, pair, o->items[i]);
+                js_arr_push(J, pair, v);
                 js_arr_push(J, out, js_from_obj(pair));
             }
         }
@@ -2320,6 +2322,7 @@ static jval nat_unescape(jctx *J, jval t, jval *a, int n) { (void)t; return js_u
 
 #include "jsarr.h"
 #include "jsprom.h"
+#include "jstyped.h"
 
 /* --- setting it all up ------------------------------------------------------ */
 
@@ -2553,6 +2556,7 @@ static void js_globals(jctx *J) {
     js_setup_promises(J);
     js_setup_generators(J);
     js_setup_dates(J);
+    js_setup_typed(J);
 
     js_declare_flags(J, g, js_str(J, "NaN"), js_num(js_nan()), 0);
     js_declare_flags(J, g, js_str(J, "Infinity"), js_num(1e308 * 10), 0);

@@ -100,6 +100,38 @@ static void script(const char *what, const char *src, const char *want) {
     js_done(&J);
 }
 
+/* Runs a setup and then a loop in the same page, and fails if the loop took
+   more than `most` bytes of the page's memory or left `result` other than
+   `want`. Something made afresh every time round shows here long before it
+   runs a page out of memory. */
+static void thrift(const char *what, const char *setup, const char *loop, const char *want, u32 most) {
+    ran++;
+    jctx J;
+    js_init(&J);
+    int ok = js_run(&J, setup, (u32)strlen(setup));
+    u32 before = J.allocated;
+    if (ok) ok = js_run(&J, loop, (u32)strlen(loop));
+    u32 took = J.allocated - before;
+    jstr *text = 0;
+    if (ok) {
+        jprop *p = js_find(J.global->vars, js_str(&J, "result"));
+        text = js_to_str(&J, p ? p->v : js_undef());
+    }
+    int same = ok && text && strlen(want) == (int)text->len && took <= most;
+    for (u32 i = 0; same && i < text->len; i++)
+        if (text->s[i] != want[i]) same = 0;
+    show(same ? "  PASS  " : "  FAIL  ");
+    show(what);
+    if (!same) {
+        show("\n          ");
+        if (!ok) { show("error: "); show(J.error); }
+        else { show("took "); putn((int)took); show(" bytes"); }
+        failed++;
+    }
+    putc('\n');
+    js_done(&J);
+}
+
 int main(void) {
     puts("javascript, in ring 3\n");
 
@@ -1075,6 +1107,56 @@ int main(void) {
            "a|1|b|2|c;a|b|c;a|b");
     expect("flags, source and a pattern as text",
            "/a/gimsuy.flags + ' ' + /a\\/b/.source + ' ' + String(/x/g) + ' ' + new RegExp(/a/g).global", "gimsuy a\\/b /x/g true");
+    /* --- bytes: ArrayBuffer, the typed arrays, DataView ---------------------- */
+    expect("a byte array wraps what is put in it, and a clamped one rounds to even and clamps",
+           "(function(){ var u = new Uint8Array(4); u[0] = 257; u[1] = -1; u[2] = 3.7;"
+           " return [...u].join() + ';' + [...new Uint8ClampedArray([300, -5, 1.5, 2.5])].join(); })()",
+           "1,255,3,0;255,0,2,2");
+    expect("sixteen and thirty-two bit and float elements keep their own widths",
+           "[new Int16Array([40000])[0], new Uint32Array([-1])[0], new Float32Array([0.1])[0],"
+           " new Int8Array([200])[0], new Float64Array(2).byteLength].join()",
+           "-25536,4294967295,0.10000000149011612,-56,16");
+    expect("a data view reads and writes either byte order",
+           "(function(){ var b = new ArrayBuffer(16), d = new DataView(b); d.setUint16(0, 0x1234);"
+           " d.setUint32(4, 0xdeadbeef, true); d.setFloat64(8, Math.PI); var u = new Uint8Array(b);"
+           " return [u[0], u[1], u[4], d.getUint32(4, true).toString(16), d.getInt8(7), u[8],"
+           " d.getFloat64(8) === Math.PI].join(); })()",
+           "18,52,239,deadbeef,-34,64,true");
+    expect("views share their buffer, and slice copies it",
+           "(function(){ var s = new Uint8Array([1, 2, 3, 4, 5]); s.subarray(1, 3)[0] = 9;"
+           " s.slice(1, 3)[0] = 7; new Uint8Array(s.buffer, 3, 2)[0] = 6;"
+           " var c = new Uint8Array(s.buffer.slice(3)); c[1] = 0;"
+           " return [...s].join() + ';' + s.subarray(2).byteOffset + ';' + [...c].join(); })()",
+           "1,9,3,6,5;2;6,0");
+    expect("typed array methods keep their kind and sort as numbers",
+           "(function(){ var s = new Uint8Array([1, 2, 3]); var m = s.map(x => x * 100);"
+           " return [m instanceof Uint8Array, m[2], [...new Float64Array([10, 2, 1]).sort()].join(' '),"
+           " Int8Array.of(1, 2, -3)[2], Uint16Array.from([1, 2]).length, s.join('-'), s.indexOf(3),"
+           " s.filter(x => x > 1).length, Object.prototype.toString.call(s)].join(); })()",
+           "true,44,1 2 10,-3,2,1-2-3,2,2,[object Uint8Array]");
+    expect("set, for-of, keys and an element past the end",
+           "(function(){ var a = new Int32Array(4); a.set([7, 8], 1); a[9] = 1; var t = 0;"
+           " for (var x of a) t += x;"
+           " return [t, Object.keys(a).join(''), a[9], a.length, ArrayBuffer.isView(a),"
+           " ArrayBuffer.isView(a.buffer), Float64Array.BYTES_PER_ELEMENT].join(); })()",
+           "15,0123,,4,true,false,8");
+    expect("compound assignment, increments and delete through an index",
+           "(function(){ var a = [1, 2, 3], o = {}, t = new Uint8Array(2), i = 1;"
+           " a[i] += 10; a[i]++; ++a[0]; a[2] **= 2; o[5] = 1; o[5] += 1; o[i + 4]++;"
+           " t[0] += 300; t[1]--; delete a[0];"
+           " var f = Object.freeze([1, 2]); f[0] = 5; f[1] += 1; var g = [1]; g[3] = 4;"
+           " return [a.join(), a.length, o[5], t[0], t[1], f.join(), g.length, g[3]].join(';'); })()",
+           ",13,9;3;3;44;255;1,2;4;4");
+    thrift("writing numbered keys over and over makes each key once",
+           "var o = {}, result;",
+           "for (var n = 0; n < 200000; n++) o[n % 1000] = n; result = o[999];",
+           "199999", 1u << 20);
+    thrift("counting up every element of long arrays makes nothing for each element",
+           "var a = []; for (var i = 0; i < 100000; i++) a.push(i);"
+           " var t = new Uint32Array(100000), result;",
+           "for (var i = 0; i < a.length; i++) { a[i] += 1; a[i]++; t[i] = a[i] * 3; }"
+           " var s = 0; for (var i = 0; i < t.length; i++) s += t[i]; result = a[99999] + ',' + s;",
+           "100001,15000450000", 1u << 18);
     expect("while two hundred nested brackets are an ordinary array",
            "(function(){ var s = ''; for (var i = 0; i < 200; i++) s += '['; s += '1';"
            " for (var i = 0; i < 200; i++) s += ']'; var a = eval(s);"

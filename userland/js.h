@@ -89,6 +89,8 @@
    to grow it until the machine has nothing left. */
 #define JS_NODES_CAP (3 * 1024 * 1024)
 
+#define JS_INT_KEYS 1024
+
 /* --- values --------------------------------------------------------------
  *
  * Seven kinds a script can see, in a tagged union, and two only the engine
@@ -162,7 +164,7 @@ typedef enum {
     JO_ARGS,                  /* an arguments object: elements like an array */
     JO_BOXED,                 /* new String(...), new Number(...) and the like */
     JO_ERROR, JO_DATE, JO_MAP, JO_SET, JO_WEAKMAP, JO_WEAKSET,
-    JO_PROMISE, JO_GEN, JO_ITER
+    JO_PROMISE, JO_GEN, JO_ITER, JO_BUFFER, JO_TYPED, JO_VIEW
 } jokind;
 
 /* What an object allows. */
@@ -370,11 +372,12 @@ typedef struct jctx {
            *p_weakset, *p_promise, *p_iterator, *p_array_iter, *p_map_iter,
            *p_set_iter, *p_string_iter, *p_generator, *p_async_generator,
            *p_async_iterator, *p_regexp_iter, *p_gen_function, *p_async_function,
-           *p_async_gen_function;
+           *p_async_gen_function, *p_buffer, *p_view, *p_typed[9];
     jobj   *c_promise, *c_object, *c_array, *c_function;
     jobj   *err_ctor[8], *err_proto[8];
     jobj   *eval_fn;          /* the original eval, which is the direct one */
     jobj   *tagged;           /* each tagged template's pieces, made once */
+    jstr   *int_keys[1024];   /* "0" to "1023" as keys, made once (JS_INT_KEYS) */
     jobj   *sym_registry;     /* Symbol.for's symbols, by name */
     jstr  **intern;           /* the names the parser has read, each once */
     u32     nintern, intern_cap;
@@ -606,6 +609,7 @@ static jobj *js_default_proto(jctx *J, jokind kind) {
         case JO_WEAKMAP: return J->p_weakmap;
         case JO_WEAKSET: return J->p_weakset;
         case JO_PROMISE: return J->p_promise;
+        case JO_BUFFER: return J->p_buffer;
         default:        return J->p_object;
     }
 }

@@ -299,12 +299,18 @@ static jstr *js_to_key(jctx *J, jval v) {
         char buf[40];
         double d = v.num;
         if (d >= 0 && d < 1e9 && d == (double)(int)d) {
-            /* Small whole numbers are nearly every key a number becomes. */
+            /* Small whole numbers are nearly every key a number becomes, and
+               the smallest are made once: a loop over an object by index
+               made a string for every turn, which a long loop turned into
+               the whole of the page's memory. */
             int k = (int)d, w = 0;
+            if (k < JS_INT_KEYS && J->int_keys[k]) return J->int_keys[k];
             char rev[12];
             do { rev[w++] = (char)('0' + k % 10); k /= 10; } while (k);
             for (int i = 0; i < w; i++) buf[i] = rev[w - 1 - i];
-            return js_str_n(J, buf, (u32)w);
+            jstr *s = js_str_n(J, buf, (u32)w);
+            if ((int)d < JS_INT_KEYS) J->int_keys[(int)d] = s;
+            return s;
         }
         u32 n = js_num_text(d, buf, sizeof(buf));
         return js_str_n(J, buf, n);
@@ -509,6 +515,9 @@ static int js_index_of(const jstr *key, u32 *out) {
 }
 
 static jobj *js_make_proto_for(jctx *J, jobj *f);
+static jval js_ta_get(jctx *J, jobj *o, u32 i);
+static void js_ta_set(jctx *J, jobj *o, u32 i, jval v);
+static u32 js_ta_length(jobj *o);
 
 /* The own properties some objects have without a property table entry. 1
    and the value in *out when o answers for key that way. */
@@ -530,6 +539,13 @@ static int js_exotic_get(jctx *J, jobj *o, jstr *key, jval *out) {
                     *out = js_from_str(js_str_n(J, s->s + idx, 1));
                     return 1;
                 }
+            }
+            return 0;
+        case JO_TYPED:
+            if (js_index_of(key, &idx)) {
+                if (idx < js_ta_length(o)) { *out = js_ta_get(J, o, idx); return 1; }
+                *out = js_undef();
+                return 1;
             }
             return 0;
         case JO_FUNC: case JO_NATIVE:
@@ -590,6 +606,7 @@ static int js_get_own(jctx *J, jobj *o, jstr *key, jval *v, int *flags) {
         int is_idx = js_index_of(key, &idx);
         *flags = (o->kind == JO_ARRAY || o->kind == JO_ARGS) && is_idx
                ? (o->flags & JOF_FROZEN ? JP_ENUM : JP_PLAIN)
+               : o->kind == JO_TYPED && is_idx ? (JP_ENUM | JP_WRITE)
                : o->kind == JO_BOXED && is_idx ? JP_ENUM
                : o->kind == JO_ARRAY && !(o->flags & JOF_FROZEN) ? JP_WRITE
                : o->kind == JO_FUNC || o->kind == JO_NATIVE ? JP_CONF : 0;
@@ -713,6 +730,13 @@ static void js_putv(jctx *J, jval target, jstr *key, jval v, jval receiver) {
     }
     jobj *o = target.obj;
 
+    if (o->kind == JO_TYPED) {
+        /* An element past the end is dropped, as the standard has it; any
+           other name is an ordinary property. */
+        u32 idx;
+        if (js_index_of(key, &idx)) { js_ta_set(J, o, idx, v); return; }
+    }
+
     if (o->kind == JO_ARRAY || o->kind == JO_ARGS) {
         u32 idx;
         if (js_index_of(key, &idx)) {
@@ -813,6 +837,10 @@ static void js_define_accessor(jctx *J, jobj *o, jstr *key, jval get, jval set, 
 static int js_delete(jctx *J, jval target, jstr *key) {
     if (target.t != JS_OBJ || !target.obj) return 1;
     jobj *o = target.obj;
+    if (o->kind == JO_TYPED) {
+        u32 idx;
+        if (js_index_of(key, &idx)) return idx >= js_ta_length(o);
+    }
     if (o->kind == JO_ARRAY || o->kind == JO_ARGS) {
         u32 idx;
         if (js_index_of(key, &idx)) {
@@ -1617,17 +1645,24 @@ static jval js_binary(jctx *J, jop op, jval l, jval r, int line);
 
 /* Both sides of an assignment target: where to read it and where to put it
    back. Used by ++, --, the compound assignments and the logical ones, which
-   need both. */
+   need both. An element of an array or a typed array, by a whole number, is
+   reached directly: a[i] = v in a loop made the text of every i. */
 typedef struct {
-    int    kind;              /* 0 name, 1 property, 2 nothing, 3 super */
+    int    kind;              /* 0 name, 1 property, 2 nothing, 3 super, 4 element */
+    u32    idx;
     jstr  *name;
     jval   obj;
     jval   self;
 } jplace;
 
+static jval js_ta_get(jctx *J, jobj *o, u32 i);
+static void js_ta_set(jctx *J, jobj *o, u32 i, jval v);
+static u32 js_ta_length(jobj *o);
+
 static jplace js_place(jctx *J, int node, jscope *sc, jval this_val) {
     jplace p;
     p.kind = 2;
+    p.idx = 0;
     p.name = 0;
     p.obj = js_undef();
     p.self = js_undef();
@@ -1651,7 +1686,16 @@ static jplace js_place(jctx *J, int node, jscope *sc, jval this_val) {
         int b = J->nodes[node].b;
         p.obj = js_eval(J, J->nodes[node].a, sc, this_val);
         if (J->sig != JS_OK) return p;
-        p.name = js_to_key(J, js_eval(J, b, sc, this_val));
+        jval k = js_eval(J, b, sc, this_val);
+        if (J->sig != JS_OK) return p;
+        if (k.t == JS_NUM && p.obj.t == JS_OBJ && p.obj.obj
+            && (p.obj.obj->kind == JO_ARRAY || p.obj.obj->kind == JO_TYPED)
+            && k.num >= 0 && k.num < 4294967295.0 && k.num == (double)(u32)k.num) {
+            p.kind = 4;
+            p.idx = (u32)k.num;
+            return p;
+        }
+        p.name = js_to_key(J, k);
         p.kind = 1;
         return p;
     }
@@ -1674,6 +1718,12 @@ static jval js_place_get(jctx *J, jplace *p, jscope *sc) {
     if (p->kind == 0) return js_ident(J, p->name, sc);
     if (p->kind == 1) return js_get(J, p->obj, p->name);
     if (p->kind == 3) return js_getv(J, p->obj, p->name, p->self);
+    if (p->kind == 4) {
+        jobj *o = p->obj.obj;
+        if (o->kind == JO_TYPED) return p->idx < js_ta_length(o) ? js_ta_get(J, o, p->idx) : js_undef();
+        if (p->idx < o->len) return o->items[p->idx];
+        return js_get(J, p->obj, js_to_key(J, js_num(p->idx)));
+    }
     return js_undef();
 }
 
@@ -1681,6 +1731,12 @@ static void js_place_put(jctx *J, jplace *p, jscope *sc, jval v) {
     if (p->kind == 0) js_assign_name(J, sc, p->name, v);
     else if (p->kind == 1) js_put(J, p->obj, p->name, v);
     else if (p->kind == 3) js_putv(J, p->self, p->name, v, p->self);
+    else if (p->kind == 4) {
+        jobj *o = p->obj.obj;
+        if (o->kind == JO_TYPED) { js_ta_set(J, o, p->idx, v); return; }
+        if (!(o->flags & JOF_FROZEN) && p->idx < o->len) { o->items[p->idx] = v; return; }
+        js_put(J, p->obj, js_to_key(J, js_num(p->idx)), v);
+    }
 }
 
 /* A name's value. One that was never declared is a ReferenceError, as the
@@ -2402,12 +2458,14 @@ static JS_NOINLINE jval js_eval_unaryish(jctx *J, int node, jscope *sc, jval thi
             int shorted = J->chain_short;
             J->chain_short = 0;
             if (shorted || J->sig != JS_OK) return js_bool(1);
+            if (p.kind == 4) { p.kind = 1; p.name = js_to_key(J, js_num(p.idx)); }
             if (p.kind == 1) return js_bool(js_delete(J, p.obj, p.name));
             return js_bool(1);
         }
         if (k == N_MEMBER || k == N_INDEX) {
             jplace p = js_place(J, a, sc, this_val);
             if (J->sig != JS_OK) return js_undef();
+            if (p.kind == 4) { p.kind = 1; p.name = js_to_key(J, js_num(p.idx)); }
             if (p.obj.t == JS_NULL || p.obj.t == JS_UNDEF)
                 return js_nothing(J, "cannot delete ", p.name, p.obj);
             return js_bool(js_delete(J, p.obj, p.name));
@@ -2460,11 +2518,14 @@ static JS_NOINLINE jval js_eval_member(jctx *J, int node, jscope *sc, jval this_
         int b = J->nodes[node].b;
         jval idx = js_eval(J, b, sc, this_val);
         if (J->sig != JS_OK) return js_undef();
-        if (target.t == JS_OBJ && target.obj && idx.t == JS_NUM
-            && (target.obj->kind == JO_ARRAY || target.obj->kind == JO_ARGS)) {
+        if (target.t == JS_OBJ && target.obj && idx.t == JS_NUM) {
             double d = idx.num;
-            if (d >= 0 && d < (double)target.obj->len && d == (double)(u32)d)
-                return target.obj->items[(u32)d];
+            jobj *o = target.obj;
+            if ((o->kind == JO_ARRAY || o->kind == JO_ARGS)
+                && d >= 0 && d < (double)o->len && d == (double)(u32)d)
+                return o->items[(u32)d];
+            if (o->kind == JO_TYPED && d >= 0 && d == (double)(u32)d)
+                return js_ta_get(J, o, (u32)d);
         }
         if (target.t == JS_STR && idx.t == JS_NUM && target.str) {
             double d = idx.num;
@@ -2654,8 +2715,10 @@ static jobj *js_forin_keys(jctx *J, jobj *o) {
     if (!keys) return 0;
     int depth = 0;
     for (jobj *q = o; q && depth < 64; q = q->proto, depth++) {
-        if (q->kind == JO_ARRAY || q->kind == JO_ARGS)
-            for (u32 i = 0; i < q->len; i++) js_arr_push(J, keys, js_from_str(js_to_key(J, js_num(i))));
+        if (q->kind == JO_ARRAY || q->kind == JO_ARGS || q->kind == JO_TYPED) {
+            u32 len = q->kind == JO_TYPED ? js_ta_length(q) : q->len;
+            for (u32 i = 0; i < len; i++) js_arr_push(J, keys, js_from_str(js_to_key(J, js_num(i))));
+        }
         if (q->kind == JO_BOXED && q->ival.t == JS_STR)
             for (u32 i = 0; i < q->ival.str->len; i++)
                 js_arr_push(J, keys, js_from_str(js_to_key(J, js_num(i))));
