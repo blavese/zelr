@@ -782,7 +782,12 @@ it is no longer the only one.
 
 **And the pages can run.** The engine in `userland/js.h` knows nothing
 about pages — it runs a language, and it was written that way so it could be
-tested without one. What it has instead is two hooks, how a property on a
+tested without one. The language is JavaScript as it was written from 2015 to
+2021: `let` and `const` with their scopes, arrows, template strings,
+destructuring, spread, default parameters, classes with private fields,
+symbols and iteration, Map and Set, generators, promises and async functions
+(run on stacks of their own), patterns with lookaround and named groups,
+typed arrays, and eval. Modules, Proxy, Intl and BigInt are not there yet. What it has instead is two hooks, how a property on a
 host object is read and written, and `userland/jsdom.h` is the browser
 filling them in.
 

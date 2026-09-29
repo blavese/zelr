@@ -95,7 +95,32 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
-### 0.72.0 (in progress)
+### 0.73.0 (in progress)
+
+- **JavaScript (12).** The engine is JavaScript of 2015 to 2021: prototypes and lexical scopes (`let`/`const`
+  with a fresh binding per loop turn, hoisting: B22), arrows, template and tagged template strings,
+  defaults, rest, spread, destructuring, getters and setters, `?.` `??` `??=` `**`, `this` in a plain call
+  (B23), no 24-argument limit (B20), a parser depth guard (B9), direct eval; classes with fields, private
+  names, static blocks, `super`, `new.target`; Symbol, iterators, for-of, Map/Set/WeakMap/WeakSet and the
+  2015-2021 library; generators, Promise with a microtask queue, async/await and async generators, on
+  coroutines with their own stacks (System V in zelr, Windows x64 on the host); patterns with lookbehind,
+  backreferences, named groups and `$<name>`, the s/y/u/d flags and `\p{}` (B11, B16), reading whole UTF-8
+  characters; ArrayBuffer, the nine typed arrays and DataView; atob, btoa, TextEncoder, TextDecoder, `self`,
+  DOMException. New files: `jsarr.h`, `jsco.h`, `jslib.h`, `jsprom.h`, `jstyped.h`. jstest 384 (was 248),
+  pagetest 87, each new check seen failing on a broken build. Not there: modules, Proxy, Intl, BigInt
+  arithmetic; strings are indexed by byte; no garbage collector and a 24 MB cap a page; WeakMap holds its
+  keys. The image grew from 14.3 MB to 20.2 MB (jstest 2.4 MB, the browser 4.8 MB).
+- **Templates and noscript (11).** `<template>` is hidden by the browser's sheet and its style elements,
+  linked sheets and pictures are not gathered (`in_template`); a meta refresh inside `<noscript>` is not
+  followed (`in_noscript`), since scripts run here. GitHub's `{{ message }}` placeholder and stray dialog
+  were template contents. layouttest 179, browsercheck 29 (a refresh, one in `<noscript>`, a template).
+- **display: contents (11).** `D_CONTENTS`: an element with no box (`lay_style` clears its margins, padding,
+  borders, background and size); a flex row or a grid takes its children as items (`lay_items_start`,
+  `lay_items_next`, `lay_items`, and each item's parent style from `lay_item_parent`, so what the wrapper
+  passes down still reaches them); elsewhere it is laid out as inline. `@supports` says yes to it now.
+  layouttest 184.
+
+### 0.72.0
 
 - **WebP (13).** `webp.h`: lossless and lossy WebP, transparency, the first frame of an animation, from RFC
   9649 and RFC 6386, tables taken from the RFC texts (`tools/genwebptab.py`). webptest (136) decodes twelve

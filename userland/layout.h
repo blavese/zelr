@@ -1107,6 +1107,23 @@ static inline void lay_style(lctx *L, int el, const cstyle *parent,
     if (L->inl && L->inl[el].n > 0)
         for (int k = 0; k < L->inl[el].n; k++)
             lay_apply_decl(L, &L->s->decls[L->inl[el].at + k], out, pct_of);
+
+    /* display: contents is an element with no box: its children are laid
+       out as though they were its parent's (a flex row or a grid takes
+       them as its own items, lay_items), and nothing of a box -- margins,
+       padding, borders, a background, a size -- is drawn for it. What it
+       passes down by inheritance it still passes. Elsewhere it is laid out
+       as inline, which with no box is the same thing. */
+    if (out->display == D_CONTENTS) {
+        out->mt = out->mr = out->mb = out->ml = 0;
+        out->pt = out->pr = out->pb = out->pl = 0;
+        out->bt = out->br = out->bb = out->bl = 0;
+        out->has_bg = 0;
+        out->width = out->height = out->max_width = -1;
+        out->min_width = out->min_height = out->max_height = -1;
+        out->position = POS_STATIC;
+        out->floated = 0;
+    }
 }
 
 static void lay_block(lctx *L, int node, const cstyle *parent, int x,
@@ -1902,6 +1919,83 @@ static inline int lay_is_block_node(lctx *L, int n, const cstyle *parent) {
 
 #define LAY_FLEX_MAX 128
 
+/* The items of a flex row or a grid: its children that are drawn and in the
+ * flow, with a display: contents child's own children in its place, since
+ * it has no box to be an item. `par` says which element each item inherits
+ * from: -1 for the container, else the contents element it was found in
+ * (a contents element inside another is measured from the container, which
+ * is near enough for what a wrapper passes down). Children positioned
+ * absolutely go in `placed`, being out of the row altogether. The first
+ * child that did not fit goes in `extra`, -1 when all did. Items: how many. */
+#define LAY_WRAPS 6
+typedef struct {
+    int at[LAY_WRAPS], from[LAY_WRAPS], depth;
+    cstyle wrap[LAY_WRAPS];
+} litems;
+
+static void lay_items_start(lctx *L, litems *it, int node, const cstyle *st) {
+    it->depth = 0;
+    it->at[0] = L->d->nodes[node].first;
+    it->from[0] = -1;
+    lay_cs(&it->wrap[0], st);
+}
+
+/* The next item, and in `par` what it inherits from; with `positioned` set
+   to whether it is out of the flow (to be laid out on its own). -1 at the
+   end. */
+static int lay_items_next(lctx *L, litems *it, int cw, int *par, int *positioned) {
+    const ddoc *d = L->d;
+    while (it->depth >= 0) {
+        int c = it->at[it->depth];
+        if (c < 0) { it->depth--; continue; }
+        it->at[it->depth] = d->nodes[c].next;
+        if (d->nodes[c].kind != DN_ELEMENT) continue;
+        cstyle own;
+        lay_style(L, c, &it->wrap[it->depth], &own, cw);
+        if (own.display == D_NONE || lay_unseen(&own)) continue;
+        if (own.display == D_CONTENTS && it->depth + 1 < LAY_WRAPS) {
+            int dp = ++it->depth;
+            it->at[dp] = d->nodes[c].first;
+            it->from[dp] = c;
+            lay_cs(&it->wrap[dp], &own);
+            continue;
+        }
+        *par = it->from[it->depth];
+        *positioned = own.position == POS_ABSOLUTE || own.position == POS_FIXED;
+        return c;
+    }
+    return -1;
+}
+
+static int lay_items(lctx *L, int node, const cstyle *st, int cw, int *kid, int *par,
+                     int *placed, int *nplaced, int *extra) {
+    int n = 0;
+    *extra = -1;
+    *nplaced = 0;
+    litems it;
+    lay_items_start(L, &it, node, st);
+    int c, from, positioned;
+    while ((c = lay_items_next(L, &it, cw, &from, &positioned)) >= 0) {
+        if (positioned) {
+            if (*nplaced < LAY_FLEX_MAX) placed[(*nplaced)++] = c;
+            continue;
+        }
+        if (n >= LAY_FLEX_MAX) { if (*extra < 0) *extra = c; continue; }
+        kid[n] = c;
+        par[n] = from;
+        n++;
+    }
+    return n;
+}
+
+/* The style an item inherits from: the container's, or the contents element
+   it was found in, worked out into `buf`. */
+static const cstyle *lay_item_parent(lctx *L, const cstyle *st, int par, int cw, cstyle *buf) {
+    if (par < 0) return st;
+    lay_style(L, par, st, buf, cw);
+    return buf;
+}
+
 /* Lays a node out and forgets it, returning how wide its content came out
    and how tall. Everything the layout was in the middle of is put back. */
 /* What a measurement came to, kept for the rest of the layout: which
@@ -1993,7 +2087,7 @@ static int lay_measure(lctx *L, int node, const cstyle *parent, int avail,
 /* One line of flex items along the row: kid[0..n), with what each would
    like (want, which this changes to what each gets), the narrowest each can
    go (low), its measured height and how much it grows. */
-static void lay_flex_line(lctx *L, const cstyle *st, const int *kid, int n,
+static void lay_flex_line(lctx *L, const cstyle *st, const int *kid, const int *par, int n,
                           const int *meas, int *want, const int *low,
                           const int *high, const int *grow, int cx, int cw,
                           int gap, int reverse, int *y) {
@@ -2104,8 +2198,10 @@ static void lay_flex_line(lctx *L, const cstyle *st, const int *kid, int n,
         int i = reverse ? n - 1 - idx : idx;
         first[idx] = L->out->nitems;
         int child_y = top;
+        cstyle pbuf;
+        const cstyle *ps = lay_item_parent(L, st, par[i], cw, &pbuf);
         L->flex_sized = kid[i];
-        lay_block(L, kid[i], st, pen, want[i], &child_y);
+        lay_block(L, kid[i], ps, pen, want[i], &child_y);
         L->flex_sized = -1;
         got[idx] = child_y - top;
         if (got[idx] > tallest) tallest = got[idx];
@@ -2142,20 +2238,9 @@ static void lay_flex(lctx *L, int node, const cstyle *st, int cx, int cw,
        once the row is done. Counted in, a closed menu written as
        `hidden` with width: 100% took a whole line of the row and pushed
        what came after it onto the next. */
-    int kid[LAY_FLEX_MAX], placed[LAY_FLEX_MAX];
-    int n = 0, nplaced = 0, extra = -1, top = *y;
-    for (int c = d->nodes[node].first; c >= 0; c = d->nodes[c].next) {
-        if (d->nodes[c].kind != DN_ELEMENT) continue;
-        cstyle own;
-        lay_style(L, c, st, &own, cw);
-        if (own.display == D_NONE || lay_unseen(&own)) continue;
-        if (own.position == POS_ABSOLUTE || own.position == POS_FIXED) {
-            if (nplaced < LAY_FLEX_MAX) placed[nplaced++] = c;
-            continue;
-        }
-        if (n < LAY_FLEX_MAX) kid[n++] = c;
-        else { extra = c; break; }
-    }
+    int kid[LAY_FLEX_MAX], par[LAY_FLEX_MAX], placed[LAY_FLEX_MAX];
+    int nplaced = 0, extra = -1, top = *y;
+    int n = lay_items(L, node, st, cw, kid, par, placed, &nplaced, &extra);
     for (int i = 0; i < nplaced; i++) {
         int yy = top;
         lay_block(L, placed[i], st, cx, cw, &yy);
@@ -2175,9 +2260,11 @@ static void lay_flex(lctx *L, int node, const cstyle *st, int cx, int cw,
      * everything touching. */
     if (column) {
         for (int i = 0; i < n; i++) {
-            int k = kid[reverse ? n - 1 - i : i];
+            int ki = reverse ? n - 1 - i : i;
+            cstyle pbuf;
+            const cstyle *ps = lay_item_parent(L, st, par[ki], cw, &pbuf);
             if (i) *y += gap;
-            lay_block(L, k, st, cx, cw, y);
+            lay_block(L, kid[ki], ps, cx, cw, y);
         }
     } else {
         /* --- along the line ------------------------------------------------ */
@@ -2190,12 +2277,14 @@ static void lay_flex(lctx *L, int node, const cstyle *st, int cx, int cw,
                child would like to be rather than how wide it was squeezed
                into; and as narrow as it will go, which is as far as it
                shrinks. */
-            int w = lay_measure(L, kid[i], st, cw > 0 ? cw : 2000, &h);
+            cstyle pbuf;
+            const cstyle *ps = lay_item_parent(L, st, par[i], cw, &pbuf);
+            int w = lay_measure(L, kid[i], ps, cw > 0 ? cw : 2000, &h);
             if (w < 1) w = 1;
             if (w > cw && cw > 0) w = cw;
 
             cstyle own;
-            lay_style(L, kid[i], st, &own, cw);
+            lay_style(L, kid[i], ps, &own, cw);
             if (own.width >= 0)
                 w = own.width + (own.border_box ? 0 : own.pl + own.pr + own.bl + own.br)
                   + (own.ml > 0 ? own.ml : 0) + (own.mr > 0 ? own.mr : 0);
@@ -2207,7 +2296,7 @@ static void lay_flex(lctx *L, int node, const cstyle *st, int cx, int cw,
             int lo;
             if (own.min_width >= 0) lo = own.min_width;
             else if (own.clip) lo = 8;
-            else { L->flex_sized = kid[i]; lo = lay_measure(L, kid[i], st, 1, &h2); L->flex_sized = -1; }
+            else { L->flex_sized = kid[i]; lo = lay_measure(L, kid[i], ps, 1, &h2); L->flex_sized = -1; }
             if (lo > w) lo = w;
             if (lo < 1) lo = 1;
 
@@ -2222,7 +2311,7 @@ static void lay_flex(lctx *L, int node, const cstyle *st, int cx, int cw,
            albums -- cannot be scrolled inside a page here, and squeezed onto
            one line its cards were written over each other. It wraps. */
         if (!st->flex_wrap && st->clip != 2) {
-            lay_flex_line(L, st, kid, n, meas, want, low, high, grow, cx, cw, gap, reverse, y);
+            lay_flex_line(L, st, kid, par, n, meas, want, low, high, grow, cx, cw, gap, reverse, y);
         } else {
             /* Wrapping: as many as fit on each line, each line a row of its
                own. Card grids are built this way, and one row of every card
@@ -2239,7 +2328,7 @@ static void lay_flex(lctx *L, int node, const cstyle *st, int cx, int cw,
                     i1++;
                 }
                 if (i0) *y += gap;
-                lay_flex_line(L, st, kid + i0, i1 - i0, meas + i0, want + i0, low + i0,
+                lay_flex_line(L, st, kid + i0, par + i0, i1 - i0, meas + i0, want + i0, low + i0,
                               high + i0, grow + i0, cx, cw, gap, reverse, y);
                 i0 = i1;
             }
@@ -3003,34 +3092,42 @@ static void lay_grid_named(lctx *L, int node, const cstyle *st, int cx, int cw, 
 
 static void lay_grid(lctx *L, int node, const cstyle *st, int cx, int cw, int *y) {
     if (st->grid_areas) { lay_grid_named(L, node, st, cx, cw, y); return; }
-    const ddoc *d = L->d;
     int gap = st->gap > 0 ? st->gap : 0;
     int width[LAY_GRID_COLS];
 
-    /* The items, counted, for a grid that makes a column for each; then
-       the least each column's items can be drawn in. */
-    int nitems = 0;
-    for (int k = d->nodes[node].first; k >= 0; k = d->nodes[k].next) {
-        if (d->nodes[k].kind != DN_ELEMENT) continue;
-        cstyle own;
-        lay_style(L, k, st, &own, cw);
-        if (own.display != D_NONE) nitems++;
+    /* The items (lay_items_next: a display: contents child's own children
+       in its place), counted for a grid that makes a column for each; one
+       positioned absolutely is laid out on its own, from the grid's top.
+       Then the least each column's items can be drawn in. */
+    int nitems = 0, top0 = *y;
+    litems it;
+    int k, from, positioned;
+    lay_items_start(L, &it, node, st);
+    while ((k = lay_items_next(L, &it, cw, &from, &positioned)) >= 0) {
+        if (positioned) {
+            cstyle pb;
+            int yy = top0;
+            lay_block(L, k, lay_item_parent(L, st, from, cw, &pb), cx, cw, &yy);
+            continue;
+        }
+        nitems++;
     }
     int kind[LAY_GRID_COLS], val[LAY_GRID_COLS], base[LAY_GRID_COLS];
     int ncols = lay_grid_tracks(L, st, cw, gap, nitems, kind, val, base);
     if (ncols == 0) { ncols = 1; kind[0] = GT_PX; val[0] = cw; base[0] = 0; }
     if (ncols > 1) {
         int col = 0, most = 0;
-        for (int k = d->nodes[node].first; k >= 0; k = d->nodes[k].next) {
-            if (d->nodes[k].kind != DN_ELEMENT) continue;
-            cstyle own;
-            lay_style(L, k, st, &own, cw);
-            if (own.display == D_NONE) continue;
+        lay_items_start(L, &it, node, st);
+        while ((k = lay_items_next(L, &it, cw, &from, &positioned)) >= 0) {
+            if (positioned) continue;
+            cstyle own, pb;
+            const cstyle *ps = lay_item_parent(L, st, from, cw, &pb);
+            lay_style(L, k, ps, &own, cw);
             int span = own.gspan < 0 ? ncols : own.gspan > 0 ? own.gspan : 1;
             if (span > ncols) span = ncols;
             if (col + span > ncols) col = 0;
             if (span == 1) {
-                int m = lay_grid_least(L, k, st, &own, cw);
+                int m = lay_grid_least(L, k, ps, &own, cw);
                 if (kind[col] == GT_FR && m > base[col]) base[col] = m;
                 if (m > most) most = m;
             }
@@ -3065,14 +3162,17 @@ static void lay_grid(lctx *L, int node, const cstyle *st, int cx, int cw, int *y
 
     struct { int first, end, h; } row[LAY_GRID_COLS];
     int nrow = 0, col = 0, top = *y, rowh = 0, any = 0;
-    for (int k = d->nodes[node].first; ; k = d->nodes[k].next) {
+    lay_items_start(L, &it, node, st);
+    for (;;) {
+        k = lay_items_next(L, &it, cw, &from, &positioned);
+        if (k >= 0 && positioned) continue;
         int last = k < 0;
         int span = 1;
-        cstyle own;
+        cstyle own, pb;
+        const cstyle *ps = st;
         if (!last) {
-            if (d->nodes[k].kind != DN_ELEMENT) continue;
-            lay_style(L, k, st, &own, cw);
-            if (own.display == D_NONE) continue;
+            ps = lay_item_parent(L, st, from, cw, &pb);
+            lay_style(L, k, ps, &own, cw);
             span = own.gspan < 0 ? ncols : own.gspan > 0 ? own.gspan : 1;
             if (span > ncols) span = ncols;
         }
@@ -3095,7 +3195,7 @@ static void lay_grid(lctx *L, int node, const cstyle *st, int cx, int cw, int *y
         int w = colx[col + span] - gap - x;
         int first = L->out->nitems, cy = top;
         L->flex_sized = k;
-        lay_block(L, k, st, x, w, &cy);
+        lay_block(L, k, ps, x, w, &cy);
         L->flex_sized = -1;
         if (nrow < LAY_GRID_COLS) {
             row[nrow].first = first;

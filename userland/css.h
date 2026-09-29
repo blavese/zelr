@@ -71,7 +71,7 @@ enum { POS_STATIC = 0, POS_RELATIVE, POS_ABSOLUTE, POS_FIXED };
 
 enum { D_INLINE = 0, D_BLOCK, D_INLINE_BLOCK, D_LIST_ITEM, D_NONE,
        D_TABLE_CELL, D_FLEX, D_TABLE, D_TABLE_ROW, D_TABLE_GROUP,
-       D_INLINE_FLEX, D_GRID };
+       D_INLINE_FLEX, D_GRID, D_CONTENTS };
 
 /* Where a table cell's contents sit when the row is taller than they are.
    Baseline is what nothing asked for, and a cell treats it as the middle,
@@ -1332,7 +1332,7 @@ static inline int css_mq(const char *p, int n, int *lo, int *hi) {
 /* Whether @supports would say yes here. Nearly everything a page asks
    about is read or harmlessly ignored, so the answer is yes -- except what
    this browser lays out differently or not at all: grid (and subgrid),
-   display: contents, container queries and :has(). A page asks precisely so
+   container queries and :has(). A page asks precisely so
    that it can do something else where the answer is no, and opening the
    block anyway gave an encyclopaedia's grid layout, whose columns are never
    made, instead of the one it writes for a browser without grid. A leading
@@ -1344,7 +1344,6 @@ static inline int css_supports(const char *p, int n) {
     int no = 0;
     for (int k = 0; k < n; k++) {
         if (css_named(p + k, (k + 4 <= n ? 4 : n - k), "grid")) no = 1;
-        if (css_named(p + k, (k + 8 <= n ? 8 : n - k), "contents")) no = 1;
         if (css_named(p + k, (k + 9 <= n ? 9 : n - k), "container")) no = 1;
         if (k + 4 <= n && p[k] == ':' && css_named(p + k + 1, 3, "has")) no = 1;
     }
@@ -1977,6 +1976,7 @@ static inline void css_apply_v(int prop, const char *v, cstyle *st, int root_px,
                 st->display = D_TABLE;
             else if (w_starts_fold(v, "flex")) st->display = D_FLEX;
             else if (w_starts_fold(v, "grid")) st->display = D_GRID;
+            else if (w_starts_fold(v, "contents")) st->display = D_CONTENTS;
             else st->display = D_BLOCK;
             break;
 

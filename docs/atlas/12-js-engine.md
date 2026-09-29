@@ -56,6 +56,11 @@ jstest.c, jsprobe.c include js.h + jsparse.h + jsrun.h
 
 ### 2.4 Language support summary (details in §3)
 
+**Since 0.73.0 most of what follows is out of date**: the engine runs JavaScript of 2015 to 2021, with
+classes, generators, promises, async functions, modern patterns, typed arrays and eval, in new files
+`jsarr.h`, `jsco.h`, `jslib.h`, `jsprom.h` and `jstyped.h`. See the atlas README, 0.73.0, for the list and
+what is still missing. The rest of this file describes 6048716.
+
 **Supported:**
 - `var`/`let`/`const`, where all three mean function-scoped var.
 - Function declarations (hoisted per block), function expressions, and arrow functions (plain-name parameters only, max 16, lexical `this`).

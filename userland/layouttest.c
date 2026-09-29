@@ -1270,6 +1270,41 @@ int main(void) {
            && !word("stamped"));
     }
 
+    /* --- display: contents ------------------------------------------------------
+     *
+     * An element with no box: in a row or a grid its children are the
+     * items. Read as a block, a wrapper was one item with its children
+     * stacked inside it, and a strip of cards was a card and a column. */
+    {
+        lay("<style>.row{display:flex}.w{display:contents;color:#ff0000;background:#0000ff;padding:20px}"
+            ".i{width:100px;background:#eeeeee}</style>"
+            "<div class=row><div class=w id=w><div class=i id=a>one</div><div class=i id=b>two</div></div>"
+            "<div class=i id=c>three</div></div>", 600);
+        const litem *a = box_of(by_id("a")), *b = box_of(by_id("b")), *c = box_of(by_id("c"));
+        ok("a contents element's children are the row's items",
+           a && b && c && a->y == b->y && b->y == c->y && b->x >= a->x + 100 && c->x >= b->x + 100);
+        const litem *one = word("one");
+        ok("and still take what it passes down", one && one->color == 0xFF0000);
+
+        lay("<style>.w{display:contents;background:#0000ff;padding:20px}</style>"
+            "<div><div class=w id=w>inside</div></div>", 600);
+        const litem *w = box_of(by_id("w")), *in = word("inside");
+        ok("while it draws no box of its own", !(w && w->has_bg) && in && in->x < 10);
+
+        lay("<style>.g{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}.w{display:contents}"
+            ".g div{background:#eeeeee}</style>"
+            "<div class=g><div class=w><div id=a>1</div><div id=b>2</div></div><div id=c>3</div></div>", 620);
+        a = box_of(by_id("a"));
+        b = box_of(by_id("b"));
+        c = box_of(by_id("c"));
+        ok("and a grid's", a && b && c && a->y == b->y && b->y == c->y && a->w == 200 && b->x > a->x
+           && c->x > b->x);
+
+        lay("<style>@supports (display:contents){#y{color:#00ff00}}</style><p id=y>asked</p>", 600);
+        const litem *y = word("asked");
+        ok("and @supports says so", y && y->color == 0x00FF00);
+    }
+
     puts(failed ? "LAYOUTTEST_FAIL\n" : "LAYOUTTEST_PASS\n");
     return failed;
 }
