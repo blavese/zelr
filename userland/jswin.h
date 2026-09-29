@@ -734,6 +734,8 @@ static void jd_setup_storage(jctx *J) {
 static jobj *jd_perf_entries;
 static double jd_time_origin;
 
+static void jd_perf_observed(jobj *entry);        /* jsobs.h */
+
 static jval nat_perf_now(jctx *J, jval t, jval *a, int n) {
     (void)J; (void)t; (void)a; (void)n;
     return js_num(jd_now_ms());
@@ -753,6 +755,7 @@ static jobj *jd_perf_entry(jctx *J, jstr *name, const char *type, double start, 
     js_set(J, e, "duration", js_num(dur));
     js_set(J, e, "detail", js_null());
     if (jd_perf_entries) js_arr_push(J, jd_perf_entries, js_from_obj(e));
+    jd_perf_observed(e);
     return e;
 }
 
@@ -834,6 +837,11 @@ static jval nat_perf_json(jctx *J, jval t, jval *a, int n) {
     jobj *o = js_object(J, JO_PLAIN);
     if (o) js_set(J, o, "timeOrigin", js_num(jd_time_origin));
     return js_from_obj(o);
+}
+
+static jval nat_win_event(jctx *J, jval t, jval *a, int n) {
+    (void)J; (void)t; (void)a; (void)n;
+    return jd_window_event;
 }
 
 /* requestAnimationFrame: called back before the next frame, about sixty a
@@ -1372,6 +1380,10 @@ static void jd_setup_window_more(jctx *J) {
         { "devicePixelRatio", nat_win_one }, { 0, 0 }
     };
     for (int i = 0; SIZES[i].name && w; i++) jd_accessor(J, w, SIZES[i].name, SIZES[i].get, 0);
+    /* window.event: the event being handled while a listener runs, and
+       nothing otherwise (jd_invoke). Old pages read it bare, `event`. */
+    jd_window_event = js_undef();
+    if (w) jd_accessor(J, w, "event", nat_win_event, 0);
     js_declare(J, g, js_str(J, "scrollTo"), js_from_obj(js_native_n(J, "scrollTo", nat_win_scroll_to, 2)));
     js_declare(J, g, js_str(J, "scroll"), js_from_obj(js_native_n(J, "scroll", nat_win_scroll_to, 2)));
     js_declare(J, g, js_str(J, "scrollBy"), js_from_obj(js_native_n(J, "scrollBy", nat_win_scroll_by, 2)));

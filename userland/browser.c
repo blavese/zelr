@@ -872,6 +872,9 @@ static int do_request(const char *method, const char *url, const char *body,
  * has no box, and says so. */
 static u8 box_mark[DOM_NODES / 8];
 
+/* What the layout drew at a point of the page, for elementFromPoint. */
+static int node_at_point(int x, int y) { return lay_node_at(&page, x, y); }
+
 static int box_of(int node, int *x, int *y, int *w, int *h) {
     if (node < 0 || node >= doc.count) return 0;
     for (int i = node; i >= 0; i = dom_next(&doc, i, node)) box_mark[i >> 3] |= (u8)(1 << (i & 7));
@@ -1265,6 +1268,7 @@ static void build(const char *html, int len, int width, int want_sheets,
         jsdom_fetch_with(fetch_script);
         jsdom_request_with(do_request);
         jsdom_boxes_with(box_of);
+        jsdom_points_with(node_at_point);
         jsdom_pictures_with(picture_size);
         jsdom_scroll_with(script_scroll);
         jsdom_navigate_with(script_navigate);

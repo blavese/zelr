@@ -196,6 +196,15 @@ static int fake_box(int node, int *x, int *y, int *w, int *h) {
     return 1;
 }
 
+/* What a pretend layout drew at a point of the page: the word inside the
+   element with the id "hit", across the top hundred pixels, and nothing
+   below them. */
+static int fake_point(int x, int y) {
+    (void)x;
+    int hit = dom_by_id(&page, "hit");
+    return y < 100 && hit >= 0 ? page.nodes[hit].first : -1;
+}
+
 /* A style with padding and borders: 4 and 2 of padding across and down, a
    border of 1 at each side. */
 static int padded_style(int node, cstyle *out) {
@@ -984,6 +993,20 @@ int main(void) {
                    "document.title = [r.left, r.top, r.width, r.height, r.bottom,"
                    " document.documentElement.clientWidth].join(' ');</script></body>"),
             "10 70 50 20 90 800");
+        /* elementFromPoint: the element of what was drawn there, the
+           document element where nothing was, nothing outside the window.
+           Scrolled by thirty, the window's ten is the page's forty. */
+        jsdom_points_with(fake_point);
+        oks("elementFromPoint is the element drawn at a point of the window, and what it is inside",
+            titled("<html><body><p><b id=hit>word</b></p><script>"
+                   "var a = document.elementFromPoint(10, 10), b = document.elementFromPoint(10, 90),"
+                   " c = document.elementFromPoint(10, 300), d = document.elementFromPoint(-1, 10),"
+                   " e = document.elementFromPoint(900, 10);"
+                   "document.title = [a && a.id, b === document.documentElement, c === document.documentElement, d, e,"
+                   " document.elementsFromPoint(10, 10).map(function(x){ return x.nodeName; }).join(',')].join(' ');"
+                   "</script></body></html>"),
+            "hit true true   B,P,BODY,HTML");
+        jsdom_points_with(0);
         jsdom_boxes_with(0);
         jsdom_view(0, 0, 0);
         oks("and with nothing laid out it is nowhere, with no size",
@@ -1646,6 +1669,59 @@ int main(void) {
                    "var t = document.title; document.title = '[' + t + ']';</script></body>"),
             "[]");
         jsdom_at("");
+    }
+
+    /* --- walks, window.event and PerformanceObserver ------------------------------------
+     *
+     * Yahoo's advertising loader stopped on NodeFilter, a CSS-Tricks script
+     * on a bare `event`, and LinkedIn's bundle on PerformanceObserver. */
+    oks("a TreeWalker walks the tree the standard's way, through whatToShow and a filter",
+        titled("<body><div id=r><p>a<b>b</b></p><i>d</i>e</div><script>var r = document.getElementById('r');"
+               "var w = document.createTreeWalker(r, NodeFilter.SHOW_ELEMENT), fwd = [], back = [];"
+               "while (w.nextNode()) fwd.push(w.currentNode.nodeName);"
+               "while (w.previousNode()) back.push(w.currentNode.nodeName);"
+               "var t = document.createTreeWalker(r, NodeFilter.SHOW_TEXT, { acceptNode: function(n){"
+               " return n.data === 'b' ? NodeFilter.FILTER_SKIP : NodeFilter.FILTER_ACCEPT; } }), texts = [];"
+               "for (var n = t.firstChild(); n; n = t.nextSibling()) texts.push(n.data);"
+               "t.currentNode = r.querySelector('b'); var up = t.parentNode();"
+               "document.title = [fwd.join(','), back.join(','), texts.join(','), up, t.root === r,"
+               " w.whatToShow, t.filter !== null].join(' ');</script></body>"),
+        "P,B,I B,P,DIV a,d,e  true 1 true");
+    oks("a NodeIterator goes through everything in order, and a walk of the document starts at its element",
+        titled("<html><body><div id=r><p>a<b>b</b></p><i>d</i>e</div><script>var r = document.getElementById('r');"
+               "var it = document.createNodeIterator(r, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT), all = [], x;"
+               "while ((x = it.nextNode())) all.push(x.nodeName);"
+               "var last = it.previousNode().nodeName + ' ' + it.pointerBeforeReferenceNode;"
+               "var d = document.createTreeWalker(document, NodeFilter.SHOW_ELEMENT); d.nextNode();"
+               "var top = d.currentNode === document.documentElement; d.parentNode();"
+               "document.title = [all.join(','), last, top, d.currentNode === document.documentElement,"
+               " NodeFilter.SHOW_ALL].join(' ');</script></body></html>"),
+        "DIV,P,#text,B,#text,I,#text,#text #text true true true 4294967295");
+    oks("window.event is the event being handled, and nothing otherwise",
+        titled("<body><script>var inside = '';"
+               "document.body.addEventListener('click', function(e){ inside = event.type + ' ' + (window.event === e); });"
+               "document.body.click();"
+               "document.title = [typeof event, inside, typeof window.event].join(' ');</script></body>"),
+        "undefined click true undefined");
+    {
+        load("<body><script>var got = [];"
+             "performance.mark('early');"
+             "var po = new PerformanceObserver(function(list, o){"
+             " got.push(list.getEntries().map(function(e){ return e.name; }).join(',') + ':' + (o === po));"
+             " document.title = got.join(' ') + ' ' + PerformanceObserver.supportedEntryTypes.join(','); });"
+             "po.observe({ type: 'mark', buffered: true });"
+             "new PerformanceObserver(function(){ document.title = 'told of a long task'; })"
+             ".observe({ type: 'longtask', buffered: true });"
+             "var both = 'none'; try { po.observe({ type: 'mark', entryTypes: ['mark'] }); } catch (e) { both = e.name; }"
+             "performance.mark('one'); performance.measure('span', 'early', 'one');"
+             "document.title = 'waiting ' + got.length + ' ' + both;</script></body>");
+        char err[128];
+        run_scripts(&page, err, (int)sizeof(err), 0);
+        oks("a PerformanceObserver says nothing while the script runs",
+            page.title >= 0 ? page.arena + page.title : "", "waiting 0 TypeError");
+        pump_until(1, 1000);
+        oks("and on the next pass is told of the page's own marks, the earlier ones too, and of no type it does not record",
+            page.title >= 0 ? page.arena + page.title : "", "early,one:true mark,measure");
     }
 
     /* --- a page that uses up its memory ---------------------------------------

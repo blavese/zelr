@@ -505,6 +505,8 @@ __attribute__((unused)) static void jsdom_laid_out(void) {
     if (jd_later_native(jd_ro_all, js_undef(), 1)) jd_ro_pending = 1;
 }
 
+static void jd_setup_perf_observer(jctx *J);
+
 static void jd_setup_observers(jctx *J) {
     jd_k_records = js_sym_new(J, "records", 7);
     jd_k_mcb = js_sym_new(J, "callback", 8);
@@ -536,4 +538,192 @@ static void jd_setup_observers(jctx *J) {
     jd_method(J, jd_p_robs, "unobserve", nat_ro_unobserve, 1);
     jd_method(J, jd_p_robs, "disconnect", nat_ro_disconnect, 0);
     jd_interface(J, "ResizeObserverEntry", 0, 0, 0);
+    jd_setup_perf_observer(J);
+}
+
+/* --- PerformanceObserver --------------------------------------------------------------------
+ *
+ * The only performance entries this browser has are the marks and measures
+ * a page makes itself (jswin.h), so those are the entry types it supports
+ * (PerformanceObserver.supportedEntryTypes), and an observer of them hears
+ * of each new one on the next pass, with the ones already made if it asked
+ * for them (buffered). One that asks for another type -- long tasks, paint,
+ * resources, layout shifts, none of which this browser records -- is told
+ * nothing, as the standard says a type the browser does not support is
+ * ignored. LinkedIn stopped on the name. */
+
+static jobj *jd_pobservers;
+static jstr *jd_k_ptypes, *jd_k_pqueue, *jd_k_plist;
+static jobj *jd_p_pobs, *jd_p_plist;
+static int jd_po_pending;
+
+static int jd_perf_type_known(const jstr *s) { return js_str_is(s, "mark") || js_str_is(s, "measure"); }
+
+static int jd_po_watches(jobj *obs, const jstr *type) {
+    jval types = jd_kept(obs, jd_k_ptypes);
+    if (types.t != JS_OBJ) return 0;
+    for (u32 i = 0; i < types.obj->len; i++)
+        if (types.obj->items[i].t == JS_STR && js_str_eq(types.obj->items[i].str, type)) return 1;
+    return 0;
+}
+
+static void jd_po_queue(jobj *obs, jval entry) {
+    jval q = jd_kept(obs, jd_k_pqueue);
+    if (q.t != JS_OBJ) {
+        jobj *arr = js_array(&jd_J);
+        if (!arr) return;
+        q = js_from_obj(arr);
+        jd_keep(obs, jd_k_pqueue, q);
+    }
+    js_arr_push(&jd_J, q.obj, entry);
+}
+
+static jval jd_plist_entries(jctx *J, jval t, const jstr *name, const jstr *type) {
+    jobj *out = js_array(J);
+    jval all = js_is_obj(t) ? jd_kept(t.obj, jd_k_plist) : js_undef();
+    for (u32 i = 0; out && all.t == JS_OBJ && i < all.obj->len; i++) {
+        jobj *e = all.obj->items[i].obj;
+        jval nm = jd_ev_get(e, "name"), ty = jd_ev_get(e, "entryType");
+        if (name && !(nm.t == JS_STR && js_str_eq(nm.str, name))) continue;
+        if (type && !(ty.t == JS_STR && js_str_eq(ty.str, type))) continue;
+        js_arr_push(J, out, all.obj->items[i]);
+    }
+    return js_from_obj(out);
+}
+
+static jval nat_plist_all(jctx *J, jval t, jval *a, int n) { (void)a; (void)n; return jd_plist_entries(J, t, 0, 0); }
+static jval nat_plist_by_type(jctx *J, jval t, jval *a, int n) { return jd_plist_entries(J, t, 0, jd_arg_str(J, a, n, 0)); }
+static jval nat_plist_by_name(jctx *J, jval t, jval *a, int n) {
+    return jd_plist_entries(J, t, jd_arg_str(J, a, n, 0), n > 1 && a[1].t != JS_UNDEF ? jd_arg_str(J, a, n, 1) : 0);
+}
+
+static void jd_po_deliver(jval arg) {
+    (void)arg;
+    jd_po_pending = 0;
+    if (!jd_pobservers || jd_spent()) return;
+    jctx *J = &jd_J;
+    for (u32 i = 0; i < jd_pobservers->len; i++) {
+        if (!js_is_obj(jd_pobservers->items[i])) continue;
+        jobj *obs = jd_pobservers->items[i].obj;
+        jval q = jd_kept(obs, jd_k_pqueue);
+        if (q.t != JS_OBJ || !q.obj->len) continue;
+        jd_keep(obs, jd_k_pqueue, js_undef());
+        jobj *list = js_object_with(J, JO_PLAIN, jd_p_plist);
+        jval cb = jd_kept(obs, jd_k_ocb);
+        if (!list || !js_callable(cb)) continue;
+        jd_keep(list, jd_k_plist, q);
+        jval args[2] = { js_from_obj(list), js_from_obj(obs) };
+        jd_call(cb, js_from_obj(obs), args, 2);
+    }
+}
+
+static void jd_po_schedule(void) {
+    if (!jd_po_pending && jd_later_native(jd_po_deliver, js_undef(), 1)) jd_po_pending = 1;
+}
+
+/* Every new mark and measure (jswin.h, jd_perf_entry), to the observers of
+   its type. */
+static void jd_perf_observed(jobj *entry) {
+    if (!jd_pobservers || !entry) return;
+    jval ty = jd_ev_get(entry, "entryType");
+    if (ty.t != JS_STR) return;
+    int any = 0;
+    for (u32 i = 0; i < jd_pobservers->len; i++)
+        if (js_is_obj(jd_pobservers->items[i]) && jd_po_watches(jd_pobservers->items[i].obj, ty.str)) {
+            jd_po_queue(jd_pobservers->items[i].obj, js_from_obj(entry));
+            any = 1;
+        }
+    if (any) jd_po_schedule();
+}
+
+static jval nat_po_ctor(jctx *J, jval t, jval *a, int n) { return jd_observer_ctor(J, t, a, n, "PerformanceObserver"); }
+
+static jval nat_po_observe(jctx *J, jval t, jval *a, int n) {
+    if (!js_is_obj(t) || !js_callable(jd_kept(t.obj, jd_k_ocb))) return jd_illegal(J);
+    jval opt = js_arg(a, n, 0);
+    jval list = js_is_obj(opt) ? js_get(J, opt, js_str(J, "entryTypes")) : js_undef();
+    jval one = js_is_obj(opt) ? js_get(J, opt, js_str(J, "type")) : js_undef();
+    if (J->sig != JS_OK) return js_undef();
+    if ((list.t == JS_UNDEF) == (one.t == JS_UNDEF))
+        return js_throw(J, JS_ERR_TYPE, "observe needs entryTypes or type, and not both", J->error_line);
+    jval types = jd_kept(t.obj, jd_k_ptypes);
+    if (types.t != JS_OBJ || list.t != JS_UNDEF) {
+        jobj *arr = js_array(J);
+        if (!arr) return js_undef();
+        types = js_from_obj(arr);
+        jd_keep(t.obj, jd_k_ptypes, types);
+    }
+    int buffered = one.t != JS_UNDEF && js_to_bool(js_get(J, opt, js_str(J, "buffered")));
+    jargs A;
+    js_args_init(&A);
+    if (list.t != JS_UNDEF) js_iter_collect(J, list, &A);
+    else js_args_push(J, &A, one);
+    for (int i = 0; i < A.n; i++) {
+        jstr *s = js_to_str(J, A.v[i]);
+        if (!s || !jd_perf_type_known(s) || jd_po_watches(t.obj, s)) continue;
+        js_arr_push(J, types.obj, js_from_str(s));
+        if (buffered && jd_perf_entries) {
+            for (u32 k = 0; k < jd_perf_entries->len; k++) {
+                jval ty = jd_ev_get(jd_perf_entries->items[k].obj, "entryType");
+                if (ty.t == JS_STR && js_str_eq(ty.str, s)) jd_po_queue(t.obj, jd_perf_entries->items[k]);
+            }
+            jd_po_schedule();
+        }
+    }
+    js_args_free(&A);
+    if (!jd_pobservers) jd_pobservers = js_array(J);
+    if (jd_pobservers) {
+        int in = 0;
+        for (u32 i = 0; i < jd_pobservers->len; i++)
+            if (js_is_obj(jd_pobservers->items[i]) && jd_pobservers->items[i].obj == t.obj) in = 1;
+        if (!in) js_arr_push(J, jd_pobservers, t);
+    }
+    return js_undef();
+}
+
+static jval nat_po_disconnect(jctx *J, jval t, jval *a, int n) {
+    (void)J; (void)a; (void)n;
+    if (!js_is_obj(t) || !jd_pobservers) return js_undef();
+    for (u32 i = 0; i < jd_pobservers->len; i++)
+        if (js_is_obj(jd_pobservers->items[i]) && jd_pobservers->items[i].obj == t.obj) jd_pobservers->items[i] = js_undef();
+    jd_keep(t.obj, jd_k_pqueue, js_undef());
+    jd_keep(t.obj, jd_k_ptypes, js_undef());
+    return js_undef();
+}
+
+static jval nat_po_take(jctx *J, jval t, jval *a, int n) {
+    (void)a; (void)n;
+    if (!js_is_obj(t)) return jd_illegal(J);
+    jval q = jd_kept(t.obj, jd_k_pqueue);
+    jd_keep(t.obj, jd_k_pqueue, js_undef());
+    return q.t == JS_OBJ ? q : js_from_obj(js_array(J));
+}
+
+static jval nat_po_supported(jctx *J, jval t, jval *a, int n) {
+    (void)t; (void)a; (void)n;
+    jobj *arr = js_array(J);
+    if (arr) {
+        js_arr_push(J, arr, jd_str("mark"));
+        js_arr_push(J, arr, jd_str("measure"));
+    }
+    return js_from_obj(arr);
+}
+
+static void jd_setup_perf_observer(jctx *J) {
+    jd_k_ptypes = js_sym_new(J, "types", 5);
+    jd_k_pqueue = js_sym_new(J, "queue", 5);
+    jd_k_plist = js_sym_new(J, "entries", 7);
+    jd_pobservers = 0;
+    jd_po_pending = 0;
+    jd_p_pobs = jd_interface(J, "PerformanceObserver", 0, nat_po_ctor, 1);
+    jd_method(J, jd_p_pobs, "observe", nat_po_observe, 1);
+    jd_method(J, jd_p_pobs, "disconnect", nat_po_disconnect, 0);
+    jd_method(J, jd_p_pobs, "takeRecords", nat_po_take, 0);
+    jobj *c = jd_ctor_of(jd_p_pobs);
+    jobj *get = js_native(J, "supportedEntryTypes", nat_po_supported);
+    if (c && get) js_define_accessor(J, c, js_str(J, "supportedEntryTypes"), js_from_obj(get), js_undef(), JP_CONF);
+    jd_p_plist = jd_interface(J, "PerformanceObserverEntryList", 0, 0, 0);
+    jd_method(J, jd_p_plist, "getEntries", nat_plist_all, 0);
+    jd_method(J, jd_p_plist, "getEntriesByType", nat_plist_by_type, 1);
+    jd_method(J, jd_p_plist, "getEntriesByName", nat_plist_by_name, 1);
 }

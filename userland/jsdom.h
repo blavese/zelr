@@ -1939,6 +1939,7 @@ static jobj *jd_attrs_obj(jctx *J, int el) {
  * window: the browser's to say, through these, set with jsdom_boxes_with and
  * jsdom_view. Before the page is laid out a box is nowhere, and says so. */
 static int (*jd_box_of)(int node, int *x, int *y, int *w, int *h);
+static int (*jd_node_at)(int x, int y);  /* what the layout drew at a point of the page */
 static int (*jd_picture_size)(int node, int *w, int *h);
 static int jd_view_w = 0, jd_view_h = 0, jd_scroll_y = 0;
 
@@ -4259,9 +4260,13 @@ static int jd_body_handler(const jstr *type) {
 /* Calls one listener or handler. A handler that returns false has refused
    the default, which is how pages said so before there was
    preventDefault, and still do. */
+static jval jd_window_event;             /* window.event, while a listener runs */
+
 static void jd_invoke(jval fn, jval self, jobj *ev, int is_handler) {
     jval arg = js_from_obj(ev);
     jval got;
+    jval was = jd_window_event;
+    jd_window_event = arg;
     jd_J.sig = JS_OK;
     jd_J.steps = 0;
     if (js_callable(fn)) {
@@ -4271,6 +4276,7 @@ static void jd_invoke(jval fn, jval self, jobj *ev, int is_handler) {
         if (jd_J.sig == JS_OK && js_callable(m)) got = js_call(&jd_J, m, fn, &arg, 1);
         else got = js_undef();
     }
+    jd_window_event = was;
     if (jd_J.sig != JS_OK) { jd_note_error(); jd_J.sig = JS_OK; return; }
     if (is_handler && got.t == JS_BOOL && !got.b && js_to_bool(jd_ev_get(ev, "cancelable"))) {
         js_set(&jd_J, ev, "defaultPrevented", js_bool(1));
@@ -4948,6 +4954,37 @@ static jval nat_doc_writeln(jctx *J, jval t, jval *a, int n) {
     return jd_inert_of(t) >= 0 ? js_undef() : jd_doc_write(J, a, n, 1);
 }
 
+/* elementFromPoint: the element the layout drew at a point of the window
+   (a word is its element's), the document element where it drew nothing,
+   and nothing outside the window; elementsFromPoint, that element and
+   everything it is inside. A document of its own is drawn nowhere. */
+static int jd_element_at(jctx *J, jval *a, int n) {
+    double x = js_to_num(J, js_arg(a, n, 0)), y = js_to_num(J, js_arg(a, n, 1));
+    if (!(x >= 0 && y >= 0 && x < jd_view_w && y < jd_view_h)) return -1;
+    int el = jd_node_at ? jd_node_at((int)x, (int)y + jd_scroll_y) : -1;
+    while (el >= 0 && !jd_is_element(el)) el = jd_doc->nodes[el].parent;
+    if (el < 0 || !jd_connected(el) || el == jd_doc->root) el = jd_top();
+    return el;
+}
+
+static jval nat_doc_element_from_point(jctx *J, jval t, jval *a, int n) {
+    if (jd_inert_of(t) >= 0) return js_null();
+    int el = jd_element_at(J, a, n);
+    return el >= 0 ? jd_el_value(J, el) : js_null();
+}
+
+static jval nat_doc_elements_from_point(jctx *J, jval t, jval *a, int n) {
+    jobj *out = js_array(J);
+    if (!out || jd_inert_of(t) >= 0) return js_from_obj(out);
+    for (int el = jd_element_at(J, a, n); el >= 0; el = jd_doc->nodes[el].parent) {
+        if (jd_is_element(el)) js_arr_push(J, out, jd_el_value(J, el));
+        /* The root the parser keeps above the page's own element is not
+           there to a script (jd_top). */
+        if (el == jd_top()) break;
+    }
+    return js_from_obj(out);
+}
+
 static jval nat_doc_has_focus(jctx *J, jval t, jval *a, int n) {
     (void)J; (void)a; (void)n;
     return js_bool(jd_inert_of(t) < 0);
@@ -5488,6 +5525,7 @@ __attribute__((unused)) static int jsdom_next_restyled(void) {
 }
 
 void jsdom_boxes_with(int (*fn)(int, int *, int *, int *, int *)) { jd_box_of = fn; }
+void jsdom_points_with(int (*fn)(int x, int y)) { jd_node_at = fn; }
 void jsdom_pictures_with(int (*fn)(int, int *, int *)) { jd_picture_size = fn; }
 void jsdom_scroll_with(void (*fn)(int)) { jd_scroll_to = fn; }
 void jsdom_navigate_with(void (*fn)(const char *, int)) { jd_navigate = fn; }
@@ -5519,6 +5557,7 @@ static void jd_consts(jctx *J, jobj *on, const char *const *names, int from);
 #include "jsnet.h"
 #include "jswin.h"
 #include "jsobs.h"
+#include "jswalk.h"
 
 /* --- the hooks -----------------------------------------------------------------------------------
  *
@@ -6126,6 +6165,8 @@ static void jd_setup_document(jctx *J, jobj *document) {
     jd_method(J, d, "open", nat_nothing_js, 0);
     jd_method(J, d, "close", nat_nothing_js, 0);
     jd_method(J, d, "hasFocus", nat_doc_has_focus, 0);
+    jd_method(J, d, "elementFromPoint", nat_doc_element_from_point, 2);
+    jd_method(J, d, "elementsFromPoint", nat_doc_elements_from_point, 2);
     jd_accessor(J, d, "documentElement", nat_doc_element, 0);
     jd_accessor(J, d, "head", nat_doc_head, 0);
     jd_accessor(J, d, "body", nat_doc_body, 0);
@@ -6273,6 +6314,7 @@ static void jd_setup(jctx *J) {
     jd_setup_window_more(J);
     jd_setup_storage(J);
     jd_setup_observers(J);
+    jd_setup_walks(J);
 }
 
 /* --- opening and closing the world -----------------------------------------------------------
