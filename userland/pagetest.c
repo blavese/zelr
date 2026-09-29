@@ -169,6 +169,9 @@ static int fake_history_length(void) { return 4; }
 static long long little_memory(void) { return 2 * 1024 * 1024; }
 static long long much_memory(void) { return 512LL * 1024 * 1024; }
 
+/* A machine whose generator has found nothing to be unpredictable with. */
+static int no_random(void *buf, int len) { (void)buf; (void)len; return -1; }
+
 /* Where the page asked to be scrolled to. */
 static int scrolled_to = -1;
 static void fake_scroll(int y) { scrolled_to = y; }
@@ -1535,6 +1538,46 @@ int main(void) {
         jsdom_styles_with(0);
         jsdom_boxes_with(0);
         jsdom_view(0, 0, 0);
+    }
+
+    /* --- crypto ----------------------------------------------------------------------
+     *
+     * From the kernel's generator (SYS_RANDOM), and nothing at all without
+     * it. The Verge stopped on crypto.randomUUID. */
+    {
+        jsdom_at("https://site.test/");
+        oks("crypto.getRandomValues fills the array it is given, and never the same twice",
+            titled("<script>var a = new Uint8Array(64), b = new Uint32Array(16);"
+                   "var r = crypto.getRandomValues(a); crypto.getRandomValues(b);"
+                   "var zero = true, same = true, b8 = new Uint8Array(b.buffer);"
+                   "for (var i = 0; i < 64; i++) { if (a[i]) zero = false; if (b8[i] !== a[i]) same = false; }"
+                   "document.title = [r === a, zero, same, typeof crypto.subtle, crypto instanceof Crypto].join(' ');"
+                   "</script>"),
+            "true false false undefined true");
+        oks("and refuses what the standard refuses",
+            titled("<script>var e1 = '', e2 = '';"
+                   "try { crypto.getRandomValues(new Float64Array(2)); } catch (e) { e1 = e.name; }"
+                   "try { crypto.getRandomValues(new Uint8Array(65537)); } catch (e) { e2 = e.name; }"
+                   "document.title = [e1, e2, crypto.getRandomValues(new Uint8Array(65536)).length].join(' ');"
+                   "</script>"),
+            "TypeMismatchError QuotaExceededError 65536");
+        oks("crypto.randomUUID is a random UUID, on a page that came encrypted",
+            titled("<script>var u = crypto.randomUUID(), v = crypto.randomUUID();"
+                   "document.title = [/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(u),"
+                   " u !== v, u.length].join(' ');</script>"),
+            "true true 36");
+        jsdom_at("http://site.test/");
+        oks("and not on one that did not",
+            titled("<script>document.title = typeof crypto.randomUUID + ' ' + typeof crypto.getRandomValues;</script>"),
+            "undefined function");
+        jsdom_random_with(no_random);
+        oks("with no source of randomness it says so, and gives nothing",
+            titled("<script>var a = new Uint8Array(4), n = 'none';"
+                   "try { crypto.getRandomValues(a); } catch (e) { n = e.name; }"
+                   "document.title = n + ' ' + a.join(',');</script>"),
+            "OperationError 0,0,0,0");
+        jsdom_random_with(0);
+        jsdom_at("");
     }
 
     /* --- a page that uses up its memory ---------------------------------------

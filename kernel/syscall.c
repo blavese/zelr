@@ -37,6 +37,7 @@
 #include "fat.h"
 #include "power.h"
 #include "diskfs.h"
+#include "rng.h"
 
 /* A pointer from ring 3 has to be inside user space to begin with. Being
    mapped is checked separately, and being reachable from ring 3 after that. */
@@ -1117,6 +1118,30 @@ static i64 sys_sysinfo(registers_t *r) {
     return 0;
 }
 
+/* Random bytes for a program, a block at a time through a buffer of the
+   kernel's own: the generator writes where it is told, and a page of the
+   program's that is read-only would fault in the middle of it with the
+   pool half stirred. The block is wiped after, so what was handed out does
+   not stay on the kernel stack for the next call to find. */
+static i64 sys_random(registers_t *r) {
+    u64 buf = r->rbx, len = r->rcx;
+    if (len > RANDOM_CALL_MAX) len = RANDOM_CALL_MAX;
+    if (!rng_ready()) return -1;
+    if (!user_range_ok(buf, len)) return -1;
+    u8 block[64];
+    for (u64 done = 0; done < len; ) {
+        u32 n = len - done < sizeof(block) ? (u32)(len - done) : (u32)sizeof(block);
+        rng_bytes(block, n);
+        memcpy((void *)(buf + done), block, n);
+        done += n;
+    }
+    /* Through a volatile pointer, or the compiler drops a store nothing
+       reads afterwards. */
+    volatile u8 *wipe = block;
+    for (u32 i = 0; i < sizeof(block); i++) wipe[i] = 0;
+    return (i64)len;
+}
+
 static u32 served;
 u32 syscall_count(void) { return served; }
 
@@ -1189,6 +1214,7 @@ static const syscall_fn TABLE[] = {
     [SYS_FSYNC]       = sys_fsync,
     [SYS_RENAME]      = sys_rename,
     [SYS_POLL]        = sys_poll,
+    [SYS_RANDOM]      = sys_random,
 };
 
 #define N_SYSCALLS (sizeof(TABLE) / sizeof(TABLE[0]))

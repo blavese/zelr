@@ -1124,6 +1124,85 @@ static jval nat_channel_ctor(jctx *J, jval t, jval *a, int n) {
     return js_undef();
 }
 
+/* --- crypto ------------------------------------------------------------------------------
+ *
+ * crypto.getRandomValues and crypto.randomUUID, from the kernel's random
+ * number generator (SYS_RANDOM), which is the one the TLS keys come from.
+ * Nothing here makes up for it: when the kernel has found no source of
+ * randomness yet it says so, and so does this, with an OperationError,
+ * rather than hand a page numbers somebody could guess. crypto.subtle is
+ * not here: this browser has no SubtleCrypto, and a page that looks for it
+ * finds nothing rather than something that pretends. */
+
+static int (*jd_random)(void *buf, int len);
+
+/* Where the bytes come from, for a check that has to see what happens
+   without them; left alone, the kernel. */
+void jsdom_random_with(int (*fn)(void *buf, int len)) { jd_random = fn; }
+
+static int jd_kernel_random(void *buf, int len) {
+    u8 *p = (u8 *)buf;
+    int done = 0;
+    while (done < len) {
+        long got = random_bytes(p + done, len - done);
+        if (got <= 0) return -1;
+        done += (int)got;
+    }
+    return done;
+}
+
+static int jd_random_fill(jctx *J, u8 *p, u32 n) {
+    int got = jd_random ? jd_random(p, (int)n) : jd_kernel_random(p, (int)n);
+    if (got != (int)n) {
+        js_throw_dom(J, "OperationError", "this machine has no source of randomness yet");
+        return 0;
+    }
+    return 1;
+}
+
+static jval nat_crypto_values(jctx *J, jval t, jval *a, int n) {
+    (void)t;
+    jval v = js_arg(a, n, 0);
+    if (!js_is_obj(v) || v.obj->kind != JO_TYPED || !v.obj->internal)
+        return js_throw(J, JS_ERR_TYPE, "getRandomValues needs an integer typed array", J->error_line);
+    jtyped *x = (jtyped *)v.obj->internal;
+    if (x->type == TA_F32 || x->type == TA_F64)
+        return js_throw_dom(J, "TypeMismatchError", "getRandomValues fills integers, not floating point");
+    u32 bytes = x->len * TA_SIZE[x->type];
+    if (bytes > 65536)
+        return js_throw_dom(J, "QuotaExceededError", "getRandomValues gives at most 65536 bytes at a time");
+    if (bytes && !jd_random_fill(J, ta_bytes(x->buf) + x->off, bytes)) return js_undef();
+    return v;
+}
+
+static jval nat_crypto_uuid(jctx *J, jval t, jval *a, int n) {
+    (void)t; (void)a; (void)n;
+    static const char hex[] = "0123456789abcdef";
+    u8 b[16];
+    if (!jd_random_fill(J, b, sizeof(b))) return js_undef();
+    b[6] = (u8)((b[6] & 0x0F) | 0x40);            /* version 4: random */
+    b[8] = (u8)((b[8] & 0x3F) | 0x80);            /* the standard's variant */
+    char s[37];
+    int w = 0;
+    for (int i = 0; i < 16; i++) {
+        if (i == 4 || i == 6 || i == 8 || i == 10) s[w++] = '-';
+        s[w++] = hex[b[i] >> 4];
+        s[w++] = hex[b[i] & 15];
+    }
+    s[w] = 0;
+    return jd_str(s);
+}
+
+static void jd_setup_crypto(jctx *J, jscope *g, int secure) {
+    jobj *cp = jd_interface(J, "Crypto", 0, 0, 0);
+    jd_method(J, cp, "getRandomValues", nat_crypto_values, 1);
+    /* Only on a page that came over an encrypted connection, as the
+       standard has it; getRandomValues is for every page. */
+    if (secure) jd_method(J, cp, "randomUUID", nat_crypto_uuid, 0);
+    jobj *c = js_object_with(J, JO_PLAIN, cp);
+    if (c) js_declare(J, g, js_str(J, "crypto"), js_from_obj(c));
+}
+
 /* --- the computed style ------------------------------------------------------------------------
  *
  * getComputedStyle, from the style the layout works out for the element --
@@ -1363,6 +1442,7 @@ static void jd_setup_window_more(jctx *J) {
         free(u);
         js_declare(J, g, js_str(J, "isSecureContext"), js_bool(secure));
         js_declare(J, g, js_str(J, "origin"), js_from_str(jd_page_origin(J)));
+        jd_setup_crypto(J, g, secure);
     }
 
     /* getComputedStyle */

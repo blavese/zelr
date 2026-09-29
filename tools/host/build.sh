@@ -33,6 +33,6 @@ T="-target x86_64-windows-gnu"
 $ZIG cc $T -O2 -g -c tools/host/shim.c -o "$OUT/shim.o"
 $ZIG cc $T -O2 -g -ffreestanding -fno-builtin -w -DZELR_NO_START -Dmain=zelr_main \
     -I "$OUT" -I sdk -I userland -c "$SRC" -o "$OUT/$PROG.o"
-$ZIG cc $T "$OUT/$PROG.o" "$OUT/shim.o" -o "$OUT/$PROG.exe" -lws2_32 -ldbghelp \
+$ZIG cc $T "$OUT/$PROG.o" "$OUT/shim.o" -o "$OUT/$PROG.exe" -lws2_32 -ldbghelp -lbcrypt \
     -Wl,--stack,33554432
 echo "built build/host/$PROG.exe"
