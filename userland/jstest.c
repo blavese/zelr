@@ -960,6 +960,90 @@ int main(void) {
     expect("JSON.stringify indents, and JSON.parse revives",
            "JSON.stringify({ a: [1] }, null, 1) + JSON.parse('{\"b\":2}', (k, v) => typeof v === 'number' ? v * 10 : v).b",
            "{\n \"a\": [\n  1\n ]\n}20");
+    /* --- generators, promises and async functions ---------------------------
+     *
+     * Each generator and each async function runs on a small stack of its
+     * own and gives it back at every yield and await (jsco.h); the promise
+     * jobs run once the script has finished, before js_run returns. */
+    expect("a generator stops at each yield and is handed what next is given",
+           "(function(){ function* g() { var x = yield 1; yield x * 2; return 3; } var it = g();"
+           " var a = it.next(), b = it.next(5), c = it.next(), d = it.next();"
+           " return [a.value, b.value, c.value, c.done, d.value, d.done].join(); })()", "1,10,3,true,,true");
+    expect("yield* walks another generator, and a generator can be spread",
+           "(function(){ function* i() { yield 'a'; yield 'b'; } function* o() { yield* i(); yield 'c'; }"
+           " return [...o()].join(''); })()", "abc");
+    expect("a generator's finally runs when a loop leaves it early",
+           "(function(){ var log = []; function* g() { try { yield 1; yield 2; } finally { log.push('f'); } }"
+           " for (var x of g()) break; return log.join(); })()", "f");
+    expect("throw and return reach a generator where it stopped",
+           "(function(){ function* g() { try { yield 1; } catch (e) { yield 'caught ' + e; } }"
+           " var it = g(); it.next(); var t = it.throw('x').value; var r = it.return(7);"
+           " return t + ',' + r.value + ',' + r.done; })()", "caught x,7,true");
+    expect("a generator that never ends, stepped a thousand times",
+           "(function(){ function* n() { var i = 0; while (true) yield i++; } var it = n(), s = 0;"
+           " for (var k = 0; k < 1000; k++) s += it.next().value; return s; })()", "499500");
+    expect("a generator method on a class, and one that calls deeply",
+           "(function(){ class C { *each() { function depth(n) { return n ? depth(n - 1) + 1 : 0; }"
+           " yield depth(300); } } return [...new C().each()][0]; })()", "300");
+    script("promise jobs run after the script, in the order they were queued",
+           "var order = []; Promise.resolve().then(() => order.push('a')).then(() => order.push('c'));"
+           " Promise.resolve().then(() => order.push('b')); queueMicrotask(() => order.push('q'));"
+           " order.push('sync'); var result; Promise.resolve().then(() => 0).then(() => 0).then(() => { result = order.join(''); });",
+           "syncabqc");
+    script("then, catch and finally, and a value passed through a handler that is not there",
+           "var m = [], s = '', result; new Promise((ok) => ok(1)).then(v => { m.push(v); throw new Error('e'); })"
+           " .then(() => m.push('skipped')).catch(e => { m.push(e.message); return 2; })"
+           " .finally(() => m.push('f')).then(v => { m.push(v); result = m.join() + '|' + s; });"
+           " Promise.reject(3).then(null).catch(v => { s += v; });", "1,e,f,2|3");
+    script("Promise.all, allSettled, race and any",
+           "var result = ''; Promise.all([1, Promise.resolve(2)]).then(v => result += v.join('') + ';');"
+           " Promise.allSettled([1, Promise.reject(2)]).then(v => result += v.map(x => x.status[0]).join('') + ';');"
+           " Promise.race([new Promise(() => {}), Promise.resolve('r')]).then(v => result += v + ';');"
+           " Promise.any([Promise.reject(1), Promise.resolve('y')]).then(v => result += v + ';');",
+           "12;fr;r;y;");
+    script("an object with a then is followed like a promise",
+           "var result; Promise.resolve({ then(ok) { ok('th'); } }).then(v => { result = v; });", "th");
+    script("an async function awaits, returns and throws through its promise",
+           "async function add(a, b) { await null; return a + b; }"
+           " async function bad() { await 1; throw new Error('no'); }"
+           " var result = ''; add(1, 2).then(v => result += v); bad().catch(e => result += e.message);",
+           "3no");
+    script("await in a loop and inside try, catch and finally",
+           "async function f() { var s = ''; for (var i = 0; i < 3; i++) s += await Promise.resolve(i);"
+           " try { await Promise.reject(new Error('x')); } catch (e) { s += e.message; } finally { s += 'f'; }"
+           " return s; } var result; f().then(v => { result = v; });", "012xf");
+    script("an async function runs up to its first await before the caller carries on",
+           "var r = []; (async () => { r.push(1); await null; r.push(3); })(); r.push(2);"
+           " var result; Promise.resolve().then(() => 0).then(() => { result = r.join(''); });", "123");
+    script("async arrows and async methods, and await of a thenable",
+           "class C { constructor() { this.v = 7; } async m() { return this.v + await { then(ok) { ok(1); } }; } }"
+           " var result; (async x => (await x) * 2)(new C().m()).then(v => { result = v; });", "16");
+    script("an async generator and for await",
+           "async function* g() { yield 1; await null; yield Promise.resolve(2); }"
+           " var result; (async () => { var r = []; for await (var x of g()) r.push(x);"
+           " for await (var y of [Promise.resolve('p'), 'q']) r.push(y); result = r.join(); })();", "1,2,p,q");
+    script("fifty async functions waiting at once, each finished",
+           "var fs = [], waiting = []; for (var k = 0; k < 50; k++)"
+           " fs.push((async (n) => { await new Promise(ok => waiting.push(ok)); return n; })(k));"
+           " Promise.resolve().then(() => waiting.forEach((ok, i) => ok(i)));"
+           " var result; Promise.all(fs).then(v => { result = v.reduce((a, b) => a + b, 0); });", "1225");
+    {
+        /* Jobs that queue themselves for ever: stopped by the page's limits,
+           with the reason said, rather than the browser spinning. */
+        ran++;
+        jctx J;
+        js_init(&J);
+        const char *src = "var n = 0; function spin() { n++; Promise.resolve().then(spin); } spin();";
+        int ok = js_run(&J, src, (u32)strlen(src));
+        const char *want = "this script ";
+        int said = !ok;
+        for (int i = 0; said && want[i]; i++) if (J.error[i] != want[i]) said = 0;
+        puts(said ? "  PASS  " : "  FAIL  ");
+        puts("a promise loop that never ends is stopped rather than hanging");
+        putc('\n');
+        if (!said) failed++;
+        js_done(&J);
+    }
     expect("while two hundred nested brackets are an ordinary array",
            "(function(){ var s = ''; for (var i = 0; i < 200; i++) s += '['; s += '1';"
            " for (var i = 0; i < 200; i++) s += ']'; var a = eval(s);"

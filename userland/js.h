@@ -72,8 +72,17 @@
    host first called in. A tree walker spends stack on every level of nesting
    in the text as well as on every call, and the only honest bound is the
    stack itself: counting calls alone let a deeply nested expression, or a
-   parser reading one, run the program off the end of its stack. */
+   parser reading one, run the program off the end of its stack.
+ *
+ * Half of zelr's megabyte, which is about six hundred levels of calls. The
+ * Windows build (tools/host) gets twice the bytes for the same depth: that
+ * calling convention hands every sixteen byte value back through memory, and
+ * a level costs twice the stack. */
+#if defined(_WIN32)
+#define JS_STACK_BUDGET (1024u * 1024)
+#else
 #define JS_STACK_BUDGET (512u * 1024)
+#endif
 
 /* The tree, which is not in the region (it is read, never collected), has a
    ceiling of its own: a page that evaluates text in a loop must not be able

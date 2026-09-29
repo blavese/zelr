@@ -842,13 +842,13 @@ static int js_delete(jctx *J, jval target, jstr *key) {
 typedef struct {
     jval *v;
     int   n, cap;
-    jval  local[6];
+    jval  local[4];
 } jargs;
 
 static void js_args_init(jargs *A) {
     A->v = A->local;
     A->n = 0;
-    A->cap = 6;
+    A->cap = 4;
 }
 
 static int js_args_push(jctx *J, jargs *A, jval x) {
@@ -1604,7 +1604,7 @@ static jstr *js_private_key(jctx *J, jscope *sc, jstr *name) {
 
 /* `this` inside a derived class's constructor, which is not there until
    super() has made it. */
-static jval js_this_binding(jctx *J, jscope *sc) {
+static JS_NOINLINE jval js_this_binding(jctx *J, jscope *sc) {
     jprop *p = js_lookup(sc, J->s_this);
     if (!p) return js_undef();
     if (p->v.t == JS_HOLE)
@@ -1706,7 +1706,7 @@ static jval js_ident_soft(jctx *J, jstr *name, jscope *sc, int *found) {
     return js_undef();
 }
 
-static jval js_ident(jctx *J, jstr *name, jscope *sc) {
+static JS_NOINLINE jval js_ident(jctx *J, jstr *name, jscope *sc) {
     int found;
     jval v = js_ident_soft(J, name, sc, &found);
     if (!found) return js_throw_named(J, JS_ERR_REFERENCE, "", name, " is not defined");
@@ -2531,14 +2531,21 @@ static JS_NOINLINE jval js_eval_misc(jctx *J, int node, jscope *sc, jval this_va
     }
 }
 
+/* #x in o: whether o has the class's #x. */
+static JS_NOINLINE jval js_eval_private_in(jctx *J, int node, jscope *sc, jval this_val) {
+    int a = J->nodes[node].a, b = J->nodes[node].b, line = J->nodes[node].line;
+    jstr *key = js_private_key(J, sc, J->nodes[a].str);
+    jval r = js_eval(J, b, sc, this_val);
+    if (J->sig != JS_OK || !key) return js_undef();
+    if (!js_is_obj(r)) return js_throw(J, JS_ERR_TYPE, "the right of in is not an object", line);
+    return js_bool(js_has(J, r.obj, key));
+}
+
 static jval js_eval(jctx *J, int node, jscope *sc, jval this_val) {
     if (node < 0) return js_undef();
     if (!js_tick(J)) return js_undef();
-    {
-        char here;
-        if (&here < J->stack_limit)
-            return js_throw(J, JS_ERR_RANGE, "too many nested calls", J->error_line);
-    }
+    if ((char *)&node < J->stack_limit)
+        return js_throw(J, JS_ERR_RANGE, "too many nested calls", J->error_line);
     int kind = J->nodes[node].kind;
     J->error_line = J->nodes[node].line;
 
@@ -2580,14 +2587,8 @@ static jval js_eval(jctx *J, int node, jscope *sc, jval this_val) {
         case N_BINARY: {
             int a = J->nodes[node].a, b = J->nodes[node].b, op = J->nodes[node].op;
             int line = J->nodes[node].line;
-            if (op == OP_IN && a >= 0 && J->nodes[a].kind == N_PRIVNAME) {
-                /* #x in o: whether o has the class's #x. */
-                jstr *key = js_private_key(J, sc, J->nodes[a].str);
-                jval r = js_eval(J, b, sc, this_val);
-                if (J->sig != JS_OK || !key) return js_undef();
-                if (!js_is_obj(r)) return js_throw(J, JS_ERR_TYPE, "the right of in is not an object", line);
-                return js_bool(js_has(J, r.obj, key));
-            }
+            if (op == OP_IN && a >= 0 && J->nodes[a].kind == N_PRIVNAME)
+                return js_eval_private_in(J, node, sc, this_val);
             jval l = js_eval(J, a, sc, this_val);
             if (J->sig != JS_OK) return js_undef();
             jval r = js_eval(J, b, sc, this_val);
@@ -2914,37 +2915,12 @@ static void js_note_thrown(jctx *J, jval v, int line) {
     J->error_line = line;
 }
 
-static jsignal js_exec(jctx *J, int node, jscope *sc, jval this_val) {
-    if (node < 0) return J->sig;
-    if (!js_tick(J)) return J->sig;
-    {
-        char here;
-        if (&here < J->stack_limit) {
-            js_throw(J, JS_ERR_RANGE, "too many nested calls", J->error_line);
-            return J->sig;
-        }
-    }
+/* The statements that are not on the way into every call: out of the way of
+   js_exec's own frame, which is on the stack once for every block and every
+   return in every function being run. */
+static JS_NOINLINE jsignal js_exec_misc(jctx *J, int node, jscope *sc, jval this_val) {
     int kind = J->nodes[node].kind;
-    J->error_line = J->nodes[node].line;
-
     switch (kind) {
-        case N_BLOCK: {
-            jscope *bsc = sc;
-            if (J->nodes[node].flags & NF_SCOPE) {
-                bsc = js_scope(J, sc);
-                js_hoist_list(J, J->nodes[node].a, bsc, bsc);
-            }
-            jsignal s = JS_OK;
-            for (int cell = J->nodes[node].a; cell >= 0; cell = J->nodes[cell].b) {
-                s = js_exec(J, J->nodes[cell].a, bsc, this_val);
-                if (s != JS_OK) break;
-            }
-            if (bsc != sc && !bsc->escaped) js_scope_free(J, bsc);
-            return s;
-        }
-
-        case N_EMPTY: return JS_OK;
-
         case N_FUNCDECL:
             /* Already made when the block was entered. One in a block is
                also the function's var, as the old rule has it, from here. */
@@ -2953,12 +2929,6 @@ static jsignal js_exec(jctx *J, int node, jscope *sc, jval this_val) {
                 if (p && sc->parent) js_assign_name(J, sc->parent, J->nodes[node].str, p->v);
             }
             return J->sig;
-
-        case N_EXPRSTMT: {
-            jval v = js_eval(J, J->nodes[node].a, sc, this_val);
-            if (J->sig == JS_OK) J->ret = v;       /* what eval() hands back */
-            return J->sig;
-        }
 
         case N_VAR: {
             int kind_d = J->nodes[node].d;
@@ -2986,15 +2956,6 @@ static jsignal js_exec(jctx *J, int node, jscope *sc, jval this_val) {
             if (J->sig != JS_OK) return J->sig;
             if (J->nodes[node].str) js_declare(J, sc, J->nodes[node].str, c);
             return JS_OK;
-        }
-
-        case N_IF: {
-            int a = J->nodes[node].a, b = J->nodes[node].b, c = J->nodes[node].c;
-            jval t = js_eval(J, a, sc, this_val);
-            if (J->sig != JS_OK) return J->sig;
-            if (js_to_bool(t)) return js_exec(J, b, sc, this_val);
-            if (c >= 0) return js_exec(J, c, sc, this_val);
-            return J->sig;
         }
 
         case N_WHILE: {
@@ -3033,32 +2994,6 @@ static jsignal js_exec(jctx *J, int node, jscope *sc, jval this_val) {
             return J->sig;
         }
 
-        case N_FOR:   return js_exec_for(J, node, sc, this_val);
-        case N_FORIN: return js_exec_forin(J, node, sc, this_val);
-        case N_FOROF: return js_exec_forof(J, node, sc, this_val);
-
-        case N_RETURN: {
-            /* Into a local first: when the value throws, J->ret is what was
-               thrown, and writing the failed evaluation's undefined over it
-               made every error that passed through `return f()` arrive in
-               the catch as undefined. */
-            int a = J->nodes[node].a;
-            jval v = a >= 0 ? js_eval(J, a, sc, this_val) : js_undef();
-            if (J->sig != JS_OK) return J->sig;
-            J->ret = v;
-            J->sig = JS_RETURN;
-            return JS_RETURN;
-        }
-
-        case N_BREAK:
-            J->label = J->nodes[node].str;
-            J->sig = JS_BREAK;
-            return JS_BREAK;
-        case N_CONTINUE:
-            J->label = J->nodes[node].str;
-            J->sig = JS_CONTINUE;
-            return JS_CONTINUE;
-
         /* The name is handed to the statement about to run, so that a loop
            can tell a break meant for it from one meant for something it is
            inside. A labelled thing that is not a loop -- a block, which is
@@ -3089,9 +3024,6 @@ static jsignal js_exec(jctx *J, int node, jscope *sc, jval this_val) {
             return JS_THROWN;
         }
 
-        case N_TRY:    return js_exec_try(J, node, sc, this_val);
-        case N_SWITCH: return js_exec_switch(J, node, sc, this_val);
-
         case N_WITH: {
             /* A scope whose variables are the object's own properties. It is
                never given back: its table is the object's. */
@@ -3111,6 +3043,90 @@ static jsignal js_exec(jctx *J, int node, jscope *sc, jval this_val) {
         default:
             js_eval(J, node, sc, this_val);
             return J->sig;
+    }
+}
+
+static JS_NOINLINE jsignal js_exec_scoped_block(jctx *J, int node, jscope *sc, jval this_val) {
+    jscope *bsc = js_scope(J, sc);
+    js_hoist_list(J, J->nodes[node].a, bsc, bsc);
+    jsignal s = JS_OK;
+    for (int cell = J->nodes[node].a; cell >= 0; cell = J->nodes[cell].b) {
+        s = js_exec(J, J->nodes[cell].a, bsc, this_val);
+        if (s != JS_OK) break;
+    }
+    if (bsc != sc && !bsc->escaped) js_scope_free(J, bsc);
+    return s;
+}
+
+static jsignal js_exec(jctx *J, int node, jscope *sc, jval this_val) {
+    if (node < 0) return J->sig;
+    if (!js_tick(J)) return J->sig;
+    if ((char *)&node < J->stack_limit) {
+        js_throw(J, JS_ERR_RANGE, "too many nested calls", J->error_line);
+        return J->sig;
+    }
+    /* The fields are read before anything below can run code: running code
+       can read more text (eval), which grows the node array and moves it. */
+    int kind = J->nodes[node].kind;
+    J->error_line = J->nodes[node].line;
+
+    switch (kind) {
+        case N_BLOCK: {
+            if (J->nodes[node].flags & NF_SCOPE) return js_exec_scoped_block(J, node, sc, this_val);
+            for (int cell = J->nodes[node].a; cell >= 0; cell = J->nodes[cell].b) {
+                jsignal s = js_exec(J, J->nodes[cell].a, sc, this_val);
+                if (s != JS_OK) return s;
+            }
+            return JS_OK;
+        }
+
+        case N_EMPTY: return JS_OK;
+
+        case N_EXPRSTMT: {
+            jval v = js_eval(J, J->nodes[node].a, sc, this_val);
+            if (J->sig == JS_OK) J->ret = v;       /* what eval() hands back */
+            return J->sig;
+        }
+
+        case N_IF: {
+            int b = J->nodes[node].b, c = J->nodes[node].c;
+            jval t = js_eval(J, J->nodes[node].a, sc, this_val);
+            if (J->sig != JS_OK) return J->sig;
+            if (js_to_bool(t)) return js_exec(J, b, sc, this_val);
+            if (c >= 0) return js_exec(J, c, sc, this_val);
+            return J->sig;
+        }
+
+        case N_RETURN: {
+            /* Into a local first: when the value throws, J->ret is what was
+               thrown, and writing the failed evaluation's undefined over it
+               made every error that passed through `return f()` arrive in
+               the catch as undefined. */
+            int a = J->nodes[node].a;
+            jval v = a >= 0 ? js_eval(J, a, sc, this_val) : js_undef();
+            if (J->sig != JS_OK) return J->sig;
+            J->ret = v;
+            J->sig = JS_RETURN;
+            return JS_RETURN;
+        }
+
+        case N_BREAK:
+            J->label = J->nodes[node].str;
+            J->sig = JS_BREAK;
+            return JS_BREAK;
+        case N_CONTINUE:
+            J->label = J->nodes[node].str;
+            J->sig = JS_CONTINUE;
+            return JS_CONTINUE;
+
+        case N_FOR:    return js_exec_for(J, node, sc, this_val);
+        case N_FORIN:  return js_exec_forin(J, node, sc, this_val);
+        case N_FOROF:  return js_exec_forof(J, node, sc, this_val);
+        case N_TRY:    return js_exec_try(J, node, sc, this_val);
+        case N_SWITCH: return js_exec_switch(J, node, sc, this_val);
+
+        default:
+            return js_exec_misc(J, node, sc, this_val);
     }
 }
 
@@ -3234,7 +3250,7 @@ static void co_after(jctx *J, jco *co) {
     }
 }
 
-static jval js_start_coroutine(jctx *J, jobj *f, jval this_val, jval *argv, int argc) {
+static JS_NOINLINE jval js_start_coroutine(jctx *J, jobj *f, jval this_val, jval *argv, int argc) {
     int fl = J->nodes[f->node].op;
     if (fl & FN_GEN) {
         int kind = (fl & FN_ASYNC) ? CO_ASYNCGEN : CO_GEN;
@@ -3555,7 +3571,7 @@ static int js_run(jctx *J, const char *src, u32 len) {
 
 /* And evaluates one expression, for anything that wants a value back: an
    event handler written in an attribute, or a test. */
-static int js_eval_text(jctx *J, const char *src, u32 len, jval *out) {
+__attribute__((unused)) static int js_eval_text(jctx *J, const char *src, u32 len, jval *out) {
     J->sig = JS_OK;
     J->steps = 0;
     J->error[0] = 0;

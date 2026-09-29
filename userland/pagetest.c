@@ -545,6 +545,30 @@ int main(void) {
             "waiting");
     }
 
+    /* A promise's reaction, and an async function's next step, run once the
+       timer or the handler that queued them has returned: the checkpoint a
+       browser makes after every callback. The engine makes it itself when
+       the outermost call the host made returns (jsrun.h, js_leave), so
+       nothing here had to change for it. */
+    {
+        load("<body><p id=out>waiting</p><p id=b>button</p>"
+             "<script>setTimeout(function(){ Promise.resolve().then(function(){"
+             " document.getElementById('out').textContent = 'job'; }); }, 10);"
+             "document.getElementById('b').addEventListener('click', async function(){"
+             " await null; document.getElementById('b').textContent = 'awaited'; });"
+             "</script></body>");
+
+        char err[128];
+        int changed = 0;
+        run_scripts(&page, err, (int)sizeof(err), &changed);
+        pump_until(1, 3000);
+        oks("a promise a timer queued runs when the timer returns",
+            content_of(dom_by_id(&page, "out")), "job");
+        jsdom_click(dom_by_id(&page, "b"));
+        oks("an async click handler carries on past its await once it has returned",
+            content_of(dom_by_id(&page, "b")), "awaited");
+    }
+
     /* What is in a field, as a script sees it. The same attribute the
        browser types into and the layout draws, so all three agree. */
     {
