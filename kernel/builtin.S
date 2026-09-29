@@ -357,3 +357,10 @@ builtin_polltest_end:
 builtin_sitetest_start:
 .incbin "build/user/sitetest.elf"
 builtin_sitetest_end:
+
+.balign 4
+.global builtin_giftest_start
+.global builtin_giftest_end
+builtin_giftest_start:
+.incbin "build/user/giftest.elf"
+builtin_giftest_end:

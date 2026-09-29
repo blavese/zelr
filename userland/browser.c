@@ -36,6 +36,7 @@
 #include "jsdom.h"
 #include "png.h"
 #include "jpeg.h"
+#include "gif.h"
 #include "svg.h"
 
 /* --- how much room there is ----------------------------------------------
@@ -855,6 +856,8 @@ static void gather_pictures(void) {
             ok = png_decode(body, r.len, &s->pic, 0xFFFFFF) == PNG_OK;
         } else if (r.len > 3 && body[0] == 0xFF && body[1] == 0xD8) {
             ok = jpeg_decode(body, r.len, &s->pic) == JPG_OK;
+        } else if (r.len > 6 && body[0] == 'G' && body[1] == 'I' && body[2] == 'F') {
+            ok = gif_decode(body, r.len, &s->pic, 0xFFFFFF) == GIF_OK;
         } else {
             /* A drawing, which is markup and so can start with an XML
                declaration, a comment, or the element itself. */

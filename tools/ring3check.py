@@ -49,6 +49,7 @@ SUITES = [
     ("polltest",  "POLLTEST_PASS",  "waiting on several descriptors at once", 180),
     ("cputest",   "CPUTEST_PASS",   "a process's memory stays its own", 240),
     ("sitetest",  "SITETEST_PASS",  "YouTube and Twitch read from their data", 120),
+    ("giftest",   "GIFTEST_PASS",   "gif pictures, made by another encoder", 120),
 ]
 
 
