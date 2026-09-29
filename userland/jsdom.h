@@ -5369,6 +5369,9 @@ static u32 jd_data_url(const char *src, char **out, char *mime, int mcap) {
     return n;
 }
 
+static int jd_is_blob_url(const char *s);                          /* jswin.h */
+static int jd_blob_lookup(const char *url, jstr **bytes, jstr **type);
+
 /* A script element's text, from its src or from inside it. 0 for none. An
    inline one is gathered into memory of its own, which *owned says the
    caller frees once it has run: the text of a script inserted while another
@@ -5392,6 +5395,17 @@ static u32 jd_script_text(int i, const char **text, const char **src, char **own
             *owned = buf;
             *text = buf;
             return n;
+        }
+        if (jd_is_blob_url(*src)) {
+            jstr *bb, *bt;
+            if (!jd_blob_lookup(*src, &bb, &bt)) {
+                jd_outside_failed++;
+                if (jd_script_done) jd_script_done(i, *src, 0, "its blob: address names nothing");
+                return 0;
+            }
+            jd_outside++;
+            *text = bb->s;
+            return bb->len;
         }
         if (!jd_get_script) { jd_outside_failed++; return 0; }
         int n = jd_get_script(*src, text);

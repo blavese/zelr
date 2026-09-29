@@ -276,9 +276,17 @@ static jstr *jd_k_fpairs;
 
 static int jd_is_formdata(jval v) { return js_is_obj(v) && js_find(v.obj, jd_k_fpairs) != 0; }
 
+static int jd_blob_parts(jval v, jstr **bytes, jstr **type);     /* jswin.h */
+static int jd_blob_lookup(const char *url, jstr **bytes, jstr **type);
+
 static jstr *jd_body_of(jctx *J, jval b, const char **type) {
     *type = 0;
     if (b.t == JS_UNDEF || b.t == JS_NULL) return 0;
+    jstr *bb, *bt;
+    if (jd_blob_parts(b, &bb, &bt)) {
+        *type = bt && bt->len ? bt->s : 0;
+        return bb;
+    }
     /* FormData before URLSearchParams: it keeps its pairs the same way. */
     if (!jd_is_formdata(b) && jd_is_search_params_obj(b)) {
         *type = "application/x-www-form-urlencoded;charset=UTF-8";
@@ -883,6 +891,17 @@ __attribute__((unused)) static int jsdom_requests(void) {
                 rp.len = (int)n;
                 rp.status = 200;
                 rp.type = mime;
+                rp.url = url;
+            }
+        } else if (jd_is_blob_url(url)) {
+            /* From what the address was made for, or a failure to fetch
+               once it has been revoked. */
+            jstr *bb, *bt;
+            if (jd_blob_lookup(url, &bb, &bt)) {
+                rp.body = bb->s;
+                rp.len = (int)bb->len;
+                rp.status = 200;
+                rp.type = bt ? bt->s : "";
                 rp.url = url;
             }
         } else if (url[0] && jd_do_request && (kind != JQ_XHR || jd_method_ok(method))) {

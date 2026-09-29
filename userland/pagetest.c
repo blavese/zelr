@@ -1753,6 +1753,50 @@ int main(void) {
         jsdom_at("");
     }
 
+    /* --- Blob, File and blob: addresses ------------------------------------------------
+     *
+     * Instagram makes a Blob for every beacon it sends, and stopped on the
+     * name. */
+    {
+        jsdom_at("https://site.test/");
+        oks("a Blob is its parts' bytes, with a type, and can be cut and read",
+            titled("<body><script>var b = new Blob(['h\xc3\xa9', new Uint8Array([33]), new Blob(['!'])], { type: 'Text/Plain' });"
+                   "var s = b.slice(1, -1, 'x/y'), out = [b.size, b.type, s.size, s.type, b instanceof Blob];"
+                   "var f = new File(['abc'], 'a.txt', { type: 'text/plain', lastModified: 5 });"
+                   "out.push(f.name, f.lastModified, f.size, f instanceof Blob, f instanceof File);"
+                   "b.text().then(function(t){ out.push(t); return s.arrayBuffer(); })"
+                   ".then(function(ab){ out.push(new Uint8Array(ab).length); document.title = out.join(' '); });"
+                   "</script></body>"),
+            "5 text/plain 3 x/y true a.txt 5 3 true true h\xc3\xa9!! 3");
+        jsdom_request_with(fake_request);
+        asked[0] = 0;
+        load("<body><p id=x>none</p><p id=y>none</p><script>"
+             "var u = URL.createObjectURL(new Blob(['window.fromBlob = 7;'], { type: 'text/javascript' }));"
+             "var sc = document.createElement('script'); sc.src = u; document.body.appendChild(sc);"
+             "var j = URL.createObjectURL(new Blob(['{\"k\":1}'], { type: 'application/json' }));"
+             "fetch(j).then(function(r){ return r.json().then(function(o){"
+             " document.getElementById('x').textContent = [u.indexOf('blob:https://site.test/'), u.length,"
+             "  window.fromBlob, o.k, r.headers.get('content-type')].join(' ');"
+             " URL.revokeObjectURL(j); fetch(j).catch(function(e){ document.getElementById('y').textContent = e.name; });"
+             "}); });</script></body>");
+        char err[128];
+        run_scripts(&page, err, (int)sizeof(err), 0);
+        pump_until(1, 1000);                /* the inserted script, on the next pass */
+        for (int k = 0; k < 4; k++) jsdom_requests();
+        oks("a blob: address is answered from its Blob, for a script and a fetch alike",
+            content_of(dom_by_id(&page, "x")), "0 59 7 1 application/json");
+        oks("until it is revoked, and never from the network", content_of(dom_by_id(&page, "y")), "TypeError");
+        oks("so nothing was sent", asked, "");
+        load("<body><script>navigator.sendBeacon('/b', new Blob(['a=1'], { type: 'application/x-www-form-urlencoded' }));"
+             "</script></body>");
+        run_scripts(&page, err, (int)sizeof(err), 0);
+        pump_until(1, 1000);
+        oks("and sendBeacon sends a Blob as its bytes, with its type", asked,
+            "POST https://site.test/b a=1 application/x-www-form-urlencoded");
+        jsdom_request_with(0);
+        jsdom_at("");
+    }
+
     /* --- a page that uses up its memory ---------------------------------------
      *
      * At the cap a string or a property came back as nothing, and places that

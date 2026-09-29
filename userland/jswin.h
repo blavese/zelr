@@ -139,21 +139,21 @@ static jval nat_nav_beacon(jctx *J, jval t, jval *a, int n) {
     (void)t;
     jstr *url = jd_arg_str(J, a, n, 0);
     if (!url->len) return js_throw(J, JS_ERR_TYPE, "sendBeacon needs an address", J->error_line);
+    /* Made whole against the page, as fetch makes its address. */
+    {
+        char out[URL_TEXT + 256];
+        if (jd_resolve(url->s, out, (int)sizeof(out))) url = js_str(J, out);
+    }
     jval data = js_arg(a, n, 1);
     jval body = jd_str(""), type = js_undef();
     if (data.t != JS_UNDEF && data.t != JS_NULL) {
-        const u8 *bytes;
-        u32 blen;
-        if (js_is_obj(data) && tx_bytes_of(data, &bytes, &blen)) {
-            body = js_from_str(js_str_n(J, (const char *)bytes, blen));
-            type = jd_str("application/octet-stream");
-        } else {
-            jstr *s = js_to_str(J, data);
-            if (!s) return js_undef();
-            body = js_from_str(s);
-            type = jd_str(jd_is_search_params_obj(data) ?"application/x-www-form-urlencoded;charset=UTF-8"
-                                                    : "text/plain;charset=UTF-8");
-        }
+        /* Whatever fetch would send it as (jsnet.h): a Blob as its bytes
+           and its type, which is how Instagram sends every beacon. */
+        const char *ty = 0;
+        jstr *s = jd_body_of(J, data, &ty);
+        if (!s) return js_undef();
+        body = js_from_str(s);
+        if (ty) type = jd_str(ty);
     }
     jobj *job = js_array(J);
     if (!job) return js_bool(0);
@@ -1211,6 +1211,258 @@ static void jd_setup_crypto(jctx *J, jscope *g, int secure) {
     if (c) js_declare(J, g, js_str(J, "crypto"), js_from_obj(c));
 }
 
+/* --- Blob, File and blob: addresses ------------------------------------------------------------
+ *
+ * Bytes a page puts together and hands to something that takes a body or an
+ * address: Instagram makes a Blob for every beacon it sends. A Blob keeps
+ * its bytes as a string of them (strings here are bytes) and its type;
+ * a File is a Blob with a name and a time. URL.createObjectURL gives one an
+ * address, blob:<origin>/<uuid>, that a fetch, an XMLHttpRequest or a
+ * script's src is answered from until the address is revoked or the page
+ * is left. */
+
+static jstr *jd_k_bbytes, *jd_k_btype;
+static jobj *jd_p_blob, *jd_p_file;
+static jobj *jd_blob_urls;                 /* [address, blob, address, blob, ...] */
+static int jd_blob_count;
+
+/* A Blob's bytes and type, when v is one. */
+static int jd_blob_parts(jval v, jstr **bytes, jstr **type) {
+    if (!js_is_obj(v)) return 0;
+    jval b = jd_kept(v.obj, jd_k_bbytes);
+    if (b.t != JS_STR) return 0;
+    *bytes = b.str;
+    jval t = jd_kept(v.obj, jd_k_btype);
+    *type = t.t == JS_STR ? t.str : 0;
+    return 1;
+}
+
+/* A type as the standard keeps it: lower case, and nothing at all if it
+   has a character outside printable ASCII. */
+static jstr *jd_blob_type(jctx *J, jval v) {
+    if (v.t == JS_UNDEF) return js_str(J, "");
+    jstr *s = js_to_str(J, v);
+    if (!s) return js_str(J, "");
+    for (u32 i = 0; i < s->len; i++) if ((u8)s->s[i] < 0x20 || (u8)s->s[i] > 0x7E) return js_str(J, "");
+    return jd_lower_str(J, s);
+}
+
+static jobj *jd_blob_make(jctx *J, jobj *proto, jstr *bytes, jstr *type) {
+    jobj *b = js_object_with(J, JO_PLAIN, proto ? proto : jd_p_blob);
+    if (!b) return 0;
+    jd_keep(b, jd_k_bbytes, js_from_str(bytes ? bytes : js_str(J, "")));
+    jd_keep(b, jd_k_btype, js_from_str(type ? type : js_str(J, "")));
+    return b;
+}
+
+/* The parts a Blob is made of, one after another: strings as their UTF-8,
+   buffers and views as their bytes, Blobs as theirs. */
+static jstr *jd_blob_join(jctx *J, jval parts) {
+    jtext t = { 0, 0, 0, 0 };
+    if (parts.t != JS_UNDEF && parts.t != JS_NULL) {
+        if (!js_is_obj(parts)) {
+            js_throw(J, JS_ERR_TYPE, "a Blob is made from a list of parts", J->error_line);
+            return 0;
+        }
+        jargs A;
+        js_args_init(&A);
+        if (js_iter_collect(J, parts, &A)) {
+            for (int i = 0; i < A.n && J->sig == JS_OK; i++) {
+                const u8 *p;
+                u32 n;
+                jstr *bb, *bt;
+                if (jd_blob_parts(A.v[i], &bb, &bt)) jt_put(J, &t, bb->s, bb->len);
+                else if (js_is_obj(A.v[i]) && tx_bytes_of(A.v[i], &p, &n)) jt_put(J, &t, (const char *)p, n);
+                else {
+                    jstr *s = js_to_str(J, A.v[i]);
+                    if (s) jt_put(J, &t, s->s, s->len);
+                }
+            }
+        }
+        js_args_free(&A);
+    }
+    if (J->sig != JS_OK) { free(t.b); return 0; }
+    return jt_done(J, &t);
+}
+
+static jval nat_blob_ctor(jctx *J, jval t, jval *a, int n) {
+    if (J->new_target.t == JS_UNDEF || !js_is_obj(t))
+        return js_throw(J, JS_ERR_TYPE, "Blob is made with new", J->error_line);
+    jstr *bytes = jd_blob_join(J, js_arg(a, n, 0));
+    if (!bytes) return js_undef();
+    jval opt = js_arg(a, n, 1);
+    jstr *type = jd_blob_type(J, js_is_obj(opt) ? js_get(J, opt, js_str(J, "type")) : js_undef());
+    jd_keep(t.obj, jd_k_bbytes, js_from_str(bytes));
+    jd_keep(t.obj, jd_k_btype, js_from_str(type));
+    return js_undef();
+}
+
+static jval nat_file_ctor(jctx *J, jval t, jval *a, int n) {
+    if (J->new_target.t == JS_UNDEF || !js_is_obj(t))
+        return js_throw(J, JS_ERR_TYPE, "File is made with new", J->error_line);
+    if (n < 2) return js_throw(J, JS_ERR_TYPE, "a File needs its parts and a name", J->error_line);
+    jstr *bytes = jd_blob_join(J, a[0]);
+    if (!bytes) return js_undef();
+    jstr *name = js_to_str(J, a[1]);
+    jval opt = js_arg(a, n, 2);
+    jstr *type = jd_blob_type(J, js_is_obj(opt) ? js_get(J, opt, js_str(J, "type")) : js_undef());
+    jval when = js_is_obj(opt) ? js_get(J, opt, js_str(J, "lastModified")) : js_undef();
+    jd_keep(t.obj, jd_k_bbytes, js_from_str(bytes));
+    jd_keep(t.obj, jd_k_btype, js_from_str(type));
+    js_define(J, t.obj, js_str(J, "name"), js_from_str(name ? name : js_str(J, "")), JP_ENUM);
+    js_define(J, t.obj, js_str(J, "lastModified"),
+              js_num(when.t == JS_UNDEF ? js_trunc(js_now(J)) : js_to_num(J, when)), JP_ENUM);
+    return js_undef();
+}
+
+static jval nat_blob_size(jctx *J, jval t, jval *a, int n) {
+    (void)a; (void)n;
+    jstr *b, *ty;
+    if (!jd_blob_parts(t, &b, &ty)) return jd_illegal(J);
+    return js_num(b->len);
+}
+
+static jval nat_blob_type_get(jctx *J, jval t, jval *a, int n) {
+    (void)a; (void)n;
+    jstr *b, *ty;
+    if (!jd_blob_parts(t, &b, &ty)) return jd_illegal(J);
+    return js_from_str(ty ? ty : js_str(J, ""));
+}
+
+/* A position as slice takes one: from the end when negative, and inside. */
+static u32 jd_blob_at(jctx *J, jval v, u32 len, u32 dflt) {
+    if (v.t == JS_UNDEF) return dflt;
+    double d = js_trunc(js_to_num(J, v));
+    if (d != d) d = 0;
+    if (d < 0) d = d + len < 0 ? 0 : d + len;
+    return d > len ? len : (u32)d;
+}
+
+static jval nat_blob_slice(jctx *J, jval t, jval *a, int n) {
+    jstr *b, *ty;
+    if (!jd_blob_parts(t, &b, &ty)) return jd_illegal(J);
+    u32 from = jd_blob_at(J, js_arg(a, n, 0), b->len, 0);
+    u32 to = jd_blob_at(J, js_arg(a, n, 1), b->len, b->len);
+    if (to < from) to = from;
+    jstr *type = jd_blob_type(J, js_arg(a, n, 2));
+    jobj *o = jd_blob_make(J, jd_p_blob, js_str_n(J, b->s + from, to - from), type);
+    return o ? js_from_obj(o) : js_null();
+}
+
+static jval nat_blob_text(jctx *J, jval t, jval *a, int n) {
+    (void)a; (void)n;
+    jstr *b, *ty;
+    if (!jd_blob_parts(t, &b, &ty)) return jd_illegal(J);
+    return jd_promise_from(J, js_from_str(b));
+}
+
+static jval nat_blob_buffer(jctx *J, jval t, jval *a, int n) {
+    (void)a; (void)n;
+    jstr *b, *ty;
+    if (!jd_blob_parts(t, &b, &ty)) return jd_illegal(J);
+    jobj *buf = ta_new_buffer(J, J->p_buffer, b->len);
+    if (buf) {
+        u8 *d = ta_bytes(buf);
+        for (u32 i = 0; i < b->len; i++) d[i] = (u8)b->s[i];
+    }
+    return jd_promise_from(J, js_from_obj(buf));
+}
+
+/* --- blob: addresses --- */
+
+static jval nat_url_create_object(jctx *J, jval t, jval *a, int n) {
+    (void)t;
+    jval v = js_arg(a, n, 0);
+    jstr *b, *ty;
+    if (!jd_blob_parts(v, &b, &ty)) return js_throw(J, JS_ERR_TYPE, "createObjectURL needs a Blob", J->error_line);
+    /* A UUID from the kernel's generator when it has one; the address is a
+       name, not a secret, so a counter in the same form does when not. */
+    static const char hex[] = "0123456789abcdef";
+    u8 r[16];
+    int got = jd_random ? jd_random(r, 16) : jd_kernel_random(r, 16);
+    if (got != 16) {
+        for (int i = 0; i < 16; i++) r[i] = 0;
+        int c = ++jd_blob_count;
+        for (int i = 15; i >= 12 && c; i--, c >>= 8) r[i] = (u8)c;
+    }
+    r[6] = (u8)((r[6] & 0x0F) | 0x40);
+    r[8] = (u8)((r[8] & 0x3F) | 0x80);
+    char id[37];
+    int w = 0;
+    for (int i = 0; i < 16; i++) {
+        if (i == 4 || i == 6 || i == 8 || i == 10) id[w++] = '-';
+        id[w++] = hex[r[i] >> 4];
+        id[w++] = hex[r[i] & 15];
+    }
+    id[w] = 0;
+    jtext tx = { 0, 0, 0, 0 };
+    jd_put(&tx, "blob:");
+    jstr *origin = jd_page_origin(J);
+    if (origin && !js_str_is(origin, "null")) jt_put(J, &tx, origin->s, origin->len);
+    else jd_put(&tx, "null");
+    jd_putc(&tx, '/');
+    jd_put(&tx, id);
+    jstr *url = jt_done(J, &tx);
+    if (!jd_blob_urls) jd_blob_urls = js_array(J);
+    if (jd_blob_urls && url) {
+        js_arr_push(J, jd_blob_urls, js_from_str(url));
+        js_arr_push(J, jd_blob_urls, v);
+    }
+    return url ? js_from_str(url) : js_undef();
+}
+
+static jval nat_url_revoke_object(jctx *J, jval t, jval *a, int n) {
+    (void)t;
+    jstr *url = jd_arg_str(J, a, n, 0);
+    for (u32 i = 0; jd_blob_urls && i + 1 < jd_blob_urls->len; i += 2)
+        if (jd_blob_urls->items[i].t == JS_STR && js_str_eq(jd_blob_urls->items[i].str, url)) {
+            jd_blob_urls->items[i] = js_undef();
+            jd_blob_urls->items[i + 1] = js_undef();
+        }
+    return js_undef();
+}
+
+static int jd_is_blob_url(const char *s) {
+    return s && w_lower(s[0]) == 'b' && w_lower(s[1]) == 'l' && w_lower(s[2]) == 'o'
+           && w_lower(s[3]) == 'b' && s[4] == ':';
+}
+
+/* What a blob: address was made for, while it has not been revoked; the
+   fragment is no part of it. */
+static int jd_blob_lookup(const char *url, jstr **bytes, jstr **type) {
+    if (!jd_blob_urls || !jd_is_blob_url(url)) return 0;
+    int len = 0;
+    while (url[len] && url[len] != '#') len++;
+    for (u32 i = 0; i + 1 < jd_blob_urls->len; i += 2) {
+        jval u = jd_blob_urls->items[i];
+        if (u.t != JS_STR || (int)u.str->len != len) continue;
+        int same = 1;
+        for (int k = 0; k < len && same; k++) if (u.str->s[k] != url[k]) same = 0;
+        if (same) return jd_blob_parts(jd_blob_urls->items[i + 1], bytes, type);
+    }
+    return 0;
+}
+
+static void jd_setup_blobs(jctx *J, jscope *g) {
+    (void)g;
+    jd_k_bbytes = js_sym_new(J, "bytes", 5);
+    jd_k_btype = js_sym_new(J, "type", 4);
+    jd_blob_urls = 0;
+    jd_blob_count = 0;
+    jd_p_blob = jd_interface(J, "Blob", 0, nat_blob_ctor, 0);
+    jd_accessor(J, jd_p_blob, "size", nat_blob_size, 0);
+    jd_accessor(J, jd_p_blob, "type", nat_blob_type_get, 0);
+    jd_method(J, jd_p_blob, "slice", nat_blob_slice, 0);
+    jd_method(J, jd_p_blob, "text", nat_blob_text, 0);
+    jd_method(J, jd_p_blob, "arrayBuffer", nat_blob_buffer, 0);
+    jd_p_file = jd_interface(J, "File", jd_p_blob, nat_file_ctor, 2);
+    jobj *url = jd_ctor_of(jd_p_url);
+    if (url) {
+        js_method(J, url, "createObjectURL", nat_url_create_object, 1);
+        js_method(J, url, "revokeObjectURL", nat_url_revoke_object, 1);
+    }
+}
+
 /* --- the computed style ------------------------------------------------------------------------
  *
  * getComputedStyle, from the style the layout works out for the element --
@@ -1455,6 +1707,7 @@ static void jd_setup_window_more(jctx *J) {
         js_declare(J, g, js_str(J, "isSecureContext"), js_bool(secure));
         js_declare(J, g, js_str(J, "origin"), js_from_str(jd_page_origin(J)));
         jd_setup_crypto(J, g, secure);
+        jd_setup_blobs(J, g);
     }
 
     /* getComputedStyle */
