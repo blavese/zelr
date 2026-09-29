@@ -51,6 +51,7 @@ enum {
     P_POSITION, P_TOP, P_RIGHT, P_BOTTOM, P_LEFT,
     P_VALIGN, P_SPACING, P_COLLAPSE, P_OVERFLOW, P_CLIP, P_FLOAT, P_CLEAR, P_TRANSFORM,
     P_GRID_COLS, P_GRID_COLUMN, P_GRID_AREAS, P_GRID_AREA, P_GRID_FLOW, P_GRID_AUTO_COLS,
+    P_GRID_COL_START, P_GRID_COL_END, P_GRID_ROW, P_GRID_ROW_START, P_GRID_ROW_END,
     P_MASK,
     P_CUSTOM,        /* --name: value, kept as the text "--name:value" */
     P_DEFER,         /* a shorthand whose value has var() in it: "name:value" */
@@ -199,6 +200,13 @@ typedef struct {
        lays the items out along one row, a new column each. */
     const char *grid_auto;
     unsigned char gflow_col;
+
+    /* Where an item is placed along a grid's columns, as written:
+       grid-column, and its two longhands (layout.h, lay_grid_place). */
+    const char *gcol, *gcol_s, *gcol_e;
+    /* And along its rows, and grid-area written as lines (1 / 2 / 3 / 4)
+       rather than a name. */
+    const char *grid_row, *grid_row_s, *grid_row_e, *gplace;
 
     /* Whether width was a percentage, which a box being measured for how
        wide its contents want to be cannot resolve: it is auto there, as the
@@ -572,6 +580,11 @@ static const cprop CSS_PROPS[] = {
     { "grid-area", P_GRID_AREA },
     { "grid-auto-flow", P_GRID_FLOW },
     { "grid-auto-columns", P_GRID_AUTO_COLS },
+    { "grid-column-start", P_GRID_COL_START },
+    { "grid-column-end", P_GRID_COL_END },
+    { "grid-row", P_GRID_ROW },
+    { "grid-row-start", P_GRID_ROW_START },
+    { "grid-row-end", P_GRID_ROW_END },
     { "mask", P_MASK },
     { "mask-image", P_MASK },
     { "-webkit-mask", P_MASK },
@@ -1738,6 +1751,8 @@ static inline void css_default_style(cstyle *st, int root_px) {
     st->tx_px = st->ty_px = st->tx_pct = st->ty_pct = 0;
     st->grid_cols = st->grid_areas = st->garea = st->grid_auto = 0;
     st->gflow_col = 0;
+    st->gcol = st->gcol_s = st->gcol_e = 0;
+    st->grid_row = st->grid_row_s = st->grid_row_e = st->gplace = 0;
     st->width_pct = 0;
     st->vars = -1;
     st->gspan = 0;
@@ -2110,9 +2125,23 @@ static inline void css_apply_v(int prop, const char *v, cstyle *st, int root_px,
         case P_GRID_AREAS:
             st->grid_areas = w_starts_fold(v, "none") ? 0 : v;
             break;
-        case P_GRID_AREA:
-            /* A name; a placement by line numbers is left to the flow. */
-            st->garea = (v[0] >= '0' && v[0] <= '9') || w_starts_fold(v, "auto") ? 0 : v;
+        case P_GRID_AREA: {
+            /* A name, or lines: row start / column start / row end /
+               column end (lay_grid_parts). */
+            int lines = (v[0] >= '0' && v[0] <= '9') || v[0] == '-';
+            for (const char *q = v; *q; q++) if (*q == '/') lines = 1;
+            st->gplace = lines ? v : 0;
+            st->garea = lines || w_starts_fold(v, "auto") ? 0 : v;
+            break;
+        }
+        case P_GRID_ROW:
+            st->grid_row = v;
+            break;
+        case P_GRID_ROW_START:
+            st->grid_row_s = v;
+            break;
+        case P_GRID_ROW_END:
+            st->grid_row_e = v;
             break;
         case P_GRID_COLS:
             st->grid_cols = w_starts_fold(v, "none") ? 0 : v;
@@ -2123,9 +2152,17 @@ static inline void css_apply_v(int prop, const char *v, cstyle *st, int root_px,
         case P_GRID_AUTO_COLS:
             st->grid_auto = w_starts_fold(v, "auto") ? 0 : v;
             break;
+        case P_GRID_COL_START:
+            st->gcol_s = v;
+            break;
+        case P_GRID_COL_END:
+            st->gcol_e = v;
+            break;
         case P_GRID_COLUMN: {
             /* span N, or 1 / -1 for the whole row; a line number alone is
-               one column, placed where the next free one is. */
+               one column, placed where the next free one is. The text is
+               kept too, for a placement by line (lay_grid_place). */
+            st->gcol = v;
             st->gspan = 0;
             const char *q = v;
             while (*q == ' ') q++;

@@ -1323,6 +1323,72 @@ int main(void) {
         ok("and font-weight: bold is bold", e && pl && e->face != pl->face);
     }
 
+    /* --- placing an item by line -----------------------------------------------
+     *
+     * A page built on a grid with named lines, [content-start] ...
+     * [content-end], puts every section in the content column by name.
+     * Poured into the first column instead -- a margin a few pixels wide --
+     * a whole front page was a column one word across. */
+    {
+        lay("<style>.g{display:grid;grid-template-columns:[full-start] 1fr [content-start] 200px "
+            "[content-end] 1fr [full-end]}.g>*{grid-column:content;background:#eeeeee}</style>"
+            "<div class=g><div id=a>one</div><div id=b>two</div></div>", 600);
+        const litem *a = box_of(by_id("a")), *b = box_of(by_id("b"));
+        okn("an item placed by a named line is in that column", a && a->x == 200 && a->w == 200,
+            a ? a->x : -1);
+        ok("and the next one placed there starts a row of its own", b && a && b->x == 200 && b->y > a->y);
+
+        lay("<style>.g{display:grid;grid-template-columns:repeat(4,100px)}.g div{background:#eeeeee}"
+            "#a{grid-column:2 / 4}#b{grid-column:-2}#c{grid-column-start:1;grid-column-end:span 2}</style>"
+            "<div class=g><div id=a>a</div><div id=b>b</div><div id=c>c</div></div>", 600);
+        a = box_of(by_id("a"));
+        b = box_of(by_id("b"));
+        const litem *c = box_of(by_id("c"));
+        okn("by numbers, 2 / 4 is the second and third columns", a && a->x == 100 && a->w == 200,
+            a ? a->w : -1);
+        okn("and -2 the last", b && b->x == 300 && b->y == a->y, b ? b->x : -1);
+        okn("and the longhands, a start and a span", c && c->x == 0 && c->w == 200 && c->y > a->y,
+            c ? c->w : -1);
+
+        /* minmax(0, 300px) between two 1fr margins: as wide as there is
+           room for, up to 300, before the margins share the rest. */
+        lay("<style>.g{display:grid;grid-template-columns:1fr minmax(0,300px) 1fr}"
+            ".g div{grid-column:2;background:#eeeeee}</style><div class=g><div id=a>mid</div></div>", 600);
+        a = box_of(by_id("a"));
+        okn("a capped track grows to its cap", a && a->x == 150 && a->w == 300, a ? a->w : -1);
+        lay("<style>.g{display:grid;grid-template-columns:1fr minmax(0,300px) 1fr}"
+            ".g div{grid-column:2;background:#eeeeee}</style><div class=g><div id=a>mid</div></div>", 250);
+        a = box_of(by_id("a"));
+        okn("and no further than the room there is", a && a->w == 250, a ? a->w : -1);
+    }
+
+    /* --- an item that names its row ----------------------------------------------
+     *
+     * The BBC's lead story puts its picture on row 1 at column 9 and its
+     * words, which name no row, in columns 1 to 8 beside it. Placed row by
+     * row in the order written, the words went under the picture. */
+    {
+        lay("<style>.g{display:grid;grid-template-columns:repeat(3,100px)}.g div{background:#eeeeee}"
+            "#p{grid-column:2 / span 2;grid-row:1}#t{grid-column:1}</style>"
+            "<div class=g><div id=p>picture</div><div id=t>words</div></div>", 600);
+        const litem *p = box_of(by_id("p")), *t = box_of(by_id("t"));
+        okn("an item on a named row is placed first, the rest beside it",
+            p && t && p->x == 100 && p->w == 200 && t->x == 0 && t->y == p->y, t ? t->y - (p ? p->y : 0) : -1);
+
+        lay("<style>.g{display:grid;grid-template-columns:repeat(3,100px)}.g div{background:#eeeeee}"
+            "#q{grid-area:2 / 1 / 3 / 3}</style>"
+            "<div class=g><div id=a>a</div><div id=q>q</div></div>", 600);
+        const litem *a = box_of(by_id("a")), *q = box_of(by_id("q"));
+        okn("grid-area written as lines", a && q && q->x == 0 && q->w == 200 && q->y > a->y, q ? q->w : -1);
+
+        lay("<style>.g{display:grid;grid-template-columns:100px 100px}.g div{background:#eeeeee}"
+            "#tall{grid-column:1;grid-row:1 / span 2}</style>"
+            "<div class=g><div id=tall>tall</div><div id=b>b</div><div id=c>c</div></div>", 600);
+        const litem *tl = box_of(by_id("tall")), *b = box_of(by_id("b")), *c = box_of(by_id("c"));
+        ok("an item two rows tall leaves both rows' other column free",
+           tl && b && c && b->x == 100 && c->x == 100 && b->y == tl->y && c->y > b->y);
+    }
+
     puts(failed ? "LAYOUTTEST_FAIL\n" : "LAYOUTTEST_PASS\n");
     return failed;
 }

@@ -125,6 +125,17 @@ numbered files are still to 6048716; where they disagree with this list, this li
   spaces) applied. Closed menus, fixed bars, floats and centring on Python's docs and home page, W3C,
   arXiv, WordPress, Wikipedia and Ars Technica now come out as written. Every layouttest check used
   compact CSS, which is why none saw it; four now use a sheet written by hand. layouttest 188.
+- **Grid placement (11).** Line names in `grid-template-columns` (`[content-start] ... [content-end]`,
+  `lgline`, `lay_grid_tracks`); a track read whole, brackets and all, and worked out with `css_len_at`
+  (MDN's `max(1rem, calc(50vw - 720px))` was four tracks); capped tracks, `minmax(least, length)` (`GT_CAP`),
+  grown to their caps before `fr` shares. Items placed by line along both axes (`lay_grid_parts`: numeric
+  `grid-area`, `grid-row`/`grid-column` and their longhands; `lay_grid_axis`, `lay_grid_line`: numbers,
+  negative numbers, spans, names and `name-start`/`name-end`); a grid with an item on a named row is placed
+  the way the rules place it (`lay_grid_placed`: named rows first, then the rest from a cursor over an
+  occupancy map, rows sized from measured items, row spans), and one without keeps the row by row pass.
+  MDN's home page (sections placed on `content`) and the BBC's lead story (picture on row 1 at column 9,
+  words beside it) now come out as other browsers draw them. Not done: `grid-template-rows`, dense
+  packing, named rows. layouttest 198.
 - **Pages to eight megabytes (11).** `SRC_MAX` 8 MB (was 3; mapped, paid for as used): Netflix's front
   page is 3.2 MB unpacked. It then overflows the document's text store (`DOM_ARENA`, 3 MB), which is left
   as it is because `svg_render` and the test programs hold a whole `ddoc` each. browsercheck 30 (a page

@@ -2774,7 +2774,16 @@ static int lay_centres_table(const ddoc *d, int table) {
  * grid-template-rows, and dense packing. */
 #define LAY_GRID_COLS 32
 
-enum { GT_PX = 0, GT_PCT, GT_FR };
+/* A track's kind: a length, a percentage, a share of what is left (fr, and
+   auto, which is near enough), or capped: minmax(least, a length), which
+   grows from its least toward its cap before the shares are handed out. */
+enum { GT_PX = 0, GT_PCT, GT_FR, GT_CAP };
+
+/* A line of a grid by name: grid-template-columns can name the lines
+   between its tracks, [content-start] 1fr [content-end], and an item be
+   placed by those names. `line` is 1 before the first track. */
+#define LAY_GRID_NAMES 24
+typedef struct { char name[32]; short line; } lgline;
 
 /* One track, from `p`: its kind and amount, and the smallest it may be
    (for minmax); where it ended. */
@@ -2787,6 +2796,11 @@ static const char *lay_grid_track(const char *p, const cstyle *st, int root_px, 
         p = lay_grid_track(p + 7, st, root_px, cw, &k2, &v2, &m2);
         *min = k2 == GT_PX ? v2 : k2 == GT_PCT ? v2 * cw / 100 : 0;
         p = lay_grid_track(p, st, root_px, cw, kind, v, &m2);
+        /* A length for the most it may be is a cap, not a size: the column
+           of a page built as minmax(0, 1200px) between two 1fr margins is
+           as wide as the window allows, up to 1200. */
+        if (*kind == GT_PX) *kind = GT_CAP;
+        else if (*kind == GT_PCT) { *kind = GT_CAP; *v = *v * cw / 100; }
         while (*p && *p != ')') p++;
         if (*p) p++;
         return p;
@@ -2799,9 +2813,18 @@ static const char *lay_grid_track(const char *p, const cstyle *st, int root_px, 
         if (*p) p++;
         return p;
     }
-    char tok[32];
-    int n = 0;
-    while (*p && *p != ' ' && *p != ',' && *p != ')' && n < 31) tok[n++] = *p++;
+    /* One track, brackets and all: max(1rem, calc(50vw - 720px)) is one
+       track with spaces and commas inside it, and read up to the first
+       space it was four, which put every named line after it on the wrong
+       column. */
+    char tok[160];
+    int n = 0, depth = 0;
+    while (*p && (depth > 0 || (*p != ' ' && *p != ',' && *p != ')'))) {
+        if (*p == '(') depth++;
+        else if (*p == ')') depth--;
+        if (n < (int)sizeof(tok) - 1) tok[n++] = *p;
+        p++;
+    }
     tok[n] = 0;
     int tl = n;
     if (tl > 2 && w_lower(tok[tl - 2]) == 'f' && w_lower(tok[tl - 1]) == 'r') {
@@ -2816,7 +2839,7 @@ static const char *lay_grid_track(const char *p, const cstyle *st, int root_px, 
         *v = 100;
         return p;
     }
-    clen L = css_len(tok);
+    clen L = css_len_at(tok, st->font_px, root_px, cw);
     if (L.unit == U_PCT) { *kind = GT_PCT; *v = L.v / 100; return p; }
     *kind = GT_PX;
     *v = css_px(L, st->font_px, root_px, cw);
@@ -2828,12 +2851,32 @@ static const char *lay_grid_track(const char *p, const cstyle *st, int root_px, 
    least width; how many there are. With grid-auto-flow: column, `items`
    items make a column each past the ones written, at grid-auto-columns. */
 static int lay_grid_tracks(lctx *L, const cstyle *st, int cw, int gap, int items,
-                           int *kind, int *val, int *mins) {
+                           int *kind, int *val, int *mins, lgline *names, int *nnames) {
     int n = 0;
+    if (nnames) *nnames = 0;
     const char *p = st->grid_cols ? st->grid_cols : "";
     while (*p && n < LAY_GRID_COLS) {
         while (*p == ' ') p++;
         if (!*p) break;
+        if (*p == '[') {
+            /* The names of the line before the next track. */
+            p++;
+            for (;;) {
+                while (*p == ' ') p++;
+                if (!*p || *p == ']') break;
+                char nm[32];
+                int k = 0;
+                while (*p && *p != ' ' && *p != ']') { if (k < 31) nm[k++] = *p; p++; }
+                nm[k] = 0;
+                if (names && nnames && *nnames < LAY_GRID_NAMES && k) {
+                    w_copy(names[*nnames].name, 32, nm, 32);
+                    names[*nnames].line = (short)(n + 1);
+                    (*nnames)++;
+                }
+            }
+            if (*p == ']') p++;
+            continue;
+        }
         if (w_starts_fold(p, "repeat(")) {
             p += 7;
             while (*p == ' ') p++;
@@ -2851,6 +2894,7 @@ static int lay_grid_tracks(lctx *L, const cstyle *st, int cw, int gap, int items
             while (*p && *p != ')' && rn < 8) {
                 while (*p == ' ') p++;
                 if (*p == ')') break;
+                if (*p == '[') { while (*p && *p != ']') p++; if (*p) p++; continue; }
                 p = lay_grid_track(p, st, L->root_px, cw, &rk[rn], &rv[rn], &rm[rn]);
                 rn++;
             }
@@ -2860,7 +2904,8 @@ static int lay_grid_tracks(lctx *L, const cstyle *st, int cw, int gap, int items
                 /* As many as fit, each at the least it may be. */
                 int one = 0;
                 for (int i = 0; i < rn; i++)
-                    one += rk[i] == GT_PX ? rv[i] : rk[i] == GT_PCT ? rv[i] * cw / 100 : (rm[i] > 0 ? rm[i] : 0);
+                    one += rk[i] == GT_PX || rk[i] == GT_CAP ? rv[i] : rk[i] == GT_PCT ? rv[i] * cw / 100
+                         : (rm[i] > 0 ? rm[i] : 0);
                 if (one <= 0) one = 1;
                 count = (cw + gap) / (one + gap * rn);
                 if (count < 1) count = 1;
@@ -2895,10 +2940,34 @@ static void lay_grid_share(int cw, int gap, int n, const int *kind, const int *v
                            const int *base, int *width) {
     int fixed = gap * (n - 1);
     unsigned char held[LAY_GRID_COLS];
+    int cap[LAY_GRID_COLS];
+    int frbase = 0, ncap = 0;
     for (int i = 0; i < n; i++) {
         held[i] = 0;
         if (kind[i] == GT_PX) fixed += val[i];
         else if (kind[i] == GT_PCT) fixed += val[i] * cw / 100;
+        else if (kind[i] == GT_CAP) { cap[i] = base[i] > 0 ? base[i] : 0; fixed += cap[i]; ncap++; }
+        else frbase += base[i] > 0 ? base[i] : 0;
+    }
+    /* Capped tracks grow first, evenly, each to its cap, out of what the
+       fixed ones and the shares' least leave; the shares then have the
+       rest. */
+    for (int round = 0; round < 8 && ncap > 0; round++) {
+        int spare = cw - fixed - frbase, growing = 0;
+        if (spare <= 0) break;
+        for (int i = 0; i < n; i++) if (kind[i] == GT_CAP && cap[i] < val[i]) growing++;
+        if (!growing) break;
+        int each = spare / growing;
+        if (each <= 0) each = 1;
+        for (int i = 0; i < n && spare > 0; i++) {
+            if (kind[i] != GT_CAP || cap[i] >= val[i]) continue;
+            int add = val[i] - cap[i];
+            if (add > each) add = each;
+            if (add > spare) add = spare;
+            cap[i] += add;
+            fixed += add;
+            spare -= add;
+        }
     }
     int left = 0, frs = 0;
     for (int pass = 0; pass <= n; pass++) {
@@ -2920,6 +2989,7 @@ static void lay_grid_share(int cw, int gap, int n, const int *kind, const int *v
     for (int i = 0; i < n; i++) {
         if (kind[i] == GT_PX) width[i] = val[i];
         else if (kind[i] == GT_PCT) width[i] = val[i] * cw / 100;
+        else if (kind[i] == GT_CAP) width[i] = cap[i];
         else if (held[i] || frs <= 0) width[i] = base[i];
         else {
             width[i] = left > 0 ? (int)((long long)left * val[i] / frs) : 0;
@@ -2933,10 +3003,133 @@ static void lay_grid_share(int cw, int gap, int n, const int *kind, const int *v
    many there are. */
 static int lay_grid_columns(lctx *L, const cstyle *st, int cw, int gap, int *width) {
     int kind[LAY_GRID_COLS], val[LAY_GRID_COLS], mins[LAY_GRID_COLS];
-    int n = lay_grid_tracks(L, st, cw, gap, 0, kind, val, mins);
+    int n = lay_grid_tracks(L, st, cw, gap, 0, kind, val, mins, 0, 0);
     if (n == 0) { width[0] = cw; return 1; }
     lay_grid_share(cw, gap, n, kind, val, mins, width);
     return n;
+}
+
+/* Which line a reference means: a number (negative counts back from the
+   last line), or a name -- name-start for a start and name-end for an end
+   first, as the rules have it, then the name as written. 0 when it names
+   nothing. */
+static int lay_grid_line(const char *t, int len, int end_side, int ncols,
+                         const lgline *names, int nn) {
+    while (len > 0 && *t == ' ') { t++; len--; }
+    while (len > 0 && t[len - 1] == ' ') len--;
+    if (len <= 0) return 0;
+    if ((*t >= '0' && *t <= '9') || (*t == '-' && len > 1 && t[1] >= '0' && t[1] <= '9')) {
+        int neg = *t == '-', v = 0;
+        for (int i = neg; i < len && t[i] >= '0' && t[i] <= '9'; i++) v = v * 10 + (t[i] - '0');
+        if (!v) return 0;
+        return neg ? ncols + 2 - v : v;
+    }
+    char want[40];
+    int k = 0;
+    for (int i = 0; i < len && k < 32; i++) want[k++] = t[i];
+    const char *suffix = end_side ? "-end" : "-start";
+    int w = k;
+    for (const char *s = suffix; *s && w < 39; s++) want[w++] = *s;
+    want[w] = 0;
+    for (int i = 0; i < nn; i++) if (w_same(names[i].name, want)) return names[i].line;
+    want[k] = 0;
+    for (int i = 0; i < nn; i++) if (w_same(names[i].name, want)) return names[i].line;
+    return 0;
+}
+
+/* The four parts of an item's placement as written -- row start, column
+ * start, row end, column end, grid-area's order -- from grid-area written
+ * as lines, the grid-row and grid-column shorthands, and their longhands,
+ * each later one in that list winning over the earlier. A shorthand of one
+ * name (grid-column: content) means that name at both ends. */
+typedef struct { const char *p; int n; } lslice;
+
+static void lay_grid_split(const char *v, lslice *start, lslice *end) {
+    const char *slash = v;
+    while (*slash && *slash != '/') slash++;
+    start->p = v;
+    start->n = (int)(slash - v);
+    if (*slash) { end->p = slash + 1; end->n = w_len(slash + 1); return; }
+    const char *q = v;
+    while (*q == ' ') q++;
+    int ident = ((*q >= 'a' && *q <= 'z') || (*q >= 'A' && *q <= 'Z') || *q == '_' || *q == '-')
+             && !w_starts_fold(q, "span") && !w_starts_fold(q, "auto")
+             && !(q[0] == '-' && q[1] >= '0' && q[1] <= '9');
+    if (ident) *end = *start;
+}
+
+static void lay_grid_parts(const cstyle *own, lslice part[4]) {
+    for (int i = 0; i < 4; i++) { part[i].p = 0; part[i].n = 0; }
+    if (own->gplace) {
+        const char *q = own->gplace;
+        for (int i = 0; i < 4 && *q; i++) {
+            const char *e = q;
+            while (*e && *e != '/') e++;
+            part[i].p = q;
+            part[i].n = (int)(e - q);
+            q = *e ? e + 1 : e;
+        }
+    }
+    if (own->grid_row) lay_grid_split(own->grid_row, &part[0], &part[2]);
+    if (own->gcol) lay_grid_split(own->gcol, &part[1], &part[3]);
+    if (own->grid_row_s) { part[0].p = own->grid_row_s; part[0].n = w_len(own->grid_row_s); }
+    if (own->grid_row_e) { part[2].p = own->grid_row_e; part[2].n = w_len(own->grid_row_e); }
+    if (own->gcol_s) { part[1].p = own->gcol_s; part[1].n = w_len(own->gcol_s); }
+    if (own->gcol_e) { part[3].p = own->gcol_e; part[3].n = w_len(own->gcol_e); }
+}
+
+static int lay_grid_spanof(lslice s) {
+    const char *q = s.p;
+    if (!q) return 0;
+    int n = s.n;
+    while (n > 0 && *q == ' ') { q++; n--; }
+    if (n < 4 || !w_starts_fold(q, "span")) return 0;
+    q += 4;
+    int k = 0;
+    while (*q == ' ') q++;
+    while (*q >= '0' && *q <= '9') k = k * 10 + (*q++ - '0');
+    return k > 0 ? k : 1;
+}
+
+/* One axis of a placement: its first track and how many it spans. 1 when
+   the start is a line; 0 when it is left to the flow, with `span` still set
+   from a span on either end. */
+static int lay_grid_axis(lslice s, lslice e, int ntracks, const lgline *names, int nn,
+                         int *start, int *span) {
+    *span = 1;
+    int ss = lay_grid_spanof(s), es = lay_grid_spanof(e);
+    int sl = (s.p && s.n > 0 && !ss) ? lay_grid_line(s.p, s.n, 0, ntracks, names, nn) : 0;
+    if (sl <= 0) {
+        if (ss) *span = ss;
+        else if (es) *span = es;
+        return 0;
+    }
+    int el = sl + 1;
+    if (es) el = sl + es;
+    else if (e.p && e.n > 0) {
+        int got = lay_grid_line(e.p, e.n, 1, ntracks, names, nn);
+        if (got > sl) el = got;
+    }
+    *start = sl - 1;
+    *span = el - sl;
+    if (*span < 1) *span = 1;
+    return 1;
+}
+
+/* Where an item placed by line goes along the columns: its first column
+   and how many it spans; 0 when it is left to the flow. */
+static int lay_grid_place(const cstyle *own, int ncols, const lgline *names, int nn,
+                          int *c0, int *span) {
+    lslice part[4];
+    lay_grid_parts(own, part);
+    int start, sp;
+    if (!lay_grid_axis(part[1], part[3], ncols, names, nn, &start, &sp)) return 0;
+    *c0 = start;
+    if (*c0 >= ncols) *c0 = ncols - 1;
+    if (*c0 < 0) *c0 = 0;
+    *span = sp;
+    if (*c0 + *span > ncols) *span = ncols - *c0;
+    return 1;
 }
 
 /* The least an item can be drawn in, as a grid track sees it: the width it
@@ -3090,6 +3283,157 @@ static void lay_grid_named(lctx *L, int node, const cstyle *st, int cx, int cw, 
     *y = yy;
 }
 
+/* A grid some of whose items name the row they are on, placed the way the
+ * rules place them: those with a row first, where they say; then the rest in
+ * order into the cells still free, from a cursor, a column earlier than the
+ * cursor's starting the next row. Every item is measured at its columns'
+ * width before any is laid out, since a row is as tall as its tallest item
+ * and an item can be placed ahead of those written before it. The BBC's lead
+ * story puts its picture on row 1 at column 9 and its words, which name no
+ * row, in columns 1 to 8 beside it; row by row in order, the words went
+ * under the picture. 1 when laid out; 0 when there were more items than the
+ * records hold, and the caller goes row by row instead. */
+#define LAY_GRID_ROWS 128
+#define LAY_GPOOL 12288
+static int lay_gpool[LAY_GPOOL];
+static int lay_gpool_top;
+
+static int lay_grid_free(const unsigned *occ, int r, int rs, int c, int cs) {
+    unsigned mask = cs >= 32 ? 0xFFFFFFFFu : ((1u << cs) - 1) << c;
+    for (int i = r; i < r + rs; i++) {
+        if (i >= LAY_GRID_ROWS) return 0;
+        if (occ[i] & mask) return 0;
+    }
+    return 1;
+}
+
+static void lay_grid_take(unsigned *occ, int r, int rs, int c, int cs) {
+    unsigned mask = cs >= 32 ? 0xFFFFFFFFu : ((1u << cs) - 1) << c;
+    for (int i = r; i < r + rs && i < LAY_GRID_ROWS; i++) occ[i] |= mask;
+}
+
+enum { GR_NODE, GR_PAR, GR_C0, GR_CS, GR_R0, GR_RS, GR_H, GR_ROW, GR_N };
+
+static int lay_grid_placed(lctx *L, int node, const cstyle *st, int cw, int ncols,
+                           const int *colx, int gap, const lgline *names, int nn, int *y) {
+    litems it;
+    int k, from, positioned, n = 0;
+    int *rec = lay_gpool + lay_gpool_top;
+    int room = (LAY_GPOOL - lay_gpool_top) / GR_N;
+    lay_items_start(L, &it, node, st);
+    while ((k = lay_items_next(L, &it, cw, &from, &positioned)) >= 0) {
+        if (positioned) continue;
+        if (n >= room) return 0;
+        int *r = rec + n * GR_N;
+        cstyle own, pb;
+        lay_style(L, k, lay_item_parent(L, st, from, cw, &pb), &own, cw);
+        lslice part[4];
+        lay_grid_parts(&own, part);
+        int c0 = -1, cs = 1, r0 = -1, rs = 1;
+        if (!lay_grid_axis(part[1], part[3], ncols, names, nn, &c0, &cs)) c0 = -1;
+        if (!lay_grid_axis(part[0], part[2], 0, 0, 0, &r0, &rs)) r0 = -1;
+        if (cs > ncols) cs = ncols;
+        if (c0 >= ncols) c0 = ncols - 1;
+        if (c0 >= 0 && c0 + cs > ncols) cs = ncols - c0;
+        if (r0 >= LAY_GRID_ROWS) r0 = LAY_GRID_ROWS - 1;
+        if (rs > LAY_GRID_ROWS) rs = LAY_GRID_ROWS;
+        r[GR_NODE] = k; r[GR_PAR] = from;
+        r[GR_C0] = c0; r[GR_CS] = cs; r[GR_R0] = r0; r[GR_RS] = rs;
+        r[GR_H] = 0; r[GR_ROW] = r0 >= 0;
+        n++;
+    }
+    lay_gpool_top += n * GR_N;
+
+    unsigned occ[LAY_GRID_ROWS];
+    for (int i = 0; i < LAY_GRID_ROWS; i++) occ[i] = 0;
+    for (int i = 0; i < n; i++) {
+        int *r = rec + i * GR_N;
+        if (!r[GR_ROW]) continue;
+        if (r[GR_C0] < 0) {
+            int c = 0;
+            while (c + r[GR_CS] <= ncols && !lay_grid_free(occ, r[GR_R0], r[GR_RS], c, r[GR_CS])) c++;
+            r[GR_C0] = c + r[GR_CS] <= ncols ? c : 0;
+        }
+        lay_grid_take(occ, r[GR_R0], r[GR_RS], r[GR_C0], r[GR_CS]);
+    }
+    int cr = 0, cc = 0;
+    for (int i = 0; i < n; i++) {
+        int *r = rec + i * GR_N;
+        if (r[GR_ROW]) continue;
+        int cs = r[GR_CS], rs = r[GR_RS];
+        if (r[GR_C0] >= 0) {
+            if (r[GR_C0] < cc) cr++;
+            cc = r[GR_C0];
+            while (cr < LAY_GRID_ROWS - 1 && !lay_grid_free(occ, cr, rs, cc, cs)) cr++;
+        } else {
+            for (;;) {
+                if (cc + cs > ncols) { cc = 0; cr++; }
+                if (cr >= LAY_GRID_ROWS - 1 || lay_grid_free(occ, cr, rs, cc, cs)) break;
+                cc++;
+            }
+        }
+        if (cr >= LAY_GRID_ROWS) cr = LAY_GRID_ROWS - 1;
+        r[GR_C0] = cc;
+        r[GR_R0] = cr;
+        lay_grid_take(occ, cr, rs, cc, cs);
+        cc += cs;
+    }
+
+    int nrows = 0;
+    for (int i = 0; i < n; i++) {
+        int *r = rec + i * GR_N;
+        int w = colx[r[GR_C0] + r[GR_CS]] - gap - colx[r[GR_C0]];
+        cstyle pb;
+        const cstyle *ps = lay_item_parent(L, st, r[GR_PAR], cw, &pb);
+        int h = 0;
+        L->flex_sized = r[GR_NODE];
+        lay_measure(L, r[GR_NODE], ps, w, &h);
+        L->flex_sized = -1;
+        r[GR_H] = h;
+        if (r[GR_R0] + r[GR_RS] > nrows) nrows = r[GR_R0] + r[GR_RS];
+    }
+    if (nrows > LAY_GRID_ROWS) nrows = LAY_GRID_ROWS;
+    int rowh[LAY_GRID_ROWS], top[LAY_GRID_ROWS + 1];
+    for (int i = 0; i < nrows; i++) rowh[i] = 0;
+    for (int i = 0; i < n; i++) {
+        int *r = rec + i * GR_N;
+        if (r[GR_RS] == 1 && r[GR_R0] < nrows && r[GR_H] > rowh[r[GR_R0]]) rowh[r[GR_R0]] = r[GR_H];
+    }
+    for (int i = 0; i < n; i++) {
+        int *r = rec + i * GR_N;
+        if (r[GR_RS] <= 1) continue;
+        int last = r[GR_R0] + r[GR_RS] - 1;
+        if (last >= nrows) last = nrows - 1;
+        int total = gap * (last - r[GR_R0]);
+        for (int j = r[GR_R0]; j <= last; j++) total += rowh[j];
+        if (r[GR_H] > total) rowh[last] += r[GR_H] - total;
+    }
+    top[0] = *y;
+    for (int i = 0; i < nrows; i++) top[i + 1] = top[i] + rowh[i] + gap;
+
+    for (int i = 0; i < n; i++) {
+        int *r = rec + i * GR_N;
+        int x = colx[r[GR_C0]], w = colx[r[GR_C0] + r[GR_CS]] - gap - x;
+        int last = r[GR_R0] + r[GR_RS];
+        if (last > nrows) last = nrows;
+        int area = top[last] - gap - top[r[GR_R0]];
+        cstyle pb;
+        const cstyle *ps = lay_item_parent(L, st, r[GR_PAR], cw, &pb);
+        int first = L->out->nitems, cy = top[r[GR_R0]];
+        L->flex_sized = r[GR_NODE];
+        lay_block(L, r[GR_NODE], ps, x, w, &cy);
+        L->flex_sized = -1;
+        int got = cy - top[r[GR_R0]];
+        int dy = st->align_items == AI_CENTER ? (area - got) / 2
+               : st->align_items == AI_END ? area - got : 0;
+        if (dy > 0)
+            for (int j = first; j < L->out->nitems; j++) L->out->items[j].y += dy;
+    }
+    lay_gpool_top -= n * GR_N;
+    if (nrows) *y = top[nrows] - gap;
+    return 1;
+}
+
 static void lay_grid(lctx *L, int node, const cstyle *st, int cx, int cw, int *y) {
     if (st->grid_areas) { lay_grid_named(L, node, st, cx, cw, y); return; }
     int gap = st->gap > 0 ? st->gap : 0;
@@ -3113,7 +3457,9 @@ static void lay_grid(lctx *L, int node, const cstyle *st, int cx, int cw, int *y
         nitems++;
     }
     int kind[LAY_GRID_COLS], val[LAY_GRID_COLS], base[LAY_GRID_COLS];
-    int ncols = lay_grid_tracks(L, st, cw, gap, nitems, kind, val, base);
+    lgline names[LAY_GRID_NAMES];
+    int nnames = 0;
+    int ncols = lay_grid_tracks(L, st, cw, gap, nitems, kind, val, base, names, &nnames);
     if (ncols == 0) { ncols = 1; kind[0] = GT_PX; val[0] = cw; base[0] = 0; }
     if (ncols > 1) {
         int col = 0, most = 0;
@@ -3125,6 +3471,8 @@ static void lay_grid(lctx *L, int node, const cstyle *st, int cx, int cw, int *y
             lay_style(L, k, ps, &own, cw);
             int span = own.gspan < 0 ? ncols : own.gspan > 0 ? own.gspan : 1;
             if (span > ncols) span = ncols;
+            int c0, xs;
+            if (lay_grid_place(&own, ncols, names, nnames, &c0, &xs)) { col = c0; span = xs; }
             if (col + span > ncols) col = 0;
             if (span == 1) {
                 int m = lay_grid_least(L, k, ps, &own, cw);
@@ -3160,6 +3508,21 @@ static void lay_grid(lctx *L, int node, const cstyle *st, int cx, int cw, int *y
     colx[0] = cx;
     for (int c = 0; c < ncols; c++) colx[c + 1] = colx[c] + width[c] + gap;
 
+    /* An item that names its row needs the grid placed properly; without
+       one, row by row in order is the same answer at half the work. */
+    int named_row = 0;
+    lay_items_start(L, &it, node, st);
+    while (!named_row && (k = lay_items_next(L, &it, cw, &from, &positioned)) >= 0) {
+        if (positioned) continue;
+        cstyle own, pb;
+        lay_style(L, k, lay_item_parent(L, st, from, cw, &pb), &own, cw);
+        lslice part[4];
+        lay_grid_parts(&own, part);
+        int r0, rs;
+        if (lay_grid_axis(part[0], part[2], 0, 0, 0, &r0, &rs)) named_row = 1;
+    }
+    if (named_row && lay_grid_placed(L, node, st, cw, ncols, colx, gap, names, nnames, y)) return;
+
     struct { int first, end, h; } row[LAY_GRID_COLS];
     int nrow = 0, col = 0, top = *y, rowh = 0, any = 0;
     lay_items_start(L, &it, node, st);
@@ -3167,7 +3530,7 @@ static void lay_grid(lctx *L, int node, const cstyle *st, int cx, int cw, int *y
         k = lay_items_next(L, &it, cw, &from, &positioned);
         if (k >= 0 && positioned) continue;
         int last = k < 0;
-        int span = 1;
+        int span = 1, placed_at = -1;
         cstyle own, pb;
         const cstyle *ps = st;
         if (!last) {
@@ -3175,10 +3538,13 @@ static void lay_grid(lctx *L, int node, const cstyle *st, int cx, int cw, int *y
             lay_style(L, k, ps, &own, cw);
             span = own.gspan < 0 ? ncols : own.gspan > 0 ? own.gspan : 1;
             if (span > ncols) span = ncols;
+            int xs;
+            if (lay_grid_place(&own, ncols, names, nnames, &placed_at, &xs)) span = xs;
         }
-        /* A row is finished by the item that will not fit on it, or by the
-           end: every item on it is then lined up against the tallest. */
-        if (nrow && (last || col + span > ncols)) {
+        /* A row is finished by the item that will not fit on it, one placed
+           in a column the row has already passed, or the end: every item on
+           it is then lined up against the tallest. */
+        if (nrow && (last || col + span > ncols || (placed_at >= 0 && placed_at < col))) {
             for (int i = 0; i < nrow; i++) {
                 int dy = st->align_items == AI_CENTER ? (rowh - row[i].h) / 2
                        : st->align_items == AI_END ? rowh - row[i].h : 0;
@@ -3191,6 +3557,8 @@ static void lay_grid(lctx *L, int node, const cstyle *st, int cx, int cw, int *y
             col = 0;
         }
         if (last) break;
+        if (placed_at >= 0) col = placed_at;
+        if (col + span > ncols) col = ncols - span > 0 ? ncols - span : 0;
         int x = colx[col];
         int w = colx[col + span] - gap - x;
         int first = L->out->nitems, cy = top;
