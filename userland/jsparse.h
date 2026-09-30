@@ -176,8 +176,6 @@ static const char *const JS_WORDS[] = {
     "extends", "super", "import", "debugger", "with", 0
 };
 
-static const char *const JS_UNSUPPORTED[] = { "export", 0 };
-
 static int js_is_word(const char *s, u32 len, const char *w) {
     u32 i = 0;
     for (; i < len; i++) if (s[i] != w[i] || !w[i]) return 0;
@@ -386,8 +384,6 @@ static void js_template_piece(jlex *L) {
 static void js_next(jlex *L) {
     L->ends_expr = L->want_regex ? 0 : js_tok_ends_expr(&L->tok);
     L->want_regex = 0;
-    /* After a dot, a word is only a property's name: a.with(), o.export. */
-    int after_dot = L->tok.type == T_PUNCT && L->tok.len == 1 && L->tok.text[0] == '.';
     L->nl = 0;
     int line_start = L->at == 0;
 
@@ -593,21 +589,6 @@ static void js_next(jlex *L) {
             if (s) { L->tok.text = s->s; L->tok.len = s->len; }
         }
 
-        for (int i = 0; !L->J->parse_module && JS_UNSUPPORTED[i]; i++) {
-            if (js_is_word(L->tok.text, L->tok.len, JS_UNSUPPORTED[i])) {
-                /* A word as a property name is only a name: a.with,
-                   {export: 1}. */
-                u32 k = L->at;
-                while (k < L->n && (L->src[k] == ' ' || L->src[k] == '\t')) k++;
-                if (after_dot || (k < L->n && L->src[k] == ':')) break;
-                js_fail_at(L->J, L->tok.line,
-                           "this engine does not have ", JS_UNSUPPORTED[i],
-                           (u32)strlen(JS_UNSUPPORTED[i]));
-                L->failed = 1;
-                L->tok.type = T_EOF;
-                return;
-            }
-        }
         for (int i = 0; JS_WORDS[i]; i++) {
             if (js_is_word(L->tok.text, L->tok.len, JS_WORDS[i])) {
                 L->tok.type = T_KEYWORD;
@@ -2873,6 +2854,15 @@ static int js_parse_stmt_in(jparse *P) {
                 return js_parse_import_decl(P);
         }
         if (js_at_name(P, "export")) return js_parse_export_decl(P);
+    } else if (js_at_name(P, "export")) {
+        /* export is a name anywhere a name may be -- a method called
+           export(), as Next.js's bloom filter has, or o.export -- but as a
+           statement it belongs to a module's top level alone. */
+        jtok nx = js_peek(P);
+        if (!(nx.type == T_PUNCT && nx.len == 1 && (nx.text[0] == '(' || nx.text[0] == '.' || nx.text[0] == '='))) {
+            js_parse_fail(P, P->L.tok.line, "export is written only at a module's top level", 0, 0);
+            return -1;
+        }
     }
     {
         int lab = js_try_label(P);

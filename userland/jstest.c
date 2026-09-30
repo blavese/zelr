@@ -298,9 +298,11 @@ int main(void) {
         jctx J;
         js_init(&J);
         int ok = js_run(&J, "export default 1", 16);
-        int said = !ok && J.error[0];
+        int said = 0;
+        for (const char *q = J.error; !ok && *q; q++)
+            if (q[0] == 'm' && q[1] == 'o' && q[2] == 'd' && q[3] == 'u' && q[4] == 'l' && q[5] == 'e') said = 1;
         puts(said ? "  PASS  " : "  FAIL  ");
-        puts("a word this engine does not have is refused by name");
+        puts("export outside a module is refused, and says where it belongs");
         if (said) { puts(" ("); puts(J.error); puts(")"); }
         putc('\n');
         if (!said) failed++;
@@ -1332,6 +1334,14 @@ int main(void) {
            " t(function () {}); t(Symbol('x')); t({ f: function () {} }); t(new WeakMap()); t(Promise.resolve(1));"
            " t(new Proxy({}, {})); t({ ok: [1, 'a', null, undefined, true] }); return r.join(' '); })()",
            "DataCloneError DataCloneError DataCloneError DataCloneError DataCloneError DataCloneError none");
+
+    /* export is only a statement at a module's top level: a method may be
+       called it, and Next.js's bloom filter has one, which stopped the BBC's
+       and The Verge's pages ("this engine does not have export"). */
+    expect("a method, a property and a key may be called export",
+           "(function(){ class B { export() { return 'x'; } } var o = { export() { return 'y'; } };"
+           " o.export2 = { 'export': 'z' }; return new B().export() + o.export() + o.export.name + o.export2.export; })()",
+           "xyexportz");
 
     /* A function expression's own name, which GSAP's recursion is written
        with: "u is not defined". */
