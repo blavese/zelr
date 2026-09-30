@@ -894,10 +894,10 @@ The "never touch the ESP" rule is only enforced for disk 0, so a bootable stick'
 **S22. FIXED in 0.76.0 (`on_usb`, `vfs_volume_missing`, `fd_open`; the live tree self test). `/usb` with nothing mounted falls through to the RAM fs** (vfs.c:195-197, 246-253, 296-305).
 Writes silently succeed into memory and are lost at reboot. `mkdir /usb` creates a RAM directory, which then lists and chdirs as if it were the stick. A file opened on /usb and closed after the stick was pulled is written to RAM (fd.c:120). mountcheck.py:87-91 acknowledges this.
 
-**S23. The black-box boot counter increments on every `bb_flush`** (blackbox.c:268-275).
+**S23. FIXED in 0.77.0** -- the boot number is worked out at the first flush of a boot and kept (`counted`; [black box]: two more flushes leave it where it was). The original finding: **The black-box boot counter increments on every `bb_flush`** (blackbox.c:268-275).
 It reads back this boot's own header. A boot that reaches the scheduler and later panics counts twice, and a selftest run advances it by about 5.
 
-**S24. `region_is_free` checks only the first of the 32 log sectors** (blackbox.c:251-258), not the whole region the comment at :243-250 promises to protect.
+**S24. FIXED in 0.77.0** -- the region is free when its first sector is a log or all 32 are blank ([black box]: a blank first sector with something in a later one is refused). The original finding: **`region_is_free` checks only the first of the 32 log sectors** (blackbox.c:251-258), not the whole region the comment at :243-250 promises to protect.
 
 **S25. FIXED in 0.76.0 (a sleeping re-entrant filesystem lock, `fat_enter`/`fat_leave`, held by vfs.c for a whole operation and released for a killed task by `fat_abandon`; [fat]). Preemptible kernel tasks can interleave inside fat.c** (§6).
 In particular, the hot-plug mount in the `usb` service task (`fat_mount_on` saves and restores `current_volume`, fat.c:339-347) could write USB geometry into `volumes[DISK]` if another kernel task calls `route()` in between. Low probability, high impact.

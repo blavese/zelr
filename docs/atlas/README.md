@@ -101,6 +101,9 @@ numbered files are still to 6048716; where they disagree with this list, this li
   certificate that will not is never chosen as a parent, so an extra one a server left in (an Ed25519 or
   P-521 key, odd DER) no longer fails the connection, and a chain that needed it still fails, saying the
   certificate could not be read. [certificates]: three checks.
+- **The black box counts a boot once and writes only over blank (04 S23, S24, blackbox.c).** The boot number
+  was read back off this boot's own record at every flush and counted again; the region was free if its
+  first sector alone was blank. [black box]: three checks.
 
 ### 0.76.0
 

@@ -5081,6 +5081,14 @@ static void test_blackbox(void) {
     blk_flush();
     ok("our own volume is accepted again", bb_flush());
 
+    /* Each flush read the boot number back off the record this boot had
+       just written, and counted the boot again. */
+    u32 counted_once = bb_boot_number();
+    bb_flush();
+    bb_flush();
+    ok("a boot is counted once however often its log is written",
+       counted_once > 0 && bb_boot_number() == counted_once);
+
     /* Something else in the reserved sectors, which is what a second stage
        bootloader would look like. The volume still passes every check about
        who formatted it, so this is the only thing standing between the log
@@ -5092,13 +5100,29 @@ static void test_blackbox(void) {
     blk_write(lba, 1, intruder);
     ok("data we do not recognise is not written over", bb_flush() == false);
 
-    /* And a blank region is fine, which is what a fresh format leaves. */
+    /* Or anywhere further in, behind a first sector that is blank: only
+       the first was looked at. */
+    u8 keep_later[SECTOR_SIZE];
+    u32 later = lba + BB_SECTORS - 3;
+    ok("read a later reserved sector", blk_read(later, 1, keep_later));
     memset(intruder, 0, sizeof(intruder));
     blk_write(lba, 1, intruder);
+    memcpy(intruder, "NOT A BLACK BOX", 15);
+    blk_write(later, 1, intruder);
+    ok("nor is it further in, behind a blank first sector", bb_flush() == false);
+    blk_write(later, 1, keep_later);
+
+    /* And a blank region is fine, which is what a fresh format leaves --
+       blank all through, now that all of it is looked at. */
+    memset(intruder, 0, sizeof(intruder));
+    for (u32 s = 0; s < BB_SECTORS; s++) blk_write(lba + s, 1, intruder);
     ok("a blank region is written to", bb_flush());
 
+    /* The first sector put back, and a record written over it that agrees
+       with itself. */
     blk_write(lba, 1, keep_first);
     blk_flush();
+    bb_flush();
 }
 
 /* The two ways of reaching configuration space have to agree.

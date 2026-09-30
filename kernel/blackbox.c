@@ -40,6 +40,7 @@ typedef struct {
 static u8   image[BB_BYTES];
 static u32  len;
 static u32  boot_number;
+static bool counted;          /* boot_number worked out, once a boot */
 static bool wrapped;
 
 static char *text(void) { return (char *)(image + sizeof(bb_head_t)); }
@@ -95,6 +96,7 @@ void bb_init(void) {
     len = 0;
     wrapped = false;
     boot_number = 0;
+    counted = false;
     append("zelr ");
     append(KERNEL_VERSION);
     append(" boot log\n");
@@ -249,11 +251,18 @@ static bool volume_is_ours(u8 *sec) {
  * to remember later, the rule here is that unrecognised data is never
  * written over, which holds whatever else the reserved area grows into. */
 static bool region_is_free(void) {
-    u8 first[512];
-    if (!blk_read(volume_base() + log_lba, 1, first)) return false;
-    if (*(u32 *)first == BB_MAGIC) return true;
-    for (u32 i = 0; i < sizeof(first); i++)
-        if (first[i]) return false;
+    u8 sec[512];
+    if (!blk_read(volume_base() + log_lba, 1, sec)) return false;
+    if (*(u32 *)sec == BB_MAGIC) return true;
+
+    /* Blank means all of it. Only the first sector was looked at, and a
+       region whose first sector happened to be empty was written over from
+       end to end. */
+    for (u32 s = 0; s < BB_SECTORS; s++) {
+        if (s && !blk_read(volume_base() + log_lba + s, 1, sec)) return false;
+        for (u32 i = 0; i < sizeof(sec); i++)
+            if (sec[i]) return false;
+    }
     return true;
 }
 
@@ -265,14 +274,20 @@ bool bb_flush(void) {
     if (!volume_is_ours(scratch)) return false;
     if (!region_is_free()) return false;
 
-    /* The count comes off the previous record, so it survives a reboot. */
-    bb_head_t prev;
-    u32 n = 0;
-    if (blk_read(volume_base() + log_lba, 1, scratch)) {
-        memcpy(&prev, scratch, sizeof(prev));
-        if (prev.magic == BB_MAGIC) n = prev.boot;
+    /* The count comes off the previous record, so it survives a reboot --
+       once a boot. Read at every flush, it read this boot's own record
+       after the first and counted the boot again: a boot that panicked
+       after reaching the scheduler counted twice, a self test five times. */
+    if (!counted) {
+        bb_head_t prev;
+        u32 n = 0;
+        if (blk_read(volume_base() + log_lba, 1, scratch)) {
+            memcpy(&prev, scratch, sizeof(prev));
+            if (prev.magic == BB_MAGIC) n = prev.boot;
+        }
+        boot_number = n + 1;
+        counted = true;
     }
-    boot_number = n + 1;
 
     bb_head_t *h = (bb_head_t *)image;
     h->magic = BB_MAGIC;
