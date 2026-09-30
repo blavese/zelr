@@ -111,6 +111,9 @@ numbered files are still to 6048716; where they disagree with this list, this li
   and Instagram 54 (was 11), showing its sign-in page instead of a blank one. pagetest: five checks (a 32 MB
   script runs with the memory and stops without it, the quarter, the ceiling, and the order the browser
   tells it in). The host shim reports `HOST_FREE_KB` as the machine's free memory.
+- **Patterns with hundreds of groups and alternatives (12, jsregex.h).** `RX_CAPS` 50 to 256 and `RX_NODES` 1024
+  to 4096; names are cleared per group as the prescan counts them and each search resets only the groups
+  the pattern has (`ngroups`), since every use compiles afresh. jstest: three checks.
 
 ### 0.76.0
 

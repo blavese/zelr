@@ -351,7 +351,7 @@ All binary operators are left-associative. `&&`/`||` produce `N_LOGICAL` nodes; 
 - Refuses lookaround, backreferences, named groups, sticky, and unicode property escapes, "refused when it is compiled".
 
 **Limits (`:42-46`)**
-- `RX_NODES 512`, `RX_CLASSES 64`, `RX_CONTS 512`, `RX_CAPS 10` (group 0 plus groups 1–9), `RX_STEPS 400000` per start position.
+- `RX_NODES 512`, `RX_CLASSES 64`, `RX_CONTS 512`, `RX_CAPS 10` (group 0 plus groups 1–9), `RX_STEPS 400000` per start position. (Since grown: at 0.77.0 `RX_NODES 4096`, `RX_CLASSES 96`, `RX_CONTS 1024`, `RX_CAPS 256`.)
 - Nesting depth over 24 is refused (`:416`).
 
 **Types**
@@ -965,7 +965,7 @@ No path today dispatches an event from inside a script (there is no `el.click()`
 | `0x5A4C5200` | `jsrun.h:2206` | `Math.random` seed |
 | 1.7e308 | `jsrun.h:59` | Printed as Infinity above this |
 | 2^53, 1e21, 1e-6, 10 digits | `jsrun.h:70`, `83`, `124` | Number printing thresholds |
-| `RX_NODES` 512, `RX_CLASSES` 64, `RX_CONTS` 512, `RX_CAPS` 10, `RX_STEPS` 400,000, depth 24 | `jsregex.h:42-46`, `416` | Regex limits (repetitions per attempt ≲ 511) |
+| `RX_NODES` 4096, `RX_CLASSES` 96, `RX_CONTS` 1024, `RX_CAPS` 256 (0.77.0; 512, 64, 512, 10 at the atlas's read), `RX_STEPS` 400,000, depth 24 | `jsregex.h:42-46`, `416` | Regex limits (repetitions per attempt ≲ 511) |
 | `JD_DOCUMENT` 0x1000000, `JD_CLASSLIST` 0x2000000 | `jsdom.h:48`, `463` | Host number spaces |
 | `JD_WRAPS` = `DOM_NODES` = 20000 | `jsdom.h:63`, `dom.h:37` | Wrapper table (160,000 B from the region) |
 | `JD_LISTENERS` 256, `JD_TYPE_MAX` 24 | `jsdom.h:219-220` | Listener registrations per page life; event type length |

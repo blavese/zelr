@@ -412,6 +412,18 @@ int main(void) {
            "RegExp('^a+$').test('aaa')", "true");
     expect("with its flags", "RegExp('abc', 'i').test('ABC')", "true");
 
+    /* Fifty groups was the most a pattern could have, and pages build them
+       out of many alternatives each in its group. */
+    expect("a pattern with a hundred groups, each caught and the last named",
+           "(function(){ var m = new RegExp('(b)'.repeat(99) + '(?<z>c)').exec('x' + 'b'.repeat(99) + 'c');"
+           " return [m.length, m[1], m[99], m[100], m.groups.z].join(' '); })()", "101 b b c c");
+    expect("a pattern of three hundred words, each an alternative, finds the last",
+           "(function(){ var w = []; for (var i = 0; i < 300; i++) w.push('wd' + i + 'x');"
+           " var r = new RegExp('\\\\b(?:' + w.join('|') + ')\\\\b'); return r.exec('a wd299x b')[0]; })()",
+           "wd299x");
+    expect("and a reference back to the ninetieth of them",
+           "new RegExp('(a)'.repeat(95) + '\\\\90').test('a'.repeat(96))", "true");
+
     expect("exec walks a global pattern through its subject",
            "(function(){ var r = /\\d/g, s = 'a1b2', n = 0;"
            " while (r.exec(s) !== null) n++; return n; })()", "2");

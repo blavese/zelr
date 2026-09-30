@@ -55,11 +55,16 @@
 #pragma once
 #include "zelr.h"
 
-#define RX_NODES   1024
+#define RX_NODES   4096          /* a list of hundreds of words, each an alternative */
 #define RX_CLASSES 96
 #define RX_RANGES  512           /* class ranges past U+00FF, all classes together */
 #define RX_CONTS   1024
-#define RX_CAPS    50
+/* Groups, the whole match included. Fifty was not enough for patterns pages
+   build out of many alternatives each in its group -- The Verge's stopped a
+   script with "more groups than a pattern has room for" -- and a group costs
+   its name here and eight bytes a lookaround while matching. Only the groups
+   a pattern has are cleared (ngroups), so the room costs nothing per use. */
+#define RX_CAPS    256
 #define RX_NAME    32
 #define RX_STEPS   400000        /* a pattern that will not finish, stopped */
 #define RX_SEARCH  4000000       /* and across all the places it is tried */
@@ -106,6 +111,7 @@ typedef struct {
     int    nranges;
     int    nclasses;
     int    ncaps;
+    int    ngroups;                  /* how many the pattern has, counted first */
     char   names[RX_CAPS][RX_NAME];  /* a named group's name, or empty */
     int    named;                    /* whether any group has one */
 
@@ -523,7 +529,7 @@ static int rx_parse_alt(rx *R, const char *p, int len, int *at, int depth);
 
 /* The group a name stands for, or -1. */
 static int rx_name_index(rx *R, const char *nm, int n) {
-    for (int g = 1; g < R->ncaps || g < RX_CAPS; g++) {
+    for (int g = 1; g < R->ngroups && g < RX_CAPS; g++) {
         if (!R->names[g][0]) continue;
         int k = 0;
         while (k < n && k < RX_NAME - 1 && R->names[g][k] == nm[k]) k++;
@@ -536,6 +542,7 @@ static int rx_name_index(rx *R, const char *nm, int n) {
    and \2 can name a group that comes later in the text. */
 static int rx_prescan(rx *R, const char *p, int len) {
     int n = 1, in_class = 0;
+    R->names[0][0] = 0;
     for (int i = 0; i < len; i++) {
         char c = p[i];
         if (c == '\\') { i++; continue; }
@@ -545,6 +552,12 @@ static int rx_prescan(rx *R, const char *p, int len) {
         if (i + 1 < len && p[i + 1] == '?') {
             if (!(i + 2 < len && p[i + 2] == '<' && i + 3 < len && p[i + 3] != '=' && p[i + 3] != '!'))
                 continue;
+        } else if (n < RX_CAPS) {
+            R->names[n][0] = 0;                 /* a group with no name */
+            n++;
+            continue;
+        }
+        {
             int k = i + 3, w = 0;
             if (n < RX_CAPS) {
                 while (k < len && p[k] != '>' && w < RX_NAME - 1) R->names[n][w++] = p[k++];
@@ -812,8 +825,6 @@ static int rx_compile(rx *R, const char *pat, int len, const char *flags) {
        is set by rx_search. */
     volatile char *z = (volatile char *)R->classes;
     for (u32 i = 0; i < sizeof(R->classes); i++) z[i] = 0;
-    z = (volatile char *)R->names;
-    for (u32 i = 0; i < sizeof(R->names); i++) z[i] = 0;
     R->nnodes = R->nclasses = R->named = R->nranges = 0;
     R->icase = R->multiline = R->global = R->dotall = R->sticky = R->unicode = 0;
     R->ok = 1;
@@ -830,10 +841,13 @@ static int rx_compile(rx *R, const char *pat, int len, const char *flags) {
         else if (*f == 'd') { /* indices: accepted, not given */ }
         else { rx_fail(R, "a flag that is not here"); return 0; }
     }
-    if (rx_prescan(R, pat, len) > RX_CAPS) {
+    R->ngroups = 0;
+    int groups = rx_prescan(R, pat, len);
+    if (groups > RX_CAPS) {
         rx_fail(R, "more groups than a pattern has room for");
         return 0;
     }
+    R->ngroups = groups;
 
     int at = 0;
     int root = rx_new(R, RXN_GROUP);
@@ -949,7 +963,8 @@ static int rx_atom(rx *R, int n, int pos, int cont) {
             /* What the group caught, again; nothing at all when the group
                took no part. */
             int g = x->ch;
-            int s = g < RX_CAPS ? R->cap_start[g] : -1, e = g < RX_CAPS ? R->cap_end[g] : -1;
+            int in = (g < R->ngroups || g < R->ncaps) && g < RX_CAPS;
+            int s = in ? R->cap_start[g] : -1, e = in ? R->cap_end[g] : -1;
             if (s < 0 || e < s) return rx_cont_do(R, cont, pos);
             int L = e - s;
             if (pos + L > R->len) return 0;
@@ -1080,7 +1095,8 @@ static int rx_search(rx *R, const char *s, int len, int from) {
         if (start < len && (u8)s[start] >= 0x80) rx_utf8(s + start, len - start, &k);
         R->ncont = 0;
         R->steps = 0;
-        for (int i = 0; i < RX_CAPS; i++) {
+        int upto = R->ncaps > R->ngroups ? R->ncaps : R->ngroups;
+        for (int i = 0; i < upto && i < RX_CAPS; i++) {
             R->cap_start[i] = -1;
             R->cap_end[i] = -1;
         }
