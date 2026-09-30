@@ -95,6 +95,31 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.81.0
+
+- **The page's styles follow its scripts (11, browser.c `sheets_follow`).** The sheet was made once, before any
+  script ran, so a style element a script added or rewrote, a rule put in through the CSSOM, a sheet linked or
+  adopted later, and a style element taken out changed nothing on the screen. What the page's sheets gave is kept
+  as the base with each element's rules; when the page's styles change the rest is read again after it, and a gone
+  or changed element's base rules are switched off. Stylesheet and preloaded links fire load or error once fetched,
+  so the preload and print-media patterns and webpack's chunk sheets work. browsercheck: a page whose seven bands
+  are turned green seven ways, and getComputedStyle asked mid-script.
+- **The CSSOM (11, jscssom.h).** Sheets for style and link elements, document.styleSheets, constructable sheets and
+  adoptedStyleSheets, and the rules as objects of every kind with their selectors, styles, conditions and nested
+  lists, insertRule and deleteRule refusing what is not one rule of a kind the list can hold. A changed sheet is what
+  the browser reads in place of the element's text, written out when asked. pagetest: eight checks, each failing on
+  a broken build.
+- **Attr nodes, namespaces, createDocument, execCommand (11, jsform.h)**; forms that check themselves, DocumentType,
+  XMLSerializer, Range and Selection; XMLHttpRequest's fields, list lengths and performance entries' fields as getters
+  on their prototypes, and nine event constructors. Mozilla's consent manager runs; on the host Mozilla runs all 11
+  of its scripts. pagetest: eight checks, each failing on a broken build.
+- **structuredClone (12, jsclone.h)** and **export as a name (12)**: the BBC's and The Verge's pages no longer stop
+  on a method called export.
+- **A command line that survives a kernel kept deep in folders (08, kernel/main.c `multiboot_args`).** QEMU puts the
+  kernel file's path before the words it passes; from a deep checkout the path filled the 128 bytes kept, `console`
+  was lost and every harness timed out at the desktop. The path is left out. argscheck (gate fast), failing on the
+  old copy.
+
 ### 0.80.0
 
 - **BigInt (12, jsbig.h).** A value of its own: literals, BigInt(), every operator on two's complement of unbounded

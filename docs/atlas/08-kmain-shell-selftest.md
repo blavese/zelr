@@ -1,5 +1,12 @@
 # 08 - Kernel entry (kmain), boot sequence, kernel shell, first run, selftest
 
+**Since 0.81.0** (the rest of this file is older; trust the code): `kmain_multiboot` copies the command line
+through `multiboot_args`, which leaves out the leading words with a slash or backslash in them. QEMU and GRUB put
+the kernel file's own path first, and from a checkout deep in folders that path filled the 128 bytes of
+`handoff_t.cmdline`: `console` was cut off, the machine opened its desktop, and every harness waiting for a prompt
+timed out (a folder named `selftest` would have started the self test, since the words are looked for at every
+position). Checked by `tools/argscheck.py` (gate fast).
+
 Source tree: the repository root (zelr 0.37.0 + 2 commits, `KERNEL_VERSION "0.37.0"` at include/types.h:25).
 All line numbers are from that tree. "Verified in the real log" refers to
 a local selftest log (a real `bash run.sh -T` run: QEMU i440fx, `-m 64`, one CPU, rtl8139, fresh 16 MiB IDE `zelr.img`, result `556 passed, 0 failed`, `SELFTEST_PASS`).

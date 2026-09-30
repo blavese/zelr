@@ -2,7 +2,18 @@
 
 Source root the repository root (github.com/blavese/zelr main, 2026-09-22). All paths are relative to it; `file:N` means 1-based line N. Everything below was verified by reading the code. Where a behaviour was derived by tracing (not by running) it says so. Nothing here was built or run.
 
-**Since 0.80.0** (the rest of this file is older; trust the code):
+**Since 0.81.0** (the rest of this file is older; trust the code):
+- **export is a name** outside a module. The lexer refused the word anywhere but after a dot or before a colon
+  (`JS_UNSUPPORTED`, gone), so a method called export(), as Next.js's bloom filter has, stopped the BBC's pages; now a
+  statement that starts with it outside a module (and is not `export(`, `export.` or `export =`) is "export is
+  written only at a module's top level" (`js_parse_stmt_in`).
+- **structuredClone** (`jsclone.h`, `js_setup_clone`): a deep copy through a memo (a `jmap` from original to copy),
+  so what was shared is shared and a cycle is a cycle; plain objects and arrays by their own enumerable properties,
+  Dates, regular expressions, Maps, Sets, errors (nearest prototype first), boxed values, ArrayBuffers, typed arrays
+  and DataViews as new ones of their kind; a function, symbol, promise, weak collection, proxy or platform object
+  (`host != -1`) is a DataCloneError. 2000 levels at most. Not done: transfer (what it names is copied).
+
+**Since 0.80.0**:
 - **BigInt** (`jsbig.h`): `JS_BIG` values point at a `jbint`, a sign and a magnitude in 32-bit limbs least
   significant first with no zero limb at the top, made once in the region and never changed. Literals (`10n`,
   `0x1fn`, with underscores) are `T_NUM` tokens marked `JT_BIGINT` whose text an `N_BIGINT` node keeps; `1.5n` is a

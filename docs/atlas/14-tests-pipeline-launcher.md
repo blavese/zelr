@@ -46,6 +46,7 @@ For each of these I read the header and the assertion logic. Almost all were rea
 | tools/crashcheck.py | 154 | Power cut in the middle of a FAT write. Six killed rounds; each must leave the file whole as either A or B. |
 | tools/defaultcheck.py | 150 | Static. The palette defaults in theme.c against settings.c, and the keys the kernel reads against what Settings writes or carries over. Rewritten in 0.41.0 (section 10, AB). |
 | tools/serialcheck.py | 100 | Types three 14-byte lines to the kernel shell in one write each and wants them back whole, and `mem` to report no dropped bytes (0.41.0; the FIFO trigger, kernel/serial.c). |
+| tools/argscheck.py | 70 | Copies `build/zelr.bin` into folders under `build/` (one called `selftest`) until its path passes 150 characters, boots it with `console` and wants the prompt (0.81.0; `multiboot_args`, kernel/main.c). |
 | tools/deskcheck.py | 799 | The window manager: minimise, restore, maximise, panel hide, resize, snap, wallpapers, alt-tab, wheel, resolution change, launcher, context menu, rubber band, and auto-desktop at 1920x1080. |
 | tools/enscheck.py | 111 | Two notes from the ES1370 (Ensoniq), recorded with `-audiodev wav` and pitch-checked. |
 | tools/fat32_test.sh | 127 | A FAT32 volume built by mkfat (one file past cluster 65535): read, write, survive a reboot. FAT16 still works. |

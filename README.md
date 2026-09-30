@@ -1292,8 +1292,21 @@ and linear gradients; a picture's clear parts show what is behind it, and a
 picture can be fitted into its box and rounded at its corners.
 Custom properties (`--brand` and `var(--brand, fallback)`, inherited from
 `:root`), `calc()`, `min()`, `max()` and `clamp()` are worked out, which is how
-most sites written this decade give every colour and size. Up to forty style
-sheets are read, each address once, with their `@import`s.
+most sites written this decade give every colour and size. Up to ninety-six
+style sheets are read, each address once, with their `@import`s.
+
+And a page's styles follow its scripts. The sheets used to be read once,
+before any script ran, so a style element a script added or rewrote, a rule
+it put in with `insertRule`, and a sheet it linked later never reached the
+screen -- which is how most React pages are styled now, by emotion or
+styled-components in the browser, and how most pages load the sheet they do
+not need first, preloaded or linked for print until its onload says
+otherwise. Now what the page's own sheets gave is kept as it was read, and
+whenever the page's styles change everything else is read again after it:
+style elements, links, a sheet's rules as a script left them, and the sheets
+a script made and adopted. To a script the sheets are objects as well
+(`document.styleSheets`, `cssRules`, a rule's selector and style, `new
+CSSStyleSheet()`), and a stylesheet link says when it has loaded.
 
 **What travels, and how often.** The body is asked for compressed and put
 back together on arrival, using the deflate that was written for PNG with a

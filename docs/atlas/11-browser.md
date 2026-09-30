@@ -1,6 +1,70 @@
 # 11 -- The web browser (everything except JS-engine internals and image decoders)
 
-**Since 0.79.0** (the rest of this file is older; trust the code and the README's "since 6048716" list):
+**Since 0.81.0** (the rest of this file is older; trust the code and the README's "since 6048716" list):
+- **The page's styles follow its scripts** (browser.c, `sheets_follow`). What `build` read before any script ran is
+  the base (`styles_base`: the sheet's counts and each rule's `decl_n`), with every style and link element it read
+  and the rules each gave (`sources`, 512, `ok` 1 fetched, 0 failed, -1 another medium or disabled, -2 past
+  SHEETS_MAX). `styles_print` hashes each style and link element's number, whether it is in the page and outside a
+  template, and what it is read from (`source_hash`: a style's text by `dom_text_hash`, its media, a link's rel,
+  href, as and disabled), with `jsdom_css_version`. When that differs from the last, `sheets_remake` cuts the sheet
+  back to the base, switches off (`decl_n` 0) the base rules of each element that has gone, changed or been given a
+  script's version (`jsdom_sheet_override`), reads every other style element, stylesheet link and adopted sheet
+  (`jsdom_adopted`) after it in the page's order, reads again the style attributes read since the base (their
+  declarations went with everything else after it), and indexes the sheet. `relayout` calls it, and
+  `computed_style` calls `sheets_follow_if_changed`, which skips the walk while `jsdom_dom_version` and
+  `jsdom_css_version` are as they were (a loop of getComputedStyle cost three times 0.80.0's without it), so
+  getComputedStyle sees a style the script has just made. A changed element's rules come after the whole base,
+  where a browser keeps its place: which rule wins a tie can differ. `rel` is read as a list of words
+  (`rel_is_sheet`: stylesheet and not alternate), and a disabled link is not read. Linked sheets fetched after the
+  build are kept for the page (`links_kept`, 48 and 3 MB) and handed to scripts that read a linked sheet's rules
+  (`sheet_text_for_script`).
+- **Link events** (`links_report`, after `jsdom_open` and after each remake): each stylesheet link and preloaded
+  sheet (`rel=preload as=style`), once for each address, is told whether it arrived (`jsdom_link_loaded`, which
+  fires load or error as a task); one the base did not fetch (for another medium, preloaded, or added by a script)
+  is fetched for that. So a preload's onload makes it a stylesheet, a print sheet's onload makes it the screen's,
+  and webpack's chunk sheets say they have loaded.
+- **The CSSOM** (`userland/jscssom.h`, `jd_setup_cssom`): `HTMLStyleElement.sheet` and `HTMLLinkElement.sheet`
+  (null out of the page, for a link that is not a stylesheet's, or with no href), `document.styleSheets` (made again
+  when `jd_version` moves), `new CSSStyleSheet()`, `replace`, `replaceSync`, `insertRule`, `deleteRule`, `addRule`,
+  `removeRule`, `disabled`, `media` (MediaList), `ownerNode`, `href`, and the rules: CSSStyleRule (selectorText,
+  style), CSSMediaRule, CSSSupportsRule, CSSContainerRule, CSSLayerBlockRule, CSSLayerStatementRule, CSSScopeRule,
+  CSSStartingStyleRule, CSSKeyframesRule (appendRule, deleteRule, findRule) and CSSKeyframeRule, CSSFontFaceRule,
+  CSSImportRule, CSSPageRule, CSSNamespaceRule, CSSPropertyRule, CSSCounterStyleRule, CSSFontFeatureValuesRule, with
+  CSSRule's type numbers. A holder (a sheet, or a rule that holds rules) keeps its rules' texts and, once asked for,
+  their objects (`jcs_k_texts`, `jcs_k_objs`); a sheet's texts are split from its element's text or the fetched file
+  when first wanted (`jcs_ready`). What a browser drops is dropped (`jcs_read`, `jcs_valid`): a selector the style
+  sheets' own parser will not read (`jcs_selector_ok`), an at-rule it does not know, an @import after other rules.
+  A sheet is the element's while the element's text (or a link's href) hashes as it did (`jcs_node_hash`); after
+  that the element has a new one and the old belongs to nobody. A change goes up through the holders' texts to the
+  sheet (`jcs_changed`), which is marked for the browser (`jcs_publish`: a record per sheet, 128, written out only
+  when the browser asks, since emotion inserts thousands of rules one at a time). cssRules is a live list (host
+  numbers from `JD_RLIST`), and a rule's style is a CSSStyleDeclaration (from `JD_RSTYLE`) sharing the element
+  style's code through `jd_decls`, so camelCase names, setProperty and cssText work on either. Only a made sheet may
+  be replaced or adopted (NotAllowedError); `adoptedStyleSheets` keeps a copy of what it was given, and pushing onto
+  that is seen (`jsdom_css_version` hashes the list). Not done: a shadow root's adopted sheets are kept and not
+  applied, an @import's styleSheet is null, shorthands are not expanded into longhands, and rules nested in a style
+  rule are kept as written.
+- **Forms, ranges and markup** (`userland/jsform.h`): constraint validation (ValidityState, checkValidity,
+  reportValidity, setCustomValidity, validationMessage in Chrome's words), DocumentType and document.doctype,
+  XMLSerializer, Range (boundaries, the contents methods, comparisons, createContextualFragment whose scripts run
+  when inserted) and a Selection holding the ranges a script adds. Also Attr nodes: `createAttribute(NS)`,
+  `get/set/removeAttributeNode(NS)`, NamedNodeMap's `setNamedItem(NS)`, `getNamedItemNS` and `removeNamedItemNS`;
+  an Attr's value is kept under a symbol and read and written through the element that holds it. Namespaces:
+  `lookupNamespaceURI`, `lookupPrefix` and `isDefaultNamespace` through the element's own namespace and the xmlns
+  attributes round it. `execCommand` and the queryCommand* answer no (nothing is editable). DOMImplementation's
+  `createDocument` (an empty document, a root element when named; not marked as XML, so the root's nodeName is upper
+  case) and `createDocumentType`.
+- **What Mozilla's consent manager takes off the prototypes**: XMLHttpRequest's fields are getters on its prototype
+  (`JD_XHR_FIELDS`, kept under symbols), NodeList and HTMLCollection have a `length` getter, performance entries keep
+  their fields under symbols and read them through getters on PerformanceEntry, PerformanceResourceTiming and
+  PerformanceNavigationTiming (`PE_*`, `nat_pe_field`), marks and measures are PerformanceMark and PerformanceMeasure
+  with `detail` (and a mark's `startTime` option), and `clearResourceTimings` and `setResourceTimingBufferSize` exist
+  (no resource entries are kept). New event constructors: PointerEvent, DragEvent, TouchEvent, AnimationEvent,
+  TransitionEvent, ClipboardEvent, SecurityPolicyViolationEvent, FormDataEvent and ToggleEvent. On the host,
+  Mozilla now runs all 11 of its scripts.
+- The host shim (`tools/host/shim.c`) takes `pause=MS` in a script, for a picture after a page's timers have run.
+
+**Since 0.79.0**:
 - **DOMMatrix, DOMMatrixReadOnly, DOMPoint, DOMPointReadOnly** (`userland/jsmatrix.h`, `jd_setup_matrix`): sixteen
   numbers in the standard's order under a symbol key, accessors a-f and m11-m44 on the prototypes, every method and
   its Self form, transform text read as CSS writes it (pixels and angles; % and em refused), toString, toJSON, the
