@@ -95,6 +95,15 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.80.0
+
+- **BigInt (12, jsbig.h).** A value of its own: literals, BigInt(), every operator on two's complement of unbounded
+  width, Knuth's division, exact comparison with Numbers and strings, equality and Map/Set keys by value,
+  Number(), JSON's refusal, Intl formatting from the digits, and DataView's 64-bit methods. Mixing with a Number
+  is a TypeError. GitHub and Spotify stopped at "BigInt is not defined"; on the host GitHub runs all 114 modules
+  and Spotify its scripts with no error. jstest: six checks, each failing on one of ten broken builds, and 380
+  random operations checked against Python.
+
 ### 0.79.0
 
 - **Intl (12, jsintl.h).** NumberFormat, DateTimeFormat, PluralRules, RelativeTimeFormat, Collator, ListFormat,

@@ -2,7 +2,21 @@
 
 Source root the repository root (github.com/blavese/zelr main, 2026-09-22). All paths are relative to it; `file:N` means 1-based line N. Everything below was verified by reading the code. Where a behaviour was derived by tracing (not by running) it says so. Nothing here was built or run.
 
-**Since 0.79.0** (the rest of this file is older; trust the code):
+**Since 0.80.0** (the rest of this file is older; trust the code):
+- **BigInt** (`jsbig.h`): `JS_BIG` values point at a `jbint`, a sign and a magnitude in 32-bit limbs least
+  significant first with no zero limb at the top, made once in the region and never changed. Literals (`10n`,
+  `0x1fn`, with underscores) are `T_NUM` tokens marked `JT_BIGINT` whose text an `N_BIGINT` node keeps; `1.5n` is a
+  syntax error. School multiplication, Knuth's division (`jsb_mag_divmod`, from Hacker's Delight), two's complement
+  one limb wider for & | ^ ~, floor shifts, `asIntN`/`asUintN`, `toString(radix)`, text read with or without a
+  prefix. js_binary makes both sides primitive when either is a BigInt or an object and sends BigInt arithmetic to
+  `jsb_binary`; mixing with a Number is a TypeError, `>>>` is one, and unary + is one (ToNumber); comparisons
+  with Numbers and strings are exact (`jsb_cmp_num`, `jsb_relational`); == reads a string as a BigInt; strict and
+  SameValueZero compare by value, and Map and Set hash by value (`jsb_hash`). `Number(10n)` converts through the
+  decimal text, which is read exactly; JSON refuses one unless a toJSON says otherwise; Intl formats one from its
+  own digits (`intl_big_digits`). DataView has getBigInt64, getBigUint64, setBigInt64 and setBigUint64. A
+  million bits at most (`JSB_MAX_LIMBS`). Not done: BigInt64Array and BigUint64Array.
+
+**Since 0.79.0**:
 - **Intl** (`jsintl.h`, set up by `js_setup_intl`): NumberFormat, DateTimeFormat, PluralRules, RelativeTimeFormat,
   Collator, ListFormat, Segmenter, DisplayNames, Locale, getCanonicalLocales and supportedValuesOf. One locale,
   en-US, which every `resolvedOptions().locale` says whatever was asked; `supportedLocalesOf` keeps the English tags.
