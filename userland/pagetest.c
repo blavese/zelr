@@ -900,11 +900,11 @@ int main(void) {
                " Object.prototype.toString.call(d), typeof HTMLScriptElement].join(' ');"
                "</script></body>"),
         "true true true true true true 9 1 1 DIV HTML [object HTMLDivElement] function");
-    oks("ShadowRoot is there to be asked about, and nothing is one",
+    oks("ShadowRoot is there to be asked about, and nothing is one until a script makes it",
         titled("<body><script>document.title = [typeof ShadowRoot, document.body.parentNode instanceof ShadowRoot,"
                " document.body.shadowRoot, 'attachShadow' in Element.prototype,"
                " ShadowRoot.prototype instanceof DocumentFragment].join(' ');</script></body>"),
-        "function false  false true");
+        "function false  true true");
     oks("and a page can add a method to Element.prototype that every element has",
         titled("<body><p id=p>x</p><script>Element.prototype.hi = function(){ return 'hi ' + this.id; };"
                "document.title = document.getElementById('p').hi();</script></body>"),
@@ -1983,6 +1983,21 @@ int main(void) {
         oks("and on the next pass is told of the page's own marks, the earlier ones too, and of no type it does not record",
             page.title >= 0 ? page.arena + page.title : "", "early,one:true mark,measure,navigation");
     }
+
+    /* --- shadow roots a script makes --------------------------------------------------
+     *
+     * Cloudflare's components stopped on attachShadow. */
+    oks("attachShadow makes a shadow root its element keeps, filled and searched as a fragment",
+        titled("<body><div id=h><b>light</b></div><script>var h = document.getElementById('h');"
+               "var r = h.attachShadow({ mode: 'open' }); r.innerHTML = '<p id=in>inside</p><slot></slot>';"
+               "var closed = document.createElement('x-y').attachShadow({ mode: 'closed' });"
+               "var again = 'none'; try { h.attachShadow({ mode: 'open' }); } catch (e) { again = e.name; }"
+               "var bad = 'none'; try { document.createElement('img').attachShadow({ mode: 'open' }); } catch (e) { bad = e.name; }"
+               "var p = r.querySelector('p');"
+               "document.title = [r instanceof ShadowRoot, h.shadowRoot === r, r.host === h, r.mode, r.getElementById('in').textContent,"
+               " p.getRootNode() === r, p.getRootNode({ composed: true }) === document, closed.mode, String(closed.host.shadowRoot),"
+               " again, bad, String(document.getElementById('in')), h.textContent, r.innerHTML.length > 20].join(' ');</script></body>"),
+        "true true true open inside true true closed null NotSupportedError NotSupportedError null light true");
 
     /* --- the page's own timing ------------------------------------------------------
      *

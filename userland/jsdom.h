@@ -427,7 +427,9 @@ static jval jd_node_or_doc(jctx *J, int node) {
    classList, style and dataset, made once so that `el.style === el.style`,
    and a template's contents. Keyed by symbols made for this world. */
 static jstr *jd_k_classlist, *jd_k_style, *jd_k_dataset, *jd_k_attrs, *jd_k_children,
-            *jd_k_childnodes, *jd_k_content, *jd_k_evflags, *jd_k_evpath, *jd_k_signal;
+            *jd_k_childnodes, *jd_k_content, *jd_k_evflags, *jd_k_evpath, *jd_k_signal,
+            *jd_k_shadow, *jd_k_host, *jd_k_mode;
+static jobj *jd_p_shadowroot;
 
 static jval jd_kept(jobj *o, jstr *key) {
     jprop *p = o ? js_find(o, key) : 0;
@@ -2253,14 +2255,83 @@ static jval nat_has_child_nodes(jctx *J, jval t, jval *a, int n) {
     return js_bool(x >= 0 && jd_doc->nodes[x].first >= 0);
 }
 
+/* The top of the tree a node is in: the document, a fragment, or a shadow
+   root -- and, asked for composed, past a shadow root to its element's. */
 static jval nat_get_root_node(jctx *J, jval t, jval *a, int n) {
-    (void)a; (void)n;
     if (jd_is_doc(t)) return t;
     int x = jd_node_of(t);
     if (x < 0) return jd_illegal(J);
-    if (jd_connected(x) && jd_document_obj) return js_from_obj(jd_document_obj);
-    while (jd_doc->nodes[x].parent >= 0) x = jd_doc->nodes[x].parent;
-    return jd_el_value(J, x);
+    int composed = n > 0 && js_is_obj(a[0]) && js_to_bool(js_get(J, a[0], js_str(J, "composed")));
+    if (J->sig != JS_OK) return js_undef();
+    for (int hops = 0; hops < 64; hops++) {
+        if (jd_connected(x) && jd_document_obj) return js_from_obj(jd_document_obj);
+        while (jd_doc->nodes[x].parent >= 0) x = jd_doc->nodes[x].parent;
+        jval root = jd_el_value(J, x);
+        jval host = composed && js_is_obj(root) ? jd_kept(root.obj, jd_k_host) : js_undef();
+        int h = host.t == JS_OBJ ? jd_node_of(host) : -1;
+        if (h < 0) return root;
+        x = h;
+    }
+    return js_null();
+}
+
+/* --- shadow roots a script makes ------------------------------------------------------
+ *
+ * attachShadow makes the shadow root a component fills: a fragment of its
+ * own whose object is a ShadowRoot, kept on its element (shadowRoot, when it
+ * is open) and knowing it (host). Scripts build and search it as they would
+ * any fragment; there was no attachShadow, and Cloudflare's components
+ * stopped on it. It is not drawn: the element is drawn from its own
+ * children, as before, which for a component written to work without its
+ * script are what it shows. The trees written into the page are drawn (dom.h,
+ * dom_shadows); a script's would need the layout to walk a second tree. */
+static int jd_shadow_host_ok(int x) {
+    if (jd_doc->nodes[x].kind != DN_ELEMENT || jd_is_svg(x)) return 0;
+    const char *nm = dom_tag_name(jd_doc, x);
+    for (const char *p = nm; *p; p++) if (*p == '-') return 1;
+    return jd_word_in("article aside blockquote body div footer h1 h2 h3 h4 h5 h6 header main nav p section span", nm);
+}
+
+static jval nat_attach_shadow(jctx *J, jval t, jval *a, int n) {
+    int x = jd_node_of(t);
+    if (x < 0 || !js_is_obj(t)) return jd_illegal(J);
+    jval init = js_arg(a, n, 0);
+    jval mode = js_is_obj(init) ? js_get(J, init, js_str(J, "mode")) : js_undef();
+    if (J->sig != JS_OK) return js_undef();
+    jstr *m = mode.t == JS_STR ? mode.str : 0;
+    if (!m || !(js_str_is(m, "open") || js_str_is(m, "closed")))
+        return js_throw(J, JS_ERR_TYPE, "attachShadow needs a mode, open or closed", J->error_line);
+    if (!jd_shadow_host_ok(x)) return js_throw_dom(J, "NotSupportedError", "this element cannot have a shadow root");
+    if (jd_kept(t.obj, jd_k_shadow).t == JS_OBJ)
+        return js_throw_dom(J, "NotSupportedError", "this element has a shadow root already");
+    int f = jd_new_fragment();
+    jobj *r = f >= 0 ? jd_element(J, f) : 0;
+    if (!r) return js_null();
+    if (jd_p_shadowroot) r->proto = jd_p_shadowroot;
+    jd_keep(r, jd_k_host, t);
+    jd_keep(r, jd_k_mode, js_from_str(m));
+    jd_keep(t.obj, jd_k_shadow, js_from_obj(r));
+    return js_from_obj(r);
+}
+
+static jval nat_el_shadow_root(jctx *J, jval t, jval *a, int n) {
+    (void)J; (void)a; (void)n;
+    jval r = js_is_obj(t) ? jd_kept(t.obj, jd_k_shadow) : js_undef();
+    if (r.t != JS_OBJ) return js_null();
+    jval m = jd_kept(r.obj, jd_k_mode);
+    return m.t == JS_STR && js_str_is(m.str, "open") ? r : js_null();
+}
+
+static jval nat_shadow_host(jctx *J, jval t, jval *a, int n) {
+    (void)a; (void)n;
+    jval h = js_is_obj(t) ? jd_kept(t.obj, jd_k_host) : js_undef();
+    return h.t == JS_OBJ ? h : jd_illegal(J);
+}
+
+static jval nat_shadow_mode(jctx *J, jval t, jval *a, int n) {
+    (void)a; (void)n;
+    jval m = js_is_obj(t) ? jd_kept(t.obj, jd_k_mode) : js_undef();
+    return m.t == JS_STR ? m : jd_illegal(J);
 }
 
 /* Where one node is against another, in the standard's bits: 2 before,
@@ -5941,7 +6012,8 @@ static void jd_setup_node(jctx *J) {
     jd_accessor(J, el, "localName", nat_local_name, 0);
     jd_accessor(J, el, "namespaceURI", nat_namespace, 0);
     jd_accessor(J, el, "prefix", nat_null_getter, 0);
-    jd_accessor(J, el, "shadowRoot", nat_null_getter, 0);
+    jd_accessor(J, el, "shadowRoot", nat_el_shadow_root, 0);
+    jd_method(J, el, "attachShadow", nat_attach_shadow, 1);
     jd_accessor(J, el, "id", nat_el_id, nat_el_set_id);
     jd_accessor(J, el, "className", nat_class_name, nat_set_class_name);
     jd_accessor(J, el, "classList", nat_class_list, nat_set_class_list);
@@ -6434,11 +6506,17 @@ static void jd_setup(jctx *J) {
     jd_p[JI_DOCUMENT] = jd_interface(J, "Document", jd_p[JI_NODE], 0, 0);
     jd_p[JI_HTMLDOCUMENT] = jd_interface(J, "HTMLDocument", jd_p[JI_DOCUMENT], 0, 0);
     jd_p[JI_FRAGMENT] = jd_interface(J, "DocumentFragment", jd_p[JI_NODE], nat_fragment_ctor, 0);
-    /* The interface, with nothing that is one: this browser makes no shadow
-       trees for a script (there is no attachShadow, and shadowRoot is
-       null). Alpine.js asks `parentNode instanceof ShadowRoot` of every
-       element it walks, and Ars Technica stopped on the name. */
-    jd_interface(J, "ShadowRoot", jd_p[JI_FRAGMENT], 0, 0);
+    /* Alpine.js asks `parentNode instanceof ShadowRoot` of every element it
+       walks, and Ars Technica stopped on the name; attachShadow makes them. */
+    jd_p_shadowroot = jd_interface(J, "ShadowRoot", jd_p[JI_FRAGMENT], 0, 0);
+    jd_accessor(J, jd_p_shadowroot, "host", nat_shadow_host, 0);
+    jd_accessor(J, jd_p_shadowroot, "mode", nat_shadow_mode, 0);
+    jd_accessor(J, jd_p_shadowroot, "innerHTML", nat_inner_html, nat_set_inner_html);
+    jd_accessor(J, jd_p_shadowroot, "activeElement", nat_null_getter, 0);
+    if (jd_p_shadowroot) {
+        js_set(J, jd_p_shadowroot, "delegatesFocus", js_bool(0));
+        js_set(J, jd_p_shadowroot, "slotAssignment", jd_str("named"));
+    }
     jd_p[JI_NODELIST] = jd_interface(J, "NodeList", 0, 0, 0);
     jd_p[JI_HTMLCOLLECTION] = jd_interface(J, "HTMLCollection", 0, 0, 0);
     jd_p[JI_TOKENLIST] = jd_interface(J, "DOMTokenList", 0, 0, 0);
@@ -6612,6 +6690,9 @@ static int jsdom_open(ddoc *d, csheet *sheet) {
     jd_k_evflags = js_sym_new(&jd_J, "event", 5);
     jd_k_evpath = js_sym_new(&jd_J, "path", 4);
     jd_k_signal = js_sym_new(&jd_J, "signal", 6);
+    jd_k_shadow = js_sym_new(&jd_J, "shadow", 6);
+    jd_k_host = js_sym_new(&jd_J, "host", 4);
+    jd_k_mode = js_sym_new(&jd_J, "mode", 4);
 
     jd_setup(&jd_J);
 
