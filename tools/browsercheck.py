@@ -543,12 +543,36 @@ def main():
             c.add("a style a page's script writes is drawn",
                   count_in(pxy, wy, PAGE, GREEN) > 3000 and count_in(pxy, wy, PAGE, BAND) < 200, shoty)
 
+            # --- styles a script makes --------------------------------------
+            #
+            # The page's sheets were read once, before any script ran, so a
+            # style element a script added, a rule it put in through the
+            # CSSOM, and a sheet it linked, adopted or took out changed
+            # nothing on the screen; nor did a preloaded sheet or one linked
+            # for print, whose onload makes them the page's. Seven bands
+            # start blue and each way turns one green. The late sheets come
+            # after the page's load events, so this waits for the last blue
+            # to go, and says so if it never does.
+            said_before = len([l for l in vm.serial().splitlines() if l.startswith("browser: ")])
+            go(vm, mon, "http://%s/scripted-sheets" % srv.host, settle=12.0,
+               was=restyled, name="br-going-sheets")
+            wq, hq, pxq, shotq, _ = mon.wait_screen(
+                "br-sheets", lambda w, h, px: count_in(px, w, PAGE, BAND) < 200, timeout=40)
+            sheets = region(pxq, wq, PAGE)
+            c.add("every style a page's script makes is drawn, all seven ways pages make them",
+                  count_in(pxq, wq, PAGE, GREEN) > 7 * 3000 and count_in(pxq, wq, PAGE, BAND) < 200, shotq)
+            lines = [l for l in vm.serial().splitlines() if l.startswith("browser: ")][said_before:]
+            said = next((l for l in lines if "/scripted-sheets" in l), "")
+            green = "rgb(0, 176, 80)"
+            c.add("and a style the script has just made is the element's when the script asks",
+                  ("sheets %s %s %s" % (green, green, green)) in said, shotq)
+
             # --- a script file past the old limit ---------------------------
             #
             # 600 kilobytes, where a file was cut off at 128 and run anyway;
             # the last line of it turns the band green.
             go(vm, mon, "http://%s/big-script/600" % srv.host, settle=60.0,
-               was=restyled, name="br-going-big-script")
+               was=sheets, name="br-going-big-script")
             bigs, pxz, wz, shotz = page_settled(mon, "br-big-script")
             c.add("a script file of 600 kilobytes is fetched and run to its end",
                   count_in(pxz, wz, PAGE, GREEN) > 3000, shotz)

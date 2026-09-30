@@ -1077,13 +1077,18 @@ static int in_template(int el) {
     return 0;
 }
 
+/* Each style and link element the base read, and what it gave (below,
+   sheets_follow). */
+static void source_add(int node, int r0, int ok);
+static int rel_is_sheet(const char *rel);
+
 static void gather_inline_sheets(void) {
     for (int i = 0; i < doc.count; i++) {
         if (doc.nodes[i].kind != DN_ELEMENT || doc.nodes[i].tag != T_STYLE)
             continue;
         if (in_template(i)) continue;
-        int lo, hi;
-        if (!sheet_media(i, &lo, &hi)) continue;
+        int lo, hi, r0 = sheet.nrules;
+        if (!sheet_media(i, &lo, &hi)) { source_add(i, r0, 1); continue; }
         const char *scope = dom_attr(&doc, i, "data-zs");      /* dom_shadows */
         int t = doc.nodes[i].first;
         while (t >= 0) {
@@ -1093,6 +1098,7 @@ static void gather_inline_sheets(void) {
             }
             t = doc.nodes[t].next;
         }
+        source_add(i, r0, 1);
     }
 }
 
@@ -1200,17 +1206,19 @@ static int gather_linked_sheets(int *fetched, int *skipped) {
 
         /* rel can be a list, and "stylesheet alternate" is one this should
            not take: an alternate sheet is one the reader has not chosen. */
-        if (!w_same_fold(rel, "stylesheet")) continue;
-        int lo, hi;
-        if (!sheet_media(i, &lo, &hi)) continue;
+        if (!rel_is_sheet(rel)) continue;
+        int lo, hi, r0 = sheet.nrules;
+        /* One for another medium, or switched off, is fetched only if a
+           script makes it one for the screen (sheets_follow). */
+        if (!sheet_media(i, &lo, &hi) || dom_attr(&doc, i, "disabled")) { source_add(i, r0, -1); continue; }
 
-        if (*fetched >= SHEETS_MAX) { (*skipped)++; continue; }
+        if (*fetched >= SHEETS_MAX) { (*skipped)++; source_add(i, r0, -2); continue; }
 
         url_t u;
-        if (!url_join(&here, href, &u)) { (*skipped)++; continue; }
+        if (!url_join(&here, href, &u)) { (*skipped)++; source_add(i, r0, 0); continue; }
         char whole[URL_TEXT];
         url_text(&u, whole, (int)sizeof(whole));
-        if (sheet_seen(whole)) continue;
+        if (sheet_seen(whole)) { source_add(i, r0, 1); continue; }
 
         response_t r;
         int rc = web_get(&u, cssbuf, CSS_MAX, &r);
@@ -1219,13 +1227,323 @@ static int gather_linked_sheets(int *fetched, int *skipped) {
            way is a page drawn with none of its style (Wikipedia's, after a
            burst of fetching). */
         if (rc < 0 || rc == 429 || rc >= 500 || r.cut) rc = web_get(&u, cssbuf, CSS_MAX, &r);
-        if (rc < 200 || rc >= 300 || r.len <= 0) { (*skipped)++; continue; }
+        if (rc < 200 || rc >= 300 || r.len <= 0) { (*skipped)++; source_add(i, r0, 0); continue; }
         gather_imports(&u, r.body, r.len, fetched);
         css_parse_sheet(&u, r.body, r.len, lo, hi);
         (*fetched)++;
+        source_add(i, r0, 1);
     }
     return *fetched;
 }
+
+/* --- the page's styles as its scripts change them --------------------------------------
+ *
+ * The sheet is made once, before any script runs (build), and what the
+ * scripts did to the page's styles after that never reached it: a style
+ * element added or written, a stylesheet link added, a rule put in through
+ * the CSSOM (jscssom.h). React pages whose styles emotion or
+ * styled-components make in the browser came out with none, and a sheet a
+ * page loads the way most do now -- preloaded, made a stylesheet by its
+ * onload, or linked for print until its onload says all -- never applied.
+ *
+ * So what the page's own sheets gave is kept (the base), with each style
+ * and link element that gave some and the rules it gave, and whenever the
+ * page's styles are no longer what the sheet was made from (styles_print),
+ * everything after the base is thrown away and read again: an element that
+ * has gone or changed has its base rules switched off, and every style
+ * element, link and adopted sheet that is not in the base as it was is read
+ * after it, in the page's order. A changed element's rules so come after all
+ * the base, where a browser would keep its place among them: which rule wins
+ * a tie can differ, which rules there are cannot.
+ *
+ * A link a script adds is fetched once (links_kept), as is a preloaded sheet
+ * and one linked for another medium, and the page is told whether each
+ * arrived (jsdom_link_loaded): webpack waits for that before it runs the
+ * code the sheet came with. */
+typedef struct { int nrules, nsels, ndecls, nnegs, used, nlayers, overflowed; } sheet_mark_t;
+static sheet_mark_t base_mark;
+static int base_decl_n[CSS_RULES];
+#define SOURCES_MAX 512
+/* ok: 1 fetched, 0 failed, -1 not asked for (another medium), -2 past the
+   limit on how many sheets a page may have fetched, and never to be. */
+static struct { int node, r0, r1, ok; unsigned hash; } sources[SOURCES_MAX];
+static int nsources;
+static unsigned styles_made;          /* styles_print when the sheet was last made */
+static unsigned styles_dom_seen, styles_css_seen;   /* the tree's and the sheets' versions then */
+static int styles_live;               /* the page has scripts, which can change them */
+
+static unsigned mix_text(unsigned h, const char *s) {
+    for (; s && *s; s++) { h ^= (unsigned char)*s; h *= 16777619u; }
+    return h * 31u + (s ? 1u : 0u);
+}
+
+/* What an element's contribution was read from: a style element's text and
+   media, a link's rel, address, medium and whether it is switched off. */
+static unsigned source_hash(int i) {
+    unsigned h = doc.nodes[i].tag == T_STYLE ? dom_text_hash(&doc, i) : 2166136261u;
+    h = mix_text(h, dom_attr(&doc, i, "media"));
+    if (doc.nodes[i].tag == T_LINK) {
+        h = mix_text(h, dom_attr(&doc, i, "rel"));
+        h = mix_text(h, dom_attr(&doc, i, "href"));
+        h = mix_text(h, dom_attr(&doc, i, "as"));
+        if (dom_attr(&doc, i, "disabled")) h ^= 0x9E3779B9u;
+    }
+    return h;
+}
+
+/* rel="stylesheet", as one word of a list, but not an alternate sheet, which
+   is one the reader has not chosen. */
+static int rel_is_sheet(const char *rel) {
+    int yes = 0, alt = 0;
+    for (const char *p = rel; p && *p; ) {
+        while (*p == ' ' || *p == '\t' || *p == '\n') p++;
+        const char *w = p;
+        while (*p && *p != ' ' && *p != '\t' && *p != '\n') p++;
+        int n = (int)(p - w);
+        if (n == 10 && w_starts_fold(w, "stylesheet")) yes = 1;
+        if (n == 9 && w_starts_fold(w, "alternate")) alt = 1;
+    }
+    return yes && !alt;
+}
+
+static int source_of(int node) {
+    for (int k = 0; k < nsources; k++) if (sources[k].node == node) return k;
+    return -1;
+}
+
+static void source_add(int node, int r0, int ok) {
+    if (nsources >= SOURCES_MAX) return;
+    sources[nsources].node = node;
+    sources[nsources].r0 = r0;
+    sources[nsources].r1 = sheet.nrules;
+    sources[nsources].ok = ok;
+    sources[nsources].hash = source_hash(node);
+    nsources++;
+}
+
+static int node_in_page(int i) {
+    for (int k = 0; i >= 0 && k < DOM_NODES; k++) {
+        if (i == doc.root) return 1;
+        i = doc.nodes[i].parent;
+    }
+    return 0;
+}
+
+/* The next node in the page's order, leaving out what is inside a template. */
+static int next_in_page(int i) {
+    const dnode *x = &doc.nodes[i];
+    if (x->first >= 0 && !(x->kind == DN_ELEMENT && x->tag == T_OTHER
+                           && w_same_fold(dom_tag_name(&doc, i), "template"))) return x->first;
+    while (i >= 0) {
+        if (doc.nodes[i].next >= 0) return doc.nodes[i].next;
+        i = doc.nodes[i].parent;
+    }
+    return -1;
+}
+
+/* Everything the page's styles are made from, in one number. */
+static unsigned styles_print(void) {
+    unsigned h = 2166136261u ^ jsdom_css_version();
+    for (int i = 0; i < doc.count; i++) {
+        if (doc.nodes[i].kind != DN_ELEMENT) continue;
+        int tag = doc.nodes[i].tag;
+        if (tag != T_STYLE && tag != T_LINK) continue;
+        int live = node_in_page(i) && !in_template(i);
+        h = (h ^ (unsigned)i) * 16777619u;
+        h = (h ^ (unsigned)live) * 16777619u;
+        if (live) h = (h ^ source_hash(i)) * 16777619u;
+    }
+    return h;
+}
+
+/* Linked sheets fetched after the page was built, kept for the page: read
+   again at every change to the page's styles, they would otherwise be asked
+   for again each time. */
+#define LINKS_KEPT 48
+#define LINKS_BYTES (3 * 1024 * 1024)
+static struct { char url[URL_TEXT]; char *text; int len; } links_kept[LINKS_KEPT];
+static int nlinks_kept, links_kept_bytes;
+
+static void links_forget(void) {
+    for (int k = 0; k < nlinks_kept; k++) free(links_kept[k].text);
+    nlinks_kept = 0;
+    links_kept_bytes = 0;
+}
+
+/* A linked sheet's text, and its length, or -1 when it would not come. The
+   text may be in cssbuf, and last only until that is used again. */
+static int link_text(url_t *u, const char **text) {
+    char whole[URL_TEXT];
+    url_text(u, whole, (int)sizeof(whole));
+    for (int k = 0; k < nlinks_kept; k++)
+        if (w_same(links_kept[k].url, whole)) {
+            *text = links_kept[k].text;
+            return links_kept[k].text ? links_kept[k].len : -1;
+        }
+    response_t r;
+    int rc = web_get(u, cssbuf, CSS_MAX, &r);
+    if (rc < 0 || rc == 429 || rc >= 500 || r.cut) rc = web_get(u, cssbuf, CSS_MAX, &r);
+    int ok = rc >= 200 && rc < 300 && r.len > 0;
+    char *copy = 0;
+    if (ok && links_kept_bytes + r.len <= LINKS_BYTES && (copy = (char *)malloc((u64)r.len + 1))) {
+        for (int i = 0; i < r.len; i++) copy[i] = r.body[i];
+        copy[r.len] = 0;
+        links_kept_bytes += r.len;
+    }
+    if (nlinks_kept < LINKS_KEPT && (copy || !ok)) {
+        w_copy(links_kept[nlinks_kept].url, URL_TEXT, whole, URL_TEXT);
+        links_kept[nlinks_kept].text = copy;
+        links_kept[nlinks_kept].len = ok ? r.len : 0;
+        nlinks_kept++;
+    } else if (copy) {
+        free(copy);
+        links_kept_bytes -= r.len;
+        copy = 0;
+    }
+    if (!ok) return -1;
+    *text = copy ? copy : r.body;
+    return r.len;
+}
+
+/* For a script that reads a linked sheet's rules (jscssom.h, jcs_ready). */
+static int sheet_text_for_script(const char *href, const char **text) {
+    url_t u;
+    if (!url_join(&here, href, &u)) return -1;
+    return link_text(&u, text);
+}
+
+/* Each stylesheet link and preloaded sheet in the page, told once whether
+   it arrived; one the base did not fetch is fetched for that. */
+#define REPORTED_MAX 256
+static struct { int node; unsigned href; } reported[REPORTED_MAX];
+static int nreported;
+
+static void links_report(void) {
+    if (!styles_live || doc.root < 0) return;
+    for (int i = doc.root; i >= 0; i = next_in_page(i)) {
+        if (doc.nodes[i].kind != DN_ELEMENT || doc.nodes[i].tag != T_LINK) continue;
+        const char *rel = dom_attr(&doc, i, "rel"), *href = dom_attr(&doc, i, "href");
+        const char *as = dom_attr(&doc, i, "as");
+        if (!rel || !href || !*href || dom_attr(&doc, i, "disabled")) continue;
+        int is_sheet = rel_is_sheet(rel);
+        if (!is_sheet && !(w_same_fold(rel, "preload") && as && w_same_fold(as, "style"))) continue;
+        unsigned h = mix_text(2166136261u, href);
+        int k = 0;
+        while (k < nreported && !(reported[k].node == i && reported[k].href == h)) k++;
+        if (k < nreported) continue;
+        int s = source_of(i);
+        if (s >= 0 && sources[s].ok == -2) continue;
+        if (nreported >= REPORTED_MAX) return;
+        reported[nreported].node = i;
+        reported[nreported].href = h;
+        nreported++;
+        int ok;
+        if (is_sheet && s >= 0 && sources[s].ok >= 0) ok = sources[s].ok;
+        else {
+            url_t u;
+            const char *t;
+            ok = url_join(&here, href, &u) && link_text(&u, &t) >= 0;
+        }
+        jsdom_link_loaded(i, ok);
+    }
+}
+
+/* What the page's own sheets gave, before any script ran. */
+static void styles_base(void) {
+    base_mark.nrules = sheet.nrules;
+    base_mark.nsels = sheet.nsels;
+    base_mark.ndecls = sheet.ndecls;
+    base_mark.nnegs = sheet.nnegs;
+    base_mark.used = sheet.used;
+    base_mark.nlayers = sheet.nlayers;
+    base_mark.overflowed = sheet.overflowed;
+    for (int r = 0; r < sheet.nrules; r++) base_decl_n[r] = sheet.rules[r].decl_n;
+    styles_made = styles_print();
+}
+
+static void sheets_remake(void) {
+    sheet.nrules = base_mark.nrules;
+    sheet.nsels = base_mark.nsels;
+    sheet.ndecls = base_mark.ndecls;
+    sheet.nnegs = base_mark.nnegs;
+    sheet.used = base_mark.used;
+    sheet.nlayers = base_mark.nlayers;
+    sheet.overflowed = base_mark.overflowed;
+    for (int r = 0; r < base_mark.nrules; r++) sheet.rules[r].decl_n = base_decl_n[r];
+
+    /* The base's elements that no longer give what they gave. */
+    static unsigned char intact[SOURCES_MAX];
+    for (int k = 0; k < nsources; k++) {
+        int i = sources[k].node;
+        intact[k] = node_in_page(i) && !in_template(i) && source_hash(i) == sources[k].hash
+                    && !jsdom_sheet_override(i, 0, 0);
+        if (!intact[k])
+            for (int r = sources[k].r0; r < sources[k].r1; r++) sheet.rules[r].decl_n = 0;
+    }
+
+    /* And everything else, in the page's order. */
+    for (int i = doc.root; i >= 0; i = next_in_page(i)) {
+        if (doc.nodes[i].kind != DN_ELEMENT) continue;
+        int tag = doc.nodes[i].tag;
+        if (tag != T_STYLE && tag != T_LINK) continue;
+        int k = source_of(i);
+        if (k >= 0 && intact[k]) continue;
+        int lo, hi;
+        if (!sheet_media(i, &lo, &hi)) continue;
+        const char *ov = 0;
+        int ovn = 0, has_ov = jsdom_sheet_override(i, &ov, &ovn);
+        if (tag == T_STYLE) {
+            const char *scope = dom_attr(&doc, i, "data-zs");
+            if (has_ov) { css_parse_style(&sheet, ov, ovn, lo, hi, scope); continue; }
+            for (int t = doc.nodes[i].first; t >= 0; t = doc.nodes[t].next)
+                if (doc.nodes[t].kind == DN_TEXT && doc.nodes[t].text >= 0) {
+                    const char *s = doc.arena + doc.nodes[t].text;
+                    css_parse_style(&sheet, s, w_len(s), lo, hi, scope);
+                }
+            continue;
+        }
+        const char *rel = dom_attr(&doc, i, "rel"), *href = dom_attr(&doc, i, "href");
+        if (!rel || !href || !*href || !rel_is_sheet(rel) || dom_attr(&doc, i, "disabled")) continue;
+        if (k >= 0 && sources[k].ok == -2) continue;
+        url_t u;
+        if (!url_join(&here, href, &u)) continue;
+        if (has_ov) { css_parse_sheet(&u, ov, ovn, lo, hi); continue; }
+        const char *text;
+        int n = link_text(&u, &text);
+        if (n > 0) css_parse_sheet(&u, text, n, lo, hi);
+    }
+    const char *t;
+    int n;
+    for (int k = 0; jsdom_adopted(k, &t, &n); k++) if (n > 0) css_parse_in(&sheet, t, n, -1, -1);
+
+    /* Style attributes read since the base, whose declarations went with
+       everything else after it. */
+    for (int i = 0; i < doc.count; i++)
+        if (inl[i].n > 0 && inl[i].at >= base_mark.ndecls) inline_style_of(i);
+    css_index(&sheet, &index_);
+    links_report();
+}
+
+/* The sheet made again when the page's styles have changed since. */
+static void sheets_follow(void) {
+    if (!styles_live) return;
+    styles_dom_seen = jsdom_dom_version();
+    styles_css_seen = jsdom_css_version();
+    unsigned now = styles_print();
+    if (now == styles_made) return;
+    styles_made = now;
+    sheets_remake();
+}
+
+/* The same for getComputedStyle, which a script may ask in a loop a thousand
+   times over: styles_print walks every node, so it is worked out only when
+   the tree or a sheet has changed since it last was. */
+static void sheets_follow_if_changed(void) {
+    if (!styles_live) return;
+    if (jsdom_dom_version() == styles_dom_seen && jsdom_css_version() == styles_css_seen) return;
+    sheets_follow();
+}
+
 
 /* A script with a src, fetched. Handed to jsdom.h, which knows how to run
    one and deliberately knows nothing about where it came from.
@@ -1359,6 +1677,7 @@ static int computed_style(int node, cstyle *out) {
         chain[n++] = p;
     }
     if (chain[n - 1] != doc.root) return 0;             /* not in the page */
+    sheets_follow_if_changed();
     restyle_changed();
     lay_gen++;
     lay_hit_used = 0;
@@ -1447,6 +1766,7 @@ static int script_history_length(void) { return hist_n > 0 ? hist_n : 1; }
 static int page_unhidden;      /* it was laid out a second time, shown anyway */
 
 static void relayout(int width) {
+    sheets_follow();
     restyle_changed();
     /* And the title, which a script may have written. */
     if (doc.title >= 0) w_copy(title, sizeof(title), doc.arena + doc.title, sizeof(title));
@@ -1688,6 +2008,11 @@ static void build(const char *html, int len, int width, int want_sheets,
                   int *fetched, int *skipped) {
     /* Before the tree it is bound to is taken apart under it. */
     jsdom_close();
+    nsources = 0;
+    nreported = 0;
+    styles_live = 0;
+    styles_dom_seen = 0xFFFFFFFFu;
+    links_forget();
     dom_parse(&doc, html, len);
     dom_shadows(&doc);
 
@@ -1699,6 +2024,7 @@ static void build(const char *html, int len, int width, int want_sheets,
     if (want_sheets) gather_linked_sheets(fetched, skipped);
     else { *fetched = 0; *skipped = 0; }
     gather_inline_styles();
+    styles_base();
     css_index(&sheet, &index_);
 
     /* The pictures, before the layout so it can leave room for them. */
@@ -1743,6 +2069,9 @@ static void build(const char *html, int len, int width, int want_sheets,
         jsdom_history_with(script_history_go, script_history_length);
         jsdom_styles_with(computed_style);
         jsdom_memory_with(free_memory);
+        jsdom_sheet_text_with(sheet_text_for_script);
+        styles_live = want_sheets;
+        links_report();
         scripts_ran = jsdom_scripts(script_err, (int)sizeof(script_err));
         jsdom_loaded();
         scripts_changed = jsdom_changed();

@@ -13,7 +13,7 @@
  * tlsproxy.py on 127.0.0.1 (HOST_PROXY, default 8765) so that the program's
  * own HTTP, chunking and gzip still run. A window is a buffer; the program's
  * idle waits drive a small script (HOST_SCRIPT: shot, pgdn*N, wheel*N,
- * go=ADDRESS, click=X:Y, wait) and `shot` writes the window as a PPM
+ * go=ADDRESS, click=X:Y, wait, pause=MS) and `shot` writes the window as a PPM
  * (HOST_SHOT is the file prefix). HOST_SAMPLE=N prints the program's stack
  * five times after N seconds, named from the .pdb, for finding a hang;
  * HOST_NETLOG shows each connection and each wait that ran out.
@@ -52,6 +52,7 @@ static int qhead, qtail;
 static int waiting_for_line = 1;
 static int wanted_line = 1;
 static DWORD start_ms;
+static DWORD pause_until;         /* pause=MS: nothing more until then */
 static int max_seconds = 120;
 
 static void dump(const char *tag) {
@@ -128,6 +129,8 @@ static void step(void) {
     } else if (!strcmp(cmd, "wait")) {
         waiting_for_line = 1;
         wanted_line = lines_seen + 1;
+    } else if (!strncmp(cmd, "pause=", 6)) {
+        pause_until = GetTickCount() + (DWORD)atoi(cmd + 6);
     }
 }
 
@@ -138,6 +141,7 @@ static void idle(void) {
         exit(3);
     }
     if (qhead != qtail) return;
+    if (pause_until && GetTickCount() < pause_until) return;
     if (waiting_for_line) {
         if (lines_seen < wanted_line) return;
         waiting_for_line = 0;

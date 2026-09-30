@@ -533,6 +533,38 @@ b.style.background = '#00B050';
 </script></body></html>"""
 
 
+# A page whose styles come from its script, in each way pages make them now:
+# a style element added, a rule put in through the CSSOM, a preloaded sheet
+# its onload makes a stylesheet, a sheet linked for print until its onload
+# says all, an adopted sheet, a link added the way webpack adds a chunk's,
+# and a style element taken out. Every band starts blue and its way turns it
+# green. The page's sheets were read once, before any script ran, and all of
+# them stayed blue.
+SCRIPTED_SHEETS = b"""<!doctype html><html><head><title>scripted sheets</title>
+<style>div{height:24px;margin:4px 0;background:#1D4ED8}.b7{background:#00B050}</style>
+<link rel=preload href=/late-sheet/3 as=style onload="this.onload=null;this.rel='stylesheet'">
+<link rel=stylesheet href=/late-sheet/4 media=print onload="this.media='all'">
+<style id=speedy></style>
+<style id=gone>.b7{background:#1D4ED8}</style>
+</head><body>
+<div class=b1></div><div class=b2></div><div class=b3></div><div class=b4></div>
+<div class=b5></div><div class=b6></div><div class=b7></div>
+<script>
+var st = document.createElement('style');
+st.textContent = '.b1{background:#00B050}';
+document.head.appendChild(st);
+document.getElementById('speedy').sheet.insertRule('.b2{background:#00B050}', 0);
+var m = new CSSStyleSheet();
+m.replaceSync('.b5{background:#00B050}');
+document.adoptedStyleSheets = [m];
+document.getElementById('gone').remove();
+var l = document.createElement('link');
+l.rel = 'stylesheet';
+l.href = '/late-sheet/6';
+document.head.appendChild(l);
+var q = function (c) { return getComputedStyle(document.querySelector(c)).backgroundColor; };
+document.title = 'sheets ' + q('.b1') + ' ' + q('.b2') + ' ' + q('.b7');
+</script></body></html>"""
 
 # A form, and a page that says back exactly what arrived. The value of this
 # one is that it is the server deciding what was received rather than the
@@ -847,6 +879,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._send(bundle(int(path[8:-3])), ctype="text/javascript")
         elif path == "/restyled":
             self._send(RESTYLED)
+        elif path == "/scripted-sheets":
+            self._send(SCRIPTED_SHEETS)
+        elif path.startswith("/late-sheet/") and path[12:].isdigit():
+            self._send(b".b%s{background:#00B050}" % path[12:].encode(), ctype="text/css")
         elif path == "/templated":
             self._send(TEMPLATED)
         elif path == "/meta-refresh":
