@@ -1196,7 +1196,11 @@ old Let's Encrypt long chain `leaf → R1x → ISRG Root X1 (cross-signed by DST
 expired 2024-09-30)` fails, while `leaf → R1x` alone would pass (ISRG Root X1 is in the store,
 `roots.c:4073`). This is the AddTrust-2020 failure mode.
 
-### 10.5 Fragility -- any unparseable certificate in the served list fails the whole chain
+### 10.5 FIXED in 0.77.0 -- Fragility -- any unparseable certificate in the served list fails the whole chain
+(Only the leaf must parse; any other certificate that does not is marked unusable and never chosen as a
+parent (`unreadable` in `verify_with`), so a chain that needed it ends unanchored and fails with
+`X509_BAD_PARSE`. `[certificates]`: junk DER beside google.com's chain verifies; in place of the
+intermediate or the leaf it fails. The original finding follows.)
 `x509.c:565-566` parses all `n` certificates up front. An extra, unneeded certificate with a
 key this code does not read (Ed25519, P-521, DSA, RSA < 1024 bits, RSA-PSS SPKI) or with odd
 DER makes the connection fail with "the certificate could not be read", although the comment

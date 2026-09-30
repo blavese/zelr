@@ -4177,6 +4177,30 @@ static void test_x509(void) {
                x509_verify_chain(with_old_mid, lens, 3, "www.google.com", when)
                == X509_EXPIRED);
         }
+
+        /* A certificate the chain does not need and this code cannot read,
+           left in by the server: it failed the whole connection. Only the
+           leaf has to be readable; one the chain does need still fails it. */
+        {
+            static const u8 junk[] = { 0x30, 0x06, 0x02, 0x01, 0x05, 0x04, 0x01, 0x00 };
+            const u8 *extra[4] = { test_cert0, junk, test_cert1, test_cert2 };
+            u32 extra_lens[4] = { sizeof(test_cert0), sizeof(junk),
+                                  sizeof(test_cert1), sizeof(test_cert2) };
+            ok("a certificate the chain does not need and cannot be read does not fail it",
+               x509_verify_chain(extra, extra_lens, 4, "www.google.com", when) == X509_OK);
+
+            const u8 *no_mid[3] = { test_cert0, junk, test_cert2 };
+            u32 no_mid_lens[3] = { sizeof(test_cert0), sizeof(junk), sizeof(test_cert2) };
+            ok("but an intermediate that cannot be read still fails it, saying so",
+               x509_verify_chain(no_mid, no_mid_lens, 3, "www.google.com", when)
+               == X509_BAD_PARSE);
+
+            const u8 *no_leaf[3] = { junk, test_cert1, test_cert2 };
+            u32 no_leaf_lens[3] = { sizeof(junk), sizeof(test_cert1), sizeof(test_cert2) };
+            ok("and so does a leaf that cannot be read",
+               x509_verify_chain(no_leaf, no_leaf_lens, 3, "www.google.com", when)
+               == X509_BAD_PARSE);
+        }
     }
 
     /* --- a digest other than SHA-256 ------------------------------------

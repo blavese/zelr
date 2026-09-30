@@ -95,6 +95,13 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.77.0 (in progress)
+
+- **A certificate the chain does not need (06b 10.5, x509.c).** Only the leaf has to parse; any other
+  certificate that will not is never chosen as a parent, so an extra one a server left in (an Ed25519 or
+  P-521 key, odd DER) no longer fails the connection, and a chain that needed it still fails, saying the
+  certificate could not be read. [certificates]: three checks.
+
 ### 0.76.0
 
 - **The document and window layer (11, 12; jsdom.h and the new jsnet.h, jsobs.h, jsurl.h, jswalk.h,

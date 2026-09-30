@@ -560,8 +560,16 @@ static bool dates_ok(const x509_t *c, u64 now, x509_result_t *why) {
 
 static x509_result_t verify_with(x509_t *chain, const u8 *const *ders, const u32 *lens,
                                  u32 n, const char *host, u64 now) {
-    for (u32 i = 0; i < n; i++)
-        if (!x509_parse(ders[i], lens[i], &chain[i])) return X509_BAD_PARSE;
+    /* The leaf has to be read. The rest are what the server chose to send,
+     * and servers leave in certificates the chain does not need: one this
+     * code cannot read -- a key it does not know (Ed25519, P-521), odd DER
+     * -- failed the whole connection although nothing depended on it. One
+     * that will not read is now never chosen as anybody's parent, so a chain
+     * that needed it ends without an anchor and fails, and says why. */
+    if (!x509_parse(ders[0], lens[0], &chain[0])) return X509_BAD_PARSE;
+    u32 unreadable = 0;
+    for (u32 i = 1; i < n; i++)
+        if (!x509_parse(ders[i], lens[i], &chain[i])) unreadable |= 1u << i;
 
     /* The leaf is for the host that was asked for, and not for whatever
        host the connection happened to reach. */
@@ -591,7 +599,7 @@ static x509_result_t verify_with(x509_t *chain, const u8 *const *ders, const u32
      * points at itself from being walked forever.
      */
     const u8 *root; u32 root_len;
-    u32 used = 1;                                  /* the leaf is in it */
+    u32 used = 1 | unreadable;                     /* the leaf is in it */
     const x509_t *top = &chain[0];
     const x509_t *below = 0;                       /* whose parent top is */
     int depth = 0;
@@ -708,8 +716,10 @@ static x509_result_t verify_with(x509_t *chain, const u8 *const *ders, const u32
         return X509_OK;
     }
 
+    /* With nothing above it this machine trusts, and a certificate sent that
+       could not be read, that one was most likely the missing link. */
     if (!roots_find(top->issuer, top->issuer_len, &root, &root_len))
-        return X509_UNTRUSTED;
+        return unreadable ? X509_BAD_PARSE : X509_UNTRUSTED;
     if (!x509_parse(root, root_len, &anchor)) return X509_BAD_PARSE;
     if (!anchor.has_basic_constraints || !anchor.is_ca) return X509_NOT_A_CA;
     if (!x509_signed_by(top, &anchor)) return X509_BAD_SIGNATURE;
