@@ -349,11 +349,6 @@ static jval nat_matrix_ctor(jctx *J, jval t, jval *a, int n) {
     return t;
 }
 
-static jval dmx_this(jctx *J, jval t, dmat *x) {
-    if (!dmx_of(t, x)) return jd_illegal(J);
-    return js_undef();
-}
-
 static jval nat_matrix_field(jctx *J, jval t, jval *a, int n) {
     (void)a; (void)n;
     dmat x;
