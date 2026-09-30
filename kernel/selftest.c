@@ -3106,6 +3106,26 @@ static void test_tls_alerts(void) {
        sent_len == 27 && open_record(c_app, 0, sent, sent_len, plain, &pl) &&
        pl == 6 && is_hex(plain, 6, "180000010016") &&
        is_hex(c_after, 32, "fcdfcc72725aaee48bf64e4fd8b749cdbdbab39d90da0b26e2245ca6ea167207"));
+
+    /* A record that arrives in two parts, the read in between running out of
+       time: split in its header and then in its body. The time allowed was
+       twenty seconds for each part whatever the caller asked, and running
+       out threw away what had come and ended the session, so a slow server's
+       answer looked finished. */
+    static const u8 later[6] = { 'l', 'a', 't', 'e', 'r', 0x17 };
+    u8 split[64], two[16];
+    u32 sl = seal_record(s_app, 0, later, sizeof(later), split);
+    bool waited = true, whole = true;
+    for (u32 cut = 3; cut <= 9; cut += 6) {
+        u32 first = 1;
+        bool ended = true;
+        memset(two, 0, sizeof(two));
+        u32 g2 = tls_test_recv_split(s_app, split, cut, sl, two, sizeof(two), &first, &ended);
+        if (first != 0 || ended) waited = false;
+        if (g2 != 5 || memcmp(two, "later", 5) != 0) whole = false;
+    }
+    ok("a record half arrived is waited for, and the session goes on", waited);
+    ok("and it reads whole once the rest has come", whole);
 }
 
 /* --- SHA-256, FIPS 180-4 --------------------------------------------- */

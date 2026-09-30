@@ -88,6 +88,12 @@ typedef struct {
     u8 *hs;           /* handshake messages being reassembled */
     u32 hs_len, hs_pos;
 
+    /* How much of the record being read has arrived: its header into head,
+       then its body into rec. Kept from one read to the next, so a read
+       whose time runs out in the middle of a record loses nothing. */
+    u8 head[5];
+    u32 have;
+
     /* Decrypted application data waiting to be read. */
     u8 *app;
     u32 app_len, app_pos;
@@ -172,28 +178,67 @@ bool tls_any(void) {
    checked to the byte without a server. */
 static const u8 *test_in;
 static u32 test_in_len, test_in_pos;
+static bool test_in_waits;       /* running out means "not yet", not "ended" */
 static u8 *test_out;
 static u32 test_out_len, test_out_cap;
 static u32 test_writes;          /* how many writes a record took */
 
 u32 tls_test_writes(void) { return test_writes; }
 
-static bool read_exact(tls_t *z, u8 *out, u32 n, u32 timeout_ms) {
+/* Some of what is wanted, waiting up to wait_ms for it: how many bytes
+   came, or -1 once the connection has ended. */
+static int take_some(tls_t *z, u8 *out, u32 n, u32 wait_ms) {
     if (test_in) {
-        if (test_in_len - test_in_pos < n) return false;
-        memcpy(out, test_in + test_in_pos, n);
-        test_in_pos += n;
-        return true;
+        u32 left = test_in_len - test_in_pos;
+        if (!left) return test_in_waits ? 0 : -1;
+        u32 k = left < n ? left : n;
+        memcpy(out, test_in + test_in_pos, k);
+        test_in_pos += k;
+        return (int)k;
     }
-    u32 have = 0;
+    u32 got = tcp_recv(z->tcp, out, n, wait_ms);
+    if (got) return (int)got;
+    return tcp_ended(z->tcp) ? -1 : 0;
+}
+
+/* Reads the record under way until it is whole or the time runs out: 1 once
+   it is whole, 0 when the time ran out first (what did arrive is kept for the
+   next read), -1 when the connection ended.
+ *
+ * The header and the body were read with twenty seconds each, whatever the
+ * caller had asked for, and what had arrived was thrown away when that ran
+ * out. So a program that asked for four seconds could be held for forty, and
+ * a server quiet for twenty in the middle of its answer ended the session, and
+ * the answer looked finished when it was not. */
+static int fill_record(tls_t *z, u32 timeout_ms) {
     u64 deadline = timer_ticks() + (u64)timeout_ms * timer_hz() / 1000;
-    while (have < n) {
-        u32 got = tcp_recv(z->tcp, out + have, n - have, 1000);
-        if (got) { have += got; continue; }
-        if (tcp_ended(z->tcp)) return false;
-        if (timer_ticks() > deadline) return false;
+    for (;;) {
+        u8 *to;
+        u32 want;
+        if (z->have < 5) {
+            to = z->head + z->have;
+            want = 5 - z->have;
+        } else {
+            u32 n = ((u32)z->head[3] << 8) | z->head[4];
+            if (n == 0 || n > REC_MAX) return 1;      /* read_record refuses it */
+            if (z->have - 5 >= n) return 1;
+            to = z->rec + (z->have - 5);
+            want = n - (z->have - 5);
+        }
+
+        /* Past the deadline, what is already here is still taken; only the
+           waiting stops. */
+        u64 now = timer_ticks();
+        u32 wait = 0;
+        if (now < deadline) {
+            u64 ms = (deadline - now) * 1000 / timer_hz();
+            wait = ms > 1000 ? 1000 : (u32)ms;
+        }
+        int got = take_some(z, to, want, wait);
+        if (got < 0) return -1;
+        if (got == 0 && (wait == 0 || test_in)) return 0;
+        z->have += (u32)got;
     }
-    return true;
 }
 
 /* The stack underneath sends at most a segment at a time. */
@@ -311,63 +356,70 @@ static u8 alert_for_chain(x509_result_t r) {
     return ALERT_BAD_CERTIFICATE;
 }
 
-/* Reads one record. When encryption is on, unwraps it and reports the type
-   that was inside. Returns false on a broken connection or a record that
-   does not authenticate, which are not distinguished on purpose. */
-static bool read_record(tls_t *z, u8 *type, u32 *len, bool encrypted) {
-    u8 head[5];
-    if (!read_exact(z, head, 5, 20000)) { fail(z, "the connection stopped"); return false; }
+/* Reads one record within timeout_ms. When encryption is on, unwraps it and
+   reports the type that was inside. 1 for a record; 0 when the time ran out
+   before one was whole, which loses nothing (the rest is read next time);
+   -1 on a broken connection or a record that does not authenticate, which
+   are not distinguished on purpose. */
+static int read_record(tls_t *z, u8 *type, u32 *len, bool encrypted, u32 timeout_ms) {
+    int r = fill_record(z, timeout_ms);
+    if (r < 0) {
+        fail(z, z->have < 5 ? "the connection stopped" : "the connection stopped mid record");
+        return -1;
+    }
+    if (r == 0) return 0;
 
+    const u8 *head = z->head;
     u32 n = ((u32)head[3] << 8) | head[4];
-    if (n == 0 || n > REC_MAX) { refuse(z, "the server sent a record of an impossible size", ALERT_RECORD_OVERFLOW); return false; }
-    if (!read_exact(z, z->rec, n, 20000)) { fail(z, "the connection stopped mid record"); return false; }
+    if (n == 0 || n > REC_MAX) { refuse(z, "the server sent a record of an impossible size", ALERT_RECORD_OVERFLOW); return -1; }
+    z->have = 0;                         /* taken: the next record starts afresh */
 
     if (head[0] == REC_CHANGE_CIPHER) {
         /* Meaningless in 1.3 and sent anyway, so that the connection looks
            like an older one to anything in the middle counting records. */
         *type = REC_CHANGE_CIPHER;
         *len = 0;
-        return true;
+        return 1;
     }
 
     if (head[0] == REC_ALERT && !encrypted) {
         z->alerted = true;                     /* not answered */
         fail(z, "the server refused the connection");
-        return false;
+        return -1;
     }
 
     if (!encrypted) {
         *type = head[0];
         *len = n;
-        return true;
+        return 1;
     }
 
-    if (n < GCM_TAG + 1) { refuse(z, "the server sent a record too short to be real", ALERT_DECODE_ERROR); return false; }
+    if (n < GCM_TAG + 1) { refuse(z, "the server sent a record too short to be real", ALERT_DECODE_ERROR); return -1; }
 
     u32 body = n - GCM_TAG;
     u8 nonce[12];
     nonce_for(nonce, z->s_iv, z->s_seq);
     if (!gcm_open(&z->s_gcm, nonce, head, 5, z->rec, body, z->rec + body)) {
         refuse(z, "a record did not authenticate", ALERT_BAD_RECORD_MAC);
-        return false;
+        return -1;
     }
     z->s_seq++;
 
     /* The real type is the last byte that is not padding. */
     while (body > 0 && z->rec[body - 1] == 0) body--;
-    if (body == 0) { refuse(z, "a record had nothing in it", ALERT_UNEXPECTED_MESSAGE); return false; }
+    if (body == 0) { refuse(z, "a record had nothing in it", ALERT_UNEXPECTED_MESSAGE); return -1; }
 
     *type = z->rec[body - 1];
     *len = body - 1;
 
     if (*type == REC_ALERT) {
         /* A close is an alert and so is a refusal; the second byte says. */
-        if (*len >= 2 && z->rec[0] == 1) { z->ended = true; *len = 0; return true; }
+        if (*len >= 2 && z->rec[0] == 1) { z->ended = true; *len = 0; return 1; }
         z->alerted = true;
         fail(z, "the server closed the connection with an alert");
-        return false;
+        return -1;
     }
-    return true;
+    return 1;
 }
 
 /* --- handshake message reassembly ---------------------------------------- */
@@ -378,7 +430,11 @@ static bool read_record(tls_t *z, u8 *type, u32 *len, bool encrypted) {
 static bool hs_fill(tls_t *z, bool encrypted) {
     for (;;) {
         u8 type; u32 len;
-        if (!read_record(z, &type, &len, encrypted)) return false;
+        /* Twenty seconds for a record of the handshake, which nobody is
+           waiting to read in the middle of. */
+        int r = read_record(z, &type, &len, encrypted, 20000);
+        if (r == 0) fail(z, z->have < 5 ? "the connection stopped" : "the connection stopped mid record");
+        if (r <= 0) return false;
         if (type == REC_CHANGE_CIPHER) continue;
         if (type != REC_HANDSHAKE) {
             refuse(z, "the server sent something other than a handshake message", ALERT_UNEXPECTED_MESSAGE);
@@ -1069,10 +1125,15 @@ static u32 recv_on(tls_t *z, u8 *out, u32 cap, u32 timeout_ms) {
 
     u64 deadline = timer_ticks() + (u64)timeout_ms * timer_hz() / 1000;
     for (;;) {
-        if (timer_ticks() > deadline) return 0;
+        u64 now = timer_ticks();
+        u32 left = now >= deadline ? 0 : (u32)((deadline - now) * 1000 / timer_hz());
 
+        /* Not yet is not the end: a server quiet for a while is still
+           answering, and the caller decides how long to wait for it. */
         u8 type; u32 len;
-        if (!read_record(z, &type, &len, true)) {
+        int r = read_record(z, &type, &len, true, left);
+        if (r == 0) return 0;
+        if (r < 0) {
             z->ended = true;
             return 0;
         }
@@ -1107,6 +1168,7 @@ void tls_abandon(int tcp) {
     z->ended = false;
     z->app_len = z->app_pos = 0;
     z->hs_len = z->hs_pos = 0;
+    z->have = 0;
 }
 
 void tls_close(int tcp) {
@@ -1122,6 +1184,7 @@ void tls_close(int tcp) {
     z->ended = false;
     z->app_len = z->app_pos = 0;
     z->hs_len = z->hs_pos = 0;
+    z->have = 0;
 }
 
 /* --- for the self test -----------------------------------------------------
@@ -1145,6 +1208,7 @@ static void scratch_end(void) {
     kfree(scratch.rec); kfree(scratch.hs); kfree(scratch.app);
     memset(&scratch, 0, sizeof(scratch));
     test_in = 0; test_out = 0;
+    test_in_waits = false;
 }
 
 u32 tls_test_alert(const u8 *secret, u8 desc, u8 *out, u32 cap) {
@@ -1174,6 +1238,25 @@ u32 tls_test_recv(const u8 s_app[32], const u8 c_app[32], const u8 *in, u32 in_l
         *sent_len = test_out_len;
         memcpy(s_after, scratch.s_app, 32);
         memcpy(c_after, scratch.c_app, 32);
+    }
+    scratch_end();
+    return n;
+}
+
+u32 tls_test_recv_split(const u8 s_app[32], const u8 *in, u32 first, u32 in_len,
+                        u8 *got, u32 got_cap, u32 *first_got, bool *ended_between) {
+    if (!scratch_begin()) { scratch_end(); return 0; }
+    memcpy(scratch.s_app, s_app, 32);
+    u32 n = 0;
+    *first_got = 0;
+    *ended_between = true;
+    if (set_keys(&scratch, s_app, false)) {
+        scratch.open = scratch.handshake_done = scratch.keys_are_app = true;
+        test_in = in; test_in_len = first; test_in_pos = 0; test_in_waits = true;
+        *first_got = recv_on(&scratch, got, got_cap, 1000);
+        *ended_between = scratch.ended;
+        test_in_len = in_len;
+        n = recv_on(&scratch, got, got_cap, 1000);
     }
     scratch_end();
     return n;

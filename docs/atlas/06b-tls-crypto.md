@@ -1202,7 +1202,12 @@ key this code does not read (Ed25519, P-521, DSA, RSA < 1024 bits, RSA-PSS SPKI)
 DER makes the connection fail with "the certificate could not be read", although the comment
 at 578-581 acknowledges servers leave unrelated certificates in.
 
-### 10.6 `tls_recv` timeout semantics
+### 10.6 FIXED in 0.76.0 -- `tls_recv` timeout semantics
+(A record is read into the session as it arrives (`head`, `have`, `fill_record`), within what the caller
+asked for; a read whose time runs out returns nothing and keeps what came, and only a connection that
+ended ends the session. The handshake keeps twenty seconds a record. Selftest `[tls 1.3]`: a record
+split in its header and in its body, the read between them running out, is waited for and read whole.
+The original finding follows.)
 `timeout_ms` is only checked between records (`tls.c:861-862`); `read_record` blocks up to
 20 s per header/body (`tls.c:219, 223`). So `sys_recv`'s 4000 ms (`syscall.c:860`) becomes
 ≈20 s, and a peer silent for 20 s marks the session `ended` with "the connection stopped"

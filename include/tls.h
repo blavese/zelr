@@ -61,6 +61,13 @@ u32 tls_test_recv(const u8 s_app[32], const u8 c_app[32], const u8 *in, u32 in_l
                   u8 *got, u32 got_cap, u8 *sent, u32 sent_cap, u32 *sent_len,
                   u8 s_after[32], u8 c_after[32]);
 
+/* Two reads of a session under the server secret s_app: the first handed only
+   `first` bytes of `in`, as though the rest were still on its way, and the
+   second all of it. What the first gave back and whether the session had
+   ended after it; the second's data is the answer. */
+u32 tls_test_recv_split(const u8 s_app[32], const u8 *in, u32 first, u32 in_len,
+                        u8 *got, u32 got_cap, u32 *first_got, bool *ended_between);
+
 /* Whether anything at all is encrypted just now. A question about the
    machine rather than about one connection, which is what a self test
    asking "is anything open" wants to know. */
