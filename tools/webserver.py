@@ -441,6 +441,16 @@ LONG_PAGE = (b"<!doctype html><html><head><title>a long page</title><style>"
              b"<body><h1>the end of a long page</h1><!--" + b"x" * (3300 * 1024) +
              b"--><div class=\"band\">past three megabytes</div></body></html>\n")
 
+# A page whose one script is four megabytes, nearly all of it a string, with
+# a last line that turns the band green. Every string a page holds goes in its
+# document's arena, which was 3 MB for every document, and the script was cut
+# off in the middle of its string and never ran: Netflix's page is built so.
+BIG_INLINE = (b"<!doctype html><html><head><title>a big inline script</title></head><body>"
+              b"<div id=band style=\"background:#1D4ED8;height:200px\">a big inline script</div>"
+              b"<script>var s = '" + b"x" * (4 * 1024 * 1024) + b"';"
+              b"if (s.length > 4000000) document.getElementById('band').style.background = '#00B050';"
+              b"</script></body></html>\n")
+
 # A page whose band is inside a shadow tree written into it, its colour in
 # the tree's own sheet: drawn only by a browser that puts the tree in the
 # page, and only on the tree's paragraph, not the one outside it.
@@ -873,6 +883,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._send(SHADOWED)
         elif path == "/long-page":
             self._send(LONG_PAGE)
+        elif path == "/big-inline":
+            self._send(BIG_INLINE)
         elif path.startswith("/big-script/") and path[12:].isdigit():
             self._send(big_script_page(int(path[12:])))
         elif path.startswith("/bundle/") and path.endswith(".js") and path[8:-3].isdigit():

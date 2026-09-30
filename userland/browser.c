@@ -62,6 +62,7 @@
  * the data its script draws from, and the buffer is mapped, so a page pays
  * only for what it uses (the comment above `src`). */
 #define SRC_MAX    (8 * 1024 * 1024)
+#define DOC_ARENA  (2 * SRC_MAX)
 #define CSS_MAX    (1024 * 1024)
 /* Style sheets a page may link. A site built in pieces links one per
    piece: The Verge links sixty-six, and the rule that keeps its menu drawer
@@ -2815,6 +2816,10 @@ int main(int argc, char **argv) {
     scriptbuf = (char *)map(SCRIPT_MAX, PROT_READ | PROT_WRITE);
     replybuf = (char *)map(REPLY_MAX, PROT_READ | PROT_WRITE);
     doc_mem = (ddoc *)map(sizeof(ddoc), PROT_READ | PROT_WRITE);
+    /* Twice the largest page this reads, since every string of it goes here;
+       mapped, so a page costs only the part it uses (dom_use_arena). */
+    char *arena = (char *)map(DOC_ARENA, PROT_READ | PROT_WRITE);
+    if (doc_mem) dom_use_arena(doc_mem, arena, DOC_ARENA);
     sheet_mem = (csheet *)map(sizeof(csheet), PROT_READ | PROT_WRITE);
     page_mem = (ldoc *)map(sizeof(ldoc), PROT_READ | PROT_WRITE);
     if (!src || !cssbuf || !doc_mem || !sheet_mem || !page_mem) exit(1);

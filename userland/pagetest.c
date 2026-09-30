@@ -1619,6 +1619,35 @@ int main(void) {
         ok("and none once the document is nearly full, and what follows is still read",
            comments == 0 && dom_by_id(&page, "end") >= 0);
     }
+    {
+        /* A document given a larger arena reads what one of its own cuts off:
+           Netflix's page is 3.2 MB, nearly all of it one script, and the 3 MB
+           every document had stopped that script in the middle of a string. */
+        int want = 3500 * 1024;
+        char *big = (char *)malloc((u64)want + 64);
+        char *room = (char *)malloc(8u * 1024 * 1024);
+        int n = 0;
+        if (big && room) {
+            for (const char *h = "<body><script>"; *h; h++) big[n++] = *h;
+            while (n < want) { big[n++] = 'x'; big[n++] = ';'; }
+            for (const char *h = "</script><p id=end>end</p></body>"; *h; h++) big[n++] = *h;
+            big[n] = 0;
+            load(big);
+            int cut = page.overflowed;
+            dom_use_arena(&page, room, 8 * 1024 * 1024);
+            load(big);
+            int s = -1;
+            for (int i = 0; i < page.count && s < 0; i++)
+                if (page.nodes[i].kind == DN_ELEMENT && page.nodes[i].tag == T_SCRIPT) s = i;
+            int t = s >= 0 ? page.nodes[s].first : -1, len = 0;
+            if (t >= 0) while (page.arena[page.nodes[t].text + len]) len++;
+            ok("a document's own arena stops at 3 MB, and one given a larger arena reads a 3.5 MB script whole",
+               cut && !page.overflowed && len == want - 14 && dom_by_id(&page, "end") >= 0);
+            dom_use_arena(&page, 0, 0);
+        }
+        free(big);
+        free(room);
+    }
 
     /* --- modules ----------------------------------------------------------------------
      *

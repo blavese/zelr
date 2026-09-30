@@ -460,13 +460,20 @@ def main():
             c.add("a page past three megabytes is read to its end",
                   count_in(pxl, wl, PAGE, BAND) > 3000, shotl)
 
+            # --- a script of four megabytes written into its page -----------
+            go(vm, mon, "http://%s/big-inline" % srv.host, settle=60.0,
+               was=longp, name="br-going-big-inline")
+            bigi, pxi, wi, shoti = page_settled(mon, "br-big-inline")
+            c.add("a script of four megabytes written into its page is read whole and runs",
+                  count_in(pxi, wi, PAGE, GREEN) > 3000 and count_in(pxi, wi, PAGE, BAND) < 200, shoti)
+
             # --- a shadow tree --------------------------------------------
             #
             # One band's worth, from the tree's sheet on the tree's
             # paragraph; a sheet let loose on the page would band the other
             # paragraph too.
             go(vm, mon, "http://%s/shadowed" % srv.host,
-               was=longp, name="br-going-shadow")
+               was=bigi, name="br-going-shadow")
             shadow, pxh, wh, shoth = page_settled(mon, "br-shadow")
             banded = count_in(pxh, wh, PAGE, BAND)
             c.add("a shadow tree written into a page is drawn, its sheet on it alone",

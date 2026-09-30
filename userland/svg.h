@@ -879,6 +879,7 @@ static inline int svg_render(const char *xml, int len, int want_w, int want_h,
 
     ddoc *doc = (ddoc *)malloc((u32)sizeof(ddoc));
     if (!doc) return SVG_TOO_BIG;
+    dom_use_arena(doc, 0, 0);          /* malloc left the pointer as it found it */
     dom_parse(doc, xml, len);
 
     int root = -1;

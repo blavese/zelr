@@ -370,6 +370,7 @@ int main(void) {
         ddoc *d = (ddoc *)malloc((u32)sizeof(ddoc));
         int root = -1;
         if (d) {
+            dom_use_arena(d, 0, 0);
             dom_parse(d, PAGE, (int)sizeof(PAGE) - 1);
             for (int i = 0; i < d->count; i++)
                 if (d->nodes[i].kind == DN_ELEMENT && d->nodes[i].tag == T_SVG) { root = i; break; }

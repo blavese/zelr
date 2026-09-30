@@ -97,6 +97,8 @@ int main(int argc, char **argv) {
     scriptbuf = (char *)map(SCRIPT_MAX, PROT_READ | PROT_WRITE);
     replybuf = (char *)map(REPLY_MAX, PROT_READ | PROT_WRITE);
     doc_mem = (ddoc *)map(sizeof(ddoc), PROT_READ | PROT_WRITE);
+    char *arena = (char *)map(DOC_ARENA, PROT_READ | PROT_WRITE);   /* as the browser's (main) */
+    if (doc_mem) dom_use_arena(doc_mem, arena, DOC_ARENA);
     sheet_mem = (csheet *)map(sizeof(csheet), PROT_READ | PROT_WRITE);
     page_mem = (ldoc *)map(sizeof(ldoc), PROT_READ | PROT_WRITE);
     if (!src || !cssbuf || !doc_mem || !sheet_mem || !page_mem) return 1;

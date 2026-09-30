@@ -67,8 +67,15 @@ typedef struct {
     int   count;
     dattr attrs[DOM_ATTRS];
     int   nattrs;
-    char  arena[DOM_ARENA];
+    /* The strings, in memory the document's owner may give it (dom_use_arena):
+       the browser gives its page a large one that costs only what is used, and
+       a document given none has DOM_ARENA of its own. Netflix's page is 3.2 MB,
+       nearly all of it one script, and the 3 MB every document had cut that
+       script off in the middle of a string. */
+    char *arena;
+    int   arena_cap;
     int   used;
+    char  own_arena[DOM_ARENA];
 
     int   root;                  /* the html element this always has */
     int   body;                  /* where content goes, for scripts to find */
@@ -86,8 +93,13 @@ typedef struct {
 /* --- the arena ----------------------------------------------------------- */
 
 static inline void dom_put(ddoc *d, char c) {
-    if (d->used < DOM_ARENA - 1) d->arena[d->used++] = c;
+    if (d->used < d->arena_cap - 1) d->arena[d->used++] = c;
     else d->overflowed = 1;
+}
+
+static inline void dom_use_arena(ddoc *d, char *arena, int cap) {
+    d->arena = arena ? arena : d->own_arena;
+    d->arena_cap = arena ? cap : DOM_ARENA;
 }
 
 static inline int dom_str(ddoc *d, const char *s, int len) {
@@ -728,6 +740,7 @@ static inline void dom_parse_into(ddoc *d, const char *p, int len, int parent) {
 }
 
 static inline void dom_parse(ddoc *d, const char *p, int len) {
+    if (!d->arena) dom_use_arena(d, 0, 0);
     d->count = 0; d->nattrs = 0; d->used = 0;
     d->title = -1; d->overflowed = 0;
     d->root = d->body = d->head = -1;
