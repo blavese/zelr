@@ -307,6 +307,7 @@ typedef struct {
 #define FN_SETTER    0x1000
 #define FN_EXPR      0x2000   /* an arrow whose body is one expression */
 #define FN_FIELD     0x4000   /* a class field's initialiser */
+#define FN_SELFNAME  0x8000   /* a function expression written with a name, which it knows itself by */
 
 /* What an object literal's or a class's entry is. */
 enum { PK_INIT = 0, PK_SHORT, PK_METHOD, PK_GET, PK_SET, PK_SPREAD, PK_PROTO,

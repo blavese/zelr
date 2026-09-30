@@ -1252,6 +1252,14 @@ int main(void) {
            "(function(){ var \\u0061bc = 1, x\\u{62} = 2, o = { \\u0066oo: 3 }; return [abc, xb, o.foo].join(' '); })()",
            "1 2 3");
 
+    /* A function expression's own name, which GSAP's recursion is written
+       with: "u is not defined". */
+    expect("a function expression written with a name knows itself by it, and only inside",
+           "(function(){ var f = function u(t) { return t > 0 ? u(t - 1) : 'done'; };"
+           " var g = function v(v) { return typeof v; }, h = function w() { var w = 2; return w; };"
+           " return [f(3), typeof u, g(1), h(), (function r() { return typeof r; })()].join(' '); })()",
+           "done undefined number 2 function");
+
     /* Which value it was that had nothing to read, when that is a name or a
        chain of them: a bundle on one line said only "at line 1". */
     expect("reading from undefined says which value it was",

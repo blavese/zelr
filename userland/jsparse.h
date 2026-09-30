@@ -2270,7 +2270,9 @@ static int js_parse_func(jparse *P, int is_decl, int flags) {
         js_parse_fail(P, line, "a function declaration needs a name", 0, 0);
         return -1;
     }
-    return js_parse_function_rest(P, flags, name, line, is_decl ? N_FUNCDECL : N_FUNC);
+    int f = js_parse_function_rest(P, flags, name, line, is_decl ? N_FUNCDECL : N_FUNC);
+    if (f >= 0 && !is_decl && name) P->J->nodes[f].op |= FN_SELFNAME;
+    return f;
 }
 
 /* --- classes ---------------------------------------------------------------

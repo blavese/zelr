@@ -1161,6 +1161,20 @@ static jobj *js_make_function(jctx *J, int node, jscope *sc, jval this_val) {
     if (!f) return 0;
     int fl = J->nodes[node].op;
     f->node = node;
+    /* A function expression written with a name (function u() { ... u() })
+       is the one thing that name means inside it, unless its parameters or
+       variables say otherwise: a scope of its own round the call's, holding
+       only the name. It was not bound at all, so GSAP, and every library
+       whose minifier writes its recursion that way, stopped at "u is not
+       defined". An assignment to it changes it, where the standard would
+       ignore it or throw. */
+    if ((fl & FN_SELFNAME) && J->nodes[node].kind == N_FUNC && J->nodes[node].str) {
+        jscope *own = js_scope(J, sc);
+        if (own != sc) {
+            js_declare(J, own, J->nodes[node].str, js_from_obj(f));
+            sc = own;
+        }
+    }
     f->closure = sc;
     f->name = J->nodes[node].str;
     if ((fl & FN_ASYNC) && (fl & FN_GEN) && J->p_async_gen_function) f->proto = J->p_async_gen_function;
