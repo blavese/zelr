@@ -440,6 +440,17 @@ int main(void) {
         if (b) okn("and border-box is the width", b->w == 200, b->w);
     }
 
+    /* The border shorthand's colour. The whole value went on as the colour,
+       which is no colour, and every border it set was drawn in the default
+       grey. */
+    {
+        lay("<style>#s{border:4px solid #1D4ED8}#t { border: 2px dashed rgb(0, 128, 0) }</style>"
+            "<div id=s>a</div><div id=t>b</div>", 600);
+        const litem *a = box_of(by_id("s")), *b = box_of(by_id("t"));
+        okn("a border's colour comes from the shorthand, written close or spaced out",
+            a && b && a->border == 0x1D4ED8 && b->border == 0x008000, a ? (int)a->border : -1);
+    }
+
     /* --- a floor and a ceiling --------------------------------------------- */
     {
         lay("<style>"

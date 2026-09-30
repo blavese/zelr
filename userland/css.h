@@ -1174,11 +1174,11 @@ static inline void css_declare(csheet *s, const char *name, int nlen,
         int np = css_parts(v, vlen, st, ln, 4);
         int wpx = -1;
         u32 col = 0;
-        int have_col = 0, none = 0;
+        int have_col = -1, none = 0;
         for (int i = 0; i < np; i++) {
             const char *pp = v + st[i];
             if (w_starts_fold(pp, "none") || w_starts_fold(pp, "hidden")) none = 1;
-            else if (css_color(pp, &col)) have_col = 1;
+            else if (css_color(pp, &col)) have_col = i;
             else {
                 clen L = css_len(pp);
                 if (L.unit != U_AUTO) wpx = L.v / 100;
@@ -1199,7 +1199,9 @@ static inline void css_declare(csheet *s, const char *name, int nlen,
         css_add(s, P_BORDER_R, num, w);
         css_add(s, P_BORDER_B, num, w);
         css_add(s, P_BORDER_L, num, w);
-        if (have_col) css_add(s, P_BORDER_COLOR, v, vlen);
+        /* The colour alone: the whole value is no colour, and every border
+           set by the shorthand was drawn in the default grey. */
+        if (have_col >= 0) css_add(s, P_BORDER_COLOR, v + st[have_col], ln[have_col]);
         return;
     }
     if (w_same(lower, "border-top")) { css_add(s, P_BORDER_T, v, vlen); return; }
