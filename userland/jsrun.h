@@ -972,10 +972,12 @@ static int js_delete(jctx *J, jval target, jstr *key) {
         }
         if (js_str_eq(key, J->s_length)) return 0;
     }
+    /* A function's prototype, made if nothing has asked for it yet, so that
+       deleting it is refused rather than answered yes and made again. */
+    if (o->kind == JO_FUNC && js_str_eq(key, J->s_prototype) && !js_find(o, key)) js_make_proto_for(J, o);
     jprop *p = js_find(o, key);
     if (!p) return 1;
     if (!(p->flags & JP_CONF)) return 0;
-    (void)J;
     return js_delete_prop(o, key);
 }
 

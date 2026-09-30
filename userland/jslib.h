@@ -413,11 +413,23 @@ static jval nat_obj_assign(jctx *J, jval t, jval *a, int n) {
     return tv;
 }
 
+/* A function's prototype is made when something first asks for it
+   (js_make_proto_for). What works on the properties an object already has
+   makes it first: freezing a function left its prototype to be made later,
+   writable; deleting it said yes and it came back; and a descriptor with no
+   value, Babel's way of making every class's prototype read-only, left a
+   class with no methods, whose prototype nothing had asked for, with none --
+   so a class extending it failed in Object.create, and Stripe's script. */
+static void js_proto_ready(jctx *J, jobj *o) {
+    if (o && o->kind == JO_FUNC && !js_find(o, J->s_prototype)) js_make_proto_for(J, o);
+}
+
 static jval nat_obj_freeze(jctx *J, jval t, jval *a, int n) {
-    (void)t; (void)J;
+    (void)t;
     jval v = js_arg(a, n, 0);
     if (!js_is_obj(v)) return v;
     jobj *o = v.obj;
+    js_proto_ready(J, o);
     for (jprop *p = o->ofirst; p; p = p->onext) {
         p->flags &= ~JP_CONF;
         if (p->v.t != JS_ACC) p->flags &= ~JP_WRITE;
@@ -428,17 +440,19 @@ static jval nat_obj_freeze(jctx *J, jval t, jval *a, int n) {
 }
 
 static jval nat_obj_seal(jctx *J, jval t, jval *a, int n) {
-    (void)t; (void)J;
+    (void)t;
     jval v = js_arg(a, n, 0);
     if (!js_is_obj(v)) return v;
+    js_proto_ready(J, v.obj);
     for (jprop *p = v.obj->ofirst; p; p = p->onext) p->flags &= ~JP_CONF;
     v.obj->flags |= JOF_NOEXT;
     return v;
 }
 
 static jval nat_obj_prevent_ext(jctx *J, jval t, jval *a, int n) {
-    (void)t; (void)J;
+    (void)t;
     jval v = js_arg(a, n, 0);
+    if (js_is_obj(v)) js_proto_ready(J, v.obj);
     if (js_is_obj(v)) v.obj->flags |= JOF_NOEXT;
     return v;
 }
@@ -519,6 +533,7 @@ static int js_define_from_desc(jctx *J, jobj *o, jstr *key, jval desc) {
         return 0;
     }
 
+    if (js_str_eq(key, J->s_prototype)) js_proto_ready(J, o);
     jprop *p = js_find(o, key);
     if (p && !(p->flags & JP_CONF)) {
         /* Not configurable: only a writable value may still change. */
@@ -669,6 +684,14 @@ static jval js_own_names(jctx *J, jval o, int want) {
     if ((want & JK_STR) && (ob->kind == JO_ARRAY || ob->kind == JO_ARGS)) {
         for (u32 i = 0; i < ob->len; i++) js_arr_push(J, out, js_from_str(js_to_key(J, js_num(i))));
         js_arr_push(J, out, js_from_str(J->s_length));
+    }
+    /* A function's length and name are read from the function itself
+       unless a script has given it its own (js_exotic_get), and they are
+       its own properties all the same, before its prototype. */
+    if ((want & JK_STR) && (ob->kind == JO_FUNC || ob->kind == JO_NATIVE)) {
+        if (!js_find(ob, J->s_length)) js_arr_push(J, out, js_from_str(J->s_length));
+        if (!js_find(ob, J->s_name)) js_arr_push(J, out, js_from_str(J->s_name));
+        js_proto_ready(J, ob);
     }
     jprop **own;
     u32 nown = js_keys_of(J, ob, &own, want);

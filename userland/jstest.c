@@ -1335,6 +1335,18 @@ int main(void) {
            " t(new Proxy({}, {})); t({ ok: [1, 'a', null, undefined, true] }); return r.join(' '); })()",
            "DataCloneError DataCloneError DataCloneError DataCloneError DataCloneError DataCloneError none");
 
+    /* A function's prototype is made when first asked for. Babel makes every
+       class's prototype read-only with a descriptor that has no value in it,
+       and a class with no methods was left with none, so a class extending it
+       failed in Object.create (Stripe's script, on NPR). */
+    expect("a function's prototype is there to defineProperty, delete, freeze and getOwnPropertyNames",
+           "(function(){ function F() {} Object.defineProperty(F, 'prototype', { writable: false });"
+           " function Sub() {} Sub.prototype = Object.create(F.prototype);"
+           " function N() {} function D() {} function Z() {} Object.freeze(Z);"
+           " return [typeof F.prototype, F.prototype.constructor === F, Object.getOwnPropertyDescriptor(F, 'prototype').writable,"
+           " new Sub() instanceof F, Object.getOwnPropertyNames(N).sort().join(','), delete D.prototype, typeof D.prototype,"
+           " Object.getOwnPropertyDescriptor(Z, 'prototype').writable].join(' '); })()",
+           "object true false true length,name,prototype false object false");
     /* export is only a statement at a module's top level: a method may be
        called it, and Next.js's bloom filter has one, which stopped the BBC's
        and The Verge's pages ("this engine does not have export"). */
