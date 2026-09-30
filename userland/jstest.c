@@ -1355,6 +1355,20 @@ int main(void) {
            " new Sub() instanceof F, Object.getOwnPropertyNames(N).sort().join(','), delete D.prototype, typeof D.prototype,"
            " Object.getOwnPropertyDescriptor(Z, 'prototype').writable].join(' '); })()",
            "object true false true length,name,prototype false object false");
+    /* A function gives back its own text: MapLibre makes its worker out of
+       its functions' text, which came back as "{ ... }". */
+    expect("a function's toString is its text, whatever kind of function it is",
+           "(function(){ function plain(a, b) { return a + b; } async  function af(x) { await x; }"
+           " var arrow = (a, b) => a * b, one = x => x + 1;"
+           " var o = { m(a) { return a; }, get g() { return 1; }, async am() {}, *gm() {} };"
+           " class A { constructor(v) { this.v = v; } static s() { return 2; } }"
+           " return [plain, af, arrow, one, o.m, Object.getOwnPropertyDescriptor(o, 'g').get, o.am, o.gm, A, A.s,"
+           " new Function('a', 'return a')].map(String).join(' # ').replace(/\\n/g, '|')"
+           " + ' # ' + eval('(' + plain + ')')(2, 3); })()",
+           "function plain(a, b) { return a + b; } # async  function af(x) { await x; } # (a, b) => a * b # x => x + 1 # m(a) { return a; } # "
+           "get g() { return 1; } # async am() {} # *gm() {} # class A { constructor(v) { this.v = v; } static s() { return 2; } } # "
+           "s() { return 2; } # function anonymous(a|) {|return a|} # 5");
+
     /* export is only a statement at a module's top level: a method may be
        called it, and Next.js's bloom filter has one, which stopped the BBC's
        and The Verge's pages ("this engine does not have export"). */

@@ -3848,6 +3848,11 @@ static void js_init(jctx *J) {
 }
 
 static void js_done(jctx *J) {
+    free(J->srcs);
+    free(J->spans);
+    J->srcs = 0;
+    J->spans = 0;
+    J->nsrcs = J->capsrcs = J->nspans = J->capspans = 0;
     if (J->nodes) free(J->nodes);
     J->nodes = 0;
     J->nnodes = J->ncap = 0;

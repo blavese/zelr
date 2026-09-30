@@ -69,6 +69,7 @@ typedef struct {
     double num;
     const char *text;         /* into the source, or a region copy for strings */
     u32    len;
+    u32    start;             /* where it begins in the source */
     int    line;
     int    nl_before;         /* a newline came before this token */
     int    flags;             /* T_REGEX: which letters followed it; T_TEMPLATE:
@@ -86,6 +87,8 @@ typedef struct {
     u32    n, at;
     int    line;
     jtok   tok;               /* the one being looked at */
+    u32    tok_end;           /* where it ends in the source */
+    u32    prev_end;          /* and where the one before it did */
     int    nl;                /* a newline has been passed since the last */
     int    failed;
 
@@ -379,9 +382,10 @@ static void js_template_piece(jlex *L) {
     L->tok.bad_escape = bad;
     L->tok.flags = ended;
     L->at = end + (ended ? 1 : 2);
+    L->tok_end = L->at;
 }
 
-static void js_next(jlex *L) {
+static void js_next_raw(jlex *L) {
     L->ends_expr = L->want_regex ? 0 : js_tok_ends_expr(&L->tok);
     L->want_regex = 0;
     L->nl = 0;
@@ -442,6 +446,7 @@ static void js_next(jlex *L) {
     L->tok.op = OP_NONE;
     L->tok.len = 0;
     L->tok.flags = 0;
+    L->tok.start = L->at;
     L->tok.text = L->src + L->at;
 
     if (L->at >= L->n) { L->tok.type = T_EOF; return; }
@@ -800,6 +805,14 @@ static void js_next(jlex *L) {
 
 #define JS_NODES_STEP 1024
 
+/* The next token, with where the one left behind ended, which is where a
+   function that closes on it ends (js_span). */
+static void js_next(jlex *L) {
+    L->prev_end = L->tok_end;
+    js_next_raw(L);
+    L->tok_end = L->at;
+}
+
 static int js_node(jctx *J, ntype kind, int line) {
     if (J->nnodes >= J->ncap) {
         if (J->ncap >= JS_NODES_CAP) {
@@ -872,7 +885,7 @@ static int js_parse_assign(jparse *P);
 static int js_parse_stmt(jparse *P);
 static int js_parse_unary(jparse *P);
 static int js_parse_primary(jparse *P);
-static int js_parse_function_rest(jparse *P, int flags, jstr *name, int line, ntype kind);
+static int js_parse_function_rest(jparse *P, int flags, jstr *name, int line, ntype kind, u32 start);
 static int js_parse_class(jparse *P, int is_decl);
 static int js_parse_template(jparse *P, int tag);
 
@@ -1265,6 +1278,7 @@ static int js_parse_object(jparse *P, int line) {
 
         int fflags = FN_METHOD;
         int kind = PK_INIT;
+        u32 mstart = P->L.tok.start;
         /* get, set and async are words only when a name follows them. */
         if ((js_at_name(P, "get") || js_at_name(P, "set")) ) {
             jtok nx = js_peek(P);
@@ -1307,7 +1321,7 @@ static int js_parse_object(jparse *P, int line) {
 
         if (js_at_punct(P, '(')) {
             if (kind == PK_INIT) kind = PK_METHOD;
-            int f = js_parse_function_rest(P, fflags, key, cline, N_FUNC);
+            int f = js_parse_function_rest(P, fflags, key, cline, N_FUNC, mstart);
             J->nodes[cell].op = (u16)kind;
             J->nodes[cell].a = f;
         } else if (kind != PK_INIT) {
@@ -1410,7 +1424,25 @@ static int js_arrow_params(jparse *P, int *items, int count, int *simple) {
 }
 
 /* The body of an arrow, its parameters already read. */
-static int js_parse_arrow_body(jparse *P, int params, int nparams, int simple, int flags, int line) {
+/* A function's text, from start to the end of the last token read, kept
+   (J->spans) as the index a function node carries in c. */
+static int js_span(jparse *P, u32 start) {
+    jctx *J = P->J;
+    if (J->cur_src < 0 || P->L.prev_end <= start) return -1;
+    if (J->nspans >= J->capspans) {
+        int cap = J->capspans ? J->capspans * 2 : 256;
+        jspan *more = (jspan *)realloc(J->spans, (u64)cap * sizeof(jspan));
+        if (!more) return -1;
+        J->spans = more;
+        J->capspans = cap;
+    }
+    J->spans[J->nspans].src = J->cur_src;
+    J->spans[J->nspans].start = start;
+    J->spans[J->nspans].end = P->L.prev_end;
+    return J->nspans++;
+}
+
+static int js_parse_arrow_body(jparse *P, int params, int nparams, int simple, int flags, int line, u32 start) {
     jctx *J = P->J;
     if (!js_at_op(P, OP_ARROW)) {
         js_parse_fail(P, P->L.tok.line, "expected =>, not ", P->L.tok.text, P->L.tok.len);
@@ -1454,6 +1486,7 @@ static int js_parse_arrow_body(jparse *P, int params, int nparams, int simple, i
     J->nodes[n].b = params;
     J->nodes[n].d = nparams;
     J->nodes[n].op = (u16)fl;
+    J->nodes[n].c = js_span(P, start);
     P->last_arrow = n;
     return n;
 }
@@ -1462,7 +1495,7 @@ static int js_parse_arrow_body(jparse *P, int params, int nparams, int simple, i
    the list, and then either makes the arrow (when => follows) or the
    expression it is. `async_ident` is the node for a preceding `async`, which
    makes a call of the list if no arrow follows. */
-static int js_parse_paren(jparse *P, int line, int async_ident) {
+static int js_parse_paren(jparse *P, int line, int async_ident, u32 start) {
     jctx *J = P->J;
     /* Small, because brackets nest and every level of them has one of
        these on the stack; a longer list moves to the region. */
@@ -1509,7 +1542,7 @@ static int js_parse_paren(jparse *P, int line, int async_ident) {
             nformal++;
         }
         return js_parse_arrow_body(P, params, nformal, simple,
-                                   async_ident >= 0 ? FN_ASYNC : 0, line);
+                                   async_ident >= 0 ? FN_ASYNC : 0, line, start);
     }
 
     if (async_ident >= 0) {
@@ -1616,6 +1649,7 @@ static int js_parse_primary(jparse *P) {
     if (P->L.tok.type == T_NAME) {
         /* async function, and the async arrows. */
         if (js_at_name(P, "async")) {
+            u32 astart = P->L.tok.start;
             jtok nx = js_peek(P);
             if (!nx.nl_before && nx.type == T_KEYWORD && js_is_word(nx.text, nx.len, "function")) {
                 js_next(&P->L);
@@ -1634,7 +1668,7 @@ static int js_parse_primary(jparse *P) {
                     if (cell < 0) return -1;
                     J->nodes[cell].a = id;
                     J->nodes[cell].str = J->nodes[id].str;
-                    return js_parse_arrow_body(P, cell, 1, 1, FN_ASYNC, line);
+                    return js_parse_arrow_body(P, cell, 1, 1, FN_ASYNC, line, astart);
                 }
                 P->L = save;
             }
@@ -1644,11 +1678,12 @@ static int js_parse_primary(jparse *P) {
                 J->nodes[id].str = js_tok_str(P);
                 js_next(&P->L);
                 js_next(&P->L);                        /* the ( */
-                return js_parse_paren(P, line, id);
+                return js_parse_paren(P, line, id, astart);
             }
         }
         /* x => ... */
         if (js_arrow_follows(P)) {
+            u32 xstart = P->L.tok.start;
             int id = js_node(J, N_IDENT, line);
             if (id < 0) return -1;
             J->nodes[id].str = js_tok_str(P);
@@ -1657,7 +1692,7 @@ static int js_parse_primary(jparse *P) {
             if (cell < 0) return -1;
             J->nodes[cell].a = id;
             J->nodes[cell].str = J->nodes[id].str;
-            return js_parse_arrow_body(P, cell, 1, 1, 0, line);
+            return js_parse_arrow_body(P, cell, 1, 1, 0, line, xstart);
         }
         int n = js_node(J, N_IDENT, line);
         if (n >= 0) J->nodes[n].str = js_tok_str(P);
@@ -1745,7 +1780,8 @@ static int js_parse_primary(jparse *P) {
         }
     }
 
-    if (js_eat_punct(P, '(')) return js_parse_paren(P, line, -1);
+    u32 pstart = P->L.tok.start;
+    if (js_eat_punct(P, '(')) return js_parse_paren(P, line, -1, pstart);
     if (js_eat_punct(P, '[')) return js_parse_array(P, line);
     if (js_eat_punct(P, '{')) return js_parse_object(P, line);
 
@@ -2221,7 +2257,7 @@ static int js_directive_strict(jparse *P) {
 
 static int js_parse_block(jparse *P);
 
-static int js_parse_function_rest(jparse *P, int flags, jstr *name, int line, ntype kind) {
+static int js_parse_function_rest(jparse *P, int flags, jstr *name, int line, ntype kind, u32 start) {
     jctx *J = P->J;
     int n = js_node(J, kind, line);
     if (n < 0) return -1;
@@ -2257,6 +2293,7 @@ static int js_parse_function_rest(jparse *P, int flags, jstr *name, int line, nt
     js_expect(P, '}');
     P->fc = outer;
     P->no_in = keep_in;
+    J->nodes[n].c = js_span(P, start);
 
     if (body >= 0) {
         J->nodes[body].a = ch.head;
@@ -2275,6 +2312,14 @@ static int js_parse_function_rest(jparse *P, int flags, jstr *name, int line, nt
    already behind us. */
 static int js_parse_func(jparse *P, int is_decl, int flags) {
     int line = P->L.tok.line;
+    /* From the async before it, which is already read: nothing but spaces
+       may stand between the two. */
+    u32 start = P->L.tok.start;
+    if (flags & FN_ASYNC) {
+        u32 k = start;
+        while (k > 0 && (P->L.src[k - 1] == ' ' || P->L.src[k - 1] == '\t')) k--;
+        if (k >= 5 && js_is_word(P->L.src + k - 5, 5, "async")) start = k - 5;
+    }
     js_eat_word(P, "function");
     if (js_at_op(P, OP_MUL)) {
         js_next(&P->L);
@@ -2289,7 +2334,7 @@ static int js_parse_func(jparse *P, int is_decl, int flags) {
         js_parse_fail(P, line, "a function declaration needs a name", 0, 0);
         return -1;
     }
-    int f = js_parse_function_rest(P, flags, name, line, is_decl ? N_FUNCDECL : N_FUNC);
+    int f = js_parse_function_rest(P, flags, name, line, is_decl ? N_FUNCDECL : N_FUNC, start);
     if (f >= 0 && !is_decl && name) P->J->nodes[f].op |= FN_SELFNAME;
     return f;
 }
@@ -2304,6 +2349,7 @@ static int js_parse_func(jparse *P, int is_decl, int flags) {
 static int js_parse_class(jparse *P, int is_decl) {
     jctx *J = P->J;
     int line = P->L.tok.line;
+    u32 cstart = P->L.tok.start;
     js_next(&P->L);                                    /* class */
     jstr *name = 0;
     if (P->L.tok.type == T_NAME) {
@@ -2337,6 +2383,7 @@ static int js_parse_class(jparse *P, int is_decl) {
         int is_static = 0;
         int kind = PK_METHOD;
         int fflags = FN_METHOD | FN_STRICT;
+        u32 mstart = P->L.tok.start;
 
         if (js_at_name(P, "static")) {
             jtok nx = js_peek(P);
@@ -2346,6 +2393,7 @@ static int js_parse_class(jparse *P, int is_decl) {
             if (follows) {
                 is_static = 1;
                 js_next(&P->L);
+                mstart = P->L.tok.start;            /* static is not the method's */
                 if (js_at_punct(P, '{')) {
                     /* static { ... }, run once with the class as `this`. */
                     int f = js_node(J, N_FUNC, mline);
@@ -2408,10 +2456,10 @@ static int js_parse_class(jparse *P, int is_decl) {
                        && !(fflags & (FN_ASYNC | FN_GEN)) && js_str_is(key, "constructor");
             if (is_ctor) {
                 int cf = FN_CTOR | FN_STRICT | (heritage >= 0 ? FN_DERIVED : 0);
-                ctor = js_parse_function_rest(P, cf, name, mline, N_FUNC);
+                ctor = js_parse_function_rest(P, cf, name, mline, N_FUNC, mstart);
                 continue;
             }
-            int f = js_parse_function_rest(P, fflags, key, mline, N_FUNC);
+            int f = js_parse_function_rest(P, fflags, key, mline, N_FUNC, mstart);
             int cell = js_chain_add(P, &ch, mline);
             if (cell < 0) break;
             J->nodes[cell].op = (u16)kind;
@@ -2478,6 +2526,8 @@ static int js_parse_class(jparse *P, int is_decl) {
     }
     J->nodes[n].b = ch.head;
     J->nodes[n].c = ctor;
+    /* The class is its constructor, whose text is the whole class. */
+    if (ctor >= 0) J->nodes[ctor].c = js_span(P, cstart);
     return n;
 }
 
@@ -3138,7 +3188,26 @@ static int js_parse_stmt_in(jparse *P) {
 
 /* The parser's state at the start of some text. It was left uninitialised
    and the first token was worked out from whatever the stack held. */
+/* The source kept for the page's life, in the region, and read from there,
+   so a function's span is into text that stays. */
+static const char *js_keep_source(jctx *J, const char *src, u32 len) {
+    J->cur_src = -1;
+    if (J->nsrcs >= J->capsrcs) {
+        int cap = J->capsrcs ? J->capsrcs * 2 : 64;
+        jstr **more = (jstr **)realloc(J->srcs, (u64)cap * sizeof(jstr *));
+        if (!more) return src;
+        J->srcs = more;
+        J->capsrcs = cap;
+    }
+    jstr *keep = js_str_n(J, src, len);
+    if (!keep) return src;
+    J->srcs[J->nsrcs] = keep;
+    J->cur_src = J->nsrcs++;
+    return keep->s;
+}
+
 static void js_parse_begin(jparse *P, jctx *J, const char *src, u32 len, jfnctx *fc) {
+    src = js_keep_source(J, src, len);
     memset(P, 0, (int)sizeof(*P));
     P->J = J;
     P->no_in = 0;

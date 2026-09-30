@@ -351,6 +351,10 @@ typedef struct {
 
 struct jco;
 
+/* Where a function's text is: which kept source, and from where to where
+   (Function.prototype.toString). */
+typedef struct { int src; u32 start, end; } jspan;
+
 typedef struct jctx {
     /* the tree */
     jnode *nodes;
@@ -458,6 +462,13 @@ typedef struct jctx {
     int  (*host_get)(struct jctx *J, jobj *o, const char *name, jval *out);
     int  (*host_set)(struct jctx *J, jobj *o, const char *name, jval v);
     void *host_data;
+    /* The text of every script read, kept for the page's life so that a
+       function can give its own back (toString): a function node's c is its
+       span's index in spans. */
+    jstr  **srcs;
+    int     nsrcs, capsrcs, cur_src;
+    jspan  *spans;
+    int     nspans, capspans;
 } jctx;
 
 /* --- allocation ---------------------------------------------------------- */

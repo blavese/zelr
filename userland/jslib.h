@@ -847,6 +847,18 @@ static jval nat_fn_tostring(jctx *J, jval t, jval *a, int n) {
     char buf[160];
     int w = 0;
     int native = t.obj->kind == JO_NATIVE;
+    /* The function's own text, as the standard asks and as MapLibre needs:
+       it makes its worker from its functions' text, and got "{ ... }". */
+    if (!native && t.obj->node >= 0 && t.obj->node < J->nnodes) {
+        int sp = J->nodes[t.obj->node].c;
+        int k = J->nodes[t.obj->node].kind;
+        if ((k == N_FUNC || k == N_FUNCDECL) && sp >= 0 && sp < J->nspans) {
+            jspan *s = &J->spans[sp];
+            jstr *src = s->src >= 0 && s->src < J->nsrcs ? J->srcs[s->src] : 0;
+            if (src && s->end <= src->len && s->start < s->end)
+                return js_from_str(js_str_n(J, src->s + s->start, s->end - s->start));
+        }
+    }
     int fl = native || t.obj->node < 0 ? 0 : J->nodes[t.obj->node].op;
     const char *head = (fl & FN_CTOR) ? "class " : (fl & FN_ASYNC) ? "async function " : "function ";
     if (fl & FN_ARROW) head = "";
