@@ -34,6 +34,7 @@
 #include "ata.h"
 #include "diskfs.h"
 #include "fat.h"
+#include "ahci.h"
 #include "elf.h"
 #include "user.h"
 #include "paging.h"
@@ -4833,6 +4834,10 @@ static void test_live_tree(void) {
        && vfs_read("/usb/lost.txt", buf, 16) < 0);
 }
 
+static void test_ahci_waits(void) {
+    ok("a wait on a disk port that never finishes gives up", ahci_test_bounded_wait());
+}
+
 static void test_layout(void) {
     layout_init();
 
@@ -5406,7 +5411,7 @@ int selftest_run(void) {
     kprintf("[open files]\n");  test_open_files(); test_pipe_big();
     kprintf("[timer]\n");      test_timer();
     kprintf("[interrupts]\n"); test_interrupts();
-    kprintf("[disk]\n");       test_disk();
+    kprintf("[disk]\n");       test_disk(); test_ahci_waits();
     kprintf("[fat]\n");        test_fat(); test_fat_names(); test_fat_big(); test_fat_io(); test_fs_lock();
     kprintf("[network]\n");    test_net();
     kprintf("[tcp]\n");        test_tcp();

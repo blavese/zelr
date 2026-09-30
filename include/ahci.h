@@ -9,3 +9,6 @@ const char *ahci_model(void);
 bool ahci_read(u32 lba, u32 count, void *buf);
 bool ahci_write(u32 lba, u32 count, const void *buf);
 bool ahci_flush(void);
+
+/* For the self test: that the driver's waits on a port give up. */
+bool ahci_test_bounded_wait(void);

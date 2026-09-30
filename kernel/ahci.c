@@ -118,20 +118,32 @@ static void *alloc_aligned(u64 bytes, u64 align) {
     return (void *)addr;
 }
 
-static void stop_port(void) {
-    port->cmd &= ~HBA_PxCMD_ST;
-    port->cmd &= ~HBA_PxCMD_FRE;
-    for (u32 i = 0; i < 1000000; i++) {
-        if (port->cmd & HBA_PxCMD_FR) continue;
-        if (port->cmd & HBA_PxCMD_CR) continue;
-        break;
-    }
+/* Whether bits of a register clear within a bounded wait. A port whose
+   engine never stops is a port with something wrong with it, and waiting for
+   it for ever stopped the machine starting at all, with nothing on the
+   screen to say why. */
+static bool bits_clear(volatile u32 *reg, u32 bits, u32 spins) {
+    for (u32 i = 0; i < spins; i++)
+        if (!(*reg & bits)) return true;
+    return false;
 }
 
-static void start_port(void) {
-    while (port->cmd & HBA_PxCMD_CR) { }
+bool ahci_test_bounded_wait(void) {
+    volatile u32 stuck = HBA_PxCMD_CR, idle = 0;
+    return !bits_clear(&stuck, HBA_PxCMD_CR, 1000) && bits_clear(&idle, HBA_PxCMD_CR, 1000);
+}
+
+static bool stop_port(void) {
+    port->cmd &= ~HBA_PxCMD_ST;
+    port->cmd &= ~HBA_PxCMD_FRE;
+    return bits_clear(&port->cmd, HBA_PxCMD_FR | HBA_PxCMD_CR, 1000000);
+}
+
+static bool start_port(void) {
+    if (!bits_clear(&port->cmd, HBA_PxCMD_CR, 1000000)) return false;
     port->cmd |= HBA_PxCMD_FRE;
     port->cmd |= HBA_PxCMD_ST;
+    return true;
 }
 
 /* Returns the index of a free command slot, or -1. */
@@ -293,7 +305,9 @@ bool ahci_init(void) {
     }
     if (port_no < 0) return false;
 
-    stop_port();
+    /* A port that will not stop cannot be given new lists to run: this
+       driver says no, and the disk is left to the next one. */
+    if (!stop_port()) return false;
 
     cmd_list = (hba_cmd_header_t *)alloc_aligned(32 * sizeof(hba_cmd_header_t), 1024);
     fis_area = (u8 *)alloc_aligned(256, 256);
@@ -309,7 +323,7 @@ bool ahci_init(void) {
     port->is = (u32)-1;
     port->ie = 0;                               /* polled, not interrupt driven */
 
-    start_port();
+    if (!start_port()) { stop_port(); return false; }
 
     if (!identify()) { stop_port(); return false; }
 

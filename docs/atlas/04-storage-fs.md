@@ -677,7 +677,7 @@ pci.c (`pci_find_class`, `pci_read32`, `pci_enable_bus_master`); paging.c (`pagi
 | ATA capacity | LBA28 (≤ 0x0FFFFFFF sectors, 128 GiB) | ata.c:92 |
 | AHCI/NVMe capacity | clamped to 0xFFFFFFFF sectors (2 TiB) | ahci.c:228, nvme.c:322 |
 | ATA spin | 100,000,000 status reads | ata.c:46,54 |
-| AHCI spins | wait_done 20M, TFD 10M, stop_port 1M, start_port unbounded | ahci.c:145,190,123,131 |
+| AHCI spins | wait_done 20M, TFD 10M, stop_port 1M, start_port 1M (unbounded before 0.76.0) | ahci.c |
 | NVMe queues | 64 entries each (admin and I/O), I/O QID 1, namespace 1 | nvme.c:47-48 |
 | NVMe timeout | CAP.TO×500 ms, 30 s if 0 or larger; ticks = ms/10+2 (100 Hz assumed) | nvme.c:153,262-263 |
 | Partitions | 16 | parts.h:22 |
@@ -904,7 +904,7 @@ In particular, the hot-plug mount in the `usb` service task (`fat_mount_on` save
 
 **S26. Unreachable branch in main.c:438** ("disk unreadable, using memory only"). `diskfs_mount` returns -1 only when `!blk_present()`, which is impossible inside `if (blk_init())`.
 
-Also, `start_port` in AHCI spins forever if CR never clears (ahci.c:131). `fat_mount_at` does not check that the FAT is large enough for `cluster_count`. `make_alias` returns a duplicate alias once ~1..~999 are all taken (fat.c:1094-1113). A failed seed write still records the marker (layout.c:45, 144-147).
+Also, `start_port` in AHCI spun forever if CR never cleared (ahci.c:131) -- FIXED in 0.76.0: both port waits are bounded (`bits_clear`) and a port that will not stop or start is refused ([disk]). `fat_mount_at` does not check that the FAT is large enough for `cluster_count`. `make_alias` returns a duplicate alias once ~1..~999 are all taken (fat.c:1094-1113). A failed seed write still records the marker (layout.c:45, 144-147).
 
 ### Doc and comment drift
 - **D1.** fat.c:23-25 says "Formatting only produces FAT16". fat_format_at writes FAT32 above about 2 GiB (fat.c:655-672), and the comment at fat.c:489-491 says so.
