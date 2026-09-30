@@ -621,6 +621,50 @@ static jval js_nothing(jctx *J, const char *verb, jstr *name, jval target) {
                           target.t == JS_NULL ? " of null" : " of undefined");
 }
 
+/* The words of a name or a chain of them, a.b.c, into out; 0 when the
+   expression is anything else or will not fit. */
+static int js_chain_text(jctx *J, int node, char *out, int cap, int *n) {
+    if (node < 0 || node >= J->nnodes) return 0;
+    const jnode *x = &J->nodes[node];
+    const char *s = 0;
+    u32 len = 0;
+    if (x->kind == N_THIS) { s = "this"; len = 4; }
+    else if (x->kind == N_IDENT && x->str) { s = x->str->s; len = x->str->len; }
+    else if (x->kind == N_MEMBER && x->str && !(x->flags & NF_PRIVATE)) {
+        if (!js_chain_text(J, x->a, out, cap, n)) return 0;
+        if (*n + 1 >= cap) return 0;
+        out[(*n)++] = '.';
+        s = x->str->s;
+        len = x->str->len;
+    } else if (x->kind == N_CALL) {
+        /* What a call gave back: f(...), a.b(...). */
+        if (!js_chain_text(J, x->a, out, cap, n)) return 0;
+        s = "(...)";
+        len = 5;
+    } else return 0;
+    if (*n + (int)len >= cap) return 0;
+    for (u32 i = 0; i < len; i++) out[(*n)++] = s[i];
+    out[*n] = 0;
+    return 1;
+}
+
+/* The same error, saying which value it was when that is a name or a chain
+   of them: "cannot read forEach of undefined (e.addedNodes)". Without it a
+   bundle on one line said only "at line 1", which could be anywhere. */
+static jval js_nothing_from(jctx *J, jstr *name, jval target, int obj_node) {
+    char what[64];
+    int n = 0;
+    if (!js_chain_text(J, obj_node, what, (int)sizeof(what), &n)) return js_nothing(J, "cannot read ", name, target);
+    char tail[96];
+    const char *of = target.t == JS_NULL ? " of null (" : " of undefined (";
+    int w = 0;
+    for (const char *p = of; *p; p++) tail[w++] = *p;
+    for (int i = 0; i < n && w < (int)sizeof(tail) - 2; i++) tail[w++] = what[i];
+    tail[w++] = ')';
+    tail[w] = 0;
+    return js_throw_named(J, JS_ERR_TYPE, "cannot read ", name, tail);
+}
+
 /* The object whose properties a value has, for reading: an object itself,
    or the prototype of a primitive's kind. */
 static jobj *js_proto_of_value(jctx *J, jval v) {
@@ -2003,7 +2047,7 @@ static JS_NOINLINE jval js_eval_call(jctx *J, int node, jscope *sc, jval this_va
         if (J->sig != JS_OK) return js_undef();
         J->error_line = line;
         if (self.t == JS_NULL || self.t == JS_UNDEF)
-            return js_nothing(J, "cannot read ", key, self);
+            return js_nothing_from(J, key, self, inner);
         fn = js_getv(J, self, key, self);
     } else if (ck == N_SUPERMEMBER) {
         jplace p = js_place(J, callee, sc, this_val);
@@ -2595,7 +2639,7 @@ static JS_NOINLINE jval js_eval_member(jctx *J, int node, jscope *sc, jval this_
         if (J->sig != JS_OK) return js_undef();
     }
     J->error_line = J->nodes[node].line;
-    if (target.t == JS_UNDEF || target.t == JS_NULL) return js_nothing(J, "cannot read ", key, target);
+    if (target.t == JS_UNDEF || target.t == JS_NULL) return js_nothing_from(J, key, target, a);
     return js_getv(J, target, key, target);
 }
 

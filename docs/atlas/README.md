@@ -114,6 +114,8 @@ numbered files are still to 6048716; where they disagree with this list, this li
 - **with through the object (12, jsrun.h).** A `with` statement's names were its object's own properties only; now
   they are what the object has, inherited or through a proxy, and a function found there is called on it.
   Alpine evaluates in `with` over a proxy of its components' data. jstest: one check.
+- **Errors that say which value was undefined (12, jsrun.h).** "cannot read forEach of undefined (i(...))" instead of
+  only "at line 1" in a bundle on one line. jstest: one check.
 - **Scripts may have what the machine can spare (12, js.h, jsdom.h).** A page's script memory, 24 MB on every
   machine with nothing freed until the page is left, is now each context's `mem_cap`, raised to a quarter of
   the free memory when the page opens and again when its scripts start (the browser says what is free after

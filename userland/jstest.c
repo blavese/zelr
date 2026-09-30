@@ -1246,6 +1246,18 @@ int main(void) {
            " for (var i = 0; i < 200; i++) s += ']'; var a = eval(s);"
            " for (var i = 0; i < 199; i++) a = a[0]; return a[0]; })()", "1");
 
+    /* Which value it was that had nothing to read, when that is a name or a
+       chain of them: a bundle on one line said only "at line 1". */
+    expect("reading from undefined says which value it was",
+           "(function(){ var out = []; var e = {};"
+           " try { e.addedNodes.forEach(1); } catch (x) { out.push(x.message); }"
+           " try { var n = null; n.x; } catch (x) { out.push(x.message); }"
+           " try { [][0].y; } catch (x) { out.push(x.message); }"
+           " try { var o = { f: function() {} }; o.f(2).z; } catch (x) { out.push(x.message); }"
+           " return out.join(' | '); })()",
+           "cannot read forEach of undefined (e.addedNodes) | cannot read x of null (n) | cannot read y of undefined"
+           " | cannot read z of undefined (o.f(...))");
+
     /* The constructors of async functions and generators, reached as the
        constructor of one: they were Function, so an "async" function made
        that way -- as Alpine makes every expression in a page's attributes --
