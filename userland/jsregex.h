@@ -55,7 +55,11 @@
 #pragma once
 #include "zelr.h"
 
-#define RX_NODES   4096          /* a list of hundreds of words, each an alternative */
+/* Nodes, one a character: a list of hundreds of words, each an alternative,
+   is thousands, and Al Jazeera's went past the 4096 there were. The table
+   grows as a pattern needs it, to this many. */
+#define RX_NODES_FIRST 1024
+#define RX_NODES   65536
 #define RX_CLASSES 96
 #define RX_RANGES  512           /* class ranges past U+00FF, all classes together */
 #define RX_CONTS   1024
@@ -102,8 +106,8 @@ typedef struct {
 } rxnode;
 
 typedef struct {
-    rxnode nodes[RX_NODES];
-    int    nnodes;
+    rxnode *nodes;                   /* capnodes of them, kept from one pattern to the next */
+    int    nnodes, capnodes;
     u8     classes[RX_CLASSES][32];  /* code points 0 to 255, a bit each */
     u8     cneg[RX_CLASSES];         /* the class is turned inside out */
     u32    rlo[RX_RANGES], rhi[RX_RANGES];   /* and past 255, ranges, */
@@ -133,7 +137,19 @@ typedef struct {
 /* --- reading a pattern ---------------------------------------------------- */
 
 static int rx_new(rx *R, int kind) {
-    if (R->nnodes >= RX_NODES) return -1;
+    if (R->nnodes >= R->capnodes) {
+        /* Nodes are named by number, never held by address across a call
+           that makes one, so the table can move. */
+        if (R->capnodes >= RX_NODES) return -1;
+        int cap = R->capnodes ? R->capnodes * 2 : RX_NODES_FIRST;
+        if (cap > RX_NODES) cap = RX_NODES;
+        rxnode *more = (rxnode *)malloc((u64)cap * sizeof(rxnode));
+        if (!more) return -1;
+        for (int i = 0; i < R->nnodes; i++) more[i] = R->nodes[i];
+        free(R->nodes);
+        R->nodes = more;
+        R->capnodes = cap;
+    }
     int n = R->nnodes++;
     rxnode *x = &R->nodes[n];
     x->kind = (short)kind;
@@ -853,7 +869,8 @@ static int rx_compile(rx *R, const char *pat, int len, const char *flags) {
     int root = rx_new(R, RXN_GROUP);
     if (root < 0) { rx_fail(R, "pattern too big"); return 0; }
     R->nodes[root].cap = 0;
-    R->nodes[root].alt = rx_parse_alt(R, pat, len, &at, 0);
+    int top = rx_parse_alt(R, pat, len, &at, 0);
+    R->nodes[root].alt = top;
     if (at < len) rx_fail(R, at < len && pat[at] == ')' ? "a ) with no ( before it" : "something left over");
     return R->ok;
 }

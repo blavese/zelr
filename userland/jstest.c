@@ -1252,6 +1252,14 @@ int main(void) {
            "(function(){ var \\u0061bc = 1, x\\u{62} = 2, o = { \\u0066oo: 3 }; return [abc, xb, o.foo].join(' '); })()",
            "1 2 3");
 
+    /* A pattern of more characters than there were nodes for: a word list,
+       as Al Jazeera's is. */
+    expect("a pattern of fifteen hundred words is read and matched",
+           "(function(){ var w = []; for (var i = 0; i < 1500; i++) w.push('w' + i);"
+           " var re = new RegExp('^(?:' + w.join('|') + ')$');"
+           " return [re.test('w1499'), re.test('w1500'), re.test('w7'), /^(a|b)+$/.test('abab')].join(' '); })()",
+           "true false true true");
+
     /* A function expression's own name, which GSAP's recursion is written
        with: "u is not defined". */
     expect("a function expression written with a name knows itself by it, and only inside",
