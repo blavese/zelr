@@ -2069,6 +2069,41 @@ int main(void) {
                " again, bad, String(document.getElementById('in')), h.textContent, r.innerHTML.length > 20].join(' ');</script></body>"),
         "true true true open inside true true closed null NotSupportedError NotSupportedError null light true");
 
+    /* --- shadow trees drawn, connected and crossed ----------------------------------------
+     *
+     * MSN's page is components inside components, each drawing only in its
+     * shadow root: none of those trees was drawn, and a component inside one
+     * was never upgraded, since only what was in the document was connected. */
+    oks("a component in a component's shadow root is upgraded and told it is connected, once",
+        titled("<body><outer-el></outer-el><script>var log = [];"
+               "var inner = function (n) { var e = document.createElement('inner-el'); e.setAttribute('n', n); return e; };"
+               "customElements.define('inner-el', class extends HTMLElement {"
+               " connectedCallback() { log.push(this.getAttribute('n') + ' ' + this.isConnected); } });"
+               "customElements.define('outer-el', class extends HTMLElement {"
+               " constructor() { super(); this.attachShadow({ mode: 'open' }).innerHTML = '<inner-el n=s1></inner-el>'; }"
+               " connectedCallback() { log.push('outer'); this.shadowRoot.appendChild(inner('s2')); this.appendChild(inner('l3')); } });"
+               "var first = log.join(','); log = [];"
+               "document.body.appendChild(document.createElement('outer-el'));"
+               "var loose = document.createElement('div').attachShadow({ mode: 'open' });"
+               "loose.innerHTML = '<inner-el n=x></inner-el>';"
+               "document.title = first + ' | ' + log.join(',') + ' | ' + loose.firstChild.isConnected;</script></body>"),
+        "s1 true,outer,s2 true,l3 true | outer,s2 true,l3 true,s1 true | false");
+    oks("an element of a defined name is upgraded when markup, cloneNode or importNode makes it, but not in a template",
+        titled("<body><template id=t><x-up></x-up></template><script>var log = [];"
+               "class XUp extends HTMLElement { constructor() { super(); this.ready = 'made'; }"
+               " set options(v) { log.push('options ' + this.ready); } connectedCallback() { log.push('in'); } }"
+               "document.body.insertAdjacentHTML('beforeend', '<template id=t2><x-up></x-up></template>');"
+               "customElements.define('x-up', XUp);"
+               "var d = document.createElement('div'); d.innerHTML = '<x-up></x-up>'; var a = d.firstChild;"
+               "a.options = 1;"
+               "var c = a.cloneNode(true), t = document.getElementById('t').content;"
+               "var i = document.importNode(t, true).firstChild, raw = t.firstChild, copy = t.cloneNode(true).firstChild;"
+               "document.adoptNode(t); var adopted = t.cloneNode(true).firstChild;"
+               "document.body.appendChild(d);"
+               "var made = function (x) { return x.ready === 'made'; };"
+               "document.title = [made(a), made(c), made(i), made(raw), made(copy), made(adopted),"
+               " made(document.getElementById('t2').content.firstChild), log.join(',')].join(' ');</script></body>"),
+        "true true true false false true false options made,in");
     oks("document.fonts is empty and loaded, and what it is asked to load comes to nothing at once",
         titled("<body><script>var f = document.fonts, got = 'waiting';"
                "f.ready.then(function (s) { return f.load('12px serif').then(function (l) { got = (s === f) + ' ' + l.length; }); })"

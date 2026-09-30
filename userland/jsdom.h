@@ -218,6 +218,43 @@ static int jd_connected(int n) {
     return 0;
 }
 
+/* Each shadow root a script attached, with its element (attachShadow, below).
+   What is in one is in the page while its element is, and the browser draws
+   them (browser.c, page_drawn). jd_shadow_mark has a bit for every host and
+   every root, so asking of a node that is neither costs nothing. */
+#define JD_SHADOWS 1024
+static int jd_shadow_host[JD_SHADOWS], jd_shadow_root[JD_SHADOWS], jd_nshadow;
+static u8 jd_shadow_mark[DOM_NODES / 8];
+
+/* A template's contents, which are a document of their own with no window:
+   nothing made there is upgraded, as in a browser (jd_custom_created). */
+static u8 jd_inert_mark[DOM_NODES / 8];
+
+/* Which of them n is the root of (as_root) or the element of, or -1. */
+static int jd_shadow_find(int n, int as_root) {
+    if (n < 0 || n >= DOM_NODES || !(jd_shadow_mark[n >> 3] & (1 << (n & 7)))) return -1;
+    for (int s = 0; s < jd_nshadow; s++)
+        if ((as_root ? jd_shadow_root[s] : jd_shadow_host[s]) == n) return s;
+    return -1;
+}
+
+/* Connected as the standard means it, through a shadow root to its element:
+   isConnected, and custom elements' upgrades and callbacks. A component's
+   own components are in its shadow root, and were never upgraded, so they
+   drew nothing. The page's searches keep to the document (jd_connected). */
+static int jd_connected_deep(int n) {
+    for (int k = 0; n >= 0 && k < DOM_NODES; k++) {
+        if (n == jd_doc->root) return 1;
+        int p = jd_doc->nodes[n].parent;
+        if (p < 0) {
+            int s = jd_shadow_find(n, 1);
+            p = s >= 0 ? jd_shadow_host[s] : -1;
+        }
+        n = p;
+    }
+    return 0;
+}
+
 /* The page's own <html> element, which is the document element to a
    script. The parser puts every page under a root html element of its own
    (dom.h, dom_parse), so a page that wrote <html lang="en" class="no-js">
@@ -455,6 +492,8 @@ static void jd_record_text(int target, const char *old);
 
 /* And a custom element hears of its own (jd_custom_*, further down). */
 static void jd_custom_connected(int top);
+static void jd_custom_created(int top);
+static int jd_inert(int x);
 static void jd_custom_disconnected(int top);
 static void jd_custom_attr(int node, const char *name, const char *old, const char *now);
 static int  jd_ncustom;
@@ -621,7 +660,7 @@ static void jd_nav_mark(int which);
 static void jd_remove(int child) {
     int parent = jd_doc->nodes[child].parent;
     if (parent < 0) return;
-    int was_in = jd_ncustom && jd_connected(child);
+    int was_in = jd_ncustom && jd_connected_deep(child);
     int prev = jd_doc->nodes[child].prev, next = jd_doc->nodes[child].next;
     dom_unlink(jd_doc, child);
     jd_record_children(parent, -1, child, prev, next);
@@ -672,8 +711,8 @@ static void jd_insert(int parent, int child, int before) {
     if (jd_connected(child)) {
         jd_scripts_inserted(child);
         if (jd_doc->nodes[parent].tag == T_SCRIPT) jd_scripts_inserted(parent);
-        jd_custom_connected(child);
     }
+    if (jd_connected_deep(child)) jd_custom_connected(child);
 }
 
 /* A value that may be a node or a string, as append() and before() take:
@@ -851,6 +890,7 @@ static void jd_set_inner(int el, const char *html, int len) {
 
     int f = jd_parse_fragment(html, len);
     if (f >= 0) jd_insert(el, f, -1);
+    jd_custom_created(el);
 }
 
 /* --- copies ------------------------------------------------------------------------- */
@@ -2204,7 +2244,7 @@ static jval nat_is_connected(jctx *J, jval t, jval *a, int n) {
     (void)J; (void)a; (void)n;
     if (jd_is_doc(t)) return js_bool(1);
     int x = jd_node_of(t);
-    return js_bool(x >= 0 && jd_connected(x));
+    return js_bool(x >= 0 && jd_connected_deep(x));
 }
 
 static jval nat_base_uri(jctx *J, jval t, jval *a, int n) {
@@ -2277,6 +2317,8 @@ static jval nat_clone_node(jctx *J, jval t, jval *a, int n) {
             if (cc >= 0) dom_append(jd_doc, to, cc);
         }
     }
+    /* A copy is made in the document its original is in. */
+    if (c >= 0 && !jd_inert(x)) jd_custom_created(c);
     return c >= 0 ? jd_el_value(J, c) : js_null();
 }
 
@@ -2349,6 +2391,13 @@ static jval nat_attach_shadow(jctx *J, jval t, jval *a, int n) {
     jobj *r = f >= 0 ? jd_element(J, f) : 0;
     if (!r) return js_null();
     if (jd_p_shadowroot) r->proto = jd_p_shadowroot;
+    if (jd_nshadow < JD_SHADOWS) {
+        jd_shadow_host[jd_nshadow] = x;
+        jd_shadow_root[jd_nshadow] = f;
+        jd_nshadow++;
+        jd_shadow_mark[x >> 3] |= (u8)(1 << (x & 7));
+        jd_shadow_mark[f >> 3] |= (u8)(1 << (f & 7));
+    }
     jd_keep(r, jd_k_host, t);
     jd_keep(r, jd_k_mode, js_from_str(m));
     jd_keep(t.obj, jd_k_shadow, js_from_obj(r));
@@ -2829,6 +2878,7 @@ static jval nat_set_outer_html(jctx *J, jval t, jval *a, int n) {
     int next = jd_doc->nodes[x].next;
     jd_remove(x);
     if (f >= 0) jd_insert(p, f, next);
+    jd_custom_created(p);
     return js_undef();
 }
 
@@ -2858,6 +2908,7 @@ static jval nat_insert_adj_html(jctx *J, jval t, jval *a, int n) {
     jstr *s = jd_arg_str(J, a, n, 1);
     int f = jd_parse_fragment(s->s, (int)s->len);
     if (f >= 0) jd_insert(p, f, before);
+    jd_custom_created(p);
     return js_undef();
 }
 
@@ -3054,7 +3105,7 @@ static jval nat_scroll_height(jctx *J, jval t, jval *a, int n) {
 static jval nat_offset_parent(jctx *J, jval t, jval *a, int n) {
     (void)a; (void)n;
     int x = jd_el_of(t);
-    if (x < 0 || !jd_connected(x) || x == jd_doc->body || jd_is_top(x)) return js_null();
+    if (x < 0 || !jd_connected_deep(x) || x == jd_doc->body || jd_is_top(x)) return js_null();
     return jd_el_value(J, jd_doc->body);
 }
 
@@ -3180,7 +3231,7 @@ static jval nat_focus(jctx *J, jval t, jval *a, int n) {
     (void)a; (void)n;
     int x = jd_el_of(t);
     if (x < 0) return jd_illegal(J);
-    if (jd_active == x || !jd_connected(x)) return js_undef();
+    if (jd_active == x || !jd_connected_deep(x)) return js_undef();
     int old = jd_active;
     jd_active = x;
     if (old >= 0) { jd_fire_simple(old, "blur", 0, 0); jd_fire_simple(old, "focusout", 1, 0); }
@@ -3827,6 +3878,7 @@ static int jd_template_content(int el) {
         dom_append(jd_doc, f, c);
     }
     jd_keep(w, jd_k_content, jd_el_value(&jd_J, f));
+    jd_inert_mark[f >> 3] |= (u8)(1 << (f & 7));
     return f;
 }
 
@@ -3912,25 +3964,84 @@ static void jd_upgrade(int node) {
             jval args[3] = { nm, js_null(), jd_str(v) };
             jd_custom_callback(node, "attributeChangedCallback", args, 3);
         }
-    if (jd_connected(node)) jd_custom_callback(node, "connectedCallback", 0, 0);
+    if (jd_connected_deep(node)) jd_custom_callback(node, "connectedCallback", 0, 0);
 }
 
-/* Elements of defined names in a subtree just put in the page: upgraded if
-   they were not, told they are connected if they were. */
+/* The elements that may be custom in a subtree, in the order the standard
+   takes them: each, then what is in its shadow root, then its children. */
+typedef struct { int *at; int n, cap; } jd_nodelist;
+
+static void jd_custom_gather(int top, jd_nodelist *L) {
+    for (int i = top; i >= 0; i = jd_walk_next(i, top)) {
+        if (!jd_is_element(i)) continue;
+        if (jd_doc->nodes[i].tag == T_OTHER) {
+            if (L->n >= L->cap) {
+                int cap = L->cap ? L->cap * 2 : 64;
+                int *more = (int *)malloc((u64)cap * sizeof(int));
+                if (!more) return;
+                for (int k = 0; k < L->n; k++) more[k] = L->at[k];
+                free(L->at);
+                L->at = more;
+                L->cap = cap;
+            }
+            L->at[L->n++] = i;
+        }
+        int s = jd_shadow_find(i, 0);
+        if (s >= 0)
+            for (int c = jd_doc->nodes[jd_shadow_root[s]].first; c >= 0; c = jd_doc->nodes[c].next)
+                jd_custom_gather(c, L);
+    }
+}
+
+/* Whether a node is in a document with no window: a template's contents,
+   or one DOMParser made. */
+static int jd_inert(int x) {
+    int top = x;
+    for (int k = 0; top >= 0 && jd_doc->nodes[top].parent >= 0 && k < DOM_NODES; k++) top = jd_doc->nodes[top].parent;
+    if (top < 0) return 0;
+    if (top < DOM_NODES && (jd_inert_mark[top >> 3] & (1 << (top & 7)))) return 1;
+    return top != jd_doc->root && jd_kind(top) == JN_DOCUMENT;
+}
+
+/* Elements of defined names just made by the page's document, in or out of
+   the page: upgraded then, as a browser upgrades what markup, cloneNode and
+   importNode make before handing it over. They were upgraded only once put
+   in the page, and a component's property set in between (FAST binds its
+   views' properties before they go in) reached a class not yet made: MSN's
+   header read a field its constructor had not yet set, and stopped. */
+static void jd_custom_created(int top) {
+    if (!jd_ncustom || top < 0 || jd_inert(top)) return;
+    jd_nodelist L = { 0, 0, 0 };
+    jd_custom_gather(top, &L);
+    for (int k = 0; k < L.n; k++) if (!jd_is_upgraded(L.at[k])) jd_upgrade(L.at[k]);
+    free(L.at);
+}
+
+/* Elements of defined names in a subtree just put in the page, and in the
+   shadow roots in it: upgraded if they were not, told they are connected if
+   they were. Taken from a list made first, as the standard queues them: an
+   element a callback adds is told by its own insertion, and was told twice
+   when the walk then reached it. */
 static void jd_custom_connected(int top) {
     if (!jd_ncustom) return;
-    for (int i = top; i >= 0; i = jd_walk_next(i, top)) {
-        if (!jd_is_element(i) || jd_doc->nodes[i].tag != T_OTHER) continue;
+    jd_nodelist L = { 0, 0, 0 };
+    jd_custom_gather(top, &L);
+    for (int k = 0; k < L.n; k++) {
+        int i = L.at[k];
+        if (!jd_connected_deep(i)) continue;          /* taken out again by a callback */
         if (jd_is_upgraded(i)) jd_custom_callback(i, "connectedCallback", 0, 0);
         else jd_upgrade(i);
-        if (i == top && jd_doc->nodes[i].first < 0) break;
     }
+    free(L.at);
 }
 
 static void jd_custom_disconnected(int top) {
     if (!jd_ncustom) return;
-    for (int i = top; i >= 0; i = jd_walk_next(i, top))
-        if (jd_is_upgraded(i)) jd_custom_callback(i, "disconnectedCallback", 0, 0);
+    jd_nodelist L = { 0, 0, 0 };
+    jd_custom_gather(top, &L);
+    for (int k = 0; k < L.n; k++)
+        if (jd_is_upgraded(L.at[k])) jd_custom_callback(L.at[k], "disconnectedCallback", 0, 0);
+    free(L.at);
 }
 
 static void jd_custom_attr(int node, const char *name, const char *old, const char *now) {
@@ -4010,10 +4121,11 @@ static jval nat_ce_define(jctx *J, jval t, jval *a, int n) {
         js_args_free(&A);
         J->sig = JS_OK;
     }
-    /* Everything of that name already here, in document order. */
+    /* Everything of that name already here, in document order -- but not in
+       a template, whose contents are no document's until copied out. */
     for (int i = 0; i < jd_doc->count; i++)
-        if (jd_is_element(i) && jd_doc->nodes[i].tag == T_OTHER && jd_connected(i)
-            && js_str_is(name, dom_tag_name(jd_doc, i)))
+        if (jd_is_element(i) && jd_doc->nodes[i].tag == T_OTHER && jd_connected_deep(i)
+            && js_str_is(name, dom_tag_name(jd_doc, i)) && !jd_has_ancestor_tag(i, T_OTHER, "template"))
             jd_upgrade(i);
     for (int i = 0; i < jd_npending; i++)
         if (jd_pending_defs[i] && js_str_eq(jd_pending_names[i], name)) {
@@ -4922,6 +5034,7 @@ static jval nat_doc_import(jctx *J, jval t, jval *a, int n) {
     int x = jd_node_of(js_arg(a, n, 0));
     if (x < 0) return js_throw_dom(J, "NotSupportedError", "only a node can be imported");
     int c = jd_clone(x, n > 1 && js_to_bool(a[1]));
+    jd_custom_created(c);
     return c < 0 ? js_null() : jd_el_value(J, c);
 }
 
@@ -4929,6 +5042,9 @@ static jval nat_doc_adopt(jctx *J, jval t, jval *a, int n) {
     (void)J; (void)t;
     int x = jd_node_of(js_arg(a, n, 0));
     if (x >= 0) jd_remove(x);
+    /* A template's contents adopted are the page's document's, and what is
+       copied from them is upgraded: FAST makes its views so. */
+    if (x >= 0 && x < DOM_NODES) jd_inert_mark[x >> 3] &= (u8)~(1 << (x & 7));
     return js_arg(a, n, 0);
 }
 
@@ -6773,6 +6889,9 @@ static int jsdom_open(ddoc *d, csheet *sheet) {
     jd_zero(jd_upgraded, (int)sizeof(jd_upgraded));
     jd_zero(jd_svg_made, (int)sizeof(jd_svg_made));
     jd_zero(jd_restyle, (int)sizeof(jd_restyle));
+    jd_zero(jd_shadow_mark, (int)sizeof(jd_shadow_mark));
+    jd_zero(jd_inert_mark, (int)sizeof(jd_inert_mark));
+    jd_nshadow = 0;
     jd_open = 1;
 
     /* Sized for the whole document rather than for the part of it that
