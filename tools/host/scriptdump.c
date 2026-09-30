@@ -1,12 +1,19 @@
 /* What each of a real page's scripts did, one line each.
  *
- *   scriptdump ADDRESS [SECONDS] [text]
+ *   scriptdump ADDRESS [SECONDS] [text] [tree] ['js=EXPRESSION' ...]
  *
  * Loads the page with the browser's own load() -- the same fetches, the same
  * limits on how many scripts and how large, the same document and bindings
  * -- and prints, for every script element that is run, where it came from,
  * how long it was, and what stopped it, or "ok". Then how much of the page's
  * script memory was in use, and the line the browser would have printed.
+ *
+ * With "tree", the page is laid out and printed as it is drawn, an element
+ * a line, with the shadow trees its scripts attached in place (browser.c,
+ * page_drawn): what a page whose scripts all ran shows, and where.
+ *
+ * Each js= is evaluated in the page once it has run, and what it came to is
+ * printed: a page's own state, asked for the way its console would be.
  *
  * The browser's own line names only the first thing that stopped, which is
  * the right thing to show a reader and not enough to tell which of thirty
@@ -23,6 +30,58 @@
 
 static int dumped;
 static int show_text;            /* "text" after the address */
+static int show_tree;            /* "tree": the page as it is drawn */
+
+static void put_cut(const char *s, int most) {
+    int k = 0;
+    for (; s[k] && k < most; k++) {
+        char one[2] = { s[k] == '\n' || s[k] == '\t' ? ' ' : s[k], 0 };
+        puts(one);
+    }
+    if (s[k]) puts("...");
+}
+
+/* An element a line, indented by its depth, with its id, its class and the
+   shadow tree marks (dom_flat); words in quotes. Scripts, sheets and
+   drawings are one line each. */
+static void outline(const ddoc *d, int most) {
+    int lines = 0;
+    for (int i = d->root; i >= 0 && lines < most; ) {
+        const dnode *n = &d->nodes[i];
+        int depth = 0;
+        for (int p = n->parent; p >= 0 && depth < 200; p = d->nodes[p].parent) depth++;
+        int skip = 0;
+        if (n->kind == DN_ELEMENT) {
+            for (int k = 0; k < depth && k < 40; k++) puts(" ");
+            puts(dom_tag_name(d, i));
+            const char *id = dom_attr(d, i, "id"), *cl = dom_attr(d, i, "class");
+            if (id && *id) { puts("#"); put_cut(id, 30); }
+            if (cl && *cl) { puts("."); put_cut(cl, 40); }
+            if (dom_attr(d, i, "data-zh")) puts(" [host]");
+            if (dom_attr(d, i, "data-zl")) puts(" [slotted]");
+            putc('\n');
+            lines++;
+            skip = n->tag == T_SCRIPT || n->tag == T_STYLE || w_same(dom_tag_name(d, i), "svg");
+        } else if (n->kind == DN_TEXT && n->text >= 0) {
+            const char *t = d->arena + n->text;
+            int words = 0;
+            for (const char *q = t; *q && !words; q++) words = *q != ' ' && *q != '\n' && *q != '\t' && *q != '\r';
+            if (words) {
+                for (int k = 0; k < depth && k < 40; k++) puts(" ");
+                puts("\"");
+                while (*t == ' ' || *t == '\n' || *t == '\t' || *t == '\r') t++;
+                put_cut(t, 60);
+                puts("\"\n");
+                lines++;
+            }
+        }
+        if (!skip) { i = dom_next(d, i, -1); continue; }
+        /* Past what is inside it. */
+        while (i >= 0 && d->nodes[i].next < 0) i = d->nodes[i].parent;
+        if (i >= 0) i = d->nodes[i].next;
+    }
+    if (lines >= most) puts("...\n");
+}
 
 static int number_of(const char *s) {
     int v = 0;
@@ -91,6 +150,7 @@ static void console_line(const char *s, u32 n) {
 int main(int argc, char **argv) {
     if (argc < 2) { puts("scriptdump ADDRESS [SECONDS] [text]\n"); return 2; }
     for (int a = 2; a < argc; a++) if (w_same(argv[a], "text")) show_text = 1;
+    for (int a = 2; a < argc; a++) if (w_same(argv[a], "tree")) show_tree = 1;
 
     src = (char *)map(SRC_MAX, PROT_READ | PROT_WRITE);
     cssbuf = (char *)map(CSS_MAX, PROT_READ | PROT_WRITE);
@@ -188,5 +248,38 @@ int main(int argc, char **argv) {
     puts("status: ");
     puts(status);
     putc('\n');
+
+    for (int a = 2; a < argc; a++) {
+        if (!w_starts_fold(argv[a], "js=") || !jsdom_live()) continue;
+        const char *code = argv[a] + 3;
+        jd_J.error[0] = 0;
+        jval v = js_eval_source(&jd_J, js_str_n(&jd_J, code, (u32)w_len(code)), jd_J.global, jd_J.global_lex,
+                                js_from_obj(jd_J.global_obj));
+        puts("js: ");
+        if (jd_J.sig != JS_OK) {
+            puts("stopped: ");
+            puts(jd_J.error);
+            jd_J.sig = JS_OK;
+        } else {
+            jstr *t = js_to_str(&jd_J, v);
+            for (u32 i = 0; t && i < t->len; i++) { char one[2] = { t->s[i], 0 }; puts(one); }
+        }
+        puts("\n");
+    }
+
+    if (show_tree) {
+        relayout(844);
+        const ddoc *d = laid ? laid : &doc;
+        puts("shadow trees ");
+        putn(trees_n);
+        puts(", laid out as ");
+        putn(page.nitems);
+        puts(" items and ");
+        putn(lay_words(&page));
+        puts(" words, ");
+        putn(page.height);
+        puts(" pixels down\n");
+        outline(d, 1500);
+    }
     return 0;
 }
