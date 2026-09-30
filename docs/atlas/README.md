@@ -146,6 +146,12 @@ numbered files are still to 6048716; where they disagree with this list, this li
   ran out, and ended the session, so a server quiet mid answer looked finished. Records are now read as
   they arrive and kept between reads (`fill_record`); only an ended connection ends the session.
   [tls 1.3]: two checks.
+- **An answer that stops short, said and not kept (11 §10.1 #23, fetch.h).** An answer that stopped before
+  its length or its last chunk (the server went quiet, the connection dropped, the buffer was full) was shown
+  as though whole and its connection kept, so the rest of it could arrive as the next request's answer. It is
+  now marked (`cut`: "shown as far as it came", a cut script not run, a cut sheet asked for again) and its
+  connection dropped. An interim 103 ahead of an answer is passed over, and a 204 or 304 is not waited on for
+  a body. wiretest: five checks (the test server waits for the client to act rather than for a time).
 - **The page's own background (11, layout.h, browser.c).** The html element's background, or else the
   body's, fills the whole window behind the page (`ldoc.canvas`), as CSS carries it to the canvas: a dark
   page was dark for the height of its words and white below. layouttest: three checks; browsercheck: a

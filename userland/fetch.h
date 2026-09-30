@@ -47,6 +47,7 @@ typedef struct {
     char *body;
     int   len;
     int   truncated;               /* the page is bigger than the buffer */
+    int   cut;                     /* the answer stopped before its end */
     char  location[URL_TEXT];      /* where a redirect points */
     char  ctype[64];
     int   secure;                  /* it was encrypted, and to whom it said */
@@ -412,6 +413,18 @@ static inline int wh_hex(const char *s, int len, int *used) {
 
 /* Where the headers end, or -1. A server is entitled to use bare newlines,
    and one that does is not broken enough to refuse to talk to. */
+/* The status of the answer at the front of buf, or 0 when it does not start
+   like one. */
+static inline int wh_status(const char *buf, int len) {
+    if (len < 12 || buf[0] != 'H') return 0;
+    int s = 0;
+    for (int i = 9; i < 12; i++) {
+        if (buf[i] < '0' || buf[i] > '9') return 0;
+        s = s * 10 + (buf[i] - '0');
+    }
+    return s;
+}
+
 static inline int wh_split(const char *buf, int len, int *skip) {
     for (int i = 0; i + 1 < len; i++) {
         if (buf[i] == '\n' && buf[i + 1] == '\n') { *skip = 2; return i; }
@@ -516,6 +529,7 @@ static inline int web_fetch_once(const url_t *u, const char *body,
     r->body = buf;
     r->len = 0;
     r->truncated = 0;
+    r->cut = 0;
     r->location[0] = 0;
     r->ctype[0] = 0;
     r->secure = 0;
@@ -619,7 +633,7 @@ static inline int web_fetch_once(const url_t *u, const char *body,
         }
     }
 
-    int total = 0, quiet = 0;
+    int total = 0, quiet = 0, ended = 0;
     int hlen = -1, skip = 0, want = -1, chunked = 0;
 
     for (;;) {
@@ -628,7 +642,7 @@ static inline int web_fetch_once(const url_t *u, const char *body,
         int piece = room > 32768 ? 32768 : room;
 
         int got = recv(ka_sock, buf + total, piece);
-        if (got == NET_EOF) break;
+        if (got == NET_EOF) { ended = 1; break; }
         if (got < 0) break;
         if (got == 0) {
             /* Nothing for a while. Three of those in a row is a server that
@@ -643,12 +657,28 @@ static inline int web_fetch_once(const url_t *u, const char *body,
 
         if (hlen < 0) {
             hlen = wh_split(buf, total, &skip);
+            /* An interim answer (103 Early Hints, 100 Continue) comes down the
+               connection ahead of the real one, and was taken for the answer,
+               with the real one as its body. Passed over. 101 is not one: it
+               is the connection turning into something else. */
+            for (int st; hlen >= 0 && (st = wh_status(buf, total)) >= 100
+                         && st < 200 && st != 101; ) {
+                int gone = hlen + skip;
+                for (int i = gone; i <= total; i++) buf[i - gone] = buf[i];
+                total -= gone;
+                hlen = wh_split(buf, total, &skip);
+            }
             if (hlen >= 0) {
                 char v[64];
                 if (wh_header(buf, hlen, "transfer-encoding", v, sizeof(v)))
                     chunked = w_starts_fold(v, "chunked");
                 if (!chunked && wh_header(buf, hlen, "content-length", v, sizeof(v)))
                     want = wh_number(v);
+                /* These have no body whatever the head says (RFC 9112 6.3),
+                   and one sent without a length was waited on for three
+                   quiet reads. */
+                int st = wh_status(buf, total);
+                if (st == 204 || st == 304) { want = 0; chunked = 0; }
             }
         }
 
@@ -672,11 +702,25 @@ static inline int web_fetch_once(const url_t *u, const char *body,
         }
     }
 
+    /* Whether the answer reached the end it said it had: its length, the
+       zero sized last piece, or with neither the close. One that stopped
+       short -- the server went quiet, or the connection dropped, or the
+       buffer was full -- is marked, so the reader can be told, and its
+       connection is not kept: the rest of this answer may still be on its way
+       down it, and the next request would read it as its own answer. */
+    int whole = 0;
+    if (hlen >= 0) {
+        if (want >= 0) whole = total - hlen - skip >= want;
+        else if (chunked) whole = quiet == 99;
+        else whole = ended;
+    }
+    if (!whole && !r->truncated) r->cut = 1;
+
     /* Kept only when the answer said how long it was. Where it did not,
        the close is the only thing that marks the end and there is nothing
        to keep. */
     int keep = 0;
-    if (hlen >= 0 && (want >= 0 || chunked)) {
+    if (whole && hlen >= 0 && (want >= 0 || chunked)) {
         char conn[32];
         if (!wh_header(buf, hlen, "connection", conn, sizeof(conn))
             || !w_starts_fold(conn, "close"))
@@ -699,14 +743,7 @@ static inline int web_fetch_once(const url_t *u, const char *body,
     if (hlen < 0) hlen = wh_split(buf, total, &skip);
     if (hlen < 0) return WEB_ERR_HEADERS;
 
-    if (total > 12 && buf[0] == 'H') {
-        int s = 0;
-        for (int i = 9; i < 12; i++) {
-            if (buf[i] < '0' || buf[i] > '9') { s = 0; break; }
-            s = s * 10 + (buf[i] - '0');
-        }
-        r->status = s;
-    }
+    r->status = wh_status(buf, total);
 
     wh_header(buf, hlen, "location", r->location, sizeof(r->location));
     wh_header(buf, hlen, "content-type", r->ctype, sizeof(r->ctype));

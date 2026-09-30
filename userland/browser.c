@@ -1208,10 +1208,11 @@ static int gather_linked_sheets(int *fetched, int *skipped) {
 
         response_t r;
         int rc = web_get(&u, cssbuf, CSS_MAX, &r);
-        /* Asked for again, once, when the answer was no answer or the server
-           said it was busy: one sheet that failed on the way is a page drawn
-           with none of its style (Wikipedia's, after a burst of fetching). */
-        if (rc < 0 || rc == 429 || rc >= 500) rc = web_get(&u, cssbuf, CSS_MAX, &r);
+        /* Asked for again, once, when the answer was no answer, the server
+           said it was busy or it stopped short: one sheet that failed on the
+           way is a page drawn with none of its style (Wikipedia's, after a
+           burst of fetching). */
+        if (rc < 0 || rc == 429 || rc >= 500 || r.cut) rc = web_get(&u, cssbuf, CSS_MAX, &r);
         if (rc < 200 || rc >= 300 || r.len <= 0) { (*skipped)++; continue; }
         gather_imports(&u, r.body, r.len, fetched);
         css_parse_sheet(&u, r.body, r.len, lo, hi);
@@ -1248,7 +1249,7 @@ static int fetch_script(const char *src, const char **out) {
     if (rc < 200 || rc >= 300 || r.len <= 0) return 0;
     /* Half a script is a syntax error somewhere in its middle, and the page
        is better told the file would not come. */
-    if (r.truncated || scripts_bytes + r.len > SCRIPTS_BYTES) return 0;
+    if (r.truncated || r.cut || scripts_bytes + r.len > SCRIPTS_BYTES) return 0;
 
     scripts_outside++;
     scripts_bytes += r.len;
@@ -2049,6 +2050,8 @@ static void load(const char *address, int width, int keep_scroll) {
        afternoon working out which limit a page had reached. */
     else if (reply.truncated)
         say("shown as far as it fits: more page arrived than this can hold", 0);
+    else if (reply.cut)
+        say("shown as far as it came: the server stopped before the end of the page", 0);
     else if (doc.overflowed)
         say("shown as far as it fits: more markup than this can hold", 0);
     else if (page.overflowed)

@@ -69,6 +69,10 @@ def main():
                   conns > 0 and conns * 2 <= reqs)
             print("      %d requests over %d connection(s)" % (reqs, conns))
 
+            for took, what in srv.stalls():
+                print("      the answer that stopped short: the client %s after %.1fs"
+                      % (what, took))
+
             # Which cookies actually travelled, as the server saw them.
             seen = srv.cookies()
             c.add("a request before anything was set carried no cookie",

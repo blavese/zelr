@@ -139,6 +139,35 @@ int main(int argc, char **argv) {
        !body_has("sid=abc123"));
     ok("and deleting it left the others alone", body_has("pref=dark"));
 
+    /* --- an answer that stops short --------------------------------------
+     *
+     * The server says 2000 bytes, sends 500 and goes quiet for longer than a
+     * fetch waits; then it sends the rest, which is made to look like an
+     * answer of its own. The fetch has to say the page stopped short, and
+     * must not keep the connection: the next request down it read the rest
+     * of this answer as its own. */
+    int stalled = get(base, "/stalls");
+    ok("an answer that stops before its length says so",
+       stalled == 500 && reply.cut && !reply.truncated);
+    get(base, "/one");
+    ok("and the answer after it is its own, not the rest of that one",
+       body_has("marker-alpha") && !body_has("stale-tail"));
+    get(base, "/two");
+    ok("and so is the one after that", body_has("marker-beta") && !reply.cut);
+
+    /* An early answer (103) ahead of the real one was taken for the answer. */
+    int early = get(base, "/early-hints");
+    ok("an early answer ahead of the real one is passed over",
+       early > 0 && reply.status == 200 && body_has("marker-early"));
+
+    /* No Content-Length on a 204, which has no body: it was waited on for
+       three quiet reads, twelve seconds. */
+    int began = ticks();
+    get(base, "/no-body");
+    int took = ticks() - began;
+    ok("an answer with no body is not waited on for one",
+       reply.status == 204 && reply.len == 0 && !reply.cut && took < 300);
+
     /* --- three at once ----------------------------------------------------
      *
      * This is the one that could not be written before. The stack held a

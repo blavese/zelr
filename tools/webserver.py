@@ -610,6 +610,10 @@ COUNTS = {"connections": 0, "requests": 0}
 # from the side that would actually act on it.
 COOKIES = []
 
+# What a client did with an answer that stopped short (/stalls): how long it
+# waited, and whether it closed the connection or asked again down it.
+STALLS = []
+
 GZIPPED = b"""<html><head><title>compressed</title></head><body>
 <h1>Sent compressed</h1>
 <p>This page went over the wire deflated, with a gzip wrapper round it, and
@@ -855,6 +859,53 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._send(b"moved", status=301, extra=[("Location", "second")])
         elif path == "/loop":
             self._send(b"round", status=302, extra=[("Location", "/loop")])
+        elif path == "/stalls":
+            # Promises 2000 bytes, sends 500 and goes quiet until the client
+            # does something. One that gave up closes the connection. One that
+            # kept it asks again down it, and is sent the rest -- made to look
+            # like an answer of its own, which it takes for its next answer.
+            # Waited for rather than timed: how long a guest's four seconds
+            # take here depends on how busy the host is.
+            import select
+            import time
+            fake = b""
+            for n in range(1400, 1500):
+                head = (b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n"
+                        b"Content-Length: %d\r\n\r\n" % n)
+                if len(head) + n == 1500:
+                    fake = head + b"<p>stale-tail</p>" + b" " * (n - 17)
+                    break
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain")
+            self.send_header("Content-Length", "2000")
+            self.end_headers()
+            began = time.time()
+            try:
+                self.wfile.write(b"x" * 500)
+                self.wfile.flush()
+                sock = self.connection
+                ready, _, _ = select.select([sock], [], [], 90)
+                if ready and sock.recv(1, socket.MSG_PEEK):
+                    STALLS.append((time.time() - began, "asked again"))
+                    self.wfile.write(fake)
+                    self.wfile.flush()
+                else:
+                    STALLS.append((time.time() - began,
+                                   "closed" if ready else "did nothing"))
+                    self.close_connection = True
+            except OSError:
+                STALLS.append((time.time() - began, "closed"))
+                self.close_connection = True
+        elif path == "/early-hints":
+            # An interim answer first, as servers that hint at what a page
+            # will need send it, then the real one.
+            self.wfile.write(b"HTTP/1.1 103 Early Hints\r\n"
+                             b"Link: </style.css>; rel=preload\r\n\r\n")
+            self._send(b"<html><body><p>marker-early</p></body></html>")
+        elif path == "/no-body":
+            # No content, and so no length, with the connection kept.
+            self.send_response(204)
+            self.end_headers()
         elif path == "/slow":
             # A body that arrives in dribs, to catch anything that treats a
             # quiet moment as the end of the answer.
@@ -877,6 +928,10 @@ class Server:
     def counts(self):
         """Connections opened and requests served, since the last reset."""
         return dict(COUNTS)
+
+    def stalls(self):
+        """What clients did with the answer that stopped short."""
+        return list(STALLS)
 
     def cookies(self):
         """The Cookie header of every request, oldest first."""
