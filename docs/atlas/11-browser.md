@@ -815,6 +815,7 @@ https inside the browser (no TLS test server; `tlscheck.py` uses the kernel `fet
 35. **Unquoted attribute ending in `/` self-closes** (dom.h:640): `<a href=/>Home</a>` or `<a href=https://x.com/>` is treated as `<a/>` and its text is not a link.
 36. **`<` not followed by a letter starts a tag** (dom.h:571-591): text like `a < b` or `<3` creates a nameless/odd element that swallows text up to the next `>` and stays open.
 37. **`&#0;` writes a NUL into the text arena** (html.h:176, 216 → `html_fold_cp(0)`), truncating that text node; other control code points are passed through.
+37b. Since 0.77.0 a `<template>`'s children are moved into its content fragment when scripts open (`jsdom_open`, `jd_template_content`), so no script sees them as children: made on the first read of `.content`, they had been children until then, and Alpine's walk went into them. Also since 0.77.0, scriptdump prints the page's console output.
 38. **Script `type` is ignored** (jsdom.h:1248-1281): `application/ld+json`, templates and `type=module` are run as classic scripts; the first error recorded (`jd_note_error` keeps only the first) can mask a real one.
 39. **`load` events go to `document` only** (jsdom.h:1293-1297 dispatch with node -1): `window.addEventListener('load', …)` throws (window is the global object without that method), `window.onload` and `<body onload>` never run; XHR supports only `onload`.
 40. **`visibility:hidden` removes the box and its space** (layout.h:1084, 1144), unlike CSS; `opacity` below 0.2 does the same (css.h:1189-1194).

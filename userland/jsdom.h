@@ -6586,5 +6586,15 @@ static int jsdom_open(ddoc *d, csheet *sheet) {
         jd_setup_document(&jd_J, document);
         js_declare(&jd_J, jd_J.global, js_str(&jd_J, "document"), js_from_obj(document));
     }
+
+    /* A template's children are its content, a fragment of its own, from
+       the start. Made on the first read of .content, they were the
+       template's children until then: Alpine's walk of the page went into
+       them, queued what their attributes said, and ran it after the
+       template's x-teleport had moved them out from under their scope --
+       "isCategoryExcluded is not defined", 28 times on Ars Technica. */
+    for (int i = 0; i < jd_parsed; i++)
+        if (d->nodes[i].kind == DN_ELEMENT && d->nodes[i].first >= 0 && jd_is_template(i))
+            jd_template_content(i);
     return 1;
 }

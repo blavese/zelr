@@ -76,6 +76,18 @@ static void any_error(const char *err, int line) {
     putc('\n');
 }
 
+/* What the page's scripts write to the console, which is where a library
+   that catches its own errors says what they were (Alpine does). */
+static void console_line(const char *s, u32 n) {
+    static int fresh = 1;
+    for (u32 i = 0; i < n; i++) {
+        if (fresh) { puts("  console: "); fresh = 0; }
+        char one[2] = { s[i], 0 };
+        puts(one);
+        if (s[i] == '\n') fresh = 1;
+    }
+}
+
 int main(int argc, char **argv) {
     if (argc < 2) { puts("scriptdump ADDRESS [SECONDS] [text]\n"); return 2; }
     for (int a = 2; a < argc; a++) if (w_same(argv[a], "text")) show_text = 1;
@@ -92,6 +104,7 @@ int main(int argc, char **argv) {
 
     jd_script_done = one_done;
     jd_on_error = any_error;
+    js_print_hook = console_line;
     set_address(argv[1]);
     int t0 = ticks();
     load(address, 844, 0);

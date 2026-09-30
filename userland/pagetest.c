@@ -1498,6 +1498,15 @@ int main(void) {
                    "document.title = document.getElementById('w').textContent;</script></body>"),
             "arrived");
 
+        /* A template's children are its content from the start: until its
+           content was first read they were children, and a walk of the page
+           went into them. */
+        oks("a template has no children, only content, from the start",
+            titled("<body><template id=t><p id=in>x</p></template><script>var t = document.getElementById('t');"
+                   "document.title = [t.firstElementChild, t.childNodes.length, t.content.firstElementChild.id,"
+                   " document.getElementById('in'), t.innerHTML].join(' ');</script></body>"),
+            " 0 in  <p id=\"in\">x</p>");
+
         /* Markup set into a script is its code, as the standard reads it
            there; Next.js sets the scripts it makes this way, and a `<` in the
            code began a tag. In a textarea only the entities are read. */

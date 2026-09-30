@@ -116,6 +116,10 @@ numbered files are still to 6048716; where they disagree with this list, this li
   Alpine evaluates in `with` over a proxy of its components' data. jstest: one check.
 - **Errors that say which value was undefined (12, jsrun.h).** "cannot read forEach of undefined (i(...))" instead of
   only "at line 1" in a bundle on one line. jstest: one check.
+- **A template's children are its content from the start (11, jsdom.h).** Until its content was first read a
+  template's children were children, and Alpine's walk went into them and lost their scope when x-teleport moved
+  them (Ars Technica, "isCategoryExcluded is not defined" 28 times). pagetest: one check. scriptdump prints the
+  console.
 - **Scripts may have what the machine can spare (12, js.h, jsdom.h).** A page's script memory, 24 MB on every
   machine with nothing freed until the page is left, is now each context's `mem_cap`, raised to a quarter of
   the free memory when the page opens and again when its scripts start (the browser says what is free after
