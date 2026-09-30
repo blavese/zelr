@@ -62,6 +62,11 @@ static const char *content_of(int el) {
     return text;
 }
 
+/* What the layout drew at a point, for elementFromPoint: here whatever node
+   a check puts in point_node. */
+static int point_node = -1;
+static int point_at(int x, int y) { (void)x; (void)y; return point_node; }
+
 /* What jsdom_run used to be: open a world, run what is in the page, and say
    whether anything changed. The browser does these three separately now
    because it keeps the world afterwards, and so does everything below here
@@ -2088,6 +2093,18 @@ int main(void) {
                "loose.innerHTML = '<inner-el n=x></inner-el>';"
                "document.title = first + ' | ' + log.join(',') + ' | ' + loose.firstChild.isConnected;</script></body>"),
         "s1 true,outer,s2 true,l3 true | outer,s2 true,l3 true,s1 true | false");
+    oks("an event from inside a shadow tree goes on to its element if it is composed, which it is the target of beyond it",
+        titled("<body><x-b id=h></x-b><script>var h = document.getElementById('h'), r = h.attachShadow({ mode: 'open' });"
+               "r.innerHTML = '<button id=in>go</button>'; var b = r.getElementById('in'), got = [];"
+               "document.addEventListener('click', function (e) { got.push('doc ' + (e.target === h)); });"
+               "r.addEventListener('click', function (e) { got.push('root ' + (e.target === b)); });"
+               "h.addEventListener('click', function (e) { got.push('host ' + (e.target === h) + ' ' + e.composedPath().length); });"
+               "document.addEventListener('ping', function () { got.push('doc ping'); });"
+               "r.addEventListener('ping', function (e) { got.push('root ping ' + (e.target === b)); });"
+               "b.click(); b.dispatchEvent(new Event('ping', { bubbles: true }));"
+               "b.dispatchEvent(new Event('pong', { bubbles: true, composed: true }));"
+               "document.addEventListener('pong', function () {}); document.title = got.join(',');</script></body>"),
+        "root true,host true 7,doc true,root ping true");
     oks("an element of a defined name is upgraded when markup, cloneNode or importNode makes it, but not in a template",
         titled("<body><template id=t><x-up></x-up></template><script>var log = [];"
                "class XUp extends HTMLElement { constructor() { super(); this.ready = 'made'; }"
@@ -2104,6 +2121,51 @@ int main(void) {
                "document.title = [made(a), made(c), made(i), made(raw), made(copy), made(adopted),"
                " made(document.getElementById('t2').content.firstChild), log.join(',')].join(' ');</script></body>"),
         "true true true false false true false options made,in");
+    oks("a slot says what it is given, flattened or not, and an element which slot it went to",
+        titled("<body><x-s id=h><b slot=a>one</b>text<i>two</i><u slot=zz>nowhere</u></x-s><x-c id=k><b>shut</b></x-c><script>"
+               "var h = document.getElementById('h'), r = h.attachShadow({ mode: 'open' });"
+               "r.innerHTML = '<slot name=a id=sa></slot><slot id=sd></slot><slot name=a id=sa2></slot><slot name=e id=se><p>fallback</p></slot>';"
+               "var k = document.getElementById('k'), kr = k.attachShadow({ mode: 'closed' }); kr.innerHTML = '<slot></slot>';"
+               "var names = function (l) { return l.map(function (n) { return n.nodeType === 3 ? '#' + n.data : n.localName; }).join('+'); };"
+               "var g = function (id) { return r.getElementById(id); };"
+               "document.title = [names(g('sa').assignedNodes()), names(g('sd').assignedNodes()), names(g('sd').assignedElements()),"
+               " names(g('sa2').assignedNodes()), names(g('se').assignedNodes()), names(g('se').assignedNodes({ flatten: true })),"
+               " h.firstChild.assignedSlot === g('sa'), h.childNodes[1].assignedSlot === g('sd'), String(h.lastChild.assignedSlot),"
+               " String(k.firstChild.assignedSlot), g('sd') instanceof HTMLSlotElement].join(' ');</script></body>"),
+        "b #text+i i   p true true null null true");
+    {
+        load("<body><x-w id=h></x-w><script>var h = document.getElementById('h'), r = h.attachShadow({ mode: 'open' }), heard = [];"
+             "r.innerHTML = '<slot name=n id=n></slot><slot id=d></slot>';"
+             "r.getElementById('d').addEventListener('slotchange', function (e) { heard.push('d ' + e.target.assignedNodes().length); });"
+             "r.getElementById('n').addEventListener('slotchange', function () { heard.push('n'); });"
+             "h.appendChild(document.createElement('span')); h.appendChild(document.createElement('em'));"
+             "document.title = 'waiting ' + heard.length;"
+             "setTimeout(function () { document.title = heard.join(','); }, 50);</script></body>");
+        char err[128];
+        run_scripts(&page, err, (int)sizeof(err), 0);
+        oks("a slot hears slotchange, once, after what it is given has changed", page.title >= 0 ? page.arena + page.title : "",
+            "waiting 0");
+        pump_until(3, 1000);
+        oks("and not the slot of another name", page.title >= 0 ? page.arena + page.title : "", "d 2");
+    }
+    {
+        load("<body><x-p id=h></x-p><script>var h = document.getElementById('h'), r = h.attachShadow({ mode: 'open' });"
+             "r.innerHTML = '<p><b id=deep>in the tree</b></p>';"
+             "setTimeout(function () { var e = document.elementFromPoint(5, 5), all = document.elementsFromPoint(5, 5);"
+             " document.title = [e === h, all[0] === h, e && e.localName].join(' '); }, 10);</script></body>");
+        char err[128];
+        run_scripts(&page, err, (int)sizeof(err), 0);
+        point_node = -1;
+        for (int i = 0; i < page.count; i++)
+            if (page.nodes[i].kind == DN_ELEMENT && page.nodes[i].tag == T_B) point_node = i;
+        jsdom_points_with(point_at);
+        jsdom_view(800, 600, 0);
+        pump_until(1, 1000);
+        oks("elementFromPoint over a shadow tree's drawing is the tree's element", page.title >= 0 ? page.arena + page.title : "",
+            "true true x-p");
+        jsdom_points_with(0);
+        point_node = -1;
+    }
     oks("document.fonts is empty and loaded, and what it is asked to load comes to nothing at once",
         titled("<body><script>var f = document.fonts, got = 'waiting';"
                "f.ready.then(function (s) { return f.load('12px serif').then(function (l) { got = (s === f) + ' ' + l.length; }); })"

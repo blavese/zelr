@@ -494,6 +494,9 @@ static void jd_record_text(int target, const char *old);
 static void jd_custom_connected(int top);
 static void jd_custom_created(int top);
 static int jd_inert(int x);
+static void jd_slots_touch(int parent, int child);
+static int jd_fire_simple(int node, const char *type, int bubbles, int cancelable);
+static int jd_later_native(void (*fn)(jval arg), jval arg, int ticks_from_now);
 static void jd_custom_disconnected(int top);
 static void jd_custom_attr(int node, const char *name, const char *old, const char *now);
 static int  jd_ncustom;
@@ -665,6 +668,7 @@ static void jd_remove(int child) {
     dom_unlink(jd_doc, child);
     jd_record_children(parent, -1, child, prev, next);
     jd_touched();
+    jd_slots_touch(parent, child);
     if (was_in) jd_custom_disconnected(child);
 }
 
@@ -705,6 +709,7 @@ static void jd_insert(int parent, int child, int before) {
     else dom_append(jd_doc, parent, child);
     jd_record_children(parent, child, -1, jd_doc->nodes[child].prev, jd_doc->nodes[child].next);
     jd_touched();
+    jd_slots_touch(parent, child);
     /* A script put into the page runs, which is how a page loads the rest
        of itself: a script element made, given a src and appended -- or made,
        appended, and then given its text. */
@@ -2416,6 +2421,124 @@ static jval nat_shadow_host(jctx *J, jval t, jval *a, int n) {
     (void)a; (void)n;
     jval h = js_is_obj(t) ? jd_kept(t.obj, jd_k_host) : js_undef();
     return h.t == JS_OBJ ? h : jd_illegal(J);
+}
+
+/* --- slots ------------------------------------------------------------------------------
+ *
+ * What a shadow tree's slot is given: its element's children whose slot
+ * attribute is its name (the rest go to a slot with none), when it is the
+ * first slot of that name in the tree -- as the browser draws them (dom.h,
+ * dom_flat). FAST's buttons ask theirs whether they hold an icon, and every
+ * one of MSN's stopped on assignedNodes. A slot is told by slotchange, as a
+ * task, when a child of its element that it would be given comes or goes, and
+ * when it arrives in a tree whose element has children for it. */
+static u8 jd_slot_pending[DOM_NODES / 8];
+
+static int jd_is_slot(int x) {
+    return jd_doc->nodes[x].kind == DN_ELEMENT && jd_doc->nodes[x].tag == T_OTHER
+           && w_same(dom_tag_name(jd_doc, x), "slot");
+}
+
+/* The shadow root a node is in, or -1. */
+static int jd_slot_root(int x) {
+    int top = x;
+    for (int k = 0; top >= 0 && jd_doc->nodes[top].parent >= 0 && k < DOM_NODES; k++) top = jd_doc->nodes[top].parent;
+    return top >= 0 && jd_shadow_find(top, 1) >= 0 ? top : -1;
+}
+
+static const char *jd_slot_name(int sl) {
+    const char *v = dom_attr(jd_doc, sl, "name");
+    return v ? v : "";
+}
+
+/* The name of the slot a child of a shadow tree's element goes to. */
+static const char *jd_slottable_name(int c) {
+    const char *v = jd_doc->nodes[c].kind == DN_ELEMENT ? dom_attr(jd_doc, c, "slot") : 0;
+    return v ? v : "";
+}
+
+/* The first slot of a name in a tree, or -1. */
+static int jd_slot_for(int root, const char *name) {
+    for (int i = jd_doc->nodes[root].first; i >= 0; i = jd_walk_next(i, root))
+        if (jd_is_slot(i) && w_same(jd_slot_name(i), name)) return i;
+    return -1;
+}
+
+static int jd_slottable(int c) {
+    int k = jd_doc->nodes[c].kind;
+    return k == DN_ELEMENT || k == DN_TEXT;
+}
+
+static jval jd_assigned(jctx *J, jval t, jval *a, int n, int elements) {
+    int sl = jd_el_of(t);
+    if (sl < 0) return jd_illegal(J);
+    int flatten = n > 0 && js_is_obj(a[0]) && js_to_bool(js_get(J, a[0], js_str(J, "flatten")));
+    if (J->sig != JS_OK) return js_undef();
+    jobj *arr = js_array(J);
+    if (!arr) return js_null();
+    int root = jd_slot_root(sl), got = 0;
+    int s = root >= 0 ? jd_shadow_find(root, 1) : -1;
+    if (s >= 0 && jd_slot_for(root, jd_slot_name(sl)) == sl)
+        for (int c = jd_doc->nodes[jd_shadow_host[s]].first; c >= 0; c = jd_doc->nodes[c].next) {
+            if (!jd_slottable(c) || !w_same(jd_slottable_name(c), jd_slot_name(sl))) continue;
+            got = 1;
+            if (!elements || jd_doc->nodes[c].kind == DN_ELEMENT) js_arr_push(J, arr, jd_el_value(J, c));
+        }
+    /* Flattened, a slot given nothing is what it holds itself. */
+    if (flatten && !got)
+        for (int c = jd_doc->nodes[sl].first; c >= 0; c = jd_doc->nodes[c].next)
+            if (jd_slottable(c) && (!elements || jd_doc->nodes[c].kind == DN_ELEMENT))
+                js_arr_push(J, arr, jd_el_value(J, c));
+    return js_from_obj(arr);
+}
+
+static jval nat_slot_assigned_nodes(jctx *J, jval t, jval *a, int n) { return jd_assigned(J, t, a, n, 0); }
+static jval nat_slot_assigned_elements(jctx *J, jval t, jval *a, int n) { return jd_assigned(J, t, a, n, 1); }
+
+/* The slot an element or a text is given to, unless its tree is closed. */
+static jval nat_assigned_slot(jctx *J, jval t, jval *a, int n) {
+    (void)a; (void)n;
+    int x = jd_node_of(t);
+    int p = x >= 0 ? jd_doc->nodes[x].parent : -1;
+    int s = p >= 0 ? jd_shadow_find(p, 0) : -1;
+    if (s < 0) return js_null();
+    jobj *r = jd_element(J, jd_shadow_root[s]);
+    jval m = r ? jd_kept(r, jd_k_mode) : js_undef();
+    if (m.t != JS_STR || !js_str_is(m.str, "open")) return js_null();
+    int sl = jd_slot_for(jd_shadow_root[s], jd_slottable_name(x));
+    return sl >= 0 ? jd_el_value(J, sl) : js_null();
+}
+
+static void jd_slotchange_due(jval arg) {
+    int sl = (int)arg.num;
+    if (sl < 0 || sl >= DOM_NODES) return;
+    jd_slot_pending[sl >> 3] &= (u8)~(1 << (sl & 7));
+    if (sl < jd_doc->count) jd_fire_simple(sl, "slotchange", 1, 0);
+}
+
+static void jd_slot_signal(int sl) {
+    if (sl < 0 || sl >= DOM_NODES || (jd_slot_pending[sl >> 3] & (1 << (sl & 7)))) return;
+    jd_slot_pending[sl >> 3] |= (u8)(1 << (sl & 7));
+    jd_later_native(jd_slotchange_due, js_num(sl), 0);
+}
+
+/* A child has come under parent or gone from it. */
+static void jd_slots_touch(int parent, int child) {
+    if (!jd_nshadow || parent < 0 || child < 0) return;
+    int s = jd_shadow_find(parent, 0);
+    if (s >= 0) {
+        if (jd_slottable(child)) jd_slot_signal(jd_slot_for(jd_shadow_root[s], jd_slottable_name(child)));
+        return;
+    }
+    /* Slots arriving in a tree whose element has children for them. */
+    int root = jd_doc->nodes[child].parent >= 0 ? jd_slot_root(parent) : -1;
+    int hs = root >= 0 ? jd_shadow_find(root, 1) : -1;
+    if (hs < 0 || jd_doc->nodes[jd_shadow_host[hs]].first < 0) return;
+    for (int i = child; i >= 0; i = jd_walk_next(i, child)) {
+        if (!jd_is_slot(i) || jd_slot_for(root, jd_slot_name(i)) != i) continue;
+        for (int c = jd_doc->nodes[jd_shadow_host[hs]].first; c >= 0; c = jd_doc->nodes[c].next)
+            if (jd_slottable(c) && w_same(jd_slottable_name(c), jd_slot_name(i))) { jd_slot_signal(i); break; }
+    }
 }
 
 static jval nat_shadow_mode(jctx *J, jval t, jval *a, int n) {
@@ -4591,6 +4714,13 @@ static void jd_deliver(jobj *on, int node, jobj *ev, const jstr *type, int phase
 
 #define JD_PATH_MAX 1024
 
+/* The target a stop on the path sees (jd_dispatch_to's seen). */
+static void jd_seen_as(jobj *ev, int host, jval given) {
+    jval v = host >= 0 ? jd_el_value(&jd_J, host) : given;
+    js_set(&jd_J, ev, "target", v);
+    js_set(&jd_J, ev, "srcElement", v);
+}
+
 /* An event sent to a target: a node's object, the document, the window, or
    anything else. `as_target` is what event.target says, which for the
    window's load is the document. Returns whether the default was
@@ -4599,28 +4729,39 @@ static int jd_dispatch_to(jobj *ev, jval target, jval as_target) {
     if (!jd_open || !jd_doc || jd_spent() || !ev || !js_is_obj(target)) return 0;
     jobj *path[JD_PATH_MAX];
     int nodes[JD_PATH_MAX];
-    int np = 0;
+    /* What each stop sees as the target: the one given (-1), or past a shadow
+       root the element whose root it is, as the standard retargets it. */
+    int seen[JD_PATH_MAX];
+    int np = 0, crossed = 0;
     int tn = jd_node_of(target);
     if (tn >= 0) {
-        int at = tn;
-        for (; at >= 0 && np < JD_PATH_MAX - 2; at = jd_doc->nodes[at].parent) {
+        int at = tn, as = -1;
+        int composed = js_to_bool(jd_ev_get(ev, "composed"));
+        while (at >= 0 && np < JD_PATH_MAX - 2) {
             jobj *o = jd_element(&jd_J, at);
             if (!o) break;
             path[np] = o;
+            seen[np] = as;
             nodes[np++] = at;
             if (jd_is_top(at)) break;
+            int p = jd_doc->nodes[at].parent;
+            if (p < 0 && composed) {
+                int s = jd_shadow_find(at, 1);
+                if (s >= 0) as = p = jd_shadow_host[s], crossed = 1;
+            }
+            at = p;
         }
-        if (jd_is_top(at) && jd_document_obj) {
-            path[np] = jd_document_obj; nodes[np++] = -1;
+        if (at >= 0 && jd_is_top(at) && jd_document_obj) {
+            path[np] = jd_document_obj; seen[np] = as; nodes[np++] = -1;
             if (jd_J.global_obj && !js_str_is(js_to_str(&jd_J, jd_ev_get(ev, "type")), "load")) {
-                path[np] = jd_J.global_obj; nodes[np++] = -1;
+                path[np] = jd_J.global_obj; seen[np] = as; nodes[np++] = -1;
             }
         }
     } else if (jd_is_doc(target)) {
-        path[np] = target.obj; nodes[np++] = -1;
-        if (jd_J.global_obj) { path[np] = jd_J.global_obj; nodes[np++] = -1; }
+        path[np] = target.obj; seen[np] = -1; nodes[np++] = -1;
+        if (jd_J.global_obj) { path[np] = jd_J.global_obj; seen[np] = -1; nodes[np++] = -1; }
     } else {
-        path[np] = target.obj; nodes[np++] = -1;
+        path[np] = target.obj; seen[np] = -1; nodes[np++] = -1;
     }
 
     jval tyv = jd_ev_get(ev, "type");
@@ -4636,15 +4777,19 @@ static int jd_dispatch_to(jobj *ev, jval target, jval as_target) {
     jd_keep(ev, jd_k_evpath, js_from_obj(arr));
 
     int bubbles = js_to_bool(jd_ev_get(ev, "bubbles"));
-    for (int i = np - 1; i > 0 && !(jd_ev_flags(ev) & JE_STOP); i--)
+    for (int i = np - 1; i > 0 && !(jd_ev_flags(ev) & JE_STOP); i--) {
+        if (crossed) jd_seen_as(ev, seen[i], as_target);
         jd_deliver(path[i], nodes[i], ev, type, 1, 1);
+    }
     if (!(jd_ev_flags(ev) & JE_STOP)) {
         /* At the target the capture listeners run first, then the rest. */
+        if (crossed) jd_seen_as(ev, seen[0], as_target);
         jd_deliver(path[0], nodes[0], ev, type, 2, 1);
         if (!(jd_ev_flags(ev) & JE_STOPNOW)) jd_deliver(path[0], nodes[0], ev, type, 2, 3);
     }
     for (int i = 1; bubbles && i < np && !(jd_ev_flags(ev) & JE_STOP); i++) {
         if (js_to_bool(jd_ev_get(ev, "cancelBubble"))) break;
+        if (crossed) jd_seen_as(ev, seen[i], as_target);
         jd_deliver(path[i], nodes[i], ev, type, 3, 3);
     }
 
@@ -5234,6 +5379,14 @@ static int jd_element_at(jctx *J, jval *a, int n) {
     if (!(x >= 0 && y >= 0 && x < jd_view_w && y < jd_view_h)) return -1;
     int el = jd_node_at ? jd_node_at((int)x, (int)y + jd_scroll_y) : -1;
     while (el >= 0 && !jd_is_element(el)) el = jd_doc->nodes[el].parent;
+    /* One in a shadow tree is its element, to the document, as a browser
+       answers: what is in the tree is the component's own. */
+    for (int hops = 0; el >= 0 && !jd_connected(el) && hops < 64; hops++) {
+        int top = el;
+        while (jd_doc->nodes[top].parent >= 0) top = jd_doc->nodes[top].parent;
+        int s = jd_shadow_find(top, 1);
+        el = s >= 0 ? jd_shadow_host[s] : -1;
+    }
     if (el < 0 || !jd_connected(el) || el == jd_doc->root) el = jd_top();
     return el;
 }
@@ -6573,7 +6726,13 @@ static void jd_setup_html(jctx *J) {
         jd_method(J, p, "reportValidity", nat_true_fn, 0);
         jd_method(J, p, "setCustomValidity", nat_nothing_js, 1);
     }
-    if ((p = jd_iface("HTMLSlotElement"))) jd_reflect_strs(J, p, "name");
+    if ((p = jd_iface("HTMLSlotElement"))) {
+        jd_reflect_strs(J, p, "name");
+        jd_method(J, p, "assignedNodes", nat_slot_assigned_nodes, 0);
+        jd_method(J, p, "assignedElements", nat_slot_assigned_elements, 0);
+    }
+    jd_accessor(J, jd_p[JI_ELEMENT], "assignedSlot", nat_assigned_slot, 0);
+    jd_accessor(J, jd_p[JI_TEXT], "assignedSlot", nat_assigned_slot, 0);
     if ((p = jd_iface("HTMLSourceElement"))) {
         jd_reflect(J, p, "src", "src", JR_URL);
         jd_reflect_strs(J, p, "srcset sizes media type");
@@ -6892,6 +7051,7 @@ static int jsdom_open(ddoc *d, csheet *sheet) {
     jd_zero(jd_shadow_mark, (int)sizeof(jd_shadow_mark));
     jd_zero(jd_inert_mark, (int)sizeof(jd_inert_mark));
     jd_nshadow = 0;
+    jd_zero(jd_slot_pending, (int)sizeof(jd_slot_pending));
     jd_open = 1;
 
     /* Sized for the whole document rather than for the part of it that
