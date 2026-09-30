@@ -108,6 +108,9 @@ numbered files are still to 6048716; where they disagree with this list, this li
   prototype, call and construction, with the target's own behaviour where it has no trap; revocable. Ars Technica's
   and Yahoo's scripts stopped at "Proxy is not defined". `Reflect.set` defines on a proxy receiver instead of
   setting through it, which Vue's set trap made a loop. jstest: ten checks.
+- **The constructors of async functions and generators (12, jslib.h, jsprom.h).** They were `Function`, so an
+  async function made from source gave back no promise, and Alpine, which makes every expression in a page's
+  attributes that way, stopped each one at its `.catch`. jstest: one check.
 - **Scripts may have what the machine can spare (12, js.h, jsdom.h).** A page's script memory, 24 MB on every
   machine with nothing freed until the page is left, is now each context's `mem_cap`, raised to a quarter of
   the free memory when the page opens and again when its scripts start (the browser says what is free after

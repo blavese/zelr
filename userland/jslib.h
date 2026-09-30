@@ -845,10 +845,10 @@ static jval nat_fn_hasinstance(jctx *J, jval t, jval *a, int n) {
 static jval js_eval_source(jctx *J, jstr *src, jscope *var_sc, jscope *sc, jval this_val);
 
 /* Function(a, b, body): a function made from text, at the top level. */
-static jval nat_function_make(jctx *J, jval t, jval *a, int n) {
-    (void)t;
+/* A function made from its source at run time, of the kind `head` begins. */
+static jval js_function_from(jctx *J, const char *head, u32 hlen, jval *a, int n) {
     jtext tx = { 0, 0, 0, 0 };
-    jt_put(J, &tx, "(function anonymous(", 20);
+    jt_put(J, &tx, head, hlen);
     for (int i = 0; i + 1 < n; i++) {
         jstr *p = js_to_str(J, a[i]);
         if (i) jt_put(J, &tx, ",", 1);
@@ -863,6 +863,31 @@ static jval nat_function_make(jctx *J, jval t, jval *a, int n) {
     jstr *src = jt_done(J, &tx);
     if (J->sig != JS_OK || !src) return js_undef();
     return js_eval_source(J, src, J->global, J->global_lex, js_from_obj(J->global_obj));
+}
+
+static jval nat_function_make(jctx *J, jval t, jval *a, int n) {
+    (void)t;
+    return js_function_from(J, "(function anonymous(", 20, a, n);
+}
+
+/* The same for the other kinds of function, whose constructors are reached
+   only as the constructor of a function of the kind. Alpine makes every
+   expression a page writes in its attributes into an async function this
+   way, and with Function's answer those gave back a value and no promise:
+   its `.catch` on the result stopped every one. */
+static jval nat_async_function_make(jctx *J, jval t, jval *a, int n) {
+    (void)t;
+    return js_function_from(J, "(async function anonymous(", 26, a, n);
+}
+
+static jval nat_gen_function_make(jctx *J, jval t, jval *a, int n) {
+    (void)t;
+    return js_function_from(J, "(function* anonymous(", 21, a, n);
+}
+
+static jval nat_async_gen_function_make(jctx *J, jval t, jval *a, int n) {
+    (void)t;
+    return js_function_from(J, "(async function* anonymous(", 27, a, n);
 }
 
 static jval nat_fn_proto(jctx *J, jval t, jval *a, int n) {

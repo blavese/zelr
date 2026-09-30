@@ -9,6 +9,8 @@ Source root the repository root (github.com/blavese/zelr main, 2026-09-22). All 
   `js_define_from_desc`, `Object.getPrototypeOf` and `Array.isArray`. `Reflect.set` defines on a proxy receiver
   rather than setting through it (Vue's set trap calls it). Not done: the handler invariants, the
   isExtensible/preventExtensions/setPrototypeOf traps.
+- **AsyncFunction, GeneratorFunction, AsyncGeneratorFunction**: the constructors of their prototypes
+  (`js_function_from`); `Object.getPrototypeOf(async function(){}).constructor` was `Function`.
 ---
 
 ## 1. Scope

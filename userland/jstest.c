@@ -1246,6 +1246,17 @@ int main(void) {
            " for (var i = 0; i < 200; i++) s += ']'; var a = eval(s);"
            " for (var i = 0; i < 199; i++) a = a[0]; return a[0]; })()", "1");
 
+    /* The constructors of async functions and generators, reached as the
+       constructor of one: they were Function, so an "async" function made
+       that way -- as Alpine makes every expression in a page's attributes --
+       gave back no promise. */
+    expect("an async function's constructor makes async functions, and a generator's generators",
+           "(function(){ var AF = Object.getPrototypeOf(async function(){}).constructor;"
+           " var GF = Object.getPrototypeOf(function*(){}).constructor;"
+           " var f = new AF('a', 'return a * 2'), g = new GF('yield 1; yield 2');"
+           " return [AF === Function, AF.name, f(21) instanceof Promise, f instanceof AF, [...g()].join()].join(' '); })()",
+           "false AsyncFunction true true 1,2");
+
     /* Proxy, which was not there: Ars Technica's and Yahoo's scripts
        stopped at "Proxy is not defined". Each trap, and each thing done
        to the target when there is none. */

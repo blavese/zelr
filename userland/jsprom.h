@@ -881,6 +881,19 @@ static void js_setup_generators(jctx *J) {
     J->p_async_gen_function = js_object_with(J, JO_PLAIN, J->p_function);
     js_put_prop_flags(J, J->p_async_gen_function, J->s_prototype, js_from_obj(J->p_async_generator), JP_CONF);
     js_tag(J, J->p_async_gen_function, "AsyncGeneratorFunction");
+
+    /* Their constructors, each the constructor of its prototype. */
+    struct { const char *name; jnative fn; jobj *proto; } K[] = {
+        { "AsyncFunction", nat_async_function_make, J->p_async_function },
+        { "GeneratorFunction", nat_gen_function_make, J->p_gen_function },
+        { "AsyncGeneratorFunction", nat_async_gen_function_make, J->p_async_gen_function },
+    };
+    for (u32 i = 0; i < sizeof(K) / sizeof(K[0]); i++) {
+        jobj *c = js_native_n(J, K[i].name, K[i].fn, 1);
+        if (!c || !K[i].proto) continue;
+        js_put_prop_flags(J, c, J->s_prototype, js_from_obj(K[i].proto), 0);
+        js_put_prop_flags(J, K[i].proto, J->s_constructor, js_from_obj(c), JP_CONF);
+    }
 }
 
 /* --- Date ------------------------------------------------------------------------
