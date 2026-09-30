@@ -2,7 +2,25 @@
 
 Source root the repository root (github.com/blavese/zelr main, 2026-09-22). All paths are relative to it; `file:N` means 1-based line N. Everything below was verified by reading the code. Where a behaviour was derived by tracing (not by running) it says so. Nothing here was built or run.
 
-**Since 0.78.0** (the rest of this file is older; trust the code):
+**Since 0.79.0** (the rest of this file is older; trust the code):
+- **Intl** (`jsintl.h`, set up by `js_setup_intl`): NumberFormat, DateTimeFormat, PluralRules, RelativeTimeFormat,
+  Collator, ListFormat, Segmenter, DisplayNames, Locale, getCanonicalLocales and supportedValuesOf. One locale,
+  en-US, which every `resolvedOptions().locale` says whatever was asked; `supportedLocalesOf` keeps the English tags.
+  Each object keeps its resolved options as the bytes of a C struct in a string under a symbol (`intl_store`,
+  `intl_load`, kinds `INTL_NF` ...). Numbers round from the shortest digits that read back as the double
+  (`intl_digits` = `js_shortest`), as ICU does, half away from nought: 1.005 to two places is 1.01. Dates are UTC,
+  the machine's time, or a zone in `INTL_ZONES` (about 70, with the US, EU, Australian and New Zealand summer rules
+  of 2026, `intl_in_summer`); an IANA-shaped zone not listed is shown in UTC and resolvedOptions says UTC, and a name
+  of no such shape is a RangeError. Collation weighs letter, then accent (case-blind, `intl_latin_lower`), then
+  case lower first, with numeric runs and ignored punctuation as options; `String.prototype.localeCompare`,
+  `Number.prototype.toLocaleString` and the `Date` `toLocale*` methods go through it. Segments index by byte, as
+  strings do here. `format` and `compare` are getters giving a function bound to the object (`intl_bound`).
+- **\p{...}** knows every general category (the marks, the punctuation and symbol kinds, Cc/Cf/Co/Cs, Zl/Zp),
+  Any, ASCII, ID_Start and ID_Continue, and Script= / sc= / Script_Extensions= for thirteen scripts (others
+  answer as letters). Unions are merged before a \P{} complements them (`rx_add_lists`). A name it does not
+  know is named in the error. `RX_RANGES` is 2048.
+
+**Since 0.78.0**:
 - **Modules** (`jsmod.h`, the parser's module goal). `js_parse_module` reads a module: strict, `await` an operator at
   the top (`FN_ASYNC` on the top context; one used there sets `NF_TLA` on the program), `import`/`export` declarations
   at the top level only (`N_IMPORTDECL` with `N_IMPSPEC` children, op 0 named, 1 default, 2 namespace;

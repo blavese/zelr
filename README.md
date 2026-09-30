@@ -790,7 +790,10 @@ symbols and iteration, Map and Set, generators, promises and async functions
 typed arrays, proxies, and eval. Modules are there too: `<script
 type="module">`, import and export with live bindings, `import()`,
 `import.meta`, import maps and top-level `await`, which GitHub, MDN, Reddit,
-Cloudflare and BBC Sport are written in. Intl and BigInt are not there yet.
+Cloudflare and BBC Sport are written in. Intl is there as well, in English
+as the United States writes it -- numbers, currencies, dates in about seventy
+time zones, plurals, relative times, lists, sorting and segmenting -- and
+every object says en-US whatever it was asked for. BigInt is not there yet.
 A page's scripts may have a quarter of the memory the machine has free,
 between 24 and 128 megabytes, since nothing is freed until the page is left.
 What it has instead is two hooks, how a property on a host object is read

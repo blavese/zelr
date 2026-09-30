@@ -1,6 +1,13 @@
 # 11 -- The web browser (everything except JS-engine internals and image decoders)
 
-**Since 0.78.0** (the rest of this file is older; trust the code and the README's "since 6048716" list):
+**Since 0.79.0** (the rest of this file is older; trust the code and the README's "since 6048716" list):
+- **DOMMatrix, DOMMatrixReadOnly, DOMPoint, DOMPointReadOnly** (`userland/jsmatrix.h`, `jd_setup_matrix`): sixteen
+  numbers in the standard's order under a symbol key, accessors a-f and m11-m44 on the prototypes, every method and
+  its Self form, transform text read as CSS writes it (pixels and angles; % and em refused), toString, toJSON, the
+  typed-array forms and the from* statics; `WebKitCSSMatrix` is DOMMatrix. getComputedStyle's `transform` is what the
+  layout moves the element by, `none` or `matrix(1, 0, 0, 1, x, y)`, since translation is all of a transform it draws.
+
+**Since 0.78.0**:
 - **Module scripts** (`userland/jsmod.h`). `<script type=module>` runs after the classic scripts in the order written,
   as defer has it; a `nomodule` script does not run; `HTMLScriptElement.supports` says yes to classic, module and
   importmap. The module map `jd_mods` (256, states `JM_NEW` ... `JM_FAILED`) holds each address once, fetched

@@ -95,6 +95,23 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.79.0
+
+- **Intl (12, jsintl.h).** NumberFormat, DateTimeFormat, PluralRules, RelativeTimeFormat, Collator, ListFormat,
+  Segmenter, DisplayNames, Locale, getCanonicalLocales and supportedValuesOf, in one locale, en-US, which every
+  object reports. Numbers round from the shortest digits as ICU does; dates are in UTC or one of 71 zones with the
+  summer rules of 2026; the collator weighs letter, accent and case; localeCompare, toLocaleString and the Date
+  toLocale methods go through it. GitHub and Spotify stopped at "Intl is not defined". jstest: eleven checks, and
+  fourteen builds broken on purpose each failed one.
+- **\p{...} past letters and numbers (12, jsregex.h).** Every general category, Any, ASCII, ID_Start, ID_Continue
+  and thirteen scripts by name; unions merged before \P{} complements them; the unknown name named. GitHub's code
+  view stopped on \p{Mn}. jstest: one check.
+- **DOMMatrix (11, jsmatrix.h)** and its read-only, point and WebKit forms, and a computed `transform` that is what
+  the layout moves an element by. Apple's home page stopped at "DOMMatrix is not a constructor". pagetest: four
+  checks.
+- On the host, sixty sites rendered against 0.78.0 differ only where these reach: Apple runs its 13 scripts and 10
+  modules with no error, and GitHub and Spotify run past Intl to stop at BigInt.
+
 ### 0.78.0
 
 - **Module scripts (11, 12, jsmod.h, jsparse.h, jsrun.h).** `<script type="module">` with every form of import and
