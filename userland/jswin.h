@@ -113,6 +113,54 @@ static jobj *jd_empty_list(jctx *J, const char *iface) {
 
 static jobj *jd_plugins, *jd_mimetypes;
 
+/* document.fonts: the page's fonts, of which there are none, since this
+ * browser draws its own typeface and loads no font a page names. So the set
+ * is empty, it is loaded, what it is asked to load comes to nothing at once,
+ * and a check finds nothing waiting. Cloudflare's scripts waited on
+ * document.fonts.ready and stopped on the undefined. */
+static jobj *jd_fonts_ready;
+
+static jval nat_fonts_ready(jctx *J, jval t, jval *a, int n) {
+    (void)J; (void)t; (void)a; (void)n;
+    return jd_fonts_ready ? js_from_obj(jd_fonts_ready) : js_undef();
+}
+
+static jval nat_fonts_load(jctx *J, jval t, jval *a, int n) {
+    (void)t; (void)a; (void)n;
+    jobj *p = js_promise_new(J);
+    if (p) js_promise_settle(J, p, 1, js_from_obj(js_array(J)));
+    return p ? js_from_obj(p) : js_undef();
+}
+
+static jval nat_fonts_check(jctx *J, jval t, jval *a, int n) { (void)J; (void)t; (void)a; (void)n; return js_bool(1); }
+static jval nat_fonts_no(jctx *J, jval t, jval *a, int n) { (void)J; (void)t; (void)a; (void)n; return js_bool(0); }
+static jval nat_fonts_self(jctx *J, jval t, jval *a, int n) { (void)J; (void)a; (void)n; return t; }
+
+static void jd_setup_fonts(jctx *J) {
+    jobj *p = jd_interface(J, "FontFaceSet", jd_p[JI_EVENTTARGET], 0, 0);
+    jobj *set = p ? js_object_with(J, JO_PLAIN, p) : 0;
+    jd_fonts_ready = js_promise_new(J);
+    if (!set || !jd_fonts_ready) return;
+    js_promise_settle(J, jd_fonts_ready, 1, js_from_obj(set));
+    jd_accessor(J, p, "ready", nat_fonts_ready, 0);
+    js_const_prop(J, p, "status", jd_str("loaded"));
+    js_const_prop(J, p, "size", js_num(0));
+    jd_method(J, p, "load", nat_fonts_load, 1);
+    jd_method(J, p, "check", nat_fonts_check, 1);
+    jd_method(J, p, "has", nat_fonts_no, 1);
+    jd_method(J, p, "delete", nat_fonts_no, 1);
+    jd_method(J, p, "add", nat_fonts_self, 1);
+    jd_method(J, p, "clear", nat_nothing_js, 0);
+    jd_method(J, p, "forEach", nat_nothing_js, 1);
+    jd_method(J, p, "values", nat_list_values_empty, 0);
+    jd_method(J, p, "keys", nat_list_values_empty, 0);
+    jd_method(J, p, "entries", nat_list_values_empty, 0);
+    js_method_key(J, p, J->sym_iterator, "[Symbol.iterator]", nat_list_values_empty, 0);
+    static const char *const on[] = { "onloading", "onloadingdone", "onloadingerror" };
+    for (int i = 0; i < 3; i++) js_set(J, set, on[i], js_null());
+    js_put_prop_flags(J, jd_p[JI_DOCUMENT], js_str(J, "fonts"), js_from_obj(set), JP_ENUM | JP_CONF);
+}
+
 static jval nat_nav_plugins(jctx *J, jval t, jval *a, int n) {
     (void)J; (void)t; (void)a; (void)n;
     return jd_plugins ? js_from_obj(jd_plugins) : js_null();
@@ -1764,6 +1812,7 @@ static void jd_setup_window_more(jctx *J) {
     jobj *perf = js_object_with(J, JO_PLAIN, pp);
     if (perf) js_declare(J, g, js_str(J, "performance"), js_from_obj(perf));
     jd_setup_nav_timing(J, perf);
+    jd_setup_fonts(J);
 
     js_declare(J, g, js_str(J, "requestAnimationFrame"), js_from_obj(js_native_n(J, "requestAnimationFrame", nat_raf, 1)));
     js_declare(J, g, js_str(J, "cancelAnimationFrame"), js_from_obj(js_native_n(J, "cancelAnimationFrame", nat_clear_timer, 1)));

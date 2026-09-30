@@ -1999,6 +1999,13 @@ int main(void) {
                " again, bad, String(document.getElementById('in')), h.textContent, r.innerHTML.length > 20].join(' ');</script></body>"),
         "true true true open inside true true closed null NotSupportedError NotSupportedError null light true");
 
+    oks("document.fonts is empty and loaded, and what it is asked to load comes to nothing at once",
+        titled("<body><script>var f = document.fonts, got = 'waiting';"
+               "f.ready.then(function (s) { return f.load('12px serif').then(function (l) { got = (s === f) + ' ' + l.length; }); })"
+               ".then(function () { document.title = [got, f.status, f.size, f.check('12px serif'), f.has({}),"
+               " Array.from(f).length, f instanceof FontFaceSet, f instanceof EventTarget].join(' '); });</script></body>"),
+        "true 0 loaded 0 true false 0 true true");
+
     /* --- the page's own timing ------------------------------------------------------
      *
      * WordPress read the navigation entry and Bing performance.timing as they
