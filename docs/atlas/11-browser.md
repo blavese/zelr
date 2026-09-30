@@ -217,9 +217,9 @@ Includes `zelr.h`, `alloc.h`, `inflate.h`, `web.h` (15-19).
 **Limits** (32-40, "measured against real pages rather than picked": 5600 elements, 14000 attributes, 670 KB of HTML): `DOM_NODES 20000`, `DOM_ATTRS 40000`, `DOM_ARENA (1536*1024)`, `DOM_DEPTH 64` (parser stack).
 
 **Types**:
-- `DN_ELEMENT = 1, DN_TEXT` (42).
+- `DN_ELEMENT = 1, DN_TEXT` (42); since 0.77.0 also `DN_COMMENT`: the parser keeps each comment (its first `DOM_COMMENT_MAX` 4096 bytes, and none once the document is within 1024 nodes of full), the whitespace rule looks past comments, `:empty` ignores them, and the layout draws nothing for one (an empty inline no rule matches). jsdom's comments are the same nodes (`jd_new_comment`).
 - `dattr {int name, value}` (47-49): arena offsets; names folded to lower case on the way in.
-- `dnode` (51-58): `short kind, tag; int text` (DN_TEXT: its string; DN_ELEMENT with `T_OTHER`: its lower-cased name; else -1); `int attr_at, attr_n` (a contiguous run in `attrs`); `int parent, first, last, next, prev` (-1 = none).
+- `dnode` (51-58): `short kind, tag; int text` (DN_TEXT, DN_COMMENT: its string; DN_ELEMENT with `T_OTHER`: its lower-cased name; else -1); `int attr_at, attr_n` (a contiguous run in `attrs`); `int parent, first, last, next, prev` (-1 = none).
 - `ddoc` (60-73): `nodes[DOM_NODES], count, attrs[DOM_ATTRS], nattrs, arena[DOM_ARENA], used, root` (a synthetic `<html>` element, always index 0), `body` (first `<body>`, else `root`), `head`, `title` (arena offset or -1), `overflowed`. About 2.6 MB; the browser holds one static `doc`.
 
 Nothing is freed: removed nodes keep their index and data; the whole arena is discarded when the next page is parsed (108-117).

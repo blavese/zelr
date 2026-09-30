@@ -1962,6 +1962,7 @@ static inline int css_part_matches(const csheet *s, const ddoc *d, int el,
             break;
         case PS_EMPTY:
             for (int k = n->first; k >= 0; k = d->nodes[k].next) {
+                if (d->nodes[k].kind == DN_COMMENT) continue;
                 if (d->nodes[k].kind == DN_ELEMENT) return 0;
                 if (d->nodes[k].text >= 0 && d->arena[d->nodes[k].text]) return 0;
             }

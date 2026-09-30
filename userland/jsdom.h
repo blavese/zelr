@@ -169,17 +169,16 @@ __attribute__((unused)) static void jd_put_num(jtext *t, int v) {
 
 /* --- what a node is ------------------------------------------------------------------
  *
- * The document here has two kinds of node, elements and text (dom.h). A
- * comment and a document fragment are elements with a name no page can
- * write, "#comment" and "#document-fragment": the layout draws nothing for
- * an element it does not know and has no children to draw, and a fragment
- * is never in the tree to be drawn at all. A comment keeps its words in an
- * attribute, where nothing draws them either. */
+ * The document here has three kinds of node, elements, text and comments
+ * (dom.h), and the layout draws nothing for a comment. A document fragment
+ * is an element with a name no page can write, "#document-fragment", and is
+ * never in the tree to be drawn at all. */
 enum { JN_ELEMENT = 1, JN_TEXT = 3, JN_COMMENT = 8, JN_DOCUMENT = 9, JN_FRAGMENT = 11 };
 
 static int jd_kind(int n) {
     const dnode *x = &jd_doc->nodes[n];
     if (x->kind == DN_TEXT) return JN_TEXT;
+    if (x->kind == DN_COMMENT) return JN_COMMENT;
     if (x->tag == T_OTHER && x->text >= 0 && jd_doc->arena[x->text] == '#') {
         /* "#comment", "#document-fragment", or "#document" (jd_new_document),
            which is nine letters long. */
@@ -549,11 +548,9 @@ static int jd_new_named(const char *name) {
 }
 
 static int jd_new_comment(const char *s, int len) {
-    int c = jd_new_named("#comment");
+    int c = dom_new(jd_doc, DN_COMMENT, T_OTHER);
     if (c < 0) return -1;
-    int nm = dom_str(jd_doc, "data", 4);
-    int vl = dom_str(jd_doc, s, len);
-    dom_attr_add(jd_doc, c, nm, vl);
+    jd_doc->nodes[c].text = dom_str(jd_doc, s, len);
     return c;
 }
 
@@ -573,11 +570,8 @@ static int jd_new_element(const jstr *name) {
 
 static const char *jd_text_of(int n) {
     const dnode *x = &jd_doc->nodes[n];
-    if (x->kind == DN_TEXT) return x->text >= 0 ? jd_doc->arena + x->text : "";
-    if (jd_kind(n) == JN_COMMENT) {
-        const char *d = dom_attr(jd_doc, n, "data");
-        return d ? d : "";
-    }
+    if (x->kind == DN_TEXT || x->kind == DN_COMMENT)
+        return x->text >= 0 ? jd_doc->arena + x->text : "";
     return "";
 }
 
@@ -595,16 +589,8 @@ static jval jd_text_value(int el) {
 
 static void jd_set_data(int n, const char *s, int len) {
     jd_record_text(n, jd_text_of(n));
-    if (jd_doc->nodes[n].kind == DN_TEXT) {
+    if (jd_doc->nodes[n].kind == DN_TEXT || jd_doc->nodes[n].kind == DN_COMMENT)
         jd_doc->nodes[n].text = dom_str(jd_doc, s, len);
-    } else {
-        char *buf = (char *)malloc((u64)len + 1);
-        if (!buf) return;
-        for (int i = 0; i < len; i++) buf[i] = s[i];
-        buf[len] = 0;
-        dom_attr_set(jd_doc, n, "data", buf);
-        free(buf);
-    }
     jd_touched();
 }
 
@@ -814,6 +800,7 @@ static void jd_set_inner(int el, const char *html, int len) {
     if (jd_is_template(el)) el = jd_template_content(el);
     if (el < 0) return;
     jd_remove_children(el);
+
     int f = jd_parse_fragment(html, len);
     if (f >= 0) jd_insert(el, f, -1);
 }
@@ -824,6 +811,7 @@ static int jd_clone(int n, int deep) {
     int k = jd_kind(n);
     int c;
     if (k == JN_TEXT) return jd_new_text(jd_text_of(n), w_len(jd_text_of(n)));
+    if (k == JN_COMMENT) return jd_new_comment(jd_text_of(n), w_len(jd_text_of(n)));
     const dnode *x = &jd_doc->nodes[n];
     c = dom_new(jd_doc, DN_ELEMENT, x->tag);
     if (c < 0) return -1;

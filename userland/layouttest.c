@@ -1751,6 +1751,43 @@ int main(void) {
         ok("and a page with neither has none", !page.has_canvas);
     }
 
+    /* --- comments ----------------------------------------------------------
+     *
+     * In the document now, where scripts find them, and still nothing on the
+     * page: no cell of a grid, no place or gap in a row, no line between
+     * blocks, and not content to :empty or a child to :first-child. React's
+     * streamed pages put them everywhere. */
+    {
+        lay("<style>.g{display:grid;grid-template-columns:100px 100px}.g div{background:#eeeeee}"
+            ".f{display:flex;gap:10px}.f span{display:block;width:30px;height:10px;background:#dddddd}"
+            "li:first-child{color:#ff0000}p{background:#cccccc}p:empty{height:7px}"
+            ".s div{background:#bbbbbb}.ib{display:inline-block;width:50px;height:10px;background:#aaaaaa}</style>"
+            "<div class=g><!--$--><div id=g1>a</div><!--/$--><div id=g2>b</div><!-- --><div id=g3>c</div></div>"
+            "<div class=f><!--x--><span id=f1></span><!--y--><span id=f2></span></div>"
+            "<ul><!--a--><li>first</li></ul><p id=e><!--nothing here--></p>"
+            "<div class=s><div id=b1>x</div> <!--between--> <div id=b2>y</div></div>"
+            "<div class=s><div id=c1>x</div> <div id=c2>y</div></div>"
+            "<div><div class=ib id=i1></div> <!--x--> <div class=ib id=i2></div></div>"
+            "<div><div class=ib id=j1></div> <div class=ib id=j2></div></div>", 600);
+        const litem *g1 = box_of(by_id("g1")), *g2 = box_of(by_id("g2")), *g3 = box_of(by_id("g3"));
+        ok("a comment in a grid takes no cell",
+           g1 && g2 && g3 && g2->y == g1->y && g2->x == g1->x + 100 && g3->y > g1->y && g3->x == g1->x);
+        const litem *f1 = box_of(by_id("f1")), *f2 = box_of(by_id("f2"));
+        okn("nor a place in a row, nor a gap", f1 && f2 && f2->x - f1->x == 40, f1 && f2 ? f2->x - f1->x : -1);
+        const litem *first = word("first");
+        ok("a list's first item is still its first child", first && first->color == 0xFF0000);
+        const litem *e = box_of(by_id("e"));
+        okn("an element with only a comment in it is empty", e && e->h == 7, e ? e->h : -1);
+        const litem *b1 = box_of(by_id("b1")), *b2 = box_of(by_id("b2"));
+        const litem *c1 = box_of(by_id("c1")), *c2 = box_of(by_id("c2"));
+        okn("and one between two blocks adds no line",
+            b1 && b2 && c1 && c2 && b2->y - b1->y == c2->y - c1->y, b1 && b2 ? b2->y - b1->y : -1);
+        const litem *i1 = box_of(by_id("i1")), *i2 = box_of(by_id("i2"));
+        const litem *j1 = box_of(by_id("j1")), *j2 = box_of(by_id("j2"));
+        okn("nor a space between two boxes on one line",
+            i1 && i2 && j1 && j2 && i2->x - i1->x == j2->x - j1->x, i1 && i2 ? i2->x - i1->x : -1);
+    }
+
     puts(failed ? "LAYOUTTEST_FAIL\n" : "LAYOUTTEST_PASS\n");
     return failed;
 }

@@ -111,6 +111,13 @@ numbered files are still to 6048716; where they disagree with this list, this li
   and Instagram 54 (was 11), showing its sign-in page instead of a blank one. pagetest: five checks (a 32 MB
   script runs with the memory and stops without it, the quarter, the ceiling, and the order the browser
   tells it in). The host shim reports `HOST_FREE_KB` as the machine's free memory.
+- **Comments are nodes (11, dom.h, jsdom.h).** The parser threw a page's comments away, so a script that found
+  its place by one found nothing: React's streamed pages move each late part in beside the comment in front
+  of its placeholder, and Yahoo's stopped on every one with "cannot set data of null". Comments are
+  `DN_COMMENT` nodes (the first 4 KB of each; none once the document is nearly full), which the whitespace
+  rule looks past, `:empty` ignores and the layout draws nothing for; jsdom's comments are the same nodes.
+  layouttest: six checks (no grid cell, no flex place or gap, still first-child, `:empty`, no line between
+  blocks, no space between inline boxes); pagetest: five.
 - **Patterns with hundreds of groups and alternatives (12, jsregex.h).** `RX_CAPS` 50 to 256 and `RX_NODES` 1024
   to 4096; names are cleared per group as the prescan counts them and each search resets only the groups
   the pattern has (`ngroups`), since every use compiles afresh. jstest: three checks.

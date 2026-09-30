@@ -1468,6 +1468,63 @@ int main(void) {
         jsdom_memory_with(0);
     }
 
+    /* --- comments -------------------------------------------------------------------
+     *
+     * A comment in the page was thrown away as it was read, so a script that
+     * found its place by one found nothing: React's streamed pages move each
+     * late part in beside the comment in front of its placeholder, and Yahoo's
+     * stopped at "cannot set data of null". What follows does what those do,
+     * written here. */
+    {
+        oks("a comment in the page is a node a script can find",
+            titled("<body><p id=a>x</p><!--hello--><p id=b>y</p><script>"
+                   "var c = document.getElementById('b').previousSibling;"
+                   "document.title = [c.nodeType, c.nodeName, c.data].join(' ');</script></body>"),
+            "8 #comment hello");
+        oks("and its words can be changed, and it goes into markup and comes back out",
+            titled("<body><div id=d>a<!--x-->b</div><script>var d = document.getElementById('d');"
+                   "d.childNodes[1].data = 'y'; var before = d.innerHTML; d.innerHTML = 'p<!--q-->r';"
+                   "document.title = before + ' ' + d.childNodes.length + ' ' + d.innerHTML;</script></body>"),
+            "a<!--y-->b 3 p<!--q-->r");
+        oks("a late part moved in where its comment says, as a streamed page does",
+            titled("<body><div id=w><!--$?--><template id=B0></template><p>loading</p><!--/$--></div>"
+                   "<div hidden id=S0><p>arrived</p></div><script>"
+                   "var t = document.getElementById('B0'), s = document.getElementById('S0');"
+                   "var mark = t.previousSibling; mark.data = '$';"
+                   "var n = t, up = n.parentNode;"
+                   "while (n && !(n.nodeType == 8 && n.data == '/$')) { var nx = n.nextSibling; up.removeChild(n); n = nx; }"
+                   "while (s.firstChild) up.insertBefore(s.firstChild, n);"
+                   "s.parentNode.removeChild(s);"
+                   "document.title = document.getElementById('w').textContent;</script></body>"),
+            "arrived");
+
+        /* The first DOM_COMMENT_MAX bytes of a long one, and none at all once
+           the document is nearly full: the nodes left go to what is drawn. */
+        static char big[6000];
+        int n = 0;
+        for (const char *h = "<body><div id=d><!--"; *h; h++) big[n++] = *h;
+        for (int i = 0; i < 5000; i++) big[n++] = 'c';
+        for (const char *h = "--></div></body>"; *h; h++) big[n++] = *h;
+        big[n] = 0;
+        load(big);
+        int d0 = dom_by_id(&page, "d"), c0 = d0 >= 0 ? page.nodes[d0].first : -1, kept = 0;
+        if (c0 >= 0 && page.nodes[c0].kind == DN_COMMENT)
+            while (page.arena[page.nodes[c0].text + kept]) kept++;
+        ok("a long comment keeps its first four kilobytes", kept == DOM_COMMENT_MAX);
+
+        static char many[DOM_NODES * 8];
+        n = 0;
+        for (int i = 0; i < DOM_NODES - 900; i++)
+            for (const char *h = "<i></i>"; *h; h++) many[n++] = *h;
+        for (const char *h = "<!--late--><p id=end></p>"; *h; h++) many[n++] = *h;
+        many[n] = 0;
+        load(many);
+        int comments = 0;
+        for (int i = 0; i < page.count; i++) if (page.nodes[i].kind == DN_COMMENT) comments++;
+        ok("and none once the document is nearly full, and what follows is still read",
+           comments == 0 && dom_by_id(&page, "end") >= 0);
+    }
+
     /* --- what a page's scripts may have ---------------------------------------------
      *
      * 24 megabytes whatever the machine had, with nothing given back until the

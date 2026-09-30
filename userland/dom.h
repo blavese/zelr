@@ -39,7 +39,12 @@
 #define DOM_ARENA   (3 * 1024 * 1024)
 #define DOM_DEPTH   64
 
-enum { DN_ELEMENT = 1, DN_TEXT };
+/* Comments are nodes, as the standard has them: React's streamed pages find
+   the place a late part goes by the comment in front of it, and nothing was
+   there. The layout draws nothing for one; only the first DOM_COMMENT_MAX
+   bytes of each are kept, and none once the document is nearly full. */
+enum { DN_ELEMENT = 1, DN_TEXT, DN_COMMENT };
+#define DOM_COMMENT_MAX 4096
 
 /* An attribute's name and value, both offsets into the arena. Names are
    folded to lower case on the way in, because HTML does not care and every
@@ -51,7 +56,7 @@ typedef struct {
 typedef struct {
     short kind;
     short tag;
-    int   text;                  /* DN_TEXT: the string, into the arena.
+    int   text;                  /* DN_TEXT, DN_COMMENT: the string, into the arena.
                                     DN_ELEMENT with an unknown tag: its name */
     int   attr_at, attr_n;
     int   parent, first, last, next, prev;
@@ -544,7 +549,10 @@ static inline void dom_parse_into(ddoc *d, const char *p, int len, int parent) {
 
                 int parent = dp_top(&z);
                 if (parent < 0) continue;
+                /* A comment is not there as far as this is concerned: what
+                   decides is the last thing before it that is. */
                 int last = d->nodes[parent].last;
+                while (last >= 0 && d->nodes[last].kind == DN_COMMENT) last = d->nodes[last].prev;
                 if (last < 0) continue;
                 if (d->nodes[last].kind == DN_ELEMENT
                     && dom_is_block(d->nodes[last].tag)) continue;
@@ -566,9 +574,21 @@ static inline void dom_parse_into(ddoc *d, const char *p, int len, int parent) {
         if (i + 3 < len && p[i + 1] == '!' && p[i + 2] == '-'
             && p[i + 3] == '-') {
             i += 4;
+            int start = i;
             while (i + 2 < len && !(p[i] == '-' && p[i + 1] == '-'
                                     && p[i + 2] == '>')) i++;
+            int end = i + 2 < len ? i : len;
             i = i + 3 < len ? i + 3 : len;
+
+            int parent = dp_top(&z);
+            if (parent >= 0 && d->count < DOM_NODES - 1024) {
+                int keep = end - start;
+                if (keep > DOM_COMMENT_MAX) keep = DOM_COMMENT_MAX;
+                int c = dom_new(d, DN_COMMENT, T_OTHER);
+                if (c < 0) return;
+                d->nodes[c].text = dom_str(d, p + start, keep);
+                dom_append(d, parent, c);
+            }
             continue;
         }
         if (i + 1 < len && (p[i + 1] == '!' || p[i + 1] == '?')) {
