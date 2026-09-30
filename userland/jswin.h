@@ -141,8 +141,8 @@ static jval nat_nav_beacon(jctx *J, jval t, jval *a, int n) {
     if (!url->len) return js_throw(J, JS_ERR_TYPE, "sendBeacon needs an address", J->error_line);
     /* Made whole against the page, as fetch makes its address. */
     {
-        char out[URL_TEXT + 256];
-        if (jd_resolve(url->s, out, (int)sizeof(out))) url = js_str(J, out);
+        jstr *whole = jd_resolve_str(J, url->s);
+        if (whole) url = whole;
     }
     jval data = js_arg(a, n, 1);
     jval body = jd_str(""), type = js_undef();

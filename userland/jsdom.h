@@ -1981,6 +1981,7 @@ static int jd_box(int node, int *x, int *y, int *w, int *h) {
    URL module does this properly once it is there (jsurl.h); this is the
    browser's own rule for links, which is what a page's links go by. */
 static int jd_resolve(const char *href, char *out, int cap);
+static jstr *jd_resolve_str(jctx *J, const char *href);
 
 /* --- nodes ------------------------------------------------------------------------------- */
 
@@ -3113,9 +3114,8 @@ static jval nat_refl_get(jctx *J, jval t, jval *a, int n) {
         }
         case JR_URL: {
             if (!v) return jd_str("");
-            char out[URL_TEXT + 256];
-            if (!jd_resolve(v, out, (int)sizeof(out))) return jd_str(v);
-            return jd_str(out);
+            jstr *s = jd_resolve_str(J, v);
+            return s ? js_from_str(s) : jd_str(v);
         }
         case JR_ENUM: {
             if (!v || !*v) return me->data2;
@@ -3507,8 +3507,8 @@ static jval nat_form_action(jctx *J, jval t, jval *a, int n) {
     if (x < 0) return js_undef();
     const char *v = jd_attr(x, "action");
     if (!v || !*v) return jd_str(jd_address);
-    char out[URL_TEXT + 256];
-    return jd_resolve(v, out, (int)sizeof(out)) ? jd_str(out) : jd_str(v);
+    jstr *s = jd_resolve_str(J, v);
+    return s ? js_from_str(s) : jd_str(v);
 }
 
 static jval nat_label_control(jctx *J, jval t, jval *a, int n) {

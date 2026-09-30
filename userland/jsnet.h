@@ -476,8 +476,8 @@ static jobj *jd_make_request(jctx *J, jobj *proto, jval input, jval init) {
     } else {
         jstr *s = js_to_str(J, input);
         if (!s) return 0;
-        char out[URL_TEXT + 256];
-        url = jd_resolve(s->s, out, (int)sizeof(out)) ? js_str(J, out) : s;
+        jstr *whole = jd_resolve_str(J, s->s);
+        url = whole ? whole : s;
     }
     if (js_is_obj(init)) {
         jval m = js_get(J, init, js_str(J, "method"));
@@ -752,9 +752,9 @@ static jval nat_xhr_open(jctx *J, jval t, jval *a, int n) {
     if (!js_is_obj(t)) return jd_illegal(J);
     jstr *m = jd_arg_str(J, a, n, 0);
     jstr *u = jd_arg_str(J, a, n, 1);
-    char out[URL_TEXT + 256];
+    jstr *whole = jd_resolve_str(J, u->s);
     jd_keep(t.obj, jd_k_method, js_from_str(m));
-    jd_keep(t.obj, jd_k_url, js_from_str(jd_resolve(u->s, out, (int)sizeof(out)) ? js_str(J, out) : u));
+    jd_keep(t.obj, jd_k_url, js_from_str(whole ? whole : u));
     jobj *list = js_array(J);
     if (list) jd_keep(t.obj, jd_k_hlist, js_from_obj(list));
     js_set(J, t.obj, "readyState", js_num(1));

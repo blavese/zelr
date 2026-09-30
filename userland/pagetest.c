@@ -1609,6 +1609,11 @@ int main(void) {
             titled("<body><script>document.title = 'classic';</script><script nomodule>document.title += ' old';</script>"
                    "<script type=module>import './order.js'; document.title = document.title + ' ' + window.order;</script></body>"),
             "classic 21");
+        oks("an address of any length comes back whole from src and href",
+            titled("<body><script>var s = document.createElement('script'); s.src = 'data:text/javascript,' + 'x'.repeat(5000);"
+                   "var a = document.createElement('a'); a.href = '/?' + 'q'.repeat(3000);"
+                   "document.title = [s.src.length, s.src.slice(-3), a.href.length, a.href.slice(0, 20)].join(' ');</script></body>"),
+            "5021 xxx 3019 https://site.test/?q");
         oks("and HTMLScriptElement.supports says so",
             titled("<body><script>document.title = ['classic', 'module', 'importmap', 'speculationrules']"
                    ".map(function (k) { return HTMLScriptElement.supports(k); }).join(' ');</script></body>"),

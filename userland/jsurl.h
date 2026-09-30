@@ -440,6 +440,27 @@ static int jd_resolve(const char *href, char *out, int cap) {
     return ok;
 }
 
+/* The same as a string of whatever length it comes to, for what a script is
+   given back: a data: address runs to many kilobytes, and Reddit's page
+   imported its modules by their src, which came back cut at the buffer's end
+   and would not parse. A data: or blob: address is given back as written. 0
+   when it will not parse. */
+static jstr *jd_resolve_str(jctx *J, const char *href) {
+    if (jd_is_data_url(href) || jd_is_blob_url(href)) return js_str(J, href);
+    jurl *base = (jurl *)malloc(sizeof(jurl));
+    jurl *u = (jurl *)malloc(sizeof(jurl));
+    jstr *s = 0;
+    if (base && u && ju_page(base) && ju_parse(href, base, u)) {
+        jtext t = { 0, 0, 0, 0 };
+        ju_text(u, &t, 1);
+        s = js_str_n(J, t.b ? t.b : "", t.n);
+        free(t.b);
+    }
+    free(base);
+    free(u);
+    return s;
+}
+
 /* --- form encoding -----------------------------------------------------------------------
  *
  * application/x-www-form-urlencoded: what a query string is, and what
@@ -998,9 +1019,9 @@ static jval nat_link_tostring(jctx *J, jval t, jval *a, int n) {
     int el = jd_el_of(t);
     if (el < 0) return jd_illegal(J);
     const char *h = jd_attr(el, "href");
-    char out[URL_TEXT + 256];
     if (!h) return jd_str("");
-    return jd_resolve(h, out, (int)sizeof(out)) ? jd_str(out) : jd_str(h);
+    jstr *s = jd_resolve_str(J, h);
+    return s ? js_from_str(s) : jd_str(h);
 }
 
 static void jd_url_accessor(jctx *J, jobj *on, const char *name, int which, jnative get, jnative set) {
