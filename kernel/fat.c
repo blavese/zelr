@@ -1342,54 +1342,164 @@ static bool short_taken(const dir_t *d, const u8 name[11]) {
  * The first few usable characters, a tilde and a number, which is what
  * everything else does. The number is what makes it unique, and it has to
  * be, because the short name is the one the file is actually found by. */
-static void make_alias(const dir_t *d, const char *name, u8 out[11]) {
+
+/* What a long name's short ones are made from: up to six characters of what
+   comes before the last dot, and up to three of what comes after it. */
+typedef struct {
     char base[8];
-    u32 b = 0;
-    for (u32 i = 0; name[i] && b < 6; i++) {
+    u32  b;
+    u8   ext[3];
+} alias_parts_t;
+
+static void alias_parts(const char *name, alias_parts_t *p) {
+    p->b = 0;
+    for (u32 i = 0; name[i] && p->b < 6; i++) {
         char c = name[i];
         if (c == '.') break;
         if (c == ' ') continue;
         /* A character past ASCII is an underscore in the short name, one
            for the whole character rather than one per byte of it. */
         if ((u8)c >= 0x80) {
-            if (((u8)c & 0xC0) != 0x80) base[b++] = '_';
+            if (((u8)c & 0xC0) != 0x80) p->base[p->b++] = '_';
             continue;
         }
-        base[b++] = upcase(c);
+        p->base[p->b++] = upcase(c);
     }
-    if (!b) base[b++] = 'X';
+    if (!p->b) p->base[p->b++] = 'X';
 
     const char *dot = 0;
     for (u32 i = 0; name[i]; i++) if (name[i] == '.') dot = name + i;
-
-    for (u32 n = 1; n <= 999; n++) {
-        char tail[5];
-        u32 t = 0;
-        tail[t++] = '~';
-        if (n >= 100) tail[t++] = (char)('0' + n / 100);
-        if (n >= 10)  tail[t++] = (char)('0' + (n / 10) % 10);
-        tail[t++] = (char)('0' + n % 10);
-
-        u32 keep = 8 - t;
-        if (keep > b) keep = b;
-
-        memset(out, ' ', 11);
-        for (u32 i = 0; i < keep; i++) out[i] = (u8)base[i];
-        for (u32 i = 0; i < t; i++) out[keep + i] = (u8)tail[i];
-        if (dot) {
-            u32 x = 0;
-            for (u32 j = 1; dot[j] && x < 3; j++) {
-                u8 c = (u8)dot[j];
-                if (c >= 0x80) {
-                    if ((c & 0xC0) != 0x80) out[8 + x++] = '_';
-                    continue;
-                }
-                out[8 + x++] = (u8)upcase((char)c);
+    memset(p->ext, ' ', 3);
+    if (dot) {
+        u32 x = 0;
+        for (u32 j = 1; dot[j] && x < 3; j++) {
+            u8 c = (u8)dot[j];
+            if (c >= 0x80) {
+                if ((c & 0xC0) != 0x80) p->ext[x++] = '_';
+                continue;
             }
+            p->ext[x++] = (u8)upcase((char)c);
         }
-
-        if (!short_taken(d, out)) return;
     }
+}
+
+/* The nth numbered one, 1 to 999: BASE~N.EXT, the base cut to make room. */
+static void alias_numbered(const alias_parts_t *p, u32 n, u8 out[11]) {
+    char tail[5];
+    u32 t = 0;
+    tail[t++] = '~';
+    if (n >= 100) tail[t++] = (char)('0' + n / 100);
+    if (n >= 10)  tail[t++] = (char)('0' + (n / 10) % 10);
+    tail[t++] = (char)('0' + n % 10);
+
+    u32 keep = 8 - t;
+    if (keep > p->b) keep = p->b;
+
+    memset(out, ' ', 11);
+    for (u32 i = 0; i < keep; i++) out[i] = (u8)p->base[i];
+    for (u32 i = 0; i < t; i++) out[keep + i] = (u8)tail[i];
+    memcpy(out + 8, p->ext, 3);
+}
+
+/* Past the numbers, what other systems do: two characters of the base,
+   four hex digits of a hash of the whole name, and ~1. */
+static void alias_hashed(const alias_parts_t *p, u32 h, u8 out[11]) {
+    static const char hex[] = "0123456789ABCDEF";
+    memset(out, ' ', 11);
+    u32 k = 0;
+    for (; k < 2 && k < p->b; k++) out[k] = (u8)p->base[k];
+    for (int sh = 12; sh >= 0; sh -= 4) out[k++] = (u8)hex[(h >> sh) & 0xF];
+    out[k++] = '~';
+    out[k] = '1';
+    memcpy(out + 8, p->ext, 3);
+}
+
+/* Which of the numbered short names for these parts a name already in the
+   directory is, 1 to 999, or 0 if it is none of them. */
+static u32 alias_number_of(const alias_parts_t *p, const u8 name[11]) {
+    u32 t = 0;
+    while (t < 8 && name[t] != '~') t++;
+    if (t == 8) return 0;
+    u32 n = 0;
+    for (u32 k = t + 1; k < 8 && name[k] >= '0' && name[k] <= '9'; k++)
+        n = n * 10 + (u32)(name[k] - '0');
+    if (n < 1 || n > 999) return 0;
+    u8 want[11];
+    alias_numbered(p, n, want);
+    return memcmp(want, name, 11) == 0 ? n : 0;
+}
+
+typedef bool (*alias_taken_fn)(const void *ctx, const u8 name[11]);
+
+/* The lowest number not in `used`, or, all 999 taken, a hashed name nothing
+   has (asked of `taken`). False when there is none to be had.
+ *
+ * It stopped at 999 and handed back the last number, which was taken: the
+ * thousandth file whose name began the same way -- a folder of screenshots
+ * -- shared a short name with another, and the short name is what a file is
+ * found by. */
+static bool alias_choose(const char *name, const alias_parts_t *p, const u8 *used,
+                         alias_taken_fn taken, const void *ctx, u8 out[11]) {
+    for (u32 n = 1; n <= 999; n++) {
+        if (used[n / 8] & (1u << (n % 8))) continue;
+        alias_numbered(p, n, out);
+        return true;
+    }
+    u32 h = 2166136261u;
+    for (u32 i = 0; name[i]; i++) { h ^= (u8)name[i]; h *= 16777619u; }
+    for (u32 k = 0; k < 256; k++) {
+        alias_hashed(p, (h >> 8) + k * 40503u, out);
+        if (!taken(ctx, out)) return true;
+    }
+    return false;
+}
+
+static bool short_taken_in(const void *ctx, const u8 name[11]) {
+    return short_taken((const dir_t *)ctx, name);
+}
+
+/* One pass over the directory marks which numbers are in use. It asked the
+   directory about each number in turn, a whole pass for each, so the
+   hundredth file whose name began the same way cost a hundred. */
+static bool make_alias(const dir_t *d, const char *name, u8 out[11]) {
+    alias_parts_t p;
+    alias_parts(name, &p);
+
+    u8 used[1000 / 8 + 1];
+    memset(used, 0, sizeof used);
+    u32 cap = dir_capacity(d);
+    dirent_t e;
+    for (u32 i = 0; i < cap; i++) {
+        if (!dir_read(d, i, &e)) break;
+        if (e.name[0] == ENT_FREE) break;
+        if (!entry_is_real(&e)) continue;
+        u32 n = alias_number_of(&p, e.name);
+        if (n) used[n / 8] |= (u8)(1u << (n % 8));
+    }
+    return alias_choose(name, &p, used, short_taken_in, d, out);
+}
+
+/* For the self test: a directory where the first `upto` numbered short names
+   for this long name are taken, and the hashed ones in `hashed_taken`. */
+static bool test_taken(const void *ctx, const u8 name[11]) {
+    const u8 (*list)[11] = (const u8 (*)[11])ctx;
+    for (u32 i = 0; list && list[i][0]; i++)
+        if (memcmp(list[i], name, 11) == 0) return true;
+    return false;
+}
+
+bool fat_test_alias(const char *name, u32 upto, const u8 (*hashed_taken)[11], u8 out[11]) {
+    alias_parts_t p;
+    alias_parts(name, &p);
+    u8 used[1000 / 8 + 1];
+    memset(used, 0, sizeof used);
+    for (u32 n = 1; n <= upto && n <= 999; n++) {
+        u8 each[11];
+        alias_numbered(&p, n, each);
+        u32 k = alias_number_of(&p, each);
+        if (k) used[k / 8] |= (u8)(1u << (k % 8));
+    }
+    return alias_choose(name, &p, used, test_taken, hashed_taken, out);
 }
 
 /* A run of free slots, growing the directory once if there is not one. */
@@ -1435,7 +1545,7 @@ static int dir_put_name(const dir_t *d, const char *name, dirent_t *e) {
     int start = dir_free_run(d, n + 1);
     if (start < 0) return -1;
 
-    make_alias(d, name, e->name);
+    if (!make_alias(d, name, e->name)) return -1;
     u8 sum = short_checksum(e->name);
 
     /* Numbered backwards, so the entry nearest the short one is the first
@@ -1715,6 +1825,26 @@ static int fat_read_file_held(const char *path, u8 *buf, u32 cap) {
         cluster = next;
     }
     return (int)done;
+}
+
+static bool fat_test_short_names_unique_held(const char *path) {
+    if (!mounted) return false;
+    dir_t d;
+    if (!resolve_dir(path, &d)) return false;
+    u32 cap = dir_capacity(&d);
+    for (u32 i = 0; i < cap; i++) {
+        dirent_t a;
+        if (!dir_read(&d, i, &a)) break;
+        if (a.name[0] == ENT_FREE) break;
+        if (!entry_is_real(&a)) continue;
+        for (u32 j = i + 1; j < cap; j++) {
+            dirent_t b;
+            if (!dir_read(&d, j, &b)) break;
+            if (b.name[0] == ENT_FREE) break;
+            if (entry_is_real(&b) && memcmp(a.name, b.name, 11) == 0) return false;
+        }
+    }
+    return true;
 }
 
 static u32 fat_test_runs_held(const char *path) {
@@ -2249,6 +2379,7 @@ u32 fat_count(const char *path) { fat_enter(); u32 r = fat_count_held(path); fat
 bool fat_stat(const char *path, u32 *size_out, bool *dir_out) { fat_enter(); bool r = fat_stat_held(path, size_out, dir_out); fat_leave(); return r; }
 int fat_read_file(const char *path, u8 *buf, u32 cap) { fat_enter(); int r = fat_read_file_held(path, buf, cap); fat_leave(); return r; }
 u32 fat_test_runs(const char *path) { fat_enter(); u32 r = fat_test_runs_held(path); fat_leave(); return r; }
+bool fat_test_short_names_unique(const char *path) { fat_enter(); bool r = fat_test_short_names_unique_held(path); fat_leave(); return r; }
 bool fat_write_file(const char *path, const u8 *buf, u32 size) { fat_enter(); bool r = fat_write_file_held(path, buf, size); fat_leave(); return r; }
 bool fat_rename(const char *from, const char *to) { fat_enter(); bool r = fat_rename_held(from, to); fat_leave(); return r; }
 bool fat_delete_file(const char *path) { fat_enter(); bool r = fat_delete_file_held(path); fat_leave(); return r; }

@@ -152,6 +152,10 @@ numbered files are still to 6048716; where they disagree with this list, this li
   now marked (`cut`: "shown as far as it came", a cut script not run, a cut sheet asked for again) and its
   connection dropped. An interim 103 ahead of an answer is passed over, and a 204 or 304 is not waited on for
   a body. wiretest: five checks (the test server waits for the client to act rather than for a time).
+- **A short name of its own past the thousandth (04, fat.c).** The thousandth long name beginning the same way
+  (a folder of screenshots) was given `~999`, which another file already had, and each short name cost a pass
+  over the folder for every number tried. Now one pass marks the numbers in use, and past 999 a hashed name
+  (two characters, four hex digits, `~1`) is chosen and checked. [fat]: five checks.
 - **The page's own background (11, layout.h, browser.c).** The html element's background, or else the
   body's, fills the whole window behind the page (`ldoc.canvas`), as CSS carries it to the canvas: a dark
   page was dark for the height of its words and white below. layouttest: three checks; browsercheck: a

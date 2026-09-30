@@ -121,3 +121,10 @@ void fat_test_subdirs_unreadable(bool on);
 /* How many runs of neighbouring clusters a file's chain is in, 0 if it has
    none or is not there: what reading or writing it in runs is measured by. */
 u32  fat_test_runs(const char *path);
+
+/* The short name a long one gets in a directory where its first `upto`
+   numbered short names are taken, and the hashed ones listed (ending with an
+   empty name); false if none is left. And whether every short name in a
+   directory is its own. */
+bool fat_test_alias(const char *name, u32 upto, const u8 (*hashed_taken)[11], u8 out[11]);
+bool fat_test_short_names_unique(const char *path);

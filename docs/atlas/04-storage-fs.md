@@ -904,7 +904,7 @@ In particular, the hot-plug mount in the `usb` service task (`fat_mount_on` save
 
 **S26. Unreachable branch in main.c:438** ("disk unreadable, using memory only"). `diskfs_mount` returns -1 only when `!blk_present()`, which is impossible inside `if (blk_init())`.
 
-Also, `start_port` in AHCI spun forever if CR never cleared (ahci.c:131) -- FIXED in 0.76.0: both port waits are bounded (`bits_clear`) and a port that will not stop or start is refused ([disk]). `fat_mount_at` does not check that the FAT is large enough for `cluster_count`. `make_alias` returns a duplicate alias once ~1..~999 are all taken (fat.c:1094-1113). A failed seed write still records the marker (layout.c:45, 144-147).
+Also, `start_port` in AHCI spun forever if CR never cleared (ahci.c:131) -- FIXED in 0.76.0: both port waits are bounded (`bits_clear`) and a port that will not stop or start is refused ([disk]). `fat_mount_at` does not check that the FAT is large enough for `cluster_count`. `make_alias` returned a duplicate alias once ~1..~999 were all taken (fat.c:1094-1113) -- FIXED in 0.76.0: past the numbers it gives two characters, four hex digits of a hash of the name and ~1, as other systems do, checked against the directory, and it marks the numbers in use in one pass over the directory instead of a pass for each number (`alias_choose`, `alias_number_of`; [fat]: the 101st same-beginning name took 60 reads, 872 before, and three checks of the choice past 999). A failed seed write still records the marker (layout.c:45, 144-147).
 
 ### Doc and comment drift
 - **D1.** fat.c:23-25 says "Formatting only produces FAT16". fat_format_at writes FAT32 above about 2 GiB (fat.c:655-672), and the comment at fat.c:489-491 says so.

@@ -670,6 +670,51 @@ static void test_fat_io(void) {
     ok("a directory of forty files listed twice is read once",
        n == 40 && again == 40 && b.reads == a.reads);
 
+    /* Long names beginning the same way, past what the directory cache
+       holds: the short name for each was found by asking the directory
+       about ~1, ~2 and so on, a whole pass for each number. */
+    fat_mkdir("/aliases");
+    for (int i = 0; i < 100; i++) {
+        kformat(name, sizeof name, "/aliases/Screenshot %03d.png", i);
+        fat_write_file(name, (const u8 *)"x", 1);
+    }
+    blk_io(&a);
+    bool made = fat_write_file("/aliases/Screenshot 100.png", (const u8 *)"x", 1);
+    blk_io(&b);
+    ok("the hundred and first name beginning the same way reads its folder a few times, not a hundred",
+       made && fat_count("/aliases") == 101 && b.reads - a.reads < 200);
+    ok("and every one of them has a short name of its own",
+       fat_test_short_names_unique("/aliases"));
+    kprintf("        the hundred and first file took %u reads\n",
+            b.reads - a.reads);
+    for (int i = 0; i <= 100; i++) {
+        kformat(name, sizeof name, "/aliases/Screenshot %03d.png", i);
+        fat_delete_file(name);
+    }
+    fat_rmdir("/aliases");
+
+    /* And past the last number: the thousandth such name was handed ~999,
+       which another file already had. */
+    u8 al[11];
+    static const u8 none[1][11] = { { 0 } };
+    bool gave = fat_test_alias("Screenshot 2026.png", 998, none, al);
+    ok("the last number is still used before anything else",
+       gave && memcmp(al, "SCRE~999PNG", 11) == 0);
+    gave = fat_test_alias("Screenshot 2026.png", 999, none, al);
+    bool hex = true;
+    for (u32 k = 2; k < 6; k++)
+        if (!((al[k] >= '0' && al[k] <= '9') || (al[k] >= 'A' && al[k] <= 'F'))) hex = false;
+    ok("with all 999 taken, a short name none of them has",
+       gave && memcmp(al, "SC", 2) == 0 && hex && al[6] == '~' && al[7] == '1'
+       && memcmp(al + 8, "PNG", 3) == 0);
+    u8 first[2][11];
+    memcpy(first[0], al, 11);
+    memset(first[1], 0, 11);
+    u8 al2[11];
+    gave = fat_test_alias("Screenshot 2026.png", 999, first, al2);
+    ok("and when that one is taken too, another",
+       gave && memcmp(al2, al, 11) != 0 && al2[6] == '~');
+
     /* A write from outside the filesystem -- here the same bytes put back
        where the disk check keeps its probe -- could have been to a directory,
        so what is kept goes. */
