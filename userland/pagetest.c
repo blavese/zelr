@@ -220,6 +220,15 @@ static int fake_style(int node, cstyle *out) {
     return 1;
 }
 
+/* The same, moved as the layout moves a translated element: by 4 pixels
+   across and half its own height down. */
+static int fake_style_moved(int node, cstyle *out) {
+    fake_style(node, out);
+    out->tx_px = 4;
+    out->ty_pct = 50;
+    return 1;
+}
+
 /* Where a pretend layout put everything: one box, for every element, as
    wide as box_w (a layout that changes it is a check's to make). */
 static int box_w = 50;
@@ -2005,6 +2014,42 @@ int main(void) {
                ".then(function () { document.title = [got, f.status, f.size, f.check('12px serif'), f.has({}),"
                " Array.from(f).length, f instanceof FontFaceSet, f instanceof EventTarget].join(' '); });</script></body>"),
         "true 0 loaded 0 true false 0 true true");
+
+    /* --- the page's geometry ----------------------------------------------------------
+     *
+     * Apple's animations make a DOMMatrix of each element's computed transform
+     * and read its sixteen numbers: "DOMMatrix is not a constructor". */
+    oks("DOMMatrix reads a transform, gives its numbers back, and transforms a point",
+        titled("<body><script>var m = new DOMMatrix('translate(10px, 20px) scale(2)'), r = new DOMMatrix([1, 2, 3, 4, 5, 6]);"
+               "var p = m.transformPoint(new DOMPoint(1, 1));"
+               "document.title = [m.a, m.d, m.e, m.f, m.m41, m.m11, m.is2D, new DOMMatrix().isIdentity, r.toString(), p.x, p.y,"
+               " new DOMMatrix('rotate(90deg)').transformPoint({ x: 1, y: 0 }).y.toFixed(6), m.inverse().multiply(m).isIdentity,"
+               " new DOMMatrix('translateZ(5px)').is2D, new DOMMatrix('none').isIdentity, String(new DOMMatrix('matrix(1, 0, 0, 1, 3, 4)')),"
+               " typeof WebKitCSSMatrix, WebKitCSSMatrix === DOMMatrix, new DOMMatrix('rotate(0.25turn)').b.toFixed(3)].join(' ');</script></body>"),
+        "2 2 10 20 10 2 true true matrix(1, 2, 3, 4, 5, 6) 12 22 1.000000 true false true matrix(1, 0, 0, 1, 3, 4) function true 1.000");
+    oks("and its Self forms change it, a length it cannot measure is refused, and the rest are as the standard has them",
+        titled("<body><script>var m = new DOMMatrix(); m.translateSelf(5, 0).scaleSelf(3); m.m42 = 7;"
+               "var e = 'none'; try { new DOMMatrix('translate(50%)'); } catch (x) { e = x.name; }"
+               "var ro = new DOMMatrixReadOnly('scale(2)'), f = m.toFloat64Array();"
+               "var nf = 'none'; try { String(new DOMMatrix([0, 0, 0, 0, 0, 0]).inverse()); } catch (x) { nf = x.name; }"
+               "document.title = [m.a, m.e, m.f, e, ro.a, typeof ro.translateSelf, f.length, f[12], f instanceof Float64Array,"
+               " JSON.stringify(new DOMPoint(1, 2)), DOMMatrix.fromMatrix({ a: 2, d: 3 }).d, m.m33, new DOMMatrix('skewX(45deg)').c.toFixed(3),"
+               " nf, new DOMMatrix('scale(2)').multiply(new DOMMatrix('translate(1px)')).e, ro instanceof DOMMatrix, m instanceof DOMMatrixReadOnly].join(' ');</script></body>"),
+        "3 5 7 SyntaxError 2 undefined 16 5 true {\"x\":1,\"y\":2,\"z\":0,\"w\":1} 3 1 1.000 InvalidStateError 2 false true");
+    {
+        jsdom_styles_with(fake_style_moved);
+        jsdom_boxes_with(fake_box);
+        oks("a computed transform is what the layout moves the element by, as a matrix",
+            titled("<body><div id=d></div><script>var t = getComputedStyle(document.getElementById('d')).transform;"
+                   "document.title = t + ' ' + new DOMMatrix(t).f;</script></body>"),
+            "matrix(1, 0, 0, 1, 4, 10) 10");
+        jsdom_styles_with(fake_style);
+        oks("and none when it does not move it",
+            titled("<body><div id=d></div><script>document.title = getComputedStyle(document.getElementById('d')).transform;</script></body>"),
+            "none");
+        jsdom_styles_with(0);
+        jsdom_boxes_with(0);
+    }
 
     /* --- the page's own timing ------------------------------------------------------
      *

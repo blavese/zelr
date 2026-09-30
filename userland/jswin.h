@@ -1730,6 +1730,20 @@ static int jd_computed_value(int node, const cstyle *s, const char *prop, jtext 
         if (jd_box(node, &bx, &by, &bw, &bh)) jd_css_px(t, wide ? bw : bh);
         else if ((wide ? s->width : s->height) >= 0) jd_css_px(t, wide ? s->width : s->height);
         else jd_put(t, "auto");
+    } else if (w_same(prop, "transform")) {
+        /* What the layout moves the element by, which is all of a transform
+           it draws: none, or a translation as the matrix a browser gives. */
+        int w = 0, h = 0;
+        if (jd_box(node, &bx, &by, &bw, &bh)) { w = bw; h = bh; }
+        int dx = s->tx_px + s->tx_pct * w / 100, dy = s->ty_px + s->ty_pct * h / 100;
+        if (!s->tx_px && !s->ty_px && !s->tx_pct && !s->ty_pct) jd_put(t, "none");
+        else {
+            jd_put(t, "matrix(1, 0, 0, 1, ");
+            jd_put_num(t, dx);
+            jd_put(t, ", ");
+            jd_put_num(t, dy);
+            jd_putc(t, ')');
+        }
     } else if (w_same(prop, "line-height")) {
         if (s->line_h > 0) jd_css_px(t, s->font_px * s->line_h / 100);
         else jd_put(t, "normal");

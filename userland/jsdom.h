@@ -5820,6 +5820,7 @@ static void jd_consts(jctx *J, jobj *on, const char *const *names, int from);
 #include "jsnet.h"
 #include "jswin.h"
 #include "jsobs.h"
+#include "jsmatrix.h"
 #include "jswalk.h"
 #include "jsmod.h"
 
@@ -6583,6 +6584,7 @@ static void jd_setup(jctx *J) {
     jd_setup_navigator(J);
     jd_setup_location(J);
     jd_setup_window_more(J);
+    jd_setup_matrix(J);
     jd_setup_storage(J);
     jd_setup_observers(J);
     jd_setup_walks(J);
