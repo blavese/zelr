@@ -1260,6 +1260,16 @@ int main(void) {
            " return [re.test('w1499'), re.test('w1500'), re.test('w7'), /^(a|b)+$/.test('abab')].join(' '); })()",
            "true false true true");
 
+    /* Unicode's classes beyond letters and numbers: GitHub's code view
+       stopped on "a \\p{...} class this does not know: Mn". */
+    expect("\\p{...} knows marks, the kinds of punctuation and symbol, scripts and identifiers",
+           "[/^\\p{Mn}$/u.test('\\u0301'), /^\\p{M}$/u.test('\\u0903'), /^\\P{M}$/u.test('a'), /^\\P{M}$/u.test('\\u0301'),"
+           " /^[\\p{L}\\p{Mn}\\p{Nd}\\p{Pc}]+$/u.test('a\\u0301_9'), /^\\p{Script=Han}+$/u.test('\\u4e2d\\u6587'),"
+           " /\\p{sc=Latin}/u.test('\\u4e2d'), /^\\p{ID_Start}\\p{ID_Continue}*$/u.test('x_1'), /^\\p{Lu}\\p{Ll}$/u.test('Ab'),"
+           " /\\p{Sc}/u.test('$'), /\\p{Pd}/u.test('-'), /\\p{Ps}\\p{Pe}/u.test('()'), /\\p{Cc}/u.test('\\n'),"
+           " /^\\p{Script=Cyrillic}+$/u.test('\\u0434\\u0430'), (function () { try { new RegExp('\\\\p{Nope}', 'u'); } catch (e) { return e.message.indexOf('Nope') > 0; } })()].join(' ')",
+           "true true true false true true false true true true true true true true true");
+
     /* A function expression's own name, which GSAP's recursion is written
        with: "u is not defined". */
     expect("a function expression written with a name knows itself by it, and only inside",
