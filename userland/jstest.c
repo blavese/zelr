@@ -59,6 +59,28 @@ static void expect(const char *what, const char *src, const char *want) {
     js_done(&J);
 }
 
+static void check(const char *what, int good) {
+    ran++;
+    show(good ? "  PASS  " : "  FAIL  ");
+    show(what);
+    if (!good) failed++;
+    putc('\n');
+}
+
+/* Where a program's memory is (zelr.h), which a collector looks through: the
+   stack from here to where it begins, and the data these words are in, one
+   given a value and one not. */
+static int a_static_word = 1;
+static int a_zero_word;
+
+static void where_memory_is(void) {
+    volatile int here = 0;
+    check("a program knows where its stack begins and where its data lies",
+          zelr_stack_top && (char *)&here < zelr_stack_top
+          && zelr_data_lo() <= (char *)&a_static_word && (char *)&a_static_word < zelr_data_hi()
+          && zelr_data_lo() <= (char *)&a_zero_word && (char *)&a_zero_word < zelr_data_hi());
+}
+
 /* And runs a whole script, where the answer is whatever it leaves in a
    global called `result`. */
 static void script(const char *what, const char *src, const char *want) {
@@ -1591,6 +1613,7 @@ int main(void) {
            " try { Proxy({}, {}); out.push('made'); } catch (e) { out.push(e instanceof TypeError); }"
            " return out.join(' '); })()", "1 true true");
 
+    where_memory_is();
     /* The count, at the end. It used to be printed half way down, so every
        case after the regular expressions ran without being counted, and a
        suite that lost them would have reported the same total. */

@@ -1023,10 +1023,32 @@ static inline int win_resize(int handle, int w, int h) {
  * sure it never comes back here.
  */
 
+/* --- where a program's memory is -------------------------------------------
+ *
+ * Its writable data, which the linker script marks, and the top of its
+ * stack, which _start writes down, being the first to see it: a collector
+ * that looks through a program's memory for what is still in use needs both
+ * (userland/jsgc.h). In the host build (tools/host) the shim says. */
+#if defined(ZELR_HOST)
+extern char *zelr_stack_top, *zelr_host_data_lo, *zelr_host_data_hi;
+static inline char *zelr_data_lo(void) { return zelr_host_data_lo; }
+static inline char *zelr_data_hi(void) { return zelr_host_data_hi; }
+#else
+extern char __zelr_data_start[], __zelr_data_end[];
+static inline char *zelr_data_lo(void) { return __zelr_data_start; }
+static inline char *zelr_data_hi(void) { return __zelr_data_end; }
+#ifndef ZELR_NO_START
+__attribute__((used)) static char *zelr_stack_top;
+#else
+extern char *zelr_stack_top;                     /* the libc's crt0.c has it */
+#endif
+#endif
+
 #ifndef ZELR_NO_START
 __attribute__((naked, section(".text._start")))
 void _start(void) {
     __asm__ volatile(
+        "movq %rsp, zelr_stack_top(%rip)\n"      /* where the stack begins */
         "xorl %ebp, %ebp\n"                      /* the frame chain ends */
         "movq (%rsp), %rdi\n"                    /* argc */
         "leaq 8(%rsp), %rsi\n"                   /* argv */

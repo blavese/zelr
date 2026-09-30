@@ -40,9 +40,13 @@ _Noreturn void _zstart(long *sp) {
     exit(main(argc, argv));
 }
 
+/* Where the stack begins (zelr.h). */
+char *zelr_stack_top;
+
 __attribute__((naked, section(".text._start")))
 void _start(void) {
     __asm__ volatile(
+        "movq %rsp, zelr_stack_top(%rip)\n"      /* where the stack begins */
         "xorl %ebp, %ebp\n"                      /* the frame chain ends */
         "movq %rsp, %rdi\n"                      /* where the words are */
         "andq $-16, %rsp\n"                      /* what a call is promised */

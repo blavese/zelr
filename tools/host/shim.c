@@ -338,7 +338,26 @@ static DWORD WINAPI sampler(LPVOID arg) {
 
 int zelr_main(int argc, char **argv);
 
+/* Where a program's memory is (zelr.h): the top of this thread's stack, from
+   its thread block, and the image's writable sections, from its headers. */
+char *zelr_stack_top, *zelr_host_data_lo, *zelr_host_data_hi;
+
+static void memory_bounds(void) {
+    zelr_stack_top = (char *)((NT_TIB *)NtCurrentTeb())->StackBase;
+    unsigned char *base = (unsigned char *)GetModuleHandleA(0);
+    IMAGE_NT_HEADERS64 *nt = (IMAGE_NT_HEADERS64 *)(base + ((IMAGE_DOS_HEADER *)base)->e_lfanew);
+    IMAGE_SECTION_HEADER *sec = IMAGE_FIRST_SECTION(nt);
+    for (int i = 0; i < nt->FileHeader.NumberOfSections; i++) {
+        if (!(sec[i].Characteristics & IMAGE_SCN_MEM_WRITE)) continue;
+        char *lo = (char *)base + sec[i].VirtualAddress;
+        char *hi = lo + sec[i].Misc.VirtualSize;
+        if (!zelr_host_data_lo || lo < zelr_host_data_lo) zelr_host_data_lo = lo;
+        if (hi > zelr_host_data_hi) zelr_host_data_hi = hi;
+    }
+}
+
 int main(int argc, char **argv) {
+    memory_bounds();
     WSADATA wd;
     WSAStartup(MAKEWORD(2, 2), &wd);
     start_ms = GetTickCount();

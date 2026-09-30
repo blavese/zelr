@@ -23,7 +23,7 @@ b = src.index("return r;\n}", a) + len("return r;\n}")
 door = ("zelr_word host_syscall(zelr_word n, zelr_word a, zelr_word b, zelr_word c);\n"
         "static inline zelr_word syscall(zelr_word n, zelr_word a, zelr_word b, zelr_word c) {\n"
         "    return host_syscall(n, a, b, c);\n}")
-open(sys.argv[2], "w", encoding="utf-8", newline="\n").write(src[:a] + door + src[b:])
+open(sys.argv[2], "w", encoding="utf-8", newline="\n").write("#define ZELR_HOST 1\n" + src[:a] + door + src[b:])
 EOF
 
 SRC=userland/$PROG.c
