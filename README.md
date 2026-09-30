@@ -787,7 +787,10 @@ tested without one. The language is JavaScript as it was written from 2015 to
 destructuring, spread, default parameters, classes with private fields,
 symbols and iteration, Map and Set, generators, promises and async functions
 (run on stacks of their own), patterns with lookaround and named groups,
-typed arrays, proxies, and eval. Modules, Intl and BigInt are not there yet.
+typed arrays, proxies, and eval. Modules are there too: `<script
+type="module">`, import and export with live bindings, `import()`,
+`import.meta`, import maps and top-level `await`, which GitHub, MDN, Reddit,
+Cloudflare and BBC Sport are written in. Intl and BigInt are not there yet.
 A page's scripts may have a quarter of the memory the machine has free,
 between 24 and 128 megabytes, since nothing is freed until the page is left.
 What it has instead is two hooks, how a property on a host object is read

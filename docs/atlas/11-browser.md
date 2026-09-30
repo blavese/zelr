@@ -1,5 +1,29 @@
 # 11 -- The web browser (everything except JS-engine internals and image decoders)
 
+**Since 0.78.0** (the rest of this file is older; trust the code and the README's "since 6048716" list):
+- **Module scripts** (`userland/jsmod.h`). `<script type=module>` runs after the classic scripts in the order written,
+  as defer has it; a `nomodule` script does not run; `HTMLScriptElement.supports` says yes to classic, module and
+  importmap. The module map `jd_mods` (256, states `JM_NEW` ... `JM_FAILED`) holds each address once, fetched
+  breadth first through `jd_get_script` (`jd_mod_fetch_all`), a `data:` address decoded from itself and a `blob:` one
+  read from its Blob. Linking (`jd_mod_link`) gives each module a scope under the global one and a namespace whose
+  exports are getters reading the exporter's bindings (`nat_mod_binding`, `nat_mod_forward`), so they are live; its
+  imports are getters in its scope. An address resolves against the module's own (`jd_mod_resolve`), a bare name
+  through the page's first import map, exact names then the longest prefix ending in a slash; one nothing resolves
+  is said ("a module name this cannot resolve: X"). `import()` gives a promise of the namespace; `import.meta` has
+  `url` and `resolve`. A module that awaits at its top level is `JM_ASYNC` until its promise settles; one importing
+  a module still pending is `JM_WAITING` with a count and runs when the last settles; each has a `done` promise
+  that importers and `import()` wait on. What such a module throws later is put on the page's error line
+  (`jd_mod_note_value`). Not done: an import map's scopes, import attributes (read and set aside), and a cycle
+  through a module that awaits. SCRIPTS_MAX is 256 and SCRIPTS_BYTES 16 MB (browser.c), since a module page is
+  many files.
+- **performance.timing, performance.navigation and the navigation entry** (jswin.h): the fetch's moments are the
+  page's beginning (its world opens after the answer has come), and interactive, DOMContentLoaded, complete and
+  load are recorded as they happen (`jd_nav_mark`) and 0 until then. An observer of `navigation` is told once load
+  has finished. No redirect or reload is known, so none is said.
+- **attachShadow** makes a `ShadowRoot` (a fragment, kept on the element; `shadowRoot` when open, `host`, `mode`,
+  `innerHTML`; `getRootNode({composed})` passes it). It is not drawn: the element is drawn from its own children.
+- **document.fonts**: an empty `FontFaceSet`, loaded, since the browser draws its own typeface.
+
 Source tree: the repository root (zelr main, 2026-09-22, two commits after v0.37.0). Static reading only: nothing was built or run. Every `file:line` below was checked against the tree. "Verified" in section 10 means verified by reading the code, not by running it.
 
 ---

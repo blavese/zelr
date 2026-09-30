@@ -2,7 +2,27 @@
 
 Source root the repository root (github.com/blavese/zelr main, 2026-09-22). All paths are relative to it; `file:N` means 1-based line N. Everything below was verified by reading the code. Where a behaviour was derived by tracing (not by running) it says so. Nothing here was built or run.
 
-**Since 0.77.0** (the rest of this file is older; trust the code):
+**Since 0.78.0** (the rest of this file is older; trust the code):
+- **Modules** (`jsmod.h`, the parser's module goal). `js_parse_module` reads a module: strict, `await` an operator at
+  the top (`FN_ASYNC` on the top context; one used there sets `NF_TLA` on the program), `import`/`export` declarations
+  at the top level only (`N_IMPORTDECL` with `N_IMPSPEC` children, op 0 named, 1 default, 2 namespace;
+  `N_EXPORTDECL` op 0 a declaration, 1 default (a named function or class becomes a declaration), 2 a list, 3 a list
+  from, 4 star, 5 star as), `import.meta` (`N_IMPORTMETA`), and the words JS_UNSUPPORTED refuses let through.
+  `js_hoist_one` binds `*default*`. Two hooks on the context, `import_hook` (`import()`) and `meta_hook`
+  (`import.meta`), are given `jscope.module`, the record of the module the code was written in, found up the scope
+  chain (`js_module_of`). `js_run_module` runs a body in a scope the caller made; `js_run_module_async` runs one that
+  awaits at the top on a coroutine of its own (`jco.is_module`) and gives back its promise. The module map, linking,
+  live bindings (getters on a namespace reading the exporter's scope), the import map and top-level await are the
+  browser's, in jsmod.h (atlas 11).
+- **Names written with `\u` escapes** are their letters: the lexer decodes them into a string of its own.
+- **Regular expressions to 65536 nodes**: the node table (`rx.nodes`) is allocated and grows as a pattern needs it,
+  from 1024, so a list of hundreds of words is read (Al Jazeera's: "pattern too big"). Nodes are named by number,
+  never held by address across `rx_new`.
+- **A named function expression knows its name** (`FN_SELFNAME`, `js_make_function`): a scope of its own round the
+  call's holds only the name, so the parameters and variables shadow it. It was not bound at all (GSAP: "u is not
+  defined"). An assignment to it changes it, where the standard ignores it.
+
+**Since 0.77.0**:
 - **Proxy** (`jsproxy.h`): an object with `JOF_PROXY`, target in `data` and handler in `data2`; a proxy of a function is a
   native (`js_proxy_call`). Hooks in `js_getv`, `js_has`, `js_putv` (and its inherited walk), `js_delete`, `js_get_own`,
   `js_keys_of` (a listing takes each key's descriptor, getter included, never its value through `get`),
@@ -367,7 +387,7 @@ All binary operators are left-associative. `&&`/`||` produce `N_LOGICAL` nodes; 
 - Refuses lookaround, backreferences, named groups, sticky, and unicode property escapes, "refused when it is compiled".
 
 **Limits (`:42-46`)**
-- `RX_NODES 512`, `RX_CLASSES 64`, `RX_CONTS 512`, `RX_CAPS 10` (group 0 plus groups 1–9), `RX_STEPS 400000` per start position. (Since grown: at 0.77.0 `RX_NODES 4096`, `RX_CLASSES 96`, `RX_CONTS 1024`, `RX_CAPS 256`.)
+- `RX_NODES 512`, `RX_CLASSES 64`, `RX_CONTS 512`, `RX_CAPS 10` (group 0 plus groups 1–9), `RX_STEPS 400000` per start position. (Since grown: at 0.77.0 `RX_NODES 4096`, `RX_CLASSES 96`, `RX_CONTS 1024`, `RX_CAPS 256`; at 0.78.0 the node table is allocated and grows from `RX_NODES_FIRST` 1024 to `RX_NODES` 65536.)
 - Nesting depth over 24 is refused (`:416`).
 
 **Types**
@@ -981,7 +1001,7 @@ No path today dispatches an event from inside a script (there is no `el.click()`
 | `0x5A4C5200` | `jsrun.h:2206` | `Math.random` seed |
 | 1.7e308 | `jsrun.h:59` | Printed as Infinity above this |
 | 2^53, 1e21, 1e-6, 10 digits | `jsrun.h:70`, `83`, `124` | Number printing thresholds |
-| `RX_NODES` 4096, `RX_CLASSES` 96, `RX_CONTS` 1024, `RX_CAPS` 256 (0.77.0; 512, 64, 512, 10 at the atlas's read), `RX_STEPS` 400,000, depth 24 | `jsregex.h:42-46`, `416` | Regex limits (repetitions per attempt ≲ 511) |
+| `RX_NODES` 65536 (a table grown from 1024; 4096 fixed at 0.77.0), `RX_CLASSES` 96, `RX_CONTS` 1024, `RX_CAPS` 256 (512, 64, 512, 10 at the atlas's read), `RX_STEPS` 400,000, depth 24 | `jsregex.h:42-46`, `416` | Regex limits (repetitions per attempt ≲ 511) |
 | `JD_DOCUMENT` 0x1000000, `JD_CLASSLIST` 0x2000000 | `jsdom.h:48`, `463` | Host number spaces |
 | `JD_WRAPS` = `DOM_NODES` = 20000 | `jsdom.h:63`, `dom.h:37` | Wrapper table (160,000 B from the region) |
 | `JD_LISTENERS` 256, `JD_TYPE_MAX` 24 | `jsdom.h:219-220` | Listener registrations per page life; event type length |

@@ -95,6 +95,33 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.78.0
+
+- **Module scripts (11, 12, jsmod.h, jsparse.h, jsrun.h).** `<script type="module">` with every form of import and
+  export, live bindings (getters on a namespace reading the exporter's scope), `import()`, `import.meta`, the page's
+  import map (exact names and prefixes), `data:` and `blob:` modules, and top-level await (a module left waiting,
+  its importers counting, `import()` settling when it finishes). Module scripts run after the classic ones in the
+  order written; `nomodule` no longer runs; `HTMLScriptElement.supports` says yes. A page may fetch 256 script
+  files and 16 MB. pagetest: twenty checks, each seen failing on a build broken for it. On the host BBC Sport runs
+  56 scripts (was 5), MDN 7 (2), gov.uk 7 (4), and Cloudflare all 94 of its modules.
+- **A named function expression knows its name (12, jsrun.h).** `function u() { ... u() }` bound nothing, so
+  every such recursion went to the outer name; GSAP stopped at "u is not defined". It had been so since the
+  engine was written. `FN_SELFNAME` and a scope of its own round the closure. jstest: one check.
+- **Names written with `\u` escapes (12, jsparse.h)** are their letters. jstest: one check.
+- **Regular expressions to 65536 nodes (12, jsregex.h).** The node table grows from 1024; it was a fixed 4096
+  and a list of words (Al Jazeera's) was "pattern too big". jstest: one check.
+- **Addresses given back whole (11, jsurl.h).** An element's src or href, a form's action and the addresses
+  fetch, XMLHttpRequest and sendBeacon make whole were cut at about a kilobyte; Reddit imports its 34 KB `data:`
+  modules by their src. `jd_resolve_str`. pagetest: one check.
+- **performance.timing, performance.navigation and the navigation entry (11, jswin.h).** The fetch's steps are
+  the page's beginning; interactive, DOMContentLoaded, complete and load are recorded as they happen. WordPress
+  and Bing stopped on them. pagetest: two checks, two changed.
+- **attachShadow and document.fonts (11, jsdom.h, jswin.h).** A `ShadowRoot` a script fills and searches (not
+  drawn: the element draws its own children), and an empty, loaded `FontFaceSet`. pagetest: two checks.
+- Measured on the host against 0.77.0, sixty sites rendered side by side: arXiv, Bing, dev.to, NASA, rustdoc and
+  weather.com now run every script where one stopped; Reddit's 20 scripts and 3 modules run; GitHub's modules run
+  and now stop at `Intl`, which is not there yet.
+
 ### 0.77.0
 
 - **A certificate the chain does not need (06b 10.5, x509.c).** Only the leaf has to parse; any other
