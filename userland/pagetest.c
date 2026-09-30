@@ -168,6 +168,8 @@ static int fake_history_length(void) { return 4; }
 /* A machine with a little memory free, and one with plenty. */
 static long long little_memory(void) { return 2 * 1024 * 1024; }
 static long long much_memory(void) { return 512LL * 1024 * 1024; }
+static long long some_memory(void) { return 200LL * 1024 * 1024; }
+static long long a_little_more(void) { return 64LL * 1024 * 1024; }
 
 /* A machine whose generator has found nothing to be unpredictable with. */
 static int no_random(void *buf, int len) { (void)buf; (void)len; return -1; }
@@ -1463,6 +1465,42 @@ int main(void) {
         jsdom_memory_with(much_memory);
         oks("while one with the memory runs it",
             titled("<script>document.title = 'ran';</script>"), "ran");
+        jsdom_memory_with(0);
+    }
+
+    /* --- what a page's scripts may have ---------------------------------------------
+     *
+     * 24 megabytes whatever the machine had, with nothing given back until the
+     * page is left, which is where big sites' scripts stopped. A quarter of
+     * what is free now, between 24 and 128. */
+    {
+        static const char *big =
+            "<script>var s = []; for (var i = 0; i < 160; i++) s.push('ab'.repeat(50000) + i);"
+            "document.title = 'made ' + s.length;</script>";
+        jsdom_memory_with(much_memory);
+        oks("a page's scripts may have more than 24 megabytes on a machine with the memory",
+            titled(big), "made 160");
+        ok("a quarter of what is free, up to 128", jd_J.mem_cap == 128u * 1024 * 1024);
+        jsdom_memory_with(some_memory);
+        titled("<script>document.title = 'x';</script>");
+        ok("and a quarter it is, below that", jd_J.mem_cap == 50u * 1024 * 1024);
+        /* In the browser's order: it says what is free after the page has
+           opened, and the first page kept 24 megabytes. */
+        jsdom_memory_with(0);
+        load("<body><script>document.title = 'x';</script></body>");
+        if (jsdom_open(&page, &qsheet)) {
+            jsdom_memory_with(much_memory);
+            char e2[64];
+            jsdom_scripts(e2, (int)sizeof(e2));
+            jsdom_loaded();
+        }
+        ok("and it is what is free when the scripts start, told after the page opened",
+           jd_J.mem_cap == 128u * 1024 * 1024);
+        jsdom_memory_with(a_little_more);
+        static const char too_much[] = "this script asked for more memory than a page is allowed";
+        const char *stopped = titled(big);
+        ok("but no more than 24 on a machine with little to spare",
+           strncmp(stopped, too_much, (int)sizeof too_much - 1) == 0);
         jsdom_memory_with(0);
     }
 

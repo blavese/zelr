@@ -42,7 +42,7 @@ jstest.c, jsprobe.c include js.h + jsparse.h + jsrun.h
 
 ### 2.3 Design decisions and the reasons the comments give
 
-1. **A region allocator and no garbage collector** (`js.h:38-53`). The comment: "A collector needs to know every live value, and in a tree-walking interpreter half of them are in local variables of the C functions doing the walking … A region has none of that: nothing is ever freed early because nothing is ever freed at all." The whole region is freed when the world is torn down (page left). The cap `JS_MEM_CAP` = 24 MiB is meant to stop a runaway script "and say so". Since 0.43.0 there is one exception to "nothing is ever freed": a finished call's scope that no function value captured goes back to size-class free lists (§3.4 Scopes). That is the case the comment's reasoning covers, a scope that nothing can reach, and not a collector.
+1. **A region allocator and no garbage collector** (`js.h:38-53`). The comment: "A collector needs to know every live value, and in a tree-walking interpreter half of them are in local variables of the C functions doing the walking … A region has none of that: nothing is ever freed early because nothing is ever freed at all." The whole region is freed when the world is torn down (page left). The cap `JS_MEM_CAP` = 24 MiB is meant to stop a runaway script "and say so"; since 0.77.0 it is the floor of each context's own `mem_cap`, which the browser raises to a quarter of the machine's free memory, up to 128 MiB (`jd_mem_cap`, worked out when a page opens and again when its scripts start). Since 0.43.0 there is one exception to "nothing is ever freed": a finished call's scope that no function value captured goes back to size-class free lists (§3.4 Scopes). That is the case the comment's reasoning covers, a scope that nothing can reach, and not a collector.
 2. **Refuse by name rather than approximate** (`js.h:33-36`, `jsparse.h:105-111`). `class` gets "this engine does not have class" rather than a confusing syntax error. In practice several features are approximated silently anyway (§10).
 3. **The engine knows nothing about pages.** Two host hooks (`host_get`/`host_set`, `js.h:214-219`) keep it testable on its own (jstest), and `jsdom.h` fills them in (`jsdom.h:9-24`).
 4. **Built-ins are written in C**, not bootstrapped in JS, because a JS bootstrap would cost "a parse and a tree walk on every page load" (`jsrun.h:624-629`).
@@ -90,7 +90,7 @@ what is still missing. The rest of this file describes 6048716.
 **Header comment (`:1-54`)** lists what is here and what is not. The "what is not" list says "no regular expressions" (`:30`), which is stale (§10 D1). The memory rationale is at `:38-53`.
 
 **Constants**
-- `JS_MEM_CAP (24u*1024*1024)` `:61`: total region bytes per context.
+- `JS_MEM_CAP (24u*1024*1024)` `:61`: total region bytes per context unless the host raises `J->mem_cap` (set to it by `js_init`; jsdom.h raises it, 0.77.0).
 - `JS_STEP_CAP 40000000u` `:62`: steps per run or per callback.
 - `JS_DEPTH_CAP 160` `:63`: nested JS function calls.
 - `JS_CHUNK (256u*1024u)` `:224`: region chunk size.
@@ -137,7 +137,7 @@ what is still missing. The rest of this file describes 6048716.
 **Functions**
 - `js_alloc(J, n)` `:226-262`:
   - Rounds `n` up to 16.
-  - If `allocated + n > JS_MEM_CAP`, sets `sig = JS_FAILED` and `error = "this script asked for more memory than a page is allowed"` (only the first time) and returns 0.
+  - If `allocated + n > J->mem_cap` (`JS_MEM_CAP` before 0.77.0), sets `sig = JS_FAILED` and `error = "this script asked for more memory than a page is allowed"` (only the first time) and returns 0.
   - Otherwise bump-allocates from the head chunk. A new chunk is `max(n, 256 KiB)` from `malloc`.
   - Memory is zero-filled.
   - If `malloc` fails: `JS_FAILED` with an empty message.
@@ -944,7 +944,7 @@ No path today dispatches an event from inside a script (there is no `el.click()`
 
 | Name / value | Where | Meaning |
 |---|---|---|
-| `JS_MEM_CAP` 24 MiB | `js.h:61` | Region bytes per context over its whole life. At the cap: `JS_FAILED`, "this script asked for more memory than a page is allowed" |
+| `JS_MEM_CAP` 24 MiB | `js.h:61` | Region bytes per context over its whole life (the floor of `J->mem_cap`, which jsdom.h raises to a quarter of free memory, at most 128 MiB). At the cap: `JS_FAILED`, "this script asked for more memory than a page is allowed" |
 | `JS_STEP_CAP` 40,000,000 | `js.h:62` | Evaluator steps per `js_run`, per listener, per timer callback, per onload. An attribute handler shares its dispatch's budget |
 | `JS_DEPTH_CAP` 160 | `js.h:63` | Nested JS function calls; "too many nested calls" (catchable) |
 | `JS_CHUNK` 256 KiB | `js.h:224` | Region chunk size ("a quarter megabyte", `jsdom.h:37`) |

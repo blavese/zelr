@@ -1051,7 +1051,7 @@ static jval nat_str_repeat(jctx *J, jval t, jval *a, int n) {
     double times = js_trunc(js_to_num(J, js_arg(a, n, 0)));
     if (times < 0 || times - times != 0)
         return js_throw(J, JS_ERR_RANGE, "repeat takes a count that is not negative", J->error_line);
-    if (times * s->len > (double)JS_MEM_CAP)
+    if (times * s->len > (double)J->mem_cap)
         return js_throw(J, JS_ERR_RANGE, "that would be longer than a page may have", J->error_line);
     jtext o = { 0, 0, 0, 0 };
     for (u32 i = 0; i < (u32)times && !o.full; i++) jt_put(J, &o, s->s, s->len);

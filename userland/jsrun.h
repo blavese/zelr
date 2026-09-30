@@ -2105,7 +2105,7 @@ static void jt_put(jctx *J, jtext *t, const char *s, u32 n) {
     if (t->n + n + 1 > t->cap) {
         u32 cap = t->cap ? t->cap : 128;
         while (cap < t->n + n + 1) cap *= 2;
-        if (cap > JS_MEM_CAP) { t->full = 1; js_out_of_memory(J); return; }
+        if (cap > J->mem_cap) { t->full = 1; js_out_of_memory(J); return; }
         char *nb = (char *)malloc(cap);
         if (!nb) { t->full = 1; js_out_of_memory(J); return; }
         volatile char *d = nb;
@@ -3572,6 +3572,7 @@ static void agen_after(jctx *J, jco *co) {
 static void js_init(jctx *J) {
     memset(J, 0, (int)sizeof(*J));
     J->sig = JS_OK;
+    J->mem_cap = JS_MEM_CAP;
     js_names(J);
     J->global = js_scope(J, 0);
     if (!J->global) return;

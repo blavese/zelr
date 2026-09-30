@@ -104,6 +104,13 @@ numbered files are still to 6048716; where they disagree with this list, this li
 - **The black box counts a boot once and writes only over blank (04 S23, S24, blackbox.c).** The boot number
   was read back off this boot's own record at every flush and counted again; the region was free if its
   first sector alone was blank. [black box]: three checks.
+- **Scripts may have what the machine can spare (12, js.h, jsdom.h).** A page's script memory, 24 MB on every
+  machine with nothing freed until the page is left, is now each context's `mem_cap`, raised to a quarter of
+  the free memory when the page opens and again when its scripts start (the browser says what is free after
+  opening), never below 24 MB nor above 128. With 800 MB free on the host, The Verge ran 56 scripts (was 10)
+  and Instagram 54 (was 11), showing its sign-in page instead of a blank one. pagetest: five checks (a 32 MB
+  script runs with the memory and stops without it, the quarter, the ceiling, and the order the browser
+  tells it in). The host shim reports `HOST_FREE_KB` as the machine's free memory.
 
 ### 0.76.0
 

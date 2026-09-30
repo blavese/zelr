@@ -102,7 +102,7 @@ static void js_ta_set(jctx *J, jobj *o, u32 i, jval v) {
 
 /* A buffer of n bytes, all nought. */
 static jobj *ta_new_buffer(jctx *J, jobj *proto, double n) {
-    if (!(n >= 0) || n > (double)(JS_MEM_CAP / 2) || n != js_trunc(n)) {
+    if (!(n >= 0) || n > (double)(J->mem_cap / 2) || n != js_trunc(n)) {
         js_throw(J, JS_ERR_RANGE, "that is not a length a buffer can have", J->error_line);
         return 0;
     }
@@ -146,7 +146,7 @@ static jval nat_ta_make(jctx *J, jval t, jval *a, int n) {
     if (!js_is_obj(src)) {
         double len = src.t == JS_UNDEF ? 0 : js_trunc(js_to_num(J, src));
         if (J->sig != JS_OK) return js_undef();
-        if (len < 0 || len > (double)(JS_MEM_CAP / 2) / sz)
+        if (len < 0 || len > (double)(J->mem_cap / 2) / sz)
             return js_throw(J, JS_ERR_RANGE, "that is not a length a typed array can have", J->error_line);
         jobj *buf = ta_new_buffer(J, 0, len * sz);
         return buf ? js_from_obj(ta_make(J, type, buf, 0, (u32)len, proto)) : js_undef();

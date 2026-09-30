@@ -192,7 +192,7 @@ static void co_entry(void *arg);
 
 /* A stack for it, laid out so the first switch to it lands in the entry. */
 static int co_stack_new(jctx *J, jco *co) {
-    if (J->allocated + JS_CO_STACK > JS_MEM_CAP) {
+    if (J->allocated + JS_CO_STACK > J->mem_cap) {
         js_out_of_memory(J);
         return 0;
     }

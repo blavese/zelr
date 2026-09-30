@@ -474,7 +474,7 @@ Mouse: wheel ±48 px per step (`scroll -= steps*48`, 1511); click on a link, a c
 
 ### 3.8 The JS interface (`userland/jsdom.h`, 1314 lines; `userland/js.h` 1-260)
 
-The engine (js.h) runs a language and knows nothing of pages; its `jctx` has two hooks, `host_get(J, obj, name, *out)` and `host_set(J, obj, name, v)` (js.h:214-219), and every `jobj` carries an `int host` (js.h:133-135). jsdom.h fills them in. Engine limits relevant to pages: `JS_MEM_CAP 24 MiB`, `JS_STEP_CAP 40 000 000`, `JS_DEPTH_CAP 160` (js.h:61-63), region allocation in `JS_CHUNK 256 KiB` pieces via `malloc`, no garbage collector (js.h:38-53). (The js.h header's "no regular expressions" is contradicted by jsregex.h -- the engine agent's area.)
+The engine (js.h) runs a language and knows nothing of pages; its `jctx` has two hooks, `host_get(J, obj, name, *out)` and `host_set(J, obj, name, v)` (js.h:214-219), and every `jobj` carries an `int host` (js.h:133-135). jsdom.h fills them in. Engine limits relevant to pages: `JS_MEM_CAP 24 MiB` (since 0.77.0 raised per page to a quarter of free memory, at most 128 MiB: `jd_mem_cap`), `JS_STEP_CAP 40 000 000`, `JS_DEPTH_CAP 160` (js.h:61-63), region allocation in `JS_CHUNK 256 KiB` pieces via `malloc`, no garbage collector (js.h:38-53). (The js.h header's "no regular expressions" is contradicted by jsregex.h -- the engine agent's area.)
 
 **What browser.c calls** (all static in jsdom.h unless noted):
 

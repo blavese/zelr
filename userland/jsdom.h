@@ -118,7 +118,7 @@ static void jd_note_error(void) {
    they have, none of its handlers, timers or requests is run again: each one
    would stop at its first allocation anyway, having used a little more of the
    spare the one that ran out is getting out on (js.h, js_alloc). */
-static int jd_spent(void) { return jd_J.allocated >= JS_MEM_CAP; }
+static int jd_spent(void) { return jd_J.allocated >= jd_J.mem_cap; }
 
 /* A call from the browser into the page: a handler, a timer, a reply. What
    it throws is the page's to report and not the browser's to stop on. */
@@ -5445,6 +5445,26 @@ static long long (*jd_free_memory)(void);
 
 void jsdom_memory_with(long long (*fn)(void)) { jd_free_memory = fn; }
 
+/* How much a page's scripts may have, from what the machine has free as the
+ * page opens: a quarter of it, never less than the 24 megabytes every machine
+ * gets and never more than 128.
+ *
+ * With nothing ever given back until the page is left, 24 was where the
+ * scripts of big sites stopped -- The Verge, Yahoo, Microsoft, Instagram and
+ * Ars Technica all ended on "more memory than a page is allowed" -- on a
+ * machine with hundreds of megabytes doing nothing. A quarter leaves the
+ * layout, the pictures and every other program the rest. */
+#define JD_MEM_CAP_MAX (128u * 1024 * 1024)
+
+static u32 jd_mem_cap(void) {
+    long long free_b = jd_free_memory ? jd_free_memory() : -1;
+    if (free_b < 0) return JS_MEM_CAP;
+    long long c = free_b / 4;
+    if (c < (long long)JS_MEM_CAP) c = JS_MEM_CAP;
+    if (c > (long long)JD_MEM_CAP_MAX) c = JD_MEM_CAP_MAX;
+    return (u32)c;
+}
+
 static int jd_room_for(u32 len) {
     long long free_b = jd_free_memory ? jd_free_memory() : -1;
     if (free_b < 0) return 1;
@@ -5522,6 +5542,12 @@ static int jsdom_scripts(char *err, int errcap) {
     int ran = 0;
     jd_outside = jd_outside_failed = 0;
     jd_ready = 0;
+
+    /* Again here, where the browser has handed over everything it lends:
+       it says what is free after opening the page, and the first page used
+       to keep the 24 megabytes of a machine that had not said. */
+    u32 cap = jd_mem_cap();
+    if (cap > jd_J.mem_cap) jd_J.mem_cap = cap;
 
     /* The page's own, in the order they were written -- which for what the
        parser made is the order of the numbers. A file that defines
@@ -6491,6 +6517,7 @@ static int jsdom_open(ddoc *d, csheet *sheet) {
     jd_sheet = sheet;
 
     js_init(&jd_J);
+    jd_J.mem_cap = jd_mem_cap();
     jd_J.host_get = jd_host_get;
     jd_J.host_set = jd_host_set;
 

@@ -247,7 +247,16 @@ zw host_syscall(zw n, zw a, zw b, zw c) {
        nought but the screen. It cleared sixty-four bytes, past the end of
        the caller's, which a program keeping one on its stack did not
        survive. */
-    case 31: { memset((void *)a, 0, 12 * 4); ((unsigned *)a)[8] = 1024; ((unsigned *)a)[9] = 768; return 0; }
+    /* HOST_FREE_KB, when set, is what the machine says it has free (and in
+       all), so a program that sizes itself by it can be tried on the host
+       as it would be on a machine with that much. */
+    case 31: {
+        memset((void *)a, 0, 12 * 4);
+        ((unsigned *)a)[8] = 1024; ((unsigned *)a)[9] = 768;
+        const char *kb = getenv("HOST_FREE_KB");
+        if (kb) ((unsigned *)a)[2] = ((unsigned *)a)[5] = (unsigned)strtoul(kb, 0, 10);
+        return 0;
+    }
     /* random_bytes: the host's own generator, capped as the kernel caps a
        call (include/syscall.h, RANDOM_CALL_MAX). */
     case 67: {

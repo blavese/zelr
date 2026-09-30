@@ -62,7 +62,9 @@
 #include "alloc.h"
 
 /* How much one page's scripts may have at once, and how long they may run.
-   All are refusals with a message rather than limits that corrupt. */
+   All are refusals with a message rather than limits that corrupt. The
+   memory is what every machine gets; a host with more to spare raises a
+   context's own mem_cap (jsdom.h, jd_mem_cap). */
 #define JS_MEM_CAP   (24u * 1024 * 1024)
 #define JS_MEM_SPARE (1u * 1024 * 1024)
 #define JS_STEP_CAP  40000000u
@@ -342,6 +344,7 @@ typedef struct jctx {
        up to 256 bytes, in steps of sixteen */
     jchunk *chunks;
     u32     allocated;
+    u32     mem_cap;          /* JS_MEM_CAP unless the host gave more */
     void   *free_list[16];
 
     /* The global scope, whose variables are the global object's properties,
@@ -454,7 +457,7 @@ static void *js_alloc(jctx *J, u32 n) {
             return p;
         }
     }
-    if (J->allocated + n > JS_MEM_CAP) {
+    if (J->allocated + n > J->mem_cap) {
         js_out_of_memory(J);
         /* The script is stopped from here, but the C already on its way
            through a statement is not: it asked for a string or a property and
@@ -463,7 +466,7 @@ static void *js_alloc(jctx *J, u32 n) {
            down. So what is already running is given a little more, from a
            spare that nothing reaches but this, to get back out; the page's
            handlers and timers do not run again (jsdom.h, jd_spent). */
-        if (J->allocated + n > JS_MEM_CAP + JS_MEM_SPARE) return 0;
+        if (J->allocated + n > J->mem_cap + JS_MEM_SPARE) return 0;
     }
 
     jchunk *c = J->chunks;
