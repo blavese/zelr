@@ -801,6 +801,34 @@ static void jd_set_inner(int el, const char *html, int len) {
     if (el < 0) return;
     jd_remove_children(el);
 
+    /* Inside a script or a style sheet markup is not markup, and in a
+       textarea or a title only its entities are: what is set is text, as the
+       standard reads it there. Next.js sets the code of the scripts it makes
+       this way, and a `<` in the code began a tag and cut the script off. */
+    int tag = jd_doc->nodes[el].tag;
+    if (jd_raw_text(el) || tag == T_TEXTAREA || tag == T_TITLE) {
+        int t;
+        if (tag == T_TEXTAREA || tag == T_TITLE) {
+            /* A byte that is not part of a character comes out as three. */
+            int cap = len * 3 + 8;
+            char *out = (char *)malloc((u64)cap);
+            if (!out) return;
+            int w = 0;
+            for (int i = 0; i < len; ) {
+                char one[8];
+                int used = 1, n = html_char(html + i, len - i, &used, one);
+                for (int k = 0; k < n && w < cap; k++) out[w++] = one[k];
+                i += used;
+            }
+            t = jd_new_text(out, w);
+            free(out);
+        } else {
+            t = jd_new_text(html, len);
+        }
+        if (t >= 0) jd_insert(el, t, -1);
+        return;
+    }
+
     int f = jd_parse_fragment(html, len);
     if (f >= 0) jd_insert(el, f, -1);
 }

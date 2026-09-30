@@ -118,6 +118,12 @@ numbered files are still to 6048716; where they disagree with this list, this li
   rule looks past, `:empty` ignores and the layout draws nothing for; jsdom's comments are the same nodes.
   layouttest: six checks (no grid cell, no flex place or gap, still first-child, `:empty`, no line between
   blocks, no space between inline boxes); pagetest: five.
+- **Markup set into a script is its code (11, jsdom.h).** `innerHTML` on a script, a style sheet or the other
+  raw-text elements sets text, and on a textarea or a title text with its entities read, as the standard's
+  fragment parsing has it. Next.js makes its `beforeInteractive` scripts by setting their code that way, and
+  the first `<` in the code began a tag and cut the script off: Yahoo's hydration script and its consent
+  script stopped on "expected ), not {". pagetest: two checks. scriptdump prints a stopped inline script's
+  text with `text` after the address.
 - **Patterns with hundreds of groups and alternatives (12, jsregex.h).** `RX_CAPS` 50 to 256 and `RX_NODES` 1024
   to 4096; names are cleared per group as the prescan counts them and each search resets only the groups
   the pattern has (`ngroups`), since every use compiles afresh. jstest: three checks.

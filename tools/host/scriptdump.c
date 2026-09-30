@@ -1,6 +1,6 @@
 /* What each of a real page's scripts did, one line each.
  *
- *   scriptdump ADDRESS
+ *   scriptdump ADDRESS [SECONDS] [text]
  *
  * Loads the page with the browser's own load() -- the same fetches, the same
  * limits on how many scripts and how large, the same document and bindings
@@ -22,6 +22,7 @@
 #define main zelr_main
 
 static int dumped;
+static int show_text;            /* "text" after the address */
 
 static int number_of(const char *s) {
     int v = 0;
@@ -53,6 +54,17 @@ static void one_done(int index, const char *from, u32 len, const char *err) {
     puts("  [");
     putn((int)(jd_J.allocated / 1024));
     puts(" KB]\n");
+
+    /* With "text": an inline script that stopped is printed whole between
+       markers, to find what the engine could not read. One from a file has
+       its address above, to fetch. */
+    if (show_text && err && *err && len && !(from && *from)) {
+        puts("---- script text\n");
+        for (int c = jd_doc->nodes[index].first; c >= 0; c = jd_doc->nodes[c].next)
+            if (jd_doc->nodes[c].kind == DN_TEXT && jd_doc->nodes[c].text >= 0)
+                puts(jd_doc->arena + jd_doc->nodes[c].text);
+        puts("\n---- end\n");
+    }
 }
 
 /* Every error, as it happens, a script's own just before its line and a
@@ -65,7 +77,8 @@ static void any_error(const char *err, int line) {
 }
 
 int main(int argc, char **argv) {
-    if (argc < 2) { puts("scriptdump ADDRESS [SECONDS]\n"); return 2; }
+    if (argc < 2) { puts("scriptdump ADDRESS [SECONDS] [text]\n"); return 2; }
+    for (int a = 2; a < argc; a++) if (w_same(argv[a], "text")) show_text = 1;
 
     src = (char *)map(SRC_MAX, PROT_READ | PROT_WRITE);
     cssbuf = (char *)map(CSS_MAX, PROT_READ | PROT_WRITE);

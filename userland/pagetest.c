@@ -1498,6 +1498,21 @@ int main(void) {
                    "document.title = document.getElementById('w').textContent;</script></body>"),
             "arrived");
 
+        /* Markup set into a script is its code, as the standard reads it
+           there; Next.js sets the scripts it makes this way, and a `<` in the
+           code began a tag. In a textarea only the entities are read. */
+        oks("markup set into a script is its code, and it runs whole",
+            titled("<head></head><body><script>var s = document.createElement('script');"
+                   "s.innerHTML = 'document.title = (1 < 2) + \" \" + \"a<b>c\".length;';"
+                   "document.head.appendChild(s);</script></body>"),
+            "true 5");
+        oks("and into a style sheet or a textarea it is text",
+            titled("<body><style id=st></style><textarea id=ta></textarea><script>"
+                   "var st = document.getElementById('st'), ta = document.getElementById('ta');"
+                   "st.innerHTML = 'p > b { color: red }'; ta.innerHTML = 'a &amp; <b>';"
+                   "document.title = st.textContent + ' | ' + ta.value + ' ' + ta.childNodes.length;</script></body>"),
+            "p > b { color: red } | a & <b> 1");
+
         /* The first DOM_COMMENT_MAX bytes of a long one, and none at all once
            the document is nearly full: the nodes left go to what is drawn. */
         static char big[6000];
