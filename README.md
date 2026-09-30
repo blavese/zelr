@@ -795,7 +795,12 @@ as the United States writes it -- numbers, currencies, dates in about seventy
 time zones, plurals, relative times, lists, sorting and segmenting -- and
 every object says en-US whatever it was asked for. And BigInt: whole numbers
 of any size, with every operator, exact comparisons and DataView's 64-bit
-methods.
+methods. A page's workers run too, each a script with a world of its own,
+talking to the page by copied messages, on the page's own time; and a
+function gives back the text it was written as, which is what some pages
+build their workers from. Scripts run in the order a browser runs them: the
+deferred ones and the modules after the page has been read, not in the order
+they were written.
 A page's scripts may have a quarter of the memory the machine has free,
 between 24 and 128 megabytes, since nothing is freed until the page is left.
 What it has instead is two hooks, how a property on a host object is read

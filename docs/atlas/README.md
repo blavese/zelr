@@ -95,6 +95,28 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.82.0
+
+- **Scripts in a browser's order (11, jsdom.h `jd_script_when`).** The parser's scripts, then (the document
+  interactive) the deferred files and modules, then the async ones; they had all run in the order written, and NHS's
+  deferred main.js ran before the settings it reads. pagetest, failing with every script run where it stands and
+  with the document still loading.
+- **Web Workers (11, jsworker.h).** A context of its own for each, run as tasks on the page's thread, with messages
+  copied across contexts, importScripts, timers, fetch, MessageChannel, AbortController and URL. MSN and OpenStreetMap
+  stopped at "Worker is not defined"; both run their scripts now. pagetest: six checks, failing on nine broken builds.
+- **Function.prototype.toString is the function's text (12).** Sources are kept and each function's span recorded;
+  MapLibre's worker is built from it. jstest, failing with the spans unused and with async left out.
+- **A function's lazy prototype (12, `js_proto_ready`)** is made before defineProperty, delete, freeze and
+  getOwnPropertyNames: Babel's classes with no methods lost theirs, and Stripe's script on NPR stopped. jstest,
+  failing on four broken builds.
+- **A document's arena is its owner's (11, dom.h `dom_use_arena`)**: the browser's page has 16 MB, lazily mapped,
+  and Netflix's 2.5 MB script is read whole; regular expressions' classes and ranges grow past 96 and 2048, which had
+  stopped Netflix's page next. pagetest and browsercheck (a four-megabyte script), jstest; each failing on the old
+  limits.
+- **The Intl key is each context's (12)**, since a worker's setup had replaced the page's. pagetest compares the key
+  itself before and after a worker is made (the two keys' serial numbers agree, so an Intl object kept working until
+  the freed worker's memory was used again), failing with the key shared.
+
 ### 0.81.0
 
 - **The page's styles follow its scripts (11, browser.c `sheets_follow`).** The sheet was made once, before any

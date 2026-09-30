@@ -1,6 +1,34 @@
 # 11 -- The web browser (everything except JS-engine internals and image decoders)
 
-**Since 0.81.0** (the rest of this file is older; trust the code and the README's "since 6048716" list):
+**Since 0.82.0** (the rest of this file is older; trust the code and the README's "since 6048716" list):
+- **Scripts run in a browser's order** (`jsdom_scripts`, `jd_script_when`): first those the parser stops for, in the
+  order written (`JR_NOW`); then, the document read and `interactive` (readystatechange fires between), the deferred
+  files and every module that is not async, in the order written (`JR_AFTER`); then the async ones (`JR_ARRIVES`).
+  They had all run in the order written, so NHS's deferred main.js ran before the inline script below it that sets
+  the settings it reads. defer and async mean nothing to a classic script without a src. A deferred or async
+  script's document.write is dropped, since the document is no longer loading (`jd_doc_write`).
+- **Web Workers** (`userland/jsworker.h`, `jd_setup_workers`): a worker is a JavaScript context of its own
+  (`js_init`, `JW_MAX` 8 slots, each with half what a page is given and none when under 24 MB is free), made from a
+  fetched, `data:` or `blob:` script and run on the page's thread: its script, each message to it, each of its timers
+  and each of its fetches is a task in the page's queue (`jd_later_native`). Messages cross by a copy made in the other
+  context (`jsc_across`). Tasks carry the slot's generation (`jw_name`, `jw_named`), so a slot used again never runs
+  what was queued for the worker before; what a worker posted before close() still arrives, and nothing from one the
+  page terminated (`jw_ended`). Its globals are postMessage, close, importScripts (fetched and run in its global scope,
+  in order), setTimeout and the rest, fetch (GET or POST with a text body, data: and blob: too), name, location,
+  navigator (the page's), performance, crypto, and from a JavaScript prelude run in its context (`JW_PRELUDE`, handed
+  its natives as arguments): addEventListener and onmessage, Event, MessageEvent, ErrorEvent, EventTarget,
+  WorkerGlobalScope and the rest of its interfaces, MessageChannel, AbortController, URL and URLSearchParams (parsed
+  by the page's parser, `nat_jw_parse_url`), Headers and Response. An uncaught error is an error event at the Worker
+  and a line on the console. Not done: module workers (run as classic scripts), SharedWorker, transfer (copied, not
+  moved), XMLHttpRequest in a worker, a fetch's headers beyond its content type.
+- **A document's arena is its owner's to give** (`ddoc.arena`, `arena_cap`, `dom_use_arena`; `own_arena` is the
+  DOM_ARENA of 3 MB a document given none has). The browser gives its page 16 MB (`DOC_ARENA`, twice `SRC_MAX`), lazily
+  mapped, so a page costs only what it uses; Netflix's page is 3.2 MB, nearly all one script, which had been cut in the
+  middle of a string. svg.h and svgtest, which malloc a document, say they use its own.
+- On the host: NHS runs all 10 of its scripts, Netflix all 10 and is drawn, OpenStreetMap and MSN run theirs (MSN still
+  draws nothing: its content is in shadow trees a script attaches, which are not drawn).
+
+**Since 0.81.0**:
 - **The page's styles follow its scripts** (browser.c, `sheets_follow`). What `build` read before any script ran is
   the base (`styles_base`: the sheet's counts and each rule's `decl_n`), with every style and link element it read
   and the rules each gave (`sources`, 512, `ok` 1 fetched, 0 failed, -1 another medium or disabled, -2 past

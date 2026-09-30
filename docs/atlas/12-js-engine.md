@@ -2,7 +2,30 @@
 
 Source root the repository root (github.com/blavese/zelr main, 2026-09-22). All paths are relative to it; `file:N` means 1-based line N. Everything below was verified by reading the code. Where a behaviour was derived by tracing (not by running) it says so. Nothing here was built or run.
 
-**Since 0.81.0** (the rest of this file is older; trust the code):
+**Since 0.82.0** (the rest of this file is older; trust the code):
+- **Function.prototype.toString gives the function's own text.** Every source parsed is kept in the region for the
+  page's life (`js_keep_source`, called by `js_parse_begin`, into `J->srcs`), each token knows where it starts
+  (`jtok.start`) and the lexer where the last one ended (`jlex.prev_end`, kept by the `js_next` wrapper around
+  `js_next_raw`), and each function-making site records its span (`js_span` into `J->spans`, the index in the
+  function node's otherwise unused `c`): declarations and expressions from `function` (or the `async` before it,
+  found by a scan back over spaces), methods from their name or get/set/async/`*` (not `static`), arrows from their
+  parameters or `async`, and a class, whose constructor's span is the whole class. MapLibre builds its worker out
+  of its functions' text, which had come back as `{ ... }`, and AngularJS 1 reads parameter names from it. Natives
+  and bound functions still say `[native code]`. Cost: a copy of each script's text in the region.
+- **A function's prototype is made before anything works on the properties it has** (`js_proto_ready`):
+  defineProperty (Babel's `_createClass` makes each class's prototype read-only with a descriptor that has no value,
+  and a class with no methods was left with none, so `Object.create(Parent.prototype)` in a subclass threw --
+  Stripe's script on NPR), delete (refused, not answered yes and made again), freeze, seal, preventExtensions, and
+  getOwnPropertyNames, which now lists a function's length and name as well.
+- **Regular expressions' classes and ranges grow** as the nodes do (`RX_CLASSES_FIRST` 96 to `RX_CLASSES` 4096,
+  `RX_RANGES_FIRST` 2048 to 65536, a range's class a u16): a pattern with more than 96 classes stopped Netflix's page.
+- **structuredClone's copy crosses contexts** (`jsc_clone2`, reading in one and making in the other; `jsc_across`),
+  which is how a message reaches a worker.
+- **The Intl key is the context's** (`J->k_intl`): a worker is a second context, and its setup had replaced the
+  page's key with its own, and the page read its Intl objects by a key in the worker's memory, freed when the worker
+  ended. The keys' serial numbers agree, so only the key itself shows it (`js_intl_key`, compared by pagetest).
+
+**Since 0.81.0**:
 - **export is a name** outside a module. The lexer refused the word anywhere but after a dot or before a colon
   (`JS_UNSUPPORTED`, gone), so a method called export(), as Next.js's bloom filter has, stopped the BBC's pages; now a
   statement that starts with it outside a module (and is not `export(`, `export.` or `export =`) is "export is
