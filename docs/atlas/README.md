@@ -95,6 +95,16 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.84.0
+
+- **A collector for the JavaScript engine (12, jsgc.h)**: conservative mark and sweep over the stacks, the suspended
+  functions' stacks, the program's data, the context and the tree's strings, with the engine's and jsdom's value-holding
+  malloc moved into the region. jstest (churn far past the cap; what is reachable surviving, suspended generator and
+  async function included; arguments, jobs and texts; sort and JSON; a block held from inside; texts and names; a
+  context in malloc) and pagetest (listeners, timers, observers and lists through churn; a worker's own); failing on
+  nineteen broken builds, two of them only in a stress build. pagetest passes collecting every 37 blocks, jstest every
+  50. On the host MSN runs 82 scripts where it ran 33 and draws its feed.
+
 ### 0.83.0
 
 - **Shadow trees a script attaches are drawn (11, dom.h `dom_flat`, browser.c `page_drawn`)**, each with its own style

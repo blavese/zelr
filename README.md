@@ -804,8 +804,10 @@ they were written. Web components are drawn: the shadow tree a component's
 script attaches is laid out where the component stands, with its slots
 filled and its own style sheets on it alone, and the components inside it are
 made and told they are in the page as a browser tells them.
-A page's scripts may have a quarter of the memory the machine has free,
-between 24 and 128 megabytes, since nothing is freed until the page is left.
+A page's scripts may hold a quarter of the memory the machine has free,
+between 24 and 128 megabytes, at once: a collector gives back what they
+have finished with, finding what is still in use by looking through the
+machine's own stacks and memory for anything that points at it.
 What it has instead is two hooks, how a property on a host object is read
 and written, and `userland/jsdom.h` is the browser filling them in.
 

@@ -2,7 +2,25 @@
 
 Source root the repository root (github.com/blavese/zelr main, 2026-09-22). All paths are relative to it; `file:N` means 1-based line N. Everything below was verified by reading the code. Where a behaviour was derived by tracing (not by running) it says so. Nothing here was built or run.
 
-**Since 0.83.0** (the rest of this file is older; trust the code):
+**Since 0.84.0** (the rest of this file is older; trust the code):
+- **A collector** (userland/jsgc.h): conservative mark and sweep, non-moving, one context at a time. Each chunk has two
+  bitmaps after its data (`jchunk.bits`: where blocks start, which are in use), a block on a free list says so in its
+  second word (`js_is_free`, its address turned by `JS_FREE_MARK`), and the chunks are kept by address (`gc_map`) so a
+  word is found in one by halving. The roots are every word of the stack in use up to `zelr_stack_top` (zelr.h: `_start`
+  writes it; the host's shim reads the thread block), of a suspended function's stack (`js_thread_co` for the running
+  one, whichever context it is of, then its `back_sp` on the main stack; every other one on `co_all` from its `sp`), of
+  the program's writable data (`zelr_data_lo`/`hi`: linker symbols in sdk/zelr.ld, the PE sections on the host), of the
+  context itself, and the tree's strings. `__builtin_unwind_init` puts the caller's registers in js_gc's frame. A word
+  anywhere inside a block holds it. Sweeping makes each run of free blocks one, gives a chunk with nothing in use back
+  to malloc and the end of the one being filled back to its room, and rebuilds the free lists (256 sizes to 4096 and a
+  list of larger blocks, first fit with a split). It runs when `allocated` passes `gc_next` (8 MB, then twice what was
+  left in use) and not again near the cap if little came back. `JS_GC_STRESS` in a test build runs it every that many
+  blocks. **Nothing the engine keeps in malloc may hold a value**: the job queue, the names, the kept texts, arguments
+  gathered for a call, sort's copy, JSON's state and jsdom's listeners, timers, lists and observers' registrations moved
+  into the region. `ran_out` makes a page that ran out stay out (`jd_spent`).
+- **Array holes are not kept** (a gap written past is filled with undefined, and `in` finds it): known, not changed.
+
+**Since 0.83.0**:
 - **Shadow roots are kept** (jsdom.h `jd_shadow_host`, `jd_shadow_root`, `JD_SHADOWS` 1024, with a bit per host and
   root in `jd_shadow_mark` so asking of any other node costs nothing; `jsdom_shadow` for the browser).
 - **Connected goes through shadow roots** (`jd_connected_deep`): isConnected, focus, offsetParent, custom elements'
