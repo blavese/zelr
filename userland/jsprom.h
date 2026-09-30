@@ -27,6 +27,7 @@ static u32 jm_hash(jval k) {
             return (u32)(x.u ^ (x.u >> 32)) * 2654435761u;
         }
         case JS_BOOL: return k.b ? 3 : 5;
+        case JS_BIG: return jsb_hash(k.big);
         case JS_OBJ: {
             u64 p = (u64)k.obj;
             return (u32)((p >> 4) ^ (p >> 20)) * 2654435761u;

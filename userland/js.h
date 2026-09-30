@@ -107,12 +107,18 @@ typedef enum {
     JS_HOLE,
     /* An accessor: a getter and a setter where a value would be. Only ever
        inside a property, never handed to a script. */
-    JS_ACC
+    JS_ACC,
+    /* A BigInt: a whole number of any size (jsbig.h). */
+    JS_BIG
 } jtype;
 
 typedef struct jstr jstr;
 typedef struct jobj jobj;
 typedef struct jacc jacc;
+
+/* A BigInt's sign and magnitude, 32-bit limbs least significant first,
+   none of them zero at the top; made once and never changed (jsbig.h). */
+typedef struct jbint { u32 n; u32 neg; u32 d[1]; } jbint;
 
 typedef struct {
     jtype t;
@@ -122,6 +128,7 @@ typedef struct {
         jstr  *str;           /* JS_STR, and JS_SYM: the symbol's own key */
         jobj  *obj;
         jacc  *acc;
+        jbint *big;
     };
 } jval;
 
@@ -273,7 +280,9 @@ typedef enum {
     N_THROW, N_TRY, N_SWITCH, N_CASE, N_LABEL, N_CLASSDECL, N_WITH,
     /* a module's: import and export declarations, one name in their lists,
        and import.meta */
-    N_IMPORTDECL, N_IMPSPEC, N_EXPORTDECL, N_EXPSPEC, N_IMPORTMETA
+    N_IMPORTDECL, N_IMPSPEC, N_EXPORTDECL, N_EXPSPEC, N_IMPORTMETA,
+    /* a BigInt literal: its text, made a value when reached */
+    N_BIGINT
 } ntype;
 
 /* Thirty two bytes a node. A big page's bundle is a million of them, and the
@@ -393,7 +402,7 @@ typedef struct jctx {
     /* Prototypes, and the constructors the engine needs to find again
        whatever a script has assigned over their names. */
     jobj   *p_object, *p_function, *p_array, *p_string, *p_number, *p_boolean,
-           *p_symbol, *p_regexp, *p_error, *p_date, *p_map, *p_set, *p_weakmap,
+           *p_symbol, *p_bigint, *p_regexp, *p_error, *p_date, *p_map, *p_set, *p_weakmap,
            *p_weakset, *p_promise, *p_iterator, *p_array_iter, *p_map_iter,
            *p_set_iter, *p_string_iter, *p_generator, *p_async_generator,
            *p_async_iterator, *p_regexp_iter, *p_gen_function, *p_async_function,

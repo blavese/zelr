@@ -486,7 +486,20 @@ static int intl_nf_setup(jctx *J, intl_nf *f, jval opts, int dflt_min_frac, int 
    that read back as it, which is what the browsers round (ICU), so 1.005 to
    two places is 1.01 as a page expects, where the double's exact value,
    1.00499..., would round down. */
-static int intl_digits(double x, char *dg, int *first) { return js_shortest(x, dg, first); }
+static const char *intl_big_digits;   /* a BigInt's digits, while one is formatted */
+
+static int intl_digits(double x, char *dg, int *first) {
+    if (intl_big_digits) {
+        int n = 0;
+        while (intl_big_digits[n] && n < 780) { dg[n] = intl_big_digits[n]; n++; }
+        while (n > 1 && dg[n - 1] == '0') n--;
+        int len = 0;
+        while (intl_big_digits[len]) len++;
+        *first = len - 1;
+        return n;
+    }
+    return js_shortest(x, dg, first);
+}
 
 /* A non-negative finite number's decimal digits, rounded as f says, after
    dividing by 10^shift: the digits dg[0..*nd) with the first at 10^*first.
@@ -699,23 +712,59 @@ static jval nat_intl_nf_ctor(jctx *J, jval t, jval *a, int n) {
     return js_from_obj(o);
 }
 
-/* A number, or its text read as one, as format takes it. */
-static double intl_arg_num(jctx *J, jval v) {
+/* A number, or its text read as one, as format takes it. A BigInt is
+   written from its digits, which formatting then reads (intl_digits): *big
+   holds them, or is 0. */
+static double intl_arg_num(jctx *J, jval v, jstr **big) {
+    if (big) *big = 0;
+    if (v.t == JS_BIG) {
+        jstr *s = jsb_to_str(J, v.big, 10);
+        if (big && s) *big = s;
+        /* Its size, for the choices made by size (compact's K and M). */
+        double d = jsb_to_double(J, v.big);
+        if (d - d != 0) d = d < 0 ? -1e308 : 1e308;
+        return d;
+    }
     if (v.t == JS_STR) return js_str_to_num(v.str->s, v.str->len);
     return js_to_num(J, v);
+}
+
+/* Formats x, or the BigInt whose text is big. */
+static void intl_format_any(jctx *J, intl_parts *P, const intl_nf *f, double x, jstr *big) {
+    char *buf = 0;
+    if (big) {
+        const char *d = big->s[0] == '-' ? big->s + 1 : big->s;
+        if (d[0] == '0') x = 0;
+        else if (f->style == NFS_PERCENT) {
+            /* A percent is a hundred times the number: two more digits. */
+            u32 n = 0;
+            while (d[n]) n++;
+            buf = (char *)malloc(n + 3);
+            if (buf) {
+                for (u32 i = 0; i < n; i++) buf[i] = d[i];
+                buf[n] = buf[n + 1] = '0';
+                buf[n + 2] = 0;
+                intl_big_digits = buf;
+            }
+        } else intl_big_digits = d;
+    }
+    intl_format_number(J, P, f, x);
+    intl_big_digits = 0;
+    free(buf);
 }
 
 static jval nat_intl_nf_format_fn(jctx *J, jval t, jval *a, int n) {
     (void)t;
     intl_nf f;
     if (!intl_load(J, J->callee->data, INTL_NF, &f, (u32)sizeof f)) return js_undef();
-    double x = intl_arg_num(J, js_arg(a, n, 0));
+    jstr *big;
+    double x = intl_arg_num(J, js_arg(a, n, 0), &big);
     if (J->sig != JS_OK) return js_undef();
     intl_parts *P = (intl_parts *)malloc(sizeof(intl_parts));
     if (!P) return js_undef();
     P->text.b = 0; P->text.n = 0; P->text.cap = 0; P->text.full = 0;
     P->n = 0;
-    intl_format_number(J, P, &f, x);
+    intl_format_any(J, P, &f, x, big);
     jval r = ip_string(J, P);
     free(P);
     return r;
@@ -731,13 +780,14 @@ static jval nat_intl_nf_format(jctx *J, jval t, jval *a, int n) {
 static jval nat_intl_nf_parts(jctx *J, jval t, jval *a, int n) {
     intl_nf f;
     if (!intl_load(J, t, INTL_NF, &f, (u32)sizeof f)) return js_undef();
-    double x = intl_arg_num(J, js_arg(a, n, 0));
+    jstr *big;
+    double x = intl_arg_num(J, js_arg(a, n, 0), &big);
     if (J->sig != JS_OK) return js_undef();
     intl_parts *P = (intl_parts *)malloc(sizeof(intl_parts));
     if (!P) return js_undef();
     P->text.b = 0; P->text.n = 0; P->text.cap = 0; P->text.full = 0;
     P->n = 0;
-    intl_format_number(J, P, &f, x);
+    intl_format_any(J, P, &f, x, big);
     jval r = ip_array(J, P, 0, js_undef());
     free(P);
     return r;
@@ -746,7 +796,7 @@ static jval nat_intl_nf_parts(jctx *J, jval t, jval *a, int n) {
 static jval nat_intl_nf_range(jctx *J, jval t, jval *a, int n) {
     intl_nf f;
     if (!intl_load(J, t, INTL_NF, &f, (u32)sizeof f)) return js_undef();
-    double x = intl_arg_num(J, js_arg(a, n, 0)), y = intl_arg_num(J, js_arg(a, n, 1));
+    double x = intl_arg_num(J, js_arg(a, n, 0), 0), y = intl_arg_num(J, js_arg(a, n, 1), 0);
     if (J->sig != JS_OK) return js_undef();
     if (x != x || y != y) return js_throw(J, JS_ERR_RANGE, "a range of numbers needs numbers", J->error_line);
     intl_parts *P = (intl_parts *)malloc(sizeof(intl_parts));
@@ -811,6 +861,24 @@ static jval nat_intl_nf_resolved(jctx *J, jval t, jval *a, int n) {
     intl_set_str(J, o, "roundingPriority", f.compact_round ? "morePrecision" : "auto");
     intl_set_str(J, o, "trailingZeroDisplay", "auto");
     return js_from_obj(o);
+}
+
+/* BigInt.prototype.toLocaleString. */
+static jval intl_bigint_text(jctx *J, jval v, jval locales, jval opts) {
+    intl_requested(J, locales);
+    if (J->sig != JS_OK) return js_undef();
+    intl_nf f;
+    if (!intl_nf_setup(J, &f, opts, 0, 3)) return js_undef();
+    jstr *big;
+    double x = intl_arg_num(J, v, &big);
+    intl_parts *P = (intl_parts *)malloc(sizeof(intl_parts));
+    if (!P) return js_undef();
+    P->text.b = 0; P->text.n = 0; P->text.cap = 0; P->text.full = 0;
+    P->n = 0;
+    intl_format_any(J, P, &f, x, big);
+    jval r = ip_string(J, P);
+    free(P);
+    return r;
 }
 
 /* Number.prototype.toLocaleString, through a NumberFormat of its options. */

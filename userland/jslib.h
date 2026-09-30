@@ -1045,7 +1045,9 @@ static jval nat_bool_valueof(jctx *J, jval t, jval *a, int n) {
 /* --- numbers ---------------------------------------------------------------- */
 
 static jval nat_num_ctor(jctx *J, jval t, jval *a, int n) {
-    jval v = js_num(n ? js_to_num(J, js_unbox(a[0])) : 0);
+    jval x = n ? js_unbox(a[0]) : js_num(0);
+    if (x.t == JS_OBJ) { x = js_to_primitive(J, x, 1); if (J->sig != JS_OK) return js_undef(); }
+    jval v = x.t == JS_BIG ? js_num(jsb_to_double(J, x.big)) : js_num(js_to_num(J, x));
     if (J->new_target.t != JS_UNDEF && js_is_obj(t)) {
         t.obj->kind = JO_BOXED;
         t.obj->ival = v;
@@ -1867,8 +1869,8 @@ static void js_json_newline(jctx *J, jjson *S) {
 /* Writes a value; 0 when it wrote nothing (undefined, a function, a symbol),
    -1 when something threw. */
 static int js_json_value(jctx *J, jjson *S, jval holder, jstr *key, jval v) {
-    if (js_is_obj(v) || v.t == JS_STR || v.t == JS_NUM) {
-        jval tj = js_is_obj(v) ? js_get(J, v, J->s_toJSON) : js_undef();
+    if (js_is_obj(v) || v.t == JS_STR || v.t == JS_NUM || v.t == JS_BIG) {
+        jval tj = js_is_obj(v) || v.t == JS_BIG ? js_get(J, v, J->s_toJSON) : js_undef();
         if (J->sig != JS_OK) return -1;
         if (js_callable(tj)) {
             jval k = js_from_str(key);
@@ -1884,6 +1886,10 @@ static int js_json_value(jctx *J, jjson *S, jval holder, jstr *key, jval v) {
     /* A boxed number, string or boolean is written as what it holds; a boxed
        symbol is an object like any other, and is written as one. */
     if (js_is_obj(v) && v.obj->kind == JO_BOXED && v.obj->ival.t != JS_SYM) v = v.obj->ival;
+    if (v.t == JS_BIG) {
+        js_throw(J, JS_ERR_TYPE, "JSON cannot write a BigInt", J->error_line);
+        return -1;
+    }
     switch (v.t) {
         case JS_NULL: jt_put(J, &S->out, "null", 4); return 1;
         case JS_BOOL: jt_put(J, &S->out, v.b ? "true" : "false", v.b ? 4 : 5); return 1;
@@ -2414,6 +2420,7 @@ static jval nat_unescape(jctx *J, jval t, jval *a, int n) { (void)t; return js_u
 #include "jsprom.h"
 #include "jstyped.h"
 #include "jsproxy.h"
+#include "jsbig.h"
 #include "jsintl.h"
 
 /* --- setting it all up ------------------------------------------------------ */
@@ -2652,6 +2659,7 @@ static void js_globals(jctx *J) {
     js_setup_dates(J);
     js_setup_typed(J);
     js_setup_text(J);
+    js_setup_bigint(J);
     js_setup_intl(J);
 
     js_declare_flags(J, g, js_str(J, "NaN"), js_num(js_nan()), 0);

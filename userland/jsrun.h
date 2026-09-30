@@ -33,6 +33,14 @@ static jstr *js_to_str(jctx *J, jval v);
 static double js_to_num(jctx *J, jval v);
 static jobj *js_native(jctx *J, const char *name, jnative fn);
 static void js_drain(jctx *J);
+/* BigInt (jsbig.h, which comes after jslib.h). */
+static jval js_from_big(jbint *b);
+static jbint *jsb_literal(jctx *J, const jstr *s);
+static jval jsb_negate(jctx *J, jval v);
+static jval jsb_bitnot(jctx *J, jval v);
+static jval jsb_step(jctx *J, jval v, int up);
+static u32 jsb_hash(const jbint *a);
+static double jsb_to_double(jctx *J, const jbint *a);
 static jobj *js_promise_new(jctx *J);
 static void js_promise_settle(jctx *J, jobj *p, int ok, jval v);
 static void js_promise_resolve_with(jctx *J, jobj *p, jval v);
@@ -130,6 +138,7 @@ static int js_to_bool(jval v) {
         /* NaN is false, and so is zero, and -0 is zero. */
         case JS_NUM:  return !(v.num == 0 || v.num != v.num);
         case JS_STR:  return v.str && v.str->len > 0;
+        case JS_BIG:  return v.big->n != 0;
         default: return 1;
     }
 }
@@ -231,6 +240,9 @@ static double js_to_num(jctx *J, jval v) {
         case JS_SYM:
             js_throw(J, JS_ERR_TYPE, "a symbol cannot be made into a number", J->error_line);
             return js_nan();
+        case JS_BIG:
+            js_throw(J, JS_ERR_TYPE, "a BigInt is made into a number with Number()", J->error_line);
+            return js_nan();
         case JS_OBJ: {
             jval p = js_to_primitive(J, v, 1);
             if (J->sig != JS_OK) return js_nan();
@@ -274,6 +286,7 @@ static double js_trunc(double d) {
 }
 
 static jstr *js_concat(jctx *J, jstr *a, jstr *b);
+static jstr *jsb_to_str(jctx *J, const jbint *a, int radix);
 
 static jstr *js_to_str(jctx *J, jval v) {
     char buf[64];
@@ -286,6 +299,7 @@ static jstr *js_to_str(jctx *J, jval v) {
             return js_str_n(J, buf, n);
         }
         case JS_STR: return v.str ? v.str : js_str(J, "");
+        case JS_BIG: return jsb_to_str(J, v.big, 10);
         case JS_SYM:
             js_throw(J, JS_ERR_TYPE, "a symbol cannot be made into text without String()",
                      J->error_line);
@@ -354,6 +368,7 @@ static const char *js_typeof_name(jval v) {
         case JS_NUM:   return "number";
         case JS_STR:   return "string";
         case JS_SYM:   return "symbol";
+        case JS_BIG:   return "bigint";
         case JS_OBJ:   return js_callable(v) ? "function" : "object";
         default:       return "undefined";
     }
@@ -365,9 +380,13 @@ static const char *js_typeof_name(jval v) {
  * language leads with. Strict compares kinds first and is what anybody
  * means; loose converts, and is here because pages use it; SameValueZero is
  * what includes, Map and Set use, where NaN is itself. */
+static int jsb_cmp(const jbint *a, const jbint *b);
+static int jsb_loose_eq(jctx *J, jval big, jval other);
+
 static int js_strict_eq(jval a, jval b) {
     if (a.t != b.t) return 0;
     switch (a.t) {
+        case JS_BIG:  return jsb_cmp(a.big, b.big) == 0;
         case JS_UNDEF: case JS_NULL: return 1;
         case JS_BOOL: return a.b == b.b;
         case JS_NUM:  return a.num == b.num;      /* NaN fails, correctly */
@@ -412,6 +431,8 @@ static int js_loose_eq(jctx *J, jval a, jval b) {
         return js_loose_eq(J, pa, pb);
     }
     if (a.t == JS_STR && b.t == JS_STR) return js_str_eq(a.str, b.str);
+    if (a.t == JS_BIG) return jsb_loose_eq(J, a, b);
+    if (b.t == JS_BIG) return jsb_loose_eq(J, b, a);
     double x = js_to_num(J, a), y = js_to_num(J, b);
     return x == y;
 }
@@ -681,6 +702,7 @@ static jobj *js_proto_of_value(jctx *J, jval v) {
         case JS_NUM: return J->p_number;
         case JS_BOOL: return J->p_boolean;
         case JS_SYM: return J->p_symbol;
+        case JS_BIG: return J->p_bigint;
         default: return 0;
     }
 }
@@ -1899,7 +1921,28 @@ static JS_NOINLINE jval js_ident(jctx *J, jstr *name, jscope *sc) {
     return v;
 }
 
+static jval jsb_binary(jctx *J, jop op, jval l, jval r);
+static jval jsb_relational(jctx *J, jop op, jval l, jval r);
+
+/* The arithmetic and bitwise operators when either side is a BigInt or an
+   object, which may stand for one: both made primitive (as numbers), then
+   BigInt arithmetic when either is one. 0 when neither is, with l and r
+   left primitive for the ordinary way. */
+static int js_binary_big(jctx *J, jop op, jval *l, jval *r, jval *out) {
+    if (l->t == JS_OBJ) { *l = js_to_primitive(J, *l, 1); if (J->sig != JS_OK) { *out = js_undef(); return 1; } }
+    if (r->t == JS_OBJ) { *r = js_to_primitive(J, *r, 1); if (J->sig != JS_OK) { *out = js_undef(); return 1; } }
+    if (l->t != JS_BIG && r->t != JS_BIG) return 0;
+    *out = jsb_binary(J, op, *l, *r);
+    return 1;
+}
+
 static jval js_binary(jctx *J, jop op, jval l, jval r, int line) {
+    if ((l.t == JS_BIG || r.t == JS_BIG || l.t == JS_OBJ || r.t == JS_OBJ) && op != OP_ADD
+        && op != OP_EQ && op != OP_NE && op != OP_SEQ && op != OP_SNE && op != OP_INSTANCEOF && op != OP_IN
+        && op != OP_LT && op != OP_GT && op != OP_LE && op != OP_GE) {
+        jval out;
+        if (js_binary_big(J, op, &l, &r, &out)) return out;
+    }
     switch (op) {
         case OP_ADD:
             if (l.t == JS_NUM && r.t == JS_NUM) return js_num(l.num + r.num);
@@ -1914,6 +1957,7 @@ static jval js_binary(jctx *J, jop op, jval l, jval r, int line) {
                 if (J->sig != JS_OK) return js_undef();
                 return js_from_str(js_concat(J, a, b));
             }
+            if (l.t == JS_BIG || r.t == JS_BIG) return jsb_binary(J, op, l, r);
             return js_num(js_to_num(J, l) + js_to_num(J, r));
 
         case OP_SUB: return js_num(js_to_num(J, l) - js_to_num(J, r));
@@ -1957,6 +2001,7 @@ static jval js_binary(jctx *J, jop op, jval l, jval r, int line) {
                     default:    return js_bool(c >= 0);
                 }
             }
+            if (l.t == JS_BIG || r.t == JS_BIG) return jsb_relational(J, op, l, r);
             double a = js_to_num(J, l), b = js_to_num(J, r);
             switch (op) {
                 case OP_LT: return js_bool(a < b);
@@ -2616,7 +2661,16 @@ static JS_NOINLINE jval js_eval_unaryish(jctx *J, int node, jscope *sc, jval thi
         jplace p = js_place(J, a, sc, this_val);
         if (J->sig != JS_OK) return js_undef();
         if (p.kind == 2) return js_throw(J, JS_ERR_SYNTAX, "this cannot be incremented", J->nodes[node].line);
-        double cur = js_to_num(J, js_place_get(J, &p, sc));
+        jval old = js_place_get(J, &p, sc);
+        if (J->sig != JS_OK) return js_undef();
+        if (old.t == JS_OBJ) { old = js_to_primitive(J, old, 1); if (J->sig != JS_OK) return js_undef(); }
+        if (old.t == JS_BIG) {
+            jval nb = jsb_step(J, old, op == OP_INC);
+            if (J->sig != JS_OK) return js_undef();
+            js_place_put(J, &p, sc, nb);
+            return kind == N_PREINC ? nb : old;
+        }
+        double cur = js_to_num(J, old);
         if (J->sig != JS_OK) return js_undef();
         double next = op == OP_INC ? cur + 1 : cur - 1;
         js_place_put(J, &p, sc, js_num(next));
@@ -2625,6 +2679,10 @@ static JS_NOINLINE jval js_eval_unaryish(jctx *J, int node, jscope *sc, jval thi
     /* N_UNARY */
     jval v = js_eval(J, a, sc, this_val);
     if (J->sig != JS_OK) return js_undef();
+    if ((op == OP_NEG || op == OP_BNOT) && (v.t == JS_BIG || v.t == JS_OBJ)) {
+        if (v.t == JS_OBJ) { v = js_to_primitive(J, v, 1); if (J->sig != JS_OK) return js_undef(); }
+        if (v.t == JS_BIG) return op == OP_NEG ? jsb_negate(J, v) : jsb_bitnot(J, v);
+    }
     switch (op) {
         case OP_NOT:  return js_bool(!js_to_bool(v));
         case OP_NEG:  return js_num(-js_to_num(J, v));
@@ -2753,6 +2811,10 @@ static jval js_eval(jctx *J, int node, jscope *sc, jval this_val) {
 
     switch (kind) {
         case N_NUM:   return js_num(J->nodes[node].num);
+        case N_BIGINT: {
+            jbint *b = jsb_literal(J, J->nodes[node].str);
+            return b ? js_from_big(b) : js_undef();
+        }
         case N_STR:   return js_from_str(J->nodes[node].str);
         case N_TRUE:  return js_bool(1);
         case N_FALSE: return js_bool(0);

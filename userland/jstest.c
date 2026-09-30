@@ -1270,6 +1270,52 @@ int main(void) {
            " /^\\p{Script=Cyrillic}+$/u.test('\\u0434\\u0430'), (function () { try { new RegExp('\\\\p{Nope}', 'u'); } catch (e) { return e.message.indexOf('Nope') > 0; } })()].join(' ')",
            "true true true false true true false true true true true true true true true");
 
+    /* BigInt, which GitHub's protocol buffers and hashes and Spotify's player
+       stopped at. Each answer is what the language defines. */
+    expect("BigInt literals and BigInt() make whole numbers of any size, and typeof says bigint",
+           "[typeof 10n, 10n + 5n, 2n ** 100n, BigInt('123456789012345678901234567890') * 10n,"
+           " BigInt(Number.MAX_SAFE_INTEGER) + 2n, 0x1fn, 0b101n, 0o17n, 1_000n, BigInt(' -42 '), BigInt(true),"
+           " String(-0n), (255n).toString(16), (-255n).toString(2), BigInt('0x10'), BigInt(''), typeof Object(1n)].join(' ')",
+           "bigint 15 1267650600228229401496703205376 1234567890123456789012345678900 9007199254740993 31 5 15 1000 -42 1 0 ff -11111111 16 0 object");
+    expect("and divides, takes remainders and shifts as the language defines them, negatives included",
+           "[7n / 2n, -7n / 2n, 7n % -2n, -7n % 2n, 1n << 70n, -5n >> 1n, 5n >> 1n, -1n >> 100n, 5n & -2n, -6n | 3n,"
+           " 5n ^ -1n, ~5n, -(-3n), BigInt.asUintN(64, -1n), BigInt.asIntN(8, 255n), BigInt.asIntN(64, 2n ** 63n),"
+           " 10n ** 30n / 10n ** 28n, (2n ** 200n + 5n) % (2n ** 100n + 1n),"
+           /* The division that has to add back a step it took too far,
+              which long division comes to about twice in 2^32 digits. */
+           " 0x7fffffff800000000000000000000000n / 0x800000000000000000000001n,"
+           " (0x7fffffff800000000000000000000000n % 0x800000000000000000000001n).toString(16)].join(' ')",
+           "3 -3 1 -1 1180591620717411303424 -3 2 -1 4 -5 -6 -6 3 18446744073709551615 -1 -9223372036854775808 100 6 "
+           "4294967294 7fffffffffffffff00000002");
+    expect("and compares exactly with numbers and strings, and strictly equals only a BigInt of its value",
+           "[1n == 1, 1n === 1, 2n > 1, 1n < 1.5, 2n ** 64n > 1e19, 10n == '10', 10n < '11', 0n == false, 1n == true,"
+           " [1n, 2n].includes(2n), new Set([1n, 1n, 2n]).size, new Map([[5n, 'x']]).get(5n), Object.is(0n, -0n), !!0n, !!1n,"
+           " 3n > 2n && -3n < -2n, 1n < NaN, 2n ** 53n + 1n > 2 ** 53, 5n === 5n, 'x' < 1n].join(' ')",
+           "true false true true true true true true true true 2 x true false true true false true true false");
+    expect("and refuses to be mixed with numbers, and is written as JSON only through a toJSON",
+           "(function(){ var r = [], t = function (f) { try { f(); r.push('none'); } catch (e) { r.push(e.name); } };"
+           " t(function () { return 1n + 1; }); t(function () { return +1n; }); t(function () { return Math.abs(1n); });"
+           " t(function () { return 1n >>> 0n; }); t(function () { return BigInt(1.5); }); t(function () { return BigInt('1.5'); });"
+           " t(function () { return new BigInt(1); }); t(function () { return JSON.stringify({ a: 1n }); }); t(function () { return 1n / 0n; });"
+           " r.push('' + 5n, `${6n}`, Number(2n ** 64n), parseInt('7n'), 2n + '3');"
+           " BigInt.prototype.toJSON = function () { return this.toString(); }; r.push(JSON.stringify({ a: 1n }));"
+           " return r.join(' '); })()",
+           "TypeError TypeError TypeError TypeError RangeError SyntaxError TypeError TypeError RangeError 5 6 18446744073709552000 7 23 {\"a\":\"1\"}");
+    expect("and counts, hashes and is written by Intl from its own digits",
+           "(function(){ var x = 5n; x++; x += 10n; x **= 2n; x--;"
+           " var h = 14695981039346656037n, p = 1099511628211n;"
+           " for (var c of 'hello') { h ^= BigInt(c.charCodeAt(0)); h = BigInt.asUintN(64, h * p); }"
+           " return [x, typeof x, h.toString(16), new Intl.NumberFormat().format(12345678901234567890n), (1234n).toLocaleString(),"
+           " new Intl.NumberFormat('en', { style: 'currency', currency: 'USD' }).format(10n ** 20n),"
+           " new Intl.NumberFormat('en', { notation: 'compact' }).format(1500000n), new Intl.NumberFormat('en', { style: 'percent' }).format(5n)].join(' '); })()",
+           "255 bigint a430d84680aabd0b 12,345,678,901,234,567,890 1,234 $100,000,000,000,000,000,000.00 1.5M 500%");
+    expect("and DataView reads and writes 64-bit BigInts, either end first",
+           "(function(){ var v = new DataView(new ArrayBuffer(16)); v.setBigInt64(0, -2n); v.setBigUint64(8, 2n ** 64n - 1n, true);"
+           " var w = new DataView(new ArrayBuffer(8)); w.setBigUint64(0, 0x0102030405060708n, true);"
+           " return [v.getBigInt64(0), v.getBigUint64(0), v.getBigUint64(8, true), v.getInt32(4), v.getUint8(15), w.getUint8(0),"
+           " w.getBigUint64(0).toString(16), typeof v.getBigInt64].join(' '); })()",
+           "-2 18446744073709551614 18446744073709551615 -2 255 8 807060504030201 function");
+
     /* A function expression's own name, which GSAP's recursion is written
        with: "u is not defined". */
     expect("a function expression written with a name knows itself by it, and only inside",

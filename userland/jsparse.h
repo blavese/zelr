@@ -35,6 +35,8 @@ typedef enum {
     T_TEMPLATE, T_PRIVATE
 } ttype;
 
+#define JT_BIGINT 4           /* T_NUM: written with an n, a BigInt */
+
 /* Which flags a regular expression literal carried, as bits, because the
    node they end up on has one string on it and that is the pattern. */
 #define RXF_I 1
@@ -514,14 +516,15 @@ static void js_next(jlex *L) {
                 L->at = k;
             }
         }
-        /* A BigInt is read as the number it names: this engine has no
-           arithmetic of any size, and a page that writes 10n nearly always
-           means ten. */
-        if (L->at < L->n && L->src[L->at] == 'n') L->at++;
+        /* 10n is a BigInt (jsbig.h): the same token, marked, its text kept
+           for the parser, which makes the value exactly. */
+        int big = 0;
+        if (L->at < L->n && L->src[L->at] == 'n') { L->at++; big = 1; }
 
         L->tok.type = T_NUM;
         L->tok.num = v;
         L->tok.len = L->at - start;
+        if (big) L->tok.flags = JT_BIGINT;
         return;
     }
 
@@ -1581,6 +1584,25 @@ static int js_parse_primary(jparse *P) {
     if (P->L.tok.type == T_PUNCT && (P->L.tok.op == OP_DIV || P->L.tok.op == OP_DIVEQ))
         js_relex_regex(P);
 
+    if (P->L.tok.type == T_NUM && (P->L.tok.flags & JT_BIGINT)) {
+        /* The text without its n or underscores, made a BigInt each time
+           the literal is reached (jsbig.h, jsb_literal). */
+        int n = js_node(J, N_BIGINT, line);
+        char buf[512];
+        u32 w = 0;
+        int hex = P->L.tok.len > 2 && P->L.tok.text[0] == '0' && (P->L.tok.text[1] | 0x20) == 'x';
+        for (u32 i = 0; i + 1 < P->L.tok.len && w < sizeof(buf) - 1; i++) {
+            char ch = P->L.tok.text[i];
+            if (ch == '.' || (!hex && (ch == 'e' || ch == 'E'))) {
+                js_parse_fail(P, line, "a BigInt is a whole number", 0, 0);
+                return -1;
+            }
+            if (ch != '_') buf[w++] = ch;
+        }
+        if (n >= 0) J->nodes[n].str = js_str_n(J, buf, w);
+        js_next(&P->L);
+        return n;
+    }
     if (P->L.tok.type == T_NUM) {
         int n = js_node(J, N_NUM, line);
         if (n >= 0) J->nodes[n].num = P->L.tok.num;
