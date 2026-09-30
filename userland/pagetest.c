@@ -2234,6 +2234,74 @@ int main(void) {
             page.title >= 0 ? page.arena + page.title : "", "loaded stylesheet failed");
     }
 
+    /* --- workers ------------------------------------------------------------------------
+     *
+     * MSN's page and OpenStreetMap's stopped at "Worker is not defined". A worker
+     * is a context of its own, run as tasks on the page's thread. */
+    {
+        load("<body><p id=sync></p><p id=err></p><p id=term>quiet</p><script>"
+             "var nf = new Intl.NumberFormat('en-US');"
+             "var src = \"importScripts('data:text/javascript,var fromImport = 42;');"
+             " onmessage = function (e) { var d = e.data; postMessage({ echo: d.n * 2, map: d.m.get('k'), bytes: d.b[2],"
+             "  scope: self instanceof WorkerGlobalScope, imp: fromImport, win: typeof window, doc: typeof document,"
+             "  fmt: new Intl.NumberFormat('en-US').format(1234.5), u: new URL('x?a=1', 'https://s.test/p/').href,"
+             "  q: new URLSearchParams('a=1&b=x+y').get('b'), type: e.constructor.name }); };"
+             " var n = 0, iv = setInterval(function () { if (++n === 2) { clearInterval(iv); postMessage('ticked'); } }, 10);\";"
+             "var w = new Worker(URL.createObjectURL(new Blob([src]))), got = [];"
+             "w.onmessage = function (e) { got.push(typeof e.data === 'string' ? e.data : JSON.stringify(e.data)); document.title = got.join(' | '); };"
+             "w.postMessage({ n: 21, m: new Map([['k', 'v']]), b: new Uint8Array([1, 2, 3]) });"
+             "var bad = new Worker('data:text/javascript,this is not(');"
+             "bad.onerror = function (e) { document.getElementById('err').textContent = 'error ' + (e instanceof ErrorEvent); };"
+             "var t = new Worker(URL.createObjectURL(new Blob(['postMessage(1)'])));"
+             "t.onmessage = function () { document.getElementById('term').textContent = 'heard'; }; t.terminate();"
+             "var refused = ''; try { w.postMessage(function () {}); } catch (x) { refused = x.name; }"
+             "document.getElementById('sync').textContent = [w instanceof Worker, w instanceof EventTarget, nf.format(9876.5), refused].join(' ');"
+             "</script></body>");
+        char err[128];
+        run_scripts(&page, err, (int)sizeof(err), 0);
+        oks("a page's Intl made before a worker still works after it, and a function will not go in a message",
+            content_of(dom_by_id(&page, "sync")), "true true 9,876.5 DataCloneError");
+        pump_until(1000, 1500);
+        oks("a worker is started from a Blob, imports a script and hears a message copied whole; its answer comes back, and so do its timers",
+            page.title >= 0 ? page.arena + page.title : "",
+            "{\"echo\":42,\"map\":\"v\",\"bytes\":3,\"scope\":true,\"imp\":42,\"win\":\"undefined\",\"doc\":\"undefined\","
+            "\"fmt\":\"1,234.5\",\"u\":\"https://s.test/p/x?a=1\",\"q\":\"x y\",\"type\":\"MessageEvent\"} | ticked");
+        oks("a worker whose script does not read is an error event at its Worker",
+            content_of(dom_by_id(&page, "err")), "error true");
+        oks("and one that was terminated says nothing", content_of(dom_by_id(&page, "term")), "quiet");
+    }
+    {
+        /* When the key was one for the whole program, a worker's setup put its
+           own there, and the page read its Intl objects by a key in the worker's
+           memory, freed when the worker ended. The two keys' serial numbers
+           agree, so an Intl object still worked until that memory was used
+           again: only the key itself shows it. */
+        load("<body><script>setTimeout(function () { new Worker('data:text/javascript,1').terminate(); document.title = 'made'; }, 0);"
+             "</script></body>");
+        char err[128];
+        run_scripts(&page, err, (int)sizeof(err), 0);
+        jstr *key = js_intl_key(&jd_J);
+        pump_until(1, 1000);
+        ok("making a worker leaves the key the page's Intl objects are read by as it was",
+           key && js_intl_key(&jd_J) == key && page.title >= 0 && page.arena[page.title] == 'm');
+    }
+    {
+        load("<body><script>"
+             "var src = \"var ch = new MessageChannel(), ac = new AbortController(), heard = '';"
+             " ch.port2.onmessage = function (e) { heard = e.data + heard; };"
+             " ac.signal.addEventListener('abort', function () { heard += ' aborted'; }); ac.abort(); ch.port1.postMessage('port');"
+             " setTimeout(function () { fetch('data:text/plain,hello%20there').then(function (r) { return r.text(); })"
+             "   .then(function (t) { postMessage([heard, t, ac.signal.reason.name].join(', ')); close(); }); }, 20);\";"
+             "var w = new Worker(URL.createObjectURL(new Blob([src])));"
+             "w.onmessage = function (e) { document.title = e.data; };"
+             "</script></body>");
+        char err[128];
+        run_scripts(&page, err, (int)sizeof(err), 0);
+        pump_until(1000, 1500);
+        oks("a worker has MessageChannel, AbortController and fetch",
+            page.title >= 0 ? page.arena + page.title : "", "port aborted, hello there, AbortError");
+    }
+
     /* --- the page's geometry ----------------------------------------------------------
      *
      * Apple's animations make a DOMMatrix of each element's computed transform

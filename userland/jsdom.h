@@ -5911,6 +5911,7 @@ static void jd_consts(jctx *J, jobj *on, const char *const *names, int from);
 #include "jscssom.h"
 #include "jswalk.h"
 #include "jsmod.h"
+#include "jsworker.h"
 
 /* --- the hooks -----------------------------------------------------------------------------------
  *
@@ -6680,6 +6681,7 @@ static void jd_setup(jctx *J) {
     jd_setup_matrix(J);
     jd_setup_form(J);
     jd_setup_cssom(J);
+    jd_setup_workers(J);
     jd_setup_storage(J);
     jd_setup_observers(J);
     jd_setup_walks(J);
@@ -6719,6 +6721,7 @@ static void jd_zero(void *p, int n) {
    document's own arena rather than this one. */
 static void jsdom_close(void) {
     jd_mods_reset();
+    jw_close_all();
     for (int i = 0; i < jd_nreq; i++) { jd_req[i].waiting = 0; jd_req[i].self = 0; }
     jd_nreq = 0;
     if (!jd_open) return;

@@ -462,6 +462,9 @@ typedef struct jctx {
     int  (*host_get)(struct jctx *J, jobj *o, const char *name, jval *out);
     int  (*host_set)(struct jctx *J, jobj *o, const char *name, jval v);
     void *host_data;
+
+    jstr *k_intl;             /* where an Intl object keeps its state (jsintl.h), one for each context */
+
     /* The text of every script read, kept for the page's life so that a
        function can give its own back (toString): a function node's c is its
        span's index in spans. */

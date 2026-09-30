@@ -20,7 +20,12 @@
 
 /* --- the locale ------------------------------------------------------------------------ */
 
-static jstr *intl_k_state;
+/* The key an Intl object keeps its state under: the context's own, since a
+   worker is a context of its own beside the page's. */
+#define intl_k_state (J->k_intl)
+
+/* The key itself, for pagetest to see that a worker leaves the page's alone. */
+__attribute__((unused)) static jstr *js_intl_key(jctx *J) { return intl_k_state; }
 
 static u32 intl_len(const char *s) { u32 n = 0; while (s[n]) n++; return n; }
 static int intl_same(const char *a, const char *b) {
@@ -2399,7 +2404,7 @@ static jobj *intl_class(jctx *J, jobj *intl, const char *name, jnative ctor, int
 }
 
 static void js_setup_intl(jctx *J) {
-    intl_k_state = js_sym_new(J, "intl", 4);
+    J->k_intl = js_sym_new(J, "intl", 4);
     intl_k_seg_input = js_sym_new(J, "input", 5);
     intl_k_seg_at = js_sym_new(J, "at", 2);
     jobj *intl = js_object(J, JO_PLAIN);
