@@ -544,8 +544,9 @@ static void jd_setup_observers(jctx *J) {
 /* --- PerformanceObserver --------------------------------------------------------------------
  *
  * The only performance entries this browser has are the marks and measures
- * a page makes itself (jswin.h), so those are the entry types it supports
- * (PerformanceObserver.supportedEntryTypes), and an observer of them hears
+ * a page makes itself and the page's navigation entry (jswin.h), so those are
+ * the entry types it supports (PerformanceObserver.supportedEntryTypes), and
+ * an observer of them hears
  * of each new one on the next pass, with the ones already made if it asked
  * for them (buffered). One that asks for another type -- long tasks, paint,
  * resources, layout shifts, none of which this browser records -- is told
@@ -557,7 +558,9 @@ static jstr *jd_k_ptypes, *jd_k_pqueue, *jd_k_plist;
 static jobj *jd_p_pobs, *jd_p_plist;
 static int jd_po_pending;
 
-static int jd_perf_type_known(const jstr *s) { return js_str_is(s, "mark") || js_str_is(s, "measure"); }
+static int jd_perf_type_known(const jstr *s) {
+    return js_str_is(s, "mark") || js_str_is(s, "measure") || js_str_is(s, "navigation");
+}
 
 static int jd_po_watches(jobj *obs, const jstr *type) {
     jval types = jd_kept(obs, jd_k_ptypes);
@@ -705,6 +708,7 @@ static jval nat_po_supported(jctx *J, jval t, jval *a, int n) {
     if (arr) {
         js_arr_push(J, arr, jd_str("mark"));
         js_arr_push(J, arr, jd_str("measure"));
+        js_arr_push(J, arr, jd_str("navigation"));
     }
     return js_from_obj(arr);
 }

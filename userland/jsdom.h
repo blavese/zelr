@@ -607,6 +607,10 @@ static void jd_inserted_module_due(jval arg);
 static jval jd_import(jctx *J, jval spec, void *module);
 static jval jd_import_meta(jctx *J, void *module);
 
+/* The moments of the page's navigation entry (jswin.h). */
+enum { NV_INTERACTIVE, NV_DCL_START, NV_DCL_END, NV_COMPLETE, NV_LOAD_START, NV_LOAD_END, NV_COUNT };
+static void jd_nav_mark(int which);
+
 static void jd_remove(int child) {
     int parent = jd_doc->nodes[child].parent;
     if (parent < 0) return;
@@ -5626,19 +5630,25 @@ static void jd_ready_change(int to) {
 
 static void jsdom_loaded(void) {
     if (!jd_open) return;
+    jd_nav_mark(NV_INTERACTIVE);
     jd_ready_change(1);
     jobj *ev = jd_new_event(0, "DOMContentLoaded", 1, 0);
+    jd_nav_mark(NV_DCL_START);
     if (ev && jd_document_obj) {
         js_set(&jd_J, ev, "isTrusted", js_bool(1));
         jd_dispatch_to(ev, js_from_obj(jd_document_obj), js_from_obj(jd_document_obj));
     }
+    jd_nav_mark(NV_DCL_END);
+    jd_nav_mark(NV_COMPLETE);
     jd_ready_change(2);
     ev = jd_new_event(0, "load", 0, 0);
+    jd_nav_mark(NV_LOAD_START);
     if (ev && jd_J.global_obj) {
         js_set(&jd_J, ev, "isTrusted", js_bool(1));
         jd_dispatch_to(ev, js_from_obj(jd_J.global_obj),
                        jd_document_obj ? js_from_obj(jd_document_obj) : js_null());
     }
+    jd_nav_mark(NV_LOAD_END);
     ev = jd_new_event(jd_evkind("PageTransitionEvent"), "pageshow", 0, 0);
     if (ev && jd_J.global_obj) {
         js_set(&jd_J, ev, "isTrusted", js_bool(1));

@@ -1339,7 +1339,7 @@ int main(void) {
                "document.title = [typeof t, t >= 0, performance.timeOrigin > 1.7e12,"
                " performance.getEntriesByName('a').length, performance.getEntriesByType('measure')[0].name,"
                " performance.getEntries().length].join(' ');</script>"),
-        "number true true 1 m 2");
+        "number true true 1 m 3");
     {
         load("<body><p id=out>none</p><script>var n = 0;"
              "requestAnimationFrame(function(t){ document.getElementById('out').textContent = typeof t + ' ' + (t >= 0); });"
@@ -1981,7 +1981,38 @@ int main(void) {
             page.title >= 0 ? page.arena + page.title : "", "waiting 0 TypeError");
         pump_until(1, 1000);
         oks("and on the next pass is told of the page's own marks, the earlier ones too, and of no type it does not record",
-            page.title >= 0 ? page.arena + page.title : "", "early,one:true mark,measure");
+            page.title >= 0 ? page.arena + page.title : "", "early,one:true mark,measure,navigation");
+    }
+
+    /* --- the page's own timing ------------------------------------------------------
+     *
+     * WordPress read the navigation entry and Bing performance.timing as they
+     * started, and both stopped on an undefined. */
+    {
+        jsdom_at("https://site.test/nav");
+        oks("the page's navigation entry and performance.timing are there as its scripts start, what has not happened yet 0",
+            titled("<script>var e = performance.getEntriesByType('navigation')[0], t = performance.timing;"
+                   "document.title = [e.entryType, e.name, e.type, e.startTime, e.domContentLoadedEventStart, e.loadEventEnd,"
+                   " e.duration, t.navigationStart === Math.floor(performance.timeOrigin), t.responseEnd === t.navigationStart,"
+                   " t.secureConnectionStart === t.navigationStart, t.redirectStart, t.domContentLoadedEventStart, t.loadEventEnd,"
+                   " performance.navigation.type, e instanceof PerformanceNavigationTiming].join(' ');</script>"),
+            "navigation https://site.test/nav navigate 0 0 0 0 true true true 0 0 0 0 true");
+        load("<body><script>var inload = 'none', told = 'none';"
+             "new PerformanceObserver(function (l) { told = l.getEntries()[0].entryType; }).observe({ type: 'navigation' });"
+             "addEventListener('load', function () {"
+             " var t = performance.timing; inload = (t.loadEventStart > 0) + ' ' + t.loadEventEnd;"
+             " setTimeout(function () { setTimeout(function () { var e = performance.getEntriesByType('navigation')[0]; t = performance.timing;"
+             "  document.title = [inload, e.domInteractive <= e.domContentLoadedEventStart,"
+             "   e.domContentLoadedEventStart <= e.domContentLoadedEventEnd, e.domContentLoadedEventEnd <= e.domComplete,"
+             "   e.domComplete <= e.loadEventStart, e.loadEventStart <= e.loadEventEnd, e.duration === e.loadEventEnd,"
+             "   t.loadEventEnd >= t.loadEventStart, t.domInteractive > 0, told,"
+             "   JSON.parse(JSON.stringify(e)).loadEventEnd === e.loadEventEnd].join(' '); }, 0); }, 0); });</script></body>");
+        char err[128];
+        run_scripts(&page, err, (int)sizeof(err), 0);
+        pump_until(3, 1500);
+        oks("and once the page has loaded, its moments are recorded in order, and an observer is told of it",
+            page.title >= 0 ? page.arena + page.title : "", "true 0 true true true true true true true true navigation true");
+        jsdom_at("");
     }
 
     /* --- data: addresses -------------------------------------------------------------

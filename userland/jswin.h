@@ -729,10 +729,22 @@ static void jd_setup_storage(jctx *J) {
  * tick, which is ten milliseconds long: that is the resolution a page gets,
  * and it is the truth of this machine rather than a finer clock pretended.
  * timeOrigin is when that was, by the same wall clock Date reads. Marks and
- * measures are kept as a page makes them; the browser records no timings of
- * its own, so there are no other entries. */
+ * measures are kept as a page makes them.
+ *
+ * The page's own timing is the navigation entry and its older form,
+ * performance.timing: WordPress and Bing read them as they start and stopped
+ * on an undefined. The page began, for its scripts, when the browser opened
+ * its world, after the answer had come: so every step of the fetch is that
+ * moment, as the standard has them for an answer that needed no new
+ * connection, and what the page does after -- interactive, DOMContentLoaded,
+ * complete, load -- is recorded when it happens (jd_nav_mark), and is 0 until
+ * then. The browser does not tell the page how it came (reload, back) or
+ * whether it was redirected, so it is a navigation with none. */
 static jobj *jd_perf_entries;
 static double jd_time_origin;
+
+static double jd_nav_at[NV_COUNT];               /* ms since timeOrigin, -1 before it happens */
+static jobj *jd_nav_entry;
 
 static void jd_perf_observed(jobj *entry);        /* jsobs.h */
 
@@ -837,6 +849,139 @@ static jval nat_perf_json(jctx *J, jval t, jval *a, int n) {
     jobj *o = js_object(J, JO_PLAIN);
     if (o) js_set(J, o, "timeOrigin", js_num(jd_time_origin));
     return js_from_obj(o);
+}
+
+/* The fields of performance.timing in the standard's order, and what each
+   one is: nothing (0), the page's beginning, the beginning on a secure page
+   only, or one of the moments jd_nav_at records. */
+enum { NT_ZERO = -3, NT_ORIGIN = -2, NT_SECURE = -1 };
+static const struct { const char *name; int what; } JD_NAV_FIELDS[] = {
+    { "navigationStart", NT_ORIGIN }, { "unloadEventStart", NT_ZERO }, { "unloadEventEnd", NT_ZERO },
+    { "redirectStart", NT_ZERO }, { "redirectEnd", NT_ZERO }, { "fetchStart", NT_ORIGIN },
+    { "domainLookupStart", NT_ORIGIN }, { "domainLookupEnd", NT_ORIGIN }, { "connectStart", NT_ORIGIN },
+    { "connectEnd", NT_ORIGIN }, { "secureConnectionStart", NT_SECURE }, { "requestStart", NT_ORIGIN },
+    { "responseStart", NT_ORIGIN }, { "responseEnd", NT_ORIGIN }, { "domLoading", NT_ORIGIN },
+    { "domInteractive", NV_INTERACTIVE }, { "domContentLoadedEventStart", NV_DCL_START },
+    { "domContentLoadedEventEnd", NV_DCL_END }, { "domComplete", NV_COMPLETE },
+    { "loadEventStart", NV_LOAD_START }, { "loadEventEnd", NV_LOAD_END },
+};
+#define JD_NAV_NFIELDS ((int)(sizeof JD_NAV_FIELDS / sizeof JD_NAV_FIELDS[0]))
+
+static int jd_page_secure(void) {
+    const char *s = "https:";
+    for (int i = 0; s[i]; i++) if (jd_address[i] != s[i]) return 0;
+    return 1;
+}
+
+/* Field k, in ms since timeOrigin, or -1 for none: 0 in the navigation
+   entry, which counts from the beginning, and 0 in performance.timing, which
+   counts from 1970. */
+static double jd_nav_field(int k) {
+    if (k < 0 || k >= JD_NAV_NFIELDS) return -1;
+    int w = JD_NAV_FIELDS[k].what;
+    if (w == NT_ZERO) return -1;
+    if (w == NT_ORIGIN) return 0;
+    if (w == NT_SECURE) return jd_page_secure() ? 0 : -1;
+    return jd_nav_at[w];
+}
+
+static void jd_nav_mark(int which) {
+    if (which >= 0 && which < NV_COUNT) jd_nav_at[which] = jd_now_ms();
+    /* The entry goes to the observers once load has finished, as the
+       standard queues it. */
+    if (which == NV_LOAD_END && jd_nav_entry) jd_perf_observed(jd_nav_entry);
+}
+
+static jval nat_timing_field(jctx *J, jval t, jval *a, int n) {
+    (void)t; (void)a; (void)n;
+    double v = jd_nav_field((int)J->callee->data.num);
+    if (v < 0) return js_num(0);
+    double whole = jd_time_origin + v;
+    return js_num((double)(long long)whole);
+}
+
+static jval nat_nav_field(jctx *J, jval t, jval *a, int n) {
+    (void)t; (void)a; (void)n;
+    double v = jd_nav_field((int)J->callee->data.num);
+    return js_num(v < 0 ? 0 : v);
+}
+
+static jval nat_nav_duration(jctx *J, jval t, jval *a, int n) {
+    (void)J; (void)t; (void)a; (void)n;
+    return js_num(jd_nav_at[NV_LOAD_END] < 0 ? 0 : jd_nav_at[NV_LOAD_END]);
+}
+
+/* toJSON for either: every field as it reads now, the entry's own too. */
+static jval nat_timing_json(jctx *J, jval t, jval *a, int n) {
+    (void)a; (void)n;
+    jobj *o = js_object(J, JO_PLAIN);
+    if (!o || !js_is_obj(t)) return js_from_obj(o);
+    int entry = js_is_obj(t) && t.obj == jd_nav_entry;
+    if (entry) {
+        static const char *const own[] = { "name", "entryType", "startTime", "duration", "initiatorType",
+                                           "nextHopProtocol", "type", "redirectCount" };
+        for (u32 i = 0; i < sizeof own / sizeof own[0]; i++) js_set(J, o, own[i], js_get(J, t, js_str(J, own[i])));
+    }
+    for (int k = entry ? 1 : 0; k < JD_NAV_NFIELDS; k++) {
+        if (entry && w_same(JD_NAV_FIELDS[k].name, "domLoading")) continue;
+        js_set(J, o, JD_NAV_FIELDS[k].name, js_get(J, t, js_str(J, JD_NAV_FIELDS[k].name)));
+    }
+    return js_from_obj(o);
+}
+
+static void jd_field_getter(jctx *J, jobj *on, const char *name, jnative fn, int k) {
+    jobj *g = js_native(J, name, fn);
+    if (!on || !g) return;
+    g->flags |= JOF_NOCTOR;
+    g->data = js_num((double)k);
+    js_define_accessor(J, on, js_str(J, name), js_from_obj(g), js_undef(), JP_ENUM | JP_CONF);
+}
+
+static void jd_setup_nav_timing(jctx *J, jobj *perf) {
+    for (int i = 0; i < NV_COUNT; i++) jd_nav_at[i] = -1;
+    jd_nav_entry = 0;
+    if (!perf) return;
+
+    jobj *tp = jd_interface(J, "PerformanceTiming", 0, 0, 0);
+    for (int k = 0; tp && k < JD_NAV_NFIELDS; k++) jd_field_getter(J, tp, JD_NAV_FIELDS[k].name, nat_timing_field, k);
+    jd_method(J, tp, "toJSON", nat_timing_json, 0);
+    jobj *timing = js_object_with(J, JO_PLAIN, tp);
+    if (timing) js_put_prop_flags(J, perf, js_str(J, "timing"), js_from_obj(timing), JP_ENUM | JP_CONF);
+
+    jobj *np = jd_interface(J, "PerformanceNavigation", 0, 0, 0);
+    jobj *nav = js_object_with(J, JO_PLAIN, np);
+    if (nav) {
+        js_set(J, nav, "type", js_num(0));
+        js_set(J, nav, "redirectCount", js_num(0));
+        js_put_prop_flags(J, perf, js_str(J, "navigation"), js_from_obj(nav), JP_ENUM | JP_CONF);
+    }
+    static const char *const kinds[] = { "TYPE_NAVIGATE", "TYPE_RELOAD", "TYPE_BACK_FORWARD" };
+    for (int i = 0; np && i < 3; i++) js_set(J, np, kinds[i], js_num(i));
+
+    /* The entry: what the lists find it by as its own, the rest read when
+       asked. It has no unload time of its own, and domLoading is only the
+       old form's. */
+    jobj *ep = jd_interface(J, "PerformanceEntry", 0, 0, 0);
+    jobj *rp = jd_interface(J, "PerformanceResourceTiming", ep, 0, 0);
+    jobj *pp = jd_interface(J, "PerformanceNavigationTiming", rp, 0, 0);
+    for (int k = 1; pp && k < JD_NAV_NFIELDS; k++) {
+        if (w_same(JD_NAV_FIELDS[k].name, "domLoading")) continue;
+        jd_field_getter(J, pp, JD_NAV_FIELDS[k].name, nat_nav_field, k);
+    }
+    jd_accessor(J, pp, "duration", nat_nav_duration, 0);
+    jd_method(J, pp, "toJSON", nat_timing_json, 0);
+    jobj *e = js_object_with(J, JO_PLAIN, pp);
+    if (!e) return;
+    js_set(J, e, "name", js_from_str(js_str(J, jd_address[0] ? jd_address : "about:blank")));
+    js_set(J, e, "entryType", jd_str("navigation"));
+    js_set(J, e, "startTime", js_num(0));
+    js_set(J, e, "initiatorType", jd_str("navigation"));
+    js_set(J, e, "nextHopProtocol", jd_str("http/1.1"));
+    js_set(J, e, "workerStart", js_num(0));
+    js_set(J, e, "type", jd_str("navigate"));
+    js_set(J, e, "redirectCount", js_num(0));
+    jd_nav_entry = e;
+    if (jd_perf_entries) js_arr_push(J, jd_perf_entries, js_from_obj(e));
 }
 
 static jval nat_win_event(jctx *J, jval t, jval *a, int n) {
@@ -1618,6 +1763,7 @@ static void jd_setup_window_more(jctx *J) {
     jd_method(J, pp, "toJSON", nat_perf_json, 0);
     jobj *perf = js_object_with(J, JO_PLAIN, pp);
     if (perf) js_declare(J, g, js_str(J, "performance"), js_from_obj(perf));
+    jd_setup_nav_timing(J, perf);
 
     js_declare(J, g, js_str(J, "requestAnimationFrame"), js_from_obj(js_native_n(J, "requestAnimationFrame", nat_raf, 1)));
     js_declare(J, g, js_str(J, "cancelAnimationFrame"), js_from_obj(js_native_n(J, "cancelAnimationFrame", nat_clear_timer, 1)));
