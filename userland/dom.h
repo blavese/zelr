@@ -222,6 +222,19 @@ static inline const char *dom_attr(const ddoc *d, int el, const char *name) {
     return 0;
 }
 
+/* A hash of an element's own text, its text children in order: what a
+   style element's sheet is read from, so the browser and the page's scripts
+   can each tell when it has changed (browser.c, sheets_follow; jscssom.h). */
+static inline unsigned dom_text_hash(const ddoc *d, int el) {
+    unsigned h = 2166136261u;
+    if (el < 0 || el >= d->count) return h;
+    for (int c = d->nodes[el].first; c >= 0; c = d->nodes[c].next) {
+        if (d->nodes[c].kind != DN_TEXT || d->nodes[c].text < 0) continue;
+        for (const char *p = d->arena + d->nodes[c].text; *p; p++) { h ^= (unsigned char)*p; h *= 16777619u; }
+    }
+    return h;
+}
+
 /* The same, without caring about the case of the name.
  *
  * Attribute names are folded to lower case on the way in, a few lines

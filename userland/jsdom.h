@@ -67,6 +67,8 @@
 #define JD_LIST      0x6000000               /* + index: a list of nodes */
 #define JD_STORAGE   0x7000000               /* localStorage; + 1 sessionStorage */
 #define JD_COMPUTED  (JD_STORAGE + 2)        /* a getComputedStyle answer */
+#define JD_RSTYLE    0x8000000               /* + n: a CSS rule's style (jscssom.h) */
+#define JD_RLIST     0x9000000               /* + n: a live list of CSS rules (jscssom.h) */
 
 static jobj  *jd_document_obj;
 static ddoc  *jd_doc;            /* what these bindings are bound to */
@@ -1607,9 +1609,26 @@ static int jd_decl_is(const char *st, const jd_decl *d, const char *prop) {
     return 1;
 }
 
+/* A block of declarations: an element's style attribute, or a style rule's
+   declarations (jscssom.h), which one set of accessors reads and writes. */
+typedef struct { int el; jobj *rule; } jd_decls;
+
+static const char *jcs_rule_decls(jobj *rule);
+static void jcs_rule_set_decls(jobj *rule, const char *text);
+static jobj *jcs_style_rule(jval t);
+
+static const char *jd_decls_text(const jd_decls *d) {
+    return d->el >= 0 ? jd_attr(d->el, "style") : jcs_rule_decls(d->rule);
+}
+
+static void jd_decls_store(const jd_decls *d, const char *text) {
+    if (d->el >= 0) jd_attr_set(d->el, "style", text);
+    else jcs_rule_set_decls(d->rule, text);
+}
+
 /* A property's value, "" when it is not set, and whether it was important. */
-static jval jd_style_value(int el, const char *prop, int *imp) {
-    const char *st = jd_attr(el, "style");
+static jval jd_style_value(const jd_decls *src, const char *prop, int *imp) {
+    const char *st = jd_decls_text(src);
     if (imp) *imp = 0;
     if (!st) return jd_str("");
     jd_decl d;
@@ -1624,8 +1643,8 @@ static jval jd_style_value(int el, const char *prop, int *imp) {
 
 /* The attribute again with one property set to a value, or taken out when
    the value is empty. */
-static void jd_style_write(int el, const char *prop, const char *val, int imp) {
-    const char *st = jd_attr(el, "style");
+static void jd_style_write(const jd_decls *src, const char *prop, const char *val, int imp) {
+    const char *st = jd_decls_text(src);
     jtext t = { 0, 0, 0, 0 };
     jd_decl d;
     int at = 0, done = 0;
@@ -1657,7 +1676,7 @@ static void jd_style_write(int el, const char *prop, const char *val, int imp) {
         jd_putc(&t, ';');
     }
     jd_putc(&t, 0);
-    jd_attr_set(el, "style", t.b ? t.b : "");
+    jd_decls_store(src, t.b ? t.b : "");
     free(t.b);
 }
 
@@ -1668,6 +1687,12 @@ static int jd_style_node(jval t) {
     return (!jd_doc || h >= jd_doc->count) ? -1 : h;
 }
 
+static int jd_decls_of(jval t, jd_decls *d) {
+    d->el = jd_style_node(t);
+    d->rule = d->el < 0 ? jcs_style_rule(t) : 0;
+    return d->el >= 0 || d->rule;
+}
+
 /* A value as a style takes it: a number is a number, null is nothing. */
 static jstr *jd_style_arg(jctx *J, jval v) {
     if (v.t == JS_NULL || v.t == JS_UNDEF) return js_str(J, "");
@@ -1675,32 +1700,32 @@ static jstr *jd_style_arg(jctx *J, jval v) {
 }
 
 static jval nat_style_get(jctx *J, jval t, jval *a, int n) {
-    int el = jd_style_node(t);
-    if (el < 0) return jd_illegal(J);
+    jd_decls src;
+    if (!jd_decls_of(t, &src)) return jd_illegal(J);
     char prop[64];
     jstr *s = jd_arg_str(J, a, n, 0);
     int k = 0;
     for (; k < (int)s->len && k < 63; k++) prop[k] = s->s[0] == '-' && s->s[1] == '-' ? s->s[k] : w_lower(s->s[k]);
     prop[k] = 0;
-    return jd_style_value(el, prop, 0);
+    return jd_style_value(&src, prop, 0);
 }
 
 static jval nat_style_priority(jctx *J, jval t, jval *a, int n) {
-    int el = jd_style_node(t);
-    if (el < 0) return jd_illegal(J);
+    jd_decls src;
+    if (!jd_decls_of(t, &src)) return jd_illegal(J);
     char prop[64];
     jstr *s = jd_arg_str(J, a, n, 0);
     int k = 0;
     for (; k < (int)s->len && k < 63; k++) prop[k] = w_lower(s->s[k]);
     prop[k] = 0;
     int imp;
-    jd_style_value(el, prop, &imp);
+    jd_style_value(&src, prop, &imp);
     return jd_str(imp ? "important" : "");
 }
 
 static jval nat_style_set(jctx *J, jval t, jval *a, int n) {
-    int el = jd_style_node(t);
-    if (el < 0) return jd_illegal(J);
+    jd_decls src;
+    if (!jd_decls_of(t, &src)) return jd_illegal(J);
     jstr *s = jd_arg_str(J, a, n, 0);
     char prop[64];
     int k = 0, custom = s->len > 2 && s->s[0] == '-' && s->s[1] == '-';
@@ -1710,40 +1735,40 @@ static jval nat_style_set(jctx *J, jval t, jval *a, int n) {
     jstr *v = jd_style_arg(J, js_arg(a, n, 1));
     jstr *pri = n > 2 ? jd_arg_str(J, a, n, 2) : 0;
     if (J->sig != JS_OK) return js_undef();
-    jd_style_write(el, prop, v->s, pri && js_str_is(pri, "important"));
+    jd_style_write(&src, prop, v->s, pri && js_str_is(pri, "important"));
     return js_undef();
 }
 
 static jval nat_style_remove(jctx *J, jval t, jval *a, int n) {
-    int el = jd_style_node(t);
-    if (el < 0) return jd_illegal(J);
+    jd_decls src;
+    if (!jd_decls_of(t, &src)) return jd_illegal(J);
     jstr *s = jd_arg_str(J, a, n, 0);
     char prop[64];
     int k = 0, custom = s->len > 2 && s->s[0] == '-' && s->s[1] == '-';
     for (; k < (int)s->len && k < 63; k++) prop[k] = custom ? s->s[k] : w_lower(s->s[k]);
     prop[k] = 0;
-    jval old = jd_style_value(el, prop, 0);
-    jd_style_write(el, prop, "", 0);
+    jval old = jd_style_value(&src, prop, 0);
+    jd_style_write(&src, prop, "", 0);
     return old;
 }
 
 static jval nat_style_csstext(jctx *J, jval t, jval *a, int n) {
     (void)a; (void)n; (void)J;
-    int el = jd_style_node(t);
-    if (el < 0) return js_undef();
-    const char *st = jd_attr(el, "style");
+    jd_decls src;
+    if (!jd_decls_of(t, &src)) return js_undef();
+    const char *st = jd_decls_text(&src);
     return jd_str(st ? st : "");
 }
 
 static jval nat_style_set_csstext(jctx *J, jval t, jval *a, int n) {
-    int el = jd_style_node(t);
-    if (el < 0) return js_undef();
-    jd_attr_set(el, "style", jd_style_arg(J, js_arg(a, n, 0))->s);
+    jd_decls src;
+    if (!jd_decls_of(t, &src)) return js_undef();
+    jd_decls_store(&src, jd_style_arg(J, js_arg(a, n, 0))->s);
     return js_undef();
 }
 
-static int jd_style_count(int el) {
-    const char *st = jd_attr(el, "style");
+static int jd_style_count(const jd_decls *src) {
+    const char *st = jd_decls_text(src);
     jd_decl d;
     int at = 0, k = 0;
     while (st && jd_decl_next(st, &at, &d)) k++;
@@ -1752,12 +1777,12 @@ static int jd_style_count(int el) {
 
 static jval nat_style_length(jctx *J, jval t, jval *a, int n) {
     (void)a; (void)n; (void)J;
-    int el = jd_style_node(t);
-    return el < 0 ? js_undef() : js_num(jd_style_count(el));
+    jd_decls src;
+    return !jd_decls_of(t, &src) ? js_undef() : js_num(jd_style_count(&src));
 }
 
-static jval jd_style_nth(int el, int i) {
-    const char *st = jd_attr(el, "style");
+static jval jd_style_nth(const jd_decls *src, int i) {
+    const char *st = jd_decls_text(src);
     jd_decl d;
     int at = 0, k = 0;
     while (st && jd_decl_next(st, &at, &d)) {
@@ -1772,40 +1797,40 @@ static jval jd_style_nth(int el, int i) {
 }
 
 static jval nat_style_item(jctx *J, jval t, jval *a, int n) {
-    int el = jd_style_node(t);
-    if (el < 0) return jd_illegal(J);
+    jd_decls src;
+    if (!jd_decls_of(t, &src)) return jd_illegal(J);
     double d = n > 0 ? js_to_num(J, a[0]) : 0;
-    return d >= 0 && d < 10000 ? jd_style_nth(el, (int)d) : jd_str("");
+    return d >= 0 && d < 10000 ? jd_style_nth(&src, (int)d) : jd_str("");
 }
 
 static int jd_style_get(jctx *J, jobj *o, const char *name, jval *out) {
     (void)J;
-    int el = jd_style_node(js_from_obj(o));
-    if (el < 0) return 0;
+    jd_decls src;
+    if (!jd_decls_of(js_from_obj(o), &src)) return 0;
     if (name[0] >= '0' && name[0] <= '9') {
         int i = 0;
         for (const char *p = name; *p; p++) {
             if (*p < '0' || *p > '9' || i > 100000) return 0;
             i = i * 10 + (*p - '0');
         }
-        *out = i < jd_style_count(el) ? jd_style_nth(el, i) : js_undef();
+        *out = i < jd_style_count(&src) ? jd_style_nth(&src, i) : js_undef();
         return 1;
     }
     char prop[64];
     jd_css_name(name, prop, (int)sizeof(prop));
     if (!jd_css_known(prop) || (prop[0] == '-' && prop[1] == '-')) return 0;
-    *out = jd_style_value(el, prop, 0);
+    *out = jd_style_value(&src, prop, 0);
     return 1;
 }
 
 static int jd_style_put(jctx *J, jobj *o, const char *name, jval v) {
-    int el = jd_style_node(js_from_obj(o));
-    if (el < 0) return 0;
+    jd_decls src;
+    if (!jd_decls_of(js_from_obj(o), &src)) return 0;
     char prop[64];
     jd_css_name(name, prop, (int)sizeof(prop));
     if (!jd_css_known(prop) || (prop[0] == '-' && prop[1] == '-')) return 0;
     jstr *s = jd_style_arg(J, v);
-    if (s) jd_style_write(el, prop, s->s, 0);
+    if (s) jd_style_write(&src, prop, s->s, 0);
     return 1;
 }
 
@@ -5856,6 +5881,7 @@ static void jd_consts(jctx *J, jobj *on, const char *const *names, int from);
 #include "jsobs.h"
 #include "jsmatrix.h"
 #include "jsform.h"
+#include "jscssom.h"
 #include "jswalk.h"
 #include "jsmod.h"
 
@@ -5926,6 +5952,8 @@ static int jd_host_get(jctx *J, jobj *o, const char *name, jval *out) {
     if (h < JD_STORAGE) return jd_list_get(J, o, name, out);
     if (h == JD_COMPUTED) return jd_computed_host(J, o, name, out);
     if (h == JD_STORAGE || h == JD_STORAGE + 1) return jd_storage_get(J, o, name, out);
+    if (h >= JD_RSTYLE && h < JD_RLIST) return jd_style_get(J, o, name, out);
+    if (h >= JD_RLIST) return jcs_list_get(J, o, name, out);
     return 0;
 }
 
@@ -5936,6 +5964,7 @@ static int jd_host_set(jctx *J, jobj *o, const char *name, jval v) {
     if (h < JD_DATASET) return jd_style_put(J, o, name, v);
     if (h < JD_ATTRS) return jd_dataset_put(J, o, name, v);
     if (h == JD_STORAGE || h == JD_STORAGE + 1) return jd_storage_put(J, o, name, v);
+    if (h >= JD_RSTYLE && h < JD_RLIST) return jd_style_put(J, o, name, v);
     return 0;
 }
 
@@ -6318,7 +6347,7 @@ static void jd_setup_html(jctx *J) {
         jd_reflect_strs(J, p, "rel as media type hreflang sizes integrity referrerPolicy imageSrcset imageSizes fetchPriority");
         jd_reflect_as(J, p, "crossOrigin", "crossorigin", JR_NULLSTR, js_null());
         jd_reflect_bools(J, p, "disabled");
-        jd_accessor(J, p, "sheet", nat_null_getter, 0);
+        jd_accessor(J, p, "sheet", nat_cssom_sheet, 0);
     }
     if ((p = jd_iface("HTMLMapElement"))) jd_reflect_strs(J, p, "name");
     if ((p = jd_iface("HTMLMetaElement"))) {
@@ -6408,7 +6437,7 @@ static void jd_setup_html(jctx *J) {
     if ((p = jd_iface("HTMLStyleElement"))) {
         jd_reflect_strs(J, p, "media type nonce");
         jd_reflect_bools(J, p, "disabled");
-        jd_accessor(J, p, "sheet", nat_null_getter, 0);
+        jd_accessor(J, p, "sheet", nat_cssom_sheet, 0);
     }
     if ((p = jd_iface("HTMLTableCellElement"))) {
         jd_reflect_as(J, p, "colSpan", "colspan", JR_INT, js_num(1));
@@ -6623,6 +6652,7 @@ static void jd_setup(jctx *J) {
     jd_setup_window_more(J);
     jd_setup_matrix(J);
     jd_setup_form(J);
+    jd_setup_cssom(J);
     jd_setup_storage(J);
     jd_setup_observers(J);
     jd_setup_walks(J);

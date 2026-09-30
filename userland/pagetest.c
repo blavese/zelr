@@ -95,6 +95,16 @@ static int pump_until(int want, int ms) {
    the title it never got to write. */
 static char said[256];
 
+/* Where want first comes in s, or 0. */
+static const char *find_in(const char *s, const char *want) {
+    for (; s && *s; s++) {
+        int k = 0;
+        while (want[k] && s[k] == want[k]) k++;
+        if (!want[k]) return s;
+    }
+    return 0;
+}
+
 static const char *titled(const char *html) {
     load(html);
     char err[128];
@@ -2102,6 +2112,76 @@ int main(void) {
                " Object.keys(nav).length, nav.toJSON().entryType, performance.mark('m', { detail: 5 }).detail,"
                " performance.mark('n') instanceof PerformanceMark, typeof performance.setResourceTimingBufferSize].join('|');</script></body>"),
         "function|function|0|0||function|function|2|function|pointerdown|true|function|function|navigation|0|navigation|5|true|function");
+
+    /* --- style sheets as objects ----------------------------------------------------------
+     *
+     * There was no CSSOM: a style element's sheet was null, so emotion and
+     * styled-components, which put a production React page's rules in with
+     * insertRule, had nowhere to put them. */
+    oks("a style element's sheet has its rules as objects, each kind with what it holds",
+        titled("<head><style id=s>p { color: red } @media (min-width: 600px) { .a > b { margin: 0 } }"
+               " @keyframes spin { from { opacity: 0 } to { opacity: 1 } } @font-face { font-family: x; src: url(x.woff) }"
+               " @import url(y.css);</style></head><body><script>var s = document.getElementById('s').sheet, R = s.cssRules;"
+               "document.title = [s instanceof CSSStyleSheet, s.ownerNode.id, s.href, R.length, R[0].cssText, R[0].type, R[0].style.color,"
+               " R[1].conditionText, R[1].media.mediaText, R[1].cssRules[0].selectorText, R[1].cssRules[0].parentRule === R[1], R[2].name,"
+               " R[2].findRule('to').style.opacity, R[3] instanceof CSSFontFaceRule, R[3].style.getPropertyValue('font-family'),"
+               " R[0].parentStyleSheet === s, document.styleSheets.length, document.styleSheets[0] === s, R === s.cssRules].join('|');</script></body>"),
+        "true|s||4|p { color: red; }|1|red|(min-width: 600px)|(min-width: 600px)|.a > b|true|spin|1|true|x|true|1|true|true");
+    oks("rules are put in, taken out and rewritten, what is not one rule is refused, and only a made sheet is replaced or adopted",
+        titled("<head><style id=s>p { color: red }</style></head><body><script>var r = [], s = document.getElementById('s').sheet, R = s.cssRules;"
+               "r.push(s.insertRule('.b { color: blue }', 1), R.length, R[1].cssText); s.deleteRule(0); r.push(R.length, R[0].selectorText);"
+               "['p {} q {}', '', 'p ( {', '@nonsense x;'].forEach(function (t) { try { s.insertRule(t); r.push('took ' + t); } catch (e) { r.push(e.name); } });"
+               "try { s.insertRule('p {}', 9); } catch (e) { r.push(e.name); }"
+               "var b = R[0]; b.style.setProperty('background-color', 'green'); b.style.fontSize = '12px';"
+               "r.push(b.cssText, b.style.length, b.style.parentRule === b);"
+               "b.selectorText = 'div.x'; r.push(b.selectorText); b.selectorText = '!!'; r.push(b.selectorText);"
+               "var m = new CSSStyleSheet(); m.replaceSync('h1 { color: red } @import url(x.css);'); r.push(m.cssRules.length);"
+               "try { s.replaceSync('p {}'); } catch (e) { r.push(e.name); }"
+               "document.adoptedStyleSheets = [m]; r.push(document.adoptedStyleSheets.length);"
+               "try { document.adoptedStyleSheets = [s]; } catch (e) { r.push(e.name); }"
+               "s.addRule('em', 'color: red'); r.push(R[R.length - 1].cssText);"
+               "var st = document.createElement('style'); r.push(st.sheet); document.head.appendChild(st); st.sheet.insertRule('i { color: teal }');"
+               "var keep = st.sheet; r.push(st.sheet === keep, st.textContent.length); st.textContent = 'u {}';"
+               "r.push(st.sheet === keep, keep.ownerNode, st.sheet.cssRules[0].selectorText);"
+               "document.title = r.join('|');</script></body>"),
+        "1|2|.b { color: blue; }|1|.b|SyntaxError|SyntaxError|SyntaxError|SyntaxError|IndexSizeError|"
+        ".b { color: blue; background-color: green; font-size: 12px; }|3|true|div.x|div.x|1|NotAllowedError|1|NotAllowedError|"
+        "em { color: red; }||true|0|false||u");
+    {
+        /* What the browser then reads (browser.c, sheets_follow): the changed
+           sheet in place of the element's text, until that text changes. */
+        titled("<head><style id=s>p { color: red }</style></head><body><script>"
+               "var sh = document.getElementById('s').sheet; sh.insertRule('.x { top: 1px }', 1); sh.cssRules[0].style.color = 'blue';"
+               "var m = new CSSStyleSheet(); m.replaceSync('h2 { left: 2px }'); document.adoptedStyleSheets = [m];"
+               "setTimeout(function () { document.getElementById('s').textContent = 'q {}'; m.cssRules[0].style.left = '3px'; }, 10);</script></body>");
+        const char *t = 0;
+        int n = 0, s = dom_by_id(&page, "s");
+        unsigned v = jsdom_css_version();
+        int has = jsdom_sheet_override(s, &t, &n);
+        ok("a sheet a script changed, a rule's style included, is what the browser reads in place of the element's text",
+           has && n > 0 && find_in(t, "p { color: blue; }") && find_in(t, ".x { top: 1px }") && find_in(t, "p {") < find_in(t, ".x {"));
+        has = jsdom_adopted(0, &t, &n);
+        ok("and an adopted sheet is read after the rest, and only the ones there are",
+           has && n > 0 && find_in(t, "h2 { left: 2px }") && !jsdom_adopted(1, &t, &n));
+        ok("and when the element's text is written again, the text is what is read",
+           pump_until(1, 1000) == 1 && !jsdom_sheet_override(s, &t, &n));
+        ok("and a rule's style changed after the browser read the sheet is told, and read",
+           jsdom_css_version() != v && jsdom_adopted(0, &t, &n) && find_in(t, "h2 { left: 3px; }"));
+    }
+    {
+        /* A preloaded sheet's onload is what makes it a stylesheet, and
+           webpack waits for a chunk's sheet to load before it runs the chunk. */
+        load("<head><link id=l rel=preload as=style href=a.css onload=\"this.rel = 'stylesheet'; document.title += 'loaded ' + this.rel\">"
+             "<link id=m rel=stylesheet href=b.css onerror=\"document.title += ' failed'\"></head><body><script></script></body>");
+        char err[128];
+        run_scripts(&page, err, (int)sizeof(err), 0);
+        jsdom_link_loaded(dom_by_id(&page, "l"), 1);
+        jsdom_link_loaded(dom_by_id(&page, "m"), 0);
+        oks("a link's load event waits for a task of its own", page.title >= 0 ? page.arena + page.title : "", "");
+        pump_until(2, 1000);
+        oks("and then its onload runs, or its onerror for one that did not come",
+            page.title >= 0 ? page.arena + page.title : "", "loaded stylesheet failed");
+    }
 
     /* --- the page's geometry ----------------------------------------------------------
      *
