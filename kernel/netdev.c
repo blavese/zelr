@@ -57,10 +57,13 @@ bool netdev_send(const void *data, u16 len) {
     }
 }
 
+/* Whether the card says when a frame has come, so that the stack's task can
+   sleep until it does. The USB one does too, through its controller's events
+   (usbnet.c, on_transfer). */
 bool netdev_interrupts(void) {
     switch (current()) {
-        case NIC_E1000: case NIC_PCNET: case NIC_RTL8139: return true;
-        default: return false;                  /* the USB one is polled */
+        case NIC_E1000: case NIC_PCNET: case NIC_RTL8139: case NIC_USB: return true;
+        default: return false;
     }
 }
 

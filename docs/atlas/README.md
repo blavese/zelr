@@ -129,6 +129,11 @@ numbered files are still to 6048716; where they disagree with this list, this li
   without the debug information the compiler added by default, which was two thirds of the kernel image
   (27 MB, now 9 MB): on the 64 MiB machine the heap came out 20 MiB instead of 24 and programs had almost
   no memory. A gate step fails on any program carrying a .debug section or an image past 16 MiB.
+- **Frames from a USB network adapter kept (05 C7, usbnet.c, xhci.c).** A receive left queued when a
+  five second wait ran out swallowed the next frame unseen, and a DHCP answer lost that way was an address
+  never had, about one start in five (the gate's usb address check). One receive is now kept queued and
+  asked about without waiting, and its completion wakes the network task, which had spun while idle.
+  netcheck: the address, and the task asleep while nothing arrives (6 wakes in five seconds, was 178).
 - **The page's own background (11, layout.h, browser.c).** The html element's background, or else the
   body's, fills the whole window behind the page (`ldoc.canvas`), as CSS carries it to the canvas: a dark
   page was dark for the height of its words and white below. layouttest: three checks; browsercheck: a

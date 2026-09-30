@@ -20,6 +20,7 @@
 #include "printf.h"
 #include "timer.h"
 #include "blackbox.h"
+#include "smp.h"
 
 /* --- the messages --------------------------------------------------------- */
 
@@ -63,6 +64,13 @@ static u32  rx_count, tx_count;
 
 static u8  *tx;          /* one transfer out, header and frame together */
 static u8  *rx;          /* and one in */
+
+/* The one receive kept on the in endpoint's ring, and the count of finished
+   transfers there when it was put on (xhci_bulk_queue). Two tasks can poll,
+   so the pair is changed only under the lock, interrupts off. */
+static bool rx_queued;
+static u32  rx_mark;
+static spinlock_t rx_lock;
 
 /* And the control conversation, which cannot use the stack.
  *
@@ -179,6 +187,13 @@ static bool set_filter(u32 filter) {
 
 /* --- the driver ----------------------------------------------------------- */
 
+/* From the controller's events, which the timer drains every tick: the
+   receive has finished, and the network's task is woken to take the frame
+   rather than finding it at its next look. */
+static void on_transfer(u8 slot, u8 dci) {
+    if (present && slot == slot_used && dci == ep_in) net_wake();
+}
+
 bool usbnet_attach(u8 slot, u8 in_dci, u8 out_dci, u8 ctrl_iface) {
     if (present) return false;          /* one is enough */
 
@@ -209,14 +224,20 @@ bool usbnet_attach(u8 slot, u8 in_dci, u8 out_dci, u8 ctrl_iface) {
         return false;
     }
 
+    rx_queued = false;
+    xhci_on_transfer(on_transfer);
     present = true;
+    usbnet_poll();                      /* which puts the first receive on */
     bb_log("usbnet %02x:%02x:%02x:%02x:%02x:%02x on slot %d",
            mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], slot);
     return true;
 }
 
 void usbnet_detach(u8 slot) {
-    if (present && slot == slot_used) present = false;
+    if (present && slot == slot_used) {
+        present = false;
+        rx_queued = false;
+    }
 }
 
 bool usbnet_present(void) { return present; }
@@ -239,10 +260,8 @@ bool usbnet_send(const void *frame, u16 len) {
     return true;
 }
 
-void usbnet_poll(void) {
-    if (!present || !rx) return;
-
-    int got = xhci_bulk(slot_used, ep_in, rx, TRANSFER_MAX, true);
+/* One frame out of a finished receive. */
+static void take(int got) {
     if (got < PACKET_HEADER) return;
 
     if (get32(rx) != MSG_PACKET) return;
@@ -257,6 +276,33 @@ void usbnet_poll(void) {
 
     rx_count++;
     net_receive(rx + off, (u16)len);
+}
+
+/* A receive is kept on the in endpoint at all times, and this only looks at
+ * whether it has finished; a finished one is taken, and the next put on.
+ *
+ * It used to put a receive on and wait up to five seconds for it, spinning,
+ * and a wait that ran out left its receive there. The next frame landed in
+ * it and was counted finished with nobody looking; the next wait began
+ * after that and waited for another frame, and the one that had come was
+ * never read. Two tasks polling at once lost frames the same way. An answer
+ * lost in the middle of asking for an address was an address never had,
+ * about one start in five, and the task polling spent its five seconds
+ * spinning while nothing came. */
+void usbnet_poll(void) {
+    if (!present || !rx) return;
+    bool on = spin_lock_irqsave(&rx_lock);
+    for (int frames = 0; frames < 16 && present; frames++) {
+        if (!rx_queued) {
+            if (!xhci_bulk_queue(slot_used, ep_in, rx, TRANSFER_MAX, &rx_mark)) break;
+            rx_queued = true;
+        }
+        int got = xhci_bulk_finished(slot_used, ep_in, TRANSFER_MAX, rx_mark);
+        if (got == XHCI_NOT_YET) break;
+        rx_queued = false;
+        take(got);
+    }
+    spin_unlock_irqrestore(&rx_lock, on);
 }
 
 u32 usbnet_rx_count(void) { return rx_count; }

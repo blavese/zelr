@@ -24,6 +24,11 @@ void  net_abandon(const void *task);
    once the scheduler exists, because it is a task. */
 void  net_start_service(void);
 
+/* Wakes whoever is waiting on the network, for a card whose frames are
+   noticed somewhere else than in net_receive (usbnet.c). Safe in an
+   interrupt. */
+void  net_wake(void);
+
 /* What the queue between the card and the stack is doing. Dropped frames are
    frames the card delivered that nothing came to collect, which is the one
    number that says the machine is behind rather than merely busy. */

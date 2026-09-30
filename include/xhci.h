@@ -128,6 +128,17 @@ bool xhci_open_interrupt_in(u8 slot, u8 dci, u16 max_packet, u8 interval);
  * is how the last block of a file arrives. */
 int  xhci_bulk(u8 slot, u8 dci, void *data, u32 len, bool in);
 
+/* The same transfer put on the ring and left there, for a caller that must
+   not wait for it: it asks xhci_bulk_finished later with the mark this
+   gives. One at a time on an endpoint, which is what lets a count of
+   finished transfers say that this one has. */
+bool xhci_bulk_queue(u8 slot, u8 dci, void *data, u32 len, u32 *mark);
+
+/* XHCI_NOT_YET while it is still on the ring, -1 when it failed, otherwise
+   how many bytes it moved. */
+#define XHCI_NOT_YET (-2)
+int  xhci_bulk_finished(u8 slot, u8 dci, u32 len, u32 mark);
+
 /* Hands the controller a buffer to fill the next time the endpoint has
    something to say. One report per call: it is queued again when it comes
    back, which is what usb.c does with it. */
@@ -139,6 +150,10 @@ bool xhci_listen(u8 slot, u8 dci, void *buf, u16 len);
    how many bytes arrived. */
 void xhci_poll(void);
 void xhci_on_report(void (*fn)(u8 slot, u8 dci, u32 len));
+
+/* Called, in an interrupt, for every transfer that finished on an endpoint
+   past the control one, well or not. */
+void xhci_on_transfer(void (*fn)(u8 slot, u8 dci));
 
 /* What to show in the system information window. */
 const char *xhci_describe(void);

@@ -287,6 +287,18 @@ def main():
         counted = [ln for ln in out.splitlines() if ln.strip().startswith("packets")]
         c.add("with frames counted going out as well as coming in",
               bool(counted) and "0 in, 0 out" not in counted[-1])
+
+        # The adapter's receive used to be waited on for five seconds at a
+        # time, spinning, so its task was never idle -- and a receive left
+        # behind when a wait ran out swallowed the next frame, which is how
+        # the address above went missing about one start in five.
+        first = task_slices(vm3, "net")
+        time.sleep(5)
+        second = task_slices(vm3, "net")
+        woke = (second - first) if first is not None and second is not None else None
+        print("      on usb, the network task ran %s times in five idle seconds" % (woke,))
+        c.add("and on usb too the network's task sleeps until a frame arrives",
+              woke is not None and woke < 100)
     finally:
         vm3.stop()
         try:

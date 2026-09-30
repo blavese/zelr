@@ -2345,7 +2345,14 @@ C6. **Bulk TRBs are neither split nor bounded.** One TRB with
    length field, and buffers crossing a 64 KiB boundary violate the TRB
    rules. usbdisk keeps runs at 8 sectors through the block layer, but
    `rw10` itself allows `count <= 0xFFFF` (usbdisk.c:203) for direct callers.
-C7. **`xhci_bulk` blocks about 5 s when no data comes**, and usbnet uses it
+C7. FIXED in 0.76.0 -- usbnet keeps one receive on the in endpoint's ring and
+   only asks whether it has finished (`xhci_bulk_queue`, `xhci_bulk_finished`,
+   under `rx_lock`), and the controller's transfer event wakes the network task
+   (`xhci_on_transfer`, `net_wake`). The left receive swallowed the next frame
+   with nobody looking, which lost a DHCP answer about one start in five, and
+   the task spun its five seconds (netcheck: the usb address, and the task idle).
+   The original finding follows.
+   **`xhci_bulk` blocks about 5 s when no data comes**, and usbnet uses it
    for RX polling (usbnet.c:242-260, reached from netdev.c:65). Every idle
    poll spins about 5 s and leaves one more TRB queued (see C5). This is
    cross-area; the network atlas should confirm the calling pattern.

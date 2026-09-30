@@ -192,6 +192,8 @@ void net_wait(void) {
     if (interrupts_enabled()) hlt();
 }
 
+void net_wake(void) { wake_all(&net_arrived); }
+
 static bool resolve_mac(ipv4_t ip, u8 *out, u32 timeout_ms) {
     /* Anything off our subnet goes via the gateway. */
     if (my_mask && ((ip & my_mask) != (my_ip & my_mask)) && my_gw) ip = my_gw;

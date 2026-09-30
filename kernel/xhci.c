@@ -190,6 +190,7 @@ static volatile u8  xfer_code[XHCI_MAX_SLOTS][MAX_DCI];
 static volatile u32 xfer_left[XHCI_MAX_SLOTS][MAX_DCI];
 
 static void (*report_cb)(u8 slot, u8 dci, u32 len);
+static void (*transfer_cb)(u8 slot, u8 dci);
 
 /* Set when a root port reports a change and cleared by whoever acts on it. */
 static volatile bool port_changed;
@@ -345,6 +346,9 @@ static void drain_events(void) {
                     && (code == COMP_SUCCESS || code == COMP_SHORT_PACKET)) {
                     report_cb(slot, dci, xfer_left[slot][dci]);
                 }
+                /* And a transfer nobody is waiting for (xhci_bulk_queue):
+                   whoever queued it hears now that it has finished. */
+                if (dci > 1 && transfer_cb) transfer_cb(slot, dci);
             }
         } else if (type == TRB_PORT_STATUS) {
             /* Something was plugged in or pulled out. Which port it was is
@@ -374,6 +378,7 @@ void xhci_poll(void) {
 }
 
 void xhci_on_report(void (*fn)(u8 slot, u8 dci, u32 len)) { report_cb = fn; }
+void xhci_on_transfer(void (*fn)(u8 slot, u8 dci)) { transfer_cb = fn; }
 
 bool xhci_took_port_change(void) {
     if (!port_changed) return false;
@@ -851,6 +856,31 @@ int xhci_bulk(u8 slot, u8 dci, void *data, u32 len, bool in) {
         if (i > 50000) return -1;
         spin_us(100);
     }
+
+    u8 code = xfer_code[slot][dci];
+    if (code != COMP_SUCCESS && code != COMP_SHORT_PACKET) return -1;
+    u32 left = xfer_left[slot][dci];
+    return (int)(len > left ? len - left : 0);
+}
+
+bool xhci_bulk_queue(u8 slot, u8 dci, void *data, u32 len, u32 *mark) {
+    if (!present || slot >= XHCI_MAX_SLOTS || !slots[slot].used) return false;
+    if (dci < 2 || dci >= MAX_DCI) return false;
+    if (!data || virt_to_phys((u64)data) != (u64)data) return false;
+
+    *mark = xfer_done[slot][dci];
+    ring_push(&slots[slot].ep[dci], (u64)data, len,
+              TRB_TYPE(TRB_NORMAL) | TRB_IOC | TRB_ISP);
+    doorbell(slot, dci);
+    return true;
+}
+
+int xhci_bulk_finished(u8 slot, u8 dci, u32 len, u32 mark) {
+    if (!present || slot >= XHCI_MAX_SLOTS || !slots[slot].used) return -1;
+    if (dci < 2 || dci >= MAX_DCI) return -1;
+
+    xhci_poll();
+    if (xfer_done[slot][dci] == mark) return XHCI_NOT_YET;
 
     u8 code = xfer_code[slot][dci];
     if (code != COMP_SUCCESS && code != COMP_SHORT_PACKET) return -1;
