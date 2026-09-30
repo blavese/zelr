@@ -423,6 +423,14 @@ int main(void) {
            "(function(){ var w = []; for (var i = 0; i < 300; i++) w.push('wd' + i + 'x');"
            " var r = new RegExp('\\\\b(?:' + w.join('|') + ')\\\\b'); return r.exec('a wd299x b')[0]; })()",
            "wd299x");
+    /* A pattern with more than 96 classes stopped Netflix's page ("too many
+       classes"), and one past 2048 ranges above U+00FF would have next: each
+       class here holds the marks, 321 ranges past U+00FF, so eight hold 2568. */
+    expect("a pattern of two hundred classes, and one whose classes hold 2568 ranges past U+00FF",
+           "(function(){ var r = new RegExp('^' + '[a-c]'.repeat(200) + '$'), s = 'abc'.repeat(67).slice(0, 200);"
+           " var u = new RegExp('^' + '[\\\\p{Mn}\\\\p{Mc}a-z]'.repeat(8) + '$', 'u');"
+           " return [r.test(s), r.test(s + 'a'), u.test('abcdefgh'), u.test('abcdefg1'), u.test('abcdefg\\u0301')].join(' '); })()",
+           "true false true false true");
     expect("and a reference back to the ninetieth of them",
            "new RegExp('(a)'.repeat(95) + '\\\\90').test('a'.repeat(96))", "true");
 

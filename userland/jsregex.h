@@ -60,8 +60,13 @@
    grows as a pattern needs it, to this many. */
 #define RX_NODES_FIRST 1024
 #define RX_NODES   65536
-#define RX_CLASSES 96
-#define RX_RANGES  2048          /* class ranges past U+00FF, all classes together: \p{ID_Continue} is 400 */
+/* Classes and their ranges past U+00FF (all classes together: \p{ID_Continue}
+   is 400) grow as a pattern needs them, as the nodes do: a pattern with more
+   than 96 classes stopped Netflix's page. */
+#define RX_CLASSES_FIRST 96
+#define RX_CLASSES 4096
+#define RX_RANGES_FIRST 2048
+#define RX_RANGES  65536
 #define RX_CONTS   1024
 /* Groups, the whole match included. Fifty was not enough for patterns pages
    build out of many alternatives each in its group -- The Verge's stopped a
@@ -108,12 +113,12 @@ typedef struct {
 typedef struct {
     rxnode *nodes;                   /* capnodes of them, kept from one pattern to the next */
     int    nnodes, capnodes;
-    u8     classes[RX_CLASSES][32];  /* code points 0 to 255, a bit each */
-    u8     cneg[RX_CLASSES];         /* the class is turned inside out */
-    u32    rlo[RX_RANGES], rhi[RX_RANGES];   /* and past 255, ranges, */
-    u8     rcls[RX_RANGES];                  /* each with its class */
-    int    nranges;
-    int    nclasses;
+    u8   (*classes)[32];             /* code points 0 to 255, a bit each */
+    u8    *cneg;                     /* the class is turned inside out */
+    int    nclasses, capclasses;
+    u32   *rlo, *rhi;                /* and past 255, ranges, */
+    u16   *rcls;                     /* each with its class */
+    int    nranges, capranges;
     int    ncaps;
     int    ngroups;                  /* how many the pattern has, counted first */
     char   names[RX_CAPS][RX_NAME];  /* a named group's name, or empty */
@@ -177,16 +182,32 @@ static void rx_fail(rx *R, const char *why) {
    were bits only, and \uD800 was taken for its low byte, so [\uD800-\uDBFF]
    became every byte there is -- which is how core-js's JSON.stringify came
    to escape the brackets of every array it wrote. */
+/* Room for one more range, the three lists moved together. */
+static int rx_more_ranges(rx *R) {
+    if (R->nranges < R->capranges) return 1;
+    if (R->capranges >= RX_RANGES) return 0;
+    int cap = R->capranges ? R->capranges * 2 : RX_RANGES_FIRST;
+    if (cap > RX_RANGES) cap = RX_RANGES;
+    u32 *lo = (u32 *)malloc((u64)cap * sizeof(u32)), *hi = (u32 *)malloc((u64)cap * sizeof(u32));
+    u16 *cl = (u16 *)malloc((u64)cap * sizeof(u16));
+    if (!lo || !hi || !cl) { free(lo); free(hi); free(cl); return 0; }
+    for (int i = 0; i < R->nranges; i++) { lo[i] = R->rlo[i]; hi[i] = R->rhi[i]; cl[i] = R->rcls[i]; }
+    free(R->rlo); free(R->rhi); free(R->rcls);
+    R->rlo = lo; R->rhi = hi; R->rcls = cl;
+    R->capranges = cap;
+    return 1;
+}
+
 static void rx_cls_add(rx *R, int c, u32 lo, u32 hi) {
-    if (c < 0 || c >= RX_CLASSES || hi < lo) return;
+    if (c < 0 || c >= R->nclasses || hi < lo) return;
     for (u32 i = lo; i <= hi && i < 256; i++)
         R->classes[c][i >> 3] |= (u8)(1 << (i & 7));
     if (hi < 256) return;
     if (lo < 256) lo = 256;
-    if (R->nranges >= RX_RANGES) { rx_fail(R, "too many ranges in its classes"); return; }
+    if (!rx_more_ranges(R)) { rx_fail(R, "too many ranges in its classes"); return; }
     R->rlo[R->nranges] = lo;
     R->rhi[R->nranges] = hi;
-    R->rcls[R->nranges] = (u8)c;
+    R->rcls[R->nranges] = (u16)c;
     R->nranges++;
 }
 
@@ -752,7 +773,21 @@ static int rx_fill_script(rx *R, int c, const char *nm, int n, int neg) {
 }
 
 static int rx_new_class(rx *R) {
-    if (R->nclasses >= RX_CLASSES) { rx_fail(R, "too many classes"); return -1; }
+    if (R->nclasses >= R->capclasses) {
+        /* Named by number, like the nodes, so the table can move. */
+        int cap = R->capclasses ? R->capclasses * 2 : RX_CLASSES_FIRST;
+        if (cap > RX_CLASSES) cap = RX_CLASSES;
+        u8 (*more)[32] = R->capclasses < RX_CLASSES ? (u8 (*)[32])malloc((u64)cap * 32) : 0;
+        u8 *neg = more ? (u8 *)malloc((u64)cap) : 0;
+        if (!more || !neg) { free(more); rx_fail(R, "too many classes"); return -1; }
+        for (int i = 0; i < R->nclasses; i++) {
+            for (int k = 0; k < 32; k++) more[i][k] = R->classes[i][k];
+            neg[i] = R->cneg[i];
+        }
+        free(R->classes); free(R->cneg);
+        R->classes = more; R->cneg = neg;
+        R->capclasses = cap;
+    }
     int c = R->nclasses++;
     for (int i = 0; i < 32; i++) R->classes[c][i] = 0;
     R->cneg[c] = 0;
@@ -1171,8 +1206,7 @@ static int rx_parse_alt(rx *R, const char *p, int len, int *at, int depth) {
 static int rx_compile(rx *R, const char *pat, int len, const char *flags) {
     /* Only what is read before matching needs clearing; the matching state
        is set by rx_search. */
-    volatile char *z = (volatile char *)R->classes;
-    for (u32 i = 0; i < sizeof(R->classes); i++) z[i] = 0;
+    /* Each class is cleared when it is made (rx_new_class). */
     R->nnodes = R->nclasses = R->named = R->nranges = 0;
     R->icase = R->multiline = R->global = R->dotall = R->sticky = R->unicode = 0;
     R->ok = 1;
