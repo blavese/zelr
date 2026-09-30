@@ -247,6 +247,27 @@ static handoff_t multiboot_handoff;
 
 void kmain(handoff_t *h);
 
+/* The words a multiboot loader passes after the name of the file the kernel
+   was loaded from, which QEMU and GRUB both put first. From a checkout deep
+   in folders that name alone filled the 128 bytes the handoff keeps: the
+   "console" after it was cut off, the machine opened its desktop, and a
+   harness waiting for a prompt waited for ever. A folder called selftest
+   would have started the self test, since the words are looked for anywhere.
+   So the leading words with a slash in them, which is the path however many
+   spaces it holds, are left out; no word the kernel knows has one. */
+static void multiboot_args(char *out, u64 cap, const char *in) {
+    for (;;) {
+        while (*in == ' ') in++;
+        const char *w = in;
+        int path = 0;
+        while (*w && *w != ' ') { if (*w == '/' || *w == '\\') path = 1; w++; }
+        if (!path) break;
+        in = w;
+    }
+    strncpy(out, in, cap - 1);
+    out[cap - 1] = 0;
+}
+
 void kmain_multiboot(u32 magic, u32 mbi_addr) {
     handoff_t *h = &multiboot_handoff;
     memset(h, 0, sizeof(*h));
@@ -263,7 +284,7 @@ void kmain_multiboot(u32 magic, u32 mbi_addr) {
     multiboot_info_t *mbi = (multiboot_info_t *)(u64)mbi_addr;
 
     if ((mbi->flags & (1 << 2)) && mbi->cmdline)
-        strncpy(h->cmdline, (const char *)(u64)mbi->cmdline, sizeof(h->cmdline) - 1);
+        multiboot_args(h->cmdline, sizeof(h->cmdline), (const char *)(u64)mbi->cmdline);
 
     /* Multiboot describes memory in its own format; boil it down to the
        three kinds the kernel understands. */

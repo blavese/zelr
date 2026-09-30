@@ -388,6 +388,14 @@ par_start "the shell answers over serial" shelltest
 serialtest() { keep timeout 300 python tools/serialcheck.py; }
 par_start "a line typed all at once arrives whole" serialtest
 
+# --- the words on the kernel's command line -----------------------------------
+#
+# QEMU puts the kernel file's path in front of them, and from a checkout deep
+# in folders that path filled the 128 bytes the kernel keeps: "console" was
+# cut off and every harness waited for a prompt the desktop never gave.
+argstest() { keep timeout 300 python tools/argscheck.py; }
+par_start "the kernel hears its command line from a file deep in folders" argstest
+
 # --- the black box, which needs two boots to check at all -----------------
 #
 # In fast rather than full because everything about running on real hardware
