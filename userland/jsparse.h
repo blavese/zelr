@@ -590,7 +590,7 @@ static void js_next(jlex *L) {
             if (s) { L->tok.text = s->s; L->tok.len = s->len; }
         }
 
-        for (int i = 0; JS_UNSUPPORTED[i]; i++) {
+        for (int i = 0; !L->J->parse_module && JS_UNSUPPORTED[i]; i++) {
             if (js_is_word(L->tok.text, L->tok.len, JS_UNSUPPORTED[i])) {
                 /* A word as a property name is only a name: a.with,
                    {export: 1}. */
@@ -872,6 +872,12 @@ typedef struct {
 
     /* How deep the reading may go on the machine's stack. */
     char *stack_floor;
+
+    /* A module, and its top level, where import and export are declarations;
+       and whether it awaits there. */
+    int     module;
+    jfnctx *top;
+    int     tla;
 } jparse;
 
 #define JS_NESTED(P, stmt) do { int keep_in_ = (P)->no_in; (P)->no_in = 0; \
@@ -1698,6 +1704,15 @@ static int js_parse_primary(jparse *P) {
 
     if (js_at_word(P, "import")) {
         js_next(&P->L);
+        /* import.meta: what the module knows of itself, its address. */
+        if (js_eat_punct(P, '.')) {
+            if (!js_at_name(P, "meta")) {
+                js_parse_fail(P, line, "import. is only followed by meta", 0, 0);
+                return -1;
+            }
+            js_next(&P->L);
+            return js_node(J, N_IMPORTMETA, line);
+        }
         if (js_eat_punct(P, '(')) {
             int e;
             JS_NESTED(P, e = js_parse_assign(P));
@@ -1939,6 +1954,7 @@ static int js_parse_unary(jparse *P) {
        name. */
     if (P->fc && (P->fc->flags & FN_ASYNC) && js_at_name(P, "await")) {
         js_next(&P->L);
+        if (P->module && P->fc == P->top) P->tla = 1;
         return js_parse_prefix(P, N_AWAIT, OP_NONE, line);
     }
 
@@ -2585,6 +2601,220 @@ static int js_try_label(jparse *P) {
 
 static int js_parse_stmt_in(jparse *P);
 
+/* --- a module's declarations -----------------------------------------------
+ *
+ * import x, { a, b as c } from "m";  import * as ns from "m";  import "m";
+ * export let/const/var/function/class ...;  export default ...;
+ * export { a, b as c };  export { a } from "m";  export * [as ns] from "m";
+ *
+ * Only read at a module's top level. The names are kept on nodes for the host
+ * to link (jsmod.h); running one does nothing but what a declaration does. */
+
+/* A name in an import or export list: a name, a word (default is one), or a
+   string. */
+static jstr *jp_mod_name(jparse *P) {
+    int t = P->L.tok.type;
+    if (t != T_NAME && t != T_KEYWORD && t != T_STRING) {
+        js_parse_fail(P, P->L.tok.line, "expected a name, not ", P->L.tok.text, P->L.tok.len);
+        return 0;
+    }
+    jstr *s = js_tok_str(P);
+    js_next(&P->L);
+    return s;
+}
+
+/* One name of a list: `name`, with `other` -- the name on the other side of
+   `as` -- in a string node below it. */
+static int jp_mod_spec(jparse *P, ntype kind, int op, jstr *name, jstr *other, int line) {
+    jctx *J = P->J;
+    int n = js_node(J, kind, line);
+    if (n < 0) return -1;
+    J->nodes[n].str = name;
+    J->nodes[n].op = (u16)op;
+    if (other) {
+        int s = js_node(J, N_STR, line);
+        if (s < 0) return -1;
+        J->nodes[s].str = other;
+        J->nodes[n].a = s;
+    }
+    return n;
+}
+
+/* The module a declaration names, a string, and any attributes after it
+   (`with { type: "json" }`), which are read and set aside. */
+static int jp_mod_from(jparse *P, int n) {
+    if (P->L.tok.type != T_STRING) {
+        js_parse_fail(P, P->L.tok.line, "a module is named by a string, not ", P->L.tok.text, P->L.tok.len);
+        return -1;
+    }
+    P->J->nodes[n].str = js_tok_str(P);
+    js_next(&P->L);
+    if (!P->L.tok.nl_before && (js_at_word(P, "with") || js_at_name(P, "assert"))) {
+        js_next(&P->L);
+        int depth = 0;
+        do {
+            if (js_at_punct(P, '{')) depth++;
+            else if (js_at_punct(P, '}')) depth--;
+            js_next(&P->L);
+        } while (depth > 0 && P->L.tok.type != T_EOF && !P->L.failed);
+    }
+    return 0;
+}
+
+static int js_parse_import_decl(jparse *P) {
+    jctx *J = P->J;
+    int line = P->L.tok.line;
+    js_next(&P->L);                                        /* import */
+    int n = js_node(J, N_IMPORTDECL, line);
+    if (n < 0) return -1;
+    jchain ch = { -1, -1 };
+    if (P->L.tok.type != T_STRING) {
+        int more = 1;
+        if (P->L.tok.type == T_NAME) {                     /* the default */
+            jstr *local = js_tok_str(P);
+            js_next(&P->L);
+            int c = js_chain_add(P, &ch, line);
+            if (c >= 0) J->nodes[c].a = jp_mod_spec(P, N_IMPSPEC, 1, local, 0, line);
+            more = js_eat_punct(P, ',');
+        }
+        if (more && js_at_op(P, OP_MUL)) {                 /* * as ns */
+            js_next(&P->L);
+            if (!js_at_name(P, "as")) {
+                js_parse_fail(P, P->L.tok.line, "expected as after *, not ", P->L.tok.text, P->L.tok.len);
+                return -1;
+            }
+            js_next(&P->L);
+            jstr *local = jp_mod_name(P);
+            if (!local) return -1;
+            int c = js_chain_add(P, &ch, line);
+            if (c >= 0) J->nodes[c].a = jp_mod_spec(P, N_IMPSPEC, 2, local, 0, line);
+        } else if (more && js_eat_punct(P, '{')) {         /* { a, b as c } */
+            while (!js_at_punct(P, '}') && P->L.tok.type != T_EOF && !P->L.failed) {
+                jstr *imported = jp_mod_name(P);
+                if (!imported) return -1;
+                jstr *local = imported;
+                if (js_at_name(P, "as")) {
+                    js_next(&P->L);
+                    local = jp_mod_name(P);
+                    if (!local) return -1;
+                }
+                int c = js_chain_add(P, &ch, line);
+                if (c >= 0) J->nodes[c].a = jp_mod_spec(P, N_IMPSPEC, 0, local, imported, line);
+                if (!js_eat_punct(P, ',')) break;
+            }
+            js_expect(P, '}');
+        }
+        if (!js_at_name(P, "from")) {
+            js_parse_fail(P, P->L.tok.line, "expected from, not ", P->L.tok.text, P->L.tok.len);
+            return -1;
+        }
+        js_next(&P->L);
+    }
+    if (jp_mod_from(P, n) < 0) return -1;
+    js_semicolon(P);
+    J->nodes[n].a = ch.head;
+    return n;
+}
+
+static int js_parse_export_decl(jparse *P) {
+    jctx *J = P->J;
+    int line = P->L.tok.line;
+    js_next(&P->L);                                        /* export */
+    int n = js_node(J, N_EXPORTDECL, line);
+    if (n < 0) return -1;
+
+    if (js_eat_word(P, "default")) {
+        /* A function or class with a name is a declaration of it, as the
+           standard has it; anything else is a value. */
+        int d;
+        J->nodes[n].op = 1;
+        if (js_at_word(P, "function")) {
+            d = js_parse_func(P, 0, 0);
+        } else if (js_at_name(P, "async") && js_peek(P).type == T_KEYWORD
+                   && js_is_word(js_peek(P).text, js_peek(P).len, "function") && !js_peek(P).nl_before) {
+            js_next(&P->L);
+            d = js_parse_func(P, 0, FN_ASYNC);
+        } else if (js_at_word(P, "class")) {
+            d = js_parse_class(P, 0);
+        } else {
+            d = js_parse_assign(P);
+            js_semicolon(P);
+        }
+        if (d >= 0 && J->nodes[d].str) {
+            if (J->nodes[d].kind == N_FUNC) {
+                J->nodes[d].kind = N_FUNCDECL;
+                J->nodes[d].op &= (u16)~FN_SELFNAME;
+            }
+            else if (J->nodes[d].kind == N_CLASS) J->nodes[d].kind = N_CLASSDECL;
+        }
+        J->nodes[n].a = d;
+        return n;
+    }
+
+    if (js_at_op(P, OP_MUL)) {                             /* * [as ns] from "m" */
+        js_next(&P->L);
+        J->nodes[n].op = 4;
+        if (js_at_name(P, "as")) {
+            js_next(&P->L);
+            jstr *name = jp_mod_name(P);
+            if (!name) return -1;
+            J->nodes[n].op = 5;
+            int s = js_node(J, N_STR, line);
+            if (s >= 0) J->nodes[s].str = name;
+            J->nodes[n].a = s;
+        }
+        if (!js_at_name(P, "from")) {
+            js_parse_fail(P, P->L.tok.line, "expected from, not ", P->L.tok.text, P->L.tok.len);
+            return -1;
+        }
+        js_next(&P->L);
+        if (jp_mod_from(P, n) < 0) return -1;
+        js_semicolon(P);
+        return n;
+    }
+
+    if (js_eat_punct(P, '{')) {                            /* { a, b as c } [from "m"] */
+        jchain ch = { -1, -1 };
+        while (!js_at_punct(P, '}') && P->L.tok.type != T_EOF && !P->L.failed) {
+            jstr *local = jp_mod_name(P);
+            if (!local) return -1;
+            jstr *exported = local;
+            if (js_at_name(P, "as")) {
+                js_next(&P->L);
+                exported = jp_mod_name(P);
+                if (!exported) return -1;
+            }
+            int c = js_chain_add(P, &ch, line);
+            if (c >= 0) J->nodes[c].a = jp_mod_spec(P, N_EXPSPEC, 0, exported, local, line);
+            if (!js_eat_punct(P, ',')) break;
+        }
+        js_expect(P, '}');
+        J->nodes[n].op = 2;
+        J->nodes[n].a = ch.head;
+        if (js_at_name(P, "from")) {
+            js_next(&P->L);
+            J->nodes[n].op = 3;
+            if (jp_mod_from(P, n) < 0) return -1;
+        }
+        js_semicolon(P);
+        return n;
+    }
+
+    int d;
+    if (js_decl_kind(P)) d = js_parse_var(P);
+    else if (js_at_word(P, "function")) d = js_parse_func(P, 1, 0);
+    else if (js_at_name(P, "async")) { js_next(&P->L); d = js_parse_func(P, 1, FN_ASYNC); }
+    else if (js_at_word(P, "class")) d = js_parse_class(P, 1);
+    else {
+        js_parse_fail(P, P->L.tok.line, "export needs a declaration, a list or default, not ",
+                      P->L.tok.text, P->L.tok.len);
+        return -1;
+    }
+    J->nodes[n].op = 0;
+    J->nodes[n].a = d;
+    return n;
+}
+
 /* A statement is outside the reach of any for clause around it: a function
    body written inside one has the `in` operator back. */
 static int js_parse_stmt(jparse *P) {
@@ -2614,6 +2844,14 @@ static int js_parse_for_rest(jparse *P, ntype kind, int target, int decl, int is
 
 static int js_parse_stmt_in(jparse *P) {
     jctx *J = P->J;
+    if (P->module && P->fc == P->top) {
+        if (js_at_word(P, "import")) {
+            jtok nx = js_peek(P);
+            if (!(nx.type == T_PUNCT && nx.len == 1 && (nx.text[0] == '(' || nx.text[0] == '.')))
+                return js_parse_import_decl(P);
+        }
+        if (js_at_name(P, "export")) return js_parse_export_decl(P);
+    }
     {
         int lab = js_try_label(P);
         if (lab >= 0) return lab;
@@ -2707,6 +2945,7 @@ static int js_parse_stmt_in(jparse *P) {
         if (P->fc && (P->fc->flags & FN_ASYNC) && js_at_name(P, "await")) {
             js_next(&P->L);
             is_await = 1;
+            if (P->module && P->fc == P->top) P->tla = 1;
         }
         js_expect(P, '(');
 
@@ -2907,10 +3146,14 @@ static void js_parse_begin(jparse *P, jctx *J, const char *src, u32 len, jfnctx 
 
 /* The whole of a script: statements until the end, as one block, with the
    names its var statements declared in c. */
-static int js_parse(jctx *J, const char *src, u32 len) {
+static int js_parse_goal(jctx *J, const char *src, u32 len, int module) {
     jparse P;
-    jfnctx fc = { -1, -1, 0, 0, 0 };
+    /* A module's top level is async: await there is an operator. */
+    jfnctx fc = { -1, -1, module ? (FN_STRICT | FN_ASYNC) : 0, 0, 0 };
+    J->parse_module = module;
     js_parse_begin(&P, J, src, len, &fc);
+    P.module = module;
+    P.top = &fc;
     if (js_directive_strict(&P)) fc.flags |= FN_STRICT;
 
     int head = js_node(J, N_BLOCK, 1);
@@ -2929,6 +3172,18 @@ static int js_parse(jctx *J, const char *src, u32 len) {
         /* A strict script's functions are strict; the flag rides on the
            block for whoever runs it. */
         if (fc.flags & FN_STRICT) J->nodes[head].op = FN_STRICT;
+        if (P.tla) J->nodes[head].flags |= NF_TLA;
     }
+    J->parse_module = 0;
     return P.L.failed || J->sig == JS_FAILED ? -1 : head;
+}
+
+static int js_parse(jctx *J, const char *src, u32 len) {
+    return js_parse_goal(J, src, len, 0);
+}
+
+/* A module: strict, with export a word and import and export declarations
+   at its top level. */
+__attribute__((unused)) static int js_parse_module(jctx *J, const char *src, u32 len) {
+    return js_parse_goal(J, src, len, 1);
 }

@@ -115,6 +115,37 @@ static int fake_script(const char *src, const char **out) {
     return 0;
 }
 
+/* Module files, answered by their whole address. */
+static const char *const MODFILES[][2] = {
+    { "https://site.test/m.js", "export default 'D'; export const a = 1; export let b = 2;" },
+    { "https://site.test/live.js", "export let n = 1; export function bump() { n++; }" },
+    { "https://site.test/re.js", "export * from './m.js'; export { a as z } from './m.js';" },
+    { "https://site.test/meta.js", "export const url = import.meta.url; export const next = import.meta.resolve('./m.js');" },
+    { "https://site.test/dir/x.js", "export default 'X';" },
+    { "https://site.test/order.js", "import './order2.js'; window.order = (window.order || '') + '1';" },
+    { "https://site.test/order2.js", "window.order = (window.order || '') + '2';" },
+    { "https://site.test/tla.js", "export let v = 1; await Promise.resolve(); v = 2;" },
+    { "https://site.test/tlauser.js", "import { v } from './tla.js'; export const seen = v;" },
+    { "https://site.test/tla2.js", "export let v = 'early'; await Promise.resolve(); await null; v = 'late';" },
+    { "https://site.test/tlabad.js", "await null; throw new Error('late');" },
+    { "https://site.test/throws.js", "throw new Error('boom');" },
+    { "https://site.test/tla3.js", "export let v = 'early'; await new Promise(function (r) { setTimeout(r, 0); }); v = 'late';" },
+    { "https://site.test/tla3user.js", "import { v } from './tla3.js'; window.seen3 = v;" },
+    { "https://site.test/tlabad3.js", "await new Promise(function (r) { setTimeout(r, 0); }); throw new Error('later');" },
+    { 0, 0 },
+};
+
+static int fake_modules(const char *src, const char **out) {
+    for (int i = 0; MODFILES[i][0]; i++)
+        if (w_same(src, MODFILES[i][0])) {
+            *out = MODFILES[i][1];
+            int n = 0;
+            while ((*out)[n]) n++;
+            return n;
+        }
+    return 0;
+}
+
 /* The browser's own cookie jar (fetch.h), for a page at one address, which
    is what browser.c hands a page too. */
 static url_t jar_at;
@@ -842,13 +873,12 @@ int main(void) {
     {
         load("<body><p id=out>no</p><p id=who>?</p>"
              "<script type=\"application/ld+json\">{\"@context\": \"https://schema.org\"}</script>"
-             "<script type=\"module\">import x from './x.js';</script>"
              "<script type=\"text/javascript\">document.getElementById('out').textContent = 'ran';"
              "document.addEventListener('click', function(){"
              " document.getElementById('who').textContent = String(this === document); });</script></body>");
         char err[128];
         int ran = run_scripts(&page, err, (int)sizeof(err), 0);
-        ok("data in a script element is not run as script, nor a module", ran == 1 && err[0] == 0);
+        ok("data in a script element is not run as script", ran == 1 && err[0] == 0);
         oks("while a script that says it is JavaScript is", content_of(dom_by_id(&page, "out")), "ran");
         jsdom_click(dom_by_id(&page, "out"));
         oks("and a listener on the document has the document as this",
@@ -1547,6 +1577,112 @@ int main(void) {
         for (int i = 0; i < page.count; i++) if (page.nodes[i].kind == DN_COMMENT) comments++;
         ok("and none once the document is nearly full, and what follows is still read",
            comments == 0 && dom_by_id(&page, "end") >= 0);
+    }
+
+    /* --- modules ----------------------------------------------------------------------
+     *
+     * GitHub, MDN, Reddit, Cloudflare and BBC Sport ran none of their scripts:
+     * they are modules, and there were none. */
+    {
+        jsdom_fetch_with(fake_modules);
+        jsdom_at("https://site.test/page");
+        oks("a module imports a default, names, renamed names and the namespace",
+            titled("<body><script type=module>import d, { a, b as c } from './m.js'; import * as ns from './m.js';"
+                   "document.title = [d, a, c, ns.a, Object.keys(ns).sort().join('')].join(' ');</script></body>"),
+            "D 1 2 1 abdefault");
+        oks("a binding is live: what the exporter changes, the importer sees",
+            titled("<body><script type=module>import { n, bump } from './live.js'; var before = n; bump();"
+                   "document.title = before + ' ' + n;</script></body>"),
+            "1 2");
+        oks("names are passed on with export * and export from",
+            titled("<body><script type=module>import { a, z, b } from './re.js';"
+                   "document.title = [a, z, b].join(' ');</script></body>"),
+            "1 1 2");
+        oks("import.meta knows the module's address and resolves against it",
+            titled("<body><script type=module>import { url, next } from './meta.js';"
+                   "document.title = url + ' ' + next + ' ' + import.meta.url;</script></body>"),
+            "https://site.test/meta.js https://site.test/m.js https://site.test/page");
+        oks("import() gives a promise of the namespace",
+            titled("<body><script type=module>import('./m.js').then(function (ns) { document.title = ns.a + ns.default; });</script></body>"),
+            "1D");
+        oks("a module runs after what it imports and after the classic scripts, and nomodule does not run",
+            titled("<body><script>document.title = 'classic';</script><script nomodule>document.title += ' old';</script>"
+                   "<script type=module>import './order.js'; document.title = document.title + ' ' + window.order;</script></body>"),
+            "classic 21");
+        oks("and HTMLScriptElement.supports says so",
+            titled("<body><script>document.title = ['classic', 'module', 'importmap', 'speculationrules']"
+                   ".map(function (k) { return HTMLScriptElement.supports(k); }).join(' ');</script></body>"),
+            "true true true false");
+        oks("a bare name is found through the import map, and this is undefined at the top",
+            titled("<head><script type=importmap>{\"imports\": {\"lib\": \"./m.js\", \"pre/\": \"./dir/\"}}</script></head>"
+                   "<body><script type=module>import { a } from 'lib'; import x from 'pre/x.js';"
+                   "document.title = a + x + ' ' + (typeof this);</script></body>"),
+            "1X undefined");
+        oks("a module may await at its top level",
+            titled("<body><script type=module>document.title = 'a'; await Promise.resolve(); document.title += 'b';</script></body>"),
+            "ab");
+        oks("and one that imports a module that awaits runs when that module has finished",
+            titled("<body><script type=module>import { v } from './tla.js'; import { seen } from './tlauser.js';"
+                   "document.title = v + ' ' + seen;</script></body>"),
+            "2 2");
+        oks("and import() of one settles when it has finished",
+            titled("<body><script>import('./tla2.js').then(function (ns) { document.title = ns.v; });</script></body>"),
+            "late");
+        oks("a module may come from a data: address, escaped or in base64, and from a blob:",
+            titled("<body><script type=module>import { q } from 'data:text/javascript,export%20const%20q%20=%207;';"
+                   "import b from 'data:text/javascript;base64,ZXhwb3J0IGRlZmF1bHQgJ0I2NCc7';"
+                   "var u = URL.createObjectURL(new Blob(['export const w = 9;'], { type: 'text/javascript' }));"
+                   "import(u).then(function (ns) { document.title = [q, b, ns.w].join(' '); });</script></body>"),
+            "7 B64 9");
+        /* Longer than any address buffer: a data: address is never copied. */
+        static char longsrc[2600];
+        {
+            int w = 0;
+            const char *head = "<body><script type=module src=\"data:text/javascript,/*";
+            for (const char *q = head; *q; q++) longsrc[w++] = *q;
+            for (int k = 0; k < 1500; k++) longsrc[w++] = 'x';
+            const char *tail = "*/document.title='from data'\"></script></body>";
+            for (const char *q = tail; *q; q++) longsrc[w++] = *q;
+            longsrc[w] = 0;
+        }
+        oks("and a module script's src may be one, however long", titled(longsrc), "from data");
+        const char *late = titled("<body><script type=module>import './tlabad.js'; document.title = 'ran';</script></body>");
+        ok("and one that throws after it awaited says what, and what imports it does not run",
+           strncmp(late, "Error: late", 11) == 0);
+        /* A timer is what makes them wait: the jobs an await leaves are run
+           before the script's run is over. */
+        char merr[128];
+        load("<body><script type=module>import './tla3user.js'; document.title = 'after ' + window.seen3;</script></body>");
+        run_scripts(&page, merr, (int)sizeof(merr), 0);
+        int early = page.title < 0;
+        pump_until(1, 2000);
+        ok("one that awaits a timer holds back what imports it until the timer has run",
+           early && page.title >= 0 && w_same(page.arena + page.title, "after late"));
+        load("<body><script>import('./tla3.js').then(function (ns) { document.title = 'got ' + ns.v; });</script></body>");
+        run_scripts(&page, merr, (int)sizeof(merr), 0);
+        early = page.title < 0;
+        pump_until(1, 2000);
+        ok("and import() of it settles then", early && page.title >= 0 && w_same(page.arena + page.title, "got late"));
+        load("<body><script type=module>import './tlabad3.js'; document.title = 'ran';</script></body>");
+        run_scripts(&page, merr, (int)sizeof(merr), 0);
+        pump_until(1, 2000);
+        ok("and one that throws after the timer says what, and what imports it does not run",
+           page.title < 0 && strncmp(jd_err, "Error: later", 12) == 0);
+        load("<body><script type=module>import { a } from './missing.js'; document.title = 'ran';</script></body>");
+        run_scripts(&page, merr, (int)sizeof(merr), 0);
+        ok("and one whose import would not come does not run, and says why",
+           (page.title < 0 || !w_same(page.arena + page.title, "ran"))
+           && strncmp(merr, "a module would not come", 23) == 0);
+        load("<body><script type=module>import './throws.js'; document.title = 'ran';</script></body>");
+        run_scripts(&page, merr, (int)sizeof(merr), 0);
+        ok("and one whose import threw as it ran does not run, and says what",
+           (page.title < 0 || !w_same(page.arena + page.title, "ran")) && strncmp(merr, "Error: boom", 11) == 0);
+        load("<body><script type=module>import { a } from 'nowhere';</script></body>");
+        run_scripts(&page, merr, (int)sizeof(merr), 0);
+        ok("and a bare name no import map gives is said to be one",
+           strncmp(merr, "a module name this cannot resolve: nowhere", 42) == 0);
+        jsdom_at("");
+        jsdom_fetch_with(fake_script);
     }
 
     /* --- what a page's scripts may have ---------------------------------------------

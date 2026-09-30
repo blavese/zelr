@@ -598,6 +598,15 @@ static void jd_set_data(int n, const char *s, int len) {
 
 static void jd_scripts_inserted(int top);
 
+/* Modules (jsmod.h). */
+static void jd_mods_reset(void);
+static void jd_importmap_read(void);
+static int  jd_module_wanted(int i);
+static int  jd_run_module_el(int node);
+static void jd_inserted_module_due(jval arg);
+static jval jd_import(jctx *J, jval spec, void *module);
+static jval jd_import_meta(jctx *J, void *module);
+
 static void jd_remove(int child) {
     int parent = jd_doc->nodes[child].parent;
     if (parent < 0) return;
@@ -3675,12 +3684,12 @@ static jval nat_dialog_close(jctx *J, jval t, jval *a, int n) {
 static jval nat_script_text(jctx *J, jval t, jval *a, int n) { return nat_text_content(J, t, a, n); }
 static jval nat_script_set_text(jctx *J, jval t, jval *a, int n) { return nat_set_text_content(J, t, a, n); }
 
-/* HTMLScriptElement.supports: a classic script, yes; a module, no, which is
-   the truth -- there is no import here (js.h) -- and what makes a page load
-   its nomodule bundle instead. */
+/* HTMLScriptElement.supports: a classic script, a module and an import map,
+   yes (jsmod.h); speculation rules and the rest, no. */
 static jval nat_script_supports(jctx *J, jval t, jval *a, int n) {
     (void)t;
-    return js_bool(js_str_is(jd_arg_str(J, a, n, 0), "classic"));
+    jstr *k = jd_arg_str(J, a, n, 0);
+    return js_bool(js_str_is(k, "classic") || js_str_is(k, "module") || js_str_is(k, "importmap"));
 }
 
 /* --- template -------------------------------------------------------------------------------
@@ -5235,9 +5244,7 @@ static int (*jd_get_script)(const char *src, const char **out);
    application/ld+json describing the article, text/template, importmap --
    and every one was run: the data did not parse, and its error became the
    only thing the page said. Nothing, or one of the names JavaScript goes by,
-   runs; a module does not, since its first line is an import this engine
-   does not have. A nomodule script does run: it is written for exactly a
-   browser that has no modules, which this is. */
+   runs as a classic script; a module runs as one (jsmod.h, jd_module_wanted). */
 static int jd_script_type_runs(const char *type) {
     if (!type) return 1;
     while (*type == ' ') type++;
@@ -5278,6 +5285,8 @@ static int jd_script_wanted(int i) {
     if (jd_doc->nodes[i].kind != DN_ELEMENT || jd_doc->nodes[i].tag != T_SCRIPT) return 0;
     if (jd_is_started(i)) return 0;
     if (!jd_script_type_runs(dom_attr(jd_doc, i, "type"))) return 0;
+    /* What a page gives a browser without modules; this one has them. */
+    if (dom_attr(jd_doc, i, "nomodule")) return 0;
     if (!jd_connected(i)) return 0;
     if (jd_has_ancestor_tag(i, T_OTHER, "template")) return 0;
     return 1;
@@ -5537,6 +5546,13 @@ static void jd_inserted_script_due(jval arg) {
 
 static void jd_scripts_inserted(int top) {
     for (int i = top; i >= 0; i = jd_walk_next(i, top)) {
+        if (jd_module_wanted(i)) {
+            const char *msrc = dom_attr(jd_doc, i, "src");
+            if (!(msrc && *msrc) && jd_doc->nodes[i].first < 0) continue;
+            jd_mark_started(i);
+            jd_later_native(jd_inserted_module_due, jd_el_value(&jd_J, i), 1);
+            continue;
+        }
         if (!jd_script_wanted(i)) continue;
         /* One with no src and nothing in it yet waits: a page that makes a
            script, appends it and then sets its text runs it when it has
@@ -5564,6 +5580,7 @@ static int jsdom_scripts(char *err, int errcap) {
        to keep the 24 megabytes of a machine that had not said. */
     u32 cap = jd_mem_cap();
     if (cap > jd_J.mem_cap) jd_J.mem_cap = cap;
+    jd_importmap_read();
 
     /* The page's own, in the order they were written -- which for what the
        parser made is the order of the numbers. A file that defines
@@ -5577,6 +5594,14 @@ static int jsdom_scripts(char *err, int errcap) {
         ran++;
         jd_run_written();
         if (jd_spent()) break;
+    }
+
+    /* Then its modules, in the order they were written, as defer runs
+       scripts: after the page is read and its classic scripts have run. */
+    for (int i = 0; i < jd_parsed && i < jd_doc->count && !jd_spent(); i++) {
+        if (!jd_module_wanted(i)) continue;
+        jd_mark_started(i);
+        if (jd_run_module_el(i)) ran++;
     }
 
     if (err && errcap) {
@@ -5715,6 +5740,7 @@ static void jd_consts(jctx *J, jobj *on, const char *const *names, int from);
 #include "jswin.h"
 #include "jsobs.h"
 #include "jswalk.h"
+#include "jsmod.h"
 
 /* --- the hooks -----------------------------------------------------------------------------------
  *
@@ -6507,6 +6533,7 @@ static void jd_zero(void *p, int n) {
    keeps whatever the scripts wrote into it, because that lives in the
    document's own arena rather than this one. */
 static void jsdom_close(void) {
+    jd_mods_reset();
     for (int i = 0; i < jd_nreq; i++) { jd_req[i].waiting = 0; jd_req[i].self = 0; }
     jd_nreq = 0;
     if (!jd_open) return;
@@ -6536,6 +6563,8 @@ static int jsdom_open(ddoc *d, csheet *sheet) {
     jd_J.mem_cap = jd_mem_cap();
     jd_J.host_get = jd_host_get;
     jd_J.host_set = jd_host_set;
+    jd_J.import_hook = jd_import;
+    jd_J.meta_hook = jd_import_meta;
 
     jd_doc = d;
     jd_dirty = 0;

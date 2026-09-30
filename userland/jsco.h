@@ -186,6 +186,11 @@ typedef struct jco {
 
     /* Every one holding a stack, so the page's end can give them back. */
     struct jco *all_prev, *all_next;
+
+    /* A module's body rather than a function's: one that awaits at its top
+       level runs as an async function's body does. */
+    int     is_module, prog;
+    jscope *msc;
 } jco;
 
 static void co_entry(void *arg);

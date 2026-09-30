@@ -85,10 +85,16 @@
  * whether the machine has that is asked before each one runs (jsdom.h,
  * jd_room_for), which on a 64 megabyte machine is about a quarter of a
  * megabyte of script and on a 256 megabyte one several; SCRIPTS_BYTES is a
- * ceiling on what a page's files come to together whatever the machine. */
+ * ceiling on what a page's files come to together whatever the machine.
+ *
+ * A page of modules is many small files rather than a few large ones:
+ * GitHub's home page asked for more than 64, and more than 6 megabytes of
+ * them together, and the rest would not come. So a page may have 256 files
+ * and 16 megabytes; whether the machine can run each one is still asked
+ * before it runs (jd_room_for). */
 #define SCRIPT_MAX    (4 * 1024 * 1024)
-#define SCRIPTS_MAX   64
-#define SCRIPTS_BYTES (6 * 1024 * 1024)
+#define SCRIPTS_MAX   256
+#define SCRIPTS_BYTES (16 * 1024 * 1024)
 
 /* And what a script asks for while the page is up. Its own buffer, because
    a reply arriving must not write over the text of the script that asked

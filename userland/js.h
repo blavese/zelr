@@ -249,6 +249,10 @@ struct jscope {
     /* A with statement's: `vars` is the object itself, and a name is its
        when the object has it, inherited or through a proxy's has. */
     int     with;
+
+    /* A module's own scope: the host's record of the module, which import()
+       and import.meta written anywhere inside it are relative to. */
+    void   *module;
 };
 
 /* --- what the reader produces -------------------------------------------- */
@@ -266,7 +270,10 @@ typedef enum {
     /* statements */
     N_VAR, N_BLOCK, N_IF, N_WHILE, N_DO, N_FOR, N_FORIN, N_FOROF,
     N_RETURN, N_BREAK, N_CONTINUE, N_EXPRSTMT, N_FUNCDECL, N_EMPTY,
-    N_THROW, N_TRY, N_SWITCH, N_CASE, N_LABEL, N_CLASSDECL, N_WITH
+    N_THROW, N_TRY, N_SWITCH, N_CASE, N_LABEL, N_CLASSDECL, N_WITH,
+    /* a module's: import and export declarations, one name in their lists,
+       and import.meta */
+    N_IMPORTDECL, N_IMPSPEC, N_EXPORTDECL, N_EXPSPEC, N_IMPORTMETA
 } ntype;
 
 /* Thirty two bytes a node. A big page's bundle is a million of them, and the
@@ -290,6 +297,7 @@ typedef struct {
 #define NF_PRIVATE 8          /* a member named by #name */
 #define NF_STATIC  16         /* a class member on the class itself */
 #define NF_PAREN   32         /* written in brackets */
+#define NF_TLA     64         /* a module's body that awaits at its top level */
 
 /* Function flags, in the op of an N_FUNC. */
 #define FN_ARROW     0x0001
@@ -369,6 +377,12 @@ typedef struct jctx {
     char    error[192];
     int     error_line;
     int     with_used;        /* a with statement has run: calls look for its object */
+    int     parse_module;     /* what is being read is a module: export is a word */
+
+    /* The host's, for modules: import() and import.meta, given the module
+       the code was written in (0 for a classic script). */
+    jval  (*import_hook)(struct jctx *J, jval spec, void *module);
+    jval  (*meta_hook)(struct jctx *J, void *module);
 
     /* The native being called, for the length of the call into it, and the
        constructor `new` was given when it was new that called it. Read them

@@ -459,6 +459,13 @@ static jprop *js_lookup(jscope *sc, const jstr *name) {
 
 static int js_has(jctx *J, jobj *o, jstr *key);
 
+/* The module the code at sc was written in, the host's record of it, or 0. */
+static void *js_module_of(jscope *sc) {
+    for (jscope *s = sc; s; s = s->parent)
+        if (s->module) return s->module;
+    return 0;
+}
+
 /* A name a page wrote: the binding it is, or, when a with statement's object
    has it first, 0 with *with set to the object. The object was the scope's
    table, so only its own properties were names: `with (document) { title }`
@@ -1671,20 +1678,34 @@ static void js_note_lexical(jctx *J, int target, jscope *sc) {
 
 /* The declarations in a list of statements: functions made in `fn_sc`,
    let, const and class marked in `lex_sc`. */
+static void js_hoist_one(jctx *J, int st, jscope *fn_sc, jscope *lex_sc) {
+    int k = J->nodes[st].kind;
+    if (k == N_FUNCDECL) {
+        jobj *f = js_make_function(J, st, lex_sc, js_undef());
+        if (f && J->nodes[st].str) js_declare(J, fn_sc, J->nodes[st].str, js_from_obj(f));
+    } else if (k == N_VAR && J->nodes[st].d != VK_VAR) {
+        for (int c = J->nodes[st].a; c >= 0; c = J->nodes[c].b)
+            js_note_lexical(J, J->nodes[c].c, lex_sc);
+    } else if (k == N_CLASSDECL && J->nodes[st].str) {
+        js_declare_flags(J, lex_sc, J->nodes[st].str, js_hole(), JP_PLAIN);
+    } else if (k == N_EXPORTDECL) {
+        /* What an export declares is declared, and a default is a binding
+           of its own, *default*, which no page can name. */
+        int d = J->nodes[st].a;
+        if (J->nodes[st].op <= 1 && d >= 0) js_hoist_one(J, d, fn_sc, lex_sc);
+        if (J->nodes[st].op == 1) {
+            jstr *dk = js_intern(J, "*default*", 9);
+            jprop *p = d >= 0 && J->nodes[d].kind == N_FUNCDECL && J->nodes[d].str
+                     ? js_find(fn_sc->vars, J->nodes[d].str) : 0;
+            js_declare_flags(J, lex_sc, dk, p ? p->v : js_hole(), JP_PLAIN);
+        }
+    }
+}
+
 static void js_hoist_list(jctx *J, int chain, jscope *fn_sc, jscope *lex_sc) {
     for (int cell = chain; cell >= 0; cell = J->nodes[cell].b) {
         int st = J->nodes[cell].a;
-        if (st < 0) continue;
-        int k = J->nodes[st].kind;
-        if (k == N_FUNCDECL) {
-            jobj *f = js_make_function(J, st, lex_sc, js_undef());
-            if (f && J->nodes[st].str) js_declare(J, fn_sc, J->nodes[st].str, js_from_obj(f));
-        } else if (k == N_VAR && J->nodes[st].d != VK_VAR) {
-            for (int c = J->nodes[st].a; c >= 0; c = J->nodes[c].b)
-                js_note_lexical(J, J->nodes[c].c, lex_sc);
-        } else if (k == N_CLASSDECL && J->nodes[st].str) {
-            js_declare_flags(J, lex_sc, J->nodes[st].str, js_hole(), JP_PLAIN);
-        }
+        if (st >= 0) js_hoist_one(J, st, fn_sc, lex_sc);
     }
 }
 
@@ -2690,14 +2711,17 @@ static JS_NOINLINE jval js_eval_misc(jctx *J, int node, jscope *sc, jval this_va
             return co_await(J, v);
         }
         case N_IMPORT: {
-            js_eval(J, J->nodes[node].a, sc, this_val);
+            jval spec = js_eval(J, J->nodes[node].a, sc, this_val);
             if (J->sig != JS_OK) return js_undef();
+            if (J->import_hook) return J->import_hook(J, spec, js_module_of(sc));
             jobj *p = js_promise_new(J);
             jobj *e = js_error_with(J, J->err_proto[JS_ERR_TYPE], js_str(J, "TypeError"),
                                     js_str(J, "this engine does not have modules"));
             if (p) js_promise_settle(J, p, 0, js_from_obj(e));
             return js_from_obj(p);
         }
+        case N_IMPORTMETA:
+            return J->meta_hook ? J->meta_hook(J, js_module_of(sc)) : js_undef();
         case N_PRIVNAME:
             return js_throw(J, JS_ERR_SYNTAX, "a #name on its own is only for `in`", J->nodes[node].line);
         case N_SPREAD:
@@ -3204,6 +3228,30 @@ static JS_NOINLINE jsignal js_exec_misc(jctx *J, int node, jscope *sc, jval this
             return JS_THROWN;
         }
 
+        case N_IMPORTDECL:
+            return J->sig;                   /* linked before the module ran */
+        case N_EXPORTDECL: {
+            int d = J->nodes[node].a, op = J->nodes[node].op;
+            if (op == 0) return js_exec(J, d, sc, this_val);
+            if (op != 1) return J->sig;
+            /* export default: the binding *default* given its value, which a
+               function declaration already has. */
+            jval v = js_undef();
+            if (d >= 0 && J->nodes[d].kind == N_FUNCDECL) return J->sig;
+            if (d >= 0 && J->nodes[d].kind == N_CLASSDECL) {
+                js_exec(J, d, sc, this_val);
+                if (J->sig != JS_OK) return J->sig;
+                jprop *cp = js_find(sc->vars, J->nodes[d].str);
+                v = cp ? cp->v : js_undef();
+            } else {
+                v = js_eval(J, d, sc, this_val);
+                if (J->sig != JS_OK) return J->sig;
+            }
+            jprop *p = js_find(sc->vars, js_intern(J, "*default*", 9));
+            if (p) p->v = v;
+            return J->sig;
+        }
+
         case N_WITH: {
             /* A scope whose variables are the object's own properties. It is
                never given back: its table is the object's. */
@@ -3391,6 +3439,13 @@ static void co_run(jctx *J, jco *co) {
 static void co_entry(void *arg) {
     jco *co = (jco *)arg;
     jctx *J = co->J;
+    if (co->is_module) {
+        js_exec(J, co->prog, co->msc, js_undef());
+        if (J->sig == JS_RETURN || J->sig == JS_BREAK || J->sig == JS_CONTINUE) J->sig = JS_OK;
+        co->value = js_undef();
+        co_switch_out(co, CO_WHY_END);
+        return;
+    }
     jval r = js_run_function(J, co->fn, co->this_val, co->args, co->argc, js_undef(), 0);
     co->value = r;
     co_switch_out(co, CO_WHY_END);
@@ -3453,6 +3508,31 @@ static JS_NOINLINE jval js_start_coroutine(jctx *J, jobj *f, jval this_val, jval
     co_run(J, co);
     co_after(J, co);
     return js_from_obj(p);
+}
+
+/* A module's body that awaits at its top level, run as an async function's
+   body is, on a stack of its own: the promise it gives back settles when the
+   body has finished, fulfilled, or rejected with what it threw. */
+__attribute__((unused)) static jobj *js_run_module_async(jctx *J, int prog, jscope *msc) {
+    jobj *p = js_promise_new(J);
+    jco *co = co_new(J, 0, js_undef(), 0, 0, CO_ASYNC);
+    if (!p || !co) return 0;
+    co->is_module = 1;
+    co->prog = prog;
+    co->msc = msc;
+    co->promise = p;
+    if (J->nest == 0) {
+        J->sig = JS_OK;
+        J->steps = 0;
+        J->error[0] = 0;
+    }
+    js_enter(J);
+    if (co_stack_new(J, co)) {
+        co_run(J, co);
+        co_after(J, co);
+    }
+    js_leave(J);
+    return p;
 }
 
 /* A value arriving in a function that was suspended, as the thing it asked
@@ -3748,6 +3828,26 @@ static int js_run(jctx *J, const char *src, u32 len) {
 
     if (J->sig == JS_THROWN) return 0;
     if (J->sig == JS_FAILED) return 0;
+    J->sig = JS_OK;
+    return 1;
+}
+
+/* A module's body, read with js_parse_module and hoisted into its scope by
+   the host, run there: `this` is undefined at a module's top level. Run from
+   inside another script -- an import() -- it leaves the outer script's state
+   as it was and says what happened by its answer. 1 when it finished. */
+__attribute__((unused)) static int js_run_module(jctx *J, int prog, jscope *msc) {
+    int outer = J->nest > 0;
+    if (!outer) {
+        J->sig = JS_OK;
+        J->steps = 0;
+        J->error[0] = 0;
+    }
+    js_enter(J);
+    js_exec(J, prog, msc, js_undef());
+    if (J->sig == JS_RETURN || J->sig == JS_BREAK || J->sig == JS_CONTINUE) J->sig = JS_OK;
+    js_leave(J);
+    if (J->sig == JS_THROWN || J->sig == JS_FAILED) return 0;
     J->sig = JS_OK;
     return 1;
 }

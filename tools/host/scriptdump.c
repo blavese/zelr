@@ -127,11 +127,12 @@ int main(int argc, char **argv) {
     puts(" requests made\n");
 
     /* And the ones that were not run at all, with the type that kept them
-       out: data, modules, and templates' scripts. */
+       out: data, modules not started, and templates' scripts. */
     for (int i = 0; i < doc.count; i++) {
         if (doc.nodes[i].kind != DN_ELEMENT || doc.nodes[i].tag != T_SCRIPT) continue;
         const char *ty = dom_attr(&doc, i, "type");
         if (jd_script_type_runs(ty)) continue;
+        if (jd_module_type(ty) && jd_is_started(i)) continue;
         const char *s = dom_attr(&doc, i, "src");
         puts("not run (node ");
         putn(i);
@@ -139,6 +140,34 @@ int main(int argc, char **argv) {
         puts(ty ? ty : "");
         if (s) { puts(" src="); puts(s); }
         putc('\n');
+    }
+
+    /* The module map: how each one ended, and the ones that did not
+       finish, by address. */
+    static const char *const MSTATE[] = { "never fetched", "read", "linked", "running", "waiting",
+                                          "awaiting", "done", "failed" };
+    int by[8] = { 0 };
+    for (int i = 0; i < jd_nmods; i++) if (jd_mods[i].state >= 0 && jd_mods[i].state < 8) by[jd_mods[i].state]++;
+    if (jd_nmods) {
+        puts("modules ");
+        putn(jd_nmods);
+        for (int k = 0; k < 8; k++) {
+            if (!by[k]) continue;
+            puts(", ");
+            putn(by[k]);
+            putc(' ');
+            puts(MSTATE[k]);
+        }
+        putc('\n');
+        for (int i = 0; i < jd_nmods; i++) {
+            int st = jd_mods[i].state;
+            if (st == JM_DONE) continue;
+            puts("  module ");
+            puts(st >= 0 && st < 8 ? MSTATE[st] : "?");
+            puts(": ");
+            puts(jd_mods[i].key);
+            putc('\n');
+        }
     }
 
     puts("scripts ");
