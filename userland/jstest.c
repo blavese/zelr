@@ -1316,6 +1316,23 @@ int main(void) {
            " w.getBigUint64(0).toString(16), typeof v.getBigInt64].join(' '); })()",
            "-2 18446744073709551614 18446744073709551615 -2 255 8 807060504030201 function");
 
+    /* structuredClone, which libraries copy state with, and Mozilla's consent
+       manager takes off the window before it does anything. */
+    expect("structuredClone copies deeply, keeping kinds, shared parts and cycles",
+           "(function(){ var shared = { n: 1 }; var src = { a: [1, 2, { b: 'x' }], d: new Date(5), r: /x/gi,"
+           " m: new Map([[1, shared]]), s: new Set([shared]), e: new TypeError('bad'), big: 10n, u8: new Uint8Array([1, 2, 3]),"
+           " one: shared, two: shared };"
+           " src.self = src; var c = structuredClone(src);"
+           " return [c !== src, c.a[2].b, c.a[2] !== src.a[2], c.d instanceof Date, c.d.getTime(), c.r.source + c.r.flags,"
+           " c.m.get(1).n, c.m.get(1) === c.one, c.s.has(c.one), c.one === c.two, c.one !== shared, c.self === c,"
+           " c.e instanceof TypeError, c.e.message, typeof c.big, c.u8[2], c.u8.buffer !== src.u8.buffer].join(' '); })()",
+           "true x true true 5 xgi 1 true true true true true true bad bigint 3 true");
+    expect("and refuses what cannot be copied",
+           "(function(){ var r = [], t = function (v) { try { structuredClone(v); r.push('none'); } catch (e) { r.push(e.name); } };"
+           " t(function () {}); t(Symbol('x')); t({ f: function () {} }); t(new WeakMap()); t(Promise.resolve(1));"
+           " t(new Proxy({}, {})); t({ ok: [1, 'a', null, undefined, true] }); return r.join(' '); })()",
+           "DataCloneError DataCloneError DataCloneError DataCloneError DataCloneError DataCloneError none");
+
     /* A function expression's own name, which GSAP's recursion is written
        with: "u is not defined". */
     expect("a function expression written with a name knows itself by it, and only inside",

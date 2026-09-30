@@ -2421,6 +2421,7 @@ static jval nat_unescape(jctx *J, jval t, jval *a, int n) { (void)t; return js_u
 #include "jstyped.h"
 #include "jsproxy.h"
 #include "jsbig.h"
+#include "jsclone.h"
 #include "jsintl.h"
 
 /* --- setting it all up ------------------------------------------------------ */
@@ -2660,6 +2661,7 @@ static void js_globals(jctx *J) {
     js_setup_typed(J);
     js_setup_text(J);
     js_setup_bigint(J);
+    js_setup_clone(J);
     js_setup_intl(J);
 
     js_declare_flags(J, g, js_str(J, "NaN"), js_num(js_nan()), 0);
