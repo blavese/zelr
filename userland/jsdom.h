@@ -5702,6 +5702,24 @@ static void jd_scripts_inserted(int top) {
 /* Returns how many scripts ran. `err` gets the first failure, because a page
    with a broken script should say so somewhere rather than silently doing
    nothing -- and the second failure is usually the first one's fault. */
+/* When a script the parser met runs, as a browser that has all of the page at
+   once runs it: now, where it stands (JR_NOW); after the document is read, in
+   the order written (JR_AFTER: defer on a script with a src, and every module
+   that is not async); or when it arrives (JR_ARRIVES: async), for which after
+   the document is a time it could have come. defer and async mean nothing to
+   a classic script without a src. */
+enum { JR_NOW, JR_AFTER, JR_ARRIVES };
+
+static int jd_script_when(int i, int module) {
+    int async = dom_attr(jd_doc, i, "async") != 0;
+    if (module) return async ? JR_ARRIVES : JR_AFTER;
+    if (!dom_attr(jd_doc, i, "src")) return JR_NOW;
+    if (async) return JR_ARRIVES;
+    return dom_attr(jd_doc, i, "defer") ? JR_AFTER : JR_NOW;
+}
+
+static void jd_ready_change(int to);
+
 static int jsdom_scripts(char *err, int errcap) {
     if (err && errcap) err[0] = 0;
     if (!jd_open || !jd_doc) return 0;
@@ -5716,26 +5734,33 @@ static int jsdom_scripts(char *err, int errcap) {
     if (cap > jd_J.mem_cap) jd_J.mem_cap = cap;
     jd_importmap_read();
 
-    /* The page's own, in the order they were written -- which for what the
-       parser made is the order of the numbers. A file that defines
-       something and an inline script below it that uses it is the
-       commonest shape on the web, and running them the other way round is
-       a page that fails with a name it has never heard of. */
-    for (int i = 0; i < jd_parsed && i < jd_doc->count; i++) {
-        if (!jd_script_wanted(i)) continue;
-        jd_mark_started(i);
-        if (!jd_run_script_el(i)) continue;
-        ran++;
-        jd_run_written();
-        if (jd_spent()) break;
-    }
-
-    /* Then its modules, in the order they were written, as defer runs
-       scripts: after the page is read and its classic scripts have run. */
-    for (int i = 0; i < jd_parsed && i < jd_doc->count && !jd_spent(); i++) {
-        if (!jd_module_wanted(i)) continue;
-        jd_mark_started(i);
-        if (jd_run_module_el(i)) ran++;
+    /* The page's own, each in its turn (jd_script_when), and in each turn in
+       the order they were written -- which for what the parser made is the
+       order of the numbers. A file that defines something and an inline
+       script below it that uses it is the commonest shape on the web. So is
+       the other way round with defer: every script ran in the order written,
+       and NHS's deferred main.js ran before the inline script below it that
+       sets up the settings it reads. Between the parser's turn and the rest,
+       the document is read: it is interactive, and a script run after that
+       cannot write into it, as in a browser. */
+    for (int turn = JR_NOW; turn <= JR_ARRIVES && !jd_spent(); turn++) {
+        if (turn == JR_AFTER) {
+            jd_nav_mark(NV_INTERACTIVE);
+            jd_ready_change(1);
+        }
+        for (int i = 0; i < jd_parsed && i < jd_doc->count && !jd_spent(); i++) {
+            int module = jd_module_wanted(i);
+            if (!module && !jd_script_wanted(i)) continue;
+            if (jd_script_when(i, module) != turn) continue;
+            jd_mark_started(i);
+            if (module) {
+                if (jd_run_module_el(i)) ran++;
+                continue;
+            }
+            if (!jd_run_script_el(i)) continue;
+            ran++;
+            jd_run_written();
+        }
     }
 
     if (err && errcap) {
@@ -5760,8 +5785,10 @@ static void jd_ready_change(int to) {
 
 static void jsdom_loaded(void) {
     if (!jd_open) return;
-    jd_nav_mark(NV_INTERACTIVE);
-    jd_ready_change(1);
+    if (jd_ready < 1) {
+        jd_nav_mark(NV_INTERACTIVE);
+        jd_ready_change(1);
+    }
     jobj *ev = jd_new_event(0, "DOMContentLoaded", 1, 0);
     jd_nav_mark(NV_DCL_START);
     if (ev && jd_document_obj) {

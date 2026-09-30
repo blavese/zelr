@@ -1103,6 +1103,28 @@ int main(void) {
                "<script>var d = document.getElementById('d');"
                "document.title = d.children[1].id + ' ' + d.lastChild.textContent;</script></body>"),
         "w after");
+    {
+        /* The order a browser runs a page's scripts in: those the parser
+           stops for as it meets them, while the document is loading; then,
+           the document read and interactive, the deferred files and the
+           modules in the order written; then the async ones. A deferred
+           script's document.write is dropped, as in a browser. NHS's
+           deferred main.js ran before the inline script below it that sets
+           window.NHSUK_SETTINGS. */
+        jsdom_fetch_with(fake_script);
+        oks("scripts run in a browser's order: the parser's, then the deferred files and modules, then the async ones",
+            titled("<head><script src=\"d.js#window.o = (window.o || '') + 'd' + document.readyState[0];\" defer></script>"
+                   "<script src=\"a.js#window.o = (window.o || '') + 'a';\" async></script>"
+                   "<script type=module>window.o = (window.o || '') + 'm';</script>"
+                   "<script>window.o = (window.o || '') + '1' + document.readyState[0];</script>"
+                   "<script defer>window.o = (window.o || '') + '2';</script></head>"
+                   "<body><p id=p>x</p><script src=\"n.js#window.o = (window.o || '') + 'n' + (document.getElementById('p') ? 'P' : '-');\"></script>"
+                   "<script src=\"e.js#window.o = (window.o || '') + 'e'; document.write('<i>w</i>');\" defer></script>"
+                   "<script>document.addEventListener('DOMContentLoaded', function () {"
+                   " document.title = window.o + ' ' + document.getElementsByTagName('i').length; });</script></body>"),
+            "1l2nPdimea 0");
+        jsdom_fetch_with(0);
+    }
 
     /* --- custom elements ------------------------------------------------------------ */
     oks("a custom element defined after it is in the page is upgraded and told it is connected",
