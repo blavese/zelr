@@ -95,6 +95,24 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.83.0
+
+- **Shadow trees a script attaches are drawn (11, dom.h `dom_flat`, browser.c `page_drawn`)**, each with its own style
+  elements and adopted sheets scoped to it (`trees_gather`), and getComputedStyle, getBoundingClientRect and :hover use
+  the tree as drawn. pagetest (the copy's shape and marks, and the page left as it was) and browsercheck (a component
+  with an adopted sheet, a :host border, a ::slotted rule and a component inside it; a paragraph with the band's class
+  outside); failing with the trees not moved, not marked, slots not filled, a mark written over the page's string, the
+  copy not laid out, the trees' sheets not read, and getComputedStyle and the boxes read from the page's own tree.
+- **Components inside components (12, `jd_connected_deep`, `jd_custom_created`)**: connected through shadow roots,
+  callbacks from a list made first (an element a callback added was told twice), and elements upgraded when markup,
+  cloneNode or importNode makes them, but not in a template or a DOMParser document. pagetest, failing on seven broken
+  builds.
+- **Events across a shadow root and slots (12)**: composed events go on to the tree's element, retargeted;
+  elementFromPoint answers with the element; assignedNodes, assignedElements, assignedSlot and slotchange. pagetest,
+  failing on six broken builds.
+- **A sheet a script makes keeps :host and ::slotted() (12, `jcs_selector_ok`)**; **the border shorthand's colour
+  (11)**, which had drawn every such border grey. pagetest and layouttest, each failing on a broken build.
+
 ### 0.82.0
 
 - **Scripts in a browser's order (11, jsdom.h `jd_script_when`).** The parser's scripts, then (the document

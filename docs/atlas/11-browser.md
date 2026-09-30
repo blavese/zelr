@@ -1,6 +1,31 @@
 # 11 -- The web browser (everything except JS-engine internals and image decoders)
 
-**Since 0.82.0** (the rest of this file is older; trust the code and the README's "since 6048716" list):
+**Since 0.83.0** (the rest of this file is older; trust the code and the README's "since 6048716" list):
+- **Shadow trees a script attaches are drawn** (dom.h `dom_flat`, browser.c `page_drawn`). The page is laid out from a
+  copy (`flat_mem`) in which each tree jsdom knows of (`jsdom_shadow`) is in place: its contents are its element's
+  children, and each slot holds its element's children given to it by their slot attribute (the rest to the first slot
+  with no name), in place of its own, which stay only when none were; children given to no slot are not drawn. It is
+  read from the page as the scripts left it, so the trees' order does not matter, and a node is the same number in
+  both. The copy has nodes and attributes of its own and shares the page's strings: its marks go after the page's last
+  string, where the page's next one will go, so it is made again before every layout (`page_drawn(1)`) and whenever
+  the page has changed or grown since (`flat_used`, `flat_count`, the dom version). A value an element already has is
+  pointed at a new string, never written over (`dom_flat_mark`). Marks are dom_shadows's with the tree's scope name:
+  data-zs, data-zh, data-zl.
+- **Each tree's sheets reach it alone** (browser.c `trees_gather`, `sheet_read`). Its style and link elements and its
+  adopted sheets (`jsdom_shadow_adopted`) are read after the document's, scoped (css.h `css_scope`) to a name made from
+  what they are ("f" and eight hex digits of `tree_key`): every copy of one component adopts the same sheets, so the
+  copies share one name and one reading, where a name each read the sheets again for every copy. A tree with none has
+  no name and no marks. `styles_print` takes the keys in, so a change to a tree's sheets remakes the sheet.
+- **getComputedStyle, getBoundingClientRect and :hover use the tree as drawn** (`computed_style` from `page_drawn(0)`,
+  `box_of` and `css_hover_reach` from `laid`, the tree the last layout walked): an element in a shadow tree has its
+  tree's rules and inherits from where it is shown, and a component's box holds what its tree drew.
+- **The border shorthand's colour** is the colour part (css.h): the whole value went on as the colour, which is no
+  colour, so every border it set was drawn in the default grey.
+- On the host MSN draws its search box, section navigation and panels, where it drew nothing (the feed does not come:
+  the page is at 121 MB of its 128 MB of script memory four seconds in). `scriptdump URL SECS tree` prints the page as
+  it is drawn, shadow trees in place; `'js=EXPR'` evaluates in the page once it has run.
+
+**Since 0.82.0**:
 - **Scripts run in a browser's order** (`jsdom_scripts`, `jd_script_when`): first those the parser stops for, in the
   order written (`JR_NOW`); then, the document read and `interactive` (readystatechange fires between), the deferred
   files and every module that is not async, in the order written (`JR_AFTER`); then the async ones (`JR_ARRIVES`).
@@ -69,9 +94,9 @@
   numbers from `JD_RLIST`), and a rule's style is a CSSStyleDeclaration (from `JD_RSTYLE`) sharing the element
   style's code through `jd_decls`, so camelCase names, setProperty and cssText work on either. Only a made sheet may
   be replaced or adopted (NotAllowedError); `adoptedStyleSheets` keeps a copy of what it was given, and pushing onto
-  that is seen (`jsdom_css_version` hashes the list). Not done: a shadow root's adopted sheets are kept and not
-  applied, an @import's styleSheet is null, shorthands are not expanded into longhands, and rules nested in a style
-  rule are kept as written.
+  that is seen (`jsdom_css_version` hashes the list). Not done (0.81.0; a shadow root's adopted sheets are applied
+  since 0.83.0): an @import's styleSheet is null, shorthands are not expanded into longhands, and rules nested in a
+  style rule are kept as written.
 - **Forms, ranges and markup** (`userland/jsform.h`): constraint validation (ValidityState, checkValidity,
   reportValidity, setCustomValidity, validationMessage in Chrome's words), DocumentType and document.doctype,
   XMLSerializer, Range (boundaries, the contents methods, comparisons, createContextualFragment whose scripts run
@@ -120,7 +145,7 @@
   load are recorded as they happen (`jd_nav_mark`) and 0 until then. An observer of `navigation` is told once load
   has finished. No redirect or reload is known, so none is said.
 - **attachShadow** makes a `ShadowRoot` (a fragment, kept on the element; `shadowRoot` when open, `host`, `mode`,
-  `innerHTML`; `getRootNode({composed})` passes it). It is not drawn: the element is drawn from its own children.
+  `innerHTML`; `getRootNode({composed})` passes it). Drawn since 0.83.0 (above).
 - **document.fonts**: an empty `FontFaceSet`, loaded, since the browser draws its own typeface.
 
 Source tree: the repository root (zelr main, 2026-09-22, two commits after v0.37.0). Static reading only: nothing was built or run. Every `file:line` below was checked against the tree. "Verified" in section 10 means verified by reading the code, not by running it.

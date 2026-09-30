@@ -2,7 +2,32 @@
 
 Source root the repository root (github.com/blavese/zelr main, 2026-09-22). All paths are relative to it; `file:N` means 1-based line N. Everything below was verified by reading the code. Where a behaviour was derived by tracing (not by running) it says so. Nothing here was built or run.
 
-**Since 0.82.0** (the rest of this file is older; trust the code):
+**Since 0.83.0** (the rest of this file is older; trust the code):
+- **Shadow roots are kept** (jsdom.h `jd_shadow_host`, `jd_shadow_root`, `JD_SHADOWS` 1024, with a bit per host and
+  root in `jd_shadow_mark` so asking of any other node costs nothing; `jsdom_shadow` for the browser).
+- **Connected goes through shadow roots** (`jd_connected_deep`): isConnected, focus, offsetParent, custom elements'
+  upgrades and callbacks. A component's own components are in its shadow root and were never upgraded. The page's
+  searches and scripts keep to the document (`jd_connected`).
+- **Custom element callbacks come from a list made first** (`jd_custom_gather`, shadow-including tree order), as the
+  standard queues them: an element a callback added was told twice when the walk then reached it, and the elements in
+  a connected host's shadow root were never told.
+- **Elements are upgraded when they are made** (`jd_custom_created`): by innerHTML, insertAdjacentHTML, outerHTML,
+  cloneNode and importNode, in or out of the page, as a browser does; they were upgraded only once connected, so a
+  property FAST binds before its view goes in reached a class not yet made, and MSN's header read a field its
+  constructor had not set ("App Errors not set"). A template's contents are inert (`jd_inert_mark`, set when the
+  content is made, cleared by adoptNode, which is how FAST makes its views), and so is a DOMParser document; define's
+  sweep leaves out what is under a template.
+- **Composed events go on from a shadow root to its element** (`jd_dispatch_to`), and beyond it see the element as
+  their target (`seen`, `jd_seen_as`); an event that is not composed stops at the root. elementFromPoint and
+  elementsFromPoint answer with the outermost element for what a tree drew (`jd_element_at`).
+- **Slots** (`jd_assigned`): `assignedNodes` and `assignedElements` (with `flatten`), `assignedSlot` on elements and
+  text (null for a closed tree), and `slotchange` as a task (`jd_slot_signal`, one pending per slot) when a child of the
+  element that the slot would be given comes or goes, or a slot arrives with children waiting for it. FAST's buttons
+  ask theirs, and all of MSN's stopped on assignedNodes.
+- **A sheet a script makes keeps :host and ::slotted()** (jscssom.h `jcs_selector_ok` checks such a selector as
+  `css_scope` writes it): the parser knows them only so, and replaceSync dropped every ::slotted rule.
+
+**Since 0.82.0**:
 - **Function.prototype.toString gives the function's own text.** Every source parsed is kept in the region for the
   page's life (`js_keep_source`, called by `js_parse_begin`, into `J->srcs`), each token knows where it starts
   (`jtok.start`) and the lexer where the last one ended (`jlex.prev_end`, kept by the `js_next` wrapper around

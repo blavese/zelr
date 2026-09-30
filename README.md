@@ -800,7 +800,10 @@ talking to the page by copied messages, on the page's own time; and a
 function gives back the text it was written as, which is what some pages
 build their workers from. Scripts run in the order a browser runs them: the
 deferred ones and the modules after the page has been read, not in the order
-they were written.
+they were written. Web components are drawn: the shadow tree a component's
+script attaches is laid out where the component stands, with its slots
+filled and its own style sheets on it alone, and the components inside it are
+made and told they are in the page as a browser tells them.
 A page's scripts may have a quarter of the memory the machine has free,
 between 24 and 128 megabytes, since nothing is freed until the page is left.
 What it has instead is two hooks, how a property on a host object is read
