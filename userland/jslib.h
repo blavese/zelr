@@ -476,6 +476,7 @@ static jval nat_obj_getproto(jctx *J, jval t, jval *a, int n) {
     if (v.t == JS_NULL || v.t == JS_UNDEF)
         return js_throw(J, JS_ERR_TYPE, "undefined or null has no prototype", J->error_line);
     if (!js_is_obj(v)) return js_from_obj(js_proto_of_value(J, v));
+    if (v.obj->flags & JOF_PROXY) return js_proxy_getproto(J, v.obj);
     return v.obj->proto ? js_from_obj(v.obj->proto) : js_null();
 }
 
@@ -492,9 +493,12 @@ static jval nat_obj_setproto(jctx *J, jval t, jval *a, int n) {
     return v;
 }
 
+static int js_proxy_define(jctx *J, jobj *p, jstr *key, jval desc);
+
 /* Object.defineProperty's descriptor, applied: a value or an accessor, and
    what is allowed, with anything left out kept from what was there. */
 static int js_define_from_desc(jctx *J, jobj *o, jstr *key, jval desc) {
+    if (o->flags & JOF_PROXY) return js_proxy_define(J, o, key, desc);
     if (!js_is_obj(desc)) {
         js_throw(J, JS_ERR_TYPE, "a property descriptor has to be an object", J->error_line);
         return 0;
@@ -2260,9 +2264,28 @@ static jval nat_reflect_set(jctx *J, jval t, jval *a, int n) {
     int mfl;
     if (js_get_own(J, r, key, &mine, &mfl)) {
         if (mine.t == JS_ACC || !(mfl & JP_WRITE)) return js_bool(0);
+        /* On a proxy the value is defined, as the standard has it, not set
+           through it: its set trap is what very often called this -- Vue's
+           does, Reflect.set(target, key, value, receiver) -- and setting
+           asked the trap again, for ever. */
+        if (r->flags & JOF_PROXY) {
+            jobj *d = js_object(J, JO_PLAIN);
+            if (!d) return js_undef();
+            js_put_prop(J, d, J->s_value, v);
+            return js_bool(js_proxy_define(J, r, key, js_from_obj(d)));
+        }
         js_putv(J, recv, key, v, recv);
     } else {
         if (r->flags & JOF_NOEXT) return js_bool(0);
+        if (r->flags & JOF_PROXY) {
+            jobj *d = js_object(J, JO_PLAIN);
+            if (!d) return js_undef();
+            js_put_prop(J, d, J->s_value, v);
+            js_put_prop(J, d, J->s_writable, js_bool(1));
+            js_put_prop(J, d, J->s_enumerable, js_bool(1));
+            js_put_prop(J, d, J->s_configurable, js_bool(1));
+            return js_bool(js_proxy_define(J, r, key, js_from_obj(d)));
+        }
         if (r == o.obj) js_putv(J, recv, key, v, recv);
         else js_define(J, r, key, v, JP_PLAIN);
     }
@@ -2382,6 +2405,7 @@ static jval nat_unescape(jctx *J, jval t, jval *a, int n) { (void)t; return js_u
 #include "jsarr.h"
 #include "jsprom.h"
 #include "jstyped.h"
+#include "jsproxy.h"
 
 /* --- setting it all up ------------------------------------------------------ */
 
@@ -2579,6 +2603,8 @@ static void js_globals(jctx *J) {
     js_method(J, reflect, "preventExtensions", nat_reflect_prevent, 1);
     js_tag(J, reflect, "Reflect");
     js_declare_flags(J, g, js_str(J, "Reflect"), js_from_obj(reflect), JP_WRITE | JP_CONF);
+
+    js_proxy_init(J);
 
     /* console */
     jobj *console = js_object(J, JO_PLAIN);

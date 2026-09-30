@@ -1246,6 +1246,57 @@ int main(void) {
            " for (var i = 0; i < 200; i++) s += ']'; var a = eval(s);"
            " for (var i = 0; i < 199; i++) a = a[0]; return a[0]; })()", "1");
 
+    /* Proxy, which was not there: Ars Technica's and Yahoo's scripts
+       stopped at "Proxy is not defined". Each trap, and each thing done
+       to the target when there is none. */
+    expect("a proxy's get trap answers every read",
+           "(function(){ var p = new Proxy({}, { get: function(t, k) { return 'got ' + String(k); } });"
+           " return p.x + ', ' + p[1]; })()", "got x, got 1");
+    expect("with no traps a proxy reads, writes, asks and deletes on its target",
+           "(function(){ var o = { a: 1 }, p = new Proxy(o, {}); p.b = 2;"
+           " return [p.a, o.b, 'a' in p, delete p.a, o.a].join(' '); })()", "1 2 true true ");
+    expect("set, has and deleteProperty traps are asked",
+           "(function(){ var log = [], p = new Proxy({}, {"
+           " set: function(t, k, v) { log.push('set ' + k + '=' + v); t[k] = v * 2; return true; },"
+           " has: function(t, k) { log.push('has ' + k); return k == 'z'; },"
+           " deleteProperty: function(t, k) { log.push('del ' + k); return true; } });"
+           " p.q = 3; var h = ('z' in p) + ',' + ('y' in p); delete p.q; return log.join(';') + ' ' + h; })()",
+           "set q=3;has z;has y;del q true,false");
+    expect("its keys are what ownKeys and getOwnPropertyDescriptor say",
+           "Object.keys(new Proxy({}, { ownKeys: function() { return ['x', 'y']; },"
+           " getOwnPropertyDescriptor: function(t, k) { return { value: k, enumerable: true, configurable: true }; } })).join()",
+           "x,y");
+    expect("a proxy of a function is called through apply, and made through construct",
+           "(function(){ var f = new Proxy(function(a, b) { return a + b; }, { apply: function(t, th, args) { return t.apply(th, args) * 10; } });"
+           " class K { constructor(x) { this.x = x; } }"
+           " var C = new Proxy(K, { construct: function(t, args) { return { made: args[0] }; } });"
+           " return [f(1, 2), new C(5).made, new (new Proxy(Date, {}))(0).getTime(), new (new Proxy(K, {}))(7) instanceof K].join(' '); })()",
+           "30 5 0 true");
+    expect("it is a function or an object as its target is, of its target's kind, with its prototype",
+           "[typeof new Proxy(function(){}, {}), typeof new Proxy({}, {}), new Proxy(new Date(0), {}) instanceof Date,"
+           " Object.getPrototypeOf(new Proxy({}, { getPrototypeOf: function() { return Array.prototype; } })) === Array.prototype,"
+           " Array.isArray(new Proxy([], {}))].join(' ')", "function object true true true");
+    expect("and its elements spread, its keys walk, its properties copy and it writes out as JSON",
+           "(function(){ var ks = []; for (var k in new Proxy({ a: 1, b: 2 }, {})) ks.push(k);"
+           " var o = { get me() { return this; } }, p = new Proxy(o, {});"
+           " return [[...new Proxy([1, 2, 3], {})].join(), ks.join(), p.me === p, Object.assign({}, new Proxy({ x: 1, y: 2 }, {})).y,"
+           " ({ ...new Proxy({ z: 3 }, {}) }).z, JSON.stringify(new Proxy({ a: 1, b: [2] }, {}))].join(' '); })()",
+           "1,2,3 a,b true 2 3 {\"a\":1,\"b\":[2]}");
+    expect("a proxy's descriptors are read without running its getters, and ownKeys lists what the trap says",
+           "(function(){ var calls = 0, p = new Proxy({ get g() { calls++; return 1; } }, {});"
+           " var d = Object.getOwnPropertyDescriptors(p);"
+           " return [calls, typeof d.g.get, Reflect.ownKeys(new Proxy({}, { ownKeys: function() { return ['a', 'b']; } })).join('')].join(' '); })()",
+           "0 function ab");
+    expect("a set trap that sets with Reflect.set and the proxy as receiver is asked once a write",
+           "(function(){ var calls = 0, h = { set: function(t, k, v, r) { calls++; return Reflect.set(t, k, v, r); } };"
+           " var p = new Proxy({ a: 1 }, h); p.a = 2; p.b = 3; return [calls, p.a, p.b, Object.keys(p).join('')].join(' '); })()",
+           "2 2 3 ab");
+    expect("a revoked proxy refuses, and Proxy without new is an error",
+           "(function(){ var r = Proxy.revocable({}, {}); r.proxy.a = 1; var before = r.proxy.a; r.revoke(); var out = [before];"
+           " try { r.proxy.x; out.push('read'); } catch (e) { out.push(e instanceof TypeError); }"
+           " try { Proxy({}, {}); out.push('made'); } catch (e) { out.push(e instanceof TypeError); }"
+           " return out.join(' '); })()", "1 true true");
+
     /* The count, at the end. It used to be printed half way down, so every
        case after the regular expressions ran without being counted, and a
        suite that lost them would have reported the same total. */

@@ -38,6 +38,16 @@ static void js_promise_settle(jctx *J, jobj *p, int ok, jval v);
 static void js_promise_resolve_with(jctx *J, jobj *p, jval v);
 static jobj *js_promise_of(jctx *J, jval v);
 static void js_promise_await(jctx *J, jobj *p, jco *co);
+
+/* A Proxy's traps (jsproxy.h), where the ordinary paths meet one. */
+static jval js_proxy_get(jctx *J, jobj *p, jstr *key, jval receiver);
+static void js_proxy_set(jctx *J, jobj *p, jstr *key, jval v, jval receiver);
+static int  js_proxy_set_inherited(jctx *J, jobj *p, jstr *key, jval v, jval receiver);
+static int  js_proxy_has(jctx *J, jobj *p, jstr *key);
+static int  js_proxy_delete(jctx *J, jobj *p, jstr *key);
+static int  js_proxy_get_own(jctx *J, jobj *p, jstr *key, jval *v, int *flags);
+static int  js_proxy_is_array(jctx *J, jobj *p);
+static jval js_proxy_getproto(jctx *J, jobj *p);
 static jval js_iter_result(jctx *J, jval value, int done);
 static jobj *js_to_object(jctx *J, jval v);
 static int js_array_join_fast(jctx *J, jval v, jstr **out);
@@ -599,6 +609,7 @@ static jobj *js_proto_of_value(jctx *J, jval v) {
 /* An own property's descriptor, exotic ones included: 1 when there is one,
    with its value (or accessor) and flags. */
 static int js_get_own(jctx *J, jobj *o, jstr *key, jval *v, int *flags) {
+    if (o->flags & JOF_PROXY) return js_proxy_get_own(J, o, key, v, flags);
     jprop *p = js_find(o, key);
     if (p) { *v = p->v; *flags = p->flags; return 1; }
     if (js_exotic_get(J, o, key, v)) {
@@ -638,6 +649,7 @@ static jval js_getv(jctx *J, jval target, jstr *key, jval receiver) {
     int depth = 0;
     for (; o; o = o->proto) {
         if (++depth > 10000) break;
+        if (o->flags & JOF_PROXY) return js_proxy_get(J, o, key, receiver);
         if (o->kind != JO_PLAIN) {
             jval out;
             if (js_exotic_get(J, o, key, &out)) return out;
@@ -680,6 +692,7 @@ static jval js_get_index(jctx *J, jval target, u32 i) {
 static int js_has(jctx *J, jobj *o, jstr *key) {
     int sym = js_is_sym_key(key);
     for (int depth = 0; o && depth < 10000; o = o->proto, depth++) {
+        if (o->flags & JOF_PROXY) return js_proxy_has(J, o, key);
         jval out;
         int fl;
         if (js_get_own(J, o, key, &out, &fl)) return 1;
@@ -729,6 +742,7 @@ static void js_putv(jctx *J, jval target, jstr *key, jval v, jval receiver) {
         return;
     }
     jobj *o = target.obj;
+    if (o->flags & JOF_PROXY) { js_proxy_set(J, o, key, v, receiver); return; }
 
     if (o->kind == JO_TYPED) {
         /* An element past the end is dropped, as the standard has it; any
@@ -782,6 +796,7 @@ static void js_putv(jctx *J, jval target, jstr *key, jval v, jval receiver) {
        the write, as the language has it. */
     int depth = 0;
     for (jobj *q = o->proto; q && depth < 10000; q = q->proto, depth++) {
+        if ((q->flags & JOF_PROXY) && js_proxy_set_inherited(J, q, key, v, receiver)) return;
         jprop *pp = js_find(q, key);
         if (!pp) continue;
         if (pp->v.t == JS_ACC) {
@@ -837,6 +852,7 @@ static void js_define_accessor(jctx *J, jobj *o, jstr *key, jval get, jval set, 
 static int js_delete(jctx *J, jval target, jstr *key) {
     if (target.t != JS_OBJ || !target.obj) return 1;
     jobj *o = target.obj;
+    if (o->flags & JOF_PROXY) return js_proxy_delete(J, o, key);
     if (o->kind == JO_TYPED) {
         u32 idx;
         if (js_index_of(key, &idx)) return idx >= js_ta_length(o);

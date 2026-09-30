@@ -175,6 +175,7 @@ typedef enum {
 #define JOF_FROZEN 2          /* an array whose elements cannot change */
 #define JOF_LINKED 4          /* a promise resolver whose pair has been used */
 #define JOF_NOCTOR 8          /* a native that `new` refuses */
+#define JOF_PROXY  16         /* a Proxy: target in data, handler in data2 (jsproxy.h) */
 
 struct jctx;
 typedef jval (*jnative)(struct jctx *J, jval this_val, jval *argv, int argc);
@@ -767,9 +768,12 @@ static int js_index_key(const jstr *k, u32 *out) {
 #define JK_STR  2
 #define JK_SYM  4
 
+static u32 js_proxy_keys_of(jctx *J, jobj *p, jprop ***out, int want);
+
 static u32 js_keys_of(jctx *J, jobj *o, jprop ***out, int want) {
     *out = 0;
     if (!o) return 0;
+    if (o->flags & JOF_PROXY) return js_proxy_keys_of(J, o, out, want);
     u32 n = 0;
     for (jprop *p = o->ofirst; p; p = p->onext) {
         if ((want & JK_ENUM) && !(p->flags & JP_ENUM)) continue;

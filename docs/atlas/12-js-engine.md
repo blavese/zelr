@@ -2,6 +2,13 @@
 
 Source root the repository root (github.com/blavese/zelr main, 2026-09-22). All paths are relative to it; `file:N` means 1-based line N. Everything below was verified by reading the code. Where a behaviour was derived by tracing (not by running) it says so. Nothing here was built or run.
 
+**Since 0.77.0** (the rest of this file is older; trust the code):
+- **Proxy** (`jsproxy.h`): an object with `JOF_PROXY`, target in `data` and handler in `data2`; a proxy of a function is a
+  native (`js_proxy_call`). Hooks in `js_getv`, `js_has`, `js_putv` (and its inherited walk), `js_delete`, `js_get_own`,
+  `js_keys_of` (a listing takes each key's descriptor, getter included, never its value through `get`),
+  `js_define_from_desc`, `Object.getPrototypeOf` and `Array.isArray`. `Reflect.set` defines on a proxy receiver
+  rather than setting through it (Vue's set trap calls it). Not done: the handler invariants, the
+  isExtensible/preventExtensions/setPrototypeOf traps.
 ---
 
 ## 1. Scope

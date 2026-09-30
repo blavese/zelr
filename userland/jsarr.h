@@ -125,8 +125,9 @@ static jval nat_array_make(jctx *J, jval t, jval *a, int n) {
 }
 
 static jval nat_array_is(jctx *J, jval t, jval *a, int n) {
-    (void)J; (void)t;
+    (void)t;
     jval v = js_arg(a, n, 0);
+    if (v.t == JS_OBJ && v.obj && (v.obj->flags & JOF_PROXY)) return js_bool(js_proxy_is_array(J, v.obj));
     return js_bool(v.t == JS_OBJ && v.obj && v.obj->kind == JO_ARRAY);
 }
 

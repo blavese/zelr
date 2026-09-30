@@ -104,6 +104,10 @@ numbered files are still to 6048716; where they disagree with this list, this li
 - **The black box counts a boot once and writes only over blank (04 S23, S24, blackbox.c).** The boot number
   was read back off this boot's own record at every flush and counted again; the region was free if its
   first sector alone was blank. [black box]: three checks.
+- **Proxy (12, jsproxy.h).** A handler asked for every get, set, `in`, delete, key listing, descriptor, definition,
+  prototype, call and construction, with the target's own behaviour where it has no trap; revocable. Ars Technica's
+  and Yahoo's scripts stopped at "Proxy is not defined". `Reflect.set` defines on a proxy receiver instead of
+  setting through it, which Vue's set trap made a loop. jstest: ten checks.
 - **Scripts may have what the machine can spare (12, js.h, jsdom.h).** A page's script memory, 24 MB on every
   machine with nothing freed until the page is left, is now each context's `mem_cap`, raised to a quarter of
   the free memory when the page opens and again when its scripts start (the browser says what is free after
