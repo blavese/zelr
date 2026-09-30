@@ -787,9 +787,11 @@ tested without one. The language is JavaScript as it was written from 2015 to
 destructuring, spread, default parameters, classes with private fields,
 symbols and iteration, Map and Set, generators, promises and async functions
 (run on stacks of their own), patterns with lookaround and named groups,
-typed arrays, and eval. Modules, Proxy, Intl and BigInt are not there yet. What it has instead is two hooks, how a property on a
-host object is read and written, and `userland/jsdom.h` is the browser
-filling them in.
+typed arrays, proxies, and eval. Modules, Intl and BigInt are not there yet.
+A page's scripts may have a quarter of the memory the machine has free,
+between 24 and 128 megabytes, since nothing is freed until the page is left.
+What it has instead is two hooks, how a property on a host object is read
+and written, and `userland/jsdom.h` is the browser filling them in.
 
 An element is a plain JavaScript object with its index in the document
 written on it, so reading `el.textContent` walks the document as it stands
@@ -1491,7 +1493,7 @@ byte.
 ## testing
 
 The kernel tests itself. `./run.sh -T` boots with selftest on the command line,
-runs 702 checks across every subsystem, then writes to QEMU's debug-exit port
+runs 708 checks across every subsystem, then writes to QEMU's debug-exit port
 so the host gets a real exit status.
 
     [string]                8 checks   [live tree]            23 checks
@@ -1506,13 +1508,13 @@ so the host gets a real exit status.
     [open files]           33 checks   [p-256]                13 checks
     [timer]                 3 checks   [sha-512]               4 checks
     [interrupts]            2 checks   [p-384]                 6 checks
-    [disk]                 13 checks   [certificates]         42 checks
+    [disk]                 13 checks   [certificates]         45 checks
     [fat]                  58 checks   [randomness]            8 checks
     [network]               9 checks   [tls 1.3]              42 checks
     [tcp]                   8 checks   [wpa]                  19 checks
     [elf]                   7 checks   [wait timeouts]         3 checks
     [userspace]             9 checks   [processors]            4 checks
-    [video]                13 checks   [black box]            21 checks
+    [video]                13 checks   [black box]            24 checks
     [mouse]                 4 checks   [acpi and pcie]         4 checks
     [graphics]             15 checks   [interrupt routing]    11 checks
     [windows]              27 checks   [clipboard]            14 checks
@@ -1521,14 +1523,14 @@ so the host gets a real exit status.
     [theme]                19 checks   [kernel stack]          3 checks
     [taskbar]              18 checks
 
-    702 passed, 0 failed
+    708 passed, 0 failed
     SELFTEST_PASS
 
 The sound section is skipped because `run.sh` attaches no sound card, the
 identity map is checked in four more places when there is more memory to map,
 and the desktop keeps a copy of its wallpaper only when the memory allows it,
 which two more checks need: given 256 MiB, as the gate gives it, the same run
-is 708.
+is 714.
 
 Two of the sections are about what happens when something goes wrong half
 way, which a machine that keeps its power cannot show. `[fat]` makes the
@@ -1559,10 +1561,10 @@ on a machine with several, where it hands work to each of them and requires
 the count they share to come back exact, and then starts more programs than
 there are processors to check that handed work is neither given to a busy
 one nor abandoned halfway for a program. `qemu-system-x86_64 -smp 4` with
-256 MiB reaches 729, and the gate runs it.
+256 MiB reaches 735, and the gate runs it.
 
 The same checks run again on `-machine q35`, which has PCIe and an AHCI
-controller rather than a 1996 chipset and a PIO disk, and reach 715 there.
+controller rather than a 1996 chipset and a PIO disk, and reach 721 there.
 Two bugs found the day that was added were invisible on the older machine:
 the block layer would not split a request past the eight sectors AHCI
 accepts, and the ACPI tables were never read on a UEFI machine at all.
