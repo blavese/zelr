@@ -11,6 +11,9 @@ Source root the repository root (github.com/blavese/zelr main, 2026-09-22). All 
   isExtensible/preventExtensions/setPrototypeOf traps.
 - **AsyncFunction, GeneratorFunction, AsyncGeneratorFunction**: the constructors of their prototypes
   (`js_function_from`); `Object.getPrototypeOf(async function(){}).constructor` was `Function`.
+- **with** scopes (`jscope.with`): names are the object's through `js_has`/`js_get`/`js_put`, inherited or
+  through a proxy (`js_lookup_name`); internal bindings skip them (`js_lookup`); a bare call to a name found on
+  the object is called on it (`J->with_used`).
 ---
 
 ## 1. Scope

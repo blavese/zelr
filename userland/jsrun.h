@@ -444,8 +444,33 @@ static void js_scope_free(jctx *J, jscope *sc) {
     js_free(J, sc, (u32)sizeof(jscope));
 }
 
+/* A binding the engine keeps -- this, new.target, a class's private names
+   -- or a variable, in the scopes from sc out. A with statement's object
+   has none of the first kind, so its scope is passed over here; the
+   variables a page names go through js_lookup_name. */
 static jprop *js_lookup(jscope *sc, const jstr *name) {
     for (jscope *s = sc; s; s = s->parent) {
+        if (s->with) continue;
+        jprop *p = js_find(s->vars, name);
+        if (p) return p;
+    }
+    return 0;
+}
+
+static int js_has(jctx *J, jobj *o, jstr *key);
+
+/* A name a page wrote: the binding it is, or, when a with statement's object
+   has it first, 0 with *with set to the object. The object was the scope's
+   table, so only its own properties were names: `with (document) { title }`
+   missed the title, and Alpine's scope, a proxy, had no names at all. */
+static jprop *js_lookup_name(jctx *J, jscope *sc, jstr *name, jobj **with) {
+    *with = 0;
+    for (jscope *s = sc; s; s = s->parent) {
+        if (s->with) {
+            if (js_has(J, s->vars, name)) { *with = s->vars; return 0; }
+            if (J->sig != JS_OK) return 0;
+            continue;
+        }
         jprop *p = js_find(s->vars, name);
         if (p) return p;
     }
@@ -467,7 +492,10 @@ static void js_declare_flags(jctx *J, jscope *sc, jstr *name, jval v, int flags)
    into a new global rather than an error. A const, or a let before its line,
    refuses. */
 static void js_assign_name(jctx *J, jscope *sc, jstr *name, jval v) {
-    jprop *p = js_lookup(sc, name);
+    jobj *with;
+    jprop *p = js_lookup_name(J, sc, name, &with);
+    if (with) { js_put(J, js_from_obj(with), name, v); return; }
+    if (J->sig != JS_OK) return;
     if (p) {
         if (p->v.t == JS_HOLE) {
             js_throw_named(J, JS_ERR_REFERENCE, "", name, " cannot be used before its declaration");
@@ -1760,9 +1788,11 @@ static void js_place_put(jctx *J, jplace *p, jscope *sc, jval v) {
    something this browser does not have carry on past the try that would
    have caught it, to fail somewhere with nothing round it. typeof asks
    without the error. */
-static jval js_ident_soft(jctx *J, jstr *name, jscope *sc, int *found) {
-    jprop *p = js_lookup(sc, name);
+static jval js_ident_in(jctx *J, jstr *name, jscope *sc, int *found, jobj **with) {
+    jprop *p = js_lookup_name(J, sc, name, with);
     *found = 1;
+    if (*with) return js_get(J, js_from_obj(*with), name);
+    if (J->sig != JS_OK) return js_undef();
     if (p) {
         if (p->v.t == JS_HOLE)
             return js_throw_named(J, JS_ERR_REFERENCE, "", name, " cannot be used before its declaration");
@@ -1776,6 +1806,11 @@ static jval js_ident_soft(jctx *J, jstr *name, jscope *sc, int *found) {
     }
     *found = 0;
     return js_undef();
+}
+
+static jval js_ident_soft(jctx *J, jstr *name, jscope *sc, int *found) {
+    jobj *with;
+    return js_ident_in(J, name, sc, found, &with);
 }
 
 static JS_NOINLINE jval js_ident(jctx *J, jstr *name, jscope *sc) {
@@ -1975,6 +2010,14 @@ static JS_NOINLINE jval js_eval_call(jctx *J, int node, jscope *sc, jval this_va
         if (J->sig != JS_OK) return js_undef();
         fn = js_place_get(J, &p, sc);
         self = p.self;
+    } else if (ck == N_IDENT && J->with_used) {
+        /* A function a with statement's object has is called on it. */
+        int found;
+        jobj *with = 0;
+        fn = js_ident_in(J, J->nodes[callee].str, sc, &found, &with);
+        if (J->sig == JS_OK && !found)
+            return js_throw_named(J, JS_ERR_REFERENCE, "", J->nodes[callee].str, " is not defined");
+        if (with) self = js_from_obj(with);
     } else {
         fn = js_eval(J, callee, sc, this_val);
         if (J->chain_short) return js_undef();
@@ -3116,6 +3159,8 @@ static JS_NOINLINE jsignal js_exec_misc(jctx *J, int node, jscope *sc, jval this
             ws->vars = ob;
             ws->parent = sc;
             ws->escaped = 1;
+            ws->with = 1;
+            J->with_used = 1;
             return js_exec(J, b, ws, this_val);
         }
 

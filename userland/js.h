@@ -245,6 +245,10 @@ struct jscope {
        is made inside it. One that is never set is given back at the end of
        its call. */
     int     escaped;
+
+    /* A with statement's: `vars` is the object itself, and a name is its
+       when the object has it, inherited or through a proxy's has. */
+    int     with;
 };
 
 /* --- what the reader produces -------------------------------------------- */
@@ -363,6 +367,7 @@ typedef struct jctx {
     int     depth;
     char    error[192];
     int     error_line;
+    int     with_used;        /* a with statement has run: calls look for its object */
 
     /* The native being called, for the length of the call into it, and the
        constructor `new` was given when it was new that called it. Read them

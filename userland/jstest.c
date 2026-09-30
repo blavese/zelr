@@ -1257,6 +1257,19 @@ int main(void) {
            " return [AF === Function, AF.name, f(21) instanceof Promise, f instanceof AF, [...g()].join()].join(' '); })()",
            "false AsyncFunction true true 1,2");
 
+    /* A with statement's names are what its object has, inherited or through
+       a proxy, and a function found there is called on the object: Alpine
+       evaluates every expression in a page's attributes that way, in a
+       proxy over its components' data. */
+    expect("with finds names an object inherits and a proxy says it has, and calls on the object",
+           "(function(){ var base = { hi: function() { return 'hi ' + this.who; } };"
+           " var o = Object.create(base); o.who = 'o';"
+           " var seen = [], p = new Proxy({ n: 1 }, { has: function(t, k) { seen.push(k); return k == 'n' || k == 'm'; },"
+           " get: function(t, k) { return k == 'm' ? 'made' : t[k]; } });"
+           " var out = []; with (o) { out.push(hi()); } with (p) { out.push(n + 1, m); n = 5; }"
+           " return out.join(' ') + ' ' + p.n + ' ' + (seen.indexOf('n') >= 0); })()",
+           "hi o 2 made 5 true");
+
     /* Proxy, which was not there: Ars Technica's and Yahoo's scripts
        stopped at "Proxy is not defined". Each trap, and each thing done
        to the target when there is none. */
