@@ -336,6 +336,30 @@ static DWORD WINAPI sampler(LPVOID arg) {
     return 0;
 }
 
+/* The function an address is in, and its line, for a program's own report
+   of where it spends (js.h, JS_ALLOC_PROFILE). */
+int host_symbol(void *addr, char *out, int cap) {
+    static int ready;
+    HANDLE proc = GetCurrentProcess();
+    if (!ready) {
+        SymSetOptions(SYMOPT_UNDNAME | SYMOPT_DEFERRED_LOADS | SYMOPT_LOAD_LINES);
+        SymInitialize(proc, 0, TRUE);
+        ready = 1;
+    }
+    char buf[sizeof(SYMBOL_INFO) + 256];
+    SYMBOL_INFO *si = (SYMBOL_INFO *)buf;
+    si->SizeOfStruct = sizeof(SYMBOL_INFO);
+    si->MaxNameLen = 255;
+    DWORD64 disp = 0;
+    IMAGEHLP_LINE64 line;
+    DWORD ld = 0;
+    line.SizeOfStruct = sizeof(line);
+    const char *name = SymFromAddr(proc, (DWORD64)addr, &disp, si) ? si->Name : "?";
+    if (SymGetLineFromAddr64(proc, (DWORD64)addr, &ld, &line))
+        return snprintf(out, cap, "%s:%lu", name, line.LineNumber);
+    return snprintf(out, cap, "%s", name);
+}
+
 int zelr_main(int argc, char **argv);
 
 /* Where a program's memory is (zelr.h): the top of this thread's stack, from

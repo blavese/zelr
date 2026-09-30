@@ -1833,16 +1833,17 @@ int main(void) {
 
     /* --- what a page's scripts may have ---------------------------------------------
      *
-     * 24 megabytes whatever the machine had, with nothing given back until the
-     * page is left, which is where big sites' scripts stopped. A quarter of
-     * what is free now, between 24 and 128. */
+     * 24 megabytes whatever the machine had, which is where big sites' scripts
+     * stopped. A quarter of what is free now, between 24 and 128. The page
+     * keeps 30 megabytes of strings, which the collector cannot give back
+     * (jsgc.h): it made as much again that it can, and did not count. */
     {
         static const char *big =
-            "<script>var s = []; for (var i = 0; i < 160; i++) s.push('ab'.repeat(50000) + i);"
+            "<script>var s = []; for (var i = 0; i < 300; i++) s.push('ab'.repeat(50000) + i);"
             "document.title = 'made ' + s.length;</script>";
         jsdom_memory_with(much_memory);
         oks("a page's scripts may have more than 24 megabytes on a machine with the memory",
-            titled(big), "made 160");
+            titled(big), "made 300");
         ok("a quarter of what is free, up to 128", jd_J.mem_cap == 128u * 1024 * 1024);
         jsdom_memory_with(some_memory);
         titled("<script>document.title = 'x';</script>");
@@ -2634,6 +2635,42 @@ int main(void) {
             "POST https://site.test/b a=1 application/x-www-form-urlencoded");
         jsdom_request_with(0);
         jsdom_at("");
+    }
+
+    /* --- the collector (jsgc.h) -----------------------------------------------
+     *
+     * The lists of a page's listeners, timers and observers are in the region,
+     * held from the browser's own data; a page that makes much and drops it
+     * keeps them all. So does a worker, whose context's own record is in
+     * memory from malloc, looked through as the context being collected. */
+    {
+        load("<body><p id=out></p><script>var heard = [], bs = document.getElementsByTagName('b' + 'ig'.slice(2));"
+             "document.addEventListener('ping', function (e) { heard.push('ping ' + e.detail.word); });"
+             "new MutationObserver(function (records) { heard.push('changed ' + records.length); })"
+             ".observe(document.getElementById('out'), { childList: true });"
+             "setTimeout(function () { heard.push('timer ' + ['a', 'b'].join('')); }, 20);"
+             "for (var j = 0; j < 400; j++) { var junk = 'w'.repeat(100000) + j; }"
+             "document.dispatchEvent(new CustomEvent('ping', { detail: { word: 'pong' } }));"
+             "document.getElementById('out').appendChild(document.createElement('b'));"
+             "setTimeout(function () { heard.push('bs ' + bs.length); document.title = heard.join(', '); }, 60);</script></body>");
+        char err[128];
+        run_scripts(&page, err, (int)sizeof(err), 0);
+        pump_until(3, 2000);
+        oks("a page that makes 80 megabytes and drops them keeps its listeners, timers, observers and live lists",
+            page.title >= 0 ? page.arena + page.title : "", "ping pong, changed 1, timer ab, bs 1");
+        ok("and the collector ran, and gave the drops back", jd_J.gc_runs >= 3 && jd_J.allocated < 40u * 1024 * 1024);
+    }
+    {
+        load("<body><script>var src = \"var keep = { a: [1, 2, 3], s: 'ke' + 'pt' };"
+             " for (var j = 0; j < 250; j++) { var junk = 'v'.repeat(100000) + j; }"
+             " postMessage(keep.s + keep.a.join(''));\";"
+             "var w = new Worker(URL.createObjectURL(new Blob([src])));"
+             "w.onmessage = function (e) { document.title = 'worker ' + e.data; };</script></body>");
+        char err[128];
+        run_scripts(&page, err, (int)sizeof(err), 0);
+        pump_until(3, 3000);
+        oks("and a worker that makes 50 megabytes and drops them keeps its own",
+            page.title >= 0 ? page.arena + page.title : "", "worker kept123");
     }
 
     /* --- a page that uses up its memory ---------------------------------------

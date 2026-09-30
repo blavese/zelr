@@ -19,6 +19,7 @@
 #include "jsparse.h"
 #include "jsregex.h"
 #include "jsco.h"
+#include "jsgc.h"
 
 #define JS_NOINLINE __attribute__((noinline))
 
@@ -990,12 +991,14 @@ typedef struct {
     jval *v;
     int   n, cap;
     jval  local[4];
+    jctx *J;                  /* whose region v is in, once it is not local */
 } jargs;
 
 static void js_args_init(jargs *A) {
     A->v = A->local;
     A->n = 0;
     A->cap = 4;
+    A->J = 0;
 }
 
 static int js_args_push(jctx *J, jargs *A, jval x) {
@@ -1004,20 +1007,22 @@ static int js_args_push(jctx *J, jargs *A, jval x) {
             js_throw(J, JS_ERR_RANGE, "too many arguments for one call", J->error_line);
             return 0;
         }
+        /* In the region, where the collector sees what is in it (jsgc.h). */
         int cap = A->cap * 2;
-        jval *more = (jval *)malloc((u64)cap * sizeof(jval));
+        jval *more = (jval *)js_alloc(J, (u32)cap * (u32)sizeof(jval));
         if (!more) { js_out_of_memory(J); return 0; }
         for (int i = 0; i < A->n; i++) more[i] = A->v[i];
-        if (A->v != A->local) free(A->v);
+        if (A->v != A->local) js_free(A->J, A->v, (u32)A->cap * (u32)sizeof(jval));
         A->v = more;
         A->cap = cap;
+        A->J = J;
     }
     A->v[A->n++] = x;
     return 1;
 }
 
 static void js_args_free(jargs *A) {
-    if (A->v != A->local) free(A->v);
+    if (A->v != A->local && A->J) js_free(A->J, A->v, (u32)A->cap * (u32)sizeof(jval));
     A->v = A->local;
 }
 
@@ -1229,10 +1234,10 @@ static void js_enqueue(jctx *J, int kind, jval a, jval b, jobj *o, void *co) {
     if (J->jcount >= J->jcap) {
         u32 cap = J->jcap ? J->jcap * 2 : 64;
         if (cap > (1u << 22)) { js_out_of_memory(J); return; }
-        jjob *more = (jjob *)malloc((u64)cap * sizeof(jjob));
+        jjob *more = (jjob *)js_alloc(J, cap * (u32)sizeof(jjob));
         if (!more) { js_out_of_memory(J); return; }
         for (u32 i = 0; i < J->jcount; i++) more[i] = J->jobs[(J->jhead + i) % J->jcap];
-        if (J->jobs) free(J->jobs);
+        if (J->jobs) js_free(J, J->jobs, J->jcap * (u32)sizeof(jjob));
         J->jobs = more;
         J->jhead = 0;
         J->jcap = cap;
@@ -3836,6 +3841,8 @@ static void js_init(jctx *J) {
     memset(J, 0, (int)sizeof(*J));
     J->sig = JS_OK;
     J->mem_cap = JS_MEM_CAP;
+    J->gc_next = JS_GC_FIRST;
+    J->gc_on = 1;
     js_names(J);
     J->global = js_scope(J, 0);
     if (!J->global) return;
@@ -3848,7 +3855,6 @@ static void js_init(jctx *J) {
 }
 
 static void js_done(jctx *J) {
-    free(J->srcs);
     free(J->spans);
     J->srcs = 0;
     J->spans = 0;
@@ -3856,10 +3862,8 @@ static void js_done(jctx *J) {
     if (J->nodes) free(J->nodes);
     J->nodes = 0;
     J->nnodes = J->ncap = 0;
-    if (J->jobs) free(J->jobs);
-    J->jobs = 0;
+    J->jobs = 0;                              /* the region's, like the names */
     J->jcount = J->jcap = J->jhead = 0;
-    if (J->intern) free(J->intern);
     J->intern = 0;
     J->nintern = J->intern_cap = 0;
     /* The stacks of whatever was still suspended when the page was left: a

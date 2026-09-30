@@ -195,6 +195,10 @@ typedef struct jco {
 
 static void co_entry(void *arg);
 
+/* The suspended function whose stack the thread is on now, of whichever
+   context: the collector starts its look there (jsgc.h). */
+static jco *js_thread_co;
+
 /* A stack for it, laid out so the first switch to it lands in the entry. */
 static int co_stack_new(jctx *J, jco *co) {
     if (J->allocated + JS_CO_STACK > J->mem_cap) {
@@ -252,7 +256,10 @@ static void co_switch_in(jctx *J, jco *co) {
     J->co_current = co;
     J->stack_limit = (char *)co->stack + JS_CO_MARGIN;
     co->state = CO_RUNNING;
+    jco *was = js_thread_co;
+    js_thread_co = co;
     zelr_jsco_swap(&co->back_sp, co->sp);
+    js_thread_co = was;
     J->co_current = co->saved_current;
     J->stack_limit = co->saved_limit;
 }

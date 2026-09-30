@@ -599,14 +599,17 @@ static jval nat_arr_sort(jctx *J, jval t, jval *a, int n) {
     if (!js_arraylike(J, t)) return t;
     u32 len = js_len_of(J, t);
     if (len < 2) return t;
-    jval *v = (jval *)malloc((u64)len * 2 * sizeof(jval));
+    /* In the region: the comparator runs scripts, and the collector must see
+       what is being sorted. */
+    if ((u64)len * 2 * sizeof(jval) > 0xFFFFFFF0u) { js_out_of_memory(J); return t; }
+    jval *v = (jval *)js_alloc(J, len * 2 * (u32)sizeof(jval));
     if (!v) { js_out_of_memory(J); return t; }
     for (u32 i = 0; i < len; i++) v[i] = js_get_index(J, t, i);
     jsortctx S = { J, fn, 0 };
     js_merge_sort(&S, v, v + len, len);
     if (!S.failed && J->sig == JS_OK)
         for (u32 i = 0; i < len; i++) js_put_index(J, t, i, v[i]);
-    free(v);
+    js_free(J, v, len * 2 * (u32)sizeof(jval));
     return t;
 }
 

@@ -30,10 +30,11 @@
  *
  * --- what is not ----------------------------------------------------------
  *
- * No modules (import and export are refused by name; a page's module scripts
- * are not run), no with, no BigInt arithmetic (a literal such as 10n is read
- * as the number it names), no Proxy, no typed arrays, no Intl. Strings are
- * bytes of UTF-8 rather than UTF-16 units, so length counts bytes.
+ * Strings are bytes of UTF-8 rather than UTF-16 units, so length counts
+ * bytes. An array has no holes: an element never written is there, and is
+ * undefined. (Modules, with, BigInt, Proxy, typed arrays and Intl, once on
+ * this list, are in jsmod.h, jsrun.h, jsbig.h, jsproxy.h, jstyped.h and
+ * jsintl.h.)
  *
  * What is refused is refused by name. An engine that accepts a word and does
  * something slightly wrong with it is worse than one that says it does not
@@ -44,18 +45,20 @@
  *
  * Everything a script allocates comes from a region, and the whole region
  * goes when the script's world is torn down, which for a browser is when the
- * page is left. There is no garbage collector.
+ * page is left. In between, a collector (jsgc.h) gives back what nothing can
+ * reach any more.
  *
- * That is a decision and not an omission. A collector needs to know every
- * live value, and in a tree-walking interpreter half of them are in local
- * variables of the C functions doing the walking; getting that wrong gives
- * you an object collected while something is still using it, which is the
- * worst class of bug there is and it appears at random. A region has none of
- * that: nothing is ever freed early because nothing is ever freed at all.
+ * A collector needs to know every live value, and in a tree-walking
+ * interpreter half of them are in local variables of the C functions doing
+ * the walking; getting that wrong gives you an object collected while
+ * something is still using it. So it does not ask to be told: it looks at
+ * every word of the stacks, the program's data and the region itself, and
+ * takes anything that points into a block to mean the block is in use. What
+ * it cannot see is memory from malloc, which is why nothing the engine keeps
+ * there may hold a value.
  *
- * What it costs is a script that allocates in a loop forever. There is a cap,
- * and reaching it stops the script and says so, rather than taking the
- * machine down with it.
+ * There is still a cap, for what a page holds at once; reaching it stops the
+ * script and says so, rather than taking the machine down with it.
  */
 #pragma once
 #include "zelr.h"
@@ -67,6 +70,19 @@
    context's own mem_cap (jsdom.h, jd_mem_cap). */
 #define JS_MEM_CAP   (24u * 1024 * 1024)
 #define JS_MEM_SPARE (1u * 1024 * 1024)
+
+/* The region's free blocks, by size: sixteen bytes a step up to 4096, and
+   one list of the larger ones (js_alloc, jsgc.h). */
+#define JS_FREE_CLASSES 256
+#define JS_FREE_MAX (JS_FREE_CLASSES * 16u)
+
+/* When the collector first runs (jsgc.h); after that, when what is in use has
+   doubled since it last ran. JS_GC_STRESS, in a test build, runs it every
+   that many allocations, to find anything it cannot see. */
+#define JS_GC_FIRST (8u * 1024 * 1024)
+#ifndef JS_GC_STRESS
+#define JS_GC_STRESS 0
+#endif
 #define JS_STEP_CAP  40000000u
 #define JS_DEPTH_CAP 800
 
@@ -233,6 +249,8 @@ struct jobj {
 typedef struct jchunk {
     struct jchunk *next;
     u32 used, size;
+    u32 *bits;                /* after the data: where blocks start, which are in use (jsgc.h) */
+    u64 spare;                /* the data starts on sixteen bytes */
     u8  data[1];
 } jchunk;
 
@@ -368,11 +386,20 @@ typedef struct jctx {
     jstr  *pending_label;
 
     /* the region, and what has been given back to it: a list for each size
-       up to 256 bytes, in steps of sixteen */
+       up to JS_FREE_MAX, in steps of sixteen, and one of the larger blocks */
     jchunk *chunks;
-    u32     allocated;
+    u32     allocated;        /* bytes in blocks in use, and suspended functions' stacks */
     u32     mem_cap;          /* JS_MEM_CAP unless the host gave more */
-    void   *free_list[16];
+    void   *free_list[JS_FREE_CLASSES];
+    void   *free_large;
+
+    /* The collector's (jsgc.h): the chunks by address, when it next runs,
+       and how often it has. */
+    jchunk **gc_map;
+    u32     gc_nmap, gc_capmap;
+    u32     gc_next, gc_ticks, gc_runs, gc_freed;
+    u8      gc_on, gc_busy;
+    u8      ran_out;          /* told it had no more memory: it stays told, whatever is collected after */
 
     /* The global scope, whose variables are the global object's properties,
        and inside it the scope every script's top level let, const and class
@@ -479,6 +506,7 @@ typedef struct jctx {
 #define JS_CHUNK (256u * 1024u)
 
 static void js_out_of_memory(jctx *J) {
+    J->ran_out = 1;
     if (J->sig == JS_FAILED) return;
     J->sig = JS_FAILED;
     const char *m = "this script asked for more memory than a page is allowed";
@@ -490,15 +518,213 @@ static void js_out_of_memory(jctx *J) {
     J->error[i] = 0;
 }
 
-static void *js_alloc(jctx *J, u32 n) {
-    n = (n + 15u) & ~15u;
-    if (n && n <= 256) {
+#ifdef JS_ALLOC_PROFILE
+/* Where the region's bytes go, by the four calls above each allocation: a
+   host build only (HOST_CFLAGS=-DJS_ALLOC_PROFILE bash tools/host/build.sh
+   scriptdump, then scriptdump URL SECONDS prof), named by the shim. */
+unsigned short __stdcall RtlCaptureStackBackTrace(unsigned long skip, unsigned long n, void **frames, unsigned long *hash);
+int host_symbol(void *addr, char *out, int cap);
+int snprintf(char *out, unsigned long long cap, const char *fmt, ...);
+#define JS_PROF_SLOTS 16384
+typedef struct { void *at[4]; u64 bytes; u32 count; } jprof;
+static jprof js_prof[JS_PROF_SLOTS];
+
+__attribute__((noinline)) static void js_prof_note(u32 n) {
+    void *f[4] = { 0, 0, 0, 0 };
+    RtlCaptureStackBackTrace(2, 4, f, 0);
+    u64 h = 1469598103934665603ull;
+    for (int i = 0; i < 4; i++) h = (h ^ (u64)f[i]) * 1099511628211ull;
+    for (u32 k = 0, s = (u32)(h % JS_PROF_SLOTS); k < JS_PROF_SLOTS; k++, s = (s + 1) % JS_PROF_SLOTS) {
+        jprof *p = &js_prof[s];
+        if (!p->count) for (int i = 0; i < 4; i++) p->at[i] = f[i];
+        if (p->at[0] == f[0] && p->at[1] == f[1] && p->at[2] == f[2] && p->at[3] == f[3]) {
+            p->bytes += n;
+            p->count++;
+            return;
+        }
+    }
+}
+
+/* The most costly stacks, most first, and what all of it came to. */
+__attribute__((unused)) static void js_prof_report(int most) {
+    u64 total = 0;
+    for (int s = 0; s < JS_PROF_SLOTS; s++) total += js_prof[s].bytes;
+    char line[1200];
+    int w = snprintf(line, sizeof(line), "allocated %llu KB in all\n", (unsigned long long)(total / 1024));
+    puts(line);
+    (void)w;
+    static u8 shown[JS_PROF_SLOTS];
+    for (int r = 0; r < most; r++) {
+        int best = -1;
+        for (int s = 0; s < JS_PROF_SLOTS; s++)
+            if (!shown[s] && js_prof[s].count && (best < 0 || js_prof[s].bytes > js_prof[best].bytes)) best = s;
+        if (best < 0) break;
+        shown[best] = 1;
+        int at = snprintf(line, sizeof(line), "%7llu KB %8u  ", (unsigned long long)(js_prof[best].bytes / 1024), js_prof[best].count);
+        for (int i = 0; i < 4 && js_prof[best].at[i]; i++) {
+            if (i) at += snprintf(line + at, sizeof(line) - at, " < ");
+            at += host_symbol(js_prof[best].at[i], line + at, (int)sizeof(line) - at - 4);
+            if (at > (int)sizeof(line) - 300) break;
+        }
+        snprintf(line + at, sizeof(line) - at, "\n");
+        puts(line);
+    }
+}
+#endif
+
+/* A block on a free list says so in its second word: its own address turned
+   by a constant, which nothing in use holds by chance. The collector does not
+   look inside one (jsgc.h). A large one keeps its size in its third. */
+#define JS_FREE_MARK 0x5A17C0DEF4EEB10Cull
+static inline void js_free_mark(void *p) { ((u64 *)p)[1] = (u64)p ^ JS_FREE_MARK; }
+static inline int js_is_free(const void *p) { return ((const u64 *)p)[1] == ((u64)p ^ JS_FREE_MARK); }
+
+/* After each chunk's data, two bitmaps of a bit for every sixteen bytes:
+   where each block starts, and which blocks the collector found in use. */
+static inline u32 js_bits_words(u32 size) { return (size / 16u + 31u) / 32u; }
+static inline u32 *js_starts(jchunk *c) { return c->bits; }
+static inline u32 *js_marks(jchunk *c) { return c->bits + js_bits_words(c->size); }
+static inline void js_bit_set(u32 *b, u32 i) { b[i >> 5] |= 1u << (i & 31); }
+static inline void js_bit_clear(u32 *b, u32 i) { b[i >> 5] &= ~(1u << (i & 31)); }
+static inline int js_bit(const u32 *b, u32 i) { return (int)((b[i >> 5] >> (i & 31)) & 1u); }
+
+static void js_gc(jctx *J);
+
+/* The chunk a byte is in, or 0: the chunks by address (gc_map), halved. */
+static jchunk *js_chunk_of(jctx *J, const void *p) {
+    u32 lo = 0, hi = J->gc_nmap;
+    while (lo < hi) {
+        u32 mid = (lo + hi) / 2;
+        if ((const u8 *)p < J->gc_map[mid]->data) hi = mid;
+        else lo = mid + 1;
+    }
+    if (!lo) return 0;
+    jchunk *c = J->gc_map[lo - 1];
+    return (const u8 *)p < c->data + c->size ? c : 0;
+}
+
+static int js_map_add(jctx *J, jchunk *c) {
+    if (J->gc_nmap >= J->gc_capmap) {
+        u32 cap = J->gc_capmap ? J->gc_capmap * 2 : 64;
+        jchunk **more = (jchunk **)malloc((u64)cap * sizeof(jchunk *));
+        if (!more) return 0;
+        for (u32 i = 0; i < J->gc_nmap; i++) more[i] = J->gc_map[i];
+        free(J->gc_map);
+        J->gc_map = more;
+        J->gc_capmap = cap;
+    }
+    u32 at = J->gc_nmap;
+    while (at > 0 && J->gc_map[at - 1]->data > c->data) { J->gc_map[at] = J->gc_map[at - 1]; at--; }
+    J->gc_map[at] = c;
+    J->gc_nmap++;
+    return 1;
+}
+
+static void js_map_remove(jctx *J, jchunk *c) {
+    u32 i = 0;
+    while (i < J->gc_nmap && J->gc_map[i] != c) i++;
+    for (; i + 1 < J->gc_nmap; i++) J->gc_map[i] = J->gc_map[i + 1];
+    if (J->gc_nmap) J->gc_nmap--;
+}
+
+/* A block given back, on its list: it is free until it is taken again. */
+static void js_free_push(jctx *J, void *p, u32 n) {
+    js_free_mark(p);
+    if (n <= JS_FREE_MAX) {
+        void **slot = &J->free_list[n / 16 - 1];
+        *(void **)p = *slot;
+        *slot = p;
+    } else {
+        ((u64 *)p)[2] = n;
+        *(void **)p = J->free_large;
+        J->free_large = p;
+    }
+}
+
+static void *js_bump(jchunk *c, u32 n) {
+    void *p = c->data + c->used;
+    js_bit_set(js_starts(c), c->used / 16);
+    c->used += n;
+    return p;
+}
+
+/* A free block larger than n, split: the first n are taken and the rest is
+   a free block of its own. */
+static void *js_take_split(jctx *J, u32 n) {
+    void *p = 0;
+    u32 size = 0;
+    for (u32 k = n / 16; k < JS_FREE_CLASSES && !p; k++)
+        if (J->free_list[k]) {
+            p = J->free_list[k];
+            J->free_list[k] = *(void **)p;
+            size = (k + 1) * 16;
+        }
+    for (void **prev = &J->free_large; !p && *prev; prev = (void **)*prev)
+        if (((u64 *)*prev)[2] >= n) {
+            p = *prev;
+            size = (u32)((u64 *)p)[2];
+            *prev = *(void **)p;
+        }
+    if (!p) return 0;
+    if (size > n) {
+        jchunk *c = js_chunk_of(J, p);
+        u8 *rest = (u8 *)p + n;
+        if (c) js_bit_set(js_starts(c), (u32)(rest - c->data) / 16);
+        js_free_push(J, rest, size - n);
+    }
+    return p;
+}
+
+static void *js_take(jctx *J, u32 n) {
+    if (n <= JS_FREE_MAX) {
         void **slot = &J->free_list[n / 16 - 1];
         if (*slot) {
             void *p = *slot;
             *slot = *(void **)p;
-            memset(p, 0, (int)n);
             return p;
+        }
+    }
+    jchunk *c = J->chunks;
+    if (c && c->used + n <= c->size) return js_bump(c, n);
+    void *p = js_take_split(J, n);
+    if (p) return p;
+
+    u32 want = n > JS_CHUNK ? n : JS_CHUNK;
+    u32 words = js_bits_words(want);
+    jchunk *fresh = (jchunk *)malloc(sizeof(jchunk) + want + 2 * words * 4);
+    if (!fresh) return 0;
+    fresh->used = 0;
+    fresh->size = want;
+    fresh->bits = (u32 *)(fresh->data + want);
+    memset(fresh->bits, 0, (int)(2 * words * 4));
+    if (!js_map_add(J, fresh)) {
+        free(fresh);
+        return 0;
+    }
+    /* A chunk made for one large block goes behind the one being filled,
+       which keeps its room. */
+    if (n > JS_CHUNK && c) {
+        fresh->next = c->next;
+        c->next = fresh;
+    } else {
+        fresh->next = J->chunks;
+        J->chunks = fresh;
+    }
+    return js_bump(fresh, n);
+}
+
+static void *js_alloc(jctx *J, u32 n) {
+#ifdef JS_ALLOC_PROFILE
+    js_prof_note((n + 15u) & ~15u);
+#endif
+    n = (n + 15u) & ~15u;
+    if (!n) n = 16;
+    if (J->gc_on && !J->gc_busy) {
+        if (JS_GC_STRESS && ++J->gc_ticks >= JS_GC_STRESS) {
+            J->gc_ticks = 0;
+            js_gc(J);
+        } else if (J->allocated + n > J->gc_next) {
+            js_gc(J);
         }
     }
     if (J->allocated + n > J->mem_cap) {
@@ -512,37 +738,24 @@ static void *js_alloc(jctx *J, u32 n) {
            handlers and timers do not run again (jsdom.h, jd_spent). */
         if (J->allocated + n > J->mem_cap + JS_MEM_SPARE) return 0;
     }
-
-    jchunk *c = J->chunks;
-    if (!c || c->used + n > c->size) {
-        u32 want = n > JS_CHUNK ? n : JS_CHUNK;
-        jchunk *fresh = (jchunk *)malloc(sizeof(jchunk) + want);
-        if (!fresh) {
-            js_out_of_memory(J);
-            return 0;
-        }
-        fresh->next = J->chunks;
-        fresh->used = 0;
-        fresh->size = want;
-        J->chunks = fresh;
-        c = fresh;
+    void *p = js_take(J, n);
+    if (!p) {
+        js_out_of_memory(J);
+        return 0;
     }
-    void *p = c->data + c->used;
-    c->used += n;
     J->allocated += n;
     memset(p, 0, (int)n);
     return p;
 }
 
-/* Gives a block back, for the next js_alloc of the same size. Only for a
-   block nothing can reach any more: the region never had to know, and what
-   is given back here is used again. */
+/* Gives a block back, for the next js_alloc that fits it. Only for a block
+   nothing can reach any more, with the size it was asked for. */
 static void js_free(jctx *J, void *p, u32 n) {
     n = (n + 15u) & ~15u;
-    if (!p || !n || n > 256) return;
-    void **slot = &J->free_list[n / 16 - 1];
-    *(void **)p = *slot;
-    *slot = p;
+    if (!p) return;
+    if (!n) n = 16;
+    J->allocated = J->allocated >= n ? J->allocated - n : 0;
+    js_free_push(J, p, n);
 }
 
 static void js_free_all(jctx *J) {
@@ -554,7 +767,11 @@ static void js_free_all(jctx *J) {
     }
     J->chunks = 0;
     J->allocated = 0;
-    for (int i = 0; i < 16; i++) J->free_list[i] = 0;
+    for (int i = 0; i < JS_FREE_CLASSES; i++) J->free_list[i] = 0;
+    J->free_large = 0;
+    free(J->gc_map);
+    J->gc_map = 0;
+    J->gc_nmap = J->gc_capmap = 0;
 }
 
 /* --- strings ------------------------------------------------------------- */

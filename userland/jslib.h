@@ -1991,9 +1991,8 @@ static int js_json_value(jctx *J, jjson *S, jval holder, jstr *key, jval v) {
 
 static jval nat_json_stringify(jctx *J, jval t, jval *a, int n) {
     (void)t;
-    jjson *S = (jjson *)malloc(sizeof(jjson));
+    jjson *S = (jjson *)js_alloc(J, (u32)sizeof(jjson));   /* the region's: it holds values */
     if (!S) { js_out_of_memory(J); return js_undef(); }
-    memset(S, 0, (int)sizeof(jjson));
     S->replacer = js_undef();
     jval rep = js_arg(a, n, 1);
     if (js_callable(rep)) S->replacer = rep;
@@ -2019,7 +2018,7 @@ static jval nat_json_stringify(jctx *J, jval t, jval *a, int n) {
     if (r > 0 && S->out.full) js_throw(J, JS_ERR_RANGE, "JSON too long to write", J->error_line);
     else if (r > 0) out = js_from_str(js_str_n(J, S->out.b ? S->out.b : "", S->out.n));
     free(S->out.b);
-    free(S);
+    js_free(J, S, (u32)sizeof(jjson));
     return out;
 }
 

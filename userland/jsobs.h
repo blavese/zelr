@@ -216,12 +216,13 @@ static jval nat_mo_observe(jctx *J, jval t, jval *a, int n) {
         if (!jd_mregs[i].obs) { jd_mregs[i] = r; return js_undef(); }
     if (jd_nmregs >= jd_capmregs) {
         int cap = jd_capmregs ? jd_capmregs * 2 : 16;
-        jmreg *more = (jmreg *)malloc((u64)cap * sizeof(jmreg));
+        /* In the region: each holds its observer (jsgc.h). */
+        jmreg *more = (jmreg *)js_alloc(&jd_J, (u32)cap * (u32)sizeof(jmreg));
         if (!more) return js_undef();
         volatile u8 *d = (volatile u8 *)more;
         const u8 *s = (const u8 *)jd_mregs;
         for (u64 i = 0; i < (u64)jd_nmregs * sizeof(jmreg); i++) d[i] = s[i];
-        if (jd_mregs) free(jd_mregs);
+        if (jd_mregs) js_free(&jd_J, jd_mregs, (u32)jd_capmregs * (u32)sizeof(jmreg));
         jd_mregs = more;
         jd_capmregs = cap;
     }
@@ -514,6 +515,8 @@ static void jd_setup_observers(jctx *J) {
     jd_k_targets = js_sym_new(J, "targets", 7);
     jd_k_sizes = js_sym_new(J, "sizes", 5);
     jd_nmregs = 0;
+    jd_mregs = 0;                        /* the last page's region's */
+    jd_capmregs = 0;
     jd_mo_queued = 0;
     jd_mo_none = js_undef();
     jd_robservers = 0;

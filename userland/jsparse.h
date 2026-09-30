@@ -1059,7 +1059,7 @@ static jstr *js_intern(jctx *J, const char *s, u32 n) {
     u32 h = js_hash(s, n);
     if (J->nintern * 2 >= J->intern_cap) {
         u32 cap = J->intern_cap ? J->intern_cap * 2 : 4096;
-        jstr **fresh = (jstr **)malloc((u64)cap * sizeof(jstr *));
+        jstr **fresh = (jstr **)js_alloc(J, cap * (u32)sizeof(jstr *));
         if (!fresh) return js_str_n(J, s, n);
         for (u32 i = 0; i < cap; i++) fresh[i] = 0;
         for (u32 i = 0; i < J->intern_cap; i++) {
@@ -1069,7 +1069,7 @@ static jstr *js_intern(jctx *J, const char *s, u32 n) {
             while (fresh[k]) k = (k + 1) & (cap - 1);
             fresh[k] = x;
         }
-        if (J->intern) free(J->intern);
+        if (J->intern) js_free(J, J->intern, J->intern_cap * (u32)sizeof(jstr *));
         J->intern = fresh;
         J->intern_cap = cap;
     }
@@ -3194,8 +3194,10 @@ static const char *js_keep_source(jctx *J, const char *src, u32 len) {
     J->cur_src = -1;
     if (J->nsrcs >= J->capsrcs) {
         int cap = J->capsrcs ? J->capsrcs * 2 : 64;
-        jstr **more = (jstr **)realloc(J->srcs, (u64)cap * sizeof(jstr *));
+        jstr **more = (jstr **)js_alloc(J, (u32)cap * (u32)sizeof(jstr *));
         if (!more) return src;
+        for (int i = 0; i < J->nsrcs; i++) more[i] = J->srcs[i];
+        if (J->srcs) js_free(J, J->srcs, (u32)J->capsrcs * (u32)sizeof(jstr *));
         J->srcs = more;
         J->capsrcs = cap;
     }

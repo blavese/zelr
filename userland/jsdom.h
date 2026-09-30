@@ -120,7 +120,10 @@ static void jd_note_error(void) {
    they have, none of its handlers, timers or requests is run again: each one
    would stop at its first allocation anyway, having used a little more of the
    spare the one that ran out is getting out on (js.h, js_alloc). */
-static int jd_spent(void) { return jd_J.allocated >= jd_J.mem_cap; }
+/* A page that has run out does not run again: what it holds is what ran it
+   out, and a collection after (jsgc.h) gives back only what it had finished
+   with. */
+static int jd_spent(void) { return jd_J.ran_out || jd_J.allocated >= jd_J.mem_cap; }
 
 /* A call from the browser into the page: a handler, a timer, a reply. What
    it throws is the page's to report and not the browser's to stop on. */
@@ -1162,12 +1165,13 @@ static int jd_list_new(int kind, int html, int root, jstr *name) {
     if (jd_nlists >= jd_caplists) {
         int cap = jd_caplists ? jd_caplists * 2 : 64;
         if (cap > (1 << 20)) return -1;
-        jlist *more = (jlist *)malloc((u64)cap * sizeof(jlist));
+        /* In the region: a list holds its name and object (jsgc.h). */
+        jlist *more = (jlist *)js_alloc(&jd_J, (u32)cap * (u32)sizeof(jlist));
         if (!more) return -1;
         volatile u8 *d = (volatile u8 *)more;
         const u8 *s = (const u8 *)jd_lists;
         for (u64 i = 0; i < (u64)jd_nlists * sizeof(jlist); i++) d[i] = s[i];
-        if (jd_lists) free(jd_lists);
+        if (jd_lists) js_free(&jd_J, jd_lists, (u32)jd_caplists * (u32)sizeof(jlist));
         jd_lists = more;
         jd_caplists = cap;
     }
@@ -1186,8 +1190,7 @@ static int jd_list_new(int kind, int html, int root, jstr *name) {
 
 static void jd_lists_free(void) {
     for (int i = 0; i < jd_nlists; i++) if (jd_lists[i].nodes) free(jd_lists[i].nodes);
-    if (jd_lists) free(jd_lists);
-    jd_lists = 0;
+    jd_lists = 0;                        /* the region's, gone with it */
     jd_nlists = jd_caplists = 0;
 }
 
@@ -4385,12 +4388,13 @@ static jval nat_add_listener(jctx *J, jval t, jval *a, int n) {
         if (slot < 0) {
             int cap = jd_caplisten ? jd_caplisten * 2 : 256;
             if (cap > (1 << 18)) return js_undef();
-            jlisten *more = (jlisten *)malloc((u64)cap * sizeof(jlisten));
+            /* In the region, where the collector sees the listeners (jsgc.h). */
+            jlisten *more = (jlisten *)js_alloc(&jd_J, (u32)cap * (u32)sizeof(jlisten));
             if (!more) return js_undef();
             volatile u8 *d = (volatile u8 *)more;
             const u8 *s = (const u8 *)jd_listen;
             for (u64 i = 0; i < (u64)jd_nlisten * sizeof(jlisten); i++) d[i] = s[i];
-            if (jd_listen) free(jd_listen);
+            if (jd_listen) js_free(&jd_J, jd_listen, (u32)jd_caplisten * (u32)sizeof(jlisten));
             jd_listen = more;
             jd_caplisten = cap;
         }
@@ -4960,12 +4964,13 @@ static jtimer *jd_timer_slot(void) {
     if (jd_ntimer >= jd_captimer) {
         int cap = jd_captimer ? jd_captimer * 2 : 64;
         if (cap > (1 << 16)) return 0;
-        jtimer *more = (jtimer *)malloc((u64)cap * sizeof(jtimer));
+        /* In the region, where the collector sees what each will call. */
+        jtimer *more = (jtimer *)js_alloc(&jd_J, (u32)cap * (u32)sizeof(jtimer));
         if (!more) return 0;
         volatile u8 *d = (volatile u8 *)more;
         const u8 *s = (const u8 *)jd_timer;
         for (u64 i = 0; i < (u64)jd_ntimer * sizeof(jtimer); i++) d[i] = s[i];
-        if (jd_timer) free(jd_timer);
+        if (jd_timer) js_free(&jd_J, jd_timer, (u32)jd_captimer * (u32)sizeof(jtimer));
         jd_timer = more;
         jd_captimer = cap;
     }
@@ -7015,10 +7020,8 @@ static void jsdom_close(void) {
     jd_sheet = 0;
     jd_wrap = 0;
     jd_document_obj = 0;
-    if (jd_listen) free(jd_listen);
-    jd_listen = 0;
+    jd_listen = 0;                       /* the region's, gone with it */
     jd_nlisten = jd_caplisten = 0;
-    if (jd_timer) free(jd_timer);
     jd_timer = 0;
     jd_ntimer = jd_captimer = 0;
     jd_lists_free();

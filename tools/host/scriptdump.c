@@ -1,6 +1,6 @@
 /* What each of a real page's scripts did, one line each.
  *
- *   scriptdump ADDRESS [SECONDS] [text] [tree] ['js=EXPRESSION' ...]
+ *   scriptdump ADDRESS [SECONDS] [text] [tree] ['js=EXPRESSION' ...] [prof]
  *
  * Loads the page with the browser's own load() -- the same fetches, the same
  * limits on how many scripts and how large, the same document and bindings
@@ -14,6 +14,9 @@
  *
  * Each js= is evaluated in the page once it has run, and what it came to is
  * printed: a page's own state, asked for the way its console would be.
+ *
+ * "prof", in a build with HOST_CFLAGS=-DJS_ALLOC_PROFILE, prints where the
+ * page's script memory went, by the calls that asked for it (js.h).
  *
  * The browser's own line names only the first thing that stopped, which is
  * the right thing to show a reader and not enough to tell which of thirty
@@ -265,6 +268,15 @@ int main(int argc, char **argv) {
             for (u32 i = 0; t && i < t->len; i++) { char one[2] = { t->s[i], 0 }; puts(one); }
         }
         puts("\n");
+    }
+
+    for (int a = 2; a < argc; a++) {
+        if (!w_same(argv[a], "prof")) continue;
+#ifdef JS_ALLOC_PROFILE
+        js_prof_report(60);
+#else
+        puts("prof: built without HOST_CFLAGS=-DJS_ALLOC_PROFILE" "\n");
+#endif
     }
 
     if (show_tree) {

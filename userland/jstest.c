@@ -59,6 +59,48 @@ static void expect(const char *what, const char *src, const char *want) {
     js_done(&J);
 }
 
+/* A whole script whose answer is its global `result`, for the collector
+   (jsgc.h): it must also have run at least `runs` times, and what is left in
+   use after it be under `most` bytes. */
+static void collected(const char *what, const char *src, const char *want, u32 runs, u32 most) {
+    ran++;
+    jctx J;
+    js_init(&J);
+    int ok = js_run(&J, src, (u32)strlen(src));
+    jstr *text = 0;
+    if (ok) {
+        jval r = js_get(&J, js_from_obj(J.global_obj), js_intern(&J, "result", 6));
+        text = js_to_str(&J, r);
+    }
+    int same = ok && text && strlen(want) == (int)text->len && J.gc_runs >= runs && J.allocated < most;
+    for (u32 i = 0; same && i < text->len; i++) if (text->s[i] != want[i]) same = 0;
+    show(same ? "  PASS  " : "  FAIL  ");
+    show(what);
+    if (!same) {
+        char buf[200];
+        u32 n = 0;
+        if (!ok) { show("\n          error: "); show(J.error); }
+        else if (text) {
+            n = text->len < 150 ? text->len : 150;
+            for (u32 i = 0; i < n; i++) buf[i] = text->s[i];
+            buf[n] = 0;
+            show("\n          got ["); show(buf); show("]");
+        }
+        u32 v = J.gc_runs, k = 0;
+        char num[16];
+        do { num[k++] = (char)('0' + v % 10); v /= 10; } while (v);
+        show(" collections ");
+        while (k) { char one[2] = { num[--k], 0 }; show(one); }
+        v = J.allocated / 1024; k = 0;
+        do { num[k++] = (char)('0' + v % 10); v /= 10; } while (v);
+        show(", in use KB ");
+        while (k) { char one[2] = { num[--k], 0 }; show(one); }
+        failed++;
+    }
+    putc('\n');
+    js_done(&J);
+}
+
 static void check(const char *what, int good) {
     ran++;
     show(good ? "  PASS  " : "  FAIL  ");
@@ -79,6 +121,65 @@ static void where_memory_is(void) {
           zelr_stack_top && (char *)&here < zelr_stack_top
           && zelr_data_lo() <= (char *)&a_static_word && (char *)&a_static_word < zelr_data_hi()
           && zelr_data_lo() <= (char *)&a_zero_word && (char *)&a_zero_word < zelr_data_hi());
+}
+
+/* The collector from the inside (jsgc.h): what only a pointer into the
+   middle of a block holds, the texts and names a context keeps, and a
+   context whose own record is in memory from malloc, as a worker's is.
+   What is made for the first two is made in calls of their own, and the
+   stack they used is written over, so that no copy of the block's start is
+   left behind on it for the collector to find instead. */
+static volatile const char *held_inside;
+static volatile u64 name_hidden;              /* turned inside out: as an address it would hold it */
+
+__attribute__((noinline)) static void make_inside(jctx *J) {
+    jstr *s = js_str_n(J, "a string held from inside", 25);
+    held_inside = s->s + 9;
+}
+
+__attribute__((noinline)) static void make_name(jctx *J) {
+    name_hidden = (u64)js_intern(J, "a name only the table holds", 27) ^ 0xFFFFFFFFFFFFFFFFull;
+}
+
+__attribute__((noinline)) static void scrub_stack(void) {
+    volatile char pad[16384];
+    for (int i = 0; i < (int)sizeof(pad); i++) pad[i] = 0;
+}
+
+static void collector_inside(void) {
+    jctx *J = (jctx *)malloc(sizeof(jctx));
+    js_init(J);
+    const char *setup = "function kept(a) { return a * 2; } var names = []; for (var i = 0; i < 50; i++) names.push('n' + i);";
+    js_run(J, setup, (u32)strlen(setup));
+
+    /* A string held by nothing but a pointer nine bytes into its text. */
+    make_inside(J);
+    make_name(J);
+    scrub_stack();
+    js_gc(J);
+    for (int i = 0; i < 2000; i++) js_str_n(J, "something else entirely!", 25);
+    int held = held_inside[0] == 'h' && held_inside[1] == 'e' && held_inside[2] == 'l';
+    check("a block held only from inside is kept", held);
+
+    scrub_stack();
+    js_gc(J);
+    int texts = J->nsrcs > 0;
+    for (int i = 0; i < J->nsrcs; i++) if (js_is_free(J->srcs[i])) texts = 0;
+    int names = J->nintern > 0 && !js_is_free((void *)(name_hidden ^ 0xFFFFFFFFFFFFFFFFull));
+    for (u32 i = 0; i < J->intern_cap; i++) if (J->intern[i] && js_is_free(J->intern[i])) names = 0;
+    check("the texts and the names a context keeps are kept", texts && names);
+
+    int own = !js_is_free(J->global_obj) && !js_is_free(J->s_length) && !js_is_free(J->p_array) && J->gc_runs >= 2;
+    jval v = js_undef();
+    const char *ask = "[1, 2, 3].length + ':' + kept.toString().length + ':' + names[49]";
+    js_eval_text(J, ask, (u32)strlen(ask), &v);
+    jstr *t = js_to_str(J, v);
+    const char *want = "3:34:n49";
+    own = own && t && t->len == (u32)strlen(want);
+    for (u32 i = 0; own && i < t->len; i++) if (t->s[i] != want[i]) own = 0;
+    check("and a context whose own record is in memory from malloc", own);
+    js_done(J);
+    free(J);
 }
 
 /* And runs a whole script, where the answer is whatever it leaves in a
@@ -1613,7 +1714,57 @@ int main(void) {
            " try { Proxy({}, {}); out.push('made'); } catch (e) { out.push(e instanceof TypeError); }"
            " return out.join(' '); })()", "1 true true");
 
+    /* --- the collector (jsgc.h) ---------------------------------------------------------
+     *
+     * Nothing was given back but a call's own scope, and a page ran out when
+     * it had made as much as it was allowed, however little of it it still
+     * held. A context here has 24 megabytes. */
+    collected("a script that makes 180 megabytes it drops runs in 24, the collector giving them back",
+              "var total = 0; for (var i = 0; i < 600; i++) { var s = 'ab'.repeat(50000) + i; total += s.length; }"
+              " function mk(n) { var a = [n, n + 1]; return function () { return a[0] + a[1]; }; }"
+              " var sum = 0; for (var j = 0; j < 100000; j++) sum += mk(j)();"
+              " result = total + ' ' + sum;",
+              "60001690 10000000000", 5, 12u * 1024 * 1024);
+    collected("and what it can still reach is kept through them: objects, long arrays, maps, sets, closures, typed arrays, "
+              "a suspended generator's locals and an awaiting async function's",
+              "var keep = { list: [], map: new Map(), set: new Set(), buf: new Uint8Array(1000) };"
+              " for (var i = 0; i < 2000; i++) { var o = { n: i, name: 'item ' + i, sub: [i, { d: i * 2 }] };"
+              "  keep.list.push(o); keep.map.set('k' + i, o); keep.set.add(o.name); }"
+              " keep.list[5000] = 'far'; keep.buf[999] = 7;"
+              " var counter = (function () { var c = 0; return function () { return ++c; }; })();"
+              " function* gen() { var local = { word: 'gen' + 'erator', arr: [1, 2, 3] }; var x = yield 1;"
+              "  yield local.word + x + local.arr.join(''); }"
+              " var g = gen(); g.next();"
+              " var open; var gate = new Promise(function (r) { open = r; }); var fromAsync = '';"
+              " (async function () { var mine = { text: 'as' + 'ync', n: [4, 5] }; await gate; fromAsync = mine.text + mine.n.join(''); })();"
+              " for (var j = 0; j < 300; j++) { var junk = 'x'.repeat(100000) + j; var arr = []; for (var k = 0; k < 100; k++) arr.push({ k: k }); }"
+              " open();"
+              " Promise.resolve().then(function () { return 0; }).then(function () {"
+              "  var ok = keep.list.length === 5001 && keep.list[1999].sub[1].d === 3998 && keep.map.get('k777').name === 'item 777'"
+              "   && keep.set.has('item 1500') && keep.list[5000] === 'far' && keep.list[3000] === undefined && keep.buf[999] === 7;"
+              "  result = [ok, counter(), counter(), g.next('!').value, fromAsync].join(' '); });",
+              "true 1 2 generator!123 async45", 3, 20u * 1024 * 1024);
+    collected("arguments gathered for a call, jobs waiting and a function's own text are kept while more is made",
+              "function* many() { for (var i = 0; i < 60; i++) { var big = 'y'.repeat(150000) + i; yield { n: i, tail: big.slice(-2) }; } }"
+              " function count() { var s = 0; for (var i = 0; i < arguments.length; i++) s += arguments[i].n; return s + ':' + arguments[59].tail; }"
+              " var gathered = count(...many());"
+              " var done = []; for (var p = 0; p < 200; p++) (function (k) { Promise.resolve(k).then(function (v) { done.push({ v: v * 2 }); }); })(p);"
+              " function kept(a, b) { return a + b; }"
+              " for (var j = 0; j < 200; j++) { var junk = 'z'.repeat(100000) + j; }"
+              " var text = kept.toString();"
+              " Promise.resolve().then(function () {"
+              "  result = [gathered, done.length, done[199].v, text === 'function kept(a, b) { return a + b; }'].join(' '); });",
+              "1770:59 200 398 true", 3, 20u * 1024 * 1024);
+    collected("what sort is sorting and JSON is writing are kept, though the array is emptied and the keys were made",
+              "var a = []; for (var i = 0; i < 60; i++) a.push({ n: 60 - i, pad: 'q'.repeat(20000) + i });"
+              " var first = true; a.sort(function (x, y) { if (first) { first = false; a.length = 0; for (var z = 0; z < 3000; z++) a.push(z); }"
+              "  var junk = 'j'.repeat(60000) + x.n; return x.n - y.n; });"
+              " var o = { 5001: 'one', 5002: { get x() { for (var k = 0; k < 120; k++) { var junk = 'k'.repeat(100000) + k; } return 'two'; } }, 5003: 'three' };"
+              " result = a.slice(0, 60).map(function (e) { return e.n; }).slice(0, 5).join() + ' ' + a.length + ' ' + JSON.stringify(o, [5001, 5002, 'x']);",
+              "1,2,3,4,5 3000 {\"5001\":\"one\",\"5002\":{\"x\":\"two\"}}", 2, 20u * 1024 * 1024);
     where_memory_is();
+    collector_inside();
+
     /* The count, at the end. It used to be printed half way down, so every
        case after the regular expressions ran without being counted, and a
        suite that lost them would have reported the same total. */
