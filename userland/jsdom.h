@@ -609,6 +609,9 @@ static void jd_inserted_module_due(jval arg);
 static jval jd_import(jctx *J, jval spec, void *module);
 static jval jd_import_meta(jctx *J, void *module);
 
+/* document.doctype (jsform.h). */
+static jval nat_doctype(jctx *J, jval t, jval *a, int n);
+
 /* The moments of the page's navigation entry (jswin.h). */
 enum { NV_INTERACTIVE, NV_DCL_START, NV_DCL_END, NV_COMPLETE, NV_LOAD_START, NV_LOAD_END, NV_COUNT };
 static void jd_nav_mark(int which);
@@ -1189,6 +1192,16 @@ static jval nat_list_item(jctx *J, jval t, jval *a, int n) {
     double d = n > 0 ? js_to_num(J, a[0]) : 0;
     if (!(d >= 0) || d >= (double)L->n) return js_null();
     return jd_el_value(J, L->nodes[(u32)d]);
+}
+
+/* length, as an accessor on NodeList's and HTMLCollection's prototypes, where
+   the standard has it and scripts take its getter from. */
+static jval nat_list_length(jctx *J, jval t, jval *a, int n) {
+    (void)a; (void)n;
+    jlist *L = jd_list_of(t);
+    if (!L) return jd_illegal(J);
+    jd_list_gather(L);
+    return js_num(L->n);
 }
 
 static int jd_list_find_name(jlist *L, const char *want) {
@@ -1874,6 +1887,8 @@ static int jd_attrs_node(jval t) {
     return (!jd_doc || h >= jd_doc->count) ? -1 : h;
 }
 
+static jstr *jd_k_attr_value;
+
 static jval jd_attr_obj(jctx *J, int el, int i) {
     const dnode *x = &jd_doc->nodes[el];
     if (i < 0 || i >= x->attr_n) return js_null();
@@ -1884,8 +1899,9 @@ static jval jd_attr_obj(jctx *J, int el, int i) {
     js_set(J, o, "name", nm);
     js_set(J, o, "localName", nm);
     js_set(J, o, "nodeName", nm);
-    js_set(J, o, "value", jd_str(jd_doc->arena + a->value));
-    js_set(J, o, "nodeValue", jd_str(jd_doc->arena + a->value));
+    /* The value is read through the element while it holds this (jsform.h,
+       nat_attr_value); the one kept is for when it no longer does. */
+    jd_keep(o, jd_k_attr_value, jd_str(jd_doc->arena + a->value));
     js_set(J, o, "nodeType", js_num(2));
     js_set(J, o, "specified", js_bool(1));
     js_set(J, o, "namespaceURI", js_null());
@@ -4169,6 +4185,19 @@ static const jd_evkind_t JD_EVENTS[] = {
     { "PageTransitionEvent", "Event", "bpersisted" },
     { "StorageEvent", "Event", "okey ooldValue onewValue surl ostorageArea" },
     { "SubmitEvent", "Event", "osubmitter" },
+    /* The rest a page makes or takes the prototype of: Mozilla's consent
+       manager makes a SecurityPolicyViolationEvent to learn its isTrusted. */
+    { "PointerEvent", "MouseEvent", "npointerId nwidth nheight npressure ntangentialPressure ntiltX ntiltY ntwist"
+                                    " spointerType bisPrimary" },
+    { "DragEvent", "MouseEvent", "odataTransfer" },
+    { "TouchEvent", "UIEvent", "otouches otargetTouches ochangedTouches bctrlKey bshiftKey baltKey bmetaKey" },
+    { "AnimationEvent", "Event", "sanimationName nelapsedTime spseudoElement" },
+    { "TransitionEvent", "Event", "spropertyName nelapsedTime spseudoElement" },
+    { "ClipboardEvent", "Event", "oclipboardData" },
+    { "SecurityPolicyViolationEvent", "Event", "sdocumentURI sreferrer sblockedURI sviolatedDirective seffectiveDirective"
+                                              " soriginalPolicy sdisposition ssourceFile nstatusCode nlineNumber ncolumnNumber ssample" },
+    { "FormDataEvent", "Event", "oformData" },
+    { "ToggleEvent", "Event", "soldState snewState" },
 };
 #define JD_EVKINDS ((int)(sizeof(JD_EVENTS) / sizeof(JD_EVENTS[0])))
 static jobj *jd_ev_proto[JD_EVKINDS];
@@ -5291,9 +5320,14 @@ static jval nat_doc_implementation(jctx *J, jval t, jval *a, int n) {
     return jd_implementation ? js_from_obj(jd_implementation) : js_null();
 }
 
+static jval nat_impl_create_doc(jctx *J, jval t, jval *a, int n);
+static jval nat_impl_create_doctype(jctx *J, jval t, jval *a, int n);
+
 static void jd_setup_documents(jctx *J, jobj *docproto) {
     jobj *ip = jd_interface(J, "DOMImplementation", 0, 0, 0);
     jd_method(J, ip, "createHTMLDocument", nat_impl_create_html, 0);
+    jd_method(J, ip, "createDocument", nat_impl_create_doc, 2);
+    jd_method(J, ip, "createDocumentType", nat_impl_create_doctype, 3);
     jd_method(J, ip, "hasFeature", nat_impl_has_feature, 0);
     jd_implementation = js_object_with(J, JO_PLAIN, ip);
     jd_accessor(J, docproto, "implementation", nat_doc_implementation, 0);
@@ -5821,6 +5855,7 @@ static void jd_consts(jctx *J, jobj *on, const char *const *names, int from);
 #include "jswin.h"
 #include "jsobs.h"
 #include "jsmatrix.h"
+#include "jsform.h"
 #include "jswalk.h"
 #include "jsmod.h"
 
@@ -6091,6 +6126,8 @@ static void jd_setup_node(jctx *J) {
     js_method_key(J, nl, J->sym_iterator, "[Symbol.iterator]", nat_list_values, 0);
     jd_method(J, hc, "item", nat_list_item, 1);
     jd_method(J, hc, "namedItem", nat_list_named, 1);
+    jd_accessor(J, nl, "length", nat_list_length, 0);
+    jd_accessor(J, hc, "length", nat_list_length, 0);
     js_method_key(J, hc, J->sym_iterator, "[Symbol.iterator]", nat_list_values, 0);
 
     jobj *tl = jd_p[JI_TOKENLIST];
@@ -6458,7 +6495,7 @@ static void jd_setup_document(jctx *J, jobj *document) {
     jd_accessor(J, d, "links", nat_doc_links, 0);
     jd_accessor(J, d, "scripts", nat_doc_scripts, 0);
     jd_accessor(J, d, "currentScript", nat_doc_current_script, 0);
-    jd_accessor(J, d, "doctype", nat_null_getter, 0);
+    jd_accessor(J, d, "doctype", nat_doctype, 0);
     jd_accessor(J, d, "fullscreenElement", nat_null_getter, 0);
     jd_accessor(J, d, "scrollingElement", nat_doc_element, 0);
     (void)document;
@@ -6585,6 +6622,7 @@ static void jd_setup(jctx *J) {
     jd_setup_location(J);
     jd_setup_window_more(J);
     jd_setup_matrix(J);
+    jd_setup_form(J);
     jd_setup_storage(J);
     jd_setup_observers(J);
     jd_setup_walks(J);

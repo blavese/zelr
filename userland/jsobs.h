@@ -586,7 +586,7 @@ static jval jd_plist_entries(jctx *J, jval t, const jstr *name, const jstr *type
     jval all = js_is_obj(t) ? jd_kept(t.obj, jd_k_plist) : js_undef();
     for (u32 i = 0; out && all.t == JS_OBJ && i < all.obj->len; i++) {
         jobj *e = all.obj->items[i].obj;
-        jval nm = jd_ev_get(e, "name"), ty = jd_ev_get(e, "entryType");
+        jval nm = jd_pe(e, PE_NAME), ty = jd_pe(e, PE_TYPE);
         if (name && !(nm.t == JS_STR && js_str_eq(nm.str, name))) continue;
         if (type && !(ty.t == JS_STR && js_str_eq(ty.str, type))) continue;
         js_arr_push(J, out, all.obj->items[i]);
@@ -628,7 +628,7 @@ static void jd_po_schedule(void) {
    its type. */
 static void jd_perf_observed(jobj *entry) {
     if (!jd_pobservers || !entry) return;
-    jval ty = jd_ev_get(entry, "entryType");
+    jval ty = jd_pe(entry, PE_TYPE);
     if (ty.t != JS_STR) return;
     int any = 0;
     for (u32 i = 0; i < jd_pobservers->len; i++)
@@ -667,7 +667,7 @@ static jval nat_po_observe(jctx *J, jval t, jval *a, int n) {
         js_arr_push(J, types.obj, js_from_str(s));
         if (buffered && jd_perf_entries) {
             for (u32 k = 0; k < jd_perf_entries->len; k++) {
-                jval ty = jd_ev_get(jd_perf_entries->items[k].obj, "entryType");
+                jval ty = jd_pe(jd_perf_entries->items[k].obj, PE_TYPE);
                 if (ty.t == JS_STR && js_str_eq(ty.str, s)) jd_po_queue(t.obj, jd_perf_entries->items[k]);
             }
             jd_po_schedule();

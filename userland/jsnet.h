@@ -721,18 +721,45 @@ static void jd_fetch_done(jobj *r, const jd_reply *rp) {
 
 /* --- XMLHttpRequest ------------------------------------------------------------------------ */
 
+/* Its state kept under keys no script can name, and read through accessors
+   on the prototype, where the standard puts them: Mozilla's consent manager
+   takes the getters of readyState, response and responseText off
+   XMLHttpRequest.prototype, and found none. */
+static const char *const JD_XHR_FIELDS[] = { "readyState", "status", "statusText", "responseText", "response",
+                                             "responseType", "responseURL", 0 };
+static jstr *jd_k_xhr[7];
+
+static void jd_xhr_put(jobj *o, int k, jval v) { jd_keep(o, jd_k_xhr[k], v); }
+
+static jval nat_xhr_field(jctx *J, jval t, jval *a, int n) {
+    (void)a; (void)n;
+    int k = (int)J->callee->data.num;
+    jval v = js_is_obj(t) ? jd_kept(t.obj, jd_k_xhr[k]) : js_undef();
+    if (v.t != JS_UNDEF) return v;
+    return k <= 1 ? js_num(0) : jd_str("");
+}
+
+/* responseType: one of the kinds, or left as it was. */
+static jval nat_xhr_set_type(jctx *J, jval t, jval *a, int n) {
+    if (!js_is_obj(t)) return js_undef();
+    jstr *s = js_to_str(J, js_arg(a, n, 0));
+    static const char *const KINDS = "arraybuffer blob document json text";
+    if (s && (!s->len || jd_word_in(KINDS, s->s))) jd_xhr_put(t.obj, 5, js_from_str(s));
+    return js_undef();
+}
+
 static jval nat_xhr_ctor(jctx *J, jval t, jval *a, int n) {
     (void)a; (void)n;
     if (J->new_target.t == JS_UNDEF || !js_is_obj(t))
         return js_throw(J, JS_ERR_TYPE, "XMLHttpRequest is made with new", J->error_line);
     jobj *o = t.obj;
-    js_set(J, o, "readyState", js_num(0));
-    js_set(J, o, "status", js_num(0));
-    js_set(J, o, "statusText", jd_str(""));
-    js_set(J, o, "responseText", jd_str(""));
-    js_set(J, o, "response", jd_str(""));
-    js_set(J, o, "responseType", jd_str(""));
-    js_set(J, o, "responseURL", jd_str(""));
+    jd_xhr_put(o, 0, js_num(0));
+    jd_xhr_put(o, 1, js_num(0));
+    jd_xhr_put(o, 2, jd_str(""));
+    jd_xhr_put(o, 3, jd_str(""));
+    jd_xhr_put(o, 4, jd_str(""));
+    jd_xhr_put(o, 5, jd_str(""));
+    jd_xhr_put(o, 6, jd_str(""));
     js_set(J, o, "responseXML", js_null());
     js_set(J, o, "timeout", js_num(0));
     js_set(J, o, "withCredentials", js_bool(0));
@@ -757,7 +784,7 @@ static jval nat_xhr_open(jctx *J, jval t, jval *a, int n) {
     jd_keep(t.obj, jd_k_url, js_from_str(whole ? whole : u));
     jobj *list = js_array(J);
     if (list) jd_keep(t.obj, jd_k_hlist, js_from_obj(list));
-    js_set(J, t.obj, "readyState", js_num(1));
+    jd_xhr_put(t.obj, 0, js_num(1));
     jd_xhr_event(t.obj, "readystatechange");
     return js_undef();
 }
@@ -794,11 +821,11 @@ static jval nat_xhr_abort(jctx *J, jval t, jval *a, int n) {
     for (int i = 0; i < jd_nreq; i++)
         if (jd_req[i].waiting && jd_req[i].self == t.obj) { jd_req[i].waiting = 0; was = 1; }
     if (was) {
-        js_set(J, t.obj, "readyState", js_num(4));
+        jd_xhr_put(t.obj, 0, js_num(4));
         jd_xhr_event(t.obj, "readystatechange");
         jd_xhr_event(t.obj, "abort");
         jd_xhr_event(t.obj, "loadend");
-        js_set(J, t.obj, "readyState", js_num(0));
+        jd_xhr_put(t.obj, 0, js_num(0));
     }
     return js_undef();
 }
@@ -843,11 +870,11 @@ static void jd_xhr_done(jobj *o, const jd_reply *rp) {
     }
     jobj *headers = jd_reply_headers(J, rp);
     if (headers) jd_keep(o, jd_k_rheaders, js_from_obj(headers));
-    js_set(J, o, "status", js_num(rp->status > 0 ? rp->status : 0));
-    js_set(J, o, "readyState", js_num(4));
-    js_set(J, o, "responseText", text);
-    js_set(J, o, "response", resp);
-    js_set(J, o, "responseURL", jd_str(rp->url && rp->url[0] ? rp->url : jd_kept_str(o, jd_k_url, "")));
+    jd_xhr_put(o, 1, js_num(rp->status > 0 ? rp->status : 0));
+    jd_xhr_put(o, 0, js_num(4));
+    jd_xhr_put(o, 3, text);
+    jd_xhr_put(o, 4, resp);
+    jd_xhr_put(o, 6, jd_str(rp->url && rp->url[0] ? rp->url : jd_kept_str(o, jd_k_url, "")));
     jd_xhr_event(o, "readystatechange");
     /* load either way when the server answered: a page that asked for
        something it did not get is entitled to find out, and status is where
@@ -935,6 +962,16 @@ static void jd_setup_net(jctx *J) {
     jobj *xp = jd_interface(J, "XMLHttpRequestEventTarget", jd_p[JI_EVENTTARGET], 0, 0);
     xp = jd_interface(J, "XMLHttpRequest", xp, nat_xhr_ctor, 0);
     jd_p[JI_XHR] = xp;
+    for (int k = 0; JD_XHR_FIELDS[k]; k++) {
+        jd_k_xhr[k] = js_sym_new(J, JD_XHR_FIELDS[k], (u32)w_len(JD_XHR_FIELDS[k]));
+        jobj *g = js_native(J, JD_XHR_FIELDS[k], nat_xhr_field);
+        jobj *st = k == 5 ? js_native(J, JD_XHR_FIELDS[k], nat_xhr_set_type) : 0;
+        if (!g) continue;
+        g->flags |= JOF_NOCTOR;
+        g->data = js_num(k);
+        if (st) st->flags |= JOF_NOCTOR;
+        js_define_accessor(J, xp, js_str(J, JD_XHR_FIELDS[k]), js_from_obj(g), st ? js_from_obj(st) : js_undef(), JP_ENUM | JP_CONF);
+    }
     jd_method(J, xp, "open", nat_xhr_open, 2);
     jd_method(J, xp, "send", nat_xhr_send, 0);
     jd_method(J, xp, "setRequestHeader", nat_xhr_header, 2);

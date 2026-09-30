@@ -796,6 +796,41 @@ static jobj *jd_nav_entry;
 
 static void jd_perf_observed(jobj *entry);        /* jsobs.h */
 
+/* An entry's fields, kept under keys no script can name and read through
+   accessors on the prototypes, where the standard puts them: Mozilla's
+   consent manager copies an entry by calling each getter it finds on
+   PerformanceEntry.prototype and PerformanceResourceTiming.prototype, and
+   had copied one with no name, type or start, which made a date of NaN. */
+enum { PE_NAME, PE_TYPE, PE_START, PE_DUR, PE_DETAIL, PE_INITIATOR, PE_HOP, PE_WORKER, PE_NAVTYPE, PE_REDIRECTS,
+       PE_COUNT };
+static const char *const JD_PE_FIELDS[PE_COUNT] = { "name", "entryType", "startTime", "duration", "detail",
+                                                    "initiatorType", "nextHopProtocol", "workerStart", "type",
+                                                    "redirectCount" };
+static jstr *jd_k_pe[PE_COUNT];
+static jobj *jd_p_pe_mark, *jd_p_pe_measure;
+
+static jval jd_pe(jobj *e, int k) { return e ? jd_kept(e, jd_k_pe[k]) : js_undef(); }
+static void jd_pe_put(jobj *e, int k, jval v) { jd_keep(e, jd_k_pe[k], v); }
+
+static jval nat_pe_field(jctx *J, jval t, jval *a, int n) {
+    (void)a; (void)n;
+    if (!js_is_obj(t) || jd_pe(t.obj, PE_TYPE).t != JS_STR) return jd_illegal(J);
+    int k = (int)J->callee->data.num;
+    jval v = jd_pe(t.obj, k);
+    if (v.t != JS_UNDEF) return v;
+    return k == PE_DETAIL ? js_null() : k == PE_INITIATOR || k == PE_HOP ? jd_str("") : js_num(0);
+}
+
+/* toJSON: the four every entry has, through the getters, which the
+   navigation entry's duration is. */
+static jval nat_pe_json(jctx *J, jval t, jval *a, int n) {
+    (void)a; (void)n;
+    if (!js_is_obj(t) || jd_pe(t.obj, PE_TYPE).t != JS_STR) return jd_illegal(J);
+    jobj *o = js_object(J, JO_PLAIN);
+    for (int k = PE_NAME; o && k <= PE_DUR; k++) js_set(J, o, JD_PE_FIELDS[k], js_get(J, t, js_str(J, JD_PE_FIELDS[k])));
+    return js_from_obj(o);
+}
+
 static jval nat_perf_now(jctx *J, jval t, jval *a, int n) {
     (void)J; (void)t; (void)a; (void)n;
     return js_num(jd_now_ms());
@@ -806,14 +841,14 @@ static jval nat_perf_origin(jctx *J, jval t, jval *a, int n) {
     return js_num(jd_time_origin);
 }
 
-static jobj *jd_perf_entry(jctx *J, jstr *name, const char *type, double start, double dur) {
-    jobj *e = js_object(J, JO_PLAIN);
+static jobj *jd_perf_entry(jctx *J, jstr *name, const char *type, double start, double dur, jval detail) {
+    jobj *e = js_object_with(J, JO_PLAIN, type[1] == 'a' ? jd_p_pe_mark : jd_p_pe_measure);
     if (!e) return 0;
-    js_set(J, e, "name", js_from_str(name));
-    js_set(J, e, "entryType", jd_str(type));
-    js_set(J, e, "startTime", js_num(start));
-    js_set(J, e, "duration", js_num(dur));
-    js_set(J, e, "detail", js_null());
+    jd_pe_put(e, PE_NAME, js_from_str(name));
+    jd_pe_put(e, PE_TYPE, jd_str(type));
+    jd_pe_put(e, PE_START, js_num(start));
+    jd_pe_put(e, PE_DUR, js_num(dur));
+    jd_pe_put(e, PE_DETAIL, detail.t == JS_UNDEF ? js_null() : detail);
     if (jd_perf_entries) js_arr_push(J, jd_perf_entries, js_from_obj(e));
     jd_perf_observed(e);
     return e;
@@ -822,24 +857,38 @@ static jobj *jd_perf_entry(jctx *J, jstr *name, const char *type, double start, 
 static double jd_perf_find(const jstr *name) {
     for (u32 i = jd_perf_entries ? jd_perf_entries->len : 0; i > 0; i--) {
         jval e = jd_perf_entries->items[i - 1];
-        jval nm = jd_ev_get(e.obj, "name");
-        if (nm.t == JS_STR && js_str_eq(nm.str, name)) return js_to_num(&jd_J, jd_ev_get(e.obj, "startTime"));
+        jval nm = jd_pe(e.obj, PE_NAME);
+        if (nm.t == JS_STR && js_str_eq(nm.str, name)) return js_to_num(&jd_J, jd_pe(e.obj, PE_START));
     }
     return -1;
 }
 
+/* mark(name, { startTime, detail }). */
 static jval nat_perf_mark(jctx *J, jval t, jval *a, int n) {
     (void)t;
-    jobj *e = jd_perf_entry(J, jd_arg_str(J, a, n, 0), "mark", jd_now_ms(), 0);
+    jstr *name = jd_arg_str(J, a, n, 0);
+    jval opt = js_arg(a, n, 1), detail = js_undef();
+    double at = jd_now_ms();
+    if (js_is_obj(opt)) {
+        jval st = js_get(J, opt, js_str(J, "startTime"));
+        detail = js_get(J, opt, js_str(J, "detail"));
+        if (J->sig != JS_OK) return js_undef();
+        if (st.t != JS_UNDEF) {
+            at = js_to_num(J, st);
+            if (at != at || at < 0) return js_throw(J, JS_ERR_TYPE, "a mark's startTime cannot be negative", J->error_line);
+        }
+    }
+    jobj *e = jd_perf_entry(J, name, "mark", at, 0, detail);
     return e ? js_from_obj(e) : js_undef();
 }
 
 static jval nat_perf_measure(jctx *J, jval t, jval *a, int n) {
     (void)t;
     double start = 0, end = jd_now_ms();
-    jval s = js_arg(a, n, 1), f = js_arg(a, n, 2);
+    jval s = js_arg(a, n, 1), f = js_arg(a, n, 2), detail = js_undef();
     if (js_is_obj(s)) {
         jval st = js_get(J, s, js_str(J, "start")), en = js_get(J, s, js_str(J, "end"));
+        detail = js_get(J, s, js_str(J, "detail"));
         if (st.t == JS_STR) start = jd_perf_find(st.str); else if (st.t == JS_NUM) start = st.num;
         if (en.t == JS_STR) end = jd_perf_find(en.str); else if (en.t == JS_NUM) end = en.num;
     } else {
@@ -847,7 +896,7 @@ static jval nat_perf_measure(jctx *J, jval t, jval *a, int n) {
         if (f.t == JS_STR) end = jd_perf_find(f.str);
     }
     if (start < 0 || end < 0) return js_throw_dom(J, "SyntaxError", "there is no mark of that name");
-    jobj *e = jd_perf_entry(J, jd_arg_str(J, a, n, 0), "measure", start, end - start);
+    jobj *e = jd_perf_entry(J, jd_arg_str(J, a, n, 0), "measure", start, end - start, detail);
     return e ? js_from_obj(e) : js_undef();
 }
 
@@ -855,7 +904,7 @@ static jval jd_perf_list(jctx *J, const jstr *name, const jstr *type) {
     jobj *out = js_array(J);
     for (u32 i = 0; out && jd_perf_entries && i < jd_perf_entries->len; i++) {
         jobj *e = jd_perf_entries->items[i].obj;
-        jval nm = jd_ev_get(e, "name"), ty = jd_ev_get(e, "entryType");
+        jval nm = jd_pe(e, PE_NAME), ty = jd_pe(e, PE_TYPE);
         if (name && !(nm.t == JS_STR && js_str_eq(nm.str, name))) continue;
         if (type && !(ty.t == JS_STR && js_str_eq(ty.str, type))) continue;
         js_arr_push(J, out, js_from_obj(e));
@@ -881,7 +930,7 @@ static jval jd_perf_clear(jctx *J, jval *a, int n, const char *type) {
     u32 w = 0;
     for (u32 i = 0; i < jd_perf_entries->len; i++) {
         jobj *e = jd_perf_entries->items[i].obj;
-        jval nm = jd_ev_get(e, "name"), ty = jd_ev_get(e, "entryType");
+        jval nm = jd_pe(e, PE_NAME), ty = jd_pe(e, PE_TYPE);
         int gone = ty.t == JS_STR && js_str_is(ty.str, type) && (!name || (nm.t == JS_STR && js_str_eq(nm.str, name)));
         if (!gone) jd_perf_entries->items[w++] = jd_perf_entries->items[i];
     }
@@ -988,6 +1037,31 @@ static void jd_field_getter(jctx *J, jobj *on, const char *name, jnative fn, int
 static void jd_setup_nav_timing(jctx *J, jobj *perf) {
     for (int i = 0; i < NV_COUNT; i++) jd_nav_at[i] = -1;
     jd_nav_entry = 0;
+    for (int k = 0; k < PE_COUNT; k++) jd_k_pe[k] = js_sym_new(J, JD_PE_FIELDS[k], (u32)w_len(JD_PE_FIELDS[k]));
+
+    /* The entries' interfaces, each field on the one the standard puts it
+       on. The resource timing fields read the navigation's, the only
+       resource entry there is. */
+    jobj *ep = jd_interface(J, "PerformanceEntry", 0, 0, 0);
+    jobj *rp = jd_interface(J, "PerformanceResourceTiming", ep, 0, 0);
+    jobj *pp = jd_interface(J, "PerformanceNavigationTiming", rp, 0, 0);
+    jd_p_pe_mark = jd_interface(J, "PerformanceMark", ep, 0, 0);
+    jd_p_pe_measure = jd_interface(J, "PerformanceMeasure", ep, 0, 0);
+    for (int k = PE_NAME; k <= PE_DUR; k++) jd_field_getter(J, ep, JD_PE_FIELDS[k], nat_pe_field, k);
+    jd_method(J, ep, "toJSON", nat_pe_json, 0);
+    jd_field_getter(J, jd_p_pe_mark, "detail", nat_pe_field, PE_DETAIL);
+    jd_field_getter(J, jd_p_pe_measure, "detail", nat_pe_field, PE_DETAIL);
+    for (int k = PE_INITIATOR; k <= PE_WORKER; k++) jd_field_getter(J, rp, JD_PE_FIELDS[k], nat_pe_field, k);
+    jd_field_getter(J, pp, "type", nat_pe_field, PE_NAVTYPE);
+    jd_field_getter(J, pp, "redirectCount", nat_pe_field, PE_REDIRECTS);
+    for (int k = 1; k < JD_NAV_NFIELDS; k++) {
+        const char *nm = JD_NAV_FIELDS[k].name;
+        if (w_same(nm, "domLoading")) continue;
+        int page = w_same(nm, "unloadEventStart") || w_same(nm, "unloadEventEnd") || JD_NAV_FIELDS[k].what >= 0;
+        jd_field_getter(J, page ? pp : rp, nm, nat_nav_field, k);
+    }
+    jd_accessor(J, pp, "duration", nat_nav_duration, 0);
+    jd_method(J, pp, "toJSON", nat_timing_json, 0);
     if (!perf) return;
 
     jobj *tp = jd_interface(J, "PerformanceTiming", 0, 0, 0);
@@ -1006,28 +1080,17 @@ static void jd_setup_nav_timing(jctx *J, jobj *perf) {
     static const char *const kinds[] = { "TYPE_NAVIGATE", "TYPE_RELOAD", "TYPE_BACK_FORWARD" };
     for (int i = 0; np && i < 3; i++) js_set(J, np, kinds[i], js_num(i));
 
-    /* The entry: what the lists find it by as its own, the rest read when
-       asked. It has no unload time of its own, and domLoading is only the
-       old form's. */
-    jobj *ep = jd_interface(J, "PerformanceEntry", 0, 0, 0);
-    jobj *rp = jd_interface(J, "PerformanceResourceTiming", ep, 0, 0);
-    jobj *pp = jd_interface(J, "PerformanceNavigationTiming", rp, 0, 0);
-    for (int k = 1; pp && k < JD_NAV_NFIELDS; k++) {
-        if (w_same(JD_NAV_FIELDS[k].name, "domLoading")) continue;
-        jd_field_getter(J, pp, JD_NAV_FIELDS[k].name, nat_nav_field, k);
-    }
-    jd_accessor(J, pp, "duration", nat_nav_duration, 0);
-    jd_method(J, pp, "toJSON", nat_timing_json, 0);
+    /* The entry. domLoading is only the old form's. */
     jobj *e = js_object_with(J, JO_PLAIN, pp);
     if (!e) return;
-    js_set(J, e, "name", js_from_str(js_str(J, jd_address[0] ? jd_address : "about:blank")));
-    js_set(J, e, "entryType", jd_str("navigation"));
-    js_set(J, e, "startTime", js_num(0));
-    js_set(J, e, "initiatorType", jd_str("navigation"));
-    js_set(J, e, "nextHopProtocol", jd_str("http/1.1"));
-    js_set(J, e, "workerStart", js_num(0));
-    js_set(J, e, "type", jd_str("navigate"));
-    js_set(J, e, "redirectCount", js_num(0));
+    jd_pe_put(e, PE_NAME, js_from_str(js_str(J, jd_address[0] ? jd_address : "about:blank")));
+    jd_pe_put(e, PE_TYPE, jd_str("navigation"));
+    jd_pe_put(e, PE_START, js_num(0));
+    jd_pe_put(e, PE_INITIATOR, jd_str("navigation"));
+    jd_pe_put(e, PE_HOP, jd_str("http/1.1"));
+    jd_pe_put(e, PE_WORKER, js_num(0));
+    jd_pe_put(e, PE_NAVTYPE, jd_str("navigate"));
+    jd_pe_put(e, PE_REDIRECTS, js_num(0));
     jd_nav_entry = e;
     if (jd_perf_entries) js_arr_push(J, jd_perf_entries, js_from_obj(e));
 }
@@ -1822,6 +1885,10 @@ static void jd_setup_window_more(jctx *J) {
     jd_method(J, pp, "getEntriesByType", nat_perf_by_type, 1);
     jd_method(J, pp, "clearMarks", nat_perf_clear_marks, 0);
     jd_method(J, pp, "clearMeasures", nat_perf_clear_measures, 0);
+    /* No resource entries are kept, so there are none to clear and no
+       buffer to size; Mozilla's consent manager calls both. */
+    jd_method(J, pp, "clearResourceTimings", nat_nothing_js, 0);
+    jd_method(J, pp, "setResourceTimingBufferSize", nat_nothing_js, 1);
     jd_method(J, pp, "toJSON", nat_perf_json, 0);
     jobj *perf = js_object_with(J, JO_PLAIN, pp);
     if (perf) js_declare(J, g, js_str(J, "performance"), js_from_obj(perf));

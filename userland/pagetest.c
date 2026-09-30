@@ -2015,6 +2015,94 @@ int main(void) {
                " Array.from(f).length, f instanceof FontFaceSet, f instanceof EventTarget].join(' '); });</script></body>"),
         "true 0 loaded 0 true false 0 true true");
 
+    /* --- forms that check themselves, ranges and markup ----------------------------------
+     *
+     * checkValidity said yes to an empty required field, and Mozilla's consent
+     * manager stopped on DocumentType, Range and ValidityState. */
+    oks("a field's validity is worked out from what it holds, and checkValidity fires invalid",
+        titled("<body><form id=f><input id=a required><input id=b type=email value=nope><input id=c type=url value=\"http://x.test/\">"
+               "<input id=d pattern=\"[0-9]+\" value=12a><input id=e type=number min=5 max=10 step=2 value=4>"
+               "<input id=g type=number min=5 max=10 step=2 value=9><input id=h type=checkbox required>"
+               "<input id=i type=radio name=r required><input id=j type=radio name=r>"
+               "<select id=k required><option value=\"\">choose</option><option value=1>one</option></select>"
+               "<input id=m disabled required><input id=n type=hidden required></form><script>"
+               "var $ = function (id) { return document.getElementById(id); }, fired = [];"
+               "['a','b','c','d','e','g','h','i','k'].forEach(function (id) { $(id).addEventListener('invalid', function () { fired.push(id); }); });"
+               "var r = [$('a').validity.valueMissing, $('a').validity.valid, $('a').validationMessage, $('b').validity.typeMismatch,"
+               " $('c').validity.valid, $('d').validity.patternMismatch, $('e').validity.rangeUnderflow, $('e').validity.stepMismatch,"
+               " $('g').validity.valid, $('h').validity.valueMissing, $('i').validity.valueMissing, $('j').validity.valueMissing,"
+               " $('k').validity.valueMissing, $('k').validationMessage, $('m').willValidate, $('n').willValidate, $('m').checkValidity()];"
+               "$('j').checked = true; r.push($('i').validity.valid);"
+               "$('b').setCustomValidity('mine'); r.push($('b').validity.customError, $('b').validationMessage); $('b').setCustomValidity('');"
+               "r.push($('f').checkValidity(), fired.join(','), $('a').validity instanceof ValidityState, $('a').validity === $('a').validity);"
+               "document.title = r.join('|');</script></body>"),
+        "true|false|Please fill out this field.|true|true|true|true|true|true|true|true|true|true|Please select an item in the list.|"
+        "false|false|true|true|true|mine|false|a,b,d,e,h,k|true|true");
+    oks("document.doctype is the page's, and XMLSerializer writes nodes as markup",
+        titled("<!DOCTYPE html><body><p id=p class=x>a &amp; <b>b</b></p><script>var s = new XMLSerializer();"
+               "document.title = [document.doctype.name, document.doctype instanceof DocumentType, typeof DocumentType.prototype.before,"
+               " s.serializeToString(document.getElementById('p')), s.serializeToString(document).slice(0, 15)].join('|');</script></body>"),
+        "html|true|function|<p id=\"p\" class=\"x\">a &amp; <b>b</b></p>|<!DOCTYPE html>");
+    oks("and without a doctype there is none",
+        titled("<body><script>document.title = String(document.doctype);</script></body>"), "null");
+    oks("a Range selects, reads, copies and deletes, and its contextual fragment's scripts run when put in the page",
+        titled("<body><p id=p>Hello <b>big</b> world</p><div id=d></div><script>"
+               "var p = document.getElementById('p'), r = document.createRange(); r.selectNodeContents(p);"
+               "var t1 = r.toString(), c1 = r.commonAncestorContainer === p, off = r.endOffset;"
+               "r.setStart(p.firstChild, 1); r.setEnd(p.lastChild, 3);"
+               "var t2 = r.toString(), col = r.collapsed, cloned = r.cloneContents().textContent;"
+               "var f2 = document.createRange().createContextualFragment('<i>x</i><script>window.ran = (window.ran || 0) + 1;<\\/script>');"
+               "var before = window.ran; document.getElementById('d').appendChild(f2);"
+               "var r2 = new Range(); r2.selectNode(document.getElementById('d'));"
+               "var cmp = r.compareBoundaryPoints(Range.START_TO_START, r2);"
+               "r.deleteContents();"
+               "document.title = [t1, c1, off, t2, col, cloned, String(before), window.ran, document.getElementById('d').innerHTML.slice(0, 8),"
+               " cmp, p.textContent, r.collapsed, typeof getSelection(), getSelection().rangeCount].join('|');</script></body>"),
+        "Hello big world|true|3|ello big wo|false|ello big wo|undefined|1|<i>x</i>|-1|Hrld|true|object|0");
+    oks("and extracts, puts a node in and wraps what it holds",
+        titled("<body><p id=q>abcdef</p><script>var q = document.getElementById('q'), r = document.createRange();"
+               "r.setStart(q.firstChild, 2); r.setEnd(q.firstChild, 4); var f = r.extractContents();"
+               "var b = document.createElement('b'); b.textContent = 'X'; r.insertNode(b);"
+               "var r3 = document.createRange(); r3.selectNodeContents(b); r3.surroundContents(document.createElement('i'));"
+               "document.title = [f.textContent, q.innerHTML, r.collapsed].join('|');</script></body>"),
+        "cd|ab<b><i>X</i></b>ef|true");
+    oks("an attribute is made, handed to an element and taken back as a node, and its value is the element's while it holds it",
+        titled("<body><script>var a = document.createAttribute('Data-X'); a.value = 'one'; var e = document.createElement('div');"
+               "var r = [a.name, a.ownerElement, e.setAttributeNode(a), e.getAttribute('data-x'), a.ownerElement === e];"
+               "a.value = 'two'; r.push(e.getAttribute('data-x'));"
+               "var b = document.createAttribute('data-x'); b.value = 'three'; var old = e.setAttributeNode(b);"
+               "r.push(old.value, old.ownerElement, e.getAttribute('data-x'), e.getAttributeNode('DATA-X').value,"
+               " e.attributes.getNamedItem('data-x').value, e.removeAttributeNode(b) === b, e.hasAttribute('data-x'), b.value);"
+               "var c = document.createAttributeNS('http://www.w3.org/1999/xlink', 'xlink:href'); r.push(c.prefix, c.localName, c.namespaceURI);"
+               "e.attributes.setNamedItem(document.createAttribute('title')); r.push(e.hasAttribute('title'));"
+               "try { document.createElement('p').setAttributeNode(e.getAttributeNode('title')); r.push('taken'); } catch (x) { r.push(x.name); }"
+               "document.title = r.join('|');</script></body>"),
+        "data-x|||one|true|two|two||three|three|three|true|false|three|xlink|href|http://www.w3.org/1999/xlink|true|InUseAttributeError");
+    oks("namespaces are looked up through the element and those round it, and no editing command is claimed",
+        titled("<body><script>var d = document.implementation.createDocument(null, 'root', null);"
+               "var svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');"
+               "var g = document.createElement('div'); g.setAttribute('xmlns:foo', 'urn:foo'); var h = document.createElement('span'); g.appendChild(h);"
+               "document.title = [d.nodeType, d.documentElement.localName, d.documentElement.parentNode === d,"
+               " document.implementation.createDocumentType('html', '', '').name, h.lookupNamespaceURI(null), h.lookupNamespaceURI('foo'),"
+               " h.lookupPrefix('urn:foo'), h.lookupNamespaceURI('bar'), svg.lookupNamespaceURI(null),"
+               " h.isDefaultNamespace('http://www.w3.org/1999/xhtml'), h.lookupNamespaceURI('xml'),"
+               " document.execCommand('copy'), document.queryCommandSupported('bold'), document.queryCommandValue('bold')].join('|');</script></body>"),
+        "9|root|true|html|http://www.w3.org/1999/xhtml|urn:foo|foo||http://www.w3.org/2000/svg|true|http://www.w3.org/XML/1998/namespace|false|false|");
+    /* Mozilla's consent manager takes getters off the prototypes and calls
+       them on its objects, and copies each timing entry through the getters
+       of PerformanceEntry.prototype: fields kept on the objects themselves
+       were not there to take. */
+    oks("an XMLHttpRequest's, a list's and a timing entry's fields are getters on their prototypes",
+        titled("<body><p></p><script>var x = new XMLHttpRequest(), nav = performance.getEntriesByType('navigation')[0];"
+               "var gd = function (p, n) { var q = Object.getOwnPropertyDescriptor(p, n); return q && typeof q.get; };"
+               "document.title = [gd(XMLHttpRequest.prototype, 'readyState'), gd(XMLHttpRequest.prototype, 'responseText'), x.readyState,"
+               " x.status, x.responseType, gd(HTMLCollection.prototype, 'length'), gd(NodeList.prototype, 'length'), document.body.children.length,"
+               " typeof SecurityPolicyViolationEvent, new PointerEvent('pointerdown').type, new ToggleEvent('toggle') instanceof Event,"
+               " gd(PerformanceEntry.prototype, 'startTime'), gd(PerformanceResourceTiming.prototype, 'initiatorType'), nav.initiatorType,"
+               " Object.keys(nav).length, nav.toJSON().entryType, performance.mark('m', { detail: 5 }).detail,"
+               " performance.mark('n') instanceof PerformanceMark, typeof performance.setResourceTimingBufferSize].join('|');</script></body>"),
+        "function|function|0|0||function|function|2|function|pointerdown|true|function|function|navigation|0|navigation|5|true|function");
+
     /* --- the page's geometry ----------------------------------------------------------
      *
      * Apple's animations make a DOMMatrix of each element's computed transform
