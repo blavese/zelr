@@ -2369,10 +2369,10 @@ static jval nat_get_root_node(jctx *J, jval t, jval *a, int n) {
  * own whose object is a ShadowRoot, kept on its element (shadowRoot, when it
  * is open) and knowing it (host). Scripts build and search it as they would
  * any fragment; there was no attachShadow, and Cloudflare's components
- * stopped on it. It is not drawn: the element is drawn from its own
- * children, as before, which for a component written to work without its
- * script are what it shows. The trees written into the page are drawn (dom.h,
- * dom_shadows); a script's would need the layout to walk a second tree. */
+ * stopped on it. Each is kept in jd_shadow_host and jd_shadow_root: what is
+ * in one is connected while its element is (jd_connected_deep), a composed
+ * event goes on from it to its element (jd_dispatch_to), and the browser
+ * lays out a copy of the page with each tree in place (dom.h, dom_flat). */
 static int jd_shadow_host_ok(int x) {
     if (jd_doc->nodes[x].kind != DN_ELEMENT || jd_is_svg(x)) return 0;
     const char *nm = dom_tag_name(jd_doc, x);
@@ -2406,7 +2406,16 @@ static jval nat_attach_shadow(jctx *J, jval t, jval *a, int n) {
     jd_keep(r, jd_k_host, t);
     jd_keep(r, jd_k_mode, js_from_str(m));
     jd_keep(t.obj, jd_k_shadow, js_from_obj(r));
+    jd_touched();                    /* its element's own children are no longer drawn */
     return js_from_obj(r);
+}
+
+/* The i-th shadow root a script attached, and its element; 0 past the last. */
+__attribute__((unused)) static int jsdom_shadow(int i, int *host, int *root) {
+    if (!jd_open || !jd_doc || i < 0 || i >= jd_nshadow) return 0;
+    *host = jd_shadow_host[i];
+    *root = jd_shadow_root[i];
+    return 1;
 }
 
 static jval nat_el_shadow_root(jctx *J, jval t, jval *a, int n) {

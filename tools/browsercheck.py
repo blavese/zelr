@@ -479,6 +479,27 @@ def main():
             c.add("a shadow tree written into a page is drawn, its sheet on it alone",
                   3000 < banded < 3000 + (PAGE[2] - PAGE[0]) * 90, shoth)
 
+            # --- a component a script makes ----------------------------------
+            #
+            # Two green bands of 60 across the panel, from the tree's sheet and
+            # from the component inside the tree; a sheet let loose on the page
+            # would make a third of the paragraph outside, and a tree not drawn
+            # none. The border and the slotted element are blue: 6 all round a
+            # panel some 700 across, and a line of words.
+            go(vm, mon, "http://%s/component" % srv.host,
+               was=shadow, name="br-going-component")
+            comp, pxc, wc, shotc = page_settled(mon, "br-component")
+            across = PAGE[2] - PAGE[0]
+            green = count_in(pxc, wc, PAGE, GREEN)
+            blue = count_in(pxc, wc, PAGE, BAND)
+            print("      green %d, blue %d, %d across" % (green, blue, across))
+            c.add("a component a script makes is drawn from its shadow tree, with the one inside it, its sheet on them alone",
+                  100 * (across - 120) < green < 130 * across, shotc)
+            c.add("and its :host border and ::slotted rule have the colour they name",
+                  blue > 12 * (across - 120), shotc)
+            c.add("and a script reads a tree's styles, and a component's box as its tree drew it",
+                  count_in(pxc, wc, PAGE, (0x00, 0xB0, 0xB0)) > 1200, shotc)
+
             # --- background pictures -----------------------------------------
             #
             # 160 by 90 of rose from a sheet that names it relative to itself,
@@ -488,7 +509,7 @@ def main():
             # paints teal in a disc of radius 30: about 2830, where a square
             # would be 3600 and no mask at all nothing.
             go(vm, mon, "http://%s/bg/page" % srv.host,
-               was=shadow, name="br-going-bg")
+               was=comp, name="br-going-bg")
             bgd, pxb, wb, shotb = page_settled(mon, "br-bg")
             rose = count_in(pxb, wb, PAGE, LOGO)
             teal = count_in(pxb, wb, PAGE, (0x00, 0xB0, 0xB0))

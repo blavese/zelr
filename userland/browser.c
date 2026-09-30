@@ -1153,11 +1153,15 @@ static int css_urls_from(const url_t *base, const char *in, int n, char *out, in
 /* A sheet read with its urls made whole (css_urls_from), or as it is when
    there is no room to. */
 static char *sheet_abs;
-static void css_parse_sheet(const url_t *base, const char *css, int len, int lo, int hi) {
+static void css_parse_sheet_in(const url_t *base, const char *css, int len, int lo, int hi, const char *scope) {
     if (!sheet_abs) sheet_abs = (char *)malloc(CSS_MAX + CSS_MAX / 4);
     int n = sheet_abs ? css_urls_from(base, css, len, sheet_abs, CSS_MAX + CSS_MAX / 4) : -1;
-    if (n >= 0) css_parse_in(&sheet, sheet_abs, n, lo, hi);
-    else css_parse_in(&sheet, css, len, lo, hi);
+    if (n >= 0) css_parse_style(&sheet, sheet_abs, n, lo, hi, scope);
+    else css_parse_style(&sheet, css, len, lo, hi, scope);
+}
+
+static void css_parse_sheet(const url_t *base, const char *css, int len, int lo, int hi) {
+    css_parse_sheet_in(base, css, len, lo, hi, 0);
 }
 
 /* The sheets a sheet imports, fetched and read before it, which is where
@@ -1292,6 +1296,71 @@ static unsigned source_hash(int i) {
     return h;
 }
 
+/* --- shadow trees a script attached -------------------------------------------------
+ *
+ * The page is laid out from a copy with each in place (dom.h, dom_flat;
+ * page_drawn), and each tree's style elements and adopted sheets reach that
+ * tree alone, scoped to a name made from what they are: every copy of one
+ * component adopts the same sheets, so the copies share a name and one
+ * reading of them, where a name each would have read the component's sheets
+ * again for every copy of it on the page. A tree with none has no name. */
+#define TREES_MAX 1024
+static int trees_n;
+static int tree_host[TREES_MAX], tree_root[TREES_MAX];
+static unsigned tree_key[TREES_MAX];          /* what its sheets are, in one number; 0 for none */
+static char tree_scope[TREES_MAX][DOM_SCOPE];
+static unsigned trees_dom_seen, trees_css_seen;
+static int trees_known;
+
+static unsigned tree_sources(int s, int root) {
+    unsigned h = 2166136261u;
+    int any = 0;
+    for (int i = doc.nodes[root].first; i >= 0; i = dom_next(&doc, i, root)) {
+        if (doc.nodes[i].kind != DN_ELEMENT) continue;
+        int tag = doc.nodes[i].tag;
+        if (tag != T_STYLE && tag != T_LINK) continue;
+        h = (h ^ source_hash(i)) * 16777619u;
+        /* One a script has changed is this tree's alone. */
+        if (jsdom_sheet_override(i, 0, 0)) h = (h ^ (unsigned)i ^ 0x5bd1e995u) * 16777619u;
+        any = 1;
+    }
+    const char *t;
+    int n;
+    u32 id;
+    for (int k = 0; jsdom_shadow_adopted(s, k, &t, &n, &id); k++) {
+        h = (h ^ id) * 16777619u;
+        any = 1;
+    }
+    return any ? (h ? h : 1) : 0;
+}
+
+/* The trees as the scripts have left them, worked out again only when the
+   tree or a sheet has changed since. */
+static void trees_gather(void) {
+    unsigned dv = jsdom_dom_version(), cv = jsdom_css_version();
+    if (trees_known && dv == trees_dom_seen && cv == trees_css_seen) return;
+    trees_known = 1;
+    trees_dom_seen = dv;
+    trees_css_seen = cv;
+    trees_n = 0;
+    int h, r;
+    for (int s = 0; trees_n < TREES_MAX && jsdom_shadow(s, &h, &r); s++) {
+        unsigned key = tree_sources(s, r);
+        tree_host[trees_n] = h;
+        tree_root[trees_n] = r;
+        tree_key[trees_n] = key;
+        char *sc = tree_scope[trees_n];
+        sc[0] = 0;
+        if (key) {
+            static const char hex[] = "0123456789abcdef";
+            sc[0] = 'f';
+            for (int k = 0; k < 8; k++) sc[1 + k] = hex[(key >> (28 - 4 * k)) & 15];
+            sc[9] = 0;
+        }
+        trees_n++;
+    }
+}
+
 /* rel="stylesheet", as one word of a list, but not an alternate sheet, which
    is one the reader has not chosen. */
 static int rel_is_sheet(const char *rel) {
@@ -1354,7 +1423,9 @@ static unsigned styles_print(void) {
         h = (h ^ (unsigned)live) * 16777619u;
         if (live) h = (h ^ source_hash(i)) * 16777619u;
     }
-    return h;
+    trees_gather();
+    for (int t = 0; t < trees_n; t++) h = (h ^ tree_key[t]) * 16777619u;
+    return h * 31u + (unsigned)trees_n;
 }
 
 /* Linked sheets fetched after the page was built, kept for the page: read
@@ -1462,6 +1533,34 @@ static void styles_base(void) {
     styles_made = styles_print();
 }
 
+/* What one style or link element gives, read into the sheet: for the
+   document, or for the shadow tree `scope` names. k is its place in the
+   base's sources, or -1. */
+static void sheet_read(int i, int k, const char *scope) {
+    int lo, hi;
+    if (!sheet_media(i, &lo, &hi)) return;
+    const char *ov = 0;
+    int ovn = 0, has_ov = jsdom_sheet_override(i, &ov, &ovn);
+    if (doc.nodes[i].tag == T_STYLE) {
+        if (has_ov) { css_parse_style(&sheet, ov, ovn, lo, hi, scope); return; }
+        for (int t = doc.nodes[i].first; t >= 0; t = doc.nodes[t].next)
+            if (doc.nodes[t].kind == DN_TEXT && doc.nodes[t].text >= 0) {
+                const char *s = doc.arena + doc.nodes[t].text;
+                css_parse_style(&sheet, s, w_len(s), lo, hi, scope);
+            }
+        return;
+    }
+    const char *rel = dom_attr(&doc, i, "rel"), *href = dom_attr(&doc, i, "href");
+    if (!rel || !href || !*href || !rel_is_sheet(rel) || dom_attr(&doc, i, "disabled")) return;
+    if (k >= 0 && sources[k].ok == -2) return;
+    url_t u;
+    if (!url_join(&here, href, &u)) return;
+    if (has_ov) { css_parse_sheet_in(&u, ov, ovn, lo, hi, scope); return; }
+    const char *text;
+    int n = link_text(&u, &text);
+    if (n > 0) css_parse_sheet_in(&u, text, n, lo, hi, scope);
+}
+
 static void sheets_remake(void) {
     sheet.nrules = base_mark.nrules;
     sheet.nsels = base_mark.nsels;
@@ -1489,33 +1588,27 @@ static void sheets_remake(void) {
         if (tag != T_STYLE && tag != T_LINK) continue;
         int k = source_of(i);
         if (k >= 0 && intact[k]) continue;
-        int lo, hi;
-        if (!sheet_media(i, &lo, &hi)) continue;
-        const char *ov = 0;
-        int ovn = 0, has_ov = jsdom_sheet_override(i, &ov, &ovn);
-        if (tag == T_STYLE) {
-            const char *scope = dom_attr(&doc, i, "data-zs");
-            if (has_ov) { css_parse_style(&sheet, ov, ovn, lo, hi, scope); continue; }
-            for (int t = doc.nodes[i].first; t >= 0; t = doc.nodes[t].next)
-                if (doc.nodes[t].kind == DN_TEXT && doc.nodes[t].text >= 0) {
-                    const char *s = doc.arena + doc.nodes[t].text;
-                    css_parse_style(&sheet, s, w_len(s), lo, hi, scope);
-                }
-            continue;
-        }
-        const char *rel = dom_attr(&doc, i, "rel"), *href = dom_attr(&doc, i, "href");
-        if (!rel || !href || !*href || !rel_is_sheet(rel) || dom_attr(&doc, i, "disabled")) continue;
-        if (k >= 0 && sources[k].ok == -2) continue;
-        url_t u;
-        if (!url_join(&here, href, &u)) continue;
-        if (has_ov) { css_parse_sheet(&u, ov, ovn, lo, hi); continue; }
-        const char *text;
-        int n = link_text(&u, &text);
-        if (n > 0) css_parse_sheet(&u, text, n, lo, hi);
+        sheet_read(i, k, dom_attr(&doc, i, "data-zs"));
     }
     const char *t;
     int n;
     for (int k = 0; jsdom_adopted(k, &t, &n); k++) if (n > 0) css_parse_in(&sheet, t, n, -1, -1);
+
+    /* Each shadow tree's own, for it alone, read once for the trees that
+       share them. */
+    trees_gather();
+    for (int tr = 0; tr < trees_n; tr++) {
+        if (!tree_key[tr]) continue;
+        int again = 0;
+        for (int u = 0; u < tr && !again; u++) again = tree_key[u] == tree_key[tr];
+        if (again) continue;
+        int r = tree_root[tr];
+        for (int i = doc.nodes[r].first; i >= 0; i = dom_next(&doc, i, r))
+            if (doc.nodes[i].kind == DN_ELEMENT && (doc.nodes[i].tag == T_STYLE || doc.nodes[i].tag == T_LINK))
+                sheet_read(i, -1, tree_scope[tr]);
+        for (int k = 0; jsdom_shadow_adopted(tr, k, &t, &n, 0); k++)
+            if (n > 0) css_parse_style(&sheet, t, n, -1, -1, tree_scope[tr]);
+    }
 
     /* Style attributes read since the base, whose declarations went with
        everything else after it. */
@@ -1629,6 +1722,30 @@ static int do_request(const char *method, const char *url, const char *body,
     return r.len;
 }
 
+/* The page as it is drawn: itself, or when a script has attached shadow
+   trees, a copy with them in place (dom.h, dom_flat). The copy shares the
+   page's strings and writes its marks where the page's next string will go,
+   so it is made again once the page has changed or added a string; `fresh`
+   makes it again anyway, as every layout does. */
+static ddoc *flat_mem;
+static unsigned flat_dom_seen;
+static int flat_used = -1, flat_count;
+static const ddoc *laid;             /* what the last layout walked */
+
+static const ddoc *page_drawn(int fresh) {
+    trees_gather();
+    if (!trees_n) return &doc;
+    if (!flat_mem) flat_mem = (ddoc *)map(sizeof(ddoc), PROT_READ | PROT_WRITE);
+    if (!flat_mem) return &doc;
+    if (fresh || flat_used != doc.used || flat_count != doc.count || flat_dom_seen != jsdom_dom_version()) {
+        dom_flat(flat_mem, &doc, tree_host, tree_root, (const char (*)[DOM_SCOPE])tree_scope, trees_n);
+        flat_used = doc.used;
+        flat_count = doc.count;
+        flat_dom_seen = jsdom_dom_version();
+    }
+    return flat_mem;
+}
+
 /* --- what a page's scripts may ask the browser -----------------------------
  *
  * Where the layout put an element, which is every box it drew for the
@@ -1643,7 +1760,9 @@ static int node_at_point(int x, int y) { return lay_node_at(&page, x, y); }
 
 static int box_of(int node, int *x, int *y, int *w, int *h) {
     if (node < 0 || node >= doc.count) return 0;
-    for (int i = node; i >= 0; i = dom_next(&doc, i, node)) box_mark[i >> 3] |= (u8)(1 << (i & 7));
+    /* A component's box holds what its shadow tree drew. */
+    const ddoc *d = laid && node < laid->count ? laid : &doc;
+    for (int i = node; i >= 0; i = dom_next(d, i, node)) box_mark[i >> 3] |= (u8)(1 << (i & 7));
     int x0 = 0, y0 = 0, x1 = 0, y1 = 0, any = 0;
     for (int k = 0; k < page.nitems; k++) {
         const litem *it = &page.items[k];
@@ -1655,7 +1774,7 @@ static int box_of(int node, int *x, int *y, int *w, int *h) {
         if (!any || it->y + it->h > y1) y1 = it->y + it->h;
         any = 1;
     }
-    for (int i = node; i >= 0; i = dom_next(&doc, i, node)) box_mark[i >> 3] &= (u8)~(1 << (i & 7));
+    for (int i = node; i >= 0; i = dom_next(d, i, node)) box_mark[i >> 3] &= (u8)~(1 << (i & 7));
     *x = x0; *y = y0; *w = x1 - x0; *h = y1 - y0;
     return any;
 }
@@ -1672,13 +1791,16 @@ static void restyle_changed(void);
 
 static int computed_style(int node, cstyle *out) {
     if (node < 0 || node >= doc.count || doc.nodes[node].kind != DN_ELEMENT) return 0;
+    /* From the page as it is drawn, so that one in a shadow tree has its
+       tree's rules and inherits from where it is shown. */
+    sheets_follow_if_changed();
+    const ddoc *d = page_drawn(0);
     int chain[256], n = 0;
-    for (int p = node; p >= 0; p = doc.nodes[p].parent) {
+    for (int p = node; p >= 0; p = d->nodes[p].parent) {
         if (n >= (int)(sizeof(chain) / sizeof(chain[0]))) return 0;
         chain[n++] = p;
     }
-    if (chain[n - 1] != doc.root) return 0;             /* not in the page */
-    sheets_follow_if_changed();
+    if (chain[n - 1] != d->root) return 0;              /* not in the page */
     restyle_changed();
     lay_gen++;
     lay_hit_used = 0;
@@ -1688,7 +1810,7 @@ static int computed_style(int node, cstyle *out) {
     static lctx L;
     volatile u8 *z = (volatile u8 *)&L;
     for (u32 i = 0; i < sizeof(L); i++) z[i] = 0;
-    L.d = &doc; L.s = &sheet; L.x = &index_; L.m = &match; L.inl = inl;
+    L.d = d; L.s = &sheet; L.x = &index_; L.m = &match; L.inl = inl;
     L.imgs = pic_sizes; L.nimgs = npic_sizes;
     L.out = &page; L.root_px = root_px;
     L.cur_link = -1; L.flex_sized = -1; L.floating = -1;
@@ -1775,7 +1897,9 @@ static void relayout(int width) {
     match.hover = hover_node;
     match.visited_links = 0;
     lay_show_hidden = 0;
-    lay_run(&page, &doc, &sheet, &index_, &match, inl, pic_sizes, npic_sizes,
+    const ddoc *d = page_drawn(1);
+    laid = d;
+    lay_run(&page, d, &sheet, &index_, &match, inl, pic_sizes, npic_sizes,
             width, root_px);
 
     /* A page that hides its whole self until its script has rebuilt it.
@@ -1784,9 +1908,9 @@ static void relayout(int width) {
        around everything does to a browser that is not going to run the
        framework that takes it off again. */
     page_unhidden = 0;
-    if (lay_words(&page) == 0 && dom_has_words(&doc)) {
+    if (lay_words(&page) == 0 && dom_has_words(d)) {
         lay_show_hidden = 1;
-        lay_run(&page, &doc, &sheet, &index_, &match, inl, pic_sizes,
+        lay_run(&page, d, &sheet, &index_, &match, inl, pic_sizes,
                 npic_sizes, width, root_px);
         lay_show_hidden = 0;
         page_unhidden = lay_words(&page) > 0;
@@ -2014,6 +2138,10 @@ static void build(const char *html, int len, int width, int want_sheets,
     styles_live = 0;
     styles_dom_seen = 0xFFFFFFFFu;
     links_forget();
+    trees_known = 0;
+    trees_n = 0;
+    laid = 0;
+    flat_used = -1;
     dom_parse(&doc, html, len);
     dom_shadows(&doc);
 
@@ -3148,7 +3276,7 @@ int main(int argc, char **argv) {
         if (node_under != last_hover) {
             last_hover = node_under;
             hover_node = node_under;
-            int reach[16], nr = css_hover_reach(&sheet, &doc, node_under, reach, 16);
+            int reach[16], nr = css_hover_reach(&sheet, laid ? laid : &doc, node_under, reach, 16);
             int same = nr == hover_n;
             for (int k = 0; same && k < nr; k++) same = reach[k] == hover_reach[k];
             if (!same) {

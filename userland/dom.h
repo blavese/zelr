@@ -863,3 +863,117 @@ static inline int dom_shadows(ddoc *d) {
     }
     return count;
 }
+
+/* --- shadow trees a script attached, where they are drawn -------------------------------
+ *
+ * A shadow root a script attaches is a fragment of its own beside the page
+ * (jsdom.h, attachShadow), and the layout walks one tree. So what is laid out
+ * is a copy of the page in which each shadow tree is where it is drawn, as
+ * dom_shadows arranges the ones written into the page: its contents are its
+ * host's children, and each of its slots holds the host's children assigned
+ * to it (by their slot attribute, the rest to the first slot with no name) in
+ * place of its own, which stay only when none were. A host's children
+ * assigned to no slot are not drawn, as in a browser.
+ *
+ * Everything is read from the page as the scripts left it, which does not
+ * move, so the order the trees are taken in does not matter, and a node is
+ * the same number in both: what the layout says of one can be told to the
+ * scripts. The copy has nodes and attributes of its own and shares the
+ * page's strings. What it adds goes after the page's last, where the page's
+ * next string will go, so the copy is good until the page next changes; it
+ * is made again before every layout. Nothing already there is written over.
+ *
+ * The marks are dom_shadows's, with each tree's own scope name (`scopes`,
+ * "" for a tree with no style sheets of its own, which needs none): data-zs
+ * on each element of the tree, data-zh on its host and data-zl on each
+ * element put in one of its slots, which is what the tree's sheets are
+ * scoped to (css.h, css_scope). How many trees were put in place. */
+#define DOM_SCOPE 12
+#define DOM_FLAT_SLOTS 64
+
+/* A mark on the copy. A value the element already has is the page's string,
+   so it is pointed at a new one rather than written over. */
+static inline void dom_flat_mark(ddoc *d, int el, const char *name, const char *value) {
+    if (!value[0] || el < 0 || d->nodes[el].kind != DN_ELEMENT) return;
+    dnode *n = &d->nodes[el];
+    for (int i = 0; i < n->attr_n; i++) {
+        dattr *a = &d->attrs[n->attr_at + i];
+        if (w_same(d->arena + a->name, name)) { a->value = dom_str(d, value, w_len(value)); return; }
+    }
+    dom_attr_set(d, el, name, value);
+}
+
+static inline int dom_flat_tree_ok(const ddoc *d, int h, int r) {
+    return h >= 0 && h < d->count && r >= 0 && r < d->count && h != r
+           && d->nodes[h].kind == DN_ELEMENT && d->nodes[r].parent < 0;
+}
+
+static inline int dom_flat(ddoc *out, const ddoc *d, const int *hosts, const int *roots,
+                           const char (*scopes)[DOM_SCOPE], int n) {
+    for (int i = 0; i < d->count; i++) out->nodes[i] = d->nodes[i];
+    out->count = d->count;
+    for (int i = 0; i < d->nattrs; i++) out->attrs[i] = d->attrs[i];
+    out->nattrs = d->nattrs;
+    out->arena = d->arena;
+    out->arena_cap = d->arena_cap;
+    out->used = d->used;
+    out->root = d->root;
+    out->body = d->body;
+    out->head = d->head;
+    out->title = d->title;
+    out->overflowed = d->overflowed;
+    out->standards = d->standards;
+
+    /* The marks first, while the copy is still the page's shape. */
+    for (int t = 0; t < n; t++) {
+        int h = hosts[t], r = roots[t];
+        if (!dom_flat_tree_ok(d, h, r) || !scopes[t][0]) continue;
+        dom_flat_mark(out, h, "data-zh", scopes[t]);
+        for (int i = d->nodes[r].first; i >= 0; i = dom_next(d, i, r))
+            dom_flat_mark(out, i, "data-zs", scopes[t]);
+    }
+
+    int placed = 0;
+    for (int t = 0; t < n; t++) {
+        int h = hosts[t], r = roots[t];
+        if (!dom_flat_tree_ok(d, h, r)) continue;
+        placed++;
+        int light[DOM_SLOTTED], nl = 0;
+        for (int c = d->nodes[h].first; c >= 0; c = d->nodes[c].next) {
+            if (nl < DOM_SLOTTED) light[nl++] = c;
+            dom_unlink(out, c);
+        }
+        for (int c = d->nodes[r].first; c >= 0; c = d->nodes[c].next) dom_append(out, h, c);
+
+        int slots[DOM_FLAT_SLOTS], ns = 0;
+        for (int i = d->nodes[r].first; i >= 0 && ns < DOM_FLAT_SLOTS; i = dom_next(d, i, r))
+            if (d->nodes[i].kind == DN_ELEMENT && d->nodes[i].tag == T_OTHER
+                && w_same_fold(dom_tag_name(d, i), "slot")) slots[ns++] = i;
+        for (int si = 0; si < ns; si++) {
+            int sl = slots[si];
+            const char *name = dom_attr(d, sl, "name");
+            if (!name) name = "";
+            /* Only the first slot of a name is given anything. */
+            int first = 1;
+            for (int k = 0; k < si && first; k++) {
+                const char *other = dom_attr(d, slots[k], "name");
+                if (w_same(other ? other : "", name)) first = 0;
+            }
+            if (!first) continue;
+            int got = 0;
+            for (int i = 0; i < nl; i++) {
+                int c = light[i], kind = d->nodes[c].kind;
+                if (kind != DN_ELEMENT && kind != DN_TEXT) continue;
+                const char *want = kind == DN_ELEMENT ? dom_attr(d, c, "slot") : 0;
+                if (!w_same(want ? want : "", name)) continue;
+                if (!got) {
+                    while (out->nodes[sl].first >= 0) dom_unlink(out, out->nodes[sl].first);
+                    got = 1;
+                }
+                dom_append(out, sl, c);
+                dom_flat_mark(out, c, "data-zl", scopes[t]);
+            }
+        }
+    }
+    return placed;
+}

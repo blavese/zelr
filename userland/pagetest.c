@@ -62,10 +62,76 @@ static const char *content_of(int el) {
     return text;
 }
 
+/* A subtree as its tag names and words, for comparing trees:
+   x(h1(slot(span("T"))) p("body")). Space-only text is left out. */
+static char shape[1024];
+
+static int shape_put(int at, const char *t) {
+    while (*t && at < (int)sizeof(shape) - 1) shape[at++] = *t++;
+    shape[at] = 0;
+    return at;
+}
+
+static int shape_of(const ddoc *d, int el, int at) {
+    const dnode *n = &d->nodes[el];
+    if (n->kind == DN_TEXT) {
+        const char *t = n->text >= 0 ? d->arena + n->text : "";
+        int words = 0;
+        for (const char *q = t; *q; q++) if (*q != ' ' && *q != '\n' && *q != '\t') words = 1;
+        if (!words) return at;
+        at = shape_put(at, "\"");
+        at = shape_put(at, t);
+        return shape_put(at, "\"");
+    }
+    if (n->kind != DN_ELEMENT) return at;
+    at = shape_put(at, dom_tag_name(d, el));
+    if (n->first < 0) return at;
+    at = shape_put(at, "(");
+    int first = 1;
+    for (int c = n->first; c >= 0; c = d->nodes[c].next) {
+        int was = at;
+        if (!first) at = shape_put(at, " ");
+        int now = shape_of(d, c, at);
+        if (now == at) at = was;                    /* it left nothing */
+        else { at = now; first = 0; }
+    }
+    return shape_put(at, ")");
+}
+
+static int same_text(const char *a, const char *b) {
+    while (*a && *a == *b) { a++; b++; }
+    return *a == *b;
+}
+
+static const char *shape_text(const ddoc *d, int el) {
+    shape[0] = 0;
+    if (el >= 0) shape_of(d, el, 0);
+    return shape;
+}
+
 /* What the layout drew at a point, for elementFromPoint: here whatever node
    a check puts in point_node. */
 static int point_node = -1;
 static int point_at(int x, int y) { (void)x; (void)y; return point_node; }
+
+/* The page as it is drawn, with the shadow trees its scripts attached in
+   place (dom.h, dom_flat), each scoped as "t" and its number. */
+static ddoc flat;
+
+static int flatten_page(void) {
+    static int hosts[64], roots[64];
+    static char scopes[64][DOM_SCOPE];
+    int n = 0, h, r;
+    for (int i = 0; n < 64 && jsdom_shadow(i, &h, &r); i++) {
+        hosts[n] = h;
+        roots[n] = r;
+        scopes[n][0] = 't';
+        scopes[n][1] = (char)('0' + n % 10);
+        scopes[n][2] = 0;
+        n++;
+    }
+    return dom_flat(&flat, &page, hosts, roots, (const char (*)[DOM_SCOPE])scopes, n);
+}
 
 /* What jsdom_run used to be: open a world, run what is in the page, and say
    whether anything changed. The browser does these three separately now
@@ -2079,6 +2145,30 @@ int main(void) {
      * MSN's page is components inside components, each drawing only in its
      * shadow root: none of those trees was drawn, and a component inside one
      * was never upgraded, since only what was in the document was connected. */
+    {
+        load("<body><x-card id=h><span id=t slot=title>T</span><p>body</p><i slot=nowhere>gone</i></x-card>"
+             "<div id=plain><b>light</b></div><script>"
+             "var r = document.getElementById('h').attachShadow({ mode: 'open' });"
+             "r.innerHTML = '<h1 id=head data-zs=keep><slot name=title>fallback</slot></h1><div><slot></slot></div><slot name=none>kept</slot>'"
+             " + '<slot name=title>second</slot>';"
+             "</script></body>");
+        char err[128];
+        run_scripts(&page, err, (int)sizeof(err), 0);
+        int placed = flatten_page();
+        int h = dom_by_id(&page, "h"), t = dom_by_id(&page, "t"), head = -1;
+        for (int i = 0; i < flat.count; i++)
+            if (flat.nodes[i].kind == DN_ELEMENT && flat.nodes[i].tag == T_H1) head = i;
+        oks("a shadow tree a script attached is laid out in its element's place, each slot holding what was given to it",
+            shape_text(&flat, h), "x-card(h1(slot(span(\"T\"))) div(slot(p(\"body\"))) slot(\"kept\") slot(\"second\"))");
+        const char *zh = dom_attr(&flat, h, "data-zh"), *zs = head >= 0 ? dom_attr(&flat, head, "data-zs") : 0;
+        const char *zl = dom_attr(&flat, t, "data-zl");
+        ok("its element, what is in it and what went into its slots are marked for its sheets; the page is as it was",
+           placed == 1 && zh && zs && zl && zh[0] == 't' && zs[0] == 't' && zl[0] == 't'
+           && !dom_attr(&page, t, "data-zl") && !dom_attr(&page, h, "data-zh") && head >= 0
+           && same_text(dom_attr(&page, head, "data-zs") ? dom_attr(&page, head, "data-zs") : "", "keep")
+           && page.nodes[h].first == t && same_text(shape_text(&page, dom_by_id(&page, "plain")), "div(b(\"light\"))")
+           && same_text(shape_text(&flat, dom_by_id(&flat, "plain")), "div(b(\"light\"))"));
+    }
     oks("a component in a component's shadow root is upgraded and told it is connected, once",
         titled("<body><outer-el></outer-el><script>var log = [];"
                "var inner = function (n) { var e = document.createElement('inner-el'); e.setAttribute('n', n); return e; };"
@@ -2166,6 +2256,13 @@ int main(void) {
         jsdom_points_with(0);
         point_node = -1;
     }
+    oks("a sheet made for a component keeps its :host and ::slotted() rules",
+        titled("<body><script>var s = new CSSStyleSheet();"
+               "s.replaceSync(':host { display: block } ::slotted(em) { color: blue } :host(.wide) p, ::slotted(*) { margin: 0 } ::nonsense( { }');"
+               "var r = []; for (var i = 0; i < s.cssRules.length; i++) r.push(s.cssRules[i].selectorText);"
+               "s.insertRule('::slotted(p) { color: red }', 0); document.title = r.join('|') + ' ' + s.cssRules.length;</script></body>"),
+        ":host|::slotted(em)|:host(.wide) p, ::slotted(*) 4");
+
     oks("document.fonts is empty and loaded, and what it is asked to load comes to nothing at once",
         titled("<body><script>var f = document.fonts, got = 'waiting';"
                "f.ready.then(function (s) { return f.load('12px serif').then(function (l) { got = (s === f) + ' ' + l.length; }); })"

@@ -24,9 +24,8 @@
  * A sheet nobody reads costs nothing, and one only added to is never taken
  * apart.
  *
- * Not done: a shadow root's adopted sheets are kept and not applied (a
- * script's shadow trees are not drawn); an @import rule's own styleSheet is
- * null; a style is the text it was written as, so a shorthand is not
+ * A shadow root's adopted sheets are read for its tree (jsdom_shadow_adopted,
+ * browser.c). Not done: an @import rule's own styleSheet is null; a style is the text it was written as, so a shorthand is not
  * expanded into its longhands as a browser's is; and nested rules inside a
  * style rule are kept as written, not made into rules of their own. */
 #pragma once
@@ -219,10 +218,21 @@ static int jcs_read(const char *s, int len, int *at, jcs_raw *r, int ctx) {
 }
 
 /* Whether the style sheets' own parser reads a selector list, all of it
-   (css.h, as querySelector does, the sheet put back as it was after). */
+   (css.h, as querySelector does, the sheet put back as it was after). A
+   shadow tree's :host and ::slotted() are read as its sheet is written for
+   it (css_scope): the parser knows them only so, and a component's adopted
+   sheet lost every ::slotted rule. */
 static int jcs_selector_ok(const char *s, int len) {
     if (len <= 0) return 0;
     if (!jd_sheet) return 1;
+    static char scoped[1024];
+    int shadowy = 0;
+    for (int i = 0; i + 5 <= len && !shadowy; i++)
+        shadowy = s[i] == ':' && (w_starts_fold(s + i, ":host") || w_starts_fold(s + i, "::slotted("));
+    if (shadowy && len < (int)sizeof(scoped) / 2) {
+        len = css_scope_selectors(s, len, scoped, (int)sizeof(scoped), 0, "x");
+        s = scoped;
+    }
     int sels = jd_sheet->nsels, used = jd_sheet->used, over = jd_sheet->overflowed, negs = jd_sheet->nnegs;
     int at = 0, ok = 1, parts = 0;
     for (;;) {
@@ -612,16 +622,28 @@ static jobj *jcs_adopted_list(void) {
     return jd_document_obj ? jcs_obj(jd_document_obj, jcs_k_adopted) : 0;
 }
 
-/* Changes whenever what the browser should read for the page's sheets may
-   have: a sheet written out, one dropped, or the adopted list rearranged,
-   which a script can do by pushing onto the array it was handed. */
-__attribute__((unused)) static u32 jsdom_css_version(void) {
-    if (!jd_doc || !jd_open) return 0;
-    u32 v = jcs_version;
-    jobj *ad = jcs_adopted_list();
+/* The adopted list of the s-th shadow root a script attached (jsdom.h). */
+static jobj *jcs_shadow_adopted_list(int s) {
+    if (s < 0 || s >= jd_nshadow) return 0;
+    jobj *r = jd_element(&jd_J, jd_shadow_root[s]);
+    return r ? jcs_obj(r, jcs_k_adopted) : 0;
+}
+
+static u32 jcs_list_print(u32 v, jobj *ad) {
     for (u32 i = 0; ad && i < ad->len; i++)
         v = v * 31u + (ad->items[i].t == JS_OBJ ? (u32)(u64)ad->items[i].obj : 7u);
     return ad ? v * 31u + ad->len : v;
+}
+
+/* Changes whenever what the browser should read for the page's sheets may
+   have: a sheet written out, one dropped, or an adopted list rearranged --
+   the document's or a shadow root's -- which a script can do by pushing onto
+   the array it was handed. */
+__attribute__((unused)) static u32 jsdom_css_version(void) {
+    if (!jd_doc || !jd_open) return 0;
+    u32 v = jcs_list_print(jcs_version, jcs_adopted_list());
+    for (int s = 0; s < jd_nshadow; s++) v = jcs_list_print(v * 31u + (u32)s, jcs_shadow_adopted_list(s));
+    return v;
 }
 
 /* How often the tree has changed, for the browser to tell a
@@ -643,10 +665,9 @@ __attribute__((unused)) static int jsdom_sheet_override(int node, const char **t
     return 0;
 }
 
-/* The i-th of document.adoptedStyleSheets, or 0 past the last: what it
-   holds, which is nothing while it is disabled. */
-__attribute__((unused)) static int jsdom_adopted(int i, const char **text, int *len) {
-    jobj *ad = jd_doc && jd_open ? jcs_adopted_list() : 0;
+/* The i-th sheet of an adopted list, or 0 past the last: what it holds,
+   which is nothing while it is disabled. */
+static int jcs_adopted_at(jobj *ad, int i, const char **text, int *len, u32 *id) {
     if (!ad || i < 0 || (u32)i >= ad->len) return 0;
     *text = "";
     *len = 0;
@@ -658,7 +679,20 @@ __attribute__((unused)) static int jsdom_adopted(int i, const char **text, int *
     }
     if (k >= 0) jcs_rec_write(&jd_J, k);
     if (k >= 0 && jcs_rec[k].text) { *text = jcs_rec[k].text; *len = jcs_rec[k].len; }
+    if (id) *id = sh ? (u32)(u64)sh : 0;
     return 1;
+}
+
+/* The i-th of document.adoptedStyleSheets. */
+__attribute__((unused)) static int jsdom_adopted(int i, const char **text, int *len) {
+    return jd_doc && jd_open && jcs_adopted_at(jcs_adopted_list(), i, text, len, 0);
+}
+
+/* The i-th adopted sheet of the s-th shadow root a script attached, with a
+   number that is the sheet's own, so trees that adopt the same sheets can
+   share one reading of them (browser.c, trees_gather). */
+__attribute__((unused)) static int jsdom_shadow_adopted(int s, int i, const char **text, int *len, u32 *id) {
+    return jd_doc && jd_open && jcs_adopted_at(jcs_shadow_adopted_list(s), i, text, len, id);
 }
 
 __attribute__((unused)) static void jsdom_sheet_text_with(int (*fn)(const char *url, const char **text)) {

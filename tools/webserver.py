@@ -480,6 +480,54 @@ SHADOWED = b"""<!doctype html>
 </body></html>
 """
 
+# A component a script defines, drawn from the shadow tree it attaches: a
+# green band from the tree's adopted sheet, the page's element put into its
+# slot on a blue ground by ::slotted, a blue border from :host, and a second
+# green band from a component inside the tree. The paragraph outside has the
+# band's class, and stays plain unless the tree's sheet gets loose. Once the
+# page is drawn a script reads the band's style and the box of a component
+# with no box of its own, all of whose drawing is in its tree, and turns a
+# square teal if the one is the tree's green and the other holds the tree.
+COMPONENT = b"""<!doctype html>
+<html><head><title>a component</title>
+<style>body { font-family: sans-serif; padding: 24px } .band { height: 10px }</style></head>
+<body><h1>a component drawn from its shadow tree</h1>
+<x-panel><span class="tag">put into its slot</span></x-panel>
+<p class="band">outside it, and plain</p>
+<x-plain></x-plain>
+<div id="ok" style="width: 40px; height: 40px"></div>
+<script>
+setTimeout(function () {
+  var band = document.querySelector('x-panel').shadowRoot.querySelector('.band');
+  var plain = document.querySelector('x-plain').getBoundingClientRect();
+  if (getComputedStyle(band).backgroundColor === 'rgb(0, 176, 80)' && plain.height >= 50)
+    document.getElementById('ok').style.background = '#00b0b0';
+}, 300);
+var sheet = new CSSStyleSheet();
+sheet.replaceSync(':host { display: block; border: 6px solid #1d4ed8 } .band { background: #00b050; height: 60px }'
+  + ' ::slotted(.tag) { background: #1d4ed8; color: #ffffff }');
+customElements.define('x-part', class extends HTMLElement {
+  connectedCallback() {
+    this.attachShadow({ mode: 'open' }).innerHTML = '<style>b { display: block; height: 60px; background: #00b050 }</style><b></b>';
+  }
+});
+customElements.define('x-plain', class extends HTMLElement {
+  constructor() {
+    super();
+    this.attachShadow({ mode: 'open' }).innerHTML = '<style>div { height: 50px; background: #f0f0f0 }</style><div>drawn from its tree alone</div>';
+  }
+});
+customElements.define('x-panel', class extends HTMLElement {
+  constructor() {
+    super();
+    var r = this.attachShadow({ mode: 'open' });
+    r.adoptedStyleSheets = [sheet];
+    r.innerHTML = '<div class="band"></div><slot></slot><x-part></x-part>';
+  }
+});
+</script></body></html>
+"""
+
 # The same page pointing at something that is not there, so the words it
 # carries are what shows instead. That is what alt text is for, and a
 # browser that drew nothing at all would look identical to one that drew
@@ -881,6 +929,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.close_connection = True
         elif path == "/shadowed":
             self._send(SHADOWED)
+        elif path == "/component":
+            self._send(COMPONENT)
         elif path == "/long-page":
             self._send(LONG_PAGE)
         elif path == "/big-inline":
