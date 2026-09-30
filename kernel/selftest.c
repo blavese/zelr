@@ -4860,6 +4860,16 @@ static void test_layout(void) {
     layout_init();
     ok("and starting up empties it", !vfs_stat("/tmp/scratch", 0, 0));
 
+    /* A folder with something in it, first in the listing, used to stop the
+       emptying there, and everything after it stayed. */
+    vfs_mkdir("/tmp/deep");
+    vfs_mkdir("/tmp/deep/er");
+    vfs_write("/tmp/deep/er/left.txt", "x", 1);
+    vfs_write("/tmp/after.txt", "y", 1);
+    layout_empty_tmp();
+    ok("folders in /tmp go with what is in them", !vfs_stat("/tmp/deep", 0, 0));
+    ok("and so does what comes after them", !vfs_stat("/tmp/after.txt", 0, 0) && vfs_count("/tmp") == 0);
+
     vfs_delete("/home/kept");
 }
 

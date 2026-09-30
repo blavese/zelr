@@ -134,6 +134,9 @@ numbered files are still to 6048716; where they disagree with this list, this li
   never had, about one start in five (the gate's usb address check). One receive is now kept queued and
   asked about without waiting, and its completion wakes the network task, which had spun while idle.
   netcheck: the address, and the task asleep while nothing arrives (6 wakes in five seconds, was 178).
+- **/tmp emptied of folders (04 S19, layout.c).** One folder with anything in it at the front of /tmp kept
+  itself and everything after it; each entry now goes as a tree (`remove_tree`, eight levels) and one that
+  will not go is stepped past. [userspace]: two checks.
 - **The page's own background (11, layout.h, browser.c).** The html element's background, or else the
   body's, fills the whole window behind the page (`ldoc.canvas`), as CSS carries it to the canvas: a dark
   page was dark for the height of its words and white below. layouttest: three checks; browsercheck: a

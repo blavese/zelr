@@ -880,7 +880,7 @@ There is no `dir_drop_long`, unlike `fat_delete_file` (:1586). A long-named dire
 **S18. ".." lookup inside fat.c can never succeed** (fat.c:231-241 with 1258-1266, 1296-1304).
 `to_83("..")` yields `"        .  "`, which does not match the on-disk `"..         "`. `long_name_of` finds no LFN in front of it, so `dir_find(…, "..")` always fails. This is latent: `vfs_resolve` removes "." and ".." before FAT sees a path.
 
-**S19. `empty_tmp` gives up at the first non-empty subdirectory** (layout.c:71-75).
+**S19. FIXED in 0.76.0** -- each entry of /tmp goes as a tree, eight levels at most, and one that will not go is stepped past (`layout_empty_tmp`, `remove_tree`; [userspace]: a folder two deep first in /tmp and a file after it both go). The original finding: **`empty_tmp` gives up at the first non-empty subdirectory** (layout.c:71-75).
 It always looks at entry 0. If that entry is a non-empty directory, both delete and rmdir fail and the loop breaks, so nothing else in /tmp is removed. This contradicts "Files left there from last time are gone" (layout.c:66-67).
 
 **S20. FIXED in 0.42.0 (a volume without the "ZELR" OEM field is mounted as it is: no reclaim, no folders, no seed files, no emptying of TMP; `gpt_test.sh` has a GPT partition and an unpartitioned disk made by "MSDOS5.0", each with a lost chain and a TMP/KEEP.TXT, and checks that every byte outside the file it wrote is unchanged). It is still read-write: files written there are written. Foreign FAT partitions are adopted read-write** (a stated design choice, diskfs.c:16-17), with side effects the comments do not discuss:

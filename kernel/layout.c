@@ -64,16 +64,44 @@ static void write_marker(u32 generation) {
     if (n > 0) vfs_write(SEED_MARKER, buf, (u32)n);
 }
 
-/* /tmp means what it says. Files left there from last time are gone, which
-   is the only guarantee that makes a scratch directory worth having. */
-static void empty_tmp(void) {
+/* A path and everything under it. Eight levels at most: a scratch directory
+   holds what programs left there, not a tree to follow without end, and each
+   level costs a name and a path of stack. */
+static bool remove_tree(const char *path, u32 depth) {
+    bool dir = false;
+    if (!vfs_stat(path, 0, &dir)) return false;
+    if (!dir) return vfs_delete(path);
+    if (depth >= 8) return false;
+
     char name[VFS_NAME_MAX];
-    for (u32 guard = 0; guard < 256; guard++) {
-        if (vfs_list("/tmp", 0, name, 0, 0) != 1) break;
+    u32 at = 0;
+    for (u32 guard = 0; guard < 1024; guard++) {
+        if (vfs_list(path, at, name, 0, 0) != 1) break;
+        char sub[VFS_PATH_MAX];
+        kformat(sub, sizeof(sub), "%s/%s", path, name);
+        /* What will not go is stepped past, so the rest still does. */
+        if (!remove_tree(sub, depth + 1)) at++;
+    }
+    return vfs_rmdir(path);
+}
+
+/* /tmp means what it says. Files left there from last time are gone, which
+   is the only guarantee that makes a scratch directory worth having.
+ *
+ * It looked only ever at the first entry, deleting it or removing it as an
+ * empty directory, and stopped at the first that was neither: one folder
+ * with something in it at the front of /tmp kept everything behind it for
+ * ever. Each entry now goes as a tree, and one that will not go is stepped
+ * past. */
+void layout_empty_tmp(void) {
+    char name[VFS_NAME_MAX];
+    u32 at = 0;
+    for (u32 guard = 0; guard < 1024; guard++) {
+        if (vfs_list("/tmp", at, name, 0, 0) != 1) break;
 
         char path[VFS_PATH_MAX];
         kformat(path, sizeof(path), "/tmp/%s", name);
-        if (!vfs_delete(path) && !vfs_rmdir(path)) break;
+        if (!remove_tree(path, 0)) at++;
     }
 }
 
@@ -96,7 +124,7 @@ void layout_init(void) {
     for (u32 i = 0; i < N_DIRS; i++)
         if (!vfs_stat(DIRS[i], 0, 0)) vfs_mkdir(DIRS[i]);
 
-    empty_tmp();
+    layout_empty_tmp();
 
     seeded_through = read_marker();
 
