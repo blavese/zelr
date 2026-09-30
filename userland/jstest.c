@@ -1278,6 +1278,125 @@ int main(void) {
            " return [f(3), typeof u, g(1), h(), (function r() { return typeof r; })()].join(' '); })()",
            "done undefined number 2 function");
 
+    /* Intl, which GitHub and Spotify stopped at: English as the United States
+       writes it, numbers rounded as the browsers round them, and times in
+       the zones it knows. Each answer is what Chrome gives. */
+    expect("Intl.NumberFormat writes decimals, currencies, percents and units",
+           "(function(){ var f = function (o, x) { return new Intl.NumberFormat('en-US', o).format(x); };"
+           " return [f({}, 1234567.891), f({ style: 'currency', currency: 'USD' }, -1234.5),"
+           " encodeURIComponent(f({ style: 'currency', currency: 'EUR' }, 9.995)), encodeURIComponent(f({ style: 'currency', currency: 'JPY' }, 12345.6)),"
+           " f({ style: 'percent' }, 0.256), f({ maximumSignificantDigits: 3 }, 123456), f({ minimumFractionDigits: 2 }, 5),"
+           " (1.005).toLocaleString('en', { maximumFractionDigits: 2 }), (-0).toLocaleString(), f({ signDisplay: 'always' }, 3),"
+           " f({ signDisplay: 'exceptZero' }, 0), f({ style: 'currency', currency: 'USD', currencySign: 'accounting' }, -5),"
+           " f({ style: 'currency', currency: 'USD', currencyDisplay: 'name' }, 1), f({ style: 'currency', currency: 'USD', currencyDisplay: 'name' }, 2),"
+           " f({ style: 'currency', currency: 'CHF' }, 10).replace(/\\u00a0/, '_'), f({ style: 'unit', unit: 'kilometer-per-hour' }, 50),"
+           " f({ style: 'unit', unit: 'megabyte', unitDisplay: 'long' }, 1), f({ style: 'unit', unit: 'second', unitDisplay: 'narrow' }, 5),"
+           " f({ useGrouping: false }, 12345), f({ minimumIntegerDigits: 3 }, 7), f({}, NaN)].join('|'); })()",
+           "1,234,567.891|-$1,234.50|%E2%82%AC10.00|%C2%A512%2C346|26%|123,000|5.00|1.01|-0|+3|0|($5.00)|1.00 US dollars|2.00 US dollars|"
+           "CHF_10.00|50 km/h|1 megabyte|5s|12345|007|NaN");
+    expect("and compact, scientific and engineering notation, with its parts and what it resolved",
+           "(function(){ var c = new Intl.NumberFormat('en', { notation: 'compact' });"
+           " var l = new Intl.NumberFormat('en', { notation: 'compact', compactDisplay: 'long' });"
+           " var r = new Intl.NumberFormat('de-DE', { style: 'currency', currency: 'EUR' }).resolvedOptions();"
+           " return [[999, 1234, 12345, 123456, 1500000, 999999, 2e9].map(c.format).join(' '), l.format(2500000000),"
+           " new Intl.NumberFormat('en', { notation: 'scientific' }).format(123456), new Intl.NumberFormat('en', { notation: 'engineering' }).format(123456),"
+           " new Intl.NumberFormat().formatToParts(-1234.5).map(function (p) { return p.type + ':' + p.value; }).join(','),"
+           " r.locale, r.currency, r.minimumFractionDigits, r.maximumFractionDigits, r.style, r.useGrouping,"
+           " [1, 2, 3000].map(new Intl.NumberFormat().format).join(';'), new Intl.NumberFormat().formatRange(3, 5)].join('|'); })()",
+           "999 1.2K 12K 123K 1.5M 1M 2B|2.5 billion|1.235E5|123.456E3|minusSign:-,integer:1,group:,,integer:234,decimal:.,fraction:5|"
+           "en-US|EUR|2|2|currency|auto|1;2;3,000|3\xE2\x80\x93" "5");
+    expect("and refuses what it cannot do, as the standard says",
+           "(function(){ var r = []; var t = function (f) { try { f(); r.push('none'); } catch (e) { r.push(e.name); } };"
+           " t(function () { new Intl.NumberFormat('en', { style: 'currency' }); });"
+           " t(function () { new Intl.NumberFormat('not a tag!'); });"
+           " t(function () { new Intl.NumberFormat('en', { style: 'money' }); });"
+           " t(function () { new Intl.NumberFormat('en', { minimumFractionDigits: 3, maximumFractionDigits: 1 }); });"
+           " t(function () { Intl.NumberFormat.prototype.format.call({}, 1); });"
+           " return r.join(' '); })()",
+           "TypeError RangeError RangeError RangeError TypeError");
+    expect("Intl.DateTimeFormat writes a date and a time as en-US does, in its styles and parts",
+           "(function(){ var d = new Date(Date.UTC(2026, 8, 30, 19, 5, 3, 45));"
+           " var f = function (o) { return new Intl.DateTimeFormat('en-US', o).format(d); };"
+           " return [f(), d.toLocaleDateString(), d.toLocaleTimeString(), d.toLocaleString(),"
+           " ['full', 'long', 'medium', 'short'].map(function (s) { return f({ dateStyle: s, timeStyle: s }); }).join(' / '),"
+           " f({ month: 'long', day: 'numeric', year: 'numeric' }), f({ weekday: 'short', month: 'short', day: 'numeric' }),"
+           " f({ hour: 'numeric', minute: '2-digit' }), f({ hour: '2-digit', minute: '2-digit', hour12: false }),"
+           " f({ month: 'long', year: 'numeric' }), f({ hour: 'numeric', minute: '2-digit', second: '2-digit', fractionalSecondDigits: 2 }),"
+           " d.toLocaleDateString('en-US', { weekday: 'long' }), f({ year: '2-digit', month: '2-digit', day: '2-digit' })].join(' | '); })()",
+           "9/30/2026 | 9/30/2026 | 7:05:03 PM | 9/30/2026, 7:05:03 PM | "
+           "Wednesday, September 30, 2026 at 7:05:03 PM Coordinated Universal Time / September 30, 2026 at 7:05:03 PM UTC / "
+           "Sep 30, 2026, 7:05:03 PM / 9/30/26, 7:05 PM | September 30, 2026 | Wed, Sep 30 | 7:05 PM | 19:05 | September 2026 | "
+           "7:05:03.04 PM | Wednesday | 09/30/26");
+    expect("and in the time zones it knows, summer and winter",
+           "(function(){ var s = new Date(Date.UTC(2026, 8, 30, 19, 5)), w = new Date(Date.UTC(2026, 0, 15, 19, 5));"
+           " var f = function (z, d, o) { o = o || { hour: 'numeric', minute: 'numeric', timeZoneName: 'short' }; o.timeZone = z;"
+           " return new Intl.DateTimeFormat('en-US', o).format(d); };"
+           " return [f('America/New_York', s), f('America/New_York', w), f('america/los_angeles', w), f('Europe/Paris', s), f('Europe/London', w),"
+           " f('Europe/London', s), f('Australia/Sydney', s), f('Australia/Sydney', w), f('Asia/Kolkata', s), f('Pacific/Auckland', w),"
+           " f('UTC', s), f('Europe/Paris', s, { timeStyle: 'full' }), new Intl.DateTimeFormat().resolvedOptions().timeZone,"
+           " new Intl.DateTimeFormat('en', { timeZone: 'Mars/Olympus' }).resolvedOptions().timeZone,"
+           " (function () { try { new Intl.DateTimeFormat('en', { timeZone: 'Nowhere' }); return 'none'; } catch (e) { return e.name; } })()].join(' | '); })()",
+           "3:05 PM EDT | 2:05 PM EST | 11:05 AM PST | 9:05 PM GMT+2 | 7:05 PM GMT | 8:05 PM GMT+1 | 5:05 AM GMT+10 | "
+           "6:05 AM GMT+11 | 12:35 AM GMT+5:30 | 8:05 AM GMT+13 | 7:05 PM UTC | 9:05:00 PM Central European Summer Time | UTC | UTC | RangeError");
+    expect("and its parts, ranges and resolved options",
+           "(function(){ var d = new Date(Date.UTC(2026, 8, 30, 19, 5)), e = new Date(Date.UTC(2026, 9, 2));"
+           " var f = new Intl.DateTimeFormat('en', { year: 'numeric', month: 'short', day: 'numeric' }), r = f.resolvedOptions();"
+           " return [f.formatToParts(d).map(function (p) { return p.type + ':' + p.value; }).join(','),"
+           " encodeURIComponent(f.formatRange(d, e)), f.formatRange(d, d), r.locale, r.calendar, r.timeZone, r.month, r.year,"
+           " [d, e].map(f.format).join(';'), Object.prototype.toString.call(f)].join(' | '); })()",
+           "month:Sep,literal: ,day:30,literal:, ,year:2026 | Sep%2030%2C%202026%E2%80%89%E2%80%93%E2%80%89Oct%202%2C%202026 | "
+           "Sep 30, 2026 | en-US | gregory | UTC | short | numeric | Sep 30, 2026;Oct 2, 2026 | [object Intl.DateTimeFormat]");
+    expect("Intl.PluralRules and Intl.RelativeTimeFormat speak English",
+           "(function(){ var p = new Intl.PluralRules('en'), o = new Intl.PluralRules('en', { type: 'ordinal' });"
+           " var r = new Intl.RelativeTimeFormat('en'), a = new Intl.RelativeTimeFormat('en', { numeric: 'auto' });"
+           " return [[0, 1, 1.5, 2].map(function (n) { return p.select(n); }).join(','), new Intl.PluralRules('en', { minimumFractionDigits: 1 }).select(1),"
+           " [1, 2, 3, 4, 11, 12, 13, 21, 22, 23, 101, 111].map(function (n) { return o.select(n); }).join(','),"
+           " o.resolvedOptions().pluralCategories.join(','), r.format(3, 'day'), r.format(-1, 'day'), r.format(-2, 'hours'), r.format(1000, 'year'),"
+           " a.format(-1, 'day'), a.format(1, 'day'), a.format(0, 'day'), a.format(-1, 'year'), a.format(0, 'second'), a.format(1, 'month'),"
+           " new Intl.RelativeTimeFormat('en', { style: 'short' }).format(-5, 'minute'), new Intl.RelativeTimeFormat('en', { style: 'narrow' }).format(3, 'day'),"
+           " r.formatToParts(-2, 'week').map(function (x) { return x.type + ':' + x.value + (x.unit ? '/' + x.unit : ''); }).join(',')].join(' | '); })()",
+           "other,one,other,other | other | one,two,few,other,other,other,other,one,two,few,one,other | few,one,two,other | "
+           "in 3 days | 1 day ago | 2 hours ago | in 1,000 years | yesterday | tomorrow | today | last year | now | next month | "
+           "5 min. ago | in 3d | integer:2/week,literal: weeks ago");
+    expect("Intl.Collator sorts as a reader expects: letters, then accents, then case, lower first",
+           "(function(){ var c = new Intl.Collator();"
+           " return [encodeURIComponent(['b', 'A', 'a', 'B', '\\u00e9', 'e', 'E', '\\u00c9', 'z', '\\u00e6', 'ae', '10', '9', '_x'].sort(c.compare).join(' ')),"
+           " ['item10', 'item9', 'item1'].sort(new Intl.Collator('en', { numeric: true }).compare).join(' '),"
+           " 'a'.localeCompare('A'), 'a'.localeCompare('b'), 'r\\u00e9sum\\u00e9'.localeCompare('resume'),"
+           " 'r\\u00e9sum\\u00e9'.localeCompare('Resume', undefined, { sensitivity: 'base' }),"
+           " 'r\\u00e9sum\\u00e9'.localeCompare('R\\u00e9sum\\u00e9', 'en', { sensitivity: 'accent' }),"
+           " 'e\\u0301'.localeCompare('\\u00e9', 'en', { sensitivity: 'base' }), '\\u00df'.localeCompare('ss', 'de', { sensitivity: 'base' }),"
+           " ['a', 'A'].sort(new Intl.Collator('en', { caseFirst: 'upper' }).compare).join(''),"
+           " new Intl.Collator('en', { ignorePunctuation: true }).compare('a-b', 'ab'), new Intl.Collator().resolvedOptions().sensitivity].join(' | '); })()",
+           "_x%2010%209%20a%20A%20ae%20%C3%A6%20b%20B%20e%20E%20%C3%A9%20%C3%89%20z | item1 item9 item10 | -1 | -1 | 1 | 0 | 0 | 0 | 0 | Aa | 0 | variant");
+    expect("Intl.ListFormat joins with and, or and commas as English does",
+           "(function(){ var f = function (o, l) { return new Intl.ListFormat('en', o).format(l); };"
+           " return [f({}, ['a', 'b', 'c']), f({}, ['a', 'b']), f({}, ['a']), f({}, []), f({ type: 'disjunction' }, ['a', 'b', 'c']),"
+           " f({ style: 'short' }, ['a', 'b', 'c']), f({ style: 'narrow' }, ['a', 'b', 'c']), f({ type: 'unit' }, ['a', 'b']),"
+           " f({ type: 'unit', style: 'narrow' }, ['a', 'b', 'c']),"
+           " new Intl.ListFormat('en').formatToParts(['x', 'y']).map(function (p) { return p.type + ':' + p.value; }).join(','),"
+           " (function () { try { f({}, [1]); return 'none'; } catch (e) { return e.name; } })()].join(' | '); })()",
+           "a, b, and c | a and b | a |  | a, b, or c | a, b, & c | a, b, c | a, b | a b c | element:x,literal: and ,element:y | TypeError");
+    expect("Intl.Segmenter finds characters, words and sentences",
+           "(function(){ var g = new Intl.Segmenter(), w = new Intl.Segmenter('en', { granularity: 'word' });"
+           " var s = new Intl.Segmenter('en', { granularity: 'sentence' });"
+           " var words = Array.from(w.segment(\"Hello, world! It's 3.14 now.\"));"
+           " return [Array.from(g.segment('ae\\u0301b')).length, Array.from(g.segment('\\ud83d\\udc4d\\ud83c\\udffd!')).length,"
+           " words.filter(function (x) { return x.isWordLike; }).map(function (x) { return x.segment; }).join('/'), words.length,"
+           " Array.from(s.segment('One. Two! Three')).map(function (x) { return x.segment; }).join('|'),"
+           " w.segment('ab cd').containing(3).segment, w.segment('ab cd').containing(3).index].join(' | '); })()",
+           "3 | 2 | Hello/world/It's/3.14/now | 12 | One. |Two! |Three | cd | 3");
+    expect("and Intl says it has one locale, names things in English, and lists what it knows",
+           "(function(){ var l = new Intl.Locale('EN-latn-us');"
+           " return [l.toString(), l.language, l.script, l.region, new Intl.Locale('fr').maximize().toString(),"
+           " Intl.getCanonicalLocales(['EN-us', 'zh-hant-TW']).join(','), Intl.DateTimeFormat.supportedLocalesOf(['fr', 'en-GB', 'de']).join(','),"
+           " new Intl.NumberFormat('fr-FR').resolvedOptions().locale, new Intl.DisplayNames(['en'], { type: 'region' }).of('US'),"
+           " new Intl.DisplayNames(['en'], { type: 'language' }).of('en-GB'), new Intl.DisplayNames(['en'], { type: 'currency' }).of('EUR'),"
+           " new Intl.DisplayNames(['en'], { type: 'language' }).of('de-AT'), Intl.supportedValuesOf('calendar').join(','),"
+           " Intl.supportedValuesOf('timeZone').indexOf('Europe/Paris') >= 0, Object.prototype.toString.call(Intl)].join(' | '); })()",
+           "en-Latn-US | en | Latn | US | fr-Latn-FR | en-US,zh-Hant-TW | en-GB | en-US | United States | British English | Euro | "
+           "German (Austria) | gregory | true | [object Intl]");
+
     /* Which value it was that had nothing to read, when that is a name or a
        chain of them: a bundle on one line said only "at line 1". */
     expect("reading from undefined says which value it was",

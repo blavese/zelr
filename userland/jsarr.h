@@ -1059,19 +1059,16 @@ static jval nat_str_repeat(jctx *J, jval t, jval *a, int n) {
     return js_from_str(jt_done(J, &o));
 }
 
+static jval intl_locale_compare(jctx *J, jstr *x, jstr *y, jval locales, jval opts);
+
+/* As an Intl.Collator of its options compares (jsintl.h): letters before
+   their accents before their case, lower case first. */
 static jval nat_str_localecompare(jctx *J, jval t, jval *a, int n) {
-    jstr *x = js_this_str(J, t, "localeCompare"), *y = js_to_str(J, js_arg(a, n, 0));
-    u32 m = x->len < y->len ? x->len : y->len;
-    for (u32 i = 0; i < m; i++) {
-        u8 c = (u8)x->s[i], d = (u8)y->s[i];
-        /* Case folded first, as a person reading a sorted list expects. */
-        u8 fc = c >= 'A' && c <= 'Z' ? (u8)(c + 32) : c, fd = d >= 'A' && d <= 'Z' ? (u8)(d + 32) : d;
-        if (fc != fd) return js_num(fc < fd ? -1 : 1);
-    }
-    if (x->len != y->len) return js_num(x->len < y->len ? -1 : 1);
-    for (u32 i = 0; i < m; i++)
-        if (x->s[i] != y->s[i]) return js_num((u8)x->s[i] > (u8)y->s[i] ? -1 : 1);
-    return js_num(0);
+    jstr *x = js_this_str(J, t, "localeCompare");
+    if (!x || J->sig != JS_OK) return js_undef();
+    jstr *y = js_to_str(J, js_arg(a, n, 0));
+    if (!y || J->sig != JS_OK) return js_undef();
+    return intl_locale_compare(J, x, y, js_arg(a, n, 1), js_arg(a, n, 2));
 }
 
 static jval nat_str_normalize(jctx *J, jval t, jval *a, int n) {

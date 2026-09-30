@@ -1287,31 +1287,14 @@ static jval nat_num_valueof(jctx *J, jval t, jval *a, int n) {
     return js_num(x);
 }
 
-/* The way en-US writes a number: commas between thousands and at most three
-   places. There is no locale here but that one. */
+static jval intl_number_text(jctx *J, double x, jval locales, jval opts);
+
+/* Through a NumberFormat of its options (jsintl.h): the way en-US writes a
+   number, commas between thousands and at most three places by default. */
 static jval nat_num_tolocalestring(jctx *J, jval t, jval *a, int n) {
-    (void)a; (void)n;
     double x;
     if (!js_this_num(J, t, &x)) return js_undef();
-    if (x != x || x - x != 0) return js_from_str(js_to_str(J, js_num(x)));
-    jval three = js_num(3);
-    jval fixed = nat_num_tofixed(J, js_num(x < 0 ? -x : x), &three, 1);
-    if (J->sig != JS_OK) return js_undef();
-    jstr *s = fixed.str;
-    u32 dot = 0;
-    while (dot < s->len && s->s[dot] != '.') dot++;
-    u32 end = s->len;
-    while (end > dot + 1 && s->s[end - 1] == '0') end--;
-    if (end == dot + 1) end = dot;
-    char out[400];
-    int w = 0;
-    if (x < 0) out[w++] = '-';
-    for (u32 i = 0; i < dot; i++) {
-        if (i && (dot - i) % 3 == 0) out[w++] = ',';
-        out[w++] = s->s[i];
-    }
-    for (u32 i = dot; i < end && w < 399; i++) out[w++] = s->s[i];
-    return js_from_str(js_str_n(J, out, (u32)w));
+    return intl_number_text(J, x, js_arg(a, n, 0), js_arg(a, n, 1));
 }
 
 static int js_is_int(double d) { return d == d && d - d == 0 && js_trunc(d) == d; }
@@ -2431,6 +2414,7 @@ static jval nat_unescape(jctx *J, jval t, jval *a, int n) { (void)t; return js_u
 #include "jsprom.h"
 #include "jstyped.h"
 #include "jsproxy.h"
+#include "jsintl.h"
 
 /* --- setting it all up ------------------------------------------------------ */
 
@@ -2668,6 +2652,7 @@ static void js_globals(jctx *J) {
     js_setup_dates(J);
     js_setup_typed(J);
     js_setup_text(J);
+    js_setup_intl(J);
 
     js_declare_flags(J, g, js_str(J, "NaN"), js_num(js_nan()), 0);
     js_declare_flags(J, g, js_str(J, "Infinity"), js_num(1e308 * 10), 0);

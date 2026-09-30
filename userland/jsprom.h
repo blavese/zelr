@@ -1324,8 +1324,12 @@ static jval nat_date_tostring(jctx *J, jval t, jval *a, int n) {
 
 #define JS_DATE_TEXT(nm, k) static jval nat_date_##nm(jctx *J, jval t, jval *a, int n) { (void)a; (void)n; return js_date_text(J, t, k); }
 JS_DATE_TEXT(todatestring, 1) JS_DATE_TEXT(totimestring, 2) JS_DATE_TEXT(toutcstring, 3)
-JS_DATE_TEXT(toisostring, 4) JS_DATE_TEXT(tolocaledate, 5) JS_DATE_TEXT(tolocaletime, 6)
-JS_DATE_TEXT(tolocale, 7)
+JS_DATE_TEXT(toisostring, 4)
+
+/* The locale forms, through a DateTimeFormat of their options (jsintl.h). */
+static jval intl_date_text(jctx *J, double t, jval locales, jval opts, int shape);
+#define JS_DATE_LOCALE(nm, k) static jval nat_date_##nm(jctx *J, jval t, jval *a, int n) {     int ok; double tv = js_this_time(J, t, &ok); if (!ok) return js_undef();     return intl_date_text(J, tv, js_arg(a, n, 0), js_arg(a, n, 1), k); }
+JS_DATE_LOCALE(tolocaledate, 5) JS_DATE_LOCALE(tolocaletime, 6) JS_DATE_LOCALE(tolocale, 7)
 
 static jval nat_date_tojson(jctx *J, jval t, jval *a, int n) {
     (void)a; (void)n;
