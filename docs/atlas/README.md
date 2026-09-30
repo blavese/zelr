@@ -95,7 +95,7 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
-### 0.76.0 (in progress)
+### 0.76.0
 
 - **The document and window layer (11, 12; jsdom.h and the new jsnet.h, jsobs.h, jsurl.h, jswalk.h,
   jswin.h).** A page's nodes as the standard's objects (Node, Element, the interface prototypes, custom
