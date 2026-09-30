@@ -1246,6 +1246,12 @@ int main(void) {
            " for (var i = 0; i < 200; i++) s += ']'; var a = eval(s);"
            " for (var i = 0; i < 199; i++) a = a[0]; return a[0]; })()", "1");
 
+    /* \u escapes in names are their letters: GitHub's hotkey module is
+       written with them, and "an escape in a name is not read here". */
+    expect("a name written with escapes is the name",
+           "(function(){ var \\u0061bc = 1, x\\u{62} = 2, o = { \\u0066oo: 3 }; return [abc, xb, o.foo].join(' '); })()",
+           "1 2 3");
+
     /* Which value it was that had nothing to read, when that is a name or a
        chain of them: a bundle on one line said only "at line 1". */
     expect("reading from undefined says which value it was",

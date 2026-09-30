@@ -528,8 +528,25 @@ static void js_next(jlex *L) {
     /* --- a name or a word ------------------------------------------------- */
     if (js_alpha(c) || (c == '\\' && L->at + 1 < L->n && L->src[L->at + 1] == 'u')) {
         u32 start = L->at;
+        int escaped = 0;
         while (L->at < L->n) {
             char d = L->src[L->at];
+            /* A or \u{41} in a name is the letter: GitHub's hotkey
+               module is written with them. Stepped over here and decoded
+               below. */
+            if (d == '\\' && L->at + 1 < L->n && L->src[L->at + 1] == 'u') {
+                u32 k = L->at + 2;
+                if (k < L->n && L->src[k] == '{') {
+                    while (k < L->n && L->src[k] != '}') k++;
+                    k++;
+                } else {
+                    k += 4;
+                }
+                if (k > L->n) break;
+                L->at = k;
+                escaped = 1;
+                continue;
+            }
             if ((unsigned char)d >= 0x80) {
                 int nl;
                 if (js_wide_space(L->src + L->at, L->n - L->at, &nl)) break;
@@ -547,6 +564,31 @@ static void js_next(jlex *L) {
         }
         L->tok.text = L->src + start;
         L->tok.len = L->at - start;
+        if (escaped) {
+            /* The name as its letters, in a string of its own that the token
+               points at; the source goes on from where the name ended. */
+            char buf[256];
+            u32 w = 0;
+            for (u32 i = start; i < L->at && w < sizeof(buf) - 4; ) {
+                if (L->src[i] == '\\' && i + 1 < L->at && L->src[i + 1] == 'u') {
+                    u32 cp = 0;
+                    i += 2;
+                    if (i < L->at && L->src[i] == '{') {
+                        for (i++; i < L->at && L->src[i] != '}'; i++)
+                            if (js_hexval(L->src[i]) >= 0) cp = cp * 16 + (u32)js_hexval(L->src[i]);
+                        i++;
+                    } else {
+                        for (int h = 0; h < 4 && i < L->at; h++, i++)
+                            if (js_hexval(L->src[i]) >= 0) cp = cp * 16 + (u32)js_hexval(L->src[i]);
+                    }
+                    w += js_utf8(cp, buf + w);
+                } else {
+                    buf[w++] = L->src[i++];
+                }
+            }
+            jstr *s = js_str_n(L->J, buf, w);
+            if (s) { L->tok.text = s->s; L->tok.len = s->len; }
+        }
 
         for (int i = 0; JS_UNSUPPORTED[i]; i++) {
             if (js_is_word(L->tok.text, L->tok.len, JS_UNSUPPORTED[i])) {
