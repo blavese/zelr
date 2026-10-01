@@ -392,3 +392,10 @@ builtin_play_end:
 builtin_h264test_start:
 .incbin "build/user/h264test.elf"
 builtin_h264test_end:
+
+.balign 4
+.global builtin_mediatest_start
+.global builtin_mediatest_end
+builtin_mediatest_start:
+.incbin "build/user/mediatest.elf"
+builtin_mediatest_end:

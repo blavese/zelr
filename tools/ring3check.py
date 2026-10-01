@@ -53,6 +53,7 @@ SUITES = [
     ("webptest",  "WEBPTEST_PASS",  "webp pictures, made by another encoder", 240),
     ("aactest",   "AACTEST_PASS",   "aac sound, made by another encoder", 240),
     ("h264test",  "H264TEST_PASS",  "h.264 pictures, made by another encoder", 300),
+    ("mediatest", "MEDIATEST_PASS", "a film appended as a page appends it, played in order", 300),
 ]
 
 

@@ -745,7 +745,7 @@ static int aac_decode(aac_dec *d, const u8 *data, int n, short *pcm) {
    rate and the channels. 0 when this is not one. */
 typedef struct { int frame_len, header_len, sfi, channels, profile; } aac_adts;
 
-static int aac_adts_read(const u8 *p, int n, aac_adts *h) {
+__attribute__((unused)) static int aac_adts_read(const u8 *p, int n, aac_adts *h) {
     if (n < 7 || p[0] != 0xFF || (p[1] & 0xF6) != 0xF0) return 0;
     int protection_absent = p[1] & 1;
     h->profile = (p[2] >> 6) + 1;                /* the object type: 2 is low complexity */
