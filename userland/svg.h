@@ -834,7 +834,7 @@ static inline int sv_shape(const ddoc *d, int el, svmat m, svpath *path) {
 
 /* One shape filled and stroked as it and what it sits in say: how many
    times it painted. */
-static inline int sv_paint(const ddoc *doc, int el, int root, const svpath *path, svcanvas *cv, float sc) {
+static inline int sv_paint(const ddoc *doc, int el, int root, const svpath *path, svcanvas *cv, svmat m) {
     int drawn = 0;
     u32 fill = 0x000000;
     int has_fill;
@@ -871,7 +871,11 @@ static inline int sv_paint(const ddoc *doc, int el, int root, const svpath *path
     u32 stroke = 0;
     const char *sv = sv_inherit(doc, el, root, "stroke");
     if (sv && sv_paint_value(sv, &stroke)) {
-        float sw = sv_inherit_num(doc, el, root, "stroke-width", 1.0f) * sc;
+        /* Scaled as the shape is, by everything it sits in and not by the
+           drawing's own scale alone: an icon drawn small through a
+           scale(0.5) had strokes twice as thick as it should. */
+        float det = m.a * m.d - m.b * m.c;
+        float sw = sv_inherit_num(doc, el, root, "stroke-width", 1.0f) * sv_sqrt(det < 0 ? -det : det);
         float so = sv_inherit_num(doc, el, root, "stroke-opacity", 1.0f) * opacity;
         if (so > 0.004f) {
             sv_stroke(cv, path, stroke, sw, so > 1 ? 1 : so);
@@ -887,7 +891,7 @@ static inline int sv_paint(const ddoc *doc, int el, int root, const svpath *path
    written: a page full of <svg><use href="#icon"/></svg> drew nothing. One
    level: a use inside what is used is not followed. */
 static inline int sv_use(const ddoc *doc, int use, int root, svmat m, svpath *path, svcanvas *cv,
-                         float sc, float vw, float vh) {
+                         float vw, float vh) {
     if (sv_use_at >= 0) return 0;
     const char *href = dom_attr(doc, use, "href");
     if (!href) href = dom_attr(doc, use, "xlink:href");
@@ -935,7 +939,7 @@ static inline int sv_use(const ddoc *doc, int use, int root, svmat m, svpath *pa
             if (!(symbol && chain[i] == target)) em = sv_transform(doc, chain[i], em);
         if (w_same_fold(dom_tag_name(doc, el), "use")) continue;
         if (!sv_shape(doc, el, em, path)) continue;
-        drawn += sv_paint(doc, el, root, path, cv, sc);
+        drawn += sv_paint(doc, el, root, path, cv, em);
     }
     sv_use_top = sv_use_at = -1;
     return drawn;
@@ -1027,11 +1031,11 @@ static inline int svg_render_tree(const ddoc *doc, int root, int want_w, int wan
         for (int i = n - 1; i >= 0; i--) m = sv_transform(doc, chain[i], m);
 
         if (w_same_fold(dom_tag_name(doc, el), "use")) {
-            drawn += sv_use(doc, el, root, m, path, &cv, sc, vw, vh);
+            drawn += sv_use(doc, el, root, m, path, &cv, vw, vh);
             continue;
         }
         if (!sv_shape(doc, el, m, path)) continue;
-        drawn += sv_paint(doc, el, root, path, &cv, sc);
+        drawn += sv_paint(doc, el, root, path, &cv, m);
     }
     (void)depth;
     (void)stack;

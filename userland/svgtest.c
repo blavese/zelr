@@ -410,6 +410,16 @@ int main(void) {
            rc == SVG_OK && isred(at(20, 10)) && iswhite(at(20, 25)) && isred(at(33, 33)) && iswhite(at(27, 33)));
     }
 
+    /* A stroke's width is scaled by the transforms around it: a 4 wide line
+       drawn at half size is 2 wide. */
+    {
+        int rc = draw("<svg width='40' height='40'><g transform='scale(0.5)'>"
+                      "<line x1='0' y1='40' x2='80' y2='40' stroke='red' stroke-width='4'/></g></svg>", 40, 40);
+        int tall = 0;
+        for (int y = 14; y < 26; y++) if (isred(at(20, y))) tall++;
+        okn("a stroke is as wide as the transforms around it make it", rc == SVG_OK && tall >= 1 && tall <= 3, tall);
+    }
+
     puts(failed ? "SVGTEST_FAIL\n" : "SVGTEST_PASS\n");
     return failed;
 }
