@@ -385,3 +385,10 @@ builtin_aactest_end:
 builtin_play_start:
 .incbin "build/user/play.elf"
 builtin_play_end:
+
+.balign 4
+.global builtin_h264test_start
+.global builtin_h264test_end
+builtin_h264test_start:
+.incbin "build/user/h264test.elf"
+builtin_h264test_end:

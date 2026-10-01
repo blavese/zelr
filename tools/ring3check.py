@@ -52,6 +52,7 @@ SUITES = [
     ("giftest",   "GIFTEST_PASS",   "gif pictures, made by another encoder", 120),
     ("webptest",  "WEBPTEST_PASS",  "webp pictures, made by another encoder", 240),
     ("aactest",   "AACTEST_PASS",   "aac sound, made by another encoder", 240),
+    ("h264test",  "H264TEST_PASS",  "h.264 pictures, made by another encoder", 300),
 ]
 
 
