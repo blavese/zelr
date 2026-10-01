@@ -1714,6 +1714,16 @@ int main(void) {
            " try { Proxy({}, {}); out.push('made'); } catch (e) { out.push(e instanceof TypeError); }"
            " return out.join(' '); })()", "1 true true");
 
+    /* An array kept no holes: [1, , 3] had an element at 1, and a write past
+       the end filled the gap, so `in`, the keys and forEach all found them. */
+    expect("an array keeps its holes: not in it, not among its keys, skipped by forEach, undefined when read",
+           "(function(){ var a = [1, , 3], b = [1]; b[4] = 5; var c = new Array(3), d = [1, 2, 3]; delete d[1];"
+           " var e = [0]; e.length = 3; var seen = []; b.forEach(function (x, i) { seen.push(i); });"
+           " return [1 in a, String(a[1]), a.length, Object.keys(b).join(), seen.join(), 0 in c, c.length, 1 in d, d.length, 2 in e,"
+           " JSON.stringify(a), a.map(function (x) { return x * 2; }).join('|'), 1 in a.map(String), [...a].join('|'),"
+           " a.indexOf(undefined), a.includes(undefined), Object.values([4, , 6]).join(), String(a), b.hasOwnProperty(2)].join(' '); })()",
+           "false undefined 3 0,4 0,4 false 3 false 3 false [1,null,3] 2||6 false 1||3 -1 true 4,6 1,,3 false");
+
     /* --- the collector (jsgc.h) ---------------------------------------------------------
      *
      * Nothing was given back but a call's own scope, and a page ran out when

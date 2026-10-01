@@ -356,6 +356,7 @@ static jobj *js_own_enum(jctx *J, jval v, int what) {
     if (o->kind == JO_ARRAY || o->kind == JO_ARGS || o->kind == JO_TYPED) {
         u32 len = o->kind == JO_TYPED ? js_ta_length(o) : o->len;
         for (u32 i = 0; i < len; i++) {
+            if (o->kind != JO_TYPED && o->items[i].t == JS_HOLE) continue;
             jval k = js_from_str(js_to_key(J, js_num(i)));
             jval v = o->kind == JO_TYPED ? js_ta_get(J, o, i) : o->items[i];
             if (what == 0) js_arr_push(J, out, k);
@@ -404,7 +405,8 @@ static jval nat_obj_assign(jctx *J, jval t, jval *a, int n) {
         if (!js_is_obj(from)) continue;
         jobj *src = from.obj;
         if (src->kind == JO_ARRAY || src->kind == JO_ARGS)
-            for (u32 k = 0; k < src->len; k++) js_put(J, tv, js_to_key(J, js_num(k)), src->items[k]);
+            for (u32 k = 0; k < src->len; k++)
+                if (src->items[k].t != JS_HOLE) js_put(J, tv, js_to_key(J, js_num(k)), src->items[k]);
         jprop **own;
         u32 nown = js_keys_of(J, src, &own, JK_ENUM | JK_STR | JK_SYM);
         for (u32 k = 0; k < nown && J->sig == JS_OK; k++)
@@ -663,7 +665,8 @@ static jval nat_obj_getownpropdescs(jctx *J, jval t, jval *a, int n) {
     if (!js_is_obj(o) || !out) return js_from_obj(out);
     if (o.obj->kind == JO_ARRAY)
         for (u32 i = 0; i < o.obj->len; i++)
-            js_put_prop(J, out, js_to_key(J, js_num(i)), js_from_obj(js_descriptor(J, o.obj->items[i], JP_PLAIN)));
+            if (o.obj->items[i].t != JS_HOLE)
+                js_put_prop(J, out, js_to_key(J, js_num(i)), js_from_obj(js_descriptor(J, o.obj->items[i], JP_PLAIN)));
     jprop **own;
     u32 nown = js_keys_of(J, o.obj, &own, JK_STR | JK_SYM);
     for (u32 i = 0; i < nown; i++)
@@ -682,7 +685,8 @@ static jval js_own_names(jctx *J, jval o, int want) {
     if (!js_is_obj(o)) return js_from_obj(out);
     jobj *ob = o.obj;
     if ((want & JK_STR) && (ob->kind == JO_ARRAY || ob->kind == JO_ARGS)) {
-        for (u32 i = 0; i < ob->len; i++) js_arr_push(J, out, js_from_str(js_to_key(J, js_num(i))));
+        for (u32 i = 0; i < ob->len; i++)
+            if (ob->items[i].t != JS_HOLE) js_arr_push(J, out, js_from_str(js_to_key(J, js_num(i))));
         js_arr_push(J, out, js_from_str(J->s_length));
     }
     /* A function's length and name are read from the function itself
@@ -771,7 +775,7 @@ static int js_list_from(jctx *J, jval v, jargs *A) {
     }
     jobj *o = v.obj;
     if (o->kind == JO_ARRAY || o->kind == JO_ARGS) {
-        for (u32 i = 0; i < o->len; i++) if (!js_args_push(J, A, o->items[i])) return 0;
+        for (u32 i = 0; i < o->len; i++) if (!js_args_push(J, A, js_item(o, i))) return 0;
         return 1;
     }
     double len = js_to_num(J, js_get(J, v, J->s_length));
@@ -808,7 +812,7 @@ static jval nat_fn_bound(jctx *J, jval t, jval *a, int n) {
     jargs A;
     js_args_init(&A);
     jobj *pre = self->extra;
-    if (pre) for (u32 i = 0; i < pre->len; i++) js_args_push(J, &A, pre->items[i]);
+    if (pre) for (u32 i = 0; i < pre->len; i++) js_args_push(J, &A, js_item(pre, i));
     for (int i = 0; i < n; i++) js_args_push(J, &A, a[i]);
     jval r;
     if (nt.t != JS_UNDEF) r = js_construct(J, fn, A.v, A.n, js_is_obj(nt) && nt.obj == self ? fn : nt);
@@ -1956,7 +1960,7 @@ static int js_json_value(jctx *J, jjson *S, jval holder, jstr *key, jval v) {
         for (u32 i = 0; i < ob->len; i++) {
             if (i) jt_put(J, &S->out, ",", 1);
             js_json_newline(J, S);
-            int r = js_json_value(J, S, v, js_to_key(J, js_num(i)), ob->items[i]);
+            int r = js_json_value(J, S, v, js_to_key(J, js_num(i)), js_item(ob, i));
             if (r < 0) return -1;
             if (r == 0) jt_put(J, &S->out, "null", 4);
         }
@@ -1999,7 +2003,7 @@ static jval nat_json_stringify(jctx *J, jval t, jval *a, int n) {
     else if (js_is_obj(rep) && rep.obj->kind == JO_ARRAY) {
         S->allow = js_array(J);
         for (u32 i = 0; i < rep.obj->len; i++) {
-            jval e = js_unbox(rep.obj->items[i]);
+            jval e = js_unbox(js_item(rep.obj, i));
             if (e.t == JS_STR || e.t == JS_NUM) js_arr_push(J, S->allow, js_from_str(js_to_key(J, e)));
         }
     }

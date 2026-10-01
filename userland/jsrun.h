@@ -593,7 +593,7 @@ static int js_exotic_get(jctx *J, jobj *o, jstr *key, jval *out) {
     switch (o->kind) {
         case JO_ARRAY: case JO_ARGS:
             if (js_index_of(key, &idx)) {
-                if (idx < o->len) { *out = o->items[idx]; return 1; }
+                if (idx < o->len && o->items[idx].t != JS_HOLE) { *out = o->items[idx]; return 1; }
                 return 0;
             }
             if (js_str_eq(key, J->s_length)) { *out = js_num((double)o->len); return 1; }
@@ -785,7 +785,7 @@ static jval js_get_str(jctx *J, jval target, const char *name) {
 /* The same read, from an index. */
 static jval js_get_index(jctx *J, jval target, u32 i) {
     if (target.t == JS_OBJ && target.obj && (target.obj->kind == JO_ARRAY || target.obj->kind == JO_ARGS)
-        && i < target.obj->len)
+        && i < target.obj->len && target.obj->items[i].t != JS_HOLE)
         return target.obj->items[i];
     return js_get(J, target, js_to_key(J, js_num((double)i)));
 }
@@ -820,7 +820,7 @@ static void js_set_length(jctx *J, jobj *o, jval v) {
     }
     u32 want = (u32)d;
     if (want < o->len) o->len = want;
-    else if (want > o->len) js_arr_set(J, o, want - 1, js_undef());
+    else if (want > o->len) js_arr_set(J, o, want - 1, js_hole());
 }
 
 static void js_putv(jctx *J, jval target, jstr *key, jval v, jval receiver) {
@@ -964,9 +964,8 @@ static int js_delete(jctx *J, jval target, jstr *key) {
         if (js_index_of(key, &idx)) {
             if (o->flags & JOF_FROZEN) return 0;
             if (idx < o->len) {
-                /* A hole, which this engine keeps as undefined: the length
-                   stays, as it does everywhere. */
-                o->items[idx] = js_undef();
+                /* A hole, and the length stays, as it does everywhere. */
+                o->items[idx] = js_hole();
                 if (idx + 1 == o->len && o->kind == JO_ARRAY) { /* stays */ }
                 return 1;
             }
@@ -1461,7 +1460,7 @@ static int js_iter_step(jctx *J, jiter *it, jval *out) {
         case IT_ARRAY: {
             jobj *o = it->obj.obj;
             if (it->at >= o->len) return 0;
-            *out = o->items[it->at++];
+            *out = js_item(o, it->at++);
             return 1;
         }
         case IT_STRING: {
@@ -1639,7 +1638,8 @@ static void js_bind(jctx *J, int target, jval v, jscope *sc, jval this_val, int 
                     }
                     if (src->kind == JO_ARRAY)
                         for (u32 i = 0; i < src->len; i++)
-                            js_define(J, rest, js_to_key(J, js_num(i)), src->items[i], JP_PLAIN);
+                            if (src->items[i].t != JS_HOLE)
+                                js_define(J, rest, js_to_key(J, js_num(i)), src->items[i], JP_PLAIN);
                 }
                 js_bind(J, t, js_from_obj(rest), sc, this_val, mode);
                 if (J->sig != JS_OK) return;
@@ -1873,7 +1873,7 @@ static jval js_place_get(jctx *J, jplace *p, jscope *sc) {
     if (p->kind == 4) {
         jobj *o = p->obj.obj;
         if (o->kind == JO_TYPED) return p->idx < js_ta_length(o) ? js_ta_get(J, o, p->idx) : js_undef();
-        if (p->idx < o->len) return o->items[p->idx];
+        if (p->idx < o->len && o->items[p->idx].t != JS_HOLE) return o->items[p->idx];
         return js_get(J, p->obj, js_to_key(J, js_num(p->idx)));
     }
     return js_undef();
@@ -2202,7 +2202,7 @@ static JS_NOINLINE jval js_eval_array(jctx *J, int node, jscope *sc, jval this_v
     if (!a) return js_undef();
     for (int cell = J->nodes[node].a; cell >= 0; cell = J->nodes[cell].b) {
         int e = J->nodes[cell].a;
-        if (e < 0) { js_arr_push(J, a, js_undef()); continue; }
+        if (e < 0) { js_arr_push(J, a, js_hole()); continue; }      /* [1, , 3] */
         if (J->nodes[e].kind == N_SPREAD) {
             jval v = js_eval(J, J->nodes[e].a, sc, this_val);
             if (J->sig != JS_OK) break;
@@ -2236,7 +2236,8 @@ static void js_copy_props(jctx *J, jobj *to, jval from) {
     jobj *src = from.obj;
     if (src->kind == JO_ARRAY || src->kind == JO_ARGS)
         for (u32 i = 0; i < src->len; i++)
-            js_define(J, to, js_to_key(J, js_num(i)), src->items[i], JP_PLAIN);
+            if (src->items[i].t != JS_HOLE)
+                js_define(J, to, js_to_key(J, js_num(i)), src->items[i], JP_PLAIN);
     jprop **own;
     u32 nown = js_keys_of(J, src, &own, JK_ENUM | JK_STR | JK_SYM);
     for (u32 i = 0; i < nown && J->sig == JS_OK; i++)
@@ -2725,7 +2726,7 @@ static JS_NOINLINE jval js_eval_member(jctx *J, int node, jscope *sc, jval this_
             double d = idx.num;
             jobj *o = target.obj;
             if ((o->kind == JO_ARRAY || o->kind == JO_ARGS)
-                && d >= 0 && d < (double)o->len && d == (double)(u32)d)
+                && d >= 0 && d < (double)o->len && d == (double)(u32)d && o->items[(u32)d].t != JS_HOLE)
                 return o->items[(u32)d];
             if (o->kind == JO_TYPED && d >= 0 && d == (double)(u32)d)
                 return js_ta_get(J, o, (u32)d);
@@ -2927,7 +2928,9 @@ static jobj *js_forin_keys(jctx *J, jobj *o) {
     for (jobj *q = o; q && depth < 64; q = q->proto, depth++) {
         if (q->kind == JO_ARRAY || q->kind == JO_ARGS || q->kind == JO_TYPED) {
             u32 len = q->kind == JO_TYPED ? js_ta_length(q) : q->len;
-            for (u32 i = 0; i < len; i++) js_arr_push(J, keys, js_from_str(js_to_key(J, js_num(i))));
+            for (u32 i = 0; i < len; i++)
+                if (q->kind == JO_TYPED || q->items[i].t != JS_HOLE)
+                    js_arr_push(J, keys, js_from_str(js_to_key(J, js_num(i))));
         }
         if (q->kind == JO_BOXED && q->ival.t == JS_STR)
             for (u32 i = 0; i < q->ival.str->len; i++)

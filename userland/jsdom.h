@@ -1282,7 +1282,7 @@ static jval nat_list_foreach(jctx *J, jval t, jval *a, int n) {
     jobj *arr = jd_list_array(J, L);
     if (!arr) return js_undef();
     for (u32 i = 0; i < arr->len && J->sig == JS_OK; i++) {
-        jval args[3] = { arr->items[i], js_num(i), t };
+        jval args[3] = { js_item(arr, i), js_num(i), t };
         js_call(J, fn, js_arg(a, n, 1), args, 3);
     }
     return js_undef();
@@ -1527,7 +1527,7 @@ static jval nat_cls_foreach(jctx *J, jval t, jval *a, int n) {
     if (!js_callable(fn)) return js_throw(J, JS_ERR_TYPE, "forEach needs a function", J->error_line);
     jobj *arr = jd_token_array(J, el);
     for (u32 i = 0; arr && i < arr->len && J->sig == JS_OK; i++) {
-        jval args[3] = { arr->items[i], js_num(i), t };
+        jval args[3] = { js_item(arr, i), js_num(i), t };
         js_call(J, fn, js_arg(a, n, 1), args, 3);
     }
     return js_undef();

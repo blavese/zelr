@@ -31,8 +31,7 @@
  * --- what is not ----------------------------------------------------------
  *
  * Strings are bytes of UTF-8 rather than UTF-16 units, so length counts
- * bytes. An array has no holes: an element never written is there, and is
- * undefined. (Modules, with, BigInt, Proxy, typed arrays and Intl, once on
+ * bytes. (Modules, with, BigInt, Proxy, typed arrays and Intl, once on
  * this list, are in jsmod.h, jsrun.h, jsbig.h, jsproxy.h, jstyped.h and
  * jsintl.h.)
  *
@@ -1103,7 +1102,7 @@ static int js_arr_set(jctx *J, jobj *a, u32 i, jval v) {
     if ((u64)i + 1 > JS_ARR_MAX) return 0;
     js_arr_reserve(J, a, i + 1);
     if ((u64)i + 1 > a->cap) return 0;
-    for (u32 k = a->len; k < i; k++) a->items[k] = js_undef();
+    for (u32 k = a->len; k < i; k++) a->items[k] = js_hole();
     a->items[i] = v;
     if (i + 1 > a->len) a->len = i + 1;
     return 1;
@@ -1111,6 +1110,14 @@ static int js_arr_set(jctx *J, jobj *a, u32 i, jval v) {
 
 static void js_arr_push(jctx *J, jobj *a, jval v) {
     js_arr_set(J, a, a->len, v);
+}
+
+/* An array keeps its holes -- the elements never written, or deleted -- as
+   JS_HOLE, which is no element: not `in` it, not among its keys, skipped by
+   forEach. Read as a value, one is undefined. */
+static inline jval js_item(const jobj *a, u32 i) {
+    jval v = a->items[i];
+    return v.t == JS_HOLE ? js_undef() : v;
 }
 
 static jobj *js_array(jctx *J) { return js_object(J, JO_ARRAY); }

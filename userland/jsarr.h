@@ -38,7 +38,7 @@ static void js_put_index(jctx *J, jval t, u32 i, jval v) {
 }
 
 static int js_has_index(jctx *J, jval t, u32 i) {
-    if (js_is_dense(t)) return i < t.obj->len;
+    if (js_is_dense(t)) return i < t.obj->len && t.obj->items[i].t != JS_HOLE;
     if (t.t == JS_STR) return i < t.str->len;
     if (!js_is_obj(t)) return 0;
     return js_has(J, t.obj, js_to_key(J, js_num(i)));
@@ -115,7 +115,7 @@ static jval nat_array_make(jctx *J, jval t, jval *a, int n) {
         double want = a[0].num;
         if (!(want >= 0) || want != (double)(u32)want)
             return js_throw(J, JS_ERR_RANGE, "that is not a length an array can have", J->error_line);
-        if (want > 0 && !js_arr_set(J, o, (u32)want - 1, js_undef()))
+        if (want > 0 && !js_arr_set(J, o, (u32)want - 1, js_hole()))
             return js_throw(J, JS_ERR_RANGE, "an array that long is more than a page may have", J->error_line);
         return js_from_obj(o);
     }
@@ -200,7 +200,7 @@ static jval nat_arr_pop(jctx *J, jval t, jval *a, int n) {
     (void)a; (void)n;
     if (t.t == JS_OBJ && t.obj && t.obj->kind == JO_ARRAY && !(t.obj->flags & JOF_FROZEN)) {
         if (!t.obj->len) return js_undef();
-        return t.obj->items[--t.obj->len];
+        return js_item(t.obj, --t.obj->len);
     }
     if (!js_arraylike(J, t)) return js_undef();
     u32 len = js_len_of(J, t);
@@ -216,7 +216,7 @@ static jval nat_arr_shift(jctx *J, jval t, jval *a, int n) {
     if (t.t == JS_OBJ && t.obj && t.obj->kind == JO_ARRAY && !(t.obj->flags & JOF_FROZEN)) {
         jobj *o = t.obj;
         if (!o->len) return js_undef();
-        jval first = o->items[0];
+        jval first = js_item(o, 0);
         for (u32 i = 1; i < o->len; i++) o->items[i - 1] = o->items[i];
         o->len--;
         return first;
@@ -369,7 +369,7 @@ static jval nat_arr_indexof(jctx *J, jval t, jval *a, int n) {
     jval want = js_arg(a, n, 0);
     u32 from = js_rel_index(J, js_arg(a, n, 1), len, 0);
     for (u32 i = from; i < len; i++) {
-        if (!js_is_dense(t) && !js_has_index(J, t, i)) continue;
+        if (!js_has_index(J, t, i)) continue;                 /* a hole is no element */
         if (js_strict_eq(js_get_index(J, t, i), want)) return js_num((double)i);
     }
     return js_num(-1);
@@ -384,7 +384,7 @@ static jval nat_arr_lastindexof(jctx *J, jval t, jval *a, int n) {
     if (from < 0) from += len;
     if (from >= len) from = (double)len - 1;
     for (double i = from; i >= 0; i--)
-        if (js_strict_eq(js_get_index(J, t, (u32)i), want)) return js_num(i);
+        if (js_has_index(J, t, (u32)i) && js_strict_eq(js_get_index(J, t, (u32)i), want)) return js_num(i);
     return js_num(-1);
 }
 
@@ -413,8 +413,9 @@ static jval js_arr_iterate(jctx *J, jval t, jval *a, int n, int kind) {
     for (u32 k = 0; k < len; k++) {
         u32 i = backwards ? len - 1 - k : k;
         int skip_holes = kind != AI_FIND && kind != AI_FINDI && !backwards;
-        if (skip_holes && !js_is_dense(t) && !js_has_index(J, t, i)) {
-            if (kind == AI_MAP) js_arr_push(J, out, js_undef());
+        if (skip_holes && !js_has_index(J, t, i)) {
+            if (js_is_dense(t) && i >= t.obj->len) break;
+            if (kind == AI_MAP) js_arr_set(J, out, i, js_hole());   /* map keeps the hole */
             continue;
         }
         if (js_is_dense(t) && i >= t.obj->len) break;
