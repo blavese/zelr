@@ -390,6 +390,26 @@ int main(void) {
         free(d);
     }
 
+    /* --- arcs, rounded corners and <use> ------------------------------------------
+     *
+     * An arc was its chord, a rounded rectangle square, and <use>, which is
+     * how a sprite of icons is drawn from, drew nothing. */
+    {
+        int rc = draw("<svg width='40' height='40'><path d='M5 20 A15 15 0 0 1 35 20 Z' fill='red'/></svg>", 40, 40);
+        ok("an arc bulges as its radius says, the way its sweep says",
+           rc == SVG_OK && isred(at(20, 8)) && iswhite(at(20, 24)) && iswhite(at(6, 8)));
+        rc = draw("<svg width='40' height='40'><path d='M5 20 a15 15 0 1 0 30 0' fill='red'/></svg>", 40, 40);
+        ok("and the other way, relative", rc == SVG_OK && isred(at(20, 32)) && iswhite(at(20, 8)));
+        rc = draw("<svg width='40' height='40'><rect width='40' height='40' rx='12' fill='red'/></svg>", 40, 40);
+        ok("a rectangle's corners are rounded by rx", rc == SVG_OK && iswhite(at(1, 1)) && iswhite(at(38, 38))
+           && isred(at(20, 1)) && isred(at(1, 20)) && isred(at(20, 20)));
+        rc = draw("<svg width='40' height='40' viewBox='0 0 40 40'><defs><symbol id='s' viewBox='0 0 10 10'>"
+                  "<rect width='10' height='5' fill='red'/></symbol><rect id='r' width='6' height='6'/></defs>"
+                  "<use href='#s'/><use xlink:href='#r' x='30' y='30' fill='red'/></svg>", 40, 40);
+        ok("use draws a symbol fitted to the drawing, and an element moved and painted as the use says",
+           rc == SVG_OK && isred(at(20, 10)) && iswhite(at(20, 25)) && isred(at(33, 33)) && iswhite(at(27, 33)));
+    }
+
     puts(failed ? "SVGTEST_FAIL\n" : "SVGTEST_PASS\n");
     return failed;
 }

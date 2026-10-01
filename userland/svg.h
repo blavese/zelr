@@ -96,6 +96,42 @@ static inline svpt sv_apply(svmat m, float x, float y) {
  *
  * Path data is numbers with almost anything between them: commas, spaces, or
  * nothing at all when the sign makes the break. "10-20" is two numbers. */
+/* The little trigonometry an arc needs, in floats, with nothing to ask for
+   it: the square root is the instruction, sine and cosine the series after
+   reducing into a half turn, and the arctangent a polynomial good to a
+   ten-thousandth of a radian, which is far finer than a pixel. */
+#define SV_PI 3.14159265358979f
+
+static inline float sv_sqrt(float x) {
+    if (!(x > 0)) return 0;
+    float r;
+    __asm__("sqrtss %1, %0" : "=x"(r) : "x"(x));
+    return r;
+}
+
+static inline float sv_sin(float r) {
+    while (r > SV_PI) r -= 2 * SV_PI;
+    while (r < -SV_PI) r += 2 * SV_PI;
+    float s = r, term = r;
+    for (int k = 1; k < 10; k++) {
+        term *= -r * r / (float)((2 * k) * (2 * k + 1));
+        s += term;
+    }
+    return s;
+}
+
+static inline float sv_cos(float r) { return sv_sin(r + SV_PI / 2); }
+
+static inline float sv_atan2(float y, float x) {
+    float ax = x < 0 ? -x : x, ay = y < 0 ? -y : y;
+    if (ax == 0 && ay == 0) return 0;
+    float a = ax > ay ? ay / ax : ax / ay, s2 = a * a;
+    float r = ((-0.0464964749f * s2 + 0.15931422f) * s2 - 0.327622764f) * s2 * a + a;
+    if (ay > ax) r = SV_PI / 2 - r;
+    if (x < 0) r = SV_PI - r;
+    return y < 0 ? -r : r;
+}
+
 static inline int sv_space(char c) {
     return c == ' ' || c == ',' || c == '\t' || c == '\n' || c == '\r';
 }
@@ -171,6 +207,45 @@ static inline void sv_cubic(svpath *p, svmat m, float x0, float y0,
         float y = u * u * u * y0 + 3 * u * u * t * y1
                 + 3 * u * t * t * y2 + t * t * t * y3;
         sv_add(p, m, x, y);
+    }
+}
+
+/* An arc from (x1, y1) to (x2, y2) on an ellipse of radii rx, ry turned by
+   rot degrees, the large or small way round, one way or the other. */
+static inline void sv_arc(svpath *p, svmat m, float x1, float y1, float rx, float ry, float rot,
+                          int large, int sweep, float x2, float y2) {
+    if (rx < 0) rx = -rx;
+    if (ry < 0) ry = -ry;
+    if (rx == 0 || ry == 0 || (x1 == x2 && y1 == y2)) { sv_add(p, m, x2, y2); return; }
+    float phi = rot * SV_PI / 180, cp = sv_cos(phi), sp = sv_sin(phi);
+    float dx = (x1 - x2) / 2, dy = (y1 - y2) / 2;
+    float x1p = cp * dx + sp * dy, y1p = -sp * dx + cp * dy;
+    float lam = x1p * x1p / (rx * rx) + y1p * y1p / (ry * ry);
+    if (lam > 1) { float k = sv_sqrt(lam); rx *= k; ry *= k; }
+    float num = rx * rx * ry * ry - rx * rx * y1p * y1p - ry * ry * x1p * x1p;
+    float den = rx * rx * y1p * y1p + ry * ry * x1p * x1p;
+    float co = den > 0 ? sv_sqrt(num > 0 ? num / den : 0) : 0;
+    if (large == sweep) co = -co;
+    float cxp = co * rx * y1p / ry, cyp = -co * ry * x1p / rx;
+    float cx = cp * cxp - sp * cyp + (x1 + x2) / 2, cy = sp * cxp + cp * cyp + (y1 + y2) / 2;
+    float ux = (x1p - cxp) / rx, uy = (y1p - cyp) / ry, vx = (-x1p - cxp) / rx, vy = (-y1p - cyp) / ry;
+    float t1 = sv_atan2(uy, ux);
+    float dt = sv_atan2(ux * vy - uy * vx, ux * vx + uy * vy);
+    if (!sweep && dt > 0) dt -= 2 * SV_PI;
+    if (sweep && dt < 0) dt += 2 * SV_PI;
+    int n = (int)((dt < 0 ? -dt : dt) / (SV_PI / 2) + 0.999f);
+    if (n < 1) n = 1;
+    float step = dt / n, k = 4.0f / 3.0f * sv_sin(step / 4) / sv_cos(step / 4);
+    float ex = x1, ey = y1;
+    for (int i = 0; i < n; i++) {
+        float a = t1 + step * i, b = a + step;
+        float ca = sv_cos(a), sa = sv_sin(a), cb = sv_cos(b), sb = sv_sin(b);
+        float bx = cx + rx * cp * cb - ry * sp * sb, by = cy + rx * sp * cb + ry * cp * sb;
+        float dax = -rx * cp * sa - ry * sp * ca, day = -rx * sp * sa + ry * cp * ca;
+        float dbx = -rx * cp * sb - ry * sp * cb, dby = -rx * sp * sb + ry * cp * cb;
+        if (i == n - 1) { bx = x2; by = y2; }
+        sv_cubic(p, m, ex, ey, ex + k * dax, ey + k * day, bx - k * dbx, by - k * dby, bx, by);
+        ex = bx; ey = by;
     }
 }
 
@@ -268,20 +343,17 @@ static inline void sv_path_data(svpath *path, svmat m, const char *d) {
             have_control = 1;
             x = x2; y = y2;
         } else if (c == 'A') {
-            /* An elliptical arc, as a line to where it ends.
-             *
-             * The parameters are an ellipse's radii, a rotation and two
-             * flags, and turning that into a curve is a page of trigonometry
-             * for something a logo uses to round a corner. Drawn as its
-             * chord, which is wrong by the bulge of the arc and right about
-             * where the shape goes next — and the alternative, skipping it,
-             * leaves the outline open and fills the whole shape wrongly. */
-            sv_number(&p); sv_number(&p); sv_number(&p);
-            sv_number(&p); sv_number(&p);
+            /* An elliptical arc. It was drawn as its chord, which flattened
+               every rounded corner and circle an icon makes this way. The
+               standard's own steps (its appendix on arcs): the centre found
+               from the ends, the radii grown if they cannot reach, and the
+               turn drawn as a cubic for each quarter of it. */
+            float rx = sv_number(&p), ry = sv_number(&p), rot = sv_number(&p);
+            float large = sv_number(&p), sweep = sv_number(&p);
             float nx = sv_number(&p), ny = sv_number(&p);
-            x = rel ? x + nx : nx;
-            y = rel ? y + ny : ny;
-            sv_add(path, m, x, y);
+            float x2 = rel ? x + nx : nx, y2 = rel ? y + ny : ny;
+            sv_arc(path, m, x, y, rx, ry, rot, large != 0, sweep != 0, x2, y2);
+            x = x2; y = y2;
             have_control = 0;
         } else if (c == 'Z') {
             sv_add(path, m, sx, sy);
@@ -516,8 +588,18 @@ static inline const char *sv_said(const ddoc *d, int el, const char *name) {
    <svg>, that says anything. A group that set a fill used to colour none of
    its shapes, which came out black -- the default -- and a logo drawn as one
    <g fill="..."> round its paths came out as a black silhouette. */
+/* What a <use> is drawing: the element it names (sv_use_top) and itself
+   (sv_use_at). What is drawn there inherits from the <use>, not from where
+   it was written. -1 when nothing is being used. */
+static int sv_use_top = -1, sv_use_at = -1;
+
+static inline int sv_up(const ddoc *d, int a) {
+    if (a == sv_use_top && sv_use_at >= 0) return sv_use_at;
+    return d->nodes[a].parent;
+}
+
 static inline const char *sv_inherit(const ddoc *d, int el, int root, const char *name) {
-    for (int a = el; a >= 0; a = d->nodes[a].parent) {
+    for (int a = el; a >= 0; a = sv_up(d, a)) {
         const char *v = sv_said(d, a, name);
         if (v) return v;
         if (a == root) break;
@@ -662,6 +744,28 @@ static inline int sv_shape(const ddoc *d, int el, svmat m, svpath *path) {
         float w = sv_attr_num(d, el, "width", 0);
         float h = sv_attr_num(d, el, "height", 0);
         if (w <= 0 || h <= 0) return 0;
+        /* Rounded corners: rx and ry, each the other when one is left out,
+           no more than half the side. They were drawn square. */
+        const char *rxs = dom_attr(d, el, "rx"), *rys = dom_attr(d, el, "ry");
+        float rx = rxs ? sv_attr_num(d, el, "rx", 0) : -1, ry = rys ? sv_attr_num(d, el, "ry", 0) : -1;
+        if (rx < 0) rx = ry;
+        if (ry < 0) ry = rx;
+        if (rx > w / 2) rx = w / 2;
+        if (ry > h / 2) ry = h / 2;
+        if (rx > 0 && ry > 0) {
+            const float kk = 0.5522848f;
+            sv_begin(path);
+            sv_add(path, m, x + rx, y);
+            sv_add(path, m, x + w - rx, y);
+            sv_cubic(path, m, x + w - rx, y, x + w - rx + rx * kk, y, x + w, y + ry - ry * kk, x + w, y + ry);
+            sv_add(path, m, x + w, y + h - ry);
+            sv_cubic(path, m, x + w, y + h - ry, x + w, y + h - ry + ry * kk, x + w - rx + rx * kk, y + h, x + w - rx, y + h);
+            sv_add(path, m, x + rx, y + h);
+            sv_cubic(path, m, x + rx, y + h, x + rx - rx * kk, y + h, x, y + h - ry + ry * kk, x, y + h - ry);
+            sv_add(path, m, x, y + ry);
+            sv_cubic(path, m, x, y + ry, x, y + ry - ry * kk, x + rx - rx * kk, y, x + rx, y);
+            return 1;
+        }
         sv_begin(path);
         sv_add(path, m, x, y);
         sv_add(path, m, x + w, y);
@@ -726,6 +830,115 @@ static inline int sv_shape(const ddoc *d, int el, svmat m, svpath *path) {
     }
 
     return 0;
+}
+
+/* One shape filled and stroked as it and what it sits in say: how many
+   times it painted. */
+static inline int sv_paint(const ddoc *doc, int el, int root, const svpath *path, svcanvas *cv, float sc) {
+    int drawn = 0;
+    u32 fill = 0x000000;
+    int has_fill;
+    const char *fv = sv_inherit(doc, el, root, "fill");
+    if (fv) {
+        has_fill = sv_paint_value(fv, &fill);
+    } else {
+        /* Unsaid all the way up means black, which is what the format
+           says and is why a path with no fill anywhere still draws. */
+        has_fill = !w_same_fold(dom_tag_name(doc, el), "polyline")
+                && !w_same_fold(dom_tag_name(doc, el), "line");
+    }
+
+    /* Opacity is not inherited but a group's applies to everything in
+       it, which for shapes that do not overlap is the same as
+       multiplying down the chain. */
+    float opacity = 1.0f;
+    for (int a = el; a >= 0; a = sv_up(doc, a)) {
+        const char *ov = sv_said(doc, a, "opacity");
+        if (ov) { const char *at = ov; opacity *= sv_number(&at); }
+        if (a == root) break;
+    }
+    float fo = sv_inherit_num(doc, el, root, "fill-opacity", 1.0f) * opacity;
+    if (fo < 0) fo = 0;
+    if (fo > 1) fo = 1;
+
+    if (has_fill && fo > 0.004f) {
+        const char *rule = sv_inherit(doc, el, root, "fill-rule");
+        int evenodd = rule && w_starts_fold(rule, "evenodd");
+        sv_fill(cv, path, fill, evenodd, fo);
+        drawn++;
+    }
+
+    u32 stroke = 0;
+    const char *sv = sv_inherit(doc, el, root, "stroke");
+    if (sv && sv_paint_value(sv, &stroke)) {
+        float sw = sv_inherit_num(doc, el, root, "stroke-width", 1.0f) * sc;
+        float so = sv_inherit_num(doc, el, root, "stroke-opacity", 1.0f) * opacity;
+        if (so > 0.004f) {
+            sv_stroke(cv, path, stroke, sw, so > 1 ? 1 : so);
+            drawn++;
+        }
+    }
+    return drawn;
+}
+
+/* <use href="#name">: the element named drawn here, at x and y, and a
+   <symbol>'s drawing fitted from its viewBox into the use's width and height
+   (all of the drawing's own, when it gives none). How icon sprites are
+   written: a page full of <svg><use href="#icon"/></svg> drew nothing. One
+   level: a use inside what is used is not followed. */
+static inline int sv_use(const ddoc *doc, int use, int root, svmat m, svpath *path, svcanvas *cv,
+                         float sc, float vw, float vh) {
+    if (sv_use_at >= 0) return 0;
+    const char *href = dom_attr(doc, use, "href");
+    if (!href) href = dom_attr(doc, use, "xlink:href");
+    if (!href || href[0] != '#' || !href[1]) return 0;
+    int target = dom_by_id(doc, href + 1);
+    if (target < 0 || target == use || doc->nodes[target].kind != DN_ELEMENT) return 0;
+    for (int a = use; a >= 0; a = doc->nodes[a].parent) if (a == target) return 0;
+
+    svmat at = sv_identity();
+    at.e = sv_attr_num(doc, use, "x", 0);
+    at.f = sv_attr_num(doc, use, "y", 0);
+    m = sv_mul(m, at);
+    int symbol = w_same_fold(dom_tag_name(doc, target), "symbol");
+    if (symbol) {
+        const char *vb = dom_attr_fold(doc, target, "viewBox");
+        if (vb && *vb) {
+            float bx = sv_number(&vb), by = sv_number(&vb), bw = sv_number(&vb), bh = sv_number(&vb);
+            float uw = sv_attr_num(doc, use, "width", vw), uh = sv_attr_num(doc, use, "height", vh);
+            if (bw > 0 && bh > 0 && uw > 0 && uh > 0) {
+                float k = uw / bw < uh / bh ? uw / bw : uh / bh;
+                svmat fit = sv_identity();
+                fit.a = k; fit.d = k;
+                fit.e = -bx * k + (uw - bw * k) / 2;
+                fit.f = -by * k + (uh - bh * k) / 2;
+                m = sv_mul(m, fit);
+            }
+        }
+    }
+
+    sv_use_top = target;
+    sv_use_at = use;
+    int drawn = 0;
+    for (int el = target; el >= 0; el = dom_next(doc, el, target)) {
+        if (doc->nodes[el].kind != DN_ELEMENT) continue;
+        int chain[32], n = 0, hidden = 0;
+        for (int a = el; n < 32; a = doc->nodes[a].parent) {
+            chain[n++] = a;
+            if (a == target) break;
+        }
+        for (int i = 0; i < n && !hidden; i++)
+            hidden = !(symbol && chain[i] == target) && sv_unpainted(doc, chain[i]);
+        if (hidden) continue;
+        svmat em = m;
+        for (int i = n - 1; i >= 0; i--)
+            if (!(symbol && chain[i] == target)) em = sv_transform(doc, chain[i], em);
+        if (w_same_fold(dom_tag_name(doc, el), "use")) continue;
+        if (!sv_shape(doc, el, em, path)) continue;
+        drawn += sv_paint(doc, el, root, path, cv, sc);
+    }
+    sv_use_top = sv_use_at = -1;
+    return drawn;
 }
 
 /* --- the whole drawing ----------------------------------------------------
@@ -813,50 +1026,12 @@ static inline int svg_render_tree(const ddoc *doc, int root, int want_w, int wan
         if (hidden) continue;
         for (int i = n - 1; i >= 0; i--) m = sv_transform(doc, chain[i], m);
 
+        if (w_same_fold(dom_tag_name(doc, el), "use")) {
+            drawn += sv_use(doc, el, root, m, path, &cv, sc, vw, vh);
+            continue;
+        }
         if (!sv_shape(doc, el, m, path)) continue;
-
-        u32 fill = 0x000000;
-        int has_fill;
-        const char *fv = sv_inherit(doc, el, root, "fill");
-        if (fv) {
-            has_fill = sv_paint_value(fv, &fill);
-        } else {
-            /* Unsaid all the way up means black, which is what the format
-               says and is why a path with no fill anywhere still draws. */
-            has_fill = !w_same_fold(dom_tag_name(doc, el), "polyline")
-                    && !w_same_fold(dom_tag_name(doc, el), "line");
-        }
-
-        /* Opacity is not inherited but a group's applies to everything in
-           it, which for shapes that do not overlap is the same as
-           multiplying down the chain. */
-        float opacity = 1.0f;
-        for (int a = el; a >= 0; a = doc->nodes[a].parent) {
-            const char *ov = sv_said(doc, a, "opacity");
-            if (ov) { const char *at = ov; opacity *= sv_number(&at); }
-            if (a == root) break;
-        }
-        float fo = sv_inherit_num(doc, el, root, "fill-opacity", 1.0f) * opacity;
-        if (fo < 0) fo = 0;
-        if (fo > 1) fo = 1;
-
-        if (has_fill && fo > 0.004f) {
-            const char *rule = sv_inherit(doc, el, root, "fill-rule");
-            int evenodd = rule && w_starts_fold(rule, "evenodd");
-            sv_fill(&cv, path, fill, evenodd, fo);
-            drawn++;
-        }
-
-        u32 stroke = 0;
-        const char *sv = sv_inherit(doc, el, root, "stroke");
-        if (sv && sv_paint_value(sv, &stroke)) {
-            float sw = sv_inherit_num(doc, el, root, "stroke-width", 1.0f) * sc;
-            float so = sv_inherit_num(doc, el, root, "stroke-opacity", 1.0f) * opacity;
-            if (so > 0.004f) {
-                sv_stroke(&cv, path, stroke, sw, so > 1 ? 1 : so);
-                drawn++;
-            }
-        }
+        drawn += sv_paint(doc, el, root, path, &cv, sc);
     }
     (void)depth;
     (void)stack;
@@ -870,6 +1045,7 @@ static inline int svg_render_tree(const ddoc *doc, int root, int want_w, int wan
     out->rgb = rgb;
     return SVG_OK;
 }
+
 
 /* A drawing that arrived as a file of its own: its markup read, then drawn. */
 static inline int svg_render(const char *xml, int len, int want_w, int want_h,
