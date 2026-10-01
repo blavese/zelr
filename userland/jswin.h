@@ -1694,7 +1694,8 @@ static jval nat_url_create_object(jctx *J, jval t, jval *a, int n) {
     (void)t;
     jval v = js_arg(a, n, 0);
     jstr *b, *ty;
-    if (!jd_blob_parts(v, &b, &ty)) return js_throw(J, JS_ERR_TYPE, "createObjectURL needs a Blob", J->error_line);
+    if (!jd_blob_parts(v, &b, &ty) && !jd_ms_is(v))
+        return js_throw(J, JS_ERR_TYPE, "createObjectURL needs a Blob or a MediaSource", J->error_line);
     /* A UUID from the kernel's generator when it has one; the address is a
        name, not a secret, so a counter in the same form does when not. */
     static const char hex[] = "0123456789abcdef";

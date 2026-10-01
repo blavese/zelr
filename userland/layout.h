@@ -249,7 +249,7 @@ static inline int lay_button_box(const ddoc *d, int el) {
 static inline void lay_words_of(const ddoc *d, int el, char *out, int cap) {
     int w = 0;
     for (int i = el; i >= 0 && w < cap - 1; ) {
-        if (d->nodes[i].kind == DN_ELEMENT && d->nodes[i].tag == T_SVG && i != el) {
+        if (d->nodes[i].kind == DN_ELEMENT && (d->nodes[i].tag == T_SVG || d->nodes[i].tag == T_VIDEO) && i != el) {
             int nx = -1;
             for (int up = i; up >= 0 && up != el; up = d->nodes[up].parent)
                 if (d->nodes[up].next >= 0) { nx = d->nodes[up].next; break; }
@@ -982,7 +982,7 @@ static inline void lay_hints(lctx *L, int el, cstyle *st, int pct_of) {
         int w = lay_attr_len(dom_attr(d, el, "width"), pct_of);
         if (w > 0) st->width = (short)(w > 4000 ? 4000 : w);
     }
-    if (tag == T_SVG) {
+    if (tag == T_SVG || tag == T_VIDEO) {
         /* A drawing's width and height say how big it is drawn unless the
            page's rules say otherwise, the way an image's do (lay_drawing);
            in any unit, since icons say 1em to be the size of their text. */
@@ -1367,7 +1367,7 @@ static void lay_float(lctx *L, int node, const cstyle *parent, int cleft, int cw
     cstyle st;
     lay_style(L, node, parent, &st, cwidth);
     int tag = d->nodes[node].tag;
-    int replaced = tag == T_IMG || tag == T_SVG || lay_control_kind(d, node) != CTL_NONE;
+    int replaced = tag == T_IMG || tag == T_SVG || tag == T_VIDEO || lay_control_kind(d, node) != CTL_NONE;
     int ml = st.ml == CSS_AUTO_OFF ? 0 : st.ml, mr = st.mr == CSS_AUTO_OFF ? 0 : st.mr;
 
     /* The box's own width, margins apart. */
@@ -1737,6 +1737,8 @@ static inline void lay_viewbox(const ddoc *d, int el, int *vw, int *vh) {
     if (k == 4 && n[2] > 0 && n[3] > 0) { *vw = n[2]; *vh = n[3]; }
 }
 
+static void lay_video(lctx *L, int at, const cstyle *st, int *y);
+
 /* An SVG written into the page: a picture, which the browser draws from the
  * page's own tree at the size given here (svg.h, svg_render_tree). That is
  * the width and height the page's rules or its attributes give it; either
@@ -1789,6 +1791,59 @@ static void lay_drawing(lctx *L, int at, const cstyle *st, int *y) {
         it->node = at;
         it->at = -1;
         it->link = L->cur_link;
+        it->color = st->color;
+        it->bg = st->background;
+    }
+    L->pen += w + mr;
+    lay_line_fit(L, h, 100);
+    L->line_started = 1;
+    L->pending_space = 0;
+}
+
+/* A <video>: a picture the size the page's rules or its attributes give it,
+ * either one alone and the picture's proportions make the other, and with
+ * neither the size of the picture -- known once its first frame is (the
+ * browser hands it in with the other pictures' sizes) and 300 by 150, every
+ * browser's default, before that. Kept to the line like a picture. Its
+ * frames are drawn in the box as object-fit says, contain unless the page
+ * says otherwise (the browser's own rules). */
+static void lay_video(lctx *L, int at, const cstyle *st, int *y) {
+    const limage *pic = lay_image_of(L, at);
+    int iw = pic && pic->w > 0 ? pic->w : 300, ih = pic && pic->h > 0 ? pic->h : 150;
+    int w = st->width, h = st->height;
+    if (L->measuring && st->width_pct) w = -1;
+    if (w < 0 && h < 0) { w = iw; h = ih; }
+    else if (w < 0) w = (int)((long long)h * iw / ih);
+    else if (h < 0) h = (int)((long long)w * ih / iw);
+    if (st->max_width >= 0 && w > st->max_width && !(L->measuring && st->width_pct)) {
+        h = (int)((long long)h * st->max_width / (w > 0 ? w : 1));
+        w = st->max_width;
+    }
+    if (w > L->line_width && L->line_width > 0) {
+        h = (int)((long long)h * L->line_width / w);
+        w = L->line_width;
+    }
+    if (w < 1 || h < 1) return;
+    int ml = st->ml == CSS_AUTO_OFF ? 0 : st->ml;
+    int mr = st->mr == CSS_AUTO_OFF ? 0 : st->mr;
+    if (L->pen + ml + w > L->line_left + L->line_width && L->pen > L->line_left) {
+        int left = L->cont_left, width = L->cont_width, al = L->align;
+        lay_line_end(L, y);
+        lay_line_start(L, *y, left, width, al);
+    }
+    L->pen += ml;
+    litem *it = (st->visible || lay_show_hidden) ? lay_item(L) : 0;
+    if (it) {
+        it->kind = LK_IMAGE;
+        it->x = L->pen;
+        it->y = L->line_top;
+        it->w = w;
+        it->h = h;
+        it->node = at;
+        it->at = -1;
+        it->link = L->cur_link;
+        it->ofit = st->obj_fit;
+        it->radius = (unsigned char)(st->radius > 255 ? 255 : st->radius < 0 ? 0 : st->radius);
         it->color = st->color;
         it->bg = st->background;
     }
@@ -1870,7 +1925,7 @@ static inline void lay_inline(lctx *L, int node, const cstyle *parent, int *y) {
             if (n->tag != T_BR && n->tag != T_IMG
                 && (lay_control_kind(d, at) == CTL_NONE || lay_button_box(d, at))) {
                 if ((st.position == POS_ABSOLUTE || st.position == POS_FIXED)
-                    && (n->tag != T_SVG || at != node)) {
+                    && ((n->tag != T_SVG && n->tag != T_VIDEO) || at != node)) {
                     lay_inline_piece(L, at, &stack[sp], 1, y);
                     at = lay_past(d, at, node);
                     continue;
@@ -1878,6 +1933,13 @@ static inline void lay_inline(lctx *L, int node, const cstyle *parent, int *y) {
                 if (n->tag == T_SVG) {
                     /* A drawing is a picture whatever its display says. */
                     lay_drawing(L, at, &st, y);
+                    at = lay_past(d, at, node);
+                    continue;
+                }
+                if (n->tag == T_VIDEO) {
+                    /* So is a video, and what is inside it is for browsers
+                       that cannot play one. */
+                    lay_video(L, at, &st, y);
                     at = lay_past(d, at, node);
                     continue;
                 }
@@ -4317,7 +4379,7 @@ static void lay_block_placed(lctx *L, int node, const cstyle *parent, int x,
        that draws them, on a line of its own. As a box it had no children
        to lay out and came out as nothing, or, for a drawing, as its shapes
        laid out as though they were the page. */
-    if (d->nodes[node].tag == T_IMG || d->nodes[node].tag == T_SVG
+    if (d->nodes[node].tag == T_IMG || d->nodes[node].tag == T_SVG || d->nodes[node].tag == T_VIDEO
         || (d->nodes[node].tag != T_BUTTON && lay_control_kind(d, node) != CTL_NONE)) {
         lay_line_start(L, *y, x, avail, A_LEFT);
         lay_inline(L, node, parent, y);
@@ -4508,7 +4570,7 @@ static void lay_block_placed(lctx *L, int node, const cstyle *parent, int x,
     while (child >= 0) {
         int next = d->nodes[child].next;
         int is_block = lay_is_block_node(L, child, &st);
-        if (is_block && (d->nodes[child].tag == T_IMG || d->nodes[child].tag == T_SVG
+        if (is_block && (d->nodes[child].tag == T_IMG || d->nodes[child].tag == T_SVG || d->nodes[child].tag == T_VIDEO
                          || (lay_control_kind(d, child) != CTL_NONE && !lay_button_box(d, child)))) {
             /* A picture or a field made a block is still a picture or a
                field: on a line of its own, drawn by the code that draws

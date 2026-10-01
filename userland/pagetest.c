@@ -18,6 +18,7 @@
 #include "css.h"
 #include "fetch.h"
 #include "jsdom.h"
+#include "mediadata.h"
 
 static int failed;
 
@@ -262,6 +263,63 @@ static int fake_request(const char *method, const char *url, const char *body, c
     out->body = json ? "{\"n\": 7, \"list\": [1, 2]}" : "ok";
     out->len = w_len(out->body);
     return out->len;
+}
+
+/* mediadata.h's fragmented MP4, as a page's player fetches it: /v-init and
+   /v-media for the pictures, /a-init and /a-media for the sound; anything
+   else is not MP4 at all. */
+static int media_request(const char *method, const char *url, const char *body, const char *type,
+                         jd_reply *out) {
+    (void)method; (void)body; (void)type;
+    const char *end = url;
+    while (*end) end++;
+    int n = (int)(end - url);
+    out->url = url;
+    out->type = "video/mp4";
+    out->status = 200;
+#define MEDIA_IS(s) (n >= (int)sizeof(s) - 1 && same_text(end - (sizeof(s) - 1), s))
+    if (MEDIA_IS("/v-init"))       { out->body = (const char *)MEDIA_VIDEO_INIT;  out->len = (int)sizeof(MEDIA_VIDEO_INIT); }
+    else if (MEDIA_IS("/v-media")) { out->body = (const char *)MEDIA_VIDEO_MEDIA; out->len = (int)sizeof(MEDIA_VIDEO_MEDIA); }
+    else if (MEDIA_IS("/a-init"))  { out->body = (const char *)MEDIA_AUDIO_INIT;  out->len = (int)sizeof(MEDIA_AUDIO_INIT); }
+    else if (MEDIA_IS("/a-media")) { out->body = (const char *)MEDIA_AUDIO_MEDIA; out->len = (int)sizeof(MEDIA_AUDIO_MEDIA); }
+    else { out->body = "not a film"; out->len = 10; }
+#undef MEDIA_IS
+    return out->len;
+}
+
+/* Each picture the page's <video> decoded: which of Windows' it is, by its
+   checksums, or -1. */
+static int media_seen[64], media_nseen;
+static unsigned media_fnv(const u8 *p, int w, int h, int stride) {
+    unsigned v = 2166136261u;
+    for (int y = 0; y < h; y++)
+        for (int x = 0; x < w; x++) v = (v ^ p[y * stride + x]) * 16777619u;
+    return v;
+}
+static void media_picture(void *ctx, const h264_picture *p) {
+    (void)ctx;
+    unsigned y = media_fnv(p->y, p->width, p->height, p->stride_y);
+    unsigned u = media_fnv(p->cb, p->width / 2, p->height / 2, p->stride_c);
+    unsigned v = media_fnv(p->cr, p->width / 2, p->height / 2, p->stride_c);
+    int which = -1;
+    for (int f = 0; f < MEDIA_VIDEO_FRAMES; f++)
+        if (MEDIA_VIDEO_SUMS[3 * f] == y && MEDIA_VIDEO_SUMS[3 * f + 1] == u && MEDIA_VIDEO_SUMS[3 * f + 2] == v) { which = f; break; }
+    if (media_nseen < 64) media_seen[media_nseen++] = which;
+}
+
+/* The page's passes, with the media clock moved on a thirtieth of a second
+   each, until its title says it is done. */
+static void media_passes(int max) {
+    double t = 0;
+    for (int k = 0; k < max; k++) {
+        jsdom_requests();
+        jsdom_media_test_clock(t);
+        jsdom_media_on_picture(media_picture);
+        jsdom_timers();
+        const char *title = page.title >= 0 ? page.arena + page.title : "";
+        if (title[0] == 'd' && title[1] == 'o' && title[2] == 'n' && title[3] == 'e') break;
+        t += 1.0 / 30;
+    }
 }
 
 /* Where the page sent the browser, and what address it said it was at. */
@@ -2731,6 +2789,104 @@ int main(void) {
         pump_until(3, 3000);
         oks("and a worker that makes 50 megabytes and drops them keeps its own",
             page.title >= 0 ? page.arena + page.title : "", "worker kept123");
+    }
+
+    /* --- sound and video (jsmedia.h) -----------------------------------------
+     *
+     * A page plays the way the players on the web do: a MediaSource given to
+     * a <video> by its blob: address, a SourceBuffer for each stream, the
+     * segments fetched and appended, then play(). What the element tells is
+     * the standard's, in its order; the pictures that come out are Windows'
+     * decoding of the stream, every one, in display order (the same answers
+     * as h264test and mediatest). Once it has ended, a seek to the half and
+     * play() again. */
+    {
+        jsdom_request_with(media_request);
+        jsdom_at("https://site.test/watch");
+        media_nseen = 0;
+        load("<body><video id=v width=320></video><script>"
+             "var v = document.getElementById('v'), log = [], ms = new MediaSource(), info = [], round = 0, first;"
+             "['loadstart','durationchange','loadedmetadata','loadeddata','canplay','canplaythrough','play','playing',"
+             " 'waiting','seeking','seeked','timeupdate','pause','ended','resize','error','emptied','abort'].forEach(function (e) {"
+             " v.addEventListener(e, function () { if (e !== 'timeupdate' || log[log.length - 1] !== 'timeupdate') log.push(e); }); });"
+             "v.addEventListener('seeked', function () { log.push(v.currentTime.toFixed(1)); });"
+             "info.push(MediaSource.isTypeSupported('video/mp4; codecs=\"avc1.4d401e\"'),"
+             " MediaSource.isTypeSupported('video/webm; codecs=\"vp9\"'), MediaSource.isTypeSupported('audio/mp4; codecs=\"mp4a.40.2\"'),"
+             " v.canPlayType('video/mp4; codecs=\"avc1.42E01E, mp4a.40.2\"'), v.canPlayType('video/mp4'), '[' + v.canPlayType('video/webm') + ']',"
+             " ms.readyState, v.readyState, v.paused, isNaN(v.duration));"
+             "function get(u) { return fetch(u).then(function (r) { return r.arrayBuffer(); }); }"
+             "function append(sb, u) { return get(u).then(function (b) { return new Promise(function (ok) {"
+             " sb.addEventListener('updateend', function f() { sb.removeEventListener('updateend', f); ok(); }); sb.appendBuffer(b); }); }); }"
+             "ms.addEventListener('sourceopen', function () {"
+             " info.push(ms.readyState, ms.sourceBuffers.length);"
+             " var vb = ms.addSourceBuffer('video/mp4; codecs=\"avc1.4d401e\"'), ab = ms.addSourceBuffer('audio/mp4; codecs=\"mp4a.40.2\"');"
+             " info.push(ms.sourceBuffers.length, ms.sourceBuffers[1] === ab, vb.updating, vb.mode);"
+             " append(vb, '/v-init').then(function () { return append(ab, '/a-init'); }).then(function () {"
+             "  info.push(v.readyState, v.videoWidth, v.videoHeight); return append(vb, '/v-media'); })"
+             " .then(function () { return append(ab, '/a-media'); }).then(function () {"
+             "  info.push(vb.buffered.length, vb.buffered.end(0).toFixed(2), ab.buffered.end(0).toFixed(2), v.buffered.end(0).toFixed(2));"
+             "  ms.endOfStream(); info.push(ms.readyState, v.duration.toFixed(2));"
+             "  return v.play(); }).then(function () { log.push('resolved'); });"
+             "});"
+             "v.addEventListener('ended', function () { var q = v.getVideoPlaybackQuality();"
+             " var line = info.join(' ') + '|' + log.join(',') + '|' + [v.currentTime.toFixed(2), v.paused, v.ended,"
+             " q.totalVideoFrames, q.droppedVideoFrames].join(' ');"
+             " if (++round === 1) { first = line; log = []; info = []; v.currentTime = 0.5; v.play(); return; }"
+             " document.title = 'done|' + first + '#' + line; });"
+             "v.src = URL.createObjectURL(ms);"
+             "</script></body>");
+        char err[128];
+        run_scripts(&page, err, (int)sizeof(err), 0);
+        media_passes(600);
+        const char *said_media = page.title >= 0 ? page.arena + page.title : "";
+        oks("a page's MediaSource plays in a <video>: what is supported, the buffers, then what the element tells, in order",
+            said_media,
+            "done|true false true probably maybe [] closed 0 true true open 0 2 true false segments 1 176 144 1 1.00 1.02 1.00 ended 1.02"
+            "|loadstart,loadedmetadata,resize,loadeddata,canplay,canplaythrough,durationchange,play,playing,resolved,timeupdate,pause,ended"
+            "|1.02 true true 30 0"
+            "#|seeking,play,waiting,timeupdate,seeked,0.5,canplay,playing,canplaythrough,timeupdate,pause,ended|1.02 true true 45 0");
+        int inorder = media_nseen == MEDIA_VIDEO_FRAMES + 15;
+        for (int i = 0; i < media_nseen && inorder; i++) if (media_seen[i] != (i < 30 ? i : i - 15)) inorder = 0;
+        ok("every picture it showed is Windows' decoding of it, in display order, and after the seek from the half on", inorder);
+        if (!inorder) { puts("          seen:"); for (int i = 0; i < media_nseen; i++) { putc(' '); putn(media_seen[i]); } putc('\n'); }
+
+        /* What is not MP4 is an error, told as the standard tells it. */
+        oks("before it is open a MediaSource takes no buffer and no duration",
+            titled("<body><video id=v></video><script>var v = document.getElementById('v'), ms = new MediaSource(), r = [];"
+                   "ms.onsourceopen = function () { var sb = ms.addSourceBuffer('video/mp4');"
+                   " sb.onerror = function () { r.push('error'); }; sb.onupdateend = function () { r.push('updateend', ms.readyState); };"
+                   " v.onerror = function () { r.push('element', v.error.code, v.error instanceof MediaError, MediaError.MEDIA_ERR_DECODE);"
+                   "  try { sb.appendBuffer(new Uint8Array(4)); } catch (e) { r.push(e.name); } document.title = 'done ' + r.join(' '); };"
+                   " sb.appendBuffer(new Uint8Array([0, 0, 0, 16, 109, 111, 111, 102, 1, 2, 3, 4, 5, 6, 7, 8])); };"
+                   "try { ms.addSourceBuffer('video/mp4'); } catch (e) { r.push(e.name); }"
+                   "try { ms.duration = 5; } catch (e) { r.push(e.name); }"
+                   "document.title = r.join(' '); v.src = URL.createObjectURL(ms);</script></body>"),
+            "InvalidStateError InvalidStateError");
+        media_passes(20);
+        oks("and an append that is not MP4 is an error on the buffer, ends the stream and gives the element a decode error",
+            page.title >= 0 ? page.arena + page.title : "",
+            "done InvalidStateError InvalidStateError error updateend ended element 3 true 3 InvalidStateError");
+        titled("<body><video id=v></video><script>var v = document.getElementById('v'), ms = new MediaSource(), r = [];"
+               "ms.onsourceopen = function () { try { ms.addSourceBuffer('video/webm; codecs=\"vp9\"'); } catch (e) { r.push(e.name); }"
+               " var sb = ms.addSourceBuffer('audio/mp4; codecs=\"mp4a.40.2\"'); r.push(sb.buffered.length);"
+               " try { sb.buffered.start(0); } catch (e) { r.push(e.name); }"
+               " ms.removeSourceBuffer(sb); r.push(ms.sourceBuffers.length);"
+               " try { sb.appendBuffer(new Uint8Array(1)); } catch (e) { r.push(e.name); }"
+               " v.removeAttribute('src'); v.load(); };"
+               "ms.onsourceclose = function () { r.push('closed', ms.readyState); document.title = 'done ' + r.join(' '); };"
+               "v.src = URL.createObjectURL(ms);</script></body>");
+        media_passes(20);
+        oks("a type it does not play is refused, TimeRanges say what is out of range, and a load lets the MediaSource go",
+            page.title >= 0 ? page.arena + page.title : "",
+            "done NotSupportedError 0 IndexSizeError 0 InvalidStateError closed closed");
+        titled("<body><video id=v src=/clip.mp4></video><script>var v = document.getElementById('v');"
+               "v.load(); v.play().catch(function (e) { document.title = ['done', e.name, v.error && v.error.code, v.networkState].join(' '); });"
+               "</script></body>");
+        media_passes(20);
+        oks("and a file named as the src is not played, and says so", page.title >= 0 ? page.arena + page.title : "",
+            "done NotSupportedError 4 3");
+        jsdom_request_with(0);
+        jsdom_at("");
     }
 
     /* --- a page that uses up its memory ---------------------------------------

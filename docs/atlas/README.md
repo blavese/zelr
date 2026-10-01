@@ -95,6 +95,18 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.98.0
+
+- **A page plays video by Media Source Extensions (12, 13 §3.13, 11)**: MediaSource, SourceBuffer, TimeRanges and a
+  real media element (`jsmedia.h`) on a pipeline that reads fragmented MP4 (`mp4.h`) and decodes, times and plays it
+  (`media.h`: the sound's clock, seeks from the last picture that needs no other, ranges joined across reordered
+  pictures). `<video>` is laid out as a picture and drawn from its latest frame (`lay_video`, `T_VIDEO`); a sound has no
+  box. mediatest (ring3check): appends in pieces, every picture Windows' decoding in display order, a seek, the sound
+  frames byte for byte, damage refused; failing with pictures decoded out of order splitting the ranges. pagetest: the
+  whole flow from a page's script, its events in the standard's order, every picture checked, a seek after the end,
+  errors; failing with the readyState judged a pass late and with play()'s promise never kept. msecheck (gate): the
+  same in the browser on the desktop in QEMU, looked at and listened to; failing with a video's frames not drawn.
+
 ### 0.97.0
 
 - **A live Twitch channel can be watched: an H.264 decoder (13 §3.12)**, `h264.h`, `h264mb.h`, `h264rec.h`: Baseline,

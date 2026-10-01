@@ -503,6 +503,11 @@ static int jd_later_native(void (*fn)(jval arg), jval arg, int ticks_from_now);
 static int jd_ws_pump(void);                 /* jsws.h */
 static int jd_ws_open_count(void);
 static void jd_ws_reset(void);
+static void jd_media_src_set(int el, const char *name);     /* jsmedia.h */
+static int jd_media_pump(void);
+static int jd_media_due(void);
+static void jd_media_reset(void);
+static int jd_ms_is(jval v);
 static void jd_custom_disconnected(int top);
 static void jd_custom_attr(int node, const char *name, const char *old, const char *now);
 static int  jd_ncustom;
@@ -559,6 +564,7 @@ static void jd_attr_set(int el, const char *name, const char *value) {
     if (w_same(name, "style")) jd_mark_restyle(el);
     if (jd_ncustom && jd_is_upgraded(el)) jd_custom_attr(el, name, had ? (was ? was : "") : 0, value);
     if (was) free(was);
+    jd_media_src_set(el, name);
 }
 
 /* Out of the element's run of attributes. The runs sit end to end (dom.h),
@@ -3929,18 +3935,6 @@ static jval nat_canvas_data_url(jctx *J, jval t, jval *a, int n) {
     return jd_str("data:,");
 }
 
-/* Sound and video: nothing here plays either, so a page asking whether one
-   can be played is told no, and a play() is refused. */
-static jval nat_media_can_play(jctx *J, jval t, jval *a, int n) {
-    (void)J; (void)t; (void)a; (void)n;
-    return jd_str("");
-}
-
-static jval nat_media_play(jctx *J, jval t, jval *a, int n) {
-    (void)t; (void)a; (void)n;
-    return jd_rejected_dom(J, "NotSupportedError", "this browser plays no sound or video");
-}
-
 static jval nat_true_getter(jctx *J, jval t, jval *a, int n) {
     (void)J; (void)t; (void)a; (void)n;
     return js_bool(1);
@@ -3949,21 +3943,6 @@ static jval nat_true_getter(jctx *J, jval t, jval *a, int n) {
 static jval nat_false_getter(jctx *J, jval t, jval *a, int n) {
     (void)J; (void)t; (void)a; (void)n;
     return js_bool(0);
-}
-
-static jval nat_nan_getter(jctx *J, jval t, jval *a, int n) {
-    (void)J; (void)t; (void)a; (void)n;
-    return js_num(js_nan());
-}
-
-static jval nat_one_getter(jctx *J, jval t, jval *a, int n) {
-    (void)J; (void)t; (void)a; (void)n;
-    return js_num(1);
-}
-
-static jval nat_three_getter(jctx *J, jval t, jval *a, int n) {
-    (void)J; (void)t; (void)a; (void)n;
-    return js_num(3);
 }
 
 static jval nat_empty_str(jctx *J, jval t, jval *a, int n) {
@@ -5051,6 +5030,9 @@ static int jsdom_next_due(void) {
     if (jd_requests_waiting()) return 0;
     /* A WebSocket open is asked every twentieth of a second (jsws.h). */
     int now = ticks(), best = jd_ws_open_count() ? 5 : -1;
+    /* And playing media every tick (jsmedia.h). */
+    int media = jd_media_due();
+    if (media >= 0 && (best < 0 || media < best)) best = media;
     for (int i = 0; i < jd_ntimer; i++) {
         if (!jd_timer[i].used) continue;
         int left = jd_timer[i].due - now;
@@ -5099,6 +5081,8 @@ static void jd_run_timer(jtimer *t) {
 static int jsdom_timers(void) {
     if (!jd_open || jd_spent()) return 0;
     int ran = jd_ws_pump();
+    if (jd_spent()) return ran;
+    ran += jd_media_pump();
     if (jd_spent()) return ran;
     int now = ticks();
     int limit = jd_timer_id;             /* not the ones these set */
@@ -6216,6 +6200,7 @@ static void jd_consts(jctx *J, jobj *on, const char *const *names, int from);
 #include "jsworker.h"
 #include "jsws.h"
 #include "jsframe.h"
+#include "jsmedia.h"
 
 /* --- the hooks -----------------------------------------------------------------------------------
  *
@@ -6541,31 +6526,17 @@ static void jd_setup_html(jctx *J) {
     if ((p = jd_iface("HTMLMediaElement"))) {
         jd_reflect(J, p, "src", "src", JR_URL);
         jd_reflect(J, p, "currentSrc", "src", JR_URL);
-        jd_reflect_bools(J, p, "autoplay loop controls muted defaultMuted");
+        jd_reflect_bools(J, p, "autoplay loop controls");
+        jd_reflect(J, p, "defaultMuted", "muted", JR_BOOL);
         jd_reflect_strs(J, p, "preload");
         jd_reflect_as(J, p, "crossOrigin", "crossorigin", JR_NULLSTR, js_null());
-        jd_accessor(J, p, "paused", nat_true_getter, 0);
-        jd_accessor(J, p, "ended", nat_false_getter, 0);
-        jd_accessor(J, p, "seeking", nat_false_getter, 0);
-        jd_accessor(J, p, "currentTime", nat_zero, nat_nothing_js);
-        jd_accessor(J, p, "duration", nat_nan_getter, 0);
-        jd_accessor(J, p, "volume", nat_one_getter, nat_nothing_js);
-        jd_accessor(J, p, "playbackRate", nat_one_getter, nat_nothing_js);
-        jd_accessor(J, p, "readyState", nat_zero, 0);
-        jd_accessor(J, p, "networkState", nat_three_getter, 0);
-        jd_accessor(J, p, "error", nat_null_getter, 0);
-        jd_method(J, p, "canPlayType", nat_media_can_play, 1);
-        jd_method(J, p, "play", nat_media_play, 0);
-        jd_method(J, p, "pause", nat_nothing_js, 0);
-        jd_method(J, p, "load", nat_nothing_js, 0);
+        /* The rest is jsmedia.h's (jd_setup_media). */
     }
     if ((p = jd_iface("HTMLVideoElement"))) {
         jd_reflect(J, p, "poster", "poster", JR_URL);
         jd_reflect(J, p, "width", "width", JR_INT);
         jd_reflect(J, p, "height", "height", JR_INT);
         jd_reflect_bools(J, p, "playsInline");
-        jd_accessor(J, p, "videoWidth", nat_zero, 0);
-        jd_accessor(J, p, "videoHeight", nat_zero, 0);
     }
     if ((p = jd_iface("HTMLBaseElement"))) {
         jd_reflect(J, p, "href", "href", JR_URL);
@@ -6987,6 +6958,7 @@ static void jd_setup(jctx *J) {
     jd_setup_url(J);
     jd_setup_net(J);
     jd_setup_ws(J);
+    jd_setup_media(J);
     jd_setup_frames(J);
     jd_setup_navigator(J);
     jd_setup_location(J);
@@ -7036,6 +7008,7 @@ static void jsdom_close(void) {
     jd_mods_reset();
     jw_close_all();
     jd_ws_reset();
+    jd_media_reset();
     for (int i = 0; i < jd_nreq; i++) { jd_req[i].waiting = 0; jd_req[i].self = 0; }
     jd_nreq = 0;
     if (!jd_open) return;

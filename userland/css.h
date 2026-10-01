@@ -3318,6 +3318,11 @@ static const char CSS_UA[] =
     "input,textarea,select{display:inline-block;padding:4px 8px;"
         "background:#ffffff;border:1px #c9ccd1;border-radius:6px}"
     "img{display:inline-block}"
+    /* A video's picture keeps its shape inside its box, as the standard's
+       rendering has it; nothing draws a player's controls, so a sound has
+       no box at all. */
+    "video{object-fit:contain}"
+    "audio{display:none}"
     /* Old markup that is still on the front of some very large sites.
        center is a block that centres what is in it, and it is how the
        plain version of more than one homepage is laid out to this day. */

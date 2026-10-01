@@ -39,6 +39,7 @@ enum {
        an unknown element is inline and centres nothing -- which is the
        whole reason that page rendered against the left margin. */
     T_CENTER,
+    T_VIDEO, T_AUDIO,
     T_COUNT
 };
 
@@ -75,6 +76,7 @@ static const char *const HTML_TAGS[T_COUNT] = {
     "main", "aside", "figure", "figcaption", "small",
     "noscript", "iframe", "svg", "label", "meta", "link", "hgroup",
     "center",
+    "video", "audio",
 };
 
 static inline int html_tag_of(const char *name, int len) {

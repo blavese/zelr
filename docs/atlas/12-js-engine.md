@@ -2,7 +2,37 @@
 
 Source root the repository root (github.com/blavese/zelr main, 2026-09-22). All paths are relative to it; `file:N` means 1-based line N. Everything below was verified by reading the code. Where a behaviour was derived by tracing (not by running) it says so. Nothing here was built or run.
 
-**Since 0.94.0** (the rest of this file is older; trust the code):
+**Since 0.98.0** (the rest of this file is older; trust the code):
+- **Sound and video for the page** (userland/jsmedia.h, on media.h, atlas 13 §3.13): MediaSource (readyState,
+  duration, sourceBuffers and activeSourceBuffers as SourceBufferLists, addSourceBuffer, removeSourceBuffer,
+  endOfStream with or without an error, the live seekable range calls, `isTypeSupported`), SourceBuffer (appendBuffer,
+  remove, abort, changeType, updating, buffered, timestampOffset, mode, the append window), TimeRanges, MediaError, and
+  the media element made real: play() gives a promise kept when playing is told, pause(), load(), currentTime (a seek),
+  duration, paused, ended, seeking, readyState, networkState, error, buffered, seekable, played, volume and muted (the
+  state; defaultMuted reflects the attribute), the two rates (kept, not applied), canPlayType, videoWidth/Height and
+  getVideoPlaybackQuality. A type is ours when it is MP4 with avc1/avc3 of the baseline, main, extended or high profile
+  and mp4a.40.2 (`jd_media_type`: 2 "probably" with codecs, 1 "maybe" without, 0 otherwise; webm, vp9, av01 and opus
+  are refused). `URL.createObjectURL` takes a MediaSource as well as a Blob (`jd_ms_is`), and the element's load
+  algorithm (`jd_media_load`: a src set by attribute or property, `jd_media_src_set` from `jd_attr_set`, or load())
+  finds the MediaSource by its blob: address (`jd_ms_lookup`) and opens it. A file named as the src is refused with
+  MEDIA_ERR_SRC_NOT_SUPPORTED and a page's console says why ("media: ...").
+  State lives in static tables, so the collector sees what they hold: `jd_media[JD_MEDIA]` (4 elements, each with a
+  `media_t`), `jd_sb[JD_SBUFS]` (8 buffers, each a source of its element's pipeline), and the queue `jd_mq` of events to
+  tell. Everything is told on the next pass (`jd_media_pump`, from `jsdom_timers` after the sockets), never inside the
+  script that caused it; an append or a removal runs there too, between updatestart and update/updateend, and what it
+  brought is judged before updateend (`jd_media_judge`: HAVE_METADATA once every buffer has its initialisation segment,
+  CURRENT when the position is buffered, ENOUGH when a second past it is or the stream has ended there; loadedmetadata,
+  loadeddata, canplay, canplaythrough, playing, waiting, seeked and resize as the standard has them). The clock runs
+  only while the element is not paused, has future data, is not seeking and has not ended (`jd_media_clock`). An
+  append that is not MP4 ends the stream with a decode error before the buffer's error and updateend are told.
+  `jsdom_next_due` wakes the browser every tick while one plays. The browser draws `jsdom_media_picture`, lays a
+  `<video>` out at `jsdom_media_size`, and redraws when `jsdom_media_frames` says a frame came (atlas 11). Only the first
+  element to play has the card's sound (`m.no_sound` on the others). Checked by pagetest (the whole flow, its events in
+  order and every picture against Windows' decoding, a seek after the end, errors) and msecheck in QEMU.
+  Not done: files as a src, sequence mode (taken, played as segments), the append window, rates other than 1, text,
+  audio and video track lists (empty arrays).
+
+**Since 0.94.0**:
 - **Frames** (userland/jsframe.h): an iframe in the page has a window (`jd_frame_window`, kept on the element):
   itself as window, self and frames, the page's window as parent and top, the element as frameElement, a postMessage
   that goes nowhere, listeners (EventTarget), and the page's own timers, constructors and other globals by the same

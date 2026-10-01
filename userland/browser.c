@@ -616,6 +616,36 @@ static const picture *pic_of(int node) {
     return 0;
 }
 
+/* A <video>'s latest frame, lent by the page's media (jsmedia.h) until the
+   next pass. */
+static const picture *video_of(int node) {
+    static picture v;
+    int w, h;
+    const u8 *rgb = jsdom_media_picture(node, &w, &h);
+    if (!rgb) return 0;
+    v.w = w;
+    v.h = h;
+    v.rgb = (u8 *)rgb;
+    return &v;
+}
+
+/* The sizes the layout is given: the pictures', and each <video>'s once its
+   first frame has said what it is. */
+static limage lay_sizes[PICS_MAX + 8];
+
+static int sizes_for_layout(void) {
+    int n = 0;
+    for (int i = 0; i < npic_sizes; i++) lay_sizes[n++] = pic_sizes[i];
+    int node, w, h;
+    for (int i = 0; n < PICS_MAX + 8 && jsdom_media_size(i, &node, &w, &h); i++) {
+        lay_sizes[n].node = node;
+        lay_sizes[n].w = w;
+        lay_sizes[n].h = h;
+        n++;
+    }
+    return n;
+}
+
 static const u8 *pic_alpha_of(int node) {
     for (int i = 0; i < npics; i++)
         if (pics[i].node == node && pics[i].pic.rgb) return pics[i].alpha;
@@ -1811,7 +1841,7 @@ static int computed_style(int node, cstyle *out) {
     volatile u8 *z = (volatile u8 *)&L;
     for (u32 i = 0; i < sizeof(L); i++) z[i] = 0;
     L.d = d; L.s = &sheet; L.x = &index_; L.m = &match; L.inl = inl;
-    L.imgs = pic_sizes; L.nimgs = npic_sizes;
+    L.imgs = lay_sizes; L.nimgs = sizes_for_layout();
     L.out = &page; L.root_px = root_px;
     L.cur_link = -1; L.flex_sized = -1; L.floating = -1;
     int width = css_view_w > 0 ? css_view_w : 800;
@@ -1914,7 +1944,8 @@ static void relayout(int width) {
     lay_show_hidden = 0;
     const ddoc *d = page_drawn(1);
     laid = d;
-    lay_run(&page, d, &sheet, &index_, &match, inl, pic_sizes, npic_sizes,
+    int nsizes = sizes_for_layout();
+    lay_run(&page, d, &sheet, &index_, &match, inl, lay_sizes, nsizes,
             width, root_px);
 
     /* A page that hides its whole self until its script has rebuilt it.
@@ -1925,8 +1956,8 @@ static void relayout(int width) {
     page_unhidden = 0;
     if (lay_words(&page) == 0 && dom_has_words(d)) {
         lay_show_hidden = 1;
-        lay_run(&page, d, &sheet, &index_, &match, inl, pic_sizes,
-                npic_sizes, width, root_px);
+        lay_run(&page, d, &sheet, &index_, &match, inl, lay_sizes,
+                nsizes, width, root_px);
         lay_show_hidden = 0;
         page_unhidden = lay_words(&page) > 0;
     }
@@ -2693,6 +2724,8 @@ static void draw_page(surface *s, int ox, int oy, int vw, int vh) {
             const u8 *alpha = p ? pic_alpha_of(it->node) : 0;
             if (!p && it->node >= 0 && it->node < doc.count && doc.nodes[it->node].tag == T_SVG)
                 p = drawing_of(it);
+            if (!p && it->node >= 0 && it->node < doc.count && doc.nodes[it->node].tag == T_VIDEO)
+                p = video_of(it->node);
             if (p && p->rgb && it->w > 0 && it->h > 0) {
                 /* Nearest neighbour, chosen rather than settled for. A
                    picture on a page is usually drawn at or near its own
@@ -3160,6 +3193,14 @@ int main(int argc, char **argv) {
         if (jsdom_live() && jsdom_timers() && jsdom_changed()) {
             relayout(view_w - UI_PAD * 2);
             dirty = 1;
+        }
+
+        /* A video's new frame is drawn; one whose size changed is laid
+           out again first (jsmedia.h). */
+        if (jsdom_live()) {
+            int resized = 0;
+            if (jsdom_media_frames(&resized)) dirty = 1;
+            if (resized) { relayout(view_w - UI_PAD * 2); dirty = 1; }
         }
 
         /* And anything it asked the network for. One per pass: each blocks

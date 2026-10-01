@@ -1,6 +1,17 @@
 # 11 -- The web browser (everything except JS-engine internals and image decoders)
 
-**Since 0.92.0** (the rest of this file is older; trust the code and the README's "since 6048716" list):
+**Since 0.98.0** (the rest of this file is older; trust the code and the README's "since 6048716" list):
+- **`<video>` is drawn.** html.h knows `video` and `audio` (`T_VIDEO`, `T_AUDIO`, after `T_CENTER`). The browser's rules
+  give a video `object-fit: contain` and a sound no box (nothing draws a player's controls). layout.h `lay_video` lays a
+  video out as a picture whatever its display (like `lay_drawing`, at every place an SVG is): the page's width and
+  height (its attributes are hints, as an SVG's), either alone with the picture's proportions, neither and the picture's
+  own size once its first frame is known (handed in with the pictures' sizes) or 300 by 150; kept to max-width and the
+  line. Its children are never laid out (fallback for browsers without video), nor read as its words. browser.c gives
+  the layout `sizes_for_layout()` (the pictures' sizes and each video's, `jsdom_media_size`), draws a video's item from
+  `video_of` (the latest frame, lent by jsmedia.h), and after the timers pass redraws when `jsdom_media_frames` says a
+  frame came, laying out again first when a video's size changed. The whole page is drawn for each frame.
+
+**Since 0.92.0**:
 - **WebSocket.** userland/wsock.h is RFC 6455's client and nothing of the page: `ws_start` connects (`connect_tls` for
   wss:), sends the upgrade (key from `random_bytes`, Origin, the offered subprotocols, the jar's cookies, the browser's
   User-Agent) and sets the socket's wait to 0; `ws_pump` reads what has come and gives one event a call (the answer
