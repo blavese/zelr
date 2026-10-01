@@ -895,6 +895,15 @@ static void js_putv(jctx *J, jval target, jstr *key, jval v, jval receiver) {
         if (J->host_set(J, o, buf, v)) return;
     }
 
+    /* A function's own prototype is there before anything has asked for it
+       (js_make_proto_for), so it is made now and written as the own property
+       it is. Left to the walk up the chain below, a class whose own prototype
+       chain tslib's __extends had just pointed at its base found the base's
+       prototype, which Babel makes read only, and the write was refused:
+       the class inherited nothing, Apollo's ObservableQuery was not an
+       Observable, and Al Jazeera's page stayed at "Loading". */
+    if (o->kind == JO_FUNC && js_str_eq(key, J->s_prototype) && !js_find(o, key)) js_make_proto_for(J, o);
+
     jprop *p = js_find(o, key);
     if (p) {
         if (p->v.t == JS_ACC) {

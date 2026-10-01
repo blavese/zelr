@@ -979,6 +979,9 @@ int main(void) {
     expect("atob gives a character for each byte and btoa takes them back",
            "(function(){ var b = atob('6cOp/w=='); return [b.length, b.charCodeAt(0), b.charCodeAt(1), b.charCodeAt(3), btoa(b), btoa(String.fromCharCode(233, 255))].join(); })()",
            "4,233,195,255,6cOp/w==,6f8=");
+    expect("a function's own prototype is written even when its parent's is read only",
+           "(function(){ function P(s){ if (!(this instanceof P)) throw new TypeError('called'); this.s = s; } Object.defineProperty(P, 'prototype', { writable: false }); var ext = function (d, b) { Object.setPrototypeOf(d, b); function n() { this.constructor = d; } n.prototype = b.prototype; d.prototype = new n(); }; var C = (function (e) { function t(x) { return e.call(this, x) || this; } ext(t, e); t.prototype.m = function () { return 2; }; return t; })(P); var q = new C(1), a = () => 0; Object.setPrototypeOf(a, P); a.prototype = 5; return [q.s, q instanceof P, q.m(), C.prototype instanceof P, a.prototype === P.prototype].join(); })()",
+           "1,true,2,true,true");
     expect("an escaped character past ASCII is that character, in a class and out of one",
            "(function(){ var b = String.fromCharCode(92); var cls = new RegExp('[' + b + '\\u00e9-' + b + '\\u00fc]', 'g'), one = new RegExp(b + '\\u20ac'); return [cls.test('\\u00f1'), 'a\\u00e9b\\u00fc'.replace(cls, '_'), one.test('5\\u20ac'), one.test('5e')].join(); })()",
            "true,a_b_,true,false");
