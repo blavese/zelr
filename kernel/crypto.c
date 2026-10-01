@@ -335,6 +335,35 @@ void aes_decrypt_block(const aes_t *a, const u8 in[16], u8 out[16]) {
 
 /* --- unwrapping a key ----------------------------------------------------- */
 
+/* Six passes forwards over the blocks, the round number mixed into the
+   check value each step: what aes_unwrap_key undoes. */
+bool aes_wrap_key(const u8 *kek, u32 kek_bits, const u8 *in, u32 in_len, u8 *out) {
+    if (in_len < 16 || (in_len % 8) != 0) return false;
+    aes_t a;
+    if (!aes_set_key(&a, kek, kek_bits)) return false;
+    u32 n = in_len / 8;
+    u8 acc[8];
+    memset(acc, 0xA6, 8);
+    memcpy(out + 8, in, in_len);
+    for (int round = 0; round <= 5; round++) {
+        for (u32 i = 1; i <= n; i++) {
+            u8 block[16];
+            memcpy(block, acc, 8);
+            memcpy(block + 8, out + i * 8, 8);
+            aes_encrypt_block(&a, block, block);
+            u32 t = n * (u32)round + i;
+            memcpy(acc, block, 8);
+            acc[7] ^= (u8)t;
+            acc[6] ^= (u8)(t >> 8);
+            acc[5] ^= (u8)(t >> 16);
+            acc[4] ^= (u8)(t >> 24);
+            memcpy(out + i * 8, block + 8, 8);
+        }
+    }
+    memcpy(out, acc, 8);
+    return true;
+}
+
 bool aes_unwrap_key(const u8 *kek, u32 kek_bits,
                     const u8 *in, u32 in_len, u8 *out) {
     if (in_len < 16 || (in_len % 8) != 0) return false;

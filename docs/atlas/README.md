@@ -95,6 +95,16 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.101.0
+
+- **A wireless station, joined to a simulated access point (06a, 06b)**: CCMP (`ccmp.c`), the 802.11 frames, scanning,
+  open authentication and association, the 4-way and group key handshakes, data frames to and from Ethernet with
+  replay and forgery refused (`wlan.c`), and a WPA2 access point for the selftest (`wlansim.c`). `[ccmp]` (8): RFC 3610's
+  vectors and the standard's CCMP frame byte for byte; failing with the AAD's retry bit kept. `[wireless]` (16): the
+  scan, a wrong password, three wrong third messages, joining, ARP and ping under CCMP, a group frame, a replay, a bent
+  frame, a frame in the clear and a deauthentication; failing with each of the station's checks taken out. No card
+  drives it yet.
+
 ### 0.100.0
 
 - **A `<video>` or `<audio>` plays a file (13 §3.13, 12)**: MP4 that is not fragmented, read by its sample tables and

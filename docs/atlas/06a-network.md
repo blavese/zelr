@@ -1,6 +1,26 @@
 # 06a -- Network drivers and the TCP/IP stack
 
-**Since 0.92.0** (the rest of this file is older): a read of a socket waits `sock_t.wait_ms` (syscall 68, atlas 03),
+**Since 0.101.0** (the rest of this file is older): **a wireless station** (include/wlan.h, kernel/wlan.c), not yet
+driven by any card: a state machine moved on by frames (`wlan_rx`) and by polls (`wlan_poll`, one a tick), talking to a
+radio (`wlan_radio`: send a frame, go to a channel). `wlan_scan` probes each of channels 1 to 13 for `WLAN_DWELL` polls
+and keeps every beacon and probe response (`wlan_bss`: SSID, channel, signal, the RSN element; `secure` is 1 only for
+CCMP group and pairwise ciphers with a pre-shared key, `rsn_ours`). `wlan_join`: the PMK (PBKDF2, 4096 rounds) once,
+open authentication, association with our RSN element (`OUR_RSN`) and 802.11b/g rates, then the 4-way handshake
+(`key_msg1`, `key_msg3`: replay counter past the last, the first message's nonce, the MIC, the key data unwrapped with
+the KEK, its RSN element byte for byte the beacon's, the group key's KDE; then the fourth message and the keys in) and
+the group key handshake (`key_group`). Retries every 200 ms, four tries, three seconds for the handshake; a
+deauthentication or disassociation says why (`reason`). Data frames go to the DS with the destination as the third
+address and LLC/SNAP before the type; CCMP (include/ccmp.h, kernel/ccmp.c) once there is a pairwise key, its packet
+number counted up; frames coming in are decrypted with the pairwise key, or the group key when to a group, and
+dropped (`wlan_dropped`) when the MIC fails, the packet number is not past the last (per priority for the pairwise key),
+or they come in the clear once there are keys. kernel/wlansim.c is a WPA2 access point on channel 6 for the selftest's
+`[wireless]`, its authenticator written from 12.7 apart from the station's code: it gives up with reason 15 on a wrong
+second message, answers ARP and ping for 10.77.0.1, and can be made to send to all, replay, bend, send in the clear,
+deauthenticate, and send third messages that are wrong (a downgraded RSN element, another nonce, an old replay
+counter). `aes_wrap_key` (crypto.c) is RFC 3394's wrap for it. Not done: a card's driver, netdev and the stack (no
+interface uses the station yet), WEP, TKIP, WPA3, enterprise, 802.11n rates, power saving, hidden networks, roaming.
+
+**Since 0.92.0**: a read of a socket waits `sock_t.wait_ms` (syscall 68, atlas 03),
 not always 4000 ms, so a program can ask a connection held open whether anything came without waiting (the
 browser's WebSocket, userland/wsock.h).
 

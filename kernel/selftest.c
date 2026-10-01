@@ -26,6 +26,9 @@
 #include "sha256.h"
 #include "sha512.h"
 #include "wpa.h"
+#include "ccmp.h"
+#include "wlan.h"
+#include "wlansim.h"
 #include "sched.h"
 #include "wait.h"
 #include "syscall.h"
@@ -4511,6 +4514,14 @@ static void test_crypto(void) {
         kek[0] ^= 0x80;
         ok("and so is the right key under the wrong one",
            !aes_unwrap_key(kek, 128, wrapped, 24, out));
+        kek[0] ^= 0x80;
+
+        /* Wrapping, as an access point sends the group key: the same
+           vector the other way. */
+        u8 key[16], made[24];
+        from_hex("00112233445566778899AABBCCDDEEFF", key, 16);
+        ok("a key wrapped is RFC 3394's wrapped key", aes_wrap_key(kek, 128, key, 16, made) &&
+           is_hex(made, 24, "1FA68B0A8112B447AEF34BD8FB5A7B829D3E862371D2CFE5"));
     }
 }
 
@@ -4531,6 +4542,232 @@ static void test_crypto(void) {
  * single vector: that both ends sorting the same pair arrive at the same
  * key however it reached them, and that anything else changing changes it.
  */
+/* CCMP (ccmp.h): RFC 3610's packet vectors that use CCMP's parameters (an
+ * eight byte MIC, a thirteen byte nonce) for the CCM underneath, and the
+ * standard's own CCMP test frame (IEEE 802.11-2016 M.6.4) for the header,
+ * nonce and AAD around it; then the frame decrypted again, and refused when
+ * any byte of it has changed. */
+static void test_ccmp(void) {
+    static const struct { u8 key[16], nonce[13]; u32 hdr, len; u8 in[33], out[41]; } V[] = {
+        { /* #1 */ { 0xc0, 0xc1, 0xc2, 0xc3, 0xc4, 0xc5, 0xc6, 0xc7, 0xc8, 0xc9, 0xca, 0xcb, 0xcc, 0xcd, 0xce, 0xcf },
+          { 0x00, 0x00, 0x00, 0x03, 0x02, 0x01, 0x00, 0xa0, 0xa1, 0xa2, 0xa3, 0xa4, 0xa5 }, 8, 31,
+          { 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e },
+          { 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x58, 0x8c, 0x97, 0x9a, 0x61, 0xc6, 0x63, 0xd2, 0xf0, 0x66, 0xd0, 0xc2, 0xc0, 0xf9, 0x89, 0x80, 0x6d, 0x5f, 0x6b, 0x61, 0xda, 0xc3, 0x84, 0x17, 0xe8, 0xd1, 0x2c, 0xfd, 0xf9, 0x26, 0xe0 } },
+        { /* #2 */ { 0xc0, 0xc1, 0xc2, 0xc3, 0xc4, 0xc5, 0xc6, 0xc7, 0xc8, 0xc9, 0xca, 0xcb, 0xcc, 0xcd, 0xce, 0xcf },
+          { 0x00, 0x00, 0x00, 0x04, 0x03, 0x02, 0x01, 0xa0, 0xa1, 0xa2, 0xa3, 0xa4, 0xa5 }, 8, 32,
+          { 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f },
+          { 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x72, 0xc9, 0x1a, 0x36, 0xe1, 0x35, 0xf8, 0xcf, 0x29, 0x1c, 0xa8, 0x94, 0x08, 0x5c, 0x87, 0xe3, 0xcc, 0x15, 0xc4, 0x39, 0xc9, 0xe4, 0x3a, 0x3b, 0xa0, 0x91, 0xd5, 0x6e, 0x10, 0x40, 0x09, 0x16, 0x11 } },
+        { /* #3 */ { 0xc0, 0xc1, 0xc2, 0xc3, 0xc4, 0xc5, 0xc6, 0xc7, 0xc8, 0xc9, 0xca, 0xcb, 0xcc, 0xcd, 0xce, 0xcf },
+          { 0x00, 0x00, 0x00, 0x05, 0x04, 0x03, 0x02, 0xa0, 0xa1, 0xa2, 0xa3, 0xa4, 0xa5 }, 8, 33,
+          { 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f, 0x20 },
+          { 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x51, 0xb1, 0xe5, 0xf4, 0x4a, 0x19, 0x7d, 0x1d, 0xa4, 0x6b, 0x0f, 0x8e, 0x2d, 0x28, 0x2a, 0xe8, 0x71, 0xe8, 0x38, 0xbb, 0x64, 0xda, 0x85, 0x96, 0x57, 0x4a, 0xda, 0xa7, 0x6f, 0xbd, 0x9f, 0xb0, 0xc5 } },
+        { /* #4 */ { 0xc0, 0xc1, 0xc2, 0xc3, 0xc4, 0xc5, 0xc6, 0xc7, 0xc8, 0xc9, 0xca, 0xcb, 0xcc, 0xcd, 0xce, 0xcf },
+          { 0x00, 0x00, 0x00, 0x06, 0x05, 0x04, 0x03, 0xa0, 0xa1, 0xa2, 0xa3, 0xa4, 0xa5 }, 12, 31,
+          { 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e },
+          { 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0xa2, 0x8c, 0x68, 0x65, 0x93, 0x9a, 0x9a, 0x79, 0xfa, 0xaa, 0x5c, 0x4c, 0x2a, 0x9d, 0x4a, 0x91, 0xcd, 0xac, 0x8c, 0x96, 0xc8, 0x61, 0xb9, 0xc9, 0xe6, 0x1e, 0xf1, 0x12 } },
+        { /* #13 */ { 0xd7, 0x82, 0x8d, 0x13, 0xb2, 0xb0, 0xbd, 0xc3, 0x25, 0xa7, 0x62, 0x36, 0xdf, 0x93, 0xcc, 0x6b },
+          { 0x00, 0x41, 0x2b, 0x4e, 0xa9, 0xcd, 0xbe, 0x3c, 0x96, 0x96, 0x76, 0x6c, 0xfa }, 8, 31,
+          { 0x0b, 0xe1, 0xa8, 0x8b, 0xac, 0xe0, 0x18, 0xb1, 0x08, 0xe8, 0xcf, 0x97, 0xd8, 0x20, 0xea, 0x25, 0x84, 0x60, 0xe9, 0x6a, 0xd9, 0xcf, 0x52, 0x89, 0x05, 0x4d, 0x89, 0x5c, 0xea, 0xc4, 0x7c },
+          { 0x0b, 0xe1, 0xa8, 0x8b, 0xac, 0xe0, 0x18, 0xb1, 0x4c, 0xb9, 0x7f, 0x86, 0xa2, 0xa4, 0x68, 0x9a, 0x87, 0x79, 0x47, 0xab, 0x80, 0x91, 0xef, 0x53, 0x86, 0xa6, 0xff, 0xbd, 0xd0, 0x80, 0xf8, 0xe7, 0x8c, 0xf7, 0xcb, 0x0c, 0xdd, 0xd7, 0xb3 } },
+    };
+    int all = 1, back = 1, refused = 1;
+    for (u32 v = 0; v < sizeof(V) / sizeof(V[0]); v++) {
+        aes_t a;
+        aes_set_key(&a, V[v].key, 128);
+        u8 ct[40], mic[8], pt[40];
+        u32 m = V[v].len - V[v].hdr;
+        ccm_encrypt(&a, V[v].nonce, V[v].in, V[v].hdr, V[v].in + V[v].hdr, m, ct, mic);
+        if (memcmp(ct, V[v].out + V[v].hdr, m) || memcmp(mic, V[v].out + V[v].len, 8)) all = 0;
+        if (!ccm_decrypt(&a, V[v].nonce, V[v].in, V[v].hdr, V[v].out + V[v].hdr, m, pt, V[v].out + V[v].len) ||
+            memcmp(pt, V[v].in + V[v].hdr, m)) back = 0;
+        u8 bad[40];
+        memcpy(bad, V[v].out + V[v].hdr, m);
+        bad[m / 2] ^= 1;
+        if (ccm_decrypt(&a, V[v].nonce, V[v].in, V[v].hdr, bad, m, pt, V[v].out + V[v].len)) refused = 0;
+    }
+    ok("CCM matches RFC 3610's packet vectors with CCMP's parameters", all);
+    ok("and decrypts them back", back);
+    ok("and refuses one with a byte changed", refused);
+
+    /* The standard's frame: a data frame, retry set, to no DS. */
+    static const u8 tkb[16] = { 0xc9, 0x7c, 0x1f, 0x67, 0xce, 0x37, 0x11, 0x85,
+                                0x51, 0x4a, 0x8a, 0x19, 0xf2, 0xbd, 0xd5, 0x2f };
+    static const u8 hdr[24] = { 0x08, 0x48, 0xc3, 0x2c, 0x0f, 0xd2, 0xe1, 0x28, 0xa5, 0x7c, 0x50, 0x30,
+                                0xf1, 0x84, 0x44, 0x08, 0xab, 0xae, 0xa5, 0xb8, 0xfc, 0xba, 0x80, 0x33 };
+    static const u8 plain[20] = { 0xf8, 0xba, 0x1a, 0x55, 0xd0, 0x2f, 0x85, 0xae, 0x96, 0x7b,
+                                  0xb6, 0x2f, 0xb6, 0xcd, 0xa8, 0xeb, 0x7e, 0x78, 0xa0, 0x50 };
+    static const u8 want[60] = {
+        0x08, 0x48, 0xc3, 0x2c, 0x0f, 0xd2, 0xe1, 0x28, 0xa5, 0x7c, 0x50, 0x30, 0xf1, 0x84, 0x44, 0x08,
+        0xab, 0xae, 0xa5, 0xb8, 0xfc, 0xba, 0x80, 0x33, 0x0c, 0xe7, 0x00, 0x20, 0x76, 0x97, 0x03, 0xb5,
+        0xf3, 0xd0, 0xa2, 0xfe, 0x9a, 0x3d, 0xbf, 0x23, 0x42, 0xa6, 0x43, 0xe4, 0x32, 0x46, 0xe8, 0x0c,
+        0x3c, 0x04, 0xd0, 0x19, 0x78, 0x45, 0xce, 0x0b, 0x16, 0xf9, 0x76, 0x23 };
+    aes_t tk;
+    aes_set_key(&tk, tkb, 128);
+    u8 frame[64];
+    u32 n = ccmp_encrypt(&tk, 0xB5039776E70CULL, 0, hdr, 24, plain, 20, frame);
+    ok("a frame encrypted is the standard's CCMP test frame, byte for byte", n == 60 && !memcmp(frame, want, 60));
+    u8 body[32];
+    u64 pn = 0;
+    int got = ccmp_decrypt(&tk, want, 60, ccmp_hdr_len(want, 60), body, &pn);
+    ok("and the standard's frame decrypts to its words, with its packet number",
+       got == 20 && !memcmp(body, plain, 20) && pn == 0xB5039776E70CULL);
+    /* Changing a byte the AAD covers (an address) is as fatal as changing
+       the words; a retry bit, which it takes out, is not. */
+    u8 bent[60];
+    memcpy(bent, want, 60);
+    bent[5] ^= 0x01;
+    ok("a frame with an address changed is refused", ccmp_decrypt(&tk, bent, 60, 24, body, &pn) < 0);
+    memcpy(bent, want, 60);
+    bent[1] &= (u8)~0x08;
+    ok("one sent again without its retry bit still decrypts", ccmp_decrypt(&tk, bent, 60, 24, body, &pn) == 20);
+    u8 qos[26 + 8 + 20 + 8], qhdr[26];
+    memcpy(qhdr, hdr, 24);
+    qhdr[0] = 0x88;                               /* a QoS data frame, priority 5 */
+    qhdr[24] = 5;
+    qhdr[25] = 0;
+    n = ccmp_encrypt(&tk, 7, 1, qhdr, 26, plain, 20, qos);
+    ok("a QoS frame's header is 26 bytes and goes round, priority and key id kept",
+       ccmp_hdr_len(qos, n) == 26 && ccmp_decrypt(&tk, qos, n, 26, body, &pn) == 20 && pn == 7 &&
+       !memcmp(body, plain, 20) && (qos[26 + 3] >> 6) == 1);
+}
+
+/* The station (wlan.h) joining the simulated access point (wlansim.c):
+ * found by a scan, refused with the wrong password, joined with the right
+ * one, and then ARP and ping both ways under CCMP, a frame to everyone under
+ * the group key, a frame sent twice and one bent dropped, and being sent
+ * away told. Driven by hand: the access point's frames are delivered and the
+ * station's clock moved on a poll at a time. */
+static bool contains(const char *hay, const char *needle);
+static u8 wlan_got[1600];
+static u32 wlan_got_len;
+static int wlan_got_n;
+static void wlan_take(const u8 *eth, u32 len) {
+    if (len > sizeof(wlan_got)) return;
+    memcpy(wlan_got, eth, len);
+    wlan_got_len = len;
+    wlan_got_n++;
+}
+
+static void wlan_run(int polls, wlan_state_t until) {
+    for (int i = 0; i < polls; i++) {
+        wlansim_pump();
+        if (wlan_state() == until) return;
+        wlan_poll();
+    }
+}
+
+static void test_wlan(void) {
+    static const u8 mac[6] = { 0x02, 0x00, 0x00, 0x5A, 0x45, 0x4C };
+    wlan_attach(wlansim_reset(mac));
+    wlan_on_eth(wlan_take);
+    wlan_scan();
+    for (int i = 0; i < 400 && wlan_state() == WLAN_SCANNING; i++) {
+        if (i % 7 == 0) wlansim_beacon();
+        wlansim_pump();
+        wlan_poll();
+    }
+    wlan_bss nets[WLAN_BSS_MAX];
+    int n = wlan_networks(nets, WLAN_BSS_MAX), k = -1;
+    for (int i = 0; i < n; i++) if (!strcmp(nets[i].ssid, wlansim_ssid())) k = i;
+    ok("a scan of every channel finds the network, on its channel, protected as this can join",
+       wlan_state() == WLAN_IDLE && k >= 0 && nets[k].channel == 6 && nets[k].secure == 1 &&
+       !memcmp(nets[k].bssid, wlansim_bssid(), 6));
+
+    ok("joining with the wrong password begins", wlan_join(wlansim_ssid(), "not the password") == 0);
+    wlan_run(600, WLAN_FAILED);
+    ok("and fails at the handshake, said so, the access point having found the MIC wrong",
+       wlan_state() == WLAN_FAILED && wlansim_mic_failures() == 1 && !wlansim_keys() &&
+       contains(wlan_why(), "password"));
+
+    /* Third messages that are wrong in the ways an attacker's would be. */
+    wlansim_misbehave(1);
+    wlan_join(wlansim_ssid(), wlansim_password());
+    wlan_run(600, WLAN_FAILED);
+    ok("a third message offering less than the beacon did is refused, and said so",
+       wlan_state() == WLAN_FAILED && contains(wlan_why(), "did not offer what its beacon did"));
+    u32 was = wlan_dropped();
+    wlansim_misbehave(2);
+    wlan_join(wlansim_ssid(), wlansim_password());
+    wlan_run(600, WLAN_FAILED);
+    ok("one with another nonce than the first message's is not taken",
+       wlan_state() == WLAN_FAILED && wlan_dropped() == was + 1 && !wlansim_keys());
+    wlansim_misbehave(3);
+    wlan_join(wlansim_ssid(), wlansim_password());
+    wlan_run(600, WLAN_FAILED);
+    ok("nor one whose replay counter has not moved on",
+       wlan_state() == WLAN_FAILED && wlan_dropped() == was + 2 && !wlansim_keys());
+    wlansim_misbehave(0);
+
+    ok("joining with the right one", wlan_join(wlansim_ssid(), wlansim_password()) == 0);
+    wlan_run(600, WLAN_CONNECTED);
+    ok("is joined, both ends with the keys in", wlan_state() == WLAN_CONNECTED && wlansim_keys());
+
+    /* ARP for the access point's address, and its answer. */
+    u8 arp[42] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
+    memcpy(arp + 6, mac, 6);
+    arp[12] = 0x08; arp[13] = 0x06;
+    static const u8 req[8] = { 0, 1, 8, 0, 6, 4, 0, 1 };
+    memcpy(arp + 14, req, 8);
+    memcpy(arp + 22, mac, 6);
+    arp[28] = 10; arp[29] = 77; arp[30] = 0; arp[31] = 2;
+    memset(arp + 32, 0, 6);
+    arp[38] = 10; arp[39] = 77; arp[40] = 0; arp[41] = 1;
+    wlan_got_n = 0;
+    ok("an ARP request goes out encrypted", wlan_send_eth(arp, 42));
+    wlan_run(4, WLAN_IDLE);
+    ok("and the access point's answer comes back, decrypted, as an Ethernet frame to us from it",
+       wlan_got_n == 1 && wlan_got_len >= 42 && !memcmp(wlan_got, mac, 6) && !memcmp(wlan_got + 6, wlansim_bssid(), 6) &&
+       wlan_got[12] == 0x08 && wlan_got[13] == 0x06 && wlan_got[21] == 2 && !memcmp(wlan_got + 22, wlansim_bssid(), 6));
+
+    /* A ping with words in it, and its reply with the same words. */
+    u8 ping[14 + 20 + 8 + 16];
+    memcpy(ping, wlansim_bssid(), 6);
+    memcpy(ping + 6, mac, 6);
+    ping[12] = 0x08; ping[13] = 0x00;
+    u8 *ip = ping + 14;
+    memset(ip, 0, 20);
+    ip[0] = 0x45; ip[3] = 20 + 8 + 16; ip[8] = 64; ip[9] = 1;
+    ip[12] = 10; ip[13] = 77; ip[14] = 0; ip[15] = 2;
+    ip[16] = 10; ip[17] = 77; ip[18] = 0; ip[19] = 1;
+    u8 *icmp = ip + 20;
+    memset(icmp, 0, 8);
+    icmp[0] = 8;
+    memcpy(icmp + 8, "over the air now", 16);
+    wlan_got_n = 0;
+    wlan_send_eth(ping, sizeof(ping));
+    wlan_run(4, WLAN_IDLE);
+    ok("a ping is answered, its words back unchanged",
+       wlan_got_n == 1 && wlan_got_len == sizeof(ping) && wlan_got[14 + 9] == 1 && wlan_got[14 + 20] == 0 &&
+       !memcmp(wlan_got + 14 + 28, "over the air now", 16));
+
+    /* To everyone, under the group key. */
+    wlan_got_n = 0;
+    wlansim_broadcast();
+    wlan_run(2, WLAN_IDLE);
+    ok("a frame to everyone, under the group key, comes in",
+       wlan_got_n == 1 && wlan_got[0] == 0xFF && wlan_got[12] == 0x08 && wlan_got[13] == 0x06);
+
+    /* The same again, and one bent: both dropped, and nothing given up. */
+    u32 before = wlan_dropped();
+    wlan_got_n = 0;
+    wlansim_replay();
+    wlan_run(2, WLAN_IDLE);
+    ok("a frame sent a second time is dropped", wlan_got_n == 0 && wlan_dropped() == before + 1);
+    wlansim_bend();
+    wlan_run(2, WLAN_IDLE);
+    ok("and so is one with a byte changed", wlan_got_n == 0 && wlan_dropped() == before + 2 &&
+       wlan_state() == WLAN_CONNECTED);
+
+    wlansim_plain();
+    wlan_run(2, WLAN_IDLE);
+    ok("and so is one in the clear now that there are keys", wlan_got_n == 0 && wlan_dropped() == before + 3);
+
+    wlansim_deauth(3);
+    wlan_run(2, WLAN_IDLE);
+    ok("being sent away is told, with why", wlan_state() == WLAN_FAILED && contains(wlan_why(), "going down") &&
+       !wlan_send_eth(arp, 42));
+}
+
 static void test_wpa(void) {
     u8 pmk[PMK_LEN];
 
@@ -5661,6 +5898,8 @@ int selftest_run(void) {
     kprintf("[randomness]\n"); test_rng(); test_rng_call();
     kprintf("[tls 1.3]\n");    test_tls_schedule(); test_tls(); test_tls_order(); test_tls_alerts();
     kprintf("[wpa]\n");        test_wpa();
+    kprintf("[ccmp]\n");       test_ccmp();
+    kprintf("[wireless]\n");   test_wlan();
     kprintf("[wait timeouts]\n"); test_wait_timeout();
     kprintf("[processors]\n"); test_smp();
     kprintf("[black box]\n"); test_blackbox();

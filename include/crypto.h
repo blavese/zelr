@@ -78,3 +78,7 @@ void aes_decrypt_block(const aes_t *a, const u8 in[16], u8 out[16]);
    interfering, and the two are deliberately indistinguishable. */
 bool aes_unwrap_key(const u8 *kek, u32 kek_bits,
                     const u8 *in, u32 in_len, u8 *out);
+
+/* And the other way, which an access point does to send the group key: n
+   bytes (a multiple of eight, at least sixteen) into n + 8. */
+bool aes_wrap_key(const u8 *kek, u32 kek_bits, const u8 *in, u32 in_len, u8 *out);

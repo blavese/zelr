@@ -1453,6 +1453,17 @@ that. Atheros parts are the exception, because their MAC is in hardware.
 So a machine with wireless it cannot use says which card and why, which is
 more useful than an empty list of networks and a good deal more honest.
 
+Above whatever card it will be, the station is written: it scans the
+channels for networks and what they protect with, joins one with
+authentication, association and WPA2's 4-way handshake (the access point's
+third message checked for every way an attacker's could be wrong, the group
+key unwrapped), and then carries Ethernet frames encrypted with CCMP,
+dropping any that are replayed, altered or sent in the clear once there are
+keys. The encryption reproduces RFC 3610's vectors and the 802.11
+standard's own test frame byte for byte, and the self test joins a
+simulated access point written from the other side of the standard. No
+card's driver uses it yet.
+
 **Ethernet over USB**, which is the answer to a laptop whose wireless will
 not start without a vendor binary. There is still a socket on the side of
 it, and a phone with tethering turned on presents itself as a network
@@ -1985,6 +1996,9 @@ orders of magnitude away from Linux, which is roughly 30 million lines.
     kernel/tls.c       tls 1.3, client side
     kernel/rng.c       unpredictable bytes, and refusing to invent them
     kernel/wpa.c       what a wireless password turns into
+    kernel/ccmp.c      what a protected wireless network's frames are encrypted with
+    kernel/wlan.c      a wireless station: scanning, joining, the handshake, frames
+    kernel/wlansim.c   a simulated access point, for the self test to join
     kernel/wifi.c      what wireless hardware is here, and whether it is usable
     kernel/usbnet.c    ethernet over usb, for a phone or an adapter
     userland/monitor.c what the machine is doing, while it does it
