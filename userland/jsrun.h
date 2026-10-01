@@ -1780,7 +1780,12 @@ static void js_hoist_body(jctx *J, int block, jscope *var_sc, jscope *lex_sc) {
 /* --- the evaluator -------------------------------------------------------- */
 
 static int js_tick(jctx *J) {
-    if (++J->steps > JS_STEP_CAP) {
+    /* The first step of a run starts its clock: every place a run begins
+       sets steps to 0. */
+    if (++J->steps == 1) J->run_since = ticks();
+    if ((J->steps & 0xFFFF) == 0 && J->time_cap > 0 && ticks() - J->run_since > J->time_cap)
+        J->steps = JS_STEP_CAP;
+    if (J->steps > JS_STEP_CAP - 1) {
         if (J->sig == JS_OK || J->sig == JS_THROWN) {
             J->sig = JS_FAILED;
             const char *m = "this script ran for too long and was stopped";
@@ -3871,6 +3876,7 @@ static void agen_after(jctx *J, jco *co) {
 static void js_init(jctx *J) {
     memset(J, 0, (int)sizeof(*J));
     J->sig = JS_OK;
+    J->time_cap = JS_TIME_CAP;
     J->mem_cap = JS_MEM_CAP;
     J->gc_next = JS_GC_FIRST;
     J->gc_on = 1;

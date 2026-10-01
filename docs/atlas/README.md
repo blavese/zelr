@@ -95,6 +95,11 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.93.0
+
+- **Scripts stopped by the clock, not a count (12, `js_tick`, `JS_TIME_CAP`)**: forty million steps stopped React
+  half way through Al Jazeera's page. jstest, failing with the old cap and with the clock not looked at.
+
 ### 0.92.0
 
 - **A function's own prototype written when its chain's is read only (12, `js_putv`)**: tslib subclasses of Babel

@@ -447,6 +447,7 @@ int main(void) {
         ran++;
         jctx J;
         js_init(&J);
+        J.time_cap = 50;
         int ok = js_run(&J, "while (true) {}", 15);
         int stopped = !ok && J.error[0];
         puts(stopped ? "  PASS  " : "  FAIL  ");
@@ -454,6 +455,41 @@ int main(void) {
         putc('\n');
         if (!stopped) failed++;
         js_done(&J);
+    }
+    {
+        /* Stopped by the clock, not by a count: more steps than the forty
+           million that used to be all a run had finish, and one that never
+           ends stops about when its time is up. */
+        ran++;
+        jctx J;
+        js_init(&J);
+        J.time_cap = 6000;          /* the count is what is asked about, on however slow a machine */
+        const char *src = "var s = 0; for (var i = 0; i < 16000000; i++) s += i & 1; result = s;";
+        int ok = js_run(&J, src, (u32)strlen(src));
+        jval got = js_get(&J, js_from_obj(J.global_obj), js_str(&J, "result"));
+        int whole = ok && got.t == JS_NUM && got.num == 8000000;
+        js_done(&J);
+        js_init(&J);
+        J.time_cap = 30;
+        int t0 = ticks();
+        ok = js_run(&J, "while (true) {}", 15);
+        int took = ticks() - t0;
+        int in_time = !ok && took >= 30 && took < 300;
+        js_done(&J);
+        puts(whole && in_time ? "  PASS  " : "  FAIL  ");
+        puts("a long run finishes, and one that never ends is stopped when its time is up");
+        putc('\n');
+        if (!(whole && in_time)) {
+            failed++;
+            puts("          finished ");
+            puts(whole ? "yes" : "no");
+            puts(", stopped after ");
+            char b[12]; int k = 0, v = took < 0 ? 0 : took; char t[12];
+            do { t[k++] = (char)('0' + v % 10); v /= 10; } while (v && k < 11);
+            int w = 0; while (k) b[w++] = t[--k]; b[w] = 0;
+            puts(b);
+            puts(" ticks\n");
+        }
     }
 
     /* --- regular expressions -------------------------------------------
@@ -1234,6 +1270,7 @@ int main(void) {
         ran++;
         jctx J;
         js_init(&J);
+        J.time_cap = 50;
         const char *src = "var n = 0; function spin() { n++; Promise.resolve().then(spin); } spin();";
         int ok = js_run(&J, src, (u32)strlen(src));
         const char *want = "this script ";

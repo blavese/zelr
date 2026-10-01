@@ -2,7 +2,15 @@
 
 Source root the repository root (github.com/blavese/zelr main, 2026-09-22). All paths are relative to it; `file:N` means 1-based line N. Everything below was verified by reading the code. Where a behaviour was derived by tracing (not by running) it says so. Nothing here was built or run.
 
-**Since 0.92.0** (the rest of this file is older; trust the code):
+**Since 0.93.0** (the rest of this file is older; trust the code):
+- **A run is stopped by the clock** (js.h `JS_TIME_CAP`, `jctx.time_cap`, `run_since`; jsrun.h `js_tick`): the first
+  step of a run (every place a run begins sets `steps` to 0) notes `ticks()`, and every 65536 steps a run older than
+  `time_cap` ticks (1000, ten seconds) is stopped with the same message as before. `JS_STEP_CAP` (now 2000 million)
+  is only a backstop. It was 40 million steps alone: under a second on the host and three in a slow guest, and React
+  putting Al Jazeera's page together needed about fifty million. A runaway loop now holds the browser for up to ten
+  seconds a run, where it held it for a few.
+
+**Since 0.92.0**:
 - **A function's own prototype is written whatever its chain says** (jsrun.h `js_putv`): a `prototype` not yet made
   (`js_make_proto_for`) is made before the write, so the write lands on it. It went up the chain first, where tslib's
   `__extends` had just put the base class, and Babel makes a class's prototype read only: the write was refused and the

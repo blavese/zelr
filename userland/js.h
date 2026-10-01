@@ -82,7 +82,15 @@
 #ifndef JS_GC_STRESS
 #define JS_GC_STRESS 0
 #endif
-#define JS_STEP_CAP  40000000u
+/* How long one run of the page's scripts may go on -- a script, a handler,
+   a timer, with the jobs it leaves -- before it is stopped as one that will
+   not end: JS_TIME_CAP ticks of the clock (ten seconds), looked at every
+   65536 steps, and JS_STEP_CAP steps whatever the clock says. It was forty
+   million steps alone, which is under a second here and three seconds in a
+   slow machine: React putting Al Jazeera's page together took fifty million,
+   and was stopped half way. A context's own `time_cap` may be shorter. */
+#define JS_STEP_CAP  2000000000u
+#define JS_TIME_CAP  1000
 #define JS_DEPTH_CAP 800
 
 /* How much of the machine's stack the scripts may use, below wherever the
@@ -414,6 +422,7 @@ typedef struct jctx {
     jsignal sig;
     jval    ret;              /* the value of a return, or what was thrown */
     u32     steps;
+    int     run_since, time_cap;  /* when this run began, in ticks, and how long it may go */
     int     depth;
     char    error[192];
     int     error_line;
