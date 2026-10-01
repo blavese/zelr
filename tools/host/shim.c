@@ -16,7 +16,11 @@
  * go=ADDRESS, click=X:Y, wait, pause=MS) and `shot` writes the window as a PPM
  * (HOST_SHOT is the file prefix). HOST_SAMPLE=N prints the program's stack
  * five times after N seconds, named from the .pdb, for finding a hang;
- * HOST_NETLOG shows each connection and each wait that ran out.
+ * HOST_PROFILE=N (or FROM:N, starting FROM seconds in) looks at the stack
+ * every few milliseconds for N seconds and then prints the functions it was
+ * in most (innermost, and anywhere on the stack) while it was not waiting,
+ * for finding where the time goes; HOST_NETLOG shows each
+ * connection and each wait that ran out.
  *
  * What it is not: a check. Nothing in the gate uses it, and it proves
  * nothing about the kernel, the TLS or the drawing on the machine; those are
@@ -341,6 +345,113 @@ static DWORD WINAPI sampler(LPVOID arg) {
     return 0;
 }
 
+/* HOST_PROFILE=N or FROM:N: where the time goes. The main thread is stopped
+   every millisecond or so (as often as Sleep(1) lets this run) for N
+   seconds, from FROM seconds after the start, and its stack walked; then the
+   functions are named and counted -- the one it was in, and every one on the
+   stack once a look -- and the commonest of each printed. A look that found
+   it waiting (on the network, mostly) is counted apart, and the shares are
+   of the rest. A count of looks rather than a timing, so it is a share. */
+#define PROF_LOOKS 60000
+#define PROF_DEPTH 24
+static DWORD64 prof_pc[PROF_LOOKS][PROF_DEPTH];
+static unsigned char prof_n[PROF_LOOKS];
+
+typedef struct { char name[96]; int self, all, seen; } prof_fn;
+
+static int prof_cmp_self(const void *a, const void *b) { return ((const prof_fn *)b)->self - ((const prof_fn *)a)->self; }
+static int prof_cmp_all(const void *a, const void *b) { return ((const prof_fn *)b)->all - ((const prof_fn *)a)->all; }
+
+static DWORD WINAPI profiler(LPVOID arg) {
+    const char *spec = (const char *)arg;
+    int from = 0, secs = atoi(spec);
+    const char *colon = strchr(spec, ':');
+    if (colon) { from = atoi(spec); secs = atoi(colon + 1); }
+    HANDLE proc = GetCurrentProcess();
+    /* The program's .pdb is beside it, which is not where the symbol
+       handler looks by itself. */
+    char dir[MAX_PATH];
+    DWORD dl = GetModuleFileNameA(0, dir, sizeof(dir));
+    while (dl > 0 && dir[dl - 1] != '\\' && dir[dl - 1] != '/') dl--;
+    dir[dl] = 0;
+    SymSetOptions(SYMOPT_UNDNAME | SYMOPT_DEFERRED_LOADS);
+    SymInitialize(proc, dir, TRUE);
+    Sleep((DWORD)from * 1000);
+    DWORD until = GetTickCount() + (DWORD)secs * 1000;
+    int looks = 0;
+    while (looks < PROF_LOOKS && (int)(GetTickCount() - until) < 0) {
+        Sleep(1);
+        if (SuspendThread(main_thread) == (DWORD)-1) break;
+        CONTEXT ctx;
+        memset(&ctx, 0, sizeof(ctx));
+        ctx.ContextFlags = CONTEXT_FULL;
+        if (GetThreadContext(main_thread, &ctx)) {
+            STACKFRAME64 f;
+            memset(&f, 0, sizeof(f));
+            f.AddrPC.Offset = ctx.Rip; f.AddrPC.Mode = AddrModeFlat;
+            f.AddrFrame.Offset = ctx.Rbp; f.AddrFrame.Mode = AddrModeFlat;
+            f.AddrStack.Offset = ctx.Rsp; f.AddrStack.Mode = AddrModeFlat;
+            int d = 0;
+            while (d < PROF_DEPTH && StackWalk64(IMAGE_FILE_MACHINE_AMD64, proc, main_thread, &f, &ctx, 0,
+                                                 SymFunctionTableAccess64, SymGetModuleBase64, 0)) {
+                prof_pc[looks][d++] = f.AddrPC.Offset;
+                if (!f.AddrReturn.Offset) break;
+            }
+            prof_n[looks++] = (unsigned char)d;
+        }
+        ResumeThread(main_thread);
+    }
+    /* Named, and counted by name; a look that was waiting, apart. */
+    static prof_fn fns[4096];
+    int nf = 0, waiting = 0;
+    for (int i = 0; i < looks; i++) {
+        if (prof_n[i]) {
+            char wb[sizeof(SYMBOL_INFO) + 256];
+            SYMBOL_INFO *wi = (SYMBOL_INFO *)wb;
+            wi->SizeOfStruct = sizeof(SYMBOL_INFO);
+            wi->MaxNameLen = 255;
+            DWORD64 wd = 0;
+            if (SymFromAddr(proc, prof_pc[i][0], &wd, wi)
+                && (strstr(wi->Name, "Wait") || strstr(wi->Name, "Delay") || strstr(wi->Name, "select"))) {
+                waiting++;
+                prof_n[i] = 0;
+                continue;
+            }
+        }
+        for (int d = 0; d < prof_n[i]; d++) {
+            char buf[sizeof(SYMBOL_INFO) + 256];
+            SYMBOL_INFO *si = (SYMBOL_INFO *)buf;
+            si->SizeOfStruct = sizeof(SYMBOL_INFO);
+            si->MaxNameLen = 255;
+            DWORD64 disp = 0;
+            const char *name = SymFromAddr(proc, prof_pc[i][d], &disp, si) ? si->Name : "?";
+            int k = 0;
+            while (k < nf && strcmp(fns[k].name, name)) k++;
+            if (k == nf) {
+                if (nf == 4096) continue;
+                snprintf(fns[nf].name, sizeof(fns[nf].name), "%s", name);
+                fns[nf].self = fns[nf].all = 0;
+                fns[nf].seen = -1;
+                nf++;
+            }
+            if (d == 0) fns[k].self++;
+            if (fns[k].seen != i) { fns[k].all++; fns[k].seen = i; }
+        }
+    }
+    int busy = looks - waiting;
+    fprintf(stderr, "HOST_PROFILE %d looks in %d s from %d s, %d of them waiting\n  innermost:\n",
+            looks, secs, from, waiting);
+    qsort(fns, nf, sizeof(fns[0]), prof_cmp_self);
+    for (int k = 0; k < nf && k < 30; k++)
+        if (fns[k].self) fprintf(stderr, "    %5.1f%%  %s\n", 100.0 * fns[k].self / (busy ? busy : 1), fns[k].name);
+    fprintf(stderr, "  anywhere on the stack:\n");
+    qsort(fns, nf, sizeof(fns[0]), prof_cmp_all);
+    for (int k = 0; k < nf && k < 40; k++)
+        fprintf(stderr, "    %5.1f%%  %s\n", 100.0 * fns[k].all / (busy ? busy : 1), fns[k].name);
+    fflush(stderr);
+    return 0;
+}
+
 /* The function an address is in, and its line, for a program's own report
    of where it spends (js.h, JS_ALLOC_PROFILE). */
 int host_symbol(void *addr, char *out, int cap) {
@@ -401,10 +512,12 @@ int main(int argc, char **argv) {
     heap_base = heap_brk = (char *)VirtualAlloc(0, hs, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
     heap_end = heap_base + hs;
     setvbuf(stdout, 0, _IOFBF, 1 << 16);
-    if (getenv("HOST_SAMPLE")) {
+    if (getenv("HOST_SAMPLE") || getenv("HOST_PROFILE"))
         DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(), &main_thread,
                         0, FALSE, DUPLICATE_SAME_ACCESS);
+    if (getenv("HOST_SAMPLE"))
         CreateThread(0, 0, sampler, (LPVOID)(long long)atoi(getenv("HOST_SAMPLE")), 0, 0);
-    }
+    if (getenv("HOST_PROFILE"))
+        CreateThread(0, 0, profiler, (LPVOID)getenv("HOST_PROFILE"), 0, 0);
     return zelr_main(argc, argv);
 }
