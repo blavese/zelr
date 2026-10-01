@@ -4381,9 +4381,14 @@ static void lay_block_placed(lctx *L, int node, const cstyle *parent, int x,
        laid out as though they were the page. */
     if (d->nodes[node].tag == T_IMG || d->nodes[node].tag == T_SVG || d->nodes[node].tag == T_VIDEO
         || (d->nodes[node].tag != T_BUTTON && lay_control_kind(d, node) != CTL_NONE)) {
-        lay_line_start(L, *y, x, avail, A_LEFT);
+        /* With its own margins above and below, and centred by auto ones
+           at its sides (img { display: block; margin: 0 auto }). */
+        *y += st.mt == CSS_AUTO_OFF ? 0 : st.mt;
+        int centre = st.ml == CSS_AUTO_OFF && st.mr == CSS_AUTO_OFF;
+        lay_line_start(L, *y, x, avail, centre ? A_CENTER : A_LEFT);
         lay_inline(L, node, parent, y);
         lay_line_end(L, y);
+        *y += st.mb == CSS_AUTO_OFF ? 0 : st.mb;
         return;
     }
 
@@ -4575,11 +4580,17 @@ static void lay_block_placed(lctx *L, int node, const cstyle *parent, int x,
             /* A picture or a field made a block is still a picture or a
                field: on a line of its own, drawn by the code that draws
                them, which is the inline code. As a block it had no children
-               and came out as nothing. */
+               and came out as nothing. Its margins above and below are its
+               own, and auto ones at its sides centre it. */
             if (inline_open) lay_line_end(L, y);
-            lay_line_start(L, *y, cx, cw, st.align);
+            cstyle cs;
+            lay_style(L, child, &st, &cs, cw);
+            *y += cs.mt == CSS_AUTO_OFF ? 0 : cs.mt;
+            int centre = cs.ml == CSS_AUTO_OFF && cs.mr == CSS_AUTO_OFF;
+            lay_line_start(L, *y, cx, cw, centre ? A_CENTER : st.align);
             lay_inline(L, child, &st, y);
             lay_line_end(L, y);
+            *y += cs.mb == CSS_AUTO_OFF ? 0 : cs.mb;
             inline_open = 0;
         } else if (is_block) {
             if (inline_open) { lay_line_end(L, y); inline_open = 0; }

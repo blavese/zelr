@@ -1205,6 +1205,28 @@ int main(void) {
            && word("a")->x < s->x && s->x < word("b")->x);
         ok("and what is inside it is not laid out as the page", !word("words"));
 
+        /* A picture made a block keeps its own margins above and below,
+           and auto ones at its sides centre it: the commonest way a page
+           puts a picture in the middle with room around it. Both ways a
+           block picture is laid out: a block's child, and a box of its own
+           (here a flex item). With spaced CSS, as pages write it. */
+        lay("<style>body { margin: 0 } p { margin: 0 } svg { display: block; margin: 12px auto 20px auto }</style>"
+            "<div><p>before</p><svg id=s width=100 height=40></svg><p>after</p></div>", 400);
+        s = image_of(by_id("s"));
+        const litem *before = word("before"), *after = word("after");
+        okn("a block picture keeps its top margin (its gap from the line above)",
+            s && before && s->y - (before->y + before->h) >= 12 && s->y - (before->y + before->h) < 20,
+            s && before ? s->y - (before->y + before->h) : -1);
+        okn("and its bottom margin (the gap to the line below)",
+            s && after && after->y - (s->y + s->h) >= 20 && after->y - (s->y + s->h) < 28,
+            s && after ? after->y - (s->y + s->h) : -1);
+        okn("and auto margins at its sides centre it", s && s->x == 150, s ? s->x : -1);
+        lay("<style>body { margin: 0 } .f { display: flex; flex-direction: column } "
+            ".f svg { margin: 10px auto 0 auto }</style>"
+            "<div class=f><svg id=s width=60 height=30></svg></div>", 400);
+        s = image_of(by_id("s"));
+        okn("so does one that is a box of its own, a flex item (its x)", s && s->x == 170 && s->y >= 10, s ? s->x : -1);
+
         lay("<style>.i{width:24px;height:24px}</style>"
             "<svg id=s class=i width=100 height=100 viewBox=\"0 0 10 10\"></svg>", 600);
         s = image_of(by_id("s"));
