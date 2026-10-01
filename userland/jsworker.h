@@ -355,7 +355,7 @@ static void jw_fetch_due(jval arg) {
     int slot = jw[f->slot].J && jw[f->slot].gen == f->gen && !jw[f->slot].closed ? f->slot : -1;
     if (slot < 0) { free(f->body); return; }
     jctx *W = jw[slot].J;
-    jd_reply rp = { 0, 0, 0, 0, 0 };
+    jd_reply rp = { 0, 0, 0, 0, 0, 0, 0 };
     char *owned = 0;
     if (jd_is_data_url(f->url)) {
         rp.len = (int)jd_data_url(f->url, &owned, 0, 0);
@@ -367,7 +367,7 @@ static void jw_fetch_due(jval arg) {
         if (jd_blob_lookup(f->url, &bb, &bt)) {
             rp.body = bb->s; rp.len = (int)bb->len; rp.status = 200; rp.type = bt ? bt->s : ""; rp.url = f->url;
         }
-    } else if (jd_do_request) jd_do_request(f->method, f->url, f->body, 0, &rp);
+    } else if (jd_do_request) jd_do_request(f->method, f->url, f->body, f->body ? w_len(f->body) : 0, 0, "", &rp);
     free(f->body);
     W->sig = JS_OK;
     if (rp.status <= 0) {

@@ -1,6 +1,6 @@
 /* What each of a real page's scripts did, one line each.
  *
- *   scriptdump ADDRESS [SECONDS] [text] [tree] ['js=EXPRESSION' ...] [prof]
+ *   scriptdump ADDRESS [SECONDS] [text] [tree] ['js=EXPRESSION' ...] [prof] [from=ADDRESS] [real]
  *
  * Loads the page with the browser's own load() -- the same fetches, the same
  * limits on how many scripts and how large, the same document and bindings
@@ -14,6 +14,11 @@
  *
  * Each js= is evaluated in the page once it has run, and what it came to is
  * printed: a page's own state, asked for the way its console would be.
+ *
+ * With from=, the page is asked for as a link on that address would ask for
+ * it: with its Referer, which the page also sees as document.referrer. With
+ * "real", YouTube's or Twitch's own page is run instead of what sites.h
+ * reads out of it.
  *
  * "prof", in a build with HOST_CFLAGS=-DJS_ALLOC_PROFILE, prints where the
  * page's script memory went, by the calls that asked for it (js.h).
@@ -154,6 +159,9 @@ int main(int argc, char **argv) {
     if (argc < 2) { puts("scriptdump ADDRESS [SECONDS] [text]\n"); return 2; }
     for (int a = 2; a < argc; a++) if (w_same(argv[a], "text")) show_text = 1;
     for (int a = 2; a < argc; a++) if (w_same(argv[a], "tree")) show_tree = 1;
+    for (int a = 2; a < argc; a++)
+        if (w_starts_fold(argv[a], "from=")) w_copy(nav_from, sizeof(nav_from), argv[a] + 5, sizeof(nav_from));
+    for (int a = 2; a < argc; a++) if (w_same(argv[a], "real")) site_readers_off = 1;
 
     src = (char *)map(SRC_MAX, PROT_READ | PROT_WRITE);
     cssbuf = (char *)map(CSS_MAX, PROT_READ | PROT_WRITE);

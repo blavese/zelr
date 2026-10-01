@@ -4020,8 +4020,9 @@ static jval nat_template_content(jctx *J, jval t, jval *a, int n) {
  * runs through HTMLElement's, which hands back the element being upgraded
  * or makes one of the defined name (nat_html_element_ctor), and the
  * callbacks run as the standard names them: connected, disconnected, and
- * attributeChanged for the attributes it says it observes. */
-#define JD_CUSTOM 256
+ * attributeChanged for the attributes it says it observes. YouTube's watch
+ * page defines more than a thousand. */
+#define JD_CUSTOM 2048
 
 typedef struct {
     jstr *name;
@@ -5270,8 +5271,13 @@ static jval nat_doc_domain(jctx *J, jval t, jval *a, int n) {
     return jd_str(u.host);
 }
 
-/* The browser sends no Referer (fetch.h), so there is none to report. */
-static jval nat_doc_referrer(jctx *J, jval t, jval *a, int n) { return nat_empty_str(J, t, a, n); }
+/* What the browser sent as the page's Referer (fetch.h, the page's policy
+   applied), set by the browser before the page's scripts run. */
+static char jd_referrer[URL_TEXT];
+
+void jsdom_referrer(const char *r) { w_copy(jd_referrer, sizeof(jd_referrer), r ? r : "", sizeof(jd_referrer)); }
+
+static jval nat_doc_referrer(jctx *J, jval t, jval *a, int n) { (void)J; (void)t; (void)a; (void)n; return jd_str(jd_referrer); }
 
 static jval nat_doc_charset(jctx *J, jval t, jval *a, int n) {
     (void)J; (void)t; (void)a; (void)n;
@@ -6876,6 +6882,11 @@ static void jd_setup(jctx *J) {
     jd_p[JI_CHARDATA] = jd_interface(J, "CharacterData", jd_p[JI_NODE], 0, 0);
     jd_p[JI_TEXT] = jd_interface(J, "Text", jd_p[JI_CHARDATA], nat_text_ctor, 0);
     jd_p[JI_COMMENT] = jd_interface(J, "Comment", jd_p[JI_CHARDATA], nat_comment_ctor, 0);
+    /* No HTML document has either, but the web components polyfill YouTube
+       loads first patches the four kinds of character data by name, and
+       stopped on the two that were not there. */
+    jd_interface(J, "CDATASection", jd_p[JI_TEXT], 0, 0);
+    jd_interface(J, "ProcessingInstruction", jd_p[JI_CHARDATA], 0, 0);
     jd_p[JI_ELEMENT] = jd_interface(J, "Element", jd_p[JI_NODE], 0, 0);
     jd_p[JI_HTMLELEMENT] = jd_interface(J, "HTMLElement", jd_p[JI_ELEMENT], nat_html_element_ctor, 0);
     jd_p[JI_SVGELEMENT] = jd_interface(J, "SVGElement", jd_p[JI_ELEMENT], 0, 0);

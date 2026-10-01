@@ -50,6 +50,9 @@ typedef struct {
     int   cut;                     /* the answer stopped before its end */
     char  location[URL_TEXT];      /* where a redirect points */
     char  ctype[64];
+    char  refpol[64];              /* its Referrer-Policy, if it said one */
+    const char *head;              /* the status line and headers as they came, */
+    int   hlen;                    /* in the caller's buffer before the body */
     int   secure;                  /* it was encrypted, and to whom it said */
     char  how[64];                 /* what was agreed, or why it was refused */
 } response_t;
@@ -510,10 +513,105 @@ static inline void web_drop(void) {
    (sites.h) -- set these for the one call and put them back to nothing. */
 static const char *web_body_type;      /* nothing: a form */
 static const char *web_extra;          /* whole header lines, each ending \r\n */
+/* And for a page's own requests (jsnet.h): another method than GET, or POST
+   with a body, and a body's length where it is bytes rather than words (a
+   NUL in it is not its end). */
+static const char *web_method;         /* nothing: GET, or POST with a body */
+static int web_body_len = -1;          /* -1: the body is a string, as long as it is */
 /* What to ask for, when it is not a page: a picture is asked for as the
    kinds this can decode. Asking for anything let a picture server choose WebP or AVIF,
    which nothing here reads, over the JPEG it would otherwise have sent. */
 static const char *web_accept;
+
+/* --- who is asking --------------------------------------------------------
+ *
+ * Referer, as every browser sends it (W3C Referrer Policy): the address of
+ * the document a request is made for, cut down by the policy that document
+ * is under. The default, strict-origin-when-cross-origin, sends the whole
+ * address (less its fragment and any user name) to the same site, only its
+ * origin to another, and nothing from https to http, where it would travel
+ * in the clear. A page can ask for less or more by a Referrer-Policy header
+ * or a <meta name="referrer">. The browser says which document is asking;
+ * an address typed, the start page and the browser's own questions are asked
+ * from nowhere and carry none. */
+enum { REF_STRICT_CROSS, REF_NONE, REF_NO_DOWNGRADE, REF_SAME_ORIGIN, REF_ORIGIN,
+       REF_STRICT_ORIGIN, REF_ORIGIN_CROSS, REF_UNSAFE };
+static char web_referrer_from[URL_TEXT];
+static int  web_referrer_policy;
+
+/* A policy by the name a header or a meta tag gives it, the last one known
+   in a list winning; -1 when none is known, which leaves the policy alone.
+   The old meta keywords are the policies they became. */
+static inline int web_policy_of(const char *s) {
+    static const char *const NAMES[] = { "strict-origin-when-cross-origin", "no-referrer",
+        "no-referrer-when-downgrade", "same-origin", "origin", "strict-origin",
+        "origin-when-cross-origin", "unsafe-url", "never", "default", "always", 0 };
+    static const signed char IS[] = { REF_STRICT_CROSS, REF_NONE, REF_NO_DOWNGRADE, REF_SAME_ORIGIN,
+        REF_ORIGIN, REF_STRICT_ORIGIN, REF_ORIGIN_CROSS, REF_UNSAFE, REF_NONE, REF_NO_DOWNGRADE, REF_UNSAFE };
+    int found = -1;
+    while (s && *s) {
+        while (*s == ' ' || *s == ',' || *s == '\t') s++;
+        int n = 0;
+        while (s[n] && s[n] != ',' && s[n] != ' ' && s[n] != '\t') n++;
+        for (int i = 0; NAMES[i]; i++)
+            if (w_len(NAMES[i]) == n && w_starts_fold(s, NAMES[i])) found = IS[i];
+        s += n;
+    }
+    return found;
+}
+
+/* The Referer a request to u carries, into out: its length, 0 for none. */
+static inline int web_referrer_for(const url_t *u, char *out, int cap) {
+    out[0] = 0;
+    const char *from = web_referrer_from;
+    int https = w_starts_fold(from, "https://");
+    if (!https && !w_starts_fold(from, "http://")) return 0;    /* data:, about:, blob:, nothing */
+    /* The address without a user name or a fragment, which are never sent;
+       its origin is the scheme and host, a slash after it. */
+    char clean[URL_TEXT];
+    int n = 0, at = https ? 8 : 7;
+    for (int i = 0; i < at; i++) clean[n++] = from[i];
+    int auth = at;
+    while (from[auth] && from[auth] != '/' && from[auth] != '?' && from[auth] != '#') auth++;
+    int host = at;
+    for (int i = at; i < auth; i++) if (from[i] == '@') host = i + 1;
+    for (int i = host; i < auth && n < (int)sizeof(clean) - 2; i++) clean[n++] = from[i];
+    int origin = n;
+    if (from[auth] != '/') clean[n++] = '/';
+    for (int i = auth; from[i] && from[i] != '#' && n < (int)sizeof(clean) - 1; i++) clean[n++] = from[i];
+    clean[n] = 0;
+    url_t f;
+    if (!url_parse(clean, &f)) return 0;
+    int same = f.secure == u->secure && f.port == u->port && w_same_fold(f.host, u->host);
+    int down = https && !u->secure;
+    int whole;
+    switch (web_referrer_policy) {
+        case REF_NONE: return 0;
+        case REF_NO_DOWNGRADE: if (down) return 0; whole = 1; break;
+        case REF_SAME_ORIGIN: if (!same) return 0; whole = 1; break;
+        case REF_ORIGIN: whole = 0; break;
+        case REF_STRICT_ORIGIN: if (down) return 0; whole = 0; break;
+        case REF_ORIGIN_CROSS: whole = same; break;
+        case REF_UNSAFE: whole = 1; break;
+        default: if (down) return 0; whole = same; break;
+    }
+    int len = whole ? n : origin + 1;
+    if (len > cap - 1) return 0;               /* too long to send whole: nothing rather than part */
+    for (int i = 0; i < len; i++) out[i] = clean[i];
+    out[len] = 0;
+    return len;
+}
+
+/* Whether whole header lines hold one of a name, whatever its case. */
+static inline int wh_has_line(const char *lines, const char *name) {
+    int n = w_len(name);
+    for (const char *p = lines; p && *p; ) {
+        if (w_starts_fold(p, name) && p[n] == ':') return 1;
+        while (*p && *p != '\n') p++;
+        if (*p) p++;
+    }
+    return 0;
+}
 
 static inline int ka_matches(const url_t *u) {
     return ka_live && u->port == ka_port && u->secure == ka_secure
@@ -532,6 +630,9 @@ static inline int web_fetch_once(const url_t *u, const char *body,
     r->cut = 0;
     r->location[0] = 0;
     r->ctype[0] = 0;
+    r->refpol[0] = 0;
+    r->head = 0;
+    r->hlen = 0;
     r->secure = 0;
     r->how[0] = 0;
 
@@ -562,9 +663,13 @@ static inline int web_fetch_once(const url_t *u, const char *body,
         ka_sock = rc;
     }
 
-    char req[URL_PATH + URL_HOST + CK_VALUE + 512];
+    char req[URL_PATH + URL_HOST + CK_VALUE + URL_TEXT + 4096];
+    const char *method = web_method ? web_method : body ? "POST" : "GET";
+    int blen = body ? (web_body_len >= 0 ? web_body_len : w_len(body)) : 0;
+    int head_only = w_same_fold(method, "HEAD");
     int n = 0;
-    n = wh_add(req, sizeof(req), n, body ? "POST " : "GET ");
+    n = wh_add(req, sizeof(req), n, method);
+    if (n >= 0) n = wh_add(req, sizeof(req), n, " ");
     if (n >= 0) n = wh_add(req, sizeof(req), n, u->path);
     if (n >= 0) n = wh_add(req, sizeof(req), n, " HTTP/1.1\r\nHost: ");
     if (n >= 0) n = wh_add(req, sizeof(req), n, u->host);
@@ -579,12 +684,15 @@ static inline int web_fetch_once(const url_t *u, const char *body,
        allowed to gzip will. Close, because this makes one request per
        connection and a server holding the socket open afterwards is a wait
        for nothing. */
+    if (n >= 0) n = wh_add(req, sizeof(req), n, "\r\nUser-Agent: " WEB_USER_AGENT "\r\n");
+    /* What it takes, unless the lines a page set say so themselves. */
+    if (!wh_has_line(web_extra, "accept")) {
+        if (n >= 0) n = wh_add(req, sizeof(req), n, "Accept: ");
+        if (n >= 0) n = wh_add(req, sizeof(req), n, web_accept ? web_accept : "text/html,text/plain,*/*");
+        if (n >= 0) n = wh_add(req, sizeof(req), n, "\r\n");
+    }
     if (n >= 0) n = wh_add(req, sizeof(req), n,
-                           "\r\nUser-Agent: " WEB_USER_AGENT "\r\nAccept: ");
-    if (n >= 0) n = wh_add(req, sizeof(req), n, web_accept ? web_accept
-                                                  : "text/html,text/plain,*/*");
-    if (n >= 0) n = wh_add(req, sizeof(req), n,
-                           "\r\nAccept-Encoding: gzip\r\n"
+                           "Accept-Encoding: gzip\r\n"
                            "Connection: keep-alive\r\n");
 
     /* Whatever this site has already said to remember about itself. */
@@ -594,16 +702,30 @@ static inline int web_fetch_once(const url_t *u, const char *body,
         if (n >= 0) n = wh_add(req, sizeof(req), n, cookies);
         if (n >= 0) n = wh_add(req, sizeof(req), n, "\r\n");
     }
+    /* And who is asking, as far as the asking page's policy says. */
+    char ref[URL_TEXT];
+    if (web_referrer_for(u, ref, sizeof(ref))) {
+        if (n >= 0) n = wh_add(req, sizeof(req), n, "Referer: ");
+        if (n >= 0) n = wh_add(req, sizeof(req), n, ref);
+        if (n >= 0) n = wh_add(req, sizeof(req), n, "\r\n");
+    }
     if (web_extra && n >= 0) n = wh_add(req, sizeof(req), n, web_extra);
     /* A server is entitled to read exactly this many bytes and not one
        more, so the length has to be the body's and not the buffer's. */
     if (body) {
-        if (n >= 0) n = wh_add(req, sizeof(req), n, "Content-Type: ");
-        if (n >= 0) n = wh_add(req, sizeof(req), n, web_body_type ? web_body_type
-                                                     : "application/x-www-form-urlencoded");
-        if (n >= 0) n = wh_add(req, sizeof(req), n, "\r\nContent-Length: ");
-        if (n >= 0) n = wh_add_num(req, sizeof(req), n, w_len(body));
+        /* A type of "" is a body that says nothing of what it is. */
+        if (!web_body_type || web_body_type[0]) {
+            if (n >= 0) n = wh_add(req, sizeof(req), n, "Content-Type: ");
+            if (n >= 0) n = wh_add(req, sizeof(req), n, web_body_type ? web_body_type
+                                                         : "application/x-www-form-urlencoded");
+            if (n >= 0) n = wh_add(req, sizeof(req), n, "\r\n");
+        }
+        if (n >= 0) n = wh_add(req, sizeof(req), n, "Content-Length: ");
+        if (n >= 0) n = wh_add_num(req, sizeof(req), n, blen);
         if (n >= 0) n = wh_add(req, sizeof(req), n, "\r\n");
+    } else if (w_same_fold(method, "POST") || w_same_fold(method, "PUT") || w_same_fold(method, "PATCH")) {
+        /* A method that carries a body says when it carries none. */
+        if (n >= 0) n = wh_add(req, sizeof(req), n, "Content-Length: 0\r\n");
     }
     if (n >= 0) n = wh_add(req, sizeof(req), n, "\r\n");
     if (n < 0) { web_drop(); return WEB_ERR_SEND; }
@@ -621,7 +743,7 @@ static inline int web_fetch_once(const url_t *u, const char *body,
     /* And the body after the head, in the same sized pieces. Not part of
        req: a form can be longer than the buffer a request line fits in. */
     if (body) {
-        int blen = w_len(body), bs = 0;
+        int bs = 0;
         while (bs < blen) {
             int piece = blen - bs;
             if (piece > 1400) piece = 1400;
@@ -678,7 +800,7 @@ static inline int web_fetch_once(const url_t *u, const char *body,
                    and one sent without a length was waited on for three
                    quiet reads. */
                 int st = wh_status(buf, total);
-                if (st == 204 || st == 304) { want = 0; chunked = 0; }
+                if (st == 204 || st == 304 || head_only) { want = 0; chunked = 0; }
             }
         }
 
@@ -744,9 +866,12 @@ static inline int web_fetch_once(const url_t *u, const char *body,
     if (hlen < 0) return WEB_ERR_HEADERS;
 
     r->status = wh_status(buf, total);
+    r->head = buf;
+    r->hlen = hlen;
 
     wh_header(buf, hlen, "location", r->location, sizeof(r->location));
     wh_header(buf, hlen, "content-type", r->ctype, sizeof(r->ctype));
+    wh_header(buf, hlen, "referrer-policy", r->refpol, sizeof(r->refpol));
     ck_take(u, buf, hlen);
 
     r->body = buf + hlen + skip;
@@ -799,8 +924,8 @@ static inline int web_fetch(const url_t *u, const char *body,
    than followed until the machine gives up. */
 #define WEB_MAX_HOPS 6
 
-static inline int web_send(url_t *u, const char *body, char *buf, int cap,
-                           response_t *r) {
+static inline int web_send_hops(url_t *u, const char *body, char *buf, int cap,
+                                response_t *r) {
     for (int hop = 0; hop < WEB_MAX_HOPS; hop++) {
         int rc = web_fetch(u, body, buf, cap, r);
         if (rc < 0) return rc;
@@ -826,8 +951,24 @@ static inline int web_send(url_t *u, const char *body, char *buf, int cap,
            method, so they do. Sending the form again to wherever it was
            sent is how somebody orders twice. */
         if (body && (rc == 301 || rc == 302 || rc == 303)) body = 0;
+        /* And a 303 is a GET whatever was asked, a HEAD apart (Fetch, the
+           redirect steps); so is a 301 or 302 after a POST. */
+        if (web_method && !w_same_fold(web_method, "HEAD")
+            && (rc == 303 || ((rc == 301 || rc == 302) && w_same_fold(web_method, "POST")))) {
+            web_method = 0;
+            body = 0;
+        }
     }
     return r->status;
+}
+
+/* The method put back afterwards, since a redirect may have changed it. */
+static inline int web_send(url_t *u, const char *body, char *buf, int cap,
+                           response_t *r) {
+    const char *method = web_method;
+    int rc = web_send_hops(u, body, buf, cap, r);
+    web_method = method;
+    return rc;
 }
 
 static inline int web_get(url_t *u, char *buf, int cap, response_t *r) {

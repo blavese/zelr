@@ -243,15 +243,38 @@ static void jar_set(const char *line) { ck_take_line(&jar_at, line, 1); }
    for an address with "json" in it, a failure for one with "down", and "ok"
    for the rest. */
 static char asked[512];
-static int fake_request(const char *method, const char *url, const char *body, const char *type,
-                        jd_reply *out) {
+/* And the header lines it carried, each ending ";", and its body's bytes as
+   numbers when one of them is not a printable character. */
+static char asked_headers[512], asked_bytes[256];
+
+static int fake_request(const char *method, const char *url, const char *body, int blen,
+                        const char *type, const char *headers, jd_reply *out) {
     int w = 0;
-    const char *parts[4] = { method, url, body ? body : "", type ? type : "-" };
+    const char *parts[4] = { method, url, body ? body : "", type ? (type[0] ? type : "none") : "-" };
     for (int k = 0; k < 4; k++) {
         if (k) asked[w++] = ' ';
         for (const char *p = parts[k]; *p && w < (int)sizeof(asked) - 2; p++) asked[w++] = *p;
     }
     asked[w] = 0;
+    w = 0;
+    for (const char *p = headers ? headers : ""; *p && w < (int)sizeof(asked_headers) - 2; p++)
+        if (*p == '\r') continue;
+        else asked_headers[w++] = *p == '\n' ? ';' : *p;
+    asked_headers[w] = 0;
+    w = 0;
+    for (int i = 0; body && i < blen && w < (int)sizeof(asked_bytes) - 5; i++) {
+        int v = (u8)body[i];
+        if (i) asked_bytes[w++] = ',';
+        if (v >= 100) asked_bytes[w++] = (char)('0' + v / 100);
+        if (v >= 10) asked_bytes[w++] = (char)('0' + v / 10 % 10);
+        asked_bytes[w++] = (char)('0' + v % 10);
+    }
+    asked_bytes[w] = 0;
+    /* What the server says back, headers and all, its cookie among them. */
+    static const char head[] = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nX-Reply: yes\r\n"
+                               "Set-Cookie: s=1\r\nX-Two:  spaced  \r\n";
+    out->head = head;
+    out->hlen = (int)sizeof(head) - 1;
     int json = 0, down = 0;
     for (const char *p = url; *p; p++) {
         if (p[0] == 'j' && p[1] == 's' && p[2] == 'o' && p[3] == 'n') json = 1;
@@ -260,6 +283,7 @@ static int fake_request(const char *method, const char *url, const char *body, c
     out->url = url;
     out->type = json ? "application/json" : "text/plain";
     out->status = down ? 0 : 200;
+    if (json) { out->head = 0; out->hlen = 0; }
     out->body = json ? "{\"n\": 7, \"list\": [1, 2]}" : "ok";
     out->len = w_len(out->body);
     return out->len;
@@ -268,9 +292,9 @@ static int fake_request(const char *method, const char *url, const char *body, c
 /* mediadata.h's fragmented MP4, as a page's player fetches it: /v-init and
    /v-media for the pictures, /a-init and /a-media for the sound; anything
    else is not MP4 at all. */
-static int media_request(const char *method, const char *url, const char *body, const char *type,
-                         jd_reply *out) {
-    (void)method; (void)body; (void)type;
+static int media_request(const char *method, const char *url, const char *body, int blen,
+                         const char *type, const char *headers, jd_reply *out) {
+    (void)method; (void)body; (void)blen; (void)type; (void)headers;
     const char *end = url;
     while (*end) end++;
     int n = (int)(end - url);
@@ -1098,6 +1122,22 @@ int main(void) {
                "document.title = [typeof FileList, f instanceof FileList, f.length, f.item(0), [...f].length,"
                " document.getElementById('t').files, ({}) instanceof FileList].join(' ');</script></body>"),
         "function true 0  0  false");
+    oks("a page defines a thousand custom elements, as YouTube's does, and each is there",
+        titled("<body><script>var made = 0; for (var i = 0; i < 1000; i++) {"
+               " customElements.define('x-el-' + i, class extends HTMLElement {}); }"
+               " for (var j = 0; j < 1000; j++) if (customElements.get('x-el-' + j)) made++;"
+               " document.title = made + ' ' + (document.createElement('x-el-999') instanceof HTMLElement);</script></body>"),
+        "1000 true");
+    oks("new Audio makes an <audio>, which says what it can play",
+        titled("<body><script>var a = new Audio(); document.title = [a.tagName, a instanceof HTMLAudioElement,"
+               " a.preload, a.paused, a.canPlayType('audio/mp4; codecs=\"mp4a.40.2\"'), a.canPlayType('audio/ogg'),"
+               " Audio.prototype === HTMLAudioElement.prototype].join(' ');</script></body>"),
+        "AUDIO true auto true probably  true");
+    oks("the four kinds of character data are there by name, as a polyfill patches them",
+        titled("<body><script>document.title = ['Text', 'Comment', 'CDATASection', 'ProcessingInstruction'].map(function (n) {"
+               " return typeof window[n] + ':' + (window[n].prototype instanceof CharacterData); }).join(' ')"
+               " + ' ' + (CDATASection.prototype instanceof Text);</script></body>"),
+        "function:true function:true function:true function:true true");
     oks("ShadowRoot is there to be asked about, and nothing is one until a script makes it",
         titled("<body><script>document.title = [typeof ShadowRoot, document.body.parentNode instanceof ShadowRoot,"
                " document.body.shadowRoot, 'attachShadow' in Element.prototype,"
@@ -1665,11 +1705,53 @@ int main(void) {
         oks("a POST's body and its type go out with it", asked,
             "POST https://site.test/post q=a+b&n=1 application/x-www-form-urlencoded;charset=UTF-8");
         asked[0] = 0;
-        oks("a method this browser cannot send is refused, not sent as another",
-            titled("<script>fetch('/x', { method: 'PUT' }).catch(function(e){ document.title = e.name + ': ' + e.message; });"
+        oks("a method the standard forbids is refused",
+            titled("<script>var r = []; try { var q = new XMLHttpRequest(); q.open('CONNECT', '/x'); } catch (e) { r.push(e.name); }"
+                   "try { new XMLHttpRequest().open('BAD METHOD', '/x'); } catch (e) { r.push(e.name); }"
+                   "fetch('/x', { method: 'TRACE' }).catch(function(e){ document.title = e.name + ': ' + e.message + ' ' + r.join(' '); });"
                    "</script>"),
-            "TypeError: this browser sends only GET and POST");
+            "TypeError: that method may not be sent SecurityError SyntaxError");
         oks("and nothing was sent", asked, "");
+
+        /* Any other method goes as itself; the standard's six in capitals
+           whatever their case, others as written; bytes as bytes, saying
+           nothing of what they are. */
+        load("<body><script>fetch('/put', { method: 'put', body: new Uint8Array([1, 0, 2, 255]) });</script></body>");
+        run_scripts(&page, err, (int)sizeof(err), 0);
+        jsdom_requests();
+        oks("PUT goes as PUT, with a body of bytes and no type", asked, "PUT https://site.test/put \x01 none");
+        oks("every byte of it, a NUL among them", asked_bytes, "1,0,2,255");
+        load("<body><script>var q = new XMLHttpRequest(); q.open('delete', '/d'); q.send();"
+             "fetch('/p', { method: 'patch', body: 'x' });</script></body>");
+        run_scripts(&page, err, (int)sizeof(err), 0);
+        jsdom_requests();
+        oks("delete is DELETE", asked, "DELETE https://site.test/d  -");
+        jsdom_requests();
+        oks("and patch stays as it was written, as the standard has it", asked, "patch https://site.test/p x text/plain;charset=UTF-8");
+
+        /* The headers the page set go with it, but those the browser keeps
+           for itself. */
+        load("<body><p id=h>none</p><script>"
+             "fetch('/h', { headers: { 'X-Custom': 'a b', 'Cookie': 'no', 'Referer': 'no', 'Sec-Fetch-Mode': 'no',"
+             " 'Proxy-Thing': 'no', 'Accept': 'application/json', 'Content-Type': 'text/x-kind', 'X-Bad': 'a\\nb' } })"
+             ".then(function (r) { var all = []; r.headers.forEach(function (v, k) { all.push(k + '=' + v); });"
+             " document.getElementById('h').textContent = [r.headers.get('x-reply'), String(r.headers.get('set-cookie')),"
+             " r.headers.get('x-two'), all.join(',')].join(' '); });</script></body>");
+        run_scripts(&page, err, (int)sizeof(err), 0);
+        jsdom_requests();
+        oks("a fetch carries the headers the page set, but the forbidden ones and those that would end the line",
+            asked_headers, "x-custom: a b;accept: application/json;");
+        oks("and its reply carries every header the server sent but its cookie",
+            content_of(dom_by_id(&page, "h")), "yes null spaced content-type=text/plain,x-reply=yes,x-two=spaced");
+        load("<body><p id=x>none</p><script>var q = new XMLHttpRequest(); q.open('POST', '/x');"
+             "q.setRequestHeader('X-Requested-With', 'XMLHttpRequest'); q.setRequestHeader('Host', 'elsewhere');"
+             "q.onload = function () { document.getElementById('x').textContent ="
+             " q.getAllResponseHeaders().replace(/\\r\\n/g, ';'); }; q.send('b');</script></body>");
+        run_scripts(&page, err, (int)sizeof(err), 0);
+        jsdom_requests();
+        oks("and so does XMLHttpRequest's", asked_headers, "x-requested-with: XMLHttpRequest;");
+        oks("whose reply's headers are all there to read but the cookie", content_of(dom_by_id(&page, "x")),
+            "content-type: text/plain;x-reply: yes;x-two: spaced;");
 
         oks("Headers keep names in lower case and join a name given twice",
             titled("<script>var h = new Headers({ 'X-One': 'a' }); h.append('x-one', 'b'); h.set('Accept', 'text/html');"
@@ -2789,6 +2871,58 @@ int main(void) {
         pump_until(3, 3000);
         oks("and a worker that makes 50 megabytes and drops them keeps its own",
             page.title >= 0 ? page.arena + page.title : "", "worker kept123");
+    }
+
+    /* --- who is asking (fetch.h, Referer) -----------------------------------
+     *
+     * The Referrer Policy's default and the others a page can ask for: the
+     * whole address to the same site, the origin to another, nothing from
+     * https to http, and never a fragment or a user name. */
+    {
+        static char got[URL_TEXT * 4];
+        static const struct { const char *from, *to, *policy, *want; } R[] = {
+            { "https://a.test/dir/page?q=1#frag", "https://a.test/other", "", "https://a.test/dir/page?q=1" },
+            { "https://a.test/dir/page?q=1#frag", "https://b.test/x", "", "https://a.test/" },
+            { "https://a.test/dir/page", "http://a.test/x", "", "" },
+            { "http://a.test/dir/page", "https://b.test/x", "", "http://a.test/" },
+            { "https://user:secret@a.test:8443/p?x#y", "https://a.test:8443/z", "", "https://a.test:8443/p?x" },
+            { "https://a.test?only=query", "https://a.test/z", "", "https://a.test/?only=query" },
+            { "https://a.test/p", "https://a.test/z", "no-referrer", "" },
+            { "https://a.test/p", "https://b.test/z", "same-origin", "" },
+            { "https://a.test/p", "https://a.test/z", "origin", "https://a.test/" },
+            { "https://a.test/p", "http://b.test/z", "unsafe-url", "https://a.test/p" },
+            { "https://a.test/p", "http://b.test/z", "strict-origin", "" },
+            { "https://a.test/p", "https://b.test/z", "no-referrer-when-downgrade", "https://a.test/p" },
+            { "https://a.test/p", "https://b.test/z", "unknown, origin-when-cross-origin", "https://a.test/" },
+            { "https://a.test/p", "https://a.test/z", "never", "" },
+            { "about:blank", "https://a.test/z", "", "" },
+        };
+        int w = 0;
+        for (int i = 0; i < (int)(sizeof(R) / sizeof(R[0])); i++) {
+            url_t to;
+            url_parse(R[i].to, &to);
+            w_copy(web_referrer_from, sizeof(web_referrer_from), R[i].from, sizeof(web_referrer_from));
+            int pol = web_policy_of(R[i].policy);
+            web_referrer_policy = pol >= 0 ? pol : REF_STRICT_CROSS;
+            char one[URL_TEXT];
+            web_referrer_for(&to, one, sizeof(one));
+            if (!same_text(one, R[i].want)) {
+                for (const char *p = R[i].to; *p && w < (int)sizeof(got) - 2; p++) got[w++] = *p;
+                got[w++] = '=';
+                for (const char *p = one; *p && w < (int)sizeof(got) - 2; p++) got[w++] = *p;
+                got[w++] = ' ';
+            }
+        }
+        got[w] = 0;
+        web_referrer_from[0] = 0;
+        web_referrer_policy = REF_STRICT_CROSS;
+        oks("a request's Referer is the asking page as its policy allows (those that differ)", got, "");
+        jsdom_referrer("https://a.test/");
+        oks("and the page sees what was sent for it as document.referrer",
+            titled("<script>document.title = '[' + document.referrer + ']';</script>"), "[https://a.test/]");
+        jsdom_referrer("");
+        oks("or nothing, for a page nothing sent the browser to",
+            titled("<script>document.title = '[' + document.referrer + ']';</script>"), "[]");
     }
 
     /* --- sound and video (jsmedia.h) -----------------------------------------

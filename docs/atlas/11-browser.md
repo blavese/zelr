@@ -1,6 +1,28 @@
 # 11 -- The web browser (everything except JS-engine internals and image decoders)
 
-**Since 0.98.0** (the rest of this file is older; trust the code and the README's "since 6048716" list):
+**Since 0.99.0** (the rest of this file is older; trust the code and the README's "since 6048716" list):
+- **Referer** (fetch.h, "who is asking"): `web_referrer_from` (the asking document's address) and `web_referrer_policy`
+  (`REF_*`, the W3C Referrer Policy's eight, by name from `web_policy_of`, which also takes the old meta keywords) give
+  every request a Referer from `web_referrer_for`: the default strict-origin-when-cross-origin sends the address less its
+  fragment and user name to the same origin, `scheme://host[:port]/` to another, nothing from https to http. browser.c
+  keeps `nav_from`/`nav_policy` for the next page (set by a link click, `want_go` -- forms, a script's navigation, a meta
+  refresh -- and cleared after each load; nothing for an address typed or the history buttons), asks the page from there
+  (`page_referrer` is what was sent, handed to jsdom as `document.referrer`, `jsdom_referrer`), then from the page
+  itself under its Referrer-Policy header (`response_t.refpol`) or `<meta name="referrer">` (`meta_referrer`, read in
+  `build` after the parse). A failed load asks from nowhere afterwards.
+- **A page's requests are what it asked for** (jsnet.h, browser.c `do_request`): any method a token names but CONNECT,
+  TRACE and TRACK (`jd_method_norm`: the standard's six in capitals, others as written), the page's headers but the
+  forbidden ones (`jd_header_forbidden`, `jd_header_lines`; an Accept of its own replaces fetch.h's, `wh_has_line`), a
+  body of bytes with its length (a BufferSource says no type: `web_body_type` "" sends no Content-Type), and Origin with
+  a request to another origin or one that is not GET or HEAD. fetch.h takes `web_method` and `web_body_len` for one call,
+  sends Content-Length 0 for a POST, PUT or PATCH without a body, reads no body after HEAD, keeps a 303 (and a 301/302
+  after a POST) as a GET, puts the method back after redirects (`web_send`), and leaves the answer's head where the page
+  can read it (`response_t.head`, `hlen`): fetch and XMLHttpRequest show every header but Set-Cookie.
+- `SCRIPT_MAX` is 16 MB (YouTube's main script is 10.8 MB; it was 4).
+- `site_readers_off` (set by scriptdump's `real`) runs YouTube's or Twitch's own page for the next load instead of
+  sites.h's reading of it.
+
+**Since 0.98.0**:
 - **`<video>` is drawn.** html.h knows `video` and `audio` (`T_VIDEO`, `T_AUDIO`, after `T_CENTER`). The browser's rules
   give a video `object-fit: contain` and a sound no box (nothing draws a player's controls). layout.h `lay_video` lays a
   video out as a picture whatever its display (like `lay_drawing`, at every place an SVG is): the page's width and

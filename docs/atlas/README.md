@@ -95,6 +95,23 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.99.0
+
+- **Referer and document.referrer (11)**, under the W3C Referrer Policy's default and whatever a page's header or meta
+  tag asks for. pagetest: fifteen pairs of asking page, address and policy; failing with a user name left in. wiretest:
+  what the server is sent.
+- **A page's requests are what it asked for (11, 12)**: any allowed method, its own headers but the forbidden ones,
+  bodies of bytes, Origin, every header of the reply but its cookies; HEAD is not waited on for a body. pagetest and
+  wiretest.
+- **Bodies read when first run (12)**: a `function`'s body is passed over and read at its first call. jstest: braces in
+  templates, strings and patterns, strictness, arguments and vars, generators and async functions, a mistake told at
+  the call, and a bundle read lazily giving the same answer in under a fifth of the nodes; failing with templates
+  not told apart, with the body's uses left off the function, and with every body read at once.
+- YouTube's own watch page runs in the browser (scriptdump `real`): every one of its scripts, its player making a
+  MediaSource, its integrity token fetched. Its media servers answer every request for the film with 403 (13 §3.13).
+  Found on the way and fixed: `CDATASection`, `ProcessingInstruction`, `new Audio`, more custom elements and media
+  elements, a 16 MB script.
+
 ### 0.98.0
 
 - **A page plays video by Media Source Extensions (12, 13 §3.13, 11)**: MediaSource, SourceBuffer, TimeRanges and a

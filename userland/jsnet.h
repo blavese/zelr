@@ -12,8 +12,12 @@
  *
  * What goes out goes through the browser (jd_do_request; browser.c,
  * do_request), which sends the jar's cookies for the address as every
- * request does and knows two methods, GET and POST. A request for another
- * is refused, as a failed fetch, rather than sent as one of those.
+ * request does, the page's address as its Referer as far as the page's
+ * policy allows, and Origin where the standard asks for it. The method is
+ * any the standard allows (CONNECT, TRACE and TRACK are refused), the
+ * headers the page set go with it but for those the standard keeps for the
+ * browser (jd_header_forbidden), and a body is bytes, as long as it is. What
+ * comes back carries every header the server sent but its cookies.
  */
 
 /* One reply, as the browser hands it back. */
@@ -23,17 +27,19 @@ typedef struct {
     int  status;
     const char *type;            /* the Content-Type it came with, or none */
     const char *url;             /* where it ended up, after redirects */
+    const char *head;            /* the status line and headers as they came, or none */
+    int  hlen;
 } jd_reply;
 
 /* How one is made. Set by the browser, for the same reason the script
-   fetch is: the network and the page's address are its business. `type` is
-   what the body is, when there is one and it is not a form. */
-static int (*jd_do_request)(const char *method, const char *url, const char *body,
-                            const char *type, jd_reply *out);
+   fetch is: the network and the page's address are its business. `body` is
+   blen bytes; `type` is what it is, "" for nothing said; `headers` are the
+   page's own, whole lines each ending CRLF. */
+typedef int (*jd_request_fn)(const char *method, const char *url, const char *body, int blen,
+                             const char *type, const char *headers, jd_reply *out);
+static jd_request_fn jd_do_request;
 
-void jsdom_request_with(int (*fn)(const char *, const char *, const char *, const char *, jd_reply *)) {
-    jd_do_request = fn;
-}
+void jsdom_request_with(jd_request_fn fn) { jd_do_request = fn; }
 
 /* --- the queue ------------------------------------------------------------------------- */
 
@@ -73,8 +79,63 @@ static const char *jd_kept_str(jobj *o, jstr *key, const char *fallback) {
     return v.t == JS_STR ? v.str->s : fallback;
 }
 
-static int jd_method_ok(const char *m) {
-    return w_same_fold(m, "GET") || w_same_fold(m, "POST");
+/* A method as the standard takes one (Fetch, "normalize"): DELETE, GET,
+   HEAD, OPTIONS, POST and PUT in capitals whatever their case, any other
+   token as written. 0 for one that is not a token; *forbidden for CONNECT,
+   TRACE and TRACK, which a page may not send. */
+static jstr *jd_method_norm(jctx *J, jstr *m, int *forbidden) {
+    *forbidden = 0;
+    if (!m || !m->len || m->len > 32) return 0;
+    for (u32 i = 0; i < m->len; i++) {
+        u8 c = (u8)m->s[i];
+        if (c <= 0x20 || c >= 0x7F) return 0;
+        for (const char *p = "()<>@,;:\\\"/[]?={}"; *p; p++) if (c == (u8)*p) return 0;
+    }
+    static const char *const UP[] = { "DELETE", "GET", "HEAD", "OPTIONS", "POST", "PUT", 0 };
+    for (int i = 0; UP[i]; i++) if (w_len(UP[i]) == (int)m->len && w_starts_fold(m->s, UP[i])) return js_str(J, UP[i]);
+    if (w_same_fold(m->s, "CONNECT") || w_same_fold(m->s, "TRACE") || w_same_fold(m->s, "TRACK")) *forbidden = 1;
+    return m;
+}
+
+/* The headers the standard keeps for the browser to send (Fetch, "forbidden
+   request-header"): a page setting one is ignored, as a browser ignores it. */
+static int jd_header_forbidden(const char *name, int n) {
+    static const char *const NO[] = { "accept-charset", "accept-encoding", "access-control-request-headers",
+        "access-control-request-method", "connection", "content-length", "cookie", "cookie2", "date", "dnt",
+        "expect", "host", "keep-alive", "origin", "referer", "set-cookie", "te", "trailer",
+        "transfer-encoding", "upgrade", "via", "x-http-method", "x-http-method-override",
+        "x-method-override", 0 };
+    for (int i = 0; NO[i]; i++) if (w_len(NO[i]) == n && w_starts_fold(name, NO[i])) return 1;
+    return (n >= 6 && w_starts_fold(name, "proxy-")) || (n >= 4 && w_starts_fold(name, "sec-"));
+}
+
+/* A request's headers as the lines that go out: each pair the page set,
+   but the forbidden ones, Content-Type (sent as the body's type) and any
+   whose name is not a token or whose value would end the line. */
+static int jd_header_lines(jobj *list, char *out, int cap) {
+    int w = 0;
+    out[0] = 0;
+    for (u32 i = 0; list && i < list->len; i++) {
+        jval pv = list->items[i];
+        if (!js_is_obj(pv) || pv.obj->len < 2 || pv.obj->items[0].t != JS_STR || pv.obj->items[1].t != JS_STR) continue;
+        jstr *name = pv.obj->items[0].str, *value = pv.obj->items[1].str;
+        if (!name->len || jd_header_forbidden(name->s, (int)name->len) || js_str_is(name, "content-type")) continue;
+        int bad = 0;
+        for (u32 k = 0; k < name->len && !bad; k++) {
+            u8 c = (u8)name->s[k];
+            if (c <= 0x20 || c >= 0x7F || c == ':') bad = 1;
+        }
+        for (u32 k = 0; k < value->len && !bad; k++) if (value->s[k] == '\r' || value->s[k] == '\n' || !value->s[k]) bad = 1;
+        if (bad || w + (int)name->len + (int)value->len + 5 >= cap) continue;
+        for (u32 k = 0; k < name->len; k++) out[w++] = name->s[k];
+        out[w++] = ':';
+        out[w++] = ' ';
+        for (u32 k = 0; k < value->len; k++) out[w++] = value->s[k];
+        out[w++] = '\r';
+        out[w++] = '\n';
+    }
+    out[w] = 0;
+    return w;
 }
 
 /* --- Headers ----------------------------------------------------------------------------
@@ -302,7 +363,7 @@ static jstr *jd_body_of(jctx *J, jval b, const char **type) {
     const u8 *bytes;
     u32 blen;
     if (js_is_obj(b) && tx_bytes_of(b, &bytes, &blen)) {
-        *type = "application/octet-stream";
+        *type = 0;                       /* bytes say nothing of what they are */
         return js_str_n(J, (const char *)bytes, blen);
     }
     *type = "text/plain;charset=UTF-8";
@@ -482,12 +543,12 @@ static jobj *jd_make_request(jctx *J, jobj *proto, jval input, jval init) {
     if (js_is_obj(init)) {
         jval m = js_get(J, init, js_str(J, "method"));
         if (m.t != JS_UNDEF) {
-            jstr *ms = js_to_str(J, m);
-            char up[16];
-            int k = 0;
-            for (; ms && k < (int)ms->len && k < 15; k++) up[k] = (ms->s[k] >= 'a' && ms->s[k] <= 'z') ? (char)(ms->s[k] - 32) : ms->s[k];
-            up[k] = 0;
-            method = js_str(J, up);
+            int forbidden;
+            jstr *ms = jd_method_norm(J, js_to_str(J, m), &forbidden);
+            if (J->sig != JS_OK) return 0;
+            if (!ms) { js_throw(J, JS_ERR_TYPE, "that is not a method", J->error_line); return 0; }
+            if (forbidden) { js_throw(J, JS_ERR_TYPE, "that method may not be sent", J->error_line); return 0; }
+            method = ms;
         }
         jval h = js_get(J, init, js_str(J, "headers"));
         if (headers && js_is_obj(h)) {
@@ -673,8 +734,6 @@ static jval nat_fetch(jctx *J, jval t, jval *a, int n) {
     jval sig = jd_kept(r, jd_k_rsig);
     if (js_is_obj(sig) && jd_signal_aborted(sig.obj))
         js_promise_settle(J, p, 0, jd_kept(sig.obj, jd_k_reason));
-    else if (!jd_method_ok(jd_kept_str(r, jd_k_method, "GET")))
-        jd_refuse(J, p, "this browser sends only GET and POST");
     else if (!jd_queue(r, JQ_FETCH))
         jd_refuse(J, p, "too many requests at once");
     return js_from_obj(p);
@@ -693,11 +752,37 @@ static void jd_fetch_aborted(jctx *J, jobj *sig) {
     }
 }
 
-/* The reply's headers, as far as the browser keeps them: its type. */
+/* The reply's headers: every one the server sent but its cookies, which a
+   page never sees (Fetch, "forbidden response-header"); for a reply made
+   here (data:, blob:) its type. */
 static jobj *jd_reply_headers(jctx *J, const jd_reply *rp) {
     jobj *h = jd_new_headers(J);
-    if (h && rp->type && rp->type[0])
-        jd_hlist_add(J, jd_hlist_of(J, js_from_obj(h)), js_str(J, "content-type"), js_str(J, rp->type));
+    if (!h) return 0;
+    jobj *list = jd_hlist_of(J, js_from_obj(h));
+    if (!rp->head || rp->hlen <= 0) {
+        if (rp->type && rp->type[0]) jd_hlist_add(J, list, js_str(J, "content-type"), js_str(J, rp->type));
+        return h;
+    }
+    const char *s = rp->head;
+    int n = rp->hlen, at = 0;
+    while (at < n && s[at] != '\n') at++;          /* past the status line */
+    while (++at < n) {
+        int ls = at;
+        while (at < n && s[at] != '\n') at++;
+        int le = at;
+        if (le > ls && s[le - 1] == '\r') le--;
+        int c = ls;
+        while (c < le && s[c] != ':') c++;
+        if (c == le || c == ls) continue;
+        int vs = c + 1;
+        while (vs < le && (s[vs] == ' ' || s[vs] == '\t')) vs++;
+        int ve = le;
+        while (ve > vs && (s[ve - 1] == ' ' || s[ve - 1] == '\t')) ve--;
+        jstr *name = js_str_n(J, s + ls, (u32)(c - ls));
+        if (!name || (c - ls == 10 && w_starts_fold(s + ls, "set-cookie")) ||
+            (c - ls == 11 && w_starts_fold(s + ls, "set-cookie2"))) continue;
+        jd_hlist_add(J, list, name, js_str_n(J, s + vs, (u32)(ve - vs)));
+    }
     return h;
 }
 
@@ -777,7 +862,10 @@ static void jd_xhr_event(jobj *o, const char *type) {
 
 static jval nat_xhr_open(jctx *J, jval t, jval *a, int n) {
     if (!js_is_obj(t)) return jd_illegal(J);
-    jstr *m = jd_arg_str(J, a, n, 0);
+    int forbidden;
+    jstr *m = jd_method_norm(J, jd_arg_str(J, a, n, 0), &forbidden);
+    if (!m) return js_throw_dom(J, "SyntaxError", "that is not a method");
+    if (forbidden) return js_throw_dom(J, "SecurityError", "that method may not be sent");
     jstr *u = jd_arg_str(J, a, n, 1);
     jstr *whole = jd_resolve_str(J, u->s);
     jd_keep(t.obj, jd_k_method, js_from_str(m));
@@ -896,18 +984,28 @@ __attribute__((unused)) static int jsdom_requests(void) {
         if (!o) continue;
         const char *method = jd_kept_str(o, jd_k_method, "GET");
         const char *url = jd_kept_str(o, jd_k_url, "");
-        const char *body = jd_kept_str(o, jd_k_body, 0);
+        jval bv = jd_kept(o, jd_k_body);
+        const char *body = bv.t == JS_STR ? bv.str->s : 0;
+        int blen = bv.t == JS_STR ? (int)bv.str->len : 0;
         const char *type = jd_kept_str(o, jd_k_type, 0);
+        static char lines[4096];
+        lines[0] = 0;
+        jobj *hl = 0;
         if (kind == JQ_FETCH) {
             jval h = js_get(&jd_J, js_from_obj(o), js_str(&jd_J, "headers"));
             jd_J.sig = JS_OK;
-            if (js_is_obj(h)) {
-                jobj *list = jd_hlist_of(&jd_J, h);
-                jval ct = list ? jd_headers_get(&jd_J, list, js_str(&jd_J, "content-type")) : js_undef();
-                if (ct.t == JS_STR) type = ct.str->s;
-            }
+            if (js_is_obj(h)) hl = jd_hlist_of(&jd_J, h);
+            jd_J.sig = JS_OK;
+        } else {
+            jval h = jd_kept(o, jd_k_hlist);
+            if (h.t == JS_OBJ && h.obj->kind == JO_ARRAY) hl = h.obj;
         }
-        jd_reply rp = { 0, 0, 0, 0, 0 };
+        if (hl) {
+            jval ct = jd_headers_get(&jd_J, hl, js_str(&jd_J, "content-type"));
+            if (ct.t == JS_STR) type = ct.str->s;
+            jd_header_lines(hl, lines, (int)sizeof(lines));
+        }
+        jd_reply rp = { 0, 0, 0, 0, 0, 0, 0 };
         char *data = 0, mime[96];
         if (jd_is_data_url(url)) {
             /* Answered here, from the address itself; one that does not
@@ -931,8 +1029,8 @@ __attribute__((unused)) static int jsdom_requests(void) {
                 rp.type = bt ? bt->s : "";
                 rp.url = url;
             }
-        } else if (url[0] && jd_do_request && (kind != JQ_XHR || jd_method_ok(method))) {
-            jd_do_request(method, url, body, type, &rp);
+        } else if (url[0] && jd_do_request) {
+            jd_do_request(method, url, body, blen, body ? (type ? type : "") : 0, lines, &rp);
         }
         if (kind == JQ_FETCH) jd_fetch_done(o, &rp);
         else jd_xhr_done(o, &rp);

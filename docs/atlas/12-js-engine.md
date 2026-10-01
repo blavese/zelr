@@ -2,7 +2,25 @@
 
 Source root the repository root (github.com/blavese/zelr main, 2026-09-22). All paths are relative to it; `file:N` means 1-based line N. Everything below was verified by reading the code. Where a behaviour was derived by tracing (not by running) it says so. Nothing here was built or run.
 
-**Since 0.98.0** (the rest of this file is older; trust the code):
+**Since 0.99.0** (the rest of this file is older; trust the code):
+- **A function's body is read when it is first called** (jsparse.h, "bodies read when they are first run"): a function
+  written with `function` (declaration or expression, not an arrow, method or accessor) has its body passed over by
+  `js_skip_body` -- tokens read, braces counted, a template's `${ }` told apart so the lexer carries on with the template --
+  and its N_BLOCK marked `NF_LAZY` with the source (`b` = source index * 2 + module) and the offset of its first token
+  (`d`). `js_run_function` reads it first (`js_parse_lazy`: the same statement loop, `fc` from the function's FN_ASYNC,
+  FN_GEN and FN_STRICT, then the body's chain and vars put in and `fc.uses` added to the function's op); a failure is
+  thrown as a SyntaxError at the call. Strictness is known without the body (the directive is looked at before the
+  body is passed over). A function right after `(` or `!` is read at once (it is about to be called). `jctx.eager`
+  reads everything at once. YouTube's watch page (14 MB of script) needed more than the 3 million node cap; it now runs
+  in 1.7 million. An error in a body is found at its first call, not when the script is read.
+- `CDATASection` and `ProcessingInstruction` are interfaces (the web components polyfill patches all four kinds of
+  character data by name); `new Audio(src)` (jsmedia.h); `JD_CUSTOM` is 2048 custom elements (YouTube defines more than a
+  thousand); `JD_MEDIA` is 16.
+- fetch and XMLHttpRequest: see atlas 11 (methods, headers, bytes, the reply's headers).
+- A stress build (`JS_GC_STRESS`) has no clock cap (`JS_TIME_CAP` 0): two checks were stopped by it, saying nothing of the
+  collector.
+
+**Since 0.98.0**:
 - **Sound and video for the page** (userland/jsmedia.h, on media.h, atlas 13 §3.13): MediaSource (readyState,
   duration, sourceBuffers and activeSourceBuffers as SourceBufferLists, addSourceBuffer, removeSourceBuffer,
   endOfStream with or without an error, the live seekable range calls, `isTypeSupported`), SourceBuffer (appendBuffer,

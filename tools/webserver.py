@@ -895,11 +895,40 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def do_POST(self):
         path = self.path.split("?")[0]
         n = int(self.headers.get("Content-Length") or 0)
+        if path == "/asked":
+            self._asked(self.rfile.read(n))
+            return
         body = self.rfile.read(n).decode("latin-1")
         if path == "/said":
             self._said("post", body)
         else:
             self._send(b"<html><body><h1>404</h1></body></html>", status=404)
+
+    def _asked(self, body):
+        """What a request was, as the server saw it: its method, its body's
+        bytes as numbers, its type and the headers a page may set."""
+        heads = ";".join("%s=%s" % (k.lower(), v) for k, v in self.headers.items()
+                         if k.lower().startswith("x-") or k.lower() in ("origin", "accept"))
+        text = "method=%s bytes=%s type=%s heads=%s" % (self.command, ",".join(str(b) for b in body),
+                                                      self.headers.get("Content-Type") or "none", heads)
+        self._send(("<html><body><p id=asked>" + text + "</p></body></html>").encode(),
+                   extra=[("X-Answer", "plain"), ("Set-Cookie", "asked=1; Path=/")])
+
+    def do_PUT(self):
+        n = int(self.headers.get("Content-Length") or 0)
+        self._asked(self.rfile.read(n))
+
+    def do_DELETE(self):
+        self._asked(b"")
+
+    def do_HEAD(self):
+        # The length of a body that is not sent: a client that waits for it
+        # waits for nothing.
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html")
+        self.send_header("Content-Length", "5000")
+        self.send_header("X-Answer", "head")
+        self.end_headers()
 
     def _gzip(self, body):
         """Compressed, but only for a client that said it could cope.
@@ -1007,6 +1036,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
                        b"<p><a href=\"/whoami\">who am i</a></p></body></html>",
                        extra=[("Set-Cookie", "sid=abc123; Path=/"),
                               ("Set-Cookie", "pref=dark; Path=/")])
+        elif path == "/referer":
+            got = self.headers.get("Referer") or "nothing"
+            self._send(b"<html><body><p id=ref>referer=" + got.encode() + b"</p></body></html>")
         elif path == "/whoami":
             got = self.headers.get("Cookie") or "nothing"
             self._send(b"<html><body><h1>you are</h1><p id=who>"

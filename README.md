@@ -1335,7 +1335,10 @@ expensive kind; a kept connection that the far end has closed is not a fault
 but the ordinary way of things, so a request that fails on one is tried once
 more on a new one — but only when nothing came back at all, because a
 request the server answered and then dropped may already have been acted on.
-And cookies are remembered, with domain and path matching, so that a session
+A request says which page asked for it, as every browser's does and no
+more than the page's referrer policy allows: the whole address to the same
+site, only the site to another, and nothing from an encrypted page to a
+plain one. And cookies are remembered, with domain and path matching, so that a session
 survives a click. They live in memory and go when the browser does, which is
 a decision rather than half a job: a cookie written to disk is something
 somebody has to be able to find and delete, and there is nowhere to say so

@@ -94,7 +94,7 @@ For each of these I read the header and the assertion logic. Almost all were rea
 | tools/webcheck.py | 170 | TCP/HTTP against the host server: large bodies, keep-alive, slow bodies, 404, pcnet, ne2k_pci, and an instant guestfwd reply. |
 | tools/webserver.py | 633 | Host HTTP/1.1 server (`ThreadingHTTPServer` on 127.0.0.1:0) with all the test pages. The guest reaches it at `10.0.2.2:<port>`. |
 | tools/whereis.py | 49 | Maps an address to a symbol from ELF symtab. **Only accepts a 32-bit ELF**, so it is broken on the 64-bit kernel. |
-| tools/wirecheck.py | 89 | `/bin/wiretest` against the server: gzip, keep-alive (counted on the server side), cookies. |
+| tools/wirecheck.py | 89 | `/bin/wiretest` against the server: gzip, keep-alive (counted on the server side), cookies; since 0.99.0 the Referer under the default policy (same site, another, https to http, none; webserver.py `/referer`), and PUT with a body of bytes and the page's headers, DELETE and HEAD (`/asked`, `do_PUT`, `do_DELETE`, `do_HEAD`). |
 
 ### 1.3 Generators and utilities (other agents cover them; one line each)
 

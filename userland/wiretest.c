@@ -139,6 +139,75 @@ int main(int argc, char **argv) {
        !body_has("sid=abc123"));
     ok("and deleting it left the others alone", body_has("pref=dark"));
 
+    /* --- who is asking ------------------------------------------------------
+     *
+     * The Referer the server is sent, under the default policy: the asking
+     * page whole when it is on the same site, its origin when it is not, and
+     * nothing when it was encrypted and this is not. */
+    {
+        char from[URL_TEXT], want[URL_TEXT];
+        w_copy(from, sizeof(from), base, sizeof(from));
+        w_copy(from + w_len(from), (int)sizeof(from) - w_len(from), "/from/page?q=1#frag", (int)sizeof(from) - w_len(from));
+        w_copy(web_referrer_from, sizeof(web_referrer_from), from, sizeof(web_referrer_from));
+        get(base, "/referer");
+        w_copy(want, sizeof(want), "referer=", sizeof(want));
+        w_copy(want + 8, (int)sizeof(want) - 8, from, (int)sizeof(want) - 8);
+        want[w_len(want) - 5] = 0;                       /* less the fragment */
+        ok("a request from a page on the same site says which page, less its fragment", body_has(want));
+        w_copy(web_referrer_from, sizeof(web_referrer_from), "http://elsewhere.test:8080/a/b?c", sizeof(web_referrer_from));
+        get(base, "/referer");
+        ok("one from another site says only that site", body_has("referer=http://elsewhere.test:8080/<"));
+        w_copy(web_referrer_from, sizeof(web_referrer_from), "https://secure.test/private", sizeof(web_referrer_from));
+        get(base, "/referer");
+        ok("and one from an encrypted page to a plain one says nothing", body_has("referer=nothing"));
+        web_referrer_from[0] = 0;
+        get(base, "/referer");
+        ok("nor does one from no page", body_has("referer=nothing"));
+    }
+
+    /* --- other methods, bytes and a page's headers -----------------------
+     *
+     * What a page's fetch sends (jsnet.h, through browser.c): a method other
+     * than GET and POST, a body of bytes with a NUL in it and no type, the
+     * header lines the page set; and an answer to HEAD, which says how long
+     * a body is that never comes. */
+    {
+        char full[URL_TEXT];
+        w_copy(full, sizeof(full), base, sizeof(full));
+        w_copy(full + w_len(full), (int)sizeof(full) - w_len(full), "/asked", (int)sizeof(full) - w_len(full));
+        url_t u;
+        url_parse(full, &u);
+        static const char bytes[4] = { 1, 0, 2, (char)255 };
+        web_method = "PUT";
+        web_body_len = 4;
+        web_body_type = "";
+        web_extra = "X-Page: set by the page\r\nAccept: application/json\r\n";
+        reply.len = 0;
+        web_send(&u, bytes, buf, (int)sizeof(buf), &reply);
+        web_method = 0; web_body_len = -1; web_body_type = 0; web_extra = 0;
+        ok("PUT arrives as PUT with every byte of its body, a NUL among them, and no type",
+           body_has("method=PUT bytes=1,0,2,255 type=none"));
+        ok("with the page's own header, and its Accept in place of the browser's",
+           body_has("x-page=set by the page") && body_has("accept=application/json") && !body_has("accept=text"));
+        int has_answer = 0;
+        for (int i = 0; reply.head && i + 8 < reply.hlen; i++)
+            if (reply.head[i] == 'X' && reply.head[i + 1] == '-' && reply.head[i + 2] == 'A') has_answer = 1;
+        ok("and its answer's headers are kept for the page to read", has_answer);
+        web_method = "DELETE";
+        url_parse(full, &u);
+        web_send(&u, 0, buf, (int)sizeof(buf), &reply);
+        web_method = 0;
+        ok("DELETE arrives as DELETE", body_has("method=DELETE bytes= type=none"));
+        web_method = "HEAD";
+        url_parse(full, &u);
+        int began = ticks();
+        int hr = web_send(&u, 0, buf, (int)sizeof(buf), &reply);
+        int took = ticks() - began;
+        web_method = 0;
+        ok("an answer to HEAD is not waited on for the body its length promises",
+           hr == 200 && reply.len == 0 && !reply.cut && took < 300);
+    }
+
     /* --- an answer that stops short --------------------------------------
      *
      * The server says 2000 bytes, sends 500 and goes quiet for longer than a

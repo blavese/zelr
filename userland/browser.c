@@ -93,7 +93,7 @@
  * them together, and the rest would not come. So a page may have 256 files
  * and 16 megabytes; whether the machine can run each one is still asked
  * before it runs (jd_room_for). */
-#define SCRIPT_MAX    (4 * 1024 * 1024)
+#define SCRIPT_MAX    (16 * 1024 * 1024)
 #define SCRIPTS_MAX   256
 #define SCRIPTS_BYTES (16 * 1024 * 1024)
 
@@ -829,6 +829,18 @@ static int in_noscript(int el) {
     return 0;
 }
 
+/* <meta name="referrer">: the policy the page's own requests go under, from
+   here on (fetch.h, web_policy_of). */
+static void meta_referrer(void) {
+    for (int i = 0; i < doc.count; i++) {
+        if (doc.nodes[i].kind != DN_ELEMENT || doc.nodes[i].tag != T_META) continue;
+        const char *nm = dom_attr(&doc, i, "name");
+        if (!nm || !lay_same_fold(nm, "referrer")) continue;
+        int p = web_policy_of(dom_attr(&doc, i, "content"));
+        if (p >= 0) web_referrer_policy = p;
+    }
+}
+
 static int meta_refresh(char *out, int cap) {
     for (int i = 0; i < doc.count; i++) {
         if (doc.nodes[i].kind != DN_ELEMENT) continue;
@@ -865,6 +877,19 @@ static int meta_refresh(char *out, int cap) {
 }
 static char post_body[4096];
 static int  want_go;
+
+/* Who sent the browser to the next page, for its Referer (fetch.h): the page
+   it was on when a link, a form or the page's own script did, under that
+   page's policy; nothing for an address typed or the history buttons. What
+   was sent for the page on the screen is what its document.referrer says. */
+static char nav_from[URL_TEXT];
+static int  nav_policy;
+static char page_referrer[URL_TEXT];
+
+static void nav_from_here(void) {
+    w_copy(nav_from, sizeof(nav_from), web_referrer_from, sizeof(nav_from));
+    nav_policy = web_referrer_policy;
+}
 static int  go_is_post;
 
 static void url_encode_into(char *out, int cap, int *at, const char *v) {
@@ -1716,8 +1741,8 @@ static int fetch_script(const char *src, const char **out) {
  *
  * The address is resolved against the page, so a script may ask for a path
  * the way it would write one in a link. */
-static int do_request(const char *method, const char *url, const char *body,
-                      const char *type, jd_reply *out) {
+static int do_request(const char *method, const char *url, const char *body, int blen,
+                      const char *type, const char *headers, jd_reply *out) {
     static char landed[URL_TEXT];
     static char ctype[64];
     out->body = 0;
@@ -1725,17 +1750,58 @@ static int do_request(const char *method, const char *url, const char *body,
     out->status = 0;
     out->type = 0;
     out->url = 0;
+    out->head = 0;
+    out->hlen = 0;
     if (asks_made >= ASKS_MAX || !replybuf) return 0;
 
     url_t u;
     if (!url_join(&here, url, &u)) return 0;
 
+    /* The page's own lines, and Origin, which the standard sends with a
+       request to another site and with any that is not a GET or a HEAD. */
+    static char extra[4096 + URL_TEXT];
+    w_copy(extra, sizeof(extra), headers ? headers : "", sizeof(extra));
+    int cross = u.secure != here.secure || u.port != here.port || !w_same_fold(u.host, here.host);
+    int plain = !method || w_same_fold(method, "GET") || w_same_fold(method, "HEAD");
+    if (cross || !plain) {
+        char origin[URL_TEXT];
+        int w = 0;
+        const char *from = web_referrer_from;
+        if (w_starts_fold(from, "http://") || w_starts_fold(from, "https://")) {
+            int slashes = 0;
+            for (; from[w] && w < (int)sizeof(origin) - 1; w++) {
+                if (from[w] == '/' && ++slashes == 3) break;
+                if (from[w] == '?' || from[w] == '#') break;
+                origin[w] = from[w];
+            }
+        } else {
+            w_copy(origin, sizeof(origin), "null", sizeof(origin));
+            w = 4;
+        }
+        origin[w] = 0;
+        int e = w_len(extra);
+        if (e + w + 12 < (int)sizeof(extra)) {
+            w_copy(extra + e, (int)sizeof(extra) - e, "Origin: ", (int)sizeof(extra) - e);
+            e += 8;
+            w_copy(extra + e, (int)sizeof(extra) - e, origin, (int)sizeof(extra) - e);
+            e += w;
+            w_copy(extra + e, (int)sizeof(extra) - e, "\r\n", (int)sizeof(extra) - e);
+        }
+    }
+
     response_t r;
-    int post = method && (method[0] == 'P' || method[0] == 'p');
+    web_method = method && !w_same_fold(method, "GET") ? method : 0;
     web_body_type = type;
-    int rc = post ? web_post(&u, body ? body : "", replybuf, REPLY_MAX, &r)
+    web_body_len = body ? blen : -1;
+    web_extra = extra;
+    web_accept = "*/*";
+    int rc = body ? web_post(&u, body, replybuf, REPLY_MAX, &r)
                   : web_get(&u, replybuf, REPLY_MAX, &r);
+    web_method = 0;
     web_body_type = 0;
+    web_body_len = -1;
+    web_extra = 0;
+    web_accept = 0;
 
     asks_made++;
     out->status = rc;
@@ -1746,6 +1812,8 @@ static int do_request(const char *method, const char *url, const char *body,
     w_copy(ctype, sizeof(ctype), r.ctype, sizeof(ctype));
     out->url = landed;
     out->type = ctype;
+    out->head = r.head;
+    out->hlen = r.hlen;
     if (r.len <= 0) return 0;
     out->body = r.body;
     out->len = r.len;
@@ -2190,6 +2258,7 @@ static void build(const char *html, int len, int width, int want_sheets,
     flat_used = -1;
     dom_parse(&doc, html, len);
     dom_shadows(&doc);
+    meta_referrer();
 
     css_init(&sheet);
     css_parse(&sheet, CSS_UA, (int)sizeof(CSS_UA) - 1);
@@ -2229,6 +2298,7 @@ static void build(const char *html, int len, int width, int want_sheets,
             w_copy(at + n, (int)sizeof(at) - n, address + h, (int)sizeof(at) - n);
     }
     jsdom_at(at);
+    jsdom_referrer(page_referrer);
     jsdom_view(width, css_view_h, 0);
     if (jsdom_open(&doc, &sheet)) {
         jsdom_fetch_with(fetch_script);
@@ -2418,7 +2488,13 @@ static void build_noted(const char *note, const char *html, int len, int width,
     free(both);
 }
 
+/* The site's own page instead of what sites.h reads out of it, for the
+   next load only: YouTube's or Twitch's application, run as it is. */
+static int site_readers_off;
+
 static void load(const char *address, int width, int keep_scroll) {
+    int readers = !site_readers_off;
+    site_readers_off = 0;
     if (w_same_fold(address, START_ADDRESS)) {
         show_start(width);
         char shown[16];
@@ -2453,11 +2529,22 @@ static void load(const char *address, int width, int keep_scroll) {
     url_copy(&here, &u);
     say("fetching ", address);
 
+    /* Asked for from the page that sent the browser here, if one did; then
+       everything the page asks for is asked from the page itself, under the
+       default policy until it says another. */
+    w_copy(web_referrer_from, sizeof(web_referrer_from), nav_from, sizeof(web_referrer_from));
+    web_referrer_policy = nav_policy;
+    web_referrer_for(&here, page_referrer, sizeof(page_referrer));
+    nav_from[0] = 0;
+    nav_policy = REF_STRICT_CROSS;
+
     /* Twitch sends no page worth fetching, only its application; what it
        would show comes from its API, and is written as a page here. */
-    if (!load_post && site_is_twitch(&here)) {
+    if (!load_post && readers && site_is_twitch(&here)) {
         say("asking Twitch who is live", 0);
         int n = site_twitch(&here, src, SRC_MAX);
+        url_text(&here, web_referrer_from, sizeof(web_referrer_from));
+        web_referrer_policy = REF_STRICT_CROSS;
         if (n > 0) {
             int fetched, skipped;
             build(src, n, width, 1, &fetched, &skipped);
@@ -2495,6 +2582,7 @@ static void load(const char *address, int width, int keep_scroll) {
     }
     if (rc < 0) {
         if (big) free(big);
+        web_referrer_from[0] = 0;
         /* A refused certificate has a reason worth reading, and it is the
            one kind of failure where the difference between "expired" and
            "for a different site" is the whole story. Anything that failed
@@ -2511,6 +2599,15 @@ static void load(const char *address, int width, int keep_scroll) {
         return;
     }
 
+    /* From here on the page is the one asking, under the policy it gave
+       if it gave one. */
+    url_text(&here, web_referrer_from, sizeof(web_referrer_from));
+    web_referrer_policy = REF_STRICT_CROSS;
+    {
+        int pol = web_policy_of(reply.refpol);
+        if (pol >= 0) web_referrer_policy = pol;
+    }
+
     int plain = w_starts_fold(reply.ctype, "text/plain")
              || w_starts_fold(reply.ctype, "application/json");
 
@@ -2519,7 +2616,7 @@ static void load(const char *address, int width, int keep_scroll) {
     if (plain) {
         show_plain(reply.body, reply.len, width);
         w_copy(title, sizeof(title), here.path, sizeof(title));
-    } else if (big && rc < 400
+    } else if (big && readers && rc < 400
                && (read_site = site_youtube(&here, reply.body, reply.len, src, SRC_MAX)) > 0) {
         /* A video's comments are a second question, asked with the token the
            page carries for them, while the page is still in hand; and a
@@ -3231,6 +3328,7 @@ int main(int argc, char **argv) {
 
         if (want_go) {
             want_go = 0;
+            nav_from_here();
             load_post = go_is_post;
             set_address(go_to);
             if (go_replace && hist_at >= 0) w_copy(hist[hist_at].text, URL_TEXT, go_to, URL_TEXT);
@@ -3445,6 +3543,7 @@ int main(int argc, char **argv) {
                 url_text(&next, text_of, sizeof(text_of));
                 set_address(text_of);
                 push_history(text_of);
+                nav_from_here();
                 want_load = 1;
             }
         }

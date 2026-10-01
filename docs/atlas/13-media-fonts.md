@@ -782,6 +782,14 @@ was in the frame before stays.
 **Speed.** The browser decodes and draws in its own loop, so a frame costs a decode and a page drawn. In QEMU the
 colours (320x176, ten a second) play every picture on time on q35.
 
+**YouTube (seen on the host, 2026-10-02).** Its watch page sends no addresses for its streams: its player asks
+googlevideo.com for them by POSTing a binary request (SABR) and appends what comes back to a MediaSource. Run as it is
+(scriptdump `real`, after 0.99.0's referrer, request headers, binary bodies and lazy reading), every script runs, the
+player makes its MediaSource and gives the `<video>` its address, and the integrity token request (GenerateIT) is
+answered; every request for the film is answered 403 with nothing in it. What it is missing is decided by YouTube's
+anti-abuse code, which this project does not take apart or work round. An embed opened as a page of its own is refused
+for having no embedder ("embedder.identity.denied"), as it is in any browser.
+
 ---
 
 ## 4. Control flow and lifecycles

@@ -18,8 +18,8 @@
  * the middle of the script that caused it; appends and removals happen
  * there too, between updatestart and updateend.
  *
- * A page has JD_MEDIA elements with a pipeline at once and JD_SBUFS source
- * buffers among them. Only the first element to play sound has the card;
+ * A page has JD_MEDIA elements with a pipeline at once (YouTube's watch page
+ * makes seven) and JD_SBUFS source buffers among them. Only the first element to play sound has the card;
  * another plays on the clock with its sound left out.
  *
  * Not done: a file named as a src (only a MediaSource is played), sequence
@@ -29,7 +29,7 @@
 #include "h264.h"
 #include "media.h"
 
-#define JD_MEDIA 4
+#define JD_MEDIA 16
 #define JD_SBUFS 8
 #define JD_MQ 96
 
@@ -772,7 +772,7 @@ static const char *jd_media_source(int node) {
    there, find the source, and attach its MediaSource. */
 static void jd_media_load(int node) {
     int s = jd_media_slot(node);
-    if (s < 0) { jd_media_say("a page plays four elements at most"); return; }
+    if (s < 0) { jd_media_say("a page plays sixteen elements at most"); return; }
     jdmedia *d = &jd_media[s];
     int keep_playing = !d->paused && d->net == JM_NET_EMPTY;
     jd_media_reset_slot(s, 1);
@@ -825,7 +825,7 @@ static jval nat_media_play(jctx *J, jval t, jval *a, int n) {
     int node = jd_el_of(t);
     if (node < 0) return jd_illegal(J);
     int s = jd_media_slot(node);
-    if (s < 0) return jd_rejected_dom(J, "NotSupportedError", "a page plays four elements at most");
+    if (s < 0) return jd_rejected_dom(J, "NotSupportedError", "a page plays sixteen elements at most");
     jdmedia *d = &jd_media[s];
     if (d->error == 4) return jd_rejected_dom(J, "NotSupportedError", "the element has nothing it can play");
     if (d->net == JM_NET_EMPTY && jd_media_source(node)) { jd_media_load(node); d = &jd_media[s]; }
@@ -1341,6 +1341,23 @@ void jsdom_media_on_picture(void (*fn)(void *, const h264_picture *)) {
     for (int s = 0; s < JD_MEDIA; s++) if (jd_media[s].el) jd_media[s].m.on_picture = fn;
 }
 
+/* new Audio(src): an <audio> to play by script, its src set (and so loaded)
+   when one is given, preload auto as the standard has it. */
+static jval nat_audio_ctor(jctx *J, jval t, jval *a, int n) {
+    (void)t;
+    if (J->new_target.t == JS_UNDEF) return js_throw(J, JS_ERR_TYPE, "Audio is made with new", J->error_line);
+    int o = dom_create_element(jd_doc, "audio", 5);
+    if (o < 0) return js_undef();
+    jval v = jd_el_value(J, o);
+    dom_attr_set(jd_doc, o, "preload", "auto");
+    if (n > 0 && a[0].t != JS_UNDEF) {
+        jstr *src = js_to_str(J, a[0]);
+        if (J->sig != JS_OK) return js_undef();
+        jd_attr_set(o, "src", src->s);
+    }
+    return v;
+}
+
 /* --- setting up ----------------------------------------------------------------------------- */
 
 static void jd_setup_media(jctx *J) {
@@ -1430,6 +1447,11 @@ static void jd_setup_media(jctx *J) {
         jd_consts(J, p, READY, 0);
         jd_consts(J, jd_ctor_of(p), NET, 0);
         jd_consts(J, jd_ctor_of(p), READY, 0);
+    }
+    jobj *audio = js_native_n(J, "Audio", nat_audio_ctor, 0);
+    if (audio) {
+        js_put_prop_flags(J, audio, J->s_prototype, js_from_obj(jd_iface("HTMLAudioElement")), 0);
+        js_declare_flags(J, J->global, js_str(J, "Audio"), js_from_obj(audio), JP_WRITE | JP_CONF);
     }
     if ((p = jd_iface("HTMLVideoElement"))) {
         jd_accessor(J, p, "videoWidth", nat_media_vw, 0);
