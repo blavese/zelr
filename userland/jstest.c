@@ -961,6 +961,9 @@ int main(void) {
     expect("a plain call's this is the global object, and undefined in strict code",
            "(function(){ function p() { return this; } function s() { 'use strict'; return this; }"
            " return (p() === globalThis) + ',' + s(); })()", "true,undefined");
+    expect("an escaped character past ASCII is that character, in a class and out of one",
+           "(function(){ var b = String.fromCharCode(92); var cls = new RegExp('[' + b + '\\u00e9-' + b + '\\u00fc]', 'g'), one = new RegExp(b + '\\u20ac'); return [cls.test('\\u00f1'), 'a\\u00e9b\\u00fc'.replace(cls, '_'), one.test('5\\u20ac'), one.test('5e')].join(); })()",
+           "true,a_b_,true,false");
     expect("\\u escapes are the characters they name", "'\\u00e9' === 'é' && '\\u{1F600}'.length === 4",
            "true");
     expect("eval sees the variables round it, and Function builds at the top level",

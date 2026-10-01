@@ -325,7 +325,19 @@ static int rx_escape_char(const char *p, int len, int *at) {
             }
             return h;
         }
-        default: return c;
+        default:
+            /* Anything else escaped is itself, and a character past ASCII is
+               all of its bytes. Read as one signed byte, the entity escaper
+               many pages carry (a class of every character it escapes, each
+               after a backslash) had a range that ran backwards, and Al
+               Jazeera's page stopped on it. */
+            if ((u8)c >= 0x80) {
+                int k;
+                u32 cp = rx_utf8(p + *at - 1, len - (*at - 1), &k);
+                *at += k - 1;
+                return (int)cp;
+            }
+            return c;
     }
 }
 
