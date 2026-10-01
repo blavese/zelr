@@ -2637,6 +2637,16 @@ int main(void) {
         jsdom_at("");
     }
 
+    /* --- named characters ---------------------------------------------------
+     *
+     * Thirty-six names were known, and MSN's weather read "&lrm;72". Every
+     * name the standard has is (entities.h), as written, and only the old
+     * ones without their semicolon. */
+    oks("every named character is read, as written, and only the old names without a semicolon",
+        titled("<body><p id=e>a&lrm;b &Eacute;&eacute; &amp &copy2 &notit; &AMP; &Notequaltilde; &bogus; &DoubleRightArrow;"
+               "&mdash x</p><script>document.title = document.getElementById('e').textContent;</script></body>"),
+        "ab Ee & (c)2 ?it; & &Notequaltilde; &bogus; ?&mdash x");
+
     /* --- the collector (jsgc.h) -----------------------------------------------
      *
      * The lists of a page's listeners, timers and observers are in the region,

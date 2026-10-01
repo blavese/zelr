@@ -12,6 +12,7 @@
  * for angle brackets.
  */
 #pragma once
+#include "entities.h"
 #include "zelr.h"
 #include "web.h"
 
@@ -160,6 +161,22 @@ static inline int html_fold_cp(unsigned cp, char *out) {
     return n;
 }
 
+/* A name of exactly n bytes in the table, or -1, by halving. */
+static inline int html_named(const char *name, int n) {
+    int lo = 0, hi = HTML_ENTITIES;
+    while (lo < hi) {
+        int mid = (lo + hi) / 2;
+        const char *t = HTML_ENTITY[mid].name;
+        int c = 0, k = 0;
+        for (; k < n && t[k]; k++)
+            if ((unsigned char)name[k] != (unsigned char)t[k]) { c = (unsigned char)name[k] < (unsigned char)t[k] ? -1 : 1; break; }
+        if (!c) c = k < n ? 1 : (t[k] ? -1 : 0);
+        if (!c) return mid;
+        if (c < 0) hi = mid; else lo = mid + 1;
+    }
+    return -1;
+}
+
 /* One character out of the source, whatever it is written as. `used` comes
    back as how many bytes it took. */
 static inline int html_char(const char *p, int left, int *used, char *out) {
@@ -187,39 +204,29 @@ static inline int html_char(const char *p, int left, int *used, char *out) {
             }
             if (!digits) { *used = 1; out[0] = '&'; return 1; }
         } else {
-            static const struct { const char *name; unsigned cp; } NAMED[] = {
-                { "amp",   '&' },  { "lt",    '<' },  { "gt",   '>' },
-                { "quot",  '"' },  { "apos",  '\'' }, { "nbsp", 0x00A0 },
-                { "mdash", 0x2014 }, { "ndash", 0x2013 }, { "hellip", 0x2026 },
-                { "lsquo", 0x2018 }, { "rsquo", 0x2019 },
-                { "ldquo", 0x201C }, { "rdquo", 0x201D },
-                { "copy",  0x00A9 }, { "reg",  0x00AE }, { "trade", 0x2122 },
-                { "bull",  0x2022 }, { "middot", 0x00B7 },
-                { "laquo", 0x00AB }, { "raquo", 0x00BB },
-                { "times", 0x00D7 }, { "deg",  0x00B0 },
-                { "euro",  0x20AC }, { "pound", 0x00A3 }, { "yen", 0x00A5 },
-                { "eacute", 0x00E9 }, { "egrave", 0x00E8 },
-                { "agrave", 0x00E0 }, { "ccedil", 0x00E7 },
-                { "uuml",  0x00FC }, { "ouml", 0x00F6 }, { "auml", 0x00E4 },
-                { "szlig", 0x00DF }, { "ntilde", 0x00F1 },
-                { "rarr",  0x2192 }, { "larr", 0x2190 },
-                { 0, 0 }
-            };
-            int name_len = 0;
-            while (1 + name_len < left && name_len < 12) {
-                char d = p[1 + name_len];
+            /* Every name the standard has (entities.h), as written: &Eacute;
+               is not &eacute;. With its semicolon a name is itself; without
+               one only the old names count, the longest that starts the
+               run, as a browser reads &notit; as the not sign and "it;". */
+            int run = 0;
+            while (1 + run < left && run < 32) {
+                char d = p[1 + run];
                 if ((d >= 'a' && d <= 'z') || (d >= 'A' && d <= 'Z')
-                    || (d >= '0' && d <= '9')) name_len++;
+                    || (d >= '0' && d <= '9')) run++;
                 else break;
             }
-            for (int k = 0; NAMED[k].name; k++) {
-                int j = 0;
-                while (j < name_len && NAMED[k].name[j]
-                       && w_lower(p[1 + j]) == NAMED[k].name[j]) j++;
-                if (j == name_len && !NAMED[k].name[j]) { cp = NAMED[k].cp; break; }
+            int at = -1, took = 0;
+            if (run && 1 + run < left && p[1 + run] == ';') {
+                at = html_named(p + 1, run);
+                if (at >= 0) took = run + 1;
             }
-            if (!cp) { *used = 1; out[0] = '&'; return 1; }
-            i = 1 + name_len;
+            for (int k = run; at < 0 && k >= 2; k--) {
+                int e = html_named(p + 1, k);
+                if (e >= 0 && HTML_ENTITY[e].bare) { at = e; took = k; }
+            }
+            if (at < 0) { *used = 1; out[0] = '&'; return 1; }
+            *used = 1 + took;
+            return html_fold_cp(HTML_ENTITY[at].cp, out);
         }
         /* The semicolon is optional in practice and required in the spec, so
            it is taken when it is there and not insisted on. */
