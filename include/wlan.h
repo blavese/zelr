@@ -45,6 +45,8 @@ typedef struct {
 typedef struct {
     void (*tx)(const u8 *frame, u32 len);     /* a whole frame, no FCS */
     void (*channel)(int ch);
+    void (*poll)(void);                       /* hands what it has heard to wlan_rx */
+    const char *name;
     u8   mac[6];
 } wlan_radio;
 
@@ -79,3 +81,14 @@ void wlan_on_eth(void (*fn)(const u8 *eth, u32 len));
 
 /* How many frames came in and were dropped as replayed or not genuine. */
 u32  wlan_dropped(void);
+
+/* For the network stack (netdev.c): the radio, if one is attached (none
+   detaches it); whether it is the machine's network (a card's driver or the
+   "wlansim" boot word say so; the self test's is not); the network joined;
+   Ethernet frames carried each way. */
+const wlan_radio *wlan_radio_of(void);
+void wlan_for_network(bool yes);
+bool wlan_is_network(void);
+const char *wlan_ssid(void);
+u32  wlan_rx_count(void);
+u32  wlan_tx_count(void);

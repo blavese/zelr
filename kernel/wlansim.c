@@ -11,7 +11,10 @@
  * the keys are in it answers ARP and ping for its own address, encrypting
  * with CCMP, and the test can make it send to everyone, send the same frame
  * twice, or bend one. Frames to the station are queued and delivered by
- * wlansim_pump, never from inside the station's own sending.
+ * wlansim_pump, never from inside the station's own sending. Run as a
+ * machine's radio (the "wlansim" boot word, main.c), it also hands out an
+ * address by DHCP (10.77.0.2, itself the router and the name server) and
+ * sends a beacon every tenth time it is asked for what it has.
  */
 #include "wlansim.h"
 #include "wpa.h"
@@ -186,6 +189,8 @@ static void msg4(const u8 *e, u32 len) {
 
 /* --- what the station sends ---------------------------------------------------------- */
 
+static void dhcp_answer(const u8 *ip, u32 len);
+
 static void from_sta_data(const u8 *f, u32 len) {
     u32 hl = ccmp_hdr_len(f, len);
     if (!hl || (f[1] & 3) != 0x01) return;
@@ -222,6 +227,8 @@ static void from_sta_data(const u8 *f, u32 len) {
         memcpy(r + 14, AP_IP, 4);
         memcpy(r + 18, p + 8, 10);
         to_sta(f + 10, BSSID, 0x0806, r, 28, 0);
+    } else if (type == 0x0800 && pl >= 28 + 240 && p[9] == 17 && p[(p[0] & 15) * 4 + 3] == 67) {
+        dhcp_answer(p, pl);
     } else if (type == 0x0800 && pl >= 28 && p[9] == 1 && !memcmp(p + 16, AP_IP, 4) && p[20] == 8) {
         /* A ping for us: the same back, as a reply, its sums worked again. */
         static u8 r[1600];
@@ -280,11 +287,72 @@ static void from_sta(const u8 *f, u32 len) {
     }
 }
 
+/* --- DHCP: one address, to the one station ------------------------------------------ */
+
+static u16 sum_of(const u8 *p, u32 n, u32 start) {
+    u32 s = start;
+    for (u32 i = 0; i + 1 < n; i += 2) s += (u32)(p[i] << 8 | p[i + 1]);
+    if (n & 1) s += (u32)p[n - 1] << 8;
+    while (s >> 16) s = (s & 0xFFFF) + (s >> 16);
+    return (u16)~s;
+}
+
+/* A DISCOVER answered with an OFFER, a REQUEST with an ACK: to the station,
+   from 10.77.0.1, with the mask, the router and the name server. */
+static void dhcp_answer(const u8 *ip, u32 len) {
+    u32 ihl = (u32)(ip[0] & 15) * 4;
+    if (len < ihl + 8 + 240) return;
+    const u8 *b = ip + ihl + 8;
+    u32 blen = len - ihl - 8;
+    if (b[0] != 1 || b[236] != 99 || b[237] != 130 || b[238] != 83 || b[239] != 99) return;
+    int type = 0;
+    for (u32 at = 240; at + 2 <= blen && b[at] != 255; at += b[at] == 0 ? 1 : 2 + b[at + 1])
+        if (b[at] == 53 && b[at + 1] == 1) type = b[at + 2];
+    if (type != 1 && type != 3) return;
+    static u8 pkt[20 + 8 + 300];
+    memset(pkt, 0, sizeof(pkt));
+    u8 *r = pkt + 28;
+    r[0] = 2; r[1] = 1; r[2] = 6;
+    memcpy(r + 4, b + 4, 4);                   /* the station's transaction */
+    r[16] = 10; r[17] = 77; r[18] = 0; r[19] = 2;            /* yours */
+    memcpy(r + 20, AP_IP, 4);                  /* the server */
+    memcpy(r + 28, b + 28, 16);                /* its hardware address */
+    r[236] = 99; r[237] = 130; r[238] = 83; r[239] = 99;
+    u32 o = 240;
+    r[o++] = 53; r[o++] = 1; r[o++] = type == 1 ? 2 : 5;     /* offer, or ack */
+    r[o++] = 54; r[o++] = 4; memcpy(r + o, AP_IP, 4); o += 4;
+    r[o++] = 51; r[o++] = 4; r[o++] = 0; r[o++] = 0; r[o++] = 0x0E; r[o++] = 0x10;
+    r[o++] = 1;  r[o++] = 4; r[o++] = 255; r[o++] = 255; r[o++] = 255; r[o++] = 0;
+    r[o++] = 3;  r[o++] = 4; memcpy(r + o, AP_IP, 4); o += 4;
+    r[o++] = 6;  r[o++] = 4; memcpy(r + o, AP_IP, 4); o += 4;
+    r[o++] = 255;
+    u32 ulen = 8 + o, tlen = 20 + ulen;
+    u8 *h = pkt;
+    h[0] = 0x45; h[2] = (u8)(tlen >> 8); h[3] = (u8)tlen; h[8] = 64; h[9] = 17;
+    memcpy(h + 12, AP_IP, 4);
+    memset(h + 16, 255, 4);
+    u16 hs = sum_of(h, 20, 0);
+    h[10] = (u8)(hs >> 8); h[11] = (u8)hs;
+    u8 *u = pkt + 20;
+    u[0] = 0; u[1] = 67; u[2] = 0; u[3] = 68;
+    u[4] = (u8)(ulen >> 8); u[5] = (u8)ulen;   /* no UDP sum: allowed over IPv4 */
+    to_sta(sta, BSSID, 0x0800, pkt, tlen, 0);
+}
+
 static void sim_channel(int ch) { sta_channel = ch; }
+
+static int pumps;
+static void sim_poll(void) {
+    /* A beacon now and then, as an access point sends ten a second. */
+    if (++pumps % 10 == 0) advertise(1);
+    wlansim_pump();
+}
 
 const wlan_radio *wlansim_reset(const u8 mac[6]) {
     sim_radio.tx = from_sta;
     sim_radio.channel = sim_channel;
+    sim_radio.poll = sim_poll;
+    sim_radio.name = "simulated wireless";
     memcpy(sim_radio.mac, mac, 6);
     wpa_pmk(PASS, SSID, pmk);
     rng_bytes(gtk, sizeof(gtk));

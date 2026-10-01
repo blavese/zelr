@@ -1,6 +1,15 @@
 # 06a -- Network drivers and the TCP/IP stack
 
-**Since 0.101.0** (the rest of this file is older): **a wireless station** (include/wlan.h, kernel/wlan.c), not yet
+**Since 0.102.0**: **the station is a network device** (netdev.c `NIC_WLAN`, after a USB adapter, when the radio is
+the machine's network: `wlan_for_network`, set by the "wlansim" boot word or a card's driver; the selftest's is not):
+sends go to `wlan_send_eth`, what it takes off the air goes to `net_receive` (`netdev_wlan_rx`), and `netdev_poll`
+asks the radio for what it heard and moves the station's clock on once a tick (`wlan_tick`). A radio has a `poll` and
+a `name`. The shell's `wifi` says what there is, `wifi scan` lists the networks heard, `wifi join NETWORK [PASSWORD]`
+(the password is the rest of the line) scans first when the network has not been heard, `wifi leave`. Booting with
+"wlansim" and no card makes the simulated access point the radio; it then also gives out 10.77.0.2 by DHCP (itself the
+router and name server) and sends a beacon every tenth poll. tools/wificheck.py drives it in QEMU with `-nic none`.
+
+**Since 0.101.0**: **a wireless station** (include/wlan.h, kernel/wlan.c), not yet
 driven by any card: a state machine moved on by frames (`wlan_rx`) and by polls (`wlan_poll`, one a tick), talking to a
 radio (`wlan_radio`: send a frame, go to a channel). `wlan_scan` probes each of channels 1 to 13 for `WLAN_DWELL` polls
 and keeps every beacon and probe response (`wlan_bss`: SSID, channel, signal, the RSN element; `secure` is 1 only for

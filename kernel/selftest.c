@@ -4766,6 +4766,8 @@ static void test_wlan(void) {
     wlan_run(2, WLAN_IDLE);
     ok("being sent away is told, with why", wlan_state() == WLAN_FAILED && contains(wlan_why(), "going down") &&
        !wlan_send_eth(arp, 42));
+    wlan_on_eth(0);
+    wlan_attach(0);
 }
 
 static void test_wpa(void) {

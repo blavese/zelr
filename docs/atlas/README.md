@@ -95,6 +95,13 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.102.0
+
+- **Wireless reaches the network stack (06a)**: the station is a network device when a radio is the machine's network,
+  the shell has `wifi` (scan, join, leave), and booting with "wlansim" makes the simulated access point the radio, with
+  DHCP. wificheck (gate): a machine with no card scans, is refused with a wrong password, joins, gets an address over
+  the air and pings; failing with the station's frames not handed to the stack. Still no card's driver.
+
 ### 0.101.0
 
 - **A wireless station, joined to a simulated access point (06a, 06b)**: CCMP (`ccmp.c`), the 802.11 frames, scanning,

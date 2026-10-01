@@ -18,6 +18,9 @@
 #include "fat.h"
 #include "net.h"
 #include "netdev.h"
+#include "wlan.h"
+#include "wifi.h"
+#include "timer.h"
 #include "http.h"
 #include "mouse.h"
 #include "user.h"
@@ -96,6 +99,7 @@ static void cmd_help(void) {
             "  format          erase the disk and start clean\n"
             "  net             network status\n"
             "  dhcp            ask the network for an address\n"
+            "  wifi [scan | join NETWORK [PASSWORD] | leave]   wireless networks\n"
             "  ping ADDRESS    ping a host by ip or name\n"
             "  resolve HOST    look up a hostname\n"
             "  fetch HOST [PATH] [FILE]   download a page over http\n"
@@ -289,6 +293,72 @@ static bool run_by_name(u32 argc, char **argv) {
     return false;
 }
 
+/* Wireless: what there is, the networks heard, joining one. Each waits
+   for the station (wlan.h) in the network's own loop, as dhcp does, a few
+   seconds at most. */
+static void wifi_wait(wlan_state_t while_in, u32 seconds) {
+    u64 until = timer_ticks() + (u64)seconds * timer_hz();
+    while (timer_ticks() < until) {
+        wlan_state_t s = wlan_state();
+        if (s != while_in && !(while_in == WLAN_AUTH && (s == WLAN_ASSOC || s == WLAN_HANDSHAKE))) return;
+        net_poll();
+        net_wait();
+    }
+}
+
+static void wifi_list(void) {
+    wlan_bss b[WLAN_BSS_MAX];
+    int n = wlan_networks(b, WLAN_BSS_MAX);
+    if (!n) { kprintf("no networks heard\n"); return; }
+    for (int i = 0; i < n; i++)
+        kprintf("  %-24s channel %2d  %s  signal %d\n", b[i].ssid, b[i].channel,
+                b[i].secure == 1 ? "wpa2" : b[i].secure ? "protected another way" : "open", b[i].signal);
+}
+
+static void cmd_wifi(u32 argc, char **argv) {
+    if (!wlan_is_network()) {
+        kprintf("%s\n", wifi_describe());
+        if (wifi_state() != WIFI_NONE) kprintf("no driver yet runs it as a network\n");
+        return;
+    }
+    if (argc < 2) {
+        kprintf("radio    %s\n", wlan_radio_of()->name);
+        if (wlan_state() == WLAN_CONNECTED) kprintf("joined   %s\n", wlan_ssid());
+        else kprintf("state    %s\n", wlan_why());
+        return;
+    }
+    if (!strcmp(argv[1], "scan")) {
+        kprintf("listening on every channel...\n");
+        wlan_scan();
+        wifi_wait(WLAN_SCANNING, 10);
+        wifi_list();
+    } else if (!strcmp(argv[1], "join")) {
+        if (argc < 3) { kprintf("usage: wifi join NETWORK [PASSWORD]\n"); return; }
+        /* The password is the rest of the line, spaces and all. */
+        static char pass[128];
+        u32 w = 0;
+        for (u32 i = 3; i < argc; i++) {
+            for (const char *p = argv[i]; *p && w < sizeof(pass) - 2; p++) pass[w++] = *p;
+            if (i + 1 < argc && w < sizeof(pass) - 2) pass[w++] = ' ';
+        }
+        pass[w] = 0;
+        wlan_bss b[WLAN_BSS_MAX];
+        int known = 0, n = wlan_networks(b, WLAN_BSS_MAX);
+        for (int i = 0; i < n; i++) if (!strcmp(b[i].ssid, argv[2])) known = 1;
+        if (!known) { wlan_scan(); wifi_wait(WLAN_SCANNING, 10); }
+        if (wlan_join(argv[2], pass) < 0) { kprintf("not joined: %s\n", wlan_why()); return; }
+        kprintf("joining %s...\n", argv[2]);
+        wifi_wait(WLAN_AUTH, 8);
+        if (wlan_state() == WLAN_CONNECTED) kprintf("joined %s\n", argv[2]);
+        else kprintf("not joined: %s\n", wlan_why());
+    } else if (!strcmp(argv[1], "leave")) {
+        wlan_leave();
+        kprintf("left\n");
+    } else {
+        kprintf("usage: wifi [scan | join NETWORK [PASSWORD] | leave]\n");
+    }
+}
+
 static void execute(char *buf) {
     char *argv[ARG_MAX];
     u32 argc = split(buf, argv, ARG_MAX);
@@ -389,6 +459,8 @@ static void execute(char *buf) {
             kprintf("address  none, run: dhcp\n");
         }
         kprintf("packets  %d in, %d out\n", net_rx_packets(), net_tx_packets());
+    } else if (!strcmp(c, "wifi")) {
+        cmd_wifi(argc, argv);
     } else if (!strcmp(c, "dhcp")) {
         if (!net_up()) { kprintf("no network card\n"); return; }
         kprintf("asking for an address...\n");

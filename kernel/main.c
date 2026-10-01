@@ -44,6 +44,8 @@
 #include "builtin.h"
 #include "layout.h"
 #include "selftest.h"
+#include "wlan.h"
+#include "wlansim.h"
 #include "string.h"
 #include "io.h"
 #include "blackbox.h"
@@ -152,6 +154,7 @@ static u64 heap_size_for(const handoff_t *h, u64 base) {
 }
 
 static bool want_selftest = false;
+static bool want_wlansim = false;      /* the simulated access point as the machine's radio */
 
 /* QEMU's isa-debug-exit device: writing here ends the VM with (code<<1)|1,
    which is how the test script gets a real exit status out of the kernel. */
@@ -334,6 +337,7 @@ void kmain(handoff_t *h) {
     for (const char *p = h->cmdline; *p; p++) {
         if (!strncmp(p, "selftest", 8)) want_selftest = true;
         if (!strncmp(p, "console", 7))  shell_console_only();
+        if (!strncmp(p, "wlansim", 7))  want_wlansim = true;
     }
 
     banner();
@@ -520,6 +524,17 @@ void kmain(handoff_t *h) {
         kprintf("  net     %s %02x:%02x:%02x:%02x:%02x:%02x\n",
                 netdev_name(), m[0], m[1], m[2], m[3], m[4], m[5]);
         bb_log("net %s", netdev_name());
+    } else if (want_wlansim) {
+        /* No card, and told to use the simulated access point as the radio:
+           the whole road a wireless card's frames take, tested in a machine
+           that has no wireless card (tools/wificheck.py). */
+        static const u8 mac[6] = { 0x02, 0x00, 0x00, 0x5A, 0x45, 0x4C };
+        wlan_attach(wlansim_reset(mac));
+        wlan_on_eth(netdev_wlan_rx);
+        wlan_for_network(true);
+        net_init();
+        kprintf("  net     %s, not joined: wifi scan, wifi join\n", netdev_name());
+        bb_log("net simulated wireless");
     } else {
         kprintf("  net     no card found\n");
         bb_log("net no card this kernel can drive");

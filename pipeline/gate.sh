@@ -516,6 +516,11 @@ if [ "$MODE" = "screen" ] || [ "$MODE" = "full" ]; then
   # recording are looked at.
   msetest() { keep timeout 600 python tools/msecheck.py; }
 
+  # A machine with no network card joins a wireless network through the
+  # shell and gets an address over it: the simulated access point as its
+  # radio ("wlansim"), so everything but a card's driver is on the road.
+  wifitest() { keep timeout 600 python tools/wificheck.py; }
+
   # And what a frame costs. The desktop sends the bands of the screen that
   # differ from the last one rather than all of it, and hands half of the
   # comparison to a second processor; both are easy to claim and easy to
@@ -694,6 +699,7 @@ if [ "$MODE" = "screen" ] || [ "$MODE" = "full" ]; then
   par_start "the volume slider can be heard changing the volume" voltest
   par_start "a stream is heard whole and at its pitch" playtest
   par_start "a page plays a film by media source extensions" msetest
+  par_start "a machine joins a wireless network and gets an address" wifitest
   par_start "a frame sends the part of the screen that changed" frametest
   par_start "a usb stick mounts, and files copy off it" mounttest
   par_start "files keep the names they were given" nametest

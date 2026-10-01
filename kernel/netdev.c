@@ -18,15 +18,33 @@
 #include "pcnet.h"
 #include "rtl8139.h"
 #include "usbnet.h"
+#include "wlan.h"
+#include "timer.h"
+#include "net.h"
 
-typedef enum { NIC_NONE, NIC_E1000, NIC_PCNET, NIC_RTL8139, NIC_USB } nic_t;
+typedef enum { NIC_NONE, NIC_E1000, NIC_PCNET, NIC_RTL8139, NIC_USB, NIC_WLAN } nic_t;
 static nic_t nic = NIC_NONE;
 
 /* Asked every time rather than remembered, because the answer changes when
-   something is plugged in. */
+   something is plugged in. A wireless radio is last: a cable is chosen
+   over it. */
 static nic_t current(void) {
     if (nic != NIC_NONE) return nic;
-    return usbnet_present() ? NIC_USB : NIC_NONE;
+    if (usbnet_present()) return NIC_USB;
+    return wlan_is_network() ? NIC_WLAN : NIC_NONE;
+}
+
+/* What the station takes off the air, to the stack as a card's frames go. */
+void netdev_wlan_rx(const u8 *eth, u32 len) { net_receive(eth, (u16)len); }
+
+/* The wireless station's clock, a poll a tick however often the stack asks
+   (every wait in it is a loop round netdev_poll). */
+static u64 wlan_last_tick;
+static void wlan_tick(void) {
+    const wlan_radio *r = wlan_radio_of();
+    if (r && r->poll) r->poll();
+    u64 now = timer_ticks();
+    if (now != wlan_last_tick) { wlan_last_tick = now; wlan_poll(); }
 }
 
 bool netdev_init(void) {
@@ -43,6 +61,7 @@ bool netdev_up(void) {
         case NIC_PCNET:   return pcnet_up();
         case NIC_RTL8139: return rtl_up();
         case NIC_USB:     return true;
+        case NIC_WLAN:    return true;
         default:          return false;
     }
 }
@@ -53,6 +72,7 @@ bool netdev_send(const void *data, u16 len) {
         case NIC_PCNET:   return pcnet_send(data, len);
         case NIC_RTL8139: return rtl_send(data, len);
         case NIC_USB:     return usbnet_send(data, len);
+        case NIC_WLAN:    return wlan_send_eth((const u8 *)data, len);
         default:          return false;
     }
 }
@@ -73,6 +93,7 @@ void netdev_poll(void) {
         case NIC_PCNET:   pcnet_poll(); break;
         case NIC_RTL8139: rtl_poll();   break;
         case NIC_USB:     usbnet_poll(); break;
+        case NIC_WLAN:    wlan_tick(); break;
         default: break;
     }
 }
@@ -84,6 +105,7 @@ const u8 *netdev_mac(void) {
         case NIC_PCNET:   return pcnet_mac();
         case NIC_RTL8139: return rtl_mac();
         case NIC_USB:     return usbnet_mac();
+        case NIC_WLAN:    return wlan_radio_of()->mac;
         default:          return zero;
     }
 }
@@ -94,6 +116,7 @@ u32 netdev_rx_count(void) {
         case NIC_PCNET:   return pcnet_rx_count();
         case NIC_RTL8139: return rtl_rx_count();
         case NIC_USB:     return usbnet_rx_count();
+        case NIC_WLAN:    return wlan_rx_count();
         default:          return 0;
     }
 }
@@ -104,6 +127,7 @@ u32 netdev_tx_count(void) {
         case NIC_PCNET:   return pcnet_tx_count();
         case NIC_RTL8139: return rtl_tx_count();
         case NIC_USB:     return usbnet_tx_count();
+        case NIC_WLAN:    return wlan_tx_count();
         default:          return 0;
     }
 }
@@ -143,6 +167,7 @@ const char *netdev_name(void) {
         case NIC_PCNET:   return "pcnet";
         case NIC_RTL8139: return "rtl8139";
         case NIC_USB:     return usbnet_name();
+        case NIC_WLAN:    return wlan_radio_of()->name;
         default:          return "none";
     }
 }

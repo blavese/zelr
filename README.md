@@ -1461,8 +1461,12 @@ key unwrapped), and then carries Ethernet frames encrypted with CCMP,
 dropping any that are replayed, altered or sent in the clear once there are
 keys. The encryption reproduces RFC 3610's vectors and the 802.11
 standard's own test frame byte for byte, and the self test joins a
-simulated access point written from the other side of the standard. No
-card's driver uses it yet.
+simulated access point written from the other side of the standard. It
+is the machine's network as a card would be, behind the same device the
+stack sends through, and the shell's `wifi` scans, joins and leaves; a
+harness boots a machine with no network card and the simulated access point
+as its radio, joins with the shell, gets an address over the air and pings.
+No card's driver uses it yet.
 
 **Ethernet over USB**, which is the answer to a laptop whose wireless will
 not start without a vendor binary. There is still a socket on the side of

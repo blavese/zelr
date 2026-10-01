@@ -15,7 +15,8 @@ static const char *why = "not joined";
 static wlan_bss bss[WLAN_BSS_MAX];
 static int nbss;
 static void (*on_eth)(const u8 *eth, u32 len);
-static u32 dropped;
+static u32 dropped, rx_count, tx_count;
+static bool as_network;
 
 /* The network being joined, and where joining has got to. */
 static wlan_bss cur;
@@ -47,6 +48,7 @@ static void fail(const char *w) { state = WLAN_FAILED; why = w; keys_in = group_
 
 void wlan_attach(const wlan_radio *r) {
     radio = r;
+    as_network = false;
     state = WLAN_IDLE;
     why = "not joined";
     nbss = 0;
@@ -55,6 +57,12 @@ void wlan_attach(const wlan_radio *r) {
 }
 
 wlan_state_t wlan_state(void) { return state; }
+const wlan_radio *wlan_radio_of(void) { return radio; }
+void wlan_for_network(bool yes) { as_network = yes; }
+bool wlan_is_network(void) { return radio && as_network; }
+const char *wlan_ssid(void) { return state == WLAN_CONNECTED || state == WLAN_HANDSHAKE ? cur.ssid : ""; }
+u32 wlan_rx_count(void) { return rx_count; }
+u32 wlan_tx_count(void) { return tx_count; }
 const char *wlan_why(void) { return why; }
 u32 wlan_dropped(void) { return dropped; }
 void wlan_on_eth(void (*fn)(const u8 *, u32)) { on_eth = fn; }
@@ -160,6 +168,7 @@ static bool send_data(const u8 *da, u16 type, const u8 *payload, u32 len, int pl
 
 bool wlan_send_eth(const u8 *eth, u32 len) {
     if (state != WLAN_CONNECTED || len < 14) return false;
+    tx_count++;
     return send_data(eth, (u16)(eth[12] << 8 | eth[13]), eth + 14, len - 14, 0);
 }
 
@@ -422,6 +431,7 @@ static void data_in(const u8 *f, u32 len) {
     memcpy(eth, f + 4, 6);                     /* to: the first address */
     memcpy(eth + 6, f + 16, 6);                /* from: the third */
     memcpy(eth + 12, body + 6, n - 6);
+    rx_count++;
     if (on_eth) on_eth(eth, n - 6 + 12);
 }
 
