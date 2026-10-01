@@ -166,9 +166,11 @@ typedef struct {
     short grow;                          /* this element's own flex-grow */
 
     /* A table's: the room between its cells (-1 when nothing said, which is
-       two pixels, or cellspacing), inherited the way border-spacing is; and
-       a cell's own vertical-align. */
+       two pixels, or cellspacing), inherited the way border-spacing is;
+       whether its cells share their borders (border-collapse, inherited);
+       and a cell's own vertical-align. */
     short spacing;
+    unsigned char collapse;
     unsigned char valign;
 
     /* Something written to be read aloud and not seen: clipped to nothing,
@@ -2089,6 +2091,7 @@ static inline void css_default_style(cstyle *st, int root_px) {
     st->radius = 0;
     st->indent = 0;
     st->spacing = -1;
+    st->collapse = 0;
     st->valign = VA_BASELINE;
     st->clip = st->gone = 0;
     st->floated = st->clear = st->flow_root = 0;
@@ -2139,6 +2142,7 @@ static inline void css_inherit(cstyle *child, const cstyle *parent) {
     child->background = parent->background;
     child->has_bg = 0;
     child->spacing = parent->spacing;
+    child->collapse = parent->collapse;
     child->vars = parent->vars;
     child->ink_none = parent->ink_none;
     child->ttrans = parent->ttrans;
@@ -2908,8 +2912,10 @@ static inline void css_apply_v(int prop, const char *v, cstyle *st, int root_px,
         }
         case P_COLLAPSE:
             /* Collapsed borders share the line between two cells, which is
-               no room between them; separate is the default's two pixels. */
-            if (w_starts_fold(v, "collapse")) st->spacing = 0;
+               no room between them (and one border, lay_table_rows);
+               separate is the default's two pixels. */
+            st->collapse = (unsigned char)w_starts_fold(v, "collapse");
+            if (st->collapse) st->spacing = 0;
             break;
         case P_OVERFLOW:
             /* 1 hides what overflows; 2 would scroll it, which nothing

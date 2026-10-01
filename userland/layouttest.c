@@ -1872,6 +1872,30 @@ int main(void) {
             bg && bw && bw->y >= bg->y + 50, bg && bw ? bw->y - bg->y : -1);
     }
 
+    /* --- collapsed borders ------------------------------------------------------------
+     *
+     * The cells of a collapsed table share their borders, and the table's own
+     * border stands in for theirs at its edge; every inner line had been
+     * drawn twice. */
+    {
+        lay("<style>.c{border-collapse:collapse}.c td{border:1px solid #000}.b{border:1px solid #000}"
+            ".s td { border: 1px solid #000 }</style>"
+            "<table class=c><tr><td id=c1>a</td><td id=c2>b</td></tr><tr><td id=c3>c</td><td id=c4>d</td></tr></table>"
+            "<table class='c b'><tr><td id=d1>a</td><td id=d2>b</td></tr></table>"
+            "<table class=s><tr><td id=s1>first</td><td id=s2>second</td></tr></table>", 600);
+        const litem *c1 = box_of(by_id("c1")), *c2 = box_of(by_id("c2")), *c3 = box_of(by_id("c3")), *c4 = box_of(by_id("c4"));
+        const litem *d1 = box_of(by_id("d1")), *d2 = box_of(by_id("d2"));
+        const litem *s1 = box_of(by_id("s1")), *s2 = box_of(by_id("s2"));
+        okn("a collapsed table's cells draw each inner line once",
+            c1 && c2 && c3 && c4 && c1->bl == 1 && c1->bt == 1 && c2->bl == 0 && c2->br == 1 && c3->bt == 0 && c3->bb == 1
+            && c4->bl == 0 && c4->bt == 0 && c4->br == 1 && c4->bb == 1, c2 ? c2->bl : -1);
+        okn("a collapsed table's own border stands in for its cells' at its edge",
+            d1 && d2 && d1->bl == 0 && d1->bt == 0 && d1->bb == 0 && d1->br == 1 && d2->br == 0 && d2->bl == 0,
+            d1 ? d1->bl : -1);
+        okn("and a table that keeps its borders apart draws them all",
+            s1 && s2 && s2->bl == 1 && s1->br == 1 && s2->x > s1->x + s1->w, s2 ? s2->bl : -1);
+    }
+
     puts(failed ? "LAYOUTTEST_FAIL\n" : "LAYOUTTEST_PASS\n");
     return failed;
 }

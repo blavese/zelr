@@ -1,6 +1,17 @@
 # 11 -- The web browser (everything except JS-engine internals and image decoders)
 
-**Since 0.89.0** (the rest of this file is older; trust the code and the README's "since 6048716" list):
+**Since 0.90.0** (the rest of this file is older; trust the code and the README's "since 6048716" list):
+- **A box that is its own formatting context sits beside a float** (layout.h `lay_beside_floats`, from
+  `lay_block_placed`): overflow other than visible, `display: flow-root` (css.h `cstyle.flow_root`), flex, grid and
+  tables are laid out in the room beside the floats at their top, and below them when a width of their own does not
+  fit there (48 pixels for one without). Only the room at the box's top is looked at. An ordinary block still runs
+  under a float with only its lines shortened, as in a browser.
+- **Collapsed tables share their cells' borders** (css.h `cstyle.collapse`, inherited; layout.h `lay_table_share`): a
+  cell leaves out its left border past the first column, its top past the first row, and any side on the table's edge
+  where the table has a border of its own. The cells do not move, so their words sit a border's width from where a
+  browser puts them; the wider of two borders does not win (each cell keeps its own right and bottom).
+
+**Since 0.89.0**:
 - **A row's items stretch** (layout.h `lay_stretch`, called from `lay_flex_line` and both grid ways): an item whose
   align-self (or the row's align-items) is stretch, with no height or max-height of its own, has its own box made as
   tall as the row's tallest. Only the box grows: what is in it stays at the top and nothing is laid out again, so a

@@ -2853,6 +2853,7 @@ typedef struct {
     int col_w[LAY_TCOLS];
     int width;                  /* all the columns and the room around them */
     int spacing;
+    int collapse;               /* border-collapse: the cells share borders */
 } ltable;
 
 enum { TR_ROW = 0, TR_CELLS, TR_BLOCK };
@@ -2962,8 +2963,9 @@ static void lay_row_style(lctx *L, int table, const cstyle *tst, int row, cstyle
 static void lay_table_plan(lctx *L, int table, const cstyle *tst, int avail, int fill,
                            ltable *T) {
     const ddoc *d = L->d;
-    int spacing = tst->spacing >= 0 ? tst->spacing : 2;
+    int spacing = tst->collapse ? 0 : tst->spacing >= 0 ? tst->spacing : 2;
     T->spacing = spacing;
+    T->collapse = tst->collapse;
     T->ncols = 0;
     T->width = 0;
 
@@ -3119,6 +3121,26 @@ static void lay_cell_fit(lctx *L, int cell, int first, int end, int h, int rowh,
     }
 }
 
+/* A collapsed table's cells share their borders: a cell leaves out the
+   side its neighbour (left, above) or the table's own border already
+   draws, so a ruled table has lines one border wide. Each had drawn all
+   four, which with no room between them is every inner line twice as
+   thick as the outer ones, and the outer ones doubled by the table's.
+   Only which lines are drawn changes; where the cells go does not, so a
+   cell's words sit a border's width from where a browser puts them. */
+static void lay_table_share(lctx *L, int cell, int first, int end, const cstyle *tst,
+                            int left, int top, int right, int bottom) {
+    for (int k = first; k < end; k++) {
+        litem *it = &L->out->items[k];
+        if (it->node != cell || it->kind != LK_BOX) continue;
+        if (left || tst->bl) it->bl = 0;
+        if (top || tst->bt) it->bt = 0;
+        if (right && tst->br) it->br = 0;
+        if (bottom && tst->bb) it->bb = 0;
+        return;
+    }
+}
+
 static void lay_table_rows(lctx *L, int table, const cstyle *tst, int cx, const ltable *T,
                            int *y) {
     const ddoc *d = L->d;
@@ -3139,7 +3161,10 @@ static void lay_table_rows(lctx *L, int table, const cstyle *tst, int cx, const 
     struct { int cell, first, end, top, rows, h, va; } tall[LAY_TCOLS];
     int ntall = 0;
 
-    int kind = 0;
+    int kind = 0, rowi = 0;
+    /* The last row's cells, whose bottoms the table's own border draws. */
+    struct { int cell, first, end; } lastrow[LAY_TCOLS];
+    int nlast = 0;
     for (int row = lay_table_next(L, table, tst, -1, &kind); row >= 0;
          row = lay_table_next(L, table, tst, row, &kind)) {
         cstyle rst;
@@ -3155,6 +3180,7 @@ static void lay_table_rows(lctx *L, int table, const cstyle *tst, int cx, const 
 
         struct { int cell, first, end, h; } got[LAY_TCOLS];
         int ngot = 0, rowh = 0, col = 0;
+        nlast = 0;
         for (int cell = lay_row_cell(L, row, kind, &rst, -1); cell >= 0;
              cell = lay_row_cell(L, row, kind, &rst, cell)) {
             while (col < T->ncols && busy[col]) col++;
@@ -3177,6 +3203,16 @@ static void lay_table_rows(lctx *L, int table, const cstyle *tst, int cx, const 
             lay_block(L, cell, &rst, x, w, &cy);
             L->flex_sized = -1;
             int h = cy - top;
+            if (T->collapse && kind != TR_BLOCK) {
+                lay_table_share(L, cell, first, L->out->nitems, tst, col > 0, rowi > 0,
+                                col + span >= T->ncols, 0);
+                if (rows == 1 && nlast < LAY_TCOLS) {
+                    lastrow[nlast].cell = cell;
+                    lastrow[nlast].first = first;
+                    lastrow[nlast].end = L->out->nitems;
+                    nlast++;
+                }
+            }
 
             if (rows > 1 && ntall < LAY_TCOLS) {
                 tall[ntall].cell = cell; tall[ntall].first = first;
@@ -3224,7 +3260,10 @@ static void lay_table_rows(lctx *L, int table, const cstyle *tst, int cx, const 
         }
         *y = top + rowh + spacing;
         for (int k = 0; k < LAY_TCOLS; k++) if (busy[k] > 0) busy[k]--;
+        rowi++;
     }
+    for (int i = 0; i < nlast; i++)
+        lay_table_share(L, lastrow[i].cell, lastrow[i].first, lastrow[i].end, tst, 0, 0, 0, 1);
 }
 
 /* Old markup centres a table by what is round it: <center>, or align on

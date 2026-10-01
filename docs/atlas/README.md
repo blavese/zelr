@@ -95,6 +95,15 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.90.0
+
+- **Boxes beside floats (11, `lay_beside_floats`)**: a box with overflow hidden, flow-root, a flex box, a grid or a
+  table ran under a float, its background and border drawn behind the picture. layouttest, failing with the call
+  taken out, with the room's width not compared, and with flow-root not read.
+- **Collapsed table borders (11, `lay_table_share`)**: every inner line of a ruled table was drawn twice. layouttest,
+  failing with no border shared, with the table's own border ignored, with the last row's bottoms kept, and with
+  border-collapse not read.
+
 ### 0.89.0
 
 - **A row's items stretch to its tallest (11, `lay_stretch`)**: in flex rows and grids each card was as tall as its own
