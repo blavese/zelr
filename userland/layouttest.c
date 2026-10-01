@@ -1799,6 +1799,44 @@ int main(void) {
             i1 && i2 && j1 && j2 && i2->x - i1->x == j2->x - j1->x, i1 && i2 ? i2->x - i1->x : -1);
     }
 
+    /* --- a grid's rows ----------------------------------------------------------
+     *
+     * Every row was as tall as what was in it, whatever grid-template-rows
+     * and grid-auto-rows said. */
+    {
+        lay("<style>.g{display:grid;grid-template-columns:100px 100px;grid-template-rows:50px 120px;gap:10px}"
+            ".h { display: grid; grid-template-columns: 100px; grid-template-rows: 1fr 2fr; height: 300px }"
+            ".a{display:grid;grid-template-columns:100px;grid-auto-rows:40px}"
+            ".m{display:grid;grid-template-columns:100px;grid-template-rows:minmax(80px,auto) repeat(2,30px)}.m div{background:#000}"
+            "p{margin:0}</style>"
+            "<div class=g><div id=g1>a</div><div id=g2>b</div><div id=g3>c</div></div><p id=after>x</p>"
+            "<div class=h><div id=h1>a</div><div id=h2>b</div></div>"
+            "<div class=a><div id=a1>a</div><div id=a2>b</div></div>"
+            "<div class=m><div id=m1>a</div><div id=m2>b</div><div id=m3>c</div></div>", 600);
+        const litem *g1 = word("a"), *after = word("x");
+        int g1y = g1 ? g1->y : -1;
+        const litem *w_c = 0, *w_b[3] = { 0, 0, 0 };
+        int nb = 0;
+        for (int i = 0; i < page.nitems; i++) {
+            const litem *it = &page.items[i];
+            if (it->kind != LK_TEXT || it->at < 0) continue;
+            if (w_same(page.text + it->at, "c") && !w_c) w_c = it;
+            if (w_same(page.text + it->at, "b") && nb < 3) w_b[nb++] = it;
+        }
+        okn("a row of a written length is that tall, and the grid holds every row it names",
+            g1 && w_c && after && w_c->y - g1y == 60 && after->y - g1y >= 180, w_c && g1 ? w_c->y - g1y : -1);
+        const litem *a[4] = { 0, 0, 0, 0 };
+        int na = 0;
+        for (int i = 0; i < page.nitems && na < 4; i++)
+            if (page.items[i].kind == LK_TEXT && page.items[i].at >= 0 && w_same(page.text + page.items[i].at, "a")) a[na++] = &page.items[i];
+        okn("shares of a grid's own height, rows of grid-auto-rows, and minmax and repeat",
+            na == 4 && nb == 3 && w_b[1]->y - a[1]->y == 100 && w_b[2]->y - a[2]->y == 40 && w_b[0]->y - a[0]->y == 0,
+            na == 4 && nb == 3 ? w_b[1]->y - a[1]->y : -1);
+        const litem *m1 = box_of(by_id("m1")), *m2 = box_of(by_id("m2")), *m3 = box_of(by_id("m3"));
+        okn("a minmax row is at least its least, and a repeat of lengths is each that tall",
+            m1 && m2 && m3 && m2->y - m1->y == 80 && m3->y - m2->y == 30, m1 && m2 ? m2->y - m1->y : -1);
+    }
+
     puts(failed ? "LAYOUTTEST_FAIL\n" : "LAYOUTTEST_PASS\n");
     return failed;
 }

@@ -3276,11 +3276,15 @@ static const char *lay_grid_track(const char *p, const cstyle *st, int root_px, 
 /* A grid's tracks, from grid-template-columns: each one's kind, amount and
    least width; how many there are. With grid-auto-flow: column, `items`
    items make a column each past the ones written, at grid-auto-columns. */
+/* The template lay_grid_tracks reads in place of the columns', when it is
+   reading a grid's rows (lay_grid_rows). */
+static const char *lay_tracks_text;
+
 static int lay_grid_tracks(lctx *L, const cstyle *st, int cw, int gap, int items,
                            int *kind, int *val, int *mins, lgline *names, int *nnames) {
     int n = 0;
     if (nnames) *nnames = 0;
-    const char *p = st->grid_cols ? st->grid_cols : "";
+    const char *p = lay_tracks_text ? lay_tracks_text : st->grid_cols ? st->grid_cols : "";
     while (*p && n < LAY_GRID_COLS) {
         while (*p == ' ') p++;
         if (!*p) break;
@@ -3720,6 +3724,53 @@ static void lay_grid_named(lctx *L, int node, const cstyle *st, int cx, int cw, 
  * under the picture. 1 when laid out; 0 when there were more items than the
  * records hold, and the caller goes row by row instead. */
 #define LAY_GRID_ROWS 128
+
+/* The rows' sizes, from grid-template-rows and grid-auto-rows, given how
+   tall what is in each made it (rowh): a length is the row's height, a
+   minmax's least a floor and its length a cap, and a share (fr, auto) or a
+   percentage is worked out from the grid's own height when it has one and
+   is what is in it when it has not. Rows the template names exist with
+   nothing in them. Every row was as tall as what was in it. How many rows
+   there are. */
+static int lay_grid_rows(lctx *L, const cstyle *st, int gap, int *rowh, int nrows) {
+    if (!st->grid_rows && !st->grid_auto_rows) return nrows;
+    int H = st->height > 0 ? st->height : -1;
+    int kind[LAY_GRID_COLS], val[LAY_GRID_COLS], mins[LAY_GRID_COLS], nt = 0;
+    if (st->grid_rows) {
+        /* The column reader, handed the rows: the same lengths, repeat()
+           and minmax(), with the grid's height for its width. (Not by a
+           copy of the style: a ring 3 program has no memcpy to copy it.) */
+        lay_tracks_text = st->grid_rows;
+        nt = lay_grid_tracks(L, st, H > 0 ? H : 0, gap, 0, kind, val, mins, 0, 0);
+        lay_tracks_text = 0;
+    }
+    int ak = GT_FR, av = 1, am = 0;
+    if (st->grid_auto_rows) lay_grid_track(st->grid_auto_rows, st, L->root_px, H > 0 ? H : 0, &ak, &av, &am);
+    if (nt > nrows) {
+        for (int i = nrows; i < nt && i < LAY_GRID_ROWS; i++) rowh[i] = 0;
+        nrows = nt < LAY_GRID_ROWS ? nt : LAY_GRID_ROWS;
+    }
+    int fixed = gap * (nrows > 0 ? nrows - 1 : 0), shares = 0;
+    for (int i = 0; i < nrows; i++) {
+        int k = i < nt ? kind[i] : ak, v = i < nt ? val[i] : av, m = i < nt ? mins[i] : am;
+        if (k == GT_PX) rowh[i] = v;
+        else if (k == GT_PCT) { if (H > 0) rowh[i] = v * H / 100; }
+        else if (k == GT_CAP) { if (rowh[i] > v) rowh[i] = v; if (rowh[i] < m) rowh[i] = m; }
+        else { if (rowh[i] < m) rowh[i] = m; shares += v; }
+        if (k != GT_FR) fixed += rowh[i];
+    }
+    if (H > 0 && shares > 0) {
+        int left = H - fixed;
+        for (int i = 0; i < nrows; i++) {
+            int k = i < nt ? kind[i] : ak, v = i < nt ? val[i] : av;
+            if (k != GT_FR) continue;
+            int share = left > 0 ? (int)((long long)left * v / shares) : 0;
+            if (share > rowh[i]) rowh[i] = share;
+        }
+    }
+    return nrows;
+}
+
 #define LAY_GPOOL 12288
 static int lay_gpool[LAY_GPOOL];
 static int lay_gpool_top;
@@ -3834,6 +3885,7 @@ static int lay_grid_placed(lctx *L, int node, const cstyle *st, int cw, int ncol
         for (int j = r[GR_R0]; j <= last; j++) total += rowh[j];
         if (r[GR_H] > total) rowh[last] += r[GR_H] - total;
     }
+    nrows = lay_grid_rows(L, st, gap, rowh, nrows);
     top[0] = *y;
     for (int i = 0; i < nrows; i++) top[i + 1] = top[i] + rowh[i] + gap;
 
@@ -3947,7 +3999,9 @@ static void lay_grid(lctx *L, int node, const cstyle *st, int cx, int cw, int *y
         int r0, rs;
         if (lay_grid_axis(part[0], part[2], 0, 0, 0, &r0, &rs)) named_row = 1;
     }
-    if (named_row && lay_grid_placed(L, node, st, cw, ncols, colx, gap, names, nnames, y)) return;
+    /* Rows given sizes need the whole table of rows too (lay_grid_rows). */
+    if ((named_row || st->grid_rows || st->grid_auto_rows)
+        && lay_grid_placed(L, node, st, cw, ncols, colx, gap, names, nnames, y)) return;
 
     struct { int first, end, h; } row[LAY_GRID_COLS];
     int nrow = 0, col = 0, top = *y, rowh = 0, any = 0;

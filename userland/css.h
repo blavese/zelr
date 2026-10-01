@@ -53,7 +53,7 @@ enum {
     P_POSITION, P_TOP, P_RIGHT, P_BOTTOM, P_LEFT,
     P_VALIGN, P_SPACING, P_COLLAPSE, P_OVERFLOW, P_CLIP, P_FLOAT, P_CLEAR, P_TRANSFORM,
     P_GRID_COLS, P_GRID_COLUMN, P_GRID_AREAS, P_GRID_AREA, P_GRID_FLOW, P_GRID_AUTO_COLS,
-    P_GRID_COL_START, P_GRID_COL_END, P_GRID_ROW, P_GRID_ROW_START, P_GRID_ROW_END,
+    P_GRID_COL_START, P_GRID_COL_END, P_GRID_ROW, P_GRID_ROW_START, P_GRID_ROW_END, P_GRID_ROWS, P_GRID_AUTO_ROWS,
     P_TEXT_TRANSFORM, P_ORDER, P_ALIGN_SELF, P_FLEX, P_FLEX_BASIS, P_FLEX_SHRINK, P_ASPECT,
     P_MASK,
     P_BG_IMAGE, P_BG_LAYER, P_BG_SIZE, P_BG_POS, P_BG_REPEAT, P_MASK_LAYER, P_OBJECT_FIT,
@@ -225,6 +225,10 @@ typedef struct {
        lays the items out along one row, a new column each. */
     const char *grid_auto;
     unsigned char gflow_col;
+
+    /* grid-template-rows and grid-auto-rows, as written (null: none, auto):
+       the rows' sizes, where they were each as tall as what is in it. */
+    const char *grid_rows, *grid_auto_rows;
 
     /* Where an item is placed along a grid's columns, as written:
        grid-column, and its two longhands (layout.h, lay_grid_place). */
@@ -643,6 +647,8 @@ static const cprop CSS_PROPS[] = {
     { "grid-row", P_GRID_ROW },
     { "grid-row-start", P_GRID_ROW_START },
     { "grid-row-end", P_GRID_ROW_END },
+    { "grid-template-rows", P_GRID_ROWS },
+    { "grid-auto-rows", P_GRID_AUTO_ROWS },
     { "mask", P_MASK_LAYER },
     { "mask-image", P_MASK },
     { "-webkit-mask", P_MASK_LAYER },
@@ -2096,6 +2102,7 @@ static inline void css_default_style(cstyle *st, int root_px) {
     st->ink_none = 0;
     st->tx_px = st->ty_px = st->tx_pct = st->ty_pct = 0;
     st->grid_cols = st->grid_areas = st->garea = st->grid_auto = 0;
+    st->grid_rows = st->grid_auto_rows = 0;
     st->gflow_col = 0;
     st->gcol = st->gcol_s = st->gcol_e = 0;
     st->grid_row = st->grid_row_s = st->grid_row_e = st->gplace = 0;
@@ -2818,6 +2825,12 @@ static inline void css_apply_v(int prop, const char *v, cstyle *st, int root_px,
             break;
         case P_GRID_AUTO_COLS:
             st->grid_auto = w_starts_fold(v, "auto") ? 0 : v;
+            break;
+        case P_GRID_ROWS:
+            st->grid_rows = w_starts_fold(v, "none") ? 0 : v;
+            break;
+        case P_GRID_AUTO_ROWS:
+            st->grid_auto_rows = w_starts_fold(v, "auto") ? 0 : v;
             break;
         case P_GRID_COL_START:
             st->gcol_s = v;
