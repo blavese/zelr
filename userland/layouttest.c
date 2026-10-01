@@ -1853,6 +1853,25 @@ int main(void) {
         okn("and so do a grid row's", k1 && k2 && k1->h == k2->h && k2->h > 30, k1 && k2 ? k2->h - k1->h : -1);
     }
 
+    /* --- beside a float -------------------------------------------------------------
+     *
+     * A box that is its own formatting context sits beside a float, and below
+     * it when it does not fit there; an ordinary block still runs under it.
+     * The media object's box was drawn under its picture. */
+    {
+        lay("<style>.f{float:left;width:100px;height:50px;background:#000}.o{overflow:hidden;background:#000}"
+            ".n{background:#000}.w { display: flow-root; width: 550px; background: #000 }</style>"
+            "<div><div class=f id=bf></div><div class=o id=bo>beside</div><div class=n id=bn>under</div></div>"
+            "<div><div class=f id=bg></div><div class=w id=bw>below</div></div>", 600);
+        const litem *bf = box_of(by_id("bf")), *bo = box_of(by_id("bo")), *bn = box_of(by_id("bn"));
+        const litem *bg = box_of(by_id("bg")), *bw = box_of(by_id("bw"));
+        okn("a box that is its own formatting context sits beside a float, an ordinary one under it",
+            bf && bo && bn && bo->x - bf->x == 100 && bo->x + bo->w == bn->x + bn->w && bn->x == bf->x,
+            bf && bo ? bo->x - bf->x : -1);
+        okn("and below the float when it is too wide for the room beside it",
+            bg && bw && bw->y >= bg->y + 50, bg && bw ? bw->y - bg->y : -1);
+    }
+
     puts(failed ? "LAYOUTTEST_FAIL\n" : "LAYOUTTEST_PASS\n");
     return failed;
 }

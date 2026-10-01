@@ -1354,10 +1354,9 @@ static void lay_inline_piece(lctx *L, int at, const cstyle *parent, int pin, int
  *
  * What is here: a float is as wide as it was told or as its contents want,
  * goes as far to its side as the floats already there allow, and down past
- * them when there is no room; lines beside it are shorter, and a block that
- * clears goes below it. What is not: blocks do not move aside for floats
- * (only their lines do, which is what a block that is not its own
- * formatting context does anyway), and a block always grows to hold the
+ * them when there is no room; lines beside it are shorter, a block that
+ * clears goes below it, and one that is its own formatting context is laid
+ * out beside it (lay_beside_floats). What is not: a block always grows to hold the
  * floats inside it, as though every one were cleared at its end -- the
  * clearfix nearly every page applies, which this cannot see because it is
  * written as an ::after box. */
@@ -1459,6 +1458,38 @@ static int lay_cleared(const lctx *L, int y, int clear, int x, int w) {
         if (b > y) y = b;
     }
     return y;
+}
+
+/* A box that is a formatting context of its own -- overflow other than
+   visible, flow-root, a flex box, a grid or a table -- does not run under a
+   float as an ordinary block does (only its lines moving aside): it is laid
+   out in the room beside the floats, and below them when that room is
+   narrower than it needs. The media object, a picture floated left with its
+   words in an overflow: hidden box, had the box's background and border
+   drawn under the picture. Only the room at its top is looked at. */
+static void lay_beside_floats(lctx *L, const cstyle *st, int *x, int *avail, int *y) {
+    if (!L->fl_seq || st->floated || st->position == POS_ABSOLUTE || st->position == POS_FIXED) return;
+    if (!(st->clip || st->flow_root || st->display == D_FLEX || st->display == D_GRID || st->display == D_TABLE))
+        return;
+    int need = 48;
+    if (st->width >= 0) {
+        need = st->width + (st->border_box ? 0 : st->pl + st->pr + st->bl + st->br);
+        if (st->ml > 0 && st->ml != CSS_AUTO_OFF) need += st->ml;
+        if (st->mr > 0 && st->mr != CSS_AUTO_OFF) need += st->mr;
+    }
+    for (int tries = 0; tries < 16; tries++) {
+        int l = *x, r = *x + *avail;
+        lay_float_room(L, *y, &l, &r);
+        if (l == *x && r == *x + *avail) return;
+        if (r - l >= need) {
+            *x = l;
+            *avail = r - l;
+            return;
+        }
+        int nb = lay_float_next(L, *y, *x, *x + *avail);
+        if (nb < 0) return;
+        *y = nb;
+    }
 }
 
 /* Inline content, which is everything between two blocks. Walked with an
@@ -4240,6 +4271,7 @@ static void lay_block_placed(lctx *L, int node, const cstyle *parent, int x,
     if (!st.visible && !lay_show_hidden) return;
 
     if (st.clear) *y = lay_cleared(L, *y, st.clear, x, avail);
+    lay_beside_floats(L, &st, &x, &avail, y);
 
     /* A picture or a drawing given a box of its own -- a flex item, a grid
        cell, something positioned -- is still a picture, drawn by the code

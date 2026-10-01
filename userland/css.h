@@ -178,8 +178,10 @@ typedef struct {
     unsigned char clip, gone;
 
     /* Floated to one side (1 left, 2 right) and cleared past floats (1 left,
-       2 right, 3 both). See layout.h, lay_float. */
-    unsigned char floated, clear;
+       2 right, 3 both). See layout.h, lay_float. flow_root: display:
+       flow-root, a block that is a formatting context of its own
+       (lay_beside_floats). */
+    unsigned char floated, clear, flow_root;
 
     /* Painted through a mask this cannot draw: an icon is often a square of
        the text colour with the icon's shape as its mask, and drawn without
@@ -2089,7 +2091,7 @@ static inline void css_default_style(cstyle *st, int root_px) {
     st->spacing = -1;
     st->valign = VA_BASELINE;
     st->clip = st->gone = 0;
-    st->floated = st->clear = 0;
+    st->floated = st->clear = st->flow_root = 0;
     st->masked = 0;
     st->obj_fit = 0;
     st->bg_img = 0;
@@ -2521,6 +2523,7 @@ static inline void css_apply_v(int prop, const char *v, cstyle *st, int root_px,
         }
         case P_BORDER_COLOR: css_color(v, &st->border_color); break;
         case P_DISPLAY:
+            st->flow_root = (unsigned char)w_starts_fold(v, "flow-root");
             if (w_starts_fold(v, "none")) st->display = D_NONE;
             else if (w_starts_fold(v, "inline-block")) st->display = D_INLINE_BLOCK;
             else if (w_starts_fold(v, "inline-flex")) st->display = D_INLINE_FLEX;
