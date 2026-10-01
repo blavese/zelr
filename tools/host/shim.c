@@ -14,7 +14,9 @@
  * own HTTP, chunking and gzip still run. A window is a buffer; the program's
  * idle waits drive a small script (HOST_SCRIPT: shot, pgdn*N, wheel*N,
  * go=ADDRESS, click=X:Y, wait, pause=MS) and `shot` writes the window as a PPM
- * (HOST_SHOT is the file prefix). HOST_SAMPLE=N prints the program's stack
+ * (HOST_SHOT is the file prefix; the script waits for each "browser: " line,
+ * or HOST_LINE's). A program that faults prints the fault and its stack.
+ * HOST_SAMPLE=N prints the program's stack
  * five times after N seconds, named from the .pdb, for finding a hang;
  * HOST_PROFILE=N (or FROM:N, starting FROM seconds in) looks at the stack
  * every few milliseconds for N seconds and then prints the functions it was
@@ -79,11 +81,15 @@ static void push(unsigned type, int x, int y, unsigned buttons, unsigned key) {
     queue[qtail++ & 255] = e;
 }
 
+/* The line the script waits for: the browser's report of a page, or with
+   HOST_LINE any other program's (the player's "play: playing"). */
+static const char *line_prefix = "browser: ";
+
 static void out_char(char c) {
     fputc(c, stdout);
     if (c == '\n') {
         outbuf[outn] = 0;
-        if (!strncmp(outbuf, "browser: ", 9)) lines_seen++;
+        if (!strncmp(outbuf, line_prefix, strlen(line_prefix))) lines_seen++;
         outn = 0;
         fflush(stdout);
     } else if (outn < (int)sizeof(outbuf) - 1) {
@@ -496,12 +502,66 @@ static void memory_bounds(void) {
     }
 }
 
+/* A program that faults says where, rather than vanishing with the last
+   64 KiB of what it printed still in the buffer: what it printed, then the
+   fault and the stack at it, named from the .pdb. */
+static LONG WINAPI on_fault(EXCEPTION_POINTERS *ep) {
+    DWORD code = ep->ExceptionRecord->ExceptionCode;
+    if (code != EXCEPTION_ACCESS_VIOLATION && code != EXCEPTION_ILLEGAL_INSTRUCTION &&
+        code != EXCEPTION_INT_DIVIDE_BY_ZERO && code != EXCEPTION_ARRAY_BOUNDS_EXCEEDED &&
+        code != EXCEPTION_PRIV_INSTRUCTION && code != EXCEPTION_DATATYPE_MISALIGNMENT)
+        return EXCEPTION_CONTINUE_SEARCH;
+    fflush(stdout);
+    fprintf(stderr, "HOST_FAULT 0x%08lx at %p", (unsigned long)code, ep->ExceptionRecord->ExceptionAddress);
+    if (code == EXCEPTION_ACCESS_VIOLATION && ep->ExceptionRecord->NumberParameters >= 2)
+        fprintf(stderr, " (%s %p)", ep->ExceptionRecord->ExceptionInformation[0] ? "writing" : "reading",
+                (void *)ep->ExceptionRecord->ExceptionInformation[1]);
+    fprintf(stderr, "\n");
+    HANDLE proc = GetCurrentProcess();
+    char dir[MAX_PATH];                       /* the .pdb is beside the program */
+    DWORD dl = GetModuleFileNameA(0, dir, sizeof(dir));
+    while (dl > 0 && dir[dl - 1] != '\\' && dir[dl - 1] != '/') dl--;
+    dir[dl] = 0;
+    SymSetOptions(SYMOPT_UNDNAME | SYMOPT_DEFERRED_LOADS | SYMOPT_LOAD_LINES);
+    SymInitialize(proc, dir, TRUE);
+    CONTEXT ctx = *ep->ContextRecord;
+    STACKFRAME64 f;
+    memset(&f, 0, sizeof(f));
+    f.AddrPC.Offset = ctx.Rip; f.AddrPC.Mode = AddrModeFlat;
+    f.AddrFrame.Offset = ctx.Rbp; f.AddrFrame.Mode = AddrModeFlat;
+    f.AddrStack.Offset = ctx.Rsp; f.AddrStack.Mode = AddrModeFlat;
+    for (int depth = 0; depth < 40; depth++) {
+        if (!StackWalk64(IMAGE_FILE_MACHINE_AMD64, proc, GetCurrentThread(), &f, &ctx, 0,
+                         SymFunctionTableAccess64, SymGetModuleBase64, 0)) break;
+        char buf[sizeof(SYMBOL_INFO) + 256];
+        SYMBOL_INFO *si = (SYMBOL_INFO *)buf;
+        si->SizeOfStruct = sizeof(SYMBOL_INFO);
+        si->MaxNameLen = 255;
+        DWORD64 disp = 0;
+        IMAGEHLP_LINE64 line;
+        DWORD ld = 0;
+        line.SizeOfStruct = sizeof(line);
+        const char *name = "?";
+        if (SymFromAddr(proc, f.AddrPC.Offset, &disp, si)) name = si->Name;
+        if (SymGetLineFromAddr64(proc, f.AddrPC.Offset, &ld, &line))
+            fprintf(stderr, "   %s  %s:%lu\n", name, line.FileName, line.LineNumber);
+        else
+            fprintf(stderr, "   %s  +%llx\n", name, (unsigned long long)disp);
+        if (!f.AddrReturn.Offset) break;
+    }
+    fflush(stderr);
+    ExitProcess(3);
+    return EXCEPTION_CONTINUE_SEARCH;
+}
+
 int main(int argc, char **argv) {
+    AddVectoredExceptionHandler(1, on_fault);
     memory_bounds();
     WSADATA wd;
     WSAStartup(MAKEWORD(2, 2), &wd);
     start_ms = GetTickCount();
     shot_prefix = getenv("HOST_SHOT");
+    if (getenv("HOST_LINE")) line_prefix = getenv("HOST_LINE");
     script = getenv("HOST_SCRIPT");
     if (!script) script = "shot";
     if (getenv("HOST_W")) sw = atoi(getenv("HOST_W"));
