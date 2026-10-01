@@ -1,4 +1,10 @@
 
+
+**Since 0.92.0** (the rest of this file is older): **wscheck.py** (gate step "a page's websocket talks to a server
+both ways", beside livecheck) opens webserver.py's `/ws-test` in the browser and reads what the page saw from the
+address it goes to when done (`/ws-done?...`), and what the client did from the server (`Server.websockets()`:
+masked frames, pong, close answered, cookie and origin). webserver.py speaks WebSocket on `/ws/echo`, `/ws/close`,
+`/ws/bad-accept`, `/ws/proto` and `/ws/binary`, and no longer prints a traceback for a connection the client reset.
 Source tree: the repository root (github.com/blavese/zelr, main, 2026-09-22, two commits after v0.37.0).
 `KERNEL_VERSION` is `"0.37.0"` (include/types.h). `.git/packed-refs` has 40 tags, and the newest is `v0.37.0`.
 

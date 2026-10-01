@@ -40,6 +40,7 @@ static int sw = 860, sh = 620, maxw = 2048, maxh = 2048;
 static char *heap_base, *heap_brk, *heap_end;
 static SOCKET socks[64];
 static int sock_used[64];
+static int sock_wait_ms[64];          /* how long recv waits (sock_wait, 68) */
 static char outbuf[1 << 16];
 static int outn;
 static int lines_seen;           /* "browser: " lines */
@@ -151,7 +152,7 @@ static void idle(void) {
 
 static int sock_new(SOCKET s) {
     for (int i = 1; i < 64; i++)
-        if (!sock_used[i]) { sock_used[i] = 1; socks[i] = s; return i; }
+        if (!sock_used[i]) { sock_used[i] = 1; socks[i] = s; sock_wait_ms[i] = 4000; return i; }
     closesocket(s);
     return -6;
 }
@@ -235,7 +236,7 @@ zw host_syscall(zw n, zw a, zw b, zw c) {
         fd_set rd;
         FD_ZERO(&rd);
         FD_SET(socks[a], &rd);
-        struct timeval tv = { 4, 0 };
+        struct timeval tv = { sock_wait_ms[a] / 1000, (sock_wait_ms[a] % 1000) * 1000 };
         if (select(0, &rd, 0, 0, &tv) == 0) return 0;
         int k = recv(socks[a], (char *)b, (int)c, 0);
         if (getenv("HOST_NETLOG") && k <= 0) fprintf(stderr, "HOST_RECV %d -> %d (%lu ms)\n", (int)a, k, GetTickCount() - start_ms);
@@ -245,6 +246,10 @@ zw host_syscall(zw n, zw a, zw b, zw c) {
         return -2;
     }
     case 28: if (a > 0 && a < 64 && sock_used[a]) { closesocket(socks[a]); sock_used[a] = 0; } return 0;
+    case 68:                                   /* sock_wait */
+        if (a <= 0 || a >= 64 || !sock_used[a] || b < 0 || b > 60000) return -1;
+        sock_wait_ms[a] = (int)b;
+        return 0;
     case 29: return -1;
     case 30: { memset((void *)a, 0, 24); *(unsigned *)a = 1; return 0; }
     /* sysinfo: twelve words (sdk/zelr.h, zelr_sysinfo) and no more, all

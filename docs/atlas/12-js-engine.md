@@ -2,7 +2,16 @@
 
 Source root the repository root (github.com/blavese/zelr main, 2026-09-22). All paths are relative to it; `file:N` means 1-based line N. Everything below was verified by reading the code. Where a behaviour was derived by tracing (not by running) it says so. Nothing here was built or run.
 
-**Since 0.91.0** (the rest of this file is older; trust the code):
+**Since 0.92.0** (the rest of this file is older; trust the code):
+- **A function's own prototype is written whatever its chain says** (jsrun.h `js_putv`): a `prototype` not yet made
+  (`js_make_proto_for`) is made before the write, so the write lands on it. It went up the chain first, where tslib's
+  `__extends` had just put the base class, and Babel makes a class's prototype read only: the write was refused and the
+  subclass inherited nothing (Apollo's ObservableQuery was no Observable). An arrow or method still has none of its
+  own, so a read-only one up its chain still stops the write, as the language has it.
+- **FileList** (jswin.h): an interface with `length`, `item` and iteration over its indexed properties; a file
+  field's `files` is an empty one (nothing can choose a file yet), any other field's null.
+
+**Since 0.91.0**:
 - **Strings are counted in UTF-16 units** (js.h, "positions in a string"). They are still kept as UTF-8; `jstr.units`
   holds the length in units plus one, with `JS_UWIDE` when a byte is past ASCII, worked out when first asked
   (`js_units`) and carried by `js_concat` and `js_usub`. A character is read by `js_uchar`: well-formed UTF-8 (a lone

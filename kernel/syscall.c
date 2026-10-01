@@ -756,6 +756,7 @@ typedef struct {
     bool secure;
     u32  owner;
     int  tcp;
+    u32  wait_ms;               /* how long recv waits (SYS_SOCK_WAIT) */
 } sock_t;
 
 static sock_t socks[SOCK_MAX];
@@ -794,6 +795,7 @@ static int sock_take(bool secure) {
         socks[i].secure = secure;
         socks[i].owner = caller_pid();
         socks[i].tcp = -1;
+        socks[i].wait_ms = 4000;
         return i;
     }
     return -1;
@@ -912,7 +914,7 @@ static i64 sys_recv(registers_t *r) {
     if (!user_range_ok(buf, len)) return -1;
 
     if (s->secure) {
-        u32 n = tls_recv(s->tcp, (u8 *)buf, len, 4000);
+        u32 n = tls_recv(s->tcp, (u8 *)buf, len, s->wait_ms);
         if (n) return (i32)n;
         /* A finished TLS connection is one that said so in an alert, or one
            whose carrier stopped. The second is not a clean ending and is
@@ -921,9 +923,16 @@ static i64 sys_recv(registers_t *r) {
         return (tls_ended(s->tcp) || tcp_ended(s->tcp)) ? -2 : 0;
     }
 
-    u32 n = tcp_recv(s->tcp, (u8 *)buf, len, 4000);
+    u32 n = tcp_recv(s->tcp, (u8 *)buf, len, s->wait_ms);
     if (n) return (i32)n;
     return tcp_ended(s->tcp) ? -2 : 0;
+}
+
+static i64 sys_sock_wait(registers_t *r) {
+    sock_t *s = sock_of(r->rbx);
+    if (!s || r->rcx > 60000) return -1;
+    s->wait_ms = (u32)r->rcx;
+    return 0;
 }
 
 static i64 sys_disconnect(registers_t *r) {
@@ -1217,6 +1226,7 @@ static const syscall_fn TABLE[] = {
     [SYS_RENAME]      = sys_rename,
     [SYS_POLL]        = sys_poll,
     [SYS_RANDOM]      = sys_random,
+    [SYS_SOCK_WAIT]   = sys_sock_wait,
 };
 
 #define N_SYSCALLS (sizeof(TABLE) / sizeof(TABLE[0]))

@@ -1,5 +1,9 @@
 # 06a -- Network drivers and the TCP/IP stack
 
+**Since 0.92.0** (the rest of this file is older): a read of a socket waits `sock_t.wait_ms` (syscall 68, atlas 03),
+not always 4000 ms, so a program can ask a connection held open whether anything came without waiting (the
+browser's WebSocket, userland/wsock.h).
+
 Snapshot: zelr `main` of 2026-09-22 (two commits after v0.37.0; `KERNEL_VERSION "0.37.0"`, include/types.h:25).
 All references are `path:line` relative to the repository root. "Host order" means the kernel's `ipv4_t` convention
 (a `u32` in host byte order, include/net.h:6). TLS/X.509/crypto internals belong to another area; only the interface

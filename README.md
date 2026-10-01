@@ -1490,7 +1490,7 @@ is still the kernel's own, on the console; the one in a window is a program.
 ## writing a program for it
 
 Four files in `sdk/` are everything a program needs: `zelr.h`, which is the
-sixty-seven system calls and a little sugar over them, `zelr.ld`, which says
+sixty-eight system calls and a little sugar over them, `zelr.ld`, which says
 where a program is linked, a build line, and an example.
 
 ```bash
@@ -1729,22 +1729,20 @@ break.
 Being explicit about the boundary, because "operating system" covers a very
 large range:
 
-- **No promises, so no `fetch`.** A page asks the network with
-  `XMLHttpRequest` and a callback. `fetch` returns a promise and this
-  interpreter has none — no async, no await, no `then` — and a `fetch`
-  that returned something promise-shaped and not a promise would be worse
-  than not having one, because a page written against it stops at the
-  first `.then`. The request is made on the browser's next pass rather
-  than inside `send()`, so the code after `send()` runs first, which is
-  the contract a page is written against. The fetch itself stalls the
-  browser while it happens.
+- **The network from a page is one request at a time, and no HTTP/2.** A
+  page has `fetch` (promises), `XMLHttpRequest`, `sendBeacon` and, since
+  0.92.0, `WebSocket`. A request is made on the browser's next pass rather
+  than inside the call, so the code after it runs first, and it stalls the
+  browser while it happens. A WebSocket does not: once open it is asked on
+  every pass whether anything came (a socket can be told not to wait,
+  `sock_wait`), and a page has four at once, out of the machine's six
+  sockets. There is no permessage-deflate, no HTTP/2 and no HTTP/3.
 
-  What a page *can* do after it has been read: a click reaches
-  `addEventListener` and `onclick`, `setTimeout` and `setInterval` go
-  off, `DOMContentLoaded` and `load` are delivered, a `<script src>` is
-  fetched and run in the order it appears, and anything that changes the
-  document lays the page out again. This entry used to say none of that
-  existed, long after most of it did.
+  What a page can do after it has been read: a click reaches
+  `addEventListener` and `onclick`, timers go off, `DOMContentLoaded` and
+  `load` are delivered, scripts are fetched and run in their turns, modules
+  and workers run, and anything that changes the document lays the page
+  out again. This entry said none of that existed long after it all did.
 - **Three signals.** A program can be interrupted, killed or asked to end.
   It can have the first and the last ignored — which is how a shell
   survives the ctrl-C meant for the program it started — or catch them and
@@ -1767,9 +1765,9 @@ large range:
   matters and a guess in the ones that do not.
 - **No job control.** `cmd &` starts something and stops waiting for it, and
   nothing keeps a list; `jobs` says so rather than printing an empty one.
-- **Sixty-four system calls.** Enough to print, walk directories, read and
-  write files, rename one, say when it must be on the disk, open a TCP
-  connection, sleep, exit, fork, exec, wait on a child, make a pipe, wait
+- **Sixty-eight system calls.** Enough to print, walk directories, read and
+  write files, rename one, say when it must be on the disk, open a TCP or
+  TLS connection and say how long a read of it waits, sleep, exit, fork, exec, wait on a child, make a pipe, wait
   on several descriptors at once, map memory, catch a signal and own a
   window. The numbers are fixed: a program built somewhere else has
   nothing but the number to go on, so a call that goes away leaves a gap

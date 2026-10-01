@@ -1,6 +1,20 @@
 # 11 -- The web browser (everything except JS-engine internals and image decoders)
 
-**Since 0.90.0** (the rest of this file is older; trust the code and the README's "since 6048716" list):
+**Since 0.92.0** (the rest of this file is older; trust the code and the README's "since 6048716" list):
+- **WebSocket.** userland/wsock.h is RFC 6455's client and nothing of the page: `ws_start` connects (`connect_tls` for
+  wss:), sends the upgrade (key from `random_bytes`, Origin, the offered subprotocols, the jar's cookies, the browser's
+  User-Agent) and sets the socket's wait to 0; `ws_pump` reads what has come and gives one event a call (the answer
+  checked: 101, Upgrade, Connection, Sec-WebSocket-Accept against SHA-1 of the key, no extension, a subprotocol only one
+  offered; then frames: masked from the server or RSV bits fail it, ping gets pong, close gets close, pieces are joined
+  up to 8 MB, text must be UTF-8); `ws_send` and `ws_close` frame with a fresh mask each. SHA-1 (`ws_sha1_*`) is FIPS
+  180-4, used only here. jsws.h is the page's object: the constructor resolves the address (http: and https: become ws:
+  and wss:, a fragment is dropped), checks the subprotocols, takes one of `JD_SOCKETS` (4) slots and connects on the
+  next pass (`jd_ws_begin`); `jd_ws_pump`, called first in `jsdom_timers`, turns events into open, message
+  (MessageEvent; binary as a Blob or an ArrayBuffer by binaryType), error and close (CloseEvent, added to the event
+  kinds); `jsdom_next_due` wakes the browser every 5 ticks while one is open; `jsdom_close` drops them. browser.c gives
+  the cookies (`socket_cookies`, `jsdom_websockets_with`). A failure is said on the console as "WebSocket: why".
+
+**Since 0.90.0**:
 - **A box that is its own formatting context sits beside a float** (layout.h `lay_beside_floats`, from
   `lay_block_placed`): overflow other than visible, `display: flow-root` (css.h `cstyle.flow_root`), flex, grid and
   tables are laid out in the room beside the floats at their top, and below them when a width of their own does not

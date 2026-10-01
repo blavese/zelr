@@ -500,6 +500,9 @@ static int jd_inert(int x);
 static void jd_slots_touch(int parent, int child);
 static int jd_fire_simple(int node, const char *type, int bubbles, int cancelable);
 static int jd_later_native(void (*fn)(jval arg), jval arg, int ticks_from_now);
+static int jd_ws_pump(void);                 /* jsws.h */
+static int jd_ws_open_count(void);
+static void jd_ws_reset(void);
 static void jd_custom_disconnected(int top);
 static void jd_custom_attr(int node, const char *name, const char *old, const char *now);
 static int  jd_ncustom;
@@ -4456,6 +4459,7 @@ static const jd_evkind_t JD_EVENTS[] = {
     { "PopStateEvent", "Event", "ostate" },
     { "HashChangeEvent", "Event", "soldURL snewURL" },
     { "MessageEvent", "Event", "odata sorigin slastEventId osource oports" },
+    { "CloseEvent", "Event", "bwasClean ncode sreason" },
     { "ProgressEvent", "Event", "blengthComputable nloaded ntotal" },
     { "PageTransitionEvent", "Event", "bpersisted" },
     { "StorageEvent", "Event", "okey ooldValue onewValue surl ostorageArea" },
@@ -5042,7 +5046,8 @@ static int jd_requests_waiting(void);
 static int jsdom_next_due(void) {
     if (!jd_open || jd_spent()) return -1;
     if (jd_requests_waiting()) return 0;
-    int now = ticks(), best = -1;
+    /* A WebSocket open is asked every twentieth of a second (jsws.h). */
+    int now = ticks(), best = jd_ws_open_count() ? 5 : -1;
     for (int i = 0; i < jd_ntimer; i++) {
         if (!jd_timer[i].used) continue;
         int left = jd_timer[i].due - now;
@@ -5090,8 +5095,9 @@ static void jd_run_timer(jtimer *t) {
  * rather than accumulating a backlog it can never run down. */
 static int jsdom_timers(void) {
     if (!jd_open || jd_spent()) return 0;
+    int ran = jd_ws_pump();
+    if (jd_spent()) return ran;
     int now = ticks();
-    int ran = 0;
     int limit = jd_timer_id;             /* not the ones these set */
     for (;;) {
         int pick = -1;
@@ -6197,6 +6203,7 @@ static void jd_consts(jctx *J, jobj *on, const char *const *names, int from);
 #include "jswalk.h"
 #include "jsmod.h"
 #include "jsworker.h"
+#include "jsws.h"
 
 /* --- the hooks -----------------------------------------------------------------------------------
  *
@@ -6966,6 +6973,7 @@ static void jd_setup(jctx *J) {
     jd_setup_window(J);
     jd_setup_url(J);
     jd_setup_net(J);
+    jd_setup_ws(J);
     jd_setup_navigator(J);
     jd_setup_location(J);
     jd_setup_window_more(J);
@@ -7013,6 +7021,7 @@ static void jd_zero(void *p, int n) {
 static void jsdom_close(void) {
     jd_mods_reset();
     jw_close_all();
+    jd_ws_reset();
     for (int i = 0; i < jd_nreq; i++) { jd_req[i].waiting = 0; jd_req[i].self = 0; }
     jd_nreq = 0;
     if (!jd_open) return;

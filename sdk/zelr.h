@@ -193,6 +193,7 @@ typedef long long          zelr_word;
 
 /* Bytes from the kernel's random number generator (random_bytes). */
 #define SYS_RANDOM        67
+#define SYS_SOCK_WAIT     68
 #define TLS_WHY   0
 #define TLS_WHAT  1
 
@@ -476,6 +477,12 @@ static inline int recv(int sock, void *buf, int len) {
 }
 static inline int disconnect(int sock) {
     return syscall(SYS_DISCONNECT, sock, 0, 0);
+}
+
+/* How long recv waits on this socket, in milliseconds (4000 until said):
+   0 takes what has come and does not wait for more. */
+static inline int sock_wait(int sock, int ms) {
+    return syscall(SYS_SOCK_WAIT, sock, ms, 0);
 }
 
 static inline int resolve(const char *host, u32 *out) {

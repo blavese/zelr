@@ -13,8 +13,11 @@ project expected.
 QEMU's user networking carries the guest to it, so nothing in the guest
 knows it is talking to the machine it is running on.
 """
+import base64
+import hashlib
 import http.server
 import socket
+import struct
 import threading
 
 # Where the guest reaches the host. QEMU's user networking puts the machine
@@ -712,10 +715,144 @@ existed.</p>
 </body></html>"""
 
 
+# --- WebSocket (RFC 6455), the server's side --------------------------------
+#
+# Written from the RFC with the standard library, for the same reason as the
+# rest of this file: a check against a server in this project's own image
+# would only check that the two ends agree with each other. Each path does
+# one thing the client has to get right, and WS_LOG keeps what the client did
+# -- whether it masked, answered a ping, answered a close -- because a page
+# saying it passed is the client marking its own work.
+
+WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+WS_LOG = []
+
+
+def ws_accept(key):
+    return base64.b64encode(hashlib.sha1((key + WS_GUID).encode()).digest()).decode()
+
+
+def ws_read(rfile):
+    """One frame: (fin, opcode, masked, payload), or None at the end."""
+    h = rfile.read(2)
+    if len(h) < 2:
+        return None
+    fin, op, masked, n = h[0] & 0x80, h[0] & 15, h[1] & 0x80, h[1] & 127
+    if n == 126:
+        n = struct.unpack(">H", rfile.read(2))[0]
+    elif n == 127:
+        n = struct.unpack(">Q", rfile.read(8))[0]
+    mask = rfile.read(4) if masked else b"\0\0\0\0"
+    data = bytearray(rfile.read(n))
+    for i in range(n):
+        data[i] ^= mask[i & 3]
+    return bool(fin), op, bool(masked), bytes(data)
+
+
+def ws_write(wfile, op, data, fin=True):
+    n = len(data)
+    b0 = (0x80 if fin else 0) | op
+    if n < 126:
+        head = bytes([b0, n])
+    elif n < 65536:
+        head = bytes([b0, 126]) + struct.pack(">H", n)
+    else:
+        head = bytes([b0, 127]) + struct.pack(">Q", n)
+    wfile.write(head + data)
+    wfile.flush()
+
+
+# The page that drives them, one after another, and goes to /ws-done with
+# what it saw when it has finished: the browser says on its console where it
+# landed, and this server keeps the address.
+WS_PAGE = """<!doctype html>
+<html><head><title>websocket</title></head><body><h1>websocket</h1><pre id=out></pre>
+<script>
+var out = [], base = 'ws://' + location.host;
+function log(s) { out.push(s); document.getElementById('out').textContent = out.join('\\n'); }
+function done() { log('done'); location.href = '/ws-done?' + encodeURIComponent(out.join(';')); }
+function echo(next) {
+  var ws = new WebSocket(base + '/ws/echo'), got = [];
+  log('made ' + ws.readyState + ' ' + WebSocket.CONNECTING + ' ' + (ws.url === base + '/ws/echo'));
+  try { ws.send('early'); log('sent early'); } catch (e) { log('early ' + e.name); }
+  ws.binaryType = 'arraybuffer';
+  ws.onopen = function () {
+    log('open ' + ws.readyState + ' [' + ws.protocol + ']');
+    ws.send('caf\\u00e9 \\u{1F600}');
+    ws.send(new Uint8Array([1, 2, 250]).buffer);
+    ws.send(new Uint8Array(70000).fill(7));
+  };
+  ws.onmessage = function (e) {
+    got.push(typeof e.data === 'string' ? 's:' + e.data
+             : e.data.byteLength > 100 ? 'b:' + e.data.byteLength + 'x' + new Uint8Array(e.data)[69999]
+             : 'b:' + Array.from(new Uint8Array(e.data)).join('.'));
+    if (got.length === 5) { log('echo ' + got.join('|')); ws.close(1000, 'done'); log('closing ' + ws.readyState); }
+  };
+  ws.onerror = function () { log('error echo'); };
+  ws.onclose = function (e) { log('close ' + e.code + ' ' + e.wasClean + ' ' + e.reason + ' ' + ws.readyState); next(); };
+}
+function serverclose(next) {
+  var ws = new WebSocket(base + '/ws/close');
+  ws.onclose = function (e) { log('server close ' + e.code + ' ' + e.wasClean + ' ' + e.reason); next(); };
+}
+function badaccept(next) {
+  var ws = new WebSocket(base + '/ws/bad-accept'), seen = '';
+  ws.onopen = function () { seen += 'open '; };
+  ws.onerror = function () { seen += 'error '; };
+  ws.onclose = function (e) { log('bad accept ' + seen + e.code + ' ' + e.wasClean); next(); };
+}
+function proto(next) {
+  var ws = new WebSocket(base + '/ws/proto', ['chat.v1', 'chat.v2']);
+  ws.onopen = function () { log('protocol ' + ws.protocol); ws.close(); };
+  ws.onclose = function (e) { log('proto close ' + e.code); next(); };
+}
+function blob(next) {
+  var ws = new WebSocket(base + '/ws/binary');
+  ws.onmessage = function (e) {
+    var isblob = e.data instanceof Blob, size = e.data.size;
+    e.data.arrayBuffer().then(function (b) {
+      log('blob ' + isblob + ' ' + size + ' ' + Array.from(new Uint8Array(b)).join('.'));
+      ws.close(4000, 'thanks');
+    });
+  };
+  ws.onclose = function (e) { log('blob close ' + e.code + ' ' + e.reason); next(); };
+}
+function refused() {
+  var r = [];
+  try { new WebSocket('ftp://example.com/'); r.push('none'); } catch (e) { r.push(e.name); }
+  try { new WebSocket(base + '/ws/echo', ['a', 'a']); r.push('none'); } catch (e) { r.push(e.name); }
+  var ws = new WebSocket(base + '/ws/echo');
+  try { ws.close(1001); r.push('none'); } catch (e) { r.push(e.name); }
+  ws.close();
+  log('refused ' + r.join(' '));
+}
+// Each step has twenty seconds, so one that hangs is reported as that and
+// the rest still run.
+function step(fn, name, next) {
+  var moved = false;
+  var t = setTimeout(function () { if (!moved) { moved = true; log('timeout ' + name); next(); } }, 20000);
+  fn(function () { if (!moved) { moved = true; clearTimeout(t); next(); } });
+}
+refused();
+step(echo, 'echo', function () { step(serverclose, 'server close', function () { step(badaccept, 'bad accept', function () {
+  step(proto, 'proto', function () { step(blob, 'blob', done); }); }); }); });
+</script></body></html>
+""".encode()
+
+
 class Handler(http.server.BaseHTTPRequestHandler):
     def setup(self):
         COUNTS["connections"] += 1
         http.server.BaseHTTPRequestHandler.setup(self)
+
+    def handle(self):
+        # A client that drops a connection it had no more use for is not a
+        # fault, and a traceback for it in the middle of a check's output
+        # reads like one.
+        try:
+            http.server.BaseHTTPRequestHandler.handle(self)
+        except (ConnectionResetError, BrokenPipeError, ConnectionAbortedError):
+            pass
 
     protocol_version = "HTTP/1.1"
 
@@ -781,11 +918,77 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(packed)
 
+    def _websocket(self, path):
+        """An upgrade, then whatever the path is for. Each socket's doings
+        go in WS_LOG as (path, what) pairs."""
+        key = self.headers.get("Sec-WebSocket-Key") or ""
+        offered = [p.strip() for p in (self.headers.get("Sec-WebSocket-Protocol") or "").split(",") if p.strip()]
+        WS_LOG.append((path, "open cookie=%s origin=%s version=%s" % (
+            self.headers.get("Cookie") or "", self.headers.get("Origin") or "",
+            self.headers.get("Sec-WebSocket-Version") or "")))
+        accept = ws_accept(key)
+        if path == "/ws/bad-accept":
+            accept = ("A" if accept[0] != "A" else "B") + accept[1:]
+        self.send_response(101)
+        self.send_header("Upgrade", "websocket")
+        self.send_header("Connection", "Upgrade")
+        self.send_header("Sec-WebSocket-Accept", accept)
+        if path == "/ws/proto" and "chat.v2" in offered:
+            self.send_header("Sec-WebSocket-Protocol", "chat.v2")
+        self.end_headers()
+        self.wfile.flush()
+        self.close_connection = True
+        r, w = self.rfile, self.wfile
+        if path == "/ws/bad-accept":
+            ws_read(r)
+            return
+        if path == "/ws/echo":
+            ws_write(w, 1, "hello \u00e9".encode())
+            ws_write(w, 1, b"frag", fin=False)
+            ws_write(w, 0, b"ment", fin=False)
+            ws_write(w, 0, b"ed")
+            ws_write(w, 9, b"are you there")
+        if path == "/ws/binary":
+            ws_write(w, 2, b"\x00\x01\xfe\xff")
+        if path == "/ws/close":
+            ws_write(w, 8, struct.pack(">H", 4001) + b"bye")
+        while True:
+            f = ws_read(r)
+            if f is None:
+                WS_LOG.append((path, "ended"))
+                return
+            fin, op, masked, data = f
+            if not masked:
+                WS_LOG.append((path, "unmasked"))
+            if op == 8:
+                code = struct.unpack(">H", data[:2])[0] if len(data) >= 2 else 0
+                WS_LOG.append((path, "close %d %s" % (code, data[2:].decode("utf-8", "replace"))))
+                if path != "/ws/close":
+                    ws_write(w, 8, data)
+                return
+            if op == 10:
+                WS_LOG.append((path, "pong " + data.decode("utf-8", "replace")))
+            elif op in (1, 2):
+                WS_LOG.append((path, "%s %d" % ("text" if op == 1 else "binary", len(data))))
+                ws_write(w, op, data)
+
     def do_GET(self):
         COUNTS["requests"] += 1
         COOKIES.append(self.headers.get("Cookie") or "")
         path = self.path.split("?")[0]
         query = self.path.split("?", 1)[1] if "?" in self.path else ""
+
+        if (self.headers.get("Upgrade") or "").lower() == "websocket":
+            self._websocket(path)
+            return
+        if path == "/ws-test":
+            self._send(WS_PAGE, extra=[("Set-Cookie", "wsjar=kept; Path=/")])
+            return
+        if path == "/ws-done":
+            import urllib.parse
+            RECEIVED.append(("ws-done", urllib.parse.unquote(query)))
+            self._send(b"<html><head><title>ws done</title></head><body><p>done</p></body></html>")
+            return
 
         if path == "/" or path == "/index.html":
             self._send(PAGE)
@@ -1043,6 +1246,10 @@ class Server:
     def received(self):
         """Every form this server was sent, oldest first."""
         return list(RECEIVED)
+
+    def websockets(self):
+        """What each WebSocket client did, as (path, what), oldest first."""
+        return list(WS_LOG)
 
     def forget(self):
         del RECEIVED[:]

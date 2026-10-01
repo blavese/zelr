@@ -249,6 +249,32 @@ int main(int argc, char **argv) {
 
             for (int i = 0; i < 3; i++) disconnect(sk[i]);
         }
+
+        /* --- how long a read waits ------------------------------------------
+         *
+         * sock_wait (syscall 68): a read of a connection nothing is coming
+         * on takes as long as the socket was told to wait. A WebSocket is
+         * asked on every pass of the browser's loop, and the four seconds a
+         * read waited otherwise froze the browser for as long as the server
+         * was quiet. The server here waits for a request this never sends. */
+        int s = connect(host, port);
+        ok("a connection to read from", s >= 0);
+        if (s >= 0) {
+            char b[16];
+            int set0 = sock_wait(s, 0);
+            int t0 = ticks();
+            int r0 = recv(s, b, (int)sizeof(b));
+            int quick = ticks() - t0;
+            ok("a socket told not to wait gives nothing back at once", set0 == 0 && r0 == 0 && quick < 10);
+            sock_wait(s, 300);
+            t0 = ticks();
+            int r1 = recv(s, b, (int)sizeof(b));
+            int waited = ticks() - t0;
+            ok("and one told to wait 300 ms waits that long", r1 == 0 && waited >= 25 && waited < 200);
+            ok("and a wait past a minute is refused", sock_wait(s, 60001) < 0);
+            disconnect(s);
+            ok("and so is a socket that is not open", sock_wait(s, 0) < 0);
+        }
     }
 
     puts(failed ? "WIRETEST_FAIL\n" : "WIRETEST_PASS\n");

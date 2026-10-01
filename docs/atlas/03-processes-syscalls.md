@@ -1,5 +1,10 @@
 # Atlas 03 -- Tasks, Processes and System Calls
 
+**Since 0.92.0** (the rest of this file is older): **68 `SYS_SOCK_WAIT`** (rbx the socket, rcx milliseconds up to
+60000; -1 for a socket not the caller's or a longer wait) sets `sock_t.wait_ms`, which `sys_recv` hands `tcp_recv` and
+`tls_recv` in place of the fixed 4000; `sock_take` starts it at 4000. 0 hands over what has come and returns. The host
+shim keeps it per socket and gives it to `select`. Checked by wiretest (wirecheck.py).
+
 Source root: the repository root (copy of github.com/blavese/zelr @ main, two commits past v0.37.0, 2026-09-22).
 This section covers the scheduler, task model, ELF loader, ring-3 process building, the int 0x80 syscall dispatch, file descriptors, pipes, signals, wait queues, the "about" window, and the two ABI-checking Python tools. Cross-references into paging/pmm/idt/smp/timer are traced where the process machinery depends on them.
 

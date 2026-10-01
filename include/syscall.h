@@ -206,6 +206,15 @@
    into look exactly like good ones. */
 #define SYS_RANDOM        67
 #define RANDOM_CALL_MAX   65536
+
+/* How long recv waits on a socket for something to arrive: rbx the socket,
+   rcx milliseconds, at most 60000. It is 4000 until changed. 0 hands over
+   what has already come and returns at once, which is what a connection
+   held open for whenever the other end has something (a page's WebSocket)
+   needs: asked on every pass of a program's loop, four seconds of waiting
+   a pass froze the program for as long as the server was quiet. */
+#define SYS_SOCK_WAIT     68
+
 #define TLS_WHY   0
 #define TLS_WHAT  1
 

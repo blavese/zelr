@@ -95,6 +95,22 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.92.0
+
+- **A function's own prototype written when its chain's is read only (12, `js_putv`)**: tslib subclasses of Babel
+  classes inherited nothing. jstest, failing without the fix.
+- **FileList (12, jswin.h)**: there was none, and Apollo's upload check stopped with a ReferenceError. pagetest,
+  failing with a file field's files left null. With these and WebSocket, Al Jazeera's home page is drawn by its own
+  app (it was empty once its scripts ran), though one of its scripts now runs out of time.
+
+- **WebSocket (11/12, userland/wsock.h, jsws.h)**: there was none, and a page that made one stopped; Al Jazeera's
+  GraphQL client did, and its page sat at "Loading". RFC 6455's client over ws: and wss:, the page's object with its
+  events, and **`SYS_SOCK_WAIT` (68)**, how long a read of a socket waits (`sock_t.wait_ms`, 4000 until set), which a
+  socket asked on every pass needs at 0. wscheck.py (20 checks against webserver.py's WebSocket paths) and wiretest
+  (five on the wait), failing with the accept not checked, frames unmasked, no pong, the server's close unanswered,
+  fragments not joined, binaryType ignored, close() not closing, no cookie, a long frame's length wrong, and the
+  kernel ignoring the wait.
+
 ### 0.91.0
 
 - **Strings counted in UTF-16 units (12, js.h `js_units`, `js_ubyte`)**: every length, index and offset a script saw

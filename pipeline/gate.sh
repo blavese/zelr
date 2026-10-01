@@ -565,6 +565,11 @@ if [ "$MODE" = "screen" ] || [ "$MODE" = "full" ]; then
   # is how the readme came to say none of them existed.
   livetest() { keep timeout 700 python tools/livecheck.py; }
 
+  # A page's WebSocket against the test server: echo, a close from either
+  # end, an upgrade answered for the wrong key, a subprotocol, binary, and
+  # what only the server can say (masked frames, pong, cookie and origin).
+  wstest() { keep timeout 600 python tools/wscheck.py; }
+
   # Filling a form in and sending it, checked against what the server was
   # actually sent rather than against what the browser says it sent. The
   # second is the client marking its own work and passes just as happily
@@ -674,6 +679,7 @@ if [ "$MODE" = "screen" ] || [ "$MODE" = "full" ]; then
   par_start "youtube and twitch are read, and a google search answered" sitetest
   par_start "the browser shows a page and follows a link" browsertest
   par_start "a page does its work on a click, a timer and an answer" livetest
+  par_start "a page's websocket talks to a server both ways" wstest
   par_start "a form is filled in and arrives as it was filled in" formtest
   par_start "bodies arrive compressed and connections are kept" wiretest
   par_start "a server that never answers does not stop the machine" hangtest

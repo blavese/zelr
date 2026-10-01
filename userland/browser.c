@@ -1841,6 +1841,21 @@ static void script_scroll(int y) { scroll = y < 0 ? 0 : y; }
 /* document.cookie, from the jar and into it, for the page's address: what a
    request there would send, less what is HttpOnly (fetch.h). */
 static int script_cookies(char *out, int cap) { return ck_cookies_for(&here, out, cap, 1); }
+
+/* The cookies a WebSocket's upgrade carries: the jar's for its address, as
+   for any request there (HttpOnly ones too: no script reads them here). */
+static int socket_cookies(const char *address, char *out, int cap) {
+    char http[URL_TEXT];
+    int n = 0, secure = w_starts_fold(address, "wss://");
+    const char *rest = address + (secure ? 6 : w_starts_fold(address, "ws://") ? 5 : 0);
+    for (const char *p = secure ? "https://" : "http://"; *p && n < URL_TEXT - 1; p++) http[n++] = *p;
+    for (const char *p = rest; *p && n < URL_TEXT - 1; p++) http[n++] = *p;
+    http[n] = 0;
+    url_t u;
+    out[0] = 0;
+    if (!url_parse(http, &u)) return 0;
+    return ck_cookies_for(&u, out, cap, 0);
+}
 static void script_set_cookie(const char *line) { ck_take_line(&here, line, 1); }
 
 /* A page sending the browser somewhere: a link a script clicked, and
@@ -2194,6 +2209,7 @@ static void build(const char *html, int len, int width, int want_sheets,
         jsdom_navigate_with(script_navigate);
         jsdom_submit_with(submit_form);
         jsdom_cookies_with(script_cookies, script_set_cookie);
+        jsdom_websockets_with(socket_cookies);
         jsdom_address_with(script_address);
         jsdom_history_with(script_history_go, script_history_length);
         jsdom_styles_with(computed_style);
