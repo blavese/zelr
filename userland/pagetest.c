@@ -137,10 +137,15 @@ static int flatten_page(void) {
    whether anything changed. The browser does these three separately now
    because it keeps the world afterwards, and so does everything below here
    that clicks on something. */
+/* The page's clock (js.h, time_cap) for the next run_scripts, when a check
+   sets one: -1 leaves the context's own. */
+static int script_time_cap = -1;
+
 static int run_scripts(ddoc *d, char *err, int errcap, int *changed) {
     if (changed) *changed = 0;
     if (err && errcap) err[0] = 0;
     if (!jsdom_open(d, &qsheet)) return 0;
+    if (script_time_cap >= 0) jd_J.time_cap = script_time_cap;
     int ran = jsdom_scripts(err, errcap);
     jsdom_loaded();
     if (changed) *changed = jsdom_changed();
@@ -2740,12 +2745,17 @@ int main(void) {
              " document.getElementById('out').textContent = 'ran ' + {}.a; });"
              "var o = {}; for (var i = 0; ; i++) o['key number ' + i] = 'value ' + i;"
              "</script></body>");
+        /* Memory is what is asked about, so the clock (js_tick) is not let
+           stop the loop first, as it did in the collector's stress build. */
+        script_time_cap = 0;
         char err[128];
         run_scripts(&page, err, (int)sizeof(err), 0);
+        script_time_cap = -1;
         int said = 0;
         for (int i = 0; err[i]; i++)
             if (err[i] == 'm' && err[i + 1] == 'e' && err[i + 2] == 'm') said = 1;
         ok("a page whose script uses up its memory stops it, and says so, and this is still here", said);
+        if (!said) { puts("          it said: "); puts(err); putc('\n'); }
         jsdom_click(dom_by_id(&page, "out"));
         oks("and its handlers do not run again", content_of(dom_by_id(&page, "out")), "no");
         ok("nor is it woken for timers", jsdom_next_due() < 0);
