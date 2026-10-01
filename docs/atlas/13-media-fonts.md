@@ -691,30 +691,84 @@ typedef struct { short size; short bold, mono; const face_glyph *glyphs; const u
 
 **The player.** For Twitch it finds the stream the way Twitch's page does: an access token from the GQL API
 (`streamPlaybackAccessToken`, asked through sites.h's `twitch_ask`, which learns the Client-Id again if it changes),
-then usher's master playlist with that token, then the `audio_only` rendition (or the smallest), read again every
-second while fewer than six seconds are queued. A live stream starts one segment behind the end; a finished one
+then usher's master playlist with that token, then a rendition's media playlist, read again every second while
+fewer than six seconds are queued. Since 0.97.0 the rendition is one with a picture: the smallest first (by height,
+then bandwidth), up one while decoding takes under a third of the time it covers and down one when it takes more
+than four fifths, judged over every four seconds of picture; Twitch's renditions are cut at the same moments and
+each piece starts with an IDR picture, so a change is clean (the decoder makes its frames again at the new size).
+`audio_only` is used only when there is no picture. A live stream starts one segment behind the end; a finished one
 (ENDLIST) from its first segment and is never asked for twice, even when the address given is the media playlist.
-One segment is fetched a pass, demuxed and decoded into a twenty-second queue, and the queue goes to the card as
-`sound_info`'s `room` allows, resampled to the card's rate by linear interpolation, so nothing waits in a write. A
-segment that cannot be had is asked for again a second later and passed over after the third try. The window shows
-the channel, what it is doing and how much is queued; the console gets `play: ...` lines. Where there is no window
-it plays all the same and leaves when the stream ends. The browser starts it for a `play:` link (11 §3.8a).
+One segment is fetched a pass and demuxed. Its sound is decoded at once into a twenty-second queue, and the queue
+goes to the card as `sound_info`'s `room` allows, resampled to the card's rate by linear interpolation, so nothing
+waits in a write. Its pictures' access units are kept (copies, in a list) and decoded only as the picture needs
+them (`h264_room` says whether there is a frame free). A frame is shown when the sound reaches its PTS: the clock
+is the sample being heard, the time at the end of the queue (each PES packet's own PTS) less what is queued here
+and in the card (`queued`); without a card the queue is let go at the rate it would be heard, so the clock still
+runs. A frame more than 100 ms late is passed over when the next is also due. Frames are drawn scaled to the window
+(nearest sample) and centred, converted from YUV by the matrix the stream names (BT.709, or BT.601, or by size
+when it names none) and its range; the window can be resized. A segment that cannot be had is asked for again a
+second later and passed over after the third try. The window shows the picture with a status line (the channel,
+the size, how much is ahead, frames passed over); the console gets `play: ...` lines and, at the end, how many
+frames were shown and passed over. Where there is no window it plays all the same and leaves when the stream ends.
+The browser starts it for a `play:` link (11 §3.8a).
 
-**Checked by playcheck.** A host server serves six copies of aacdata.h's transport stream as a finished playlist
-with relative addresses, and a page that is one big `play:` link to it; QEMU (q35, HD Audio, a WAV backend)
-records. The desktop is started, the browser shows the page (waited for by its `browser:` line, the command typed
+**Checked by playcheck.** A host server serves a finished playlist of three two-second segments it muxes itself
+as Twitch's are (PAT, PMT, PES with PTS and, for the pictures, DTS and a PCR): aacdata.h's second of tone twice
+and h264data.h's colours (red beside blue for a second, then green beside yellow, ten pictures a second), each
+picture's PTS from its picture order count; relative addresses, and a page that is one big `play:` link to the
+playlist; QEMU (q35, HD Audio, a WAV backend) records. (Until 0.97.0 the segments were the tone alone, six of
+them.) The desktop is started, the browser shows the page (waited for by its `browser:` line, the command typed
 again if the desktop was not yet taking them) and the page is clicked. It checks that the player says it is
 playing and that the stream ended, that every segment decoded, that the playlist was read once and each segment
 once from the first, that 6.1 s are heard with no quiet longer than the encoder's own lead-in (29 ms; 80 allowed),
 and each channel's pitch by the median period between crossings (441 and 658 Hz for 440 and 660). Each failed on a
 broken build: the browser not handing `play:` over, no rate conversion (479 and 719 Hz), the ending waiting for a
 queue `feed` never empties, a finished list started near its end, the playlist read twice, the card fed every two
-seconds (658 ms gaps), and the kernel reporting no room.
+seconds (658 ms gaps), and the kernel reporting no room. Since 0.97.0 it also looks at the screen while the stream
+plays (a screendump at a time, every fourth pixel each way counted against the four colours): the player must show
+at least half the pictures, red beside blue and green beside yellow must each be seen, and each in at least a
+quarter of the looks, since each is half of every segment. Those failed with U and V swapped in the conversion,
+with frames shown as soon as decoded rather than when the sound reaches them (the first pair hardly seen), and with
+the pictures not decoded at all.
 
 **Not covered.** Windows' encoder never writes intensity stereo, pulses or a downward TNS filter, so those paths
 are read from the standard and unverified. HE-AAC (SBR, PS) is not decoded: such a stream plays its AAC-LC core at
-half the rate (Twitch's are AAC-LC). Only ADTS in transport streams is played, not fragmented MP4. There is no
-picture yet: Twitch's video is H.264.
+half the rate (Twitch's are AAC-LC). Only ADTS in transport streams is played, not fragmented MP4. Scaling is
+nearest sample, not filtered. A rendition change loses the two or three frames waiting to be shown.
+
+### 3.12 H.264: `h264.h`, `h264mb.h`, `h264rec.h` (since 0.97.0)
+
+| File | Role |
+|---|---|
+| `userland/h264.h` | The stream: NAL units (emulation prevention taken out), SPS (with VUI: the reorder count, the buffer size, the colour matrix and range) and PPS (scaling lists with both fall-back rules), slice headers, picture order (all three types), reference lists (initial order for P and B, the changes, long-term), marking (sliding window and memory management, gaps in frame_num), the decoded picture buffer and output in display order (an epoch counter keeps pictures after an IDR or a reset behind the ones before), and the interface: `h264_nal`, `h264_next_nal`, `h264_decode_au` (a PES packet and its PTS), `h264_room`, `h264_peek`, `h264_frame`, `h264_flush`. |
+| `userland/h264mb.h` | A macroblock's syntax by CAVLC (coeff_token, levels, total_zeros, run_before, Exp-Golomb) or CABAC (the engine bit for bit as the standard has it, every context's selection by ctxIdxInc), the residual (dequantised as it is read), and the macroblock and slice loops; each macroblock is predicted and its residual added as soon as it is read. |
+| `userland/h264rec.h` | Intra prediction (4x4, 8x8 with its reference filtering, 16x16, chroma), inter prediction (quarter-sample luma by the six-tap filter, eighth-sample chroma, weighted: explicit and implicit), motion vector prediction, P_Skip, direct (spatial and temporal, with direct_8x8_inference), the transforms (4x4, 8x8, the DC Hadamards) and the deblocking filter (boundary strength from intra, coefficients, references and vectors; luma and chroma, the strong filter at intra edges). |
+| `userland/h264tab.h` | GENERATED by `tools/mkh264.py` from ITU-T's reference decoder (JM 19.0, the software of H.264.2), numbers only: the CABAC context initialisation for ctxIdx 0-459 and 1012-1015 in I and the three P/B tables (JM keeps them by syntax element; each is put back at the standard's ctxIdx by how JM's decoder indexes it, and every context lands once), rangeTabLPS and transIdxLPS, the CAVLC codes (each table checked prefix-free with the standard's count), Table 9-4's coded_block_pattern map, the 8x8 context positions, the scans, the filter's alpha, beta and tC0, the dequantisation scales, the chroma QP map and the default scaling lists. Spot values the standard gives are checked as they are read. |
+| `userland/h264test.c`, `userland/h264data.h`, `tools/genh264.py`, `tools/mfh264.c` | h264test (ring3check, `H264TEST_PASS`): four streams Windows' encoder made from clips genh264.py draws (Baseline CAVLC with P pictures; Main CABAC with P; Main CABAC with B pictures and reordering; High with B, a cropped 320x180 and three GOPs), every frame compared with Windows' decoding by a checksum of each plane; then damaged and cut copies, decoded or refused without a fault. mfh264.c is Media Foundation's sink writer and source reader from C, built by zig as a host tool; encoder settings (B pictures, GOP, QP, CABAC) must reach it as attributes with the input type, since set afterwards they are ignored. |
+| `tools/h264check.py`, `tools/h264native.c` | Gate step (outward): the newest segment of every rendition of a live Twitch channel decoded by Windows and by zelr's decoder built for the host, frame by frame, and what each stream used printed (from the decoder's `seen`). |
+
+**What real streams are needed for.** Windows' encoder makes CAVLC and CABAC, P and B pictures with spatial
+direct, several GOPs and no more: never the 8x8 transform, temporal direct, weighted prediction or several
+references. Live streams have them, and differ by channel (the encoder is the broadcaster's own, NVENC or x264, and
+Twitch's transcoder for the smaller renditions). Seen exact against Windows on 2026-10-02: the 8x8 transform and
+intra 8x8 prediction, temporal direct, several references (a 1080p60 source); explicit and implicit weights,
+memory management, spatial direct (another channel's renditions from 160p to 1080p).
+
+**Speed** (native, -O2, two seconds of video): 160p 0.09 s, 360p 0.2 s, 480p 0.3 s, 720p60 0.9 s, 1080p60 2.35 s.
+Luma interpolation works sample by sample from a clamped window, which is most of the cost of the last; it is what
+to make faster first. In QEMU (TCG) the colours stream (320x176, ten a second) plays with all but a few frames on
+time.
+
+**Robustness.** A stream comes over the network, so anything in it is refused rather than trusted: Exp-Golomb
+values are held to 2^27 - 1 so no cast goes negative, every index read is checked against what it indexes, the
+SPS's sizes against the standard's limits, a macroblock that fails is marked undecoded so neither a neighbour nor the
+filter reads what it left half written. The damage in h264test found three faults before they were committed: a
+negative parameter set number, a reference list change past the list, and the filter comparing the vectors of a
+macroblock that had failed.
+
+**Not decoded, refused by name:** fields (PAFF, MBAFF), chroma other than 4:2:0, more than 8 bits, lossless, slice
+groups (FMO), data partitioning, SP and SI slices. Redundant slices are dropped. Lost slices are not concealed: what
+was in the frame before stays.
 
 ---
 

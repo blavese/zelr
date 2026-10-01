@@ -401,8 +401,10 @@ Compared with the kernel: `theme_init` sets look MODERN, light true, preset 1 (t
 ### 3.5a `userland/play.c`: "Player" (since 0.96.0)
 
 A live stream's sound: `play twitch:<channel>` or `play <HLS playlist address>`. Not on the launcher, since it
-needs a stream; the browser starts it from a live Twitch channel's "listen" link (`play:` addresses, 11 §3.8a).
-A 460x140 window with the channel, a status line and how many seconds are queued; `play: ...` lines on the
+needs a stream; the browser starts it from a live Twitch channel's "watch" link (`play:` addresses, 11 §3.8a).
+Since 0.97.0 it shows the picture (H.264, 13 §3.12) in a resizable window above a status line, timed by the sound.
+A 640x400 window (460x140 until 0.97.0): the picture scaled to fit, and a status line with the channel, the
+picture's size, how many seconds are fetched ahead and how many frames were passed over; `play: ...` lines on the
 console. It writes only what `sound_info`'s `room` allows, so its waits are on the network, never in a write.
 Without a window it plays all the same and leaves when the stream ends. How it finds, fetches and decodes the
 stream, and playcheck: 13 §3.11.

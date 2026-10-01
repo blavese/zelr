@@ -396,7 +396,8 @@ instead.
     python tools/soundcheck.py  play notes and measure what came out
     python tools/enscheck.py    the same, out of the other sound card
     python tools/volcheck.py    drag the volume slider, listen to the result
-    python tools/playcheck.py   click a stream's link in the browser, measure what came out
+    python tools/playcheck.py   click a stream's link in the browser, listen and look
+    python tools/h264check.py   decode a live channel's renditions here and by Windows, compare
     python tools/framecheck.py  move the pointer, ask what the frames cost
     python tools/mountcheck.py  mount a usb stick, copy files, watch the flushes
     python tools/namecheck.py   save long names and read them back
@@ -1383,21 +1384,30 @@ Twitch past broadcast does the same from Twitch's own. The JSON is read where
 it lies rather than parsed into a tree, and everything taken from it is
 escaped before it goes into the page, since it came from somebody else.
 
-A live Twitch channel can be listened to. Its page has a "listen" link, which
+A live Twitch channel can be watched. Its page has a "watch" link, which
 starts the player (`userland/play.c`) rather than going anywhere: it asks
 Twitch's API for an access token the way Twitch's own page does, takes the
 channel's playlist with it, and fetches the two-second pieces of the stream
 as they appear. Each piece is an MPEG transport stream (`ts.h`) of AAC
-(`aac.h`), a decoder written here from the standard and checked sample for
-sample against Windows' own decoding of the same files; the codebooks are
-numbers read out of 3GPP's published reference and checked to be whole. The
-player is a program of its own so that the waiting a stream does is never the
-page's, and it writes no more than the sound card has room for, so its waits
-are on the network rather than in a write. A harness serves a stream from the
-host, clicks its link in the browser on the desktop and measures the
-recording: its pitch, its length, and any gap where the card ran dry. The picture is H.264 and there is no video decoder here yet, so
-it is sound only; YouTube does not play at all, since its streams are given
-to its own player only, with tokens that player makes. Google's results are made by a program that first decides whether a
+(`aac.h`) and H.264 (`h264.h`), both decoders written here from the
+standards. The sound is checked sample for sample against Windows' own
+decoding of the same files; the picture is exact by the standard, and is
+checked frame for frame against Windows' decoding of streams Windows made and,
+in the gate, of every rendition of a live channel, which have what Windows'
+encoder never makes (the 8x8 transform, temporal direct prediction, weighted
+prediction). The tables are numbers read out of the standards' published
+reference software and checked to be whole. The player starts at the smallest
+rendition and moves up while decoding takes well under the time it covers;
+each frame is shown when the sound reaches it, the clock being the sample
+being heard. It is a program of its own so that the waiting a stream does is
+never the page's, and it writes no more than the sound card has room for, so
+its waits are on the network rather than in a write. A harness serves a
+stream from the host, clicks its link in the browser on the desktop, measures
+the recording (its pitch, its length, any gap where the card ran dry) and
+looks at the screen while it plays, for colours the stream holds, each for as
+long as the sound says it should be there. YouTube does not play, since its
+streams are given to its own player only, with tokens that player makes.
+Google's results are made by a program that first decides whether a
 person is asking, which is not something to get round, so a search asked of
 Google is asked of DuckDuckGo, and the page says that too.
 

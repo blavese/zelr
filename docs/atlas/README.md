@@ -95,6 +95,22 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.97.0
+
+- **A live Twitch channel can be watched: an H.264 decoder (13 §3.12)**, `h264.h`, `h264mb.h`, `h264rec.h`: Baseline,
+  Main and High, progressive 4:2:0 at 8 bits, CAVLC and CABAC, I, P and B, weighted prediction, both direct modes,
+  the 8x8 transform and scaling matrices, long-term references and memory management, output in display order. The
+  tables (`h264tab.h`) are numbers read out of ITU-T's reference decoder (JM) by `tools/mkh264.py`, put back at the
+  standard's ctxIdx and checked. h264test (ring3check): four streams Windows' encoder made, every frame Windows'
+  decoding of it, and damaged and cut copies refused without a fault. h264check (gate, outward): every rendition of a
+  live channel decoded identically by Windows and by this decoder built for the host.
+- **The player shows the picture (13 §3.11, 10 §3.5a)**: renditions chosen by how fast they decode, each frame shown
+  when the sound reaches its PTS, YUV converted by the stream's own matrix and range, a resizable window. The channel
+  page's link says "watch" (11 §3.8a). playcheck's segments now carry a picture, and it looks at the screen while
+  they play; failing with U and V swapped, with frames shown as soon as decoded, and with no picture decoded.
+- **The host shim says where a program faulted** (the fault, the address and the stack, named from the .pdb, after
+  what it had printed), and its script can wait for a line other than the browser's (`HOST_LINE`).
+
 ### 0.96.0
 
 - **A live Twitch channel can be heard (13 §3.11, 11 §3.8a, 10 §3.5a)**: an AAC-LC decoder (`aac.h`, codebooks from

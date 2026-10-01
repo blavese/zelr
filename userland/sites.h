@@ -2321,7 +2321,7 @@ static inline int twitch_page(int kind, const char *name, const char *s, int n,
                 if (site_ident(name, login, sizeof(login), "_") && w_len(login) == w_len(name)) {
                     sp_raw(&p, "<p><a href=\"play:twitch:");
                     sp_raw(&p, login);
-                    sp_raw(&p, "\">listen</a></p>\n");
+                    sp_raw(&p, "\">watch</a></p>\n");
                 }
             } else {
                 int lb = sj_find(s, user, ue, "lastBroadcast");

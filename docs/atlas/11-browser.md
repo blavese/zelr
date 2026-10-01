@@ -708,11 +708,12 @@ Since 0.62.0 a watch page also shows storyboard sheets (`yt_frames`), and the br
 malloc'd and freed) and builds `site_youtube`'s page when it returns one; prints `browser: <address> -- <title> --
 <status>` after each page.
 
-Since 0.96.0 a live channel's page has a "listen" link, `play:twitch:<login>` (the login through `site_ident` and
+Since 0.96.0 a live channel's page has a link to the player (since 0.97.0 "watch", the player showing the picture;
+"listen" before), `play:twitch:<login>` (the login through `site_ident` and
 written only when nothing was taken out of it). browser.c does not go to a `play:` address: a click starts
 `/bin/play` on what follows the colon and leaves the page where it is, so the stream's waiting is the player's
 (13 §3.11). sitetest checks that a live channel offers the link and an offline one does not; the first failed with
-the link left out. playcheck clicks such a link on a page from a host server and listens; it failed with browser.c
+the link left out. playcheck clicks such a link on a page from a host server, listens and looks; it failed with browser.c
 not handing `play:` over.
 
 ### 3.9 Test programs in scope
