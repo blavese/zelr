@@ -6638,7 +6638,7 @@ static void jd_setup_html(jctx *J) {
         jd_accessor(J, p, "value", nat_value, nat_set_value);
         jd_accessor(J, p, "checked", nat_checked, nat_set_checked);
         jd_accessor(J, p, "form", nat_form_of, 0);
-        jd_accessor(J, p, "files", nat_null_getter, 0);
+        jd_accessor(J, p, "files", nat_input_files, 0);
         jd_accessor(J, p, "list", nat_null_getter, 0);
         jd_accessor(J, p, "labels", nat_labels, 0);
         jd_accessor(J, p, "selectionStart", nat_selection_end, nat_nothing_js);

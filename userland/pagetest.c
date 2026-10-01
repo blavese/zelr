@@ -990,6 +990,11 @@ int main(void) {
                " Object.prototype.toString.call(d), typeof HTMLScriptElement].join(' ');"
                "</script></body>"),
         "true true true true true true 9 1 1 DIV HTML [object HTMLDivElement] function");
+    oks("FileList is there to be tested against, and a file field holds an empty one",
+        titled("<body><input id=f type=file><input id=t><script>var f = document.getElementById('f').files;"
+               "document.title = [typeof FileList, f instanceof FileList, f.length, f.item(0), [...f].length,"
+               " document.getElementById('t').files, ({}) instanceof FileList].join(' ');</script></body>"),
+        "function true 0  0  false");
     oks("ShadowRoot is there to be asked about, and nothing is one until a script makes it",
         titled("<body><script>document.title = [typeof ShadowRoot, document.body.parentNode instanceof ShadowRoot,"
                " document.body.shadowRoot, 'attachShadow' in Element.prototype,"

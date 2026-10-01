@@ -1478,7 +1478,7 @@ static void jd_setup_crypto(jctx *J, jscope *g, int secure) {
  * is left. */
 
 static jstr *jd_k_bbytes, *jd_k_btype;
-static jobj *jd_p_blob, *jd_p_file;
+static jobj *jd_p_blob, *jd_p_file, *jd_p_filelist;
 static jobj *jd_blob_urls;                 /* [address, blob, address, blob, ...] */
 static int jd_blob_count;
 
@@ -1699,6 +1699,38 @@ static int jd_blob_lookup(const char *url, jstr **bytes, jstr **type) {
     return 0;
 }
 
+/* FileList: the files an <input type=file> holds, which is none here, since
+   nothing can choose a file from a page yet. Its files are its indexed
+   properties and length, as an array's are. Libraries tell an upload from
+   anything else by `instanceof FileList`, and Apollo's did on every query:
+   a page without one stopped with a ReferenceError. */
+static jval nat_filelist_length(jctx *J, jval t, jval *a, int n) {
+    (void)a; (void)n;
+    if (!js_is_obj(t)) return js_num(0);
+    u32 k = 0;
+    while (k < 1024 && js_find(t.obj, js_to_key(J, js_num(k)))) k++;
+    return js_num(k);
+}
+
+static jval nat_filelist_item(jctx *J, jval t, jval *a, int n) {
+    if (!js_is_obj(t)) return js_null();
+    double i = js_trunc(js_to_num(J, js_arg(a, n, 0)));
+    if (i < 0 || i >= 1024) return js_null();
+    jprop *p = js_find(t.obj, js_to_key(J, js_num(i)));
+    return p ? p->v : js_null();
+}
+
+static jobj *jd_new_filelist(jctx *J) { return js_object_with(J, JO_PLAIN, jd_p_filelist); }
+
+static jval nat_input_files(jctx *J, jval t, jval *a, int n) {
+    (void)a; (void)n;
+    if (!js_is_obj(t)) return js_null();
+    jval ty = js_get(J, t, js_str(J, "type"));
+    if (ty.t != JS_STR || !js_str_is(ty.str, "file")) return js_null();
+    jobj *l = jd_new_filelist(J);
+    return l ? js_from_obj(l) : js_null();
+}
+
 static void jd_setup_blobs(jctx *J, jscope *g) {
     (void)g;
     jd_k_bbytes = js_sym_new(J, "bytes", 5);
@@ -1712,6 +1744,10 @@ static void jd_setup_blobs(jctx *J, jscope *g) {
     jd_method(J, jd_p_blob, "text", nat_blob_text, 0);
     jd_method(J, jd_p_blob, "arrayBuffer", nat_blob_buffer, 0);
     jd_p_file = jd_interface(J, "File", jd_p_blob, nat_file_ctor, 2);
+    jd_p_filelist = jd_interface(J, "FileList", 0, 0, 0);
+    jd_accessor(J, jd_p_filelist, "length", nat_filelist_length, 0);
+    jd_method(J, jd_p_filelist, "item", nat_filelist_item, 1);
+    js_method_key(J, jd_p_filelist, J->sym_iterator, "[Symbol.iterator]", nat_arr_values, 0);
     jobj *url = jd_ctor_of(jd_p_url);
     if (url) {
         js_method(J, url, "createObjectURL", nat_url_create_object, 1);
