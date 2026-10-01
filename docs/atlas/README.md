@@ -95,6 +95,12 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.87.0
+
+- **SVG arcs, rounded rectangles and `<use>` (13, svg.h `sv_arc`, `sv_use`)**: an arc was its chord, rx was ignored,
+  and a sprite's icons drew nothing. svgtest, failing with each taken out and with the use's paint not inherited.
+- **sort puts holes last and copyWithin carries them (12)**. jstest, failing on both.
+
 ### 0.86.0
 
 - **Arrays keep their holes (12, `JS_HOLE` in `items`, `js_item`)**: not `in` them, not among their keys, skipped by
