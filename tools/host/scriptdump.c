@@ -248,6 +248,13 @@ int main(int argc, char **argv) {
     puts(" ms, script files ");
     putn(scripts_bytes / 1024);
     puts(" KB\n");
+    puts("collections ");
+    putn((int)jd_J.gc_runs);
+    puts(", the last gave back ");
+    putn((int)(jd_J.gc_freed / 1024));
+    puts(" KB, the next at ");
+    putn((int)(jd_J.gc_next / 1024));
+    puts(" KB\n");
     puts("status: ");
     puts(status);
     putc('\n');
