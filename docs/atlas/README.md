@@ -95,6 +95,11 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.88.0
+
+- **grid-template-rows and grid-auto-rows (11, `lay_grid_rows`)**: every row had been as tall as its content.
+  layouttest, failing with the sizes not applied, with sized grids laid out row by row, and with shares left out.
+
 ### 0.87.0
 
 - **SVG arcs, rounded rectangles and `<use>` (13, svg.h `sv_arc`, `sv_use`)**: an arc was its chord, rx was ignored,
