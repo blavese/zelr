@@ -110,7 +110,8 @@ def tone_film():
 PAGE = """<!doctype html><html><head><title>film</title><style>
 body{margin:0;background:#101010}
 video{display:block;width:640px;height:352px;margin:8px}
-</style></head><body><video id=v></video><script>
+#over{position:absolute;left:40px;top:40px;width:96px;height:48px;background:#ff00ff}
+</style></head><body><video id=v></video><div id=over></div><script>
 var v = document.getElementById('v'), log = [], ms = new MediaSource();
 ['loadstart','durationchange','loadedmetadata','loadeddata','canplay','canplaythrough','play','playing',
  'waiting','seeking','seeked','timeupdate','pause','ended','resize','error','emptied','abort'].forEach(function (e) {
@@ -224,6 +225,19 @@ class QuietServer(http.server.ThreadingHTTPServer):
         pass                # a browser dropping a kept connection is not a fault
 
 
+def magenta_in(w, h, px):
+    """How many of every fourth pixel each way are the box laid over the
+    video."""
+    n = 0
+    for y in range(0, h, 4):
+        row = y * w * 3
+        for x in range(0, w, 4):
+            i = row + x * 3
+            if px[i] > 220 and px[i + 1] < 40 and px[i + 2] > 220:
+                n += 1
+    return n
+
+
 def serve(port=0):
     vinit, vsegs, frames, w, h = colour_film()
     ainit, asegs, seconds = tone_film()
@@ -272,6 +286,7 @@ def main():
     said = ""
     pairs = {"red and blue": 0, "green and yellow": 0}
     looks = 0
+    over_seen = film_looks = 0
     file_pairs = {"red and blue": 0, "green and yellow": 0}
     file_looks = 0
     try:
@@ -295,6 +310,12 @@ def main():
                     w, h, px, _ = mon.screen("mse-look")
                     n = colours_seen(w, h, px)
                     looks += 1
+                    # Only while the film is on the screen: the last look
+                    # may land as the page goes on to the next.
+                    if (n["red"] > 2000 and n["blue"] > 2000) or (n["green"] > 2000 and n["yellow"] > 2000):
+                        film_looks += 1
+                        if magenta_in(w, h, px) > 150:
+                            over_seen += 1
                     if n["red"] > 2000 and n["blue"] > 2000:
                         pairs["red and blue"] += 1
                     if n["green"] > 2000 and n["yellow"] > 2000:
@@ -348,6 +369,16 @@ def main():
     c.add("each for about as long as the other (%d and %d of %d looks)"
           % (pairs["red and blue"], pairs["green and yellow"], looks),
           looks > 0 and min(pairs.values()) * 4 >= looks)
+    # A frame is drawn on its own when nothing else changed (browser.c,
+    # draw_video_frames), and what lies over the video is drawn again over
+    # it: the box stays in every look, and the browser says how many frames
+    # it drew alone.
+    c.add("the box laid over the video stays over it while it plays (%d of %d looks at the film)" % (over_seen, film_looks),
+          film_looks > 0 and over_seen == film_looks)
+    m = re.search(r"video frames drawn alone (\d+), with the page (\d+)", said)
+    alone, whole = (int(m.group(1)), int(m.group(2))) if m else (0, 0)
+    c.add("and most frames are drawn on their own (%d alone, %d with the page)" % (alone, whole),
+          alone >= frames // 2 and alone > whole)
     c.add("every segment was fetched once",
           all(v == 1 for k, v in ASKED.items() if k.startswith("/film/") and k != "/film/file.mp4"))
 

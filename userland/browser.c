@@ -2791,6 +2791,10 @@ static void tface_draw(surface *s, int x, int y, const char *str, u32 fg,
     }
 }
 
+/* Items wholly left or right of these (in the surface's columns) are not
+   drawn: a video's frame redraws only what crosses its box. */
+static int draw_x0 = -0x7FFFFFFF, draw_x1 = 0x7FFFFFFF;
+
 static void draw_page(surface *s, int ox, int oy, int vw, int vh) {
     for (int i = 0; i < page.nitems; i++) {
         const litem *it = &page.items[i];
@@ -2798,6 +2802,7 @@ static void draw_page(surface *s, int ox, int oy, int vw, int vh) {
         if (y + it->h < -8 || y > vh + 8) continue;
         int x = ox + it->x;
         int sy = oy + y;
+        if (x + it->w < draw_x0 || x > draw_x1) continue;
 
         if (it->kind == LK_BOX) {
             int w = it->w, h = it->h;
@@ -2851,7 +2856,7 @@ static void draw_page(surface *s, int ox, int oy, int vw, int vh) {
                 if (rad * 2 > it->h) rad = it->h / 2;
                 for (int row = 0; row < it->h; row++) {
                     int dy = sy + row;
-                    if (dy < oy || dy >= oy + vh) continue;
+                    if (dy < oy || dy >= oy + vh || dy < 0 || dy >= s->h) continue;
                     int ty = row - y0;
                     if (ty < 0 || ty >= th) continue;
                     int src_y = ty * p->h / th;
@@ -3072,6 +3077,62 @@ static void go_or_search(const char *typed) {
     else set_search(typed);
 }
 
+/* --- a video's frame, alone -----------------------------------------------
+ *
+ * A new frame changes nothing but the pixels in its video's box, and the
+ * whole page was drawn for it: on a page of any size, most of what a frame
+ * cost. So when a frame is all that changed, each video's box is drawn on
+ * its own, into a surface just that size -- the page's background, then
+ * every item that crosses the box, in order, so what lies over the video (its
+ * controls, a caption) stays over it -- and only that box is committed
+ * (win_commit_rect). A box that meets the well's rounded corners or its
+ * edges, or a page laid out again, is drawn whole as before. */
+static u32 *frame_buf;
+static int frame_cap;
+static int frames_whole, frames_alone;        /* for the console, per page */
+
+static int draw_video_frames(surface *win_s, int win, int view_x, int view_y, int view_w, int view_h, u32 well) {
+    int drawn = 0;
+    int ix0 = view_x + 2, ix1 = view_x + view_w + UI_SCROLL_W - 2;
+    int iy0 = view_y + 2, iy1 = view_y + view_h - 2;
+    for (int i = 0; i < page.nitems; i++) {
+        const litem *it = &page.items[i];
+        if (it->kind != LK_IMAGE || it->node < 0 || it->node >= doc.count || doc.nodes[it->node].tag != T_VIDEO) continue;
+        int rx = view_x + UI_PAD + it->x, ry = view_y + 2 + it->y - scroll, rw = it->w, rh = it->h;
+        if (rx < ix0) { rw -= ix0 - rx; rx = ix0; }
+        if (ry < iy0) { rh -= iy0 - ry; ry = iy0; }
+        if (rx + rw > ix1) rw = ix1 - rx;
+        if (ry + rh > iy1) rh = iy1 - ry;
+        if (rw <= 0 || rh <= 0) continue;                  /* scrolled out of sight */
+        /* Not where the well's corners are rounded. */
+        if ((ry < iy0 + 8 || ry + rh > iy1 - 8) && (rx < ix0 + 8 || rx + rw > ix1 - 8)) return -1;
+        if (rw * rh > frame_cap) {
+            if (frame_buf) free(frame_buf);
+            frame_buf = (u32 *)malloc((u64)rw * rh * 4);
+            frame_cap = frame_buf ? rw * rh : 0;
+            if (!frame_buf) return -1;
+        }
+        surface fs = { frame_buf, rw, rh };
+        rect(&fs, 0, 0, rw, rh, page.has_canvas ? page.canvas : well);
+        /* The box's top made the surface's: the page as drawn, moved up. */
+        int keep = scroll;
+        scroll += ry - (view_y + 2);
+        draw_x0 = 0;
+        draw_x1 = rw;
+        draw_page(&fs, view_x + UI_PAD - rx, 0, view_w + rx - (view_x + UI_PAD), rh);
+        draw_x0 = -0x7FFFFFFF;
+        draw_x1 = 0x7FFFFFFF;
+        scroll = keep;
+        for (int y = 0; y < rh; y++) {
+            u32 *d = win_s->px + (u32)(ry + y) * win_s->w + rx;
+            for (int x = 0; x < rw; x++) d[x] = frame_buf[y * rw + x];
+        }
+        win_commit_rect(win, rx, ry, rw, rh);
+        drawn++;
+    }
+    return drawn;
+}
+
 /* Asleep until something arrives for the window, the page has a timer due or
    a request waiting, or something drawn is due to change -- rather than
    looking sixty times a second at a page nobody is touching. */
@@ -3117,6 +3178,7 @@ int main(int argc, char **argv) {
     int last_mx = -1, last_my = -1, last_scroll = -1;
     int last_hover = -2;
     int dirty = 1;              /* something changed and a frame is owed */
+    int video_due = 0;          /* a video has a new frame (draw_video_frames) */
 
     /* Started on something, which may equally be an address or a thing to
        look for: `browser an operating system` should search for one. */
@@ -3292,11 +3354,12 @@ int main(int argc, char **argv) {
             dirty = 1;
         }
 
-        /* A video's new frame is drawn; one whose size changed is laid
-           out again first (jsmedia.h). */
+        /* A video's new frame is drawn, on its own when nothing else
+           changed; one whose size changed is laid out again first
+           (jsmedia.h). */
         if (jsdom_live()) {
             int resized = 0;
-            if (jsdom_media_frames(&resized)) dirty = 1;
+            if (jsdom_media_frames(&resized)) video_due = 1;
             if (resized) { relayout(view_w - UI_PAD * 2); dirty = 1; }
         }
 
@@ -3364,8 +3427,17 @@ int main(int argc, char **argv) {
         last_my = in.my;
         last_scroll = scroll;
 
+        if (!dirty && video_due && !want_load) {
+            ui_theme vt = ui_load_theme();
+            int alone = draw_video_frames(&s, win, view_x, view_y, view_w, view_h, vt.well);
+            if (alone > 0) { video_due = 0; frames_alone++; browser_wait(win); continue; }
+            if (alone == 0) video_due = 0;            /* no video in sight: nothing to draw */
+            else dirty = 1;                           /* drawn with the page, and counted so */
+        }
         if (!dirty) { browser_wait(win); continue; }
+        if (video_due) frames_whole++;
         dirty = 0;
+        video_due = 0;
 
         /* The theme comes off the disk, so it is read on a frame that is
            being drawn rather than on every pass of this loop. */
@@ -3401,6 +3473,16 @@ int main(int argc, char **argv) {
             /* And what it came to, on the console, where nobody on the
                desktop sees it: a machine driven over its serial line has no
                other way to know what a page turned into (sitecheck.py). */
+            /* What the last page's videos cost: frames drawn on their own,
+               and with the whole page (frame_cost.py looks). */
+            if (frames_alone || frames_whole) {
+                puts("browser: video frames drawn alone ");
+                putn(frames_alone);
+                puts(", with the page ");
+                putn(frames_whole);
+                putc('\n');
+            }
+            frames_alone = frames_whole = 0;
             puts("browser: ");
             puts(landed);
             puts(" -- ");
