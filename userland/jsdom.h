@@ -649,6 +649,8 @@ static void jd_set_data(int n, const char *s, int len) {
 /* --- putting nodes in and taking them out -------------------------------------------- */
 
 static void jd_scripts_inserted(int top);
+static void jd_frames_inserted(int top);  /* jsframe.h */
+static void jd_frames_loaded(void);
 
 /* Modules (jsmod.h). */
 static void jd_mods_reset(void);
@@ -722,6 +724,7 @@ static void jd_insert(int parent, int child, int before) {
     if (jd_connected(child)) {
         jd_scripts_inserted(child);
         if (jd_doc->nodes[parent].tag == T_SCRIPT) jd_scripts_inserted(parent);
+        jd_frames_inserted(child);
     }
     if (jd_connected_deep(child)) jd_custom_connected(child);
 }
@@ -5385,6 +5388,13 @@ static jval jd_doc_write(jctx *J, jval *a, int n, int newline) {
 /* Into the page only: a document of its own is written to by nobody here,
    and writing its markup after the running script would put it in the
    page instead. */
+/* open() gives back the document, as the standard says; a frame's loader
+   writes into what it returns. What is already in it stays. */
+static jval nat_doc_open(jctx *J, jval t, jval *a, int n) {
+    (void)J; (void)a; (void)n;
+    return t;
+}
+
 static jval nat_doc_write(jctx *J, jval t, jval *a, int n) {
     return jd_inert_of(t) >= 0 ? js_undef() : jd_doc_write(J, a, n, 0);
 }
@@ -6087,6 +6097,7 @@ static void jsdom_loaded(void) {
         jd_dispatch_to(ev, js_from_obj(jd_document_obj), js_from_obj(jd_document_obj));
     }
     jd_nav_mark(NV_DCL_END);
+    jd_frames_loaded();
     jd_nav_mark(NV_COMPLETE);
     jd_ready_change(2);
     ev = jd_new_event(0, "load", 0, 0);
@@ -6204,6 +6215,7 @@ static void jd_consts(jctx *J, jobj *on, const char *const *names, int from);
 #include "jsmod.h"
 #include "jsworker.h"
 #include "jsws.h"
+#include "jsframe.h"
 
 /* --- the hooks -----------------------------------------------------------------------------------
  *
@@ -6612,9 +6624,10 @@ static void jd_setup_html(jctx *J) {
         jd_reflect(J, p, "src", "src", JR_URL);
         jd_reflect_strs(J, p, "srcdoc name width height allow loading referrerPolicy");
         jd_reflect_bools(J, p, "allowFullscreen");
-        /* No frame is loaded, so there is no window or document in it. */
-        jd_accessor(J, p, "contentWindow", nat_null_getter, 0);
-        jd_accessor(J, p, "contentDocument", nat_null_getter, 0);
+        /* No frame is loaded, but scripts reach into frames all the same
+           (jsframe.h). */
+        jd_accessor(J, p, "contentWindow", nat_frame_window_get, 0);
+        jd_accessor(J, p, "contentDocument", nat_frame_document_get, 0);
     }
     if ((p = jd_iface("HTMLImageElement"))) {
         jd_reflect(J, p, "src", "src", JR_URL);
@@ -6820,7 +6833,7 @@ static void jd_setup_document(jctx *J, jobj *document) {
     jd_method(J, d, "adoptNode", nat_doc_adopt, 1);
     jd_method(J, d, "write", nat_doc_write, 0);
     jd_method(J, d, "writeln", nat_doc_writeln, 0);
-    jd_method(J, d, "open", nat_nothing_js, 0);
+    jd_method(J, d, "open", nat_doc_open, 0);
     jd_method(J, d, "close", nat_nothing_js, 0);
     jd_method(J, d, "hasFocus", nat_doc_has_focus, 0);
     jd_method(J, d, "elementFromPoint", nat_doc_element_from_point, 2);
@@ -6974,6 +6987,7 @@ static void jd_setup(jctx *J) {
     jd_setup_url(J);
     jd_setup_net(J);
     jd_setup_ws(J);
+    jd_setup_frames(J);
     jd_setup_navigator(J);
     jd_setup_location(J);
     jd_setup_window_more(J);

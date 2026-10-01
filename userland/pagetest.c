@@ -990,6 +990,30 @@ int main(void) {
                " Object.prototype.toString.call(d), typeof HTMLScriptElement].join(' ');"
                "</script></body>"),
         "true true true true true true 9 1 1 DIV HTML [object HTMLDivElement] function");
+    {
+        /* Frames (jsframe.h): a window and, for a blank one, a document to
+           write into, and load on the next pass. The checks are set down by
+           a timer, which runs after the frames' loads. */
+        load("<body><script>var f = document.createElement('iframe'); f.src = 'about:blank'; var r = [f.contentWindow];"
+             "document.body.appendChild(f); var w = f.contentWindow, d = w.document.open();"
+             "d.write('<p>x</p>'); d.close(); var p = d.createElement('p'); d.body.appendChild(p);"
+             "r.push(w.parent === window, w.top === window, w.frameElement === f, w.self === w, d === f.contentDocument,"
+             " d.body.childNodes.length > 0, w.Array === Array, typeof w.setTimeout);"
+             "var o = document.createElement('iframe'); o.src = 'https://example.com/'; document.body.appendChild(o);"
+             "r.push(o.contentWindow !== null, o.contentDocument, typeof o.contentWindow.postMessage);"
+             "var s = document.createElement('iframe'); s.srcdoc = '<b id=b>hi</b>'; document.body.appendChild(s);"
+             "r.push(s.contentDocument.getElementById('b').textContent);"
+             "var got = []; f.onload = function () { got.push('el'); }; w.addEventListener('load', function () { got.push('win'); });"
+             "setTimeout(function () { var g = document.createElement('iframe'); g.onload = function () { got.push('late'); };"
+             " document.body.appendChild(g); }, 10);"
+             "setTimeout(function () { document.title = r.join(' ') + ' ' + got.join(','); }, 200);</script></body>");
+        char err[128];
+        run_scripts(&page, err, (int)sizeof(err), 0);
+        pump_until(1000, 600);
+        oks("a blank iframe in the page has a window and a document to write into, and is told load",
+            err[0] ? err : page.title >= 0 ? page.arena + page.title : "",
+            " true true true true true true true function true  function hi win,el,late");
+    }
     oks("FileList is there to be tested against, and a file field holds an empty one",
         titled("<body><input id=f type=file><input id=t><script>var f = document.getElementById('f').files;"
                "document.title = [typeof FileList, f instanceof FileList, f.length, f.item(0), [...f].length,"
