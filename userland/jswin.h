@@ -1388,6 +1388,70 @@ static jval nat_channel_ctor(jctx *J, jval t, jval *a, int n) {
     return js_undef();
 }
 
+/* BroadcastChannel: a message to every other open channel of the same name,
+   arriving afterwards, as a copy (structuredClone's). Between tabs or
+   workers in a browser; here there is one page, so between the channels it
+   made, which is where a page that keeps its own parts in step finds them.
+   NPR's player asked for one and said "BroadcastChannel is not defined". The
+   open ones are kept in the region and reached from a static, where the
+   collector finds them (jsgc.h). */
+static jstr *jd_k_bcname, *jd_k_bcshut;
+static jobj *jd_p_bc, *jd_bc_open;
+
+static jval nat_bc_ctor(jctx *J, jval t, jval *a, int n) {
+    if (J->new_target.t == JS_UNDEF || !js_is_obj(t))
+        return js_throw(J, JS_ERR_TYPE, "a BroadcastChannel is made with new", J->error_line);
+    if (n < 1) return js_throw(J, JS_ERR_TYPE, "a BroadcastChannel needs a name", J->error_line);
+    jstr *name = js_to_str(J, a[0]);
+    if (J->sig != JS_OK) return js_undef();
+    jd_keep(t.obj, jd_k_bcname, js_from_str(name));
+    if (!jd_bc_open) jd_bc_open = js_array(J);
+    if (jd_bc_open) js_arr_push(J, jd_bc_open, t);
+    return js_undef();
+}
+
+static jval nat_bc_name(jctx *J, jval t, jval *a, int n) {
+    (void)J; (void)a; (void)n;
+    return js_is_obj(t) ? jd_kept(t.obj, jd_k_bcname) : js_undef();
+}
+
+static jval nat_bc_post(jctx *J, jval t, jval *a, int n) {
+    if (!js_is_obj(t)) return jd_illegal(J);
+    if (jd_kept(t.obj, jd_k_bcshut).t != JS_UNDEF)
+        return js_throw_dom(J, "InvalidStateError", "this BroadcastChannel is closed");
+    jval name = jd_kept(t.obj, jd_k_bcname);
+    jmap *memo = jm_new(J);
+    jval data = memo ? jsc_clone(J, js_arg(a, n, 0), memo, 0) : js_undef();
+    if (J->sig != JS_OK) return js_undef();
+    for (u32 i = 0; jd_bc_open && i < jd_bc_open->len; i++) {
+        jval other = js_item(jd_bc_open, i);
+        if (!js_is_obj(other) || other.obj == t.obj) continue;
+        if (!js_strict_eq(jd_kept(other.obj, jd_k_bcname), name)) continue;
+        jobj *job = js_array(J);
+        if (!job) return js_undef();
+        js_arr_push(J, job, other);
+        js_arr_push(J, job, data);
+        js_arr_push(J, job, js_from_str(jd_page_origin(J)));
+        jd_later_native(jd_message_due, js_from_obj(job), 1);
+    }
+    return js_undef();
+}
+
+static jval nat_bc_close(jctx *J, jval t, jval *a, int n) {
+    (void)a; (void)n;
+    if (!js_is_obj(t)) return js_undef();
+    jd_keep(t.obj, jd_k_bcshut, js_bool(1));
+    if (!jd_bc_open) return js_undef();
+    jobj *keep = js_array(J);
+    if (!keep) return js_undef();
+    for (u32 i = 0; i < jd_bc_open->len; i++) {
+        jval o = js_item(jd_bc_open, i);
+        if (js_is_obj(o) && o.obj != t.obj) js_arr_push(J, keep, o);
+    }
+    jd_bc_open = keep;
+    return js_undef();
+}
+
 /* --- crypto ------------------------------------------------------------------------------
  *
  * crypto.getRandomValues and crypto.randomUUID, from the kernel's random
@@ -1998,6 +2062,13 @@ static void jd_setup_window_more(jctx *J) {
     jd_method(J, jd_p_port, "start", nat_nothing_js, 0);
     jd_method(J, jd_p_port, "close", nat_port_close, 0);
     jd_interface(J, "MessageChannel", 0, nat_channel_ctor, 0);
+    jd_k_bcname = js_sym_new(J, "name", 4);
+    jd_k_bcshut = js_sym_new(J, "closed", 6);
+    jd_bc_open = 0;
+    jd_p_bc = jd_interface(J, "BroadcastChannel", jd_p[JI_EVENTTARGET], nat_bc_ctor, 1);
+    jd_accessor(J, jd_p_bc, "name", nat_bc_name, 0);
+    jd_method(J, jd_p_bc, "postMessage", nat_bc_post, 1);
+    jd_method(J, jd_p_bc, "close", nat_bc_close, 0);
 
     /* The window's own family: it is its own frames, parent and top, and
        nothing opened it. */

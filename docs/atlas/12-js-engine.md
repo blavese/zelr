@@ -2,7 +2,22 @@
 
 Source root the repository root (github.com/blavese/zelr main, 2026-09-22). All paths are relative to it; `file:N` means 1-based line N. Everything below was verified by reading the code. Where a behaviour was derived by tracing (not by running) it says so. Nothing here was built or run.
 
-**Since 0.93.0** (the rest of this file is older; trust the code):
+**Since 0.94.0** (the rest of this file is older; trust the code):
+- **Frames** (userland/jsframe.h): an iframe in the page has a window (`jd_frame_window`, kept on the element):
+  itself as window, self and frames, the page's window as parent and top, the element as frameElement, a postMessage
+  that goes nowhere, listeners (EventTarget), and the page's own timers, constructors and other globals by the same
+  names (`JD_FRAME_GLOBALS`; one realm, not two). A frame whose src is empty, about:blank, about:srcdoc or javascript:,
+  or that has a srcdoc, is the page's origin (`jd_frame_own`) and has a document: an inert one as createHTMLDocument
+  makes, the srcdoc parsed into it by DOMParser's code. Any other frame's contentDocument is null. Only an iframe in
+  the page has either. load goes to the frame's window and then the element: on the next pass for one put into the
+  page (`jd_frames_inserted`, from `jd_insert`), and before the page's own load for the ones it was written with
+  (`jd_frames_loaded`). `document.open()` gives back the document. Not done: a frame's address, scripts, history, and
+  globals of its own.
+- **BroadcastChannel** (jswin.h): a message goes, as a structuredClone copy, to every other open channel of the same
+  name in the page, afterwards (`jd_message_due`); a closed channel hears nothing and refuses to send. The open ones are
+  an array in the region reached from a static (`jd_bc_open`).
+
+**Since 0.93.0**:
 - **A run is stopped by the clock** (js.h `JS_TIME_CAP`, `jctx.time_cap`, `run_since`; jsrun.h `js_tick`): the first
   step of a run (every place a run begins sets `steps` to 0) notes `ticks()`, and every 65536 steps a run older than
   `time_cap` ticks (1000, ten seconds) is stopped with the same message as before. `JS_STEP_CAP` (now 2000 million)

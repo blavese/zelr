@@ -95,6 +95,15 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.94.0
+
+- **Frames have windows, and blank ones documents (12, jsframe.h)**: contentWindow and contentDocument were null, so
+  every loader that writes into a blank iframe stopped (NPR's mPulse snippet), and no iframe was told load. pagetest,
+  failing with contentWindow null, with document.open() giving nothing back, with no load for a frame put in later, and
+  with a frame from another site given a document.
+- **BroadcastChannel (12, jswin.h)**. pagetest, failing with a message to its own sender, with the data not copied, and
+  with a closed channel still hearing.
+
 ### 0.93.0
 
 - **Scripts stopped by the clock, not a count (12, `js_tick`, `JS_TIME_CAP`)**: forty million steps stopped React

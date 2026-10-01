@@ -991,6 +991,22 @@ int main(void) {
                "</script></body>"),
         "true true true true true true 9 1 1 DIV HTML [object HTMLDivElement] function");
     {
+        /* BroadcastChannel: to every other open channel of the name, as a
+           copy, afterwards; not to itself, another name or a closed one. */
+        load("<body><script>var a = new BroadcastChannel('n'), b = new BroadcastChannel('n'), c = new BroadcastChannel('m'),"
+             " d = new BroadcastChannel('n'), got = [], sent = { x: 1 };"
+             "a.onmessage = function () { got.push('a'); }; c.onmessage = function () { got.push('c'); };"
+             "b.onmessage = function (e) { got.push('b' + e.data.x + (e.data !== sent) + (e instanceof MessageEvent)); };"
+             "d.addEventListener('message', function () { got.push('d'); }); d.close(); a.postMessage(sent);"
+             "var shut = 'open'; try { d.postMessage(1); } catch (e) { shut = e.name; }"
+             "setTimeout(function () { document.title = [b.name, got.sort().join(','), shut].join(' '); }, 50);</script></body>");
+        char err[128];
+        run_scripts(&page, err, (int)sizeof(err), 0);
+        pump_until(1000, 300);
+        oks("a BroadcastChannel's message reaches the other open channels of its name, as a copy",
+            err[0] ? err : page.title >= 0 ? page.arena + page.title : "", "n b1truetrue InvalidStateError");
+    }
+    {
         /* Frames (jsframe.h): a window and, for a blank one, a document to
            write into, and load on the next pass. The checks are set down by
            a timer, which runs after the frames' loads. */
