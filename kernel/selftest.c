@@ -2479,6 +2479,7 @@ static void test_pins(void) {
 }
 
 static void test_theme(void) {
+    u32 heard_before = sound_volume();
     vfs_delete(THEME_FILE);
     theme_init();
 
@@ -2509,6 +2510,43 @@ static void test_theme(void) {
     ok("wallpaper applied", theme()->wallpaper == WALLPAPER_GRID);
     ok("corner applied", theme()->corner == 14);
     ok("shadows applied", !theme()->shadows);
+
+    /* A ground set by hand under a preset's accent survives a save: it was
+       written as the preset alone and came back as the preset's ground. A
+       palette that is all the preset's is still written as just that. */
+    {
+        const char *mine = "light 0\npreset 2\ndesktop 0x123456\n";
+        vfs_write(THEME_FILE, mine, (u32)strlen(mine));
+        theme_reload();
+        bool read = theme()->desktop == 0x123456 && theme()->accent == theme_preset_accent(2);
+        theme_save();
+        theme_apply_preset(0);
+        theme_reload();
+        ok("a ground set by hand under a preset's accent is kept through a save",
+           read && theme()->desktop == 0x123456 && theme()->accent == theme_preset_accent(2));
+        theme_apply_preset(4);
+        theme_save();
+        char back[1600];
+        int got = vfs_read(THEME_FILE, back, sizeof(back) - 1);
+        bool plain = got > 0;
+        if (plain) {
+            back[got] = 0;
+            for (int i = 0; back[i]; i++)
+                if (!strncmp(back + i, "\ndesktop ", 9)) plain = false;
+        }
+        ok("and a preset's own palette is saved as the preset alone", plain);
+
+        /* And a look or light line keeps an accent set by hand before it. */
+        const char *acc = "accent 0x123456\nlook 1\nlight 1\n";
+        vfs_write(THEME_FILE, acc, (u32)strlen(acc));
+        theme_reload();
+        ok("an accent set by hand is kept when a look or light line follows it", theme()->accent == 0x123456);
+
+        const char *vol = "volume 33\n";
+        vfs_write(THEME_FILE, vol, (u32)strlen(vol));
+        theme_reload();
+        ok("a volume read from the file is the one the sound is played at", sound_volume() == 33);
+    }
 
     /* A value out of range must be clamped rather than believed, and to
        the bound the table gives rather than to a number written down here.
@@ -2556,6 +2594,7 @@ static void test_theme(void) {
     }
 
     vfs_delete(THEME_FILE);
+    sound_set_volume(heard_before);          /* the loop above left it at nothing */
 }
 
 /* --- the other processors -------------------------------------------------

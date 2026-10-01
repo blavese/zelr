@@ -185,24 +185,49 @@ u32 theme_preset_accent(int i) {
     return PRESETS[i].accent;
 }
 
+/* The ground a preset gives under the current look and light: desktop,
+   surface, text and dim text, in that order. theme_save asks it whether the
+   palette is still exactly a preset's. */
+static void preset_ground(int i, u32 out[4]) {
+    bool modern = current.look == LOOK_MODERN;
+    if (current.light) {
+        out[0] = modern ? MODERN_DESKTOP : LIGHT_DESKTOP;
+        out[1] = modern ? MODERN_L_SURFACE : LIGHT_SURFACE;
+        out[2] = modern ? MODERN_L_TEXT : LIGHT_TEXT;
+        out[3] = modern ? MODERN_L_DIM : LIGHT_DIM;
+    } else {
+        out[0] = modern ? MODERN_DESKTOP : PRESETS[i].desktop;
+        out[1] = modern ? MODERN_D_SURFACE : PRESETS[i].surface;
+        out[2] = DARK_TEXT;
+        out[3] = DARK_DIM;
+    }
+}
+
 void theme_apply_preset(int i) {
     if (i < 0 || i >= THEME_PRESETS) return;
     current.accent = PRESETS[i].accent;
-
-    bool modern = current.look == LOOK_MODERN;
-
-    if (current.light) {
-        current.desktop  = modern ? MODERN_DESKTOP : LIGHT_DESKTOP;
-        current.surface  = modern ? MODERN_L_SURFACE : LIGHT_SURFACE;
-        current.text     = modern ? MODERN_L_TEXT : LIGHT_TEXT;
-        current.text_dim = modern ? MODERN_L_DIM : LIGHT_DIM;
-    } else {
-        current.desktop  = modern ? MODERN_DESKTOP : PRESETS[i].desktop;
-        current.surface  = modern ? MODERN_D_SURFACE : PRESETS[i].surface;
-        current.text = DARK_TEXT;
-        current.text_dim = DARK_DIM;
-    }
+    u32 g[4];
+    preset_ground(i, g);
+    current.desktop = g[0];
+    current.surface = g[1];
+    current.text = g[2];
+    current.text_dim = g[3];
     derive();
+}
+
+/* The ground rebuilt for a changed look or light, keeping an accent set by
+   hand: a look or light line re-applied preset 1 or preset 0 whatever the
+   accent was, so a hand-set accent read before them was thrown away, and
+   which preset it fell back on depended on which line it was. */
+#define THEME_FALLBACK_PRESET 1
+static void ground_again(void) {
+    int at = theme_current_preset();
+    u32 accent = current.accent;
+    theme_apply_preset(at >= 0 ? at : THEME_FALLBACK_PRESET);
+    if (at < 0) {
+        current.accent = accent;
+        derive();
+    }
 }
 
 int theme_current_preset(void) {
@@ -393,16 +418,14 @@ static void apply(const char *key, const char *value) {
         /* The look changes what the palette is derived from, so the preset
            has to be applied again rather than only the flag being set. */
         current.look = parse_dec(value) ? LOOK_BUILT : LOOK_MODERN;
-        int at = theme_current_preset();
-        theme_apply_preset(at >= 0 ? at : 1);
+        ground_again();
     }
     else if (!strcmp(key, "preset"))  theme_apply_preset((int)parse_dec(value));
     else if (!strcmp(key, "light")) {
         /* The whole palette follows from this, so whichever order the file
            happens to be in, the ground is rebuilt when it is read. */
         current.light = parse_dec(value) != 0;
-        int at = theme_current_preset();
-        theme_apply_preset(at >= 0 ? at : 0);
+        ground_again();
     }
 }
 
@@ -459,6 +482,11 @@ bool theme_reload(void) {
     /* The file names three colours; the rest of the palette follows from
        them, so it is rebuilt here rather than left over from before. */
     derive();
+
+    /* And the level is heard as well as shown: one written into the file by
+       Settings' Everything page or the shell's write moved the dock's slider
+       and not the speaker, until the desktop was next entered. */
+    if (current.volume != before.volume) sound_set_volume((u32)current.volume);
 
     return memcmp(&before, &current, sizeof(theme_t)) != 0;
 }
@@ -527,14 +555,24 @@ bool theme_save(void) {
     n += put_num(out + n, current.light ? 1u : 0u);
     out[n++] = '\n';
 
+    /* A preset's name alone only when the palette is still exactly that
+       preset's: a ground set by hand under a preset's accent was written as
+       the preset and came back as its ground, the next time anything saved
+       -- which a volume change on the dock does. */
+    u32 g[4];
+    if (at >= 0) preset_ground(at, g);
+    bool whole = at >= 0 && g[0] == current.desktop && g[1] == current.surface
+                 && g[2] == current.text && g[3] == current.text_dim;
     if (at >= 0) {
         n = put_key(out, n, "preset");
         n += put_num(out + n, (u32)at);
         out[n++] = '\n';
-    } else {
+    }
+    if (!whole) {
         /* A palette nobody can name still has to survive a reboot, and all
            four of it: writing the accent and the ground and leaving the
-           surface behind was a palette that came back half itself. */
+           surface behind was a palette that came back half itself. After
+           the preset line, so the colours are the last word. */
         struct { const char *key; u32 value; } c[] = {
             { "accent",  current.accent },
             { "desktop", current.desktop },
