@@ -2,7 +2,13 @@
 
 Source root the repository root (github.com/blavese/zelr main, 2026-09-22). All paths are relative to it; `file:N` means 1-based line N. Everything below was verified by reading the code. Where a behaviour was derived by tracing (not by running) it says so. Nothing here was built or run.
 
-**Since 0.84.0** (the rest of this file is older; trust the code):
+**Since 0.86.0** (the rest of this file is older; trust the code):
+- **Arrays keep holes** as `JS_HOLE` in `items` (`js_arr_set` fills a gap with them; elision, `new Array(n)`, a longer
+  length and delete make them). A hole is no own property (`js_exotic_get`, `js_has_index`), the key lists, for-in,
+  values, assign and spread leave it out, the iterating methods skip it (map keeps it), and a direct read takes
+  `js_item`, which gives undefined. Not done: sort, copyWithin and fill treat holes as values.
+
+**Since 0.84.0**:
 - **A collector** (userland/jsgc.h): conservative mark and sweep, non-moving, one context at a time. Each chunk has two
   bitmaps after its data (`jchunk.bits`: where blocks start, which are in use), a block on a free list says so in its
   second word (`js_is_free`, its address turned by `JS_FREE_MARK`), and the chunks are kept by address (`gc_map`) so a
@@ -18,7 +24,6 @@ Source root the repository root (github.com/blavese/zelr main, 2026-09-22). All 
   blocks. **Nothing the engine keeps in malloc may hold a value**: the job queue, the names, the kept texts, arguments
   gathered for a call, sort's copy, JSON's state and jsdom's listeners, timers, lists and observers' registrations moved
   into the region. `ran_out` makes a page that ran out stay out (`jd_spent`).
-- **Array holes are not kept** (a gap written past is filled with undefined, and `in` finds it): known, not changed.
 
 **Since 0.83.0**:
 - **Shadow roots are kept** (jsdom.h `jd_shadow_host`, `jd_shadow_root`, `JD_SHADOWS` 1024, with a bit per host and

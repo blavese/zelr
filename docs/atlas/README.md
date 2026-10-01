@@ -95,6 +95,12 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.86.0
+
+- **Arrays keep their holes (12, `JS_HOLE` in `items`, `js_item`)**: not `in` them, not among their keys, skipped by
+  forEach and indexOf, kept by map, undefined when read. jstest, failing with gaps filled again and with a hole read as
+  an element.
+
 ### 0.85.0
 
 - **Every named character reference (11, entities.h from tools/mkentities.py)**, as written, the old ones also
