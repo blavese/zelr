@@ -7,6 +7,11 @@ fragmented MP4 the way a page's player appends them to a SourceBuffer
     its picture order count. mediatest compares what comes out with the
     same checksums of Windows' decoding that h264test uses.
   - aacdata.h's second of tone as AAC in MP4, in two fragments.
+  - Files as a page names one for a <video> (not fragmented): the MP4
+    Windows' own encoder wrote for that stream, its moov after its media,
+    and one made here with the pictures and the tone interleaved, the
+    pictures' composition offsets made positive and taken back off by an
+    edit list, as encoders write them.
 
 Windows decodes each file made here (Media Foundation, through
 tools/mfh264.c), so they are checked by a reader that is not ours before
@@ -228,6 +233,140 @@ def audio_file():
     return init, media, len(raw), rate, chans, raw
 
 
+def windows_file():
+    """The MP4 Windows' sink writer made of h264data.h's third stream, which
+    genh264.py leaves behind; made again the same way when it has not. Its
+    stream must be the one h264data.h holds, so its answers are the same."""
+    import genh264
+    mp4 = os.path.join(ROOT, "build", "genh264", "case2.mp4")
+    if not os.path.exists(mp4):
+        os.makedirs(os.path.dirname(mp4), exist_ok=True)
+        name, clip, W, H, prof, bf, gop, qp = genh264.CASES[2]
+        frames = 30 if clip == "shapes" else 24
+        raw = mp4[:-4] + ".yuv.in"
+        open(raw, "wb").write((genh264.shapes if clip == "shapes" else genh264.busy)(W, H, frames))
+        subprocess.run([MF, "encode", raw, str(W), str(H), "30", prof, str(bf), str(gop), str(qp), mp4], check=True,
+                       stdout=subprocess.DEVNULL)
+    stream, _ = genh264.annexb(mp4)
+    if stream != header_array("H264D_2", "h264data.h"):
+        sys.exit("Windows' file of the third stream is not the stream h264data.h holds")
+    return open(mp4, "rb").read()
+
+
+def stbl_tables(samples, chunk_of, offsets, ctts=None, sync=None):
+    """A track's sample tables: samples (duration, size), which chunk each is
+    in (in order), the chunks' offsets, composition offsets and the samples
+    that need no other (1-based), or None for none or all."""
+    runs = []
+    for d, _ in samples:
+        if runs and runs[-1][1] == d:
+            runs[-1][0] += 1
+        else:
+            runs.append([1, d])
+    stts = full(b"stts", 0, 0, struct.pack(">I", len(runs)), b"".join(struct.pack(">II", c, d) for c, d in runs))
+    stsz = full(b"stsz", 0, 0, struct.pack(">II", 0, len(samples)), b"".join(struct.pack(">I", s) for _, s in samples))
+    per = {}
+    for c in chunk_of:
+        per[c] = per.get(c, 0) + 1
+    stsc_e, last = [], None
+    for c in sorted(per):
+        if per[c] != last:
+            stsc_e.append(struct.pack(">III", c + 1, per[c], 1))
+            last = per[c]
+    stsc = full(b"stsc", 0, 0, struct.pack(">I", len(stsc_e)), b"".join(stsc_e))
+    stco = full(b"stco", 0, 0, struct.pack(">I", len(offsets)), b"".join(struct.pack(">I", o) for o in offsets))
+    out = stts + stsc + stsz + stco
+    if ctts is not None:
+        out += full(b"ctts", 0, 0, struct.pack(">I", len(ctts)), b"".join(struct.pack(">II", 1, o) for o in ctts))
+    if sync is not None:
+        out += full(b"stss", 0, 0, struct.pack(">I", len(sync)), b"".join(struct.pack(">I", s) for s in sync))
+    return out
+
+
+def muxed_file(stream="H264D_2", fps=30, tones=1):
+    """A stream (h264data.h's third, unless another is named, at fps a
+    second) and the tone (tones times over) in one file, half a second of
+    each in turn, the moov after the media; the pictures' offsets made
+    positive and an edit list saying where they start."""
+    sps, pps, units = video_units(header_array(stream, "h264data.h"))
+    w, h = sps_size(sps)
+    avcc = bytes([1, sps[1], sps[2], sps[3], 0xFF, 0xE1]) + struct.pack(">H", len(sps)) + sps + \
+        bytes([1]) + struct.pack(">H", len(pps)) + pps
+    ventry = box(b"avc1", b"\0" * 6, struct.pack(">H", 1), b"\0" * 16, struct.pack(">HH", w, h),
+                 struct.pack(">II", 0x480000, 0x480000), struct.pack(">I", 0), struct.pack(">H", 1), b"\0" * 32,
+                 struct.pack(">Hh", 0x18, -1), box(b"avcC", avcc))
+    from playcheck import ts_payloads, adts_frames
+    frames = adts_frames(b"".join(ts_payloads(header_array("AACD_TS", "aacdata.h"))[0x0F]))
+    hd = frames[0]
+    sfi = (hd[2] >> 2) & 15
+    chans = ((hd[2] & 1) << 2) | (hd[3] >> 6)
+    rate = [96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050, 16000, 12000, 11025, 8000][sfi]
+    asc = struct.pack(">H", (2 << 11) | (sfi << 7) | (chans << 3))
+    dec_specific = bytes([5, len(asc)]) + asc
+    dec_config = bytes([4, 13 + len(dec_specific), 0x40, 0x15, 0, 0, 0]) + struct.pack(">II", 128000, 128000) + dec_specific
+    es = bytes([3, 3 + len(dec_config) + 3]) + struct.pack(">HB", 0, 0) + dec_config + bytes([6, 1, 2])
+    aentry = box(b"mp4a", b"\0" * 6, struct.pack(">H", 1), b"\0" * 8, struct.pack(">HHHH", chans, 16, 0, 0),
+                 struct.pack(">I", rate << 16), full(b"esds", 0, 0, es))
+    raw = [f[7:] for f in frames] * tones
+    vts, vdur = 30000, 30000 // fps
+    lead = max(i - idx for i, (_, idx, _) in enumerate(units))
+    # Chunks of fifteen pictures and of the sound under them, in turn.
+    mdat = bytearray()
+    voff, aoff, vchunk, achunk = [], [], [], []
+    head = 64                                 # where the mdat's data starts (ftyp, mdat head)
+    vi = ai = 0
+    while vi < len(units) or ai < len(raw):
+        if vi < len(units):
+            voff.append(head + len(mdat))
+            for _ in range(max(1, fps // 2)):
+                if vi >= len(units):
+                    break
+                mdat += units[vi][2]
+                vchunk.append(len(voff) - 1)
+                vi += 1
+        if ai < len(raw):
+            aoff.append(head + len(mdat))
+            end_t = vi / float(fps)
+            while ai < len(raw) and (ai * 1024.0 / rate < end_t or vi >= len(units)):
+                mdat += raw[ai]
+                achunk.append(len(aoff) - 1)
+                ai += 1
+    vsamples = [(vdur, len(u[2])) for u in units]
+    ctts = [(idx - i + lead) * vdur for i, (_, idx, _) in enumerate(units)]
+    sync = [i + 1 for i, (idr, _, _) in enumerate(units) if idr]
+    vstbl = box(b"stbl", full(b"stsd", 0, 0, struct.pack(">I", 1), ventry),
+                stbl_tables(vsamples, vchunk, voff, ctts, sync))
+    astbl = box(b"stbl", full(b"stsd", 0, 0, struct.pack(">I", 1), aentry),
+                stbl_tables([(1024, len(a)) for a in raw], achunk, aoff))
+    mvts = 1000
+    vlen_mv = len(units) * vdur * mvts // vts
+    alen_mv = len(raw) * 1024 * mvts // rate
+
+    def trak(tid, ts, handler, stbl, w=0, hh=0, edit=None, length=0):
+        tkhd = full(b"tkhd", 0, 7, struct.pack(">IIIII", 0, 0, tid, 0, length), b"\0" * 8,
+                    struct.pack(">hhhh", 0, 0, 0x0100 if handler == b"soun" else 0, 0),
+                    struct.pack(">9I", 0x10000, 0, 0, 0, 0x10000, 0, 0, 0, 0x40000000), struct.pack(">II", w << 16, hh << 16))
+        mdhd = full(b"mdhd", 0, 0, struct.pack(">IIII", 0, 0, ts, 0), struct.pack(">HH", 0x55C4, 0))
+        hdlr = full(b"hdlr", 0, 0, struct.pack(">I4s", 0, handler), b"\0" * 12, b"zelr\0")
+        mh = full(b"vmhd", 0, 1, b"\0" * 8) if handler == b"vide" else full(b"smhd", 0, 0, b"\0" * 4)
+        dinf = box(b"dinf", full(b"dref", 0, 0, struct.pack(">I", 1), full(b"url ", 0, 1)))
+        parts = [tkhd]
+        if edit is not None:
+            parts.append(box(b"edts", full(b"elst", 0, 0, struct.pack(">I", 1), struct.pack(">IiHH", length, edit, 1, 0))))
+        parts.append(box(b"mdia", mdhd, hdlr, box(b"minf", mh, dinf, stbl)))
+        return box(b"trak", *parts)
+    mvhd = full(b"mvhd", 0, 0, struct.pack(">IIII", 0, 0, mvts, max(vlen_mv, alen_mv)), struct.pack(">IH", 0x00010000, 0x0100),
+                b"\0" * 10, struct.pack(">9I", 0x10000, 0, 0, 0, 0x10000, 0, 0, 0, 0x40000000), b"\0" * 24, struct.pack(">I", 3))
+    moov = box(b"moov", mvhd, trak(1, vts, b"vide", vstbl, w, h, edit=lead * vdur, length=vlen_mv),
+               trak(2, rate, b"soun", astbl, length=alen_mv))
+    ftyp = box(b"ftyp", b"isom", struct.pack(">I", 0x200), b"isomiso2avc1mp41")
+    pad = head - len(ftyp) - 8
+    ftyp += box(b"free", b"\0" * (pad - 8))
+    out = ftyp + struct.pack(">I4s", 8 + len(mdat), b"mdat") + bytes(mdat) + moov
+    assert out[head:head + 4] == bytes(mdat[:4])
+    return out, len(units), len(raw), rate, chans
+
+
 def c_bytes(name, data):
     o = ["static const unsigned char %s[%d] = {" % (name, len(data))]
     for i in range(0, len(data), 24):
@@ -285,6 +424,37 @@ def main():
         sys.exit("Windows reads the fragmented sound as %d samples, not %d" % (heard, aframes * 1024))
     print("audio: %d frames at %d Hz, %d channels, init %d bytes, media %d bytes; Windows reads %d samples"
           % (aframes, rate, chans, len(ainit), len(amedia), heard))
+    # The files: Windows' own, and the muxed one, read back by Windows, the
+    # pictures of both its decoding of the stream.
+    wfile = windows_file()
+    mfile, mframes, maframes, _, _ = muxed_file()
+    for name, data in (("windows", wfile), ("muxed", mfile)):
+        path = os.path.join(TMP, name + ".mp4")
+        open(path, "wb").write(data)
+        r = subprocess.run([MF, "decode", path, yuv], stdout=subprocess.PIPE, text=True)
+        if r.returncode or "frames %d" % frames not in r.stdout:
+            sys.exit("Windows does not read the %s file as %d frames: %s" % (name, frames, r.stdout.strip()))
+        got = open(yuv, "rb").read()
+        for f in range(frames):
+            fr = got[f * fs:(f + 1) * fs]
+            if [fnv(fr[:w * h]), fnv(fr[w * h:w * h * 5 // 4]), fnv(fr[w * h * 5 // 4:])] != sums[3 * f:3 * f + 3]:
+                sys.exit("Windows' decoding of the %s file differs at frame %d" % (name, f))
+    mwav = os.path.join(TMP, "muxed.wav")
+    subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+                    os.path.join(TOOLS, "mftranscode.ps1"), "-In", os.path.join(TMP, "muxed.mp4"), "-Out", mwav,
+                    "-Channels", str(chans), "-Rate", str(rate)], check=True)
+    d = open(mwav, "rb").read()
+    at, mdata = 12, b""
+    while at + 8 <= len(d):
+        size = struct.unpack("<I", d[at + 4:at + 8])[0]
+        if d[at:at + 4] == b"data":
+            mdata = d[at + 8:at + 8 + size]
+            break
+        at += 8 + size + (size & 1)
+    if abs(len(mdata) // (2 * chans) - maframes * 1024) > 2048:
+        sys.exit("Windows reads the muxed file's sound as %d samples" % (len(mdata) // (2 * chans)))
+    print("files: Windows' %d bytes, muxed %d bytes; Windows reads both, every picture the same" % (len(wfile), len(mfile)))
+
     o = ["/* Generated by tools/genmedia.py: streams the tests already know, in fragmented",
          "   MP4 as Media Source Extensions append them. Do not edit. */", "#pragma once", ""]
     o += c_bytes("MEDIA_VIDEO_INIT", vinit)
@@ -300,6 +470,11 @@ def main():
     o += c_bytes("MEDIA_AUDIO_MEDIA", amedia)
     o.append("#define MEDIA_AUDIO_FRAMES %d" % aframes)
     o.append("#define MEDIA_AUDIO_RATE %d" % rate)
+    o.append("/* Files as a page names one: Windows' own (pictures, its moov at the end), and the")
+    o.append("   pictures and the tone interleaved, with an edit list. */")
+    o += c_bytes("MEDIA_FILE_WINDOWS", wfile)
+    o += c_bytes("MEDIA_FILE_MUXED", mfile)
+    o.append("#define MEDIA_FILE_AUDIO_FRAMES %d" % maframes)
     with open(OUT, "w", newline="\n") as f:
         f.write("\n".join(o) + "\n")
     print("wrote", OUT, os.path.getsize(OUT), "bytes")

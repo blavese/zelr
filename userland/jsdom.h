@@ -508,6 +508,7 @@ static int jd_media_pump(void);
 static int jd_media_due(void);
 static void jd_media_reset(void);
 static int jd_ms_is(jval v);
+static void jd_media_scan(void);
 static void jd_custom_disconnected(int top);
 static void jd_custom_attr(int node, const char *name, const char *old, const char *now);
 static int  jd_ncustom;
@@ -6998,6 +6999,8 @@ static int jd_page_scripts(const ddoc *d) {
     for (int i = 0; i < d->count; i++) {
         if (d->nodes[i].kind != DN_ELEMENT) continue;
         if (d->nodes[i].tag == T_SCRIPT) return 1;
+        /* A <video> or an <audio> plays by what is here, scripts or not. */
+        if (d->nodes[i].tag == T_VIDEO || d->nodes[i].tag == T_AUDIO) return 1;
         const dnode *n = &d->nodes[i];
         for (int a = n->attr_at; a < n->attr_at + n->attr_n; a++) {
             const char *nm = d->arena + d->attrs[a].name;
@@ -7116,5 +7119,8 @@ static int jsdom_open(ddoc *d, csheet *sheet) {
     for (int i = 0; i < jd_parsed; i++)
         if (d->nodes[i].kind == DN_ELEMENT && d->nodes[i].first >= 0 && jd_is_template(i))
             jd_template_content(i);
+    /* The media elements the page was written with load as it is read, as
+       a browser's do: their events are told once the scripts have run. */
+    jd_media_scan();
     return 1;
 }

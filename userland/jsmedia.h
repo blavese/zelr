@@ -22,9 +22,14 @@
  * makes seven) and JD_SBUFS source buffers among them. Only the first element to play sound has the card;
  * another plays on the clock with its sound left out.
  *
- * Not done: a file named as a src (only a MediaSource is played), sequence
- * mode (taken, and played as segments), append windows (kept, not applied),
- * a playbackRate other than 1 (kept, not applied), and text tracks. */
+ * A src that names a file (MP4, not fragmented) is played from it: asked
+ * for by ranges, a stretch a pass, as the pipeline wants it (media.h,
+ * media_file_want), from the network through the browser, or from what a
+ * blob: or data: address holds.
+ *
+ * Not done: sequence mode (taken, and played as segments), append windows
+ * (kept, not applied), a playbackRate other than 1 (kept, not applied), and
+ * text tracks. */
 #include "aac.h"
 #include "h264.h"
 #include "media.h"
@@ -53,6 +58,10 @@ typedef struct {
     int     npromises;
     int     pic_w, pic_h;        /* the latest frame, lent to the browser */
     u8     *pic;
+    /* A file named as the src: its address, or the bytes a blob: or data:
+       address held (in the region, reached from here). */
+    char    url[URL_TEXT];
+    jstr   *bytes;
 } jdmedia;
 
 typedef struct {
@@ -259,6 +268,7 @@ static jval nat_ranges_end(jctx *J, jval t, jval *a, int n) { return jd_ranges_a
 /* What every source of an element holds, the ranges they all cover. */
 static int jd_media_buffered(int s, double *r, int max) {
     media_t *m = &jd_media[s].m;
+    if (m->file) return media_buffered(m, 0, r, max);
     int n = -1;
     double acc[64];
     for (int k = 0; k < MEDIA_SOURCES; k++) {
@@ -750,6 +760,8 @@ static void jd_media_reset_slot(int s, int tell) {
     d->vw = d->vh = 0;
     d->pic = 0;
     d->pic_w = d->pic_h = 0;
+    d->url[0] = 0;
+    d->bytes = 0;
 }
 
 /* The source an element names: its src, or the first <source> child of a
@@ -786,9 +798,24 @@ static void jd_media_load(int node) {
     d->net = JM_NET_LOADING;
     jd_media_tell(s, "loadstart");
     jstr *whole = jd_resolve_str(&jd_J, src);
-    jobj *ms = jd_ms_lookup(whole ? whole->s : src);
+    const char *addr = whole ? whole->s : src;
+    jobj *ms = jd_ms_lookup(addr);
     if (!ms) {
-        jd_media_fail(s, 4, "only a MediaSource is played here, not a file");
+        /* A file: what a blob: or data: address holds, or the network's. */
+        jstr *bb, *bt;
+        if (jd_blob_lookup(addr, &bb, &bt)) d->bytes = bb;
+        else if (jd_is_data_url(addr)) {
+            char *data = 0;
+            u32 len = jd_data_url(addr, &data, 0, 0);
+            if (data) d->bytes = js_str_n(&jd_J, data, len);
+            free(data);
+            if (!d->bytes) { jd_media_fail(s, 4, "a data: address that does not read"); return; }
+        } else if (!w_starts_fold(addr, "http://") && !w_starts_fold(addr, "https://")) {
+            jd_media_fail(s, 4, "nothing a src of that kind can name is played here");
+            return;
+        }
+        w_copy(d->url, sizeof(d->url), addr, sizeof(d->url));
+        media_file_open(&d->m);
         return;
     }
     int was = jd_ms_slot(ms);
@@ -797,6 +824,16 @@ static void jd_media_load(int node) {
     d->ms_state = JM_MS_OPEN;
     jd_keep(ms, jd_k_msslot, js_num(s));
     jd_mq_add(ms, -1, "sourceopen");
+}
+
+/* Every <video> and <audio> the page was written with that names
+   something, loaded (jsdom_open). */
+static void jd_media_scan(void) {
+    for (int i = 0; i < jd_doc->count; i++) {
+        int tag = jd_doc->nodes[i].tag;
+        if (jd_doc->nodes[i].kind != DN_ELEMENT || (tag != T_VIDEO && tag != T_AUDIO) || !jd_connected(i)) continue;
+        if (jd_media_source(i)) jd_media_load(i);
+    }
 }
 
 /* A src set or changed (jd_attr_set): the element loads again. */
@@ -1094,8 +1131,9 @@ static jval nat_media_src_object(jctx *J, jval t, jval *a, int n) {
    readyState, and what that change tells. */
 static void jd_media_judge(int s) {
     jdmedia *d = &jd_media[s];
-    if (!d->ms || d->error) return;
+    if ((!d->ms && !d->m.file) || d->error) return;
     int any = 0, all = 1;
+    if (d->m.file) any = all = d->m.file_ready;
     for (int b = 0; b < JD_SBUFS; b++)
         if (jd_sb[b].self && jd_sb[b].slot == s) {
             any = 1;
@@ -1197,6 +1235,73 @@ static void jd_sb_work(int b) {
     if (now - jd_media[s].last_progress >= 35) { jd_media[s].last_progress = now; jd_media_tell(s, "progress"); }
 }
 
+/* The whole length a 206's Content-Range says ("bytes a-b/total"), or 0. */
+static long long jd_range_total(const jd_reply *rp) {
+    const char *h = rp->head;
+    for (int i = 0; h && i + 14 < rp->hlen; i++) {
+        if ((i && h[i - 1] != '\n') || !w_starts_fold(h + i, "content-range:")) continue;
+        int k = i + 14;
+        while (k < rp->hlen && h[k] != '/' && h[k] != '\n') k++;
+        if (k >= rp->hlen || h[k] != '/') return 0;
+        long long v = 0;
+        for (k++; k < rp->hlen && h[k] >= '0' && h[k] <= '9'; k++) v = v * 10 + (h[k] - '0');
+        return v;
+    }
+    return 0;
+}
+
+/* One stretch of a file the element wants, fetched and fed: from the bytes
+   a blob: or data: address held, or by a range from the network. 1 when
+   something was asked for. */
+static int jd_media_file_step(int s) {
+    jdmedia *d = &jd_media[s];
+    long long from;
+    int len;
+    if (!media_file_want(&d->m, &from, &len)) return 0;
+    int r;
+    if (d->bytes) {
+        long long n = d->bytes->len;
+        if (from >= n) { jd_media_fail(s, 4, "the file ends before what it says it holds"); return 1; }
+        long long l = from + len > n ? n - from : len;
+        r = media_file_feed(&d->m, from, (const u8 *)d->bytes->s + from, l, n);
+    } else {
+        if (!jd_do_request) return 0;
+        char range[64];
+        int w = 0;
+        const char *pre = "Range: bytes=";
+        for (const char *p = pre; *p; p++) range[w++] = *p;
+        long long nums[2] = { from, from + len - 1 };
+        for (int k = 0; k < 2; k++) {
+            char tmp[24];
+            int t = 0;
+            long long v = nums[k];
+            do { tmp[t++] = (char)('0' + v % 10); v /= 10; } while (v);
+            while (t) range[w++] = tmp[--t];
+            if (!k) range[w++] = '-';
+        }
+        range[w++] = '\r';
+        range[w++] = '\n';
+        range[w] = 0;
+        jd_reply rp = { 0, 0, 0, 0, 0, 0, 0 };
+        jd_do_request("GET", d->url, 0, 0, 0, range, &rp);
+        if (rp.status != 200 && rp.status != 206) {
+            jd_media_fail(s, d->ready ? 2 : 4, rp.status > 0 ? "the server would not give the file" : "the file could not be fetched");
+            return 1;
+        }
+        /* A server that does not do ranges sends the whole file from the
+           start, as far as it fits. */
+        long long at = rp.status == 206 ? from : 0;
+        long long total = rp.status == 206 ? jd_range_total(&rp) : rp.len;
+        r = rp.len > 0 ? media_file_feed(&d->m, at, (const u8 *)rp.body, rp.len, total) : -1;
+    }
+    if (r < 0) jd_media_fail(s, d->ready ? 3 : 4, d->m.src[0].why[0] ? d->m.src[0].why : "the file is not MP4 this plays");
+    else {
+        int now = ticks();
+        if (now - d->last_progress >= 35) { d->last_progress = now; jd_media_tell(s, "progress"); }
+    }
+    return 1;
+}
+
 /* Lends the slot that has the card's sound, so two elements never write
    into it at once. */
 static int jd_media_sound_owner = -1;
@@ -1226,7 +1331,11 @@ static int jd_media_pump(void) {
         if (jd_sb[b].self && jd_sb[b].updating) { jd_sb_work(b); js_drain(&jd_J); told++; }
     for (int s = 0; s < JD_MEDIA; s++) {
         jdmedia *d = &jd_media[s];
-        if (!d->el || !d->ms) continue;
+        if (!d->el || (!d->ms && !d->m.file) || d->error) continue;
+        /* A file's next stretch, one a pass: each holds the browser while
+           it comes. */
+        if (d->m.file && jd_media_file_step(s)) told++;
+        if (d->error) continue;
         jd_media_judge(s);
         if (d->ready < JM_METADATA) continue;
         if (jd_media_sound_owner < 0 && d->m.playing) jd_media_sound_owner = s;
@@ -1273,7 +1382,10 @@ static int jd_media_due(void) {
     int best = -1;
     for (int s = 0; s < JD_MEDIA; s++) {
         jdmedia *d = &jd_media[s];
-        if (!d->el || !d->ms) continue;
+        if (!d->el || (!d->ms && !d->m.file) || d->error) continue;
+        long long from;
+        int len;
+        if (d->m.file && media_file_want(&d->m, &from, &len)) return 0;
         if (d->m.playing) return 1;
         if (d->ready >= JM_METADATA && !d->m.frames_shown) best = 2;
     }

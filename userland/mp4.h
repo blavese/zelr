@@ -12,6 +12,10 @@
  *
  * Every box's size is checked against what holds it, so a damaged or hostile
  * segment is refused, never read past.
+ *
+ * And a file that is not fragmented, as a page names one for a <video> to
+ * play: its moov holds every sample's place in the file, size and times in
+ * each track's sample tables (mp4_index).
  */
 #pragma once
 
@@ -26,6 +30,8 @@ typedef struct {
     int sfi, channels, aot;             /* AAC: the rate's index, channels, object type */
     u32 def_duration, def_size, def_flags;   /* the trex defaults */
     long long next_dts;                 /* where a fragment without tfdt carries on */
+    long long trak_b, trak_e;           /* its trak's body, in what mp4_parse_init read */
+    long long shift;                    /* its edit list's start, taken off every time */
 } mp4_track;
 
 enum { MP4_VIDEO = 1, MP4_AUDIO = 2 };
@@ -38,8 +44,8 @@ typedef struct {
     char why[80];
 } mp4_init;
 
-typedef void (*mp4_sample_fn)(void *ctx, const mp4_track *t, long long dts, long long pts, int key,
-                              const u8 *data, int len);
+typedef void (*mp4_sample_fn)(void *ctx, const mp4_track *t, long long dts, long long pts, long long dur,
+                              int key, const u8 *data, int len);
 
 static inline u32 mp4_u32(const u8 *p) { return (u32)p[0] << 24 | (u32)p[1] << 16 | (u32)p[2] << 8 | p[3]; }
 static inline u32 mp4_u16(const u8 *p) { return (u32)p[0] << 8 | p[1]; }
@@ -153,6 +159,8 @@ static void mp4_trak(const u8 *p, long long b, long long e, mp4_init *m) {
     if (m->n >= MP4_TRACKS) return;
     mp4_track *t = &m->t[m->n];
     for (int i = 0; i < (int)sizeof(*t); i++) ((volatile u8 *)t)[i] = 0;
+    t->trak_b = b;
+    t->trak_e = e;
     long long tb, te, mb, me, nb, ne, sb, se;
     if (mp4_find(p, b, e, MP4_T('t', 'k', 'h', 'd'), &tb, &te) && tb + 24 <= te)
         t->id = (int)mp4_u32(p + tb + (p[tb] == 1 ? 20 : 12));
@@ -160,6 +168,25 @@ static void mp4_trak(const u8 *p, long long b, long long e, mp4_init *m) {
     long long hb, he;
     if (mp4_find(p, mb, me, MP4_T('m', 'd', 'h', 'd'), &hb, &he) && hb + 24 <= he)
         t->timescale = mp4_u32(p + hb + (p[hb] == 1 ? 20 : 12));
+    /* An edit list: where in the media the presentation starts, after any
+       empty stretch first. An encoder that writes B pictures with offsets
+       that cannot be negative starts there, so its first picture is at 0. */
+    long long eb2, ee2, lb, le;
+    if (t->timescale && mp4_find(p, b, e, MP4_T('e', 'd', 't', 's'), &eb2, &ee2) &&
+        mp4_find(p, eb2, ee2, MP4_T('e', 'l', 's', 't'), &lb, &le) && lb + 8 <= le) {
+        int v1 = p[lb] == 1, each = v1 ? 20 : 12;
+        long long cnt = mp4_u32(p + lb + 4), q = lb + 8, delay = 0;
+        for (long long i = 0; i < cnt && q + each <= le; i++, q += each) {
+            long long dur = v1 ? (long long)mp4_u64(p + q) : (long long)mp4_u32(p + q);
+            long long mt = v1 ? (long long)mp4_u64(p + q + 8) : (long long)(int)mp4_u32(p + q + 4);
+            if (mt == -1) {                 /* empty: nothing shown for its length */
+                if (m->movie_timescale) delay += dur * t->timescale / m->movie_timescale;
+                continue;
+            }
+            t->shift = mt - delay;
+            break;
+        }
+    }
     u32 handler = 0;
     if (mp4_find(p, mb, me, MP4_T('h', 'd', 'l', 'r'), &hb, &he) && hb + 12 <= he) handler = mp4_u32(p + hb + 8);
     if (!mp4_find(p, mb, me, MP4_T('m', 'i', 'n', 'f'), &nb, &ne)) return;
@@ -226,6 +253,103 @@ static long long mp4_parse_init(const u8 *p, long long n, mp4_init *m) {
     return moov_end;
 }
 
+/* --- a file that is not fragmented ------------------------------------------------------------ */
+
+/* Each sample of a track: where it is in the file, how long, its decoding
+   time and duration in the track's timescale, its composition offset, and
+   whether it needs no other. */
+typedef struct {
+    long long off, dts;
+    u32 size;
+    int cto, dur;
+    u8 key;
+} mp4_entry;
+
+#define MP4_SAMPLES_MAX 2000000
+
+/* The full box's table in [b, e): its entry count, checked to fit with each
+   entry `each` bytes after `head` bytes; -1 when it does not. */
+static long long mp4_table(const u8 *p, long long b, long long e, int head, int each) {
+    if (b + head > e) return -1;
+    long long n = mp4_u32(p + b + head - 4);
+    if (n > MP4_SAMPLES_MAX || b + head + n * each > e) return -1;
+    return n;
+}
+
+/* Track t's samples from its sample tables, read from the buffer the moov
+   was in (p), into a list from malloc; how many, or -1 with why said. */
+static int mp4_index(const u8 *p, const mp4_track *t, mp4_entry **out, mp4_init *m) {
+    *out = 0;
+    long long mb, me, nb, ne, b, e;
+    if (!mp4_find(p, t->trak_b, t->trak_e, MP4_T('m', 'd', 'i', 'a'), &mb, &me) ||
+        !mp4_find(p, mb, me, MP4_T('m', 'i', 'n', 'f'), &nb, &ne) ||
+        !mp4_find(p, nb, ne, MP4_T('s', 't', 'b', 'l'), &nb, &ne)) { mp4_why(m, "a track with no sample tables"); return -1; }
+    /* Sizes: one for all, or one each. */
+    if (!mp4_find(p, nb, ne, MP4_T('s', 't', 's', 'z'), &b, &e) || b + 12 > e) { mp4_why(m, "no sample sizes"); return -1; }
+    u32 same = mp4_u32(p + b + 4);
+    long long n = mp4_u32(p + b + 8);
+    if (n > MP4_SAMPLES_MAX || (!same && b + 12 + n * 4 > e)) { mp4_why(m, "sample sizes that do not fit"); return -1; }
+    long long szb = b + 12;
+    /* Chunks: where each is, and how many samples each run of them holds. */
+    long long cb, ce, nchunks;
+    int wide = 0;
+    if (mp4_find(p, nb, ne, MP4_T('s', 't', 'c', 'o'), &cb, &ce)) nchunks = mp4_table(p, cb, ce, 8, 4);
+    else if (mp4_find(p, nb, ne, MP4_T('c', 'o', '6', '4'), &cb, &ce)) { nchunks = mp4_table(p, cb, ce, 8, 8); wide = 1; }
+    else nchunks = -1;
+    long long scb, sce, nruns = -1;
+    if (mp4_find(p, nb, ne, MP4_T('s', 't', 's', 'c'), &scb, &sce)) nruns = mp4_table(p, scb, sce, 8, 12);
+    long long tsb, tse, nts = -1;
+    if (mp4_find(p, nb, ne, MP4_T('s', 't', 't', 's'), &tsb, &tse)) nts = mp4_table(p, tsb, tse, 8, 8);
+    if (nchunks < 0 || nruns < 0 || nts < 0) { mp4_why(m, "sample tables that do not fit"); return -1; }
+    long long ctb = 0, cte = 0, ncts = 0, ssb = 0, sse = 0, nsync = -1;
+    if (mp4_find(p, nb, ne, MP4_T('c', 't', 't', 's'), &ctb, &cte) && (ncts = mp4_table(p, ctb, cte, 8, 8)) < 0) ncts = 0;
+    if (mp4_find(p, nb, ne, MP4_T('s', 't', 's', 's'), &ssb, &sse)) nsync = mp4_table(p, ssb, sse, 8, 4);
+    if (!n) return 0;
+    mp4_entry *x = (mp4_entry *)malloc((u64)n * sizeof(mp4_entry));
+    if (!x) { mp4_why(m, "no memory for the samples"); return -1; }
+    /* Where each sample is: chunk by chunk, each run of chunks holding its
+       count, the samples of a chunk one after the other. */
+    long long k = 0;
+    for (long long r = 0; r < nruns && k < n; r++) {
+        const u8 *q = p + scb + 8 + r * 12;
+        long long first = mp4_u32(q), per = mp4_u32(q + 4);
+        long long last = r + 1 < nruns ? (long long)mp4_u32(q + 12) - 1 : nchunks;
+        if (first < 1 || last > nchunks || per > MP4_SAMPLES_MAX) break;
+        for (long long c = first; c <= last && k < n; c++) {
+            long long off = wide ? (long long)mp4_u64(p + cb + 8 + (c - 1) * 8) : (long long)mp4_u32(p + cb + 8 + (c - 1) * 4);
+            for (long long i = 0; i < per && k < n; i++, k++) {
+                x[k].off = off;
+                x[k].size = same ? same : mp4_u32(p + szb + k * 4);
+                off += x[k].size;
+            }
+        }
+    }
+    if (k < n) { free(x); mp4_why(m, "fewer chunks than samples"); return -1; }
+    /* Times: runs of durations, runs of composition offsets, the samples
+       that need no other (all of them when there is no list). */
+    long long dts = -t->shift, at = 0;
+    for (long long r = 0; r < nts && at < n; r++) {
+        long long cnt = mp4_u32(p + tsb + 8 + r * 8);
+        int d = (int)mp4_u32(p + tsb + 12 + r * 8);
+        for (long long i = 0; i < cnt && at < n; i++, at++) { x[at].dts = dts; x[at].dur = d; dts += d; }
+    }
+    for (; at < n; at++) { x[at].dts = dts; x[at].dur = 0; }
+    at = 0;
+    for (long long r = 0; r < ncts && at < n; r++) {
+        long long cnt = mp4_u32(p + ctb + 8 + r * 8);
+        int o = (int)mp4_u32(p + ctb + 12 + r * 8);
+        for (long long i = 0; i < cnt && at < n; i++, at++) x[at].cto = o;
+    }
+    for (; at < n; at++) x[at].cto = 0;
+    for (long long i = 0; i < n; i++) x[i].key = nsync < 0;
+    for (long long r = 0; r < nsync; r++) {
+        long long s = mp4_u32(p + ssb + 8 + r * 4);
+        if (s >= 1 && s <= n) x[s - 1].key = 1;
+    }
+    *out = x;
+    return (int)n;
+}
+
 /* One traf of a moof whose start is moof_at: its samples, read from the
    buffer p of n bytes. */
 static int mp4_traf(const u8 *p, long long n, long long b, long long e, long long moof_at, mp4_init *m,
@@ -274,7 +398,7 @@ static int mp4_traf(const u8 *p, long long n, long long b, long long e, long lon
             if (tf & 0x800) { cto = version ? (int)mp4_u32(p + q) : (int)mp4_u32(p + q); q += 4; }
             if (data < 0 || data + (long long)size > n) return -1;
             int key = !(sflags & 0x00010000);
-            if (t->kind) fn(ctx, t, dts, dts + cto, key, p + data, (int)size);
+            if (t->kind) fn(ctx, t, dts - t->shift, dts - t->shift + cto, dur, key, p + data, (int)size);
             data += size;
             dts += dur;
         }

@@ -292,16 +292,54 @@ static int fake_request(const char *method, const char *url, const char *body, i
 /* mediadata.h's fragmented MP4, as a page's player fetches it: /v-init and
    /v-media for the pictures, /a-init and /a-media for the sound; anything
    else is not MP4 at all. */
+static int media_asks;
 static int media_request(const char *method, const char *url, const char *body, int blen,
                          const char *type, const char *headers, jd_reply *out) {
-    (void)method; (void)body; (void)blen; (void)type; (void)headers;
+    (void)method; (void)body; (void)blen; (void)type;
     const char *end = url;
     while (*end) end++;
     int n = (int)(end - url);
     out->url = url;
     out->type = "video/mp4";
     out->status = 200;
+    out->head = 0;
+    out->hlen = 0;
+    media_asks++;
 #define MEDIA_IS(s) (n >= (int)sizeof(s) - 1 && same_text(end - (sizeof(s) - 1), s))
+    if (MEDIA_IS("/file.mp4")) {
+        /* A file, as a server that does ranges answers: the bytes asked for
+           and the whole length. */
+        long long a = 0, b = -1, total = (long long)sizeof(MEDIA_FILE_MUXED);
+        const char *r = find_in(headers ? headers : "", "Range: bytes=");
+        if (r) {
+            r += 13;
+            a = 0; while (*r >= '0' && *r <= '9') a = a * 10 + (*r++ - '0');
+            if (*r == '-') { r++; b = 0; while (*r >= '0' && *r <= '9') b = b * 10 + (*r++ - '0'); }
+        }
+        if (b < 0 || b >= total) b = total - 1;
+        if (a >= total) { out->status = 416; out->body = ""; out->len = 0; return 0; }
+        static char head[160];
+        int w = 0;
+        const char *parts[] = { "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes ", 0 };
+        for (const char *p = parts[0]; *p; p++) head[w++] = *p;
+        long long nums[3] = { a, b, total };
+        for (int k = 0; k < 3; k++) {
+            char tmp[24];
+            int t = 0;
+            long long v = nums[k];
+            do { tmp[t++] = (char)('0' + v % 10); v /= 10; } while (v);
+            while (t) head[w++] = tmp[--t];
+            head[w++] = k == 0 ? '-' : k == 1 ? '/' : '\r';
+        }
+        head[w++] = '\n';
+        head[w] = 0;
+        out->head = head;
+        out->hlen = w;
+        out->status = r ? 206 : 200;
+        out->body = (const char *)MEDIA_FILE_MUXED + a;
+        out->len = (int)(b - a + 1);
+        return out->len;
+    }
     if (MEDIA_IS("/v-init"))       { out->body = (const char *)MEDIA_VIDEO_INIT;  out->len = (int)sizeof(MEDIA_VIDEO_INIT); }
     else if (MEDIA_IS("/v-media")) { out->body = (const char *)MEDIA_VIDEO_MEDIA; out->len = (int)sizeof(MEDIA_VIDEO_MEDIA); }
     else if (MEDIA_IS("/a-init"))  { out->body = (const char *)MEDIA_AUDIO_INIT;  out->len = (int)sizeof(MEDIA_AUDIO_INIT); }
@@ -3017,8 +3055,29 @@ int main(void) {
                "v.load(); v.play().catch(function (e) { document.title = ['done', e.name, v.error && v.error.code, v.networkState].join(' '); });"
                "</script></body>");
         media_passes(20);
-        oks("and a file named as the src is not played, and says so", page.title >= 0 ? page.arena + page.title : "",
+        oks("and a src that names something that is not MP4 is refused, and says so", page.title >= 0 ? page.arena + page.title : "",
             "done NotSupportedError 4 3");
+
+        /* A file named as the src, as most pages name one: asked for by
+           ranges, its pictures and its sound in one, played to the end. */
+        media_nseen = 0;
+        media_asks = 0;
+        titled("<body><video id=v src=/file.mp4></video><script>var v = document.getElementById('v'), log = [];"
+               "['loadstart','durationchange','loadedmetadata','loadeddata','canplay','canplaythrough','play','playing',"
+               " 'waiting','timeupdate','pause','ended','resize','error'].forEach(function (e) {"
+               " v.addEventListener(e, function () { if (e !== 'timeupdate' || log[log.length - 1] !== 'timeupdate') log.push(e); }); });"
+               "v.addEventListener('loadedmetadata', function () { log.push(v.duration.toFixed(2), v.videoWidth); v.play(); });"
+               "v.addEventListener('ended', function () { document.title = 'done ' + log.join(',') + ' ' + v.currentTime.toFixed(2); });"
+               "</script></body>");
+        media_passes(200);
+        oks("a file named as the src plays: fetched by ranges, told as the standard tells it, to its end",
+            page.title >= 0 ? page.arena + page.title : "",
+            "done loadstart,durationchange,loadedmetadata,1.02,176,resize,play,waiting,loadeddata,canplay,playing,"
+            "canplaythrough,timeupdate,pause,ended 1.02");
+        inorder = media_nseen == MEDIA_VIDEO_FRAMES;
+        for (int i = 0; i < media_nseen && inorder; i++) if (media_seen[i] != i) inorder = 0;
+        ok("every picture of it Windows' decoding, in order, asked for in more than one stretch", inorder && media_asks >= 2);
+        if (!inorder) { puts("          seen:"); for (int i = 0; i < media_nseen; i++) { putc(' '); putn(media_seen[i]); } putc('\n'); }
         jsdom_request_with(0);
         jsdom_at("");
     }

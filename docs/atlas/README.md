@@ -95,6 +95,15 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.100.0
+
+- **A `<video>` or `<audio>` plays a file (13 §3.13, 12)**: MP4 that is not fragmented, read by its sample tables and
+  asked for by ranges, its moov found wherever it is; an edit list's start taken off; a source holding pictures and
+  sound together (a muxed SourceBuffer or a file) gives each its own. Elements the page was written with load as it is
+  read, scripts or not. mediatest: Windows' own MP4 of the stream (moov at the end), a muxed file with an edit list,
+  every picture Windows' decoding, the sound frames byte for byte, a seek, damage; pagetest: a file named as the src,
+  fetched by ranges, its events and pictures; msecheck: a page with a file, in QEMU.
+
 ### 0.99.0
 
 - **Referer and document.referrer (11)**, under the W3C Referrer Policy's default and whatever a page's header or meta

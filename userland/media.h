@@ -15,6 +15,13 @@
  *
  * Memory: samples are copies, freed as they are played or removed; a source
  * keeps at most MEDIA_KEEP seconds behind the playing position.
+ *
+ * A source may hold pictures and sound together (a SourceBuffer of muxed
+ * MP4, or a file): every sample says which it is, and each step takes only
+ * its own. A file named as the src (not fragmented) is read by its index
+ * (mp4_index): the pipeline says which bytes of it it wants next
+ * (media_file_want), the page's side fetches them by a range, and hands them
+ * back (media_file_feed), which takes every sample whole inside them.
  */
 #pragma once
 #include "mp4.h"
@@ -27,6 +34,7 @@ typedef struct media_sample {
     struct media_sample *next;
     double dts, pts, dur;
     int key, len;
+    int kind;                            /* MP4_VIDEO or MP4_AUDIO */
     u8 data[];
 } media_sample;
 
@@ -71,6 +79,13 @@ typedef struct {
     u32 step, frac;
     double clock_at;                     /* with no sound: when (media_seconds) position was last moved */
     double clock_pos;
+    /* A file named as the src: its samples by track, the next of each not
+       yet taken, how long it is, and what is wanted of it next. */
+    int file, file_ready, file_done;
+    long long file_size, file_scan;      /* the whole length (0 unknown); where boxes are looked for */
+    long long file_need;                 /* how much to ask for there: a moov's whole length */
+    mp4_entry *fx[MP4_TRACKS];
+    int fn[MP4_TRACKS], fnext[MP4_TRACKS];
     /* For a test: the seconds it says have passed, standing for the
        processor's ticks (negative: the real ones), and each decoded picture
        before it is converted. */
@@ -113,6 +128,7 @@ static void media_close(media_t *m) {
         media_free_samples(&m->src[i]);
         if (m->src[i].pend) free(m->src[i].pend);
     }
+    for (int i = 0; i < MP4_TRACKS; i++) if (m->fx[i]) free(m->fx[i]);
     if (m->vdec) { h264_close(m->vdec); free(m->vdec); }
     if (m->adec) free(m->adec);
     if (m->frame) free(m->frame);
@@ -124,7 +140,8 @@ static void media_close(media_t *m) {
 
 typedef struct { media_t *m; media_source *s; } media_ctx;
 
-static void media_take(void *ctx, const mp4_track *t, long long dts, long long pts, int key, const u8 *data, int len) {
+static void media_take(void *ctx, const mp4_track *t, long long dts, long long pts, long long dur, int key,
+                       const u8 *data, int len) {
     media_ctx *c = (media_ctx *)ctx;
     media_source *s = c->s;
     if (!t->timescale || len <= 0 || s->count > 200000) return;
@@ -133,23 +150,26 @@ static void media_take(void *ctx, const mp4_track *t, long long dts, long long p
     x->next = 0;
     x->dts = (double)dts / t->timescale + s->offset;
     x->pts = (double)pts / t->timescale + s->offset;
-    x->dur = t->def_duration ? (double)t->def_duration / t->timescale : 0;
+    x->dur = dur > 0 ? (double)dur / t->timescale : t->def_duration ? (double)t->def_duration / t->timescale : 0;
     x->key = key;
     x->len = len;
+    x->kind = t->kind;
     for (int i = 0; i < len; i++) x->data[i] = data[i];
     s->kind |= t->kind;
     /* In decoding order: an append is normally after what is there, a
        re-append of an earlier stretch replaces its samples. */
     if (!s->tail || x->dts > s->tail->dts) {
-        if (s->tail) { if (!s->tail->dur) s->tail->dur = x->dts - s->tail->dts; s->tail->next = x; }
-        else s->head = x;
+        if (s->tail) {
+            if (!s->tail->dur && s->tail->kind == x->kind) s->tail->dur = x->dts - s->tail->dts;
+            s->tail->next = x;
+        } else s->head = x;
         s->tail = x;
         s->count++;
         return;
     }
     media_sample **pp = &s->head;
-    while (*pp && (*pp)->dts < x->dts) pp = &(*pp)->next;
-    if (*pp && (*pp)->dts == x->dts) {          /* the same sample again: the new one wins */
+    while (*pp && ((*pp)->dts < x->dts || ((*pp)->dts == x->dts && (*pp)->kind != x->kind))) pp = &(*pp)->next;
+    if (*pp && (*pp)->dts == x->dts && (*pp)->kind == x->kind) {   /* the same sample again: the new one wins */
         media_sample *old = *pp;
         x->next = old->next;
         *pp = x;
@@ -244,12 +264,13 @@ static int media_append(media_t *m, int k, const u8 *p, long long n) {
    ranges where it belongs, which are kept sorted, rather than taken as the
    end of the last. */
 #define MEDIA_RANGES 64
-static int media_buffered(media_t *m, int k, double *r, int max) {
+static int media_buffered_kind(media_t *m, int k, int kind, double *r, int max) {
     media_source *s = &m->src[k];
     double lo[MEDIA_RANGES], hi[MEDIA_RANGES];
     int n = 0;
     const double tol = 0.1;
     for (media_sample *x = s->head; x; x = x->next) {
+        if (x->kind != kind) continue;
         double a = x->pts, b = x->pts + (x->dur > 0 ? x->dur : 0.02);
         int i = 0;
         while (i < n && hi[i] + tol < a) i++;
@@ -278,6 +299,23 @@ static int media_buffered(media_t *m, int k, double *r, int max) {
     if (n > max) n = max;
     for (int i = 0; i < n; i++) { r[2 * i] = lo[i]; r[2 * i + 1] = hi[i]; }
     return n;
+}
+
+/* What source k holds: its one kind's ranges, or where its pictures' and its
+   sound's overlap when it holds both (as the standard has a muxed buffer). */
+static int media_buffered(media_t *m, int k, double *r, int max) {
+    media_source *s = &m->src[k];
+    if (s->kind != (MP4_VIDEO | MP4_AUDIO)) return media_buffered_kind(m, k, s->kind & MP4_VIDEO ? MP4_VIDEO : MP4_AUDIO, r, max);
+    double a[2 * MEDIA_RANGES], b[2 * MEDIA_RANGES];
+    int na = media_buffered_kind(m, k, MP4_VIDEO, a, MEDIA_RANGES), nb = media_buffered_kind(m, k, MP4_AUDIO, b, MEDIA_RANGES);
+    int w = 0;
+    for (int i = 0; i < na; i++)
+        for (int j = 0; j < nb && w < max; j++) {
+            double lo = a[2 * i] > b[2 * j] ? a[2 * i] : b[2 * j];
+            double hi = a[2 * i + 1] < b[2 * j + 1] ? a[2 * i + 1] : b[2 * j + 1];
+            if (hi > lo) { r[2 * w] = lo; r[2 * w + 1] = hi; w++; }
+        }
+    return w;
 }
 
 /* Takes out what lies in [from, to) of source k. */
@@ -309,6 +347,180 @@ static void media_end_of_stream(media_t *m) {
         if (n && r[2 * n - 1] > end) end = r[2 * n - 1];
     }
     if (end > 0) m->duration = end;
+}
+
+/* --- a file ----------------------------------------------------------------------------------
+ *
+ * Its moov is looked for from the start, box by box: a box whose head has
+ * arrived says where the next starts, so a moov at the end (as most encoders
+ * write it) is found by asking for the bytes where it is. Once read, the
+ * samples are asked for in the file's order from the earliest one not yet
+ * taken, a stretch at a time, as far as MEDIA_AHEAD seconds past the playing
+ * position. */
+#define MEDIA_AHEAD 10.0
+#define MEDIA_FILE_STRETCH (512 * 1024)
+
+static void media_file_open(media_t *m) {
+    m->file = 1;
+    m->file_scan = 0;
+}
+
+/* The track the file's samples go into the one source as. */
+static mp4_track *media_file_track(media_t *m, int i) { return &m->src[0].init.t[i]; }
+
+/* The bytes [*from, *from + *len) it wants next; 0 for none now. */
+static int media_file_want(media_t *m, long long *from, int *len) {
+    if (!m->file || m->file_done) return 0;
+    if (!m->file_ready) {
+        if (m->file_size && m->file_scan >= m->file_size) return 0;
+        *from = m->file_scan;
+        *len = m->file_need > MEDIA_FILE_STRETCH ? (int)m->file_need : MEDIA_FILE_STRETCH;
+        return 1;
+    }
+    /* The earliest sample not taken, of any track, if it is due. */
+    int best = -1;
+    double when = 0;
+    for (int i = 0; i < m->src[0].init.n; i++) {
+        if (m->fnext[i] >= m->fn[i]) continue;
+        mp4_track *t = media_file_track(m, i);
+        double d = (double)m->fx[i][m->fnext[i]].dts / t->timescale;
+        if (best < 0 || d < when) { best = i; when = d; }
+    }
+    if (best < 0) { m->file_done = 1; m->eos = 1; return 0; }
+    if (when > m->position + MEDIA_AHEAD) return 0;
+    *from = m->fx[best][m->fnext[best]].off;
+    *len = MEDIA_FILE_STRETCH;
+    long long need = m->fx[best][m->fnext[best]].size;
+    if (need > *len) *len = (int)(need > 64 * 1024 * 1024 ? 64 * 1024 * 1024 : need);
+    return 1;
+}
+
+/* The moov, whole, at p: the source's init and every track's index. */
+static int media_file_moov(media_t *m, const u8 *p, long long n) {
+    media_source *s = &m->src[0];
+    static mp4_init fresh;
+    if (mp4_parse_init(p, n, &fresh) < 0) {
+        int i = 0;
+        for (; fresh.why[i] && i < (int)sizeof(s->why) - 1; i++) s->why[i] = fresh.why[i];
+        s->why[i] = 0;
+        return -1;
+    }
+    for (int i = 0; i < fresh.n; i++) {
+        if (m->fx[i]) free(m->fx[i]);
+        m->fx[i] = 0;
+        m->fn[i] = mp4_index(p, &fresh.t[i], &m->fx[i], &fresh);
+        if (m->fn[i] < 0) {
+            int k = 0;
+            for (; fresh.why[k] && k < (int)sizeof(s->why) - 1; k++) s->why[k] = fresh.why[k];
+            s->why[k] = 0;
+            return -1;
+        }
+        m->fnext[i] = 0;
+    }
+    for (int i = 0; i < (int)sizeof(fresh); i++) ((volatile u8 *)&s->init)[i] = ((u8 *)&fresh)[i];
+    s->have_init = 1;
+    s->used = 1;
+    for (int i = 0; i < fresh.n; i++) s->kind |= fresh.t[i].kind;
+    if (fresh.duration && fresh.movie_timescale) m->duration = (double)fresh.duration / fresh.movie_timescale;
+    m->file_ready = 1;
+    return 0;
+}
+
+/* Bytes [at, at + n) of the file, and its whole length when the answer said
+   (0 when not). -1 with why said when the file is not one this reads. */
+static int media_file_feed(media_t *m, long long at, const u8 *p, long long n, long long total) {
+    media_source *s = &m->src[0];
+    if (total > 0) m->file_size = total;
+    if (!m->file_ready) {
+        if (at != m->file_scan) return 0;
+        /* Box by box from where the looking had got to. */
+        long long off = 0;
+        while (off + 8 <= n) {
+            u64 size = mp4_u32(p + off);
+            u32 type = mp4_u32(p + off + 4);
+            long long head = 8;
+            if (size == 1) {
+                if (off + 16 > n) break;
+                size = mp4_u64(p + off + 8);
+                head = 16;
+            } else if (size == 0) {
+                size = m->file_size ? (u64)(m->file_size - (at + off)) : (u64)(n - off);
+            }
+            if (size < (u64)head) { const char *w = "a box whose size is less than its head"; int i = 0; for (; w[i]; i++) s->why[i] = w[i]; s->why[i] = 0; return -1; }
+            if (type == MP4_T('m', 'o', 'o', 'v')) {
+                if (size > 64 * 1024 * 1024) { const char *w = "a moov too big to read"; int i = 0; for (; w[i]; i++) s->why[i] = w[i]; s->why[i] = 0; return -1; }
+                if (off + (long long)size <= n) return media_file_moov(m, p + off, (long long)size);
+                /* Not all here: asked for again from its start, as long as
+                   it is. A moov asked for whole that still came short is a
+                   file shorter than it says. */
+                if (off == 0 && m->file_need >= (long long)size) {
+                    const char *w = "a moov cut short";
+                    int i = 0;
+                    for (; w[i]; i++) s->why[i] = w[i];
+                    s->why[i] = 0;
+                    return -1;
+                }
+                m->file_scan = at + off;
+                m->file_need = (long long)size;
+                return 0;
+            }
+            if (type == MP4_T('m', 'o', 'o', 'f')) {
+                const char *w = "a fragmented file, which is appended, not named as a src";
+                int i = 0;
+                for (; w[i]; i++) s->why[i] = w[i];
+                s->why[i] = 0;
+                return -1;
+            }
+            off += (long long)size;
+        }
+        if (off == 0 && n >= 8) {
+            /* The box at the start is longer than what came: what follows it
+               is where to look next. */
+            u64 size = mp4_u32(p);
+            if (size == 1 && n >= 16) size = mp4_u64(p + 8);
+            off = (long long)size;
+        }
+        m->file_scan = at + off;
+        if (m->file_size && m->file_scan >= m->file_size) {
+            const char *w = "no moov in the file";
+            int i = 0;
+            for (; w[i]; i++) s->why[i] = w[i];
+            s->why[i] = 0;
+            return -1;
+        }
+        return 0;
+    }
+    /* Every sample of every track that lies whole in what came. */
+    media_ctx c = { m, s };
+    for (int i = 0; i < s->init.n; i++) {
+        mp4_track *t = &s->init.t[i];
+        while (m->fnext[i] < m->fn[i]) {
+            mp4_entry *e = &m->fx[i][m->fnext[i]];
+            if (e->off < at || e->off + (long long)e->size > at + n) break;
+            if (t->kind) media_take(&c, t, e->dts, e->dts + e->cto, e->dur, e->key, p + (e->off - at), (int)e->size);
+            m->fnext[i]++;
+        }
+    }
+    return 0;
+}
+
+/* After a seek: each track's next sample to take is back at the last one
+   that needs no other at or before the position (the samples already taken
+   are taken again, the new copy replacing the old). */
+static void media_file_seek(media_t *m, double t) {
+    if (!m->file || !m->file_ready) return;
+    m->file_done = 0;
+    m->eos = 0;
+    for (int i = 0; i < m->src[0].init.n; i++) {
+        mp4_track *tr = media_file_track(m, i);
+        int k = 0;
+        for (int j = 0; j < m->fn[i]; j++) {
+            double d = (double)m->fx[i][j].dts / tr->timescale;
+            if (d > t + 0.001) break;
+            if (m->fx[i][j].key) k = j;
+        }
+        m->fnext[i] = k;
+    }
 }
 
 /* --- playing ------------------------------------------------------------------------------ */
@@ -351,6 +563,7 @@ static void media_seek(media_t *m, double t) {
     m->ended = 0;
     m->flushed = 0;
     if (m->vdec) { h264_close(m->vdec); h264_open(m->vdec); }
+    media_file_seek(m, t);
 }
 
 static void media_play(media_t *m) {
@@ -394,7 +607,7 @@ static void media_sound_step(media_t *m) {
         static short pcm[1024 * AAC_MAX_CH];
         while (m->qlen + 1024 < MEDIA_QUEUE && m->a_end < media_clock(m) + 2.0) {
             media_sample *x = s->head;
-            while (x && x->pts + 0.001 < m->a_next) x = x->next;
+            while (x && (x->kind != MP4_AUDIO || x->pts + 0.001 < m->a_next)) x = x->next;
             if (!x) break;
             m->a_next = x->pts + (x->dur > 0 ? x->dur : 1024.0 / m->a_rate);
             if (aac_decode(m->adec, x->data, x->len, pcm) != 1024) continue;
@@ -500,17 +713,18 @@ static int media_video_step(media_t *m) {
             }
             if (h264_room(m->vdec) <= 0) return 0;
             media_sample *x = s->head;
-            while (x && x->dts < m->vnext) x = x->next;      /* vnext is just past the last one fed */
+            while (x && (x->kind != MP4_VIDEO || x->dts < m->vnext)) x = x->next;   /* vnext is just past the last one fed */
             if (m->need_key) {
                 /* Back to the last picture that needs no other at or before
                    the position. */
                 media_sample *key = 0;
                 for (media_sample *y = s->head; y; y = y->next) {
+                    if (y->kind != MP4_VIDEO) continue;
                     if (y->key && y->pts <= m->position + 0.001) key = y;
                     if (y->pts > m->position + 0.001 && key) break;
                 }
                 if (!key) key = s->head;
-                while (key && !key->key) key = key->next;
+                while (key && (!key->key || key->kind != MP4_VIDEO)) key = key->next;
                 x = key;
                 if (!x) return 0;
                 m->need_key = 0;

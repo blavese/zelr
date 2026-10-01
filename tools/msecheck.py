@@ -13,6 +13,11 @@ the page goes to /mse-done with every event the element told, in order, and
 what it says of itself then; that request is what this reads, so a browser
 that never got there fails here rather than passing by saying nothing wrong.
 
+Then on to a page that names a file for its <video> to play, as most pages
+do: the colours and the tone in one MP4, not fragmented, its moov after its
+media, served by ranges. It plays muted (so the recording is the first
+page's alone), on its own once it can, and reports its events to /file-done.
+
 jsmedia.h's events and buffers are checked in pagetest, and the pictures
 against Windows' decoding there and in mediatest. This is the rest of the
 road, which only a running machine has: the frames drawn in the element's
@@ -41,7 +46,7 @@ import urllib.parse
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from harness import Guest, Checks, build_once, ROOT                         # noqa: E402
 from soundcheck import close_to                                             # noqa: E402
-from genmedia import header_array, video_units, sps_size, box, full, init_segment, fragment   # noqa: E402
+from genmedia import header_array, video_units, sps_size, box, full, init_segment, fragment, muxed_file   # noqa: E402
 from playcheck import ts_payloads, adts_frames, read_stereo, pitch_of, stretches, colours_seen  # noqa: E402
 
 DISK = os.path.join(ROOT, "msecheck.%d.img" % os.getpid())
@@ -140,8 +145,26 @@ v.addEventListener('error', function () { report('element error ' + (v.error && 
 v.src = URL.createObjectURL(ms);
 </script></body></html>"""
 
+FILE_PAGE = """<!doctype html><html><head><title>file</title><style>
+body{margin:0;background:#101010}
+video{display:block;width:640px;height:352px;margin:8px}
+</style></head><body><video id=v src="/film/file.mp4" autoplay muted></video><script>
+var v = document.getElementById('v'), log = [];
+['loadstart','durationchange','loadedmetadata','loadeddata','canplay','canplaythrough','play','playing',
+ 'waiting','timeupdate','pause','ended','resize','error'].forEach(function (e) {
+  v.addEventListener(e, function () { if (e !== 'timeupdate' || log[log.length - 1] !== 'timeupdate') log.push(e); });
+});
+v.addEventListener('playing', function () { fetch('/mse-note?file-playing'); });
+v.addEventListener('ended', function () {
+  location.href = '/file-done?' + encodeURIComponent([log.join(','), v.currentTime.toFixed(2), v.muted, v.videoWidth].join(' '));
+});
+v.addEventListener('error', function () { location.href = '/file-done?' + encodeURIComponent('error ' + (v.error && v.error.code)); });
+</script></body></html>"""
+
 REPORTS = []
 NOTES = []
+FILE_REPORTS = []
+RANGES = []
 ASKED = {}
 
 
@@ -159,7 +182,25 @@ class Handler(http.server.BaseHTTPRequestHandler):
             body, ctype = b"noted", "text/plain"
         elif self.path.startswith("/mse-done?"):
             REPORTS.append(urllib.parse.unquote(self.path[len("/mse-done?"):]))
-            body, ctype = b"<title>done</title><p>done</p>", "text/html"
+            # On to the page with a file, as the page's own redirect.
+            body, ctype = b"<title>done</title><meta http-equiv=refresh content=\"0; url=/file.html\"><p>done</p>", "text/html"
+        elif self.path.startswith("/file-done?"):
+            FILE_REPORTS.append(urllib.parse.unquote(self.path[len("/file-done?"):]))
+            body, ctype = b"<title>file done</title><p>done</p>", "text/html"
+        elif self.path == "/film/file.mp4" and self.headers.get("Range", "").startswith("bytes="):
+            data = Handler.files[self.path][0]
+            a, _, b = self.headers["Range"][6:].partition("-")
+            a = int(a)
+            b = min(int(b) if b else len(data) - 1, len(data) - 1)
+            RANGES.append((a, b))
+            part = data[a:b + 1]
+            self.send_response(206)
+            self.send_header("Content-Type", "video/mp4")
+            self.send_header("Content-Range", "bytes %d-%d/%d" % (a, b, len(data)))
+            self.send_header("Content-Length", str(len(part)))
+            self.end_headers()
+            self.wfile.write(part)
+            return
         elif self.path in Handler.files:
             body, ctype = Handler.files[self.path]
         else:
@@ -197,6 +238,8 @@ def serve(port=0):
                    "VSEGS": "[" + ",".join("'%s'" % n for n in vnames) + "]",
                    "ASEGS": "[" + ",".join("'%s'" % n for n in anames) + "]"}
     files["/mse.html"] = (page.encode(), "text/html")
+    files["/file.html"] = (FILE_PAGE.encode(), "text/html")
+    files["/film/file.mp4"] = (muxed_file("H264D_COLOURS", 10, 2)[0], "video/mp4")
     Handler.files = files
     httpd = QuietServer(("127.0.0.1", port), Handler)
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
@@ -212,6 +255,8 @@ def main():
             time.sleep(1)
             while REPORTS:
                 print("report:", REPORTS.pop(0), flush=True)
+            while FILE_REPORTS:
+                print("file report:", FILE_REPORTS.pop(0), flush=True)
             while NOTES:
                 print("note:", NOTES.pop(0), flush=True)
     keep = "--keep" in sys.argv
@@ -227,6 +272,8 @@ def main():
     said = ""
     pairs = {"red and blue": 0, "green and yellow": 0}
     looks = 0
+    file_pairs = {"red and blue": 0, "green and yellow": 0}
+    file_looks = 0
     try:
         vm.wait_boot()
         vm.run("dhcp", timeout=25)
@@ -252,6 +299,19 @@ def main():
                         pairs["red and blue"] += 1
                     if n["green"] > 2000 and n["yellow"] > 2000:
                         pairs["green and yellow"] += 1
+                else:
+                    time.sleep(0.2)
+            # Then the page with a file, which the first sends the browser on to.
+            end = time.time() + 180
+            while time.time() < end and not FILE_REPORTS:
+                if "file-playing" in NOTES:
+                    w, h, px, _ = mon.screen("mse-file-look")
+                    n = colours_seen(w, h, px)
+                    file_looks += 1
+                    if n["red"] > 2000 and n["blue"] > 2000:
+                        file_pairs["red and blue"] += 1
+                    if n["green"] > 2000 and n["yellow"] > 2000:
+                        file_pairs["green and yellow"] += 1
                 else:
                     time.sleep(0.2)
         said = vm.serial()[mark:]
@@ -288,7 +348,17 @@ def main():
     c.add("each for about as long as the other (%d and %d of %d looks)"
           % (pairs["red and blue"], pairs["green and yellow"], looks),
           looks > 0 and min(pairs.values()) * 4 >= looks)
-    c.add("every segment was fetched once", all(v == 1 for k, v in ASKED.items() if k.startswith("/film/")))
+    c.add("every segment was fetched once",
+          all(v == 1 for k, v in ASKED.items() if k.startswith("/film/") and k != "/film/file.mp4"))
+
+    fgot = FILE_REPORTS[0] if FILE_REPORTS else ""
+    print("      the page with a file said: %s; %d ranges asked for; %d looks: %s" % (fgot, len(RANGES), file_looks, file_pairs))
+    c.add("a page with a file for its <video> is gone on to, and the file plays on its own, muted, to its end",
+          fgot.startswith("loadstart,durationchange,loadedmetadata,resize,") and "playing" in fgot and
+          fgot.split(" ")[0].endswith("ended") and fgot.split(" ")[2:] == ["true", str(fw)])
+    c.add("the file is asked for by ranges, its moov found after its media", len(RANGES) >= 2)
+    c.add("its colours are seen in the element's box too",
+          file_pairs["red and blue"] > 0 and file_pairs["green and yellow"] > 0)
 
     if not os.path.exists(WAV):
         c.add("something was recorded", False)

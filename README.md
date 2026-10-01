@@ -1418,9 +1418,11 @@ states climbing as the buffer reaches past the playing position, seeking,
 waiting, `timeupdate` four times a second, `ended` -- while the pieces,
 fragmented MP4 holding H.264 and AAC, are taken apart (`mp4.h`), decoded,
 and played on the sound's clock (`media.h`), the picture drawn in the
-element's box. A harness serves a page that does this from the host, and
-checks what the element told, the colours in its box and the sound at the
-card. YouTube does not play, since its
+element's box. A page that simply names a file for its `<video>` or
+`<audio>` plays too: an MP4 is asked for a stretch at a time by byte ranges,
+its index found wherever the encoder put it. A harness serves pages that do
+both from the host, and checks what the element told, the colours in its
+box and the sound at the card. YouTube does not play, since its
 streams are given to its own player only, with tokens that player makes.
 Google's results are made by a program that first decides whether a
 person is asking, which is not something to get round, so a search asked of

@@ -82,6 +82,33 @@ static void play_to(double from, double until) {
     }
 }
 
+/* A file, answered as a server answers ranges: whatever the pipeline asks
+   for, as much of it as the file has, and no more than `piece` at once (a
+   server may send less than it was asked for). How many asks it took. */
+static int asks, piece = 1 << 30;
+static int feed_file(const u8 *f, long long n) {
+    long long from;
+    int len;
+    for (int guard = 0; guard < 4000 && media_file_want(&med, &from, &len); guard++) {
+        if (from >= n) return -1;
+        if (len > piece) len = piece;
+        long long l = from + len > n ? n - from : len;
+        asks++;
+        if (media_file_feed(&med, from, f + from, l, n) < 0) return -1;
+    }
+    return 0;
+}
+
+/* Plays a file to `until`, its bytes fed as it asks for them. */
+static void play_file_to(const u8 *f, long long n, double from, double until) {
+    for (double t = from; t <= until + 0.0001; t += 1.0 / 30) {
+        feed_file(f, n);
+        med.test_clock = test_now;
+        media_step(&med);
+        test_now += 1.0 / 30;
+    }
+}
+
 /* The ADTS frames of aacdata.h's transport stream, as the answer for what
    the MP4 carries. */
 static const u8 *adts_at[64];
@@ -166,7 +193,7 @@ int main(void) {
         media_ctx cx = { &med, &med.src[2] };
         static const int shown[10] = { 0, 3, 1, 2, 6, 4, 5, 9, 7, 8 };
         static const u8 one[1] = { 0 };
-        for (int i = 0; i < 10; i++) media_take(&cx, &ft, i, shown[i], i == 0, one, 1);
+        for (int i = 0; i < 10; i++) media_take(&cx, &ft, i, shown[i], 0, i == 0, one, 1);
         nr = media_buffered(&med, 2, r, 4);
         okn("pictures decoded out of the order they are shown still make one range (ranges)", nr == 1 && r[0] < 0.001 &&
             r[1] > 0.95, nr);
@@ -201,6 +228,73 @@ int main(void) {
     ok("each at its time, 1024 samples after the last", timed);
     media_close(&med);
 
+    /* --- files --------------------------------------------------------------------------------
+     *
+     * As a page names one for a <video>: Windows' own MP4 of the stream, its
+     * moov after its media, so found by asking where the boxes say it is;
+     * then the stream and the tone in one file, with an edit list. */
+    media_open(&med);
+    med.on_picture = on_picture;
+    med.test_clock = test_now;
+    media_file_open(&med);
+    nseen = 0;
+    asks = 0;
+    piece = 4096;                 /* less than the media before the moov */
+    int fed = feed_file(MEDIA_FILE_WINDOWS, (long long)sizeof(MEDIA_FILE_WINDOWS));
+    okn("Windows' own file is read, answered in pieces smaller than its media: its moov found after it (asks)",
+        fed == 0 && med.file_ready && asks >= 2, asks);
+    okn("its duration is what its moov says (ms)", med.duration > 0.99 && med.duration < 1.01, (int)(med.duration * 1000));
+    media_play(&med);
+    play_file_to(MEDIA_FILE_WINDOWS, (long long)sizeof(MEDIA_FILE_WINDOWS), 0, 1.2);
+    inorder = nseen == c->frames;
+    for (int i = 0; i < nseen && inorder; i++) if (seen[i] != i) inorder = 0;
+    okn("and every picture is Windows' decoding of it, in display order", inorder, nseen);
+    if (!inorder) { puts("          seen:"); for (int i = 0; i < nseen; i++) { putc(' '); putn(seen[i]); } putc('\n'); }
+    nseen = 0;
+    media_seek(&med, 0.5);
+    media_play(&med);
+    play_file_to(MEDIA_FILE_WINDOWS, (long long)sizeof(MEDIA_FILE_WINDOWS), 0.5, 1.2);
+    /* Windows writes no edit list and starts its offsets a picture in, so in
+       its own file picture k is at (k + 1) / 30 and half a second is 14. */
+    okn("a seek in a file starts from the picture there, in the file's own times (its number)",
+        nseen > 0 && seen[0] == 14 && nseen == 16, nseen ? seen[0] : -1);
+    media_close(&med);
+    piece = 1 << 30;
+
+    media_open(&med);
+    med.on_picture = on_picture;
+    med.test_clock = test_now;
+    media_file_open(&med);
+    nseen = 0;
+    fed = feed_file(MEDIA_FILE_MUXED, (long long)sizeof(MEDIA_FILE_MUXED));
+    s = &med.src[0];
+    ok("a file with the pictures and the sound interleaved is read, both tracks in it",
+       fed == 0 && s->init.n == 2 && s->kind == (MP4_VIDEO | MP4_AUDIO));
+    int vcount = 0, acount = 0, aright = 1;
+    for (media_sample *x = s->head; x; x = x->next) {
+        if (x->kind == MP4_VIDEO) { vcount++; continue; }
+        if (acount < nadts) {
+            if (x->len != adts_len[acount]) aright = 0;
+            for (int i = 0; aright && i < x->len; i++) if (x->data[i] != adts_at[acount][i]) aright = 0;
+            double want = acount * 1024.0 / MEDIA_AUDIO_RATE;
+            if (x->pts < want - 0.0001 || x->pts > want + 0.0001) aright = 0;
+        }
+        acount++;
+    }
+    okn("every picture and every sound frame comes out of it (frames of sound)",
+        vcount == MEDIA_VIDEO_FRAMES && acount == MEDIA_FILE_AUDIO_FRAMES, acount);
+    ok("the sound frames byte for byte and at their times", aright && acount <= nadts);
+    nr = media_buffered(&med, 0, r, 4);
+    okn("what it holds is where its pictures and its sound overlap (ms)", nr == 1 && r[0] < 0.001 && r[1] > 0.99 &&
+        r[1] < 1.01, nr ? (int)(r[1] * 1000) : -1);
+    media_play(&med);
+    play_file_to(MEDIA_FILE_MUXED, (long long)sizeof(MEDIA_FILE_MUXED), 0, 1.2);
+    inorder = nseen == c->frames;
+    for (int i = 0; i < nseen && inorder; i++) if (seen[i] != i) inorder = 0;
+    okn("and its pictures, the sound left to the sound, are Windows' decoding, from the edit list's start", inorder, nseen);
+    if (!inorder) { puts("          seen:"); for (int i = 0; i < nseen; i++) { putc(' '); putn(seen[i]); } putc('\n'); }
+    media_close(&med);
+
     /* --- damage ----------------------------------------------------------------------------- */
     static u8 copy[sizeof(MEDIA_VIDEO_MEDIA)];
     int refused = 0, runs = 0;
@@ -225,6 +319,22 @@ int main(void) {
     media_append(&med, 0, lie, 64);
     media_close(&med);
     okn("damaged fragments are decoded or refused, and nothing faults", runs > 5, runs);
+    static u8 fcopy[sizeof(MEDIA_FILE_MUXED)];
+    int fruns = 0, frefused = 0;
+    for (int step = 7; step < 6000; step = step * 2 + 1) {
+        for (int i = 0; i < (int)sizeof(fcopy); i++) fcopy[i] = MEDIA_FILE_MUXED[i];
+        /* The moov, where the tables are, is at the end. */
+        for (int i = (int)sizeof(fcopy) - 1 - step / 3; i > (int)sizeof(fcopy) - 1400; i -= step) fcopy[i] ^= (u8)(0x6B + i);
+        media_open(&med);
+        med.test_clock = test_now;
+        media_file_open(&med);
+        if (feed_file(fcopy, (long long)sizeof(fcopy)) < 0) frefused++;
+        media_play(&med);
+        play_file_to(fcopy, (long long)sizeof(fcopy), 0, 1.2);
+        media_close(&med);
+        fruns++;
+    }
+    okn("damaged files are played or refused, and nothing faults (refused)", fruns > 5, frefused);
     okn("and a fragment whose boxes do not add up is noticed", refused > 0, refused);
 
     puts(failed ? "MEDIATEST_FAIL\n" : "MEDIATEST_PASS\n");

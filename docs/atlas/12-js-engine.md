@@ -2,7 +2,16 @@
 
 Source root the repository root (github.com/blavese/zelr main, 2026-09-22). All paths are relative to it; `file:N` means 1-based line N. Everything below was verified by reading the code. Where a behaviour was derived by tracing (not by running) it says so. Nothing here was built or run.
 
-**Since 0.99.0** (the rest of this file is older; trust the code):
+**Since 0.100.0** (the rest of this file is older; trust the code):
+- **A media element plays a file** (jsmedia.h): a src that is no MediaSource's (http/https, or a blob:/data: address's
+  bytes, kept in `jdmedia.bytes` in the region) is played in media.h's file mode. `jd_media_file_step` asks for one
+  stretch a pass by `jd_do_request` with a Range header (a 206's Content-Range gives the length; a 200 is the whole
+  file from its start), feeds it, and fails the element with MEDIA_ERR_NETWORK (2) or, before metadata,
+  SRC_NOT_SUPPORTED (4), or DECODE (3) when what came does not read. The media elements the page was written with load
+  when the page's world opens (`jd_media_scan`, from `jsdom_open`), and a page with a `<video>` or `<audio>` opens one
+  even with no script (`jd_page_scripts`).
+
+**Since 0.99.0**:
 - **A function's body is read when it is first called** (jsparse.h, "bodies read when they are first run"): a function
   written with `function` (declaration or expression, not an arrow, method or accessor) has its body passed over by
   `js_skip_body` -- tokens read, braces counted, a template's `${ }` told apart so the lexer carries on with the template --

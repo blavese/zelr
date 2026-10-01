@@ -779,6 +779,20 @@ was in the frame before stays.
 | `userland/mediatest.c`, `userland/mediadata.h`, `tools/genmedia.py` | mediatest (ring3check, `MEDIATEST_PASS`): h264data.h's Main stream with B pictures and aacdata.h's tone, made fragmented MP4 by genmedia.py (three video fragments with version 1 offsets, two audio fragments) and read back by Windows before they are written; appended in pieces that cut boxes in two; every picture Windows' decoding of it in display order, a seek to the half starting from picture 15, a removal, the sound frames byte for byte and timed, pictures decoded out of the order they are shown making one range, and damaged fragments decoded or refused without a fault. genmedia.py also writes the video's checksums (`MEDIA_VIDEO_SUMS`) for pagetest. |
 | `tools/msecheck.py` | Gate step: a page served from the host plays the colours and the tone by MSE in the browser on the desktop (each segment fetched by the page's own script); the element's events in order and its state at the end are reported to the server; the screen shows both pairs of colours in the element's box, each for about as long as the other; the recording is the whole tone at its pitch with no gap. `--serve PORT` serves the page for the host browser. |
 
+**Files (since 0.100.0).** `mp4_index` reads a track's sample tables (stsz, stsc, stco or co64, stts, ctts, stss) into
+`mp4_entry`s (offset, size, decoding time, duration, composition offset, sync), at most `MP4_SAMPLES_MAX` (two
+million), every table checked to fit. An edit list's start (after any empty edit) is `mp4_track.shift`, taken off
+every time, fragmented or not. A sample carries its kind (`media_sample.kind`) and its own duration (the trun's or the
+stts's, passed through `mp4_sample_fn`), so a source may hold both kinds: each step takes only its own, and a muxed
+source's buffered ranges are where its two kinds overlap (`media_buffered_kind`). File mode (`media_file_open`,
+`media_file_want`, `media_file_feed`, `media_file_seek`): the moov is looked for box by box from the start, a box's
+head saying where the next starts, so one at the end is found by asking for it (`file_scan`, `file_need`, its whole
+length); then samples are wanted in file order from the earliest not taken, `MEDIA_FILE_STRETCH` (512 KB) at a time,
+up to `MEDIA_AHEAD` (10 s) past the position; every sample lying whole in what is fed is taken. A seek puts each
+track's next sample back at the last that needs no other. A fragmented file named as a src is refused (it is for
+MSE). mediatest feeds Windows' own MP4 of the third stream (moov after mdat, no edit list: its first picture a frame
+in) and a muxed file genmedia.py makes (the stream and the tone interleaved, an edit list), both read back by Windows.
+
 **Speed.** The browser decodes and draws in its own loop, so a frame costs a decode and a page drawn. In QEMU the
 colours (320x176, ten a second) play every picture on time on q35.
 
