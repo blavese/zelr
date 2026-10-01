@@ -493,6 +493,22 @@ static jval nat_arr_fill(jctx *J, jval t, jval *a, int n) {
     return t;
 }
 
+/* An index made a hole: in an array the element is gone and the length
+   stays; anything else that is array-like loses the property. */
+static void js_make_hole(jctx *J, jval t, u32 i) {
+    if (js_is_dense(t)) {
+        if (i < t.obj->len && !(t.obj->flags & JOF_FROZEN)) t.obj->items[i] = js_hole();
+        return;
+    }
+    js_delete(J, t, js_to_key(J, js_num((double)i)));
+}
+
+/* One element copied, or the hole it was. */
+static void js_copy_index(jctx *J, jval t, u32 to, u32 from) {
+    if (js_has_index(J, t, from)) js_put_index(J, t, to, js_get_index(J, t, from));
+    else js_make_hole(J, t, to);
+}
+
 static jval nat_arr_copywithin(jctx *J, jval t, jval *a, int n) {
     if (!js_arraylike(J, t)) return t;
     u32 len = js_len_of(J, t);
@@ -502,9 +518,9 @@ static jval nat_arr_copywithin(jctx *J, jval t, jval *a, int n) {
     u32 count = end > from ? end - from : 0;
     if (count > len - to) count = len - to;
     if (from < to && to < from + count) {
-        for (u32 i = count; i > 0; i--) js_put_index(J, t, to + i - 1, js_get_index(J, t, from + i - 1));
+        for (u32 i = count; i > 0; i--) js_copy_index(J, t, to + i - 1, from + i - 1);
     } else {
-        for (u32 i = 0; i < count; i++) js_put_index(J, t, to + i, js_get_index(J, t, from + i));
+        for (u32 i = 0; i < count; i++) js_copy_index(J, t, to + i, from + i);
     }
     return t;
 }
@@ -605,11 +621,16 @@ static jval nat_arr_sort(jctx *J, jval t, jval *a, int n) {
     if ((u64)len * 2 * sizeof(jval) > 0xFFFFFFF0u) { js_out_of_memory(J); return t; }
     jval *v = (jval *)js_alloc(J, len * 2 * (u32)sizeof(jval));
     if (!v) { js_out_of_memory(J); return t; }
-    for (u32 i = 0; i < len; i++) v[i] = js_get_index(J, t, i);
+    /* The elements there are, sorted, then the holes: a hole is no element,
+       and goes to the end, after even undefined. */
+    u32 m = 0;
+    for (u32 i = 0; i < len; i++) if (js_has_index(J, t, i)) v[m++] = js_get_index(J, t, i);
     jsortctx S = { J, fn, 0 };
-    js_merge_sort(&S, v, v + len, len);
-    if (!S.failed && J->sig == JS_OK)
-        for (u32 i = 0; i < len; i++) js_put_index(J, t, i, v[i]);
+    js_merge_sort(&S, v, v + m, m);
+    if (!S.failed && J->sig == JS_OK) {
+        for (u32 i = 0; i < m; i++) js_put_index(J, t, i, v[i]);
+        for (u32 i = m; i < len; i++) js_make_hole(J, t, i);
+    }
     js_free(J, v, len * 2 * (u32)sizeof(jval));
     return t;
 }

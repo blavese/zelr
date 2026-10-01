@@ -1723,6 +1723,12 @@ int main(void) {
            " JSON.stringify(a), a.map(function (x) { return x * 2; }).join('|'), 1 in a.map(String), [...a].join('|'),"
            " a.indexOf(undefined), a.includes(undefined), Object.values([4, , 6]).join(), String(a), b.hasOwnProperty(2)].join(' '); })()",
            "false undefined 3 0,4 0,4 false 3 false 3 false [1,null,3] 2||6 false 1||3 -1 true 4,6 1,,3 false");
+    expect("sort puts the holes last, after undefined, and copyWithin carries them",
+           "(function(){ var a = [3, , undefined, 1, , 2]; a.sort(); var b = [1, 2, , 4, 5]; b.copyWithin(0, 2, 4);"
+           " var c = [, 'b', 'a']; c.sort(function (x, y) { return x < y ? -1 : 1; });"
+           " return [a.length, String(a[3]), 3 in a, 4 in a, 5 in a, a.slice(0, 3).join(), 0 in b, String(b[1]), b.length,"
+           " c.join('|'), 2 in c].join(' '); })()",
+           "6 undefined true false false 1,2,3 false 4 5 a|b| false");
 
     /* --- the collector (jsgc.h) ---------------------------------------------------------
      *
