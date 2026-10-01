@@ -822,7 +822,8 @@ typedef struct {
     u32 present;
     u32 rate;
     u32 channels;
-    u32 reserved;
+    u32 room;          /* frames a write would take now without waiting */
+    u32 queued;        /* frames written and not yet played */
 } zelr_sound;
 
 static inline int sound_info(zelr_sound *out) {

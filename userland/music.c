@@ -189,6 +189,15 @@ static int open_song(const song_t *s) {
     return 1;
 }
 
+/* Whether the card has a third of a second queued. Its ring holds more than
+   a second (for the stream player, which must not run dry while it fetches),
+   and what is in it plays whatever happens here: Stop has to be heard to
+   stop, so this keeps no more than a third of a second there. */
+static int card_full(void) {
+    zelr_sound snd;
+    return sound_info(&snd) == 0 && snd.queued > dev_rate / 3;
+}
+
 /* One block: read source frames, step through them at the ratio, write the
    device's own rate out. Returns 0 when the file is finished. */
 static int pump(void) {
@@ -197,6 +206,7 @@ static int pump(void) {
     u32 src_frame = src_chans * (src_bits / 8);
     u32 left = data_len - data_done;
     if (!left) return 0;
+    if (card_full()) return 1;
 
     /* How many source frames this block will consume, which is how many to
        read: the step is how far along the source one output frame moves. */
@@ -259,6 +269,7 @@ static int tune_until;
 static void tune_step(void) {
     if (tune_at < 0) return;
     if (ticks() < tune_until) return;
+    if (card_full()) { tune_until = ticks() + 2; return; }
 
     if (tune_at >= TUNE_N) { tune_at = -1; say("done"); return; }
 
@@ -352,6 +363,15 @@ int main(int argc, char **argv) {
             close(fd);
             fd = -1;
             say("finished");
+            /* What the card still has to play of it, which is what Stop
+               would have left playing: a third of a second (card_full).
+               appcheck reads it here. */
+            zelr_sound snd;
+            if (sound_info(&snd) == 0 && dev_rate) {
+                puts("music: finished with ");
+                putn((int)((u64)snd.queued * 1000 / (u32)dev_rate));
+                puts(" ms still to play\n");
+            }
         }
         tune_step();
 

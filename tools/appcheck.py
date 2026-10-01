@@ -17,6 +17,7 @@ that cannot be faked is a tone at the pitch that was in the file.
   python tools/appcheck.py
 """
 import os
+import re
 import struct
 import subprocess
 import sys
@@ -164,6 +165,7 @@ def main():
         c.add("a stick can be built with a tone on it", False)
         return c.report()
 
+    said = ""
     vm = Guest(DISK, memory=256, machine="q35", extra=USB + AUDIO)
     try:
         vm.wait_boot()
@@ -249,6 +251,8 @@ def main():
         # which is what that looks like.
         vm.type("music /usb/TONE.WAV\n")
         time.sleep(12)
+        vm.wait_serial("music: finished with", timeout=30)
+        said = vm.serial()
     finally:
         vm.stop()
         for junk in (DISK, STICK, TONE):
@@ -256,6 +260,15 @@ def main():
                 os.remove(junk)
             except OSError:
                 pass
+
+    # How much was still queued when the last of the file had been read,
+    # which is what Stop leaves playing. The card's ring holds 1.36 s, for
+    # the stream player; music keeps a third of a second in it so that Stop
+    # is heard to stop. The kernel's count, printed by music.
+    m = re.search(r"music: finished with (\d+) ms still to play", said or "")
+    queued = int(m.group(1)) if m else -1
+    c.add("and stopping leaves no more than a third of a second to play (%d ms)" % queued,
+          0 <= queued <= 400)
 
     # --- and what came out of it --------------------------------------------
     rate, samples = read_wav(REC) if os.path.exists(REC) else (0, [])

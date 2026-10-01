@@ -482,7 +482,8 @@ static i64 sys_sound_info(registers_t *r) {
     out->present = sound_present() ? 1 : 0;
     out->rate = sound_rate();
     out->channels = sound_channels();
-    out->reserved = 0;
+    out->room = sound_room();
+    out->queued = sound_queued();
     return 0;
 }
 

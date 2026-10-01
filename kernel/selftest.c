@@ -5585,6 +5585,29 @@ static void test_sound(void) {
     ok("the play position advances at about the rate it claims",
        moved > (u64)want / 4 && moved < (u64)want * 4);
 
+    /* Room to write into, so a program playing a stream need not wait in a
+       write: with nothing queued more than a second of it, and after a
+       write less by about what was written (the hardware reads on
+       meanwhile, so a little is given back). */
+    u32 empty = sound_room();
+    ok("with nothing queued there is room for more than a second",
+       empty > sound_rate() && empty <= 65536);
+    static i16 quiet[4096 * 8];
+    for (u32 i = 0; i < sizeof(quiet) / sizeof(quiet[0]); i++) quiet[i] = 0;
+    u32 put = sound_write(quiet, 4096);
+    u32 after = sound_room();
+    ok("and a write takes room for what it wrote", put == 4096 && after < empty && empty - after > 2048);
+    u32 queued = sound_queued();
+    ok("and is counted as queued until it is played", queued <= 4096 && queued > 2048);
+
+    /* The ring holds most notes whole; a note still lasts about its length,
+       so a second one is a second note. */
+    sound_tone(440, 600);
+    u32 left = sound_queued();
+    kprintf("        a 600 ms note came back with %d frames of it still queued\n", left);
+    ok("a note comes back with no more than a third of a second left to play",
+       left <= sound_rate() / 3 + 512);
+
     /* How long a note takes to hand over would say the same thing from the
        other side, and it is not checked here: it is measured in the ticks
        above, and under a hypervisor those are worth about as much as the

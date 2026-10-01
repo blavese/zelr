@@ -26,6 +26,8 @@ u32 sound_channels(void);
 /* Writes frames, waiting when the buffer is full, and returns how many went
    in. A frame is one sample for every channel. */
 u32 sound_write(const i16 *frames, u32 count);
+u32 sound_room(void);                 /* frames a write would take without waiting */
+u32 sound_queued(void);               /* frames written and not yet played */
 
 /* A note. Blocks for about as long as the note lasts, because it is writing
    into a buffer that only drains in real time. */

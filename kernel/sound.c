@@ -22,9 +22,13 @@
 #include "sched.h"
 #include "io.h"
 
-/* A third of a second at 48 kHz in stereo. Long enough that a tick's worth of
-   jitter cannot empty it, short enough that silencing is not audibly late. */
-#define RING_FRAMES  16384
+/* About a second and a third at 48 kHz in stereo. A program that plays a
+   stream has to fetch the next piece of it, and while it waits on the
+   network nothing writes: a third of a second ran dry under a fetch. A
+   program that wants its sound heard soon writes a little at a time, so the
+   size is room, not delay. 65536 frames is as many as the Ensoniq's size
+   register can count. */
+#define RING_FRAMES  65536
 
 /* Never fill it completely. A writer allowed to catch its own tail would
    overwrite the sample the hardware is reading at that instant. */
@@ -246,6 +250,25 @@ void sound_poll(void) {
     }
 }
 
+/* How many frames a write could take now without waiting: what is neither
+   queued nor too close to what is being read. A program that must not stop
+   (the browser's player, between fetches) writes no more than this. */
+u32 sound_room(void) {
+    if (!ready) return 0;
+    advance();
+    i64 room = (i64)ring_bytes - (i64)(written - played) - (i64)GUARD_FRAMES * frame_bytes;
+    return room > 0 ? (u32)(room / frame_bytes) : 0;
+}
+
+/* How many frames are written and not played yet: what a program that
+   wants to be heard to stop (music's Stop) keeps short, now the ring holds
+   more than a second. */
+u32 sound_queued(void) {
+    if (!ready) return 0;
+    advance();
+    return (u32)((written - played) / frame_bytes);
+}
+
 u32 sound_write(const i16 *frames, u32 count) {
     if (!ready || !frames || !count) return 0;
 
@@ -346,6 +369,15 @@ void sound_tone(u32 hz, u32 ms) {
         done += n;
         left -= n;
     }
+
+    /* The ring holds more than a second, so most notes go in whole and the
+       call would come back as the note starts. The shell's beep lasted about
+       its note when the ring was a third of a second, and a second beep
+       typed after it is a second note, not more of the first: wait until no
+       more than that third is left. Never longer than the note itself, so a
+       click from the desktop over a stream that keeps the ring full costs at
+       most its own length. */
+    for (u32 waited = 0; sound_queued() > rate / 3 && waited < ms; waited += 10) sleep_ms(10);
 }
 
 void sound_silence(void) {

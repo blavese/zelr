@@ -1008,8 +1008,11 @@ minus 1 in the low half, current dword count in the high half).
 
 ### 3.10 include/sound.h + kernel/sound.c (above the controllers)
 
-**Constants**: `RING_FRAMES 16384` (0.34 s at 48 kHz; with 4-byte frames the
-ring is 64 KiB). `GUARD_FRAMES 256`: never fill completely, so the writer
+**Constants**: `RING_FRAMES 65536` since 0.96.0 (1.36 s at 48 kHz, 256 KiB with
+4-byte frames; the Ensoniq's size register counts no further). It was 16384
+(0.34 s), which the stream player (13 §3.11) ran dry while it fetched a
+segment. A program that wants to be heard to stop keeps its own share short
+with `queued` (music keeps a third of a second). `GUARD_FRAMES 256`: never fill completely, so the writer
 cannot overwrite the sample being read.
 
 **Device dispatch** (41-66): `snd_dev_t {SND_NONE, SND_HDA, SND_ENS}` and the
@@ -1056,10 +1059,16 @@ Clock fallback: `pos_moves`, `clocked`, `clock_from_tick`,
     `written`.
 
   Returns frames written.
+* `sound_room()`, `sound_queued()` (0.96.0): frames a write would take now
+  without waiting (`ring - (written - played) - GUARD`), and frames written
+  and not yet played. Both `advance` first.
 * `sound_tone(hz, ms)` (303-349): `total = rate*ms/1000` frames, 512-frame
   blocks built on the stack (2 KiB). Phase step `(hz<<16)/rate`. A 5 ms
   linear ramp at each end (`rate/200` frames) removes the clicks. Each block
-  goes through `sound_write`. It blocks for roughly the note's length.
+  goes through `sound_write`. It blocks for roughly the note's length: since
+  0.96.0 the ring holds most notes whole, so it then waits (10 ms sleeps)
+  until no more than a third of a second is queued, and never longer than
+  `ms`, so the desktop's 70 ms click over a stream costs at most 70 ms.
 * `sound_silence()` (351-357): memset the ring, advance,
   `written = zeroed = played`.
 * `sound_init()` (359-391): `hda_init`, else `ens_init`. Frame bytes, ring,
@@ -1068,7 +1077,8 @@ Clock fallback: `pos_moves`, `clocked`, `clock_from_tick`,
 
 **Syscall exposure** (syscall.c:439-461, include/syscall.h:63-64, 203-208):
 `SYS_SOUND_INFO 40` fills `sound_info_t {u32 present, rate, channels,
-reserved}`. `SYS_SOUND_WRITE 41` takes (frames pointer, count), caps count at
+room, queued}` (`room` and `queued` since 0.96.0, from `sound_room` and
+`sound_queued`; the field was `reserved`). `SYS_SOUND_WRITE 41` takes (frames pointer, count), caps count at
 4096 frames per call, checks the user range, and calls `sound_write`. There is
 **no syscall for volume or tone**. Volume comes from the theme
 (`theme_set_volume_live`, theme.c:462-469; `wm_run`, wm.c:3884). Tones come

@@ -381,7 +381,7 @@ Complete table (number, kernel handler, sdk wrapper, args → return):
 | 37 | sys_win_resize | win_resize | rbx=handle, rcx=w, rdx=h | 0/-1 |
 | 38 | sys_clip_set | clip_set | rbx=text, rcx=len | len or -1 (len≤CLIP_MAX 65536) |
 | 39 | sys_clip_get | clip_get/clip_len | rbx=buf, rcx=cap | cap==0 → length; else copied bytes |
-| 40 | sys_sound_info | sound_info | rbx=sound_info* | 0/-1 |
+| 40 | sys_sound_info | sound_info | rbx=sound_info* | 0/-1; fills present, rate, channels, room, queued (the last two since 0.96.0) |
 | 41 | sys_sound_write | sound_write | rbx=frames, rcx=count | frames written; count capped 4096 |
 | 42 | sys_power | power_off/power_reboot | rbx=POWER_OFF/REBOOT | no return on success, -1 else |
 | 43 | sys_spawn_argv | spawnv/spawn_arg | rbx=path, rcx=argv[], rdx=count | pid or -1 |

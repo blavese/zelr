@@ -339,12 +339,17 @@ par_start "what a program can do that it could not" ring3test
 # to the run above: the block layer would not split a request past eight
 # sectors, which only AHCI refuses, and ACPI was never given the pointer the
 # UEFI loader had already found. Both would have shown up first on a laptop.
+#
+# With an HD Audio controller that plays to nowhere, so [sound] runs: no other
+# run here has a sound card, and its checks (the ring's room and what is
+# queued, a note's length) skipped themselves in every gate until 0.96.0.
 selftest_q35() {
   rm -f gateq.img
   head -c 33554432 /dev/zero > gateq.img
   local out
   out="$(timeout 300 "$QEMU" -machine q35 -kernel build/zelr.bin -m 256 -no-reboot \
       -display none -serial stdio -append selftest \
+      -audiodev none,id=snd0 -device intel-hda -device hda-output,audiodev=snd0 \
       -drive "file=gateq.img,format=raw,if=none,id=d0" \
       -device ahci,id=ahci -device ide-hd,drive=d0,bus=ahci.0 \
       -device isa-debug-exit,iobase=0xf4,iosize=0x04 2>&1)"

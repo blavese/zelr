@@ -241,7 +241,7 @@ at `:504-507` records the historical 32-vs-64 overflow).
 | `sbrk(i64 delta)` | 741-743 | 47 | returns old break, **0 on failure** (not -1); break starts at `0x8010000000`, max `0x8038000000`; byte granular, pages mapped as crossed; negative delta lowers the break but keeps the pages (`kernel/user.c:156-194`) |
 
 *Clipboard / sound / power* (`:766-811`): `clip_set(text, len)` (38; len ≤ 65536), `clip_get(out, cap)` (39; cap 0 →
-length), `clip_len()`; `zelr_sound {u32 present, rate, channels, reserved;}`, `sound_info` (40), `sound_write(frames,
+length), `clip_len()`; `zelr_sound {u32 present, rate, channels, room, queued;}` (room: frames a write takes without waiting; queued: written, not played; 0.96.0), `sound_info` (40), `sound_write(frames,
 count)` (41; ≤ 4096 frames per call, blocks while the buffer drains); `power_off()`/`power_reboot()` (42 with
 `POWER_OFF 0`/`POWER_REBOOT 1`; flushes disks first).
 
