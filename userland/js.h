@@ -90,7 +90,14 @@
    slow machine: React putting Al Jazeera's page together took fifty million,
    and was stopped half way. A context's own `time_cap` may be shorter. */
 #define JS_STEP_CAP  2000000000u
+/* Not in a stress build, where collecting every few allocations makes the
+   heaviest checks take minutes: a clock there stopped two of them, which
+   then said nothing about the collector. */
+#if JS_GC_STRESS
+#define JS_TIME_CAP  0
+#else
 #define JS_TIME_CAP  1000
+#endif
 #define JS_DEPTH_CAP 800
 
 /* How much of the machine's stack the scripts may use, below wherever the
@@ -334,6 +341,7 @@ typedef struct {
 #define NF_STATIC  16         /* a class member on the class itself */
 #define NF_PAREN   32         /* written in brackets */
 #define NF_TLA     64         /* a module's body that awaits at its top level */
+#define NF_LAZY    128        /* a function's body not read yet (jsparse.h, js_parse_lazy) */
 
 /* Function flags, in the op of an N_FUNC. */
 #define FN_ARROW     0x0001
@@ -513,6 +521,7 @@ typedef struct jctx {
        span's index in spans. */
     jstr  **srcs;
     int     nsrcs, capsrcs, cur_src;
+    int     eager;            /* read every function's body as it is met (none left for later) */
     jspan  *spans;
     int     nspans, capspans;
 } jctx;

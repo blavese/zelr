@@ -876,6 +876,9 @@ typedef struct {
     int     module;
     jfnctx *top;
     int     tla;
+
+    /* The function about to be read may leave its body for later (js_parse_func). */
+    int     lazy_next;
 } jparse;
 
 #define JS_NESTED(P, stmt) do { int keep_in_ = (P)->no_in; (P)->no_in = 0; \
@@ -2258,8 +2261,116 @@ static int js_directive_strict(jparse *P) {
 
 static int js_parse_block(jparse *P);
 
+/* --- bodies read when they are first run ----------------------------------
+ *
+ * A page's bundle is megabytes of functions, most of which never run: a
+ * library's every feature, a site's every screen. Reading each into the tree
+ * as it was met cost 32 bytes a node and YouTube's watch page more than the
+ * three million nodes a page may have. So the body of a function written
+ * with `function` is passed over -- its tokens read, to find where it ends,
+ * and nothing kept -- and read into the tree the first time it is called
+ * (js_parse_lazy, from js_run_function). What is known without the body is
+ * kept: the name, the parameters, whether it is strict (its directive is
+ * looked at before it is passed over), a generator or async. What the body
+ * says of itself (whether it uses arguments, super or new.target, the names
+ * its vars declare) is worked out when it is read.
+ *
+ * A function written straight after an opening bracket or a ! is nearly
+ * always called where it stands, the way a bundle wraps itself, and is read
+ * at once rather than twice. An error in a body is found when it is first
+ * called, not when the script is read: what every engine finds early, this
+ * finds late, and only in a function that never runs does that differ. */
+
+/* The body after its opening brace, passed over to its closing one, which is
+   left as the current token: braces counted, with a template's ${ } told
+   apart from a block's so that the lexer can carry on with the template. */
+static void js_skip_body(jparse *P) {
+    int depth = 0, tn = 0, tdepth[64];
+    for (;;) {
+        if (P->L.failed || P->L.tok.type == T_EOF) return;
+        if (P->L.tok.type == T_TEMPLATE) {
+            if (!(P->L.tok.flags & 1)) {
+                if (tn == 64) { js_parse_fail(P, P->L.tok.line, "templates nested too deep", 0, 0); return; }
+                tdepth[tn++] = depth;
+            }
+            js_next(&P->L);
+            continue;
+        }
+        if (js_at_punct(P, '{')) { depth++; js_next(&P->L); continue; }
+        if (js_at_punct(P, '}')) {
+            if (tn && tdepth[tn - 1] == depth) {
+                /* The end of a ${ }: the template carries on from here. */
+                js_template_piece(&P->L);
+                if (P->L.failed) return;
+                if (P->L.tok.flags & 1) tn--;
+                js_next(&P->L);
+                continue;
+            }
+            if (depth == 0) return;
+            depth--;
+        }
+        js_next(&P->L);
+    }
+}
+
+static int js_parse_stmt(jparse *P);
+
+/* A body passed over, read now: from the token after its brace to the brace
+   that closes it, with what the reading learns put on the function. 0 when
+   the text does not read, with the error the page is told. */
+static int js_parse_lazy(jctx *J, int fnode) {
+    int body = J->nodes[fnode].a;
+    if (body < 0 || !(J->nodes[body].flags & NF_LAZY)) return 1;
+    int src = J->nodes[body].b >> 1, module = J->nodes[body].b & 1;
+    if (src < 0 || src >= J->nsrcs || !J->srcs[src]) return 0;
+    jstr *text = J->srcs[src];
+    int fl = J->nodes[fnode].op;
+    jfnctx fc = { -1, -1, fl & (FN_ASYNC | FN_GEN | FN_STRICT), 0, 0 };
+    jparse P;
+    memset(&P, 0, (int)sizeof(P));
+    P.J = J;
+    P.last_arrow = -1;
+    P.fc = &fc;
+    P.module = module;
+    P.top = 0;
+    P.L.J = J;
+    P.L.src = text->s;
+    P.L.n = text->len;
+    P.L.at = (u32)J->nodes[body].d;
+    P.L.line = J->nodes[body].line;
+    P.L.tok.type = T_EOF;
+    char here;
+    P.stack_floor = J->stack_limit ? J->stack_limit : &here - JS_STACK_BUDGET;
+    int keep_src = J->cur_src, keep_module = J->parse_module;
+    J->cur_src = src;
+    J->parse_module = module;
+    js_next(&P.L);
+    int line = J->nodes[body].line;
+    jchain ch = { -1, -1 };
+    while (!js_at_punct(&P, '}') && P.L.tok.type != T_EOF && !P.L.failed && J->sig != JS_FAILED) {
+        int st = js_parse_stmt(&P);
+        if (st < 0) break;
+        int cell = js_chain_add(&P, &ch, line);
+        if (cell < 0) break;
+        J->nodes[cell].a = st;
+    }
+    if (!P.L.failed && J->sig != JS_FAILED) js_expect(&P, '}');
+    J->cur_src = keep_src;
+    J->parse_module = keep_module;
+    if (P.L.failed || J->sig == JS_FAILED) return 0;
+    J->nodes[body].a = ch.head;
+    J->nodes[body].c = fc.vars;
+    J->nodes[body].b = -1;
+    J->nodes[body].d = -1;
+    J->nodes[body].flags &= (u8)~NF_LAZY;
+    J->nodes[fnode].op = (u16)(J->nodes[fnode].op | fc.uses | (fc.flags & FN_STRICT));
+    return 1;
+}
+
 static int js_parse_function_rest(jparse *P, int flags, jstr *name, int line, ntype kind, u32 start) {
     jctx *J = P->J;
+    int lazy = P->lazy_next && !J->eager && J->cur_src >= 0;
+    P->lazy_next = 0;
     int n = js_node(J, kind, line);
     if (n < 0) return -1;
     J->nodes[n].str = name;
@@ -2283,8 +2394,16 @@ static int js_parse_function_rest(jparse *P, int flags, jstr *name, int line, nt
     if (js_directive_strict(P)) fc.flags |= FN_STRICT;
     /* The body, read as a block but without the brace already taken. */
     int body = js_node(J, N_BLOCK, line);
+    if (lazy && body >= 0) {
+        /* Or passed over, to be read where it starts when it is run. */
+        J->nodes[body].d = (int)P->L.tok.start;
+        J->nodes[body].line = P->L.tok.line;
+        J->nodes[body].b = J->cur_src * 2 + (J->parse_module ? 1 : 0);
+        J->nodes[body].flags |= NF_LAZY;
+        js_skip_body(P);
+    }
     jchain ch = { -1, -1 };
-    while (!js_at_punct(P, '}') && P->L.tok.type != T_EOF && !P->L.failed) {
+    while (!lazy && !js_at_punct(P, '}') && P->L.tok.type != T_EOF && !P->L.failed) {
         int st = js_parse_stmt(P);
         if (st < 0) break;
         int cell = js_chain_add(P, &ch, line);
@@ -2299,7 +2418,7 @@ static int js_parse_function_rest(jparse *P, int flags, jstr *name, int line, nt
     if (body >= 0) {
         J->nodes[body].a = ch.head;
         J->nodes[body].flags |= NF_BODY;
-        J->nodes[body].c = fc.vars;
+        J->nodes[body].c = lazy ? -1 : fc.vars;
     }
     int fl = (flags & ~FN_STRICT) | (fc.flags & FN_STRICT) | fc.uses | (simple ? FN_SIMPLE : 0);
     J->nodes[n].a = body;
@@ -2335,6 +2454,12 @@ static int js_parse_func(jparse *P, int is_decl, int flags) {
         js_parse_fail(P, line, "a function declaration needs a name", 0, 0);
         return -1;
     }
+    /* Its body left for later, unless a bracket or a ! before it says it is
+       about to be called where it stands. */
+    u32 k = start;
+    while (k > 0 && (P->L.src[k - 1] == ' ' || P->L.src[k - 1] == '\t' || P->L.src[k - 1] == '\n'
+                     || P->L.src[k - 1] == '\r')) k--;
+    P->lazy_next = !(k > 0 && (P->L.src[k - 1] == '(' || P->L.src[k - 1] == '!'));
     int f = js_parse_function_rest(P, flags, name, line, is_decl ? N_FUNCDECL : N_FUNC, start);
     if (f >= 0 && !is_decl && name) P->J->nodes[f].op |= FN_SELFNAME;
     return f;

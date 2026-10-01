@@ -1323,6 +1323,20 @@ static jval js_call_function(jctx *J, jobj *f, jval this_val, jval *argv, int ar
 static jval js_run_function(jctx *J, jobj *f, jval this_val, jval *argv, int argc,
                             jval new_target, jval *this_out) {
     int node = f->node;
+    /* A body passed over when the script was read is read now (jsparse.h). */
+    int body0 = J->nodes[node].a;
+    if (body0 >= 0 && (J->nodes[body0].flags & NF_LAZY)) {
+        int saved_line = J->error_line;
+        jsignal before = J->sig;
+        if (!js_parse_lazy(J, node)) {
+            char why[sizeof(J->error)];
+            for (u32 i = 0; i < sizeof(why); i++) why[i] = J->error[i];
+            int at = J->error_line;
+            J->sig = before;
+            J->error_line = saved_line;
+            return js_throw(J, JS_ERR_SYNTAX, why, at);
+        }
+    }
     int fl = J->nodes[node].op;
     int body = J->nodes[node].a;
     int params = J->nodes[node].b;

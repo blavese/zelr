@@ -59,6 +59,44 @@ static void expect(const char *what, const char *src, const char *want) {
     js_done(&J);
 }
 
+static void check(const char *what, int good);
+
+/* A bundle of functions of which one is called, read with the bodies left
+   for later and read whole: how many nodes each makes, and that both give
+   the same answer. The bodies left are most of it, and a library's are. */
+static void lazy_reading(void) {
+    static char src[24 * 1024];
+    int w = 0;
+    const char *head = "var lib = {};";
+    for (const char *p = head; *p; p++) src[w++] = *p;
+    for (int i = 0; i < 100; i++) {
+        const char *f = "lib.f = function (a, b) { var t = 0; for (var i = 0; i < a; i++) { t += i * b + (i % 3 ? 1 : 2); }"
+                        " if (t > 10) { return { t: t, s: 'x' + t, l: [a, b, t] }; } return null; };";
+        for (const char *p = f; *p; p++) src[w++] = *p;
+    }
+    const char *tail = "result = lib.f(5, 2).t;";
+    for (const char *p = tail; *p; p++) src[w++] = *p;
+    src[w] = 0;
+    int nodes[2];
+    char got[2][16];
+    for (int eager = 0; eager < 2; eager++) {
+        jctx J;
+        js_init(&J);
+        J.eager = eager;
+        int ok = js_run(&J, src, (u32)w);
+        jval r = ok ? js_get(&J, js_from_obj(J.global_obj), js_intern(&J, "result", 6)) : js_undef();
+        jstr *t = js_to_str(&J, r);
+        int n = 0;
+        for (; t && n < (int)t->len && n < 15; n++) got[eager][n] = t->s[n];
+        got[eager][n] = 0;
+        nodes[eager] = J.nnodes;
+        js_done(&J);
+    }
+    check("a bundle read with its bodies left for later gives the answer it gives read whole",
+          got[0][0] && got[0][0] == got[1][0] && strlen(got[0]) == strlen(got[1]));
+    check("and makes less than a fifth of the nodes", nodes[0] * 5 < nodes[1]);
+}
+
 /* A whole script whose answer is its global `result`, for the collector
    (jsgc.h): it must also have run at least `runs` times, and what is left in
    use after it be under `most` bytes. */
@@ -358,6 +396,34 @@ int main(void) {
            "result = fact(10)", "3628800");
     script("arguments",
            "function n(){ return arguments.length } result = n(1,2,3)", "3");
+
+    /* A function's body is read when it is first called (jsparse.h,
+       js_parse_lazy): what is passed over must be passed over exactly --
+       braces in strings, templates and patterns are not the body's -- and
+       what is read later must be what was written. */
+    script("a body passed over reads the same when it is called: braces in templates, strings and patterns",
+           "function f(x) { var t = `a${ {b: 1}.b }c${ `in${ x }ner` }d}`; var s = '}{'; var r = /[}{]+/g;"
+           "  if (x) { return t + s + '}'.replace(r, '!') + (function () { return '{'; })(); } return 0; }"
+           "result = f(5)", "a1cin5nerd}}{!{");
+    script("and a division after a bracket is not a pattern",
+           "function g(a, b) { var q = (a) / b / 2; return q; } result = g(8, 2)", "2");
+    script("its strictness, its arguments and its vars are its own",
+           "function s() { 'use strict'; return this === undefined; }"
+           "function a() { var v = 1; function inner() { return v + arguments.length; } return inner(1, 2); }"
+           "function h() { return typeof later; var later = 1; }"
+           "result = [s(), a(), h()].join(' ')", "true 3 undefined");
+    script("a generator, an async function and a function that makes functions, each read when first run",
+           "function* gen() { yield 1; yield 2; } function mk(n) { return function () { return n * 2; }; }"
+           "async function as() { return 7; } var out = [];"
+           "as().then(function (v) { out.push(v); });"
+           "result = [...gen()].join('') + ' ' + mk(4)() + ' ' + mk(5)()", "12 8 10");
+    script("a mistake in a body is told when the function is called, as a SyntaxError the page can catch",
+           "function broken() { var = 1; } var r = 'read';"
+           "try { broken(); } catch (e) { r += ' ' + e.name; } try { broken(); } catch (e) { r += ' again'; }"
+           "result = r", "read SyntaxError again");
+    script("and a function passed over still says what it was written as",
+           "function shown(a, b) { return `${a}+${b}`; } result = shown.toString() + ' ' + shown(1, 2)",
+           "function shown(a, b) { return `${a}+${b}`; } 1+2");
 
     /* --- statements ------------------------------------------------------- */
     script("a for loop",
@@ -1840,6 +1906,7 @@ int main(void) {
               " result = a.slice(0, 60).map(function (e) { return e.n; }).slice(0, 5).join() + ' ' + a.length + ' ' + JSON.stringify(o, [5001, 5002, 'x']);",
               "1,2,3,4,5 3000 {\"5001\":\"one\",\"5002\":{\"x\":\"two\"}}", 2, 20u * 1024 * 1024);
     where_memory_is();
+    lazy_reading();
     collector_inside();
 
     /* The count, at the end. It used to be printed half way down, so every
