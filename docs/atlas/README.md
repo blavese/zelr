@@ -95,6 +95,12 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.85.0
+
+- **Every named character reference (11, entities.h from tools/mkentities.py)**, as written, the old ones also
+  without a semicolon; 36 were known, and MSN's weather read "&lrm;72". pagetest, failing with any name taken
+  without its semicolon and with the semicolon path left out.
+
 ### 0.84.0
 
 - **A collector for the JavaScript engine (12, jsgc.h)**: conservative mark and sweep over the stacks, the suspended

@@ -1,6 +1,12 @@
 # 11 -- The web browser (everything except JS-engine internals and image decoders)
 
-**Since 0.83.0** (the rest of this file is older; trust the code and the README's "since 6048716" list):
+**Since 0.85.0** (the rest of this file is older; trust the code and the README's "since 6048716" list):
+- **Every named character reference** (userland/entities.h, written by tools/mkentities.py from Python's copy of the
+  standard's table: 2125 names, sorted, `html_named` halves to one). Read as written (case matters); with its
+  semicolon any name, without one only the 106 old ones, the longest that starts the run (`&notit;` is the not sign
+  and "it;"). The text is still folded to ASCII (`html_fold_cp`), so a sign it has no fold for is `?`.
+
+**Since 0.83.0**:
 - **Shadow trees a script attaches are drawn** (dom.h `dom_flat`, browser.c `page_drawn`). The page is laid out from a
   copy (`flat_mem`) in which each tree jsdom knows of (`jsdom_shadow`) is in place: its contents are its element's
   children, and each slot holds its element's children given to it by their slot attribute (the rest to the first slot
