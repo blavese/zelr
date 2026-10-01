@@ -1,12 +1,18 @@
 # 11 -- The web browser (everything except JS-engine internals and image decoders)
 
-**Since 0.88.0** (the rest of this file is older; trust the code and the README's "since 6048716" list):
+**Since 0.89.0** (the rest of this file is older; trust the code and the README's "since 6048716" list):
+- **A row's items stretch** (layout.h `lay_stretch`, called from `lay_flex_line` and both grid ways): an item whose
+  align-self (or the row's align-items) is stretch, with no height or max-height of its own, has its own box made as
+  tall as the row's tallest. Only the box grows: what is in it stays at the top and nothing is laid out again, so a
+  percentage height inside does not follow (in a browser it would). An item that draws no box of its own shows no
+  change.
+
+**Since 0.88.0**:
 - **A grid's rows take their sizes** (css.h `grid_rows`, `grid_auto_rows`; layout.h `lay_grid_rows`, read by the
   column reader `lay_grid_tracks` handed the row template): a length is the row's height, minmax a floor and cap,
   fr/auto and percentages from the grid's own `height` when it has one and the content's height when not, and rows the
   template names exist empty. A grid that sizes its rows goes the placed way (`lay_grid_placed`), which keeps a table
-  of rows; the row-by-row way had none. Items are not stretched to their row: they sit at its top, or as align-items
-  says.
+  of rows; the row-by-row way had none. (Items stretch to their row since 0.89.0.)
 
 **Since 0.85.0**:
 - **Every named character reference** (userland/entities.h, written by tools/mkentities.py from Python's copy of the

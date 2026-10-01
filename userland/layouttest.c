@@ -1837,6 +1837,22 @@ int main(void) {
             m1 && m2 && m3 && m2->y - m1->y == 80 && m3->y - m2->y == 30, m1 && m2 ? m2->y - m1->y : -1);
     }
 
+    /* --- stretch ------------------------------------------------------------------
+     *
+     * A row's items are as tall as the row unless they or it say otherwise;
+     * each card had been as tall as its own words. */
+    {
+        lay("<style>.r{display:flex}.r div{background:#000;width:100px}.s{align-self:flex-start}.t{height:20px}"
+            ".k { display: grid; grid-template-columns: 100px 100px } .k div { background: #000 }</style>"
+            "<div class=r><div id=f1>a</div><div id=f2>b<br>b<br>b</div><div id=f3 class=s>c</div><div id=f4 class=t>d</div></div>"
+            "<div class=k><div id=k1>a</div><div id=k2>b<br>b<br>b</div></div>", 600);
+        const litem *f1 = box_of(by_id("f1")), *f2 = box_of(by_id("f2")), *f3 = box_of(by_id("f3")), *f4 = box_of(by_id("f4"));
+        const litem *k1 = box_of(by_id("k1")), *k2 = box_of(by_id("k2"));
+        okn("a flex row's items stretch to its tallest, but not one that starts or has a height",
+            f1 && f2 && f3 && f4 && f1->h == f2->h && f3->h < f2->h && f4->h < f2->h, f1 && f2 ? f2->h - f1->h : -1);
+        okn("and so do a grid row's", k1 && k2 && k1->h == k2->h && k2->h > 30, k1 && k2 ? k2->h - k1->h : -1);
+    }
+
     puts(failed ? "LAYOUTTEST_FAIL\n" : "LAYOUTTEST_PASS\n");
     return failed;
 }

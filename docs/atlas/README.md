@@ -95,6 +95,13 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.89.0
+
+- **A row's items stretch to its tallest (11, `lay_stretch`)**: in flex rows and grids each card was as tall as its own
+  words. layouttest, failing with the box left alone and with an item's own height and align-self ignored.
+- **A stroke is as wide as the transforms around it make it (13, `sv_paint`)**: only the drawing's own scale was
+  applied, so an icon drawn through scale(0.5) had strokes twice as thick. svgtest, failing with the transforms left out.
+
 ### 0.88.0
 
 - **grid-template-rows and grid-auto-rows (11, `lay_grid_rows`)**: every row had been as tall as its content.

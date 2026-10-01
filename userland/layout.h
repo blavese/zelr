@@ -2391,6 +2391,25 @@ static int lay_measure(lctx *L, int node, const cstyle *parent, int avail,
 /* One line of flex items along the row: kid[0..n), with what each would
    like (want, which this changes to what each gets), the narrowest each can
    go (low), its measured height and how much it grows. */
+/* Stretch, which is what a row's items do unless they or the row say
+   otherwise: an item's own box made taller by what the row's tallest has
+   over it, `more`. What is in it stays at the top, as it does in a browser
+   for anything but a percentage height inside, so nothing is laid out
+   again. An item with a height of its own, or a cap on it, keeps it. Every
+   card in a row of them had been as tall as its own words. */
+static void lay_stretch(lctx *L, int node, const cstyle *ps, int cw, int align_items,
+                        int first, int end, int more) {
+    if (more <= 0 || L->d->nodes[node].kind != DN_ELEMENT) return;
+    cstyle own;
+    lay_style(L, node, ps, &own, cw);
+    int al = own.align_self >= 0 ? own.align_self : align_items;
+    if (al != AI_STRETCH || own.height >= 0 || own.max_height >= 0) return;
+    for (int k = first; k < end; k++) {
+        litem *it = &L->out->items[k];
+        if (it->node == node && it->kind == LK_BOX) { it->h += more; return; }
+    }
+}
+
 static void lay_flex_line(lctx *L, const cstyle *st, const int *kid, const int *par, int n,
                           const int *meas, int *want, const int *low,
                           const int *high, const int *grow, const int *aself,
@@ -2578,10 +2597,9 @@ static void lay_flex_line(lctx *L, const cstyle *st, const int *kid, const int *
     first[n] = L->out->nitems;
 
     /* Slid down the cross axis afterwards, which is cheaper than laying it
-       out somewhere else and gives the same answer. Stretch is left where it
-       is: making a child taller means laying it out again with a height it
-       did not ask for, and a box at the top of its row is what stretch looks
-       like when everything in it is the same height anyway. */
+       out somewhere else and gives the same answer. Stretch leaves what is
+       in a child where it is and only makes its own box taller
+       (lay_stretch). */
     for (int idx = 0; idx < n; idx++) {
         int dy = 0;
         int i = reverse ? n - 1 - idx : idx;
@@ -2591,6 +2609,11 @@ static void lay_flex_line(lctx *L, const cstyle *st, const int *kid, const int *
         if (dy > 0)
             for (int k = first[idx]; k < first[idx + 1]; k++)
                 L->out->items[k].y += dy;
+        if (al == AI_STRETCH && got[idx] < tallest) {
+            cstyle pbuf;
+            const cstyle *ps = lay_item_parent(L, st, par[i], cw, &pbuf);
+            lay_stretch(L, kid[i], ps, cw, st->align_items, first[idx], first[idx + 1], tallest - got[idx]);
+        }
     }
 
     *y = top + tallest;
@@ -3906,6 +3929,7 @@ static int lay_grid_placed(lctx *L, int node, const cstyle *st, int cw, int ncol
                : st->align_items == AI_END ? area - got : 0;
         if (dy > 0)
             for (int j = first; j < L->out->nitems; j++) L->out->items[j].y += dy;
+        lay_stretch(L, r[GR_NODE], ps, cw, st->align_items, first, L->out->nitems, area - got);
     }
     lay_gpool_top -= n * GR_N;
     if (nrows) *y = top[nrows] - gap;
@@ -4003,7 +4027,7 @@ static void lay_grid(lctx *L, int node, const cstyle *st, int cx, int cw, int *y
     if ((named_row || st->grid_rows || st->grid_auto_rows)
         && lay_grid_placed(L, node, st, cw, ncols, colx, gap, names, nnames, y)) return;
 
-    struct { int first, end, h; } row[LAY_GRID_COLS];
+    struct { int first, end, h, node, from; } row[LAY_GRID_COLS];
     int nrow = 0, col = 0, top = *y, rowh = 0, any = 0;
     lay_items_start(L, &it, node, st);
     for (;;) {
@@ -4030,6 +4054,9 @@ static void lay_grid(lctx *L, int node, const cstyle *st, int cx, int cw, int *y
                        : st->align_items == AI_END ? rowh - row[i].h : 0;
                 if (dy > 0)
                     for (int j = row[i].first; j < row[i].end; j++) L->out->items[j].y += dy;
+                cstyle sb;
+                lay_stretch(L, row[i].node, lay_item_parent(L, st, row[i].from, cw, &sb), cw, st->align_items,
+                            row[i].first, row[i].end, rowh - row[i].h);
             }
             top += rowh + gap;
             rowh = 0;
@@ -4049,6 +4076,8 @@ static void lay_grid(lctx *L, int node, const cstyle *st, int cx, int cw, int *y
             row[nrow].first = first;
             row[nrow].end = L->out->nitems;
             row[nrow].h = cy - top;
+            row[nrow].node = k;
+            row[nrow].from = from;
             nrow++;
         }
         if (cy - top > rowh) rowh = cy - top;
