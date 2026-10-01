@@ -2055,6 +2055,50 @@ static void test_wm_keys(void) {
         }
         wm_close(w);
     }
+
+    /* A window that opened smaller than a window may be resized to can be
+       restored after a maximise: its restore was refused, and it stayed
+       maximised for good. */
+    {
+        window_t *small = wm_create("small", 30, 30, 100, 50);
+        if (small) {
+            small->resizable = true;
+            bool up = wm_test_maximize(small);
+            bool down = !wm_test_maximize(small);
+            ok("a window smaller than the least resize maximises and comes back",
+               up && down && small->cw >= 100 && small->cw < 400 && small->ch < 300);
+        }
+        wm_close(small);
+    }
+
+    /* Find walks every match once, front to back as the windows stood when
+       the word was typed. Going to a match raises its window, and the next
+       return was numbered from the new front: it skipped the rest of that
+       window's matches and went back to the first window's. */
+    {
+        window_t *back = wm_create("back", 40, 40, 160, 100);
+        window_t *front = wm_create("front", 60, 60, 160, 100);
+        if (back && front) {
+            wm_set_text(back, "ab ab ab", 8);
+            wm_set_text(front, "ab ab", 5);
+            wm_test_key(6);                                  /* ctrl+f */
+            wm_test_key('a');
+            wm_test_key('b');
+            window_t *want[6] = { front, front, back, back, back, front };
+            int want_at[6] = { 0, 1, 0, 1, 2, 0 };
+            bool walked = true;
+            for (int i = 0; i < 6; i++) {
+                if (i) wm_test_key('\n');
+                int local = -1;
+                window_t *at = wm_test_find_last(&local);
+                if (at != want[i] || local != want_at[i]) walked = false;
+            }
+            ok("return walks every match once, in the order the windows stood", walked);
+            wm_test_key(27);
+        }
+        wm_close(front);
+        wm_close(back);
+    }
 }
 
 static void winsrv_checks(void);

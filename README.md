@@ -1524,7 +1524,7 @@ byte.
 ## testing
 
 The kernel tests itself. `./run.sh -T` boots with selftest on the command line,
-runs 708 checks across every subsystem, then writes to QEMU's debug-exit port
+runs 714 checks across every subsystem, then writes to QEMU's debug-exit port
 so the host gets a real exit status.
 
     [string]                8 checks   [live tree]            23 checks
@@ -1554,7 +1554,7 @@ so the host gets a real exit status.
     [theme]                19 checks   [kernel stack]          3 checks
     [taskbar]              18 checks
 
-    708 passed, 0 failed
+    714 passed, 0 failed
     SELFTEST_PASS
 
 The sound section is skipped because `run.sh` attaches no sound card, the

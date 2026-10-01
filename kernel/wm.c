@@ -1915,8 +1915,12 @@ static void draw_chrome(window_t *w, bool focused) {
  * replaced. One a program draws into is the window server's business,
  * because the same memory is mapped into that program's address space and
  * the program has to be told. */
+/* The smallest a window may be resized to. */
+#define WM_MIN_CW 120
+#define WM_MIN_CH 60
+
 bool wm_resize(window_t *w, int cw, int ch) {
-    if (!w || cw < 120 || ch < 60) return false;
+    if (!w || cw < WM_MIN_CW || ch < WM_MIN_CH) return false;
     if (w->cw == cw && w->ch == ch) return true;
 
     if (w->owned_by_user) return winsrv_resize_window(w, cw, ch);
@@ -1985,7 +1989,12 @@ static void apply_snap(window_t *w, snap_t zone) {
 static void toggle_maximize(window_t *w) {
     if (!w->resizable) return;
     if (w->maximized) {
-        if (place(w, w->restore_x, w->restore_y, w->restore_cw, w->restore_ch))
+        /* No smaller than a window may be resized to: one that opened
+           smaller had its restore refused, and could be maximised and never
+           brought back. */
+        int cw = w->restore_cw < WM_MIN_CW ? WM_MIN_CW : w->restore_cw;
+        int ch = w->restore_ch < WM_MIN_CH ? WM_MIN_CH : w->restore_ch;
+        if (place(w, w->restore_x, w->restore_y, cw, ch))
             w->maximized = false;
     } else {
         apply_snap(w, SNAP_FULL);
@@ -3593,18 +3602,52 @@ static int find_count_in(const window_t *w, const char *q, int qn) {
     return n;
 }
 
-/* Counted over the whole screen, and the window the current match is in.
-   Walked from the front backwards, because the window somebody is looking
-   at is the one they mean. */
+/* The order the matches are numbered in: the windows front to back as they
+   were when the words were typed, kept while return walks them. Numbered by
+   the stack as it stands, the window a match was taken to came to the front
+   and was numbered first, so the next return skipped the rest of its
+   matches and went back to ones already seen. A window that closes drops
+   out and one that opens goes at the end; only the pointers are compared,
+   so a closed window's record is never read. */
+static window_t *find_order[WM_MAX_WINDOWS];
+static int find_norder;
+
+static void find_order_take(void) {
+    find_norder = 0;
+    for (int i = nwin - 1; i >= 0 && find_norder < WM_MAX_WINDOWS; i--) find_order[find_norder++] = stack[i];
+}
+
+static int stack_index_of(const window_t *w) {
+    for (int i = 0; i < nwin; i++) if (stack[i] == w) return i;
+    return -1;
+}
+
+static void find_order_tidy(void) {
+    int k = 0;
+    for (int j = 0; j < find_norder; j++)
+        if (stack_index_of(find_order[j]) >= 0) find_order[k++] = find_order[j];
+    find_norder = k;
+    for (int i = nwin - 1; i >= 0; i--) {
+        bool known = false;
+        for (int j = 0; j < find_norder && !known; j++) known = find_order[j] == stack[i];
+        if (!known && find_norder < WM_MAX_WINDOWS) find_order[find_norder++] = stack[i];
+    }
+}
+
+/* Counted over the whole screen, and the window the current match is in,
+   in the order above: the window somebody was looking at when they typed
+   is the one they meant first. */
 static void find_recount(void) {
     find_total = 0;
     find_windows = 0;
     find_win = -1;
+    find_order_tidy();
 
     int seen = 0;
-    for (int i = nwin - 1; i >= 0; i--) {
-        window_t *w = stack[i];
-        if (w->minimized) continue;
+    for (int j = 0; j < find_norder; j++) {
+        window_t *w = find_order[j];
+        int i = stack_index_of(w);
+        if (i < 0 || w->minimized) continue;
         if (w->textlen > 0) find_windows++;
         int n = find_count_in(w, find_q, find_qn);
         if (!n) continue;
@@ -3620,12 +3663,15 @@ static void find_recount(void) {
         /* The count moved under it -- somebody typed another letter -- so
            start again at the first one. */
         find_at = 0;
-        for (int i = nwin - 1; i >= 0 && find_win < 0; i--)
-            if (!stack[i]->minimized
-                && find_count_in(stack[i], find_q, find_qn))
-                find_win = i;
+        for (int j = 0; j < find_norder && find_win < 0; j++) {
+            int i = stack_index_of(find_order[j]);
+            if (i >= 0 && !stack[i]->minimized && find_count_in(stack[i], find_q, find_qn)) find_win = i;
+        }
     }
 }
+
+static window_t *find_last_win;          /* where find_go last went, for the self test */
+static int find_last_local;
 
 /* Take the match to whoever is showing it: raise the window and tell it
    which one, so a program that can scroll to a word does. */
@@ -3634,11 +3680,15 @@ static void find_go(void) {
     window_t *w = stack[find_win];
 
     int local = find_at;
-    for (int i = nwin - 1; i > find_win; i--)
-        if (!stack[i]->minimized)
+    for (int j = 0; j < find_norder && find_order[j] != w; j++) {
+        int i = stack_index_of(find_order[j]);
+        if (i >= 0 && !stack[i]->minimized)
             local -= find_count_in(stack[i], find_q, find_qn);
+    }
     if (local < 0) local = 0;
 
+    find_last_win = w;
+    find_last_local = local;
     wm_raise(w);
     wm_event_t ev = { WM_EV_FIND, 0, local, 0, 0 };
     wm_push_event(w, &ev);
@@ -3695,6 +3745,7 @@ static void find_start(void) {
     find_qn = 0;
     find_q[0] = 0;
     find_at = 0;
+    find_order_take();
     find_recount();
     need_frame();
 }
@@ -3717,6 +3768,7 @@ static bool find_key(int key) {
         if (find_qn > 0) {
             find_q[--find_qn] = 0;
             find_at = 0;
+            find_order_take();
             find_recount();
             if (find_total > 0) find_go();
             else find_clear_marks();
@@ -3728,6 +3780,7 @@ static bool find_key(int key) {
         find_q[find_qn++] = (char)c;
         find_q[find_qn] = 0;
         find_at = 0;
+        find_order_take();
         find_recount();
         /* Taken to straight away, the way a find field does: what is being
            looked for is usually on the screen already and waiting for
@@ -4397,6 +4450,7 @@ bool wm_test_damage(int x, int y, int w, int h, int out[4]) {
 int wm_test_chip_at(int x) { return taskbar_chip_at(x, taskbar_y() + TASKBAR_H / 2); }
 int wm_test_chips_x(void) { return taskbar_chips_x(); }
 bool wm_test_find_open(void) { return find_open; }
+window_t *wm_test_find_last(int *local) { if (local) *local = find_last_local; return find_last_win; }
 
 /* --- the pointer on its own ------------------------------------------------
  *

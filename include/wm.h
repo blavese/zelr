@@ -196,6 +196,9 @@ window_t *wm_test_nth(int n);
 int  wm_test_chip_at(int x);
 int  wm_test_chips_x(void);
 bool wm_test_find_open(void);
+/* Where the find bar last took a match: the window, and which of its
+   matches (*local). */
+window_t *wm_test_find_last(int *local);
 
 /* Runs the desktop until the user leaves it. */
 void wm_run(void);

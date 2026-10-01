@@ -95,6 +95,20 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.95.0
+
+- **The theme keeps what was set by hand (07 §10 11, 12)**: a ground set under a preset's accent was saved as the
+  preset alone and came back as its ground at the next save (every dock volume change saves); a look or light line
+  threw away a hand-set accent read before it, falling back on preset 1 or 0 by which line it was. `[theme]`, three
+  checks, failing with the preset written alone, with the colours always written, and with the accent not kept.
+- **A volume in the file is heard (07 §10 9)**. `[theme]`, failing with the reload not telling the driver.
+- **Find walks every match once (07 §10 8)**: going to a match raised its window and renumbered the rest. `[windows]`,
+  failing with the order taken afresh at every count.
+- **A small window comes back from a maximise (07 §10 24)**. `[windows]`, failing with the restore at its own size.
+- **HOST_PROFILE** in the host shim (tools/host/shim.c): where a program's time goes, innermost and on the stack, the
+  waits apart. Al Jazeera's scripts: the collector and the allocator a quarter, the evaluator and name lookups most of
+  the rest.
+
 ### 0.94.0
 
 - **Frames have windows, and blank ones documents (12, jsframe.h)**: contentWindow and contentDocument were null, so
