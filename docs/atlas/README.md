@@ -95,6 +95,13 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.103.0
+
+- **A video's frame redraws only its box (11)**, with whatever lies over it drawn over it again, and is committed alone.
+  msecheck: a box laid over the video stays in every look at the film, and the browser says most frames were drawn
+  alone; failing with only the video redrawn (the box lost in every look) and with frames never drawn alone.
+- **Block pictures keep their margins and centre with auto ones (11)**. layouttest: four checks, failing without it.
+
 ### 0.102.0
 
 - **Wireless reaches the network stack (06a)**: the station is a network device when a radio is the machine's network,

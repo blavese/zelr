@@ -1418,7 +1418,8 @@ states climbing as the buffer reaches past the playing position, seeking,
 waiting, `timeupdate` four times a second, `ended` -- while the pieces,
 fragmented MP4 holding H.264 and AAC, are taken apart (`mp4.h`), decoded,
 and played on the sound's clock (`media.h`), the picture drawn in the
-element's box. A page that simply names a file for its `<video>` or
+element's box -- and only that box redrawn for each new frame, with
+whatever the page lays over the video drawn over it again. A page that simply names a file for its `<video>` or
 `<audio>` plays too: an MP4 is asked for a stretch at a time by byte ranges,
 its index found wherever the encoder put it. A harness serves pages that do
 both from the host, and checks what the element told, the colours in its

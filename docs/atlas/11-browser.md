@@ -1,6 +1,18 @@
 # 11 -- The web browser (everything except JS-engine internals and image decoders)
 
-**Since 0.99.0** (the rest of this file is older; trust the code and the README's "since 6048716" list):
+**Since 0.103.0** (the rest of this file is older; trust the code and the README's "since 6048716" list):
+- **A video's frame is drawn alone** (browser.c `draw_video_frames`): when a frame is all that changed (`video_due`
+  without `dirty`), each video in sight has its box drawn into a surface that size (`frame_buf`): the page's canvas or
+  the well's colour, then `draw_page` with the scroll moved down to the box's top and every item not crossing its
+  columns skipped (`draw_x0`, `draw_x1`), so what lies over the video is drawn over it again; then copied into the
+  window and committed alone (`win_commit_rect`). A box that meets the well's rounded corners falls back to the whole
+  page. The image loop in `draw_page` now also keeps its rows inside the surface. Leaving a page prints
+  "browser: video frames drawn alone N, with the page M" when it had frames.
+- **A block picture keeps its margins** (layout.h): an img, svg or video laid out as a block -- a block's child or a box
+  of its own -- has its own top and bottom margins, and auto margins at its sides centre it (both paths used to start it
+  on a line at the block's top, its margins dropped).
+
+**Since 0.99.0**:
 - **Referer** (fetch.h, "who is asking"): `web_referrer_from` (the asking document's address) and `web_referrer_policy`
   (`REF_*`, the W3C Referrer Policy's eight, by name from `web_policy_of`, which also takes the old meta keywords) give
   every request a Referer from `web_referrer_for`: the default strict-origin-when-cross-origin sends the address less its
