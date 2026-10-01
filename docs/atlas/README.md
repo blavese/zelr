@@ -95,6 +95,19 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.91.0
+
+- **Strings counted in UTF-16 units (12, js.h `js_units`, `js_ubyte`)**: every length, index and offset a script saw
+  was in bytes, so an accent counted twice and an emoji four times. jstest (six new checks, and two that had written
+  down byte counts), failing with units read as bytes, with the count left as bytes, with halves not joined by `+`,
+  with a cut pair's half dropped, with a match's index in bytes, with atob's bytes kept raw, with the backward step
+  miscounted, with a lone byte not standing alone, with `+` miscounting what it joins, and with Segmenter's index in
+  bytes. The host site comparison found one page it broke, through the next item.
+- **An escaped character past ASCII in a pattern (12, jsregex.h `rx_escape_char`)** was read as one signed byte. The
+  `entities` escaper builds a class of every character it escapes, each after a backslash, and with strings counted
+  in units it began putting accented ones there: Al Jazeera's page stopped on "a range that runs backwards". jstest,
+  failing with the old reader.
+
 ### 0.90.0
 
 - **Boxes beside floats (11, `lay_beside_floats`)**: a box with overflow hidden, flow-root, a flex box, a grid or a

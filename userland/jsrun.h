@@ -348,15 +348,34 @@ static jstr *js_to_key(jctx *J, jval v) {
     return js_to_str(J, v);
 }
 
+/* Joined end to end; the two halves of a pair meeting there are the one
+   character they make, as they are in UTF-16 (what a page that took a
+   string apart unit by unit and put it back together expects to get). */
 static jstr *js_concat(jctx *J, jstr *a, jstr *b) {
     u32 n = (a ? a->len : 0) + (b ? b->len : 0);
     jstr *out = (jstr *)js_alloc(J, (u32)sizeof(jstr) + n + 1);
     if (!out) return a;
-    u32 w = 0;
+    u32 w = 0, skip = 0;
     for (u32 i = 0; a && i < a->len; i++) out->s[w++] = a->s[i];
-    for (u32 i = 0; b && i < b->len; i++) out->s[w++] = b->s[i];
+    if (w >= 3 && b && b->len >= 3 && (u8)out->s[w - 3] == 0xED && (u8)out->s[w - 2] >= 0xA0
+        && (u8)out->s[w - 2] < 0xB0 && (u8)b->s[0] == 0xED && (u8)b->s[1] >= 0xB0) {
+        u32 hi = 0xD000 | (((u32)(u8)out->s[w - 2] & 63) << 6) | ((u8)out->s[w - 1] & 63);
+        u32 lo = 0xD000 | (((u32)(u8)b->s[1] & 63) << 6) | ((u8)b->s[2] & 63);
+        u32 cp = 0x10000 + ((hi - 0xD800) << 10) + (lo - 0xDC00);
+        w -= 3;
+        out->s[w++] = (char)(0xF0 | (cp >> 18));
+        out->s[w++] = (char)(0x80 | ((cp >> 12) & 63));
+        out->s[w++] = (char)(0x80 | ((cp >> 6) & 63));
+        out->s[w++] = (char)(0x80 | (cp & 63));
+        skip = 3;
+    }
+    for (u32 i = skip; b && i < b->len; i++) out->s[w++] = b->s[i];
     out->s[w] = 0;
     out->len = w;
+    /* Its length in units is theirs added (two halves joined are still two
+       units), so a loop that adds to a string and asks its length does not
+       count the whole string again each time round. */
+    out->units = (js_units(a) + js_units(b) + 1) | ((!js_ubytes(a) || !js_ubytes(b)) ? JS_UWIDE : 0);
     out->hash = js_hash(out->s, w);
     return out;
 }
@@ -601,9 +620,9 @@ static int js_exotic_get(jctx *J, jobj *o, jstr *key, jval *out) {
         case JO_BOXED:
             if (o->ival.t == JS_STR && o->ival.str) {
                 jstr *s = o->ival.str;
-                if (js_str_eq(key, J->s_length)) { *out = js_num((double)s->len); return 1; }
-                if (js_index_of(key, &idx) && idx < s->len) {
-                    *out = js_from_str(js_str_n(J, s->s + idx, 1));
+                if (js_str_eq(key, J->s_length)) { *out = js_num((double)js_units(s)); return 1; }
+                if (js_index_of(key, &idx) && idx < js_units(s)) {
+                    *out = js_from_str(js_str_unit(J, s, idx));
                     return 1;
                 }
             }
@@ -737,10 +756,10 @@ static jval js_getv(jctx *J, jval target, jstr *key, jval receiver) {
     if (target.t == JS_STR) {
         u32 idx;
         jstr *s = target.str;
-        if (js_str_eq(key, J->s_length)) return js_num((double)(s ? s->len : 0));
+        if (js_str_eq(key, J->s_length)) return js_num((double)js_units(s));
         if (js_index_of(key, &idx)) {
-            if (!s || idx >= s->len) return js_undef();
-            return js_from_str(js_str_n(J, s->s + idx, 1));
+            if (!s || idx >= js_units(s)) return js_undef();
+            return js_from_str(js_str_unit(J, s, idx));
         }
     }
     if (target.t == JS_NULL || target.t == JS_UNDEF)
@@ -2228,8 +2247,8 @@ static JS_NOINLINE jval js_eval_array(jctx *J, int node, jscope *sc, jval this_v
    another: {...x} and Object.assign. */
 static void js_copy_props(jctx *J, jobj *to, jval from) {
     if (from.t == JS_STR) {
-        for (u32 i = 0; from.str && i < from.str->len; i++)
-            js_define(J, to, js_to_key(J, js_num(i)), js_from_str(js_str_n(J, from.str->s + i, 1)), JP_PLAIN);
+        for (u32 i = 0, len = js_units(from.str); i < len; i++)
+            js_define(J, to, js_to_key(J, js_num(i)), js_from_str(js_str_unit(J, from.str, i)), JP_PLAIN);
         return;
     }
     if (!js_is_obj(from)) return;
@@ -2733,8 +2752,8 @@ static JS_NOINLINE jval js_eval_member(jctx *J, int node, jscope *sc, jval this_
         }
         if (target.t == JS_STR && idx.t == JS_NUM && target.str) {
             double d = idx.num;
-            if (d >= 0 && d < (double)target.str->len && d == (double)(u32)d)
-                return js_from_str(js_str_n(J, target.str->s + (u32)d, 1));
+            if (d >= 0 && d < (double)js_units(target.str) && d == (double)(u32)d)
+                return js_from_str(js_str_unit(J, target.str, (u32)d));
         }
         key = js_to_key(J, idx);
         if (J->sig != JS_OK) return js_undef();
@@ -2933,7 +2952,7 @@ static jobj *js_forin_keys(jctx *J, jobj *o) {
                     js_arr_push(J, keys, js_from_str(js_to_key(J, js_num(i))));
         }
         if (q->kind == JO_BOXED && q->ival.t == JS_STR)
-            for (u32 i = 0; i < q->ival.str->len; i++)
+            for (u32 i = 0, len = js_units(q->ival.str); i < len; i++)
                 js_arr_push(J, keys, js_from_str(js_to_key(J, js_num(i))));
         jprop **own;
         u32 nown = js_keys_of(J, q, &own, JK_STR | (depth ? 0 : 0));

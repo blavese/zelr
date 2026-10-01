@@ -159,6 +159,8 @@ typedef struct {
 struct jstr {
     u32 len;
     u32 hash;
+    u32 units;                /* UTF-16 units plus one, with JS_UWIDE when a byte is
+                                 past ASCII; 0 until asked (js_units) */
     char s[1];                /* len + 1, allocated with the header */
 };
 
@@ -468,6 +470,12 @@ typedef struct jctx {
     /* A ?. chain that met null or undefined, on its way out to the end of
        the chain. */
     int     chain_short;
+
+    /* The last place a unit was looked for in a string (js_ubyte): the
+       string, known by where it is, its length and its hash, and the unit
+       and byte a character starts at there. */
+    const jstr *u_s;
+    u32     u_len, u_hash, u_u, u_b;
 
     /* The jobs waiting for the current script to finish, as a ring. */
     jjob   *jobs;
@@ -785,6 +793,7 @@ static jstr *js_str_n(jctx *J, const char *s, u32 n) {
     jstr *r = (jstr *)js_alloc(J, (u32)sizeof(jstr) + n + 1);
     if (!r) return 0;
     r->len = n;
+    r->units = 0;
     for (u32 i = 0; i < n; i++) r->s[i] = s[i];
     r->s[n] = 0;
     r->hash = js_hash(s, n);
@@ -796,6 +805,188 @@ static jstr *js_str(jctx *J, const char *s) {
     while (s[n]) n++;
     return js_str_n(J, s, n);
 }
+
+/* --- positions in a string -------------------------------------------------
+ *
+ * Strings are kept as UTF-8, and a script counts them in UTF-16 units, as
+ * the standard says: "\u00e9".length is 1 and an emoji's is 2, and every
+ * index, offset and length a script is given or gives is one of those. It
+ * was given bytes, so a word with an accent in it was longer than it is,
+ * and a page that cut a title at forty characters could cut through the
+ * middle of one.
+ *
+ * A character is read as UTF-8 where it is well formed (a lone half of a
+ * pair is the three bytes it is on its own) and as one unit of its own value
+ * where a byte is not, which is how a string of raw bytes was always read. A
+ * string knows how many units it is once asked (`units`), and the context
+ * keeps the last place a unit was looked for, so walking a string from one
+ * end to the other does not walk from its start at every step. */
+#define JS_UWIDE 0x80000000u
+
+/* The character at s, `left` bytes there: how many bytes it is, and *cp. */
+static inline u32 js_uchar(const char *s, u32 left, u32 *cp) {
+    u8 c = (u8)s[0];
+    *cp = c;
+    if (c < 0x80) return 1;
+#define JS_UCONT(k) (left > (k) && ((u8)s[k] & 0xC0) == 0x80)
+    if (c >= 0xC2 && c <= 0xDF && JS_UCONT(1)) {
+        *cp = ((u32)(c & 0x1F) << 6) | ((u8)s[1] & 0x3F);
+        return 2;
+    }
+    if (c >= 0xE0 && c <= 0xEF && JS_UCONT(1) && JS_UCONT(2) && (c != 0xE0 || (u8)s[1] >= 0xA0)) {
+        *cp = ((u32)(c & 0x0F) << 12) | ((u32)((u8)s[1] & 0x3F) << 6) | ((u8)s[2] & 0x3F);
+        return 3;
+    }
+    if (c >= 0xF0 && c <= 0xF4 && JS_UCONT(1) && JS_UCONT(2) && JS_UCONT(3)
+        && (c != 0xF0 || (u8)s[1] >= 0x90) && (c != 0xF4 || (u8)s[1] < 0x90)) {
+        *cp = ((u32)(c & 0x07) << 18) | ((u32)((u8)s[1] & 0x3F) << 12) | ((u32)((u8)s[2] & 0x3F) << 6)
+            | ((u8)s[3] & 0x3F);
+        return 4;
+    }
+#undef JS_UCONT
+    return 1;
+}
+
+/* How many UTF-16 units n bytes of text are, and whether any is past ASCII. */
+static u32 js_ucount(const char *s, u32 n, int *wide) {
+    u32 k = 0;
+    if (wide) *wide = 0;
+    for (u32 b = 0; b < n;) {
+        if ((u8)s[b] < 0x80) { k++; b++; continue; }
+        if (wide) *wide = 1;
+        u32 cp, w = js_uchar(s + b, n - b, &cp);
+        k += w == 4 ? 2 : 1;
+        b += w;
+    }
+    return k;
+}
+
+/* A string's length as a script counts it. */
+static u32 js_units(const jstr *cs) {
+    jstr *s = (jstr *)cs;
+    if (!s) return 0;
+    if (!s->units) {
+        int wide;
+        u32 k = js_ucount(s->s, s->len, &wide);
+        s->units = (k + 1) | (wide ? JS_UWIDE : 0);
+    }
+    return (s->units & ~JS_UWIDE) - 1;
+}
+
+/* Whether units and bytes are the same thing in a string. */
+static inline int js_ubytes(const jstr *s) { js_units(s); return !s || !(s->units & JS_UWIDE); }
+
+/* Where the character that ends at byte b starts: at the nearest lead byte
+   behind it when what is between continues it and it is that long, and at
+   b - 1 when the byte there stands alone. */
+static u32 js_uback(const jstr *s, u32 b) {
+    u32 q = b - 1;
+    while (q > 0 && b - q < 4 && ((u8)s->s[q] & 0xC0) == 0x80) q--;
+    u32 cp;
+    if (q < b - 1 && js_uchar(s->s + q, s->len - q, &cp) == b - q) return q;
+    return b - 1;
+}
+
+static inline int js_ucache_ok(jctx *J, const jstr *s) {
+    return J->u_s == s && J->u_len == s->len && J->u_hash == s->hash && J->u_b <= s->len;
+}
+
+/* The byte where unit u starts (the string's length for u at its end or
+   past it). *half is 1 when u is the second unit of a character that takes
+   two, whose bytes start there. */
+static u32 js_ubyte(jctx *J, const jstr *s, u32 u, int *half) {
+    if (half) *half = 0;
+    if (!s) return 0;
+    if (js_ubytes(s)) return u < s->len ? u : s->len;
+    if (u >= js_units(s)) return s->len;
+    u32 k = 0, b = 0;
+    if (js_ucache_ok(J, s) && (J->u_u <= u || J->u_u - u < u)) {
+        k = J->u_u;
+        b = J->u_b;
+        while (k > u && b > 0) {
+            u32 p = js_uback(s, b), cp;
+            k -= js_uchar(s->s + p, s->len - p, &cp) == 4 ? 2 : 1;
+            b = p;
+        }
+    }
+    while (b < s->len) {
+        u32 cp, w = js_uchar(s->s + b, s->len - b, &cp);
+        u32 m = w == 4 ? 2 : 1;
+        if (k + m > u) { if (half && u > k) *half = 1; break; }
+        k += m;
+        b += w;
+    }
+    J->u_s = s; J->u_len = s->len; J->u_hash = s->hash; J->u_u = k; J->u_b = b;
+    return b;
+}
+
+/* How many units come before byte b, which starts a character. */
+static u32 js_uunit(jctx *J, const jstr *s, u32 b) {
+    if (!s) return 0;
+    if (b > s->len) b = s->len;
+    if (js_ubytes(s)) return b;
+    u32 k = 0, at = 0;
+    if (js_ucache_ok(J, s) && J->u_b <= b) { k = J->u_u; at = J->u_b; }
+    while (at < b) {
+        u32 cp, w = js_uchar(s->s + at, s->len - at, &cp);
+        k += w == 4 ? 2 : 1;
+        at += w;
+    }
+    if (at == b) { J->u_s = s; J->u_len = s->len; J->u_hash = s->hash; J->u_u = k; J->u_b = b; }
+    return k;
+}
+
+/* The code unit at u, which is inside the string. */
+static u32 js_ucode(jctx *J, const jstr *s, u32 u) {
+    if (js_ubytes(s)) return (u8)s->s[u];
+    int half;
+    u32 b = js_ubyte(J, s, u, &half), cp;
+    js_uchar(s->s + b, s->len - b, &cp);
+    if (cp < 0x10000) return cp;
+    return half ? 0xDC00 + ((cp - 0x10000) & 0x3FF) : 0xD800 + ((cp - 0x10000) >> 10);
+}
+
+/* A lone half of a pair, as the three bytes it is on its own. */
+static inline void js_uhalf(u32 cu, char *o) {
+    o[0] = (char)(0xE0 | (cu >> 12));
+    o[1] = (char)(0x80 | ((cu >> 6) & 63));
+    o[2] = (char)(0x80 | (cu & 63));
+}
+
+/* The units from `from` up to `to` (from <= to <= the length), as a string:
+   a character cut in two by either end leaves its half. */
+static jstr *js_usub(jctx *J, const jstr *s, u32 from, u32 to) {
+    if (js_ubytes(s)) {
+        jstr *r = js_str_n(J, s->s + from, to - from);
+        if (r) r->units = to - from + 1;
+        return r;
+    }
+    if (to <= from) return js_str_n(J, "", 0);
+    int hf, ht;
+    u32 bf = js_ubyte(J, s, from, &hf);
+    u32 lo = hf ? js_ucode(J, s, from) : 0;
+    u32 bt = js_ubyte(J, s, to, &ht);
+    u32 hi = ht ? js_ucode(J, s, to - 1) : 0;
+    if (hf) bf += 4;
+    u32 n = (bt > bf ? bt - bf : 0) + (hf ? 3 : 0) + (ht ? 3 : 0);
+    jstr *r = js_str_n(J, "", 0);
+    if (n) {
+        r = (jstr *)js_alloc(J, (u32)sizeof(jstr) + n + 1);
+        if (!r) return 0;
+        u32 w = 0, wide = hf || ht;
+        if (hf) { js_uhalf(lo, r->s); w = 3; }
+        for (u32 i = bf; i < bt; i++) { wide |= (u8)s->s[i] >= 0x80; r->s[w++] = s->s[i]; }
+        if (ht) { js_uhalf(hi, r->s + w); w += 3; }
+        r->s[w] = 0;
+        r->len = w;
+        r->units = (to - from + 1) | (wide ? JS_UWIDE : 0);
+        r->hash = js_hash(r->s, w);
+    }
+    return r;
+}
+
+/* The one unit at u, as a string. */
+static jstr *js_str_unit(jctx *J, const jstr *s, u32 u) { return js_usub(J, s, u, u + 1); }
 
 /* A new symbol, whose key is equal to nothing that exists. */
 static jstr *js_sym_new(jctx *J, const char *desc, u32 n) {

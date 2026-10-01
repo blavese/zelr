@@ -828,7 +828,7 @@ int main(void) {
            "(function(){ var a = []; for (var i = 0; i < 20000; i++) a.push({ n: i, s: 'text' });"
            " return JSON.stringify(a).length; })()", "448891");
     expect("JSON.parse undoes \\u escapes, a pair of halves as one character",
-           "(function(){ var s = JSON.parse('\"\\\\u00e9\\\\ud83d\\\\ude00\"'); return s.length; })()", "6");
+           "(function(){ var s = JSON.parse('\"\\\\u00e9\\\\ud83d\\\\ude00\"'); return s.length; })()", "3");
     expect("and refuses what is not JSON",
            "(function(){ var bad = ['tru', '{a:1}', '[1,]', '01', '\"x', 'nul', '1 2'], n = 0;"
            " for (var i = 0; i < bad.length; i++) { try { JSON.parse(bad[i]); } catch (e) { n++; } }"
@@ -961,10 +961,28 @@ int main(void) {
     expect("a plain call's this is the global object, and undefined in strict code",
            "(function(){ function p() { return this; } function s() { 'use strict'; return this; }"
            " return (p() === globalThis) + ',' + s(); })()", "true,undefined");
+    expect("a string's length and positions are UTF-16 units: an accent is one, an emoji two",
+           "(function(){ var s = 'caf\\u00e9 \\u{1F600}!'; return [s.length, s.indexOf('!'), s.lastIndexOf(' '), s.charCodeAt(3).toString(16), s.charCodeAt(5).toString(16), s.charCodeAt(6).toString(16), s.codePointAt(5).toString(16), s.at(-1), s[3] === '\\u00e9'].join(); })()",
+           "8,7,4,e9,d83d,de00,1f600,!,true");
+    expect("slice, substring, substr, padStart and split count units, and halves join back into the character",
+           "(function(){ var s = '\\u00e9t\\u00e9 \\u{1F600}x'; var h = s.slice(4, 5), l = s.slice(5, 6); return [s.slice(1, 3) === 't\\u00e9', s.substring(3, 0) === '\\u00e9t\\u00e9', s.substr(-1), h.length, l.length, (h + l) === '\\u{1F600}', (h + l).length, 'ab'.padStart(5, '\\u00e9').length, s.split('').length, [...s].length].join(); })()",
+           "true,true,x,1,1,true,2,5,7,6");
+    expect("a match's index and lastIndex are units, and a replacer is told the unit it is at",
+           "(function(){ var s = '\\u00e9\\u00e9a\\u{1F600}b'; var r = /[ab]/g; var m1 = r.exec(s), i1 = r.lastIndex; var m2 = r.exec(s); var at = []; s.replace(/b/, function(m, o){ at.push(o); }); return [m1.index, i1, m2.index, r.lastIndex, s.search(/b/), at[0], s.match(/b/).index].join(); })()",
+           "2,3,5,6,5,5,5");
+    expect("walked backwards a string gives the units it gives forwards, without starting again at every step",
+           "(function(){ var s = ''; for (var i = 0; i < 300; i++) s += ['a', '\\u00e9', '\\u{1F600}', '\\u20ac', '\\udc00x'][i % 5]; var f = [], b = []; for (var i = 0; i < s.length; i++) f.push(s.charCodeAt(i)); for (var i = s.length - 1; i >= 0; i--) b.unshift(s.charCodeAt(i)); var t0 = Date.now(), n = 0; var big = s; for (var k = 0; k < 6; k++) big += big; for (var i = big.length - 1; i >= 0; i--) n += big.charCodeAt(i) & 1; return [s.length, f.join() === b.join(), f[3], f[5], f[6], Date.now() - t0 < 4000].join(); })()",
+           "420,true,56832,56320,120,true");
+    expect("a segment's index is in units, and so is what containing is asked",
+           "(function(){ var g = new Intl.Segmenter('en', { granularity: 'word' }).segment('caf\\u00e9 au lait'); var at = []; for (var x of g) at.push(x.index); return at.join() + ';' + g.containing(6).segment; })()",
+           "0,4,5,7,8;au");
+    expect("atob gives a character for each byte and btoa takes them back",
+           "(function(){ var b = atob('6cOp/w=='); return [b.length, b.charCodeAt(0), b.charCodeAt(1), b.charCodeAt(3), btoa(b), btoa(String.fromCharCode(233, 255))].join(); })()",
+           "4,233,195,255,6cOp/w==,6f8=");
     expect("an escaped character past ASCII is that character, in a class and out of one",
            "(function(){ var b = String.fromCharCode(92); var cls = new RegExp('[' + b + '\\u00e9-' + b + '\\u00fc]', 'g'), one = new RegExp(b + '\\u20ac'); return [cls.test('\\u00f1'), 'a\\u00e9b\\u00fc'.replace(cls, '_'), one.test('5\\u20ac'), one.test('5e')].join(); })()",
            "true,a_b_,true,false");
-    expect("\\u escapes are the characters they name", "'\\u00e9' === 'é' && '\\u{1F600}'.length === 4",
+    expect("\\u escapes are the characters they name", "'\\u00e9' === 'é' && '\\u{1F600}'.length === 2",
            "true");
     expect("eval sees the variables round it, and Function builds at the top level",
            "(function(){ var v = 4; return eval('v * 2') + Function('a', 'b', 'return a + b')(1, 2); })()",

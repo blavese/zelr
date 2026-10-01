@@ -639,6 +639,7 @@ static void js_next_raw(jlex *L) {
         jstr *js = (jstr *)js_alloc(L->J, (u32)sizeof(jstr) + (scan - start) + 1);
         if (!js) { L->tok.type = T_EOF; L->failed = 1; return; }
         char *buf = js->s;
+        js->units = 0;
         u32 w = 0;
         u32 i = start;
         while (i < scan) {

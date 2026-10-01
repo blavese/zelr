@@ -842,33 +842,46 @@ static jval nat_str_valueof(jctx *J, jval t, jval *a, int n) {
     return v;
 }
 
+/* Every position below is in UTF-16 units (js.h, js_ubyte): what a
+   script gives and is given. The searching is done on the bytes. */
 static jval nat_str_charat(jctx *J, jval t, jval *a, int n) {
     jstr *s = js_this_str(J, t, "charAt");
     double d = js_trunc(js_to_num(J, js_arg(a, n, 0)));
-    if (d < 0 || d >= s->len) return js_from_str(js_str(J, ""));
-    return js_from_str(js_str_n(J, s->s + (u32)d, 1));
+    if (d < 0 || d >= js_units(s)) return js_from_str(js_str(J, ""));
+    return js_from_str(js_str_unit(J, s, (u32)d));
 }
 
 static jval nat_str_charcode(jctx *J, jval t, jval *a, int n) {
     jstr *s = js_this_str(J, t, "charCodeAt");
     double d = js_trunc(js_to_num(J, js_arg(a, n, 0)));
-    if (d < 0 || d >= s->len) return js_num(js_nan());
-    return js_num((double)(u8)s->s[(u32)d]);
+    if (d < 0 || d >= js_units(s)) return js_num(js_nan());
+    return js_num((double)js_ucode(J, s, (u32)d));
 }
 
-/* The code point of the UTF-8 character that starts at a byte. */
+/* The code point at a unit: the two halves of a pair there are one. */
 static jval nat_str_codepoint(jctx *J, jval t, jval *a, int n) {
     jstr *s = js_this_str(J, t, "codePointAt");
     double d = js_trunc(js_to_num(J, js_arg(a, n, 0)));
-    if (d < 0 || d >= s->len) return js_undef();
-    u32 i = (u32)d;
-    u8 c = (u8)s->s[i];
-    u32 k = js_utf8_len(c);
-    if (c < 0x80 || (c & 0xC0) == 0x80 || i + k > s->len) return js_num(c);
-    u32 cp = c & (k == 2 ? 0x1F : k == 3 ? 0x0F : 0x07);
-    for (u32 q = 1; q < k; q++) cp = (cp << 6) | ((u8)s->s[i + q] & 0x3F);
-    return js_num(cp);
+    u32 len = js_units(s);
+    if (d < 0 || d >= len) return js_undef();
+    u32 cu = js_ucode(J, s, (u32)d);
+    if (cu >= 0xD800 && cu < 0xDC00 && (u32)d + 1 < len) {
+        u32 lo = js_ucode(J, s, (u32)d + 1);
+        if (lo >= 0xDC00 && lo < 0xE000) return js_num((double)(0x10000 + ((cu - 0xD800) << 10) + (lo - 0xDC00)));
+    }
+    return js_num((double)cu);
 }
+
+/* The byte a search from unit u starts at: past a character that u is the
+   second half of. */
+static u32 js_ufrom(jctx *J, const jstr *s, u32 u) {
+    int half;
+    u32 b = js_ubyte(J, s, u, &half);
+    return half ? b + 4 : b;
+}
+
+/* A byte position found by a search, or -1, as a script is told it. */
+static double js_ufound(jctx *J, const jstr *s, int b) { return b < 0 ? -1 : (double)js_uunit(J, s, (u32)b); }
 
 static int js_find_sub(const jstr *h, const jstr *nd, u32 from) {
     if (!h || !nd) return -1;
@@ -895,18 +908,20 @@ static int js_str_pos(jctx *J, jval *a, int n, int i, int len, int dflt) {
 
 static jval nat_str_indexof(jctx *J, jval t, jval *a, int n) {
     jstr *h = js_this_str(J, t, "indexOf"), *nd = js_to_str(J, js_arg(a, n, 0));
-    return js_num((double)js_find_sub(h, nd, (u32)js_str_pos(J, a, n, 1, (int)h->len, 0)));
+    u32 from = js_ufrom(J, h, (u32)js_str_pos(J, a, n, 1, (int)js_units(h), 0));
+    return js_num(js_ufound(J, h, js_find_sub(h, nd, from)));
 }
 
 static jval nat_str_lastindexof(jctx *J, jval t, jval *a, int n) {
     jstr *h = js_this_str(J, t, "lastIndexOf"), *nd = js_to_str(J, js_arg(a, n, 0));
     if (nd->len > h->len) return js_num(-1);
-    int from = js_str_pos(J, a, n, 1, (int)h->len, (int)h->len);
+    u32 len = js_units(h);
+    int from = (int)js_ubyte(J, h, (u32)js_str_pos(J, a, n, 1, (int)len, (int)len), 0);
     if (from > (int)(h->len - nd->len)) from = (int)(h->len - nd->len);
     for (int i = from; i >= 0; i--) {
         u32 k = 0;
         while (k < nd->len && h->s[i + k] == nd->s[k]) k++;
-        if (k == nd->len) return js_num((double)i);
+        if (k == nd->len) return js_num(js_ufound(J, h, i));
     }
     return js_num(-1);
 }
@@ -918,7 +933,7 @@ static jval nat_str_includes(jctx *J, jval t, jval *a, int n) {
     if (js_is_regex(js_arg(a, n, 0)))
         return js_throw(J, JS_ERR_TYPE, "includes takes text, not a pattern", J->error_line);
     jstr *nd = js_to_str(J, js_arg(a, n, 0));
-    return js_bool(js_find_sub(h, nd, (u32)js_str_pos(J, a, n, 1, (int)h->len, 0)) >= 0);
+    return js_bool(js_find_sub(h, nd, js_ufrom(J, h, (u32)js_str_pos(J, a, n, 1, (int)js_units(h), 0))) >= 0);
 }
 
 static jval nat_str_startswith(jctx *J, jval t, jval *a, int n) {
@@ -926,7 +941,7 @@ static jval nat_str_startswith(jctx *J, jval t, jval *a, int n) {
     if (js_is_regex(js_arg(a, n, 0)))
         return js_throw(J, JS_ERR_TYPE, "startsWith takes text, not a pattern", J->error_line);
     jstr *nd = js_to_str(J, js_arg(a, n, 0));
-    u32 at = (u32)js_str_pos(J, a, n, 1, (int)h->len, 0);
+    u32 at = js_ubyte(J, h, (u32)js_str_pos(J, a, n, 1, (int)js_units(h), 0), 0);
     if (nd->len > h->len - at) return js_bool(0);
     for (u32 i = 0; i < nd->len; i++) if (h->s[at + i] != nd->s[i]) return js_bool(0);
     return js_bool(1);
@@ -938,7 +953,8 @@ static jval nat_str_endswith(jctx *J, jval t, jval *a, int n) {
     if (js_is_regex(js_arg(a, n, 0)))
         return js_throw(J, JS_ERR_TYPE, "endsWith takes text, not a pattern", J->error_line);
     jstr *nd = js_to_str(J, js_arg(a, n, 0));
-    u32 end = (u32)js_str_pos(J, a, n, 1, (int)h->len, (int)h->len);
+    u32 len = js_units(h);
+    u32 end = js_ubyte(J, h, (u32)js_str_pos(J, a, n, 1, (int)len, (int)len), 0);
     if (nd->len > end) return js_bool(0);
     for (u32 i = 0; i < nd->len; i++)
         if (h->s[end - nd->len + i] != nd->s[i]) return js_bool(0);
@@ -947,11 +963,11 @@ static jval nat_str_endswith(jctx *J, jval t, jval *a, int n) {
 
 static jval nat_str_slice(jctx *J, jval t, jval *a, int n) {
     jstr *s = js_this_str(J, t, "slice");
-    u32 len = s->len;
+    u32 len = js_units(s);
     u32 from = js_rel_index(J, js_arg(a, n, 0), len, 0);
     u32 to = js_rel_index(J, js_arg(a, n, 1), len, len);
     if (to <= from) return js_from_str(js_str(J, ""));
-    return js_from_str(js_str_n(J, s->s + from, to - from));
+    return js_from_str(js_usub(J, s, from, to));
 }
 
 /* Not slice. substring clamps a negative to nothing rather than counting it
@@ -959,16 +975,16 @@ static jval nat_str_slice(jctx *J, jval t, jval *a, int n) {
    and a length. */
 static jval nat_str_substring(jctx *J, jval t, jval *a, int n) {
     jstr *s = js_this_str(J, t, "substring");
-    int len = (int)s->len;
+    int len = (int)js_units(s);
     int from = js_str_pos(J, a, n, 0, len, 0);
     int to = js_str_pos(J, a, n, 1, len, len);
     if (from > to) { int k = from; from = to; to = k; }
-    return js_from_str(js_str_n(J, s->s + from, (u32)(to - from)));
+    return js_from_str(js_usub(J, s, (u32)from, (u32)to));
 }
 
 static jval nat_str_substr(jctx *J, jval t, jval *a, int n) {
     jstr *s = js_this_str(J, t, "substr");
-    int len = (int)s->len;
+    int len = (int)js_units(s);
     double d = n > 0 ? js_trunc(js_to_num(J, a[0])) : 0;
     int from = d < 0 ? (d < -len ? 0 : len + (int)d) : (d > len ? len : (int)d);
     int want = len - from;
@@ -976,16 +992,17 @@ static jval nat_str_substr(jctx *J, jval t, jval *a, int n) {
         double w = js_trunc(js_to_num(J, a[1]));
         want = w < 0 ? 0 : (w > want ? want : (int)w);
     }
-    return js_from_str(js_str_n(J, s->s + from, (u32)want));
+    return js_from_str(js_usub(J, s, (u32)from, (u32)(from + want)));
 }
 
 /* One character, counted from the end when the index is negative. */
 static jval nat_str_at(jctx *J, jval t, jval *a, int n) {
     jstr *s = js_this_str(J, t, "at");
     double d = js_trunc(js_to_num(J, js_arg(a, n, 0)));
-    if (d < 0) d += s->len;
-    if (d < 0 || d >= s->len) return js_undef();
-    return js_from_str(js_str_n(J, s->s + (u32)d, 1));
+    u32 len = js_units(s);
+    if (d < 0) d += len;
+    if (d < 0 || d >= len) return js_undef();
+    return js_from_str(js_str_unit(J, s, (u32)d));
 }
 
 static jval nat_str_concat(jctx *J, jval t, jval *a, int n) {
@@ -1004,12 +1021,17 @@ static jval js_str_pad(jctx *J, jval t, jval *a, int n, int front) {
     jstr *s = js_this_str(J, t, front ? "padStart" : "padEnd");
     double w = n > 0 ? js_trunc(js_to_num(J, a[0])) : 0;
     jstr *fill = n > 1 && a[1].t != JS_UNDEF ? js_to_str(J, a[1]) : js_str(J, " ");
-    if (w <= (double)s->len || !fill->len) return js_from_str(s);
+    u32 have = js_units(s), fu = js_units(fill);
+    if (w <= (double)have || !fu) return js_from_str(s);
     if (w > (1 << 24)) return js_throw(J, JS_ERR_RANGE, "that padding is longer than a page may have", J->error_line);
-    u32 need = (u32)w - s->len;
+    u32 need = (u32)w - have;
     jtext o = { 0, 0, 0, 0 };
     if (!front) jt_put(J, &o, s->s, s->len);
-    for (u32 i = 0; i < need; i++) jt_put(J, &o, fill->s + i % fill->len, 1);
+    for (; need >= fu; need -= fu) jt_put(J, &o, fill->s, fill->len);
+    if (need) {
+        jstr *part = js_usub(J, fill, 0, need);
+        if (part) jt_put(J, &o, part->s, part->len);
+    }
     if (front) jt_put(J, &o, s->s, s->len);
     return js_from_str(jt_done(J, &o));
 }
@@ -1115,8 +1137,7 @@ static jval nat_striter_next(jctx *J, jval t, jval *a, int n) {
     jstr *s = it->ival.str;
     u32 i = (u32)(u64)it->internal;
     if (!s || i >= s->len) return js_iter_result(J, js_undef(), 1);
-    u32 k = js_utf8_len((u8)s->s[i]);
-    if (i + k > s->len) k = s->len - i;
+    u32 cp, k = js_uchar(s->s + i, s->len - i, &cp);
     it->internal = (void *)(u64)(i + k);
     return js_iter_result(J, js_from_str(js_str_n(J, s->s + i, k)), 0);
 }
@@ -1183,7 +1204,7 @@ static jval js_rx_result(jctx *J, jstr *s) {
     jobj *out = js_array(J);
     if (!out) return js_null();
     for (int i = 0; i < js_rx.ncaps; i++) js_arr_set(J, out, (u32)i, js_rx_cap(J, s, i));
-    js_put_prop(J, out, J->s_index, js_num((double)js_rx.cap_start[0]));
+    js_put_prop(J, out, J->s_index, js_num((double)js_uunit(J, s, (u32)js_rx.cap_start[0])));
     js_put_prop(J, out, J->s_input, js_from_str(s));
     js_put_prop(J, out, J->s_groups, js_rx_groups(J, s));
     return js_from_obj(out);
@@ -1217,14 +1238,14 @@ static jval js_rx_exec(jctx *J, jval t, jstr *s) {
     int from = 0;
     if (walks) {
         double li = js_last_index(J, re);
-        if (li > s->len) { js_set_last_index(J, re, 0); return js_null(); }
-        from = (int)li;
+        if (li > js_units(s)) { js_set_last_index(J, re, 0); return js_null(); }
+        from = (int)js_ufrom(J, s, (u32)li);
     }
     if (js_rx_search(re, s, from) < 0) {
         if (walks) js_set_last_index(J, re, 0);
         return js_null();
     }
-    if (walks) js_set_last_index(J, re, js_rx.cap_end[0]);
+    if (walks) js_set_last_index(J, re, js_uunit(J, s, (u32)js_rx.cap_end[0]));
     return js_rx_result(J, s);
 }
 
@@ -1416,7 +1437,7 @@ static jval js_str_replace_re(jctx *J, jstr *s, jval re, jval rep) {
     int call = js_callable(rep);
     jstr *with = call ? 0 : js_to_str(J, rep);
     jtext out = { 0, 0, 0, 0 };
-    int from = every ? 0 : ((ro->spare & RXF_Y) ? (int)js_last_index(J, ro) : 0);
+    int from = every ? 0 : ((ro->spare & RXF_Y) ? (int)js_ufrom(J, s, (u32)js_last_index(J, ro)) : 0);
     int done_any = 0;
     u32 copied = 0;
     while (from <= (int)s->len) {
@@ -1433,7 +1454,7 @@ static jval js_str_replace_re(jctx *J, jstr *s, jval re, jval rep) {
             for (int g = 0; g < ncaps; g++)
                 js_args_push(J, &A, cs[g] < 0 ? js_undef()
                              : js_from_str(js_str_n(J, s->s + cs[g], (u32)(ce[g] - cs[g]))));
-            js_args_push(J, &A, js_num((double)start));
+            js_args_push(J, &A, js_num((double)js_uunit(J, s, (u32)start)));
             js_args_push(J, &A, js_from_str(s));
             if (js_rx.named) js_args_push(J, &A, js_rx_groups(J, s));
             jval got = js_call(J, rep, js_undef(), A.v, A.n);
@@ -1459,7 +1480,8 @@ static jval js_str_replace_re(jctx *J, jstr *s, jval re, jval rep) {
         from = next;
         if (!every) break;
     }
-    if (!every && (ro->spare & RXF_Y)) js_set_last_index(J, ro, done_any ? js_rx.cap_end[0] : 0);
+    if (!every && (ro->spare & RXF_Y))
+        js_set_last_index(J, ro, done_any ? js_uunit(J, s, (u32)js_rx.cap_end[0]) : 0);
     if (copied < s->len) jt_put(J, &out, s->s + copied, s->len - copied);
     if (every) js_set_last_index(J, ro, 0);
     return js_from_str(jt_done(J, &out));
@@ -1477,7 +1499,7 @@ static jval js_str_replace_text(jctx *J, jstr *s, jstr *find, jval rep, int ever
         jt_put(J, &out, s->s + at, (u32)hit - at);
         if (call) {
             jval args[3] = { js_from_str(js_str_n(J, s->s + hit, find->len)),
-                             js_num((double)hit), js_from_str(s) };
+                             js_num((double)js_uunit(J, s, (u32)hit)), js_from_str(s) };
             jval got = js_call(J, rep, js_undef(), args, 3);
             if (J->sig != JS_OK) { free(out.b); return js_undef(); }
             jstr *gs = js_to_str(J, got);
@@ -1580,12 +1602,9 @@ static jval nat_str_split(jctx *J, jval t, jval *a, int n) {
 
     jstr *sep = js_to_str(J, a[0]);
     if (sep->len == 0) {
-        for (u32 i = 0; i < s->len && out->len < limit; ) {
-            u32 k = js_utf8_len((u8)s->s[i]);
-            if (i + k > s->len) k = s->len - i;
-            js_arr_push(J, out, js_from_str(js_str_n(J, s->s + i, k)));
-            i += k;
-        }
+        /* Into units: the halves of a pair come apart, as they do in UTF-16. */
+        u32 len = js_units(s);
+        for (u32 u = 0; u < len && out->len < limit; u++) js_arr_push(J, out, js_from_str(js_str_unit(J, s, u)));
         return js_from_obj(out);
     }
     u32 at = 0;
@@ -1626,7 +1645,7 @@ static jval nat_str_search(jctx *J, jval t, jval *a, int n) {
     jstr *s = js_this_str(J, t, "search");
     jval re = js_as_regex(J, js_arg(a, n, 0), 0);
     if (J->sig != JS_OK || !js_rx_load(J, re)) return js_num(-1);
-    return js_num((double)rx_search(&js_rx, s->s, (int)s->len, 0));
+    return js_num(js_ufound(J, s, rx_search(&js_rx, s->s, (int)s->len, 0)));
 }
 
 /* matchAll: an iterator over every match, each the array exec gives. It
@@ -1664,7 +1683,7 @@ static jval nat_regexpiter_next(jctx *J, jval t, jval *a, int n) {
         return js_iter_result(J, js_undef(), 1);
     }
     /* An empty match would otherwise stand still for ever. */
-    if (js_last_index(J, re) == before) js_set_last_index(J, re, before + js_rx_step(s, (int)before));
+    if (js_last_index(J, re) == before) js_set_last_index(J, re, before + 1);
     return js_iter_result(J, m, 0);
 }
 

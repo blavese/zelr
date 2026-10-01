@@ -2046,7 +2046,7 @@ static jval intl_seg_data(jctx *J, const intl_seg *g, jstr *input, u32 at, u32 e
     jobj *o = js_object(J, JO_PLAIN);
     if (!o) return js_undef();
     js_set(J, o, "segment", js_from_str(js_str_n(J, input->s + at, end - at)));
-    js_set(J, o, "index", js_num(at));
+    js_set(J, o, "index", js_num((double)js_uunit(J, input, at)));
     js_set(J, o, "input", js_from_str(input));
     if (g->granularity == 1) js_set(J, o, "isWordLike", js_bool(wordlike));
     return js_from_obj(o);
@@ -2073,9 +2073,9 @@ static jval nat_intl_segments_containing(jctx *J, jval t, jval *a, int n) {
     jprop *ip = js_find(t.obj, intl_k_seg_input);
     if (!ip || ip->v.t != JS_STR) return js_undef();
     jstr *s = ip->v.str;
-    double want = n > 0 && a[0].t != JS_UNDEF ? js_to_num(J, a[0]) : 0;
-    if (want != want || want < 0 || want >= s->len) return js_undef();
-    u32 at = 0;
+    double wu = n > 0 && a[0].t != JS_UNDEF ? js_to_num(J, a[0]) : 0;
+    if (wu != wu || wu < 0 || wu >= js_units(s)) return js_undef();
+    u32 want = js_ubyte(J, s, (u32)wu, 0), at = 0;
     while (at < s->len) {
         int wl;
         u32 end = intl_seg_next(&g, s->s, s->len, at, &wl);

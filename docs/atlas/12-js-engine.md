@@ -2,7 +2,27 @@
 
 Source root the repository root (github.com/blavese/zelr main, 2026-09-22). All paths are relative to it; `file:N` means 1-based line N. Everything below was verified by reading the code. Where a behaviour was derived by tracing (not by running) it says so. Nothing here was built or run.
 
-**Since 0.86.0** (the rest of this file is older; trust the code):
+**Since 0.91.0** (the rest of this file is older; trust the code):
+- **Strings are counted in UTF-16 units** (js.h, "positions in a string"). They are still kept as UTF-8; `jstr.units`
+  holds the length in units plus one, with `JS_UWIDE` when a byte is past ASCII, worked out when first asked
+  (`js_units`) and carried by `js_concat` and `js_usub`. A character is read by `js_uchar`: well-formed UTF-8 (a lone
+  half of a pair is its three bytes), else one unit of the byte's own value. `js_ubyte` turns a unit into a byte
+  (with `half` when it is the second unit of a four-byte character), `js_uunit` a byte into units, `js_ucode` gives
+  the code unit, `js_usub` a substring by units (a cut pair leaves its half), `js_str_unit` one unit. The context
+  keeps the last position looked for (`u_s`, `u_u`, `u_b`, known by address, length and hash, never dereferenced),
+  and `js_ubyte` steps backwards from it a character at a time (`js_uback`), so walking a string either way is
+  linear. Everything a script sees is in units: length, `s[i]`, keys, the String methods (positions, padding,
+  split by "" into units), a match's index and lastIndex, a replacer's offset, search, Intl.Segmenter's index and
+  `containing`, a text node's length and an input's selection. Searching is still done on the bytes, then converted.
+  `js_concat` joins two halves meeting at its seam into the one character. atob gives the characters U+0000 to
+  U+00FF (UTF-8, two bytes past 0x7F) and btoa reads characters, a byte that is not UTF-8 as itself. Not done: a
+  pattern's `.` still matches a whole code point without the u flag, comparison is by code point (it differs from
+  UTF-16 order only past U+FFFF), a lone half at the end of one string and the start of another is joined only by
+  `+` (not by join or a template), and the DOM's other offsets (Range) are not units.
+- **An escaped character past ASCII in a pattern is that character** (jsregex.h `rx_escape_char`, its default case
+  reads the whole UTF-8 character); it was one signed byte.
+
+**Since 0.86.0**:
 - **Arrays keep holes** as `JS_HOLE` in `items` (`js_arr_set` fills a gap with them; elision, `new Array(n)`, a longer
   length and delete make them). A hole is no own property (`js_exotic_get`, `js_has_index`), the key lists, for-in,
   values, assign and spread leave it out, the iterating methods skip it (map keeps it), and a direct read takes
@@ -109,8 +129,8 @@ Source root the repository root (github.com/blavese/zelr main, 2026-09-22). All 
   of 2026, `intl_in_summer`); an IANA-shaped zone not listed is shown in UTC and resolvedOptions says UTC, and a name
   of no such shape is a RangeError. Collation weighs letter, then accent (case-blind, `intl_latin_lower`), then
   case lower first, with numeric runs and ignored punctuation as options; `String.prototype.localeCompare`,
-  `Number.prototype.toLocaleString` and the `Date` `toLocale*` methods go through it. Segments index by byte, as
-  strings do here. `format` and `compare` are getters giving a function bound to the object (`intl_bound`).
+  `Number.prototype.toLocaleString` and the `Date` `toLocale*` methods go through it. Segments index by unit
+  (since 0.91.0). `format` and `compare` are getters giving a function bound to the object (`intl_bound`).
 - **\p{...}** knows every general category (the marks, the punctuation and symbol kinds, Cc/Cf/Co/Cs, Zl/Zp),
   Any, ASCII, ID_Start and ID_Continue, and Script= / sc= / Script_Extensions= for thirteen scripts (others
   answer as letters). Unions are merged before a \P{} complements them (`rx_add_lists`). A name it does not

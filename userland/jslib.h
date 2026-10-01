@@ -221,7 +221,7 @@ static jval nat_obj_tolocalestring(jctx *J, jval t, jval *a, int n) {
 static int js_has_own(jctx *J, jval t, jstr *key) {
     if (t.t == JS_STR) {
         u32 idx;
-        return js_str_eq(key, J->s_length) || (js_index_of(key, &idx) && idx < t.str->len);
+        return js_str_eq(key, J->s_length) || (js_index_of(key, &idx) && idx < js_units(t.str));
     }
     if (!js_is_obj(t)) return 0;
     jval v;
@@ -645,10 +645,10 @@ static jval nat_obj_getownpropdesc(jctx *J, jval t, jval *a, int n) {
     if (J->sig != JS_OK) return js_undef();
     if (o.t == JS_STR) {
         u32 idx;
-        if (js_index_of(key, &idx) && idx < o.str->len)
-            return js_from_obj(js_descriptor(J, js_from_str(js_str_n(J, o.str->s + idx, 1)), JP_ENUM));
+        if (js_index_of(key, &idx) && idx < js_units(o.str))
+            return js_from_obj(js_descriptor(J, js_from_str(js_str_unit(J, o.str, idx)), JP_ENUM));
         if (js_str_eq(key, J->s_length))
-            return js_from_obj(js_descriptor(J, js_num(o.str->len), 0));
+            return js_from_obj(js_descriptor(J, js_num(js_units(o.str)), 0));
         return js_undef();
     }
     if (!js_is_obj(o)) return js_undef();
@@ -678,7 +678,7 @@ static jval js_own_names(jctx *J, jval o, int want) {
     jobj *out = js_array(J);
     if (!out) return js_undef();
     if (o.t == JS_STR && (want & JK_STR)) {
-        for (u32 i = 0; i < o.str->len; i++) js_arr_push(J, out, js_from_str(js_to_key(J, js_num(i))));
+        for (u32 i = 0, len = js_units(o.str); i < len; i++) js_arr_push(J, out, js_from_str(js_to_key(J, js_num(i))));
         js_arr_push(J, out, js_from_str(J->s_length));
         return js_from_obj(out);
     }

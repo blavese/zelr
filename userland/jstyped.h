@@ -472,11 +472,11 @@ static jval nat_view_byteoffset(jctx *J, jval t, jval *a, int n) {
  * program it runs with atob, and without it that program stopped where
  * nothing said so.
  *
- * This engine's strings are UTF-8 bytes, indexed by byte. A "binary string"
- * -- a character for each byte, which is what atob gives and btoa takes -- is
- * therefore kept as those bytes themselves: charCodeAt(i) over what atob gave
- * is then the i-th byte, and length is the count of bytes, which is what the
- * code that calls atob does with it. */
+ * A "binary string" -- a character for each byte, which is what atob gives
+ * and btoa takes -- is the characters U+0000 to U+00FF, kept as UTF-8 like
+ * any other string: charCodeAt(i) over what atob gave is the i-th byte, and
+ * length is the count of bytes. It was the bytes themselves while strings
+ * were counted in bytes (js.h, js_ubyte). */
 
 /* DOMException: an Error with a name that says which, and the old number
    for it. Nothing about it needs a document, and core-js takes it for
@@ -598,43 +598,43 @@ static jval nat_atob(jctx *J, jval t, jval *a, int n) {
         have += 6;
         if (have >= 8) { have -= 8; clean[w++] = (u8)(bits >> have); }
     }
-    jstr *r = js_str_n(J, (const char *)clean, w);
+    /* Each byte the character of its value: one past 0x7F is two bytes of
+       UTF-8, so the text is at most twice as long. */
+    u8 *text = (u8 *)malloc(2 * w + 1);
+    if (!text) { free(clean); js_out_of_memory(J); return js_undef(); }
+    u32 tn = 0;
+    for (u32 i = 0; i < w; i++) {
+        if (clean[i] < 0x80) text[tn++] = clean[i];
+        else { text[tn++] = (u8)(0xC0 | (clean[i] >> 6)); text[tn++] = (u8)(0x80 | (clean[i] & 0x3F)); }
+    }
+    jstr *r = js_str_n(J, (const char *)text, tn);
+    free(text);
     free(clean);
     return r ? js_from_str(r) : js_undef();
 }
 
-/* btoa. A string that is UTF-8 with every character at or under U+00FF is
-   those characters, one byte each, as String.fromCharCode made them; one
-   that is not UTF-8 at all is taken as the bytes it is, as atob gave them;
-   a character past U+00FF cannot be said in a byte and is refused. */
+/* btoa. Each character at or under U+00FF is the byte of its value, as
+   String.fromCharCode and atob make them; a byte that is not UTF-8 is read
+   as itself, as everything else reads it (js.h, js_uchar); a character past
+   U+00FF cannot be said in a byte and is refused. */
 static jval nat_btoa(jctx *J, jval t, jval *a, int n) {
     (void)t;
     if (n < 1) return js_throw(J, JS_ERR_TYPE, "btoa needs something to encode", J->error_line);
     jstr *s = js_to_str(J, a[0]);
     if (J->sig != JS_OK || !s) return js_undef();
-    const u8 *p = (const u8 *)s->s;
-    int whole = 1, wide = 0;
     for (u32 i = 0; i < s->len;) {
         u32 cp;
-        int k = tx_char(p + i, s->len - i, &cp);
-        if (k <= 0) { whole = 0; break; }
-        if (cp > 0xFF) wide = 1;
-        i += (u32)k;
+        i += js_uchar(s->s + i, s->len - i, &cp);
+        if (cp > 0xFF) return js_throw_dom(J, "InvalidCharacterError", "btoa takes characters up to U+00FF only");
     }
-    if (whole && wide)
-        return js_throw_dom(J, "InvalidCharacterError", "btoa takes characters up to U+00FF only");
     u8 *bytes = (u8 *)malloc(s->len + 1);
     char *out = (char *)malloc((s->len + 2) / 3 * 4 + 4);
     if (!bytes || !out) { free(bytes); free(out); js_out_of_memory(J); return js_undef(); }
     u32 nb = 0;
-    if (whole) {
-        for (u32 i = 0; i < s->len;) {
-            u32 cp;
-            i += (u32)tx_char(p + i, s->len - i, &cp);
-            bytes[nb++] = (u8)cp;
-        }
-    } else {
-        for (u32 i = 0; i < s->len; i++) bytes[nb++] = p[i];
+    for (u32 i = 0; i < s->len;) {
+        u32 cp;
+        i += js_uchar(s->s + i, s->len - i, &cp);
+        bytes[nb++] = (u8)cp;
     }
     static const char AL[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     u32 w = 0;

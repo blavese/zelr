@@ -2723,7 +2723,9 @@ static jval nat_cd_data(jctx *J, jval t, jval *a, int n) {
 static jval nat_cd_length(jctx *J, jval t, jval *a, int n) {
     (void)J; (void)a; (void)n;
     int x = jd_node_of(t);
-    return x < 0 ? js_undef() : js_num(w_len(jd_text_of(x)));
+    if (x < 0) return js_undef();
+    const char *tx = jd_text_of(x);
+    return js_num((double)js_ucount(tx, (u32)w_len(tx), 0));
 }
 
 static jval nat_cd_append(jctx *J, jval t, jval *a, int n) {
@@ -3837,7 +3839,7 @@ static jval nat_select_text(jctx *J, jval t, jval *a, int n) {
 
 static jval nat_selection_end(jctx *J, jval t, jval *a, int n) {
     jval v = nat_value(J, t, a, n);
-    return v.t == JS_STR ? js_num(v.str->len) : js_num(0);
+    return v.t == JS_STR ? js_num((double)js_units(v.str)) : js_num(0);
 }
 
 /* --- pictures and the rest ------------------------------------------------------------------ */
