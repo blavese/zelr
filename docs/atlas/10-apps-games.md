@@ -378,8 +378,8 @@ Compared with the kernel: `theme_init` sets look MODERN, light true, preset 1 (t
 - This is nearest (floor) sampling: no interpolation, no filter.
 
 **Sound syscalls.**
-- `sound_info` (SYS_SOUND_INFO 40) fills `zelr_sound {present, rate, channels, reserved}` (:296-303).
-- `sound_write` (SYS_SOUND_WRITE 41): the kernel caps each call at 4096 frames (syscall.c:454-460). It **blocks until the frames fit in the ring** (about a third of a second), sleeping 2 ms at a time and giving up after ~50 stalled waits (sound.c:249-301). That blocking is what paces playback, since the UI loop only sleeps 4 ms while playing (:440).
+- `sound_info` (SYS_SOUND_INFO 40) fills `zelr_sound {present, rate, channels, room, queued}` (:296-303).
+- `sound_write` (SYS_SOUND_WRITE 41): the kernel caps each call at 4096 frames (syscall.c:454-460). It **blocks until the frames fit in the ring**, sleeping 2 ms at a time and giving up after ~50 stalled waits (sound.c:249-301). That blocking paced playback while the ring was a third of a second. Since 0.96.0 the ring holds 1.36 s, so `pump` and the tune write only while `queued` is under a third of a second (`card_full`): Stop is still heard to stop within that. At the end of a file music prints `music: finished with N ms still to play`, which appcheck holds to 400 ms. The UI loop sleeps 4 ms while playing (:440).
 
 **Volume.** Nothing in the app. The kernel scales every written sample by the global `volume` (sound.c:84-101, default 70). That value is the `volume` knob (Settings → Behaviour) or the dock speaker (wm.c:3936-3938).
 
@@ -397,6 +397,15 @@ Compared with the kernel: `theme_init` sets look MODERN, light true, preset 1 (t
 **Syscalls.** `win_*`, `sound_info`, `sound_write`, `readdir`, `open`, `fread`, `seek`, `close`, `ticks`, `sleep_ms`, `exit`.
 
 ---
+
+### 3.5a `userland/play.c`: "Player" (since 0.96.0)
+
+A live stream's sound: `play twitch:<channel>` or `play <HLS playlist address>`. Not on the launcher, since it
+needs a stream; the browser starts it from a live Twitch channel's "listen" link (`play:` addresses, 11 §3.8a).
+A 460x140 window with the channel, a status line and how many seconds are queued; `play: ...` lines on the
+console. It writes only what `sound_info`'s `room` allows, so its waits are on the network, never in a write.
+Without a window it plays all the same and leaves when the stream ends. How it finds, fetches and decodes the
+stream, and playcheck: 13 §3.11.
 
 ### 3.6 `userland/calc.c`: "Calculator"
 

@@ -2315,6 +2315,14 @@ static inline int twitch_page(int kind, const char *name, const char *s, int n,
                 if (game[0]) { sp_text(&p, game); sp_raw(&p, " &middot; "); }
                 sp_num(&p, site_atoll(viewers));
                 sp_raw(&p, " watching</p>\n");
+                /* The stream itself, to the player (play.c), which the browser
+                   starts for a play: address rather than going to it. */
+                static char login[64];
+                if (site_ident(name, login, sizeof(login), "_") && w_len(login) == w_len(name)) {
+                    sp_raw(&p, "<p><a href=\"play:twitch:");
+                    sp_raw(&p, login);
+                    sp_raw(&p, "\">listen</a></p>\n");
+                }
             } else {
                 int lb = sj_find(s, user, ue, "lastBroadcast");
                 title[0] = 0;

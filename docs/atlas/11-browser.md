@@ -708,6 +708,13 @@ Since 0.62.0 a watch page also shows storyboard sheets (`yt_frames`), and the br
 malloc'd and freed) and builds `site_youtube`'s page when it returns one; prints `browser: <address> -- <title> --
 <status>` after each page.
 
+Since 0.96.0 a live channel's page has a "listen" link, `play:twitch:<login>` (the login through `site_ident` and
+written only when nothing was taken out of it). browser.c does not go to a `play:` address: a click starts
+`/bin/play` on what follows the colon and leaves the page where it is, so the stream's waiting is the player's
+(13 §3.11). sitetest checks that a live channel offers the link and an offline one does not; the first failed with
+the link left out. playcheck clicks such a link on a page from a host server and listens; it failed with browser.c
+not handing `play:` over.
+
 ### 3.9 Test programs in scope
 
 - **`userland/layouttest.c`** (515): builds pages like the browser minus fetching -- `dom_parse`, `CSS_UA`, `<style>` sheets, zeroed `inl`, `css_index`, `lay_run(width, 16)` (56-83) -- and asserts on `litem` coordinates found via `box_of(node)` (LK_BOX with that node) or LK_IMAGE items; `picture_at(id, w, h)` fakes a decoded picture (51-92). No accent sheet, no linked sheets, `css_view_h` never set. Ends `LAYOUTTEST_PASS`/`LAYOUTTEST_FAIL`, exit status = failures. About 46 assertions (listed in §8).

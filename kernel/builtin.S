@@ -371,3 +371,17 @@ builtin_giftest_end:
 builtin_webptest_start:
 .incbin "build/user/webptest.elf"
 builtin_webptest_end:
+
+.balign 4
+.global builtin_aactest_start
+.global builtin_aactest_end
+builtin_aactest_start:
+.incbin "build/user/aactest.elf"
+builtin_aactest_end:
+
+.balign 4
+.global builtin_play_start
+.global builtin_play_end
+builtin_play_start:
+.incbin "build/user/play.elf"
+builtin_play_end:

@@ -95,6 +95,22 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.96.0
+
+- **A live Twitch channel can be heard (13 §3.11, 11 §3.8a, 10 §3.5a)**: an AAC-LC decoder (`aac.h`, codebooks from
+  3GPP TS 26.410's numbers by `tools/mkaac.py`), a transport stream demuxer (`ts.h`), HLS (`hls.h`) and a player
+  (`play.c`) the channel page's "listen" link starts (`play:` addresses, browser.c). aactest (ring3check): four
+  sounds and a transport stream agree with Windows' decoding at 101-199 dB; failing with TNS skipped, with M/S
+  skipped and with the short-window order wrong. playcheck (gate): the browser's listen link to a stream from a host
+  server is clicked, and the stream is heard whole, at its pitch, with no gap, its playlist read once and each
+  segment once; failing with each of seven breaks, the browser not handing `play:` over among them. sitetest:
+  the link, failing without it.
+- **The sound ring holds 1.36 s, and a program can ask how much room and how much is queued (05 §3.10)**:
+  `sound_info`'s `room` and `queued`. Music keeps a third of a second queued so Stop is heard; a note (`beep`, the
+  desktop's click) still lasts about its length, never waiting longer. `[sound]`, four checks, which now run in the
+  gate (q35 has an HD Audio card playing to nowhere), failing with no room, nothing counted as queued and a note
+  that does not wait; appcheck, what music leaves queued at the end of a file (312 ms; 561 with the limit taken out).
+
 ### 0.95.0
 
 - **The theme keeps what was set by hand (07 §10 11, 12)**: a ground set under a preset's accent was saved as the

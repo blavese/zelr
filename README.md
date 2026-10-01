@@ -260,7 +260,11 @@ reads the configuration the manufacturer left on each socket, picks the one
 most likely to be the speaker, and walks backwards along the connection lists
 until it reaches a converter. Tested by playing notes and measuring the
 recording, because every step of an audio driver can report success while
-producing silence.
+producing silence. The buffer it plays from holds a second and a third, so a
+program playing a stream can fetch the next piece of it without the sound
+stopping, and a program asks how much room there is and how much is still
+queued (`sound_info`), so the music player keeps only a third of a second in
+it and its Stop is still heard to stop.
 
 There is a second controller, because HD Audio is not what a virtual machine
 necessarily offers: VMware hands a guest whose kind it does not recognise an
@@ -392,6 +396,7 @@ instead.
     python tools/soundcheck.py  play notes and measure what came out
     python tools/enscheck.py    the same, out of the other sound card
     python tools/volcheck.py    drag the volume slider, listen to the result
+    python tools/playcheck.py   click a stream's link in the browser, measure what came out
     python tools/framecheck.py  move the pointer, ask what the frames cost
     python tools/mountcheck.py  mount a usb stick, copy files, watch the flushes
     python tools/namecheck.py   save long names and read them back
@@ -1376,10 +1381,23 @@ frames from it too, taken from the storyboards YouTube keeps for scrubbing:
 sheets of small pictures at a fixed interval all the way through, and a
 Twitch past broadcast does the same from Twitch's own. The JSON is read where
 it lies rather than parsed into a tree, and everything taken from it is
-escaped before it goes into the page, since it came from somebody else. What
-it cannot do is play anything: the video is H.264 sent in pieces chosen by
-the site's own player, and there is no video decoder here. Each page says
-so. Google's results are made by a program that first decides whether a
+escaped before it goes into the page, since it came from somebody else.
+
+A live Twitch channel can be listened to. Its page has a "listen" link, which
+starts the player (`userland/play.c`) rather than going anywhere: it asks
+Twitch's API for an access token the way Twitch's own page does, takes the
+channel's playlist with it, and fetches the two-second pieces of the stream
+as they appear. Each piece is an MPEG transport stream (`ts.h`) of AAC
+(`aac.h`), a decoder written here from the standard and checked sample for
+sample against Windows' own decoding of the same files; the codebooks are
+numbers read out of 3GPP's published reference and checked to be whole. The
+player is a program of its own so that the waiting a stream does is never the
+page's, and it writes no more than the sound card has room for, so its waits
+are on the network rather than in a write. A harness serves a stream from the
+host, clicks its link in the browser on the desktop and measures the
+recording: its pitch, its length, and any gap where the card ran dry. The picture is H.264 and there is no video decoder here yet, so
+it is sound only; YouTube does not play at all, since its streams are given
+to its own player only, with tokens that player makes. Google's results are made by a program that first decides whether a
 person is asking, which is not something to get round, so a search asked of
 Google is asked of DuckDuckGo, and the page says that too.
 
@@ -1557,7 +1575,8 @@ so the host gets a real exit status.
     714 passed, 0 failed
     SELFTEST_PASS
 
-The sound section is skipped because `run.sh` attaches no sound card, the
+The sound section is skipped because `run.sh` attaches no sound card (the
+gate's q35 run gives it one), the
 identity map is checked in four more places when there is more memory to map,
 and the desktop keeps a copy of its wallpaper only when the memory allows it,
 which two more checks need: given 256 MiB, as the gate gives it, the same run

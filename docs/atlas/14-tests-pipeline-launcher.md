@@ -72,7 +72,7 @@ For each of these I read the header and the assertion logic. Almost all were rea
 | tools/piccheck.py | 79 | Runs pngtest, jpegtest, svgtest, layouttest and pagetest in ring 3 (all five are also in ring3check). |
 | tools/powercheck.py | 65 | `shutdown` must make QEMU exit with code 0 (ACPI S5 from the `_S5` AML object). |
 | tools/progcheck.py | 98 | A program copied to /home runs by typing its name, and not-a-program files are refused. |
-| tools/ring3check.py | 107 | 19 ring-3 test programs, run by their `*_PASS` markers (21 since 0.69.0: sitetest, giftest; 22 since 0.72.0: webptest). The JS suite must have at least 86 cases. |
+| tools/ring3check.py | 107 | 19 ring-3 test programs, run by their `*_PASS` markers (21 since 0.69.0: sitetest, giftest; 22 since 0.72.0: webptest; 23 since 0.96.0: aactest). The JS suite must have at least 86 cases. |
 | tools/host/ | -- | Since 0.69.0: ring 3 programs built for the Windows host on a system-call shim, TLS by a local proxy, `render.py` for many pages at once, `cssq` for the rules reaching an element, `laydump` (since 0.72.0) for where every item and block of a page was laid out. A host tool, not in the gate. |
 | tools/sdkcheck.py | 143 | `sdk/hello.c` built outside the tree with sdk/build.sh, put on a mkfat volume and run with arguments. |
 | tools/setcheck.py | 292 | `/sys/settings` table, a hand-written `dock_h`, and a settings-window toggle that rewrites `/zelr.cfg`. |
@@ -86,6 +86,8 @@ For each of these I read the header and the assertion logic. Almost all were rea
 | tools/tlscheck.py | 173 | HTTPS against 5 real internet sites (needs internet access), a non-TLS port refused, plain http. |
 | tools/sitecheck.py | 150 | Since 0.61.0: `sitetest live` on a real YouTube search and watch page and Twitch's front page and directory; the browser on YouTube, Twitch and a Google search (needs internet access). |
 | tools/usbcheck.py | 331 | xHCI keyboard and mouse, a hub, hot-plug, and a USB stick sector read and write verified on the host. |
+| tools/playcheck.py | ~260 | Since 0.96.0: a finished HLS playlist of six AAC segments from a server on the host, started by clicking a `play:` link in the browser on the desktop and played by `/bin/play` on HD Audio; the WAV is measured for pitch per channel (median period), length and the longest gap, and the server for how often each address was asked for (13 §3.11). |
+| tools/appcheck.py (0.96.0) | -- | Also reads music's `finished with N ms still to play` and holds it to 400 ms (Stop heard to stop with the bigger ring). |
 | tools/volcheck.py | 143 | Drags the dock volume slider; the loud note must be louder than the quiet one (WAV). |
 | tools/webcheck.py | 170 | TCP/HTTP against the host server: large bodies, keep-alive, slow bodies, 404, pcnet, ne2k_pci, and an instant guestfwd reply. |
 | tools/webserver.py | 633 | Host HTTP/1.1 server (`ThreadingHTTPServer` on 127.0.0.1:0) with all the test pages. The guest reaches it at `10.0.2.2:<port>`. |
@@ -322,7 +324,7 @@ The kernel selftest step functions:
 | Function | Lines | QEMU command | Disk |
 |---|---|---|---|
 | `selftest` | 282-294 | `timeout 300 $QEMU -kernel build/zelr.bin -m 256 -no-reboot -display none -serial stdio -append selftest -drive file=gate.img,format=raw,if=ide,index=0 -device isa-debug-exit,iobase=0xf4,iosize=0x04` | fresh 32 MiB `gate.img` |
-| `selftest_q35` | 316-329 | `-machine q35` … `-drive file=gateq.img,format=raw,if=none,id=d0 -device ahci,id=ahci -device ide-hd,drive=d0,bus=ahci.0` + debug-exit | fresh 32 MiB `gateq.img` |
+| `selftest_q35` | 316-329 | `-machine q35` … `-drive file=gateq.img,format=raw,if=none,id=d0 -device ahci,id=ahci -device ide-hd,drive=d0,bus=ahci.0` + debug-exit; since 0.96.0 also `-audiodev none -device intel-hda -device hda-output`, so `[sound]` runs (no other selftest has a card) | fresh 32 MiB `gateq.img` |
 | `selftest_nvme` | 378-390 | `-machine q35` … `-drive file=gatenv.img,format=raw,if=none,id=nv0 -device nvme,drive=nv0,serial=zelr0001` + debug-exit | fresh 64 MiB `gatenv.img` |
 
 Each selftest step prints `grep -E 'FAIL|passed,' | tail -3` and **passes iff `SELFTEST_PASS` appears** in the output. The QEMU exit code is not used. None of them passes `-smp` or `-nic`, so QEMU's default user-mode NIC is present: `e1000` on pc and `e1000e` on q35. `kernel/e1000.c:25` supports device 0x10D3, which is e1000e.
@@ -534,7 +536,7 @@ A failing static step counts as a failure, but the gate continues.
 |---|---|---|---|---|
 | A1 | the kernel's own checks | `selftest` | 300 | pc, IDE `gate.img` 32 MiB, `-m 256`, `-append selftest`, debug-exit |
 | A2 | what a program can do that it could not | `keep timeout 600 python tools/ring3check.py` | 600 | G(pc,256) |
-| A3 | the same checks on q35, with pcie and ahci | `selftest_q35` | 300 | q35 + ahci + ide-hd, `gateq.img` 32 MiB |
+| A3 | the same checks on q35, with pcie and ahci | `selftest_q35` | 300 | q35 + ahci + ide-hd + intel-hda (0.96.0), `gateq.img` 32 MiB |
 | A4 | the shell answers over serial | `keep timeout 400 bash tools/shell_test.sh` | 400 (90 inner) | pc `-m 64`, no disk |
 | A5 | the boot log survives a reboot | `keep timeout 400 bash tools/blackbox_test.sh` | 400 (2×90 inner) | pc `-m 128`, IDE, 2 boots |
 
@@ -567,6 +569,7 @@ Then `par_wait`.
 | C6 | notes come out at the pitch they were asked for | soundcheck.py | 600 |
 | C7 | and out of the ensoniq as well | enscheck.py | 600 |
 | C8 | the volume slider can be heard changing the volume | volcheck.py | 600 |
+| C8a | a stream is heard whole and at its pitch (0.96.0) | playcheck.py | 600 |
 | C9 | a frame sends the part of the screen that changed | framecheck.py | 600 |
 | C10 | a usb stick mounts, and files copy off it | mountcheck.py | 600 |
 | C11 | files keep the names they were given | namecheck.py | 600 |
@@ -899,7 +902,7 @@ Drive methods:
 | defaultcheck.py | every (serial) | none | n/a | Wallpaper enum parses; kernel and settings defaults and saved keys agree. **Currently vacuous.** | 3 | <2 s |
 | selftest (gate.sh:282) | fast | pc `-m 256 -append selftest`, IDE 32 MiB, isa-debug-exit | S | `SELFTEST_PASS` appears. | ≈556 (in-kernel) | ~1 min |
 | ring3check.py | fast | G(pc,256) | S | 19 suites: each runs and prints `_PASS`; jstest has at least 86 cases. | 39 | 3-5 min |
-| selftest_q35 | fast | q35, `-device ahci` + `ide-hd`, 32 MiB | S | `SELFTEST_PASS`. | in-kernel | ~1 min |
+| selftest_q35 | fast | q35, `-device ahci` + `ide-hd`, intel-hda to `none` (0.96.0), 32 MiB | S | `SELFTEST_PASS`. | in-kernel | ~1 min |
 | shell_test.sh | fast | pc `-m 64 -append console`, **no disk** | S | uname and version, file operations, cd/pwd, ps, mem, spawn, exec hello, wintest surface at 0x8060000000, echo. | 17 | ~40 s |
 | blackbox_test.sh | fast | pc `-m 128`, IDE 32 MiB, 2 boots | S | The second boot's `/sys/lastboot` (fenced) holds the first boot's marks and "prepared", and not "fat16 mounted". | 11 | ~40 s |
 | gpt_test.sh | full | pc `-m 256`, IDE, 4 boots | S | Good GPT mounts partition 2, not the ESP; bad header CRC and bad entry CRC are rejected and nothing is mounted; a bare disk is formatted. | 12 | 1-1.5 min |
@@ -915,6 +918,7 @@ Drive methods:
 | inputcheck.py | screen | 5 × G(q35,128) | K | Typing works after 0/8/25 keys, 8 mouse moves, or both, sent during boot. | 5 | 2-4 min |
 | soundcheck.py | screen | G(q35,256) `-audiodev wav -device intel-hda -device hda-output` | S,A | hda found with a codec route; `beep 440 600` and `beep 880 600`; exactly 2 notes at ±6%; different; silent afterwards. | 9 | ~1 min |
 | enscheck.py | screen | G(pc,256) `-device ES1370,audiodev=a0` | S,A | `ensoniq es137`, `44100 Hz`, then the same 2-note checks. | 9 | ~1 min |
+| playcheck.py | screen | G(q35,256) + intel-hda (WAV), e1000 to a host server | S,M,A | the browser shows the listen page; a click starts `play`, which says playing and ended; every segment decoded; playlist read once, each segment once from the first; 5.6-6.6 s heard, no gap over 80 ms; 440/660 Hz within 3%. | 11 | ~45 s |
 | volcheck.py | screen | G(pc,256) + intel-hda | S,M,P,A | Speaker popover opens; slider drags produce at least 2 bursts; the loud one's peak is more than 1.5× the quiet one's. | 5 | 1-1.5 min |
 | framecheck.py | screen | G(pc,512) `-smp 2` | S,M,K | `/sys/screen`: fullkib > 1000; more than 10 frames drawn; average frame KiB less than half the full frame; `shared > 0`. Since 0.54.0 also: pointer moves over a terminal's contents and bare desktop redraw only the pointer (`pointeronly`); after steps over bare desktop the arrow is where it was sent and nowhere it has been, with the kernel's `draws` (read through the monitor, `kernel_symbol`) unchanged across the walk; the first icon lights up under the pointer; a blinking terminal draws at least 2 frames in 4 s, and with every window put away no more than 1 in 8 s. Since 0.55.0 also, over those 4 s: every frame drew only what changed (the kernel's `partial_draws`), each commit copied under 256 KiB (winsrv.c `published_bytes` over `published_frames`: the terminal's blink commits its bottom row), and the cursor's colour rises and falls by at least 20 pixels on the screen. Since 0.56.0 the commits' size is the kernel's diff: a blink copies under 8 KiB a commit (`published_bytes`), the terminal hands over under 256 KiB (`compared_bytes`), and a typed character, a whole commit, copies under 32 KiB. Since 0.57.0 the first session's whole frames are twelve clicks on bare desktop (the band checks), its moves along the dock must all be partial with more than 10 drawn as hover zones (`hover_frames`), the terminal's close button lights down to its lower corner, and the dock's badge lights under the pointer over a maximised window; and under the stars wallpaper (`write /zelr.cfg wallpaper 4`), at least 2 of 20 or more frames in four seconds are partial. Since 0.58.0 each session enters the desktop through `enter_desktop` (90 s for the terminal, typed again once), and the first says whether it came up; the idle stretch also wants the desktop's loop under 100 passes in eight seconds (`passes`) and no disk reads (blockdev.c `io`), and the blinking stretch no commit drawn late (`late_commits`; since 0.60.0 the average wait, `lag_ticks` over `lag_count`, at most 3 ticks). | 24 | 3-4 min |
 | mountcheck.py | screen | G(q35,256) with xhci and usb-storage (mkfat 8 MiB FAT16) | S,H | Mounted; ls/cat on the stick; write joins the existing file; copy to /home; `usb/` in `/`; readfat confirms file and contents. | 8 | ~1 min |

@@ -505,6 +505,11 @@ if [ "$MODE" = "screen" ] || [ "$MODE" = "full" ]; then
   # just set to, so the check is that the quiet one is quieter.
   voltest() { keep timeout 600 python tools/volcheck.py; }
 
+  # A stream's sound, by ear: a finished playlist from a server on the host,
+  # fetched, taken apart, decoded and played by /bin/play, and the recording
+  # measured for its pitch, its length and any gap where the card ran dry.
+  playtest() { keep timeout 600 python tools/playcheck.py; }
+
   # And what a frame costs. The desktop sends the bands of the screen that
   # differ from the last one rather than all of it, and hands half of the
   # comparison to a second processor; both are easy to claim and easy to
@@ -674,6 +679,7 @@ if [ "$MODE" = "screen" ] || [ "$MODE" = "full" ]; then
   par_start "notes come out at the pitch they were asked for" soundtest
   par_start "and out of the ensoniq as well" enstest
   par_start "the volume slider can be heard changing the volume" voltest
+  par_start "a stream is heard whole and at its pitch" playtest
   par_start "a frame sends the part of the screen that changed" frametest
   par_start "a usb stick mounts, and files copy off it" mounttest
   par_start "files keep the names they were given" nametest

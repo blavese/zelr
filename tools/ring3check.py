@@ -51,6 +51,7 @@ SUITES = [
     ("sitetest",  "SITETEST_PASS",  "YouTube and Twitch read from their data", 120),
     ("giftest",   "GIFTEST_PASS",   "gif pictures, made by another encoder", 120),
     ("webptest",  "WEBPTEST_PASS",  "webp pictures, made by another encoder", 240),
+    ("aactest",   "AACTEST_PASS",   "aac sound, made by another encoder", 240),
 ]
 
 

@@ -673,9 +673,11 @@ static void checks(void) {
            n > 0 && has(page, "<h1>Some\xC3\xA9One</h1>") && has(page, "<b>live:</b> live now")
            && has(page, "Chess &middot; 42 watching") && has(page, "live_user_x-640x360.jpg"));
         ok("and what it says about itself, escaped", has(page, "<p>hi &lt;there&gt;</p>"));
+        ok("and offers its stream to the player", has(page, "<a href=\"play:twitch:somename\">listen</a>"));
         n = tw(TW_CHANNEL, "quiet", TW_OFF_USER);
         ok("a channel that is not live says so, and what it last streamed",
            n > 0 && has(page, "offline; last streamed: yesterday's") && !has(page, "watching"));
+        ok("and offers nothing to play", !has(page, "play:twitch"));
         n = tw(TW_CHANNEL, "nobody_here", TW_NO_USER);
         ok("a name Twitch has never heard of says that",
            n > 0 && has(page, "<h1>nobody_here</h1>") && has(page, "knows nobody by that name"));

@@ -3394,7 +3394,12 @@ int main(int argc, char **argv) {
         if (over_link >= 0 && in.released) {
             in.released = 0;
             url_t next;
-            if (url_join(&here, page.text + page.links[over_link].href, &next)) {
+            const char *href = page.text + page.links[over_link].href;
+            /* A stream, to the player: a program of its own (play.c), so the
+               page stays where it is and the stream's waiting is not its. */
+            if (w_starts_fold(href, "play:")) {
+                if (spawn_arg("/bin/play", href + 5) < 0) puts("browser: the player could not be started\n");
+            } else if (url_join(&here, href, &next)) {
                 char text_of[URL_TEXT];
                 url_text(&next, text_of, sizeof(text_of));
                 set_address(text_of);
