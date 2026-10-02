@@ -618,11 +618,191 @@ static inline int ka_matches(const url_t *u) {
         && w_same_fold(u->host, ka_host);
 }
 
-/* One request. A body means POST: the same head with a method, a length
-   and a type on it, and the bytes after the blank line. Nothing else about
-   the exchange differs, which is why it is one function and not two. */
-static inline int web_fetch_once(const url_t *u, const char *body,
-                                 char *buf, int cap, response_t *r) {
+/* The request's head, from the settings above: its length, or -1 when it
+   does not fit. A body means POST unless web_method says otherwise. */
+static inline int web_head_for(const url_t *u, const char *body, char *req, int cap) {
+    const char *method = web_method ? web_method : body ? "POST" : "GET";
+    int blen = body ? (web_body_len >= 0 ? web_body_len : w_len(body)) : 0;
+    int n = 0;
+    n = wh_add(req, cap, n, method);
+    if (n >= 0) n = wh_add(req, cap, n, " ");
+    if (n >= 0) n = wh_add(req, cap, n, u->path);
+    if (n >= 0) n = wh_add(req, cap, n, " HTTP/1.1\r\nHost: ");
+    if (n >= 0) n = wh_add(req, cap, n, u->host);
+    /* The port belongs in Host only when it is not the one the scheme
+       implies. Sending "Host: www.google.com:443" is legal and a number of
+       servers answer it with a redirect to themselves, forever. */
+    if (n >= 0 && u->port != (u->secure ? 443 : 80)) {
+        n = wh_add(req, cap, n, ":");
+        if (n >= 0) n = wh_add_num(req, cap, n, u->port);
+    }
+    if (n >= 0) n = wh_add(req, cap, n, "\r\nUser-Agent: " WEB_USER_AGENT "\r\n");
+    /* What it takes, unless the lines a page set say so themselves. */
+    if (!wh_has_line(web_extra, "accept")) {
+        if (n >= 0) n = wh_add(req, cap, n, "Accept: ");
+        if (n >= 0) n = wh_add(req, cap, n, web_accept ? web_accept : "text/html,text/plain,*/*");
+        if (n >= 0) n = wh_add(req, cap, n, "\r\n");
+    }
+    if (n >= 0) n = wh_add(req, cap, n,
+                           "Accept-Encoding: gzip\r\n"
+                           "Connection: keep-alive\r\n");
+
+    /* Whatever this site has already said to remember about itself. */
+    char cookies[CK_VALUE];
+    if (ck_header(u, cookies, sizeof(cookies))) {
+        if (n >= 0) n = wh_add(req, cap, n, "Cookie: ");
+        if (n >= 0) n = wh_add(req, cap, n, cookies);
+        if (n >= 0) n = wh_add(req, cap, n, "\r\n");
+    }
+    /* And who is asking, as far as the asking page's policy says. */
+    char ref[URL_TEXT];
+    if (web_referrer_for(u, ref, sizeof(ref))) {
+        if (n >= 0) n = wh_add(req, cap, n, "Referer: ");
+        if (n >= 0) n = wh_add(req, cap, n, ref);
+        if (n >= 0) n = wh_add(req, cap, n, "\r\n");
+    }
+    if (web_extra && n >= 0) n = wh_add(req, cap, n, web_extra);
+    /* A server is entitled to read exactly this many bytes and not one
+       more, so the length has to be the body's and not the buffer's. */
+    if (body) {
+        /* A type of "" is a body that says nothing of what it is. */
+        if (!web_body_type || web_body_type[0]) {
+            if (n >= 0) n = wh_add(req, cap, n, "Content-Type: ");
+            if (n >= 0) n = wh_add(req, cap, n, web_body_type ? web_body_type
+                                                 : "application/x-www-form-urlencoded");
+            if (n >= 0) n = wh_add(req, cap, n, "\r\n");
+        }
+        if (n >= 0) n = wh_add(req, cap, n, "Content-Length: ");
+        if (n >= 0) n = wh_add_num(req, cap, n, blen);
+        if (n >= 0) n = wh_add(req, cap, n, "\r\n");
+    } else if (w_same_fold(method, "POST") || w_same_fold(method, "PUT") || w_same_fold(method, "PATCH")) {
+        /* A method that carries a body says when it carries none. */
+        if (n >= 0) n = wh_add(req, cap, n, "Content-Length: 0\r\n");
+    }
+    if (n >= 0) n = wh_add(req, cap, n, "\r\n");
+    return n;
+}
+
+/* The head and the body after it, in the pieces the socket takes (1400
+   bytes; a long path or a form is more). 0, or -1 when a send failed. */
+static inline int web_send_all(int sock, const char *req, int n, const char *body, int blen) {
+    for (int sent = 0; sent < n; ) {
+        int piece = n - sent > 1400 ? 1400 : n - sent;
+        if (send(sock, req + sent, piece) < 0) return -1;
+        sent += piece;
+    }
+    for (int bs = 0; body && bs < blen; ) {
+        int piece = blen - bs > 1400 ? 1400 : blen - bs;
+        if (send(sock, body + bs, piece) < 0) return -1;
+        bs += piece;
+    }
+    return 0;
+}
+
+/* Where an answer's head ends and how its body is measured, once the head
+   has come: hlen -1 until then. */
+typedef struct {
+    int hlen, skip, want, chunked;
+} web_shape;
+
+/* Looks at what has arrived, buf[0..total), and passes over interim answers
+   (103 Early Hints, 100 Continue) that come down the connection ahead of the
+   real one and were taken for it, with the real one as its body. 101 is
+   not one: it is the connection turning into something else. total may
+   shrink. */
+static inline void web_shape_of(char *buf, int *total, int head_only, web_shape *s) {
+    if (s->hlen >= 0) return;
+    s->hlen = wh_split(buf, *total, &s->skip);
+    for (int st; s->hlen >= 0 && (st = wh_status(buf, *total)) >= 100 && st < 200 && st != 101; ) {
+        int gone = s->hlen + s->skip;
+        for (int i = gone; i <= *total; i++) buf[i - gone] = buf[i];
+        *total -= gone;
+        s->hlen = wh_split(buf, *total, &s->skip);
+    }
+    if (s->hlen < 0) return;
+    char v[64];
+    if (wh_header(buf, s->hlen, "transfer-encoding", v, sizeof(v)))
+        s->chunked = w_starts_fold(v, "chunked");
+    if (!s->chunked && wh_header(buf, s->hlen, "content-length", v, sizeof(v)))
+        s->want = wh_number(v);
+    /* These have no body whatever the head says (RFC 9112 6.3), and one
+       sent without a length was waited on for three quiet reads. */
+    int st = wh_status(buf, *total);
+    if (st == 204 || st == 304 || head_only) { s->want = 0; s->chunked = 0; }
+}
+
+/* Whether the answer has reached the end it said it would: its length, or
+   the zero sized last piece of a chunked one. (One with neither ends with
+   the connection.) */
+static inline int web_shape_done(const char *buf, int total, const web_shape *s) {
+    if (s->hlen < 0) return 0;
+    if (s->want >= 0) return total - s->hlen - s->skip >= s->want;
+    if (!s->chunked) return 0;
+    int at = total - 5;
+    if (at < s->hlen) at = s->hlen;
+    for (int i = at; i + 4 < total + 1 && i + 4 <= total; i++)
+        if (buf[i] == '0' && buf[i + 1] == '\r' && buf[i + 2] == '\n'
+            && buf[i + 3] == '\r' && buf[i + 4] == '\n') return 1;
+    return 0;
+}
+
+/* Whether the connection can be kept for the next request: the answer was
+   whole, said how long it was, and the server did not ask to close. */
+static inline int web_keepable(const char *buf, int whole, const web_shape *s) {
+    if (!whole || s->hlen < 0 || (s->want < 0 && !s->chunked)) return 0;
+    char conn[32];
+    return !wh_header(buf, s->hlen, "connection", conn, sizeof(conn)) || !w_starts_fold(conn, "close");
+}
+
+/* The answer read into r, once it is all there: the status, the head, the
+   headers this file uses, the cookies, the body with its chunks joined and
+   its compression undone. */
+static inline int web_read_answer(const url_t *u, char *buf, int cap, int total,
+                                  web_shape *s, response_t *r) {
+    buf[total < cap ? total : cap - 1] = 0;
+    if (total == 0) return WEB_ERR_EMPTY;
+    if (s->hlen < 0) s->hlen = wh_split(buf, total, &s->skip);
+    if (s->hlen < 0) return WEB_ERR_HEADERS;
+    int hlen = s->hlen, skip = s->skip;
+
+    r->status = wh_status(buf, total);
+    r->head = buf;
+    r->hlen = hlen;
+
+    wh_header(buf, hlen, "location", r->location, sizeof(r->location));
+    wh_header(buf, hlen, "content-type", r->ctype, sizeof(r->ctype));
+    wh_header(buf, hlen, "referrer-policy", r->refpol, sizeof(r->refpol));
+    ck_take(u, buf, hlen);
+
+    r->body = buf + hlen + skip;
+    r->len = total - hlen - skip;
+    if (r->len < 0) r->len = 0;
+
+    if (s->chunked) {
+        int d = wh_dechunk(r->body, r->len);
+        r->len = d > 0 ? d : 0;
+    } else if (s->want >= 0 && s->want < r->len) {
+        r->len = s->want;                    /* ignore anything after it */
+    }
+    r->body[r->len] = 0;
+
+    /* Undone after the chunks, because the chunking is how it travelled and
+       the compression is what it is. */
+    char enc[32];
+    if (wh_header(buf, hlen, "content-encoding", enc, sizeof(enc))
+        && w_starts_fold(enc, "gzip")) {
+        int room = cap - (int)(r->body - buf) - 1;
+        int cut = 0;
+        int got = wh_gunzip(r->body, r->len, room, &cut);
+        if (got < 0) return WEB_ERR_ENCODING;
+        if (cut) r->truncated = 1;
+        r->len = got;
+        r->body[r->len] = 0;
+    }
+    return r->status ? r->status : WEB_ERR_EMPTY;
+}
+
+static inline void web_answer_clear(response_t *r, char *buf) {
     r->status = 0;
     r->body = buf;
     r->len = 0;
@@ -635,6 +815,14 @@ static inline int web_fetch_once(const url_t *u, const char *body,
     r->hlen = 0;
     r->secure = 0;
     r->how[0] = 0;
+}
+
+/* One request. A body means POST: the same head with a method, a length
+   and a type on it, and the bytes after the blank line. Nothing else about
+   the exchange differs, which is why it is one function and not two. */
+static inline int web_fetch_once(const url_t *u, const char *body,
+                                 char *buf, int cap, response_t *r) {
+    web_answer_clear(r, buf);
 
     if (ka_matches(u)) {
         /* Already there. A TLS connection kept is a handshake not done. */
@@ -667,96 +855,12 @@ static inline int web_fetch_once(const url_t *u, const char *body,
     const char *method = web_method ? web_method : body ? "POST" : "GET";
     int blen = body ? (web_body_len >= 0 ? web_body_len : w_len(body)) : 0;
     int head_only = w_same_fold(method, "HEAD");
-    int n = 0;
-    n = wh_add(req, sizeof(req), n, method);
-    if (n >= 0) n = wh_add(req, sizeof(req), n, " ");
-    if (n >= 0) n = wh_add(req, sizeof(req), n, u->path);
-    if (n >= 0) n = wh_add(req, sizeof(req), n, " HTTP/1.1\r\nHost: ");
-    if (n >= 0) n = wh_add(req, sizeof(req), n, u->host);
-    /* The port belongs in Host only when it is not the one the scheme
-       implies. Sending "Host: www.google.com:443" is legal and a number of
-       servers answer it with a redirect to themselves, forever. */
-    if (n >= 0 && u->port != (u->secure ? 443 : 80)) {
-        n = wh_add(req, sizeof(req), n, ":");
-        if (n >= 0) n = wh_add_num(req, sizeof(req), n, u->port);
-    }
-    /* identity, because there is no decompressor here and a server that is
-       allowed to gzip will. Close, because this makes one request per
-       connection and a server holding the socket open afterwards is a wait
-       for nothing. */
-    if (n >= 0) n = wh_add(req, sizeof(req), n, "\r\nUser-Agent: " WEB_USER_AGENT "\r\n");
-    /* What it takes, unless the lines a page set say so themselves. */
-    if (!wh_has_line(web_extra, "accept")) {
-        if (n >= 0) n = wh_add(req, sizeof(req), n, "Accept: ");
-        if (n >= 0) n = wh_add(req, sizeof(req), n, web_accept ? web_accept : "text/html,text/plain,*/*");
-        if (n >= 0) n = wh_add(req, sizeof(req), n, "\r\n");
-    }
-    if (n >= 0) n = wh_add(req, sizeof(req), n,
-                           "Accept-Encoding: gzip\r\n"
-                           "Connection: keep-alive\r\n");
-
-    /* Whatever this site has already said to remember about itself. */
-    char cookies[CK_VALUE];
-    if (ck_header(u, cookies, sizeof(cookies))) {
-        if (n >= 0) n = wh_add(req, sizeof(req), n, "Cookie: ");
-        if (n >= 0) n = wh_add(req, sizeof(req), n, cookies);
-        if (n >= 0) n = wh_add(req, sizeof(req), n, "\r\n");
-    }
-    /* And who is asking, as far as the asking page's policy says. */
-    char ref[URL_TEXT];
-    if (web_referrer_for(u, ref, sizeof(ref))) {
-        if (n >= 0) n = wh_add(req, sizeof(req), n, "Referer: ");
-        if (n >= 0) n = wh_add(req, sizeof(req), n, ref);
-        if (n >= 0) n = wh_add(req, sizeof(req), n, "\r\n");
-    }
-    if (web_extra && n >= 0) n = wh_add(req, sizeof(req), n, web_extra);
-    /* A server is entitled to read exactly this many bytes and not one
-       more, so the length has to be the body's and not the buffer's. */
-    if (body) {
-        /* A type of "" is a body that says nothing of what it is. */
-        if (!web_body_type || web_body_type[0]) {
-            if (n >= 0) n = wh_add(req, sizeof(req), n, "Content-Type: ");
-            if (n >= 0) n = wh_add(req, sizeof(req), n, web_body_type ? web_body_type
-                                                         : "application/x-www-form-urlencoded");
-            if (n >= 0) n = wh_add(req, sizeof(req), n, "\r\n");
-        }
-        if (n >= 0) n = wh_add(req, sizeof(req), n, "Content-Length: ");
-        if (n >= 0) n = wh_add_num(req, sizeof(req), n, blen);
-        if (n >= 0) n = wh_add(req, sizeof(req), n, "\r\n");
-    } else if (w_same_fold(method, "POST") || w_same_fold(method, "PUT") || w_same_fold(method, "PATCH")) {
-        /* A method that carries a body says when it carries none. */
-        if (n >= 0) n = wh_add(req, sizeof(req), n, "Content-Length: 0\r\n");
-    }
-    if (n >= 0) n = wh_add(req, sizeof(req), n, "\r\n");
+    int n = web_head_for(u, body, req, sizeof(req));
     if (n < 0) { web_drop(); return WEB_ERR_SEND; }
-
-    /* The socket takes 1400 bytes at a time, and a long path can be more
-       than that. */
-    int sent = 0;
-    while (sent < n) {
-        int piece = n - sent;
-        if (piece > 1400) piece = 1400;
-        if (send(ka_sock, req + sent, piece) < 0) { web_drop(); return WEB_ERR_SEND; }
-        sent += piece;
-    }
-
-    /* And the body after the head, in the same sized pieces. Not part of
-       req: a form can be longer than the buffer a request line fits in. */
-    if (body) {
-        int bs = 0;
-        while (bs < blen) {
-            int piece = blen - bs;
-            if (piece > 1400) piece = 1400;
-            if (send(ka_sock, body + bs, piece) < 0) {
-                web_drop();
-                return WEB_ERR_SEND;
-            }
-            bs += piece;
-        }
-    }
+    if (web_send_all(ka_sock, req, n, body, blen) < 0) { web_drop(); return WEB_ERR_SEND; }
 
     int total = 0, quiet = 0, ended = 0;
-    int hlen = -1, skip = 0, want = -1, chunked = 0;
+    web_shape sh = { -1, 0, -1, 0 };
 
     for (;;) {
         int room = cap - 1 - total;
@@ -776,52 +880,13 @@ static inline int web_fetch_once(const url_t *u, const char *body,
         quiet = 0;
         total += got;
         buf[total] = 0;
-
-        if (hlen < 0) {
-            hlen = wh_split(buf, total, &skip);
-            /* An interim answer (103 Early Hints, 100 Continue) comes down the
-               connection ahead of the real one, and was taken for the answer,
-               with the real one as its body. Passed over. 101 is not one: it
-               is the connection turning into something else. */
-            for (int st; hlen >= 0 && (st = wh_status(buf, total)) >= 100
-                         && st < 200 && st != 101; ) {
-                int gone = hlen + skip;
-                for (int i = gone; i <= total; i++) buf[i - gone] = buf[i];
-                total -= gone;
-                hlen = wh_split(buf, total, &skip);
-            }
-            if (hlen >= 0) {
-                char v[64];
-                if (wh_header(buf, hlen, "transfer-encoding", v, sizeof(v)))
-                    chunked = w_starts_fold(v, "chunked");
-                if (!chunked && wh_header(buf, hlen, "content-length", v, sizeof(v)))
-                    want = wh_number(v);
-                /* These have no body whatever the head says (RFC 9112 6.3),
-                   and one sent without a length was waited on for three
-                   quiet reads. */
-                int st = wh_status(buf, total);
-                if (st == 204 || st == 304 || head_only) { want = 0; chunked = 0; }
-            }
-        }
+        web_shape_of(buf, &total, head_only, &sh);
 
         /* Stop as soon as the answer is complete rather than waiting for the
            connection to close. A server that ignores Connection: close would
            otherwise hold this here for the length of three timeouts on every
            single page. */
-        if (hlen >= 0 && want >= 0 && total - hlen - skip >= want) break;
-        if (hlen >= 0 && chunked) {
-            /* The end of a chunked body is a zero sized piece. */
-            int at = total - 5;
-            if (at < hlen) at = hlen;
-            for (int i = at; i + 4 < total + 1 && i + 4 <= total; i++) {
-                if (buf[i] == '0' && buf[i + 1] == '\r' && buf[i + 2] == '\n'
-                    && buf[i + 3] == '\r' && buf[i + 4] == '\n') {
-                    quiet = 99;
-                    break;
-                }
-            }
-            if (quiet == 99) break;
-        }
+        if (web_shape_done(buf, total, &sh)) break;
     }
 
     /* Whether the answer reached the end it said it had: its length, the
@@ -830,25 +895,13 @@ static inline int web_fetch_once(const url_t *u, const char *body,
        buffer was full -- is marked, so the reader can be told, and its
        connection is not kept: the rest of this answer may still be on its way
        down it, and the next request would read it as its own answer. */
-    int whole = 0;
-    if (hlen >= 0) {
-        if (want >= 0) whole = total - hlen - skip >= want;
-        else if (chunked) whole = quiet == 99;
-        else whole = ended;
-    }
+    int whole = sh.hlen >= 0 && (sh.want >= 0 || sh.chunked ? web_shape_done(buf, total, &sh) : ended);
     if (!whole && !r->truncated) r->cut = 1;
 
     /* Kept only when the answer said how long it was. Where it did not,
        the close is the only thing that marks the end and there is nothing
        to keep. */
-    int keep = 0;
-    if (whole && hlen >= 0 && (want >= 0 || chunked)) {
-        char conn[32];
-        if (!wh_header(buf, hlen, "connection", conn, sizeof(conn))
-            || !w_starts_fold(conn, "close"))
-            keep = 1;
-    }
-    if (keep) {
+    if (web_keepable(buf, whole, &sh)) {
         ka_live = 1;
         ka_port = u->port;
         ka_secure = u->secure;
@@ -859,50 +912,9 @@ static inline int web_fetch_once(const url_t *u, const char *body,
         ka_sock = -1;
     }
 
-    buf[total < cap ? total : cap - 1] = 0;
-
-    if (total == 0) return WEB_ERR_EMPTY;
-    if (hlen < 0) hlen = wh_split(buf, total, &skip);
-    if (hlen < 0) return WEB_ERR_HEADERS;
-
-    r->status = wh_status(buf, total);
-    r->head = buf;
-    r->hlen = hlen;
-
-    wh_header(buf, hlen, "location", r->location, sizeof(r->location));
-    wh_header(buf, hlen, "content-type", r->ctype, sizeof(r->ctype));
-    wh_header(buf, hlen, "referrer-policy", r->refpol, sizeof(r->refpol));
-    ck_take(u, buf, hlen);
-
-    r->body = buf + hlen + skip;
-    r->len = total - hlen - skip;
-    if (r->len < 0) r->len = 0;
-
-    if (chunked) {
-        int d = wh_dechunk(r->body, r->len);
-        r->len = d > 0 ? d : 0;
-    } else if (want >= 0 && want < r->len) {
-        r->len = want;                       /* ignore anything after it */
-    }
-    r->body[r->len] = 0;
-
-    /* Undone after the chunks, because the chunking is how it travelled and
-       the compression is what it is. */
-    char enc[32];
-    if (wh_header(buf, hlen, "content-encoding", enc, sizeof(enc))
-        && w_starts_fold(enc, "gzip")) {
-        int room = cap - (int)(r->body - buf) - 1;
-        int cut = 0;
-        int got = wh_gunzip(r->body, r->len, room, &cut);
-        if (got < 0) {
-            web_drop();
-            return WEB_ERR_ENCODING;
-        }
-        if (cut) r->truncated = 1;
-        r->len = got;
-        r->body[r->len] = 0;
-    }
-    return r->status ? r->status : WEB_ERR_EMPTY;
+    int rc = web_read_answer(u, buf, cap, total, &sh, r);
+    if (rc == WEB_ERR_ENCODING) web_drop();
+    return rc;
 }
 
 /* And once more on a fresh connection when a kept one had been closed at
@@ -978,4 +990,234 @@ static inline int web_get(url_t *u, char *buf, int cap, response_t *r) {
 static inline int web_post(url_t *u, const char *body, char *buf, int cap,
                            response_t *r) {
     return web_send(u, body ? body : "", buf, cap, r);
+}
+
+/* --- an answer that comes while the program does other things ------------
+ *
+ * Everything above waits: the request goes out and the call returns with
+ * the whole answer, which is right for the page being loaded and froze the
+ * browser for as long as a video's next stretch, or a script's fetch(),
+ * took to come. A job is the same exchange taken a step at a time: started
+ * (a connection made, or the one it kept reused, and the request sent),
+ * then asked on each pass of the program's loop for what has arrived, which
+ * never waits (sock_wait 0), until the answer is whole. Redirects are
+ * followed as web_send follows them, and a kept connection the far end had
+ * closed is tried once more on a new one, when nothing came back.
+ *
+ * Each job has a connection of its own, kept between its exchanges when the
+ * answer allowed it, so a video asking for one stretch after another reuses
+ * the one it made. Making a connection still waits: the kernel's connect
+ * and its TLS handshake return only when they are done.
+ */
+#define WJ_IDLE    0
+#define WJ_READING 1
+#define WJ_DONE    2
+#define WJ_FAILED  3
+#define WJ_QUIET   1200                /* ticks without a byte before it gives up, as three quiet reads did */
+
+typedef struct {
+    int   sock;                        /* -1: no connection */
+    char  host[URL_HOST];              /* what sock is connected to */
+    int   port, secure;
+    url_t u;                           /* where it asks now, after any redirect */
+    char *buf;                         /* the answer as it comes, head and all */
+    int   cap, max, total;
+    web_shape sh;
+    int   head_only, reused, hops, quiet_since, state, err;
+    /* What to ask, kept for a retry or a redirect: the caller's strings,
+       which must outlive the exchange. */
+    const char *method, *body, *type, *extra, *accept;
+    int   blen;
+    response_t r;
+} web_job;
+
+static inline void web_job_init(web_job *j) {
+    for (int i = 0; i < (int)sizeof(*j); i++) ((volatile char *)j)[i] = 0;
+    j->sock = -1;
+}
+
+static inline void web_job_hangup(web_job *j) {
+    if (j->sock >= 0) disconnect(j->sock);
+    j->sock = -1;
+}
+
+/* Whether the job's connection, if it has one, is to where u is. */
+static inline int web_job_at(const web_job *j, const url_t *u) {
+    return j->sock >= 0 && j->port == u->port && j->secure == u->secure && w_same_fold(j->host, u->host);
+}
+
+/* The request sent on the job's connection, one made when it has none to
+   this place. 0, or a WEB_ERR_. */
+static inline int web_job_send(web_job *j) {
+    url_t *u = &j->u;
+    j->reused = web_job_at(j, u);
+    if (!j->reused) {
+        web_job_hangup(j);
+        int rc = u->secure ? connect_tls(u->host, u->port) : connect(u->host, u->port);
+        if (rc < 0) return web_err_from(rc);
+        j->sock = rc;
+        j->port = u->port;
+        j->secure = u->secure;
+        w_copy(j->host, sizeof(j->host), u->host, sizeof(j->host));
+    }
+    sock_wait(j->sock, 0);
+    /* The settings web_head_for reads, the job's for the moment. */
+    const char *m0 = web_method, *t0 = web_body_type, *e0 = web_extra, *a0 = web_accept;
+    int b0 = web_body_len;
+    web_method = j->method;
+    web_body_type = j->type;
+    web_extra = j->extra;
+    web_accept = j->accept;
+    web_body_len = j->body ? j->blen : -1;
+    char req[URL_PATH + URL_HOST + CK_VALUE + URL_TEXT + 4096];
+    int n = web_head_for(u, j->body, req, sizeof(req));
+    web_method = m0;
+    web_body_type = t0;
+    web_extra = e0;
+    web_accept = a0;
+    web_body_len = b0;
+    if (n < 0) return WEB_ERR_SEND;
+    if (web_send_all(j->sock, req, n, j->body, j->body ? j->blen : 0) < 0) { web_job_hangup(j); return WEB_ERR_SEND; }
+    j->total = 0;
+    j->sh.hlen = -1;
+    j->sh.skip = 0;
+    j->sh.want = -1;
+    j->sh.chunked = 0;
+    j->quiet_since = ticks();
+    j->state = WJ_READING;
+    web_answer_clear(&j->r, j->buf);
+    return 0;
+}
+
+/* Sent once more on a new connection when a kept one would not take it. */
+static inline int web_job_send_fresh(web_job *j) {
+    int rc = web_job_send(j);
+    if (rc < 0 && j->reused) {
+        web_job_hangup(j);
+        rc = web_job_send(j);
+    }
+    if (rc < 0) { j->state = WJ_FAILED; j->err = rc; }
+    return rc;
+}
+
+/* An exchange begun: 0, or a WEB_ERR_ when it could not be sent. max is
+   the most the answer may take, head and all; the buffer grows to it. */
+static inline int web_job_start(web_job *j, const url_t *u, const char *method, const char *body, int blen,
+                                const char *type, const char *extra, const char *accept, int max) {
+    url_copy(&j->u, u);
+    j->method = method && !w_same_fold(method, "GET") ? method : 0;
+    j->body = body;
+    j->blen = blen;
+    j->type = type;
+    j->extra = extra;
+    j->accept = accept;
+    j->head_only = method && w_same_fold(method, "HEAD");
+    j->hops = 0;
+    j->err = 0;
+    j->max = max;
+    if (!j->buf) {
+        j->cap = max < 65536 ? max : 65536;
+        j->buf = (char *)malloc((u64)j->cap);
+        if (!j->buf) { j->cap = 0; j->state = WJ_FAILED; j->err = WEB_ERR_BUSY; return WEB_ERR_BUSY; }
+    }
+    return web_job_send_fresh(j);
+}
+
+/* Room for at least one more byte and its terminator, the buffer grown
+   toward max; 0 when it is as large as it may be. */
+static inline int web_job_room(web_job *j, int want) {
+    if (j->total + want < j->cap) return 1;
+    if (j->cap >= j->max) return 0;
+    int ncap = j->cap;
+    while (ncap < j->total + want + 1 && ncap < j->max) ncap = ncap * 2 > j->max ? j->max : ncap * 2;
+    char *nb = (char *)realloc(j->buf, (u64)ncap);
+    if (!nb) return 0;
+    j->buf = nb;
+    j->cap = ncap;
+    return 1;
+}
+
+/* What has arrived, taken without waiting: 0 while the answer is still
+   coming, 1 once it is whole (in j->r, good until the job's next exchange),
+   or a WEB_ERR_. */
+static inline int web_job_step(web_job *j) {
+    if (j->state == WJ_DONE) return 1;
+    if (j->state != WJ_READING) return j->err ? j->err : WEB_ERR_EMPTY;
+    int ended = 0, broken = 0, done = 0;
+    /* At most a couple of megabytes a pass, so a fast answer does not hold
+       the program's loop either. */
+    for (int round = 0; round < 64; round++) {
+        if (!web_job_room(j, 2)) { j->r.truncated = 1; done = 1; break; }
+        int room = j->cap - 1 - j->total;
+        int got = recv(j->sock, j->buf + j->total, room > 32768 ? 32768 : room);
+        if (got == NET_EOF) { ended = 1; break; }
+        if (got < 0) { broken = 1; break; }
+        if (got == 0) break;
+        j->quiet_since = ticks();
+        j->total += got;
+        j->buf[j->total] = 0;
+        web_shape_of(j->buf, &j->total, j->head_only, &j->sh);
+        if (web_shape_done(j->buf, j->total, &j->sh)) { done = 1; break; }
+    }
+    if (!done && !ended && !broken && ticks() - j->quiet_since < WJ_QUIET) return 0;
+
+    /* Nothing at all on a connection that was kept: closed at the far end
+       before it read the request, and not acted on. Once more, afresh. */
+    if (j->total == 0 && j->reused && (ended || broken)) {
+        web_job_hangup(j);
+        return web_job_send_fresh(j) < 0 ? j->err : 0;
+    }
+
+    int whole = j->sh.hlen >= 0 && (j->sh.want >= 0 || j->sh.chunked ? web_shape_done(j->buf, j->total, &j->sh) : ended);
+    if (!whole && !j->r.truncated) j->r.cut = 1;
+    if (!web_keepable(j->buf, whole, &j->sh)) web_job_hangup(j);
+    /* Room to undo its compression in. */
+    char enc[32];
+    if (j->sh.hlen >= 0 && wh_header(j->buf, j->sh.hlen, "content-encoding", enc, sizeof(enc))
+        && w_starts_fold(enc, "gzip"))
+        web_job_room(j, j->max);
+    j->r.secure = j->u.secure;
+    int rc = web_read_answer(&j->u, j->buf, j->cap, j->total, &j->sh, &j->r);
+    if (rc < 0) {
+        web_job_hangup(j);
+        j->state = WJ_FAILED;
+        j->err = rc;
+        return rc;
+    }
+
+    /* Redirects, as web_send_hops follows them. */
+    if ((rc == 301 || rc == 302 || rc == 303 || rc == 307 || rc == 308) && j->r.location[0]
+        && j->hops < WEB_MAX_HOPS - 1) {
+        url_t next;
+        if (url_join(&j->u, j->r.location, &next)
+            && !(w_same(next.host, j->u.host) && w_same(next.path, j->u.path)
+                 && next.port == j->u.port && next.secure == j->u.secure)) {
+            url_copy(&j->u, &next);
+            j->hops++;
+            if (j->body && (rc == 301 || rc == 302 || rc == 303)) j->body = 0;
+            if (j->method && !w_same_fold(j->method, "HEAD")
+                && (rc == 303 || ((rc == 301 || rc == 302) && w_same_fold(j->method, "POST")))) {
+                j->method = 0;
+                j->body = 0;
+            }
+            return web_job_send_fresh(j) < 0 ? j->err : 0;
+        }
+    }
+    j->state = WJ_DONE;
+    return 1;
+}
+
+/* Done with: the connection hung up unless it finished whole and keepable
+   (then kept for the next start), the buffer kept. */
+static inline void web_job_stop(web_job *j) {
+    if (j->state == WJ_READING) web_job_hangup(j);
+    j->state = WJ_IDLE;
+}
+
+static inline void web_job_free(web_job *j) {
+    web_job_hangup(j);
+    if (j->buf) free(j->buf);
+    j->buf = 0;
+    j->cap = 0;
+    j->state = WJ_IDLE;
 }

@@ -62,6 +62,10 @@ typedef struct {
        address held (in the region, reached from here). */
     char    url[URL_TEXT];
     jstr   *bytes;
+    /* The stretch under way (the browser's id for it, plus one; 0 for
+       none), and where it starts. */
+    int     ask;
+    long long ask_from;
 } jdmedia;
 
 typedef struct {
@@ -741,9 +745,16 @@ static jval nat_sb_tracks(jctx *J, jval t, jval *a, int n) {
 
 /* --- the element ---------------------------------------------------------------------------- */
 
+/* The stretch under way given up on, or finished with. */
+static void jd_media_ask_end(jdmedia *d) {
+    if (d->ask && jd_ask_end) jd_ask_end(d->ask - 1);
+    d->ask = 0;
+}
+
 /* The element let go of what it played: told emptied, at the start again. */
 static void jd_media_reset_slot(int s, int tell) {
     jdmedia *d = &jd_media[s];
+    jd_media_ask_end(d);
     jd_ms_detach(s);
     if (tell && (d->net == JM_NET_LOADING || d->net == JM_NET_IDLE)) jd_media_tell(s, "abort");
     jd_media_settle(s, 0, "AbortError", "the element was given something else to play");
@@ -1251,21 +1262,29 @@ static long long jd_range_total(const jd_reply *rp) {
 }
 
 /* One stretch of a file the element wants, fetched and fed: from the bytes
-   a blob: or data: address held, or by a range from the network. 1 when
-   something was asked for. */
+   a blob: or data: address held, or by a range from the network -- started
+   on one pass and taken on a later one where the browser can, so the page
+   and what is already buffered go on playing while it comes. 1 when
+   something was asked for or came. */
 static int jd_media_file_step(int s) {
     jdmedia *d = &jd_media[s];
-    long long from;
-    int len;
-    if (!media_file_want(&d->m, &from, &len)) return 0;
+    long long from = 0;
+    int len = 0;
     int r;
-    if (d->bytes) {
+    jd_reply rp = { 0, 0, 0, 0, 0, 0, 0 };
+    if (d->ask) {
+        int st = jd_ask_poll(d->ask - 1, &rp);
+        if (st == 0) return 0;
+        if (st < 0) rp.status = st;
+        from = d->ask_from;
+    } else if (!media_file_want(&d->m, &from, &len)) return 0;
+    if (d->bytes && !d->ask) {
         long long n = d->bytes->len;
         if (from >= n) { jd_media_fail(s, 4, "the file ends before what it says it holds"); return 1; }
         long long l = from + len > n ? n - from : len;
         r = media_file_feed(&d->m, from, (const u8 *)d->bytes->s + from, l, n);
     } else {
-        if (!jd_do_request) return 0;
+        if (!d->ask && !jd_do_request && !jd_ask_start) return 0;
         char range[64];
         int w = 0;
         const char *pre = "Range: bytes=";
@@ -1282,9 +1301,16 @@ static int jd_media_file_step(int s) {
         range[w++] = '\r';
         range[w++] = '\n';
         range[w] = 0;
-        jd_reply rp = { 0, 0, 0, 0, 0, 0, 0 };
-        jd_do_request("GET", d->url, 0, 0, 0, range, &rp);
+        if (!d->ask && jd_ask_start) {
+            int id = jd_ask_start("GET", d->url, 0, 0, 0, range, len + 65536);
+            if (id == -1) return 0;              /* every way out busy: a later pass */
+            if (id >= 0) { d->ask = id + 1; d->ask_from = from; return 1; }
+            rp.status = id;
+        } else if (!d->ask) {
+            jd_do_request("GET", d->url, 0, 0, 0, range, &rp);
+        }
         if (rp.status != 200 && rp.status != 206) {
+            jd_media_ask_end(d);
             jd_media_fail(s, d->ready ? 2 : 4, rp.status > 0 ? "the server would not give the file" : "the file could not be fetched");
             return 1;
         }
@@ -1293,6 +1319,7 @@ static int jd_media_file_step(int s) {
         long long at = rp.status == 206 ? from : 0;
         long long total = rp.status == 206 ? jd_range_total(&rp) : rp.len;
         r = rp.len > 0 ? media_file_feed(&d->m, at, (const u8 *)rp.body, rp.len, total) : -1;
+        jd_media_ask_end(d);
     }
     if (r < 0) jd_media_fail(s, d->ready ? 3 : 4, d->m.src[0].why[0] ? d->m.src[0].why : "the file is not MP4 this plays");
     else {
@@ -1385,7 +1412,8 @@ static int jd_media_due(void) {
         if (!d->el || (!d->ms && !d->m.file) || d->error) continue;
         long long from;
         int len;
-        if (d->m.file && media_file_want(&d->m, &from, &len)) return 0;
+        if (d->ask) best = 1;
+        else if (d->m.file && media_file_want(&d->m, &from, &len)) return 0;
         if (d->m.playing) return 1;
         if (d->ready >= JM_METADATA && !d->m.frames_shown) best = 2;
     }
@@ -1394,6 +1422,7 @@ static int jd_media_due(void) {
 
 static void jd_media_reset(void) {
     for (int s = 0; s < JD_MEDIA; s++) {
+        jd_media_ask_end(&jd_media[s]);
         if (jd_media[s].el) media_close(&jd_media[s].m);
         for (int i = 0; i < (int)sizeof(jd_media[s]); i++) ((volatile u8 *)&jd_media[s])[i] = 0;
     }

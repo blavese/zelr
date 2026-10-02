@@ -5026,12 +5026,15 @@ static jval nat_clear_timer(jctx *J, jval t, jval *a, int n) {
    asked for nothing. The browser sleeps that long rather than looking sixty
    times a second. */
 static int jd_requests_waiting(void);
+static int jd_requests_under_way(void);
+static int jd_asks_full;
 
 static int jsdom_next_due(void) {
     if (!jd_open || jd_spent()) return -1;
-    if (jd_requests_waiting()) return 0;
-    /* A WebSocket open is asked every twentieth of a second (jsws.h). */
-    int now = ticks(), best = jd_ws_open_count() ? 5 : -1;
+    if (jd_requests_waiting() && !jd_asks_full) return 0;
+    /* A WebSocket open is asked every twentieth of a second (jsws.h), and
+       a request under way every tick. */
+    int now = ticks(), best = jd_requests_under_way() || jd_asks_full ? 1 : jd_ws_open_count() ? 5 : -1;
     /* And playing media every tick (jsmedia.h). */
     int media = jd_media_due();
     if (media >= 0 && (best < 0 || media < best)) best = media;
@@ -7023,7 +7026,7 @@ static void jsdom_close(void) {
     jw_close_all();
     jd_ws_reset();
     jd_media_reset();
-    for (int i = 0; i < jd_nreq; i++) { jd_req[i].waiting = 0; jd_req[i].self = 0; }
+    for (int i = 0; i < jd_nreq; i++) { jd_request_drop(i); jd_req[i].waiting = 0; jd_req[i].self = 0; }
     jd_nreq = 0;
     if (!jd_open) return;
     js_done(&jd_J);

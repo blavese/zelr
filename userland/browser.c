@@ -1741,27 +1741,13 @@ static int fetch_script(const char *src, const char **out) {
  *
  * The address is resolved against the page, so a script may ask for a path
  * the way it would write one in a link. */
-static int do_request(const char *method, const char *url, const char *body, int blen,
-                      const char *type, const char *headers, jd_reply *out) {
-    static char landed[URL_TEXT];
-    static char ctype[64];
-    out->body = 0;
-    out->len = 0;
-    out->status = 0;
-    out->type = 0;
-    out->url = 0;
-    out->head = 0;
-    out->hlen = 0;
-    if (asks_made >= ASKS_MAX || !replybuf) return 0;
-
-    url_t u;
-    if (!url_join(&here, url, &u)) return 0;
-
-    /* The page's own lines, and Origin, which the standard sends with a
-       request to another site and with any that is not a GET or a HEAD. */
-    static char extra[4096 + URL_TEXT];
-    w_copy(extra, sizeof(extra), headers ? headers : "", sizeof(extra));
-    int cross = u.secure != here.secure || u.port != here.port || !w_same_fold(u.host, here.host);
+/* The page's own lines, and Origin, which the standard sends with a
+   request to another site and with any that is not a GET or a HEAD. */
+#define REQUEST_LINES (4096 + URL_TEXT)
+static void request_lines(const url_t *u, const char *method, const char *headers, char *extra) {
+    int sizeof_extra = REQUEST_LINES;
+    w_copy(extra, sizeof_extra, headers ? headers : "", sizeof_extra);
+    int cross = u->secure != here.secure || u->port != here.port || !w_same_fold(u->host, here.host);
     int plain = !method || w_same_fold(method, "GET") || w_same_fold(method, "HEAD");
     if (cross || !plain) {
         char origin[URL_TEXT];
@@ -1780,14 +1766,33 @@ static int do_request(const char *method, const char *url, const char *body, int
         }
         origin[w] = 0;
         int e = w_len(extra);
-        if (e + w + 12 < (int)sizeof(extra)) {
-            w_copy(extra + e, (int)sizeof(extra) - e, "Origin: ", (int)sizeof(extra) - e);
+        if (e + w + 12 < sizeof_extra) {
+            w_copy(extra + e, sizeof_extra - e, "Origin: ", sizeof_extra - e);
             e += 8;
-            w_copy(extra + e, (int)sizeof(extra) - e, origin, (int)sizeof(extra) - e);
+            w_copy(extra + e, sizeof_extra - e, origin, sizeof_extra - e);
             e += w;
-            w_copy(extra + e, (int)sizeof(extra) - e, "\r\n", (int)sizeof(extra) - e);
+            w_copy(extra + e, sizeof_extra - e, "\r\n", sizeof_extra - e);
         }
     }
+}
+
+static int do_request(const char *method, const char *url, const char *body, int blen,
+                      const char *type, const char *headers, jd_reply *out) {
+    static char landed[URL_TEXT];
+    static char ctype[64];
+    out->body = 0;
+    out->len = 0;
+    out->status = 0;
+    out->type = 0;
+    out->url = 0;
+    out->head = 0;
+    out->hlen = 0;
+    if (asks_made >= ASKS_MAX || !replybuf) return 0;
+
+    url_t u;
+    if (!url_join(&here, url, &u)) return 0;
+    static char extra[REQUEST_LINES];
+    request_lines(&u, method, headers, extra);
 
     response_t r;
     web_method = method && !w_same_fold(method, "GET") ? method : 0;
@@ -1818,6 +1823,127 @@ static int do_request(const char *method, const char *url, const char *body, int
     out->body = r.body;
     out->len = r.len;
     return r.len;
+}
+
+/* --- a page's requests, answered while it goes on --------------------------
+ *
+ * The same requests, each started on one pass and asked on the next ones
+ * for what has come (fetch.h, web_job), so the page's timers, its frames,
+ * its video and the reader's input go on while an answer arrives: done the
+ * way above, a video's next stretch or a script's fetch() held the whole
+ * browser for as long as it took. A few at a time, each slot keeping its
+ * connection between requests, since the machine has six sockets in all;
+ * one asked for while every slot is busy waits for a later pass. A slot
+ * whose connection is to where a new request goes is chosen first. */
+#define ASK_SLOTS 3
+
+typedef struct {
+    int     used;                       /* a request is under way, or answered and not yet ended */
+    web_job job;
+    char    method[16], type[96];
+    char    extra[REQUEST_LINES];
+    char   *body;                       /* a copy: the page's string may go before a retry needs it */
+    char    landed[URL_TEXT], ctype[64];
+    int     idle_since;                 /* the tick it was last ended */
+} ask_t;
+
+static ask_t asks[ASK_SLOTS];
+static int asks_ready;
+
+static void asks_init(void) {
+    if (asks_ready) return;
+    for (int i = 0; i < ASK_SLOTS; i++) web_job_init(&asks[i].job);
+    asks_ready = 1;
+}
+
+/* A connection kept by a slot nobody is using, hung up once it has been
+   idle for five seconds -- or now, when a connection is wanted and every
+   socket is taken. The machine's six are for everything on it: a page's
+   WebSockets, the next page, another program. */
+#define ASK_IDLE 500
+static void asks_hang_up_idle(int now_too) {
+    if (!asks_ready) return;
+    int now = ticks();
+    for (int i = 0; i < ASK_SLOTS; i++)
+        if (!asks[i].used && asks[i].job.sock >= 0 && (now_too || now - asks[i].idle_since > ASK_IDLE))
+            web_job_hangup(&asks[i].job);
+}
+
+static void asks_tidy(void) { asks_hang_up_idle(0); }
+
+static int ask_start(const char *method, const char *url, const char *body, int blen,
+                     const char *type, const char *headers, int max) {
+    asks_init();
+    if (asks_made >= ASKS_MAX) return -2;
+    url_t u;
+    if (!url_join(&here, url, &u)) return WEB_ERR_SCHEME;
+    int pick = -1;
+    for (int i = 0; i < ASK_SLOTS; i++) {
+        if (asks[i].used) continue;
+        if (web_job_at(&asks[i].job, &u)) { pick = i; break; }
+        if (pick < 0 || (asks[pick].job.sock >= 0 && asks[i].job.sock < 0)) pick = i;
+    }
+    if (pick < 0) return -1;
+    ask_t *a = &asks[pick];
+    w_copy(a->method, sizeof(a->method), method ? method : "GET", sizeof(a->method));
+    w_copy(a->type, sizeof(a->type), type ? type : "", sizeof(a->type));
+    request_lines(&u, method, headers, a->extra);
+    if (a->body) free(a->body);
+    a->body = 0;
+    if (body) {
+        a->body = (char *)malloc((u64)blen + 1);
+        if (!a->body) return WEB_ERR_BUSY;
+        for (int i = 0; i < blen; i++) a->body[i] = body[i];
+        a->body[blen] = 0;
+    }
+    asks_made++;
+    a->used = 1;
+    int rc = web_job_start(&a->job, &u, a->method, a->body, blen, type ? a->type : 0, a->extra, "*/*", max);
+    if (rc == WEB_ERR_BUSY) {
+        asks_hang_up_idle(1);
+        rc = web_job_start(&a->job, &u, a->method, a->body, blen, type ? a->type : 0, a->extra, "*/*", max);
+    }
+    if (rc < 0) {
+        a->used = 0;
+        return rc < -1 ? rc : -2;
+    }
+    return pick;
+}
+
+static int ask_poll(int id, jd_reply *out) {
+    if (id < 0 || id >= ASK_SLOTS || !asks[id].used) return WEB_ERR_EMPTY;
+    ask_t *a = &asks[id];
+    int st = web_job_step(&a->job);
+    if (st <= 0) return st;
+    response_t *r = &a->job.r;
+    url_text(&a->job.u, a->landed, sizeof(a->landed));
+    w_copy(a->ctype, sizeof(a->ctype), r->ctype, sizeof(a->ctype));
+    out->status = r->status;
+    out->url = a->landed;
+    out->type = a->ctype;
+    out->head = r->head;
+    out->hlen = r->hlen;
+    out->body = r->len > 0 ? r->body : 0;
+    out->len = r->len > 0 ? r->len : 0;
+    return 1;
+}
+
+static void ask_end(int id) {
+    if (id < 0 || id >= ASK_SLOTS || !asks[id].used) return;
+    web_job_stop(&asks[id].job);
+    asks[id].used = 0;
+    asks[id].idle_since = ticks();
+}
+
+/* A page left: whatever it had under way given up, and the connections
+   with it, which were the old page's to keep. */
+static void asks_drop_all(void) {
+    if (!asks_ready) return;
+    for (int i = 0; i < ASK_SLOTS; i++) {
+        web_job_hangup(&asks[i].job);
+        web_job_stop(&asks[i].job);
+        asks[i].used = 0;
+    }
 }
 
 /* The page as it is drawn: itself, or when a script has attached shadow
@@ -2287,6 +2413,7 @@ static void build(const char *html, int len, int width, int want_sheets,
     scripts_outside = 0;
     scripts_bytes = 0;
     asks_made = 0;
+    asks_drop_all();
     /* The page's address for its scripts, with the fragment the reader asked
        for, which is never sent and so is not in `here`. */
     char at[URL_TEXT];
@@ -2303,6 +2430,7 @@ static void build(const char *html, int len, int width, int want_sheets,
     if (jsdom_open(&doc, &sheet)) {
         jsdom_fetch_with(fetch_script);
         jsdom_request_with(do_request);
+        jsdom_asks_with(ask_start, ask_poll, ask_end);
         jsdom_boxes_with(box_of);
         jsdom_points_with(node_at_point);
         jsdom_pictures_with(picture_size);
@@ -3142,6 +3270,9 @@ static void browser_wait(int win) {
        itself, where the old sixteen milliseconds held it to sixty a second. */
     int due = jsdom_next_due();
     if (due >= 0) ui_due(ticks() + (due > 0 ? due : 1));
+    /* And when a kept connection is due to be let go. */
+    for (int i = 0; asks_ready && i < ASK_SLOTS; i++)
+        if (!asks[i].used && asks[i].job.sock >= 0) ui_due(asks[i].idle_since + ASK_IDLE + 1);
     ui_wait(win);
 }
 
@@ -3363,13 +3494,13 @@ int main(int argc, char **argv) {
             if (resized) { relayout(view_w - UI_PAD * 2); dirty = 1; }
         }
 
-        /* And anything it asked the network for. One per pass: each blocks
-           this loop while it happens, and a page that sent six would
-           otherwise stop for all six before drawing anything. */
+        /* And anything it asked the network for: started, and the answers
+           that have come handed over (asks, below). */
         if (jsdom_live() && jsdom_requests() && jsdom_changed()) {
             relayout(view_w - UI_PAD * 2);
             dirty = 1;
         }
+        asks_tidy();
 
         /* Where a form asked to go, once the click or the key that sent
            it has been dealt with. */

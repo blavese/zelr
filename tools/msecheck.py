@@ -149,15 +149,44 @@ v.src = URL.createObjectURL(ms);
 FILE_PAGE = """<!doctype html><html><head><title>file</title><style>
 body{margin:0;background:#101010}
 video{display:block;width:640px;height:352px;margin:8px}
-</style></head><body><video id=v src="/film/file.mp4" autoplay muted></video><script>
+</style></head><body><video id=v autoplay muted></video><script>
 var v = document.getElementById('v'), log = [];
 ['loadstart','durationchange','loadedmetadata','loadeddata','canplay','canplaythrough','play','playing',
  'waiting','timeupdate','pause','ended','resize','error'].forEach(function (e) {
   v.addEventListener(e, function () { if (e !== 'timeupdate' || log[log.length - 1] !== 'timeupdate') log.push(e); });
 });
 v.addEventListener('playing', function () { fetch('/mse-note?file-playing'); });
+// A timer every twentieth of a second, and the longest it went without
+// running: while a fetch() the server answers four seconds late is under
+// way, and in all, while the file's stretches come late too. Both are
+// begun from the timer, once it is going: a browser that stops for an
+// answer stops its timers with it, and before they had started that was
+// not seen.
+var last = 0, beats = 0, fworst = 0, rworst = 0, fetching = 0, slow = '';
+setInterval(function () {
+  var now = performance.now();
+  if (last) {
+    var g = now - last;
+    if (fetching && g > fworst) fworst = g;
+    if (g > rworst) rworst = g;
+  }
+  last = now;
+  if (++beats === 3) {
+    fetching = 1;
+    fetch('/slow').then(function (r) { return r.text(); }).then(function (t) {
+      // Measured here too: answered inside the pass that stopped for it,
+      // it would be over before the timer next ran.
+      var g = performance.now() - last;
+      if (g > fworst) fworst = g;
+      slow = t;
+      fetching = 0;
+    });
+    v.src = '/film/file.mp4';
+  }
+}, 50);
 v.addEventListener('ended', function () {
-  location.href = '/file-done?' + encodeURIComponent([log.join(','), v.currentTime.toFixed(2), v.muted, v.videoWidth].join(' '));
+  location.href = '/file-done?' + encodeURIComponent([log.join(','), v.currentTime.toFixed(2), v.muted, v.videoWidth,
+    Math.round(fworst), Math.round(rworst), slow].join(' '));
 });
 v.addEventListener('error', function () { location.href = '/file-done?' + encodeURIComponent('error ' + (v.error && v.error.code)); });
 </script></body></html>"""
@@ -218,6 +247,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
         elif self.path.startswith("/file-done?"):
             FILE_REPORTS.append(urllib.parse.unquote(self.path[len("/file-done?"):]))
             body, ctype = b"<title>file done</title><meta http-equiv=refresh content=\"0; url=/pause.html\"><p>done</p>", "text/html"
+        elif self.path == "/slow":
+            time.sleep(4.0)
+            body, ctype = b"slow", "text/plain"
         elif self.path.startswith("/pause-done?"):
             PAUSE_REPORTS.append(urllib.parse.unquote(self.path[len("/pause-done?"):]))
             body, ctype = b"<title>pause done</title><p>done</p>", "text/html"
@@ -228,6 +260,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             b = min(int(b) if b else len(data) - 1, len(data) - 1)
             if self.path == "/film/file.mp4":
                 RANGES.append((a, b))
+                time.sleep(3.0)             # late, as a far server's are
             part = data[a:b + 1]
             self.send_response(206)
             self.send_header("Content-Type", "video/mp4")
@@ -440,10 +473,11 @@ def main():
     alone, whole = (int(m.group(1)), int(m.group(2))) if m else (0, 0)
     c.add("and most frames are drawn on their own (%d alone, %d with the page)" % (alone, whole),
           alone >= frames // 2 and alone > whole)
-    # The first page's connection is kept for the next page: nothing hangs
-    # up the one the page came on. The WebSockets' reset at the first page's
-    # build did (jsws.h), and the number was then handed to the next
-    # connection made while fetch.h still used it as its own.
+    # The first page's connection is kept for the next page: the page's
+    # scripts' requests have connections of their own (browser.c, asks), and
+    # nothing hangs up the one the page came on. The WebSockets' reset at the
+    # first page's build did (jsws.h), and the number was then handed to the
+    # next connection made while fetch.h still used it as its own.
     c.add("the next page comes on the connection the first one did (%s)" % PAGE_PORTS,
           len(PAGE_PORTS) == 2 and PAGE_PORTS["/mse.html"] == PAGE_PORTS["/file.html"])
     c.add("every segment was fetched once",
@@ -453,7 +487,15 @@ def main():
     print("      the page with a file said: %s; %d ranges asked for; %d looks: %s" % (fgot, len(RANGES), file_looks, file_pairs))
     c.add("a page with a file for its <video> is gone on to, and the file plays on its own, muted, to its end",
           fgot.startswith("loadstart,durationchange,loadedmetadata,resize,") and "playing" in fgot and
-          fgot.split(" ")[0].endswith("ended") and fgot.split(" ")[2:] == ["true", str(fw)])
+          fgot.split(" ")[0].endswith("ended") and fgot.split(" ")[2:4] == ["true", str(fw)])
+    # Its timers, while answers came late (jsnet.h and jsmedia.h through
+    # browser.c's asks, on fetch.h's jobs).
+    fp = fgot.split(" ")
+    fworst, rworst = (int(fp[4]), int(fp[5])) if len(fp) >= 7 else (-1, -1)
+    c.add("the page's timers go on while its fetch() is answered four seconds late (longest wait %d ms)" % fworst,
+          len(fp) >= 7 and fp[6] == "slow" and 0 <= fworst < 1000)
+    c.add("and while the file's stretches come late (longest wait %d ms, %d ranges)" % (rworst, len(RANGES)),
+          len(RANGES) >= 2 and 0 <= rworst < 1000)
     c.add("the file is asked for by ranges, its moov found after its media", len(RANGES) >= 2)
     c.add("its colours are seen in the element's box too",
           file_pairs["red and blue"] > 0 and file_pairs["green and yellow"] > 0)

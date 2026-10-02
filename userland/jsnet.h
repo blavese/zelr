@@ -6,9 +6,11 @@
  * Included from jsdom.h. Every request is made on the browser's next pass
  * rather than inside the call that asked for it, so the code after send()
  * or fetch() runs first, as the page is written to expect, and a reply
- * arrives the way it would anywhere: afterwards. The fetch itself blocks the
- * browser while it happens, which is a stall rather than a lie -- nothing is
- * told it finished before it did.
+ * arrives the way it would anywhere: afterwards. Where the browser can (it
+ * gives jsdom_asks_with), a request is started on one pass and its answer
+ * taken on a later one, the page's timers, frames and input going on in
+ * between; a browser that cannot (the host's tests) makes each one whole,
+ * one a pass, which stalls the page while it comes.
  *
  * What goes out goes through the browser (jd_do_request; browser.c,
  * do_request), which sends the jar's cookies for the address as every
@@ -41,6 +43,27 @@ static jd_request_fn jd_do_request;
 
 void jsdom_request_with(jd_request_fn fn) { jd_do_request = fn; }
 
+/* And the same without waiting: start one (an id, -1 when every way out is
+   busy and it should be asked again on a later pass, or below -1 for a
+   failure to send), ask how it is going (0 still coming, 1 there, below 0
+   failed; *out good until it is ended), and end it (also one still coming).
+   `max` is the most its answer may be. */
+typedef int  (*jd_ask_start_fn)(const char *method, const char *url, const char *body, int blen,
+                                const char *type, const char *headers, int max);
+typedef int  (*jd_ask_poll_fn)(int ask, jd_reply *out);
+typedef void (*jd_ask_end_fn)(int ask);
+static jd_ask_start_fn jd_ask_start;
+static jd_ask_poll_fn  jd_ask_poll;
+static jd_ask_end_fn   jd_ask_end;
+
+void jsdom_asks_with(jd_ask_start_fn start, jd_ask_poll_fn poll, jd_ask_end_fn end) {
+    jd_ask_start = start;
+    jd_ask_poll = poll;
+    jd_ask_end = end;
+}
+
+#define JD_REPLY_MAX (4 * 1024 * 1024)
+
 /* --- the queue ------------------------------------------------------------------------- */
 
 #define JD_REQUESTS 32
@@ -49,6 +72,7 @@ enum { JQ_XHR = 1, JQ_FETCH, JQ_BEACON };
 typedef struct {
     jobj *self;                  /* the request, which holds its own state */
     int   kind, waiting;
+    int   ask;                   /* the browser's id for it while it is under way, plus one; 0 for none */
 } jxhr;
 
 static jxhr jd_req[JD_REQUESTS];
@@ -59,9 +83,25 @@ static int jd_requests_waiting(void) {
     return 0;
 }
 
+/* Every way out was busy on the last pass, so what waits is asked again
+   on the next tick rather than at once. */
+static int jd_asks_full;
+
+/* Requests started and not answered yet, which want asking each tick. */
+static int jd_requests_under_way(void) {
+    for (int i = 0; i < jd_nreq; i++) if (jd_req[i].ask) return 1;
+    return 0;
+}
+
+/* One under way given up on: aborted, or the page gone. */
+static void jd_request_drop(int i) {
+    if (jd_req[i].ask && jd_ask_end) jd_ask_end(jd_req[i].ask - 1);
+    jd_req[i].ask = 0;
+}
+
 static int jd_queue(jobj *self, int kind) {
     int slot = -1;
-    for (int i = 0; i < jd_nreq; i++) if (!jd_req[i].waiting) { slot = i; break; }
+    for (int i = 0; i < jd_nreq; i++) if (!jd_req[i].waiting && !jd_req[i].ask) { slot = i; break; }
     if (slot < 0 && jd_nreq < JD_REQUESTS) slot = jd_nreq++;
     if (slot < 0) return 0;
     jd_req[slot].self = self;
@@ -739,14 +779,16 @@ static jval nat_fetch(jctx *J, jval t, jval *a, int n) {
     return js_from_obj(p);
 }
 
-/* A fetch whose signal was aborted before it was made is refused now. */
+/* A fetch whose signal was aborted before it was answered is refused now,
+   and one under way given up. */
 static void jd_fetch_aborted(jctx *J, jobj *sig) {
     for (int i = 0; i < jd_nreq; i++) {
-        if (!jd_req[i].waiting || jd_req[i].kind != JQ_FETCH) continue;
+        if ((!jd_req[i].waiting && !jd_req[i].ask) || jd_req[i].kind != JQ_FETCH) continue;
         jobj *r = jd_req[i].self;
         jval s = jd_kept(r, jd_k_rsig);
         if (!js_is_obj(s) || s.obj != sig) continue;
         jd_req[i].waiting = 0;
+        jd_request_drop(i);
         jval p = jd_kept(r, jd_k_promise);
         if (js_is_obj(p)) js_promise_settle(J, p.obj, 0, jd_kept(sig, jd_k_reason));
     }
@@ -907,7 +949,11 @@ static jval nat_xhr_abort(jctx *J, jval t, jval *a, int n) {
     if (!js_is_obj(t)) return js_undef();
     int was = 0;
     for (int i = 0; i < jd_nreq; i++)
-        if (jd_req[i].waiting && jd_req[i].self == t.obj) { jd_req[i].waiting = 0; was = 1; }
+        if ((jd_req[i].waiting || jd_req[i].ask) && jd_req[i].self == t.obj) {
+            jd_req[i].waiting = 0;
+            jd_request_drop(i);
+            was = 1;
+        }
     if (was) {
         jd_xhr_put(t.obj, 0, js_num(4));
         jd_xhr_event(t.obj, "readystatechange");
@@ -971,17 +1017,41 @@ static void jd_xhr_done(jobj *o, const jd_reply *rp) {
     jd_xhr_event(o, "loadend");
 }
 
-/* Whatever was sent, made. One per pass, because each one blocks the
-   browser while it happens and a page that sent six would otherwise stop
-   for all six at once. */
+/* An answer handed to the request it is for. */
+static void jd_request_answered(jobj *o, int kind, const jd_reply *rp) {
+    if (kind == JQ_FETCH) jd_fetch_done(o, rp);
+    else jd_xhr_done(o, rp);
+    /* A promise settled from here, outside any call into the page, has its
+       reactions run now, as they would be at the end of a task. */
+    js_drain(&jd_J);
+}
+
+/* Whatever was sent, made. Started without waiting where the browser can,
+   and the answers that have come handed over; otherwise one made whole a
+   pass, because each blocks the browser while it happens and a page that
+   sent six would otherwise stop for all six at once. */
 __attribute__((unused)) static int jsdom_requests(void) {
     if (!jd_open || jd_spent()) return 0;
+    int told = 0;
+    jd_asks_full = 0;
+    for (int i = 0; i < jd_nreq && jd_ask_poll; i++) {
+        if (!jd_req[i].ask) continue;
+        jd_reply rp = { 0, 0, 0, 0, 0, 0, 0 };
+        int st = jd_ask_poll(jd_req[i].ask - 1, &rp);
+        if (st == 0) continue;
+        if (st < 0) rp.status = st;
+        jobj *o = jd_req[i].self;
+        int kind = jd_req[i].kind;
+        if (o) jd_request_answered(o, kind, &rp);
+        jd_request_drop(i);
+        told++;
+        if (jd_spent()) return told;
+    }
     for (int i = 0; i < jd_nreq; i++) {
         if (!jd_req[i].waiting) continue;
         jobj *o = jd_req[i].self;
         int kind = jd_req[i].kind;
-        jd_req[i].waiting = 0;
-        if (!o) continue;
+        if (!o) { jd_req[i].waiting = 0; continue; }
         const char *method = jd_kept_str(o, jd_k_method, "GET");
         const char *url = jd_kept_str(o, jd_k_url, "");
         jval bv = jd_kept(o, jd_k_body);
@@ -1007,6 +1077,16 @@ __attribute__((unused)) static int jsdom_requests(void) {
         }
         jd_reply rp = { 0, 0, 0, 0, 0, 0, 0 };
         char *data = 0, mime[96];
+        if (url[0] && !jd_is_data_url(url) && !jd_is_blob_url(url) && jd_ask_start) {
+            int id = jd_ask_start(method, url, body, blen, body ? (type ? type : "") : 0, lines, JD_REPLY_MAX);
+            if (id == -1) { jd_asks_full = 1; break; }   /* every way out busy: a later pass */
+            jd_req[i].waiting = 0;
+            if (id >= 0) { jd_req[i].ask = id + 1; continue; }
+            rp.status = id;
+            jd_request_answered(o, kind, &rp);
+            return told + 1;
+        }
+        jd_req[i].waiting = 0;
         if (jd_is_data_url(url)) {
             /* Answered here, from the address itself; one that does not
                decode is a failure to fetch, as the standard has it. */
@@ -1032,15 +1112,11 @@ __attribute__((unused)) static int jsdom_requests(void) {
         } else if (url[0] && jd_do_request) {
             jd_do_request(method, url, body, blen, body ? (type ? type : "") : 0, lines, &rp);
         }
-        if (kind == JQ_FETCH) jd_fetch_done(o, &rp);
-        else jd_xhr_done(o, &rp);
+        jd_request_answered(o, kind, &rp);
         free(data);
-        /* A promise settled from here, outside any call into the page, has
-           its reactions run now, as they would be at the end of a task. */
-        js_drain(&jd_J);
-        return 1;
+        return told + 1;
     }
-    return 0;
+    return told;
 }
 
 static void jd_setup_net(jctx *J) {
