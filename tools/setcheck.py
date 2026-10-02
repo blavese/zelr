@@ -64,7 +64,7 @@ PAGE_X = IN_X + SIDEBAR_W + UI_PAD * 2
 ROW_H, NAME_W = 30, 172
 
 PAGES = ["Colours", "Dock", "Windows", "Desktop", "Behaviour",
-         "Screen", "Everything", "The file", "System", "About"]
+         "Screen", "Wireless", "Everything", "The file", "System", "About"]
 
 # The desktop's own menu, which is how the terminal is cleared away before
 # the settings window is opened: the cascade has to start from empty or the

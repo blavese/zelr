@@ -6,6 +6,7 @@
  * only structure here, and the comment above the queue says what it cost to
  * learn that it was needed. */
 #include "net.h"
+#include "wlan.h"
 #include "netdev.h"
 #include "timer.h"
 #include "printf.h"
@@ -576,8 +577,35 @@ void net_poll(void) {
  * it (net_receive), which wakes this, so for one of those the task sleeps
  * until a frame comes, a second at most; a card that is only heard when it is
  * asked -- the USB one -- is still asked a hundred times a second. */
+/* A wireless network joined is asked for an address, as a cable is at
+   startup, from wherever it was joined; one left forgets its address, which
+   the network may give to somebody else once we have gone.
+ *
+ * Asked once any exchange already going has ended: one begun before the join
+ * (the shell's dhcp typed a moment early) was asking a network that was not
+ * there yet, and taking it for this one's left the machine joined with no
+ * address. */
+static void net_follow_wireless(void) {
+    static bool joined, wanted;
+    if (!wlan_is_network()) return;
+    bool now = wlan_state() == WLAN_CONNECTED;
+    if (now && !joined) wanted = true;
+    if (wanted && now && !net_dhcp_busy()) {
+        wanted = false;
+        if (!my_ip) net_dhcp_start();
+    }
+    if (!now && joined) {
+        wanted = false;
+        my_ip = my_mask = my_gw = my_dns = 0;
+        bound = false;
+        memset(arp_cache, 0, sizeof(arp_cache));
+    }
+    joined = now;
+}
+
 static void net_task(void) {
     for (;;) {
+        net_follow_wireless();
         net_poll();
         wait_on(&net_arrived, netdev_interrupts() ? 1000 : 10);
     }
@@ -708,6 +736,10 @@ static void dhcp_task(void) {
 }
 
 void net_dhcp_start(void) {
+    /* A wireless network not joined has nobody to answer; joining asks. The
+       machine's own exchange at startup was six seconds of asking the air,
+       and still going when somebody joined. */
+    if (wlan_is_network() && wlan_state() != WLAN_CONNECTED) return;
     if (dhcp_asking || !netdev_up()) return;
     dhcp_asking = true;
     if (!task_create("dhcp", dhcp_task)) dhcp_asking = false;

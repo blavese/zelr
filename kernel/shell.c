@@ -464,7 +464,13 @@ static void execute(char *buf) {
     } else if (!strcmp(c, "dhcp")) {
         if (!net_up()) { kprintf("no network card\n"); return; }
         kprintf("asking for an address...\n");
-        if (net_dhcp(6000)) {
+        /* One exchange at a time: joining a wireless network starts one by
+           itself (net.c), and two on the one socket answer each other's
+           questions. That one's answer is this one's. */
+        u64 until = timer_ticks() + 8 * timer_hz();
+        bool waited = false;
+        while (net_dhcp_busy() && timer_ticks() < until) { waited = true; net_poll(); net_wait(); }
+        if ((waited && net_ip()) || net_dhcp(6000)) {
             char b[20]; net_format_ip(net_ip(), b);
             kprintf("got %s\n", b);
         } else kprintf("no answer\n");

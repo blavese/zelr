@@ -8,7 +8,7 @@
  * reason. See NOTICE in the repository this came from.
  */
 
-/* The entire user-facing interface: sixty-six system calls and a little
+/* The entire user-facing interface: sixty-nine system calls and a little
    sugar. Nothing is linked in from the kernel; every call below crosses the
    ring boundary through int 0x80.
  *
@@ -194,6 +194,15 @@ typedef long long          zelr_word;
 /* Bytes from the kernel's random number generator (random_bytes). */
 #define SYS_RANDOM        67
 #define SYS_SOCK_WAIT     68
+
+/* Wireless: look for networks, join one, leave (wifi_scan, wifi_join,
+   wifi_leave); /sys/wifi says how it is going. */
+#define SYS_WIFI          69
+#define WIFI_SCAN         0
+#define WIFI_JOIN         1
+#define WIFI_LEAVE        2
+#define WIFI_NAME_MAX     33
+#define WIFI_PASS_MAX     64
 #define TLS_WHY   0
 #define TLS_WHAT  1
 
@@ -484,6 +493,15 @@ static inline int disconnect(int sock) {
 static inline int sock_wait(int sock, int ms) {
     return syscall(SYS_SOCK_WAIT, sock, ms, 0);
 }
+
+/* Each returns at once: what happens next is read from /sys/wifi. -1 when
+   the machine's network is not wireless, a scan while joined, or a network
+   that was not heard. */
+static inline int wifi_scan(void) { return syscall(SYS_WIFI, WIFI_SCAN, 0, 0); }
+static inline int wifi_join(const char *name, const char *password) {
+    return syscall(SYS_WIFI, WIFI_JOIN, (zelr_word)name, (zelr_word)password);
+}
+static inline int wifi_leave(void) { return syscall(SYS_WIFI, WIFI_LEAVE, 0, 0); }
 
 static inline int resolve(const char *host, u32 *out) {
     return syscall(SYS_RESOLVE, (zelr_word)host, (zelr_word)out, 0);

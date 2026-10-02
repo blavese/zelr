@@ -215,6 +215,19 @@
    a pass froze the program for as long as the server was quiet. */
 #define SYS_SOCK_WAIT     68
 
+/* Wireless, for a program (Settings): rbx what, rcx the network's name and
+   rdx its password (WIFI_JOIN), both strings. It returns at once and
+   /sys/wifi says how it is going: looking, the networks heard, joining,
+   joined or why not. 0, or -1 when the machine's network is not a wireless
+   one, a scan is asked for while joined (leave first: the radio listens on
+   one channel at a time), or the network was not heard. */
+#define SYS_WIFI          69
+#define WIFI_SCAN         0
+#define WIFI_JOIN         1
+#define WIFI_LEAVE        2
+#define WIFI_NAME_MAX     33     /* a name, its terminator included */
+#define WIFI_PASS_MAX     64     /* a passphrase is 8 to 63 characters */
+
 #define TLS_WHY   0
 #define TLS_WHAT  1
 

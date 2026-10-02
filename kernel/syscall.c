@@ -28,6 +28,7 @@
 #include "elf.h"
 #include "user.h"
 #include "net.h"
+#include "wlan.h"
 #include "tcp.h"
 #include "tls.h"
 #include "heap.h"
@@ -936,6 +937,35 @@ static i64 sys_sock_wait(registers_t *r) {
     return 0;
 }
 
+/* Wireless (wlan.h), for a program: the shell's wifi command without the
+   waiting, which a call cannot do with interrupts off. The station moves on
+   in the network's own loop; /sys/wifi is where a program reads how. */
+static i64 sys_wifi(registers_t *r) {
+    if (!wlan_is_network()) return -1;
+    switch (r->rbx) {
+    case WIFI_SCAN:
+        if (wlan_state() == WLAN_CONNECTED || wlan_state() == WLAN_HANDSHAKE
+            || wlan_state() == WLAN_ASSOC || wlan_state() == WLAN_AUTH) return -1;
+        wlan_scan();
+        return 0;
+    case WIFI_JOIN: {
+        char name[WIFI_NAME_MAX], pass[WIFI_PASS_MAX];
+        if (!copy_path(r->rcx, name, sizeof(name))) return -1;
+        if (r->rdx) { if (!copy_path(r->rdx, pass, sizeof(pass))) return -1; }
+        else pass[0] = 0;
+        int rc = wlan_join(name, pass);
+        /* Not left lying on the stack for the next call to find. */
+        volatile char *wipe = pass;
+        for (u32 i = 0; i < sizeof(pass); i++) wipe[i] = 0;
+        return rc < 0 ? -1 : 0;
+    }
+    case WIFI_LEAVE:
+        wlan_leave();
+        return 0;
+    }
+    return -1;
+}
+
 static i64 sys_disconnect(registers_t *r) {
     sock_t *s = sock_of(r->rbx);
     if (!s) return -1;
@@ -1228,6 +1258,7 @@ static const syscall_fn TABLE[] = {
     [SYS_POLL]        = sys_poll,
     [SYS_RANDOM]      = sys_random,
     [SYS_SOCK_WAIT]   = sys_sock_wait,
+    [SYS_WIFI]        = sys_wifi,
 };
 
 #define N_SYSCALLS (sizeof(TABLE) / sizeof(TABLE[0]))

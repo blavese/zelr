@@ -89,9 +89,9 @@ static const struct { int w, h; const char *name; } MODES[] = {
 
 static const char *const PAGES[] = {
     "Colours", "Dock", "Windows", "Desktop", "Behaviour",
-    "Screen", "Everything", "The file", "System", "About"
+    "Screen", "Wireless", "Everything", "The file", "System", "About"
 };
-#define N_PAGES 10
+#define N_PAGES 11
 static int page = 0;
 static int scroll;              /* the Everything page, which is long */
 
@@ -782,6 +782,211 @@ static int page_file(surface *s, ui_input *in, ui_theme *t,
     return h - 40;
 }
 
+/* --- wireless --------------------------------------------------------------
+ *
+ * The shell's wifi command, for somebody who does not use the shell: the
+ * networks heard, one chosen, its password, joined. The kernel does the
+ * work (SYS_WIFI) and says how it is going in /sys/wifi, read every time
+ * the page is drawn, which is four times a second while it is open. The
+ * address comes by itself once joined (net.c), and is read from /sys/net.
+ *
+ * What it says it also puts on the console, a line each time it changes:
+ * that is how the harness (wificheck.py) knows what the window showed. */
+
+#define WIFI_ROWS 6
+
+typedef struct {
+    int  channel;
+    char prot[8];
+    char name[WIFI_NAME_MAX];
+} wifi_net;
+
+static char wifi_pick[WIFI_NAME_MAX];      /* the network chosen from the list */
+static char wifi_pass[WIFI_PASS_MAX];
+static ui_field wifi_field = { wifi_pass, WIFI_PASS_MAX, 0, 0, 0 };
+static char wifi_said[160];
+static char wifi_list_said[200];       /* the networks, as last said */
+
+/* The rest of the line a /sys file starts with this word. */
+static void sys_value(const char *buf, const char *key, char *out, int cap) {
+    int kl = (int)strlen(key);
+    out[0] = 0;
+    for (const char *p = buf; *p; ) {
+        if (!strncmp(p, key, kl) && (p[kl] == ' ' || p[kl] == '\n')) {
+            p += kl;
+            while (*p == ' ') p++;
+            int i = 0;
+            while (*p && *p != '\n' && i < cap - 1) out[i++] = *p++;
+            out[i] = 0;
+            return;
+        }
+        while (*p && *p != '\n') p++;
+        if (*p) p++;
+    }
+}
+
+/* "network CHANNEL SIGNAL PROTECTION NAME" lines, in the order heard. */
+static int wifi_heard(const char *buf, wifi_net *out, int max) {
+    int n = 0;
+    for (const char *p = buf; *p && n < max; ) {
+        if (!strncmp(p, "network ", 8)) {
+            char line[96];
+            int i = 0;
+            for (p += 8; *p == ' '; p++) {}
+            while (*p && *p != '\n' && i < (int)sizeof(line) - 1) line[i++] = *p++;
+            line[i] = 0;
+            char sig[12];
+            int at = word(line, 0, i, sig, sizeof(sig));
+            out[n].channel = num(sig);
+            at = word(line, at, i, sig, sizeof(sig));                 /* the signal */
+            at = word(line, at, i, out[n].prot, sizeof(out[n].prot));
+            while (at < i && line[at] == ' ') at++;
+            copy_into(out[n].name, WIFI_NAME_MAX, line + at, i - at);
+            if (out[n].name[0]) n++;
+        }
+        while (*p && *p != '\n') p++;
+        if (*p) p++;
+    }
+    return n;
+}
+
+static void wifi_say(const char *line) {
+    if (!strcmp(line, wifi_said)) return;
+    strcpy(wifi_said, line);
+    puts("settings: wireless ");
+    puts(line);
+    puts("\n");
+}
+
+static void wifi_join_picked(void) {
+    if (!wifi_pick[0]) return;
+    wifi_join(wifi_pick, wifi_pass);
+    wifi_field.focused = 0;
+}
+
+static int page_wireless(surface *s, ui_input *in, ui_theme *t,
+                         int x, int y, int w) {
+    char buf[2048];
+    int n = slurp("/sys/wifi", buf, sizeof(buf) - 1);
+    buf[n > 0 ? n : 0] = 0;
+    char state[24], joined[WIFI_NAME_MAX], why[72], card[72], addr[24];
+    sys_value(buf, "state", state, sizeof(state));
+    sys_value(buf, "joined", joined, sizeof(joined));
+    sys_value(buf, "why", why, sizeof(why));
+    sys_value(buf, "card", card, sizeof(card));
+    char net[1024];
+    n = slurp("/sys/net", net, sizeof(net) - 1);
+    net[n > 0 ? n : 0] = 0;
+    sys_value(net, "address", addr, sizeof(addr));
+    if (!strcmp(addr, "0.0.0.0")) addr[0] = 0;
+    wifi_net nets[WIFI_ROWS];
+    int nn = wifi_heard(buf, nets, WIFI_ROWS);
+
+    int is_joined = !strcmp(state, "joined"), looking = !strcmp(state, "looking");
+    int joining = !strcmp(state, "joining"), failed = !strcmp(state, "failed");
+    int radio = is_joined || looking || joining || failed || !strcmp(state, "idle");
+
+    y = ui_section(s, t, x, y, w, "Wireless");
+    char line[160];
+    line[0] = 0;
+    if (!radio) {
+        wifi_say(state);
+        copy_into(line, sizeof(line), card, sizeof(line));
+        ui_label(s, t, x, y, line);
+        ui_dim_label(s, t, x, y + 22, state);
+        return y + 50;
+    }
+    /* What the window shows in its first line, and the console too. */
+    const char *head = is_joined ? "Joined " : looking ? "Looking for networks" : joining ? "Joining "
+                     : failed ? "Not joined: " : "Not joined";
+    const char *rest = is_joined ? joined : joining ? wifi_pick : failed ? why : "";
+    int at = 0;
+    for (const char *p = head; *p && at < (int)sizeof(line) - 1; p++) line[at++] = *p;
+    for (const char *p = rest; *p && at < (int)sizeof(line) - 1; p++) line[at++] = *p;
+    const char *tail = is_joined ? (addr[0] ? ", address " : ", asking for an address") : "";
+    for (const char *p = tail; *p && at < (int)sizeof(line) - 1; p++) line[at++] = *p;
+    if (is_joined) for (const char *p = addr; *p && at < (int)sizeof(line) - 1; p++) line[at++] = *p;
+    line[at] = 0;
+    wifi_say(line);
+    ui_label(s, t, x, y, line);
+    ui_dim_label(s, t, x + w - face_w(card, UI_FACE_BODY), y, card);
+    y += 24;
+
+    if (is_joined || joining) {
+        if (ui_button(s, in, t, x, y, 120, "leave")) wifi_leave();
+    } else if (ui_button(s, in, t, x, y, 170, looking ? "looking..." : "look for networks")) {
+        wifi_scan();
+    }
+    y += UI_BTN_H + UI_GAP * 2;
+
+    y = ui_section(s, t, x, y, w, "Networks heard");
+    int top = y;
+    char list[200];
+    int ln = 0;
+    list[0] = 0;
+    for (int i = 0; i < nn; i++) {
+        char right[32];
+        int r = 0;
+        const char *pr = !strcmp(nets[i].prot, "wpa2") ? "wpa2" : !strcmp(nets[i].prot, "open") ? "open" : "not supported";
+        for (const char *p = pr; *p; p++) right[r++] = *p;
+        for (const char *p = ", channel "; *p; p++) right[r++] = *p;
+        if (nets[i].channel >= 10) right[r++] = (char)('0' + nets[i].channel / 10);
+        right[r++] = (char)('0' + nets[i].channel % 10);
+        right[r] = 0;
+        const char *bits[5] = { ln ? "; " : "", nets[i].name, " (", right, ")" };
+        for (int k = 0; k < 5; k++)
+            for (const char *p = bits[k]; *p && ln < (int)sizeof(list) - 1; p++) list[ln++] = *p;
+        list[ln] = 0;
+        int picked = !strcmp(nets[i].name, wifi_pick);
+        if (ui_row(s, in, t, x, y, w, nets[i].name, right, picked) == 1 && !picked) {
+            copy_into(wifi_pick, WIFI_NAME_MAX, nets[i].name, WIFI_NAME_MAX);
+            memset(wifi_pass, 0, sizeof(wifi_pass));
+            wifi_field.len = wifi_field.cursor = 0;
+            wifi_field.focused = !strcmp(nets[i].prot, "wpa2");
+        }
+        y += UI_ROW + 2;
+    }
+    if (!nn) ui_dim_label(s, t, x + UI_PAD, y + 4, looking ? "Listening on every channel in turn." : "None heard yet.");
+    if (strcmp(list, wifi_list_said)) {
+        strcpy(wifi_list_said, list);
+        if (nn) { puts("settings: wireless heard "); puts(list); puts("\n"); }
+    }
+    y = top + WIFI_ROWS * (UI_ROW + 2) + UI_GAP;
+
+    y = ui_section(s, t, x, y, w, "Join");
+    if (!wifi_pick[0]) {
+        ui_dim_label(s, t, x, y, "Choose a network above.");
+        return y + 30;
+    }
+    int open = 0;
+    for (int i = 0; i < nn; i++) if (!strcmp(nets[i].name, wifi_pick)) open = !strcmp(nets[i].prot, "open");
+    char ask[80];
+    at = 0;
+    for (const char *p = open ? "No password: " : "Password for "; *p; p++) ask[at++] = *p;
+    for (const char *p = wifi_pick; *p && at < (int)sizeof(ask) - 1; p++) ask[at++] = *p;
+    ask[at] = 0;
+    ui_dim_label(s, t, x, y, ask);
+    y += 22;
+    int fx = x;
+    if (!open) {
+        /* Typed into the real buffer, shown as stars. */
+        for (int k = 0; k < in->nkeys; k++) {
+            if (in->keys[k] == '\n' && wifi_field.focused) { wifi_join_picked(); continue; }
+            ui_field_key(&wifi_field, in->keys[k]);
+        }
+        char stars[WIFI_PASS_MAX];
+        for (int k = 0; k < wifi_field.len; k++) stars[k] = '*';
+        stars[wifi_field.len] = 0;
+        ui_field shown = wifi_field;
+        shown.buf = stars;
+        ui_field_draw(s, in, t, x, y, 260, &shown, "password");
+        wifi_field.focused = shown.focused;
+        fx = x + 270;
+    }
+    if (ui_button_primary(s, in, t, fx, y, 100, "join")) wifi_join_picked();
+    return y + UI_BTN_H + UI_GAP;
+}
+
 static int page_system(surface *s, ui_input *in, ui_theme *t,
                        int x, int y, int w, int h) {
     (void)in;
@@ -883,9 +1088,10 @@ int main(void) {
         case 3: y = page_desktop(&s, &in, &t, x, y, cw); break;
         case 4: y = page_behaviour(&s, &in, &t, x, y, cw); break;
         case 5: y = page_screen(&s, &in, &t, x, y, cw); break;
-        case 6: y = page_everything(&s, &in, &t, x, y, cw, h); break;
-        case 7: y = page_file(&s, &in, &t, x, y, cw, h); break;
-        case 8: y = page_system(&s, &in, &t, x, y, cw, h); break;
+        case 6: y = page_wireless(&s, &in, &t, x, y, cw); break;
+        case 7: y = page_everything(&s, &in, &t, x, y, cw, h); break;
+        case 8: y = page_file(&s, &in, &t, x, y, cw, h); break;
+        case 9: y = page_system(&s, &in, &t, x, y, cw, h); break;
         default: y = page_about(&s, &in, &t, x, y, cw, h); break;
         }
 

@@ -29,6 +29,8 @@
 #include "netdev.h"
 #include "sound.h"
 #include "net.h"
+#include "wlan.h"
+#include "wifi.h"
 #include "tcp.h"
 #include "fb.h"
 #include "wm.h"
@@ -217,6 +219,31 @@ static u32 render_net(char *b, u32 cap) {
     return o.len;
 }
 
+/* Wireless, for Settings: where the station is, then the networks heard,
+   one a line -- "network CHANNEL SIGNAL PROTECTION NAME", the name last
+   because it can have spaces in it. */
+static u32 render_wifi(char *b, u32 cap) {
+    out_t o = { b, cap, 0 };
+    if (!wlan_is_network()) {
+        put(&o, "card      %s\n", wifi_describe());
+        put(&o, "state     %s\n", wifi_state() == WIFI_NONE ? "no wireless card" : "no driver yet runs it");
+        return o.len;
+    }
+    put(&o, "card      %s\n", wlan_radio_of()->name);
+    wlan_state_t s = wlan_state();
+    const char *word = s == WLAN_CONNECTED ? "joined" : s == WLAN_SCANNING ? "looking"
+                     : s == WLAN_FAILED ? "failed" : s == WLAN_IDLE ? "idle" : "joining";
+    put(&o, "state     %s\n", word);
+    put(&o, "joined    %s\n", s == WLAN_CONNECTED ? wlan_ssid() : "");
+    put(&o, "why       %s\n", wlan_why());
+    wlan_bss nb[WLAN_BSS_MAX];
+    int n = wlan_networks(nb, WLAN_BSS_MAX);
+    for (int i = 0; i < n; i++)
+        put(&o, "network   %d %d %s %s\n", nb[i].channel, nb[i].signal,
+            nb[i].secure == 1 ? "wpa2" : nb[i].secure ? "other" : "open", nb[i].ssid);
+    return o.len;
+}
+
 static u32 render_programs(char *b, u32 cap) {
     out_t o = { b, cap, 0 };
     for (u32 i = 0; i < n_programs; i++)
@@ -385,6 +412,7 @@ static const node_t nodes[] = {
     { "/sys/screen",   render_screen    },
     { "/sys/settings", render_settings  },
     { "/sys/theme",    render_theme     },
+    { "/sys/wifi",     render_wifi      },
 };
 #define N_NODES (sizeof(nodes) / sizeof(nodes[0]))
 
