@@ -95,6 +95,13 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.107.0
+
+- **A page is shown before its pictures, and each drawn as it comes (11)**: `<img>` pictures and backgrounds fetched as
+  asks after the page is shown. browsercheck: a picture the server holds back, the page drawn without it and the console
+  not told; failing on the browser before (nothing drawn until the server answered), with the console told at once, with
+  backgrounds never asked for, and with no layout when a picture comes.
+
 ### 0.106.0
 
 - **A first page's connection no longer hung up by the WebSockets' reset (11)**: `jd_ws_reset` dropped every slot,

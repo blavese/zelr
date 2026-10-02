@@ -1,6 +1,18 @@
 # 11 -- The web browser (everything except JS-engine internals and image decoders)
 
-**Since 0.106.0** (the rest of this file is older; trust the code and the README's "since 6048716" list):
+**Since 0.107.0** (the rest of this file is older; trust the code and the README's "since 6048716" list):
+- **A page is shown before its pictures** (browser.c `pic_wait`, `pictures_pump`). `gather_pictures` makes a picture
+  written into the page (data:) at once and puts one at an address on the waiting list; `gather_backgrounds` does the
+  same for backgrounds, keeping the slot as nothing (`ok` 0) until it comes. The decoding is `pic_take` (an element's)
+  and `bg_take` (a background's). Each pass, `pictures_pump` starts what waits as asks (`ask_begin`, not counted against
+  the page's `ASKS_MAX`; an Accept line for pictures), and makes what has come: an element's picture lays the page out
+  again (`pics_relayout`, at most every 25 ticks while more are coming, and once at the end), a background's is only
+  drawn. A new page or `load` drops what was coming (`pic_wait_drop`). The status is said in halves (`status_head`,
+  `status_tail`) around the pictures, "N pictures (M more coming)" (`status_compose`), and the console's `browser:` line
+  waits until the last picture has settled (`announce_owed`, `announce_page`), or is said as far as it got when another
+  page is asked for, since what reads it takes it to mean the page is all there.
+
+**Since 0.106.0**:
 - **A page's requests do not stop the browser** (fetch.h `web_job`, browser.c `ask_t`). fetch.h's exchange is split
   into `web_head_for` (the head), `web_send_all`, `web_shape_of`/`web_shape_done` (where the head ends and how the body
   is measured), `web_keepable` and `web_read_answer`; `web_fetch_once` is made of them, and so is a job:

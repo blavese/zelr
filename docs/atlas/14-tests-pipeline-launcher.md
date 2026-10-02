@@ -44,7 +44,7 @@ For each of these I read the header and the assertion logic. Almost all were rea
 | tools/appcheck.py | 281 | Calculator (78/4 compared against a typed 19.5 by pixel comparison), the monitor app, and the music player played from a USB stick and recorded. |
 | tools/blackbox_test.sh | 110 | Boot log survives a reboot. Two boots of one disk; reads `/sys/lastboot` fenced between two echoes. |
 | tools/bootcheck.py | 207 | The disk the kernel formats must boot from a plain BIOS, including repair of a disk formatted by the previous release. |
-| tools/browsercheck.py | 404 | The browser against tools/webserver.py: render comparisons, links, back, chunked, CSS, PNG, SVG, JS, redirect, 404, https refusal. |
+| tools/browsercheck.py | 404 | The browser against tools/webserver.py: render comparisons, links, back, chunked, CSS, PNG, SVG, JS, redirect, 404, https refusal. Since 0.107.0 `/held-picture`, whose picture webserver.py holds back (`Server.hold`, `release`): the page must be drawn (its band) while the picture is not, and the console not told; then the picture drawn, and the console told with it counted. |
 | tools/check_loader.py | 133 | Static, run by bootloader/build.sh:25. Checks the cdboot signature position, the handoff magic halves, and that the load address is the same in both loaders. |
 | tools/check_sse.py | 170 | Byte scanner for SSE/MMX opcodes in ELF executable sections. Run by the gate on build/zelr.elf since 0.41.0 (section 10, S). |
 | tools/check_version.py | 81 | Static. `KERNEL_VERSION` must not be behind the newest `vN.N.N` git tag. |

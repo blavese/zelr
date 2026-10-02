@@ -1802,7 +1802,9 @@ large range:
   is started there and its answer taken on later passes, three at a time
   each on a connection of its own, so the page's timers, its video and the
   reader go on while it comes (a video's file is fetched the same way).
-  Making a new connection still stalls the browser until it is made. A
+  Making a new connection still stalls the browser until it is made. Since
+  0.107.0 the page is shown before its pictures, which are fetched the same
+  way and drawn as they come. A
   WebSocket, once open, is asked on every pass whether anything came (a
   socket can be told not to wait, `sock_wait`), and a page has four at
   once, out of the machine's six sockets. There is no permessage-deflate,
