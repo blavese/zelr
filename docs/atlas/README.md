@@ -95,6 +95,13 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.104.0
+
+- **Wireless from the desktop (06a, 03, 10)**: `SYS_WIFI` (69), `/sys/wifi`, and a Wireless page in Settings; the address
+  follows a join by itself and leaving forgets it. wificheck: the address by itself, forgetting it, and a second machine
+  joined through Settings with the mouse and keys; failing with no address asked for, with the address kept after
+  leaving, with the password not handed to the station, and with the page's rows not choosing a network.
+
 ### 0.103.0
 
 - **A video's frame redraws only its box (11)**, with whatever lies over it drawn over it again, and is committed alone.

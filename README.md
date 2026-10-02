@@ -1464,10 +1464,12 @@ keys. The encryption reproduces RFC 3610's vectors and the 802.11
 standard's own test frame byte for byte, and the self test joins a
 simulated access point written from the other side of the standard. It
 is the machine's network as a card would be, behind the same device the
-stack sends through, and the shell's `wifi` scans, joins and leaves; a
-harness boots a machine with no network card and the simulated access point
-as its radio, joins with the shell, gets an address over the air and pings.
-No card's driver uses it yet.
+stack sends through. The shell's `wifi` scans, joins and leaves, and so does
+Settings' Wireless page -- the networks heard, one chosen, its password,
+join -- and the address follows a join by itself, as it does a cable at
+startup. A harness boots a machine with no network card and the simulated
+access point as its radio, joins with the shell and then with Settings,
+gets an address over the air and pings. No card's driver uses it yet.
 
 **Ethernet over USB**, which is the answer to a laptop whose wireless will
 not start without a vendor binary. There is still a socket on the side of
@@ -1551,7 +1553,7 @@ is still the kernel's own, on the console; the one in a window is a program.
 ## writing a program for it
 
 Four files in `sdk/` are everything a program needs: `zelr.h`, which is the
-sixty-eight system calls and a little sugar over them, `zelr.ld`, which says
+sixty-nine system calls and a little sugar over them, `zelr.ld`, which says
 where a program is linked, a build line, and an example.
 
 ```bash
@@ -1827,9 +1829,10 @@ large range:
   matters and a guess in the ones that do not.
 - **No job control.** `cmd &` starts something and stops waiting for it, and
   nothing keeps a list; `jobs` says so rather than printing an empty one.
-- **Sixty-eight system calls.** Enough to print, walk directories, read and
+- **Sixty-nine system calls.** Enough to print, walk directories, read and
   write files, rename one, say when it must be on the disk, open a TCP or
-  TLS connection and say how long a read of it waits, sleep, exit, fork, exec, wait on a child, make a pipe, wait
+  TLS connection and say how long a read of it waits, join a wireless
+  network, sleep, exit, fork, exec, wait on a child, make a pipe, wait
   on several descriptors at once, map memory, catch a signal and own a
   window. The numbers are fixed: a program built somewhere else has
   nothing but the number to go on, so a call that goes away leaves a gap

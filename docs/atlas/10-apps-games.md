@@ -11,7 +11,7 @@ The PIT runs at 100 Hz (`kernel/main.c:459 timer_init(100)`), so **1 tick = 10 m
 | File | Lines | Role |
 |---|---:|---|
 | `userland/files.c` | 700 | File manager ("Files"): Places sidebar, toolbar, File/Edit/View/Help menu bar, context menu, filter, in-place rename, open-by-name mapping to other programs |
-| `userland/settings.c` | 843 | Settings: 10 pages. Generic controls built from `/sys/settings`. Writes `/zelr.cfg` |
+| `userland/settings.c` | 1110 | Settings: 11 pages. Generic controls built from `/sys/settings`. Writes `/zelr.cfg`. Since 0.104.0 a Wireless page: the state from `/sys/wifi` and the address from `/sys/net`, look for networks, the networks heard as rows, a password field shown as stars, join (or return in the field) and leave through `SYS_WIFI`; what its first line says and the networks heard are also put on the console ("settings: wireless ...", never the password) |
 | `userland/notes.c` | 361 | Text editor ("Notes"), one flat 64 KiB buffer |
 | `userland/paint.c` | 235 | Paint: 16 colours, 4 brush sizes, Bresenham strokes. Draws everything itself; does not use ui.h |
 | `userland/music.c` | 446 | WAV player: RIFF chunk walk, 16.16 nearest-sample resampler, mono duplication, built-in tune |

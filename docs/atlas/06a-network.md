@@ -1,5 +1,13 @@
 # 06a -- Network drivers and the TCP/IP stack
 
+**Since 0.104.0**: **wireless from a program**: `SYS_WIFI` (69; `WIFI_SCAN`, `WIFI_JOIN` with the name and password as
+strings, `WIFI_LEAVE`) starts each and returns at once (a scan while joined is refused: the radio listens on one channel
+at a time); `/sys/wifi` says how it is going (`card`, `state` idle/looking/joining/joined/failed, `joined`, `why`, then
+a `network CHANNEL SIGNAL PROTECTION NAME` line per network heard). **The address follows the join** wherever it was
+joined from: the net task (`net_follow_wireless`) calls `net_dhcp_start` when the station becomes joined, and on leaving
+forgets the address, mask, router, name server and the ARP cache. The shell's `dhcp` first waits out an exchange already
+running (`net_dhcp_busy`), since two on the one socket answer each other's questions. Settings has a Wireless page on it.
+
 **Since 0.102.0**: **the station is a network device** (netdev.c `NIC_WLAN`, after a USB adapter, when the radio is
 the machine's network: `wlan_for_network`, set by the "wlansim" boot word or a card's driver; the selftest's is not):
 sends go to `wlan_send_eth`, what it takes off the air goes to `net_receive` (`netdev_wlan_rx`), and `netdev_poll`

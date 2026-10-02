@@ -1,5 +1,9 @@
 # Atlas 03 -- Tasks, Processes and System Calls
 
+**Since 0.104.0**: **69 `SYS_WIFI`** (rbx `WIFI_SCAN`/`WIFI_JOIN`/`WIFI_LEAVE`, rcx and rdx the network's name and
+password for a join, copied in with `copy_path`, the password wiped from the stack after) drives the wireless station
+(06a); -1 when the machine's network is not wireless, for a scan while joined, or a network not heard. 69 live calls.
+
 **Since 0.92.0** (the rest of this file is older): **68 `SYS_SOCK_WAIT`** (rbx the socket, rcx milliseconds up to
 60000; -1 for a socket not the caller's or a longer wait) sets `sock_t.wait_ms`, which `sys_recv` hands `tcp_recv` and
 `tls_recv` in place of the fixed 4000; `sock_take` starts it at 4000. 0 hands over what has come and returns. The host
