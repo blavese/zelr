@@ -1419,7 +1419,9 @@ waiting, `timeupdate` four times a second, `ended` -- while the pieces,
 fragmented MP4 holding H.264 and AAC, are taken apart (`mp4.h`), decoded,
 and played on the sound's clock (`media.h`), the picture drawn in the
 element's box -- and only that box redrawn for each new frame, with
-whatever the page lays over the video drawn over it again. A page that simply names a file for its `<video>` or
+whatever the page lays over the video drawn over it again. Pausing,
+seeking or leaving the page is heard at once: what the card still held is
+dropped rather than left to play out. A page that simply names a file for its `<video>` or
 `<audio>` plays too: an MP4 is asked for a stretch at a time by byte ranges,
 its index found wherever the encoder put it. A harness serves pages that do
 both from the host, and checks what the element told, the colours in its
@@ -1553,7 +1555,7 @@ is still the kernel's own, on the console; the one in a window is a program.
 ## writing a program for it
 
 Four files in `sdk/` are everything a program needs: `zelr.h`, which is the
-sixty-nine system calls and a little sugar over them, `zelr.ld`, which says
+seventy system calls and a little sugar over them, `zelr.ld`, which says
 where a program is linked, a build line, and an example.
 
 ```bash
@@ -1829,7 +1831,7 @@ large range:
   matters and a guess in the ones that do not.
 - **No job control.** `cmd &` starts something and stops waiting for it, and
   nothing keeps a list; `jobs` says so rather than printing an empty one.
-- **Sixty-nine system calls.** Enough to print, walk directories, read and
+- **Seventy system calls.** Enough to print, walk directories, read and
   write files, rename one, say when it must be on the disk, open a TCP or
   TLS connection and say how long a read of it waits, join a wireless
   network, sleep, exit, fork, exec, wait on a child, make a pipe, wait

@@ -1070,7 +1070,8 @@ Clock fallback: `pos_moves`, `clocked`, `clock_from_tick`,
   until no more than a third of a second is queued, and never longer than
   `ms`, so the desktop's 70 ms click over a stream costs at most 70 ms.
 * `sound_silence()` (351-357): memset the ring, advance,
-  `written = zeroed = played`.
+  `written = zeroed = played`. Since 0.105.0 reached from ring 3 too
+  (`SYS_SOUND_STOP` 70), which media.h uses on a pause, a seek and a page left.
 * `sound_init()` (359-391): `hda_init`, else `ens_init`. Frame bytes, ring,
   `snd_start(ring, ring_bytes, 48000)`, counters reset, `last_pos` from the
   hardware, `started_at = timer_ticks()`.

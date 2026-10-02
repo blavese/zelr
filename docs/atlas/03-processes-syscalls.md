@@ -1,5 +1,8 @@
 # Atlas 03 -- Tasks, Processes and System Calls
 
+**Since 0.105.0**: **70 `SYS_SOUND_STOP`** (no arguments; -1 with no sound card) calls `sound_silence`: what was
+written and not yet played is dropped (05, 13 §3.13). 70 live calls.
+
 **Since 0.104.0**: **69 `SYS_WIFI`** (rbx `WIFI_SCAN`/`WIFI_JOIN`/`WIFI_LEAVE`, rcx and rdx the network's name and
 password for a join, copied in with `copy_path`, the password wiped from the stack after) drives the wireless station
 (06a); -1 when the machine's network is not wireless, for a scan while joined, or a network not heard. 69 live calls.

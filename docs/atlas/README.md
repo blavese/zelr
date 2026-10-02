@@ -95,6 +95,12 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.105.0
+
+- **A video's sound stops when it is paused, seeks or its page is left (13 §3.13, 05, 03)**: `SYS_SOUND_STOP` (70)
+  drops what the card holds; media.h's `media_drop_sound`. msecheck: a page that seeks, pauses, plays and leaves, its
+  sound measured stretch by stretch; failing by 1.3 s with the drop left out of the pause and seek, and of closing.
+
 ### 0.104.0
 
 - **Wireless from the desktop (06a, 03, 10)**: `SYS_WIFI` (69), `/sys/wifi`, and a Wireless page in Settings; the address
