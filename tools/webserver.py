@@ -537,6 +537,23 @@ customElements.define('x-panel', class extends HTMLElement {
 # the picture wrongly.
 MISSING = PICTURE.replace(b"/logo.png", b"/no-such-picture.png")
 
+# A page whose picture the server holds back until the harness lets it go
+# (Server.hold, Server.release): the page has to be shown, its band drawn,
+# before the picture comes, and the picture drawn once it does. The picture
+# says no size, so its coming lays the page out again.
+HELD_PAGE = b"""<!doctype html>
+<html><head><title>a held picture</title>
+<style>body { font-family: sans-serif; padding: 24px }
+.band { background: #1d4ed8; height: 60px }</style></head>
+<body>
+<div class="band"></div>
+<p>the picture below comes when it is let go</p>
+<img src="/held/logo.png" alt="">
+</body></html>
+"""
+HELD = threading.Event()
+HELD.set()
+
 BARE = STYLED.replace(b'<link rel="stylesheet" href="/style.css">', b"")
 BARE = BARE[:BARE.index(b"<style>")] + BARE[BARE.index(b"</style>") + 8:]
 BARE = BARE.replace(b' style="text-align:center;color:#15803d"', b"")
@@ -1102,6 +1119,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._send(DISC, ctype="image/svg+xml")
         elif path == "/webp-picture":
             self._send(WEBP_PICTURE)
+        elif path == "/held-picture":
+            self._send(HELD_PAGE)
+        elif path == "/held/logo.png":
+            HELD.wait(timeout=90)
+            self._send(LOGO, ctype="image/png")
         elif path == "/inline-drawing":
             self._send(INLINE_DRAWING)
         elif path == "/missing-picture":
@@ -1285,6 +1307,13 @@ class Server:
 
     def forget(self):
         del RECEIVED[:]
+
+    def hold(self):
+        """/held/logo.png waits from now until release."""
+        HELD.clear()
+
+    def release(self):
+        HELD.set()
 
     def __init__(self):
         self.httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)

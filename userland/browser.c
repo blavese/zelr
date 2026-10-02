@@ -253,6 +253,31 @@ typedef struct {
 static bgpic bgpics[BGPICS_MAX];
 static int nbgpics, bgpics_bytes;
 
+/* Pictures asked for and not yet come. The page used to wait for every one
+   before it was shown, a server at a time; it is shown first now and each
+   picture drawn as it arrives (pictures_pump), a picture element's laid out
+   again, a background's only drawn. `bg` is the background's slot, or -1
+   for the element `node`; `ask` the request under way, plus one. */
+#define PIC_WAIT (PICS_MAX + BGPICS_MAX)
+#define PIC_ACCEPT "Accept: image/webp,image/png,image/jpeg,image/gif,image/svg+xml;q=0.9,*/*;q=0.1\r\n"
+
+typedef struct {
+    int  node, bg, ask;
+    char url[URL_TEXT];
+} pic_wait_t;
+
+static pic_wait_t pic_wait[PIC_WAIT];
+static int npic_wait;
+
+static void pic_wait_add(int node, int bg, const url_t *u) {
+    if (npic_wait >= PIC_WAIT) return;
+    pic_wait_t *w = &pic_wait[npic_wait++];
+    w->node = node;
+    w->bg = bg;
+    w->ask = 0;
+    url_text(u, w->url, sizeof(w->url));
+}
+
 static u32 bg_hash(const char *s, int *len) {
     u32 h = 2166136261u;
     int n = 0;
@@ -386,6 +411,49 @@ static int bg_raster(const u8 *body, int len, u32 bg, picture *out) {
 
 static int pic_data_uri(const char *src, char *out, int cap);
 
+/* A background's bytes made into what is drawn: 1 when it could be. */
+static int bg_take(bgpic *b, const u8 *body, int len) {
+    if (len > 3 && body[0] == 0xFF && body[1] == 0xD8) {
+        picture p;
+        if (jpeg_decode(body, len, &p) != JPG_OK) return 0;
+        b->rgb = p.rgb;
+        b->w = b->dw = p.w;
+        b->h = b->dh = p.h;
+        b->ok = 1;
+    } else {
+        picture k, wh;
+        if (bg_raster(body, len, 0x000000, &k)) {
+            if (!bg_raster(body, len, 0xFFFFFF, &wh)) { picture_free(&k); return 0; }
+            b->ok = bg_merge(&k, &wh, b);
+        } else {
+            int at = 0;
+            while (at < len && (body[at] == ' ' || body[at] == '\n' || body[at] == '\r'
+                                || body[at] == '\t')) at++;
+            if (at >= len || body[at] != '<') return 0;
+            b->svg = (char *)malloc((u32)len + 1);
+            if (!b->svg) return 0;
+            for (int c = 0; c < len; c++) b->svg[c] = (char)body[c];
+            b->svg[len] = 0;
+            b->svglen = len;
+            /* Made once at its own size, which is its size. */
+            picture own;
+            if (svg_render(b->svg, b->svglen, 0, 0, &own, 0xFFFFFF) != SVG_OK) return 0;
+            b->w = own.w;
+            b->h = own.h;
+            picture_free(&own);
+            b->ok = b->w > 0 && b->h > 0;
+        }
+    }
+    if (b->ok && !b->svg) {
+        bgpics_bytes += b->dw * b->dh * 4;
+        if (bgpics_bytes > BGPICS_BYTES) { bg_pixels_free(b); b->ok = 0; }
+    }
+    return b->ok;
+}
+
+/* Every background the layout drew a box for: one written into the page
+   made now, one at an address asked for (pictures_pump) and drawn when it
+   comes, its slot kept as nothing until then. */
 static void gather_backgrounds(void) {
     for (int i = 0; i < page.nitems && nbgpics < BGPICS_MAX; i++) {
         const litem *it = &page.items[i];
@@ -401,55 +469,12 @@ static void gather_backgrounds(void) {
         b->svg = 0;
         b->svglen = 0;
 
-        response_t r;
         if (w_starts_fold(src, "data:")) {
             int dn = pic_data_uri(src, cssbuf, CSS_MAX);
-            if (dn <= 0) continue;
-            r.body = cssbuf;
-            r.len = dn;
+            if (dn > 0) bg_take(b, (const u8 *)cssbuf, dn);
         } else {
             url_t u;
-            if (!url_join(&here, src, &u)) continue;
-            web_accept = "image/webp,image/png,image/jpeg,image/gif,image/svg+xml;q=0.9,*/*;q=0.1";
-            int rc = web_get(&u, cssbuf, CSS_MAX, &r);
-            web_accept = 0;
-            if (rc < 0 || rc >= 400 || r.len <= 0) continue;
-        }
-        const u8 *body = (const u8 *)r.body;
-        if (r.len > 3 && body[0] == 0xFF && body[1] == 0xD8) {
-            picture p;
-            if (jpeg_decode(body, r.len, &p) != JPG_OK) continue;
-            b->rgb = p.rgb;
-            b->w = b->dw = p.w;
-            b->h = b->dh = p.h;
-            b->ok = 1;
-        } else {
-            picture k, wh;
-            if (bg_raster(body, r.len, 0x000000, &k)) {
-                if (!bg_raster(body, r.len, 0xFFFFFF, &wh)) { picture_free(&k); continue; }
-                b->ok = bg_merge(&k, &wh, b);
-            } else {
-                int at = 0;
-                while (at < r.len && (body[at] == ' ' || body[at] == '\n' || body[at] == '\r'
-                                      || body[at] == '\t')) at++;
-                if (at >= r.len || body[at] != '<') continue;
-                b->svg = (char *)malloc((u32)r.len + 1);
-                if (!b->svg) continue;
-                for (int c = 0; c < r.len; c++) b->svg[c] = r.body[c];
-                b->svg[r.len] = 0;
-                b->svglen = r.len;
-                /* Made once at its own size, which is its size. */
-                picture own;
-                if (svg_render(b->svg, b->svglen, 0, 0, &own, 0xFFFFFF) != SVG_OK) continue;
-                b->w = own.w;
-                b->h = own.h;
-                picture_free(&own);
-                b->ok = b->w > 0 && b->h > 0;
-            }
-        }
-        if (b->ok && !b->svg) {
-            bgpics_bytes += b->dw * b->dh * 4;
-            if (bgpics_bytes > BGPICS_BYTES) { bg_pixels_free(b); b->ok = 0; }
+            if (url_join(&here, src, &u)) pic_wait_add(-1, (int)(b - bgpics), &u);
         }
     }
 }
@@ -597,7 +622,17 @@ static void draw_picture_layer(surface *s, const litem *it, int x, int sy, int o
     }
 }
 
+static void ask_end(int id);
+
+/* What was still coming for the last page, given up. */
+static void pic_wait_drop(void) {
+    for (int k = 0; k < npic_wait; k++)
+        if (pic_wait[k].ask) ask_end(pic_wait[k].ask - 1);
+    npic_wait = 0;
+}
+
 static void pics_drop(void) {
+    pic_wait_drop();
     for (int i = 0; i < npics; i++) {
         picture_free(&pics[i].pic);
         if (pics[i].alpha) free(pics[i].alpha);
@@ -1009,6 +1044,11 @@ static void say_more(const char *s) {
     for (const char *p = s; *p && n < (int)sizeof(status) - 1; p++) status[n++] = *p;
     status[n] = 0;
 }
+
+/* The status in two halves around what it says of the pictures, which
+   changes as they come. */
+static char status_head[sizeof(status)], status_tail[sizeof(status)];
+static int  pics_said;                  /* the status has the halves to compose */
 
 static const char *why(int rc) {
     switch (rc) {
@@ -1871,10 +1911,10 @@ static void asks_hang_up_idle(int now_too) {
 
 static void asks_tidy(void) { asks_hang_up_idle(0); }
 
-static int ask_start(const char *method, const char *url, const char *body, int blen,
-                     const char *type, const char *headers, int max) {
+static int ask_begin(const char *method, const char *url, const char *body, int blen,
+                     const char *type, const char *headers, int max, int counted) {
     asks_init();
-    if (asks_made >= ASKS_MAX) return -2;
+    if (counted && asks_made >= ASKS_MAX) return -2;
     url_t u;
     if (!url_join(&here, url, &u)) return WEB_ERR_SCHEME;
     int pick = -1;
@@ -1896,7 +1936,7 @@ static int ask_start(const char *method, const char *url, const char *body, int 
         for (int i = 0; i < blen; i++) a->body[i] = body[i];
         a->body[blen] = 0;
     }
-    asks_made++;
+    if (counted) asks_made++;
     a->used = 1;
     int rc = web_job_start(&a->job, &u, a->method, a->body, blen, type ? a->type : 0, a->extra, "*/*", max);
     if (rc == WEB_ERR_BUSY) {
@@ -1908,6 +1948,12 @@ static int ask_start(const char *method, const char *url, const char *body, int 
         return rc < -1 ? rc : -2;
     }
     return pick;
+}
+
+/* A page's script's request, counted against what a page may ask. */
+static int ask_start(const char *method, const char *url, const char *body, int blen,
+                     const char *type, const char *headers, int max) {
+    return ask_begin(method, url, body, blen, type, headers, max, 1);
 }
 
 static int ask_poll(int id, jd_reply *out) {
@@ -2274,8 +2320,82 @@ static int pic_data_uri(const char *src, char *out, int cap) {
     return n;
 }
 
+/* A picture's bytes made into what is drawn for the element: 1 when they
+   could be. */
+static int pic_take(int i, const u8 *body, int len) {
+    if (npics >= PICS_MAX) return 0;
+    shown *s = &pics[npics];
+    s->node = i;
+    s->alpha = 0;
+
+    /* Which kind it is, from the bytes rather than from what the
+       server said it was. A server that labels a PNG as an octet stream
+       is common; a PNG that does not start with the PNG signature is
+       not, so the bytes are the better authority. One whose file says
+       it may have clear parts is decoded twice, over black and over
+       white, so they show what is behind them (pic_merge): flattened
+       onto white, a logo on a dark header sat in a white box. */
+    int ok = 0;
+    int clear = pic_may_be_clear(body, len);
+    u32 under = clear ? 0x000000 : 0xFFFFFF;
+    picture white;
+    white.rgb = 0;
+
+    if (len > 8 && body[0] == 137 && body[1] == 'P'
+        && body[2] == 'N' && body[3] == 'G') {
+        ok = png_decode(body, len, &s->pic, under) == PNG_OK;
+        if (ok && clear) ok = png_decode(body, len, &white, 0xFFFFFF) == PNG_OK;
+    } else if (len > 3 && body[0] == 0xFF && body[1] == 0xD8) {
+        ok = jpeg_decode(body, len, &s->pic) == JPG_OK;
+        clear = 0;
+    } else if (len > 6 && body[0] == 'G' && body[1] == 'I' && body[2] == 'F') {
+        ok = gif_decode(body, len, &s->pic, under) == GIF_OK;
+        if (ok && clear) ok = gif_decode(body, len, &white, 0xFFFFFF) == GIF_OK;
+    } else if (len > 12 && body[0] == 'R' && body[1] == 'I' && body[2] == 'F'
+               && body[3] == 'F' && body[8] == 'W' && body[9] == 'E'
+               && body[10] == 'B' && body[11] == 'P') {
+        /* What a server sends a browser that says it takes WebP, and
+           what some send whatever the browser says. */
+        ok = webp_decode(body, len, &s->pic, under) == WEBP_OK;
+        if (ok && clear) ok = webp_decode(body, len, &white, 0xFFFFFF) == WEBP_OK;
+    } else {
+        /* A drawing, which is markup and so can start with an XML
+           declaration, a comment, or the element itself. */
+        int at = 0;
+        while (at < len && (body[at] == ' ' || body[at] == '\n'
+                            || body[at] == '\r' || body[at] == '\t')) at++;
+        if (at < len && body[at] == '<') {
+            /* What the page asked for, so a drawing lands at the size
+               the layout is about to leave for it rather than at
+               whatever size it happens to describe. */
+            const char *aw = dom_attr(&doc, i, "width");
+            const char *ah = dom_attr(&doc, i, "height");
+            int want_w = aw ? lay_number(aw) : 0;
+            int want_h = ah ? lay_number(ah) : 0;
+            ok = svg_render((const char *)body, len, want_w, want_h,
+                            &s->pic, 0x000000) == SVG_OK
+              && svg_render((const char *)body, len, want_w, want_h,
+                            &white, 0xFFFFFF) == SVG_OK;
+            clear = 1;
+        }
+    }
+
+    if (ok && clear && white.rgb) ok = pic_merge(&s->pic, &white, &s->alpha);
+    else if (white.rgb) picture_free(&white);
+    if (!ok) { picture_free(&s->pic); pics_skipped++; return 0; }
+
+    pic_sizes[npic_sizes].node = i;
+    pic_sizes[npic_sizes].w = s->pic.w;
+    pic_sizes[npic_sizes].h = s->pic.h;
+    npic_sizes++;
+    npics++;
+    return 1;
+}
+
+/* Every picture element: one written into the page made now, one at an
+   address asked for (pictures_pump) and laid out when it comes. */
 static void gather_pictures(void) {
-    for (int i = 0; i < doc.count && npics < PICS_MAX; i++) {
+    for (int i = 0; i < doc.count && npics + npic_wait < PICS_MAX; i++) {
         if (doc.nodes[i].kind != DN_ELEMENT || doc.nodes[i].tag != T_IMG)
             continue;
         if (in_template(i)) continue;          /* a slot for one that is drawn */
@@ -2283,90 +2403,61 @@ static void gather_pictures(void) {
         const char *src = pic_source(i);
         if (!src) continue;
 
-        response_t r;
         if (w_starts_fold(src, "data:")) {
             /* A one-pixel placeholder is not worth a slot; anything else is
                decoded where it lies, with no fetch at all. */
             int dn = pic_data_uri(src, cssbuf, CSS_MAX);
             if (dn < 100) continue;
-            r.body = cssbuf;
-            r.len = dn;
+            pic_take(i, (const u8 *)cssbuf, dn);
         } else {
             url_t u;
             if (!url_join(&here, src, &u)) { pics_skipped++; continue; }
-            web_accept = "image/webp,image/png,image/jpeg,image/gif,image/svg+xml;q=0.9,*/*;q=0.1";
-            int rc = web_get(&u, cssbuf, CSS_MAX, &r);
-            web_accept = 0;
-            if (rc < 0 || rc >= 400 || r.len <= 0) { pics_skipped++; continue; }
+            pic_wait_add(i, -1, &u);
         }
-
-        shown *s = &pics[npics];
-        s->node = i;
-        s->alpha = 0;
-
-        /* Which kind it is, from the bytes rather than from what the
-           server said it was. A server that labels a PNG as an octet stream
-           is common; a PNG that does not start with the PNG signature is
-           not, so the bytes are the better authority. One whose file says
-           it may have clear parts is decoded twice, over black and over
-           white, so they show what is behind them (pic_merge): flattened
-           onto white, a logo on a dark header sat in a white box. */
-        const u8 *body = (const u8 *)r.body;
-        int ok = 0;
-        int clear = pic_may_be_clear(body, r.len);
-        u32 under = clear ? 0x000000 : 0xFFFFFF;
-        picture white;
-        white.rgb = 0;
-
-        if (r.len > 8 && body[0] == 137 && body[1] == 'P'
-            && body[2] == 'N' && body[3] == 'G') {
-            ok = png_decode(body, r.len, &s->pic, under) == PNG_OK;
-            if (ok && clear) ok = png_decode(body, r.len, &white, 0xFFFFFF) == PNG_OK;
-        } else if (r.len > 3 && body[0] == 0xFF && body[1] == 0xD8) {
-            ok = jpeg_decode(body, r.len, &s->pic) == JPG_OK;
-            clear = 0;
-        } else if (r.len > 6 && body[0] == 'G' && body[1] == 'I' && body[2] == 'F') {
-            ok = gif_decode(body, r.len, &s->pic, under) == GIF_OK;
-            if (ok && clear) ok = gif_decode(body, r.len, &white, 0xFFFFFF) == GIF_OK;
-        } else if (r.len > 12 && body[0] == 'R' && body[1] == 'I' && body[2] == 'F'
-                   && body[3] == 'F' && body[8] == 'W' && body[9] == 'E'
-                   && body[10] == 'B' && body[11] == 'P') {
-            /* What a server sends a browser that says it takes WebP, and
-               what some send whatever the browser says. */
-            ok = webp_decode(body, r.len, &s->pic, under) == WEBP_OK;
-            if (ok && clear) ok = webp_decode(body, r.len, &white, 0xFFFFFF) == WEBP_OK;
-        } else {
-            /* A drawing, which is markup and so can start with an XML
-               declaration, a comment, or the element itself. */
-            int at = 0;
-            while (at < r.len && (body[at] == ' ' || body[at] == '\n'
-                                  || body[at] == '\r' || body[at] == '\t')) at++;
-            if (at < r.len && body[at] == '<') {
-                /* What the page asked for, so a drawing lands at the size
-                   the layout is about to leave for it rather than at
-                   whatever size it happens to describe. */
-                const char *aw = dom_attr(&doc, i, "width");
-                const char *ah = dom_attr(&doc, i, "height");
-                int want_w = aw ? lay_number(aw) : 0;
-                int want_h = ah ? lay_number(ah) : 0;
-                ok = svg_render((const char *)body, r.len, want_w, want_h,
-                                &s->pic, 0x000000) == SVG_OK
-                  && svg_render((const char *)body, r.len, want_w, want_h,
-                                &white, 0xFFFFFF) == SVG_OK;
-                clear = 1;
-            }
-        }
-
-        if (ok && clear && white.rgb) ok = pic_merge(&s->pic, &white, &s->alpha);
-        else if (white.rgb) picture_free(&white);
-        if (!ok) { picture_free(&s->pic); pics_skipped++; continue; }
-
-        pic_sizes[npic_sizes].node = i;
-        pic_sizes[npic_sizes].w = s->pic.w;
-        pic_sizes[npic_sizes].h = s->pic.h;
-        npic_sizes++;
-        npics++;
     }
+}
+
+/* The pictures waiting, a pass at a time: each started as a way out comes
+   free, each that has come made. Bit 1 when an element's came (the page is
+   laid out again), 2 when a background's did (only drawn), 4 when any was
+   settled either way (the status says so). */
+static int pictures_pump(void) {
+    int what = 0;
+    for (int k = 0; k < npic_wait; k++) {
+        pic_wait_t *w = &pic_wait[k];
+        int done = 0, ok = 0;
+        if (!w->ask) {
+            int id = ask_begin("GET", w->url, 0, 0, 0, PIC_ACCEPT, CSS_MAX, 0);
+            if (id == -1) break;                 /* every way out busy: a later pass */
+            if (id >= 0) { w->ask = id + 1; continue; }
+            done = 1;
+        } else {
+            jd_reply rp = { 0, 0, 0, 0, 0, 0, 0 };
+            int st = ask_poll(w->ask - 1, &rp);
+            if (st == 0) continue;
+            done = 1;
+            if (st > 0 && rp.status < 400 && rp.len > 0) {
+                if (w->bg >= 0) ok = bg_take(&bgpics[w->bg], (const u8 *)rp.body, rp.len);
+                else ok = pic_take(w->node, (const u8 *)rp.body, rp.len);
+            }
+            ask_end(w->ask - 1);
+        }
+        if (!done) continue;
+        if (!ok && w->bg < 0) pics_skipped++;
+        if (ok) what |= w->bg >= 0 ? 2 : 1;
+        what |= 4;
+        /* Field by field: assigning the whole would be a memcpy, which a
+           program here does not have. */
+        for (int m = k + 1; m < npic_wait; m++) {
+            pic_wait[m - 1].node = pic_wait[m].node;
+            pic_wait[m - 1].bg = pic_wait[m].bg;
+            pic_wait[m - 1].ask = pic_wait[m].ask;
+            w_copy(pic_wait[m - 1].url, URL_TEXT, pic_wait[m].url, URL_TEXT);
+        }
+        npic_wait--;
+        k--;
+    }
+    return what;
 }
 
 static void build(const char *html, int len, int width, int want_sheets,
@@ -2620,9 +2711,38 @@ static void build_noted(const char *note, const char *html, int len, int width,
    next load only: YouTube's or Twitch's application, run as it is. */
 static int site_readers_off;
 
+/* The pictures, as many as have come and how many are still coming,
+   between the halves load said. */
+static void status_compose(void) {
+    if (!pics_said) return;
+    w_copy(status, sizeof(status), status_head, sizeof(status));
+    int coming = 0;
+    for (int k = 0; k < npic_wait; k++) if (pic_wait[k].bg < 0) coming++;
+    char n[16];
+    if (npics || coming) {
+        number_into(n, npics);
+        say_more(", ");
+        say_more(n);
+        say_more(npics == 1 ? " picture" : " pictures");
+        if (coming) {
+            number_into(n, coming);
+            say_more(" (");
+            say_more(n);
+            say_more(" more coming)");
+        }
+        if (pics_skipped) say_more(" (more would not show)");
+    } else if (pics_skipped) {
+        say_more(", no picture on it would show");
+    }
+    say_more(status_tail);
+}
+
 static void load(const char *address, int width, int keep_scroll) {
     int readers = !site_readers_off;
     site_readers_off = 0;
+    /* What was still coming for the last page is not this one's. */
+    pic_wait_drop();
+    pics_said = 0;
     if (w_same_fold(address, START_ADDRESS)) {
         show_start(width);
         char shown[16];
@@ -2805,20 +2925,13 @@ static void load(const char *address, int width, int keep_scroll) {
     if (skipped) say_more(" (more were not read)");
     if (from_google) say_more(", DuckDuckGo's answer to a Google search");
 
+    /* The pictures are said in between, as they come (status_compose). */
+    w_copy(status_head, sizeof(status_head), status, sizeof(status_head));
+    status[0] = 0;
+
     /* And what the page's own scripts did. A script that threw is worth
        saying out loud: the page will look like the one it was before it
        ran, and without this there is nothing to tell the two apart. */
-    if (npics) {
-        char n[16];
-        number_into(n, npics);
-        say_more(", ");
-        say_more(n);
-        say_more(npics == 1 ? " picture" : " pictures");
-        if (pics_skipped) say_more(" (more would not show)");
-    } else if (pics_skipped) {
-        say_more(", no picture on it would show");
-    }
-
     if (script_err[0]) {
         say_more(", a script stopped: ");
         say_more(script_err);
@@ -2870,6 +2983,9 @@ static void load(const char *address, int width, int keep_scroll) {
        as nothing in particular, and the case worth noticing is the other
        one. */
     say_more(reply.secure ? ", encrypted" : ", NOT encrypted");
+    w_copy(status_tail, sizeof(status_tail), status, sizeof(status_tail));
+    pics_said = 1;
+    status_compose();
 }
 
 static void push_history(const char *address) {
@@ -3264,12 +3380,30 @@ static int draw_video_frames(surface *win_s, int win, int view_x, int view_y, in
 /* Asleep until something arrives for the window, the page has a timer due or
    a request waiting, or something drawn is due to change -- rather than
    looking sixty times a second at a page nobody is touching. */
+/* What the console is told of a page once it is all there: where it
+   landed, its title and the status. */
+static char announce_at[URL_TEXT];
+static int  announce_owed, pics_relayout, pics_laid_at;
+
+static void announce_page(void) {
+    announce_owed = 0;
+    puts("browser: ");
+    puts(announce_at);
+    puts(" -- ");
+    puts(title);
+    puts(" -- ");
+    puts(status);
+    putc('\n');
+}
+
 static void browser_wait(int win) {
     /* A tick at the least, even for a timer already due: a page that sets
        a zero timeout from inside one would otherwise have the processor to
        itself, where the old sixteen milliseconds held it to sixty a second. */
     int due = jsdom_next_due();
     if (due >= 0) ui_due(ticks() + (due > 0 ? due : 1));
+    /* Pictures still coming are asked after every tick. */
+    if (npic_wait) ui_due(ticks() + 1);
     /* And when a kept connection is due to be let go. */
     for (int i = 0; asks_ready && i < ASK_SLOTS; i++)
         if (!asks[i].used && asks[i].job.sock >= 0) ui_due(asks[i].idle_since + ASK_IDLE + 1);
@@ -3502,6 +3636,24 @@ int main(int argc, char **argv) {
         }
         asks_tidy();
 
+        /* And the page's pictures, drawn as they come: laid out again at
+           most four times a second while more are coming, and once when the
+           last has. */
+        if (npic_wait) {
+            int came = pictures_pump();
+            if (came & 1) pics_relayout = 1;
+            if (came & 2) dirty = 1;
+            if (came & 4) { status_compose(); dirty = 1; }
+        }
+        if (pics_relayout && (!npic_wait || ticks() - pics_laid_at >= 25)) {
+            pics_relayout = 0;
+            pics_laid_at = ticks();
+            relayout(view_w - UI_PAD * 2);
+            publish_text();
+            dirty = 1;
+        }
+        if (announce_owed && !npic_wait) announce_page();
+
         /* Where a form asked to go, once the click or the key that sent
            it has been dealt with. */
         /* The history buttons, pressed by a script. */
@@ -3576,6 +3728,7 @@ int main(int argc, char **argv) {
 
         if (want_load) {
             want_load = 0;
+            if (announce_owed) announce_page();  /* the last page, as far as it got */
             /* A reader asking for an address starts the count again; a page
                asking on their behalf does not, or a pair of pages pointing
                at each other would go round for ever. */
@@ -3600,6 +3753,7 @@ int main(int argc, char **argv) {
             set_address(landed);
             if (hist_at >= 0) w_copy(hist[hist_at].text, URL_TEXT, landed,
                                      URL_TEXT);
+            w_copy(announce_at, sizeof(announce_at), landed, sizeof(announce_at));
 
             /* And what it came to, on the console, where nobody on the
                desktop sees it: a machine driven over its serial line has no
@@ -3614,13 +3768,10 @@ int main(int argc, char **argv) {
                 putc('\n');
             }
             frames_alone = frames_whole = 0;
-            puts("browser: ");
-            puts(landed);
-            puts(" -- ");
-            puts(title);
-            puts(" -- ");
-            puts(status);
-            putc('\n');
+            /* Said once its pictures are in too (announce_page), which is
+               what anything reading the console takes this line to mean. */
+            announce_owed = 1;
+            if (!npic_wait) announce_page();
             laid_for = view_w;
             want_width = 0;
         }

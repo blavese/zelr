@@ -396,8 +396,37 @@ def main():
             # element in the real document, the assignment had to reach that
             # document rather than a copy of it, and the cascade had to match
             # a class that was not there when the sheet was indexed.
+            # --- a page shown before its picture comes --------------------
+            #
+            # The server holds the picture back. The page must be drawn
+            # meanwhile -- its band on the screen, the picture not -- and the
+            # console not told the page is there; once the picture is let go
+            # it must be drawn, and the console told. A browser that fetched
+            # its pictures before showing the page showed nothing at all
+            # until the server answered.
+            srv.hold()
+            try:
+                mark = len(vm.serial())
+                go(vm, mon, "http://%s/held-picture" % srv.host, settle=12.0,
+                   was=webpd, name="br-going-held")
+                _, _, _, shoth, early = mon.wait_screen(
+                    "br-held-early",
+                    lambda w, h, px: count_in(px, w, PAGE, BAND) > 3000 and count_in(px, w, PAGE, LOGO) < 100,
+                    timeout=30)
+                c.add("a page is shown before its picture comes", early, shoth)
+                c.add("and the console is not told it is there until it has",
+                      "held-picture -- " not in vm.serial()[mark:])
+            finally:
+                srv.release()
+            held, pxh, wh, shoth = page_settled(mon, "br-held-late")
+            c.add("and the picture is drawn when it comes",
+                  count_in(pxh, wh, PAGE, LOGO) > 10000, shoth)
+            c.add("and then the console is told, with the picture counted",
+                  vm.wait_serial("held-picture -- a held picture -- ", timeout=30)
+                  and " 1 picture" in vm.serial()[mark:])
+
             go(vm, mon, "http://%s/scripted" % srv.host, settle=12.0,
-               was=webpd, name="br-going-scripted")
+               was=held, name="br-going-scripted")
             scripted, pxc, wc, shotc = page_settled(mon, "br-scripted")
             c.add("a page's own script runs, and changes the page",
                   count_in(pxc, wc, PAGE, BAND) > 3000, shotc)
