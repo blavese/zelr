@@ -191,6 +191,7 @@ v.addEventListener('error', function () { location.href = '/pause-done?' + encod
 REPORTS = []
 NOTES = []
 FILE_REPORTS = []
+PAGE_PORTS = {}                     # a page's address: the client port it came on
 PAUSE_REPORTS = []
 RANGES = []
 ASKED = {}
@@ -205,6 +206,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     def do_GET(self):
         ASKED[self.path.split("?")[0]] = ASKED.get(self.path.split("?")[0], 0) + 1
+        if self.path in ("/mse.html", "/file.html"):
+            PAGE_PORTS.setdefault(self.path, self.client_address[1])
         if self.path.startswith("/mse-note?"):
             NOTES.append(self.path[len("/mse-note?"):])
             body, ctype = b"noted", "text/plain"
@@ -437,6 +440,12 @@ def main():
     alone, whole = (int(m.group(1)), int(m.group(2))) if m else (0, 0)
     c.add("and most frames are drawn on their own (%d alone, %d with the page)" % (alone, whole),
           alone >= frames // 2 and alone > whole)
+    # The first page's connection is kept for the next page: nothing hangs
+    # up the one the page came on. The WebSockets' reset at the first page's
+    # build did (jsws.h), and the number was then handed to the next
+    # connection made while fetch.h still used it as its own.
+    c.add("the next page comes on the connection the first one did (%s)" % PAGE_PORTS,
+          len(PAGE_PORTS) == 2 and PAGE_PORTS["/mse.html"] == PAGE_PORTS["/file.html"])
     c.add("every segment was fetched once",
           all(v == 1 for k, v in ASKED.items() if k.startswith("/film/") and k not in ("/film/file.mp4", "/film/long.mp4")))
 

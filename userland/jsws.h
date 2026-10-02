@@ -172,8 +172,15 @@ static int jd_ws_open_count(void) {
    to tell. */
 static void jd_ws_reset(void) {
     for (int s = 0; s < JD_SOCKETS; s++) {
-        if (jd_ws[s].self && jd_ws[s].w.state == WS_OPEN) ws_close(&jd_ws[s].w, 1001, "");
-        ws_drop(&jd_ws[s].w);
+        /* Only a slot in use holds a connection. A free one's socket is -1
+           once dropped, or 0 never having been set, and 0 is a real socket
+           number: dropping every slot hung up socket 0 at the first page's
+           build, which was the page's own kept connection, and fetch.h went
+           on using the number once the kernel had given it to somebody else. */
+        if (jd_ws[s].self) {
+            if (jd_ws[s].w.state == WS_OPEN) ws_close(&jd_ws[s].w, 1001, "");
+            ws_drop(&jd_ws[s].w);
+        }
         jd_ws[s].self = 0;
         jd_ws[s].started = 0;
     }
