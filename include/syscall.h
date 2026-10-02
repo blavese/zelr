@@ -228,6 +228,11 @@
 #define WIFI_NAME_MAX     33     /* a name, its terminator included */
 #define WIFI_PASS_MAX     64     /* a passphrase is 8 to 63 characters */
 
+/* Sound written and not yet played, dropped: a player that pauses or seeks
+   stops at once, rather than when the card's buffer runs out (about a
+   second and a third of it). -1 with no sound card. */
+#define SYS_SOUND_STOP    70
+
 #define TLS_WHY   0
 #define TLS_WHAT  1
 

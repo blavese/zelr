@@ -51,16 +51,6 @@ u64 sound_played(void);
    the difference is worth reporting rather than hiding. */
 bool sound_clocked(void);
 
-/* Bytes the hardware has read since the machine started, which only goes up.
- *
- * This is the one number about a sound controller that cannot be produced by
- * a driver that is not working. Every other thing it can be asked -- the
- * device is there, the codec answered, the stream is set up, the run bit is
- * set -- is reported by the driver about itself. This one is the hardware
- * saying where it has got to, and if it does not move then nothing is being
- * played whatever else is true. */
-
-
 /* Puts silence behind the playing position, so a sound that has finished is
    not still in the buffer when the loop comes round again. Called from the
    timer, like the other things that have to keep happening. */

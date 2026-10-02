@@ -502,6 +502,13 @@ static i64 sys_sound_write(registers_t *r) {
     return (i64)sound_write((const i16 *)r->rbx, count);
 }
 
+static i64 sys_sound_stop(registers_t *r) {
+    (void)r;
+    if (!sound_present()) return -1;
+    sound_silence();
+    return 0;
+}
+
 static i64 sys_power(registers_t *r) {
     /* Anything not yet on the disk goes first. A machine that is switched
        off does not come back to finish writing. */
@@ -1259,6 +1266,7 @@ static const syscall_fn TABLE[] = {
     [SYS_RANDOM]      = sys_random,
     [SYS_SOCK_WAIT]   = sys_sock_wait,
     [SYS_WIFI]        = sys_wifi,
+    [SYS_SOUND_STOP]  = sys_sound_stop,
 };
 
 #define N_SYSCALLS (sizeof(TABLE) / sizeof(TABLE[0]))

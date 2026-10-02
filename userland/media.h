@@ -108,6 +108,16 @@ static void media_sound_setup(void) {
     }
 }
 
+/* What this element handed the card and has not been heard yet, dropped,
+   when the clock stops or jumps or the element goes: left to play out, a
+   pause went on being heard for as long as the card held (a second and
+   more), a seek played the old place's sound while the picture waited for
+   it to run out, and a page left went on being heard after it. Only by the
+   element that has the card's sound. */
+static void media_drop_sound(media_t *m) {
+    if (m->a_open && media_have_sound > 0 && !m->no_sound && m->test_clock < 0) sound_stop();
+}
+
 static void media_open(media_t *m) {
     for (int i = 0; i < (int)sizeof(*m); i++) ((volatile u8 *)m)[i] = 0;
     m->duration = 0.0 / 0.0;
@@ -124,6 +134,7 @@ static void media_free_samples(media_source *s) {
 }
 
 static void media_close(media_t *m) {
+    if (m->playing) media_drop_sound(m);
     for (int i = 0; i < MEDIA_SOURCES; i++) {
         media_free_samples(&m->src[i]);
         if (m->src[i].pend) free(m->src[i].pend);
@@ -551,6 +562,7 @@ static double media_clock(media_t *m) {
 }
 
 static void media_seek(media_t *m, double t) {
+    media_drop_sound(m);
     m->position = t;
     m->clock_pos = t;
     m->clock_at = media_seconds(m);
@@ -579,7 +591,8 @@ __attribute__((unused)) static void media_pause(media_t *m) {
     m->playing = 0;
     m->clock_pos = m->position;
     /* The sound starts again from here, not from where the queue had got
-       to; what the card still holds plays out. */
+       to, and what the card still holds is dropped: it is past here. */
+    media_drop_sound(m);
     m->qlen = 0;
     m->a_next = m->position;
     m->a_end = m->position;

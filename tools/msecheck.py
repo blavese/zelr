@@ -162,9 +162,36 @@ v.addEventListener('ended', function () {
 v.addEventListener('error', function () { location.href = '/file-done?' + encodeURIComponent('error ' + (v.error && v.error.code)); });
 </script></body></html>"""
 
+# Last, the colours again with five seconds of the tone under them, so
+# there is always more sound than the card holds: played from the start,
+# sent on to 0.9 s at 0.3 s in, paused at 1.2, played again a second and a
+# half later, and left a quarter of a second of it after that. What is heard must stop when
+# the element does, each time: the card holds over a second of sound ahead,
+# and left to play out it went on being heard after a seek, a pause and the
+# page itself (media.h, media_drop_sound; SYS_SOUND_STOP).
+PAUSE_PAGE = """<!doctype html><html><head><title>pause</title><style>
+body{margin:0;background:#101010}
+video{display:block;width:640px;height:352px;margin:8px}
+</style></head><body><video id=v src="/film/long.mp4" autoplay></video><script>
+var v = document.getElementById('v'), at = [], step = 0, held = '';
+v.addEventListener('playing', function () { if (!step) fetch('/mse-note?pause-playing'); });
+v.addEventListener('timeupdate', function () {
+  if (step === 0 && v.currentTime >= 0.3) { step = 1; at.push(v.currentTime.toFixed(2)); v.currentTime = 0.9; }
+  else if (step === 1 && v.currentTime >= 1.2) {
+    step = 2; at.push(v.currentTime.toFixed(2)); v.pause();
+    setTimeout(function () { held = v.currentTime.toFixed(2) + ' ' + v.paused; step = 3; v.play(); }, 1500);
+  } else if (step === 3 && v.currentTime >= parseFloat(at[1]) + 0.25) {
+    step = 4; at.push(v.currentTime.toFixed(2));
+    location.href = '/pause-done?' + encodeURIComponent(at.join(' ') + ' ' + held);
+  }
+});
+v.addEventListener('error', function () { location.href = '/pause-done?' + encodeURIComponent('error ' + (v.error && v.error.code)); });
+</script></body></html>"""
+
 REPORTS = []
 NOTES = []
 FILE_REPORTS = []
+PAUSE_REPORTS = []
 RANGES = []
 ASKED = {}
 
@@ -187,13 +214,17 @@ class Handler(http.server.BaseHTTPRequestHandler):
             body, ctype = b"<title>done</title><meta http-equiv=refresh content=\"0; url=/file.html\"><p>done</p>", "text/html"
         elif self.path.startswith("/file-done?"):
             FILE_REPORTS.append(urllib.parse.unquote(self.path[len("/file-done?"):]))
-            body, ctype = b"<title>file done</title><p>done</p>", "text/html"
-        elif self.path == "/film/file.mp4" and self.headers.get("Range", "").startswith("bytes="):
+            body, ctype = b"<title>file done</title><meta http-equiv=refresh content=\"0; url=/pause.html\"><p>done</p>", "text/html"
+        elif self.path.startswith("/pause-done?"):
+            PAUSE_REPORTS.append(urllib.parse.unquote(self.path[len("/pause-done?"):]))
+            body, ctype = b"<title>pause done</title><p>done</p>", "text/html"
+        elif self.path in ("/film/file.mp4", "/film/long.mp4") and self.headers.get("Range", "").startswith("bytes="):
             data = Handler.files[self.path][0]
             a, _, b = self.headers["Range"][6:].partition("-")
             a = int(a)
             b = min(int(b) if b else len(data) - 1, len(data) - 1)
-            RANGES.append((a, b))
+            if self.path == "/film/file.mp4":
+                RANGES.append((a, b))
             part = data[a:b + 1]
             self.send_response(206)
             self.send_header("Content-Type", "video/mp4")
@@ -225,6 +256,26 @@ class QuietServer(http.server.ThreadingHTTPServer):
         pass                # a browser dropping a kept connection is not a fault
 
 
+def runs(samples, rate, floor=2000, quiet=1.0):
+    """Each stretch of sound as (start, end) in samples, a new one wherever
+    it is quiet for `quiet` seconds, in five millisecond blocks."""
+    block = max(1, rate // 200)
+    out = []
+    start = last = None
+    for i in range(0, len(samples) - block, block):
+        if max(abs(v) for v in samples[i:i + block]) < floor:
+            continue
+        if start is None:
+            start = i
+        elif i - last > quiet * rate:
+            out.append((start, last + block))
+            start = i
+        last = i
+    if start is not None:
+        out.append((start, last + block))
+    return out
+
+
 def magenta_in(w, h, px):
     """How many of every fourth pixel each way are the box laid over the
     video."""
@@ -253,7 +304,9 @@ def serve(port=0):
                    "ASEGS": "[" + ",".join("'%s'" % n for n in anames) + "]"}
     files["/mse.html"] = (page.encode(), "text/html")
     files["/file.html"] = (FILE_PAGE.encode(), "text/html")
+    files["/pause.html"] = (PAUSE_PAGE.encode(), "text/html")
     files["/film/file.mp4"] = (muxed_file("H264D_COLOURS", 10, 2)[0], "video/mp4")
+    files["/film/long.mp4"] = (muxed_file("H264D_COLOURS", 10, 5)[0], "video/mp4")
     Handler.files = files
     httpd = QuietServer(("127.0.0.1", port), Handler)
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
@@ -335,6 +388,11 @@ def main():
                         file_pairs["green and yellow"] += 1
                 else:
                     time.sleep(0.2)
+            # And the one that seeks, pauses, plays and leaves, which says
+            # so as it leaves.
+            end = time.time() + 120
+            while time.time() < end and not PAUSE_REPORTS:
+                time.sleep(0.2)
         said = vm.serial()[mark:]
         time.sleep(2.0)
     finally:
@@ -380,7 +438,7 @@ def main():
     c.add("and most frames are drawn on their own (%d alone, %d with the page)" % (alone, whole),
           alone >= frames // 2 and alone > whole)
     c.add("every segment was fetched once",
-          all(v == 1 for k, v in ASKED.items() if k.startswith("/film/") and k != "/film/file.mp4"))
+          all(v == 1 for k, v in ASKED.items() if k.startswith("/film/") and k not in ("/film/file.mp4", "/film/long.mp4")))
 
     fgot = FILE_REPORTS[0] if FILE_REPORTS else ""
     print("      the page with a file said: %s; %d ranges asked for; %d looks: %s" % (fgot, len(RANGES), file_looks, file_pairs))
@@ -396,7 +454,13 @@ def main():
         return c.report(keep=keep)
     rate, left, right = read_stereo(WAV)
     c.add("something was recorded", rate > 0 and len(left) > rate)
-    found = stretches(left, rate) if rate else None
+    # The first page's sound, then (the file page is muted) the last page's.
+    heard = runs(left, rate) if rate else []
+    print("      sound heard at %s" % ", ".join("%.2f-%.2fs" % (a / float(rate), b / float(rate)) for a, b in heard))
+    first = heard[0] if heard else (0, 0)
+    found = stretches(left[first[0]:first[1]], rate) if heard else None
+    if found:
+        found = (found[0] + first[0], found[1] + first[0], found[2])
     if found is None:
         c.add("and it is not silence", False)
     else:
@@ -409,6 +473,28 @@ def main():
         low, high = pitch_of(left[start:end], rate), pitch_of(right[start:end], rate)
         c.add("the left is the pitch encoded (440 Hz, heard %d)" % low, close_to(low, 440, 0.03))
         c.add("and the right the other (660 Hz, heard %d)" % high, close_to(high, 660, 0.03))
+    pgot = PAUSE_REPORTS[0] if PAUSE_REPORTS else ""
+    print("      the page that seeks, pauses and leaves said: %s" % pgot)
+    pp = pgot.split(" ")
+    ok = len(pp) == 5 and pp[4] == "true" and pp[1] == pp[3]
+    c.add("a page sends its film on, pauses it where it was, plays it again and leaves", ok)
+    if ok and len(heard) >= 3:
+        t1, t2, t3 = float(pp[0]), float(pp[1]), float(pp[2])
+        # Up to the pause, then (after a second and a half of quiet) from
+        # there to the page left. Each heard for as long as it played, give
+        # or take the pass the element waits for, the sound found again
+        # after the seek and the page going: the card's second and more left
+        # to play out is well past that.
+        want_a, want_b = t1 + (t2 - 0.9), t3 - t2
+        got_a = (heard[-2][1] - heard[-2][0]) / float(rate)
+        got_b = (heard[-1][1] - heard[-1][0]) / float(rate)
+        c.add("and the sound stops when it seeks and when it pauses (heard %.2fs of the %.2fs played)" % (got_a, want_a),
+              want_a - 0.3 <= got_a <= want_a + 0.6)
+        c.add("and when the page is left (heard %.2fs of the %.2fs played)" % (got_b, want_b),
+              got_b <= want_b + 0.8)
+    else:
+        c.add("and the sound stops when it seeks and when it pauses", False)
+        c.add("and when the page is left", False)
     if not keep:
         try:
             os.remove(WAV)

@@ -8,7 +8,7 @@
  * reason. See NOTICE in the repository this came from.
  */
 
-/* The entire user-facing interface: sixty-nine system calls and a little
+/* The entire user-facing interface: seventy system calls and a little
    sugar. Nothing is linked in from the kernel; every call below crosses the
    ring boundary through int 0x80.
  *
@@ -203,6 +203,9 @@ typedef long long          zelr_word;
 #define WIFI_LEAVE        2
 #define WIFI_NAME_MAX     33
 #define WIFI_PASS_MAX     64
+
+/* What was written and has not been played, dropped (sound_stop). */
+#define SYS_SOUND_STOP    70
 #define TLS_WHY   0
 #define TLS_WHAT  1
 
@@ -850,6 +853,12 @@ static inline int sound_info(zelr_sound *out) {
 
 static inline int sound_write(const short *frames, int count) {
     return syscall(SYS_SOUND_WRITE, (zelr_word)frames, (zelr_word)count, 0);
+}
+
+/* Drops what was written and has not been played yet: pausing, or going
+   somewhere else in what is playing, is heard at once. */
+static inline int sound_stop(void) {
+    return syscall(SYS_SOUND_STOP, 0, 0, 0);
 }
 
 /* Neither of these comes back on a machine where it works. */
