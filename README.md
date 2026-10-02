@@ -1795,14 +1795,18 @@ break.
 Being explicit about the boundary, because "operating system" covers a very
 large range:
 
-- **The network from a page is one request at a time, and no HTTP/2.** A
+- **The network from a page is three requests at a time, and no HTTP/2.** A
   page has `fetch` (promises), `XMLHttpRequest`, `sendBeacon` and, since
   0.92.0, `WebSocket`. A request is made on the browser's next pass rather
-  than inside the call, so the code after it runs first, and it stalls the
-  browser while it happens. A WebSocket does not: once open it is asked on
-  every pass whether anything came (a socket can be told not to wait,
-  `sock_wait`), and a page has four at once, out of the machine's six
-  sockets. There is no permessage-deflate, no HTTP/2 and no HTTP/3.
+  than inside the call, so the code after it runs first; since 0.106.0 it
+  is started there and its answer taken on later passes, three at a time
+  each on a connection of its own, so the page's timers, its video and the
+  reader go on while it comes (a video's file is fetched the same way).
+  Making a new connection still stalls the browser until it is made. A
+  WebSocket, once open, is asked on every pass whether anything came (a
+  socket can be told not to wait, `sock_wait`), and a page has four at
+  once, out of the machine's six sockets. There is no permessage-deflate,
+  no HTTP/2 and no HTTP/3.
 
   What a page can do after it has been read: a click reaches
   `addEventListener` and `onclick`, timers go off, `DOMContentLoaded` and

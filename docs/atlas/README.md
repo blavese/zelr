@@ -95,6 +95,18 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.106.0
+
+- **A first page's connection no longer hung up by the WebSockets' reset (11)**: `jd_ws_reset` dropped every slot,
+  and a never-used slot's socket is 0 (the table starts zeroed), so the first build hung up socket 0, the page's kept
+  connection, while fetch.h kept the number. msecheck: the second page comes on the first page's connection; failing
+  with every slot dropped. Found by the next item's breaks.
+- **A page's requests no longer stop the browser (11)**: fetch.h's jobs, browser.c's asks, jsnet.h's queue and
+  jsmedia.h's file stretches started on one pass and answered on later ones. msecheck: a page's 50 ms timer goes on
+  while a fetch() and the file's ranges come late (60 and 120 ms at most in QEMU); failing with every request waited for
+  (2560 and 4520 ms), with the file's stretches waited for (2000 and 2000) and with the jobs' reads left to wait (2570
+  and 2590).
+
 ### 0.105.0
 
 - **A video's sound stops when it is paused, seeks or its page is left (13 §3.13, 05, 03)**: `SYS_SOUND_STOP` (70)

@@ -1,6 +1,26 @@
 # 11 -- The web browser (everything except JS-engine internals and image decoders)
 
-**Since 0.103.0** (the rest of this file is older; trust the code and the README's "since 6048716" list):
+**Since 0.106.0** (the rest of this file is older; trust the code and the README's "since 6048716" list):
+- **A page's requests do not stop the browser** (fetch.h `web_job`, browser.c `ask_t`). fetch.h's exchange is split
+  into `web_head_for` (the head), `web_send_all`, `web_shape_of`/`web_shape_done` (where the head ends and how the body
+  is measured), `web_keepable` and `web_read_answer`; `web_fetch_once` is made of them, and so is a job:
+  `web_job_start` (its own connection, kept between its exchanges, or a new one; the request sent),
+  `web_job_step` (what has arrived, read with `sock_wait` 0; 0 still coming, 1 whole in `j->r`, or a `WEB_ERR_`;
+  redirects followed as `web_send_hops` does, a kept connection the far end closed tried once more afresh, given up after
+  `WJ_QUIET` ticks without a byte), `web_job_stop`, `web_job_free`. The browser has `ASK_SLOTS` (3) asks: `ask_start`
+  (a slot whose connection is to the same place first; -1 when all are busy; `request_lines` adds Origin as
+  `do_request` does; the body copied), `ask_poll`, `ask_end`; idle connections are hung up after `ASK_IDLE` (5 s,
+  `asks_tidy`, and `browser_wait` wakes for it) or at once when a connect finds every socket busy; a new page drops
+  them all (`asks_drop_all`). jsnet.h's queue uses them through `jsdom_asks_with`: a request is started on one pass
+  (`jxhr.ask`, plus one) and answered on a later one, several at a time; `jd_asks_full` makes a request waiting for a
+  slot ask again on the next tick rather than at once. jsmedia.h's file stretches use them too (`jdmedia.ask`,
+  `ask_from`), ended when the element or the page goes. Without the hooks (the host's tests) both block as before.
+  Making a connection still waits (the kernel's connect and handshake).
+- **The WebSockets' reset drops only slots in use** (jsws.h `jd_ws_reset`): a free slot's socket is 0 before it was ever
+  used, and dropping it hung up socket 0 at the first page's build -- the page's kept connection -- after which fetch.h
+  and the next connection made shared the number.
+
+**Since 0.103.0**:
 - **A video's frame is drawn alone** (browser.c `draw_video_frames`): when a frame is all that changed (`video_due`
   without `dirty`), each video in sight has its box drawn into a surface that size (`frame_buf`): the page's canvas or
   the well's colour, then `draw_page` with the scroll moved down to the box's top and every item not crossing its

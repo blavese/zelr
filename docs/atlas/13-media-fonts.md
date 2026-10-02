@@ -1036,6 +1036,11 @@ Then rebuild with `bash build.sh`, which builds userland first and embeds the te
 
 ### Likely bugs
 
+- **Since 0.106.0, suspected: `hls.h` counts socket 0 as no connection** (`c->sock > 0`, `hls_conns` zeroed). A
+  connection made on socket 0 is neither reused nor hung up, so it stays open until the player exits; the browser's
+  WebSockets had the same mistake the other way round (jsws.h, fixed in 0.106.0). Not seen failing: play.c's token
+  request usually holds socket 0 first.
+
 1. **PNG chunk bounds check wraps: `png.h:146`.** `if (clen > (u32)(n - at - 12))`. When 8 ≤ `n - at` < 12 the right-hand side is a negative int cast to about 0xFFFFFFFC, so nearly any `clen` passes. The code then reads the chunk body past `data + n`: IHDR 13 bytes, PLTE up to 768, tRNS up to 256, and IDAT up to `n - zlen` bytes (`:178`). If `clen >= 0x80000000`, `at += 12 + (int)clen` (`:183`) makes `at` negative, and the next iteration reads before the buffer. Triggers are a PNG truncated within the first 12 bytes of its last chunk, or crafted input. The impact is an over-read or crash of the ring-3 browser. The existing truncation test (`pngtest.c:164-165`, n=20) does not reach this case.
 2. **Truncation misreported as damage: `inflate.h:163-164`.** When the input ends while reading a length's extra bits or the distance code, `err` is already `INF_TRUNCATED`, but the combined test `if (s->err || dsym < 0 || dsym >= 30) s->err = INF_BAD` overwrites it. `png.h:204` then reports `PNG_BAD` instead of `PNG_TRUNCATED`. The effect is limited to the error code.
 3. **FIXED in 0.42.0 (the fill is `sv_inherit`, which reads `style`). `style="fill:none"` fills black: `svg.h:766-776`.** `sv_paint` correctly returns 0 for `none` found in `style`, but the default-black rule only checks for a `fill` *attribute* (`fv`). A stroke-only shape with its fill in `style`, which is typical of Inkscape and Illustrator output, therefore gets a solid black fill.
