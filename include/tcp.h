@@ -41,6 +41,10 @@ bool tcp_connected(int h);
    never close them itself. */
 void tcp_abandon(u32 pid);
 
+/* A connection opened by one task (the kernel's connecting task) handed to
+   the program it was opened for, so that ending the program lets it go. */
+void tcp_give_to(int h, u32 pid);
+
 /* Totals since boot across every connection, which is what /sys/net is
    about: a count that resets when a connection closes says nothing about a
    machine's link. */

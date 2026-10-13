@@ -766,6 +766,15 @@ typedef struct {
     u32  owner;
     int  tcp;
     u32  wait_ms;               /* how long recv waits (SYS_SOCK_WAIT) */
+    /* Connecting without waiting (CONNECT_NOWAIT): 1 asked for, 2 being
+       made by a task, 0 done; what it came to (0 up, or a NET_ERR_); where
+       to; and a count that tells a socket given back and taken again from
+       the one a task was making. */
+    u8   connecting;
+    int  result;
+    char host[128];
+    u16  port;
+    u32  gen;
 } sock_t;
 
 static sock_t socks[SOCK_MAX];
@@ -805,6 +814,9 @@ static int sock_take(bool secure) {
         socks[i].owner = caller_pid();
         socks[i].tcp = -1;
         socks[i].wait_ms = 4000;
+        socks[i].connecting = 0;
+        socks[i].result = 0;
+        socks[i].gen++;
         return i;
     }
     return -1;
@@ -816,6 +828,68 @@ static void sock_give_back(int h) {
     socks[h].tcp = -1;
 }
 
+/* The connection one socket asked for without waiting, made by a kernel
+   task of its own: the name, TCP, and for a secure one the handshake. The
+   socket may be given back while this waits -- the program hangs up, or
+   ends -- and then what was made is closed again, as nobody else will; the
+   count tells it from the socket being taken again by somebody else. What
+   is made stays this task's until it is handed over, so ending the program
+   halfway does not let go of a connection this is still using. */
+static void connect_task(void) {
+    int h = -1;
+    for (int i = 0; i < SOCK_MAX; i++)
+        if (socks[i].open && socks[i].connecting == 1) { h = i; break; }
+    if (h < 0) task_exit();
+    sock_t *s = &socks[h];
+    s->connecting = 2;
+    u32 gen = s->gen, owner = s->owner;
+    bool secure = s->secure;
+    char host[128];
+    memcpy(host, s->host, sizeof(host));
+    u16 port = s->port;
+
+    int rc = 0, t = -1;
+    ipv4_t ip = net_parse_ip(host);
+    if (!ip && !net_resolve(host, &ip, 6000)) rc = NET_ERR_RESOLVE;
+    if (!rc && (t = tcp_open(ip, port, 6000)) < 0) rc = NET_ERR_CONNECT;
+    /* A handshake that fails takes the connection with it, as in
+       sys_connect_tls. */
+    if (!rc && secure && !tls_connect(t, host)) { tcp_close(t); t = -1; rc = NET_ERR_TLS; }
+
+    if (!s->open || s->gen != gen) {
+        if (t >= 0) {
+            if (secure) tls_close(t);
+            tcp_close(t);
+        }
+        task_exit();
+    }
+    if (t >= 0) tcp_give_to(t, owner);
+    s->tcp = t;
+    s->result = rc;
+    s->connecting = 0;
+    task_exit();
+}
+
+/* A socket taken, handed to a task to connect, and returned at once. */
+static i64 connect_later(int h, const char *host, u16 port) {
+    sock_t *s = &socks[h];
+    memcpy(s->host, host, sizeof(s->host));
+    s->port = port;
+    s->connecting = 1;
+    if (!task_create("connect", connect_task)) {
+        sock_give_back(h);
+        return NET_ERR_BUSY;
+    }
+    return h;
+}
+
+static i64 sys_sock_state(registers_t *r) {
+    sock_t *s = sock_of(r->rbx);
+    if (!s) return -1;
+    if (s->connecting) return 0;
+    return s->result ? s->result : 1;
+}
+
 static i64 sys_connect(registers_t *r) {
     char host[128];
     if (!copy_path(r->rbx, host, sizeof(host))) return -1;
@@ -825,6 +899,7 @@ static i64 sys_connect(registers_t *r) {
 
     int h = sock_take(false);
     if (h < 0) return NET_ERR_BUSY;          /* every socket is in use */
+    if (r->rdx & CONNECT_NOWAIT) return connect_later(h, host, port);
 
     ipv4_t ip = net_parse_ip(host);
     if (!ip && !net_resolve(host, &ip, 6000)) { sock_give_back(h); return NET_ERR_RESOLVE; }
@@ -858,6 +933,7 @@ static i64 sys_connect_tls(registers_t *r) {
 
     int h = sock_take(true);
     if (h < 0) return NET_ERR_BUSY;
+    if (r->rdx & CONNECT_NOWAIT) return connect_later(h, host, port);
 
     ipv4_t ip = net_parse_ip(host);
     if (!ip && !net_resolve(host, &ip, 6000)) { sock_give_back(h); return NET_ERR_RESOLVE; }
@@ -898,7 +974,7 @@ static i64 sys_tls_status(registers_t *r) {
 
 static i64 sys_send(registers_t *r) {
     sock_t *s = sock_of(r->rbx);
-    if (!s) return -1;
+    if (!s || s->connecting || s->tcp < 0) return -1;
     u64 buf = r->rcx, len = r->rdx;
     /* A plain send is one segment, because that is what the stack writes in
        one go. TLS makes its own records and splits them itself, so the limit
@@ -918,6 +994,9 @@ static i64 sys_send(registers_t *r) {
 static i64 sys_recv(registers_t *r) {
     sock_t *s = sock_of(r->rbx);
     if (!s) return -1;
+    /* Not up yet: nothing has come. Never up: there is nothing to come. */
+    if (s->connecting) return 0;
+    if (s->tcp < 0) return -2;
     u64 buf = r->rcx, len = r->rdx;
     if (len == 0 || len > 65536) return -1;
     if (!user_range_ok(buf, len)) return -1;
@@ -1267,6 +1346,7 @@ static const syscall_fn TABLE[] = {
     [SYS_SOCK_WAIT]   = sys_sock_wait,
     [SYS_WIFI]        = sys_wifi,
     [SYS_SOUND_STOP]  = sys_sound_stop,
+    [SYS_SOCK_STATE]  = sys_sock_state,
 };
 
 #define N_SYSCALLS (sizeof(TABLE) / sizeof(TABLE[0]))

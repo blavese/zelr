@@ -1006,13 +1006,15 @@ static inline int web_post(url_t *u, const char *body, char *buf, int cap,
  *
  * Each job has a connection of its own, kept between its exchanges when the
  * answer allowed it, so a video asking for one stretch after another reuses
- * the one it made. Making a connection still waits: the kernel's connect
- * and its TLS handshake return only when they are done.
+ * the one it made. A new one is made without waiting either (connect's
+ * CONNECT_NOWAIT, the kernel's task doing the name, TCP and the TLS
+ * handshake), and the request goes once sock_state says it is up.
  */
-#define WJ_IDLE    0
-#define WJ_READING 1
-#define WJ_DONE    2
-#define WJ_FAILED  3
+#define WJ_IDLE       0
+#define WJ_READING    1
+#define WJ_DONE       2
+#define WJ_FAILED     3
+#define WJ_CONNECTING 4
 #define WJ_QUIET   1200                /* ticks without a byte before it gives up, as three quiet reads did */
 
 typedef struct {
@@ -1046,20 +1048,10 @@ static inline int web_job_at(const web_job *j, const url_t *u) {
     return j->sock >= 0 && j->port == u->port && j->secure == u->secure && w_same_fold(j->host, u->host);
 }
 
-/* The request sent on the job's connection, one made when it has none to
-   this place. 0, or a WEB_ERR_. */
-static inline int web_job_send(web_job *j) {
+/* The request sent on the job's connection, which is up. 0, or a
+   WEB_ERR_. */
+static inline int web_job_ask(web_job *j) {
     url_t *u = &j->u;
-    j->reused = web_job_at(j, u);
-    if (!j->reused) {
-        web_job_hangup(j);
-        int rc = u->secure ? connect_tls(u->host, u->port) : connect(u->host, u->port);
-        if (rc < 0) return web_err_from(rc);
-        j->sock = rc;
-        j->port = u->port;
-        j->secure = u->secure;
-        w_copy(j->host, sizeof(j->host), u->host, sizeof(j->host));
-    }
     sock_wait(j->sock, 0);
     /* The settings web_head_for reads, the job's for the moment. */
     const char *m0 = web_method, *t0 = web_body_type, *e0 = web_extra, *a0 = web_accept;
@@ -1085,6 +1077,26 @@ static inline int web_job_send(web_job *j) {
     j->sh.chunked = 0;
     j->quiet_since = ticks();
     j->state = WJ_READING;
+    web_answer_clear(&j->r, j->buf);
+    return 0;
+}
+
+/* The request sent on the job's connection when it has one to this place;
+   otherwise a connection begun, the request to go once it is up
+   (web_job_step). 0, or a WEB_ERR_. */
+static inline int web_job_send(web_job *j) {
+    url_t *u = &j->u;
+    j->reused = web_job_at(j, u);
+    if (j->reused) return web_job_ask(j);
+    web_job_hangup(j);
+    int rc = u->secure ? connect_tls_nowait(u->host, u->port) : connect_nowait(u->host, u->port);
+    if (rc < 0) return web_err_from(rc);
+    j->sock = rc;
+    j->port = u->port;
+    j->secure = u->secure;
+    w_copy(j->host, sizeof(j->host), u->host, sizeof(j->host));
+    j->quiet_since = ticks();
+    j->state = WJ_CONNECTING;
     web_answer_clear(&j->r, j->buf);
     return 0;
 }
@@ -1142,6 +1154,19 @@ static inline int web_job_room(web_job *j, int want) {
    or a WEB_ERR_. */
 static inline int web_job_step(web_job *j) {
     if (j->state == WJ_DONE) return 1;
+    if (j->state == WJ_CONNECTING) {
+        int st = sock_state(j->sock);
+        if (st == 0 && ticks() - j->quiet_since < WJ_QUIET) return 0;
+        if (st <= 0) {
+            web_job_hangup(j);
+            j->state = WJ_FAILED;
+            j->err = st < 0 ? web_err_from(st) : WEB_ERR_CONNECT;
+            return j->err;
+        }
+        int rc = web_job_ask(j);
+        if (rc < 0) { j->state = WJ_FAILED; j->err = rc; }
+        return rc < 0 ? rc : 0;
+    }
     if (j->state != WJ_READING) return j->err ? j->err : WEB_ERR_EMPTY;
     int ended = 0, broken = 0, done = 0;
     /* At most a couple of megabytes a pass, so a fast answer does not hold
@@ -1210,7 +1235,7 @@ static inline int web_job_step(web_job *j) {
 /* Done with: the connection hung up unless it finished whole and keepable
    (then kept for the next start), the buffer kept. */
 static inline void web_job_stop(web_job *j) {
-    if (j->state == WJ_READING) web_job_hangup(j);
+    if (j->state == WJ_READING || j->state == WJ_CONNECTING) web_job_hangup(j);
     j->state = WJ_IDLE;
 }
 

@@ -256,6 +256,8 @@ zw host_syscall(zw n, zw a, zw b, zw c) {
         return -2;
     }
     case 28: if (a > 0 && a < 64 && sock_used[a]) { closesocket(socks[a]); sock_used[a] = 0; } return 0;
+    case 71:                                   /* sock_state: connected at once here */
+        return (a > 0 && a < 64 && sock_used[a]) ? 1 : -1;
     case 68:                                   /* sock_wait */
         if (a <= 0 || a >= 64 || !sock_used[a] || b < 0 || b > 60000) return -1;
         sock_wait_ms[a] = (int)b;

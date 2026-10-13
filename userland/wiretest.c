@@ -344,6 +344,44 @@ int main(int argc, char **argv) {
             disconnect(s);
             ok("and so is a socket that is not open", sock_wait(s, 0) < 0);
         }
+
+        /* --- connecting without waiting -------------------------------------
+         *
+         * connect_nowait (CONNECT_NOWAIT, sock_state 71): the socket comes
+         * back at once and a kernel task makes the connection. To an address
+         * nothing answers it is still connecting after the call has long
+         * returned, and says why it failed when TCP gives up; to the server
+         * it comes up and carries a request. A browser waited for each new
+         * connection, a second and more with TLS, with nothing drawn. */
+        int t0 = ticks();
+        int dead = connect_nowait("192.0.2.1", 80);     /* TEST-NET-1: nothing answers */
+        int took = ticks() - t0;
+        ok("a connection asked for without waiting comes back at once", dead >= 0 && took < 10);
+        int st = dead >= 0 ? sock_state(dead) : -1;
+        ok("still being made", st == 0);
+        char nb[8];
+        ok("and nothing can be read from it yet", dead >= 0 && recv(dead, nb, (int)sizeof(nb)) == 0);
+        while (dead >= 0 && st == 0 && ticks() - t0 < 2000) { sleep_ms(200); st = sock_state(dead); }
+        int gave_up = ticks() - t0;
+        ok("to an address nothing answers it fails, saying so, after TCP gives up", st == NET_ERR_CONNECT && gave_up > 100);
+        ok("and the socket is given back", dead >= 0 && disconnect(dead) == 0 && sock_state(dead) < 0);
+
+        int up = connect_nowait(host, port);
+        st = up >= 0 ? sock_state(up) : -1;
+        t0 = ticks();
+        while (up >= 0 && st == 0 && ticks() - t0 < 1000) { sleep_ms(10); st = sock_state(up); }
+        ok("to the server it comes up", st == 1);
+        if (st == 1) {
+            static const char ask[] = "GET /one HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n";
+            int sent = send(up, ask, (int)sizeof(ask) - 1);
+            char got[256];
+            int n = 0, k;
+            sock_wait(up, 2000);
+            while (n < (int)sizeof(got) - 1 && (k = recv(up, got + n, (int)sizeof(got) - 1 - n)) > 0) n += k;
+            got[n] = 0;
+            ok("and carries a request and its answer", sent > 0 && n > 12 && got[9] == '2');
+        }
+        if (up >= 0) disconnect(up);
     }
 
     puts(failed ? "WIRETEST_FAIL\n" : "WIRETEST_PASS\n");

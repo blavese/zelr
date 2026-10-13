@@ -206,6 +206,11 @@ typedef long long          zelr_word;
 
 /* What was written and has not been played, dropped (sound_stop). */
 #define SYS_SOUND_STOP    70
+
+/* Connecting without waiting (connect_nowait, connect_tls_nowait), and how
+   it is going (sock_state). */
+#define CONNECT_NOWAIT    1
+#define SYS_SOCK_STATE    71
 #define TLS_WHY   0
 #define TLS_WHAT  1
 
@@ -505,6 +510,19 @@ static inline int wifi_join(const char *name, const char *password) {
     return syscall(SYS_WIFI, WIFI_JOIN, (zelr_word)name, (zelr_word)password);
 }
 static inline int wifi_leave(void) { return syscall(SYS_WIFI, WIFI_LEAVE, 0, 0); }
+
+/* The same without waiting for the connection: the socket at once, and
+   sock_state says 0 while it is being made, 1 once it is up, or why it was
+   not (a NET_ERR_; disconnect gives the socket back). */
+static inline int connect_nowait(const char *host, int port) {
+    return syscall(SYS_CONNECT, (zelr_word)host, port, CONNECT_NOWAIT);
+}
+static inline int connect_tls_nowait(const char *host, int port) {
+    return syscall(SYS_TLS_CONNECT, (zelr_word)host, port, CONNECT_NOWAIT);
+}
+static inline int sock_state(int sock) {
+    return syscall(SYS_SOCK_STATE, sock, 0, 0);
+}
 
 static inline int resolve(const char *host, u32 *out) {
     return syscall(SYS_RESOLVE, (zelr_word)host, (zelr_word)out, 0);

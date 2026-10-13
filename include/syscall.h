@@ -233,6 +233,17 @@
    second and a third of it). -1 with no sound card. */
 #define SYS_SOUND_STOP    70
 
+/* Connecting without waiting. connect and connect_tls wait until the
+   connection is made -- the name resolved, TCP's handshake, and for TLS its
+   handshake and the certificate checked -- which is a second and more on a
+   slow network. With CONNECT_NOWAIT in rdx the socket comes back at once,
+   marked connecting, and a kernel task makes the connection; SYS_SOCK_STATE
+   (rbx the socket) says how it is going: 0 still connecting, 1 up, or the
+   NET_ERR_ it came to. A failed one is given back with disconnect, as any
+   socket is. Until it is up, a read finds nothing and a send fails. */
+#define CONNECT_NOWAIT    1
+#define SYS_SOCK_STATE    71
+
 #define TLS_WHY   0
 #define TLS_WHAT  1
 

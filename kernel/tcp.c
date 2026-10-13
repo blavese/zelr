@@ -523,6 +523,11 @@ void tcp_abandon(u32 pid) {
     }
 }
 
+void tcp_give_to(int h, u32 pid) {
+    tcpc *c = slot(h);
+    if (c) c->owner = pid;
+}
+
 int tcp_open(ipv4_t ip, u16 port, u32 timeout_ms) {
     if (!next_port) next_port = (u16)(45000 + (timer_ticks() & 0x0FFF));
 
