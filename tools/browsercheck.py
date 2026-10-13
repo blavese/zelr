@@ -425,8 +425,23 @@ def main():
                   vm.wait_serial("held-picture -- a held picture -- ", timeout=30)
                   and " 1 picture" in vm.serial()[mark:])
 
+            # --- pictures a script gives a source, or adds, later ----------
+            #
+            # One element with only data-src until a script copies it across
+            # after the page is shown, and one the script makes and adds: the
+            # two of them, both the rose of the PNG, are twice the picture. A
+            # browser that fetched only what the markup had at first drew
+            # neither.
+            go(vm, mon, "http://%s/late-picture" % srv.host, settle=12.0,
+               was=held, name="br-going-late")
+            _, _, _, shotl, both = mon.wait_screen(
+                "br-late", lambda w, h, px: count_in(px, w, PAGE, LOGO) > 20000, timeout=30)
+            late, pxl, wl, shotl = page_settled(mon, "br-late-settled")
+            c.add("pictures a script gives a source, and adds, after the page is shown are drawn (%d)"
+                  % count_in(pxl, wl, PAGE, LOGO), both and count_in(pxl, wl, PAGE, LOGO) > 20000, shotl)
+
             go(vm, mon, "http://%s/scripted" % srv.host, settle=12.0,
-               was=held, name="br-going-scripted")
+               was=late, name="br-going-scripted")
             scripted, pxc, wc, shotc = page_settled(mon, "br-scripted")
             c.add("a page's own script runs, and changes the page",
                   count_in(pxc, wc, PAGE, BAND) > 3000, shotc)

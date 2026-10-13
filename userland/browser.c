@@ -175,6 +175,7 @@ typedef struct {
     picture pic;                 /* its pixels, or nothing: colour times alpha */
     u8     *alpha;               /* how much of it covers what is behind, or null
                                     for a picture with no clear parts (pic_merge) */
+    u32     key;                 /* the address it came from, hashed */
 } shown;
 
 static shown  pics[PICS_MAX];
@@ -263,11 +264,19 @@ static int nbgpics, bgpics_bytes;
 
 typedef struct {
     int  node, bg, ask;
+    u32  key;                    /* the address, hashed (pic_key) */
     char url[URL_TEXT];
 } pic_wait_t;
 
 static pic_wait_t pic_wait[PIC_WAIT];
 static int npic_wait;
+
+/* An address hashed, to tell a picture's source from the one before it. */
+static u32 pic_key(const char *s) {
+    u32 h = 2166136261u;
+    for (; *s; s++) h = (h ^ (u8)*s) * 16777619u;
+    return h;
+}
 
 static void pic_wait_add(int node, int bg, const url_t *u) {
     if (npic_wait >= PIC_WAIT) return;
@@ -276,7 +285,16 @@ static void pic_wait_add(int node, int bg, const url_t *u) {
     w->bg = bg;
     w->ask = 0;
     url_text(u, w->url, sizeof(w->url));
+    w->key = pic_key(w->url);
 }
+
+/* Elements whose picture would not come or not decode, and from where: not
+   asked for again every time the page is laid out, unless their source
+   changes. */
+#define PIC_TRIED 64
+static struct { int node; u32 key; } pic_tried[PIC_TRIED];
+static int npic_tried;
+static int pics_follow_on;               /* this page's pictures are fetched (build's want_sheets) */
 
 static u32 bg_hash(const char *s, int *len) {
     u32 h = 2166136261u;
@@ -641,6 +659,8 @@ static void pics_drop(void) {
     npics = 0;
     npic_sizes = 0;
     pics_skipped = 0;
+    npic_tried = 0;
+    pics_follow_on = 0;
     drawings_drop();
     bgpics_drop();
 }
@@ -2173,6 +2193,8 @@ static int script_history_length(void) { return hist_n > 0 ? hist_n : 1; }
 
 static int page_unhidden;      /* it was laid out a second time, shown anyway */
 
+static void pictures_follow(void);
+
 static void relayout(int width) {
     sheets_follow();
     restyle_changed();
@@ -2204,6 +2226,8 @@ static void relayout(int width) {
     /* Sizes may have changed, which a page's ResizeObserver hears of on the
        next pass (jsdom.h). */
     jsdom_laid_out();
+    /* And pictures a script has added or moved since. */
+    if (jsdom_live()) pictures_follow();
 }
 
 /* What this system thinks a link looks like, which is the accent the rest of
@@ -2323,8 +2347,33 @@ static int pic_data_uri(const char *src, char *out, int cap) {
 /* A picture's bytes made into what is drawn for the element: 1 when they
    could be. */
 static int pic_take(int i, const u8 *body, int len) {
+    /* A source changed by a script: the new picture in the old one's place. */
+    for (int k = 0; k < npics; k++) {
+        if (pics[k].node != i) continue;
+        picture_free(&pics[k].pic);
+        if (pics[k].alpha) free(pics[k].alpha);
+        for (int m = k + 1; m < npics; m++) {
+            pics[m - 1].node = pics[m].node;
+            pics[m - 1].pic = pics[m].pic;
+            pics[m - 1].alpha = pics[m].alpha;
+            pics[m - 1].key = pics[m].key;
+        }
+        npics--;
+        for (int m = 0; m < npic_sizes; m++)
+            if (pic_sizes[m].node == i) {
+                for (int j = m + 1; j < npic_sizes; j++) {
+                    pic_sizes[j - 1].node = pic_sizes[j].node;
+                    pic_sizes[j - 1].w = pic_sizes[j].w;
+                    pic_sizes[j - 1].h = pic_sizes[j].h;
+                }
+                npic_sizes--;
+                break;
+            }
+        break;
+    }
     if (npics >= PICS_MAX) return 0;
     shown *s = &pics[npics];
+    s->key = 0;
     s->node = i;
     s->alpha = 0;
 
@@ -2408,12 +2457,56 @@ static void gather_pictures(void) {
                decoded where it lies, with no fetch at all. */
             int dn = pic_data_uri(src, cssbuf, CSS_MAX);
             if (dn < 100) continue;
-            pic_take(i, (const u8 *)cssbuf, dn);
+            if (pic_take(i, (const u8 *)cssbuf, dn)) pics[npics - 1].key = pic_key(src);
         } else {
             url_t u;
             if (!url_join(&here, src, &u)) { pics_skipped++; continue; }
             pic_wait_add(i, -1, &u);
         }
+    }
+}
+
+/* Whether an element's picture from this address is drawn, coming, or has
+   been tried and would not come. */
+static int pic_known(int node, u32 key) {
+    for (int k = 0; k < npics; k++) if (pics[k].node == node && pics[k].key == key) return 1;
+    for (int k = 0; k < npic_wait; k++) if (pic_wait[k].node == node && pic_wait[k].key == key) return 1;
+    for (int k = 0; k < npic_tried; k++) if (pic_tried[k].node == node && pic_tried[k].key == key) return 1;
+    return 0;
+}
+
+/* Pictures a page's script added, or pointed at another address, after the
+   page was shown -- a picture loaded as it comes into view starts with no
+   source, or a stand-in, and its script gives it the real one later. Asked
+   for as the page's first ones were, after every layout a script's change
+   brings. Only gathering at build saw pictures before. */
+static void pictures_follow(void) {
+    if (!pics_follow_on) return;
+    for (int i = 0; i < doc.count && npic_wait < PIC_WAIT; i++) {
+        if (doc.nodes[i].kind != DN_ELEMENT || doc.nodes[i].tag != T_IMG) continue;
+        if (in_template(i)) continue;
+        const char *src = pic_source(i);
+        if (!src) continue;
+        if (w_starts_fold(src, "data:")) {
+            u32 key = pic_key(src);
+            if (pic_known(i, key)) continue;
+            int dn = pic_data_uri(src, cssbuf, CSS_MAX);
+            if (dn >= 100 && pic_take(i, (const u8 *)cssbuf, dn)) pics[npics - 1].key = key;
+            else if (npic_tried < PIC_TRIED) { pic_tried[npic_tried].node = i; pic_tried[npic_tried++].key = key; }
+            continue;
+        }
+        url_t u;
+        if (!url_join(&here, src, &u)) continue;
+        char text[URL_TEXT];
+        url_text(&u, text, sizeof(text));
+        if (pic_known(i, pic_key(text))) continue;
+        if (npics + npic_wait >= PICS_MAX) {
+            /* No room unless it replaces the element's own picture. */
+            int had = 0;
+            for (int k = 0; k < npics; k++) if (pics[k].node == i) had = 1;
+            if (!had) continue;
+        }
+        pic_wait_add(i, -1, &u);
     }
 }
 
@@ -2438,12 +2531,15 @@ static int pictures_pump(void) {
             done = 1;
             if (st > 0 && rp.status < 400 && rp.len > 0) {
                 if (w->bg >= 0) ok = bg_take(&bgpics[w->bg], (const u8 *)rp.body, rp.len);
-                else ok = pic_take(w->node, (const u8 *)rp.body, rp.len);
+                else if ((ok = pic_take(w->node, (const u8 *)rp.body, rp.len)) != 0) pics[npics - 1].key = w->key;
             }
             ask_end(w->ask - 1);
         }
         if (!done) continue;
-        if (!ok && w->bg < 0) pics_skipped++;
+        if (!ok && w->bg < 0) {
+            pics_skipped++;
+            if (npic_tried < PIC_TRIED) { pic_tried[npic_tried].node = w->node; pic_tried[npic_tried++].key = w->key; }
+        }
         if (ok) what |= w->bg >= 0 ? 2 : 1;
         what |= 4;
         /* Field by field: assigning the whole would be a memcpy, which a
@@ -2452,6 +2548,7 @@ static int pictures_pump(void) {
             pic_wait[m - 1].node = pic_wait[m].node;
             pic_wait[m - 1].bg = pic_wait[m].bg;
             pic_wait[m - 1].ask = pic_wait[m].ask;
+            pic_wait[m - 1].key = pic_wait[m].key;
             w_copy(pic_wait[m - 1].url, URL_TEXT, pic_wait[m].url, URL_TEXT);
         }
         npic_wait--;
@@ -2491,6 +2588,7 @@ static void build(const char *html, int len, int width, int want_sheets,
     /* The pictures, before the layout so it can leave room for them. */
     pics_drop();
     if (want_sheets) gather_pictures();
+    pics_follow_on = want_sheets;
 
     /* And then whatever the page brought with it, before any of it is laid
        out: a script that writes to an element is writing to the document

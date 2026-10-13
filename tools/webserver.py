@@ -554,6 +554,28 @@ HELD_PAGE = b"""<!doctype html>
 HELD = threading.Event()
 HELD.set()
 
+# A picture loaded the way a page loads one as it comes into view: no source
+# in the markup, only data-src, and a script that gives it its source a
+# moment after the page is shown. A second element a script makes and adds.
+LATE_PAGE = b"""<!doctype html>
+<html><head><title>a picture given its source late</title>
+<style>body { font-family: sans-serif; padding: 24px }</style></head>
+<body>
+<h1>a picture given its source late</h1>
+<img id="late" data-src="/logo.png" alt="">
+<div id="more"></div>
+<script>
+setTimeout(function () {
+  var p = document.getElementById('late');
+  p.src = p.getAttribute('data-src');
+  var q = document.createElement('img');
+  q.src = '/logo.webp';
+  document.getElementById('more').appendChild(q);
+}, 300);
+</script>
+</body></html>
+"""
+
 BARE = STYLED.replace(b'<link rel="stylesheet" href="/style.css">', b"")
 BARE = BARE[:BARE.index(b"<style>")] + BARE[BARE.index(b"</style>") + 8:]
 BARE = BARE.replace(b' style="text-align:center;color:#15803d"', b"")
@@ -1121,6 +1143,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._send(WEBP_PICTURE)
         elif path == "/held-picture":
             self._send(HELD_PAGE)
+        elif path == "/late-picture":
+            self._send(LATE_PAGE)
         elif path == "/held/logo.png":
             HELD.wait(timeout=90)
             self._send(LOGO, ctype="image/png")
