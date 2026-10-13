@@ -1393,7 +1393,9 @@ Twitch's API for an access token the way Twitch's own page does, takes the
 channel's playlist with it, and fetches the two-second pieces of the stream
 as they appear. Each piece is an MPEG transport stream (`ts.h`) of AAC
 (`aac.h`) and H.264 (`h264.h`), both decoders written here from the
-standards. The sound is checked sample for sample against Windows' own
+standards -- or, for the channels Twitch now sends that way, fragmented MP4
+under an initialisation segment (`mp4.h`, the reader the browser's video
+uses). The sound is checked sample for sample against Windows' own
 decoding of the same files; the picture is exact by the standard, and is
 checked frame for frame against Windows' decoding of streams Windows made and,
 in the gate, of every rendition of a live channel, which have what Windows'

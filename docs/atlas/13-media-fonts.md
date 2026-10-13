@@ -689,6 +689,17 @@ typedef struct { short size; short bold, mono; const face_glyph *glyphs; const u
 | `userland/aactest.c`, `userland/aacdata.h`, `tools/genaac.py`, `tools/mftranscode.ps1` | aactest (ring3check, `AACTEST_PASS`): the codebooks are whole, the transform agrees with its formula (137-140 dB), and four one-second sounds made by genaac.py, encoded and decoded by Windows (Media Foundation, through the WinRT MediaTranscoder in mftranscode.ps1), agree with Windows' decoding sample for sample: a tone a channel (199 dB), clicks over a sweep, which the encoder codes in short windows (175), a voice-like sound in one channel (176), and noise nearly the same in both channels, coded mid/side (101). The first is also muxed by genaac.py the way Twitch carries a stream (ADTS in PES in a transport stream), which Windows decodes as well: 142 packets, 44 frames, 199 dB. |
 | `tools/playcheck.py` | Gate step: the whole road by ear (below). |
 
+**Fragmented MP4 (0.108.0).** A media playlist that names an initialisation segment (`#EXT-X-MAP`, kept by
+`hls_media` in `hls_map`) has segments of fragmented MP4, as Twitch sends some channels now (seen 2026-10-02: an
+`emsg` box, then `moof`/`mdat`). `take_init` reads the initialisation segment with `mp4_parse_init` once per address
+(again at a change of rendition); a segment that does not start with the transport stream's 0x47 is read by
+`mp4_parse_media` into `on_sample`: a picture's length-prefixed units made Annex B, the track's parameter sets put
+before each sample that needs no other, and queued as a PES's access unit would be (`au_put`); a sound sample decoded
+raw with the AudioSpecificConfig's rate index and channels (`aac_open`), `audio_end` from its time. Times go from the
+track's timescale to 90 kHz. playcheck's `--fmp4` mode (a gate step of its own) plays the same stream made so by
+genmedia.py `hls_fragments`; h264check reads such renditions too (`fmp4_video`, Windows given the two segments as one
+file).
+
 **The player.** For Twitch it finds the stream the way Twitch's page does: an access token from the GQL API
 (`streamPlaybackAccessToken`, asked through sites.h's `twitch_ask`, which learns the Client-Id again if it changes),
 then usher's master playlist with that token, then a rendition's media playlist, read again every second while

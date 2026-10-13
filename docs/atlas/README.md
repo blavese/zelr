@@ -95,6 +95,14 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.108.0
+
+- **A Twitch channel sent as fragmented MP4 plays (13 §3.11)**: `hls_map`, `take_init`, `on_sample` in play.c on
+  mp4.h. playcheck `--fmp4` (a gate step): the same stream as fragmented MP4 heard and seen; failing with the
+  initialisation segment never read (nothing shown or heard), with the parameter sets not put before key frames (no
+  picture), and with the sound never decoded (silence, and so no picture either). h264check reads fragmented renditions
+  as well.
+
 ### 0.107.0
 
 - **A page is shown before its pictures, and each drawn as it comes (11)**: `<img>` pictures and backgrounds fetched as
