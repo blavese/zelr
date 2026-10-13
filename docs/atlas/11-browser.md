@@ -1,6 +1,18 @@
 # 11 -- The web browser (everything except JS-engine internals and image decoders)
 
-**Since 0.110.0** (the rest of this file is older; trust the code and the README's "since 6048716" list):
+**Since 0.111.0** (the rest of this file is older; trust the code and the README's "since 6048716" list):
+- **`<noscript>` is raw text** (dom.h `dom_raw`), as in any browser that runs scripts: its style elements, refreshes and
+  pictures are not elements at all, and its text is the markup (the serialiser, `jd_raw_text`, already wrote it so).
+  DuckDuckGo's home page keeps `body { display: none }` there and was blank. browser.c's `in_noscript` went with it.
+- **A NUL in the page is U+FFFD** (dom.h `dom_parse`, from a copy made only when there is one): text is kept as C
+  strings, and a NUL had ended X's first script mid-string.
+- **A transform's percentages are of the box as laid out** (layout.h `lay_translate` reads `box_node`, `box_w`, `box_h`,
+  which `lay_block_placed` sets as it finishes a box and clears as it starts one): from the items, a box drawing nothing
+  of its own was as wide as its words, and DuckDuckGo's closed menu (fixed, right 0, `translate(100%)`) stood at the
+  window's edge.
+- SCRIPTS_MAX is 1024 (X has 604 modules).
+
+**Since 0.110.0**:
 - **Pictures a script adds or points elsewhere are fetched** (browser.c `pictures_follow`, called at the end of
   `relayout` while the page is live): every `<img>` whose source (`pic_source`) is not drawn, coming or tried for that
   element (`pic_known`: `shown.key`, `pic_wait_t.key`, `pic_tried`, keys from `pic_key`, a hash of the address) is put
@@ -273,8 +285,8 @@
   a module still pending is `JM_WAITING` with a count and runs when the last settles; each has a `done` promise
   that importers and `import()` wait on. What such a module throws later is put on the page's error line
   (`jd_mod_note_value`). Not done: an import map's scopes, import attributes (read and set aside), and a cycle
-  through a module that awaits. SCRIPTS_MAX is 256 and SCRIPTS_BYTES 16 MB (browser.c), since a module page is
-  many files.
+  through a module that awaits. SCRIPTS_MAX is 1024 (256 until 0.111.0) and SCRIPTS_BYTES 16 MB (browser.c), since a
+  module page is many files.
 - **performance.timing, performance.navigation and the navigation entry** (jswin.h): the fetch's moments are the
   page's beginning (its world opens after the answer has come), and interactive, DOMContentLoaded, complete and
   load are recorded as they happen (`jd_nav_mark`) and 0 until then. An observer of `navigation` is told once load

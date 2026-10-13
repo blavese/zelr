@@ -809,7 +809,9 @@ deferred ones and the modules after the page has been read, not in the order
 they were written. Web components are drawn: the shadow tree a component's
 script attaches is laid out where the component stands, with its slots
 filled and its own style sheets on it alone, and the components inside it are
-made and told they are in the page as a browser tells them.
+made and told they are in the page as a browser tells them. Streams a page
+makes are read as a browser reads them (through a reader, as an async
+iterator, teed and piped), and a page may be up to 1024 modules.
 A page's scripts may hold a quarter of the memory the machine has free,
 between 24 and 128 megabytes, at once: a collector gives back what they
 have finished with, finding what is still in use by looking through the

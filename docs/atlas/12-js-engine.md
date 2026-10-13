@@ -2,7 +2,27 @@
 
 Source root the repository root (github.com/blavese/zelr main, 2026-09-22). All paths are relative to it; `file:N` means 1-based line N. Everything below was verified by reading the code. Where a behaviour was derived by tracing (not by running) it says so. Nothing here was built or run.
 
-**Since 0.100.0** (the rest of this file is older; trust the code):
+**Since 0.111.0** (the rest of this file is older; trust the code):
+- **A prelude in the page's own language** (`userland/jsprelude.h`, `JD_PRELUDE`, run by `jd_setup_prelude` at the
+  end of jsdom's setup, before any of the page's scripts; a failure in it is not the page's to see):
+  - ReadableStream: the default controller (`enqueue`, `close`, `error`, `desiredSize` from the strategy's
+    `highWaterMark`, a chunk counting one) and reader (`read`, `releaseLock`, `cancel`, `closed`), a source's
+    `start`, `pull` and `cancel`, `values` and `Symbol.asyncIterator`, `tee`, `pipeTo` (with `preventCancel` and the
+    rest of its options' names) and `pipeThrough` into anything with a writable side, and `ReadableStream.from`.
+    Not done: byte streams, WritableStream and TransformStream as classes, a fetch() answer's body as a stream.
+  - `navigator.serviceWorker`: a `ServiceWorkerContainer` with no controller, a `ready` that never settles, and a
+    `register` refused with NotSupportedError.
+  - The GlobalEventHandlers `on*` properties on `HTMLElement.prototype`, `SVGElement.prototype`,
+    `Document.prototype` and the window: null, or for an element its attribute compiled as `new Function('event',
+    body)`; set, an own data property, which is where dispatch looks. React's `isEventSupported('input')` (`'oninput'
+    in document`) had said no and sent it to `attachEvent`. No touch handlers.
+- **Modules**: `JD_MODS_MAX` 1024 (jsmod.h, was 256: X's imports past the 256th were refused as names nothing could
+  resolve); one past it is said to be ("more modules than a page may have").
+- **performance.measure** takes a performance.timing field's name for a start or an end (jswin.h
+  `jd_perf_find_or_field`, `jd_nav_named`); one the page has not reached is InvalidAccessError. BBC measured from
+  `navigationStart`.
+
+**Since 0.100.0**:
 - **A media element plays a file** (jsmedia.h): a src that is no MediaSource's (http/https, or a blob:/data: address's
   bytes, kept in `jdmedia.bytes` in the region) is played in media.h's file mode. `jd_media_file_step` asks for one
   stretch a pass by `jd_do_request` with a Range header (a 206's Content-Range gives the length; a 200 is the whole

@@ -95,6 +95,17 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.111.0
+
+- **What a survey of fifty sites found stopping their scripts (12)**: a prelude in the page's own language
+  (`jsprelude.h`: ReadableStream, `navigator.serviceWorker` refusing to register, the `on*` handler properties), 1024
+  modules (`JD_MODS_MAX`, `SCRIPTS_MAX`), a NUL read as U+FFFD (dom.h), and `performance.measure` from a timing field.
+  pagetest 322: streams, a 300-module import, a NUL in a script, the container, the measure, the handler properties;
+  each failing on a build without it.
+- **DuckDuckGo's home page drawn (11)**: `<noscript>` read as raw text (`dom_raw`), and a transform's percentages of
+  the box as laid out (`lay_translate`, `box_node`). layouttest 287: a style sheet in noscript not read and its
+  contents text, a closed menu moved by its own width out of the window; each failing on a build without it.
+
 ### 0.110.0
 
 - **Pictures a script gives a source or adds after the page is shown are drawn (11)**: `pictures_follow` after every
