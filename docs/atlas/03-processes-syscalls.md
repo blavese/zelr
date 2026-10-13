@@ -1,5 +1,13 @@
 # Atlas 03 -- Tasks, Processes and System Calls
 
+**Since 0.109.0**: **71 `SYS_SOCK_STATE`** and **`CONNECT_NOWAIT`** (rdx of 25 and 45). With the flag the socket is
+taken (`sock_take`, which now counts each taking in `sock_t.gen`) and handed to a kernel task, `connect_task`, which
+resolves, opens TCP and for TLS shakes hands, then checks the socket is still the one it was given (open and the same
+`gen`) and hands the connection over (`tcp_give_to` makes the program its TCP owner, so `tcp_abandon` of the program
+takes it) or closes what it made. `sock_t.connecting` is 1 asked for, 2 being made, 0 done; `result` 0 or a
+`NET_ERR_`. SYS_SOCK_STATE answers 0, 1 or that error; `sys_recv` answers 0 while connecting and NET_EOF for one never
+up, `sys_send` refuses both. 71 live calls.
+
 **Since 0.105.0**: **70 `SYS_SOUND_STOP`** (no arguments; -1 with no sound card) calls `sound_silence`: what was
 written and not yet played is dropped (05, 13 §3.13). 70 live calls.
 

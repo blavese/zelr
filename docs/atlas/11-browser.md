@@ -28,6 +28,10 @@
   slot ask again on the next tick rather than at once. jsmedia.h's file stretches use them too (`jdmedia.ask`,
   `ask_from`), ended when the element or the page goes. Without the hooks (the host's tests) both block as before.
   Making a connection still waits (the kernel's connect and handshake).
+- **Since 0.109.0 a job's connection is made without waiting** (fetch.h `web_job_send` with `connect_nowait` /
+  `connect_tls_nowait`, state `WJ_CONNECTING`; `web_job_step` asks `sock_state` and sends the request with
+  `web_job_ask` once it is up, giving up after `WJ_QUIET`). The blocking path (`web_fetch_once`: the page, its sheets,
+  scripts) connects as before.
 - **The WebSockets' reset drops only slots in use** (jsws.h `jd_ws_reset`): a free slot's socket is 0 before it was ever
   used, and dropping it hung up socket 0 at the first page's build -- the page's kept connection -- after which fetch.h
   and the next connection made shared the number.

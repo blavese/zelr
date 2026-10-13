@@ -1,5 +1,10 @@
 # 06a -- Network drivers and the TCP/IP stack
 
+**Since 0.109.0**: **a connection made without waiting** (syscall.c `connect_task`, 03): connect and connect_tls with
+`CONNECT_NOWAIT` return the socket at once and a kernel task named "connect" does the name, `tcp_open` and
+`tls_connect`; tcp.c `tcp_give_to` hands the connection to the program when it is up. Kernel tasks stay on CPU 0 and
+the handshake still holds the big lock while it computes, as it did inside the call.
+
 **Since 0.104.0**: **wireless from a program**: `SYS_WIFI` (69; `WIFI_SCAN`, `WIFI_JOIN` with the name and password as
 strings, `WIFI_LEAVE`) starts each and returns at once (a scan while joined is refused: the radio listens on one channel
 at a time); `/sys/wifi` says how it is going (`card`, `state` idle/looking/joining/joined/failed, `joined`, `why`, then

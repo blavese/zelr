@@ -95,6 +95,13 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.109.0
+
+- **A connection made while the program goes on (03, 06a, 11)**: `CONNECT_NOWAIT`, `SYS_SOCK_STATE` (71), a kernel task
+  per connection; fetch.h's jobs use it. wiretest: a connection to an address nothing answers comes back at once and
+  says why it failed after TCP gives up, one to the server comes up and carries a request; failing with the flag
+  ignored.
+
 ### 0.108.0
 
 - **A Twitch channel sent as fragmented MP4 plays (13 §3.11)**: `hls_map`, `take_init`, `on_sample` in play.c on

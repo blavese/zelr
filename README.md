@@ -1557,7 +1557,7 @@ is still the kernel's own, on the console; the one in a window is a program.
 ## writing a program for it
 
 Four files in `sdk/` are everything a program needs: `zelr.h`, which is the
-seventy system calls and a little sugar over them, `zelr.ld`, which says
+seventy-one system calls and a little sugar over them, `zelr.ld`, which says
 where a program is linked, a build line, and an example.
 
 ```bash
@@ -1804,7 +1804,8 @@ large range:
   is started there and its answer taken on later passes, three at a time
   each on a connection of its own, so the page's timers, its video and the
   reader go on while it comes (a video's file is fetched the same way).
-  Making a new connection still stalls the browser until it is made. Since
+  Since 0.109.0 a new connection for them is made without waiting too: the
+  kernel makes it in a task of its own while the page goes on. Since
   0.107.0 the page is shown before its pictures, which are fetched the same
   way and drawn as they come. A
   WebSocket, once open, is asked on every pass whether anything came (a
@@ -1839,7 +1840,7 @@ large range:
   matters and a guess in the ones that do not.
 - **No job control.** `cmd &` starts something and stops waiting for it, and
   nothing keeps a list; `jobs` says so rather than printing an empty one.
-- **Seventy system calls.** Enough to print, walk directories, read and
+- **Seventy-one system calls.** Enough to print, walk directories, read and
   write files, rename one, say when it must be on the disk, open a TCP or
   TLS connection and say how long a read of it waits, join a wireless
   network, sleep, exit, fork, exec, wait on a child, make a pipe, wait
