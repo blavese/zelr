@@ -35,7 +35,7 @@
  * is not; and a cycle is only as right as reading bindings late makes it. */
 #pragma once
 
-#define JD_MODS_MAX 256
+#define JD_MODS_MAX 1024              /* as browser.c's SCRIPTS_MAX: X's app is past 300 */
 #define JD_URL_MAX  1024
 
 enum { JM_NEW, JM_PARSED, JM_LINKED, JM_RUNNING, JM_WAITING, JM_ASYNC, JM_DONE, JM_FAILED };
@@ -373,7 +373,12 @@ static int jd_mod_link(int i) {
             jstr *s = J->nodes[st].str;
             char msg[160];
             int w = 0;
-            for (const char *p = "a module name this cannot resolve: "; *p; p++) msg[w++] = *p;
+            /* Or, when the table is full, a module past the most a page may
+               have, which said it could not be resolved and sent X's
+               failures looking in the wrong place. */
+            const char *why = jd_nmods >= JD_MODS_MAX ? "more modules than a page may have: "
+                                                      : "a module name this cannot resolve: ";
+            for (const char *p = why; *p; p++) msg[w++] = *p;
             for (u32 k = 0; s && k < s->len && w < (int)sizeof(msg) - 1; k++) msg[w++] = s->s[k];
             msg[w] = 0;
             jd_note_text(msg);

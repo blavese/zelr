@@ -6211,6 +6211,7 @@ static void jd_consts(jctx *J, jobj *on, const char *const *names, int from);
 #include "jsws.h"
 #include "jsframe.h"
 #include "jsmedia.h"
+#include "jsprelude.h"
 
 /* --- the hooks -----------------------------------------------------------------------------------
  *
@@ -6985,6 +6986,7 @@ static void jd_setup(jctx *J) {
     jd_setup_storage(J);
     jd_setup_observers(J);
     jd_setup_walks(J);
+    jd_setup_prelude(J);                 /* last: it is a script, and uses what is above */
 }
 
 /* --- opening and closing the world -----------------------------------------------------------

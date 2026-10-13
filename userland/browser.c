@@ -90,11 +90,12 @@
  *
  * A page of modules is many small files rather than a few large ones:
  * GitHub's home page asked for more than 64, and more than 6 megabytes of
- * them together, and the rest would not come. So a page may have 256 files
- * and 16 megabytes; whether the machine can run each one is still asked
- * before it runs (jd_room_for). */
+ * them together, and the rest would not come. So a page may have 1024 files
+ * and 16 megabytes -- X's is past 300 modules, and its imports past the
+ * 256th were refused as names that could not be resolved -- and whether the
+ * machine can run each one is still asked before it runs (jd_room_for). */
 #define SCRIPT_MAX    (16 * 1024 * 1024)
-#define SCRIPTS_MAX   256
+#define SCRIPTS_MAX   1024
 #define SCRIPTS_BYTES (16 * 1024 * 1024)
 
 /* And what a script asks for while the page is up. Its own buffer, because

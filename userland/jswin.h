@@ -883,6 +883,18 @@ static jval nat_perf_mark(jctx *J, jval t, jval *a, int n) {
     return e ? js_from_obj(e) : js_undef();
 }
 
+/* A mark's time, or else one of performance.timing's fields by name, as
+   measure() takes either (User Timing, "convert a mark to a timestamp"):
+   -1 for neither, -2 for a field the page has not reached yet. BBC measured
+   from "navigationStart", was told there was no such mark, and its client
+   rendering stopped there. */
+static double jd_nav_named(const jstr *name);
+
+static double jd_perf_find_or_field(const jstr *name) {
+    double v = jd_perf_find(name);
+    return v >= 0 ? v : jd_nav_named(name);
+}
+
 static jval nat_perf_measure(jctx *J, jval t, jval *a, int n) {
     (void)t;
     double start = 0, end = jd_now_ms();
@@ -890,12 +902,13 @@ static jval nat_perf_measure(jctx *J, jval t, jval *a, int n) {
     if (js_is_obj(s)) {
         jval st = js_get(J, s, js_str(J, "start")), en = js_get(J, s, js_str(J, "end"));
         detail = js_get(J, s, js_str(J, "detail"));
-        if (st.t == JS_STR) start = jd_perf_find(st.str); else if (st.t == JS_NUM) start = st.num;
-        if (en.t == JS_STR) end = jd_perf_find(en.str); else if (en.t == JS_NUM) end = en.num;
+        if (st.t == JS_STR) start = jd_perf_find_or_field(st.str); else if (st.t == JS_NUM) start = st.num;
+        if (en.t == JS_STR) end = jd_perf_find_or_field(en.str); else if (en.t == JS_NUM) end = en.num;
     } else {
-        if (s.t == JS_STR) start = jd_perf_find(s.str);
-        if (f.t == JS_STR) end = jd_perf_find(f.str);
+        if (s.t == JS_STR) start = jd_perf_find_or_field(s.str);
+        if (f.t == JS_STR) end = jd_perf_find_or_field(f.str);
     }
+    if (start == -2 || end == -2) return js_throw_dom(J, "InvalidAccessError", "the page has not reached that moment yet");
     if (start < 0 || end < 0) return js_throw_dom(J, "SyntaxError", "there is no mark of that name");
     jobj *e = jd_perf_entry(J, jd_arg_str(J, a, n, 0), "measure", start, end - start, detail);
     return e ? js_from_obj(e) : js_undef();
@@ -981,6 +994,17 @@ static double jd_nav_field(int k) {
     if (w == NT_ORIGIN) return 0;
     if (w == NT_SECURE) return jd_page_secure() ? 0 : -1;
     return jd_nav_at[w];
+}
+
+/* A field of performance.timing by name, in ms since timeOrigin; -1 for a
+   name that is no field, -2 for one not reached (or 0 in the standard). */
+static double jd_nav_named(const jstr *name) {
+    for (int k = 0; k < JD_NAV_NFIELDS; k++)
+        if (js_str_is(name, JD_NAV_FIELDS[k].name)) {
+            double v = jd_nav_field(k);
+            return v >= 0 ? v : -2;
+        }
+    return -1;
 }
 
 static void jd_nav_mark(int which) {

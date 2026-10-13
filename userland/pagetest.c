@@ -222,7 +222,55 @@ static const char *const MODFILES[][2] = {
     { 0, 0 },
 };
 
+/* A module importing 300 others, each its number, and those 300: more than
+   the 256 a page used to have room for. */
+static char many_text[300 * 40];
+static char many_one[48];
+
 static int fake_modules(const char *src, const char **out) {
+    if (w_starts_fold(src, "https://site.test/many/")) {
+        int k = 0;
+        for (const char *p = src + 23; *p >= '0' && *p <= '9'; p++) k = k * 10 + (*p - '0');
+        int n = 0;
+        for (const char *p = "export default "; *p; p++) many_one[n++] = *p;
+        char d[8];
+        int dn = 0;
+        do { d[dn++] = (char)('0' + k % 10); k /= 10; } while (k);
+        while (dn) many_one[n++] = d[--dn];
+        many_one[n++] = ';';
+        many_one[n] = 0;
+        *out = many_one;
+        return n;
+    }
+    if (w_same(src, "https://site.test/many.js")) {
+        int n = 0;
+        for (int k = 0; k < 300; k++) {
+            char line[40];
+            int l = 0;
+            for (const char *p = "import m"; *p; p++) line[l++] = *p;
+            char d[8];
+            int dn = 0, v = k;
+            do { d[dn++] = (char)('0' + v % 10); v /= 10; } while (v);
+            for (int i = dn - 1; i >= 0; i--) line[l++] = d[i];
+            for (const char *p = " from './many/"; *p; p++) line[l++] = *p;
+            for (int i = dn - 1; i >= 0; i--) line[l++] = d[i];
+            for (const char *p = ".js';"; *p; p++) line[l++] = *p;
+            for (int i = 0; i < l; i++) many_text[n++] = line[i];
+        }
+        for (const char *p = "export default m0"; *p; p++) many_text[n++] = *p;
+        for (int k = 1; k < 300; k++) {
+            many_text[n++] = '+';
+            many_text[n++] = 'm';
+            char d[8];
+            int dn = 0, v = k;
+            do { d[dn++] = (char)('0' + v % 10); v /= 10; } while (v);
+            while (dn) many_text[n++] = d[--dn];
+        }
+        many_text[n++] = ';';
+        many_text[n] = 0;
+        *out = many_text;
+        return n;
+    }
     for (int i = 0; MODFILES[i][0]; i++)
         if (w_same(src, MODFILES[i][0])) {
             *out = MODFILES[i][1];
@@ -1116,6 +1164,46 @@ int main(void) {
                "</script></body>"),
         "true true true true true true 9 1 1 DIV HTML [object HTMLDivElement] function");
     {
+        /* ReadableStream (jsstream.h): what a source enqueues read in order
+           and then done; a pulled one; an error reaching a read; the lock;
+           async iteration; tee. X's first script makes one, and stopped on
+           finding none. */
+        load("<body><script>var got = [];"
+             "var s = new ReadableStream({ start: function (c) { c.enqueue('a'); c.enqueue('b'); c.close(); } });"
+             "var r = s.getReader(), locked = s.locked, twice = 'no';"
+             "try { s.getReader(); } catch (e) { twice = e.name; }"
+             "var n = 0, p = new ReadableStream({ pull: function (c) { if (++n > 3) c.close(); else c.enqueue(n); } });"
+             "var bad = new ReadableStream({ start: function (c) { c.error(new Error('broke')); } });"
+             "var t = new ReadableStream({ start: function (c) { c.enqueue(1); c.enqueue(2); c.close(); } }).tee();"
+             "r.read().then(function (x) { got.push(x.value); return r.read(); })"
+             ".then(function (x) { got.push(x.value); return r.read(); })"
+             ".then(function (x) { got.push(x.done); return (async function () { var all = []; for await (var v of p) all.push(v); return all.join(''); })(); })"
+             ".then(function (v) { got.push(v); return bad.getReader().read(); })"
+             ".then(null, function (e) { got.push(e.message); return t[1].getReader().read(); })"
+             ".then(function (x) { got.push(x.value, String(s)); document.title = [got.join(' '), locked, twice].join(' '); });"
+             "</script></body>");
+        char err[128];
+        run_scripts(&page, err, (int)sizeof(err), 0);
+        pump_until(1000, 300);
+        oks("a ReadableStream is read in order, pulled, errored, locked, iterated and teed",
+            err[0] ? err : page.title >= 0 ? page.arena + page.title : "",
+            "a b true 123 broke 1 [object ReadableStream] true TypeError");
+        /* A NUL in a script is U+FFFD by the time the script sees it, and it
+           ended the script where it stood: X's routes carry them. */
+        static const char nul_page[] = "<body><script>var s = 'a\\0b'; document.title = s.length + ' ' + s.charCodeAt(1);</script></body>";
+        char *np = (char *)malloc(sizeof(nul_page));
+        int nl = 0;
+        for (int i = 0; nul_page[i]; i++) {
+            if (nul_page[i] == '\\' && nul_page[i + 1] == '0') { np[nl++] = 0; i++; continue; }
+            np[nl++] = nul_page[i];
+        }
+        dom_parse(&page, np, nl);
+        free(np);
+        run_scripts(&page, err, (int)sizeof(err), 0);
+        oks("a NUL in a script's text is read as U+FFFD, and the script runs whole",
+            err[0] ? err : page.title >= 0 ? page.arena + page.title : "", "3 65533");
+    }
+    {
         /* BroadcastChannel: to every other open channel of the name, as a
            copy, afterwards; not to itself, another name or a closed one. */
         load("<body><script>var a = new BroadcastChannel('n'), b = new BroadcastChannel('n'), c = new BroadcastChannel('m'),"
@@ -1470,7 +1558,22 @@ int main(void) {
                " n.javaEnabled(), 'userAgentData' in n, 'serviceWorker' in n, 'geolocation' in n,"
                " n instanceof Navigator, Object.getOwnPropertyNames(n).length,"
                " typeof n.hardwareConcurrency == 'undefined' || n.hardwareConcurrency > 0].join(' ');</script>"),
-        "zelr en-GB 1 true true false 0 0 0 false false false false false true 0 true");
+        "zelr en-GB 1 true true false 0 0 0 false false false true false true 0 true");
+    {
+        /* A service worker container with nothing in it (jsprelude.h), as a
+           browser with them turned off has: no controller, and register()
+           refused. Bing read navigator.serviceWorker.controller and stopped
+           where there was none. */
+        load("<body><script>var sw = navigator.serviceWorker;"
+             "sw.register('/sw.js').then(function () { document.title = 'registered'; },"
+             " function (e) { document.title = [String(sw.controller), e.name, sw instanceof ServiceWorkerContainer].join(' '); });"
+             "</script></body>");
+        char err[128];
+        run_scripts(&page, err, (int)sizeof(err), 0);
+        pump_until(1000, 100);
+        oks("navigator.serviceWorker has no controller, and registering one is refused",
+            err[0] ? err : page.title >= 0 ? page.arena + page.title : "", "null NotSupportedError true");
+    }
     {
         jsdom_request_with(fake_request);
         asked[0] = 0;
@@ -1638,6 +1741,25 @@ int main(void) {
                " performance.getEntriesByName('a').length, performance.getEntriesByType('measure')[0].name,"
                " performance.getEntries().length].join(' ');</script>"),
         "number true true 1 m 3");
+    /* A measure from one of performance.timing's fields by its name, as the
+       standard takes it, and a name that is neither still refused: BBC
+       measured from navigationStart and stopped when told no such mark. */
+    /* The handler properties (jsprelude.h) are there before a page sets one;
+       an element's comes from its attribute; one set still fires. React asks
+       'oninput' in document, and without it fell back on attachEvent, which
+       stopped DuckDuckGo's home page. No touch handlers on a desktop. */
+    oks("handler properties are there before a page sets one, and an element's comes from its attribute",
+        titled("<body><div id=d oninput='return 1;'></div><script>var d = document.getElementById('d'),"
+               " e = document.createElement('div'); e.setAttribute('onclick', 'return;');"
+               " var n = 0, p = document.createElement('p'); p.onclick = function () { n++; }; p.click();"
+               "document.title = ['oninput' in document, 'onclick' in window, 'ontouchstart' in window,"
+               " typeof d.oninput, typeof e.onclick, String(document.body.onkeydown), n].join(' ');</script></body>"),
+        "true true false function function null 1");
+    oks("performance.measure takes a timing field's name, and refuses a name that is neither",
+        titled("<script>var m = performance.measure('since', 'navigationStart'), r = 'none';"
+               "try { performance.measure('x', 'no-such-mark'); } catch (e) { r = e.name; }"
+               "document.title = [m.startTime, m.duration >= 0, r].join(' ');</script>"),
+        "0 true SyntaxError");
     {
         load("<body><p id=out>none</p><script>var n = 0;"
              "requestAnimationFrame(function(t){ document.getElementById('out').textContent = typeof t + ' ' + (t >= 0); });"
@@ -1959,6 +2081,11 @@ int main(void) {
             titled("<body><script type=module>import d, { a, b as c } from './m.js'; import * as ns from './m.js';"
                    "document.title = [d, a, c, ns.a, Object.keys(ns).sort().join('')].join(' ');</script></body>"),
             "D 1 2 1 abdefault");
+        /* X's app is past 300 modules, and its imports past the 256th were
+           refused as names that could not be resolved. */
+        oks("a page's modules may be more than 256 (one importing 300 others)",
+            titled("<body><script type=module>import s from './many.js'; document.title = 'many ' + s;</script></body>"),
+            "many 44850");
         oks("a binding is live: what the exporter changes, the importer sees",
             titled("<body><script type=module>import { n, bump } from './live.js'; var before = n; bump();"
                    "document.title = before + ' ' + n;</script></body>"),

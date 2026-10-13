@@ -747,7 +747,27 @@ static inline void dom_parse(ddoc *d, const char *p, int len) {
     d->standards = 0;
     d->root = dom_new(d, DN_ELEMENT, T_HTML);
 
-    dom_parse_into(d, p, len, d->root);
+    /* A NUL in the page is U+FFFD by the time a script or an attribute sees
+       it (HTML, the tokenizer's script and attribute states), and here,
+       where text is kept as C strings, it ended a script where it stood:
+       X writes NULs into its routes' names, and its first script was cut
+       off in the middle of a string. Parsed from a copy with each made
+       U+FFFD, only when there is one. */
+    int nuls = 0;
+    for (int i = 0; i < len; i++) if (!p[i]) nuls++;
+    char *fixed = nuls ? (char *)malloc((u64)len + 2 * (u64)nuls + 1) : 0;
+    if (fixed) {
+        int w = 0;
+        for (int i = 0; i < len; i++) {
+            if (p[i]) { fixed[w++] = p[i]; continue; }
+            fixed[w++] = (char)0xEF; fixed[w++] = (char)0xBF; fixed[w++] = (char)0xBD;
+        }
+        fixed[w] = 0;
+        dom_parse_into(d, fixed, w, d->root);
+        free(fixed);
+    } else {
+        dom_parse_into(d, p, len, d->root);
+    }
 
     /* A page with no body element still has content, and everything that
        looks for one has to find something. */
