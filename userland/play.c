@@ -1,7 +1,8 @@
 /* A player for live streams: a Twitch channel, or any HLS stream.
  *
  *   play twitch:<channel>         what the channel is broadcasting now
- *   play https://.../index.m3u8   any HLS stream of H.264 and AAC in MPEG-TS
+ *   play https://.../index.m3u8   any HLS stream of H.264 and AAC, in MPEG-TS
+ *                                 or fragmented MP4
  *
  * The browser starts it from a live channel's page. A program of its own,
  * so the waiting a stream does -- for the next segment, for room in the
@@ -12,7 +13,12 @@
  * Client-Id again if Twitch changes it), then the channel's master playlist
  * from usher with that token, then a rendition's media playlist, read again
  * every couple of seconds for the segments it adds. Each segment is an MPEG
- * transport stream (ts.h). Its AAC frames (aac.h) are decoded at once into a
+ * transport stream (ts.h), or -- when the playlist names an initialisation
+ * segment (EXT-X-MAP), as Twitch's do for some channels now -- fragmented
+ * MP4 (mp4.h), whose pictures come as length-prefixed units, made Annex B
+ * for the decoder with the parameter sets put before each that needs no
+ * other, and whose sound comes as bare AAC frames, decoded with what the
+ * initialisation segment said of them. Its AAC frames (aac.h) are decoded at once into a
  * queue of samples, handed to the sound card as fast as it has room, at the
  * card's rate. Its H.264 access units (h264.h) are kept and decoded only as
  * the picture needs them, and each frame is shown when the sound reaches
@@ -41,6 +47,7 @@
 #include "sites.h"
 #include "hls.h"
 #include "ts.h"
+#include "mp4.h"
 #include "aac.h"
 #include "h264.h"
 
@@ -296,11 +303,84 @@ static void on_pes(void *ctx, int type, long long pts, const u8 *p, int n) {
 
 static char *segbuf, *textbuf;
 
-/* A segment fetched and taken apart; 0 when it could not be had. */
-static int take_segment(const char *url) {
+/* --- fragmented MP4 -------------------------------------------------------------------- */
+
+static mp4_init minit;                   /* the initialisation segment last read */
+static char minit_from[HLS_URI];         /* and where it came from */
+static int minit_ok;
+static u8 *annexb;                       /* one access unit made Annex B */
+#define ANNEXB_MAX (4 << 20)
+
+/* A sample of a fragmented segment: a picture's units made Annex B and kept
+   as a transport stream's would be, or a frame of sound decoded. Times are
+   in the track's timescale, made the transport stream's 90 kHz. */
+static void on_sample(void *ctx, const mp4_track *t, long long dts, long long pts, long long dur,
+                      int key, const u8 *data, int len) {
+    (void)ctx; (void)dts; (void)dur;
+    long long p90 = t->timescale ? pts * 90000 / (long long)t->timescale : 0;
+    if (t->kind == MP4_VIDEO) {
+        if (!annexb) annexb = (u8 *)malloc(ANNEXB_MAX);
+        if (!annexb) return;
+        int n = 0, nl = t->nal_len ? t->nal_len : 4, at = 0;
+        /* Its parameter sets before a picture that needs no other: a change
+           of rendition brings new ones, and the decoder starts there. */
+        if (key && t->params_n && t->params_n < ANNEXB_MAX)
+            for (int i = 0; i < t->params_n; i++) annexb[n++] = t->params[i];
+        while (at + nl <= len) {
+            int ul = 0;
+            for (int i = 0; i < nl; i++) ul = (ul << 8) | data[at + i];
+            at += nl;
+            if (ul <= 0 || at + ul > len || n + 4 + ul > ANNEXB_MAX) break;
+            annexb[n++] = 0; annexb[n++] = 0; annexb[n++] = 0; annexb[n++] = 1;
+            for (int i = 0; i < ul; i++) annexb[n++] = data[at + i];
+            at += ul;
+        }
+        if (n) { have_video = 1; au_put(p90, annexb, n); }
+        return;
+    }
+    if (t->kind != MP4_AUDIO) return;
+    if (!dec_open) {
+        dec_open = aac_open(&dec, t->sfi, t->channels ? t->channels : 2);
+        if (!dec_open) { say("the stream's sound is not one this can play"); return; }
+        stream_rate = AAC_RATES[dec.rate_idx].rate;
+        step = (u32)(((u64)stream_rate << 16) / (u32)(dev_rate ? dev_rate : stream_rate));
+    }
+    static short pcm[1024 * AAC_MAX_CH];
+    if (aac_decode(&dec, data, len, pcm) == 1024) {
+        queue_put(pcm, 1024, dec.channels);
+        frames_decoded++;
+        if (stream_rate) audio_end = p90 + 1024LL * 90000 / stream_rate;
+    } else {
+        frames_bad++;
+    }
+}
+
+/* The initialisation segment a fragmented stream names, read when it is
+   one not read yet: at the start, and at each change of rendition. */
+static int take_init(const char *url) {
+    if (minit_ok && w_same(url, minit_from)) return 1;
     int st = 0;
     int n = hls_get(url, segbuf, SEGMENT_MAX, &st);
     if (n <= 0 || st != 200) return 0;
+    minit_ok = mp4_parse_init((const u8 *)segbuf, n, &minit) > 0;
+    if (!minit_ok) { say(minit.why[0] ? minit.why : "the stream's start could not be read"); return 0; }
+    w_copy(minit_from, sizeof(minit_from), url, sizeof(minit_from));
+    return 1;
+}
+
+/* A segment fetched and taken apart; 0 when it could not be had. */
+static int take_segment(const char *url) {
+    int st = 0;
+    if (hls_map[0] && !take_init(hls_map)) return 0;
+    int n = hls_get(url, segbuf, SEGMENT_MAX, &st);
+    if (n <= 0 || st != 200) return 0;
+    /* A transport stream starts with its sync byte; anything else under a
+       playlist that named an initialisation segment is fragmented MP4. */
+    if (hls_map[0] && (u8)segbuf[0] != 0x47) {
+        if (mp4_parse_media((const u8 *)segbuf, n, &minit, on_sample, 0) < 0)
+            say(minit.why[0] ? minit.why : "a segment could not be read");
+        return 1;
+    }
     ts_demux t;
     ts_init(&t, on_pes, 0);
     ts_feed(&t, (const u8 *)segbuf, n);

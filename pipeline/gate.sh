@@ -509,6 +509,9 @@ if [ "$MODE" = "screen" ] || [ "$MODE" = "full" ]; then
   # fetched, taken apart, decoded and played by /bin/play, and the recording
   # measured for its pitch, its length and any gap where the card ran dry.
   playtest() { keep timeout 600 python tools/playcheck.py; }
+  # And the same stream as fragmented MP4 under an initialisation segment,
+  # as Twitch sends some channels now.
+  playtest_fmp4() { keep timeout 600 python tools/playcheck.py --fmp4; }
 
   # A page's own film, by Media Source Extensions: a page from a server on
   # the host appends fragmented MP4 to a MediaSource given to a <video> and
@@ -698,6 +701,7 @@ if [ "$MODE" = "screen" ] || [ "$MODE" = "full" ]; then
   par_start "and out of the ensoniq as well" enstest
   par_start "the volume slider can be heard changing the volume" voltest
   par_start "a stream is heard whole and at its pitch" playtest
+  par_start "a stream of fragmented MP4 is heard and seen" playtest_fmp4
   par_start "a page plays a film by media source extensions" msetest
   par_start "a machine joins a wireless network and gets an address" wifitest
   par_start "a frame sends the part of the screen that changed" frametest

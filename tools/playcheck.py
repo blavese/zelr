@@ -43,6 +43,10 @@ from harness import Guest, Checks, build_once, ROOT      # noqa: E402
 from soundcheck import close_to                          # noqa: E402
 from browsercheck import PAGE, PARK                      # noqa: E402
 
+# --fmp4: the same stream as fragmented MP4 under an initialisation segment
+# (EXT-X-MAP), as Twitch now sends some channels: genmedia's hls_fragments.
+FMP4 = "--fmp4" in sys.argv
+
 DISK = os.path.join(ROOT, "playcheck.%d.img" % os.getpid())
 WAV = os.path.join(ROOT, "playcheck.%d.wav" % os.getpid())
 
@@ -265,10 +269,12 @@ def segment(k, units, frames):
 def playlist(seconds):
     # Relative addresses, as Twitch's are, so the player has to join them to
     # the playlist's own.
-    lines = ["#EXTM3U", "#EXT-X-VERSION:3", "#EXT-X-TARGETDURATION:3",
+    lines = ["#EXTM3U", "#EXT-X-VERSION:%d" % (7 if FMP4 else 3), "#EXT-X-TARGETDURATION:3",
              "#EXT-X-MEDIA-SEQUENCE:0"]
+    if FMP4:
+        lines.append('#EXT-X-MAP:URI="init.mp4"')
     for i in range(SEGMENTS):
-        lines += ["#EXTINF:%.3f," % seconds, "seg%d.ts" % i]
+        lines += ["#EXTINF:%.3f," % seconds, ("seg%d.m4s" if FMP4 else "seg%d.ts") % i]
     lines.append("#EXT-X-ENDLIST")
     return ("\n".join(lines) + "\n").encode()
 
@@ -276,6 +282,7 @@ def playlist(seconds):
 class Handler(http.server.BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     segs = []
+    init = b""
     seconds = 2.0
 
     def log_message(self, *a):
@@ -283,7 +290,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     def do_GET(self):
         ASKED[self.path] = ASKED.get(self.path, 0) + 1
-        m = re.fullmatch(r"/live/seg(\d+)\.ts", self.path)
+        m = re.fullmatch(r"/live/seg(\d+)\.(ts|m4s)", self.path)
         if self.path == "/watch.html":
             # All of the page is the link, so a click anywhere on it lands.
             stream = "http://%s/live/index.m3u8" % self.headers.get("Host", "")
@@ -293,8 +300,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
             ctype = "text/html"
         elif self.path == "/live/index.m3u8":
             body, ctype = playlist(Handler.seconds), "application/vnd.apple.mpegurl"
-        elif m and int(m.group(1)) < SEGMENTS:
-            body, ctype = Handler.segs[int(m.group(1))], "video/mp2t"
+        elif self.path == "/live/init.mp4" and FMP4:
+            body, ctype = Handler.init, "video/mp4"
+        elif m and int(m.group(1)) < SEGMENTS and (m.group(2) == "m4s") == FMP4:
+            body, ctype = Handler.segs[int(m.group(1))], "video/mp4" if FMP4 else "video/mp2t"
         else:
             body, ctype = b"no", "text/plain"
             self.send_response(404)
@@ -399,11 +408,15 @@ def colours_seen(w, h, px):
 
 def main():
     build_once()
-    c = Checks("play test")
+    c = Checks("play test, fragmented MP4" if FMP4 else "play test")
     tone = adts_frames(b"".join(ts_payloads(header_array("AACD_TS", "aacdata.h"))[0x0F]))
     units = access_units(header_array("H264D_COLOURS", "h264data.h"))
-    Handler.segs = [segment(k, units, tone) for k in range(SEGMENTS)]
-    Handler.seconds = 2 * len(tone) * 1024 / 44100.0
+    if FMP4:
+        from genmedia import hls_fragments
+        Handler.init, Handler.segs, Handler.seconds, _ = hls_fragments("H264D_COLOURS", 10, SEGMENTS, 2)
+    else:
+        Handler.segs = [segment(k, units, tone) for k in range(SEGMENTS)]
+        Handler.seconds = 2 * len(tone) * 1024 / 44100.0
 
     for stale in (WAV, DISK):
         if os.path.exists(stale):
@@ -477,8 +490,11 @@ def main():
           "could not be decoded" not in said and "could not be fetched" not in said)
     c.add("the playlist is read once, since it says it is finished",
           ASKED.get("/live/index.m3u8") == 1)
+    ext = "m4s" if FMP4 else "ts"
     c.add("and each segment fetched once, from the first",
-          all(ASKED.get("/live/seg%d.ts" % i) == 1 for i in range(SEGMENTS)))
+          all(ASKED.get("/live/seg%d.%s" % (i, ext)) == 1 for i in range(SEGMENTS)))
+    if FMP4:
+        c.add("and the initialisation segment once, before them", ASKED.get("/live/init.mp4") == 1)
 
     m = re.search(r"play: shown (\d+) frames, passed over (\d+)", said)
     frames, passed = (int(m.group(1)), int(m.group(2))) if m else (0, 0)

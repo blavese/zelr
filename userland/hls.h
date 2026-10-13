@@ -325,14 +325,23 @@ static int hls_master(const char *base, const char *s, int n, hls_variant *out, 
 
 /* The segments a media playlist names, numbered; how many. *target is its
    target duration in seconds and *ended whether it says it will not grow. */
+/* The initialisation segment the last media playlist named (EXT-X-MAP),
+   whole, or empty: segments of fragmented MP4 need it read first, and a
+   playlist of transport streams names none. */
+static char hls_map[HLS_URI];
+
 static int hls_media(const char *base, const char *s, int n, hls_segment *out, int max, int *target, int *ended) {
     static char line[HLS_URI + 256];
     int at = 0, count = 0, ms = 0;
     long long seq = 0;
     *target = 0;
     *ended = 0;
+    hls_map[0] = 0;
     while (hls_line(s, n, &at, line, sizeof(line))) {
-        if (w_starts_fold(line, "#EXT-X-MEDIA-SEQUENCE:")) {
+        if (w_starts_fold(line, "#EXT-X-MAP:")) {
+            static char uri[HLS_URI];
+            if (hls_attr(line, "URI", uri, sizeof(uri))) hls_join(base, uri, hls_map, HLS_URI);
+        } else if (w_starts_fold(line, "#EXT-X-MEDIA-SEQUENCE:")) {
             seq = 0;
             for (const char *p = line + 22; *p >= '0' && *p <= '9'; p++) seq = seq * 10 + (*p - '0');
         } else if (w_starts_fold(line, "#EXT-X-TARGETDURATION:")) *target = hls_num(line + 22);

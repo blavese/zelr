@@ -367,6 +367,83 @@ def muxed_file(stream="H264D_2", fps=30, tones=1):
     return out, len(units), len(raw), rate, chans
 
 
+def hls_fragments(stream="H264D_COLOURS", fps=10, segments=3, tones=2):
+    """A stream as HLS serves it in fragmented MP4: one initialisation
+    segment holding both tracks, and `segments` media segments, each the
+    stream's pictures and the tone `tones` times over in a moof with a traf
+    for each and one mdat, times running on from the segments before (the
+    pictures from a second in, as playcheck's transport streams start).
+    Returns (init, [segment], seconds a segment, pictures a segment)."""
+    sps, pps, units = video_units(header_array(stream, "h264data.h"))
+    w, h = sps_size(sps)
+    avcc = bytes([1, sps[1], sps[2], sps[3], 0xFF, 0xE1]) + struct.pack(">H", len(sps)) + sps + \
+        bytes([1]) + struct.pack(">H", len(pps)) + pps
+    ventry = box(b"avc1", b"\0" * 6, struct.pack(">H", 1), b"\0" * 16, struct.pack(">HH", w, h),
+                 struct.pack(">II", 0x480000, 0x480000), struct.pack(">I", 0), struct.pack(">H", 1), b"\0" * 32,
+                 struct.pack(">Hh", 0x18, -1), box(b"avcC", avcc))
+    from playcheck import ts_payloads, adts_frames
+    frames = adts_frames(b"".join(ts_payloads(header_array("AACD_TS", "aacdata.h"))[0x0F]))
+    hd = frames[0]
+    sfi = (hd[2] >> 2) & 15
+    chans = ((hd[2] & 1) << 2) | (hd[3] >> 6)
+    rate = [96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050, 16000, 12000, 11025, 8000][sfi]
+    asc = struct.pack(">H", (2 << 11) | (sfi << 7) | (chans << 3))
+    dec_specific = bytes([5, len(asc)]) + asc
+    dec_config = bytes([4, 13 + len(dec_specific), 0x40, 0x15, 0, 0, 0]) + struct.pack(">II", 128000, 128000) + dec_specific
+    es = bytes([3, 3 + len(dec_config) + 3]) + struct.pack(">HB", 0, 0) + dec_config + bytes([6, 1, 2])
+    aentry = box(b"mp4a", b"\0" * 6, struct.pack(">H", 1), b"\0" * 8, struct.pack(">HHHH", chans, 16, 0, 0),
+                 struct.pack(">I", rate << 16), full(b"esds", 0, 0, es))
+    raw = [f[7:] for f in frames] * tones
+    vts, vdur = 90000, 90000 // fps
+
+    def trak(tid, ts, handler, entry, ww=0, hh=0):
+        tkhd = full(b"tkhd", 0, 7, struct.pack(">IIIII", 0, 0, tid, 0, 0), b"\0" * 8,
+                    struct.pack(">hhhh", 0, 0, 0x0100 if handler == b"soun" else 0, 0),
+                    struct.pack(">9I", 0x10000, 0, 0, 0, 0x10000, 0, 0, 0, 0x40000000), struct.pack(">II", ww << 16, hh << 16))
+        mdhd = full(b"mdhd", 0, 0, struct.pack(">IIII", 0, 0, ts, 0), struct.pack(">HH", 0x55C4, 0))
+        hdlr = full(b"hdlr", 0, 0, struct.pack(">I4s", 0, handler), b"\0" * 12, b"zelr\0")
+        mh = full(b"vmhd", 0, 1, b"\0" * 8) if handler == b"vide" else full(b"smhd", 0, 0, b"\0" * 4)
+        dinf = box(b"dinf", full(b"dref", 0, 0, struct.pack(">I", 1), full(b"url ", 0, 1)))
+        stbl = box(b"stbl", full(b"stsd", 0, 0, struct.pack(">I", 1), entry),
+                   full(b"stts", 0, 0, struct.pack(">I", 0)), full(b"stsc", 0, 0, struct.pack(">I", 0)),
+                   full(b"stsz", 0, 0, struct.pack(">II", 0, 0)), full(b"stco", 0, 0, struct.pack(">I", 0)))
+        return box(b"trak", tkhd, box(b"mdia", mdhd, hdlr, box(b"minf", mh, dinf, stbl)))
+    mvhd = full(b"mvhd", 0, 0, struct.pack(">IIII", 0, 0, 1000, 0), struct.pack(">IH", 0x00010000, 0x0100),
+                b"\0" * 10, struct.pack(">9I", 0x10000, 0, 0, 0, 0x10000, 0, 0, 0, 0x40000000), b"\0" * 24, struct.pack(">I", 3))
+    mvex = box(b"mvex", full(b"trex", 0, 0, struct.pack(">IIIII", 1, 1, 0, 0, 0)),
+               full(b"trex", 0, 0, struct.pack(">IIIII", 2, 1, 0, 0, 0)))
+    init = box(b"ftyp", b"iso6", struct.pack(">I", 0), b"iso6mp41") + \
+        box(b"moov", mvhd, trak(1, vts, b"vide", ventry, w, h), trak(2, rate, b"soun", aentry), mvex)
+
+    per = len(units)
+    lead = max(i - idx for i, (_, idx, _) in enumerate(units))
+    segs = []
+    for k in range(segments):
+        vsamples = [(vdur, len(u), 0x02000000 if idr else 0x01010000, (idx - i + lead) * vdur, u)
+                    for i, (idr, idx, u) in enumerate(units)]
+        asamples = [(1024, len(a), 0x02000000, 0, a) for a in raw]
+        vbase = vts + (k * per - lead) * vdur
+        abase = rate + k * len(raw) * 1024
+
+        def build(voff, aoff):
+            def traf(tid, base, samples, off):
+                entries = b"".join(struct.pack(">IIIi", d, s, f, c) for d, s, f, c, _ in samples)
+                trun = full(b"trun", 1, 0x000F01, struct.pack(">Ii", len(samples), off), entries)
+                return box(b"traf", full(b"tfhd", 0, 0x020000, struct.pack(">I", tid)),
+                           full(b"tfdt", 1, 0, struct.pack(">Q", base)), trun)
+            return box(b"moof", full(b"mfhd", 0, 0, struct.pack(">I", k + 1)),
+                       traf(1, vbase, vsamples, voff), traf(2, abase, asamples, aoff))
+        moof = build(0, 0)
+        vbytes = sum(len(x[4]) for x in vsamples)
+        moof = build(len(moof) + 8, len(moof) + 8 + vbytes)
+        mdat = box(b"mdat", b"".join(x[4] for x in vsamples) + b"".join(x[4] for x in asamples))
+        # As Twitch's do, an event message box before the fragment, which a
+        # reader passes over.
+        emsg = full(b"emsg", 0, 0, b"urn:zelr:test\0\0", struct.pack(">IIII", 1000, 0, 0, k))
+        segs.append(emsg + moof + mdat)
+    return init, segs, len(raw) * 1024.0 / rate, per
+
+
 def c_bytes(name, data):
     o = ["static const unsigned char %s[%d] = {" % (name, len(data))]
     for i in range(0, len(data), 24):
