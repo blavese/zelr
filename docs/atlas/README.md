@@ -95,6 +95,12 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.110.0
+
+- **Pictures a script gives a source or adds after the page is shown are drawn (11)**: `pictures_follow` after every
+  layout a script's change brings. browsercheck: a picture loaded the way one is as it comes into view, and one made
+  and added by the script; failing without the following (neither drawn).
+
 ### 0.109.0
 
 - **A connection made while the program goes on (03, 06a, 11)**: `CONNECT_NOWAIT`, `SYS_SOCK_STATE` (71), a kernel task

@@ -1807,7 +1807,9 @@ large range:
   Since 0.109.0 a new connection for them is made without waiting too: the
   kernel makes it in a task of its own while the page goes on. Since
   0.107.0 the page is shown before its pictures, which are fetched the same
-  way and drawn as they come. A
+  way and drawn as they come, and since 0.110.0 so are pictures its
+  scripts add or give a source later (a picture loaded as it comes into
+  view). A
   WebSocket, once open, is asked on every pass whether anything came (a
   socket can be told not to wait, `sock_wait`), and a page has four at
   once, out of the machine's six sockets. There is no permessage-deflate,

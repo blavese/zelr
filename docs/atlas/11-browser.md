@@ -1,6 +1,15 @@
 # 11 -- The web browser (everything except JS-engine internals and image decoders)
 
-**Since 0.107.0** (the rest of this file is older; trust the code and the README's "since 6048716" list):
+**Since 0.110.0** (the rest of this file is older; trust the code and the README's "since 6048716" list):
+- **Pictures a script adds or points elsewhere are fetched** (browser.c `pictures_follow`, called at the end of
+  `relayout` while the page is live): every `<img>` whose source (`pic_source`) is not drawn, coming or tried for that
+  element (`pic_known`: `shown.key`, `pic_wait_t.key`, `pic_tried`, keys from `pic_key`, a hash of the address) is put
+  on the waiting list, a data: one made at once; a picture made for an element that had one replaces it (`pic_take`);
+  one that would not come is remembered (`pic_tried`, 64) so it is not asked for at every layout. On only for a page
+  whose build gathered pictures (`pics_follow_on`). Before, only the build's gathering saw pictures, so a picture loaded
+  as it comes into view (data-src copied to src by a script) was never drawn.
+
+**Since 0.107.0**:
 - **A page is shown before its pictures** (browser.c `pic_wait`, `pictures_pump`). `gather_pictures` makes a picture
   written into the page (data:) at once and puts one at an address on the waiting list; `gather_backgrounds` does the
   same for backgrounds, keeping the slot as nothing (`ok` 0) until it comes. The decoding is `pic_take` (an element's)
