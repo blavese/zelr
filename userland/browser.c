@@ -875,16 +875,6 @@ static int  load_post;
 static int refreshes;
 static int go_is_refresh;      /* this load was the page's idea, not a reader's */
 
-/* Whether an element is inside <noscript>, which is for a browser that does
-   not run scripts. This one does: Google's search page says there to go to
-   a page asking for scripts to be turned on, and following it left the page
-   the page's own script was about to work on. */
-static int in_noscript(int el) {
-    for (int p = doc.nodes[el].parent; p >= 0; p = doc.nodes[p].parent)
-        if (doc.nodes[p].kind == DN_ELEMENT && doc.nodes[p].tag == T_NOSCRIPT) return 1;
-    return 0;
-}
-
 /* <meta name="referrer">: the policy the page's own requests go under, from
    here on (fetch.h, web_policy_of). */
 static void meta_referrer(void) {
@@ -901,7 +891,6 @@ static int meta_refresh(char *out, int cap) {
     for (int i = 0; i < doc.count; i++) {
         if (doc.nodes[i].kind != DN_ELEMENT) continue;
         if (doc.nodes[i].tag != T_META) continue;
-        if (in_noscript(i)) continue;
 
         const char *eq = dom_attr(&doc, i, "http-equiv");
         if (!eq || !lay_same_fold(eq, "refresh")) continue;

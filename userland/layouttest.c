@@ -1918,6 +1918,40 @@ int main(void) {
             s1 && s2 && s2->bl == 1 && s1->br == 1 && s2->x > s1->x + s1->w, s2 ? s2->bl : -1);
     }
 
+    /* --- noscript ---------------------------------------------------------------------
+     *
+     * What is in a <noscript> is for a browser that does not run scripts, and
+     * is its text in one that does. DuckDuckGo's home page hides its body
+     * there, and was blank. */
+    {
+        lay("<style>.v{background:#000}</style>"
+            "<noscript><style>p { display: none }</style><div id=ns>no scripts</div></noscript>"
+            "<p id=nw class=v>words</p>", 600);
+        const litem *nw = box_of(by_id("nw"));
+        ok("a style sheet inside noscript is not read", nw && nw->h > 0);
+        int nsel = -1;
+        for (int i = 0; i < doc.count; i++)
+            if (doc.nodes[i].kind == DN_ELEMENT && doc.nodes[i].tag == T_NOSCRIPT) nsel = i;
+        int kid = nsel >= 0 ? doc.nodes[nsel].first : -1;
+        ok("and what is in it is its text, not elements",
+           by_id("ns") < 0 && kid >= 0 && doc.nodes[kid].kind == DN_TEXT
+           && doc.nodes[kid].text >= 0 && doc.arena[doc.nodes[kid].text] == '<');
+    }
+
+    /* --- a transform's share is of the box ------------------------------------------
+     *
+     * translate(100%) moves a box by its own width, though it draws nothing
+     * of its own. Taken from what was in it, DuckDuckGo's closed menu moved
+     * by a word's width and stood at the window's edge. */
+    {
+        lay("<style>.m{position:fixed;top:0;right:0;width:200px;transform:translate(100%)}"
+            ".k { width: 50px; background: #000 }</style>"
+            "<div class=m><div class=k id=mk>menu</div></div><p>page</p>", 600);
+        const litem *mk = box_of(by_id("mk"));
+        okn("a closed menu moved by its own width is out of the window",
+            mk && mk->x >= 600, mk ? mk->x : -1);
+    }
+
     puts(failed ? "LAYOUTTEST_FAIL\n" : "LAYOUTTEST_PASS\n");
     return failed;
 }

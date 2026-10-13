@@ -431,9 +431,17 @@ static inline int dom_closes(int open, int now) {
 
 /* Elements whose contents are not markup. Reading them as markup is how a
    script containing a less-than sign becomes a document with a tag in it
-   that nobody wrote. */
+   that nobody wrote.
+   <noscript> too, as in any browser that runs scripts (HTML, "scripting
+   flag"): what is in it is for one that does not. Read as elements, it was
+   obeyed: DuckDuckGo's home page keeps <style>body { display: none }</style>
+   there, beside a refresh to its page without scripts, and was blank; and
+   Google's search page keeps a refresh there to a page asking for scripts
+   to be turned on, which the browser once followed and later had to step
+   round. */
 static inline int dom_raw(int t) {
-    return t == T_SCRIPT || t == T_STYLE || t == T_TEXTAREA || t == T_TITLE;
+    return t == T_SCRIPT || t == T_STYLE || t == T_TEXTAREA || t == T_TITLE
+        || t == T_NOSCRIPT;
 }
 
 /* Whether there is anything to read in here: a text node with a character

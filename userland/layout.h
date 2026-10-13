@@ -382,6 +382,11 @@ typedef struct {
     unsigned char fl_side[LAY_FLOATS];
     int fl_seq;                   /* how many ever placed */
     int floating;                 /* the float being laid out, not floated again */
+
+    /* The border box of the block lay_block_placed last finished, which is
+       what a transform's percentages are of (lay_translate). box_node is -1
+       while none is finished, or when the last one was drawn as a picture. */
+    int box_node, box_w, box_h;
 } lctx;
 
 static inline int lay_put(lctx *L, const char *s, int n) {
@@ -4252,11 +4257,17 @@ static void lay_block_placed(lctx *L, int node, const cstyle *parent, int x,
  * width and height. It is how a dialog is centred (left: 50% and then back
  * by half itself) and how a menu that slides in is kept out of sight
  * (translateX(-100%)); read past, the dialog sat half off its place and the
- * closed menu lay over the page. */
+ * closed menu lay over the page. The share is of the box as laid out: of
+ * its items instead, a box that draws nothing of its own was as wide as its
+ * words, and DuckDuckGo's closed menu, 18em wide, moved by a word's width
+ * and stood at the window's edge. */
 static void lay_translate(lctx *L, int node, const cstyle *st, int first) {
     if (!st->tx_px && !st->ty_px && !st->tx_pct && !st->ty_pct) return;
     int w = 0, h = 0;
-    if (first < L->out->nitems && L->out->items[first].node == node
+    if (L->box_node == node) {
+        w = L->box_w;
+        h = L->box_h;
+    } else if (first < L->out->nitems && L->out->items[first].node == node
         && L->out->items[first].kind == LK_BOX) {
         w = L->out->items[first].w;
         h = L->out->items[first].h;
@@ -4367,6 +4378,7 @@ static void lay_block_placed(lctx *L, int node, const cstyle *parent, int x,
                              int avail, int *y) {
     const ddoc *d = L->d;
     cstyle st;
+    L->box_node = -1;
     lay_style(L, node, parent, &st, avail);
     if (st.display == D_NONE) return;
     if (!st.visible && !lay_show_hidden) return;
@@ -4723,6 +4735,9 @@ static void lay_block_placed(lctx *L, int node, const cstyle *parent, int x,
         bg->bl = (unsigned char)(st.bl > 255 ? 255 : st.bl);
         bg->radius = (unsigned char)(st.radius > 40 ? 40 : st.radius);
     }
+    L->box_node = node;
+    L->box_w = shrunk >= 0 ? shrunk : box_w;
+    L->box_h = box_h;
 
     L->cur_link = held_link;
     *y += st.mb == CSS_AUTO_OFF ? 0 : st.mb;
