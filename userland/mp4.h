@@ -278,7 +278,7 @@ static long long mp4_table(const u8 *p, long long b, long long e, int head, int 
 
 /* Track t's samples from its sample tables, read from the buffer the moov
    was in (p), into a list from malloc; how many, or -1 with why said. */
-static int mp4_index(const u8 *p, const mp4_track *t, mp4_entry **out, mp4_init *m) {
+__attribute__((unused)) static int mp4_index(const u8 *p, const mp4_track *t, mp4_entry **out, mp4_init *m) {
     *out = 0;
     long long mb, me, nb, ne, b, e;
     if (!mp4_find(p, t->trak_b, t->trak_e, MP4_T('m', 'd', 'i', 'a'), &mb, &me) ||
