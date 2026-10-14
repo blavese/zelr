@@ -1550,6 +1550,14 @@ int main(void) {
                "document.title = u.querySelectorAll('.row').length + ' ' + t.content.nodeType + ' '"
                " + document.querySelectorAll('template .row').length;</script></body>"),
         "2 11 0");
+    oks("a template copied deep brings the contents of a template inside its own",
+        titled("<body><script>var t = document.createElement('template'), t2 = document.createElement('template');"
+               "t2.content.appendChild(document.createElement('div')); t.content.appendChild(t2);"
+               "var c = t.cloneNode(true), d = document.importNode(t, true);"
+               "document.title = c.content.childNodes.length + ' ' + c.content.firstChild.content.childNodes.length"
+               " + ' ' + d.content.firstChild.content.childNodes.length + ' ' + t.cloneNode(false).content.childNodes.length;"
+               "</script></body>"),
+        "1 1 1 0");
     oks("a script a page makes and appends runs when it is put in the page",
         titled("<body><script>var s = document.createElement('script');"
                "s.textContent = 'document.title = \"inserted \" + (document.currentScript === s);';"

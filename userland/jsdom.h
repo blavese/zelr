@@ -940,6 +940,22 @@ static int jd_clone(int n, int deep) {
     if (n < DOM_NODES && c < DOM_NODES && (jd_svg_made[n >> 3] & (1 << (n & 7))))
         jd_svg_made[c >> 3] |= (u8)(1 << (c & 7));
     if (!deep) return c;
+    if (jd_is_template(n)) {
+        /* A template's contents come with it, which is the one thing its
+           copy is for, and a template inside them brings its own: the copy
+           was made in cloneNode alone, so a template in another's contents
+           came out empty. The web components loader asks exactly that, to
+           find an old Edge, and finding it here loaded every polyfill it
+           has, whose stand-in for shadow trees drew archive.org as nothing. */
+        int from = jd_template_content(n), to = jd_template_content(c);
+        for (int ch = from >= 0 ? jd_doc->nodes[from].first : -1; ch >= 0 && to >= 0;
+             ch = jd_doc->nodes[ch].next) {
+            int cc = jd_clone(ch, 1);
+            if (cc < 0) break;
+            dom_append(jd_doc, to, cc);
+        }
+        return c;
+    }
     for (int ch = jd_doc->nodes[n].first; ch >= 0; ch = jd_doc->nodes[ch].next) {
         int cc = jd_clone(ch, 1);
         if (cc < 0) break;
@@ -2347,16 +2363,6 @@ static jval nat_clone_node(jctx *J, jval t, jval *a, int n) {
     if (x < 0) return jd_illegal(J);
     int deep = n > 0 && js_to_bool(a[0]);
     int c = jd_clone(x, deep);
-    if (c >= 0 && deep && jd_is_template(x)) {
-        /* A template's contents come with it, which is the one thing its
-           copy is for. */
-        int from = jd_template_content(x), to = jd_template_content(c);
-        for (int ch = from >= 0 ? jd_doc->nodes[from].first : -1; ch >= 0 && to >= 0;
-             ch = jd_doc->nodes[ch].next) {
-            int cc = jd_clone(ch, 1);
-            if (cc >= 0) dom_append(jd_doc, to, cc);
-        }
-    }
     /* A copy is made in the document its original is in. */
     if (c >= 0 && !jd_inert(x)) jd_custom_created(c);
     return c >= 0 ? jd_el_value(J, c) : js_null();
