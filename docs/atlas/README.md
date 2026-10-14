@@ -95,6 +95,11 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.119.0
+
+- **A page's style sheets asked for with its scripts (11)**, as soon as the page is read, applied in the order
+  written. browsercheck 62; failing on a build that left the sheets out of the list.
+
 ### 0.118.0
 
 - **A page's script files asked for together as it loads (11)**, run in the order written. browsercheck 60 (six slow

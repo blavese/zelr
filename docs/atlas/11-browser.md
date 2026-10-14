@@ -1,6 +1,15 @@
 # 11 -- The web browser (everything except JS-engine internals and image decoders)
 
-**Since 0.118.0** (the rest of this file is older; trust the code and the README's "since 6048716" list):
+**Since 0.119.0** (the rest of this file is older; trust the code and the README's "since 6048716" list):
+- **The page's style sheets join the read-ahead** (browser.c `files_ahead`, called in `build` as soon as the page is
+  read, before `gather_linked_sheets`; `ahead_add` with each file's own most, `CSS_MAX` or `SCRIPT_MAX`;
+  `AHEAD_MAX` 192, since The Verge links 66 sheets). `gather_linked_sheets` takes a sheet from the list and fetches it
+  the old way only when it is not there. The old page's pictures (`pics_drop`) and asks (`asks_drop_all`) are let go
+  first, since a picture still coming holds the number of a slot that is about to be another file's. Medians of three
+  on the host: BBC News 4.4 s to 3.7, The Verge 10.6 to 9.5, Imgur 6.0 to 5.5. Test: browsercheck `/sheets` (four
+  sheets a second late each, counted at once; the last written must win).
+
+**Since 0.118.0**:
 - **A page's script files are asked for together as it loads** (browser.c `scripts_ahead`, `ahead_pump`,
   `ahead_take`, `AHEAD_MAX` 64): before `jsdom_scripts`, every script element with a src that will run (classic, or a
   module's first file) is listed and asked for over the ask slots, as many at once as are free; `fetch_script` takes
