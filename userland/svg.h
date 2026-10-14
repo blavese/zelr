@@ -402,36 +402,42 @@ static inline void sv_span(float *cov, int w, float x0, float x1) {
  * mistake the kernel made with its own stacks and found by painting them;
  * ring 3 has no such paint, so the rule here is simply that nothing puts one
  * of these on the stack.
+ *
+ * The coverage is worked out here and handed a row at a time to a painter:
+ * this file's paints an opaque colour, and a page's canvas (jscanvas.h)
+ * paints colours, gradients and pictures with their transparency through
+ * the same rows. cov[x] runs from 0 to 1, and only x0 to x1 (past the end)
+ * can be other than 0.
  */
-static inline void sv_fill_pts(svcanvas *cv, const svpt *pts, int n,
-                               const int *start, int nsub, u32 colour,
-                               int evenodd, float alpha) {
-    if (n < 2 || nsub < 1) return;
+typedef void (*sv_row_fn)(void *ctx, int y, const float *cov, int x0, int x1);
 
-    float miny = pts[0].y, maxy = pts[0].y;
+static inline void sv_cover(int w, int h, const svpt *pts, int n, const int *start, int nsub,
+                            int evenodd, sv_row_fn paint, void *ctx) {
+    if (n < 2 || nsub < 1 || w <= 0 || h <= 0) return;
+
+    float miny = pts[0].y, maxy = pts[0].y, minx = pts[0].x, maxx = pts[0].x;
     for (int i = 1; i < n; i++) {
         if (pts[i].y < miny) miny = pts[i].y;
         if (pts[i].y > maxy) maxy = pts[i].y;
+        if (pts[i].x < minx) minx = pts[i].x;
+        if (pts[i].x > maxx) maxx = pts[i].x;
     }
-    int y0 = (int)miny - 1, y1 = (int)maxy + 1;
-    if (y0 < 0) y0 = 0;
-    if (y1 > cv->h) y1 = cv->h;
-    if (y0 >= y1) return;
+    if (!(miny < (float)h) || !(maxy > 0) || !(minx < (float)w) || !(maxx > 0)) return;
+    int y0 = miny < 0 ? 0 : (int)miny, y1 = maxy >= (float)h ? h : (int)maxy + 1;
+    int x0 = minx < 0 ? 0 : (int)minx, x1 = maxx >= (float)w ? w : (int)maxx + 1;
+    if (y0 >= y1 || x0 >= x1) return;
 
-    float *cov = (float *)malloc((u32)(cv->w * (int)sizeof(float)));
+    float *cov = (float *)malloc((u32)(w * (int)sizeof(float)));
     if (!cov) return;
+    for (int i = 0; i < w; i++) cov[i] = 0;
 
     /* Crossings of one sub-scanline: where, and which way the edge was
        going, which is what the nonzero rule needs. */
     float xs[256];
     int dirs[256];
 
-    int r = (int)((colour >> 16) & 0xFF);
-    int g = (int)((colour >> 8) & 0xFF);
-    int b = (int)(colour & 0xFF);
-
     for (int y = y0; y < y1; y++) {
-        for (int i = 0; i < cv->w; i++) cov[i] = 0;
+        for (int i = x0; i < x1; i++) cov[i] = 0;
 
         for (int sub = 0; sub < SVG_SUB; sub++) {
             float sy = (float)y + ((float)sub + 0.5f) / SVG_SUB;
@@ -474,29 +480,49 @@ static inline void sv_fill_pts(svcanvas *cv, const svpt *pts, int n,
 
             if (evenodd) {
                 for (int i = 0; i + 1 < crossings; i += 2)
-                    sv_span(cov, cv->w, xs[i], xs[i + 1]);
+                    sv_span(cov, w, xs[i], xs[i + 1]);
             } else {
                 int wind = 0;
                 for (int i = 0; i + 1 < crossings; i++) {
                     wind += dirs[i];
-                    if (wind != 0) sv_span(cov, cv->w, xs[i], xs[i + 1]);
+                    if (wind != 0) sv_span(cov, w, xs[i], xs[i + 1]);
                 }
             }
         }
 
-        for (int x = 0; x < cv->w; x++) {
-            float a = cov[x] / SVG_SUB * alpha;
-            if (a <= 0.002f) continue;
-            if (a > 1) a = 1;
-
-            u8 *px = cv->rgb + (y * cv->w + x) * 3;
-            px[0] = (u8)(px[0] + (r - px[0]) * a);
-            px[1] = (u8)(px[1] + (g - px[1]) * a);
-            px[2] = (u8)(px[2] + (b - px[2]) * a);
-        }
+        for (int x = x0; x < x1; x++) cov[x] *= 1.0f / SVG_SUB;
+        paint(ctx, y, cov, x0, x1);
     }
 
     free(cov);
+}
+
+typedef struct { svcanvas *cv; int r, g, b; float alpha; } sv_flat;
+
+static inline void sv_flat_row(void *ctx, int y, const float *cov, int x0, int x1) {
+    const sv_flat *f = (const sv_flat *)ctx;
+    for (int x = x0; x < x1; x++) {
+        float a = cov[x] * f->alpha;
+        if (a <= 0.002f) continue;
+        if (a > 1) a = 1;
+
+        u8 *px = f->cv->rgb + (y * f->cv->w + x) * 3;
+        px[0] = (u8)(px[0] + (f->r - px[0]) * a);
+        px[1] = (u8)(px[1] + (f->g - px[1]) * a);
+        px[2] = (u8)(px[2] + (f->b - px[2]) * a);
+    }
+}
+
+static inline void sv_fill_pts(svcanvas *cv, const svpt *pts, int n,
+                               const int *start, int nsub, u32 colour,
+                               int evenodd, float alpha) {
+    sv_flat f;
+    f.cv = cv;
+    f.r = (int)((colour >> 16) & 0xFF);
+    f.g = (int)((colour >> 8) & 0xFF);
+    f.b = (int)(colour & 0xFF);
+    f.alpha = alpha;
+    sv_cover(cv->w, cv->h, pts, n, start, nsub, evenodd, sv_flat_row, &f);
 }
 
 static inline void sv_fill(svcanvas *cv, const svpath *path, u32 colour,

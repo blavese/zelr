@@ -20,7 +20,7 @@
 #include "web.h"
 #include "dom.h"
 #include "css.h"
-#include "facetext.h"
+#include "tface.h"
 
 /* One item per box and one per run of text on a line, and one entry per
    link. Set against what a real page costs, measured: an encyclopaedia
@@ -127,58 +127,6 @@ typedef struct {
     int   matched;       /* elements run through selector matching */
 } ldoc;
 
-/* --- picking a face ------------------------------------------------------
- *
- * A page asks for a size in whatever unit it likes and gets the nearest one
- * that exists, at the weight and spacing asked for. Matching the weight
- * matters more than matching the size: bold text one pixel off reads as
- * bold, and regular text at the right size does not read as bold at all. */
-static inline int face_pick(int px, int bold, int mono) {
-    int best = 0, best_d = 1 << 20;
-    for (int i = 0; i < TFACE_SIZES; i++) {
-        const face_t *f = &tface_faces[i];
-        if ((f->bold != 0) != (bold != 0)) continue;
-        if ((f->mono != 0) != (mono != 0)) continue;
-        int d = f->size - px;
-        if (d < 0) d = -d;
-        if (d < best_d) { best_d = d; best = i; }
-    }
-    if (best_d == (1 << 20)) {
-        /* Nothing at that weight and spacing, so fall back on size alone
-           rather than on face zero, which is the smallest there is. */
-        for (int i = 0; i < TFACE_SIZES; i++) {
-            int d = tface_faces[i].size - px;
-            if (d < 0) d = -d;
-            if (d < best_d) { best_d = d; best = i; }
-        }
-    }
-    return best;
-}
-
-static inline const face_t *tface_of(int which) {
-    if (which < 0 || which >= TFACE_SIZES) which = 0;
-    return &tface_faces[which];
-}
-
-static inline int tface_h(int which) { return tface_of(which)->size; }
-
-static inline int tface_wn(const char *s, int n, int which) {
-    const face_t *f = tface_of(which);
-    int w = 0;
-    for (int i = 0; i < n; i++) {
-        unsigned char c = (unsigned char)s[i];
-        if (c < FACE_FIRST || c > FACE_LAST) c = ' ';
-        w += f->glyphs[c - FACE_FIRST].advance;
-    }
-    return w;
-}
-
-static inline int tface_w(const char *s, int which) {
-    int n = 0;
-    while (s[n]) n++;
-    return tface_wn(s, n, which);
-}
-
 /* --- form controls --------------------------------------------------------
  *
  * A control is a box whose contents are a value rather than markup. The
@@ -243,13 +191,18 @@ static inline int lay_button_box(const ddoc *d, int el) {
 
 /* The words on a control, which are not what it submits: a button carries a
    label and sends a value, and a password shows none of what it holds. */
+/* A box drawn from pixels the page's media or its script makes: a video's
+   frames, a canvas's bitmap. What is written inside one is for a browser
+   that has neither, and is not laid out. */
+static inline int lay_painted(int tag) { return tag == T_VIDEO || tag == T_CANVAS; }
+
 /* An element's words, leaving out any drawing inside it: an icon's <title>
    ("Chevron Left", "Hamburger") is a name for a screen reader, and written
    as a button's label it read as the button's words. */
 static inline void lay_words_of(const ddoc *d, int el, char *out, int cap) {
     int w = 0;
     for (int i = el; i >= 0 && w < cap - 1; ) {
-        if (d->nodes[i].kind == DN_ELEMENT && (d->nodes[i].tag == T_SVG || d->nodes[i].tag == T_VIDEO) && i != el) {
+        if (d->nodes[i].kind == DN_ELEMENT && (d->nodes[i].tag == T_SVG || lay_painted(d->nodes[i].tag)) && i != el) {
             int nx = -1;
             for (int up = i; up >= 0 && up != el; up = d->nodes[up].parent)
                 if (d->nodes[up].next >= 0) { nx = d->nodes[up].next; break; }
@@ -1372,7 +1325,7 @@ static void lay_float(lctx *L, int node, const cstyle *parent, int cleft, int cw
     cstyle st;
     lay_style(L, node, parent, &st, cwidth);
     int tag = d->nodes[node].tag;
-    int replaced = tag == T_IMG || tag == T_SVG || tag == T_VIDEO || lay_control_kind(d, node) != CTL_NONE;
+    int replaced = tag == T_IMG || tag == T_SVG || lay_painted(tag) || lay_control_kind(d, node) != CTL_NONE;
     int ml = st.ml == CSS_AUTO_OFF ? 0 : st.ml, mr = st.mr == CSS_AUTO_OFF ? 0 : st.mr;
 
     /* The box's own width, margins apart. */
@@ -1815,6 +1768,15 @@ static void lay_drawing(lctx *L, int at, const cstyle *st, int *y) {
 static void lay_video(lctx *L, int at, const cstyle *st, int *y) {
     const limage *pic = lay_image_of(L, at);
     int iw = pic && pic->w > 0 ? pic->w : 300, ih = pic && pic->h > 0 ? pic->h : 150;
+    if (L->d->nodes[at].tag == T_CANVAS) {
+        /* A canvas is as big as its bitmap, which its width and height
+           attributes make, unless the page's rules say otherwise. */
+        iw = lay_attr_len(dom_attr(L->d, at, "width"), 0);
+        ih = lay_attr_len(dom_attr(L->d, at, "height"), 0);
+        if (!dom_attr(L->d, at, "width") || iw < 0) iw = 300;
+        if (!dom_attr(L->d, at, "height") || ih < 0) ih = 150;
+        if (iw < 1 || ih < 1) return;
+    }
     int w = st->width, h = st->height;
     if (L->measuring && st->width_pct) w = -1;
     if (w < 0 && h < 0) { w = iw; h = ih; }
@@ -1930,7 +1892,7 @@ static inline void lay_inline(lctx *L, int node, const cstyle *parent, int *y) {
             if (n->tag != T_BR && n->tag != T_IMG
                 && (lay_control_kind(d, at) == CTL_NONE || lay_button_box(d, at))) {
                 if ((st.position == POS_ABSOLUTE || st.position == POS_FIXED)
-                    && ((n->tag != T_SVG && n->tag != T_VIDEO) || at != node)) {
+                    && ((n->tag != T_SVG && !lay_painted(n->tag)) || at != node)) {
                     lay_inline_piece(L, at, &stack[sp], 1, y);
                     at = lay_past(d, at, node);
                     continue;
@@ -1941,9 +1903,9 @@ static inline void lay_inline(lctx *L, int node, const cstyle *parent, int *y) {
                     at = lay_past(d, at, node);
                     continue;
                 }
-                if (n->tag == T_VIDEO) {
-                    /* So is a video, and what is inside it is for browsers
-                       that cannot play one. */
+                if (lay_painted(n->tag)) {
+                    /* So is a video or a canvas, and what is inside one is
+                       for browsers that cannot play or draw it. */
                     lay_video(L, at, &st, y);
                     at = lay_past(d, at, node);
                     continue;
@@ -4391,7 +4353,7 @@ static void lay_block_placed(lctx *L, int node, const cstyle *parent, int x,
        that draws them, on a line of its own. As a box it had no children
        to lay out and came out as nothing, or, for a drawing, as its shapes
        laid out as though they were the page. */
-    if (d->nodes[node].tag == T_IMG || d->nodes[node].tag == T_SVG || d->nodes[node].tag == T_VIDEO
+    if (d->nodes[node].tag == T_IMG || d->nodes[node].tag == T_SVG || lay_painted(d->nodes[node].tag)
         || (d->nodes[node].tag != T_BUTTON && lay_control_kind(d, node) != CTL_NONE)) {
         /* With its own margins above and below, and centred by auto ones
            at its sides (img { display: block; margin: 0 auto }). */
@@ -4587,7 +4549,7 @@ static void lay_block_placed(lctx *L, int node, const cstyle *parent, int x,
     while (child >= 0) {
         int next = d->nodes[child].next;
         int is_block = lay_is_block_node(L, child, &st);
-        if (is_block && (d->nodes[child].tag == T_IMG || d->nodes[child].tag == T_SVG || d->nodes[child].tag == T_VIDEO
+        if (is_block && (d->nodes[child].tag == T_IMG || d->nodes[child].tag == T_SVG || lay_painted(d->nodes[child].tag)
                          || (lay_control_kind(d, child) != CTL_NONE && !lay_button_box(d, child)))) {
             /* A picture or a field made a block is still a picture or a
                field: on a line of its own, drawn by the code that draws

@@ -685,6 +685,19 @@ static const picture *video_of(int node) {
     return &v;
 }
 
+/* A canvas's bitmap and its alpha, lent by the page (jscanvas.h) until it is
+   drawn on again. */
+static const picture *canvas_of(int node, const u8 **alpha) {
+    static picture c;
+    int w, h;
+    const u8 *rgb = jsdom_canvas_picture(node, &w, &h, alpha);
+    if (!rgb) return 0;
+    c.w = w;
+    c.h = h;
+    c.rgb = (u8 *)rgb;
+    return &c;
+}
+
 /* The sizes the layout is given: the pictures', and each <video>'s once its
    first frame has said what it is. */
 static limage lay_sizes[PICS_MAX + 8];
@@ -2116,6 +2129,17 @@ static int picture_size(int node, int *w, int *h) {
     return 0;
 }
 
+/* A decoded picture's pixels for a page's canvas to draw (jscanvas.h):
+   three bytes each, and their alpha or 0. */
+static const u8 *image_pixels(int node, int *w, int *h, const u8 **alpha) {
+    const picture *p = pic_of(node);
+    if (!p) return 0;
+    *w = p->w;
+    *h = p->h;
+    *alpha = pic_alpha_of(node);
+    return p->rgb;
+}
+
 static void script_scroll(int y) { scroll = y < 0 ? 0 : y; }
 
 /* document.cookie, from the jar and into it, for the page's address: what a
@@ -2613,6 +2637,7 @@ static void build(const char *html, int len, int width, int want_sheets,
         jsdom_boxes_with(box_of);
         jsdom_points_with(node_at_point);
         jsdom_pictures_with(picture_size);
+        jsdom_image_pixels_with(image_pixels);
         jsdom_scroll_with(script_scroll);
         jsdom_navigate_with(script_navigate);
         jsdom_submit_with(submit_form);
@@ -3160,6 +3185,8 @@ static void draw_page(surface *s, int ox, int oy, int vw, int vh) {
                 p = drawing_of(it);
             if (!p && it->node >= 0 && it->node < doc.count && doc.nodes[it->node].tag == T_VIDEO)
                 p = video_of(it->node);
+            if (!p && it->node >= 0 && it->node < doc.count && doc.nodes[it->node].tag == T_CANVAS)
+                p = canvas_of(it->node, &alpha);
             if (p && p->rgb && it->w > 0 && it->h > 0) {
                 /* Nearest neighbour, chosen rather than settled for. A
                    picture on a page is usually drawn at or near its own
@@ -3429,7 +3456,7 @@ static int draw_video_frames(surface *win_s, int win, int view_x, int view_y, in
     int iy0 = view_y + 2, iy1 = view_y + view_h - 2;
     for (int i = 0; i < page.nitems; i++) {
         const litem *it = &page.items[i];
-        if (it->kind != LK_IMAGE || it->node < 0 || it->node >= doc.count || doc.nodes[it->node].tag != T_VIDEO) continue;
+        if (it->kind != LK_IMAGE || it->node < 0 || it->node >= doc.count || !lay_painted(doc.nodes[it->node].tag)) continue;
         int rx = view_x + UI_PAD + it->x, ry = view_y + 2 + it->y - scroll, rw = it->w, rh = it->h;
         if (rx < ix0) { rw -= ix0 - rx; rx = ix0; }
         if (ry < iy0) { rh -= iy0 - ry; ry = iy0; }
@@ -3709,10 +3736,11 @@ int main(int argc, char **argv) {
 
         /* A video's new frame is drawn, on its own when nothing else
            changed; one whose size changed is laid out again first
-           (jsmedia.h). */
+           (jsmedia.h). A canvas drawn on is drawn the same way. */
         if (jsdom_live()) {
             int resized = 0;
             if (jsdom_media_frames(&resized)) video_due = 1;
+            if (jsdom_canvas_drawn()) video_due = 1;
             if (resized) { relayout(view_w - UI_PAD * 2); dirty = 1; }
         }
 

@@ -3932,18 +3932,6 @@ static jval nat_img_decode(jctx *J, jval t, jval *a, int n) {
     return jd_resolved_promise(J, js_undef());
 }
 
-/* A canvas this browser has no drawing context for, and says so the way
-   the standard lets it: getContext gives null. */
-static jval nat_canvas_context(jctx *J, jval t, jval *a, int n) {
-    (void)J; (void)t; (void)a; (void)n;
-    return js_null();
-}
-
-static jval nat_canvas_data_url(jctx *J, jval t, jval *a, int n) {
-    (void)J; (void)t; (void)a; (void)n;
-    return jd_str("data:,");
-}
-
 /* The window's document: an accessor of the window's own, as the standard
    has it, since Transcend's consent manager calls the getter it takes off
    the window. */
@@ -6255,6 +6243,7 @@ static void jd_consts(jctx *J, jobj *on, const char *const *names, int from);
 #include "jsws.h"
 #include "jsframe.h"
 #include "jsmedia.h"
+#include "jscanvas.h"
 #include "jsprelude.h"
 
 /* --- the hooks -----------------------------------------------------------------------------------
@@ -6607,12 +6596,6 @@ static void jd_setup_html(jctx *J) {
         jd_method(J, p, "checkValidity", nat_true_fn, 0);
         jd_method(J, p, "reportValidity", nat_true_fn, 0);
         jd_method(J, p, "setCustomValidity", nat_nothing_js, 1);
-    }
-    if ((p = jd_iface("HTMLCanvasElement"))) {
-        jd_reflect_as(J, p, "width", "width", JR_INT, js_num(300));
-        jd_reflect_as(J, p, "height", "height", JR_INT, js_num(150));
-        jd_method(J, p, "getContext", nat_canvas_context, 1);
-        jd_method(J, p, "toDataURL", nat_canvas_data_url, 0);
     }
     if ((p = jd_iface("HTMLDataElement"))) jd_reflect_strs(J, p, "value");
     if ((p = jd_iface("HTMLDetailsElement"))) jd_reflect_bools(J, p, "open");
@@ -7036,6 +7019,7 @@ static void jd_setup(jctx *J) {
     jd_setup_net(J);
     jd_setup_ws(J);
     jd_setup_media(J);
+    jd_setup_canvas(J);
     jd_setup_frames(J);
     jd_setup_navigator(J);
     jd_setup_location(J);
@@ -7089,6 +7073,7 @@ static void jsdom_close(void) {
     jw_close_all();
     jd_ws_reset();
     jd_media_reset();
+    jd_canvas_reset();
     for (int i = 0; i < jd_nreq; i++) { jd_request_drop(i); jd_req[i].waiting = 0; jd_req[i].self = 0; }
     jd_nreq = 0;
     if (!jd_open) return;

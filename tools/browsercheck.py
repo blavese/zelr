@@ -118,6 +118,8 @@ PAPER = (0xFF, 0xFF, 0xFF)
 # else on the screen is this, so counting it asks whether the thing arrived,
 # decoded and reached the glass -- three separate things, one number.
 LOGO = (0xE1, 0x1D, 0x48)
+CANVAS_FILL = (0x1E, 0x90, 0xA0)      # /canvas: what the script fills it with
+CANVAS_DISC = (0xA0, 0x50, 0x1E)      # and the circle drawn on it later
 
 # The colour /styled asks for its band to be. Nothing else on the screen is
 # this colour, so counting it is the same question as "was the sheet read".
@@ -440,8 +442,25 @@ def main():
             c.add("pictures a script gives a source, and adds, after the page is shown are drawn (%d)"
                   % count_in(pxl, wl, PAGE, LOGO), both and count_in(pxl, wl, PAGE, LOGO) > 20000, shotl)
 
+            # --- a canvas a script draws on ----------------------------------
+            #
+            # Filled teal as the page loads, then an orange circle drawn on it
+            # after it is shown: both on the screen, the circle about the
+            # area it should be. getContext gave null, and the page showed
+            # the canvas's fallback words.
+            go(vm, mon, "http://%s/canvas" % srv.host, settle=12.0,
+               was=late, name="br-going-canvas")
+            _, _, _, _, drew = mon.wait_screen(
+                "br-canvas", lambda w, h, px: count_in(px, w, PAGE, CANVAS_FILL) > 30000
+                and count_in(px, w, PAGE, CANVAS_DISC) > 9000, timeout=30)
+            canv, pxv, wv, shotv = page_settled(mon, "br-canvas-settled")
+            teal, orange = count_in(pxv, wv, PAGE, CANVAS_FILL), count_in(pxv, wv, PAGE, CANVAS_DISC)
+            c.add("a canvas a script fills is drawn on the page (%d)" % teal, drew and teal > 30000, shotv)
+            c.add("and what it draws after the page is shown is drawn too (%d)" % orange,
+                  drew and 9000 < orange < 13000, shotv)
+
             go(vm, mon, "http://%s/scripted" % srv.host, settle=12.0,
-               was=late, name="br-going-scripted")
+               was=canv, name="br-going-scripted")
             scripted, pxc, wc, shotc = page_settled(mon, "br-scripted")
             c.add("a page's own script runs, and changes the page",
                   count_in(pxc, wc, PAGE, BAND) > 3000, shotc)

@@ -1952,6 +1952,30 @@ int main(void) {
             mk && mk->x >= 600, mk ? mk->x : -1);
     }
 
+    /* --- a canvas ---------------------------------------------------------------------
+     *
+     * As big as its bitmap, which its width and height attributes make (300
+     * by 150 without them), its shape kept when the page's rules give it one
+     * side; and what is written inside it is for a browser that cannot draw
+     * one. It had been an unknown element, its fallback words laid out and
+     * no box for its picture. */
+    {
+        lay("<canvas width=50 height=20>fallback words</canvas>", 600);
+        int only = page.nitems == 1 && page.items[0].kind == LK_IMAGE
+                   && page.items[0].w == 50 && page.items[0].h == 20;
+        okn("a canvas is a box its attributes' size, and its fallback is not laid out", only, page.nitems);
+        lay("<style>.w{width:200px}</style><canvas id=c1 width=100 height=50 class=w></canvas><canvas id=c2></canvas>", 600);
+        int c1 = by_id("c1"), c2 = by_id("c2");
+        const litem *i1 = 0, *i2 = 0;
+        for (int i = 0; i < page.nitems; i++) {
+            if (page.items[i].kind != LK_IMAGE) continue;
+            if (page.items[i].node == c1) i1 = &page.items[i];
+            if (page.items[i].node == c2) i2 = &page.items[i];
+        }
+        okn("given a width, its height keeps its shape", i1 && i1->w == 200 && i1->h == 100, i1 ? i1->h : -1);
+        okn("and with no attributes it is 300 by 150", i2 && i2->w == 300 && i2->h == 150, i2 ? i2->w : -1);
+    }
+
     puts(failed ? "LAYOUTTEST_FAIL\n" : "LAYOUTTEST_PASS\n");
     return failed;
 }

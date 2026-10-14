@@ -576,6 +576,29 @@ setTimeout(function () {
 </body></html>
 """
 
+# A canvas a script draws on: filled as the page loads, and a circle drawn
+# on it a moment after it is shown, which only a browser that draws a canvas
+# again when it changes shows.
+CANVAS_PAGE = b"""<!doctype html>
+<html><head><title>a canvas</title>
+<style>body { font-family: sans-serif; padding: 24px }</style></head>
+<body>
+<h1>a canvas</h1>
+<canvas id="c" width="300" height="150">a browser that cannot draw one</canvas>
+<script>
+var x = document.getElementById('c').getContext('2d');
+x.fillStyle = '#1e90a0';
+x.fillRect(0, 0, 300, 150);
+setTimeout(function () {
+  x.fillStyle = '#a0501e';
+  x.beginPath();
+  x.arc(150, 75, 60, 0, Math.PI * 2);
+  x.fill();
+}, 800);
+</script>
+</body></html>
+"""
+
 BARE = STYLED.replace(b'<link rel="stylesheet" href="/style.css">', b"")
 BARE = BARE[:BARE.index(b"<style>")] + BARE[BARE.index(b"</style>") + 8:]
 BARE = BARE.replace(b' style="text-align:center;color:#15803d"', b"")
@@ -1145,6 +1168,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._send(HELD_PAGE)
         elif path == "/late-picture":
             self._send(LATE_PAGE)
+        elif path == "/canvas":
+            self._send(CANVAS_PAGE)
         elif path == "/held/logo.png":
             HELD.wait(timeout=90)
             self._send(LOGO, ctype="image/png")

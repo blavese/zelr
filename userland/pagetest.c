@@ -18,6 +18,7 @@
 #include "css.h"
 #include "fetch.h"
 #include "jsdom.h"
+#include "png.h"
 #include "mediadata.h"
 
 static int failed;
@@ -1787,6 +1788,149 @@ int main(void) {
                " Object.getOwnPropertyDescriptor(window, 'document').get.call(window) === document].join(' ');</script></body>"),
         "all 0 201 true true title d title go 5 false true");
 
+    /* --- a canvas's 2d context (jscanvas.h) -----------------------------------------------
+     *
+     * getContext('2d') gave null, and Lottie, which makes a canvas and paints
+     * on it as its module loads, stopped every page carrying it (Vimeo's).
+     * Each check draws and reads the pixels back. */
+    oks("a canvas has a 2d context, the same each time, and Lottie's first use of it works",
+        titled("<script>var c = document.createElement('canvas'); c.width = 1; c.height = 1;"
+               "var x = c.getContext('2d'); x.fillStyle = 'rgba(0,0,0,0)'; x.fillRect(0, 0, 1, 1);"
+               "document.title = [x === c.getContext('2d'), x.canvas === c, String(c.getContext('webgl')),"
+               " x instanceof CanvasRenderingContext2D, x.fillStyle, c.width, document.createElement('canvas').height].join(' ');"
+               "</script>"),
+        "true true null true rgba(0, 0, 0, 0) 1 150");
+    oks("rectangles are filled in their colours, and a colour is given back as the standard writes it",
+        titled("<script>var c = document.createElement('canvas'); c.width = 20; c.height = 10;"
+               "var x = c.getContext('2d'); x.fillStyle = '#f00'; x.fillRect(0, 0, 10, 10);"
+               "x.fillStyle = 'rgb(0, 0, 255)'; x.fillRect(10, 0, 10, 10);"
+               "var d = x.getImageData(0, 0, 20, 10).data, p = (5 * 20 + 15) * 4;"
+               "document.title = [d[0], d[1], d[2], d[3], d[p], d[p + 2], d[p + 3], x.fillStyle, d.length,"
+               " d instanceof Uint8ClampedArray].join(' ');</script>"),
+        "255 0 0 255 0 255 255 #0000ff 800 true");
+    oks("a circle's area is what it should be, its middle filled and its corners not",
+        titled("<script>var c = document.createElement('canvas'); c.width = 40; c.height = 40;"
+               "var x = c.getContext('2d'); x.beginPath(); x.arc(20, 20, 15, 0, Math.PI * 2); x.fill();"
+               "var d = x.getImageData(0, 0, 40, 40).data, sum = 0;"
+               "for (var i = 3; i < d.length; i += 4) sum += d[i];"
+               "document.title = [Math.abs(sum / 255 - Math.PI * 225) < 4, d[(20 * 40 + 20) * 4 + 3],"
+               " d[(2 * 40 + 2) * 4 + 3]].join(' ');</script>"),
+        "true 255 0");
+    oks("a stroke is as wide as lineWidth, on both sides of its line, and leaves the inside alone",
+        titled("<script>var c = document.createElement('canvas'); c.width = 40; c.height = 40;"
+               "var x = c.getContext('2d'); x.lineWidth = 4; x.strokeStyle = '#00ff00'; x.strokeRect(10, 10, 20, 20);"
+               "var a = function (px, py) { var d = x.getImageData(px, py, 1, 1).data; return d[1] + '/' + d[3]; };"
+               "document.title = [a(10, 20), a(8, 20), a(11, 20), a(13, 20), a(20, 20), a(7, 20)].join(' ');</script>"),
+        "255/255 255/255 255/255 0/0 0/0 0/0");
+    oks("transforms move what is drawn, and save and restore bring the state back",
+        titled("<script>var c = document.createElement('canvas'); c.width = 30; c.height = 20;"
+               "var x = c.getContext('2d'); x.save(); x.translate(10, 0); x.scale(2, 1); x.fillStyle = 'red';"
+               "x.fillRect(0, 0, 5, 5); x.restore(); x.fillRect(0, 10, 5, 5);"
+               "var a = function (px, py) { return x.getImageData(px, py, 1, 1).data[3]; }, m = x.getTransform();"
+               "document.title = [a(15, 2), a(19, 2), a(21, 2), a(5, 2), a(2, 12), x.fillStyle, m.a, m.e,"
+               " m instanceof DOMMatrix].join(' ');</script>"),
+        "255 255 0 0 255 #000000 1 0 true");
+    oks("globalAlpha lays a colour over what is there, and destination-out takes it away",
+        titled("<script>var c = document.createElement('canvas'); c.width = 10; c.height = 10;"
+               "var x = c.getContext('2d'); x.fillStyle = '#fff'; x.fillRect(0, 0, 10, 10);"
+               "x.globalAlpha = 0.5; x.fillStyle = '#000'; x.fillRect(0, 0, 10, 10);"
+               "var p = x.getImageData(5, 5, 1, 1).data; x.globalAlpha = 1;"
+               "x.globalCompositeOperation = 'destination-out'; x.fillRect(0, 0, 5, 10);"
+               "var q = x.getImageData(2, 5, 1, 1).data;"
+               "document.title = [Math.abs(p[0] - 128) <= 1, p[3], q[3], x.globalCompositeOperation, x.globalAlpha].join(' ');"
+               "</script>"),
+        "true 255 0 destination-out 1");
+    oks("a clip keeps drawing and clearing inside it",
+        titled("<script>var c = document.createElement('canvas'); c.width = 20; c.height = 20;"
+               "var x = c.getContext('2d'); x.fillStyle = 'red'; x.fillRect(0, 0, 20, 20);"
+               "x.save(); x.beginPath(); x.rect(0, 0, 10, 10); x.clip(); x.fillStyle = 'blue'; x.fillRect(0, 0, 20, 20);"
+               "x.clearRect(0, 5, 20, 15); x.restore();"
+               "var a = function (px, py) { var d = x.getImageData(px, py, 1, 1).data; return d[0] + ',' + d[2] + ',' + d[3]; };"
+               "document.title = [a(5, 2), a(15, 2), a(5, 7), a(15, 15)].join(' ');</script>"),
+        "0,255,255 255,0,255 0,0,0 255,0,255");
+    oks("a linear gradient runs between its stops, and a radial one from its middle",
+        titled("<script>var c = document.createElement('canvas'); c.width = 101; c.height = 101;"
+               "var x = c.getContext('2d'); var g = x.createLinearGradient(0, 0, 100, 0);"
+               "g.addColorStop(0, '#000'); g.addColorStop(1, '#fff'); x.fillStyle = g; x.fillRect(0, 0, 101, 50);"
+               "var r = x.createRadialGradient(50, 75, 0, 50, 75, 20); r.addColorStop(0, '#f00'); r.addColorStop(1, '#00f');"
+               "x.fillStyle = r; x.fillRect(0, 51, 101, 50);"
+               "var m = x.getImageData(50, 10, 1, 1).data, e = x.getImageData(99, 10, 1, 1).data;"
+               "var mid = x.getImageData(50, 75, 1, 1).data, out = x.getImageData(90, 75, 1, 1).data, bad = 'none';"
+               "try { g.addColorStop(2, 'red'); } catch (err) { bad = err.name; }"
+               "document.title = [Math.abs(m[0] - 128) <= 3, e[0] > 245, mid[0] > 240 && mid[2] < 20, out[2] === 255 && out[0] === 0,"
+               " x.fillStyle === r, bad].join(' ');</script>"),
+        "true true true true true IndexSizeError");
+    /* A maxWidth of undefined is none at all: Chart.js passes one, and no
+       chart had a word on it. */
+    oks("text is measured and drawn in the browser's faces, and moved by textAlign",
+        titled("<script>var c = document.createElement('canvas'); c.width = 200; c.height = 40;"
+               "var x = c.getContext('2d'); x.font = 'bold 20px sans-serif';"
+               "var w = x.measureText('Hello').width, w2 = x.measureText('Hello Hello').width;"
+               "x.fillText('Hello', 10, 30, undefined); var d = x.getImageData(0, 0, 100, 40).data, ink = 0, left = 999;"
+               "for (var i = 0; i < 100 * 40; i++) if (d[i * 4 + 3] > 128) { ink++; left = Math.min(left, i % 100); }"
+               "x.clearRect(0, 0, 200, 40); x.textAlign = 'center'; x.fillText('Hello', 100, 30);"
+               "var e = x.getImageData(0, 0, 200, 40).data, left2 = 999;"
+               "for (var j = 0; j < 200 * 40; j++) if (e[j * 4 + 3] > 128) left2 = Math.min(left2, j % 200);"
+               "document.title = [w > 30 && w < 80, w2 > w * 2, ink > 50, left >= 9 && left <= 12,"
+               " Math.abs(left2 - (100 - w / 2)) <= 3, x.font, x.textAlign].join(' ');</script>"),
+        "true true true true true bold 20px sans-serif center");
+    oks("a canvas is drawn on another, scaled, and a picture's bytes are put and read as they are",
+        titled("<script>var s = document.createElement('canvas'); s.width = 2; s.height = 2;"
+               "var sx = s.getContext('2d'); sx.fillStyle = '#00ff00'; sx.fillRect(0, 0, 2, 2);"
+               "var c = document.createElement('canvas'); c.width = 20; c.height = 20; var x = c.getContext('2d');"
+               "x.drawImage(s, 0, 0, 10, 10); var a = x.getImageData(5, 5, 1, 1).data, b = x.getImageData(15, 15, 1, 1).data;"
+               "var id = new ImageData(2, 1); id.data[0] = 9; id.data[3] = 200; id.data[5] = 7; id.data[7] = 100;"
+               "x.globalAlpha = 0.1; x.putImageData(id, 18, 0); var p = x.getImageData(18, 0, 2, 1).data;"
+               "var made = x.createImageData(3, 2), bad = 'none';"
+               "try { x.drawImage({}, 0, 0); } catch (e) { bad = e.name; }"
+               "document.title = [a[1], a[3], b[3], p[0], p[3], p[5], p[7], made.width, made.data.length, bad].join(' ');"
+               "</script>"),
+        "255 255 0 9 200 7 100 3 24 TypeError");
+    oks("a Path2D is filled where it was drawn, from its own commands or an SVG path's",
+        titled("<script>var c = document.createElement('canvas'); c.width = 20; c.height = 20;"
+               "var x = c.getContext('2d'); var p = new Path2D('M0 0 L10 0 L10 10 Z'); x.fill(p);"
+               "var q = new Path2D(); q.rect(12, 12, 4, 4); x.fill(q);"
+               "var a = function (px, py) { return x.getImageData(px, py, 1, 1).data[3]; };"
+               "document.title = [a(8, 2), a(2, 8), a(13, 13), a(18, 18), x.isPointInPath(p, 8, 2), x.isPointInPath(p, 2, 8)].join(' ');"
+               "</script>"),
+        "255 0 255 0 true false");
+    oks("setting a canvas's width clears it and its context's state, the same width or not",
+        titled("<script>var c = document.createElement('canvas'); c.width = 10; c.height = 10;"
+               "var x = c.getContext('2d'); x.fillStyle = 'red'; x.translate(5, 5); x.fillRect(-5, -5, 10, 10);"
+               "var before = x.getImageData(2, 2, 1, 1).data[3]; c.width = c.width;"
+               "document.title = [before, x.getImageData(2, 2, 1, 1).data[3], x.fillStyle, x.getTransform().e,"
+               " c.getAttribute('width')].join(' ');</script>"),
+        "255 0 #000000 0 10");
+    {
+        /* toDataURL as a PNG another decoder reads back: png.h, with what is
+           clear laid over green. */
+        const char *got = titled("<script>var c = document.createElement('canvas'); c.width = 4; c.height = 2;"
+                                 "var x = c.getContext('2d'); x.fillStyle = 'red'; x.fillRect(0, 0, 2, 2);"
+                                 "document.title = c.toDataURL();</script>");
+        const char *pre = "data:image/png;base64,";
+        int ok_pre = 1;
+        for (int i = 0; pre[i]; i++) if (got[i] != pre[i]) ok_pre = 0;
+        static u8 bytes[256];
+        int nb = 0;
+        if (ok_pre) {
+            u32 acc = 0;
+            int bits = 0;
+            for (const char *p = got + 22; *p && *p != '=' && nb < (int)sizeof(bytes); p++) {
+                int v = *p >= 'A' && *p <= 'Z' ? *p - 'A' : *p >= 'a' && *p <= 'z' ? *p - 'a' + 26
+                      : *p >= '0' && *p <= '9' ? *p - '0' + 52 : *p == '+' ? 62 : *p == '/' ? 63 : -1;
+                if (v < 0) break;
+                acc = acc << 6 | (u32)v;
+                bits += 6;
+                if (bits >= 8) { bits -= 8; bytes[nb++] = (u8)(acc >> bits); }
+            }
+        }
+        picture pic;
+        int rc = nb ? png_decode(bytes, nb, &pic, 0x00FF00) : -1;
+        int right = rc == 0 && pic.w == 4 && pic.h == 2 && pic.rgb
+                    && pic.rgb[0] == 255 && pic.rgb[1] == 0 && pic.rgb[3 * 3 + 0] == 0 && pic.rgb[3 * 3 + 1] == 255;
+        ok("toDataURL is a PNG of the canvas that another decoder reads back, clear where it was not drawn", ok_pre && right);
+        if (rc == 0 && pic.rgb) free(pic.rgb);
+    }
     {
         load("<body><p id=out>none</p><script>var n = 0;"
              "requestAnimationFrame(function(t){ document.getElementById('out').textContent = typeof t + ' ' + (t >= 0); });"
