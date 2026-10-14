@@ -1774,11 +1774,22 @@ static long long free_memory(void) {
     return (long long)si.mem_free_kb * 1024;
 }
 
+static int ahead_take(const url_t *u, const char **out);
+
 static int fetch_script(const char *src, const char **out) {
     if (scripts_outside >= SCRIPTS_MAX || scripts_bytes >= SCRIPTS_BYTES || !scriptbuf) return 0;
 
     url_t u;
     if (!url_join(&here, src, &u)) return 0;
+
+    /* Asked for already, with the page's other files (scripts_ahead). */
+    int got = ahead_take(&u, out);
+    if (got > 0) {
+        if (scripts_bytes + got > SCRIPTS_BYTES) return 0;
+        scripts_outside++;
+        scripts_bytes += got;
+        return got;
+    }
 
     response_t r;
     int rc = web_get(&u, scriptbuf, SCRIPT_MAX, &r);
@@ -2058,6 +2069,127 @@ static void asks_drop_all(void) {
         web_job_stop(&asks[i].job);
         asks[i].used = 0;
     }
+}
+
+/* --- a page's script files, asked for together --------------------------------
+ *
+ * The scripts a page is written with run one after another in the order
+ * written, and each one's file was asked for when its turn came and waited
+ * for: Imgur's forty-five took seven seconds on the host, one round trip
+ * after another. A browser reads ahead and asks for them together; so does
+ * this now. Before the first runs, every script element with a src that
+ * will run is put in a list, and each pass asks for as many as there are
+ * ways out (the asks above, which keep their connections, so a site's files
+ * come over one or two); a script whose turn comes takes its file from the
+ * list (fetch_script), waiting only for its own, and the rest go on coming
+ * meanwhile. What has not been taken when the scripts are done is let go.
+ * A file that would not come this way is asked for the old way, once. */
+#define AHEAD_MAX 64
+
+typedef struct {
+    char  url[URL_TEXT];
+    int   state;                        /* 0 to ask, 1 asked (slot + 1 in ask), 2 here, 3 would not come, 4 taken */
+    int   ask;
+    char *text;
+    int   len;
+} ahead_t;
+
+static ahead_t ahead[AHEAD_MAX];
+static int nahead;
+static char *ahead_given;              /* the text fetch_script last handed out, freed at the next */
+
+static void ahead_drop(void) {
+    for (int i = 0; i < nahead; i++) {
+        if (ahead[i].state == 1) ask_end(ahead[i].ask - 1);
+        if (ahead[i].text) free(ahead[i].text);
+        ahead[i].text = 0;
+    }
+    nahead = 0;
+    if (ahead_given) free(ahead_given);
+    ahead_given = 0;
+}
+
+/* One pass: what has come taken out of its slot, and what waits asked for
+   while a slot is free, in the order written. */
+static void ahead_pump(void) {
+    for (int i = 0; i < nahead; i++) {
+        ahead_t *a = &ahead[i];
+        if (a->state != 1) continue;
+        ask_t *k = &asks[a->ask - 1];
+        int st = web_job_step(&k->job);
+        if (st == 0) continue;
+        response_t *r = &k->job.r;
+        ASK_SEEN("GET", a->url, st > 0 ? r->status : st);
+        a->state = 3;
+        if (st > 0 && r->status >= 200 && r->status < 300 && r->len > 0 && !r->truncated && !r->cut) {
+            a->text = (char *)malloc((u64)r->len + 1);
+            if (a->text) {
+                for (int b = 0; b < r->len; b++) a->text[b] = r->body[b];
+                a->text[r->len] = 0;
+                a->len = r->len;
+                a->state = 2;
+            }
+        }
+        ask_end(a->ask - 1);
+        a->ask = 0;
+    }
+    for (int i = 0; i < nahead; i++) {
+        if (ahead[i].state != 0) continue;
+        int id = ask_begin("GET", ahead[i].url, 0, 0, 0, 0, SCRIPT_MAX, 0);
+        if (id == -1) break;
+        if (id < 0) { ahead[i].state = 3; continue; }
+        ahead[i].state = 1;
+        ahead[i].ask = id + 1;
+    }
+}
+
+/* The page's script files listed and the first ones asked for: those the
+   parser made that will run, classic or a module's first file, with a src
+   that is an address (a data: or blob: one carries its own). */
+static void scripts_ahead(void) {
+    ahead_drop();
+    for (int i = 0; i < doc.count && nahead < AHEAD_MAX; i++) {
+        if (doc.nodes[i].kind != DN_ELEMENT || doc.nodes[i].tag != T_SCRIPT) continue;
+        const char *s = dom_attr(&doc, i, "src");
+        if (!s || !*s || w_starts_fold(s, "data:") || w_starts_fold(s, "blob:")) continue;
+        if (dom_attr(&doc, i, "nomodule")) continue;
+        const char *type = dom_attr(&doc, i, "type");
+        if (type && *type && !w_same_fold(type, "module") && !w_starts_fold(type, "text/javascript")
+            && !w_starts_fold(type, "application/javascript") && !w_same_fold(type, "text/ecmascript"))
+            continue;
+        url_t u;
+        if (!url_join(&here, s, &u)) continue;
+        url_text(&u, ahead[nahead].url, sizeof(ahead[nahead].url));
+        ahead[nahead].state = 0;
+        ahead[nahead].ask = 0;
+        ahead[nahead].text = 0;
+        ahead[nahead].len = 0;
+        nahead++;
+    }
+    ahead_pump();
+}
+
+/* A file for fetch_script from the list, waiting for it if it is still
+   coming: its length, or 0 when it is not in the list or would not come
+   this way. The text is good until the next call. */
+static int ahead_take(const url_t *u, const char **out) {
+    if (!nahead) return 0;
+    char want[URL_TEXT];
+    url_text(u, want, sizeof(want));
+    int i = 0;
+    for (; i < nahead; i++) if (ahead[i].state != 4 && w_same(ahead[i].url, want)) break;
+    if (i == nahead) return 0;
+    while (ahead[i].state == 0 || ahead[i].state == 1) {
+        ahead_pump();
+        if (ahead[i].state == 0 || ahead[i].state == 1) sleep_ms(5);
+    }
+    if (ahead[i].state != 2) { ahead[i].state = 4; return 0; }
+    if (ahead_given) free(ahead_given);
+    ahead_given = ahead[i].text;
+    ahead[i].text = 0;
+    ahead[i].state = 4;
+    *out = ahead_given;
+    return ahead[i].len;
 }
 
 /* The page as it is drawn: itself, or when a script has attached shadow
@@ -2738,7 +2870,9 @@ static void build(const char *html, int len, int width, int want_sheets,
         jsdom_sheet_text_with(sheet_text_for_script);
         styles_live = want_sheets;
         links_report();
+        scripts_ahead();
         scripts_ran = jsdom_scripts(script_err, (int)sizeof(script_err));
+        ahead_drop();
         jsdom_loaded();
         scripts_changed = jsdom_changed();
     }

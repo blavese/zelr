@@ -621,6 +621,38 @@ document.head.appendChild(s);
 </body></html>
 """
 
+# Six script files the server answers a second late each, and how many of
+# them it was asked for at once (DELAY_MOST): a browser that asks for a
+# page's files together has several under way, one that asks for each in
+# its turn one. Each adds its number; the page draws a teal block once all
+# six have run in the order written.
+TOGETHER_PAGE = b"""<!doctype html>
+<html><head><title>together</title>
+<style>body { font-family: sans-serif; padding: 24px }</style>
+<script src="/delay/1.js"></script>
+<script src="/delay/2.js"></script>
+<script src="/delay/3.js"></script>
+<script src="/delay/4.js"></script>
+<script src="/delay/5.js"></script>
+<script src="/delay/6.js"></script>
+</head>
+<body>
+<h1>six files</h1>
+<script>
+if (window.order === '123456') {
+  var b = document.createElement('div');
+  b.style.cssText = 'width: 300px; height: 80px; background: #1e9080';
+  document.body.appendChild(b);
+}
+document.title = 'together ' + window.order;
+</script>
+</body></html>
+"""
+
+DELAY_LOCK = threading.Lock()
+DELAY_NOW = 0
+DELAY_MOST = 0
+
 # A canvas a script draws on: filled as the page loads, and a circle drawn
 # on it a moment after it is shown, which only a browser that draws a canvas
 # again when it changes shows.
@@ -1219,6 +1251,20 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._send(PSEUDO_PAGE)
         elif path == "/inserted":
             self._send(INSERTED_PAGE)
+        elif path == "/together":
+            self._send(TOGETHER_PAGE)
+        elif path.startswith("/delay/") and path.endswith(".js"):
+            global DELAY_NOW, DELAY_MOST
+            import time
+            n = path[len("/delay/"):-3]
+            with DELAY_LOCK:
+                DELAY_NOW += 1
+                DELAY_MOST = max(DELAY_MOST, DELAY_NOW)
+            time.sleep(1.0)
+            with DELAY_LOCK:
+                DELAY_NOW -= 1
+            self._send(("window.order = (window.order || '') + '%s';" % n).encode(),
+                       ctype="application/javascript")
         elif path == "/late.js":
             import time
             time.sleep(2.0)

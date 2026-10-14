@@ -25,6 +25,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from harness import (Guest, Checks, build_once, centre_of,      # noqa: E402
                      count_in, ROOT)
 from webserver import Server                                    # noqa: E402
+import webserver                                                # noqa: E402
 
 DISK = os.path.join(ROOT, "browsercheck.%d.img" % os.getpid())
 
@@ -122,6 +123,7 @@ CANVAS_FILL = (0x1E, 0x90, 0xA0)      # /canvas: what the script fills it with
 CANVAS_DISC = (0xA0, 0x50, 0x1E)      # and the circle drawn on it later
 PSEUDO_GREEN = (0x20, 0xB0, 0x60)     # /pseudo: the block its ::before makes
 WENT_ON = (0x60, 0x40, 0xC0)          # /inserted: its timers went on while its script came
+TOGETHER = (0x1E, 0x90, 0x80)         # /together: its six files ran in the order written
 STOOD = (0xC0, 0x30, 0x30)            # and the block it draws when they did not
 
 # The colour /styled asks for its band to be. Nothing else on the screen is
@@ -493,8 +495,25 @@ def main():
             c.add("a script a page puts in is fetched while the page's timers go on (%d, %d)" % (purple, red),
                   done and purple > 20000 and red < 100, shoti)
 
+            # --- a page's script files, asked for together ------------------
+            #
+            # Six files the server answers a second late each: asked for one
+            # after another that is six seconds and one at a time; together,
+            # several at once. They must still run in the order written.
+            webserver.DELAY_MOST = 0
+            go(vm, mon, "http://%s/together" % srv.host, settle=12.0,
+               was=ins, name="br-going-together")
+            _, _, _, _, ran6 = mon.wait_screen(
+                "br-together", lambda w, h, px: count_in(px, w, PAGE, TOGETHER) > 20000, timeout=40)
+            tog, pxt, wt_, shott = page_settled(mon, "br-together-settled")
+            teal = count_in(pxt, wt_, PAGE, TOGETHER)
+            c.add("a page's six script files run in the order written (%d)" % teal,
+                  ran6 and teal > 20000, shott)
+            c.add("and were asked for together, %d at once" % webserver.DELAY_MOST,
+                  webserver.DELAY_MOST >= 2, shott)
+
             go(vm, mon, "http://%s/scripted" % srv.host, settle=12.0,
-               was=ins, name="br-going-scripted")
+               was=tog, name="br-going-scripted")
             scripted, pxc, wc, shotc = page_settled(mon, "br-scripted")
             c.add("a page's own script runs, and changes the page",
                   count_in(pxc, wc, PAGE, BAND) > 3000, shotc)
