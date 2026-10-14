@@ -181,6 +181,8 @@ static SOCKET tcp_to(const char *host, int port) {
     return s;
 }
 
+static int time_at;                    /* how much of /sys/time has been read */
+
 zw host_syscall(zw n, zw a, zw b, zw c) {
     switch (n) {
     case 0: fflush(stdout); exit((int)a);
@@ -299,6 +301,28 @@ zw host_syscall(zw n, zw a, zw b, zw c) {
     }
     case 60: VirtualFree((void *)a, 0, MEM_RELEASE); return 0;
     case 38: case 39: return 0;
+    /* One file: /sys/time, the wall clock as the kernel writes it (sysfs.c,
+       render_time), from the host's own in UTC, as the machine's CMOS clock
+       is. The script engine reads it for Date (jsprom.h, js_now); with
+       nothing there it took 2026-01-01, and Cloudflare's checks told the
+       host's pages their device's clock was wrong. */
+    case 13:
+        if (a && strcmp((const char *)a, "/sys/time") == 0) { time_at = 0; return 99; }
+        return -1;
+    case 15: {
+        if (a != 99) return -1;
+        SYSTEMTIME st;
+        GetSystemTime(&st);
+        char t[96];
+        int n = snprintf(t, sizeof(t), "now       %04d-%02d-%02d %02d:%02d:%02d\nsource    host clock\n",
+                         st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
+        int k = n - time_at < c ? n - time_at : (int)c;
+        if (k <= 0) return 0;
+        memcpy((void *)b, t + time_at, (size_t)k);
+        time_at += k;
+        return k;
+    }
+    case 14: return a == 99 ? 0 : -1;
     default:
         return -1;
     }
