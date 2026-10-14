@@ -1495,6 +1495,15 @@ int main(void) {
            "[/\\s/.test('\\u2003'), /\\S/.test('\\u2003'), /\\W/.test('\\u00e9'), /\\p{L}+/u.exec('h\\u00e9llo w')[0] === 'h\\u00e9llo',"
            " /\\uD83D\\uDE00/.test('\\ud83d\\ude00'), /[\\x80-\\xff]/.test(atob('gA==')), /[\\x80-\\xbf]/.test('\\u00e9')].join()",
            "true,false,true,true,true,true,false");
+    /* FormatJS's message parser reads Pattern_Syntax and Pattern_White_Space,
+       and a page that loaded it (Yahoo's) stopped on the class; the space
+       separators (Zs) had been all of White_Space, a tab and a new line too. */
+    expect("the binary properties are Unicode's: Pattern_Syntax, Pattern_White_Space, White_Space and the rest",
+           "[/^[\\p{Pattern_Syntax}\\p{Pattern_White_Space}]+$/u.test('{}#\\u2192 \\t'), /\\p{Pattern_Syntax}/u.test('a'),"
+           " /\\p{White_Space}/u.test('\\n'), /\\p{White_Space}/u.test('\\u00a0'), /\\p{Pattern_White_Space}/u.test('\\u00a0'),"
+           " /^\\p{Emoji_Component}+$/u.test('#\\u200d'), /\\p{RI}/u.test('\\ud83c\\udde6'), /\\p{AHex}/u.test('g'),"
+           " /\\p{Zs}/u.test('\\t'), /\\p{Zs}/u.test('\\u3000'), /\\p{Z}/u.test('\\u2028')].join()",
+           "true,false,true,true,false,true,true,false,false,true,true");
     expect("DOMException is an Error with a name, a message and the old code, and atob throws one",
            "(function(){ var e = new DOMException('gone', 'NotFoundError'), r = [e.name, e.message, e.code,"
            " e instanceof Error, String(e), Object.prototype.toString.call(e), DOMException.DATA_CLONE_ERR,"

@@ -419,7 +419,9 @@ static const u32 RXP_P[][2] = {
     { 0x2053, 0x205E }, { 0x3001, 0x3003 }, { 0x3008, 0x3011 }, { 0x3014, 0x301F }, { 0xFE10, 0xFE19 },
     { 0xFE30, 0xFE4F }, { 0xFF01, 0xFF03 }, { 0xFF05, 0xFF0A }, { 0xFF0C, 0xFF0F }
 };
-static const u32 RXP_Z[][2] = {
+/* White_Space. The space separators (Zs) are only some of it: \p{Zs} had
+   been this, and matched a tab and a new line. */
+static const u32 RXP_WHITE_SPACE[][2] = {
     { '\t', '\r' }, { ' ', ' ' }, { 0x85, 0x85 }, { 0xA0, 0xA0 }, { 0x1680, 0x1680 }, { 0x2000, 0x200A },
     { 0x2028, 0x2029 }, { 0x202F, 0x202F }, { 0x205F, 0x205F }, { 0x3000, 0x3000 }
 };
@@ -706,6 +708,40 @@ static void rx_add_lists(rx *R, int c, const rx_list *ls, int nl, int neg) {
     rx_add_list(R, c, (const u32 (*)[2])m, w, neg);
 }
 
+/* Binary properties from Unicode's PropList.txt. Pattern_Syntax and
+   Pattern_White_Space never change (Unicode's stability policy says so);
+   FormatJS's message parser reads both, and a page that loaded it stopped
+   on the class (Yahoo's home page, whose app then took its own markup away). */
+static const u32 RXP_PATTERN_SYNTAX[][2] = {
+    { 0x21, 0x2F }, { 0x3A, 0x40 }, { 0x5B, 0x5E }, { 0x60, 0x60 }, { 0x7B, 0x7E }, { 0xA1, 0xA7 },
+    { 0xA9, 0xA9 }, { 0xAB, 0xAC }, { 0xAE, 0xAE }, { 0xB0, 0xB1 }, { 0xB6, 0xB6 }, { 0xBB, 0xBB },
+    { 0xBF, 0xBF }, { 0xD7, 0xD7 }, { 0xF7, 0xF7 }, { 0x2010, 0x2027 }, { 0x2030, 0x203E },
+    { 0x2041, 0x2053 }, { 0x2055, 0x205E }, { 0x2190, 0x245F }, { 0x2500, 0x2775 }, { 0x2794, 0x2BFF },
+    { 0x2E00, 0x2E7F }, { 0x3001, 0x3003 }, { 0x3008, 0x3020 }, { 0x3030, 0x3030 }, { 0xFD3E, 0xFD3F },
+    { 0xFE45, 0xFE46 },
+};
+static const u32 RXP_PATTERN_WS[][2] = {
+    { 0x09, 0x0D }, { 0x20, 0x20 }, { 0x85, 0x85 }, { 0x200E, 0x200F }, { 0x2028, 0x2029 },
+};
+static const u32 RXP_ZS[][2] = {
+    { 0x20, 0x20 }, { 0xA0, 0xA0 }, { 0x1680, 0x1680 }, { 0x2000, 0x200A }, { 0x202F, 0x202F }, { 0x205F, 0x205F },
+    { 0x3000, 0x3000 },
+};
+static const u32 RXP_ASCII_HEX[][2] = { { 0x30, 0x39 }, { 0x41, 0x46 }, { 0x61, 0x66 } };
+static const u32 RXP_HEX[][2] = {
+    { 0x30, 0x39 }, { 0x41, 0x46 }, { 0x61, 0x66 }, { 0xFF10, 0xFF19 }, { 0xFF21, 0xFF26 }, { 0xFF41, 0xFF46 },
+};
+static const u32 RXP_JOIN_CONTROL[][2] = { { 0x200C, 0x200D } };
+static const u32 RXP_REGIONAL[][2] = { { 0x1F1E6, 0x1F1FF } };
+static const u32 RXP_EMOJI_MODIFIER[][2] = { { 0x1F3FB, 0x1F3FF } };
+static const u32 RXP_EMOJI_COMPONENT[][2] = {
+    { 0x23, 0x23 }, { 0x2A, 0x2A }, { 0x30, 0x39 }, { 0x200D, 0x200D }, { 0x20E3, 0x20E3 }, { 0xFE0F, 0xFE0F },
+    { 0x1F1E6, 0x1F1FF }, { 0x1F3FB, 0x1F3FF }, { 0x1F9B0, 0x1F9B3 }, { 0xE0020, 0xE007F },
+};
+static const u32 RXP_VARIATION[][2] = {
+    { 0x180B, 0x180D }, { 0x180F, 0x180F }, { 0xFE00, 0xFE0F }, { 0xE0100, 0xE01EF },
+};
+
 /* 0 when the name is not one of those. */
 static int rx_fill_property(rx *R, int c, const char *nm, int n, int neg) {
     #define IS(w) (n == (int)sizeof(w) - 1 && !strncmp(nm, w, n))
@@ -733,7 +769,18 @@ static int rx_fill_property(rx *R, int c, const char *nm, int n, int neg) {
     else if (IS("Pi") || IS("Initial_Punctuation")) LIST(RXP_PI);
     else if (IS("Pf") || IS("Final_Punctuation")) LIST(RXP_PF);
     else if (IS("Po") || IS("Other_Punctuation")) LIST(RXP_PO);
-    else if (IS("Z") || IS("Zs") || IS("White_Space") || IS("Space_Separator") || IS("Separator")) LIST(RXP_Z);
+    else if (IS("Zs") || IS("Space_Separator")) LIST(RXP_ZS);
+    else if (IS("Z") || IS("Separator")) { rx_list l[] = { RXL(RXP_ZS), RXL(RXP_ZL), RXL(RXP_ZP) }; rx_add_lists(R, c, l, 3, neg); }
+    else if (IS("White_Space") || IS("WSpace")) LIST(RXP_WHITE_SPACE);
+    else if (IS("Pattern_Syntax") || IS("Pat_Syn")) LIST(RXP_PATTERN_SYNTAX);
+    else if (IS("Pattern_White_Space") || IS("Pat_WS")) LIST(RXP_PATTERN_WS);
+    else if (IS("ASCII_Hex_Digit") || IS("AHex")) LIST(RXP_ASCII_HEX);
+    else if (IS("Hex_Digit") || IS("Hex")) LIST(RXP_HEX);
+    else if (IS("Join_Control") || IS("Join_C")) LIST(RXP_JOIN_CONTROL);
+    else if (IS("Regional_Indicator") || IS("RI")) LIST(RXP_REGIONAL);
+    else if (IS("Emoji_Modifier") || IS("EMod")) LIST(RXP_EMOJI_MODIFIER);
+    else if (IS("Emoji_Component") || IS("EComp")) LIST(RXP_EMOJI_COMPONENT);
+    else if (IS("Variation_Selector") || IS("VS")) LIST(RXP_VARIATION);
     else if (IS("Zl") || IS("Line_Separator")) LIST(RXP_ZL);
     else if (IS("Zp") || IS("Paragraph_Separator")) LIST(RXP_ZP);
     else if (IS("S") || IS("Symbol") || IS("So") || IS("Other_Symbol")) LIST(RXP_S);
