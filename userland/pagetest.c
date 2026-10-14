@@ -3528,7 +3528,9 @@ int main(void) {
              "w.onmessage = function (e) { document.title = 'worker ' + e.data; };</script></body>");
         char err[128];
         run_scripts(&page, err, (int)sizeof(err), 0);
-        pump_until(3, 3000);
+        /* Ten seconds, not three: under QEMU the worker's churn took longer
+           than three once the page tests before it had grown (0.121.0). */
+        pump_until(3, 10000);
         oks("and a worker that makes 50 megabytes and drops them keeps its own",
             page.title >= 0 ? page.arena + page.title : "", "worker kept123");
     }
