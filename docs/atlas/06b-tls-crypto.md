@@ -5,6 +5,22 @@ Pure static reading: nothing was built or run. All `file:line` references are
 1-based line numbers in the tree as it is. "Verified" means read in the code;
 anything inferred is marked as such.
 
+**Since 0.115.0** (the rest of this file is older; trust the code):
+- **P-256 for the key exchange, when a server asks to start again with it** (RFC 8446 4.1.4). The hello lists x25519
+  and P-256 (`supported_groups`) and carries an x25519 share only; a HelloRetryRequest naming P-256 is answered with a
+  second hello (same random and session id, the P-256 share, the server's cookie given back) after `transcript_restart`
+  has replaced the first hello with its hash wrapped as `message_hash`. Refused: a second request, one for the group
+  already sent or one not offered, one that changes nothing, a hello that does not give back our session id (checked
+  now for every server hello). Microsoft's servers (login.microsoftonline.com, Office, Outlook, Teams), Zillow's and
+  Skype's have no x25519 and were refused outright.
+- **ec.c agrees keys** (`ec_public`, `ec_agree`): `pt_mul_secret` does a doubling and an addition for every bit and
+  keeps one by `pt_select`, from k + n or k + 2n (whichever has its top bit at the order's width plus one) so the loop
+  starts from P; the carries (`add_in_place`, `sub_in_place`, 128 bit sums) and reductions (`reduce_once`) no longer
+  branch. A peer's point is checked on the curve first. `tls_describe` says "p-256" or "x25519".
+- Tests: selftest `[p-256]` against RFC 8448 section 5's keys (`test_p256_agree`), `[tls 1.3]` `test_tls_retry`
+  (the trace's transcript, and a handshake against its server through `tls_test_connect`, which fixes the randomness:
+  `test_random`); tlscheck reaches login.microsoftonline.com over P-256.
+
 ---
 
 ## 1. Scope

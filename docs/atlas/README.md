@@ -95,6 +95,14 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.115.0
+
+- **P-256 key agreement and HelloRetryRequest (06b)**: servers with no x25519 (Microsoft's sign-in, Office, Outlook;
+  Zillow) ask to start again with P-256, which was refused. ec.c agrees keys with a loop that does the same work for
+  every bit; tls.c answers the request. Selftest 762 (`[p-256]` RFC 8448 section 5's keys, `[tls 1.3]` its transcript
+  and a handshake against its server, six refusals); tlscheck reaches login.microsoftonline.com; each failing on a
+  build without its fix.
+
 ### 0.114.0
 
 - **Video through hls.js (12)**: typed array `set` as a copy, text tracks, the run's clock without the network; also a

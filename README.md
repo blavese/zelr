@@ -1663,7 +1663,9 @@ program's window on a screen switched to 1920 wide.
 The cryptographic sections are all known answers from published documents:
 the hashes against FIPS 180, AES-GCM against the NIST vectors, X25519
 against RFC 7748, the curves against their own test vectors, the TLS key
-schedule against the handshake traced end to end in RFC 8448, and the
+schedule against the handshake traced end to end in RFC 8448, a key agreed on
+P-256 and the transcript of a server that asks to start again against the
+second handshake it traces, and the
 certificate checks against a chain google.com actually served. A test that
 only agrees with the thing it is testing proves nothing here, because an
 implementation that is wrong in a consistent way passes it and then cannot
@@ -1928,7 +1930,9 @@ large range:
   one after another over its kept connection. Asking for them at once needs
   sockets a program can wait on together, which `poll` does not cover.
 - **TLS is 1.3 and one cipher suite**: AES-128-GCM with SHA-256 over X25519,
-  which every 1.3 server must implement. There is no TLS 1.2 and no second
+  which every 1.3 server must implement, or over P-256 for a server that has
+  no X25519 and asks to start again with that (Microsoft's sign-in, Office and
+  Outlook, Zillow). There is no TLS 1.2 and no second
   suite, and that is the design rather than an unfinished part of it. Every
   attack that has broken this protocol in practice worked by talking two
   modern implementations into an old thing they both still supported, and
