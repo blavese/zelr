@@ -2005,9 +2005,27 @@ int main(void) {
      * no box for its picture. */
     {
         lay("<canvas width=50 height=20>fallback words</canvas>", 600);
-        int only = page.nitems == 1 && page.items[0].kind == LK_IMAGE
-                   && page.items[0].w == 50 && page.items[0].h == 20;
-        okn("a canvas is a box its attributes' size, and its fallback is not laid out", only, page.nitems);
+        /* What is drawn: the edges of the boxes round it draw nothing. */
+        int drawn = 0;
+        const litem *pic = 0;
+        for (int i = 0; i < page.nitems; i++)
+            if (page.items[i].kind != LK_EDGE) { drawn++; pic = &page.items[i]; }
+        int only = drawn == 1 && pic->kind == LK_IMAGE && pic->w == 50 && pic->h == 20;
+        okn("a canvas is a box its attributes' size, and its fallback is not laid out", only, drawn);
+        /* A box that draws nothing has its edges laid out all the same, and
+           they go where its contents are moved to. */
+        lay("<style>body { margin: 0 } .w { width: 300px } .f { display: flex; justify-content: center; width: 400px }"
+            " .c { width: 100px }</style><div id=e1 class=w>x</div><div class=f><div id=e2 class=c>y</div></div>", 800);
+        const litem *e1 = 0, *e2 = 0;
+        for (int i = 0; i < page.nitems; i++) {
+            if (page.items[i].kind != LK_EDGE) continue;
+            if (page.items[i].node == by_id("e1")) e1 = &page.items[i];
+            if (page.items[i].node == by_id("e2")) e2 = &page.items[i];
+        }
+        const litem *wy = word("y");
+        okn("a box that draws nothing has its edges: a div 300 wide holding a word is 300 wide", e1 && e1->w == 300, e1 ? e1->w : -1);
+        okn("and a centred flex item's edges are where its words went", e2 && e2->x == 150 && e2->w == 100 && wy && wy->x >= 150,
+            e2 ? e2->x : -1);
         lay("<style>.w{width:200px}</style><canvas id=c1 width=100 height=50 class=w></canvas><canvas id=c2></canvas>", 600);
         int c1 = by_id("c1"), c2 = by_id("c2");
         const litem *i1 = 0, *i2 = 0;

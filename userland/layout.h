@@ -40,7 +40,10 @@
 #define LAY_LINE   400
 #define LAY_DEPTH  DOM_DEPTH
 
-enum { LK_BOX = 1, LK_TEXT, LK_BULLET, LK_IMAGE, LK_FIELD };
+/* LK_EDGE is a block that draws nothing of its own: where its edges are,
+   drawn as nothing, so that what asks where it is (getBoundingClientRect,
+   a click on its empty parts) is told its box. */
+enum { LK_BOX = 1, LK_TEXT, LK_BULLET, LK_IMAGE, LK_FIELD, LK_EDGE };
 
 /* --- a page that hides itself until its script has run --------------------
  *
@@ -2548,7 +2551,7 @@ static void lay_stretch(lctx *L, int node, const cstyle *ps, int cw, int align_i
     if (al != AI_STRETCH || own.height >= 0 || own.max_height >= 0) return;
     for (int k = first; k < end; k++) {
         litem *it = &L->out->items[k];
-        if (it->node == node && it->kind == LK_BOX) { it->h += more; return; }
+        if (it->node == node && (it->kind == LK_BOX || it->kind == LK_EDGE)) { it->h += more; return; }
     }
 }
 
@@ -3224,7 +3227,7 @@ static void lay_cell_fit(lctx *L, int cell, int first, int end, int h, int rowh,
     int dy = va == VA_MIDDLE ? (rowh - h) / 2 : va == VA_BOTTOM ? rowh - h : 0;
     for (int i = first; i < end; i++) {
         litem *it = &L->out->items[i];
-        if (i == first && it->kind == LK_BOX && it->node == cell) {
+        if (i == first && (it->kind == LK_BOX || it->kind == LK_EDGE) && it->node == cell) {
             it->h = rowh;
             continue;
         }
@@ -4312,7 +4315,7 @@ static void lay_translate(lctx *L, int node, const cstyle *st, int first) {
         w = L->box_w;
         h = L->box_h;
     } else if (first < L->out->nitems && L->out->items[first].node == node
-        && L->out->items[first].kind == LK_BOX) {
+        && (L->out->items[first].kind == LK_BOX || L->out->items[first].kind == LK_EDGE)) {
         w = L->out->items[first].w;
         h = L->out->items[first].h;
     } else {
@@ -4550,6 +4553,21 @@ static void lay_block_placed(lctx *L, int node, const cstyle *parent, int x,
             bg->bgi = (short)lay_bg(L, &st);
         }
     }
+    if (slot < 0) {
+        /* A box that draws nothing still has edges. With no item of its own
+           a script asking where it was got the run of its words: a div 300
+           wide holding "x" was 8 wide, and a page sizing a carousel or a
+           player to its container sized it to its contents. The item is
+           carried wherever the layout moves the contents after it. */
+        litem *e = lay_item(L);
+        if (e) {
+            slot = L->out->nitems - 1;
+            e->kind = LK_EDGE;
+            e->node = node;
+            e->link = L->cur_link;
+            e->bgi = -1;
+        }
+    }
     int inside_at = L->out->nitems;
     int floats_at = L->fl_seq;
     int held_right = L->measure_right;
@@ -4770,6 +4788,9 @@ static void lay_block_placed(lctx *L, int node, const cstyle *parent, int x,
         bg->y = box_top;
         bg->w = shrunk >= 0 ? shrunk : box_w;
         bg->h = box_h;
+    }
+    if (slot >= 0 && L->out->items[slot].kind == LK_BOX) {
+        litem *bg = &L->out->items[slot];
         bg->bg = st.background;
         bg->has_bg = st.has_bg;
         bg->border = st.border_color;
@@ -5032,7 +5053,7 @@ static inline int lay_link_at(const ldoc *o, int x, int y) {
            logo, a card) exactly: only words were, and a site's logo could
            not be clicked. */
         int slop = it->kind == LK_TEXT ? 2 : 0;
-        if (it->kind != LK_TEXT && it->kind != LK_IMAGE && it->kind != LK_BOX) continue;
+        if (it->kind != LK_TEXT && it->kind != LK_IMAGE && it->kind != LK_BOX && it->kind != LK_EDGE) continue;
         if (x >= it->x && x < it->x + it->w
             && y >= it->y - slop && y < it->y + it->h + slop) return it->link;
     }
