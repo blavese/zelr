@@ -112,6 +112,17 @@ def main():
                     filtered += 1
                     continue
 
+                # Anywhere in a 64-bit immediate: `movabs rax, imm64` is a REX
+                # prefix with W set, B8 to BF, and eight bytes of value. 0.116.0's
+                # self test filled a key block with 1, 2, ... 40, which clang
+                # wrote as such moves, and 48 b8 09 0a 0b 0c 0d 0e 0f 10 holds
+                # 0f 10 in its seventh and eighth.
+                if any(j - back >= 0 and 0x48 <= body[j - back] <= 0x4F and
+                       0xB8 <= body[j - back + 1] <= 0xBF
+                       for back in range(2, 10)):
+                    filtered += 1
+                    continue
+
                 # A scale-index byte. The addressing byte in front says one
                 # follows (rm 100, with mod 01 or 10), and 0F is an ordinary
                 # value for it: `movzx ecx, word [rdi+rcx+0x10]` is
