@@ -810,8 +810,14 @@ they were written. Web components are drawn: the shadow tree a component's
 script attaches is laid out where the component stands, with its slots
 filled and its own style sheets on it alone, and the components inside it are
 made and told they are in the page as a browser tells them. Streams a page
-makes are read as a browser reads them (through a reader, as an async
-iterator, teed and piped), and a page may be up to 1024 modules.
+makes are read and written as a browser does (through readers and writers,
+as async iterators, teed, piped and transformed, a fetch's body among them),
+and a page may be up to 1024 modules. A page can
+draw on a canvas: shapes, curves, strokes with their joins, caps and dashes,
+gradients, patterns, clipping, transparency and the ways one drawing is laid
+over another, text in the browser's own letters, pictures, and the pixels
+read and written directly; a chart library or an animation draws as it
+would anywhere (shadows and filters are not drawn).
 A page's scripts may hold a quarter of the memory the machine has free,
 between 24 and 128 megabytes, at once: a collector gives back what they
 have finished with, finding what is still in use by looking through the

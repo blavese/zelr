@@ -4,6 +4,11 @@ Atlas section for zelr (tree at the repository root, main 2026-09-22, two commit
 Static reading only (no build or run was possible). All `file:line` references are 1-based and were checked against the tree.
 Where something is inferred rather than read, it says so.
 
+**Since 0.112.0**: svg.h's scanline is `sv_cover`, which works out a row's coverage (0 to 1, four samples a pixel each
+way) and hands it to a painter (`sv_row_fn`); `sv_fill_pts` is `sv_cover` with `sv_flat_row`, an opaque colour, as
+before, and a page's canvas (jscanvas.h) paints colours, gradients and pictures with their alpha through the same rows.
+The face picker and measurer (`face_pick`, `tface_of`, `tface_wn`) are `userland/tface.h`.
+
 ---
 
 ## 1. Scope

@@ -95,6 +95,21 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.112.0
+
+- **Facts the standard keeps as getters on prototypes (12)**: Response's fields, XMLHttpRequest's timeout and
+  withCredentials, Attr's name and owner, every event's fields (getters reading the event's own), the window's
+  `closed` and `document`. pagetest: one check that sweeps them and calls each taken off its prototype; failing with
+  Response's url, Attr's getters, withCredentials, the event getters, the window's `closed` or `document` left out.
+- **A canvas a page can draw on (11, 12, 13)**: `jscanvas.h`, `<canvas>` as `T_CANVAS` laid out and drawn like a video
+  (`lay_painted`), svg.h's fill split into `sv_cover` and a painter, `tface.h`. pagetest 336: the context, rectangles,
+  a circle's area, strokes, transforms with save and restore, alpha and compositing, clipping and clearing, gradients,
+  text, drawImage and ImageData, Path2D, a width set clearing it, and a toDataURL PNG decoded by png.h; layouttest 290;
+  browsercheck: a canvas filled as the page loads and drawn on after, both on the screen.
+- **WritableStream, TransformStream and a body as a stream (12)**, and **Unicode's binary properties** with `\p{Zs}`
+  the separators alone (12). pagetest 337 (writes in order, a transform and its flush, text decoded across a split
+  character, a response's body); jstest 455; each failing on a build without it.
+
 ### 0.111.0
 
 - **What a survey of fifty sites found stopping their scripts (12)**: a prelude in the page's own language

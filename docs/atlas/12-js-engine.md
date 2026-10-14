@@ -2,7 +2,45 @@
 
 Source root the repository root (github.com/blavese/zelr main, 2026-09-22). All paths are relative to it; `file:N` means 1-based line N. Everything below was verified by reading the code. Where a behaviour was derived by tracing (not by running) it says so. Nothing here was built or run.
 
-**Since 0.111.0** (the rest of this file is older; trust the code):
+**Since 0.112.0** (the rest of this file is older; trust the code):
+- **Streams, the writable kind** (jsprelude.h): WritableStream (its writer, controller and signal; one write at a time,
+  in order, the close after them), TransformStream (writes go through transform() to the readable side, flush() at the
+  close, terminate and error), TextDecoderStream and TextEncoderStream, and a fetch answer's `body` (a ReadableStream
+  read from `arrayBuffer()` when first pulled, so asking for it does not use the body up). Next.js reads its server's
+  components through a TransformStream, and Yahoo's page took its own markup away when there was none. No backpressure.
+- **Unicode's binary properties in patterns** (jsregex.h): Pattern_Syntax and Pattern_White_Space (FormatJS's message
+  parser), the hex digits, Join_Control, Regional_Indicator, Emoji_Modifier, Emoji_Component and Variation_Selector;
+  `\p{Zs}` and `\p{Z}` are the separators alone, where they had been all of White_Space (a tab and a new line too).
+- **A canvas's 2D context** (`userland/jscanvas.h`, `jd_setup_canvas`, `jd_canvas_reset` from `jsdom_close`):
+  CanvasRenderingContext2D with its state (transform, fill and stroke colour or paint, line width, cap, join, miter,
+  dashes, global alpha, the compositing operations source-over, copy, destination-over/out/in/atop, source-in/atop,
+  lighter, xor (the blend modes are kept and drawn as source-over), font, textAlign, textBaseline, clip) and a stack of
+  32 saves; paths (moveTo to ellipse, roundRect, arcTo) flattened onto the canvas as they are made; fill (nonzero or
+  even-odd), stroke (each segment, join and cap a shape, filled together), clip (a byte mask a pixel, shared between
+  saves by count), isPointInPath/isPointInStroke; fillRect, strokeRect, clearRect; linear, radial and conic gradients
+  and patterns; fillText, strokeText (drawn filled) and measureText in the browser's faces (tface.h; scaled past 11 and
+  42 px; upright whatever the transform); drawImage of a canvas, an `<img>` the browser has decoded
+  (`jsdom_image_pixels_with`, browser.c `image_pixels`) or a `<video>`'s frame; getImageData, putImageData,
+  createImageData and ImageData; Path2D (its commands kept as numbers, an SVG path's text read by svg.h's
+  `sv_path_data`, addPath with a transform); toDataURL and toBlob as PNG (stored deflate blocks). Each canvas is a
+  table slot (`jc_canvas`, 32) with an RGBA bitmap (16 MB each, 48 MB in all) made to match the element's width and
+  height, and cleared whenever either is set (the element's own accessors) or reset() is called. Script values a
+  context holds (its gradients and patterns) are kept on the context object, one place per save
+  (`jc_paint_slot`), never in the table. getContext of anything but '2d' is null. Not done: shadows (kept, not drawn),
+  filters, the blend modes, text along a turning transform, and the outside of the shape for copy, source-in and
+  destination-in. The browser draws the bitmap where the element's box is (`jsdom_canvas_picture`) and draws it again
+  when it changes (`jsdom_canvas_drawn`).
+- **Facts the standard keeps as getters on prototypes** (Transcend's consent manager takes dozens of them off the
+  prototypes and calls them on objects, and stopped Vimeo's page): a Response's status, ok, statusText, headers, url,
+  redirected, type and bodyUsed (jsnet.h `JD_RESP_FIELDS`, kept under symbols); an XMLHttpRequest's timeout and
+  withCredentials (kept and given back, neither changes the request) and responseXML; an Attr's name, localName,
+  prefix, namespaceURI, ownerElement and nodeName (`JD_ATTR_FIELDS`); getters for every event's fields on
+  Event.prototype and each kind's (`jd_ev_getters`, `nat_ev_field`: they read the event's own property, which the
+  event still has, so a getter taken off the prototype reads the event it is called on); and the window's own
+  accessors for `closed` and `document`. `var closed` at a script's top level no longer takes the window's over, as in
+  a browser.
+
+**Since 0.111.0**:
 - **A prelude in the page's own language** (`userland/jsprelude.h`, `JD_PRELUDE`, run by `jd_setup_prelude` at the
   end of jsdom's setup, before any of the page's scripts; a failure in it is not the page's to see):
   - ReadableStream: the default controller (`enqueue`, `close`, `error`, `desiredSize` from the strategy's

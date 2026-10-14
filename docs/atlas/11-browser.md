@@ -1,6 +1,14 @@
 # 11 -- The web browser (everything except JS-engine internals and image decoders)
 
-**Since 0.111.0** (the rest of this file is older; trust the code and the README's "since 6048716" list):
+**Since 0.112.0** (the rest of this file is older; trust the code and the README's "since 6048716" list):
+- **`<canvas>` is `T_CANVAS`** (html.h), a box drawn from pixels like a `<video>` (layout.h `lay_painted`): laid out by
+  `lay_video`, as big as its width and height attributes (300 by 150 without them) unless the page's rules say
+  otherwise, keeping its shape when they give one side; what is written inside it is not laid out. The browser draws its
+  bitmap and alpha in the box (`canvas_of`, from jscanvas.h `jsdom_canvas_picture`) and draws it again, the box alone
+  where it can (`draw_video_frames`), when `jsdom_canvas_drawn` says it changed. The 2D context is atlas 12.
+- The browser's faces are picked and measured in `userland/tface.h` (moved out of layout.h), shared with the canvas.
+
+**Since 0.111.0**:
 - **`<noscript>` is raw text** (dom.h `dom_raw`), as in any browser that runs scripts: its style elements, refreshes and
   pictures are not elements at all, and its text is the markup (the serialiser, `jd_raw_text`, already wrote it so).
   DuckDuckGo's home page keeps `body { display: none }` there and was blank. browser.c's `in_noscript` went with it.
