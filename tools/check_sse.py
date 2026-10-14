@@ -13,8 +13,11 @@ common case: `push $0x00110f00` contains the bytes 0f 11 00, which look like
 `movups`. Those are filtered by checking whether the surrounding bytes read as
 an address inside the image; anything that does is an operand, not an opcode.
 
-The unambiguous forms (66 0F ..., the operand-size prefixed SSE2 moves) are
-always reported, because no immediate produces that prefix by accident.
+The operand-size prefixed forms (66 0F ..., the SSE2 moves) are reported
+unless they sit in a displacement relative to rip that reaches into the
+image: no immediate spells that prefix by accident, but a global's distance
+can. 0.112.0's kernel had `mov [rip+0x00d60f66], rax`, 48 89 05 66 0f d6 00,
+once the programs pasted into it grew.
 """
 import struct
 import sys
@@ -59,6 +62,26 @@ def image_range(secs):
     return lo, hi
 
 
+def in_rip_displacement(body, j, s, lo, hi):
+    """Whether the bytes at j sit in the four byte displacement of an
+    instruction that reaches memory relative to rip, one whose target is in
+    the image. On x86-64 nearly every access to a global is one of those.
+    The giveaway is the addressing byte in front: mod 00 with rm 101 is the
+    encoding that means "relative to rip"."""
+    import struct
+    for back in (0, 1, 2, 3):
+        k = j - back
+        if k < 1 or k + 4 > len(body):
+            continue
+        if (body[k - 1] & 0xC7) != 0x05:
+            continue
+        disp, = struct.unpack_from("<i", body, k)
+        target = s["addr"] + k + 4 + disp
+        if lo <= target < hi:
+            return True
+    return False
+
+
 def main():
     data = open(sys.argv[1], "rb").read()
     secs = sections(data)
@@ -75,6 +98,10 @@ def main():
             prefixed = body[j] == 0x66 and body[j + 1] == 0x0F and body[j + 2] in PREFIXED
             bare = body[j] == 0x0F and body[j + 1] in BARE
             if not prefixed and not bare:
+                continue
+
+            if prefixed and in_rip_displacement(body, j, s, lo, hi):
+                filtered += 1
                 continue
 
             if bare and not prefixed:
@@ -108,23 +135,10 @@ def main():
                     value, = struct.unpack_from("<I", body, j)
                     looks_like_operand = lo <= value < hi
 
-                # Instructions that reach memory relative to the
-                # instruction pointer carry a four byte displacement, and on
-                # x86-64 nearly every access to a global is one of those, so
-                # this is the common case rather than a corner. The giveaway
-                # is the addressing byte in front: mod 00 with rm 101 is the
-                # encoding that means "relative to rip".
-                for back in (0, 1, 2, 3):
-                    k = j - back
-                    if k < 1 or k + 4 > len(body):
-                        continue
-                    if (body[k - 1] & 0xC7) != 0x05:
-                        continue
-                    disp, = struct.unpack_from("<i", body, k)
-                    target = s["addr"] + k + 4 + disp
-                    if lo <= target < hi:
-                        looks_like_operand = True
-                        break
+                # In a displacement relative to rip: the common case on
+                # x86-64 rather than a corner.
+                if in_rip_displacement(body, j, s, lo, hi):
+                    looks_like_operand = True
                 if looks_like_operand:
                     filtered += 1
                     continue
