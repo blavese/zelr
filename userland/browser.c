@@ -1839,6 +1839,13 @@ static void request_lines(const url_t *u, const char *method, const char *header
     }
 }
 
+/* Each request a page's scripts make, as it starts (a status of nought) and
+   as it ends, for a host tool to hear (scriptdump's "net"); on the machine it
+   is nothing. */
+#ifndef ASK_SEEN
+#define ASK_SEEN(method, url, status) ((void)0)
+#endif
+
 static int do_request(const char *method, const char *url, const char *body, int blen,
                       const char *type, const char *headers, jd_reply *out) {
     static char landed[URL_TEXT];
@@ -1873,6 +1880,7 @@ static int do_request(const char *method, const char *url, const char *body, int
 
     asks_made++;
     out->status = rc;
+    ASK_SEEN(method ? method : "GET", url, rc);
     if (rc <= 0) return 0;
     /* Where it ended up, after any redirect (web_send follows them in u),
        and what the server said it was. */
@@ -1970,6 +1978,7 @@ static int ask_begin(const char *method, const char *url, const char *body, int 
         a->used = 0;
         return rc < -1 ? rc : -2;
     }
+    ASK_SEEN(a->method, url, 0);
     return pick;
 }
 
@@ -1983,9 +1992,14 @@ static int ask_poll(int id, jd_reply *out) {
     if (id < 0 || id >= ASK_SLOTS || !asks[id].used) return WEB_ERR_EMPTY;
     ask_t *a = &asks[id];
     int st = web_job_step(&a->job);
+    if (st < 0) {
+        url_text(&a->job.u, a->landed, sizeof(a->landed));
+        ASK_SEEN(a->method, a->landed, st);
+    }
     if (st <= 0) return st;
     response_t *r = &a->job.r;
     url_text(&a->job.u, a->landed, sizeof(a->landed));
+    ASK_SEEN(a->method, a->landed, r->status);
     w_copy(a->ctype, sizeof(a->ctype), r->ctype, sizeof(a->ctype));
     out->status = r->status;
     out->url = a->landed;

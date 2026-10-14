@@ -1,6 +1,6 @@
 /* What each of a real page's scripts did, one line each.
  *
- *   scriptdump ADDRESS [SECONDS] [text] [tree] ['js=EXPRESSION' ...] [prof] [from=ADDRESS] [real]
+ *   scriptdump ADDRESS [SECONDS] [text] [tree] [net] ['js=EXPRESSION' ...] [prof] [from=ADDRESS] [real]
  *
  * Loads the page with the browser's own load() -- the same fetches, the same
  * limits on how many scripts and how large, the same document and bindings
@@ -23,6 +23,9 @@
  * "prof", in a build with HOST_CFLAGS=-DJS_ALLOC_PROFILE, prints where the
  * page's script memory went, by the calls that asked for it (js.h).
  *
+ * "net" prints each request the page's scripts make as it is answered: the
+ * method, where it ended up, and the status (or the error, below nought).
+ *
  * The browser's own line names only the first thing that stopped, which is
  * the right thing to show a reader and not enough to tell which of thirty
  * scripts to look at next.
@@ -30,6 +33,10 @@
  * A host tool (bash tools/host/build.sh scriptdump), browser.c itself with
  * this main in front of it, as laydump is. Not a test, and not on the
  * machine. */
+static int show_net;             /* "net": each request as it is answered */
+static void ask_seen(const char *method, const char *url, int status);
+#define ASK_SEEN(method, url, status) ask_seen(method, url, status)
+
 #undef main
 #define main browser_main
 #include "browser.c"
@@ -47,6 +54,23 @@ static void put_cut(const char *s, int most) {
         puts(one);
     }
     if (s[k]) puts("...");
+}
+
+static void ask_seen(const char *method, const char *url, int status) {
+    static int first;
+    if (!show_net) return;
+    if (!first) first = ticks();
+    puts("  net ");
+    putn((ticks() - first) * 10);
+    puts(" ms: ");
+    puts(method);
+    puts(" ");
+    put_cut(url, 160);
+    if (!status) { puts(" asked\n"); return; }
+    puts(" -> ");
+    if (status < 0) puts("-");
+    putn(status < 0 ? -status : status);
+    puts("\n");
 }
 
 /* An element a line, indented by its depth, with its id, its class and the
@@ -159,6 +183,7 @@ int main(int argc, char **argv) {
     if (argc < 2) { puts("scriptdump ADDRESS [SECONDS] [text]\n"); return 2; }
     for (int a = 2; a < argc; a++) if (w_same(argv[a], "text")) show_text = 1;
     for (int a = 2; a < argc; a++) if (w_same(argv[a], "tree")) show_tree = 1;
+    for (int a = 2; a < argc; a++) if (w_same(argv[a], "net")) show_net = 1;
     for (int a = 2; a < argc; a++)
         if (w_starts_fold(argv[a], "from=")) w_copy(nav_from, sizeof(nav_from), argv[a] + 5, sizeof(nav_from));
     for (int a = 2; a < argc; a++) if (w_same(argv[a], "real")) site_readers_off = 1;
