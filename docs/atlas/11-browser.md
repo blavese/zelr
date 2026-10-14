@@ -1,6 +1,19 @@
 # 11 -- The web browser (everything except JS-engine internals and image decoders)
 
-**Since 0.120.0** (the rest of this file is older; trust the code and the README's "since 6048716" list):
+**Since 0.121.0** (the rest of this file is older; trust the code and the README's "since 6048716" list):
+- **`<base href>`** (browser.c `base`, `base_take` in `build`; every `url_join` of what the page wrote is against
+  `base`, `here` stays the page's own address): PeerTube's scripts under `<base href="/client/en-US/">` came back as
+  the site's page. jsdom's side is jsurl.h `jd_base`/`ju_base` (baseURI, element href/src, a link's parts, location's
+  and history's addresses, modules, import maps, import(), workers). A `<base>` a script adds moves jsdom's base, not
+  the browser's.
+- **A media file's stretches follow a redirect** (jsmedia.h: `d->url` becomes where the last stretch was sent):
+  archive.org sends each request on to the server holding the film. Test: msecheck `/film/moved.mp4`.
+- **`crypto.subtle`** (jscrypto.h): digest with SHA-1/256/384/512 on secure pages; every other method rejects with
+  NotSupportedError.
+- Found, not fixed: a frame from another site has no document, so players that live in one (Dailymotion's, BitChute's,
+  PBS's) never start, and Dailymotion's whole page waits on its player.
+
+**Since 0.120.0**:
 - **Text past ASCII is folded where it is laid out** (layout.h `lay_fold`, in `lay_word` and the preformatted path):
   a script's text reaches the tree as it was given, and its curly apostrophes, dashes, ellipses and accented letters
   were drawn as gaps; now each word is folded with html.h `html_fold_cp`, as the parser folds a page's own text. The

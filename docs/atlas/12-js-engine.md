@@ -2,7 +2,14 @@
 
 Source root the repository root (github.com/blavese/zelr main, 2026-09-22). All paths are relative to it; `file:N` means 1-based line N. Everything below was verified by reading the code. Where a behaviour was derived by tracing (not by running) it says so. Nothing here was built or run.
 
-**Since 0.120.0** (the rest of this file is older; trust the code):
+**Since 0.121.0** (the rest of this file is older; trust the code):
+- **crypto.subtle** (jscrypto.h, set up from jswin.h `jd_setup_crypto` on secure pages): digest (SHA-1 from wsock.h,
+  SHA-256/384/512 written from FIPS 180-4) through a promise; encrypt, sign, importKey and the rest reject with
+  NotSupportedError. Not in workers.
+- **The page's base** (jsurl.h `jd_base`, cached by the tree's node count) for baseURI, href/src, links, location,
+  history (held to the page's own origin), modules, import maps, import() and workers.
+
+**Since 0.120.0**:
 - **Dates written as numbers** (jsprom.h `js_date_parse`): "10/13/2026", "10-13-2026", "2026/10/13 23:35" and
   "10/13/2026, 11:35:12 PM" (what toLocaleString writes, which pages hand back to Date to move a time between zones),
   month first unless the first number cannot be a month or a day; a month past twelve is no date. Still one zone, UTC.
