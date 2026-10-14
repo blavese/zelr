@@ -576,6 +576,23 @@ setTimeout(function () {
 </body></html>
 """
 
+# A ::before that is a green block, and an ::after whose content the page's
+# script reads back into its title: both are what a browser makes of rules
+# naming them, and this one threw every such rule away.
+PSEUDO_PAGE = b"""<!doctype html>
+<html><head><title>pseudo</title>
+<style>body { font-family: sans-serif; padding: 24px }
+#m::before { content: ""; display: block; width: 300px; height: 80px; background: #20b060 }
+#m::after { content: 'wide' }</style></head>
+<body>
+<h1>before and after</h1>
+<div id="m">words</div>
+<script>
+document.title = 'pseudo ' + getComputedStyle(document.getElementById('m'), '::after').content;
+</script>
+</body></html>
+"""
+
 # A canvas a script draws on: filled as the page loads, and a circle drawn
 # on it a moment after it is shown, which only a browser that draws a canvas
 # again when it changes shows.
@@ -1170,6 +1187,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._send(LATE_PAGE)
         elif path == "/canvas":
             self._send(CANVAS_PAGE)
+        elif path == "/pseudo":
+            self._send(PSEUDO_PAGE)
         elif path == "/held/logo.png":
             HELD.wait(timeout=90)
             self._send(LOGO, ctype="image/png")

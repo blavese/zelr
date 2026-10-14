@@ -120,6 +120,7 @@ PAPER = (0xFF, 0xFF, 0xFF)
 LOGO = (0xE1, 0x1D, 0x48)
 CANVAS_FILL = (0x1E, 0x90, 0xA0)      # /canvas: what the script fills it with
 CANVAS_DISC = (0xA0, 0x50, 0x1E)      # and the circle drawn on it later
+PSEUDO_GREEN = (0x20, 0xB0, 0x60)     # /pseudo: the block its ::before makes
 
 # The colour /styled asks for its band to be. Nothing else on the screen is
 # this colour, so counting it is the same question as "was the sheet read".
@@ -459,8 +460,24 @@ def main():
             c.add("and what it draws after the page is shown is drawn too (%d)" % orange,
                   drew and 9000 < orange < 13000, shotv)
 
+            # --- ::before and ::after ----------------------------------------
+            #
+            # The ::before is a green block 300 by 80, which must be on the
+            # screen; the ::after says 'wide', which the page's script reads
+            # with getComputedStyle into its title, and the console must say.
+            mark = len(vm.serial())
+            go(vm, mon, "http://%s/pseudo" % srv.host, settle=12.0,
+               was=canv, name="br-going-pseudo")
+            _, _, _, _, made = mon.wait_screen(
+                "br-pseudo", lambda w, h, px: count_in(px, w, PAGE, PSEUDO_GREEN) > 20000, timeout=30)
+            pse, pxp, wp, shotp = page_settled(mon, "br-pseudo-settled")
+            green = count_in(pxp, wp, PAGE, PSEUDO_GREEN)
+            c.add("a ::before a rule makes is drawn (%d)" % green, made and 20000 < green < 26000, shotp)
+            said = vm.wait_serial('-- pseudo "wide" --', timeout=30)
+            c.add("and an ::after's content is read back by the page's script", said, shotp)
+
             go(vm, mon, "http://%s/scripted" % srv.host, settle=12.0,
-               was=canv, name="br-going-scripted")
+               was=pse, name="br-going-scripted")
             scripted, pxc, wc, shotc = page_settled(mon, "br-scripted")
             c.add("a page's own script runs, and changes the page",
                   count_in(pxc, wc, PAGE, BAND) > 3000, shotc)

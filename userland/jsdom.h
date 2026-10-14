@@ -1008,6 +1008,8 @@ static void jd_sel_open(jd_selq *q, const jstr *sel) {
         /* A part this cannot read matches nothing, and neither does the
            rest of the list, whose end it cannot find. */
         if (k <= 0 || jd_sheet->overflowed) break;
+        /* A pseudo-element is no element, and a selector for one finds none. */
+        if (css_parsed_pe) continue;
         crule *r = &q->r[q->n++];
         r->sel_at = sel_at;
         r->sel_n = k;
@@ -1016,6 +1018,7 @@ static void jd_sel_open(jd_selq *q, const jstr *sel) {
         r->order = 0;
         r->mq_lo = r->mq_hi = -1;
         r->layer = CSS_UNLAYERED;
+        r->pe = 0;
     }
 }
 

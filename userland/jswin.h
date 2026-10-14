@@ -1858,6 +1858,31 @@ static int (*jd_style_of)(int node, cstyle *out);
 
 void jsdom_styles_with(int (*fn)(int, cstyle *)) { jd_style_of = fn; }
 
+/* And an element's ::before (1) or ::after (2): its style and its content as
+   the sheet wrote it, or 0 when it has no box (browser.c, pseudo_style).
+   Pages write a breakpoint into one for their scripts to read (Netflix's
+   read getComputedStyle(body, '::after').content and stopped on finding
+   nothing there). */
+static int (*jd_pseudo_of)(int node, int pe, cstyle *out, char *content, int cap);
+
+void jsdom_pseudo_with(int (*fn)(int, int, cstyle *, char *, int)) { jd_pseudo_of = fn; }
+
+/* A content value as getComputedStyle gives it back: a string in double
+   quotes, whichever the sheet used, and no !important. */
+static void jd_content_text(jtext *t, const char *v) {
+    while (*v == ' ') v++;
+    int n = 0;
+    while (v[n] && v[n] != '!') n++;
+    while (n > 0 && v[n - 1] == ' ') n--;
+    if (n >= 2 && v[0] == '\'' && v[n - 1] == '\'') {
+        jd_putc(t, '"');
+        for (int i = 1; i < n - 1; i++) jd_putc(t, v[i]);
+        jd_putc(t, '"');
+        return;
+    }
+    for (int i = 0; i < n; i++) jd_putc(t, v[i]);
+}
+
 static void jd_css_colour(jtext *t, u32 c) {
     jd_put(t, "rgb(");
     jd_put_num(t, (int)((c >> 16) & 255));
@@ -1940,7 +1965,7 @@ static int jd_computed_value(int node, const cstyle *s, const char *prop, jtext 
     return 1;
 }
 
-static jstr *jd_k_computed;
+static jstr *jd_k_computed, *jd_k_computed_pe;
 static jobj *jd_p_computed;
 
 static int jd_computed_node(jobj *o) {
@@ -1948,8 +1973,32 @@ static int jd_computed_node(jobj *o) {
     return v.t == JS_NUM ? (int)v.num : -1;
 }
 
-static jval jd_computed_get_value(jctx *J, int node, const char *prop) {
-    if (node < 0 || !jd_style_of || !jd_is_element(node)) return jd_str("");
+static int jd_computed_pe(jobj *o) {
+    jval v = jd_kept(o, jd_k_computed_pe);
+    return v.t == JS_NUM ? (int)v.num : 0;
+}
+
+static jval jd_computed_get_value(jctx *J, int node, int pe, const char *prop) {
+    if (node < 0 || !jd_is_element(node)) return jd_str("");
+    int content = w_same(prop, "content");
+    if (content && !pe) return jd_str("normal");
+    if (pe) {
+        /* A pseudo-element with no box has content none, and nothing else to say. */
+        char raw[256];
+        cstyle *ps = (cstyle *)malloc(sizeof(cstyle));
+        if (!ps) return jd_str("");
+        int got = jd_pseudo_of && jd_pseudo_of(node, pe, ps, raw, (int)sizeof(raw));
+        jval r = jd_str(content ? "none" : "");
+        if (got) {
+            jtext t = { 0, 0, 0, 0 };
+            if (content) { jd_content_text(&t, raw); r = js_from_str(jt_done(J, &t)); }
+            else if (jd_computed_value(node, ps, prop, &t)) r = js_from_str(jt_done(J, &t));
+            else free(t.b);
+        }
+        free(ps);
+        return r;
+    }
+    if (!jd_style_of) return jd_str("");
     cstyle *s = (cstyle *)malloc(sizeof(cstyle));
     if (!s) return jd_str("");
     jval r = jd_str("");
@@ -1969,7 +2018,7 @@ static jval nat_computed_get(jctx *J, jval t, jval *a, int n) {
     int k = 0;
     for (; k < (int)p->len && k < 63; k++) low[k] = w_lower(p->s[k]);
     low[k] = 0;
-    return jd_computed_get_value(J, jd_computed_node(t.obj), low);
+    return jd_computed_get_value(J, jd_computed_node(t.obj), jd_computed_pe(t.obj), low);
 }
 
 /* The properties by their camelCase names, as a page reads them. */
@@ -1978,8 +2027,9 @@ static int jd_computed_host(jctx *J, jobj *o, const char *name, jval *out) {
     if (node < 0 || name[0] < 'a' || name[0] > 'z') return 0;
     char prop[64];
     jd_css_name(name, prop, (int)sizeof(prop));
-    if (!jd_css_known(prop) && !w_same(prop, "visibility") && !w_same(prop, "border-top-color")) return 0;
-    *out = jd_computed_get_value(J, node, prop);
+    if (!jd_css_known(prop) && !w_same(prop, "visibility") && !w_same(prop, "border-top-color")
+        && !w_same(prop, "content")) return 0;
+    *out = jd_computed_get_value(J, node, jd_computed_pe(o), prop);
     return 1;
 }
 
@@ -1991,6 +2041,14 @@ static jval nat_get_computed_style(jctx *J, jval t, jval *a, int n) {
     if (!o) return js_undef();
     o->host = JD_COMPUTED;
     jd_keep(o, jd_k_computed, js_num(x));
+    /* A pseudo-element, with one colon or two. */
+    jval pv = js_arg(a, n, 1);
+    if (pv.t == JS_STR) {
+        const char *q = pv.str->s;
+        while (*q == ':') q++;
+        int pe = w_same_fold(q, "before") ? 1 : w_same_fold(q, "after") ? 2 : 0;
+        if (pe) jd_keep(o, jd_k_computed_pe, js_num(pe));
+    }
     return js_from_obj(o);
 }
 
@@ -2123,6 +2181,7 @@ static void jd_setup_window_more(jctx *J) {
 
     /* getComputedStyle */
     jd_k_computed = js_sym_new(J, "computed", 8);
+    jd_k_computed_pe = js_sym_new(J, "pseudo", 6);
     jd_p_computed = js_object_with(J, JO_PLAIN, jd_p[JI_STYLEDECL]);
     if (jd_p_computed) {
         jd_method(J, jd_p_computed, "getPropertyValue", nat_computed_get, 1);

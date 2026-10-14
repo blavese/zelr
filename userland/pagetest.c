@@ -1817,6 +1817,15 @@ int main(void) {
                " Object.getOwnPropertyDescriptor(window, 'document').get.call(window) === document].join(' ');</script></body>"),
         "all 0 201 true true title d title go 5 false true");
 
+    /* A pseudo-element: getComputedStyle with one, and a selector naming one,
+       which finds nothing (it is no element) and is not refused. Netflix
+       reads a breakpoint from content and stopped on undefined. */
+    oks("content is normal for an element and none for a pseudo-element with no box, and a selector for one finds nothing",
+        titled("<body><p id=p>x</p><script>var p = document.getElementById('p');"
+               "document.title = [getComputedStyle(p).content, getComputedStyle(p, '::before').content,"
+               " getComputedStyle(p, ':after').getPropertyValue('content'), String(document.querySelector('p::before')),"
+               " document.querySelectorAll('p::after, #p').length].join(' ');</script></body>"),
+        "normal none none null 1");
     /* --- a canvas's 2d context (jscanvas.h) -----------------------------------------------
      *
      * getContext('2d') gave null, and Lottie, which makes a canvas and paints

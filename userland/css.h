@@ -57,6 +57,7 @@ enum {
     P_TEXT_TRANSFORM, P_ORDER, P_ALIGN_SELF, P_FLEX, P_FLEX_BASIS, P_FLEX_SHRINK, P_ASPECT,
     P_MASK,
     P_BG_IMAGE, P_BG_LAYER, P_BG_SIZE, P_BG_POS, P_BG_REPEAT, P_MASK_LAYER, P_OBJECT_FIT,
+    P_CONTENT,       /* what a ::before or ::after says, read by the layout (lay_generated) */
     P_CUSTOM,        /* --name: value, kept as the text "--name:value" */
     P_DEFER,         /* a shorthand whose value has var() in it: "name:value" */
     P_COUNT
@@ -302,6 +303,7 @@ typedef struct {
        at least mq_lo and at most mq_hi pixels, -1 for no bound. */
     short mq_lo, mq_hi;
     short layer;              /* its @layer's rank (css_layer), or CSS_UNLAYERED */
+    short pe;                 /* 0 for the element, or the ::before (1) or ::after (2) it styles */
 } crule;
 
 typedef struct {
@@ -600,6 +602,7 @@ static const cprop CSS_PROPS[] = {
     { "background-color", P_BACKGROUND },
     { "background", P_BACKGROUND },
     { "display", P_DISPLAY },
+    { "content", P_CONTENT },
     { "flex-direction", P_FLEX_DIR },
     { "justify-content", P_JUSTIFY },
     { "align-items", P_ALIGN_ITEMS },
@@ -788,6 +791,10 @@ static inline int css_nth(const char *p, int len, int i, short *a, short *b) {
     return i < len && p[i] == ')';
 }
 
+/* The pseudo-element the selector being read ends in: 0, or 1 for ::before
+   and 2 for ::after (crule.pe). */
+static int css_parsed_pe;
+
 /* One compound -- a tag, classes, an id, attributes and pseudo-classes run
    together -- into `c`. Returns whether it had anything in it, or -1 when it
    uses something that cannot be matched here and the selector must go. */
@@ -838,7 +845,17 @@ static inline int css_parse_compound(csheet *s, const char *p, int len, int *at,
                the shape of `*`. Every box on the page came out six pixels
                wide, and a whole site's article was a column of one word per
                line. */
-            if (elem) return -1;
+            /* ::before and ::after are styled, as the boxes the layout makes
+               for them (layout.h, lay_generated): the rule is kept for its
+               pseudo-element, at the end of a selector only. */
+            if (elem) {
+                int which = css_named(nm, l, "before") ? 1 : css_named(nm, l, "after") ? 2 : 0;
+                if (!which || inner || css_parsed_pe) return -1;
+                css_parsed_pe = which;
+                *spec += 1;
+                any = 1;
+                continue;
+            }
 
             if (i < len && p[i] == '(') {
                 int open = i + 1, d = 0;
@@ -1016,6 +1033,7 @@ static inline int css_parse_selector(csheet *s, const char *p, int len,
                                      int *at, int *spec_out) {
     int i = *at, n = 0, spec = 0;
     int combinator = CB_FIRST;
+    css_parsed_pe = 0;
 
     for (;;) {
         i = css_skip(p, len, i);
@@ -1030,7 +1048,10 @@ static inline int css_parse_selector(csheet *s, const char *p, int len,
 
         if (s->nsels >= CSS_SELS) { s->overflowed = 1; return 0; }
         csel *c = &s->sels[s->nsels];
+        int pe_before = css_parsed_pe;
         int got = css_parse_compound(s, p, len, &i, c, &spec, 0);
+        /* Nothing comes after a pseudo-element. */
+        if (got > 0 && pe_before) got = -1;
         if (got < 0) {
             while (i < len && p[i] != ',' && p[i] != '{') i++;
             *at = i;
@@ -1754,7 +1775,7 @@ static inline void css_parse_in(csheet *s, const char *p, int len, int lo, int h
 
         /* A selector list, then one block shared by all of them. */
         int first_rule = s->nrules;
-        int sel_starts[32], sel_counts[32], specs[32], nsel_lists = 0;
+        int sel_starts[32], sel_counts[32], specs[32], pes[32], nsel_lists = 0;
         for (;;) {
             int spec = 0;
             int start = s->nsels;
@@ -1763,6 +1784,7 @@ static inline void css_parse_in(csheet *s, const char *p, int len, int lo, int h
                 sel_starts[nsel_lists] = start;
                 sel_counts[nsel_lists] = n;
                 specs[nsel_lists] = spec;
+                pes[nsel_lists] = css_parsed_pe;
                 nsel_lists++;
             } else if (n == 0) {
                 s->nsels = start;         /* a selector this cannot match */
@@ -1794,6 +1816,7 @@ static inline void css_parse_in(csheet *s, const char *p, int len, int lo, int h
             r->mq_lo = mlo[nested < 16 ? nested : 16];
             r->mq_hi = mhi[nested < 16 ? nested : 16];
             r->layer = mlayer[nested < 16 ? nested : 16];
+            r->pe = (short)pes[k];
             s->nrules++;
         }
         (void)first_rule;
@@ -3112,6 +3135,12 @@ typedef struct {
     int by_tag[T_COUNT];
     int by_key[CSS_BUCKETS];
     int universal;
+    /* The rules for ::before and ::after, chained apart, so an element's own
+       matching never walks them (lay_generated asks for them). */
+    int pe_by_tag[T_COUNT];
+    int pe_by_key[CSS_BUCKETS];
+    int pe_universal;
+    int npe;
     int next[CSS_RULES];
     cbloom need[CSS_RULES];   /* what a rule's other parts want above it */
 } cindex;
@@ -3123,21 +3152,24 @@ static inline unsigned css_hash(const char *s) {
 }
 
 static inline void css_index(const csheet *s, cindex *x) {
-    for (int i = 0; i < T_COUNT; i++) x->by_tag[i] = -1;
-    for (int i = 0; i < CSS_BUCKETS; i++) x->by_key[i] = -1;
-    x->universal = -1;
+    for (int i = 0; i < T_COUNT; i++) x->by_tag[i] = x->pe_by_tag[i] = -1;
+    for (int i = 0; i < CSS_BUCKETS; i++) x->by_key[i] = x->pe_by_key[i] = -1;
+    x->universal = x->pe_universal = -1;
+    x->npe = 0;
 
     /* Backwards, so each chain comes out in source order and the cascade
        below sees the rules in the order they were written. */
     for (int r = s->nrules - 1; r >= 0; r--) {
         const crule *rule = &s->rules[r];
         const csel *c = &s->sels[rule->sel_at + rule->sel_n - 1];
+        int *keys = rule->pe ? x->pe_by_key : x->by_key, *tags = rule->pe ? x->pe_by_tag : x->by_tag;
         int *head;
-        if (c->id >= 0) head = &x->by_key[css_hash(s->text + c->id)];
+        if (c->id >= 0) head = &keys[css_hash(s->text + c->id)];
         else if (c->ncls > 0 && c->cls[0] >= 0)
-            head = &x->by_key[css_hash(s->text + c->cls[0])];
-        else if (c->tag >= 0) head = &x->by_tag[c->tag];
-        else head = &x->universal;
+            head = &keys[css_hash(s->text + c->cls[0])];
+        else if (c->tag >= 0) head = &tags[c->tag];
+        else head = rule->pe ? &x->pe_universal : &x->universal;
+        if (rule->pe) x->npe++;
         x->next[r] = *head;
         *head = r;
 
@@ -3193,9 +3225,10 @@ static inline int css_hit_after(const chit *a, const chit *b) {
 static inline void css_collect_chain(const csheet *s, const cindex *x,
                                      const ddoc *d, int el, int head,
                                      const cmatch *m, const cbloom *anc,
-                                     chit *hits, int *n) {
+                                     chit *hits, int *n, int pe) {
     for (int r = head; r >= 0; r = x->next[r]) {
         if (*n >= CSS_HITS) return;
+        if (s->rules[r].pe != pe) continue;
         if (anc && ((x->need[r].w[0] & ~anc->w[0]) | (x->need[r].w[1] & ~anc->w[1])))
             continue;                          /* wants an ancestor there is not */
         const crule *rule = &s->rules[r];
@@ -3210,21 +3243,33 @@ static inline void css_collect_chain(const csheet *s, const cindex *x,
     }
 }
 
-/* Every rule that applies to this element, in the order they should be
-   applied: weaker specificity first, and among equals the one written
-   later wins, which is what "later in the sheet" means. */
-static inline int css_collect(const csheet *s, const cindex *x, const ddoc *d,
-                              int el, const cmatch *m, const cbloom *anc,
-                              chit *hits) {
+/* A box the layout made for an element's ::before (1) or ::after (2), or 0
+   (layout.h, lay_generated: an element of no tag named so, its host's first
+   or last child). */
+static inline int css_pseudo_node(const ddoc *d, int el) {
+    const dnode *x = &d->nodes[el];
+    if (x->kind != DN_ELEMENT || x->tag != T_OTHER || x->text < 0) return 0;
+    const char *nm = d->arena + x->text;
+    if (nm[0] != ':' || nm[1] != ':') return 0;
+    return w_same(nm, "::before") ? 1 : w_same(nm, "::after") ? 2 : 0;
+}
+
+/* Every rule for an element's ::before or ::after (pe 1 or 2), or for the
+   element itself (0), in the order they should be applied. */
+static inline int css_collect_pe(const csheet *s, const cindex *x, const ddoc *d,
+                                 int el, int pe, const cmatch *m, const cbloom *anc,
+                                 chit *hits) {
     int n = 0;
-    css_collect_chain(s, x, d, el, x->universal, m, anc, hits, &n);
+    const int *keys = pe ? x->pe_by_key : x->by_key, *tags = pe ? x->pe_by_tag : x->by_tag;
+    if (pe && !x->npe) return 0;
+    css_collect_chain(s, x, d, el, pe ? x->pe_universal : x->universal, m, anc, hits, &n, pe);
     int tag = d->nodes[el].tag;
     if (tag > 0 && tag < T_COUNT)
-        css_collect_chain(s, x, d, el, x->by_tag[tag], m, anc, hits, &n);
+        css_collect_chain(s, x, d, el, tags[tag], m, anc, hits, &n, pe);
 
     const char *id = dom_attr(d, el, "id");
     if (id && *id)
-        css_collect_chain(s, x, d, el, x->by_key[css_hash(id)], m, anc, hits, &n);
+        css_collect_chain(s, x, d, el, keys[css_hash(id)], m, anc, hits, &n, pe);
 
     const char *cl = dom_attr(d, el, "class");
     if (cl) {
@@ -3241,8 +3286,8 @@ static inline int css_collect(const csheet *s, const cindex *x, const ddoc *d,
                 i++;
             }
             one[w] = 0;
-            if (w) css_collect_chain(s, x, d, el, x->by_key[css_hash(one)],
-                                     m, anc, hits, &n);
+            if (w) css_collect_chain(s, x, d, el, keys[css_hash(one)],
+                                     m, anc, hits, &n, pe);
         }
     }
 
@@ -3258,6 +3303,23 @@ static inline int css_collect(const csheet *s, const cindex *x, const ddoc *d,
         hits[j + 1] = h;
     }
     return n;
+}
+
+/* Every rule that applies to this element, in the order they should be
+   applied: weaker specificity first, and among equals the one written
+   later wins, which is what "later in the sheet" means. A box made for a
+   ::before or ::after takes its host's rules for that pseudo-element, and
+   none of the rules for elements (a * does not reach it, as in a browser). */
+static inline int css_collect(const csheet *s, const cindex *x, const ddoc *d,
+                              int el, const cmatch *m, const cbloom *anc,
+                              chit *hits) {
+    int pe = css_pseudo_node(d, el);
+    if (pe) {
+        int host = d->nodes[el].parent;
+        if (host < 0) return 0;
+        return css_collect_pe(s, x, d, host, pe, m, anc, hits);
+    }
+    return css_collect_pe(s, x, d, el, 0, m, anc, hits);
 }
 
 /* --- what the browser itself says about each element ----------------------

@@ -2016,10 +2016,13 @@ static void asks_drop_all(void) {
 }
 
 /* The page as it is drawn: itself, or when a script has attached shadow
-   trees, a copy with them in place (dom.h, dom_flat). The copy shares the
-   page's strings and writes its marks where the page's next string will go,
-   so it is made again once the page has changed or added a string; `fresh`
-   makes it again anyway, as every layout does. */
+   trees or the sheet has rules for ::before and ::after, a copy with the
+   trees in place (dom.h, dom_flat) and a box for each ::before and ::after
+   that has content (layout.h, lay_generated). The copy shares the page's
+   strings and writes its own where the page's next string will go, so it
+   is made again once the page has changed or added a string; `fresh`
+   makes it again anyway, as every layout does (a hover can change which
+   rules apply). */
 static ddoc *flat_mem;
 static unsigned flat_dom_seen;
 static int flat_used = -1, flat_count;
@@ -2027,11 +2030,12 @@ static const ddoc *laid;             /* what the last layout walked */
 
 static const ddoc *page_drawn(int fresh) {
     trees_gather();
-    if (!trees_n) return &doc;
+    if (!trees_n && !index_.npe) return &doc;
     if (!flat_mem) flat_mem = (ddoc *)map(sizeof(ddoc), PROT_READ | PROT_WRITE);
     if (!flat_mem) return &doc;
     if (fresh || flat_used != doc.used || flat_count != doc.count || flat_dom_seen != jsdom_dom_version()) {
         dom_flat(flat_mem, &doc, tree_host, tree_root, (const char (*)[DOM_SCOPE])tree_scope, trees_n);
+        lay_generated(flat_mem, &sheet, &index_, &match, inl);
         flat_used = doc.used;
         flat_count = doc.count;
         flat_dom_seen = jsdom_dom_version();
@@ -2048,8 +2052,16 @@ static const ddoc *page_drawn(int fresh) {
  * has no box, and says so. */
 static u8 box_mark[DOM_NODES / 8];
 
+/* A node of what was laid out as the page's own: a box made for a ::before
+   or ::after (layout.h, lay_generated), or the words in one, is its host's,
+   since the page has no such element for a script or a click to be told of. */
+static int page_node(int n) {
+    while (n >= doc.count && laid && n < laid->count) n = laid->nodes[n].parent;
+    return n < doc.count ? n : -1;
+}
+
 /* What the layout drew at a point of the page, for elementFromPoint. */
-static int node_at_point(int x, int y) { return lay_node_at(&page, x, y); }
+static int node_at_point(int x, int y) { return page_node(lay_node_at(&page, x, y)); }
 
 static int box_of(int node, int *x, int *y, int *w, int *h) {
     if (node < 0 || node >= doc.count) return 0;
@@ -2082,12 +2094,41 @@ static int box_of(int node, int *x, int *y, int *w, int *h) {
    block's: the one way this differs. */
 static void restyle_changed(void);
 
+static int style_in_drawn(const ddoc *d, int node, cstyle *out);
+
 static int computed_style(int node, cstyle *out) {
     if (node < 0 || node >= doc.count || doc.nodes[node].kind != DN_ELEMENT) return 0;
     /* From the page as it is drawn, so that one in a shadow tree has its
        tree's rules and inherits from where it is shown. */
     sheets_follow_if_changed();
+    return style_in_drawn(page_drawn(0), node, out);
+}
+
+/* An element's ::before (pe 1) or ::after (2), for getComputedStyle with a
+   pseudo-element: the style of the box made for it (layout.h,
+   lay_generated) and what its content says, as the sheet wrote it. 0 when
+   no box was made, which is content none. */
+static int pseudo_style(int node, int pe, cstyle *out, char *content, int cap) {
+    if (node < 0 || node >= doc.count || doc.nodes[node].kind != DN_ELEMENT || cap < 1) return 0;
+    sheets_follow_if_changed();
     const ddoc *d = page_drawn(0);
+    int g = pe == 1 ? d->nodes[node].first : d->nodes[node].last;
+    if (g < 0 || css_pseudo_node(d, g) != pe) return 0;
+    chit hits[CSS_HITS];
+    int nh = css_collect_pe(&sheet, &index_, d, node, pe, &match, 0, hits);
+    const char *val = "";
+    for (int i = 0; i < nh; i++) {
+        const crule *r = &sheet.rules[hits[i].rule];
+        for (int k = 0; k < r->decl_n; k++) {
+            const cdecl *dc = &sheet.decls[r->decl_at + k];
+            if ((dc->prop & ~CSS_HAS_VAR) == P_CONTENT) val = sheet.text + dc->value;
+        }
+    }
+    w_copy(content, cap, val, w_len(val) + 1);
+    return style_in_drawn(d, g, out);
+}
+
+static int style_in_drawn(const ddoc *d, int node, cstyle *out) {
     int chain[256], n = 0;
     for (int p = node; p >= 0; p = d->nodes[p].parent) {
         if (n >= (int)(sizeof(chain) / sizeof(chain[0]))) return 0;
@@ -2646,6 +2687,7 @@ static void build(const char *html, int len, int width, int want_sheets,
         jsdom_address_with(script_address);
         jsdom_history_with(script_history_go, script_history_length);
         jsdom_styles_with(computed_style);
+        jsdom_pseudo_with(pseudo_style);
         jsdom_memory_with(free_memory);
         jsdom_sheet_text_with(sheet_text_for_script);
         styles_live = want_sheets;
@@ -3900,7 +3942,7 @@ int main(int argc, char **argv) {
         int node_under = -1;
         if (in.my > view_y && in.my < view_y + view_h) {
             over_link = lay_link_at(&page, dx, dy);
-            node_under = lay_node_at(&page, dx, dy);
+            node_under = page_node(lay_node_at(&page, dx, dy));
         }
 
         /* :hover is a style, so an element coming under the pointer changes

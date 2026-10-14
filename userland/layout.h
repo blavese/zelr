@@ -4705,6 +4705,153 @@ static void lay_block_placed(lctx *L, int node, const cstyle *parent, int x,
     *y += st.mb == CSS_AUTO_OFF ? 0 : st.mb;
 }
 
+/* --- ::before and ::after ------------------------------------------------------
+ *
+ * What a page's rules put before and after an element's own contents, as
+ * boxes of their own: a clearfix's empty ::after, which clears the floats
+ * above it and so keeps them inside their box; the mark before a list's
+ * item; the breakpoint a page writes for its script to read. Every rule
+ * naming one was thrown away, so a float ran out of the bottom of the box
+ * it was in and over what came after.
+ *
+ * Each is made in the copy of the page that is laid out, never in the page
+ * the scripts see: an element of no tag named "::before" or "::after", its
+ * host's first or last child, holding its text. css.h (css_collect) gives it
+ * its host's rules for it, and the layout lays it out as any element. */
+
+static void lay_content_put(char *out, int *w, int cap, unsigned cp) {
+    /* An icon font's characters are in the private use areas, and this
+       browser has no icon font: a box with nothing in it beats a box with
+       a wrong letter. */
+    if (!cp || (cp >= 0xE000 && cp <= 0xF8FF) || cp >= 0xF0000) return;
+    char tmp[8];
+    int n = html_fold_cp(cp, tmp);
+    for (int k = 0; k < n && *w < cap - 1; k++) out[(*w)++] = tmp[k];
+}
+
+static unsigned lay_utf8(const char **p) {
+    const unsigned char *s = (const unsigned char *)*p;
+    unsigned c = s[0];
+    int extra = c >= 0xF0 ? 3 : c >= 0xE0 ? 2 : c >= 0xC0 ? 1 : 0;
+    unsigned cp = extra ? c & (0x3F >> extra) : c;
+    int k = 1;
+    for (; k <= extra && s[k] >= 0x80 && s[k] < 0xC0; k++) cp = (cp << 6) | (s[k] & 0x3F);
+    *p += k;
+    return cp;
+}
+
+static int lay_hex(char c) {
+    return c >= '0' && c <= '9' ? c - '0' : c >= 'a' && c <= 'f' ? c - 'a' + 10 : c >= 'A' && c <= 'F' ? c - 'A' + 10 : -1;
+}
+
+/* The text a content value makes -- its strings with their escapes, attr(),
+   the quotes -- or -1 for none or normal, which make no box. Anything else
+   (a counter, a picture, a variable) makes nothing in it. */
+static int lay_content_text(const ddoc *d, int host, const char *v, char *out, int cap) {
+    while (*v == ' ') v++;
+    const char *e = v;
+    while (*e && *e != ' ' && *e != '!') e++;
+    if ((e - v == 4 && w_starts_fold(v, "none")) || (e - v == 6 && w_starts_fold(v, "normal"))) return -1;
+    int w = 0;
+    const char *p = v;
+    while (*p && w < cap - 8) {
+        if (*p == ' ' || *p == '\t' || *p == '\n') { p++; continue; }
+        if (*p == '!') break;                              /* !important */
+        if (*p == '"' || *p == '\'') {
+            char q = *p++;
+            while (*p && *p != q) {
+                unsigned cp;
+                if (*p == '\\') {
+                    p++;
+                    if (!*p) break;
+                    if (lay_hex(*p) >= 0) {
+                        cp = 0;
+                        for (int k = 0; k < 6 && lay_hex(*p) >= 0; k++) cp = cp * 16 + (unsigned)lay_hex(*p++);
+                        if (*p == ' ') p++;
+                    } else if (*p == '\n') { p++; continue; }
+                    else cp = lay_utf8(&p);
+                } else cp = lay_utf8(&p);
+                lay_content_put(out, &w, cap, cp);
+            }
+            if (*p == q) p++;
+            continue;
+        }
+        if (w_starts_fold(p, "attr(")) {
+            p += 5;
+            char name[64];
+            int k = 0;
+            while (*p == ' ') p++;
+            while (*p && *p != ')' && *p != ' ' && *p != ',' && k < 63) name[k++] = *p++;
+            name[k] = 0;
+            while (*p && *p != ')') p++;
+            if (*p) p++;
+            const char *a = k ? dom_attr(d, host, name) : 0;
+            while (a && *a && w < cap - 8) lay_content_put(out, &w, cap, lay_utf8(&a));
+            continue;
+        }
+        if (w_starts_fold(p, "open-quote") || w_starts_fold(p, "close-quote")) {
+            lay_content_put(out, &w, cap, '"');
+            p += w_starts_fold(p, "open") ? 10 : 11;
+            continue;
+        }
+        /* A word or a function this does not make anything of. */
+        int depth = 0;
+        while (*p && (depth || (*p != ' ' && *p != '"' && *p != '\''))) {
+            if (*p == '(') depth++;
+            else if (*p == ')') depth--;
+            p++;
+        }
+    }
+    out[w] = 0;
+    return w;
+}
+
+/* The boxes for every element's ::before and ::after the sheet says have
+   content, made in the copy `out` (inl, when there is one, is cleared for
+   each node made). How many were made. */
+static int lay_generated(ddoc *out, const csheet *s, const cindex *x, const cmatch *m, cinline *inl) {
+    if (!x->npe) return 0;
+    int count = out->count, made = 0;
+    chit hits[CSS_HITS];
+    char txt[512];
+    for (int el = 0; el < count; el++) {
+        const dnode *n = &out->nodes[el];
+        if (n->kind != DN_ELEMENT || n->tag == T_HEAD || dom_raw(n->tag) || html_void(n->tag)) continue;
+        /* Pictures, fields and boxes drawn from pixels have none. */
+        if (n->tag == T_IMG || n->tag == T_SVG || n->tag == T_IFRAME || n->tag == T_SELECT || lay_painted(n->tag))
+            continue;
+        for (int pe = 1; pe <= 2; pe++) {
+            int nh = css_collect_pe(s, x, out, el, pe, m, 0, hits);
+            const char *val = 0;
+            for (int i = 0; i < nh; i++) {
+                const crule *r = &s->rules[hits[i].rule];
+                for (int k = 0; k < r->decl_n; k++) {
+                    const cdecl *dc = &s->decls[r->decl_at + k];
+                    if ((dc->prop & ~CSS_HAS_VAR) == P_CONTENT) val = s->text + dc->value;
+                }
+            }
+            if (!val) continue;
+            int len = lay_content_text(out, el, val, txt, (int)sizeof(txt));
+            if (len < 0) continue;
+            int g = dom_create_element(out, pe == 1 ? "::before" : "::after", pe == 1 ? 8 : 7);
+            if (g < 0) return made;
+            if (inl) { inl[g].at = 0; inl[g].n = 0; }
+            if (len > 0) {
+                int t = dom_new(out, DN_TEXT, T_OTHER);
+                if (t >= 0) {
+                    out->nodes[t].text = dom_str(out, txt, len);
+                    dom_append(out, g, t);
+                    if (inl) { inl[t].at = 0; inl[t].n = 0; }
+                }
+            }
+            if (pe == 1 && out->nodes[el].first >= 0) dom_insert_before(out, el, g, out->nodes[el].first);
+            else dom_append(out, el, g);
+            made++;
+        }
+    }
+    return made;
+}
+
 /* --- the whole page ------------------------------------------------------ */
 
 static inline void lay_run(ldoc *out, const ddoc *d, const csheet *s,

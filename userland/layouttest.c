@@ -81,6 +81,9 @@ static void lay(const char *html, int width) {
     css_index(&sheet, &index_);
     match.hover = hover_id ? dom_by_id(&doc, hover_id) : -1;
     match.visited_links = 0;
+    /* What ::before and ::after put in, as the browser makes them in the copy
+       it lays out (here the page itself, which no script sees). */
+    lay_generated(&doc, &sheet, &index_, &match, inl);
     lay_run(&page, &doc, &sheet, &index_, &match, inl, fake, nfake,
             width, 16);
 }
@@ -1974,6 +1977,33 @@ int main(void) {
         }
         okn("given a width, its height keeps its shape", i1 && i1->w == 200 && i1->h == 100, i1 ? i1->h : -1);
         okn("and with no attributes it is 300 by 150", i2 && i2->w == 300 && i2->h == 150, i2 ? i2->w : -1);
+    }
+
+    /* --- ::before and ::after --------------------------------------------------------
+     *
+     * Every rule naming one was thrown away, and a page's marks, labels and
+     * clearing blocks were not there. */
+    {
+        lay("<style>.q::before{content:'[' attr(data-x) ']'}.q::after{content:\"\\21\"}"
+            ".n::before{content:none}.v{background:#000}"
+            ".cf::after { content: \"end\"; display: block; clear: both }"
+            ".f{float:left;width:50px;height:50px;background:#000}</style>"
+            "<p class=q data-x=hi>words</p><p class=n id=np>plain</p>"
+            "<div class='cf v' id=box><div class=f></div></div><div class=v id=next>next</div>", 600);
+        const litem *a = word("[hi]"), *b = word("words"), *c = word("!");
+        okn("::before and ::after put their content round the element's, from strings, escapes and attr()",
+            a && b && c && a->x < b->x && b->x < c->x && a->y == b->y, a ? a->x : -1);
+        int np = by_id("np"), extra = 0;
+        for (int i = 0; i < page.nitems; i++)
+            if (page.items[i].kind == LK_TEXT && page.items[i].node != np && page.items[i].y == (word("plain") ? word("plain")->y : -1))
+                extra++;
+        okn("and content: none puts nothing", word("plain") && !extra, extra);
+        /* (A box here holds its floats with or without a clearfix, so the
+           ::after is a block of words that clears the float: only its own
+           rules put it below.) */
+        const litem *bx = box_of(by_id("box")), *end = word("end");
+        okn("a ::after takes its own rules: a block that clears the float above it", bx && end && end->y >= bx->y + 50,
+            end && bx ? end->y - bx->y : -1);
     }
 
     puts(failed ? "LAYOUTTEST_FAIL\n" : "LAYOUTTEST_PASS\n");
