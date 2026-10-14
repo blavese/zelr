@@ -95,6 +95,12 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.120.0
+
+- **A script's text drawn as the face can draw it (11)**: curly quotes, dashes, ellipses and accents folded where the
+  layout measures a word, and in the title shown; **dates written as numbers (12)**; the host build's clock; jstest's
+  long run given ninety seconds. Layouttest 298, jstest 458, browsercheck 63; each failing on a build without it.
+
 ### 0.119.0
 
 - **A page's style sheets asked for with its scripts (11)**, as soon as the page is read, applied in the order

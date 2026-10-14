@@ -1,6 +1,15 @@
 # 11 -- The web browser (everything except JS-engine internals and image decoders)
 
-**Since 0.119.0** (the rest of this file is older; trust the code and the README's "since 6048716" list):
+**Since 0.120.0** (the rest of this file is older; trust the code and the README's "since 6048716" list):
+- **Text past ASCII is folded where it is laid out** (layout.h `lay_fold`, in `lay_word` and the preformatted path):
+  a script's text reaches the tree as it was given, and its curly apostrophes, dashes, ellipses and accented letters
+  were drawn as gaps; now each word is folded with html.h `html_fold_cp`, as the parser folds a page's own text. The
+  tree keeps the real characters. The title shown in the status line and told to the console is folded the same way
+  (browser.c `title_take`). Tests: layouttest (raw UTF-8 put in with `dom_set_text`, laid out again with
+  `lay_again`), browsercheck `/folded`.
+- The host shim answers `/sys/time` from the host's clock (it answered no file, and pages took 2026-01-01).
+
+**Since 0.119.0**:
 - **The page's style sheets join the read-ahead** (browser.c `files_ahead`, called in `build` as soon as the page is
   read, before `gather_linked_sheets`; `ahead_add` with each file's own most, `CSS_MAX` or `SCRIPT_MAX`;
   `AHEAD_MAX` 192, since The Verge links 66 sheets). `gather_linked_sheets` takes a sheet from the list and fetches it

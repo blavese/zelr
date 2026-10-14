@@ -2,7 +2,13 @@
 
 Source root the repository root (github.com/blavese/zelr main, 2026-09-22). All paths are relative to it; `file:N` means 1-based line N. Everything below was verified by reading the code. Where a behaviour was derived by tracing (not by running) it says so. Nothing here was built or run.
 
-**Since 0.114.0** (the rest of this file is older; trust the code):
+**Since 0.120.0** (the rest of this file is older; trust the code):
+- **Dates written as numbers** (jsprom.h `js_date_parse`): "10/13/2026", "10-13-2026", "2026/10/13 23:35" and
+  "10/13/2026, 11:35:12 PM" (what toLocaleString writes, which pages hand back to Date to move a time between zones),
+  month first unless the first number cannot be a month or a day; a month past twelve is no date. Still one zone, UTC.
+- jstest's long run has ninety seconds (QEMU took most of sixty) and its failure says which half failed.
+
+**Since 0.114.0**:
 - **Video through hls.js plays** (checked on the host with hls.js 1.5 and two public streams, Mux's test stream and
   TED's, which has its audio apart): it needed three things. A typed array's `set` from another typed array is a copy
   of its bytes (same kind, overlap-safe) or of its numbers read out first (jstyped.h `nat_ta_set`); it went through a
