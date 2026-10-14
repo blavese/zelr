@@ -1,6 +1,21 @@
 # 11 -- The web browser (everything except JS-engine internals and image decoders)
 
-**Since 0.112.0** (the rest of this file is older; trust the code and the README's "since 6048716" list):
+**Since 0.113.0** (the rest of this file is older; trust the code and the README's "since 6048716" list):
+- **`::before` and `::after` are drawn.** css.h keeps a rule whose selector ends in one (`crule.pe`, 1 or 2; nothing
+  may follow it; `::first-line`, `::first-letter` and the rest are still refused), indexes those rules in chains of
+  their own (`cindex.pe_by_tag`, `pe_by_key`, `pe_universal`, `npe`), and reads `content` (`P_CONTENT`). layout.h
+  `lay_generated` makes, in the copy of the page that is laid out, an element of no tag named "::before" or "::after"
+  as each host's first or last child, holding its text (`lay_content_text`: strings and their escapes, `attr()`, the
+  quotes; private-use characters, an icon font's, are left out; counters, pictures and variables make nothing), for
+  every element whose cascaded content is not none or normal (pictures, fields and painted boxes have none).
+  `css_collect` gives such a node its host's rules for that pseudo-element (`css_pseudo_node`, `css_collect_pe`), and
+  none of the element rules, so it is laid out as any element: inline, a block, a float, clearing. browser.c makes the
+  copy (`page_drawn`) whenever the sheet has such rules, not only for shadow trees, and maps a generated node to its
+  host for clicks, hovers and elementFromPoint (`page_node`). A box here already grows to hold its floats, so a
+  clearfix changes nothing that was wrong; what was missing were the boxes themselves. `getComputedStyle(el,
+  '::before')` reads a pseudo-element's style and content through `pseudo_style` (atlas 12).
+
+**Since 0.112.0**:
 - **`<canvas>` is `T_CANVAS`** (html.h), a box drawn from pixels like a `<video>` (layout.h `lay_painted`): laid out by
   `lay_video`, as big as its width and height attributes (300 by 150 without them) unless the page's rules say
   otherwise, keeping its shape when they give one side; what is written inside it is not laid out. The browser draws its

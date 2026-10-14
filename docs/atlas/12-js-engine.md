@@ -2,7 +2,20 @@
 
 Source root the repository root (github.com/blavese/zelr main, 2026-09-22). All paths are relative to it; `file:N` means 1-based line N. Everything below was verified by reading the code. Where a behaviour was derived by tracing (not by running) it says so. Nothing here was built or run.
 
-**Since 0.112.0** (the rest of this file is older; trust the code):
+**Since 0.113.0** (the rest of this file is older; trust the code):
+- **Object.defineProperty with a descriptor that has neither a value nor an accessor** (only enumerable or
+  configurable) changes only those (jslib.h `js_define_from_desc`); it had made an accessor a value of undefined.
+  React's value tracker makes an input's `value` an accessor of the input's own and then sets it enumerable, so every
+  React input read back undefined (GitHub's search box set its query to that and the repository page stopped).
+- **A script's selector has room in the sheet** (css.h `CSS_QUERY_SELS`, `CSS_QUERY_NEGS`, `CSS_QUERY_TEXT`, used only
+  while `csheet.query` is set by jsdom.h `jd_sel_open`, which also sets aside an overflow of the page's own sheets).
+  GitHub's sheets filled the tables, and every selector but a bare tag name found nothing. A selector ending in a
+  pseudo-element matches nothing and is not refused.
+- **getComputedStyle with a pseudo-element** (jswin.h `jd_pseudo_of`, browser.c `pseudo_style`): `content` is the
+  cascaded value with double quotes (or none, with no box); an element's is normal. Netflix reads a breakpoint from
+  `::after`'s content and stopped on undefined.
+
+**Since 0.112.0**:
 - **Streams, the writable kind** (jsprelude.h): WritableStream (its writer, controller and signal; one write at a time,
   in order, the close after them), TransformStream (writes go through transform() to the readable side, flush() at the
   close, terminate and error), TextDecoderStream and TextEncoderStream, and a fetch answer's `body` (a ReadableStream

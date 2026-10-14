@@ -1317,7 +1317,10 @@ picture can be fitted into its box and rounded at its corners.
 Custom properties (`--brand` and `var(--brand, fallback)`, inherited from
 `:root`), `calc()`, `min()`, `max()` and `clamp()` are worked out, which is how
 most sites written this decade give every colour and size. Up to ninety-six
-style sheets are read, each address once, with their `@import`s.
+style sheets are read, each address once, with their `@import`s. What a page
+puts in `::before` and `::after` is drawn as a box of its own -- its words,
+an attribute's value, a block or a float with its own style -- though a
+character from an icon font, which this browser has none of, is left out.
 
 And a page's styles follow its scripts. The sheets used to be read once,
 before any script ran, so a style element a script added or rewrote, a rule

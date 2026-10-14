@@ -95,6 +95,17 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.113.0
+
+- **`::before` and `::after` drawn (11)**: rules for them kept and indexed apart, a box for each with content made in
+  the laid-out copy (`lay_generated`) and styled by its host's rules for it. layouttest 293: content round an element's
+  from strings, escapes and attr(); none making nothing; an ::after that is a block clearing a float; each failing with
+  the boxes not made, made without their rules, or the rules refused as before. browsercheck: a ::before block on the
+  screen and an ::after's content read back by the page's script.
+- **Three script faults found on GitHub and Netflix (12)**: a generic descriptor replacing an accessor (jstest 456), a
+  script's selector refused once the page's sheets filled the tables, and getComputedStyle's content (pagetest 339);
+  each failing on a build without its fix.
+
 ### 0.112.0
 
 - **Facts the standard keeps as getters on prototypes (12)**: Response's fields, XMLHttpRequest's timeout and
