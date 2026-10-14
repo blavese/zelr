@@ -124,6 +124,8 @@ CANVAS_DISC = (0xA0, 0x50, 0x1E)      # and the circle drawn on it later
 PSEUDO_GREEN = (0x20, 0xB0, 0x60)     # /pseudo: the block its ::before makes
 WENT_ON = (0x60, 0x40, 0xC0)          # /inserted: its timers went on while its script came
 TOGETHER = (0x1E, 0x90, 0x80)         # /together: its six files ran in the order written
+SHEET_LAST = (0xB0, 0x70, 0x10)       # /sheets: the last of its four sheets won
+SHEET_THIRD = (0x50, 0xD0, 0x50)      # and the one before it, which must not have
 STOOD = (0xC0, 0x30, 0x30)            # and the block it draws when they did not
 
 # The colour /styled asks for its band to be. Nothing else on the screen is
@@ -512,8 +514,26 @@ def main():
             c.add("and were asked for together, %d at once" % webserver.DELAY_MOST,
                   webserver.DELAY_MOST >= 2, shott)
 
+            # --- and its style sheets ---------------------------------------
+            #
+            # Four sheets the server answers a second late each, all colouring
+            # one block: asked for together, and applied in the order written,
+            # so the last one's brown is what shows.
+            webserver.DELAY_MOST = 0
+            go(vm, mon, "http://%s/sheets" % srv.host, settle=12.0,
+               was=tog, name="br-going-sheets")
+            _, _, _, _, coloured = mon.wait_screen(
+                "br-sheets", lambda w, h, px: count_in(px, w, PAGE, SHEET_LAST) > 20000
+                or count_in(px, w, PAGE, SHEET_THIRD) > 20000, timeout=40)
+            shs, pxs, ws_, shots = page_settled(mon, "br-sheets-settled")
+            brown, green3 = count_in(pxs, ws_, PAGE, SHEET_LAST), count_in(pxs, ws_, PAGE, SHEET_THIRD)
+            c.add("a page's four style sheets apply in the order written (%d, %d)" % (brown, green3),
+                  coloured and brown > 20000 and green3 < 100, shots)
+            c.add("and were asked for together, %d at once" % webserver.DELAY_MOST,
+                  webserver.DELAY_MOST >= 2, shots)
+
             go(vm, mon, "http://%s/scripted" % srv.host, settle=12.0,
-               was=tog, name="br-going-scripted")
+               was=shs, name="br-going-scripted")
             scripted, pxc, wc, shotc = page_settled(mon, "br-scripted")
             c.add("a page's own script runs, and changes the page",
                   count_in(pxc, wc, PAGE, BAND) > 3000, shotc)

@@ -649,6 +649,26 @@ document.title = 'together ' + window.order;
 </body></html>
 """
 
+# Four style sheets the server answers a second late each, every one
+# colouring the same block, so that the last written wins whatever order
+# they come in: a browser that reads a page's sheets in the order written
+# draws it brown.
+SHEETS_PAGE = b"""<!doctype html>
+<html><head><title>sheets</title>
+<link rel="stylesheet" href="/delay/1.css">
+<link rel="stylesheet" href="/delay/2.css">
+<link rel="stylesheet" href="/delay/3.css">
+<link rel="stylesheet" href="/delay/4.css">
+<style>body { font-family: sans-serif; padding: 24px } #b { width: 300px; height: 80px }</style>
+</head>
+<body>
+<h1>four sheets</h1>
+<div id="b"></div>
+</body></html>
+"""
+
+SHEET_COLOURS = {"1": "#5050d0", "2": "#d05050", "3": "#50d050", "4": "#b07010"}
+
 DELAY_LOCK = threading.Lock()
 DELAY_NOW = 0
 DELAY_MOST = 0
@@ -1253,8 +1273,20 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._send(INSERTED_PAGE)
         elif path == "/together":
             self._send(TOGETHER_PAGE)
-        elif path.startswith("/delay/") and path.endswith(".js"):
+        elif path == "/sheets":
+            self._send(SHEETS_PAGE)
+        elif path.startswith("/delay/") and path.endswith(".css"):
             global DELAY_NOW, DELAY_MOST
+            import time
+            n = path[len("/delay/"):-4]
+            with DELAY_LOCK:
+                DELAY_NOW += 1
+                DELAY_MOST = max(DELAY_MOST, DELAY_NOW)
+            time.sleep(1.0)
+            with DELAY_LOCK:
+                DELAY_NOW -= 1
+            self._send(("#b { background: %s }" % SHEET_COLOURS.get(n, "#000")).encode(), ctype="text/css")
+        elif path.startswith("/delay/") and path.endswith(".js"):
             import time
             n = path[len("/delay/"):-3]
             with DELAY_LOCK:

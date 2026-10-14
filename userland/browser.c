@@ -1316,6 +1316,8 @@ static int sheet_seen(const char *url) {
     return 0;
 }
 
+static int ahead_take(const url_t *u, const char **out);
+
 static int gather_linked_sheets(int *fetched, int *skipped) {
     *fetched = *skipped = 0;
     nsheets_seen = 0;
@@ -1343,16 +1345,23 @@ static int gather_linked_sheets(int *fetched, int *skipped) {
         url_text(&u, whole, (int)sizeof(whole));
         if (sheet_seen(whole)) { source_add(i, r0, 1); continue; }
 
-        response_t r;
-        int rc = web_get(&u, cssbuf, CSS_MAX, &r);
-        /* Asked for again, once, when the answer was no answer, the server
-           said it was busy or it stopped short: one sheet that failed on the
-           way is a page drawn with none of its style (Wikipedia's, after a
-           burst of fetching). */
-        if (rc < 0 || rc == 429 || rc >= 500 || r.cut) rc = web_get(&u, cssbuf, CSS_MAX, &r);
-        if (rc < 200 || rc >= 300 || r.len <= 0) { (*skipped)++; source_add(i, r0, 0); continue; }
-        gather_imports(&u, r.body, r.len, fetched);
-        css_parse_sheet(&u, r.body, r.len, lo, hi);
+        /* Asked for already, with the page's other files (files_ahead). */
+        const char *text = 0;
+        int len = ahead_take(&u, &text);
+        if (len <= 0) {
+            response_t r;
+            int rc = web_get(&u, cssbuf, CSS_MAX, &r);
+            /* Asked for again, once, when the answer was no answer, the server
+               said it was busy or it stopped short: one sheet that failed on the
+               way is a page drawn with none of its style (Wikipedia's, after a
+               burst of fetching). */
+            if (rc < 0 || rc == 429 || rc >= 500 || r.cut) rc = web_get(&u, cssbuf, CSS_MAX, &r);
+            if (rc < 200 || rc >= 300 || r.len <= 0) { (*skipped)++; source_add(i, r0, 0); continue; }
+            text = r.body;
+            len = r.len;
+        }
+        gather_imports(&u, text, len, fetched);
+        css_parse_sheet(&u, text, len, lo, hi);
         (*fetched)++;
         source_add(i, r0, 1);
     }
@@ -2084,12 +2093,12 @@ static void asks_drop_all(void) {
  * list (fetch_script), waiting only for its own, and the rest go on coming
  * meanwhile. What has not been taken when the scripts are done is let go.
  * A file that would not come this way is asked for the old way, once. */
-#define AHEAD_MAX 64
+#define AHEAD_MAX 192
 
 typedef struct {
     char  url[URL_TEXT];
     int   state;                        /* 0 to ask, 1 asked (slot + 1 in ask), 2 here, 3 would not come, 4 taken */
-    int   ask;
+    int   ask, max;                     /* and the most its answer may be: a script's, or a sheet's */
     char *text;
     int   len;
 } ahead_t;
@@ -2135,7 +2144,7 @@ static void ahead_pump(void) {
     }
     for (int i = 0; i < nahead; i++) {
         if (ahead[i].state != 0) continue;
-        int id = ask_begin("GET", ahead[i].url, 0, 0, 0, 0, SCRIPT_MAX, 0);
+        int id = ask_begin("GET", ahead[i].url, 0, 0, 0, 0, ahead[i].max, 0);
         if (id == -1) break;
         if (id < 0) { ahead[i].state = 3; continue; }
         ahead[i].state = 1;
@@ -2143,11 +2152,35 @@ static void ahead_pump(void) {
     }
 }
 
-/* The page's script files listed and the first ones asked for: those the
-   parser made that will run, classic or a module's first file, with a src
-   that is an address (a data: or blob: one carries its own). */
-static void scripts_ahead(void) {
+static void ahead_add(const url_t *u, int max) {
+    if (nahead >= AHEAD_MAX) return;
+    url_text(u, ahead[nahead].url, sizeof(ahead[nahead].url));
+    ahead[nahead].state = 0;
+    ahead[nahead].ask = 0;
+    ahead[nahead].max = max;
+    ahead[nahead].text = 0;
+    ahead[nahead].len = 0;
+    nahead++;
+}
+
+/* The page's files listed as soon as it is read, and the first ones asked
+   for, so that what comes next comes while the sheets are read: its style
+   sheets (when they are wanted), as gather_linked_sheets will want them,
+   then the scripts the parser made that will run, classic or a module's
+   first file, with a src that is an address (a data: or blob: one carries
+   its own). */
+static void files_ahead(int want_sheets) {
     ahead_drop();
+    for (int i = 0; want_sheets && i < doc.count && nahead < AHEAD_MAX; i++) {
+        if (doc.nodes[i].kind != DN_ELEMENT || doc.nodes[i].tag != T_LINK || in_template(i)) continue;
+        const char *rel = dom_attr(&doc, i, "rel");
+        const char *href = dom_attr(&doc, i, "href");
+        int lo, hi;
+        if (!rel || !href || !*href || !rel_is_sheet(rel)) continue;
+        if (!sheet_media(i, &lo, &hi) || dom_attr(&doc, i, "disabled")) continue;
+        url_t u;
+        if (url_join(&here, href, &u)) ahead_add(&u, CSS_MAX);
+    }
     for (int i = 0; i < doc.count && nahead < AHEAD_MAX; i++) {
         if (doc.nodes[i].kind != DN_ELEMENT || doc.nodes[i].tag != T_SCRIPT) continue;
         const char *s = dom_attr(&doc, i, "src");
@@ -2158,13 +2191,7 @@ static void scripts_ahead(void) {
             && !w_starts_fold(type, "application/javascript") && !w_same_fold(type, "text/ecmascript"))
             continue;
         url_t u;
-        if (!url_join(&here, s, &u)) continue;
-        url_text(&u, ahead[nahead].url, sizeof(ahead[nahead].url));
-        ahead[nahead].state = 0;
-        ahead[nahead].ask = 0;
-        ahead[nahead].text = 0;
-        ahead[nahead].len = 0;
-        nahead++;
+        if (url_join(&here, s, &u)) ahead_add(&u, SCRIPT_MAX);
     }
     ahead_pump();
 }
@@ -2805,6 +2832,12 @@ static void build(const char *html, int len, int width, int want_sheets,
     dom_parse(&doc, html, len);
     dom_shadows(&doc);
     meta_referrer();
+    /* The old page's pictures let go before its asks are, since each holds
+       the number of a slot that is about to be another file's. */
+    pics_drop();
+    asks_made = 0;
+    asks_drop_all();
+    files_ahead(want_sheets);
 
     css_init(&sheet);
     css_parse(&sheet, CSS_UA, (int)sizeof(CSS_UA) - 1);
@@ -2818,7 +2851,6 @@ static void build(const char *html, int len, int width, int want_sheets,
     css_index(&sheet, &index_);
 
     /* The pictures, before the layout so it can leave room for them. */
-    pics_drop();
     if (want_sheets) gather_pictures();
     pics_follow_on = want_sheets;
 
@@ -2833,8 +2865,6 @@ static void build(const char *html, int len, int width, int want_sheets,
     scripts_changed = 0;
     scripts_outside = 0;
     scripts_bytes = 0;
-    asks_made = 0;
-    asks_drop_all();
     /* The page's address for its scripts, with the fragment the reader asked
        for, which is never sent and so is not in `here`. */
     char at[URL_TEXT];
@@ -2870,7 +2900,6 @@ static void build(const char *html, int len, int width, int want_sheets,
         jsdom_sheet_text_with(sheet_text_for_script);
         styles_live = want_sheets;
         links_report();
-        scripts_ahead();
         scripts_ran = jsdom_scripts(script_err, (int)sizeof(script_err));
         ahead_drop();
         jsdom_loaded();
