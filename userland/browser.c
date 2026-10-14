@@ -2129,7 +2129,7 @@ static void asks_drop_all(void) {
  * list (fetch_script), waiting only for its own, and the rest go on coming
  * meanwhile. What has not been taken when the scripts are done is let go.
  * A file that would not come this way is asked for the old way, once. */
-#define AHEAD_MAX 192
+#define AHEAD_MAX 384
 
 typedef struct {
     char  url[URL_TEXT];
@@ -2229,6 +2229,32 @@ static void files_ahead(int want_sheets) {
         url_t u;
         if (url_join(&base, s, &u)) ahead_add(&u, SCRIPT_MAX);
     }
+    /* And the modules the page says it will import (modulepreload, or a
+       script it preloads): a module's own imports are known only once it
+       has been read, and these are what it will ask for first. */
+    for (int i = 0; i < doc.count && nahead < AHEAD_MAX; i++) {
+        if (doc.nodes[i].kind != DN_ELEMENT || doc.nodes[i].tag != T_LINK || in_template(i)) continue;
+        const char *rel = dom_attr(&doc, i, "rel"), *href = dom_attr(&doc, i, "href"), *as = dom_attr(&doc, i, "as");
+        if (!rel || !href || !*href) continue;
+        if (!w_same_fold(rel, "modulepreload") && !(w_same_fold(rel, "preload") && as && w_same_fold(as, "script")))
+            continue;
+        url_t u;
+        if (url_join(&base, href, &u)) ahead_add(&u, SCRIPT_MAX);
+    }
+    ahead_pump();
+}
+
+/* A file a module imports (jsmod.h, jd_want_script), put on the list as
+   soon as the module naming it has been read, and asked for while the
+   modules before it are still coming. */
+static void script_want(const char *src) {
+    if (scripts_outside >= SCRIPTS_MAX || scripts_bytes >= SCRIPTS_BYTES || nahead >= AHEAD_MAX) return;
+    url_t u;
+    if (!url_join(&base, src, &u)) return;
+    char t[URL_TEXT];
+    url_text(&u, t, sizeof(t));
+    for (int i = 0; i < nahead; i++) if (w_same(ahead[i].url, t)) return;
+    ahead_add(&u, SCRIPT_MAX);
     ahead_pump();
 }
 
@@ -2971,6 +2997,7 @@ static void build(const char *html, int len, int width, int want_sheets,
     jsdom_view(width, css_view_h, 0);
     if (jsdom_open(&doc, &sheet)) {
         jsdom_fetch_with(fetch_script);
+        jsdom_want_with(script_want);
         jsdom_request_with(do_request);
         jsdom_asks_with(ask_start, ask_poll, ask_end);
         jsdom_script_asks_with(script_ask_start, script_ask_poll, ask_end);

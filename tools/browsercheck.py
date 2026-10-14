@@ -568,8 +568,16 @@ def main():
             c.add("a module a busy server refuses once is asked for again after the pause it names (%d asks)"
                   % len(webserver.MODFLAKY_REFUSED), told_flaky and len(webserver.MODFLAKY_REFUSED) == 2, shotk)
 
+            # --- a module's imports, asked for together -----------------------
+            go(vm, mon, "http://%s/mods" % srv.host, settle=10.0,
+               was=flk, name="br-going-mods")
+            told_mods = vm.wait_serial("-- mods 123 --", timeout=40)
+            mds, _, _, shotm = page_settled(mon, "br-mods")
+            c.add("a module's three imports run in order and were asked for together, %d at once"
+                  % webserver.MDELAY_MOST, told_mods and webserver.MDELAY_MOST >= 2, shotm)
+
             go(vm, mon, "http://%s/scripted" % srv.host, settle=12.0,
-               was=flk, name="br-going-scripted")
+               was=mds, name="br-going-scripted")
             scripted, pxc, wc, shotc = page_settled(mon, "br-scripted")
             c.add("a page's own script runs, and changes the page",
                   count_in(pxc, wc, PAGE, BAND) > 3000, shotc)

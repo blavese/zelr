@@ -294,7 +294,14 @@ static void jd_mod_fetch_all(int first) {
             char url[JD_URL_MAX];
             const char *to = s ? jd_mod_resolve(s->s, m->url, url, (int)sizeof(url)) : 0;
             if (!to) continue;
-            if (jd_mod_find(to) < 0 && jd_mod_add(to, to) < 0) break;
+            if (jd_mod_find(to) < 0) {
+                if (jd_mod_add(to, to) < 0) break;
+                /* Asked for now, with every other file this module and the
+                   ones read before it import, rather than when its turn
+                   comes: Mastodon's app is 140 files, which one after another
+                   took two minutes on the host. */
+                if (jd_want_script && !jd_is_data_url(to) && !jd_is_blob_url(to)) jd_want_script(to);
+            }
             m = &jd_mods[i];
         }
     }

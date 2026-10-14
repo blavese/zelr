@@ -732,6 +732,20 @@ MODFLAKY_MAIN = b"import { v } from './dep.js';\ndocument.title = 'flaky ' + v;\
 MODFLAKY_DEP = b"export const v = 'came';\n"
 MODFLAKY_REFUSED = []
 
+# A module importing three modules the server takes a second each to give,
+# counting how many it is giving at once: a browser that asks for a module's
+# imports one after another never gives it more than one.
+MODS_PAGE = b"""<!doctype html>
+<html><head><title>mods</title>
+<style>body { font-family: sans-serif; padding: 24px; font-size: 32px }</style></head>
+<body><p>mods</p>
+<script type="module" src="/mods/top.js"></script>
+</body></html>
+"""
+MODS_TOP = (b"import '/mdelay/1.js'; import '/mdelay/2.js'; import '/mdelay/3.js';\n"
+            b"document.title = 'mods ' + window.order;\n")
+MDELAY_NOW = 0
+MDELAY_MOST = 0
 
 DELAY_NOW = 0
 DELAY_MOST = 0
@@ -1368,6 +1382,22 @@ class Handler(http.server.BaseHTTPRequestHandler):
             time.sleep(1.0)
             with DELAY_LOCK:
                 DELAY_NOW -= 1
+            self._send(("window.order = (window.order || '') + '%s';" % n).encode(),
+                       ctype="application/javascript")
+        elif path == "/mods":
+            self._send(MODS_PAGE)
+        elif path == "/mods/top.js":
+            self._send(MODS_TOP, ctype="application/javascript")
+        elif path.startswith("/mdelay/") and path.endswith(".js"):
+            global MDELAY_NOW, MDELAY_MOST
+            import time
+            n = path[len("/mdelay/"):-3]
+            with DELAY_LOCK:
+                MDELAY_NOW += 1
+                MDELAY_MOST = max(MDELAY_MOST, MDELAY_NOW)
+            time.sleep(1.0)
+            with DELAY_LOCK:
+                MDELAY_NOW -= 1
             self._send(("window.order = (window.order || '') + '%s';" % n).encode(),
                        ctype="application/javascript")
         elif path == "/flaky":

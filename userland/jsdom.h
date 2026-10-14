@@ -5718,6 +5718,13 @@ static void jd_setup_documents(jctx *J, jobj *docproto) {
    immediately. */
 static int (*jd_get_script)(const char *src, const char **out);
 
+/* And a file a module imports, named as soon as the module naming it has
+   been read, before its turn comes: the browser asks for it alongside the
+   others it is waiting on (browser.c, script_want). */
+static void (*jd_want_script)(const char *src);
+
+void jsdom_want_with(void (*fn)(const char *)) { jd_want_script = fn; }
+
 /* Waiting on the network while a script runs -- a module its import() asks
    for, a request it waits on -- is not the script running, and a run's
    clock (js.h, JS_TIME_CAP) is moved on by it. Counted, the modules
