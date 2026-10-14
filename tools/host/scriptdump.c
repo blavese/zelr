@@ -47,6 +47,68 @@ static int dumped;
 static int show_text;            /* "text" after the address */
 static int show_tree;            /* "tree": the page as it is drawn */
 
+/* "nodes": what the tree's nodes are, the page's and the removed ones apart,
+   by kind and name (a text node by its parent's), the most first, and the
+   last few removed texts. A page whose tree runs past what the layout can
+   reach (DOM_NODES) is churning through something, and this says what. */
+static void put_cut(const char *s, int most);
+
+static void nodes_report(void) {
+    u8 *live = (u8 *)malloc((u64)doc.count + 1);
+    if (!live) return;
+    for (int i = 0; i < doc.count; i++) live[i] = 0;
+    for (int i = doc.root; i >= 0; i = dom_next(&doc, i, doc.root)) live[i] = 1;
+    static struct { char name[40]; int dead, alive; } kinds[64];
+    int nk = 0;
+    for (int i = 0; i < doc.count; i++) {
+        const dnode *n = &doc.nodes[i];
+        char name[40];
+        if (n->kind == DN_ELEMENT) w_copy(name, sizeof(name), dom_tag_name(&doc, i), 30);
+        else {
+            w_copy(name, sizeof(name), n->kind == DN_TEXT ? "text in " : "other in ", 10);
+            int p = n->parent, k = w_len(name);
+            w_copy(name + k, (int)sizeof(name) - k, p >= 0 && doc.nodes[p].kind == DN_ELEMENT ? dom_tag_name(&doc, p) : "nothing", 24);
+        }
+        int k = 0;
+        while (k < nk && !w_same(kinds[k].name, name)) k++;
+        if (k == nk) {
+            if (nk == 64) continue;
+            w_copy(kinds[nk].name, sizeof(kinds[nk].name), name, sizeof(name));
+            kinds[nk].dead = kinds[nk].alive = 0;
+            nk++;
+        }
+        if (live[i]) kinds[k].alive++;
+        else kinds[k].dead++;
+    }
+    puts("nodes ");
+    putn(doc.count);
+    puts(", by kind (in the page / removed):\n");
+    for (int shown = 0; shown < 12; shown++) {
+        int best = -1;
+        for (int k = 0; k < nk; k++)
+            if (kinds[k].dead + kinds[k].alive > 0
+                && (best < 0 || kinds[k].dead + kinds[k].alive > kinds[best].dead + kinds[best].alive)) best = k;
+        if (best < 0) break;
+        puts("  ");
+        puts(kinds[best].name);
+        puts(" ");
+        putn(kinds[best].alive);
+        puts(" / ");
+        putn(kinds[best].dead);
+        puts("\n");
+        kinds[best].dead = kinds[best].alive = 0;
+    }
+    int said = 0;
+    for (int i = doc.count - 1; i >= 0 && said < 4; i--) {
+        if (live[i] || doc.nodes[i].kind != DN_TEXT || doc.nodes[i].text < 0) continue;
+        puts("  removed text: ");
+        put_cut(doc.arena + doc.nodes[i].text, 100);
+        puts("\n");
+        said++;
+    }
+    free(live);
+}
+
 static void put_cut(const char *s, int most) {
     int k = 0;
     for (; s[k] && k < most; k++) {
@@ -91,6 +153,11 @@ static void outline(const ddoc *d, int most) {
             if (cl && *cl) { puts("."); put_cut(cl, 40); }
             if (dom_attr(d, i, "data-zh")) puts(" [host]");
             if (dom_attr(d, i, "data-zl")) puts(" [slotted]");
+            /* What the layout made for it itself (boxes, pictures, fields):
+               where a page stops being drawn is where these stop. */
+            int made = 0;
+            for (int k = 0; k < page.nitems; k++) if (page.items[k].node == i) made++;
+            if (made) { puts(" ["); putn(made); puts(" laid out]"); }
             putc('\n');
             lines++;
             skip = n->tag == T_SCRIPT || n->tag == T_STYLE || w_same(dom_tag_name(d, i), "svg");
@@ -144,7 +211,12 @@ static void one_done(int index, const char *from, u32 len, const char *err) {
     puts(err && *err ? (len ? "stopped" : err) : "ok");
     puts("  [");
     putn((int)(jd_J.allocated / 1024));
-    puts(" KB]\n");
+    /* And how many nodes the tree has made, removed ones included: a script
+       that churns through them pushes what is made after it past what the
+       layout can reach (DOM_NODES). */
+    puts(" KB, page nodes ");
+    putn(doc.count);
+    puts("]\n");
 
     /* With "text": an inline script that stopped is printed whole between
        markers, to find what the engine could not read. One from a file has
@@ -309,6 +381,8 @@ int main(int argc, char **argv) {
         }
         puts("\n");
     }
+
+    for (int a = 2; a < argc; a++) if (w_same(argv[a], "nodes")) nodes_report();
 
     for (int a = 2; a < argc; a++) {
         if (!w_same(argv[a], "prof")) continue;
