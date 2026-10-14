@@ -1,6 +1,17 @@
 # 11 -- The web browser (everything except JS-engine internals and image decoders)
 
-**Since 0.125.0** (the rest of this file is older; trust the code and the README's "since 6048716" list):
+**Since 0.126.0** (the rest of this file is older; trust the code and the README's "since 6048716" list):
+- **A script's or module's file is asked for again once** (browser.c `ask_again`, shared with sheets): no answer, cut
+  short, 429 or 5xx; 429/503 after their Retry-After (half a second if none, two at most).
+- **A module's imports are read ahead** (jsmod.h calls `jd_want_script` as each new import is found; browser.c
+  `script_want` puts it on the `ahead` list, now 384 long), and `modulepreload` / `preload as=script` links join the list
+  in `files_ahead`. Mastodon: 115 s of script time on the host to 6 s.
+- **An empty sheet or script is a file** (gather_linked_sheets, `link_text`, `fetch_script` hands an empty script over as
+  one space, since nought means it did not come).
+- Harness pages: `/flaky` (a module refused once, `MODFLAKY_*`; `FLAKY_*` is the busy sheet's), `/mods` (`MDELAY_MOST`),
+  `/empty` (judged by colour, `EMPTY_OK`: the console line is printed before a timer's title).
+
+**Since 0.125.0**:
 - **`LK_EDGE`** (layout.h): a block with no background or border gets an item of its own, made where its background
   would be and drawn as nothing, carried by every move of its contents (`lay_cell_fit`, `lay_translate`, flex
   stretch). browser.c `box_of` (getBoundingClientRect, offset/client sizes) and `lay_node_at` see it; `lay_link_at`

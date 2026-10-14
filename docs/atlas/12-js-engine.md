@@ -2,7 +2,11 @@
 
 Source root the repository root (github.com/blavese/zelr main, 2026-09-22). All paths are relative to it; `file:N` means 1-based line N. Everything below was verified by reading the code. Where a behaviour was derived by tracing (not by running) it says so. Nothing here was built or run.
 
-**Since 0.125.0** (the rest of this file is older; trust the code):
+**Since 0.126.0** (the rest of this file is older; trust the code):
+- **A worker's import.meta** (jsworker.h `jw_import_meta`, its `meta_hook`): `{ url }`, the worker's address, one object;
+  the worker's URL has a `revokeObjectURL` that does nothing. A module worker is still run as a classic script.
+
+**Since 0.125.0**:
 - **getComputedStyle(...).getPropertyValue('--name')** (jswin.h `jd_custom_of`, set by `jsdom_custom_with`): by the name
   as written, trimmed; "" for none or for a pseudo-element. Not listed when a computed style is enumerated.
 

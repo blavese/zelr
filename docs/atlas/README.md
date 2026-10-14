@@ -95,6 +95,12 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.126.0
+
+- **Script and module files asked for again after a busy server's pause (11)**, **a module's imports read ahead (11)**,
+  **empty sheets and scripts taken as files (11)**, **a worker's import.meta (12)**. Browser harness 68, pagetest 355,
+  each failing on a build without its change.
+
 ### 0.125.0
 
 - **Custom properties through getComputedStyle (12, 11)**; **a box that draws nothing given its edges (11)**, so
