@@ -1,7 +1,8 @@
 #pragma once
 #include "types.h"
 
-/* TLS 1.3, client side, over a TCP connection that is already open.
+/* TLS 1.3, client side, over a TCP connection that is already open, and
+ * TLS 1.2 for a server that has nothing newer.
  *
  * One session per connection, and the connection's own handle names it.
  * There is no second handle space to keep in step: a session belongs to
@@ -14,14 +15,15 @@
  * encrypted connection after another, each one a fresh handshake waited
  * out in turn, because there was nowhere to put a second.
  *
- * Only version 1.3 and only one cipher suite: AES-128-GCM with SHA-256,
- * which every server is required to implement, agreed over X25519, or over
- * P-256 when the server asks to start again with that. That is
- * a deliberate floor rather than a subset chosen for convenience. Older
- * versions of this protocol have a long history of being talked down into
- * by anybody in the middle, and the way that is prevented is by not
- * implementing them, not by preferring against them. A server too old for
- * 1.3 does not get a weaker connection here; it gets no connection. */
+ * 1.3 with one cipher suite: AES-128-GCM with SHA-256, which every server is
+ * required to implement, agreed over X25519, or over P-256 when the server
+ * asks to start again with that. 1.2 only as far as nobody has broken it:
+ * ECDHE (X25519 or P-256) signed with the certificate's key, AES-128-GCM,
+ * the extended master secret when the server has it, and nothing older --
+ * no RSA key transport, no CBC, no renegotiation, no resumption. Older
+ * versions have a long history of being talked down into by anybody in the
+ * middle; 1.0 and 1.1 are not here, and a 1.3 server talked down to 1.2 is
+ * caught by what 1.3 has it put in its random. */
 
 /* Runs the whole handshake over a connection that is already open, given
    by handle, including checking the certificate chain against the host name
@@ -74,6 +76,14 @@ u32 tls_test_recv_split(const u8 s_app[32], const u8 *in, u32 first, u32 in_len,
    stopped. True only if it finished. */
 bool tls_test_connect(const u8 random[128], const char *host, const u8 *in, u32 in_len,
                       u8 *sent, u32 sent_cap, u32 *sent_len, char *why, u32 why_cap);
+
+/* A TLS 1.2 session in mid conversation under the key block `block` (our
+   key, the server's, our nonce's fixed four bytes, the server's): says `say`
+   twice, as two records, if it is not empty, then reads all of `in`. What it
+   read, what it sent, and why it stopped if it did. */
+u32 tls_test_v12(const u8 block[40], const u8 *in, u32 in_len, u8 *got, u32 got_cap,
+                 const u8 *say, u32 say_len, u8 *sent, u32 sent_cap, u32 *sent_len,
+                 char *why, u32 why_cap);
 
 /* The transcript hash over a first hello, a server's request to start again
    and what follows, as a handshake that was asked to start again keeps it. */

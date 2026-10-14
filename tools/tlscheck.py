@@ -21,13 +21,14 @@ passing against it says nothing about the second. Two of the ones here were
 added after they were found to be refused, each for a reason the first three
 could never have shown.
 
-What is not here is a site with a deliberately bad certificate. The obvious
-ones are only reachable over TLS 1.2, which this refuses before it has
-looked at a certificate at all, so they would pass for the wrong reason. The
-wrong name, the expired date and the untrusted root are checked in
-kernel/selftest.c instead, against a real chain with those faults introduced
-on purpose, which is both stricter and not dependent on somebody else's
-server staying misconfigured.
+Sites with deliberately bad certificates were left out while TLS 1.2 was
+refused before any certificate was looked at: badssl.com speaks only 1.2,
+so they would have passed for the wrong reason. Since 0.116.0 a 1.2
+handshake gets as far as the certificate, and three of them are here, each
+refused for its own reason. The wrong name, the expired date and the
+untrusted root are also checked in kernel/selftest.c, against a real chain
+with those faults introduced on purpose, which does not depend on somebody
+else's server staying misconfigured.
 
   python tools/tlscheck.py [--keep]
 """
@@ -41,12 +42,12 @@ from harness import Guest, Checks, build_once, ROOT              # noqa: E402
 DISK = os.path.join(ROOT, "tlscheck.%d.img" % os.getpid())
 
 # Name, what the answer has to contain to count as that site answering
-# rather than as something in the middle answering for it, and the group the
-# key was agreed in.
+# rather than as something in the middle answering for it, and the version
+# and group the key was agreed in.
 SITES = [
-    ("www.google.com", "<title>Google</title>", "x25519"),
-    ("example.com", "Example Domain", "x25519"),
-    ("wikipedia.org", None, "x25519"),    # answers with a redirect, which is fine
+    ("www.google.com", "<title>Google</title>", "1.3, x25519"),
+    ("example.com", "Example Domain", "1.3, x25519"),
+    ("wikipedia.org", None, "1.3, x25519"),    # answers with a redirect, which is fine
 
     # These two are here because each of them was once refused, and for a
     # different reason, and both reasons looked identical from the outside:
@@ -58,14 +59,34 @@ SITES = [
     # self-signed with SHA-1, and verifying that self-signature is both
     # impossible here and pointless: a root signs itself, which proves
     # nothing. The store's copy is the one to believe.
-    ("www.bbc.co.uk", None, "x25519"),
-    ("archive.org", None, "x25519"),
+    ("www.bbc.co.uk", None, "1.3, x25519"),
+    ("archive.org", None, "1.3, x25519"),
 
     # Microsoft's servers have no x25519: they answer a hello offering it
     # with a request to start again with P-256, which was refused, so Office,
     # Outlook and their sign-in could not be reached at all. (www.office.com
     # answers / with a redirect and no body; this one says where to go.)
-    ("login.microsoftonline.com", None, "p-256"),
+    ("login.microsoftonline.com", None, "1.3, p-256"),
+
+    # Servers with nothing newer than TLS 1.2, refused until 0.116.0: signing
+    # with RSA-PSS over x25519, with ECDSA over x25519, with RSA's older
+    # padding over P-256, and with RSA-PSS over P-256 (Microsoft's account
+    # sign-in).
+    ("imgur.com", None, "1.2, x25519"),
+    ("genius.com", None, "1.2, x25519"),
+    ("arstechnica.com", None, "1.2, p-256"),
+    ("login.live.com", None, "1.2, p-256"),
+]
+
+# TLS 1.2 servers whose certificates are wrong on purpose (badssl.com), which
+# have to be refused for that reason. The file's opening said why these were
+# left out: they speak only 1.2, which was refused before any certificate
+# was looked at. Now a 1.2 handshake gets as far as the certificate, and
+# these are what show it is still looked at.
+BAD = [
+    ("expired.badssl.com", "the certificate has expired"),
+    ("wrong.host.badssl.com", "the certificate is for another site"),
+    ("self-signed.badssl.com", "no trusted authority signed this"),
 ]
 
 
@@ -130,7 +151,7 @@ def main():
             out = fetch(vm, host)
             got = status_of(out)
 
-            ok = "TLS 1.3, %s, aes-128-gcm" % group in out
+            ok = "TLS %s, aes-128-gcm" % group in out
             c.add("%s completes a handshake" % host, ok)
             c.add("and answers", got is not None)
             if not ok or got is None:
@@ -145,6 +166,17 @@ def main():
             if marker:
                 c.add("and the body is really %s's" % host, marker in out
                       or body > 400)
+
+        for host, reason in BAD:
+            if not resolved(vm, host):
+                c.add("%s resolves, so there is something to connect to" % host, False)
+                continue
+            out = vm.fresh("fetch https://%s /" % host, timeout=120)
+            c.add("%s is refused" % host, "secure:" not in out and status_of(out) is None)
+            c.add("because %s" % reason, reason in out)
+            if reason not in out:
+                for line in out.splitlines()[1:6]:
+                    print("      | %s" % line)
 
         # Something that is not a TLS server at all, on a port that answers.
         # The certificate checks are covered against a real chain by the
@@ -183,7 +215,7 @@ def main():
         plain = vm.fresh("fetch http://example.com /", timeout=90)
         c.add("and plain http still works", status_of(plain) is not None)
         c.add("and is not quietly encrypted",
-              "TLS 1.3" not in plain)
+              "TLS 1." not in plain)
     finally:
         vm.stop()
         if not keep and os.path.exists(DISK):

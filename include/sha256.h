@@ -50,3 +50,9 @@ bool hkdf_expand_label(const u8 secret[SHA256_SIZE], const char *label,
 bool tls13_derive_secret(const u8 secret[SHA256_SIZE], const char *label,
                          const u8 *transcript_hash, u32 hash_len,
                          u8 out[SHA256_SIZE]);
+
+/* TLS 1.2's PRF with SHA-256 (RFC 5246 5): HMAC chained over the label and
+   seed together, as many bytes as are asked for. False if the label and seed
+   are longer than this has room for (96 bytes; TLS asks for at most 86). */
+bool tls12_prf(const u8 *secret, u32 secret_len, const char *label,
+               const u8 *seed, u32 seed_len, u8 *out, u32 out_len);

@@ -213,3 +213,30 @@ bool tls13_derive_secret(const u8 secret[SHA256_SIZE], const char *label,
     return hkdf_expand_label(secret, label, transcript_hash, hash_len,
                              out, SHA256_SIZE);
 }
+
+bool tls12_prf(const u8 *secret, u32 secret_len, const char *label,
+               const u8 *seed, u32 seed_len, u8 *out, u32 out_len) {
+    u8 ls[96], a[SHA256_SIZE], buf[SHA256_SIZE + 96], block[SHA256_SIZE];
+    u32 label_len = 0;
+    while (label[label_len]) label_len++;
+    if (label_len + seed_len > sizeof(ls)) return false;
+    memcpy(ls, label, label_len);
+    memcpy(ls + label_len, seed, seed_len);
+    u32 n = label_len + seed_len;
+
+    /* A(1) is the HMAC of the label and seed, each A after it the HMAC of
+       the one before; every block of output is the HMAC of an A followed by
+       the label and seed again. */
+    hmac_sha256(secret, secret_len, ls, n, a);
+    while (out_len) {
+        memcpy(buf, a, SHA256_SIZE);
+        memcpy(buf + SHA256_SIZE, ls, n);
+        hmac_sha256(secret, secret_len, buf, SHA256_SIZE + n, block);
+        u32 take = out_len < SHA256_SIZE ? out_len : SHA256_SIZE;
+        memcpy(out, block, take);
+        out += take;
+        out_len -= take;
+        hmac_sha256(secret, secret_len, a, SHA256_SIZE, a);
+    }
+    return true;
+}

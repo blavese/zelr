@@ -1,4 +1,4 @@
-/* TLS 1.3.
+/* TLS 1.3, and TLS 1.2 for a server that has nothing newer.
  *
  * The shape of it: agree a secret nobody watching can work out, use it to
  * derive keys, and have the server prove with a signature that it is the
@@ -6,11 +6,17 @@
  * three separate things and all three have to hold. A connection with the
  * first two and not the third is encrypted to a stranger.
  *
- * One version and one cipher suite, on purpose. Every attack that has
- * broken this protocol in practice worked by persuading two modern
- * implementations to use an old thing they both still supported, and the
- * defence is not to support it. A server that cannot do 1.3 gets refused
- * rather than accommodated.
+ * Every attack that has broken this protocol in practice worked by
+ * persuading two implementations to use an old thing they both still
+ * supported, and the defence is not to support it. So 1.3 has one cipher
+ * suite. 1.2 is here because about one popular site in twenty has nothing
+ * newer (Imgur, Craigslist, Ars Technica, Microsoft's account sign-in), and
+ * only the part of it nobody has broken: a key agreed afresh (ECDHE, x25519
+ * or P-256) and signed with the certificate's key, AES-128-GCM, and the
+ * extended master secret when the server has it. No RSA key transport, no
+ * CBC, no SHA-1, no compression, no renegotiation, no resumption. And a
+ * server that can do 1.3 cannot be talked down to 1.2 by anybody in the
+ * middle: 1.3 has it say so in its random, which is checked.
  *
  * The transcript is the spine. Every handshake message, in order, is hashed
  * into a running total, and the signature and both finished messages are
@@ -38,17 +44,24 @@
 #define REC_HANDSHAKE     22
 #define REC_APPDATA       23
 
+#define HS_HELLO_REQUEST  0
 #define HS_CLIENT_HELLO   1
 #define HS_SERVER_HELLO   2
 #define HS_NEW_TICKET     4
 #define HS_ENCRYPTED_EXT  8
 #define HS_CERTIFICATE    11
+#define HS_SERVER_KEY_EXCH 12
+#define HS_CERT_REQUEST   13
+#define HS_SERVER_DONE    14
 #define HS_CERT_VERIFY    15
+#define HS_CLIENT_KEY_EXCH 16
 #define HS_FINISHED       20
 #define HS_KEY_UPDATE     24
 #define HS_MESSAGE_HASH   254
 
 #define SUITE_AES128_GCM_SHA256 0x1301
+#define SUITE_ECDHE_ECDSA_AES128_GCM 0xc02b
+#define SUITE_ECDHE_RSA_AES128_GCM   0xc02f
 #define GROUP_X25519    0x001d
 #define GROUP_SECP256R1 0x0017
 
@@ -82,6 +95,18 @@ typedef struct {
     bool retried;
     u8 cookie[COOKIE_MAX];
     u32 cookie_len;
+
+    /* TLS 1.2: the suite the server chose, its random (the signed exchange and
+       the key block are over both), whether it agreed the extended master
+       secret, the master secret, and whether its change of cipher has come,
+       after which its records are sealed. That is taken only once ours has
+       gone (ccs_ok). */
+    bool v12;
+    u16 suite;
+    u8 server_random[32];
+    bool ems;
+    u8 master[48];
+    bool ccs_ok, s_sealed;
 
     sha256_t transcript;
 
@@ -306,9 +331,39 @@ static bool send_plain_record(tls_t *z, u8 type, const u8 *data, u32 len) {
     return write_all(z, out, len + 5);
 }
 
+/* A TLS 1.2 record under AES-GCM (RFC 5288) shows its type. Its nonce is
+   four bytes from the key block and eight sent in front of the data, which
+   are the record's number here, since that never repeats under one key; the
+   number, type, version and length are authenticated with it. */
+static void aad12(u8 aad[13], u64 seq, u8 type, u32 len) {
+    for (int i = 0; i < 8; i++) aad[i] = (u8)(seq >> (56 - 8 * i));
+    aad[8] = type; aad[9] = 3; aad[10] = 3;
+    aad[11] = (u8)(len >> 8); aad[12] = (u8)len;
+}
+
+static bool send_sealed12(tls_t *z, u8 type, const u8 *data, u32 len) {
+    if (len + 8 + GCM_TAG > REC_MAX) return false;
+    u8 *head = z->rec, *sent_nonce = z->rec + 5, *buf = z->rec + 13;
+    memmove(buf, data, len);
+    for (int i = 0; i < 8; i++) sent_nonce[i] = (u8)(z->c_seq >> (56 - 8 * i));
+    u8 nonce[12], aad[13], tag[GCM_TAG];
+    memcpy(nonce, z->c_iv, 4);
+    memcpy(nonce + 4, sent_nonce, 8);
+    aad12(aad, z->c_seq, type, len);
+    gcm_seal(&z->c_gcm, nonce, aad, 13, buf, len, tag);
+    z->c_seq++;
+    memcpy(buf + len, tag, GCM_TAG);
+
+    u32 total = 8 + len + GCM_TAG;
+    head[0] = type; head[1] = 0x03; head[2] = 0x03;
+    head[3] = (u8)(total >> 8); head[4] = (u8)total;
+    return write_all(z, head, total + 5);
+}
+
 /* An encrypted record hides what kind of record it is: the real type goes
    inside, after the data, and the outer one always says application data. */
 static bool send_encrypted(tls_t *z, u8 inner_type, const u8 *data, u32 len) {
+    if (z->v12) return send_sealed12(z, inner_type, data, len);
     if (len + 1 + GCM_TAG > REC_MAX) return false;
 
     u8 *head = z->rec;
@@ -375,6 +430,36 @@ static u8 alert_for_chain(x509_result_t r) {
     return ALERT_BAD_CERTIFICATE;
 }
 
+/* A sealed record's alert: a close (a warning) ends the conversation; any
+   other is the server refusing it. */
+static int sealed_alert(tls_t *z, u32 *len) {
+    if (*len >= 2 && z->rec[0] == 1) { z->ended = true; *len = 0; return 1; }
+    z->alerted = true;
+    fail(z, "the server closed the connection with an alert");
+    return -1;
+}
+
+/* A TLS 1.2 record, opened where it lies; the data is moved to the front of
+   z->rec, where every reader expects it. */
+static int open12(tls_t *z, u8 *type, u32 *len, u32 n) {
+    if (n < 8 + GCM_TAG) { refuse(z, "the server sent a record too short to be real", ALERT_DECODE_ERROR); return -1; }
+    u32 body = n - 8 - GCM_TAG;
+    u8 nonce[12], aad[13];
+    memcpy(nonce, z->s_iv, 4);
+    memcpy(nonce + 4, z->rec, 8);
+    aad12(aad, z->s_seq, z->head[0], body);
+    if (!gcm_open(&z->s_gcm, nonce, aad, 13, z->rec + 8, body, z->rec + 8 + body)) {
+        refuse(z, "a record did not authenticate", ALERT_BAD_RECORD_MAC);
+        return -1;
+    }
+    z->s_seq++;
+    memmove(z->rec, z->rec + 8, body);
+    *type = z->head[0];
+    *len = body;
+    if (*type == REC_ALERT) return sealed_alert(z, len);
+    return 1;
+}
+
 /* Reads one record within timeout_ms. When encryption is on, unwraps it and
    reports the type that was inside. 1 for a record; 0 when the time ran out
    before one was whole, which loses nothing (the rest is read next time);
@@ -395,11 +480,24 @@ static int read_record(tls_t *z, u8 *type, u32 *len, bool encrypted, u32 timeout
 
     if (head[0] == REC_CHANGE_CIPHER) {
         /* Meaningless in 1.3 and sent anyway, so that the connection looks
-           like an older one to anything in the middle counting records. */
+           like an older one to anything in the middle counting records.
+         *
+         * In 1.2 it says the server's records are sealed from here, so it is
+         * taken once, and only after ours has gone: one taken earlier would
+         * switch to keys not yet agreed, which is how an injected one let
+         * somebody in the middle read OpenSSL's connections (CVE-2014-0224). */
+        if (z->v12) {
+            if (!z->ccs_ok || z->s_sealed || n != 1 || z->rec[0] != 1) {
+                refuse(z, "the server changed cipher out of turn", ALERT_UNEXPECTED_MESSAGE);
+                return -1;
+            }
+            z->s_sealed = true;
+        }
         *type = REC_CHANGE_CIPHER;
         *len = 0;
         return 1;
     }
+    if (z->v12) encrypted = z->s_sealed;
 
     if (head[0] == REC_ALERT && !encrypted) {
         z->alerted = true;                     /* not answered */
@@ -413,6 +511,7 @@ static int read_record(tls_t *z, u8 *type, u32 *len, bool encrypted, u32 timeout
         return 1;
     }
 
+    if (z->v12) return open12(z, type, len, n);
     if (n < GCM_TAG + 1) { refuse(z, "the server sent a record too short to be real", ALERT_DECODE_ERROR); return -1; }
 
     u32 body = n - GCM_TAG;
@@ -431,13 +530,7 @@ static int read_record(tls_t *z, u8 *type, u32 *len, bool encrypted, u32 timeout
     *type = z->rec[body - 1];
     *len = body - 1;
 
-    if (*type == REC_ALERT) {
-        /* A close is an alert and so is a refusal; the second byte says. */
-        if (*len >= 2 && z->rec[0] == 1) { z->ended = true; *len = 0; return 1; }
-        z->alerted = true;
-        fail(z, "the server closed the connection with an alert");
-        return -1;
-    }
+    if (*type == REC_ALERT) return sealed_alert(z, len);
     return 1;
 }
 
@@ -538,8 +631,10 @@ static u32 build_client_hello(tls_t *z, u8 *out, u32 cap) {
     out[n++] = 32;
     memcpy(out + n, z->session_id, 32); n += 32;
 
-    put16(out + n, 2); n += 2;                 /* one cipher suite */
+    put16(out + n, 6); n += 2;                 /* 1.3's one, and 1.2's two */
     put16(out + n, SUITE_AES128_GCM_SHA256); n += 2;
+    put16(out + n, SUITE_ECDHE_ECDSA_AES128_GCM); n += 2;
+    put16(out + n, SUITE_ECDHE_RSA_AES128_GCM); n += 2;
 
     out[n++] = 1; out[n++] = 0;                /* no compression */
 
@@ -559,11 +654,28 @@ static u32 build_client_hello(tls_t *z, u8 *out, u32 cap) {
         memcpy(out + n, z->host, host_len); n += host_len;
     }
 
-    /* supported_versions: the real version negotiation in 1.3. */
+    /* supported_versions: the real version negotiation in 1.3, and 1.2 after
+       it. A 1.2 server knows nothing of this extension and goes by the
+       legacy version above. */
     put16(out + n, 0x002b); n += 2;
-    put16(out + n, 3); n += 2;
-    out[n++] = 2;
+    put16(out + n, 5); n += 2;
+    out[n++] = 4;
     put16(out + n, 0x0304); n += 2;
+    put16(out + n, 0x0303); n += 2;
+
+    /* ec_point_formats: uncompressed only, which some 1.2 servers want said. */
+    put16(out + n, 0x000b); n += 2;
+    put16(out + n, 2); n += 2;
+    out[n++] = 1; out[n++] = 0;
+
+    /* extended_master_secret (RFC 7627), so that a 1.2 master secret is over
+       the whole handshake; and renegotiation_info, empty, which says this
+       connection is the first and only one and that none will follow. */
+    put16(out + n, 0x0017); n += 2;
+    put16(out + n, 0); n += 2;
+    put16(out + n, 0xff01); n += 2;
+    put16(out + n, 1); n += 2;
+    out[n++] = 0;
 
     /* supported_groups: x25519 first, and P-256, which a server that has no
        x25519 asks for with a request to start again. */
@@ -581,7 +693,8 @@ static u32 build_client_hello(tls_t *z, u8 *out, u32 cap) {
             0x0403,   /* ecdsa with p-256 and sha-256 */
             0x0804,   /* rsa-pss with sha-256 */
             0x0503,   /* ecdsa with p-384 and sha-384 */
-            0x0401    /* rsa pkcs#1 with sha-256, for the certificates */
+            0x0401,   /* rsa pkcs#1 with sha-256: certificates, and 1.2 */
+            0x0501    /* and with sha-384 */
         };
         u32 count = sizeof(algs) / sizeof(algs[0]);
         put16(out + n, 0x000d); n += 2;
@@ -625,7 +738,8 @@ static u32 build_client_hello(tls_t *z, u8 *out, u32 cap) {
    same message with a fixed value for its random, naming in its key share
    only the group it wants and perhaps carrying a cookie. That group and
    cookie are kept for the second hello; a real hello's share is kept for the
-   key. */
+   key. Or a TLS 1.2 server's hello, which says so by having no version
+   extension: its suite and random are kept for the rest of its handshake. */
 static bool parse_server_hello(tls_t *z, const u8 *p, u32 len, bool *retry) {
     /* The value a server puts in the random field when it is not really a
        server hello but a request to start again with a different group. */
@@ -634,104 +748,150 @@ static bool parse_server_hello(tls_t *z, const u8 *p, u32 len, bool *retry) {
         0x1e,0x65,0xb8,0x91,0xc2,0xa2,0x11,0x16,0x7a,0xbb,0x8c,0x5e,
         0x07,0x9e,0x09,0xe2,0xc8,0xa8,0x33,0x9c
     };
+    /* What a 1.3 server puts at the end of its random when it answers as 1.2
+       or older (RFC 8446 4.1.3): it can do better, so somebody took 1.3 out
+       of the hello on its way. */
+    static const u8 DOWNGRADE[7] = { 'D', 'O', 'W', 'N', 'G', 'R', 'D' };
 
     if (len < 38) { refuse(z, "the server hello is too short", ALERT_DECODE_ERROR); return false; }
-    u32 i = 2;                                  /* the legacy version */
+    u32 legacy = ((u32)p[0] << 8) | p[1];
+    u32 i = 2;
 
     *retry = memcmp(p + i, RETRY, 32) == 0;
+    const u8 *random = p + i;
     i += 32;
 
-    /* Our session id, given back: a server that answers with another is
-       answering some other hello. */
     u32 sid = p[i++];
     if (i + sid + 3 > len) { refuse(z, "the server hello is malformed", ALERT_DECODE_ERROR); return false; }
-    if (sid != 32 || memcmp(p + i, z->session_id, 32) != 0) {
-        refuse(z, "the server answered a hello this did not send", ALERT_ILLEGAL_PARAMETER);
-        return false;
-    }
+    const u8 *sid_at = p + i;
     i += sid;
 
     u32 suite = ((u32)p[i] << 8) | p[i + 1]; i += 2;
+    if (p[i++] != 0) { refuse(z, "the server chose compression", ALERT_ILLEGAL_PARAMETER); return false; }
+
+    /* The extensions are found first and read after, since what they mean
+       depends on which version the server chose, and that is one of them.
+       A 1.2 server may send none at all. */
+    enum { E_VERSION, E_SHARE, E_COOKIE, E_EMS, E_RENEG, E_COUNT };
+    static const u16 KINDS[E_COUNT] = { 0x002b, 0x0033, 0x002c, 0x0017, 0xff01 };
+    const u8 *at[E_COUNT] = { 0 };
+    u32 size[E_COUNT] = { 0 };
+    if (i + 2 <= len) {
+        u32 ext_len = ((u32)p[i] << 8) | p[i + 1]; i += 2;
+        if (i + ext_len > len) { refuse(z, "the server hello is malformed", ALERT_DECODE_ERROR); return false; }
+        u32 end = i + ext_len;
+        while (i + 4 <= end) {
+            u32 kind = ((u32)p[i] << 8) | p[i + 1];
+            u32 n = ((u32)p[i + 2] << 8) | p[i + 3];
+            i += 4;
+            if (i + n > end) { refuse(z, "an extension runs past the message", ALERT_DECODE_ERROR); return false; }
+            for (int k = 0; k < E_COUNT; k++)
+                if (kind == KINDS[k]) { at[k] = p + i; size[k] = n; }
+            i += n;
+        }
+    }
+
+    if (!at[E_VERSION]) {
+        /* Without the extension this is a 1.2 server, or an older one, or a
+           request to start again that is not a real one. */
+        if (*retry) { refuse(z, "the server did not agree to TLS 1.3", ALERT_PROTOCOL_VERSION); return false; }
+        if (z->retried) {
+            refuse(z, "the server asked to start again and then answered as TLS 1.2", ALERT_ILLEGAL_PARAMETER);
+            return false;
+        }
+        if (legacy != 0x0303) { refuse(z, "the server does not do TLS 1.2 or 1.3", ALERT_PROTOCOL_VERSION); return false; }
+        if (memcmp(random + 24, DOWNGRADE, 7) == 0 && (random[31] == 0 || random[31] == 1)) {
+            refuse(z, "the server can do TLS 1.3 and was made to answer as an older one", ALERT_ILLEGAL_PARAMETER);
+            return false;
+        }
+        if (suite != SUITE_ECDHE_ECDSA_AES128_GCM && suite != SUITE_ECDHE_RSA_AES128_GCM) {
+            refuse(z, "the server chose a cipher this does not have", ALERT_ILLEGAL_PARAMETER);
+            return false;
+        }
+        /* Our session id given back would be the server resuming a session,
+           and none was ever made. */
+        if (sid == 32 && memcmp(sid_at, z->session_id, 32) == 0) {
+            refuse(z, "the server tried to resume a session this never had", ALERT_ILLEGAL_PARAMETER);
+            return false;
+        }
+        if (at[E_EMS] && size[E_EMS] != 0) { refuse(z, "the server hello is malformed", ALERT_DECODE_ERROR); return false; }
+        if (at[E_RENEG] && (size[E_RENEG] != 1 || at[E_RENEG][0] != 0)) {
+            refuse(z, "the server's renegotiation extension is not empty", ALERT_HANDSHAKE_FAILURE);
+            return false;
+        }
+        z->v12 = true;
+        z->suite = (u16)suite;
+        z->ems = at[E_EMS] != 0;
+        memcpy(z->server_random, random, 32);
+        return true;
+    }
+
+    if (size[E_VERSION] != 2) { refuse(z, "the version extension is malformed", ALERT_DECODE_ERROR); return false; }
+    if ((((u32)at[E_VERSION][0] << 8) | at[E_VERSION][1]) != 0x0304) {
+        refuse(z, "the server does not do TLS 1.3", ALERT_PROTOCOL_VERSION);
+        return false;
+    }
+
+    /* Our session id, given back: a server that answers with another is
+       answering some other hello. */
+    if (sid != 32 || memcmp(sid_at, z->session_id, 32) != 0) {
+        refuse(z, "the server answered a hello this did not send", ALERT_ILLEGAL_PARAMETER);
+        return false;
+    }
     if (suite != SUITE_AES128_GCM_SHA256) {
         refuse(z, "the server chose a cipher this does not have", ALERT_ILLEGAL_PARAMETER);
         return false;
     }
-    i++;                                        /* the compression byte */
 
-    if (i + 2 > len) { refuse(z, "the server hello has no extensions", ALERT_DECODE_ERROR); return false; }
-    u32 ext_len = ((u32)p[i] << 8) | p[i + 1]; i += 2;
-    if (i + ext_len > len) { refuse(z, "the server hello is malformed", ALERT_DECODE_ERROR); return false; }
-
-    bool got_version = false, got_share = false;
-    u16 wanted = 0;
-    u32 end = i + ext_len;
-    while (i + 4 <= end) {
-        u32 kind = ((u32)p[i] << 8) | p[i + 1];
-        u32 n = ((u32)p[i + 2] << 8) | p[i + 3];
-        i += 4;
-        if (i + n > end) { refuse(z, "an extension runs past the message", ALERT_DECODE_ERROR); return false; }
-
-        if (kind == 0x002b) {
-            if (n != 2) { refuse(z, "the version extension is malformed", ALERT_DECODE_ERROR); return false; }
-            u32 v = ((u32)p[i] << 8) | p[i + 1];
-            if (v != 0x0304) {
-                refuse(z, "the server does not do TLS 1.3", ALERT_PROTOCOL_VERSION);
-                return false;
-            }
-            got_version = true;
-        } else if (kind == 0x0033 && *retry) {
-            /* Only the group it wants. */
-            if (n != 2) { refuse(z, "the request to start again is malformed", ALERT_DECODE_ERROR); return false; }
-            wanted = (u16)(((u32)p[i] << 8) | p[i + 1]);
-            got_share = true;
-        } else if (kind == 0x0033) {
-            if (n < 4) { refuse(z, "the key share is malformed", ALERT_DECODE_ERROR); return false; }
-            u32 group = ((u32)p[i] << 8) | p[i + 1];
-            u32 klen = ((u32)p[i + 2] << 8) | p[i + 3];
-            u32 want_len = z->group == GROUP_SECP256R1 ? 65 : 32;
-            if (group != z->group || klen != want_len || n != klen + 4) {
-                refuse(z, "the server chose a key exchange this does not have", ALERT_ILLEGAL_PARAMETER);
-                return false;
-            }
-            memcpy(z->peer_share, p + i + 4, klen);
-            z->peer_len = klen;
-            got_share = true;
-        } else if (kind == 0x002c && *retry) {
-            if (n < 3 || n != 2 + (((u32)p[i] << 8) | p[i + 1])) {
+    if (*retry) {
+        /* Only the group it wants, and perhaps a cookie. It has to ask for
+           something this can give, and not for what the first hello already
+           gave it; and it has to change something, or the second hello would
+           be the first again. */
+        u16 wanted = 0;
+        if (at[E_SHARE]) {
+            if (size[E_SHARE] != 2) { refuse(z, "the request to start again is malformed", ALERT_DECODE_ERROR); return false; }
+            wanted = (u16)(((u32)at[E_SHARE][0] << 8) | at[E_SHARE][1]);
+        }
+        if (at[E_COOKIE]) {
+            u32 n = size[E_COOKIE];
+            if (n < 3 || n != 2 + (((u32)at[E_COOKIE][0] << 8) | at[E_COOKIE][1])) {
                 refuse(z, "the cookie is malformed", ALERT_DECODE_ERROR);
                 return false;
             }
             if (n - 2 > COOKIE_MAX) { refuse(z, "the server's cookie is too big to hold", ALERT_INTERNAL_ERROR); return false; }
-            memcpy(z->cookie, p + i + 2, n - 2);
+            memcpy(z->cookie, at[E_COOKIE] + 2, n - 2);
             z->cookie_len = n - 2;
         }
-        i += n;
-    }
-
-    if (!got_version) {
-        /* Without the extension this is an older server pretending, or an
-           older server being honest. Either way it is not 1.3. */
-        refuse(z, "the server did not agree to TLS 1.3", ALERT_PROTOCOL_VERSION);
-        return false;
-    }
-    if (*retry) {
-        /* It has to ask for something this can give, and not for what the
-           first hello already gave it; and it has to change something, or
-           the second hello would be the first again. */
-        if (got_share && wanted != GROUP_SECP256R1) {
+        if (at[E_SHARE] && wanted != GROUP_SECP256R1) {
             refuse(z, wanted == z->group ? "the server asked for the key share it was sent"
                                          : "the server wants a key exchange group this does not have",
                    ALERT_ILLEGAL_PARAMETER);
             return false;
         }
-        if (!got_share && !z->cookie_len) {
+        if (!at[E_SHARE] && !z->cookie_len) {
             refuse(z, "the server asked to start again and changed nothing", ALERT_ILLEGAL_PARAMETER);
             return false;
         }
-        if (got_share) z->group = wanted;
+        if (at[E_SHARE]) z->group = wanted;
         return true;
     }
-    if (!got_share) { refuse(z, "the server sent no key share", ALERT_MISSING_EXTENSION); return false; }
+
+    if (!at[E_SHARE]) { refuse(z, "the server sent no key share", ALERT_MISSING_EXTENSION); return false; }
+    {
+        u32 n = size[E_SHARE];
+        const u8 *q = at[E_SHARE];
+        if (n < 4) { refuse(z, "the key share is malformed", ALERT_DECODE_ERROR); return false; }
+        u32 group = ((u32)q[0] << 8) | q[1];
+        u32 klen = ((u32)q[2] << 8) | q[3];
+        u32 want_len = z->group == GROUP_SECP256R1 ? 65 : 32;
+        if (group != z->group || klen != want_len || n != klen + 4) {
+            refuse(z, "the server chose a key exchange this does not have", ALERT_ILLEGAL_PARAMETER);
+            return false;
+        }
+        memcpy(z->peer_share, q + 4, klen);
+        z->peer_len = klen;
+    }
     return true;
 }
 
@@ -752,6 +912,38 @@ static void transcript_restart(sha256_t *t, const u8 *request, u32 request_len) 
 }
 
 /* --- what the server signs ------------------------------------------------ */
+
+/* Whether sig, by the holder of the leaf's key, is good over what h256 and
+   h384 are the hashes of: 1 good, 0 not, -1 a scheme this cannot check. A
+   1.2 server may sign with RSA's older padding (PKCS #1 v1.5), which 1.3
+   allows only in certificates, and 1.2's ECDSA schemes name a hash but not
+   a curve. */
+static int signed_by(const x509_t *leaf, u32 scheme, const u8 *sig, u32 sig_len,
+                     const u8 h256[32], const u8 h384[48], bool v12) {
+    switch (scheme) {
+        case 0x0403:                            /* ecdsa with sha-256 (1.3: on p-256) */
+        case 0x0503: {                          /* ecdsa with sha-384 (1.3: on p-384) */
+            bool wide = scheme == 0x0503;
+            if (leaf->key_type != X509_KEY_EC) return 0;
+            if (!v12 && leaf->curve != (wide ? EC_P384 : EC_P256)) return 0;
+            const u8 *r, *s; u32 rl, sl;
+            if (!x509_ecdsa_split(sig, sig_len, &r, &rl, &s, &sl)) return 0;
+            return ec_verify(leaf->curve, leaf->ec, leaf->ec_len, wide ? h384 : h256, wide ? 48 : 32,
+                             r, rl, s, sl) ? 1 : 0;
+        }
+        case 0x0804:                            /* rsa-pss, sha-256 */
+            if (leaf->key_type != X509_KEY_RSA) return 0;
+            return rsa_verify_pss(&leaf->rsa, sig, sig_len, h256, 32) ? 1 : 0;
+        case 0x0401:                            /* rsa pkcs#1, sha-256: 1.2 only */
+        case 0x0501:                            /* and sha-384 */
+            if (!v12) return -1;
+            if (leaf->key_type != X509_KEY_RSA) return 0;
+            return rsa_verify_pkcs1(&leaf->rsa, sig, sig_len, scheme == 0x0501 ? h384 : h256,
+                                    scheme == 0x0501 ? 48 : 32) ? 1 : 0;
+        default:
+            return -1;
+    }
+}
 
 static bool check_cert_verify(tls_t *z, const u8 *p, u32 len, const x509_t *leaf,
                               const u8 hash_before[32]) {
@@ -787,39 +979,16 @@ static bool check_cert_verify(tls_t *z, const u8 *p, u32 len, const x509_t *leaf
     sha512_update(&s3, hash_before, 32);
     sha512_final(&s3, h384);
 
-    switch (scheme) {
-        case 0x0403:                            /* ecdsa, p-256, sha-256 */
-            if (leaf->key_type != X509_KEY_EC || leaf->curve != EC_P256) break;
-            {
-                const u8 *r, *s; u32 rl, sl;
-                if (!x509_ecdsa_split(sig, sig_len, &r, &rl, &s, &sl)) break;
-                if (ec_verify(EC_P256, leaf->ec, leaf->ec_len, h256, 32,
-                              r, rl, s, sl)) return true;
-            }
-            break;
-
-        case 0x0503:                            /* ecdsa, p-384, sha-384 */
-            if (leaf->key_type != X509_KEY_EC || leaf->curve != EC_P384) break;
-            {
-                const u8 *r, *s; u32 rl, sl;
-                if (!x509_ecdsa_split(sig, sig_len, &r, &rl, &s, &sl)) break;
-                if (ec_verify(EC_P384, leaf->ec, leaf->ec_len, h384, 48,
-                              r, rl, s, sl)) return true;
-            }
-            break;
-
-        case 0x0804:                            /* rsa-pss, sha-256 */
-            if (leaf->key_type != X509_KEY_RSA) break;
-            if (rsa_verify_pss(&leaf->rsa, sig, sig_len, h256, 32)) return true;
-            break;
-
-        default:
-            refuse(z, "the server signed with something this cannot check", ALERT_ILLEGAL_PARAMETER);
-            return false;
+    int r = signed_by(leaf, scheme, sig, sig_len, h256, h384, false);
+    if (r < 0) {
+        refuse(z, "the server signed with something this cannot check", ALERT_ILLEGAL_PARAMETER);
+        return false;
     }
-
-    refuse(z, "the server's signature over the handshake is wrong", ALERT_DECRYPT_ERROR);
-    return false;
+    if (r == 0) {
+        refuse(z, "the server's signature over the handshake is wrong", ALERT_DECRYPT_ERROR);
+        return false;
+    }
+    return true;
 }
 
 /* --- the order of the server's encrypted messages ------------------------- */
@@ -843,6 +1012,39 @@ int tls_flight_step(int step, u8 type, const char **why) {
         return -1;
     }
     return step + 1;
+}
+
+/* --- the certificates ---------------------------------------------------- */
+
+/* The list of certificates in a Certificate message, copied out of the
+   handshake buffer (which moves on) into z->chain, and the first one read.
+   In 1.3 each certificate has extensions after it; in 1.2 none. */
+static bool read_chain(tls_t *z, const u8 *body, u32 list, bool with_exts, u32 *nchain) {
+    u32 p = 0, used = 0;
+    *nchain = 0;
+    while (p + 3 <= list && *nchain < X509_MAX_CHAIN) {
+        u32 clen = ((u32)body[p] << 16) | ((u32)body[p + 1] << 8) | body[p + 2];
+        p += 3;
+        if (p + clen > list) { refuse(z, "a certificate runs past the list", ALERT_DECODE_ERROR); return false; }
+        if (used + clen > HS_MAX) { refuse(z, "the certificates are too big", ALERT_INTERNAL_ERROR); return false; }
+        memcpy(z->chain + used, body + p, clen);
+        z->ders[*nchain] = z->chain + used;
+        z->lens[*nchain] = clen;
+        used += clen;
+        (*nchain)++;
+        p += clen;
+        if (with_exts) {
+            if (p + 2 > list) break;
+            u32 ext = ((u32)body[p] << 8) | body[p + 1];
+            p += 2 + ext;
+        }
+    }
+    if (*nchain == 0) { refuse(z, "the server sent no certificate", ALERT_DECODE_ERROR); return false; }
+    if (!x509_parse(z->ders[0], z->lens[0], &z->leaf)) {
+        refuse(z, "the server's certificate could not be read", ALERT_BAD_CERTIFICATE);
+        return false;
+    }
+    return true;
 }
 
 /* --- the handshake -------------------------------------------------------- */
@@ -882,6 +1084,251 @@ static bool send_client_hello(tls_t *z) {
 }
 
 static bool connect_on(tls_t *z, const char *host);
+
+/* A P-256 key, drawn until it is a scalar in range. */
+static bool p256_key(tls_t *z) {
+    for (int tries = 0; tries < 16; tries++) {
+        if (test_random) memcpy(z->p256_priv, test_random + 96, 32);
+        else             rng_bytes(z->p256_priv, 32);
+        if (ec_public(EC_P256, z->p256_priv, 32, z->p256_pub)) return true;
+    }
+    refuse(z, "could not make a P-256 key", ALERT_INTERNAL_ERROR);
+    return false;
+}
+
+/* --- TLS 1.2 ---------------------------------------------------------------
+ *
+ * After its hello the server's flight is in the clear: its certificate, its
+ * share of a key signed with the certificate's key over both randoms,
+ * perhaps a request for a certificate of ours, and done. Then ours: our
+ * share, a change of cipher, and a finished message sealed under the new
+ * keys; then its change and its finished, which shows it agreed the same
+ * secret and saw the same handshake. */
+static bool handshake12(tls_t *z) {
+    u32 nchain = 0;
+    bool asked = false;
+    u16 group = 0;
+    u8 peer[65];
+    u32 peer_len = 0;
+
+    /* Certificate, key exchange, perhaps a certificate request, done: in that
+       order and each once. The key exchange is required: both suites here
+       agree a key afresh, and it is the signature on it that ties the key to
+       the certificate. */
+    enum { WANT_CERT, WANT_KEX, WANT_REQ_OR_DONE, WANT_DONE } step = WANT_CERT;
+    for (;;) {
+        u8 type; const u8 *body, *whole; u32 len, whole_len;
+        if (!hs_next(z, false, &type, &body, &len, &whole, &whole_len)) return false;
+        if (step == WANT_CERT && type != HS_CERTIFICATE) {
+            refuse(z, "the server sent no certificate", ALERT_UNEXPECTED_MESSAGE);
+            return false;
+        }
+        if (step == WANT_KEX && type != HS_SERVER_KEY_EXCH) {
+            refuse(z, "the server sent no key exchange", ALERT_UNEXPECTED_MESSAGE);
+            return false;
+        }
+        if ((step == WANT_REQ_OR_DONE && type != HS_CERT_REQUEST && type != HS_SERVER_DONE) ||
+            (step == WANT_DONE && type != HS_SERVER_DONE)) {
+            refuse(z, "the server sent its handshake out of order", ALERT_UNEXPECTED_MESSAGE);
+            return false;
+        }
+
+        if (type == HS_CERTIFICATE) {
+            if (len < 3) { refuse(z, "the certificate message is malformed", ALERT_DECODE_ERROR); return false; }
+            u32 list = ((u32)body[0] << 16) | ((u32)body[1] << 8) | body[2];
+            if (3 + list != len) { refuse(z, "the certificate list is malformed", ALERT_DECODE_ERROR); return false; }
+            if (!read_chain(z, body + 3, list, false, &nchain)) return false;
+            step = WANT_KEX;
+
+        } else if (type == HS_SERVER_KEY_EXCH) {
+            /* A named curve (3), which one, the point; then the signature's
+               scheme and the signature. */
+            if (len < 4 || body[0] != 3) {
+                refuse(z, "the server's key exchange is not one this has", ALERT_HANDSHAKE_FAILURE);
+                return false;
+            }
+            group = (u16)(((u32)body[1] << 8) | body[2]);
+            u32 plen = body[3];
+            u32 want = group == GROUP_X25519 ? 32 : group == GROUP_SECP256R1 ? 65 : 0;
+            if (!want) { refuse(z, "the server chose a key exchange this does not have", ALERT_ILLEGAL_PARAMETER); return false; }
+            u32 params = 4 + plen;
+            if (plen != want || params + 4 > len) {
+                refuse(z, "the server's key exchange is malformed", ALERT_DECODE_ERROR);
+                return false;
+            }
+            memcpy(peer, body + 4, plen);
+            peer_len = plen;
+            u32 scheme = ((u32)body[params] << 8) | body[params + 1];
+            u32 sig_len = ((u32)body[params + 2] << 8) | body[params + 3];
+            if (params + 4 + sig_len != len) {
+                refuse(z, "the server's key exchange is malformed", ALERT_DECODE_ERROR);
+                return false;
+            }
+
+            /* The certificate has to be the kind of key the suite names. */
+            x509_keytype_t kind = z->suite == SUITE_ECDHE_ECDSA_AES128_GCM ? X509_KEY_EC : X509_KEY_RSA;
+            if (z->leaf.key_type != kind) {
+                refuse(z, "the server's certificate does not fit the cipher it chose", ALERT_ILLEGAL_PARAMETER);
+                return false;
+            }
+
+            /* Signed: both randoms, then the curve and the point. */
+            u8 h256[32], h384[48];
+            sha256_t s2;
+            sha512_t s3;
+            sha256_init(&s2);
+            sha256_update(&s2, z->client_random, 32);
+            sha256_update(&s2, z->server_random, 32);
+            sha256_update(&s2, body, params);
+            sha256_final(&s2, h256);
+            sha384_init(&s3);
+            sha512_update(&s3, z->client_random, 32);
+            sha512_update(&s3, z->server_random, 32);
+            sha512_update(&s3, body, params);
+            sha512_final(&s3, h384);
+            int r = signed_by(&z->leaf, scheme, body + params + 4, sig_len, h256, h384, true);
+            if (r < 0) {
+                refuse(z, "the server signed with something this cannot check", ALERT_ILLEGAL_PARAMETER);
+                return false;
+            }
+            if (r == 0) {
+                refuse(z, "the server's signature over its key is wrong", ALERT_DECRYPT_ERROR);
+                return false;
+            }
+            step = WANT_REQ_OR_DONE;
+
+        } else if (type == HS_CERT_REQUEST) {
+            /* It would like a certificate of ours. There is none; an empty
+               list says so, and the server decides whether that will do. */
+            asked = true;
+            step = WANT_DONE;
+
+        } else {
+            if (len != 0) { refuse(z, "the server's hello done is malformed", ALERT_DECODE_ERROR); return false; }
+            sha256_update(&z->transcript, whole, whole_len);
+            break;
+        }
+        sha256_update(&z->transcript, whole, whole_len);
+    }
+
+    /* Who it is, before anything of ours depends on the key it signed. */
+    {
+        x509_result_t r = x509_verify_chain(z->ders, z->lens, nchain, z->host, x509_now());
+        if (r != X509_OK) { refuse(z, x509_reason(r), alert_for_chain(r)); return false; }
+    }
+
+    /* Our share, in the group the server chose, and the secret. */
+    u8 pms[32];
+    const u8 *ours;
+    u32 ours_len;
+    bool agreed;
+    z->group = group;
+    if (group == GROUP_SECP256R1) {
+        if (!p256_key(z)) return false;
+        agreed = ec_agree(EC_P256, z->p256_priv, 32, peer, peer_len, pms);
+        ours = z->p256_pub;
+        ours_len = 65;
+    } else {
+        agreed = x25519(z->priv, peer, pms);
+        ours = z->pub;
+        ours_len = 32;
+    }
+    if (!agreed) { refuse(z, "the server's key share is not usable", ALERT_ILLEGAL_PARAMETER); return false; }
+
+    if (asked) {
+        static const u8 none[7] = { HS_CERTIFICATE, 0, 0, 3, 0, 0, 0 };
+        sha256_update(&z->transcript, none, 7);
+        if (!send_plain_record(z, REC_HANDSHAKE, none, 7)) { fail(z, "could not send the certificate list"); return false; }
+    }
+    {
+        u8 msg[5 + 65];
+        msg[0] = HS_CLIENT_KEY_EXCH;
+        msg[1] = 0; msg[2] = 0; msg[3] = (u8)(1 + ours_len);
+        msg[4] = (u8)ours_len;
+        memcpy(msg + 5, ours, ours_len);
+        sha256_update(&z->transcript, msg, 5 + ours_len);
+        if (!send_plain_record(z, REC_HANDSHAKE, msg, 5 + ours_len)) { fail(z, "could not send the key exchange"); return false; }
+    }
+
+    /* The master secret: in the extended form (RFC 7627) over the hash of the
+       handshake so far, which ties it to this handshake and no other; else
+       over the two randoms, all a server without the extension knows how to
+       do (badssl.com's). Without the extended form somebody in the middle
+       can carry a session into a second connection, but only by resuming or
+       renegotiating it, and neither is ever done here. Then the key block:
+       our key, the server's, our nonce's fixed part, the server's. */
+    {
+        u8 seed[64], block[40];
+        bool made;
+        if (z->ems) {
+            transcript_hash(z, seed);
+            made = tls12_prf(pms, 32, "extended master secret", seed, 32, z->master, 48);
+        } else {
+            memcpy(seed, z->client_random, 32);
+            memcpy(seed + 32, z->server_random, 32);
+            made = tls12_prf(pms, 32, "master secret", seed, 64, z->master, 48);
+        }
+        memcpy(seed, z->server_random, 32);
+        memcpy(seed + 32, z->client_random, 32);
+        made = made && tls12_prf(z->master, 48, "key expansion", seed, 64, block, 40) &&
+               gcm_init(&z->c_gcm, block, 128) && gcm_init(&z->s_gcm, block + 16, 128);
+        memcpy(z->c_iv, block + 32, 4);
+        memcpy(z->s_iv, block + 36, 4);
+        z->c_seq = z->s_seq = 0;
+        memset(block, 0, sizeof(block));
+        memset(pms, 0, sizeof(pms));
+        if (!made) { refuse(z, "the key schedule failed", ALERT_INTERNAL_ERROR); return false; }
+    }
+
+    /* A change of cipher, then our finished, sealed. */
+    {
+        static const u8 change[1] = { 1 };
+        if (!send_plain_record(z, REC_CHANGE_CIPHER, change, 1)) { fail(z, "could not send the change of cipher"); return false; }
+        z->can_seal = true;
+
+        u8 th[32], msg[16];
+        transcript_hash(z, th);
+        msg[0] = HS_FINISHED; msg[1] = 0; msg[2] = 0; msg[3] = 12;
+        if (!tls12_prf(z->master, 48, "client finished", th, 32, msg + 4, 12)) {
+            refuse(z, "the key schedule failed", ALERT_INTERNAL_ERROR); return false;
+        }
+        sha256_update(&z->transcript, msg, 16);
+        if (!send_encrypted(z, REC_HANDSHAKE, msg, 16)) { fail(z, "could not send the finished message"); return false; }
+        z->ccs_ok = true;
+    }
+
+    /* Its change of cipher, which read_record takes once and which seals
+       what follows, and its finished. Nothing else may come between: a
+       handshake message in the clear here is refused. */
+    {
+        u8 type; const u8 *body, *whole; u32 len, whole_len;
+        if (!hs_next(z, false, &type, &body, &len, &whole, &whole_len)) return false;
+        if (!z->s_sealed || type != HS_FINISHED) {
+            refuse(z, "the server sent its handshake out of order", ALERT_UNEXPECTED_MESSAGE);
+            return false;
+        }
+        u8 th[32], want[12];
+        transcript_hash(z, th);
+        if (!tls12_prf(z->master, 48, "server finished", th, 32, want, 12)) {
+            refuse(z, "the key schedule failed", ALERT_INTERNAL_ERROR); return false;
+        }
+        if (len != 12 || memcmp(want, body, 12) != 0) {
+            refuse(z, "the server's finished message is wrong", ALERT_DECRYPT_ERROR);
+            return false;
+        }
+        (void)whole; (void)whole_len;
+    }
+
+    z->keys_are_app = true;
+    z->open = true;
+    z->handshake_done = true;
+    z->error[0] = 0;
+    kformat(z->described, sizeof(z->described), "TLS 1.2, %s, aes-128-gcm",
+            z->group == GROUP_SECP256R1 ? "p-256" : "x25519");
+    memcpy(nowhere.described, z->described, sizeof(nowhere.described));
+    bb_log("tls %s to %s", z->described, z->host);
+    return true;
+}
 
 bool tls_connect(int tcp, const char *host) {
     tls_t *z = tls_of(tcp);
@@ -946,18 +1393,10 @@ static bool connect_on(tls_t *z, const char *host) {
         z->retried = true;
         transcript_restart(&z->transcript, whole, whole_len);
 
-        /* A P-256 key, drawn until it is a scalar in range. */
-        if (z->group == GROUP_SECP256R1) {
-            bool made = false;
-            for (int tries = 0; tries < 16 && !made; tries++) {
-                if (test_random) memcpy(z->p256_priv, test_random + 96, 32);
-                else             rng_bytes(z->p256_priv, 32);
-                made = ec_public(EC_P256, z->p256_priv, 32, z->p256_pub);
-            }
-            if (!made) { refuse(z, "could not make a P-256 key", ALERT_INTERNAL_ERROR); return false; }
-        }
+        if (z->group == GROUP_SECP256R1 && !p256_key(z)) return false;
         if (!send_client_hello(z)) return false;
     }
+    if (z->v12) return handshake12(z);
 
     /* --- the shared secret, and the keys for the rest of the handshake --- */
     u8 shared[32];
@@ -1014,7 +1453,6 @@ static bool connect_on(tls_t *z, const char *host) {
     u8 hash_before_verify[32];
 
     u32 nchain = 0;
-    u32 chain_used = 0;
 
     for (;;) {
         u8 type; const u8 *body, *whole; u32 len, whole_len;
@@ -1042,27 +1480,7 @@ static bool connect_on(tls_t *z, const char *host) {
             p += 3;
             if (p + list > len) { refuse(z, "the certificate list is malformed", ALERT_DECODE_ERROR); return false; }
 
-            u32 end = p + list;
-            while (p + 3 <= end && nchain < X509_MAX_CHAIN) {
-                u32 clen = ((u32)body[p] << 16) | ((u32)body[p + 1] << 8) | body[p + 2];
-                p += 3;
-                if (p + clen > end) { refuse(z, "a certificate runs past the list", ALERT_DECODE_ERROR); return false; }
-                if (chain_used + clen > HS_MAX) { refuse(z, "the certificates are too big", ALERT_INTERNAL_ERROR); return false; }
-                memcpy(z->chain + chain_used, body + p, clen);
-                z->ders[nchain] = z->chain + chain_used;
-                z->lens[nchain] = clen;
-                chain_used += clen;
-                nchain++;
-                p += clen;
-                if (p + 2 > end) break;
-                u32 ext = ((u32)body[p] << 8) | body[p + 1];
-                p += 2 + ext;
-            }
-            if (nchain == 0) { refuse(z, "the server sent no certificate", ALERT_DECODE_ERROR); return false; }
-            if (!x509_parse(z->ders[0], z->lens[0], &z->leaf)) {
-                refuse(z, "the server's certificate could not be read", ALERT_BAD_CERTIFICATE);
-                return false;
-            }
+            if (!read_chain(z, body + p, list, true, &nchain)) return false;
             sha256_update(&z->transcript, whole, whole_len);
 
         } else if (type == HS_CERT_VERIFY) {
@@ -1226,7 +1644,9 @@ static bool post_handshake(tls_t *z, const u8 *data, u32 len) {
             return false;
         }
         if (avail < 4 + n) break;
-        if (p[0] == HS_KEY_UPDATE) {
+        /* In 1.2 a server may ask to renegotiate (a hello request); it is
+           not answered, and nothing else is looked at. */
+        if (p[0] == HS_KEY_UPDATE && !z->v12) {
             if (n != 1) { refuse(z, "a key update is malformed", ALERT_DECODE_ERROR); return false; }
             if (p[4] > 1) { refuse(z, "a key update asks for something that does not exist", ALERT_ILLEGAL_PARAMETER); return false; }
             if (!key_update(z, p[4])) {
@@ -1405,6 +1825,37 @@ bool tls_test_connect(const u8 random[128], const char *host, const u8 *in, u32 
     }
     scratch_end();
     return ok;
+}
+
+u32 tls_test_v12(const u8 block[40], const u8 *in, u32 in_len, u8 *got, u32 got_cap,
+                 const u8 *say, u32 say_len, u8 *sent, u32 sent_cap, u32 *sent_len,
+                 char *why, u32 why_cap) {
+    u32 n = 0;
+    *sent_len = 0;
+    why[0] = 0;
+    if (scratch_begin() && gcm_init(&scratch.c_gcm, block, 128) && gcm_init(&scratch.s_gcm, block + 16, 128)) {
+        memcpy(scratch.c_iv, block + 32, 4);
+        memcpy(scratch.s_iv, block + 36, 4);
+        scratch.v12 = scratch.ccs_ok = scratch.s_sealed = scratch.can_seal = true;
+        scratch.open = scratch.handshake_done = scratch.keys_are_app = true;
+        test_in = in; test_in_len = in_len; test_in_pos = 0;
+        test_out = sent; test_out_len = 0; test_out_cap = sent_cap; test_writes = 0;
+        if (say_len) {
+            send_encrypted(&scratch, REC_APPDATA, say, say_len);
+            send_encrypted(&scratch, REC_APPDATA, say, say_len);
+        }
+        for (;;) {
+            u32 k = n < got_cap ? recv_on(&scratch, got + n, got_cap - n, 1000) : 0;
+            if (!k) break;
+            n += k;
+        }
+        *sent_len = test_out_len;
+        u32 i = 0;
+        while (scratch.error[i] && i + 1 < why_cap) { why[i] = scratch.error[i]; i++; }
+        why[i] = 0;
+    }
+    scratch_end();
+    return n;
 }
 
 void tls_test_restart(const u8 *hello1, u32 len1, const u8 *request, u32 request_len,

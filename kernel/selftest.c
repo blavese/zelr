@@ -3873,6 +3873,250 @@ static void test_tls_retry(void) {
        retry_stops(bad, nin, "the server's key share is not usable"));
 }
 
+/* --- TLS 1.2 -----------------------------------------------------------------
+ *
+ * For the servers that have nothing newer. The PRF against an answer worked
+ * out apart from this code (Python's hmac). The record layer against records
+ * sealed and opened here as RFC 5288 lays them out, with the GCM the session
+ * uses (itself checked against NIST's vectors). And a server's first flight,
+ * made by tools outside the kernel (scratch gen12.py: an RSA key, a
+ * certificate for "server" signed by itself, an x25519 share signed over the
+ * fixed client random), taken as far as the certificate's authority, which
+ * no root vouches for, and refused for each fault put into it. A whole 1.2
+ * handshake is checked outward, against real servers, by tlscheck. */
+/* a TLS 1.2 server's first flight: ServerHello (ECDHE-RSA-AES128-GCM-SHA256,
+   extended master secret), its certificate, its x25519 share signed over the client random
+   b0b1c5a5..., and ServerHelloDone, a record each (1120 bytes) */
+static const char V12_FLIGHT[] =
+    "160303005b020000570303404142434445464748494a4b4c4d4e4f5051525354"
+    "55565758595a5b5c5d5e5f207777777777777777777777777777777777777777"
+    "777777777777777777777777c02f00000fff0100010000170000000b00020100"
+    "16030302c10b0002bd0002ba0002b7308202b33082019ba00302010202021234"
+    "300d06092a864886f70d01010b05003011310f300d06035504030c0673657276"
+    "6572301e170d3230303130313030303030305a170d3439313233313233353935"
+    "395a3011310f300d06035504030c0673657276657230820122300d06092a8648"
+    "86f70d01010105000382010f003082010a0282010100c55dd7a98020e97e46eb"
+    "8eb1c0cca4a9aa7c472ab023dad061ae35a3fe61dab1b292711f5ad6740c0729"
+    "75f458bcab13c680a11e16cb10127de67e08a7c25109ee2b5bab225c51926e09"
+    "4f383044c3087181e5f90345d70bfe05123662b5b6da795e606aedb7e606aabe"
+    "5fa39f1aa258a5cd0798d79cd276f86bcb90645fbe2ec3a816fbee25b0215da4"
+    "2eb675d6bc41c9e671bb4616dfd30b00c53b6f785e1ccd8a0aa98ebffbc359a7"
+    "9705ab893ee554884a9fa1afc72ea6b5b5f7143d5e9c599861926cdeca78f215"
+    "03ed1af6e8befa6dfd9de2f3bce402827cb9fe8d86187f4ec05342d3c0a65e37"
+    "f04b7e16cf721f48a693c8d2295295abbf9b1be341710203010001a315301330"
+    "110603551d11040a30088206736572766572300d06092a864886f70d01010b05"
+    "000382010100a90d3d5a5c0a6d576bbef3952d094f2a5411a810f9dcd9b4e923"
+    "a854736e935aef0e8d09cc07b897236470554e5f92c5c93151fd28e4df0e8065"
+    "9c491b59542a5c5240a1905a805e856b10280c992a2ba26d7bdbbeacbcfc4cf2"
+    "8d686b1c418a31ed09c21bb0e6e8cf993900e41b1a646a377e1f679cce2b2743"
+    "188e1b78bac27e38238fb067b2c923041dcf60339c82fd71d3a37c4d7e7d9eaa"
+    "4509e5e8ae701bf8c2cce043ffa1cc13f9946f6f145063d6f38bf69eb9d1f46b"
+    "542d32613d6d9b905ca8c33fe985bf5ea7a673fbb0656641422d6ea4e2edc403"
+    "4c997208fe2abe5261d51c5fa1920fca4b679bd06bbf14350fb5a3a8ceb2cdc5"
+    "fc80826ef06b160303012c0c00012803001d2007a37cbc142093c8b755dc1b10"
+    "e86cb426374ad16aa853ed0bdfc0b2b86d1c7c040101008fb644394bc75112cc"
+    "e2657a29d5d0bb7841277d343bd5834cb7a1f09f4d673f347526cbf6f1185c2c"
+    "ee21958025d67ac48d88c7c8ecb4e7e86236725a9e89a2eefa7e4aab407bb3b1"
+    "82da487cc787b4572282be4cd5db4b8e1fce17c78e9c207691318bffa2b90095"
+    "da96245321066603266c0040448a3630dab5a8de4c85fa450cfa636bd9094227"
+    "e3ec90f286f2ff683f8a34b3e4be1f4561ae1ca00434ad3dd0bb6c26db164fb0"
+    "e00cd641a2cc7c694157a5c1aef6c1b1d4ddde8d167cf3a01a75fe1351712453"
+    "fd10ce22ff5c815600cfbf26558b641648811d26be7f7adcdddac027302630a6"
+    "91ddad345d160a56c373954857fb7967a7b5b31662e17616030300040e000000";
+/* the TLS 1.2 PRF of 9bbe436b... with "test label" and a0ba9f93..., 100 bytes */
+static const char V12_PRF[] =
+    "e3f229ba727be17b8d122620557cd453c2aab21d07c3d495329b52d4e61edb5a"
+    "6b301791e90d35c9c9a46b4e14baf9af0fa022f7077def17abfd3797c0564bab"
+    "4fbc91666e9def9b97fce34f796789baa48082d122ee42c5a72e5a5110fff701"
+    "87347b66";
+
+static u32 seal12(const u8 *key, const u8 *iv4, u64 seq, u8 type, const u8 *plain, u32 len, u8 *out) {
+    gcm_t g;
+    u8 nonce[12], aad[13];
+    if (!gcm_init(&g, key, 128)) return 0;
+    memcpy(nonce, iv4, 4);
+    for (int i = 0; i < 8; i++) nonce[4 + i] = aad[i] = (u8)(seq >> (56 - 8 * i));
+    aad[8] = type; aad[9] = 3; aad[10] = 3; aad[11] = (u8)(len >> 8); aad[12] = (u8)len;
+    u32 total = 8 + len + GCM_TAG;
+    out[0] = type; out[1] = 3; out[2] = 3; out[3] = (u8)(total >> 8); out[4] = (u8)total;
+    memcpy(out + 5, nonce + 4, 8);
+    memcpy(out + 13, plain, len);
+    gcm_seal(&g, nonce, aad, 13, out + 13, len, out + 13 + len);
+    return 5 + total;
+}
+
+static bool open12_record(const u8 *key, const u8 *iv4, u64 seq, const u8 *rec, u32 n,
+                          u8 *plain, u32 *plain_len) {
+    gcm_t g;
+    u8 nonce[12], aad[13];
+    if (n < 5 + 8 + GCM_TAG || !gcm_init(&g, key, 128)) return false;
+    u32 len = n - 5 - 8 - GCM_TAG;
+    memcpy(nonce, iv4, 4);
+    memcpy(nonce + 4, rec + 5, 8);
+    for (int i = 0; i < 8; i++) aad[i] = (u8)(seq >> (56 - 8 * i));
+    aad[8] = rec[0]; aad[9] = 3; aad[10] = 3; aad[11] = (u8)(len >> 8); aad[12] = (u8)len;
+    memcpy(plain, rec + 13, len);
+    if (!gcm_open(&g, nonce, aad, 13, plain, len, rec + 13 + len)) return false;
+    *plain_len = len;
+    return true;
+}
+
+/* Where the k-th record of a run of them starts. */
+static u32 record_at(const u8 *b, u32 n, int k) {
+    u32 o = 0;
+    while (k-- > 0 && o + 5 <= n) o += 5 + (((u32)b[o + 3] << 8) | b[o + 4]);
+    return o;
+}
+
+static u8 v12_random[128];
+static u8 v12_sent[2048];
+
+static bool v12_stops(const u8 *in, u32 n, const char *want, u32 *sent_len) {
+    char why[128];
+    u32 got = 0;
+    bool done = tls_test_connect(v12_random, "server", in, n, v12_sent, sizeof(v12_sent), &got, why, sizeof(why));
+    if (sent_len) *sent_len = got;
+    if (strcmp(why, want) != 0) kprintf("      it said: %s\n", why);
+    return !done && strcmp(why, want) == 0;
+}
+
+static void test_tls12(void) {
+    {
+        u8 secret[16], seed[16], out[100];
+        from_hex("9bbe436ba940f017b17652849a71db35", secret, 16);
+        from_hex("a0ba9f936cda311827a6f796ffd5198c", seed, 16);
+        ok("the tls 1.2 prf, against an answer worked out apart from this code",
+           tls12_prf(secret, 16, "test label", seed, 16, out, 100) && is_hex(out, 100, V12_PRF));
+    }
+
+    /* The record layer, under a key block of 1, 2, ... 40: our key, the
+       server's, our four bytes of nonce, the server's. Two records each way,
+       so that the second has to carry its number. */
+    {
+        u8 block[40], in[128], got[32], sent[128], plain[16];
+        for (int i = 0; i < 40; i++) block[i] = (u8)(i + 1);
+        char why[128];
+        u32 sent_len = 0, pl = 0, pl2 = 0;
+        u32 n = seal12(block + 16, block + 36, 0, 0x17, (const u8 *)"hello", 5, in);
+        n += seal12(block + 16, block + 36, 1, 0x17, (const u8 *)"world", 5, in + n);
+        u32 g = tls_test_v12(block, in, n, got, sizeof(got), (const u8 *)"ping", 4,
+                             sent, sizeof(sent), &sent_len, why, sizeof(why));
+        u32 one = 5 + 8 + 4 + GCM_TAG;
+        ok("1.2 records from the server are opened, and ours sealed as rfc 5288 lays them out",
+           g == 10 && memcmp(got, "helloworld", 10) == 0 && sent_len == 2 * one &&
+           is_hex(sent, 13, "170303001c0000000000000000") &&
+           is_hex(sent + one, 13, "170303001c0000000000000001") &&
+           open12_record(block, block + 32, 0, sent, one, plain, &pl) && pl == 4 &&
+           memcmp(plain, "ping", 4) == 0 &&
+           open12_record(block, block + 32, 1, sent + one, one, plain + 4, &pl2) && pl2 == 4 &&
+           memcmp(plain + 4, "ping", 4) == 0);
+
+        n = seal12(block + 16, block + 36, 0, 0x17, (const u8 *)"hello", 5, in);
+        n += seal12(block + 16, block + 36, 0, 0x17, (const u8 *)"hello", 5, in + n);
+        g = tls_test_v12(block, in, n, got, sizeof(got), 0, 0, sent, sizeof(sent), &sent_len, why, sizeof(why));
+        ok("a record played a second time does not authenticate",
+           g == 5 && strcmp(why, "a record did not authenticate") == 0);
+
+        n = seal12(block + 16, block + 36, 1, 0x17, (const u8 *)"hello", 5, in);
+        g = tls_test_v12(block, in, n, got, sizeof(got), 0, 0, sent, sizeof(sent), &sent_len, why, sizeof(why));
+        ok("nor one numbered out of turn",
+           g == 0 && strcmp(why, "a record did not authenticate") == 0);
+
+        n = seal12(block + 16, block + 36, 0, 0x17, (const u8 *)"hello", 5, in);
+        in[0] = 0x16;
+        g = tls_test_v12(block, in, n, got, sizeof(got), 0, 0, sent, sizeof(sent), &sent_len, why, sizeof(why));
+        ok("nor one whose type was changed on the way",
+           g == 0 && strcmp(why, "a record did not authenticate") == 0);
+    }
+
+    /* The scripted server. The client random is the one the flight's
+       signature is over; the session id is 0x5a bytes. */
+    from_hex("b0b1c5a5aa37c5919f2ed1d5c6fff7fcb7849716945a2b8cee9258a346677b6f", v12_random, 32);
+    memset(v12_random + 32, 0x5a, 32);
+    from_hex("0ed02f8e8117efc75ca7ac32aa7e34eda64cdc0ddad154a5e85289f959f63204", v12_random + 64, 32);
+    from_hex("ab5473467e19346ceb0a0414e41da21d4d2445bc3025afe97c4e8dc8d513da39", v12_random + 96, 32);
+
+    static u8 flight[1200], bad[1400];
+    u32 nf = hex_into(V12_FLIGHT, flight);
+    u32 ske = record_at(flight, nf, 2), shd = record_at(flight, nf, 3);
+    u32 ske_last = shd - 1;
+    u32 sent_len = 0;
+
+    ok("a 1.2 server's flight is taken as far as its certificate's authority",
+       v12_stops(flight, nf, "no trusted authority signed this", &sent_len));
+    /* After the hello, only the alert saying why (unknown_ca, in the clear):
+       no share of ours, no finished, before the certificate is believed. */
+    {
+        u32 alert = record_at(v12_sent, sent_len, 1);
+        ok("and nothing of ours went after the hello but the alert saying why",
+           sent_len > 5 && v12_sent[0] == 0x16 && v12_sent[5] == 1 && alert + 7 == sent_len &&
+           is_hex(v12_sent + alert, 7, "15030300020230"));
+    }
+
+    memcpy(bad, flight, nf);
+    memcpy(bad + 35, "DOWNGRD\x01", 8);
+    ok("a 1.3 server talked down to 1.2 is caught by its random",
+       v12_stops(bad, nf, "the server can do TLS 1.3 and was made to answer as an older one", 0));
+
+    memcpy(bad, flight, nf);
+    bad[10] = 2;
+    ok("a server that would answer as 1.1 is refused",
+       v12_stops(bad, nf, "the server does not do TLS 1.2 or 1.3", 0));
+
+    memcpy(bad, flight, nf);
+    memset(bad + 44, 0x5a, 32);
+    ok("and one that would resume a session there never was",
+       v12_stops(bad, nf, "the server tried to resume a session this never had", 0));
+
+    memcpy(bad, flight, nf);
+    bad[85] = 1;
+    ok("and one whose renegotiation extension is not empty",
+       v12_stops(bad, nf, "the server's renegotiation extension is not empty", 0));
+
+    memcpy(bad, flight, nf);
+    bad[77] = 0x2b;
+    ok("an ecdsa suite with an rsa certificate is refused",
+       v12_stops(bad, nf, "the server's certificate does not fit the cipher it chose", 0));
+
+    memcpy(bad, flight, nf);
+    bad[ske_last] ^= 1;
+    ok("a key exchange whose signature is wrong is refused",
+       v12_stops(bad, nf, "the server's signature over its key is wrong", 0));
+
+    memcpy(bad, flight, nf);
+    bad[ske + 9 + 36] = 0x02;
+    ok("and one signed with sha-1, which was not offered",
+       v12_stops(bad, nf, "the server signed with something this cannot check", 0));
+
+    memcpy(bad, flight, nf);
+    bad[ske + 9 + 2] = 0x18;
+    ok("and one in a group not offered",
+       v12_stops(bad, nf, "the server chose a key exchange this does not have", 0));
+
+    {
+        u32 sh_end = record_at(flight, nf, 1);
+        static const u8 change[6] = { 0x14, 3, 3, 0, 1, 1 };
+        memcpy(bad, flight, sh_end);
+        memcpy(bad + sh_end, change, 6);
+        memcpy(bad + sh_end + 6, flight + sh_end, nf - sh_end);
+        ok("a change of cipher before ours is refused",
+           v12_stops(bad, nf + 6, "the server changed cipher out of turn", 0));
+    }
+
+    memcpy(bad, flight, ske);
+    memcpy(bad + ske, flight + shd, nf - shd);
+    ok("a flight with no key exchange is refused",
+       v12_stops(bad, ske + (nf - shd), "the server sent no key exchange", 0));
+
+    {
+        u32 nreq = hex_into(HRR_REQUEST_REC, bad);
+        u32 sh_end = record_at(flight, nf, 1);
+        memcpy(bad + nreq, flight, sh_end);
+        ok("and a 1.2 hello after a request to start again",
+           v12_stops(bad, nreq + sh_end, "the server asked to start again and then answered as TLS 1.2", 0));
+    }
+}
+
 static void test_tls_order(void) {
     enum { EXT = 8, CERT = 11, VERIFY = 15, FINISHED = 20 };
     const char *why = 0;
@@ -6153,6 +6397,7 @@ int selftest_run(void) {
     kprintf("[randomness]\n"); test_rng(); test_rng_call();
     kprintf("[tls 1.3]\n");    test_tls_schedule(); test_tls(); test_tls_order(); test_tls_alerts();
                                test_tls_retry();
+    kprintf("[tls 1.2]\n");    test_tls12();
     kprintf("[wpa]\n");        test_wpa();
     kprintf("[ccmp]\n");       test_ccmp();
     kprintf("[wireless]\n");   test_wlan();
