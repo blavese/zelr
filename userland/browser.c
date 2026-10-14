@@ -1982,6 +1982,37 @@ static int ask_begin(const char *method, const char *url, const char *body, int 
     return pick;
 }
 
+/* A script element's file, which a page's script put in (jsnet.h,
+   jsdom_script_asks_with): counted as the scripts the page was written with
+   are, against SCRIPTS_MAX and SCRIPTS_BYTES, and not as a request. */
+static int script_ask_start(const char *src) {
+    if (scripts_outside >= SCRIPTS_MAX || scripts_bytes >= SCRIPTS_BYTES) return -2;
+    return ask_begin("GET", src, 0, 0, 0, 0, SCRIPT_MAX, 0);
+}
+
+static int script_ask_poll(int id, const char **text) {
+    if (id < 0 || id >= ASK_SLOTS || !asks[id].used) return WEB_ERR_EMPTY;
+    ask_t *a = &asks[id];
+    int st = web_job_step(&a->job);
+    if (st < 0) {
+        url_text(&a->job.u, a->landed, sizeof(a->landed));
+        ASK_SEEN(a->method, a->landed, st);
+    }
+    if (st <= 0) return st;
+    response_t *r = &a->job.r;
+    url_text(&a->job.u, a->landed, sizeof(a->landed));
+    ASK_SEEN(a->method, a->landed, r->status);
+    /* Half a script is a syntax error somewhere in its middle, as for the
+       page's own (fetch_script). */
+    if (r->status < 200 || r->status >= 300 || r->len <= 0 || r->truncated || r->cut
+        || scripts_bytes + r->len > SCRIPTS_BYTES)
+        return WEB_ERR_EMPTY;
+    scripts_outside++;
+    scripts_bytes += r->len;
+    *text = r->body;
+    return r->len;
+}
+
 /* A page's script's request, counted against what a page may ask. */
 static int ask_start(const char *method, const char *url, const char *body, int blen,
                      const char *type, const char *headers, int max) {
@@ -2689,6 +2720,7 @@ static void build(const char *html, int len, int width, int want_sheets,
         jsdom_fetch_with(fetch_script);
         jsdom_request_with(do_request);
         jsdom_asks_with(ask_start, ask_poll, ask_end);
+        jsdom_script_asks_with(script_ask_start, script_ask_poll, ask_end);
         jsdom_boxes_with(box_of);
         jsdom_points_with(node_at_point);
         jsdom_pictures_with(picture_size);

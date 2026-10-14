@@ -121,6 +121,8 @@ LOGO = (0xE1, 0x1D, 0x48)
 CANVAS_FILL = (0x1E, 0x90, 0xA0)      # /canvas: what the script fills it with
 CANVAS_DISC = (0xA0, 0x50, 0x1E)      # and the circle drawn on it later
 PSEUDO_GREEN = (0x20, 0xB0, 0x60)     # /pseudo: the block its ::before makes
+WENT_ON = (0x60, 0x40, 0xC0)          # /inserted: its timers went on while its script came
+STOOD = (0xC0, 0x30, 0x30)            # and the block it draws when they did not
 
 # The colour /styled asks for its band to be. Nothing else on the screen is
 # this colour, so counting it is the same question as "was the sheet read".
@@ -476,8 +478,23 @@ def main():
             said = vm.wait_serial('-- pseudo "wide" --', timeout=30)
             c.add("and an ::after's content is read back by the page's script", said, shotp)
 
+            # --- a script a page puts in, fetched while it goes on ----------
+            #
+            # The server answers /late.js two seconds late; the page's timer
+            # counts tenths meanwhile, and once the script has loaded the page
+            # draws a purple block if it had counted five, a red one if not.
+            go(vm, mon, "http://%s/inserted" % srv.host, settle=10.0,
+               was=pse, name="br-going-inserted")
+            _, _, _, _, done = mon.wait_screen(
+                "br-inserted", lambda w, h, px: count_in(px, w, PAGE, WENT_ON) > 20000
+                or count_in(px, w, PAGE, STOOD) > 20000, timeout=40)
+            ins, pxi, wi, shoti = page_settled(mon, "br-inserted-settled")
+            purple, red = count_in(pxi, wi, PAGE, WENT_ON), count_in(pxi, wi, PAGE, STOOD)
+            c.add("a script a page puts in is fetched while the page's timers go on (%d, %d)" % (purple, red),
+                  done and purple > 20000 and red < 100, shoti)
+
             go(vm, mon, "http://%s/scripted" % srv.host, settle=12.0,
-               was=pse, name="br-going-scripted")
+               was=ins, name="br-going-scripted")
             scripted, pxc, wc, shotc = page_settled(mon, "br-scripted")
             c.add("a page's own script runs, and changes the page",
                   count_in(pxc, wc, PAGE, BAND) > 3000, shotc)

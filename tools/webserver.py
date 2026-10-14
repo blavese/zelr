@@ -593,6 +593,34 @@ document.title = 'pseudo ' + getComputedStyle(document.getElementById('m'), '::a
 </body></html>
 """
 
+# A script the page puts in, which the server answers two seconds late, and
+# a timer counting tenths while it waits: a browser that fetches it without
+# waiting has counted many by the time it runs, and one that waits has
+# counted none. Once the script has loaded the page draws a purple block for
+# the first and a red one for the second (the browser tells the console of
+# a page once, before this, so the screen is where it shows).
+INSERTED_PAGE = b"""<!doctype html>
+<html><head><title>inserted</title>
+<style>body { font-family: sans-serif; padding: 24px }</style></head>
+<body>
+<h1>a script put in</h1>
+<script>
+var ticks = 0, iv = setInterval(function () { ticks++; }, 100);
+window.ranAt = -1;
+var s = document.createElement('script');
+s.src = '/late.js';
+s.onload = function () {
+  clearInterval(iv);
+  var b = document.createElement('div');
+  b.style.cssText = 'width: 300px; height: 80px; background: ' + (window.ranAt >= 5 ? '#6040c0' : '#c03030');
+  document.body.appendChild(b);
+  document.title = 'inserted ' + (window.ranAt >= 5 ? 'went on' : 'stood still') + ' then loaded';
+};
+document.head.appendChild(s);
+</script>
+</body></html>
+"""
+
 # A canvas a script draws on: filled as the page loads, and a circle drawn
 # on it a moment after it is shown, which only a browser that draws a canvas
 # again when it changes shows.
@@ -1189,6 +1217,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._send(CANVAS_PAGE)
         elif path == "/pseudo":
             self._send(PSEUDO_PAGE)
+        elif path == "/inserted":
+            self._send(INSERTED_PAGE)
+        elif path == "/late.js":
+            import time
+            time.sleep(2.0)
+            self._send(b"window.ranAt = ticks;", ctype="application/javascript")
         elif path == "/held/logo.png":
             HELD.wait(timeout=90)
             self._send(LOGO, ctype="image/png")

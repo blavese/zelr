@@ -203,6 +203,77 @@ static int fake_script(const char *src, const char **out) {
     return 0;
 }
 
+/* The browser's asks, stood in for: a script's file answered after as many
+   passes as its name says (slow.js three, any other one), missing.js refused
+   at once, and the names asked for, in order, into ask_order. At most
+   ask_budget are started a pass (the caller sets it before each one); past
+   that every way out is busy. A request (fetch) is answered "ok" the pass
+   after it starts. */
+static char ask_order[256];
+static int  ask_budget = 100;
+static struct { int used, left; const char *text; } ask_slot[8];
+
+static void ask_note(const char *url) {
+    const char *name = url;
+    for (const char *p = url; *p; p++) if (*p == '/') name = p + 1;
+    int w = 0;
+    while (ask_order[w]) w++;
+    if (w) ask_order[w++] = ' ';
+    for (const char *p = name; *p && w < (int)sizeof(ask_order) - 1; p++) ask_order[w++] = *p;
+    ask_order[w] = 0;
+}
+
+static int ask_take(const char *url, int left, const char *text) {
+    if (ask_budget <= 0) return -1;
+    for (int i = 0; i < 8; i++) {
+        if (ask_slot[i].used) continue;
+        ask_budget--;
+        ask_note(url);
+        ask_slot[i].used = 1;
+        ask_slot[i].left = left;
+        ask_slot[i].text = text;
+        return i;
+    }
+    return -1;
+}
+
+static int fake_sask_start(const char *src) {
+    if (find_in(src, "missing")) { ask_note(src); return -2; }
+    if (find_in(src, "slow.js")) return ask_take(src, 3, "order.push('slow ran');");
+    if (find_in(src, "fast.js")) return ask_take(src, 1, "order.push('fast ran');");
+    return ask_take(src, 1, ";");
+}
+
+static int fake_sask_poll(int id, const char **text) {
+    if (id < 0 || id >= 8 || !ask_slot[id].used) return -1;
+    if (--ask_slot[id].left > 0) return 0;
+    *text = ask_slot[id].text;
+    int n = 0;
+    while (ask_slot[id].text[n]) n++;
+    return n;
+}
+
+static void fake_ask_end(int id) {
+    if (id >= 0 && id < 8) ask_slot[id].used = 0;
+}
+
+static int fake_ask_start(const char *method, const char *url, const char *body, int blen,
+                          const char *type, const char *headers, int max) {
+    (void)method; (void)body; (void)blen; (void)type; (void)headers; (void)max;
+    return ask_take(url, 1, "ok");
+}
+
+static int fake_ask_poll(int id, jd_reply *out) {
+    if (id < 0 || id >= 8 || !ask_slot[id].used) return -1;
+    if (--ask_slot[id].left > 0) return 0;
+    out->status = 200;
+    out->body = ask_slot[id].text;
+    out->len = 2;
+    out->type = "text/plain";
+    out->url = "";
+    return 1;
+}
+
 /* Module files, answered by their whole address. */
 static const char *const MODFILES[][2] = {
     { "https://site.test/m.js", "export default 'D'; export const a = 1; export let b = 2;" },
@@ -1498,6 +1569,85 @@ int main(void) {
         oks("and is told it loaded", page.title >= 0 ? page.arena + page.title : "", "loaded");
         jsdom_fetch_with(0);
     }
+    {
+        /* Fetched without waiting (0.117.0): the inserted scripts' files come
+           as asks, the page's timers go on while they do, each runs when its
+           file has come (the faster one first, whatever order they were put
+           in), then is told load; one that will not come is told error. On
+           Imgur the gallery waited behind dozens of ad scripts, each fetched
+           while everything else stood still. */
+        static char was[sizeof(jd_address)];
+        w_copy(was, (int)sizeof(was), jd_address, (int)sizeof(was));
+        jsdom_at("https://www.site.test/");
+        jsdom_fetch_with(fake_script);
+        jsdom_script_asks_with(fake_sask_start, fake_sask_poll, fake_ask_end);
+        ask_order[0] = 0;
+        load("<body><script>window.order = [];"
+             "function put(src, name) { var s = document.createElement('script'); s.src = src;"
+             " s.onload = function () { order.push(name + ' load'); };"
+             " s.onerror = function () { order.push(name + ' error'); };"
+             " document.head.appendChild(s); }"
+             "put('https://www.site.test/slow.js#order.push(\"slow ran\");', 'slow');"
+             "put('https://www.site.test/fast.js#order.push(\"fast ran\");', 'fast');"
+             "put('https://www.site.test/missing.js', 'missing');"
+             "setTimeout(function () { order.push('timer'); }, 0); order.push('inserted');"
+             "var iv = setInterval(function () { if (order.indexOf('slow load') < 0) return; clearInterval(iv);"
+             " var at = function (w) { return order.indexOf(w); };"
+             " document.title = [order[0], at('timer') < at('slow ran'), at('fast ran') < at('slow ran'),"
+             " at('fast ran') < at('fast load'), at('slow ran') < at('slow load'), at('missing error') >= 0].join(' '); }, 5);"
+             "</script></body>");
+        char err[128];
+        run_scripts(&page, err, (int)sizeof(err), 0);
+        for (int k = 0; k < 40 && !(page.title >= 0 && page.arena[page.title]); k++) {
+            ask_budget = 100;
+            jsdom_timers();
+            jsdom_requests();
+            sleep_ms(10);
+        }
+        oks("a script a page puts in is fetched while the page goes on, and run when it has come",
+            page.title >= 0 ? page.arena + page.title : "", "inserted true true true true true");
+
+        /* What waits goes in two rounds, the page's own site first: one
+           started a pass, so the order they were asked in is the order. */
+        ask_order[0] = 0;
+        load("<body><script>"
+             "['https://ads.other.test/a.js', 'https://cdn.site.test/b.js', '/c.js', '//www.site.test/d.js',"
+             " 'https://site.test.other.test/e.js'].forEach(function (u) {"
+             " var s = document.createElement('script'); s.src = u; document.head.appendChild(s); });"
+             "</script></body>");
+        run_scripts(&page, err, (int)sizeof(err), 0);
+        for (int k = 0; k < 20; k++) {
+            ask_budget = 1;
+            jsdom_timers();
+            jsdom_requests();
+            sleep_ms(10);
+        }
+        oks("the page's own site's scripts are asked for first", ask_order, "b.js c.js d.js a.js e.js");
+        jsdom_script_asks_with(0, 0, 0);
+
+        jsdom_asks_with(fake_ask_start, fake_ask_poll, fake_ask_end);
+        ask_order[0] = 0;
+        load("<body><script>window.got = [];"
+             "['https://ads.other.test/x', 'https://api.site.test/y', 'https://ads.other.test/z', '/w']"
+             ".forEach(function (u) { fetch(u).then(function (r) { return r.text(); })"
+             " .then(function (t) { got.push(t); if (got.length == 4) document.title = got.join(' '); }); });"
+             "</script></body>");
+        run_scripts(&page, err, (int)sizeof(err), 0);
+        for (int k = 0; k < 20; k++) {
+            ask_budget = 1;
+            jsdom_timers();
+            jsdom_requests();
+        }
+        oks("and so are its requests", ask_order, "y w x z");
+        oks("and every one is answered", page.title >= 0 ? page.arena + page.title : "", "ok ok ok ok");
+        jsdom_asks_with(0, 0, 0);
+        jsdom_fetch_with(0);
+        jsdom_at(was);
+    }
+    oks("the site of an address is its last two names, or three under a country's short one",
+        jd_site_part("api.imgur.com"), "imgur.com");
+    oks("so a page on news.bbc.co.uk is on bbc.co.uk", jd_site_part("news.bbc.co.uk"), "bbc.co.uk");
+    oks("and localhost is its own", jd_site_part("localhost"), "localhost");
     oks("document.write while the page is read puts its markup after the script",
         titled("<body><div id=d><script>document.write('<b id=w>written</b>');</script><i>after</i></div>"
                "<script>var d = document.getElementById('d');"

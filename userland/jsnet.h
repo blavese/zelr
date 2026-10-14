@@ -78,9 +78,117 @@ typedef struct {
 static jxhr jd_req[JD_REQUESTS];
 static int  jd_nreq;
 
+/* --- the page's own site first ------------------------------------------------------------
+ *
+ * Three ways out are shared by everything a page asks for once it is up, and
+ * on a page that carries advertising most of what it asks for is someone
+ * else's: Imgur's gallery asked for its posts in its first seconds and the
+ * request waited behind trackers and ad scripts until the twenty-fifth. A
+ * browser keeps connections per host, so another host's queue never holds
+ * up the page's own. Here what is waiting goes in two rounds, the page's own
+ * site first.
+ *
+ * The site is the host's last two labels, or three when the last is a
+ * two-letter country and the one before it is short (bbc.co.uk, abc.net.au).
+ * That is a guess at the public suffix list, which is not here, and all it
+ * decides is which request goes first. */
+static const char *jd_site_part(const char *host) {
+    int n = w_len(host);
+    while (n > 0 && host[n - 1] == '.') n--;
+    int dots[3] = { -1, -1, -1 }, nd = 0;
+    for (int i = n - 1; i >= 0 && nd < 3; i--) if (host[i] == '.') dots[nd++] = i;
+    if (nd < 1) return host;
+    int last = n - dots[0] - 1;
+    int second = nd >= 2 ? dots[0] - dots[1] - 1 : dots[0];
+    if (last == 2 && second <= 3 && nd >= 2) return host + (nd >= 3 ? dots[2] + 1 : 0);
+    return host + (nd >= 2 ? dots[1] + 1 : 0);
+}
+
+/* Whether an address is on the page's own site; one with no host of its own
+   (a path) is. */
+static int jd_same_site(const char *url) {
+    if (!url || !*url) return 1;
+    const char *p = url;
+    while (*p && *p != ':' && *p != '/' && *p != '?' && *p != '#') p++;
+    int bare = url[0] == '/' && url[1] == '/';
+    if (!(p[0] == ':' && p[1] == '/' && p[2] == '/') && !bare) return 1;
+    static char whole[URL_TEXT + 8];
+    if (bare) {
+        w_copy(whole, (int)sizeof(whole), "https:", (int)sizeof(whole));
+        w_copy(whole + 6, (int)sizeof(whole) - 6, url, (int)sizeof(whole) - 6);
+        url = whole;
+    }
+    url_t u, page;
+    if (!url_parse(url, &u) || !url_parse(jd_address, &page)) return 0;
+    return w_same_fold(jd_site_part(u.host), jd_site_part(page.host));
+}
+
+/* --- scripts a page puts in, fetched while it goes on -------------------------------------
+ *
+ * A script element a page's script inserts with a src was fetched on the
+ * next pass, and the fetch waited: nothing else on the page happened until
+ * the file had come. An ad loader inserts dozens, one after another, and on
+ * Imgur the gallery's own requests waited behind them for most of a minute
+ * (the program, sampled, was waiting on the network nine looks in ten).
+ * Browsers fetch such a script without waiting and run it when it comes,
+ * in whatever order they come in; so does this now, when the browser gives
+ * it a way (jsdom_script_asks_with): the fetch is one of the page's asks,
+ * started on one pass and run, then told load or error, on the pass its
+ * answer is whole. Without one (the tests' stand-ins) the old way stands. */
+typedef int  (*jd_sask_start_fn)(const char *src);
+typedef int  (*jd_sask_poll_fn)(int ask, const char **text);
+typedef void (*jd_sask_end_fn)(int ask);
+static jd_sask_start_fn jd_sask_start;
+static jd_sask_poll_fn  jd_sask_poll;
+static jd_sask_end_fn   jd_sask_end;
+
+/* start: an id, -1 when every way out is busy (asked again on a later
+   pass), below -1 when it will not come; poll: 0 still coming, the length
+   once it is whole (the text good until it is ended), below 0 when it
+   failed; end: done with, whole or not. */
+void jsdom_script_asks_with(jd_sask_start_fn start, jd_sask_poll_fn poll, jd_sask_end_fn end) {
+    jd_sask_start = start;
+    jd_sask_poll = poll;
+    jd_sask_end = end;
+}
+
+#define JD_SCRIPT_ASKS 128
+typedef struct {
+    int node;                    /* the script element */
+    int ask;                     /* the browser's id plus one while it is coming; 0 before it is asked */
+} jsask;
+static jsask jd_sq[JD_SCRIPT_ASKS];
+static int   jd_nsq;
+
+/* Queued to be fetched without waiting: 1, or 0 when there is no way to (or
+   no room), and the caller fetches it the old way. */
+static int jd_script_queue(int node) {
+    if (!jd_sask_start || !jd_sask_poll || jd_nsq >= JD_SCRIPT_ASKS) return 0;
+    jd_sq[jd_nsq].node = node;
+    jd_sq[jd_nsq].ask = 0;
+    jd_nsq++;
+    return 1;
+}
+
+static void jd_script_unqueue(int k) {
+    for (int m = k; m + 1 < jd_nsq; m++) jd_sq[m] = jd_sq[m + 1];
+    jd_nsq--;
+}
+
+static void jd_scripts_drop(void) {
+    for (int k = 0; k < jd_nsq; k++)
+        if (jd_sq[k].ask && jd_sask_end) jd_sask_end(jd_sq[k].ask - 1);
+    jd_nsq = 0;
+}
+
+static int jd_scripts_waiting(void) {
+    for (int k = 0; k < jd_nsq; k++) if (!jd_sq[k].ask) return 1;
+    return 0;
+}
+
 static int jd_requests_waiting(void) {
     for (int i = 0; i < jd_nreq; i++) if (jd_req[i].waiting) return 1;
-    return 0;
+    return jd_scripts_waiting();
 }
 
 /* Every way out was busy on the last pass, so what waits is asked again
@@ -90,6 +198,7 @@ static int jd_asks_full;
 /* Requests started and not answered yet, which want asking each tick. */
 static int jd_requests_under_way(void) {
     for (int i = 0; i < jd_nreq; i++) if (jd_req[i].ask) return 1;
+    for (int k = 0; k < jd_nsq; k++) if (jd_sq[k].ask) return 1;
     return 0;
 }
 
@@ -1072,6 +1181,60 @@ static void jd_request_answered(jobj *o, int kind, const jd_reply *rp) {
    and the answers that have come handed over; otherwise one made whole a
    pass, because each blocks the browser while it happens and a page that
    sent six would otherwise stop for all six at once. */
+/* The scripts queued above: each asked for when a way out is free, and run,
+   then told load or error, once its text has come, in the order they come.
+   How many were run or failed. */
+static int jd_scripts_pump(void) {
+    int told = 0;
+    /* What waits is asked for, the page's own site's first. */
+    for (int round = 0; round < 2 && !jd_asks_full; round++) {
+        for (int k = 0; k < jd_nsq && !jd_spent(); ) {
+            int i = jd_sq[k].node;
+            const char *src = dom_attr(jd_doc, i, "src");
+            if (jd_sq[k].ask || jd_same_site(src) != !round) { k++; continue; }
+            int id = src && *src ? jd_sask_start(src) : -2;
+            if (id == -1) { jd_asks_full = 1; break; }
+            if (id >= 0) { jd_sq[k].ask = id + 1; k++; continue; }
+            jd_script_unqueue(k);
+            jd_outside_failed++;
+            if (jd_script_done) jd_script_done(i, src, 0, "it would not come");
+            jd_fire_simple(i, "error", 0, 0);
+            told++;
+        }
+    }
+    /* And what has come is run, in the order it came. */
+    for (int k = 0; k < jd_nsq && !jd_spent(); ) {
+        int i = jd_sq[k].node;
+        const char *src = dom_attr(jd_doc, i, "src");
+        if (!jd_sq[k].ask) { k++; continue; }
+        const char *text = 0;
+        int ask = jd_sq[k].ask - 1;
+        int n = jd_sask_poll(ask, &text);
+        if (n == 0) { k++; continue; }
+        /* Out of the queue before it runs: what it inserts joins the end. */
+        jd_script_unqueue(k);
+        int ran = 0;
+        if (n > 0 && text) {
+            jd_outside++;
+            if (!jd_room_for((u32)n)) {
+                jd_note_text("a script too large for this machine's memory was not run");
+                if (jd_script_done) jd_script_done(i, src, 0, "too large for this machine's memory");
+            } else {
+                jd_run_text(i, src, text, (u32)n);
+                ran = 1;
+            }
+        } else {
+            jd_outside_failed++;
+            if (jd_script_done) jd_script_done(i, src, 0, "it would not come");
+        }
+        /* Ended after it ran: its text is the ask's until then. */
+        if (jd_sask_end) jd_sask_end(ask);
+        jd_fire_simple(i, ran ? "load" : "error", 0, 0);
+        told++;
+    }
+    return told;
+}
+
 __attribute__((unused)) static int jsdom_requests(void) {
     if (!jd_open || jd_spent()) return 0;
     int told = 0;
@@ -1089,7 +1252,20 @@ __attribute__((unused)) static int jsdom_requests(void) {
         told++;
         if (jd_spent()) return told;
     }
-    for (int i = 0; i < jd_nreq; i++) {
+    /* What waits goes in two rounds, the page's own site's first. Scripts a
+       page put in go before its requests, since most requests need what
+       those define. */
+    told += jd_scripts_pump();
+    if (jd_spent() || jd_asks_full) return told;
+    int order[JD_REQUESTS], no = 0;
+    for (int round = 0; round < 2; round++)
+        for (int i = 0; i < jd_nreq; i++) {
+            if (!jd_req[i].waiting) continue;
+            const char *u = jd_req[i].self ? jd_kept_str(jd_req[i].self, jd_k_url, "") : "";
+            if (jd_same_site(u) == !round) order[no++] = i;
+        }
+    for (int oi = 0; oi < no; oi++) {
+        int i = order[oi];
         if (!jd_req[i].waiting) continue;
         jobj *o = jd_req[i].self;
         int kind = jd_req[i].kind;

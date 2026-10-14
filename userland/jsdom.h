@@ -6013,12 +6013,17 @@ static void jd_run_written(void) {
     jd_nwritten = 0;
 }
 
-/* A script a page put in the page itself, from a src: fetched and run on
-   the next pass, which is when a browser would have it, then told so with
-   load, or error when it would not come. */
+/* A script a page put in the page itself, from a src: fetched without
+   waiting and run when it has come (jsnet.h, jd_script_queue), or, with no
+   way to do that, fetched and run on the next pass; then told so with load,
+   or error when it would not come. */
+static int jd_script_queue(int node);
+
 static void jd_inserted_script_due(jval arg) {
     int i = jd_node_of(arg);
     if (i < 0) return;
+    const char *src = dom_attr(jd_doc, i, "src");
+    if (src && *src && !jd_is_data_url(src) && !jd_is_blob_url(src) && jd_script_queue(i)) return;
     int ran = jd_run_script_el(i);
     jd_fire_simple(i, ran ? "load" : "error", 0, 0);
 }
@@ -7094,6 +7099,7 @@ static void jsdom_close(void) {
     jd_canvas_reset();
     for (int i = 0; i < jd_nreq; i++) { jd_request_drop(i); jd_req[i].waiting = 0; jd_req[i].self = 0; }
     jd_nreq = 0;
+    jd_scripts_drop();
     if (!jd_open) return;
     js_done(&jd_J);
     jd_open = 0;
