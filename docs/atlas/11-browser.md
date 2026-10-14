@@ -1,6 +1,22 @@
 # 11 -- The web browser (everything except JS-engine internals and image decoders)
 
-**Since 0.121.0** (the rest of this file is older; trust the code and the README's "since 6048716" list):
+**Since 0.123.0** (the rest of this file is older; trust the code and the README's "since 6048716" list):
+- **A player from another site is a box that opens it.** The browser's rules no longer hide `iframe`; layout.h
+  counts it with video and canvas (`lay_painted`) and `lay_video` lays it out only when `lay_frame_player` says its
+  address names an embed or a player (a host starting `player.`/`embed.`, `w.soundcloud.`, `www.youtube-nocookie.`,
+  or a path with `/embed` or `/player`), at its width and height (nought kept, so a counter's 0 by 0 is not drawn) or
+  300 by 150, with a link of its own to its src. Every other frame is left out as before. browser.c
+  `draw_frame_box` draws it dark with a play mark and "open the player from HOST"; `link_target` sends a frame's
+  link through sites.h `site_frame_page` (YouTube's embed to its watch page, Twitch's player to the channel's or
+  video's page). The frame's document is still not loaded or drawn. Tests: layouttest's player section, sitetest's.
+- **A noscript is never laid out** (layout.h, after the cascade), whatever the page's rules say: PeerTube's sheet makes
+  it a block and its raw markup was drawn.
+- **The void elements with no tag number** (base, source, wbr, col, embed, param, track, area, keygen; dom.h
+  `dom_void_name`) are no longer containers in `dom_parse`: a `<base>` took the rest of the head.
+- scriptdump: "page nodes" on each script's line (the summary's "tree N nodes" is the script engine's syntax tree),
+  "[N laid out]" in `tree`, and a `nodes` option (the page's nodes by kind, in the page and removed).
+
+**Since 0.121.0**:
 - **`<base href>`** (browser.c `base`, `base_take` in `build`; every `url_join` of what the page wrote is against
   `base`, `here` stays the page's own address): PeerTube's scripts under `<base href="/client/en-US/">` came back as
   the site's page. jsdom's side is jsurl.h `jd_base`/`ju_base` (baseURI, element href/src, a link's parts, location's

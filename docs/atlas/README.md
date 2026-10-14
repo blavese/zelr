@@ -95,6 +95,13 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.123.0
+
+- **A player from another site drawn as a box that opens it (11)**: frames whose address names an embed or a player,
+  YouTube's and Twitch's opened as the pages the readers make; **a noscript never drawn (11)**; **base, source, wbr
+  and the other void elements with no tag number no longer containers (11)**. Layouttest and sitetest, each failing on
+  a build without its change.
+
 ### 0.122.0
 
 - **HD Audio through a machine's codec (05)**: connection lists read whole, a route through mixers and selectors with
