@@ -1234,6 +1234,26 @@ int main(void) {
             "x y shut AB! true body text true [object TransformStream] true");
     }
     {
+        /* A media element's text tracks (jsprelude.h): hls.js reads textTracks
+           as it attaches and stopped finding none. Cues in the order of their
+           start; one a track does not hold is refused; addtrack comes later. */
+        load("<body><video id=v></video><script>var v = document.getElementById('v'), got = [];"
+             "got.push(v.textTracks.length, v.textTracks === v.textTracks);"
+             "v.textTracks.addEventListener('addtrack', function (e) { got.push('added ' + e.track.kind); document.title = got.join(' '); });"
+             "var t = v.addTextTrack('captions', 'English', 'en');"
+             "t.addCue(new VTTCue(5, 6, 'later')); t.addCue(new VTTCue(1, 2, 'first'));"
+             "got.push(v.textTracks.length, v.textTracks[0] === t, t.cues.length, t.cues[0].text, t.mode);"
+             "var bad = 'none'; try { t.removeCue(new VTTCue(0, 1, 'x')); } catch (e) { bad = e.name; }"
+             "t.removeCue(t.cues[0]); got.push(t.cues.length, t.cues[0].text, bad);"
+             "</script></body>");
+        char err[128];
+        run_scripts(&page, err, (int)sizeof(err), 0);
+        pump_until(1000, 300);
+        oks("a media element's text tracks are a list a track is added to, its cues in order",
+            err[0] ? err : page.title >= 0 ? page.arena + page.title : "",
+            "0 true 1 true 2 first hidden 1 later NotFoundError added captions");
+    }
+    {
         /* BroadcastChannel: to every other open channel of the name, as a
            copy, afterwards; not to itself, another name or a closed one. */
         load("<body><script>var a = new BroadcastChannel('n'), b = new BroadcastChannel('n'), c = new BroadcastChannel('m'),"

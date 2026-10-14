@@ -229,6 +229,28 @@ static jval nat_ta_set(jctx *J, jval t, jval *a, int n) {
     u32 len = js_is_obj(src) && src.obj->kind == JO_TYPED ? js_ta_length(src.obj) : js_len_of(J, src);
     if (off < 0 || off + len > js_ta_length(o))
         return js_throw(J, JS_ERR_RANGE, "that does not fit in the typed array", J->error_line);
+    /* One typed array into another: its bytes moved when the kinds are the
+       same, as memmove would (the two may share a buffer), and its numbers
+       read out before any is written when they are not. They went through a
+       call's list of arguments, a value each, and hls.js joining two
+       segments of video, past a million bytes, was refused as too many. */
+    if (js_is_obj(src) && src.obj->kind == JO_TYPED) {
+        jtyped *s = (jtyped *)src.obj->internal, *d = (jtyped *)o->internal;
+        if (s->type == d->type) {
+            u32 bytes = len * TA_SIZE[d->type];
+            volatile u8 *to = ta_bytes(d->buf) + d->off + (u32)off * TA_SIZE[d->type];
+            const volatile u8 *from = ta_bytes(s->buf) + s->off;
+            if (to <= from) for (u32 i = 0; i < bytes; i++) to[i] = from[i];
+            else for (u32 i = bytes; i-- > 0; ) to[i] = from[i];
+            return js_undef();
+        }
+        double *tmp = (double *)malloc((u64)(len ? len : 1) * sizeof(double));
+        if (!tmp) { js_out_of_memory(J); return js_undef(); }
+        for (u32 i = 0; i < len; i++) tmp[i] = js_ta_get(J, src.obj, i).num;
+        for (u32 i = 0; i < len; i++) js_ta_set(J, o, (u32)off + i, js_num(tmp[i]));
+        free(tmp);
+        return js_undef();
+    }
     /* Read first, then write, in case the two share a buffer. */
     jargs A;
     js_args_init(&A);

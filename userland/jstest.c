@@ -1498,6 +1498,16 @@ int main(void) {
     /* FormatJS's message parser reads Pattern_Syntax and Pattern_White_Space,
        and a page that loaded it (Yahoo's) stopped on the class; the space
        separators (Zs) had been all of White_Space, a tab and a new line too. */
+    /* hls.js joins segments of video with set(), past a million bytes, and it
+       went through a call's list of arguments and was refused. */
+    expect("a typed array is set from another past a million, overlapping its own buffer, and from another kind",
+           "(function () { var a = new Uint8Array(1500000); a[1499999] = 7; var b = new Uint8Array(1500001); b.set(a, 1);"
+           " var c = new Uint8Array([1, 2, 3, 4, 5]); c.set(c.subarray(0, 4), 1);"
+           " var d = new Uint8Array([1, 2, 3, 4, 5]); d.set(d.subarray(1), 0);"
+           " var f = new Float32Array(3); f.set(new Uint8Array([250, 2, 3]));"
+           " var u = new Uint8Array(2); u.set(new Int16Array([-1, 300]));"
+           " return [b[1500000], b[0], c.join(''), d.join(''), f[0], u.join(' ')].join(); })()",
+           "7,0,11234,23455,250,255 44");
     /* React's value tracker defines an input's value as an accessor and then
        sets it enumerable on its own; that turned it into undefined, and
        GitHub's repository page stopped. */
