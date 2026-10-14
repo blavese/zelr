@@ -1,6 +1,22 @@
 # 11 -- The web browser (everything except JS-engine internals and image decoders)
 
-**Since 0.113.0** (the rest of this file is older; trust the code and the README's "since 6048716" list):
+**Since 0.117.0** (the rest of this file is older; trust the code and the README's "since 6048716" list):
+- **A script element a page's script inserts with a src is an ask** (jsnet.h `jd_script_queue`, `jd_scripts_pump`;
+  browser.c `script_ask_start`/`script_ask_poll` on `ask_begin`, counted against `SCRIPTS_MAX`/`SCRIPTS_BYTES`, not
+  `ASKS_MAX`): started on one pass, run when its file is whole, in the order the files come, then told load or error.
+  It was fetched with a waiting `web_get` on the next pass, and nothing else on the page happened meanwhile: on Imgur,
+  sampled, the program was waiting on the network nine looks in ten, and its gallery's posts came after forty seconds.
+  Without `jsdom_script_asks_with` (the tests' stand-ins) the old way stands. The page's own scripts, read as it
+  loads (`fetch_script`), still wait, as do modules and workers.
+- **The page's own site first** (jsnet.h `jd_same_site`, `jd_site_part`: the host's last two labels, or three under
+  a two-letter country with a short label before it): what waits for one of the three ways out goes in two rounds,
+  scripts before requests. Imgur's posts now come at about fifteen seconds on the host.
+- **scriptdump `net`** prints each ask as it starts and ends, with the time (browser.c `ASK_SEEN`, a macro only
+  scriptdump defines). Tests: pagetest (an inserted script fetched while a timer runs and run in the order the files
+  come, a missing one told error; the own site's scripts and requests asked first; `jd_site_part`); browsercheck
+  `/inserted` (a script the test server answers two seconds late, purple if the page's timer counted on meanwhile).
+
+**Since 0.113.0**:
 - **`::before` and `::after` are drawn.** css.h keeps a rule whose selector ends in one (`crule.pe`, 1 or 2; nothing
   may follow it; `::first-line`, `::first-letter` and the rest are still refused), indexes those rules in chains of
   their own (`cindex.pe_by_tag`, `pe_by_key`, `pe_universal`, `npe`), and reads `content` (`P_CONTENT`). layout.h

@@ -95,6 +95,12 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.117.0
+
+- **Inserted scripts fetched without waiting, and the page's own site first (11)**: a script element a page's script
+  puts in is fetched as an ask and run when it comes; what waits for a way out goes own site first. pagetest 349,
+  browsercheck 58; scriptdump `net` shows a page's requests. Each check failing on a build without its fix.
+
 ### 0.116.0
 
 - **TLS 1.2 (06b)** for the servers with nothing newer, ECDHE with AES-128-GCM only, with the downgrade check, the
