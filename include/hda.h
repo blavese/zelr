@@ -36,3 +36,8 @@ u32 hda_position(void);
 u32 hda_rate(void);
 u32 hda_channels(void);
 u32 hda_frame_bytes(void);
+
+/* For the self test: the route find_route takes through a codec fn
+   simulates (answering each verb sent to a widget), and the pin and the
+   converter it ended at. The real codec, if any, is left as it was. */
+bool hda_test_route(bool (*fn)(u8 nid, u32 payload, u32 *out), u8 *pin, u8 *dac);

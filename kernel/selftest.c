@@ -2,6 +2,7 @@
    kernel can be checked from a script without a human watching a screen. */
 #include "selftest.h"
 #include "sound.h"
+#include "hda.h"
 #include "printf.h"
 #include "string.h"
 #include "heap.h"
@@ -6286,6 +6287,113 @@ static void test_clock(void) {
  * This is the check that can be run on a machine nothing else here can
  * reach. There is no way to record what came out of somebody's laptop, but
  * there is a way to find out whether the bytes left. */
+/* --- a route out through a codec ---------------------------------------------
+ *
+ * hda.c's walk from a pin to a converter, against codecs simulated here,
+ * since QEMU's has one input on every widget and a machine's do not. The
+ * first is laid out as the codecs in machines are: the internal speaker's
+ * pin takes the fifth of its five inputs (so its list takes two answers),
+ * which is a mixer whose second input is the converter, with another
+ * converter at a lower number wired to nothing; a headphone socket behind a
+ * selector loses to the speaker; the function group describes the output
+ * amplifiers and the mixer its own inputs, nought decibels below the top
+ * step of each. The second describes no connections and no amplifiers at
+ * all, and gets its first converter at the most gain. */
+#define CODEC_LOG 64
+static struct { u8 nid; u32 payload; } codec_log[CODEC_LOG];
+static int ncodec_log;
+static int codec_bare;                       /* the second codec: no connection lists */
+
+static u32 fake_widget_type(u8 nid) {
+    switch (nid) {
+        case 0x02: case 0x03: case 0x04: return 0;      /* converters */
+        case 0x0c: return 2 | 0x80;                      /* a mixer, its own amplifiers */
+        case 0x07: return 3;                             /* a selector */
+        case 0x0a: case 0x0d: return 4;                  /* pins */
+        case 0x0b: return 7;                             /* the beep */
+        default: return 0xF;                             /* the maker's own */
+    }
+}
+
+/* The connection list of a widget, as nids. */
+static int fake_conns(u8 nid, const u8 **list) {
+    static const u8 SPEAKER[] = { 0x0e, 0x0f, 0x10, 0x11, 0x0c };
+    static const u8 MIXER[] = { 0x0b, 0x03 };
+    static const u8 HEADPHONE[] = { 0x07 };
+    static const u8 SELECTOR[] = { 0x04 };
+    if (codec_bare) return 0;
+    switch (nid) {
+        case 0x0d: *list = SPEAKER; return 5;
+        case 0x0c: *list = MIXER; return 2;
+        case 0x0a: *list = HEADPHONE; return 1;
+        case 0x07: *list = SELECTOR; return 1;
+        default: return 0;
+    }
+}
+
+static bool fake_codec(u8 nid, u32 payload, u32 *out) {
+    u32 verb = payload >> 8, low = payload & 0xFF;
+    u32 v = 0;
+    if (verb == 0xF00) {                         /* a parameter */
+        if (low == 0x04) v = nid == 0 ? (0x01u << 16) | 1 : nid == 0x01 ? (0x02u << 16) | 0x1E : 0;
+        else if (low == 0x05) v = nid == 0x01 ? 1 : 0;
+        else if (low == 0x09) {
+            u32 t = fake_widget_type(nid);
+            v = ((t & 0x0F) << 20) | ((t & 0x80) ? (1u << 3) | (1u << 1) : 0);
+        }
+        else if (low == 0x0D) v = (!codec_bare && nid == 0x0c) ? 0x80051F17u : 0;
+        else if (low == 0x12) v = (!codec_bare && nid == 0x01) ? 0x80055740u : 0;
+        else if (low == 0x0C) v = (nid == 0x0a || nid == 0x0d) ? (1u << 4) : 0;
+        else if (low == 0x0E) { const u8 *l; v = (u32)fake_conns(nid, &l); }
+    } else if (verb == 0xF02) {                  /* four entries from low, rounded down */
+        const u8 *l;
+        int n = fake_conns(nid, &l);
+        for (int k = 0; k < 4; k++) {
+            int at = (int)(low & ~3u) + k;
+            if (at < n) v |= (u32)l[at] << (8 * k);
+        }
+    } else if (verb == 0xF1C) {                  /* the pin's configuration default */
+        if (nid == 0x0d) v = (2u << 30) | (1u << 20);   /* fixed, a speaker */
+        if (nid == 0x0a) v = (0u << 30) | (2u << 20);   /* a socket, headphones */
+    } else if (ncodec_log < CODEC_LOG) {
+        codec_log[ncodec_log].nid = nid;
+        codec_log[ncodec_log].payload = payload;
+        ncodec_log++;
+    }
+    if (out) *out = v;
+    return true;
+}
+
+static bool codec_was_told(u8 nid, u32 payload) {
+    for (int i = 0; i < ncodec_log; i++)
+        if (codec_log[i].nid == nid && codec_log[i].payload == payload) return true;
+    return false;
+}
+
+static void test_codec_routes(void) {
+    u8 pin = 0, dac = 0;
+    ncodec_log = 0;
+    codec_bare = 0;
+    bool found = hda_test_route(fake_codec, &pin, &dac);
+    ok("a route goes from the speaker, past a mixer, to the converter behind it",
+       found && pin == 0x0d && dac == 0x03);
+    ok("the pin is told to take the fifth of its five inputs", codec_was_told(0x0d, 0x70104));
+    ok("the mixer's input from the converter is unmuted, at its own nought decibels",
+       codec_was_told(0x0c, 0x37117));
+    ok("and the pin is switched to output with its amplifier at the group's nought decibels",
+       codec_was_told(0x0d, 0x707C0) && codec_was_told(0x0d, 0x70C02) && codec_was_told(0x0d, 0x3B040)
+       && codec_was_told(0x03, 0x3B040));
+
+    ncodec_log = 0;
+    codec_bare = 1;
+    found = hda_test_route(fake_codec, &pin, &dac);
+    ok("a codec that describes no connections still plays through its first converter",
+       found && pin == 0x0d && dac == 0x02);
+    ok("and an amplifier that describes nothing is asked for the most",
+       codec_was_told(0x0d, 0x3B07F) && codec_was_told(0x02, 0x3B07F));
+    codec_bare = 0;
+}
+
 static void test_sound(void) {
     if (!sound_present()) { kprintf("  SKIP  no sound controller\n"); return; }
 
@@ -6408,6 +6516,7 @@ int selftest_run(void) {
     kprintf("[interrupt routing]\n"); test_irqs();
     kprintf("[clipboard]\n"); test_clipboard();
     kprintf("[clock]\n"); test_clock();
+    kprintf("[codec routes]\n"); test_codec_routes();
     kprintf("[sound]\n"); test_sound();
     kprintf("[kernel stack]\n"); test_stack();
     /* Last, after every section has allocated and freed with the other

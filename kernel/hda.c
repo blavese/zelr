@@ -103,7 +103,13 @@
 #define P_FUNC_TYPE     0x05
 #define P_WIDGET_CAPS   0x09
 #define P_PIN_CAPS      0x0C
+#define P_IN_AMP_CAP    0x0D
 #define P_CONN_LEN      0x0E
+#define P_OUT_AMP_CAP   0x12
+
+/* The widget describes its own amplifiers; without it the function group's
+   description stands for them. */
+#define WCAP_AMP_OVERRIDE (1u << 3)
 
 #define WIDGET_DAC      0
 #define WIDGET_MIXER    2
@@ -112,11 +118,10 @@
 
 #define PIN_CAP_OUTPUT  (1u << 4)
 
-/* Turn the amplifier on: output side, both channels, no mute, full gain.
-   The gain field is seven bits and what full means differs per widget, so
-   the widget's own capability would be the careful thing to read. This asks
-   for more than any of them have, and they clamp. */
-#define AMP_OUT_UNMUTE  0xB07F
+/* An amplifier on: the output side or an input by its index, both channels,
+   not muted, at gain g. */
+#define AMP_OUT(g)      (0xB000u | (g))
+#define AMP_IN(i, g)    (0x7000u | ((i) << 8) | (g))
 
 #define PIN_OUT_ENABLE  0xC0      /* output, and headphone drive with it */
 
@@ -135,6 +140,7 @@ static u32  corb_wp;
 static u32  rirb_rp;
 
 static u8   codec_addr;
+static u8   afg_nid;              /* the audio function group */
 static u8   dac_nid, pin_nid;
 static char described[96];
 
@@ -178,7 +184,12 @@ static void spin_us(u32 us) {
  * it moved to is the answer. Nothing else is ever in flight, which costs
  * some setup time at boot and removes every question about which response
  * belongs to which command. */
+/* For the self test: a codec simulated in software, answering in place of
+   the link (hda_test_route). */
+static bool (*test_codec)(u8 nid, u32 payload, u32 *out);
+
 static bool codec(u8 nid, u32 payload, u32 *out) {
+    if (test_codec) return test_codec(nid, payload, out);
     if (!corb || !rirb) return false;
 
     u32 verb = ((u32)codec_addr << 28) | ((u32)nid << 20) | (payload & 0xFFFFF);
@@ -217,6 +228,24 @@ static u8 widget_type(u8 nid) {
     return (u8)((param(nid, P_WIDGET_CAPS) >> 20) & 0x0F);
 }
 
+/* The gain an amplifier calls nought decibels, held to the steps it has.
+ *
+ * Every amplifier was asked for 0x7F, the most the field holds, on the
+ * understanding that each would stop at its own top step. The specification
+ * leaves a gain past the last step undefined, and the codecs in machines
+ * put nought decibels well below the top, where 0x7F is past it or a boost.
+ * QEMU's scales the gain to a byte for its mixer, so 0x7F against its 0x4A
+ * steps wrapped round to about seven tenths of full volume. An amplifier
+ * that describes nothing is asked for the most, as before. */
+static u32 amp_unity(u8 nid, bool out) {
+    u8 p = out ? P_OUT_AMP_CAP : P_IN_AMP_CAP;
+    bool own = (param(nid, P_WIDGET_CAPS) & WCAP_AMP_OVERRIDE) != 0;
+    u32 cap = param(own ? nid : afg_nid, p);
+    if (!cap) return 0x7F;
+    u32 unity = cap & 0x7F, steps = (cap >> 8) & 0x7F;
+    return unity > steps ? steps : unity;
+}
+
 /* Whether this pin is one a sound could come out of, and how much it looks
    like the one that was meant to.
  *
@@ -241,41 +270,76 @@ static int pin_score(u8 nid) {
     return 10;
 }
 
-/* Walks back from a pin looking for a converter.
+/* The widgets a widget's connection list names, as many as fit in out: an
+ * answer to GET_CONN carries four of them in the short form and two in the
+ * long, starting at the index asked for rounded down to that many.
  *
- * One hop through a mixer or a selector is allowed, which covers nearly
- * everything: pins rarely hang off a converter directly, and the thing in
- * between is usually a single mixer. When the widget in the way is a
- * selector it also has to be told which of its inputs to listen to. */
-static u8 dac_behind(u8 pin) {
-    u32 count = param(pin, P_CONN_LEN) & 0x7F;
-    if (!count) return 0;
-
-    for (u32 i = 0; i < count && i < 8; i++) {
-        u32 list = 0;
-        codec(pin, GET_CONN(i), &list);
-        u8 first = (u8)(list & 0xFF);
-        if (!first) continue;
-
-        if (widget_type(first) == WIDGET_DAC) return first;
-
-        u8 mid = widget_type(first);
-        if (mid == WIDGET_MIXER || mid == WIDGET_SELECTOR) {
-            u32 inner = param(first, P_CONN_LEN) & 0x7F;
-            for (u32 j = 0; j < inner && j < 8; j++) {
-                u32 sub = 0;
-                codec(first, GET_CONN(j), &sub);
-                u8 cand = (u8)(sub & 0xFF);
-                if (cand && widget_type(cand) == WIDGET_DAC) {
-                    if (mid == WIDGET_SELECTOR) tell(first, SET_CONN_SEL(j));
-                    tell(first, SET_POWER(0));
-                    tell(first, SET_AMP(AMP_OUT_UNMUTE));
-                    return cand;
-                }
-            }
+ * Only the lowest byte of each answer was read, so entry one, two or three
+ * came back as entry nought again, and a pin or a mixer with more than one
+ * input was looked behind through its first alone. QEMU's codec has one
+ * input everywhere and never showed it; the codecs in machines put the
+ * converter behind a mixer's second input as often as its first. A range
+ * (the top bit of an entry) is taken as its last widget. */
+static u32 conn_list(u8 nid, u8 *out, u32 cap) {
+    u32 len = param(nid, P_CONN_LEN);
+    bool wide = (len & 0x80) != 0;
+    u32 count = len & 0x7F, per = wide ? 2 : 4, n = 0;
+    for (u32 i = 0; i < count && n < cap; i += per) {
+        u32 resp = 0;
+        if (!codec(nid, GET_CONN(i), &resp)) break;
+        for (u32 k = 0; k < per && i + k < count && n < cap; k++) {
+            u32 e = wide ? (resp >> (16 * k)) & 0xFFFF : (resp >> (8 * k)) & 0xFF;
+            out[n++] = (u8)(e & (wide ? 0x7FFF : 0x7F));
         }
     }
-    return 0;
+    return n;
+}
+
+/* A way back from the pin to a converter, through mixers and selectors, at
+ * most three steps: route[0] is the pin, route[route_n - 1] the converter,
+ * and through[j] which of route[j]'s inputs leads to route[j + 1]. Nearer
+ * converters are looked for before deeper ones. */
+#define ROUTE_MAX 5
+static u8  route[ROUTE_MAX], through[ROUTE_MAX];
+static u32 route_n;
+
+static bool route_from(u8 nid, u32 depth) {
+    u8 conns[16];
+    u32 n = conn_list(nid, conns, 16);
+    route[depth] = nid;
+    for (u32 i = 0; i < n; i++)
+        if (conns[i] && widget_type(conns[i]) == WIDGET_DAC) {
+            through[depth] = (u8)i;
+            route[depth + 1] = conns[i];
+            route_n = depth + 2;
+            return true;
+        }
+    if (depth + 2 >= ROUTE_MAX) return false;
+    for (u32 i = 0; i < n; i++) {
+        u8 t = conns[i] ? widget_type(conns[i]) : 0xFF;
+        if (t != WIDGET_MIXER && t != WIDGET_SELECTOR) continue;
+        through[depth] = (u8)i;
+        if (route_from(conns[i], depth + 1)) return true;
+    }
+    return false;
+}
+
+/* Everything on the route awake and open: each widget's output amplifier
+   unmuted, a pin or selector told which input to take, and a mixer's input
+   from the next widget unmuted -- a mixer's inputs start muted on the codecs
+   in machines, which is silence with every other register right. Each
+   amplifier is set to its own nought decibels; how loud is the mixing's to
+   say, in software. */
+static void route_open(void) {
+    for (u32 j = 0; j < route_n; j++) {
+        u8 nid = route[j];
+        tell(nid, SET_POWER(0));
+        tell(nid, SET_AMP(AMP_OUT(amp_unity(nid, true))));
+        if (j + 1 >= route_n) continue;
+        u8 t = widget_type(nid);
+        if (t == WIDGET_MIXER) tell(nid, SET_AMP(AMP_IN((u32)through[j], amp_unity(nid, false))));
+        else tell(nid, SET_CONN_SEL(through[j]));
+    }
 }
 
 /* The audio function group, and every widget under it. */
@@ -287,6 +351,7 @@ static bool find_route(void) {
     for (u8 fg = first_fg; fg < first_fg + n_fg; fg++) {
         if ((param(fg, P_FUNC_TYPE) & 0xFF) != 1) continue;   /* not audio */
 
+        afg_nid = fg;
         tell(fg, SET_POWER(0));                               /* D0, awake */
         spin_us(1000);
 
@@ -303,26 +368,28 @@ static bool find_route(void) {
         }
         if (!best_pin) continue;
 
-        u8 dac = dac_behind(best_pin);
-        if (!dac) {
-            /* No connection list worth following. Some codecs, including the
-               simple one QEMU presents, wire a single converter straight to
-               the pin and do not describe it, so take the first converter
-               there is. */
+        u8 dac = 0;
+        route_n = 0;
+        if (route_from(best_pin, 0)) dac = route[route_n - 1];
+        else {
+            /* No connection list worth following. Some codecs wire a single
+               converter straight to the pin and do not describe it, so take
+               the first converter there is. (QEMU's does describe it: its
+               pin 3 names converter 2.) */
             for (u8 w = first_w; w < first_w + n_w; w++)
                 if (widget_type(w) == WIDGET_DAC) { dac = w; break; }
+            route[0] = best_pin;
+            route[1] = dac;
+            route_n = 2;
         }
         if (!dac) continue;
 
         pin_nid = best_pin;
         dac_nid = dac;
 
-        tell(pin_nid, SET_POWER(0));
-        tell(dac_nid, SET_POWER(0));
+        route_open();
         tell(pin_nid, SET_PIN_CTL(PIN_OUT_ENABLE));
         tell(pin_nid, SET_EAPD(0x02));      /* laptops need this or silence */
-        tell(pin_nid, SET_AMP(AMP_OUT_UNMUTE));
-        tell(dac_nid, SET_AMP(AMP_OUT_UNMUTE));
         return true;
     }
     return false;
@@ -436,7 +503,14 @@ bool hda_init(void) {
             "hda codec %x:%x, converter %d into pin %d",
             (u32)(vendor >> 16), (u32)(vendor & 0xFFFF),
             (u32)dac_nid, (u32)pin_nid);
-    bb_log("audio %s", described);
+    /* The whole way, pin first: on a machine with no sound, what was chosen
+       is the first thing to know. */
+    char way[40];
+    u32 at = 0;
+    way[0] = 0;
+    for (u32 j = 0; j < route_n && at + 6 < sizeof way; j++)
+        at += (u32)kformat(way + at, sizeof way - at, j ? " %d" : "%d", (u32)route[j]);
+    bb_log("audio %s, by way of %s", described, way);
     return true;
 }
 
@@ -501,4 +575,23 @@ bool hda_start(void *buffer, u32 bytes, u32 rate_hz) {
 u32 hda_position(void) {
     if (!present) return 0;
     return r32(sd_off(SD_LPIB));
+}
+
+/* --- for the self test ------------------------------------------------------ */
+
+bool hda_test_route(bool (*fn)(u8 nid, u32 payload, u32 *out), u8 *pin, u8 *dac) {
+    bool (*was)(u8, u32, u32 *) = test_codec;
+    u8 was_addr = codec_addr, was_afg = afg_nid, was_pin = pin_nid, was_dac = dac_nid;
+    test_codec = fn;
+    codec_addr = 0;
+    pin_nid = dac_nid = 0;
+    bool found = find_route();
+    *pin = pin_nid;
+    *dac = dac_nid;
+    test_codec = was;
+    codec_addr = was_addr;
+    afg_nid = was_afg;
+    pin_nid = was_pin;
+    dac_nid = was_dac;
+    return found;
 }
