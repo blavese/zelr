@@ -1178,6 +1178,32 @@ static void restyle_changed(void) {
         if (i < doc.count) inline_style_of(i);
 }
 
+/* Whether an answer is worth asking for again, once: no answer, a server
+   too busy to give one, or one cut short. One that said it was too busy is
+   asked again after the pause it named (Retry-After), half a second if it
+   named none and never more than two: the reader is waiting. */
+static int ask_again(int rc, const response_t *r) {
+    if (!(rc < 0 || rc == 429 || rc >= 500 || r->cut)) return 0;
+    if (rc != 429 && rc != 503) return 1;
+    int ms = 500;
+    const char *h = r->head;
+    for (int i = 0; h && i + 12 < r->hlen; i++) {
+        if ((i == 0 || h[i - 1] == '\n') && w_starts_fold(h + i, "Retry-After:")) {
+            const char *v = h + i + 12;
+            while (*v == ' ') v++;
+            if (*v >= '0' && *v <= '9') {
+                int s = 0;
+                while (*v >= '0' && *v <= '9' && s < 100) s = s * 10 + (*v++ - '0');
+                ms = s * 1000;
+            }
+            break;
+        }
+    }
+    if (ms > 2000) ms = 2000;
+    sleep_ms(ms);
+    return 1;
+}
+
 /* What a link or style element's media attribute allows: 0 when the sheet
    is not for this screen at all (print, a dark scheme), else the window
    widths it is for. A sheet for dark mode was read as though it were the
@@ -1361,7 +1387,7 @@ static int gather_linked_sheets(int *fetched, int *skipped) {
                said it was busy or it stopped short: one sheet that failed on the
                way is a page drawn with none of its style (Wikipedia's, after a
                burst of fetching). */
-            if (rc < 0 || rc == 429 || rc >= 500 || r.cut) rc = web_get(&u, cssbuf, CSS_MAX, &r);
+            if (ask_again(rc, &r)) rc = web_get(&u, cssbuf, CSS_MAX, &r);
             if (rc < 200 || rc >= 300 || r.len <= 0) { (*skipped)++; source_add(i, r0, 0); continue; }
             text = r.body;
             len = r.len;
@@ -1587,7 +1613,7 @@ static int link_text(url_t *u, const char **text) {
         }
     response_t r;
     int rc = web_get(u, cssbuf, CSS_MAX, &r);
-    if (rc < 0 || rc == 429 || rc >= 500 || r.cut) rc = web_get(u, cssbuf, CSS_MAX, &r);
+    if (ask_again(rc, &r)) rc = web_get(u, cssbuf, CSS_MAX, &r);
     int ok = rc >= 200 && rc < 300 && r.len > 0;
     char *copy = 0;
     if (ok && links_kept_bytes + r.len <= LINKS_BYTES && (copy = (char *)malloc((u64)r.len + 1))) {
@@ -1808,6 +1834,10 @@ static int fetch_script(const char *src, const char **out) {
 
     response_t r;
     int rc = web_get(&u, scriptbuf, SCRIPT_MAX, &r);
+    /* Asked for again, once, as a sheet is: PeerTube's app is seventy-odd
+       modules, every one of which must come, and one dropped by a busy
+       server was the whole page not drawn. */
+    if (ask_again(rc, &r)) rc = web_get(&u, scriptbuf, SCRIPT_MAX, &r);
     if (rc < 200 || rc >= 300 || r.len <= 0) return 0;
     /* Half a script is a syntax error somewhere in its middle, and the page
        is better told the file would not come. */

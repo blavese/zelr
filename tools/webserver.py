@@ -716,6 +716,23 @@ BASED_PAGE = b"""<!doctype html>
 """
 
 DELAY_LOCK = threading.Lock()
+
+# A module page whose one import the server refuses the first time it is
+# asked for -- 503, with a Retry-After of a second, as a busy server does --
+# and gives the second: a browser that asks once draws nothing, one that
+# asks again after the pause writes "flaky came" into the title.
+MODFLAKY_PAGE = b"""<!doctype html>
+<html><head><title>flaky</title>
+<style>body { font-family: sans-serif; padding: 24px; font-size: 32px }</style></head>
+<body><p>flaky</p>
+<script type="module" src="/flaky/main.js"></script>
+</body></html>
+"""
+MODFLAKY_MAIN = b"import { v } from './dep.js';\ndocument.title = 'flaky ' + v;\n"
+MODFLAKY_DEP = b"export const v = 'came';\n"
+MODFLAKY_REFUSED = []
+
+
 DELAY_NOW = 0
 DELAY_MOST = 0
 
@@ -1353,6 +1370,18 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 DELAY_NOW -= 1
             self._send(("window.order = (window.order || '') + '%s';" % n).encode(),
                        ctype="application/javascript")
+        elif path == "/flaky":
+            self._send(MODFLAKY_PAGE)
+        elif path == "/flaky/main.js":
+            self._send(MODFLAKY_MAIN, ctype="application/javascript")
+        elif path == "/flaky/dep.js":
+            with DELAY_LOCK:
+                first = not MODFLAKY_REFUSED
+                MODFLAKY_REFUSED.append(1)
+            if first:
+                self._send(b"busy", ctype="text/plain", status=503, extra=[("Retry-After", "1")])
+            else:
+                self._send(MODFLAKY_DEP, ctype="application/javascript")
         elif path == "/late.js":
             import time
             time.sleep(2.0)

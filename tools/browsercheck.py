@@ -560,8 +560,16 @@ def main():
             vrs, _, _, shotv = page_settled(mon, "br-vars")
             c.add("a script reads a page's custom properties through getComputedStyle", told_vars, shotv)
 
+            # --- a module a busy server refuses once ---------------------------
+            go(vm, mon, "http://%s/flaky" % srv.host, settle=10.0,
+               was=vrs, name="br-going-modflaky")
+            told_flaky = vm.wait_serial("-- flaky came --", timeout=40)
+            flk, _, _, shotk = page_settled(mon, "br-modflaky")
+            c.add("a module a busy server refuses once is asked for again after the pause it names (%d asks)"
+                  % len(webserver.MODFLAKY_REFUSED), told_flaky and len(webserver.MODFLAKY_REFUSED) == 2, shotk)
+
             go(vm, mon, "http://%s/scripted" % srv.host, settle=12.0,
-               was=vrs, name="br-going-scripted")
+               was=flk, name="br-going-scripted")
             scripted, pxc, wc, shotc = page_settled(mon, "br-scripted")
             c.add("a page's own script runs, and changes the page",
                   count_in(pxc, wc, PAGE, BAND) > 3000, shotc)
