@@ -735,9 +735,11 @@ static jobj *jcs_sheet_new(jctx *J, int node, int flags) {
 
 /* A style or link element's sheet: none while it is not in the page, or a
    link is not a stylesheet's; a new one when what it holds has changed,
-   and the old one then belongs to nobody. */
+   and the old one then belongs to nobody. In the page counts a shadow tree
+   in it: Media Chrome reads the sheet of the style in each of its controls'
+   trees and found none. */
 static jobj *jcs_sheet_for(jctx *J, int node) {
-    if (node < 0 || node >= jd_doc->count || !jd_connected(node)) return 0;
+    if (node < 0 || node >= jd_doc->count || !jd_connected_deep(node)) return 0;
     int link = jd_doc->nodes[node].tag == T_LINK;
     if (link ? !jcs_is_sheet_link(node) : jd_doc->nodes[node].tag != T_STYLE) return 0;
     if (link && !jd_attr(node, "href")) return 0;

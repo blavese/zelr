@@ -1884,6 +1884,17 @@ int main(void) {
                " getComputedStyle(p, ':after').getPropertyValue('content'), String(document.querySelector('p::before')),"
                " document.querySelectorAll('p::after, #p').length].join(' ');</script></body>"),
         "normal none none null 1");
+    /* A frame of the page's own answers with every interface the page has:
+       Osano takes HTMLScriptElement, Storage and the rest from one it makes. A
+       style in a shadow tree in the page has its sheet: Media Chrome reads it. */
+    oks("a frame's window has the page's interfaces, and a style in a shadow tree has its sheet",
+        titled("<body><div id=h></div><script>var f = document.createElement('iframe'); document.body.appendChild(f);"
+               "var w = f.contentWindow, r = document.getElementById('h').attachShadow({ mode: 'open' });"
+               "r.innerHTML = '<style>p { color: red }</style><p>x</p>'; var st = r.querySelector('style');"
+               "document.title = [typeof w.HTMLScriptElement, w.Storage === Storage, w.Navigator === Navigator,"
+               " w.HTMLIFrameElement === HTMLIFrameElement, !!st.sheet, st.sheet && st.sheet.cssRules.length].join(' ');"
+               "</script></body>"),
+        "function true true true true 1");
     /* --- a canvas's 2d context (jscanvas.h) -----------------------------------------------
      *
      * getContext('2d') gave null, and Lottie, which makes a canvas and paints

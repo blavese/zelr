@@ -103,6 +103,15 @@ static jval jd_frame_window(jctx *J, jobj *el, int x) {
             if (J->sig != JS_OK) { J->sig = JS_OK; continue; }
             if (v.t != JS_UNDEF) js_set(J, w, JD_FRAME_GLOBALS[i], v);
         }
+        /* And every interface the page has, the globals named with a capital:
+           Osano makes a frame to take Document, Element, HTMLScriptElement,
+           Navigator, Storage and the rest from, as no script has patched them,
+           and stopped on finding no HTMLScriptElement there (TED's pages). */
+        for (jprop *p = jd_J.global_obj ? jd_J.global_obj->ofirst : 0; p; p = p->onext) {
+            if (!p->key || !p->key->len || js_is_sym_key(p->key) || p->v.t == JS_ACC) continue;
+            if (p->key->s[0] < 'A' || p->key->s[0] > 'Z' || js_find(w, p->key)) continue;
+            js_set_prop(J, w, p->key, p->v);
+        }
         js_set(J, w, "document", jd_frame_document(J, el, x));
     }
     jd_keep(el, jd_k_fwin, me);
