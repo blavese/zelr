@@ -1498,6 +1498,17 @@ int main(void) {
     /* FormatJS's message parser reads Pattern_Syntax and Pattern_White_Space,
        and a page that loaded it (Yahoo's) stopped on the class; the space
        separators (Zs) had been all of White_Space, a tab and a new line too. */
+    /* React's value tracker defines an input's value as an accessor and then
+       sets it enumerable on its own; that turned it into undefined, and
+       GitHub's repository page stopped. */
+    expect("a descriptor with neither a value nor an accessor changes only what it names",
+           "(function () { var o = {}; Object.defineProperty(o, 'v', { configurable: true,"
+           " get: function () { return 7; }, set: function (x) { this.w = x; } });"
+           " Object.defineProperty(o, 'v', { enumerable: true }); var d = Object.getOwnPropertyDescriptor(o, 'v');"
+           " var q = { a: 1 }; Object.defineProperty(q, 'a', { enumerable: false });"
+           " return [typeof d.get, typeof d.set, d.enumerable, o.v, 'value' in d, q.a, Object.keys(q).length,"
+           " Object.getOwnPropertyDescriptor(q, 'a').writable].join(); })()",
+           "function,function,true,7,false,1,0,true");
     expect("the binary properties are Unicode's: Pattern_Syntax, Pattern_White_Space, White_Space and the rest",
            "[/^[\\p{Pattern_Syntax}\\p{Pattern_White_Space}]+$/u.test('{}#\\u2192 \\t'), /\\p{Pattern_Syntax}/u.test('a'),"
            " /\\p{White_Space}/u.test('\\n'), /\\p{White_Space}/u.test('\\u00a0'), /\\p{Pattern_White_Space}/u.test('\\u00a0'),"

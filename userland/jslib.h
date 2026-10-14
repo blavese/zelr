@@ -553,6 +553,16 @@ static int js_define_from_desc(jctx *J, jobj *o, jstr *key, jval desc) {
     if (has_e) flags = e ? (flags | JP_ENUM) : (flags & ~JP_ENUM);
     if (has_c) flags = c ? (flags | JP_CONF) : (flags & ~JP_CONF);
 
+    /* A descriptor with neither a value nor an accessor in it changes only
+       what it names. React's value tracker makes an input's value an
+       accessor of the input's own and then sets it enumerable, and this
+       made it a value of undefined: GitHub's search box read back nothing,
+       set its query to that, and the repository page stopped. */
+    if (p && !has_value && !has_w && !has_get && !has_set) {
+        p->flags = flags;
+        return 1;
+    }
+
     if (has_get || has_set) {
         if (p && p->v.t != JS_ACC) js_delete_prop(o, key);
         js_define_accessor(J, o, key, get, set, flags);
