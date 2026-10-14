@@ -969,6 +969,29 @@ static void checks(void) {
         int no4 = site_google_search(&u, q, sizeof(q));
         ok("nor from a Google page that is not its search", !no3 && !no4);
     }
+
+    /* --- a player from another site, as a page ---------------------------------- */
+    {
+        url_t u;
+        static char to[256];
+        at_url("https://www.youtube.com/embed/dQw4w9WgXcQ?si=abc", &u);
+        ok("YouTube's embed is read as its watch page",
+           site_frame_page(&u, to, sizeof(to)) && w_same(to, "https://www.youtube.com/watch?v=dQw4w9WgXcQ"));
+        at_url("https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ", &u);
+        ok("and its embed without cookies too",
+           site_frame_page(&u, to, sizeof(to)) && w_same(to, "https://www.youtube.com/watch?v=dQw4w9WgXcQ"));
+        at_url("https://player.twitch.tv/?channel=some_body&parent=example.com", &u);
+        ok("Twitch's player is read as its channel's page",
+           site_frame_page(&u, to, sizeof(to)) && w_same(to, "https://www.twitch.tv/some_body"));
+        at_url("https://player.twitch.tv/?video=v123456&parent=example.com", &u);
+        ok("and a video in it as the video's",
+           site_frame_page(&u, to, sizeof(to)) && w_same(to, "https://www.twitch.tv/videos/123456"));
+        at_url("https://player.twitch.tv/?channel=a%22b", &u);
+        int bad = site_frame_page(&u, to, sizeof(to));
+        at_url("https://player.vimeo.com/video/1", &u);
+        int other = site_frame_page(&u, to, sizeof(to));
+        ok("a name that is not one, and another site's player, are opened as they are", !bad && !other);
+    }
 }
 
 /* One real page, read, and what was found in it said on the console, for

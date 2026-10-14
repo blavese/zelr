@@ -194,7 +194,33 @@ static inline int lay_button_box(const ddoc *d, int el) {
 /* A box drawn from pixels the page's media or its script makes: a video's
    frames, a canvas's bitmap. What is written inside one is for a browser
    that has neither, and is not laid out. */
-static inline int lay_painted(int tag) { return tag == T_VIDEO || tag == T_CANVAS; }
+static inline int lay_painted(int tag) { return tag == T_VIDEO || tag == T_CANVAS || tag == T_IFRAME; }
+
+/* Whether a frame is a player from another site: its address names an embed
+ * or a player, as YouTube's, Vimeo's, Dailymotion's, Twitch's, PeerTube's,
+ * archive.org's, SoundCloud's and Spotify's do. Such a frame is drawn as a
+ * box that opens it (browser.c draws it, sites.h says where it is read).
+ * Every other frame is left out, as all of them were: advertising, counting
+ * and sign-in more often than anything a reader looks at, and a box for each
+ * would be noise. A player was left out too, and an article about a film
+ * had a gap where the film was. */
+static inline int lay_frame_player(const ddoc *d, int at) {
+    const char *src = dom_attr(d, at, "src");
+    if (!src || !*src) return 0;
+    const char *p = src;
+    if (w_starts_fold(p, "https://")) p += 8;
+    else if (w_starts_fold(p, "http://")) p += 7;
+    else if (p[0] == '/' && p[1] == '/') p += 2;
+    else p = 0;                                 /* on the page's own site */
+    if (p) {
+        if (w_starts_fold(p, "player.") || w_starts_fold(p, "embed.") || w_starts_fold(p, "w.soundcloud.")
+            || w_starts_fold(p, "www.youtube-nocookie.")) return 1;
+        while (*p && *p != '/' && *p != '?' && *p != '#') p++;
+    } else p = src;
+    for (; *p && *p != '?' && *p != '#'; p++)
+        if (*p == '/' && (w_starts_fold(p, "/embed") || w_starts_fold(p, "/player"))) return 1;
+    return 0;
+}
 
 /* An element's words, leaving out any drawing inside it: an icon's <title>
    ("Chevron Left", "Hamburger") is a name for a screen reader, and written
@@ -977,20 +1003,23 @@ static inline void lay_hints(lctx *L, int el, cstyle *st, int pct_of) {
         int w = lay_attr_len(dom_attr(d, el, "width"), pct_of);
         if (w > 0) st->width = (short)(w > 4000 ? 4000 : w);
     }
-    if (tag == T_SVG || tag == T_VIDEO) {
+    if (tag == T_SVG || tag == T_VIDEO || tag == T_IFRAME) {
         /* A drawing's width and height say how big it is drawn unless the
            page's rules say otherwise, the way an image's do (lay_drawing);
            in any unit, since icons say 1em to be the size of their text. */
         v = dom_attr(d, el, "width");
         clen wl = css_len(v ? v : "");
         int w = v ? css_px(wl, st->font_px, L->root_px, pct_of) : -1;
-        if (w > 0) {
+        /* A frame sized nought is a counter's, not something to see: its
+           nought is kept (and nothing is drawn), not taken for no size. */
+        int least = tag == T_IFRAME ? 0 : 1;
+        if (w >= least) {
             st->width = (short)(w > 4000 ? 4000 : w);
             st->width_pct = (unsigned char)(wl.unit == U_PCT);
         }
         v = dom_attr(d, el, "height");
         int h = v ? css_px(css_len(v), st->font_px, L->root_px, -1) : -1;
-        if (h > 0) st->height = (short)(h > 4000 ? 4000 : h);
+        if (h >= least) st->height = (short)(h > 4000 ? 4000 : h);
     }
     if (tag == T_TABLE || tag == T_TD || tag == T_TH || tag == T_TR) {
         int h = lay_attr_len(dom_attr(d, el, "height"), -1);
@@ -1803,6 +1832,8 @@ static void lay_drawing(lctx *L, int at, const cstyle *st, int *y) {
  * frames are drawn in the box as object-fit says, contain unless the page
  * says otherwise (the browser's own rules). */
 static void lay_video(lctx *L, int at, const cstyle *st, int *y) {
+    int frame = L->d->nodes[at].tag == T_IFRAME;
+    if (frame && !lay_frame_player(L->d, at)) return;
     const limage *pic = lay_image_of(L, at);
     int iw = pic && pic->w > 0 ? pic->w : 300, ih = pic && pic->h > 0 ? pic->h : 150;
     if (L->d->nodes[at].tag == T_CANVAS) {
@@ -1846,6 +1877,13 @@ static void lay_video(lctx *L, int at, const cstyle *st, int *y) {
         it->node = at;
         it->at = -1;
         it->link = L->cur_link;
+        if (frame && L->out->nlinks < LAY_LINKS) {
+            /* The whole box opens the player, the frame its own anchor. */
+            const char *src = dom_attr(L->d, at, "src");
+            L->out->links[L->out->nlinks].node = at;
+            L->out->links[L->out->nlinks].href = lay_put(L, src, w_len(src));
+            it->link = L->out->nlinks++;
+        }
         it->ofit = st->obj_fit;
         it->radius = (unsigned char)(st->radius > 255 ? 255 : st->radius < 0 ? 0 : st->radius);
         it->color = st->color;

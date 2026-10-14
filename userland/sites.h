@@ -1767,6 +1767,48 @@ static inline int site_is_twitch(const url_t *u) {
     return site_host_is(u, H);
 }
 
+/* --- a player from another site, as a page -----------------------------------
+ *
+ * Where a player a page embeds is read as a page of its own (browser.c,
+ * when its box is clicked): YouTube's embed as its watch page, Twitch's
+ * player as its channel's or its video's page, which the readers here make
+ * plain -- and a Twitch channel's has the watch link that plays it. Written
+ * into out; 0 for anything else, which is opened as it is. */
+static inline void site_add(char *out, int cap, const char *s) {
+    int n = w_len(out);
+    w_copy(out + n, cap - n, s, cap);
+}
+
+static inline int site_frame_page(const url_t *u, char *out, int cap) {
+    static const char *const YT[] = { "www.youtube.com", "youtube.com", "m.youtube.com",
+                                      "www.youtube-nocookie.com", "youtube-nocookie.com", 0 };
+    char id[64];
+    out[0] = 0;
+    if (site_host_is(u, YT) && w_starts_fold(u->path, "/embed/")) {
+        if (site_ident(u->path + 7, id, sizeof(id), "-_") != 11) return 0;
+        site_add(out, cap, "https://www.youtube.com/watch?v=");
+        site_add(out, cap, id);
+        return 1;
+    }
+    static const char *const TW[] = { "player.twitch.tv", 0 };
+    if (!site_host_is(u, TW)) return 0;
+    char raw[64];
+    if (site_param(u->path, "channel", raw, sizeof(raw)) && site_ident(raw, id, sizeof(id), "_") == w_len(raw) && id[0]) {
+        site_add(out, cap, "https://www.twitch.tv/");
+        site_add(out, cap, id);
+        return 1;
+    }
+    if (site_param(u->path, "video", raw, sizeof(raw))) {
+        const char *v = raw[0] == 'v' ? raw + 1 : raw;
+        if (site_ident(v, id, sizeof(id), "") == w_len(v) && id[0]) {
+            site_add(out, cap, "https://www.twitch.tv/videos/");
+            site_add(out, cap, id);
+            return 1;
+        }
+    }
+    return 0;
+}
+
 /* The Client-Id Twitch's own web page sends. The API answers ordinary
    public questions -- who is live, what is being played -- to any client that
    gives one. */

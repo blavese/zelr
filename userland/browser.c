@@ -2836,6 +2836,20 @@ static int pictures_pump(void) {
     return what;
 }
 
+/* The address a link goes to: its own, or for a player from another site
+   (a frame, layout.h lay_frame_player) the page it is read from, when the
+   site's reader knows one (sites.h site_frame_page). */
+static int link_target(int li, url_t *u) {
+    if (!url_join(&base, page.text + page.links[li].href, u)) return 0;
+    int node = page_node(page.links[li].node);
+    if (node >= 0 && doc.nodes[node].tag == T_IFRAME) {
+        char to[URL_TEXT];
+        url_t v;
+        if (site_frame_page(u, to, sizeof(to)) && url_parse(to, &v)) url_copy(u, &v);
+    }
+    return 1;
+}
+
 /* The page's base, from its first <base> element with an href. */
 static void base_take(void) {
     url_copy(&base, &here);
@@ -3432,6 +3446,45 @@ static void tface_draw(surface *s, int x, int y, const char *str, u32 fg,
     }
 }
 
+/* A player from another site, where the frame would be: dark, a play mark,
+   and where it is from; the whole box is a link (layout.h lay_video) that
+   opens it. What a frame holds is a page of its own, and a second page
+   inside the first is more memory than a small machine has to give; opened,
+   the player is the page. */
+static void draw_frame_box(surface *s, const litem *it, int x, int sy, int vw) {
+    int w = it->w > vw ? vw : it->w, h = it->h;
+    rect(s, x, sy, w, h, 0x202124);
+    int r = (w < h ? w : h) / 6;
+    if (r > 30) r = 30;
+    if (r < 6) return;
+    int face = face_pick(14, 0, 0);
+    int words = h >= 2 * r + tface_h(face) + 24;
+    int cx = x + w / 2, cy = sy + h / 2 - (words ? (tface_h(face) + 8) / 2 : 0);
+    disc(s, cx, cy, r, 0xE8E8EA);
+    /* A triangle pointing right, a third of the circle each side of the
+       middle: rows narrowing from its left edge. */
+    int t = r / 2;
+    for (int row = -t; row <= t; row++) {
+        int len = (t - (row < 0 ? -row : row)) * 7 / 4;
+        if (len > 0) rect(s, cx - t * 2 / 3, cy + row, len, 1, 0x202124);
+    }
+    if (!words) return;
+    url_t u;
+    char line[URL_HOST + 32];
+    line[0] = 0;
+    const char *src = dom_attr(&doc, it->node, "src");
+    w_copy(line, sizeof(line), "open the player", 16);
+    if (src && url_join(&base, src, &u) && u.host[0]) {
+        int n = w_len(line);
+        w_copy(line + n, (int)sizeof(line) - n, " from ", 7);
+        n = w_len(line);
+        w_copy(line + n, (int)sizeof(line) - n, u.host, URL_HOST);
+    }
+    if (tface_w(line, face) > w - 8) line[15] = 0;          /* just "open the player" */
+    if (tface_w(line, face) > w - 8) return;
+    tface_draw(s, x + (w - tface_w(line, face)) / 2, cy + r + 8, line, 0xE8E8EA, face);
+}
+
 /* Items wholly left or right of these (in the surface's columns) are not
    drawn: a video's frame redraws only what crosses its box. */
 static int draw_x0 = -0x7FFFFFFF, draw_x1 = 0x7FFFFFFF;
@@ -3459,6 +3512,11 @@ static void draw_page(surface *s, int ox, int oy, int vw, int vh) {
             if (it->bb) rect(s, x, sy + h - it->bb, w, it->bb, it->border);
             if (it->bl) rect(s, x, sy, it->bl, h, it->border);
             if (it->br) rect(s, x + w - it->br, sy, it->br, h, it->border);
+            continue;
+        }
+
+        if (it->kind == LK_IMAGE && it->node >= 0 && it->node < doc.count && doc.nodes[it->node].tag == T_IFRAME) {
+            draw_frame_box(s, it, x, sy, vw);
             continue;
         }
 
@@ -3740,7 +3798,8 @@ static int draw_video_frames(surface *win_s, int win, int view_x, int view_y, in
     int iy0 = view_y + 2, iy1 = view_y + view_h - 2;
     for (int i = 0; i < page.nitems; i++) {
         const litem *it = &page.items[i];
-        if (it->kind != LK_IMAGE || it->node < 0 || it->node >= doc.count || !lay_painted(doc.nodes[it->node].tag)) continue;
+        if (it->kind != LK_IMAGE || it->node < 0 || it->node >= doc.count || !lay_painted(doc.nodes[it->node].tag)
+            || doc.nodes[it->node].tag == T_IFRAME) continue;
         int rx = view_x + UI_PAD + it->x, ry = view_y + 2 + it->y - scroll, rw = it->w, rh = it->h;
         if (rx < ix0) { rw -= ix0 - rx; rx = ix0; }
         if (ry < iy0) { rh -= iy0 - ry; ry = iy0; }
@@ -4302,7 +4361,7 @@ int main(int argc, char **argv) {
                page stays where it is and the stream's waiting is not its. */
             if (w_starts_fold(href, "play:")) {
                 if (spawn_arg("/bin/play", href + 5) < 0) puts("browser: the player could not be started\n");
-            } else if (url_join(&base, href, &next)) {
+            } else if (link_target(over_link, &next)) {
                 char text_of[URL_TEXT];
                 url_text(&next, text_of, sizeof(text_of));
                 set_address(text_of);
@@ -4350,7 +4409,7 @@ int main(int argc, char **argv) {
             char hover[URL_TEXT];
             if (over_link >= 0) {
                 url_t u;
-                if (url_join(&base, page.text + page.links[over_link].href, &u)) {
+                if (link_target(over_link, &u)) {
                     url_text(&u, hover, sizeof(hover));
                     left = hover;
                 }

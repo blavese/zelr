@@ -2007,6 +2007,31 @@ int main(void) {
         okn("and with no attributes it is 300 by 150", i2 && i2->w == 300 && i2->h == 150, i2 ? i2->w : -1);
     }
 
+    /* --- a player from another site ----------------------------------------------------
+     *
+     * A frame whose address names an embed or a player is a box its width and
+     * height say, 300 by 150 without them, the whole of it a link to the
+     * frame's address; any other frame, and one sized nought, is not laid out.
+     * Every frame had been left out, and an article had a gap where its film
+     * was. */
+    {
+        lay("<p>a</p><iframe id=f1 width=560 height=315 src=\"https://www.youtube.com/embed/abcdefghijk\"></iframe>"
+            "<iframe id=f2 src=\"https://ads.example.net/pagead/x\"></iframe>"
+            "<iframe id=f3 width=0 height=0 src=\"https://player.vimeo.com/video/1\"></iframe>"
+            "<iframe id=f4 src=\"/videos/embed/xyz\">words for a browser with no frames</iframe>", 800);
+        const litem *f1 = image_of(by_id("f1")), *f2 = image_of(by_id("f2"));
+        const litem *f3 = image_of(by_id("f3")), *f4 = image_of(by_id("f4"));
+        okn("a player from another site is a box its attributes' size", f1 && f1->w == 560 && f1->h == 315, f1 ? f1->w : -1);
+        ok("and the whole box opens the frame's address",
+           f1 && f1->link >= 0 && w_same(page.text + page.links[f1->link].href, "https://www.youtube.com/embed/abcdefghijk"));
+        ok("a frame that is not a player, or is sized nought, is not laid out", !f2 && !f3);
+        okn("a player on the page's own site is 300 by 150 without a size", f4 && f4->w == 300 && f4->h == 150, f4 ? f4->w : -1);
+        ok("and what is written inside a frame is not laid out", !word("words"));
+        lay("<style>.w { width: 400px; height: 225px }</style><iframe id=f5 class=w src=\"https://player.twitch.tv/?channel=x\"></iframe>", 800);
+        const litem *f5 = image_of(by_id("f5"));
+        okn("the page's rules size it", f5 && f5->w == 400 && f5->h == 225, f5 ? f5->w : -1);
+    }
+
     /* --- ::before and ::after --------------------------------------------------------
      *
      * Every rule naming one was thrown away, and a page's marks, labels and

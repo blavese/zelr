@@ -3397,5 +3397,4 @@ static const char CSS_UA[] =
     /* Old markup that is still on the front of some very large sites.
        center is a block that centres what is in it, and it is how the
        plain version of more than one homepage is laid out to this day. */
-    "center{display:block;text-align:center}"
-    "iframe{display:none}";
+    "center{display:block;text-align:center}";
