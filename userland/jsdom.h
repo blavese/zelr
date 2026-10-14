@@ -1975,6 +1975,16 @@ static int jd_attrs_node(jval t) {
 
 static jstr *jd_k_attr_value;
 
+/* An attribute's own facts, kept under keys no script can name and read
+   through accessors on Attr.prototype, where the standard puts them
+   (jsform.h, nat_attr_field): Transcend's consent manager takes the getters
+   of name and ownerElement off the prototype. */
+enum { JA_NAME, JA_LOCAL, JA_PREFIX, JA_NS, JA_OWNER, JA_FIELDS };
+static const char *const JD_ATTR_FIELDS[] = { "name", "localName", "prefix", "namespaceURI", "ownerElement", 0 };
+static jstr *jd_k_attr[JA_FIELDS];
+
+static void jd_attr_put(jobj *o, int k, jval v) { jd_keep(o, jd_k_attr[k], v); }
+
 static jval jd_attr_obj(jctx *J, int el, int i) {
     const dnode *x = &jd_doc->nodes[el];
     if (i < 0 || i >= x->attr_n) return js_null();
@@ -1982,17 +1992,15 @@ static jval jd_attr_obj(jctx *J, int el, int i) {
     jobj *o = js_object_with(J, JO_PLAIN, jd_p[JI_ATTR]);
     if (!o) return js_null();
     jval nm = jd_str(jd_doc->arena + a->name);
-    js_set(J, o, "name", nm);
-    js_set(J, o, "localName", nm);
-    js_set(J, o, "nodeName", nm);
+    jd_attr_put(o, JA_NAME, nm);
+    jd_attr_put(o, JA_LOCAL, nm);
     /* The value is read through the element while it holds this (jsform.h,
        nat_attr_value); the one kept is for when it no longer does. */
     jd_keep(o, jd_k_attr_value, jd_str(jd_doc->arena + a->value));
     js_set(J, o, "nodeType", js_num(2));
-    js_set(J, o, "specified", js_bool(1));
-    js_set(J, o, "namespaceURI", js_null());
-    js_set(J, o, "prefix", js_null());
-    js_set(J, o, "ownerElement", jd_el_value(J, el));
+    jd_attr_put(o, JA_NS, js_null());
+    jd_attr_put(o, JA_PREFIX, js_null());
+    jd_attr_put(o, JA_OWNER, jd_el_value(J, el));
     return js_from_obj(o);
 }
 
@@ -3936,6 +3944,14 @@ static jval nat_canvas_data_url(jctx *J, jval t, jval *a, int n) {
     return jd_str("data:,");
 }
 
+/* The window's document: an accessor of the window's own, as the standard
+   has it, since Transcend's consent manager calls the getter it takes off
+   the window. */
+static jval nat_win_document(jctx *J, jval t, jval *a, int n) {
+    (void)J; (void)t; (void)a; (void)n;
+    return jd_document_obj ? js_from_obj(jd_document_obj) : js_null();
+}
+
 static jval nat_true_getter(jctx *J, jval t, jval *a, int n) {
     (void)J; (void)t; (void)a; (void)n;
     return js_bool(1);
@@ -4591,6 +4607,34 @@ static jval nat_ev_modifier(jctx *J, jval t, jval *a, int n) {
     const char *prop = js_str_is(k, "Control") ? "ctrlKey" : js_str_is(k, "Shift") ? "shiftKey"
                      : js_str_is(k, "Alt") ? "altKey" : js_str_is(k, "Meta") ? "metaKey" : 0;
     return js_bool(prop && js_to_bool(jd_ev_get(t.obj, prop)));
+}
+
+/* An event's fields are its own properties (jd_ev_init), and the standard's
+   getters for them, on Event.prototype and each kind's, read those of the
+   event they are called on: Transcend's consent manager takes the getters
+   off Event.prototype and calls them on events. The name is the getter's
+   datum. */
+static jval nat_ev_field(jctx *J, jval t, jval *a, int n) {
+    (void)a; (void)n;
+    if (!js_is_obj(t) || J->callee->data.t != JS_STR) return js_undef();
+    jprop *p = js_find(t.obj, J->callee->data.str);
+    return p && p->v.t != JS_ACC ? p->v : js_undef();
+}
+
+static void jd_ev_getters(jctx *J, jobj *on, const char *names) {
+    char key[32];
+    for (const char *p = names; *p; ) {
+        while (*p == ' ') p++;
+        int k = 0;
+        while (*p && *p != ' ' && k < 31) key[k++] = *p++;
+        key[k] = 0;
+        if (!k || js_find(on, js_str(J, key))) continue;
+        jobj *g = js_native(J, key, nat_ev_field);
+        if (!g) continue;
+        g->flags |= JOF_NOCTOR;
+        g->data = js_from_str(js_str(J, key));
+        js_define_accessor(J, on, js_str(J, key), js_from_obj(g), js_undef(), JP_ENUM | JP_CONF);
+    }
 }
 
 static jval nat_create_event(jctx *J, jval t, jval *a, int n) {
@@ -6953,6 +6997,23 @@ static void jd_setup(jctx *J) {
     jd_method(J, jd_ev_proto[jd_evkind("CustomEvent")], "initCustomEvent", nat_ev_init_custom, 4);
     jd_method(J, jd_ev_proto[jd_evkind("MouseEvent")], "getModifierState", nat_ev_modifier, 1);
     jd_method(J, jd_ev_proto[jd_evkind("KeyboardEvent")], "getModifierState", nat_ev_modifier, 1);
+    /* isTrusted is not among them: the standard has it on each event. */
+    jd_ev_getters(J, ev, "type bubbles cancelable composed defaultPrevented timeStamp target currentTarget srcElement"
+                         " eventPhase returnValue cancelBubble");
+    for (int i = 1; i < JD_EVKINDS; i++) {
+        /* A kind's fields are written with their type before each ("nclientX"). */
+        char names[512];
+        int w = 0;
+        for (const char *p = JD_EVENTS[i].keys; *p && w < 500; ) {
+            while (*p == ' ') p++;
+            if (!*p) break;
+            p++;
+            while (*p && *p != ' ' && w < 500) names[w++] = *p++;
+            names[w++] = ' ';
+        }
+        names[w] = 0;
+        jd_ev_getters(J, jd_ev_proto[i], names);
+    }
 
     jd_setup_node(J);
     jd_setup_html(J);
@@ -7112,7 +7173,7 @@ static int jsdom_open(ddoc *d, csheet *sheet) {
     if (document) {
         document->host = JD_DOCUMENT;
         jd_setup_document(&jd_J, document);
-        js_declare(&jd_J, jd_J.global, js_str(&jd_J, "document"), js_from_obj(document));
+        jd_accessor(&jd_J, jd_J.global_obj, "document", nat_win_document, 0);
     }
 
     /* A template's children are its content, a fragment of its own, from

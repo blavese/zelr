@@ -636,15 +636,28 @@ static jval nat_request_signal(jctx *J, jval t, jval *a, int n) {
     return js_from_obj(fresh);
 }
 
+/* A response's facts, kept under keys no script can name and read through
+   accessors on the prototype, where the standard puts them: Transcend's
+   consent manager takes the getter of url off Response.prototype, and
+   stopped on Vimeo finding none. */
+static const char *const JD_RESP_FIELDS[] = { "status", "ok", "statusText", "headers", "url", "redirected", "type",
+                                              "bodyUsed", 0 };
+enum { JRF_STATUS, JRF_OK, JRF_STEXT, JRF_HEADERS, JRF_URL, JRF_REDIR, JRF_TYPE, JRF_USED, JRF_FIELDS };
+static jstr *jd_k_resp[JRF_FIELDS];
+
+static jval nat_response_field(jctx *J, jval t, jval *a, int n) {
+    (void)a; (void)n;
+    return js_is_obj(t) ? jd_kept(t.obj, jd_k_resp[(int)J->callee->data.num]) : js_undef();
+}
+
 /* A response's body: text, parsed JSON, or bytes, read once. */
 static jval jd_response_body(jctx *J, jval t) {
     if (!js_is_obj(t)) return js_undef();
-    jval used = js_get(J, t, js_str(J, "bodyUsed"));
-    if (js_to_bool(used)) {
+    if (js_to_bool(jd_kept(t.obj, jd_k_resp[JRF_USED]))) {
         js_throw(J, JS_ERR_TYPE, "that response's body has been read already", J->error_line);
         return js_undef();
     }
-    js_define(J, t.obj, js_str(J, "bodyUsed"), js_bool(1), JP_ENUM | JP_CONF);
+    jd_keep(t.obj, jd_k_resp[JRF_USED], js_bool(1));
     jval b = jd_kept(t.obj, jd_k_rbody);
     return b.t == JS_STR ? b : jd_str("");
 }
@@ -691,14 +704,14 @@ static jobj *jd_make_response(jctx *J, jobj *proto, jstr *body, int status, jstr
     jobj *r = js_object_with(J, JO_PLAIN, proto ? proto : jd_p_response);
     if (!r) return 0;
     jd_keep(r, jd_k_rbody, body ? js_from_str(body) : jd_str(""));
-    js_define(J, r, js_str(J, "status"), js_num(status), JP_ENUM | JP_CONF);
-    js_define(J, r, js_str(J, "ok"), js_bool(status >= 200 && status < 300), JP_ENUM | JP_CONF);
-    js_define(J, r, js_str(J, "statusText"), js_from_str(status_text ? status_text : js_str(J, "")), JP_ENUM | JP_CONF);
-    js_define(J, r, js_str(J, "headers"), js_from_obj(headers ? headers : jd_new_headers(J)), JP_ENUM | JP_CONF);
-    js_define(J, r, js_str(J, "url"), js_from_str(url ? url : js_str(J, "")), JP_ENUM | JP_CONF);
-    js_define(J, r, js_str(J, "redirected"), js_bool(redirected), JP_ENUM | JP_CONF);
-    js_define(J, r, js_str(J, "type"), jd_str(status ? "basic" : "error"), JP_ENUM | JP_CONF);
-    js_define(J, r, js_str(J, "bodyUsed"), js_bool(0), JP_ENUM | JP_CONF);
+    jd_keep(r, jd_k_resp[JRF_STATUS], js_num(status));
+    jd_keep(r, jd_k_resp[JRF_OK], js_bool(status >= 200 && status < 300));
+    jd_keep(r, jd_k_resp[JRF_STEXT], js_from_str(status_text ? status_text : js_str(J, "")));
+    jd_keep(r, jd_k_resp[JRF_HEADERS], js_from_obj(headers ? headers : jd_new_headers(J)));
+    jd_keep(r, jd_k_resp[JRF_URL], js_from_str(url ? url : js_str(J, "")));
+    jd_keep(r, jd_k_resp[JRF_REDIR], js_bool(redirected));
+    jd_keep(r, jd_k_resp[JRF_TYPE], jd_str(status ? "basic" : "error"));
+    jd_keep(r, jd_k_resp[JRF_USED], js_bool(0));
     return r;
 }
 
@@ -858,6 +871,36 @@ static jstr *jd_k_xhr[7];
 
 static void jd_xhr_put(jobj *o, int k, jval v) { jd_keep(o, jd_k_xhr[k], v); }
 
+/* What a page sets, kept and given back, on the prototype as the standard
+   has them (the consent manager above wraps withCredentials): a time limit,
+   not kept to, since a request here ends when the connection's own wait
+   does; and whether to send credentials, which does not change how the
+   request is made. */
+static jstr *jd_k_xhr_timeout, *jd_k_xhr_creds;
+
+static jval nat_xhr_timeout(jctx *J, jval t, jval *a, int n) {
+    (void)J; (void)a; (void)n;
+    jval v = js_is_obj(t) ? jd_kept(t.obj, jd_k_xhr_timeout) : js_undef();
+    return v.t == JS_NUM ? v : js_num(0);
+}
+
+static jval nat_xhr_set_timeout(jctx *J, jval t, jval *a, int n) {
+    double ms = js_to_num(J, js_arg(a, n, 0));
+    if (js_is_obj(t) && ms >= 0) jd_keep(t.obj, jd_k_xhr_timeout, js_num((double)(u32)ms));
+    return js_undef();
+}
+
+static jval nat_xhr_creds(jctx *J, jval t, jval *a, int n) {
+    (void)J; (void)a; (void)n;
+    return js_bool(js_is_obj(t) && js_to_bool(jd_kept(t.obj, jd_k_xhr_creds)));
+}
+
+static jval nat_xhr_set_creds(jctx *J, jval t, jval *a, int n) {
+    (void)J;
+    if (js_is_obj(t)) jd_keep(t.obj, jd_k_xhr_creds, js_bool(js_to_bool(js_arg(a, n, 0))));
+    return js_undef();
+}
+
 static jval nat_xhr_field(jctx *J, jval t, jval *a, int n) {
     (void)a; (void)n;
     int k = (int)J->callee->data.num;
@@ -887,9 +930,8 @@ static jval nat_xhr_ctor(jctx *J, jval t, jval *a, int n) {
     jd_xhr_put(o, 4, jd_str(""));
     jd_xhr_put(o, 5, jd_str(""));
     jd_xhr_put(o, 6, jd_str(""));
-    js_set(J, o, "responseXML", js_null());
-    js_set(J, o, "timeout", js_num(0));
-    js_set(J, o, "withCredentials", js_bool(0));
+    jd_keep(o, jd_k_xhr_timeout, js_num(0));
+    jd_keep(o, jd_k_xhr_creds, js_bool(0));
     jobj *up = js_object_with(J, JO_PLAIN, jd_p[JI_EVENTTARGET]);
     js_set(J, o, "upload", js_from_obj(up));
     jobj *headers = jd_new_headers(J);
@@ -1146,6 +1188,11 @@ static void jd_setup_net(jctx *J) {
         if (st) st->flags |= JOF_NOCTOR;
         js_define_accessor(J, xp, js_str(J, JD_XHR_FIELDS[k]), js_from_obj(g), st ? js_from_obj(st) : js_undef(), JP_ENUM | JP_CONF);
     }
+    jd_k_xhr_timeout = js_sym_new(J, "timeout", 7);
+    jd_k_xhr_creds = js_sym_new(J, "withCredentials", 15);
+    jd_accessor(J, xp, "timeout", nat_xhr_timeout, nat_xhr_set_timeout);
+    jd_accessor(J, xp, "withCredentials", nat_xhr_creds, nat_xhr_set_creds);
+    jd_accessor(J, xp, "responseXML", nat_null_getter, 0);
     jd_method(J, xp, "open", nat_xhr_open, 2);
     jd_method(J, xp, "send", nat_xhr_send, 0);
     jd_method(J, xp, "setRequestHeader", nat_xhr_header, 2);
@@ -1176,6 +1223,14 @@ static void jd_setup_net(jctx *J) {
     jd_accessor(J, jd_p_request, "signal", nat_request_signal, 0);
 
     jd_p_response = jd_interface(J, "Response", 0, nat_response_ctor, 0);
+    for (int k = 0; k < JRF_FIELDS; k++) {
+        jd_k_resp[k] = js_sym_new(J, JD_RESP_FIELDS[k], (u32)w_len(JD_RESP_FIELDS[k]));
+        jobj *g = js_native(J, JD_RESP_FIELDS[k], nat_response_field);
+        if (!g) continue;
+        g->flags |= JOF_NOCTOR;
+        g->data = js_num(k);
+        js_define_accessor(J, jd_p_response, js_str(J, JD_RESP_FIELDS[k]), js_from_obj(g), js_undef(), JP_ENUM | JP_CONF);
+    }
     jd_method(J, jd_p_response, "text", nat_response_text, 0);
     jd_method(J, jd_p_response, "json", nat_response_json, 0);
     jd_method(J, jd_p_response, "arrayBuffer", nat_response_buffer, 0);

@@ -2105,7 +2105,9 @@ static void jd_setup_window_more(jctx *J) {
     }
     js_declare(J, g, js_str(J, "opener"), js_null());
     js_declare(J, g, js_str(J, "frameElement"), js_null());
-    js_declare(J, g, js_str(J, "closed"), js_bool(0));
+    /* The window's own accessor, as the standard has it: Transcend's consent
+       manager calls the getter it takes off the window. */
+    if (w) jd_accessor(J, w, "closed", nat_false_getter, 0);
     js_declare(J, g, js_str(J, "length"), js_num(0));
     js_declare(J, g, js_str(J, "name"), jd_str(""));
     js_declare(J, g, js_str(J, "status"), jd_str(""));

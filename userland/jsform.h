@@ -1058,11 +1058,24 @@ static int jd_is_attr(jval v) {
     return 0;
 }
 
-static int jd_attr_owner(jctx *J, jval at) { return jd_el_of(js_get(J, at, js_str(J, "ownerElement"))); }
+static int jd_attr_owner(jctx *J, jval at) {
+    (void)J;
+    return js_is_obj(at) ? jd_el_of(jd_kept(at.obj, jd_k_attr[JA_OWNER])) : -1;
+}
 
 static jstr *jd_attr_name_of(jctx *J, jval at) {
-    jval v = js_get(J, at, js_str(J, "name"));
+    (void)J;
+    jval v = js_is_obj(at) ? jd_kept(at.obj, jd_k_attr[JA_NAME]) : js_undef();
     return v.t == JS_STR ? v.str : 0;
+}
+
+/* name, localName, prefix, namespaceURI, ownerElement (jsdom.h, JD_ATTR_FIELDS);
+   nodeName is the name. */
+static jval nat_attr_field(jctx *J, jval t, jval *a, int n) {
+    (void)a; (void)n;
+    if (!jd_is_attr(t)) return jd_illegal(J);
+    jval v = jd_kept(t.obj, jd_k_attr[(int)J->callee->data.num]);
+    return v.t == JS_UNDEF ? js_null() : v;
 }
 
 static jval nat_attr_value(jctx *J, jval t, jval *a, int n) {
@@ -1096,14 +1109,12 @@ static jval jd_attr_new(jctx *J, jstr *name, jval ns) {
     for (u32 i = 0; i < name->len && !colon; i++)
         if (name->s[i] == ':') colon = i + 1;
     jval nm = js_from_str(name);
-    js_set(J, o, "name", nm);
-    js_set(J, o, "nodeName", nm);
-    js_set(J, o, "localName", colon ? js_from_str(js_str_n(J, name->s + colon, name->len - colon)) : nm);
-    js_set(J, o, "prefix", colon ? js_from_str(js_str_n(J, name->s, colon - 1)) : js_null());
+    jd_attr_put(o, JA_NAME, nm);
+    jd_attr_put(o, JA_LOCAL, colon ? js_from_str(js_str_n(J, name->s + colon, name->len - colon)) : nm);
+    jd_attr_put(o, JA_PREFIX, colon ? js_from_str(js_str_n(J, name->s, colon - 1)) : js_null());
     js_set(J, o, "nodeType", js_num(2));
-    js_set(J, o, "specified", js_bool(1));
-    js_set(J, o, "namespaceURI", ns);
-    js_set(J, o, "ownerElement", js_null());
+    jd_attr_put(o, JA_NS, ns);
+    jd_attr_put(o, JA_OWNER, js_null());
     jd_keep(o, jd_k_attr_value, jd_str(""));
     return js_from_obj(o);
 }
@@ -1155,9 +1166,9 @@ static jval jd_attr_node_put(jctx *J, int el, jval at) {
     int i = jd_attr_index(el, nm->s);
     jval old = i >= 0 ? jd_attr_obj(J, el, i) : js_null();
     /* The one handed back keeps the value it had and belongs to nobody. */
-    if (js_is_obj(old)) js_set(J, old.obj, "ownerElement", js_null());
+    if (js_is_obj(old)) jd_attr_put(old.obj, JA_OWNER, js_null());
     jd_attr_set(el, nm->s, v.t == JS_STR ? v.str->s : "");
-    js_set(J, at.obj, "ownerElement", jd_el_value(J, el));
+    jd_attr_put(at.obj, JA_OWNER, jd_el_value(J, el));
     return old;
 }
 
@@ -1168,7 +1179,7 @@ static jval jd_attr_node_take(jctx *J, int el, jval at) {
     const char *v = nm && jd_attr_owner(J, at) == el ? jd_attr(el, nm->s) : 0;
     if (!v) return js_throw_dom(J, "NotFoundError", "that attribute is not on this element");
     jd_keep(at.obj, jd_k_attr_value, jd_str(v));
-    js_set(J, at.obj, "ownerElement", js_null());
+    jd_attr_put(at.obj, JA_OWNER, js_null());
     jd_attr_remove(el, nm->s);
     return at;
 }
@@ -1337,6 +1348,8 @@ static void jd_setup_form(jctx *J) {
     jd_k_rend = js_sym_new(J, "end", 3);
     jd_k_reoff = js_sym_new(J, "endOffset", 9);
     jd_k_attr_value = js_sym_new(J, "value", 5);
+    for (int k = 0; k < JA_FIELDS; k++)
+        jd_k_attr[k] = js_sym_new(J, JD_ATTR_FIELDS[k], (u32)w_len(JD_ATTR_FIELDS[k]));
     jd_doctype_obj = 0;
     jd_selection = 0;
     jd_sel_range = 0;
@@ -1375,6 +1388,9 @@ static void jd_setup_form(jctx *J) {
     jd_method(J, jd_p_doctype, "remove", nat_nothing_node, 0);
 
     jobj *ap = jd_p[JI_ATTR];
+    for (int k = 0; k < JA_FIELDS; k++) jd_getter_data(J, ap, JD_ATTR_FIELDS[k], nat_attr_field, k);
+    jd_getter_data(J, ap, "nodeName", nat_attr_field, JA_NAME);
+    jd_accessor(J, ap, "specified", nat_true_getter, 0);
     jd_accessor(J, ap, "value", nat_attr_value, nat_attr_set_value);
     jd_accessor(J, ap, "nodeValue", nat_attr_value, nat_attr_set_value);
     jd_accessor(J, ap, "textContent", nat_attr_value, nat_attr_set_value);

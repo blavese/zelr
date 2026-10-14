@@ -1741,9 +1741,6 @@ int main(void) {
                " performance.getEntriesByName('a').length, performance.getEntriesByType('measure')[0].name,"
                " performance.getEntries().length].join(' ');</script>"),
         "number true true 1 m 3");
-    /* A measure from one of performance.timing's fields by its name, as the
-       standard takes it, and a name that is neither still refused: BBC
-       measured from navigationStart and stopped when told no such mark. */
     /* The handler properties (jsprelude.h) are there before a page sets one;
        an element's comes from its attribute; one set still fires. React asks
        'oninput' in document, and without it fell back on attachEvent, which
@@ -1755,11 +1752,41 @@ int main(void) {
                "document.title = ['oninput' in document, 'onclick' in window, 'ontouchstart' in window,"
                " typeof d.oninput, typeof e.onclick, String(document.body.onkeydown), n].join(' ');</script></body>"),
         "true true false function function null 1");
+    /* A measure from one of performance.timing's fields by its name, as the
+       standard takes it, and a name that is neither still refused: BBC
+       measured from navigationStart and stopped when told no such mark. */
     oks("performance.measure takes a timing field's name, and refuses a name that is neither",
         titled("<script>var m = performance.measure('since', 'navigationStart'), r = 'none';"
                "try { performance.measure('x', 'no-such-mark'); } catch (e) { r = e.name; }"
                "document.title = [m.startTime, m.duration >= 0, r].join(' ');</script>"),
         "0 true SyntaxError");
+    /* What the standard keeps as getters on the prototypes is there, and a
+       getter taken off reads the object it is called on: Transcend's consent
+       manager takes dozens of them before anything else and stopped Vimeo's
+       page on Response.prototype's url. A response has no facts of its own. */
+    oks("the facts the standard keeps on prototypes are getters there, read from the object they are called on",
+        titled("<body><div id=d title=t></div><script>"
+               "var miss = [['RegExp', 'source flags'], ['Map', 'size'],"
+               " ['Node', 'nodeType childNodes parentNode ownerDocument isConnected'],"
+               " ['Document', 'cookie readyState documentElement body head'], ['Element', 'tagName namespaceURI innerHTML'],"
+               " ['Response', 'status ok statusText headers url redirected type bodyUsed'],"
+               " ['XMLHttpRequest', 'readyState response responseText withCredentials timeout'],"
+               " ['Attr', 'name localName namespaceURI ownerElement value'],"
+               " ['Event', 'type target currentTarget eventPhase bubbles cancelable defaultPrevented timeStamp'],"
+               " ['MouseEvent', 'clientX button ctrlKey'], ['KeyboardEvent', 'key code']].map(function (p) {"
+               " return p[1].split(' ').filter(function (n) { var x = Object.getOwnPropertyDescriptor(self[p[0]].prototype, n);"
+               " return !x || typeof x.get !== 'function'; }).map(function (n) { return p[0] + '.' + n; }).join(); }).filter(String);"
+               "var r = new Response('x', { status: 201 }), x = new XMLHttpRequest(),"
+               " at = document.getElementById('d').getAttributeNode('title');"
+               "x.withCredentials = true;"
+               "var g = function (C, n, o) { return Object.getOwnPropertyDescriptor(C.prototype, n).get.call(o); };"
+               "document.title = [miss.length ? miss.join(' ') : 'all', Object.keys(r).length, g(Response, 'status', r),"
+               " g(Response, 'ok', r), x.withCredentials, g(Attr, 'name', at), g(Attr, 'ownerElement', at).id,"
+               " at.nodeName, g(Event, 'type', new Event('go')), g(MouseEvent, 'clientX', new MouseEvent('click', { clientX: 5 })),"
+               " Object.getOwnPropertyDescriptor(window, 'closed').get.call(window),"
+               " Object.getOwnPropertyDescriptor(window, 'document').get.call(window) === document].join(' ');</script></body>"),
+        "all 0 201 true true title d title go 5 false true");
+
     {
         load("<body><p id=out>none</p><script>var n = 0;"
              "requestAnimationFrame(function(t){ document.getElementById('out').textContent = typeof t + ' ' + (t >= 0); });"
@@ -2483,16 +2510,17 @@ int main(void) {
 
     /* --- shadow roots a script makes --------------------------------------------------
      *
-     * Cloudflare's components stopped on attachShadow. */
+     * Cloudflare's components stopped on attachShadow. (Not "var closed": that
+     * is the window's, and a declaration does not take it over.) */
     oks("attachShadow makes a shadow root its element keeps, filled and searched as a fragment",
         titled("<body><div id=h><b>light</b></div><script>var h = document.getElementById('h');"
                "var r = h.attachShadow({ mode: 'open' }); r.innerHTML = '<p id=in>inside</p><slot></slot>';"
-               "var closed = document.createElement('x-y').attachShadow({ mode: 'closed' });"
+               "var shut = document.createElement('x-y').attachShadow({ mode: 'closed' });"
                "var again = 'none'; try { h.attachShadow({ mode: 'open' }); } catch (e) { again = e.name; }"
                "var bad = 'none'; try { document.createElement('img').attachShadow({ mode: 'open' }); } catch (e) { bad = e.name; }"
                "var p = r.querySelector('p');"
                "document.title = [r instanceof ShadowRoot, h.shadowRoot === r, r.host === h, r.mode, r.getElementById('in').textContent,"
-               " p.getRootNode() === r, p.getRootNode({ composed: true }) === document, closed.mode, String(closed.host.shadowRoot),"
+               " p.getRootNode() === r, p.getRootNode({ composed: true }) === document, shut.mode, String(shut.host.shadowRoot),"
                " again, bad, String(document.getElementById('in')), h.textContent, r.innerHTML.length > 20].join(' ');</script></body>"),
         "true true true open inside true true closed null NotSupportedError NotSupportedError null light true");
 
