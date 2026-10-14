@@ -1152,7 +1152,9 @@ __attribute__((unused)) static int jsdom_requests(void) {
                 rp.url = url;
             }
         } else if (url[0] && jd_do_request) {
+            int asked = ticks();
             jd_do_request(method, url, body, blen, body ? (type ? type : "") : 0, lines, &rp);
+            jd_net_waited(asked);
         }
         jd_request_answered(o, kind, &rp);
         free(data);

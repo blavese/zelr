@@ -5710,6 +5710,13 @@ static void jd_setup_documents(jctx *J, jobj *docproto) {
    immediately. */
 static int (*jd_get_script)(const char *src, const char **out);
 
+/* Waiting on the network while a script runs -- a module its import() asks
+   for, a request it waits on -- is not the script running, and a run's
+   clock (js.h, JS_TIME_CAP) is moved on by it. Counted, the modules
+   videojs.com's player imports one after another took the ten seconds,
+   and whichever was running then was stopped as one that would not end. */
+static void jd_net_waited(int since) { jd_J.run_since += ticks() - since; }
+
 /* Whether a script element is a script. A page carries data in them too --
    application/ld+json describing the article, text/template, importmap --
    and every one was run: the data did not parse, and its error became the
@@ -5904,7 +5911,9 @@ static u32 jd_script_text(int i, const char **text, const char **src, char **own
             return bb->len;
         }
         if (!jd_get_script) { jd_outside_failed++; return 0; }
+        int asked = ticks();
         int n = jd_get_script(*src, text);
+        jd_net_waited(asked);
         if (n <= 0 || !*text) {
             jd_outside_failed++;
             if (jd_script_done) jd_script_done(i, *src, 0, "it would not come");

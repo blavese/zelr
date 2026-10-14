@@ -276,7 +276,9 @@ static void jd_mod_fetch_all(int first) {
                 jstr *bb, *bt;
                 if (jd_blob_lookup(m->url, &bb, &bt)) { text = bb->s; len = (int)bb->len; }
             } else if (jd_get_script) {
+                int asked = ticks();
                 len = jd_get_script(m->url, &text);
+                jd_net_waited(asked);
             }
             if (len <= 0 || !text) { free(owned); jd_mod_failed(m, "a module would not come"); continue; }
             if (!jd_room_for((u32)len)) { free(owned); jd_mod_failed(m, "a module too large for this machine's memory"); continue; }

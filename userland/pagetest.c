@@ -229,6 +229,11 @@ static char many_text[300 * 40];
 static char many_one[48];
 
 static int fake_modules(const char *src, const char **out) {
+    if (w_same(src, "https://site.test/slow.js")) {
+        sleep_ms(2000);
+        *out = "export const x = 'came';";
+        return 24;
+    }
     if (w_starts_fold(src, "https://site.test/many/")) {
         int k = 0;
         for (const char *p = src + 23; *p >= '0' && *p <= '9'; p++) k = k * 10 + (*p - '0');
@@ -2348,6 +2353,24 @@ int main(void) {
         oks("a page's modules may be more than 256 (one importing 300 others)",
             titled("<body><script type=module>import s from './many.js'; document.title = 'many ' + s;</script></body>"),
             "many 44850");
+        /* A module an import() fetches while the script runs: the wait is the
+           network's, and the run's clock leaves it out. Counted, the modules
+           videojs.com's player imports took the ten seconds. Here the fetch
+           takes two seconds and a run may take 0.8, and the script goes on long
+           enough after it for the clock to be looked at (and no longer, for a
+           guest whose clock runs slow). */
+        {
+            load("<body><script type=module>const m = await import('https://site.test/slow.js');"
+                 " let k = 0; for (let i = 0; i < 40000; i++) k += i & 1;"
+                 " document.title = 'imported ' + m.x + ' ' + k;</script></body>");
+            script_time_cap = 80;
+            char err[128];
+            run_scripts(&page, err, (int)sizeof(err), 0);
+            pump_until(1000, 300);
+            script_time_cap = -1;
+            oks("a module fetched while a script runs is not counted against the script's time",
+                err[0] ? err : page.title >= 0 ? page.arena + page.title : "", "imported came 20000");
+        }
         oks("a binding is live: what the exporter changes, the importer sees",
             titled("<body><script type=module>import { n, bump } from './live.js'; var before = n; bump();"
                    "document.title = before + ' ' + n;</script></body>"),
