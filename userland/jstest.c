@@ -1252,6 +1252,12 @@ int main(void) {
     expect("Object.prototype.toString names what a thing is",
            "[[], null, new Map(), function(){}, 1].map(x => Object.prototype.toString.call(x)).join()",
            "[object Array],[object Null],[object Map],[object Function],[object Number]");
+    expect("dates written as numbers, as browsers read them, and what toLocaleString writes read back",
+           "(function(){ var t = function (s) { return new Date(s).getTime(); };"
+           " var d = new Date(Date.UTC(2026, 2, 4, 0, 5));"
+           " return [t('10/13/2026, 11:35:12 PM'), t('2026/10/13 23:35'), t('10/13/2026'), t('10-13-2026'),"
+           " t(d.toLocaleString('en-US', { timeZone: 'UTC' })), t('13/10/2026'), t('Oct 13, 2026')].join(); })()",
+           "1791934512000,1791934500000,1791849600000,1791849600000,1772582700000,NaN,1791849600000");
     expect("a Date made from its parts, read back as ISO text and parsed again",
            "(function(){ var d = new Date(Date.UTC(2020, 1, 29, 12, 30, 15, 250));"
            " return d.toISOString() + ',' + (Date.parse(d.toISOString()) === d.getTime()) + ',' + d.getUTCDay(); })()",

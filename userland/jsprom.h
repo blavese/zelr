@@ -1058,7 +1058,11 @@ static double js_date_parse(const char *s, u32 n) {
                 return js_make_time(y, mon - 1, d, h, mi, sec, ms) - off * 60000.0;
         }
     }
-    /* "Tue, 01 Jan 2024 10:00:00 GMT", "January 1, 2024 10:00", "1 Jan 2024". */
+    /* "Tue, 01 Jan 2024 10:00:00 GMT", "January 1, 2024 10:00", "1 Jan 2024";
+       and with no month's name, the numbers browsers read: "10/13/2026",
+       "2026/10/13 23:35", and "10/13/2026, 11:35:12 PM", which is what
+       toLocaleString writes and what pages hand back to Date to move a time
+       between zones (Imgur's countdown said NaN). */
     static const char *const MON[12] = { "jan", "feb", "mar", "apr", "may", "jun",
                                          "jul", "aug", "sep", "oct", "nov", "dec" };
     int mon = -1;
@@ -1066,6 +1070,7 @@ static double js_date_parse(const char *s, u32 n) {
     int nn = 0;
     double off = 0;
     int pm = 0, am = 0;
+    char sep = 0;                       /* what came after the first number: '/' or '-' for a date of numbers */
     for (u32 k = i; k < n;) {
         char c = s[k];
         if (js_digit(c)) {
@@ -1094,13 +1099,26 @@ static double js_date_parse(const char *s, u32 n) {
             if (k - start == 2 && js_word_is(s + start, "am")) am = 1;
             continue;
         }
+        if ((c == '/' || c == '-') && nn == 1 && !sep) sep = c;
         k++;
     }
-    if (mon < 0 || nn < 2) return js_nan();
-    double d, y;
-    if (nums[0] > 31) { y = nums[0]; d = nums[1]; }
-    else { d = nums[0]; y = nums[1]; }
-    double h = nn > 2 ? nums[2] : 0, mi = nn > 3 ? nums[3] : 0, sec = nn > 4 ? nums[4] : 0;
+    double d, y, h, mi, sec;
+    if (mon < 0 && sep && nn >= 3) {
+        /* Year first when the first number cannot be a month or a day. */
+        if (nums[0] > 31) { y = nums[0]; mon = (int)nums[1] - 1; d = nums[2]; }
+        else { mon = (int)nums[0] - 1; d = nums[1]; y = nums[2]; }
+        if (mon < 0 || mon > 11 || d < 1 || d > 31) return js_nan();
+        h = nn > 3 ? nums[3] : 0;
+        mi = nn > 4 ? nums[4] : 0;
+        sec = nn > 5 ? nums[5] : 0;
+    } else {
+        if (mon < 0 || nn < 2) return js_nan();
+        if (nums[0] > 31) { y = nums[0]; d = nums[1]; }
+        else { d = nums[0]; y = nums[1]; }
+        h = nn > 2 ? nums[2] : 0;
+        mi = nn > 3 ? nums[3] : 0;
+        sec = nn > 4 ? nums[4] : 0;
+    }
     if (pm && h < 12) h += 12;
     if (am && h == 12) h = 0;
     if (y < 100) y += y < 50 ? 2000 : 1900;
