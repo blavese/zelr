@@ -684,6 +684,20 @@ document.getElementById('p').textContent = 'you\\u2019ll';
 </body></html>
 """
 
+# A page whose script and sheet are written relative to its <base href>,
+# and are only there: a browser that starts from the page's own address asks
+# for /based/b.js and gets the 404 page. Each draws a block.
+BASED_PAGE = b"""<!doctype html>
+<html><head><title>based</title><base href="/basetarget/">
+<link rel="stylesheet" href="b.css">
+<style>body { font-family: sans-serif; padding: 24px } #s, #j { width: 300px; height: 60px; margin: 8px 0 }</style>
+<script src="b.js"></script>
+</head>
+<body><h1>a base</h1><div id="s"></div><div id="j"></div>
+<script>if (window.based) document.getElementById('j').style.background = '#7a2a9a';</script>
+</body></html>
+"""
+
 DELAY_LOCK = threading.Lock()
 DELAY_NOW = 0
 DELAY_MOST = 0
@@ -1292,6 +1306,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._send(SHEETS_PAGE)
         elif path == "/folded":
             self._send(FOLDED_PAGE)
+        elif path == "/based/":
+            self._send(BASED_PAGE)
+        elif path == "/basetarget/b.css":
+            self._send(b"#s { background: #2a8a9a }", ctype="text/css")
+        elif path == "/basetarget/b.js":
+            self._send(b"window.based = 1;", ctype="application/javascript")
         elif path.startswith("/delay/") and path.endswith(".css"):
             global DELAY_NOW, DELAY_MOST
             import time

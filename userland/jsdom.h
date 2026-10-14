@@ -2285,9 +2285,11 @@ static jval nat_is_connected(jctx *J, jval t, jval *a, int n) {
     return js_bool(x >= 0 && jd_connected_deep(x));
 }
 
+static const char *jd_base(void);
+
 static jval nat_base_uri(jctx *J, jval t, jval *a, int n) {
     (void)J; (void)t; (void)a; (void)n;
-    return jd_str(jd_address);
+    return jd_str(jd_base());
 }
 
 /* The node a method is called on, as a parent: a node, or the document,

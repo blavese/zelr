@@ -291,6 +291,7 @@ static const char *const MODFILES[][2] = {
     { "https://site.test/tla3.js", "export let v = 'early'; await new Promise(function (r) { setTimeout(r, 0); }); v = 'late';" },
     { "https://site.test/tla3user.js", "import { v } from './tla3.js'; window.seen3 = v;" },
     { "https://site.test/tlabad3.js", "await new Promise(function (r) { setTimeout(r, 0); }); throw new Error('later');" },
+    { "https://site.test/sub/based.js", "export default 'based';" },
     { 0, 0 },
 };
 
@@ -1648,6 +1649,24 @@ int main(void) {
         jd_site_part("api.imgur.com"), "imgur.com");
     oks("so a page on news.bbc.co.uk is on bbc.co.uk", jd_site_part("news.bbc.co.uk"), "bbc.co.uk");
     oks("and localhost is its own", jd_site_part("localhost"), "localhost");
+    {
+        /* A page's <base href> is where its addresses start from: what
+           baseURI says, what a link's href gives back and where a module
+           inline in the page imports from. PeerTube's scripts sit under
+           <base href="/client/en-US/"> and were asked for at the root. */
+        static char was_at[sizeof(jd_address)];
+        w_copy(was_at, (int)sizeof(was_at), jd_address, (int)sizeof(was_at));
+        jsdom_at("https://site.test/");
+        jsdom_fetch_with(fake_modules);
+        oks("a page's base is where its addresses start from: baseURI, a link and an import",
+            titled("<head><base href=\"/sub/\"></head><body><a id=a href=\"x.html\">x</a>"
+                   "<script type=module>import v from './based.js';"
+                   " document.title = [document.baseURI, document.getElementById('a').href, v,"
+                   " location.href].join(' ');</script></body>"),
+            "https://site.test/sub/ https://site.test/sub/x.html based https://site.test/");
+        jsdom_fetch_with(0);
+        jsdom_at(was_at);
+    }
     oks("document.write while the page is read puts its markup after the script",
         titled("<body><div id=d><script>document.write('<b id=w>written</b>');</script><i>after</i></div>"
                "<script>var d = document.getElementById('d');"

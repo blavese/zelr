@@ -224,7 +224,7 @@ static int jw_resolve(int slot, const char *href, char *out, int cap) {
     int ok = 0;
     if (base && u) {
         int have = !jd_is_data_url(jw[slot].url) && !jd_is_blob_url(jw[slot].url) && ju_parse(jw[slot].url, 0, base);
-        if ((have || ju_page(base)) && ju_parse(href, base, u)) {
+        if ((have || ju_base(base)) && ju_parse(href, base, u)) {
             jtext tx = { 0, 0, 0, 0 };
             ju_text(u, &tx, 1);
             int k = 0;

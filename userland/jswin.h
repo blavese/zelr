@@ -324,7 +324,7 @@ static void jd_location_to_text(jctx *J, jstr *s, int replace) {
     jurl *base = (jurl *)malloc(sizeof(jurl));
     jurl *to = (jurl *)malloc(sizeof(jurl));
     if (base && to) {
-        int have = ju_page(base);
+        int have = ju_base(base);
         if (ju_parse(s->s, have ? base : 0, to)) jd_location_go(J, to, replace);
         else js_throw_dom(J, "SyntaxError", "that is not an address to go to");
     }
@@ -402,7 +402,8 @@ static jval jd_history_change(jctx *J, jval *a, int n, int push) {
         jurl *base = (jurl *)malloc(sizeof(jurl));
         jurl *to = (jurl *)malloc(sizeof(jurl));
         int ok = 0;
-        if (base && to && ju_page(base) && ju_parse(s->s, base, to)) {
+        /* Resolved against the base, and held to the page's own origin. */
+        if (base && to && ju_base(base) && ju_parse(s->s, base, to) && ju_page(base)) {
             jstr *o1 = ju_origin(J, base), *o2 = ju_origin(J, to);
             if (!js_str_eq(o1, o2)) {
                 free(base);

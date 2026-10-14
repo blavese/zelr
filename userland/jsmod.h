@@ -156,7 +156,7 @@ static const char *jd_mod_resolve(const char *spec, const char *base, char *out,
             return out;
         }
         target = mapped;
-        against = jd_address;
+        against = jd_base();
     }
     jurl *b = (jurl *)malloc(sizeof(jurl));
     jurl *u = (jurl *)malloc(sizeof(jurl));
@@ -676,7 +676,7 @@ static int jd_run_module_el(int node) {
         do { digits[nd++] = (char)('0' + v % 10); v /= 10; } while (v && nd < 11);
         while (nd) key[w++] = digits[--nd];
         key[w] = 0;
-        idx = jd_mod_add(key, jd_address[0] ? jd_address : "about:blank");
+        idx = jd_mod_add(key, jd_address[0] ? jd_base() : "about:blank");
         if (idx >= 0) {
             jtext t = { 0, 0, 0, 0 };
             jd_text_content(node, &t);
@@ -723,7 +723,7 @@ static jval jd_import(jctx *J, jval spec, void *module) {
     if (J->sig != JS_OK) return js_undef();
     jmod *from = (jmod *)module;
     char url[JD_URL_MAX];
-    const char *base = from ? from->url : (jd_address[0] ? jd_address : "about:blank");
+    const char *base = from ? from->url : (jd_address[0] ? jd_base() : "about:blank");
     int idx = -1;
     const char *to = s ? jd_mod_resolve(s->s, base, url, (int)sizeof(url)) : 0;
     if (to) {

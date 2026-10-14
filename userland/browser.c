@@ -143,6 +143,12 @@ static hist_t hist[HIST_MAX];
 static int    hist_n, hist_at = -1;
 
 static url_t    here;
+/* Where the page's own addresses start from: its first <base href> when it
+   has one, resolved against here, else here. PeerTube writes its scripts as
+   main-7RR2Q2IV.js under <base href="/client/en-US/">, and they were asked
+   for at the site's root and came back as its page. Here stays the page's
+   own address (what it is, what it tells a server it came from). */
+static url_t    base;
 static response_t reply;
 
 static char  title[160];
@@ -493,7 +499,7 @@ static void gather_backgrounds(void) {
             if (dn > 0) bg_take(b, (const u8 *)cssbuf, dn);
         } else {
             url_t u;
-            if (url_join(&here, src, &u)) pic_wait_add(-1, (int)(b - bgpics), &u);
+            if (url_join(&base, src, &u)) pic_wait_add(-1, (int)(b - bgpics), &u);
         }
     }
 }
@@ -1016,7 +1022,7 @@ static void submit_form(int form) {
        the specification says and what a search box on a site relies on. */
     url_t target;
     if (action && *action) {
-        if (!url_join(&here, action, &target)) return;
+        if (!url_join(&base, action, &target)) return;
     } else {
         url_copy(&target, &here);
     }
@@ -1340,7 +1346,7 @@ static int gather_linked_sheets(int *fetched, int *skipped) {
         if (*fetched >= SHEETS_MAX) { (*skipped)++; source_add(i, r0, -2); continue; }
 
         url_t u;
-        if (!url_join(&here, href, &u)) { (*skipped)++; source_add(i, r0, 0); continue; }
+        if (!url_join(&base, href, &u)) { (*skipped)++; source_add(i, r0, 0); continue; }
         char whole[URL_TEXT];
         url_text(&u, whole, (int)sizeof(whole));
         if (sheet_seen(whole)) { source_add(i, r0, 1); continue; }
@@ -1607,7 +1613,7 @@ static int link_text(url_t *u, const char **text) {
 /* For a script that reads a linked sheet's rules (jscssom.h, jcs_ready). */
 static int sheet_text_for_script(const char *href, const char **text) {
     url_t u;
-    if (!url_join(&here, href, &u)) return -1;
+    if (!url_join(&base, href, &u)) return -1;
     return link_text(&u, text);
 }
 
@@ -1641,7 +1647,7 @@ static void links_report(void) {
         else {
             url_t u;
             const char *t;
-            ok = url_join(&here, href, &u) && link_text(&u, &t) >= 0;
+            ok = url_join(&base, href, &u) && link_text(&u, &t) >= 0;
         }
         jsdom_link_loaded(i, ok);
     }
@@ -1681,7 +1687,7 @@ static void sheet_read(int i, int k, const char *scope) {
     if (!rel || !href || !*href || !rel_is_sheet(rel) || dom_attr(&doc, i, "disabled")) return;
     if (k >= 0 && sources[k].ok == -2) return;
     url_t u;
-    if (!url_join(&here, href, &u)) return;
+    if (!url_join(&base, href, &u)) return;
     if (has_ov) { css_parse_sheet_in(&u, ov, ovn, lo, hi, scope); return; }
     const char *text;
     int n = link_text(&u, &text);
@@ -1789,7 +1795,7 @@ static int fetch_script(const char *src, const char **out) {
     if (scripts_outside >= SCRIPTS_MAX || scripts_bytes >= SCRIPTS_BYTES || !scriptbuf) return 0;
 
     url_t u;
-    if (!url_join(&here, src, &u)) return 0;
+    if (!url_join(&base, src, &u)) return 0;
 
     /* Asked for already, with the page's other files (scripts_ahead). */
     int got = ahead_take(&u, out);
@@ -1880,7 +1886,7 @@ static int do_request(const char *method, const char *url, const char *body, int
     if (asks_made >= ASKS_MAX || !replybuf) return 0;
 
     url_t u;
-    if (!url_join(&here, url, &u)) return 0;
+    if (!url_join(&base, url, &u)) return 0;
     static char extra[REQUEST_LINES];
     request_lines(&u, method, headers, extra);
 
@@ -1967,7 +1973,7 @@ static int ask_begin(const char *method, const char *url, const char *body, int 
     asks_init();
     if (counted && asks_made >= ASKS_MAX) return -2;
     url_t u;
-    if (!url_join(&here, url, &u)) return WEB_ERR_SCHEME;
+    if (!url_join(&base, url, &u)) return WEB_ERR_SCHEME;
     int pick = -1;
     for (int i = 0; i < ASK_SLOTS; i++) {
         if (asks[i].used) continue;
@@ -2179,7 +2185,7 @@ static void files_ahead(int want_sheets) {
         if (!rel || !href || !*href || !rel_is_sheet(rel)) continue;
         if (!sheet_media(i, &lo, &hi) || dom_attr(&doc, i, "disabled")) continue;
         url_t u;
-        if (url_join(&here, href, &u)) ahead_add(&u, CSS_MAX);
+        if (url_join(&base, href, &u)) ahead_add(&u, CSS_MAX);
     }
     for (int i = 0; i < doc.count && nahead < AHEAD_MAX; i++) {
         if (doc.nodes[i].kind != DN_ELEMENT || doc.nodes[i].tag != T_SCRIPT) continue;
@@ -2191,7 +2197,7 @@ static void files_ahead(int want_sheets) {
             && !w_starts_fold(type, "application/javascript") && !w_same_fold(type, "text/ecmascript"))
             continue;
         url_t u;
-        if (url_join(&here, s, &u)) ahead_add(&u, SCRIPT_MAX);
+        if (url_join(&base, s, &u)) ahead_add(&u, SCRIPT_MAX);
     }
     ahead_pump();
 }
@@ -2733,7 +2739,7 @@ static void gather_pictures(void) {
             if (pic_take(i, (const u8 *)cssbuf, dn)) pics[npics - 1].key = pic_key(src);
         } else {
             url_t u;
-            if (!url_join(&here, src, &u)) { pics_skipped++; continue; }
+            if (!url_join(&base, src, &u)) { pics_skipped++; continue; }
             pic_wait_add(i, -1, &u);
         }
     }
@@ -2769,7 +2775,7 @@ static void pictures_follow(void) {
             continue;
         }
         url_t u;
-        if (!url_join(&here, src, &u)) continue;
+        if (!url_join(&base, src, &u)) continue;
         char text[URL_TEXT];
         url_text(&u, text, sizeof(text));
         if (pic_known(i, pic_key(text))) continue;
@@ -2830,6 +2836,20 @@ static int pictures_pump(void) {
     return what;
 }
 
+/* The page's base, from its first <base> element with an href. */
+static void base_take(void) {
+    url_copy(&base, &here);
+    for (int i = 0; i < doc.count; i++) {
+        if (doc.nodes[i].kind != DN_ELEMENT || doc.nodes[i].tag != T_OTHER) continue;
+        if (!w_same(dom_tag_name(&doc, i), "base")) continue;
+        const char *h = dom_attr(&doc, i, "href");
+        if (!h) continue;
+        url_t b;
+        if (url_join(&here, h, &b)) url_copy(&base, &b);
+        return;
+    }
+}
+
 static void build(const char *html, int len, int width, int want_sheets,
                   int *fetched, int *skipped) {
     /* Before the tree it is bound to is taken apart under it. */
@@ -2846,6 +2866,7 @@ static void build(const char *html, int len, int width, int want_sheets,
     dom_parse(&doc, html, len);
     dom_shadows(&doc);
     meta_referrer();
+    base_take();
     /* The old page's pictures let go before its asks are, since each holds
        the number of a slot that is about to be another file's. */
     pics_drop();
@@ -3336,7 +3357,7 @@ static void load(const char *address, int width, int keep_scroll) {
         char where[URL_TEXT];
         if (meta_refresh(where, sizeof(where))) {
             url_t next;
-            if (url_join(&here, where, &next)) {
+            if (url_join(&base, where, &next)) {
                 char text_of[URL_TEXT];
                 url_text(&next, text_of, sizeof(text_of));
                 char now[URL_TEXT];
@@ -4281,7 +4302,7 @@ int main(int argc, char **argv) {
                page stays where it is and the stream's waiting is not its. */
             if (w_starts_fold(href, "play:")) {
                 if (spawn_arg("/bin/play", href + 5) < 0) puts("browser: the player could not be started\n");
-            } else if (url_join(&here, href, &next)) {
+            } else if (url_join(&base, href, &next)) {
                 char text_of[URL_TEXT];
                 url_text(&next, text_of, sizeof(text_of));
                 set_address(text_of);
@@ -4329,7 +4350,7 @@ int main(int argc, char **argv) {
             char hover[URL_TEXT];
             if (over_link >= 0) {
                 url_t u;
-                if (url_join(&here, page.text + page.links[over_link].href, &u)) {
+                if (url_join(&base, page.text + page.links[over_link].href, &u)) {
                     url_text(&u, hover, sizeof(hover));
                     left = hover;
                 }

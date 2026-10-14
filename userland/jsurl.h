@@ -421,12 +421,54 @@ static int ju_page(jurl *u) {
     return jd_address[0] && ju_parse(jd_address, 0, u);
 }
 
+/* Where the page's addresses start from (its base URL): the first <base>
+   element with an href, resolved against the page's address, else the
+   address itself. Looked for again only when the tree has more nodes than
+   it had, which a page's <base> arriving would give it. */
+static char jd_base_text[URL_TEXT + 256];
+static int  jd_base_seen = -1;
+static const ddoc *jd_base_doc;
+
+static const char *jd_base(void) {
+    if (jd_base_doc == jd_doc && jd_base_seen == (jd_doc ? jd_doc->count : 0)) return jd_base_text;
+    jd_base_doc = jd_doc;
+    jd_base_seen = jd_doc ? jd_doc->count : 0;
+    w_copy(jd_base_text, (int)sizeof(jd_base_text), jd_address, (int)sizeof(jd_base_text));
+    for (int i = 0; jd_doc && i < jd_doc->count; i++) {
+        if (jd_doc->nodes[i].kind != DN_ELEMENT || jd_doc->nodes[i].tag != T_OTHER) continue;
+        if (!w_same(dom_tag_name(jd_doc, i), "base") || !jd_connected(i)) continue;
+        const char *h = dom_attr(jd_doc, i, "href");
+        if (!h) continue;
+        jurl *page = (jurl *)malloc(sizeof(jurl)), *u = (jurl *)malloc(sizeof(jurl));
+        if (page && u && ju_page(page) && ju_parse(h, page, u)) {
+            jtext t = { 0, 0, 0, 0 };
+            ju_text(u, &t, 1);
+            int k = 0;
+            for (; k < (int)t.n && k < (int)sizeof(jd_base_text) - 1; k++) jd_base_text[k] = t.b[k];
+            jd_base_text[k] = 0;
+            free(t.b);
+        }
+        free(page);
+        free(u);
+        break;
+    }
+    return jd_base_text;
+}
+
+/* The page's base as a jurl, for what the standard resolves against it: a
+   link's parts, location's and history's new addresses, a worker's file. */
+static int ju_base(jurl *u) {
+    const char *b = jd_base();
+    return b[0] && ju_parse(b, 0, u);
+}
+
 /* An address a page wrote, whole: what href and src give back. */
 static int jd_resolve(const char *href, char *out, int cap) {
     jurl *base = (jurl *)malloc(sizeof(jurl));
     jurl *u = (jurl *)malloc(sizeof(jurl));
     int ok = 0;
-    if (base && u && ju_page(base) && ju_parse(href, base, u)) {
+    const char *from = jd_base();
+    if (base && u && from[0] && ju_parse(from, 0, base) && ju_parse(href, base, u)) {
         jtext t = { 0, 0, 0, 0 };
         ju_text(u, &t, 1);
         int k = 0;
@@ -450,7 +492,7 @@ static jstr *jd_resolve_str(jctx *J, const char *href) {
     jurl *base = (jurl *)malloc(sizeof(jurl));
     jurl *u = (jurl *)malloc(sizeof(jurl));
     jstr *s = 0;
-    if (base && u && ju_page(base) && ju_parse(href, base, u)) {
+    if (base && u && jd_base()[0] && ju_parse(jd_base(), 0, base) && ju_parse(href, base, u)) {
         jtext t = { 0, 0, 0, 0 };
         ju_text(u, &t, 1);
         s = js_str_n(J, t.b ? t.b : "", t.n);
@@ -1041,7 +1083,7 @@ static int jd_link_url(int el, jurl *u) {
     if (!h) return 0;
     jurl *base = (jurl *)malloc(sizeof(jurl));
     if (!base) return 0;
-    int ok = ju_page(base) && ju_parse(h, base, u);
+    int ok = ju_base(base) && ju_parse(h, base, u);
     free(base);
     return ok;
 }

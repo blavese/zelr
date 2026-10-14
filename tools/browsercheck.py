@@ -125,6 +125,8 @@ PSEUDO_GREEN = (0x20, 0xB0, 0x60)     # /pseudo: the block its ::before makes
 WENT_ON = (0x60, 0x40, 0xC0)          # /inserted: its timers went on while its script came
 TOGETHER = (0x1E, 0x90, 0x80)         # /together: its six files ran in the order written
 SHEET_LAST = (0xB0, 0x70, 0x10)       # /sheets: the last of its four sheets won
+BASED_SHEET = (0x2A, 0x8A, 0x9A)      # /based/: its sheet, found through its <base href>
+BASED_SCRIPT = (0x7A, 0x2A, 0x9A)     # and its script
 SHEET_THIRD = (0x50, 0xD0, 0x50)      # and the one before it, which must not have
 STOOD = (0xC0, 0x30, 0x30)            # and the block it draws when they did not
 
@@ -540,8 +542,19 @@ def main():
             c.add("a title a script writes with an accent, a dash and curly quotes is told as the face draws it",
                   told, shotf)
 
+            # --- a page's <base href> ----------------------------------------
+            go(vm, mon, "http://%s/based/" % srv.host, settle=10.0,
+               was=fld, name="br-going-based")
+            _, _, _, _, based = mon.wait_screen(
+                "br-based", lambda w, h, px: count_in(px, w, PAGE, BASED_SHEET) > 10000
+                and count_in(px, w, PAGE, BASED_SCRIPT) > 10000, timeout=30)
+            bas, pxb, wb, shotb = page_settled(mon, "br-based-settled")
+            c.add("a page's sheet and script are found through its <base href> (%d, %d)"
+                  % (count_in(pxb, wb, PAGE, BASED_SHEET), count_in(pxb, wb, PAGE, BASED_SCRIPT)),
+                  based, shotb)
+
             go(vm, mon, "http://%s/scripted" % srv.host, settle=12.0,
-               was=fld, name="br-going-scripted")
+               was=bas, name="br-going-scripted")
             scripted, pxc, wc, shotc = page_settled(mon, "br-scripted")
             c.add("a page's own script runs, and changes the page",
                   count_in(pxc, wc, PAGE, BAND) > 3000, shotc)
