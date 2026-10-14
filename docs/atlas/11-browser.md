@@ -1,6 +1,16 @@
 # 11 -- The web browser (everything except JS-engine internals and image decoders)
 
-**Since 0.117.0** (the rest of this file is older; trust the code and the README's "since 6048716" list):
+**Since 0.118.0** (the rest of this file is older; trust the code and the README's "since 6048716" list):
+- **A page's script files are asked for together as it loads** (browser.c `scripts_ahead`, `ahead_pump`,
+  `ahead_take`, `AHEAD_MAX` 64): before `jsdom_scripts`, every script element with a src that will run (classic, or a
+  module's first file) is listed and asked for over the ask slots, as many at once as are free; `fetch_script` takes
+  its file from the list, waiting only for its own, and the rest go on coming; what is left is let go after
+  (`ahead_drop`); a file that would not come this way is fetched the old way once. They still run in the order
+  written. On the host: BBC News 8.3 s to 3.7 s, The Verge 67 s to 12 s, The Guardian 3.8 s to 1.2 s. Not yet: style
+  sheets and pictures, and modules' imports. Test: browsercheck `/together` (six files the test server answers a
+  second late each and counts at once, `webserver.DELAY_MOST`).
+
+**Since 0.117.0**:
 - **A script element a page's script inserts with a src is an ask** (jsnet.h `jd_script_queue`, `jd_scripts_pump`;
   browser.c `script_ask_start`/`script_ask_poll` on `ask_begin`, counted against `SCRIPTS_MAX`/`SCRIPTS_BYTES`, not
   `ASKS_MAX`): started on one pass, run when its file is whole, in the order the files come, then told load or error.
