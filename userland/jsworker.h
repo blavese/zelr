@@ -21,7 +21,8 @@
  * context when it is made (JW_PRELUDE), given the natives it needs as
  * arguments so none of them is a global a script could find.
  *
- * Not done: module workers (type "module" is run as a classic script, and
+ * Not done: module workers (type "module" is run as a classic script, with an
+ * import.meta that has its url, and
  * one with import in it fails with an error event), SharedWorker, transfer
  * (what the list names is copied, not moved), XMLHttpRequest inside a worker,
  * and a fetch's headers beyond its content type. */
@@ -48,6 +49,7 @@ typedef struct {
     u32   gen;
     int   closed;
     char  url[URL_TEXT];
+    jobj *meta;               /* import.meta, made when first asked for, in its context */
     jwtimer timers[JW_TIMERS];
     u32   next_timer;
 } jworker;
@@ -619,6 +621,9 @@ static const char JW_PRELUDE[] =
     "  URL.prototype.toString = URL.prototype.toJSON = function () { return href(this.__p); };\n"
     "  URL.canParse = function (u, b) { return !!parseURL(String(u), b === undefined ? undefined : String(b)); };\n"
     "  URL.parse = function (u, b) { try { return new URL(u, b); } catch (e) { return null; } };\n"
+    "  /* A worker makes no blob: addresses here, but a bundler's gives back the one\n"
+    "     the page made it from, which it does not hold: nothing to do. */\n"
+    "  URL.revokeObjectURL = function (u) {};\n"
     "\n"
     "  function Headers(init) { this.map = {}; if (init) for (var k in init) this.map[String(k).toLowerCase()] = String(init[k]); }\n"
     "  Headers.prototype.get = function (n) { var v = this.map[String(n).toLowerCase()]; return v === undefined ? null : v; };\n"
@@ -732,6 +737,24 @@ static jobj *jw_navigator(jctx *W) {
 }
 
 /* A worker's context and globals, in a free slot: the slot, or -1. */
+/* import.meta in a worker: its address. A bundler's worker is often made
+   from a Blob whose first line is URL.revokeObjectURL(import.meta.url), and
+   with no import.meta it stopped there: Mastodon's did. The same object
+   every time it is asked for, as a module's is. */
+static jval jw_import_meta(jctx *J, void *module) {
+    (void)module;
+    for (int i = 0; i < JW_MAX; i++) {
+        if (jw[i].J != J) continue;
+        if (!jw[i].meta) {
+            jw[i].meta = js_object_with(J, JO_PLAIN, 0);
+            if (!jw[i].meta) return js_undef();
+            js_set(J, jw[i].meta, "url", js_from_str(js_str(J, jw[i].url)));
+        }
+        return js_from_obj(jw[i].meta);
+    }
+    return js_undef();
+}
+
 static int jw_new(const char *url, const char *name) {
     int slot = -1;
     for (int i = 0; i < JW_MAX && slot < 0; i++) if (!jw[i].J) slot = i;
@@ -752,6 +775,8 @@ static int jw_new(const char *url, const char *name) {
     w->closed = 0;
     w->next_timer = 0;
     w_copy(w->url, (int)sizeof(w->url), url, (int)sizeof(w->url));
+    w->meta = 0;
+    W->meta_hook = jw_import_meta;
     w->inbox = js_array(W);
 
     jw_native(W, 0, "postMessage", nat_jw_post, 1);

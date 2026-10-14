@@ -3332,6 +3332,21 @@ int main(void) {
         oks("and one that was terminated says nothing", content_of(dom_by_id(&page, "term")), "quiet");
     }
     {
+        /* A bundler's worker, made from a Blob whose first line gives back its
+           own address: Mastodon's stopped there, with no import.meta. */
+        load("<body><script>"
+             "var src = 'URL.revokeObjectURL(import.meta.url); postMessage(import.meta.url.slice(0, 5) + \" \" + (import.meta === import.meta));';"
+             "var w = new Worker(URL.createObjectURL(new Blob([src], { type: 'text/javascript' })), { type: 'module' });"
+             "w.onmessage = function (e) { document.title = e.data; };"
+             "w.onerror = function (e) { document.title = 'error ' + e.message; };"
+             "</script></body>");
+        char err[128];
+        run_scripts(&page, err, (int)sizeof(err), 0);
+        pump_until(1000, 1500);
+        oks("a module worker made from a Blob has an import.meta with its address, the same each time",
+            page.title >= 0 ? page.arena + page.title : "", "blob: true");
+    }
+    {
         /* When the key was one for the whole program, a worker's setup put its
            own there, and the page read its Intl objects by a key in the worker's
            memory, freed when the worker ended. The two keys' serial numbers
