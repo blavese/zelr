@@ -1205,6 +1205,35 @@ int main(void) {
             err[0] ? err : page.title >= 0 ? page.arena + page.title : "", "3 65533");
     }
     {
+        /* WritableStream and TransformStream (jsprelude.h): writes in order and
+           the close after them; a transform's chunks read from its other side,
+           its flush at the end; text decoded across a split character; a
+           Response's body read as a stream. Next.js reads its server's
+           components through a TransformStream, and Yahoo's page stopped. */
+        load("<body><script>var out = [];"
+             "var w = new WritableStream({ write: function (c) { out.push(c); }, close: function () { out.push('shut'); } });"
+             "var wr = w.getWriter(); wr.write('x'); wr.write('y'); var closing = wr.close();"
+             "var t = new TransformStream({ transform: function (c, k) { k.enqueue(c.toUpperCase()); }, flush: function (k) { k.enqueue('!'); } });"
+             "var tw = t.writable.getWriter(); tw.write('a'); tw.write('b'); tw.close();"
+             "var bytes = new TextEncoder().encode('h\\u00e9'), ds = new TextDecoderStream(), dw = ds.writable.getWriter();"
+             "dw.write(bytes.slice(0, 2)); dw.write(bytes.slice(2)); dw.close();"
+             "var res = new Response('body text');"
+             "function all(rs) { var r = rs.getReader(), got = []; return (function step() { return r.read().then(function (x) {"
+             " if (x.done) return got; got.push(x.value); return step(); }); })(); }"
+             "closing.then(function () { return all(t.readable); })"
+             ".then(function (a) { out.push(a.join('')); return all(ds.readable); })"
+             ".then(function (a) { out.push(a.join('') === 'h\\u00e9'); return all(res.body); })"
+             ".then(function (a) { out.push(new TextDecoder().decode(a[0]), res.bodyUsed, String(t), w.locked);"
+             " document.title = out.join(' '); });"
+             "</script></body>");
+        char err[128];
+        run_scripts(&page, err, (int)sizeof(err), 0);
+        pump_until(1000, 300);
+        oks("a WritableStream writes in order, a TransformStream passes through its transform, and a body is a stream",
+            err[0] ? err : page.title >= 0 ? page.arena + page.title : "",
+            "x y shut AB! true body text true [object TransformStream] true");
+    }
+    {
         /* BroadcastChannel: to every other open channel of the name, as a
            copy, afterwards; not to itself, another name or a closed one. */
         load("<body><script>var a = new BroadcastChannel('n'), b = new BroadcastChannel('n'), c = new BroadcastChannel('m'),"
