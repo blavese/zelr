@@ -34,6 +34,13 @@
 #define CSS_TEXT    (2048 * 1024)
 #define CSS_MAXCLS  4
 #define CSS_NEGS    2048
+/* What the page's own sheets leave at the end of the tables for a script's
+   selector (querySelector parses into the sheet, jsdom.h jd_sel_open):
+   GitHub's sheets filled them, and every selector a script asked with but
+   a bare tag name found nothing. Used only while csheet.query is set. */
+#define CSS_QUERY_SELS 512
+#define CSS_QUERY_NEGS 64
+#define CSS_QUERY_TEXT (32 * 1024)
 #define CSS_LAYERS  64
 #define CSS_UNLAYERED 0x7FFF      /* a rule in no layer, stronger than any in one */
 
@@ -319,6 +326,7 @@ typedef struct {
     char  text[CSS_TEXT];
     int   used;
     int   overflowed;
+    int   query;              /* a script's selector is being read: the reserve may be used */
     char  layers[CSS_LAYERS][48];  /* @layer names, in the order they were first named */
     int   nlayers;
 } csheet;
@@ -335,7 +343,7 @@ typedef struct {
 
 static inline int css_put(csheet *s, const char *p, int len) {
     int at = s->used;
-    if (s->used + len + 1 >= CSS_TEXT) { s->overflowed = 1; return -1; }
+    if (s->used + len + 1 >= CSS_TEXT - (s->query ? 0 : CSS_QUERY_TEXT)) { s->overflowed = 1; return -1; }
     for (int i = 0; i < len; i++) s->text[s->used++] = p[i];
     s->text[s->used++] = 0;
     return at;
@@ -343,7 +351,7 @@ static inline int css_put(csheet *s, const char *p, int len) {
 
 static inline int css_put_lower(csheet *s, const char *p, int len) {
     int at = s->used;
-    if (s->used + len + 1 >= CSS_TEXT) { s->overflowed = 1; return -1; }
+    if (s->used + len + 1 >= CSS_TEXT - (s->query ? 0 : CSS_QUERY_TEXT)) { s->overflowed = 1; return -1; }
     for (int i = 0; i < len; i++) s->text[s->used++] = w_lower(p[i]);
     s->text[s->used++] = 0;
     return at;
@@ -716,6 +724,7 @@ static inline void css_init(csheet *s) {
     s->nnegs = 0;
     s->ua_rules = 0;
     s->overflowed = 0;
+    s->query = 0;
     s->nlayers = 0;
 }
 
@@ -880,7 +889,7 @@ static inline int css_parse_compound(csheet *s, const char *p, int len, int *at,
                        at. They sit side by side in negs. */
                     int first = s->nnegs, count = 0, q = open, best = 0;
                     for (;;) {
-                        if (s->nnegs >= CSS_NEGS) return -1;
+                        if (s->nnegs >= CSS_NEGS - (s->query ? 0 : CSS_QUERY_NEGS)) return -1;
                         csel *ng = &s->negs[s->nnegs];
                         int sp2 = 0;
                         while (q < close && css_space(p[q])) q++;
@@ -1046,7 +1055,7 @@ static inline int css_parse_selector(csheet *s, const char *p, int len,
         if (p[i] == '+') { combinator = CB_NEXT; i++; continue; }
         if (p[i] == '~') { combinator = CB_LATER; i++; continue; }
 
-        if (s->nsels >= CSS_SELS) { s->overflowed = 1; return 0; }
+        if (s->nsels >= CSS_SELS - (s->query ? 0 : CSS_QUERY_SELS)) { s->overflowed = 1; return 0; }
         csel *c = &s->sels[s->nsels];
         int pe_before = css_parsed_pe;
         int got = css_parse_compound(s, p, len, &i, c, &spec, 0);

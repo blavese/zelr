@@ -1817,6 +1817,39 @@ int main(void) {
                " Object.getOwnPropertyDescriptor(window, 'document').get.call(window) === document].join(' ');</script></body>"),
         "all 0 201 true true title d title go 5 false true");
 
+    {
+        /* A script's selector is parsed into the page's sheet, and GitHub's
+           sheets fill its tables: every selector but a bare tag name found
+           nothing. Here the sheet is filled past its last selector first. */
+        int cap = 48000 * 8 + 32;
+        char *big = (char *)malloc((u64)cap);
+        int w = 0;
+        for (int i = 0; i < 48000 && w < cap - 32; i++) {
+            int v = i;
+            big[w++] = '.'; big[w++] = 'k';
+            char rev[8]; int r = 0;
+            if (!v) rev[r++] = '0';
+            while (v) { rev[r++] = (char)('0' + v % 10); v /= 10; }
+            while (r) big[w++] = rev[--r];
+            big[w++] = (i % 100 == 99) ? '{' : ',';
+            if (i % 100 == 99) { big[w++] = 'c'; big[w++] = ':'; big[w++] = '0'; big[w++] = '}'; }
+        }
+        css_init(&qsheet);
+        css_parse(&qsheet, big, w);
+        free(big);
+        int full = qsheet.overflowed;
+        const char *got = titled("<body><b data-t=1 class=x></b><i x-y=2></i><script>"
+                                 "document.title = [document.querySelectorAll('[data-t]').length,"
+                                 " document.querySelectorAll('i[x-y], b.x').length,"
+                                 " document.querySelector('body > b[data-t=1]') ? 'yes' : 'no'].join(' ');</script></body>");
+        char keep[64];
+        int k = 0;
+        for (; got[k] && k < 63; k++) keep[k] = got[k];
+        keep[k] = 0;
+        css_init(&qsheet);
+        oks("a script's selector still finds its elements when the page's sheets have filled the tables",
+            full ? keep : "the sheet did not fill", "1 2 yes");
+    }
     /* A pseudo-element: getComputedStyle with one, and a selector naming one,
        which finds nothing (it is no element) and is not refused. Netflix
        reads a breakpoint from content and stopped on undefined. */

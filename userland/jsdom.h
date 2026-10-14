@@ -999,6 +999,11 @@ static void jd_sel_open(jd_selq *q, const jstr *sel) {
     q->save_used = jd_sheet->used;
     q->save_over = jd_sheet->overflowed;
     q->save_negs = jd_sheet->nnegs;
+    /* The reserve at the end of the sheet's tables is the query's, and an
+       overflow of the page's own sheets is no reason to refuse it (both put
+       back by jd_sel_close). */
+    jd_sheet->query = 1;
+    jd_sheet->overflowed = 0;
     int len = (int)sel->len, at = 0;
     while (at < len && q->n < JD_SEL_PARTS) {
         while (at < len && (sel->s[at] == ',' || css_space(sel->s[at]))) at++;
@@ -1045,6 +1050,7 @@ static void jd_sel_close(jd_selq *q) {
     jd_sheet->used = q->save_used;
     jd_sheet->overflowed = q->save_over;
     jd_sheet->nnegs = q->save_negs;
+    jd_sheet->query = 0;
 }
 
 static int jd_sel_matches(int el, const jstr *sel) {
