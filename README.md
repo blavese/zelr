@@ -258,10 +258,14 @@ run bit, and once it is running whatever is in the buffer is what comes out.
 The work is the codec behind it, a graph of converters, mixers and physical
 sockets where nothing says which of them you can actually hear. The driver
 reads the configuration the manufacturer left on each socket, picks the one
-most likely to be the speaker, and walks backwards along the connection lists
-until it reaches a converter. Tested by playing notes and measuring the
-recording, because every step of an audio driver can report success while
-producing silence. The buffer it plays from holds a second and a third, so a
+most likely to be the speaker, and walks backwards along the connection lists,
+through the mixers and selectors a machine's codec puts in the way, until it
+reaches a converter; then every amplifier on the way is opened at its own
+nought decibels, and every mixer's input from it unmuted. Tested by playing
+notes and measuring the recording, because every step of an audio driver can
+report success while producing silence, and by running the walk against
+codecs simulated in the self test, laid out as the ones in machines are,
+since QEMU's has one input on every widget. The buffer it plays from holds a second and a third, so a
 program playing a stream can fetch the next piece of it without the sound
 stopping, and a program asks how much room there is and how much is still
 queued (`sound_info`), so the music player keeps only a third of a second in
@@ -273,6 +277,8 @@ Ensoniq AudioPCI, and it does not recognise a system written from scratch. The
 ES1370 and the ES1371 are one design with the front end swapped — the same
 block of memory, size, format and run bit, which is the whole of what makes a
 sound — so they are one driver with two ways of setting a rate and two mixers.
+QEMU has only the ES1370, so the ES1371's start-up is run in the self test
+against a chip simulated from its manual.
 One of them plays the buffer and never says how far through it is, so when the
 position register does not move the kernel keeps time for it instead.
 
@@ -1606,37 +1612,39 @@ byte.
 ## testing
 
 The kernel tests itself. `./run.sh -T` boots with selftest on the command line,
-runs 714 checks across every subsystem, then writes to QEMU's debug-exit port
+runs 791 checks across every subsystem, then writes to QEMU's debug-exit port
 so the host gets a real exit status.
 
-    [string]                8 checks   [live tree]            23 checks
-    [the identity map]      2 checks   [layout]               11 checks
-    [physical memory]       6 checks   [waiting]              16 checks
-    [paging]                5 checks   [trackpad]             25 checks
-    [user access]           5 checks   [crypto]               22 checks
-    [heap]                 10 checks   [sha-256]              15 checks
-    [filesystem]            7 checks   [aes-gcm]              11 checks
-    [paths]                11 checks   [x25519]                8 checks
-    [directories]          12 checks   [rsa]                   8 checks
-    [open files]           33 checks   [p-256]                13 checks
-    [timer]                 3 checks   [sha-512]               4 checks
-    [interrupts]            2 checks   [p-384]                 6 checks
-    [disk]                 13 checks   [certificates]         45 checks
-    [fat]                  58 checks   [randomness]            8 checks
-    [network]               9 checks   [tls 1.3]              42 checks
-    [tcp]                   8 checks   [wpa]                  19 checks
-    [elf]                   7 checks   [wait timeouts]         3 checks
-    [userspace]             9 checks   [processors]            4 checks
-    [video]                13 checks   [black box]            24 checks
-    [mouse]                 4 checks   [acpi and pcie]         4 checks
-    [graphics]             15 checks   [interrupt routing]    11 checks
-    [windows]              27 checks   [clipboard]            14 checks
-    [window server]        39 checks   [clock]                18 checks
-    [built-in programs]     8 checks   [sound]                  skipped
-    [theme]                19 checks   [kernel stack]          3 checks
-    [taskbar]              18 checks
+    [string]                 8 checks  [waiting]               16 checks
+    [the identity map]       2 checks  [trackpad]              25 checks
+    [physical memory]        6 checks  [crypto]                23 checks
+    [paging]                 5 checks  [sha-256]               15 checks
+    [user access]            5 checks  [aes-gcm]               11 checks
+    [heap]                  10 checks  [x25519]                 8 checks
+    [filesystem]             7 checks  [rsa]                    8 checks
+    [paths]                 11 checks  [p-256]                 23 checks
+    [directories]           12 checks  [sha-512]                4 checks
+    [open files]            33 checks  [p-384]                  6 checks
+    [timer]                  3 checks  [certificates]          45 checks
+    [interrupts]             2 checks  [randomness]             8 checks
+    [disk]                  13 checks  [tls 1.3]               55 checks
+    [fat]                   58 checks  [tls 1.2]               18 checks
+    [network]                9 checks  [wpa]                   19 checks
+    [tcp]                    8 checks  [ccmp]                   8 checks
+    [elf]                    7 checks  [wireless]              16 checks
+    [userspace]              9 checks  [wait timeouts]          3 checks
+    [video]                 13 checks  [processors]             4 checks
+    [mouse]                  4 checks  [black box]             24 checks
+    [graphics]              15 checks  [acpi and pcie]          4 checks
+    [windows]               29 checks  [interrupt routing]     11 checks
+    [window server]         39 checks  [clipboard]             14 checks
+    [built-in programs]      8 checks  [clock]                 18 checks
+    [theme]                 23 checks  [codec routes]           6 checks
+    [taskbar]               18 checks  [es1371]                 5 checks
+    [live tree]             23 checks  [sound]                  skipped
+    [layout]                11 checks  [kernel stack]           3 checks
 
-    714 passed, 0 failed
+    791 passed, 0 failed
     SELFTEST_PASS
 
 The sound section is skipped because `run.sh` attaches no sound card (the
@@ -1644,7 +1652,7 @@ gate's q35 run gives it one), the
 identity map is checked in four more places when there is more memory to map,
 and the desktop keeps a copy of its wallpaper only when the memory allows it,
 which two more checks need: given 256 MiB, as the gate gives it, the same run
-is 714.
+is 797.
 
 Two of the sections are about what happens when something goes wrong half
 way, which a machine that keeps its power cannot show. `[fat]` makes the

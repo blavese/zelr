@@ -95,6 +95,13 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.122.0
+
+- **HD Audio through a machine's codec (05)**: connection lists read whole, a route through mixers and selectors with
+  every amplifier on it opened at its own nought decibels; the sound ring on a 128-byte boundary; **the ES1371's codec
+  written in the converter's free state, its recording channel kept off (05)**. Selftest `[codec routes]`, `[es1371]`
+  and a `[sound]` check, each failing on a build without its change.
+
 ### 0.121.0
 
 - **`<base href>` (11)**, **a media file's stretches after a redirect (11)**, **crypto.subtle's digest (12)**; a worker

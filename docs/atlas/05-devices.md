@@ -10,6 +10,26 @@ current tree. Where I say "verified" I read the code path end to end. Where I
 say "suspected" or "likely" I am reasoning from the code plus an outside spec
 (xHCI, USB, HDA, AK4531), and I say which one.
 
+**Since 0.122.0** (the sections below are older; trust the code):
+- **HD Audio finds its way out through a machine's codec** (hda.c `conn_list`, `route_from`, `route_open`): connection
+  lists are read four entries an answer (two in the long form), and the walk goes back from the pin through mixers and
+  selectors up to three steps, nearer converters first. Every widget on the way is powered and its output amplifier
+  opened; a pin or selector is told which input to take, and a mixer's input from the next widget is unmuted. C12 and
+  C13 below are fixed. Each amplifier is set to its own nought decibels (`amp_unity`, from the widget's description
+  with `WCAP_AMP_OVERRIDE`, else the function group's; 0x7F when nothing is described): 0x7F against QEMU's 0x4A steps
+  wrapped to 181 of 255 in its mixer, measured as volcheck's top burst going from 22790 to 32105. The boot log gives
+  the route, pin first ("by way of 3 2" on QEMU). Test: selftest `[codec routes]` on two simulated codecs
+  (`hda_test_route`, the `test_codec` hook in `codec()`).
+- **The sound ring starts on a 128-byte boundary** (sound.c), as HD Audio's buffer descriptors require. Test: `[sound]`
+  (on q35 with HD Audio only).
+- **The ES1371** (ens.c `init_1371`): the AC97 window waits now ask the converter to show its state (`SRC_SHOW`, bit 16)
+  and put its switches back after (`codec_window`, `codec_window_close`); `src_read` does the same; the recording
+  channel stays off (`SRC_DIS_R1`), since its numbers were left zero when the converter was switched on; the wait for
+  `CODEC_RDY` after reset (a read's answer, never asked for) is now a read of register 0x26 until its four sections are
+  ready, a tenth of a second at most; the codec's vendor words go in the boot log ("ens: es1371 at ..., codec
+  83847609, sections ready f"). Test: selftest `[es1371]` against a simulated chip (`ens_test_1371`, the `test_io`
+  hook), since QEMU has the ES1370 only. Still never run on a real ES1371 or on VMware's.
+
 ---------------------------------------------------------------------------
 
 ## 1. Scope
@@ -2385,10 +2405,10 @@ C10. **`MAX_DCI 8`** limits endpoints to numbers 1-3 (xhci.c:170, 786, 839,
 C11. **Missing post-reset recovery delays.** None after a root or hub port
    reset before Address Device (the USB spec wants 10 ms). QEMU does not
    care; some real devices do.
-C12. **HDA BDL buffer alignment.** The HDA BDL requires 128-byte-aligned
+C12. **HDA BDL buffer alignment.** (Fixed in 0.122.0.) The HDA BDL requires 128-byte-aligned
    buffer addresses. The sound ring is plain `kmalloc` (8-byte alignment,
    heap.c:41; hda.c:461). Suspected minor impact on real controllers.
-C13. **HDA connection-list walk.** `dac_behind` sends `GET_CONN(i)` for
+C13. **HDA connection-list walk.** (Fixed in 0.122.0: `conn_list`, `route_from`.) `dac_behind` sends `GET_CONN(i)` for
    i = 0..7 and uses only the low byte (hda.c:255-258, 266-268). A
    short-form response carries four entries. Linux queries only multiples of
    4 and unpacks them, so for i not a multiple of 4 it is codec-dependent
