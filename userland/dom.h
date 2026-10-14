@@ -640,13 +640,30 @@ static inline void dom_parse_into(ddoc *d, const char *p, int len, int parent) {
             continue;
         }
         if (i + 1 < len && (p[i + 1] == '!' || p[i + 1] == '?')) {
-            if (i + 9 < len && p[i + 1] == '!' && w_lower(p[i + 2]) == 'd'
+            int doctype = i + 9 < len && p[i + 1] == '!' && w_lower(p[i + 2]) == 'd'
                 && w_lower(p[i + 3]) == 'o' && w_lower(p[i + 4]) == 'c'
                 && w_lower(p[i + 5]) == 't' && w_lower(p[i + 6]) == 'y'
-                && w_lower(p[i + 7]) == 'p' && w_lower(p[i + 8]) == 'e')
-                d->standards = 1;
+                && w_lower(p[i + 7]) == 'p' && w_lower(p[i + 8]) == 'e';
+            if (doctype) d->standards = 1;
+            int start = i + (p[i + 1] == '?' ? 1 : 2);
             while (i < len && p[i] != '>') i++;
+            int end = i < len ? i : len;
             i++;
+            /* Anything else written so is a comment whose words run to the
+               next >, a ? included (HTML's bogus comment). It was left out:
+               Lit marks where a template's values go with <?lit$...$> and
+               finds those places again as comments with exactly those words,
+               so with none there a template lost its words and archive.org's
+               page came out as an empty link round an empty header. */
+            int parent = dp_top(&z);
+            if (!doctype && parent >= 0 && d->count < DOM_NODES - 1024) {
+                int keep = end - start;
+                if (keep > DOM_COMMENT_MAX) keep = DOM_COMMENT_MAX;
+                int c = dom_new(d, DN_COMMENT, T_OTHER);
+                if (c < 0) return;
+                d->nodes[c].text = dom_str(d, p + start, keep);
+                dom_append(d, parent, c);
+            }
             continue;
         }
 

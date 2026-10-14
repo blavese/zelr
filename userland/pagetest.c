@@ -1558,6 +1558,14 @@ int main(void) {
                " + ' ' + d.content.firstChild.content.childNodes.length + ' ' + t.cloneNode(false).content.childNodes.length;"
                "</script></body>"),
         "1 1 1 0");
+    oks("markup written <?like this> is a comment of those words, in a page and in a template's markup",
+        titled("<body><template id=t><p>a<?lit$1$>b</p><i>c</i></template><script>var f = document.getElementById('t').content,"
+               " p = f.firstChild, t2 = document.createElement('template');"
+               "t2.innerHTML = '<a>x</a><?lit$2$><b></b>';"
+               "document.title = p.childNodes.length + ' ' + p.childNodes[1].nodeType + ' ' + p.childNodes[1].data + ' '"
+               " + f.childNodes.length + ' ' + t2.content.childNodes.length + ' ' + t2.content.childNodes[1].data;"
+               "</script></body>"),
+        "3 8 ?lit$1$ 2 3 ?lit$2$");
     oks("a script a page makes and appends runs when it is put in the page",
         titled("<body><script>var s = document.createElement('script');"
                "s.textContent = 'document.title = \"inserted \" + (document.currentScript === s);';"
