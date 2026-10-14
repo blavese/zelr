@@ -517,8 +517,40 @@ static inline int lay_space(char c) {
     return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f';
 }
 
+static unsigned lay_utf8(const char **p);
+
+/* Text past ASCII, as the face can draw it: each character folded to the
+ * ASCII it stands for (html.h, html_fold_cp: a curly apostrophe to ', a
+ * dash to --, é to e, an emoji to nothing), as the parser folds what a page
+ * is written with. Text a script puts in reaches the tree as it was given --
+ * the script reading it back must get what it wrote -- and was measured and
+ * drawn as it was, so every curly apostrophe, dash and accented letter on a
+ * page drawn by React or Vue came out as a gap (Imgur's "you'll"). The
+ * length of what was written to out; 0 when s is all ASCII and was left. */
+static inline int lay_fold(const char *s, int n, char *out, int cap) {
+    int wide = 0;
+    for (int i = 0; i < n; i++) if ((unsigned char)s[i] >= 0x80) { wide = 1; break; }
+    if (!wide) return 0;
+    int w = 0;
+    for (int i = 0; i < n && w < cap - 8; ) {
+        unsigned char c = (unsigned char)s[i];
+        if (c < 0x80) { out[w++] = (char)c; i++; continue; }
+        const char *p = s + i;
+        unsigned cp = lay_utf8(&p);
+        i = (int)(p - s);
+        char tmp[8];
+        int k = html_fold_cp(cp, tmp);
+        for (int m = 0; m < k; m++) out[w++] = tmp[m];
+    }
+    return w;
+}
+
 static inline void lay_word(lctx *L, const char *s, int n, const cstyle *st,
                             int *y, int face) {
+    if (n <= 0) return;
+    char folded[256];
+    int nf = n < (int)sizeof(folded) - 8 ? lay_fold(s, n, folded, (int)sizeof(folded)) : 0;
+    if (nf) { s = folded; n = nf; }
     if (n <= 0) return;
     /* text-transform: the word measured and kept as it is shown. ASCII and
        the accented letters of Latin-1, which is where the pairs are. */
@@ -581,11 +613,16 @@ static inline void lay_text_run(lctx *L, const char *s, const cstyle *st,
             while (s[i] && s[i] != '\n') i++;
             if (i > start) {
                 /* One item per line, so the spacing inside it is kept. */
-                int w = tface_wn(s + start, i - start, face);
+                const char *ls = s + start;
+                int ln = i - start;
+                char folded[512];
+                int nf = ln < (int)sizeof(folded) - 8 ? lay_fold(ls, ln, folded, (int)sizeof(folded)) : 0;
+                if (nf) { ls = folded; ln = nf; }
+                int w = tface_wn(ls, ln, face);
                 litem *it = lay_item(L);
                 if (!it) return;
                 it->kind = LK_TEXT;
-                it->at = lay_put(L, s + start, i - start);
+                it->at = lay_put(L, ls, ln);
                 it->x = L->pen;
                 it->w = w;
                 it->h = tface_h(face);

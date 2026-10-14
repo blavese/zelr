@@ -54,11 +54,19 @@ static int nfake;
 static void picture_at(const char *id, int w, int h);
 static const char *hover_id;     /* the element under the pointer, for :hover */
 
+static void lay_again(int width);
+
 /* The same three steps the browser takes, without the fetching. */
 static void lay(const char *html, int width) {
     int n = 0;
     while (html[n]) n++;
     dom_parse(&doc, html, n);
+    lay_again(width);
+}
+
+/* And the page as it now is laid out again, as after a script has changed
+   it. */
+static void lay_again(int width) {
     dom_shadows(&doc);
 
     css_init(&sheet);
@@ -128,6 +136,26 @@ static const litem *word(const char *w) {
 
 int main(void) {
     puts("where things end up\n");
+
+    /* --- text a script put in --------------------------------------------
+     *
+     * textContent puts a script's text in the tree as it was given, so the
+     * layout meets what the parser never lets through: UTF-8 past ASCII.
+     * Folded as the parser folds a page's own text, or each curly
+     * apostrophe, dash and accented letter is a gap. */
+    {
+        lay("<body><p id=s>x</p><pre id=p>x</pre></body>", 600);
+        static const char said[] = "you\xe2\x80\x99ll \xe2\x80\x9cquote\xe2\x80\x9d caf\xc3\xa9 dash\xe2\x80\xa6"
+                                   " \xf0\x9f\x98\x80smile";
+        static const char pre[] = "a\xe2\x80\x94" "b";
+        dom_set_text(&doc, by_id("s"), said, (int)sizeof(said) - 1);
+        dom_set_text(&doc, by_id("p"), pre, (int)sizeof(pre) - 1);
+        lay_again(600);
+        ok("a script's curly apostrophe is drawn as one the face has", word("you'll") != 0);
+        ok("and its quotes, accents and ellipsis", word("\"quote\"") && word("cafe") && word("dash..."));
+        ok("and an emoji is left out, keeping the word after it", word("smile") != 0);
+        ok("and the same in preformatted text", word("a--b") != 0);
+    }
 
     /* --- a row -------------------------------------------------------------
      *
