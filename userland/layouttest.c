@@ -1974,6 +1974,10 @@ int main(void) {
         ok("a base, a source and a wbr hold nothing: what follows each is beside it",
            l1 >= 0 && doc.nodes[l1].parent == doc.head && pi >= 0 && doc.nodes[pi].parent == pc
            && last >= 0 && doc.nodes[last].kind == DN_TEXT && w_same(doc.arena + doc.nodes[last].text, "two"));
+        lay("<div id=cd><a id=ca href=#m>skip</a\n      ><header id=ch>head</header></div>", 600);
+        int ca = by_id("ca"), ch = by_id("ch");
+        ok("a close tag whose name is followed by a line break closes the element",
+           ca >= 0 && ch >= 0 && doc.nodes[ch].parent == by_id("cd"));
         lay("<style>.alert { display: block; padding: 8px }</style><noscript class=alert><h2>needs scripts</h2></noscript><p>shown</p>", 600);
         ok("and a noscript the page's rules give a display is still not drawn", !word("scripts</h2>") && !word("needs") && word("shown"));
     }

@@ -670,7 +670,12 @@ static inline void dom_parse_into(ddoc *d, const char *p, int len, int parent) {
         /* --- a close tag -------------------------------------------------- */
         if (i + 1 < len && p[i + 1] == '/') {
             int at = i + 2, start = at;
-            while (at < len && p[at] != '>' && p[at] != ' ') at++;
+            /* The name ends at any white space, as an open tag's does: Lit
+               writes </a + a line break + >, and the name read as "a" and a
+               line break closed nothing, so archive.org's whole page went
+               inside its skip link, which is a pixel square and clipped. */
+            while (at < len && p[at] != '>' && p[at] != ' ' && p[at] != '\t' && p[at] != '\n'
+                   && p[at] != '\r' && p[at] != '\f' && p[at] != '/') at++;
             int end = at;
             int tag = html_tag_of(p + start, end - start);
             while (at < len && p[at] != '>') at++;
