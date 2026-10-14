@@ -388,6 +388,8 @@ void sound_silence(void) {
     zeroed = played;
 }
 
+const void *sound_ring_address(void) { return ring; }
+
 bool sound_init(void) {
     ready = false;
     device = SND_NONE;
@@ -402,8 +404,12 @@ bool sound_init(void) {
     if (!frame_bytes) { device = SND_NONE; return false; }
     ring_bytes = RING_FRAMES * frame_bytes;
 
-    ring = (i16 *)kmalloc(ring_bytes);
-    if (!ring) { device = SND_NONE; return false; }
+    /* On a 128-byte boundary: HD Audio's buffer descriptors must start on
+       one, and the heap gives eight. QEMU reads from anywhere; a controller
+       that drops the low bits plays from somewhere before the ring. */
+    u8 *raw = (u8 *)kmalloc(ring_bytes + 128);
+    if (!raw) { device = SND_NONE; return false; }
+    ring = (i16 *)(((u64)raw + 127) & ~(u64)127);
     memset(ring, 0, ring_bytes);
 
     /* Forty eight thousand is asked for and whatever is agreed to is what is

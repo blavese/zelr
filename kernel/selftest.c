@@ -6397,6 +6397,9 @@ static void test_codec_routes(void) {
 static void test_sound(void) {
     if (!sound_present()) { kprintf("  SKIP  no sound controller\n"); return; }
 
+    ok("the ring the controller reads starts on a 128-byte boundary",
+       ((u64)sound_ring_address() & 127) == 0);
+
     ok("it says what rate it is running at",
        sound_rate() >= 8000 && sound_rate() <= 96000);
     ok("and how many channels it has",

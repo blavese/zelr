@@ -55,3 +55,6 @@ bool sound_clocked(void);
    not still in the buffer when the loop comes round again. Called from the
    timer, like the other things that have to keep happening. */
 void sound_poll(void);
+
+/* For the self test: where the ring the controller reads begins. */
+const void *sound_ring_address(void);
