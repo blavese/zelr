@@ -1,6 +1,14 @@
 # 11 -- The web browser (everything except JS-engine internals and image decoders)
 
-**Since 0.124.0** (the rest of this file is older; trust the code and the README's "since 6048716" list):
+**Since 0.125.0** (the rest of this file is older; trust the code and the README's "since 6048716" list):
+- **`LK_EDGE`** (layout.h): a block with no background or border gets an item of its own, made where its background
+  would be and drawn as nothing, carried by every move of its contents (`lay_cell_fit`, `lay_translate`, flex
+  stretch). browser.c `box_of` (getBoundingClientRect, offset/client sizes) and `lay_node_at` see it; `lay_link_at`
+  follows a block link anywhere in it. Anything new that counts items or takes "the box" of a node must allow for it.
+- **Custom properties for scripts**: browser.c `custom_style` finds a name in the chain `computed_style` leaves
+  (`cstyle.vars`, `lay_var_find`), with var() put in (`lay_var_subst`).
+
+**Since 0.124.0**:
 - **dom.h reads `<?...>` and a `<!` that starts no comment or doctype as a comment** (HTML's bogus comment, the `?`
   kept): Lit finds where a template's values go by comments `?lit$...$`, and with none every value was lost.
 - **A close tag's name ends at any white space or `/`**, not only a space: Lit writes `</a` + newline + `>`.

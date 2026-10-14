@@ -2,7 +2,11 @@
 
 Source root the repository root (github.com/blavese/zelr main, 2026-09-22). All paths are relative to it; `file:N` means 1-based line N. Everything below was verified by reading the code. Where a behaviour was derived by tracing (not by running) it says so. Nothing here was built or run.
 
-**Since 0.124.0** (the rest of this file is older; trust the code):
+**Since 0.125.0** (the rest of this file is older; trust the code):
+- **getComputedStyle(...).getPropertyValue('--name')** (jswin.h `jd_custom_of`, set by `jsdom_custom_with`): by the name
+  as written, trimmed; "" for none or for a pseudo-element. Not listed when a computed style is enumerated.
+
+**Since 0.124.0**:
 - **A template's contents are copied inside `jd_clone`** for any deep copy (cloneNode, importNode, a template inside
   copied contents), not in cloneNode alone: the web components loader asks whether a nested template keeps its
   contents (an old Edge did not) and loaded every polyfill when it did not.

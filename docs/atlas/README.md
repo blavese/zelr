@@ -95,6 +95,12 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.125.0
+
+- **Custom properties through getComputedStyle (12, 11)**; **a box that draws nothing given its edges (11)**, so
+  getBoundingClientRect and the offset and client sizes are its box. Browser harness 65, layouttest 308, each failing
+  on a build without its change.
+
 ### 0.124.0
 
 - **A template's deep copy brings a nested template's contents (12)**, **`<?...>` read as a comment (11)**, **a close
