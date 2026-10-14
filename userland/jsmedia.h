@@ -1319,6 +1319,12 @@ static int jd_media_file_step(int s) {
         long long at = rp.status == 206 ? from : 0;
         long long total = rp.status == 206 ? jd_range_total(&rp) : rp.len;
         r = rp.len > 0 ? media_file_feed(&d->m, at, (const u8 *)rp.body, rp.len, total) : -1;
+        /* The next stretch from where this one was sent, as a browser's media
+           loader asks: archive.org sends every request for a film on to the
+           server that holds it, and going round by the redirect each time
+           made a stretch three seconds that a second of film needed. */
+        if (r >= 0 && rp.url && rp.url[0] && !w_same(rp.url, d->url))
+            w_copy(d->url, sizeof(d->url), rp.url, sizeof(d->url));
         jd_media_ask_end(d);
     }
     if (r < 0) jd_media_fail(s, d->ready ? 3 : 4, d->m.src[0].why[0] ? d->m.src[0].why : "the file is not MP4 this plays");

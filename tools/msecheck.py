@@ -181,7 +181,7 @@ setInterval(function () {
       slow = t;
       fetching = 0;
     });
-    v.src = '/film/file.mp4';
+    v.src = '/film/moved.mp4';
   }
 }, 50);
 v.addEventListener('ended', function () {
@@ -253,6 +253,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
         elif self.path.startswith("/pause-done?"):
             PAUSE_REPORTS.append(urllib.parse.unquote(self.path[len("/pause-done?"):]))
             body, ctype = b"<title>pause done</title><p>done</p>", "text/html"
+        elif self.path == "/film/moved.mp4":
+            # Somewhere else, as archive.org sends a film on to the server
+            # that holds it: asked here once, and then there.
+            self.send_response(302)
+            self.send_header("Location", "/film/file.mp4")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
         elif self.path in ("/film/file.mp4", "/film/long.mp4") and self.headers.get("Range", "").startswith("bytes="):
             data = Handler.files[self.path][0]
             a, _, b = self.headers["Range"][6:].partition("-")
@@ -497,6 +505,9 @@ def main():
     c.add("and while the file's stretches come late (longest wait %d ms, %d ranges)" % (rworst, len(RANGES)),
           len(RANGES) >= 2 and 0 <= rworst < 1000)
     c.add("the file is asked for by ranges, its moov found after its media", len(RANGES) >= 2)
+    c.add("a file sent on elsewhere is asked for there after its first stretch (asked where it was %d times, %d ranges)"
+          % (ASKED.get("/film/moved.mp4", 0), len(RANGES)),
+          ASKED.get("/film/moved.mp4", 0) == 1 and len(RANGES) >= 2)
     c.add("its colours are seen in the element's box too",
           file_pairs["red and blue"] > 0 and file_pairs["green and yellow"] > 0)
 
