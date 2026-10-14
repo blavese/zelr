@@ -1436,9 +1436,12 @@ whatever the page lays over the video drawn over it again. Pausing,
 seeking or leaving the page is heard at once: what the card still held is
 dropped rather than left to play out. A page that simply names a file for its `<video>` or
 `<audio>` plays too: an MP4 is asked for a stretch at a time by byte ranges,
-its index found wherever the encoder put it. A harness serves pages that do
-both from the host, and checks what the element told, the colours in its
-box and the sound at the card. YouTube does not play, since its
+its index found wherever the encoder put it. The players most sites use
+run on it: hls.js, which reads a stream's playlists and turns its transport
+stream into what the element takes, plays a stream with its sound apart from
+its picture (tried on the host with public test streams). A harness serves
+pages that do both from the host, and checks what the element told, the
+colours in its box and the sound at the card. YouTube does not play, since its
 streams are given to its own player only, with tokens that player makes.
 Google's results are made by a program that first decides whether a
 person is asking, which is not something to get round, so a search asked of

@@ -95,6 +95,13 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.114.0
+
+- **Video through hls.js (12)**: typed array `set` as a copy, text tracks, the run's clock without the network; also a
+  frame's interfaces and a shadow tree's style sheet. jstest 457 (set past a million, overlapping, across kinds);
+  pagetest 342 (text tracks, a slow import() under a short clock, a frame's interfaces and a shadow style's sheet);
+  each failing on a build without its fix.
+
 ### 0.113.0
 
 - **`::before` and `::after` drawn (11)**: rules for them kept and indexed apart, a box for each with content made in

@@ -2,7 +2,20 @@
 
 Source root the repository root (github.com/blavese/zelr main, 2026-09-22). All paths are relative to it; `file:N` means 1-based line N. Everything below was verified by reading the code. Where a behaviour was derived by tracing (not by running) it says so. Nothing here was built or run.
 
-**Since 0.113.0** (the rest of this file is older; trust the code):
+**Since 0.114.0** (the rest of this file is older; trust the code):
+- **Video through hls.js plays** (checked on the host with hls.js 1.5 and two public streams, Mux's test stream and
+  TED's, which has its audio apart): it needed three things. A typed array's `set` from another typed array is a copy
+  of its bytes (same kind, overlap-safe) or of its numbers read out first (jstyped.h `nat_ta_set`); it went through a
+  call's list of arguments, refused past a million, and hls.js joins segments past that. A media element has
+  `textTracks` and `addTextTrack`, with TextTrackList, TextTrack, TextTrackCue and VTTCue (jsprelude.h; cues kept in
+  start order, drawn nowhere). And the run's clock (`JS_TIME_CAP`) leaves out waiting on the network while a script
+  runs (jsdom.h `jd_net_waited`, around `jd_get_script` and a request a script waits on): a module's import() fetched
+  that way counted, and videojs.com's modules ran out the ten seconds.
+- **A frame of the page's own has every interface the page has** (jsframe.h: the globals named with a capital), as one
+  realm: Osano takes HTMLScriptElement and the rest from a frame it makes. **A style in a shadow tree in the page has a
+  sheet** (jscssom.h `jcs_sheet_for`, `jd_connected_deep`): Media Chrome reads it.
+
+**Since 0.113.0**:
 - **Object.defineProperty with a descriptor that has neither a value nor an accessor** (only enumerable or
   configurable) changes only those (jslib.h `js_define_from_desc`); it had made an accessor a value of undefined.
   React's value tracker makes an input's `value` an accessor of the input's own and then sets it enumerable, so every
