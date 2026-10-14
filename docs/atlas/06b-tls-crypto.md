@@ -5,7 +5,31 @@ Pure static reading: nothing was built or run. All `file:line` references are
 1-based line numbers in the tree as it is. "Verified" means read in the code;
 anything inferred is marked as such.
 
-**Since 0.115.0** (the rest of this file is older; trust the code):
+**Since 0.116.0** (the rest of this file is older; trust the code):
+- **TLS 1.2 for a server with nothing newer** (about one popular site in twenty: Imgur, Genius, Ars Technica,
+  Microsoft's account sign-in). The hello offers 1.3 and 1.2 (`supported_versions`), suites 0x1301, 0xc02b, 0xc02f,
+  `ec_point_formats`, `extended_master_secret` and an empty `renegotiation_info`, and rsa_pkcs1_sha384 (0x0501) among
+  the signature schemes. `parse_server_hello` now finds the extensions first and reads them after: a hello with no
+  version extension is 1.2 (`z->v12`), refused if the legacy version is not 0x0303, if its random ends in "DOWNGRD"
+  and 0 or 1 (a 1.3 server talked down), if it follows a request to start again, if its suite is not one of the two,
+  if it gives back our session id (resuming), or if its renegotiation extension is not empty. `handshake12`:
+  Certificate, ServerKeyExchange (named curve x25519 or P-256, signed over both randoms and the params; `signed_by`
+  takes 0401/0501 PKCS#1 in 1.2 only, and 1.2's ECDSA schemes on either curve), optional CertificateRequest
+  (answered with an empty list), ServerHelloDone, strictly in that order; the certificate's key type must match the
+  suite; the chain is checked before anything of ours goes; then ClientKeyExchange, the master secret (RFC 7627's
+  extended form when agreed, else over the randoms), the key block, ChangeCipherSpec, our Finished; then the
+  server's ChangeCipherSpec, taken by `read_record` only once ours has gone (`ccs_ok`; CVE-2014-0224) and only once
+  (`s_sealed`), and its Finished. Records are RFC 5288's (`send_sealed12`, `open12`, `aad12`: the explicit nonce is
+  the sequence number). After the handshake a HelloRequest is ignored and KeyUpdate means nothing. `tls12_prf` is in
+  sha256.c. `tls_describe` says "TLS 1.2, x25519, aes-128-gcm".
+- `read_chain` reads a Certificate message's list for both versions; `signed_by` checks a signature for both.
+- Tests: selftest `[tls 1.2]` (`test_tls12`): the PRF against Python's hmac, the record layer against records sealed
+  and opened with RFC 5288's layout (`tls_test_v12`), and a scripted server's flight (scratchpad `gen12.py`: an RSA
+  key, a self-signed certificate for "server", an x25519 share signed over the fixed client random) taken as far as
+  the certificate's authority and refused for eleven faults. tlscheck: imgur.com, genius.com, arstechnica.com and
+  login.live.com over 1.2, and badssl.com's expired, wrong-host and self-signed certificates refused for their reasons.
+
+**Since 0.115.0**:
 - **P-256 for the key exchange, when a server asks to start again with it** (RFC 8446 4.1.4). The hello lists x25519
   and P-256 (`supported_groups`) and carries an x25519 share only; a HelloRetryRequest naming P-256 is answered with a
   second hello (same random and session id, the P-256 share, the server's cookie given back) after `transcript_restart`

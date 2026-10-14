@@ -95,6 +95,13 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.116.0
+
+- **TLS 1.2 (06b)** for the servers with nothing newer, ECDHE with AES-128-GCM only, with the downgrade check, the
+  extended master secret, and no renegotiation or resumption. Selftest 780 (`[tls 1.2]`: the PRF, the record layer,
+  a scripted server and eleven refusals); tlscheck 44 (four 1.2 sites, three of badssl.com's bad certificates);
+  each failing on a build without its fix.
+
 ### 0.115.0
 
 - **P-256 key agreement and HelloRetryRequest (06b)**: servers with no x25519 (Microsoft's sign-in, Office, Outlook;

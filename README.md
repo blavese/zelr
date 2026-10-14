@@ -8,7 +8,8 @@ describes.
 It routes its interrupts through the IOAPIC, finds an NVMe, SATA or ATA disk,
 reads the GPT on it, keeps files in directories on a FAT16 or FAT32 volume,
 talks to the internet over its own TCP/IP stack, opens an https connection
-with its own TLS 1.3 and checks the certificate at the other end against its
+with its own TLS (1.3, and 1.2 for a server with nothing newer) and checks
+the certificate at the other end against its
 own root store, takes input from PS/2 and USB, and runs a desktop whose
 programs are real ring 3 processes.
 
@@ -1665,7 +1666,8 @@ the hashes against FIPS 180, AES-GCM against the NIST vectors, X25519
 against RFC 7748, the curves against their own test vectors, the TLS key
 schedule against the handshake traced end to end in RFC 8448, a key agreed on
 P-256 and the transcript of a server that asks to start again against the
-second handshake it traces, and the
+second handshake it traces, TLS 1.2's PRF against an answer worked out apart
+from this code, and the
 certificate checks against a chain google.com actually served. A test that
 only agrees with the thing it is testing proves nothing here, because an
 implementation that is wrong in a consistent way passes it and then cannot
@@ -1929,16 +1931,21 @@ large range:
   the browser holds one -- but the browser still asks for a page's pictures
   one after another over its kept connection. Asking for them at once needs
   sockets a program can wait on together, which `poll` does not cover.
-- **TLS is 1.3 and one cipher suite**: AES-128-GCM with SHA-256 over X25519,
-  which every 1.3 server must implement, or over P-256 for a server that has
-  no X25519 and asks to start again with that (Microsoft's sign-in, Office and
-  Outlook, Zillow). There is no TLS 1.2 and no second
-  suite, and that is the design rather than an unfinished part of it. Every
-  attack that has broken this protocol in practice worked by talking two
-  modern implementations into an old thing they both still supported, and
-  the defence is not to have it. A server too old for 1.3 is refused rather
-  than accommodated. There is no session resumption, so every connection
-  does the full handshake.
+- **TLS is 1.3 with one cipher suite, and 1.2 only as far as nobody has
+  broken it.** 1.3 is AES-128-GCM with SHA-256 over X25519, which every 1.3
+  server must implement, or over P-256 for a server that has no X25519 and
+  asks to start again with that (Microsoft's sign-in, Office and Outlook,
+  Zillow). 1.2 was left out on purpose until 0.116.0, and about one popular
+  site in twenty could not be reached (Imgur, Ars Technica, Genius,
+  Microsoft's account sign-in). It is there now as ECDHE over X25519 or P-256
+  signed with the certificate's key, AES-128-GCM, and the extended master
+  secret when the server has it. Every attack that has broken this protocol
+  in practice worked by talking two implementations into an old thing they
+  both still supported, and those things are still not here: no 1.0 or 1.1,
+  no RSA key transport, no CBC, no SHA-1, no compression, no renegotiation.
+  Nor can a server that does 1.3 be talked down to 1.2: 1.3 has it say so in
+  its random, and that is checked. There is no session resumption, so every
+  connection does the full handshake.
 - **Certificates are checked with SHA-256, SHA-384 and SHA-512 over RSA, and
   with ECDSA on P-256 and P-384.** Not SHA-1, which is broken for signatures
   and is not worth accepting to read a page. A root that signs itself with
@@ -2024,15 +2031,15 @@ orders of magnitude away from Linux, which is roughly 30 million lines.
                        default, and the file they live in
     kernel/synaptics.c a trackpad, and turning a position into a pointer
     kernel/crypto.c    sha-1, hmac, pbkdf2 and aes, written out
-    kernel/sha256.c    sha-256, hkdf, and the labelled form tls 1.3 uses
+    kernel/sha256.c    sha-256, hkdf, the labelled form tls 1.3 uses, tls 1.2's prf
     kernel/sha512.c    sha-384 and sha-512
     kernel/gcm.c       aes-gcm, which is what tls 1.3 encrypts with
     kernel/x25519.c    the key exchange, rfc 7748
-    kernel/ec.c        ecdsa on p-256 and p-384
+    kernel/ec.c        ecdsa on p-256 and p-384, and agreeing a key on them
     kernel/rsa.c       rsa signature checking, pkcs#1 and pss
     kernel/x509.c      certificates, and what makes a chain of them mean something
     kernel/roots.c     the authorities this machine believes (generated)
-    kernel/tls.c       tls 1.3, client side
+    kernel/tls.c       tls 1.3 and 1.2, client side
     kernel/rng.c       unpredictable bytes, and refusing to invent them
     kernel/wpa.c       what a wireless password turns into
     kernel/ccmp.c      what a protected wireless network's frames are encrypted with
