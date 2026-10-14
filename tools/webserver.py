@@ -684,6 +684,23 @@ document.getElementById('p').textContent = 'you\\u2019ll';
 </body></html>
 """
 
+# A page whose script reads its custom properties through getComputedStyle
+# and writes them into its title: inherited, with var() in them put in, kept
+# to where they are set, told apart by case.
+VARS_PAGE = b"""<!doctype html>
+<html><head><title>vars</title>
+<style>:root { --gap: 12px; --line: var(--gap) solid } .x { --tone: #2a8a9a }
+body { font-family: sans-serif; padding: 24px; font-size: 32px }</style></head>
+<body><div class="x" id="d">vars</div>
+<script>
+var r = getComputedStyle(document.documentElement), d = getComputedStyle(document.getElementById('d'));
+document.title = 'vars ' + r.getPropertyValue('--gap') + ' ' + r.getPropertyValue('--line') + ' '
+    + d.getPropertyValue('--tone') + ' ' + d.getPropertyValue('--gap') + ' ['
+    + r.getPropertyValue('--tone') + d.getPropertyValue('--Tone') + ']';
+</script>
+</body></html>
+"""
+
 # A page whose script and sheet are written relative to its <base href>,
 # and are only there: a browser that starts from the page's own address asks
 # for /based/b.js and gets the 404 page. Each draws a block.
@@ -1308,6 +1325,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._send(FOLDED_PAGE)
         elif path == "/based/":
             self._send(BASED_PAGE)
+        elif path == "/vars":
+            self._send(VARS_PAGE)
         elif path == "/basetarget/b.css":
             self._send(b"#s { background: #2a8a9a }", ctype="text/css")
         elif path == "/basetarget/b.js":

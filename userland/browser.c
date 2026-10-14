@@ -2338,6 +2338,18 @@ static int pseudo_style(int node, int pe, cstyle *out, char *content, int cap) {
     return style_in_drawn(d, g, out);
 }
 
+/* An element's custom property for getComputedStyle (jswin.h, jd_custom_of):
+   found in the chain computed_style leaves in the layout's tables, var() in
+   it put in. */
+static int custom_style(int node, const char *name, char *out, int cap) {
+    cstyle *s = (cstyle *)malloc(sizeof(cstyle));
+    if (!s) return 0;
+    const char *v = computed_style(node, s) ? lay_var_find(s->vars, name, w_len(name)) : 0;
+    if (v) lay_var_subst(s->vars, v, w_len(v), out, cap, 0);
+    free(s);
+    return v != 0;
+}
+
 static int style_in_drawn(const ddoc *d, int node, cstyle *out) {
     int chain[256], n = 0;
     for (int p = node; p >= 0; p = d->nodes[p].parent) {
@@ -2945,6 +2957,7 @@ static void build(const char *html, int len, int width, int want_sheets,
         jsdom_history_with(script_history_go, script_history_length);
         jsdom_styles_with(computed_style);
         jsdom_pseudo_with(pseudo_style);
+        jsdom_custom_with(custom_style);
         jsdom_memory_with(free_memory);
         jsdom_sheet_text_with(sheet_text_for_script);
         styles_live = want_sheets;

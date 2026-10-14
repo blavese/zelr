@@ -1870,6 +1870,15 @@ static int (*jd_pseudo_of)(int node, int pe, cstyle *out, char *content, int cap
 
 void jsdom_pseudo_with(int (*fn)(int, int, cstyle *, char *, int)) { jd_pseudo_of = fn; }
 
+/* And an element's custom property, by its name as written (they are told
+   apart by case): the value the cascade left it, with var() in it put in, or
+   0 when it has none (browser.c, custom_style). Theme code reads its
+   palette's colours this way: PeerTube found none of them, built no palette,
+   and its page's colours, all var(), came to nothing. */
+static int (*jd_custom_of)(int node, const char *name, char *out, int cap);
+
+void jsdom_custom_with(int (*fn)(int, const char *, char *, int)) { jd_custom_of = fn; }
+
 /* A content value as getComputedStyle gives it back: a string in double
    quotes, whichever the sheet used, and no !important. */
 static void jd_content_text(jtext *t, const char *v) {
@@ -2017,6 +2026,26 @@ static jval jd_computed_get_value(jctx *J, int node, int pe, const char *prop) {
 static jval nat_computed_get(jctx *J, jval t, jval *a, int n) {
     if (!js_is_obj(t)) return jd_illegal(J);
     jstr *p = jd_arg_str(J, a, n, 0);
+    if (p->len > 2 && p->s[0] == '-' && p->s[1] == '-') {
+        /* A custom property: white space at its ends is not part of it. */
+        int node = jd_computed_node(t.obj);
+        if (node < 0 || jd_computed_pe(t.obj) || !jd_custom_of || p->len > 120) return jd_str("");
+        char name[128];
+        w_copy(name, sizeof(name), p->s, (int)p->len);
+        char *val = (char *)malloc(4096);
+        if (!val) return jd_str("");
+        jval r = jd_str("");
+        if (jd_custom_of(node, name, val, 4096)) {
+            char *s = val;
+            while (*s == ' ' || *s == '\t' || *s == '\n' || *s == '\r') s++;
+            int e = w_len(s);
+            while (e > 0 && (s[e - 1] == ' ' || s[e - 1] == '\t' || s[e - 1] == '\n' || s[e - 1] == '\r')) e--;
+            s[e] = 0;
+            r = jd_str(s);
+        }
+        free(val);
+        return r;
+    }
     char low[64];
     int k = 0;
     for (; k < (int)p->len && k < 63; k++) low[k] = w_lower(p->s[k]);

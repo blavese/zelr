@@ -553,8 +553,15 @@ def main():
                   % (count_in(pxb, wb, PAGE, BASED_SHEET), count_in(pxb, wb, PAGE, BASED_SCRIPT)),
                   based, shotb)
 
+            # --- custom properties a script asks for ------------------------
+            go(vm, mon, "http://%s/vars" % srv.host, settle=10.0,
+               was=bas, name="br-going-vars")
+            told_vars = vm.wait_serial("-- vars 12px 12px solid #2a8a9a 12px [] --", timeout=30)
+            vrs, _, _, shotv = page_settled(mon, "br-vars")
+            c.add("a script reads a page's custom properties through getComputedStyle", told_vars, shotv)
+
             go(vm, mon, "http://%s/scripted" % srv.host, settle=12.0,
-               was=bas, name="br-going-scripted")
+               was=vrs, name="br-going-scripted")
             scripted, pxc, wc, shotc = page_settled(mon, "br-scripted")
             c.add("a page's own script runs, and changes the page",
                   count_in(pxc, wc, PAGE, BAND) > 3000, shotc)
