@@ -2454,11 +2454,25 @@ static int page_unhidden;      /* it was laid out a second time, shown anyway */
 
 static void pictures_follow(void);
 
+/* The page's title, as the status line and the console show it: folded as
+   a word is (layout.h, lay_fold), since a script's title arrives as it
+   wrote it and "Café — news" was shown as "Caf   news". The tree keeps
+   what the page said. */
+static void title_take(void) {
+    if (doc.title < 0) { title[0] = 0; return; }
+    const char *t = doc.arena + doc.title;
+    int n = w_len(t);
+    char folded[sizeof(title) * 4];
+    int nf = n < (int)sizeof(folded) - 8 ? lay_fold(t, n, folded, (int)sizeof(folded)) : 0;
+    if (nf) { folded[nf] = 0; t = folded; }
+    w_copy(title, sizeof(title), t, sizeof(title));
+}
+
 static void relayout(int width) {
     sheets_follow();
     restyle_changed();
     /* And the title, which a script may have written. */
-    if (doc.title >= 0) w_copy(title, sizeof(title), doc.arena + doc.title, sizeof(title));
+    title_take();
     drawings_drop();                 /* made for the sizes of the last one */
     match.hover = hover_node;
     match.visited_links = 0;
@@ -2913,9 +2927,7 @@ static void build(const char *html, int len, int width, int want_sheets,
     find_item = -1;
     publish_text();
 
-    if (doc.title >= 0) w_copy(title, sizeof(title), doc.arena + doc.title,
-                               sizeof(title));
-    else title[0] = 0;
+    title_take();
 }
 
 /* Builds a page of our own, for when there is nothing to show. Written as

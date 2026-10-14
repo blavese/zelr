@@ -532,8 +532,16 @@ def main():
             c.add("and were asked for together, %d at once" % webserver.DELAY_MOST,
                   webserver.DELAY_MOST >= 2, shots)
 
+            # --- a script's title, as the face can draw it -------------------
+            go(vm, mon, "http://%s/folded" % srv.host, settle=10.0,
+               was=shs, name="br-going-folded")
+            told = vm.wait_serial('-- Cafe -- scripted "news" --', timeout=30)
+            fld, _, _, shotf = page_settled(mon, "br-folded")
+            c.add("a title a script writes with an accent, a dash and curly quotes is told as the face draws it",
+                  told, shotf)
+
             go(vm, mon, "http://%s/scripted" % srv.host, settle=12.0,
-               was=shs, name="br-going-scripted")
+               was=fld, name="br-going-scripted")
             scripted, pxc, wc, shotc = page_settled(mon, "br-scripted")
             c.add("a page's own script runs, and changes the page",
                   count_in(pxc, wc, PAGE, BAND) > 3000, shotc)

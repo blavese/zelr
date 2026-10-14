@@ -669,6 +669,21 @@ SHEETS_PAGE = b"""<!doctype html>
 
 SHEET_COLOURS = {"1": "#5050d0", "2": "#d05050", "3": "#50d050", "4": "#b07010"}
 
+# A title a script writes with an accent, a dash and curly quotes, and the
+# same words in the page: the browser shows and tells the console the title
+# folded to what its face can draw, "Cafe -- scripted "news"".
+FOLDED_PAGE = b"""<!doctype html>
+<html><head><title>folded</title>
+<style>body { font-family: sans-serif; padding: 24px; font-size: 32px }</style></head>
+<body>
+<p id="p">x</p>
+<script>
+document.title = 'Caf\\u00e9 \\u2014 scripted \\u201cnews\\u201d';
+document.getElementById('p').textContent = 'you\\u2019ll';
+</script>
+</body></html>
+"""
+
 DELAY_LOCK = threading.Lock()
 DELAY_NOW = 0
 DELAY_MOST = 0
@@ -1275,6 +1290,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._send(TOGETHER_PAGE)
         elif path == "/sheets":
             self._send(SHEETS_PAGE)
+        elif path == "/folded":
+            self._send(FOLDED_PAGE)
         elif path.startswith("/delay/") and path.endswith(".css"):
             global DELAY_NOW, DELAY_MOST
             import time
