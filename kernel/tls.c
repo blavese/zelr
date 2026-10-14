@@ -46,9 +46,15 @@
 #define HS_CERT_VERIFY    15
 #define HS_FINISHED       20
 #define HS_KEY_UPDATE     24
+#define HS_MESSAGE_HASH   254
 
 #define SUITE_AES128_GCM_SHA256 0x1301
-#define GROUP_X25519 0x001d
+#define GROUP_X25519    0x001d
+#define GROUP_SECP256R1 0x0017
+
+/* The most of a cookie a server's request to start again may carry that is
+   kept to send back. RFC 8448's is 114 bytes. */
+#define COOKIE_MAX 1024
 
 /* The largest a record may be, plus what the encryption adds. */
 #define REC_MAX 16640
@@ -60,9 +66,22 @@ typedef struct {
     bool handshake_done;
     bool ended;
 
-    u8 priv[32], pub[32], peer_share[32];
+    u8 priv[32], pub[32];
     u8 client_random[32];
     u8 session_id[32];
+
+    /* The group whose share the hello being answered carried: x25519 first,
+       P-256 when the server asks for it (Microsoft's servers, Zillow's). */
+    u16 group;
+    u8 p256_priv[32], p256_pub[65];
+    u8 peer_share[65];
+    u32 peer_len;
+
+    /* A server may answer the first hello by asking for another: with a
+       group it can use, and perhaps a cookie to be sent back. Once. */
+    bool retried;
+    u8 cookie[COOKIE_MAX];
+    u32 cookie_len;
 
     sha256_t transcript;
 
@@ -546,11 +565,13 @@ static u32 build_client_hello(tls_t *z, u8 *out, u32 cap) {
     out[n++] = 2;
     put16(out + n, 0x0304); n += 2;
 
-    /* supported_groups */
+    /* supported_groups: x25519 first, and P-256, which a server that has no
+       x25519 asks for with a request to start again. */
     put16(out + n, 0x000a); n += 2;
+    put16(out + n, 6); n += 2;
     put16(out + n, 4); n += 2;
-    put16(out + n, 2); n += 2;
     put16(out + n, GROUP_X25519); n += 2;
+    put16(out + n, GROUP_SECP256R1); n += 2;
 
     /* signature_algorithms: what this can actually check. Advertising
        something unverifiable here means a server signs with it and the
@@ -570,13 +591,29 @@ static u32 build_client_hello(tls_t *z, u8 *out, u32 cap) {
     }
 
     /* key_share: the public half of a key agreed for this connection only,
-       sent with the first message so the whole thing takes one round trip. */
-    put16(out + n, 0x0033); n += 2;
-    put16(out + n, 32 + 6); n += 2;
-    put16(out + n, 32 + 4); n += 2;
-    put16(out + n, GROUP_X25519); n += 2;
-    put16(out + n, 32); n += 2;
-    memcpy(out + n, z->pub, 32); n += 32;
+       sent with the first message so the whole thing takes one round trip.
+       Only x25519's at first: a P-256 share costs a scalar multiplication
+       that nearly every server would throw away. */
+    {
+        const u8 *share = z->group == GROUP_SECP256R1 ? z->p256_pub : z->pub;
+        u32 klen = z->group == GROUP_SECP256R1 ? 65 : 32;
+        put16(out + n, 0x0033); n += 2;
+        put16(out + n, klen + 6); n += 2;
+        put16(out + n, klen + 4); n += 2;
+        put16(out + n, z->group); n += 2;
+        put16(out + n, klen); n += 2;
+        memcpy(out + n, share, klen); n += klen;
+    }
+
+    /* cookie: what the server's request to start again asked to be sent
+       back, unchanged. */
+    if (z->cookie_len) {
+        if (n + 6 + z->cookie_len > cap) return 0;
+        put16(out + n, 0x002c); n += 2;
+        put16(out + n, z->cookie_len + 2); n += 2;
+        put16(out + n, z->cookie_len); n += 2;
+        memcpy(out + n, z->cookie, z->cookie_len); n += z->cookie_len;
+    }
 
     put16(out + ext_len_at, n - ext_start);
     return n;
@@ -584,7 +621,12 @@ static u32 build_client_hello(tls_t *z, u8 *out, u32 cap) {
 
 /* --- reading the server hello --------------------------------------------- */
 
-static bool parse_server_hello(tls_t *z, const u8 *p, u32 len) {
+/* A server hello, or (*retry) a request to start again (RFC 8446 4.1.4): the
+   same message with a fixed value for its random, naming in its key share
+   only the group it wants and perhaps carrying a cookie. That group and
+   cookie are kept for the second hello; a real hello's share is kept for the
+   key. */
+static bool parse_server_hello(tls_t *z, const u8 *p, u32 len, bool *retry) {
     /* The value a server puts in the random field when it is not really a
        server hello but a request to start again with a different group. */
     static const u8 RETRY[32] = {
@@ -596,14 +638,17 @@ static bool parse_server_hello(tls_t *z, const u8 *p, u32 len) {
     if (len < 38) { refuse(z, "the server hello is too short", ALERT_DECODE_ERROR); return false; }
     u32 i = 2;                                  /* the legacy version */
 
-    if (memcmp(p + i, RETRY, 32) == 0) {
-        refuse(z, "the server wants a key exchange group this does not have", ALERT_ILLEGAL_PARAMETER);
-        return false;
-    }
+    *retry = memcmp(p + i, RETRY, 32) == 0;
     i += 32;
 
+    /* Our session id, given back: a server that answers with another is
+       answering some other hello. */
     u32 sid = p[i++];
     if (i + sid + 3 > len) { refuse(z, "the server hello is malformed", ALERT_DECODE_ERROR); return false; }
+    if (sid != 32 || memcmp(p + i, z->session_id, 32) != 0) {
+        refuse(z, "the server answered a hello this did not send", ALERT_ILLEGAL_PARAMETER);
+        return false;
+    }
     i += sid;
 
     u32 suite = ((u32)p[i] << 8) | p[i + 1]; i += 2;
@@ -618,6 +663,7 @@ static bool parse_server_hello(tls_t *z, const u8 *p, u32 len) {
     if (i + ext_len > len) { refuse(z, "the server hello is malformed", ALERT_DECODE_ERROR); return false; }
 
     bool got_version = false, got_share = false;
+    u16 wanted = 0;
     u32 end = i + ext_len;
     while (i + 4 <= end) {
         u32 kind = ((u32)p[i] << 8) | p[i + 1];
@@ -633,16 +679,31 @@ static bool parse_server_hello(tls_t *z, const u8 *p, u32 len) {
                 return false;
             }
             got_version = true;
+        } else if (kind == 0x0033 && *retry) {
+            /* Only the group it wants. */
+            if (n != 2) { refuse(z, "the request to start again is malformed", ALERT_DECODE_ERROR); return false; }
+            wanted = (u16)(((u32)p[i] << 8) | p[i + 1]);
+            got_share = true;
         } else if (kind == 0x0033) {
             if (n < 4) { refuse(z, "the key share is malformed", ALERT_DECODE_ERROR); return false; }
             u32 group = ((u32)p[i] << 8) | p[i + 1];
             u32 klen = ((u32)p[i + 2] << 8) | p[i + 3];
-            if (group != GROUP_X25519 || klen != 32 || n != klen + 4) {
+            u32 want_len = z->group == GROUP_SECP256R1 ? 65 : 32;
+            if (group != z->group || klen != want_len || n != klen + 4) {
                 refuse(z, "the server chose a key exchange this does not have", ALERT_ILLEGAL_PARAMETER);
                 return false;
             }
-            memcpy(z->peer_share, p + i + 4, 32);
+            memcpy(z->peer_share, p + i + 4, klen);
+            z->peer_len = klen;
             got_share = true;
+        } else if (kind == 0x002c && *retry) {
+            if (n < 3 || n != 2 + (((u32)p[i] << 8) | p[i + 1])) {
+                refuse(z, "the cookie is malformed", ALERT_DECODE_ERROR);
+                return false;
+            }
+            if (n - 2 > COOKIE_MAX) { refuse(z, "the server's cookie is too big to hold", ALERT_INTERNAL_ERROR); return false; }
+            memcpy(z->cookie, p + i + 2, n - 2);
+            z->cookie_len = n - 2;
         }
         i += n;
     }
@@ -653,8 +714,41 @@ static bool parse_server_hello(tls_t *z, const u8 *p, u32 len) {
         refuse(z, "the server did not agree to TLS 1.3", ALERT_PROTOCOL_VERSION);
         return false;
     }
+    if (*retry) {
+        /* It has to ask for something this can give, and not for what the
+           first hello already gave it; and it has to change something, or
+           the second hello would be the first again. */
+        if (got_share && wanted != GROUP_SECP256R1) {
+            refuse(z, wanted == z->group ? "the server asked for the key share it was sent"
+                                         : "the server wants a key exchange group this does not have",
+                   ALERT_ILLEGAL_PARAMETER);
+            return false;
+        }
+        if (!got_share && !z->cookie_len) {
+            refuse(z, "the server asked to start again and changed nothing", ALERT_ILLEGAL_PARAMETER);
+            return false;
+        }
+        if (got_share) z->group = wanted;
+        return true;
+    }
     if (!got_share) { refuse(z, "the server sent no key share", ALERT_MISSING_EXTENSION); return false; }
     return true;
+}
+
+/* The transcript once a server has asked to start again (RFC 8446 4.4.1):
+   the first hello stands in it as its hash, wrapped as a message of its own
+   kind, and the request follows. So both ends hash the same thing however
+   long the first hello was, and a server that keeps nothing between the two
+   (its cookie holds the hash) can rebuild it. */
+static void transcript_restart(sha256_t *t, const u8 *request, u32 request_len) {
+    u8 h1[32];
+    sha256_t copy = *t;
+    sha256_final(&copy, h1);
+    u8 head[4] = { HS_MESSAGE_HASH, 0, 0, 32 };
+    sha256_init(t);
+    sha256_update(t, head, 4);
+    sha256_update(t, h1, 32);
+    sha256_update(t, request, request_len);
 }
 
 /* --- what the server signs ------------------------------------------------ */
@@ -761,6 +855,34 @@ static bool alloc_buffers(tls_t *z) {
     return z->rec && z->hs && z->app && z->chain;
 }
 
+/* For the self test: the randomness a handshake would draw, fixed (client
+   random, session id, x25519 key, P-256 key: 128 bytes). */
+static const u8 *test_random;
+
+/* The hello, framed, into the transcript and out. */
+static bool send_client_hello(tls_t *z) {
+    u8 *hello = z->rec;
+    u32 hello_len = build_client_hello(z, hello + 4, REC_MAX - 4);
+    if (!hello_len) { fail(z, "could not build the greeting"); return false; }
+    hello[0] = HS_CLIENT_HELLO;
+    hello[1] = (u8)(hello_len >> 16);
+    hello[2] = (u8)(hello_len >> 8);
+    hello[3] = (u8)hello_len;
+
+    sha256_update(&z->transcript, hello, hello_len + 4);
+
+    /* Copied out because the record buffer is about to be reused. */
+    u8 *copy = (u8 *)kmalloc(hello_len + 4);
+    if (!copy) { fail(z, "not enough memory"); return false; }
+    memcpy(copy, hello, hello_len + 4);
+    bool sent = send_plain_record(z, REC_HANDSHAKE, copy, hello_len + 4);
+    kfree(copy);
+    if (!sent) { fail(z, "could not send the greeting"); return false; }
+    return true;
+}
+
+static bool connect_on(tls_t *z, const char *host);
+
 bool tls_connect(int tcp, const char *host) {
     tls_t *z = tls_of(tcp);
 
@@ -772,7 +894,10 @@ bool tls_connect(int tcp, const char *host) {
     z->tcp = tcp;
 
     if (!alloc_buffers(z)) { fail(z, "not enough memory for a connection"); return false; }
+    return connect_on(z, host);
+}
 
+static bool connect_on(tls_t *z, const char *host) {
     u32 i = 0;
     while (host[i] && i < sizeof(z->host) - 1) { z->host[i] = host[i]; i++; }
     z->host[i] = 0;
@@ -781,51 +906,65 @@ bool tls_connect(int tcp, const char *host) {
     /* Without unpredictable bytes there is no point continuing: the key
        would be one anybody could work out, and the connection would look
        exactly as good as a real one. */
-    if (!rng_ready()) {
+    if (!test_random && !rng_ready()) {
         fail(z, "this machine has no source of randomness, so no key can be made");
         return false;
     }
 
-    rng_bytes(z->priv, 32);
-    rng_bytes(z->client_random, 32);
-    rng_bytes(z->session_id, 32);
+    if (test_random) {
+        memcpy(z->client_random, test_random, 32);
+        memcpy(z->session_id, test_random + 32, 32);
+        memcpy(z->priv, test_random + 64, 32);
+    } else {
+        rng_bytes(z->priv, 32);
+        rng_bytes(z->client_random, 32);
+        rng_bytes(z->session_id, 32);
+    }
     x25519_public(z->priv, z->pub);
+    z->group = GROUP_X25519;
 
     sha256_init(&z->transcript);
 
     /* --- client hello --- */
-    u8 *hello = z->rec;
-    u32 hello_len = build_client_hello(z, hello + 4, REC_MAX - 4);
-    if (!hello_len) { fail(z, "could not build the greeting"); return false; }
-    hello[0] = HS_CLIENT_HELLO;
-    hello[1] = (u8)(hello_len >> 16);
-    hello[2] = (u8)(hello_len >> 8);
-    hello[3] = (u8)hello_len;
+    if (!send_client_hello(z)) return false;
 
-    sha256_update(&z->transcript, hello, hello_len + 4);
-
-    {
-        /* Copied out because the record buffer is about to be reused. */
-        u8 *copy = (u8 *)kmalloc(hello_len + 4);
-        if (!copy) { fail(z, "not enough memory"); return false; }
-        memcpy(copy, hello, hello_len + 4);
-        bool sent = send_plain_record(z, REC_HANDSHAKE, copy, hello_len + 4);
-        kfree(copy);
-        if (!sent) { fail(z, "could not send the greeting"); return false; }
-    }
-
-    /* --- server hello --- */
-    {
+    /* --- server hello, perhaps after a request to start again --- */
+    for (;;) {
         u8 type; const u8 *body, *whole; u32 len, whole_len;
+        bool retry;
         if (!hs_next(z, false, &type, &body, &len, &whole, &whole_len)) return false;
         if (type != HS_SERVER_HELLO) { refuse(z, "the server did not answer with a hello", ALERT_UNEXPECTED_MESSAGE); return false; }
-        if (!parse_server_hello(z, body, len)) return false;
-        sha256_update(&z->transcript, whole, whole_len);
+        if (!parse_server_hello(z, body, len, &retry)) return false;
+        if (!retry) {
+            sha256_update(&z->transcript, whole, whole_len);
+            break;
+        }
+        if (z->retried) {
+            refuse(z, "the server asked to start again twice", ALERT_UNEXPECTED_MESSAGE);
+            return false;
+        }
+        z->retried = true;
+        transcript_restart(&z->transcript, whole, whole_len);
+
+        /* A P-256 key, drawn until it is a scalar in range. */
+        if (z->group == GROUP_SECP256R1) {
+            bool made = false;
+            for (int tries = 0; tries < 16 && !made; tries++) {
+                if (test_random) memcpy(z->p256_priv, test_random + 96, 32);
+                else             rng_bytes(z->p256_priv, 32);
+                made = ec_public(EC_P256, z->p256_priv, 32, z->p256_pub);
+            }
+            if (!made) { refuse(z, "could not make a P-256 key", ALERT_INTERNAL_ERROR); return false; }
+        }
+        if (!send_client_hello(z)) return false;
     }
 
     /* --- the shared secret, and the keys for the rest of the handshake --- */
     u8 shared[32];
-    if (!x25519(z->priv, z->peer_share, shared)) {
+    bool agreed = z->group == GROUP_SECP256R1
+                    ? ec_agree(EC_P256, z->p256_priv, 32, z->peer_share, z->peer_len, shared)
+                    : x25519(z->priv, z->peer_share, shared);
+    if (!agreed) {
         refuse(z, "the server's key share is not usable", ALERT_ILLEGAL_PARAMETER);
         return false;
     }
@@ -1018,7 +1157,8 @@ bool tls_connect(int tcp, const char *host) {
     z->open = true;
     z->handshake_done = true;
     z->error[0] = 0;
-    kformat(z->described, sizeof(z->described), "TLS 1.3, x25519, aes-128-gcm");
+    kformat(z->described, sizeof(z->described), "TLS 1.3, %s, aes-128-gcm",
+            z->group == GROUP_SECP256R1 ? "p-256" : "x25519");
     memcpy(nowhere.described, z->described, sizeof(nowhere.described));
     bb_log("tls %s to %s", z->described, z->host);
     return true;
@@ -1241,6 +1381,40 @@ u32 tls_test_recv(const u8 s_app[32], const u8 c_app[32], const u8 *in, u32 in_l
     }
     scratch_end();
     return n;
+}
+
+bool tls_test_connect(const u8 random[128], const char *host, const u8 *in, u32 in_len,
+                      u8 *sent, u32 sent_cap, u32 *sent_len, char *why, u32 why_cap) {
+    bool ok = false;
+    *sent_len = 0;
+    why[0] = 0;
+    if (scratch_begin()) {
+        scratch.chain = (u8 *)kmalloc(HS_MAX);
+        if (scratch.chain) {
+            test_random = random;
+            test_in = in; test_in_len = in_len; test_in_pos = 0;
+            test_out = sent; test_out_len = 0; test_out_cap = sent_cap; test_writes = 0;
+            ok = connect_on(&scratch, host);
+            *sent_len = test_out_len;
+            u32 i = 0;
+            while (scratch.error[i] && i + 1 < why_cap) { why[i] = scratch.error[i]; i++; }
+            why[i] = 0;
+            test_random = 0;
+        }
+        if (scratch.chain) kfree(scratch.chain);
+    }
+    scratch_end();
+    return ok;
+}
+
+void tls_test_restart(const u8 *hello1, u32 len1, const u8 *request, u32 request_len,
+                      const u8 *rest, u32 rest_len, u8 out[32]) {
+    sha256_t t;
+    sha256_init(&t);
+    sha256_update(&t, hello1, len1);
+    transcript_restart(&t, request, request_len);
+    sha256_update(&t, rest, rest_len);
+    sha256_final(&t, out);
 }
 
 u32 tls_test_recv_split(const u8 s_app[32], const u8 *in, u32 first, u32 in_len,

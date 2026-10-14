@@ -15,7 +15,8 @@
  * out in turn, because there was nowhere to put a second.
  *
  * Only version 1.3 and only one cipher suite: AES-128-GCM with SHA-256,
- * which every server is required to implement, agreed over X25519. That is
+ * which every server is required to implement, agreed over X25519, or over
+ * P-256 when the server asks to start again with that. That is
  * a deliberate floor rather than a subset chosen for convenience. Older
  * versions of this protocol have a long history of being talked down into
  * by anybody in the middle, and the way that is prevented is by not
@@ -67,6 +68,17 @@ u32 tls_test_recv(const u8 s_app[32], const u8 c_app[32], const u8 *in, u32 in_l
    ended after it; the second's data is the answer. */
 u32 tls_test_recv_split(const u8 s_app[32], const u8 *in, u32 first, u32 in_len,
                         u8 *got, u32 got_cap, u32 *first_got, bool *ended_between);
+
+/* A handshake against `in` in place of a server, with its randomness fixed
+   (client random, session id, x25519 key, P-256 key): what it sent, and why it
+   stopped. True only if it finished. */
+bool tls_test_connect(const u8 random[128], const char *host, const u8 *in, u32 in_len,
+                      u8 *sent, u32 sent_cap, u32 *sent_len, char *why, u32 why_cap);
+
+/* The transcript hash over a first hello, a server's request to start again
+   and what follows, as a handshake that was asked to start again keeps it. */
+void tls_test_restart(const u8 *hello1, u32 len1, const u8 *request, u32 request_len,
+                      const u8 *rest, u32 rest_len, u8 out[32]);
 
 /* Whether anything at all is encrypted just now. A question about the
    machine rather than about one connection, which is what a self test

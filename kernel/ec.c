@@ -1,4 +1,4 @@
-/* ECDSA over P-256 and P-384.
+/* ECDSA over P-256 and P-384, and agreeing a key over either.
  *
  * Both curves have the same shape: y^2 = x^3 - 3x + b over a prime field,
  * with a group of prime order. Only the numbers differ, so there is one
@@ -126,13 +126,16 @@ static bool ge_mod(const u64 *a, const u64 *m, int n) {
     return true;
 }
 
+/* The carries go through 128 bit sums rather than comparisons joined with
+   || and |, which a compiler is free to turn into branches: a key agreement's
+   private scalar goes through these, and what it takes must not depend on
+   it. */
 static u64 sub_in_place(u64 *a, const u64 *b, int n) {
     u64 borrow = 0;
     for (int i = 0; i < n; i++) {
-        u64 x = a[i], y = b[i];
-        u64 d = x - y - borrow;
-        borrow = (x < y + borrow) || (borrow && y + borrow == 0);
-        a[i] = d;
+        u128 d = (u128)a[i] - b[i] - borrow;
+        a[i] = (u64)d;
+        borrow = (u64)(d >> 64) & 1;
     }
     return borrow;
 }
@@ -140,14 +143,21 @@ static u64 sub_in_place(u64 *a, const u64 *b, int n) {
 static u64 add_in_place(u64 *a, const u64 *b, int n) {
     u64 carry = 0;
     for (int i = 0; i < n; i++) {
-        u64 x = a[i];
-        u64 t = x + b[i];
-        u64 c1 = t < x;
-        u64 u = t + carry;
-        carry = c1 | (u < t);
-        a[i] = u;
+        u128 t = (u128)a[i] + b[i] + carry;
+        a[i] = (u64)t;
+        carry = (u64)(t >> 64);
     }
     return carry;
+}
+
+/* a less m, when a (with a carry out of its top limb) is at least m; else a.
+   Both are worked out and one is kept by a mask, for the same reason. */
+static void reduce_once(u64 *a, u64 carry, const u64 *m, int n) {
+    u64 t[MAXL];
+    for (int i = 0; i < n; i++) t[i] = a[i];
+    u64 borrow = sub_in_place(t, m, n);
+    u64 keep = 0 - ((carry | (borrow ^ 1)) & 1);
+    for (int i = 0; i < n; i++) a[i] = (t[i] & keep) | (a[i] & ~keep);
 }
 
 /* Both of these work in a local and copy out at the end, so the result may
@@ -158,14 +168,16 @@ static u64 add_in_place(u64 *a, const u64 *b, int n) {
 static void fe_add_mod(fe *out, const fe *a, const fe *b, const field_t *f) {
     fe t = *a;
     u64 carry = add_in_place(t.v, b->v, f->n);
-    if (carry || ge_mod(t.v, f->m, f->n)) sub_in_place(t.v, f->m, f->n);
+    reduce_once(t.v, carry, f->m, f->n);
     *out = t;
 }
 
 static void fe_sub_mod(fe *out, const fe *a, const fe *b, const field_t *f) {
     fe t = *a;
     u64 borrow = sub_in_place(t.v, b->v, f->n);
-    if (borrow) add_in_place(t.v, f->m, f->n);
+    u64 back[MAXL], mask = 0 - borrow;
+    for (int i = 0; i < f->n; i++) back[i] = f->m[i] & mask;
+    add_in_place(t.v, back, f->n);
     *out = t;
 }
 
@@ -221,7 +233,7 @@ static void mont_mul(fe *out, const fe *a, const fe *b, const field_t *f) {
 
     fe_zero(out);
     for (int i = 0; i < n; i++) out->v[i] = t[i];
-    if (t[n] || ge_mod(out->v, f->m, n)) sub_in_place(out->v, f->m, n);
+    reduce_once(out->v, t[n], f->m, n);
 }
 
 static void mont_sq(fe *out, const fe *a, const field_t *f) {
@@ -410,6 +422,27 @@ static bool pt_affine_x(fe *out, const point_t *p, const field_t *f) {
     return true;
 }
 
+static bool pt_affine_xy(fe *x, fe *y, const point_t *p, const field_t *f) {
+    if (pt_is_inf(p, f->n)) return false;
+    fe zi, zi2, zi3;
+    fe_inv(&zi, &p->z, f);
+    mont_sq(&zi2, &zi, f);
+    mont_mul(&zi3, &zi2, &zi, f);
+    mont_mul(x, &p->x, &zi2, f);
+    mont_mul(y, &p->y, &zi3, f);
+    return true;
+}
+
+/* b when take is one, a when it is nought, without a branch on which. */
+static void pt_select(point_t *out, const point_t *a, const point_t *b, u64 take) {
+    u64 m = 0 - (take & 1);
+    for (int i = 0; i < MAXL; i++) {
+        out->x.v[i] = (a->x.v[i] & ~m) | (b->x.v[i] & m);
+        out->y.v[i] = (a->y.v[i] & ~m) | (b->y.v[i] & m);
+        out->z.v[i] = (a->z.v[i] & ~m) | (b->z.v[i] & m);
+    }
+}
+
 /* --- curve setup --------------------------------------------------------- */
 
 static bool curve_setup(curve_t *c, ec_curve_t which) {
@@ -436,6 +469,38 @@ static bool curve_setup(curve_t *c, ec_curve_t which) {
     fe_from_bytes(&raw, gx, c->bytes); to_mont(&c->gx, &raw, &c->fp);
     fe_from_bytes(&raw, gy, c->bytes); to_mont(&c->gy, &raw, &c->fp);
     return true;
+}
+
+/* k*P for a k that must stay secret: the private half of a key agreement.
+ *
+ * pt_mul's loop adds only for the bits that are set, so how long it takes says
+ * how many are. Here every bit costs a doubling and an addition, and which of
+ * the two results is kept is chosen with a mask. And k + n or k + 2n stands in
+ * for k (the same point, since n times any point is the identity), whichever
+ * has its top bit just above the order's width: the loop then starts from P
+ * rather than from the identity, so how many of k's leading bits are nought,
+ * which a loop starting from nothing shows by how soon it has work to do,
+ * shows nowhere. pt_add's own exceptions (a doubling, the identity) are not
+ * reached by a scalar chosen at random. */
+static void pt_mul_secret(point_t *out, const fe *k, const point_t *p, const curve_t *c) {
+    const field_t *f = &c->fp;
+    int n = c->limbs;
+    u64 k1[MAXL + 1], k2[MAXL + 1], order[MAXL + 1];
+    for (int i = 0; i < n; i++) { k1[i] = k->v[i]; order[i] = c->fn.m[i]; }
+    k1[n] = 0; order[n] = 0;
+    add_in_place(k1, order, n + 1);
+    for (int i = 0; i <= n; i++) k2[i] = k1[i];
+    add_in_place(k2, order, n + 1);
+    u64 first = 0 - (k1[n] & 1);
+    for (int i = 0; i <= n; i++) k1[i] = (k1[i] & first) | (k2[i] & ~first);
+
+    point_t acc = *p, sum;
+    for (int i = n * 64 - 1; i >= 0; i--) {
+        pt_double(&acc, &acc, f);
+        pt_add(&sum, &acc, p, f);
+        pt_select(&acc, &acc, &sum, k1[i / 64] >> (i % 64));
+    }
+    *out = acc;
 }
 
 /* y^2 == x^3 - 3x + b. A key that is not a point on the curve is a known
@@ -551,6 +616,63 @@ bool ec_base_x(ec_curve_t curve, const u8 *k, u32 k_len, u8 *out_x) {
     fe scalar;
     fe_from_bytes(&scalar, k, c.bytes);
     pt_mul(&r, &scalar, &g, &c.fp);
+
+    fe xm, x;
+    if (!pt_affine_x(&xm, &r, &c.fp)) return false;
+    from_mont(&x, &xm, &c.fp);
+    fe_to_bytes(out_x, &x, c.bytes);
+    return true;
+}
+
+/* A private scalar from the caller's random bytes: between one and the
+   order, or false, and the caller draws again (for P-256, about one draw in
+   four thousand million). */
+static bool secret_scalar(const curve_t *c, const u8 *priv, u32 len, fe *k) {
+    if (len != c->bytes) return false;
+    fe_from_bytes(k, priv, c->bytes);
+    return !fe_is_zero(k, c->limbs) && !ge_mod(k->v, c->fn.m, c->limbs);
+}
+
+bool ec_public(ec_curve_t curve, const u8 *priv, u32 priv_len, u8 *pub) {
+    curve_t c;
+    fe k;
+    if (!curve_setup(&c, curve) || !secret_scalar(&c, priv, priv_len, &k)) return false;
+
+    point_t g, q;
+    g.x = c.gx; g.y = c.gy; g.z = c.fp.one;
+    pt_mul_secret(&q, &k, &g, &c);
+
+    fe xm, ym, x, y;
+    if (!pt_affine_xy(&xm, &ym, &q, &c.fp)) return false;
+    from_mont(&x, &xm, &c.fp);
+    from_mont(&y, &ym, &c.fp);
+    pub[0] = 0x04;
+    fe_to_bytes(pub + 1, &x, c.bytes);
+    fe_to_bytes(pub + 1 + c.bytes, &y, c.bytes);
+    return true;
+}
+
+bool ec_agree(ec_curve_t curve, const u8 *priv, u32 priv_len,
+              const u8 *peer, u32 peer_len, u8 *out_x) {
+    curve_t c;
+    fe k;
+    if (!curve_setup(&c, curve) || !secret_scalar(&c, priv, priv_len, &k)) return false;
+
+    /* The other side's point, checked for being one before anything is done
+       with it: a point off the curve, multiplied by our scalar, gives an
+       answer that tells whoever chose it something about the scalar. */
+    if (peer_len != 1 + 2 * c.bytes || peer[0] != 0x04) return false;
+    fe px_raw, py_raw, px, py;
+    fe_from_bytes(&px_raw, peer + 1, c.bytes);
+    fe_from_bytes(&py_raw, peer + 1 + c.bytes, c.bytes);
+    if (ge_mod(px_raw.v, c.fp.m, c.limbs) || ge_mod(py_raw.v, c.fp.m, c.limbs)) return false;
+    to_mont(&px, &px_raw, &c.fp);
+    to_mont(&py, &py_raw, &c.fp);
+    if (!on_curve(&c, &px, &py)) return false;
+
+    point_t p, r;
+    p.x = px; p.y = py; p.z = c.fp.one;
+    pt_mul_secret(&r, &k, &p, &c);
 
     fe xm, x;
     if (!pt_affine_x(&xm, &r, &c.fp)) return false;

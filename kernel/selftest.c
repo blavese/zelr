@@ -3676,6 +3676,203 @@ static int flight(const u8 *types, u32 n, const char **why) {
     return step;
 }
 
+/* --- a server that asks to start again ------------------------------------
+ *
+ * Microsoft's servers, Zillow's and others have no x25519, and answer a hello
+ * that offers it with a request to start again with P-256. RFC 8448 traces
+ * such a handshake from end to end; its messages are here, as it prints
+ * them, and the transcript, which treats the first hello differently once
+ * there has been a request, has to come out as the trace's. Then a
+ * handshake is run against the trace's server, its two messages giving back
+ * our session id, and what was sent and why it stopped are looked at. */
+/* RFC 8448 5's first ClientHello (180 bytes) */
+static const char HRR_CH1[] =
+    "010000b00303b0b1c5a5aa37c5919f2ed1d5c6fff7fcb7849716945a2b8cee92"
+    "58a346677b6f000006130113031302010000810000000b000900000673657276"
+    "6572ff01000100000a00080006001d00170018003300260024001d0020e8e8e3"
+    "f3b93a25ed97a14a7dcacb8a272c6288e585c6484d05262fcad062ad1f002b00"
+    "03020304000d0020001e04030503060302030804080508060401050106010201"
+    "0402050206020202002d00020101001c00024001";
+/* its HelloRetryRequest (176) */
+static const char HRR_REQUEST[] =
+    "020000ac0303cf21ad74e59a6111be1d8c021e65b891c2a211167abb8c5e079e"
+    "09e2c8a8339c001301000084003300020017002c0074007271dcd04bb88bc318"
+    "9119398a00000000eefafc76c146b823b096f8aacad365dd0030953f4edf6256"
+    "36e5f21bb2e23fcc654b1b5b40318d10d137abcbb87574e36e8a1f025f7dfa5d"
+    "6e50781b5eda4aa15b0c8be778257d16aa3030e9e7841dd9e4c0342267e8ca0c"
+    "af571fb2b7cff0f934b0002b00020304";
+/* its second ClientHello, less the 175 noughts it ends with (512) */
+static const char HRR_CH2[] =
+    "010001fc0303b0b1c5a5aa37c5919f2ed1d5c6fff7fcb7849716945a2b8cee92"
+    "58a346677b6f000006130113031302010001cd0000000b000900000673657276"
+    "6572ff01000100000a00080006001d001700180033004700450017004104a6da"
+    "7392ec591e17abfd535964b99894d13befb221b3def2ebe3830eac8f01518126"
+    "77c4d6d2237e85cf01d6910cfb83954e76ba7352830534159897e8065780002b"
+    "0003020304000d0020001e040305030603020308040805080604010501060102"
+    "010402050206020202002c0074007271dcd04bb88bc3189119398a00000000ee"
+    "fafc76c146b823b096f8aacad365dd0030953f4edf625636e5f21bb2e23fcc65"
+    "4b1b5b40318d10d137abcbb87574e36e8a1f025f7dfa5d6e50781b5eda4aa15b"
+    "0c8be778257d16aa3030e9e7841dd9e4c0342267e8ca0caf571fb2b7cff0f934"
+    "b0002d00020101001c00024001001500af";
+/* its ServerHello (123) */
+static const char HRR_SH[] =
+    "020000770303bb341d847fd789c47c387172dc0c9bf147fccacb5043d86ca4c5"
+    "98d3ff571b9800130100004f003300450017004104583e054b7a66672ae020ad"
+    "9d2686fcc85b5ad41a134a0f03ee72b893052bd85b4c8de6776f5b04ac07d835"
+    "40eab3e3d9c547bc6528c4317d294686093a6cad7d002b00020304";
+/* the request as a record, giving back a session id of 32 0x5a bytes */
+static const char HRR_REQUEST_REC[] =
+    "16030300d0020000cc0303cf21ad74e59a6111be1d8c021e65b891c2a211167a"
+    "bb8c5e079e09e2c8a8339c205a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a"
+    "5a5a5a5a5a5a5a5a5a5a5a5a1301000084003300020017002c0074007271dcd0"
+    "4bb88bc3189119398a00000000eefafc76c146b823b096f8aacad365dd003095"
+    "3f4edf625636e5f21bb2e23fcc654b1b5b40318d10d137abcbb87574e36e8a1f"
+    "025f7dfa5d6e50781b5eda4aa15b0c8be778257d16aa3030e9e7841dd9e4c034"
+    "2267e8ca0caf571fb2b7cff0f934b0002b00020304";
+/* and the hello after it */
+static const char HRR_SH_REC[] =
+    "160303009b020000970303bb341d847fd789c47c387172dc0c9bf147fccacb50"
+    "43d86ca4c598d3ff571b98205a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a"
+    "5a5a5a5a5a5a5a5a5a5a5a5a130100004f003300450017004104583e054b7a66"
+    "672ae020ad9d2686fcc85b5ad41a134a0f03ee72b893052bd85b4c8de6776f5b"
+    "04ac07d83540eab3e3d9c547bc6528c4317d294686093a6cad7d002b00020304";
+/* the cookie in the request */
+static const char HRR_COOKIE[] =
+    "71dcd04bb88bc3189119398a00000000eefafc76c146b823b096f8aacad365dd"
+    "0030953f4edf625636e5f21bb2e23fcc654b1b5b40318d10d137abcbb87574e3"
+    "6e8a1f025f7dfa5d6e50781b5eda4aa15b0c8be778257d16aa3030e9e7841dd9"
+    "e4c0342267e8ca0caf571fb2b7cff0f934b0";
+
+static u32 hex_into(const char *s, u8 *out) {
+    u32 n = (u32)strlen(s) / 2;
+    from_hex(s, out, n);
+    return n;
+}
+
+static int find_bytes(const u8 *hay, u32 n, const u8 *needle, u32 m) {
+    for (u32 i = 0; i + m <= n; i++)
+        if (memcmp(hay + i, needle, m) == 0) return (int)i;
+    return -1;
+}
+
+/* Sets the byte `off` past the first place pat appears. */
+static bool patch_after(u8 *buf, u32 n, const u8 *pat, u32 m, u32 off, u8 val) {
+    int at = find_bytes(buf, n, pat, m);
+    if (at < 0) return false;
+    buf[at + off] = val;
+    return true;
+}
+
+static u8 retry_random[128];
+static u8 retry_sent[2048];
+
+static bool retry_stops(const u8 *in, u32 n, const char *want) {
+    char why[128];
+    u32 sent_len = 0;
+    bool done = tls_test_connect(retry_random, "server", in, n, retry_sent, sizeof(retry_sent),
+                                 &sent_len, why, sizeof(why));
+    return !done && strcmp(why, want) == 0;
+}
+
+static void test_tls_retry(void) {
+    static u8 ch1[180], req[176], rest[512 + 123];
+    u8 out[32];
+    u32 n1 = hex_into(HRR_CH1, ch1), n2 = hex_into(HRR_REQUEST, req);
+    memset(rest, 0, sizeof(rest));
+    hex_into(HRR_CH2, rest);
+    hex_into(HRR_SH, rest + 512);
+    tls_test_restart(ch1, n1, req, n2, rest, sizeof(rest), out);
+    ok("the transcript after a request to start again is rfc 8448's",
+       n1 == 180 && n2 == 176 && is_hex(out, 32,
+       "8aa8e828ec2f8a884fec95a3139de01c15a3daa7ff5bfc3f4bfcc21b438d7bf8"));
+
+    /* The trace's client random, a session id of 0x5a bytes, and the trace's
+       x25519 and P-256 keys. */
+    from_hex("b0b1c5a5aa37c5919f2ed1d5c6fff7fcb7849716945a2b8cee9258a346677b6f", retry_random, 32);
+    memset(retry_random + 32, 0x5a, 32);
+    from_hex("0ed02f8e8117efc75ca7ac32aa7e34eda64cdc0ddad154a5e85289f959f63204", retry_random + 64, 32);
+    from_hex("ab5473467e19346ceb0a0414e41da21d4d2445bc3025afe97c4e8dc8d513da39", retry_random + 96, 32);
+
+    static u8 in[512], bad[1024];
+    u32 nreq = hex_into(HRR_REQUEST_REC, in);
+    u32 nin = nreq + hex_into(HRR_SH_REC, in + nreq);
+
+    /* Taken, its share agreed, and on to wait for the encrypted flight that
+       the test has no more of. */
+    ok("a request to start again with p-256 is answered, and the hello after it taken",
+       retry_stops(in, nin, "the connection stopped"));
+
+    u32 sent_len = 0;
+    char why[128];
+    tls_test_connect(retry_random, "server", in, nin, retry_sent, sizeof(retry_sent),
+                     &sent_len, why, sizeof(why));
+    const u8 *h1 = retry_sent;
+    u32 l1 = sent_len >= 5 ? (((u32)h1[3] << 8) | h1[4]) + 5 : 0;
+    const u8 *h2 = retry_sent + l1;
+    u32 l2 = sent_len >= l1 + 5 ? (((u32)h2[3] << 8) | h2[4]) + 5 : 0;
+
+    static const u8 groups[] = { 0x00,0x0a,0x00,0x06,0x00,0x04,0x00,0x1d,0x00,0x17 };
+    ok("the first hello offers x25519 and p-256",
+       l1 && find_bytes(h1, l1, groups, sizeof(groups)) > 0);
+    ok("asked, a second hello goes, with the same random and session id",
+       l1 && l2 && l1 + l2 == sent_len && h1[5] == 1 && h2[5] == 1 &&
+       memcmp(h1 + 11, h2 + 11, 65) == 0);
+
+    u8 share[75];
+    static const u8 share_head[10] = { 0x00,0x33,0x00,0x47,0x00,0x45,0x00,0x17,0x00,0x41 };
+    memcpy(share, share_head, 10);
+    from_hex("04a6da7392ec591e17abfd535964b99894d13befb221b3def2ebe3830eac8f01"
+             "51812677c4d6d2237e85cf01d6910cfb83954e76ba7352830534159897e8065780", share + 10, 65);
+    ok("carrying only the p-256 share of its key",
+       l2 && find_bytes(h2, l2, share, 75) > 0);
+
+    u8 cookie[6 + 114];
+    static const u8 cookie_head[6] = { 0x00,0x2c,0x00,0x74,0x00,0x72 };
+    memcpy(cookie, cookie_head, 6);
+    hex_into(HRR_COOKIE, cookie + 6);
+    ok("and the server's cookie, given back as it came",
+       l2 && find_bytes(h2, l2, cookie, sizeof(cookie)) > 0);
+
+    /* What is refused. */
+    static const u8 want_group[] = { 0x00,0x33,0x00,0x02,0x00 };
+    memcpy(bad, in, nin);
+    ok("a request for the share the first hello carried is refused",
+       patch_after(bad, nreq, want_group, sizeof(want_group), 5, 0x1d) &&
+       retry_stops(bad, nin, "the server asked for the key share it was sent"));
+    memcpy(bad, in, nin);
+    ok("and one for a group not offered",
+       patch_after(bad, nreq, want_group, sizeof(want_group), 5, 0x18) &&
+       retry_stops(bad, nin, "the server wants a key exchange group this does not have"));
+
+    memcpy(bad, in, nreq);
+    memcpy(bad + nreq, in, nreq);
+    ok("and a second request to start again",
+       retry_stops(bad, 2 * nreq, "the server asked to start again twice"));
+
+    static const u8 cookie_ext[] = { 0x00,0x2c,0x00,0x74 };
+    memcpy(bad, in, nin);
+    ok("and one that changes nothing, with neither a group nor a cookie",
+       patch_after(bad, nreq, want_group, 4, 0, 0xfa) &&
+       patch_after(bad, nreq, cookie_ext, 4, 0, 0xfa) &&
+       retry_stops(bad, nin, "the server asked to start again and changed nothing"));
+
+    static const u8 sh_share[] = { 0x00,0x33,0x00,0x45,0x00 };
+    memcpy(bad, in, nin);
+    ok("a hello after it with a share in another group is refused",
+       patch_after(bad + nreq, nin - nreq, sh_share, sizeof(sh_share), 5, 0x1d) &&
+       retry_stops(bad, nin, "the server chose a key exchange this does not have"));
+
+    memcpy(bad, in, nin);
+    bad[nreq + 5 + 4 + 2 + 32 + 1] ^= 1;
+    ok("and one giving back another session id",
+       retry_stops(bad, nin, "the server answered a hello this did not send"));
+
+    memcpy(bad, in, nin);
+    bad[nin - 7] ^= 1;
+    ok("and one whose p-256 share is not a point on the curve",
+       retry_stops(bad, nin, "the server's key share is not usable"));
+}
+
 static void test_tls_order(void) {
     enum { EXT = 8, CERT = 11, VERIFY = 15, FINISHED = 20 };
     const char *why = 0;
@@ -3936,6 +4133,62 @@ static void test_rsa(void) {
            !rsa_verify_pkcs1(&key, s, sizeof(s),
                              intermediate_signed_leaf_hash, 32));
     }
+}
+
+/* --- agreeing a key on P-256 ----------------------------------------------
+ *
+ * Against RFC 8448's trace of a handshake that was asked to start again with
+ * P-256: the client's key pair, and the secret it and the server's share
+ * make, which is the trace's input to its handshake secret. Each was worked
+ * out again apart from this code, in plain affine arithmetic. */
+static void test_p256_agree(void) {
+    u8 priv[32], pub[65], peer[65], shared[32], spriv[32], spub[65], back[32];
+    from_hex("ab5473467e19346ceb0a0414e41da21d4d2445bc3025afe97c4e8dc8d513da39", priv, 32);
+    ok("a p-256 key pair, rfc 8448's client's",
+       ec_public(EC_P256, priv, 32, pub) && is_hex(pub, 65,
+       "04a6da7392ec591e17abfd535964b99894d13befb221b3def2ebe3830eac8f01"
+       "51812677c4d6d2237e85cf01d6910cfb83954e76ba7352830534159897e8065780"));
+
+    from_hex("04583e054b7a66672ae020ad9d2686fcc85b5ad41a134a0f03ee72b893052bd8"
+             "5b4c8de6776f5b04ac07d83540eab3e3d9c547bc6528c4317d294686093a6cad7d", peer, 65);
+    ok("and the secret it agrees with the server's share",
+       ec_agree(EC_P256, priv, 32, peer, 65, shared) && is_hex(shared, 32,
+       "c142ce13ca11b5c2233652e63ad3d97844f1621fbfb9de69d547dc8fedeabeb4"));
+
+    from_hex("8c510601f9765bfb8ed693449a48989859b5cfa879cb9f5443c41c5ff10634ed", spriv, 32);
+    ok("the server's key makes its share, and the same secret from the client's",
+       ec_public(EC_P256, spriv, 32, spub) && memcmp(spub, peer, 65) == 0 &&
+       ec_agree(EC_P256, spriv, 32, pub, 65, back) && memcmp(back, shared, 32) == 0);
+
+    /* The ends of the range, where the stand-in for k (k + n, or k + 2n) is
+       nearest to going wrong: one gives the base point, and the order less
+       one its negative. */
+    memset(priv, 0, 32); priv[31] = 1;
+    ok("a private key of one has the base point for its share",
+       ec_public(EC_P256, priv, 32, pub) && is_hex(pub, 65,
+       "046b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c296"
+       "4fe342e2fe1a7f9b8ee7eb4a7c0f9e162bce33576b315ececbb6406837bf51f5"));
+    from_hex("ffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632550", priv, 32);
+    ok("and the order less one has its negative",
+       ec_public(EC_P256, priv, 32, pub) && is_hex(pub, 65,
+       "046b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c296"
+       "b01cbd1c01e58065711814b583f061e9d431cca994cea1313449bf97c840ae0a"));
+
+    memset(priv, 0, 32);
+    ok("a private key of nought makes no key", !ec_public(EC_P256, priv, 32, pub));
+    from_hex("ffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551", priv, 32);
+    ok("nor does the order itself", !ec_public(EC_P256, priv, 32, pub));
+
+    from_hex("ab5473467e19346ceb0a0414e41da21d4d2445bc3025afe97c4e8dc8d513da39", priv, 32);
+    peer[64] ^= 1;
+    ok("a share that is not a point on the curve is refused",
+       !ec_agree(EC_P256, priv, 32, peer, 65, shared));
+    peer[64] ^= 1;
+    peer[0] = 0x02;
+    ok("and so is one in the compressed form",
+       !ec_agree(EC_P256, priv, 32, peer, 33, shared) && !ec_agree(EC_P256, priv, 32, peer, 65, shared));
+    peer[0] = 0x04;
+    ok("and one cut short", !ec_agree(EC_P256, priv, 32, peer, 64, shared));
 }
 
 /* --- ECDSA on P-256, against a signature a real authority made -------- */
@@ -5893,12 +6146,13 @@ int selftest_run(void) {
     kprintf("[aes-gcm]\n");    test_gcm();
     kprintf("[x25519]\n");     test_x25519();
     kprintf("[rsa]\n");        test_rsa();
-    kprintf("[p-256]\n");      test_p256();
+    kprintf("[p-256]\n");      test_p256(); test_p256_agree();
     kprintf("[sha-512]\n");    test_sha512();
     kprintf("[p-384]\n");      test_p384();
     kprintf("[certificates]\n"); test_x509();
     kprintf("[randomness]\n"); test_rng(); test_rng_call();
     kprintf("[tls 1.3]\n");    test_tls_schedule(); test_tls(); test_tls_order(); test_tls_alerts();
+                               test_tls_retry();
     kprintf("[wpa]\n");        test_wpa();
     kprintf("[ccmp]\n");       test_ccmp();
     kprintf("[wireless]\n");   test_wlan();

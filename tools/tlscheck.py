@@ -40,12 +40,13 @@ from harness import Guest, Checks, build_once, ROOT              # noqa: E402
 
 DISK = os.path.join(ROOT, "tlscheck.%d.img" % os.getpid())
 
-# Name, and what the answer has to contain to count as that site answering
-# rather than as something in the middle answering for it.
+# Name, what the answer has to contain to count as that site answering
+# rather than as something in the middle answering for it, and the group the
+# key was agreed in.
 SITES = [
-    ("www.google.com", "<title>Google</title>"),
-    ("example.com", "Example Domain"),
-    ("wikipedia.org", None),          # answers with a redirect, which is fine
+    ("www.google.com", "<title>Google</title>", "x25519"),
+    ("example.com", "Example Domain", "x25519"),
+    ("wikipedia.org", None, "x25519"),    # answers with a redirect, which is fine
 
     # These two are here because each of them was once refused, and for a
     # different reason, and both reasons looked identical from the outside:
@@ -57,8 +58,14 @@ SITES = [
     # self-signed with SHA-1, and verifying that self-signature is both
     # impossible here and pointless: a root signs itself, which proves
     # nothing. The store's copy is the one to believe.
-    ("www.bbc.co.uk", None),
-    ("archive.org", None),
+    ("www.bbc.co.uk", None, "x25519"),
+    ("archive.org", None, "x25519"),
+
+    # Microsoft's servers have no x25519: they answer a hello offering it
+    # with a request to start again with P-256, which was refused, so Office,
+    # Outlook and their sign-in could not be reached at all. (www.office.com
+    # answers / with a redirect and no body; this one says where to go.)
+    ("login.microsoftonline.com", None, "p-256"),
 ]
 
 
@@ -112,7 +119,7 @@ def main():
         vm.wait_boot()
         vm.run("dhcp", timeout=30)
 
-        for host, marker in SITES:
+        for host, marker, group in SITES:
             if not resolved(vm, host):
                 c.add("%s resolves, so there is something to connect to"
                       % host, False)
@@ -123,7 +130,7 @@ def main():
             out = fetch(vm, host)
             got = status_of(out)
 
-            ok = "TLS 1.3, x25519, aes-128-gcm" in out
+            ok = "TLS 1.3, %s, aes-128-gcm" % group in out
             c.add("%s completes a handshake" % host, ok)
             c.add("and answers", got is not None)
             if not ok or got is None:
