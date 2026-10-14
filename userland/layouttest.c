@@ -1967,6 +1967,8 @@ int main(void) {
         ok("and what is in it is its text, not elements",
            by_id("ns") < 0 && kid >= 0 && doc.nodes[kid].kind == DN_TEXT
            && doc.nodes[kid].text >= 0 && doc.arena[doc.nodes[kid].text] == '<');
+        lay("<style>.alert { display: block; padding: 8px }</style><noscript class=alert><h2>needs scripts</h2></noscript><p>shown</p>", 600);
+        ok("and a noscript the page's rules give a display is still not drawn", !word("scripts</h2>") && !word("needs") && word("shown"));
     }
 
     /* --- a transform's share is of the box ------------------------------------------

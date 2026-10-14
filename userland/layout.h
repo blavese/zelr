@@ -1202,6 +1202,13 @@ static inline void lay_style(lctx *L, int el, const cstyle *parent,
         for (int k = 0; k < L->inl[el].n; k++)
             lay_apply_decl(L, &L->s->decls[L->inl[el].at + k], out, pct_of);
 
+    /* What is inside noscript is for a browser that runs no scripts, and
+       this one runs them, so it is never drawn whatever the page's rules
+       say, as a browser that runs scripts never draws it. The browser's own
+       rule hid it until a page's sheet gave it a display: PeerTube's is an
+       alert box, and its markup, raw text here, was drawn tags and all. */
+    if (el >= 0 && L->d->nodes[el].kind == DN_ELEMENT && L->d->nodes[el].tag == T_NOSCRIPT) out->display = D_NONE;
+
     /* display: contents is an element with no box: its children are laid
        out as though they were its parent's (a flex row or a grid takes
        them as its own items, lay_items), and nothing of a box -- margins,
