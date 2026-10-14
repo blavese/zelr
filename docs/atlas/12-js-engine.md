@@ -2,7 +2,12 @@
 
 Source root the repository root (github.com/blavese/zelr main, 2026-09-22). All paths are relative to it; `file:N` means 1-based line N. Everything below was verified by reading the code. Where a behaviour was derived by tracing (not by running) it says so. Nothing here was built or run.
 
-**Since 0.121.0** (the rest of this file is older; trust the code):
+**Since 0.124.0** (the rest of this file is older; trust the code):
+- **A template's contents are copied inside `jd_clone`** for any deep copy (cloneNode, importNode, a template inside
+  copied contents), not in cloneNode alone: the web components loader asks whether a nested template keeps its
+  contents (an old Edge did not) and loaded every polyfill when it did not.
+
+**Since 0.121.0**:
 - **crypto.subtle** (jscrypto.h, set up from jswin.h `jd_setup_crypto` on secure pages): digest (SHA-1 from wsock.h,
   SHA-256/384/512 written from FIPS 180-4) through a promise; encrypt, sign, importKey and the rest reject with
   NotSupportedError. Not in workers.

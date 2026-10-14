@@ -1,6 +1,12 @@
 # 11 -- The web browser (everything except JS-engine internals and image decoders)
 
-**Since 0.123.0** (the rest of this file is older; trust the code and the README's "since 6048716" list):
+**Since 0.124.0** (the rest of this file is older; trust the code and the README's "since 6048716" list):
+- **dom.h reads `<?...>` and a `<!` that starts no comment or doctype as a comment** (HTML's bogus comment, the `?`
+  kept): Lit finds where a template's values go by comments `?lit$...$`, and with none every value was lost.
+- **A close tag's name ends at any white space or `/`**, not only a space: Lit writes `</a` + newline + `>`.
+- With jsdom.h's template copy (12), archive.org's front page draws (179 items, where there was one).
+
+**Since 0.123.0**:
 - **A player from another site is a box that opens it.** The browser's rules no longer hide `iframe`; layout.h
   counts it with video and canvas (`lay_painted`) and `lay_video` lays it out only when `lay_frame_player` says its
   address names an embed or a player (a host starting `player.`/`embed.`, `w.soundcloud.`, `www.youtube-nocookie.`,

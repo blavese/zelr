@@ -95,6 +95,12 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.124.0
+
+- **A template's deep copy brings a nested template's contents (12)**, **`<?...>` read as a comment (11)**, **a close
+  tag's name ending at any white space (11)**: archive.org's front page draws. Pagetest 354, layouttest 306, each
+  failing on a build without its change.
+
 ### 0.123.0
 
 - **A player from another site drawn as a box that opens it (11)**: frames whose address names an embed or a player,
