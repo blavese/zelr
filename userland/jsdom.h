@@ -6266,6 +6266,7 @@ static void jd_consts(jctx *J, jobj *on, const char *const *names, int from);
 #include "jsmod.h"
 #include "jsworker.h"
 #include "jsws.h"
+#include "jscrypto.h"
 #include "jsframe.h"
 #include "jsmedia.h"
 #include "jscanvas.h"

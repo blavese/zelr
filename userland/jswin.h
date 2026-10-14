@@ -1485,8 +1485,7 @@ static jval nat_bc_close(jctx *J, jval t, jval *a, int n) {
  * Nothing here makes up for it: when the kernel has found no source of
  * randomness yet it says so, and so does this, with an OperationError,
  * rather than hand a page numbers somebody could guess. crypto.subtle is
- * not here: this browser has no SubtleCrypto, and a page that looks for it
- * finds nothing rather than something that pretends. */
+ * jscrypto.h's: digest, and every other method refused by name. */
 
 static int (*jd_random)(void *buf, int len);
 
@@ -1547,8 +1546,11 @@ static jval nat_crypto_uuid(jctx *J, jval t, jval *a, int n) {
     return jd_str(s);
 }
 
+static void jd_setup_subtle(jctx *J, jobj *crypto_proto);
+
 static void jd_setup_crypto(jctx *J, jscope *g, int secure) {
     jobj *cp = jd_interface(J, "Crypto", 0, 0, 0);
+    if (secure) jd_setup_subtle(J, cp);          /* jscrypto.h */
     jd_method(J, cp, "getRandomValues", nat_crypto_values, 1);
     /* Only on a page that came over an encrypted connection, as the
        standard has it; getRandomValues is for every page. */

@@ -1667,6 +1667,35 @@ int main(void) {
         jsdom_fetch_with(0);
         jsdom_at(was_at);
     }
+    {
+        /* crypto.subtle on a page that came encrypted: digest against FIPS
+           180's answers (worked out again with Python's hashlib), at the
+           lengths where the padding takes another block, and the rest
+           refused by name; on a page that did not, no subtle at all. */
+        static char was_c[sizeof(jd_address)];
+        w_copy(was_c, (int)sizeof(was_c), jd_address, (int)sizeof(was_c));
+        jsdom_at("https://site.test/");
+        oks("crypto.subtle digests as FIPS 180 has it, and refuses what it does not do by name",
+            titled("<script>var hex = function (b) { return Array.from(new Uint8Array(b)).map(function (x) {"
+                   " return (x < 16 ? '0' : '') + x.toString(16); }).join(''); };"
+                   "var e = new TextEncoder(), a = function (n) { return e.encode('a'.repeat(n)); };"
+                   "Promise.all([crypto.subtle.digest('SHA-1', e.encode('abc')), crypto.subtle.digest('SHA-256', e.encode('abc')),"
+                   " crypto.subtle.digest({ name: 'SHA-384' }, e.encode('abc')), crypto.subtle.digest('SHA-512', e.encode('abc').buffer),"
+                   " crypto.subtle.digest('SHA-256', a(55)), crypto.subtle.digest('SHA-256', a(56)),"
+                   " crypto.subtle.digest('SHA-512', a(111)), crypto.subtle.digest('SHA-512', new DataView(a(112).buffer))])"
+                   ".then(function (r) { var out = r.map(function (b) { return hex(b).length / 2 + ':' + hex(b).slice(0, 16); });"
+                   " return crypto.subtle.digest('MD5', e.encode('x')).catch(function (x) { out.push(x.name); }).then(function () {"
+                   " return crypto.subtle.importKey('raw', e.encode('k'), 'AES-GCM', false, ['encrypt']).catch(function (x) { out.push(x.name); });"
+                   " }).then(function () { document.title = out.join(' '); }); });</script>"),
+            "20:a9993e364706816a 32:ba7816bf8f01cfea 48:cb00753f45a35e8b 64:ddaf35a193617aba"
+            " 32:9f4390f8d30c2dd9 32:b35439a4ac6f0948 64:fa9121c7b32b9e01 64:c01d080efd492776"
+            " NotSupportedError NotSupportedError");
+        jsdom_at("http://site.test/");
+        oks("and a page that did not come encrypted has no crypto.subtle",
+            titled("<script>document.title = typeof crypto.subtle + ' ' + typeof crypto.getRandomValues;</script>"),
+            "undefined function");
+        jsdom_at(was_c);
+    }
     oks("document.write while the page is read puts its markup after the script",
         titled("<body><div id=d><script>document.write('<b id=w>written</b>');</script><i>after</i></div>"
                "<script>var d = document.getElementById('d');"
@@ -2817,7 +2846,7 @@ int main(void) {
                    "for (var i = 0; i < 64; i++) { if (a[i]) zero = false; if (b8[i] !== a[i]) same = false; }"
                    "document.title = [r === a, zero, same, typeof crypto.subtle, crypto instanceof Crypto].join(' ');"
                    "</script>"),
-            "true false false undefined true");
+            "true false false object true");
         oks("and refuses what the standard refuses",
             titled("<script>var e1 = '', e2 = '';"
                    "try { crypto.getRandomValues(new Float64Array(2)); } catch (e) { e1 = e.name; }"
