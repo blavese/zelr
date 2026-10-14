@@ -529,9 +529,14 @@ int main(void) {
         ran++;
         jctx J;
         js_init(&J);
-        J.time_cap = 6000;          /* the count is what is asked about, on however slow a machine */
+        /* The count is what is asked about, on however slow a machine: the
+           loop took most of the minute it had under QEMU, and twice in a row
+           did not finish inside it. */
+        J.time_cap = 9000;
         const char *src = "var s = 0; for (var i = 0; i < 16000000; i++) s += i & 1; result = s;";
+        int t1 = ticks();
         int ok = js_run(&J, src, (u32)strlen(src));
+        int long_took = ticks() - t1;
         jval got = js_get(&J, js_from_obj(J.global_obj), js_str(&J, "result"));
         int whole = ok && got.t == JS_NUM && got.num == 8000000;
         js_done(&J);
@@ -544,18 +549,27 @@ int main(void) {
         js_done(&J);
         puts(whole && in_time ? "  PASS  " : "  FAIL  ");
         puts("a long run finishes, and one that never ends is stopped when its time is up");
-        putc('\n');
+        /* On the same line, which is the one a harness shows of a failure. */
         if (!(whole && in_time)) {
             failed++;
-            puts("          finished ");
-            puts(whole ? "yes" : "no");
-            puts(", stopped after ");
-            char b[12]; int k = 0, v = took < 0 ? 0 : took; char t[12];
-            do { t[k++] = (char)('0' + v % 10); v /= 10; } while (v && k < 11);
-            int w = 0; while (k) b[w++] = t[--k]; b[w] = 0;
-            puts(b);
-            puts(" ticks\n");
+            int vals[2] = { long_took < 0 ? 0 : long_took, took < 0 ? 0 : took };
+            const char *say[3] = { " (the long run ", whole ? "finished" : "did not finish", 0 };
+            puts(say[0]);
+            puts(say[1]);
+            for (int q = 0; q < 2; q++) {
+                puts(q ? ", the endless one stopped after " : " in ");
+                char b[12], t[12];
+                int k = 0, v = vals[q];
+                do { t[k++] = (char)('0' + v % 10); v /= 10; } while (v && k < 11);
+                int w = 0;
+                while (k) b[w++] = t[--k];
+                b[w] = 0;
+                puts(b);
+                puts(" ticks");
+            }
+            puts(")");
         }
+        putc('\n');
     }
 
     /* --- regular expressions -------------------------------------------
