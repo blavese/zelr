@@ -444,6 +444,21 @@ static inline int dom_raw(int t) {
         || t == T_NOSCRIPT;
 }
 
+/* The elements with no end tag that have no tag number of their own (the
+   ones that do are html.h html_void's). Read as containers, each took in
+   everything after it up to its parent's end: a <base> took the rest of the
+   head -- PeerTube's stylesheet links among it, which a script's outerHTML
+   then left out -- and a <source> took the <img> after it in a <picture>. */
+static inline int dom_void_name(const char *name) {
+    static const char *const V[] = { "area", "base", "col", "embed", "param", "source", "track", "wbr", "keygen", 0 };
+    for (int i = 0; V[i]; i++) {
+        const char *a = V[i], *b = name;
+        while (*a && *a == *b) { a++; b++; }
+        if (!*a && !*b) return 1;
+    }
+    return 0;
+}
+
 /* Whether there is anything to read in here: a text node with a character
    in it that is not a space, somewhere under the body, not counting the
    elements whose contents are not text at all. Asked when a layout produced
@@ -740,7 +755,8 @@ static inline void dom_parse_into(ddoc *d, const char *p, int len, int parent) {
                 i = end;
                 while (i < len && p[i] != '>') i++;
                 i++;
-            } else if (!html_void(tag) && !self_closed) {
+            } else if (!html_void(tag) && !self_closed
+                       && !(tag == T_OTHER && name_at >= 0 && dom_void_name(d->arena + name_at))) {
                 dp_push(&z, el);
             }
         }

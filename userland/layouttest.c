@@ -1967,6 +1967,13 @@ int main(void) {
         ok("and what is in it is its text, not elements",
            by_id("ns") < 0 && kid >= 0 && doc.nodes[kid].kind == DN_TEXT
            && doc.nodes[kid].text >= 0 && doc.arena[doc.nodes[kid].text] == '<');
+        lay("<html><head><base href=\"/x/\"><title>t</title><link id=l1 rel=stylesheet href=a.css></head>"
+            "<body><picture id=pc><source srcset=a.webp><img id=pi src=a.png></picture><p id=pw>one<wbr>two</p></body></html>", 600);
+        int l1 = by_id("l1"), pi = by_id("pi"), pc = by_id("pc"), pw = by_id("pw");
+        int last = pw >= 0 ? doc.nodes[pw].last : -1;
+        ok("a base, a source and a wbr hold nothing: what follows each is beside it",
+           l1 >= 0 && doc.nodes[l1].parent == doc.head && pi >= 0 && doc.nodes[pi].parent == pc
+           && last >= 0 && doc.nodes[last].kind == DN_TEXT && w_same(doc.arena + doc.nodes[last].text, "two"));
         lay("<style>.alert { display: block; padding: 8px }</style><noscript class=alert><h2>needs scripts</h2></noscript><p>shown</p>", 600);
         ok("and a noscript the page's rules give a display is still not drawn", !word("scripts</h2>") && !word("needs") && word("shown"));
     }
