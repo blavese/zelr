@@ -25,3 +25,8 @@ u32  ens_position(void);
 u32  ens_rate(void);
 u32  ens_channels(void);
 u32  ens_frame_bytes(void);
+
+/* For the self test: the ES1371's start-up and a rate for its second
+   playback channel, against a chip io simulates (each port read or write,
+   by register), and the codec's vendor words it read. */
+void ens_test_1371(u32 (*io)(u16 reg, u32 v, bool write), u32 hz, u32 *codec);

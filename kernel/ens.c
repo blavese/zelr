@@ -86,9 +86,9 @@
 #define FMT_16_STEREO     3u
 
 /* The ES1371's AC97 port */
-#define CODEC_RDY   (1u << 31)
+#define CODEC_RDY   (1u << 31)    /* what was asked for to read has come */
 #define CODEC_WIP   (1u << 30)
-#define CODEC_PIRD  (1u << 23)
+#define CODEC_PIRD  (1u << 23)    /* this is a read */
 
 /* The ES1371's sample rate converter */
 #define SRC_ADDR(o)   (((o) & 0x7Fu) << 25)
@@ -99,6 +99,14 @@
 #define SRC_DIS_P2    (1u << 20)
 #define SRC_DIS_R1    (1u << 19)
 #define SRC_DATA(o)   ((o) & 0xFFFFu)
+#define SRC_DIS_ALL   (SRC_DISABLE | SRC_DIS_P1 | SRC_DIS_P2 | SRC_DIS_R1)
+/* Where the converter is in its cycle, shown in the busy bit and three
+   below it only while a write has asked for it with SRC_SHOW. The first
+   state is the one in which the AC97 link and the converter's file are free
+   to use. */
+#define SRC_SHOW      (1u << 16)
+#define SRC_STATE     0x00870000u
+#define SRC_STATE_FREE 0x00010000u
 
 /* Its register file, sixteen bits a word. */
 #define SMP_DAC1        0x70
@@ -129,8 +137,17 @@ const char *ens_describe(void) { return present ? described : "none"; }
 static u32 ctl_shadow;
 static u32 ser_shadow;
 
-static void reg_write(u16 reg, u32 v) { outl((u16)(io_base + reg), v); }
-static u32  reg_read(u16 reg)         { return inl((u16)(io_base + reg)); }
+/* For the self test: a chip simulated in software, answering in place of
+   the ports (ens_test_1371). */
+static u32 (*test_io)(u16 reg, u32 v, bool write);
+
+static void reg_write(u16 reg, u32 v) {
+    if (test_io) test_io(reg, v, true);
+    else outl((u16)(io_base + reg), v);
+}
+static u32 reg_read(u16 reg) {
+    return test_io ? test_io(reg, 0, false) : inl((u16)(io_base + reg));
+}
 
 /* A delay measured on the one clock that exists before any driver has set
    anything up. Bit four of port 0x61 toggles every 15.085 microseconds on
@@ -164,10 +181,19 @@ static void src_write(u16 reg, u16 data) {
     reg_write(REG_1371_SRC, r | SRC_WE);
 }
 
+/* A word of the file comes back in the low half once the converter is in
+   its free state, which shows only when the address is written asking for
+   it; the address is then written again without, to stop showing it. */
+#define CODEC_SETTLE 4000u
+
 static u16 src_read(u16 reg) {
-    u32 r = src_wait() & (SRC_DISABLE | SRC_DIS_P1 | SRC_DIS_P2 | SRC_DIS_R1);
-    reg_write(REG_1371_SRC, r | SRC_ADDR(reg));
-    return (u16)(src_wait() & 0xFFFF);
+    u32 keep = src_wait() & SRC_DIS_ALL;
+    reg_write(REG_1371_SRC, keep | SRC_ADDR(reg) | SRC_SHOW);
+    u32 r = src_wait();
+    for (u32 i = 0; i < CODEC_SETTLE && (r & SRC_STATE) != SRC_STATE_FREE; i++)
+        r = reg_read(REG_1371_SRC);
+    reg_write(REG_1371_SRC, keep | SRC_ADDR(reg));
+    return (u16)(r & 0xFFFF);
 }
 
 /* The playback rate, as the converter wants it: the ratio against the 3 kHz
@@ -212,7 +238,12 @@ static void src_dac1_rate(u32 hz) {
  * enabled with rubbish in its accumulators: the busy bit sticks high and
  * nothing short of power clears it. So the file is zeroed, the four numbers
  * that have to be right are written, and only then is the disable bit
- * dropped. */
+ * dropped.
+ *
+ * The recording channel was switched on with it, its numbers left at the
+ * zeroes just written -- the very thing the part does not survive. Nothing
+ * here records, so it stays off (SRC_DIS_R1), carried through every write
+ * after as the other bits are. */
 static void src_init(void) {
     src_wait();
     reg_write(REG_1371_SRC, SRC_DISABLE);
@@ -238,7 +269,7 @@ static void src_init(void) {
     src_dac2_rate(rate);
 
     src_wait();
-    reg_write(REG_1371_SRC, 0);
+    reg_write(REG_1371_SRC, SRC_DIS_R1);
 }
 
 /* AC97, through a port that is busy for a while after each write and that
@@ -246,28 +277,104 @@ static void src_init(void) {
    converter is not itself using the link.
  *
  * The two short waits are that point: past whatever state the converter was
- * in, and then into the first one, which is where the window is. They are
+ * in, and then into the first one, which is where the window is. The state
+ * shows only once a write to the converter has asked for it (SRC_SHOW), and
+ * nothing asked: both waits ran out every time on a part that shows it only
+ * when asked, and every mixer write went at a moment of chance. They are
  * bounded far more tightly than the wait for the port itself, because on
  * hardware they are satisfied within a few microseconds and on something
  * that does not model the converter's state at all they are never satisfied
  * at all -- and five registers times a hundred thousand port reads, each one
  * a trip out of the virtual machine, is a second of boot spent waiting for
  * something that is not coming. Missing the window costs a mixer register;
- * spinning for it costs the boot. */
-#define CODEC_SETTLE 4000u
+ * spinning for it costs the boot. Returns the converter's switches, to be
+ * put back once the codec has its word. */
+static u32 codec_window(void) {
+    u32 keep = src_wait() & SRC_DIS_ALL;
+    reg_write(REG_1371_SRC, keep | SRC_SHOW);
+    for (u32 i = 0; i < CODEC_SETTLE; i++)
+        if ((reg_read(REG_1371_SRC) & SRC_STATE) == 0) break;
+    for (u32 i = 0; i < CODEC_SETTLE; i++)
+        if ((reg_read(REG_1371_SRC) & SRC_STATE) == SRC_STATE_FREE) break;
+    return keep;
+}
+
+static void codec_window_close(u32 keep) {
+    src_wait();
+    reg_write(REG_1371_SRC, keep);
+}
 
 static void ac97_write(u16 reg, u16 val) {
     for (u32 t = 0; t < POLL; t++) {
         if (reg_read(REG_1371_CODEC) & CODEC_WIP) continue;
-
-        for (u32 i = 0; i < CODEC_SETTLE; i++)
-            if ((reg_read(REG_1371_SRC) & 0x00870000u) == 0) break;
-        for (u32 i = 0; i < CODEC_SETTLE; i++)
-            if ((reg_read(REG_1371_SRC) & 0x00870000u) == 0x00010000u) break;
-
+        u32 keep = codec_window();
         reg_write(REG_1371_CODEC, ((u32)(reg & 0x7F) << 16) | val);
+        codec_window_close(keep);
         return;
     }
+}
+
+/* A codec register, asked for in the same window and then waited for: the
+   port is busy while the codec answers and says when the answer has come.
+   False when it never does, as from a part with no codec behind it. */
+#define CODEC_ANSWER 20000u
+
+static bool ac97_read(u16 reg, u16 *val) {
+    for (u32 t = 0; t < POLL; t++) {
+        if (reg_read(REG_1371_CODEC) & CODEC_WIP) continue;
+        u32 keep = codec_window();
+        reg_write(REG_1371_CODEC, ((u32)(reg & 0x7F) << 16) | CODEC_PIRD);
+        codec_window_close(keep);
+        for (u32 i = 0; i < CODEC_ANSWER; i++) {
+            u32 r = reg_read(REG_1371_CODEC);
+            if (!(r & CODEC_WIP) && (r & CODEC_RDY)) { *val = (u16)r; return true; }
+        }
+        return false;
+    }
+    return false;
+}
+
+static u32 codec_id;        /* the codec's vendor words, for the log */
+static u16 codec_sections;  /* its sections that say they are ready */
+
+/* The ES1371's front end: the link to the codec started, the converter set
+   up and switched on, and the codec reset, waited for and opened. */
+static void init_1371(void) {
+    /* The crystal on, the PCI clock left alone, and a warm reset of the
+       link to the codec so that it starts from a state this knows. */
+    ctl_shadow = 0;
+    reg_write(REG_CONTROL, ctl_shadow);
+    udelay(20);
+    reg_write(REG_CONTROL, ctl_shadow | CTRL_1371_SYNC_RES);
+    udelay(20);
+    reg_write(REG_CONTROL, ctl_shadow);
+    udelay(500);
+
+    src_init();
+
+    /* Reset, then the powerdown register's low four bits -- converters,
+       mixer, reference -- until they say ready, for a tenth of a second at
+       most. The wait was for CODEC_RDY, which says a read has been answered
+       and with no read asked for never comes: a hundred thousand port reads
+       of nothing on every boot. A codec that does not answer at all is still
+       written to: one that ignores the writes costs nothing, and one that is
+       there but does not model the answer is still a codec, left however it
+       was found if nobody opens it. Muted is an ordinary way to find one. */
+    ac97_write(0x00, 0);
+    codec_sections = 0;
+    for (u32 t = 0; t < 100; t++) {
+        if (!ac97_read(0x26, &codec_sections)) break;
+        if ((codec_sections & 0x0F) == 0x0F) break;
+        udelay(1000);
+    }
+    ac97_write(0x26, 0x0000);           /* out of power down */
+    ac97_write(0x02, 0x0000);           /* master, loudest, not muted */
+    ac97_write(0x04, 0x0000);           /* headphone, the same */
+    ac97_write(0x06, 0x0000);           /* and mono out */
+    ac97_write(0x18, 0x0808);           /* pcm out at unity */
+
+    u16 hi = 0, lo = 0;
+    codec_id = ac97_read(0x7C, &hi) && ac97_read(0x7E, &lo) ? ((u32)hi << 16) | lo : 0;
 }
 
 /* --- the ES1370's front end ---------------------------------------------- */
@@ -410,44 +517,9 @@ bool ens_init(void) {
     reg_write(REG_LEGACY, 0);
 
     if (is_1371) {
-        /* The crystal on, the PCI clock left alone, and a warm reset of the
-           link to the codec so that it starts from a state this knows. */
-        ctl_shadow = 0;
-        reg_write(REG_CONTROL, ctl_shadow);
-        udelay(20);
-        reg_write(REG_CONTROL, ctl_shadow | CTRL_1371_SYNC_RES);
-        udelay(20);
-        reg_write(REG_CONTROL, ctl_shadow);
-        udelay(500);
-
-        /* The codec says when it is ready, and a codec that never does is a
-           controller that will play silence very convincingly. It is not a
-           reason to give up: QEMU's part of this family has no codec behind
-           it at all and plays perfectly well. */
-        bool ready = false;
-        for (u32 t = 0; t < POLL; t++)
-            if (reg_read(REG_1371_CODEC) & CODEC_RDY) { ready = true; break; }
-
-        src_init();
-
-        /* The mixer is set up whether or not the codec said it was ready.
-           A codec that is not there ignores the writes and costs nothing;
-           one that is there and never raised the bit -- which is what an
-           emulated part that does not model the bit looks like -- is still
-           a codec, and leaving it alone means leaving it however it was
-           found. Muted is a perfectly ordinary way to find one, and silence
-           from a controller that is otherwise working is the single hardest
-           fault in this area to tell apart from every other kind. */
-        ac97_write(0x00, 0);                /* reset to defaults */
-        udelay(100);
-        ac97_write(0x26, 0x0000);           /* out of power down */
-        ac97_write(0x02, 0x0000);           /* master, loudest, not muted */
-        ac97_write(0x04, 0x0000);           /* headphone, the same */
-        ac97_write(0x06, 0x0000);           /* and mono out */
-        ac97_write(0x18, 0x0808);           /* pcm out at unity */
-
-        bb_log("ens: es1371 at %04x, codec %s",
-               io_base, ready ? "ready" : "did not report ready");
+        init_1371();
+        bb_log("ens: es1371 at %04x, codec %08x, sections ready %x",
+               io_base, codec_id, (u32)(codec_sections & 0x0F));
     } else {
         /* The serial link to the mixer has to be running before the mixer
            can be told anything. */
@@ -470,4 +542,30 @@ bool ens_init(void) {
             is_1371 ? "ensoniq es1371" : "ensoniq es1370");
     present = true;
     return true;
+}
+
+/* --- for the self test ------------------------------------------------------ */
+
+/* The ES1371's front end against a chip io simulates, then its second
+   playback channel set to hz, with interrupts off so that nothing else
+   reaches the ports while they are the simulation's. The card, if any, is
+   left as it was. */
+void ens_test_1371(u32 (*io)(u16 reg, u32 v, bool write), u32 hz, u32 *codec) {
+    u64 flags;
+    __asm__ volatile ("pushfq; pop %0; cli" : "=r"(flags) :: "memory");
+    u32 (*was_io)(u16, u32, bool) = test_io;
+    bool was_1371 = is_1371;
+    u32 was_ctl = ctl_shadow, was_id = codec_id;
+    u16 was_sections = codec_sections;
+    test_io = io;
+    is_1371 = true;
+    init_1371();
+    src_dac2_rate(hz);
+    *codec = codec_id;
+    test_io = was_io;
+    is_1371 = was_1371;
+    ctl_shadow = was_ctl;
+    codec_id = was_id;
+    codec_sections = was_sections;
+    if (flags & 0x200) __asm__ volatile ("sti" ::: "memory");
 }

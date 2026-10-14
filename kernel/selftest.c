@@ -3,6 +3,7 @@
 #include "selftest.h"
 #include "sound.h"
 #include "hda.h"
+#include "ens.h"
 #include "printf.h"
 #include "string.h"
 #include "heap.h"
@@ -6394,6 +6395,117 @@ static void test_codec_routes(void) {
     codec_bare = 0;
 }
 
+/* --- the ES1371, simulated ---------------------------------------------------
+ *
+ * QEMU has the ES1370 only, and VMware gives most guests the ES1371, so its
+ * front end is run here against a chip simulated as its manual has it: the
+ * converter's state shows only while a write asks for it, cycling through
+ * three; it locks for good if switched on with a channel it runs not set
+ * up; the codec's port is busy for a while after each command, a read is
+ * answered once it is not, and a write is safe only in the converter's
+ * first state. */
+static struct {
+    u16  ram[0x80];
+    u32  src;                   /* the converter's switches and address */
+    u16  latch;                 /* the word last asked for */
+    bool show;
+    u32  state, last_state;
+    bool locked;
+    u16  ac97[0x40];
+    u32  busy_reads, reads_26;
+    bool answered;
+    u16  answer;
+    int  writes, writes_free, clobbered;
+} es;
+
+static void es_ac97_reset(void) {
+    memset(es.ac97, 0, sizeof es.ac97);
+    es.ac97[0x02 / 2] = es.ac97[0x04 / 2] = es.ac97[0x06 / 2] = 0x8000;
+    es.ac97[0x18 / 2] = 0x8808;
+    es.ac97[0x7C / 2] = 0x8384;
+    es.ac97[0x7E / 2] = 0x7609;
+    es.reads_26 = 0;
+}
+
+/* Whether a channel's numbers are set: its truncation and its integer
+   registers, nought in a file just cleared. */
+static bool es_channel_set(u32 base) {
+    return es.ram[base] && es.ram[base + 1];
+}
+
+static u32 fake_ens(u16 reg, u32 v, bool write) {
+    if (reg == 0x10) {
+        if (!write) {
+            u32 r = (es.locked ? (1u << 23) : 0) | (es.src & (0xFu << 19)) | es.latch;
+            if (es.show) {
+                static const u32 STATES[3] = { 0, 0x00010000u, 0x00020000u };
+                es.last_state = STATES[es.state];
+                es.state = (es.state + 1) % 3;
+                r |= es.last_state;
+            } else {
+                es.last_state = 0x00070000u;
+                r |= es.last_state;
+            }
+            return r;
+        }
+        if (es.locked) return 0;
+        u32 addr = (v >> 25) & 0x7F;
+        if (v & (1u << 24)) es.ram[addr] = (u16)v;
+        else es.latch = es.ram[addr];
+        es.src = v;
+        es.show = (v & (1u << 16)) != 0;
+        if (!(v & (1u << 22))) {                     /* the converter on */
+            if ((!(v & (1u << 21)) && !es_channel_set(0x70)) ||
+                (!(v & (1u << 20)) && !es_channel_set(0x74)) ||
+                (!(v & (1u << 19)) && !es_channel_set(0x78)))
+                es.locked = true;
+        }
+        return 0;
+    }
+    if (reg == 0x14) {
+        if (!write) {
+            if (es.busy_reads) { es.busy_reads--; return 1u << 30; }
+            return es.answered ? (1u << 31) | es.answer : 0;
+        }
+        if (es.busy_reads) es.clobbered++;
+        u32 r = (v >> 16) & 0x7F;
+        es.busy_reads = 2;
+        if (v & (1u << 23)) {                        /* a read */
+            es.answer = es.ac97[r / 2];
+            if (r == 0x26) es.answer = ++es.reads_26 >= 3 ? 0x000F : 0x0003;
+            es.answered = true;
+            return 0;
+        }
+        es.answered = false;
+        es.writes++;
+        if (es.show && es.last_state == 0x00010000u) es.writes_free++;
+        if (r == 0) es_ac97_reset();
+        else es.ac97[r / 2] = (u16)v;
+        return 0;
+    }
+    return 0;
+}
+
+static void test_es1371(void) {
+    memset(&es, 0, sizeof es);
+    es_ac97_reset();
+    es.ac97[0x02 / 2] = 0x1F1F;                      /* found turned down */
+    u32 codec = 0;
+    ens_test_1371(fake_ens, 44100, &codec);
+    ok("the converter is switched on only with every channel it runs set up",
+       !es.locked && !(es.src & (1u << 22)));
+    /* 44100 against the 3 kHz the converter counts in, in fifteen bits of
+       fraction: 481690, so 0x3800 in the integer register's top and 22938. */
+    ok("and its second playback channel runs at the rate asked for",
+       (es.ram[0x75] & 0xFC00) == 0x3800 && es.ram[0x77] == 22938);
+    ok("every word to the codec goes in the converter's free state, none over another",
+       es.writes >= 6 && es.writes == es.writes_free && !es.clobbered);
+    ok("master, headphones and pcm are left unmuted at unity",
+       es.ac97[0x02 / 2] == 0 && es.ac97[0x04 / 2] == 0 && es.ac97[0x18 / 2] == 0x0808);
+    ok("the codec's ready sections are waited for and its name read for the log",
+       es.reads_26 >= 3 && codec == 0x83847609u);
+}
+
 static void test_sound(void) {
     if (!sound_present()) { kprintf("  SKIP  no sound controller\n"); return; }
 
@@ -6520,6 +6632,7 @@ int selftest_run(void) {
     kprintf("[clipboard]\n"); test_clipboard();
     kprintf("[clock]\n"); test_clock();
     kprintf("[codec routes]\n"); test_codec_routes();
+    kprintf("[es1371]\n"); test_es1371();
     kprintf("[sound]\n"); test_sound();
     kprintf("[kernel stack]\n"); test_stack();
     /* Last, after every section has allocated and freed with the other
