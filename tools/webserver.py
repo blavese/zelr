@@ -747,6 +747,26 @@ MODS_TOP = (b"import '/mdelay/1.js'; import '/mdelay/2.js'; import '/mdelay/3.js
 MDELAY_NOW = 0
 MDELAY_MOST = 0
 
+# A page with an empty style sheet and a module that imports an empty
+# module: the sheet's link is told load, not error, and the module runs.
+# Each was taken for a file that would not come.
+EMPTY_PAGE = b"""<!doctype html>
+<html><head><title>empty</title>
+<link rel="stylesheet" href="/empty.css" onload="window.sheetsaid = 'load'" onerror="window.sheetsaid = 'error'">
+<script type="module">import '/emptymod.js'; window.modran = 1;</script>
+<style>body { font-family: sans-serif; padding: 24px; font-size: 32px }</style></head>
+<body><p>empty</p>
+<script>
+var t0 = Date.now();
+(function check() {
+  if ((window.sheetsaid && window.modran) || Date.now() - t0 > 8000) {
+    document.title = 'empty ' + (window.sheetsaid || 'none') + ' ' + (window.modran ? 'ran' : 'not');
+    document.body.style.background = window.sheetsaid === 'load' && window.modran ? '#2a9a5a' : '#c0392b';
+  } else setTimeout(check, 100);
+})();
+</script>
+</body></html>
+"""
 DELAY_NOW = 0
 DELAY_MOST = 0
 
@@ -1384,6 +1404,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 DELAY_NOW -= 1
             self._send(("window.order = (window.order || '') + '%s';" % n).encode(),
                        ctype="application/javascript")
+        elif path == "/empty":
+            self._send(EMPTY_PAGE)
+        elif path == "/empty.css":
+            self._send(b"", ctype="text/css")
+        elif path == "/emptymod.js":
+            self._send(b"", ctype="application/javascript")
         elif path == "/mods":
             self._send(MODS_PAGE)
         elif path == "/mods/top.js":

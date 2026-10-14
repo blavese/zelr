@@ -1388,7 +1388,9 @@ static int gather_linked_sheets(int *fetched, int *skipped) {
                way is a page drawn with none of its style (Wikipedia's, after a
                burst of fetching). */
             if (ask_again(rc, &r)) rc = web_get(&u, cssbuf, CSS_MAX, &r);
-            if (rc < 200 || rc >= 300 || r.len <= 0) { (*skipped)++; source_add(i, r0, 0); continue; }
+            /* An empty sheet is a sheet with no rules in it: Mastodon serves
+               its custom one so, and it was told as one not read. */
+            if (rc < 200 || rc >= 300 || r.cut) { (*skipped)++; source_add(i, r0, 0); continue; }
             text = r.body;
             len = r.len;
         }
@@ -1614,7 +1616,9 @@ static int link_text(url_t *u, const char **text) {
     response_t r;
     int rc = web_get(u, cssbuf, CSS_MAX, &r);
     if (ask_again(rc, &r)) rc = web_get(u, cssbuf, CSS_MAX, &r);
-    int ok = rc >= 200 && rc < 300 && r.len > 0;
+    /* Empty is a sheet with no rules, not one that failed: its link is told
+       load, not error. */
+    int ok = rc >= 200 && rc < 300 && r.len >= 0 && !r.cut;
     char *copy = 0;
     if (ok && links_kept_bytes + r.len <= LINKS_BYTES && (copy = (char *)malloc((u64)r.len + 1))) {
         for (int i = 0; i < r.len; i++) copy[i] = r.body[i];
@@ -1838,6 +1842,14 @@ static int fetch_script(const char *src, const char **out) {
        modules, every one of which must come, and one dropped by a busy
        server was the whole page not drawn. */
     if (ask_again(rc, &r)) rc = web_get(&u, scriptbuf, SCRIPT_MAX, &r);
+    if (rc >= 200 && rc < 300 && r.len == 0 && !r.cut && scripts_outside < SCRIPTS_MAX) {
+        /* An empty file is a script that does nothing, and a module with
+           nothing in it a module; nought is what a file that would not come
+           is told by, so it is handed over as one space. */
+        scripts_outside++;
+        *out = " ";
+        return 1;
+    }
     if (rc < 200 || rc >= 300 || r.len <= 0) return 0;
     /* Half a script is a syntax error somewhere in its middle, and the page
        is better told the file would not come. */

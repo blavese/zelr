@@ -127,6 +127,7 @@ TOGETHER = (0x1E, 0x90, 0x80)         # /together: its six files ran in the orde
 SHEET_LAST = (0xB0, 0x70, 0x10)       # /sheets: the last of its four sheets won
 BASED_SHEET = (0x2A, 0x8A, 0x9A)      # /based/: its sheet, found through its <base href>
 BASED_SCRIPT = (0x7A, 0x2A, 0x9A)     # and its script
+EMPTY_OK = (0x2A, 0x9A, 0x5A)         # /empty: its empty sheet told load, its empty module's importer run
 SHEET_THIRD = (0x50, 0xD0, 0x50)      # and the one before it, which must not have
 STOOD = (0xC0, 0x30, 0x30)            # and the block it draws when they did not
 
@@ -568,9 +569,18 @@ def main():
             c.add("a module a busy server refuses once is asked for again after the pause it names (%d asks)"
                   % len(webserver.MODFLAKY_REFUSED), told_flaky and len(webserver.MODFLAKY_REFUSED) == 2, shotk)
 
+            # --- an empty sheet and an empty module ----------------------------
+            go(vm, mon, "http://%s/empty" % srv.host, settle=10.0,
+               was=flk, name="br-going-empty")
+            _, _, _, _, told_empty = mon.wait_screen(
+                "br-empty", lambda w, h, px: count_in(px, w, PAGE, EMPTY_OK) > 10000, timeout=40)
+            emp, pxe, we, shote = page_settled(mon, "br-empty-settled")
+            c.add("an empty style sheet is told load and an empty module still lets its importer run (%d)"
+                  % count_in(pxe, we, PAGE, EMPTY_OK), told_empty, shote)
+
             # --- a module's imports, asked for together -----------------------
             go(vm, mon, "http://%s/mods" % srv.host, settle=10.0,
-               was=flk, name="br-going-mods")
+               was=emp, name="br-going-mods")
             told_mods = vm.wait_serial("-- mods 123 --", timeout=40)
             mds, _, _, shotm = page_settled(mon, "br-mods")
             c.add("a module's three imports run in order and were asked for together, %d at once"
