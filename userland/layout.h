@@ -337,6 +337,9 @@ typedef struct {
        is its width whatever its own width says: that was only where the row
        started from (lay_flex). -1 when there is none. */
     int flex_sized;
+    /* Boxes made wider than the room they were given, inside one that hides
+       its overflow (lay_block): only a box that holds one is cut at its sides. */
+    int widened;
 
     /* The element the innermost lay_measure was asked about, which is sized
        from the room it was measured in (lay_pct_cyclic). -1 outside one. */
@@ -4562,10 +4565,17 @@ static void lay_block_placed(lctx *L, int node, const cstyle *parent, int x,
        as wide as it asks to be, up to the page: the narrowest a card of 280
        pixels can be drawn in is 280, and measured as the room it was given
        it came out as narrow as that, and the grid holding it with it. */
-    if (want >= 0 && (want < box_w || (L->measuring && want <= css_view_w))) {
+    /* Inside a box that hides what overflows it, a box is as wide as it
+       asks, however wide that is: the overflow is cut, not run off the side
+       (below). SoundCloud's carousel is a row four times its window's width
+       in a box with its overflow hidden, one slide showing; kept to the
+       room, the four were squeezed side by side. */
+    int overflows = want > box_w && parent && parent->clip == 1 && !L->measuring;
+    if (overflows) L->widened++;
+    if (want >= 0 && (want < box_w || overflows || (L->measuring && want <= css_view_w))) {
         /* A width with auto margins is centred, which is how most pages put
            their content in the middle of a wide window. */
-        if (centre) ml += (box_w - want) / 2;
+        if (centre && want < box_w) ml += (box_w - want) / 2;
         box_w = want;
     }
     if (cap >= 0 && cap < box_w) {
@@ -4636,6 +4646,7 @@ static void lay_block_placed(lctx *L, int node, const cstyle *parent, int x,
         }
     }
     int inside_at = L->out->nitems;
+    int widened_at = L->widened;
     int floats_at = L->fl_seq;
     int held_right = L->measure_right;
     if (L->measuring) L->measure_right = 0;
@@ -4771,6 +4782,12 @@ static void lay_block_placed(lctx *L, int node, const cstyle *parent, int x,
         if (s2 < 0) continue;
         if (L->fl_y[k] + L->fl_h[k] > *y) *y = L->fl_y[k] + L->fl_h[k];
     }
+    /* A box that is a formatting context of its own keeps its floats to
+       itself: they are no part of what comes beside it. Debian's slideshow
+       is a row of floated slides in a box with its overflow hidden, and
+       once the row could be wider than the box its floats reached into the
+       next column and pushed its heading down past them. */
+    if (st.clip == 1 || st.flow_root) L->fl_seq = floats_at;
 
     /* Measured, a box that was not given a width is as wide as what is in
        it and its own padding and border, not as wide as the room it was
@@ -4838,6 +4855,30 @@ static void lay_block_placed(lctx *L, int node, const cstyle *parent, int x,
             if (L->out->items[i].y >= cut) L->out->items[i].kind = 0;
         *y -= box_h - cap_h;
         box_h = cap_h;
+    }
+    /* And at its sides: what lies wholly to the left or the right of a box
+       that hides its overflow is not drawn, as the slides of a carousel
+       waiting their turn are not. Something part in and part out is drawn
+       whole, as nothing here clips a piece of a word or a picture. Only a
+       box holding something made wider than it is cut: anywhere else a box
+       is placed after its children are, and cut where it was first laid
+       out, Debian's page lost the words and picture of a column. */
+    if (st.clip == 1 && !L->measuring && L->widened != widened_at) {
+        int left = x + ml, right = left + (shrunk >= 0 ? shrunk : box_w);
+        for (int i = inside_at; i < L->out->nitems; i++) {
+            litem *it = &L->out->items[i];
+            if (it->kind == 0 || it->w <= 0) continue;
+            if (it->x >= right || it->x + it->w <= left) { it->kind = 0; continue; }
+            /* A box running out of it is cut at its edges: a carousel's row,
+               six slides wide, drew its background over the column beside
+               it. */
+            if (it->kind == LK_BOX && (it->x < left || it->x + it->w > right)) {
+                int x0 = it->x < left ? left : it->x;
+                int x1 = it->x + it->w > right ? right : it->x + it->w;
+                it->x = x0;
+                it->w = x1 - x0;
+            }
+        }
     }
 
     /* A horizontal rule is a border on a box with nothing in it, and a box

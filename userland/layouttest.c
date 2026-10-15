@@ -2115,6 +2115,31 @@ int main(void) {
            he && li && he->h == li->h && he->face != li->face && !word("hidden"));
     }
     {
+        /* A carousel: a row four windows wide in a box that hides its
+           overflow, one slide showing, moved on by a translate. Kept to the
+           room, SoundCloud's four slides were squeezed side by side. */
+        lay("<style>.wrap{overflow:hidden;width:400px}.car{display:flex;width:400%}.on{transform:translateX(-25%)}.s{width:25%}"
+            ".open{width:400px}</style>"
+            "<div class=wrap><div class=car><div class=s>one</div><div class=s>two</div><div class=s>three</div><div class=s>four</div></div></div>"
+            "<div class=wrap><div class='car on'><div class=s>alpha</div><div class=s>beta</div><div class=s>gamma</div><div class=s>delta</div></div></div>"
+            "<div class=open><div class=car><div class=s>red</div><div class=s>green</div></div></div>", 800);
+        const litem *one = word("one"), *two = word("two"), *beta = word("beta"), *green = word("green");
+        ok("a carousel wider than the box hiding its overflow shows its first slide and not the rest",
+           one && one->x == 0 && !two && !word("three"));
+        ok("and a translate moves the next one in, alone", beta && beta->x == 0 && !word("alpha") && !word("gamma"));
+        ok("while a row in a box that shows its overflow is still kept to the room", green && green->x > 0 && green->x < 400);
+
+        /* Debian's slideshow: floated slides in a box hiding its overflow, a
+           column beside it. The floats are the box's own; reaching out, they
+           pushed the next column's heading down past them. */
+        lay("<style>.row{display:flex}.col{width:50%}.sw{overflow:hidden}.strip{width:600%}.sl{float:left;width:16%;height:120px}"
+            "</style><div class=row><div class=col><div class=sw><div class=strip><div class=sl>s1</div><div class=sl>s2</div>"
+            "<div class=sl>s3</div></div></div></div><div class=col><h2>first words of a heading that runs onto a second line here</h2></div></div>", 600);
+        const litem *fw = word("first"), *ln = word("line");
+        ok("and floats inside a box hiding its overflow do not push the column beside it down",
+           fw && ln && fw->y < 60 && ln->y > fw->y && ln->y - fw->y < 80);
+    }
+    {
         /* A sheet with thousands of :not()s, as CNN's has: a rule after the
            first two thousand was dropped. */
         static char many[3000 * 32 + 256];
