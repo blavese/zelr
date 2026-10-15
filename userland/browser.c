@@ -2643,6 +2643,12 @@ static void relayout(int width) {
     /* And pictures a script has added or moved since. */
     if (jsdom_live()) pictures_follow();
     sprites_follow();
+    /* And the background pictures of boxes laid out for the first time: they
+       were gathered once, after the first layout, so a background a script
+       set, or a box an app drew later, never had its picture fetched
+       (SoundCloud's carousel slides). Those already asked for are passed
+       over. */
+    if (pics_follow_on) gather_backgrounds();
 }
 
 /* What this system thinks a link looks like, which is the accent the rest of

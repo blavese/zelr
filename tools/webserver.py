@@ -274,6 +274,19 @@ def _half(w, h, rgb):
 HALF = _half(80, 40, (225, 29, 72))
 PURPLE = _logo(160, 90, (0x70, 0x30, 0xA0))
 OLIVE = _logo(160, 90, (0x80, 0x80, 0x00))
+TEAL = _logo(160, 90, (0x1C, 0x8C, 0x8C))
+
+# A background picture a script sets once the page is up, as an app sets a
+# slide's: backgrounds were gathered once, after the first layout, and one
+# set later was never fetched.
+BGJS_PAGE = b"""<!doctype html>
+<html><head><title>bgjs</title>
+<style>body { font-family: sans-serif; padding: 24px; font-size: 32px; background: #ffffff }
+#box { width: 400px; height: 200px; background-size: cover }</style></head>
+<body><p>bgjs</p><div id="box"></div>
+<script>setTimeout(function () { document.getElementById('box').style.backgroundImage = 'url(/bgjs/teal.png)'; }, 300);</script>
+</body></html>
+"""
 
 # Background pictures, from a sheet in a directory of its own that names them
 # relative to itself (../img/, which from the page would be the wrong place),
@@ -1388,6 +1401,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._send(PURPLE, ctype="image/png")
         elif path == "/bg/img/olive.png":
             self._send(OLIVE, ctype="image/png")
+        elif path == "/bgjs":
+            self._send(BGJS_PAGE)
+        elif path == "/bgjs/teal.png":
+            self._send(TEAL, ctype="image/png")
         elif path == "/bg/img/disc.svg":
             self._send(DISC, ctype="image/svg+xml")
         elif path == "/webp-picture":
