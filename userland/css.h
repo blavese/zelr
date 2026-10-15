@@ -884,14 +884,19 @@ static inline int css_parse_compound(csheet *s, const char *p, int len, int *at,
                     if (!css_nth(p, close + 1, open, &c->nth_a, &c->nth_b)) return -1;
                     c->pseudo = css_named(nm, l, "nth-child") ? PS_NTH_CHILD
                               : css_named(nm, l, "nth-of-type") ? PS_NTH_OF_TYPE : PS_NTH_LAST_CHILD;
-                } else if (css_named(nm, l, "not") && !inner && c->neg < 0) {
+                } else if (css_named(nm, l, "not") && !inner
+                           && (c->neg < 0 || c->neg + c->nneg == s->nnegs)) {
                     /* Simple compounds inside, one or a list of them:
                        :not(.open), :not([hidden], :focus-within) -- matching
                        none of them. A list was dropped whole, and MDN's menus,
                        closed by :host(:not([loaded],:focus-within)), were
                        drawn open. Anything more than compounds is not guessed
-                       at. They sit side by side in negs. */
-                    int first = s->nnegs, count = 0, q = open, best = 0;
+                       at. They sit side by side in negs. A second :not on the
+                       compound adds to the first's list, which means the same:
+                       NPR places its cards' parts with
+                       >:not(.c-promo-card__media):not(.c-promo-card__attention-label),
+                       and the rule was dropped, so each part took one column. */
+                    int first = c->neg >= 0 ? c->neg : s->nnegs, count = c->nneg, q = open, best = 0;
                     for (;;) {
                         if (s->nnegs >= CSS_NEGS - (s->query ? 0 : CSS_QUERY_NEGS)) return -1;
                         csel *ng = &s->negs[s->nnegs];

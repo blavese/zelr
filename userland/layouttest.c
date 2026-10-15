@@ -2163,6 +2163,16 @@ int main(void) {
            eb && hl && af && hl->y > eb->y && hl->y - eb->y < 100 && af->y >= 300);
     }
     {
+        /* Two :not()s on one compound, as NPR places its cards' parts: the
+           selector was dropped, so the parts took a column each. */
+        lay("<style>.r{display:grid;grid-template-columns:repeat(4,100px);width:400px}"
+            ".r>:not(.m):not(.l){grid-column:1/span 3}</style>"
+            "<div class=r><p>wide words here</p><p class=m>media</p><p class=l>label</p></div>", 800);
+        const litem *wd = word("wide"), *hr = word("here"), *md = word("media"), *lb = word("label");
+        ok("a compound with two :not()s matches what is neither",
+           wd && hr && md && lb && hr->y == wd->y && md->y == wd->y && md->x >= 300 && lb->y > wd->y && lb->x < 100);
+    }
+    {
         /* A grid item flowed into place with its span on the end alone, as
            National Geographic writes it: it took one column of twelve. */
         lay("<style>.g{display:grid;grid-template-columns:repeat(12,1fr);width:600px}.g>*{grid-column-end:span 12}"
