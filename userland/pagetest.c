@@ -551,6 +551,7 @@ static long long little_memory(void) { return 2 * 1024 * 1024; }
 static long long much_memory(void) { return 512LL * 1024 * 1024; }
 static long long some_memory(void) { return 200LL * 1024 * 1024; }
 static long long a_little_more(void) { return 64LL * 1024 * 1024; }
+static long long plenty_memory(void) { return 2048LL * 1024 * 1024; }
 
 /* A machine whose generator has found nothing to be unpredictable with. */
 static int no_random(void *buf, int len) { (void)buf; (void)len; return -1; }
@@ -2833,7 +2834,7 @@ int main(void) {
     /* --- what a page's scripts may have ---------------------------------------------
      *
      * 24 megabytes whatever the machine had, which is where big sites' scripts
-     * stopped. A quarter of what is free now, between 24 and 128. The page
+     * stopped. A quarter of what is free now, between 24 and 384. The page
      * keeps 30 megabytes of strings, which the collector cannot give back
      * (jsgc.h): it made as much again that it can, and did not count. */
     {
@@ -2843,7 +2844,12 @@ int main(void) {
         jsdom_memory_with(much_memory);
         oks("a page's scripts may have more than 24 megabytes on a machine with the memory",
             titled(big), "made 300");
-        ok("a quarter of what is free, up to 128", jd_J.mem_cap == 128u * 1024 * 1024);
+        ok("a quarter of what is free", jd_J.mem_cap == 128u * 1024 * 1024);
+        jsdom_memory_with(plenty_memory);
+        oks("and more than 128 on a machine with plenty to spare (Tumblr's scripts hold 205)",
+            titled("<script>var s = []; for (var i = 0; i < 1600; i++) s.push('ab'.repeat(50000) + i);"
+                   "document.title = 'made ' + s.length;</script>"), "made 1600");
+        ok("up to 384", jd_J.mem_cap == 384u * 1024 * 1024);
         jsdom_memory_with(some_memory);
         titled("<script>document.title = 'x';</script>");
         ok("and a quarter it is, below that", jd_J.mem_cap == 50u * 1024 * 1024);

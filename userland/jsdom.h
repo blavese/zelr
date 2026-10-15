@@ -6021,14 +6021,17 @@ void jsdom_memory_with(long long (*fn)(void)) { jd_free_memory = fn; }
 
 /* How much a page's scripts may have, from what the machine has free as the
  * page opens: a quarter of it, never less than the 24 megabytes every machine
- * gets and never more than 128.
+ * gets and never more than 384.
  *
  * With nothing ever given back until the page is left, 24 was where the
  * scripts of big sites stopped -- The Verge, Yahoo, Microsoft, Instagram and
  * Ars Technica all ended on "more memory than a page is allowed" -- on a
  * machine with hundreds of megabytes doing nothing. A quarter leaves the
- * layout, the pictures and every other program the rest. */
-#define JD_MEM_CAP_MAX (128u * 1024 * 1024)
+ * layout, the pictures and every other program the rest. The ceiling was
+ * 128, and Tumblr's scripts hold 205 once its feed is up: they stopped at
+ * 128 and its posts were drawn one on top of another. 384 still leaves the
+ * rest of the program's 640 megabyte heap for everything else. */
+#define JD_MEM_CAP_MAX (384u * 1024 * 1024)
 
 static u32 jd_mem_cap(void) {
     long long free_b = jd_free_memory ? jd_free_memory() : -1;
