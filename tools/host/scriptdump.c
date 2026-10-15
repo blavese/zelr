@@ -288,6 +288,11 @@ int main(int argc, char **argv) {
         int t = jsdom_timers(), r = jsdom_requests();
         timers += t;
         asked += r;
+        /* And the sheet made again when the page's styles change, as the
+           browser's every layout does: that is where a link a script put in
+           is told load (links_report). Without it a page waiting on one --
+           Vite's preload of a chunk's sheets -- waited here for ever. */
+        sheets_follow_if_changed();
         if (!t && !r) sleep_ms(10);
     }
     puts("afterwards: ");
