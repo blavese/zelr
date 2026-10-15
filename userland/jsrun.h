@@ -1383,6 +1383,11 @@ static jval js_run_function(jctx *J, jobj *f, jval this_val, jval *argv, int arg
         if (a) {
             js_arr_reserve(J, a, (u32)argc);
             for (int k = 0; k < argc; k++) js_arr_push(J, a, argv[k]);
+            /* The function itself, outside strict code, not among the keys:
+               John Resig's Class.extend, in Parse.ly's script and a great
+               many older ones, ends with `Class.extend = arguments.callee`,
+               and every class made with it had no extend of its own. */
+            if (!(fl & FN_STRICT)) js_put_prop_flags(J, a, J->s_callee, js_from_obj(f), JP_WRITE | JP_CONF);
             js_declare(J, sc, J->s_arguments, js_from_obj(a));
         }
     }

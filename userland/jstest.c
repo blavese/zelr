@@ -1834,6 +1834,17 @@ int main(void) {
     /* The standard's old pair, by code unit: SoundCloud's
        btoa(unescape(encodeURIComponent(s))) threw when unescape made one
        character of three bytes. */
+    /* arguments.callee: Resig's Class.extend hands itself on with it. */
+    expect("arguments.callee is the function, not among the keys, and Resig's Class.extend passes itself on",
+           "(function(){ var fact = function (n) { return n <= 1 ? 1 : n * arguments.callee(n - 1); };"
+           " var Class = function () {}; Class.extend = function (prop) {"
+           "  function K() { if (this.init) this.init.apply(this, arguments); }"
+           "  K.prototype = Object.create(this.prototype); for (var k in prop) K.prototype[k] = prop[k];"
+           "  K.extend = arguments.callee; return K; };"
+           " var A = Class.extend({ init: function (x) { this.x = x; } }); var B = A.extend({ y: 2 });"
+           " var keys = (function () { return Object.keys(arguments).join(); })(1, 2);"
+           " return [fact(5), typeof B.extend, new B(7).x, new B(7).y, keys].join(' '); })()",
+           "120 function 7 2 0,1");
     expect("escape and unescape work by code unit, %XX below 256 and %uXXXX above",
            "(function(){ var s = '\\u00e9\\u2713\\ud83d\\ude00 a+b';"
            " return [escape(s), unescape('%E9%u2713%uD83D%uDE00%20a+b') === s, unescape('%E2%9C%93').length,"
