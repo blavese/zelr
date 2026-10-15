@@ -969,6 +969,11 @@ static void lay_apply_short(lctx *L, cstyle *st, const char *nv, int pct_of) {
         css_font_split(v, w_len(v), lay_font_put, &x);
         return;
     }
+    if (lay_same_fold(name, "flex-flow")) {
+        lay_font_put_t x = { L, st, pct_of };
+        css_flex_flow_split(v, w_len(v), lay_font_put, &x);
+        return;
+    }
     if (lay_same_fold(name, "flex")) { css_apply_v(P_FLEX_GROW, v, st, L->root_px, pct_of); return; }
     if (lay_same_fold(name, "list-style")) { css_apply_v(P_LIST_STYLE, v, st, L->root_px, pct_of); return; }
 }

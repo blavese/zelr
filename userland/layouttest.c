@@ -2152,6 +2152,18 @@ int main(void) {
            fw && ln && fw->y < 60 && ln->y > fw->y && ln->y - fw->y < 80);
     }
     {
+        /* flex-flow, a direction and a wrap together, was not read at all:
+           `flex-flow: column` left a row. */
+        lay("<style>.c{display:flex;flex-flow:column}.w{display:flex;flex-flow:row wrap;width:300px}.i{width:200px}"
+            ".v{--d:column;display:flex;flex-flow:var(--d) nowrap}</style>"
+            "<div class=c><p>top</p><p>bottom</p></div><div class=w><div class=i>left</div><div class=i>right</div></div>"
+            "<div class=v><p>upper</p><p>lower</p></div>", 800);
+        const litem *t = word("top"), *bo = word("bottom"), *l = word("left"), *r = word("right");
+        const litem *up = word("upper"), *lo = word("lower");
+        ok("flex-flow sets a column, a wrapping row, and a column through var()",
+           t && bo && bo->y > t->y && bo->x == t->x && l && r && r->y > l->y && up && lo && lo->y > up->y && lo->x == up->x);
+    }
+    {
         /* A sheet with thousands of :not()s, as CNN's has: a rule after the
            first two thousand was dropped. */
         static char many[3000 * 32 + 256];

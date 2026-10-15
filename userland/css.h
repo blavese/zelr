@@ -1187,6 +1187,20 @@ static inline void css_font_split(const char *v, int vlen, css_put_fn put, void 
 
 static void css_font_to_sheet(void *ctx, int prop, const char *v, int n) { css_add((csheet *)ctx, prop, v, n); }
 
+/* flex-flow: a direction and a wrap, in either order, either left out. It
+   was not read at all, so `flex-flow: column` left a row: SoundCloud's
+   front hero is a column holding its carousel, and as a row it shrank the
+   carousel into the window. */
+static inline void css_flex_flow_split(const char *v, int vlen, css_put_fn put, void *ctx) {
+    int st[3], ln[3];
+    int np = css_parts(v, vlen, st, ln, 3);
+    for (int i = 0; i < np; i++) {
+        const char *q = v + st[i];
+        if (w_starts_fold(q, "row") || w_starts_fold(q, "column")) put(ctx, P_FLEX_DIR, q, ln[i]);
+        else if (w_starts_fold(q, "wrap") || w_starts_fold(q, "nowrap")) put(ctx, P_FLEX_WRAP, q, ln[i]);
+    }
+}
+
 static inline void css_shorthand4(csheet *s, const char *v, int vlen,
                                   int pt, int pr, int pb, int pl) {
     int st[4], ln[4];
@@ -1252,6 +1266,7 @@ static inline void css_declare(csheet *s, const char *name, int nlen,
                     || w_same(lower, "border-right") || w_same(lower, "border-bottom")
                     || w_same(lower, "border-left") || w_same(lower, "background")
                     || w_same(lower, "font") || w_same(lower, "inset") || w_same(lower, "flex")
+                    || w_same(lower, "flex-flow")
                     || w_same(lower, "border-radius") || w_same(lower, "list-style"))) {
         char both[2048];
         int k = 0;
@@ -1320,6 +1335,10 @@ static inline void css_declare(csheet *s, const char *name, int nlen,
     if (w_same(lower, "border-right")) { css_add(s, P_BORDER_R, v, vlen); return; }
     if (w_same(lower, "font")) {
         css_font_split(v, vlen, css_font_to_sheet, s);
+        return;
+    }
+    if (w_same(lower, "flex-flow")) {
+        css_flex_flow_split(v, vlen, css_font_to_sheet, s);
         return;
     }
     if (w_same(lower, "list-style")) {
