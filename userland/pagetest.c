@@ -373,6 +373,24 @@ static char asked[512];
    numbers when one of them is not a printable character. */
 static char asked_headers[512], asked_bytes[256];
 
+/* A picture kept at half its natural size each way, as browser.c keeps a
+   big one (pic_shrink): two pixels, red then blue, of a picture four by two. */
+static const u8 *half_pixels(int node, int *w, int *h, const u8 **alpha) {
+    (void)node;
+    static const u8 px[6] = { 255, 0, 0, 0, 0, 255 };
+    *w = 2;
+    *h = 1;
+    *alpha = 0;
+    return px;
+}
+
+static int half_natural(int node, int *w, int *h) {
+    (void)node;
+    *w = 4;
+    *h = 2;
+    return 1;
+}
+
 static int fake_request(const char *method, const char *url, const char *body, int blen,
                         const char *type, const char *headers, jd_reply *out) {
     int w = 0;
@@ -2241,6 +2259,16 @@ int main(void) {
                "document.title = [a[1], a[3], b[3], p[0], p[3], p[5], p[7], made.width, made.data.length, bad].join(' ');"
                "</script>"),
         "255 255 0 9 200 7 100 3 24 TypeError");
+    jsdom_image_pixels_with(half_pixels);
+    jsdom_pictures_with(half_natural);
+    oks("a picture kept smaller than it is is drawn on a canvas at its natural size",
+        titled("<body><img id=p src=x.png><script>var c = document.createElement('canvas'); c.width = 8; c.height = 4;"
+               "var x = c.getContext('2d'); x.imageSmoothingEnabled = false; x.drawImage(document.getElementById('p'), 0, 0);"
+               "var at = function (px, py) { var d = x.getImageData(px, py, 1, 1).data; return d[0] + '.' + d[2] + '.' + d[3]; };"
+               "document.title = [at(1, 0), at(3, 1), at(5, 0)].join(' ');</script></body>"),
+        "255.0.255 0.255.255 0.0.0");
+    jsdom_image_pixels_with(0);
+    jsdom_pictures_with(0);
     oks("a Path2D is filled where it was drawn, from its own commands or an SVG path's",
         titled("<script>var c = document.createElement('canvas'); c.width = 20; c.height = 20;"
                "var x = c.getContext('2d'); var p = new Path2D('M0 0 L10 0 L10 10 Z'); x.fill(p);"

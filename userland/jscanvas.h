@@ -2029,7 +2029,15 @@ static jval nat_jc_draw_image(jctx *J, jval t, jval *a, int n) {
     pt.rep_x = pt.rep_y = 0;
     if (!jc_source(J, a[0], &pt)) return js_undef();
     if (!cv->px || pt.sw <= 0 || pt.sh <= 0) return js_undef();
-    double sx = 0, sy = 0, sw = pt.sw, sh = pt.sh, dx, dy, dw, dh;
+    /* A picture is measured in its natural size, which may be more than the
+       pixels it is kept at (browser.c, pic_shrink). */
+    int el = jd_el_of(a[0]), nw = pt.sw, nh = pt.sh;
+    if (el >= 0 && jd_doc->nodes[el].tag == T_IMG && jd_picture_size) {
+        int w = 0, h = 0;
+        jd_picture_size(el, &w, &h);
+        if (w > 0 && h > 0) { nw = w; nh = h; }
+    }
+    double sx = 0, sy = 0, sw = nw, sh = nh, dx, dy, dw, dh;
     if (n >= 9) {
         sx = jc_num(J, a, n, 1); sy = jc_num(J, a, n, 2); sw = jc_num(J, a, n, 3); sh = jc_num(J, a, n, 4);
         dx = jc_num(J, a, n, 5); dy = jc_num(J, a, n, 6); dw = jc_num(J, a, n, 7); dh = jc_num(J, a, n, 8);
@@ -2051,6 +2059,11 @@ static jval nat_jc_draw_image(jctx *J, jval t, jval *a, int n) {
     double ub = -s->b / det, ud = s->a / det, uf = (s->b * s->e - s->a * s->f) / det;
     pt.ia = ua * kx; pt.ic = uc * kx; pt.ie = (ue - dx) * kx + sx;
     pt.ib = ub * ky; pt.id = ud * ky; pt.iff = (uf - dy) * ky + sy;
+    if (nw != pt.sw || nh != pt.sh) {
+        double px = (double)pt.sw / nw, py = (double)pt.sh / nh;
+        pt.ia *= px; pt.ic *= px; pt.ie *= px;
+        pt.ib *= py; pt.id *= py; pt.iff *= py;
+    }
     jval sm = js_get(J, t, js_str(J, "imageSmoothingEnabled"));
     pt.smooth = sm.t == JS_UNDEF ? 1 : js_to_bool(sm);
     jc_path_clear(&jc_tmp);

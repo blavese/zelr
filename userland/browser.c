@@ -174,8 +174,17 @@ static int   root_px = 16;
  * A picture that will not decode is not an error: the element falls back to
  * its alt text, which is what that text is for. Only the count of what was
  * skipped is worth saying.
+ *
+ * A page had room for forty-eight, and a news site's front page has a
+ * hundred, most of them sent far bigger than they are drawn: kept as
+ * decoded, three bytes a pixel, forty-eight of those were what the memory
+ * would stand. So a picture is kept at no more than PIC_KEEP along either
+ * side (pic_shrink), which is still sharp drawn the width of a wide window,
+ * and its natural size is what the layout, the page's script and a canvas
+ * are told.
  */
-#define PICS_MAX 48
+#define PICS_MAX 128
+#define PIC_KEEP 1280
 
 typedef struct {
     int     node;                /* which img element */
@@ -183,6 +192,7 @@ typedef struct {
     u8     *alpha;               /* how much of it covers what is behind, or null
                                     for a picture with no clear parts (pic_merge) */
     u32     key;                 /* the address it came from, hashed */
+    int     nat_w, nat_h;        /* its size as the file has it, before pic_shrink */
 } shown;
 
 static shown  pics[PICS_MAX];
@@ -762,6 +772,52 @@ static const u8 *pic_alpha_of(int node) {
     for (int i = 0; i < npics; i++)
         if (pics[i].node == node && pics[i].pic.rgb) return pics[i].alpha;
     return 0;
+}
+
+/* A picture's own size, as its file has it, whatever it is kept at; the
+   kept size for anything that is not a fetched picture. */
+static void pic_natural(int node, const picture *p, int *w, int *h) {
+    *w = p->w;
+    *h = p->h;
+    for (int i = 0; i < npics; i++)
+        if (pics[i].node == node && &pics[i].pic == p) { *w = pics[i].nat_w; *h = pics[i].nat_h; return; }
+}
+
+/* A picture made f times smaller each way, each f by f block averaged, its
+   alpha with it (its colours are already times their alpha, so the
+   averages stay right). Left as it was when there is no memory for it. */
+static void pic_shrink(picture *p, u8 **alpha, int f) {
+    int w = (p->w + f - 1) / f, h = (p->h + f - 1) / f;
+    u8 *rgb = (u8 *)malloc((u64)w * (u64)h * 3);
+    u8 *a = *alpha ? (u8 *)malloc((u64)w * (u64)h) : 0;
+    if (!rgb || (*alpha && !a)) {
+        if (rgb) free(rgb);
+        if (a) free(a);
+        return;
+    }
+    for (int y = 0; y < h; y++)
+        for (int x = 0; x < w; x++) {
+            u32 r = 0, g = 0, b = 0, al = 0, n = 0;
+            for (int yy = y * f; yy < y * f + f && yy < p->h; yy++)
+                for (int xx = x * f; xx < x * f + f && xx < p->w; xx++) {
+                    const u8 *q = p->rgb + ((u64)yy * (u64)p->w + (u64)xx) * 3;
+                    r += q[0];
+                    g += q[1];
+                    b += q[2];
+                    if (a) al += (*alpha)[(u64)yy * (u64)p->w + (u64)xx];
+                    n++;
+                }
+            u8 *o = rgb + ((u64)y * (u64)w + (u64)x) * 3;
+            o[0] = (u8)(r / n);
+            o[1] = (u8)(g / n);
+            o[2] = (u8)(b / n);
+            if (a) a[(u64)y * (u64)w + (u64)x] = (u8)(al / n);
+        }
+    free(p->rgb);
+    p->rgb = rgb;
+    p->w = w;
+    p->h = h;
+    if (a) { free(*alpha); *alpha = a; }
 }
 
 /* --- what is being typed into ---------------------------------------------
@@ -2507,10 +2563,10 @@ static int style_in_drawn(const ddoc *d, int node, cstyle *out) {
     return 1;
 }
 
-/* How big a picture was when it was decoded. */
+/* How big a picture is, as its file has it. */
 static int picture_size(int node, int *w, int *h) {
     for (int i = 0; i < npics; i++)
-        if (pics[i].node == node && pics[i].pic.rgb) { *w = pics[i].pic.w; *h = pics[i].pic.h; return 1; }
+        if (pics[i].node == node && pics[i].pic.rgb) { *w = pics[i].nat_w; *h = pics[i].nat_h; return 1; }
     *w = *h = 0;
     return 0;
 }
@@ -2779,6 +2835,8 @@ static int pic_take(int i, const u8 *body, int len) {
             pics[m - 1].pic = pics[m].pic;
             pics[m - 1].alpha = pics[m].alpha;
             pics[m - 1].key = pics[m].key;
+            pics[m - 1].nat_w = pics[m].nat_w;
+            pics[m - 1].nat_h = pics[m].nat_h;
         }
         npics--;
         for (int m = 0; m < npic_sizes; m++)
@@ -2854,10 +2912,14 @@ static int pic_take(int i, const u8 *body, int len) {
     if (ok && clear && white.rgb) ok = pic_merge(&s->pic, &white, &s->alpha);
     else if (white.rgb) picture_free(&white);
     if (!ok) { picture_free(&s->pic); pics_skipped++; return 0; }
+    s->nat_w = s->pic.w;
+    s->nat_h = s->pic.h;
+    int side = s->pic.w > s->pic.h ? s->pic.w : s->pic.h;
+    if (side > PIC_KEEP) pic_shrink(&s->pic, &s->alpha, (side + PIC_KEEP - 1) / PIC_KEEP);
 
     pic_sizes[npic_sizes].node = i;
-    pic_sizes[npic_sizes].w = s->pic.w;
-    pic_sizes[npic_sizes].h = s->pic.h;
+    pic_sizes[npic_sizes].w = s->nat_w;
+    pic_sizes[npic_sizes].h = s->nat_h;
     npic_sizes++;
     npics++;
     return 1;
@@ -3787,13 +3849,14 @@ static void draw_page(surface *s, int ox, int oy, int vw, int vh) {
                    showing (contain) or all of the box covered (cover); its
                    own size; or the smaller of that and contain. Stretched,
                    every card's thumbnail was a squashed picture. */
-                int tw = it->w, th = it->h;
-                if (it->ofit && p->w > 0 && p->h > 0) {
-                    long long fx = (long long)it->w * 65536 / p->w, fy = (long long)it->h * 65536 / p->h;
+                int tw = it->w, th = it->h, nw, nh;
+                pic_natural(it->node, p, &nw, &nh);
+                if (it->ofit && nw > 0 && nh > 0) {
+                    long long fx = (long long)it->w * 65536 / nw, fy = (long long)it->h * 65536 / nh;
                     long long f = it->ofit == 2 ? (fx > fy ? fx : fy) : (fx < fy ? fx : fy);
                     if (it->ofit == 3 || (it->ofit == 4 && f > 65536)) f = 65536;
-                    tw = (int)((p->w * f) >> 16);
-                    th = (int)((p->h * f) >> 16);
+                    tw = (int)((nw * f) >> 16);
+                    th = (int)((nh * f) >> 16);
                     if (tw < 1) tw = 1;
                     if (th < 1) th = 1;
                 }

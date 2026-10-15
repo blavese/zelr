@@ -288,6 +288,35 @@ BGJS_PAGE = b"""<!doctype html>
 </body></html>
 """
 
+# Sixty pictures, each at an address of its own: a page had room for
+# forty-eight, and the rest were never fetched.
+MANY_PNG = _logo(24, 24, (0x50, 0x78, 0x28))
+MANY_PAGE = (b"""<!doctype html>
+<html><head><title>many</title>
+<style>body { padding: 24px; background: #ffffff; font-size: 0 } img { width: 24px; height: 24px }</style></head>
+<body>""" + b"".join(b'<img src="/many/%d.png" alt="">' % k for k in range(60)) + b"""</body></html>
+""")
+
+# A picture far wider than it is drawn, which the browser keeps smaller
+# than it is: drawn, and its natural width still what its file says, which
+# the page checks and shows as the colour of a box.
+BIG_PNG = _logo(2000, 400, (0x28, 0x50, 0x78))
+BIGPIC_PAGE = b"""<!doctype html>
+<html><head><title>bigpic</title>
+<style>body { padding: 24px; background: #ffffff } #pic { width: 500px; height: 100px; display: block }
+#told { width: 300px; height: 100px }</style></head>
+<body><img id="pic" src="/big.png" alt=""><div id="told"></div>
+<script>
+(function look() {
+  var p = document.getElementById('pic');
+  if (p.complete && p.naturalWidth === 2000 && p.naturalHeight === 400)
+    document.getElementById('told').style.background = '#78285a';
+  else setTimeout(look, 200);
+})();
+</script>
+</body></html>
+"""
+
 # The keyboard told to the page: "/" on the body gives the page's search box
 # the keyboard, as GitHub's does, and Return in it, outside any form, is
 # heard by the box itself. Nothing reached the page but "input" before.
@@ -1425,6 +1454,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._send(BGJS_PAGE)
         elif path == "/keys":
             self._send(KEYS_PAGE)
+        elif path == "/many":
+            self._send(MANY_PAGE)
+        elif path.startswith("/many/") and path.endswith(".png"):
+            self._send(MANY_PNG, ctype="image/png")
+        elif path == "/bigpic":
+            self._send(BIGPIC_PAGE)
+        elif path == "/big.png":
+            self._send(BIG_PNG, ctype="image/png")
         elif path == "/bgjs/teal.png":
             self._send(TEAL, ctype="image/png")
         elif path == "/bg/img/disc.svg":

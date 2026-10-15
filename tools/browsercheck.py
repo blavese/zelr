@@ -132,6 +132,9 @@ EMPTY_OK = (0x2A, 0x9A, 0x5A)         # /empty: its empty sheet told load, its e
 SPRITE_INK = (0x7B, 0x2D, 0xB5)       # /sprite: the icon drawn from /sprite.svg#mark
 BGJS_INK = (0x1C, 0x8C, 0x8C)         # /bgjs: a background picture a script set once the page was up
 KEYS_INK = (0x8C, 0x28, 0x5A)         # /keys: its box once it heard "/", "go" and Return
+MANY_INK = (0x50, 0x78, 0x28)         # /many: each of its sixty pictures
+BIG_INK = (0x28, 0x50, 0x78)          # /bigpic: the picture far wider than it is drawn
+BIG_TOLD = (0x78, 0x28, 0x5A)         # and the box its script colours when the natural size is right
 SHEET_THIRD = (0x50, 0xD0, 0x50)      # and the one before it, which must not have
 STOOD = (0xC0, 0x30, 0x30)            # and the block it draws when they did not
 
@@ -627,6 +630,23 @@ def main():
             bgj, pxk, wk, shotk = page_settled(mon, "br-keys-settled")
             c.add("keys reach the page, which can give its search box the keyboard and hear Return in it (%d)"
                   % count_in(pxk, wk, PAGE, KEYS_INK), heard_keys, shotk)
+
+            # --- more pictures than there was room for, and one kept smaller ---
+            go(vm, mon, "http://%s/many" % srv.host, settle=10.0,
+               was=bgj, name="br-going-many")
+            _, _, _, _, drew_many = mon.wait_screen(
+                "br-many", lambda w, h, px: count_in(px, w, PAGE, MANY_INK) > 32000, timeout=60)
+            bgj, pxn, wn, shotn = page_settled(mon, "br-many-settled")
+            c.add("a page's sixty pictures are all drawn (%d)" % count_in(pxn, wn, PAGE, MANY_INK),
+                  drew_many, shotn)
+            go(vm, mon, "http://%s/bigpic" % srv.host, settle=10.0,
+               was=bgj, name="br-going-bigpic")
+            _, _, _, _, told_big = mon.wait_screen(
+                "br-bigpic", lambda w, h, px: count_in(px, w, PAGE, BIG_INK) > 40000
+                and count_in(px, w, PAGE, BIG_TOLD) > 20000, timeout=40)
+            bgj, pxg, wg, shotg = page_settled(mon, "br-bigpic-settled")
+            c.add("a picture far wider than it is drawn is drawn, its natural size what its file says (%d, %d)"
+                  % (count_in(pxg, wg, PAGE, BIG_INK), count_in(pxg, wg, PAGE, BIG_TOLD)), told_big, shotg)
 
             go(vm, mon, "http://%s/scripted" % srv.host, settle=12.0,
                was=bgj, name="br-going-scripted")
