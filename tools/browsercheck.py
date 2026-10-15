@@ -129,6 +129,7 @@ BASED_SHEET = (0x2A, 0x8A, 0x9A)      # /based/: its sheet, found through its <b
 BASED_SCRIPT = (0x7A, 0x2A, 0x9A)     # and its script
 DYN_OK = (0x2A, 0x5A, 0x9A)           # /dyn: an import() made while the page's requests hold every way out
 EMPTY_OK = (0x2A, 0x9A, 0x5A)         # /empty: its empty sheet told load, its empty module's importer run
+SPRITE_INK = (0x7B, 0x2D, 0xB5)       # /sprite: the icon drawn from /sprite.svg#mark
 SHEET_THIRD = (0x50, 0xD0, 0x50)      # and the one before it, which must not have
 STOOD = (0xC0, 0x30, 0x30)            # and the block it draws when they did not
 
@@ -596,8 +597,17 @@ def main():
             c.add("an import() made while the page's requests hold every way out still comes (%d)"
                   % count_in(pxy, wy, PAGE, DYN_OK), told_dyn, shoty)
 
+            # --- an icon from a sprite in another file ---------------------------
+            go(vm, mon, "http://%s/sprite" % srv.host, settle=10.0,
+               was=dyn, name="br-going-sprite")
+            _, _, _, _, drew_sprite = mon.wait_screen(
+                "br-sprite", lambda w, h, px: count_in(px, w, PAGE, SPRITE_INK) > 30000, timeout=40)
+            spr, pxs, ws, shots = page_settled(mon, "br-sprite-settled")
+            c.add("an icon drawn from a sprite in another file is drawn (%d)"
+                  % count_in(pxs, ws, PAGE, SPRITE_INK), drew_sprite, shots)
+
             go(vm, mon, "http://%s/scripted" % srv.host, settle=12.0,
-               was=dyn, name="br-going-scripted")
+               was=spr, name="br-going-scripted")
             scripted, pxc, wc, shotc = page_settled(mon, "br-scripted")
             c.add("a page's own script runs, and changes the page",
                   count_in(pxc, wc, PAGE, BAND) > 3000, shotc)

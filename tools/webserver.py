@@ -767,6 +767,20 @@ setTimeout(function () {
 </body></html>
 """
 
+# An icon drawn from a sprite in a file of its own, as GitLab draws every
+# icon: <use href="/sprite.svg#mark">. Only an element of the page could be
+# named, and the icon was an empty box. No script: the drawing is the test.
+SPRITE_PAGE = b"""<!doctype html>
+<html><head><title>sprite</title>
+<style>body { font-family: sans-serif; padding: 24px; font-size: 32px; background: #ffffff }</style></head>
+<body><p>sprite</p>
+<svg width="320" height="200"><use href="/sprite.svg#mark"/></svg>
+</body></html>
+"""
+SPRITE_SVG = b"""<?xml version="1.0" encoding="utf-8"?>
+<svg xmlns="http://www.w3.org/2000/svg"><symbol id="mark" viewBox="0 0 32 20"><rect width="32" height="20" fill="#7b2db5"/></symbol></svg>
+"""
+
 # A page with an empty style sheet and a module that imports an empty
 # module: the sheet's link is told load, not error, and the module runs.
 # Each was taken for a file that would not come.
@@ -1424,6 +1438,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 DELAY_NOW -= 1
             self._send(("window.order = (window.order || '') + '%s';" % n).encode(),
                        ctype="application/javascript")
+        elif path == "/sprite":
+            self._send(SPRITE_PAGE)
+        elif path == "/sprite.svg":
+            self._send(SPRITE_SVG, ctype="image/svg+xml")
         elif path == "/empty":
             self._send(EMPTY_PAGE)
         elif path == "/empty.css":

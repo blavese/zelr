@@ -214,6 +214,8 @@ static void drawings_drop(void) {
     drawings_bytes = 0;
 }
 
+static const ddoc *drawn_from(void);
+
 static const picture *drawing_of(const litem *it) {
     for (int i = 0; i < ndrawings; i++) {
         const drawn *dr = &drawings[i];
@@ -229,7 +231,10 @@ static const picture *drawing_of(const litem *it) {
     dr->h = it->h;
     dr->bg = it->bg;
     dr->ink = it->color;
-    svg_render_tree(&doc, it->node, it->w, it->h, &dr->pic, it->bg, it->color);
+    /* From what was laid out, where an icon sprite from another file has
+       been put in (sprites_into) and a shadow tree is in its place. */
+    const ddoc *from = drawn_from();
+    svg_render_tree(it->node < from->count ? from : &doc, it->node, it->w, it->h, &dr->pic, it->bg, it->color);
     if (dr->pic.rgb) drawings_bytes += bytes;
     return dr->pic.rgb ? &dr->pic : 0;
 }
@@ -277,6 +282,37 @@ typedef struct {
 
 static pic_wait_t pic_wait[PIC_WAIT];
 static int npic_wait;
+
+/* Icon sprites in files of their own: <svg><use href="/icons.svg#name"/>,
+ * how GitLab and a great many design systems draw every icon. A <use> could
+ * name only an element of the page, and each icon was an empty box. The
+ * file is fetched as a picture is (a waiting picture whose bg is -2 less
+ * its slot here), kept as markup, and put into the copy of the page that is
+ * laid out (sprites_into, from page_drawn): read in under <head>, its ids
+ * given the slot's prefix so they cannot meet the page's, and each <use>
+ * that names it pointed at its prefixed id, where svg.h's sv_use finds it. */
+#define SPRITES_MAX 8
+static struct { u32 key; char *text; int len; int state; } sprites[SPRITES_MAX];   /* state 0 asked, 1 here, 2 not */
+static int nsprites, sprites_here;
+
+static void sprites_drop(void) {
+    for (int i = 0; i < nsprites; i++) if (sprites[i].text) free(sprites[i].text);
+    nsprites = sprites_here = 0;
+}
+
+/* A sprite's file come: kept as it is, to be read into each copy. */
+static int sprite_take(int slot, const u8 *body, int len) {
+    if (slot < 0 || slot >= nsprites || len <= 0) return 0;
+    char *t = (char *)malloc((u32)len + 1);
+    if (!t) { sprites[slot].state = 2; return 0; }
+    for (int i = 0; i < len; i++) t[i] = (char)body[i];
+    t[len] = 0;
+    sprites[slot].text = t;
+    sprites[slot].len = len;
+    sprites[slot].state = 1;
+    sprites_here++;
+    return 1;
+}
 
 /* An address hashed, to tell a picture's source from the one before it. */
 static u32 pic_key(const char *s) {
@@ -670,6 +706,7 @@ static void pics_drop(void) {
     pics_follow_on = 0;
     drawings_drop();
     bgpics_drop();
+    sprites_drop();
 }
 
 static const picture *pic_of(int node) {
@@ -2318,13 +2355,18 @@ static unsigned flat_dom_seen;
 static int flat_used = -1, flat_count;
 static const ddoc *laid;             /* what the last layout walked */
 
+static const ddoc *drawn_from(void) { return laid ? laid : &doc; }
+
+static void sprites_into(ddoc *d);
+
 static const ddoc *page_drawn(int fresh) {
     trees_gather();
-    if (!trees_n && !index_.npe) return &doc;
+    if (!trees_n && !index_.npe && !sprites_here) return &doc;
     if (!flat_mem) flat_mem = (ddoc *)map(sizeof(ddoc), PROT_READ | PROT_WRITE);
     if (!flat_mem) return &doc;
     if (fresh || flat_used != doc.used || flat_count != doc.count || flat_dom_seen != jsdom_dom_version()) {
         dom_flat(flat_mem, &doc, tree_host, tree_root, (const char (*)[DOM_SCOPE])tree_scope, trees_n);
+        if (sprites_here) sprites_into(flat_mem);
         lay_generated(flat_mem, &sheet, &index_, &match, inl);
         flat_used = doc.used;
         flat_count = doc.count;
@@ -2551,6 +2593,7 @@ static int script_history_length(void) { return hist_n > 0 ? hist_n : 1; }
 static int page_unhidden;      /* it was laid out a second time, shown anyway */
 
 static void pictures_follow(void);
+static void sprites_follow(void);
 
 /* The page's title, as the status line and the console show it: folded as
    a word is (layout.h, lay_fold), since a script's title arrives as it
@@ -2599,6 +2642,7 @@ static void relayout(int width) {
     jsdom_laid_out();
     /* And pictures a script has added or moved since. */
     if (jsdom_live()) pictures_follow();
+    sprites_follow();
 }
 
 /* What this system thinks a link looks like, which is the accent the rest of
@@ -2851,6 +2895,97 @@ static int pic_known(int node, u32 key) {
    source, or a stand-in, and its script gives it the real one later. Asked
    for as the page's first ones were, after every layout a script's change
    brings. Only gathering at build saw pictures before. */
+/* The address and the name a <use> points at in another file: 0 for one
+   that names an element of the page. */
+static int sprite_ref(const ddoc *d, int el, url_t *u, const char **frag) {
+    const char *href = dom_attr(d, el, "href");
+    if (!href) href = dom_attr(d, el, "xlink:href");
+    if (!href || href[0] == '#' || !href[0]) return 0;
+    int h = 0;
+    while (href[h] && href[h] != '#') h++;
+    if (!href[h] || !href[h + 1] || h >= URL_TEXT) return 0;
+    char addr[URL_TEXT];
+    for (int i = 0; i < h; i++) addr[i] = href[i];
+    addr[h] = 0;
+    if (!url_join(&base, addr, u)) return 0;
+    *frag = href + h + 1;
+    return 1;
+}
+
+static int sprite_slot(u32 key) {
+    for (int i = 0; i < nsprites; i++) if (sprites[i].key == key) return i;
+    return -1;
+}
+
+static void sprites_follow(void) {
+    if (!pics_follow_on) return;
+    for (int i = 0; i < doc.count && nsprites < SPRITES_MAX && npic_wait < PIC_WAIT; i++) {
+        if (doc.nodes[i].kind != DN_ELEMENT || doc.nodes[i].tag != T_OTHER) continue;
+        if (!w_same_fold(dom_tag_name(&doc, i), "use")) continue;
+        url_t u;
+        const char *frag;
+        if (!sprite_ref(&doc, i, &u, &frag)) continue;
+        char text[URL_TEXT];
+        url_text(&u, text, sizeof(text));
+        u32 key = pic_key(text);
+        if (sprite_slot(key) >= 0) continue;
+        sprites[nsprites].key = key;
+        sprites[nsprites].text = 0;
+        sprites[nsprites].len = 0;
+        sprites[nsprites].state = 0;
+        pic_wait_add(-1, -2 - nsprites, &u);
+        nsprites++;
+    }
+}
+
+/* Each sprite a <use> of the copy names, read in under <head> once, and the
+   use pointed at it. */
+static void sprites_into(ddoc *d) {
+    int holder = -1, count = d->count;
+    u8 in[SPRITES_MAX] = { 0 };
+    for (int i = 0; i < count; i++) {
+        if (d->nodes[i].kind != DN_ELEMENT || d->nodes[i].tag != T_OTHER) continue;
+        if (!w_same_fold(dom_tag_name(d, i), "use")) continue;
+        url_t u;
+        const char *frag;
+        if (!sprite_ref(d, i, &u, &frag)) continue;
+        char text[URL_TEXT];
+        url_text(&u, text, sizeof(text));
+        int s = sprite_slot(pic_key(text));
+        if (s < 0 || sprites[s].state != 1) continue;
+        char prefix[8] = { 'z', 's', (char)('0' + s), '-', 0 };
+        if (!in[s]) {
+            if (holder < 0) {
+                int at = d->head >= 0 ? d->head : d->root;
+                holder = dom_create_element(d, "svg", 3);
+                if (holder < 0) return;
+                dom_append(d, at, holder);
+            }
+            int first = d->count;
+            dom_parse_into(d, sprites[s].text, sprites[s].len, holder);
+            for (int k = first; k < d->count; k++) {
+                if (d->nodes[k].kind != DN_ELEMENT) continue;
+                const char *id = dom_attr(d, k, "id");
+                if (!id || !id[0]) continue;
+                char named[160];
+                int w = 0;
+                for (const char *q = prefix; *q; q++) named[w++] = *q;
+                for (const char *q = id; *q && w < (int)sizeof(named) - 1; q++) named[w++] = *q;
+                named[w] = 0;
+                dom_flat_mark(d, k, "id", named);
+            }
+            in[s] = 1;
+        }
+        char to[160];
+        int w = 0;
+        to[w++] = '#';
+        for (const char *q = prefix; *q; q++) to[w++] = *q;
+        for (const char *q = frag; *q && w < (int)sizeof(to) - 1; q++) to[w++] = *q;
+        to[w] = 0;
+        dom_flat_mark(d, i, "href", to);
+    }
+}
+
 static void pictures_follow(void) {
     if (!pics_follow_on) return;
     for (int i = 0; i < doc.count && npic_wait < PIC_WAIT; i++) {
@@ -2902,17 +3037,25 @@ static int pictures_pump(void) {
             done = 1;
             if (st > 0 && rp.status < 400 && rp.len > 0) {
                 if (w->bg >= 0) ok = bg_take(&bgpics[w->bg], (const u8 *)rp.body, rp.len);
+                else if (w->bg <= -2) ok = sprite_take(-2 - w->bg, (const u8 *)rp.body, rp.len);
                 else if ((ok = pic_take(w->node, (const u8 *)rp.body, rp.len)) != 0) pics[npics - 1].key = w->key;
             }
             ask_end(w->ask - 1);
         }
         if (!done) continue;
-        if (!ok && w->bg < 0) {
+        if (w->bg <= -2) {
+            /* A sprite: laid out again when it came, to be drawn from. */
+            if (!ok && -2 - w->bg < nsprites) sprites[-2 - w->bg].state = 2;
+            if (ok) what |= 1;
+            what |= 4;
+        } else if (!ok && w->bg < 0) {
             pics_skipped++;
             if (npic_tried < PIC_TRIED) { pic_tried[npic_tried].node = w->node; pic_tried[npic_tried++].key = w->key; }
         }
-        if (ok) what |= w->bg >= 0 ? 2 : 1;
-        what |= 4;
+        if (w->bg > -2) {
+            if (ok) what |= w->bg >= 0 ? 2 : 1;
+            what |= 4;
+        }
         /* Field by field: assigning the whole would be a memcpy, which a
            program here does not have. */
         for (int m = k + 1; m < npic_wait; m++) {
@@ -2994,6 +3137,7 @@ static void build(const char *html, int len, int width, int want_sheets,
     /* The pictures, before the layout so it can leave room for them. */
     if (want_sheets) gather_pictures();
     pics_follow_on = want_sheets;
+    sprites_follow();                    /* and the icon sprites the markup names */
 
     /* And then whatever the page brought with it, before any of it is laid
        out: a script that writes to an element is writing to the document
