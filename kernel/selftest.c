@@ -1284,6 +1284,11 @@ static void test_elf(void) {
     ok("rejects a segment inside kernel memory",
        elf_load(dir, buf, sizeof(buf), &entry) == ELF_ERR_RANGE);
 
+    /* Nor over the room its stack grows into. */
+    make_elf(buf, USER_STACK_TOP - USER_STACK_MAX + 4096);
+    ok("rejects a segment in the room the stack grows into",
+       elf_load(dir, buf, sizeof(buf), &entry) == ELF_ERR_RANGE);
+
     make_elf(buf, USER_SPACE_BASE + 0x40000000ull);
     *(u64 *)(buf + ELF_PHOFF + 32) = 4096;          /* filesz past the end */
     ok("rejects a segment that runs off the end of the file",

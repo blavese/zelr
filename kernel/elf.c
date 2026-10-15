@@ -8,6 +8,7 @@
 #include "pmm.h"
 #include "printf.h"
 #include "string.h"
+#include "user.h"
 
 #define ET_EXEC    2
 #define EM_X86_64  62
@@ -40,7 +41,10 @@ typedef struct {
    refused rather than mapped, which is what stops an image asking to be
    loaded over the kernel. */
 #define USER_LOAD_MIN USER_SPACE_BASE
-#define USER_LOAD_MAX (USER_SPACE_BASE + 0x4FF00000ull)
+/* And below all of the room the stack may grow into (user.h), taken from
+   there: it was a number of its own, a megabyte under the stack's top,
+   and the stack's room grew to eight under it. */
+#define USER_LOAD_MAX (USER_STACK_TOP - USER_STACK_MAX)
 
 const char *elf_error(int code) {
     switch (code) {
