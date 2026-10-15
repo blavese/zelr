@@ -2353,6 +2353,48 @@ int main(void) {
         jsdom_styles_with(0);
     }
 
+    /* --- the keyboard ------------------------------------------------------------------
+     *
+     * keydown, keypress and keyup at whatever has the keyboard, with the
+     * fields pages read; a refused key kept from the browser; and the
+     * keyboard moved by the browser and by the page alike. */
+    {
+        load("<body><input id=i><input id=j><button id=b>b</button><p id=x>none</p><script>"
+             "var seen = [], put = function(s){ seen.push(s); document.getElementById('x').textContent = seen.join(','); };"
+             "document.body.addEventListener('keydown', function(e){ put('down ' + e.key + ' ' + e.code + ' ' + e.keyCode"
+             " + (e.shiftKey ? ' shift' : '') + (e.ctrlKey ? ' ctrl' : '') + (e.target.id ? ' at ' + e.target.id : ''));"
+             " if (e.key === 'ArrowDown') e.preventDefault(); });"
+             "document.addEventListener('keypress', function(e){ put('press ' + e.key + ' ' + e.charCode + ' ' + e.which); });"
+             "document.addEventListener('keyup', function(e){ put('up ' + e.key); });"
+             "document.getElementById('i').addEventListener('focus', function(){ put('focus i'); });"
+             "document.getElementById('i').addEventListener('blur', function(){ put('blur i'); });"
+             "document.getElementById('b').onclick = function(){ document.getElementById('j').focus(); };"
+             "</script></body>");
+        char err[128];
+        run_scripts(&page, err, (int)sizeof(err), 0);
+        int i = dom_by_id(&page, "i"), j = dom_by_id(&page, "j");
+        int took[4];
+        took[0] = jsdom_key_down('A');
+        jsdom_key_up('A');
+        took[1] = jsdom_key_down(KEY_DOWN);
+        took[2] = jsdom_key_down('\n');
+        jsdom_focused(i);
+        took[3] = jsdom_key_down('!');
+        jsdom_key_down(KEY_MOD_CTRL | 3);
+        oks("keys reach the page as keydown, keypress and keyup, with key, code and keyCode, at what has the keyboard",
+            content_of(dom_by_id(&page, "x")),
+            "down A KeyA 65 shift,press A 65 65,up A,down ArrowDown ArrowDown 40,down Enter Enter 13,press Enter 13 13,"
+            "focus i,down ! Digit1 49 shift at i,press ! 33 33,down c KeyC 67 ctrl at i");
+        ok("and one the page refused is kept from the browser", !took[0] && took[1] && !took[2] && !took[3]);
+        int active_i = jsdom_active() == i;
+        jsdom_click(dom_by_id(&page, "b"));
+        ok("the page knows what the browser gave the keyboard to, and the browser what the page gave it to",
+           active_i && jsdom_active() == j);
+        oks("which the one losing it hears", content_of(dom_by_id(&page, "x")),
+            "down A KeyA 65 shift,press A 65 65,up A,down ArrowDown ArrowDown 40,down Enter Enter 13,press Enter 13 13,"
+            "focus i,down ! Digit1 49 shift at i,press ! 33 33,down c KeyC 67 ctrl at i,blur i");
+    }
+
     /* --- asking the network ------------------------------------------------------------
      *
      * fetch, Headers, Request, Response, AbortController and FormData, and

@@ -778,6 +778,7 @@ static const u8 *pic_alpha_of(int node) {
 static int browser_win = -1;
 
 static int focus_node = -1;
+static int page_active = -1;      /* what the page was last known to give the keyboard to */
 
 /* The same editor the address bar uses, pointed at whichever control has the
    keyboard. One of them, rather than one per field: only one can be typed
@@ -3150,6 +3151,7 @@ static void build(const char *html, int len, int width, int want_sheets,
        the layout is about to read, so running them afterwards would show
        the page as it was and correct it a frame later. */
     focus_control(-1);
+    page_active = -1;
     script_err[0] = 0;
     said_script_err = 0;
     scripts_ran = 0;
@@ -3979,6 +3981,29 @@ static void draw_page(surface *s, int ox, int oy, int vw, int vh) {
 static char address[URL_TEXT];
 static ui_field bar = { address, sizeof(address), 0, 0, 0 };
 
+/* The keyboard given to a control, or taken away (-1), by the reader: the
+   page hears of it as blur and focus (jsdom.h, jsdom_focused). */
+static void give_focus(int el) {
+    focus_control(el);
+    jsdom_focused(el);
+    page_active = el;
+}
+
+/* The page moved the keyboard itself (el.focus(), el.blur()): a field it
+   gave it to takes what is typed next, and one it took it from gives it
+   up. Never while the address bar is being typed in. Whether it moved. */
+static int follow_page_focus(void) {
+    if (bar.focused || !jsdom_live()) return 0;
+    int a = jsdom_active();
+    if (a == page_active) return 0;
+    int was = page_active;
+    page_active = a;
+    int ck = a >= 0 && a < doc.count ? lay_control_kind(&doc, a) : CTL_NONE;
+    if (ck == CTL_TEXT || ck == CTL_PASSWORD || ck == CTL_AREA) focus_control(a);
+    else if (focus_node >= 0 && focus_node == was) focus_control(-1);
+    return 1;
+}
+
 /* Set when the bar has just been clicked into, and cleared by the first
    thing typed after that.
  *
@@ -4223,6 +4248,10 @@ int main(int argc, char **argv) {
             dirty = 1;
         }
 
+        /* A field the page gave the keyboard to since (a search box opened
+           by a script) is typed into from now on. */
+        if (follow_page_focus()) dirty = 1;
+
         /* --- what the keyboard does ----------------------------------------
          *
          * Every key that arrived this frame, not just the first. Somebody
@@ -4255,10 +4284,19 @@ int main(int argc, char **argv) {
                     bar_fresh = 0;
                     ui_field_key(&bar, raw);
                 }
+                continue;
+            }
+            /* The page hears the key first and may keep it (jsdom.h,
+               jsdom_key_down); a handler may give one of its fields the
+               keyboard, which then takes the key, as in a browser. */
+            int kept = jsdom_live() && jsdom_key_down(raw);
+            if (follow_page_focus()) dirty = 1;
+            if (kept) {
+                dirty = 1;
             } else if (focus_node >= 0) {
                 int ck = lay_control_kind(&doc, focus_node);
                 if (k == 27) {
-                    focus_control(-1);
+                    give_focus(-1);
                 } else if (k == '\n' && ck != CTL_AREA) {
                     /* Return in a field sends the form it is in, which is
                        how a search box has always worked and the only way
@@ -4305,6 +4343,7 @@ int main(int argc, char **argv) {
                     want_load = 1;
                 }
             }
+            if (jsdom_live()) jsdom_key_up(raw);
         }
 
         /* A handler for what was typed may have changed the page. */
@@ -4553,7 +4592,7 @@ int main(int argc, char **argv) {
 
                 if (ck == CTL_CHECK) {
                     field_set_checked(node_under, !field_checked(node_under));
-                    focus_control(node_under);
+                    give_focus(node_under);
                     jsdom_toggled(node_under);
                 } else if (ck == CTL_RADIO) {
                     /* One of a name at a time, which is the only thing that
@@ -4568,11 +4607,15 @@ int main(int argc, char **argv) {
                             if (o && w_same(o, nm)) field_set_checked(i, 0);
                         }
                     field_set_checked(node_under, 1);
-                    focus_control(node_under);
+                    give_focus(node_under);
                     jsdom_toggled(node_under);
                 } else if (ck == CTL_BUTTON) {
                     const char *t = dom_attr(&doc, node_under, "type");
+                    /* The page's keyboard goes to the button; the browser
+                       has nothing to type into. */
                     focus_control(-1);
+                    jsdom_focused(node_under);
+                    page_active = node_under;
                     /* A plain button is the page's; only a submit button
                        sends its form, once the page has heard of it. */
                     int f = form_of(node_under);
@@ -4580,7 +4623,7 @@ int main(int argc, char **argv) {
                         && !jsdom_submitting(f))
                         submit_form(f);
                 } else {
-                    focus_control(node_under);
+                    give_focus(node_under);
                 }
                 if (jsdom_live() && jsdom_changed()) {
                     relayout(view_w - UI_PAD * 2);
@@ -4595,7 +4638,7 @@ int main(int argc, char **argv) {
         if (in.released && focus_node >= 0
             && (node_under < 0
                 || lay_control_kind(&doc, node_under) == CTL_NONE))
-            focus_control(-1);
+            give_focus(-1);
 
         if (over_link >= 0 && in.released) {
             in.released = 0;

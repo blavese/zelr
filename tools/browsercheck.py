@@ -131,6 +131,7 @@ DYN_OK = (0x2A, 0x5A, 0x9A)           # /dyn: an import() made while the page's 
 EMPTY_OK = (0x2A, 0x9A, 0x5A)         # /empty: its empty sheet told load, its empty module's importer run
 SPRITE_INK = (0x7B, 0x2D, 0xB5)       # /sprite: the icon drawn from /sprite.svg#mark
 BGJS_INK = (0x1C, 0x8C, 0x8C)         # /bgjs: a background picture a script set once the page was up
+KEYS_INK = (0x8C, 0x28, 0x5A)         # /keys: its box once it heard "/", "go" and Return
 SHEET_THIRD = (0x50, 0xD0, 0x50)      # and the one before it, which must not have
 STOOD = (0xC0, 0x30, 0x30)            # and the block it draws when they did not
 
@@ -615,6 +616,17 @@ def main():
             bgj, pxb, wb, shotb = page_settled(mon, "br-bgjs-settled")
             c.add("a background picture a script sets once the page is up is fetched and drawn (%d)"
                   % count_in(pxb, wb, PAGE, BGJS_INK), drew_bgjs, shotb)
+
+            # --- keys the page hears, and a field it gives the keyboard to -----
+            go(vm, mon, "http://%s/keys" % srv.host, settle=10.0,
+               was=bgj, name="br-going-keys")
+            page_settled(mon, "br-keys-up")
+            vm.type("/go\n")
+            _, _, _, _, heard_keys = mon.wait_screen(
+                "br-keys", lambda w, h, px: count_in(px, w, PAGE, KEYS_INK) > 30000, timeout=30)
+            bgj, pxk, wk, shotk = page_settled(mon, "br-keys-settled")
+            c.add("keys reach the page, which can give its search box the keyboard and hear Return in it (%d)"
+                  % count_in(pxk, wk, PAGE, KEYS_INK), heard_keys, shotk)
 
             go(vm, mon, "http://%s/scripted" % srv.host, settle=12.0,
                was=bgj, name="br-going-scripted")

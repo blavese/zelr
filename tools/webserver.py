@@ -288,6 +288,26 @@ BGJS_PAGE = b"""<!doctype html>
 </body></html>
 """
 
+# The keyboard told to the page: "/" on the body gives the page's search box
+# the keyboard, as GitHub's does, and Return in it, outside any form, is
+# heard by the box itself. Nothing reached the page but "input" before.
+KEYS_PAGE = b"""<!doctype html>
+<html><head><title>keys</title>
+<style>body { font-family: sans-serif; padding: 24px; font-size: 32px; background: #ffffff }
+#box { width: 400px; height: 200px } input { font-size: 32px }</style></head>
+<body><p>keys</p><input id="q"><div id="box"></div>
+<script>
+var q = document.getElementById('q');
+document.addEventListener('keydown', function (e) {
+  if (e.target === document.body && e.key === '/' && e.keyCode === 191) { q.focus(); e.preventDefault(); }
+});
+q.addEventListener('keydown', function (e) {
+  if (e.key === 'Enter' && e.keyCode === 13 && q.value === 'go') document.getElementById('box').style.background = '#8c285a';
+});
+</script>
+</body></html>
+"""
+
 # Background pictures, from a sheet in a directory of its own that names them
 # relative to itself (../img/, which from the page would be the wrong place),
 # a mask that paints teal in the shape of a disc, the half-clear picture as a
@@ -1403,6 +1423,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._send(OLIVE, ctype="image/png")
         elif path == "/bgjs":
             self._send(BGJS_PAGE)
+        elif path == "/keys":
+            self._send(KEYS_PAGE)
         elif path == "/bgjs/teal.png":
             self._send(TEAL, ctype="image/png")
         elif path == "/bg/img/disc.svg":

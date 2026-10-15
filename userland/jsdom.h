@@ -6267,6 +6267,172 @@ __attribute__((unused)) static void jsdom_toggled(int node) {
     jd_fire_kind(node, 0, "change", 1, 0);
 }
 
+/* --- the keyboard, told to the page ------------------------------------------------------
+ *
+ * keydown goes to the element with the keyboard (the body when nothing has
+ * it), keypress after it for a character or Return, and keyup once the
+ * browser has done what the key does, each with the fields a browser
+ * gives: keyCode and which among them, since pages still compare
+ * e.keyCode with 13. A page that refuses keydown or keypress keeps the key
+ * from the browser: the field is not typed in, the page not scrolled, the
+ * form not sent. GitHub's "/" and a slideshow's arrows are keydown on the
+ * body; a search box outside any form sends itself on keydown of Enter. */
+
+typedef struct { u32 k; const char *key, *code; int keycode; } jd_keyname;
+static const jd_keyname JD_KEYNAMES[] = {
+    { KEY_UP, "ArrowUp", "ArrowUp", 38 },       { KEY_DOWN, "ArrowDown", "ArrowDown", 40 },
+    { KEY_LEFT, "ArrowLeft", "ArrowLeft", 37 }, { KEY_RIGHT, "ArrowRight", "ArrowRight", 39 },
+    { KEY_HOME, "Home", "Home", 36 },           { KEY_END, "End", "End", 35 },
+    { KEY_PAGE_UP, "PageUp", "PageUp", 33 },    { KEY_PAGE_DOWN, "PageDown", "PageDown", 34 },
+    { KEY_DELETE, "Delete", "Delete", 46 },     { KEY_INSERT, "Insert", "Insert", 45 },
+    { '\n', "Enter", "Enter", 13 },             { '\r', "Enter", "Enter", 13 },
+    { '\b', "Backspace", "Backspace", 8 },      { '\t', "Tab", "Tab", 9 },
+    { 27, "Escape", "Escape", 27 },             { ' ', " ", "Space", 32 },
+    { 0, 0, 0, 0 }
+};
+/* Punctuation as a US keyboard has it: each key, then the same key shifted. */
+static const char JD_PUNCT[] = "-_=+[{]}\\|;:'\",<.>/?`~";
+static const char *const JD_PUNCT_CODE[] = { "Minus", "Equal", "BracketLeft", "BracketRight", "Backslash",
+                                             "Semicolon", "Quote", "Comma", "Period", "Slash", "Backquote" };
+static const u8 JD_PUNCT_KC[] = { 189, 187, 219, 221, 220, 186, 222, 188, 190, 191, 192 };
+static const char JD_SHIFTED_DIGITS[] = ")!@#$%^&*(";
+
+typedef struct {
+    char key[16];                 /* what the key means: "a", "Enter" */
+    char code[16];                /* which key it is: "KeyA" */
+    int  keycode, charcode, shift, ctrl;
+} jd_keyinfo;
+
+static void jd_key_put(char *to, int cap, const char *from) {
+    int i = 0;
+    for (; from[i] && i < cap - 1; i++) to[i] = from[i];
+    to[i] = 0;
+}
+
+static void jd_key_info(u32 raw, jd_keyinfo *ki) {
+    u32 c = KEY_CODE(raw);
+    ki->key[0] = ki->code[0] = 0;
+    ki->keycode = ki->charcode = ki->shift = 0;
+    ki->ctrl = KEY_CTRL(raw);
+    if (ki->ctrl && key_ctrl_letter(raw)) c = (u32)key_ctrl_letter(raw);
+    for (int i = 0; JD_KEYNAMES[i].key; i++)
+        if (JD_KEYNAMES[i].k == c) {
+            jd_key_put(ki->key, (int)sizeof(ki->key), JD_KEYNAMES[i].key);
+            jd_key_put(ki->code, (int)sizeof(ki->code), JD_KEYNAMES[i].code);
+            ki->keycode = JD_KEYNAMES[i].keycode;
+            if (c == '\n' || c == '\r' || c == ' ') ki->charcode = c == ' ' ? 32 : 13;
+            return;
+        }
+    if (c >= KEY_F1 && c < KEY_F1 + 12) {
+        int f = (int)(c - KEY_F1) + 1;
+        ki->key[0] = ki->code[0] = 'F';
+        ki->key[1] = ki->code[1] = (char)(f < 10 ? '0' + f : '1');
+        ki->key[2] = ki->code[2] = (char)(f < 10 ? 0 : '0' + f - 10);
+        ki->key[3] = ki->code[3] = 0;
+        ki->keycode = 111 + f;
+        return;
+    }
+    if (KEY_IS_SPECIAL(c) || c < 32) return;
+    ki->charcode = (int)c;
+    if (c < 0x80) {
+        ki->key[0] = (char)c;
+        ki->key[1] = 0;
+    } else {                      /* the character, as UTF-8 */
+        int n = 0;
+        if (c < 0x800) { ki->key[n++] = (char)(0xC0 | (c >> 6)); }
+        else { ki->key[n++] = (char)(0xE0 | (c >> 12)); ki->key[n++] = (char)(0x80 | ((c >> 6) & 0x3F)); }
+        ki->key[n++] = (char)(0x80 | (c & 0x3F));
+        ki->key[n] = 0;
+        return;
+    }
+    if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')) {
+        int up = c >= 'a' ? (int)c - 32 : (int)c;
+        jd_key_put(ki->code, (int)sizeof(ki->code), "KeyA");
+        ki->code[3] = (char)up;
+        ki->keycode = up;
+        ki->shift = c <= 'Z';
+    } else if (c >= '0' && c <= '9') {
+        jd_key_put(ki->code, (int)sizeof(ki->code), "Digit0");
+        ki->code[5] = (char)c;
+        ki->keycode = (int)c;
+    } else {
+        for (int i = 0; JD_SHIFTED_DIGITS[i]; i++)
+            if ((u32)(u8)JD_SHIFTED_DIGITS[i] == c) {
+                jd_key_put(ki->code, (int)sizeof(ki->code), "Digit0");
+                ki->code[5] = (char)('0' + i);
+                ki->keycode = '0' + i;
+                ki->shift = 1;
+                return;
+            }
+        for (int i = 0; JD_PUNCT[i]; i++)
+            if ((u32)(u8)JD_PUNCT[i] == c) {
+                jd_key_put(ki->code, (int)sizeof(ki->code), JD_PUNCT_CODE[i / 2]);
+                ki->keycode = JD_PUNCT_KC[i / 2];
+                ki->shift = i & 1;
+                return;
+            }
+    }
+}
+
+static int jd_key_target(void) {
+    if (jd_active >= 0 && jd_connected(jd_active)) return jd_active;
+    return jd_doc ? jd_doc->body : -1;
+}
+
+/* One key event at whatever has the keyboard now: whether it was refused. */
+static int jd_key_event(const char *type, const jd_keyinfo *ki, int as_char) {
+    int t = jd_key_target();
+    if (t < 0) return 0;
+    jctx *J = &jd_J;
+    jobj *ev = jd_new_event(jd_evkind("KeyboardEvent"), type, 1, 1);
+    if (!ev) return 0;
+    int kc = as_char ? ki->charcode : ki->keycode;
+    js_set(J, ev, "isTrusted", js_bool(1));
+    js_set(J, ev, "key", jd_str(ki->key));
+    js_set(J, ev, "code", jd_str(ki->code));
+    js_set(J, ev, "keyCode", js_num(kc));
+    js_set(J, ev, "which", js_num(kc));
+    js_set(J, ev, "charCode", js_num(as_char ? ki->charcode : 0));
+    js_set(J, ev, "ctrlKey", js_bool(ki->ctrl));
+    js_set(J, ev, "shiftKey", js_bool(ki->shift));
+    jval tv = jd_el_value(J, t);
+    return jd_dispatch_to(ev, tv, tv);
+}
+
+/* keydown, then keypress for a character or Return: whether the page
+   refused the key, which keeps it from the browser. */
+__attribute__((unused)) static int jsdom_key_down(u32 raw) {
+    if (!jd_open || jd_spent()) return 0;
+    jd_keyinfo ki;
+    jd_key_info(raw, &ki);
+    if (jd_key_event("keydown", &ki, 0)) return 1;
+    return ki.charcode && !ki.ctrl && jd_key_event("keypress", &ki, 1);
+}
+
+/* keyup, once the browser has done what the key does. */
+__attribute__((unused)) static void jsdom_key_up(u32 raw) {
+    if (!jd_open || jd_spent()) return;
+    jd_keyinfo ki;
+    jd_key_info(raw, &ki);
+    jd_key_event("keyup", &ki, 0);
+}
+
+/* The browser gave the keyboard to an element, or took it away (-1): the
+   page hears blur and focus as it does for el.focus(). */
+__attribute__((unused)) static void jsdom_focused(int node) {
+    if (!jd_open || jd_active == node) return;
+    int old = jd_active;
+    jd_active = node;
+    if (old >= 0 && jd_connected(old)) { jd_fire_simple(old, "blur", 0, 0); jd_fire_simple(old, "focusout", 1, 0); }
+    if (node >= 0) { jd_fire_simple(node, "focus", 0, 0); jd_fire_simple(node, "focusin", 1, 0); }
+}
+
+/* The element with the keyboard as the page left it (el.focus(),
+   el.blur()), or -1. */
+__attribute__((unused)) static int jsdom_active(void) {
+    return jd_open && jd_active >= 0 && jd_connected(jd_active) ? jd_active : -1;
+}
+
 static int jsdom_live(void) { return jd_open; }
 
 /* Whether anything has changed the document since this was last asked, which
