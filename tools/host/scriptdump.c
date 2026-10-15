@@ -1,6 +1,6 @@
 /* What each of a real page's scripts did, one line each.
  *
- *   scriptdump ADDRESS [SECONDS] [text] [tree] [net] ['js=EXPRESSION' ...] [prof] [from=ADDRESS] [real]
+ *   scriptdump ADDRESS [SECONDS] [text] [tree] [net] ['js=EXPRESSION' ...] [prof] [live] [from=ADDRESS] [real]
  *
  * Loads the page with the browser's own load() -- the same fetches, the same
  * limits on how many scripts and how large, the same document and bindings
@@ -21,7 +21,9 @@
  * reads out of it.
  *
  * "prof", in a build with HOST_CFLAGS=-DJS_ALLOC_PROFILE, prints where the
- * page's script memory went, by the calls that asked for it (js.h).
+ * page's script memory went, by the calls that asked for it (js.h); "live"
+ * prints what is still held after a collection, by the same calls (jsgc.h),
+ * which is what a page that runs out is spending its memory on.
  *
  * "net" prints each request the page's scripts make as it is answered: the
  * method, where it ended up, and the status (or the error, below nought).
@@ -404,6 +406,14 @@ int main(int argc, char **argv) {
         js_prof_report(60);
 #else
         puts("prof: built without HOST_CFLAGS=-DJS_ALLOC_PROFILE" "\n");
+#endif
+    }
+    for (int a = 2; a < argc; a++) {
+        if (!w_same(argv[a], "live")) continue;
+#ifdef JS_ALLOC_PROFILE
+        js_prof_live(&jd_J, 60);
+#else
+        puts("live: built without HOST_CFLAGS=-DJS_ALLOC_PROFILE" "\n");
 #endif
     }
 

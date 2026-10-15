@@ -255,6 +255,9 @@ static void js_gc_sweep(jctx *J) {
             }
             *link = next;
             js_map_remove(J, c);
+#ifdef JS_ALLOC_PROFILE
+            free((void *)c->spare);
+#endif
             free(c);
             c = next;
             continue;
@@ -324,3 +327,51 @@ static void js_gc(jctx *J) {
     if (J->gc_freed < J->mem_cap / 16 && live + J->mem_cap / 16 > J->mem_cap) J->gc_next = J->mem_cap + JS_MEM_SPARE;
     J->gc_busy = 0;
 }
+
+#ifdef JS_ALLOC_PROFILE
+/* What is still held, by the site that made it: a collection first, then
+   every block in use summed under the stack it was made at (scriptdump URL
+   SECONDS live, in a build with HOST_CFLAGS=-DJS_ALLOC_PROFILE). */
+static u64 js_prof_held[JS_PROF_SLOTS + 1];
+static u32 js_prof_held_n[JS_PROF_SLOTS + 1];
+
+__attribute__((unused)) static void js_prof_live(jctx *J, int most) {
+    js_gc(J);
+    for (int s = 0; s <= JS_PROF_SLOTS; s++) { js_prof_held[s] = 0; js_prof_held_n[s] = 0; }
+    u64 total = 0;
+    for (jchunk *c = J->chunks; c; c = c->next) {
+        u32 nb = c->used / 16;
+        unsigned short *sites = (unsigned short *)c->spare;
+        for (u32 i = 0; i < nb; ) {
+            u32 j = js_next_start(c, i + 1);
+            if (!js_is_free(c->data + i * 16)) {
+                int s = sites ? sites[i] : 0;
+                js_prof_held[s] += (u64)(j - i) * 16;
+                js_prof_held_n[s]++;
+                total += (u64)(j - i) * 16;
+            }
+            i = j;
+        }
+    }
+    char line[1200];
+    snprintf(line, sizeof(line), "held %llu KB after a collection\n", (unsigned long long)(total / 1024));
+    puts(line);
+    static u8 shown[JS_PROF_SLOTS + 1];
+    for (int r = 0; r < most; r++) {
+        int best = -1;
+        for (int s = 0; s <= JS_PROF_SLOTS; s++)
+            if (!shown[s] && js_prof_held[s] && (best < 0 || js_prof_held[s] > js_prof_held[best])) best = s;
+        if (best < 0) break;
+        shown[best] = 1;
+        int at = snprintf(line, sizeof(line), "%7llu KB %8u  ", (unsigned long long)(js_prof_held[best] / 1024), js_prof_held_n[best]);
+        if (best == 0) at += snprintf(line + at, sizeof(line) - at, "(made before profiling knew its chunk)");
+        for (int i = 0; best > 0 && i < 4 && js_prof[best - 1].at[i]; i++) {
+            if (i) at += snprintf(line + at, sizeof(line) - at, " < ");
+            at += host_symbol(js_prof[best - 1].at[i], line + at, (int)sizeof(line) - at - 4);
+            if (at > (int)sizeof(line) - 300) break;
+        }
+        snprintf(line + at, sizeof(line) - at, "\n");
+        puts(line);
+    }
+}
+#endif

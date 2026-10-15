@@ -275,7 +275,8 @@ typedef struct jchunk {
     struct jchunk *next;
     u32 used, size;
     u32 *bits;                /* after the data: where blocks start, which are in use (jsgc.h) */
-    u64 spare;                /* the data starts on sixteen bytes */
+    u64 spare;                /* the data starts on sixteen bytes; a profiling build keeps the site each
+                                 block was made at here (JS_ALLOC_PROFILE) */
     u8  data[1];
 } jchunk;
 
@@ -570,7 +571,7 @@ int snprintf(char *out, unsigned long long cap, const char *fmt, ...);
 typedef struct { void *at[4]; u64 bytes; u32 count; } jprof;
 static jprof js_prof[JS_PROF_SLOTS];
 
-__attribute__((noinline)) static void js_prof_note(u32 n) {
+__attribute__((noinline)) static int js_prof_note(u32 n) {
     void *f[4] = { 0, 0, 0, 0 };
     RtlCaptureStackBackTrace(2, 4, f, 0);
     u64 h = 1469598103934665603ull;
@@ -581,9 +582,10 @@ __attribute__((noinline)) static void js_prof_note(u32 n) {
         if (p->at[0] == f[0] && p->at[1] == f[1] && p->at[2] == f[2] && p->at[3] == f[3]) {
             p->bytes += n;
             p->count++;
-            return;
+            return (int)s;
         }
     }
+    return -1;
 }
 
 /* The most costly stacks, most first, and what all of it came to. */
@@ -736,6 +738,7 @@ static void *js_take(jctx *J, u32 n) {
     if (!fresh) return 0;
     fresh->used = 0;
     fresh->size = want;
+    fresh->spare = 0;
     fresh->bits = (u32 *)(fresh->data + want);
     memset(fresh->bits, 0, (int)(2 * words * 4));
     if (!js_map_add(J, fresh)) {
@@ -756,7 +759,7 @@ static void *js_take(jctx *J, u32 n) {
 
 static void *js_alloc(jctx *J, u32 n) {
 #ifdef JS_ALLOC_PROFILE
-    js_prof_note((n + 15u) & ~15u);
+    int site = js_prof_note((n + 15u) & ~15u);
 #endif
     n = (n + 15u) & ~15u;
     if (!n) n = 16;
@@ -786,6 +789,17 @@ static void *js_alloc(jctx *J, u32 n) {
     }
     J->allocated += n;
     memset(p, 0, (int)n);
+#ifdef JS_ALLOC_PROFILE
+    /* Which site made the block, for what is still held (jsgc.h, js_prof_live). */
+    jchunk *pc = js_chunk_of(J, p);
+    if (pc) {
+        if (!pc->spare) {
+            pc->spare = (u64)malloc((u64)(pc->size / 16) * sizeof(unsigned short));
+            if (pc->spare) memset((void *)pc->spare, 0, (int)((pc->size / 16) * sizeof(unsigned short)));
+        }
+        if (pc->spare) ((unsigned short *)pc->spare)[(u32)((u8 *)p - pc->data) / 16] = (unsigned short)(site + 1);
+    }
+#endif
     return p;
 }
 
