@@ -204,6 +204,11 @@ struct jacc {
     jval get, set;
 };
 
+/* A Map's or Set's table (jsprom.h); here because the collector looks
+   inside the weak ones itself (jsgc.h). */
+typedef struct jmentry { jval k, v; u32 hash; int next; int gone; } jmentry;
+typedef struct { jmentry *e; u32 n, cap, live; int *heads; u32 nheads; } jmap;
+
 typedef enum {
     JO_PLAIN = 0, JO_ARRAY, JO_FUNC, JO_NATIVE, JO_REGEX,
     JO_ARGS,                  /* an arguments object: elements like an array */
@@ -419,6 +424,11 @@ typedef struct jctx {
     jchunk **gc_map;
     u32     gc_nmap, gc_capmap;
     u32     gc_next, gc_ticks, gc_runs, gc_freed;
+    /* The WeakMaps and WeakSets made here, in a list from malloc so that it
+       holds none of them: the collector looks at each, and lets go of what
+       only they hold (jsgc.h, js_gc_weak_settle). */
+    jobj  **weak;
+    u32     nweak, capweak;
     u8      gc_on, gc_busy;
     u8      ran_out;          /* told it had no more memory: it stays told, whatever is collected after */
 

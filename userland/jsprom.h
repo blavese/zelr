@@ -12,8 +12,9 @@
  * what the standard says it sees: what was added since, and not what was
  * deleted. Only clear() empties the list. Any value is a key, compared as
  * SameValueZero: an object by what it is, NaN as itself. The weak kinds are
- * the same table and hold their keys strongly: with no collector, nothing
- * is ever let go of anyway. */
+ * the same table, kept in the context's list of them, and the collector does
+ * not look inside one as it does other memory: an entry is kept only while
+ * its key is reachable some other way (jsgc.h). */
 
 static u32 jm_hash(jval k) {
     switch (k.t) {
@@ -117,6 +118,20 @@ static jval js_collection_make(jctx *J, jval t, jval *a, int n, int kind) {
     o->kind = (u8)kind;
     o->internal = jm_new(J);
     if (!o->internal) return js_undef();
+    if (kind == JO_WEAKMAP || kind == JO_WEAKSET) {
+        if (J->nweak >= J->capweak) {
+            u32 cap = J->capweak ? J->capweak * 2 : 64;
+            jobj **more = (jobj **)malloc((u64)cap * sizeof(jobj *));
+            if (more) {
+                for (u32 i = 0; i < J->nweak; i++) more[i] = J->weak[i];
+                free(J->weak);
+                J->weak = more;
+                J->capweak = cap;
+            }
+        }
+        /* One that could not be listed holds its keys, as all of them did. */
+        if (J->nweak < J->capweak) J->weak[J->nweak++] = o;
+    }
     jval src = js_arg(a, n, 0);
     if (src.t == JS_UNDEF || src.t == JS_NULL) return t;
     int is_map = kind == JO_MAP || kind == JO_WEAKMAP;

@@ -1997,6 +1997,14 @@ int main(void) {
               " for (var j = 0; j < 200; j++) { var junk = 'z'.repeat(100000) + j; }"
               " result = [q.length, s.length, s[0].slice(-2), c.length, c[0].slice(-1), p.length].join(' ');",
               "0 1 29 1 0 1", 2, 3u * 1024 * 1024);
+    collected("a WeakMap and a WeakSet let go of what only they hold, and keep what a key still reached holds",
+              "var wm = new WeakMap(), ws = new WeakSet(), keep = [];"
+              " for (var i = 0; i < 40; i++) { var k = { i: i }; wm.set(k, 'v'.repeat(100000) + i); ws.add(k); if (i % 10 === 0) keep.push(k); }"
+              " var a = {}, b = {}; wm.set(a, { next: b, pad: 'p'.repeat(100000) }); wm.set(b, 'b'.repeat(100000)); keep.push(a);"
+              " for (var j = 0; j < 200; j++) { var junk = 'z'.repeat(100000) + j; }"
+              " result = [keep.map(function (k) { return k === a ? (wm.get(a).next === b && wm.get(b).length)"
+              "  : wm.get(k).slice(-2) + ws.has(k); }).join(), wm.has({}), ws.has(a)].join(' ');",
+              "v0true,10true,20true,30true,100000 false false", 2, 3u * 1024 * 1024);
     where_memory_is();
     lazy_reading();
     collector_inside();

@@ -98,6 +98,37 @@ static void js_gc_try(jctx *J, u64 w) {
     js_gc_push(c, (u32)s);
 }
 
+/* The mark of the block p points into, as js_gc_try finds it: 1 for a
+   pointer outside the region, which nothing here frees. */
+static u32 *js_gc_mark_of(jctx *J, const void *ptr, u32 *bit) {
+    const u8 *p = (const u8 *)ptr;
+    if (!p || p < js_gc_lo || p >= js_gc_hi) return 0;
+    jchunk *c = js_chunk_of(J, p);
+    if (!c) return 0;
+    u32 off = (u32)(p - c->data);
+    if (off >= c->used) return 0;
+    int s = js_prev_start(c, off / 16);
+    if (s < 0) return 0;
+    *bit = (u32)s;
+    return js_marks(c);
+}
+
+static int js_gc_marked(jctx *J, const void *p) {
+    u32 bit, *m = js_gc_mark_of(J, p, &bit);
+    return !m || js_bit(m, bit);
+}
+
+/* Marked without being looked inside: a weak collection's own blocks. */
+static void js_gc_mark_only(jctx *J, const void *p) {
+    u32 bit, *m = js_gc_mark_of(J, p, &bit);
+    if (m) js_bit_set(m, bit);
+}
+
+static void js_gc_unmark(jctx *J, const void *p) {
+    u32 bit, *m = js_gc_mark_of(J, p, &bit);
+    if (m) js_bit_clear(m, bit);
+}
+
 static void js_gc_range(jctx *J, const void *lo, const void *hi) {
     u64 a = ((u64)lo + 7) & ~7ull, b = (u64)hi & ~7ull;
     for (; a < b; a += 8) js_gc_try(J, *(const u64 *)a);
@@ -109,6 +140,74 @@ static void js_gc_drain(jctx *J) {
         u32 end = js_next_start(it.c, it.i + 1);
         js_gc_range(J, it.c->data + it.i * 16, it.c->data + end * 16);
     }
+}
+
+/* --- WeakMap and WeakSet -------------------------------------------------------
+ *
+ * They were Maps under another name, and kept every key and value they were
+ * ever given: reselect's memo, which keys a WeakMap by each state an app's
+ * store has had, kept every one of them. So a weak collection's table, its
+ * entries and its hash are marked before anything is looked at, and never
+ * looked inside; once everything else that is reachable has been found, an
+ * entry whose key was found has its value looked at too, over and over until
+ * nothing new is found (a value may hold another entry's key), and an entry
+ * whose key was not found is removed. A collection nothing reached has its
+ * blocks unmarked, to go with it. */
+static void js_gc_weak_hold(jctx *J) {
+    for (u32 w = 0; w < J->nweak; w++) {
+        jmap *m = (jmap *)J->weak[w]->internal;
+        if (!m) continue;
+        js_gc_mark_only(J, m);
+        js_gc_mark_only(J, m->e);
+        js_gc_mark_only(J, m->heads);
+    }
+}
+
+static int js_gc_key_found(jctx *J, jval k) {
+    if (k.t == JS_OBJ) return js_gc_marked(J, k.obj);
+    if (k.t == JS_SYM) return js_gc_marked(J, k.str);
+    return 1;
+}
+
+static void js_gc_weak_settle(jctx *J) {
+    for (;;) {
+        int more = 0;
+        for (u32 w = 0; w < J->nweak; w++) {
+            jobj *o = J->weak[w];
+            jmap *m = (jmap *)o->internal;
+            if (!m || o->kind != JO_WEAKMAP || !js_gc_marked(J, o)) continue;
+            for (u32 i = 0; i < m->n; i++) {
+                jmentry *e = &m->e[i];
+                if (e->gone || !js_gc_key_found(J, e->k)) continue;
+                if (e->v.t != JS_OBJ && e->v.t != JS_STR && e->v.t != JS_SYM && e->v.t != JS_BIG) continue;
+                if (js_gc_marked(J, e->v.obj)) continue;
+                js_gc_try(J, (u64)e->v.obj);
+                more = 1;
+            }
+        }
+        js_gc_drain(J);
+        if (!more || js_gc_lost) break;
+    }
+    if (js_gc_lost) return;
+    u32 keep = 0;
+    for (u32 w = 0; w < J->nweak; w++) {
+        jobj *o = J->weak[w];
+        jmap *m = (jmap *)o->internal;
+        if (!js_gc_marked(J, o)) {
+            if (m) { js_gc_unmark(J, m->heads); js_gc_unmark(J, m->e); js_gc_unmark(J, m); }
+            continue;
+        }
+        for (u32 i = 0; m && i < m->n; i++) {
+            jmentry *e = &m->e[i];
+            if (e->gone || js_gc_key_found(J, e->k)) continue;
+            e->gone = 1;
+            e->k = js_undef();
+            e->v = js_undef();
+            m->live--;
+        }
+        J->weak[keep++] = o;
+    }
+    J->nweak = keep;
 }
 
 /* Everything that may hold a context's values from outside its region.
@@ -210,8 +309,10 @@ static void js_gc(jctx *J) {
     js_gc_hi = last->data + last->size;
     js_gc_n = 0;
     js_gc_lost = 0;
+    js_gc_weak_hold(J);
     js_gc_roots(J);
     js_gc_drain(J);
+    js_gc_weak_settle(J);
     if (js_gc_lost) js_gc_clear_marks(J);
     else js_gc_sweep(J);
     J->gc_runs++;

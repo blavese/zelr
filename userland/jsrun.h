@@ -1442,8 +1442,6 @@ typedef struct {
     int  entries;             /* a Map's pairs */
 } jiter;
 
-typedef struct jmentry { jval k, v; u32 hash; int next; int gone; } jmentry;
-typedef struct { jmentry *e; u32 n, cap, live; int *heads; u32 nheads; } jmap;
 
 static int js_proto_value_is(jctx *J, jobj *proto, jstr *key, jnative fn) {
     (void)J;
@@ -3923,6 +3921,9 @@ static void js_init(jctx *J) {
 
 static void js_done(jctx *J) {
     free(J->spans);
+    free(J->weak);
+    J->weak = 0;
+    J->nweak = J->capweak = 0;
     J->srcs = 0;
     J->spans = 0;
     J->nsrcs = J->capsrcs = J->nspans = J->capspans = 0;
