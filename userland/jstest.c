@@ -1827,6 +1827,14 @@ int main(void) {
            " return out.join(' | '); })()",
            "cannot read forEach of undefined (e.addedNodes) | cannot read x of null (n) | cannot read y of undefined"
            " | cannot read z of undefined (o.f(...))");
+    /* The standard's old pair, by code unit: SoundCloud's
+       btoa(unescape(encodeURIComponent(s))) threw when unescape made one
+       character of three bytes. */
+    expect("escape and unescape work by code unit, %XX below 256 and %uXXXX above",
+           "(function(){ var s = '\\u00e9\\u2713\\ud83d\\ude00 a+b';"
+           " return [escape(s), unescape('%E9%u2713%uD83D%uDE00%20a+b') === s, unescape('%E2%9C%93').length,"
+           " unescape('%zz%u12%'), btoa(unescape(encodeURIComponent('\\u2713')))].join(' '); })()",
+           "%E9%u2713%uD83D%uDE00%20a+b true 3 %zz%u12% 4pyT");
     /* And writing: Svelte setting a text node it never found said only
        "cannot set a symbol of null". */
     expect("writing to null says which value it was, and names a symbol and a private name",

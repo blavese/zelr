@@ -2465,8 +2465,90 @@ static jval js_uri_decode(jctx *J, jval *a, int n, const char *reserved) {
 static jval nat_decode_uri_component(jctx *J, jval t, jval *a, int n) { (void)t; return js_uri_decode(J, a, n, ""); }
 static jval nat_decode_uri(jctx *J, jval t, jval *a, int n) { (void)t; return js_uri_decode(J, a, n, ";/?:@&=+$,#"); }
 
-static jval nat_escape(jctx *J, jval t, jval *a, int n) { (void)t; return js_uri_encode(J, a, n, "@*_+-./"); }
-static jval nat_unescape(jctx *J, jval t, jval *a, int n) { (void)t; return js_uri_decode(J, a, n, ""); }
+/* escape and unescape, the standard's old pair, work by code unit: one below
+   256 is %XX and any other %uXXXX. They were encodeURIComponent and its
+   inverse under other names, which work in UTF-8 bytes: unescape threw on
+   %u2713 and made one character of %E2%9C%93, which is three, so a page's
+   btoa(unescape(encodeURIComponent(s))) was handed characters past U+00FF
+   and threw (SoundCloud). */
+static jval nat_escape(jctx *J, jval t, jval *a, int n) {
+    (void)t;
+    static const char HEX[] = "0123456789ABCDEF";
+    jstr *s = js_to_str(J, js_arg(a, n, 0));
+    if (J->sig != JS_OK) return js_undef();
+    jtext o = { 0, 0, 0, 0 };
+    for (u32 i = 0; i < s->len; ) {
+        u32 cp, w = js_uchar(s->s + i, s->len - i, &cp);
+        if (!w) { w = 1; cp = (u8)s->s[i]; }
+        i += w;
+        u32 unit[2] = { cp, 0 };
+        int nu = 1;
+        if (cp >= 0x10000) {
+            unit[0] = 0xD800 + ((cp - 0x10000) >> 10);
+            unit[1] = 0xDC00 + ((cp - 0x10000) & 0x3FF);
+            nu = 2;
+        }
+        for (int k = 0; k < nu; k++) {
+            u32 c = unit[k];
+            int plain = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9');
+            for (const char *q = "@*_+-./"; !plain && *q; q++) plain = c == (u32)*q;
+            if (plain) { char ch = (char)c; jt_put(J, &o, &ch, 1); continue; }
+            if (c < 256) {
+                char e[3] = { '%', HEX[c >> 4], HEX[c & 15] };
+                jt_put(J, &o, e, 3);
+            } else {
+                char e[6] = { '%', 'u', HEX[c >> 12], HEX[(c >> 8) & 15], HEX[(c >> 4) & 15], HEX[c & 15] };
+                jt_put(J, &o, e, 6);
+            }
+        }
+    }
+    return js_from_str(jt_done(J, &o));
+}
+
+/* The unit a %XX or %uXXXX at s[i] stands for, and in *used how long it is;
+   nought used when what is there is neither. */
+static u32 js_unescape_at(const jstr *s, u32 i, u32 *used) {
+    *used = 0;
+    if (s->s[i] != '%') return 0;
+    if (i + 5 < s->len && s->s[i + 1] == 'u') {
+        u32 v = 0;
+        int k = 2;
+        for (; k < 6; k++) {
+            int h = js_hexval(s->s[i + k]);
+            if (h < 0) break;
+            v = v * 16 + (u32)h;
+        }
+        if (k == 6) { *used = 6; return v; }
+    }
+    if (i + 2 < s->len) {
+        int h1 = js_hexval(s->s[i + 1]), h2 = js_hexval(s->s[i + 2]);
+        if (h1 >= 0 && h2 >= 0) { *used = 3; return (u32)(h1 * 16 + h2); }
+    }
+    return 0;
+}
+
+static jval nat_unescape(jctx *J, jval t, jval *a, int n) {
+    (void)t;
+    jstr *s = js_to_str(J, js_arg(a, n, 0));
+    if (J->sig != JS_OK) return js_undef();
+    jtext o = { 0, 0, 0, 0 };
+    for (u32 i = 0; i < s->len; ) {
+        u32 used, cu = js_unescape_at(s, i, &used);
+        if (!used) { jt_put(J, &o, s->s + i, 1); i++; continue; }
+        i += used;
+        /* Two halves in a row are one character, kept as UTF-8 is. */
+        if (cu >= 0xD800 && cu < 0xDC00 && i < s->len) {
+            u32 used2, lo = js_unescape_at(s, i, &used2);
+            if (used2 && lo >= 0xDC00 && lo < 0xE000) {
+                cu = 0x10000 + ((cu - 0xD800) << 10) + (lo - 0xDC00);
+                i += used2;
+            }
+        }
+        char buf[4];
+        jt_put(J, &o, buf, js_utf8(cu, buf));
+    }
+    return js_from_str(jt_done(J, &o));
+}
 
 #include "jsarr.h"
 #include "jsprom.h"
