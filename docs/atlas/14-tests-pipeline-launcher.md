@@ -1,5 +1,8 @@
 
 
+**Since 0.133.0**: browsercheck has `/many` (sixty pictures), `/bigpic` (a 2000 by 400 picture whose natural size the
+page checks), `/paste` (the address copied from the bar into a field) and `/tab` (Tab between two fields): 76 checks.
+
 **Since 0.132.0**: browsercheck has `/bgjs` (a background picture a script sets once the page is up) and `/keys` ("/"
 on the body gives the page's search box the keyboard; Return there with "go" typed turns its box a colour): 72 checks.
 

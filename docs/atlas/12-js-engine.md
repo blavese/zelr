@@ -2,7 +2,13 @@
 
 Source root the repository root (github.com/blavese/zelr main, 2026-09-22). All paths are relative to it; `file:N` means 1-based line N. Everything below was verified by reading the code. Where a behaviour was derived by tracing (not by running) it says so. Nothing here was built or run.
 
-**Since 0.132.0** (the rest of this file is older; trust the code):
+**Since 0.133.0** (the rest of this file is older; trust the code):
+- **A page's scripts may have a quarter of free memory up to 384 MB** (jsdom.h `JD_MEM_CAP_MAX`, was 128): Tumblr's
+  hold about 205.
+- The canvas's drawImage measures a picture in its natural size and samples the pixels it is kept at (jscanvas.h,
+  `jd_picture_size`).
+
+**Since 0.132.0**:
 - **XMLHttpRequest passes through states 2 and 3** (jsnet.h `jd_xhr_done`, `jd_xhr_step`): headers (status, statusText,
   the reply's headers), then the text with a progress event, then 4 with load and loadend as progress events carrying
   `loaded`; `send()` fires loadstart. A handler that aborts at 2 or 3 ends it there (`nat_xhr_abort` counts those

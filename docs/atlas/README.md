@@ -95,6 +95,13 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.133.0
+
+- **128 pictures a page, big ones kept at 1280 a side (11)**, **copy and paste in every field, ctrl+L (11)**, **Tab
+  between fields (11)**, **content-visibility: hidden and hidden=until-found (11)**, **quoted strings in sheets (11)**,
+  **scripts up to 384 MB (12)**. layouttest 333, pagetest 370, browser harness 76, each failing on a build without its
+  change.
+
 ### 0.132.0
 
 - **Keys a page hears and a keyboard shared with it (11, 12)**, **XMLHttpRequest through every state, statusText (12)**,

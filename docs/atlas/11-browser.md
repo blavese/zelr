@@ -1,6 +1,18 @@
 # 11 -- The web browser (everything except JS-engine internals and image decoders)
 
-**Since 0.132.0** (the rest of this file is older; trust the code and the README's "since 6048716" list):
+**Since 0.133.0** (the rest of this file is older; trust the code and the README's "since 6048716" list):
+- **Pictures**: 128 a page (`PICS_MAX`), each kept at no more than `PIC_KEEP` (1280) a side (`pic_shrink`, blocks
+  averaged with the alpha plane); `shown.nat_w/nat_h` is the natural size, which `pic_sizes` (the layout),
+  `picture_size` (naturalWidth), object-fit (`pic_natural`) and the canvas's drawImage use. No budget across a page.
+- **The clipboard**: the toolkit's fields take ctrl+V/C/X (ui.h `ui_field_key`, `ui_field_paste`), a `secret` field
+  is never copied (a page's password field); ctrl+L goes to the address bar; a paste into a fresh bar replaces it.
+- **Tab** gives the keyboard to the next text field, checkbox or radio drawn after the focused one (`tab_next`).
+- **`content-visibility: hidden`** (`cstyle.cv_hidden`, lay_block lays out no children) and `[hidden=until-found i]`
+  given it in the browser's sheet instead of display:none.
+- **Quoted strings** are passed over in declarations and skipped at-rule bodies (css.h `css_past_string`):
+  Tumblr's `content:":("` ate two thousand rules.
+
+**Since 0.132.0**:
 - **Keys go to the page first** (browser.c key loop; jsdom.h `jsdom_key_down`, `jsdom_key_up`): keydown at the element
   with the keyboard (the body when none has it), keypress for a character or Return, keyup after the browser's own
   action, with key/code/keyCode/which/charCode for a US keyboard (`jd_key_info`). A refused keydown or keypress keeps the
