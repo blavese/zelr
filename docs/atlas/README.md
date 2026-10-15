@@ -95,6 +95,13 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.127.0
+
+- **An 8 MiB stack and scripts 6000 calls deep (03, 12)**, the loader bounded by the stack's room (03), **a dataset's
+  entries listed (12)**, **IndexedDB, kept for the page's life (12)**, **an import() while the page's requests hold every
+  way out (11)**. Self test 792, jstest 459, pagetest 357, browser harness 69, each failing on a build without its
+  change; pagetest also under collector stress.
+
 ### 0.126.0
 
 - **Script and module files asked for again after a busy server's pause (11)**, **a module's imports read ahead (11)**,

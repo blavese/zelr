@@ -2,7 +2,18 @@
 
 Source root the repository root (github.com/blavese/zelr main, 2026-09-22). All paths are relative to it; `file:N` means 1-based line N. Everything below was verified by reading the code. Where a behaviour was derived by tracing (not by running) it says so. Nothing here was built or run.
 
-**Since 0.126.0** (the rest of this file is older; trust the code):
+**Since 0.127.0** (the rest of this file is older; trust the code):
+- **Depth**: `JS_DEPTH_CAP` 6000 and `JS_STACK_BUDGET` 6 MiB on zelr (12 on the host, whose stack is 32), on the kernel's
+  8 MiB stack: React's commit recurses over the component tree, and Bluesky went past 800.
+- **A dataset's entries are its own properties** (jsdom.h `jd_dataset_sync`, run whenever `el.dataset` is taken): an
+  accessor per data- attribute by camelCase name, stale ones deleted; `Object.keys` and copies see them.
+- **IndexedDB** (jsprelude.h, the last IIFE; data in the page's region, gone with the page): open with upgrades, stores
+  with key paths and generators, indexes (unique, multiEntry), key ranges, cursors (next/prev, unique), getAll/count/
+  delete by range, transactions that complete when their queue is empty at a task boundary (so an `await` between
+  requests keeps one alive) and roll back on abort, `indexedDB.cmp`, the IDB constructors for `instanceof`. Not kept on
+  disk; no versionchange/blocked between connections.
+
+**Since 0.126.0**:
 - **A worker's import.meta** (jsworker.h `jw_import_meta`, its `meta_hook`): `{ url }`, the worker's address, one object;
   the worker's URL has a `revokeObjectURL` that does nothing. A module worker is still run as a classic script.
 

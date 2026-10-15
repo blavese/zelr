@@ -1,5 +1,9 @@
 # Atlas 03 -- Tasks, Processes and System Calls
 
+**Since 0.127.0**: a program's stack may grow to **8 MiB** (`USER_STACK_MAX`; pages given as touched), and elf.c's
+`USER_LOAD_MAX` is `USER_STACK_TOP - USER_STACK_MAX`, so no image reaches the stack's room (`[elf]` checks it). The
+numbers below (1 MiB, +0x4FF00000) are older.
+
 **Since 0.109.0**: **71 `SYS_SOCK_STATE`** and **`CONNECT_NOWAIT`** (rdx of 25 and 45). With the flag the socket is
 taken (`sock_take`, which now counts each taking in `sock_t.gen`) and handed to a kernel task, `connect_task`, which
 resolves, opens TCP and for TLS shakes hands, then checks the socket is still the one it was given (open and the same

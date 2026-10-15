@@ -1,6 +1,13 @@
 # 11 -- The web browser (everything except JS-engine internals and image decoders)
 
-**Since 0.126.0** (the rest of this file is older; trust the code and the README's "since 6048716" list):
+**Since 0.127.0** (the rest of this file is older; trust the code and the README's "since 6048716" list):
+- **`ahead_take` gives up on a file not yet asked for after 200 ms when none of the list's own are on their way**: the
+  asks may all be the page's requests, stepped only between passes, and a module's imports found inside `import()`
+  waited for ever (Mastodon's columns). Behind the list's own it waits its turn.
+- scriptdump's wait calls `sheets_follow_if_changed` each pass, as the browser's layouts do, so links a script adds are
+  told load (Vite's preload of a chunk's sheets). Harness page `/dyn` (`DYN_OK`).
+
+**Since 0.126.0**:
 - **A script's or module's file is asked for again once** (browser.c `ask_again`, shared with sheets): no answer, cut
   short, 429 or 5xx; 429/503 after their Retry-After (half a second if none, two at most).
 - **A module's imports are read ahead** (jsmod.h calls `jd_want_script` as each new import is found; browser.c
