@@ -95,6 +95,14 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.129.0
+
+- **White space kept in the tree, passed over by layout (11)**, **`white-space` pre-wrap and pre-line, unknown values
+  dropped (11)**, **titles collapsed (11)**, **promise species (12)**, **prelude built-ins as native code (12)**,
+  **errors that name a write's null and a symbol (12)**, **escape and unescape by code unit (12)**, **arrays clearing
+  what they let go of (12)**, **weak collections that are weak (12)**, **promise jobs let go of once run (12)**.
+  jstest 466, pagetest 360, layouttest 317, each failing on a build without its change.
+
 ### 0.128.0
 
 - **A program's zero data given on first touch (03)**, **pages of eighty thousand nodes (11)**. Self test 793, maptest,

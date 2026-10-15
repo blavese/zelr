@@ -2,7 +2,29 @@
 
 Source root the repository root (github.com/blavese/zelr main, 2026-09-22). All paths are relative to it; `file:N` means 1-based line N. Everything below was verified by reading the code. Where a behaviour was derived by tracing (not by running) it says so. Nothing here was built or run.
 
-**Since 0.127.0** (the rest of this file is older; trust the code):
+**Since 0.129.0** (the rest of this file is older; trust the code):
+- **`then` makes its result with the constructor's species** (jsprom.h `js_promise_species`, `js_capability`): a
+  constructor other than Promise is handed an executor that keeps the resolving pair, and the engine's own derived
+  promise passes its outcome on (a turn later than the standard's order). `Promise[Symbol.species]` is a getter giving
+  `this`; `resolve`/`reject` on a subclass make the subclass. core-js tests this before trusting the page's Promise and
+  replaced it otherwise (Tom's Hardware lost `finally`). all/allSettled/any/race still make plain promises.
+- **The preludes' functions print as native code** (`jctx.own_src`, the prelude's kept source plus one, set by
+  jsprelude.h `jd_setup_prelude` and jsworker.h; `nat_fn_tostring`): they are built-ins to the page.
+- **Errors**: a write to a property of null or undefined names the expression, as a read did (jsrun.h
+  `js_nothing_at`); a symbol key is named `Symbol(description)` and a private name as written (`js_throw_named`).
+- **`escape`/`unescape` work by code unit** (jslib.h): %XX below 256, %uXXXX above, halves joined; they were the URI
+  functions, so `btoa(unescape(encodeURIComponent(s)))` threw (SoundCloud).
+- **Arrays clear the slots they let go of** (pop, shift, splice, a shorter length): the collector is conservative, and
+  a value behind the length was kept as long as the array. Anything new that shortens a list a value can be in must
+  clear what it leaves. jstest's `collected` cases measure after a last collection.
+- **WeakMap and WeakSet are weak** (jsgc.h `js_gc_weak_hold`, `js_gc_weak_settle`; `jctx.weak`, a malloc'd list):
+  their table, entries and hash are marked unread before marking, an entry's value is marked once its key is found
+  (repeated to a fixed point), entries with keys not found are removed, and a dead collection's blocks unmarked.
+  `jmap`/`jmentry` are in js.h now. WeakRef still holds its target.
+- **A promise job's slot is cleared as it is taken** (jsrun.h `js_drain`): the ring kept every job's handler and value
+  until it came round again. scriptdump's summary counts suspended functions and their stacks.
+
+**Since 0.127.0**:
 - **Depth**: `JS_DEPTH_CAP` 6000 and `JS_STACK_BUDGET` 6 MiB on zelr (12 on the host, whose stack is 32), on the kernel's
   8 MiB stack: React's commit recurses over the component tree, and Bluesky went past 800.
 - **A dataset's entries are its own properties** (jsdom.h `jd_dataset_sync`, run whenever `el.dataset` is taken): an

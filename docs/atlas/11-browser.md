@@ -1,6 +1,21 @@
 # 11 -- The web browser (everything except JS-engine internals and image decoders)
 
-**Since 0.128.0** (the rest of this file is older; trust the code and the README's "since 6048716" list):
+**Since 0.129.0** (the rest of this file is older; trust the code and the README's "since 6048716" list):
+- **White space is in the tree as written** (dom.h `dom_parse_into`): every run, in the page, innerHTML and template
+  contents, with its own text (it was left out at an element's start and after a block, and kept as one space
+  elsewhere). Svelte's templates hold a space node for each piece of text; crates.io drew nothing without it. **Layout
+  passes over what separates nothing** (dom.h `dom_passed_space`, called by layout.h's block walk and `lay_inline`):
+  white space whose last thing before it, past comments and other white space, is a block element, or which starts a
+  block element; at the start of an inline element it is a word space (python.org's `<span> </span>`). Anything new
+  in layout that walks text nodes must ask `dom_passed_space`, or a cell holding only a space is a space wide
+  (kernel.org's `<td> </td>`). `:empty` no longer matches an element holding only white space, as in other browsers.
+- **`white-space`** (css.h `WS_PRE_WRAP`, `WS_PRE_LINE`; layout.h `lay_text_run`): pre-wrap keeps spaces and line
+  breaks and wraps, pre-line keeps line breaks only; a value not known is dropped (it was normal, and python.org's
+  `-moz-pre-wrap !important` undid its pre-wrap).
+- **The title is shown with its white space collapsed** (dom.h `dom_collapse`, browser.c `title_take`, jsdom.h
+  `nat_doc_title`): dictionary.com's began with a line break and split the console line in two.
+
+**Since 0.128.0**:
 - **`DOM_NODES` 80000, `DOM_ATTRS` 160000** (dom.h): Wikipedia's United States article was cut off at forty thousand.
   The tables sized by them are zero data, paid for only as used now (03).
 
