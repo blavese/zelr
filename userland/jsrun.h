@@ -1304,6 +1304,11 @@ static void js_drain(jctx *J) {
     J->draining = 1;
     while (J->jcount && J->sig != JS_FAILED) {
         jjob job = J->jobs[J->jhead];
+        /* The slot is cleared as the job is taken from it: the collector
+           takes any word pointing at a block to mean it is in use, and a job
+           left in the ring kept its handler, its value and its promise, and
+           all they reach, until the ring came round to it again. */
+        memset(&J->jobs[J->jhead], 0, (int)sizeof(jjob));
         J->jhead = (J->jhead + 1) % J->jcap;
         J->jcount--;
         J->sig = JS_OK;

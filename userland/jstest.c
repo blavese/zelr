@@ -1997,6 +1997,11 @@ int main(void) {
               " for (var j = 0; j < 200; j++) { var junk = 'z'.repeat(100000) + j; }"
               " result = [q.length, s.length, s[0].slice(-2), c.length, c[0].slice(-1), p.length].join(' ');",
               "0 1 29 1 0 1", 2, 3u * 1024 * 1024);
+    collected("a promise job's handler and value are let go of once it has run",
+              "var ps = []; for (var i = 0; i < 40; i++) ps.push(Promise.resolve('j'.repeat(100000) + i).then(function (s) { return s.length; }));"
+              " Promise.all(ps).then(function (v) { ps = null; for (var j = 0; j < 200; j++) { var junk = 'z'.repeat(100000) + j; }"
+              "  result = v.join().length; });",
+              "279", 2, 1024u * 1024);
     collected("a WeakMap and a WeakSet let go of what only they hold, and keep what a key still reached holds",
               "var wm = new WeakMap(), ws = new WeakSet(), keep = [];"
               " for (var i = 0; i < 40; i++) { var k = { i: i }; wm.set(k, 'v'.repeat(100000) + i); ws.add(k); if (i % 10 === 0) keep.push(k); }"
