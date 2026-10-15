@@ -2280,8 +2280,20 @@ static int ahead_take(const url_t *u, const char **out) {
     int i = 0;
     for (; i < nahead; i++) if (ahead[i].state != 4 && w_same(ahead[i].url, want)) break;
     if (i == nahead) return 0;
+    int since = ticks();
     while (ahead[i].state == 0 || ahead[i].state == 1) {
         ahead_pump();
+        /* One not yet asked for while none of the list's are on their way,
+           with no way out free for a fifth of a second, is fetched the old
+           way: the asks are all the page's own requests then, which are taken
+           back only between passes, and a script waiting here inside import()
+           is in the middle of one. Mastodon's columns, each an import(),
+           waited for ever. Behind the list's own, it waits its turn. */
+        if (ahead[i].state == 0 && ticks() - since > 20) {
+            int going = 0;
+            for (int k = 0; k < nahead && !going; k++) going = ahead[k].state == 1;
+            if (!going) { ahead[i].state = 4; return 0; }
+        }
         if (ahead[i].state == 0 || ahead[i].state == 1) sleep_ms(5);
     }
     if (ahead[i].state != 2) { ahead[i].state = 4; return 0; }

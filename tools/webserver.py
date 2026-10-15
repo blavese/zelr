@@ -747,6 +747,26 @@ MODS_TOP = (b"import '/mdelay/1.js'; import '/mdelay/2.js'; import '/mdelay/3.js
 MDELAY_NOW = 0
 MDELAY_MOST = 0
 
+# A page whose three requests to a slow address hold every way out the
+# browser has, and which then imports a module that imports another: the
+# second waited for a way out that only comes free between passes, from
+# inside the import, and the browser stopped for ever. Done, it is blue.
+DYN_PAGE = b"""<!doctype html>
+<html><head><title>dyn</title>
+<style>body { font-family: sans-serif; padding: 24px; font-size: 32px }</style></head>
+<body><p>dyn</p>
+<script>
+for (var i = 0; i < 3; i++) fetch('/slow?' + i);
+setTimeout(function () {
+  import('/dyn/top.js').then(function (m) {
+    document.title = 'dyn ' + m.v;
+    document.body.style.background = m.v === 'dep' ? '#2a5a9a' : '#c0392b';
+  }, function (e) { document.title = 'dyn error'; document.body.style.background = '#c0392b'; });
+}, 400);
+</script>
+</body></html>
+"""
+
 # A page with an empty style sheet and a module that imports an empty
 # module: the sheet's link is told load, not error, and the module runs.
 # Each was taken for a file that would not come.
@@ -1426,6 +1446,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 MDELAY_NOW -= 1
             self._send(("window.order = (window.order || '') + '%s';" % n).encode(),
                        ctype="application/javascript")
+        elif path == "/dyn":
+            self._send(DYN_PAGE)
+        elif path == "/dyn/top.js":
+            self._send(b"import { v as d } from '/dyn/dep.js';\nexport const v = d;\n", ctype="application/javascript")
+        elif path == "/dyn/dep.js":
+            self._send(b"export const v = 'dep';\n", ctype="application/javascript")
+        elif path == "/slow":
+            import time
+            time.sleep(4.0)
+            self._send(b"slow", ctype="text/plain")
         elif path == "/flaky":
             self._send(MODFLAKY_PAGE)
         elif path == "/flaky/main.js":

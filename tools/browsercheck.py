@@ -127,6 +127,7 @@ TOGETHER = (0x1E, 0x90, 0x80)         # /together: its six files ran in the orde
 SHEET_LAST = (0xB0, 0x70, 0x10)       # /sheets: the last of its four sheets won
 BASED_SHEET = (0x2A, 0x8A, 0x9A)      # /based/: its sheet, found through its <base href>
 BASED_SCRIPT = (0x7A, 0x2A, 0x9A)     # and its script
+DYN_OK = (0x2A, 0x5A, 0x9A)           # /dyn: an import() made while the page's requests hold every way out
 EMPTY_OK = (0x2A, 0x9A, 0x5A)         # /empty: its empty sheet told load, its empty module's importer run
 SHEET_THIRD = (0x50, 0xD0, 0x50)      # and the one before it, which must not have
 STOOD = (0xC0, 0x30, 0x30)            # and the block it draws when they did not
@@ -586,8 +587,17 @@ def main():
             c.add("a module's three imports run in order and were asked for together, %d at once"
                   % webserver.MDELAY_MOST, told_mods and webserver.MDELAY_MOST >= 2, shotm)
 
+            # --- an import() while the page's own requests hold every way out --
+            go(vm, mon, "http://%s/dyn" % srv.host, settle=10.0,
+               was=mds, name="br-going-dyn")
+            _, _, _, _, told_dyn = mon.wait_screen(
+                "br-dyn", lambda w, h, px: count_in(px, w, PAGE, DYN_OK) > 10000, timeout=40)
+            dyn, pxy, wy, shoty = page_settled(mon, "br-dyn-settled")
+            c.add("an import() made while the page's requests hold every way out still comes (%d)"
+                  % count_in(pxy, wy, PAGE, DYN_OK), told_dyn, shoty)
+
             go(vm, mon, "http://%s/scripted" % srv.host, settle=12.0,
-               was=mds, name="br-going-scripted")
+               was=dyn, name="br-going-scripted")
             scripted, pxc, wc, shotc = page_settled(mon, "br-scripted")
             c.add("a page's own script runs, and changes the page",
                   count_in(pxc, wc, PAGE, BAND) > 3000, shotc)
