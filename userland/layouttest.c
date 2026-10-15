@@ -2099,6 +2099,25 @@ int main(void) {
         ok("an inline-table on a div is an inline-block: the bar after a headline sits on its line, before the next",
            al && be && bar && bar->y == al->y && bar->x > al->x + al->w && be->x > bar->x + bar->w && be->y == al->y);
     }
+    {
+        /* A sheet with thousands of :not()s, as CNN's has: a rule after the
+           first two thousand was dropped. */
+        static char many[3000 * 32 + 256];
+        int n = 0;
+        for (const char *h = "<style>"; *h; h++) many[n++] = *h;
+        for (int i = 0; i < 3000; i++) {
+            char num[8];
+            int k = 0, v = i;
+            do { num[k++] = (char)('0' + v % 10); v /= 10; } while (v);
+            for (const char *h = ".z"; *h; h++) many[n++] = *h;
+            while (k) many[n++] = num[--k];
+            for (const char *h = ":not(.q){color:red}"; *h; h++) many[n++] = *h;
+        }
+        for (const char *h = ".late:not(.q):after{content:\"MARK\"}</style><p class=late>text</p>"; *h; h++) many[n++] = *h;
+        many[n] = 0;
+        lay(many, 600);
+        ok("a rule after three thousand :not()s in the sheet still applies", word("MARK") != 0);
+    }
 
     /* --- a transform's share is of the box ------------------------------------------
      *

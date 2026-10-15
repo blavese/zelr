@@ -33,7 +33,11 @@
 #define CSS_DECLS   64000
 #define CSS_TEXT    (2048 * 1024)
 #define CSS_MAXCLS  4
-#define CSS_NEGS    2048
+/* The insides of every :not() in the sheets. CNN's page has more than six
+   thousand, and a selector past the 2048 there were room for was dropped
+   whole: the bars between its ribbon's headlines, and whatever else came
+   late in its sheet. The sheet is mapped, so room not used costs nothing. */
+#define CSS_NEGS    16384
 /* What the page's own sheets leave at the end of the tables for a script's
    selector (querySelector parses into the sheet, jsdom.h jd_sel_open):
    GitHub's sheets filled them, and every selector a script asked with but
