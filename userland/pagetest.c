@@ -3355,6 +3355,36 @@ int main(void) {
             page.title >= 0 ? page.arena + page.title : "", "blob: true");
     }
     {
+        /* IndexedDB, kept for the page's life: Mastodon's app stopped on
+           "indexedDB is not defined", and so do the apps that keep a cache in it. */
+        load("<body><script>"
+             "var log = [], r = indexedDB.open('t', 2);"
+             "r.onupgradeneeded = function (e) { var s = r.result.createObjectStore('people', { keyPath: 'id', autoIncrement: true });"
+             " s.createIndex('byName', 'name'); s.createIndex('byTag', 'tags', { multiEntry: true }); log.push('up ' + e.oldVersion + '>' + e.newVersion); };"
+             "r.onsuccess = function () { var db = r.result, tx = db.transaction('people', 'readwrite'), s = tx.objectStore('people');"
+             " s.add({ name: 'b', tags: ['x', 'y'] }); s.add({ name: 'a', tags: ['y'] }); s.put({ id: 10, name: 'c', tags: [] });"
+             " var dup = s.add({ id: 10, name: 'd' }); dup.onerror = function (e) { log.push(dup.error.name); e.preventDefault(); };"
+             " tx.oncomplete = function () { var t2 = db.transaction(['people']), s2 = t2.objectStore('people'), keys = [];"
+             "  s2.getAll().onsuccess = function (e) { log.push(e.target.result.map(function (p) { return p.id + p.name; }).join(',')); };"
+             "  s2.index('byName').getAll().onsuccess = function (e) { log.push(e.target.result.map(function (p) { return p.name; }).join('')); };"
+             "  s2.index('byTag').count('y').onsuccess = function (e) { log.push('y' + e.target.result); };"
+             "  s2.count(IDBKeyRange.bound(1, 2)).onsuccess = function (e) { log.push('r' + e.target.result); };"
+             "  s2.openCursor(null, 'prev').onsuccess = function (e) { var c = e.target.result; if (c) { keys.push(c.key); c.continue(); } else log.push(keys.join('')); };"
+             "  t2.oncomplete = function () { var t3 = db.transaction('people', 'readwrite'); t3.objectStore('people').clear().onsuccess = function () { t3.abort(); };"
+             "   t3.onabort = function () { db.transaction('people').objectStore('people').count().onsuccess = function (e) { log.push('kept' + e.target.result); after(db); }; }; }; }; };"
+             "function req(q) { return new Promise(function (ok, no) { q.onsuccess = function () { ok(q.result); }; q.onerror = function () { no(q.error); }; }); }"
+             "async function after(db) { var s = db.transaction('people', 'readwrite').objectStore('people');"
+             " await req(s.put({ id: 20, name: 'e' })); var v = await req(s.get(20));"
+             " log.push(v.name + ' ' + (r instanceof IDBRequest) + ' ' + indexedDB.cmp([1], 'z')); document.title = log.join(' '); }"
+             "</script></body>");
+        char err[128];
+        run_scripts(&page, err, (int)sizeof(err), 0);
+        pump_until(1000, 3000);
+        oks("IndexedDB: an upgrade makes a store and its indexes; adds, a refused duplicate, reads by key, index, range and a cursor going back; an abort put back; a transaction lives across an await",
+            page.title >= 0 ? page.arena + page.title : "",
+            "up 0>2 ConstraintError 1b,2a,10c abc y2 r2 1021 kept3 e true 1");
+    }
+    {
         /* When the key was one for the whole program, a worker's setup put its
            own there, and the page read its Intl objects by a key in the worker's
            memory, freed when the worker ended. The two keys' serial numbers
