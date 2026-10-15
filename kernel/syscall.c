@@ -257,6 +257,8 @@ static i64 sys_exec(registers_t *r) {
     int rc = elf_load(dir, image, size, &entry);
     kfree(image);
     if (rc != ELF_OK) { paging_free_directory(dir); argv_drop(&a); return rc; }
+    u64 zlo, zhi;
+    elf_zero_range(&zlo, &zhi);
 
     const char *self = path;
     u64 rsp = 0;
@@ -279,6 +281,8 @@ static i64 sys_exec(registers_t *r) {
     cli();
 
     t->dir = dir;
+    t->zero_lo = zlo;
+    t->zero_hi = zhi;
     paging_switch(dir);
 
     /* The heap belonged to the program that is being replaced. */

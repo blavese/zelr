@@ -1294,6 +1294,21 @@ static void test_elf(void) {
     ok("rejects a segment that runs off the end of the file",
        elf_load(dir, buf, sizeof(buf), &entry) == ELF_ERR_OVERFLOW);
 
+    /* A segment of three pages with bytes from the file in its first: the
+       other two are zeros, left for the fault handler to give out. */
+    make_elf(buf, USER_SPACE_BASE + 0x40000000ull);
+    *(u64 *)(buf + ELF_PHOFF + 40) = 3 * 4096;      /* memsz */
+    u64 zlo = 0, zhi = 0;
+    int zrc = elf_load(dir, buf, sizeof(buf), &entry);
+    elf_zero_range(&zlo, &zhi);
+    u64 seg = USER_SPACE_BASE + 0x40000000ull;
+    ok("a segment's pages of nothing but zeros are left for when they are touched",
+       zrc == ELF_OK && virt_to_phys_in(dir, seg) && !virt_to_phys_in(dir, seg + 4096)
+       && !virt_to_phys_in(dir, seg + 8192) && zlo == seg + 4096 && zhi == seg + 3 * 4096);
+    paging_free_directory(dir);
+    dir = paging_new_directory();
+    if (!dir) { ok("a second scratch address space", false); return; }
+
     make_elf(buf, USER_SPACE_BASE + 0x40000000ull);
     ok("accepts a well formed header",
        elf_load(dir, buf, sizeof(buf), &entry) == ELF_OK && entry == USER_SPACE_BASE + 0x40000000ull);

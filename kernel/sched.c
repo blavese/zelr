@@ -310,6 +310,8 @@ task_t *task_fork(const char *name, u64 dir, const registers_t *frame,
            promise, and the child inherits the promise. */
         for (int i = 0; i < VMA_MAX; i++) t->vma[i] = parent->vma[i];
         t->nvma = parent->nvma;
+        t->zero_lo = parent->zero_lo;
+        t->zero_hi = parent->zero_hi;
         t->brk = parent->brk;
         t->brk_base = parent->brk_base;
         t->parent_pid = parent->pid;

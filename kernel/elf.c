@@ -60,7 +60,19 @@ const char *elf_error(int code) {
     }
 }
 
+/* A program's zero data -- the browser's is six megabytes of tables it
+   fills as far as a page needs -- was given a page each when it started,
+   touched or not, which on a machine of 140 megabytes is memory every
+   program paid for whether it used it or not. The whole pages of a
+   segment past its last byte from the file are left unmapped and handed
+   out zeroed when first touched, as the stack's are (user.c). One range: a
+   second segment with zero pages has them mapped as before. */
+static u64 zero_lo, zero_hi;
+
+void elf_zero_range(u64 *lo, u64 *hi) { *lo = zero_lo; *hi = zero_hi; }
+
 int elf_load(u64 dir, const u8 *image, u64 size, u64 *entry_out) {
+    zero_lo = zero_hi = 0;
     if (size < sizeof(elf64_hdr_t)) return ELF_ERR_SHORT;
 
     const elf64_hdr_t *h = (const elf64_hdr_t *)image;
@@ -90,6 +102,17 @@ int elf_load(u64 dir, const u8 *image, u64 size, u64 *entry_out) {
            touches, then place the bytes at their real offset inside it. */
         u64 start = p->vaddr & ~0xFFFull;
         u64 end   = (p->vaddr + p->memsz + PAGE_SIZE - 1) & ~0xFFFull;
+
+        /* From the first whole page past the file's bytes, nothing but
+           zeros: left for the fault handler, when this is the first such
+           span. */
+        u64 bytes_end = (p->vaddr + p->filesz + PAGE_SIZE - 1) & ~0xFFFull;
+        if (bytes_end < start) bytes_end = start;
+        if (!zero_hi && bytes_end < end) {
+            zero_lo = bytes_end;
+            zero_hi = end;
+            end = bytes_end;
+        }
 
         for (u64 va = start; va < end; va += PAGE_SIZE) {
             if (virt_to_phys_in(dir, va)) continue;      /* segments can share a page */

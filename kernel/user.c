@@ -303,7 +303,8 @@ bool user_fault_fill(u64 addr, u64 err) {
        A wild pointer that lands inside that range gets a page rather than
        an error, which is the price of not asking the program to declare
        its own stack. It is the program's own memory either way. */
-    if (addr < USER_STACK_TOP && addr >= USER_STACK_TOP - USER_STACK_MAX) {
+    if ((addr < USER_STACK_TOP && addr >= USER_STACK_TOP - USER_STACK_MAX)
+        || (addr >= t->zero_lo && addr < t->zero_hi)) {
         u64 page = addr & ~(PAGE_SIZE - 1);
         if (virt_to_phys_in(t->dir, page)) return true;
 
@@ -396,6 +397,8 @@ int user_spawn_elf_argv(const char *name, const u8 *image, u32 size,
     u64 entry = 0;
     int rc = elf_load(dir, image, size, &entry);
     if (rc != ELF_OK) { paging_free_directory(dir); return rc; }
+    u64 zlo, zhi;
+    elf_zero_range(&zlo, &zhi);
 
     u64 rsp = 0;
     if (!user_build_stack(dir, argc, argv, &rsp)) {
@@ -405,5 +408,7 @@ int user_spawn_elf_argv(const char *name, const u8 *image, u32 size,
 
     task_t *t = task_create_user(name, dir, entry, rsp);
     if (!t) { paging_free_directory(dir); return ELF_ERR_MEMORY; }
+    t->zero_lo = zlo;
+    t->zero_hi = zhi;
     return (int)t->pid;
 }

@@ -146,6 +146,11 @@ typedef struct task {
     vma_t vma[VMA_MAX];
     int   nvma;
 
+    /* The pages of its image that hold nothing but zeros (its .bss past the
+       last page with bytes from the file), given a page only when first
+       touched (elf.c, user_fault_fill); 0 and 0 for none. */
+    u64   zero_lo, zero_hi;
+
     /* Where a handler returns to: a few instructions in the program itself
        that ask the kernel to put the frame back. The kernel cannot supply
        this -- it has no code mapped in ring 3 -- so the program hands its

@@ -43,11 +43,29 @@ static u32 free_kb(void) {
     return s.mem_free_kb;
 }
 
+/* Zero data the program never asked for at all: an eight megabyte table in
+   its image, which the kernel gives a page at a time as it is touched, as it
+   does a mapping. Given out at the start, as it was, the browser's six
+   megabytes of tables were memory spent before a page was loaded. */
+static volatile char zeros[8 * MEG];
+
 /* 139 is what a program killed by a memory fault exits with. */
 #define FAULTED 139
 
 int main(void) {
     puts("maptest\n");
+
+    /* --- a program's zero data costs what it touches -------------------- */
+    u32 zb = free_kb();
+    for (u32 i = 0; i < 8; i++) zeros[i * MEG] = (char)(i + 1);
+    int zcost = (int)zb - (int)free_kb();
+    ok("touching eight pages of the program's zero data costs about eight pages", zcost >= 24 && zcost < 256);
+    puts("      touching 8 pages of zero data moved memory by ");
+    putn(zcost);
+    puts(" KiB\n");
+    int zread = 1;
+    for (u32 i = 0; i < 8; i++) if (zeros[i * MEG] != (char)(i + 1) || zeros[i * MEG + 1] != 0) zread = 0;
+    ok("and they keep what was written, zero where nothing was", zread);
 
     /* --- the promise costs nothing ------------------------------------- */
     u32 before = free_kb();
