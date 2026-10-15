@@ -602,12 +602,68 @@ static jval nat_promise_make(jctx *J, jval t, jval *a, int n) {
     return t;
 }
 
+/* A promise made by some other constructor (a subclass of Promise, or a
+   library's own), with the pair that settles it: the constructor is handed
+   an executor, which keeps the two functions it is called with. */
+static jval nat_capability_executor(jctx *J, jval t, jval *a, int n) {
+    (void)t;
+    jobj *self = J->callee;
+    if (self->data.t != JS_UNDEF || self->data2.t != JS_UNDEF)
+        return js_throw(J, JS_ERR_TYPE, "a promise's executor was called twice", J->error_line);
+    self->data = js_arg(a, n, 0);
+    self->data2 = js_arg(a, n, 1);
+    return js_undef();
+}
+
+static jval js_capability(jctx *J, jval c, jval *res, jval *rej) {
+    if (!js_is_constructor(J, c)) return js_throw(J, JS_ERR_TYPE, "a promise is made by a constructor", J->error_line);
+    jobj *ex = js_native_n(J, "", nat_capability_executor, 2);
+    if (!ex) return js_undef();
+    ex->data = ex->data2 = js_undef();
+    ex->flags |= JOF_NOCTOR;
+    jval arg = js_from_obj(ex);
+    jval made = js_construct(J, c, &arg, 1, c);
+    if (J->sig != JS_OK) return js_undef();
+    if (!js_callable(ex->data) || !js_callable(ex->data2))
+        return js_throw(J, JS_ERR_TYPE, "a promise's constructor did not hand over its resolving functions", J->error_line);
+    *res = ex->data;
+    *rej = ex->data2;
+    return made;
+}
+
+/* What then() makes its result with: this.constructor's [Symbol.species],
+   or undefined for a promise of this engine's own. A library checks this
+   before trusting the page's Promise: core-js gives a promise a constructor
+   whose species is its own function and looks at what then() hands back,
+   and finding a plain promise it put its own Promise in the page's place
+   (Tom's Hardware's consent script, after which finally was gone). */
+static jval js_promise_species(jctx *J, jval t) {
+    jval c = js_get(J, t, J->s_constructor);
+    if (J->sig != JS_OK || c.t == JS_UNDEF) return js_undef();
+    if (!js_is_obj(c)) return js_throw(J, JS_ERR_TYPE, "a promise's constructor is not an object", J->error_line);
+    jval s = js_get(J, c, J->sym_species);
+    if (J->sig != JS_OK || s.t == JS_NULL || (js_is_obj(s) && s.obj == J->c_promise)) return js_undef();
+    return s;
+}
+
 static jval nat_promise_then(jctx *J, jval t, jval *a, int n) {
     jobj *p = js_this_promise(J, t);
     if (!p) return js_undef();
     jval ok = js_arg(a, n, 0), err = js_arg(a, n, 1);
+    jval s = js_promise_species(J, t);
+    if (J->sig != JS_OK) return js_undef();
+    jval res = js_undef(), rej = js_undef(), made = js_undef();
+    if (s.t != JS_UNDEF) {
+        made = js_capability(J, s, &res, &rej);
+        if (J->sig != JS_OK) return js_undef();
+    }
     jobj *d = js_promise_then(J, p, js_callable(ok) ? ok : js_undef(), js_callable(err) ? err : js_undef());
-    return js_from_obj(d);
+    if (s.t == JS_UNDEF || !d) return js_from_obj(d);
+    /* The other constructor's promise is told what this engine's derived
+       one comes to: a turn later than the standard's, never a different
+       answer. */
+    js_promise_then(J, d, res, rej);
+    return made;
 }
 
 static jval nat_promise_catch(jctx *J, jval t, jval *a, int n) {
@@ -665,16 +721,45 @@ static jval nat_promise_finally(jctx *J, jval t, jval *a, int n) {
     return js_call(J, then, t, args, 2);
 }
 
+/* Promise.resolve and reject called on a subclass make one of the subclass. */
+static int js_promise_other(jctx *J, jval t) {
+    return js_is_obj(t) && t.obj != J->c_promise && js_is_constructor(J, t);
+}
+
 static jval nat_promise_resolve(jctx *J, jval t, jval *a, int n) {
-    (void)t;
-    return js_from_obj(js_promise_of(J, js_arg(a, n, 0)));
+    jval v = js_arg(a, n, 0);
+    if (js_promise_other(J, t)) {
+        if (js_is_obj(v) && v.obj->kind == JO_PROMISE) {
+            jval c = js_get(J, v, J->s_constructor);
+            if (J->sig != JS_OK) return js_undef();
+            if (js_is_obj(c) && c.obj == t.obj) return v;
+        }
+        jval res, rej;
+        jval made = js_capability(J, t, &res, &rej);
+        if (J->sig == JS_OK) js_call(J, res, js_undef(), &v, 1);
+        return J->sig == JS_OK ? made : js_undef();
+    }
+    return js_from_obj(js_promise_of(J, v));
 }
 
 static jval nat_promise_reject(jctx *J, jval t, jval *a, int n) {
-    (void)t;
+    jval v = js_arg(a, n, 0);
+    if (js_promise_other(J, t)) {
+        jval res, rej;
+        jval made = js_capability(J, t, &res, &rej);
+        if (J->sig == JS_OK) js_call(J, rej, js_undef(), &v, 1);
+        return J->sig == JS_OK ? made : js_undef();
+    }
     jobj *p = js_promise_new(J);
-    if (p) js_promise_settle(J, p, 0, js_arg(a, n, 0));
+    if (p) js_promise_settle(J, p, 0, v);
     return js_from_obj(p);
+}
+
+/* get Promise[Symbol.species]: the constructor it is asked of, so a
+   subclass's then() makes the subclass. */
+static jval nat_promise_species(jctx *J, jval t, jval *a, int n) {
+    (void)J; (void)a; (void)n;
+    return t;
 }
 
 static jval nat_promise_withresolvers(jctx *J, jval t, jval *a, int n) {
@@ -825,6 +910,11 @@ static void js_setup_promises(jctx *J) {
     js_method(J, promise, "any", nat_promise_any, 1);
     js_method(J, promise, "race", nat_promise_race, 1);
     js_method(J, promise, "withResolvers", nat_promise_withresolvers, 0);
+    jobj *g = js_native(J, "get [Symbol.species]", nat_promise_species);
+    if (g) {
+        g->flags |= JOF_NOCTOR;
+        js_define_accessor(J, promise, J->sym_species, js_from_obj(g), js_undef(), JP_CONF);
+    }
 }
 
 /* --- generators' prototypes --------------------------------------------------- */

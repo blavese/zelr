@@ -1326,6 +1326,16 @@ int main(void) {
            " Promise.race([new Promise(() => {}), Promise.resolve('r')]).then(v => result += v + ';');"
            " Promise.any([Promise.reject(1), Promise.resolve('y')]).then(v => result += v + ';');",
            "12;fr;r;y;");
+    script("then makes its result with the constructor's species, as core-js checks before keeping Promise",
+           "var p = new Promise(ok => ok(1)); var Fake = function (ex) { ex(function () {}, function () {}); };"
+           " var c = p.constructor = {}; c[Symbol.species] = Fake;"
+           " var result = (p.then(function () {}) instanceof Fake) + ',' + (Promise[Symbol.species] === Promise);",
+           "true,true");
+    script("a subclass of Promise gets the subclass back from then, finally and resolve",
+           "class P extends Promise {} var p = new P(ok => ok(2)); var t = p.then(v => v * 3); var result;"
+           " t.finally(() => 0).then(v => { result = [t instanceof P, P.resolve(1) instanceof P,"
+           " P.resolve(p) === p, Promise.resolve(p) === p, v].join(); });",
+           "true,true,true,false,6");
     script("an object with a then is followed like a promise",
            "var result; Promise.resolve({ then(ok) { ok('th'); } }).then(v => { result = v; });", "th");
     script("an async function awaits, returns and throws through its promise",
