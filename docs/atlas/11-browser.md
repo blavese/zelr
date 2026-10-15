@@ -1,6 +1,20 @@
 # 11 -- The web browser (everything except JS-engine internals and image decoders)
 
-**Since 0.129.0** (the rest of this file is older; trust the code and the README's "since 6048716" list):
+**Since 0.130.0** (the rest of this file is older; trust the code and the README's "since 6048716" list):
+- **Icon sprites in files of their own** (browser.c `sprites_follow`, `sprite_take`, `sprites_into`): a `<use>` naming
+  `file.svg#id` has the file fetched as a waiting picture whose `bg` is -2 less its slot (8 a page), kept as markup, and
+  read into the copy of the page that is laid out (`page_drawn`, which now makes the copy when a sprite has come) under
+  `<head>`, ids prefixed `zs<slot>-`, each use pointed at its prefixed id. **Inline drawings are made from what was
+  laid out** (`drawn_from`, `laid`), not `doc`. Sprites are gathered at build and after each layout.
+- **`display: inline-table` is an inline-block** (css.h); a table element is laid out as a table whatever its display.
+- **`CSS_NEGS` 16384** (css.h): the insides of every `:not()`; CNN's sheet has more than six thousand, and a selector
+  past the old 2048 was dropped whole.
+- **The font shorthand** (css.h `css_font_split`, used by the sheet and by layout.h `lay_apply_short` for one with
+  var()): a bare number is a weight (600 and up bold), the size needs a unit, a percentage or a keyword, a line height
+  after a slash, then the families; weight and style it does not name go back to normal; `0/0` is a size. font-size
+  knows its keywords (`css_size_keyword`).
+
+**Since 0.129.0**:
 - **White space is in the tree as written** (dom.h `dom_parse_into`): every run, in the page, innerHTML and template
   contents, with its own text (it was left out at an element's start and after a block, and kept as one space
   elsewhere). Svelte's templates hold a space node for each piece of text; crates.io drew nothing without it. **Layout

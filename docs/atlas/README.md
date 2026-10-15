@@ -95,6 +95,12 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.130.0
+
+- **Icon sprites from other files (11)**, **inline-table as an inline-block (11)**, **room for 16384 `:not()`s (11)**,
+  **a font shorthand read as CSS reads it (11)**, **the host's TLS trusting the kernel's roots, scriptdump's `live`
+  (14)**. layouttest 321, browser harness 70, each failing on a build without its change.
+
 ### 0.129.0
 
 - **White space kept in the tree, passed over by layout (11)**, **`white-space` pre-wrap and pre-line, unknown values

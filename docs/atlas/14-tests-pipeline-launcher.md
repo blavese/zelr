@@ -1,5 +1,12 @@
 
 
+**Since 0.130.0**: the host build's TLS proxies (tools/host/tlsproxy.py, ovproxy.py) trust the kernel's roots, read out
+of kernel/roots.c by **tools/host/kernelroots.py**, not the machine's store (which lacked GlobalSign Root E46, under
+which CNN's certificate is issued); restart a running proxy to take it. scriptdump's summary counts suspended functions
+and their stacks; in a `HOST_CFLAGS=-DJS_ALLOC_PROFILE` build `live` prints what is held after a collection by the call
+that made it (run from `build/host/` so the shim finds the .pdb). browsercheck has a page whose only drawing is an
+external sprite (`/sprite`, `/sprite.svg`): 70 checks.
+
 **Since 0.92.0** (the rest of this file is older): **wscheck.py** (gate step "a page's websocket talks to a server
 both ways", beside livecheck) opens webserver.py's `/ws-test` in the browser and reads what the page saw from the
 address it goes to when done (`/ws-done?...`), and what the client did from the server (`Server.websockets()`:
