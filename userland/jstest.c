@@ -1827,6 +1827,16 @@ int main(void) {
            " return out.join(' | '); })()",
            "cannot read forEach of undefined (e.addedNodes) | cannot read x of null (n) | cannot read y of undefined"
            " | cannot read z of undefined (o.f(...))");
+    /* And writing: Svelte setting a text node it never found said only
+       "cannot set a symbol of null". */
+    expect("writing to null says which value it was, and names a symbol and a private name",
+           "(function(){ var out = [], o = { a: null }, s = Symbol('text');"
+           " try { o.a.b = 1; } catch (x) { out.push(x.message); }"
+           " try { o.a[s] ??= 1; } catch (x) { out.push(x.message); }"
+           " class K { #p = 1; static poke(k) { return k.#p; } }"
+           " try { K.poke(null); } catch (x) { out.push(x.message); }"
+           " return out.join(' | '); })()",
+           "cannot set b of null (o.a) | cannot set Symbol(text) of null (o.a) | cannot read #p of null (k)");
 
     /* The constructors of async functions and generators, reached as the
        constructor of one: they were Function, so an "async" function made

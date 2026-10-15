@@ -124,7 +124,14 @@ static jval js_throw_named(jctx *J, int kind, const char *before, jstr *name, co
     int n = 0;
     for (const char *p = before; *p && n < 60; p++) msg[n++] = *p;
     for (u32 i = 0; name && !js_is_sym_key(name) && i < name->len && n < 110; i++) msg[n++] = name->s[i];
-    if (name && js_is_sym_key(name)) for (const char *p = "a symbol"; *p; p++) msg[n++] = *p;
+    /* A symbol by its description, as other browsers write it, and a
+       class's private name (#x, a symbol inside) as it was written. */
+    if (name && js_is_sym_key(name)) {
+        int priv = name->len && name->s[0] == '#';
+        if (!priv) for (const char *p = "Symbol("; *p; p++) msg[n++] = *p;
+        for (u32 i = 0; i < name->len && n < 110; i++) msg[n++] = name->s[i];
+        if (!priv) msg[n++] = ')';
+    }
     for (const char *p = after; *p && n < 159; p++) msg[n++] = *p;
     msg[n] = 0;
     return js_throw(J, kind, msg, J->error_line);
@@ -699,10 +706,12 @@ static int js_chain_text(jctx *J, int node, char *out, int cap, int *n) {
 /* The same error, saying which value it was when that is a name or a chain
    of them: "cannot read forEach of undefined (e.addedNodes)". Without it a
    bundle on one line said only "at line 1", which could be anywhere. */
-static jval js_nothing_from(jctx *J, jstr *name, jval target, int obj_node) {
+/* The same, naming the expression that was null or undefined (a.b), for a
+   read or a write. */
+static jval js_nothing_at(jctx *J, const char *verb, jstr *name, jval target, int obj_node) {
     char what[64];
     int n = 0;
-    if (!js_chain_text(J, obj_node, what, (int)sizeof(what), &n)) return js_nothing(J, "cannot read ", name, target);
+    if (!js_chain_text(J, obj_node, what, (int)sizeof(what), &n)) return js_nothing(J, verb, name, target);
     char tail[96];
     const char *of = target.t == JS_NULL ? " of null (" : " of undefined (";
     int w = 0;
@@ -710,7 +719,11 @@ static jval js_nothing_from(jctx *J, jstr *name, jval target, int obj_node) {
     for (int i = 0; i < n && w < (int)sizeof(tail) - 2; i++) tail[w++] = what[i];
     tail[w++] = ')';
     tail[w] = 0;
-    return js_throw_named(J, JS_ERR_TYPE, "cannot read ", name, tail);
+    return js_throw_named(J, JS_ERR_TYPE, verb, name, tail);
+}
+
+static jval js_nothing_from(jctx *J, jstr *name, jval target, int obj_node) {
+    return js_nothing_at(J, "cannot read ", name, target, obj_node);
 }
 
 /* The object whose properties a value has, for reading: an object itself,
@@ -2624,7 +2637,7 @@ static JS_NOINLINE jval js_eval_assign(jctx *J, int node, jscope *sc, jval this_
     if (J->sig != JS_OK) return js_undef();
     if (p.kind == 2) return js_throw(J, JS_ERR_SYNTAX, "this cannot be assigned to", line);
     if ((p.kind == 1) && (p.obj.t == JS_NULL || p.obj.t == JS_UNDEF))
-        return js_nothing(J, "cannot set ", p.name, p.obj);
+        return js_nothing_at(J, "cannot set ", p.name, p.obj, J->nodes[target].a);
 
     if (op == OP_LANDEQ || op == OP_LOREQ || op == OP_NULLEQ) {
         /* a ||= b assigns only when it has to, and b is not even worked
