@@ -849,6 +849,8 @@ int main(void) {
     expect("and what is thrown through a return reaches the catch",
            "(function(){ function g(){ throw new Error('deep'); } function f(){ return g(); }"
            " try { f(); } catch (e) { return e.message; } })()", "deep");
+    expect("a call five thousand deep comes back, as a browser's does",
+           "(function(){ function r(n){ return n ? r(n - 1) + 1 : 0; } return r(5000); })()", "5000");
     expect("a call too deep is a RangeError",
            "(function(){ function r(){ return r(); } try { r(); } catch (e) {"
            " return e instanceof RangeError; } })()", "true");

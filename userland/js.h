@@ -98,7 +98,10 @@
 #else
 #define JS_TIME_CAP  1000
 #endif
-#define JS_DEPTH_CAP 800
+/* About what a browser allows: Chrome stops near eleven thousand plain
+   calls, and React's commit, which walks the component tree by calling
+   itself, went past eight hundred on Bluesky's app. */
+#define JS_DEPTH_CAP 6000
 
 /* How much of the machine's stack the scripts may use, below wherever the
    host first called in. A tree walker spends stack on every level of nesting
@@ -106,14 +109,15 @@
    stack itself: counting calls alone let a deeply nested expression, or a
    parser reading one, run the program off the end of its stack.
  *
- * Half of zelr's megabyte, which is about six hundred levels of calls. The
- * Windows build (tools/host) gets twice the bytes for the same depth: that
- * calling convention hands every sixteen byte value back through memory, and
- * a level costs twice the stack. */
+ * Six of the eight megabytes zelr gives a program's stack (user.h), which is
+ * about seven thousand levels of calls; the rest is the browser's own. The
+ * Windows build (tools/host, a 32 megabyte stack) gets twice the bytes for
+ * the same depth: that calling convention hands every sixteen byte value back
+ * through memory, and a level costs twice the stack. */
 #if defined(_WIN32)
-#define JS_STACK_BUDGET (1024u * 1024)
+#define JS_STACK_BUDGET (12u * 1024 * 1024)
 #else
-#define JS_STACK_BUDGET (512u * 1024)
+#define JS_STACK_BUDGET (6u * 1024 * 1024)
 #endif
 
 /* The tree, which is not in the region (it is read, never collected), has a
