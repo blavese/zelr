@@ -2129,6 +2129,18 @@ int main(void) {
         ok("and a translate moves the next one in, alone", beta && beta->x == 0 && !word("alpha") && !word("gamma"));
         ok("while a row in a box that shows its overflow is still kept to the room", green && green->x > 0 && green->x < 400);
 
+        /* SoundCloud's: the row hides its own overflow, its parent shows it.
+           Its slides wait past the window's edge; an old page's wider
+           wrapper with its overflow hidden is still kept to the room. */
+        lay("<style>.cont{width:800px}.car{display:flex;width:400%;overflow:hidden}.s{width:25%}"
+            ".wrapper{width:960px;overflow:hidden}</style>"
+            "<div class=cont><div class=car><div class=s>uno</div><div class=s>dos</div><div class=s>tres</div></div></div>"
+            "<div class=wrapper><p>words in an old page's wrapper</p></div>", 800);
+        const litem *uno = word("uno"), *dos = word("dos"), *wr = word("wrapper");
+        ok("a row hiding its own overflow four windows wide puts its next slides past the window's edge",
+           uno && uno->x == 0 && dos && dos->x >= 800);
+        ok("and a wrapper a little wider than the window with its overflow hidden is kept to the room",
+           wr && wr->x + wr->w <= 800);
         /* Debian's slideshow: floated slides in a box hiding its overflow, a
            column beside it. The floats are the box's own; reaching out, they
            pushed the next column's heading down past them. */

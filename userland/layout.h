@@ -4572,6 +4572,14 @@ static void lay_block_placed(lctx *L, int node, const cstyle *parent, int x,
        room, the four were squeezed side by side. */
     int overflows = want > box_w && parent && parent->clip == 1 && !L->measuring;
     if (overflows) L->widened++;
+    /* And a row that hides its own overflow and asks for twice its room or
+       more is a carousel whose slides wait off the side of the window:
+       SoundCloud's is 400% wide with its overflow hidden, in a box that
+       shows its overflow. Given its width, the slides past the first are
+       beyond the window's edge, where a browser has them too. Anything
+       narrower is kept to the room, as an old page's 960 pixel wrapper
+       with its overflow hidden should be in a narrower window. */
+    if (want >= 2 * box_w && box_w > 0 && st.clip == 1 && st.display == D_FLEX && !L->measuring) overflows = 1;
     if (want >= 0 && (want < box_w || overflows || (L->measuring && want <= css_view_w))) {
         /* A width with auto margins is centred, which is how most pages put
            their content in the middle of a wide window. */
