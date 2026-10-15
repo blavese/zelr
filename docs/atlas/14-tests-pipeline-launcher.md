@@ -1,5 +1,8 @@
 
 
+**Since 0.132.0**: browsercheck has `/bgjs` (a background picture a script sets once the page is up) and `/keys` ("/"
+on the body gives the page's search box the keyboard; Return there with "go" typed turns its box a colour): 72 checks.
+
 **Since 0.130.0**: the host build's TLS proxies (tools/host/tlsproxy.py, ovproxy.py) trust the kernel's roots, read out
 of kernel/roots.c by **tools/host/kernelroots.py**, not the machine's store (which lacked GlobalSign Root E46, under
 which CNN's certificate is issued); restart a running proxy to take it. scriptdump's summary counts suspended functions

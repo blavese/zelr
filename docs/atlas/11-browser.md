@@ -1,6 +1,21 @@
 # 11 -- The web browser (everything except JS-engine internals and image decoders)
 
-**Since 0.131.0** (the rest of this file is older; trust the code and the README's "since 6048716" list):
+**Since 0.132.0** (the rest of this file is older; trust the code and the README's "since 6048716" list):
+- **Keys go to the page first** (browser.c key loop; jsdom.h `jsdom_key_down`, `jsdom_key_up`): keydown at the element
+  with the keyboard (the body when none has it), keypress for a character or Return, keyup after the browser's own
+  action, with key/code/keyCode/which/charCode for a US keyboard (`jd_key_info`). A refused keydown or keypress keeps the
+  key from the browser. **The keyboard is shared**: a control the reader clicks or leaves tells the page
+  (`give_focus` -> `jsdom_focused`), and a field the page focuses takes what is typed next (`follow_page_focus`, after
+  each key and once a pass; never while the address bar is typed in). There is no separate key release, repeat, alt,
+  meta or Tab between fields.
+- **Background pictures are gathered after every layout** (`relayout` ends with `gather_backgrounds` when
+  `pics_follow_on`), so a background a script sets later is fetched.
+- **Grid**: a span on an item's end line alone is kept when it is flowed (`lay_grid_place` returns the span either
+  way); row lines are resolved against the rows grid-template-rows writes out (`lay_grid_explicit_rows`), so
+  `grid-row: 1 / -1` spans the card.
+- **Selectors**: a second `:not()` on a compound extends the first one's list (css.h, the contiguous `negs` range).
+
+**Since 0.131.0**:
 - **Carousels** (layout.h `lay_block`): inside a box with `overflow: hidden` a box is as wide as it asks (`overflows`,
   counted in `lctx.widened`); a box holding one so widened drops items wholly left or right of it and cuts LK_BOX
   items at its edges (only then: elsewhere a box is placed after its children and the cut would land wrong). A clipping

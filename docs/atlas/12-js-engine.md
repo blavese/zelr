@@ -2,7 +2,15 @@
 
 Source root the repository root (github.com/blavese/zelr main, 2026-09-22). All paths are relative to it; `file:N` means 1-based line N. Everything below was verified by reading the code. Where a behaviour was derived by tracing (not by running) it says so. Nothing here was built or run.
 
-**Since 0.131.0** (the rest of this file is older; trust the code):
+**Since 0.132.0** (the rest of this file is older; trust the code):
+- **XMLHttpRequest passes through states 2 and 3** (jsnet.h `jd_xhr_done`, `jd_xhr_step`): headers (status, statusText,
+  the reply's headers), then the text with a progress event, then 4 with load and loadend as progress events carrying
+  `loaded`; `send()` fires loadstart. A handler that aborts at 2 or 3 ends it there (`nat_xhr_abort` counts those
+  states as going). Disney's player helper builds its response at state 2; National Geographic's app waited on it.
+- **statusText** for XHR and fetch is read from the status line (`jd_status_text`).
+- **Keyboard events and focus** (jsdom.h, after `jsdom_toggled`): see atlas 11.
+
+**Since 0.131.0**:
 - **`arguments.callee`** outside strict code (jsrun.h, where `arguments` is made): Resig's Class.extend.
 - **`window.visualViewport`** (jsprelude.h, the last IIFE): the window at scale one, an EventTarget.
 

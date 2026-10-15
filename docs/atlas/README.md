@@ -95,6 +95,13 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.132.0
+
+- **Keys a page hears and a keyboard shared with it (11, 12)**, **XMLHttpRequest through every state, statusText (12)**,
+  **background pictures after every layout (11)**, **grid spans on the end line and row lines from the last (11)**,
+  **two :not()s on a compound (11)**. layouttest 331, pagetest 367, browser harness 72, each failing on a build without
+  its change.
+
 ### 0.131.0
 
 - **Carousels showing one slide, floats kept inside a box hiding its overflow (11)**, **flex-flow (11)**,
