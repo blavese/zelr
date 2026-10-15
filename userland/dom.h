@@ -33,9 +33,13 @@
    is six hundred and seventy kilobytes of html, fifty-six hundred elements
    and fourteen thousand attributes; a news site is worse. Every string in
    the page goes in the arena -- text, attribute names, attribute values --
-   so the arena has to be larger than the document, not the same size. */
-#define DOM_NODES   40000
-#define DOM_ATTRS   80000
+   so the arena has to be larger than the document, not the same size.
+   Forty thousand nodes cut a long article off part way (Wikipedia's United
+   States parses to thirty-nine thousand, past what the parser keeps in
+   hand); the tables sized by it cost a page only as far as it is used, now
+   that a program's zero data is given out as it is touched (elf.c). */
+#define DOM_NODES   80000
+#define DOM_ATTRS   160000
 #define DOM_ARENA   (3 * 1024 * 1024)
 #define DOM_DEPTH   64
 

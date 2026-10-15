@@ -1978,6 +1978,19 @@ int main(void) {
         int ca = by_id("ca"), ch = by_id("ch");
         ok("a close tag whose name is followed by a line break closes the element",
            ca >= 0 && ch >= 0 && doc.nodes[ch].parent == by_id("cd"));
+        {
+            /* A long article: twenty-five thousand paragraphs, fifty thousand
+               nodes, read and laid out whole. Wikipedia's United States was
+               cut off part way at forty thousand. */
+            static char longpage[25000 * 9 + 64];
+            int n = 0;
+            for (int i = 0; i < 24999; i++)
+                for (const char *h = "<p>x</p>"; *h; h++) longpage[n++] = *h;
+            for (const char *h = "<p>last</p>"; *h; h++) longpage[n++] = *h;
+            longpage[n] = 0;
+            lay(longpage, 600);
+            ok("a page of fifty thousand nodes is read and laid out whole", !doc.overflowed && !page.overflowed && word("last"));
+        }
         lay("<style>.alert { display: block; padding: 8px }</style><noscript class=alert><h2>needs scripts</h2></noscript><p>shown</p>", 600);
         ok("and a noscript the page's rules give a display is still not drawn", !word("scripts</h2>") && !word("needs") && word("shown"));
     }
