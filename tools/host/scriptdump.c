@@ -365,6 +365,15 @@ int main(int argc, char **argv) {
     puts(" KB, the next at ");
     putn((int)(jd_J.gc_next / 1024));
     puts(" KB\n");
+    /* Each suspended generator or async function has a stack of its own,
+       counted in what the page has used. */
+    int cos = 0;
+    for (jco *co = jd_J.co_all; co; co = co->all_next) cos++;
+    puts("suspended functions ");
+    putn(cos);
+    puts(", their stacks ");
+    putn(cos * (int)(JS_CO_STACK / 1024));
+    puts(" KB\n");
     puts("status: ");
     puts(status);
     putc('\n');
