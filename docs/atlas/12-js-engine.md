@@ -2,7 +2,11 @@
 
 Source root the repository root (github.com/blavese/zelr main, 2026-09-22). All paths are relative to it; `file:N` means 1-based line N. Everything below was verified by reading the code. Where a behaviour was derived by tracing (not by running) it says so. Nothing here was built or run.
 
-**Since 0.129.0** (the rest of this file is older; trust the code):
+**Since 0.131.0** (the rest of this file is older; trust the code):
+- **`arguments.callee`** outside strict code (jsrun.h, where `arguments` is made): Resig's Class.extend.
+- **`window.visualViewport`** (jsprelude.h, the last IIFE): the window at scale one, an EventTarget.
+
+**Since 0.129.0**:
 - **`then` makes its result with the constructor's species** (jsprom.h `js_promise_species`, `js_capability`): a
   constructor other than Promise is handed an executor that keeps the resolving pair, and the engine's own derived
   promise passes its outcome on (a turn later than the standard's order). `Promise[Symbol.species]` is a getter giving

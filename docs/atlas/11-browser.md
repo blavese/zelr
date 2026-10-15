@@ -1,6 +1,15 @@
 # 11 -- The web browser (everything except JS-engine internals and image decoders)
 
-**Since 0.130.0** (the rest of this file is older; trust the code and the README's "since 6048716" list):
+**Since 0.131.0** (the rest of this file is older; trust the code and the README's "since 6048716" list):
+- **Carousels** (layout.h `lay_block`): inside a box with `overflow: hidden` a box is as wide as it asks (`overflows`,
+  counted in `lctx.widened`); a box holding one so widened drops items wholly left or right of it and cuts LK_BOX
+  items at its edges (only then: elsewhere a box is placed after its children and the cut would land wrong). A clipping
+  flex row asking twice its room or more is given it too (SoundCloud's, overflow on the row itself), its slides past
+  the window's edge. **A box with `overflow: hidden` or `flow-root` keeps its floats** (`fl_seq` put back to
+  `floats_at` once it is laid out): Debian's floated slides reached into the next column.
+- **`flex-flow`** is read (css.h `css_flex_flow_split`, sheet and late split).
+
+**Since 0.130.0**:
 - **Icon sprites in files of their own** (browser.c `sprites_follow`, `sprite_take`, `sprites_into`): a `<use>` naming
   `file.svg#id` has the file fetched as a waiting picture whose `bg` is -2 less its slot (8 a page), kept as markup, and
   read into the copy of the page that is laid out (`page_drawn`, which now makes the copy when a sprite has come) under

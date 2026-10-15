@@ -95,6 +95,12 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.131.0
+
+- **Carousels showing one slide, floats kept inside a box hiding its overflow (11)**, **flex-flow (11)**,
+  **arguments.callee (12)**, **visualViewport (12)**. layouttest 328, jstest 467, pagetest 361, each failing on a build
+  without its change.
+
 ### 0.130.0
 
 - **Icon sprites from other files (11)**, **inline-table as an inline-block (11)**, **room for 16384 `:not()`s (11)**,
