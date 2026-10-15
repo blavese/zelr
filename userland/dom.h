@@ -406,6 +406,45 @@ static inline int dom_has_class(const ddoc *d, int el, const char *want,
  * unusual, it is ordinary, and a parser that nests the div inside the
  * paragraph gets a different tree from every other browser and lays the page
  * out differently for the rest of the document. */
+static inline int dom_is_block(int t);
+
+/* Whitespace that is in the page but not drawn, and which is drawn depends
+ * entirely on what is beside it.
+ *
+ * Between two inline things it is a word separator: <a>Gmail</a>
+ * <a>Images</a> is two words, and throwing it away spells GmailImages. This
+ * file once threw all of it away and that is what every page looked like --
+ * every link on google.com run together into one.
+ *
+ * It is nothing in two places, and only two. At the start of a block there
+ * is nothing for it to separate. After a block element the line has
+ * already ended, so a space would sit at the start of the next line, where
+ * the line breaker drops it anyway. Comments, and whitespace that is itself
+ * nothing, are not there as far as this is concerned: what decides is the
+ * last thing before it that is. Measured rather than passed over, a cell
+ * holding only a space (kernel.org's <td> </td>) was a space wide in every
+ * row.
+ *
+ * The parser used to leave these out of the document; it keeps them now for
+ * the page's scripts, and layout passes over them instead. */
+static inline int dp_all_space(const char *s);
+
+static inline int dom_passed_space(const ddoc *d, int n) {
+    if (d->nodes[n].kind != DN_TEXT) return 0;
+    if (d->nodes[n].text >= 0 && !dp_all_space(d->arena + d->nodes[n].text)) return 0;
+    int last = d->nodes[n].prev;
+    while (last >= 0 && (d->nodes[last].kind == DN_COMMENT
+                         || (d->nodes[last].kind == DN_TEXT
+                             && (d->nodes[last].text < 0 || dp_all_space(d->arena + d->nodes[last].text)))))
+        last = d->nodes[last].prev;
+    if (last >= 0) return d->nodes[last].kind == DN_ELEMENT && dom_is_block(d->nodes[last].tag);
+    /* At the start of an inline element, in the middle of a line, it is a
+       word space: python.org's code is <span>def</span><span> </span>
+       <span>fib</span>, and this read "deffib". */
+    int p = d->nodes[n].parent;
+    return p < 0 || d->nodes[p].kind != DN_ELEMENT || dom_is_block(d->nodes[p].tag);
+}
+
 static inline int dom_is_block(int t) {
     switch (t) {
         case T_P: case T_DIV: case T_UL: case T_OL: case T_LI: case T_DL:
@@ -577,44 +616,13 @@ static inline void dom_parse_into(ddoc *d, const char *p, int len, int parent) {
             while (i < len && p[i] != '<') i++;
             int at = dp_text(&z, p + start, i - start, 1);
 
-            /* Whitespace on its own is content or it is not, and which one
-               depends entirely on what is beside it.
-               *
-               * Between two inline things it is a word separator:
-               * <a>Gmail</a> <a>Images</a> is two words, and throwing it away
-               * spells GmailImages. This file used to throw all of it away
-               * and that is what every page looked like — every link on
-               * google.com run together into one.
-               *
-               * It is discardable in two places, and only two. At the start
-               * of a container there is nothing for it to separate. After a
-               * block element the line has already ended, so a space would
-               * sit at the start of the next line, where the line breaker
-               * drops it anyway.
-               *
-               * What is kept is one space rather than what was written,
-               * because an indented page is mostly newlines and the run that
-               * separates two words means exactly as much as a single space
-               * does. The line breaker collapses runs for the same reason. */
-            if (dp_all_space(d->arena + at)) {
-                d->used = at;
-
-                int parent = dp_top(&z);
-                if (parent < 0) continue;
-                /* A comment is not there as far as this is concerned: what
-                   decides is the last thing before it that is. */
-                int last = d->nodes[parent].last;
-                while (last >= 0 && d->nodes[last].kind == DN_COMMENT) last = d->nodes[last].prev;
-                if (last < 0) continue;
-                if (d->nodes[last].kind == DN_ELEMENT
-                    && dom_is_block(d->nodes[last].tag)) continue;
-
-                int sp = dom_new(d, DN_TEXT, T_OTHER);
-                if (sp < 0) return;
-                d->nodes[sp].text = dom_str(d, " ", 1);
-                dom_append(d, parent, sp);
-                continue;
-            }
+            /* Whitespace on its own is kept as it was written, as every
+               browser keeps it: scripts count it and walk it. Svelte makes
+               its templates from markup with a space as the place for each
+               piece of text, and finding no node there it stopped (crates.io
+               drew nothing). Which of it is drawn is layout's question
+               (dom_passed_space). */
+            if (dp_top(&z) < 0) { d->used = at; continue; }
             int t = dom_new(d, DN_TEXT, T_OTHER);
             if (t < 0) return;
             d->nodes[t].text = at;

@@ -1995,6 +1995,72 @@ int main(void) {
         ok("and a noscript the page's rules give a display is still not drawn", !word("scripts</h2>") && !word("needs") && word("shown"));
     }
 
+    /* --- white space kept for scripts, passed over by layout ---------------------------
+     *
+     * Every run of white space is in the tree as it was written, as in any
+     * browser: Svelte's templates hold a space where each piece of text goes,
+     * and with no node there crates.io drew nothing. Layout draws only what
+     * sits between inline things, so an indented page and the same page
+     * written tight come out alike. */
+    {
+        lay("<body><div id=t><p>one</p><p>two <b>x</b> <i>y</i></p><ul><li>item</li></ul></div><p>after</p></body>", 600);
+        const litem *o1 = word("one"), *t1 = word("two"), *y1 = word("y"), *i1 = word("item"), *a1 = word("after");
+        int tight[5] = { o1 ? o1->y : -1, t1 ? t1->y : -1, y1 ? y1->x : -1, i1 ? i1->y : -1, a1 ? a1->y : -1 };
+        lay("<body>\n  <div id=t>\n    <p>one</p>\n    <p>two <b>x</b>\n      <i>y</i></p>\n    <ul>\n      <li>item</li>\n    </ul>\n"
+            "  </div>\n  <!-- a comment -->\n  <p>after</p>\n</body>", 600);
+        const litem *o2 = word("one"), *t2 = word("two"), *x2 = word("x"), *y2 = word("y"), *i2 = word("item"), *a2 = word("after");
+        int kids = 0, first_kind = -1, t = by_id("t");
+        for (int c = t >= 0 ? doc.nodes[t].first : -1; c >= 0; c = doc.nodes[c].next) kids++;
+        if (t >= 0 && doc.nodes[t].first >= 0) first_kind = doc.nodes[doc.nodes[t].first].kind;
+        ok("an indented page keeps its white space in the tree, as it was written",
+           kids == 7 && first_kind == DN_TEXT && w_same(doc.arena + doc.nodes[doc.nodes[t].first].text, "\n    "));
+        ok("and is laid out as the same page written tight",
+           o2 && t2 && y2 && i2 && a2 && o2->y == tight[0] && t2->y == tight[1] && y2->x == tight[2]
+           && i2->y == tight[3] && a2->y == tight[4]);
+        ok("and the white space between two inline things is still a space", x2 && y2 && y2->x > x2->x + x2->w);
+
+        /* Inside boxes sized by what they hold: an inline-block, a cell, a
+           centred line. White space at their edges is nothing in a browser,
+           and measured as a space it widened each and moved what follows. */
+        static const char *const shapes[2] = {
+            "<style>.ib{display:inline-block;background:#ff0000}.c{text-align:center}.blk{display:block}</style>"
+            "<body><p><span class=ib id=ib><b>word</b></span>after</p>"
+            "<table><tr><td><b>cell</b></td><td>next</td></tr></table><div class=c><b>mid</b></div>"
+            "<table class=blk><tr><td>one</td><td>two</td></tr></table></body>",
+            "<style>.ib{display:inline-block;background:#ff0000}.c{text-align:center}.blk{display:block}</style>"
+            "<body>\n<p>\n  <span class=ib id=ib>\n    <b>word</b>\n  </span>after</p>\n"
+            "<table>\n  <tr>\n    <td>\n      <b>cell</b>\n    </td>\n    <td>next</td>\n  </tr>\n</table>\n"
+            "<div class=c>\n  <b>mid</b>\n</div>\n<table class=blk>\n  <tr>\n    <td>one</td>\n    <td>two</td>\n  </tr>\n</table>\n</body>" };
+        int at[2][5];
+        for (int v = 0; v < 2; v++) {
+            lay(shapes[v], 600);
+            const litem *ib = box_of(by_id("ib")), *af = word("after"), *nx = word("next"), *md = word("mid");
+            at[v][0] = ib ? ib->w : -1;
+            at[v][1] = af ? af->x : -1;
+            at[v][2] = nx ? nx->x : -1;
+            at[v][3] = md ? md->x : -1;
+            const litem *tw = word("two");
+            at[v][4] = tw ? tw->x : -1;
+        }
+        lay("<p><span>def</span><span> </span><span>fib</span> and <span>x</span><b> </b><i>y</i></p>"
+            "<table><tr><td>a</td><td> </td><td>b</td></tr></table><table><tr><td>a</td><td></td><td>b</td></tr></table>", 600);
+        const litem *d1 = word("def"), *f1 = word("fib"), *xx = word("x"), *yy = word("y");
+        int bx[2] = { -1, -1 }, nb = 0;
+        for (int i = 0; i < page.nitems && nb < 2; i++)
+            if (page.items[i].kind == LK_TEXT && page.items[i].at >= 0 && w_same(page.text + page.items[i].at, "b"))
+                bx[nb++] = page.items[i].x;
+        ok("a span holding only a space is a word space between the words beside it, and a cell holding one is empty",
+           d1 && f1 && f1->x > d1->x + d1->w && xx && yy && yy->x > xx->x + xx->w && nb == 2 && bx[0] == bx[1]);
+        ok("and an indented inline-block, cell, centred line and table made a block come out as written tight",
+           at[0][0] > 0 && at[0][0] == at[1][0] && at[0][1] == at[1][1] && at[0][2] == at[1][2] && at[0][3] == at[1][3]
+           && at[0][4] > 0 && at[0][4] == at[1][4]);
+        for (int v = 0; v < 2; v++) {
+            puts(v ? ", indented" : "      tight");
+            for (int k = 0; k < 5; k++) { puts(" "); putn(at[v][k]); }
+        }
+        puts("\n");
+    }
+
     /* --- a transform's share is of the box ------------------------------------------
      *
      * translate(100%) moves a box by its own width, though it draws nothing

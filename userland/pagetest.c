@@ -1574,6 +1574,15 @@ int main(void) {
                "document.title = first + ' ' + copy + ' ' + inn.join(',') + ' ' + d.getAttribute('data-new-one') + ' ' + ('userId' in d.dataset);"
                "</script></body>"),
         "userId,xY,plain {\"userId\":\"7\",\"xY\":\"a\",\"plain\":\"p\"} userId,plain,newOne n true");
+    oks("white space is in the tree as it was written: the page's, a template's space that Svelte fills in, and innerHTML's",
+        titled("<body><div id=w>\n  <p>a</p>\n</div><script>function v(s) { return s.replace(/\\n/g, 'N').replace(/ /g, '_'); }"
+               "var t = document.createElement('template'); t.innerHTML = '<p> </p>';"
+               "var p = t.content.firstChild.cloneNode(true); p.firstChild.nodeValue = 'set';"
+               "var d = document.createElement('div'); d.innerHTML = '<p> </p>\\n <i>x</i>'; var w = document.getElementById('w');"
+               "document.title = [w.childNodes.length, v(w.firstChild.data), t.content.firstChild.childNodes.length, p.textContent,"
+               " d.childNodes.length, v(d.childNodes[1].data)].join(' ');"
+               "</script></body>"),
+        "3 N__ 1 set 3 N_");
     oks("a built-in the browser wrote as script prints as native code, as every built-in does, and a page's own function as itself",
         titled("<body><script>function mine() { return 1; } function nat(f) { return String(f).indexOf('[native code]') > 0; }"
                "document.title = [nat(ReadableStream), nat(indexedDB.open), nat(Function.prototype.toString.call(IDBFactory)),"

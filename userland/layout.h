@@ -1944,6 +1944,10 @@ static inline void lay_inline(lctx *L, int node, const cstyle *parent, int *y) {
         }
 
         const dnode *n = &d->nodes[at];
+        if (n->kind == DN_TEXT && dom_passed_space(d, at)) {
+            at = lay_past(d, at, node);
+            continue;
+        }
         if (n->kind == DN_TEXT) {
             /* Words belong to the element they are in: a click on them is a
                click on it, and it is what is under the pointer for :hover.
@@ -4648,6 +4652,7 @@ static void lay_block_placed(lctx *L, int node, const cstyle *parent, int x,
     int inline_open = 0;
     while (child >= 0) {
         int next = d->nodes[child].next;
+        if (dom_passed_space(d, child)) { child = next; continue; }
         int is_block = lay_is_block_node(L, child, &st);
         if (is_block && (d->nodes[child].tag == T_IMG || d->nodes[child].tag == T_SVG || lay_painted(d->nodes[child].tag)
                          || (lay_control_kind(d, child) != CTL_NONE && !lay_button_box(d, child)))) {
