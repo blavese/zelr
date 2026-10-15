@@ -2100,6 +2100,21 @@ int main(void) {
            al && be && bar && bar->y == al->y && bar->x > al->x + al->w && be->x > bar->x + bar->w && be->y == al->y);
     }
     {
+        /* The font shorthand: a bare number is a weight. Forbes's `font: 400
+           0.75rem/1.5 Graphik` was read as a size of 400 and drawn forty
+           pixels high, written out and through var() alike. */
+        lay("<style>:root{--w:400;--s:0.75rem;--lh:1.5;--f:Graphik, sans-serif;--b:700}"
+            ".a{font:400 0.75rem/1.5 Graphik, \"Graphik Fallback\", sans-serif}"
+            ".b{font:var(--w) var(--s)/var(--lh) var(--f)}"
+            ".c{font:var(--b) 20px/1.2 serif}.d{font:400 20px/1.2 serif}.e{font:0/0 a}</style>"
+            "<p class=a>written</p><p class=b>through</p><p class=c>heavy</p><p class=d>light</p><p class=e>hidden</p>", 600);
+        const litem *wr = word("written"), *th = word("through"), *he = word("heavy"), *li = word("light");
+        ok("a weight before the size in the font shorthand is a weight, written out or through var()",
+           wr && th && wr->h == 12 && th->h == 12);
+        ok("and 700 there is bold, and font: 0/0 hides the words",
+           he && li && he->h == li->h && he->face != li->face && !word("hidden"));
+    }
+    {
         /* A sheet with thousands of :not()s, as CNN's has: a rule after the
            first two thousand was dropped. */
         static char many[3000 * 32 + 256];

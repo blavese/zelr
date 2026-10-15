@@ -1104,7 +1104,22 @@ static inline void css_add(csheet *s, int prop, const char *v, int vlen) {
     s->ndecls++;
 }
 
+
 /* Splits a value into up to four space separated pieces. */
+/* The pixels a font-size keyword stands for (medium is the 16 a page starts
+   with), or 0 for a word that is not one. */
+static inline int css_size_keyword(const char *v, int n) {
+    static const struct { const char *w; int px; } K[] = {
+        { "xx-small", 9 }, { "x-small", 10 }, { "small", 13 }, { "medium", 16 },
+        { "large", 18 }, { "x-large", 24 }, { "xx-large", 32 }, { "xxx-large", 48 }, { 0, 0 } };
+    for (int i = 0; K[i].w; i++) {
+        int k = 0;
+        while (K[i].w[k] && k < n && w_lower(v[k]) == K[i].w[k]) k++;
+        if (!K[i].w[k] && (k == n || v[k] == '/' || css_space(v[k]) || v[k] == 0)) return K[i].px;
+    }
+    return 0;
+}
+
 static inline int css_parts(const char *v, int vlen, int *st, int *ln, int max) {
     int n = 0, i = 0;
     while (i < vlen && n < max) {
@@ -1120,6 +1135,57 @@ static inline int css_parts(const char *v, int vlen, int *st, int *ln, int max) 
     }
     return n;
 }
+
+/* The font shorthand: style and weight, then the size, a line height after
+   a slash, and the families, each handed to put as a property and its text.
+   A bare number is a weight, never a size, which must have a unit or be a
+   keyword: Forbes's `font: 400 0.75rem/1.5 Graphik` was read as a size of
+   400 and its dates were drawn forty pixels high. What the shorthand does
+   not name goes back to normal, as CSS has it. One reader for the sheet and
+   for a shorthand with var() in it, read once the values are known
+   (layout.h, lay_apply_short), which had a guess of its own. */
+typedef void (*css_put_fn)(void *ctx, int prop, const char *v, int n);
+
+static inline void css_font_split(const char *v, int vlen, css_put_fn put, void *ctx) {
+    int st[12], ln[12];
+    int np = css_parts(v, vlen, st, ln, 12);
+    int bold = 0, italic = 0, sized = 0;
+    for (int i = 0; i < np && !sized; i++) {
+        const char *q = v + st[i];
+        int n = ln[i], digits = 0, other = 0;
+        for (int k = 0; k < n; k++) {
+            if ((q[k] >= '0' && q[k] <= '9') || q[k] == '.') digits++;
+            else other++;
+        }
+        if (w_starts_fold(q, "bold")) { bold = 1; continue; }
+        if (w_starts_fold(q, "italic") || w_starts_fold(q, "oblique")) { italic = 1; continue; }
+        if (digits && !other && !(n == 1 && q[0] == '0')) { if (q[0] >= '6' && q[0] <= '9' && n == 3) bold = 1; continue; }
+        clen L = css_len(q);
+        int keyword = css_size_keyword(q, n) > 0;
+        /* Nought is a size: `font: 0/0 a` is how a page hides the words in
+           something it draws another way. */
+        if (!keyword && (L.unit == U_AUTO || L.v < 0)) continue;
+        int slash = 0;
+        while (slash < n && q[slash] != '/') slash++;
+        put(ctx, P_FONT_SIZE, q, slash);
+        int at = st[i] + n;
+        if (slash < n - 1) put(ctx, P_LINE_HEIGHT, q + slash + 1, n - slash - 1);
+        else if (i + 1 < np && v[st[i + 1]] == '/') {
+            /* "14px / 1.5" or "14px /1.5": the slash a part of its own or the next one's start. */
+            int j = i + 1;
+            if (ln[j] == 1 && j + 1 < np) { put(ctx, P_LINE_HEIGHT, v + st[j + 1], ln[j + 1]); at = st[j + 1] + ln[j + 1]; }
+            else if (ln[j] > 1) { put(ctx, P_LINE_HEIGHT, v + st[j] + 1, ln[j] - 1); at = st[j] + ln[j]; }
+        }
+        while (at < vlen && css_space(v[at])) at++;
+        if (at < vlen) put(ctx, P_FONT_FAMILY, v + at, vlen - at);
+        sized = 1;
+    }
+    if (!sized) return;              /* a system font (caption, menu ...) or nothing usable */
+    put(ctx, P_FONT_WEIGHT, bold ? "bold" : "normal", bold ? 4 : 6);
+    put(ctx, P_FONT_STYLE, italic ? "italic" : "normal", 6);
+}
+
+static void css_font_to_sheet(void *ctx, int prop, const char *v, int n) { css_add((csheet *)ctx, prop, v, n); }
 
 static inline void css_shorthand4(csheet *s, const char *v, int vlen,
                                   int pt, int pr, int pb, int pl) {
@@ -1253,18 +1319,7 @@ static inline void css_declare(csheet *s, const char *name, int nlen,
     if (w_same(lower, "border-left")) { css_add(s, P_BORDER_L, v, vlen); return; }
     if (w_same(lower, "border-right")) { css_add(s, P_BORDER_R, v, vlen); return; }
     if (w_same(lower, "font")) {
-        /* The shorthand's one part worth having is the size. */
-        int st[6], ln[6];
-        int np = css_parts(v, vlen, st, ln, 6);
-        for (int i = 0; i < np; i++) {
-            clen L = css_len(v + st[i]);
-            if (L.unit != U_AUTO && L.v > 0) {
-                css_add(s, P_FONT_SIZE, v + st[i], ln[i]);
-                break;
-            }
-            if (w_starts_fold(v + st[i], "bold")) css_add(s, P_FONT_WEIGHT, "bold", 4);
-            if (w_starts_fold(v + st[i], "italic")) css_add(s, P_FONT_STYLE, "italic", 6);
-        }
+        css_font_split(v, vlen, css_font_to_sheet, s);
         return;
     }
     if (w_same(lower, "list-style")) {
@@ -2746,6 +2801,8 @@ static inline void css_apply_v(int prop, const char *v, cstyle *st, int root_px,
         case P_FONT_SIZE: {
             if (w_starts_fold(v, "smaller")) { st->font_px = (short)(st->font_px * 5 / 6); break; }
             if (w_starts_fold(v, "larger")) { st->font_px = (short)(st->font_px * 6 / 5); break; }
+            int kw = css_size_keyword(v, w_len(v));
+            if (kw) { st->font_px = (short)kw; break; }
             clen L = css_len_at(v, st->font_px, root_px, st->font_px);
             int px = css_px(L, st->font_px, root_px, st->font_px);
             if (px > 0) st->font_px = (short)(px > 96 ? 96 : (px < 7 ? 7 : px));

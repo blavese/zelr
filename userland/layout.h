@@ -904,6 +904,19 @@ static inline const char *lay_var_keep(int head, const char *v) {
     return dst;
 }
 
+/* A part of a font shorthand with var() in it, applied as it is found
+   (css.h, css_font_split). */
+typedef struct { lctx *L; cstyle *st; int pct_of; } lay_font_put_t;
+
+static void lay_font_put(void *ctx, int prop, const char *v, int n) {
+    lay_font_put_t *x = (lay_font_put_t *)ctx;
+    char one[256];
+    if (n > 255) n = 255;
+    for (int i = 0; i < n; i++) one[i] = v[i];
+    one[n] = 0;
+    css_apply_v(prop, one, x->st, x->L->root_px, x->pct_of);
+}
+
 /* A shorthand whose value had var() in it, split now that it is known. */
 static void lay_apply_short(lctx *L, cstyle *st, const char *nv, int pct_of) {
     char name[48];
@@ -949,13 +962,8 @@ static void lay_apply_short(lctx *L, cstyle *st, const char *nv, int pct_of) {
         return;
     }
     if (lay_same_fold(name, "font")) {
-        for (int i = 0; i < n; i++) {
-            clen F = css_len(part[i]);
-            if (F.unit != U_AUTO && F.v > 0 && F.unit != U_PX) { css_apply_v(P_FONT_SIZE, part[i], st, L->root_px, pct_of); break; }
-            if (F.unit == U_PX && F.v > 100 * 4) { css_apply_v(P_FONT_SIZE, part[i], st, L->root_px, pct_of); break; }
-            if (w_starts_fold(part[i], "bold")) css_apply_v(P_FONT_WEIGHT, "bold", st, L->root_px, pct_of);
-            if (w_starts_fold(part[i], "italic")) css_apply_v(P_FONT_STYLE, "italic", st, L->root_px, pct_of);
-        }
+        lay_font_put_t x = { L, st, pct_of };
+        css_font_split(v, w_len(v), lay_font_put, &x);
         return;
     }
     if (lay_same_fold(name, "flex")) { css_apply_v(P_FLEX_GROW, v, st, L->root_px, pct_of); return; }
