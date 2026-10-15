@@ -1574,6 +1574,11 @@ int main(void) {
                "document.title = first + ' ' + copy + ' ' + inn.join(',') + ' ' + d.getAttribute('data-new-one') + ' ' + ('userId' in d.dataset);"
                "</script></body>"),
         "userId,xY,plain {\"userId\":\"7\",\"xY\":\"a\",\"plain\":\"p\"} userId,plain,newOne n true");
+    oks("document.title gives the title with its white space taken off the ends and each run made one space",
+        titled("<head><title>\n    Word  of\tthe day | Site\n  </title></head><body><script>"
+               "var a = '[' + document.title + ']'; document.title = ' set  again '; document.title = a + '[' + document.title + ']';"
+               "</script></body>"),
+        "[Word of the day | Site][set again]");
     oks("white space is in the tree as it was written: the page's, a template's space that Svelte fills in, and innerHTML's",
         titled("<body><div id=w>\n  <p>a</p>\n</div><script>function v(s) { return s.replace(/\\n/g, 'N').replace(/ /g, '_'); }"
                "var t = document.createElement('template'); t.innerHTML = '<p> </p>';"

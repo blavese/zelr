@@ -340,6 +340,24 @@ static inline int dom_next(const ddoc *d, int i, int top) {
     return -1;
 }
 
+/* Text with the white space at its ends taken off and each run inside made
+   one space: a title as a browser shows it and as document.title gives it.
+   dictionary.com's title starts with a line break, which broke the console
+   line the title is printed in. */
+static inline int dom_collapse(const char *s, char *out, int cap) {
+    int w = 0, gap = 0;
+    if (cap <= 0) return 0;
+    for (; *s; s++) {
+        char c = *s;
+        if (c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f') { gap = w > 0; continue; }
+        if (gap && w < cap - 1) out[w++] = ' ';
+        gap = 0;
+        if (w < cap - 1) out[w++] = c;
+    }
+    out[w] = 0;
+    return w;
+}
+
 /* The text of an element and everything under it, run together. */
 static inline int dom_text_content(const ddoc *d, int el, char *out, int cap) {
     int w = 0;

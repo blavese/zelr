@@ -5346,7 +5346,11 @@ static jval nat_doc_title(jctx *J, jval t, jval *a, int n) {
     (void)a; (void)n;
     int d = jd_inert_of(t);
     if (d >= 0) return jd_inert_title(J, d);
-    return jd_str(jd_doc->title >= 0 ? jd_doc->arena + jd_doc->title : "");
+    const char *raw = jd_doc->title >= 0 ? jd_doc->arena + jd_doc->title : "";
+    char tidy[4096];
+    if (w_len(raw) >= (int)sizeof(tidy)) return jd_str(raw);
+    dom_collapse(raw, tidy, (int)sizeof(tidy));
+    return jd_str(tidy);
 }
 
 static jval nat_doc_set_title(jctx *J, jval t, jval *a, int n) {

@@ -2563,7 +2563,7 @@ static void title_take(void) {
     char folded[sizeof(title) * 4];
     int nf = n < (int)sizeof(folded) - 8 ? lay_fold(t, n, folded, (int)sizeof(folded)) : 0;
     if (nf) { folded[nf] = 0; t = folded; }
-    w_copy(title, sizeof(title), t, sizeof(title));
+    dom_collapse(t, title, (int)sizeof(title));
 }
 
 static void relayout(int width) {
