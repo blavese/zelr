@@ -2152,6 +2152,17 @@ int main(void) {
            fw && ln && fw->y < 60 && ln->y > fw->y && ln->y - fw->y < 80);
     }
     {
+        /* A row line counted back from the last, as NPR's card pictures span
+           the card (grid-row: 1 / -1): it took the first row alone, and the
+           headline beside the picture went below it. */
+        lay("<style>.c{display:grid;grid-template-columns:200px 200px;grid-template-rows:auto auto 1fr;width:400px}"
+            ".c>p{grid-column:1;margin:0}.c>div{grid-column:2;grid-row:1 / -1;height:300px}</style>"
+            "<div class=c><p>eyebrow</p><p>headline</p><div></div></div><p>after</p>", 800);
+        const litem *eb = word("eyebrow"), *hl = word("headline"), *af = word("after");
+        ok("a row line counted back from the last spans the rows written out",
+           eb && hl && af && hl->y > eb->y && hl->y - eb->y < 100 && af->y >= 300);
+    }
+    {
         /* A grid item flowed into place with its span on the end alone, as
            National Geographic writes it: it took one column of twelve. */
         lay("<style>.g{display:grid;grid-template-columns:repeat(12,1fr);width:600px}.g>*{grid-column-end:span 12}"

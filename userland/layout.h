@@ -4058,6 +4058,19 @@ static int lay_grid_rows(lctx *L, const cstyle *st, int gap, int *rowh, int nrow
     return nrows;
 }
 
+/* How many rows grid-template-rows writes out, which a negative row line
+   counts back from: NPR's card pictures are grid-row: 1 / -1, the height of
+   the card, and with nothing to count back from they took the first row,
+   and the headline beside them went below. */
+static int lay_grid_explicit_rows(lctx *L, const cstyle *st, int gap) {
+    if (!st->grid_rows) return 0;
+    int kind[LAY_GRID_COLS], val[LAY_GRID_COLS], mins[LAY_GRID_COLS];
+    lay_tracks_text = st->grid_rows;
+    int nt = lay_grid_tracks(L, st, st->height > 0 ? st->height : 0, gap, 0, kind, val, mins, 0, 0);
+    lay_tracks_text = 0;
+    return nt;
+}
+
 #define LAY_GPOOL 12288
 static int lay_gpool[LAY_GPOOL];
 static int lay_gpool_top;
@@ -4084,6 +4097,7 @@ static int lay_grid_placed(lctx *L, int node, const cstyle *st, int cw, int ncol
     int k, from, positioned, n = 0;
     int *rec = lay_gpool + lay_gpool_top;
     int room = (LAY_GPOOL - lay_gpool_top) / GR_N;
+    int erows = lay_grid_explicit_rows(L, st, gap);
     lay_items_start(L, &it, node, st);
     while ((k = lay_items_next(L, &it, cw, &from, &positioned)) >= 0) {
         if (positioned) continue;
@@ -4095,7 +4109,7 @@ static int lay_grid_placed(lctx *L, int node, const cstyle *st, int cw, int ncol
         lay_grid_parts(&own, part);
         int c0 = -1, cs = 1, r0 = -1, rs = 1;
         if (!lay_grid_axis(part[1], part[3], ncols, names, nn, &c0, &cs)) c0 = -1;
-        if (!lay_grid_axis(part[0], part[2], 0, 0, 0, &r0, &rs)) r0 = -1;
+        if (!lay_grid_axis(part[0], part[2], erows, 0, 0, &r0, &rs)) r0 = -1;
         if (cs > ncols) cs = ncols;
         if (c0 >= ncols) c0 = ncols - 1;
         if (c0 >= 0 && c0 + cs > ncols) cs = ncols - c0;
