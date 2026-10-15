@@ -110,7 +110,11 @@ static void collected(const char *what, const char *src, const char *want, u32 r
         jval r = js_get(&J, js_from_obj(J.global_obj), js_intern(&J, "result", 6));
         text = js_to_str(&J, r);
     }
-    int same = ok && text && strlen(want) == (int)text->len && J.gc_runs >= runs && J.allocated < most;
+    /* What is held, not what was made since the collector last ran, which
+       moved with where that happened to fall. */
+    u32 own_runs = J.gc_runs;
+    if (ok) js_gc(&J);
+    int same = ok && text && strlen(want) == (int)text->len && own_runs >= runs && J.allocated < most;
     for (u32 i = 0; same && i < text->len; i++) if (text->s[i] != want[i]) same = 0;
     show(same ? "  PASS  " : "  FAIL  ");
     show(what);
@@ -1985,6 +1989,14 @@ int main(void) {
               " var o = { 5001: 'one', 5002: { get x() { for (var k = 0; k < 120; k++) { var junk = 'k'.repeat(100000) + k; } return 'two'; } }, 5003: 'three' };"
               " result = a.slice(0, 60).map(function (e) { return e.n; }).slice(0, 5).join() + ' ' + a.length + ' ' + JSON.stringify(o, [5001, 5002, 'x']);",
               "1,2,3,4,5 3000 {\"5001\":\"one\",\"5002\":{\"x\":\"two\"}}", 2, 20u * 1024 * 1024);
+    collected("what an array lets go of by pop, splice or a shorter length is given back, the slots it leaves cleared",
+              "var q = [], s = [], c = [], p = [];"
+              " for (var i = 0; i < 30; i++) { q.push('a'.repeat(100000) + i); s.push('b'.repeat(100000) + i);"
+              "  c.push('c'.repeat(100000) + i); p.push('d'.repeat(100000) + i); }"
+              " while (q.length) q.pop(); while (s.length > 1) s.shift(); c.length = 1; p.splice(1, 29);"
+              " for (var j = 0; j < 200; j++) { var junk = 'z'.repeat(100000) + j; }"
+              " result = [q.length, s.length, s[0].slice(-2), c.length, c[0].slice(-1), p.length].join(' ');",
+              "0 1 29 1 0 1", 2, 3u * 1024 * 1024);
     where_memory_is();
     lazy_reading();
     collector_inside();

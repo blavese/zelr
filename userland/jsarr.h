@@ -200,7 +200,12 @@ static jval nat_arr_pop(jctx *J, jval t, jval *a, int n) {
     (void)a; (void)n;
     if (t.t == JS_OBJ && t.obj && t.obj->kind == JO_ARRAY && !(t.obj->flags & JOF_FROZEN)) {
         if (!t.obj->len) return js_undef();
-        return js_item(t.obj, --t.obj->len);
+        jval last = js_item(t.obj, --t.obj->len);
+        /* The slot let go is cleared: the collector takes any word that
+           points at a block to mean it is in use, and a popped value left
+           behind the length was kept for as long as the array was. */
+        t.obj->items[t.obj->len] = js_undef();
+        return last;
     }
     if (!js_arraylike(J, t)) return js_undef();
     u32 len = js_len_of(J, t);
@@ -218,7 +223,7 @@ static jval nat_arr_shift(jctx *J, jval t, jval *a, int n) {
         if (!o->len) return js_undef();
         jval first = js_item(o, 0);
         for (u32 i = 1; i < o->len; i++) o->items[i - 1] = o->items[i];
-        o->len--;
+        o->items[--o->len] = js_undef();
         return first;
     }
     if (!js_arraylike(J, t)) return js_undef();
@@ -290,6 +295,7 @@ static jval nat_arr_splice(jctx *J, jval t, jval *a, int n) {
             else for (u32 i = start + del; i < len; i++) o->items[i - del + add] = o->items[i];
         }
         for (u32 i = 0; i < add; i++) o->items[start + i] = a[2 + i];
+        for (u32 i = nlen; i < len; i++) o->items[i] = js_undef();
         o->len = nlen;
         return js_from_obj(removed);
     }

@@ -851,7 +851,10 @@ static void js_set_length(jctx *J, jobj *o, jval v) {
         return;
     }
     u32 want = (u32)d;
-    if (want < o->len) o->len = want;
+    if (want < o->len) {
+        for (u32 i = want; i < o->len; i++) o->items[i] = js_undef();
+        o->len = want;
+    }
     else if (want > o->len) js_arr_set(J, o, want - 1, js_hole());
 }
 
