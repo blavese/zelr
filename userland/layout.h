@@ -674,6 +674,61 @@ static inline void lay_text_run(lctx *L, const char *s, const cstyle *st,
         return;
     }
 
+    /* pre-line: runs of spaces are one, as normally, but a line break is a
+       line break. pre-wrap: the spaces are kept too, each run with the word
+       after it, and a word that does not fit goes to the next line. */
+    if (st->white == WS_PRE_LINE || st->white == WS_PRE_WRAP) {
+        int i = 0;
+        for (;;) {
+            while (s[i] && s[i] != '\n') {
+                int start = i;
+                while (s[i] == ' ' || s[i] == '\t' || s[i] == '\r') i++;
+                if (st->white == WS_PRE_LINE && i > start) { L->pending_space = 1; continue; }
+                while (s[i] && s[i] != '\n' && s[i] != ' ' && s[i] != '\t' && s[i] != '\r') i++;
+                if (st->white == WS_PRE_LINE) { lay_word(L, s + start, i - start, st, y, face); continue; }
+                const char *cs = s + start;
+                int cn = i - start;
+                char folded[512];
+                int nf = cn < (int)sizeof(folded) - 8 ? lay_fold(cs, cn, folded, (int)sizeof(folded)) : 0;
+                if (nf) { cs = folded; cn = nf; }
+                int w = tface_wn(cs, cn, face);
+                if (L->pen + w > L->line_left + L->line_width && L->pen > L->line_left) {
+                    int left = L->cont_left, width = L->cont_width, al = L->align;
+                    lay_line_end(L, y);
+                    lay_line_start(L, *y, left, width, al);
+                    while (cn > 0 && *cs == ' ') { cs++; cn--; }
+                    w = tface_wn(cs, cn, face);
+                }
+                if (cn <= 0) continue;
+                litem *it = lay_item(L);
+                if (!it) return;
+                it->kind = LK_TEXT;
+                it->at = st->ink_none ? -1 : lay_put(L, cs, cn);
+                it->x = L->pen;
+                it->w = w;
+                it->h = tface_h(face);
+                it->face = (short)face;
+                it->color = st->color;
+                it->under = st->underline;
+                it->strike = st->strike;
+                it->link = L->cur_link;
+                it->node = L->word_node;
+                L->pen += w;
+                L->line_n++;
+                lay_line_fit(L, tface_h(face), st->line_h);
+                L->pending_space = 0;
+            }
+            if (!s[i]) break;
+            i++;
+            lay_line_fit(L, tface_h(face), st->line_h);
+            int left = L->cont_left, width = L->cont_width, al = L->align;
+            lay_line_end(L, y);
+            lay_line_start(L, *y, left, width, al);
+            L->pending_space = 0;
+        }
+        return;
+    }
+
     int i = 0;
     while (s[i]) {
         if (lay_space(s[i])) { L->pending_space = 1; i++; continue; }

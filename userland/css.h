@@ -101,7 +101,7 @@ enum { FD_ROW = 0, FD_ROW_REVERSE, FD_COLUMN, FD_COLUMN_REVERSE };
 enum { JC_START = 0, JC_CENTER, JC_END, JC_BETWEEN, JC_AROUND, JC_EVENLY };
 enum { AI_STRETCH = 0, AI_START, AI_CENTER, AI_END, AI_BASELINE };
 enum { A_LEFT = 0, A_CENTER, A_RIGHT, A_JUSTIFY };
-enum { WS_NORMAL = 0, WS_PRE, WS_NOWRAP };
+enum { WS_NORMAL = 0, WS_PRE, WS_NOWRAP, WS_PRE_WRAP, WS_PRE_LINE };
 enum { LS_DISC = 0, LS_DECIMAL, LS_NONE, LS_CIRCLE, LS_SQUARE };
 
 /* A length, kept as it was written and resolved when the thing it is
@@ -2774,9 +2774,16 @@ static inline void css_apply_v(int prop, const char *v, cstyle *st, int root_px,
             if (w_starts_fold(v, "none")) { st->underline = 0; st->strike = 0; }
             break;
         case P_WHITE_SPACE:
-            if (w_starts_fold(v, "pre")) st->white = WS_PRE;
-            else if (w_starts_fold(v, "nowrap")) st->white = WS_NOWRAP;
-            else st->white = WS_NORMAL;
+            /* A value this does not know is dropped, as a browser drops it,
+               leaving what was there: python.org follows pre-wrap with
+               -moz-pre-wrap !important, and that read as normal ran the lines
+               of its code together. pre-wrap and pre-line keep their line
+               breaks and wrap as well; they were pre, which did not wrap. */
+            if (w_same_fold(v, "pre")) st->white = WS_PRE;
+            else if (w_same_fold(v, "pre-wrap") || w_same_fold(v, "break-spaces")) st->white = WS_PRE_WRAP;
+            else if (w_same_fold(v, "pre-line")) st->white = WS_PRE_LINE;
+            else if (w_same_fold(v, "nowrap")) st->white = WS_NOWRAP;
+            else if (w_same_fold(v, "normal") || w_same_fold(v, "initial")) st->white = WS_NORMAL;
             break;
         case P_LIST_STYLE:
             if (w_starts_fold(v, "none")) st->list = LS_NONE;

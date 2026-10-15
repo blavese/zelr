@@ -1912,7 +1912,7 @@ static int jd_computed_value(int node, const cstyle *s, const char *prop, jtext 
         "table-cell", "flex", "table", "table-row", "table-row-group", "inline-flex", "grid", "contents" };
     static const char *const POSITION[] = { "static", "relative", "absolute", "fixed" };
     static const char *const ALIGN[] = { "left", "center", "right", "justify" };
-    static const char *const WHITE[] = { "normal", "pre", "nowrap" };
+    static const char *const WHITE[] = { "normal", "pre", "nowrap", "pre-wrap", "pre-line" };
     static const char *const FLEXDIR[] = { "row", "row-reverse", "column", "column-reverse" };
     static const char *const JUSTIFY[] = { "flex-start", "center", "flex-end", "space-between", "space-around", "space-evenly" };
     static const char *const ALIGNITEMS[] = { "stretch", "flex-start", "center", "flex-end", "baseline" };
@@ -1931,7 +1931,7 @@ static int jd_computed_value(int node, const cstyle *s, const char *prop, jtext 
     else if (w_same(prop, "text-decoration") || w_same(prop, "text-decoration-line"))
         jd_put(t, s->underline ? "underline" : s->strike ? "line-through" : "none");
     else if (w_same(prop, "text-align")) jd_put(t, s->align < 4 ? ALIGN[s->align] : "left");
-    else if (w_same(prop, "white-space")) jd_put(t, s->white < 3 ? WHITE[s->white] : "normal");
+    else if (w_same(prop, "white-space")) jd_put(t, s->white < 5 ? WHITE[s->white] : "normal");
     else if (w_same(prop, "position")) jd_put(t, s->position < 4 ? POSITION[s->position] : "static");
     else if (w_same(prop, "float")) jd_put(t, s->floated == 1 ? "left" : s->floated == 2 ? "right" : "none");
     else if (w_same(prop, "box-sizing")) jd_put(t, s->border_box ? "border-box" : "content-box");

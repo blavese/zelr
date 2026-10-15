@@ -2061,6 +2061,29 @@ int main(void) {
         puts("\n");
     }
 
+    /* --- white-space: pre-wrap and pre-line, and a value not known ---------------------
+     *
+     * pre-wrap keeps the spaces and the line breaks and still wraps; pre-line
+     * keeps the line breaks only. Both were read as pre, which never wraps. A
+     * value this does not know is dropped, as in a browser: python.org's code
+     * sample has pre-wrap followed by -moz-pre-wrap !important, which was read
+     * as normal and ran the sample's lines together. */
+    {
+        lay("<style>.pw{white-space:pre-wrap;width:150px}.pl{white-space:pre-line;width:150px}"
+            "pre{white-space:pre-wrap;white-space:-moz-pre-wrap !important}</style>"
+            "<div class=pw>first line\n    indented and long enough to wrap round</div>"
+            "<div class=pl>alpha     beta\ngamma</div><pre>one\ntwo</pre>", 600);
+        const litem *fl = word("first"), *in = word("    indented"), *ro = word("wrap");
+        ok("pre-wrap keeps a line break and the spaces that indent a line, and wraps what does not fit",
+           fl && in && ro && in->y > fl->y && in->x == fl->x && ro->y > in->y && ro->x == fl->x);
+        const litem *al = word("alpha"), *be = word("beta"), *ga = word("gamma");
+        int one_space = al && be ? be->x - (al->x + al->w) : -1;
+        ok("pre-line keeps the line break but not the run of spaces",
+           al && be && ga && be->y == al->y && one_space > 0 && one_space < 12 && ga->y > al->y && ga->x == al->x);
+        const litem *o1 = word("one"), *t2 = word("two");
+        ok("and a white-space value not known is dropped, not read as normal", o1 && t2 && t2->y > o1->y);
+    }
+
     /* --- a transform's share is of the box ------------------------------------------
      *
      * translate(100%) moves a box by its own width, though it draws nothing
