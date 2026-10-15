@@ -525,6 +525,8 @@ typedef struct jctx {
        span's index in spans. */
     jstr  **srcs;
     int     nsrcs, capsrcs, cur_src;
+    int     own_src;          /* the browser's own script (a prelude), its index plus one: its functions are
+                                 built-ins, and print as native code */
     int     eager;            /* read every function's body as it is met (none left for later) */
     jspan  *spans;
     int     nspans, capspans;

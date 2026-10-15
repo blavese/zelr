@@ -1574,6 +1574,12 @@ int main(void) {
                "document.title = first + ' ' + copy + ' ' + inn.join(',') + ' ' + d.getAttribute('data-new-one') + ' ' + ('userId' in d.dataset);"
                "</script></body>"),
         "userId,xY,plain {\"userId\":\"7\",\"xY\":\"a\",\"plain\":\"p\"} userId,plain,newOne n true");
+    oks("a built-in the browser wrote as script prints as native code, as every built-in does, and a page's own function as itself",
+        titled("<body><script>function mine() { return 1; } function nat(f) { return String(f).indexOf('[native code]') > 0; }"
+               "document.title = [nat(ReadableStream), nat(indexedDB.open), nat(Function.prototype.toString.call(IDBFactory)),"
+               " nat(fetch), nat(mine), String(mine), String(IDBFactory)].join(' ');"
+               "</script></body>"),
+        "true true true true false function mine() { return 1; } function IDBFactory() { [native code] }");
     oks("a script a page makes and appends runs when it is put in the page",
         titled("<body><script>var s = document.createElement('script');"
                "s.textContent = 'document.title = \"inserted \" + (document.currentScript === s);';"
@@ -3343,7 +3349,8 @@ int main(void) {
         /* A bundler's worker, made from a Blob whose first line gives back its
            own address: Mastodon's stopped there, with no import.meta. */
         load("<body><script>"
-             "var src = 'URL.revokeObjectURL(import.meta.url); postMessage(import.meta.url.slice(0, 5) + \" \" + (import.meta === import.meta));';"
+             "var src = 'URL.revokeObjectURL(import.meta.url); postMessage(import.meta.url.slice(0, 5) + \" \" + (import.meta === import.meta)"
+             " + \" \" + (String(URL.revokeObjectURL).indexOf(\"[native code]\") > 0));';"
              "var w = new Worker(URL.createObjectURL(new Blob([src], { type: 'text/javascript' })), { type: 'module' });"
              "w.onmessage = function (e) { document.title = e.data; };"
              "w.onerror = function (e) { document.title = 'error ' + e.message; };"
@@ -3351,8 +3358,8 @@ int main(void) {
         char err[128];
         run_scripts(&page, err, (int)sizeof(err), 0);
         pump_until(1000, 1500);
-        oks("a module worker made from a Blob has an import.meta with its address, the same each time",
-            page.title >= 0 ? page.arena + page.title : "", "blob: true");
+        oks("a module worker made from a Blob has an import.meta with its address, the same each time, and its built-ins are native code",
+            page.title >= 0 ? page.arena + page.title : "", "blob: true true");
     }
     {
         /* IndexedDB, kept for the page's life: Mastodon's app stopped on

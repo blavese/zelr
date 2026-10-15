@@ -862,14 +862,18 @@ static jval nat_fn_tostring(jctx *J, jval t, jval *a, int n) {
     int w = 0;
     int native = t.obj->kind == JO_NATIVE;
     /* The function's own text, as the standard asks and as MapLibre needs:
-       it makes its worker from its functions' text, and got "{ ... }". */
+       it makes its worker from its functions' text, and got "{ ... }".
+       A built-in the browser wrote as script (IndexedDB, the streams) is
+       native code to the page, as in any browser: libraries take a
+       built-in that prints its source for one a page has replaced. */
     if (!native && t.obj->node >= 0 && t.obj->node < J->nnodes) {
         int sp = J->nodes[t.obj->node].c;
         int k = J->nodes[t.obj->node].kind;
         if ((k == N_FUNC || k == N_FUNCDECL) && sp >= 0 && sp < J->nspans) {
             jspan *s = &J->spans[sp];
             jstr *src = s->src >= 0 && s->src < J->nsrcs ? J->srcs[s->src] : 0;
-            if (src && s->end <= src->len && s->start < s->end)
+            if (J->own_src && s->src == J->own_src - 1) native = 1;
+            else if (src && s->end <= src->len && s->start < s->end)
                 return js_from_str(js_str_n(J, src->s + s->start, s->end - s->start));
         }
     }

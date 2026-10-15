@@ -1082,6 +1082,7 @@ static const char JD_PRELUDE[] =
    failure here is the browser's own fault and is not the page's to see. */
 static void jd_setup_prelude(jctx *J) {
     jsignal outer = J->sig;
+    J->own_src = J->nsrcs + 1;
     js_eval_source(J, js_str(J, JD_PRELUDE), J->global, J->global_lex, js_from_obj(J->global_obj));
     J->sig = outer;
 }

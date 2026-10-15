@@ -798,6 +798,7 @@ static int jw_new(const char *url, const char *name) {
     if (jd_page_secure()) jw_native(W, cr, "randomUUID", nat_crypto_uuid, 0);
     jw_put(W, 0, "crypto", js_from_obj(cr));
 
+    W->own_src = W->nsrcs + 1;
     jval prelude = js_eval_source(W, js_str(W, JW_PRELUDE), W->global, W->global_lex, js_undef());
     jobj *rep = js_native_n(W, "report", nat_jw_report, 1), *tb = js_native_n(W, "toBuffer", nat_jw_to_buffer, 1);
     jobj *pu = js_native_n(W, "parseURL", nat_jw_parse_url, 2);
