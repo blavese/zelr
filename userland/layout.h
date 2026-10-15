@@ -327,6 +327,16 @@ typedef struct {
        nothing to the element and makes it the thing its children are
        placed against. */
     int pos_x, pos_y, pos_w;
+    /* Which positioned box that is (0 for the page), and the boxes placed
+       against one by their bottom alone, waiting for its height: their
+       items, where they were laid out, how tall they came out and how far
+       from the bottom they go (lay_block moves them once the height is
+       settled). */
+    int pos_id, pos_ids;
+#define LAY_BOTTOMS 64
+    int bot_first[LAY_BOTTOMS], bot_end[LAY_BOTTOMS], bot_top[LAY_BOTTOMS], bot_h[LAY_BOTTOMS],
+        bot_off[LAY_BOTTOMS];
+    int nbots;
 
     /* Inside lay_measure, how deep, and the furthest right that a flex row
        being measured rather than laid out would have reached (see lay_flex). */
@@ -2049,6 +2059,11 @@ static inline void lay_inline(lctx *L, int node, const cstyle *parent, int *y) {
                         || st.display == D_LIST_ITEM || st.display == D_TABLE
                         || st.display == D_TABLE_ROW || st.display == D_TABLE_GROUP
                         || st.display == D_GRID;
+            if (n->tag == T_IMG && at != node && (st.position == POS_ABSOLUTE || st.position == POS_FIXED)) {
+                lay_inline_piece(L, at, &stack[sp], 1, y);
+                at = lay_past(d, at, node);
+                continue;
+            }
             if (n->tag != T_BR && n->tag != T_IMG
                 && (lay_control_kind(d, at) == CTL_NONE || lay_button_box(d, at))) {
                 if ((st.position == POS_ABSOLUTE || st.position == POS_FIXED)
@@ -2141,7 +2156,12 @@ static inline void lay_inline(lctx *L, int node, const cstyle *parent, int *y) {
                         iw = st.max_width;
                     }
 
-                    if (iw > L->line_width && iw > 0) {
+                    /* A positioned one is as big as it says, however wide the
+                       line it would have been on: Apple's hero picture is a
+                       height and its width from its shape, wider than the
+                       window and centred by a translate. */
+                    if (iw > L->line_width && iw > 0
+                        && st.position != POS_ABSOLUTE && st.position != POS_FIXED) {
                         ih = ih * L->line_width / iw;
                         iw = L->line_width;
                     }
@@ -2369,6 +2389,23 @@ static inline void lay_inline(lctx *L, int node, const cstyle *parent, int *y) {
 }
 
 /* True when a node starts a new block rather than flowing into a line. */
+/* A picture, a drawing, a video or a field that is absolutely positioned:
+   placed by its offsets, as any positioned box is (lay_block), and not on
+   the line the flow would have put it on. Apple's hero picture is
+   position: absolute; bottom: 0; left: 50% with a translate, and was drawn
+   at the left of the line, over the words above it. */
+static inline int lay_positioned_picture(lctx *L, int n, const cstyle *parent) {
+    const ddoc *d = L->d;
+    if (d->nodes[n].kind != DN_ELEMENT) return 0;
+    int tag = d->nodes[n].tag;
+    if (tag != T_IMG && tag != T_SVG && !lay_painted(tag)
+        && (lay_control_kind(d, n) == CTL_NONE || lay_button_box(d, n)))
+        return 0;
+    cstyle st;
+    lay_style(L, n, parent, &st, L->line_width);
+    return st.position == POS_ABSOLUTE || st.position == POS_FIXED;
+}
+
 static inline int lay_is_block_node(lctx *L, int n, const cstyle *parent) {
     if (L->d->nodes[n].kind != DN_ELEMENT) return 0;
     cstyle st;
@@ -4469,18 +4506,17 @@ static void lay_block(lctx *L, int node, const cstyle *parent, int x,
             ax = L->pos_x + aw - probe.right_off - bw;
 
         /* A top is an offset from the containing block's top, which is
-           known. A bottom is an offset from its bottom, which is not: this
-           is one pass and the height of the thing being measured from is
-           not settled until everything inside it has been laid out --
-           including this box.
-
-           So a box with only a bottom stays where the flow put it. That is
-           wrong, and it is the least wrong answer available: computing it
-           from the top instead puts a footer pinned to the bottom of the
-           page somewhere above the top of it, which is visibly worse than
-           leaving it in place. */
+           known. A bottom is an offset from its bottom, which is not until
+           everything inside it has been laid out, this box included: so a
+           box with only a bottom is laid out where the flow put it and
+           noted, and moved when its containing box's height is settled
+           (lay_block). Against the page itself it stays where the flow put
+           it, as it did: computing it from the top instead put a footer
+           pinned to the bottom of the page above the top of it. */
         int ay = *y;
         if (probe.top != CSS_AUTO_OFF) ay = L->pos_y + probe.top;
+        int by_bottom = probe.top == CSS_AUTO_OFF && probe.bottom != CSS_AUTO_OFF && L->pos_id
+                        && !L->measuring && L->nbots < LAY_BOTTOMS;
 
         int room = probe.width >= 0 ? probe.width : (L->pos_x + aw) - ax;
         /* Both sides given and no width: as wide as lies between them, as an
@@ -4493,6 +4529,14 @@ static void lay_block(lctx *L, int node, const cstyle *parent, int x,
         lay_block_placed(L, node, parent, ax, room, &sub);
         *y = keep;                             /* it took no space */
         if (!L->measuring) lay_translate(L, node, &probe, moved_from);
+        if (by_bottom) {
+            int b = L->nbots++;
+            L->bot_first[b] = moved_from;
+            L->bot_end[b] = L->out->nitems;
+            L->bot_top[b] = ay;
+            L->bot_h[b] = sub - ay;
+            L->bot_off[b] = probe.bottom;
+        }
         return;
     }
 
@@ -4737,11 +4781,13 @@ static void lay_block_placed(lctx *L, int node, const cstyle *parent, int x,
     /* A positioned box is what its positioned descendants are measured
        from. Saved and put back, because this is a walk and the box two
        levels up is still the right answer for the box after this one. */
-    int held_x = L->pos_x, held_y = L->pos_y, held_w = L->pos_w;
+    int held_x = L->pos_x, held_y = L->pos_y, held_w = L->pos_w, held_id = L->pos_id;
+    int bots_at = L->nbots;
     if (st.position != POS_STATIC) {
         L->pos_x = cx;
         L->pos_y = box_top;
         L->pos_w = cw;
+        L->pos_id = ++L->pos_ids;
     }
 
     /* A flex container lays its children along a line rather than down
@@ -4763,6 +4809,14 @@ static void lay_block_placed(lctx *L, int node, const cstyle *parent, int x,
     while (child >= 0) {
         int next = d->nodes[child].next;
         if (dom_passed_space(d, child)) { child = next; continue; }
+        if (lay_positioned_picture(L, child, &st)) {
+            /* Out of the flow: it takes no room, and a line being filled
+               goes on round it. */
+            if (inline_open) lay_inline_piece(L, child, &st, 1, y);
+            else lay_block(L, child, &st, cx, cw, y);
+            child = next;
+            continue;
+        }
         int is_block = lay_is_block_node(L, child, &st);
         if (is_block && (d->nodes[child].tag == T_IMG || d->nodes[child].tag == T_SVG || lay_painted(d->nodes[child].tag)
                          || (lay_control_kind(d, child) != CTL_NONE && !lay_button_box(d, child)))) {
@@ -4810,6 +4864,7 @@ static void lay_block_placed(lctx *L, int node, const cstyle *parent, int x,
     L->pos_x = held_x;
     L->pos_y = held_y;
     L->pos_w = held_w;
+    L->pos_id = held_id;
 
     /* Tall enough for the floats inside it (lay_float). */
     for (int s2 = floats_at > L->fl_seq - LAY_FLOATS ? floats_at : L->fl_seq - LAY_FLOATS;
@@ -4874,6 +4929,22 @@ static void lay_block_placed(lctx *L, int node, const cstyle *parent, int x,
 
     if (want_h >= 0 && want_h > box_h) { *y += want_h - box_h; box_h = want_h; }
     if (floor_h >= 0 && floor_h > box_h) { *y += floor_h - box_h; box_h = floor_h; }
+
+    /* Its height settled, what was placed against this box by its bottom
+       alone goes there: everything noted since it began is its own, since
+       a positioned box inside it took its own back when it ended. An
+       absolutely positioned hero picture with bottom: 0 sat at the top of
+       its box, over the words above it. */
+    if (st.position != POS_STATIC && L->nbots > bots_at) {
+        int floor_y = box_top + box_h - st.bb;
+        for (int b = bots_at; b < L->nbots; b++) {
+            int dy = floor_y - L->bot_off[b] - L->bot_h[b] - L->bot_top[b];
+            if (dy)
+                for (int i = L->bot_first[b]; i < L->bot_end[b] && i < L->out->nitems; i++)
+                    L->out->items[i].y += dy;
+        }
+        L->nbots = bots_at;
+    }
 
     /* A ceiling on height cuts the box rather than the words in it: nothing
        here clips, so the box stops and whatever was under it moves up. That
@@ -5135,6 +5206,7 @@ static inline void lay_run(ldoc *out, const ddoc *d, const csheet *s,
     /* With nothing positioned above it, an absolutely positioned box is
        measured from the page. */
     L.pos_x = 0; L.pos_y = 0; L.pos_w = width;
+    L.pos_id = L.pos_ids = L.nbots = 0;
     L.measuring = 0; L.measure_right = 0;
     L.flex_sized = -1;
     L.measure_root = -1;

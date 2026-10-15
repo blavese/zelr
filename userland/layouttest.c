@@ -2152,6 +2152,40 @@ int main(void) {
            fw && ln && fw->y < 60 && ln->y > fw->y && ln->y - fw->y < 80);
     }
     {
+        /* An absolutely positioned box with only a bottom goes that far from
+           the bottom of its positioned box, once that box's height is known,
+           whether it was given one or grew round what is in it; it stayed
+           where the flow put it. */
+        lay("<style>body{margin:0}p{margin:0;line-height:20px}.w{position:relative;height:300px}"
+            ".b{position:absolute;bottom:20px;left:0}.v{position:relative;padding:10px}"
+            ".c{position:absolute;bottom:0;right:0}</style>"
+            "<div class=w><p class=b>floor</p></div>"
+            "<div class=v><p>one</p><p>two</p><p>three</p><p class=c>corner</p></div>", 800);
+        const litem *fl = word("floor"), *th = word("three"), *co = word("corner");
+        ok("a positioned box with only a bottom goes that far from its positioned box's bottom",
+           fl && fl->y >= 255 && fl->y <= 262 && th && co && co->y >= th->y + 8 && co->y <= th->y + 12);
+
+        /* A positioned picture is placed by its offsets and as big as it
+           says, as Apple's hero is (left: 50%, a translate, bottom: 0, a
+           height): it was put on the line it would have been on, at its
+           left, and squeezed into it. inset-inline-start is left. */
+        static const char *hero =
+            "<style>body{margin:0}.w{position:relative;height:300px}"
+            ".w img{position:absolute;left:50%;bottom:0;height:100px;transform:translate(-50%)}"
+            ".x{position:relative;height:300px}.x img{position:absolute;inset-inline-start:50%;top:0;height:300px;"
+            "transform:translate(-50%)}</style>"
+            "<div class=w><img id=hp src=x></div><div class=x><img id=hq src=x></div>";
+        lay(hero, 800);
+        picture_at("hp", 1600, 400);
+        picture_at("hq", 1600, 400);
+        lay(hero, 800);
+        nfake = 0;
+        const litem *hp = image_of(by_id("hp")), *hq = image_of(by_id("hq"));
+        ok("a positioned picture is placed by its offsets and is as big as it says",
+           hp && hp->w == 400 && hp->h == 100 && hp->x == 200 && hp->y == 200
+           && hq && hq->w == 1200 && hq->x == -200 && hq->y == 300);
+    }
+    {
         /* A bracket and a brace inside quoted strings, as Tumblr's sheet has
            content:":(" half way down: the declaration ran on through every
            rule after it. */

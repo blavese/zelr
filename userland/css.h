@@ -689,6 +689,13 @@ static const cprop CSS_PROPS[] = {
     { "right", P_RIGHT },
     { "bottom", P_BOTTOM },
     { "left", P_LEFT },
+    /* The logical spellings, for writing left to right and top to bottom,
+       which is all this lays out: Apple places its hero pictures with
+       inset-inline-start. */
+    { "inset-inline-start", P_LEFT },
+    { "inset-inline-end", P_RIGHT },
+    { "inset-block-start", P_TOP },
+    { "inset-block-end", P_BOTTOM },
     { "max-width", P_MAX_WIDTH },
     { "height", P_HEIGHT },
     { "line-height", P_LINE_HEIGHT },
@@ -1297,6 +1304,16 @@ static inline void css_declare(csheet *s, const char *name, int nlen,
         /* top, right, bottom and left in one, as position: absolute; inset:
            0 is written for an overlay. */
         css_shorthand4(s, v, vlen, P_TOP, P_RIGHT, P_BOTTOM, P_LEFT);
+        return;
+    }
+    if (w_same(lower, "inset-inline") || w_same(lower, "inset-block")) {
+        /* Its two sides, start then end, or one value for both. */
+        int st[2], ln[2];
+        int np = css_parts(v, vlen, st, ln, 2);
+        if (np <= 0) return;
+        int inl = w_same(lower, "inset-inline");
+        css_add(s, inl ? P_LEFT : P_TOP, v + st[0], ln[0]);
+        css_add(s, inl ? P_RIGHT : P_BOTTOM, v + st[np - 1], ln[np - 1]);
         return;
     }
     if (w_same(lower, "border") || w_same(lower, "border-width")) {
