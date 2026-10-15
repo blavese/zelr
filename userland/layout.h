@@ -4745,8 +4745,10 @@ static void lay_block_placed(lctx *L, int node, const cstyle *parent, int x,
     }
 
     /* A flex container lays its children along a line rather than down
-       the page, so it does not use the walk below at all. */
-    if (st.display == D_FLEX || st.display == D_INLINE_FLEX) {
+       the page, so it does not use the walk below at all. A box whose
+       contents are hidden (content-visibility: hidden) has none to lay. */
+    if (st.cv_hidden) {
+    } else if (st.display == D_FLEX || st.display == D_INLINE_FLEX) {
         lay_flex(L, node, &st, cx, cw, y);
     } else if (st.display == D_GRID) {
         lay_grid(L, node, &st, cx, cw, y);

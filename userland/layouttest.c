@@ -2152,6 +2152,18 @@ int main(void) {
            fw && ln && fw->y < 60 && ln->y > fw->y && ln->y - fw->y < 80);
     }
     {
+        /* hidden="until-found" under a sheet that makes the box a block, as
+           the US government's banner is: the box stays, its contents do not,
+           and content-visibility: hidden does the same from a sheet. A plain
+           hidden box the sheet makes a block is drawn, as in a browser. */
+        lay("<style>.b{display:block;padding:4px 0 30px}.cv{content-visibility:hidden;height:40px}</style>"
+            "<div class=b hidden=until-found><p>secret words</p></div><p>after</p>"
+            "<div class=cv><p>concealed</p></div><p>below</p><div class=b hidden><p>shown</p></div>", 800);
+        const litem *af = word("after"), *bl = word("below");
+        ok("hidden=until-found and content-visibility: hidden keep the box and hide what is in it",
+           !word("secret") && !word("concealed") && af && af->y >= 34 && bl && bl->y - af->y >= 40 && word("shown"));
+    }
+    {
         /* A row line counted back from the last, as NPR's card pictures span
            the card (grid-row: 1 / -1): it took the first row alone, and the
            headline beside the picture went below it. */

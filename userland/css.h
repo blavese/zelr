@@ -71,6 +71,7 @@ enum {
     P_CONTENT,       /* what a ::before or ::after says, read by the layout (lay_generated) */
     P_CUSTOM,        /* --name: value, kept as the text "--name:value" */
     P_DEFER,         /* a shorthand whose value has var() in it: "name:value" */
+    P_CONTENT_VIS,   /* content-visibility */
     P_COUNT
 };
 
@@ -194,8 +195,9 @@ typedef struct {
     /* Floated to one side (1 left, 2 right) and cleared past floats (1 left,
        2 right, 3 both). See layout.h, lay_float. flow_root: display:
        flow-root, a block that is a formatting context of its own
-       (lay_beside_floats). */
-    unsigned char floated, clear, flow_root;
+       (lay_beside_floats). cv_hidden: content-visibility: hidden, a box
+       drawn with nothing inside it, which a display rule does not undo. */
+    unsigned char floated, clear, flow_root, cv_hidden;
 
     /* Painted through a mask this cannot draw: an icon is often a square of
        the text colour with the icon's shape as its mask, and drawn without
@@ -695,6 +697,7 @@ static const cprop CSS_PROPS[] = {
     { "border-radius", P_RADIUS },
     { "text-indent", P_TEXT_INDENT },
     { "visibility", P_VISIBILITY },
+    { "content-visibility", P_CONTENT_VIS },
     { "opacity", P_OPACITY },
     { "vertical-align", P_VALIGN },
     { "border-spacing", P_SPACING },
@@ -2209,7 +2212,7 @@ static inline void css_default_style(cstyle *st, int root_px) {
     st->collapse = 0;
     st->valign = VA_BASELINE;
     st->clip = st->gone = 0;
-    st->floated = st->clear = st->flow_root = 0;
+    st->floated = st->clear = st->flow_root = st->cv_hidden = 0;
     st->masked = 0;
     st->obj_fit = 0;
     st->bg_img = 0;
@@ -3025,6 +3028,9 @@ static inline void css_apply_v(int prop, const char *v, cstyle *st, int root_px,
         case P_VISIBILITY:
             st->visible = (unsigned char)(!w_starts_fold(v, "hidden"));
             break;
+        case P_CONTENT_VIS:
+            st->cv_hidden = (unsigned char)w_starts_fold(v, "hidden");
+            break;
         case P_VALIGN:
             if (w_starts_fold(v, "top") || w_starts_fold(v, "text-top")) st->valign = VA_TOP;
             else if (w_starts_fold(v, "middle")) st->valign = VA_MIDDLE;
@@ -3471,7 +3477,12 @@ static const char CSS_UA[] =
     "td,th{display:table-cell;padding:1px}"
     "th{font-weight:bold;text-align:center}"
     "caption{display:block;text-align:center}"
-    "[hidden]{display:none}"
+    /* hidden="until-found" keeps the box and hides what is in it, which
+       the page's own display rules do not undo: the US government's sites
+       set it on their banner's explanation, and their sheet's display:
+       block drew it a word to a line across the top of every page. */
+    "[hidden]:not([hidden=until-found i]){display:none}"
+    "[hidden=until-found i]{content-visibility:hidden}"
     "sup,sub{font-size:0.8em}"
     "u,ins{text-decoration:underline}"
     "s,del,strike{text-decoration:line-through}"
