@@ -756,7 +756,7 @@ DYN_PAGE = b"""<!doctype html>
 <style>body { font-family: sans-serif; padding: 24px; font-size: 32px }</style></head>
 <body><p>dyn</p>
 <script>
-for (var i = 0; i < 3; i++) fetch('/slow?' + i);
+for (var i = 0; i < 3; i++) fetch('/dyn/slow?' + i);
 setTimeout(function () {
   import('/dyn/top.js').then(function (m) {
     document.title = 'dyn ' + m.v;
@@ -1452,7 +1452,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._send(b"import { v as d } from '/dyn/dep.js';\nexport const v = d;\n", ctype="application/javascript")
         elif path == "/dyn/dep.js":
             self._send(b"export const v = 'dep';\n", ctype="application/javascript")
-        elif path == "/slow":
+        elif path == "/dyn/slow":
             import time
             time.sleep(4.0)
             self._send(b"slow", ctype="text/plain")
@@ -1714,3 +1714,36 @@ def reachable(port):
             return True
     except OSError:
         return False
+
+
+def _doubled_routes():
+    """The exact paths do_GET's chain of tests answers more than once. The
+    first test takes the path and the second never runs: a new page once
+    took /slow, where the web check's dribbled body was served, and the
+    check failed for a reason nowhere near what it looks at."""
+    import ast
+    tree = ast.parse(open(__file__, encoding="utf-8").read())
+    seen, doubled = set(), []
+    for cls in tree.body:
+        if not (isinstance(cls, ast.ClassDef) and cls.name == "Handler"):
+            continue
+        for fn in cls.body:
+            if not (isinstance(fn, ast.FunctionDef) and fn.name == "do_GET"):
+                continue
+            for top in fn.body:
+                node = top
+                while isinstance(node, ast.If):
+                    t = node.test
+                    if (isinstance(t, ast.Compare) and isinstance(t.left, ast.Name) and t.left.id == "path"
+                            and len(t.ops) == 1 and isinstance(t.ops[0], ast.Eq)
+                            and isinstance(t.comparators[0], ast.Constant)):
+                        p = t.comparators[0].value
+                        if p in seen:
+                            doubled.append(p)
+                        seen.add(p)
+                    node = node.orelse[0] if len(node.orelse) == 1 and isinstance(node.orelse[0], ast.If) else None
+    return doubled
+
+
+if _doubled_routes():
+    raise SystemExit("webserver.py: do_GET answers %s more than once" % ", ".join(_doubled_routes()))
