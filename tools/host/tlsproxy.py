@@ -7,7 +7,10 @@ import ssl
 import sys
 import threading
 
-CTX = ssl.create_default_context()
+import kernelroots
+
+# The kernel's roots, not the machine's store (kernelroots.py).
+CTX = kernelroots.context()
 
 
 def serve(c):

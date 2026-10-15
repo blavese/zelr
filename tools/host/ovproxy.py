@@ -16,8 +16,10 @@ import ssl
 import sys
 import threading
 
+import kernelroots
+
 OVERRIDES = {}
-CTX = ssl.create_default_context()
+CTX = kernelroots.context()      # the kernel's roots, as tlsproxy.py
 
 
 def read_request(f):
