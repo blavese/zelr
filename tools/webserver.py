@@ -317,6 +317,24 @@ BIGPIC_PAGE = b"""<!doctype html>
 </body></html>
 """
 
+# Copy and paste: the address copied from the bar and pasted into the
+# page's field, which the page checks and shows as the colour of a box.
+# A chord used to be typed into a field as a control character.
+PASTE_PAGE = b"""<!doctype html>
+<html><head><title>paste</title>
+<style>body { margin: 0; background: #ffffff }
+#f { position: absolute; left: 0; top: 0; width: 600px; height: 60px; font-size: 24px }
+#box { position: absolute; left: 0; top: 100px; width: 400px; height: 200px }</style></head>
+<body><input id="f"><div id="box"></div>
+<script>
+var f = document.getElementById('f');
+f.addEventListener('input', function () {
+  if (f.value === location.href) document.getElementById('box').style.background = '#5a8c28';
+});
+</script>
+</body></html>
+"""
+
 # The keyboard told to the page: "/" on the body gives the page's search box
 # the keyboard, as GitHub's does, and Return in it, outside any form, is
 # heard by the box itself. Nothing reached the page but "input" before.
@@ -1454,6 +1472,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._send(BGJS_PAGE)
         elif path == "/keys":
             self._send(KEYS_PAGE)
+        elif path == "/paste":
+            self._send(PASTE_PAGE)
         elif path == "/many":
             self._send(MANY_PAGE)
         elif path.startswith("/many/") and path.endswith(".png"):

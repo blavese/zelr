@@ -841,7 +841,7 @@ static int page_active = -1;      /* what the page was last known to give the ke
    into, and the value is written back to the document on every keystroke, so
    there is nothing to keep for the others. */
 static char     focus_buf[1024];
-static ui_field focus_field = { focus_buf, sizeof(focus_buf), 0, 0, 0 };
+static ui_field focus_field = { focus_buf, sizeof(focus_buf), 0, 0, 0, 0 };
 
 static int field_checked(int el) {
     const char *v = dom_attr(&doc, el, "checked");
@@ -891,6 +891,7 @@ static void focus_control(int el) {
     focus_field.len = w_len(focus_buf);
     focus_field.cursor = focus_field.len;
     focus_field.focused = 1;
+    focus_field.secret = ck == CTL_PASSWORD;
 }
 
 /* --- being searchable ------------------------------------------------------
@@ -4042,7 +4043,7 @@ static void draw_page(surface *s, int ox, int oy, int vw, int vh) {
 #define TOOLBAR_H (UI_PAD + UI_BTN_H + UI_PAD)
 
 static char address[URL_TEXT];
-static ui_field bar = { address, sizeof(address), 0, 0, 0 };
+static ui_field bar = { address, sizeof(address), 0, 0, 0, 0 };
 
 /* The keyboard given to a control, or taken away (-1), by the reader: the
    page hears of it as blur and focus (jsdom.h, jsdom_focused). */
@@ -4324,6 +4325,15 @@ int main(int argc, char **argv) {
         for (int ki = 0; ki < in.nkeys; ki++) {
             u32 raw = in.keys[ki];
             u32 k = KEY_CODE(raw);
+            /* ctrl+L is the address bar's, whatever has the keyboard: what
+               is typed next replaces the address, as after a click. */
+            if (KEY_CTRL(raw) && key_ctrl_letter(raw) == 'l') {
+                if (focus_node >= 0) give_focus(-1);
+                bar.focused = 1;
+                bar_fresh = 1;
+                dirty = 1;
+                continue;
+            }
             if (bar.focused) {
                 if (k == '\n') {
                     bar.focused = 0;
@@ -4339,7 +4349,8 @@ int main(int argc, char **argv) {
                     bar_fresh = 0;
                     set_address(hist_at >= 0 ? hist[hist_at].text : address);
                 } else {
-                    if (bar_fresh && !KEY_IS_SPECIAL(k) && k >= ' ') {
+                    int pasting = KEY_CTRL(raw) && key_ctrl_letter(raw) == 'v';
+                    if (bar_fresh && ((!KEY_IS_SPECIAL(k) && k >= ' ' && !KEY_CTRL(raw)) || pasting)) {
                         address[0] = 0;
                         bar.len = 0;
                         bar.cursor = 0;

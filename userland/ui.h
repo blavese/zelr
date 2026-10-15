@@ -614,17 +614,50 @@ static inline void ui_scrollbar(surface *s, const ui_theme *t,
 /* --- a single line of editable text ---------------------------------------
  *
  * Keeps no state of its own: the caller owns the buffer and the cursor, so
- * two fields in one window do not need a widget identity to tell apart. */
+ * two fields in one window do not need a widget identity to tell apart.
+ * A secret one (a password) is never copied out. */
 typedef struct {
     char *buf;
     int   cap;
     int   len;
     int   cursor;
     int   focused;
+    int   secret;
 } ui_field;
+
+/* The clipboard put in at the cursor: its first line, since a field holds
+   one, without the control characters. */
+static inline void ui_field_paste(ui_field *f) {
+    char got[4096];
+    int n = clip_get(got, (int)sizeof(got));
+    for (int i = 0; i < n; i++) {
+        char c = got[i];
+        if (c == '\n' || c == '\r') break;
+        if ((u8)c < 32) continue;
+        if (f->len + 1 >= f->cap) break;
+        for (int k = f->len; k > f->cursor; k--) f->buf[k] = f->buf[k - 1];
+        f->buf[f->cursor++] = c;
+        f->len++;
+    }
+    f->buf[f->len] = 0;
+}
 
 static inline void ui_field_key(ui_field *f, u32 key) {
     if (!f->focused || !key) return;
+
+    /* A chord: ctrl+v pastes; ctrl+c copies all of what is in the field and
+       ctrl+x takes it out as well, there being no selection, and never from
+       a secret one. Any other is the program's. Chords used to be typed in
+       as control characters: ctrl+v put a 0x16 into the address bar. */
+    if (KEY_CTRL(key)) {
+        int l = key_ctrl_letter(key);
+        if (l == 'v') ui_field_paste(f);
+        else if ((l == 'c' || l == 'x') && !f->secret && f->len > 0) {
+            clip_set(f->buf, f->len);
+            if (l == 'x') { f->len = 0; f->cursor = 0; f->buf[0] = 0; }
+        }
+        return;
+    }
 
     if (key == '\b') {
         if (f->cursor > 0) {

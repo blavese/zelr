@@ -803,7 +803,7 @@ typedef struct {
 
 static char wifi_pick[WIFI_NAME_MAX];      /* the network chosen from the list */
 static char wifi_pass[WIFI_PASS_MAX];
-static ui_field wifi_field = { wifi_pass, WIFI_PASS_MAX, 0, 0, 0 };
+static ui_field wifi_field = { wifi_pass, WIFI_PASS_MAX, 0, 0, 0, 1 };
 static char wifi_said[160];
 static char wifi_list_said[200];       /* the networks, as last said */
 
@@ -969,7 +969,8 @@ static int page_wireless(surface *s, ui_input *in, ui_theme *t,
     y += 22;
     int fx = x;
     if (!open) {
-        /* Typed into the real buffer, shown as stars. */
+        /* Typed into the real buffer, shown as stars, and never copied
+           (the field is secret). */
         for (int k = 0; k < in->nkeys; k++) {
             if (in->keys[k] == '\n' && wifi_field.focused) { wifi_join_picked(); continue; }
             ui_field_key(&wifi_field, in->keys[k]);
