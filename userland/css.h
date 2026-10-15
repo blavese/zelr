@@ -1378,6 +1378,20 @@ static inline void css_declare(csheet *s, const char *name, int nlen,
     css_add(s, prop, v, vlen);
 }
 
+/* Past a quoted string that starts at p[i], to just after the quote that
+   closes it, a backslash taking the next character with it; one left open
+   ends at its line, as CSS has it. What is inside is not CSS: Tumblr's
+   `content:":("` opened a bracket that never closed, and the declaration
+   ran on through half the sheet, its rules with it. */
+static inline int css_past_string(const char *p, int len, int i) {
+    char q = p[i++];
+    while (i < len && p[i] != q && p[i] != '\n') {
+        if (p[i] == '\\' && i + 1 < len) i++;
+        i++;
+    }
+    return i < len && p[i] == q ? i + 1 : i;
+}
+
 static inline void css_parse_block(csheet *s, const char *p, int len, int *at,
                                    int *decl_at, int *decl_n) {
     int i = *at;
@@ -1399,6 +1413,7 @@ static inline void css_parse_block(csheet *s, const char *p, int len, int *at,
         i++;
         int vstart = i, depth = 0;
         while (i < len) {
+            if (p[i] == '"' || p[i] == '\'') { i = css_past_string(p, len, i); continue; }
             if (p[i] == '(') depth++;
             else if (p[i] == ')') { if (depth) depth--; }
             else if (!depth && (p[i] == ';' || p[i] == '}')) break;
@@ -1616,6 +1631,7 @@ static inline int css_at_rule(const char *p, int len, int i, int *open_body,
     int depth = 0;
     i = start;
     while (i < len) {
+        if (p[i] == '"' || p[i] == '\'') { i = css_past_string(p, len, i); continue; }
         if (p[i] == '{') depth++;
         else if (p[i] == '}') { depth--; i++; if (depth <= 0) break; continue; }
         i++;

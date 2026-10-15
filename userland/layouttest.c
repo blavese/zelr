@@ -2152,6 +2152,16 @@ int main(void) {
            fw && ln && fw->y < 60 && ln->y > fw->y && ln->y - fw->y < 80);
     }
     {
+        /* A bracket and a brace inside quoted strings, as Tumblr's sheet has
+           content:":(" half way down: the declaration ran on through every
+           rule after it. */
+        lay("<style>.s:after{content:\":(\";width:1em}.t{margin-left:200px}"
+            ".u:before{content:'}'}.v{margin-left:300px}</style>"
+            "<p class=t>lefted</p><p class=v>further</p>", 800);
+        const litem *lf = word("lefted"), *fu = word("further");
+        ok("a bracket or a brace inside a quoted string is not CSS", lf && lf->x >= 200 && fu && fu->x >= 300);
+    }
+    {
         /* hidden="until-found" under a sheet that makes the box a block, as
            the US government's banner is: the box stays, its contents do not,
            and content-visibility: hidden does the same from a sheet. A plain
