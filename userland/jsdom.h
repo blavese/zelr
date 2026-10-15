@@ -1975,6 +1975,56 @@ static int jd_dataset_put(jctx *J, jobj *o, const char *name, jval v) {
     return 1;
 }
 
+/* The data- attributes as the dataset's own properties, made each time a
+   script takes el.dataset: a getter and a setter by camelCase name for each
+   one there (reading and writing the attribute, as the hooks above do), and
+   none for one taken away. Through the hooks alone they could be read by
+   name but not listed: GitLab copies its dataset with Object.keys, found
+   nothing, and stopped parsing a list of languages it had not been given. */
+static jval nat_dataset_item_get(jctx *J, jval t, jval *a, int n) {
+    (void)a; (void)n;
+    jobj *f = J->callee;
+    jval v;
+    if (!js_is_obj(t) || f->data.t != JS_STR) return js_undef();
+    return jd_dataset_get(J, t.obj, f->data.str->s, &v) ? v : js_undef();
+}
+
+static jval nat_dataset_item_set(jctx *J, jval t, jval *a, int n) {
+    jobj *f = J->callee;
+    if (js_is_obj(t) && f->data.t == JS_STR) jd_dataset_put(J, t.obj, f->data.str->s, js_arg(a, n, 0));
+    return js_undef();
+}
+
+static void jd_dataset_sync(jctx *J, jobj *o, int el) {
+    const dnode *x = &jd_doc->nodes[el];
+    for (int i = 0; i < x->attr_n; i++) {
+        const char *nm = jd_doc->arena + jd_doc->attrs[x->attr_at + i].name;
+        if (!w_starts_fold(nm, "data-") || !nm[5]) continue;
+        char camel[96];
+        int w = 0;
+        for (const char *c = nm + 5; *c && w < (int)sizeof(camel) - 1; c++) {
+            if (*c == '-' && c[1] >= 'a' && c[1] <= 'z') { camel[w++] = (char)(c[1] - 32); c++; }
+            else camel[w++] = *c;
+        }
+        camel[w] = 0;
+        jstr *k = js_str(J, camel);
+        if (!k || js_find(o, k)) continue;
+        jobj *g = js_native_n(J, camel, nat_dataset_item_get, 0);
+        jobj *s = js_native_n(J, camel, nat_dataset_item_set, 1);
+        if (!g || !s) return;
+        g->data = js_from_str(k);
+        s->data = js_from_str(k);
+        js_define_accessor(J, o, k, js_from_obj(g), js_from_obj(s), JP_ENUM | JP_CONF);
+        x = &jd_doc->nodes[el];
+    }
+    for (jprop *p = o->ofirst; p; ) {
+        jprop *next = p->onext;
+        jval v;
+        if (!js_is_sym_key(p->key) && !jd_dataset_get(J, o, p->key->s, &v)) js_delete_prop(o, p->key);
+        p = next;
+    }
+}
+
 static jobj *jd_dataset_obj(jctx *J, int el) {
     jobj *w = jd_element(J, el);
     jval kept = jd_kept(w, jd_k_dataset);
@@ -3353,6 +3403,7 @@ static jval nat_dataset(jctx *J, jval t, jval *a, int n) {
     int x = jd_el_of(t);
     if (x < 0) return js_undef();
     jobj *o = jd_dataset_obj(J, x);
+    if (o) jd_dataset_sync(J, o, x);
     return o ? js_from_obj(o) : js_null();
 }
 

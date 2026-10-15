@@ -1566,6 +1566,14 @@ int main(void) {
                " + f.childNodes.length + ' ' + t2.content.childNodes.length + ' ' + t2.content.childNodes[1].data;"
                "</script></body>"),
         "3 8 ?lit$1$ 2 3 ?lit$2$");
+    oks("a dataset's entries are its own properties: listed, copied, gone with their attribute, and written through",
+        titled("<body><div id=d data-user-id=7 data-x-y=a data-plain=p></div><script>var d = document.getElementById('d');"
+               "var first = Object.keys(d.dataset).join(','), copy = JSON.stringify(Object.assign({}, d.dataset));"
+               "d.removeAttribute('data-x-y'); d.dataset.newOne = 'n';"
+               "var inn = []; for (var k in d.dataset) inn.push(k);"
+               "document.title = first + ' ' + copy + ' ' + inn.join(',') + ' ' + d.getAttribute('data-new-one') + ' ' + ('userId' in d.dataset);"
+               "</script></body>"),
+        "userId,xY,plain {\"userId\":\"7\",\"xY\":\"a\",\"plain\":\"p\"} userId,plain,newOne n true");
     oks("a script a page makes and appends runs when it is put in the page",
         titled("<body><script>var s = document.createElement('script');"
                "s.textContent = 'document.title = \"inserted \" + (document.currentScript === s);';"
