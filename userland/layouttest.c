@@ -2152,6 +2152,17 @@ int main(void) {
            fw && ln && fw->y < 60 && ln->y > fw->y && ln->y - fw->y < 80);
     }
     {
+        /* A grid item flowed into place with its span on the end alone, as
+           National Geographic writes it: it took one column of twelve. */
+        lay("<style>.g{display:grid;grid-template-columns:repeat(12,1fr);width:600px}.g>*{grid-column-end:span 12}"
+            ".h{display:grid;grid-template-columns:repeat(12,1fr);width:600px}.h>*{grid-column-start:span 6}</style>"
+            "<div class=g><p>whole width words that should run across the row</p><p>next</p></div>"
+            "<div class=h><p>half</p><p>other</p></div>", 800);
+        const litem *wh = word("row"), *nx = word("next"), *ha = word("half"), *ot = word("other");
+        ok("a grid item flowed with its span on one end alone spans the columns it asks for",
+           wh && nx && wh->y == word("whole")->y && nx->y > wh->y && ha && ot && ot->y == ha->y && ot->x >= 290 && ot->x < 320);
+    }
+    {
         /* flex-flow, a direction and a wrap together, was not read at all:
            `flex-flow: column` left a row. */
         lay("<style>.c{display:flex;flex-flow:column}.w{display:flex;flex-flow:row wrap;width:300px}.i{width:200px}"

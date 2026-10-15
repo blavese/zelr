@@ -3829,13 +3829,18 @@ static int lay_grid_axis(lslice s, lslice e, int ntracks, const lgline *names, i
 }
 
 /* Where an item placed by line goes along the columns: its first column
-   and how many it spans; 0 when it is left to the flow. */
+   and how many it spans; 0 when it is left to the flow, with the span it
+   asks for on either end still given. National Geographic's items are
+   `grid-column-end: span 12` with no start, and flowed they took the one
+   column, a sliver of the page. */
 static int lay_grid_place(const cstyle *own, int ncols, const lgline *names, int nn,
                           int *c0, int *span) {
     lslice part[4];
     lay_grid_parts(own, part);
     int start, sp;
-    if (!lay_grid_axis(part[1], part[3], ncols, names, nn, &start, &sp)) return 0;
+    int placed = lay_grid_axis(part[1], part[3], ncols, names, nn, &start, &sp);
+    *span = sp > ncols ? ncols : sp;
+    if (!placed) return 0;
     *c0 = start;
     if (*c0 >= ncols) *c0 = ncols - 1;
     if (*c0 < 0) *c0 = 0;
@@ -4234,6 +4239,7 @@ static void lay_grid(lctx *L, int node, const cstyle *st, int cx, int cw, int *y
             if (span > ncols) span = ncols;
             int c0, xs;
             if (lay_grid_place(&own, ncols, names, nnames, &c0, &xs)) { col = c0; span = xs; }
+            else if (xs > 1 && own.gspan == 0) span = xs;
             if (col + span > ncols) col = 0;
             if (span == 1) {
                 int m = lay_grid_least(L, k, ps, &own, cw);
@@ -4303,6 +4309,7 @@ static void lay_grid(lctx *L, int node, const cstyle *st, int cx, int cw, int *y
             if (span > ncols) span = ncols;
             int xs;
             if (lay_grid_place(&own, ncols, names, nnames, &placed_at, &xs)) span = xs;
+            else if (xs > 1 && own.gspan == 0) span = xs;
         }
         /* A row is finished by the item that will not fit on it, one placed
            in a column the row has already passed, or the end: every item on
