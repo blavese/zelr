@@ -1574,6 +1574,12 @@ int main(void) {
                "document.title = first + ' ' + copy + ' ' + inn.join(',') + ' ' + d.getAttribute('data-new-one') + ' ' + ('userId' in d.dataset);"
                "</script></body>"),
         "userId,xY,plain {\"userId\":\"7\",\"xY\":\"a\",\"plain\":\"p\"} userId,plain,newOne n true");
+    oks("window.visualViewport is the window, at a scale of one, an event target a page cannot make another of",
+        titled("<body><script>var v = window.visualViewport, n = 0; v.addEventListener('resize', function () { n++; });"
+               "v.dispatchEvent(new Event('resize')); var made = ''; try { new VisualViewport(); } catch (e) { made = e.name; }"
+               "document.title = [v.width === innerWidth, v.height === innerHeight, v.scale, v.offsetLeft, n,"
+               " v instanceof EventTarget, made].join(' ');</script></body>"),
+        "true true 1 0 1 true TypeError");
     oks("document.title gives the title with its white space taken off the ends and each run made one space",
         titled("<head><title>\n    Word  of\tthe day | Site\n  </title></head><body><script>"
                "var a = '[' + document.title + ']'; document.title = ' set  again '; document.title = a + '[' + document.title + ']';"

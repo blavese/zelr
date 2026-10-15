@@ -1076,6 +1076,27 @@ static const char JD_PRELUDE[] =
     " ['IDBObjectStore', IDBObjectStore], ['IDBIndex', IDBIndex], ['IDBRequest', IDBRequest],\n"
     " ['IDBOpenDBRequest', IDBOpenDBRequest], ['IDBCursor', IDBCursor], ['IDBCursorWithValue', IDBCursorWithValue],\n"
     " ['IDBKeyRange', IDBKeyRange], ['IDBVersionChangeEvent', IDBVersionChangeEvent]].forEach(function (p) { hide(g, p[0], p[1]); });\n"
+    "})(this);\n"
+    /* window.visualViewport, the part of the page the window shows: here the
+       whole window, at a scale of one. Engadget's page asked for its height
+       and stopped on undefined. */
+    "(function (g) {\n"
+    "if (g.visualViewport) return;\n"
+    "var hide = function (o, k, v) { Object.defineProperty(o, k, { value: v, writable: true, configurable: true }); };\n"
+    "function VisualViewport() { throw new TypeError('Illegal constructor'); }\n"
+    "VisualViewport.prototype = Object.create(EventTarget.prototype);\n"
+    "hide(VisualViewport.prototype, 'constructor', VisualViewport);\n"
+    "var get = function (f) { return { get: f, enumerable: true, configurable: true }; };\n"
+    "Object.defineProperties(VisualViewport.prototype, {\n"
+    "  width: get(function () { return g.innerWidth; }), height: get(function () { return g.innerHeight; }),\n"
+    "  offsetLeft: get(function () { return 0; }), offsetTop: get(function () { return 0; }),\n"
+    "  pageLeft: get(function () { return g.scrollX; }), pageTop: get(function () { return g.scrollY; }),\n"
+    "  scale: get(function () { return 1; }) });\n"
+    "var v = new EventTarget();\n"
+    "Object.setPrototypeOf(v, VisualViewport.prototype);\n"
+    "v.onresize = null; v.onscroll = null; v.onscrollend = null;\n"
+    "hide(g, 'VisualViewport', VisualViewport);\n"
+    "Object.defineProperty(g, 'visualViewport', { get: function () { return v; }, enumerable: true, configurable: true });\n"
     "})(this);\n";
 
 /* Run as the page's context opens, before any of the page's scripts. A
