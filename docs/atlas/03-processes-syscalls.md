@@ -1,5 +1,10 @@
 # Atlas 03 -- Tasks, Processes and System Calls
 
+**Since 0.128.0**: **a program's zero data is given on first touch.** elf.c leaves the whole pages of a segment past
+its last byte from the file unmapped (one span a program, `elf_zero_range`), the task keeps it (`zero_lo`/`zero_hi`,
+copied by fork, set by exec and spawn), and `user_fault_fill` gives a zeroed page there as for the stack; system calls
+reach it through `user_range_ok`. `[elf]` and maptest check it.
+
 **Since 0.127.0**: a program's stack may grow to **8 MiB** (`USER_STACK_MAX`; pages given as touched), and elf.c's
 `USER_LOAD_MAX` is `USER_STACK_TOP - USER_STACK_MAX`, so no image reaches the stack's room (`[elf]` checks it). The
 numbers below (1 MiB, +0x4FF00000) are older.

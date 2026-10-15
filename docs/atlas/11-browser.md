@@ -1,6 +1,10 @@
 # 11 -- The web browser (everything except JS-engine internals and image decoders)
 
-**Since 0.127.0** (the rest of this file is older; trust the code and the README's "since 6048716" list):
+**Since 0.128.0** (the rest of this file is older; trust the code and the README's "since 6048716" list):
+- **`DOM_NODES` 80000, `DOM_ATTRS` 160000** (dom.h): Wikipedia's United States article was cut off at forty thousand.
+  The tables sized by them are zero data, paid for only as used now (03).
+
+**Since 0.127.0**:
 - **`ahead_take` gives up on a file not yet asked for after 200 ms when none of the list's own are on their way**: the
   asks may all be the page's requests, stepped only between passes, and a module's imports found inside `import()`
   waited for ever (Mastodon's columns). Behind the list's own it waits its turn.

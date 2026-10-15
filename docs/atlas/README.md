@@ -95,6 +95,11 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.128.0
+
+- **A program's zero data given on first touch (03)**, **pages of eighty thousand nodes (11)**. Self test 793, maptest,
+  layouttest 309, each failing on a build without its change.
+
 ### 0.127.0
 
 - **An 8 MiB stack and scripts 6000 calls deep (03, 12)**, the loader bounded by the stack's room (03), **a dataset's
