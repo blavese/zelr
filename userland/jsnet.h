@@ -950,6 +950,21 @@ static jobj *jd_reply_headers(jctx *J, const jd_reply *rp) {
     return h;
 }
 
+/* The reason the status line gives ("OK", "Not Found"), or nothing for a
+   reply made here. */
+static jstr *jd_status_text(jctx *J, const jd_reply *rp) {
+    const char *h = rp->head;
+    int n = rp->hlen, i = 0;
+    if (!h || n <= 0) return js_str(J, "");
+    while (i < n && h[i] != ' ' && h[i] != '\r' && h[i] != '\n') i++;     /* HTTP/1.1 */
+    while (i < n && h[i] == ' ') i++;
+    while (i < n && h[i] >= '0' && h[i] <= '9') i++;                       /* 200 */
+    while (i < n && h[i] == ' ') i++;
+    int at = i;
+    while (i < n && h[i] != '\r' && h[i] != '\n') i++;
+    return js_str_n(J, h + at, (u32)(i - at));
+}
+
 static void jd_fetch_done(jobj *r, const jd_reply *rp) {
     jctx *J = &jd_J;
     jval p = jd_kept(r, jd_k_promise);
@@ -964,7 +979,7 @@ static void jd_fetch_done(jobj *r, const jd_reply *rp) {
     jstr *url = rp->url && rp->url[0] ? js_str(J, rp->url) : jd_kept(r, jd_k_url).str;
     int redirected = url && !js_str_eq(url, jd_kept(r, jd_k_url).str);
     jobj *resp = jd_make_response(J, 0, rp->len > 0 && rp->body ? js_str_n(J, rp->body, (u32)rp->len) : 0,
-                                  rp->status, 0, jd_reply_headers(J, rp), url, redirected);
+                                  rp->status, jd_status_text(J, rp), jd_reply_headers(J, rp), url, redirected);
     js_promise_settle(J, p.obj, 1, js_from_obj(resp));
 }
 
@@ -1053,6 +1068,26 @@ static void jd_xhr_event(jobj *o, const char *type) {
     if (ev) jd_dispatch_to(ev, js_from_obj(o), js_from_obj(o));
 }
 
+/* One that says how much has come: the whole answer, here, since it is
+   handed over at once. */
+static void jd_xhr_progress(jobj *o, const char *type, int loaded) {
+    jobj *ev = jd_new_event(jd_evkind("ProgressEvent"), type, 0, 0);
+    if (!ev) return;
+    js_set(&jd_J, ev, "lengthComputable", js_bool(loaded > 0));
+    js_set(&jd_J, ev, "loaded", js_num(loaded));
+    js_set(&jd_J, ev, "total", js_num(loaded));
+    jd_dispatch_to(ev, js_from_obj(o), js_from_obj(o));
+}
+
+/* The request moved to a state and told so. Whether it is still in that
+   state: a handler may have aborted it or opened it again. */
+static int jd_xhr_step(jobj *o, int state) {
+    jd_xhr_put(o, 0, js_num(state));
+    jd_xhr_event(o, "readystatechange");
+    jval rs = jd_kept(o, jd_k_xhr[0]);
+    return rs.t == JS_NUM && rs.num == state;
+}
+
 static jval nat_xhr_open(jctx *J, jval t, jval *a, int n) {
     if (!js_is_obj(t)) return jd_illegal(J);
     int forbidden;
@@ -1092,6 +1127,7 @@ static jval nat_xhr_send(jctx *J, jval t, jval *a, int n) {
         if (ct.t == JS_STR) jd_keep(t.obj, jd_k_type, ct);
     }
     jd_queue(t.obj, JQ_XHR);
+    jd_xhr_event(t.obj, "loadstart");
     return js_undef();
 }
 
@@ -1105,6 +1141,10 @@ static jval nat_xhr_abort(jctx *J, jval t, jval *a, int n) {
             jd_request_drop(i);
             was = 1;
         }
+    /* Asked from a handler while the answer is being told (state 2 or 3):
+       the request is no longer waiting, but it has not ended. */
+    jval rs = jd_kept(t.obj, jd_k_xhr[0]);
+    if (rs.t == JS_NUM && (rs.num == 2 || rs.num == 3)) was = 1;
     if (was) {
         jd_xhr_put(t.obj, 0, js_num(4));
         jd_xhr_event(t.obj, "readystatechange");
@@ -1153,19 +1193,38 @@ static void jd_xhr_done(jobj *o, const jd_reply *rp) {
         if (buf) for (u32 i = 0; i < text.str->len; i++) ta_bytes(buf)[i] = (u8)text.str->s[i];
         resp = js_from_obj(buf);
     }
+    /* Everything taken from the reply before a handler runs: one may abort
+       the request, which lets the reply go. */
     jobj *headers = jd_reply_headers(J, rp);
+    jval stext = js_from_str(jd_status_text(J, rp));
+    jval where = jd_str(rp->url && rp->url[0] ? rp->url : jd_kept_str(o, jd_k_url, ""));
+    int loaded = rp->len > 0 ? rp->len : 0;
     if (headers) jd_keep(o, jd_k_rheaders, js_from_obj(headers));
     jd_xhr_put(o, 1, js_num(rp->status > 0 ? rp->status : 0));
+    jd_xhr_put(o, 2, stext);
+    jd_xhr_put(o, 6, where);
+    /* The states an answer passes through, each told: headers, then the
+       body coming, then done. Disney's player builds its response at state
+       2 (on National Geographic, whose page waits for it), and waited for
+       ever when this went from 1 straight to 4. */
+    if (rp->status > 0) {
+        if (!jd_xhr_step(o, 2)) return;
+        jstr *rt3 = js_to_str(J, js_get(J, js_from_obj(o), js_str(J, "responseType")));
+        if (!rt3 || !rt3->len || js_str_is(rt3, "text")) jd_xhr_put(o, 3, text);
+        if (!jd_xhr_step(o, 3)) return;
+        jd_xhr_progress(o, "progress", loaded);
+        jval rs = jd_kept(o, jd_k_xhr[0]);
+        if (rs.t != JS_NUM || rs.num != 3) return;
+    }
     jd_xhr_put(o, 0, js_num(4));
     jd_xhr_put(o, 3, text);
     jd_xhr_put(o, 4, resp);
-    jd_xhr_put(o, 6, jd_str(rp->url && rp->url[0] ? rp->url : jd_kept_str(o, jd_k_url, "")));
     jd_xhr_event(o, "readystatechange");
     /* load either way when the server answered: a page that asked for
        something it did not get is entitled to find out, and status is where
        it looks. No answer at all is an error. */
-    jd_xhr_event(o, rp->status > 0 ? "load" : "error");
-    jd_xhr_event(o, "loadend");
+    jd_xhr_progress(o, rp->status > 0 ? "load" : "error", rp->status > 0 ? loaded : 0);
+    jd_xhr_progress(o, "loadend", rp->status > 0 ? loaded : 0);
 }
 
 /* An answer handed to the request it is for. */

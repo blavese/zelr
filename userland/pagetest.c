@@ -2421,14 +2421,14 @@ int main(void) {
              "fetch('/h', { headers: { 'X-Custom': 'a b', 'Cookie': 'no', 'Referer': 'no', 'Sec-Fetch-Mode': 'no',"
              " 'Proxy-Thing': 'no', 'Accept': 'application/json', 'Content-Type': 'text/x-kind', 'X-Bad': 'a\\nb' } })"
              ".then(function (r) { var all = []; r.headers.forEach(function (v, k) { all.push(k + '=' + v); });"
-             " document.getElementById('h').textContent = [r.headers.get('x-reply'), String(r.headers.get('set-cookie')),"
+             " document.getElementById('h').textContent = [r.headers.get('x-reply'), r.statusText, String(r.headers.get('set-cookie')),"
              " r.headers.get('x-two'), all.join(',')].join(' '); });</script></body>");
         run_scripts(&page, err, (int)sizeof(err), 0);
         jsdom_requests();
         oks("a fetch carries the headers the page set, but the forbidden ones and those that would end the line",
             asked_headers, "x-custom: a b;accept: application/json;");
         oks("and its reply carries every header the server sent but its cookie",
-            content_of(dom_by_id(&page, "h")), "yes null spaced content-type=text/plain,x-reply=yes,x-two=spaced");
+            content_of(dom_by_id(&page, "h")), "yes OK null spaced content-type=text/plain,x-reply=yes,x-two=spaced");
         load("<body><p id=x>none</p><script>var q = new XMLHttpRequest(); q.open('POST', '/x');"
              "q.setRequestHeader('X-Requested-With', 'XMLHttpRequest'); q.setRequestHeader('Host', 'elsewhere');"
              "q.onload = function () { document.getElementById('x').textContent ="
@@ -2458,6 +2458,36 @@ int main(void) {
         jsdom_requests();
         oks("XMLHttpRequest gives its reply as the kind asked for, with its type and address",
             content_of(dom_by_id(&page, "x")), "200 4 7 application/json https://site.test/api/json");
+
+        /* Every state the answer passes through is told, with what each
+           handler settled run before the next: Disney's player (National
+           Geographic's page waits for it) makes its response at state 2 and
+           sets onload there, and waited for ever when this went from 1
+           straight to 4. */
+        load("<body><p id=x>none</p><script>"
+             "var q = new XMLHttpRequest(), seen = [], got = '';"
+             "q.onloadstart = function(){ seen.push('start'); };"
+             "q.onreadystatechange = function(){ seen.push(q.readyState);"
+             " if (q.readyState === 2) { seen.push(q.status + ' ' + q.statusText + ' [' + q.responseText + ']');"
+             "  Promise.resolve().then(function(){ seen.push('then'); });"
+             "  q.onload = function(e){ got = [q.responseText, e.loaded, e.lengthComputable].join(' '); }; } };"
+             "q.onprogress = function(e){ seen.push('progress ' + e.loaded); };"
+             "q.onloadend = function(){ document.getElementById('x').textContent = seen.join(',') + ' / ' + got; };"
+             "q.open('GET', '/text'); q.send();</script></body>");
+        run_scripts(&page, err, (int)sizeof(err), 0);
+        jsdom_requests();
+        oks("XMLHttpRequest tells each state its answer passes through, its status there from the second",
+            content_of(dom_by_id(&page, "x")), "1,start,2,200 OK [],then,3,progress 2,4 / ok 2 true");
+        load("<body><p id=x>none</p><script>"
+             "var q = new XMLHttpRequest(), seen = [];"
+             "q.onreadystatechange = function(){ seen.push(q.readyState); if (q.readyState === 2) q.abort(); };"
+             "q.onabort = function(){ seen.push('abort'); }; q.onload = function(){ seen.push('load'); };"
+             "q.onloadend = function(){ seen.push('end ' + q.readyState); Promise.resolve().then(function(){"
+             " document.getElementById('x').textContent = seen.join(',') + ' ' + q.readyState; }); };"
+             "q.open('GET', '/text'); q.send();</script></body>");
+        run_scripts(&page, err, (int)sizeof(err), 0);
+        jsdom_requests();
+        oks("and one aborted there ends there", content_of(dom_by_id(&page, "x")), "1,2,4,abort,end 4 0");
 
         oks("an AbortSignal of its own says it was aborted, and why",
             titled("<script>var s = AbortSignal.abort(); var heard = 0;"
