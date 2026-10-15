@@ -317,6 +317,26 @@ BIGPIC_PAGE = b"""<!doctype html>
 </body></html>
 """
 
+# Tab from one field to the next, as a form is filled in: Tab was given
+# to the field as nothing, and what came after went into the first field.
+TAB_PAGE = b"""<!doctype html>
+<html><head><title>tab</title>
+<style>body { margin: 0; background: #ffffff }
+input { position: absolute; left: 0; width: 300px; height: 40px; font-size: 24px }
+#a { top: 0 } #b { top: 60px }
+#box { position: absolute; left: 0; top: 140px; width: 400px; height: 200px }</style></head>
+<body><input id="a"><input id="b"><div id="box"></div>
+<script>
+var a = document.getElementById('a'), b = document.getElementById('b');
+function look() {
+  if (a.value === 'ab' && b.value === 'cd') document.getElementById('box').style.background = '#28785a';
+}
+a.addEventListener('input', look);
+b.addEventListener('input', look);
+</script>
+</body></html>
+"""
+
 # Copy and paste: the address copied from the bar and pasted into the
 # page's field, which the page checks and shows as the colour of a box.
 # A chord used to be typed into a field as a control character.
@@ -1474,6 +1494,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._send(KEYS_PAGE)
         elif path == "/paste":
             self._send(PASTE_PAGE)
+        elif path == "/tab":
+            self._send(TAB_PAGE)
         elif path == "/many":
             self._send(MANY_PAGE)
         elif path.startswith("/many/") and path.endswith(".png"):

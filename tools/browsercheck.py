@@ -134,6 +134,7 @@ BGJS_INK = (0x1C, 0x8C, 0x8C)         # /bgjs: a background picture a script set
 KEYS_INK = (0x8C, 0x28, 0x5A)         # /keys: its box once it heard "/", "go" and Return
 MANY_INK = (0x50, 0x78, 0x28)         # /many: each of its sixty pictures
 PASTE_INK = (0x5A, 0x8C, 0x28)        # /paste: its box once its field holds the address pasted
+TAB_INK = (0x28, 0x78, 0x5A)          # /tab: its box once each field holds what was typed into it
 BIG_INK = (0x28, 0x50, 0x78)          # /bigpic: the picture far wider than it is drawn
 BIG_TOLD = (0x78, 0x28, 0x5A)         # and the box its script colours when the natural size is right
 SHEET_THIRD = (0x50, 0xD0, 0x50)      # and the one before it, which must not have
@@ -648,6 +649,20 @@ def main():
             bgj, pxp, wp, shotp = page_settled(mon, "br-paste-settled")
             c.add("the address copied from the bar pastes into a page's field (%d)"
                   % count_in(pxp, wp, PAGE, PASTE_INK), pasted, shotp)
+
+            # --- Tab from one field to the next ---------------------------------
+            go(vm, mon, "http://%s/tab" % srv.host, settle=10.0,
+               was=bgj, name="br-going-tab")
+            page_settled(mon, "br-tab-up")
+            mon.click(PAGE[0] + 100, PAGE[1] + 20)
+            time.sleep(0.5)
+            mon.move_to(*PARK)
+            vm.type("ab\tcd")
+            _, _, _, _, tabbed = mon.wait_screen(
+                "br-tab", lambda w, h, px: count_in(px, w, PAGE, TAB_INK) > 30000, timeout=30)
+            bgj, pxt, wt_, shott = page_settled(mon, "br-tab-settled")
+            c.add("Tab takes the keyboard from one field to the next (%d)"
+                  % count_in(pxt, wt_, PAGE, TAB_INK), tabbed, shott)
 
             # --- more pictures than there was room for, and one kept smaller ---
             go(vm, mon, "http://%s/many" % srv.host, settle=10.0,

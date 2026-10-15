@@ -4053,6 +4053,30 @@ static void give_focus(int el) {
     page_active = el;
 }
 
+/* Tab: the keyboard to the next field drawn on the page after the one that
+   has it -- something to type in or tick -- from the top when none has it
+   or the last is passed. Where it is drawn, so the page can be scrolled to
+   it, or -1 when the page has none. Buttons and lists are passed over:
+   nothing here presses one from the keyboard yet. */
+static int tab_next(void) {
+    int from = focus_node >= 0 ? focus_node : page_active;
+    for (int pass = 0; pass < 2; pass++) {
+        int start = pass ? 0 : from + 1, stop = pass ? from + 1 : doc.count;
+        for (int i = start < 0 ? 0 : start; i < stop && i < doc.count; i++) {
+            int ck = lay_control_kind(&doc, i);
+            if (ck != CTL_TEXT && ck != CTL_PASSWORD && ck != CTL_AREA && ck != CTL_CHECK && ck != CTL_RADIO)
+                continue;
+            if (dom_attr(&doc, i, "disabled")) continue;
+            for (int k = 0; k < page.nitems; k++)
+                if (page.items[k].node == i) {
+                    give_focus(i);
+                    return page.items[k].y;
+                }
+        }
+    }
+    return -1;
+}
+
 /* The page moved the keyboard itself (el.focus(), el.blur()): a field it
    gave it to takes what is typed next, and one it took it from gives it
    up. Never while the address bar is being typed in. Whether it moved. */
@@ -4366,6 +4390,10 @@ int main(int argc, char **argv) {
             int kept = jsdom_live() && jsdom_key_down(raw);
             if (follow_page_focus()) dirty = 1;
             if (kept) {
+                dirty = 1;
+            } else if (k == '\t') {
+                int at = tab_next();
+                if (at >= 0 && (at < scroll || at > scroll + view_h - 40)) scroll = at - view_h / 3;
                 dirty = 1;
             } else if (focus_node >= 0) {
                 int ck = lay_control_kind(&doc, focus_node);
