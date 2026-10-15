@@ -2563,7 +2563,12 @@ static inline void css_apply_v(int prop, const char *v, cstyle *st, int root_px,
             if (w_starts_fold(v, "none")) st->display = D_NONE;
             else if (w_starts_fold(v, "inline-block")) st->display = D_INLINE_BLOCK;
             else if (w_starts_fold(v, "inline-flex")) st->display = D_INLINE_FLEX;
-            else if (w_starts_fold(v, "inline-table")) st->display = D_TABLE;
+            /* What an inline-table holds goes in a cell it makes, which is an
+               inline-block to everything here (a table element is laid out as
+               a table whatever its display): CNN's ribbon of headlines, each an
+               inline-table holding the headline and a "|" after it, ran its
+               headlines together when this was a block table. */
+            else if (w_starts_fold(v, "inline-table")) st->display = D_INLINE_BLOCK;
             else if (w_starts_fold(v, "inline-grid")) st->display = D_INLINE_BLOCK;
             else if (w_starts_fold(v, "inline")) st->display = D_INLINE;
             else if (w_starts_fold(v, "list-item")) st->display = D_LIST_ITEM;
@@ -2574,8 +2579,7 @@ static inline void css_apply_v(int prop, const char *v, cstyle *st, int root_px,
             else if (w_starts_fold(v, "table-row")) st->display = D_TABLE_ROW;
             else if (w_starts_fold(v, "table-column")) st->display = D_NONE;
             else if (w_starts_fold(v, "table-caption")) st->display = D_BLOCK;
-            else if (w_starts_fold(v, "table") || w_starts_fold(v, "inline-table"))
-                st->display = D_TABLE;
+            else if (w_starts_fold(v, "table")) st->display = D_TABLE;
             else if (w_starts_fold(v, "flex")) st->display = D_FLEX;
             else if (w_starts_fold(v, "grid")) st->display = D_GRID;
             else if (w_starts_fold(v, "contents")) st->display = D_CONTENTS;

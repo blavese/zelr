@@ -2084,6 +2084,22 @@ int main(void) {
         ok("and a white-space value not known is dropped, not read as normal", o1 && t2 && t2->y > o1->y);
     }
 
+    /* --- inline-table -------------------------------------------------------------------
+     *
+     * On anything but a table it holds its children in a cell it makes, an
+     * inline-block to everything here. CNN's ribbon of headlines is a row of
+     * them, each holding the headline and a "|" after it; read as a table, the
+     * bars went and the headlines ran together. */
+    {
+        lay("<style>.row{display:flex;list-style:none}.t{display:inline-table}.hl{display:inline-block}"
+            ".it:not(:last-child) .t:after{content:\"|\";padding:0 8px;display:inline-block}</style>"
+            "<ul class=row><li class=it><a href=#><div class=t><div class=hl><span>Alpha</span></div></div></a></li>"
+            "<li class=it><a href=#><div class=t><div class=hl><span>Beta</span></div></div></a></li></ul>", 600);
+        const litem *al = word("Alpha"), *be = word("Beta"), *bar = word("|");
+        ok("an inline-table on a div is an inline-block: the bar after a headline sits on its line, before the next",
+           al && be && bar && bar->y == al->y && bar->x > al->x + al->w && be->x > bar->x + bar->w && be->y == al->y);
+    }
+
     /* --- a transform's share is of the box ------------------------------------------
      *
      * translate(100%) moves a box by its own width, though it draws nothing
