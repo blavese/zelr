@@ -594,6 +594,16 @@ static inline clen css_len(const char *s) {
        range. */
     if (v > 10000) v = 10000;
     L.v = sign * (v * 100 + frac);
+    /* Not a length at all: a share of a grid, a time, an angle, a
+       resolution. Read as pixels, dev.to's width: var(--w) with --w: 2fr
+       made its sidebar 2 pixels wide, where a browser takes the width as
+       auto. */
+    static const char *const NOT_LEN[] = { "fr", "s", "ms", "deg", "grad", "rad", "turn",
+                                           "dpi", "dpcm", "dppx", "hz", "khz", 0 };
+    int ul = 0;
+    while ((s[ul] >= 'a' && s[ul] <= 'z') || (s[ul] >= 'A' && s[ul] <= 'Z')) ul++;
+    for (int k = 0; ul && NOT_LEN[k]; k++)
+        if (w_len(NOT_LEN[k]) == ul && w_starts_fold(s, NOT_LEN[k])) { L.v = 0; L.unit = U_AUTO; return L; }
     if (w_starts_fold(s, "em")) L.unit = U_EM;
     else if (w_starts_fold(s, "rem")) L.unit = U_REM;
     else if (w_starts_fold(s, "vw")) L.unit = U_VW;

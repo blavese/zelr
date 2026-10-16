@@ -2222,6 +2222,14 @@ int main(void) {
         const litem *pe = box_of(by_id("pe")), *pq = box_of(by_id("pq"));
         ok("and a grid item's percentage width is of its cell, at the end or centred by its margins",
            pe && pe->w == 250 && pe->x == 50 && pq && pq->w == 250 && pq->x == 25);
+        /* A width that is not a length, as dev.to's sidebar has it through a
+           custom property (2fr): auto, so the item fills its column. Read as
+           2 pixels, the sidebar was a sliver. */
+        lay("<style>body{margin:0}.g{display:grid;grid-template-columns:240px 1fr;width:600px;--w:2fr}"
+            ".s{width:100%;width:var(--w);height:10px;background:#a00}</style>"
+            "<div class=g><div class=s id=sw></div><div>main</div></div>", 800);
+        const litem *sw = box_of(by_id("sw"));
+        ok("and a width that is not a length (2fr) is auto, the item filling its column", sw && sw->w == 240);
     }
     {
         /* An absolutely positioned box with no width is as wide as what is

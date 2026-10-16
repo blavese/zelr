@@ -3652,7 +3652,8 @@ static const char *lay_grid_track(const char *p, const cstyle *st, int root_px, 
     tok[n] = 0;
     int tl = n;
     if (tl > 2 && w_lower(tok[tl - 2]) == 'f' && w_lower(tok[tl - 1]) == 'r') {
-        clen L = css_len(tok);                      /* 1fr reads as 1 of no unit */
+        tok[tl - 2] = 0;                            /* 2fr is a 2 of no unit */
+        clen L = css_len(tok);
         *kind = GT_FR;
         *v = L.v > 0 ? L.v : 100;                   /* hundredths */
         return p;
