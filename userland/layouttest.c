@@ -2340,11 +2340,14 @@ int main(void) {
         /* color: unset and inherit undo the browser's link colour: bbc.com's
            links say unset, and its logo, painted currentcolor, was blue. */
         lay("<style>a{color:#0000ff}div{color:#123456}.u{color:unset}.i{color:inherit}.n{color:initial}p{color:#00ff00}</style>"
-            "<div><a href=x class=u>cu</a> <a href=x class=i>ci</a> <a href=x>ca</a><p class=n>cn</p></div>", 800);
-        const litem *cu = word("cu"), *ci = word("ci"), *ca = word("ca"), *cn = word("cn");
+            "<div><a href=x class=u>cu</a> <a href=x class=i>ci</a> <a href=x>ca</a><p class=n>cn</p></div><a href=/>cs</a>", 800);
+        const litem *cu = word("cu"), *ci = word("ci"), *ca = word("ca"), *cn = word("cn"), *cs = word("cs");
         ok("color: unset and inherit take the parent's colour over a link's, initial the first colour",
            cu && cu->color == 0x123456 && ci && ci->color == 0x123456 && ca && ca->color != 0x123456
            && cn && cn->color == 0x1A1A1A);
+        /* And an unquoted value keeps its slash: <a href=/> was closed on the
+           spot, and its words were not a link. */
+        ok("<a href=/> is a link to / holding what follows", cs && cs->color == 0x0000FF && cs->link >= 0);
     }
     {
         /* background: none and background-color: initial are transparent:

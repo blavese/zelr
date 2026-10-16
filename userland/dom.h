@@ -740,6 +740,7 @@ static inline void dom_parse_into(ddoc *d, const char *p, int len, int parent) {
 
             /* Every attribute, not a chosen few: a style sheet selects on any
                of them and a script can read all of them. */
+            int bare_end = -1;
             while (at < len && p[at] != '>') {
                 while (at < len && (p[at] == ' ' || p[at] == '\t'
                                     || p[at] == '\n' || p[at] == '\r')) at++;
@@ -780,12 +781,15 @@ static inline void dom_parse_into(ddoc *d, const char *p, int len, int parent) {
                     }
                     val = dp_text(&z, p + vstart, j - vstart, 1);
                     if (quote && j < len) j++;
+                    else bare_end = j;
                     at = j;
                 }
                 dom_attr_add(d, el, nm, val);
             }
 
-            int self_closed = at > i && p[at - 1] == '/';
+            /* A value written without quotes keeps its last slash: <a href=/>
+               is a link to /, not an empty one before its words. */
+            int self_closed = at > i && p[at - 1] == '/' && bare_end != at;
             i = at + 1;
 
             dom_append(d, dp_top(&z), el);
