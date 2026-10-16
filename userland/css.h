@@ -82,6 +82,7 @@ enum {
     P_Z_INDEX,
     P_LINE_CLAMP,
     P_TEXT_OVERFLOW,
+    P_OVERFLOW_WRAP, P_WORD_BREAK,
     P_COUNT
 };
 
@@ -302,6 +303,10 @@ typedef struct {
     /* -webkit-line-clamp: how many lines are shown, 0 for all; and
        text-overflow: ellipsis. Neither inherited. */
     short line_clamp;
+    /* overflow-wrap: break-word or anywhere (bit 1), word-break: break-all
+       or break-word (bit 2): a word wider than its line may be broken.
+       Inherited, as both are. */
+    unsigned char wbreak;
     unsigned char ellipsis;
     short order, basis, shrink;
     unsigned char basis_pct;  /* the basis was a percentage of the row (lay_flex) */
@@ -952,6 +957,8 @@ static const cprop CSS_PROPS[] = {
     { "stroke", P_STROKE },
     { "z-index", P_Z_INDEX },
     { "-webkit-line-clamp", P_LINE_CLAMP },  { "line-clamp", P_LINE_CLAMP },
+    { "overflow-wrap", P_OVERFLOW_WRAP },    { "word-wrap", P_OVERFLOW_WRAP },
+    { "word-break", P_WORD_BREAK },
     { "text-overflow", P_TEXT_OVERFLOW },
     { "text-transform", P_TEXT_TRANSFORM },
     { "aspect-ratio", P_ASPECT },
@@ -2808,6 +2815,7 @@ static inline void css_default_style(cstyle *st, int root_px) {
     st->underline = st->strike = 0;
     st->display = st->display_up = D_INLINE;
     st->op_hidden = 0;
+    st->wbreak = 0;
     st->flex_dir = FD_ROW;
     st->justify = JC_START;
     st->align_items = AI_STRETCH;
@@ -2887,6 +2895,7 @@ static inline void css_inherit(cstyle *child, const cstyle *parent) {
     child->mono = parent->mono;
     child->align = parent->align;
     child->white = parent->white;
+    child->wbreak = parent->wbreak;
     child->list = parent->list;
     child->line_h = parent->line_h;
     child->visible = parent->visible;
@@ -3535,6 +3544,14 @@ static inline void css_apply_v(int prop, const char *v, cstyle *st, int root_px,
         }
 
         case P_TEXT_OVERFLOW: st->ellipsis = (unsigned char)w_starts_fold(v, "ellipsis"); break;
+        case P_OVERFLOW_WRAP:
+            if (w_starts_fold(v, "break-word") || w_starts_fold(v, "anywhere")) st->wbreak |= 1;
+            else st->wbreak &= (unsigned char)~1;
+            break;
+        case P_WORD_BREAK:
+            if (w_starts_fold(v, "break-all") || w_starts_fold(v, "break-word")) st->wbreak |= 2;
+            else st->wbreak &= (unsigned char)~2;
+            break;
 
         case P_LINE_CLAMP: {
             const char *q = v;

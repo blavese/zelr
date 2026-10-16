@@ -740,6 +740,32 @@ static inline void lay_word(lctx *L, const char *s, int n, const cstyle *st,
         lay_line_start(L, *y, left, width, al);
         sp = 0;
     }
+    /* A word wider than a whole line is broken where the line ends, and
+       the rest goes on the next, when the page says so (overflow-wrap,
+       word-break) or when it would run past the side of the page: nothing
+       here scrolls sideways, and a long address in a narrow column ran off
+       the side, out of reach, where a browser lets it be scrolled to. A
+       word that only overflows its own box stays whole, as it does in a
+       browser; a line that may not break keeps it whole, and a measurement
+       sees it whole. */
+    if (!L->measuring && L->pen == L->line_left && w > L->line_width && L->line_width > 0 && n > 1
+        && st->white != WS_NOWRAP && st->white != WS_PRE
+        && (st->wbreak || (css_view_w > 0 && L->pen + w > css_view_w))) {
+        int k = n;
+        while (k > 1 && tface_wn(s, k, face) > L->line_width) {
+            k--;
+            while (k > 1 && ((unsigned char)s[k] & 0xC0) == 0x80) k--;   /* not inside a letter */
+        }
+        if (k < n) {
+            lay_word(L, s, k, st, y, face);
+            int left = L->cont_left, width = L->cont_width, al = L->align;
+            lay_line_end(L, y);
+            lay_line_start(L, *y, left, width, al);
+            L->pending_space = 0;
+            lay_word(L, s + k, n - k, st, y, face);
+            return;
+        }
+    }
     /* A line that may not break and runs past its room is something made
        wider than it, which a box hiding its overflow cuts at its sides. */
     if (L->pen + sp + w > L->line_left + L->line_width && !L->measuring) L->widened++;

@@ -2688,6 +2688,23 @@ int main(void) {
            b1 && b2 && b2->y == b1->y + 10 && b1->w == 40 && x1 && x2 && x2->y == x1->y && x2->x >= x1->x + 100);
     }
     {
+        /* A word wider than its line is broken where the page says it may be
+           (overflow-wrap) or where it would run off the page, which nothing
+           here scrolls to; one that only overflows its own box stays whole. */
+        lay("<style>body{margin:0}.b{width:120px;overflow-wrap:break-word}.n{width:40px}</style>"
+            "<div class=b id=bw>https://example.com/a/longer/one</div><div class=n>zwhole</div>"
+            "<p>wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww</p>", 300);
+        int pieces = 0, wide = 0, bw = by_id("bw");
+        for (int i = 0; i < page.nitems; i++) {
+            const litem *it = &page.items[i];
+            if (it->kind != LK_TEXT || it->at < 0) continue;
+            if (it->node == bw) pieces++;
+            if (page.text[it->at] == 'w' && it->x + it->w > 300) wide++;
+        }
+        ok("a word is broken where the page allows or where it would leave the page, and not where it fits the page",
+           pieces >= 2 && !word("https://example.com/a/longer/one") && word("zwhole") && !wide);
+    }
+    {
         /* A fixed box with only a bottom stands that far above the foot of
            the window as the page first shows, not where the flow left it. */
         int keep_fh = css_view_h;
