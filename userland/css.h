@@ -2739,6 +2739,11 @@ static int css_place_word(const char *v) {
 }
 
 static inline void css_default_style(cstyle *st, int root_px) {
+    /* Every field, since a style starts in whatever memory its caller had:
+       box-sizing was never set here, so a box that said nothing about it was
+       border-box whenever the last style in that place had been, and its
+       padding counted or not by chance. */
+    st->border_box = 0;
     st->color = 0x1A1A1A;
     st->background = 0xFFFFFF;
     st->border_color = 0xD0D0D0;

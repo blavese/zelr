@@ -2441,6 +2441,16 @@ int main(void) {
            raw == 100 && rah == 15 && rb && rb->w == 100 && rb->h == 15);
     }
     {
+        /* A style starts from nothing that was in its memory: box-sizing was
+           never set by the default style, and a box that said nothing about
+           it was border-box when the last style in its place had been. */
+        static cstyle junk;
+        volatile unsigned char *jb = (volatile unsigned char *)&junk;
+        for (unsigned k = 0; k < sizeof junk; k++) jb[k] = 0xFF;
+        css_default_style(&junk, 16);
+        ok("a fresh style is content-box whatever was in its memory", junk.border_box == 0);
+    }
+    {
         /* GitHub's repository page sends twenty-five thousand rules, and at
            sixteen thousand the rest were lost: its visually hidden headings
            and its closed menu's rules among them. The last of 25000 rules
