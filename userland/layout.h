@@ -5295,6 +5295,40 @@ static void lay_block_placed(lctx *L, int node, const cstyle *parent, int x,
         L->nbots = bots_at;
     }
 
+    /* -webkit-line-clamp: its first lines only, the last ending in an
+       ellipsis, as news sites cut their cards' headlines and blurbs. All of
+       it ran on, and every card in a row was as tall as its longest blurb. */
+    if (st.line_clamp > 0) {
+        int lines = 0, bottom = 0, cut = -1, last = -1;
+        for (int i = inside_at; i < L->out->nitems; i++) {
+            const litem *it = &L->out->items[i];
+            if ((it->kind != LK_TEXT && it->kind != LK_IMAGE && it->kind != LK_FIELD) || it->h <= 0) continue;
+            if (!lines || it->y >= bottom - 1) {
+                if (lines == st.line_clamp) { cut = it->y; break; }
+                lines++;
+                bottom = it->y + it->h;
+            } else if (it->y + it->h > bottom) bottom = it->y + it->h;
+            if (it->kind == LK_TEXT) last = i;
+        }
+        if (cut >= 0) {
+            for (int i = inside_at; i < L->out->nitems; i++)
+                if (L->out->items[i].y >= cut) L->out->items[i].kind = 0;
+            litem *lt = last >= 0 ? &L->out->items[last] : 0;
+            if (lt && lt->at >= 0) {
+                char word[96];
+                int n = 0;
+                for (const char *q = L->out->text + lt->at; *q && n < 92; q++) word[n++] = *q;
+                word[n++] = '.'; word[n++] = '.'; word[n++] = '.';
+                lt->at = lay_put(L, word, n);
+                lt->w += tface_wn("...", 3, lt->face);
+            }
+            int keep_h = cut - box_top + st.pb + st.bb;
+            int least = want_h > floor_h ? want_h : floor_h;
+            if (keep_h < least) keep_h = least;
+            if (keep_h < box_h) { *y -= box_h - keep_h; box_h = keep_h; }
+        }
+    }
+
     /* A ceiling on height cuts the box rather than the words in it: nothing
        here clips, so the box stops and whatever was under it moves up. That
        is what max-height does on a page that uses it to cap a banner, and it
@@ -5349,6 +5383,36 @@ static void lay_block_placed(lctx *L, int node, const cstyle *parent, int x,
                 int x1 = it->x + it->w > right ? right : it->x + it->w;
                 it->x = x0;
                 it->w = x1 - x0;
+            }
+        }
+        /* text-overflow: ellipsis: a word running past the side goes too, and
+           a line that lost words ends in dots, its last word cut to fit them:
+           a card's one-line title stopped at a whole word with nothing to
+           say it went on. */
+        if (st.ellipsis) {
+            for (int i = inside_at; i < L->out->nitems; i++) {
+                litem *it = &L->out->items[i];
+                if (it->kind != LK_TEXT && !(it->kind == 0 && it->at >= 0 && it->x >= right)) continue;
+                if (it->kind == LK_TEXT && it->x + it->w <= right) continue;
+                it->kind = 0;
+                /* The line's last word still shown takes the dots. */
+                litem *lastw = 0;
+                for (int j = inside_at; j < L->out->nitems; j++) {
+                    litem *k = &L->out->items[j];
+                    if (k->kind == LK_TEXT && k->y == it->y && k->at >= 0 && (!lastw || k->x > lastw->x)) lastw = k;
+                }
+                if (!lastw) continue;
+                const char *t = L->out->text + lastw->at;
+                int n = 0;
+                while (t[n] && n < 92) n++;
+                if (n >= 3 && t[n - 1] == '.' && t[n - 2] == '.' && t[n - 3] == '.') continue;
+                int dw = tface_wn("...", 3, lastw->face);
+                while (n > 1 && lastw->x + tface_wn(t, n, lastw->face) + dw > right) n--;
+                char word[96];
+                for (int c = 0; c < n; c++) word[c] = t[c];
+                word[n] = '.'; word[n + 1] = '.'; word[n + 2] = '.';
+                lastw->at = lay_put(L, word, n + 3);
+                lastw->w = tface_wn(word, n + 3, lastw->face);
             }
         }
     }

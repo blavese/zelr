@@ -80,6 +80,8 @@ enum {
     P_JUSTIFY_ITEMS, P_JUSTIFY_SELF, P_PLACE_ITEMS, P_PLACE_SELF,
     P_FILL, P_STROKE,
     P_Z_INDEX,
+    P_LINE_CLAMP,
+    P_TEXT_OVERFLOW,
     P_COUNT
 };
 
@@ -288,6 +290,10 @@ typedef struct {
        (layout.h, lay_z_enter). Not inherited. */
     unsigned char z_set;
     int zidx;
+    /* -webkit-line-clamp: how many lines are shown, 0 for all; and
+       text-overflow: ellipsis. Neither inherited. */
+    short line_clamp;
+    unsigned char ellipsis;
     short order, basis, shrink;
     unsigned char basis_pct;  /* the basis was a percentage of the row (lay_flex) */
     int ratio_w, ratio_h;
@@ -912,6 +918,8 @@ static const cprop CSS_PROPS[] = {
     { "fill", P_FILL },
     { "stroke", P_STROKE },
     { "z-index", P_Z_INDEX },
+    { "-webkit-line-clamp", P_LINE_CLAMP },  { "line-clamp", P_LINE_CLAMP },
+    { "text-overflow", P_TEXT_OVERFLOW },
     { "text-transform", P_TEXT_TRANSFORM },
     { "aspect-ratio", P_ASPECT },
     { "flex", P_FLEX },
@@ -2809,6 +2817,8 @@ static inline void css_default_style(cstyle *st, int root_px) {
     st->fill_said = st->stroke_said = 0;
     st->z_set = 0;
     st->zidx = 0;
+    st->line_clamp = 0;
+    st->ellipsis = 0;
     st->order = 0;
     st->basis = -1;
     st->basis_pct = 0;
@@ -3447,6 +3457,17 @@ static inline void css_apply_v(int prop, const char *v, cstyle *st, int root_px,
             if (!said) break;
             if (prop == P_FILL) { st->fill = c; st->fill_said = said; }
             else { st->stroke = c; st->stroke_said = said; }
+            break;
+        }
+
+        case P_TEXT_OVERFLOW: st->ellipsis = (unsigned char)w_starts_fold(v, "ellipsis"); break;
+
+        case P_LINE_CLAMP: {
+            const char *q = v;
+            while (*q == ' ') q++;
+            int k = 0;
+            while (*q >= '0' && *q <= '9' && k < 1000) k = k * 10 + (*q++ - '0');
+            st->line_clamp = (short)k;           /* none, or anything else, is 0 */
             break;
         }
 

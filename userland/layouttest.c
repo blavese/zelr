@@ -2524,6 +2524,40 @@ int main(void) {
            fq && fq->w == 101 && fg && fg->w == 35 && fg->y == fq->y);
     }
     {
+        /* -webkit-line-clamp shows its first lines, the last ending in an
+           ellipsis: news sites cut cards' headlines and blurbs so, and every
+           card ran as long as its blurb. */
+        lay("<style>body{margin:0}p{margin:0;line-height:20px;width:120px}"
+            ".c{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}</style>"
+            "<p class=c>lca lcb lcc lcd lce lcf lcg lch lci lcj lck lcl lcm lcn</p><p>clampafter</p>", 800);
+        const litem *ca = word("lca"), *cn = word("lcn"), *af = word("clampafter"), *dots = 0;
+        for (int i = 0; i < page.nitems; i++) {
+            const litem *it = &page.items[i];
+            if (it->kind != LK_TEXT || it->at < 0) continue;
+            const char *t = page.text + it->at;
+            int n = 0;
+            while (t[n]) n++;
+            if (n > 3 && t[n - 1] == '.' && t[n - 2] == '.' && t[n - 3] == '.') dots = it;
+        }
+        ok("line-clamp: 2 shows two lines, the second ending in an ellipsis, and what follows comes after them",
+           ca && !cn && dots && dots->y == ca->y + 20 && af && af->y == 40);
+        /* And text-overflow: ellipsis on one line that may not break: what
+           runs past the side goes and the line ends in dots that fit. */
+        lay("<style>body{margin:0}.e{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;width:100px}</style>"
+            "<div class=e>eea eeb eec eed eee eef eeg eeh</div>", 800);
+        const litem *ea = word("eea"), *eh = word("eeh"), *edots = 0;
+        for (int i = 0; i < page.nitems; i++) {
+            const litem *it = &page.items[i];
+            if (it->kind != LK_TEXT || it->at < 0) continue;
+            const char *t = page.text + it->at;
+            int n = 0;
+            while (t[n]) n++;
+            if (n > 3 && t[n - 1] == '.' && t[n - 2] == '.' && t[n - 3] == '.') edots = it;
+        }
+        ok("text-overflow: ellipsis ends a cut line in dots inside its box",
+           ea && !eh && edots && edots->y == ea->y && edots->x + edots->w <= 100);
+    }
+    {
         /* A row of boxes that may not break stays one row, and a box hiding
            its overflow drops what lies past its side; one that would scroll
            is wrapped, since nothing inside a page scrolls here. */
