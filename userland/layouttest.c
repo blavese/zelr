@@ -2275,13 +2275,18 @@ int main(void) {
         /* A box that hides its overflow and is 0 high is hidden on purpose
            unless its padding makes it something: Debian's banner heading is
            0 high with 130 pixels of padding for its picture, and was never
-           drawn. One a pixel square with no padding is still hidden. */
+           drawn. One a pixel square with no padding is still hidden, and so is
+           one 0 wide whatever its side padding: Forbes' carousel slides, made
+           0 wide by a script that measured nothing, drew their words whole
+           down a column. */
         lay("<style>body{margin:0}p{margin:0}.s{height:0;padding-top:50px;overflow:hidden;background:#123456}"
-            ".sr{position:absolute;width:1px;height:1px;padding:0;overflow:hidden}</style>"
-            "<div class=s id=splash>heading</div><p class=sr>unseen</p><p>after</p>", 800);
-        const litem *sb = box_of(by_id("splash")), *us = word("unseen"), *af2 = word("after");
+            ".sr{position:absolute;width:1px;height:1px;padding:0;overflow:hidden}"
+            ".z{float:left;width:0;padding:0 16px;overflow:hidden}</style>"
+            "<div class=s id=splash>heading</div><p class=sr>unseen</p><p>after</p><div class=z>sliver words</div>", 800);
+        const litem *sb = box_of(by_id("splash")), *us = word("unseen"), *af2 = word("after"), *sl = word("sliver");
         ok("a box 0 high that hides its overflow is drawn when its padding gives it height, a pixel square is not",
            sb && sb->h == 50 && !us && af2 && af2->y == 50);
+        ok("nor one 0 wide with padding at its sides", !sl);
     }
     {
         /* Tailwind 4's palette is oklch(): unread, no colour from it reached

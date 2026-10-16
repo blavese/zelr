@@ -1361,15 +1361,17 @@ static inline int lay_pct_cyclic(const lctx *L, int node, const cstyle *st, cons
    nothing, or a box a pixel or two across whose overflow is hidden. */
 static inline int lay_unseen(const cstyle *st) {
     if (st->gone) return 1;
-    /* Its padding and borders are part of it: Debian's banner heading is 0
-       high with 130 pixels of padding for its picture, and as a box of no
-       height that hid its overflow it was taken for one hidden on purpose
-       and the picture was never drawn. A border-box size cannot be less
-       than its frame. */
-    int fw = st->pl + st->pr + st->bl + st->br, fh = st->pt + st->pb + st->bt + st->bb;
-    int w = st->width < 0 ? -1 : st->border_box ? (st->width > fw ? st->width : fw) : st->width + fw;
+    /* Its padding and borders above and below are part of it: Debian's
+       banner heading is 0 high with 130 pixels of padding for its picture,
+       and as a box of no height that hid its overflow it was taken for one
+       hidden on purpose and the picture was never drawn. A border-box height
+       cannot be less than its frame. Not at its sides: a box 0 wide shows
+       its words cut to its padding, which this layout cannot cut, and drew
+       whole down a column (Forbes' carousel, whose script measured nothing
+       and made its slides 0 wide). */
+    int fh = st->pt + st->pb + st->bt + st->bb;
     int h = st->height < 0 ? -1 : st->border_box ? (st->height > fh ? st->height : fh) : st->height + fh;
-    return st->clip && ((w >= 0 && w <= 2) || (h >= 0 && h <= 2));
+    return st->clip && ((st->width >= 0 && st->width <= 2) || (h >= 0 && h <= 2));
 }
 
 /* An inline-block, or something absolutely positioned inside a run of
