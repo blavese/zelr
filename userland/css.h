@@ -73,6 +73,7 @@ enum {
     P_DEFER,         /* a shorthand whose value has var() in it: "name:value" */
     P_CONTENT_VIS,   /* content-visibility */
     P_ROW_GAP, P_COL_GAP,
+    P_JUSTIFY_ITEMS, P_JUSTIFY_SELF, P_PLACE_ITEMS, P_PLACE_SELF,
     P_COUNT
 };
 
@@ -262,6 +263,10 @@ typedef struct {
        width and a height in hundredths (0 for none). */
     unsigned char ttrans;
     signed char align_self;
+    /* Across a grid's cells: the grid's justify-items, and an item's
+       justify-self (-1 for the grid's). The same values as align-items. */
+    unsigned char justify_items;
+    signed char justify_self;
     short order, basis, shrink;
     unsigned char basis_pct;  /* the basis was a percentage of the row (lay_flex) */
     int ratio_w, ratio_h;
@@ -637,6 +642,10 @@ static const cprop CSS_PROPS[] = {
     { "flex-shrink", P_FLEX_SHRINK },
     { "order", P_ORDER },
     { "align-self", P_ALIGN_SELF },
+    { "justify-items", P_JUSTIFY_ITEMS },
+    { "justify-self", P_JUSTIFY_SELF },
+    { "place-items", P_PLACE_ITEMS },
+    { "place-self", P_PLACE_SELF },
     { "text-transform", P_TEXT_TRANSFORM },
     { "aspect-ratio", P_ASPECT },
     { "flex", P_FLEX },
@@ -2342,6 +2351,22 @@ static inline int css_matches(const csheet *s, const ddoc *d, int el,
 
 /* --- applying ------------------------------------------------------------ */
 
+/* Where an item goes along one side of its cell or line, from one word of
+   align-items, align-self, justify-items, justify-self or place-*: -1 for
+   auto (the container's), stretch for normal and anything not known. */
+static int css_place_word(const char *v) {
+    if (w_starts_fold(v, "safe ")) v += 5;
+    else if (w_starts_fold(v, "unsafe ")) v += 7;
+    if (w_starts_fold(v, "auto")) return -1;
+    if (w_starts_fold(v, "center")) return AI_CENTER;
+    if (w_starts_fold(v, "flex-end") || w_starts_fold(v, "end") || w_starts_fold(v, "self-end")
+        || w_starts_fold(v, "right")) return AI_END;
+    if (w_starts_fold(v, "flex-start") || w_starts_fold(v, "start") || w_starts_fold(v, "self-start")
+        || w_starts_fold(v, "left")) return AI_START;
+    if (w_starts_fold(v, "baseline") || w_starts_fold(v, "first baseline")) return AI_BASELINE;
+    return AI_STRETCH;
+}
+
 static inline void css_default_style(cstyle *st, int root_px) {
     st->color = 0x1A1A1A;
     st->background = 0xFFFFFF;
@@ -2394,6 +2419,8 @@ static inline void css_default_style(cstyle *st, int root_px) {
     st->grid_row = st->grid_row_s = st->grid_row_e = st->gplace = 0;
     st->ttrans = 0;
     st->align_self = -1;
+    st->justify_items = AI_STRETCH;
+    st->justify_self = -1;
     st->order = 0;
     st->basis = -1;
     st->basis_pct = 0;
@@ -2960,6 +2987,32 @@ static inline void css_apply_v(int prop, const char *v, cstyle *st, int root_px,
             st->order = (short)(neg ? -n : n);
             break;
         }
+        /* Across a grid's cells, and both ways at once: place-items is the
+           items' align then justify, one word for both. Without them every
+           grid item was stretched across its cell. */
+        case P_JUSTIFY_ITEMS: case P_JUSTIFY_SELF: case P_PLACE_ITEMS: case P_PLACE_SELF: {
+            int st2[2], ln2[2];
+            int np = css_parts(v, w_len(v), st2, ln2, 2);
+            if (np <= 0) break;
+            char one[2][32];
+            for (int k = 0; k < np; k++) {
+                int n = ln2[k] < 31 ? ln2[k] : 31;
+                for (int q = 0; q < n; q++) one[k][q] = v[st2[k] + q];
+                one[k][n] = 0;
+            }
+            int a = css_place_word(one[0]), j = css_place_word(one[np - 1]);
+            if (prop == P_JUSTIFY_ITEMS) st->justify_items = (unsigned char)(a < 0 ? AI_STRETCH : a);
+            else if (prop == P_JUSTIFY_SELF) st->justify_self = (signed char)a;
+            else if (prop == P_PLACE_ITEMS) {
+                st->align_items = (unsigned char)(a < 0 ? AI_STRETCH : a);
+                st->justify_items = (unsigned char)(j < 0 ? AI_STRETCH : j);
+            } else {
+                st->align_self = (signed char)a;
+                st->justify_self = (signed char)j;
+            }
+            break;
+        }
+
         case P_ALIGN_SELF:
             if (w_starts_fold(v, "center")) st->align_self = AI_CENTER;
             else if (w_starts_fold(v, "flex-end") || w_starts_fold(v, "end")) st->align_self = AI_END;

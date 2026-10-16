@@ -357,6 +357,9 @@ typedef struct {
        is its width whatever its own width says: that was only where the row
        started from (lay_flex). -1 when there is none. */
     int flex_sized;
+    /* The absolutely positioned box being measured for how wide its contents
+       make it (lay_block): laid out as its body, where it stands. -1 for none. */
+    int abs_sizing;
     /* Boxes made wider than the room they were given, inside one that hides
        its overflow (lay_block): only a box that holds one is cut at its sides. */
     int widened;
@@ -2677,6 +2680,55 @@ static void lay_stretch(lctx *L, int node, const cstyle *ps, int cw, int align_i
     }
 }
 
+/* How tall a box was told to be inside its padding and border, within its
+   least and most: 0 when nothing says. A flex row's one line and a grid's
+   one row are that tall. */
+static int lay_inner_height(const cstyle *st) {
+    int vframe = st->border_box ? st->pt + st->pb + st->bt + st->bb : 0;
+    int h = st->height >= 0 ? st->height - vframe : 0;
+    if (st->min_height >= 0 && h < st->min_height - vframe) h = st->min_height - vframe;
+    if (st->max_height >= 0 && h > st->max_height - vframe) h = st->max_height - vframe;
+    return h > 0 ? h : 0;
+}
+
+/* Where a grid item goes across its cell and how wide it is. Stretched
+   across the cell only when nothing says otherwise: one with a width of its
+   own keeps it, at the cell's start unless justify-self or the grid's
+   justify-items puts it in the middle or at the end, and one put at the
+   start, middle or end is as wide as its contents. Every item was stretched
+   across its cell, so a box 32 pixels wide came out as wide as the grid
+   (bbc.com's play labels). *x and *w are moved to where it goes; the answer
+   is whether it is laid out at that width as its own (flex_sized), and *al
+   is how it lines up down the cell. */
+static int lay_grid_across(lctx *L, int k, const cstyle *ps, const cstyle *grid, int *x, int *w, int *al) {
+    *al = grid->align_items;
+    if (L->d->nodes[k].kind != DN_ELEMENT) return 1;
+    cstyle own;
+    lay_style(L, k, ps, &own, *w);
+    if (own.align_self >= 0) *al = own.align_self;
+    int js = own.justify_self >= 0 ? own.justify_self : grid->justify_items;
+    if (L->measuring) js = AI_START;
+    /* One with a width of its own is laid out in the whole cell, which is
+       what a percentage of it is of, and only starts further along: given
+       its width as the room, usa.gov's calc(100% - 50px) was taken off
+       twice. Auto margins place it themselves. */
+    if (own.width >= 0 && !lay_pct_cyclic(L, k, &own, ps)) {
+        if (own.ml == CSS_AUTO_OFF || own.mr == CSS_AUTO_OFF) return 0;
+        int iw = own.width + (own.border_box ? 0 : own.pl + own.pr + own.bl + own.br)
+               + (own.ml > 0 ? own.ml : 0) + (own.mr > 0 ? own.mr : 0);
+        if (iw < *w && js == AI_CENTER) *x += (*w - iw) / 2;
+        else if (iw < *w && js == AI_END) *x += *w - iw;
+        return 0;
+    }
+    if (js != AI_START && js != AI_CENTER && js != AI_END) return 1;
+    int h = 0, iw = lay_measure(L, k, ps, *w, &h);
+    if (iw <= 0 || iw >= *w) return 1;
+    if (js == AI_CENTER) *x += (*w - iw) / 2;
+    else if (js == AI_END) *x += *w - iw;
+    *w = iw;
+    return 1;
+}
+
 static void lay_flex_line(lctx *L, const cstyle *st, const int *kid, const int *par, int n,
                           const int *meas, int *want, const int *low,
                           const int *high, const int *grow, const int *aself,
@@ -3042,11 +3094,7 @@ static void lay_flex(lctx *L, int node, const cstyle *st, int cx, int cw,
                lined up against the tallest of them, at the row's top
                (bbc.com's cards' times), and a hero 100vh high centred
                nothing. */
-            int vframe = st->border_box ? st->pt + st->pb + st->bt + st->bb : 0;
-            int line_h = st->height >= 0 ? st->height - vframe : 0;
-            if (st->min_height >= 0 && line_h < st->min_height - vframe) line_h = st->min_height - vframe;
-            if (st->max_height >= 0 && line_h > st->max_height - vframe) line_h = st->max_height - vframe;
-            if (line_h < 0) line_h = 0;
+            int line_h = lay_inner_height(st);
             lay_flex_line(L, st, kid, par, n, meas, want, low, high, grow, aself, amarg, cx, cw, gap, reverse,
                           line_h, y);
         } else {
@@ -4036,8 +4084,8 @@ static void lay_grid_named(lctx *L, int node, const cstyle *st, int cx, int cw, 
             if (f < 0 || a[f].r0 != r) continue;
             /* Laid out on the row it starts on; it holds up the row it ends on. */
             int c1 = a[f].c1 < n ? a[f].c1 : n - 1;
-            int x = colx[a[f].c0], w = colx[c1 + 1] - gap - x, cy = rowtop[r];
-            L->flex_sized = k;
+            int x = colx[a[f].c0], w = colx[c1 + 1] - gap - x, cy = rowtop[r], al;
+            if (lay_grid_across(L, k, st, st, &x, &w, &al)) L->flex_sized = k;
             lay_block(L, k, st, x, w, &cy);
             L->flex_sized = -1;
             if (cy > endbot[a[f].r1]) endbot[a[f].r1] = cy;
@@ -4230,11 +4278,11 @@ static int lay_grid_placed(lctx *L, int node, const cstyle *st, int cw, int ncol
     int nrows = 0;
     for (int i = 0; i < n; i++) {
         int *r = rec + i * GR_N;
-        int w = colx[r[GR_C0] + r[GR_CS]] - gap - colx[r[GR_C0]];
+        int w = colx[r[GR_C0] + r[GR_CS]] - gap - colx[r[GR_C0]], ax = 0, al;
         cstyle pb;
         const cstyle *ps = lay_item_parent(L, st, r[GR_PAR], cw, &pb);
         int h = 0;
-        L->flex_sized = r[GR_NODE];
+        if (lay_grid_across(L, r[GR_NODE], ps, st, &ax, &w, &al)) L->flex_sized = r[GR_NODE];
         lay_measure(L, r[GR_NODE], ps, w, &h);
         L->flex_sized = -1;
         r[GR_H] = h;
@@ -4268,13 +4316,12 @@ static int lay_grid_placed(lctx *L, int node, const cstyle *st, int cw, int ncol
         int area = top[last] - rgap - top[r[GR_R0]];
         cstyle pb;
         const cstyle *ps = lay_item_parent(L, st, r[GR_PAR], cw, &pb);
-        int first = L->out->nitems, cy = top[r[GR_R0]];
-        L->flex_sized = r[GR_NODE];
+        int first = L->out->nitems, cy = top[r[GR_R0]], al;
+        if (lay_grid_across(L, r[GR_NODE], ps, st, &x, &w, &al)) L->flex_sized = r[GR_NODE];
         lay_block(L, r[GR_NODE], ps, x, w, &cy);
         L->flex_sized = -1;
         int got = cy - top[r[GR_R0]];
-        int dy = st->align_items == AI_CENTER ? (area - got) / 2
-               : st->align_items == AI_END ? area - got : 0;
+        int dy = al == AI_CENTER ? (area - got) / 2 : al == AI_END ? area - got : 0;
         if (dy > 0)
             for (int j = first; j < L->out->nitems; j++) L->out->items[j].y += dy;
         lay_stretch(L, r[GR_NODE], ps, cw, st->align_items, first, L->out->nitems, area - got);
@@ -4377,8 +4424,8 @@ static void lay_grid(lctx *L, int node, const cstyle *st, int cx, int cw, int *y
     if ((named_row || st->grid_rows || st->grid_auto_rows)
         && lay_grid_placed(L, node, st, cw, ncols, colx, gap, names, nnames, y)) return;
 
-    struct { int first, end, h, node, from; } row[LAY_GRID_COLS];
-    int nrow = 0, col = 0, top = *y, rowh = 0, any = 0;
+    struct { int first, end, h, node, from, al; } row[LAY_GRID_COLS];
+    int nrow = 0, col = 0, top = *y, rowh = 0, any = 0, start = *y;
     lay_items_start(L, &it, node, st);
     for (;;) {
         k = lay_items_next(L, &it, cw, &from, &positioned);
@@ -4400,9 +4447,17 @@ static void lay_grid(lctx *L, int node, const cstyle *st, int cx, int cw, int *y
            in a column the row has already passed, or the end: every item on
            it is then lined up against the tallest. */
         if (nrow && (last || col + span > ncols || (placed_at >= 0 && placed_at < col))) {
+            /* The only row stretches to the grid's height, as a row of auto
+               height does: `display: grid; place-items: center` in a box a
+               window high is how a page centres what is in it, and it sat
+               at the top. */
+            if (last && top == start) {
+                int fill = lay_inner_height(st);
+                if (fill > rowh) rowh = fill;
+            }
             for (int i = 0; i < nrow; i++) {
-                int dy = st->align_items == AI_CENTER ? (rowh - row[i].h) / 2
-                       : st->align_items == AI_END ? rowh - row[i].h : 0;
+                int dy = row[i].al == AI_CENTER ? (rowh - row[i].h) / 2
+                       : row[i].al == AI_END ? rowh - row[i].h : 0;
                 if (dy > 0)
                     for (int j = row[i].first; j < row[i].end; j++) L->out->items[j].y += dy;
                 cstyle sb;
@@ -4419,8 +4474,8 @@ static void lay_grid(lctx *L, int node, const cstyle *st, int cx, int cw, int *y
         if (col + span > ncols) col = ncols - span > 0 ? ncols - span : 0;
         int x = colx[col];
         int w = colx[col + span] - gap - x;
-        int first = L->out->nitems, cy = top;
-        L->flex_sized = k;
+        int first = L->out->nitems, cy = top, al;
+        if (lay_grid_across(L, k, ps, st, &x, &w, &al)) L->flex_sized = k;
         lay_block(L, k, ps, x, w, &cy);
         L->flex_sized = -1;
         if (nrow < LAY_GRID_COLS) {
@@ -4429,6 +4484,7 @@ static void lay_grid(lctx *L, int node, const cstyle *st, int cx, int cw, int *y
             row[nrow].h = cy - top;
             row[nrow].node = k;
             row[nrow].from = from;
+            row[nrow].al = al;
             nrow++;
         }
         if (cy - top > rowh) rowh = cy - top;
@@ -4530,9 +4586,31 @@ static void lay_block(lctx *L, int node, const cstyle *parent, int x,
     }
 
     if (probe.position == POS_ABSOLUTE || probe.position == POS_FIXED) {
+        if (node == L->abs_sizing) {
+            lay_block_placed(L, node, parent, x, avail, y);
+            return;
+        }
         int keep = *y;
         int aw = L->pos_w > 16 ? L->pos_w : avail;
-        int bw = probe.width >= 0 ? probe.width : aw;
+        /* With no width and not both sides given, as wide as what is in it,
+           up to the room between where it starts and its box's far side, as
+           a browser shrinks one to fit. It was as wide as the room: a label
+           of an icon at the corner of a picture was a bar across the whole
+           picture (bbc.com's play labels), and a box put at the right by
+           right: 0 started at its box's left. */
+        int lft = probe.left != CSS_AUTO_OFF, rgt = probe.right_off != CSS_AUTO_OFF, fit = -1;
+        if (probe.width < 0 && !(lft && rgt) && !L->measuring) {
+            int room0 = lft ? aw - probe.left : rgt ? aw - probe.right_off : (L->pos_x + aw) - x;
+            if (room0 > 0) {
+                int held = L->abs_sizing, h = 0;
+                L->abs_sizing = node;
+                fit = lay_measure(L, node, parent, room0, &h);
+                L->abs_sizing = held;
+                if (fit > room0) fit = room0;
+                if (fit <= 0) fit = -1;
+            }
+        }
+        int bw = probe.width >= 0 ? probe.width : fit >= 0 ? fit : aw;
 
         int ax = *y >= 0 ? x : x;              /* where the flow left it */
         if (probe.left != CSS_AUTO_OFF) ax = L->pos_x + probe.left;
@@ -4552,16 +4630,29 @@ static void lay_block(lctx *L, int node, const cstyle *parent, int x,
         int by_bottom = probe.top == CSS_AUTO_OFF && probe.bottom != CSS_AUTO_OFF && L->pos_id
                         && !L->measuring && L->nbots < LAY_BOTTOMS;
 
-        int room = probe.width >= 0 ? probe.width : (L->pos_x + aw) - ax;
+        int room = probe.width >= 0 ? probe.width : fit >= 0 ? fit : (L->pos_x + aw) - ax;
         /* Both sides given and no width: as wide as lies between them, as an
            overlay written inset: 0 is. */
         if (probe.width < 0 && probe.left != CSS_AUTO_OFF && probe.right_off != CSS_AUTO_OFF)
             room -= probe.right_off;
-        if (room < 16) room = 16;
+        if (room < 16 && fit < 0) room = 16;
 
-        int sub = ay;
+        int sub = ay, held_reach = L->measure_right;
+        if (fit >= 0) L->flex_sized = node;     /* that width is its own */
         lay_block_placed(L, node, parent, ax, room, &sub);
+        if (L->flex_sized == node) L->flex_sized = -1;
         *y = keep;                             /* it took no space */
+        /* Out of the flow, it is no part of how wide what holds it is: a
+           measurement leaves it out, as a browser's does. Counted, a button
+           put at the right of dev.to's search field made the field as wide
+           as its row, and the row squeezed everything beside it. */
+        if (L->measuring) {
+            for (int i = moved_from; i < L->out->nitems; i++) {
+                L->out->items[i].x = 0;
+                L->out->items[i].w = 0;
+            }
+            L->measure_right = held_reach;
+        }
         if (!L->measuring) lay_translate(L, node, &probe, moved_from);
         if (by_bottom) {
             int b = L->nbots++;
@@ -5309,6 +5400,7 @@ static inline void lay_run(ldoc *out, const ddoc *d, const csheet *s,
     L.force_node = L.relaying = -1;
     L.measuring = 0; L.measure_right = 0;
     L.flex_sized = -1;
+    L.abs_sizing = -1;
     L.measure_root = -1;
     L.ngroups = 0;
     L.cont_left = 0; L.cont_width = width;

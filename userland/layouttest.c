@@ -2195,6 +2195,61 @@ int main(void) {
            lo && lo->y == 50 && hi && hi->y == 0 && md && md->y == 25 && mi && mi->y >= 98 && mi->y <= 104);
     }
     {
+        /* Grid items across their cells: every one was stretched across, so
+           bbc.com's 32 pixel play icon in a grid was as wide as the grid. One
+           with a width keeps it, at the start, the middle (justify-items) or
+           the end (justify-self); place-items centres both ways in a grid
+           whose one row is as tall as the grid; align-self puts one at the
+           bottom of its row. */
+        lay("<style>body{margin:0}p{margin:0;line-height:20px}.g{display:grid;width:300px}"
+            ".i{width:32px;height:20px;background:#a00}.c{justify-items:center}.e{justify-self:end}"
+            ".pc{place-items:center;height:60px}.r{display:grid;grid-template-columns:1fr 1fr;width:300px}"
+            ".t{height:50px;background:#00a}.b{align-self:end}</style>"
+            "<div class=g><div class=i id=ja></div></div><div class=\"g c\"><div class=i id=jb></div></div>"
+            "<div class=g><div class=\"i e\" id=jc></div></div><div class=\"g pc\"><p>centred</p></div>"
+            "<div class=r><div class=t></div><p class=b>low</p></div>", 800);
+        const litem *ja = box_of(by_id("ja")), *jb = box_of(by_id("jb")), *jc = box_of(by_id("jc")),
+                    *ce = word("centred"), *lw = word("low");
+        ok("a grid item with a width keeps it, at its cell's start, middle or end",
+           ja && ja->x == 0 && ja->w == 32 && jb && jb->x == 134 && jb->w == 32 && jc && jc->x == 268 && jc->w == 32);
+        ok("and place-items: center centres a grid's one item both ways, align-self: end puts one at its row's foot",
+           ce && ce->x == (300 - ce->w) / 2 && ce->y == 80 && lw && lw->y == 150);
+        /* A percentage is of the cell, once: given its own width as the
+           room, usa.gov's calc(100% - 50px) was taken off twice. */
+        lay("<style>body{margin:0}.g{display:grid;width:300px}.p{width:calc(100% - 50px);justify-self:end;height:10px;"
+            "background:#a00}.q{width:calc(100% - 50px);margin:auto;height:10px;background:#0a0}</style>"
+            "<div class=g><div class=p id=pe></div><div class=q id=pq></div></div>", 800);
+        const litem *pe = box_of(by_id("pe")), *pq = box_of(by_id("pq"));
+        ok("and a grid item's percentage width is of its cell, at the end or centred by its margins",
+           pe && pe->w == 250 && pe->x == 50 && pq && pq->w == 250 && pq->x == 25);
+    }
+    {
+        /* An absolutely positioned box with no width is as wide as what is
+           in it: a label at a picture's corner was a bar across the picture,
+           one put at the right by right: 0 started at the left, and one
+           centred by left: 50% and translate(-50%) was half off the box. */
+        lay("<style>body{margin:0}p{margin:0;line-height:20px}.w{position:relative;width:400px;height:100px}"
+            ".tag{position:absolute;left:0;bottom:0;background:#000;color:#fff;padding:4px}"
+            ".cor{position:absolute;right:0;top:0;background:#0a0}"
+            ".mid{position:absolute;left:50%;top:40px;transform:translateX(-50%);background:#aa0}</style>"
+            "<div class=w><p class=tag id=tg>tag</p><p class=cor id=cr>corner</p><p class=mid id=md2>middle</p></div>", 800);
+        const litem *tg = box_of(by_id("tg")), *tw = word("tag"), *cr = box_of(by_id("cr")),
+                    *m2 = box_of(by_id("md2"));
+        ok("an absolutely positioned box with no width is as wide as its words, at the corner or the side it is put",
+           tg && tw && tg->w == tw->w + 8 && tg->x == 0 && tg->y == 100 - tg->h
+           && cr && cr->x + cr->w == 400 && cr->w < 100 && m2 && m2->x + m2->w / 2 >= 199 && m2->x + m2->w / 2 <= 201);
+        /* And it is no part of how wide what holds it is: a box sized by its
+           contents with a button put at its right was as wide as its row
+           (dev.to's search field), squeezing what was beside it. */
+        lay("<style>body{margin:0}.row{display:flex;width:600px}.f{position:relative;background:#eee}"
+            ".b{position:absolute;right:0;top:0;width:40px;height:10px;background:#000}.n{width:200px;height:10px;"
+            "background:#a00}</style><div class=row><div class=f id=ff>field<span class=b></span></div>"
+            "<div class=n id=nn></div></div>", 800);
+        const litem *ff = box_of(by_id("ff")), *nn = box_of(by_id("nn")), *fw = word("field");
+        ok("and a positioned box adds nothing to how wide its holder measures", ff && fw && ff->w < fw->w + 4
+           && nn && nn->w == 200);
+    }
+    {
         /* A box whose height a padding gives it, and what fills it placed
            absolutely with height: 100% or inset: 0, as Forbes draws its cover
            and most sites their thumbnails: the filling had no height, and
