@@ -703,7 +703,31 @@ static inline float sv_attr_num(const ddoc *d, int el, const char *name,
 }
 
 /* transform="translate(4 8) scale(2) rotate(30)", applied left to right. */
+/* An <svg> inside the drawing is a viewport of its own: placed at its x and
+   y, its viewBox fitted into its width and height as the outer one's is.
+   Wikipedia's sprite is a sheet of icons, each a nested svg at its own y
+   with its own viewBox; drawn in the sheet's coordinates, the first, a
+   logo whose viewBox is 612 wide, covered the whole sheet. */
+static inline svmat sv_viewport(const ddoc *d, int el, svmat parent) {
+    svmat at = sv_identity();
+    at.e = sv_attr_num(d, el, "x", 0);
+    at.f = sv_attr_num(d, el, "y", 0);
+    svmat m = sv_mul(parent, at);
+    const char *vb = dom_attr_fold(d, el, "viewBox");
+    if (!vb || !*vb) return m;
+    float bx = sv_number(&vb), by = sv_number(&vb), bw = sv_number(&vb), bh = sv_number(&vb);
+    float vw = sv_attr_num(d, el, "width", bw), vh = sv_attr_num(d, el, "height", bh);
+    if (bw <= 0 || bh <= 0 || vw <= 0 || vh <= 0) return m;
+    float k = vw / bw < vh / bh ? vw / bw : vh / bh;
+    svmat fit = sv_identity();
+    fit.a = k; fit.d = k;
+    fit.e = -bx * k + (vw - bw * k) / 2;
+    fit.f = -by * k + (vh - bh * k) / 2;
+    return sv_mul(m, fit);
+}
+
 static inline svmat sv_transform(const ddoc *d, int el, svmat parent) {
+    if (w_same_fold(dom_tag_name(d, el), "svg")) parent = sv_viewport(d, el, parent);
     const char *v = dom_attr(d, el, "transform");
     if (!v || !*v) return parent;
 

@@ -447,6 +447,16 @@ int main(void) {
         ok("and with nothing from a sheet the root's attribute is the paint again",
            rc == SVG_OK && iswhite(at(10, 10)));
     }
+    /* An svg inside the drawing is a viewport of its own, at its x and y,
+       its viewBox fitted into its width and height: a sheet of icons is
+       written so, and the first icon covered the whole sheet. */
+    {
+        int rc = draw("<svg width='40' height='80' viewBox='0 0 40 80'>"
+                      "<svg y='40' width='40' height='40' viewBox='0 0 400 400'>"
+                      "<rect width='200' height='400' fill='red'/></svg></svg>", 40, 80);
+        ok("a nested svg draws its viewBox into its own place",
+           rc == SVG_OK && isred(at(10, 60)) && iswhite(at(30, 60)) && iswhite(at(10, 20)));
+    }
 
     puts(failed ? "SVGTEST_FAIL\n" : "SVGTEST_PASS\n");
     return failed;
