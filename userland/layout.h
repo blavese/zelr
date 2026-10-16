@@ -4953,6 +4953,16 @@ static void lay_block(lctx *L, int node, const cstyle *parent, int x,
         if (fit >= 0) L->flex_sized = node;     /* that width is its own */
         lay_block_placed(L, node, parent, ax, room, &sub);
         if (L->flex_sized == node) L->flex_sized = -1;
+        /* A fixed box with only a bottom stands that far above the foot of
+           the window, as the page first shows: Wikipedia's appeal, cookie
+           notices and an app's bar wait at the bottom of the first screen,
+           and were drawn where the flow left them, often at the end of the
+           page. (Fixed boxes still scroll with the page here.) */
+        if (fixed && probe.top == CSS_AUTO_OFF && probe.bottom != CSS_AUTO_OFF && css_view_h > 0 && !L->measuring) {
+            int dy = css_view_h - probe.bottom - (sub - ay) - ay;
+            if (dy)
+                for (int i = moved_from; i < L->out->nitems; i++) L->out->items[i].y += dy;
+        }
         *y = keep;                             /* it took no space */
         /* Out of the flow, it is no part of how wide what holds it is: a
            measurement leaves it out, as a browser's does. Counted, a button

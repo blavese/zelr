@@ -2688,6 +2688,17 @@ int main(void) {
            b1 && b2 && b2->y == b1->y + 10 && b1->w == 40 && x1 && x2 && x2->y == x1->y && x2->x >= x1->x + 100);
     }
     {
+        /* A fixed box with only a bottom stands that far above the foot of
+           the window as the page first shows, not where the flow left it. */
+        int keep_fh = css_view_h;
+        css_view_h = 500;
+        lay("<style>body{margin:0}.fb{position:fixed;bottom:10px;left:0;width:100px;height:40px;background:#111111}"
+            "p{margin:0;height:900px}</style><p>long</p><div class=fb id=fbt></div>", 800);
+        css_view_h = keep_fh;
+        const litem *fbt = box_of(by_id("fbt"));
+        ok("a fixed box with only a bottom stands above the window's foot", fbt && fbt->y == 450);
+    }
+    {
         /* An inline-block with a width of its own keeps it inside an
            inline-block being measured: Wikipedia's wordmark, 176 wide with
            its word put off the side, came out the narrowest a box can be. */
