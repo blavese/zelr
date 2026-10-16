@@ -1024,15 +1024,51 @@ static inline int lay_var_push(int head, const char *txt) {
     return k;
 }
 
-static inline const char *lay_var_find(int head, const char *name, int n) {
+/* A custom property whose value is a keyword: 1 for inherit or unset (the
+   parent's value, custom properties being inherited), 2 for initial (none),
+   else 0. */
+static inline int lay_var_keyword(const char *v) {
+    while (*v == ' ') v++;
+    int k = w_starts_fold(v, "inherit") ? 7 : w_starts_fold(v, "unset") ? 5 : w_starts_fold(v, "initial") ? 7 : 0;
+    if (!k) return 0;
+    const char *e = v + k;
+    while (*e == ' ') e++;
+    if (*e) return 0;
+    return (v[2] | 32) == 'i' ? 2 : 1;                 /* inItial; inHerit, unSet */
+}
+
+/* The entry naming a property, nearest first, or -1; one whose value is a
+   keyword is none (lay_var_push_own put the parent's in its place when there
+   was one). */
+static inline int lay_var_entry(int head, const char *name, int n) {
     for (int k = head; k >= 0; k = lay_var_next[k]) {
         if (lay_var_nlen[k] != n) continue;
         const char *t = lay_var_text[k];
         int i = 0;
         while (i < n && t[i] == name[i]) i++;
-        if (i == n) return t + n + 1;
+        if (i == n) return lay_var_keyword(t + n + 1) ? -1 : k;
     }
-    return 0;
+    return -1;
+}
+
+static inline const char *lay_var_find(int head, const char *name, int n) {
+    int k = lay_var_entry(head, name, n);
+    return k >= 0 ? lay_var_text[k] + n + 1 : 0;
+}
+
+/* An element's own custom property onto its chain. Set to inherit (or
+   unset), it is its parent's: Bandcamp sizes its sparkles by a property
+   each sets to inherit inside the cluster that gives it 96px, and read as
+   the word "inherit" the width was nothing and each sparkle filled its
+   column. `inherited` is the chain the element was given. */
+static inline int lay_var_push_own(int h, int inherited, const char *txt) {
+    int n = 0;
+    while (txt[n] && txt[n] != ':') n++;
+    if (txt[n] == ':' && lay_var_keyword(txt + n + 1) == 1) {
+        int k = lay_var_entry(inherited, txt, n);
+        if (k >= 0) return lay_var_push(h, lay_var_text[k]);
+    }
+    return lay_var_push(h, txt);
 }
 
 /* v with every var() replaced, into out; how long it came to. */
@@ -1453,13 +1489,13 @@ static inline void lay_style(lctx *L, int el, const cstyle *parent,
                 const crule *r = &L->s->rules[rules[i]];
                 for (int k = 0; k < r->decl_n; k++) {
                     const cdecl *dc = &L->s->decls[r->decl_at + k];
-                    if (CSS_PROP(dc->prop) == P_CUSTOM) h = lay_var_push(h, L->s->text + dc->value);
+                    if (CSS_PROP(dc->prop) == P_CUSTOM) h = lay_var_push_own(h, head, L->s->text + dc->value);
                 }
             }
         if (L->inl && el >= 0 && L->inl[el].n > 0)
             for (int k = 0; k < L->inl[el].n; k++) {
                 const cdecl *dc = &L->s->decls[L->inl[el].at + k];
-                if (CSS_PROP(dc->prop) == P_CUSTOM) h = lay_var_push(h, L->s->text + dc->value);
+                if (CSS_PROP(dc->prop) == P_CUSTOM) h = lay_var_push_own(h, head, L->s->text + dc->value);
             }
         if (el >= 0 && el < DOM_NODES) {
             lay_var_gen[el] = lay_gen;

@@ -1723,6 +1723,18 @@ int main(void) {
         okn("and at its max-width", fc && fc->w == 30 && fc->x + fc->w == 300, fc ? fc->x + fc->w : -1);
     }
 
+    /* --- custom properties set to a keyword ------------------------------------ */
+    {
+        lay("<style>body{margin:0}.p{--s:40px}.c{--s:inherit;width:var(--s,200px);height:10px;background:#ccc}"
+            ".d{--s:5px}.d.e{--s:inherit;width:var(--s);height:10px;background:#ccc}"
+            ".f{--s:initial;width:var(--s,70px);height:10px;background:#ccc}</style>"
+            "<div class=p><div class=c id=vc></div><div class='d e' id=vd></div><div class=f id=vf></div></div>", 800);
+        const litem *vc = box_of(by_id("vc")), *vd = box_of(by_id("vd")), *vf = box_of(by_id("vf"));
+        okn("a custom property set to inherit is its parent's, not its own earlier value",
+            vc && vd && vc->w == 40 && vd->w == 40, vd ? vd->w : -1);
+        okn("and one set to initial is none, so var() takes its fallback", vf && vf->w == 70, vf ? vf->w : -1);
+    }
+
     /* --- nesting -------------------------------------------------------------- */
     {
         /* firefox.com: a rule nested in its first rule of a layer ended the
