@@ -4707,7 +4707,13 @@ static void lay_block(lctx *L, int node, const cstyle *parent, int x,
         }
         int zc = lay_z_enter(L, node, &probe);
         int keep = *y;
-        int aw = L->pos_w > 16 ? L->pos_w : avail;
+        /* A fixed box's box is the window, not the positioned box round it:
+           W3Schools' subject bar, fixed at top: 56px, was drawn 113 pixels
+           down, where the box round it was. */
+        int fixed = probe.position == POS_FIXED;
+        int cbx = fixed ? 0 : L->pos_x, cby = fixed ? 0 : L->pos_y;
+        int cbw = fixed && css_view_w > 0 ? css_view_w : L->pos_w;
+        int aw = cbw > 16 ? cbw : avail;
         /* With no width and not both sides given, as wide as what is in it,
            up to the room between where it starts and its box's far side, as
            a browser shrinks one to fit. It was as wide as the room: a label
@@ -4716,7 +4722,7 @@ static void lay_block(lctx *L, int node, const cstyle *parent, int x,
            right: 0 started at its box's left. */
         int lft = probe.left != CSS_AUTO_OFF, rgt = probe.right_off != CSS_AUTO_OFF, fit = -1;
         if (probe.width < 0 && !(lft && rgt) && !L->measuring) {
-            int room0 = lft ? aw - probe.left : rgt ? aw - probe.right_off : (L->pos_x + aw) - x;
+            int room0 = lft ? aw - probe.left : rgt ? aw - probe.right_off : (cbx + aw) - x;
             if (room0 > 0) {
                 int held = L->abs_sizing, h = 0;
                 L->abs_sizing = node;
@@ -4738,9 +4744,9 @@ static void lay_block(lctx *L, int node, const cstyle *parent, int x,
         }
 
         int ax = *y >= 0 ? x : x;              /* where the flow left it */
-        if (probe.left != CSS_AUTO_OFF) ax = L->pos_x + probe.left;
+        if (probe.left != CSS_AUTO_OFF) ax = cbx + probe.left;
         else if (probe.right_off != CSS_AUTO_OFF)
-            ax = L->pos_x + aw - probe.right_off - bw;
+            ax = cbx + aw - probe.right_off - bw;
 
         /* A top is an offset from the containing block's top, which is
            known. A bottom is an offset from its bottom, which is not until
@@ -4751,13 +4757,13 @@ static void lay_block(lctx *L, int node, const cstyle *parent, int x,
            it, as it did: computing it from the top instead put a footer
            pinned to the bottom of the page above the top of it. */
         int ay = *y;
-        if (probe.top != CSS_AUTO_OFF) ay = L->pos_y + probe.top;
-        int by_bottom = probe.top == CSS_AUTO_OFF && probe.bottom != CSS_AUTO_OFF && L->pos_id
+        if (probe.top != CSS_AUTO_OFF) ay = cby + probe.top;
+        int by_bottom = probe.top == CSS_AUTO_OFF && probe.bottom != CSS_AUTO_OFF && L->pos_id && !fixed
                         && !L->measuring && L->nbots < LAY_BOTTOMS;
 
         /* A percentage is worked out again from the room it is given, so it
            is given its box's width; anything else the width it was placed by. */
-        int room = probe.width < 0 ? (fit >= 0 ? fit : (L->pos_x + aw) - ax) : probe.width_pct ? aw : bw;
+        int room = probe.width < 0 ? (fit >= 0 ? fit : (cbx + aw) - ax) : probe.width_pct ? aw : bw;
         /* Both sides given and no width: as wide as lies between them, as an
            overlay written inset: 0 is. */
         if (probe.width < 0 && probe.left != CSS_AUTO_OFF && probe.right_off != CSS_AUTO_OFF)
@@ -4793,7 +4799,7 @@ static void lay_block(lctx *L, int node, const cstyle *parent, int x,
            when that is known: the picture filling a box whose height a
            padding gives it (padding-bottom: 56.25%, the picture inset: 0) had
            no height at all, and every such thumbnail drew nothing. */
-        if (L->pos_id && !L->measuring && node != L->relaying && L->nrl < LAY_RELAYS && probe.height < 0
+        if (L->pos_id && !fixed && !L->measuring && node != L->relaying && L->nrl < LAY_RELAYS && probe.height < 0
             && (probe.height_pct || (probe.top != CSS_AUTO_OFF && probe.bottom != CSS_AUTO_OFF))) {
             int r = L->nrl++;
             L->rl_node[r] = node;

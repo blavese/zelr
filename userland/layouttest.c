@@ -2524,6 +2524,18 @@ int main(void) {
            fq && fq->w == 101 && fg && fg->w == 35 && fg->y == fq->y);
     }
     {
+        /* A fixed box's box is the window: W3Schools' subject bar, fixed at
+           top: 56px, was drawn where the box round it was. An absolute one
+           still takes the positioned box round it. */
+        lay("<style>body{margin:0}.sp{height:100px}.w{position:relative;margin-left:50px;width:300px;height:200px}"
+            ".f{position:fixed;top:0;left:0;width:100%;height:20px;background:#111111}"
+            ".a{position:absolute;top:0;left:0;width:40px;height:20px;background:#222222}</style>"
+            "<div class=sp></div><div class=w><div class=f id=xf></div><div class=a id=xa></div></div>", 800);
+        const litem *xf = box_of(by_id("xf")), *xa = box_of(by_id("xa"));
+        ok("a fixed box is placed against the window, an absolute one against its positioned box",
+           xf && xf->x == 0 && xf->y == 0 && xf->w == 800 && xa && xa->x == 50 && xa->y == 100);
+    }
+    {
         /* A box placed by its right side is as wide as its limits and frame
            make it: go.dev's drawer (85% up to 27rem, right: 0) was placed by
            the 85%, sat a third of the window short of the edge, and showed
