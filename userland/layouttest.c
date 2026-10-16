@@ -2672,6 +2672,20 @@ int main(void) {
            d1 && d2 && d2->y == d1->y && d2->x == d1->x + 50 && al && be && be->y == al->y);
     }
     {
+        /* The page's <html> is the document's root, its attributes the
+           root's: made an element inside the root, html.v matched an element
+           the layout never styles, and Apple's menu bar, placed below a
+           height html.ac-ls-visible sets, sat over its banner. */
+        lay("<!doctype html><html class=v lang=en><head><style>body{margin:0}html.v{--h:70px}"
+            "#hv{margin-top:var(--h);height:10px;background:#111111}</style></head><body><div id=hv></div></body></html>", 800);
+        const litem *hv = box_of(by_id("hv"));
+        int htmls = 0;
+        for (int i = 0; i < doc.count; i++) if (doc.nodes[i].kind == DN_ELEMENT && doc.nodes[i].tag == T_HTML) htmls++;
+        const char *cl = dom_attr(&doc, doc.root, "class");
+        ok("the page's html element is the document's root, with its attributes",
+           htmls == 1 && cl && w_same(cl, "v") && hv && hv->y == 70);
+    }
+    {
         /* An inline box with position: relative is drawn moved by its
            offsets, background and all, and nothing round it moves:
            Python.org's donate button, top: 33px, sat at the top of its bar. */
