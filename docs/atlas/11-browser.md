@@ -1,6 +1,17 @@
 # 11 -- The web browser (everything except JS-engine internals and image decoders)
 
-**Since 0.135.0** (the rest of this file is older; trust the code and the README's "since 6048716" list):
+**Since 0.136.0** (the rest of this file is older; trust the code and the README's "since 6048716" list):
+- **Escapes in a selector's class and id names** (css.h `css_name_read`): a backslash takes the next character, or up to
+  six hex digits and a space as the character they number. Tailwind writes every class with a colon, a bracket or a
+  slash so (`.md\:flex`, `.w-\[37\%\]`); read up to the backslash, no responsive class ever matched. `css_list_end`
+  and `css_scope_selectors` step over an escaped character. Names past ASCII are read but still do not match a page's
+  class attribute (not looked into).
+- **A centred column measures as wide as its widest item**: a column flex item placed at the centre or the end is not
+  offset while measuring (`L->measuring`), as a grid's are not (0.135.0).
+- **A row's item is never narrower than its min-width** (`mn`, frame and margins included, in lay_flex's gathering):
+  both where it starts (`want`) and how far it shrinks (`low`).
+
+**Since 0.135.0**:
 - **row-gap apart from column-gap** (css.h `P_ROW_GAP`/`P_COL_GAP`, `cstyle.row_gap`): `gap` is the rows' then the
   columns', `grid-gap`/`grid-row-gap`/`grid-column-gap` too; flex lines down a column or wrapped and every grid's rows
   use `row_gap`.

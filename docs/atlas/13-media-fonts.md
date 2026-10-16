@@ -4,6 +4,13 @@ Atlas section for zelr (tree at the repository root, main 2026-09-22, two commit
 Static reading only (no build or run was possible). All `file:line` references are 1-based and were checked against the tree.
 Where something is inferred rather than read, it says so.
 
+**Since 0.136.0**: png.h decodes interlaced pictures (Adam7: seven passes, each a smaller picture with rows and filters
+of its own, put together as read) and sixteen bits a sample (read by the high byte), and applies the colour a tRNS
+names for grey and truecolour (`key`, compared at the file's depth); one pixel is `png_pixel` for both orders. Only an
+interlace method past 1 is refused (`PNG_BAD`); `PNG_UNSUPPORTED` is left for kinds the specification forbids. The
+refusals and the tRNS note in the png.h section below are out of date. tools/genpng.py makes an 11 by 9 interlaced
+picture, a 16-bit interlaced one with alpha, and grey and truecolour colour-keyed ones for pngtest (35 checks).
+
 **Since 0.112.0**: svg.h's scanline is `sv_cover`, which works out a row's coverage (0 to 1, four samples a pixel each
 way) and hands it to a painter (`sv_row_fn`); `sv_fill_pts` is `sv_cover` with `sv_flat_row`, an opaque colour, as
 before, and a page's canvas (jscanvas.h) paints colours, gradients and pictures with their alpha through the same rows.

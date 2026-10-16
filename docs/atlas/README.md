@@ -95,6 +95,12 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.136.0
+
+- **class names with escapes (11)**, **a centred column measured as wide as what is in it and a row's items no narrower
+  than their min-width (11)**, **interlaced and sixteen-bit PNGs and the colour tRNS names (13)**. layouttest 350, pagetest
+  371, pngtest 35, each failing on a build without its change.
+
 ### 0.135.0
 
 - **row-gap apart from column-gap (11)**, **pictures that follow the elements a script puts in the page (11)**, **a box
