@@ -2152,6 +2152,28 @@ int main(void) {
            fw && ln && fw->y < 60 && ln->y > fw->y && ln->y - fw->y < 80);
     }
     {
+        /* A box whose height a padding gives it, and what fills it placed
+           absolutely with height: 100% or inset: 0, as Forbes draws its cover
+           and most sites their thumbnails: the filling had no height, and
+           neither the background nor the picture was drawn. */
+        static const char *aspect =
+            "<style>body{margin:0}.r{position:relative;display:block;width:400px}"
+            ".r:before{content:'';display:block;padding-bottom:50%}"
+            ".w{position:absolute;top:0;left:0;width:100%;height:100%;overflow:hidden}"
+            ".i{position:absolute;inset:0;background:#e2e2e2}"
+            ".r img{position:absolute;top:0;left:0;width:100%;height:100%}</style>"
+            "<a class=r><div class=w><div class=i id=ii></div></div></a>"
+            "<div class=r><img id=ip src=x></div><p>after</p>";
+        lay(aspect, 800);
+        picture_at("ip", 640, 480);
+        lay(aspect, 800);
+        nfake = 0;
+        const litem *ii = box_of(by_id("ii")), *ip = image_of(by_id("ip")), *af = word("after");
+        ok("what fills a box by height: 100% or inset: 0 takes the height the box comes to",
+           ii && ii->w == 400 && ii->h == 200 && ii->y == 0
+           && ip && ip->w == 400 && ip->h == 200 && ip->y == 200 && af && af->y >= 400);
+    }
+    {
         /* :is() and :where() holding lists, as Forbes places its columns: the
            rule was dropped. Each choice counts, and :where weighs nothing, so
            a plainer rule before it still wins. */

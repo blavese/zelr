@@ -269,6 +269,10 @@ typedef struct {
        wide its contents want to be cannot resolve: it is auto there, as the
        rules have it (layout.h, lay_drawing). */
     unsigned char width_pct;
+    /* And height: a positioned box's is of its containing box's height,
+       which is known only once that box is laid out (layout.h, lay_block's
+       second look at what is placed against it). */
+    unsigned char height_pct;
 
     /* The custom properties in force, as the head of a chain the layout
        keeps (layout.h, lay_var_*); inherited, as custom properties are.
@@ -2392,6 +2396,7 @@ static inline void css_default_style(cstyle *st, int root_px) {
     st->shrink = 1;
     st->ratio_w = st->ratio_h = 0;
     st->width_pct = 0;
+    st->height_pct = 0;
     st->vars = -1;
     st->gspan = 0;
 }
@@ -3281,6 +3286,7 @@ static inline void css_apply_v(int prop, const char *v, cstyle *st, int root_px,
             }
             if (!slot) break;
             if (prop == P_WIDTH) st->width_pct = (unsigned char)(L.unit == U_PCT);
+            if (prop == P_HEIGHT) st->height_pct = (unsigned char)(L.unit == U_PCT);
 
             /* A percentage height is a percentage of the containing
                block's height, and in one pass down the tree that height is

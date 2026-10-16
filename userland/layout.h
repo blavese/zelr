@@ -337,6 +337,16 @@ typedef struct {
     int bot_first[LAY_BOTTOMS], bot_end[LAY_BOTTOMS], bot_top[LAY_BOTTOMS], bot_h[LAY_BOTTOMS],
         bot_off[LAY_BOTTOMS];
     int nbots;
+    /* And the boxes placed against one whose height is part of theirs -- a
+       percentage height, or a top and a bottom and no height -- laid out
+       again once it is known: the node, where it was laid out from, and its
+       items, which are then put away. force_node is laid out at force_h,
+       the height its top and bottom leave it. relaying is the one being laid
+       out again, which is not noted a second time. */
+#define LAY_RELAYS 64
+    int rl_node[LAY_RELAYS], rl_x[LAY_RELAYS], rl_avail[LAY_RELAYS], rl_y[LAY_RELAYS],
+        rl_first[LAY_RELAYS], rl_end[LAY_RELAYS];
+    int nrl, force_node, force_h, relaying;
 
     /* Inside lay_measure, how deep, and the furthest right that a flex row
        being measured rather than laid out would have reached (see lay_flex). */
@@ -4537,6 +4547,20 @@ static void lay_block(lctx *L, int node, const cstyle *parent, int x,
             L->bot_h[b] = sub - ay;
             L->bot_off[b] = probe.bottom;
         }
+        /* One whose height its box's decides, noted to be laid out again
+           when that is known: the picture filling a box whose height a
+           padding gives it (padding-bottom: 56.25%, the picture inset: 0) had
+           no height at all, and every such thumbnail drew nothing. */
+        if (L->pos_id && !L->measuring && node != L->relaying && L->nrl < LAY_RELAYS && probe.height < 0
+            && (probe.height_pct || (probe.top != CSS_AUTO_OFF && probe.bottom != CSS_AUTO_OFF))) {
+            int r = L->nrl++;
+            L->rl_node[r] = node;
+            L->rl_x[r] = x;
+            L->rl_avail[r] = avail;
+            L->rl_y[r] = keep;
+            L->rl_first[r] = moved_from;
+            L->rl_end[r] = L->out->nitems;
+        }
         return;
     }
 
@@ -4569,6 +4593,11 @@ static void lay_block_placed(lctx *L, int node, const cstyle *parent, int x,
     lay_style(L, node, parent, &st, avail);
     if (st.display == D_NONE) return;
     if (!st.visible && !lay_show_hidden) return;
+    if (L->force_node == node) {          /* the height its top and bottom leave it */
+        st.height = (short)L->force_h;
+        st.border_box = 1;
+        L->force_node = -1;
+    }
 
     if (st.clear) *y = lay_cleared(L, *y, st.clear, x, avail);
     lay_beside_floats(L, &st, &x, &avail, y);
@@ -4782,12 +4811,12 @@ static void lay_block_placed(lctx *L, int node, const cstyle *parent, int x,
        from. Saved and put back, because this is a walk and the box two
        levels up is still the right answer for the box after this one. */
     int held_x = L->pos_x, held_y = L->pos_y, held_w = L->pos_w, held_id = L->pos_id;
-    int bots_at = L->nbots;
+    int bots_at = L->nbots, rl_at = L->nrl, my_id = 0;
     if (st.position != POS_STATIC) {
         L->pos_x = cx;
         L->pos_y = box_top;
         L->pos_w = cw;
-        L->pos_id = ++L->pos_ids;
+        L->pos_id = my_id = ++L->pos_ids;
     }
 
     /* A flex container lays its children along a line rather than down
@@ -4935,6 +4964,44 @@ static void lay_block_placed(lctx *L, int node, const cstyle *parent, int x,
        a positioned box inside it took its own back when it ended. An
        absolutely positioned hero picture with bottom: 0 sat at the top of
        its box, over the words above it. */
+    /* With it settled too, what was placed against this box and takes its
+       height from it is laid out again (lay_block noted it): what it laid
+       out before is put away, and it is laid out at the end of the list,
+       above what is in the flow, as positioned boxes are painted. Only a
+       child of this box: anything deeper had a parent whose style is gone. */
+    if (st.position != POS_STATIC && L->nrl > rl_at) {
+        int n_rl = L->nrl;
+        int hx = L->pos_x, hy = L->pos_y, hw = L->pos_w, hid = L->pos_id, hrel = L->relaying;
+        L->pos_x = cx;
+        L->pos_y = box_top;
+        L->pos_w = cw;
+        L->pos_id = my_id;
+        cstyle tall;
+        lay_cs(&tall, &st);
+        tall.height = (short)(box_h - st.bt - st.bb);  /* what a percentage of it is of */
+        tall.border_box = 0;
+        for (int r = rl_at; r < n_rl; r++) {
+            int child = L->rl_node[r];
+            if (child < 0 || child >= d->count || d->nodes[child].parent != node) continue;
+            for (int i = L->rl_first[r]; i < L->rl_end[r] && i < L->out->nitems; i++) L->out->items[i].kind = 0;
+            cstyle cs;
+            lay_style(L, child, &tall, &cs, L->rl_avail[r]);
+            if (cs.height < 0 && cs.top != CSS_AUTO_OFF && cs.bottom != CSS_AUTO_OFF) {
+                int h = tall.height - cs.top - cs.bottom
+                      - (cs.mt == CSS_AUTO_OFF ? 0 : cs.mt) - (cs.mb == CSS_AUTO_OFF ? 0 : cs.mb);
+                L->force_node = child;
+                L->force_h = h > 0 ? h : 0;
+            }
+            int yy = L->rl_y[r];
+            L->relaying = child;
+            lay_block(L, child, &tall, L->rl_x[r], L->rl_avail[r], &yy);
+            L->relaying = hrel;
+            L->force_node = -1;
+        }
+        L->nrl = rl_at;
+        L->pos_x = hx; L->pos_y = hy; L->pos_w = hw; L->pos_id = hid;
+    }
+
     if (st.position != POS_STATIC && L->nbots > bots_at) {
         int floor_y = box_top + box_h - st.bb;
         for (int b = bots_at; b < L->nbots; b++) {
@@ -5207,6 +5274,8 @@ static inline void lay_run(ldoc *out, const ddoc *d, const csheet *s,
        measured from the page. */
     L.pos_x = 0; L.pos_y = 0; L.pos_w = width;
     L.pos_id = L.pos_ids = L.nbots = 0;
+    L.nrl = 0;
+    L.force_node = L.relaying = -1;
     L.measuring = 0; L.measure_right = 0;
     L.flex_sized = -1;
     L.measure_root = -1;
