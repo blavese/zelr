@@ -2152,6 +2152,24 @@ int main(void) {
            fw && ln && fw->y < 60 && ln->y > fw->y && ln->y - fw->y < 80);
     }
     {
+        /* The space between columns and the space between rows apart, as
+           bbc.com's grid has them (column-gap 16, row-gap 24): they were one,
+           so the row gap widened the columns' and they ran past the grid. */
+        lay("<style>body{margin:0}p{margin:0;line-height:20px}"
+            ".g{display:grid;grid-template-columns:repeat(4,1fr);column-gap:16px;row-gap:40px;width:448px}"
+            ".h{display:grid;grid-template-columns:repeat(2,100px);gap:30px 10px}"
+            ".f{display:flex;flex-wrap:wrap;width:250px;column-gap:10px;row-gap:50px}.f>p{width:100px}</style>"
+            "<div class=g><p>g1</p><p>g2</p><p>g3</p><p>g4</p><p>g5</p></div>"
+            "<div class=h><p>h1</p><p>h2</p><p>h3</p></div>"
+            "<div class=f><p>f1</p><p>f2</p><p>f3</p></div>", 800);
+        const litem *g1 = word("g1"), *g2 = word("g2"), *g5 = word("g5"), *h1 = word("h1"), *h2 = word("h2"),
+                    *h3 = word("h3"), *f1 = word("f1"), *f2 = word("f2"), *f3 = word("f3");
+        ok("column-gap, row-gap and gap's two values each go where they say",
+           g1 && g2 && g5 && g2->x == 116 && g5->y - g1->y == 60
+           && h1 && h2 && h3 && h2->x == 110 && h3->y - h1->y == 50
+           && f1 && f2 && f3 && f2->x == 110 && f3->y - f1->y == 70);
+    }
+    {
         /* A box whose height a padding gives it, and what fills it placed
            absolutely with height: 100% or inset: 0, as Forbes draws its cover
            and most sites their thumbnails: the filling had no height, and

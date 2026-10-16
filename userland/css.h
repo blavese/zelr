@@ -72,6 +72,7 @@ enum {
     P_CUSTOM,        /* --name: value, kept as the text "--name:value" */
     P_DEFER,         /* a shorthand whose value has var() in it: "name:value" */
     P_CONTENT_VIS,   /* content-visibility */
+    P_ROW_GAP, P_COL_GAP,
     P_COUNT
 };
 
@@ -175,7 +176,7 @@ typedef struct {
     /* Set on a flex container, and read by its children's layout rather
        than by their own style. */
     unsigned char flex_dir, justify, align_items, flex_wrap;
-    short gap;
+    short gap, row_gap;                  /* between columns, and between rows */
     short grow;                          /* this element's own flex-grow */
 
     /* A table's: the room between its cells (-1 when nothing said, which is
@@ -626,8 +627,11 @@ static const cprop CSS_PROPS[] = {
     { "align-items", P_ALIGN_ITEMS },
     { "flex-wrap", P_FLEX_WRAP },
     { "gap", P_GAP },
-    { "column-gap", P_GAP },
-    { "row-gap", P_GAP },
+    { "grid-gap", P_GAP },
+    { "column-gap", P_COL_GAP },
+    { "grid-column-gap", P_COL_GAP },
+    { "row-gap", P_ROW_GAP },
+    { "grid-row-gap", P_ROW_GAP },
     { "flex-grow", P_FLEX_GROW },
     { "flex-basis", P_FLEX_BASIS },
     { "flex-shrink", P_FLEX_SHRINK },
@@ -2350,7 +2354,7 @@ static inline void css_default_style(cstyle *st, int root_px) {
     st->justify = JC_START;
     st->align_items = AI_STRETCH;
     st->flex_wrap = 0;
-    st->gap = 0;
+    st->gap = st->row_gap = 0;
     st->grow = 0;
     st->align = A_LEFT;
     st->white = WS_NORMAL;
@@ -2863,10 +2867,28 @@ static inline void css_apply_v(int prop, const char *v, cstyle *st, int root_px,
             st->flex_wrap = w_starts_fold(v, "wrap") ? 1 : 0;
             break;
 
-        case P_GAP: {
-            clen L = css_len_at(v, st->font_px, root_px, pct_of);
-            st->gap = (short)css_px(L, st->font_px, root_px, pct_of);
-            if (st->gap < 0) st->gap = 0;
+        /* The space between columns and the space between rows are two
+           things: gap is the rows' then the columns', or one for both. They
+           were one, so a grid's row-gap: 24px widened its column gaps too,
+           and bbc.com's twenty-four columns ran out past the grid's edge
+           over the next column of stories. */
+        case P_GAP: case P_ROW_GAP: case P_COL_GAP: {
+            int st2[2], ln2[2];
+            int np = css_parts(v, w_len(v), st2, ln2, 2);
+            if (np <= 0) break;
+            char one[64];
+            int g[2];
+            for (int k = 0; k < np; k++) {
+                int n = ln2[k] < 63 ? ln2[k] : 63;
+                for (int q = 0; q < n; q++) one[q] = v[st2[k] + q];
+                one[n] = 0;
+                clen L = css_len_at(one, st->font_px, root_px, pct_of);
+                g[k] = css_px(L, st->font_px, root_px, pct_of);
+                if (g[k] < 0) g[k] = 0;
+            }
+            if (prop == P_ROW_GAP) st->row_gap = (short)g[0];
+            else if (prop == P_COL_GAP) st->gap = (short)g[0];
+            else { st->row_gap = (short)g[0]; st->gap = (short)g[np - 1]; }
             break;
         }
 

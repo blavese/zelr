@@ -2911,6 +2911,7 @@ static void lay_flex(lctx *L, int node, const cstyle *st, int cx, int cw,
     int reverse = st->flex_dir == FD_ROW_REVERSE
                || st->flex_dir == FD_COLUMN_REVERSE;
     int gap = st->gap > 0 ? st->gap : 0;
+    int rgap = st->row_gap > 0 ? st->row_gap : 0;
 
     /* --- down the page is nearly what already happens ---------------------
      *
@@ -2923,7 +2924,7 @@ static void lay_flex(lctx *L, int node, const cstyle *st, int cx, int cw,
             int ki = reverse ? n - 1 - i : i;
             cstyle pbuf;
             const cstyle *ps = lay_item_parent(L, st, par[ki], cw, &pbuf);
-            if (i) *y += gap;
+            if (i) *y += rgap;
             /* Down the page an item is as wide as the column, unless it is
                lined up otherwise -- start, centre or end, by align-items or
                its own align-self -- or has an auto margin: then it is as
@@ -3043,7 +3044,7 @@ static void lay_flex(lctx *L, int node, const cstyle *st, int cx, int cw,
                     used += add;
                     i1++;
                 }
-                if (i0) *y += gap;
+                if (i0) *y += rgap;
                 lay_flex_line(L, st, kid + i0, par + i0, i1 - i0, meas + i0, want + i0, low + i0,
                               high + i0, grow + i0, aself + i0, amarg + i0, cx, cw, gap, reverse, y);
                 i0 = i1;
@@ -3980,6 +3981,7 @@ static void lay_grid_named(lctx *L, int node, const cstyle *st, int cx, int cw, 
     int rows, cols;
     int na = lay_grid_areas(st->grid_areas, a, &rows, &cols);
     int gap = st->gap > 0 ? st->gap : 0;
+    int rgap = st->row_gap > 0 ? st->row_gap : 0;
     int width[LAY_GRID_COLS];
     int n = lay_grid_columns(L, st, cw, gap, width);
     /* Fewer columns given than the areas draw: the rest share what is left. */
@@ -4020,10 +4022,10 @@ static void lay_grid_named(lctx *L, int node, const cstyle *st, int cx, int cw, 
             L->flex_sized = -1;
             if (cy > endbot[a[f].r1]) endbot[a[f].r1] = cy;
         }
-        rowtop[r + 1] = endbot[r] > rowtop[r] ? endbot[r] + gap : rowtop[r];
+        rowtop[r + 1] = endbot[r] > rowtop[r] ? endbot[r] + rgap : rowtop[r];
     }
     int yy = rowtop[rows];
-    if (yy > *y) yy -= gap;
+    if (yy > *y) yy -= rgap;
 
     /* What names no area, on rows of its own below. */
     for (int k = d->nodes[node].first; k >= 0; k = d->nodes[k].next) {
@@ -4041,7 +4043,7 @@ static void lay_grid_named(lctx *L, int node, const cstyle *st, int cx, int cw, 
             for (int i = 0; i < na; i++) if (w_same(a[i].name, name)) f = i;
         }
         if (f >= 0) continue;
-        if (yy > *y) yy += gap;
+        if (yy > *y) yy += rgap;
         lay_block(L, k, st, cx, cw, &yy);
     }
     *y = yy;
@@ -4140,11 +4142,12 @@ enum { GR_NODE, GR_PAR, GR_C0, GR_CS, GR_R0, GR_RS, GR_H, GR_ROW, GR_N };
 
 static int lay_grid_placed(lctx *L, int node, const cstyle *st, int cw, int ncols,
                            const int *colx, int gap, const lgline *names, int nn, int *y) {
+    int rgap = st->row_gap > 0 ? st->row_gap : 0;
     litems it;
     int k, from, positioned, n = 0;
     int *rec = lay_gpool + lay_gpool_top;
     int room = (LAY_GPOOL - lay_gpool_top) / GR_N;
-    int erows = lay_grid_explicit_rows(L, st, gap);
+    int erows = lay_grid_explicit_rows(L, st, rgap);
     lay_items_start(L, &it, node, st);
     while ((k = lay_items_next(L, &it, cw, &from, &positioned)) >= 0) {
         if (positioned) continue;
@@ -4229,20 +4232,20 @@ static int lay_grid_placed(lctx *L, int node, const cstyle *st, int cw, int ncol
         if (r[GR_RS] <= 1) continue;
         int last = r[GR_R0] + r[GR_RS] - 1;
         if (last >= nrows) last = nrows - 1;
-        int total = gap * (last - r[GR_R0]);
+        int total = rgap * (last - r[GR_R0]);
         for (int j = r[GR_R0]; j <= last; j++) total += rowh[j];
         if (r[GR_H] > total) rowh[last] += r[GR_H] - total;
     }
-    nrows = lay_grid_rows(L, st, gap, rowh, nrows);
+    nrows = lay_grid_rows(L, st, rgap, rowh, nrows);
     top[0] = *y;
-    for (int i = 0; i < nrows; i++) top[i + 1] = top[i] + rowh[i] + gap;
+    for (int i = 0; i < nrows; i++) top[i + 1] = top[i] + rowh[i] + rgap;
 
     for (int i = 0; i < n; i++) {
         int *r = rec + i * GR_N;
         int x = colx[r[GR_C0]], w = colx[r[GR_C0] + r[GR_CS]] - gap - x;
         int last = r[GR_R0] + r[GR_RS];
         if (last > nrows) last = nrows;
-        int area = top[last] - gap - top[r[GR_R0]];
+        int area = top[last] - rgap - top[r[GR_R0]];
         cstyle pb;
         const cstyle *ps = lay_item_parent(L, st, r[GR_PAR], cw, &pb);
         int first = L->out->nitems, cy = top[r[GR_R0]];
@@ -4257,13 +4260,14 @@ static int lay_grid_placed(lctx *L, int node, const cstyle *st, int cw, int ncol
         lay_stretch(L, r[GR_NODE], ps, cw, st->align_items, first, L->out->nitems, area - got);
     }
     lay_gpool_top -= n * GR_N;
-    if (nrows) *y = top[nrows] - gap;
+    if (nrows) *y = top[nrows] - rgap;
     return 1;
 }
 
 static void lay_grid(lctx *L, int node, const cstyle *st, int cx, int cw, int *y) {
     if (st->grid_areas) { lay_grid_named(L, node, st, cx, cw, y); return; }
     int gap = st->gap > 0 ? st->gap : 0;
+    int rgap = st->row_gap > 0 ? st->row_gap : 0;
     int width[LAY_GRID_COLS];
 
     /* The items (lay_items_next: a display: contents child's own children
@@ -4385,7 +4389,7 @@ static void lay_grid(lctx *L, int node, const cstyle *st, int cx, int cw, int *y
                 lay_stretch(L, row[i].node, lay_item_parent(L, st, row[i].from, cw, &sb), cw, st->align_items,
                             row[i].first, row[i].end, rowh - row[i].h);
             }
-            top += rowh + gap;
+            top += rowh + rgap;
             rowh = 0;
             nrow = 0;
             col = 0;
@@ -4411,7 +4415,7 @@ static void lay_grid(lctx *L, int node, const cstyle *st, int cx, int cw, int *y
         col += span;
         any = 1;
     }
-    *y = any ? top - gap : top;
+    *y = any ? top - rgap : top;
 }
 
 /* The body: a box laid out where it was told, in the flow. */
