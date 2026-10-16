@@ -158,6 +158,7 @@ typedef struct {
     u32 color, background, border_color;
     short font_px;
     short font_up;                       /* the parent's, which an em of a font size is of */
+    unsigned char display_up;            /* the parent's display, for display: inherit */
     unsigned char bold, italic, mono;
     unsigned char underline, strike;
     unsigned char display, align, white, list, visible;
@@ -2790,7 +2791,7 @@ static inline void css_default_style(cstyle *st, int root_px) {
     st->font_px = st->font_up = (short)root_px;
     st->bold = st->italic = st->mono = 0;
     st->underline = st->strike = 0;
-    st->display = D_INLINE;
+    st->display = st->display_up = D_INLINE;
     st->flex_dir = FD_ROW;
     st->justify = JC_START;
     st->align_items = AI_STRETCH;
@@ -2864,6 +2865,7 @@ static inline void css_inherit(cstyle *child, const cstyle *parent) {
     css_default_style(child, parent->font_px);
     child->color = parent->color;
     child->font_px = child->font_up = parent->font_px;
+    child->display_up = parent->display;
     child->bold = parent->bold;
     child->italic = parent->italic;
     child->mono = parent->mono;
@@ -3296,6 +3298,13 @@ static inline void css_apply_v(int prop, const char *v, cstyle *st, int root_px,
         }
         case P_BORDER_COLOR: css_color(v, &st->border_color); break;
         case P_DISPLAY:
+            /* Not inherited, but it can be asked for: Apple's menu is a list
+               of display: contents inside display: inherit inside display:
+               inherit, its items laid out in the bar's row; read as blocks,
+               they stood in a column as wide as the widest. Its first value,
+               for initial and unset, is inline. */
+            if (w_starts_fold(v, "inherit")) { st->display = st->display_up; break; }
+            if (w_starts_fold(v, "initial") || w_starts_fold(v, "unset")) { st->display = D_INLINE; break; }
             st->flow_root = (unsigned char)w_starts_fold(v, "flow-root");
             if (w_starts_fold(v, "none")) st->display = D_NONE;
             else if (w_starts_fold(v, "inline-block")) st->display = D_INLINE_BLOCK;

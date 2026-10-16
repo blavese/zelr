@@ -2659,6 +2659,19 @@ int main(void) {
         ok("a float's bottom margin counts once in what holds it", fc && fc->h == 70);
     }
     {
+        /* display: inherit takes the parent's display, and initial is
+           inline: Apple's menu is display: contents inside display: inherit
+           inside display: inherit, its items in the bar's row, and read as
+           blocks they stood in a column. */
+        lay("<style>body{margin:0}.row{display:flex}.a{display:contents}.b{display:inherit}"
+            ".row span{display:block;width:50px;height:10px;background:#111111}p{margin:0}.x{display:initial}</style>"
+            "<div class=row><div class=a><div class=b><span id=di1></span><span id=di2></span></div></div></div>"
+            "<p class=x>alef</p><p class=x>bet</p>", 800);
+        const litem *d1 = box_of(by_id("di1")), *d2 = box_of(by_id("di2")), *al = word("alef"), *be = word("bet");
+        ok("display: inherit takes its parent's display, and initial is inline",
+           d1 && d2 && d2->y == d1->y && d2->x == d1->x + 50 && al && be && be->y == al->y);
+    }
+    {
         /* An inline box with position: relative is drawn moved by its
            offsets, background and all, and nothing round it moves:
            Python.org's donate button, top: 33px, sat at the top of its bar. */
