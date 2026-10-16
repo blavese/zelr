@@ -116,6 +116,16 @@ static const litem *box_of(int node) {
 
 static int by_id(const char *id) { return dom_by_id(&doc, id); }
 
+/* Where an item comes in the order the browser draws (lay_z_order). */
+static int drawn_at(const litem *it) {
+    if (!it) return -1;
+    int i = (int)(it - page.items);
+    if (!page.zsorted) return i;
+    for (int k = 0; k < page.nitems; k++)
+        if (page.zorder[k] == i) return k;
+    return -1;
+}
+
 /* The picture an element was laid out as: an <img>, or a drawing. */
 static const litem *image_of(int node) {
     for (int i = 0; i < page.nitems; i++)
@@ -2414,6 +2424,33 @@ int main(void) {
         ok("named colours past the common ones, in any case",
            na && na->color == 0xE6E6FA && nb && nb->color == 0xA52A2A && nc && nc->color == 0xFFEFD5
            && nd && nd->color == 0x2F4F4F && ne && ne->color == 0xFAFAD2 && nf && nf->color == 0x9ACD32);
+    }
+    {
+        /* The order things are drawn in: before, everything was drawn as it
+           was laid out, so Hugging Face's glow, written after its link, hid
+           the link's words, and Craigslist's watermark at z-index -1 lay over
+           what it was meant to be under. */
+        lay("<style>body{margin:0}p{margin:0}.r{position:relative}.ab{position:absolute;top:0;left:0;width:40px}"
+            ".wm{z-index:-1}.lk{position:relative;z-index:10}.c1{position:relative;z-index:1;background:#010101}"
+            ".c2{position:relative;z-index:2;background:#020202}.deep{position:relative;z-index:100}"
+            ".neg{position:absolute;z-index:-1;background:#030303;width:10px;height:10px}"
+            ".row{display:flex}.fz{z-index:3}</style>"
+            "<p>zfirst</p><div class=r><div class='ab wm'>zwater</div><p>zflow</p><p class=lk>zlink</p><div class=ab>zglow</div>"
+            "<p>zlater</p></div>"
+            "<div class=c1 id=c1><p class=deep>zdeep</p><div class=neg id=ng></div><p>zcone</p></div>"
+            "<div class=c2 id=c2>zctwo</div>"
+            "<div class=row><p class=fz>zitem</p><p class=r>zsib</p></div>", 800);
+        const litem *wm = word("zwater"), *fl = word("zflow"), *lk = word("zlink"), *gl = word("zglow"),
+                    *la = word("zlater"), *dp = word("zdeep"), *c1 = box_of(by_id("c1")), *c2 = box_of(by_id("c2")),
+                    *ng = box_of(by_id("ng")), *co = word("zcone"), *it = word("zitem"), *sb = word("zsib"),
+                    *fi = word("zfirst");
+        ok("a box at z-index -1 is drawn under the flow, a z-index above a later box, a positioned box over later flow",
+           page.zsorted && wm && fl && lk && gl && la && fi && drawn_at(wm) < drawn_at(fl) && drawn_at(wm) < drawn_at(fi)
+           && drawn_at(gl) < drawn_at(lk) && drawn_at(la) < drawn_at(gl));
+        ok("and a context's z-indexes stay inside it, its negative ones over its own background",
+           dp && c1 && c2 && ng && co && drawn_at(dp) < drawn_at(c2) && drawn_at(c1) < drawn_at(ng)
+           && drawn_at(ng) < drawn_at(co));
+        ok("and an item of a row takes its z-index unpositioned", it && sb && drawn_at(sb) < drawn_at(it));
     }
     {
         /* A rule's selectors past the 32nd: wikiHow hides its header's menus

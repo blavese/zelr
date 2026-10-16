@@ -76,7 +76,28 @@ typedef struct {
     unsigned char has_bg;
     unsigned char ofit;           /* LK_IMAGE: its object-fit (css.h, cstyle.obj_fit) */
     short bgi;                    /* LK_BOX: its background picture in bgs, or -1 */
+    unsigned short zc;            /* its stacking context, in zctx (lay_z_enter) */
+    unsigned char zl;             /* and its layer there: ZL_BG, ZL_FLOW or ZL_POS */
 } litem;
+
+/* A stacking context: a positioned box with a z-index (or an item of a row
+   or a grid with one), and the page itself as context 0. Its items, and the
+   contexts inside it, are drawn in the order CSS 2's appendix E gives:
+   the box's own background (ZL_BG); contexts below 0; what is in the flow
+   (ZL_FLOW); positioned boxes with no z-index and contexts at 0, in the
+   order they were written; contexts above 0. A positioned box with no
+   z-index is drawn as one, its flow together, but what it holds that is
+   positioned or a context belongs to the context round it: it is a context
+   of its own marked pseudo, which nothing is put inside. ZL_POS marks the
+   items of one when the table is full, drawn among the positioned in order. */
+#define LAY_ZCTX 8192
+enum { ZL_BG = 0, ZL_FLOW, ZL_POS };
+typedef struct {
+    int parent, z;
+    int first;                    /* the first item laid out after it began */
+    int node;
+    int pseudo;
+} lzctx;
 
 /* A box's background picture, or the mask its colour is painted through:
    where it is (url, into the text arena, as written) and how it is drawn,
@@ -128,6 +149,13 @@ typedef struct {
     int   overflowed;
     int   laid;          /* boxes laid out, trial ones included: the work done */
     int   matched;       /* elements run through selector matching */
+    lzctx zctx[LAY_ZCTX];
+    int   nzctx;
+    /* The order items are drawn in (lay_z_order): zorder[k] is the k'th item
+       drawn, when zsorted; when not, nothing was positioned and items are
+       drawn as they were laid out. */
+    int   zorder[LAY_ITEMS];
+    int   zsorted;
 } ldoc;
 
 /* --- form controls --------------------------------------------------------
@@ -395,6 +423,12 @@ typedef struct {
        what a transform's percentages are of (lay_translate). box_node is -1
        while none is finished, or when the last one was drawn as a picture. */
     int box_node, box_w, box_h;
+
+    /* The stacking context and layer what is laid out now belongs to
+       (lay_z_enter), which lay_item notes on every item, and the nearest
+       context that is not pseudo, which a new one goes inside. */
+    int z_ctx, z_real;
+    unsigned char z_layer;
 } lctx;
 
 static inline int lay_put(lctx *L, const char *s, int n) {
@@ -438,7 +472,46 @@ static inline litem *lay_item(lctx *L) {
     it->has_bg = 0;
     it->ofit = 0;
     it->bgi = -1;
+    it->zc = (unsigned short)L->z_ctx;
+    it->zl = L->z_layer;
     return it;
+}
+
+/* Into a positioned box (or an item of a row or a grid with a z-index):
+   one with a z-index begins a stacking context of its own, inside the one
+   laid out now; one without is drawn after the flow around it, with all it
+   holds. The context made, or -1. Nothing while measuring, whose items are
+   thrown away. */
+static int lay_z_enter(lctx *L, int node, const cstyle *st) {
+    if (L->measuring) return -1;
+    if (L->out->nzctx >= LAY_ZCTX) {
+        if (st->position != POS_STATIC) L->z_layer = ZL_POS;
+        return -1;
+    }
+    int c = L->out->nzctx++;
+    lzctx *z = &L->out->zctx[c];
+    z->parent = L->z_real;
+    z->z = st->z_set ? st->zidx : 0;
+    z->first = L->out->nitems;
+    z->node = node;
+    z->pseudo = !st->z_set;
+    L->z_ctx = c;
+    if (st->z_set) L->z_real = c;
+    L->z_layer = ZL_FLOW;
+    return c;
+}
+
+/* And out of it: the box's own background and border go at the bottom of
+   its context, under the contexts below 0 inside it. */
+static void lay_z_leave(lctx *L, int c, int from, int ctx, int real, unsigned char layer) {
+    if (c >= 0)
+        for (int i = from; i < L->out->nitems; i++) {
+            litem *it = &L->out->items[i];
+            if (it->zc == c && it->node == L->out->zctx[c].node && it->kind == LK_BOX) it->zl = ZL_BG;
+        }
+    L->z_ctx = ctx;
+    L->z_real = real;
+    L->z_layer = layer;
 }
 
 /* --- lines ---------------------------------------------------------------
@@ -4625,11 +4698,14 @@ static void lay_block(lctx *L, int node, const cstyle *parent, int x,
         return;
     }
 
+    int z_was = L->z_ctx, zr_was = L->z_real;
+    unsigned char zl_was = L->z_layer;
     if (probe.position == POS_ABSOLUTE || probe.position == POS_FIXED) {
         if (node == L->abs_sizing) {
             lay_block_placed(L, node, parent, x, avail, y);
             return;
         }
+        int zc = lay_z_enter(L, node, &probe);
         int keep = *y;
         int aw = L->pos_w > 16 ? L->pos_w : avail;
         /* With no width and not both sides given, as wide as what is in it,
@@ -4727,10 +4803,12 @@ static void lay_block(lctx *L, int node, const cstyle *parent, int x,
             L->rl_first[r] = moved_from;
             L->rl_end[r] = L->out->nitems;
         }
+        lay_z_leave(L, zc, moved_from, z_was, zr_was, zl_was);
         return;
     }
 
     if (probe.position == POS_RELATIVE) {
+        int zc = lay_z_enter(L, node, &probe);
         int first = L->out->nitems;
         lay_block_placed(L, node, parent, x, avail, y);
 
@@ -4744,11 +4822,17 @@ static void lay_block(lctx *L, int node, const cstyle *parent, int x,
                 L->out->items[i].y += dy;
             }
         if (!L->measuring) lay_translate(L, node, &probe, moved_from);
+        lay_z_leave(L, zc, moved_from, z_was, zr_was, zl_was);
         return;
     }
 
+    /* z-index counts on an item of a row or a grid, positioned or not. */
+    int zc = -1;
+    if (probe.z_set && (parent->display == D_FLEX || parent->display == D_INLINE_FLEX || parent->display == D_GRID))
+        zc = lay_z_enter(L, node, &probe);
     lay_block_placed(L, node, parent, x, avail, y);
     if (!L->measuring) lay_translate(L, node, &probe, moved_from);
+    if (zc >= 0) lay_z_leave(L, zc, moved_from, z_was, zr_was, zl_was);
 }
 
 static void lay_block_placed(lctx *L, int node, const cstyle *parent, int x,
@@ -5438,6 +5522,71 @@ static int lay_generated(ddoc *out, const csheet *s, const cindex *x, const cmat
 
 /* --- the whole page ------------------------------------------------------ */
 
+/* The order to draw in, from each item's context and layer (lay_z_enter):
+   context by context from the page down, as CSS 2's appendix E has it.
+   Before, everything was drawn as it was laid out, so a glow or a
+   decoration written after a link covered it whatever their z-indexes, and
+   a watermark at z-index -1 lay over the text it was meant to be under.
+   Left unsorted when nothing was positioned. */
+static int lay_z_items[LAY_ITEMS], lay_z_start[LAY_ZCTX + 1];
+static int lay_z_kids[LAY_ZCTX], lay_z_kid_at[LAY_ZCTX + 1], lay_z_fill[LAY_ZCTX];
+
+static void lay_z_emit(ldoc *o, int c, int *n) {
+    const int *its = lay_z_items + lay_z_start[c];
+    int cnt = lay_z_start[c + 1] - lay_z_start[c];
+    const int *kid = lay_z_kids + lay_z_kid_at[c];
+    int nk = lay_z_kid_at[c + 1] - lay_z_kid_at[c], k = 0;
+    for (int i = 0; i < cnt; i++)
+        if (o->items[its[i]].zl == ZL_BG) o->zorder[(*n)++] = its[i];
+    for (; k < nk && o->zctx[kid[k]].z < 0; k++) lay_z_emit(o, kid[k], n);
+    for (int i = 0; i < cnt; i++)
+        if (o->items[its[i]].zl == ZL_FLOW) o->zorder[(*n)++] = its[i];
+    /* Positioned boxes and contexts at 0, in the order they were written. */
+    int i = 0;
+    for (;;) {
+        while (i < cnt && o->items[its[i]].zl != ZL_POS) i++;
+        int kz = k < nk && o->zctx[kid[k]].z == 0;
+        if (i >= cnt && !kz) break;
+        if (kz && (i >= cnt || o->zctx[kid[k]].first <= its[i])) lay_z_emit(o, kid[k++], n);
+        else o->zorder[(*n)++] = its[i++];
+    }
+    for (; k < nk; k++) lay_z_emit(o, kid[k], n);
+}
+
+static void lay_z_order(ldoc *o) {
+    int any = o->nzctx > 1;
+    for (int i = 0; i < o->nitems && !any; i++) any = o->items[i].zl == ZL_POS;
+    o->zsorted = 0;
+    if (!any) return;
+    /* Each context's items, in the order laid out. */
+    for (int c = 0; c <= o->nzctx; c++) lay_z_start[c] = 0;
+    for (int i = 0; i < o->nitems; i++) {
+        if (o->items[i].zc >= o->nzctx) o->items[i].zc = 0;
+        lay_z_start[o->items[i].zc + 1]++;
+    }
+    for (int c = 0; c < o->nzctx; c++) lay_z_start[c + 1] += lay_z_start[c];
+    for (int c = 0; c < o->nzctx; c++) lay_z_kid_at[c] = lay_z_start[c];   /* as a cursor for now */
+    for (int i = 0; i < o->nitems; i++) lay_z_items[lay_z_kid_at[o->items[i].zc]++] = i;
+    /* Each context's contexts, by z-index and then as written. */
+    for (int c = 0; c <= o->nzctx; c++) lay_z_kid_at[c] = 0;
+    for (int c = 1; c < o->nzctx; c++) lay_z_kid_at[o->zctx[c].parent + 1]++;
+    for (int c = 0; c < o->nzctx; c++) lay_z_kid_at[c + 1] += lay_z_kid_at[c];
+    for (int c = 0; c < o->nzctx; c++) lay_z_fill[c] = lay_z_kid_at[c];
+    for (int c = 1; c < o->nzctx; c++) lay_z_kids[lay_z_fill[o->zctx[c].parent]++] = c;
+    for (int c = 0; c < o->nzctx; c++)
+        for (int a = lay_z_kid_at[c] + 1; a < lay_z_kid_at[c + 1]; a++) {
+            int v = lay_z_kids[a], b = a;
+            while (b > lay_z_kid_at[c] && o->zctx[lay_z_kids[b - 1]].z > o->zctx[v].z) {
+                lay_z_kids[b] = lay_z_kids[b - 1];
+                b--;
+            }
+            lay_z_kids[b] = v;
+        }
+    int n = 0;
+    lay_z_emit(o, 0, &n);
+    o->zsorted = n == o->nitems;
+}
+
 static inline void lay_run(ldoc *out, const ddoc *d, const csheet *s,
                            const cindex *x, const cmatch *m,
                            const cinline *inl, const limage *imgs, int nimgs,
@@ -5482,6 +5631,15 @@ static inline void lay_run(ldoc *out, const ddoc *d, const csheet *s,
     L.cont_left = 0; L.cont_width = width;
     L.fl_seq = 0;
     L.floating = -1;
+    L.z_ctx = L.z_real = 0;
+    L.z_layer = ZL_FLOW;
+    out->nzctx = 1;
+    out->zctx[0].parent = -1;
+    out->zctx[0].z = 0;
+    out->zctx[0].first = 0;
+    out->zctx[0].node = -1;
+    out->zctx[0].pseudo = 0;
+    out->zsorted = 0;
 
     lay_var_used = 0;
     lay_arena_used = 0;
@@ -5520,6 +5678,7 @@ static inline void lay_run(ldoc *out, const ddoc *d, const csheet *s,
     if (start >= 0) lay_block(&L, start, &root, 0, width, &y);
     out->height = y;
     if (d->overflowed) out->overflowed = 1;
+    lay_z_order(out);
 }
 
 /* How many words came out of it. Zero from a document with words in it is
@@ -5533,11 +5692,11 @@ static inline int lay_words(const ldoc *o) {
 
 /* --- hit testing --------------------------------------------------------- */
 
-/* The link under a point, or -1. Walked backwards so the thing drawn last,
-   which is the thing on top, is the thing found. */
+/* The link under a point, or -1. Walked backwards in the order drawn, so the
+   thing drawn last, which is the thing on top, is the thing found. */
 static inline int lay_link_at(const ldoc *o, int x, int y) {
-    for (int i = o->nitems - 1; i >= 0; i--) {
-        const litem *it = &o->items[i];
+    for (int k = o->nitems - 1; k >= 0; k--) {
+        const litem *it = &o->items[o->zsorted ? o->zorder[k] : k];
         if (it->link < 0) continue;
         /* Words a little generously; a picture or a box inside a link (a
            logo, a card) exactly: only words were, and a site's logo could
@@ -5552,8 +5711,8 @@ static inline int lay_link_at(const ldoc *o, int x, int y) {
 
 /* And the element, for anything that wants to know what was clicked. */
 static inline int lay_node_at(const ldoc *o, int x, int y) {
-    for (int i = o->nitems - 1; i >= 0; i--) {
-        const litem *it = &o->items[i];
+    for (int k = o->nitems - 1; k >= 0; k--) {
+        const litem *it = &o->items[o->zsorted ? o->zorder[k] : k];
         if (it->node < 0) continue;
         if (x >= it->x && x < it->x + it->w
             && y >= it->y && y < it->y + it->h) return it->node;

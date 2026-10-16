@@ -79,6 +79,7 @@ enum {
     P_ROW_GAP, P_COL_GAP,
     P_JUSTIFY_ITEMS, P_JUSTIFY_SELF, P_PLACE_ITEMS, P_PLACE_SELF,
     P_FILL, P_STROKE,
+    P_Z_INDEX,
     P_COUNT
 };
 
@@ -283,6 +284,10 @@ typedef struct {
        takes it for the root of a drawing written into the page). */
     u32 fill, stroke;
     unsigned char fill_said, stroke_said;
+    /* z-index: z_set is 0 for auto, which makes no stacking context
+       (layout.h, lay_z_enter). Not inherited. */
+    unsigned char z_set;
+    int zidx;
     short order, basis, shrink;
     unsigned char basis_pct;  /* the basis was a percentage of the row (lay_flex) */
     int ratio_w, ratio_h;
@@ -906,6 +911,7 @@ static const cprop CSS_PROPS[] = {
     { "place-self", P_PLACE_SELF },
     { "fill", P_FILL },
     { "stroke", P_STROKE },
+    { "z-index", P_Z_INDEX },
     { "text-transform", P_TEXT_TRANSFORM },
     { "aspect-ratio", P_ASPECT },
     { "flex", P_FLEX },
@@ -2801,6 +2807,8 @@ static inline void css_default_style(cstyle *st, int root_px) {
     st->justify_self = -1;
     st->fill = st->stroke = 0;
     st->fill_said = st->stroke_said = 0;
+    st->z_set = 0;
+    st->zidx = 0;
     st->order = 0;
     st->basis = -1;
     st->basis_pct = 0;
@@ -3439,6 +3447,19 @@ static inline void css_apply_v(int prop, const char *v, cstyle *st, int root_px,
             if (!said) break;
             if (prop == P_FILL) { st->fill = c; st->fill_said = said; }
             else { st->stroke = c; st->stroke_said = said; }
+            break;
+        }
+
+        case P_Z_INDEX: {
+            const char *q = v;
+            while (*q == ' ') q++;
+            int neg = *q == '-';
+            if (*q == '-' || *q == '+') q++;
+            if (*q < '0' || *q > '9') { st->z_set = 0; st->zidx = 0; break; }   /* auto, or anything else */
+            long z = 0;
+            while (*q >= '0' && *q <= '9') { if (z < 1000000000) z = z * 10 + (*q - '0'); q++; }
+            st->zidx = (int)(neg ? -z : z);
+            st->z_set = 1;
             break;
         }
 

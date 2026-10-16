@@ -4239,7 +4239,9 @@ static void draw_frame_box(surface *s, const litem *it, int x, int sy, int vw) {
 static int draw_x0 = -0x7FFFFFFF, draw_x1 = 0x7FFFFFFF;
 
 static void draw_page(surface *s, int ox, int oy, int vw, int vh) {
-    for (int i = 0; i < page.nitems; i++) {
+    /* In the order the layout worked out from z-indexes (lay_z_order). */
+    for (int k = 0; k < page.nitems; k++) {
+        int i = page.zsorted ? page.zorder[k] : k;
         const litem *it = &page.items[i];
         /* What the layout put away (kind 0: cut off by a box that hides its
            overflow, or the first layout of a box laid out again) is not
