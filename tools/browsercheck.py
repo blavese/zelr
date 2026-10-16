@@ -861,8 +861,22 @@ def main():
             # blue and the green boxes behind them, 1600 each, and a mask
             # paints teal in a disc of radius 30: about 2830, where a square
             # would be 3600 and no mask at all nothing.
+            # --- a picture element's sources --------------------------------
+            #
+            # 160 by 90 of teal from the third source; the img's own purple,
+            # or the first source's, or the second's olive, would be wrong.
+            go(vm, mon, "http://%s/sources" % srv.host,
+               was=trees, name="br-going-sources")
+            srcs, pxs, ws, shots = page_settled(mon, "br-sources")
+            steal = count_in(pxs, ws, PAGE, (0x1C, 0x8C, 0x8C))
+            spurple = count_in(pxs, ws, PAGE, (0x70, 0x30, 0xA0))
+            solive = count_in(pxs, ws, PAGE, (0x80, 0x80, 0x00))
+            print("      teal %d, purple %d, olive %d" % (steal, spurple, solive))
+            c.add("a picture element draws the source its media and type choose, at one pixel a pixel",
+                  steal > 12000 and spurple < 200 and solive < 200, shots)
+
             go(vm, mon, "http://%s/bg/page" % srv.host,
-               was=trees, name="br-going-bg")
+               was=srcs, name="br-going-bg")
             bgd, pxb, wb, shotb = page_settled(mon, "br-bg")
             rose = count_in(pxb, wb, PAGE, LOGO)
             teal = count_in(pxb, wb, PAGE, (0x00, 0xB0, 0xB0))

@@ -2021,6 +2021,14 @@ static inline int css_mq_part(const char *p, int n, int *lo, int *hi) {
                     if (px > *lo) *lo = px;
                 } else if (css_mq_word(f, colon, "max-width") || css_mq_word(f, colon, "max-device-width")) {
                     if (px >= 0 && (*hi < 0 || px < *hi)) *hi = px;
+                } else if (css_mq_word(f, colon, "min-height")) {
+                    /* The window's height as it is when the query is read:
+                       a sheet is read again with each page, not on each
+                       change of the window. Apple's pictures have a source
+                       for windows shorter than 734 and one for taller. */
+                    if (css_view_h > 0 && px >= 0 && css_view_h < px) never = 1;
+                } else if (css_mq_word(f, colon, "max-height")) {
+                    if (css_view_h > 0 && px >= 0 && css_view_h > px) never = 1;
                 } else if (css_mq_word(f, colon, "prefers-color-scheme")) {
                     if (css_mq_word(v, vl, "dark")) never = 1;
                 } else if (css_mq_word(f, colon, "hover") || css_mq_word(f, colon, "any-hover")) {

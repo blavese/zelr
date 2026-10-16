@@ -2695,6 +2695,17 @@ int main(void) {
         css_mq_extra = 0;
         const litem *mq = box_of(by_id("mq"));
         ok("a media query's width counts the scroll bar beside the page", mq && mq->w == 20);
+        /* And its height is the window's: Apple's pictures have a source for
+           windows shorter than 734 and one for taller, and a rule for each. */
+        int keep_vh = css_view_h;
+        css_view_h = 600;
+        lay("<style>body{margin:0}div{height:10px;background:#111111;width:10px}"
+            "@media (max-height: 733px){#hs{width:20px}}@media (min-height: 734px){#ht{width:20px}}"
+            "@media (max-height: 500px){#hu{width:20px}}</style>"
+            "<div id=hs></div><div id=ht></div><div id=hu></div>", 800);
+        css_view_h = keep_vh;
+        const litem *hs = box_of(by_id("hs")), *ht = box_of(by_id("ht")), *hu = box_of(by_id("hu"));
+        ok("a media query's height is the window's", hs && hs->w == 20 && ht && ht->w == 10 && hu && hu->w == 10);
     }
     {
         /* An inline box with position: relative is drawn moved by its

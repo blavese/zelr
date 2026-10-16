@@ -276,6 +276,21 @@ PURPLE = _logo(160, 90, (0x70, 0x30, 0xA0))
 OLIVE = _logo(160, 90, (0x80, 0x80, 0x00))
 TEAL = _logo(160, 90, (0x1C, 0x8C, 0x8C))
 
+# A picture element whose sources say which file suits the window: the
+# first is for windows of 300 or less, the second a type nothing here draws,
+# the third the one to show, teal, whose 1x candidate is first. The img's own
+# src, purple, is for a browser that reads no sources; it was what was drawn.
+SOURCES_PAGE = b"""<!doctype html>
+<html><head><title>sources</title>
+<style>body { padding: 24px; background: #ffffff } img { width: 160px; height: 90px }</style></head>
+<body><picture>
+<source media="(max-width: 300px)" srcset="/bg/img/purple.png">
+<source type="image/avif" srcset="/bg/img/olive.png">
+<source srcset="/bgjs/teal.png 1x, /bg/img/olive.png 2x">
+<img src="/bg/img/purple.png" alt="">
+</picture></body></html>
+"""
+
 # A background picture a script sets once the page is up, as an app sets a
 # slide's: backgrounds were gathered once, after the first layout, and one
 # set later was never fetched.
@@ -1568,6 +1583,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._send(OLIVE, ctype="image/png")
         elif path == "/bgjs":
             self._send(BGJS_PAGE)
+        elif path == "/sources":
+            self._send(SOURCES_PAGE)
         elif path == "/keys":
             self._send(KEYS_PAGE)
         elif path == "/paste":

@@ -2773,8 +2773,67 @@ static void accent_sheet(void) {
  * placeholder in src -- nothing, or a one-pixel image written into the
  * address itself -- and the real one in data-src or one of its spellings,
  * for its script to swap in. A responsive one may have only a srcset. */
+/* The first candidate of a srcset that is for one pixel a pixel: the one
+   with no descriptor or 1x, else the first. Into out; its length. */
+static int srcset_pick(const char *ss, char *out, int cap) {
+    const char *pick = 0;
+    int pick_n = 0;
+    for (const char *p = ss; *p; ) {
+        while (*p == ' ' || *p == ',' || *p == '\n' || *p == '\t') p++;
+        if (!*p) break;
+        /* An address runs to white space; a comma at its end ends the
+           candidate (commas inside it are a resizing service's options). */
+        const char *u = p;
+        while (*p && *p != ' ' && *p != '\n' && *p != '\t') p++;
+        int un = (int)(p - u), bare = 0;
+        if (un > 0 && u[un - 1] == ',') { un--; bare = 1; }
+        const char *dsc = p;
+        if (!bare) {
+            while (*dsc == ' ' || *dsc == '\t' || *dsc == '\n') dsc++;
+            p = dsc;
+            while (*p && *p != ',') p++;
+        }
+        int one = bare || dsc == p || (dsc[0] == '1' && (dsc[1] == 'x' || dsc[1] == '.'));
+        if (!pick || one) { pick = u; pick_n = un; }
+        if (one) break;
+    }
+    if (!pick || pick_n <= 0 || pick_n >= cap) return 0;
+    for (int k = 0; k < pick_n; k++) out[k] = pick[k];
+    out[pick_n] = 0;
+    return pick_n;
+}
+
+/* A picture element's source for this window: the first <source> before the
+   img whose media query holds and whose type can be drawn, and its srcset's
+   candidate for one pixel a pixel. Apple's hero has a source for each width
+   of window and an img of the smallest, which was drawn blown up to fill
+   its place. 0 when none is chosen. */
+static const char *pic_from_sources(int el, char *out, int cap) {
+    int par = doc.nodes[el].parent;
+    if (par < 0 || !w_same_fold(dom_tag_name(&doc, par), "picture")) return 0;
+    for (int c = doc.nodes[par].first; c >= 0 && c != el; c = doc.nodes[c].next) {
+        if (doc.nodes[c].kind != DN_ELEMENT || !w_same_fold(dom_tag_name(&doc, c), "source")) continue;
+        const char *type = dom_attr(&doc, c, "type");
+        if (type && *type && !(w_starts_fold(type, "image/jpeg") || w_starts_fold(type, "image/jpg")
+                               || w_starts_fold(type, "image/png") || w_starts_fold(type, "image/gif")
+                               || w_starts_fold(type, "image/webp") || w_starts_fold(type, "image/svg")))
+            continue;
+        const char *media = dom_attr(&doc, c, "media");
+        if (media && *media) {
+            int lo, hi, w = css_view_w + css_mq_extra;
+            if (!css_mq(media, w_len(media), &lo, &hi)) continue;
+            if ((lo >= 0 && w < lo) || (hi >= 0 && w > hi)) continue;
+        }
+        const char *ss = dom_attr(&doc, c, "srcset");
+        if (!ss) ss = dom_attr(&doc, c, "data-srcset");
+        if (ss && srcset_pick(ss, out, cap) > 0 && !w_starts_fold(out, "data:")) return out;
+    }
+    return 0;
+}
+
 static const char *pic_source(int el) {
     static char pick[URL_TEXT];
+    if (pic_from_sources(el, pick, (int)sizeof(pick))) return pick;
     const char *src = dom_attr(&doc, el, "src");
     int placeholder = !src || !*src || w_starts_fold(src, "data:");
     static const char *const LAZY[] = { "data-src", "data-lazy-src", "data-original",
