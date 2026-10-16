@@ -1735,6 +1735,29 @@ int main(void) {
         okn("and one set to initial is none, so var() takes its fallback", vf && vf->w == 70, vf ? vf->w : -1);
     }
 
+    /* --- line-height with calc() ------------------------------------------------ */
+    {
+        /* Hugging Face's heading, Tailwind 4's calc(2.5 / 2.25): each calc()
+           is set as its plain twin is. */
+        lay("<style>body{margin:0}.a{font-size:36px;line-height:calc(2.5 / 2.25);width:150px}"
+            ".pa{font-size:36px;line-height:1.111;width:150px}"
+            ".b{font-size:20px;line-height:calc(20px + 10px);width:120px}.pb{font-size:20px;line-height:30px;width:120px}"
+            "</style><p class=a>lhone lhtwo</p><p class=pa>plone pltwo</p>"
+            "<p class=b>lhthree lhfour</p><p class=pb>plthree plfour</p>", 800);
+        const litem *l1 = word("lhone"), *l2 = word("lhtwo"), *p1 = word("plone"), *p2 = word("pltwo");
+        const litem *l3 = word("lhthree"), *l4 = word("lhfour"), *p3 = word("plthree"), *p4 = word("plfour");
+        okn("a line height worked out by calc() to a number is that many of the font size",
+            l1 && l2 && p1 && p2 && l2->y - l1->y == p2->y - p1->y && l2->y > l1->y, l1 && l2 ? l2->y - l1->y : -1);
+        okn("and one worked out to a length is that length",
+            l3 && l4 && p3 && p4 && l4->y - l3->y == p4->y - p3->y && l4->y > l3->y, l3 && l4 ? l4->y - l3->y : -1);
+        lay("<style>body{margin:0}.r{font-size:36px;line-height:2.5rem;width:150px}"
+            ".pr{font-size:36px;line-height:40px;width:150px}</style>"
+            "<p class=r>rmone rmtwo</p><p class=pr>rpone rptwo</p>", 800);
+        const litem *r1 = word("rmone"), *r2 = word("rmtwo"), *q1 = word("rpone"), *q2 = word("rptwo");
+        okn("a line height in rem is that length, not so many of the font size",
+            r1 && r2 && q1 && q2 && r2->y - r1->y == q2->y - q1->y && r2->y > r1->y, r1 && r2 ? r2->y - r1->y : -1);
+    }
+
     /* --- nesting -------------------------------------------------------------- */
     {
         /* firefox.com: a rule nested in its first rule of a layer ended the

@@ -4229,11 +4229,39 @@ static inline void css_apply_v(int prop, const char *v, cstyle *st, int root_px,
             }
             break;
         case P_LINE_HEIGHT: {
+            /* calc() and its kin too, a number being so many of the font size
+               as a plain number is: Tailwind 4 writes calc(2.5 / 2.25) for a
+               36px heading's 40px, and read as a length the lines of Hugging
+               Face's heading stood twice as far apart as Chromium has them. */
+            const char *t = v;
+            while (*t == ' ') t++;
+            if (w_starts_fold(t, "calc(") || w_starts_fold(t, "min(") || w_starts_fold(t, "max(")
+                || w_starts_fold(t, "clamp(")) {
+                ccalc c = { t, st->font_px, root_px, st->font_px, 0 };
+                int is_num;
+                int r = css_calc_atom(&c, &is_num);
+                if (c.bad) break;
+                if (is_num) st->line_h = (short)(r < 300 ? r : 300);
+                else if (st->font_px > 0) {
+                    int lh = r / st->font_px;
+                    st->line_h = (short)(lh > 300 ? 300 : lh);
+                }
+                if (st->line_h < 90) st->line_h = 90;
+                break;
+            }
             clen L = css_len(v);
             if (L.unit == U_PCT) st->line_h = (short)(L.v / 100);
             else if (L.unit == U_PX && L.v > 400)
                 st->line_h = (short)(st->font_px > 0 ? L.v * 100 / (st->font_px * 100) : 145);
-            else if (L.unit != U_AUTO) st->line_h = (short)(L.v);   /* a number */
+            /* A length in rem or the window's units is a length, not so many
+               of the font size: Tailwind 4 gives a 36px heading 2.5rem, which
+               read as 2.5 times the font set Hugging Face's two lines 85
+               pixels apart. An em is so many of the font size either way. */
+            else if ((L.unit == U_REM || L.unit == U_VW || L.unit == U_VH) && st->font_px > 0) {
+                int px = css_px(L, st->font_px, root_px, -1);
+                if (px > 0) st->line_h = (short)(px * 100 / st->font_px);
+            }
+            else if (L.unit != U_AUTO) st->line_h = (short)(L.v);   /* a number, or ems */
             if (st->line_h < 90) st->line_h = 90;
             if (st->line_h > 300) st->line_h = 300;
             break;
