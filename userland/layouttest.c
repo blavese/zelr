@@ -1040,7 +1040,7 @@ int main(void) {
         lay("<button id=b><svg><title>Chevron Left</title></svg> Back</button>", 600);
         int b = by_id("b");
         const char *label = b >= 0 ? lay_control_label(&doc, b, CTL_BUTTON) : "";
-        ok("an icon's own title is not taken for the button's words", w_same(label, " Back"));
+        ok("an icon's own title is not taken for the button's words", w_same(label, "Back"));
     }
 
     /* --- grid -----------------------------------------------------------------
@@ -2507,6 +2507,20 @@ int main(void) {
         for (unsigned k = 0; k < sizeof junk; k++) jb[k] = 0xFF;
         css_default_style(&junk, 16);
         ok("a fresh style is content-box whatever was in its memory", junk.border_box == 0);
+    }
+    {
+        /* A button's words are as shown, each run of white space one space:
+           Python.org's GO button kept its markup's newlines and indentation
+           and was 320 pixels wide. */
+        lay("<style>body{margin:0}</style><p><button id=bw>\n                GO\n            </button></p>"
+            "<p><button id=bt>GO</button></p>", 800);
+        const litem *bw = 0, *bt = 0;
+        for (int i = 0; i < page.nitems; i++) {
+            if (page.items[i].kind != LK_FIELD) continue;
+            if (page.items[i].node == by_id("bw")) bw = &page.items[i];
+            if (page.items[i].node == by_id("bt")) bt = &page.items[i];
+        }
+        ok("a button written with white space round its word is as wide as one without", bw && bt && bw->w == bt->w);
     }
     {
         /* A field and a button-like input measured as Chromium measures them:

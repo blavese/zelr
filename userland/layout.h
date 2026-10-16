@@ -255,7 +255,10 @@ static inline int lay_frame_player(const ddoc *d, int at) {
 
 /* An element's words, leaving out any drawing inside it: an icon's <title>
    ("Chevron Left", "Hamburger") is a name for a screen reader, and written
-   as a button's label it read as the button's words. */
+   as a button's label it read as the button's words. Each run of white
+   space is one space and the ends have none, as the words are shown: kept as
+   written, Python.org's GO button carried its markup's newlines and
+   indentation and was 320 pixels wide. */
 static inline void lay_words_of(const ddoc *d, int el, char *out, int cap) {
     int w = 0;
     for (int i = el; i >= 0 && w < cap - 1; ) {
@@ -267,13 +270,14 @@ static inline void lay_words_of(const ddoc *d, int el, char *out, int cap) {
             continue;
         }
         if (d->nodes[i].kind == DN_TEXT && d->nodes[i].text >= 0) {
-            const char *s = d->arena + d->nodes[i].text;
-            int any = 0;
-            for (const char *q = s; *q; q++) if (*q > ' ') any = 1;
-            if (any) while (*s && w < cap - 1) out[w++] = *s++;
+            for (const char *s = d->arena + d->nodes[i].text; *s && w < cap - 1; s++) {
+                if ((unsigned char)*s > ' ') out[w++] = *s;
+                else if (w > 0 && out[w - 1] != ' ') out[w++] = ' ';
+            }
         }
         i = dom_next(d, i, el);
     }
+    while (w > 0 && out[w - 1] == ' ') w--;
     out[w] = 0;
 }
 
