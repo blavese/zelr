@@ -3298,6 +3298,16 @@ int main(void) {
                " h.firstChild.assignedSlot === g('sa'), h.childNodes[1].assignedSlot === g('sd'), String(h.lastChild.assignedSlot),"
                " String(k.firstChild.assignedSlot), g('sd') instanceof HTMLSlotElement].join(' ');</script></body>"),
         "b #text+i i   p true true null null true");
+    /* Past a thousand shadow roots each is still kept: Rotten Tomatoes'
+       front page attaches two thousand, and its later components' slots were
+       given nothing. */
+    oks("the two thousandth shadow root's slot is given its element's children",
+        titled("<body><script>var last;"
+               "for (var i = 0; i < 2000; i++) { var h = document.createElement('x-many'); h.appendChild(document.createElement('b'));"
+               " document.body.appendChild(h); var r = h.attachShadow({ mode: 'open' }); r.innerHTML = '<slot></slot>'; last = r; }"
+               "document.title = last.querySelector('slot').assignedElements().length + ' ' + (last.host.shadowRoot === last);"
+               "</script></body>"),
+        "1 true");
     {
         load("<body><x-w id=h></x-w><script>var h = document.getElementById('h'), r = h.attachShadow({ mode: 'open' }), heard = [];"
              "r.innerHTML = '<slot name=n id=n></slot><slot id=d></slot>';"

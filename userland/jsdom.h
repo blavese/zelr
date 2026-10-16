@@ -224,10 +224,15 @@ static int jd_connected(int n) {
 /* Each shadow root a script attached, with its element (attachShadow, below).
    What is in one is in the page while its element is, and the browser draws
    them (browser.c, page_drawn). jd_shadow_mark has a bit for every host and
-   every root, so asking of a node that is neither costs nothing. */
-#define JD_SHADOWS 1024
+   every root, so asking of a node that is neither costs nothing, and
+   jd_shadow_at its record (plus one; a node is a host or a root, never
+   both), so asking of one that is costs nothing either. Rotten Tomatoes'
+   front page attaches two thousand: past the 1024 there were, a root was
+   made but not kept, and its slots were given nothing. */
+#define JD_SHADOWS 8192
 static int jd_shadow_host[JD_SHADOWS], jd_shadow_root[JD_SHADOWS], jd_nshadow;
 static u8 jd_shadow_mark[DOM_NODES / 8];
+static unsigned short jd_shadow_at[DOM_NODES];
 
 /* A template's contents, which are a document of their own with no window:
    nothing made there is upgraded, as in a browser (jd_custom_created). */
@@ -236,8 +241,8 @@ static u8 jd_inert_mark[DOM_NODES / 8];
 /* Which of them n is the root of (as_root) or the element of, or -1. */
 static int jd_shadow_find(int n, int as_root) {
     if (n < 0 || n >= DOM_NODES || !(jd_shadow_mark[n >> 3] & (1 << (n & 7)))) return -1;
-    for (int s = 0; s < jd_nshadow; s++)
-        if ((as_root ? jd_shadow_root[s] : jd_shadow_host[s]) == n) return s;
+    int s = (int)jd_shadow_at[n] - 1;
+    if (s >= 0 && s < jd_nshadow && (as_root ? jd_shadow_root[s] : jd_shadow_host[s]) == n) return s;
     return -1;
 }
 
@@ -2496,6 +2501,7 @@ static jval nat_attach_shadow(jctx *J, jval t, jval *a, int n) {
         jd_shadow_host[jd_nshadow] = x;
         jd_shadow_root[jd_nshadow] = f;
         jd_nshadow++;
+        jd_shadow_at[x] = jd_shadow_at[f] = (unsigned short)jd_nshadow;
         jd_shadow_mark[x >> 3] |= (u8)(1 << (x & 7));
         jd_shadow_mark[f >> 3] |= (u8)(1 << (f & 7));
     }
