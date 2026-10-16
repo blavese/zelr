@@ -2509,6 +2509,16 @@ int main(void) {
         ok("a fresh style is content-box whatever was in its memory", junk.border_box == 0);
     }
     {
+        /* A float to the right inside a box being measured counts what it is,
+           not the room it would be pushed across: Python.org's search bar,
+           floated right in a box floated right, made the box the page's width. */
+        lay("<style>body{margin:0}.o{float:right;background:#222222}.i{float:right;width:200px;height:20px;background:#111111}"
+            ".l{float:left;width:300px;height:20px}</style>"
+            "<div class=l></div><div class=o id=fo><div class=i></div></div>", 800);
+        const litem *fo = box_of(by_id("fo"));
+        ok("a float holding a float to the right is as wide as what it holds", fo && fo->w == 200 && fo->x == 600);
+    }
+    {
         /* A button's words are as shown, each run of white space one space:
            Python.org's GO button kept its markup's newlines and indentation
            and was 320 pixels wide. */

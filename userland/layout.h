@@ -421,6 +421,7 @@ typedef struct {
     int fl_x[LAY_FLOATS], fl_y[LAY_FLOATS], fl_w[LAY_FLOATS], fl_h[LAY_FLOATS];
     unsigned char fl_side[LAY_FLOATS];
     int fl_seq;                   /* how many ever placed */
+    int fl_floor;                 /* and the first a measurement sees (lay_measure) */
     int floating;                 /* the float being laid out, not floated again */
 
     /* The border box of the block lay_block_placed last finished, which is
@@ -575,8 +576,18 @@ static inline void lay_line_end(lctx *L, int *y) {
 
 /* The room at height y inside left..left+width once the floats beside it
    have taken theirs: moved in from the side each float is on. */
-static inline void lay_float_room(const lctx *L, int y, int *l, int *r) {
+/* The first float still kept that counts here: one placed before a
+   measurement began is outside the box being measured, which is placed
+   beside it afterwards. Seen, Python.org's logo, floated left, pushed the
+   words of the box floated right beside it along while it was measured, and
+   the box came out as wide as the page less nothing. */
+static inline int lay_fl_first(const lctx *L) {
     int first = L->fl_seq > LAY_FLOATS ? L->fl_seq - LAY_FLOATS : 0;
+    return first > L->fl_floor ? first : L->fl_floor;
+}
+
+static inline void lay_float_room(const lctx *L, int y, int *l, int *r) {
+    int first = lay_fl_first(L);
     for (int s = first; s < L->fl_seq; s++) {
         int k = s % LAY_FLOATS;
         if (y < L->fl_y[k] || y >= L->fl_y[k] + L->fl_h[k]) continue;
@@ -590,7 +601,7 @@ static inline void lay_float_room(const lctx *L, int y, int *l, int *r) {
 /* The lowest bottom above which a float still stands at height y, or -1. */
 static inline int lay_float_next(const lctx *L, int y, int l, int r) {
     int best = -1;
-    int first = L->fl_seq > LAY_FLOATS ? L->fl_seq - LAY_FLOATS : 0;
+    int first = lay_fl_first(L);
     for (int s = first; s < L->fl_seq; s++) {
         int k = s % LAY_FLOATS;
         int b = L->fl_y[k] + L->fl_h[k];
@@ -1647,7 +1658,12 @@ static void lay_float(lctx *L, int node, const cstyle *parent, int cleft, int cw
         if (nb < 0) { l = cleft; r = cleft + cwidth; break; }
         y = nb;
     }
-    int mx = st.floated == 2 ? r - need : l;       /* the margin box */
+    /* Measured, a float to the right sits at the left as any other does:
+       against the far side of the room it was measured in, it made what
+       held it as wide as that room. Python.org's search bar, floated right
+       inside a box floated right, made the box the page's width, and it went
+       under the logo instead of beside it. */
+    int mx = st.floated == 2 && !L->measuring ? r - need : l;       /* the margin box */
     int x = mx + ml;                              /* the box */
 
     int s_line_at = L->line_at, s_line_n = L->line_n, s_pen = L->pen;
@@ -1665,8 +1681,12 @@ static void lay_float(lctx *L, int node, const cstyle *parent, int cleft, int cw
         lay_line_end(L, &yy);
     } else {
         /* Given room that its own margins take back off to leave exactly
-           the box decided here. */
-        L->flex_sized = node;
+           the box decided here. One with a width of its own in pixels keeps
+           it: made to fit the room instead, inside a measurement it shrank to
+           what it held, and an empty one with a background measured nothing.
+           A percentage is fitted as before, since it would be worked out
+           again from the room and come out a percentage of itself. */
+        if (st.width < 0 || st.width_pct) L->flex_sized = node;
         lay_block(L, node, parent, x - ml, w + ml + mr, &yy);
         L->flex_sized = -1;
     }
@@ -1689,7 +1709,7 @@ static void lay_float(lctx *L, int node, const cstyle *parent, int cleft, int cw
 
 /* Below every float on the side a box clears, within its width. */
 static int lay_cleared(const lctx *L, int y, int clear, int x, int w) {
-    int first = L->fl_seq > LAY_FLOATS ? L->fl_seq - LAY_FLOATS : 0;
+    int first = lay_fl_first(L);
     for (int s = first; s < L->fl_seq; s++) {
         int k = s % LAY_FLOATS;
         if (!(clear & L->fl_side[k])) continue;
@@ -2713,7 +2733,8 @@ static int lay_measure(lctx *L, int node, const cstyle *parent, int avail,
     int s_depth = L->list_depth;
     int s_count[LAY_DEPTH];
     for (int i = 0; i < LAY_DEPTH; i++) s_count[i] = L->list_count[i];
-    int s_groups = L->ngroups, s_floats = L->fl_seq;
+    int s_groups = L->ngroups, s_floats = L->fl_seq, s_floor = L->fl_floor;
+    L->fl_floor = L->fl_seq;
 
     int items = L->out->nitems, used = L->out->used, links = L->out->nlinks;
     int bgs = L->out->nbgs;
@@ -2762,6 +2783,7 @@ static int lay_measure(lctx *L, int node, const cstyle *parent, int avail,
     L->out->overflowed = spilled;
     L->ngroups = s_groups;
     L->fl_seq = s_floats;
+    L->fl_floor = s_floor;
 
     mc->gen = lay_gen; mc->node = node; mc->avail = avail; mc->sized = sized;
     mc->right = right; mc->h = *height;
@@ -5713,7 +5735,7 @@ static inline void lay_run(ldoc *out, const ddoc *d, const csheet *s,
     L.measure_root = -1;
     L.ngroups = 0;
     L.cont_left = 0; L.cont_width = width;
-    L.fl_seq = 0;
+    L.fl_seq = L.fl_floor = 0;
     L.floating = -1;
     L.z_ctx = L.z_real = 0;
     L.z_layer = ZL_FLOW;
