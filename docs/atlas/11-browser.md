@@ -1,6 +1,18 @@
 # 11 -- The web browser (everything except JS-engine internals and image decoders)
 
-**Since 0.144.0** (the rest of this file is older; trust the code and the README's "since 6048716" list):
+**Since 0.145.0** (the rest of this file is older; trust the code and the README's "since 6048716" list):
+- **A fixed box with only a bottom** is moved to stand that far above the foot of the first screen (`css_view_h`)
+  once its height is known (lay_block's positioned branch). Fixed boxes still scroll with the page.
+- **Long words** (lay_word): a word wider than a whole line is broken at the last letter that fits when
+  `overflow-wrap`/`word-wrap` break-word|anywhere or `word-break` break-all|break-word say so (`cstyle.wbreak`), or
+  when it would run past the page's side (`css_view_w`); never in nowrap/pre, never while measuring.
+- **letter-spacing** (`cstyle.lspace`, px, -20..40, inherited): `lay_word_w` adds it after each letter, `litem.ls`
+  carries it, browser.c `tface_draw_sp` draws it. pre text, ellipsis dots and list numbers are measured without it.
+- **Columns** (`col_n`, `col_w`; column-count, column-width, columns): the contents are laid out one column wide and
+  dealt by `lay_columns` at line starts after equal shares of the height. No balancing beyond that, no column-span
+  or column-rule; measured as one column.
+
+**Since 0.144.0**:
 - **The two-word display** (`inline flex`, `block grid`, `inline flow-root`...) is read by both words (css.h P_DISPLAY).
 - **Opacity** is read as a number (percentages too) into `cstyle.op_hidden`, and `lay_style` makes the element
   hidden only after every rule (a later opacity undoes an earlier one; below a fifth hides, the rest is drawn solid).

@@ -95,6 +95,11 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.145.0
+
+- **fixed boxes placed by their bottom (11)**, **long words broken where allowed or where they would leave the page
+  (11)**, **letter-spacing (11)**, **columns (11)**. layouttest 407, each failing on a build without its change.
+
 ### 0.144.0
 
 - **the two-word display (11)**, **opacity read as a number and settled after every rule (11)**, **a measured box's
