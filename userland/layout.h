@@ -5431,6 +5431,27 @@ static void lay_block_placed(lctx *L, int node, const cstyle *parent, int x,
         int fixed_h = floor_h > want_h ? floor_h : want_h;
         if (box_h > fixed_h) { *y -= box_h - fixed_h; box_h = fixed_h; }
     }
+    /* In the flow, a box that hides its overflow and has a height is that
+       high too, and what lies below its foot is not drawn (a box running
+       past it is cut there), as its sides already cut. Grown to what it
+       held, Wikipedia's wordmark, a 32 pixel window onto a sheet of icons
+       whose word is put off the side, showed the icons below the word. A
+       box that shows its overflow still grows, so that what it holds does
+       not run over what follows it. */
+    else if (st.clip == 1 && want_h >= 0 && !L->measuring) {
+        int fixed_h = floor_h > want_h ? floor_h : want_h;
+        if (box_h > fixed_h) {
+            *y -= box_h - fixed_h;
+            box_h = fixed_h;
+            int foot = box_top + box_h;
+            for (int i = inside_at; i < L->out->nitems; i++) {
+                litem *it = &L->out->items[i];
+                if (it->kind == 0) continue;
+                if (it->y >= foot) { it->kind = 0; continue; }
+                if (it->kind == LK_BOX && it->y + it->h > foot) it->h = foot - it->y;
+            }
+        }
+    }
 
     /* Its height settled, what was placed against this box by its bottom
        alone goes there: everything noted since it began is its own, since

@@ -2695,6 +2695,14 @@ int main(void) {
             "text-indent:-10000px;overflow:hidden;background:#333333}</style><h1><span id=wmk>Wikipedia</span></h1>", 800);
         const litem *wmk = box_of(by_id("wmk"));
         ok("an inline-block's own width holds inside an inline-block being measured", wmk && wmk->w == 176);
+        /* And a box that hides its overflow keeps its height, what lies below
+           its foot not drawn; one that shows it still grows. */
+        lay("<style>body{margin:0}.c{height:20px;overflow:hidden}.v{height:20px}p{margin:0;height:20px;font-size:14px;line-height:1}</style>"
+            "<div class=c id=hc><p>firstline</p><p>secondline</p></div><div class=v id=hv2><p>thirdline</p><p>fourthline</p></div>"
+            "<p>afterword</p>", 800);
+        const litem *af = word("afterword"), *s2 = word("secondline"), *f4 = word("fourthline");
+        ok("a box hiding its overflow keeps its height and drops what lies below it, one showing it grows",
+           !s2 && word("firstline") && f4 && af && af->y == 20 + 40);
     }
     {
         /* A later rule's opacity undoes an earlier one's, and what an opacity
