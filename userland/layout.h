@@ -1594,6 +1594,17 @@ static void lay_inline_piece(lctx *L, int at, const cstyle *parent, int pin, int
                first and then laying it out, at every level of nesting, was
                twice the work per level -- a page header of inline-blocks
                fifteen deep took minutes. */
+            /* And one that comes out wider than the room left after what is
+               on the line goes on a line of its own, as it does when laid
+               out for real: they had all gone on one line, so a table cell
+               of Wikipedia's lists of inline-blocks was measured, at its
+               narrowest, as wide as the whole list, and its infobox three
+               times its own width. */
+            int ib_nobreak = (parent->white == WS_NOWRAP || parent->white == WS_PRE)
+                             && (parent->clip != 2 || parent->position == POS_FIXED);
+            int ib_used = L->out->used, ib_links = L->out->nlinks, ib_bgs = L->out->nbgs;
+            int ib_groups = L->ngroups, ib_fl = L->fl_seq;
+          relay:
             w = L->line_left + L->line_width - L->pen;
             if (w < 1) w = 1;
             int first = L->out->nitems, s_mr = L->measure_right, yy = L->line_top;
@@ -1621,6 +1632,17 @@ static void lay_inline_piece(lctx *L, int at, const cstyle *parent, int pin, int
             L->line_started = 1;
             int pw = right - s_pen;
             if (pw < 1) pw = 1;
+            if (pw > w && s_pen > s_left && !ib_nobreak) {
+                L->out->nitems = first;
+                L->out->used = ib_used; L->out->nlinks = ib_links; L->out->nbgs = ib_bgs;
+                L->ngroups = ib_groups; L->fl_seq = ib_fl;
+                L->measure_right = s_mr;
+                int left = L->cont_left, width = L->cont_width, al = L->align;
+                lay_line_end(L, y);
+                lay_line_start(L, *y, left, width, al);
+                L->pending_space = 0;
+                goto relay;
+            }
             int h = yy - s_top;
             if (L->ngroups < LAY_GROUPS && L->out->nitems > first) {
                 L->grp_first[L->ngroups] = first;
@@ -3477,9 +3499,6 @@ static void lay_flex(lctx *L, int node, const cstyle *st, int cx, int cw,
                                        | ((own.mt == CSS_AUTO_OFF) << 2) | ((own.mb == CSS_AUTO_OFF) << 3));
         }
 
-        /* A row that would scroll sideways -- a shelf of cards, a strip of
-           albums -- cannot be scrolled inside a page here, and squeezed onto
-           one line its cards were written over each other. It wraps. */
         if (!st->flex_wrap && st->clip != 2) {
             /* One line is as tall as the row when the row's height is set,
                within its least and most: items centred in a row 32 high were

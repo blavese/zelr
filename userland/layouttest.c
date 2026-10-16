@@ -1674,6 +1674,26 @@ int main(void) {
         ok("layers with no name and inside a query apply too", !word("anon") && !word("inner") && word("after"));
     }
 
+    /* --- a table narrower than its cells' lines ---------------------------------- */
+    {
+        /* Wikipedia's infobox: 22em wide, with cells holding lists of
+           inline-blocks with nothing between them, which were measured at
+           their narrowest as one line and pushed the columns three times
+           the table's width. */
+        lay("<style>div{width:200px}span{display:inline-block;width:60px;height:10px}</style>"
+            "<div><span>ibone</span><span>ibtwo</span><span>ibthree</span><span>ibfour</span></div>", 800);
+        const litem *i1 = word("ibone"), *i4 = word("ibfour");
+        okn("inline-blocks with nothing between them wrap in a narrow box",
+            i1 && i4 && i4->y > i1->y, i4 ? i4->y : -1);
+        lay("<style>table{width:200px;border-spacing:0}td{padding:0}span{display:inline-block}</style>"
+            "<table><tr><td><span>tw00</span><span>tw01</span><span>tw02</span><span>tw03</span><span>tw04</span><span>tw05</span><span>tw06</span><span>tw07</span><span>tw08</span><span>tw09</span><span>tw10</span><span>tw11</span><span>tw12</span><span>tw13</span><span>tw14</span><span>tw15</span><span>tw16</span><span>tw17</span><span>tw18</span><span>tw19</span><span>tw20</span><span>tw21</span><span>tw22</span><span>tw23</span><span>tw24</span><span>tw25</span><span>tw26</span><span>tw27</span><span>tw28</span><span>tw29</span></td></tr></table>", 800);
+        int ibr = 0;
+        for (int q = 0; q < page.nitems; q++)
+            if (page.items[q].kind == LK_TEXT && page.items[q].x + page.items[q].w > ibr) ibr = page.items[q].x + page.items[q].w;
+        okn("and thirty of them in a cell are measured line by line, keeping to the table",
+            ibr > 0 && ibr <= 200, ibr);
+    }
+
     /* --- nesting -------------------------------------------------------------- */
     {
         /* firefox.com: a rule nested in its first rule of a layer ended the
