@@ -1,6 +1,31 @@
 # 11 -- The web browser (everything except JS-engine internals and image decoders)
 
-**Since 0.137.0** (the rest of this file is older; trust the code and the README's "since 6048716" list):
+**Since 0.138.0** (the rest of this file is older; trust the code and the README's "since 6048716" list):
+- **Stacking** (css.h `P_Z_INDEX`, `cstyle.z_set`/`zidx`; layout.h `lzctx`, `lay_z_enter`/`lay_z_leave`, `lay_z_order`,
+  `litem.zc`/`zl`, `ldoc.zorder`/`zsorted`): a positioned box with a z-index, or an item of a row or a grid with one, is
+  a stacking context; a positioned box with none is a pseudo context (drawn as one piece with its flow, its positioned
+  insides going to the context round it, `lctx.z_real`). Each context draws its own background (`ZL_BG`), contexts
+  below 0, its flow, positioned boxes and contexts at 0 in the order written, contexts above 0. browser.c `draw_page`,
+  `lay_link_at` and `lay_node_at` follow `zorder` when `zsorted`; a page with nothing positioned is drawn as laid out.
+  Anything new that draws items or finds what is under a point must go through `zorder` too. opacity, transforms and
+  isolation make no context; fixed boxes are not fixed to the window. Positioned boxes drawn on top now show what the
+  layout fails to hide (a closed menu it cannot tell is closed): look there first when a page gains a panel over it.
+- **A rem is the html element's font size** (`lay_run` sets `L.root_px` from the root's style; browser.c
+  `style_in_drawn` too): `html { font-size: 62.5% }` or `10px` made every rem 1.6 times too big.
+- **An absolutely positioned or fixed box with a height is that high** (lay_block_placed, after its floor): a box in the
+  flow still grows to what it holds, on purpose.
+- **A box placed by its right side** is placed by its width after max-/min-width and, for content-box, its frame; that
+  width is its room, except that a percentage is given its box's width (`lay_block`'s absolute branch).
+- **A translucent background** is laid over the parent's background (`background_up`), not over white.
+- **A fresh style is content-box**: `css_default_style` never set `border_box`, so a box that said nothing about
+  box-sizing took whatever the last style in that stack slot had. Every field of `cstyle` must be set there (scratchpad
+  `audit_cstyle.py` lists any that is not).
+- **Fields measured as Chromium measures them** (the browser's sheet): a text field's frame is four pixels a side
+  (3px padding, 1px border; Chromium's is 2 and 2), and select and button-like inputs are border-box.
+- **All 148 named colours**, as Chromium computes them; **a rule keeps up to 1024 selectors** (`CSS_LIST_MAX`; it was
+  32, and the rest were dropped).
+
+**Since 0.137.0**:
 - **A drawing's root painted by the page's sheet** (css.h `P_FILL`/`P_STROKE`, `cstyle.fill`/`fill_said`, inherited;
   browser.c `drawing_of` works the root's style out with `style_in_drawn` and hands it to svg.h `svg_root_paint`, which
   `sv_inherit` takes for the root ahead of its attributes). Shapes inside keep their own paint; a sheet's paint for them

@@ -95,6 +95,14 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.138.0
+
+- **z-index and stacking contexts, positioned boxes drawn over the flow (11)**, **a rem from the html element (11)**,
+  **out-of-flow boxes kept to their height (11)**, **right-placed boxes by their limits and frame (11)**, **translucent
+  backgrounds over what is behind (11)**, **148 named colours and 1024 selectors a rule (11)**, **box-sizing no longer
+  left to chance and fields measured as Chromium's (11)**. layouttest 374, each failing on a build without its
+  change.
+
 ### 0.137.0
 
 - **a drawing painted as the page's sheet says (11)**, **what the layout puts away left off the screen (11)**, **a box of
