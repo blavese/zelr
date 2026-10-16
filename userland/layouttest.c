@@ -2255,6 +2255,23 @@ int main(void) {
            !eg && em && em->x == 50 && eh && eh->x == 120 && ed && ed->x == 200);
     }
     {
+        /* Craigslist's header: a row of a place that grows and buttons that
+           do not, each button a column of an icon over a word, centred, and
+           at least 44 wide. Measured, a centred item reached halfway across
+           the room it was measured in, so each button measured a third of
+           the window and the place was squeezed to a sliver; and laid out at
+           a word's width, the buttons sat 22 apart, each over the next. */
+        lay("<style>body{margin:0}p{margin:0;line-height:20px}.h{display:flex;width:800px}.g{flex-grow:1;background:#eee}"
+            ".m{display:flex;flex-shrink:0}.b{display:flex;min-width:44px;justify-content:center}"
+            ".c{display:flex;flex-direction:column;align-items:center}.w{font-size:10px;line-height:12px}</style>"
+            "<div class=h><div class=g id=place><p>somewhere</p></div><div class=m>"
+            "<a class=b id=b1><span class=c><span class=w>post</span></span></a>"
+            "<a class=b id=b2><span class=c><span class=w>acct</span></span></a></div></div>", 800);
+        const litem *pl = box_of(by_id("place")), *bp = word("post"), *ba = word("acct");
+        ok("a row's centred columns measure as wide as what is in them, and keep their min-width apart",
+           pl && pl->w >= 700 && bp && ba && ba->x - bp->x == 44);
+    }
+    {
         /* An absolutely positioned box with no width is as wide as what is
            in it: a label at a picture's corner was a bar across the picture,
            one put at the right by right: 0 started at the left, and one

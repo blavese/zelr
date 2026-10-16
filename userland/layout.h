@@ -3011,6 +3011,11 @@ static void lay_flex(lctx *L, int node, const cstyle *st, int cx, int cw,
                 else if (amr) off = 0;
                 else if (al == AI_CENTER) off = (cw - w) / 2;
                 else if (al == AI_END) off = cw - w;
+                /* Measured, the room is not the column's width: centred
+                   in it, an item reached halfway across whatever it was
+                   measured in, and Craigslist's buttons, a column of an icon
+                   over a word, each measured a third of the window. */
+                if (L->measuring) off = 0;
                 L->flex_sized = kid[ki];
                 lay_block(L, kid[ki], ps, cx + off, w, y);
                 L->flex_sized = -1;
@@ -3073,6 +3078,15 @@ static void lay_flex(lctx *L, int node, const cstyle *st, int cx, int cw,
             }
             /* One that does not shrink holds its starting width. */
             if (own.shrink == 0 && w > lo) lo = w;
+            /* And none starts or ends narrower than its min-width: Craigslist's
+               buttons, 44 wide at least round a word of 22, were placed 22
+               apart, each over the next. */
+            if (own.min_width >= 0) {
+                int mn = own.min_width + (own.border_box ? 0 : own.pl + own.pr + own.bl + own.br)
+                       + (own.ml > 0 ? own.ml : 0) + (own.mr > 0 ? own.mr : 0);
+                if (w < mn) w = mn;
+                if (lo < mn) lo = mn;
+            }
             if (lo < 1) lo = 1;
 
             meas[i] = w;
