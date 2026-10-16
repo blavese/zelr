@@ -2597,6 +2597,19 @@ int main(void) {
         ok("code is on a card on a page with no sheet and not on one with its own", plain_card && !(pb && pb->has_bg));
     }
     {
+        /* A top in a percentage is of the positioned box's height, known
+           once that box is laid out: Debian's download button, top: 82% of
+           its picture, sat at the picture's top over the words above it. */
+        lay("<style>body{margin:0}p{margin:0;height:30px}.c{position:relative;width:400px}"
+            ".f{height:200px}.b{position:absolute;top:82%;left:0;width:100px;height:20px;background:#333333}"
+            ".k{position:relative;height:100px}.k .b{top:50%}</style>"
+            "<p>above</p><div class=c><div class=f></div><div class=b id=pt></div></div>"
+            "<div class=k><div class=b id=pk></div></div>", 800);
+        const litem *pt = box_of(by_id("pt")), *pk = box_of(by_id("pk"));
+        ok("a top in a percentage is of the positioned box's height, known or found", pt && pt->y == 30 + 164
+           && pk && pk->y == 230 + 50);
+    }
+    {
         /* A button's words are as shown, each run of white space one space:
            Python.org's GO button kept its markup's newlines and indentation
            and was 320 pixels wide. */

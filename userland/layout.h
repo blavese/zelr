@@ -4875,8 +4875,10 @@ static void lay_block(lctx *L, int node, const cstyle *parent, int x,
            when that is known: the picture filling a box whose height a
            padding gives it (padding-bottom: 56.25%, the picture inset: 0) had
            no height at all, and every such thumbnail drew nothing. */
-        if (L->pos_id && !fixed && !L->measuring && node != L->relaying && L->nrl < LAY_RELAYS && probe.height < 0
-            && (probe.height_pct || (probe.top != CSS_AUTO_OFF && probe.bottom != CSS_AUTO_OFF))) {
+        /* And one placed by a percentage of that height. */
+        if (L->pos_id && !fixed && !L->measuring && node != L->relaying && L->nrl < LAY_RELAYS
+            && (probe.off_pct || (probe.height < 0
+                && (probe.height_pct || (probe.top != CSS_AUTO_OFF && probe.bottom != CSS_AUTO_OFF))))) {
             int r = L->nrl++;
             L->rl_node[r] = node;
             L->rl_x[r] = x;

@@ -307,6 +307,9 @@ typedef struct {
        which is known only once that box is laid out (layout.h, lay_block's
        second look at what is placed against it). */
     unsigned char height_pct;
+    /* And a top or a bottom in a percentage, of the same height, auto until
+       it is known. */
+    unsigned char off_pct;
 
     /* The custom properties in force, as the head of a chain the layout
        keeps (layout.h, lay_var_*); inherited, as custom properties are.
@@ -2849,6 +2852,7 @@ static inline void css_default_style(cstyle *st, int root_px) {
     st->ratio_w = st->ratio_h = 0;
     st->width_pct = 0;
     st->height_pct = 0;
+    st->off_pct = 0;
     st->vars = -1;
     st->gspan = 0;
 }
@@ -3887,8 +3891,14 @@ static inline void css_apply_v(int prop, const char *v, cstyle *st, int root_px,
                     *slot = css_parent_h > 0 ? (short)(L.v / 100 * css_parent_h / 100) : -1;
                     break;
                 }
+                /* Of the containing box's height too: known when the parent
+                   was given one, or once the box is laid out, when what took
+                   it is laid out again (layout.h, lay_block's second look).
+                   As auto, Debian's download button, top: 82% of its
+                   picture, sat at the picture's top over the words above. */
                 if (prop == P_TOP || prop == P_BOTTOM) {
-                    *slot = CSS_AUTO_OFF;
+                    *slot = css_parent_h > 0 ? (short)(L.v / 100 * css_parent_h / 100) : CSS_AUTO_OFF;
+                    st->off_pct = 1;
                     break;
                 }
             }
