@@ -2647,6 +2647,19 @@ int main(void) {
         ok("a float's bottom margin counts once in what holds it", fc && fc->h == 70);
     }
     {
+        /* An inline box with position: relative is drawn moved by its
+           offsets, background and all, and nothing round it moves:
+           Python.org's donate button, top: 33px, sat at the top of its bar. */
+        lay("<style>body{margin:0}p{margin:0}.r{background:#003366}</style><p>alpha <span class=r id=rb1>moved</span> omega</p>", 800);
+        const litem *m0 = word("moved"), *o0 = word("omega"), *b0 = box_of(by_id("rb1"));
+        int m0x = m0 ? m0->x : -1, m0y = m0 ? m0->y : -1, o0x = o0 ? o0->x : -1, b0y = b0 ? b0->y : -1;
+        lay("<style>body{margin:0}p{margin:0}.r{background:#003366;position:relative;top:10px;left:5px}</style>"
+            "<p>alpha <span class=r id=rb2>moved</span> omega</p>", 800);
+        const litem *m1 = word("moved"), *o1 = word("omega"), *b1 = box_of(by_id("rb2"));
+        ok("an inline box moved by position: relative is drawn moved, and nothing round it",
+           m1 && o1 && b1 && m1->x == m0x + 5 && m1->y == m0y + 10 && o1->x == o0x && b1->y == b0y + 10);
+    }
+    {
         /* A button's words are as shown, each run of white space one space:
            Python.org's GO button kept its markup's newlines and indentation
            and was 320 pixels wide. */

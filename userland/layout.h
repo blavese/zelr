@@ -399,6 +399,12 @@ typedef struct {
     /* Where the words on a line being measured end, for a float to the right
        met after them (lay_float); 0 otherwise. */
     int float_pen;
+    /* Inline boxes moved by position: relative, kept until the block they
+       are in has laid out its lines (lay_block_placed): their items, from
+       where each opened to where it closed (-1 while open), and how far. */
+#define LAY_RELS 64
+    int rel_node[LAY_RELS], rel_first[LAY_RELS], rel_end[LAY_RELS], rel_dx[LAY_RELS], rel_dy[LAY_RELS];
+    int nrel;
     /* The absolutely positioned box being measured for how wide its contents
        make it (lay_block): laid out as its body, where it stands. -1 for none. */
     int abs_sizing;
@@ -2232,6 +2238,39 @@ static inline int lay_past(const ddoc *d, int at, int node) {
     return -1;
 }
 
+/* An inline box with position: relative is drawn moved by its offsets, its
+   words and background together, with nothing round it moving: Python.org's
+   donate button is top: 33px, and sat at the top of its bar. Its lines are
+   not placed until they end, so the move is noted here and made when the
+   block holding it is done (lay_rel_apply). */
+static void lay_rel_open(lctx *L, int node, const cstyle *st) {
+    int dx = st->left != CSS_AUTO_OFF ? st->left : st->right_off != CSS_AUTO_OFF ? -st->right_off : 0;
+    int dy = st->top != CSS_AUTO_OFF ? st->top : st->bottom != CSS_AUTO_OFF ? -st->bottom : 0;
+    if ((!dx && !dy) || L->nrel >= LAY_RELS) return;
+    int r = L->nrel++;
+    L->rel_node[r] = node;
+    L->rel_first[r] = L->out->nitems;
+    L->rel_end[r] = -1;
+    L->rel_dx[r] = dx;
+    L->rel_dy[r] = dy;
+}
+
+static void lay_rel_close(lctx *L, int node) {
+    for (int r = L->nrel - 1; r >= 0; r--)
+        if (L->rel_node[r] == node && L->rel_end[r] < 0) { L->rel_end[r] = L->out->nitems; return; }
+}
+
+static void lay_rel_apply(lctx *L, int from) {
+    for (int r = from; r < L->nrel; r++) {
+        int end = L->rel_end[r] < 0 ? L->out->nitems : L->rel_end[r];
+        for (int i = L->rel_first[r]; i < end && i < L->out->nitems; i++) {
+            L->out->items[i].x += L->rel_dx[r];
+            L->out->items[i].y += L->rel_dy[r];
+        }
+    }
+    L->nrel = from;
+}
+
 static inline void lay_inline(lctx *L, int node, const cstyle *parent, int *y) {
     const ddoc *d = L->d;
     cstyle stack[LAY_DEPTH];
@@ -2261,6 +2300,7 @@ static inline void lay_inline(lctx *L, int node, const cstyle *parent, int *y) {
             L->cur_link = stack_link[sp];
             lay_inline_close(L, &stack[sp], stack_x[sp], stack_top[sp],
                              stack_slot[sp]);
+            if (stack[sp].position == POS_RELATIVE) lay_rel_close(L, owner);
             sp--;
         }
 
@@ -2604,6 +2644,7 @@ static inline void lay_inline(lctx *L, int node, const cstyle *parent, int *y) {
                 lay_cs(&stack[sp], &st);
                 stack_node[sp] = at;
                 stack_link[sp] = L->cur_link;
+                if (st.position == POS_RELATIVE) lay_rel_open(L, at, &st);
                 if (n->tag == T_A) lay_link_open(L, at);
                 lay_inline_open(L, at, &st, &stack_x[sp], &stack_top[sp],
                                 &stack_slot[sp]);
@@ -2628,6 +2669,7 @@ static inline void lay_inline(lctx *L, int node, const cstyle *parent, int *y) {
     while (sp > 0) {
         lay_inline_close(L, &stack[sp], stack_x[sp], stack_top[sp],
                          stack_slot[sp]);
+        if (stack[sp].position == POS_RELATIVE) lay_rel_close(L, stack_node[sp]);
         sp--;
     }
     L->cur_link = entry_link;
@@ -5155,7 +5197,7 @@ static void lay_block_placed(lctx *L, int node, const cstyle *parent, int x,
     }
     int inside_at = L->out->nitems;
     int widened_at = L->widened;
-    int floats_at = L->fl_seq, floor_at = L->fl_floor;
+    int floats_at = L->fl_seq, floor_at = L->fl_floor, rel_at = L->nrel;
     /* A float is a formatting context of its own: what is inside it does not
        move aside for floats outside it. Python.org's slides are floats that
        lie over each other (margin-right: -100%), each holding a float of
@@ -5301,6 +5343,7 @@ static void lay_block_placed(lctx *L, int node, const cstyle *parent, int x,
     }
     if (inline_open) lay_line_end(L, y);
     }
+    if (L->nrel > rel_at) lay_rel_apply(L, rel_at);
     if (pushed) L->list_depth--;
 
     L->pos_x = held_x;
@@ -5849,6 +5892,7 @@ static inline void lay_run(ldoc *out, const ddoc *d, const csheet *s,
     L.pct_node = -1; L.pct_w = 0;
     L.font_pass = 0;
     L.float_pen = 0;
+    L.nrel = 0;
     L.abs_sizing = -1;
     L.measure_root = -1;
     L.ngroups = 0;
