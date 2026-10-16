@@ -1,5 +1,7 @@
 
 
+**Since 0.134.0**: browsercheck keeps a page with ctrl+D and waits for the start page to count it: 79 checks.
+
 **Since 0.133.0**: browsercheck has `/many` (sixty pictures), `/bigpic` (a 2000 by 400 picture whose natural size the
 page checks), `/paste` (the address copied from the bar into a field), `/tab` (Tab between two fields), `/dl/report.bin` (an
 attachment saved and read back, told on the console) and `/logo.png` as an address of its own: 78 checks.

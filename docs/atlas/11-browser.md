@@ -1,6 +1,19 @@
 # 11 -- The web browser (everything except JS-engine internals and image decoders)
 
-**Since 0.133.0** (the rest of this file is older; trust the code and the README's "since 6048716" list):
+**Since 0.134.0** (the rest of this file is older; trust the code and the README's "since 6048716" list):
+- **`:is()` and `:where()` with lists** (css.h `css_expand_list`): a selector list holding one is written out as one
+  selector per choice before it is read, each choice in its own single-compound `:is()`/`:where()` so it weighs what
+  the standard says; a choice more than a compound is written bare where it stands alone, dropped inside a compound;
+  32 at most. The sheet (css_parse_in) and a script's querySelector (jsdom.h `jd_sel_open`) both read through it.
+- **What fills a box by its height** (layout.h, `rl_*` in lctx): an absolutely positioned child of a positioned box
+  with a percentage height (`cstyle.height_pct`) or a top and a bottom and no height is noted, and when the box's
+  height is settled its first layout is put away (kind 0) and it is laid out again at the end of the list with that
+  height (`force_node`/`force_h` for top and bottom). The aspect box: `::before { padding-bottom: 56.25% }` and the
+  picture `inset: 0`.
+- **Bookmarks** (browser.c `bm_*`): ctrl+D keeps or lets go the page in `/home/bookmarks` (address, tab, title, a
+  line each); the start page lists them where `<!--bookmarks-->` stands and its status counts them.
+
+**Since 0.133.0**:
 - **Pictures**: 128 a page (`PICS_MAX`), each kept at no more than `PIC_KEEP` (1280) a side (`pic_shrink`, blocks
   averaged with the alpha plane); `shown.nat_w/nat_h` is the natural size, which `pic_sizes` (the layout),
   `picture_size` (naturalWidth), object-fit (`pic_natural`) and the canvas's drawImage use. No budget across a page.

@@ -95,6 +95,11 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.134.0
+
+- **`:is()` and `:where()` with lists (11)**, **what fills a box by its height laid out again once it is known (11)**,
+  **bookmarks (11)**. layouttest 337, pagetest 370, browser harness 79, each failing on a build without its change.
+
 ### 0.133.0
 
 - **128 pictures a page, big ones kept at 1280 a side (11)**, **copy and paste in every field, ctrl+L (11)**, **Tab
