@@ -321,6 +321,17 @@ RERENDER_PAGE = (b"""<!doctype html>
 </body></html>
 """)
 
+# A drawing written into the page whose own attribute says white and whose
+# style sheet gives it a colour through a custom property, as The Verge's
+# wordmark is written: drawn white on white, it was not there.
+SVGFILL_PAGE = b"""<!doctype html>
+<html><head><title>svgfill</title>
+<style>:root { --ink: #1e5a8c } body { background: #ffffff; padding: 24px }
+.logo { width: 300px; height: 100px; fill: var(--ink) }</style></head>
+<body><svg class="logo" viewBox="0 0 30 10" fill="white"><rect width="30" height="10"/></svg>
+</body></html>
+"""
+
 # A picture far wider than it is drawn, which the browser keeps smaller
 # than it is: drawn, and its natural width still what its file says, which
 # the page checks and shows as the colour of a box.
@@ -1544,6 +1555,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._send(BIGPIC_PAGE)
         elif path == "/rerender":
             self._send(RERENDER_PAGE)
+        elif path == "/svgfill":
+            self._send(SVGFILL_PAGE)
         elif path.startswith("/rr/") and path.endswith(".png"):
             self._send(RR_PNG, ctype="image/png")
         elif path == "/big.png":

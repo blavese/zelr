@@ -420,6 +420,22 @@ int main(void) {
         okn("a stroke is as wide as the transforms around it make it", rc == SVG_OK && tall >= 1 && tall <= 3, tall);
     }
 
+    /* The page's style sheet gives a drawing's root its paint over the
+       root's own attributes (svg_root_paint): The Verge's wordmark is
+       fill="white" with a dark fill in its sheet, and was drawn white on
+       white. What a shape inside says of itself still stands. */
+    {
+        svg_root_paint("#d01010", "none");
+        int rc = draw("<svg width='40' height='20' fill='white' stroke='blue'><rect width='20' height='20'/>"
+                      "<rect x='20' width='20' height='20' fill='#ffffff'/></svg>", 40, 20);
+        ok("the sheet's fill for the root beats its attribute, a shape's own fill still its own",
+           rc == SVG_OK && isred(at(10, 10)) && iswhite(at(30, 10)));
+        svg_root_paint(0, 0);
+        rc = draw("<svg width='20' height='20' fill='white'><rect width='20' height='20'/></svg>", 20, 20);
+        ok("and with nothing from a sheet the root's attribute is the paint again",
+           rc == SVG_OK && iswhite(at(10, 10)));
+    }
+
     puts(failed ? "SVGTEST_FAIL\n" : "SVGTEST_PASS\n");
     return failed;
 }

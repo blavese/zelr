@@ -624,8 +624,25 @@ static inline int sv_up(const ddoc *d, int a) {
     return d->nodes[a].parent;
 }
 
+/* The root's fill and stroke as the page's style sheet gives them, for a
+   drawing written into the page (svg_root_paint, set by whoever draws it):
+   a sheet's rule beats what the element's attributes say, so The Verge's
+   wordmark, fill="white" with fill: var(--ink) dark in its sheet, is
+   drawn dark. An empty string when the sheet said nothing. */
+static char sv_root_fill[24], sv_root_stroke[24];
+
+static inline void svg_root_paint(const char *fill, const char *stroke) {
+    int i = 0;
+    for (; fill && fill[i] && i < 23; i++) sv_root_fill[i] = fill[i];
+    sv_root_fill[i] = 0;
+    for (i = 0; stroke && stroke[i] && i < 23; i++) sv_root_stroke[i] = stroke[i];
+    sv_root_stroke[i] = 0;
+}
+
 static inline const char *sv_inherit(const ddoc *d, int el, int root, const char *name) {
     for (int a = el; a >= 0; a = sv_up(d, a)) {
+        if (a == root && name[0] == 'f' && !name[4] && sv_root_fill[0]) return sv_root_fill;
+        if (a == root && name[0] == 's' && name[1] == 't' && !name[6] && sv_root_stroke[0]) return sv_root_stroke;
         const char *v = sv_said(d, a, name);
         if (v) return v;
         if (a == root) break;

@@ -78,6 +78,7 @@ enum {
     P_CONTENT_VIS,   /* content-visibility */
     P_ROW_GAP, P_COL_GAP,
     P_JUSTIFY_ITEMS, P_JUSTIFY_SELF, P_PLACE_ITEMS, P_PLACE_SELF,
+    P_FILL, P_STROKE,
     P_COUNT
 };
 
@@ -271,6 +272,11 @@ typedef struct {
        justify-self (-1 for the grid's). The same values as align-items. */
     unsigned char justify_items;
     signed char justify_self;
+    /* A drawing's paint as the sheet gives it, inherited as CSS has it: 0
+       when nothing said, 1 the colour here, 2 none, 3 currentColor (svg.h
+       takes it for the root of a drawing written into the page). */
+    u32 fill, stroke;
+    unsigned char fill_said, stroke_said;
     short order, basis, shrink;
     unsigned char basis_pct;  /* the basis was a percentage of the row (lay_flex) */
     int ratio_w, ratio_h;
@@ -660,6 +666,8 @@ static const cprop CSS_PROPS[] = {
     { "justify-self", P_JUSTIFY_SELF },
     { "place-items", P_PLACE_ITEMS },
     { "place-self", P_PLACE_SELF },
+    { "fill", P_FILL },
+    { "stroke", P_STROKE },
     { "text-transform", P_TEXT_TRANSFORM },
     { "aspect-ratio", P_ASPECT },
     { "flex", P_FLEX },
@@ -2494,6 +2502,8 @@ static inline void css_default_style(cstyle *st, int root_px) {
     st->align_self = -1;
     st->justify_items = AI_STRETCH;
     st->justify_self = -1;
+    st->fill = st->stroke = 0;
+    st->fill_said = st->stroke_said = 0;
     st->order = 0;
     st->basis = -1;
     st->basis_pct = 0;
@@ -2528,6 +2538,10 @@ static inline void css_inherit(cstyle *child, const cstyle *parent) {
     child->vars = parent->vars;
     child->ink_none = parent->ink_none;
     child->ttrans = parent->ttrans;
+    child->fill = parent->fill;
+    child->fill_said = parent->fill_said;
+    child->stroke = parent->stroke;
+    child->stroke_said = parent->stroke_said;
 }
 
 /* One length of a translation: pixels and a percentage of the box, from a
@@ -3083,6 +3097,20 @@ static inline void css_apply_v(int prop, const char *v, cstyle *st, int root_px,
                 st->align_self = (signed char)a;
                 st->justify_self = (signed char)j;
             }
+            break;
+        }
+
+        /* A gradient or a pattern (url()) is left to the drawing's own
+           paint, which svg.h draws flat. */
+        case P_FILL: case P_STROKE: {
+            u32 c = 0;
+            unsigned char said = 0;
+            if (w_starts_fold(v, "none")) said = 2;
+            else if (w_starts_fold(v, "currentcolor")) said = 3;
+            else if (!w_starts_fold(v, "url(") && css_color(v, &c)) said = 1;
+            if (!said) break;
+            if (prop == P_FILL) { st->fill = c; st->fill_said = said; }
+            else { st->stroke = c; st->stroke_said = said; }
             break;
         }
 

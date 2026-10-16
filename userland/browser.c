@@ -225,6 +225,18 @@ static void drawings_drop(void) {
 }
 
 static const ddoc *drawn_from(void);
+static int style_in_drawn(const ddoc *d, int node, cstyle *out);
+
+/* A paint the sheet said (cstyle.fill_said), as svg.h reads one. */
+static void paint_said(int said, u32 c, char *out) {
+    static const char HEX[] = "0123456789abcdef";
+    if (said == 2) { w_copy(out, 24, "none", 5); return; }
+    if (said == 3) { w_copy(out, 24, "currentcolor", 13); return; }
+    if (said != 1) { out[0] = 0; return; }
+    out[0] = '#';
+    for (int k = 0; k < 6; k++) out[1 + k] = HEX[(c >> (20 - 4 * k)) & 15];
+    out[7] = 0;
+}
 
 static const picture *drawing_of(const litem *it) {
     for (int i = 0; i < ndrawings; i++) {
@@ -244,7 +256,19 @@ static const picture *drawing_of(const litem *it) {
     /* From what was laid out, where an icon sprite from another file has
        been put in (sprites_into) and a shadow tree is in its place. */
     const ddoc *from = drawn_from();
-    svg_render_tree(it->node < from->count ? from : &doc, it->node, it->w, it->h, &dr->pic, it->bg, it->color);
+    /* And with the paint the page's sheet gives its root, which beats the
+       root's own attributes. */
+    const ddoc *src = it->node < from->count ? from : &doc;
+    char fill[24] = "", stroke[24] = "";
+    cstyle *st = (cstyle *)malloc(sizeof(cstyle));
+    if (st && style_in_drawn(src, it->node, st)) {
+        paint_said(st->fill_said, st->fill, fill);
+        paint_said(st->stroke_said, st->stroke, stroke);
+    }
+    if (st) free(st);
+    svg_root_paint(fill, stroke);
+    svg_render_tree(src, it->node, it->w, it->h, &dr->pic, it->bg, it->color);
+    svg_root_paint(0, 0);
     if (dr->pic.rgb) drawings_bytes += bytes;
     return dr->pic.rgb ? &dr->pic : 0;
 }

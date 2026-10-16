@@ -138,6 +138,7 @@ TAB_INK = (0x28, 0x78, 0x5A)          # /tab: its box once each field holds what
 BIG_INK = (0x28, 0x50, 0x78)          # /bigpic: the picture far wider than it is drawn
 BIG_TOLD = (0x78, 0x28, 0x5A)         # and the box its script colours when the natural size is right
 RR_INK = (0x28, 0x78, 0x50)           # /rerender: its 100 pictures, in elements its script made again
+FILL_INK = (0x1E, 0x5A, 0x8C)         # /svgfill: a drawing painted by its style sheet, not its attribute
 SHEET_THIRD = (0x50, 0xD0, 0x50)      # and the one before it, which must not have
 STOOD = (0xC0, 0x30, 0x30)            # and the block it draws when they did not
 
@@ -717,6 +718,13 @@ def main():
             bgj, pxr, wr, shotr = page_settled(mon, "br-rerender-settled")
             c.add("a page its script makes again draws all 100 pictures in the new elements (%d)"
                   % count_in(pxr, wr, PAGE, RR_INK), drew_rr, shotr)
+            go(vm, mon, "http://%s/svgfill" % srv.host, settle=10.0,
+               was=bgj, name="br-going-svgfill")
+            _, _, _, _, drew_fill = mon.wait_screen(
+                "br-svgfill", lambda w, h, px: count_in(px, w, PAGE, FILL_INK) > 25000, timeout=40)
+            bgj, pxf, wf, shotf = page_settled(mon, "br-svgfill-settled")
+            c.add("a drawing is painted as its style sheet says, not white as its attribute does (%d)"
+                  % count_in(pxf, wf, PAGE, FILL_INK), drew_fill, shotf)
 
             go(vm, mon, "http://%s/scripted" % srv.host, settle=12.0,
                was=bgj, name="br-going-scripted")
