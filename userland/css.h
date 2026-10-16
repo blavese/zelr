@@ -3180,6 +3180,10 @@ static inline void css_inherit(cstyle *child, const cstyle *parent) {
     child->white = parent->white;
     child->wbreak = parent->wbreak;
     child->lspace = parent->lspace;
+    /* text-indent is inherited: the Sydney Morning Herald hides its name
+       behind its masthead with -9999px on the link, and the words are in an
+       h1 inside it, which drew them over the picture. */
+    child->indent = parent->indent;
     child->list = parent->list;
     child->line_h = parent->line_h;
     child->visible = parent->visible;

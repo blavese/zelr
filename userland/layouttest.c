@@ -1775,6 +1775,16 @@ int main(void) {
         okn("and so is a floated grid item, stretched across its track", gi && gi->w == 300, gi ? gi->w : -1);
     }
 
+    /* --- text-indent is inherited --------------------------------------------- */
+    {
+        lay("<style>body{margin:0}.a{text-indent:-9999px;overflow:hidden;width:200px;height:40px}"
+            ".p{text-indent:30px}</style>"
+            "<div class=a><h1>tihidden words</h1></div><div class=p><p>tiindented</p></div>", 800);
+        const litem *th = word("tihidden"), *ti = word("tiindented");
+        okn("a text-indent passes to the blocks inside, putting a hidden name off the page",
+            (!th || th->x + th->w <= 0) && ti && ti->x == 30, ti ? ti->x : -1);
+    }
+
     /* --- nesting -------------------------------------------------------------- */
     {
         /* firefox.com: a rule nested in its first rule of a layer ended the
