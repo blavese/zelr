@@ -2395,6 +2395,19 @@ int main(void) {
            sn && sn->bg == 0x123456 && sv && sv->bg == 0x123456);
     }
     {
+        /* Every named colour, as Chromium computes them: Craigslist's
+           watermark is lavender, which was not known, and was drawn in the
+           text colour across its search box; brown was a digit out. */
+        lay("<style>.a{color:lavender}.b{color:brown}.c{color:PapayaWhip}.d{color:darkslategrey}"
+            ".e{color:lightgoldenrodyellow}.f{color:yellowgreen}</style><p class=a>na</p><p class=b>nb</p>"
+            "<p class=c>nc</p><p class=d>nd</p><p class=e>ne</p><p class=f>nf</p>", 800);
+        const litem *na = word("na"), *nb = word("nb"), *nc = word("nc"), *nd = word("nd"), *ne = word("ne"),
+                    *nf = word("nf");
+        ok("named colours past the common ones, in any case",
+           na && na->color == 0xE6E6FA && nb && nb->color == 0xA52A2A && nc && nc->color == 0xFFEFD5
+           && nd && nd->color == 0x2F4F4F && ne && ne->color == 0xFAFAD2 && nf && nf->color == 0x9ACD32);
+    }
+    {
         /* A rule's selectors past the 32nd: wikiHow hides its header's menus
            in the 33rd of a list of 39, and they covered its front page. */
         static char css[1024];
