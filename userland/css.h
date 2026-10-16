@@ -2362,8 +2362,14 @@ static inline void css_parse_in(csheet *s, const char *p, int len, int lo, int h
         /* A selector list, then one block shared by all of them; read from
            a copy with its :is() and :where() lists written out, when it has
            any (css_expand_list), and the rule read on from its block. */
+        /* Up to 1024 selectors share a block: at 32, wikiHow's list of what
+           it hides lost its 33rd (its header's menus) and every one after,
+           and the usual reset, ninety elements long, never reached its lists,
+           tables and sections. */
+#define CSS_LIST_MAX 1024
         int first_rule = s->nrules;
-        int sel_starts[32], sel_counts[32], specs[32], pes[32], nsel_lists = 0;
+        static int sel_starts[CSS_LIST_MAX], sel_counts[CSS_LIST_MAX], specs[CSS_LIST_MAX], pes[CSS_LIST_MAX];
+        int nsel_lists = 0;
         static char expanded[8192];
         const char *sp = p;
         int slen = len, si = i;
@@ -2374,14 +2380,14 @@ static inline void css_parse_in(csheet *s, const char *p, int len, int lo, int h
             int spec = 0;
             int start = s->nsels;
             int n = css_parse_selector(s, sp, slen, &si, &spec);
-            if (n > 0 && nsel_lists < 32) {
+            if (n > 0 && nsel_lists < CSS_LIST_MAX) {
                 sel_starts[nsel_lists] = start;
                 sel_counts[nsel_lists] = n;
                 specs[nsel_lists] = spec;
                 pes[nsel_lists] = css_parsed_pe;
                 nsel_lists++;
-            } else if (n == 0) {
-                s->nsels = start;         /* a selector this cannot match */
+            } else {
+                s->nsels = start;         /* one this cannot match, or past the limit */
             }
             si = css_skip(sp, slen, si);
             if (si < slen && sp[si] == ',') { si++; continue; }

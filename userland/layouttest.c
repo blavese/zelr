@@ -2395,6 +2395,25 @@ int main(void) {
            sn && sn->bg == 0x123456 && sv && sv->bg == 0x123456);
     }
     {
+        /* A rule's selectors past the 32nd: wikiHow hides its header's menus
+           in the 33rd of a list of 39, and they covered its front page. */
+        static char css[1024];
+        int n = 0;
+        const char *head = "<style>";
+        for (int k = 0; head[k]; k++) css[n++] = head[k];
+        for (int k = 0; k < 40; k++) {
+            css[n++] = '.'; css[n++] = 's'; css[n++] = (char)('0' + k / 10); css[n++] = (char)('0' + k % 10);
+            css[n++] = ',';
+        }
+        const char *tail = ".last{color:#ff0000}</style><p class=last>lw</p><p class=s05>fw</p>";
+        for (int k = 0; tail[k]; k++) css[n++] = tail[k];
+        css[n] = 0;
+        lay(css, 800);
+        const litem *lw = word("lw"), *fw = word("fw");
+        ok("the 41st selector of a rule applies, as the 6th does",
+           lw && lw->color == 0xFF0000 && fw && fw->color == 0xFF0000);
+    }
+    {
         /* GitHub's repository page sends twenty-five thousand rules, and at
            sixteen thousand the rest were lost: its visually hidden headings
            and its closed menu's rules among them. The last of 25000 rules
