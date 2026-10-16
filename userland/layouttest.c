@@ -2688,6 +2688,20 @@ int main(void) {
            b1 && b2 && b2->y == b1->y + 10 && b1->w == 40 && x1 && x2 && x2->y == x1->y && x2->x >= x1->x + 100);
     }
     {
+        /* Columns: what the box holds is dealt into column-count columns
+           (or as many of column-width as fit), each as wide as the room less
+           the gaps allows, the box as high as its tallest column. */
+        lay("<style>body{margin:0}p{margin:0;height:20px;font-size:14px;line-height:1}.cols{column-count:2;column-gap:20px;width:420px}"
+            ".cw{columns:100px;column-gap:10px;width:430px}</style>"
+            "<div class=cols id=cl><p>colone</p><p>coltwo</p><p>colthree</p><p>colfour</p></div><p>colafter</p>"
+            "<div class=cw><p>wa</p><p>wb</p><p>wc</p><p>wd</p></div>", 800);
+        const litem *c1 = word("colone"), *c2 = word("coltwo"), *c3 = word("colthree"), *c4 = word("colfour"),
+                    *ca = word("colafter"), *wa = word("wa"), *wd = word("wd");
+        ok("columns deal what a box holds across them, the box as high as the tallest",
+           c1 && c2 && c3 && c4 && ca && c1->x == 0 && c3->x == 220 && c3->y == c1->y && c4->y == c2->y
+           && ca->y == 40 && wa && wd && wd->x == 330 && wd->y == wa->y);
+    }
+    {
         /* letter-spacing widens a word by its spacing after each letter, in
            pixels or in em of the element's size, and narrows it when less
            than nothing; the spacing goes with the word to be drawn. */

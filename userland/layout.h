@@ -1851,6 +1851,42 @@ static int lay_floated_here(lctx *L, int child, const cstyle *parent, int cw) {
            && child != L->floating;
 }
 
+/* What a box with columns holds, laid out in one column, dealt into its
+   columns: the column breaks where the next thing laid out begins after
+   each equal share of the height, so a line is not cut, and each part is
+   moved across and up to its column's top. A box running past a break is
+   cut there. The box is as high as its tallest column. */
+static void lay_columns(lctx *L, int first, int ncol, int colw, int gap, int top, int *y) {
+    ldoc *o = L->out;
+    int total = *y - top;
+    if (total <= 0 || ncol < 2) return;
+    int per = (total + ncol - 1) / ncol, brk[17];
+    brk[0] = top;
+    for (int k = 1; k < ncol; k++) {
+        int target = top + k * per, best = -1;
+        for (int i = first; i < o->nitems; i++) {
+            const litem *it = &o->items[i];
+            if (it->kind != LK_TEXT && it->kind != LK_IMAGE && it->kind != LK_FIELD && it->kind != LK_BULLET) continue;
+            if (it->y >= target && (best < 0 || it->y < best)) best = it->y;
+        }
+        brk[k] = best < 0 ? *y : best;
+        if (brk[k] < brk[k - 1]) brk[k] = brk[k - 1];
+    }
+    brk[ncol] = *y;
+    for (int i = first; i < o->nitems; i++) {
+        litem *it = &o->items[i];
+        if (it->kind == 0) continue;
+        int k = 0;
+        while (k + 1 < ncol && it->y >= brk[k + 1]) k++;
+        if (it->kind == LK_BOX && it->y + it->h > brk[k + 1]) it->h = brk[k + 1] - it->y;
+        it->x += k * (colw + gap);
+        it->y -= brk[k] - top;
+    }
+    int tallest = 0;
+    for (int k = 0; k < ncol; k++) if (brk[k + 1] - brk[k] > tallest) tallest = brk[k + 1] - brk[k];
+    *y = top + tallest;
+}
+
 /* Below every float on the side a box clears, within its width. */
 static int lay_cleared(const lctx *L, int y, int clear, int x, int w) {
     int first = lay_fl_first(L);
@@ -5265,6 +5301,23 @@ static void lay_block_placed(lctx *L, int node, const cstyle *parent, int x,
     if (cw < 16) cw = 16;
     *y += st.bt + st.pt;
 
+    /* Columns (column-count, column-width): what the box holds is laid out
+       in one column as wide as a column, and dealt into the columns after
+       (below, lay_columns). As many as the width allows when a width is
+       given, no more than the count; the gap is the column gap, or 1em. */
+    int ncol = 1, colgap = 0, col_top = *y;
+    if (!L->measuring && (st.col_n > 1 || st.col_w > 0) && !is_table && st.display != D_FLEX
+        && st.display != D_INLINE_FLEX && st.display != D_GRID) {
+        colgap = st.gap > 0 ? st.gap : st.font_px;
+        int n = st.col_n > 1 ? st.col_n : 16;
+        if (st.col_w > 0) {
+            int fit = (cw + colgap) / (st.col_w + colgap);
+            if (fit < n) n = fit < 1 ? 1 : fit;
+        } else if (st.col_n <= 1) n = 1;
+        int colw = n > 1 ? (cw - (n - 1) * colgap) / n : cw;
+        if (n > 1 && colw >= 16) { ncol = n; cw = colw; }
+    }
+
     /* A list item's marker sits in the padding its list reserved. */
     if (st.display == D_LIST_ITEM && st.list != LS_NONE) {
         litem *b = lay_item(L);
@@ -5397,6 +5450,7 @@ static void lay_block_placed(lctx *L, int node, const cstyle *parent, int x,
     if (inline_open) lay_line_end(L, y);
     }
     if (L->nrel > rel_at) lay_rel_apply(L, rel_at);
+    if (ncol > 1) lay_columns(L, inside_at, ncol, cw, colgap, col_top, y);
     if (pushed) L->list_depth--;
 
     L->pos_x = held_x;

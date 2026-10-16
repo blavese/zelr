@@ -84,6 +84,7 @@ enum {
     P_TEXT_OVERFLOW,
     P_OVERFLOW_WRAP, P_WORD_BREAK,
     P_LETTER_SPACING,
+    P_COLUMN_COUNT, P_COLUMN_WIDTH, P_COLUMNS,
     P_COUNT
 };
 
@@ -310,6 +311,8 @@ typedef struct {
     unsigned char wbreak;
     /* letter-spacing in pixels, after every letter; inherited. */
     short lspace;
+    /* column-count and column-width (pixels): 0 for auto. */
+    short col_n, col_w;
     unsigned char ellipsis;
     short order, basis, shrink;
     unsigned char basis_pct;  /* the basis was a percentage of the row (lay_flex) */
@@ -962,6 +965,8 @@ static const cprop CSS_PROPS[] = {
     { "-webkit-line-clamp", P_LINE_CLAMP },  { "line-clamp", P_LINE_CLAMP },
     { "overflow-wrap", P_OVERFLOW_WRAP },    { "word-wrap", P_OVERFLOW_WRAP },
     { "word-break", P_WORD_BREAK },          { "letter-spacing", P_LETTER_SPACING },
+    { "column-count", P_COLUMN_COUNT },      { "column-width", P_COLUMN_WIDTH },
+    { "columns", P_COLUMNS },
     { "text-overflow", P_TEXT_OVERFLOW },
     { "text-transform", P_TEXT_TRANSFORM },
     { "aspect-ratio", P_ASPECT },
@@ -2820,6 +2825,7 @@ static inline void css_default_style(cstyle *st, int root_px) {
     st->op_hidden = 0;
     st->wbreak = 0;
     st->lspace = 0;
+    st->col_n = st->col_w = 0;
     st->flex_dir = FD_ROW;
     st->justify = JC_START;
     st->align_items = AI_STRETCH;
@@ -3562,6 +3568,33 @@ static inline void css_apply_v(int prop, const char *v, cstyle *st, int root_px,
             int px10 = L.unit == U_EM ? L.v * st->font_px / 10 : L.unit == U_REM ? L.v * root_px / 10 : L.v / 10;
             int px = px10 >= 0 ? (px10 + 5) / 10 : -((-px10 + 5) / 10);    /* to the nearest pixel */
             st->lspace = (short)(px < -20 ? -20 : (px > 40 ? 40 : px));
+            break;
+        }
+        case P_COLUMN_COUNT: case P_COLUMN_WIDTH: case P_COLUMNS: {
+            /* A number is a count and a length a width, in either order. */
+            int ps[2], pl[2];
+            int np = css_parts(v, w_len(v), ps, pl, 2);
+            if (prop != P_COLUMNS) { ps[0] = 0; pl[0] = w_len(v); np = 1; }
+            if (prop == P_COLUMN_COUNT || prop == P_COLUMNS) st->col_n = 0;
+            if (prop == P_COLUMN_WIDTH || prop == P_COLUMNS) st->col_w = 0;
+            for (int k = 0; k < np; k++) {
+                char one[48];
+                int m = pl[k] < 47 ? pl[k] : 47;
+                for (int c = 0; c < m; c++) one[c] = v[ps[k] + c];
+                one[m] = 0;
+                if (w_starts_fold(one, "auto")) continue;
+                int digits = 1;
+                for (int c = 0; c < m; c++) if (!(one[c] >= '0' && one[c] <= '9')) digits = 0;
+                if (digits && prop != P_COLUMN_WIDTH) {
+                    int n = 0;
+                    for (int c = 0; c < m && n < 100; c++) n = n * 10 + (one[c] - '0');
+                    st->col_n = (short)(n > 16 ? 16 : n);
+                } else if (prop != P_COLUMN_COUNT) {
+                    clen L = css_len_at(one, st->font_px, root_px, pct_of);
+                    int px = css_px(L, st->font_px, root_px, pct_of);
+                    if (px > 0) st->col_w = (short)(px > 4000 ? 4000 : px);
+                }
+            }
             break;
         }
         case P_WORD_BREAK:
