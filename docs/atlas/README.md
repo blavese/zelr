@@ -95,6 +95,13 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.147.0
+
+- **floats at their min/max-width and none in a flex or grid row (11)**, **custom properties set to inherit, unset or
+  initial (11)**, **line heights in rem and with calc() (11)**, **text-indent inherited (11)**, **absolute boxes
+  against the window sized by top and bottom (11)**, **SVG arc flags (13)**. layouttest 431, svgtest 61, each failing
+  on a build without its change.
+
 ### 0.146.0
 
 - **!important (11)**, **CSS nesting written out flat (11)**, **media queries: other browsers' own features false,

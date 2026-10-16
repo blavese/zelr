@@ -1,6 +1,21 @@
 # 11 -- The web browser (everything except JS-engine internals and image decoders)
 
-**Since 0.146.0** (the rest of this file is older; trust the code and the README's "since 6048716" list):
+**Since 0.147.0** (the rest of this file is older; trust the code and the README's "since 6048716" list):
+- **Floats**: the width a float is placed at keeps to its max-width and min-width (lay_float, `wframe`); a box whose
+  parent is a flex or grid container is never floated (lay_block `in_row`; reached through display: contents it is
+  judged by the contents element).
+- **Custom properties set to a keyword** (layout.h `lay_var_keyword`, `lay_var_entry`, `lay_var_push_own`): inherit or
+  unset takes the parent's entry when gathered, passing over the element's own; initial (or inherit with nothing to
+  inherit) is none, so var() takes its fallback. Tailwind 4 sets `--tw-*: initial` on every element.
+- **line-height** in rem/vw/vh is a length (converted to a share of the font size); calc()/min()/max()/clamp() are
+  worked out, a number a share, a length a length (css.h P_LINE_HEIGHT).
+- **text-indent is inherited** (css_inherit), so text hidden by -9999px on a link reaches the heading inside it.
+- **An absolute box against the window** (no positioned ancestor, `!L->pos_id`) with a top and a bottom and no height
+  is laid out at `css_view_h` less both and its margins (force_node); a fixed one is not. A forced height its box did
+  not take is let go after lay_block_placed.
+- **SVG arcs**: the two flags are one digit each (svg.h `sv_flag`), so "a.5.5 0 01.016.707" reads as icon tools write it.
+
+**Since 0.146.0**:
 - **!important**: a declaration keeps a mark (css.h `CSS_IMPORTANT`, `CSS_PROP` strips it), and `lay_style` applies
   the marked ones after the rest in each of its two passes (font sizes, then the rest), in the same source order
   (browser, page, style attribute; `imp_pass`, skipped unless `saw_important`). The layer order is not turned
