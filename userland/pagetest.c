@@ -2128,10 +2128,10 @@ int main(void) {
         /* A script's selector is parsed into the page's sheet, and GitHub's
            sheets fill its tables: every selector but a bare tag name found
            nothing. Here the sheet is filled past its last selector first. */
-        int cap = 48000 * 8 + 32;
+        int n = CSS_SELS + 8000, cap = n * 10 + 32;
         char *big = (char *)malloc((u64)cap);
         int w = 0;
-        for (int i = 0; i < 48000 && w < cap - 32; i++) {
+        for (int i = 0; i < n && w < cap - 32; i++) {
             int v = i;
             big[w++] = '.'; big[w++] = 'k';
             char rev[8]; int r = 0;

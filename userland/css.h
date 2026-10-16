@@ -27,11 +27,15 @@
    kilobytes and eleven hundred rules between them; the rule and selector
    counts had room for that and the text did not, and a sheet whose text
    ran out halfway is a page styled by the first half of its stylesheet --
-   which looks like a layout bug and is not one. */
-#define CSS_RULES   16000
-#define CSS_SELS    40000
-#define CSS_DECLS   64000
-#define CSS_TEXT    (2048 * 1024)
+   which looks like a layout bug and is not one. GitHub's repository page
+   sends twenty-five thousand rules: at sixteen thousand the rest were
+   lost, its visually hidden headings and its closed menu's rules among
+   them, and the page showed its navigation drawer open. The tables are
+   zero data, given memory only as a page fills them. */
+#define CSS_RULES   32000
+#define CSS_SELS    80000
+#define CSS_DECLS   160000
+#define CSS_TEXT    (6 * 1024 * 1024)
 #define CSS_MAXCLS  4
 /* The insides of every :not() in the sheets. CNN's page has more than six
    thousand, and a selector past the 2048 there were room for was dropped

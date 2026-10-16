@@ -2272,6 +2272,31 @@ int main(void) {
            pl && pl->w >= 700 && bp && ba && ba->x - bp->x == 44);
     }
     {
+        /* GitHub's repository page sends twenty-five thousand rules, and at
+           sixteen thousand the rest were lost: its visually hidden headings
+           and its closed menu's rules among them. The last of 25000 rules
+           still takes. */
+        static char big[25000 * 24 + 256];
+        int w = 0;
+        const char *head = "<style>body{margin:0}p{margin:0}";
+        for (int i = 0; head[i]; i++) big[w++] = head[i];
+        for (int r = 0; r < 25000; r++) {
+            big[w++] = '.'; big[w++] = 'r';
+            char num[8];
+            int nn = 0, v = r;
+            do { num[nn++] = (char)('0' + v % 10); v /= 10; } while (v);
+            while (nn) big[w++] = num[--nn];
+            const char *body = "{margin-left:1px}";
+            for (int i = 0; body[i]; i++) big[w++] = body[i];
+        }
+        const char *tail = ".last{margin-left:77px}</style><p class=last>tail</p>";
+        for (int i = 0; tail[i]; i++) big[w++] = tail[i];
+        big[w] = 0;
+        lay(big, 800);
+        const litem *tl = word("tail");
+        okn("the last of twenty-five thousand rules is read", tl && tl->x == 77, tl ? tl->x : -1);
+    }
+    {
         /* An absolutely positioned box with no width is as wide as what is
            in it: a label at a picture's corner was a bar across the picture,
            one put at the right by right: 0 started at the left, and one
