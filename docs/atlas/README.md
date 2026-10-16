@@ -95,6 +95,12 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.146.0
+
+- **!important (11)**, **CSS nesting written out flat (11)**, **media queries: other browsers' own features false,
+  calc() in widths (11)**, **inline-blocks measured line by line and flex rows measured as wide as their items (11)**,
+  **a fixed scrolling row kept on one line (11)**. layouttest 420, each failing on a build without its change.
+
 ### 0.145.0
 
 - **fixed boxes placed by their bottom (11)**, **long words broken where allowed or where they would leave the page

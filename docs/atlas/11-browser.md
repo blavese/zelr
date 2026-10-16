@@ -1,6 +1,25 @@
 # 11 -- The web browser (everything except JS-engine internals and image decoders)
 
-**Since 0.145.0** (the rest of this file is older; trust the code and the README's "since 6048716" list):
+**Since 0.146.0** (the rest of this file is older; trust the code and the README's "since 6048716" list):
+- **!important**: a declaration keeps a mark (css.h `CSS_IMPORTANT`, `CSS_PROP` strips it), and `lay_style` applies
+  the marked ones after the rest in each of its two passes (font sizes, then the rest), in the same source order
+  (browser, page, style attribute; `imp_pass`, skipped unless `saw_important`). The layer order is not turned
+  round for them, the browser's are not put above the page's, and custom properties ignore the mark.
+- **CSS nesting** (css.h `css_flat`, called by `css_parse_in` and `css_parse_style`, which parse with
+  `css_parse_flat`): a sheet with a rule inside a rule's block is written out flat into `css_flat_buf` (3 MB) before
+  it is read; a sheet that nests nothing is read as written. A nested selector is joined to each parent selector
+  (& replaced; none means a descendant, or the leading combinator's relation), past 16 parents as `:is()`.
+  Declarations after a nested rule become a rule of their own after it; @media/@supports/@layer/@container inside
+  a rule hold its declarations. Twelve levels; & takes each parent's own weight, not :is()'s greatest.
+- **Media queries**: a feature beginning `-ms-` or `-moz-` makes its part false, "not" or not (`foreign`); widths
+  are worked out with calc()/min()/max()/clamp() at an em of 16 (`css_mq_px` through `css_len_at`).
+- **Measuring**: an inline-block with no width, laid out in the room left on a line being measured, goes to a new
+  line and is laid out again when it comes out wider than that room and something is already on the line (lay_inline_piece,
+  `relay`); a flex row measured with no width of its own gives its line the width of its items (`measured` in
+  lay_flex), so nothing grows or is spread into the room it was measured in.
+- **A nowrap row that would scroll** is still wrapped, unless it is fixed to the window (lay_inline_piece `nobreak`).
+
+**Since 0.145.0**:
 - **A fixed box with only a bottom** is moved to stand that far above the foot of the first screen (`css_view_h`)
   once its height is known (lay_block's positioned branch). Fixed boxes still scroll with the page.
 - **Long words** (lay_word): a word wider than a whole line is broken at the last letter that fits when
