@@ -971,6 +971,13 @@ static void lay_apply_short(lctx *L, cstyle *st, const char *nv, int pct_of) {
         for (int i = 0; i < 4; i++) css_apply_v(four + i, side[i], st, L->root_px, pct_of);
         return;
     }
+    if (css_two_sided(name) && n > 0) {
+        int first, second;
+        css_two_sides(name, &first, &second);
+        css_apply_v(first, part[0], st, L->root_px, pct_of);
+        css_apply_v(second, part[n > 1 ? 1 : 0], st, L->root_px, pct_of);
+        return;
+    }
     if (lay_same_fold(name, "background")) {
         u32 c;
         for (int i = 0; i < n; i++)

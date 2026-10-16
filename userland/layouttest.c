@@ -2306,6 +2306,22 @@ int main(void) {
         #undef NEAR
     }
     {
+        /* padding-inline and -block, margin-inline and -block, and a side of
+           one: Tailwind 4 writes px-4 as padding-inline: calc(var(--spacing)
+           * 4), and none of them was read, so its buttons had no padding. */
+        lay("<style>body{margin:0}p{margin:0;line-height:20px}:root{--spacing:4px}"
+            ".a{padding-inline:20px;padding-block:5px}.b{margin-inline:30px}.c{padding-inline:calc(var(--spacing) * 4)}"
+            ".d{padding-inline-start:12px}.e{margin-block:10px 0}.f{--tb:6px 30px;padding-block:var(--tb)}</style>"
+            "<p class=a>wa</p><p class=b>wb</p><p class=c>wc</p><p class=d>wd</p><p class=e>we</p><p>wf</p>"
+            "<p class=f>wg</p><p>wh</p>", 800);
+        const litem *la = word("wa"), *lb = word("wb"), *lc = word("wc"), *ld = word("wd"), *le = word("we"),
+                    *lf = word("wf"), *lg = word("wg"), *lh = word("wh");
+        ok("padding-inline and -block, margin-inline and -block, a side alone and calc(var()) in them all take",
+           la && la->x == 20 && la->y == 5 && lb && lb->x == 30 && lc && lc->x == 16 && ld && ld->x == 12
+           && le && lf && lf->y - le->y == 20 && le->y == 30 + 20 + 20 + 20 + 10
+           && lg && lh && lg->y - lf->y == 26 && lh->y - lg->y == 50);
+    }
+    {
         /* GitHub's repository page sends twenty-five thousand rules, and at
            sixteen thousand the rest were lost: its visually hidden headings
            and its closed menu's rules among them. The last of 25000 rules

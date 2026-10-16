@@ -758,6 +758,23 @@ static inline int css_px(clen L, int font_px, int root_px, int pct_of) {
 
 /* --- property names ------------------------------------------------------ */
 
+/* The shorthands of a start and an end side: inset-, padding- and
+   margin-inline and -block. */
+static inline int css_two_sided(const char *lower) {
+    return w_same(lower, "inset-inline") || w_same(lower, "inset-block")
+        || w_same(lower, "padding-inline") || w_same(lower, "padding-block")
+        || w_same(lower, "margin-inline") || w_same(lower, "margin-block");
+}
+
+/* Which two properties such a shorthand sets, left to right and top to
+   bottom. */
+static inline void css_two_sides(const char *lower, int *first, int *second) {
+    int inl = lower[w_len(lower) - 1] == 'e';           /* -inline, not -block */
+    if (lower[0] == 'i') { *first = inl ? P_LEFT : P_TOP; *second = inl ? P_RIGHT : P_BOTTOM; }
+    else if (lower[0] == 'p') { *first = inl ? P_PADDING_L : P_PADDING_T; *second = inl ? P_PADDING_R : P_PADDING_B; }
+    else { *first = inl ? P_MARGIN_L : P_MARGIN_T; *second = inl ? P_MARGIN_R : P_MARGIN_B; }
+}
+
 typedef struct { const char *name; short prop; } cprop;
 
 static const cprop CSS_PROPS[] = {
@@ -801,6 +818,12 @@ static const cprop CSS_PROPS[] = {
     { "margin-bottom", P_MARGIN_B },  { "margin-left", P_MARGIN_L },
     { "padding-top", P_PADDING_T },   { "padding-right", P_PADDING_R },
     { "padding-bottom", P_PADDING_B },{ "padding-left", P_PADDING_L },
+    /* The sides by the way text runs, which for a page written left to
+       right are left and right, top and bottom. */
+    { "padding-inline-start", P_PADDING_L }, { "padding-inline-end", P_PADDING_R },
+    { "padding-block-start", P_PADDING_T },  { "padding-block-end", P_PADDING_B },
+    { "margin-inline-start", P_MARGIN_L },   { "margin-inline-end", P_MARGIN_R },
+    { "margin-block-start", P_MARGIN_T },    { "margin-block-end", P_MARGIN_B },
     { "border-top-width", P_BORDER_T },
     { "border-right-width", P_BORDER_R },
     { "border-bottom-width", P_BORDER_B },
@@ -1601,7 +1624,7 @@ static inline void css_declare(csheet *s, const char *name, int nlen,
                     || w_same(lower, "border-right") || w_same(lower, "border-bottom")
                     || w_same(lower, "border-left") || w_same(lower, "background")
                     || w_same(lower, "font") || w_same(lower, "inset") || w_same(lower, "flex")
-                    || w_same(lower, "flex-flow")
+                    || w_same(lower, "flex-flow") || css_two_sided(lower)
                     || w_same(lower, "border-radius") || w_same(lower, "list-style"))) {
         char both[2048];
         int k = 0;
@@ -1626,14 +1649,16 @@ static inline void css_declare(csheet *s, const char *name, int nlen,
         css_shorthand4(s, v, vlen, P_TOP, P_RIGHT, P_BOTTOM, P_LEFT);
         return;
     }
-    if (w_same(lower, "inset-inline") || w_same(lower, "inset-block")) {
-        /* Its two sides, start then end, or one value for both. */
+    if (css_two_sided(lower)) {
+        /* Its two sides, start then end, or one value for both. Tailwind 4
+           writes every px-, py-, mx- and my- so, and none was read. */
         int st[2], ln[2];
         int np = css_parts(v, vlen, st, ln, 2);
         if (np <= 0) return;
-        int inl = w_same(lower, "inset-inline");
-        css_add(s, inl ? P_LEFT : P_TOP, v + st[0], ln[0]);
-        css_add(s, inl ? P_RIGHT : P_BOTTOM, v + st[np - 1], ln[np - 1]);
+        int first, second;
+        css_two_sides(lower, &first, &second);
+        css_add(s, first, v + st[0], ln[0]);
+        css_add(s, second, v + st[np - 1], ln[np - 1]);
         return;
     }
     if (w_same(lower, "border") || w_same(lower, "border-width")) {
