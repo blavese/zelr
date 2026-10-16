@@ -2686,6 +2686,17 @@ int main(void) {
            htmls == 1 && cl && w_same(cl, "v") && hv && hv->y == 70);
     }
     {
+        /* A media query's width counts the scroll bar beside the page: laid
+           out in 824 with a bar of 10, the page answers min-width: 834px, as
+           a browser with that room does (Apple's full menu bar). */
+        css_mq_extra = 10;
+        lay("<style>body{margin:0}#mq{height:10px;width:10px;background:#111111}@media (min-width: 834px){#mq{width:20px}}"
+            "</style><div id=mq></div>", 824);
+        css_mq_extra = 0;
+        const litem *mq = box_of(by_id("mq"));
+        ok("a media query's width counts the scroll bar beside the page", mq && mq->w == 20);
+    }
+    {
         /* An inline box with position: relative is drawn moved by its
            offsets, background and all, and nothing round it moves:
            Python.org's donate button, top: 33px, sat at the top of its bar. */

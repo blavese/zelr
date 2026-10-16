@@ -135,6 +135,12 @@ enum { U_PX = 0, U_EM, U_REM, U_PCT, U_VW, U_VH, U_AUTO };
    into a column one word across. */
 static int css_view_w;
 static int css_view_h;
+/* What a media query's width adds to it: a viewport's width counts the
+   scroll bar drawn beside it, as the standard has it and as every browser
+   on a desktop does. The browser's window of 860 laid its page out in 828
+   and answered max-width: 833px, so Apple's bar was its narrow one, where a
+   browser with the same room answers no. The browser sets it; 0 elsewhere. */
+static int css_mq_extra;
 
 /* What a percentage height is a percentage of: the parent's content height
    when the parent was given a height of its own, -1 when it was not. The
@@ -4099,8 +4105,8 @@ static inline void css_collect_chain(const csheet *s, const cindex *x,
         if (anc && ((x->need[r].w[0] & ~anc->w[0]) | (x->need[r].w[1] & ~anc->w[1])))
             continue;                          /* wants an ancestor there is not */
         const crule *rule = &s->rules[r];
-        if (rule->mq_lo >= 0 && css_view_w > 0 && css_view_w < rule->mq_lo) continue;
-        if (rule->mq_hi >= 0 && css_view_w > 0 && css_view_w > rule->mq_hi) continue;
+        if (rule->mq_lo >= 0 && css_view_w > 0 && css_view_w + css_mq_extra < rule->mq_lo) continue;
+        if (rule->mq_hi >= 0 && css_view_w > 0 && css_view_w + css_mq_extra > rule->mq_hi) continue;
         if (!css_matches(s, d, el, rule, m)) continue;
         hits[*n].rule = r;
         hits[*n].spec = rule->spec;

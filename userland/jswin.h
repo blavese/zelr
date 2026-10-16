@@ -1142,7 +1142,9 @@ static int jd_win_w, jd_win_h;          /* the browser's whole window */
 /* The browser's window, toolbar and all: what outerWidth is. */
 __attribute__((unused)) static void jsdom_window(int w, int h) { jd_win_w = w; jd_win_h = h; }
 
-static jval nat_win_inner_w(jctx *J, jval t, jval *a, int n) { (void)J; (void)t; (void)a; (void)n; return js_num(jd_view_w); }
+/* With the scroll bar, as a media query's width is; documentElement's
+   clientWidth is without it. */
+static jval nat_win_inner_w(jctx *J, jval t, jval *a, int n) { (void)J; (void)t; (void)a; (void)n; return js_num(jd_view_w + css_mq_extra); }
 static jval nat_win_inner_h(jctx *J, jval t, jval *a, int n) { (void)J; (void)t; (void)a; (void)n; return js_num(jd_view_h); }
 static jval nat_win_outer_w(jctx *J, jval t, jval *a, int n) { (void)J; (void)t; (void)a; (void)n; return js_num(jd_win_w ? jd_win_w : jd_view_w); }
 static jval nat_win_outer_h(jctx *J, jval t, jval *a, int n) { (void)J; (void)t; (void)a; (void)n; return js_num(jd_win_h ? jd_win_h : jd_view_h); }
@@ -1202,8 +1204,8 @@ static jobj *jd_mqls;                   /* the lists with listeners, to ask agai
 static int jd_mq_matches(const jstr *q) {
     int lo, hi;
     if (!css_mq(q->s, (int)q->len, &lo, &hi)) return 0;
-    if (lo >= 0 && jd_view_w < lo) return 0;
-    if (hi >= 0 && jd_view_w > hi) return 0;
+    if (lo >= 0 && jd_view_w + css_mq_extra < lo) return 0;
+    if (hi >= 0 && jd_view_w + css_mq_extra > hi) return 0;
     return 1;
 }
 

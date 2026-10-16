@@ -4705,6 +4705,7 @@ int main(int argc, char **argv) {
     int laid_for = 0;
     int want_load = 1;
     css_view_h = 600;                    /* until the window has been drawn */
+    css_mq_extra = UI_SCROLL_W;          /* the page's scroll bar, which a viewport counts */
     int want_width = 0;
     int last_mx = -1, last_my = -1, last_scroll = -1;
     int last_hover = -2;

@@ -2405,6 +2405,16 @@ int main(void) {
                    "scrollTo({ top: 250 });</script>"),
             "true false false false screen and (min-width:40em) 800 600 1 40 24 true");
         ok("and scrollTo asks the browser to scroll there", scrolled_to == 250);
+        /* With a scroll bar beside the page, the window's width counts it,
+           as the sheets' queries do. */
+        css_mq_extra = 10;
+        jsdom_view(824, 600, 0);
+        oks("innerWidth and matchMedia count the scroll bar beside the page",
+            titled("<script>document.title = [innerWidth, matchMedia('(min-width: 834px)').matches,"
+                   " matchMedia('(max-width: 833px)').matches].join(' ');</script>"),
+            "834 true false");
+        css_mq_extra = 0;
+        jsdom_view(800, 600, 40);
         load("<body><p id=out>none</p><script>var m = matchMedia('(min-width: 1000px)');"
              "m.addListener(function(e){ document.getElementById('out').textContent = 'now ' + e.matches; });"
              "</script></body>");
