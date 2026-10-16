@@ -4235,8 +4235,14 @@ static void push_history(const char *address) {
 /* The same blitter as draw.h's, against the browser's own larger set of
    faces. Written out rather than shared because draw.h's table is the one
    every other program carries and this one is thirty three faces. */
+static void tface_draw_sp(surface *s, int x, int y, const char *str, u32 fg, int which, int spacing);
 static void tface_draw(surface *s, int x, int y, const char *str, u32 fg,
                        int which) {
+    tface_draw_sp(s, x, y, str, fg, which, 0);
+}
+
+/* With letter-spacing: that many pixels after each letter. */
+static void tface_draw_sp(surface *s, int x, int y, const char *str, u32 fg, int which, int spacing) {
     const face_t *f = tface_of(which);
     int baseline = y + (f->size * 4) / 5;
     for (; *str; str++) {
@@ -4256,7 +4262,7 @@ static void tface_draw(surface *s, int x, int y, const char *str, u32 fg,
                 *slot = (a == 255) ? fg : mix(*slot, fg, a);
             }
         }
-        x += g->advance;
+        x += g->advance + spacing;
     }
 }
 
@@ -4533,7 +4539,7 @@ static void draw_page(surface *s, int ox, int oy, int vw, int vh) {
            tracked by href rather than by which run it is. */
         if (it->link >= 0 && it->link == over_link) col = 0x0842A0;
 
-        tface_draw(s, x, sy, str, col, it->face);
+        tface_draw_sp(s, x, sy, str, col, it->face, it->ls);
 
         if (it->under || (it->link >= 0 && it->link == over_link)) {
             /* Carried across the space to the next word when that word is

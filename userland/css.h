@@ -83,6 +83,7 @@ enum {
     P_LINE_CLAMP,
     P_TEXT_OVERFLOW,
     P_OVERFLOW_WRAP, P_WORD_BREAK,
+    P_LETTER_SPACING,
     P_COUNT
 };
 
@@ -307,6 +308,8 @@ typedef struct {
        or break-word (bit 2): a word wider than its line may be broken.
        Inherited, as both are. */
     unsigned char wbreak;
+    /* letter-spacing in pixels, after every letter; inherited. */
+    short lspace;
     unsigned char ellipsis;
     short order, basis, shrink;
     unsigned char basis_pct;  /* the basis was a percentage of the row (lay_flex) */
@@ -958,7 +961,7 @@ static const cprop CSS_PROPS[] = {
     { "z-index", P_Z_INDEX },
     { "-webkit-line-clamp", P_LINE_CLAMP },  { "line-clamp", P_LINE_CLAMP },
     { "overflow-wrap", P_OVERFLOW_WRAP },    { "word-wrap", P_OVERFLOW_WRAP },
-    { "word-break", P_WORD_BREAK },
+    { "word-break", P_WORD_BREAK },          { "letter-spacing", P_LETTER_SPACING },
     { "text-overflow", P_TEXT_OVERFLOW },
     { "text-transform", P_TEXT_TRANSFORM },
     { "aspect-ratio", P_ASPECT },
@@ -2816,6 +2819,7 @@ static inline void css_default_style(cstyle *st, int root_px) {
     st->display = st->display_up = D_INLINE;
     st->op_hidden = 0;
     st->wbreak = 0;
+    st->lspace = 0;
     st->flex_dir = FD_ROW;
     st->justify = JC_START;
     st->align_items = AI_STRETCH;
@@ -2896,6 +2900,7 @@ static inline void css_inherit(cstyle *child, const cstyle *parent) {
     child->align = parent->align;
     child->white = parent->white;
     child->wbreak = parent->wbreak;
+    child->lspace = parent->lspace;
     child->list = parent->list;
     child->line_h = parent->line_h;
     child->visible = parent->visible;
@@ -3548,6 +3553,17 @@ static inline void css_apply_v(int prop, const char *v, cstyle *st, int root_px,
             if (w_starts_fold(v, "break-word") || w_starts_fold(v, "anywhere")) st->wbreak |= 1;
             else st->wbreak &= (unsigned char)~1;
             break;
+        case P_LETTER_SPACING: {
+            /* Capitals set apart and headings drawn tighter: a word's width
+               is its letters' and this after each. */
+            if (w_starts_fold(v, "normal")) { st->lspace = 0; break; }
+            clen L = css_len_at(v, st->font_px, root_px, st->font_px);
+            if (L.unit == U_AUTO) break;
+            int px10 = L.unit == U_EM ? L.v * st->font_px / 10 : L.unit == U_REM ? L.v * root_px / 10 : L.v / 10;
+            int px = px10 >= 0 ? (px10 + 5) / 10 : -((-px10 + 5) / 10);    /* to the nearest pixel */
+            st->lspace = (short)(px < -20 ? -20 : (px > 40 ? 40 : px));
+            break;
+        }
         case P_WORD_BREAK:
             if (w_starts_fold(v, "break-all") || w_starts_fold(v, "break-word")) st->wbreak |= 2;
             else st->wbreak &= (unsigned char)~2;

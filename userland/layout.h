@@ -78,6 +78,7 @@ typedef struct {
     short bgi;                    /* LK_BOX: its background picture in bgs, or -1 */
     unsigned short zc;            /* its stacking context, in zctx (lay_z_enter) */
     unsigned char zl;             /* and its layer there: ZL_BG, ZL_FLOW or ZL_POS */
+    signed char ls;               /* LK_TEXT: letter-spacing, pixels after each letter */
 } litem;
 
 /* A stacking context: a positioned box with a z-index (or an item of a row
@@ -495,6 +496,7 @@ static inline litem *lay_item(lctx *L) {
     it->bgi = -1;
     it->zc = (unsigned short)L->z_ctx;
     it->zl = L->z_layer;
+    it->ls = 0;
     return it;
 }
 
@@ -704,6 +706,19 @@ static inline int lay_fold(const char *s, int n, char *out, int cap) {
     return w;
 }
 
+/* A word's width with its letter-spacing: the face's, and the spacing after
+   each letter (a letter being a character, not a byte). */
+static inline int lay_word_w(const char *s, int n, int face, int ls) {
+    int w = tface_wn(s, n, face);
+    if (ls) {
+        int letters = 0;
+        for (int i = 0; i < n; i++) if (((unsigned char)s[i] & 0xC0) != 0x80) letters++;
+        w += letters * ls;
+        if (w < 1) w = 1;
+    }
+    return w;
+}
+
 static inline void lay_word(lctx *L, const char *s, int n, const cstyle *st,
                             int *y, int face) {
     if (n <= 0) return;
@@ -729,9 +744,9 @@ static inline void lay_word(lctx *L, const char *s, int n, const cstyle *st,
         }
         s = tt;
     }
-    int w = tface_wn(s, n, face);
+    int w = lay_word_w(s, n, face, st->lspace);
     int sp = L->pending_space && L->pen > L->line_left
-             ? tface_wn(" ", 1, face) : 0;
+             ? tface_wn(" ", 1, face) + st->lspace : 0;
 
     if (L->pen + sp + w > L->line_left + L->line_width
         && L->pen > L->line_left && st->white != WS_NOWRAP) {
@@ -752,7 +767,7 @@ static inline void lay_word(lctx *L, const char *s, int n, const cstyle *st,
         && st->white != WS_NOWRAP && st->white != WS_PRE
         && (st->wbreak || (css_view_w > 0 && L->pen + w > css_view_w))) {
         int k = n;
-        while (k > 1 && tface_wn(s, k, face) > L->line_width) {
+        while (k > 1 && lay_word_w(s, k, face, st->lspace) > L->line_width) {
             k--;
             while (k > 1 && ((unsigned char)s[k] & 0xC0) == 0x80) k--;   /* not inside a letter */
         }
@@ -777,6 +792,7 @@ static inline void lay_word(lctx *L, const char *s, int n, const cstyle *st,
     it->at = st->ink_none ? -1 : lay_put(L, s, n);
     it->x = L->pen;
     it->w = w;
+    it->ls = (signed char)st->lspace;
     it->h = tface_h(face);
     it->face = (short)face;
     it->color = st->color;

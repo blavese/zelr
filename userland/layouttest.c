@@ -2688,6 +2688,26 @@ int main(void) {
            b1 && b2 && b2->y == b1->y + 10 && b1->w == 40 && x1 && x2 && x2->y == x1->y && x2->x >= x1->x + 100);
     }
     {
+        /* letter-spacing widens a word by its spacing after each letter, in
+           pixels or in em of the element's size, and narrows it when less
+           than nothing; the spacing goes with the word to be drawn. */
+        lay("<style>body{margin:0}p{margin:0}.a{letter-spacing:2px}.b{letter-spacing:.125em}.c{letter-spacing:-1px}</style>"
+            "<p>plainword</p><p class=a>spaceda</p><p class=b>spacedb</p><p class=c>tighter</p>"
+            "<p>spaceda</p><p>spacedb</p><p>tighter</p>", 800);
+        int wa = -1, wb = -1, wc = -1, pa = -1, pb = -1, pc = -1, lsa = 0;
+        for (int i = 0; i < page.nitems; i++) {
+            const litem *it = &page.items[i];
+            if (it->kind != LK_TEXT || it->at < 0) continue;
+            const char *t = page.text + it->at;
+            int spaced = it->ls != 0;
+            if (w_same(t, "spaceda")) { if (spaced) { wa = it->w; lsa = it->ls; } else pa = it->w; }
+            if (w_same(t, "spacedb")) { if (spaced) wb = it->w; else pb = it->w; }
+            if (w_same(t, "tighter")) { if (spaced) wc = it->w; else pc = it->w; }
+        }
+        ok("letter-spacing widens a word after each letter, in pixels and in em, and narrows it below nothing",
+           pa > 0 && wa == pa + 14 && lsa == 2 && pb > 0 && wb == pb + 14 && pc > 0 && wc == pc - 7);
+    }
+    {
         /* A word wider than its line is broken where the page says it may be
            (overflow-wrap) or where it would run off the page, which nothing
            here scrolls to; one that only overflows its own box stays whole. */
