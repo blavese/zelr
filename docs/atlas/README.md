@@ -95,6 +95,13 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.142.0
+
+- **a top or bottom in a percentage of the positioned box's height (11)**, **a float met after words laid beside
+  their line, its lines its own, measured beside them, its bottom margin once (11)**, **inline boxes moved by
+  position: relative (11)**, **8192 shadow roots, each found at once (12)**, **160000 nodes and mapped drawings
+  (12)**. layouttest 395, pagetest 375, svgtest 59, each failing on a build without its change.
+
 ### 0.141.0
 
 - **a float's percentages of the room it was floated in, and its floats its own (11)**, **font sizes in em of the

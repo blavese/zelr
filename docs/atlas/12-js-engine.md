@@ -2,7 +2,15 @@
 
 Source root the repository root (github.com/blavese/zelr main, 2026-09-22). All paths are relative to it; `file:N` means 1-based line N. Everything below was verified by reading the code. Where a behaviour was derived by tracing (not by running) it says so. Nothing here was built or run.
 
-**Since 0.139.0** (the rest of this file is older; trust the code):
+**Since 0.142.0** (the rest of this file is older; trust the code):
+- **8192 shadow roots** (`JD_SHADOWS`; Rotten Tomatoes attaches two thousand, and past 1024 a root was made but not
+  kept, so its slots were given nothing), each host and root keeping its record's number plus one in `jd_shadow_at`
+  (a node is a host or a root, never both), so `jd_shadow_find` no longer walks the list. Past 8192 a root is still
+  made and not kept.
+- **DOM_NODES 160000, DOM_ATTRS 320000** (dom.h): a page with its components working filled eighty thousand; removed
+  nodes are never reused. An SVG file's document is mapped (svg.h `svg_render`), since a heap block is memory at once.
+
+**Since 0.139.0**:
 - **FontFace** and **Element.animate** (with `Animation`, `KeyframeEffect`, `getAnimations`) are script in
   jsprelude.h: a FontFace loads nothing and settles at once, as `document.fonts` (jswin.h) already did; an animation is
   at its end at once, keeps its last frame when its fill is forwards or both, and fires `finish` through dispatch (which
@@ -305,7 +313,7 @@ Source root the repository root (github.com/blavese/zelr main, 2026-09-22). All 
   into the region. `ran_out` makes a page that ran out stay out (`jd_spent`).
 
 **Since 0.83.0**:
-- **Shadow roots are kept** (jsdom.h `jd_shadow_host`, `jd_shadow_root`, `JD_SHADOWS` 1024, with a bit per host and
+- **Shadow roots are kept** (jsdom.h `jd_shadow_host`, `jd_shadow_root`, `JD_SHADOWS` 1024 then (8192 since 0.142), with a bit per host and
   root in `jd_shadow_mark` so asking of any other node costs nothing; `jsdom_shadow` for the browser).
 - **Connected goes through shadow roots** (`jd_connected_deep`): isConnected, focus, offsetParent, custom elements'
   upgrades and callbacks. A component's own components are in its shadow root and were never upgraded. The page's

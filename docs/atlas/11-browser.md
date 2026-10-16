@@ -1,6 +1,21 @@
 # 11 -- The web browser (everything except JS-engine internals and image decoders)
 
-**Since 0.141.0** (the rest of this file is older; trust the code and the README's "since 6048716" list):
+**Since 0.142.0** (the rest of this file is older; trust the code and the README's "since 6048716" list):
+- **A top or bottom in a percentage** is of the containing box's height: resolved at once when the parent has a height
+  (`css_parent_h`), else marked (`cstyle.off_pct`) and left auto, and the box is laid out again when the positioned
+  box's height is settled (lay_block's relay, now also for `off_pct`). Only direct children of the positioned box.
+- **A float met after words on a line** (a floated block in the block walk when the line has something on it,
+  `lay_floated_here`; or one written inline) is laid out from the line: its items are a pinned group, which
+  `lay_line_end` leaves alone (it had moved them with the words' alignment and set every line of them on the
+  baseline), and `lay_line_beside_float` shortens the line beside it, moving the words when the float is on their
+  side, or moves the float below the line when the words do not fit beside it. Measured, a right float met after
+  words follows them (`lctx.float_pen`). A float's bottom margin is counted once in `fl_h` (a box's layout already
+  ends past it; a picture's does not).
+- **Inline boxes with position: relative** are moved by their offsets once the block holding them has laid out its
+  lines (`lctx.rel_*`, `lay_rel_open`/`lay_rel_close` from the inline stack, `lay_rel_apply` in lay_block_placed),
+  background and all; nothing round them moves.
+
+**Since 0.141.0**:
 - **A float's percentages are of the room it was floated in** (`lctx.pct_node`/`pct_w`, read by `lay_style`): laid out
   in the room `lay_float` decided, margins included, they were worked out again from that room (a slide of width 100%,
   margin-right -100% came to 0 wide). **A float is a formatting context of its own** (`lay_block_placed`'s
