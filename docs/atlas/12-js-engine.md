@@ -2,7 +2,16 @@
 
 Source root the repository root (github.com/blavese/zelr main, 2026-09-22). All paths are relative to it; `file:N` means 1-based line N. Everything below was verified by reading the code. Where a behaviour was derived by tracing (not by running) it says so. Nothing here was built or run.
 
-**Since 0.133.0** (the rest of this file is older; trust the code):
+**Since 0.139.0** (the rest of this file is older; trust the code):
+- **FontFace** and **Element.animate** (with `Animation`, `KeyframeEffect`, `getAnimations`) are script in
+  jsprelude.h: a FontFace loads nothing and settles at once, as `document.fonts` (jswin.h) already did; an animation is
+  at its end at once, keeps its last frame when its fill is forwards or both, and fires `finish` through dispatch (which
+  calls `onfinish` itself). The prelude runs before `document` is made: anything there that touches the document must
+  go through `Document.prototype` (a `document.` reference stopped the whole block once).
+- **Intersection entries are `IntersectionObserverEntry` objects** whose fields are also accessors on the prototype
+  (jsobs.h `jd_p_ioentry`, `nat_io_field`): lazy loaders check `'isIntersecting' in IntersectionObserverEntry.prototype`.
+
+**Since 0.133.0**:
 - **A page's scripts may have a quarter of free memory up to 384 MB** (jsdom.h `JD_MEM_CAP_MAX`, was 128): Tumblr's
   hold about 205.
 - The canvas's drawImage measures a picture in its natural size and samples the pixels it is kept at (jscanvas.h,
