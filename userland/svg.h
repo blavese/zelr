@@ -251,6 +251,20 @@ static inline void sv_arc(svpath *p, svmat m, float x1, float y1, float rx, floa
 
 /* --- path data ------------------------------------------------------------ */
 
+/* An arc's flag: one digit, which needs nothing after it before the next
+   number. Icon tools write "a.5.5 0 01.016.707", the flags 0 and 1 run into
+   the x that follows; read as numbers, 01.016 was one flag and every number
+   after it moved along one, so Bandcamp's outlined sparkles were drawn as
+   wedges joining their strokes. */
+static inline int sv_flag(const char **at) {
+    const char *p = *at;
+    while (*p && sv_space(*p)) p++;
+    int f = 0;
+    if (*p == '0' || *p == '1') f = *p++ - '0';
+    *at = p;
+    return f;
+}
+
 static inline void sv_path_data(svpath *path, svmat m, const char *d) {
     float x = 0, y = 0;            /* where the pen is */
     float sx = 0, sy = 0;          /* where this subpath started */
@@ -349,7 +363,7 @@ static inline void sv_path_data(svpath *path, svmat m, const char *d) {
                from the ends, the radii grown if they cannot reach, and the
                turn drawn as a cubic for each quarter of it. */
             float rx = sv_number(&p), ry = sv_number(&p), rot = sv_number(&p);
-            float large = sv_number(&p), sweep = sv_number(&p);
+            int large = sv_flag(&p), sweep = sv_flag(&p);
             float nx = sv_number(&p), ny = sv_number(&p);
             float x2 = rel ? x + nx : nx, y2 = rel ? y + ny : ny;
             sv_arc(path, m, x, y, rx, ry, rot, large != 0, sweep != 0, x2, y2);

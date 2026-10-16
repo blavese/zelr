@@ -412,6 +412,8 @@ int main(void) {
            rc == SVG_OK && isred(at(20, 8)) && iswhite(at(20, 24)) && iswhite(at(6, 8)));
         rc = draw("<svg width='40' height='40'><path d='M5 20 a15 15 0 1 0 30 0' fill='red'/></svg>", 40, 40);
         ok("and the other way, relative", rc == SVG_OK && isred(at(20, 32)) && iswhite(at(20, 8)));
+        rc = draw("<svg width='40' height='40'><path d='M5 20a15 15 0 1030 0' fill='red'/></svg>", 40, 40);
+        ok("and with its flags run into the number after them", rc == SVG_OK && isred(at(20, 32)) && iswhite(at(20, 8)));
         rc = draw("<svg width='40' height='40'><rect width='40' height='40' rx='12' fill='red'/></svg>", 40, 40);
         ok("a rectangle's corners are rounded by rx", rc == SVG_OK && iswhite(at(1, 1)) && iswhite(at(38, 38))
            && isred(at(20, 1)) && isred(at(1, 20)) && isred(at(20, 20)));
