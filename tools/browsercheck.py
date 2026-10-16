@@ -840,6 +840,19 @@ def main():
             c.add("and a script reads a tree's styles, and a component's box as its tree drew it",
                   count_in(pxc, wc, PAGE, (0x00, 0xB0, 0xB0)) > 1200, shotc)
 
+            # --- the last of eleven hundred shadow trees -----------------------
+            #
+            # A green band of 60 across the page from the last tree's sheet.
+            # With room for 1024 trees it was not drawn: Rotten Tomatoes'
+            # header, attached after a thousand components, lost its red bar.
+            go(vm, mon, "http://%s/many-trees" % srv.host,
+               was=comp, name="br-going-trees")
+            trees, pxt, wt, shott = page_settled(mon, "br-trees")
+            treeg = count_in(pxt, wt, PAGE, GREEN)
+            print("      green %d" % treeg)
+            c.add("the last of eleven hundred shadow trees is drawn from its sheet",
+                  treeg > 50 * (PAGE[2] - PAGE[0] - 120), shott)
+
             # --- background pictures -----------------------------------------
             #
             # 160 by 90 of rose from a sheet that names it relative to itself,
@@ -849,7 +862,7 @@ def main():
             # paints teal in a disc of radius 30: about 2830, where a square
             # would be 3600 and no mask at all nothing.
             go(vm, mon, "http://%s/bg/page" % srv.host,
-               was=comp, name="br-going-bg")
+               was=trees, name="br-going-bg")
             bgd, pxb, wb, shotb = page_settled(mon, "br-bg")
             rose = count_in(pxb, wb, PAGE, LOGO)
             teal = count_in(pxb, wb, PAGE, (0x00, 0xB0, 0xB0))

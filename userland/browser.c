@@ -1584,8 +1584,11 @@ static unsigned source_hash(int i) {
  * tree alone, scoped to a name made from what they are: every copy of one
  * component adopts the same sheets, so the copies share a name and one
  * reading of them, where a name each would have read the component's sheets
- * again for every copy of it on the page. A tree with none has no name. */
-#define TREES_MAX 1024
+ * again for every copy of it on the page. A tree with none has no name.
+ * As many as jsdom keeps (JD_SHADOWS): with room for 1024, Rotten Tomatoes'
+ * header, attached after a thousand other components, was not drawn as a
+ * tree, and the red bar its shadow sheet gives it was not there. */
+#define TREES_MAX 8192
 static int trees_n;
 static int tree_host[TREES_MAX], tree_root[TREES_MAX];
 static unsigned tree_key[TREES_MAX];          /* what its sheets are, in one number; 0 for none */

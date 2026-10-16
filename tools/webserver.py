@@ -651,6 +651,24 @@ SHADOWED = b"""<!doctype html>
 # page is drawn a script reads the band's style and the box of a component
 # with no box of its own, all of whose drawing is in its tree, and turns a
 # square teal if the one is the tree's green and the other holds the tree.
+# Eleven hundred shadow trees; the last one's sheet bands the page green.
+# The browser drew only the first 1024 (browser.c, TREES_MAX).
+MANY_TREES = b"""<!doctype html>
+<html><head><title>many trees</title>
+<style>body { font-family: sans-serif; padding: 24px }</style></head>
+<body><h1>the last of eleven hundred shadow trees</h1>
+<div id="trees"></div>
+<script>
+var box = document.getElementById('trees');
+for (var i = 0; i < 1100; i++) {
+  var h = document.createElement('x-tree');
+  box.appendChild(h);
+  h.attachShadow({ mode: 'open' }).innerHTML = i < 1099 ? '<i></i>'
+    : '<style>b { display: block; height: 60px; background: #00b050 }</style><b></b>';
+}
+</script></body></html>
+"""
+
 COMPONENT = b"""<!doctype html>
 <html><head><title>a component</title>
 <style>body { font-family: sans-serif; padding: 24px } .band { height: 10px }</style></head>
@@ -1746,6 +1764,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._send(SHADOWED)
         elif path == "/component":
             self._send(COMPONENT)
+        elif path == "/many-trees":
+            self._send(MANY_TREES)
         elif path == "/long-page":
             self._send(LONG_PAGE)
         elif path == "/big-inline":
