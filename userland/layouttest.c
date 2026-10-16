@@ -2170,6 +2170,31 @@ int main(void) {
            && f1 && f2 && f3 && f2->x == 110 && f3->y - f1->y == 70);
     }
     {
+        /* bbc.com's cards end in a row 32 high, centred: the time, a rule 1
+           pixel wide and 16 high written `margin: auto 2px`, the section. The
+           rule came out 16 wide over the section's first letters, and the row
+           lined its items up at its top. Also a rule standing alone. */
+        lay("<style>body{margin:0}.m{height:32px;align-items:center;display:flex;gap:8px}"
+            ".s{background-color:#545658;margin:auto 2px;height:16px;width:1px}.t{font-size:12px;line-height:14px}"
+            ".bar{background:#123456;width:3px;height:10px}</style>"
+            "<div class=m><span class=t>ago</span><div class=s id=sep></div><span class=t>section</span></div>"
+            "<div class=bar id=bar></div>", 800);
+        const litem *ag = word("ago"), *se = word("section"), *sp = box_of(by_id("sep")), *bar = box_of(by_id("bar"));
+        ok("a box the page makes 1 or 3 pixels wide is that wide",
+           sp && sp->w == 1 && bar && bar->w == 3 && se && sp->x + sp->w < se->x);
+        ok("and a row of one line 32 high centres its items, a rule with auto margins too",
+           ag && ag->y >= 8 && ag->y <= 10 && se && se->y == ag->y && sp && sp->y == 8 && sp->h == 16);
+        lay("<style>body{margin:0}.e{display:flex;height:60px;align-items:flex-end}"
+            ".e div{width:10px;height:10px;background:#654321}.u{margin-bottom:auto}.v{margin:auto 0}"
+            ".c{display:flex;min-height:100px;align-items:center}.c p{margin:0;line-height:20px}</style>"
+            "<div class=e><div id=low></div><div class=u id=high></div><div class=v id=mid></div></div>"
+            "<div class=c><p>middle</p></div>", 800);
+        const litem *lo = box_of(by_id("low")), *hi = box_of(by_id("high")), *md = box_of(by_id("mid")),
+                    *mi = word("middle");
+        ok("the end of a row 60 high is its bottom, auto margins keep an item at the top or the middle, a least height centres",
+           lo && lo->y == 50 && hi && hi->y == 0 && md && md->y == 25 && mi && mi->y >= 98 && mi->y <= 104);
+    }
+    {
         /* A box whose height a padding gives it, and what fills it placed
            absolutely with height: 100% or inset: 0, as Forbes draws its cover
            and most sites their thumbnails: the filling had no height, and

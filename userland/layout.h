@@ -2681,7 +2681,7 @@ static void lay_flex_line(lctx *L, const cstyle *st, const int *kid, const int *
                           const int *meas, int *want, const int *low,
                           const int *high, const int *grow, const int *aself,
                           const unsigned char *amarg, int cx, int cw,
-                          int gap, int reverse, int *y) {
+                          int gap, int reverse, int line_h, int *y) {
     int total = 0, grows = 0, hyp = 0;
     for (int i = 0; i < n; i++) {
         total += want[i]; grows += grow[i];
@@ -2823,7 +2823,7 @@ static void lay_flex_line(lctx *L, const cstyle *st, const int *kid, const int *
      * exact unless a child centres its content or sizes it by percentage,
      * where a measurement was already an estimate. */
     if (L->measuring) {
-        int tallest = 0;
+        int tallest = line_h;
         for (int i = 0; i < n; i++) if (high[i] > tallest) tallest = high[i];
         /* And without the room it would be spread over: a row pushed to its
            end reached the end of whatever it was measured in, and Nature's
@@ -2862,6 +2862,7 @@ static void lay_flex_line(lctx *L, const cstyle *st, const int *kid, const int *
         pen += want[i] + after[i] + between;
     }
     first[n] = L->out->nitems;
+    if (line_h > tallest) tallest = line_h;
 
     /* Slid down the cross axis afterwards, which is cheaper than laying it
        out somewhere else and gives the same answer. Stretch leaves what is
@@ -2871,6 +2872,13 @@ static void lay_flex_line(lctx *L, const cstyle *st, const int *kid, const int *
         int dy = 0;
         int i = reverse ? n - 1 - idx : idx;
         int al = aself[i] >= 0 ? aself[i] : st->align_items;
+        /* Auto margins above and below take the room before align-self
+           does: a rule between two items written `margin: auto 2px` sat at
+           the top of its row. */
+        int am = amarg[i] >> 2;
+        if (am == 3) al = AI_CENTER;
+        else if (am == 1) al = AI_END;
+        else if (am == 2) al = AI_START;
         if (al == AI_CENTER) dy = (tallest - got[idx]) / 2;
         else if (al == AI_END) dy = tallest - got[idx];
         if (dy > 0)
@@ -3021,14 +3029,26 @@ static void lay_flex(lctx *L, int node, const cstyle *st, int cx, int cw,
             high[i] = h;
             grow[i] = own.grow > 0 ? own.grow : 0;
             aself[i] = own.align_self;
-            amarg[i] = (unsigned char)((own.ml == CSS_AUTO_OFF) | ((own.mr == CSS_AUTO_OFF) << 1));
+            amarg[i] = (unsigned char)((own.ml == CSS_AUTO_OFF) | ((own.mr == CSS_AUTO_OFF) << 1)
+                                       | ((own.mt == CSS_AUTO_OFF) << 2) | ((own.mb == CSS_AUTO_OFF) << 3));
         }
 
         /* A row that would scroll sideways -- a shelf of cards, a strip of
            albums -- cannot be scrolled inside a page here, and squeezed onto
            one line its cards were written over each other. It wraps. */
         if (!st->flex_wrap && st->clip != 2) {
-            lay_flex_line(L, st, kid, par, n, meas, want, low, high, grow, aself, amarg, cx, cw, gap, reverse, y);
+            /* One line is as tall as the row when the row's height is set,
+               within its least and most: items centred in a row 32 high were
+               lined up against the tallest of them, at the row's top
+               (bbc.com's cards' times), and a hero 100vh high centred
+               nothing. */
+            int vframe = st->border_box ? st->pt + st->pb + st->bt + st->bb : 0;
+            int line_h = st->height >= 0 ? st->height - vframe : 0;
+            if (st->min_height >= 0 && line_h < st->min_height - vframe) line_h = st->min_height - vframe;
+            if (st->max_height >= 0 && line_h > st->max_height - vframe) line_h = st->max_height - vframe;
+            if (line_h < 0) line_h = 0;
+            lay_flex_line(L, st, kid, par, n, meas, want, low, high, grow, aself, amarg, cx, cw, gap, reverse,
+                          line_h, y);
         } else {
             /* Wrapping: as many as fit on each line, each line a row of its
                own. Card grids are built this way, and one row of every card
@@ -3046,7 +3066,7 @@ static void lay_flex(lctx *L, int node, const cstyle *st, int cx, int cw,
                 }
                 if (i0) *y += rgap;
                 lay_flex_line(L, st, kid + i0, par + i0, i1 - i0, meas + i0, want + i0, low + i0,
-                              high + i0, grow + i0, aself + i0, amarg + i0, cx, cw, gap, reverse, y);
+                              high + i0, grow + i0, aself + i0, amarg + i0, cx, cw, gap, reverse, 0, y);
                 i0 = i1;
             }
         }
@@ -4649,7 +4669,8 @@ static void lay_block_placed(lctx *L, int node, const cstyle *parent, int x,
        avail. Taking the width again undid that -- an item that asked to
        grow stayed its own size, and one shrunk to fit ran over the next --
        and a percentage was a percentage of the share it had been given. */
-    if (L->flex_sized == node) {
+    int flex_sized = L->flex_sized == node;
+    if (flex_sized) {
         want = -1;
         L->flex_sized = -1;
     }
@@ -4696,7 +4717,13 @@ static void lay_block_placed(lctx *L, int node, const cstyle *parent, int x,
     /* A floor beats a ceiling, which is what every implementation does and
        what a page relies on when it sets both. */
     if (floor_w >= 0 && box_w < floor_w) box_w = floor_w;
-    if (box_w < 16) box_w = 16;
+    /* Room for words when nothing said how wide; a box the page sized stays
+       the size it said, however narrow. bbc.com's cards part their time and
+       their section with a box 1 pixel wide, which came out 16 wide over the
+       first letters of the section's name. Its contents still get their 16
+       (cw, below). */
+    if (box_w < 16 && want < 0 && cap < 0 && !flex_sized) box_w = 16;
+    if (box_w < 0) box_w = 0;
 
     /* A table not given a width is as wide as its columns, so its columns
        are worked out before anything else; and centred the way old markup
