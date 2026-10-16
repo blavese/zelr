@@ -2583,6 +2583,7 @@ static int style_in_drawn(const ddoc *d, int node, cstyle *out) {
     cstyle *cur = &a, *next = &b;
     for (int i = n - 1; i >= 0; i--) {
         lay_style(&L, chain[i], cur, next, width);
+        if (i == n - 1 && next->font_px > 0) L.root_px = next->font_px;   /* a rem, as lay_run has it */
         cstyle *t = cur; cur = next; next = t;
     }
     lay_cs(out, cur);

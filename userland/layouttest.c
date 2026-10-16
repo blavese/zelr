@@ -2427,6 +2427,20 @@ int main(void) {
            lw && lw->color == 0xFF0000 && fw && fw->color == 0xFF0000);
     }
     {
+        /* A rem is the html element's font size: Engadget sets 10px and sizes
+           everything in rem, and at the browser's 16 its fixed header covered
+           a third of the window. */
+        lay("<style>html{font-size:10px}body{margin:0}.a{width:10rem;height:1.5rem;background:#111111}</style>"
+            "<div class=a id=ra></div>", 800);
+        const litem *ra = box_of(by_id("ra"));
+        int raw = ra ? ra->w : -1, rah = ra ? ra->h : -1;
+        lay("<style>html{font-size:62.5%}body{margin:0}.a{width:10rem;height:1.5rem;background:#111111}</style>"
+            "<div class=a id=rb></div>", 800);
+        const litem *rb = box_of(by_id("rb"));
+        ok("a rem is the html element's font size, in pixels or a percentage",
+           raw == 100 && rah == 15 && rb && rb->w == 100 && rb->h == 15);
+    }
+    {
         /* GitHub's repository page sends twenty-five thousand rules, and at
            sixteen thousand the rest were lost: its visually hidden headings
            and its closed menu's rules among them. The last of 25000 rules

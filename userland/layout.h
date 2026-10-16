@@ -5475,6 +5475,11 @@ static inline void lay_run(ldoc *out, const ddoc *d, const csheet *s,
     if (d->root >= 0 && d->body >= 0) lay_style(&L, d->root, &base, &root, width);
     else lay_cs(&root, &base);
     root.display = D_BLOCK;
+    /* A rem is the html element's font size, not the browser's: Engadget
+       sets 10px and sizes everything in rem, and at 16 its fixed header was
+       a third of the window, drawn over its stories, and every headline half
+       as big again. */
+    if (root.font_px > 0) L.root_px = root.font_px;
 
     /* The window behind the page takes the page's background: a dark page
        whose body was shorter than the window was dark down to the end of
