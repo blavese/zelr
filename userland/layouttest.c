@@ -846,6 +846,10 @@ int main(void) {
         ok("print never applies", !css_mq("print", 5, &lo, &hi));
         ok("nor a dark scheme", !css_mq("(prefers-color-scheme: dark)", 28, &lo, &hi));
         ok("nor a second pixel to the pixel", !css_mq("(min-resolution: 2dppx)", 23, &lo, &hi));
+        ok("nor a feature of another browser's own, with not or without",
+           !css_mq("all and (-ms-high-contrast: none)", 33, &lo, &hi)
+           && !css_mq("not all and (-moz-touch-enabled: 0)", 35, &lo, &hi)
+           && css_mq("screen and (-webkit-min-device-pixel-ratio: 1)", 46, &lo, &hi));
 
         lay("<style>@media (min-width:2000px){#m{color:#ff0000}}"
             "@media (max-width:2000px){#n{color:#ff0000}}</style>"

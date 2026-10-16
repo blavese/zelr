@@ -2030,7 +2030,7 @@ static inline int css_mq_word(const char *p, int n, const char *w) {
 /* One comma-separated part: whether it can apply at all, and its bounds. */
 static inline int css_mq_part(const char *p, int n, int *lo, int *hi) {
     *lo = -1; *hi = -1;
-    int never = 0, negate = 0, first = 1;
+    int never = 0, negate = 0, first = 1, foreign = 0;
     int i = 0;
     while (i < n) {
         while (i < n && css_space(p[i])) i++;
@@ -2051,7 +2051,19 @@ static inline int css_mq_part(const char *p, int n, int *lo, int *hi) {
                 int vl = fl - colon - 1;
                 int px = css_mq_px(v, vl);
                 while (vl > 0 && css_space(*v)) { v++; vl--; }
-                if (css_mq_word(f, colon, "min-width") || css_mq_word(f, colon, "min-device-width")) {
+                /* A feature of Internet Explorer's or Firefox's own is one this
+                   browser does not know, which makes the query false, "not" or
+                   no "not", as in Chromium: firefox.com's sheet for old
+                   browsers is linked for (-ms-high-contrast: none), and its menu
+                   for them was drawn as a white bar over the page. */
+                int fs = 0;
+                while (fs < colon && css_space(f[fs])) fs++;
+                if ((colon - fs > 4 && f[fs] == '-' && w_lower(f[fs + 1]) == 'm' && w_lower(f[fs + 2]) == 's'
+                     && f[fs + 3] == '-')
+                    || (colon - fs > 5 && f[fs] == '-' && w_lower(f[fs + 1]) == 'm' && w_lower(f[fs + 2]) == 'o'
+                        && w_lower(f[fs + 3]) == 'z' && f[fs + 4] == '-'))
+                    foreign = 1;
+                else if (css_mq_word(f, colon, "min-width") || css_mq_word(f, colon, "min-device-width")) {
                     if (px > *lo) *lo = px;
                 } else if (css_mq_word(f, colon, "max-width") || css_mq_word(f, colon, "max-device-width")) {
                     if (px >= 0 && (*hi < 0 || px < *hi)) *hi = px;
@@ -2130,6 +2142,7 @@ static inline int css_mq_part(const char *p, int n, int *lo, int *hi) {
         else if (wl > 0 && css_ident(w[0])) never = 1;    /* print, speech, tv... */
         first = 0;
     }
+    if (foreign) return 0;
     if (negate) {
         if (never) { *lo = *hi = -1; return 1; }
         if (*lo >= 0 && *hi < 0) { *hi = *lo - 1; *lo = -1; return 1; }
