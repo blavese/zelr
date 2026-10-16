@@ -99,8 +99,9 @@ numbered files are still to 6048716; where they disagree with this list, this li
 
 - **128 pictures a page, big ones kept at 1280 a side (11)**, **copy and paste in every field, ctrl+L (11)**, **Tab
   between fields (11)**, **content-visibility: hidden and hidden=until-found (11)**, **quoted strings in sheets (11)**,
-  **scripts up to 384 MB (12)**. layouttest 333, pagetest 370, browser harness 76, each failing on a build without its
-  change.
+  **scripts up to 384 MB (12)**, **boxes placed by their bottom and positioned pictures by their offsets (11)**, **files
+  saved to /home/downloads, pictures and MP4s on a page of their own (11)**. layouttest 335, pagetest 369, browser
+  harness 78, each failing on a build without its change.
 
 ### 0.132.0
 

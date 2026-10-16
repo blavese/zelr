@@ -11,6 +11,15 @@
   given it in the browser's sheet instead of display:none.
 - **Quoted strings** are passed over in declarations and skipped at-rule bodies (css.h `css_past_string`):
   Tumblr's `content:":("` ate two thousand rules.
+- **Absolute positioning**: a box with only a bottom is noted with its positioned box (`lctx.pos_id`, `bot_*`) and
+  moved once that box's height is settled at the end of its lay_block; against the page it stays where the flow put
+  it. A positioned picture, drawing, video or field takes the positioned layout (`lay_positioned_picture`, from the
+  block walk and the inline walk) and is not squeezed to the line. `inset-inline-start/-end`, `inset-block-start/-end`
+  and the `inset-inline`/`inset-block` shorthands are read as left/right/top/bottom (left to right only).
+- **A file and not a page** (browser.c `body_kind`): an attachment or a type that is not a page, text, JSON, a picture
+  or an MP4 is saved in `/home/downloads` (`download_name`, `save_download`, read back before it is said), the console
+  told "saved PATH, N bytes, read back the same"; a picture's own address is shown on a page of its own and an MP4's
+  played (`<video autoplay>`). Nothing past the 8 MB the page is read into.
 
 **Since 0.132.0**:
 - **Keys go to the page first** (browser.c key loop; jsdom.h `jsdom_key_down`, `jsdom_key_up`): keydown at the element
