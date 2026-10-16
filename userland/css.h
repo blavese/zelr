@@ -1622,6 +1622,11 @@ static inline void css_parse_block(csheet *s, const char *p, int len, int *at,
 /* Set on a declaration whose value uses var(), so the layout knows to put
    the variables in before applying it without looking at every value. */
 #define CSS_HAS_VAR 0x4000
+/* Written !important: applied after every declaration that is not
+   (layout.h, lay_style). The property is what is left (CSS_PROP). */
+#define CSS_IMPORTANT 0x2000
+#define CSS_PROP(p) ((p) & ~(CSS_HAS_VAR | CSS_IMPORTANT))
+static int css_important;               /* the declaration being added said !important */
 
 static inline void css_add(csheet *s, int prop, const char *v, int vlen) {
     if (s->ndecls >= CSS_DECLS) { s->overflowed = 1; return; }
@@ -1629,6 +1634,7 @@ static inline void css_add(csheet *s, int prop, const char *v, int vlen) {
     if (t < 0) return;
     for (int i = 0; i + 3 < vlen; i++)
         if (v[i] == 'v' && v[i + 1] == 'a' && v[i + 2] == 'r' && v[i + 3] == '(') { prop |= CSS_HAS_VAR; break; }
+    if (css_important) prop |= CSS_IMPORTANT;
     s->decls[s->ndecls].prop = (short)prop;
     s->decls[s->ndecls].value = t;
     s->ndecls++;
@@ -1757,6 +1763,8 @@ static inline void css_shorthand4(csheet *s, const char *v, int vlen,
     css_add(s, pl, v + st[left], ln[left]);
 }
 
+static inline void css_declare_body(csheet *s, const char *name, int nlen,
+                                    const char *v, int vlen);
 static inline void css_declare(csheet *s, const char *name, int nlen,
                                const char *v, int vlen) {
     /* Trim, so a value with a trailing !important or space compares -- and
@@ -1767,6 +1775,7 @@ static inline void css_declare(csheet *s, const char *name, int nlen,
        closed menus, fixed bars and floats were laid out as plain blocks. */
     while (vlen > 0 && css_space(v[0])) { v++; vlen--; }
     while (vlen > 0 && css_space(v[vlen - 1])) vlen--;
+    int important = 0;
     if (vlen > 10) {
         int k = vlen - 10;
         if (v[k] == '!' || (k > 0 && v[k - 1] == '!')) {
@@ -1775,10 +1784,19 @@ static inline void css_declare(csheet *s, const char *name, int nlen,
             if (b > 0 && w_starts_fold(v + b, "important")) {
                 vlen = b - 1;
                 while (vlen > 0 && css_space(v[vlen - 1])) vlen--;
+                important = 1;
             }
         }
     }
     if (vlen <= 0) return;
+    /* Every part the declaration becomes carries it (css_add). */
+    css_important = important;
+    css_declare_body(s, name, nlen, v, vlen);
+    css_important = 0;
+}
+
+static inline void css_declare_body(csheet *s, const char *name, int nlen,
+                                    const char *v, int vlen) {
 
     char lower[40];
     int n = nlen < 39 ? nlen : 39;
@@ -2225,7 +2243,8 @@ static inline void css_parse_in(csheet *s, const char *p, int len, int lo, int h
  * rank is where its name was first seen, in @layer a, b; or at its block; one
  * inside another is named after both ("a.b"). A layer with no name is one of
  * its own. Not kept: that a layer's own rules beat its sublayers', and the
- * reversal of all this for !important, which this does not read. */
+ * reversal of all this for !important (read since 0.146: applied after all
+ * that is not, in the same order, layout.h lay_style). */
 static inline int css_layer(csheet *s, int parent, const char *name, int n) {
     char full[48];
     int w = 0;
@@ -3284,7 +3303,7 @@ static inline void css_apply_v(int prop, const char *v, cstyle *st, int root_px,
 
 static inline void css_apply(const csheet *s, const cdecl *dcl, cstyle *st,
                              int root_px, int pct_of) {
-    css_apply_v(dcl->prop & ~CSS_HAS_VAR, s->text + dcl->value, st, root_px, pct_of);
+    css_apply_v(CSS_PROP(dcl->prop), s->text + dcl->value, st, root_px, pct_of);
 }
 
 static inline void css_apply_v(int prop, const char *v, cstyle *st, int root_px, int pct_of) {

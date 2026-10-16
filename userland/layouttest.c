@@ -2688,6 +2688,18 @@ int main(void) {
            b1 && b2 && b2->y == b1->y + 10 && b1->w == 40 && x1 && x2 && x2->y == x1->y && x2->x >= x1->x + 100);
     }
     {
+        /* !important beats what is not, whatever its weight or layer, and a
+           style attribute; font sizes too. firefox.com's menu for old
+           browsers was hidden only so, and was drawn as a white bar. */
+        lay("<style>@layer a, b;@layer a{.x{display:none!important}}@layer b{.y.x{display:block}}"
+            "body{margin:0}.f{font-size:30px!important}.f.g{font-size:10px}.f2{font-size:30px}"
+            "p.c{color:#ff0000!important}</style><p class='x y'>impgone</p><p class='f g'>impbig</p><p class=f2>plainbig</p>"
+            "<p class=c style='color:#0000ff'>impred</p>", 800);
+        const litem *ig = word("impgone"), *ib = word("impbig"), *pb = word("plainbig"), *ir = word("impred");
+        ok("!important beats a weightier rule, a later layer and a style attribute, font sizes too",
+           !ig && ib && pb && ib->h == pb->h && ir && ir->color == 0xFF0000);
+    }
+    {
         /* Columns: what the box holds is dealt into column-count columns
            (or as many of column-width as fit), each as wide as the room less
            the gaps allows, the box as high as its tallest column. */

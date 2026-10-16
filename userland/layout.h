@@ -400,6 +400,9 @@ typedef struct {
     /* Where the words on a line being measured end, for a float to the right
        met after them (lay_float); 0 otherwise. */
     int float_pen;
+    /* lay_style's pass over what is written !important (1) or what is not
+       (0), and whether a declaration of the first kind was met. */
+    int imp_pass, saw_important;
     /* Inline boxes moved by position: relative, kept until the block they
        are in has laid out its lines (lay_block_placed): their items, from
        where each opened to where it closed (-1 while open), and how far. */
@@ -1171,9 +1174,12 @@ static void lay_apply_short(lctx *L, cstyle *st, const char *nv, int pct_of) {
 
 /* One declaration, with its variables put in first when it has any. */
 static inline void lay_apply_decl(lctx *L, const cdecl *dc, cstyle *out, int pct_of) {
-    int prop = dc->prop & ~CSS_HAS_VAR;
+    int prop = CSS_PROP(dc->prop);
     if (prop == P_CUSTOM) return;                 /* gathered already */
     if (L->font_pass && prop != P_DEFER && (L->font_pass == 1) != (prop == P_FONT_SIZE)) return;
+    int important = (dc->prop & CSS_IMPORTANT) != 0;
+    if (important) L->saw_important = 1;
+    if (important != L->imp_pass) return;
     const char *v = L->s->text + dc->value;
     if (dc->prop & CSS_HAS_VAR) v = lay_var_keep(out->vars, v);
     if (prop == P_DEFER) { lay_apply_short(L, out, v, pct_of); return; }
@@ -1447,13 +1453,13 @@ static inline void lay_style(lctx *L, int el, const cstyle *parent,
                 const crule *r = &L->s->rules[rules[i]];
                 for (int k = 0; k < r->decl_n; k++) {
                     const cdecl *dc = &L->s->decls[r->decl_at + k];
-                    if ((dc->prop & ~CSS_HAS_VAR) == P_CUSTOM) h = lay_var_push(h, L->s->text + dc->value);
+                    if (CSS_PROP(dc->prop) == P_CUSTOM) h = lay_var_push(h, L->s->text + dc->value);
                 }
             }
         if (L->inl && el >= 0 && L->inl[el].n > 0)
             for (int k = 0; k < L->inl[el].n; k++) {
                 const cdecl *dc = &L->s->decls[L->inl[el].at + k];
-                if ((dc->prop & ~CSS_HAS_VAR) == P_CUSTOM) h = lay_var_push(h, L->s->text + dc->value);
+                if (CSS_PROP(dc->prop) == P_CUSTOM) h = lay_var_push(h, L->s->text + dc->value);
             }
         if (el >= 0 && el < DOM_NODES) {
             lay_var_gen[el] = lay_gen;
@@ -1472,12 +1478,24 @@ static inline void lay_style(lctx *L, int el, const cstyle *parent,
     /* The browser's dressing for a page with no rules is left off one that
        has them (css.h CSS_UA_PLAIN). */
     int plain_lo = L->s->nrules > ua ? L->s->plain_at : 0, plain_hi = L->s->nrules > ua ? L->s->plain_end : 0;
-    for (int pass = 1; pass <= 2; pass++) {
+    /* And in each, what is written !important after everything that is
+       not, in the same order: firefox.com hides its menu for old browsers
+       with display: none !important in its first layer, and a later
+       layer's display: flex had drawn it as a white bar over the page.
+       (The order of layers is not turned round for them, as the standard
+       has it.) Passed over when nothing matched says it. */
+    L->saw_important = 0;
+    for (int pass = 1; pass <= 2; pass++)
+    for (int imp = 0; imp <= 1; imp++) {
+        if (imp && !L->saw_important) continue;
         L->font_pass = pass;
+        L->imp_pass = imp;
         for (int i = 0; i < n; i++)
             if (rules[i] < ua && (rules[i] < plain_lo || rules[i] >= plain_hi)) lay_apply_rule(L, rules[i], out, pct_of);
-        if (pass == 1) lay_font_hint(L, el, out);
-        else lay_hints(L, el, out, pct_of);
+        if (!imp) {
+            if (pass == 1) lay_font_hint(L, el, out);
+            else lay_hints(L, el, out, pct_of);
+        }
         for (int i = 0; i < n; i++) if (rules[i] >= ua) lay_apply_rule(L, rules[i], out, pct_of);
 
         /* And last, what the element says about itself. A style attribute
@@ -1488,6 +1506,7 @@ static inline void lay_style(lctx *L, int el, const cstyle *parent,
                 lay_apply_decl(L, &L->s->decls[L->inl[el].at + k], out, pct_of);
     }
     L->font_pass = 0;
+    L->imp_pass = 0;
     if (out->op_hidden) out->visible = 0;
 
     /* What is inside noscript is for a browser that runs no scripts, and
@@ -5893,7 +5912,7 @@ static int lay_generated(ddoc *out, const csheet *s, const cindex *x, const cmat
                 const crule *r = &s->rules[hits[i].rule];
                 for (int k = 0; k < r->decl_n; k++) {
                     const cdecl *dc = &s->decls[r->decl_at + k];
-                    if ((dc->prop & ~CSS_HAS_VAR) == P_CONTENT) val = s->text + dc->value;
+                    if (CSS_PROP(dc->prop) == P_CONTENT) val = s->text + dc->value;
                 }
             }
             if (!val) continue;
@@ -6026,6 +6045,7 @@ static inline void lay_run(ldoc *out, const ddoc *d, const csheet *s,
     L.pct_node = -1; L.pct_w = 0;
     L.font_pass = 0;
     L.float_pen = 0;
+    L.imp_pass = L.saw_important = 0;
     L.nrel = 0;
     L.abs_sizing = -1;
     L.measure_root = -1;

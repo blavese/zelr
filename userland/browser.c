@@ -2539,7 +2539,7 @@ static int pseudo_style(int node, int pe, cstyle *out, char *content, int cap) {
         const crule *r = &sheet.rules[hits[i].rule];
         for (int k = 0; k < r->decl_n; k++) {
             const cdecl *dc = &sheet.decls[r->decl_at + k];
-            if ((dc->prop & ~CSS_HAS_VAR) == P_CONTENT) val = sheet.text + dc->value;
+            if (CSS_PROP(dc->prop) == P_CONTENT) val = sheet.text + dc->value;
         }
     }
     w_copy(content, cap, val, w_len(val) + 1);
