@@ -2610,6 +2610,43 @@ int main(void) {
            && pk && pk->y == 230 + 50);
     }
     {
+        /* A float after words on a line sits beside that line, and the
+           words are set in the room it leaves: Python.org's donate button
+           sat above its floated search bar instead of beside it. */
+        lay("<style>body{margin:0}.c{width:470px;text-align:right}.o{float:right;width:300px;height:40px;background:#003366}"
+            "</style><div class=c>Donate<div class=o id=fo2></div></div><p>after</p>", 800);
+        const litem *dn = word("Donate"), *fo2 = box_of(by_id("fo2"));
+        ok("a float after words on a line sits beside them, the words in the room it leaves",
+           dn && fo2 && fo2->y == dn->y && fo2->x == dn->x + dn->w && fo2->x + fo2->w == 470);
+        /* One written inline keeps its own lines and its place: every line
+           of it was set on the words' baseline and moved with their
+           alignment. */
+        lay("<style>body{margin:0}.c{width:470px;text-align:right}.f{float:right;width:200px;background:#003366}"
+            "</style><div class=c>first <span class=f id=fi>alpha<br>beta</span> second</div>", 800);
+        const litem *al = word("alpha"), *be = word("beta"), *fi = box_of(by_id("fi")), *se = word("second");
+        ok("a float written inline in a line keeps its lines and its side",
+           al && be && fi && be->y > al->y && fi->x == 270 && fi->y == al->y && se && se->x + se->w == 270);
+        /* Where the words already on the line leave it no room, it goes
+           below the line rather than over them. */
+        lay("<style>body{margin:0}.c{width:470px}.o{float:right;width:300px;height:40px;background:#003366}"
+            "</style><div class=c>one two three four five six seven<div class=o id=fo3></div></div>", 800);
+        const litem *sv = word("seven"), *fo3 = box_of(by_id("fo3"));
+        ok("a float with no room beside the words on its line goes below them", sv && fo3 && fo3->y >= sv->y + sv->h);
+        /* Measured, the words and the float beside them both count: Python.org's
+           bar holding its donate button and its floated search was as wide as
+           the search alone, and the button went above it. */
+        lay("<style>body{margin:0}.w{float:right;background:#eeeeee}.o{float:right;width:300px;height:40px;background:#003366}"
+            "</style><div class=w id=fw>Donate<div class=o id=fo4></div></div>", 800);
+        const litem *fw = box_of(by_id("fw")), *dn4 = word("Donate"), *fo4 = box_of(by_id("fo4"));
+        ok("a float measured holds the words and the float beside them on one line",
+           fw && dn4 && fo4 && fw->w == dn4->w + 300 && fo4->y == dn4->y && fw->x + fw->w == 800);
+        /* And its bottom margin counts once. */
+        lay("<style>body{margin:0}.c{width:470px;background:#eeeeee}.m{float:left;width:100px;height:40px;"
+            "margin-bottom:30px;background:#003366}</style><div class=c id=fc><div class=m></div></div>", 800);
+        const litem *fc = box_of(by_id("fc"));
+        ok("a float's bottom margin counts once in what holds it", fc && fc->h == 70);
+    }
+    {
         /* A button's words are as shown, each run of white space one space:
            Python.org's GO button kept its markup's newlines and indentation
            and was 320 pixels wide. */

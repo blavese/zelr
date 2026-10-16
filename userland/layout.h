@@ -396,6 +396,9 @@ typedef struct {
     /* Which declarations lay_style is applying: 1 font sizes, 2 the rest, 0
        all of them. */
     int font_pass;
+    /* Where the words on a line being measured end, for a float to the right
+       met after them (lay_float); 0 otherwise. */
+    int float_pen;
     /* The absolutely positioned box being measured for how wide its contents
        make it (lay_block): laid out as its body, where it stands. -1 for none. */
     int abs_sizing;
@@ -1695,7 +1698,11 @@ static void lay_float(lctx *L, int node, const cstyle *parent, int cleft, int cw
        held it as wide as that room. Python.org's search bar, floated right
        inside a box floated right, made the box the page's width, and it went
        under the logo instead of beside it. */
-    int mx = st.floated == 2 && !L->measuring ? r - need : l;       /* the margin box */
+    /* And met after words on a line being measured, it follows them: at the
+       line's left it left them no room and went below, and what held them
+       measured as wide as the wider of the two, not both. */
+    int mx = st.floated == 2 && !L->measuring ? r - need
+           : st.floated == 2 && L->float_pen > l && L->float_pen + need <= r ? L->float_pen : l;   /* the margin box */
     int x = mx + ml;                              /* the box */
 
     int s_line_at = L->line_at, s_line_n = L->line_n, s_pen = L->pen;
@@ -1742,9 +1749,57 @@ static void lay_float(lctx *L, int node, const cstyle *parent, int cleft, int cw
     L->fl_x[k] = mx;
     L->fl_y[k] = y;
     L->fl_w[k] = need;
-    L->fl_h[k] = yy - y + (st.mb > 0 && st.mb != CSS_AUTO_OFF ? st.mb : 0);
+    /* A box's own layout ends past its bottom margin; a picture's line does
+       not. Added to both, a float's margin pushed what cleared it, and the
+       box holding it, down twice as far. */
+    L->fl_h[k] = yy - y + (replaced && st.mb > 0 && st.mb != CSS_AUTO_OFF ? st.mb : 0);
     L->fl_side[k] = st.floated;
     L->fl_seq++;
+}
+
+/* A float met with words already on the line: the line is shortened
+   beside it, the words moved along when it is on their side, and what the
+   float laid out kept out of the line's own placing (a pinned group), which
+   moved it along with the words and set every line of it on the baseline.
+   When the words do not fit beside it, it goes below the line. Python.org's
+   donate button, before its floated search bar in a right-aligned box, sat
+   above the bar instead of beside it. */
+static void lay_line_beside_float(lctx *L, int first) {
+    ldoc *o = L->out;
+    if (o->nitems > first && L->ngroups < LAY_GROUPS) {
+        L->grp_first[L->ngroups] = first;
+        L->grp_end[L->ngroups] = o->nitems;
+        L->grp_h[L->ngroups] = 0;
+        L->grp_pin[L->ngroups] = 1;
+        L->ngroups++;
+    }
+    if (!L->fl_seq) return;
+    int k = (L->fl_seq - 1) % LAY_FLOATS;
+    if (L->fl_y[k] != L->line_top) return;
+    int l = L->cont_left, r = L->cont_left + L->cont_width;
+    lay_float_room(L, L->line_top, &l, &r);
+    int used = L->pen - L->line_left;
+    if (r - l < used) {
+        int dy = L->line_h > 0 ? L->line_h : 1;
+        for (int i = first; i < o->nitems; i++) o->items[i].y += dy;
+        L->fl_y[k] += dy;
+        return;
+    }
+    int dl = l - L->line_left;
+    if (dl)
+        for (int i = L->line_at; i < first; i++) o->items[i].x += dl;
+    L->pen += dl;
+    L->line_left = l;
+    L->line_width = r - l;
+}
+
+/* Whether a child is floated, and so laid beside the line being filled. */
+static int lay_floated_here(lctx *L, int child, const cstyle *parent, int cw) {
+    if (L->d->nodes[child].kind != DN_ELEMENT) return 0;
+    cstyle fs;
+    lay_style(L, child, parent, &fs, cw);
+    return fs.floated && fs.display != D_NONE && fs.position != POS_ABSOLUTE && fs.position != POS_FIXED
+           && child != L->floating;
 }
 
 /* Below every float on the side a box clears, within its width. */
@@ -2234,9 +2289,14 @@ static inline void lay_inline(lctx *L, int node, const cstyle *parent, int *y) {
                 && st.position != POS_FIXED) {
                 /* To the side, from the line it came in on; a line with nothing
                    on it yet is started again beside it. */
+                int fl_first = L->out->nitems;
+                L->float_pen = L->measuring && L->line_n > 0 ? L->pen : 0;
                 lay_float(L, at, &stack[sp], L->cont_left, L->cont_width, L->line_top);
+                L->float_pen = 0;
                 if (L->line_n == 0)
                     lay_line_start(L, L->line_top, L->cont_left, L->cont_width, L->align);
+                else
+                    lay_line_beside_float(L, fl_first);
                 at = lay_past(d, at, node);
                 continue;
             }
@@ -5211,6 +5271,12 @@ static void lay_block_placed(lctx *L, int node, const cstyle *parent, int x,
             lay_line_end(L, y);
             *y += cs.mb == CSS_AUTO_OFF ? 0 : cs.mb;
             inline_open = 0;
+        } else if (is_block && inline_open && L->line_n > 0 && lay_floated_here(L, child, &st, cw)) {
+            /* A float is out of the flow, so the line it comes in on goes on
+               beside it, as it does round a float written inline. (A line
+               with nothing on it -- opened by a style element, say -- is
+               ended as before.) */
+            lay_inline(L, child, &st, y);
         } else if (is_block) {
             if (inline_open) { lay_line_end(L, y); inline_open = 0; }
             lay_block(L, child, &st, cx, cw, y);
@@ -5782,6 +5848,7 @@ static inline void lay_run(ldoc *out, const ddoc *d, const csheet *s,
     L.flex_sized = -1;
     L.pct_node = -1; L.pct_w = 0;
     L.font_pass = 0;
+    L.float_pen = 0;
     L.abs_sizing = -1;
     L.measure_root = -1;
     L.ngroups = 0;
