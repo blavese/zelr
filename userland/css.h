@@ -853,6 +853,26 @@ static inline clen css_len(const char *s) {
     else if (w_starts_fold(s, "vh")) L.unit = U_VH;
     else if (*s == '%') L.unit = U_PCT;
     else if (w_starts_fold(s, "pt")) { L.v = L.v * 4 / 3; L.unit = U_PX; }
+    /* The rest were read as pixels: an article kept to max-width: 65ch was
+       65 pixels wide, and a hero of min-height: 100dvh 100 pixels tall. A
+       character's width and an x's height are taken as Chromium's sans
+       serif has them, about 0.55em and 0.5em. The small, large and dynamic
+       viewports are the one window here, and with no containers to query a
+       container's units are the window's, as the standard has it. */
+    else if (ul == 2 && w_starts_fold(s, "ch")) { L.v = L.v * 11 / 20; L.unit = U_EM; }
+    else if (ul == 2 && w_starts_fold(s, "ex")) { L.v /= 2; L.unit = U_EM; }
+    else if (ul == 3 && (w_starts_fold(s, "dvh") || w_starts_fold(s, "svh") || w_starts_fold(s, "lvh")
+                         || w_starts_fold(s, "cqh") || w_starts_fold(s, "cqb"))) L.unit = U_VH;
+    else if (ul == 3 && (w_starts_fold(s, "dvw") || w_starts_fold(s, "svw") || w_starts_fold(s, "lvw")
+                         || w_starts_fold(s, "cqw") || w_starts_fold(s, "cqi"))) L.unit = U_VW;
+    else if (ul == 4 && (w_starts_fold(s, "vmin") || w_starts_fold(s, "vmax"))) {
+        int wide = css_view_w > css_view_h;
+        L.unit = (w_lower(s[2]) == 'i') == wide ? U_VH : U_VW;
+    }
+    else if (ul == 2 && w_starts_fold(s, "in")) { L.v *= 96; L.unit = U_PX; }
+    else if (ul == 2 && w_starts_fold(s, "pc")) { L.v *= 16; L.unit = U_PX; }
+    else if (ul == 2 && w_starts_fold(s, "cm")) { L.v = L.v * 378 / 10; L.unit = U_PX; }
+    else if (ul == 2 && w_starts_fold(s, "mm")) { L.v = L.v * 378 / 100; L.unit = U_PX; }
     else L.unit = U_PX;
     return L;
 }

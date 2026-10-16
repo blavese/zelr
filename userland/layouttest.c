@@ -2569,6 +2569,20 @@ int main(void) {
         ok("a font shorthand split late gives way to a later rule's font size", sh && pl && sh->h == pl->h);
     }
     {
+        /* Units that were read as pixels: a column of 20ch, a box of 50dvh,
+           10vmin of a window wider than it is tall, an inch. */
+        int keep_h = css_view_h;
+        css_view_h = 500;
+        lay("<style>body{margin:0}div{height:10px;background:#111111}#u1{width:20ch}#u2{width:50dvh}"
+            "#u3{width:10vmin}#u4{width:1in}#u5{width:2cqw}</style>"
+            "<div id=u1></div><div id=u2></div><div id=u3></div><div id=u4></div><div id=u5></div>", 800);
+        css_view_h = keep_h;
+        const litem *u1 = box_of(by_id("u1")), *u2 = box_of(by_id("u2")), *u3 = box_of(by_id("u3"));
+        const litem *u4 = box_of(by_id("u4")), *u5 = box_of(by_id("u5"));
+        ok("ch, dvh, vmin, in and cqw are what they measure, not pixels",
+           u1 && u1->w == 176 && u2 && u2->w == 250 && u3 && u3->w == 50 && u4 && u4->w == 96 && u5 && u5->w == 16);
+    }
+    {
         /* A button's words are as shown, each run of white space one space:
            Python.org's GO button kept its markup's newlines and indentation
            and was 320 pixels wide. */
