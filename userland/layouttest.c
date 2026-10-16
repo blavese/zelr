@@ -2337,6 +2337,43 @@ int main(void) {
            && lg && lh && lg->y - lf->y == 26 && lh->y - lg->y == 50);
     }
     {
+        /* color: unset and inherit undo the browser's link colour: bbc.com's
+           links say unset, and its logo, painted currentcolor, was blue. */
+        lay("<style>a{color:#0000ff}div{color:#123456}.u{color:unset}.i{color:inherit}.n{color:initial}p{color:#00ff00}</style>"
+            "<div><a href=x class=u>cu</a> <a href=x class=i>ci</a> <a href=x>ca</a><p class=n>cn</p></div>", 800);
+        const litem *cu = word("cu"), *ci = word("ci"), *ca = word("ca"), *cn = word("cn");
+        ok("color: unset and inherit take the parent's colour over a link's, initial the first colour",
+           cu && cu->color == 0x123456 && ci && ci->color == 0x123456 && ca && ca->color != 0x123456
+           && cn && cn->color == 0x1A1A1A);
+    }
+    {
+        /* background: none and background-color: initial are transparent:
+           every reset button kept the browser's grey, and Spotify's close
+           button a white circle under its grey cross. A gradient that is not
+           drawn keeps the colour before it, its only stand-in. */
+        lay("<style>.g{background:#ff0000;height:10px}.n{background:none}.i{background-color:initial}"
+            ".u{background:url(x.png) no-repeat}.r{background:radial-gradient(#fff,#000)}"
+            ".v{--b:none;background:var(--b)}.w{--b:url(x.png) no-repeat 0 0 #00ff00;background:var(--b)}</style>"
+            "<div class='g n' id=bn></div><div class='g i' id=bi></div><div class='g u' id=bu></div>"
+            "<div class='g r' id=br></div><div class=g id=bg></div><div class='g v' id=bv></div>"
+            "<div class='g w' id=bw></div>", 800);
+        const litem *bn = box_of(by_id("bn")), *bi = box_of(by_id("bi")), *bu = box_of(by_id("bu")),
+                    *br = box_of(by_id("br")), *bg = box_of(by_id("bg")), *bv = box_of(by_id("bv")),
+                    *bw = box_of(by_id("bw"));
+        ok("background: none, a picture alone and background-color: initial leave no colour, in a variable too",
+           !(bn && bn->has_bg) && !(bi && bi->has_bg) && !(bu && bu->has_bg) && !(bv && bv->has_bg)
+           && bg && bg->has_bg && bg->bg == 0xFF0000 && bw && bw->has_bg && bw->bg == 0x00FF00);
+        ok("and a gradient that is not drawn keeps the colour before it", br && br->has_bg && br->bg == 0xFF0000);
+        /* What is drawn inside is made on what is behind the box, not on the
+           colour taken away: Spotify's cross was drawn on a white square. */
+        lay("<style>.d{background:#123456}.n{background:none}.t{background-color:initial}</style>"
+            "<div class=d><button class=n><svg id=sn width=10 height=10></svg></button>"
+            "<button class=t><svg id=st width=10 height=10></svg></button></div>", 800);
+        const litem *sn = image_of(by_id("sn")), *sv = image_of(by_id("st"));
+        ok("and a drawing in a button whose background is taken away is made on what is behind it",
+           sn && sn->bg == 0x123456 && sv && sv->bg == 0x123456);
+    }
+    {
         /* GitHub's repository page sends twenty-five thousand rules, and at
            sixteen thousand the rest were lost: its visually hidden headings
            and its closed menu's rules among them. The last of 25000 rules

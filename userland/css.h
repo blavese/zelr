@@ -234,6 +234,12 @@ typedef struct {
 
     /* Text in a colour that cannot be seen: laid out, not drawn. Inherited. */
     unsigned char ink_none;
+    /* The parent's colour and ink_none, for color: inherit and unset, which
+       must undo a rule that came before them (the browser's link colour);
+       and the parent's background, what is behind a box whose own background
+       a later rule takes away (the browser's button grey). */
+    unsigned char ink_none_up;
+    u32 color_up, background_up;
 
     /* A transform's translation: pixels, plus a percentage of the box's own
        width or height (layout.h, lay_translate). Nothing else a transform
@@ -1546,6 +1552,16 @@ static inline int css_size_keyword(const char *v, int n) {
     return 0;
 }
 
+/* Whether a background holds a gradient that is not drawn (only linear ones
+   are, browser.c's draw_background), in any of its layers. */
+static int css_bg_undrawn(const char *v, int vlen) {
+    for (int i = 0; i + 16 <= vlen; i++)
+        if ((v[i] == 'r' || v[i] == 'c' || v[i] == 'R' || v[i] == 'C')
+            && (w_starts_fold(v + i, "radial-gradient(") || w_starts_fold(v + i, "conic-gradient(")
+                || w_starts_fold(v + i, "repeating-"))) return 1;
+    return 0;
+}
+
 static inline int css_parts(const char *v, int vlen, int *st, int *ln, int max) {
     int n = 0, i = 0;
     while (i < vlen && n < max) {
@@ -1800,7 +1816,14 @@ static inline void css_declare(csheet *s, const char *name, int nlen,
         int found = -1;
         for (int i = 0; i < np; i++)
             if (css_color(v + st[i], &c)) { found = i; break; }
-        if (found < 0) return;
+        if (found < 0) {
+            /* No colour named is transparent, as the shorthand resets it:
+               button{background:none} left the browser's grey on every reset
+               button. Except over a gradient this browser does not draw, for
+               which a colour before it is the only stand-in there is. */
+            if (!css_bg_undrawn(v, vlen)) css_add(s, P_BACKGROUND, "transparent", 11);
+            return;
+        }
         css_add(s, P_BACKGROUND, v + st[found], ln[found]);
         return;
     }
@@ -2717,7 +2740,9 @@ static inline void css_default_style(cstyle *st, int root_px) {
     st->bg_sw = st->bg_sh = -1;
     st->bg_px = st->bg_py = 0;
     st->bg_ppx = st->bg_ppy = 1;
-    st->ink_none = 0;
+    st->ink_none = st->ink_none_up = 0;
+    st->color_up = st->color;
+    st->background_up = st->background;
     st->tx_px = st->ty_px = st->tx_pct = st->ty_pct = 0;
     st->grid_cols = st->grid_areas = st->garea = st->grid_auto = 0;
     st->grid_rows = st->grid_auto_rows = 0;
@@ -2762,7 +2787,9 @@ static inline void css_inherit(cstyle *child, const cstyle *parent) {
     child->spacing = parent->spacing;
     child->collapse = parent->collapse;
     child->vars = parent->vars;
-    child->ink_none = parent->ink_none;
+    child->ink_none = child->ink_none_up = parent->ink_none;
+    child->color_up = parent->color;
+    child->background_up = parent->background;
     child->ttrans = parent->ttrans;
     child->fill = parent->fill;
     child->fill_said = parent->fill_said;
@@ -3134,15 +3161,33 @@ static inline void css_apply(const csheet *s, const cdecl *dcl, cstyle *st,
 static inline void css_apply_v(int prop, const char *v, cstyle *st, int root_px, int pct_of) {
     switch (prop) {
         case P_COLOR:
-            if (w_same_fold(v, "currentcolor") || w_same_fold(v, "inherit")) break;
+            if (w_same_fold(v, "currentcolor")) break;
+            /* bbc.com's links say unset, and kept the browser's blue: its logo,
+               painted currentcolor, was blue boxes. */
+            if (w_same_fold(v, "inherit") || w_same_fold(v, "unset")) {
+                st->color = st->color_up;
+                st->ink_none = st->ink_none_up;
+                break;
+            }
+            if (w_same_fold(v, "initial")) { st->color = 0x1A1A1A; st->ink_none = 0; break; }
             if (css_color(v, &st->color)) st->ink_none = css_last_alpha < 13;
             break;
         case P_BACKGROUND: {
             u32 c;
             if (w_same_fold(v, "currentcolor")) { st->background = st->color; st->has_bg = 1; break; }
+            /* Spotify's buttons say initial, which is transparent, and wore the
+               browser's grey circle. */
+            if (w_same_fold(v, "initial") || w_same_fold(v, "unset") || w_same_fold(v, "none")) {
+                st->background = st->background_up;
+                st->has_bg = 0;
+                break;
+            }
             if (!css_color(v, &c)) break;
-            /* (Nearly) transparent is no background at all. */
-            if (css_last_alpha < 13) { st->has_bg = 0; break; }
+            /* (Nearly) transparent is no background at all, and what shows is
+               what is behind: the grey it took away was the backdrop its
+               drawings were made on, and Spotify's grey cross was drawn on a
+               white square. */
+            if (css_last_alpha < 13) { st->background = st->background_up; st->has_bg = 0; break; }
             st->background = c;
             st->has_bg = 1;
             break;

@@ -979,9 +979,18 @@ static void lay_apply_short(lctx *L, cstyle *st, const char *nv, int pct_of) {
         return;
     }
     if (lay_same_fold(name, "background")) {
-        u32 c;
-        for (int i = 0; i < n; i++)
-            if (css_color(part[i], &c)) { css_apply_v(P_BACKGROUND, part[i], st, L->root_px, pct_of); break; }
+        /* Its colour may be any of a dozen parts. None named is transparent,
+           as when the sheet split it (css.h). */
+        int bs[12], bl[12], bn = css_parts(v, w_len(v), bs, bl, 12);
+        for (int i = 0; i < bn; i++) {
+            char one[96];
+            int m = bl[i] < 95 ? bl[i] : 95;
+            for (int c = 0; c < m; c++) one[c] = v[bs[i] + c];
+            one[m] = 0;
+            u32 c;
+            if (css_color(one, &c)) { css_apply_v(P_BACKGROUND, one, st, L->root_px, pct_of); return; }
+        }
+        if (!css_bg_undrawn(v, w_len(v))) css_apply_v(P_BACKGROUND, "transparent", st, L->root_px, pct_of);
         return;
     }
     if (w_starts_fold(name, "border")) {
