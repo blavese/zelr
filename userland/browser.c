@@ -3959,7 +3959,7 @@ static void load(const char *address, int width, int keep_scroll) {
             int fetched, skipped;
             build(src, n, width, 1, &fetched, &skipped);
             if (!keep_scroll) scroll = 0;
-            say("read from Twitch's API: it cannot play the streams", 0);
+            say("read from Twitch's API; a live channel plays from its watch link", 0);
             return;
         }
         if (n < 0) {

@@ -19,10 +19,11 @@
  * them, how many watched, the pictures, and links that come back here. It is
  * said on the page that this is what happened.
  *
- * What it cannot do is play the video. That is H.264 inside MP4 or MPEG
- * transport streams, delivered in pieces chosen by the site's own script, and
- * there is no video decoder on this machine to hand it to. The page says that
- * too, rather than showing a player that does nothing.
+ * The video is another matter. A live Twitch channel plays in zelr's own
+ * player (play.c), from a watch link on the channel's page; YouTube's servers
+ * refuse to send their video to anything but a player they have checked, and
+ * this is not one. Each page says which, rather than showing a player that
+ * does nothing.
  *
  * Both sites change what they send when they like and say nothing, so each
  * thing read has somewhere further back to fall to before the page comes out
@@ -1722,8 +1723,8 @@ static inline int site_youtube(const url_t *u, const char *s, int n, char *out, 
         if (num[0]) { sp_raw(&p, " &middot; "); sp_num(&p, site_atoll(num)); sp_raw(&p, " views"); }
         if (!live && length > 0) { sp_raw(&p, " &middot; "); yt_duration(&p, length); }
         if (live) sp_raw(&p, " &middot; live");
-        sp_raw(&p, "</p>\n<p><small>The video itself is H.264, sent in pieces chosen by YouTube's "
-                   "own player; this browser has no video decoder to play it.</small></p>\n");
+        sp_raw(&p, "</p>\n<p><small>YouTube's servers refuse to send the video itself to this "
+                   "browser.</small></p>\n");
         if (bare)
             sp_raw(&p, "<p><small>What it is was read from the tags YouTube's page has for search "
                        "engines, because its data no longer says.</small></p>\n");
@@ -2134,8 +2135,8 @@ static inline void twitch_frames(site_page *p, const char *base, const char *inf
 }
 
 /* What every Twitch page says it is, and the way to the others. */
-#define TWITCH_NOT_PLAYED "A stream itself is H.264 video in pieces (HLS), and this browser has no video " \
-                          "decoder to play it.</small></p>\n"
+#define TWITCH_NOT_PLAYED "A live channel plays in zelr's own player from the watch link its page has " \
+                          "here when Twitch's API answers; past broadcasts are not played.</small></p>\n"
 #define TWITCH_NOTE "<p><small>Read by zelr from Twitch's public API, because Twitch's page is an " \
                     "application this browser cannot run. " TWITCH_NOT_PLAYED
 #define TWITCH_NAV "<form action=\"/search\" method=\"get\"><p><a href=\"/\">live now</a> &middot; " \

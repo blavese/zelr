@@ -516,7 +516,7 @@ static void checks(void) {
            has(page, "<b><a href=\"/channel/UC3\">Maker</a></b> &middot; 1,234,567 views &middot; 1:02:05"));
         ok("its description, lines kept and escapes undone",
            has(page, "line one<br>line two \xE2\x86\x92 https://example.com/?a=1&amp;b=2"));
-        ok("and that it cannot be played here, said", has(page, "no video decoder"));
+        ok("and that YouTube will not send the video, said", has(page, "refuse to send the video"));
         ok("the videos beside it, from the view model YouTube uses now",
            has(page, "/watch?v=DDDDDDDDDD4") && has(page, "Related &quot;one&quot;")
            && has(page, "Other Maker<br>5K views &middot; 1 year ago"));
@@ -659,7 +659,7 @@ static void checks(void) {
         ok("who, what, and how many watching", has(page, "FirstOne &middot; Chess<br>12,345 watching"));
         ok("a stream with no category and no display name still shows", has(page, "second<br>7 watching"));
         ok("and a picture from anywhere but Twitch's own server is left out", !has(page, "evil.example"));
-        ok("and the page says it cannot play them", has(page, "no video decoder"));
+        ok("and the page says how a live channel plays", has(page, "from the watch link"));
 
         n = tw(TW_CATEGORIES, "", TW_GAMES);
         ok("the categories are written as a page, each linked by its name",
@@ -897,9 +897,9 @@ static void checks(void) {
            n > 0 && has(page, "<title>Some &amp; One - Twitch</title>") && has(page, "<h1>Some &amp; One</h1>")
            && has(page, "<p>Streams &lt;chess&gt; daily \xE2\x80\x94 come along</p>")
            && has(page, "src=\"https://static-cdn.jtvnw.net/jtv_user_pictures/x-profile_image-300x300.png\""));
-        ok("with the way to the others, and saying how it was read and that nothing plays",
+        ok("with the way to the others, and saying how it was read and how a live channel plays",
            has(page, "<form action=\"/search\" method=\"get\">") && has(page, "because Twitch's API did not answer")
-           && has(page, "no video decoder"));
+           && has(page, "from the watch link"));
         n = twitch_page_meta("else", TW_CHANNEL_HTML_ELSEWHERE, w_len(TW_CHANNEL_HTML_ELSEWHERE), page,
                              (int)sizeof(page));
         ok("but no picture from anywhere but Twitch's own server",
