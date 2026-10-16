@@ -248,9 +248,12 @@ static jval nat_mo_take(jctx *J, jval t, jval *a, int n) {
 
 /* --- IntersectionObserver and ResizeObserver ------------------------------------------------ */
 
-static jobj *jd_p_iobs, *jd_p_robs;
+static jobj *jd_p_iobs, *jd_p_robs, *jd_p_ioentry;
 static jstr *jd_k_ocb, *jd_k_targets, *jd_k_sizes;
 static jobj *jd_robservers;            /* every ResizeObserver with a target */
+
+/* A field asked of the prototype itself: an entry has its own. */
+static jval nat_io_field(jctx *J, jval t, jval *a, int n) { (void)J; (void)t; (void)a; (void)n; return js_undef(); }
 
 /* The entries for an IntersectionObserver's new targets: every one drawn
    and intersecting, with where it is. */
@@ -269,7 +272,7 @@ static void jd_io_due(jval arg) {
         int x = 0, y = 0, w = 0, h = 0;
         int drawn = jd_box(el, &x, &y, &w, &h);
         if (!drawn) x = y = w = h = 0;
-        jobj *e = js_object(J, JO_PLAIN);
+        jobj *e = jd_p_ioentry ? js_object_with(J, JO_PLAIN, jd_p_ioentry) : js_object(J, JO_PLAIN);
         if (!e) break;
         js_set(J, e, "target", pend.obj->items[i]);
         js_set(J, e, "isIntersecting", js_bool(drawn));
@@ -534,7 +537,14 @@ static void jd_setup_observers(jctx *J) {
     jd_method(J, jd_p_iobs, "unobserve", nat_io_unobserve, 1);
     jd_method(J, jd_p_iobs, "disconnect", nat_io_disconnect, 0);
     jd_method(J, jd_p_iobs, "takeRecords", nat_empty_array, 0);
-    jd_interface(J, "IntersectionObserverEntry", 0, 0, 0);
+    /* An entry is one of these, and what it says is on the prototype too:
+       lazy loading libraries look for 'isIntersecting' in the prototype
+       before they trust the observer, and loaded nothing without it (and
+       Duolingo's check of what a browser can do counts it). */
+    jd_p_ioentry = jd_interface(J, "IntersectionObserverEntry", 0, 0, 0);
+    static const char *const io_fields[] = { "target", "isIntersecting", "intersectionRatio", "time",
+                                             "boundingClientRect", "intersectionRect", "rootBounds" };
+    for (int i = 0; jd_p_ioentry && i < 7; i++) jd_accessor(J, jd_p_ioentry, io_fields[i], nat_io_field, 0);
 
     jd_p_robs = jd_interface(J, "ResizeObserver", 0, nat_ro_ctor, 1);
     jd_method(J, jd_p_robs, "observe", nat_ro_observe, 1);

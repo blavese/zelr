@@ -1614,6 +1614,58 @@ int main(void) {
                "document.title = [v.width === innerWidth, v.height === innerHeight, v.scale, v.offsetLeft, n,"
                " v instanceof EventTarget, made].join(' ');</script></body>"),
         "true true 1 0 1 true TypeError");
+    {
+        /* FontFace: Duolingo stopped on the undefined and sent itself to its
+           page for browsers it does not support. Loading comes to nothing at
+           once, as document.fonts has it. */
+        load("<body><script>var f = new FontFace('Brand', 'url(brand.woff2)', { weight: '700' }), before = f.status;"
+             "var bare = ''; try { FontFace('x', 'y'); } catch (e) { bare = e.name; }"
+             "f.load().then(function (x) { document.fonts.add(x);"
+             " document.title = [before, x === f, f.status, f.family, f.weight, f.style, bare].join(' '); });"
+             "</script></body>");
+        char err[128];
+        run_scripts(&page, err, (int)sizeof(err), 0);
+        pump_until(1000, 300);
+        oks("a FontFace is made, loads at once to nothing, and must be made with new",
+            err[0] ? err : page.title >= 0 ? page.arena + page.title : "",
+            "unloaded true loaded Brand 700 normal TypeError");
+    }
+    {
+        /* Element.animate is at its end at once, keeping its last frame when
+           its fill says to, and finishes as an animation does: sites test for
+           it before they let a page work. */
+        load("<body><div id=d></div><script>var d = document.getElementById('d'), n = 0;"
+             "var a = d.animate([{ opacity: 0 }, { opacity: 0.5 }], { duration: 300, fill: 'forwards' });"
+             "a.onfinish = function () { n++; };"
+             "var b = d.animate({ width: ['1px', '9px'] }, 200), frames = b.effect.getKeyframes().length;"
+             "a.finished.then(function (x) { document.title = [x === a, a.playState, d.style.opacity, n, d.style.width === '',"
+             " frames, a instanceof Animation, a instanceof EventTarget, 'animate' in Element.prototype].join(' '); });"
+             "</script></body>");
+        char err[128];
+        run_scripts(&page, err, (int)sizeof(err), 0);
+        pump_until(1000, 300);
+        oks("an animation is finished at once, keeps its last frame when it fills forwards, and says it finished once",
+            err[0] ? err : page.title >= 0 ? page.arena + page.title : "",
+            "true finished 0.5 1 true 2 true true true");
+    }
+    {
+        /* An intersection entry is an IntersectionObserverEntry, and what it
+           says is on the prototype: lazy loading libraries look there before
+           they trust the observer. */
+        load("<body><div id=t>seen</div><script>var got = '';"
+             "var o = new IntersectionObserver(function (es) { var e = es[0];"
+             " got = [e instanceof IntersectionObserverEntry, typeof e.isIntersecting, typeof e.intersectionRatio].join(' '); });"
+             "o.observe(document.getElementById('t'));"
+             "setTimeout(function () { var p = IntersectionObserverEntry.prototype;"
+             " document.title = got + ' ' + ('isIntersecting' in p) + ' ' + ('intersectionRatio' in p); }, 50);"
+             "</script></body>");
+        char err[128];
+        run_scripts(&page, err, (int)sizeof(err), 0);
+        pump_until(1000, 400);
+        oks("an intersection entry is an IntersectionObserverEntry, and its prototype has what it says",
+            err[0] ? err : page.title >= 0 ? page.arena + page.title : "",
+            "true boolean number true true");
+    }
     oks("document.title gives the title with its white space taken off the ends and each run made one space",
         titled("<head><title>\n    Word  of\tthe day | Site\n  </title></head><body><script>"
                "var a = '[' + document.title + ']'; document.title = ' set  again '; document.title = a + '[' + document.title + ']';"
