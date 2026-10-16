@@ -2688,6 +2688,16 @@ int main(void) {
            b1 && b2 && b2->y == b1->y + 10 && b1->w == 40 && x1 && x2 && x2->y == x1->y && x2->x >= x1->x + 100);
     }
     {
+        /* A later rule's opacity undoes an earlier one's, and what an opacity
+           near nothing hides it hides with all it holds: Wikipedia's portal
+           hides its languages with one class and shows them with another. */
+        lay("<style>body{margin:0}.a .x{opacity:0}.b .x{opacity:1}.y{opacity:0}.z{opacity:.1}.h{opacity:50%}</style>"
+            "<div class='a b'><p class=x>shownword</p></div><div class=a><p class=x>hiddenword</p></div>"
+            "<div class=y><p>insideword</p></div><p class=z>tintword</p><p class=h>halfword</p>", 800);
+        ok("a later opacity undoes an earlier one, and one near nothing hides all it holds",
+           word("shownword") && !word("hiddenword") && !word("insideword") && !word("tintword") && word("halfword"));
+    }
+    {
         /* The page's <html> is the document's root, its attributes the
            root's: made an element inside the root, html.v matched an element
            the layout never styles, and Apple's menu bar, placed below a

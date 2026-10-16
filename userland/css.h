@@ -165,6 +165,7 @@ typedef struct {
     short font_px;
     short font_up;                       /* the parent's, which an em of a font size is of */
     unsigned char display_up;            /* the parent's display, for display: inherit */
+    unsigned char op_hidden;             /* an opacity near nothing (lay_style makes it hidden) */
     unsigned char bold, italic, mono;
     unsigned char underline, strike;
     unsigned char display, align, white, list, visible;
@@ -2806,6 +2807,7 @@ static inline void css_default_style(cstyle *st, int root_px) {
     st->bold = st->italic = st->mono = 0;
     st->underline = st->strike = 0;
     st->display = st->display_up = D_INLINE;
+    st->op_hidden = 0;
     st->flex_dir = FD_ROW;
     st->justify = JC_START;
     st->align_items = AI_STRETCH;
@@ -3864,9 +3866,28 @@ static inline void css_apply_v(int prop, const char *v, cstyle *st, int root_px,
         }
         case P_OPACITY:
             /* Nothing composites, so anything close to invisible is treated
-               as hidden and everything else as drawn. */
-            if (v[0] == '0' && (v[1] == 0 || (v[1] == '.' && v[2] <= '1')))
-                st->visible = 0;
+               as hidden and everything else as drawn. Noted apart from
+               visibility and settled when every rule has been applied
+               (layout.h, lay_style), so that a later rule's opacity: 1 undoes
+               an earlier one's 0: Wikipedia's portal hides its languages
+               with .js-enabled and shows them with .jsl10n-visible, and they
+               stayed hidden. */
+            /* Read as a number, a fifth or less: National Geographic's tint
+               over its stories is opacity: .1, which the first digit missed,
+               and it was drawn solid black over them. */
+            {
+                const char *q = v;
+                while (*q == ' ') q++;
+                int whole = 0, frac = 0, scale = 1, any = 0;
+                while (*q >= '0' && *q <= '9') { whole = whole * 10 + (*q++ - '0'); any = 1; if (whole > 1000) whole = 1000; }
+                if (*q == '.') {
+                    q++;
+                    while (*q >= '0' && *q <= '9') { if (scale < 1000) { frac = frac * 10 + (*q - '0'); scale *= 10; } q++; any = 1; }
+                }
+                int hundredths = whole * 100 + frac * 100 / scale;     /* the value, times a hundred */
+                if (*q == '%') hundredths /= 100;
+                if (any) st->op_hidden = (unsigned char)(hundredths < 20);
+            }
             break;
         case P_LINE_HEIGHT: {
             clen L = css_len(v);

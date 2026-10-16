@@ -1446,6 +1446,7 @@ static inline void lay_style(lctx *L, int el, const cstyle *parent,
                 lay_apply_decl(L, &L->s->decls[L->inl[el].at + k], out, pct_of);
     }
     L->font_pass = 0;
+    if (out->op_hidden) out->visible = 0;
 
     /* What is inside noscript is for a browser that runs no scripts, and
        this one runs them, so it is never drawn whatever the page's rules
