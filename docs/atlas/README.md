@@ -95,6 +95,13 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.141.0
+
+- **a float's percentages of the room it was floated in, and its floats its own (11)**, **font sizes in em of the
+  parent's size, applied before every other declaration (11)**, **ch, ex, dvh, vmin, container units and physical
+  lengths (11)**, **the browser's code card and quote rule only on pages with no sheet (11)**. layouttest 387, each
+  failing on a build without its change.
+
 ### 0.140.0
 
 - **line-clamp and text-overflow: ellipsis (11)**, **a button's label with its white space collapsed (11)**, **floats

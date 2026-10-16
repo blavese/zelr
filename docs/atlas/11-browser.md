@@ -1,6 +1,24 @@
 # 11 -- The web browser (everything except JS-engine internals and image decoders)
 
-**Since 0.140.0** (the rest of this file is older; trust the code and the README's "since 6048716" list):
+**Since 0.141.0** (the rest of this file is older; trust the code and the README's "since 6048716" list):
+- **A float's percentages are of the room it was floated in** (`lctx.pct_node`/`pct_w`, read by `lay_style`): laid out
+  in the room `lay_float` decided, margins included, they were worked out again from that room (a slide of width 100%,
+  margin-right -100% came to 0 wide). **A float is a formatting context of its own** (`lay_block_placed`'s
+  `own_floats`): its contents see only floats placed inside it (`fl_floor`) and those are dropped after it, as a
+  clipping box's are. Absolutely positioned boxes and inline-blocks are not treated so yet.
+- **Font sizes**: `cstyle.font_up` is the parent's size, which em, %, smaller, larger, inherit and unset of a font size
+  are of (they were of whatever an earlier rule had made the element's: the browser's h1 2em doubled a page's em
+  size). **`lay_style` applies the cascade twice** (`lctx.font_pass`): font sizes first (the sheets', `<font size>` in
+  `lay_font_hint`, the style attribute), then everything else, so every em of a length is of the final size. A
+  shorthand split late (`P_DEFER`) runs in both passes: `font` gives its size in the first (`lay_font_put`), the rest
+  in the second. Anything new that sets a font size must be a `P_FONT_SIZE` declaration or run in the first pass.
+- **Units** (css.h `css_len`): ch 0.55em, ex 0.5em, svh/lvh/dvh/cqh/cqb as vh, svw/lvw/dvw/cqw/cqi as vw, vmin/vmax by
+  the window's shape, in/pc/cm/mm in pixels. lh and svmin and the like are still pixels.
+- **The plain page's dressing** (css.h `CSS_UA_PLAIN`, `csheet.plain_at`/`plain_end`): pre's grey card and
+  blockquote's side rule are parsed between the browser's sheet and the page's and skipped by `lay_style` when the page
+  has rules of its own; a blockquote there is margin 0.9em 40px. A new parser of `CSS_UA` must parse it too.
+
+**Since 0.140.0**:
 - **line-clamp** (css.h `P_LINE_CLAMP`, `cstyle.line_clamp`; lay_block_placed): lines past the Nth are put away, the box
   ends after them (no shorter than its height or min-height), and the last word shown takes "..." (the face is ASCII).
   **text-overflow: ellipsis** (`cstyle.ellipsis`): in the side cut of a box hiding its overflow, words running past the
