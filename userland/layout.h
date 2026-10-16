@@ -1418,9 +1418,13 @@ static inline void lay_style(lctx *L, int el, const cstyle *parent,
        whichever rule set it. Applied as they came, the browser's margin of
        0.55em on an h1 was of its 2em when the page's rule after it made the
        heading smaller. */
+    /* The browser's dressing for a page with no rules is left off one that
+       has them (css.h CSS_UA_PLAIN). */
+    int plain_lo = L->s->nrules > ua ? L->s->plain_at : 0, plain_hi = L->s->nrules > ua ? L->s->plain_end : 0;
     for (int pass = 1; pass <= 2; pass++) {
         L->font_pass = pass;
-        for (int i = 0; i < n; i++) if (rules[i] < ua) lay_apply_rule(L, rules[i], out, pct_of);
+        for (int i = 0; i < n; i++)
+            if (rules[i] < ua && (rules[i] < plain_lo || rules[i] >= plain_hi)) lay_apply_rule(L, rules[i], out, pct_of);
         if (pass == 1) lay_font_hint(L, el, out);
         else lay_hints(L, el, out, pct_of);
         for (int i = 0; i < n; i++) if (rules[i] >= ua) lay_apply_rule(L, rules[i], out, pct_of);

@@ -71,6 +71,9 @@ static void lay_again(int width) {
 
     css_init(&sheet);
     css_parse(&sheet, CSS_UA, (int)sizeof(CSS_UA) - 1);
+    sheet.plain_at = sheet.nrules;
+    css_parse(&sheet, CSS_UA_PLAIN, (int)sizeof(CSS_UA_PLAIN) - 1);
+    sheet.plain_end = sheet.nrules;
     sheet.ua_rules = sheet.nrules;
 
     /* Style sheets written in the page itself. */
@@ -2581,6 +2584,17 @@ int main(void) {
         const litem *u4 = box_of(by_id("u4")), *u5 = box_of(by_id("u5"));
         ok("ch, dvh, vmin, in and cqw are what they measure, not pixels",
            u1 && u1->w == 176 && u2 && u2->w == 250 && u3 && u3->w == 50 && u4 && u4->w == 96 && u5 && u5->w == 16);
+    }
+    {
+        /* The browser's grey card for code dresses a page with no sheet,
+           and not one with a sheet of its own: Python.org's slides had their
+           code on a light card over a dark slide. */
+        lay("<pre id=pa>code</pre>", 800);
+        const litem *pa = box_of(by_id("pa"));
+        int plain_card = pa && pa->has_bg;
+        lay("<style>p{margin:0}</style><pre id=pb>code</pre>", 800);
+        const litem *pb = box_of(by_id("pb"));
+        ok("code is on a card on a page with no sheet and not on one with its own", plain_card && !(pb && pb->has_bg));
     }
     {
         /* A button's words are as shown, each run of white space one space:

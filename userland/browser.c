@@ -3305,6 +3305,9 @@ static void build(const char *html, int len, int width, int want_sheets,
 
     css_init(&sheet);
     css_parse(&sheet, CSS_UA, (int)sizeof(CSS_UA) - 1);
+    sheet.plain_at = sheet.nrules;
+    css_parse(&sheet, CSS_UA_PLAIN, (int)sizeof(CSS_UA_PLAIN) - 1);
+    sheet.plain_end = sheet.nrules;
     accent_sheet();
     sheet.ua_rules = sheet.nrules;        /* the page's own count for more */
     gather_inline_sheets();

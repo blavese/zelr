@@ -361,6 +361,7 @@ typedef struct {
     crule rules[CSS_RULES];
     int   nrules;
     int   ua_rules;           /* how many of them are the browser's own */
+    int   plain_at, plain_end;  /* which of those dress a page with no rules of its own */
     csel  sels[CSS_SELS];
     int   nsels;
     cdecl decls[CSS_DECLS];
@@ -1062,6 +1063,7 @@ static inline void css_init(csheet *s) {
     s->nrules = s->nsels = s->ndecls = s->used = 0;
     s->nnegs = 0;
     s->ua_rules = 0;
+    s->plain_at = s->plain_end = 0;
     s->overflowed = 0;
     s->query = 0;
     s->nlayers = 0;
@@ -4168,6 +4170,18 @@ static inline int css_collect(const csheet *s, const cindex *x, const ddoc *d,
     return css_collect_pe(s, x, d, el, 0, m, anc, hits);
 }
 
+/* What the browser dresses a page in that has no rules of its own: a quote
+   set off by a rule at its side and code on a grey card. A page with a
+   sheet is drawn as it says, without them, as a browser draws it: the
+   card's background stayed under Python.org's slides, whose sheet takes a
+   pre's margins and padding away and gives it no background, and the code
+   was drawn on a light card over the dark slide. Parsed after the browser's
+   own sheet and before the page's (browser.c build, plain_at and
+   plain_end), and passed over by lay_style when the page has rules. */
+static const char CSS_UA_PLAIN[] =
+    "blockquote{margin:0.9em 0;padding-left:1em;border-left:3px #d6d6d6;color:#555}"
+    "pre{padding:10px 12px;background:#f6f7f9;border-radius:6px;color:#222}";
+
 /* --- what the browser itself says about each element ----------------------
  *
  * Written as a style sheet rather than as a switch, because it is one, and
@@ -4195,10 +4209,8 @@ static const char CSS_UA[] =
     "li{display:list-item;margin:0.25em 0}"
     "ol{list-style-type:decimal}"
     "dd{display:block;margin-left:1.8em}"
-    "blockquote{display:block;margin:0.9em 0;padding-left:1em;"
-        "border-left:3px #d6d6d6;color:#555}"
-    "pre{display:block;white-space:pre;font-family:monospace;margin:0.9em 0;"
-        "padding:10px 12px;background:#f6f7f9;border-radius:6px;color:#222}"
+    "blockquote{display:block;margin:0.9em 40px}"
+    "pre{display:block;white-space:pre;font-family:monospace;margin:0.9em 0}"
     "code,kbd,samp,tt{font-family:monospace;font-size:0.93em}"
     "b,strong{font-weight:bold}"
     "i,em{font-style:italic}"
