@@ -2688,6 +2688,15 @@ int main(void) {
            b1 && b2 && b2->y == b1->y + 10 && b1->w == 40 && x1 && x2 && x2->y == x1->y && x2->x >= x1->x + 100);
     }
     {
+        /* An inline-block with a width of its own keeps it inside an
+           inline-block being measured: Wikipedia's wordmark, 176 wide with
+           its word put off the side, came out the narrowest a box can be. */
+        lay("<style>body{margin:0}h1{display:inline-block;margin:0}span{display:inline-block;width:176px;height:32px;"
+            "text-indent:-10000px;overflow:hidden;background:#333333}</style><h1><span id=wmk>Wikipedia</span></h1>", 800);
+        const litem *wmk = box_of(by_id("wmk"));
+        ok("an inline-block's own width holds inside an inline-block being measured", wmk && wmk->w == 176);
+    }
+    {
         /* A later rule's opacity undoes an earlier one's, and what an opacity
            near nothing hides it hides with all it holds: Wikipedia's portal
            hides its languages with one class and shows them with another. */

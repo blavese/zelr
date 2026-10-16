@@ -5378,13 +5378,19 @@ static void lay_block_placed(lctx *L, int node, const cstyle *parent, int x,
             int r = L->out->items[i].x + L->out->items[i].w;
             if (r > right) right = r;
         }
-        int edge = want >= 0 || is_table ? x + ml + box_w : right + st.pr + st.br;
+        /* So does one whose width its caller settled from a width of its
+           own: an inline-block of 176 pixels holding a word of 150, inside
+           an inline-block being measured, came out 150, and Wikipedia's
+           wordmark, its word put off the side by a text-indent, came out
+           the narrowest a box can be. */
+        int own_w = want >= 0 || is_table || (flex_sized && st.width >= 0 && !st.width_pct);
+        int edge = own_w ? x + ml + box_w : right + st.pr + st.br;
         /* A box with a width of its own ends there; one without ends where
            what is in it ends, and its padding after that, even past the room
            it was measured in: measured as narrow as it goes, a button round
            an icon of 24 pixels is 24 and its padding, and cut to the room it
            lost its padding and was squeezed by that much. */
-        if (edge > x + ml + box_w && (want >= 0 || is_table)) edge = x + ml + box_w;
+        if (edge > x + ml + box_w && own_w) edge = x + ml + box_w;
         if (edge < cx) edge = cx + st.pr + st.br;
         shrunk = edge - (x + ml);
         int reach = edge + (st.mr > 0 ? st.mr : 0);
