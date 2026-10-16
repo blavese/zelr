@@ -2451,6 +2451,21 @@ int main(void) {
         ok("a fresh style is content-box whatever was in its memory", junk.border_box == 0);
     }
     {
+        /* A box placed by its right side is as wide as its limits and frame
+           make it: go.dev's drawer (85% up to 27rem, right: 0) was placed by
+           the 85%, sat a third of the window short of the edge, and showed
+           over the page. */
+        lay("<style>body{margin:0}.r{position:relative;width:800px;height:50px}"
+            ".m{position:absolute;right:0;top:0;width:50%;max-width:100px;height:10px;background:#111111}"
+            ".p{position:absolute;right:0;top:20px;width:100px;padding:0 10px;height:10px;background:#222222}"
+            ".h{position:absolute;right:0;top:40px;width:50%;height:10px;background:#333333}"
+            "</style><div class=r><div class=m id=rm></div><div class=p id=rp></div><div class=h id=rh></div></div>", 800);
+        const litem *rm = box_of(by_id("rm")), *rp = box_of(by_id("rp")), *rh = box_of(by_id("rh"));
+        ok("a box at right: 0 ends at the right edge, kept to its max-width, and with its padding",
+           rm && rm->w == 100 && rm->x + rm->w == 800 && rp && rp->w == 120 && rp->x + rp->w == 800
+           && rh && rh->w == 400 && rh->x == 400);
+    }
+    {
         /* GitHub's repository page sends twenty-five thousand rules, and at
            sixteen thousand the rest were lost: its visually hidden headings
            and its closed menu's rules among them. The last of 25000 rules

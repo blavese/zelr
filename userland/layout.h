@@ -4651,6 +4651,15 @@ static void lay_block(lctx *L, int node, const cstyle *parent, int x,
             }
         }
         int bw = probe.width >= 0 ? probe.width : fit >= 0 ? fit : aw;
+        /* Placed by its right side, it is as wide as its limits and its frame
+           make it: go.dev's drawer is 85% wide up to 27rem at right: 0, and
+           placed by the 85% it sat a third of the window short of the edge
+           its translate moves it past, over the page. */
+        if (probe.width >= 0) {
+            if (probe.max_width >= 0 && bw > probe.max_width) bw = probe.max_width;
+            if (probe.min_width >= 0 && bw < probe.min_width) bw = probe.min_width;
+            if (!probe.border_box) bw += probe.pl + probe.pr + probe.bl + probe.br;
+        }
 
         int ax = *y >= 0 ? x : x;              /* where the flow left it */
         if (probe.left != CSS_AUTO_OFF) ax = L->pos_x + probe.left;
@@ -4670,7 +4679,9 @@ static void lay_block(lctx *L, int node, const cstyle *parent, int x,
         int by_bottom = probe.top == CSS_AUTO_OFF && probe.bottom != CSS_AUTO_OFF && L->pos_id
                         && !L->measuring && L->nbots < LAY_BOTTOMS;
 
-        int room = probe.width >= 0 ? probe.width : fit >= 0 ? fit : (L->pos_x + aw) - ax;
+        /* A percentage is worked out again from the room it is given, so it
+           is given its box's width; anything else the width it was placed by. */
+        int room = probe.width < 0 ? (fit >= 0 ? fit : (L->pos_x + aw) - ax) : probe.width_pct ? aw : bw;
         /* Both sides given and no width: as wide as lies between them, as an
            overlay written inset: 0 is. */
         if (probe.width < 0 && probe.left != CSS_AUTO_OFF && probe.right_off != CSS_AUTO_OFF)
