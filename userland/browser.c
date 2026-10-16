@@ -3322,6 +3322,132 @@ static void number_into(char *out, int v) {
     out[w] = 0;
 }
 
+/* --- a file and not a page ------------------------------------------------
+ *
+ * A link to an archive, a document or a program brings something that is
+ * not a page, and read as one it was a screen of garbage. It is saved in
+ * /home/downloads, under the name the server gives it or the last part of
+ * its address, and read back before the page says it was: a disk that is
+ * full says so only by holding less. A picture is shown on a page of its
+ * own and an MP4 played on one (media.h's file mode); text, JSON and pages
+ * are what they were. Anything the server calls an attachment is saved
+ * whatever it is. */
+#define DOWNLOADS "/home/downloads"
+
+enum { BODY_PAGE, BODY_FILE, BODY_PICTURE, BODY_VIDEO };
+
+static int body_kind(const response_t *r) {
+    char cd[128];
+    if (r->head && r->hlen > 0 && wh_header(r->head, r->hlen, "content-disposition", cd, sizeof(cd))
+        && w_starts_fold(cd, "attachment"))
+        return BODY_FILE;
+    const char *t = r->ctype;
+    if (!t[0]) return BODY_PAGE;
+    if (w_starts_fold(t, "image/")) return BODY_PICTURE;
+    if (w_starts_fold(t, "video/mp4") || w_starts_fold(t, "audio/mp4")) return BODY_VIDEO;
+    if (w_starts_fold(t, "text/") || w_starts_fold(t, "application/json") || w_starts_fold(t, "application/ld+json")
+        || w_starts_fold(t, "application/xhtml") || w_starts_fold(t, "application/xml")
+        || w_starts_fold(t, "application/rss") || w_starts_fold(t, "application/atom")
+        || w_starts_fold(t, "application/javascript") || w_starts_fold(t, "application/ecmascript"))
+        return BODY_PAGE;
+    return BODY_FILE;
+}
+
+/* A name to keep it under: the one in Content-Disposition, else the last
+   part of the address with its escapes undone, with nothing in it that a
+   path or the page saying where it went would read as something else. */
+static void download_name(const response_t *r, const url_t *u, char *out, int cap) {
+    char cd[256], raw[256];
+    int n = 0;
+    raw[0] = 0;
+    if (r->head && r->hlen > 0 && wh_header(r->head, r->hlen, "content-disposition", cd, sizeof(cd))) {
+        for (const char *p = cd; *p; p++) {
+            if (!w_starts_fold(p, "filename=")) continue;
+            p += 9;
+            char q = *p == '"' ? *p++ : 0;
+            while (*p && n < (int)sizeof(raw) - 1 && (q ? *p != q : (*p != ';' && *p != ' '))) raw[n++] = *p++;
+            raw[n] = 0;
+            break;
+        }
+    }
+    if (!raw[0]) {
+        const char *path = u->path, *last = path;
+        for (const char *p = path; *p && *p != '?' && *p != '#'; p++) if (*p == '/') last = p + 1;
+        n = 0;
+        for (const char *p = last; *p && *p != '?' && *p != '#' && n < (int)sizeof(raw) - 1; p++) {
+            if (p[0] == '%' && p[1] && p[2]) {
+                int hi = p[1] <= '9' ? p[1] - '0' : (w_lower(p[1]) - 'a' + 10);
+                int lo = p[2] <= '9' ? p[2] - '0' : (w_lower(p[2]) - 'a' + 10);
+                raw[n++] = (char)(hi * 16 + lo);
+                p += 2;
+            } else {
+                raw[n++] = *p;
+            }
+        }
+        raw[n] = 0;
+    }
+    int w = 0;
+    for (int i = 0; raw[i] && w < cap - 1 && w < 80; i++) {
+        char c = raw[i];
+        if ((u8)c < 32 || c == '/' || c == '\\' || c == ':' || c == '*' || c == '?' || c == '"'
+            || c == '<' || c == '>' || c == '|' || c == '&')
+            c = '_';
+        out[w++] = c;
+    }
+    while (w > 0 && (out[w - 1] == '.' || out[w - 1] == ' ')) w--;
+    out[w] = 0;
+    if (!w) w_copy(out, cap, "download", cap);
+}
+
+/* Saved under a name nothing in the folder has yet ("name (2).ext"), and
+   read back; how many bytes went, or -1. */
+static int save_download(const char *body, int len, const char *name, char *path, int cap) {
+    mkdir("/home");
+    mkdir(DOWNLOADS);
+    const char *dot = 0;
+    for (const char *p = name; *p; p++) if (*p == '.') dot = p;
+    if (!dot || dot == name) dot = name + w_len(name);
+    for (int k = 1; k < 100; k++) {
+        int w = 0;
+        for (const char *p = DOWNLOADS "/"; *p && w < cap - 1; p++) path[w++] = *p;
+        for (const char *p = name; p < dot && w < cap - 1; p++) path[w++] = *p;
+        if (k > 1) {
+            char num[16];
+            number_into(num, k);
+            for (const char *p = " ("; *p && w < cap - 1; p++) path[w++] = *p;
+            for (const char *p = num; *p && w < cap - 1; p++) path[w++] = *p;
+            if (w < cap - 1) path[w++] = ')';
+        }
+        for (const char *p = dot; *p && w < cap - 1; p++) path[w++] = *p;
+        path[w] = 0;
+        zelr_stat st;
+        if (stat(path, &st) < 0) break;
+    }
+    int fd = open(path, O_WRITE | O_CREATE | O_TRUNC);
+    if (fd < 0) return -1;
+    int done = 0;
+    while (done < len) {
+        int got = zelr_fwrite(fd, body + done, len - done);
+        if (got <= 0) break;
+        done += got;
+    }
+    close(fd);
+    if (done != len) return -1;
+    fd = open(path, O_READ);
+    if (fd < 0) return -1;
+    static char back[64 * 1024];
+    int at = 0, same = 1;
+    while (at < len && same) {
+        int want = len - at < (int)sizeof(back) ? len - at : (int)sizeof(back);
+        int got = zelr_fread(fd, back, want);
+        if (got <= 0) { same = 0; break; }
+        for (int i = 0; i < got; i++) if (back[i] != body[at + i]) { same = 0; break; }
+        at += got;
+    }
+    close(fd);
+    return same && at == len ? len : -1;
+}
+
 /* --- looking something up ------------------------------------------------
  *
  * Where a search goes, and why it is not Google.
@@ -3574,6 +3700,69 @@ static void load(const char *address, int width, int keep_scroll) {
     {
         int pol = web_policy_of(reply.refpol);
         if (pol >= 0) web_referrer_policy = pol;
+    }
+
+    int kind = rc < 400 ? body_kind(&reply) : BODY_PAGE;
+    if (kind == BODY_FILE) {
+        char name[96], path[160], n[16];
+        download_name(&reply, &here, name, (int)sizeof(name));
+        if (reply.truncated || reply.cut) {
+            show_message("Not saved", reply.truncated
+                         ? "It is more than this can hold at once (8 megabytes), and only part of it would be saved."
+                         : "The server stopped before the end of it, and only part of it would be saved.", width);
+            say("not saved: ", name);
+        } else {
+            int got = save_download(reply.body, reply.len, name, path, (int)sizeof(path));
+            if (got < 0) {
+                show_message("Not saved", "It could not be written to " DOWNLOADS ": the disk is full, or "
+                             "there is no disk.", width);
+                say("not saved: ", name);
+            } else {
+                number_into(n, got);
+                static char said[320];
+                int w = 0;
+                for (const char *p = path; *p && w < 200; p++) said[w++] = *p;
+                for (const char *p = ", "; *p; p++) said[w++] = *p;
+                for (const char *p = n; *p; p++) said[w++] = *p;
+                for (const char *p = " bytes, read back the same"; *p; p++) said[w++] = *p;
+                said[w] = 0;
+                show_message("Saved", said, width);
+                say("saved ", said);
+            }
+        }
+        w_copy(title, sizeof(title), name, sizeof(title));
+        if (big) free(big);
+        big = 0;
+        return;
+    }
+    if (kind == BODY_PICTURE || kind == BODY_VIDEO) {
+        /* On a page of its own, asked for again by the page's own picture
+           or video; the address escaped for the attribute it goes in. */
+        int w = 0;
+        const char *base_name = here.path;
+        for (const char *p = here.path; *p && *p != '?'; p++) if (*p == '/') base_name = p + 1;
+        for (const char *p = "<title>"; *p; p++) src[w++] = *p;
+        for (const char *p = base_name; *p && *p != '?' && *p != '#' && w < 300; p++)
+            src[w++] = *p == '<' || *p == '&' ? '_' : *p;
+        for (const char *p = "</title>"; *p; p++) src[w++] = *p;
+        const char *open_ = kind == BODY_PICTURE
+            ? "<style>body{margin:0;background:#202124}img{display:block;margin:0 auto;max-width:100%}</style><img src=\""
+            : "<style>body{margin:0;background:#000}video{display:block;width:100%}</style><video autoplay src=\"";
+        for (const char *p = open_; *p && w < SRC_MAX - 64; p++) src[w++] = *p;
+        for (const char *p = address; *p && w < SRC_MAX - 64; p++) {
+            if (*p == '"') { src[w++] = '%'; src[w++] = '2'; src[w++] = '2'; }
+            else if (*p == '<') { src[w++] = '%'; src[w++] = '3'; src[w++] = 'C'; }
+            else src[w++] = *p;
+        }
+        for (const char *p = kind == BODY_PICTURE ? "\" alt=\"\">" : "\"></video>"; *p; p++) src[w++] = *p;
+        src[w] = 0;
+        int f2, s2;
+        build(src, w, width, 1, &f2, &s2);
+        if (!keep_scroll) scroll = 0;
+        say(kind == BODY_PICTURE ? "a picture: " : "a video: ", reply.ctype);
+        if (big) free(big);
+        big = 0;
+        return;
     }
 
     int plain = w_starts_fold(reply.ctype, "text/plain")

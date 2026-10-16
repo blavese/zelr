@@ -664,6 +664,21 @@ def main():
             c.add("Tab takes the keyboard from one field to the next (%d)"
                   % count_in(pxt, wt_, PAGE, TAB_INK), tabbed, shott)
 
+            # --- a file saved, and a picture's own address shown ----------------
+            go(vm, mon, "http://%s/dl/report.bin" % srv.host, settle=10.0,
+               was=bgj, name="br-going-dl")
+            saved = vm.wait_serial("saved /home/downloads/report.bin, 12345 bytes, read back the same",
+                                   timeout=40)
+            bgj, _, _, shotd = page_settled(mon, "br-dl-settled")
+            c.add("a file the server says to keep is saved in /home/downloads and read back", saved, shotd)
+            go(vm, mon, "http://%s/logo.png" % srv.host, settle=10.0,
+               was=bgj, name="br-going-logo")
+            _, _, _, _, shown_logo = mon.wait_screen(
+                "br-logo", lambda w, h, px: count_in(px, w, PAGE, LOGO) > 12000, timeout=40)
+            bgj, pxl, wl, shotl = page_settled(mon, "br-logo-settled")
+            c.add("a picture's own address shows the picture (%d)" % count_in(pxl, wl, PAGE, LOGO),
+                  shown_logo, shotl)
+
             # --- more pictures than there was room for, and one kept smaller ---
             go(vm, mon, "http://%s/many" % srv.host, settle=10.0,
                was=bgj, name="br-going-many")

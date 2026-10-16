@@ -337,6 +337,19 @@ b.addEventListener('input', look);
 </body></html>
 """
 
+# A file and not a page, which the server says to keep: twelve thousand
+# bytes nothing would mistake for text, saved by the browser and read back.
+# Read as a page it was a screen of garbage.
+def _report_bytes():
+    out, x = bytearray(), 12345
+    for _ in range(12345):
+        x = (x * 1103515245 + 12345) & 0x7FFFFFFF
+        out.append(x >> 16 & 0xFF)
+    return bytes(out)
+
+
+REPORT_BIN = _report_bytes()
+
 # Copy and paste: the address copied from the bar and pasted into the
 # page's field, which the page checks and shows as the colour of a box.
 # A chord used to be typed into a field as a control character.
@@ -1494,6 +1507,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._send(KEYS_PAGE)
         elif path == "/paste":
             self._send(PASTE_PAGE)
+        elif path == "/dl/report.bin":
+            self._send(REPORT_BIN, ctype="application/octet-stream",
+                       extra=[("Content-Disposition", 'attachment; filename="report.bin"')])
         elif path == "/tab":
             self._send(TAB_PAGE)
         elif path == "/many":
