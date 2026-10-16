@@ -2698,6 +2698,15 @@ int main(void) {
         const litem *ig = word("impgone"), *ib = word("impbig"), *pb = word("plainbig"), *ir = word("impred");
         ok("!important beats a weightier rule, a later layer and a style attribute, font sizes too",
            !ig && ib && pb && ib->h == pb->h && ir && ir->color == 0xFF0000);
+        /* A row that would scroll is wrapped, unless it is fixed to the
+           window, where the page planned for its one line. */
+        lay("<style>body{margin:0}.row{white-space:nowrap;overflow-x:auto;width:200px}.fx{position:fixed;top:0;left:0}"
+            ".row a{display:inline-block;width:80px;height:10px}</style>"
+            "<div class=row><a>rwone</a><a>rwtwo</a><a>rwthree</a></div><div class='row fx'><a>fxone</a><a>fxtwo</a><a>fxthree</a></div>",
+            800);
+        const litem *r1 = word("rwone"), *r3 = word("rwthree"), *f1 = word("fxone"), *f3 = word("fxthree");
+        ok("a row that would scroll wraps, and one fixed to the window keeps its one line",
+           r1 && r3 && r3->y > r1->y && f1 && f3 && f3->y == f1->y);
     }
     {
         /* Columns: what the box holds is dealt into column-count columns

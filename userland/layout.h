@@ -1648,8 +1648,12 @@ static void lay_inline_piece(lctx *L, int at, const cstyle *parent, int pin, int
            kept, and a box hiding its overflow cuts what runs past it (a row
            of tags or a breadcrumb). Not in a row that would scroll, which is
            wrapped instead, since nothing inside a page scrolls here and what
-           it held could not be reached (W3Schools' bar of fifty subjects). */
-        int nobreak = (parent->white == WS_NOWRAP || parent->white == WS_PRE) && parent->clip != 2;
+           it held could not be reached -- unless the row is fixed to the
+           window, where the page is laid out round the one line it planned:
+           W3Schools' bar of fifty subjects, wrapped to six lines, covered the
+           heading below it once its sheet's !important rules were read. */
+        int nobreak = (parent->white == WS_NOWRAP || parent->white == WS_PRE)
+                      && (parent->clip != 2 || parent->position == POS_FIXED);
         if (L->pen + sp + w > L->line_left + L->line_width && L->pen > L->line_left && !nobreak) {
             int left = L->cont_left, width = L->cont_width, al = L->align;
             lay_line_end(L, y);
