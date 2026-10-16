@@ -95,6 +95,12 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.144.0
+
+- **the two-word display (11)**, **opacity read as a number and settled after every rule (11)**, **a measured box's
+  own width kept (11)**, **a clipping box's height kept in the flow (11)**, **nested svg viewports (11)**. layouttest
+  403, svgtest 60, each failing on a build without its change.
+
 ### 0.143.0
 
 - **display: inherit, initial and unset (11)**, **the page's html element as the document's root (11)**, **a media

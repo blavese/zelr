@@ -1,6 +1,17 @@
 # 11 -- The web browser (everything except JS-engine internals and image decoders)
 
-**Since 0.143.0** (the rest of this file is older; trust the code and the README's "since 6048716" list):
+**Since 0.144.0** (the rest of this file is older; trust the code and the README's "since 6048716" list):
+- **The two-word display** (`inline flex`, `block grid`, `inline flow-root`...) is read by both words (css.h P_DISPLAY).
+- **Opacity** is read as a number (percentages too) into `cstyle.op_hidden`, and `lay_style` makes the element
+  hidden only after every rule (a later opacity undoes an earlier one; below a fifth hides, the rest is drawn solid).
+- **A box whose caller settled its width from its own width in pixels keeps it when measured** (lay_block_placed
+  `own_w`); it was shrunk to its contents, since `flex_sized` makes `want` -1.
+- **A box in the flow that hides its overflow and has a height keeps it**: what lies wholly below its foot is dropped
+  and boxes running past are cut, as the sides are; a box that shows its overflow still grows.
+- **A nested `<svg>`** is a viewport (svg.h `sv_viewport` from `sv_transform`): x/y, viewBox fitted into width and
+  height, meet and centred. Not clipped to its place.
+
+**Since 0.143.0**:
 - **The page's `<html>` is the document's root** (dom.h `dom_parse_into`): its attributes go to the root made at the
   start, while the root's attributes can still grow in place (before any other element has any). It was a second html
   element inside the root, which the layout never styles (it starts at the body), so rules and custom properties on
