@@ -1758,6 +1758,23 @@ int main(void) {
             r1 && r2 && q1 && q2 && r2->y - r1->y == q2->y - q1->y && r2->y > r1->y, r1 && r2 ? r2->y - r1->y : -1);
     }
 
+    /* --- floated flex items --------------------------------------------------- */
+    {
+        /* The Sydney Morning Herald's story tiles: float: left and flex: auto,
+           a third of the row each, a picture beside a headline. */
+        lay("<style>body{margin:0}.r{display:flex;width:600px}.i{flex:auto;box-sizing:content-box;padding-left:16px;"
+            "float:left;width:calc(99.9% * 1/3 - 16px);background:#ccc;margin-right:16px}.t{display:flex;align-items:center}"
+            ".f{width:60px;height:60px;background:#888}.x{overflow:hidden}.g{display:grid;width:300px}.gi{float:right;"
+            "background:#ccc}</style>"
+            "<div class=r><div class=i id=fi1><div class=t><div class=f></div><div class=x>Puzzled with David Astle</div>"
+            "</div></div><div class=i id=fi2><div class=t><div class=f></div><div class=x>Superquiz</div></div></div></div>"
+            "<div class=g><div class=gi id=gi>gridfloat</div></div>", 800);
+        const litem *f1 = box_of(by_id("fi1")), *f2 = box_of(by_id("fi2")), *gi = box_of(by_id("gi"));
+        okn("a floated flex item is an item, as wide as its row gives it, not a float",
+            f1 && f2 && f1->w >= 270 && f2->x > f1->x + f1->w, f1 ? f1->w : -1);
+        okn("and so is a floated grid item, stretched across its track", gi && gi->w == 300, gi ? gi->w : -1);
+    }
+
     /* --- nesting -------------------------------------------------------------- */
     {
         /* firefox.com: a rule nested in its first rule of a layer ended the

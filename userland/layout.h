@@ -5048,8 +5048,15 @@ static void lay_block(lctx *L, int node, const cstyle *parent, int x,
     if (lay_unseen(&probe)) return;
     int moved_from = L->out->nitems;
 
+    /* A flex or grid item is never floated: the standard sets float aside
+       for one. Floated anyway, it was laid out as a float, as wide as what it
+       held, in the place its row had given it: the Sydney Morning Herald's
+       story tiles, float: left and flex: auto, were each 66 pixels wide in
+       a row of thirds, their headlines a letter or two to a line. */
+    int in_row = parent && (parent->display == D_FLEX || parent->display == D_INLINE_FLEX
+                            || parent->display == D_GRID);
     if (probe.floated && L->floating != node && probe.position != POS_ABSOLUTE
-        && probe.position != POS_FIXED) {
+        && probe.position != POS_FIXED && !in_row) {
         lay_float(L, node, parent, x, avail, *y);
         return;
     }
