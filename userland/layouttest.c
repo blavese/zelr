@@ -2337,6 +2337,19 @@ int main(void) {
            && lg && lh && lg->y - lf->y == 26 && lh->y - lg->y == 50);
     }
     {
+        /* inline-size, block-size and their limits are width and height:
+           w3.org's full-width hero is inline-size: 100vw between margins of
+           -50vw and moved back by inset-inline: 50%, and without the size it
+           was as wide as both margins. */
+        lay("<style>body{margin:0}p{margin:0}.f{inline-size:300px;block-size:30px;background:#111111}"
+            ".m{max-inline-size:100px;min-block-size:40px;background:#222222}.w{width:400px;margin:0 auto}"
+            ".k{inline-size:100vw;inset-inline:50%;margin-inline:-50vw;position:relative;block-size:10px;background:#333333}"
+            "</style><p class=f id=lf>sa</p><p class=m id=lm>sb</p><div class=w><div class=k id=lk></div></div>", 800);
+        const litem *lf = box_of(by_id("lf")), *lm = box_of(by_id("lm")), *lk = box_of(by_id("lk"));
+        ok("inline-size, block-size and their limits size a box, and a full-width box between -50vw margins fills the window",
+           lf && lf->w == 300 && lf->h == 30 && lm && lm->w == 100 && lm->h == 40 && lk && lk->x == 0 && lk->w == 800);
+    }
+    {
         /* color: unset and inherit undo the browser's link colour: bbc.com's
            links say unset, and its logo, painted currentcolor, was blue. */
         lay("<style>a{color:#0000ff}div{color:#123456}.u{color:unset}.i{color:inherit}.n{color:initial}p{color:#00ff00}</style>"

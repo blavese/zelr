@@ -953,6 +953,13 @@ static const cprop CSS_PROPS[] = {
     { "inset-block-end", P_BOTTOM },
     { "max-width", P_MAX_WIDTH },
     { "height", P_HEIGHT },
+    /* The sizes by writing direction, which is always across then down
+       here: w3.org's full-width hero is inline-size: 100vw between margins
+       of -50vw, and with the margins read and not the size it was as wide as
+       both margins and pushed its picture off the page. */
+    { "inline-size", P_WIDTH },              { "block-size", P_HEIGHT },
+    { "min-inline-size", P_MIN_WIDTH },      { "max-inline-size", P_MAX_WIDTH },
+    { "min-block-size", P_MIN_HEIGHT },      { "max-block-size", P_MAX_HEIGHT },
     { "line-height", P_LINE_HEIGHT },
     { "white-space", P_WHITE_SPACE },
     { "list-style-type", P_LIST_STYLE },
