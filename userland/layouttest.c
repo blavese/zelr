@@ -2670,6 +2670,22 @@ int main(void) {
         const litem *d1 = box_of(by_id("di1")), *d2 = box_of(by_id("di2")), *al = word("alef"), *be = word("bet");
         ok("display: inherit takes its parent's display, and initial is inline",
            d1 && d2 && d2->y == d1->y && d2->x == d1->x + 50 && al && be && be->y == al->y);
+        /* The two-word form: block flex is a flex box, inline flex an inline
+           one. Read by the first word they were a block and words. */
+        lay("<style>body{margin:0}.bf{display:block flex;flex-direction:column}.if{display:inline flex;width:100px}"
+            "span{width:40px;height:10px;background:#111111}</style>"
+            "<div class=bf><span id=b1></span><span id=b2></span></div><div class=if id=i1><span></span></div>"
+            "<div class=if id=i2><span></span></div>", 800);
+        const litem *b1 = box_of(by_id("b1")), *b2 = box_of(by_id("b2"));
+        int i1 = by_id("i1"), i2 = by_id("i2");
+        const litem *x1 = 0, *x2 = 0;
+        for (int i = 0; i < page.nitems; i++) {
+            if (page.items[i].kind != LK_BOX && page.items[i].kind != LK_EDGE) continue;
+            if (page.items[i].node == i1 && !x1) x1 = &page.items[i];
+            if (page.items[i].node == i2 && !x2) x2 = &page.items[i];
+        }
+        ok("display: block flex is a flex box and inline flex an inline one",
+           b1 && b2 && b2->y == b1->y + 10 && b1->w == 40 && x1 && x2 && x2->y == x1->y && x2->x >= x1->x + 100);
     }
     {
         /* The page's <html> is the document's root, its attributes the

@@ -3319,6 +3319,28 @@ static inline void css_apply_v(int prop, const char *v, cstyle *st, int root_px,
                for initial and unset, is inline. */
             if (w_starts_fold(v, "inherit")) { st->display = st->display_up; break; }
             if (w_starts_fold(v, "initial") || w_starts_fold(v, "unset")) { st->display = D_INLINE; break; }
+            /* The two-word form: the outside, then the inside. inline flex
+               is inline-flex, block grid is grid; read by its first word,
+               "inline flex" was inline and its row was laid out as words. */
+            {
+                const char *sp = v;
+                while (*sp && *sp != ' ') sp++;
+                const char *in = sp;
+                while (*in == ' ') in++;
+                int outer_inline = (int)(sp - v) == 6 && w_starts_fold(v, "inline");
+                int outer_block = (int)(sp - v) == 5 && w_starts_fold(v, "block");
+                if (*in && (outer_inline || outer_block)) {
+                    st->flow_root = (unsigned char)w_starts_fold(in, "flow-root");
+                    if (w_starts_fold(in, "flex")) st->display = outer_inline ? D_INLINE_FLEX : D_FLEX;
+                    else if (w_starts_fold(in, "grid")) st->display = outer_inline ? D_INLINE_BLOCK : D_GRID;
+                    else if (w_starts_fold(in, "table")) st->display = outer_inline ? D_INLINE_BLOCK : D_TABLE;
+                    else if (w_starts_fold(in, "flow-root")) st->display = outer_inline ? D_INLINE_BLOCK : D_BLOCK;
+                    else if (w_starts_fold(in, "list-item") || w_starts_fold(in, "flow list-item"))
+                        st->display = outer_inline ? D_INLINE : D_LIST_ITEM;
+                    else st->display = outer_inline ? D_INLINE : D_BLOCK;   /* flow */
+                    break;
+                }
+            }
             st->flow_root = (unsigned char)w_starts_fold(v, "flow-root");
             if (w_starts_fold(v, "none")) st->display = D_NONE;
             else if (w_starts_fold(v, "inline-block")) st->display = D_INLINE_BLOCK;
