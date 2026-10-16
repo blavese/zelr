@@ -2152,6 +2152,17 @@ int main(void) {
            fw && ln && fw->y < 60 && ln->y > fw->y && ln->y - fw->y < 80);
     }
     {
+        /* :is() and :where() holding lists, as Forbes places its columns: the
+           rule was dropped. Each choice counts, and :where weighs nothing, so
+           a plainer rule before it still wins. */
+        lay("<style>body{margin:0}p{margin:0}:is(.l,.r) :is(.big,.cols){margin-left:200px}"
+            ".z p{margin-left:50px}:where(.q,.z) p{margin-left:300px}</style>"
+            "<div class=r><p class=big>wide</p><p class=cols>column</p></div><div class=z><p>weightless</p></div>", 800);
+        const litem *wi = word("wide"), *cl = word("column"), *wl = word("weightless");
+        ok(":is() and :where() with lists match each choice, :where weighing nothing",
+           wi && wi->x >= 200 && cl && cl->x >= 200 && wl && wl->x >= 50 && wl->x < 100);
+    }
+    {
         /* An absolutely positioned box with only a bottom goes that far from
            the bottom of its positioned box, once that box's height is known,
            whether it was given one or grew round what is in it; it stayed

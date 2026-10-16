@@ -1057,6 +1057,119 @@ static inline int css_parse_compound(csheet *s, const char *p, int len, int *at,
     return any;
 }
 
+/* --- :is() and :where() with a list ----------------------------------------
+ *
+ * A compound holds one :is(X) or :where(X) of a single compound as that
+ * compound (css_parse_compound). One holding a list was refused, and the rule
+ * with it: Forbes lays its home page out with
+ * `:is(.channel--left,.channel--right) :is(.card--large,.channel__columns)`,
+ * and its stories' column was not drawn. So a selector with one is written
+ * out as one selector for each choice before it is read -- `:is(.a,.b) .c` is
+ * `:is(.a) .c, :is(.b) .c` -- each choice kept in its own :is() or :where(),
+ * so its weight is what the standard gives it (none for :where). A choice that
+ * is more than a compound is written in bare where it stands alone between
+ * combinators, and dropped where it is part of a compound. At most
+ * CSS_EXPAND_MAX selectors come out of one. */
+#define CSS_EXPAND_MAX 32
+
+static inline int css_list_end(const char *p, int n, int i, char stop) {
+    int depth = 0;
+    while (i < n) {
+        char c = p[i];
+        if (c == '"' || c == '\'') {
+            i++;
+            while (i < n && p[i] != c) { if (p[i] == '\\' && i + 1 < n) i++; i++; }
+            if (i < n) i++;
+            continue;
+        }
+        if (c == '(' || c == '[') depth++;
+        else if (c == ')' || c == ']') { if (!depth) return i; depth--; }
+        else if (!depth && c == stop) return i;
+        i++;
+    }
+    return n;
+}
+
+/* The first :is( or :where( whose list has more than one choice: where its
+   colon and its two brackets are, and whether it is :where. */
+static inline int css_is_list_at(const char *p, int n, int *colon, int *open, int *close, int *where) {
+    for (int i = 0; i + 4 < n; i++) {
+        if (p[i] == '"' || p[i] == '\'') { char q = p[i++]; while (i < n && p[i] != q) i++; continue; }
+        if (p[i] != ':') continue;
+        int w = 0, l = 0;
+        if (i + 4 <= n && (p[i + 1] | 32) == 'i' && (p[i + 2] | 32) == 's' && p[i + 3] == '(') l = 3;
+        else if (i + 7 <= n && w_starts_fold(p + i + 1, "where(")) { l = 6; w = 1; }
+        else if (i + 9 <= n && w_starts_fold(p + i + 1, "matches(")) l = 8;
+        if (!l) continue;
+        int o = i + l, c = css_list_end(p, n, o + 1, 0);
+        if (c >= n) return 0;
+        if (css_list_end(p, c, o + 1, ',') < c) {
+            *colon = i; *open = o; *close = c; *where = w;
+            return 1;
+        }
+        i = o;
+    }
+    return 0;
+}
+
+static inline int css_expand_one(const char *p, int n, char *out, int cap, int w, int *count) {
+    int colon, open, close, where;
+    if (*count >= CSS_EXPAND_MAX) return w;
+    while (n > 0 && css_space(p[0])) { p++; n--; }
+    while (n > 0 && css_space(p[n - 1])) n--;
+    if (n <= 0) return w;
+    if (!css_is_list_at(p, n, &colon, &open, &close, &where)) {
+        if (w + n + 2 >= cap) return w;
+        if (w) out[w++] = ',';
+        for (int k = 0; k < n; k++) out[w++] = p[k];
+        (*count)++;
+        return w;
+    }
+    int alone = (colon == 0 || css_space(p[colon - 1]) || p[colon - 1] == '>' || p[colon - 1] == '+'
+                 || p[colon - 1] == '~')
+             && (close + 1 >= n || css_space(p[close + 1]) || p[close + 1] == '>' || p[close + 1] == '+'
+                 || p[close + 1] == '~');
+    int a = open + 1;
+    while (a <= close) {
+        int b = css_list_end(p, close, a, ',');
+        int s0 = a, s1 = b;
+        while (s0 < s1 && css_space(p[s0])) s0++;
+        while (s1 > s0 && css_space(p[s1 - 1])) s1--;
+        int complex = css_list_end(p, s1, s0, ' ') < s1 || css_list_end(p, s1, s0, '>') < s1
+                   || css_list_end(p, s1, s0, '+') < s1 || css_list_end(p, s1, s0, '~') < s1;
+        if (s1 > s0 && (!complex || alone)) {
+            char tmp[1024];
+            int t = 0;
+            for (int k = 0; k < colon && t < (int)sizeof(tmp) - 1; k++) tmp[t++] = p[k];
+            if (!complex) {
+                const char *nm = where ? ":where(" : ":is(";
+                for (const char *q = nm; *q && t < (int)sizeof(tmp) - 1; q++) tmp[t++] = *q;
+            }
+            for (int k = s0; k < s1 && t < (int)sizeof(tmp) - 1; k++) tmp[t++] = p[k];
+            if (!complex && t < (int)sizeof(tmp) - 1) tmp[t++] = ')';
+            for (int k = close + 1; k < n && t < (int)sizeof(tmp) - 1; k++) tmp[t++] = p[k];
+            if (t < (int)sizeof(tmp) - 1) w = css_expand_one(tmp, t, out, cap, w, count);
+        }
+        a = b + 1;
+    }
+    return w;
+}
+
+/* A selector list with any such :is() or :where() in it, written out into
+   out: its length, or 0 when it has none and is read as it is. */
+static inline int css_expand_list(const char *p, int n, char *out, int cap) {
+    int c, o, e, wh;
+    if (!css_is_list_at(p, n, &c, &o, &e, &wh)) return 0;
+    int w = 0, count = 0, a = 0;
+    while (a < n) {
+        int b = css_list_end(p, n, a, ',');
+        w = css_expand_one(p + a, b - a, out, cap, w, &count);
+        a = b + 1;
+    }
+    out[w] = 0;
+    return w;
+}
+
 static inline int css_parse_selector(csheet *s, const char *p, int len,
                                      int *at, int *spec_out) {
     int i = *at, n = 0, spec = 0;
@@ -1901,13 +2014,21 @@ static inline void css_parse_in(csheet *s, const char *p, int len, int lo, int h
             continue;
         }
 
-        /* A selector list, then one block shared by all of them. */
+        /* A selector list, then one block shared by all of them; read from
+           a copy with its :is() and :where() lists written out, when it has
+           any (css_expand_list), and the rule read on from its block. */
         int first_rule = s->nrules;
         int sel_starts[32], sel_counts[32], specs[32], pes[32], nsel_lists = 0;
+        static char expanded[8192];
+        const char *sp = p;
+        int slen = len, si = i;
+        int brace = css_list_end(p, len, i, '{');
+        int xn = brace < len ? css_expand_list(p + i, brace - i, expanded, (int)sizeof(expanded)) : 0;
+        if (xn > 0) { sp = expanded; slen = xn; si = 0; }
         for (;;) {
             int spec = 0;
             int start = s->nsels;
-            int n = css_parse_selector(s, p, len, &i, &spec);
+            int n = css_parse_selector(s, sp, slen, &si, &spec);
             if (n > 0 && nsel_lists < 32) {
                 sel_starts[nsel_lists] = start;
                 sel_counts[nsel_lists] = n;
@@ -1917,10 +2038,11 @@ static inline void css_parse_in(csheet *s, const char *p, int len, int lo, int h
             } else if (n == 0) {
                 s->nsels = start;         /* a selector this cannot match */
             }
-            i = css_skip(p, len, i);
-            if (i < len && p[i] == ',') { i++; continue; }
+            si = css_skip(sp, slen, si);
+            if (si < slen && sp[si] == ',') { si++; continue; }
             break;
         }
+        i = xn > 0 ? brace : si;
 
         if (i >= len || p[i] != '{') {
             while (i < len && p[i] != '{' && p[i] != '}') i++;

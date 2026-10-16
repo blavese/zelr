@@ -1020,12 +1020,17 @@ static void jd_sel_open(jd_selq *q, const jstr *sel) {
        back by jd_sel_close). */
     jd_sheet->query = 1;
     jd_sheet->overflowed = 0;
+    /* With its :is() and :where() lists written out, as the sheet's are. */
+    static char expanded[8192];
+    const char *text = sel->s;
     int len = (int)sel->len, at = 0;
+    int xn = css_expand_list(sel->s, len, expanded, (int)sizeof(expanded));
+    if (xn > 0) { text = expanded; len = xn; }
     while (at < len && q->n < JD_SEL_PARTS) {
-        while (at < len && (sel->s[at] == ',' || css_space(sel->s[at]))) at++;
+        while (at < len && (text[at] == ',' || css_space(text[at]))) at++;
         if (at >= len) break;
         int sel_at = jd_sheet->nsels, spec = 0;
-        int k = css_parse_selector(jd_sheet, sel->s, len, &at, &spec);
+        int k = css_parse_selector(jd_sheet, text, len, &at, &spec);
         /* A part this cannot read matches nothing, and neither does the
            rest of the list, whose end it cannot find. */
         if (k <= 0 || jd_sheet->overflowed) break;

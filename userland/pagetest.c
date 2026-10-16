@@ -1136,6 +1136,12 @@ int main(void) {
         run_scripts(&page, err, (int)sizeof(err), &changed);
         oks("a selector picks the element a sheet would have styled",
             page.title >= 0 ? page.arena + page.title : "", "one 3 2 true");
+        oks("and :is() and :where() with lists find each choice",
+            titled("<body><p class=a><b>x</b></p><p class=c><b>y</b></p><i class=a>z</i><script>"
+                   "document.title = [document.querySelectorAll(':is(.a, .c) b').length,"
+                   " document.querySelectorAll(':where(p, i).a').length,"
+                   " document.querySelectorAll('p:is(.c, .q) > b').length].join(' ');</script></body>"),
+            "2 2 1");
     }
 
     {
