@@ -52,6 +52,18 @@ static int iswhite(int c) { return c == 0xFFFFFF; }
 int main(void) {
     puts("drawings\n");
 
+    /* A drawing's document is mapped, costing what it fills, and not taken
+       from the heap, where all eleven megabytes of its tables were memory
+       at once for every drawing. First, before anything else has used the
+       heap and left a block that size free in it. */
+    {
+        u64 before = (u64)sbrk(0);
+        int rc = draw("<svg width='20' height='20'><rect width='20' height='20' fill='red'/></svg>", 20, 20);
+        u64 after = (u64)sbrk(0);
+        okn("a drawing is read without taking its document from the heap (kilobytes the heap grew)",
+            rc == SVG_OK && after - before < 1024 * 1024, (int)((after - before) / 1024));
+    }
+
     /* --- a rectangle, where it was put ------------------------------------- */
     {
         int rc = draw("<svg width='40' height='40'>"

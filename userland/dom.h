@@ -37,9 +37,12 @@
    Forty thousand nodes cut a long article off part way (Wikipedia's United
    States parses to thirty-nine thousand, past what the parser keeps in
    hand); the tables sized by it cost a page only as far as it is used, now
-   that a program's zero data is given out as it is touched (elf.c). */
-#define DOM_NODES   80000
-#define DOM_ATTRS   160000
+   that a program's zero data is given out as it is touched (elf.c). Eighty
+   thousand filled on Rotten Tomatoes' front page once all two thousand of
+   its components had their shadow trees: Chromium holds sixty thousand
+   live, and here a node taken away is never given out again. */
+#define DOM_NODES   160000
+#define DOM_ATTRS   320000
 #define DOM_ARENA   (3 * 1024 * 1024)
 #define DOM_DEPTH   64
 

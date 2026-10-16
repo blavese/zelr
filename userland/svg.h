@@ -1100,7 +1100,13 @@ static inline int svg_render(const char *xml, int len, int want_w, int want_h,
     out->w = out->h = 0;
     out->rgb = 0;
 
-    ddoc *doc = (ddoc *)malloc((u32)sizeof(ddoc));
+    /* Mapped, so that it costs what the drawing fills of it: a document is
+       eleven megabytes of tables, and taken from the heap every page of it
+       was memory at once, for every drawing. The heap when no mapping is
+       left. */
+    ddoc *doc = (ddoc *)map(sizeof(ddoc), PROT_READ | PROT_WRITE);
+    int mapped = doc != 0;
+    if (!doc) doc = (ddoc *)malloc((u32)sizeof(ddoc));
     if (!doc) return SVG_TOO_BIG;
     dom_use_arena(doc, 0, 0);          /* malloc left the pointer as it found it */
     dom_parse(doc, xml, len);
@@ -1109,10 +1115,9 @@ static inline int svg_render(const char *xml, int len, int want_w, int want_h,
     for (int i = 0; i < doc->count; i++)
         if (doc->nodes[i].kind == DN_ELEMENT
             && w_same_fold(dom_tag_name(doc, i), "svg")) { root = i; break; }
-    if (root < 0) { free(doc); return SVG_NOT_SVG; }
-
-    int rc = svg_render_tree(doc, root, want_w, want_h, out, bg, 0x000000);
-    free(doc);
+    int rc = root < 0 ? SVG_NOT_SVG : svg_render_tree(doc, root, want_w, want_h, out, bg, 0x000000);
+    if (mapped) unmap(doc, sizeof(ddoc));
+    else free(doc);
     return rc;
 }
 

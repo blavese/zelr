@@ -2004,6 +2004,18 @@ int main(void) {
             lay(longpage, 600);
             ok("a page of fifty thousand nodes is read and laid out whole", !doc.overflowed && !page.overflowed && word("last"));
         }
+        {
+            /* And past eighty thousand: Rotten Tomatoes' front page filled
+               that once its components had their shadow trees. */
+            static char wider[45000 * 8 + 64];
+            int n = 0;
+            for (int i = 0; i < 45000; i++)
+                for (const char *h = "<i>x</i>"; *h; h++) wider[n++] = *h;
+            for (const char *h = "<i>end</i>"; *h; h++) wider[n++] = *h;
+            wider[n] = 0;
+            lay(wider, 600);
+            ok("a page of ninety thousand nodes is read whole", !doc.overflowed && doc.count > 90000 && word("end"));
+        }
         lay("<style>.alert { display: block; padding: 8px }</style><noscript class=alert><h2>needs scripts</h2></noscript><p>shown</p>", 600);
         ok("and a noscript the page's rules give a display is still not drawn", !word("scripts</h2>") && !word("needs") && word("shown"));
     }
