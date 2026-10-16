@@ -664,6 +664,18 @@ def main():
             c.add("Tab takes the keyboard from one field to the next (%d)"
                   % count_in(pxt, wt_, PAGE, TAB_INK), tabbed, shott)
 
+            # --- a page kept in the bookmarks, and the start page listing it -----
+            go(vm, mon, "http://%s/tab" % srv.host, settle=10.0,
+               was=bgj, name="br-going-bm")
+            bgj, _, _, _ = page_settled(mon, "br-bm-up")
+            mon.send("sendkey ctrl-d", settle=0.6)
+            kept = vm.wait_serial("-- kept in the bookmarks: tab", timeout=30)
+            go(vm, mon, "about:start", settle=10.0, was=bgj, name="br-going-start")
+            listed = vm.wait_serial("needs no network: ", timeout=30) and \
+                vm.wait_serial(" links, 1 bookmark", timeout=30)
+            bgj, _, _, shotb = page_settled(mon, "br-start-settled")
+            c.add("ctrl+D keeps a page in /home/bookmarks, and the start page lists it", kept and listed, shotb)
+
             # --- a file saved, and a picture's own address shown ----------------
             go(vm, mon, "http://%s/dl/report.bin" % srv.host, settle=10.0,
                was=bgj, name="br-going-dl")

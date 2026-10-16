@@ -3483,6 +3483,101 @@ static int save_download(const char *body, int len, const char *name, char *path
  * out. */
 #define START_ADDRESS "about:start"
 
+/* --- bookmarks ------------------------------------------------------------
+ *
+ * ctrl+D keeps the page in /home/bookmarks, or lets it go if it was kept
+ * already, and the start page lists what is kept above everything else. A
+ * line each, the address and the title with a tab between, so the file reads
+ * as what it is in Notes or the terminal. Kept on the disk, they outlast the
+ * browser and the machine being turned off. */
+#define BOOKMARKS "/home/bookmarks"
+#define BOOKMARKS_MAX (64 * 1024)
+
+static char bm_text[BOOKMARKS_MAX + 1];
+static int  bm_len;
+
+static void bm_read(void) {
+    bm_len = 0;
+    int fd = open(BOOKMARKS, O_READ);
+    if (fd >= 0) {
+        int got;
+        while (bm_len < BOOKMARKS_MAX && (got = zelr_fread(fd, bm_text + bm_len, BOOKMARKS_MAX - bm_len)) > 0)
+            bm_len += got;
+        close(fd);
+    }
+    bm_text[bm_len] = 0;
+}
+
+static int bm_write(void) {
+    mkdir("/home");
+    int fd = open(BOOKMARKS, O_WRITE | O_CREATE | O_TRUNC);
+    if (fd < 0) return 0;
+    int done = 0;
+    while (done < bm_len) {
+        int got = zelr_fwrite(fd, bm_text + done, bm_len - done);
+        if (got <= 0) break;
+        done += got;
+    }
+    close(fd);
+    return done == bm_len;
+}
+
+/* Where the line for an address starts, or -1. */
+static int bm_find(const char *addr) {
+    int n = w_len(addr);
+    for (int i = 0; i < bm_len; ) {
+        int e = i;
+        while (e < bm_len && bm_text[e] != '\n') e++;
+        if (e - i > n && bm_text[i + n] == '\t') {
+            int k = 0;
+            while (k < n && bm_text[i + k] == addr[k]) k++;
+            if (k == n) return i;
+        }
+        i = e + 1;
+    }
+    return -1;
+}
+
+static int bm_count(void) {
+    int n = 0;
+    for (int i = 0; i < bm_len; i++) if (bm_text[i] == '\n') n++;
+    return n;
+}
+
+/* Kept, or let go if it was kept: 1 kept, 0 let go, -1 not written. */
+static int bm_toggle(const char *addr, const char *name) {
+    bm_read();
+    int at = bm_find(addr);
+    if (at >= 0) {
+        int e = at;
+        while (e < bm_len && bm_text[e] != '\n') e++;
+        if (e < bm_len) e++;
+        for (int i = e; i <= bm_len; i++) bm_text[at + i - e] = bm_text[i];
+        bm_len -= e - at;
+        return bm_write() ? 0 : -1;
+    }
+    int need = w_len(addr) + w_len(name) + 2;
+    if (bm_len + need > BOOKMARKS_MAX) return -1;
+    for (const char *p = addr; *p; p++) bm_text[bm_len++] = *p;
+    bm_text[bm_len++] = '\t';
+    for (const char *p = name; *p; p++) bm_text[bm_len++] = *p == '\n' || *p == '\t' ? ' ' : *p;
+    bm_text[bm_len++] = '\n';
+    bm_text[bm_len] = 0;
+    return bm_write() ? 1 : -1;
+}
+
+/* Text put into the start page's markup with nothing in it read as markup. */
+static int bm_put(char *out, int w, int cap, const char *s, int n) {
+    for (int i = 0; i < n && w < cap - 8; i++) {
+        char c = s[i];
+        if (c == '<') { out[w++] = '&'; out[w++] = 'l'; out[w++] = 't'; out[w++] = ';'; }
+        else if (c == '&') { out[w++] = '&'; out[w++] = 'a'; out[w++] = 'm'; out[w++] = 'p'; out[w++] = ';'; }
+        else if (c == '"') { out[w++] = '&'; out[w++] = '#'; out[w++] = '3'; out[w++] = '4'; out[w++] = ';'; }
+        else out[w++] = c;
+    }
+    return w;
+}
+
 static void show_start(int width) {
     static const char PAGE_START[] =
         "<html><head><title>start</title><style>"
@@ -3495,13 +3590,14 @@ static void show_start(int width) {
         "<form action=\"https://lite.duckduckgo.com/lite/\" method=\"get\">"
         "<input type=\"text\" name=\"q\" size=\"44\"> <input type=\"submit\" value=\"search\"></form>"
         "<p><small>or type an address, or words to look for, into the bar above</small></p>"
+        "<!--bookmarks-->"
         "<h2>sites</h2><ul>"
         "<li><a href=\"https://www.youtube.com/results?search_query=music\">YouTube</a> "
         "<small>searches, videos and channels, read from YouTube's own data; videos are "
         "listed with frames from them, not played</small></li>"
         "<li><a href=\"https://www.twitch.tv/\">Twitch</a> "
-        "<small>who is live, the categories and the channels, from Twitch's API; streams "
-        "are listed, not played</small></li>"
+        "<small>who is live, the categories and the channels, from Twitch's API; a live "
+        "channel plays from its page's watch link</small></li>"
         "<li><a href=\"https://en.wikipedia.org/wiki/Special:Random\">Wikipedia</a> "
         "<small>an article at random</small></li>"
         "<li><a href=\"https://news.ycombinator.com/\">Hacker News</a></li>"
@@ -3509,8 +3605,46 @@ static void show_start(int width) {
         "<small>where searches go, Google's included</small></li>"
         "<li><a href=\"https://example.com/\">example.com</a></li>"
         "</ul></body></html>";
+    /* The bookmarks go where the page leaves room for them. */
+    static char page_with[sizeof(PAGE_START) + BOOKMARKS_MAX * 3];
+    bm_read();
+    const char *mark = "<!--bookmarks-->";
+    int w = 0, i = 0, ml = w_len(mark);
+    while (PAGE_START[i] && !w_starts_fold(PAGE_START + i, mark)) page_with[w++] = PAGE_START[i++];
+    if (bm_len > 0) {
+        const char *head = "<h2>bookmarks</h2><ul>";
+        for (const char *p = head; *p; p++) page_with[w++] = *p;
+        int cap = (int)sizeof(page_with) - 512;
+        for (int a = 0; a < bm_len && w < cap; ) {
+            int e = a;
+            while (e < bm_len && bm_text[e] != '\n') e++;
+            int t = a;
+            while (t < e && bm_text[t] != '\t') t++;
+            const char *open_ = "<li><a href=\"";
+            for (const char *p = open_; *p; p++) page_with[w++] = *p;
+            w = bm_put(page_with, w, cap, bm_text + a, t - a);
+            page_with[w++] = '"';
+            page_with[w++] = '>';
+            int has_name = t + 1 < e;
+            w = has_name ? bm_put(page_with, w, cap, bm_text + t + 1, e - t - 1) : bm_put(page_with, w, cap, bm_text + a, t - a);
+            const char *mid = "</a> <small>";
+            for (const char *p = mid; *p; p++) page_with[w++] = *p;
+            w = bm_put(page_with, w, cap, bm_text + a, t - a);
+            const char *close_ = "</small></li>";
+            for (const char *p = close_; *p; p++) page_with[w++] = *p;
+            a = e + 1;
+        }
+        const char *tail = "</ul><p><small>ctrl+D keeps a page here, or lets it go</small></p>";
+        for (const char *p = tail; *p; p++) page_with[w++] = *p;
+    } else {
+        const char *none = "<p><small>ctrl+D keeps the page you are on here</small></p>";
+        for (const char *p = none; *p; p++) page_with[w++] = *p;
+    }
+    if (PAGE_START[i]) i += ml;
+    while (PAGE_START[i]) page_with[w++] = PAGE_START[i++];
+    page_with[w] = 0;
     int fetched, skipped;
-    build(PAGE_START, (int)sizeof(PAGE_START) - 1, width, 0, &fetched, &skipped);
+    build(page_with, w, width, 0, &fetched, &skipped);
     scroll = 0;
 }
 
@@ -3595,6 +3729,13 @@ static void load(const char *address, int width, int keep_scroll) {
         number_into(shown, page.nlinks);
         say("the start page, which needs no network: ", shown);
         say_more(" links");
+        int nb = bm_count();
+        if (nb) {
+            number_into(shown, nb);
+            say_more(", ");
+            say_more(shown);
+            say_more(nb == 1 ? " bookmark" : " bookmarks");
+        }
         return;
     }
 
@@ -4544,6 +4685,18 @@ int main(int argc, char **argv) {
                 if (focus_node >= 0) give_focus(-1);
                 bar.focused = 1;
                 bar_fresh = 1;
+                dirty = 1;
+                continue;
+            }
+            /* ctrl+D keeps the page in the bookmarks, or lets it go, and says
+               so on the status line and the console. */
+            if (KEY_CTRL(raw) && key_ctrl_letter(raw) == 'd' && hist_at >= 0
+                && !w_same_fold(hist[hist_at].text, START_ADDRESS)) {
+                int kept = bm_toggle(hist[hist_at].text, title[0] ? title : hist[hist_at].text);
+                say(kept > 0 ? "kept in the bookmarks: " : kept == 0 ? "let go from the bookmarks: "
+                                                                     : "the bookmarks could not be written: ",
+                    title[0] ? title : hist[hist_at].text);
+                announce_page();
                 dirty = 1;
                 continue;
             }
