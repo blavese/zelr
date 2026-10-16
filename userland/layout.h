@@ -1345,8 +1345,15 @@ static inline int lay_pct_cyclic(const lctx *L, int node, const cstyle *st, cons
    nothing, or a box a pixel or two across whose overflow is hidden. */
 static inline int lay_unseen(const cstyle *st) {
     if (st->gone) return 1;
-    return st->clip && ((st->width >= 0 && st->width <= 2)
-                        || (st->height >= 0 && st->height <= 2));
+    /* Its padding and borders are part of it: Debian's banner heading is 0
+       high with 130 pixels of padding for its picture, and as a box of no
+       height that hid its overflow it was taken for one hidden on purpose
+       and the picture was never drawn. A border-box size cannot be less
+       than its frame. */
+    int fw = st->pl + st->pr + st->bl + st->br, fh = st->pt + st->pb + st->bt + st->bb;
+    int w = st->width < 0 ? -1 : st->border_box ? (st->width > fw ? st->width : fw) : st->width + fw;
+    int h = st->height < 0 ? -1 : st->border_box ? (st->height > fh ? st->height : fh) : st->height + fh;
+    return st->clip && ((w >= 0 && w <= 2) || (h >= 0 && h <= 2));
 }
 
 /* An inline-block, or something absolutely positioned inside a run of
@@ -5166,6 +5173,22 @@ static void lay_block_placed(lctx *L, int node, const cstyle *parent, int x,
             if (L->out->items[i].y >= cut) L->out->items[i].kind = 0;
         *y -= box_h - cap_h;
         box_h = cap_h;
+    }
+    /* And a box whose own room is nothing, its padding all it is: Debian's
+       banner heading is 0 high, its padding the room for its picture and
+       its word meant to be out of sight. Only such a box: one of some height
+       is left as tall as what is in it, since words here can wrap where
+       they would not elsewhere. */
+    if (st.height >= 0 && st.clip == 1 && (st.border_box ? st.height - vframe : st.height) <= 2) {
+        int hh = want_h > vframe ? want_h : vframe;
+        if (floor_h >= 0 && hh < floor_h) hh = floor_h;
+        if (hh < box_h) {
+            int cut = box_top + hh;
+            for (int i = inside_at; i < L->out->nitems; i++)
+                if (L->out->items[i].y >= cut) L->out->items[i].kind = 0;
+            *y -= box_h - hh;
+            box_h = hh;
+        }
     }
     /* And at its sides: what lies wholly to the left or the right of a box
        that hides its overflow is not drawn, as the slides of a carousel

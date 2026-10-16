@@ -2272,6 +2272,18 @@ int main(void) {
            pl && pl->w >= 700 && bp && ba && ba->x - bp->x == 44);
     }
     {
+        /* A box that hides its overflow and is 0 high is hidden on purpose
+           unless its padding makes it something: Debian's banner heading is
+           0 high with 130 pixels of padding for its picture, and was never
+           drawn. One a pixel square with no padding is still hidden. */
+        lay("<style>body{margin:0}p{margin:0}.s{height:0;padding-top:50px;overflow:hidden;background:#123456}"
+            ".sr{position:absolute;width:1px;height:1px;padding:0;overflow:hidden}</style>"
+            "<div class=s id=splash>heading</div><p class=sr>unseen</p><p>after</p>", 800);
+        const litem *sb = box_of(by_id("splash")), *us = word("unseen"), *af2 = word("after");
+        ok("a box 0 high that hides its overflow is drawn when its padding gives it height, a pixel square is not",
+           sb && sb->h == 50 && !us && af2 && af2->y == 50);
+    }
+    {
         /* GitHub's repository page sends twenty-five thousand rules, and at
            sixteen thousand the rest were lost: its visually hidden headings
            and its closed menu's rules among them. The last of 25000 rules
