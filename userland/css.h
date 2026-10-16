@@ -4179,8 +4179,13 @@ static const char CSS_UA[] =
     "slot{display:contents}"
     "button{display:inline-block;padding:5px 12px;background:#f2f3f5;"
         "border:1px #c9ccd1;border-radius:6px}"
-    "input,textarea,select{display:inline-block;padding:4px 8px;"
+    /* A field's frame is as wide as Chromium's, four pixels a side, and a
+       button-like input or a select is measured to its border as there: weather.gov's 93 pixel field and 35 pixel button
+       fill its 140 pixel form, and with a wider frame its button went to
+       the next line. */
+    "input,textarea,select{display:inline-block;padding:4px 3px;"
         "background:#ffffff;border:1px #c9ccd1;border-radius:6px}"
+    "select,input[type=submit],input[type=button],input[type=reset],input[type=image]{box-sizing:border-box}"
     "img{display:inline-block}"
     /* A video's picture keeps its shape inside its box, as the standard's
        rendering has it; nothing draws a player's controls, so a sound has

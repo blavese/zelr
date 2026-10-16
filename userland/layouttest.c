@@ -2509,6 +2509,21 @@ int main(void) {
         ok("a fresh style is content-box whatever was in its memory", junk.border_box == 0);
     }
     {
+        /* A field and a button-like input measured as Chromium measures them:
+           weather.gov's 93 pixel field and 35 pixel button fill its 140 pixel
+           form, and with a wider frame the button went to the next line. */
+        lay("<style>body{margin:0}form{width:140px}#fq{width:93px}#fg{width:35px}</style>"
+            "<form><input id=fq type=text><input id=fg type=submit value=Go></form>", 800);
+        const litem *fq = 0, *fg = 0;
+        for (int i = 0; i < page.nitems; i++) {
+            if (page.items[i].kind != LK_FIELD) continue;
+            if (page.items[i].node == by_id("fq")) fq = &page.items[i];
+            if (page.items[i].node == by_id("fg")) fg = &page.items[i];
+        }
+        ok("a field's frame is Chromium's width and a submit input is measured to its border, on one line",
+           fq && fq->w == 101 && fg && fg->w == 35 && fg->y == fq->y);
+    }
+    {
         /* A box placed by its right side is as wide as its limits and frame
            make it: go.dev's drawer (85% up to 27rem, right: 0) was placed by
            the 85%, sat a third of the window short of the edge, and showed
