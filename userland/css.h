@@ -157,6 +157,7 @@ typedef struct {
 typedef struct {
     u32 color, background, border_color;
     short font_px;
+    short font_up;                       /* the parent's, which an em of a font size is of */
     unsigned char bold, italic, mono;
     unsigned char underline, strike;
     unsigned char display, align, white, list, visible;
@@ -2761,7 +2762,7 @@ static inline void css_default_style(cstyle *st, int root_px) {
     st->color = 0x1A1A1A;
     st->background = 0xFFFFFF;
     st->border_color = 0xD0D0D0;
-    st->font_px = (short)root_px;
+    st->font_px = st->font_up = (short)root_px;
     st->bold = st->italic = st->mono = 0;
     st->underline = st->strike = 0;
     st->display = D_INLINE;
@@ -2836,7 +2837,7 @@ static inline void css_default_style(cstyle *st, int root_px) {
 static inline void css_inherit(cstyle *child, const cstyle *parent) {
     css_default_style(child, parent->font_px);
     child->color = parent->color;
-    child->font_px = parent->font_px;
+    child->font_px = child->font_up = parent->font_px;
     child->bold = parent->bold;
     child->italic = parent->italic;
     child->mono = parent->mono;
@@ -3532,12 +3533,19 @@ static inline void css_apply_v(int prop, const char *v, cstyle *st, int root_px,
             break;
         }
         case P_FONT_SIZE: {
-            if (w_starts_fold(v, "smaller")) { st->font_px = (short)(st->font_px * 5 / 6); break; }
-            if (w_starts_fold(v, "larger")) { st->font_px = (short)(st->font_px * 6 / 5); break; }
+            /* Relative to the parent's size, not to what an earlier rule made
+               this one's: Python.org's h1 is 1.75em, and its slides' headings
+               1.3125em, which came to 1.3125 of 1.75em, and the browser's own
+               2em for an h1 doubled any em size a page gave one. */
+            int up = st->font_up;
+            if (w_starts_fold(v, "smaller")) { st->font_px = (short)(up * 5 / 6); break; }
+            if (w_starts_fold(v, "larger")) { st->font_px = (short)(up * 6 / 5); break; }
+            if (w_starts_fold(v, "inherit") || w_starts_fold(v, "unset")) { st->font_px = (short)up; break; }
+            if (w_starts_fold(v, "initial")) { st->font_px = 16; break; }
             int kw = css_size_keyword(v, w_len(v));
             if (kw) { st->font_px = (short)kw; break; }
-            clen L = css_len_at(v, st->font_px, root_px, st->font_px);
-            int px = css_px(L, st->font_px, root_px, st->font_px);
+            clen L = css_len_at(v, up, root_px, up);
+            int px = css_px(L, up, root_px, up);
             if (px > 0) st->font_px = (short)(px > 96 ? 96 : (px < 7 ? 7 : px));
             /* Nought is how a page hides the words in something it draws
                another way, and the gaps between inline-blocks. */

@@ -2549,6 +2549,26 @@ int main(void) {
         ok("a float inside a float pulled back over another is not moved by the one outside", si && si->x == 0 && si->y == 0);
     }
     {
+        /* An em of a font size is of the parent's size, whichever rules set
+           it, and an em of a margin is of the size they settle on: the
+           browser's 2em for an h2-like heading doubled a page's em size, and
+           a margin of 1em was of the size a rule after it changed. */
+        lay("<style>body{margin:0}h2{font-size:1.75em;margin:0 0 1em}.s h2{font-size:1.25em}"
+            "h2.q{font-size:20px;margin:0 0 20px}p{margin:0}</style>"
+            "<div class=s><h2>nested</h2><p>one</p></div><div><h2 class=q>twenty</h2><p>two</p></div>", 800);
+        const litem *ne = word("nested"), *on = word("one"), *tw = word("twenty"), *two = word("two");
+        ok("an em font size is of the parent's size and an em margin of the size settled on",
+           ne && on && tw && two && ne->h == tw->h && on->y - ne->y == two->y - tw->y);
+        /* A font shorthand written with a variable is split late, and its
+           size still counts only where its rule is in the cascade:
+           SoundCloud's headings of 65 pixels came out 20, the size of a
+           plainer rule's font: var(...). */
+        lay("<style>:root{--f:bold 30px serif}h3{font:var(--f);margin:0}.k h3{font-size:12px}.t{font-size:12px}</style>"
+            "<div class=k><h3>shorthand</h3></div><div class=t>plainsize</div>", 800);
+        const litem *sh = word("shorthand"), *pl = word("plainsize");
+        ok("a font shorthand split late gives way to a later rule's font size", sh && pl && sh->h == pl->h);
+    }
+    {
         /* A button's words are as shown, each run of white space one space:
            Python.org's GO button kept its markup's newlines and indentation
            and was 320 pixels wide. */

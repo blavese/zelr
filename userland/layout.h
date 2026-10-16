@@ -393,6 +393,9 @@ typedef struct {
        still of the room it was floated in (lay_float), and that room. -1
        for none. */
     int pct_node, pct_w;
+    /* Which declarations lay_style is applying: 1 font sizes, 2 the rest, 0
+       all of them. */
+    int font_pass;
     /* The absolutely positioned box being measured for how wide its contents
        make it (lay_block): laid out as its body, where it stands. -1 for none. */
     int abs_sizing;
@@ -1035,6 +1038,7 @@ static void lay_font_put(void *ctx, int prop, const char *v, int n) {
     if (n > 255) n = 255;
     for (int i = 0; i < n; i++) one[i] = v[i];
     one[n] = 0;
+    if (x->L->font_pass && (x->L->font_pass == 1) != (prop == P_FONT_SIZE)) return;
     css_apply_v(prop, one, x->st, x->L->root_px, x->pct_of);
 }
 
@@ -1044,6 +1048,8 @@ static void lay_apply_short(lctx *L, cstyle *st, const char *nv, int pct_of) {
     int k = 0;
     while (nv[k] && nv[k] != ':' && k < 47) { name[k] = nv[k]; k++; }
     name[k] = 0;
+    /* Only the font shorthand holds a font size (lay_style's first pass). */
+    if (L->font_pass == 1 && !lay_same_fold(name, "font")) return;
     const char *v = nv[k] == ':' ? nv + k + 1 : "";
     int ps[4], pl[4];
     int n = css_parts(v, w_len(v), ps, pl, 4);
@@ -1116,6 +1122,7 @@ static void lay_apply_short(lctx *L, cstyle *st, const char *nv, int pct_of) {
 static inline void lay_apply_decl(lctx *L, const cdecl *dc, cstyle *out, int pct_of) {
     int prop = dc->prop & ~CSS_HAS_VAR;
     if (prop == P_CUSTOM) return;                 /* gathered already */
+    if (L->font_pass && prop != P_DEFER && (L->font_pass == 1) != (prop == P_FONT_SIZE)) return;
     const char *v = L->s->text + dc->value;
     if (dc->prop & CSS_HAS_VAR) v = lay_var_keep(out->vars, v);
     if (prop == P_DEFER) { lay_apply_short(L, out, v, pct_of); return; }
@@ -1187,6 +1194,25 @@ static inline int lay_table_of(const ddoc *d, int el) {
     for (int k = 0; k < 4 && at >= 0; k++, at = d->nodes[at].parent)
         if (d->nodes[at].kind == DN_ELEMENT && d->nodes[at].tag == T_TABLE) return at;
     return -1;
+}
+
+/* <font size>, one to seven or a step from three written with a sign: a
+   font size, so it is settled with the sheets' before anything else
+   (lay_style). */
+static inline void lay_font_hint(lctx *L, int el, cstyle *st) {
+    const ddoc *d = L->d;
+    if (el < 0 || d->nodes[el].kind != DN_ELEMENT || d->nodes[el].attr_n == 0 || !lay_named(d, el, "font")) return;
+    const char *v = dom_attr(d, el, "size");
+    if (!v) return;
+    static const short PX[8] = { 0, 10, 13, 16, 18, 24, 32, 48 };
+    const char *q = v;
+    while (*q == ' ') q++;
+    int step = *q == '+' || *q == '-';
+    int n = lay_number(step ? q + 1 : q);
+    if (step) n = *q == '+' ? 3 + n : 3 - n;
+    if (n < 1) n = 1;
+    if (n > 7) n = 7;
+    st->font_px = PX[n];
 }
 
 static inline void lay_hints(lctx *L, int el, cstyle *st, int pct_of) {
@@ -1299,19 +1325,6 @@ static inline void lay_hints(lctx *L, int el, cstyle *st, int pct_of) {
 
     if (lay_named(d, el, "font")) {
         if (lay_attr_color(dom_attr(d, el, "color"), &c)) st->color = c;
-        v = dom_attr(d, el, "size");
-        if (v) {
-            /* One to seven, or a step from three written with a sign. */
-            static const short PX[8] = { 0, 10, 13, 16, 18, 24, 32, 48 };
-            const char *q = v;
-            while (*q == ' ') q++;
-            int step = *q == '+' || *q == '-';
-            int n = lay_number(step ? q + 1 : q);
-            if (step) n = *q == '+' ? 3 + n : 3 - n;
-            if (n < 1) n = 1;
-            if (n > 7) n = 7;
-            st->font_px = PX[n];
-        }
         v = dom_attr(d, el, "face");
         if (v) {
             for (const char *q = v; q[0] && q[1] && q[2] && q[3]; q++) {
@@ -1400,16 +1413,26 @@ static inline void lay_style(lctx *L, int el, const cstyle *parent,
     }
     out->vars = head;
 
-    for (int i = 0; i < n; i++) if (rules[i] < ua) lay_apply_rule(L, rules[i], out, pct_of);
-    lay_hints(L, el, out, pct_of);
-    for (int i = 0; i < n; i++) if (rules[i] >= ua) lay_apply_rule(L, rules[i], out, pct_of);
+    /* The font size first, in the cascade's own order, and then everything
+       else: an em of a margin or a padding is of the element's font size,
+       whichever rule set it. Applied as they came, the browser's margin of
+       0.55em on an h1 was of its 2em when the page's rule after it made the
+       heading smaller. */
+    for (int pass = 1; pass <= 2; pass++) {
+        L->font_pass = pass;
+        for (int i = 0; i < n; i++) if (rules[i] < ua) lay_apply_rule(L, rules[i], out, pct_of);
+        if (pass == 1) lay_font_hint(L, el, out);
+        else lay_hints(L, el, out, pct_of);
+        for (int i = 0; i < n; i++) if (rules[i] >= ua) lay_apply_rule(L, rules[i], out, pct_of);
 
-    /* And last, what the element says about itself. A style attribute beats
-       every rule in every sheet no matter how specific, which is the one
-       part of the cascade that needs no comparison to decide. */
-    if (L->inl && L->inl[el].n > 0)
-        for (int k = 0; k < L->inl[el].n; k++)
-            lay_apply_decl(L, &L->s->decls[L->inl[el].at + k], out, pct_of);
+        /* And last, what the element says about itself. A style attribute
+           beats every rule in every sheet no matter how specific, which is
+           the one part of the cascade that needs no comparison to decide. */
+        if (L->inl && L->inl[el].n > 0)
+            for (int k = 0; k < L->inl[el].n; k++)
+                lay_apply_decl(L, &L->s->decls[L->inl[el].at + k], out, pct_of);
+    }
+    L->font_pass = 0;
 
     /* What is inside noscript is for a browser that runs no scripts, and
        this one runs them, so it is never drawn whatever the page's rules
@@ -5752,6 +5775,7 @@ static inline void lay_run(ldoc *out, const ddoc *d, const csheet *s,
     L.measuring = 0; L.measure_right = 0;
     L.flex_sized = -1;
     L.pct_node = -1; L.pct_w = 0;
+    L.font_pass = 0;
     L.abs_sizing = -1;
     L.measure_root = -1;
     L.ngroups = 0;
