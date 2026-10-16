@@ -95,6 +95,13 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.143.0
+
+- **display: inherit, initial and unset (11)**, **the page's html element as the document's root (11)**, **a media
+  query's width with the scroll bar, and its height read (11)**, **a picture element's sources (11)**, **as many shadow
+  trees drawn as kept (11)**, **the Twitch and YouTube pages saying truly how they play (11)**. layouttest 399, pagetest
+  376, sitetest 151, browsercheck's tree and source steps, each failing on a build without its change.
+
 ### 0.142.0
 
 - **a top or bottom in a percentage of the positioned box's height (11)**, **a float met after words laid beside

@@ -1,6 +1,22 @@
 # 11 -- The web browser (everything except JS-engine internals and image decoders)
 
-**Since 0.142.0** (the rest of this file is older; trust the code and the README's "since 6048716" list):
+**Since 0.143.0** (the rest of this file is older; trust the code and the README's "since 6048716" list):
+- **The page's `<html>` is the document's root** (dom.h `dom_parse_into`): its attributes go to the root made at the
+  start, while the root's attributes can still grow in place (before any other element has any). It was a second html
+  element inside the root, which the layout never styles (it starts at the body), so rules and custom properties on
+  `html.x` or `html[data-...]` were lost. An `<html>` in a fragment is still made an element.
+- **display: inherit** takes the parent's display (`cstyle.display_up`); initial and unset are inline. Other unknown
+  words are still block.
+- **A media query's width adds the page's scroll bar** (css.h `css_mq_extra`, set to `UI_SCROLL_W` by the browser):
+  the sheets' rules, matchMedia and innerWidth; not the layout width, vw or clientWidth. **min-height/max-height**
+  are read against `css_view_h` when the query is read (a sheet is read again per page, not per resize).
+- **A picture element's `<source>`s** (browser.c `pic_from_sources`): the first before the img whose media holds and
+  whose type is drawable, its srcset's 1x (or bare, or first) candidate (`srcset_pick`; an address runs to white
+  space, commas inside it allowed).
+- **TREES_MAX 8192** in browser.c, matching jsdom's `JD_SHADOWS`: past 1024 a shadow tree was kept by jsdom but not
+  drawn (Rotten Tomatoes' header).
+
+**Since 0.142.0**:
 - **A top or bottom in a percentage** is of the containing box's height: resolved at once when the parent has a height
   (`css_parent_h`), else marked (`cstyle.off_pct`) and left auto, and the box is laid out again when the positioned
   box's height is settled (lay_block's relay, now also for `off_pct`). Only direct children of the positioned box.
