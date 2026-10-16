@@ -139,6 +139,8 @@ BIG_INK = (0x28, 0x50, 0x78)          # /bigpic: the picture far wider than it i
 BIG_TOLD = (0x78, 0x28, 0x5A)         # and the box its script colours when the natural size is right
 RR_INK = (0x28, 0x78, 0x50)           # /rerender: its 100 pictures, in elements its script made again
 FILL_INK = (0x1E, 0x5A, 0x8C)         # /svgfill: a drawing painted by its style sheet, not its attribute
+SEEN_INK = (0x0A, 0x7A, 0x3C)         # /cut: the line a max-height box shows
+CUT_INK = (0xB4, 0x14, 0x8C)          # and the lines it cuts off, never on the screen
 SHEET_THIRD = (0x50, 0xD0, 0x50)      # and the one before it, which must not have
 STOOD = (0xC0, 0x30, 0x30)            # and the block it draws when they did not
 
@@ -725,6 +727,14 @@ def main():
             bgj, pxf, wf, shotf = page_settled(mon, "br-svgfill-settled")
             c.add("a drawing is painted as its style sheet says, not white as its attribute does (%d)"
                   % count_in(pxf, wf, PAGE, FILL_INK), drew_fill, shotf)
+            go(vm, mon, "http://%s/cut" % srv.host, settle=10.0,
+               was=bgj, name="br-going-cut")
+            _, _, _, _, drew_seen = mon.wait_screen(
+                "br-cut", lambda w, h, px: count_in(px, w, PAGE, SEEN_INK) > 50, timeout=40)
+            bgj, pxk, wk, shotk = page_settled(mon, "br-cut-settled")
+            c.add("a box that hides its overflow shows its first line and not the lines it cuts off (%d, %d)"
+                  % (count_in(pxk, wk, PAGE, SEEN_INK), count_in(pxk, wk, PAGE, CUT_INK)),
+                  drew_seen and count_in(pxk, wk, PAGE, CUT_INK) == 0, shotk)
 
             go(vm, mon, "http://%s/scripted" % srv.host, settle=12.0,
                was=bgj, name="br-going-scripted")

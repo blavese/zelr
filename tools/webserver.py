@@ -332,6 +332,18 @@ SVGFILL_PAGE = b"""<!doctype html>
 </body></html>
 """
 
+# A box that hides its overflow at a max-height of one line: its first line
+# in one colour, the two lines it cuts off in another, which must not be on
+# the screen. The layout put them away, and the browser drew them anyway.
+CUT_PAGE = b"""<!doctype html>
+<html><head><title>cut</title><style>body { background: #ffffff; padding: 24px }
+.box { max-height: 30px; overflow: hidden; font-size: 20px; line-height: 30px; width: 400px }
+.a { color: #0a7a3c } .b { color: #b4148c }</style></head>
+<body><div class="box"><span class="a">the first line, seen</span><br><span class="b">the second line, cut</span><br>
+<span class="b">the third line, cut</span></div>
+</body></html>
+"""
+
 # A picture far wider than it is drawn, which the browser keeps smaller
 # than it is: drawn, and its natural width still what its file says, which
 # the page checks and shows as the colour of a box.
@@ -1557,6 +1569,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._send(RERENDER_PAGE)
         elif path == "/svgfill":
             self._send(SVGFILL_PAGE)
+        elif path == "/cut":
+            self._send(CUT_PAGE)
         elif path.startswith("/rr/") and path.endswith(".png"):
             self._send(RR_PNG, ctype="image/png")
         elif path == "/big.png":

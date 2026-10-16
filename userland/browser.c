@@ -4240,6 +4240,12 @@ static int draw_x0 = -0x7FFFFFFF, draw_x1 = 0x7FFFFFFF;
 static void draw_page(surface *s, int ox, int oy, int vw, int vh) {
     for (int i = 0; i < page.nitems; i++) {
         const litem *it = &page.items[i];
+        /* What the layout put away (kind 0: cut off by a box that hides its
+           overflow, or the first layout of a box laid out again) is not
+           drawn. A word was drawn whatever its kind, at the end of this
+           loop, so Debian's hidden banner word showed under the banner and
+           a box laid out again drew its words twice. */
+        if (!it->kind) continue;
         int y = it->y - scroll;
         if (y + it->h < -8 || y > vh + 8) continue;
         int x = ox + it->x;
