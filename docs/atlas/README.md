@@ -95,6 +95,12 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.140.0
+
+- **line-clamp and text-overflow: ellipsis (11)**, **a button's label with its white space collapsed (11)**, **floats
+  measured as wide as what they hold, outside floats left out of the trial (11)**. layouttest 380, each failing on a
+  build without its change.
+
 ### 0.139.0
 
 - **FontFace, Element.animate and intersection entries with their fields on the prototype (12)**, **a fixed box placed

@@ -1,6 +1,16 @@
 # 11 -- The web browser (everything except JS-engine internals and image decoders)
 
-**Since 0.139.0** (the rest of this file is older; trust the code and the README's "since 6048716" list):
+**Since 0.140.0** (the rest of this file is older; trust the code and the README's "since 6048716" list):
+- **line-clamp** (css.h `P_LINE_CLAMP`, `cstyle.line_clamp`; lay_block_placed): lines past the Nth are put away, the box
+  ends after them (no shorter than its height or min-height), and the last word shown takes "..." (the face is ASCII).
+  **text-overflow: ellipsis** (`cstyle.ellipsis`): in the side cut of a box hiding its overflow, words running past the
+  side go too and the line's last word is cut to fit the dots.
+- **A button's label** (`lay_words_of`) has each run of white space made one space and none at its ends.
+- **Measuring floats**: while measuring, a right float sits at the left; a trial sees only floats placed during it
+  (`lctx.fl_floor`, raised by `lay_measure`; anything new that walks the floats must start at `lay_fl_first`); a float
+  with a width in pixels keeps it (`flex_sized` only for auto or percentage widths).
+
+**Since 0.139.0**:
 - **A fixed box's containing box is the window** (`lay_block`'s absolute branch: `cbx`/`cby` 0, `cbw` `css_view_w`), not
   the nearest positioned box; one with only a bottom stays where the flow put it, and one whose height its box decides is
   not laid out again (the layout does not know the window's height). Transformed ancestors are not looked for; fixed
