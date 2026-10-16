@@ -297,6 +297,30 @@ MANY_PAGE = (b"""<!doctype html>
 <body>""" + b"".join(b'<img src="/many/%d.png" alt="">' % k for k in range(60)) + b"""</body></html>
 """)
 
+# A page its script draws again over the server's copy, as a framework that
+# renders on top of what the server sent does: once the pictures have come,
+# all 140 img elements are taken out and 100 new ones put in, 88 at
+# addresses already fetched and 12 at ones there was no room for. The
+# pictures fetched for the elements taken out kept every place, and the new
+# ones were drawn as nothing (bbc.com).
+RR_PNG = _logo(24, 24, (0x28, 0x78, 0x50))
+RERENDER_PAGE = (b"""<!doctype html>
+<html><head><title>rerender</title>
+<style>body { padding: 24px; background: #ffffff; font-size: 0 } img { width: 24px; height: 24px }</style></head>
+<body><div id="app">""" + b"".join(b'<img src="/rr/%d.png" alt="">' % k for k in range(140)) + b"""</div>
+<script>
+(function again() {
+  var im = document.images;
+  if (im.length < 128 || im[127].naturalWidth !== 24) { setTimeout(again, 200); return; }
+  var html = '';
+  for (var k = 40; k < 140; k++) html += '<img src="/rr/' + k + '.png" alt="">';
+  document.getElementById('app').innerHTML = html;
+  document.title = 'rerendered';
+})();
+</script>
+</body></html>
+""")
+
 # A picture far wider than it is drawn, which the browser keeps smaller
 # than it is: drawn, and its natural width still what its file says, which
 # the page checks and shows as the colour of a box.
@@ -1518,6 +1542,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._send(MANY_PNG, ctype="image/png")
         elif path == "/bigpic":
             self._send(BIGPIC_PAGE)
+        elif path == "/rerender":
+            self._send(RERENDER_PAGE)
+        elif path.startswith("/rr/") and path.endswith(".png"):
+            self._send(RR_PNG, ctype="image/png")
         elif path == "/big.png":
             self._send(BIG_PNG, ctype="image/png")
         elif path == "/bgjs/teal.png":

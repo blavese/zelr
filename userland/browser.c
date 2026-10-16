@@ -348,6 +348,7 @@ static void pic_wait_add(int node, int bg, const url_t *u) {
 static struct { int node; u32 key; } pic_tried[PIC_TRIED];
 static int npic_tried;
 static int pics_follow_on;               /* this page's pictures are fetched (build's want_sheets) */
+static int pics_moved;                   /* one went to the element that took its old one's place */
 
 static u32 bg_hash(const char *s, int *len) {
     u32 h = 2166136261u;
@@ -2823,35 +2824,38 @@ static int pic_data_uri(const char *src, char *out, int cap) {
     return n;
 }
 
+/* The k'th picture let go, and the size the layout was told for it. */
+static void pic_drop(int k) {
+    int node = pics[k].node;
+    picture_free(&pics[k].pic);
+    if (pics[k].alpha) free(pics[k].alpha);
+    for (int m = k + 1; m < npics; m++) {
+        pics[m - 1].node = pics[m].node;
+        pics[m - 1].pic = pics[m].pic;
+        pics[m - 1].alpha = pics[m].alpha;
+        pics[m - 1].key = pics[m].key;
+        pics[m - 1].nat_w = pics[m].nat_w;
+        pics[m - 1].nat_h = pics[m].nat_h;
+    }
+    npics--;
+    for (int m = 0; m < npic_sizes; m++)
+        if (pic_sizes[m].node == node) {
+            for (int j = m + 1; j < npic_sizes; j++) {
+                pic_sizes[j - 1].node = pic_sizes[j].node;
+                pic_sizes[j - 1].w = pic_sizes[j].w;
+                pic_sizes[j - 1].h = pic_sizes[j].h;
+            }
+            npic_sizes--;
+            break;
+        }
+}
+
 /* A picture's bytes made into what is drawn for the element: 1 when they
    could be. */
 static int pic_take(int i, const u8 *body, int len) {
     /* A source changed by a script: the new picture in the old one's place. */
-    for (int k = 0; k < npics; k++) {
-        if (pics[k].node != i) continue;
-        picture_free(&pics[k].pic);
-        if (pics[k].alpha) free(pics[k].alpha);
-        for (int m = k + 1; m < npics; m++) {
-            pics[m - 1].node = pics[m].node;
-            pics[m - 1].pic = pics[m].pic;
-            pics[m - 1].alpha = pics[m].alpha;
-            pics[m - 1].key = pics[m].key;
-            pics[m - 1].nat_w = pics[m].nat_w;
-            pics[m - 1].nat_h = pics[m].nat_h;
-        }
-        npics--;
-        for (int m = 0; m < npic_sizes; m++)
-            if (pic_sizes[m].node == i) {
-                for (int j = m + 1; j < npic_sizes; j++) {
-                    pic_sizes[j - 1].node = pic_sizes[j].node;
-                    pic_sizes[j - 1].w = pic_sizes[j].w;
-                    pic_sizes[j - 1].h = pic_sizes[j].h;
-                }
-                npic_sizes--;
-                break;
-            }
-        break;
-    }
+    for (int k = 0; k < npics; k++)
+        if (pics[k].node == i) { pic_drop(k); break; }
     if (npics >= PICS_MAX) return 0;
     shown *s = &pics[npics];
     s->key = 0;
@@ -2926,6 +2930,17 @@ static int pic_take(int i, const u8 *body, int len) {
     return 1;
 }
 
+/* Whether an element is in the page, its shadow trees included. A script
+   that rebuilds the page leaves what it took out in the tree. */
+static int pic_in_page(int el) {
+    if (jd_doc == &doc) return jd_connected_deep(el);
+    for (int k = 0; el >= 0 && k < DOM_NODES; k++) {
+        if (el == doc.root) return 1;
+        el = doc.nodes[el].parent;
+    }
+    return 0;
+}
+
 /* Every picture element: one written into the page made now, one at an
    address asked for (pictures_pump) and laid out when it comes. */
 static void gather_pictures(void) {
@@ -2933,6 +2948,7 @@ static void gather_pictures(void) {
         if (doc.nodes[i].kind != DN_ELEMENT || doc.nodes[i].tag != T_IMG)
             continue;
         if (in_template(i)) continue;          /* a slot for one that is drawn */
+        if (!pic_in_page(i)) continue;
 
         const char *src = pic_source(i);
         if (!src) continue;
@@ -3056,11 +3072,80 @@ static void sprites_into(ddoc *d) {
     }
 }
 
+/* The picture an img element in the page wants, hashed: 0 for none. */
+static u32 pic_wanted(int i, url_t *u) {
+    if (doc.nodes[i].kind != DN_ELEMENT || doc.nodes[i].tag != T_IMG) return 0;
+    if (in_template(i) || !pic_in_page(i)) return 0;
+    const char *src = pic_source(i);
+    if (!src) return 0;
+    if (w_starts_fold(src, "data:")) return pic_key(src);
+    if (!url_join(&base, src, u)) return 0;
+    char text[URL_TEXT];
+    url_text(u, text, sizeof(text));
+    return pic_key(text);
+}
+
+/* Pictures and asks whose elements a script took out of the page: handed to
+   an element put in with the same address, which a framework that renders
+   the page again on top of the server's copy does with every picture
+   (bbc.com: 70 img elements in the page, 210 taken out), and let go
+   otherwise. They kept every slot, so the elements drawn got none, and
+   were drawn as their alt text. */
+static void pics_rehome(void) {
+    u8 out[PICS_MAX];
+    int any = 0;
+    for (int k = 0; k < npics; k++) {
+        out[k] = !pic_in_page(pics[k].node);
+        any |= out[k];
+    }
+    for (int k = 0; k < npic_wait; k++)
+        if (pic_wait[k].bg == -1 && !pic_in_page(pic_wait[k].node)) any = 1;
+    if (!any) return;
+    for (int i = 0; i < doc.count; i++) {
+        url_t u;
+        u32 key = pic_wanted(i, &u);
+        if (!key || pic_known(i, key)) continue;
+        int k;
+        for (k = 0; k < npics; k++)
+            if (out[k] && pics[k].key == key) {
+                for (int m = 0; m < npic_sizes; m++)
+                    if (pic_sizes[m].node == pics[k].node) pic_sizes[m].node = i;
+                pics[k].node = i;
+                out[k] = 0;
+                pics_moved = 1;
+                break;
+            }
+        if (k < npics) continue;
+        for (k = 0; k < npic_wait; k++)
+            if (pic_wait[k].bg == -1 && pic_wait[k].key == key && !pic_in_page(pic_wait[k].node)) {
+                pic_wait[k].node = i;
+                break;
+            }
+    }
+    for (int k = npics - 1; k >= 0; k--)
+        if (out[k]) pic_drop(k);
+    /* An ask not yet started for an element gone is not started. */
+    for (int k = 0; k < npic_wait; k++) {
+        pic_wait_t *w = &pic_wait[k];
+        if (w->bg != -1 || w->ask || pic_in_page(w->node)) continue;
+        for (int m = k + 1; m < npic_wait; m++) {
+            pic_wait[m - 1].node = pic_wait[m].node;
+            pic_wait[m - 1].bg = pic_wait[m].bg;
+            pic_wait[m - 1].ask = pic_wait[m].ask;
+            pic_wait[m - 1].key = pic_wait[m].key;
+            w_copy(pic_wait[m - 1].url, URL_TEXT, pic_wait[m].url, URL_TEXT);
+        }
+        npic_wait--;
+        k--;
+    }
+}
+
 static void pictures_follow(void) {
     if (!pics_follow_on) return;
+    pics_rehome();
     for (int i = 0; i < doc.count && npic_wait < PIC_WAIT; i++) {
         if (doc.nodes[i].kind != DN_ELEMENT || doc.nodes[i].tag != T_IMG) continue;
-        if (in_template(i)) continue;
+        if (in_template(i) || !pic_in_page(i)) continue;
         const char *src = pic_source(i);
         if (!src) continue;
         if (w_starts_fold(src, "data:")) {
@@ -4825,6 +4910,7 @@ int main(int argc, char **argv) {
         /* And the page's pictures, drawn as they come: laid out again at
            most four times a second while more are coming, and once when the
            last has. */
+        if (pics_moved) { pics_moved = 0; pics_relayout = 1; }
         if (npic_wait) {
             int came = pictures_pump();
             if (came & 1) pics_relayout = 1;

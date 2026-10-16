@@ -137,6 +137,7 @@ PASTE_INK = (0x5A, 0x8C, 0x28)        # /paste: its box once its field holds the
 TAB_INK = (0x28, 0x78, 0x5A)          # /tab: its box once each field holds what was typed into it
 BIG_INK = (0x28, 0x50, 0x78)          # /bigpic: the picture far wider than it is drawn
 BIG_TOLD = (0x78, 0x28, 0x5A)         # and the box its script colours when the natural size is right
+RR_INK = (0x28, 0x78, 0x50)           # /rerender: its 100 pictures, in elements its script made again
 SHEET_THIRD = (0x50, 0xD0, 0x50)      # and the one before it, which must not have
 STOOD = (0xC0, 0x30, 0x30)            # and the block it draws when they did not
 
@@ -707,6 +708,15 @@ def main():
             bgj, pxg, wg, shotg = page_settled(mon, "br-bigpic-settled")
             c.add("a picture far wider than it is drawn is drawn, its natural size what its file says (%d, %d)"
                   % (count_in(pxg, wg, PAGE, BIG_INK), count_in(pxg, wg, PAGE, BIG_TOLD)), told_big, shotg)
+            # All hundred: 88 fetched before, handed to the new elements, and
+            # 12 fetched once the places of the ones taken out are free.
+            go(vm, mon, "http://%s/rerender" % srv.host, settle=10.0,
+               was=bgj, name="br-going-rerender")
+            _, _, _, _, drew_rr = mon.wait_screen(
+                "br-rerender", lambda w, h, px: count_in(px, w, PAGE, RR_INK) > 57300, timeout=60)
+            bgj, pxr, wr, shotr = page_settled(mon, "br-rerender-settled")
+            c.add("a page its script makes again draws all 100 pictures in the new elements (%d)"
+                  % count_in(pxr, wr, PAGE, RR_INK), drew_rr, shotr)
 
             go(vm, mon, "http://%s/scripted" % srv.host, settle=12.0,
                was=bgj, name="br-going-scripted")
