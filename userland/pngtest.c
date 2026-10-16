@@ -173,16 +173,59 @@ int main(void) {
         okn("and one cut off at a chunk header is truncated, not read past",
             png_decode(CUT, 16, &p, 0) == PNG_TRUNCATED, PNG_TRUNCATED);
 
-        /* An interlaced file is refused rather than drawn wrongly: it
-           arrives in seven passes and this reads one. */
+        /* An interlace method there is none of is refused. */
         static u8 lace[sizeof(PNG_FILTERS)];
         for (u32 i = 0; i < sizeof(PNG_FILTERS); i++) lace[i] = PNG_FILTERS[i];
-        lace[8 + 8 + 12] = 1;                  /* the interlace byte in IHDR */
-        okn("and an interlaced one is refused rather than half drawn",
-            png_decode(lace, (int)sizeof(lace), &p, 0) == PNG_UNSUPPORTED,
-            PNG_UNSUPPORTED);
+        lace[8 + 8 + 12] = 2;                  /* the interlace byte in IHDR */
+        okn("and one with an interlace method there is none of is refused",
+            png_decode(lace, (int)sizeof(lace), &p, 0) == PNG_BAD, PNG_BAD);
 
         ok("and a refusal leaves nothing to free", p.rgb == 0);
+    }
+
+    /* --- interlaced, sixteen bits, and a clear colour --------------------------
+     *
+     * Seven passes, each a smaller picture of every eighth, fourth or second
+     * pixel with rows and filters of its own, at a size that leaves some of
+     * them short. Both were refused, and Debian's logo, interlaced, was never
+     * drawn. */
+    {
+        picture p;
+        int rc = png_decode(PNG_LACE, (int)sizeof(PNG_LACE), &p, 0xFFFFFF);
+        okn("an interlaced picture decodes", rc == PNG_OK, rc);
+        if (rc == PNG_OK) {
+            int wrong = -1;
+            for (int i = 0; i < p.w * p.h * 3; i++)
+                if (p.rgb[i] != PNG_LACE_WANT[i]) { wrong = i; break; }
+            okn("and every pixel of its seven passes lands where it belongs", wrong < 0, wrong);
+            picture_free(&p);
+        }
+
+        rc = png_decode(PNG_LACE16, (int)sizeof(PNG_LACE16), &p, 0x00FF00);
+        okn("one at sixteen bits a sample, with alpha, interlaced too, decodes", rc == PNG_OK, rc);
+        if (rc == PNG_OK) {
+            ok("and a sample is its high byte",
+               at(&p, 0, 0) == 0x070900 && at(&p, 4, 2) == 0xA78146 && at(&p, 1, 2) == 0x2F812B);
+            ok("and its clear pixel is what is behind it", at(&p, 2, 1) == 0x00FF00);
+            picture_free(&p);
+        }
+
+        rc = png_decode(PNG_GREY16KEY, (int)sizeof(PNG_GREY16KEY), &p, 0xFF0000);
+        okn("a grey picture whose tRNS names a colour decodes", rc == PNG_OK, rc);
+        if (rc == PNG_OK) {
+            ok("and that colour is what is behind it, the rest themselves",
+               at(&p, 0, 0) == 0xFF0000 && at(&p, 1, 0) == 0xABABAB && at(&p, 2, 0) == 0xFF0000
+               && at(&p, 3, 0) == 0xFFFFFF);
+            picture_free(&p);
+        }
+
+        rc = png_decode(PNG_RGBKEY, (int)sizeof(PNG_RGBKEY), &p, 0x0000FF);
+        okn("and a truecolour one", rc == PNG_OK, rc);
+        if (rc == PNG_OK) {
+            ok("and its named colour is what is behind it too",
+               at(&p, 0, 0) == 0x0000FF && at(&p, 1, 0) == 0x010203 && at(&p, 2, 0) == 0x0000FF);
+            picture_free(&p);
+        }
     }
 
     /* --- nothing was left behind --------------------------------------------

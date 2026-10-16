@@ -13,6 +13,10 @@ makes them deliberately, one per thing that can go wrong:
   a stored deflate block and a compressed one, because they are different
   code paths and the stored one is what a tiny image usually is
 
+  an interlaced picture, whose seven passes each have rows and filters of
+  their own, at a size where some passes are short; sixteen bits a sample;
+  and the colour a grey or truecolour picture's tRNS makes clear
+
 zlib is used here, in a tool that runs on the host, exactly as tools/shots.py
 uses it to write screenshots. Nothing inside zelr uses it: userland/inflate.h
 is the decoder, and the point of this file is to have something it did not
@@ -35,10 +39,10 @@ def chunk(name, body):
             + struct.pack(">I", zlib.crc32(name + body) & 0xFFFFFFFF))
 
 
-def png(w, h, depth, colour, raw, palette=None, trans=None, level=9):
+def png(w, h, depth, colour, raw, palette=None, trans=None, level=9, interlace=0):
     """raw is the scanlines with their filter bytes already in front."""
     out = SIG
-    out += chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, depth, colour, 0, 0, 0))
+    out += chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, depth, colour, 0, 0, interlace))
     if palette:
         out += chunk(b"PLTE", bytes(palette))
     if trans:
@@ -131,6 +135,62 @@ for row in rows:
 IMAGES["stored"] = (png(W, H, 8, 2, raw2, level=0), W, H, rows)
 
 
+# --- interlaced -------------------------------------------------------------
+#
+# Adam7: seven smaller pictures, of every eighth pixel and so on, each with
+# its own rows, filtered against the row above in the same pass. 11 by 9
+# leaves passes short on both sides; filters go round across them all.
+PASSES = [(0, 0, 8, 8), (4, 0, 8, 8), (0, 4, 4, 8), (2, 0, 4, 4), (0, 2, 2, 4), (1, 0, 2, 2), (0, 1, 1, 2)]
+
+
+def interlaced(w, h, bpp, pixel):
+    raw = bytearray()
+    n = 0
+    for x0, y0, dx, dy in PASSES:
+        prev = None
+        for y in range(y0, h, dy):
+            row = b"".join(pixel(x, y) for x in range(x0, w, dx))
+            if not row:
+                break
+            raw += filter_row(n % 5, row, prev, bpp)
+            n += 1
+            prev = row
+    return raw
+
+
+LW, LH = 11, 9
+
+
+def lace_px(x, y):
+    return bytes([(x * 23 + y * 5) & 0xFF, (x * 7 + y * 41) & 0xFF, (x * 59 + y * 13) & 0xFF])
+
+
+IMAGES["lace"] = (png(LW, LH, 8, 2, interlaced(LW, LH, 3, lace_px), interlace=1), LW, LH, None)
+LACE_WANT = b"".join(lace_px(x, y) for y in range(LH) for x in range(LW))
+
+
+# Sixteen bits a sample, with alpha, interlaced too: the high byte is the
+# colour, the low one is different everywhere so it shows if it is taken
+# instead, and the pixel at (2, 1) is clear.
+def lace16_px(x, y):
+    a = 0 if (x, y) == (2, 1) else 0xFFFF
+    v = [(x * 40 + 7) << 8 | 0x5A, (y * 60 + 9) << 8 | 0xA5, (x * 9 + y * 17) << 8 | 0x3C, a]
+    return b"".join(struct.pack(">H", c & 0xFFFF) for c in v)
+
+
+IMAGES["lace16"] = (png(5, 3, 16, 6, interlaced(5, 3, 8, lace16_px), interlace=1), 5, 3, None)
+
+
+# --- the colour tRNS makes clear --------------------------------------------
+# Grey at sixteen bits, the key 0x1234: its two pixels are what is behind.
+g16 = [0x1234, 0xABCD, 0x1234, 0xFF00]
+IMAGES["grey16key"] = (png(4, 1, 16, 0, bytes([0]) + b"".join(struct.pack(">H", v) for v in g16),
+                           trans=struct.pack(">H", 0x1234)), 4, 1, None)
+# Truecolour at eight bits, the key (10, 20, 30), two bytes a sample in tRNS.
+IMAGES["rgbkey"] = (png(3, 1, 8, 2, bytes([0, 10, 20, 30, 1, 2, 3, 10, 20, 30]),
+                        trans=struct.pack(">HHH", 10, 20, 30)), 3, 1, None)
+
+
 def carray(name, data):
     out = "static const u8 %s[%d] = {\n" % (name, len(data))
     for i in range(0, len(data), 16):
@@ -157,6 +217,8 @@ def main():
         want += row
     text.append("/* The pixels PNG_FILTERS and PNG_STORED are both of. */\n")
     text.append(carray("PNG_WANT", want))
+    text.append("/* And PNG_LACE's. */\n")
+    text.append(carray("PNG_LACE_WANT", LACE_WANT))
 
     io_open = open(OUT, "w", newline="\n")
     io_open.write("".join(text))
