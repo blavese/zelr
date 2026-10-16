@@ -3234,6 +3234,17 @@ static inline void css_apply_v(int prop, const char *v, cstyle *st, int root_px,
                drawings were made on, and Spotify's grey cross was drawn on a
                white square. */
             if (css_last_alpha < 13) { st->background = st->background_up; st->has_bg = 0; break; }
+            /* Partly see-through, it is laid over what is behind it rather
+               than over white: Hugging Face's glow, 45% white on its dark
+               hero, was a white box under its white words. */
+            if (css_last_alpha < 255) {
+                u32 raw = css_last_raw, up = st->background_up;
+                int a = css_last_alpha, r = 0, g = 0, b = 0;
+                r = ((int)((raw >> 16) & 255) * a + (int)((up >> 16) & 255) * (255 - a)) / 255;
+                g = ((int)((raw >> 8) & 255) * a + (int)((up >> 8) & 255) * (255 - a)) / 255;
+                b = ((int)(raw & 255) * a + (int)(up & 255) * (255 - a)) / 255;
+                c = (u32)((r << 16) | (g << 8) | b);
+            }
             st->background = c;
             st->has_bg = 1;
             break;

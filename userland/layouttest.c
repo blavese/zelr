@@ -2393,6 +2393,14 @@ int main(void) {
         const litem *sn = image_of(by_id("sn")), *sv = image_of(by_id("st"));
         ok("and a drawing in a button whose background is taken away is made on what is behind it",
            sn && sn->bg == 0x123456 && sv && sv->bg == 0x123456);
+        /* And one partly see-through is laid over what is behind it, not over
+           white: Hugging Face's 45% white glow on its dark hero was white. */
+        lay("<style>.k{background:#000000}.h{background:rgba(255,255,255,.5);height:10px}"
+            ".q{background:#ffffff80;height:10px}</style><div class=k><div class=h id=th></div></div>"
+            "<div class=q id=tq></div>", 800);
+        const litem *th = box_of(by_id("th")), *tq = box_of(by_id("tq"));
+        ok("a background partly see-through is laid over what is behind it",
+           th && th->has_bg && (th->bg == 0x7F7F7F || th->bg == 0x808080) && tq && tq->bg == 0xFFFFFF);
     }
     {
         /* Every named colour, as Chromium computes them: Craigslist's
