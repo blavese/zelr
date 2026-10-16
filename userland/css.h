@@ -2361,6 +2361,15 @@ static inline int css_matches(const csheet *s, const ddoc *d, int el,
 
 /* --- applying ------------------------------------------------------------ */
 
+/* A keyword that puts a property back where it starts, which for a grid's
+   track lists and areas is none. bbc.com writes grid-template-rows: unset
+   under a media query, and kept as a list it was one row 0 pixels high:
+   every story card was 0 high and the next row of cards lay over it. */
+static int css_reset_word(const char *v) {
+    while (*v == ' ') v++;
+    return w_starts_fold(v, "unset") || w_starts_fold(v, "initial") || w_starts_fold(v, "revert");
+}
+
 /* Where an item goes along one side of its cell or line, from one word of
    align-items, align-self, justify-items, justify-self or place-*: -1 for
    auto (the container's), stretch for normal and anything not known. */
@@ -3180,7 +3189,7 @@ static inline void css_apply_v(int prop, const char *v, cstyle *st, int root_px,
                         : w_starts_fold(v, "none") ? 3 : w_starts_fold(v, "scale-down") ? 4 : 0;
             break;
         case P_GRID_AREAS:
-            st->grid_areas = w_starts_fold(v, "none") ? 0 : v;
+            st->grid_areas = w_starts_fold(v, "none") || css_reset_word(v) ? 0 : v;
             break;
         case P_GRID_AREA: {
             /* A name, or lines: row start / column start / row end /
@@ -3201,19 +3210,19 @@ static inline void css_apply_v(int prop, const char *v, cstyle *st, int root_px,
             st->grid_row_e = v;
             break;
         case P_GRID_COLS:
-            st->grid_cols = w_starts_fold(v, "none") ? 0 : v;
+            st->grid_cols = w_starts_fold(v, "none") || css_reset_word(v) ? 0 : v;
             break;
         case P_GRID_FLOW:
             st->gflow_col = (unsigned char)w_starts_fold(v, "column");
             break;
         case P_GRID_AUTO_COLS:
-            st->grid_auto = w_starts_fold(v, "auto") ? 0 : v;
+            st->grid_auto = w_starts_fold(v, "auto") || css_reset_word(v) ? 0 : v;
             break;
         case P_GRID_ROWS:
-            st->grid_rows = w_starts_fold(v, "none") ? 0 : v;
+            st->grid_rows = w_starts_fold(v, "none") || css_reset_word(v) ? 0 : v;
             break;
         case P_GRID_AUTO_ROWS:
-            st->grid_auto_rows = w_starts_fold(v, "auto") ? 0 : v;
+            st->grid_auto_rows = w_starts_fold(v, "auto") || css_reset_word(v) ? 0 : v;
             break;
         case P_GRID_COL_START:
             st->gcol_s = v;

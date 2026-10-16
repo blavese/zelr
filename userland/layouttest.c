@@ -2230,6 +2230,15 @@ int main(void) {
             "<div class=g><div class=s id=sw></div><div>main</div></div>", 800);
         const litem *sw = box_of(by_id("sw"));
         ok("and a width that is not a length (2fr) is auto, the item filling its column", sw && sw->w == 240);
+        /* grid-template-rows: unset puts the rows back to none, as bbc.com
+           does under a media query: kept as a list, it was one row 0 pixels
+           high, every story card was 0 high and the next row lay over it. */
+        lay("<style>body{margin:0}p{margin:0;line-height:20px}.g{display:grid;grid-template-rows:10px 10px;width:300px}"
+            ".g{grid-template-rows:unset}.h{display:grid;grid-template-columns:50px 50px}.h{grid-template-columns:initial}"
+            "</style><div class=g><p>one</p><p>two</p></div><div class=h><p>three</p><p>four</p></div><p>after</p>", 800);
+        const litem *u1 = word("one"), *u2 = word("two"), *u3 = word("three"), *u4 = word("four"), *ua = word("after");
+        ok("and grid-template-rows: unset or columns: initial are none, the rows as tall as what is in them",
+           u1 && u2 && u2->y - u1->y == 20 && u3 && u4 && u4->y - u3->y == 20 && u4->x == u3->x && ua && ua->y == 80);
     }
     {
         /* An absolutely positioned box with no width is as wide as what is
