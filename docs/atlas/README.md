@@ -99,8 +99,10 @@ numbered files are still to 6048716; where they disagree with this list, this li
 
 - **a drawing painted as the page's sheet says (11)**, **what the layout puts away left off the screen (11)**, **a box of
   no height drawn when its padding makes it something (11)**, **oklch() and oklab() colours (11)**, **padding- and
-  margin-inline and -block (11)**, **room for 32000 rules (11)**. svgtest 58, layouttest 354, browser harness 82, each
-  failing on a build without its change.
+  margin-inline and -block (11)**, **room for 32000 rules (11)**, **color() and a screen neither HDR nor wide gamut
+  (11)**, **colours and backgrounds a page takes back: unset, inherit, initial, none (11)**, **`<a href=/>` as a link
+  (11)**, **inline-size and block-size (11)**, **a box 0 wide hidden whatever its side padding (11)**. svgtest 58,
+  layouttest 363, browser harness 82, each failing on a build without its change.
 
 ### 0.136.0
 

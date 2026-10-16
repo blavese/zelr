@@ -7,12 +7,28 @@
   is not read, nor url() paints.
 - **What the layout puts away is not drawn** (browser.c `draw_page` passes over kind 0): text items cut by a box that
   hides its overflow, and the first layout of a box laid out again (0.134.0), were drawn as words all the same.
-- **A box of no height that hides its overflow** is unseen only when its padding and borders leave it 2 pixels or less
-  (`lay_unseen`); one whose own room is that small is cut to its height and frame (Debian's banner heading).
+- **A box of no height that hides its overflow** is unseen only when its padding and borders above and below leave it 2
+  pixels or less (`lay_unseen`); one whose own room is that small is cut to its height and frame (Debian's banner
+  heading). A box 0 wide is unseen whatever its side padding: its words would be cut to the padding, which this layout
+  cannot do (Forbes' carousel, made 0 wide by its script, drew every word down a column).
+- **Colours a page takes back** (css.h `cstyle.color_up`/`background_up`, the parent's, set in `css_inherit`):
+  `color: inherit`/`unset` take the parent's colour over the browser's link colour (BBC's links, and so its
+  currentcolor logo), `initial` the first colour; `background: none`, a shorthand naming no colour (in the sheet and
+  split late from a variable, the colour looked for in twelve parts), `initial`/`unset`/`none` and a transparent colour
+  leave no background and put back the parent's as the backdrop drawings inside are made on. A shorthand over a gradient
+  that is not drawn (radial, conic, repeating: `css_bg_undrawn`) keeps the colour before it. `revert` and
+  `background: inherit` are not read.
+- **color()** in srgb, srgb-linear and display-p3 (`css_colorfn`, `css_srgb_linear`; P3 through the specification's
+  matrix, clamped to sRGB). Media queries answer no to `dynamic-range: high` and `color-gamut: p3`/`rec2020`
+  (Substack swapped its greys for display-p3 ones on such a screen).
+- **inline-size, block-size** and their min-/max- forms are width, height and their limits (w3.org's full-width hero,
+  `inline-size: 100vw` between `margin-inline: -50vw`).
+- **An unquoted attribute value keeps a last slash** (dom.h `bare_end`): `<a href=/>` was taken as closing itself, and
+  the link was empty (Old Reddit's block page). `<div/>` still closes, as before.
 - **oklab() and oklch()** (css.h `css_oklab`, with `css_root`, `css_srgb_byte`, `css_sincos`): Tailwind 4's palette.
   `css_supports` answers no for `color-mix()` and `gradient(in ...)`, so Tailwind's plain `#rrggbbaa` fallbacks stand
-  (custom properties overridden by an unreadable color-mix() took colours away). lab(), lch(), color() and color-mix()
-  are not read.
+  (custom properties overridden by an unreadable color-mix() took colours away). lab(), lch() and color-mix() are not
+  read; color() is, in three spaces (below).
 - **padding-inline/-block and margin-inline/-block** (css.h `css_two_sided`, `css_two_sides`; deferred with var() and split
   in layout.h `lay_apply_short`, as inset-inline/-block now are too), and the eight single sides in the property table:
   Tailwind 4's px-/py-/mx-/my-. The start side is always left or top.
