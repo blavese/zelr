@@ -1142,6 +1142,15 @@ int main(void) {
                    " document.querySelectorAll(':where(p, i).a').length,"
                    " document.querySelectorAll('p:is(.c, .q) > b').length].join(' ');</script></body>"),
             "2 2 1");
+        /* Escaped names, as Tailwind's classes are written: they matched
+           nothing, the name ending at its backslash. */
+        oks("and a class or id named with escapes is found by its name",
+            titled("<body><p class='md:flex w-[37%]'>x</p><p class='w-1/2'>y</p><p id='a.b'>z</p><script>"
+                   "document.title = [document.querySelectorAll('.md\\\\:flex').length,"
+                   " document.querySelectorAll('.w-\\\\[37\\\\%\\\\]').length,"
+                   " document.querySelectorAll('.w-1\\\\/2, #a\\\\.b').length,"
+                   " document.querySelectorAll('.\\\\6d d\\\\:flex').length].join(' ');</script></body>"),
+            "1 1 2 1");
     }
 
     {

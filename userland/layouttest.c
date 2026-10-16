@@ -2241,6 +2241,20 @@ int main(void) {
            u1 && u2 && u2->y - u1->y == 20 && u3 && u4 && u4->y - u3->y == 20 && u4->x == u3->x && ua && ua->y == 80);
     }
     {
+        /* Class names with escapes in them, as Tailwind writes every one with
+           a colon, a bracket or a slash: read up to the backslash, .lg\:hidden
+           was the class lg, so what a page shows only at other widths showed
+           at every width (Hugging Face's wide picture over its headline). */
+        lay("<style>body{margin:0}p{margin:0;line-height:20px}.max-xl\\:hidden{display:none}"
+            "@media (width>=40rem){.md\\:ml-\\[50px\\]{margin-left:50px}}.w-1\\/2{margin-left:120px}"
+            ".\\31 0x{margin-left:200px}</style>"
+            "<p class=max-xl:hidden>gone</p><p class='md:ml-[50px]'>moved</p><p class=w-1/2>half</p>"
+            "<p class=10x>digit</p>", 800);
+        const litem *eg = word("gone"), *em = word("moved"), *eh = word("half"), *ed = word("digit");
+        ok("a class named with escapes is matched by its name: .max-xl\\:hidden, .md\\:ml-\\[50px\\], .w-1\\/2, .\\31 0x",
+           !eg && em && em->x == 50 && eh && eh->x == 120 && ed && ed->x == 200);
+    }
+    {
         /* An absolutely positioned box with no width is as wide as what is
            in it: a label at a picture's corner was a bar across the picture,
            one put at the right by right: 0 started at the left, and one

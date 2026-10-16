@@ -841,6 +841,54 @@ static inline int css_nth(const char *p, int len, int i, short *a, short *b) {
     return i < len && p[i] == ')';
 }
 
+/* A class or id name in a selector, its escapes undone, into buf: a
+   backslash takes the character after it as it is, or up to six hex digits
+   (and a space after them) as the character they number. Tailwind writes
+   every class that holds a colon, a bracket or a slash so -- .md\:flex,
+   .w-\[37\%\], .w-1\/2 -- and read up to the backslash, .lg\:hidden was
+   the class lg, so the pictures and menus a page shows only at other widths
+   were shown at every width. Its length; *at moved past it. */
+static inline int css_name_read(const char *p, int len, int *at, char *buf, int cap) {
+    int i = *at, n = 0;
+    while (i < len) {
+        unsigned char c = (unsigned char)p[i];
+        if (css_ident((char)c) || c >= 0x80) {
+            if (n < cap - 1) buf[n++] = (char)c;
+            i++;
+            continue;
+        }
+        if (c != '\\' || i + 1 >= len || p[i + 1] == '\n') break;
+        i++;
+        unsigned v = 0;
+        int hx = 0;
+        while (hx < 6 && i < len && ((p[i] >= '0' && p[i] <= '9') || ((p[i] | 32) >= 'a' && (p[i] | 32) <= 'f'))) {
+            v = v * 16 + (unsigned)(p[i] <= '9' ? p[i] - '0' : (p[i] | 32) - 'a' + 10);
+            i++;
+            hx++;
+        }
+        if (!hx) {
+            if (n < cap - 1) buf[n++] = p[i];
+            i++;
+            continue;
+        }
+        if (i < len && css_space(p[i])) i++;
+        if (v == 0 || v > 0x10FFFF) v = 0xFFFD;
+        if (n + 4 >= cap) continue;
+        if (v < 0x80) buf[n++] = (char)v;
+        else if (v < 0x800) { buf[n++] = (char)(0xC0 | (v >> 6)); buf[n++] = (char)(0x80 | (v & 63)); }
+        else if (v < 0x10000) {
+            buf[n++] = (char)(0xE0 | (v >> 12)); buf[n++] = (char)(0x80 | ((v >> 6) & 63));
+            buf[n++] = (char)(0x80 | (v & 63));
+        } else {
+            buf[n++] = (char)(0xF0 | (v >> 18)); buf[n++] = (char)(0x80 | ((v >> 12) & 63));
+            buf[n++] = (char)(0x80 | ((v >> 6) & 63)); buf[n++] = (char)(0x80 | (v & 63));
+        }
+    }
+    buf[n] = 0;
+    *at = i;
+    return n;
+}
+
 /* The pseudo-element the selector being read ends in: 0, or 1 for ::before
    and 2 for ::after (crule.pe). */
 static int css_parsed_pe;
@@ -859,10 +907,10 @@ static inline int css_parse_compound(csheet *s, const char *p, int len, int *at,
         if (ch == '*') { i++; any = 1; continue; }
         if (ch == '#' || ch == '.') {
             i++;
-            int st = i;
-            while (i < len && css_ident(p[i])) i++;
-            if (i == st) break;
-            int t = css_put(s, p + st, i - st);
+            char name[256];
+            int nl = css_name_read(p, len, &i, name, (int)sizeof(name));
+            if (!nl) break;
+            int t = css_put(s, name, nl);
             if (ch == '#') { c->id = t; *spec += 1 << 20; }
             else if (c->ncls < CSS_MAXCLS) {
                 c->cls[c->ncls++] = t;
@@ -1103,6 +1151,7 @@ static inline int css_list_end(const char *p, int n, int i, char stop) {
     int depth = 0;
     while (i < n) {
         char c = p[i];
+        if (c == '\\' && i + 1 < n) { i += 2; continue; }
         if (c == '"' || c == '\'') {
             i++;
             while (i < n && p[i] != c) { if (p[i] == '\\' && i + 1 < n) i++; i++; }
@@ -1903,6 +1952,7 @@ static inline int css_scope_selectors(const char *p, int n, char *out, int cap, 
         int start = i, depth = 0;
         while (i < n) {
             char e = p[i];
+            if (e == '\\' && i + 1 < n) { i += 2; continue; }
             if (e == '(' || e == '[') depth++;
             else if (e == ')' || e == ']') depth--;
             else if (!depth && (e == ' ' || e == '\t' || e == '\n' || e == '\r' || e == '>'
