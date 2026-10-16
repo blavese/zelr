@@ -2303,6 +2303,21 @@ int main(void) {
         ok("oklch() and oklab() colours come out as the specification has them, color-mix() and gradients in lab leave their fallbacks",
            k1 && NEAR(k1->color, 0xfb2c36) && k2 && NEAR(k2->color, 0x155dfc) && k3 && NEAR(k3->color, 0x101828)
            && k4 && NEAR(k4->color, 0xff0000) && k5 && NEAR(k5->color, 0x7fbf7f) && k6 && k6->color == 0x123456);
+        /* color() in srgb, srgb-linear and display-p3, on a screen that is
+           neither high dynamic range nor wide gamut: substack.com swaps its
+           greys for display-p3 ones on such a screen, and with the swap taken
+           and color() unread its buttons had no colour. */
+        lay("<style>.a{color:color(srgb 0.2 0.4 0.6)}.b{color:color(srgb-linear 50% 50% 50%)}"
+            ".c{color:color(display-p3 0.2 0.4 0.6)}.d{color:#123456}@media (dynamic-range:high){.d{color:#ff0000}}"
+            ".e{color:#123456}@media (color-gamut:p3){.e{color:#ff0000}}"
+            ".f{color:#123456}@media (color-gamut:srgb){.f{color:#00ff00}}</style>"
+            "<p class=a>ka</p><p class=b>kb</p><p class=c>kc</p><p class=d>kd</p><p class=e>ke</p><p class=f>kf</p>", 800);
+        const litem *ka = word("ka"), *kb = word("kb"), *kc = word("kc"), *kd = word("kd"), *ke = word("ke"),
+                    *kf = word("kf");
+        ok("color() in srgb, srgb-linear and display-p3 comes out as the specification has it",
+           ka && NEAR(ka->color, 0x336699) && kb && NEAR(kb->color, 0xbcbcbc) && kc && NEAR(kc->color, 0x1b689d));
+        ok("and the screen is not high dynamic range or wide gamut, but is sRGB",
+           kd && kd->color == 0x123456 && ke && ke->color == 0x123456 && kf && kf->color == 0x00FF00);
         #undef NEAR
     }
     {

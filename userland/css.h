@@ -567,13 +567,81 @@ static inline int css_oklab(const char *s, int polar, u32 *out, int *alpha) {
     return 1;
 }
 
+/* A light value on the sRGB curve as linear light: ((x + 0.055) / 1.055)^2.4,
+   the power as the fifth root of the twelfth. */
+static inline float css_srgb_linear(float x) {
+    if (x <= 0.04045f) return x / 12.92f;
+    float y = (x + 0.055f) / 1.055f, y2 = y * y, y4 = y2 * y2;
+    return css_root(y4 * y4 * y4, 5);
+}
+
+/* color(srgb r g b / alpha), color(srgb-linear ...) or color(display-p3 ...)
+   as RGB, each part a number or a percentage of 1: substack.com gives its
+   buttons' greys in display-p3, and a colour it cannot read left them none.
+   Display P3 has the sRGB curve; its linear light goes into sRGB's by the
+   specification's matrix. 0 for any other space. */
+static inline int css_colorfn(const char *s, u32 *out, int *alpha) {
+    while (*s && *s != '(') s++;
+    if (!*s) return 0;
+    s++;
+    while (*s == ' ') s++;
+    int space = w_starts_fold(s, "srgb-linear") ? 1 : w_starts_fold(s, "srgb ") ? 0
+              : w_starts_fold(s, "display-p3") ? 2 : -1;
+    if (space < 0) return 0;
+    while (*s && *s != ' ') s++;
+    float v[4] = { 0, 0, 0, 1 };
+    int n = 0, slash = 0;
+    while (*s && *s != ')' && n < 3) {
+        while (*s == ' ') s++;
+        if (*s == '/') { slash = 1; s++; continue; }
+        if (*s == ')') break;
+        float x = 0, scale = 1;
+        int neg = 0, any = 0;
+        if (w_starts_fold(s, "none")) { s += 4; any = 1; }
+        if (*s == '-') { neg = 1; s++; } else if (*s == '+') s++;
+        while (*s >= '0' && *s <= '9') { x = x * 10 + (*s - '0'); s++; any = 1; }
+        if (*s == '.') {
+            s++;
+            while (*s >= '0' && *s <= '9') { scale /= 10; x += (*s - '0') * scale; s++; any = 1; }
+        }
+        if (!any) return 0;
+        if (*s == '%') { s++; x /= 100; }
+        if (neg) x = -x;
+        if (slash) { v[3] = x; break; }
+        v[n++] = x;
+    }
+    if (n < 3) return 0;
+    while (*s == ' ') s++;
+    if (*s == '/') {
+        s++;
+        while (*s == ' ') s++;
+        float x = 0, scale = 1;
+        while (*s >= '0' && *s <= '9') { x = x * 10 + (*s - '0'); s++; }
+        if (*s == '.') { s++; while (*s >= '0' && *s <= '9') { scale /= 10; x += (*s - '0') * scale; s++; } }
+        if (*s == '%') x /= 100;
+        v[3] = x;
+    }
+    float lin[3];
+    for (int k = 0; k < 3; k++) lin[k] = space == 1 ? v[k] : css_srgb_linear(v[k]);
+    if (space == 2) {
+        float r = 1.2249401f * lin[0] - 0.2249404f * lin[1];
+        float g = -0.0420569f * lin[0] + 1.0420571f * lin[1];
+        float b = -0.0196376f * lin[0] - 0.0786361f * lin[1] + 1.0982735f * lin[2];
+        lin[0] = r; lin[1] = g; lin[2] = b;
+    }
+    *out = (u32)((css_srgb_byte(lin[0]) << 16) | (css_srgb_byte(lin[1]) << 8) | css_srgb_byte(lin[2]));
+    int a = (int)(v[3] * 255 + 0.5f);
+    *alpha = a < 0 ? 0 : a > 255 ? 255 : a;
+    return 1;
+}
+
 static inline int css_color(const char *s, u32 *out) {
     while (*s == ' ') s++;
     css_last_alpha = 255;
-    if (w_starts_fold(s, "oklab(") || w_starts_fold(s, "oklch(")) {
+    if (w_starts_fold(s, "oklab(") || w_starts_fold(s, "oklch(") || w_starts_fold(s, "color(")) {
         u32 rgb;
         int a;
-        if (!css_oklab(s, (s[4] | 32) == 'h', &rgb, &a)) return 0;
+        if (!((s[0] | 32) == 'c' ? css_colorfn(s, &rgb, &a) : css_oklab(s, (s[4] | 32) == 'h', &rgb, &a))) return 0;
         css_last_alpha = a;
         css_last_raw = rgb;
         int r = (int)((rgb >> 16) & 255), g = (int)((rgb >> 8) & 255), b = (int)(rgb & 255);
@@ -1871,6 +1939,13 @@ static inline int css_mq_part(const char *p, int n, int *lo, int *hi) {
                     if (!css_mq_word(v, vl, "browser")) never = 1;
                 } else if (css_mq_word(f, colon, "forced-colors") || css_mq_word(f, colon, "prefers-contrast")) {
                     if (css_mq_word(v, vl, "active") || css_mq_word(v, vl, "more")) never = 1;
+                } else if (css_mq_word(f, colon, "dynamic-range") || css_mq_word(f, colon, "video-dynamic-range")) {
+                    /* The screen is an ordinary one: substack.com swaps its
+                       greys for display-p3 ones on a high dynamic range
+                       screen. */
+                    if (css_mq_word(v, vl, "high")) never = 1;
+                } else if (css_mq_word(f, colon, "color-gamut") || css_mq_word(f, colon, "video-color-gamut")) {
+                    if (css_mq_word(v, vl, "p3") || css_mq_word(v, vl, "rec2020")) never = 1;
                 }
             } else if (cmp >= 0) {
                 /* width >= 600px, width < 40em, 600px <= width */
