@@ -95,6 +95,12 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.139.0
+
+- **FontFace, Element.animate and intersection entries with their fields on the prototype (12)**, **a fixed box placed
+  against the window (11)**, **a nowrap row of inline-blocks kept one row and cut at a hidden side (11)**. layouttest
+  376, pagetest 374, each failing on a build without its change.
+
 ### 0.138.0
 
 - **z-index and stacking contexts, positioned boxes drawn over the flow (11)**, **a rem from the html element (11)**,

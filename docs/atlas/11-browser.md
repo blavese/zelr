@@ -1,6 +1,16 @@
 # 11 -- The web browser (everything except JS-engine internals and image decoders)
 
-**Since 0.138.0** (the rest of this file is older; trust the code and the README's "since 6048716" list):
+**Since 0.139.0** (the rest of this file is older; trust the code and the README's "since 6048716" list):
+- **A fixed box's containing box is the window** (`lay_block`'s absolute branch: `cbx`/`cby` 0, `cbw` `css_view_w`), not
+  the nearest positioned box; one with only a bottom stays where the flow put it, and one whose height its box decides is
+  not laid out again (the layout does not know the window's height). Transformed ancestors are not looked for; fixed
+  boxes still scroll with the page.
+- **A nowrap or pre line keeps its inline-blocks on it** (`lay_inline_piece`'s `nobreak`), except in a box that would
+  scroll (`clip` 2), which is wrapped on purpose since nothing inside a page scrolls here; and a line that may not break
+  and runs past its room counts as widened (`L->widened`, words and boxes alike), so a box hiding its overflow drops what
+  lies wholly past its sides.
+
+**Since 0.138.0**:
 - **Stacking** (css.h `P_Z_INDEX`, `cstyle.z_set`/`zidx`; layout.h `lzctx`, `lay_z_enter`/`lay_z_leave`, `lay_z_order`,
   `litem.zc`/`zl`, `ldoc.zorder`/`zsorted`): a positioned box with a z-index, or an item of a row or a grid with one, is
   a stacking context; a positioned box with none is a pseudo context (drawn as one piece with its flow, its positioned
