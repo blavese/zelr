@@ -1767,6 +1767,14 @@ static void lay_float(lctx *L, int node, const cstyle *parent, int cleft, int cw
         w = lay_measure(L, node, parent, cwidth, &h) - (ml > 0 ? ml : 0) - (mr > 0 ? mr : 0);
         L->floating = was;
     }
+    /* Its max-width and min-width hold, as a box's do: placed at the width
+       its contents measured, Wikipedia's search button, floated right with
+       a 12-pixel icon and a min-width of 44, was drawn 44 wide from where a
+       12-pixel box would stand, 32 pixels past the side it was floated to
+       and over the links beside it. */
+    int wframe = st.border_box ? 0 : st.pl + st.pr + st.bl + st.br;
+    if (st.max_width >= 0 && w > st.max_width + wframe) w = st.max_width + wframe;
+    if (st.min_width >= 0 && w < st.min_width + wframe) w = st.min_width + wframe;
     if (w > cwidth) w = cwidth;
     if (w < 1) w = 1;
 

@@ -1710,6 +1710,19 @@ int main(void) {
             hl && hl->x + hl->w > 700, hl ? hl->x + hl->w : -1);
     }
 
+    /* --- a float's min-width ---------------------------------------------------- */
+    {
+        lay("<style>body{margin:0}div{width:300px}.b{float:right;min-width:44px;height:10px;padding:0 2px;background:#ccc}"
+            "</style><div><a id=fb class=b>fl</a>after</div>", 800);
+        const litem *fb = box_of(by_id("fb"));
+        okn("a float to the right stands at its min-width against the side",
+            fb && fb->w == 48 && fb->x + fb->w == 300, fb ? fb->x + fb->w : -1);
+        lay("<style>body{margin:0}div{width:300px}.c{float:right;max-width:30px;height:10px;background:#ccc}</style>"
+            "<div><a id=fc class=c>wide words here</a>after</div>", 800);
+        const litem *fc = box_of(by_id("fc"));
+        okn("and at its max-width", fc && fc->w == 30 && fc->x + fc->w == 300, fc ? fc->x + fc->w : -1);
+    }
+
     /* --- nesting -------------------------------------------------------------- */
     {
         /* firefox.com: a rule nested in its first rule of a layer ended the
