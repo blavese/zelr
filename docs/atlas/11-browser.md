@@ -1,6 +1,25 @@
 # 11 -- The web browser (everything except JS-engine internals and image decoders)
 
-**Since 0.136.0** (the rest of this file is older; trust the code and the README's "since 6048716" list):
+**Since 0.137.0** (the rest of this file is older; trust the code and the README's "since 6048716" list):
+- **A drawing's root painted by the page's sheet** (css.h `P_FILL`/`P_STROKE`, `cstyle.fill`/`fill_said`, inherited;
+  browser.c `drawing_of` works the root's style out with `style_in_drawn` and hands it to svg.h `svg_root_paint`, which
+  `sv_inherit` takes for the root ahead of its attributes). Shapes inside keep their own paint; a sheet's paint for them
+  is not read, nor url() paints.
+- **What the layout puts away is not drawn** (browser.c `draw_page` passes over kind 0): text items cut by a box that
+  hides its overflow, and the first layout of a box laid out again (0.134.0), were drawn as words all the same.
+- **A box of no height that hides its overflow** is unseen only when its padding and borders leave it 2 pixels or less
+  (`lay_unseen`); one whose own room is that small is cut to its height and frame (Debian's banner heading).
+- **oklab() and oklch()** (css.h `css_oklab`, with `css_root`, `css_srgb_byte`, `css_sincos`): Tailwind 4's palette.
+  `css_supports` answers no for `color-mix()` and `gradient(in ...)`, so Tailwind's plain `#rrggbbaa` fallbacks stand
+  (custom properties overridden by an unreadable color-mix() took colours away). lab(), lch(), color() and color-mix()
+  are not read.
+- **padding-inline/-block and margin-inline/-block** (css.h `css_two_sided`, `css_two_sides`; deferred with var() and split
+  in layout.h `lay_apply_short`, as inset-inline/-block now are too), and the eight single sides in the property table:
+  Tailwind 4's px-/py-/mx-/my-. The start side is always left or top.
+- **The sheet holds 32000 rules** (80000 selectors, 160000 declarations, 6 MB of text; zero data until used): GitHub's
+  repository page sends about 25000, and the rest were lost.
+
+**Since 0.136.0**:
 - **Escapes in a selector's class and id names** (css.h `css_name_read`): a backslash takes the next character, or up to
   six hex digits and a space as the character they number. Tailwind writes every class with a colon, a bracket or a
   slash so (`.md\:flex`, `.w-\[37\%\]`); read up to the backslash, no responsive class ever matched. `css_list_end`

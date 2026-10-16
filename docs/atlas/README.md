@@ -95,6 +95,13 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.137.0
+
+- **a drawing painted as the page's sheet says (11)**, **what the layout puts away left off the screen (11)**, **a box of
+  no height drawn when its padding makes it something (11)**, **oklch() and oklab() colours (11)**, **padding- and
+  margin-inline and -block (11)**, **room for 32000 rules (11)**. svgtest 58, layouttest 354, browser harness 82, each
+  failing on a build without its change.
+
 ### 0.136.0
 
 - **class names with escapes (11)**, **a centred column measured as wide as what is in it and a row's items no narrower

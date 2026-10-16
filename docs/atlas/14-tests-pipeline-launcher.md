@@ -1,5 +1,8 @@
 
 
+**Since 0.137.0**: browsercheck's `/svgfill` is a drawing whose attribute says white and whose sheet colours it, and
+`/cut` a max-height box whose cut-off lines must not be on the screen: 82 checks.
+
 **Since 0.135.0**: browsercheck's `/rerender` replaces its 140 pictures with 100 new elements (88 at addresses already
 fetched, 12 not) and counts all 100 drawn: 80 checks.
 
