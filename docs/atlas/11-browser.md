@@ -1,6 +1,33 @@
 # 11 -- The web browser (everything except JS-engine internals and image decoders)
 
-**Since 0.134.0** (the rest of this file is older; trust the code and the README's "since 6048716" list):
+**Since 0.135.0** (the rest of this file is older; trust the code and the README's "since 6048716" list):
+- **row-gap apart from column-gap** (css.h `P_ROW_GAP`/`P_COL_GAP`, `cstyle.row_gap`): `gap` is the rows' then the
+  columns', `grid-gap`/`grid-row-gap`/`grid-column-gap` too; flex lines down a column or wrapped and every grid's rows
+  use `row_gap`.
+- **Pictures follow the elements in the page** (browser.c `pic_in_page`, `pics_rehome`): gathering and following pass
+  over img elements a script took out (`jd_connected_deep` when jsdom is open). A picture or an ask for an element taken
+  out goes to an element put in at the same address; what nothing takes is let go, so the 128 places are the page's.
+- **A box the page sized may be narrower than 16** (layout.h `lay_block`): the 16 pixel floor is only for a box with no
+  width, max-width or flex size (`flex_sized`); its contents still get 16 (`cw`).
+- **A flex row of one line is as tall as its height** within min/max (`lay_inner_height`, `lay_flex_line`'s `line_h`),
+  so center, flex-end and stretch work against it; auto margins above and below an item (`amarg` bits 2 and 3) come
+  before its align-self. Wrapped lines are still as tall as their items.
+- **Grid items across their cells** (`lay_grid_across`): justify-items, justify-self, place-items and place-self are read
+  (css.h `css_place_word`, `cstyle.justify_items`/`justify_self`, the align-items values). An item with a width keeps it,
+  laid out in the whole cell (a percentage is of the cell) and moved to its middle or end, auto margins placing it
+  otherwise; one set to start, center or end is as wide as its contents; a grid item's align-self is read. A grid being
+  measured puts nothing in the middle or at the end. A plain grid whose items make one row stretches it to the grid's
+  height.
+- **An absolutely positioned box with no width** (and not both sides) is measured and given that width, up to the room
+  (`lctx.abs_sizing`: the box being measured is laid out as its body), so right: 0 and translate(-50%) place it right.
+  **It is no part of a measurement**: while measuring (`L->measuring`) its items are zeroed and `measure_right` put back,
+  so a box sized by its contents is not widened by a positioned child.
+- **A unit that is not a length** (fr, s, ms, deg, grad, rad, turn, dpi, dpcm, dppx, hz, khz) makes `css_len` answer
+  auto, as a browser takes such a width; grid tracks cut their `fr` off before reading the number.
+- **unset, initial and revert** (css.h `css_reset_word`) put grid-template-rows/-columns/-areas back to none and
+  grid-auto-rows/-columns to auto; kept as a list, `unset` was one row 0 pixels high.
+
+**Since 0.134.0**:
 - **`:is()` and `:where()` with lists** (css.h `css_expand_list`): a selector list holding one is written out as one
   selector per choice before it is read, each choice in its own single-compound `:is()`/`:where()` so it weighs what
   the standard says; a choice more than a compound is written bare where it stands alone, dropped inside a compound;

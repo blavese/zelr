@@ -95,6 +95,13 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.135.0
+
+- **row-gap apart from column-gap (11)**, **pictures that follow the elements a script puts in the page (11)**, **a box
+  narrower than 16 pixels and a flex row's one line as tall as the row (11)**, **grid items across their cells and
+  positioned boxes as wide as what is in them (11)**, **a width that is not a length taken as auto (11)**, **grid track lists
+  that unset puts back to none (11)**. layouttest 348, browser harness 80, each failing on a build without its change.
+
 ### 0.134.0
 
 - **`:is()` and `:where()` with lists (11)**, **what fills a box by its height laid out again once it is known (11)**,

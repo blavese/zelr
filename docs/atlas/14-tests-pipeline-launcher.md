@@ -1,5 +1,8 @@
 
 
+**Since 0.135.0**: browsercheck's `/rerender` replaces its 140 pictures with 100 new elements (88 at addresses already
+fetched, 12 not) and counts all 100 drawn: 80 checks.
+
 **Since 0.134.0**: browsercheck keeps a page with ctrl+D and waits for the start page to count it: 79 checks.
 
 **Since 0.133.0**: browsercheck has `/many` (sixty pictures), `/bigpic` (a 2000 by 400 picture whose natural size the
