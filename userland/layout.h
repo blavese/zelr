@@ -709,6 +709,9 @@ static inline void lay_word(lctx *L, const char *s, int n, const cstyle *st,
         lay_line_start(L, *y, left, width, al);
         sp = 0;
     }
+    /* A line that may not break and runs past its room is something made
+       wider than it, which a box hiding its overflow cuts at its sides. */
+    if (L->pen + sp + w > L->line_left + L->line_width && !L->measuring) L->widened++;
     L->pen += sp;
 
     litem *it = lay_item(L);
@@ -1523,12 +1526,19 @@ static void lay_inline_piece(lctx *L, int at, const cstyle *parent, int pin, int
         int sp = 0;
         if (L->pending_space && L->pen > L->line_left)
             sp = tface_wn(" ", 1, face_pick(parent->font_px, parent->bold, parent->mono));
-        if (L->pen + sp + w > L->line_left + L->line_width && L->pen > L->line_left) {
+        /* A line that may not break keeps its boxes on it, as words are
+           kept, and a box hiding its overflow cuts what runs past it (a row
+           of tags or a breadcrumb). Not in a row that would scroll, which is
+           wrapped instead, since nothing inside a page scrolls here and what
+           it held could not be reached (W3Schools' bar of fifty subjects). */
+        int nobreak = (parent->white == WS_NOWRAP || parent->white == WS_PRE) && parent->clip != 2;
+        if (L->pen + sp + w > L->line_left + L->line_width && L->pen > L->line_left && !nobreak) {
             int left = L->cont_left, width = L->cont_width, al = L->align;
             lay_line_end(L, y);
             lay_line_start(L, *y, left, width, al);
             sp = 0;
         }
+        if (L->pen + sp + w > L->line_left + L->line_width && !L->measuring) L->widened++;
         L->pen += sp;
     }
 

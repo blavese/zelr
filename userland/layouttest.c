@@ -2524,6 +2524,20 @@ int main(void) {
            fq && fq->w == 101 && fg && fg->w == 35 && fg->y == fq->y);
     }
     {
+        /* A row of boxes that may not break stays one row, and a box hiding
+           its overflow drops what lies past its side; one that would scroll
+           is wrapped, since nothing inside a page scrolls here. */
+        lay("<style>body{margin:0}.h{white-space:nowrap;overflow:hidden;width:300px}"
+            ".s{white-space:nowrap;overflow:auto;width:300px}a{display:inline-block;padding:3px 15px}</style>"
+            "<div class=h><a>nwa</a><a>nwb</a><a>nwc</a><a>nwd</a><a>nwe</a><a>nwf</a><a>nwg</a><a>nwh</a></div>"
+            "<div class=s><a>nsa</a><a>nsb</a><a>nsc</a><a>nsd</a><a>nse</a><a>nsf</a><a>nsg</a><a>nsh</a></div>"
+            "<div class=h>wwa wwb wwc wwd wwe wwf wwg wwh wwi wwj wwk wwl wwm wwn wwo wwp wwq wwr wws wwt wwu wwv wwz</div>", 800);
+        const litem *na = word("nwa"), *ne = word("nwe"), *nh = word("nwh"), *sa = word("nsa"), *sh = word("nsh"),
+                    *wa = word("wwa"), *wz = word("wwz");
+        ok("a row of boxes or words that may not break stays one row cut at a hidden side, and a scrolling one wraps",
+           na && ne && ne->y == na->y && !nh && sa && sh && sh->y > sa->y && wa && !wz);
+    }
+    {
         /* A fixed box's box is the window: W3Schools' subject bar, fixed at
            top: 56px, was drawn where the box round it was. An absolute one
            still takes the positioned box round it. */
