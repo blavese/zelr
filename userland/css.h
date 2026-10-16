@@ -2010,13 +2010,19 @@ static inline void css_parse_block(csheet *s, const char *p, int len, int *at,
  * to a pixel; wider than tall. Anything not known applies. */
 #define CSS_MQ_BIG 30000
 
+static inline clen css_len_at(const char *v, int font_px, int root_px, int pct_of);
+
+/* A query's length in pixels, -1 for none. calc() and its kin are worked out
+   with an em of 16: Wikipedia writes (max-width: calc(640px - 1px)), which
+   read as no bound at all, so its rules for a phone hid the tabs and links
+   of every wider window. */
 static inline int css_mq_px(const char *v, int n) {
-    char tmp[32];
+    char tmp[128];
     int k = 0;
     while (n > 0 && css_space(*v)) { v++; n--; }
-    for (; k < n && k < 31; k++) tmp[k] = v[k];
+    for (; k < n && k < 127; k++) tmp[k] = v[k];
     tmp[k] = 0;
-    clen L = css_len(tmp);
+    clen L = css_len_at(tmp, 16, 16, -1);
     if (L.unit == U_EM || L.unit == U_REM) return L.v * 16 / 100;
     if (L.unit == U_AUTO) return -1;
     return L.v / 100;

@@ -846,6 +846,9 @@ int main(void) {
         ok("print never applies", !css_mq("print", 5, &lo, &hi));
         ok("nor a dark scheme", !css_mq("(prefers-color-scheme: dark)", 28, &lo, &hi));
         ok("nor a second pixel to the pixel", !css_mq("(min-resolution: 2dppx)", 23, &lo, &hi));
+        ok("a width worked out with calc() is a bound like any other",
+           css_mq("screen and (max-width:calc(640px - 1px))", 40, &lo, &hi) && hi == 639 && lo == -1
+           && css_mq("(min-width: calc(40em + 1px))", 29, &lo, &hi) && lo == 641);
         ok("nor a feature of another browser's own, with not or without",
            !css_mq("all and (-ms-high-contrast: none)", 33, &lo, &hi)
            && !css_mq("not all and (-moz-touch-enabled: 0)", 35, &lo, &hi)
