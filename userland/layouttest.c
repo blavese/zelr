@@ -1785,6 +1785,23 @@ int main(void) {
             (!th || th->x + th->w <= 0) && ti && ti->x == 30, ti ? ti->x : -1);
     }
 
+    /* --- an absolute box by its top and bottom, against the window ------------- */
+    {
+        /* OpenStreetMap: a flex row at top: 55px and bottom: 0 holding the map,
+           which grows across it and is stretched to its height. */
+        int keep_vh = css_view_h;
+        css_view_h = 500;
+        lay("<style>body{margin:0}.c{position:absolute;top:55px;bottom:0;width:100%;display:flex;overflow:hidden}"
+            ".m{flex-grow:1;background:#ccc;overflow:hidden;position:relative}"
+            ".s{position:absolute;width:100px;height:20px;background:#888}</style>"
+            "<div class=c id=ac><div class=s></div><div class=m id=am></div></div>", 800);
+        const litem *ac = box_of(by_id("ac")), *am = box_of(by_id("am"));
+        css_view_h = keep_vh;
+        okn("an absolute box with a top and a bottom against the window is as tall as they leave it",
+            am && am->y == 55 && am->h == 445, am ? am->h : -1);
+        (void)ac;
+    }
+
     /* --- nesting -------------------------------------------------------------- */
     {
         /* firefox.com: a rule nested in its first rule of a layer ended the

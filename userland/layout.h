@@ -5133,9 +5133,24 @@ static void lay_block(lctx *L, int node, const cstyle *parent, int x,
             room -= probe.right_off;
         if (room < 16 && fit < 0) room = 16;
 
+        /* Against the window itself, with a top and a bottom and no height,
+           it is as tall as the window leaves between them, as a box inside a
+           positioned one is once that one's height is known (lay_block):
+           OpenStreetMap's map is a flex item stretched across a box at top:
+           55px and bottom: 0, and with no height that box gave the map none.
+           (A fixed one is left as it was: overlays a page has not taken away
+           would cover the first screen.) */
+        if (!L->pos_id && !fixed && !L->measuring && probe.height < 0 && !probe.height_pct
+            && probe.top != CSS_AUTO_OFF && probe.bottom != CSS_AUTO_OFF && css_view_h > 0) {
+            int h = css_view_h - probe.top - probe.bottom
+                  - (probe.mt == CSS_AUTO_OFF ? 0 : probe.mt) - (probe.mb == CSS_AUTO_OFF ? 0 : probe.mb);
+            L->force_node = node;
+            L->force_h = h > 0 ? h : 0;
+        }
         int sub = ay, held_reach = L->measure_right;
         if (fit >= 0) L->flex_sized = node;     /* that width is its own */
         lay_block_placed(L, node, parent, ax, room, &sub);
+        if (L->force_node == node) L->force_node = -1;
         if (L->flex_sized == node) L->flex_sized = -1;
         /* A fixed box with only a bottom stands that far above the foot of
            the window, as the page first shows: Wikipedia's appeal, cookie
