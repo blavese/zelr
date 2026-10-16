@@ -3499,6 +3499,12 @@ static void lay_flex(lctx *L, int node, const cstyle *st, int cx, int cw,
                                        | ((own.mt == CSS_AUTO_OFF) << 2) | ((own.mb == CSS_AUTO_OFF) << 3));
         }
 
+        /* Measured for how wide it would like to be, a row is as wide as its
+           items and no wider: given all the room it was measured in, an item
+           with flex-grow took it, and the row measured as wide as the room.
+           Wikipedia's header holds its search box and links in such a row,
+           and it went onto a line of its own under the logo. */
+        int measured = L->measuring && (st->width < 0 || st->width_pct);
         if (!st->flex_wrap && st->clip != 2) {
             /* One line is as tall as the row when the row's height is set,
                within its least and most: items centred in a row 32 high were
@@ -3506,7 +3512,13 @@ static void lay_flex(lctx *L, int node, const cstyle *st, int cx, int cw,
                (bbc.com's cards' times), and a hero 100vh high centred
                nothing. */
             int line_h = lay_inner_height(st);
-            lay_flex_line(L, st, kid, par, n, meas, want, low, high, grow, aself, amarg, cx, cw, gap, reverse,
+            int lw = cw;
+            if (measured) {
+                int need = gap * (n - 1);
+                for (int i = 0; i < n; i++) need += want[i] > low[i] ? want[i] : low[i];
+                if (need < lw) lw = need;
+            }
+            lay_flex_line(L, st, kid, par, n, meas, want, low, high, grow, aself, amarg, cx, lw, gap, reverse,
                           line_h, y);
         } else {
             /* Wrapping: as many as fit on each line, each line a row of its
@@ -3525,7 +3537,8 @@ static void lay_flex(lctx *L, int node, const cstyle *st, int cx, int cw,
                 }
                 if (i0) *y += rgap;
                 lay_flex_line(L, st, kid + i0, par + i0, i1 - i0, meas + i0, want + i0, low + i0,
-                              high + i0, grow + i0, aself + i0, amarg + i0, cx, cw, gap, reverse, 0, y);
+                              high + i0, grow + i0, aself + i0, amarg + i0, cx,
+                              measured && used < cw ? used : cw, gap, reverse, 0, y);
                 i0 = i1;
             }
         }

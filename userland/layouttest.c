@@ -1694,6 +1694,22 @@ int main(void) {
             ibr > 0 && ibr <= 200, ibr);
     }
 
+    /* --- a flex row measured --------------------------------------------------- */
+    {
+        /* Wikipedia's header: a wrapping row of the logo and a row that grows,
+           whose search box grows inside it. Measured as wide as all the room,
+           the inner row went onto a second line. */
+        lay("<style>.h{display:flex;flex-wrap:wrap;width:800px}.s{width:180px}.e{display:flex;flex-grow:1}"
+            ".g{flex-grow:1}.e2{display:flex;justify-content:flex-end}</style>"
+            "<div class=h><div class=s>hdstart</div><div class=e><div class=g>hdsearch</div>"
+            "<div class=e2><span>hdlinks</span></div></div></div>", 800);
+        const litem *hs = word("hdstart"), *hq = word("hdsearch"), *hl = word("hdlinks");
+        okn("a row measured is as wide as its items, so a growing one shares the logo's line",
+            hs && hq && hl && hq->y == hs->y && hl->y == hs->y && hq->x >= 180, hq ? hq->y : -1);
+        okn("and once laid out it still grows to the end of the line",
+            hl && hl->x + hl->w > 700, hl ? hl->x + hl->w : -1);
+    }
+
     /* --- nesting -------------------------------------------------------------- */
     {
         /* firefox.com: a rule nested in its first rule of a layer ended the
