@@ -462,9 +462,128 @@ static inline u32 css_hsl(int h, int s, int l) {
     return (u32)((r << 16) | (g << 8) | b);
 }
 
+/* --- oklab and oklch --------------------------------------------------------
+ *
+ * How Tailwind 4 writes its whole palette -- --color-red-500: oklch(63.7%
+ * .237 25.331) -- so a page built with it had no colours: every background
+ * and every word that took one from the palette was left as it was. Read
+ * with Bjorn Ottosson's matrices: oklab to the cone responses, cubed to
+ * linear light, to linear sRGB, then the sRGB curve. There is no maths
+ * library here, so the roots and the sine are worked out below. */
+
+/* y with y^n == x, for x >= 0: Newton's method from above the root, where it
+   only comes down. */
+static inline float css_root(float x, int n) {
+    if (x <= 0) return 0;
+    float y = x > 1 ? x : 1;
+    for (int i = 0; i < 80; i++) {
+        float p = 1;
+        for (int k = 0; k < n - 1; k++) p *= y;
+        float ny = y - (p * y - x) / (n * p);
+        if (!(ny < y)) break;
+        y = ny;
+    }
+    return y;
+}
+
+/* Linear light, 0 to 1, as an sRGB byte. */
+static inline int css_srgb_byte(float x) {
+    if (x <= 0) return 0;
+    if (x >= 1) return 255;
+    float x5 = x * x * x * x * x;
+    float v = x <= 0.0031308f ? 12.92f * x : 1.055f * css_root(x5, 12) - 0.055f;  /* x^(5/12) */
+    int b = (int)(v * 255 + 0.5f);
+    return b < 0 ? 0 : b > 255 ? 255 : b;
+}
+
+/* The sine and cosine of an angle in degrees, by a series after the angle is
+   brought within a quarter turn. */
+static inline void css_sincos(float deg, float *sn, float *cs) {
+    while (deg < 0) deg += 360;
+    while (deg >= 360) deg -= 360;
+    int quarter = (int)(deg / 90);
+    float t = (deg - quarter * 90) * 3.14159265f / 180;
+    float t2 = t * t;
+    float sv = t * (1 - t2 / 6 * (1 - t2 / 20 * (1 - t2 / 42 * (1 - t2 / 72))));
+    float cv = 1 - t2 / 2 * (1 - t2 / 12 * (1 - t2 / 30 * (1 - t2 / 56)));
+    if (quarter == 0) { *sn = sv; *cs = cv; }
+    else if (quarter == 1) { *sn = cv; *cs = -sv; }
+    else if (quarter == 2) { *sn = -sv; *cs = -cv; }
+    else { *sn = -cv; *cs = sv; }
+}
+
+/* oklab(L a b / alpha) or oklch(L C h / alpha) as RGB: L a number or a
+   percentage of 1, a and b of 0.4, C of 0.4 too, h in degrees; "none" is
+   nought. 0 when it cannot be read. */
+static inline int css_oklab(const char *s, int polar, u32 *out, int *alpha) {
+    while (*s && *s != '(') s++;
+    if (!*s) return 0;
+    s++;
+    float v[4] = { 0, 0, 0, 1 };
+    int n = 0, slash = 0;
+    while (*s && *s != ')' && n < 4) {
+        while (*s == ' ' || *s == ',') s++;
+        if (*s == '/') { slash = 1; s++; continue; }
+        if (*s == ')') break;
+        if (w_starts_fold(s, "none")) { s += 4; v[n++] = 0; continue; }
+        float x = 0, scale = 1;
+        int neg = 0, any = 0;
+        if (*s == '-') { neg = 1; s++; } else if (*s == '+') s++;
+        while (*s >= '0' && *s <= '9') { x = x * 10 + (*s - '0'); s++; any = 1; }
+        if (*s == '.') {
+            s++;
+            while (*s >= '0' && *s <= '9') { scale /= 10; x += (*s - '0') * scale; s++; any = 1; }
+        }
+        if (!any) return 0;
+        if (neg) x = -x;
+        int k = slash ? 3 : n;
+        if (*s == '%') {
+            s++;
+            x = k == 0 || k == 3 ? x / 100 : x * 0.004f;   /* L and alpha of 1; the rest of 0.4 */
+        }
+        while (*s && *s != ' ' && *s != ',' && *s != '/' && *s != ')') s++;   /* deg */
+        v[k] = x;
+        if (!slash) n++;
+        if (slash) break;
+    }
+    if (n < 3) return 0;
+    float L = v[0], A = v[1], B = v[2];
+    if (polar) {
+        float sn, cs;
+        css_sincos(v[2], &sn, &cs);
+        A = v[1] * cs;
+        B = v[1] * sn;
+    }
+    float l_ = L + 0.3963377774f * A + 0.2158037573f * B;
+    float m_ = L - 0.1055613458f * A - 0.0638541728f * B;
+    float s_ = L - 0.0894841775f * A - 1.2914855480f * B;
+    float l = l_ * l_ * l_, m = m_ * m_ * m_, q = s_ * s_ * s_;
+    float r = 4.0767416621f * l - 3.3077115913f * m + 0.2309699292f * q;
+    float g = -1.2684380046f * l + 2.6097574011f * m - 0.3413193965f * q;
+    float b = -0.0041960863f * l - 0.7034186147f * m + 1.7076147010f * q;
+    *out = (u32)((css_srgb_byte(r) << 16) | (css_srgb_byte(g) << 8) | css_srgb_byte(b));
+    int a = (int)(v[3] * 255 + 0.5f);
+    *alpha = a < 0 ? 0 : a > 255 ? 255 : a;
+    return 1;
+}
+
 static inline int css_color(const char *s, u32 *out) {
     while (*s == ' ') s++;
     css_last_alpha = 255;
+    if (w_starts_fold(s, "oklab(") || w_starts_fold(s, "oklch(")) {
+        u32 rgb;
+        int a;
+        if (!css_oklab(s, (s[4] | 32) == 'h', &rgb, &a)) return 0;
+        css_last_alpha = a;
+        css_last_raw = rgb;
+        int r = (int)((rgb >> 16) & 255), g = (int)((rgb >> 8) & 255), b = (int)(rgb & 255);
+        /* Over white, because nothing below composites. */
+        r = (r * a + 255 * (255 - a)) / 255;
+        g = (g * a + 255 * (255 - a)) / 255;
+        b = (b * a + 255 * (255 - a)) / 255;
+        *out = (u32)((r << 16) | (g << 8) | b);
+        return 1;
+    }
     if (w_starts_fold(s, "hsl")) {
         while (*s && *s != '(') s++;
         if (*s) s++;
@@ -1817,6 +1936,13 @@ static inline int css_supports(const char *p, int n) {
     int no = 0;
     for (int k = 0; k < n; k++) {
         if (css_named(p + k, (k + 4 <= n ? 4 : n - k), "grid")) no = 1;
+        /* Nor color-mix(), nor a gradient interpolated in a colour space:
+           Tailwind writes every colour with an opacity both ways, a plain
+           #rrggbbaa first and color-mix() under @supports, and the second,
+           which is not read, put out the first. */
+        if (k + 10 <= n && css_named(p + k, 9, "color-mix") && p[k + 9] == '(') no = 1;
+        if (k + 12 <= n && css_named(p + k, 8, "gradient") && p[k + 8] == '(' && css_named(p + k + 9, 2, "in")
+            && p[k + 11] == ' ') no = 1;
         if (css_named(p + k, (k + 9 <= n ? 9 : n - k), "container")) no = 1;
         if (k + 4 <= n && p[k] == ':' && css_named(p + k + 1, 3, "has")) no = 1;
     }

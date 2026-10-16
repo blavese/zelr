@@ -2284,6 +2284,28 @@ int main(void) {
            sb && sb->h == 50 && !us && af2 && af2->y == 50);
     }
     {
+        /* Tailwind 4's palette is oklch(): unread, no colour from it reached
+           the page. Its red-500, blue-600 and gray-900 as the specification
+           works them out, and oklab's pure red, to within a step; and an
+           opacity written both ways, #rrggbbaa and then color-mix() under
+           @supports, keeps the first, since color-mix() is not read. */
+        lay("<style>:root{--red:oklch(63.7% 0.237 25.331)}.r{color:var(--red)}.b{color:oklch(54.6% .245 262.881deg)}"
+            ".g{color:oklch(0.21 0.034 264.665)}.o{color:oklab(0.628 0.2249 0.1258)}.m{--c:#00800080;color:var(--c)}"
+            "@supports (color:color-mix(in lab, red, red)){.m{--c:color-mix(in oklab, #008000 50%, transparent)}}"
+            ".q{color:#123456}@supports (background-image:linear-gradient(in lab, red, red)){.q{color:#654321}}"
+            "</style><p class=r>tred</p><p class=b>tblue</p><p class=g>tgray</p><p class=o>tok</p><p class=m>tmix</p>"
+            "<p class=q>tgrad</p>", 800);
+        const litem *k1 = word("tred"), *k2 = word("tblue"), *k3 = word("tgray"), *k4 = word("tok"), *k5 = word("tmix"),
+                    *k6 = word("tgrad");
+        #define NEAR(c, want) ((c) >= 0 && (((int)((c) >> 16) & 255) - (((want) >> 16) & 255)) * (((int)((c) >> 16) & 255) - (((want) >> 16) & 255)) <= 1 \
+            && (((int)((c) >> 8) & 255) - (((want) >> 8) & 255)) * (((int)((c) >> 8) & 255) - (((want) >> 8) & 255)) <= 1 \
+            && (((int)(c) & 255) - ((want) & 255)) * (((int)(c) & 255) - ((want) & 255)) <= 1)
+        ok("oklch() and oklab() colours come out as the specification has them, color-mix() and gradients in lab leave their fallbacks",
+           k1 && NEAR(k1->color, 0xfb2c36) && k2 && NEAR(k2->color, 0x155dfc) && k3 && NEAR(k3->color, 0x101828)
+           && k4 && NEAR(k4->color, 0xff0000) && k5 && NEAR(k5->color, 0x7fbf7f) && k6 && k6->color == 0x123456);
+        #undef NEAR
+    }
+    {
         /* GitHub's repository page sends twenty-five thousand rules, and at
            sixteen thousand the rest were lost: its visually hidden headings
            and its closed menu's rules among them. The last of 25000 rules
