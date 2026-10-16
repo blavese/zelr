@@ -2427,6 +2427,19 @@ int main(void) {
            lw && lw->color == 0xFF0000 && fw && fw->color == 0xFF0000);
     }
     {
+        /* A box out of the flow with a height is that high, whatever it holds:
+           Engadget's 64 pixel fixed header held a helper laid out 634 down and
+           was a white sheet that high over its stories. One in the flow still
+           grows to what it holds. */
+        lay("<style>body{margin:0}p{margin:0;line-height:20px}.f{position:fixed;top:0;left:0;width:100%;height:30px;"
+            "background:#111111}.s{height:30px;background:#222222}</style>"
+            "<div class=f id=hf><p>f1</p><p>f2</p><p>f3</p></div><div class=s id=hs><p>s1</p><p>s2</p><p>s3</p></div>"
+            "<p>safter</p>", 800);
+        const litem *hf = box_of(by_id("hf")), *hs = box_of(by_id("hs")), *f3 = word("f3"), *sa = word("safter");
+        ok("a fixed box with a height is that high, what overflows it still laid out, and one in the flow grows",
+           hf && hf->h == 30 && f3 && f3->y == 40 && hs && hs->h == 60 && sa && sa->y == 60);
+    }
+    {
         /* A rem is the html element's font size: Engadget sets 10px and sizes
            everything in rem, and at the browser's 16 its fixed header covered
            a third of the window. */

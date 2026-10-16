@@ -5131,6 +5131,15 @@ static void lay_block_placed(lctx *L, int node, const cstyle *parent, int x,
 
     if (want_h >= 0 && want_h > box_h) { *y += want_h - box_h; box_h = want_h; }
     if (floor_h >= 0 && floor_h > box_h) { *y += floor_h - box_h; box_h = floor_h; }
+    /* Out of the flow, a box with a height is that high whatever it holds,
+       as CSS has it: what overflows still shows, and nothing below moves
+       either way. Grown to what it held, Engadget's fixed header, 64 pixels,
+       was a white sheet 636 high, drawn above its stories as positioned
+       boxes are. */
+    if ((st.position == POS_ABSOLUTE || st.position == POS_FIXED) && want_h >= 0) {
+        int fixed_h = floor_h > want_h ? floor_h : want_h;
+        if (box_h > fixed_h) { *y -= box_h - fixed_h; box_h = fixed_h; }
+    }
 
     /* Its height settled, what was placed against this box by its bottom
        alone goes there: everything noted since it began is its own, since
