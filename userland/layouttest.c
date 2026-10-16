@@ -1671,6 +1671,33 @@ int main(void) {
         ok("layers with no name and inside a query apply too", !word("anon") && !word("inner") && word("after"));
     }
 
+    /* --- nesting -------------------------------------------------------------- */
+    {
+        /* firefox.com: a rule nested in its first rule of a layer ended the
+           layer, so the layer's link colour, in no layer then, beat a later
+           layer's button colour. */
+        lay("<style>@layer d{html{color:#000000;&:is(:lang(en)){--x:1}}a:link{color:#ff0000}}"
+            "@layer c{.b{color:#0000ff}}</style><a href=x class=b>nestly</a>", 600);
+        const litem *nl = word("nestly");
+        okn("a rule nested inside a layer's rule leaves the layer as it was",
+            nl && nl->color == 0x0000FF, nl ? (int)nl->color : -1);
+        lay("<style>.card{color:#ff0000;.t{color:#0000ff}&.on{color:#00ff00}> .k{display:none}+ .sib{display:none}"
+            "@media (min-width:1px){.m{display:none}}color:#ff00ff}"
+            ".x,.y{&:hover{color:#ff0000}.z{display:none}}.q{@media (min-width:1px){display:none}}</style>"
+            "<div class=card>cardtext <span class=t>inner</span><p class=k>kidhidden</p><div><p class=k>deepkept</p></div>"
+            "<span class=m>mhidden</span></div><div class='card on'>ontext</div><p class=sib>sibhidden</p>"
+            "<div class=y><p class=z>listhidden</p></div><p class=q>qhidden</p><p>nestend</p>", 600);
+        const litem *ct = word("cardtext"), *in = word("inner"), *on = word("ontext");
+        okn("a nested rule is inside its parent, and & is the parent",
+            in && in->color == 0x0000FF && on && on->color == 0x00FF00, in ? (int)in->color : -1);
+        okn("declarations after a nested rule still apply, after it",
+            ct && ct->color == 0xFF00FF, ct ? (int)ct->color : -1);
+        ok("> and + lead a nested selector, and a query nested in a rule holds rules",
+           !word("kidhidden") && word("deepkept") && !word("sibhidden") && !word("mhidden"));
+        ok("each of a list of parents takes the nested rule, and a nested query holds declarations",
+           !word("listhidden") && !word("qhidden") && word("nestend"));
+    }
+
     /* --- hex colours with an alpha ---------------------------------------------- */
     {
         u32 c = 0;

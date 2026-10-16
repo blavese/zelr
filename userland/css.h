@@ -2418,6 +2418,233 @@ static inline int css_scope(const char *p, int n, char *out, int cap, const char
     return w;
 }
 
+/* --- nesting -----------------------------------------------------------------
+ *
+ * CSS nesting puts rules inside a rule's block: `.card{color:red;&:hover{
+ * color:blue}.title{font-weight:bold}}` holds .card:hover and .card .title.
+ * The reader below takes a block for declarations alone, so a nested block's
+ * `}` ended the rule and the rule's own `}` then ended whatever held it:
+ * firefox.com writes its sheet in @layer blocks, and from the first nested
+ * rule in its defaults layer on every rule was in no layer, so its links'
+ * colour beat its buttons'. A sheet that nests is written out flat first
+ * (css_flat), each nested selector joined to its parent's: & stands for each
+ * of the parent's selectors in turn, and a selector without one is inside
+ * the parent (or beside it, by its leading + or ~). Declarations after a
+ * nested rule are a rule of their own after it, as in Chromium; @media,
+ * @supports, @layer and @container inside a rule hold declarations for the
+ * rule itself. A sheet that does not nest is read as written. Not done: &
+ * takes each parent selector's own weight rather than the most of them
+ * (:is()'s), except past 16 parents, where they are joined as :is(). */
+#define CSS_FLAT_MAX (3 * 1024 * 1024)
+#define CSS_FLAT_DEPTH 12
+#define CSS_FLAT_SEL 4096
+static char css_flat_buf[CSS_FLAT_MAX];
+static char css_flat_sel[CSS_FLAT_DEPTH][CSS_FLAT_SEL];
+
+typedef struct { char *o; int n, cap, over, nested; } cflat;
+
+static inline void cf_put(cflat *w, const char *s, int n) {
+    if (n <= 0) return;
+    if (w->n + n >= w->cap) { w->over = 1; return; }
+    volatile char *d = w->o + w->n;
+    for (int i = 0; i < n; i++) d[i] = s[i];
+    w->n += n;
+}
+
+static inline int cf_past_comment(const char *p, int len, int i) {
+    i += 2;
+    while (i + 1 < len && !(p[i] == '*' && p[i + 1] == '/')) i++;
+    return i + 2 < len ? i + 2 : len;
+}
+
+/* Where the text from i stops outside strings, comments and brackets: at a
+   {, ; or } (or a comma, when `comma`), else len. */
+static inline int cf_stop(const char *p, int len, int i, int comma) {
+    int d = 0;
+    while (i < len) {
+        char c = p[i];
+        if (c == '"' || c == '\'') { i = css_past_string(p, len, i); continue; }
+        if (c == '/' && i + 1 < len && p[i + 1] == '*') { i = cf_past_comment(p, len, i); continue; }
+        if (c == '(' || c == '[') d++;
+        else if ((c == ')' || c == ']') && d > 0) d--;
+        else if (d == 0 && (c == '{' || c == ';' || c == '}' || (comma && c == ','))) return i;
+        i++;
+    }
+    return len;
+}
+
+/* The } that closes the block whose { is at i, or len. */
+static inline int cf_close(const char *p, int len, int i) {
+    int d = 0;
+    while (i < len) {
+        char c = p[i];
+        if (c == '"' || c == '\'') { i = css_past_string(p, len, i); continue; }
+        if (c == '/' && i + 1 < len && p[i + 1] == '*') { i = cf_past_comment(p, len, i); continue; }
+        if (c == '{') d++;
+        else if (c == '}' && --d == 0) return i;
+        i++;
+    }
+    return len;
+}
+
+/* At-rules whose block holds rules (or, inside a rule, declarations). */
+static inline int cf_group(const char *p, int n) {
+    static const char *const G[] = { "@media", "@supports", "@layer", "@container", "@scope",
+                                     "@starting-style", "@document", "@-moz-document", 0 };
+    for (int k = 0; G[k]; k++) {
+        int l = w_len(G[k]);
+        if (n >= l && w_starts_fold(p, G[k]) && (n == l || !css_ident(p[l]))) return 1;
+    }
+    return 0;
+}
+
+/* One nested selector sel[s0..s1) joined to one parent selector par[p0..p1),
+   or to the whole parent list as :is() when `wrap`. */
+static inline void cf_join_one(cflat *w, const char *par, int p0, int p1, int wrap,
+                               const char *sel, int s0, int s1, int amp) {
+    if (!amp) {
+        if (wrap) cf_put(w, ":is(", 4);
+        cf_put(w, par + p0, p1 - p0);
+        if (wrap) cf_put(w, ")", 1);
+        cf_put(w, " ", 1);
+        cf_put(w, sel + s0, s1 - s0);
+        return;
+    }
+    for (int k = s0; k < s1; ) {
+        if (sel[k] == '"' || sel[k] == '\'') {
+            int e = css_past_string(sel, s1, k);
+            cf_put(w, sel + k, e - k);
+            k = e;
+        } else if (sel[k] == '&') {
+            if (wrap) cf_put(w, ":is(", 4);
+            cf_put(w, par + p0, p1 - p0);
+            if (wrap) cf_put(w, ")", 1);
+            k++;
+        } else cf_put(w, sel + k++, 1);
+    }
+}
+
+/* A nested selector list joined to its parent list. */
+static inline void cf_join(cflat *w, const char *par, int pn, const char *sel, int sn) {
+    int parents = 0;
+    for (int i = 0; i < pn; i = cf_stop(par, pn, i, 1) + 1) parents++;
+    int first = 1;
+    for (int a = 0; a < sn; ) {
+        int ae = cf_stop(sel, sn, a, 1);
+        int s0 = css_skip(sel, ae, a), s1 = ae;
+        while (s1 > s0 && css_space(sel[s1 - 1])) s1--;
+        a = ae + 1;
+        if (s1 <= s0) continue;
+        int amp = 0;
+        for (int k = s0; k < s1; k++) {
+            if (sel[k] == '"' || sel[k] == '\'') { k = css_past_string(sel, s1, k) - 1; continue; }
+            if (sel[k] == '&') amp = 1;
+        }
+        if (parents >= 16) {
+            if (!first) cf_put(w, ",", 1);
+            first = 0;
+            cf_join_one(w, par, 0, pn, 1, sel, s0, s1, amp);
+            continue;
+        }
+        for (int b = 0; b < pn; ) {
+            int be = cf_stop(par, pn, b, 1);
+            int p0 = css_skip(par, be, b), p1 = be;
+            while (p1 > p0 && css_space(par[p1 - 1])) p1--;
+            b = be + 1;
+            if (p1 <= p0) continue;
+            if (!first) cf_put(w, ",", 1);
+            first = 0;
+            cf_join_one(w, par, p0, p1, 0, sel, s0, s1, amp);
+        }
+    }
+}
+
+/* A run of declarations as a rule of the selectors sel, if it has any. */
+static inline void cf_run(cflat *w, const char *sel, int sn, const char *p, int a, int b) {
+    int k = css_skip(p, b, a);
+    if (k >= b) return;
+    cf_put(w, sel, sn);
+    cf_put(w, "{", 1);
+    cf_put(w, p + a, b - a);
+    cf_put(w, "}", 1);
+}
+
+/* A rule's block p[0..len) for the selectors sel (flat already): runs of its
+   declarations as rules of sel, and the rules it holds, in the order written. */
+static void cf_block(cflat *w, const char *sel, int sn, const char *p, int len, int depth) {
+    int i = 0, rs = 0;
+    while (i < len) {
+        i = css_skip(p, len, i);
+        if (i >= len) break;
+        int st = i, e = cf_stop(p, len, i, 0);
+        if (e >= len || p[e] != '{') { i = e + 1; continue; }
+        int c = cf_close(p, len, e);
+        if (p[st] == '-' && st + 1 < len && p[st + 1] == '-') { i = c + 1; continue; }   /* --x:{...} */
+        cf_run(w, sel, sn, p, rs, st);
+        w->nested = 1;
+        if (depth < CSS_FLAT_DEPTH) {
+            if (p[st] == '@') {
+                if (cf_group(p + st, e - st)) {
+                    cf_put(w, p + st, e + 1 - st);
+                    cf_block(w, sel, sn, p + e + 1, c - e - 1, depth + 1);
+                    cf_put(w, "}", 1);
+                }
+            } else {
+                cflat one = { css_flat_sel[depth], 0, CSS_FLAT_SEL, 0, 0 };
+                cf_join(&one, sel, sn, p + st, e - st);
+                if (!one.over && one.n > 0) cf_block(w, one.o, one.n, p + e + 1, c - e - 1, depth + 1);
+            }
+        }
+        i = rs = c < len ? c + 1 : len;
+    }
+    cf_run(w, sel, sn, p, rs, len);
+}
+
+/* A list of rules: at-rules as written, groups opened, style rules by cf_block. */
+static void cf_rules(cflat *w, const char *p, int len, int depth) {
+    int i = 0;
+    while (i < len && !w->over) {
+        i = css_skip(p, len, i);
+        if (i >= len) break;
+        if (p[i] == '}') { i++; continue; }
+        int st = i, e = cf_stop(p, len, i, 0);
+        if (e >= len || p[e] != '{') {
+            int stop = e < len && p[e] == ';' ? e + 1 : e;
+            cf_put(w, p + st, stop - st);
+            i = stop;
+            continue;
+        }
+        int c = cf_close(p, len, e), end = c < len ? c + 1 : len;
+        if (p[st] == '@') {
+            if (cf_group(p + st, e - st) && depth < CSS_FLAT_DEPTH) {
+                cf_put(w, p + st, e + 1 - st);
+                cf_rules(w, p + e + 1, c - e - 1, depth + 1);
+                cf_put(w, "}", 1);
+            } else cf_put(w, p + st, end - st);           /* font faces, keyframes: as written */
+        } else {
+            int sn = e - st;
+            while (sn > 0 && css_space(p[st + sn - 1])) sn--;
+            cf_block(w, p + st, sn, p + e + 1, c - e - 1, 0);
+        }
+        i = end;
+    }
+}
+
+/* The sheet written out flat when it nests rules (its length in *n), else
+   itself. */
+static inline const char *css_flat(const char *p, int len, int *n) {
+    cflat w = { css_flat_buf, 0, CSS_FLAT_MAX, 0, 0 };
+    *n = len;
+    if (p >= css_flat_buf && p < css_flat_buf + CSS_FLAT_MAX) return p;
+    cf_rules(&w, p, len, 0);
+    if (!w.nested || w.over) return p;
+    css_flat_buf[w.n] = 0;
+    *n = w.n;
+    return css_flat_buf;
+}
+
+static inline void css_parse_flat(csheet *s, const char *p, int len, int lo, int hi);
+
 /* A style element's sheet: as written, or made to reach one shadow tree
    alone when the element is inside one (`scope`, its data-zs). */
 #define CSS_SCOPED_MAX (96 * 1024)
@@ -2425,14 +2652,22 @@ static char css_scoped_buf[CSS_SCOPED_MAX];
 
 static inline void css_parse_style(csheet *s, const char *p, int len, int lo, int hi, const char *scope) {
     if (!scope || !*scope) { css_parse_in(s, p, len, lo, hi); return; }
-    int n = css_scope(p, len, css_scoped_buf, CSS_SCOPED_MAX, scope);
-    css_parse_in(s, css_scoped_buf, n, lo, hi);
+    int fn;
+    const char *f = css_flat(p, len, &fn);
+    int n = css_scope(f, fn, css_scoped_buf, CSS_SCOPED_MAX, scope);
+    css_parse_flat(s, css_scoped_buf, n, lo, hi);
 }
 
 /* A sheet, all of it for the window widths lo to hi (-1 for no bound):
    what the media attribute of the link or style element that carried it
    said, since a sheet can be meant for print or for a phone as a whole. */
 static inline void css_parse_in(csheet *s, const char *p, int len, int lo, int hi) {
+    int n;
+    const char *f = css_flat(p, len, &n);
+    css_parse_flat(s, f, n, lo, hi);
+}
+
+static inline void css_parse_flat(csheet *s, const char *p, int len, int lo, int hi) {
     int i = 0;
     int nested = 0;
     /* The widths each open query allows, the outer ones included, and the
