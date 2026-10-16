@@ -389,6 +389,10 @@ typedef struct {
        is its width whatever its own width says: that was only where the row
        started from (lay_flex). -1 when there is none. */
     int flex_sized;
+    /* A float laid out in the room decided for it, whose percentages are
+       still of the room it was floated in (lay_float), and that room. -1
+       for none. */
+    int pct_node, pct_w;
     /* The absolutely positioned box being measured for how wide its contents
        make it (lay_block): laid out as its body, where it stands. -1 for none. */
     int abs_sizing;
@@ -1333,6 +1337,7 @@ static inline void lay_cs(cstyle *d, const cstyle *s) {
 
 static inline void lay_style(lctx *L, int el, const cstyle *parent,
                              cstyle *out, int pct_of) {
+    if (el == L->pct_node) pct_of = L->pct_w;
     css_inherit(out, parent);
     css_parent_h = parent->height < 0 ? -1
                  : parent->height - (parent->border_box ? parent->pt + parent->pb + parent->bt + parent->bb : 0);
@@ -1687,7 +1692,15 @@ static void lay_float(lctx *L, int node, const cstyle *parent, int cleft, int cw
            A percentage is fitted as before, since it would be worked out
            again from the room and come out a percentage of itself. */
         if (st.width < 0 || st.width_pct) L->flex_sized = node;
+        /* Its percentages, margins too, stay of the room it was floated in.
+           Worked out again from the room given here, a slide written width:
+           100% and margin-right: -100% (FlexSlider's fade, Python.org's code
+           slideshow) was given no room, and its -100% of none came to
+           nothing, so it was 0 wide. */
+        int pn = L->pct_node, pw = L->pct_w;
+        L->pct_node = node; L->pct_w = cwidth;
         lay_block(L, node, parent, x - ml, w + ml + mr, &yy);
+        L->pct_node = pn; L->pct_w = pw;
         L->flex_sized = -1;
     }
     L->floating = was;
@@ -5053,7 +5066,13 @@ static void lay_block_placed(lctx *L, int node, const cstyle *parent, int x,
     }
     int inside_at = L->out->nitems;
     int widened_at = L->widened;
-    int floats_at = L->fl_seq;
+    int floats_at = L->fl_seq, floor_at = L->fl_floor;
+    /* A float is a formatting context of its own: what is inside it does not
+       move aside for floats outside it. Python.org's slides are floats that
+       lie over each other (margin-right: -100%), each holding a float of
+       code; the second slide's code went below the first's. */
+    int own_floats = st.floated && L->floating == node;
+    if (own_floats) L->fl_floor = L->fl_seq;
     int held_right = L->measure_right;
     if (L->measuring) L->measure_right = 0;
 
@@ -5206,7 +5225,8 @@ static void lay_block_placed(lctx *L, int node, const cstyle *parent, int x,
        is a row of floated slides in a box with its overflow hidden, and
        once the row could be wider than the box its floats reached into the
        next column and pushed its heading down past them. */
-    if (st.clip == 1 || st.flow_root) L->fl_seq = floats_at;
+    if (st.clip == 1 || st.flow_root || own_floats) L->fl_seq = floats_at;
+    L->fl_floor = floor_at;
 
     /* Measured, a box that was not given a width is as wide as what is in
        it and its own padding and border, not as wide as the room it was
@@ -5731,6 +5751,7 @@ static inline void lay_run(ldoc *out, const ddoc *d, const csheet *s,
     L.force_node = L.relaying = -1;
     L.measuring = 0; L.measure_right = 0;
     L.flex_sized = -1;
+    L.pct_node = -1; L.pct_w = 0;
     L.abs_sizing = -1;
     L.measure_root = -1;
     L.ngroups = 0;

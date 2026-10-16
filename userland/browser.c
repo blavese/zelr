@@ -2574,7 +2574,7 @@ static int style_in_drawn(const ddoc *d, int node, cstyle *out) {
     L.d = d; L.s = &sheet; L.x = &index_; L.m = &match; L.inl = inl;
     L.imgs = lay_sizes; L.nimgs = sizes_for_layout();
     L.out = &page; L.root_px = root_px;
-    L.cur_link = -1; L.flex_sized = -1; L.floating = -1;
+    L.cur_link = -1; L.flex_sized = -1; L.floating = -1; L.pct_node = -1;
     int width = css_view_w > 0 ? css_view_w : 800;
     L.line_width = width; L.pos_w = width; L.cont_width = width;
 

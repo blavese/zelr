@@ -2519,6 +2519,36 @@ int main(void) {
         ok("a float holding a float to the right is as wide as what it holds", fo && fo->w == 200 && fo->x == 600);
     }
     {
+        /* Slides that lie over each other as FlexSlider's fade lays them:
+           floats 100% wide pulled back by margin-right: -100%. Their
+           percentages were worked out again from the room left after the
+           margin, none, and each was 0 wide; and the second's float went
+           under the first's, which was outside it. */
+        lay("<style>body{margin:0}ul{margin:0;padding:0;list-style:none;width:600px}"
+            "li{float:left;width:100%;margin-right:-100%;position:relative}"
+            ".c{float:left;width:50%;height:40px;background:#111111}</style>"
+            "<ul><li><div class=c id=c1></div></li><li><div class=c id=c2></div></li></ul>", 800);
+        const litem *c1 = box_of(by_id("c1")), *c2 = box_of(by_id("c2"));
+        int c1x = c1 ? c1->x : -1, c1y = c1 ? c1->y : -1, c1w = c1 ? c1->w : -1;
+        ok("slides floated 100% wide with margin-right: -100% are as wide as their list and lie over each other",
+           c1w == 300 && c2 && c2->w == 300 && c2->x == c1x && c2->y == c1y);
+        /* And what is inside a float is no float of the words beside it:
+           pulled back to no room, it moves nothing aside. */
+        lay("<style>body{margin:0}.g{float:left;width:300px;margin-right:-300px}"
+            ".gi{float:left;width:200px;height:40px;background:#111111}</style>"
+            "<div><div class=g><div class=gi></div></div>beside</div>", 800);
+        const litem *bs = word("beside");
+        ok("words beside a float are not moved by the floats inside it", bs && bs->x == 0);
+        /* Nor is a float inside it moved by the floats outside: a sidebar
+           pulled back over the main column with margin-left: -100% had its
+           own floats pushed past the column, below it. */
+        lay("<style>body{margin:0}.m{float:left;width:100%;height:40px}.sb{float:left;width:200px;margin-left:-100%}"
+            ".si{float:left;width:100px;height:20px;background:#111111}</style>"
+            "<div class=m></div><div class=sb><div class=si id=si></div></div>", 800);
+        const litem *si = box_of(by_id("si"));
+        ok("a float inside a float pulled back over another is not moved by the one outside", si && si->x == 0 && si->y == 0);
+    }
+    {
         /* A button's words are as shown, each run of white space one space:
            Python.org's GO button kept its markup's newlines and indentation
            and was 320 pixels wide. */
