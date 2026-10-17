@@ -95,6 +95,13 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.150.0
+
+- **renames to long names and between directories, made safe by a mark the mount sweep finishes (04)**, **".." inside
+  fat.c (04, S18)**, **mv and Files moving by rename (09b, 10)**, **NVMe timeouts that run out with interrupts off,
+  and late completions passed over (04, S12)**. Selftest 805 on the 64 MiB machine, durtest's refusals turned into
+  moves, filescheck a folder moved, each failing on a build without its change.
+
 ### 0.149.0
 
 - **percentage heights through links and in stretched rows (11)**, **an ellipsis for a word alone on its line (11)**,

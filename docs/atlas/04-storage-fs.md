@@ -3,6 +3,27 @@
 Source: the repository root (zelr 0.37.0 + 2 commits, `KERNEL_VERSION "0.37.0"` in include/types.h:25).
 Everything below comes from reading the code statically. I built nothing and ran nothing. Line numbers are 1-based and taken from the files as they stand.
 
+**Since 0.150.0** (the rest of this file is older; trust the code and the README's "since 6048716" list):
+- **Rename to any name and into any directory on a volume made here** (fat.c `fat_rename_held`,
+  `rename_by_new_entry`). In one directory to a name that fits 8.3 it is still the one-sector rewrite of the entry,
+  on any volume. Anything else writes the new name (its long entries, then the short one with `NT_RENAMING` (0x40)
+  in byte 12, `nt_reserved`), flushes, deletes the old entry (long entries first), points a moved directory's ".." at
+  its new parent (`dir_point_up`), and clears the mark. A directory is not moved inside itself (`dir_within`, by "..").
+  On a volume not made here (`fat_made_here`, whose mount is not swept) such renames are refused as before, and
+  callers copy and delete.
+- **The mount sweep finishes interrupted renames**: `fat_reclaim` records entries marked `NT_RENAMING` (16 at most)
+  during its walk and `finish_renames` deletes another entry naming the same first cluster (`find_other_naming`, a
+  second walk, which must read every directory or the mark stays), fixes a directory's "..", and clears the mark. An
+  empty file has no cluster to match by, so one renamed as the power went may come back under both names.
+- **S18 fixed**: `dir_find` finds "." and ".." as stored (`is_dots`), so paths through ".." resolve inside fat.c.
+- Test hooks: `fat_test_forget` (the caches dropped as a restart drops them), `fat_test_renaming` (marked entries in a
+  directory). Selftest [fat] cuts a rename at every write in turn, forgets, sweeps and checks one name, whole, unmarked.
+- Callers: term `mv` renames into a directory first; Files moves a cut item by rename before copying.
+- **NVMe waits without ticks (S12)**: `submit` and `wait_ready` time out on `spin_deadline` (timer.c: the 8254's
+  channel 0 count, latched and read, which falls whatever the interrupts do; port 0x61's bit, toggled per read by
+  QEMU, counted reads), pass over a completion for another command id, and read the queue through volatile.
+  `nvme_test_waits` runs `submit` on a controller made of memory with interrupts off. ens.c's `udelay` uses it too.
+
 ---
 
 ## 1. Scope
@@ -860,7 +881,7 @@ A USB volume larger than disk 0 is refused as corrupt. A USB volume claiming mor
 **S11. /sys/lastboot shows the head of the previous log, not the tail** (blackbox.c:320-326 via sysfs.c:248-250, with `SYSFS_MAX` 4096).
 `bb_prev` copies the *first* cap-1 bytes. The comments (sysfs.c:245-247, blackbox.h:42-44) and README.md:331-332 say to read the *last* mark. A previous log over 4095 bytes (it can hold 16 KiB) loses exactly its end. /sys/boot correctly keeps the tail (sysfs.c:235-239). blackbox_test passes only because a QEMU first boot's log is short.
 
-**S12. NVMe timeouts are inert during boot** (nvme.c:153, 170).
+**S12. FIXED in 0.150.0 (both waits on timer.c `spin_deadline`, the 8254's count read with interrupts off; a completion whose cid is not the command's is passed over; the queue read through volatile; [disk] runs `submit` against a controller made of memory). NVMe timeouts are inert during boot** (nvme.c:153, 170).
 Deadlines are computed from `timer_ticks()`, which does not advance until `timer_init(100)` at main.c:459. `blk_init()` and `diskfs_mount()` run earlier (main.c:418-421), so a controller that never becomes ready or never completes a command hangs boot forever. The same holds on the panic path (interrupts off). Also, `submit` does not compare `cid` (:155-161), so after a genuine timeout a late completion would be taken as the next command's. And `q->cq` is not volatile; the poll is correct only because the loop calls the opaque `timer_ticks()` (no LTO in build.sh:41-50).
 
 **S13. A USB stick with non-512-byte sectors overruns kernel buffers** (cross-area, likely).
@@ -877,7 +898,7 @@ There is no `dir_drop_long`, unlike `fat_delete_file` (:1586). A long-named dire
 **S17. FIXED in 0.42.0 (UTF-8 to UTF-16 both ways, any byte past ASCII makes a name long, invalid UTF-8 is refused; `[fat]` writes, lists and reads back "café au lait.txt" and "大.txt", whose first byte is 0xE5). Long names with non-ASCII bytes are write-only.**
 `dir_put_name` stores raw bytes as UTF-16 code units (fat.c:1174). `long_name_of` turns anything ≥ 0x80 into '?' (fat.c:1018), so `dir_find` can never match the original name. The file lists as "caf??…" and cannot be opened by either spelling.
 
-**S18. ".." lookup inside fat.c can never succeed** (fat.c:231-241 with 1258-1266, 1296-1304).
+**S18. FIXED in 0.150.0 (`dir_find` finds "." and ".." as stored; [fat] "a path through .. inside the filesystem resolves"). ".." lookup inside fat.c can never succeed** (fat.c:231-241 with 1258-1266, 1296-1304).
 `to_83("..")` yields `"        .  "`, which does not match the on-disk `"..         "`. `long_name_of` finds no LFN in front of it, so `dir_find(…, "..")` always fails. This is latent: `vfs_resolve` removes "." and ".." before FAT sees a path.
 
 **S19. FIXED in 0.76.0** -- each entry of /tmp goes as a tree, eight levels at most, and one that will not go is stepped past (`layout_empty_tmp`, `remove_tree`; [userspace]: a folder two deep first in /tmp and a file after it both go). The original finding: **`empty_tmp` gives up at the first non-empty subdirectory** (layout.c:71-75).

@@ -1612,7 +1612,7 @@ byte.
 ## testing
 
 The kernel tests itself. `./run.sh -T` boots with selftest on the command line,
-runs 793 checks across every subsystem, then writes to QEMU's debug-exit port
+runs 805 checks across every subsystem, then writes to QEMU's debug-exit port
 so the host gets a real exit status.
 
     [string]                 8 checks  [waiting]               16 checks
@@ -1625,10 +1625,10 @@ so the host gets a real exit status.
     [paths]                 11 checks  [p-256]                 23 checks
     [directories]           12 checks  [sha-512]                4 checks
     [open files]            33 checks  [p-384]                  6 checks
-    [timer]                  3 checks  [certificates]          45 checks
+    [timer]                  5 checks  [certificates]          45 checks
     [interrupts]             2 checks  [randomness]             8 checks
-    [disk]                  13 checks  [tls 1.3]               55 checks
-    [fat]                   58 checks  [tls 1.2]               18 checks
+    [disk]                  15 checks  [tls 1.3]               55 checks
+    [fat]                   66 checks  [tls 1.2]               18 checks
     [network]                9 checks  [wpa]                   19 checks
     [tcp]                    8 checks  [ccmp]                   8 checks
     [elf]                    9 checks  [wireless]              16 checks
@@ -1644,7 +1644,7 @@ so the host gets a real exit status.
     [live tree]             23 checks  [sound]                  skipped
     [layout]                11 checks  [kernel stack]           3 checks
 
-    793 passed, 0 failed
+    805 passed, 0 failed
     SELFTEST_PASS
 
 The sound section is skipped because `run.sh` attaches no sound card (the
@@ -1652,7 +1652,7 @@ gate's q35 run gives it one), the
 identity map is checked in four more places when there is more memory to map,
 and the desktop keeps a copy of its wallpaper only when the memory allows it,
 which two more checks need: given 256 MiB, as the gate gives it, the same run
-is 799.
+is 811.
 
 Two of the sections are about what happens when something goes wrong half
 way, which a machine that keeps its power cannot show. `[fat]` makes the
@@ -1881,11 +1881,15 @@ large range:
   descriptor here has no non-blocking mode, because `poll` is how a
   program avoids blocking. `ioctl` is a name for everything that did not
   fit anywhere else, and nothing here has asked to be that yet.
-- **`rename` works inside one directory.** Across directories is refused
-  rather than done unsafely: FAT has nowhere to record that two entries
-  are one rename in progress, so a power cut between writing the second
-  and deleting the first leaves two names for one chain of clusters, and
-  then deleting either corrupts the other. Copy and delete instead.
+- **`rename` across directories, or to a long name, needs a disk this
+  system made.** Such a rename writes a second entry and then deletes the
+  first, and a power cut between the two leaves two names for one chain of
+  clusters, which deleting either would corrupt. FAT has nowhere to record
+  that two entries are one rename in progress, so the new entry carries a
+  mark in a byte the format leaves alone until the old one is gone, and the
+  sweep a disk made here gets when it is mounted finishes any rename it
+  finds marked. Another system's disk is never swept, so there such renames
+  are refused: copy and delete instead.
 - **No environment.** A program is started on words and nothing else. `envp`
   is a terminator, present so that startup code walking past the end of
   `argv` finds what it expects.
@@ -1979,8 +1983,7 @@ large range:
   UTF-16 the format wants and read back as the UTF-8 it was given, so
   "café" is café on another system too, and a name that is not valid UTF-8
   is refused. The kernel's faces draw only ASCII, so such a name is stored
-  and opened correctly but drawn with boxes. A rename still only renames to
-  a name that fits eight and three.
+  and opened correctly but drawn with boxes.
 - **Memory is capped at 64 GiB.** What the machine actually has is what gets
   mapped: the bottom 64 MiB a page at a time, and everything the firmware
   called usable above that in 2 MiB pages. The gaps between are left alone,
