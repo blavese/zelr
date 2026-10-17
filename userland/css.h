@@ -321,6 +321,7 @@ typedef struct {
     short order, basis, shrink;
     unsigned char basis_pct;  /* the basis was a percentage of the row (lay_flex) */
     int ratio_w, ratio_h;
+    int ratio_up_w, ratio_up_h;   /* the parent's, for aspect-ratio: inherit */
 
     /* Whether width was a percentage, which a box being measured for how
        wide its contents want to be cannot resolve: it is auto there, as the
@@ -3177,6 +3178,7 @@ static inline void css_default_style(cstyle *st, int root_px) {
     st->basis_pct = 0;
     st->shrink = 1;
     st->ratio_w = st->ratio_h = 0;
+    st->ratio_up_w = st->ratio_up_h = 0;
     st->width_pct = 0;
     st->height_pct = 0;
     st->off_pct = 0;
@@ -3192,6 +3194,8 @@ static inline void css_inherit(cstyle *child, const cstyle *parent) {
     child->color = parent->color;
     child->font_px = child->font_up = parent->font_px;
     child->display_up = parent->display;
+    child->ratio_up_w = parent->ratio_w;
+    child->ratio_up_h = parent->ratio_h;
     child->bold = parent->bold;
     child->italic = parent->italic;
     child->mono = parent->mono;
@@ -3933,9 +3937,16 @@ static inline void css_apply_v(int prop, const char *v, cstyle *st, int root_px,
                        : w_starts_fold(v, "capitalize") ? 3 : 0);
             break;
         case P_ASPECT: {
-            /* width / height, or one number over 1; auto alone is none. */
+            /* width / height, or one number over 1; auto alone is none.
+               inherit is the parent's: Engadget's lead link keeps its
+               holder's 16 / 9 so. */
             const char *p = v;
             st->ratio_w = st->ratio_h = 0;
+            if (w_starts_fold(v, "inherit")) {
+                st->ratio_w = st->ratio_up_w;
+                st->ratio_h = st->ratio_up_h;
+                break;
+            }
             while (*p && !(*p >= '0' && *p <= '9')) p++;
             if (!*p) break;
             int a = 0, b = 100, fa = 0, fd = 0;

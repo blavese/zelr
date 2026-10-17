@@ -5476,6 +5476,19 @@ static void lay_block_placed(lctx *L, int node, const cstyle *parent, int x,
         }
     }
 
+    /* aspect-ratio and no height: the height the width makes is known now,
+       before what is in it is laid out, so a percentage height inside is of
+       it. Engadget's lead picture is 100% tall in a link kept at 16 / 9, and
+       of nothing it was its own shape, which the link cut short. Taller
+       still if what is in it needs more (below), unless the box hides its
+       overflow, as in a browser. Not while measuring, when the width is not
+       yet its own. */
+    if (st.height < 0 && st.ratio_w > 0 && st.ratio_h > 0 && !L->measuring && !is_table) {
+        int h = (int)((long long)box_w * st.ratio_h / st.ratio_w);
+        if (!st.border_box) h -= st.pt + st.pb + st.bt + st.bb;
+        st.height = (short)(h < 0 ? 0 : h > 30000 ? 30000 : h);
+    }
+
     *y += st.mt == CSS_AUTO_OFF ? 0 : st.mt;
     int box_top = *y;
 

@@ -2007,6 +2007,23 @@ int main(void) {
         const litem *hb = box_of(by_id("hb"));
         okn("a drawing sized 0 by its attributes is 0, not 300 by 150, beside an item centred in a 64 pixel row",
             hb && hb->y == 17, hb ? hb->y : -1);
+
+        /* Its lead picture: 100% tall in a link that inherits its holder's
+           16 / 9 and hides its overflow. The link was the picture's own
+           shape (4:3 here), cut where the picture's attributes said, and the
+           headline sat a hundred pixels below what was drawn. */
+        const char *lead = "<style>body{margin:0}.ih{position:relative;aspect-ratio:16/9;width:800px}"
+            ".ih>a{display:block;width:100%;height:auto;overflow:hidden;aspect-ratio:inherit}"
+            "picture{width:100%;height:100%;display:block}.ih img{display:block;height:100%;width:100%}"
+            "p{margin:0}</style><div class=ih><a href=/><picture><img id=p src=x></picture></a>"
+            "</div><p>leadafter</p>";
+        lay(lead, 900);
+        picture_at("p", 1280, 960);
+        lay(lead, 900);
+        const litem *lp = image_of(by_id("p")), *la = word("leadafter");
+        okn("a box that inherits an aspect ratio is that shape, and 100% tall inside it is all of it",
+            lp && lp->w == 800 && lp->h == 450 && la && la->y == 450, lp ? lp->h : -1);
+        nfake = 0;
     }
 
     /* --- nesting -------------------------------------------------------------- */
