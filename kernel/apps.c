@@ -66,9 +66,20 @@ static void about_on_mouse(window_t *w, int x, int y, u8 buttons, bool just_pres
     if (just_pressed) { about_render(w); wm_invalidate(w); }   /* refresh the figures */
 }
 
+#define ABOUT_W 322
+#define ABOUT_H 300
+
+/* Twenty pixels in from the right and 120 down, where it always opened on a
+   1024 by 768 screen, and on the screen whatever its size: at a fixed 682 it
+   was mostly off an 800 wide one, its close button out of reach (atlas 07,
+   item 20). The 40 below it is its title bar and frame. */
 void app_about(void) {
     if (about_win) { wm_raise(about_win); return; }
-    window_t *w = wm_create("about", 682, 120, 322, 300);
+    int x = (int)fb_width() - ABOUT_W - 20, y = 120;
+    if (x < 8) x = 8;
+    if (y + ABOUT_H + 40 > (int)fb_height()) y = (int)fb_height() - ABOUT_H - 40;
+    if (y < 8) y = 8;
+    window_t *w = wm_create("about", x, y, ABOUT_W, ABOUT_H);
     if (!w) return;
     about_render(w);
     w->on_mouse = about_on_mouse;
@@ -78,3 +89,4 @@ void app_about(void) {
 }
 
 void app_about_forget(window_t *w) { if (about_win == w) about_win = 0; }
+window_t *app_about_window(void) { return about_win; }

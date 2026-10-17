@@ -18,6 +18,7 @@
 #include "parts.h"
 #include "timer.h"
 #include "power.h"
+#include "apps.h"
 #include "synaptics.h"
 #include "crypto.h"
 #include "gcm.h"
@@ -2509,6 +2510,17 @@ static void test_window_lifetimes(void) {
             fb_set_mode(ow, oh);
         } else {
             kprintf("  SKIP  the screen cannot be made 1920 wide here\n");
+        }
+
+        /* And the About window on a screen of 800 by 600, which it opened
+           mostly off, at 682 across, its close button out of reach. */
+        if (fb_set_mode(800, 600)) {
+            app_about();
+            window_t *ab = app_about_window();
+            ok("on an 800 by 600 screen the About window opens on it",
+               ab && ab->x >= 0 && ab->x + ab->cw <= 800 && ab->y >= 0 && ab->y + ab->ch <= 600);
+            if (ab) wm_close(ab);
+            fb_set_mode(ow, oh);
         }
     } else {
         kprintf("  SKIP  the screen mode is the firmware's\n");
