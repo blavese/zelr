@@ -95,6 +95,12 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.153.0
+
+- **the other processors' caches on (02, B22)**, **a randomness gate that wants the timing to vary (02, B13)**, **a fork
+  out of memory gives back what it took (02, B15)**, **a PCI scan maps only buses with devices (02, B21)**. Selftest 815 on
+  the 64 MiB machine, 851 on four processors, each failing on a build without its change. B11 found already fixed.
+
 ### 0.152.0
 
 - **a new program's x87 registers empty (02, B14)**, **power off that comes back when the firmware does not answer (02,
