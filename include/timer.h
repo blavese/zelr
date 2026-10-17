@@ -17,3 +17,7 @@ typedef struct { u32 left, still; u16 last; } spin_deadline_t;
 void spin_deadline_start(spin_deadline_t *d, u32 ms);
 void spin_deadline_start_us(spin_deadline_t *d, u32 us);
 bool spin_deadline_passed(spin_deadline_t *d);
+
+/* A wait of so many milliseconds on it, which returns with interrupts off,
+   where sleep_ms (a halt until the tick) never would. */
+void spin_delay_ms(u32 ms);

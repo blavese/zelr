@@ -142,6 +142,16 @@ void power_reboot(void) {
     for (;;) hlt();
 }
 
+/* For the self test: a firmware that takes no notice, neither handing the
+   machine over nor sleeping it, so the waits below can be seen to end. */
+static bool test_ignored;
+void power_test_ignored(bool on) { test_ignored = on; }
+
+/* The waits are spin deadlines (timer.c), not sleeps: the terminal's shut
+   down button asks for this through a system call, which runs with
+   interrupts off, and sleep_ms halts until a tick that never comes, so a
+   firmware that did not answer was a machine that hung for good instead of
+   saying it could not (atlas 02, B7). */
 bool power_off(void) {
     find_s5();
     const acpi_info_t *a = acpi();
@@ -151,24 +161,25 @@ bool power_off(void) {
        came up in legacy mode the control register does nothing until it
        has, and on one that is already in ACPI mode there is no SMI command
        to send and the bit is already set. */
-    if (a->fadt.smi_cmd && a->fadt.acpi_enable
-        && !(inw((u16)a->fadt.pm1a_cnt) & SCI_EN)) {
-        outb((u16)a->fadt.smi_cmd, a->fadt.acpi_enable);
-        for (u32 i = 0; i < 300; i++) {
-            if (inw((u16)a->fadt.pm1a_cnt) & SCI_EN) break;
-            sleep_ms(10);
+    if (test_ignored || (a->fadt.smi_cmd && a->fadt.acpi_enable
+                         && !(inw((u16)a->fadt.pm1a_cnt) & SCI_EN))) {
+        if (!test_ignored) outb((u16)a->fadt.smi_cmd, a->fadt.acpi_enable);
+        for (u32 i = 0; i < (test_ignored ? 3u : 300u); i++) {
+            if (!test_ignored && (inw((u16)a->fadt.pm1a_cnt) & SCI_EN)) break;
+            spin_delay_ms(10);
         }
     }
 
-    bb_log("powering off, sleep type %d/%d", slp_typ_a, slp_typ_b);
-
-    outw((u16)a->fadt.pm1a_cnt, (u16)((slp_typ_a << 10) | SLP_EN));
-    if (a->fadt.pm1b_cnt)
-        outw((u16)a->fadt.pm1b_cnt, (u16)((slp_typ_b << 10) | SLP_EN));
+    if (!test_ignored) {
+        bb_log("powering off, sleep type %d/%d", slp_typ_a, slp_typ_b);
+        outw((u16)a->fadt.pm1a_cnt, (u16)((slp_typ_a << 10) | SLP_EN));
+        if (a->fadt.pm1b_cnt)
+            outw((u16)a->fadt.pm1b_cnt, (u16)((slp_typ_b << 10) | SLP_EN));
+    }
 
     /* It should not get here. A machine that does is one whose firmware
        wanted something else, and the caller says so rather than this
        looping forever pretending to be asleep. */
-    sleep_ms(500);
+    spin_delay_ms(test_ignored ? 50 : 500);
     return false;
 }

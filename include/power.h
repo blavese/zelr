@@ -14,6 +14,10 @@ const char *power_describe(void);
    the firmware wanted something else, rather than hanging. */
 bool power_off(void);
 
+/* For the self test: the firmware takes no notice of power_off, which then
+   only waits and says it could not. */
+void power_test_ignored(bool on);
+
 /* Does not return either. Three ways are tried, because a machine without a
    keyboard controller does not answer the usual one. */
 void power_reboot(void);

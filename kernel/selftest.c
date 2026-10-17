@@ -17,6 +17,7 @@
 #include "sysfs.h"
 #include "parts.h"
 #include "timer.h"
+#include "power.h"
 #include "synaptics.h"
 #include "crypto.h"
 #include "gcm.h"
@@ -555,6 +556,16 @@ static void test_timer(void) {
     ok("a deadline passes with interrupts off, twice as long for twice the time",
        took[1] > took[0] * 3 / 2 && took[1] < took[0] * 5 / 2);
     ok("and fifty milliseconds of it is near fifty", ms50 >= 10 && ms50 <= 400);
+
+    /* Powering off is asked for through a system call, interrupts off, and
+       waited on with sleep_ms, a halt until a tick that never came: a
+       firmware that took no notice was a machine hung for good. */
+    power_test_ignored(true);
+    __asm__ volatile ("cli");
+    bool still_on = !power_off();
+    __asm__ volatile ("sti");
+    power_test_ignored(false);
+    ok("powering off with interrupts off says so and comes back when the firmware takes no notice", still_on);
     if (ms50 < 10 || ms50 > 400) kprintf("        fifty took %d\n", (u32)ms50);
 }
 

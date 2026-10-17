@@ -100,6 +100,12 @@ void spin_deadline_start_us(spin_deadline_t *d, u32 us) {
     d->last = pit_count_now();
 }
 
+void spin_delay_ms(u32 ms) {
+    spin_deadline_t d;
+    spin_deadline_start(&d, ms);
+    while (!spin_deadline_passed(&d)) __asm__ volatile ("pause");
+}
+
 void spin_deadline_start(spin_deadline_t *d, u32 ms) {
     spin_deadline_start_us(d, ms > 3600000u ? 3600000000u : ms * 1000u);
 }
