@@ -1051,8 +1051,28 @@ static inline int lay_var_entry(int head, const char *name, int n) {
     return -1;
 }
 
+/* What a name comes to on a chain, kept for the rest of the layout: a chain
+   never changes once made (lay_run starts the chains and the generation
+   together), and a page with hundreds of custom properties on :root walked
+   its whole chain for every var() of every element each time it was styled.
+   CNN's front page spent 43% of its time doing that. */
+#define LAY_VCACHE 16384
+typedef struct { int head, n, k; unsigned h, gen; } lvcache;
+static lvcache lay_vcache[LAY_VCACHE];
+
 static inline const char *lay_var_find(int head, const char *name, int n) {
-    int k = lay_var_entry(head, name, n);
+    unsigned h = 2166136261u;
+    for (int i = 0; i < n; i++) h = (h ^ (unsigned char)name[i]) * 16777619u;
+    lvcache *c = &lay_vcache[(h ^ (unsigned)head * 2654435761u) % LAY_VCACHE];
+    int k, same = c->gen == lay_gen && c->head == head && c->n == n && c->h == h;
+    if (same && c->k >= 0)
+        for (int i = 0; i < n && same; i++) same = lay_var_text[c->k][i] == name[i];
+    if (same) {
+        k = c->k;
+    } else {
+        k = lay_var_entry(head, name, n);
+        c->gen = lay_gen; c->head = head; c->n = n; c->h = h; c->k = k;
+    }
     return k >= 0 ? lay_var_text[k] + n + 1 : 0;
 }
 
