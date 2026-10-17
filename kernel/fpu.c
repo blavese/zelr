@@ -12,6 +12,9 @@
 #define CR0_TS (1u << 3)      /* task switched */
 
 /* CR4 */
+#define CR0_NE         (1u << 5)   /* x87 errors as #MF, not IRQ 13 */
+#define CR0_NW         (1u << 29)  /* not write through: off with CD */
+#define CR0_CD         (1u << 30)  /* cache disable */
 #define CR4_OSFXSR     (1u << 9)   /* the OS will use FXSAVE, so SSE is legal */
 #define CR4_OSXMMEXCPT (1u << 10)  /* and will handle SSE's own exceptions */
 
@@ -50,6 +53,15 @@ void fpu_init(void) {
     cr0 &= ~(u64)CR0_EM;
     cr0 |= CR0_MP;
     cr0 &= ~(u64)CR0_TS;
+
+    /* And, CR0 being open here on every processor, the caches on and x87
+       errors reported as the fault they are rather than down an old
+       interrupt line. A processor started by INIT and SIPI keeps CD and NW
+       as they were, which after a reset is set: the other processors ran
+       with their caches off unless the firmware had turned them on, and
+       nothing here did (atlas 02, B22). */
+    cr0 &= ~(u64)(CR0_CD | CR0_NW);
+    cr0 |= CR0_NE;
     write_cr0(cr0);
 
     /* And the two bits that say the operating system is prepared. Without

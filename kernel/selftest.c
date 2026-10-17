@@ -2928,6 +2928,15 @@ static void hold_lock_job(void *arg) {
     sti();
 }
 
+/* CR0 as another processor has it. */
+static volatile u64 cr0_seen;
+static void report_cr0(void *arg) {
+    (void)arg;
+    u64 v;
+    __asm__ volatile ("mov %%cr0, %0" : "=r"(v));
+    cr0_seen = v;
+}
+
 /* Work that is only ever meant to be taken back, and says if it ran. */
 static volatile u32 taken_ran;
 
@@ -2976,6 +2985,15 @@ static void test_smp(void) {
            tss_seen.rsp0 != 0 && tss_seen.rsp0 != tss_stack_of(0));
     } else {
         kprintf("  SKIP  the second processor did not answer\n");
+    }
+
+    /* Its caches on, which after INIT and SIPI are as a reset leaves them:
+       off. QEMU starts its processors so. */
+    cr0_seen = 0;
+    if (smp_run(1, report_cr0, 0) && smp_wait(1, 1000)) {
+        ok("another processor runs with its caches on, and x87 errors as faults",
+           cr0_seen && !(cr0_seen & ((1u << 30) | (1u << 29))) && (cr0_seen & (1u << 5)));
+        if (cr0_seen & ((1u << 30) | (1u << 29))) kprintf("        cr0 %p\n", (void *)cr0_seen);
     }
 
     /* An idle processor should be asleep, not burning a core.
