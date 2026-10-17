@@ -2,6 +2,12 @@
 
 Source: the repository root (blavese/zelr `main`, 2026-09-22, two commits after v0.37.0).
 Static reading only. Nothing was built or run. Every `file:line` below refers to that tree.
+
+**Since 0.154.0** (the rest of this file is older; trust the code): Files copies a folder with everything in it
+(`copy_tree`, eight deep, never into itself: `inside`), moves one to another disk by that copy and `remove_tree`, and
+deletes a folder that is not empty on a second Delete with nothing pressed between (`delete_armed`; any other key sets it
+back). filescheck copies, moves and deletes folders. Since 0.150.0 a cut item is moved by rename first where the disk
+can (see atlas 04).
 The PIT runs at 100 Hz (`kernel/main.c:459 timer_init(100)`), so **1 tick = 10 ms** wherever a constant is in ticks.
 
 ---

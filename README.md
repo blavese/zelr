@@ -1615,7 +1615,7 @@ byte.
 ## testing
 
 The kernel tests itself. `./run.sh -T` boots with selftest on the command line,
-runs 815 checks across every subsystem, then writes to QEMU's debug-exit port
+runs 816 checks across every subsystem, then writes to QEMU's debug-exit port
 so the host gets a real exit status.
 
     [string]                 9 checks  [waiting]               16 checks
@@ -1640,14 +1640,14 @@ so the host gets a real exit status.
     [mouse]                  4 checks  [black box]             24 checks
     [graphics]              15 checks  [acpi and pcie]          5 checks
     [windows]               29 checks  [interrupt routing]     11 checks
-    [window server]         39 checks  [clipboard]             14 checks
+    [window server]         40 checks  [clipboard]             14 checks
     [built-in programs]     12 checks  [clock]                 18 checks
     [theme]                 23 checks  [codec routes]           6 checks
     [taskbar]               18 checks  [es1371]                 5 checks
     [live tree]             23 checks  [sound]                  skipped
     [layout]                11 checks  [kernel stack]           3 checks
 
-    815 passed, 0 failed
+    816 passed, 0 failed
     SELFTEST_PASS
 
 The sound section is skipped because `run.sh` attaches no sound card (the
@@ -1655,7 +1655,7 @@ gate's q35 run gives it one), the
 identity map is checked in four more places when there is more memory to map,
 and the desktop keeps a copy of its wallpaper only when the memory allows it,
 which two more checks need: given 256 MiB, as the gate gives it, the same run
-is 821.
+is 822.
 
 Two of the sections are about what happens when something goes wrong half
 way, which a machine that keeps its power cannot show. `[fat]` makes the

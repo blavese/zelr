@@ -95,6 +95,12 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.154.0
+
+- **folders copied, moved between disks and deleted in Files (10)**, **cp -r and rm -r (09b)**, **the About window on the
+  screen at 800 by 600 (07, item 20)**. Selftest 816 on the 64 MiB machine, filescheck and bigfilecheck their folders,
+  each failing on a build without its change.
+
 ### 0.153.0
 
 - **the other processors' caches on (02, B22)**, **a randomness gate that wants the timing to vary (02, B13)**, **a fork

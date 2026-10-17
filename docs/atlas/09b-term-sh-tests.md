@@ -3,6 +3,10 @@
 Source: the repository root (github.com/blavese/zelr main, 2026-09-22, two commits after v0.37.0).
 This was a static reading only. Nothing was built or run. Every claim below has a file:line reference, and anything I could not check without running the machine is marked as such.
 
+**Since 0.154.0** (the rest of this file is older; trust the code): the terminal's `cp -r SRC DST` copies a folder (into
+DST when it is a folder, as DST when it is not there, never into itself) and `rm -r PATH` deletes one, both eight deep at
+most (term.c `copy_tree`, `remove_tree`); bigfilecheck runs both. Since 0.150.0 `mv` into a folder renames first.
+
 ---
 
 ## 1. Scope
