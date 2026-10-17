@@ -3204,6 +3204,24 @@ int main(void) {
         }
         ok("text-overflow: ellipsis ends a cut line in dots inside its box",
            ea && !eh && edots && edots->y == ea->y && edots->x + edots->w <= 100);
+        /* A word alone on its line, longer than the box: docs.rs's long crate
+           names, each alone in a cell of a row, were not drawn at all, as
+           there was no word before it to take the dots. */
+        lay("<style>body{margin:0}.g{display:flex}.n{display:inline-block;width:20.8333%;white-space:nowrap;"
+            "overflow:hidden;text-overflow:ellipsis}</style>"
+            "<div class=g><div class=n>bmux_decoration_plugin_renderer-0.0.1-alpha.3</div><div>desc</div></div>", 800);
+        const litem *lone = 0;
+        for (int i = 0; i < page.nitems; i++) {
+            const litem *it = &page.items[i];
+            if (it->kind != LK_TEXT || it->at < 0) continue;
+            const char *t = page.text + it->at;
+            if (t[0] == 'b' && t[1] == 'm' && t[2] == 'u' && t[3] == 'x') lone = it;
+        }
+        int lonen = 0;
+        if (lone) while (page.text[lone->at + lonen]) lonen++;
+        okn("and a word alone on its line, longer than its box, is cut to fit with its dots",
+            lone && lonen > 6 && page.text[lone->at + lonen - 1] == '.' && lone->x + lone->w <= 167,
+            lone ? lone->w : -1);
     }
     {
         /* A row of boxes that may not break stays one row, and a box hiding

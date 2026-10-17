@@ -5893,10 +5893,19 @@ static void lay_block_placed(lctx *L, int node, const cstyle *parent, int x,
                 litem *it = &L->out->items[i];
                 if (it->kind != LK_TEXT && !(it->kind == 0 && it->at >= 0 && it->x >= right)) continue;
                 if (it->kind == LK_TEXT && it->x + it->w <= right) continue;
-                it->kind = 0;
+                /* A word that begins its line inside the box is cut itself:
+                   docs.rs's long crate names, each alone in a cell, had no
+                   word before them to take the dots, and the cells were
+                   blank. */
+                int first = it->kind == LK_TEXT && it->at >= 0 && it->x < right;
+                for (int j = inside_at; first && j < L->out->nitems; j++) {
+                    const litem *k = &L->out->items[j];
+                    if (k != it && k->kind == LK_TEXT && k->y == it->y && k->x < it->x) first = 0;
+                }
+                if (!first) it->kind = 0;
                 /* The line's last word still shown takes the dots. */
-                litem *lastw = 0;
-                for (int j = inside_at; j < L->out->nitems; j++) {
+                litem *lastw = first ? it : 0;
+                for (int j = inside_at; !first && j < L->out->nitems; j++) {
                     litem *k = &L->out->items[j];
                     if (k->kind == LK_TEXT && k->y == it->y && k->at >= 0 && (!lastw || k->x > lastw->x)) lastw = k;
                 }
