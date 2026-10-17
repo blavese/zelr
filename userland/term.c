@@ -811,10 +811,32 @@ static void write_or_append(int argc, char **argv, bool append) {
 static void cmd_write(int argc, char **argv)  { write_or_append(argc, argv, false); }
 static void cmd_append(int argc, char **argv) { write_or_append(argc, argv, true); }
 
+/* A folder and everything in it, deleted, eight deep at most; or a file.
+   The first entry each time, since each one deleted is gone from the list,
+   and one that will not go stops it rather than going round for ever. */
+static bool remove_tree(const char *path, int depth) {
+    zelr_stat st;
+    if (stat(path, &st) != 0) return false;
+    if (!st.is_dir) return unlink(path) == 0;
+    if (depth > 8) return false;
+    zelr_stat e;
+    while (readdir(path, 0, &e) == 1) {
+        char child[VFS_PATH];
+        path_join(path, e.name, child, sizeof child);
+        if (!remove_tree(child, depth + 1)) return false;
+    }
+    return rmdir(path) == 0;
+}
+
+/* rm -r takes a folder and what is in it, as rmdir will not. */
 static void cmd_rm(int argc, char **argv) {
-    if (argc < 2) { need("rm FILE..."); return; }
-    for (int i = 1; i < argc; i++) {
-        if (unlink(argv[i]) == 0) { w_reset(); w_str("removed "); w_str(argv[i]); dim(work); }
+    int first = 1;
+    bool tree = argc > 1 && !strcmp(argv[1], "-r");
+    if (tree) first = 2;
+    if (argc <= first) { need("rm [-r] PATH..."); return; }
+    for (int i = first; i < argc; i++) {
+        bool gone = tree ? remove_tree(argv[i], 0) : unlink(argv[i]) == 0;
+        if (gone) { w_reset(); w_str("removed "); w_str(argv[i]); dim(work); }
         else { w_reset(); w_str("rm: "); w_str(argv[i]); err(work); }
     }
 }
@@ -884,8 +906,45 @@ static bool copy_file(const char *src, const char *dst) {
     return true;
 }
 
+/* A folder and everything in it: its folders made and its files copied,
+   eight deep at most, stopping at the first that does not arrive. */
+static bool copy_tree(const char *src, const char *dst, int depth) {
+    zelr_stat st;
+    if (stat(src, &st) != 0) { err("no such path"); return false; }
+    if (!st.is_dir) return copy_file(src, dst);
+    if (depth > 8) { err("too deep"); return false; }
+    zelr_stat there;
+    if (mkdir(dst) != 0 && (stat(dst, &there) != 0 || !there.is_dir)) { err("cannot make the folder"); return false; }
+    zelr_stat e;
+    for (int i = 0; readdir(src, i, &e) == 1; i++) {
+        char a[VFS_PATH], b[VFS_PATH];
+        path_join(src, e.name, a, sizeof a);
+        path_join(dst, e.name, b, sizeof b);
+        if (!copy_tree(a, b, depth + 1)) return false;
+    }
+    return true;
+}
+
+/* cp -r copies a folder, into DST when DST is a folder already, as DST when
+   it is not there; never into itself, which would copy the copy. */
 static void cmd_cp(int argc, char **argv) {
-    if (argc < 3) { need("cp SRC DST"); return; }
+    if (argc >= 4 && !strcmp(argv[1], "-r")) {
+        char target[VFS_PATH];
+        zelr_stat st;
+        if (stat(argv[3], &st) == 0 && st.is_dir) {
+            const char *base = argv[2];
+            for (const char *p = argv[2]; *p; p++) if (*p == '/') base = p + 1;
+            path_join(argv[3], base, target, sizeof target);
+        } else {
+            strncpy(target, argv[3], sizeof target - 1);
+            target[sizeof target - 1] = 0;
+        }
+        int n = strlen(argv[2]);
+        if (!strncmp(target, argv[2], n) && (target[n] == 0 || target[n] == '/')) { err("not into itself"); return; }
+        if (copy_tree(argv[2], target, 0)) { w_reset(); w_str("copied to "); w_str(target); dim(work); }
+        return;
+    }
+    if (argc < 3) { need("cp [-r] SRC DST"); return; }
     copy_file(argv[1], argv[2]);
 }
 
@@ -1404,9 +1463,9 @@ static const command COMMANDS[] = {
     { "stat",    cmd_stat,    "PATH",          "size, kind, and where it is kept" },
     { "write",   cmd_write,   "FILE TEXT",     "create or overwrite" },
     { "append",  cmd_append,  "FILE TEXT",     "add a line to the end" },
-    { "cp",      cmd_cp,      "SRC DST",       "copy a file" },
+    { "cp",      cmd_cp,      "[-r] SRC DST",  "copy a file, or a folder" },
     { "mv",      cmd_mv,      "SRC DST",       "move one" },
-    { "rm",      cmd_rm,      "FILE...",       "delete" },
+    { "rm",      cmd_rm,      "[-r] PATH...",  "delete, -r a folder too" },
     { "mkdir",   cmd_mkdir,   "NAME",          "make a directory" },
     { "rmdir",   cmd_rmdir,   "NAME",          "remove an empty one" },
     { "run",     cmd_run,     "PROGRAM [&]",   "start a program, & to not wait" },

@@ -66,7 +66,8 @@ def main():
     with open(HUGE_SRC, "wb") as f:
         f.write(huge)
     r = subprocess.run([sys.executable, os.path.join(TOOLS, "mkfat.py"), IMAGE, "32768",
-                        BIG_SRC + ":home/big.txt", HUGE_SRC + ":home/huge.txt"],
+                        BIG_SRC + ":home/big.txt", HUGE_SRC + ":home/huge.txt",
+                        BIG_SRC + ":home/pics/a.txt", HUGE_SRC + ":home/pics/sub/b.txt"],
                        cwd=ROOT, capture_output=True, text=True)
     c.add("a volume with two large files on it", r.returncode == 0)
     if r.returncode != 0:
@@ -98,6 +99,12 @@ def main():
         done3, shot3 = in_terminal("mv /home/gone.txt /tmp/moved.txt", "amber", AMBER, "big-mv")
         c.add("the terminal ran the copies", done1 and done2 and done3,
               shot3 if not done3 else (shot2 if not done2 else shot1))
+
+        # A folder, with a folder in it: cp -r into /tmp, then rm -r. cp took
+        # files only and rm would not take a folder.
+        done4, shot4 = in_terminal("cp -r /home/pics /tmp", "paper", PAPER, "big-cpr")
+        done5, shot5 = in_terminal("rm -r /home/pics", "amber", AMBER, "big-rmr")
+        c.add("the terminal ran cp -r and rm -r", done4 and done5, shot5 if not done5 else shot4)
 
         # Notes, on a file bigger than it used to hold: one character typed
         # at the start, then saved. The character is what makes this a check
@@ -139,6 +146,11 @@ def main():
     c.add("mv into another directory arrives whole", moved is not None and moved == big)
     c.add("and only then is the original gone", fs.read_file("/home/gone.txt") is None)
     c.add("the file copied from is untouched", fs.read_file("/home/big.txt") == big)
+
+    c.add("cp -r copies a folder and the folder in it, whole",
+          fs.read_file("/tmp/pics/a.txt") == big and fs.read_file("/tmp/pics/sub/b.txt") == huge)
+    c.add("and rm -r deletes the folder and what is in it",
+          fs.read_file("/home/pics/a.txt") is None and fs.read_file("/home/pics/sub/b.txt") is None)
 
     saved = fs.read_file("/home/huge.txt")
     want = b"x" + huge
