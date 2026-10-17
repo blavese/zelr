@@ -1371,15 +1371,20 @@ static inline void lay_hints(lctx *L, int el, cstyle *st, int pct_of) {
         clen wl = css_len(v ? v : "");
         int w = v ? css_px(wl, st->font_px, L->root_px, pct_of) : -1;
         /* A frame sized nought is a counter's, not something to see: its
-           nought is kept (and nothing is drawn), not taken for no size. */
+           nought is kept (and nothing is drawn), not taken for no size. So is
+           a drawing's written as nought, a sheet of symbols for <use> to
+           draw from: Engadget's, in its header row, was 300 by 150 and made
+           the header that tall. (A drawing's nought from anything else -- a
+           percentage of nothing yet -- is still no size.) */
         int least = tag == T_IFRAME ? 0 : 1;
-        if (w >= least) {
+        if (w >= least || (w == 0 && v && v[0] == '0' && wl.unit != U_PCT)) {
             st->width = (short)(w > 4000 ? 4000 : w);
             st->width_pct = (unsigned char)(wl.unit == U_PCT);
         }
         v = dom_attr(d, el, "height");
-        int h = v ? css_px(css_len(v), st->font_px, L->root_px, -1) : -1;
-        if (h >= least) st->height = (short)(h > 4000 ? 4000 : h);
+        clen hl = css_len(v ? v : "");
+        int h = v ? css_px(hl, st->font_px, L->root_px, -1) : -1;
+        if (h >= least || (h == 0 && v && v[0] == '0' && hl.unit != U_PCT)) st->height = (short)(h > 4000 ? 4000 : h);
     }
     if (tag == T_TABLE || tag == T_TD || tag == T_TH || tag == T_TR) {
         int h = lay_attr_len(dom_attr(d, el, "height"), -1);

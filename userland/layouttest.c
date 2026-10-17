@@ -1996,6 +1996,17 @@ int main(void) {
         }
         okn("and by justify-content, a column, the ends, align-self, its margins, one auto margin, margins at a side: "
             "as Chromium places them, 40 wide", good == 9, first_bad);
+        /* And the same header holds a sheet of symbols, <svg width=0
+           height=0>, which was 300 by 150 as an item and made the row that
+           tall, its button centred 60 down. */
+        lay("<style>body{margin:0}.c{display:flex;align-items:center;height:100%}.hd{height:64px}"
+            ".hb{width:17px;height:30px;background:#00ff00}svg:not(:root){overflow:hidden}</style>"
+            "<div class=hd><div class=c id=c><div class=hb id=hb></div>"
+            "<svg width=0 height=0 class=hidden><symbol viewBox=\"0 0 16 16\" id=rss><path d=\"M2 2h9v9z\"></path></symbol></svg>"
+            "</div></div>", 600);
+        const litem *hb = box_of(by_id("hb"));
+        okn("a drawing sized 0 by its attributes is 0, not 300 by 150, beside an item centred in a 64 pixel row",
+            hb && hb->y == 17, hb ? hb->y : -1);
     }
 
     /* --- nesting -------------------------------------------------------------- */
