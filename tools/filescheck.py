@@ -179,6 +179,45 @@ def main():
         c.add("ctrl+x and ctrl+v move a folder, with what is in it", fmoved)
         c.add("and it is gone from where it was", read("/home/box/inner/kept.txt") is None)
 
+        # --- copy: the folder, inner, back into box --------------------------------
+        # In /home: box, inner, notes, omega.txt, nothing selected. A folder
+        # could not be copied: "copy failed".
+        key("down"); key("down")           # inner
+        key("ctrl-c")
+        key("up")                          # box
+        key("ret")
+        key("ctrl-v")
+        fcopied = wait_disk(lambda: read("/home/box/inner/kept.txt") == inner)
+        c.add("ctrl+c and ctrl+v copy a folder, with what is in it", fcopied)
+        c.add("and the folder copied from is still there", read("/home/inner/kept.txt") == inner)
+
+        # --- delete: a folder with something in it, on a second press -----------------
+        # Back in /home. One Delete on inner asks; keys are taken in order, so
+        # omega.txt renamed by keys after it, seen on the disk, means the first
+        # Delete was taken, and inner is still there. Then two in a row.
+        key("backspace")                   # /home: box, inner, notes, omega.txt
+        key("down"); key("down")           # inner
+        key("delete")
+        key("down"); key("down")           # omega.txt
+        key("f2")
+        for _ in range(len("omega.txt")):
+            key("backspace", settle=0.02)
+        for ch in "psi":
+            key(ch, settle=0.02)
+        key("dot", settle=0.02)
+        for ch in "txt":
+            key(ch, settle=0.02)
+        key("ret")
+        asked = wait_disk(lambda: read("/home/psi.txt") == zeta) and read("/home/inner/kept.txt") == inner
+        c.add("delete on a folder with something in it asks first", asked)
+        # The list is box, inner, notes, psi.txt again, nothing selected.
+        key("down"); key("down")           # inner
+        key("delete")
+        key("delete")
+        gone = wait_disk(lambda: read("/home/inner/kept.txt") is None)
+        c.add("and the second press deletes it, with what is in it", gone)
+        c.add("leaving the copy in box", read("/home/box/inner/kept.txt") == inner)
+
         mon.send("sendkey alt-q", settle=1.0)
     finally:
         vm.stop()

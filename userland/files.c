@@ -294,6 +294,51 @@ static int copy_file(const char *from, const char *to) {
     return 0;
 }
 
+/* A folder and everything in it: its folders made, its files copied, eight
+   deep at most. A folder copied could not be (copy_file takes files), so
+   copying one said "copy failed", and so did moving one to another disk.
+   Stops at the first thing that does not arrive, keeping what did. */
+static int copy_tree(const char *from, const char *to, int depth) {
+    zelr_stat src;
+    if (stat(from, &src) != 0) return -1;
+    if (!src.is_dir) return copy_file(from, to);
+    if (depth > 8) return -1;
+    zelr_stat there;
+    if (mkdir(to) < 0 && (stat(to, &there) != 0 || !there.is_dir)) return -1;
+    zelr_stat e;
+    for (int i = 0; readdir(from, i, &e) == 1; i++) {
+        char a[PATH_MAX], b[PATH_MAX];
+        join(a, from, e.name);
+        join(b, to, e.name);
+        if (copy_tree(a, b, depth + 1) < 0) return -1;
+    }
+    return 0;
+}
+
+/* A folder and everything in it, deleted, the same eight deep; or a file.
+   The first entry each time, since each one deleted is gone from the list;
+   one that will not go stops it, rather than going round for ever. */
+static int remove_tree(const char *path, int depth) {
+    zelr_stat st;
+    if (stat(path, &st) != 0) return -1;
+    if (!st.is_dir) return unlink(path);
+    if (depth > 8) return -1;
+    zelr_stat e;
+    while (readdir(path, 0, &e) == 1) {
+        char child[PATH_MAX];
+        join(child, path, e.name);
+        if (remove_tree(child, depth + 1) < 0) return -1;
+    }
+    return rmdir(path);
+}
+
+/* Whether `inner` is `outer` or inside it: a folder copied into itself would
+   be copied again inside the copy, eight deep. */
+static int inside(const char *inner, const char *outer) {
+    int n = strlen(outer);
+    return !strncmp(inner, outer, n) && (inner[n] == 0 || inner[n] == '/');
+}
+
 /* Renaming is the file system's job when it can do it -- in one directory
    on any disk, into another on a disk this system made -- and moves no
    data, so it cannot lose any. The copy is for what it refuses. */
@@ -312,15 +357,17 @@ static void do_paste(void) {
     char dest[PATH_MAX];
     join(dest, cwd, leaf);
     if (!strcmp(dest, clip_path)) { say("already here"); return; }
+    if (inside(dest, clip_path)) { say("not into itself"); return; }
 
     /* Something cut is moved by a rename where the disk can do one, which
-       moves no data and works for a folder too; copied otherwise. */
+       moves no data and works for a folder too; copied otherwise, a folder
+       with everything in it, and then deleted. */
     if (clip_is_cut && zelr_rename(clip_path, dest) == 0) {
         clip_path[0] = 0;
     } else {
-        if (copy_file(clip_path, dest) < 0) { say("copy failed"); return; }
+        if (copy_tree(clip_path, dest, 0) < 0) { say("copy failed"); return; }
         if (clip_is_cut) {
-            unlink(clip_path);
+            remove_tree(clip_path, 0);
             clip_path[0] = 0;
         }
     }
@@ -353,14 +400,29 @@ static void begin_rename(void) {
     rename_field.focused = 1;
 }
 
+/* A folder with something in it is deleted, everything in it too, on a
+   second press of Delete with nothing else between: it used to say
+   "directory is not empty" and do nothing, and one press taking a folder
+   full of files would be too easy. Anything else pressed sets it back. */
+static int delete_armed = -1;
+
 static void do_delete(void) {
     if (selected < 0) { say("nothing selected"); return; }
     char target[PATH_MAX];
     join(target, cwd, entries[selected].name);
 
-    int rc = entries[selected].is_dir ? rmdir(target) : unlink(target);
-    say(rc < 0 ? (entries[selected].is_dir ? "directory is not empty" : "delete failed")
-               : "deleted");
+    if (!entries[selected].is_dir) {
+        say(unlink(target) < 0 ? "delete failed" : "deleted");
+    } else if (rmdir(target) == 0) {
+        say("deleted");
+    } else if (delete_armed != selected) {
+        delete_armed = selected;
+        say("press delete again to delete the folder and everything in it");
+        return;
+    } else {
+        say(remove_tree(target, 0) < 0 ? "could not delete all of it" : "deleted");
+    }
+    delete_armed = -1;
     reload();
 }
 
@@ -451,6 +513,7 @@ int main(int argc, char **argv) {
         for (int ki = 0; ki < in.nkeys; ki++) {
             int key = in.keys[ki];
             int code = KEY_CODE(key);
+            if (code != KEY_DELETE) delete_armed = -1;    /* a second press, and nothing between */
             if (renaming >= 0) {
                 if (code == '\n') {
                     char from[PATH_MAX], to[PATH_MAX];
