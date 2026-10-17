@@ -34,6 +34,7 @@
 #include "string.h"
 #include "io.h"
 #include "blackbox.h"
+#include "timer.h"
 
 #define VENDOR_ENSONIQ 0x1274
 #define DEV_ES1370     0x5000
@@ -149,16 +150,14 @@ static u32 reg_read(u16 reg) {
     return test_io ? test_io(reg, 0, false) : inl((u16)(io_base + reg));
 }
 
-/* A delay measured on the one clock that exists before any driver has set
-   anything up. Bit four of port 0x61 toggles every 15.085 microseconds on
-   every PC there has ever been, and unlike the timer it does not need
-   interrupts, which are still off while this runs. */
+/* A delay that needs no interrupts, which are off while this runs: the
+   timer's spin deadline (timer.c). It was bit four of port 0x61, which
+   hardware toggles every 15 microseconds and QEMU on every read, so under
+   QEMU every delay here was a few reads long. */
 static void udelay(u32 us) {
-    for (u32 i = 0; i < us / 15 + 1; i++) {
-        u8 start = inb(0x61) & 0x10;
-        u32 guard = 0;
-        while ((inb(0x61) & 0x10) == start && guard++ < 100000) { }
-    }
+    spin_deadline_t d;
+    spin_deadline_start_us(&d, us);
+    while (!spin_deadline_passed(&d)) __asm__ volatile ("pause");
 }
 
 /* --- the ES1371's front end --------------------------------------------- */

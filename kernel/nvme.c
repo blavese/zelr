@@ -75,7 +75,7 @@ typedef struct {
 
 typedef struct {
     sqe_t *sq;
-    cqe_t *cq;
+    volatile cqe_t *cq;     /* written by the controller behind the compiler's back */
     u16    sq_tail;
     u16    cq_head;
     u8     phase;           /* flips each time the completion queue wraps */
@@ -149,32 +149,84 @@ static bool submit(queue_t *q, sqe_t *cmd) {
     wr32(doorbell(q->qid, false), q->sq_tail);
 
     /* The controller publishes how long it may take to become ready; a
-       command that outlives that has not been slow, it has been lost. */
-    u64 deadline = timer_ticks() + (timeout_ms / 10) + 2;
+       command that outlives that has not been slow, it has been lost. Timed
+       without the interrupts, which are off inside every call and before the
+       timer starts: measured in ticks, a lost command was waited on for ever
+       (atlas 04, S12). */
+    spin_deadline_t deadline;
+    spin_deadline_start(&deadline, timeout_ms);
     for (;;) {
-        cqe_t *e = &q->cq[q->cq_head];
-        if ((e->status & 1) == q->phase) {
-            u16 code = (u16)(e->status >> 1);
+        volatile cqe_t *e = &q->cq[q->cq_head];
+        u16 status = e->status;
+        if ((status & 1) == q->phase) {
+            u16 code = (u16)(status >> 1);
+            u16 cid = e->cid;
             q->cq_head = (u16)((q->cq_head + 1) % QUEUE_ENTRIES);
             if (q->cq_head == 0) q->phase ^= 1;
             wr32(doorbell(q->qid, true), q->cq_head);
+            /* The answer to a command given up on earlier, arriving late:
+               taken as this one's, it reported this command done with that
+               one's result. Passed over, and this one waited for. */
+            if (cid != cmd->cid) continue;
             return code == 0;
         }
         if (rd32(REG_CSTS) & CSTS_FATAL) return false;
-        if (timer_ticks() > deadline) return false;
+        if (spin_deadline_passed(&deadline)) return false;
         __asm__ volatile ("pause");
     }
 }
 
 static bool wait_ready(bool want) {
-    u64 deadline = timer_ticks() + (timeout_ms / 10) + 2;
+    spin_deadline_t deadline;
+    spin_deadline_start(&deadline, timeout_ms);
     for (;;) {
         u32 csts = rd32(REG_CSTS);
         if (csts & CSTS_FATAL) return false;
         if (((csts & CSTS_READY) != 0) == want) return true;
-        if (timer_ticks() > deadline) return false;
+        if (spin_deadline_passed(&deadline)) return false;
         __asm__ volatile ("pause");
     }
+}
+
+/* For the self test: submit against a controller made of memory, with the
+   interrupts off. Bit 0 set when a queue that never answers is given up on;
+   bit 1 when an answer to an earlier command, one given up on, is passed
+   over for this command's own. The real controller's registers and queues
+   are put back as they were. */
+u32 nvme_test_waits(void) {
+    static u8 fake[0x2000] __attribute__((aligned(4096)));
+    static sqe_t fsq[QUEUE_ENTRIES];
+    static cqe_t fcq[QUEUE_ENTRIES];
+    volatile u8 *real = regs;
+    u32 real_stride = doorbell_stride, real_timeout = timeout_ms;
+    memset(fake, 0, sizeof fake);
+    memset(fsq, 0, sizeof fsq);
+    memset(fcq, 0, sizeof fcq);
+    queue_t q = { fsq, fcq, 0, 0, 1, 5 };
+    regs = fake;
+    doorbell_stride = 4;
+    timeout_ms = 50;
+
+    u32 got = 0;
+    sqe_t c;
+    memset(&c, 0, sizeof c);
+    __asm__ volatile ("cli");
+    if (!submit(&q, &c)) got |= 1;
+
+    /* An error answer to another command first, then this one's success. */
+    u16 mine = next_cid;
+    fcq[0].cid = (u16)(mine + 100);
+    fcq[0].status = (u16)(1 | (6 << 1));         /* phase 1, an internal error */
+    fcq[1].cid = mine;
+    fcq[1].status = 1;
+    memset(&c, 0, sizeof c);
+    if (submit(&q, &c) && q.cq_head == 2) got |= 2;
+    __asm__ volatile ("sti");
+
+    regs = real;
+    doorbell_stride = real_stride;
+    timeout_ms = real_timeout;
+    return got;
 }
 
 /* --- bringing it up -------------------------------------------------------- */

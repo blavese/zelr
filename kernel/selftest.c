@@ -40,6 +40,7 @@
 #include "diskfs.h"
 #include "fat.h"
 #include "ahci.h"
+#include "nvme.h"
 #include "elf.h"
 #include "user.h"
 #include "paging.h"
@@ -523,6 +524,34 @@ static void test_timer(void) {
     ok("giving up a slice is not a tick of the clock", gained < 10);
     if (gained >= 10)
         kprintf("        fifty yields added %d ticks\n", (u32)gained);
+
+    /* A deadline that passes with interrupts off, which a wait inside a
+       system call or at boot needs: measured in ticks, an NVMe command that
+       never came back was waited on for ever. Fifty milliseconds and a
+       hundred, interrupts off, timed by the cycle counter: the second about
+       twice the first, and the first near fifty by a rate taken from a
+       sleep (a guest's ticks run slow, so the bounds are wide; the ratio has
+       no such slack). */
+    u64 c0 = rdtsc(), k0 = timer_ticks();
+    sleep_ms(100);
+    u64 cycles = rdtsc() - c0, ticked = timer_ticks() - k0;
+    u64 per_ms = ticked ? cycles / (ticked * (1000 / timer_hz())) : 0;
+    u64 took[2];
+    u32 asked[2] = { 50, 100 };
+    for (int i = 0; i < 2; i++) {
+        __asm__ volatile ("cli");
+        spin_deadline_t d;
+        spin_deadline_start(&d, asked[i]);
+        u64 s = rdtsc();
+        while (!spin_deadline_passed(&d)) __asm__ volatile ("pause");
+        took[i] = rdtsc() - s;
+        __asm__ volatile ("sti");
+    }
+    u64 ms50 = per_ms ? took[0] / per_ms : 0;
+    ok("a deadline passes with interrupts off, twice as long for twice the time",
+       took[1] > took[0] * 3 / 2 && took[1] < took[0] * 5 / 2);
+    ok("and fifty milliseconds of it is near fifty", ms50 >= 25 && ms50 <= 400);
+    if (ms50 < 25 || ms50 > 400) kprintf("        fifty took %d\n", (u32)ms50);
 }
 
 static volatile int bp_hits = 0;
@@ -5824,6 +5853,12 @@ static void test_live_tree(void) {
 
 static void test_ahci_waits(void) {
     ok("a wait on a disk port that never finishes gives up", ahci_test_bounded_wait());
+    /* NVMe's waits were measured in ticks, which do not move inside a call
+       or at boot: a command nothing answered was waited on for ever. And a
+       late answer to a command given up on was taken as the next one's. */
+    u32 nv = nvme_test_waits();
+    ok("an nvme command nothing answers is given up on, interrupts off", nv & 1);
+    ok("and a late answer to another command is passed over for its own", nv & 2);
 }
 
 static void test_layout(void) {

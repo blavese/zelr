@@ -27,3 +27,7 @@ const char *nvme_model(void);
 bool nvme_read(u32 lba, u32 count, void *buf);
 bool nvme_write(u32 lba, u32 count, const void *buf);
 bool nvme_flush(void);
+
+/* For the self test: bit 0 when a command nothing answers is given up on
+   with interrupts off, bit 1 when a late answer to another is passed over. */
+u32  nvme_test_waits(void);

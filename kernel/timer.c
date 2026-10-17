@@ -12,6 +12,7 @@
 
 static volatile u64 ticks = 0;
 static u32 frequency = 100;
+static u32 pit_reload = 65536;          /* what the firmware leaves: 18.2 Hz */
 
 /* Counted by isr_dispatch before it asks for the kernel lock, not in on_tick
    after it has one. With another processor holding the lock, the boot
@@ -54,6 +55,7 @@ static void on_tick(registers_t *r) {
 void timer_init(u32 hz) {
     frequency = hz;
     u32 divisor = 1193182u / hz;
+    pit_reload = divisor;
     /* Channel 0, lo/hi, rate generator. The interrupt comes at the same rate
        in either mode, but in the square wave mode this used to use the
        counter steps by two and reloads twice a period, and lapic.c measures
@@ -69,6 +71,49 @@ void timer_init(u32 hz) {
 
 u64 timer_ticks(void) { return ticks; }
 u32 timer_hz(void)    { return frequency; }
+
+/* Measured on the 8254's channel 0, whose count goes on falling at
+   1.193182 MHz whatever the interrupts are doing: ticks do not move with
+   interrupts off, and an NVMe command's timeout measured on them never ran
+   out inside a call or at boot. Each read is latched and read whole; what
+   has gone since the last is the fall between them, or the fall to the
+   reload and on from it when the count has gone up. (Bit four of port 0x61,
+   which hardware toggles every 15 microseconds, was the first choice; QEMU
+   toggles it on every read, so it counted reads.) Before timer_init the
+   firmware's mode counts by twos, and a deadline then passes early; a wait
+   polled less often than once a period counts one fewer, and passes late.
+   A count that does not move for a million reads is an 8254 not running,
+   and the deadline is taken as passed rather than waited on for ever. */
+#define SPIN_STILL_MAX 1000000u
+
+static u16 pit_count_now(void) {
+    outb(0x43, 0x00);                  /* latch channel 0 */
+    u8 lo = inb(0x40);
+    u8 hi = inb(0x40);
+    return (u16)((u16)lo | ((u16)hi << 8));
+}
+
+void spin_deadline_start_us(spin_deadline_t *d, u32 us) {
+    u64 counts = (u64)us * 1193182u / 1000000u + 1;
+    d->left = counts > 0xFFFFFFF0u ? 0xFFFFFFF0u : (u32)counts;
+    d->still = 0;
+    d->last = pit_count_now();
+}
+
+void spin_deadline_start(spin_deadline_t *d, u32 ms) {
+    spin_deadline_start_us(d, ms > 3600000u ? 3600000000u : ms * 1000u);
+}
+
+bool spin_deadline_passed(spin_deadline_t *d) {
+    u16 now = pit_count_now();
+    if (now == d->last) return ++d->still > SPIN_STILL_MAX;
+    d->still = 0;
+    u32 gone = now < d->last ? (u32)(d->last - now) : (u32)d->last + (pit_reload - now);
+    d->last = now;
+    if (gone >= d->left) { d->left = 0; return true; }
+    d->left -= gone;
+    return false;
+}
 
 /* Asked for milliseconds, delivered in ticks, and never fewer than one.
  *
