@@ -43,6 +43,8 @@ void pci_write32(u8 bus, u8 slot, u8 func, u16 offset, u32 value);
 /* For the self test: config writes recorded and not made; the last one's
    offset, width (16 or 32) and value. */
 void pci_test_capture(bool on);
+/* And how many buses' configuration space has been mapped. */
+u32  pci_test_buses_mapped(void);
 u32  pci_test_captured(u16 *offset, u8 *width);
 
 void pci_write16(u8 bus, u8 slot, u8 func, u16 offset, u16 value);

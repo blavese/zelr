@@ -58,6 +58,16 @@ bool pci_ecam_active(void) { return ecam_ready; }
 u64  pci_ecam_base(void)   { return ecam_ready ? ecam_base : 0; }
 u8   pci_ecam_last_bus(void) { return ecam_ready ? ecam_last_bus : 0; }
 
+static u32 address(u8 bus, u8 slot, u8 func, u16 offset);
+
+/* How many buses have been mapped, for the self test. */
+u32 pci_test_buses_mapped(void) {
+    u32 n = 0;
+    for (u32 i = 0; i < 8; i++)
+        for (u32 b = 0; b < 32; b++) n += (bus_mapped[i] >> b) & 1;
+    return n;
+}
+
 /* Where one function's configuration space is, mapping its bus if this is
    the first time anyone has looked at it. Returns 0 when the mapped path
    cannot answer, which sends the caller back to the ports. */
@@ -70,6 +80,14 @@ static volatile u8 *ecam_at(u8 bus, u8 slot, u8 func, u16 offset) {
     offset &= 0xFFC;
 
     if (!bus_is_mapped(bus)) {
+        /* Only for something that is there. A scan reads every slot of
+           every bus the firmware lists, and mapped as it went that was all
+           256 megabytes on q35, in page tables, for four buses in use (atlas
+           02, B21). The ports answer whether anything is at this address
+           without a mapping, and what is not there reads as all ones through
+           them anyway. */
+        outl(0xCF8, address(bus, slot, func, 0));
+        if ((inl(0xCFC) & 0xFFFF) == 0xFFFF) return 0;
         u64 bus_base = ecam_base + ((u64)(bus - ecam_first_bus) << 20);
         if (!paging_map_device(bus_base, 1 << 20)) return 0;
         mark_bus(bus);

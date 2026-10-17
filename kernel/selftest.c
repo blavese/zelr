@@ -6207,6 +6207,17 @@ static void test_pcie(void) {
     pci_test_capture(false);
     ok("a sixteen bit config write writes sixteen bits, not the status word beside them",
        wwidth == 16 && woff == 0x04 && wval == 0x0006);
+
+    /* A scan of every bus maps only the buses with something on them: it
+       mapped every bus the firmware listed, 256 megabytes of page tables'
+       worth on q35. Asked for a device nothing has, which reads everything. */
+    if (pci_ecam_active()) {
+        pci_dev_t none;
+        pci_find(0x1234, 0xFEDC, &none);
+        u32 buses = pci_test_buses_mapped();
+        ok("a scan of every bus maps only buses with something on them", buses >= 1 && buses <= 8);
+        if (buses > 8) kprintf("        %d buses mapped\n", buses);
+    }
     if (a->found) {
         ok("a directory of tables was read", a->ntables > 0);
         ok("at least one processor is described", a->ncpus > 0);
