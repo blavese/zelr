@@ -274,13 +274,18 @@ static bool copy_table(u64 *dst, u64 *src, int level) {
 
         u64 below = e & PTE_ADDR_MASK;
 
+        /* Linked before it is filled. Filled first, a table whose copy ran
+           out of memory part way was in no directory, and the cleanup could
+           find neither it nor the shares already taken for the pages it held
+           (atlas 02, B15). Linked, a copy cut short is a table with zeros
+           after where it stopped, which the cleanup walks like any other. */
         if (level > 1) {
             u64 fresh = pmm_alloc_frame();
             if (!fresh) return false;
             memset((void *)fresh, 0, PAGE_SIZE);
+            dst[i] = fresh | (e & 0xFFF);
             if (!copy_table((u64 *)fresh, (u64 *)below, level - 1))
                 return false;
-            dst[i] = fresh | (e & 0xFFF);
             continue;
         }
 

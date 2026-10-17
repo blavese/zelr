@@ -373,7 +373,39 @@ static void test_pmm(void) {
     if (pmm_rival_frame && pmm_rival_frame != mine) pmm_free_frame(pmm_rival_frame);
 }
 
+/* An address space cloned with memory running out at each allocation in
+   turn: freed, the clone and the space it came from give back every frame.
+   A table whose copy failed was in no directory, so it and the shares taken
+   for the pages in it were lost for good. */
+static bool clone_cut_short_gives_back(void) {
+    u64 before = pmm_used_frames();
+    u64 dir = paging_new_directory();
+    if (!dir) return false;
+    /* Pages in four page tables under two page directories. */
+    static const u64 at[] = { 0x8000000000ull, 0x8000200000ull, 0x8040000000ull, 0x8040200000ull };
+    for (u32 k = 0; k < 4; k++) {
+        u64 f = pmm_alloc_frame();
+        if (!f || !map_page_in(dir, at[k], f, PTE_PRESENT | PTE_RW | PTE_USER)) return false;
+    }
+    bool none_left = true;
+    __asm__ volatile ("cli");
+    for (u32 k = 0; k < 12; k++) {
+        pmm_test_fail_after(k);
+        u64 c = paging_clone_directory(dir);
+        pmm_test_fail_after(0xFFFFFFFFu);
+        if (c) paging_free_directory(c);
+    }
+    __asm__ volatile ("sti");
+    paging_free_directory(dir);
+    if (pmm_used_frames() != before) none_left = false;
+    if (!none_left) kprintf("        %d frames not given back\n", (u32)(pmm_used_frames() - before));
+    return none_left;
+}
+
 static void test_paging(void) {
+    ok("a clone of an address space that runs out of memory part way gives back every frame",
+       clone_cut_short_gives_back());
+
     u64 phys = pmm_alloc_frame();
     const u64 v = 0x00D00000;
     ok("map_page", map_page(v, phys, PTE_PRESENT | PTE_RW));

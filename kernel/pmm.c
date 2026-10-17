@@ -126,8 +126,17 @@ static u64 next_hint;
 
 void (*pmm_test_probe)(void);
 
+/* For the self test: allocations allowed before every one fails, as on a
+   machine with no memory left. 0xFFFFFFFF is no limit. */
+static u32 test_allocs_left = 0xFFFFFFFFu;
+void pmm_test_fail_after(u32 n) { test_allocs_left = n; }
+
 u64 pmm_alloc_frame(void) {
     bool on = spin_lock_irqsave(&pmm_lock);
+    if (test_allocs_left != 0xFFFFFFFFu) {
+        if (!test_allocs_left) { spin_unlock_irqrestore(&pmm_lock, on); return 0; }
+        test_allocs_left--;
+    }
     for (u64 n = 0; n < total_frames; n++) {
         u64 i = next_hint + n;
         if (i >= total_frames) i -= total_frames;
