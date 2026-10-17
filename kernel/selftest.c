@@ -102,6 +102,12 @@ static void test_string(void) {
     char ov[16] = "abcdef";
     memmove(ov + 1, ov, 5); ov[6] = 0;
     ok("memmove overlap", strcmp(ov, "aabcde") == 0);
+
+    /* Spaces in front of the sign, zeros after it. */
+    char fmt[40];
+    kformat(fmt, sizeof fmt, "%4d|%04d|%-4d|%d", -5, -5, -5, (i32)0x80000000);
+    ok("a negative number is padded in front of its sign with spaces and after it with zeros",
+       strcmp(fmt, "  -5|-005|-5  |-2147483648") == 0);
 }
 
 /* A second kernel task after the same block, and the pause that lets it in:
@@ -6142,6 +6148,7 @@ static u32 legacy_read32(u8 bus, u8 slot, u8 func, u8 offset) {
 static void test_pcie(void) {
     const acpi_info_t *a = acpi();
     ok("the acpi tables were found", a->found);
+
     if (a->found) {
         ok("a directory of tables was read", a->ntables > 0);
         ok("at least one processor is described", a->ncpus > 0);

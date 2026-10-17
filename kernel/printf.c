@@ -74,13 +74,22 @@ static void put_ptr(sink_t *s, u64 v) {
         emit(s, digits[(v >> shift) & 0xF]);
 }
 
+/* Spaces go in front of the sign and zeros after it: "   -5" and "-0005".
+   The sign went first whatever the padding, and a column of numbers came out
+   as "-   5" beside "    7" (atlas 02, B18). */
 static void put_int(sink_t *s, i32 v, int width, char pad, bool left) {
-    if (v < 0) {
+    if (v >= 0) { put_uint(s, (u32)v, 10, 0, width, pad, left); return; }
+    u32 mag = 0u - (u32)v;                 /* the most negative one too */
+    if (!left && pad == ' ') {
+        int digits = 1;
+        for (u32 m = mag; m >= 10; m /= 10) digits++;
+        emit_pad(s, ' ', width - digits - 1);
         emit(s, '-');
-        put_uint(s, (u32)(-v), 10, 0, width ? width - 1 : 0, pad, left);
-    } else {
-        put_uint(s, (u32)v, 10, 0, width, pad, left);
+        put_uint(s, mag, 10, 0, 0, pad, false);
+        return;
     }
+    emit(s, '-');
+    put_uint(s, mag, 10, 0, width ? width - 1 : 0, pad, left);
 }
 
 static void format(sink_t *s, const char *fmt, va_list ap) {
