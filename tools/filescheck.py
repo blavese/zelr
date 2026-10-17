@@ -29,6 +29,7 @@ IMAGE = os.path.join(ROOT, "files.%d.img" % os.getpid())
 LETTER_SRC = os.path.join(ROOT, "files.%d.letter" % os.getpid())
 ZETA_SRC = os.path.join(ROOT, "files.%d.zeta" % os.getpid())
 BOX_SRC = os.path.join(ROOT, "files.%d.box" % os.getpid())
+INNER_SRC = os.path.join(ROOT, "files.%d.inner" % os.getpid())
 
 # Files' window, in the default theme: its list is painted in a near white
 # nothing else on this desktop uses over such an area, and a selected row in
@@ -75,12 +76,13 @@ def main():
     letter = text_of(40000, 1)          # past the 16 KiB Files copies through
     zeta = text_of(3000, 2)
     box = b"a folder with something in it\n"
-    for path, data in ((LETTER_SRC, letter), (ZETA_SRC, zeta), (BOX_SRC, box)):
+    inner = b"a folder inside the folder\n"
+    for path, data in ((LETTER_SRC, letter), (ZETA_SRC, zeta), (BOX_SRC, box), (INNER_SRC, inner)):
         with open(path, "wb") as f:
             f.write(data)
     r = subprocess.run([sys.executable, os.path.join(TOOLS, "mkfat.py"), IMAGE, "32768",
                         LETTER_SRC + ":home/letter.txt", ZETA_SRC + ":home/zeta.txt",
-                        BOX_SRC + ":home/box/readme.txt"],
+                        BOX_SRC + ":home/box/readme.txt", INNER_SRC + ":home/box/inner/kept.txt"],
                        cwd=ROOT, capture_output=True, text=True)
     c.add("a volume with a folder and two files in /home", r.returncode == 0)
     if r.returncode != 0:
@@ -164,11 +166,24 @@ def main():
         c.add("and it arrives whole", read("/home/box/letter.txt") == letter)
         c.add("beside what the folder already had", read("/home/box/readme.txt") == box)
 
+        # --- cut: a folder, box/inner, up into /home ------------------------------
+        # In box now: inner, letter.txt, readme.txt, nothing selected. A folder
+        # cannot be copied, and pasting a cut one was a copy and a delete, so
+        # it said "copy failed" and stayed where it was; it is moved by a
+        # rename now, on a disk this system made.
+        key("down")                        # inner
+        key("ctrl-x")
+        key("backspace")                   # up to /home
+        key("ctrl-v")
+        fmoved = wait_disk(lambda: read("/home/inner/kept.txt") == inner)
+        c.add("ctrl+x and ctrl+v move a folder, with what is in it", fmoved)
+        c.add("and it is gone from where it was", read("/home/box/inner/kept.txt") is None)
+
         mon.send("sendkey alt-q", settle=1.0)
     finally:
         vm.stop()
 
-    for junk in (LETTER_SRC, ZETA_SRC, BOX_SRC) + (() if keep else (IMAGE,)):
+    for junk in (LETTER_SRC, ZETA_SRC, BOX_SRC, INNER_SRC) + (() if keep else (IMAGE,)):
         try:
             os.remove(junk)
         except OSError:

@@ -890,13 +890,24 @@ static void cmd_cp(int argc, char **argv) {
 }
 
 /* A rename where the file system can do one, which moves nothing and so
-   cannot lose anything; a copy, checked, and then the delete otherwise. */
+   cannot lose anything -- into another directory too, and a directory with
+   everything in it, on a disk this system made; a copy, checked, and then
+   the delete otherwise (a file only). Into a directory is under the same
+   name there. */
 static void cmd_mv(int argc, char **argv) {
     if (argc < 3) { need("mv SRC DST"); return; }
     zelr_stat st;
-    bool into_dir = stat(argv[2], &st) == 0 && st.is_dir;
-    if (!into_dir && zelr_rename(argv[1], argv[2]) == 0) {
-        w_reset(); w_str("renamed to "); w_str(argv[2]); dim(work);
+    char target[VFS_PATH];
+    if (stat(argv[2], &st) == 0 && st.is_dir) {
+        const char *base = argv[1];
+        for (const char *p = argv[1]; *p; p++) if (*p == '/') base = p + 1;
+        path_join(argv[2], base, target, sizeof(target));
+    } else {
+        strncpy(target, argv[2], sizeof(target) - 1);
+        target[sizeof(target) - 1] = 0;
+    }
+    if (zelr_rename(argv[1], target) == 0) {
+        w_reset(); w_str("moved to "); w_str(target); dim(work);
         return;
     }
     if (copy_file(argv[1], argv[2])) unlink(argv[1]);

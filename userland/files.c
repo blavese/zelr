@@ -294,9 +294,9 @@ static int copy_file(const char *from, const char *to) {
     return 0;
 }
 
-/* Renaming is the file system's job when it can do it -- within one
-   directory, which is every rename this window makes -- and moves no data,
-   so it cannot lose any. The copy is for what it refuses. */
+/* Renaming is the file system's job when it can do it -- in one directory
+   on any disk, into another on a disk this system made -- and moves no
+   data, so it cannot lose any. The copy is for what it refuses. */
 static int rename_file(const char *from, const char *to) {
     if (zelr_rename(from, to) == 0) return 0;
     if (copy_file(from, to) < 0) return -1;
@@ -313,10 +313,16 @@ static void do_paste(void) {
     join(dest, cwd, leaf);
     if (!strcmp(dest, clip_path)) { say("already here"); return; }
 
-    if (copy_file(clip_path, dest) < 0) { say("copy failed"); return; }
-    if (clip_is_cut) {
-        unlink(clip_path);
+    /* Something cut is moved by a rename where the disk can do one, which
+       moves no data and works for a folder too; copied otherwise. */
+    if (clip_is_cut && zelr_rename(clip_path, dest) == 0) {
         clip_path[0] = 0;
+    } else {
+        if (copy_file(clip_path, dest) < 0) { say("copy failed"); return; }
+        if (clip_is_cut) {
+            unlink(clip_path);
+            clip_path[0] = 0;
+        }
     }
     say(clip_is_cut ? "moved" : "copied");
     reload();
