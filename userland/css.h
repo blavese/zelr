@@ -2337,6 +2337,15 @@ static inline int css_scope_compound(const char *p, int n, char *out, int cap, i
             if (p[end] == '(') depth++;
             else if (p[end] == ')' && --depth == 0) break;
         }
+        /* What comes before is the slot, an element of the tree, and what
+           is put into a slot is its child in the page as rearranged (dom.h):
+           slot[name=a]::slotted(*) is a child of that slot. Dropped, every
+           rule for one slot was for all of them: Rotten Tomatoes' header
+           made its logo and menu as narrow as its mobile button. */
+        if (i > 0) {
+            w = css_scope_compound(p, i, out, cap, w, id);
+            w = css_scope_put(out, cap, w, " > ", 3);
+        }
         w = css_scope_put(out, cap, w, p + start, end - start);
         return css_scope_mark(out, cap, w, "data-zl", id);
     }

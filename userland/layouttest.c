@@ -1564,6 +1564,18 @@ int main(void) {
         ok("the tree's sheet reaches the tree", sp && sp->has_bg && sp->bg == 0x1D4ED8);
         ok("and nothing outside it", !(out && out->has_bg));
         ok("and :host is the element the tree belongs to", h && h->has_bg && h->bg == 0xFF0000);
+
+        /* slot[name=x]::slotted(y) is y put into that slot, not into any:
+           Rotten Tomatoes' header gives what goes into one slot 45 pixels,
+           and its menu and logo, in others, were 45 pixels wide too. */
+        lay("<style>p{background:#eeeeee}</style><div><template shadowrootmode=open><style>slot[name=a]::slotted(*){width:45px}"
+            "::slotted(b){color:#ff0000}slot[name=a]::slotted(b){color:#0000ff}</style>"
+            "<slot name=a></slot><slot name=b></slot></template>"
+            "<p slot=a id=pa>slota</p><p slot=b id=pb>slotb</p><b slot=b>slotbold</b></div>", 600);
+        const litem *pa = box_of(by_id("pa")), *pb = box_of(by_id("pb")), *sb = word("slotbold");
+        okn("slot[name=a]::slotted(*) is what went into that slot alone",
+            pa && pa->w == 45 && pb && pb->w > 400, pb ? pb->w : -1);
+        okn("and ::slotted(b) with no slot named is any slot's", sb && sb->color == 0xFF0000, sb ? (int)sb->color : -1);
     }
 
     /* --- :not() with a list --------------------------------------------------- */
