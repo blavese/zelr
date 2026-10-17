@@ -1299,6 +1299,45 @@ int main(void) {
         okn("a height of 100% in a parent 26 pixels tall is 26 pixels", s && s->h == 26 && s->w == 100,
             s ? s->h : -1);
 
+        /* A link is no box: a block inside it takes its percentages of the
+           box around the link. Al Jazeera's logo is in a figure 100% tall
+           inside a link inside a 60 pixel header; of the link (auto), the
+           figure was auto, and the logo as wide as the column and 108 tall. */
+        lay("<style>.h{height:60px;width:300px}figure{margin:0;height:100%}"
+            ".l{display:flex;flex-direction:column;align-items:flex-start;width:100%;height:100%}"
+            ".l svg{height:100%;width:auto}</style>"
+            "<div class=h><a href=/><figure><span class=l><svg id=s viewBox=\"0 0 166 60\"></svg></span>"
+            "</figure></a></div>", 600);
+        s = image_of(by_id("s"));
+        okn("a height of 100% inside a link is of the box around the link", s && s->h == 60 && s->w == 166,
+            s ? s->h : -1);
+        const char *two = "<style>.t{height:100px}.f{display:block;height:100%;background:#00ff00}.ph{height:100%}"
+            "</style><div class=t><a href=/><b><span class=f id=f>x</span></b></a></div>"
+            "<div class=t><a href=/><img id=p class=ph src=x></a></div>";
+        lay(two, 600);
+        picture_at("p", 10, 20);
+        lay(two, 600);
+        const litem *fb = box_of(by_id("f"));
+        okn("and inside two inlines", fb && fb->h == 100, fb ? fb->h : -1);
+        s = image_of(by_id("p"));
+        okn("and a picture 100% tall in a link is as tall as the box around it", s && s->h == 100 && s->w == 50,
+            s ? s->h : -1);
+        nfake = 0;
+        lay("<style>.r{display:flex;height:100px}.f{display:block;height:100%;background:#00ff00}"
+            "</style><div class=r><a href=/><span class=f id=f>x</span></a></div>", 600);
+        fb = box_of(by_id("f"));
+        okn("a link stretched across a row 100 pixels tall is that tall to what is inside it",
+            fb && fb->h == 100, fb ? fb->h : -1);
+        lay("<style>.r{display:flex;min-height:100px}.f{display:block;height:100%;background:#00ff00}"
+            ".m{margin:10px 0}</style><div class=r><a href=/ class=m><span class=f id=f>x</span></a></div>", 600);
+        fb = box_of(by_id("f"));
+        okn("and across a row at least that tall, less the link's margins", fb && fb->h == 80, fb ? fb->h : -1);
+        lay("<style>.r{display:flex;height:100px;align-items:center}.f{display:block;height:100%;background:#00ff00}"
+            "</style><div class=r><a href=/><span class=f id=f>x</span></a></div>", 600);
+        fb = box_of(by_id("f"));
+        okn("but a link that is a centred flex item is a box of its own height", fb && fb->h > 0 && fb->h < 40,
+            fb ? fb->h : -1);
+
         /* A logo beside a menu in a row: measured as the whole row, it
            squeezed the menu and pushed the rest onto a second line. */
         lay("<style>.row{display:flex;flex-wrap:wrap}.logo{flex-grow:1}.lt{display:inline-block}"

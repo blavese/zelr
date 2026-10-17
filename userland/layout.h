@@ -1478,8 +1478,19 @@ static inline void lay_style(lctx *L, int el, const cstyle *parent,
                              cstyle *out, int pct_of) {
     if (el == L->pct_node) pct_of = L->pct_w;
     css_inherit(out, parent);
-    css_parent_h = parent->height < 0 ? -1
-                 : parent->height - (parent->border_box ? parent->pt + parent->pb + parent->bt + parent->bb : 0);
+    /* A percentage height is of the containing block, and an inline is
+       not one: a figure 100% tall inside a link inside a 60 pixel header is
+       60 pixels (Al Jazeera's logo), where of the link it was auto. So an
+       inline or display: contents parent with no height of its own hands on
+       the height its own parent gave it. A flex or grid item is a box
+       whatever its display says, and hands on nothing. */
+    if ((parent->display == D_INLINE || parent->display == D_CONTENTS) && parent->height < 0)
+        css_parent_h = parent->cb_h;
+    else
+        css_parent_h = parent->height < 0 ? -1
+                     : parent->height - (parent->border_box ? parent->pt + parent->pb + parent->bt + parent->bb : 0);
+    out->cb_h = parent->display == D_FLEX || parent->display == D_INLINE_FLEX || parent->display == D_GRID
+              ? -1 : (short)css_parent_h;
     /* Words have no rules of their own: what they inherit is their style
        (words that are a flex or grid item, lay_items_next). */
     if (el < 0 || el >= L->d->count || L->d->nodes[el].kind != DN_ELEMENT) return;
@@ -3383,9 +3394,25 @@ static void lay_flex_line(lctx *L, const cstyle *st, const int *kid, const int *
         cstyle pbuf;
         const cstyle *ps = lay_item_parent(L, st, par[i], cw, &pbuf);
         pen += before[i];
+        /* An item stretched across a row given a height (or a least one) is
+           that tall before anything in it is laid out, so a percentage height
+           inside it is of that height, as in a browser: a link stretched
+           across a 100 pixel row with a block 100% tall inside was as tall as
+           its words. */
+        int al_i = aself[i] >= 0 ? aself[i] : st->align_items;
+        if (line_h > 0 && al_i == AI_STRETCH && !(amarg[i] >> 2)
+            && L->d->nodes[kid[i]].kind == DN_ELEMENT) {
+            cstyle own;
+            lay_style(L, kid[i], ps, &own, want[i]);
+            if (own.height < 0 && own.max_height < 0) {
+                int h = line_h - (own.mt == CSS_AUTO_OFF ? 0 : own.mt) - (own.mb == CSS_AUTO_OFF ? 0 : own.mb);
+                if (h > 0) { L->force_node = kid[i]; L->force_h = h; }
+            }
+        }
         L->flex_sized = kid[i];
         lay_block(L, kid[i], ps, pen, want[i], &child_y);
         L->flex_sized = -1;
+        if (L->force_node == kid[i]) L->force_node = -1;
         got[idx] = child_y - top;
         if (got[idx] > tallest) tallest = got[idx];
         pen += want[i] + after[i] + between;

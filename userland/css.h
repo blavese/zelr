@@ -178,6 +178,10 @@ typedef struct {
     short bt, br, bb, bl;
     short width, max_width, height;      /* -1 for auto */
     short min_width, min_height, max_height;
+    /* The height a percentage inside resolves against when this box is a
+       link or other inline, which is no box: its containing block's, passed
+       through (layout.h, lay_style). -1 when that is auto. */
+    short cb_h;
 
     /* Whether width means the content box or the whole box.
 
@@ -3120,6 +3124,7 @@ static inline void css_default_style(cstyle *st, int root_px) {
     st->bt = st->br = st->bb = st->bl = 0;
     st->width = st->max_width = st->height = -1;
     st->min_width = st->min_height = st->max_height = -1;
+    st->cb_h = -1;
     st->position = POS_STATIC;
     st->top = st->right_off = st->bottom = st->left = CSS_AUTO_OFF;
     st->line_h = 145;
