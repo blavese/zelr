@@ -936,6 +936,23 @@ static int            lay_hit_used;
 static int            lay_hit_at[DOM_NODES];
 static unsigned short lay_hit_n[DOM_NODES];
 static unsigned       lay_hit_gen[DOM_NODES];
+/* Which rules reach an element depends on the tree, the sheet, the window's
+   width and what is hovered, and on nothing a layout changes: so when its
+   caller knows none of those has changed since the last layout (a picture
+   came, a timer ran and touched nothing), it sets lay_hits_keep and the
+   rules found then are kept (lay_hit_epoch stays). CNN's front page is laid
+   out twenty times as its pictures come, and each time matched every rule
+   against every element again: a third of its time. */
+static int            lay_hits_keep;
+static unsigned       lay_hit_epoch;
+
+/* Every element's rules forgotten, and the pool they are kept in emptied:
+   anything that starts the pool again must move the epoch on with it, or
+   an element would be read from slots another has since been given. */
+static inline void lay_hits_forget(void) {
+    if (!++lay_hit_epoch) lay_hit_epoch = 1;
+    lay_hit_used = 0;
+}
 static unsigned       lay_gen;             /* moved on by every lay_run */
 
 /* Each element's ancestor bits (css.h, cbloom), worked out once a layout from
@@ -1478,7 +1495,7 @@ static inline void lay_style(lctx *L, int el, const cstyle *parent,
     const int *rules;
     int n;
     chit hits[CSS_HITS];
-    if (el >= 0 && el < DOM_NODES && lay_hit_gen[el] == lay_gen) {
+    if (el >= 0 && el < DOM_NODES && lay_hit_gen[el] == lay_hit_epoch) {
         rules = lay_hit_pool + lay_hit_at[el];
         n = lay_hit_n[el];
     } else {
@@ -1487,7 +1504,7 @@ static inline void lay_style(lctx *L, int el, const cstyle *parent,
         if (el >= 0 && el < DOM_NODES && lay_hit_used + n <= LAY_HIT_POOL) {
             lay_hit_at[el] = lay_hit_used;
             lay_hit_n[el] = (unsigned short)n;
-            lay_hit_gen[el] = lay_gen;
+            lay_hit_gen[el] = lay_hit_epoch;
             for (int i = 0; i < n; i++) lay_hit_pool[lay_hit_used++] = hits[i].rule;
             rules = lay_hit_pool + lay_hit_at[el];
         } else {
@@ -6138,9 +6155,11 @@ static inline void lay_run(ldoc *out, const ddoc *d, const csheet *s,
     out->laid = 0;
     out->matched = 0;
 
-    /* A new layout, so no element's rules are known yet. */
+    /* A new layout; the rules found for each element stay only when the
+       caller said nothing they depend on has changed. */
     lay_gen++;
-    lay_hit_used = 0;
+    if (!lay_hits_keep || !lay_hit_epoch) lay_hits_forget();
+    lay_hits_keep = 0;
 
     css_view_w = width;              /* what vw is a hundredth of */
 

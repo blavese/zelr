@@ -1802,6 +1802,24 @@ int main(void) {
         (void)ac;
     }
 
+    /* --- rules kept across a layout that changed nothing ------------------------ */
+    {
+        /* The browser lays a page out again as each picture comes (CNN's
+           front page twenty times), and nothing rules are matched against
+           has changed: each element's rules are kept (lay_hits_keep). */
+        lay("<style>.a{color:#ff0000}.b{width:100px}</style><p class=a>keepone</p><div class=b>keeptwo</div>", 600);
+        int first = page.matched;
+        lay_hits_keep = 1;
+        lay_run(&page, &doc, &sheet, &index_, &match, inl, fake, nfake, 600, 16);
+        int kept = page.matched;
+        const litem *k1 = word("keepone");
+        int col = k1 ? (int)k1->color : -1;
+        lay_run(&page, &doc, &sheet, &index_, &match, inl, fake, nfake, 600, 16);
+        int again = page.matched;
+        okn("each element's rules are kept across a layout its caller says changed nothing, and found again after",
+            first > 0 && kept == 0 && again == first && col == 0xFF0000, kept);
+    }
+
     /* --- nesting -------------------------------------------------------------- */
     {
         /* firefox.com: a rule nested in its first rule of a layer ended the

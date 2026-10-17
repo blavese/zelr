@@ -2577,7 +2577,7 @@ static int style_in_drawn(const ddoc *d, int node, cstyle *out) {
     if (chain[n - 1] != d->root) return 0;              /* not in the page */
     restyle_changed();
     lay_gen++;
-    lay_hit_used = 0;
+    lay_hits_forget();
     lay_var_used = 0;
     lay_arena_used = 0;
 
@@ -2706,6 +2706,8 @@ static void title_take(void) {
     dom_collapse(t, title, (int)sizeof(title));
 }
 
+static unsigned page_loads;      /* moved on by every page built (build) */
+
 static void relayout(int width) {
     sheets_follow();
     restyle_changed();
@@ -2718,6 +2720,17 @@ static void relayout(int width) {
     const ddoc *d = page_drawn(1);
     laid = d;
     int nsizes = sizes_for_layout();
+    /* The rules that reach each element are kept from the last layout when
+       nothing they are matched against has changed (layout.h, lay_hits_keep):
+       the same page and tree, the same sheet, width and hover. */
+    static unsigned hit_print;
+    unsigned hp = 2166136261u;
+    unsigned parts[] = { page_loads, jsdom_live() ? jsdom_dom_version() : 0, jsdom_live() ? jsdom_css_version() : 0,
+                         styles_made, (unsigned)sheet.nrules, (unsigned)sheet.ndecls, (unsigned)d->count,
+                         (unsigned)(u64)d, (unsigned)width, (unsigned)match.hover, (unsigned)match.visited_links };
+    for (unsigned k = 0; k < sizeof(parts) / sizeof(parts[0]); k++) hp = (hp ^ parts[k]) * 16777619u;
+    lay_hits_keep = hp == hit_print;
+    hit_print = hp;
     lay_run(&page, d, &sheet, &index_, &match, inl, lay_sizes, nsizes,
             width, root_px);
 
@@ -3355,6 +3368,7 @@ static void build(const char *html, int len, int width, int want_sheets,
                   int *fetched, int *skipped) {
     /* Before the tree it is bound to is taken apart under it. */
     jsdom_close();
+    page_loads++;
     nsources = 0;
     nreported = 0;
     styles_live = 0;
