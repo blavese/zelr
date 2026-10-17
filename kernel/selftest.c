@@ -531,7 +531,10 @@ static void test_timer(void) {
        hundred, interrupts off, timed by the cycle counter: the second about
        twice the first, and the first near fifty by a rate taken from a
        sleep (a guest's ticks run slow, so the bounds are wide; the ratio has
-       no such slack). */
+       no such slack). A tick dropped during that sleep makes the rate too
+       high and fifty read short, never long: on a host running the gate's
+       other machines at once it read under 25, so the floor is 10, which
+       still fails a deadline counting port reads (it read 1). */
     u64 c0 = rdtsc(), k0 = timer_ticks();
     sleep_ms(100);
     u64 cycles = rdtsc() - c0, ticked = timer_ticks() - k0;
@@ -550,8 +553,8 @@ static void test_timer(void) {
     u64 ms50 = per_ms ? took[0] / per_ms : 0;
     ok("a deadline passes with interrupts off, twice as long for twice the time",
        took[1] > took[0] * 3 / 2 && took[1] < took[0] * 5 / 2);
-    ok("and fifty milliseconds of it is near fifty", ms50 >= 25 && ms50 <= 400);
-    if (ms50 < 25 || ms50 > 400) kprintf("        fifty took %d\n", (u32)ms50);
+    ok("and fifty milliseconds of it is near fifty", ms50 >= 10 && ms50 <= 400);
+    if (ms50 < 10 || ms50 > 400) kprintf("        fifty took %d\n", (u32)ms50);
 }
 
 static volatile int bp_hits = 0;
