@@ -991,12 +991,8 @@ static inline const cbloom *lay_ancestors(const ddoc *d, int el) {
     while (n--) {
         int node = chain[n], p = d->nodes[node].parent;
         cbloom *b = &lay_anc[node];
-        b->w[0] = b->w[1] = 0;
-        if (p >= 0) {
-            b->w[0] = lay_anc[p].w[0];
-            b->w[1] = lay_anc[p].w[1];
-            lay_keys_of(d, p, b);
-        }
+        for (int k = 0; k < CSS_BLOOM_W; k++) b->w[k] = p >= 0 ? lay_anc[p].w[k] : 0;
+        if (p >= 0) lay_keys_of(d, p, b);
         lay_anc_gen[node] = lay_gen;
     }
     return &lay_anc[el];

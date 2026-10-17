@@ -4402,9 +4402,11 @@ static inline void css_apply_v(int prop, const char *v, cstyle *st, int root_px,
 /* How many rules have been tried against an element, for a test to read. */
 static int css_tries;
 
-
-/* What an element's ancestors are, as a hundred and twenty eight bits: two
- * for each tag, id and class above it.
+/* What an element's ancestors are, as five hundred and twelve bits: two for
+ * each tag, id and class above it. (A hundred and twenty eight filled up on a
+ * page whose elements sit under dozens of classes: CNN's cards, each under
+ * sixty, had nearly every bit set, and the 1500 rules ending in .card__label
+ * were each walked for every card.)
  *
  * The index finds the rules whose last part could be this element, and for
  * most pages that is enough. It is not enough for a sheet whose rules share
@@ -4415,7 +4417,15 @@ static int css_tries;
  * a rule wanting a bit the element's ancestors do not have cannot match and is
  * not walked. Bits can collide, so a rule that passes is still walked; one
  * that fails is certain to have failed. */
-typedef struct { unsigned long long w[2]; } cbloom;
+#define CSS_BLOOM_W 8
+typedef struct { unsigned long long w[CSS_BLOOM_W]; } cbloom;
+
+/* Whether `need` wants a bit `have` lacks. */
+static inline int css_bloom_lacks(const cbloom *need, const cbloom *have) {
+    unsigned long long miss = 0;
+    for (int k = 0; k < CSS_BLOOM_W; k++) miss |= need->w[k] & ~have->w[k];
+    return miss != 0;
+}
 
 static inline unsigned css_fnv(const char *p, int n) {
     unsigned h = 2166136261u;
@@ -4424,7 +4434,7 @@ static inline unsigned css_fnv(const char *p, int n) {
 }
 
 static inline void css_bloom_add(cbloom *b, unsigned h) {
-    unsigned a = h & 127, c = (h >> 7) & 127;
+    unsigned a = h & (CSS_BLOOM_W * 64 - 1), c = (h >> 9) & (CSS_BLOOM_W * 64 - 1);
     b->w[a >> 6] |= 1ull << (a & 63);
     b->w[c >> 6] |= 1ull << (c & 63);
 }
@@ -4479,7 +4489,7 @@ static inline void css_index(const csheet *s, cindex *x) {
         /* Every part but the last has to be matched by an ancestor, by a
            child or a descendant join alike. */
         cbloom *b = &x->need[r];
-        b->w[0] = b->w[1] = 0;
+        for (int k = 0; k < CSS_BLOOM_W; k++) b->w[k] = 0;
         for (int k = 0; k < rule->sel_n - 1; k++) {
             const csel *p = &s->sels[rule->sel_at + k];
             /* Only a part that is an ancestor of the element: one with a
@@ -4532,7 +4542,7 @@ static inline void css_collect_chain(const csheet *s, const cindex *x,
     for (int r = head; r >= 0; r = x->next[r]) {
         if (*n >= CSS_HITS) return;
         if (s->rules[r].pe != pe) continue;
-        if (anc && ((x->need[r].w[0] & ~anc->w[0]) | (x->need[r].w[1] & ~anc->w[1])))
+        if (anc && css_bloom_lacks(&x->need[r], anc))
             continue;                          /* wants an ancestor there is not */
         const crule *rule = &s->rules[r];
         if (rule->mq_lo >= 0 && css_view_w > 0 && css_view_w + css_mq_extra < rule->mq_lo) continue;

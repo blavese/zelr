@@ -1854,6 +1854,40 @@ int main(void) {
             tw && tw->color == 0x102030 && css_tries - alone < 25, css_tries - alone);
     }
 
+    /* --- the ancestor bits do not fill up under many classes -------------------- */
+    {
+        /* CNN's cards sit under sixty classes, and 1500 rules end in the same
+           class, told apart by what is above. With 128 bits nearly all were
+           set and each rule was walked for each card. */
+        static char deep[400 * 32 + 2048];
+        int w = 0;
+        const char *head = "<style>";
+        for (int k = 0; head[k]; k++) deep[w++] = head[k];
+        for (int i = 0; i < 400; i++) {
+            char num[8];
+            int nn = 0, v = i;
+            do { num[nn++] = (char)('0' + v % 10); v /= 10; } while (v);
+            deep[w++] = '.'; deep[w++] = 'a';
+            while (nn) deep[w++] = num[--nn];
+            const char *tail = " .x{color:#ff0000}";
+            for (int k = 0; tail[k]; k++) deep[w++] = tail[k];
+        }
+        const char *mid = "</style><div class='";
+        for (int k = 0; mid[k]; k++) deep[w++] = mid[k];
+        for (int i = 0; i < 60; i++) {
+            deep[w++] = 'b'; deep[w++] = (char)('0' + i / 10); deep[w++] = (char)('0' + i % 10); deep[w++] = ' ';
+        }
+        const char *rest = "'><p class=x>deepword</p></div>";
+        for (int k = 0; rest[k]; k++) deep[w++] = rest[k];
+        deep[w] = 0;
+        lay(deep, 600);
+        css_tries = 0;
+        lay_run(&page, &doc, &sheet, &index_, &match, inl, fake, nfake, 600, 16);
+        const litem *dw = word("deepword");
+        okn("rules wanting ancestors an element does not have are passed over, however many classes are above it",
+            dw && dw->color != 0xFF0000 && css_tries < 150, css_tries);
+    }
+
     /* --- nesting -------------------------------------------------------------- */
     {
         /* firefox.com: a rule nested in its first rule of a layer ended the
