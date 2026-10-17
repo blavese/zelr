@@ -95,6 +95,12 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.148.0
+
+- **style sheets up to 4 MB (11)**, **XPath (12)**, **speed: custom property lookups kept, rules kept across a
+  layout that changed nothing, 8192 rule chains, 512 ancestor bits (11)**. layouttest 434, pagetest 378, browsercheck
+  one step more, each failing on a build without its change.
+
 ### 0.147.0
 
 - **floats at their min/max-width and none in a flex or grid row (11)**, **custom properties set to inherit, unset or

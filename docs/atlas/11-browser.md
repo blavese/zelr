@@ -1,6 +1,19 @@
 # 11 -- The web browser (everything except JS-engine internals and image decoders)
 
-**Since 0.147.0** (the rest of this file is older; trust the code and the README's "since 6048716" list):
+**Since 0.148.0** (the rest of this file is older; trust the code and the README's "since 6048716" list):
+- **Sheets up to 4 MB** (browser.c `CSS_MAX`; `sheet_abs` grows to the largest sheet read; css.h `CSS_FLAT_MAX` 5 MB).
+  Ubuntu's sheet is 1.1 MB and GitHub Docs' 2.4 MB. browsercheck's /bigsheet reads a rule at the end of 1.2 MB.
+- **XPath** in jsprelude.h (script): document.evaluate, createExpression, createNSResolver, XPathEvaluator,
+  XPathExpression, XPathResult; XPath 1.0 paths on every axis, tests, predicates, operators and core functions; no
+  variables or namespaces. htmx 2 needs it as it loads.
+- **Speed** (CNN 27 s to 10 s on the host): a custom property's lookup is kept for the layout (layout.h `lay_vcache`,
+  keyed by chain and name; chains and `lay_gen` start together in lay_run); each element's rules are kept across
+  layouts while browser.c's print of what matching depends on (page, jsdom tree and sheet versions, sheet print and
+  size, drawn document, width, hover) is unchanged (`lay_hits_keep`, `lay_hit_epoch`; anything that empties the
+  pool calls `lay_hits_forget`, as style_in_drawn does); classes hash into 8192 chains (`CSS_BUCKETS`; `css_tries`
+  counts tries for tests); ancestor bits are 512 (`CSS_BLOOM_W`, `css_bloom_lacks`).
+
+**Since 0.147.0**:
 - **Floats**: the width a float is placed at keeps to its max-width and min-width (lay_float, `wframe`); a box whose
   parent is a flex or grid container is never floated (lay_block `in_row`; reached through display: contents it is
   judged by the contents element).

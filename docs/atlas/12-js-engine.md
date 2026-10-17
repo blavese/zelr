@@ -2,6 +2,8 @@
 
 Source root the repository root (github.com/blavese/zelr main, 2026-09-22). All paths are relative to it; `file:N` means 1-based line N. Everything below was verified by reading the code. Where a behaviour was derived by tracing (not by running) it says so. Nothing here was built or run.
 
+**Since 0.148.0**: XPath (document.evaluate and the rest) is in jsprelude.h, as script over the page's nodes.
+
 **Since 0.142.0** (the rest of this file is older; trust the code):
 - **8192 shadow roots** (`JD_SHADOWS`; Rotten Tomatoes attaches two thousand, and past 1024 a root was made but not
   kept, so its slots were given nothing), each host and root keeping its record's number plus one in `jd_shadow_at`
