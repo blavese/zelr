@@ -95,6 +95,13 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.152.0
+
+- **a new program's x87 registers empty (02, B14)**, **power off that comes back when the firmware does not answer (02,
+  B7: `spin_delay_ms`)**, **the first page unmapped so a kernel NULL pointer faults (02, B24)**, **negative numbers
+  padded in front of the sign (02, B18)**, **sixteen bit config writes (02, B20)**. Selftest 813 on the 64 MiB machine,
+  fptest the tag word, each failing on a build without its change.
+
 ### 0.151.0
 
 - **USB sticks with 4096 byte blocks as sectors of 512 (04, S13)**, **programs packed into the kernel image and inflated

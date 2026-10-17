@@ -1615,11 +1615,11 @@ byte.
 ## testing
 
 The kernel tests itself. `./run.sh -T` boots with selftest on the command line,
-runs 809 checks across every subsystem, then writes to QEMU's debug-exit port
+runs 813 checks across every subsystem, then writes to QEMU's debug-exit port
 so the host gets a real exit status.
 
-    [string]                 8 checks  [waiting]               16 checks
-    [the identity map]       2 checks  [trackpad]              25 checks
+    [string]                 9 checks  [waiting]               16 checks
+    [the identity map]       3 checks  [trackpad]              25 checks
     [physical memory]        6 checks  [crypto]                23 checks
     [paging]                 5 checks  [sha-256]               15 checks
     [user access]            5 checks  [aes-gcm]               11 checks
@@ -1628,7 +1628,7 @@ so the host gets a real exit status.
     [paths]                 11 checks  [p-256]                 23 checks
     [directories]           12 checks  [sha-512]                4 checks
     [open files]            33 checks  [p-384]                  6 checks
-    [timer]                  5 checks  [certificates]          45 checks
+    [timer]                  6 checks  [certificates]          45 checks
     [interrupts]             2 checks  [randomness]             8 checks
     [disk]                  15 checks  [tls 1.3]               55 checks
     [fat]                   66 checks  [tls 1.2]               18 checks
@@ -1638,7 +1638,7 @@ so the host gets a real exit status.
     [userspace]              9 checks  [wait timeouts]          3 checks
     [video]                 13 checks  [processors]             4 checks
     [mouse]                  4 checks  [black box]             24 checks
-    [graphics]              15 checks  [acpi and pcie]          4 checks
+    [graphics]              15 checks  [acpi and pcie]          5 checks
     [windows]               29 checks  [interrupt routing]     11 checks
     [window server]         39 checks  [clipboard]             14 checks
     [built-in programs]     12 checks  [clock]                 18 checks
@@ -1647,7 +1647,7 @@ so the host gets a real exit status.
     [live tree]             23 checks  [sound]                  skipped
     [layout]                11 checks  [kernel stack]           3 checks
 
-    809 passed, 0 failed
+    813 passed, 0 failed
     SELFTEST_PASS
 
 The sound section is skipped because `run.sh` attaches no sound card (the
@@ -1655,7 +1655,7 @@ gate's q35 run gives it one), the
 identity map is checked in four more places when there is more memory to map,
 and the desktop keeps a copy of its wallpaper only when the memory allows it,
 which two more checks need: given 256 MiB, as the gate gives it, the same run
-is 815.
+is 819.
 
 Two of the sections are about what happens when something goes wrong half
 way, which a machine that keeps its power cannot show. `[fat]` makes the
