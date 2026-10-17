@@ -1,6 +1,34 @@
 # 11 -- The web browser (everything except JS-engine internals and image decoders)
 
-**Since 0.148.0** (the rest of this file is older; trust the code and the README's "since 6048716" list):
+**Since 0.149.0** (the rest of this file is older; trust the code and the README's "since 6048716" list):
+- **Percentage heights through inlines** (css.h `cstyle.cb_h`, set in layout.h `lay_style`): each style carries the
+  height its children's percentages would be of were it an inline; an inline or display: contents parent with no
+  height hands that on, so a block or picture inside a link takes its percentage of the box around the link. A flex or
+  grid item (which says inline but is a box) hands on -1.
+- **A stretched flex item's height is known before its contents** (lay_flex_line): in a single-line row with a height
+  or a least height (`line_h`), an item that stretches and has no height or max-height of its own is laid out at the
+  line's height less its margins through `force_node`, so a percentage inside it resolves. Wrapping rows and grid items
+  are still stretched afterwards (lay_stretch).
+- **text-overflow: ellipsis on a word alone on its line**: the word itself is cut to fit with its dots (it had no word
+  before it to take them, and vanished).
+- **`slot[name=x]::slotted(y)`** is scoped as `slot[name=x][data-zs=N] > y[data-zl=N]` (css.h `css_scope_compound`):
+  what is put into a slot is the slot's child in the page as laid out (dom_shadows, dom_flat). The slot part was
+  dropped, so every slot's rule applied to all of them.
+- **Absolute boxes**: both sides, a width and auto margins share what is left (margin: 0 auto centres); a box with a
+  width of its own is given room for its margins and is placed by its margin box at `right:` (`hmargins`).
+- **The static position in a row** (layout.h `lay_flex_static`): an absolute child of a flex container with no offset
+  on an axis is moved where align-items/align-self and justify-content put a sole item (across only when the row's
+  height is set). Its box and contents are shifted after it is laid out (`L->box_node`/`box_w`/`box_h`).
+- **A drawing written `width="0"` / `height="0"`** keeps its nought (lay_hints): a symbol sheet in a row was 300 by 150.
+- **aspect-ratio: inherit** (`cstyle.ratio_up_w/_h`), and **an aspect-ratio box's height is set from its width before
+  its contents are laid out** (lay_block_placed, not while measuring and not for tables): percentages inside resolve,
+  and a box hiding its overflow keeps the ratio's height.
+- **Backgrounds partly see-through are drawn over what is under them** (css.h `cstyle.bg_a`, `bg_raw`; layout.h
+  `litem.bgt`; browser.c `see_through_rect`). `cstyle.background` is still the colour laid over the parent's, for what
+  is drawn on the box (a word's or a drawing's backdrop); the box item carries its own colour and `bgt` = 255 - alpha.
+  Masked boxes keep the mixed colour. browsercheck's /glass counts purple over a red band and lavender over the page.
+
+**Since 0.148.0**:
 - **Sheets up to 4 MB** (browser.c `CSS_MAX`; `sheet_abs` grows to the largest sheet read; css.h `CSS_FLAT_MAX` 5 MB).
   Ubuntu's sheet is 1.1 MB and GitHub Docs' 2.4 MB. browsercheck's /bigsheet reads a rule at the end of 1.2 MB.
 - **XPath** in jsprelude.h (script): document.evaluate, createExpression, createNSResolver, XPathEvaluator,

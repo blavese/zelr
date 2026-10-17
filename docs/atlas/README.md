@@ -95,6 +95,14 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.149.0
+
+- **percentage heights through links and in stretched rows (11)**, **an ellipsis for a word alone on its line (11)**,
+  **`::slotted()` for the slot it names (11)**, **absolute boxes centred by auto margins and placed in their row (11)**,
+  **a drawing sized nought (11)**, **aspect-ratio inherited and known before the contents (11)**, **see-through
+  backgrounds drawn over what is under them (11)**. layouttest 451, browsercheck one step more, each failing on a build
+  without its change.
+
 ### 0.148.0
 
 - **style sheets up to 4 MB (11)**, **XPath (12)**, **speed: custom property lookups kept, rules kept across a
