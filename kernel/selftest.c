@@ -3676,6 +3676,20 @@ static void test_rng(void) {
        machine cannot make a key and says so rather than making a bad one. */
     for (int i = 0; i < 400 && !rng_ready(); i++) sleep_ms(10);
     ok("a source of randomness was found", rng_ready());
+
+    /* The timing source counts only if its intervals vary: a steady interval
+       passed, so ready meant only that the cycle counter ran. */
+    {
+        static u64 iv[200];
+        for (u32 i = 0; i < 200; i++) iv[i] = 4000000u;
+        bool steady = rng_test_judge(iv, 200);
+        for (u32 i = 0; i < 200; i++) iv[i] = 4000000u + ((i * 2654435761u) >> 20 & 0x3FF);
+        bool varied = rng_test_judge(iv, 200);
+        for (u32 i = 0; i < 200; i++) iv[i] = (i & 1) ? 4000000u : 4000001u;
+        bool few = rng_test_judge(iv, 60);
+        ok("timing that does not vary is not counted as randomness, timing that does is",
+           !steady && varied && !few);
+    }
     ok("and it says which", rng_sources()[0] && strcmp(rng_sources(), "none") != 0);
 
     memset(a, 0, sizeof(a));

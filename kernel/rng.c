@@ -36,8 +36,31 @@ static bool have_hardware;
 static char sources[40];
 
 static u64 jitter_last;
-static u64 jitter_spread;
 static u32 jitter_samples;
+
+/* Whether the intervals vary, which is the whole of what this source is
+   worth. Counted as intervals whose low sixteen bits differ from the one
+   before: it was the bits of each interval run together, which a steady
+   interval -- nothing varying at all -- passes, so ready meant only that the
+   cycle counter runs (atlas 02, B13). Half of the intervals must differ. */
+typedef struct { u64 prev; u32 seen, varied; } jitter_t;
+static jitter_t jitter;
+
+static void jitter_note(jitter_t *j, u64 delta) {
+    if (j->seen && ((delta ^ j->prev) & 0xFFFF) && j->varied < JITTER_ENOUGH * 2) j->varied++;
+    j->prev = delta;
+    if (j->seen < JITTER_ENOUGH * 2) j->seen++;
+}
+
+static bool jitter_enough(const jitter_t *j) {
+    return j->seen >= JITTER_ENOUGH && j->varied >= JITTER_ENOUGH / 2;
+}
+
+bool rng_test_judge(const u64 *intervals, u32 n) {
+    jitter_t j = { 0, 0, 0 };
+    for (u32 i = 0; i < n; i++) jitter_note(&j, intervals[i]);
+    return jitter_enough(&j);
+}
 
 static bool cpu_has(u32 leaf, int reg, u32 bit) {
     u32 a, b, c, d;
@@ -118,14 +141,14 @@ void rng_tick(void) {
        is already inside an interrupt, and the other one would turn
        interrupts back on in the middle of one. */
     if (jitter_samples || delta) stir_locked(&delta, sizeof(delta));
-    if (jitter_samples) jitter_spread |= delta ^ (delta >> 17);
+    if (jitter_samples) jitter_note(&jitter, delta);
     if (jitter_samples < JITTER_ENOUGH * 2) jitter_samples++;
 }
 
-/* If every interval came out identical the counter is not varying and this
+/* If the intervals came out the same, the counter is not varying and this
    source gave nothing, whatever it looked like. */
 static bool timing_ok(void) {
-    return jitter_samples >= JITTER_ENOUGH && (jitter_spread & 0xffff) != 0;
+    return jitter_samples >= JITTER_ENOUGH && jitter_enough(&jitter);
 }
 
 static bool have_rdseed, have_rdrand;
@@ -135,8 +158,10 @@ void rng_init(void) {
     counter = 0;
     have_hardware = false;
     have_rdseed = have_rdrand = false;
-    jitter_last = jitter_spread = 0;
+    jitter_last = 0;
     jitter_samples = 0;
+    jitter.prev = 0;
+    jitter.seen = jitter.varied = 0;
     sources[0] = 0;
 
     /* Anything at all to start with, none of it unpredictable, all of it

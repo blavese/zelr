@@ -20,6 +20,10 @@
 void rng_init(void);
 bool rng_ready(void);
 
+/* For the self test: whether the timing source would count intervals like
+   these as varying enough. */
+bool rng_test_judge(const u64 *intervals, u32 n);
+
 /* Where the entropy came from, for the boot log: "rdseed", "rdrand",
    "timing", or "none", with the sources joined. */
 const char *rng_sources(void);
