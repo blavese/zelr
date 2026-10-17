@@ -61,8 +61,38 @@ static double root(double x) {
     return g;
 }
 
+/* The x87 tag word, two bits a register, 11 for empty: from the
+   environment FNSTENV writes, where it is the third word. */
+static unsigned x87_tags(void) {
+    unsigned char env[28];
+    __asm__ volatile ("fnstenv %0" : "=m"(env));
+    return (unsigned)env[8] | ((unsigned)env[9] << 8);
+}
+
+/* One, pushed on the x87 stack and popped off it. */
+static double x87_one(void) {
+    double r;
+    __asm__ volatile ("fld1\n\tfstpl %0" : "=m"(r));
+    return r;
+}
+
 int main(void) {
     puts("floating point, in ring 3\n");
+
+    /* A program starts with every x87 register empty. They were all marked
+       full (the tag in a saved state says full with a one), so on a real
+       processor the first push overflowed the stack and, that being masked,
+       put a nonsense number there instead (atlas 02, B14). QEMU does not
+       model the overflow, so the tags are read as well: all empty is
+       0xFFFF. Nothing here used the x87 then, and a program built elsewhere
+       might. Before anything else touches it. */
+    unsigned tags = x87_tags();
+    puts(tags == 0xFFFF ? "  PASS  " : "  FAIL  ");
+    puts("a new program's x87 registers are all empty  ");
+    putn((int)tags);
+    putc('\n');
+    if (tags != 0xFFFF) failed++;
+    check("the first number pushed on the x87 is the one pushed", x87_one(), 1000000);
 
     /* The one every integer machine gets wrong: a third is not zero. */
     check("1 / 3", 1.0 / 3.0, 333333);

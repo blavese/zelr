@@ -121,8 +121,10 @@ void fpu_blank(void *area) {
     a[0] = 0x7F;
     a[1] = 0x03;
 
-    /* Every x87 register empty. */
-    a[4] = 0xFF;
+    /* Every x87 register empty, which in this abridged tag is a zero bit
+       for each: one is full. It said 0xFF, every register full, and a new
+       program's first push overflowed the stack (atlas 02, B14). */
+    a[4] = 0x00;
 
     /* MXCSR at offset 24: the same masks for the vector side. 0x1F80. */
     a[24] = 0x80;
