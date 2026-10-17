@@ -292,6 +292,20 @@ BIGSHEET_PAGE = b"""<!doctype html>
 BIGSHEET_CSS = (b"/* " + b"filler " * 175000 + b"*/\n"
                 b".band { height: 60px; background: #b04070 }\n")
 
+# A pane of half-clear blue, absolutely placed half over a red band and half
+# over the white page. Drawn in a colour mixed with its parent's (the band's
+# red) it was one purple from top to bottom, and over the white it should be
+# lavender: a fixed bar of 80% white hid Engadget's headline, and a caption's
+# dark band hid the picture it lay on.
+GLASS_PAGE = b"""<!doctype html>
+<html><head><title>see through</title>
+<style>body { padding: 24px; background: #ffffff }
+.band { height: 80px; background: #e02020; position: relative }
+.glass { position: absolute; left: 0; top: 40px; width: 300px; height: 80px; background: rgba(0, 0, 255, 0.5) }
+</style></head>
+<body><p>a pane of blue glass half over a red band</p><div class="band"><div class="glass"></div></div></body></html>
+"""
+
 SOURCES_PAGE = b"""<!doctype html>
 <html><head><title>sources</title>
 <style>body { padding: 24px; background: #ffffff } img { width: 160px; height: 90px }</style></head>
@@ -1603,6 +1617,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._send(SOURCES_PAGE)
         elif path == "/bigsheet":
             self._send(BIGSHEET_PAGE)
+        elif path == "/glass":
+            self._send(GLASS_PAGE)
         elif path == "/bigsheet.css":
             self._send(BIGSHEET_CSS, ctype="text/css")
         elif path == "/keys":

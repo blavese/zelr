@@ -23,7 +23,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from harness import (Guest, Checks, build_once, centre_of,      # noqa: E402
-                     count_in, ROOT)
+                     count_in, count_near, ROOT)
 from webserver import Server                                    # noqa: E402
 import webserver                                                # noqa: E402
 
@@ -887,8 +887,22 @@ def main():
             c.add("the last rule of a sheet past a megabyte is read",
                   bband > 50 * (PAGE[2] - PAGE[0] - 120), shotg)
 
+            # --- a background partly see-through --------------------------------
+            #
+            # Half-clear blue, 300 by 80, half over a red band and half over
+            # the page: purple over the red, lavender over the white. Mixed
+            # with its parent's red when styled, it was purple all over.
+            go(vm, mon, "http://%s/glass" % srv.host,
+               was=bigs, name="br-going-glass")
+            gls, pxl, wl, shotl = page_settled(mon, "br-glass")
+            gpurple = count_near(pxl, wl, PAGE, (0x70, 0x10, 0x8F), tol=4)
+            glav = count_near(pxl, wl, PAGE, (0x80, 0x80, 0xFF), tol=4)
+            print("      purple %d, lavender %d" % (gpurple, glav))
+            c.add("a half-clear background is drawn over what is under it, not over its parent's colour",
+                  gpurple > 10000 and glav > 10000, shotl)
+
             go(vm, mon, "http://%s/bg/page" % srv.host,
-               was=bigs, name="br-going-bg")
+               was=gls, name="br-going-bg")
             bgd, pxb, wb, shotb = page_settled(mon, "br-bg")
             rose = count_in(pxb, wb, PAGE, LOGO)
             teal = count_in(pxb, wb, PAGE, (0x00, 0xB0, 0xB0))

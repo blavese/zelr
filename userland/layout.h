@@ -79,6 +79,7 @@ typedef struct {
     unsigned short zc;            /* its stacking context, in zctx (lay_z_enter) */
     unsigned char zl;             /* and its layer there: ZL_BG, ZL_FLOW or ZL_POS */
     signed char ls;               /* LK_TEXT: letter-spacing, pixels after each letter */
+    unsigned char bgt;            /* LK_BOX: how see-through bg is, 0 not at all (cstyle.bg_a) */
 } litem;
 
 /* A stacking context: a positioned box with a z-index (or an item of a row
@@ -496,6 +497,7 @@ static inline litem *lay_item(lctx *L) {
     it->bt = it->br = it->bb = it->bl = 0;
     it->has_bg = 0;
     it->ofit = 0;
+    it->bgt = 0;
     it->bgi = -1;
     it->zc = (unsigned short)L->z_ctx;
     it->zl = L->z_layer;
@@ -6011,6 +6013,14 @@ static void lay_block_placed(lctx *L, int node, const cstyle *parent, int x,
         litem *bg = &L->out->items[slot];
         bg->bg = st.background;
         bg->has_bg = st.has_bg;
+        /* Partly see-through, it is drawn in its own colour over what is
+           drawn under it: laid over its parent's colour instead, AdThrive's
+           footer bar, 80% white, hid Engadget's headline under it, and a
+           caption's dark band hid the picture it was over. */
+        if (st.has_bg && st.bg_a < 255 && !st.masked) {
+            bg->bg = st.bg_raw;
+            bg->bgt = (unsigned char)(255 - st.bg_a);
+        }
         bg->border = st.border_color;
         bg->bt = (unsigned char)(st.bt > 255 ? 255 : st.bt);
         bg->br = (unsigned char)(st.br > 255 ? 255 : st.br);

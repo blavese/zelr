@@ -1232,7 +1232,8 @@ int main(void) {
         const litem *t = box_of(by_id("t")), *h = box_of(by_id("h")), *z = box_of(by_id("z"));
         const litem *l = word("hue"), *x = word("offpage");
         ok("a transparent background is no background", !(t && t->has_bg) && !(z && z->has_bg));
-        ok("and a faint one written .1 is faint, not black", h && h->has_bg && h->bg == 0xE6E6E6);
+        ok("and a faint one written .1 is faint, not black",
+           h && h->has_bg && h->bg == 0x000000 && h->bgt >= 229 && h->bgt <= 230);
         ok("hsl() is a colour", l && l->color == 0xFF0000);
         ok("text in a transparent colour is not drawn", !word("ghost") && word("shown"));
         ok("nor text at font-size 0", !word("hidden"));
@@ -2024,6 +2025,17 @@ int main(void) {
         okn("a box that inherits an aspect ratio is that shape, and 100% tall inside it is all of it",
             lp && lp->w == 800 && lp->h == 450 && la && la->y == 450, lp ? lp->h : -1);
         nfake = 0;
+
+        /* And its footer bar, 80% white, fixed over the page: mixed with its
+           parent's colour when styled, it was drawn solid. Its box keeps its
+           own colour and how clear it is, for the browser to lay over what
+           is drawn under it (browsercheck sees the drawing). */
+        lay("<style>.band{height:80px;background:#e02020;position:relative}"
+            ".gl{position:absolute;left:0;top:40px;width:300px;height:80px;background:rgba(0,0,255,0.5)}</style>"
+            "<div class=band><div class=gl id=gl></div></div>", 600);
+        const litem *gl = box_of(by_id("gl"));
+        okn("a half-clear background keeps its own colour and how clear it is",
+            gl && gl->has_bg && gl->bg == 0x0000FF && gl->bgt >= 126 && gl->bgt <= 128, gl ? (int)gl->bgt : -1);
     }
 
     /* --- nesting -------------------------------------------------------------- */
@@ -2807,11 +2819,14 @@ int main(void) {
         /* And one partly see-through is laid over what is behind it, not over
            white: Hugging Face's 45% white glow on its dark hero was white. */
         lay("<style>.k{background:#000000}.h{background:rgba(255,255,255,.5);height:10px}"
-            ".q{background:#ffffff80;height:10px}</style><div class=k><div class=h id=th></div></div>"
-            "<div class=q id=tq></div>", 800);
-        const litem *th = box_of(by_id("th")), *tq = box_of(by_id("tq"));
-        ok("a background partly see-through is laid over what is behind it",
-           th && th->has_bg && (th->bg == 0x7F7F7F || th->bg == 0x808080) && tq && tq->bg == 0xFFFFFF);
+            ".q{background:#ffffff80;height:10px}</style><div class=k><div class=h id=th><svg id=sh width=10 height=10>"
+            "</svg></div></div><div class=q id=tq></div>", 800);
+        const litem *th = box_of(by_id("th")), *tq = box_of(by_id("tq")), *sh = image_of(by_id("sh"));
+        ok("a background partly see-through is laid over what is behind it, for what is drawn on it",
+           sh && (sh->bg == 0x7F7F7F || sh->bg == 0x808080));
+        ok("and keeps its own colour and how clear it is, to be drawn over what is under it",
+           th && th->has_bg && th->bg == 0xFFFFFF && th->bgt >= 127 && th->bgt <= 128
+           && tq && tq->bg == 0xFFFFFF && tq->bgt == 127);
     }
     {
         /* Every named colour, as Chromium computes them: Craigslist's

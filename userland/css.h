@@ -173,6 +173,11 @@ typedef struct {
     unsigned char underline, strike;
     unsigned char display, align, white, list, visible;
     unsigned char has_bg;
+    /* A background partly see-through: its own colour and how much of it
+       (255 all). `background` is that laid over the parent's, for what is
+       drawn on it; the box itself is drawn over whatever is under it. */
+    unsigned char bg_a;
+    u32 bg_raw;
     short mt, mr, mb, ml;
     short pt, pr, pb, pl;
     short bt, br, bb, bl;
@@ -3129,6 +3134,8 @@ static inline void css_default_style(cstyle *st, int root_px) {
     st->list = LS_DISC;
     st->visible = 1;
     st->has_bg = 0;
+    st->bg_a = 255;
+    st->bg_raw = 0xFFFFFF;
     st->mt = st->mr = st->mb = st->ml = 0;
     st->pt = st->pr = st->pb = st->pl = 0;
     st->bt = st->br = st->bb = st->bl = 0;
@@ -3603,6 +3610,7 @@ static inline void css_apply_v(int prop, const char *v, cstyle *st, int root_px,
             break;
         case P_BACKGROUND: {
             u32 c;
+            st->bg_a = 255;
             if (w_same_fold(v, "currentcolor")) { st->background = st->color; st->has_bg = 1; break; }
             /* Spotify's buttons say initial, which is transparent, and wore the
                browser's grey circle. */
@@ -3627,6 +3635,8 @@ static inline void css_apply_v(int prop, const char *v, cstyle *st, int root_px,
                 g = ((int)((raw >> 8) & 255) * a + (int)((up >> 8) & 255) * (255 - a)) / 255;
                 b = ((int)(raw & 255) * a + (int)(up & 255) * (255 - a)) / 255;
                 c = (u32)((r << 16) | (g << 8) | b);
+                st->bg_a = (unsigned char)a;
+                st->bg_raw = raw & 0xFFFFFF;
             }
             st->background = c;
             st->has_bg = 1;

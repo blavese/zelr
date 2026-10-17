@@ -647,6 +647,39 @@ static void draw_gradient(surface *s, const litem *it, const lbg *g, int x, int 
     }
 }
 
+/* A background partly see-through: its colour laid over each pixel already
+   drawn, `clear` of 255 being how much of what is under it shows, with the
+   corners rounded as round_rect rounds them. */
+static void see_through_rect(surface *s, int x, int y, int w, int h, int r, u32 c, int clear) {
+    if (r * 2 > w) r = w / 2;
+    if (r * 2 > h) r = h / 2;
+    if (r < 0) r = 0;
+    int a = 255 - clear;
+    int pr = (int)((c >> 16) & 255) * a, pg = (int)((c >> 8) & 255) * a, pb = (int)(c & 255) * a;
+    for (int j = 0; j < h; j++) {
+        int dy = y + j;
+        if (dy < 0 || dy >= s->h) continue;
+        int inset = 0;
+        int i = j < r ? j : j >= h - r ? h - 1 - j : -1;
+        if (i >= 0) {
+            int ry = r - i, rx = r;
+            while (rx > 0 && rx * rx + ry * ry > r * r) rx--;
+            inset = r - rx;
+        }
+        int x0 = x + inset, x1 = x + w - inset;
+        if (x0 < 0) x0 = 0;
+        if (x1 > s->w) x1 = s->w;
+        u32 *row = s->px + (u32)dy * s->w;
+        for (int dx = x0; dx < x1; dx++) {
+            u32 d = row[dx];
+            int r2 = (pr + (int)((d >> 16) & 255) * clear) / 255;
+            int g2 = (pg + (int)((d >> 8) & 255) * clear) / 255;
+            int b2 = (pb + (int)(d & 255) * clear) / 255;
+            row[dx] = ((u32)r2 << 16) | ((u32)g2 << 8) | (u32)b2;
+        }
+    }
+}
+
 /* A box's background picture or mask, inside the box and the view: sized,
    placed and repeated as its sheet said. */
 static void draw_picture_layer(surface *s, const litem *it, int x, int sy, int ox, int oy, int vw, int vh);
@@ -4357,7 +4390,8 @@ static void draw_page(surface *s, int ox, int oy, int vw, int vh) {
             if (w > vw) w = vw;
             /* A mask's colour is painted only through its picture. */
             int masked = it->bgi >= 0 && page.bgs[it->bgi].mask;
-            if (it->has_bg && !masked) {
+            if (it->has_bg && !masked && it->bgt) see_through_rect(s, x, sy, w, h, it->radius, it->bg, it->bgt);
+            else if (it->has_bg && !masked) {
                 if (it->radius) round_rect(s, x, sy, w, h, it->radius, it->bg);
                 else rect(s, x, sy, w, h, it->bg);
             }
