@@ -1614,6 +1614,30 @@ int main(void) {
                "document.title = [v.width === innerWidth, v.height === innerHeight, v.scale, v.offsetLeft, n,"
                " v instanceof EventTarget, made].join(' ');</script></body>"),
         "true true 1 0 1 true TypeError");
+    /* XPath: htmx 2 compiles this expression as it loads and stopped on the
+       missing XPathEvaluator, and OzBargain's script after it. */
+    oks("htmx's XPath finds the elements with hx-on attributes, in document order",
+        titled("<body><div><p class=x>one</p><button hx-on:click=\"go()\">b</button><i>no</i>"
+               "<span data-hx-on-load=\"x\">s</span></div><script>"
+               "var e = new XPathEvaluator().createExpression('.//*[@*[ starts-with(name(), \"hx-on:\") or "
+               "starts-with(name(), \"data-hx-on:\") or starts-with(name(), \"hx-on-\") or starts-with(name(), \"data-hx-on-\") ]]');"
+               "var it = e.evaluate(document.body), n, found = [];"
+               "while (n = it.iterateNext()) found.push(n.tagName);"
+               "document.title = found.join(',');</script></body>"),
+        "BUTTON,SPAN");
+    oks("document.evaluate answers node sets, numbers, strings and booleans, on every axis, and refuses bad syntax",
+        titled("<body><h1>Headline</h1><ul><li>first</li><li>second</li><li>third</li></ul>"
+               "<div id=outer><div id=inner><b>bold</b></div></div><p class=x>p</p><script>var d = document;"
+               "var a = d.evaluate('//p[@class=\"x\"]', d, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null).snapshotLength;"
+               "var c = d.evaluate('count(//li)', d, null, XPathResult.NUMBER_TYPE, null).numberValue;"
+               "var s = d.evaluate('string(//li[2])', d, null, XPathResult.STRING_TYPE, null).stringValue;"
+               "var f = d.evaluate('//b/ancestor::div[1]/@id', d, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue.value;"
+               "var l = d.evaluate('//li[last()]/text()', d, null, 9, null).singleNodeValue.nodeValue;"
+               "var bo = d.evaluate('count(//li) > 2 and contains(//h1, \"Head\")', d, null, 3, null).booleanValue;"
+               "var sib = d.evaluate('//li[1]/following-sibling::li', d, null, 7, null).snapshotItem(1).textContent;"
+               "var err = ''; try { d.evaluate('//p[', d, null, 0, null); } catch (x) { err = x.name; }"
+               "document.title = [a, c, s, f, l, bo, sib, err].join(' ');</script></body>"),
+        "1 3 second inner third true third SyntaxError");
     {
         /* FontFace: Duolingo stopped on the undefined and sent itself to its
            page for browsers it does not support. Loading comes to nothing at
