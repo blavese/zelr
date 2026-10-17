@@ -621,6 +621,8 @@ static void execute(char *buf) {
             kprintf("model    %s\n", usbdisk_model());
             kprintf("size     %d sectors of %d bytes\n",
                     usbdisk_sectors(), usbdisk_block_size());
+            if (usbdisk_device_block() != usbdisk_block_size())
+                kprintf("blocks   %d bytes on the device\n", usbdisk_device_block());
             return;
         }
 

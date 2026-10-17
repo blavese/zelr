@@ -28,6 +28,8 @@ SEED = os.path.join(ROOT, "mountseed.%d.txt" % os.getpid())
 ESP_STICK = os.path.join(ROOT, "mountesp.%d.img" % os.getpid())
 ESP_DISK = os.path.join(ROOT, "mountespdisk.%d.img" % os.getpid())
 ESP_VOL = os.path.join(ROOT, "mountespvol.%d.img" % os.getpid())
+BIG_STICK = os.path.join(ROOT, "mountbig.%d.img" % os.getpid())
+BIG_DISK = os.path.join(ROOT, "mountbigdisk.%d.img" % os.getpid())
 
 ON_STICK = "a file that was already on the stick"
 FROM_ZELR = "written from inside the machine"
@@ -218,7 +220,46 @@ def main():
         finally:
             vm.stop()
 
-    for junk in (STICK, DISK, SEED, TRACE, ESP_STICK, ESP_DISK, ESP_VOL):
+    # --- a stick whose blocks are 4096 bytes ------------------------------------
+    #
+    # Large sticks and SSD enclosures say so. The kernel's buffers are counted
+    # in sectors of 512, and such a stick was read a block per sector, eight
+    # times what each buffer held, over whatever followed it in memory. The
+    # volume on it is the 512 byte one mkfat builds, which is what this system
+    # writes; the driver offers the stick as 512 byte sectors, and a write of
+    # part of a block keeps the rest of it.
+    r = subprocess.run([sys.executable, os.path.join(TOOLS, "mkfat.py"),
+                        BIG_STICK, "8192", SEED + ":HELLO.TXT"], capture_output=True, text=True)
+    c.add("a fat volume can be built for a stick of 4096 byte blocks", r.returncode == 0)
+    if r.returncode == 0:
+        big_usb = ["-device", "qemu-xhci,id=xhci",
+                   "-drive", "if=none,id=stick,format=raw,file=" + BIG_STICK.replace("\\", "/"),
+                   "-device", "usb-storage,bus=xhci.0,drive=stick,"
+                              "logical_block_size=4096,physical_block_size=4096"]
+        vm = Guest(BIG_DISK, memory=256, machine="q35", extra=big_usb)
+        try:
+            vm.wait_boot()
+            vm.wait_serial("usb volume mounted", timeout=60)
+            out = vm.fresh("stick")
+            c.add("a stick of 4096 byte blocks is offered as sectors of 512",
+                  "sectors of 512 bytes" in out and "4096 bytes on the device" in out)
+            c.add("and its volume is mounted", "usb volume mounted" in vm.serial())
+            out = vm.fresh("cat /usb/HELLO.TXT")
+            c.add("and a file on it reads whole", ON_STICK in out)
+            vm.run("write /usb/BIGBLK.TXT %s" % FROM_ZELR.replace(" ", "_"))
+            out = vm.fresh("ls /usb").upper()
+            c.add("and a file written to it joins the one there",
+                  "BIGBLK.TXT" in out and "HELLO.TXT" in out)
+        finally:
+            vm.stop()
+        r = subprocess.run([sys.executable, os.path.join(TOOLS, "readfat.py"), BIG_STICK, "BIGBLK.TXT"],
+                           capture_output=True, text=True)
+        r2 = subprocess.run([sys.executable, os.path.join(TOOLS, "readfat.py"), BIG_STICK, "HELLO.TXT"],
+                            capture_output=True, text=True)
+        c.add("and from outside, the written file is there and the first is intact",
+              "written_from_inside" in r.stdout and ON_STICK in r2.stdout)
+
+    for junk in (STICK, DISK, SEED, TRACE, ESP_STICK, ESP_DISK, ESP_VOL, BIG_STICK, BIG_DISK):
         try:
             os.remove(junk)
         except OSError:

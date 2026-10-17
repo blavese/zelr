@@ -63,7 +63,19 @@ typedef struct {
 static bool attached;
 static u8   dev_slot, dev_in, dev_out;
 static u32  nsectors;
-static u32  sector_bytes = 512;
+static u32  sector_bytes = 512;        /* the device's own block */
+
+/* The rest of the kernel counts in sectors of 512 bytes: every buffer the
+   block layer and the filesystem hand down is a number of those. A stick
+   whose blocks are bigger (4096 is what large ones and SSD enclosures
+   report) was read a block per sector asked for, eight times what the
+   buffer held, written straight over whatever followed it in the kernel's
+   memory (atlas 04, S13). So it is offered as a disk of 512 byte sectors,
+   `ratio` to a block: whole blocks go straight to the caller's buffer, a
+   part of one through `block`, and a part written is read, changed and
+   written back. */
+static u32  ratio = 1;
+static u8  *block;
 static char model[40];
 static u32  next_tag = 1;
 
@@ -189,11 +201,13 @@ static bool read_capacity(void) {
        of one. Both big endian, because SCSI predates the argument. */
     u32 last = be32(stage);
     u32 size = be32(stage + 4);
-    if (!size || size > STAGE_MAX) return false;
+    if (!size || size > STAGE_MAX || size % 512) return false;
     if (last == 0xFFFFFFFFu) return false;    /* needs the 16 byte version */
 
-    nsectors = last + 1;
     sector_bytes = size;
+    ratio = size / 512;
+    u64 sectors = (u64)(last + 1) * ratio;
+    nsectors = sectors > 0xFFFFFFFFu ? 0xFFFFFFFFu : (u32)sectors;
     return true;
 }
 
@@ -225,19 +239,64 @@ static bool rw10(u32 lba, u32 count, void *buf, bool write) {
 
 bool usbdisk_present(void)   { return attached && nsectors != 0; }
 u32  usbdisk_sectors(void)   { return nsectors; }
-u32  usbdisk_block_size(void){ return sector_bytes; }
+u32  usbdisk_block_size(void){ return 512; }
+u32  usbdisk_device_block(void) { return sector_bytes; }
 const char *usbdisk_model(void) { return model[0] ? model : "usb disk"; }
 
+/* Sectors of 512 from `lba`, whole blocks of the device's in one command
+   and the ends of a run through `block`. */
 bool usbdisk_read(u32 lba, u32 count, void *buf) {
     if (!usbdisk_present() || !buf) return false;
-    if (lba + count > nsectors) return false;
-    return rw10(lba, count, buf, false);
+    if (lba + count > nsectors || lba + count < lba) return false;
+    if (ratio == 1) return rw10(lba, count, buf, false);
+    u8 *out = (u8 *)buf;
+    while (count) {
+        u32 b = lba / ratio, off = lba % ratio;
+        if (!off && count >= ratio) {
+            u32 whole = count / ratio;
+            if (whole > 0xFFFF) whole = 0xFFFF;
+            if (!rw10(b, whole, out, false)) return false;
+            out += whole * sector_bytes;
+            lba += whole * ratio;
+            count -= whole * ratio;
+            continue;
+        }
+        u32 n = ratio - off < count ? ratio - off : count;
+        if (!rw10(b, 1, block, false)) return false;
+        memcpy(out, block + off * 512, n * 512);
+        out += n * 512;
+        lba += n;
+        count -= n;
+    }
+    return true;
 }
 
 bool usbdisk_write(u32 lba, u32 count, const void *buf) {
     if (!usbdisk_present() || !buf) return false;
-    if (lba + count > nsectors) return false;
-    return rw10(lba, count, (void *)buf, true);
+    if (lba + count > nsectors || lba + count < lba) return false;
+    if (ratio == 1) return rw10(lba, count, (void *)buf, true);
+    const u8 *in = (const u8 *)buf;
+    while (count) {
+        u32 b = lba / ratio, off = lba % ratio;
+        if (!off && count >= ratio) {
+            u32 whole = count / ratio;
+            if (whole > 0xFFFF) whole = 0xFFFF;
+            if (!rw10(b, whole, (void *)in, true)) return false;
+            in += whole * sector_bytes;
+            lba += whole * ratio;
+            count -= whole * ratio;
+            continue;
+        }
+        /* Part of a block: the rest of it as the device has it, kept. */
+        u32 n = ratio - off < count ? ratio - off : count;
+        if (!rw10(b, 1, block, false)) return false;
+        memcpy(block + off * 512, in, n * 512);
+        if (!rw10(b, 1, block, true)) return false;
+        in += n * 512;
+        lba += n;
+        count -= n;
+    }
+    return true;
 }
 
 /* Eight sectors at a time. A bulk transfer can be longer than that, but a
@@ -282,7 +341,8 @@ bool usbdisk_attach(u8 slot, u8 in_dci, u8 out_dci) {
     if (!cbw)   cbw = (cbw_t *)kmalloc(sizeof *cbw);
     if (!csw)   csw = (csw_t *)kmalloc(sizeof *csw);
     if (!stage) stage = (u8 *)kmalloc(STAGE_MAX);
-    if (!cbw || !csw || !stage) return false;
+    if (!block) block = (u8 *)kmalloc(STAGE_MAX);
+    if (!cbw || !csw || !stage || !block) return false;
 
     attached = true;
     dev_slot = slot;
@@ -290,6 +350,7 @@ bool usbdisk_attach(u8 slot, u8 in_dci, u8 out_dci) {
     dev_out = out_dci;
     nsectors = 0;
     sector_bytes = 512;
+    ratio = 1;
     model[0] = 0;
 
     if (!wait_ready()) { attached = false; return false; }
@@ -300,7 +361,7 @@ bool usbdisk_attach(u8 slot, u8 in_dci, u8 out_dci) {
        mountable rather than merely readable. */
     blk_id = blk_register(&USB_DEV);
 
-    bb_log("usb disk %s, %d sectors of %d bytes, disk %d",
+    bb_log("usb disk %s, %d sectors of 512 bytes in blocks of %d, disk %d",
            usbdisk_model(), nsectors, sector_bytes, blk_id);
     return true;
 }

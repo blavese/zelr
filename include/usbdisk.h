@@ -15,11 +15,12 @@
  * mid sector, and is never the one the system booted from. */
 
 bool usbdisk_present(void);
-u32  usbdisk_sectors(void);
-u32  usbdisk_block_size(void);
+u32  usbdisk_sectors(void);          /* of 512 bytes, whatever the device's blocks are */
+u32  usbdisk_block_size(void);       /* 512 */
+u32  usbdisk_device_block(void);     /* the device's own: 512 to 4096 */
 const char *usbdisk_model(void);
 
-/* Both take and return whole sectors, and both are synchronous. */
+/* Both take and return whole sectors of 512 bytes, and both are synchronous. */
 bool usbdisk_read(u32 lba, u32 count, void *buf);
 bool usbdisk_write(u32 lba, u32 count, const void *buf);
 
