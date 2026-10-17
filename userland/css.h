@@ -2975,9 +2975,14 @@ static inline int css_part_matches(const csheet *s, const ddoc *d, int el,
                 if (d->nodes[k].text >= 0 && d->arena[d->nodes[k].text]) return 0;
             }
             break;
-        case PS_CHECKED:
-            if (!dom_attr(d, el, "checked") && !dom_attr(d, el, "selected")) return 0;
+        case PS_CHECKED: {
+            /* checked="0" is the mark of a box unticked since the page came,
+               by the reader or by a script's checked = false, as the browser
+               and the script's .checked read it: it is not checked. */
+            const char *ck = dom_attr(d, el, "checked");
+            if ((!ck || (ck[0] == '0' && !ck[1])) && !dom_attr(d, el, "selected")) return 0;
             break;
+        }
         case PS_DISABLED: if (!dom_attr(d, el, "disabled")) return 0; break;
         case PS_ENABLED:
             if (dom_attr(d, el, "disabled")) return 0;

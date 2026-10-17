@@ -1888,6 +1888,15 @@ int main(void) {
             dw && dw->color != 0xFF0000 && css_tries < 150, css_tries);
     }
 
+    /* --- an unticked box is not :checked ---------------------------------------- */
+    {
+        lay("<style>input:checked + span{color:#ff0000}</style>"
+            "<input type=checkbox checked><span>ckon</span><input type=checkbox checked=0><span>ckoff</span>", 600);
+        const litem *on = word("ckon"), *off = word("ckoff");
+        okn("a box ticked matches :checked, and one unticked since (checked=0, the browser's mark) does not",
+            on && off && on->color == 0xFF0000 && off->color != 0xFF0000, off ? (int)off->color : -1);
+    }
+
     /* --- nesting -------------------------------------------------------------- */
     {
         /* firefox.com: a rule nested in its first rule of a layer ended the
