@@ -63,7 +63,11 @@
  * only for what it uses (the comment above `src`). */
 #define SRC_MAX    (8 * 1024 * 1024)
 #define DOC_ARENA  (2 * SRC_MAX)
-#define CSS_MAX    (1024 * 1024)
+/* A sheet may be 4 MB: Ubuntu's is 1.1 MB, and cut at a megabyte the rule
+   that hides its six notices was never read, so all six were drawn. The
+   buffer is mapped, and the copy with its addresses made whole is as big
+   as the biggest sheet read (sheet_abs), so a page pays for what it reads. */
+#define CSS_MAX    (4 * 1024 * 1024)
 /* Style sheets a page may link. A site built in pieces links one per
    piece: The Verge links sixty-six, and the rule that keeps its menu drawer
    shut until it is opened was in one past the fortieth, so the drawer and
@@ -1423,9 +1427,15 @@ static int css_urls_from(const url_t *base, const char *in, int n, char *out, in
 /* A sheet read with its urls made whole (css_urls_from), or as it is when
    there is no room to. */
 static char *sheet_abs;
+static int sheet_abs_cap;
 static void css_parse_sheet_in(const url_t *base, const char *css, int len, int lo, int hi, const char *scope) {
-    if (!sheet_abs) sheet_abs = (char *)malloc(CSS_MAX + CSS_MAX / 4);
-    int n = sheet_abs ? css_urls_from(base, css, len, sheet_abs, CSS_MAX + CSS_MAX / 4) : -1;
+    int need = len + len / 4 + 4096;
+    if (need > sheet_abs_cap) {
+        free(sheet_abs);
+        sheet_abs = (char *)malloc((u64)need);
+        sheet_abs_cap = sheet_abs ? need : 0;
+    }
+    int n = sheet_abs ? css_urls_from(base, css, len, sheet_abs, sheet_abs_cap) : -1;
     if (n >= 0) css_parse_style(&sheet, sheet_abs, n, lo, hi, scope);
     else css_parse_style(&sheet, css, len, lo, hi, scope);
 }

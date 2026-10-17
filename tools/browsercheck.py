@@ -875,8 +875,20 @@ def main():
             c.add("a picture element draws the source its media and type choose, at one pixel a pixel",
                   steal > 12000 and spurple < 200 and solive < 200, shots)
 
+            # --- a sheet past a megabyte -------------------------------------
+            #
+            # A band 60 high across the page from the last rule of a sheet of
+            # 1.2 MB. With sheets cut at a megabyte it was not read.
+            go(vm, mon, "http://%s/bigsheet" % srv.host,
+               was=srcs, name="br-going-bigsheet")
+            bigs, pxg, wg, shotg = page_settled(mon, "br-bigsheet")
+            bband = count_in(pxg, wg, PAGE, (0xB0, 0x40, 0x70))
+            print("      band %d" % bband)
+            c.add("the last rule of a sheet past a megabyte is read",
+                  bband > 50 * (PAGE[2] - PAGE[0] - 120), shotg)
+
             go(vm, mon, "http://%s/bg/page" % srv.host,
-               was=srcs, name="br-going-bg")
+               was=bigs, name="br-going-bg")
             bgd, pxb, wb, shotb = page_settled(mon, "br-bg")
             rose = count_in(pxb, wb, PAGE, LOGO)
             teal = count_in(pxb, wb, PAGE, (0x00, 0xB0, 0xB0))

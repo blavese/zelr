@@ -2441,7 +2441,7 @@ static inline int css_scope(const char *p, int n, char *out, int cap, const char
  * rule itself. A sheet that does not nest is read as written. Not done: &
  * takes each parent selector's own weight rather than the most of them
  * (:is()'s), except past 16 parents, where they are joined as :is(). */
-#define CSS_FLAT_MAX (3 * 1024 * 1024)
+#define CSS_FLAT_MAX (5 * 1024 * 1024)
 #define CSS_FLAT_DEPTH 12
 #define CSS_FLAT_SEL 4096
 static char css_flat_buf[CSS_FLAT_MAX];

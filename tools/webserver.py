@@ -280,6 +280,18 @@ TEAL = _logo(160, 90, (0x1C, 0x8C, 0x8C))
 # first is for windows of 300 or less, the second a type nothing here draws,
 # the third the one to show, teal, whose 1x candidate is first. The img's own
 # src, purple, is for a browser that reads no sources; it was what was drawn.
+# A sheet of 1.2 megabytes whose one rule comes last: Ubuntu's styles.css
+# is 1.1 MB, and with sheets cut at a megabyte the rule that hides its
+# notices was never read, so all six were drawn at the top of the page.
+BIGSHEET_PAGE = b"""<!doctype html>
+<html><head><title>big sheet</title>
+<link rel="stylesheet" href="/bigsheet.css">
+<style>body { padding: 24px; background: #ffffff }</style></head>
+<body><div class="band"></div><p>a band from the end of a big sheet</p></body></html>
+"""
+BIGSHEET_CSS = (b"/* " + b"filler " * 175000 + b"*/\n"
+                b".band { height: 60px; background: #b04070 }\n")
+
 SOURCES_PAGE = b"""<!doctype html>
 <html><head><title>sources</title>
 <style>body { padding: 24px; background: #ffffff } img { width: 160px; height: 90px }</style></head>
@@ -1585,6 +1597,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._send(BGJS_PAGE)
         elif path == "/sources":
             self._send(SOURCES_PAGE)
+        elif path == "/bigsheet":
+            self._send(BIGSHEET_PAGE)
+        elif path == "/bigsheet.css":
+            self._send(BIGSHEET_CSS, ctype="text/css")
         elif path == "/keys":
             self._send(KEYS_PAGE)
         elif path == "/paste":

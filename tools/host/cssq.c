@@ -25,7 +25,7 @@ static csheet sheet;
 static cindex index_;
 static cmatch match;
 static char   pagebuf[3 * 1024 * 1024];
-static char   cssbuf[1024 * 1024];
+static char   cssbuf[4 * 1024 * 1024];
 
 static const char *prop_name(int p) {
     for (int i = 0; CSS_PROPS[i].name; i++) if (CSS_PROPS[i].prop == p) return CSS_PROPS[i].name;
