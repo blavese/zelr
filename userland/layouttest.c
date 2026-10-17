@@ -1820,6 +1820,40 @@ int main(void) {
             first > 0 && kept == 0 && again == first && col == 0xFF0000, kept);
     }
 
+    /* --- an element tries only the rules filed under its own classes ------------ */
+    {
+        /* CNN's sheets hold thousands of class rules; filed in 512 chains,
+           an element walked the rules of dozens of other classes for each of
+           its own. Twenty thousand one-class rules and a paragraph with two
+           classes: beyond what the page alone costs, a handful more tries. */
+        static char big[20000 * 24 + 512];
+        int w = 0;
+        const char *head = "<style>";
+        for (int k = 0; head[k]; k++) big[w++] = head[k];
+        for (int i = 0; i < 20000; i++) {
+            char num[8];
+            int nn = 0, v = i;
+            do { num[nn++] = (char)('0' + v % 10); v /= 10; } while (v);
+            big[w++] = '.'; big[w++] = 'k';
+            while (nn) big[w++] = num[--nn];
+            const char *tail = "{color:#102030}";
+            for (int k = 0; tail[k]; k++) big[w++] = tail[k];
+        }
+        const char *rest = "</style><p class='k12345 zz'>triedword</p>";
+        for (int k = 0; rest[k]; k++) big[w++] = rest[k];
+        big[w] = 0;
+        lay("<style></style><p class='k12345 zz'>triedword</p>", 600);
+        css_tries = 0;
+        lay_run(&page, &doc, &sheet, &index_, &match, inl, fake, nfake, 600, 16);
+        int alone = css_tries;
+        lay(big, 600);
+        css_tries = 0;
+        lay_run(&page, &doc, &sheet, &index_, &match, inl, fake, nfake, 600, 16);
+        const litem *tw = word("triedword");
+        okn("an element tries only the rules filed under its own classes, not a chain shared with hundreds",
+            tw && tw->color == 0x102030 && css_tries - alone < 25, css_tries - alone);
+    }
+
     /* --- nesting -------------------------------------------------------------- */
     {
         /* firefox.com: a rule nested in its first rule of a layer ended the

@@ -4393,7 +4393,15 @@ static inline void css_apply_v(int prop, const char *v, cstyle *st, int root_px,
  * the few that insist on nothing. That is the whole of the trick and it
  * turns the tens of millions into tens. */
 
-#define CSS_BUCKETS 512
+/* Classes and ids hash into this many chains. At 512 a page with
+   thousands of classes, CNN's or any built on utility classes, filed the
+   rules of dozens of unrelated classes in each chain, and an element walked
+   all of them for each of its own classes: half of CNN's time went in
+   matching rules that could never apply. */
+#define CSS_BUCKETS 8192
+/* How many rules have been tried against an element, for a test to read. */
+static int css_tries;
+
 
 /* What an element's ancestors are, as a hundred and twenty eight bits: two
  * for each tag, id and class above it.
@@ -4529,6 +4537,7 @@ static inline void css_collect_chain(const csheet *s, const cindex *x,
         const crule *rule = &s->rules[r];
         if (rule->mq_lo >= 0 && css_view_w > 0 && css_view_w + css_mq_extra < rule->mq_lo) continue;
         if (rule->mq_hi >= 0 && css_view_w > 0 && css_view_w + css_mq_extra > rule->mq_hi) continue;
+        css_tries++;
         if (!css_matches(s, d, el, rule, m)) continue;
         hits[*n].rule = r;
         hits[*n].spec = rule->spec;
