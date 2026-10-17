@@ -1948,6 +1948,56 @@ int main(void) {
             on && off && on->color == 0xFF0000 && off->color != 0xFF0000, off ? (int)off->color : -1);
     }
 
+    /* --- an absolute box in a row, and one between its sides ------------------ */
+    {
+        /* Engadget's header: its name absolutely positioned with left: 0,
+           right: 0, a width and margin: 0 auto, in a row that centres. It
+           was at the header's top left corner. The figures are Chromium's. */
+        lay("<style>body{margin:0}.c{display:flex;align-items:center;height:64px;position:relative}"
+            ".l{position:absolute;margin:0 auto;left:0;right:0;width:135px;height:28px;background:#ff0000}"
+            ".h{position:relative;width:33px;height:30px;background:#00ff00}h1{margin:16px 0 12px}</style>"
+            "<div class=c><div class=h id=h></div><h1 class=l id=l></h1></div>", 600);
+        const litem *l = box_of(by_id("l")), *h = box_of(by_id("h"));
+        okn("an absolute box with both sides, a width and auto margins is centred between them",
+            l && l->x == 232 && l->w == 135, l ? l->x : -1);
+        okn("and in a row centring its items, an absolute child with no top is centred across it",
+            l && l->y == 18 && h && h->y == 17 && h->x == 0, l ? l->y : -1);
+        const char *css = "<style>body{margin:0}.c{display:flex;height:100px;width:600px;position:relative}"
+                          ".a{position:absolute;width:40px;height:20px;background:#ff0000}"
+                          ".jc{justify-content:center}.ac{align-items:center}.col{flex-direction:column}"
+                          ".je{justify-content:flex-end}.ae{align-items:flex-end}.se{align-self:flex-end}"
+                          ".m{margin:10px 0 0 20px}.b{position:relative;width:600px;height:50px}"
+                          ".lr{left:0;right:0;margin-left:auto}.l5{left:5px;margin-left:20px}.r0{right:0}"
+                          ".mr{margin-right:10px}.ml{margin-left:20px}</style>";
+        char page_[1000];
+        static const char *const rows[] = {
+            "<div class='c jc ac'><div class=a id=a></div></div>",
+            "<div class='c col je ac'><div class=a id=a></div></div>",
+            "<div class='c je ae'><span>xx</span><div class=a id=a></div></div>",
+            "<div class='c ac'><div class='a se' id=a></div></div>",
+            "<div class='c jc ac'><div class='a m' id=a></div></div>",
+            "<div class=b><div class='a lr' id=a></div></div>",
+            "<div class=b><div class='a l5' id=a></div></div>",
+            "<div class=b><div class='a r0 mr' id=a></div></div>",
+            "<div class=b><div class='a r0 ml' id=a></div></div>",
+        };
+        static const int want[][2] = { { 280, 40 }, { 280, 80 }, { 560, 80 }, { 0, 80 }, { 290, 45 }, { 560, 0 },
+                                       { 25, 0 }, { 550, 0 }, { 560, 0 } };
+        int good = 0, first_bad = -1;
+        for (int r = 0; r < 9; r++) {
+            int w = 0;
+            for (const char *q = css; *q; q++) page_[w++] = *q;
+            for (const char *q = rows[r]; *q; q++) page_[w++] = *q;
+            page_[w] = 0;
+            lay(page_, 600);
+            const litem *a = box_of(by_id("a"));
+            if (a && a->x == want[r][0] && a->y == want[r][1] && a->w == 40) good++;
+            else if (first_bad < 0) first_bad = r * 10000 + (a ? a->x * 100 + a->y : 9999) + (a ? a->w * 100000000 : 0);
+        }
+        okn("and by justify-content, a column, the ends, align-self, its margins, one auto margin, margins at a side: "
+            "as Chromium places them, 40 wide", good == 9, first_bad);
+    }
+
     /* --- nesting -------------------------------------------------------------- */
     {
         /* firefox.com: a rule nested in its first rule of a layer ended the

@@ -3450,6 +3450,37 @@ static void lay_flex_line(lctx *L, const cstyle *st, const int *kid, const int *
     *y = top + tallest;
 }
 
+/* An absolutely positioned child of a row that gives no offset on an axis
+   goes where the row would put it as its only item, its static position:
+   centred by align-items: center or justify-content: center, at the end by
+   their ends. It went at the row's start: Engadget's name, centred in its
+   header that way, sat at the header's top. Across the row only when the
+   row's height is set, which is the room it is centred in. Its box and
+   everything in it are moved, as laid out at the start (`first` on). */
+static void lay_flex_static(lctx *L, int node, const cstyle *st, int first, int cw) {
+    if (L->measuring || L->box_node != node || first >= L->out->nitems) return;
+    cstyle own;
+    lay_style(L, node, st, &own, cw);
+    if (own.position != POS_ABSOLUTE) return;
+    int column = st->flex_dir == FD_COLUMN || st->flex_dir == FD_COLUMN_REVERSE;
+    int ih = lay_inner_height(st);
+    int bw = L->box_w + (own.ml == CSS_AUTO_OFF ? 0 : own.ml) + (own.mr == CSS_AUTO_OFF ? 0 : own.mr);
+    int bh = L->box_h + (own.mt == CSS_AUTO_OFF ? 0 : own.mt) + (own.mb == CSS_AUTO_OFF ? 0 : own.mb);
+    int al = own.align_self >= 0 ? own.align_self : st->align_items;
+    int across_room = column ? cw - bw : (ih > 0 ? ih - bh : 0);
+    int along_room = column ? (ih > 0 ? ih - bh : 0) : cw - bw;
+    int across = al == AI_CENTER ? across_room / 2 : al == AI_END ? across_room : 0;
+    int along = st->justify == JC_CENTER ? along_room / 2 : st->justify == JC_END ? along_room : 0;
+    int dx = column ? across : along, dy = column ? along : across;
+    if (own.left != CSS_AUTO_OFF || own.right_off != CSS_AUTO_OFF) dx = 0;
+    if (own.top != CSS_AUTO_OFF || own.bottom != CSS_AUTO_OFF) dy = 0;
+    if (!dx && !dy) return;
+    for (int i = first; i < L->out->nitems; i++) {
+        L->out->items[i].x += dx;
+        L->out->items[i].y += dy;
+    }
+}
+
 static void lay_flex(lctx *L, int node, const cstyle *st, int cx, int cw,
                      int *y) {
     const ddoc *d = L->d;
@@ -3466,8 +3497,9 @@ static void lay_flex(lctx *L, int node, const cstyle *st, int cx, int cw,
     int nplaced = 0, extra = -1, top = *y;
     int n = lay_items(L, node, st, cw, kid, par, placed, &nplaced, &extra);
     for (int i = 0; i < nplaced; i++) {
-        int yy = top;
+        int yy = top, at = L->out->nitems;
         lay_block(L, placed[i], st, cx, cw, &yy);
+        lay_flex_static(L, placed[i], st, at, cw);
     }
     if (n == 0) return;
 
@@ -5166,10 +5198,25 @@ static void lay_block(lctx *L, int node, const cstyle *parent, int x,
             if (!probe.border_box) bw += probe.pl + probe.pr + probe.bl + probe.br;
         }
 
+        /* Its margins, which a box with a width of its own is placed inside
+           of: the margin box's right side is what right: puts at the offset
+           (a margin-right of 10 at right: 0 left the box 10 too far right),
+           and the room it is given holds them (a margin-left of 20 took 20
+           from a box 40 wide). A width it was measured to has them already. */
+        int hmargins = probe.width < 0 ? 0
+                     : (probe.ml == CSS_AUTO_OFF ? 0 : probe.ml) + (probe.mr == CSS_AUTO_OFF ? 0 : probe.mr);
         int ax = *y >= 0 ? x : x;              /* where the flow left it */
         if (probe.left != CSS_AUTO_OFF) ax = cbx + probe.left;
         else if (probe.right_off != CSS_AUTO_OFF)
-            ax = cbx + aw - probe.right_off - bw;
+            ax = cbx + aw - probe.right_off - bw - hmargins;
+        /* Both sides, a width and auto margins: the margins share what is
+           left between the sides, so margin: 0 auto centres it, as
+           Engadget centres its name in its header (left: 0, right: 0); one
+           auto margin takes it all. It sat at the left. */
+        if (probe.width >= 0 && lft && rgt && (probe.ml == CSS_AUTO_OFF || probe.mr == CSS_AUTO_OFF)) {
+            int spare = aw - probe.left - probe.right_off - bw - hmargins;
+            if (spare > 0) ax += probe.ml != CSS_AUTO_OFF ? 0 : probe.mr != CSS_AUTO_OFF ? spare : spare / 2;
+        }
 
         /* A top is an offset from the containing block's top, which is
            known. A bottom is an offset from its bottom, which is not until
@@ -5186,7 +5233,7 @@ static void lay_block(lctx *L, int node, const cstyle *parent, int x,
 
         /* A percentage is worked out again from the room it is given, so it
            is given its box's width; anything else the width it was placed by. */
-        int room = probe.width < 0 ? (fit >= 0 ? fit : (cbx + aw) - ax) : probe.width_pct ? aw : bw;
+        int room = probe.width < 0 ? (fit >= 0 ? fit : (cbx + aw) - ax) : probe.width_pct ? aw : bw + hmargins;
         /* Both sides given and no width: as wide as lies between them, as an
            overlay written inset: 0 is. */
         if (probe.width < 0 && probe.left != CSS_AUTO_OFF && probe.right_off != CSS_AUTO_OFF)
