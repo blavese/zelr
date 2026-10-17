@@ -1184,6 +1184,64 @@ static void test_fat_names(void) {
        fat_rename("/longername.txt", "/longer~1.txt"));
     ok("and the file is still there, whole", reads_as("/longer~1.txt", "kept"));
 
+    /* Renames that take a second entry: to a long name, into another
+       directory, a directory with what is in it. They were refused, and
+       Files and the terminal copied and deleted instead. */
+    ok("a file renamed to a long name in its directory",
+       fat_write_file("/shortnm.txt", (const u8 *)"renamed", 7) &&
+       fat_rename("/shortnm.txt", "/a much longer name for it.txt"));
+    ok("is there under the new name, whole, and not under the old, nothing left marked",
+       reads_as("/a much longer name for it.txt", "renamed") && !fat_stat("/shortnm.txt", 0, 0) &&
+       fat_test_short_names_unique("/") && fat_test_renaming("/") == 0);
+    ok("and moves into a directory under another long name",
+       fat_mkdir("/mvdir") && fat_rename("/a much longer name for it.txt", "/mvdir/moved here.txt") &&
+       reads_as("/mvdir/moved here.txt", "renamed") && !fat_stat("/a much longer name for it.txt", 0, 0));
+    ok("a path through .. inside the filesystem resolves",
+       fat_mkdir("/mvdir/sub") && reads_as("/mvdir/sub/../moved here.txt", "renamed"));
+    /* Its ".." has to follow it: through the old one, the marker below is
+       not there. */
+    ok("a directory moves with what is in it, and its .. is its new parent",
+       fat_write_file("/mvdir/sub/inner.txt", (const u8 *)"inside", 6) && fat_mkdir("/mvdest") &&
+       fat_write_file("/mvdest/marker.txt", (const u8 *)"here", 4) &&
+       fat_rename("/mvdir/sub", "/mvdest/sub moved") && !fat_stat("/mvdir/sub", 0, 0) &&
+       reads_as("/mvdest/sub moved/inner.txt", "inside") &&
+       reads_as("/mvdest/sub moved/../marker.txt", "here"));
+    ok("a directory is not moved inside itself",
+       !fat_rename("/mvdest", "/mvdest/sub moved/deeper") && fat_stat("/mvdest/sub moved", 0, 0));
+
+    /* The same kind of rename cut by the power after each write in turn,
+       what was cut off forgotten as a restart forgets it and the volume swept
+       as its mount sweeps it: at every point the file has one name, and is
+       whole, and nothing is left marked. Two names for one chain is what the
+       mark is for: deleting either would free the other's clusters. */
+    ok("a file to rename while the power fails", fat_write_file("/cut me.txt", (const u8 *)"survivor", 8));
+    const char *cut_names[2] = { "/cut me.txt", "/mvdest/cut me, now longer.txt" };
+    bool one_name = true, cut_whole = true, unmarked = true, finished = false;
+    u32 cuts = 0;
+    for (u32 k = 1; k < 64 && !finished; k++) {
+        bool at_first = fat_stat(cut_names[0], 0, 0);
+        fat_test_writes_left(k);
+        finished = fat_rename(cut_names[at_first ? 0 : 1], cut_names[at_first ? 1 : 0]);
+        fat_test_writes_left(0xFFFFFFFFu);
+        fat_test_forget();
+        fat_reclaim();
+        bool a = fat_stat(cut_names[0], 0, 0), b = fat_stat(cut_names[1], 0, 0);
+        if (a == b) one_name = false;
+        if (!reads_as(cut_names[a ? 0 : 1], "survivor")) cut_whole = false;
+        if (fat_test_renaming("/") || fat_test_renaming("/mvdest")) unmarked = false;
+        if (!finished) cuts++;
+    }
+    ok("a rename cut at each write leaves one name, the file whole, nothing marked",
+       finished && cuts >= 3 && one_name && cut_whole && unmarked);
+    fat_delete_file(cut_names[0]);
+    fat_delete_file(cut_names[1]);
+    fat_delete_file("/mvdest/sub moved/inner.txt");
+    fat_rmdir("/mvdest/sub moved");
+    fat_delete_file("/mvdest/marker.txt");
+    fat_rmdir("/mvdest");
+    fat_delete_file("/mvdir/moved here.txt");
+    fat_rmdir("/mvdir");
+
     /* A rename from one volume to another. Nothing is mounted at /usb here,
        which is the point: the disk's own /x.txt must not be what moves. */
     fat_write_file("/x.txt", (const u8 *)"disk", 4);

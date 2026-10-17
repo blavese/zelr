@@ -14,8 +14,8 @@
  * rename, because that is how a program replaces a file without a moment
  * where it is half written: write a temporary, then swing the name. What
  * this filesystem can and cannot do about that is in kernel/fat.c, and the
- * checks here are as much about the refusals as the successes -- a rename
- * that quietly did the unsafe thing would pass a check that only looked at
+ * checks here are about the refusals as well as the successes -- a rename
+ * that quietly did the wrong thing would pass a check that only looked at
  * the cases that work.
  */
 #include "zelr.h"
@@ -34,6 +34,8 @@ static void ok(const char *what, int cond) {
 #define B    DIR "/dur-b.txt"
 #define TMP  DIR "/dur-t.txt"
 #define DEEP "/cfg/dur-a.txt"
+#define LONG DIR "/a-name-far-too-long-for-eight-three.text"
+#define SUB  DIR "/dur-d"
 
 static char buf[256];
 
@@ -101,22 +103,25 @@ int main(void) {
     ok("and the new contents are what is there", says(B, "replaced"));
     ok("and the temporary is gone", on_disk(TMP) < 0);
 
-    /* --- and what it will not do -------------------------------------------- */
+    /* --- another directory, a long name ------------------------------------- */
     //
-    // Both of these need a second directory entry, and this filesystem has
-    // nowhere to record that two entries are one rename in progress. A
-    // power cut between them would leave two names for one chain of
-    // clusters, and deleting either would then corrupt the other. Refusing
-    // is the honest answer and these check that it really refuses rather
-    // than doing it and hoping.
-    ok("renaming into another directory is refused",
-       rename(B, DEEP) != 0);
-    ok("and the file is still where it was", says(B, "replaced"));
+    // Both need a second directory entry, and between writing it and
+    // deleting the first, two names share one chain of clusters: deleting
+    // either then would corrupt the other. The new entry carries a mark
+    // until the old one is gone, and the sweep a volume made here gets when
+    // it is mounted finishes a rename the power cut short (kernel/fat.c), so
+    // on such a volume both are done. They were refused before there was a
+    // mark.
+    ok("a file can be moved into another directory", rename(B, DEEP) == 0);
+    ok("and is there, and gone from where it was", says(DEEP, "replaced") && on_disk(B) < 0);
+    ok("and renamed to a name that does not fit eight and three", rename(DEEP, LONG) == 0);
+    ok("and is there under it, and gone from where it was", says(LONG, "replaced") && on_disk(DEEP) < 0);
+    ok("and back again", rename(LONG, B) == 0 && says(B, "replaced") && on_disk(LONG) < 0);
 
-    ok("renaming to a name that does not fit is refused",
-       rename(B, DIR "/a-name-far-too-long-for-eight-three.text") != 0);
-    ok("and the file is still where it was after that too",
-       says(B, "replaced"));
+    /* --- and what it will not do -------------------------------------------- */
+    mkdir(SUB);
+    ok("a directory is not moved inside itself", rename(SUB, SUB "/inner") != 0);
+    rmdir(SUB);
 
     ok("renaming something that is not there is refused",
        rename(DIR "/dur-nothing.txt", DIR "/dur-x.txt") != 0);

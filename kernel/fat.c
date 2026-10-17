@@ -1594,7 +1594,31 @@ static void dir_drop_long(const dir_t *d, u32 index, const dirent_t *shortent) {
 
 static bool fits_83(const char *name);
 
+/* "." or "..", which name a directory's first two entries and nothing else. */
+static bool is_dots(const char *name) {
+    return name[0] == '.' && (!name[1] || (name[1] == '.' && !name[2]));
+}
+
 static int dir_find(const dir_t *d, const char *name, dirent_t *out) {
+    /* "." and ".." are stored as themselves. Packed as names they came out
+       as an empty name with an extension of ".", which no entry has, so a
+       path through ".." inside this file never resolved (atlas 04, S18: the
+       VFS takes them out of paths before here, which hid it). The root has
+       neither. */
+    if (is_dots(name)) {
+        if (d->root) return -1;
+        u8 dots[11];
+        memset(dots, ' ', 11);
+        dots[0] = '.';
+        if (name[1]) dots[1] = '.';
+        dirent_t e;
+        for (u32 i = 0; i < 2; i++) {
+            if (!dir_read(d, i, &e)) return -1;
+            if (memcmp(e.name, dots, 11) == 0) { if (out) *out = e; return (int)i; }
+        }
+        return -1;
+    }
+
     /* By the short name only when the name really is one.
      *
      * to_83 truncates, so a name too long for eight and three packs down to
@@ -1955,37 +1979,36 @@ static bool fat_write_file_held(const char *path, const u8 *buf, u32 size) {
 
 /* --- giving a file a different name -------------------------------------
  *
- * Within one directory, and only within one.
+ * Inside one directory, to a name that fits 8.3, the name is changed in the
+ * entry that is already there: eleven bytes in one directory sector, one
+ * write, which the drive either does or does not, and either way there is
+ * exactly one name for the file. That works on any volume.
  *
- * The obvious way -- write a second entry with the new name, then delete
- * the first -- cannot be made safe on this filesystem. Between those two
- * writes the power can go, and what is left is two names for one chain of
+ * Anything else -- a long name, another directory -- needs a second entry:
+ * the new one written, then the old one deleted. Between those two writes
+ * the power can go, and what is left is two names for one chain of
  * clusters. That is not a tidy-up job: deleting either name frees the
- * chain, and the other name is then pointing at clusters that have been
- * handed to something else. There is no order of those two writes that
- * avoids it, because FAT has nowhere to say "these two entries are one
- * rename in progress".
- *
- * What can be done safely is changing the name inside the entry that is
- * already there. Eleven bytes in one directory sector: one write, which the
- * drive either does or does not, and either way there is exactly one name
- * for the file.
- *
- * The price is what it cannot do, and it says so rather than doing it
- * badly:
- *
- *   across directories, because that means a second entry
- *   to a name that does not fit 8.3, because that means long name entries
- *     alongside the short one, and those are more writes
- *
- * A caller that needs either can copy the file and delete the original,
- * which is slower and is not atomic and does not corrupt anything.
+ * chain, and the other name then points at clusters handed to something
+ * else. FAT has nowhere to say "these two entries are one rename in
+ * progress", so it is said in a byte the format leaves alone: the new entry
+ * is written with NT_RENAMING in its reserved byte, the old entry is
+ * deleted, and only then is the mark cleared. The sweep that runs when a
+ * volume made here is mounted (fat_reclaim, finish_renames) finishes a
+ * rename it finds marked: another entry still naming the same clusters is
+ * the old one, and goes. So that is done only on a volume made here; on
+ * another system's, whose mount is not swept, such a rename is refused as
+ * it always was, and a caller copies and deletes instead (slower, not
+ * atomic, never corrupt).
  *
  * Replacing an existing file is done by removing it first. That is a real
  * window -- a power cut inside it leaves the destination gone and the
  * source still there -- but it is a window a repeat of the same rename
  * closes, which is the better of the two failures available.
  */
+
+/* In byte 12 of an entry, of which Windows uses bits 3 and 4 (the case of
+   the 8.3 name) and nothing uses the rest. */
+#define NT_RENAMING 0x40
 
 /* Whether a name survives the trip through 8.3 unchanged, which is the
    condition for the short entry being the whole of what names this file. */
@@ -1999,6 +2022,66 @@ static bool fits_83(const char *name) {
     return same_name(back, name);
 }
 
+/* Whether a directory is the one starting at `top` or somewhere inside it,
+   by following ".." up to the root: a directory moved into itself would be
+   reachable from nowhere, with everything in it. Anything it cannot read
+   counts as inside, so the move is refused. */
+static bool dir_within(const dir_t *d, u32 top) {
+    dir_t here = *d;
+    for (u32 guard = 0; guard < 4096; guard++) {
+        if (here.root) return false;
+        if (here.cluster == top) return true;
+        dirent_t up;
+        if (!dir_read(&here, 1, &up) || up.name[0] != '.' || up.name[1] != '.') return true;
+        u32 upc = ent_cluster(&up);
+        if (upc < 2) return false;            /* ".." of a child of the root */
+        here.cluster = upc;
+    }
+    return true;
+}
+
+/* Points a moved directory's ".." at its new parent (cluster 0 for the root,
+   as the specification says even on FAT32). Other systems walk up by it. */
+static bool dir_point_up(u32 dir_cluster, const dir_t *parent) {
+    dir_t self = { false, dir_cluster };
+    dirent_t up;
+    if (!dir_read(&self, 1, &up)) return false;
+    if (up.name[0] != '.' || up.name[1] != '.') return true;    /* none to point */
+    set_ent_cluster(&up, parent->root ? 0 : parent->cluster);
+    return dir_write(&self, 1, &up);
+}
+
+/* The second-entry rename described above, on a volume made here. */
+static bool rename_by_new_entry(const dir_t *src_dir, int slot, const dirent_t *old,
+                                const dir_t *dst_dir, const char *leaf) {
+    bool is_dir = (old->attr & ATTR_DIRECTORY) != 0;
+    bool moved = src_dir->root != dst_dir->root || src_dir->cluster != dst_dir->cluster;
+    u32 chain = ent_cluster(old);
+    if (is_dir && chain >= 2 && dir_within(dst_dir, chain)) return false;
+
+    /* The new name, its long entries first and then the short one with the
+       mark: from here there are two names, and the mark says which is new. */
+    dirent_t n = *old;
+    n.nt_reserved = 0;
+    int nslot = dir_put_name(dst_dir, leaf, &n);
+    if (nslot < 0) return false;
+    n.nt_reserved = NT_RENAMING;
+    if (!dir_write(dst_dir, (u32)nslot, &n) || !vol_flush()) return false;
+
+    /* The old entry goes, its long name first, as a delete does. From here
+       the file has one name, the new one. */
+    dirent_t gone = *old;
+    dir_drop_long(src_dir, (u32)slot, &gone);
+    gone.name[0] = ENT_DELETED;
+    if (!dir_write(src_dir, (u32)slot, &gone) || !vol_flush()) return false;
+
+    if (is_dir && moved && chain >= 2 && (!dir_point_up(chain, dst_dir) || !vol_flush())) return false;
+
+    n.nt_reserved = 0;
+    if (!dir_write(dst_dir, (u32)nslot, &n)) return false;
+    return vol_flush();
+}
+
 static bool fat_rename_held(const char *from, const char *to) {
     if (!mounted) return false;
 
@@ -2006,21 +2089,21 @@ static bool fat_rename_held(const char *from, const char *to) {
     char src_leaf[FAT_NAME_MAX], dst_leaf[FAT_NAME_MAX];
     if (!resolve_parent(from, &src_dir, src_leaf, sizeof(src_leaf))) return false;
     if (!resolve_parent(to, &dst_dir, dst_leaf, sizeof(dst_leaf))) return false;
-    if (!src_leaf[0] || !dst_leaf[0]) return false;
+    if (!src_leaf[0] || !dst_leaf[0] || is_dots(src_leaf) || is_dots(dst_leaf)) return false;
 
-    /* The same directory, which is the whole of what this can do. A
-       directory is identified by where its entries live. */
-    if (src_dir.cluster != dst_dir.cluster || src_dir.root != dst_dir.root)
-        return false;
-
-    if (!fits_83(dst_leaf)) return false;
+    /* A directory is identified by where its entries live. In one of them to
+       a name that fits 8.3, the entry is renamed where it is; anything else
+       takes a second entry, which only a volume made here may have. */
+    bool same_dir = src_dir.cluster == dst_dir.cluster && src_dir.root == dst_dir.root;
+    bool in_place = same_dir && fits_83(dst_leaf);
+    if (!in_place && !fat_made_here_held()) return false;
 
     dirent_t e;
     int slot = dir_find(&src_dir, src_leaf, &e);
     if (slot < 0) return false;
 
     /* Nothing to do, and saying so beats rewriting the entry. */
-    if (same_name(src_leaf, dst_leaf)) return true;
+    if (same_dir && same_name(src_leaf, dst_leaf)) return true;
 
     /* Out of the way first, if something is there. A directory is not
        removed by this: a rename that quietly deleted a directory full of
@@ -2033,7 +2116,7 @@ static bool fat_rename_held(const char *from, const char *to) {
        deleting it first -- which is what happened -- left nothing to rename
        and the call reporting failure over a file that no longer existed. The
        rename is only a matter of dropping the long name, below. */
-    if (taken == slot) taken = -1;
+    if (same_dir && taken == slot) taken = -1;
 
     if (taken >= 0) {
         if (existing.attr & ATTR_DIRECTORY) return false;
@@ -2043,6 +2126,8 @@ static bool fat_rename_held(const char *from, const char *to) {
         slot = dir_find(&src_dir, src_leaf, &e);
         if (slot < 0) return false;
     }
+
+    if (!in_place) return rename_by_new_entry(&src_dir, slot, &e, &dst_dir, dst_leaf);
 
     /* The long name entries in front of this one describe the old name, so
        they go. Losing them loses nothing but the spelling: the file is
@@ -2162,6 +2247,104 @@ static bool fat_rmdir_held(const char *path) {
     return vol_flush();
 }
 
+/* --- finishing renames a power cut interrupted ---------------------------- */
+
+#define RENAMING_MAX 16
+typedef struct { dir_t d; u32 i, first; } renaming_t;
+
+/* Another real entry whose chain starts at `first`, than the one at
+   (skip, skip_i), anywhere on the volume: 1 when there is, 0 when every
+   directory was read and there is none, -1 when not every one could be. */
+static int find_other_naming(u32 first, const dir_t *skip, u32 skip_i, dir_t *out, u32 *out_i) {
+    u32 queue_cap = 64, head = 0, tail = 0, visited = 0;
+    u32 *queue = (u32 *)kmalloc(queue_cap * 4);
+    if (!queue) return -1;
+    dir_t d = ROOT;
+    int got = 0;
+    for (;;) {
+        u32 cap = dir_capacity(&d);
+        dirent_t e;
+        for (u32 i = 0; i < cap; i++) {
+            if (!dir_read(&d, i, &e)) { got = -1; break; }
+            if (e.name[0] == ENT_FREE) break;
+            if (!entry_is_real(&e) || e.name[0] == '.') continue;
+            u32 c = ent_cluster(&e);
+            if (c == first && !(d.root == skip->root && d.cluster == skip->cluster && i == skip_i)) {
+                *out = d;
+                *out_i = i;
+                got = 1;
+                break;
+            }
+            if ((e.attr & ATTR_DIRECTORY) && c >= 2) {
+                if (tail == queue_cap) {
+                    u32 *bigger = (u32 *)kmalloc(queue_cap * 8);
+                    if (!bigger) { got = -1; break; }
+                    memcpy(bigger, queue, queue_cap * 4);
+                    kfree(queue);
+                    queue = bigger;
+                    queue_cap *= 2;
+                }
+                queue[tail++] = c;
+            }
+        }
+        /* A directory pointing back at an ancestor, which only a damaged
+           volume has, would be walked for ever: past one visit a cluster,
+           the walk is not trusted. */
+        if (got || head == tail) break;
+        if (++visited > cluster_count) { got = -1; break; }
+        d.root = false;
+        d.cluster = queue[head++];
+    }
+    kfree(queue);
+    return got;
+}
+
+/* Each entry the sweep found marked NT_RENAMING: the old entry, if it is
+   still there, goes as a delete takes it (its clusters stay, being the
+   renamed file's); a moved directory's ".." is pointed at where it is now;
+   and the mark is cleared. The mark stays unless every directory could be
+   read, as an old entry not found because its directory could not be read
+   would otherwise be left naming the file's clusters for good. An empty
+   file has no clusters to know its old entry by, so one renamed as the
+   power went can come back under both names, sharing nothing. */
+static void finish_renames(const renaming_t *r, u32 n) {
+    for (u32 k = 0; k < n; k++) {
+        dirent_t e;
+        if (!dir_read(&r[k].d, r[k].i, &e) || !(e.nt_reserved & NT_RENAMING)) continue;
+        if (r[k].first >= 2) {
+            dir_t od;
+            u32 oi;
+            int other = find_other_naming(r[k].first, &r[k].d, r[k].i, &od, &oi);
+            if (other < 0) continue;
+            if (other) {
+                dirent_t old;
+                if (!dir_read(&od, oi, &old)) continue;
+                dir_drop_long(&od, oi, &old);
+                old.name[0] = ENT_DELETED;
+                if (!dir_write(&od, oi, &old) || !vol_flush()) continue;
+            }
+            if ((e.attr & ATTR_DIRECTORY) && (!dir_point_up(r[k].first, &r[k].d) || !vol_flush())) continue;
+        }
+        e.nt_reserved &= (u8)~NT_RENAMING;
+        if (dir_write(&r[k].d, r[k].i, &e)) vol_flush();
+    }
+}
+
+/* For the self test: how many entries in a directory are still marked as a
+   rename's new name. */
+static u32 fat_test_renaming_held(const char *path) {
+    if (!mounted) return 0;
+    dir_t d;
+    if (!resolve_dir(path, &d)) return 0;
+    u32 cap = dir_capacity(&d), n = 0;
+    for (u32 i = 0; i < cap; i++) {
+        dirent_t e;
+        if (!dir_read(&d, i, &e) || e.name[0] == ENT_FREE) break;
+        if (entry_is_real(&e) && (e.nt_reserved & NT_RENAMING)) n++;
+    }
+    return n;
+}
+
 /* --- reclaiming leaked clusters ----------------------------------------- */
 
 /* Frees clusters that no directory entry refers to.
@@ -2217,6 +2400,8 @@ static u32 fat_reclaim_held(void) {
      * mount; freed data does not come back. */
     bool whole = true;
     u32 failures_before = fat_read_failures;
+    renaming_t renaming[RENAMING_MAX];
+    u32 nrenaming = 0;
 
     for (;;) {
         u32 cap = dir_capacity(&d);
@@ -2228,6 +2413,12 @@ static u32 fat_reclaim_held(void) {
             if (e.name[0] == '.') continue;   /* "." and ".." lead in circles */
 
             u32 first = ent_cluster(&e);
+            if ((e.nt_reserved & NT_RENAMING) && nrenaming < RENAMING_MAX) {
+                renaming[nrenaming].d = d;
+                renaming[nrenaming].i = i;
+                renaming[nrenaming].first = first;
+                nrenaming++;
+            }
             u32 c = first;
             u32 guard = 0;
             while (c >= 2 && c < eoc_min() && c < total && guard++ < total) {
@@ -2259,6 +2450,10 @@ static u32 fat_reclaim_held(void) {
         d.root = false;
         d.cluster = queue[head++];
     }
+
+    /* Renames a power cut left half done, which the walk saw marked. Both
+       names reach the same chain, so what is reachable does not change. */
+    if (nrenaming) finish_renames(renaming, nrenaming);
 
     if (!whole || fat_read_failures != failures_before) {
         kfree(queue);
@@ -2380,6 +2575,8 @@ bool fat_stat(const char *path, u32 *size_out, bool *dir_out) { fat_enter(); boo
 int fat_read_file(const char *path, u8 *buf, u32 cap) { fat_enter(); int r = fat_read_file_held(path, buf, cap); fat_leave(); return r; }
 u32 fat_test_runs(const char *path) { fat_enter(); u32 r = fat_test_runs_held(path); fat_leave(); return r; }
 bool fat_test_short_names_unique(const char *path) { fat_enter(); bool r = fat_test_short_names_unique_held(path); fat_leave(); return r; }
+u32 fat_test_renaming(const char *path) { fat_enter(); u32 r = fat_test_renaming_held(path); fat_leave(); return r; }
+void fat_test_forget(void) { fat_enter(); fat_forget(); fat_leave(); }
 bool fat_write_file(const char *path, const u8 *buf, u32 size) { fat_enter(); bool r = fat_write_file_held(path, buf, size); fat_leave(); return r; }
 bool fat_rename(const char *from, const char *to) { fat_enter(); bool r = fat_rename_held(from, to); fat_leave(); return r; }
 bool fat_delete_file(const char *path) { fat_enter(); bool r = fat_delete_file_held(path); fat_leave(); return r; }

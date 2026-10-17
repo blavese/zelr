@@ -118,6 +118,12 @@ u32  fat_reclaim(void);
 void fat_test_writes_left(u32 n);
 void fat_test_subdirs_unreadable(bool on);
 
+/* For the self test: the volume's cached sectors forgotten, as they are by a
+   restart (what a cut-off write left only in memory is gone); and how many
+   entries in a directory are still marked as a rename's new name. */
+void fat_test_forget(void);
+u32  fat_test_renaming(const char *path);
+
 /* How many runs of neighbouring clusters a file's chain is in, 0 if it has
    none or is not there: what reading or writing it in runs is measured by. */
 u32  fat_test_runs(const char *path);
