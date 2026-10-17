@@ -73,6 +73,7 @@ FIELD = (0x00, 0xA0, 0x00)
 ROUND = (0x00, 0xA0, 0xFF)      # the one the page gave a radius
 SPARE = (0x00, 0xC0, 0xC0)
 CHECK = (0xC0, 0x00, 0xC0)
+TICKED = (0x60, 0x20, 0xA0)      # the box after the ticked one, by :checked +
 UNTICKED = (0x80, 0x80, 0x00)
 BUTTON = (0xE0, 0x80, 0x00)
 GLASS = (0x60, 0x00, 0xC0)      # the icon that is all of the search bar's button
@@ -232,8 +233,15 @@ def main():
             c.add("what is typed into it appears in it", typed != before, shot2)
 
             # --- and sending it ---------------------------------------------
+            c.add("a box nobody ticked does not match :checked",
+                  centre_of(px, w, SCREEN_H, TICKED, within=PAGE) is None, shot)
             mon.click(*box)
             time.sleep(0.6)
+            mon.move_to(*PARK)
+            time.sleep(0.6)
+            ticked, px3, w3, shot3 = page_now(mon, "fm-ticked")
+            c.add("and ticked, the rule for what follows it applies at once",
+                  centre_of(px3, w3, SCREEN_H, TICKED, within=PAGE) is not None, shot3)
             srv.forget()
             mon.click(*button)
 

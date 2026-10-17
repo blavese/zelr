@@ -1139,6 +1139,10 @@ FORM = b"""<html><head><title>a form</title></head><body>
 #go{background:#E08000}
 #spare{background:#00C0C0}
 #off{background:#808000}
+/* Ticking the box restyles what follows it: rules are kept from one layout
+   to the next while nothing they match against changes, and a box the
+   reader ticks is the browser's change, not the page's script's. */
+#deep:checked + #off{background:#6020A0}
 /* A rounded field, because every search box written this decade is one
    and a browser that draws them square does not look slightly wrong,
    it looks like a different era. The corners are what the check counts:

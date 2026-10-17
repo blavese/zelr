@@ -882,6 +882,7 @@ static int field_checked(int el) {
    behind, so it leaves a nought. */
 static void field_set_checked(int el, int on) {
     dom_attr_set(&doc, el, "checked", on ? "1" : "0");
+    lay_hits_forget();             /* :checked matches it: the rules may differ */
 }
 
 static const char *field_value(int el, int kind) {
@@ -890,6 +891,7 @@ static const char *field_value(int el, int kind) {
 
 static void field_set_value(int el, const char *v) {
     dom_attr_set(&doc, el, "value", v);
+    lay_hits_forget();             /* as may [value] selectors */
 }
 
 /* The form an element is in, or -1. Walked up rather than looked up: a page
@@ -4969,6 +4971,7 @@ int main(int argc, char **argv) {
                         field_set_checked(focus_node,
                                           !field_checked(focus_node));
                         jsdom_toggled(focus_node);
+                        relayout(view_w - UI_PAD * 2);    /* as a click does */
                     }
                 } else {
                     ui_field_key(&focus_field, raw);
@@ -5248,11 +5251,16 @@ int main(int argc, char **argv) {
                 in.released = 0;
                 bar.focused = 0;
                 dirty = 1;
+                /* A box ticked or a choice made is laid out again even on a
+                   page with no script: :checked rules (the menus pages open
+                   with a hidden checkbox) follow it, and did not. */
+                int toggled = 0;
 
                 if (ck == CTL_CHECK) {
                     field_set_checked(node_under, !field_checked(node_under));
                     give_focus(node_under);
                     jsdom_toggled(node_under);
+                    toggled = 1;
                 } else if (ck == CTL_RADIO) {
                     /* One of a name at a time, which is the only thing that
                        makes a radio button different from a checkbox. */
@@ -5268,6 +5276,7 @@ int main(int argc, char **argv) {
                     field_set_checked(node_under, 1);
                     give_focus(node_under);
                     jsdom_toggled(node_under);
+                    toggled = 1;
                 } else if (ck == CTL_BUTTON) {
                     const char *t = dom_attr(&doc, node_under, "type");
                     /* The page's keyboard goes to the button; the browser
@@ -5284,7 +5293,7 @@ int main(int argc, char **argv) {
                 } else {
                     give_focus(node_under);
                 }
-                if (jsdom_live() && jsdom_changed()) {
+                if (toggled | (jsdom_live() && jsdom_changed())) {
                     relayout(view_w - UI_PAD * 2);
                     over_link = lay_link_at(&page, dx, dy);
                 }
