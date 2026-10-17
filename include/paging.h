@@ -101,6 +101,7 @@ bool virt_is_user_in(u64 pml4_phys, u64 virt);
 
 /* Whether the page at virt is mapped writable in that space. */
 bool paging_entry_writable(u64 pml4_phys, u64 virt);
+bool paging_entry_present(u64 pml4_phys, u64 virt);
 
 /* A fresh address space sharing the kernel's mappings. Returns the physical
    address of the top level table, or 0. */

@@ -457,6 +457,14 @@ bool virt_is_user_in(u64 pml4_phys, u64 virt) {
     return (pte & PTE_PRESENT) && (pte & PTE_USER);
 }
 
+/* Whether a page is mapped at all, for the self test's look at the first. */
+bool paging_entry_present(u64 pml4_phys, u64 virt) {
+    if (!pml4_phys) return false;
+    u64 *pt = table_for((u64 *)pml4_phys, virt, false, 0);
+    if (!pt) return false;
+    return (pt[index_of(virt, 1)] & PTE_PRESENT) != 0;
+}
+
 /* Whether the last level lets the page be written, which copy on write takes
    away. Only the leaf is asked: every table above a user page is writable. */
 bool paging_entry_writable(u64 pml4_phys, u64 virt) {
@@ -489,8 +497,13 @@ void paging_init(const handoff_t *h) {
        page at a time. */
     u64 low = KERNEL_LOW_MB * 1024ull * 1024ull;
     /* Into the kernel's table by name: CR3 is still the loader's until the
-       end of this function, and map_page means the live one. */
-    for (u64 a = 0; a < low; a += PAGE_SIZE) {
+       end of this function, and map_page means the live one.
+     *
+       All but the first page, so that a NULL pointer the kernel follows is a
+       page fault that says where, not a read or a write of the real mode
+       interrupt table that says nothing (atlas 02, B24). Nothing in long mode
+       lives there; acpi.c maps it for the one word it reads. */
+    for (u64 a = PAGE_SIZE; a < low; a += PAGE_SIZE) {
         if (!map_in(kernel_pml4, a, a, PTE_PRESENT | PTE_RW))
             panic("paging: identity map failed at %p", (void *)a);
     }

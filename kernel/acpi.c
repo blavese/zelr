@@ -112,7 +112,15 @@ static const rsdp_t *find_rsdp(void) {
         /* Told, but wrong. Fall through and look: better than giving up. */
     }
 
-    u64 ebda = (u64)(*(volatile u16 *)0x40E) << 4;
+    /* The BIOS keeps the EBDA's segment at 0x40E, in the first page, which is
+       not mapped so that a NULL dereference faults (paging.c): mapped, read
+       only, for the one word, and unmapped again only if this mapped it. */
+    u64 ebda = 0;
+    bool had = paging_entry_present(paging_kernel_directory(), 0);
+    if (had || map_page(0, 0, PTE_PRESENT)) {
+        ebda = (u64)(*(volatile u16 *)0x40E) << 4;
+        if (!had) unmap_page(0);
+    }
     if (ebda >= 0x400 && ebda < 0xA0000) {
         for (u64 a = ebda; a < ebda + 1024; a += 16) {
             const rsdp_t *r = (const rsdp_t *)a;

@@ -273,6 +273,13 @@ static void test_identity_map(void) {
         if (virt_to_phys(a) != a) one_to_one = false;
     ok("and every address in it translates to itself", one_to_one);
 
+    /* Except the first page, which is not mapped at all: a NULL pointer the
+       kernel follows faults and says where, where it read and wrote the
+       real mode interrupt table and said nothing. */
+    ok("the first page is not mapped, so a NULL dereference faults",
+       !paging_entry_present(paging_kernel_directory(), 0)
+       && !paging_entry_present(paging_kernel_directory(), 0x40E));
+
     /* Memory above the low region is mapped in 2 MiB pages, and the point of
        mapping it is being able to use it. Written through a pointer and read
        back, because a page table entry that is present and wrong looks
