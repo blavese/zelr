@@ -220,6 +220,24 @@ def main():
     text.append("/* And PNG_LACE's. */\n")
     text.append(carray("PNG_LACE_WANT", LACE_WANT))
 
+    # A raw deflate stream with an empty stored block between compressed
+    # ones, which is what a sync flush writes: inflate reads bytes ahead to
+    # decode a code in one look and a stored block has to give them back,
+    # and a stream like this one is where it would not.
+    import random
+    rnd = random.Random(7)
+    words = b"".join(b"line %d of a text that says much the same each time\n" % i
+                     for i in range(120))
+    noise = bytes(rnd.getrandbits(8) for _ in range(600))
+    z = zlib.compressobj(6, zlib.DEFLATED, -15)
+    synced = (z.compress(words) + z.flush(zlib.Z_SYNC_FLUSH) + z.compress(noise)
+              + z.flush(zlib.Z_SYNC_FLUSH) + z.compress(words[:2000]) + z.flush())
+    whole = words + noise + words[:2000]
+    text.append("/* Raw deflate with sync flushes in it, and what it comes to. */\n")
+    text.append(carray("INF_SYNCED", synced))
+    text.append("#define INF_SYNCED_LEN %d\n#define INF_SYNCED_CRC 0x%08Xu\n\n"
+                % (len(whole), zlib.crc32(whole) & 0xFFFFFFFF))
+
     io_open = open(OUT, "w", newline="\n")
     io_open.write("".join(text))
     io_open.close()

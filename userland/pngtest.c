@@ -245,6 +245,22 @@ int main(void) {
             heap_live() <= before, (int)(heap_live() - before));
     }
 
+    {
+        /* Stored blocks between compressed ones, as a sync flush writes them:
+           inflate reads ahead to decode a code in one look, and a stored
+           block that threw away what was read ahead lost the start of what
+           followed it. */
+        static u8 out[INF_SYNCED_LEN + 16];
+        int n = inflate_raw(INF_SYNCED, (int)sizeof INF_SYNCED, out, (int)sizeof out);
+        u32 c = 0xFFFFFFFFu;
+        for (int i = 0; i < n; i++) {
+            c ^= out[i];
+            for (int k = 0; k < 8; k++) c = (c >> 1) ^ (0xEDB88320u & (0u - (c & 1)));
+        }
+        okn("deflate with stored blocks between compressed ones inflates whole",
+            n == INF_SYNCED_LEN && ~c == INF_SYNCED_CRC, n);
+    }
+
     puts(failed ? "PNGTEST_FAIL\n" : "PNGTEST_PASS\n");
     return failed;
 }

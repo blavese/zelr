@@ -1,5 +1,9 @@
 #pragma once
+/* The kernel inflates the programs it carries with this too (kernel/sysfs.c),
+   and says where u8 and the rest come from itself. */
+#ifndef INF_TYPES_GIVEN
 #include "zelr.h"
+#endif
 
 /* DEFLATE, which is the compression every picture on the web is inside.
  *
@@ -33,9 +37,16 @@
 /* Enough for the biggest alphabet: 288 literal/length codes. */
 #define INF_SYMS 288
 
+/* Codes this long or shorter -- nearly every one in practice -- are found in
+   one look at the next bits instead of one bit at a time. */
+#define INF_FAST 9
+
 typedef struct {
     short count[16];         /* how many codes of each length */
     short symbol[INF_SYMS];  /* the symbols, in code order */
+    /* By the next INF_FAST bits as the stream holds them: the symbol shifted
+       up four and the code's length, or 0 for a code longer than that. */
+    short fast[1 << INF_FAST];
 } inf_huff;
 
 typedef struct {
@@ -46,6 +57,7 @@ typedef struct {
 
     u8 *out;
     int cap, len;            /* the output, and how much is in it */
+    int paced;               /* how much there was when INF_PACE was last called */
 
     int err;
 } inf_state;
@@ -74,6 +86,7 @@ static inline int inf_bits(inf_state *s, int need) {
  * lengths one bit at a time asking whether the code so far is one of the
  * ones that length. */
 static inline int inf_build(inf_huff *h, const short *len, int n) {
+    for (int i = 0; i < (1 << INF_FAST); i++) h->fast[i] = 0;
     for (int i = 0; i < 16; i++) h->count[i] = 0;
     for (int i = 0; i < n; i++) h->count[len[i]]++;
 
@@ -95,10 +108,46 @@ static inline int inf_build(inf_huff *h, const short *len, int n) {
     for (int i = 1; i < 15; i++) offs[i + 1] = (short)(offs[i] + h->count[i]);
     for (int i = 0; i < n; i++)
         if (len[i]) h->symbol[offs[len[i]]++] = (short)i;
+
+    /* The short codes into the table. A code is read first bit first, which
+       is its most significant, and the stream's bits are taken least
+       significant first, so it is entered reversed, once for every value
+       the bits after it could have. The canonical codes run as inf_decode
+       walks them: each length's first is the last one's end, doubled. */
+    int code = 0, index = 0;
+    for (int length = 1; length <= INF_FAST; length++) {
+        for (int k = 0; k < h->count[length]; k++, index++, code++) {
+            int rev = 0;
+            for (int b = 0; b < length; b++)
+                if (code & (1 << b)) rev |= 1 << (length - 1 - b);
+            for (int fill = rev; fill < (1 << INF_FAST); fill += 1 << length)
+                h->fast[fill] = (short)((h->symbol[index] << 4) | length);
+        }
+        code <<= 1;
+    }
     return INF_OK;
 }
 
 static inline int inf_decode(inf_state *s, const inf_huff *h) {
+    /* In one look when the code is short and the bits are there, which is
+       all but the last few of a stream: up to four bytes are read ahead for
+       it (inf_stored gives back what it does not use). Taken a bit at a
+       time, the browser's own program took a hundred million cycles to
+       inflate. */
+    while (s->nbits <= 24 && s->at < s->n) {
+        s->bits |= (u32)s->in[s->at++] << s->nbits;
+        s->nbits += 8;
+    }
+    if (s->nbits >= INF_FAST) {
+        int e = h->fast[s->bits & ((1u << INF_FAST) - 1)];
+        if (e) {
+            int len = e & 15;
+            s->bits >>= len;
+            s->nbits -= len;
+            return e >> 4;
+        }
+    }
+
     int code = 0, first = 0, index = 0;
     for (int length = 1; length < 16; length++) {
         code |= inf_bits(s, 1);
@@ -146,6 +195,11 @@ static const short INF_DIST_EXTRA[30] = {
 static inline void inf_block(inf_state *s, const inf_huff *lit,
                              const inf_huff *dist) {
     for (;;) {
+        /* A caller that must not hold the processor for the whole of a long
+           stream says what to do every 64 KiB (the kernel gives it away). */
+#ifdef INF_PACE
+        if (s->len - s->paced >= 65536) { s->paced = s->len; INF_PACE(); }
+#endif
         int sym = inf_decode(s, lit);
         if (s->err) return;
 
@@ -249,7 +303,9 @@ static inline void inf_dynamic(inf_state *s) {
 }
 
 static inline void inf_stored(inf_state *s) {
-    /* Whole bytes from here, so whatever is left of the current one goes. */
+    /* Whole bytes from here, so whatever is left of the current one goes,
+       and the whole bytes read ahead for a decode go back to the input. */
+    s->at -= s->nbits / 8;
     s->bits = 0;
     s->nbits = 0;
     if (s->at + 4 > s->n) { s->err = INF_TRUNCATED; return; }
@@ -281,6 +337,7 @@ static inline int inf_run(const u8 *in, int n, u8 *out, int cap, int *out_len) {
     s.in = in; s.n = n; s.at = 0;
     s.bits = 0; s.nbits = 0;
     s.out = out; s.cap = cap; s.len = 0;
+    s.paced = 0;
     s.err = INF_OK;
 
     for (;;) {
