@@ -95,6 +95,11 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.155.0
+
+- **Notes' keys: ctrl+s, ctrl+c, ctrl+x, ctrl+v, ctrl+a, ctrl+z with sixteen steps of undo (10)**. notescheck, a new gate
+  step (63 now), failing on a build without each part.
+
 ### 0.154.0
 
 - **folders copied, moved between disks and deleted in Files (10)**, **cp -r and rm -r (09b)**, **the About window on the

@@ -6,7 +6,9 @@ Static reading only. Nothing was built or run. Every `file:line` below refers to
 **Since 0.154.0** (the rest of this file is older; trust the code): Files copies a folder with everything in it
 (`copy_tree`, eight deep, never into itself: `inside`), moves one to another disk by that copy and `remove_tree`, and
 deletes a folder that is not empty on a second Delete with nothing pressed between (`delete_armed`; any other key sets it
-back). filescheck copies, moves and deletes folders. Since 0.150.0 a cut item is moved by rename first where the disk
+back). filescheck copies, moves and deletes folders. Notes (0.155.0) takes ctrl+s, ctrl+c, ctrl+x, ctrl+v, ctrl+a and
+ctrl+z (they were typed in as control characters); undo keeps sixteen copies of the text from before each change, a run of
+typing being one (`undo_mark`, `typing`); a key that moves the cursor drops the selection. notescheck drives them. Since 0.150.0 a cut item is moved by rename first where the disk
 can (see atlas 04).
 The PIT runs at 100 Hz (`kernel/main.c:459 timer_init(100)`), so **1 tick = 10 ms** wherever a constant is in ticks.
 

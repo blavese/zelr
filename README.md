@@ -409,6 +409,7 @@ instead.
     python tools/mountcheck.py  mount a usb stick, copy files, watch the flushes
     python tools/namecheck.py   save long names and read them back
     python tools/filescheck.py  copy, move and rename in the file manager, from its keys
+    python tools/notescheck.py  select all, copy, paste, save and undo in the editor, from its keys
     python tools/powercheck.py  tell it to shut down, see if it does
     python tools/appcheck.py    make the calculator divide, play a file
     python tools/setcheck.py    write a setting by hand, watch the dock move
