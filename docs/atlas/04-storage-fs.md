@@ -3,7 +3,17 @@
 Source: the repository root (zelr 0.37.0 + 2 commits, `KERNEL_VERSION "0.37.0"` in include/types.h:25).
 Everything below comes from reading the code statically. I built nothing and ran nothing. Line numbers are 1-based and taken from the files as they stand.
 
-**Since 0.150.0** (the rest of this file is older; trust the code and the README's "since 6048716" list):
+**Since 0.151.0** (the rest of this file is older; trust the code and the README's "since 6048716" list):
+- **USB sticks with blocks of 512 to 4096 bytes** (usbdisk.c `ratio`, `block`): offered as 512 byte sectors; whole blocks
+  of a request go straight to the caller, the ends through `block`, a partial write read-modify-written. READ CAPACITY
+  must say a multiple of 512. `usbdisk_block_size` is 512, `usbdisk_device_block` the device's. A volume formatted with
+  4096 byte sectors by another system is found and not mounted (fat.c reads 512 byte sectors only).
+- **/bin's programs are packed** (tools/packprogs.py: "ZPK1", length, CRC-32, raw deflate; builtin.S pastes the `.elf.z`
+  files; build.sh's blob checksum is of those). sysfs.c `sysfs_add_program` reads the header, `sysfs_read` inflates into
+  the caller's buffer (`sysfs_unpack`: all of it checked by length and CRC, or the front of it for a short read), with
+  `INF_PACE` giving the processor away every 64 KiB. Nothing caches an inflated program.
+
+**Since 0.150.0**:
 - **Rename to any name and into any directory on a volume made here** (fat.c `fat_rename_held`,
   `rename_by_new_entry`). In one directory to a name that fits 8.3 it is still the one-sector rewrite of the entry,
   on any volume. Anything else writes the new name (its long entries, then the short one with `NT_RENAMING` (0x40)
@@ -884,7 +894,7 @@ A USB volume larger than disk 0 is refused as corrupt. A USB volume claiming mor
 **S12. FIXED in 0.150.0 (both waits on timer.c `spin_deadline`, the 8254's count read with interrupts off; a completion whose cid is not the command's is passed over; the queue read through volatile; [disk] runs `submit` against a controller made of memory). NVMe timeouts are inert during boot** (nvme.c:153, 170).
 Deadlines are computed from `timer_ticks()`, which does not advance until `timer_init(100)` at main.c:459. `blk_init()` and `diskfs_mount()` run earlier (main.c:418-421), so a controller that never becomes ready or never completes a command hangs boot forever. The same holds on the panic path (interrupts off). Also, `submit` does not compare `cid` (:155-161), so after a genuine timeout a late completion would be taken as the next command's. And `q->cq` is not volatile; the poll is correct only because the loop calls the opaque `timer_ticks()` (no LTO in build.sh:41-50).
 
-**S13. A USB stick with non-512-byte sectors overruns kernel buffers** (cross-area, likely).
+**S13. FIXED in 0.151.0 (usbdisk offers every stick as 512 byte sectors, `ratio` to a device block of 512 to 4096, partial blocks through its own buffer and read-modify-write; mountcheck mounts a stick of 4096 byte blocks, and the old driver panicked on it). A USB stick with non-512-byte sectors overruns kernel buffers** (cross-area, likely).
 usbdisk reports and transfers `count*sector_bytes` (usbdisk.c:193, 214). The block layer has no sector size, and `diskfs_mount_removable` reads one "sector" into `u8 sec[512]` on the stack (diskfs.c:55-56), as do `fat_mount_at` and every `vol_read`. A 4096-byte-sector stick would write 4096 bytes into 512-byte buffers. (Whether `xhci_bulk` bounds the copy is an open question, §11.)
 
 **S14. FIXED in 0.39.0 (see atlas README, since 6048716). `fat_rmdir` leaves the directory's LFN entries behind** (fat.c:1658-1662).

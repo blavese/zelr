@@ -95,6 +95,14 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.151.0
+
+- **USB sticks with 4096 byte blocks as sectors of 512 (04, S13)**, **programs packed into the kernel image and inflated
+  as they are read (01, 04: `tools/packprogs.py`, sysfs.c `sysfs_unpack`; 15.3 MB to 7.3 MB)**, **inflate with a
+  nine-bit lookup (13)**. Selftest 809 on the 64 MiB machine, mountcheck a 4096 byte stick, pngtest a stream with
+  stored blocks between compressed ones, check_image the image smaller than its programs, each failing on a build
+  without its change.
+
 ### 0.150.0
 
 - **renames to long names and between directories, made safe by a mark the mount sweep finishes (04)**, **".." inside

@@ -81,8 +81,8 @@ where there is not.
 
 The one exception, since "from scratch" invites the question: `zelr.exe`, the
 Windows launcher, is a C# program that bundles the .NET runtime, which is
-most of its 172 MB. The kernel inside it is about 10 MB, most of that the
-programs pasted into it. Nothing third party
+most of its 172 MB. The kernel inside it is about 7 MB, most of that the
+programs packed into it. Nothing third party
 runs on the machine zelr boots.
 
 ## running it on Windows
@@ -703,8 +703,11 @@ starting `paint` is one ring 3 process starting another with the kernel only
 lending a hand. An ELF64 loader maps each PT_LOAD segment where the
 file asks and refuses anything that would land in kernel memory. `userland/`
 holds programs built entirely separately: the only thing they share with the
-kernel is the syscall numbers. They are then pasted whole into the kernel
-image, so a fresh install already has something to run. They are deliberately
+kernel is the syscall numbers. They are then packed into the kernel image
+(deflate, with each one's length and CRC-32, by `tools/packprogs.py`) and
+inflated as they are read, so a fresh install already has something to run;
+packed, the 13.7 MB of them take 5.7, and the image is 7.3 MB rather than
+15.3. They are deliberately
 never saved to the disk: if they were, the first boot would write them out and
 every later boot would run the written copies, so rebuilding the kernel would
 appear to change nothing.
@@ -1612,7 +1615,7 @@ byte.
 ## testing
 
 The kernel tests itself. `./run.sh -T` boots with selftest on the command line,
-runs 805 checks across every subsystem, then writes to QEMU's debug-exit port
+runs 809 checks across every subsystem, then writes to QEMU's debug-exit port
 so the host gets a real exit status.
 
     [string]                 8 checks  [waiting]               16 checks
@@ -1638,13 +1641,13 @@ so the host gets a real exit status.
     [graphics]              15 checks  [acpi and pcie]          4 checks
     [windows]               29 checks  [interrupt routing]     11 checks
     [window server]         39 checks  [clipboard]             14 checks
-    [built-in programs]      8 checks  [clock]                 18 checks
+    [built-in programs]     12 checks  [clock]                 18 checks
     [theme]                 23 checks  [codec routes]           6 checks
     [taskbar]               18 checks  [es1371]                 5 checks
     [live tree]             23 checks  [sound]                  skipped
     [layout]                11 checks  [kernel stack]           3 checks
 
-    805 passed, 0 failed
+    809 passed, 0 failed
     SELFTEST_PASS
 
 The sound section is skipped because `run.sh` attaches no sound card (the
@@ -1652,7 +1655,7 @@ gate's q35 run gives it one), the
 identity map is checked in four more places when there is more memory to map,
 and the desktop keeps a copy of its wallpaper only when the memory allows it,
 which two more checks need: given 256 MiB, as the gate gives it, the same run
-is 811.
+is 815.
 
 Two of the sections are about what happens when something goes wrong half
 way, which a machine that keeps its power cannot show. `[fat]` makes the
@@ -2076,7 +2079,7 @@ orders of magnitude away from Linux, which is roughly 30 million lines.
     tools/mkroots.py   builds kernel/roots.c from a published list of authorities
     docs/atlas/        every part of the tree, written down, and what is wrong
                        with it
-    kernel/builtin.S   the user programs, pasted into the kernel image
+    kernel/builtin.S   the user programs, packed into the kernel image
     kernel/apps.c      the system info window
     kernel/vfs.c       one namespace over the live tree, the disk and memory
     kernel/sysfs.c     /sys and /bin: files that are generated when read
