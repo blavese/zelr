@@ -12,7 +12,10 @@ memory found almost none.
 So this reads each program built for the image and fails if any carries a
 .debug section (userland/build.sh strips them), and fails if the flat image
 is past IMAGE_BUDGET, which is what leaves a 64 MiB machine its whole heap and
-room besides.
+room besides. And since 0.151.0 the programs go in packed
+(tools/packprogs.py), which took the image from 15.3 MB to 7.3 MB: it fails
+if the image is not smaller than the programs it carries, which it cannot be
+with them pasted in whole.
 
   python tools/check_image.py
 """
@@ -80,7 +83,16 @@ def main():
         failed += 1
     else:
         print("  PASS  the image is %d bytes, within its budget of %d" % (size, IMAGE_BUDGET))
-    print("the image: %s" % ("all 2 checks passed" if not failed else "%d failed" % failed))
+
+    carried = sum(os.path.getsize(p) for p in progs)
+    if size >= 0 and size < carried:
+        print("  PASS  the image (%d bytes) is smaller than its programs (%d): they are packed"
+              % (size, carried))
+    else:
+        print("  FAIL  the image (%d bytes) is not smaller than its programs (%d): are they packed?"
+              % (size, carried))
+        failed += 1
+    print("the image: %s" % ("all 3 checks passed" if not failed else "%d failed" % failed))
     return 1 if failed else 0
 
 

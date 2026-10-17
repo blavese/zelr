@@ -48,4 +48,9 @@ int  sysfs_list(const char *abs, u32 index, char *name_out, u32 *size_out, bool 
 /* Registers a program that lives in the kernel image, so it appears in
    /bin and can be read and run like anything else. */
 void sysfs_add_program(const char *name, const u8 *data, u32 size);
+
+/* A packed program's deflate into buf (kernel/sysfs.c): its length when cap
+   holds it all and its length and CRC-32 came out right, its front when cap
+   is short, -1 when it does not inflate as it should. */
+int  sysfs_unpack(const u8 *deflate, u32 packed, u32 size, u32 crc, void *buf, u32 cap);
 u32  sysfs_program_count(void);

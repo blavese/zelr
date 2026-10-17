@@ -1,7 +1,8 @@
 /* The programs that ship inside the kernel image.
  *
  * These are ordinary ELF executables built by userland/build.sh, pasted in
- * here whole. Nothing about them is special: the kernel loads them through
+ * here packed by tools/packprogs.py and inflated as they are read
+ * (kernel/sysfs.c). Nothing about them is special: the kernel loads them through
  * the same ELF loader that reads a program off the disk. Shipping them this
  * way just means a fresh install has something to run before anyone has put
  * a file on a disk.
@@ -21,381 +22,381 @@ trampoline_end:
 .global builtin_hello_start
 .global builtin_hello_end
 builtin_hello_start:
-.incbin "build/user/hello.elf"
+.incbin "build/user/hello.elf.z"
 builtin_hello_end:
 
 .balign 4
 .global builtin_count_start
 .global builtin_count_end
 builtin_count_start:
-.incbin "build/user/count.elf"
+.incbin "build/user/count.elf.z"
 builtin_count_end:
 
 .balign 4
 .global builtin_fptest_start
 .global builtin_fptest_end
 builtin_fptest_start:
-.incbin "build/user/fptest.elf"
+.incbin "build/user/fptest.elf.z"
 builtin_fptest_end:
 
 .balign 4
 .global builtin_alloctest_start
 .global builtin_alloctest_end
 builtin_alloctest_start:
-.incbin "build/user/alloctest.elf"
+.incbin "build/user/alloctest.elf.z"
 builtin_alloctest_end:
 
 .balign 4
 .global builtin_jstest_start
 .global builtin_jstest_end
 builtin_jstest_start:
-.incbin "build/user/jstest.elf"
+.incbin "build/user/jstest.elf.z"
 builtin_jstest_end:
 
 .balign 4
 .global builtin_forktest_start
 .global builtin_forktest_end
 builtin_forktest_start:
-.incbin "build/user/forktest.elf"
+.incbin "build/user/forktest.elf.z"
 builtin_forktest_end:
 
 .balign 4
 .global builtin_wintest_start
 .global builtin_wintest_end
 builtin_wintest_start:
-.incbin "build/user/wintest.elf"
+.incbin "build/user/wintest.elf.z"
 builtin_wintest_end:
 
 .balign 4
 .global builtin_term_start
 .global builtin_term_end
 builtin_term_start:
-.incbin "build/user/term.elf"
+.incbin "build/user/term.elf.z"
 builtin_term_end:
 
 .balign 4
 .global builtin_spawntest_start
 .global builtin_spawntest_end
 builtin_spawntest_start:
-.incbin "build/user/spawntest.elf"
+.incbin "build/user/spawntest.elf.z"
 builtin_spawntest_end:
 
 .balign 4
 .global builtin_settings_start
 .global builtin_settings_end
 builtin_settings_start:
-.incbin "build/user/settings.elf"
+.incbin "build/user/settings.elf.z"
 builtin_settings_end:
 
 .balign 4
 .global builtin_paint_start
 .global builtin_paint_end
 builtin_paint_start:
-.incbin "build/user/paint.elf"
+.incbin "build/user/paint.elf.z"
 builtin_paint_end:
 
 .balign 4
 .global builtin_files_start
 .global builtin_files_end
 builtin_files_start:
-.incbin "build/user/files.elf"
+.incbin "build/user/files.elf.z"
 builtin_files_end:
 
 .balign 4
 .global builtin_calc_start
 .global builtin_calc_end
 builtin_calc_start:
-.incbin "build/user/calc.elf"
+.incbin "build/user/calc.elf.z"
 builtin_calc_end:
 
 .balign 4
 .global builtin_music_start
 .global builtin_music_end
 builtin_music_start:
-.incbin "build/user/music.elf"
+.incbin "build/user/music.elf.z"
 builtin_music_end:
 
 .balign 4
 .global builtin_monitor_start
 .global builtin_monitor_end
 builtin_monitor_start:
-.incbin "build/user/monitor.elf"
+.incbin "build/user/monitor.elf.z"
 builtin_monitor_end:
 
 .balign 4
 .global builtin_notes_start
 .global builtin_notes_end
 builtin_notes_start:
-.incbin "build/user/notes.elf"
+.incbin "build/user/notes.elf.z"
 builtin_notes_end:
 
 .balign 4
 .global builtin_browser_start
 .global builtin_browser_end
 builtin_browser_start:
-.incbin "build/user/browser.elf"
+.incbin "build/user/browser.elf.z"
 builtin_browser_end:
 
 .balign 4
 .global builtin_sh_start
 .global builtin_sh_end
 builtin_sh_start:
-.incbin "build/user/sh.elf"
+.incbin "build/user/sh.elf.z"
 builtin_sh_end:
 
 .balign 4
 .global builtin_echo_start
 .global builtin_echo_end
 builtin_echo_start:
-.incbin "build/user/echo.elf"
+.incbin "build/user/echo.elf.z"
 builtin_echo_end:
 
 .balign 4
 .global builtin_cat_start
 .global builtin_cat_end
 builtin_cat_start:
-.incbin "build/user/cat.elf"
+.incbin "build/user/cat.elf.z"
 builtin_cat_end:
 
 .balign 4
 .global builtin_ls_start
 .global builtin_ls_end
 builtin_ls_start:
-.incbin "build/user/ls.elf"
+.incbin "build/user/ls.elf.z"
 builtin_ls_end:
 
 .balign 4
 .global builtin_wc_start
 .global builtin_wc_end
 builtin_wc_start:
-.incbin "build/user/wc.elf"
+.incbin "build/user/wc.elf.z"
 builtin_wc_end:
 
 .balign 4
 .global builtin_grep_start
 .global builtin_grep_end
 builtin_grep_start:
-.incbin "build/user/grep.elf"
+.incbin "build/user/grep.elf.z"
 builtin_grep_end:
 
 .balign 4
 .global builtin_fdtest_start
 .global builtin_fdtest_end
 builtin_fdtest_start:
-.incbin "build/user/fdtest.elf"
+.incbin "build/user/fdtest.elf.z"
 builtin_fdtest_end:
 
 .balign 4
 .global builtin_pagetest_start
 .global builtin_pagetest_end
 builtin_pagetest_start:
-.incbin "build/user/pagetest.elf"
+.incbin "build/user/pagetest.elf.z"
 builtin_pagetest_end:
 
 .balign 4
 .global builtin_spin_start
 .global builtin_spin_end
 builtin_spin_start:
-.incbin "build/user/spin.elf"
+.incbin "build/user/spin.elf.z"
 builtin_spin_end:
 
 .balign 4
 .global builtin_ps_start
 .global builtin_ps_end
 builtin_ps_start:
-.incbin "build/user/ps.elf"
+.incbin "build/user/ps.elf.z"
 builtin_ps_end:
 
 .balign 4
 .global builtin_pngtest_start
 .global builtin_pngtest_end
 builtin_pngtest_start:
-.incbin "build/user/pngtest.elf"
+.incbin "build/user/pngtest.elf.z"
 builtin_pngtest_end:
 
 .balign 4
 .global builtin_jpegtest_start
 .global builtin_jpegtest_end
 builtin_jpegtest_start:
-.incbin "build/user/jpegtest.elf"
+.incbin "build/user/jpegtest.elf.z"
 builtin_jpegtest_end:
 
 .balign 4
 .global builtin_svgtest_start
 .global builtin_svgtest_end
 builtin_svgtest_start:
-.incbin "build/user/svgtest.elf"
+.incbin "build/user/svgtest.elf.z"
 builtin_svgtest_end:
 
 .balign 4
 .global builtin_layouttest_start
 .global builtin_layouttest_end
 builtin_layouttest_start:
-.incbin "build/user/layouttest.elf"
+.incbin "build/user/layouttest.elf.z"
 builtin_layouttest_end:
 
 .global builtin_wiretest_start
 .global builtin_wiretest_end
 builtin_wiretest_start:
-.incbin "build/user/wiretest.elf"
+.incbin "build/user/wiretest.elf.z"
 builtin_wiretest_end:
 
 .balign 4
 .global builtin_hangtest_start
 .global builtin_hangtest_end
 builtin_hangtest_start:
-.incbin "build/user/hangtest.elf"
+.incbin "build/user/hangtest.elf.z"
 builtin_hangtest_end:
 
 .balign 4
 .global builtin_cputest_start
 .global builtin_cputest_end
 builtin_cputest_start:
-.incbin "build/user/cputest.elf"
+.incbin "build/user/cputest.elf.z"
 builtin_cputest_end:
 
 .global builtin_jsprobe_start
 .global builtin_jsprobe_end
 builtin_jsprobe_start:
-.incbin "build/user/jsprobe.elf"
+.incbin "build/user/jsprobe.elf.z"
 builtin_jsprobe_end:
 
 .balign 4
 .global builtin_blackjack_start
 .global builtin_blackjack_end
 builtin_blackjack_start:
-.incbin "build/user/blackjack.elf"
+.incbin "build/user/blackjack.elf.z"
 builtin_blackjack_end:
 
 .balign 4
 .global builtin_poker_start
 .global builtin_poker_end
 builtin_poker_start:
-.incbin "build/user/poker.elf"
+.incbin "build/user/poker.elf.z"
 builtin_poker_end:
 
 .balign 4
 .global builtin_cardtest_start
 .global builtin_cardtest_end
 builtin_cardtest_start:
-.incbin "build/user/cardtest.elf"
+.incbin "build/user/cardtest.elf.z"
 builtin_cardtest_end:
 
 .balign 4
 .global builtin_sleeptest_start
 .global builtin_sleeptest_end
 builtin_sleeptest_start:
-.incbin "build/user/sleeptest.elf"
+.incbin "build/user/sleeptest.elf.z"
 builtin_sleeptest_end:
 
 .balign 4
 .global builtin_halfdrawn_start
 .global builtin_halfdrawn_end
 builtin_halfdrawn_start:
-.incbin "build/user/halfdrawn.elf"
+.incbin "build/user/halfdrawn.elf.z"
 builtin_halfdrawn_end:
 
 .balign 4
 .global builtin_cowtest_start
 .global builtin_cowtest_end
 builtin_cowtest_start:
-.incbin "build/user/cowtest.elf"
+.incbin "build/user/cowtest.elf.z"
 builtin_cowtest_end:
 
 .balign 4
 .global builtin_argvtest_start
 .global builtin_argvtest_end
 builtin_argvtest_start:
-.incbin "build/user/argvtest.elf"
+.incbin "build/user/argvtest.elf.z"
 builtin_argvtest_end:
 
 .balign 4
 .global builtin_sigtest_start
 .global builtin_sigtest_end
 builtin_sigtest_start:
-.incbin "build/user/sigtest.elf"
+.incbin "build/user/sigtest.elf.z"
 builtin_sigtest_end:
 
 .balign 4
 .global builtin_faulttest_start
 .global builtin_faulttest_end
 builtin_faulttest_start:
-.incbin "build/user/faulttest.elf"
+.incbin "build/user/faulttest.elf.z"
 builtin_faulttest_end:
 
 .balign 4
 .global builtin_maptest_start
 .global builtin_maptest_end
 builtin_maptest_start:
-.incbin "build/user/maptest.elf"
+.incbin "build/user/maptest.elf.z"
 builtin_maptest_end:
 
 .balign 4
 .global builtin_crashwrite_start
 .global builtin_crashwrite_end
 builtin_crashwrite_start:
-.incbin "build/user/crashwrite.elf"
+.incbin "build/user/crashwrite.elf.z"
 builtin_crashwrite_end:
 
 .balign 4
 .global builtin_durtest_start
 .global builtin_durtest_end
 builtin_durtest_start:
-.incbin "build/user/durtest.elf"
+.incbin "build/user/durtest.elf.z"
 builtin_durtest_end:
 
 .balign 4
 .global builtin_polltest_start
 .global builtin_polltest_end
 builtin_polltest_start:
-.incbin "build/user/polltest.elf"
+.incbin "build/user/polltest.elf.z"
 builtin_polltest_end:
 
 .balign 4
 .global builtin_sitetest_start
 .global builtin_sitetest_end
 builtin_sitetest_start:
-.incbin "build/user/sitetest.elf"
+.incbin "build/user/sitetest.elf.z"
 builtin_sitetest_end:
 
 .balign 4
 .global builtin_giftest_start
 .global builtin_giftest_end
 builtin_giftest_start:
-.incbin "build/user/giftest.elf"
+.incbin "build/user/giftest.elf.z"
 builtin_giftest_end:
 
 .balign 4
 .global builtin_webptest_start
 .global builtin_webptest_end
 builtin_webptest_start:
-.incbin "build/user/webptest.elf"
+.incbin "build/user/webptest.elf.z"
 builtin_webptest_end:
 
 .balign 4
 .global builtin_aactest_start
 .global builtin_aactest_end
 builtin_aactest_start:
-.incbin "build/user/aactest.elf"
+.incbin "build/user/aactest.elf.z"
 builtin_aactest_end:
 
 .balign 4
 .global builtin_play_start
 .global builtin_play_end
 builtin_play_start:
-.incbin "build/user/play.elf"
+.incbin "build/user/play.elf.z"
 builtin_play_end:
 
 .balign 4
 .global builtin_h264test_start
 .global builtin_h264test_end
 builtin_h264test_start:
-.incbin "build/user/h264test.elf"
+.incbin "build/user/h264test.elf.z"
 builtin_h264test_end:
 
 .balign 4
 .global builtin_mediatest_start
 .global builtin_mediatest_end
 builtin_mediatest_start:
-.incbin "build/user/mediatest.elf"
+.incbin "build/user/mediatest.elf.z"
 builtin_mediatest_end:

@@ -39,6 +39,17 @@
 #include "blackbox.h"
 #include "clipboard.h"
 #include "rtc.h"
+#include "parts.h"                      /* crc32 */
+
+/* The programs are carried packed (tools/packprogs.py) and inflated with the
+   browser's own inflate, which needs only the integer types. While it runs
+   inside a call, the processor is given away every 64 KiB it writes: the
+   browser's program is 3.6 MB, and inflating it whole with interrupts off
+   would stop the clock and the serial line for as long as that takes. */
+static void sysfs_pace(void) { if (task_current()) task_yield(); }
+#define INF_TYPES_GIVEN
+#define INF_PACE() sysfs_pace()
+#include "../userland/inflate.h"
 
 /* --- built-in programs, which are what /bin holds ----------------------- */
 
@@ -46,19 +57,49 @@
 
 typedef struct {
     const char *name;
-    const u8   *data;
-    u32         size;
+    const u8   *data;           /* the deflate, or the program itself if not packed */
+    u32         size;           /* the program's own length */
+    u32         packed;         /* the deflate's length, 0 when not packed */
+    u32         crc;            /* the program's CRC-32, when packed */
 } program_t;
 
 static program_t programs[MAX_PROGRAMS];
 static u32 n_programs;
 
+static u32 le32_at(const u8 *p) {
+    return (u32)p[0] | ((u32)p[1] << 8) | ((u32)p[2] << 16) | ((u32)p[3] << 24);
+}
+
+/* A program as builtin.S carries it: "ZPK1", its length and CRC-32, then the
+   deflate; or, without the mark, the program as it is. */
 void sysfs_add_program(const char *name, const u8 *data, u32 size) {
     if (n_programs >= MAX_PROGRAMS) return;
-    programs[n_programs].name = name;
-    programs[n_programs].data = data;
-    programs[n_programs].size = size;
+    program_t *p = &programs[n_programs];
+    p->name = name;
+    if (size >= 12 && data[0] == 'Z' && data[1] == 'P' && data[2] == 'K' && data[3] == '1') {
+        p->size = le32_at(data + 4);
+        p->crc = le32_at(data + 8);
+        p->data = data + 12;
+        p->packed = size - 12;
+    } else {
+        p->size = size;
+        p->crc = 0;
+        p->data = data;
+        p->packed = 0;
+    }
     n_programs++;
+}
+
+/* A packed program into `buf`: all of it, checked against its length and
+   CRC, when `cap` holds it, and its front when it does not (a read of the
+   first bytes, as the ELF loader's of the header). -1 when it does not
+   inflate as it should: a damaged image runs nothing rather than garbage. */
+int sysfs_unpack(const u8 *deflate, u32 packed, u32 size, u32 crc, void *buf, u32 cap) {
+    int got = 0;
+    int err = inf_run(deflate, (int)packed, (u8 *)buf, (int)(cap < size ? cap : size), &got);
+    if (cap < size) return err == INF_OK || err == INF_FULL ? got : -1;
+    if (err != INF_OK || (u32)got != size || crc32(buf, size) != crc) return -1;
+    return got;
 }
 
 u32 sysfs_program_count(void) { return n_programs; }
@@ -486,6 +527,7 @@ int sysfs_read(const char *abs, void *buf, u32 cap) {
     if (name) {
         const program_t *p = program_named(name);
         if (!p) return -1;
+        if (p->packed) return sysfs_unpack(p->data, p->packed, p->size, p->crc, buf, cap);
         u32 len = p->size < cap ? p->size : cap;
         memcpy(buf, p->data, len);
         return (int)len;

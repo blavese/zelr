@@ -32,6 +32,10 @@ ZIG="$ZIG" bash userland/build.sh
 ZIG="$ZIG" bash bootloader/build.sh
 ZIG="$ZIG" bash uefi/build.sh
 
+# Pasted in packed, and inflated when they are read (tools/packprogs.py,
+# kernel/sysfs.c): they are most of the image.
+python tools/packprogs.py build/user > /dev/null || { echo "packing the programs failed"; exit 1; }
+
 SRC=$(find boot kernel -name '*.c' -o -name '*.S' | sort | tr '\n' ' ')
 
 # kernel/builtin.S pulls the user programs and the SMP trampoline in through
@@ -40,7 +44,7 @@ SRC=$(find boot kernel -name '*.c' -o -name '*.S' | sort | tr '\n' ' ')
 # the kernel silently ships the copy from the previous build. Folding a
 # checksum of the blobs into the command line, which the cache key does cover,
 # is what makes a changed program actually reach the image.
-BLOBS=$(cat build/user/*.elf build/trampoline.bin | cksum | cut -d' ' -f1)
+BLOBS=$(cat build/user/*.elf.z build/trampoline.bin | cksum | cut -d' ' -f1)
 
 # Gone before the compiler runs, so a build that fails leaves nothing behind
 # for a harness to boot. The previous image surviving a failed build is how

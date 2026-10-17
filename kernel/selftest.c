@@ -15,6 +15,7 @@
 #include "pipe.h"
 #include "layout.h"
 #include "sysfs.h"
+#include "parts.h"
 #include "timer.h"
 #include "synaptics.h"
 #include "crypto.h"
@@ -2481,6 +2482,49 @@ static void test_builtin(void) {
     vfs_read("/bin/paint", head, sizeof(head));
     ok("and it is a real ELF",
        head[0] == 0x7F && head[1] == 'E' && head[2] == 'L' && head[3] == 'F');
+
+    /* Carried packed and inflated as they are read: each comes out at the
+       length /bin lists, its CRC checked as it is. A damaged one is refused
+       rather than run, and a short read is the front of it. */
+    u32 whole = 0, failed_at = 0;
+    for (u32 i = 0; ; i++) {
+        char name[VFS_NAME_MAX];
+        u32 listed = 0;
+        bool dir = false;
+        if (vfs_list("/bin", i, name, &listed, &dir) != 1) break;
+        char path[VFS_NAME_MAX + 8];
+        memcpy(path, "/bin/", 5);
+        strncpy(path + 5, name, VFS_NAME_MAX);
+        path[sizeof path - 1] = 0;
+        u32 got = 0;
+        u8 *img = vfs_slurp(path, &got);
+        if (img && got == listed && listed > 64 && img[0] == 0x7F && img[1] == 'E') whole++;
+        else if (!failed_at) failed_at = i + 1;
+        if (img) kfree(img);
+    }
+    ok("every program in /bin inflates whole, at the length it is listed at",
+       whole == builtin_count_programs() && !failed_at);
+    if (failed_at) kprintf("        the first that did not is number %d\n", failed_at);
+    {
+        static const u8 hello[] = "hello, packed";
+        /* The deflate of those bytes (zlib, level 9, raw), and a copy with one
+           bit of its end turned over. */
+        static const u8 packed[] = { 0xcb, 0x48, 0xcd, 0xc9, 0xc9, 0xd7, 0x51, 0x28, 0x48, 0x4c,
+                                     0xce, 0x4e, 0x4d, 0x01, 0x00 };
+        u8 damaged[sizeof packed];
+        memcpy(damaged, packed, sizeof packed);
+        damaged[sizeof packed - 3] ^= 0x10;
+        u32 crc = crc32(hello, sizeof hello - 1);
+        u8 out[32];
+        ok("a packed program unpacks to what was packed",
+           sysfs_unpack(packed, sizeof packed, sizeof hello - 1, crc, out, sizeof out) == (int)sizeof hello - 1
+           && memcmp(out, hello, sizeof hello - 1) == 0);
+        ok("and one damaged, or whose CRC is not its own, is refused",
+           sysfs_unpack(damaged, sizeof packed, sizeof hello - 1, crc, out, sizeof out) < 0
+           && sysfs_unpack(packed, sizeof packed, sizeof hello - 1, crc ^ 1, out, sizeof out) < 0);
+        ok("and a read shorter than it is its front",
+           sysfs_unpack(packed, sizeof packed, sizeof hello - 1, crc, out, 5) == 5 && memcmp(out, "hello", 5) == 0);
+    }
 
     ok("they cannot be overwritten", !vfs_write("/bin/paint", "x", 1));
     ok("nor deleted", !vfs_delete("/bin/paint"));
