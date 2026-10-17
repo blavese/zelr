@@ -36,6 +36,15 @@ static int  partial;
 static int  scroll_line;          /* first line drawn */
 static int  sel_anchor = -1;      /* where a selection started, -1 for none */
 
+/* Undo: copies of the text from before each change, the newest last, sixteen
+   at most. A run of typing is one change, ended by anything that is not
+   typing, so ctrl+z takes back a word typed rather than a letter. */
+#define UNDO_MAX 16
+typedef struct { char *text; int len, cursor; } undo_t;
+static undo_t undos[UNDO_MAX];
+static int    nundo;
+static int    typing;             /* the newest copy already covers this run of typing */
+
 /* --- the buffer ----------------------------------------------------------- */
 
 static void say(const char *m) {
@@ -158,6 +167,9 @@ static void load(const char *from) {
     scroll_line = 0;
     sel_anchor = -1;
     dirty = 0;
+    /* Another file's changes are not this one's to undo. */
+    while (nundo > 0) free(undos[--nundo].text);
+    typing = 0;
     strncpy(path, from, PATH_MAX - 1);
     path[PATH_MAX - 1] = 0;
 }
@@ -170,6 +182,49 @@ static void save(void) {
     say("saved");
 }
 
+/* --- undo ----------------------------------------------------------------- */
+
+/* A copy of the text as it is, before a change: the oldest goes when there
+   are sixteen. Typing after typing takes no copy, the first letter's covering
+   the run. */
+static void undo_mark(int is_typing) {
+    if (is_typing && typing) return;
+    typing = is_typing;
+    char *copy = (char *)malloc((u64)len + 1);
+    if (!copy) return;
+    memcpy(copy, buf, len);
+    copy[len] = 0;
+    if (nundo == UNDO_MAX) {
+        free(undos[0].text);
+        for (int i = 1; i < UNDO_MAX; i++) {
+            undos[i - 1].text = undos[i].text;
+            undos[i - 1].len = undos[i].len;
+            undos[i - 1].cursor = undos[i].cursor;
+        }
+        nundo--;
+    }
+    undos[nundo].text = copy;
+    undos[nundo].len = len;
+    undos[nundo].cursor = cursor;
+    nundo++;
+}
+
+static void undo(void) {
+    if (!nundo) { say("nothing to undo"); return; }
+    undo_t *u = &undos[nundo - 1];
+    if (!reserve(u->len)) { say("not enough memory for that"); return; }
+    memcpy(buf, u->text, u->len);
+    len = u->len;
+    buf[len] = 0;
+    cursor = u->cursor <= len ? u->cursor : len;
+    free(u->text);
+    nundo--;
+    sel_anchor = -1;
+    typing = 0;
+    dirty = 1;
+    say("undone");
+}
+
 /* --- selection and the clipboard ------------------------------------------ */
 
 static int sel_low(void)  { return sel_anchor < cursor ? sel_anchor : cursor; }
@@ -180,7 +235,7 @@ static void copy_selection(int cut) {
     if (!has_selection()) { say("nothing selected"); return; }
     int a = sel_low(), b = sel_high();
     clip_set(buf + a, b - a);
-    if (cut) { delete_range(a, b); sel_anchor = -1; say("cut"); }
+    if (cut) { undo_mark(0); delete_range(a, b); sel_anchor = -1; say("cut"); }
     else say("copied");
 }
 
@@ -192,6 +247,7 @@ static void paste(void) {
     if (!incoming) { say("not enough memory for that"); return; }
     n = clip_get(incoming, n + 1);
     if (n > 0) {
+        undo_mark(0);
         if (has_selection()) { delete_range(sel_low(), sel_high()); sel_anchor = -1; }
         insert_text(incoming, n);
         say("pasted");
@@ -267,6 +323,30 @@ int main(int argc, char **argv) {
             u32 k = in.keys[ki];
             int shifted = 0;                /* selection extends while shift-like keys move */
 
+            /* The chords every editor has. Each was typed into the text as the
+               control character it folds to: ctrl+s put a 0x13 in the file
+               and saved nothing. */
+            if (KEY_CTRL(k)) {
+                int l = key_ctrl_letter(k);
+                if (l == 's') save();
+                else if (l == 'c') copy_selection(0);
+                else if (l == 'x') copy_selection(1);
+                else if (l == 'v') paste();
+                else if (l == 'a') { sel_anchor = 0; cursor = len; typing = 0; }
+                else if (l == 'z') undo();
+                continue;
+            }
+
+            /* A key that moves the cursor ends a run of typing, and lets go
+               of a selection: with no shift to extend one, select all and
+               then an arrow would have left everything to the cursor
+               selected, ready to be typed over. */
+            if (k == KEY_LEFT || k == KEY_RIGHT || k == KEY_UP || k == KEY_DOWN || k == KEY_HOME
+                || k == KEY_END || k == KEY_PAGE_UP || k == KEY_PAGE_DOWN) {
+                typing = 0;
+                sel_anchor = -1;
+            }
+
             if (k == KEY_LEFT)       { if (cursor > 0) cursor--; }
             else if (k == KEY_RIGHT) { if (cursor < len) cursor++; }
             else if (k == KEY_UP)    move_line(-1);
@@ -276,14 +356,17 @@ int main(int argc, char **argv) {
             else if (k == KEY_PAGE_UP)   move_line(-rows);
             else if (k == KEY_PAGE_DOWN) move_line(rows);
             else if (k == KEY_DELETE) {
+                if (has_selection() || cursor < len) undo_mark(0);
                 if (has_selection()) { delete_range(sel_low(), sel_high()); sel_anchor = -1; }
                 else if (cursor < len) delete_range(cursor, cursor + 1);
             }
             else if (k == '\b') {
+                if (has_selection() || cursor > 0) undo_mark(0);
                 if (has_selection()) { delete_range(sel_low(), sel_high()); sel_anchor = -1; }
                 else backspace();
             }
             else if (k == '\n' || k == '\t' || (k >= 32 && !KEY_IS_SPECIAL(k))) {
+                undo_mark(!has_selection());
                 if (has_selection()) { delete_range(sel_low(), sel_high()); sel_anchor = -1; }
                 insert_char(k == '\t' ? ' ' : (char)k);
                 if (k == '\t') { insert_char(' '); insert_char(' '); insert_char(' '); }
@@ -375,7 +458,7 @@ int main(int argc, char **argv) {
             int want = at2 + col;
             if (want > end2) want = end2;
 
-            if (in.pressed) { cursor = want; sel_anchor = want; }
+            if (in.pressed) { cursor = want; sel_anchor = want; typing = 0; }
             else if (in.down) cursor = want;
         }
 

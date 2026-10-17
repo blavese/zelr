@@ -626,6 +626,10 @@ if [ "$MODE" = "screen" ] || [ "$MODE" = "full" ]; then
   # mv, which share nothing with it but the system calls.
   filestest() { keep timeout 600 python tools/filescheck.py; }
 
+  # Notes from its keys: select all, copy, paste, save and undo, read back
+  # off the disk. Its chords were typed into the text as control characters.
+  notestest() { keep timeout 600 python tools/notescheck.py; }
+
   # The second boot of a machine, which is the one nothing else reaches:
   # every other check starts the kernel directly and never asks a firmware
   # to start from the disk the kernel formatted.
@@ -721,6 +725,7 @@ if [ "$MODE" = "screen" ] || [ "$MODE" = "full" ]; then
   par_start "a server that never answers does not stop the machine" hangtest
   par_start "big files are copied, moved and saved whole" bigfiletest
   par_start "the file manager copies, moves and renames" filestest
+  par_start "the text editor's keys copy, paste, save and undo" notestest
   par_start "a machine still starts once it has formatted its disk" boottest
   par_start "ctrl+f finds a word that is on the screen" findtest
   par_start "a deal reaches the cloth and the dealer plays it out" gametest
