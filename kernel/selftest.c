@@ -6149,6 +6149,18 @@ static void test_pcie(void) {
     const acpi_info_t *a = acpi();
     ok("the acpi tables were found", a->found);
 
+    /* A sixteen bit config write is one, not the thirty two around it: the
+       command register's neighbour is the status register, whose error bits
+       a write of ones clears, and the read, change and write of the dword
+       wrote back every one it read. Recorded rather than made. */
+    pci_test_capture(true);
+    pci_write16(0, 0, 0, 0x04, 0x0006);
+    u16 woff = 0;
+    u8 wwidth = 0;
+    u32 wval = pci_test_captured(&woff, &wwidth);
+    pci_test_capture(false);
+    ok("a sixteen bit config write writes sixteen bits, not the status word beside them",
+       wwidth == 16 && woff == 0x04 && wval == 0x0006);
     if (a->found) {
         ok("a directory of tables was read", a->ntables > 0);
         ok("at least one processor is described", a->ncpus > 0);

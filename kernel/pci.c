@@ -94,6 +94,17 @@ static u32 address(u8 bus, u8 slot, u8 func, u16 offset) {
 
 /* --- what everything else calls ------------------------------------------- */
 
+/* For the self test: writes recorded rather than made, the last one kept,
+   so what a write is made of can be seen without a device to watch. */
+static struct { bool on; u16 offset; u8 width; u32 value; } pci_capture;
+
+void pci_test_capture(bool on) { pci_capture.on = on; pci_capture.width = 0; }
+u32 pci_test_captured(u16 *offset, u8 *width) {
+    if (offset) *offset = pci_capture.offset;
+    if (width) *width = pci_capture.width;
+    return pci_capture.value;
+}
+
 u32 pci_read32(u8 bus, u8 slot, u8 func, u16 offset) {
     volatile u8 *p = ecam_at(bus, slot, func, offset);
     if (p) return *(volatile u32 *)p;
@@ -114,6 +125,12 @@ u16 pci_read16(u8 bus, u8 slot, u8 func, u16 offset) {
 }
 
 void pci_write32(u8 bus, u8 slot, u8 func, u16 offset, u32 value) {
+    if (pci_capture.on) {
+        pci_capture.offset = offset;
+        pci_capture.width = 32;
+        pci_capture.value = value;
+        return;
+    }
     volatile u8 *p = ecam_at(bus, slot, func, offset);
     if (p) { *(volatile u32 *)p = value; return; }
 
@@ -122,11 +139,24 @@ void pci_write32(u8 bus, u8 slot, u8 func, u16 offset, u32 value) {
     outl(CONFIG_DATA, value);
 }
 
+/* A word, not the dword around it. The word beside the command register is
+   the status register, whose error bits are cleared by writing them as
+   ones; a read, change and write of the dword wrote back every one it had
+   read, so turning bus mastering on cleared whatever the device had to
+   report (atlas 02, B20). */
 void pci_write16(u8 bus, u8 slot, u8 func, u16 offset, u16 value) {
-    u32 old = pci_read32(bus, slot, func, offset);
-    u32 shift = (offset & 2) * 8;
-    u32 v = (old & ~(0xFFFFu << shift)) | ((u32)value << shift);
-    pci_write32(bus, slot, func, offset, v);
+    if (pci_capture.on) {
+        pci_capture.offset = offset;
+        pci_capture.width = 16;
+        pci_capture.value = value;
+        return;
+    }
+    volatile u8 *p = ecam_at(bus, slot, func, offset);
+    if (p) { *(volatile u16 *)(p + (offset & 2)) = value; return; }
+
+    if (offset >= 256) return;
+    outl(CONFIG_ADDR, address(bus, slot, func, offset));
+    outw((u16)(CONFIG_DATA + (offset & 2)), value);
 }
 
 /* --- finding things ------------------------------------------------------- */

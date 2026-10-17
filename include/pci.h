@@ -40,6 +40,11 @@ u8   pci_ecam_last_bus(void);
 u32  pci_read32(u8 bus, u8 slot, u8 func, u16 offset);
 u16  pci_read16(u8 bus, u8 slot, u8 func, u16 offset);
 void pci_write32(u8 bus, u8 slot, u8 func, u16 offset, u32 value);
+/* For the self test: config writes recorded and not made; the last one's
+   offset, width (16 or 32) and value. */
+void pci_test_capture(bool on);
+u32  pci_test_captured(u16 *offset, u8 *width);
+
 void pci_write16(u8 bus, u8 slot, u8 func, u16 offset, u16 value);
 bool pci_find(u16 vendor, u16 device, pci_dev_t *out);
 bool pci_find_class(u8 class_code, u8 subclass, u8 prog_if, pci_dev_t *out);
