@@ -95,6 +95,14 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.161.0
+
+- **A notice when Print Screen saves (07)**: wm.c `notice(text)`, a pill above the middle of the dock for `NOTICE_MS`
+  (4000), `draw_notice` with the find bar and the panels, `notice_damage` (its box and shadow) when it comes and goes,
+  `idle_ms` waking for `notice_until`, expired in the loop. Only the desktop raises one. printcheck two more.
+- **The terminal's `date` (09b)**: term.c `cmd_date` from /sys/time's `local`, `zone` and `offset`, the weekday from
+  zones.h. timecheck one more (read back through the clipboard).
+
 ### 0.160.0
 
 - **Pictures, a viewer (10)**: `userland/pictures.c` (`/bin/pictures [FILE | FOLDER]`, in /bin by builtin.S/builtin.c,

@@ -402,7 +402,11 @@ Since 0.55.0 a frame with damage draws only its damage. `composite()` is the poi
 12. Press with no window under the pointer: badge toggles the launcher (opened at `dock_x`, `panel_rest_y − 212 − 8`); find button toggles find; net icon toggles its popup (closes volume); speaker: right = mute/unmute (remembering `volume_before_mute`), left toggles the popup; a chip: minimised → restore, top → minimise, else raise; the dock band (full screen width) otherwise swallows the click; an icon: select, double click (same icon within `dblclick_ms`) launches, a right press also opens the context menu; otherwise on the wallpaper (`my < work_h()`) start a band.
 13. Press on a window: `wm_raise`; close/max/min buttons; grip → start resize; title: right press toggles maximise, left starts a drag; content: `mouse_capture = w` and push `WM_EV_MOUSE{buttons | 0x80}` (user) or `on_mouse(…, true)` (kernel).
 
-#### 3.9.25b Print Screen (0.159.0)
+#### 3.9.25b Print Screen (0.159.0; the notice 0.161.0)
+
+Since 0.161.0 the desktop also shows `notice("saved NAME in pictures")` (or why not): a pill of `NOTICE_H` 34 centred
+12 px above the dock, drawn after the find bar, gone after `NOTICE_MS` 4000 (the loop expires it; `idle_ms` wakes for
+it); a new notice replaces the old and damages both places.
 
 `wm_key` takes `KEY_PRINT` after `handle_shortcut` and before the find bar and the windows: `shot_save` (kernel/shot.c)
 writes the back buffer as a PNG to `/home/pictures/screen YYYY-MM-DD HH.MM.SS.png` (local time; `/home` and

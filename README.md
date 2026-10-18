@@ -126,7 +126,7 @@ whatever the desktop has open, then goes to a program that has a use for it
 returns to the shell; alt and Escape returns to the shell from anywhere.
 
 Print Screen saves the screen as a PNG in `/home/pictures`, named by the
-time; the kernel compresses it with a deflate of its own (it had only ever
+time, and says so in a notice above the dock for a few seconds; the kernel compresses it with a deflate of its own (it had only ever
 inflated), so a screen is a hundred kilobytes or so rather than two and a
 third megabytes. Pictures, in the launcher's Media list, shows a PNG, JPEG,
 GIF or WebP with the browser's decoders, fitted to the window, and the
@@ -151,8 +151,9 @@ The clock on the dock is told in the machine's time zone, chosen on Settings'
 Time page from the seventy one the browser's Intl knows, or with the shell's
 `zone`, and kept as one more line in that file. The zones and their summer
 rules are one table that the kernel and the browser share, so the dock and a
-page's dates agree: `/sys/time` gives the time there beside UTC, the shell's
-`date` says it in words, and a page's `Date` is local in it. A file says
+page's dates agree: `/sys/time` gives the time there beside UTC, `date` (in
+the shell and in the terminal) says it in words, and a page's `Date` is
+local in it. A file says
 when it was written and made, in that same local time as FAT keeps it: the
 shell's and the terminal's `ls -l` show it, and so does Files beside the
 file chosen. The machine's own clock is taken to keep UTC, as QEMU's does;

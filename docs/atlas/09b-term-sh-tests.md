@@ -185,6 +185,7 @@ The table row is `{name, handler, args, what}` (`term.c:1308-1313`) and `command
 | # | Command | Args | Behaviour (and messages) | Lines |
 |---|---|---|---|---|
 | 1 | `help` | [COMMAND] | Without args: dim "commands", then each `"  name args"` padded to column 28 plus the description, a blank line, and three dim hints ("A name on its own runs that program: here, then /usb, then /bin." / "Tab completes. Up and down walk through history." / "PageUp and PageDown scroll. Escape leaves the desktop."). With an arg: `name args` in accent plus the description, or "no such command". F1 also runs it. | 1363-1387 |
+| - | `date` (0.161.0) | - | /sys/time's `local`, `zone` and `offset` as "Sunday 18 October 2026, 21:05:33 in Asia/Calcutta (UTC+5:30)" (weekday from zones.h); "no clock" without one. | - |
 | 2 | `ls` | [-l] [PATH] (default ".") | (0.157.0: `-l` puts `YYYY-MM-DD HH:MM  ` from `file_times`, or 18 blanks, between the size and the name.) A file prints `%10u  PATH`. A directory prints `"     <dir>  NAME/"` in accent for subdirectories and `%10u  NAME` for files, then a dim summary "N file(s) in B bytes[, D director(y/ies)]". An empty **or nonexistent** directory prints "(empty)". | 480-518 |
 | 3 | `shutdown` | | "switching off", then `power_off()`. If that returns: "this machine will not power off by itself". SYS_POWER flushes the disk (`syscall.c:463-475`), but terminal history is **not** saved. | 464-471 |
 | 4 | `reboot` | | "restarting", `power_reboot()`, then "this machine did not restart". | 473-478 |

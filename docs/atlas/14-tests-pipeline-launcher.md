@@ -864,7 +864,8 @@ Added in 0.160.0, not yet in the table below:
   Enter opens the viewer on it. Console lines are matched without case (mkfat's names are 8.3).
 
 Added in 0.159.0, not yet in the table below:
-- **`printcheck.py`** (gate `printtest`, full; 7 checks). The desktop with its terminal, the pointer parked; `sendkey
+- **`printcheck.py`** (gate `printtest`, full; 7 checks, 9 since 0.161.0: the region above the dock changes after the
+  key (the notice) and is as it was again within 15 s, before the comparison). The desktop with its terminal, the pointer parked; `sendkey
   print`; the console says where the screen was saved; the name's time is the host's to 5 s; the file read off the image
   (readfat.py) is a 1024 by 768 RGB PNG with every chunk's CRC good (zlib.crc32), under a quarter of the raw screen, and
   decoded here (zlib and all five row filters) matches QEMU's screendump in all but a thousandth of the pixels (a cursor
@@ -880,7 +881,7 @@ Added in 0.158.0, not yet in the table below:
   clock; asked again, the clock is found right.
 
 Added in 0.156.0, not yet in the table below:
-- **`timecheck.py`** (gate `timetest`, full; 12 checks, 19 since 0.157.0, the last two the clock kept in local time:
+- **`timecheck.py`** (gate `timetest`, full; 12 checks, 19 since 0.157.0, 20 since 0.161.0 (the terminal's `date`), the last two the clock kept in local time:
   `date` straight after `write /zelr.cfg clock_local 1` says the host's UTC as Kathmandu's wall clock, and /sys/time's
   local and now agree). The time zone from the kernel shell (`zone`, refused for a
   name it does not know, set to Asia/Calcutta in lower case), /sys/time's local time 330 minutes on from its `now`, the
