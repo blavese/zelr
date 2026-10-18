@@ -28,6 +28,7 @@ extern const u8 builtin_notes_start[], builtin_notes_end[];
 extern const u8 builtin_monitor_start[], builtin_monitor_end[];
 extern const u8 builtin_calc_start[], builtin_calc_end[];
 extern const u8 builtin_music_start[], builtin_music_end[];
+extern const u8 builtin_pictures_start[], builtin_pictures_end[];
 extern const u8 builtin_browser_start[], builtin_browser_end[];
 extern const u8 builtin_sh_start[], builtin_sh_end[];
 extern const u8 builtin_echo_start[], builtin_echo_end[];
@@ -93,6 +94,7 @@ static const program_t PROGRAMS[] = {
     { "monitor",   builtin_monitor_start,   builtin_monitor_end   },
     { "calc",      builtin_calc_start,      builtin_calc_end      },
     { "music",     builtin_music_start,     builtin_music_end     },
+    { "pictures",  builtin_pictures_start,  builtin_pictures_end  },
     { "browser",   builtin_browser_start,   builtin_browser_end   },
     { "sh",        builtin_sh_start,        builtin_sh_end        },
     { "echo",      builtin_echo_start,      builtin_echo_end      },

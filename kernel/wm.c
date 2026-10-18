@@ -463,6 +463,7 @@ static const mitem_t M_WEB[] = {
 static const mitem_t M_MEDIA[] = {
     { "Paint",        "/bin/paint" },
     { "Music",        "/bin/music" },
+    { "Pictures",     "/bin/pictures" },
 };
 static const mitem_t M_SYSTEM[] = {
     { "Settings",     "/bin/settings" },

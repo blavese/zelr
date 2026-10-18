@@ -117,6 +117,13 @@ builtin_music_start:
 builtin_music_end:
 
 .balign 4
+.global builtin_pictures_start
+.global builtin_pictures_end
+builtin_pictures_start:
+.incbin "build/user/pictures.elf.z"
+builtin_pictures_end:
+
+.balign 4
 .global builtin_monitor_start
 .global builtin_monitor_end
 builtin_monitor_start:

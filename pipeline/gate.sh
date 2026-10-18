@@ -644,6 +644,10 @@ if [ "$MODE" = "screen" ] || [ "$MODE" = "full" ]; then
   # held up against QEMU's own dump of the screen.
   printtest() { keep timeout 600 python tools/printcheck.py; }
 
+  # Pictures: a PNG opened by name and from Files, the folder walked with the
+  # arrows, each step counted on the screen by the picture's own colours.
+  viewtest() { keep timeout 600 python tools/viewcheck.py; }
+
   # The second boot of a machine, which is the one nothing else reaches:
   # every other check starts the kernel directly and never asks a firmware
   # to start from the disk the kernel formatted.
@@ -743,6 +747,7 @@ if [ "$MODE" = "screen" ] || [ "$MODE" = "full" ]; then
   par_start "the clock is told in the zone the machine is in" timetest
   par_start "a clock that is wrong is set from a time server" ntptest
   par_start "print screen saves the screen as it is" printtest
+  par_start "a picture is shown, and its folder walked" viewtest
   par_start "a machine still starts once it has formatted its disk" boottest
   par_start "ctrl+f finds a word that is on the screen" findtest
   par_start "a deal reaches the cloth and the dealer plays it out" gametest
