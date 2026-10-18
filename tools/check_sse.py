@@ -131,6 +131,16 @@ def main():
                     filtered += 1
                     continue
 
+                # The byte immediate that ends an instruction on a register:
+                # an opcode that takes one after its addressing byte (80, 83,
+                # C0, C1, C6, 6B), then an addressing byte with mod 11, which
+                # has no displacement after it. 0.159.0's shot_deflate had
+                # `cmp ecx, 0x0f` then `jle`: 83 f9 0f 7e, and 0f 7e is movd.
+                if (j > 1 and body[j - 2] in (0x80, 0x83, 0xC0, 0xC1, 0xC6, 0x6B)
+                        and (body[j - 1] & 0xC0) == 0xC0):
+                    filtered += 1
+                    continue
+
                 # The first byte of a register-plus-address displacement: an
                 # addressing byte with mod 10 and no scale-index byte (rm not
                 # 100), then four bytes that are an address in the image. The

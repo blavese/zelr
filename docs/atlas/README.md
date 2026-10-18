@@ -105,6 +105,8 @@ numbered files are still to 6048716; where they disagree with this list, this li
   the screen is saved in PATH" on the console. ~120 KB for a 1024 by 768 desktop; a few seconds under QEMU without
   acceleration. Selftest `[screenshots]` (6, round trips through sysfs.c's inflate); printcheck, a new gate step (66
   now), and usbcheck one more (the USB keyboard's Print Screen).
+- check_sse.py excuses a 0F pair that is the byte immediate ending an instruction on a register (80, 83, C0, C1, C6 or
+  6B with an addressing byte of mod 11): shot_deflate's `cmp ecx, 0x0f; jle` failed the first 0.159.0 gate.
 
 ### 0.158.0
 
