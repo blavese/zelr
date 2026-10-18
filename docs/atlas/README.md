@@ -95,6 +95,18 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.162.0
+
+- **Pages on this machine (11, 10)**: web.h `URL_FILE` (secure 2, host "file", port 0): `url_parse` reads `file://PATH`,
+  `url_text` writes it, `url_join` takes a `file:` href only from a page that is a file (a scheme relative link from
+  one is https). fetch.h `web_file` (from `web_send` and `web_job_start`, which completes at once with room for the
+  whole file): the path with its query cut and %XX undone, read whole, the type from the name, 404 for nothing, a
+  folder as a page of links; only while `web_files_ok`, which browser.c `load` sets to whether the page is a file. The
+  browser's bar takes a path ("/home/site/index.html") as a file address (`go_or_search`); Files' `KIND_PAGE` (.html,
+  .htm) opens in the browser. **`WEB_ERR_SCHEME` is -11, not -1**: browser.c `ask_begin` returned it for an address it
+  could not join, and jsnet.h reads -1 as "every connection busy", so a page's fetch() of any such address waited for
+  ever. sitetest seven more; localcheck, a new gate step (68 now).
+
 ### 0.161.0
 
 - **A notice when Print Screen saves (07)**: wm.c `notice(text)`, a pill above the middle of the dock for `NOTICE_MS`

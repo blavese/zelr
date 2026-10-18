@@ -130,7 +130,12 @@ time, and says so in a notice above the dock for a few seconds; the kernel compr
 inflated), so a screen is a hundred kilobytes or so rather than two and a
 third megabytes. Pictures, in the launcher's Media list, shows a PNG, JPEG,
 GIF or WebP with the browser's decoders, fitted to the window, and the
-arrow keys walk the rest of its folder; Files opens a picture there.
+arrow keys walk the rest of its folder; Files opens a picture there. The
+browser opens pages on the machine too: a path typed into its bar or handed
+over by Files is a `file:` address, a page's sheets and pictures are read
+from beside it, and a folder is shown as a page of links. A page from the
+web cannot reach them: it cannot link to one, and its scripts are refused
+one.
 
 The wheel scrolls whatever is under the pointer, the speaker by the clock
 sets the volume, and the launcher can switch the machine off. Drag on the
@@ -439,6 +444,7 @@ instead.
     python tools/ntpcheck.py    put the clock back to 2020, serve the time from here, see it set
     python tools/printcheck.py  press print screen, decode the PNG here, compare it with the screen
     python tools/viewcheck.py   open pictures by name and from Files, walk the folder, count the colours
+    python tools/localcheck.py  open a site on the disk in the browser; a web page asks for one of its files
     python tools/powercheck.py  tell it to shut down, see if it does
     python tools/appcheck.py    make the calculator divide, play a file
     python tools/setcheck.py    write a setting by hand, watch the dock move

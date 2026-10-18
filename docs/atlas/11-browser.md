@@ -885,6 +885,9 @@ main loop (browser.c:1350): events → keys → timers → one XHR → form navi
 
 ### 3.1 `userland/web.h` (299 lines) -- URLs
 
+(0.162.0: `URL_FILE`, a `secure` of 2 for a file on the machine, "file:///path": parsed, printed and joined as the
+README's since list says; fetch.h `web_file` reads one, only while `web_files_ok`.)
+
 Purpose (web.h:1-6): "everything here is bytes in and bytes out, with no screen anywhere in it."
 
 **Constants**: `URL_HOST 128` (10), `URL_PATH 640` (11), `URL_TEXT (URL_HOST + URL_PATH + 24)` = 792 (12). `URL_HOST` matches the kernel's 128-byte host copy in `sys_connect` (kernel/syscall.c:748).
