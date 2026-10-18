@@ -8,6 +8,10 @@ CRC, zlib, the row filters) and compares it pixel by pixel with QEMU's own
 dump of the screen taken straight after. A cursor that blinks between the
 two is allowed for: almost every pixel, not every one.
 
+The desktop also says it on the screen, in a notice above the dock for a
+few seconds: that is looked for as a change above the dock after the key,
+and the comparison waits until the notice has gone again.
+
   python tools/printcheck.py [--keep]
 """
 import datetime
@@ -25,6 +29,12 @@ from readfat import Fat16                                              # noqa: E
 DISK = os.path.join(ROOT, "printcheck.%d.img" % os.getpid())
 TERMINAL = (0x10, 0x14, 0x1A)          # the terminal's default background
 SCREEN = (0, 0, 1024, 768)
+ABOVE_DOCK = (262, 644, 762, 710)       # where the notice comes and goes
+
+
+def crop(px, w, rect):
+    left, top, right, bottom = rect
+    return b"".join(px[(y * w + left) * 3:(y * w + right) * 3] for y in range(top, bottom))
 
 
 def png_pixels(data):
@@ -90,6 +100,8 @@ def main():
             "print-desk", lambda w, h, px: count_in(px, w, SCREEN, TERMINAL) > 50000, timeout=60)
         c.add("the desktop comes up with its terminal", up, shot)
         time.sleep(2)                      # nothing still opening
+        w0, h0, px0, _, _ = mon.wait_screen("print-before", lambda w, h, px: True)
+        quiet = crop(px0, w0, ABOVE_DOCK)
 
         mark = len(vm.serial())
         mon.send("sendkey print", settle=0.2)
@@ -100,6 +112,12 @@ def main():
             path = m.group(1).strip() if m else None
             time.sleep(0.2)
         host = datetime.datetime.utcnow()
+        _, _, _, shot, told = mon.wait_screen(
+            "print-notice", lambda w, h, px: crop(px, w, ABOVE_DOCK) != quiet, timeout=10)
+        c.add("a notice above the dock says so", told, shot)
+        _, _, _, shot, gone = mon.wait_screen(
+            "print-gone", lambda w, h, px: crop(px, w, ABOVE_DOCK) == quiet, timeout=15)
+        c.add("and goes again after a few seconds", gone, shot)
         w, h, px, shot, _ = mon.wait_screen("print-after", lambda w, h, px: True)
         c.add("Print Screen says where it saved the screen (%s)" % path, path is not None)
         if not path:

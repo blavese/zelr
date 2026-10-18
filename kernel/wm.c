@@ -2621,6 +2621,55 @@ static void draw_find_bar(void) {
     }
 }
 
+/* --- a notice ---------------------------------------------------------------
+ *
+ * A line in a pill above the middle of the dock for a few seconds, for
+ * something the desktop did that shows nothing by itself: Print Screen
+ * saving the screen said so on the console, which nobody at a desktop
+ * reads. One at a time; a new one takes the last one's place. */
+#define NOTICE_H   34
+#define NOTICE_MS  4000
+static char notice_text[112];
+static u64  notice_until;                    /* in ticks; 0 when none is up */
+
+static void notice_box(int *x, int *y, int *w, int *h) {
+    *w = face_width(notice_text, FACE_BODY) + 32;
+    *h = NOTICE_H;
+    *x = ((int)fb_width() - *w) / 2;
+    *y = taskbar_y() - NOTICE_H - 12;
+}
+
+/* Its place, shadow and all, to draw again. */
+static void notice_damage(void) {
+    int x, y, w, h;
+    notice_box(&x, &y, &w, &h);
+    need_frame_in(x - 14, y - 14, w + 28, h + 28);
+}
+
+static void notice(const char *text) {
+    if (notice_until) notice_damage();
+    strncpy(notice_text, text, sizeof(notice_text) - 1);
+    notice_text[sizeof(notice_text) - 1] = 0;
+    notice_until = timer_ticks() + (u64)NOTICE_MS * timer_hz() / 1000;
+    notice_damage();
+}
+
+static void draw_notice(void) {
+    if (!notice_until) return;
+    const theme_t *t = theme();
+    int x, y, w, h;
+    notice_box(&x, &y, &w, &h);
+    if (t->look == LOOK_MODERN) {
+        if (t->shadows) fb_shadow(x, y, w, h, h / 2, 7);
+        fb_round_rect_aa(x, y, w, h, h / 2, t->overlay, 248);
+        fb_round_rect_aa(x, y, w, h, h / 2, t->stroke, 85);
+    } else {
+        fb_rect((u32)x, (u32)y, (u32)w, (u32)h, t->surface);
+        raised(x, y, w, h);
+    }
+    face_text(x + 16, y + (h - face_height(FACE_BODY)) / 2, notice_text, t->text, FACE_BODY);
+}
+
 /* --- the network, left of the speaker -------------------------------------
  *
  * The icon says three things apart: no link, a link with no address, and a
@@ -3229,6 +3278,7 @@ static void draw_scene(void) {
     draw_taskbar();
     draw_volume_panel();
     draw_find_bar();
+    draw_notice();
     draw_net_panel();
     draw_menu();
     draw_ctx();
@@ -4377,8 +4427,17 @@ static bool wm_key(int c) {
     if (KEY_CODE(c) == KEY_PRINT) {
         const char *why = "";
         const char *path = shot_save(&why);
-        if (path) kprintf("desktop: the screen is saved in %s\n", path);
-        else kprintf("desktop: the screen was not saved: %s\n", why);
+        char line[112];
+        if (path) {
+            kprintf("desktop: the screen is saved in %s\n", path);
+            const char *name = path;
+            for (const char *p = path; *p; p++) if (*p == '/') name = p + 1;
+            kformat(line, sizeof(line), "saved %s in pictures", name);
+        } else {
+            kprintf("desktop: the screen was not saved: %s\n", why);
+            kformat(line, sizeof(line), "the screen was not saved: %s", why);
+        }
+        notice(line);
         return true;
     }
 
@@ -4625,6 +4684,7 @@ static u32 idle_ms(void) {
     u64 hz = timer_hz(), now = timer_ticks();
     u64 next = last_theme_check + hz / 4 + 1;
     if (last_dock_look + hz < next) next = last_dock_look + hz;
+    if (notice_until && notice_until < next) next = notice_until;   /* when it goes */
     u64 left = next > now ? next - now : 1;
     return (u32)(left * 1000 / hz);
 }
@@ -4782,6 +4842,11 @@ void wm_run(void) {
         }
 
         if (still_moving(panel_since, PANEL_MS)) panel_frame();
+
+        if (notice_until && timer_ticks() >= notice_until) {
+            notice_damage();
+            notice_until = 0;
+        }
 
         /* Anything mid transition wants the next frame. This is the only
            thing driving an animation: no timer of its own, no frame count,
