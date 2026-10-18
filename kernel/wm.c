@@ -4626,6 +4626,7 @@ void wm_run(void) {
     if (!boot_w) { boot_w = fb_width(); boot_h = fb_height(); }
     apply_screen_size();
 
+    fbcon_hold(true);           /* the screen is the desktop's now (fbcon.h) */
     running = true;
     menu_open = false;
     mouse_set_autodraw(false);          /* the manager draws the pointer */
@@ -4822,4 +4823,5 @@ void wm_run(void) {
     snap_preview = SNAP_NONE;
     shake_reset();
     mouse_set_autodraw(true);
+    fbcon_hold(false);
 }

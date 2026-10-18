@@ -9,6 +9,13 @@ another in Settings with the mouse and reads the file and the date back.
 The zones have no summer time, so nothing here depends on the date it runs
 on, and half and three quarter hours, so the minutes are checked too.
 
+And the console, which drew a program's printing over the desktop and, at
+the bottom of the screen, scrolled the whole desktop up (fbcon.h
+fbcon_hold). Settings prints a line each time the zone changes, so the zone
+is moved back and forth fourteen times: past the twelve lines a console at
+any row prints before it scrolls. Then nowhere on the screen may be the
+console's ground, which the desktop never draws in.
+
 Settings says on the console what its Time page shows ("settings: time zone
 ..."), as its Wireless page does, and that is what each click waits for.
 
@@ -21,11 +28,16 @@ import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from harness import Guest, Checks, build_once, ROOT                       # noqa: E402
+from harness import Guest, Checks, build_once, count_in, ROOT             # noqa: E402
 from setcheck import (PAGES, IN_X, IN_Y, PAGE_X, UI_PAD, UI_ROW, CTX_X, CTX_Y,  # noqa: E402
                       CTX_PAD, CTX_ITEM, CTX_CLOSE, DOCK_SIDE, DOCK_H, PANEL_Y)
 
 DISK = os.path.join(ROOT, "timecheck.%d.img" % os.getpid())
+
+# The console's ground (fbcon.c PALETTE[0]): behind every character it draws,
+# and what a scroll fills the bottom quarter of the screen with.
+CONSOLE = (0x14, 0x18, 0x1D)
+SCREEN = (0, 0, 1024, 768)
 
 # The dock's clock, at its right hand end.
 CLOCK = (920, PANEL_Y + 6, 1004, PANEL_Y + DOCK_H - 6)
@@ -136,6 +148,15 @@ def main():
                 "time-dock", lambda w, h, px: crop(px, w, CLOCK) != before, timeout=10)
             c.add("and the dock's clock moves to it",
                   moved and time.gmtime().tm_min == minute, shot)
+            # Back and forth, ending where it was: a line printed each time.
+            said = 0
+            for i in range(14):
+                name = "Asia/Calcutta, UTC+5:30" if i % 2 == 0 else "Asia/Kathmandu, UTC+5:45"
+                said += click_until(zone_row(0 if i % 2 == 0 else 1), "settings: time zone " + name, timeout=15)
+            w, h, px, shot, _ = mon.wait_screen("time-page", lambda w, h, px: True)
+            ground = count_in(px, w, SCREEN, CONSOLE)
+            c.add("and the console printed nothing over the desktop (%d lines, %d pixels of its ground)"
+                  % (said, ground), said == 14 and ground < 64, shot)
 
         # The file and the date, from the console: escape hands it back.
         mon.send("sendkey esc", settle=1.0)

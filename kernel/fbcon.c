@@ -32,6 +32,7 @@ static u32 cols, rows;
 static u32 cx, cy;
 static u8  fg = 7, bg = 0;
 static bool cursor_shown;
+static bool held;                            /* see fbcon_hold */
 static u32 dcol0, drow0, dcol1, drow1;       /* cells to send; see touched() */
 
 void fbcon_init(void) {
@@ -117,7 +118,10 @@ static void scroll(void) {
     dcol0 = dcol1 = 0;                       /* all of it has been sent */
 }
 
+void fbcon_hold(bool h) { held = h; }
+
 void fbcon_putc(char c) {
+    if (held) return;
     /* The pointer saves the pixels underneath it, so it has to come
        off before anything writes there and go back on afterwards -- when
        this can write there: the row the cursor is on and the ones either

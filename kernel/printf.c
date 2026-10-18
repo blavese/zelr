@@ -165,6 +165,7 @@ int kformat(char *buf, size_t cap, const char *fmt, ...) {
 
 void panic(const char *fmt, ...) {
     cli();
+    fbcon_hold(false);          /* a panic under the desktop is still told on the screen */
     vga_set_color(VGA_WHITE, VGA_RED);
     kprintf("\n*** KERNEL PANIC ***\n");
 

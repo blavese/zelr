@@ -990,6 +990,20 @@ static void test_console(void) {
         }
     ok("and draws it as the font has it", same && seen_ink && seen_paper && ink != paper);
 
+    /* Held, as the desktop holds it, two screens of lines and a letter
+       leave the screen as it was: nothing drawn, nothing scrolled, nothing
+       sent. */
+    u64 f1 = fb_frames(), r1 = fb_rect_flushes();
+    fbcon_hold(true);
+    for (u32 i = 0; i < 2 * rows; i++) fbcon_putc('\n');
+    fbcon_putc('B');
+    fbcon_hold(false);
+    bool kept = true;
+    for (u32 y = 0; y < FONT_H; y++)
+        for (u32 x = 0; x < FONT_W; x++)
+            kept &= fb_get(x, y) == ((g[y] & (0x80 >> x)) ? ink : paper);
+    ok("while the desktop holds the screen the console draws nothing on it",
+       kept && fb_frames() == f1 && fb_rect_flushes() == r1);
     if (pointer) mouse_inject(x0 - mouse_x(), mouse_y() - y0, b);   /* back where it was */
 }
 
