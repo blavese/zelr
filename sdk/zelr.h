@@ -954,6 +954,7 @@ typedef struct {
 #define KEY_PAGE_DOWN 0x107
 #define KEY_DELETE    0x108
 #define KEY_INSERT    0x109
+#define KEY_PRINT     0x10A      /* the desktop takes it: it saves the screen */
 #define KEY_F1        0x110      /* F1..F12 run consecutively */
 
 /* The control key arrives as a bit alongside the character, so ctrl+c and a

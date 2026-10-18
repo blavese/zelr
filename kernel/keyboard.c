@@ -77,6 +77,9 @@ static int extended_key(u8 code) {
         case 0x51: return KEY_PAGE_DOWN;
         case 0x53: return KEY_DELETE;
         case 0x52: return KEY_INSERT;
+        /* Print Screen, which comes as E0 2A E0 37: the first pair is a
+           pretend shift, and this table has nothing for 2A, so it goes. */
+        case 0x37: return KEY_PRINT;
         default:   return -1;
     }
 }

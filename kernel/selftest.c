@@ -73,6 +73,7 @@
 #include "clipboard.h"
 #include "rtc.h"
 #include "zone.h"
+#include "shot.h"
 #include "timesync.h"
 #include "rng.h"
 #include "tls.h"
@@ -6707,6 +6708,117 @@ static void test_time_zones(void) {
     zone_set(was);
 }
 
+/* --- screenshots ------------------------------------------------------------
+ *
+ * The deflate behind Print Screen's PNG (shot.c), inflated back by the
+ * inflate the kernel unpacks its programs with: flat runs, a pattern with
+ * noise in it, and noise alone; and a small PNG taken apart again, its
+ * chunks' checksums and its rows unfiltered back to the pixels. */
+static u32 lcg_next(u32 *s) { *s = *s * 1103515245u + 12345u; return *s >> 8; }
+
+static bool deflates_back(const u8 *data, u32 n, u32 *packed_out) {
+    u32 cap = n + n / 8 + 64;
+    u8 *z = (u8 *)kmalloc(cap), *back = (u8 *)kmalloc(n + 16);
+    bool same = false;
+    if (z && back) {
+        u32 packed = shot_deflate(data, n, z, cap);
+        *packed_out = packed;
+        same = packed && sysfs_unpack(z, packed, n, crc32(data, n), back, n + 16) == (int)n
+               && !memcmp(back, data, n);
+    }
+    kfree(z);
+    kfree(back);
+    return same;
+}
+
+/* A gradient along the first row, which the left neighbour filters to the
+   same small step, and rows after it one shade on and then alike, which
+   the row above filters to nothing: so both filters are chosen, and a
+   picture taken back with either mistaken comes back wrong. */
+static u32 shot_test_pixel(u32 x, u32 y) { return x * 0x141414u + (y ? 0x010101u : 0); }
+
+static u32 shot_test_rowbuf[7];
+static const u32 *shot_test_row(u32 y, void *arg) {
+    (void)arg;
+    for (u32 x = 0; x < 7; x++) shot_test_rowbuf[x] = shot_test_pixel(x, y);
+    return shot_test_rowbuf;
+}
+
+static u32 rd32(const u8 *p) { return (u32)p[0] << 24 | (u32)p[1] << 16 | (u32)p[2] << 8 | p[3]; }
+
+static void test_screenshots(void) {
+    u32 n = 200000, packed = 0;
+    u8 *d = (u8 *)kmalloc(n);
+    if (!d) { ok("memory for the screenshot checks", false); return; }
+
+    memset(d, 0x5A, n);
+    bool flat = deflates_back(d, n, &packed);
+    /* 258 bytes a match at thirteen bits with the fixed codes: 200000 bytes
+       come to about 1260. */
+    ok("a flat run deflates and inflates back, to a hundredth of its size", flat && packed < n / 100);
+
+    u32 seed = 7;
+    for (u32 i = 0; i < n; i++) d[i] = (u8)((i % 40 < 30 ? (i / 40) % 7 : lcg_next(&seed)) & 0xFF);
+    bool pattern = deflates_back(d, n, &packed);
+    ok("a pattern with noise in it comes back whole, and smaller", pattern && packed < n / 2);
+
+    for (u32 i = 0; i < 30000; i++) d[i] = (u8)lcg_next(&seed);
+    bool noise = deflates_back(d, 30000, &packed);
+    ok("noise comes back whole, no more than an eighth larger", noise && packed <= 30000 + 30000 / 8 + 8);
+    kfree(d);
+
+    /* A seven by five picture, made into a PNG and taken apart again. */
+    u32 len = 0;
+    u8 *png = shot_png(7, 5, shot_test_row, 0, &len);
+    bool sig = png && len > 57 && png[0] == 0x89 && png[1] == 'P' && png[2] == 'N' && png[3] == 'G';
+    bool ihdr = sig && rd32(png + 8) == 13 && !memcmp(png + 12, "IHDR", 4) && rd32(png + 16) == 7
+                && rd32(png + 20) == 5 && png[24] == 8 && png[25] == 2;
+    bool crcs = ihdr, pixels = false, used_sub = false, used_up = false;
+    u32 at = 8;
+    const u8 *zdata = 0;
+    u32 zlen = 0;
+    while (crcs && at + 12 <= len) {
+        u32 clen = rd32(png + at);
+        if (at + 12 + clen > len || crc32(png + at + 4, 4 + clen) != rd32(png + at + 8 + clen)) { crcs = false; break; }
+        if (!memcmp(png + at + 4, "IDAT", 4)) { zdata = png + at + 8; zlen = clen; }
+        at += 12 + clen;
+    }
+    crcs = crcs && at == len && zdata;
+    if (crcs && zlen > 6 && zdata[0] == 0x78) {
+        u32 rawlen = 5 * (1 + 7 * 3);
+        u8 raw[5 * 22 + 16], prev[21], cur[21];
+        /* The inflate checks a CRC of what comes out, and a PNG carries an
+           Adler-32 instead: so the rows are unfiltered first, then made
+           into the CRC the inflate wants, by inflating twice. */
+        int got = sysfs_unpack(zdata + 2, zlen - 6, rawlen, 0, raw, sizeof(raw));
+        (void)got;
+        u32 crc = crc32(raw, rawlen);
+        if (sysfs_unpack(zdata + 2, zlen - 6, rawlen, crc, raw, sizeof(raw)) == (int)rawlen) {
+            pixels = true;
+            memset(prev, 0, sizeof(prev));
+            for (u32 y = 0; y < 5 && pixels; y++) {
+                const u8 *r = raw + y * 22;
+                used_sub |= r[0] == 1;
+                used_up |= r[0] == 2;
+                for (u32 k = 0; k < 21; k++) {
+                    u8 left = k >= 3 ? cur[k - 3] : 0;
+                    cur[k] = (u8)(r[1 + k] + (r[0] == 1 ? left : r[0] == 2 ? prev[k] : 0));
+                }
+                for (u32 x = 0; x < 7; x++) {
+                    u32 p = shot_test_pixel(x, y);
+                    if (cur[3 * x] != (u8)(p >> 16) || cur[3 * x + 1] != (u8)(p >> 8) || cur[3 * x + 2] != (u8)p) pixels = false;
+                }
+                memcpy(prev, cur, sizeof(prev));
+            }
+        }
+    }
+    ok("a PNG is made: its signature and header say seven by five, eight bit colour", sig && ihdr);
+    ok("each chunk's checksum holds", crcs);
+    ok("and its rows, inflated and unfiltered, are the pixels, the left neighbour's filter and the row above's both "
+       "used", pixels && used_sub && used_up);
+    kfree(png);
+}
+
 /* --- network time -----------------------------------------------------------
  *
  * What a time server answers, read by timesync_read: answers made here, the
@@ -7192,6 +7304,7 @@ int selftest_run(void) {
     kprintf("[time zones]\n"); test_time_zones();
     kprintf("[file times]\n"); test_file_times();
     kprintf("[network time]\n"); test_network_time();
+    kprintf("[screenshots]\n"); test_screenshots();
     kprintf("[codec routes]\n"); test_codec_routes();
     kprintf("[es1371]\n"); test_es1371();
     kprintf("[sound]\n"); test_sound();

@@ -42,6 +42,7 @@
 #include "netdev.h"
 #include "wifi.h"
 #include "io.h"
+#include "shot.h"
 
 /* A bar that floats clear of the edges rather than one welded to them.
  *
@@ -4368,6 +4369,17 @@ static bool wm_key(int c) {
         return false;
     }
     if (handle_shortcut(c)) return true;          /* claimed by the desktop */
+
+    /* Print Screen saves what the screen shows, as it was drawn last: the
+       frame is the back buffer. Said on the console (and so the serial
+       line), which is where a harness reads it. */
+    if (KEY_CODE(c) == KEY_PRINT) {
+        const char *why = "";
+        const char *path = shot_save(&why);
+        if (path) kprintf("desktop: the screen is saved in %s\n", path);
+        else kprintf("desktop: the screen was not saved: %s\n", why);
+        return true;
+    }
 
     /* The find bar has the keyboard while it is up. It is one line in the
        corner rather than a window, so nothing else would give it back. */

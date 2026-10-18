@@ -164,6 +164,7 @@ static int special(u8 usage) {
     case 0x4E: return KEY_PAGE_DOWN;
     case 0x4C: return KEY_DELETE;
     case 0x49: return KEY_INSERT;
+    case 0x46: return KEY_PRINT;
     default: break;
     }
     if (usage >= 0x3A && usage <= 0x45) return KEY_F1 + (usage - 0x3A);

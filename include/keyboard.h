@@ -17,6 +17,7 @@
 #define KEY_PAGE_DOWN 0x107
 #define KEY_DELETE    0x108
 #define KEY_INSERT    0x109
+#define KEY_PRINT     0x10A      /* Print Screen: the desktop saves the screen (shot.h) */
 #define KEY_F1        0x110      /* F1..F12 run consecutively */
 
 /* Which modifiers were held at the moment the key was pressed.

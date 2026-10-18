@@ -167,6 +167,17 @@ def main():
                   moved is not None and moved != found)
         else:
             c.add("moving the usb mouse moves the pointer", False)
+
+        # Print Screen on the usb keyboard, whose number for it (usage 0x46)
+        # the PS/2 path never sees: the desktop saves the screen and says so.
+        mark = len(vm.serial())
+        mon.send("sendkey print", settle=0.3)
+        saved = False
+        end = time.time() + 60
+        while time.time() < end and not saved:
+            saved = "desktop: the screen is saved in" in vm.serial()[mark:]
+            time.sleep(0.3)
+        c.add("print screen on the usb keyboard saves the screen", saved)
     finally:
         vm.stop()
 
