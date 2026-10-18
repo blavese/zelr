@@ -134,7 +134,7 @@ Everything the desktop is drawn from is a setting. Not the colours and the
 wallpaper alone: the dock's height, the gap it floats clear of the edge by,
 whether the name and the find button and the clock are on it at all, a window's
 title bar and frame and corner, the size of the icons, how long a fade
-takes, how close two clicks have to be. Thirty one of them, each a line in
+takes, how close two clicks have to be. Thirty two of them, each a line in
 `/zelr.cfg`, and the settings window's Everything page is generated from the
 kernel's own list of them rather than written by hand -- so there is nothing
 in the file that the window cannot set, and nothing the window sets that the
@@ -145,7 +145,13 @@ Time page from the seventy one the browser's Intl knows, or with the shell's
 `zone`, and kept as one more line in that file. The zones and their summer
 rules are one table that the kernel and the browser share, so the dock and a
 page's dates agree: `/sys/time` gives the time there beside UTC, the shell's
-`date` says it in words, and a page's `Date` is local in it.
+`date` says it in words, and a page's `Date` is local in it. A file says
+when it was written and made, in that same local time as FAT keeps it: the
+shell's and the terminal's `ls -l` show it, and so does Files beside the
+file chosen. The machine's own clock is taken to keep UTC, as QEMU's does;
+one that keeps local time instead, as Windows keeps the clock of a machine
+it shares, is a switch on the same page, and the time is worked out from it
+with the zone.
 
 Everything on that desktop except the system info window is a separate
 program running in ring 3. Settings cannot reach into the window manager at
@@ -417,7 +423,7 @@ instead.
     python tools/namecheck.py   save long names and read them back
     python tools/filescheck.py  copy, move and rename in the file manager, from its keys
     python tools/notescheck.py  select all, copy, paste, save and undo in the editor, from its keys
-    python tools/timecheck.py   set the time zone from the shell and in Settings, read the clocks
+    python tools/timecheck.py   set the time zone from the shell and in Settings, read the clocks and a file's time
     python tools/powercheck.py  tell it to shut down, see if it does
     python tools/appcheck.py    make the calculator divide, play a file
     python tools/setcheck.py    write a setting by hand, watch the dock move
@@ -1590,7 +1596,7 @@ is still the kernel's own, on the console; the one in a window is a program.
 ## writing a program for it
 
 Four files in `sdk/` are everything a program needs: `zelr.h`, which is the
-seventy-one system calls and a little sugar over them, `zelr.ld`, which says
+seventy-two system calls and a little sugar over them, `zelr.ld`, which says
 where a program is linked, a build line, and an example.
 
 ```bash
@@ -1624,7 +1630,7 @@ byte.
 ## testing
 
 The kernel tests itself. `./run.sh -T` boots with selftest on the command line,
-runs 831 checks across every subsystem, then writes to QEMU's debug-exit port
+runs 844 checks across every subsystem, then writes to QEMU's debug-exit port
 so the host gets a real exit status.
 
     [string]                 9 checks  [waiting]               16 checks
@@ -1651,13 +1657,14 @@ so the host gets a real exit status.
     [windows]               29 checks  [interrupt routing]     11 checks
     [window server]         40 checks  [clipboard]             14 checks
     [built-in programs]     12 checks  [clock]                 18 checks
-    [theme]                 23 checks  [time zones]            14 checks
-    [taskbar]               18 checks  [codec routes]           6 checks
-    [live tree]             23 checks  [es1371]                 5 checks
-    [layout]                11 checks  [sound]                  skipped
+    [theme]                 24 checks  [time zones]            18 checks
+    [taskbar]               18 checks  [file times]             8 checks
+    [live tree]             23 checks  [codec routes]           6 checks
+    [layout]                11 checks  [es1371]                 5 checks
+                                       [sound]                  skipped
                                        [kernel stack]           3 checks
 
-    831 passed, 0 failed
+    844 passed, 0 failed
     SELFTEST_PASS
 
 The sound section is skipped because `run.sh` attaches no sound card (the
@@ -1665,7 +1672,7 @@ gate's q35 run gives it one), the
 identity map is checked in four more places when there is more memory to map,
 and the desktop keeps a copy of its wallpaper only when the memory allows it,
 which two more checks need: given 256 MiB, as the gate gives it, the same run
-is 837.
+is 850.
 
 Two of the sections are about what happens when something goes wrong half
 way, which a machine that keeps its power cannot show. `[fat]` makes the
@@ -1881,8 +1888,9 @@ large range:
   matters and a guess in the ones that do not.
 - **No job control.** `cmd &` starts something and stops waiting for it, and
   nothing keeps a list; `jobs` says so rather than printing an empty one.
-- **Seventy-one system calls.** Enough to print, walk directories, read and
-  write files, rename one, say when it must be on the disk, open a TCP or
+- **Seventy-two system calls.** Enough to print, walk directories, read and
+  write files, rename one, say when it must be on the disk and when it was
+  written, open a TCP or
   TLS connection and say how long a read of it waits, join a wireless
   network, sleep, exit, fork, exec, wait on a child, make a pipe, wait
   on several descriptors at once, map memory, catch a signal and own a

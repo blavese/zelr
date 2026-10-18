@@ -311,6 +311,15 @@ the zone kept; a name in any case; GMT is UTC; a second either side of 2026's ei
 Auckland: Windows' own zone data for the answers); New Year's Eve in UTC as Friday morning in Sydney; Kolkata's half
 hour and no summer; 1970 in Los Angeles; the dock's clock in the zone; a `zone` line in /zelr.cfg sets it; /sys/time's
 zone, offset, summer and local lines; `theme_save` writes it back. [video] gained one: the console held draws nothing.
+0.157.0 adds four (18): with `clock_local` written into the file, /sys/time re-reads it by itself and says `clock local`, a
+reading of 07:00 is Sydney's wall clock (20:00 UTC the day before), one in the skipped hour is read on the offset before,
+`x509_now` agrees with the zone's UTC to the minute, and with the switch off the reading is UTC again. The kernel shell
+re-reads /zelr.cfg after every command (`theme_reload`), so a setting written at the prompt applies without the desktop.
+
+48b. **[file times]** (0.157.0, 8): with `zone_test_fix` at 2026-12-31 20:00 UTC in Sydney, a file written is stamped
+07:00:00 written and made; written again an hour, a minute and a second on, 08:01:00 written (two seconds) and the made
+stamp kept; a rename keeps both; a directory made is stamped; /sys/version and / have none. The shell's `ls -l`
+(0.157.0) puts `YYYY-MM-DD HH:MM` (`when_text`, `vfs_times`) between the size and the name.
 
 48. **[clock]**: reads; month, day, hour, minute, second in range; 4-digit year 1970..2199; second read; same date; not backwards; second changes within 3 s; > 1000 of 4000 hammer reads succeed; none go backwards (midnight excepted); `rtc_format` 19 chars; dashes at 4,7; colons at 13,16; short form hh:mm; 3-byte buffer not overrun. (The comment at 3445-3450 says the torn-read check has never caught anything under QEMU; treat as unverified.)
 49. **[sound]**: rate 8000..96000; 1..8 channels; play position advance over 200 ms within 4x of `rate/5*frame`.

@@ -425,7 +425,7 @@ It does not check that the FAT is large enough for `cluster_count`, and does not
 - `fat_delete_file` (:1573-1590): refuses directories. **`free_chain` first**, then `dir_drop_long`, then `name[0]=0xE5` and `dir_write`, then `blk_flush`.
 - `fat_mkdir` (:1594-1640): allocates and zeroes a cluster, writes "." (itself) and ".." (the parent, **0 for the root even on FAT32**, per the spec), flushes, and only then `dir_put_name` plus the entry write (attr DIRECTORY, size 0), then flushes.
 - `fat_rmdir` (:1642-1663): refuses names starting with '.'. The directory must be empty (`fat_count(path)`). `free_chain` first, then marks 0xE5. **It never calls `dir_drop_long`.**
-- Every written entry gets `write_date = 0x5A21` (2025-01-01) and `write_time = 0`. No RTC is used; create and access dates are 0.
+- ~~Every written entry gets `write_date = 0x5A21` (2025-01-01) and `write_time = 0`. No RTC is used; create and access dates are 0.~~ Since 0.157.0 `stamp(e, made)` writes the write date and time (and access date) from zone.h's local time, and the create date, time and tenth too when the entry is new (`fat_write_file` for a new file, both entries of `fat_mkdir`); a rewrite keeps the create stamp, and a rename keeps both (the entry is copied). With no clock a new entry still gets 0x5A21. `fat_times` (`unstamp`) reads them back as `rtc_time_t`, year 0 for no date; `vfs_times` for disk paths only.
 
 #### Reclaim and statistics
 - **`fat_reclaim()`** (:1675-1755): allocates a byte map of `cluster_count+2` and a queue (64 entries, doubling). On FAT32 it marks the root chain first. The comment records that doing otherwise freed the root: "two files in the root, gone". It then walks the directories breadth-first with an explicit queue: every real non-dot entry's chain is marked (loop-guarded), and subdirectories are enqueued. The sweep frees every allocated, unmarked cluster (`fat_get(c) != 0`). If anything was freed it calls `blk_flush()` and resets the hint to 2. Returns the count. See §10 for the failure modes.
@@ -490,7 +490,7 @@ Programs: `program_t {name, data, size}`, `programs[48]`, `n_programs`. `sysfs_a
 | /sys/boot | `render_boot` :232 | this boot's log (`bb_text`), **tail** kept if over cap-1 (4095) |
 | /sys/lastboot | `render_lastboot` :248 | `bb_prev(b, cap)`, which is the **head** of the previous log. Or `no record` plus two explanatory lines ("There is one only after a boot that reached the scheduler, or / that panicked, on a volume this kernel formatted.") |
 | /sys/clipboard | `render_clipboard` :263 | `clip_get`, or `(empty)` |
-| /sys/time | `render_time` :275 | `now       <rtc_format>` (UTC, first: the browser's Date reads it); since 0.156.0 `local     YYYY-MM-DD hh:mm:ss`, `zone      NAME`, `offset    MINUTES`, `summer    0/1` (zone.h; local, offset and summer only with a clock); `source    cmos clock` or `none`; `uptime    N s` |
+| /sys/time | `render_time` :275 | `now       <rtc_format>` (UTC, first: the browser's Date reads it; since 0.157.0 zone.h's `at_utc`, so right under a clock kept in local time, and the file is re-read first, `theme_reload`); since 0.156.0 `local     YYYY-MM-DD hh:mm:ss`, `zone      NAME`, `offset    MINUTES`, `summer    0/1` (zone.h; local, offset and summer only with a clock); `source    cmos clock` or `none`; `clock     utc` or `local` (0.157.0); `uptime    N s` |
 | /sys/screen | `render_screen` :290 | `width`, `height`, `settable 0/1`, `source <fb_backend>`, `frames`, `shared`, `lastkib`, `fullkib`, `sentkib` (for settings.c) |
 | /sys/settings | `render_settings` :321 | `# key value low high default label`, then one line per theme knob (`theme_knob_*`) |
 | /sys/theme | `render_theme` :339 | `accent 0x…`, `desktop`, `surface`, `text`, `text_dim`, `light 0/1`, `look 0/1` (1 = LOOK_BUILT), `preset N` |
@@ -814,7 +814,7 @@ pci.c (`pci_find_class`, `pci_read32`, `pci_enable_bus_master`); paging.c (`pagi
 - **More than one stick / more volumes**: `FAT_VOLUMES`, `route()`, `fat_mount_on`, and usbdisk's single-stick limit. Replace the global `current_volume` with an explicit volume argument, or at least save and restore it around every VFS call (§10, S6).
 - **GPT on sticks or other disks**: parts.c reads disk 0 only through `blk_read`. Parameterise it by device id and reuse it in `diskfs_mount_removable`.
 - **FAT features**:
-  - Timestamps would need an RTC hook in the three `write_date` sites.
+  - Timestamps: written since 0.157.0 (`stamp`); the access date is set on writes only, never on reads.
   - Rename across directories or to long names is deliberately absent (fat.c:1481-1513). Doing it safely needs a journal or intent record that FAT lacks. The comment recommends copy plus delete.
   - UTF-8/UCS-2 long names: extend `dir_put_name` (fat.c:1174) and `long_name_of` (fat.c:1018) together.
 - **A new /sys file**: add a `render_x(char*, u32)` using `put()` and one row in `nodes[]` (sysfs.c:353-369). Output must fit in 4096 bytes and is rendered twice per open (stat, then read).

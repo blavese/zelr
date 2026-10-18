@@ -857,13 +857,20 @@ A note on the verified run: `bash run.sh -T` created `zelr.img` in the repositor
 ### 8.1 The complete test catalogue
 
 Added in 0.156.0, not yet in the table below:
-- **`timecheck.py`** (gate `timetest`, full; 12 checks). The time zone from the kernel shell (`zone`, refused for a
+- **`timecheck.py`** (gate `timetest`, full; 12 checks, 19 since 0.157.0, the last two the clock kept in local time:
+  `date` straight after `write /zelr.cfg clock_local 1` says the host's UTC as Kathmandu's wall clock, and /sys/time's
+  local and now agree). The time zone from the kernel shell (`zone`, refused for a
   name it does not know, set to Asia/Calcutta in lower case), /sys/time's local time 330 minutes on from its `now`, the
   zone and offset lines, the `zone` line in /zelr.cfg; then Settings opened as setcheck opens it (constants imported
   from setcheck.py), its Time page shows the zone, the row under it (Kathmandu) is chosen and Settings says so on the
   console; the dock's clock region changes (read early in a host minute, so a change is the zone's); the band below the
   dock is not the console's ground (fbcon_hold); the file has the zone once and `date` tells it. Zones with no summer,
-  so nothing depends on the date.
+  so nothing depends on the date. Since 0.157.0 (17 checks): a file written from the shell is stamped with the host's
+  time in the zone (read off the image with readfat.py `times`), made then too, and the shell's `ls -l`, the terminal's
+  (`clear`, `ls -l`, ctrl+a, ctrl+c, then `/bin/cat /sys/clipboard` from it, which prints to the serial line) and Files'
+  status line (`files: when.txt - text, written ...` on the console) say so. The console check moves the zone fourteen
+  times and counts the console's ground over the whole screen (it once looked at the band below the dock after two lines,
+  and passed on a build whose desktop did not hold the console).
 
 Added in 0.45.0, not yet in the table below:
 - **`filescheck.py`** (gate `filestest`, full; 11 checks). Files driven from the keyboard on a mkfat

@@ -426,8 +426,10 @@ The policy is eager save and restore on every `scheduler_switch` (sched.c:493, 5
   (`include/zone.h`): `zone_set` by name (`zone_find` in `userland/zones.h`, the table the browser's Intl shares),
   `zone_utc_of` (seconds since 1970 of a clock reading), `zone_at` (the local calendar, offset and summer at a
   moment), `zone_now` (false without a clock), `zone_offset_text` ("UTC+5:30"). Whole numbers only (no SSE in the
-  kernel): Hinnant's day arithmetic, `zone_sunday` for the nth or last Sunday, four rules (US, EU, AU, NZ). A clock
-  that keeps local time (as Windows sets one it shares) is not allowed for.
+  kernel): Hinnant's day arithmetic, `zone_sunday` for the nth or last Sunday, four rules (US, EU, AU, NZ). Since
+  0.157.0 a clock that keeps local time is the theme's `clock_local`: `zone_from_reading` turns the reading into UTC
+  with the zone, and `zone_time_t.at_utc` gives the moment in UTC (/sys/time's `now`, x509_now). `zone_test_fix`
+  holds the clock at a moment for the self test.
 - Users: main.c:450, sysfs.c:278, wm.c:2152 (panel clock), x509.c:172 (certificate validity), rng.c:147.
 
 ### 3.20 rng.c (228)

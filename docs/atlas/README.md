@@ -24,7 +24,7 @@ skimmed) and checking the results against a real build and test run.
 | [05-devices.md](05-devices.md) | Devices | PS/2, keyboard, mouse, Synaptics, xHCI/USB/HID/mass storage, HD Audio, Ensoniq, sound, framebuffer/VBE/SVGA/GOP, fbcon, VGA, clipboard, pins |
 | [06a-network.md](06a-network.md) | Network | netdev, e1000, PCnet, RTL8139, RNDIS, ARP/IPv4/ICMP/UDP/DHCP/DNS, TCP, the kernel HTTP client, wifi detection, the test web server |
 | [06b-tls-crypto.md](06b-tls-crypto.md) | TLS and cryptography | TLS 1.3, X.509 chains, RSA, ECDSA P-256/384, X25519, SHA-1/256/384/512, HMAC/HKDF/PBKDF2, AES/GCM, WPA2, the root store |
-| [07-wm-desktop.md](07-wm-desktop.md) | Desktop | the compositing window manager, window server, theme and its 31 knobs, gfx primitives |
+| [07-wm-desktop.md](07-wm-desktop.md) | Desktop | the compositing window manager, window server, theme and its 31 knobs (32 since 0.157.0), gfx primitives |
 | [08-kmain-shell-selftest.md](08-kmain-shell-selftest.md) | Kernel entry and self test | `kmain` phases, boot tasks, the kernel shell and its commands, first run, **the selftest sections** |
 | [09a-sdk-libc-toolkit.md](09a-sdk-libc-toolkit.md) | SDK, libc, toolkit | `sdk/zelr.h` ABI, `zelr.ld`, `sdk/libc`, `alloc.h`, `args.h`, `draw.h`, `ui.h` widgets |
 | [09b-term-sh-tests.md](09b-term-sh-tests.md) | Terminal and shell | `term.c` and its built-ins, `/bin/sh`, coreutils, the ring 3 test programs |
@@ -94,6 +94,26 @@ skimmed) and checking the results against a real build and test run.
 
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
+
+### 0.157.0
+
+- **File times (04, 03, 09b, 10)**: fat.c `stamp` writes when an entry was written and made in zone.h's local time (it
+  was 2025-01-01 for every file); `fat_times`/`vfs_times` read them; **72 `SYS_FILE_TIMES`** (`zelr_times_t`, checked by
+  abicheck); the kernel shell's and the terminal's `ls -l`; Files says ", written 18 October 2026, 14:05" for the
+  file chosen (and says that line on the console, `files: ...`, when it changes). `zone_test_fix` fixes the clock for
+  the self test's new `[file times]` (8); durtest four more; timecheck five more (the stamp read off the image by
+  readfat.py's new `times`, the shell's `ls -l`, the terminal's read back through its clipboard and /sys/clipboard, and
+  Files' line).
+- **A clock that keeps local time (02, 04, 06b, 08, 10, 16)**: knob `clock_local` ("Clock keeps local time", 32 knobs now,
+  a switch on Settings' Time page). zone.c `zone_from_reading` takes the CMOS reading as UTC, or with the switch as the
+  zone's wall clock (a skipped hour on the offset before, a repeated one as the first); `zone_time_t.at_utc` is the
+  moment in UTC. /sys/time's `now` is `at_utc` (it was the raw reading), a `clock utc|local` line follows `source`, and
+  it re-reads /zelr.cfg first (`theme_reload`, nothing read if nothing was written), as the kernel shell now does after
+  every command: only the desktop read the file after boot. x509.c `x509_now` is the zone's UTC. Selftest
+  `[time zones]` four more; timecheck two more (date at once after `write /zelr.cfg clock_local 1`, then /sys/time).
+  `theme_init` reads the file whatever `vfs_changes()` says (`read_since_defaults`): it puts every setting back to its
+  default first, and once the shell looked after each command the desktop opened on the defaults (the first gate's
+  deskcheck failure); `[theme]` one more.
 
 ### 0.156.0
 
