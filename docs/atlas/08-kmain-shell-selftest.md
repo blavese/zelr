@@ -144,6 +144,8 @@ Header comment (1-3): reads "from the PS/2 keyboard or the serial line, whicheve
 | `cpus` (484-497) | - | found/started, table `CPU APIC ROLE JOBS` (role "kernel" for cpu 0, "worker" otherwise, `(did not start)`), footer "the kernel runs on cpu 0; the others take work handed to them" (partly stale, D16) | smp |
 | `mem` (498) | - | `cmd_mem` (182-190): physical KiB total/used/free, heap KiB/bytes, files (on disk KiB free, or RAM fs count/bytes), serial counters irqs/got/read/dropped | pmm, heap, vfs, fat, fs, serial |
 | `uptime` (499) | - | `up S.cc seconds (T ticks at H Hz)` | timer |
+| `date` (0.156.0) | - | `Sunday 18 October 2026, 09:44:07 in Asia/Kathmandu (UTC+5:45)`, `, summer time` when it is; `no clock` | zone.h |
+| `zone` (0.156.0) | `[NAME \| list]` | the zone; `list` in two columns; a name sets it, saves /zelr.cfg (`theme_save`) and says the date; one it does not know: `zone: X is not one this knows (zone list shows them)` | zone.h, theme.c |
 | `uname` (500-503) | - | `zelr 0.37.0 x86_64` / `(c) 2026 blavese, GPL-3.0-or-later` | types.h |
 | `clear` (504) | - | `vga_clear()` (which clears fbcon when a framebuffer is active, vga.c:29-30) | vga/fbcon |
 | `echo` (505-508) | `TEXT...` | joined words | - |
@@ -304,6 +306,12 @@ Derived totals (static, from the conditions above): gate `selftest_q35` (q35, AH
 45. **[acpi and pcie]**: tables found; ntables > 0; ncpus > 0; no MCFG -> SKIP + extended offset 0x100 reads 0xFFFFFFFF; with ECAM: base published; page aligned; something on buses 0..3; port and ECAM agree on id and class for every present function; host bridge answers via ECAM; offset 0x100 does not alias the header; offset 0x1000 reads absent; slot 32 reads absent; every MCFG entry sane.
 46. **[interrupt routing]**: (8259 only: SKIP + `timer_hz() > 0`) LAPIC present; >= 16 IOAPIC inputs; every ACPI override names an existing input; IRQ0's GSI known (prints it; 2 on QEMU); ticks advance over 60 ms; spin calibrated per tick; masking IRQ0 stops ticks for ~4 ticks of spinning (no `sleep_ms` allowed while masked); unmasking restarts; route of input 200 refused.
 47. **[clipboard]**: fresh empty; set; length; get length; same bytes; "asking with no buffer answers the length" (only calls `clip_len`, D8); 8-byte buffer gets 7; terminated; `CLIP_MAX+16` refused; old content kept; `CLIP_MAX-1` accepted; full length; set replaces; generation +1.
+48a. **[time zones]** (0.156.0, 14): a clock reading counted from 1970, through a leap day; an unknown zone refused and
+the zone kept; a name in any case; GMT is UTC; a second either side of 2026's eight changes (New York, London, Sydney,
+Auckland: Windows' own zone data for the answers); New Year's Eve in UTC as Friday morning in Sydney; Kolkata's half
+hour and no summer; 1970 in Los Angeles; the dock's clock in the zone; a `zone` line in /zelr.cfg sets it; /sys/time's
+zone, offset, summer and local lines; `theme_save` writes it back. [video] gained one: the console held draws nothing.
+
 48. **[clock]**: reads; month, day, hour, minute, second in range; 4-digit year 1970..2199; second read; same date; not backwards; second changes within 3 s; > 1000 of 4000 hammer reads succeed; none go backwards (midnight excepted); `rtc_format` 19 chars; dashes at 4,7; colons at 13,16; short form hh:mm; 3-byte buffer not overrun. (The comment at 3445-3450 says the torn-read check has never caught anything under QEMU; treat as unverified.)
 49. **[sound]**: rate 8000..96000; 1..8 channels; play position advance over 200 ms within 4x of `rate/5*frame`.
 50. **[kernel stack]**: current task exists; headroom >= 8192 of 32768.

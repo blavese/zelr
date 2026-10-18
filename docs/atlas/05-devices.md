@@ -1246,6 +1246,10 @@ FIFO header words `MIN 0`, `MAX 1`, `NEXT_CMD 2`, `STOP 3`, header size
   `fbcon_set_color` if the framebuffer is active. This is how printf colours
   reach fbcon. `vga_get_color()`.
 * `move_hw_cursor()`: CRTC 0x3D4/0x3D5, registers 14 and 15.
+* fbcon.c (the framebuffer console) draws into the same back buffer the desktop composites into. Until 0.156.0 it drew
+  there while the desktop ran, so every line a program printed was written over the desktop, and one at the bottom
+  scrolled the whole desktop up a quarter of the screen (which the damage-only compositor kept). `fbcon_hold(true)` in
+  `wm_run`, `false` as it ends and at `panic`; the shell clears the console when the desktop gives the screen back.
 * `vga_clear()`: goes to fbcon if active, otherwise fills with spaces.
   `vga_init()` sets light grey on black and clears; it is the first thing
   kmain does (main.c:308).

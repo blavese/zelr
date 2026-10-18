@@ -93,6 +93,12 @@ Source root the repository root (github.com/blavese/zelr main, 2026-09-22). All 
   history (held to the page's own origin), modules, import maps, import() and workers.
 
 **Since 0.120.0**:
+- **Local time (0.156.0)**: jsprom.h `js_zone` reads /sys/time's `zone` line once a context (0 is UTC: the host build,
+  and so every test that does not set `J.zone`, as jstest's `expect_zone` does); `js_tza(t)` is the offset at a moment,
+  `js_local`, and `js_utc_of(local)` takes the first of a repeated hour and reads a skipped one on the offset before,
+  as the standard does. The local getters and setters and the UTC ones are separate natives now; a date made of parts
+  is local; `js_date_parse(J, ...)` reads a date and time with no zone as local, a date alone as UTC, and knows GMT, UT,
+  UTC, Z and America's EST..PDT; toString writes `GMT+hhmm (long name)` or `(GMT+hh:mm)` for a zone with no name.
 - **Dates written as numbers** (jsprom.h `js_date_parse`): "10/13/2026", "10-13-2026", "2026/10/13 23:35" and
   "10/13/2026, 11:35:12 PM" (what toLocaleString writes, which pages hand back to Date to move a time between zones),
   month first unless the first number cannot be a month or a day; a month past twelve is no date. Still one zone, UTC.
@@ -393,7 +399,9 @@ Source root the repository root (github.com/blavese/zelr main, 2026-09-22). All 
   en-US, which every `resolvedOptions().locale` says whatever was asked; `supportedLocalesOf` keeps the English tags.
   Each object keeps its resolved options as the bytes of a C struct in a string under a symbol (`intl_store`,
   `intl_load`, kinds `INTL_NF` ...). Numbers round from the shortest digits that read back as the double
-  (`intl_digits` = `js_shortest`), as ICU does, half away from nought: 1.005 to two places is 1.01. Dates are UTC,
+  (`intl_digits` = `js_shortest`), as ICU does, half away from nought: 1.005 to two places is 1.01. Dates are in the
+  machine's zone unless a timeZone is given (since 0.156.0: `js_zone`; the zone table is `userland/zones.h`, shared
+  with the kernel's clock); before that they were UTC,
   the machine's time, or a zone in `INTL_ZONES` (about 70, with the US, EU, Australian and New Zealand summer rules
   of 2026, `intl_in_summer`); an IANA-shaped zone not listed is shown in UTC and resolvedOptions says UTC, and a name
   of no such shape is a RangeError. Collation weighs letter, then accent (case-blind, `intl_latin_lower`), then

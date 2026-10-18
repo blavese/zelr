@@ -490,7 +490,7 @@ Programs: `program_t {name, data, size}`, `programs[48]`, `n_programs`. `sysfs_a
 | /sys/boot | `render_boot` :232 | this boot's log (`bb_text`), **tail** kept if over cap-1 (4095) |
 | /sys/lastboot | `render_lastboot` :248 | `bb_prev(b, cap)`, which is the **head** of the previous log. Or `no record` plus two explanatory lines ("There is one only after a boot that reached the scheduler, or / that panicked, on a volume this kernel formatted.") |
 | /sys/clipboard | `render_clipboard` :263 | `clip_get`, or `(empty)` |
-| /sys/time | `render_time` :275 | `now       <rtc_format>`; `source    cmos clock` or `none`; `uptime    N s` |
+| /sys/time | `render_time` :275 | `now       <rtc_format>` (UTC, first: the browser's Date reads it); since 0.156.0 `local     YYYY-MM-DD hh:mm:ss`, `zone      NAME`, `offset    MINUTES`, `summer    0/1` (zone.h; local, offset and summer only with a clock); `source    cmos clock` or `none`; `uptime    N s` |
 | /sys/screen | `render_screen` :290 | `width`, `height`, `settable 0/1`, `source <fb_backend>`, `frames`, `shared`, `lastkib`, `fullkib`, `sentkib` (for settings.c) |
 | /sys/settings | `render_settings` :321 | `# key value low high default label`, then one line per theme knob (`theme_knob_*`) |
 | /sys/theme | `render_theme` :339 | `accent 0x…`, `desktop`, `surface`, `text`, `text_dim`, `light 0/1`, `look 0/1` (1 = LOOK_BUILT), `preset N` |

@@ -95,6 +95,23 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.156.0
+
+- **A time zone (02, 04, 07, 08, 10, 12)**: `userland/zones.h` holds the 71 zones and four summer rules in whole numbers,
+  shared by the kernel (`kernel/zone.c`, `include/zone.h`) and the browser's Intl (the table moved out of jsintl.h). The
+  zone is a `zone NAME` line in /zelr.cfg (theme.c `apply`, written back by `theme_save`); /sys/time adds `local`,
+  `zone`, `offset` and `summer` after `now`, which stays first and UTC. The dock's clock is local
+  (`clock_text_at`, `wm_test_clock_text`); the kernel shell has `date` and `zone [NAME | list]` (which saves);
+  Settings has a Time page (a list opened at the zone in use, written as `zone` by its `save`, `zone_in_use` read from
+  the file). A page's `Date` is local in the zone (jsprom.h `js_zone` reads /sys/time once a context, `js_tza`,
+  `js_utc_of` with the standard's gap and overlap rules; the UTC getters and setters are their own natives; a date-time
+  string with no zone is local, a date alone UTC; toString names the zone) and Intl's default zone is it. The CMOS
+  clock is still taken to be UTC. Selftest `[time zones]` (14), jstest 475, timecheck (a new gate step, 64 now).
+- **The console draws nothing while the desktop has the screen (05, 07)**: fbcon.c drew a program's printing into the
+  back buffer the desktop composites into, and a line at the bottom scrolled the whole desktop up a quarter of the
+  screen, which the damage-only compositor kept. `fbcon_hold` (wm_run holds, panic lets go); `[video]` and timecheck.
+- defaultcheck compares setcheck's and wificheck's page lists with Settings' own.
+
 ### 0.155.0
 
 - **Notes' keys: ctrl+s, ctrl+c, ctrl+x, ctrl+v, ctrl+a, ctrl+z with sixteen steps of undo (10)**. notescheck, a new gate

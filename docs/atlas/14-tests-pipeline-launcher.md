@@ -856,6 +856,15 @@ A note on the verified run: `bash run.sh -T` created `zelr.img` in the repositor
 
 ### 8.1 The complete test catalogue
 
+Added in 0.156.0, not yet in the table below:
+- **`timecheck.py`** (gate `timetest`, full; 12 checks). The time zone from the kernel shell (`zone`, refused for a
+  name it does not know, set to Asia/Calcutta in lower case), /sys/time's local time 330 minutes on from its `now`, the
+  zone and offset lines, the `zone` line in /zelr.cfg; then Settings opened as setcheck opens it (constants imported
+  from setcheck.py), its Time page shows the zone, the row under it (Kathmandu) is chosen and Settings says so on the
+  console; the dock's clock region changes (read early in a host minute, so a change is the zone's); the band below the
+  dock is not the console's ground (fbcon_hold); the file has the zone once and `date` tells it. Zones with no summer,
+  so nothing depends on the date.
+
 Added in 0.45.0, not yet in the table below:
 - **`filescheck.py`** (gate `filestest`, full; 11 checks). Files driven from the keyboard on a mkfat
   volume seeded with `/home/box/readme.txt`, a 40,000-byte `/home/letter.txt` (past Files' 16 KiB copy

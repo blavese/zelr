@@ -422,7 +422,12 @@ The policy is eager save and restore on every `scheduler_switch` (sched.c:493, 5
 - `rtc_init` (78-101): if both A and B read 0xFF, there is no clock. Latch `binary_mode` and `hour24`, one `rtc_read`, then range sanity checks. `present` becomes true.
 - `rtc_read` (103-158): wait for UIP to clear (1,000,000-spin bound, returns false on timeout), sample, then up to 8 re-samples until two consecutive samples agree (the last one is used even if they never agree). Convert BCD, preserving the PM bit. Convert 12-hour to 24-hour. Year < 70 means 20xx, else 19xx; the century register is never read.
 - `rtc_format` produces "YYYY-MM-DD hh:mm:ss" and needs cap ≥ 20. `rtc_format_short` produces "hh:mm". Both write "no clock" or "--:--" on failure.
-- Read-only: no timezone, never written.
+- Read-only, never written. Since 0.156.0 it is read as UTC and turned into the machine's zone by `kernel/zone.c`
+  (`include/zone.h`): `zone_set` by name (`zone_find` in `userland/zones.h`, the table the browser's Intl shares),
+  `zone_utc_of` (seconds since 1970 of a clock reading), `zone_at` (the local calendar, offset and summer at a
+  moment), `zone_now` (false without a clock), `zone_offset_text` ("UTC+5:30"). Whole numbers only (no SSE in the
+  kernel): Hinnant's day arithmetic, `zone_sunday` for the nth or last Sunday, four rules (US, EU, AU, NZ). A clock
+  that keeps local time (as Windows sets one it shares) is not allowed for.
 - Users: main.c:450, sysfs.c:278, wm.c:2152 (panel clock), x509.c:172 (certificate validity), rng.c:147.
 
 ### 3.20 rng.c (228)
@@ -680,7 +685,9 @@ Consequences, which follow from the design:
 - **Unmapping shared kernel mappings, or reducing permissions in an address space live on another CPU**, needs a TLB-shootdown IPI mechanism that does not exist yet.
 - **SSE/AVX for programs**: switching to XSAVE needs CR4.OSXSAVE, XCR0, a larger per-task area (currently `FPU_AREA 512` + 16 inside `task_t`) and 64-byte alignment. Keep the kernel free of SSE (build.sh flags; wire tools/check_sse.py into build.sh).
 - **Power**: hardware-reduced ACPI (FADT flag HW_REDUCED, sleep control/status registers) and the X_PM1x GAS fields would go in `read_fadt` (acpi.c:247-266) and `power_off`. Never call `sleep_ms` with IF=0.
-- **Clock**: the comment says setting the RTC needs a timezone database (rtc.h:12-14). Century register use depends on FADT (rtc.c:148-152).
+- **Clock**: the comment says setting the RTC needs a timezone database (rtc.h:12-14); there is a zone table now
+  (zones.h, 0.156.0), but the clock is still never set, and a clock kept in local time would be read as UTC (a
+  setting for it would go in theme.c beside `zone`). Century register use depends on FADT (rtc.c:148-152).
 - **printf**: there are no length modifiers. Add `%lu`/`%lx` handling before printing u64 values without casts.
 
 ---

@@ -140,6 +140,13 @@ kernel's own list of them rather than written by hand -- so there is nothing
 in the file that the window cannot set, and nothing the window sets that the
 file does not hold.
 
+The clock on the dock is told in the machine's time zone, chosen on Settings'
+Time page from the seventy one the browser's Intl knows, or with the shell's
+`zone`, and kept as one more line in that file. The zones and their summer
+rules are one table that the kernel and the browser share, so the dock and a
+page's dates agree: `/sys/time` gives the time there beside UTC, the shell's
+`date` says it in words, and a page's `Date` is local in it.
+
 Everything on that desktop except the system info window is a separate
 program running in ring 3. Settings cannot reach into the window manager at
 all; it writes a file, and the window manager reads it, which is why the
@@ -410,6 +417,7 @@ instead.
     python tools/namecheck.py   save long names and read them back
     python tools/filescheck.py  copy, move and rename in the file manager, from its keys
     python tools/notescheck.py  select all, copy, paste, save and undo in the editor, from its keys
+    python tools/timecheck.py   set the time zone from the shell and in Settings, read the clocks
     python tools/powercheck.py  tell it to shut down, see if it does
     python tools/appcheck.py    make the calculator divide, play a file
     python tools/setcheck.py    write a setting by hand, watch the dock move
@@ -1616,7 +1624,7 @@ byte.
 ## testing
 
 The kernel tests itself. `./run.sh -T` boots with selftest on the command line,
-runs 816 checks across every subsystem, then writes to QEMU's debug-exit port
+runs 831 checks across every subsystem, then writes to QEMU's debug-exit port
 so the host gets a real exit status.
 
     [string]                 9 checks  [waiting]               16 checks
@@ -1637,18 +1645,19 @@ so the host gets a real exit status.
     [tcp]                    8 checks  [ccmp]                   8 checks
     [elf]                    9 checks  [wireless]              16 checks
     [userspace]              9 checks  [wait timeouts]          3 checks
-    [video]                 13 checks  [processors]             4 checks
+    [video]                 14 checks  [processors]             4 checks
     [mouse]                  4 checks  [black box]             24 checks
     [graphics]              15 checks  [acpi and pcie]          5 checks
     [windows]               29 checks  [interrupt routing]     11 checks
     [window server]         40 checks  [clipboard]             14 checks
     [built-in programs]     12 checks  [clock]                 18 checks
-    [theme]                 23 checks  [codec routes]           6 checks
-    [taskbar]               18 checks  [es1371]                 5 checks
-    [live tree]             23 checks  [sound]                  skipped
-    [layout]                11 checks  [kernel stack]           3 checks
+    [theme]                 23 checks  [time zones]            14 checks
+    [taskbar]               18 checks  [codec routes]           6 checks
+    [live tree]             23 checks  [es1371]                 5 checks
+    [layout]                11 checks  [sound]                  skipped
+                                       [kernel stack]           3 checks
 
-    816 passed, 0 failed
+    831 passed, 0 failed
     SELFTEST_PASS
 
 The sound section is skipped because `run.sh` attaches no sound card (the
@@ -1656,7 +1665,7 @@ gate's q35 run gives it one), the
 identity map is checked in four more places when there is more memory to map,
 and the desktop keeps a copy of its wallpaper only when the memory allows it,
 which two more checks need: given 256 MiB, as the gate gives it, the same run
-is 822.
+is 837.
 
 Two of the sections are about what happens when something goes wrong half
 way, which a machine that keeps its power cannot show. `[fat]` makes the
