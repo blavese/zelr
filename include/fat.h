@@ -1,5 +1,6 @@
 #pragma once
 #include "types.h"
+#include "rtc.h"
 
 #define FAT_PATH_MAX 128
 
@@ -99,6 +100,13 @@ bool fat_rename(const char *from, const char *to);
 
 /* True if the path exists. Fills in what it is, if asked. */
 bool fat_stat(const char *path, u32 *size_out, bool *dir_out);
+
+/* When a file or directory was last written and when it was made, as its
+   entry keeps them: the wall clock where the machine was, to two seconds
+   (FAT keeps no zone; see the note in fat.c). A year of nought is a time
+   the entry does not have. False when there is no such entry, and for the
+   root, which has none. */
+bool fat_times(const char *path, rtc_time_t *written, rtc_time_t *made);
 
 bool fat_mkdir(const char *path);
 bool fat_rmdir(const char *path);          /* only when empty */

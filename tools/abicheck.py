@@ -43,6 +43,7 @@ PAIRS = [
     ("zelr_sysinfo_t", "zelr_sysinfo"),
     ("zelr_netinfo_t", "zelr_netinfo"),
     ("sound_info_t", "zelr_sound"),
+    ("zelr_times_t", "zelr_times"),
 ]
 
 # What the two sides call the same width. The kernel header has the kernel's

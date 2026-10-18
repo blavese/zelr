@@ -732,6 +732,24 @@ static i64 sys_stat(registers_t *r) {
     return 0;
 }
 
+static i64 sys_file_times(registers_t *r) {
+    char path[VFS_PATH_MAX];
+    if (!copy_path(r->rbx, path, sizeof(path))) return -1;
+    if (!user_range_ok(r->rcx, sizeof(zelr_times_t))) return -1;
+
+    rtc_time_t w, m;
+    if (!vfs_times(path, &w, &m)) return -1;
+    zelr_times_t t;
+    memset(&t, 0, sizeof(t));
+    t.year = (u16)w.year;
+    t.month = w.month; t.day = w.day; t.hour = w.hour; t.minute = w.minute; t.second = w.second;
+    t.made_year = (u16)m.year;
+    t.made_month = m.month; t.made_day = m.day; t.made_hour = m.hour;
+    t.made_minute = m.minute; t.made_second = m.second;
+    memcpy((void *)r->rcx, &t, sizeof(t));
+    return 0;
+}
+
 static i64 sys_chdir(registers_t *r) {
     char path[VFS_PATH_MAX];
     if (!copy_path(r->rbx, path, sizeof(path))) return -1;
@@ -1351,6 +1369,7 @@ static const syscall_fn TABLE[] = {
     [SYS_WIFI]        = sys_wifi,
     [SYS_SOUND_STOP]  = sys_sound_stop,
     [SYS_SOCK_STATE]  = sys_sock_state,
+    [SYS_FILE_TIMES]  = sys_file_times,
 };
 
 #define N_SYSCALLS (sizeof(TABLE) / sizeof(TABLE[0]))

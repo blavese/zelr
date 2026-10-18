@@ -9,6 +9,13 @@ another in Settings with the mouse and reads the file and the date back.
 The zones have no summer time, so nothing here depends on the date it runs
 on, and half and three quarter hours, so the minutes are checked too.
 
+And a file's times, which were the first of January 2025 for every file
+whatever the clock said: one written from the shell is stamped with the
+host's time in the zone, read off the disk image here (tools/readfat.py),
+and `ls -l` shows it, in the shell, in the terminal (its scrollback copied
+to the clipboard and read back through /sys/clipboard) and in Files (which
+says on the console what its status line shows).
+
 And the console, which drew a program's printing over the desktop and, at
 the bottom of the screen, scrolled the whole desktop up (fbcon.h
 fbcon_hold). Settings prints a line each time the zone changes, so the zone
@@ -29,10 +36,14 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from harness import Guest, Checks, build_once, count_in, ROOT             # noqa: E402
+from readfat import Fat16                                                 # noqa: E402
 from setcheck import (PAGES, IN_X, IN_Y, PAGE_X, UI_PAD, UI_ROW, CTX_X, CTX_Y,  # noqa: E402
                       CTX_PAD, CTX_ITEM, CTX_CLOSE, DOCK_SIDE, DOCK_H, PANEL_Y)
 
 DISK = os.path.join(ROOT, "timecheck.%d.img" % os.getpid())
+
+TERMINAL = (0x10, 0x14, 0x1A)          # the terminal's default background
+NAMED = {" ": "spc", "/": "slash", ".": "dot", "-": "minus", "\n": "ret"}
 
 # The console's ground (fbcon.c PALETTE[0]): behind every character it draws,
 # and what a scroll fills the bottom quarter of the screen with.
@@ -94,6 +105,25 @@ def main():
         cfg = vm.fresh("cat /zelr.cfg")
         c.add("the shell writes the zone into /zelr.cfg", "zone Asia/Calcutta" in cfg)
 
+        # --- a file's times --------------------------------------------------
+        before = datetime.datetime.utcnow()
+        vm.fresh("write /home/when.txt stamped")
+        after = datetime.datetime.utcnow()
+        try:
+            stamps = Fat16(DISK).times("/home/when.txt")
+        except Exception:
+            stamps = None
+        written = stamps[0] if stamps else None
+        zone = datetime.timedelta(minutes=330)
+        c.add("a file written is stamped with the time in the zone (%s, the host %s to %s there)"
+              % (written, (before + zone).strftime("%H:%M:%S"), (after + zone).strftime("%H:%M:%S")),
+              written is not None and before + zone - datetime.timedelta(seconds=3) <= written
+              <= after + zone + datetime.timedelta(seconds=1))
+        c.add("and with when it was made, the same moment", stamps is not None and stamps[1] == written)
+        out = vm.fresh("ls -l /home")
+        c.add("ls -l says when it was written",
+              written is not None and written.strftime("%Y-%m-%d %H:%M") + "  when.txt" in out)
+
         # --- Settings' Time page ---------------------------------------------
         def said_since(mark, text, timeout):
             end = time.time() + timeout
@@ -113,8 +143,46 @@ def main():
 
         vm.type("desktop\n")
         mon = vm.monitor()
-        mon.wait_screen("time-desk", lambda w, h, px: True, timeout=60)
-        time.sleep(3)
+        _, _, _, _, up = mon.wait_screen(
+            "time-desk", lambda w, h, px: count_in(px, w, SCREEN, TERMINAL) > 50000, timeout=60)
+        time.sleep(1)                      # the terminal takes its first key
+
+        def keys(text):
+            for ch in text:
+                mon.send("sendkey %s" % NAMED.get(ch, ch), settle=0.06)
+
+        # The terminal's ls -l, read back by way of the clipboard: everything
+        # on its screen selected and copied, and /bin/cat, run from it,
+        # prints to the console.
+        when = written.strftime("%Y-%m-%d %H:%M") + "  when.txt" if written else "?"
+        keys("clear\nls -l /home\n")
+        time.sleep(1)
+        mon.send("sendkey ctrl-a", settle=0.3)
+        mon.send("sendkey ctrl-c", settle=0.3)
+        mark = len(vm.serial())
+        keys("/bin/cat /sys/clipboard\n")
+        c.add("the terminal's ls -l says when it was written", said_since(mark, when, 20))
+
+        # Files on /home, the selection moved down until it is the file.
+        mark = len(vm.serial())
+        keys("/bin/files /home\n")
+        files_said = said_since(mark, "files: /home", 30)
+        found = False
+        for _ in range(6):
+            if not files_said:
+                break
+            mon.send("sendkey down", settle=0.5)
+            if said_since(mark, "files: when.txt", 3):
+                found = True
+                break
+        line = ""
+        for ln in vm.serial()[mark:].splitlines():
+            if ln.startswith("files: when.txt"):
+                line = ln.strip()
+        told = ("%d %s %d, %02d:%02d" % (written.day, written.strftime("%B"), written.year,
+                                        written.hour, written.minute)) if written else "?"
+        c.add("and Files says so beside the file chosen (%s)" % line, found and line.endswith("written " + told))
+        mon.send("sendkey alt-q", settle=1.0)
         # The terminal away, then Settings from the launcher, by name, so it
         # is the first window and lands where setcheck.py's numbers say.
         mon.move_to(950, 200)

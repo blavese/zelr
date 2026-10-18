@@ -51,6 +51,29 @@ static int on_disk(const char *path) {
     return n;
 }
 
+/* /sys/time's local time, "local     2026-10-18 14:05:33", as a day number
+   and seconds into it; 0 when there is none. */
+static int local_now(int *day, int *secs) {
+    char t[512];
+    int n = slurp("/sys/time", t, (int)sizeof(t) - 1);
+    if (n <= 0) return 0;
+    t[n] = 0;
+    for (int i = 0; i + 30 < n; i++) {
+        if (strncmp(t + i, "local", 5) || (i && t[i - 1] != '\n')) continue;
+        const char *p = t + i + 5;
+        while (*p == ' ') p++;
+        int v[6] = { 0 }, at = 0;
+        for (int k = 0; k < 6; k++) {
+            while (p[at] >= '0' && p[at] <= '9') v[k] = v[k] * 10 + (p[at++] - '0');
+            at++;
+        }
+        *day = v[0] * 372 + v[1] * 31 + v[2];
+        *secs = v[3] * 3600 + v[4] * 60 + v[5];
+        return 1;
+    }
+    return 0;
+}
+
 static int says(const char *path, const char *want) {
     if (on_disk(path) < 0) return 0;
     return strcmp(buf, want) == 0;
@@ -130,6 +153,33 @@ int main(void) {
        error, and must not lose the file. */
     ok("renaming a file to its own name is allowed", rename(B, B) == 0);
     ok("and leaves it alone", says(B, "replaced"));
+
+    /* --- when ------------------------------------------------------------- */
+    //
+    // Every entry was stamped the first of January 2025 whatever the clock
+    // said. A file written now says now, as /sys/time's local time has it
+    // (to the two seconds the disk keeps), was made then too, and keeps both
+    // through a rename; the files the kernel makes up keep none.
+    int day0 = 0, secs0 = 0;
+    int clock = local_now(&day0, &secs0);
+    fd = open(TMP, O_WRITE | O_CREATE | O_TRUNC);
+    fwrite(fd, "when", 4);
+    close(fd);
+    zelr_times t, t2;
+    memset(&t, 0, sizeof(t));
+    int got = file_times(TMP, &t) == 0;
+    int day = t.year * 372 + t.month * 31 + t.day, secs = t.hour * 3600 + t.minute * 60 + t.second;
+    ok("a file written now is stamped now, in local time",
+       got && (!clock || (day == day0 && secs - secs0 >= -2 && secs - secs0 <= 6)));
+    ok("and was made at the same moment",
+       got && t.made_year == t.year && t.made_month == t.month && t.made_day == t.day
+       && t.made_hour == t.hour && t.made_minute == t.minute && t.made_second == t.second);
+    ok("and a rename keeps both",
+       rename(TMP, A) == 0 && file_times(A, &t2) == 0 && t2.year == t.year && t2.month == t.month
+       && t2.day == t.day && t2.hour == t.hour && t2.minute == t.minute && t2.second == t.second
+       && t2.made_second == t.made_second);
+    unlink(A);
+    ok("the files the kernel makes up keep no time", file_times("/sys/version", &t) != 0);
 
     unlink(B);
     puts(fails ? "DURTEST_FAIL\n" : "DURTEST_PASS\n");

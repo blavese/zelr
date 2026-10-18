@@ -8,7 +8,7 @@
  * reason. See NOTICE in the repository this came from.
  */
 
-/* The entire user-facing interface: seventy-one system calls and a little
+/* The entire user-facing interface: seventy-two system calls and a little
    sugar. Nothing is linked in from the kernel; every call below crosses the
    ring boundary through int 0x80.
  *
@@ -211,6 +211,20 @@ typedef long long          zelr_word;
    it is going (sock_state). */
 #define CONNECT_NOWAIT    1
 #define SYS_SOCK_STATE    71
+
+/* When a file was last written and when it was made (SYS_FILE_TIMES, rbx the
+   path, rcx this). Each is the wall clock where the machine was at the
+   time, to two seconds: FAT keeps no zone. A year of nought is a time the
+   disk does not have; /sys, /bin and the RAM files keep none, and the call
+   fails for them. A call of its own rather than more of zelr_stat, which
+   programs already built hand over at its old size. */
+#define SYS_FILE_TIMES    72
+
+typedef struct {
+    u16 year, made_year;
+    u8  month, day, hour, minute, second;
+    u8  made_month, made_day, made_hour, made_minute, made_second;
+} zelr_times;
 #define TLS_WHY   0
 #define TLS_WHAT  1
 
@@ -522,6 +536,11 @@ static inline int connect_tls_nowait(const char *host, int port) {
 }
 static inline int sock_state(int sock) {
     return syscall(SYS_SOCK_STATE, sock, 0, 0);
+}
+
+/* 0 with the times filled in, -1 when the path has none (see zelr_times). */
+static inline int file_times(const char *path, zelr_times *out) {
+    return syscall(SYS_FILE_TIMES, (zelr_word)path, (zelr_word)out, 0);
 }
 
 static inline int resolve(const char *host, u32 *out) {

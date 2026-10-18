@@ -500,8 +500,22 @@ static void cmd_reboot(int argc, char **argv) {
     err("this machine did not restart");
 }
 
+/* With -l, when a file was last written, between its size and its name:
+   "2026-10-18 14:05  ", or blanks as wide where the disk keeps no time. */
+static void w_when(const char *path) {
+    zelr_times t;
+    if (file_times(path, &t) != 0 || !t.year) { w_pad(work_n + 18); return; }
+    w_num(t.year); w_ch('-');
+    w_ch((char)('0' + t.month / 10)); w_ch((char)('0' + t.month % 10)); w_ch('-');
+    w_ch((char)('0' + t.day / 10)); w_ch((char)('0' + t.day % 10)); w_ch(' ');
+    w_ch((char)('0' + t.hour / 10)); w_ch((char)('0' + t.hour % 10)); w_ch(':');
+    w_ch((char)('0' + t.minute / 10)); w_ch((char)('0' + t.minute % 10));
+    w_str("  ");
+}
+
 static void cmd_ls(int argc, char **argv) {
-    const char *where = argc > 1 ? argv[1] : ".";
+    int times = argc > 1 && !strcmp(argv[1], "-l");
+    const char *where = argc > 1 + times ? argv[1 + times] : ".";
     zelr_stat st;
     int files = 0, dirs = 0;
     u32 bytes = 0;
@@ -509,15 +523,20 @@ static void cmd_ls(int argc, char **argv) {
     /* A path that is a file rather than a directory should show that file,
        not nothing at all. */
     if (stat(where, &st) == 0 && !st.is_dir) {
-        w_reset(); w_rnum(st.size, 10); w_str("  "); w_str(where); say(work);
+        w_reset(); w_rnum(st.size, 10); w_str("  ");
+        if (times) w_when(where);
+        w_str(where); say(work);
         return;
     }
 
     for (int i = 0; ; i++) {
         if (readdir(where, i, &st) != 1) break;
         w_reset();
+        char path[VFS_PATH];
+        if (times) path_join(where, st.name, path, sizeof(path));
         if (st.is_dir) {
             w_str("     <dir>  ");
+            if (times) w_when(path);
             w_str(st.name);
             w_ch('/');
             print(work, C_ACCENT);
@@ -525,6 +544,7 @@ static void cmd_ls(int argc, char **argv) {
         } else {
             w_rnum(st.size, 10);
             w_str("  ");
+            if (times) w_when(path);
             w_str(st.name);
             say(work);
             files++;
@@ -1447,7 +1467,7 @@ typedef struct {
 
 static const command COMMANDS[] = {
     { "help",    cmd_help,    "[COMMAND]",     "this, or detail on one command" },
-    { "ls",      cmd_ls,      "[PATH]",        "list a directory" },
+    { "ls",      cmd_ls,      "[-l] [PATH]",   "list a directory, -l with when each was written" },
     { "shutdown", cmd_shutdown, "",            "turn the machine off" },
     { "reboot",  cmd_reboot,  "",              "start it again" },
     { "tree",    cmd_tree,    "[PATH]",        "everything below a directory" },

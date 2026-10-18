@@ -34,6 +34,7 @@
 #include "sched.h"
 #include "smp.h"
 #include "wait.h"
+#include "zone.h"
 
 #define ATTR_READONLY  0x01
 #define ATTR_HIDDEN    0x02
@@ -1787,6 +1788,68 @@ static u32 fat_count_held(const char *path) {
     return n;
 }
 
+/* --- times --------------------------------------------------------------
+ *
+ * Every entry was stamped 1 January 2025 at midnight, whatever the clock
+ * said, so Files and ls had no time to show and another system saw every
+ * file as written the same moment. FAT keeps a date and a time and no zone:
+ * by its custom, and as Windows reads it, the wall clock where the machine
+ * was, which is zone.h's local time. Seven bits of year from 1980, then the
+ * month and the day; the hour, the minute and the second halved. With no
+ * clock to read a new entry keeps the old fixed date and a rewritten one
+ * keeps what it had. */
+
+static bool fat_now(u16 *date, u16 *time, u8 *tenth) {
+    zone_time_t z;
+    if (!zone_now(&z) || z.local.year < 1980 || z.local.year > 2107) return false;
+    *date = (u16)(((z.local.year - 1980) << 9) | (z.local.month << 5) | z.local.day);
+    *time = (u16)((z.local.hour << 11) | (z.local.minute << 5) | (z.local.second / 2));
+    *tenth = (u8)(z.local.second % 2 ? 100 : 0);
+    return true;
+}
+
+/* A write stamps when it was written; making an entry, when it was made. */
+static void stamp(dirent_t *e, bool made) {
+    u16 date, time;
+    u8 tenth;
+    if (!fat_now(&date, &time, &tenth)) {
+        if (made) { e->write_date = 0x5A21; e->write_time = 0; }
+        return;
+    }
+    e->write_date = date;
+    e->write_time = time;
+    e->access_date = date;
+    if (made) {
+        e->create_date = date;
+        e->create_time = time;
+        e->create_tenth = tenth;
+    }
+}
+
+static void unstamp(u16 date, u16 time, rtc_time_t *out) {
+    memset(out, 0, sizeof(*out));
+    if (!date) return;                 /* no date: a year of nought says so */
+    out->year = 1980 + (date >> 9);
+    out->month = (u8)((date >> 5) & 15);
+    out->day = (u8)(date & 31);
+    out->hour = (u8)(time >> 11);
+    out->minute = (u8)((time >> 5) & 63);
+    out->second = (u8)((time & 31) * 2);
+}
+
+static bool fat_times_held(const char *path, rtc_time_t *written, rtc_time_t *made) {
+    if (!mounted) return false;
+    dir_t parent;
+    char leaf[FAT_NAME_MAX];
+    if (!resolve_parent(path, &parent, leaf, sizeof(leaf))) return false;
+    if (!leaf[0] || strcmp(leaf, ".") == 0 || strcmp(leaf, "..") == 0) return false;
+    dirent_t e;
+    if (dir_find(&parent, leaf, &e) < 0) return false;
+    if (written) unstamp(e.write_date, e.write_time, written);
+    if (made) unstamp(e.create_date, e.create_time, made);
+    return true;
+}
+
 static bool fat_stat_held(const char *path, u32 *size_out, bool *dir_out) {
     if (!mounted) return false;
 
@@ -1898,6 +1961,7 @@ static bool fat_write_file_held(const char *path, const u8 *buf, u32 size) {
     int slot = dir_find(&parent, leaf, &e);
     u32 old_chain = 0;
 
+    bool made = slot < 0;
     if (slot >= 0) {
         if (e.attr & ATTR_DIRECTORY) return false;
         /* Remember the old chain but do not touch it yet. */
@@ -1961,8 +2025,7 @@ static bool fat_write_file_held(const char *path, const u8 *buf, u32 size) {
 
     set_ent_cluster(&e, first);
     e.size = size;
-    e.write_date = 0x5A21;
-    e.write_time = 0;
+    stamp(&e, made);
 
     /* One sector write swings the file from the old chain to the new one.
        This is the commit: before it the old file is live, after it the new
@@ -2196,7 +2259,7 @@ static bool fat_mkdir_held(const char *path) {
     dot.name[0] = '.';
     dot.attr = ATTR_DIRECTORY;
     set_ent_cluster(&dot, c);
-    dot.write_date = 0x5A21;
+    stamp(&dot, true);
     if (!dir_write(&self, 0, &dot)) { free_chain(c); return false; }
 
     dot.name[1] = '.';
@@ -2216,7 +2279,7 @@ static bool fat_mkdir_held(const char *path) {
     e.attr = ATTR_DIRECTORY;
     set_ent_cluster(&e, c);
     e.size = 0;                       /* directories report zero, by the spec */
-    e.write_date = 0x5A21;
+    stamp(&e, true);
     if (!dir_write(&parent, (u32)slot, &e)) { free_chain(c); return false; }
     return vol_flush();
 }
@@ -2572,6 +2635,7 @@ bool fat_format(const char *label) { fat_enter(); bool r = fat_format_held(label
 int fat_list(const char *path, u32 index, char *name_out, u32 *size_out, bool *dir_out) { fat_enter(); int r = fat_list_held(path, index, name_out, size_out, dir_out); fat_leave(); return r; }
 u32 fat_count(const char *path) { fat_enter(); u32 r = fat_count_held(path); fat_leave(); return r; }
 bool fat_stat(const char *path, u32 *size_out, bool *dir_out) { fat_enter(); bool r = fat_stat_held(path, size_out, dir_out); fat_leave(); return r; }
+bool fat_times(const char *path, rtc_time_t *written, rtc_time_t *made) { fat_enter(); bool r = fat_times_held(path, written, made); fat_leave(); return r; }
 int fat_read_file(const char *path, u8 *buf, u32 cap) { fat_enter(); int r = fat_read_file_held(path, buf, cap); fat_leave(); return r; }
 u32 fat_test_runs(const char *path) { fat_enter(); u32 r = fat_test_runs_held(path); fat_leave(); return r; }
 bool fat_test_short_names_unique(const char *path) { fat_enter(); bool r = fat_test_short_names_unique_held(path); fat_leave(); return r; }

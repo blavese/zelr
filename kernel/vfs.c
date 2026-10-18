@@ -266,6 +266,19 @@ bool vfs_stat(const char *path, u32 *size_out, bool *dir_out) {
     return true;
 }
 
+/* The disk's times for a path (fat.h fat_times). /sys, /bin and the RAM
+   files keep none. */
+bool vfs_times(const char *path, rtc_time_t *written, rtc_time_t *made) {
+    char abs[VFS_PATH_MAX];
+    if (!vfs_resolve(path, abs, sizeof(abs))) return false;
+    if (abs[0] == '/' && abs[1] == 0) return false;
+    if (vfs_generated(abs)) return false;
+    const char *on = route(abs);
+    bool r = fat_mounted() && fat_times(on, written, made);
+    unroute();
+    return r;
+}
+
 /* --- whole file operations ---------------------------------------------- */
 
 int vfs_read(const char *path, void *buf, u32 cap) {

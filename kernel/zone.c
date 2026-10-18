@@ -5,6 +5,7 @@
 
 /* Into ZONES; 0 is UTC. */
 static int current;
+static i64 fixed = -1;               /* see zone_test_fix */
 
 bool zone_set(const char *name) {
     int i = zone_find(name);
@@ -45,7 +46,10 @@ void zone_at(i64 utc, zone_time_t *out) {
     out->summer = off != z->offset;
 }
 
+void zone_test_fix(i64 utc) { fixed = utc; }
+
 bool zone_now(zone_time_t *out) {
+    if (fixed >= 0) { zone_at(fixed, out); return true; }
     rtc_time_t t;
     if (!rtc_present() || !rtc_read(&t)) return false;
     zone_at(zone_utc_of(&t), out);

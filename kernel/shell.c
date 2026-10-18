@@ -85,7 +85,7 @@ static void cmd_help(void) {
             "  guide           a short tour, start here\n"
             "  desktop         windows, a mouse and a paint program\n"
             "  help            this text\n"
-            "  ls [PATH]       list a directory\n"
+            "  ls [-l] [PATH]  list a directory (-l: when each was written)\n"
             "  cd [PATH]       change directory\n"
             "  pwd             print the current directory\n"
             "  mkdir NAME      make a directory\n"
@@ -121,7 +121,19 @@ static void cmd_help(void) {
             "  reboot          reset the machine\n");
 }
 
-static void cmd_ls(const char *path) {
+/* "2026-10-18 14:05", or blanks as wide for a file the disk keeps no time
+   for (/sys, /bin, the RAM files). */
+static void when_text(const char *dir, const char *name, char *out, u32 cap) {
+    char path[VFS_PATH_MAX];
+    rtc_time_t w;
+    kformat(path, sizeof(path), "%s/%s", dir, name);
+    if (vfs_times(path, &w, 0) && w.year)
+        kformat(out, cap, "%04d-%02d-%02d %02d:%02d", w.year, w.month, w.day, w.hour, w.minute);
+    else
+        kformat(out, cap, "%16s", "");
+}
+
+static void cmd_ls(const char *path, bool times) {
     char where[VFS_PATH_MAX];
     if (!vfs_resolve(path ? path : ".", where, sizeof(where))) {
         kprintf("ls: bad path\n");
@@ -139,8 +151,15 @@ static void cmd_ls(const char *path) {
         u32 size = 0;
         bool sub = false;
         if (vfs_list(where, i, name, &size, &sub) != 1) break;
-        if (sub) { kprintf("       <dir>  %s/\n", name); dirs++; }
-        else     { kprintf("  %10d  %s\n", size, name); files++; bytes += size; }
+        /* With -l, when each was last written, between the size and the name. */
+        char when[24] = "";
+        if (times) {
+            when_text(where[0] == '/' && where[1] == 0 ? "" : where, name, when, sizeof(when) - 2);
+            u32 n = (u32)strlen(when);
+            when[n] = ' '; when[n + 1] = ' '; when[n + 2] = 0;
+        }
+        if (sub) { kprintf("       <dir>  %s%s/\n", when, name); dirs++; }
+        else     { kprintf("  %10d  %s%s\n", size, when, name); files++; bytes += size; }
     }
 
     if (!files && !dirs) { kprintf("(empty)\n"); return; }
@@ -552,7 +571,10 @@ static void execute(char *buf) {
             kprintf("%s is %s\n", argv[1], b);
         } else kprintf("cannot resolve %s\n", argv[1]);
     }
-    else if (!strcmp(c, "ls")) cmd_ls(argc > 1 ? argv[1] : 0);
+    else if (!strcmp(c, "ls")) {
+        bool times = argc > 1 && !strcmp(argv[1], "-l");
+        cmd_ls(argc > 1 + times ? argv[1 + times] : 0, times);
+    }
     else if (!strcmp(c, "cat")) {
         if (argc < 2) kprintf("usage: cat NAME\n"); else cmd_cat(argv[1]);
     } else if (!strcmp(c, "write") || !strcmp(c, "append")) {

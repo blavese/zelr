@@ -36,6 +36,7 @@ bool vfs_resolve(const char *in, char *out, u32 cap);
 int  vfs_list(const char *path, u32 index, char *name_out, u32 *size_out, bool *dir_out);
 u32  vfs_count(const char *path);
 bool vfs_stat(const char *path, u32 *size_out, bool *dir_out);
+bool vfs_times(const char *path, rtc_time_t *written, rtc_time_t *made);   /* fat.h fat_times */
 int  vfs_read(const char *path, void *buf, u32 cap);       /* bytes, or -1 */
 bool vfs_write(const char *path, const void *buf, u32 len);
 bool vfs_append(const char *path, const void *buf, u32 len);

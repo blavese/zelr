@@ -181,7 +181,37 @@ static int matches(const char *name) {
     return 0;
 }
 
+/* ", written 18 October 2026, 14:05" for the selected entry, or nothing
+   where the disk keeps no time: looked up when the selection moves, not
+   every frame. */
+static int  when_for = -1;
+static char when_said[48];
+
+static void when_of(int index) {
+    static const char *const MONTHS[12] = { "January", "February", "March", "April", "May", "June", "July",
+                                            "August", "September", "October", "November", "December" };
+    when_for = index;
+    when_said[0] = 0;
+    char path[PATH_MAX];
+    join(path, cwd, entries[index].name);
+    zelr_times t;
+    if (file_times(path, &t) != 0 || !t.year || t.month < 1 || t.month > 12) return;
+    int n = 0;
+    for (const char *p = ", written "; *p; p++) when_said[n++] = *p;
+    n += utoa(t.day, when_said + n);
+    when_said[n++] = ' ';
+    for (const char *p = MONTHS[t.month - 1]; *p; p++) when_said[n++] = *p;
+    when_said[n++] = ' ';
+    n += utoa(t.year, when_said + n);
+    when_said[n++] = ','; when_said[n++] = ' ';
+    when_said[n++] = (char)('0' + t.hour / 10); when_said[n++] = (char)('0' + t.hour % 10);
+    when_said[n++] = ':';
+    when_said[n++] = (char)('0' + t.minute / 10); when_said[n++] = (char)('0' + t.minute % 10);
+    when_said[n] = 0;
+}
+
 static void reload(void) {
+    when_for = -1;
     count = 0;
     total = 0;
     total_bytes = 0;
@@ -732,8 +762,21 @@ int main(int argc, char **argv) {
             detail[d++] = ' '; detail[d++] = '-'; detail[d++] = ' ';
             const char *k = kind_name(entries[selected].kind);
             for (int i = 0; k[i]; i++) detail[d++] = k[i];
+            if (when_for != selected) when_of(selected);
+            for (int i = 0; when_said[i]; i++) detail[d++] = when_said[i];
             detail[d] = 0;
             left = detail;
+        }
+        /* What the line says, on the console as well when it changes, as
+           Settings says what its pages show: a harness cannot read the
+           window (timecheck reads the time a file was written here). */
+        static char said[160];
+        if (strcmp(left, said)) {
+            strncpy(said, left, sizeof(said) - 1);
+            said[sizeof(said) - 1] = 0;
+            puts("files: ");
+            puts(said);
+            puts("\n");
         }
         ui_statusbar(&s, &t, w, h, left, right);
 

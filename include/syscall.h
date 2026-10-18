@@ -244,6 +244,20 @@
 #define CONNECT_NOWAIT    1
 #define SYS_SOCK_STATE    71
 
+/* When a file was last written and when it was made (SYS_FILE_TIMES, rbx the
+   path, rcx this). Each is the wall clock where the machine was at the
+   time, to two seconds: FAT keeps no zone. A year of nought is a time the
+   disk does not have; /sys, /bin and the RAM files keep none, and the call
+   fails for them. A call of its own rather than more of zelr_stat, which
+   programs already built hand over at its old size. */
+#define SYS_FILE_TIMES    72
+
+typedef struct {
+    u16 year, made_year;
+    u8  month, day, hour, minute, second;
+    u8  made_month, made_day, made_hour, made_minute, made_second;
+} zelr_times_t;
+
 #define TLS_WHY   0
 #define TLS_WHAT  1
 

@@ -43,3 +43,8 @@ bool zone_now(zone_time_t *out);
 
 /* An offset as people write it: "UTC", "UTC+10", "UTC-3:30". */
 void zone_offset_text(int offset, char *out, u32 cap);
+
+/* For the self test: zone_now answers this moment (seconds since 1970)
+   rather than the clock's, until it is given -1. Files written meanwhile
+   are stamped with it. */
+void zone_test_fix(i64 utc);

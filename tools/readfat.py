@@ -83,10 +83,11 @@ class Fat16:
                 return False
         return True
 
-    def entries(self, cluster=None):
+    def entries(self, cluster=None, with_entry=False):
         """Directory contents. The root is a fixed run of sectors; every other
         directory is an ordinary cluster chain, so they are read differently
-        and then look the same."""
+        and then look the same. With with_entry, each carries its 32 byte
+        entry too."""
         if cluster is None:
             raw = self._read(self.root_start, self.root_sectors)
             limit = self.root_entries
@@ -146,8 +147,34 @@ class Fat16:
             pending, pending_sum = {}, None
             first = struct.unpack_from("<H", e, 26)[0]
             size = struct.unpack_from("<I", e, 28)[0]
-            out.append((full, first, size, attr))
+            out.append((full, first, size, attr, bytes(e)) if with_entry else (full, first, size, attr))
         return out
+
+    def times(self, path):
+        """(written, made) for a file or directory as datetimes, read from its
+        entry as the disk keeps them: the wall clock where the machine was, no
+        zone, to two seconds. None for the path or for a date not kept."""
+        import datetime
+
+        def when(date, tm):
+            if not date:
+                return None
+            return datetime.datetime(1980 + (date >> 9), (date >> 5) & 15, date & 31,
+                                     tm >> 11, (tm >> 5) & 63, (tm & 31) * 2)
+
+        parts = path.strip("/").split("/")
+        cluster = None
+        for k, part in enumerate(parts):
+            for full, first, size, attr, e in self.entries(cluster, with_entry=True):
+                if full.upper() == part.upper():
+                    break
+            else:
+                return None
+            if k == len(parts) - 1:
+                wt, wd, ct, cd = struct.unpack_from("<HH", e, 22) + struct.unpack_from("<HH", e, 14)
+                return when(wd, wt), when(cd, ct)
+            cluster = first
+        return None
 
     def walk(self, cluster=None, prefix="/", depth=0):
         """Every entry in the tree, deepest last. Guards against a directory

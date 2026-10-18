@@ -6663,6 +6663,52 @@ static void test_time_zones(void) {
     zone_set(was);
 }
 
+/* --- file times -------------------------------------------------------------
+ *
+ * Every entry was stamped 1 January 2025 at midnight. Now a file says when it
+ * was written and when it was made, in local time as FAT keeps it, through
+ * vfs_times. The clock is fixed (zone_test_fix) at New Year's morning in
+ * Sydney and moved on for the second write, and put back after. */
+static bool when_is(const rtc_time_t *t, u32 y, u8 mo, u8 d, u8 h, u8 mi, u8 s) {
+    return t->year == y && t->month == mo && t->day == d && t->hour == h && t->minute == mi && t->second == s;
+}
+
+static void test_file_times(void) {
+    if (!fat_mounted()) { kprintf("  SKIP  no disk mounted\n"); return; }
+    char was[40];
+    strncpy(was, zone_name(), sizeof(was) - 1);
+    was[sizeof(was) - 1] = 0;
+    const char *f = "/st-when.txt", *g = "/st-when2.txt", *d = "/st-whend";
+    vfs_delete(f);
+    vfs_delete(g);
+    vfs_rmdir(d);
+
+    zone_set("Australia/Sydney");
+    zone_test_fix(1798747200);                 /* 20:00 UTC on New Year's Eve: 07:00 on New Year's Day there */
+    rtc_time_t w, m;
+    bool wrote = vfs_write(f, "first", 5);
+    ok("a file is stamped with when it was written, where the machine is",
+       wrote && vfs_times(f, &w, &m) && when_is(&w, 2027, 1, 1, 7, 0, 0));
+    ok("and with when it was made", when_is(&m, 2027, 1, 1, 7, 0, 0));
+
+    zone_test_fix(1798747200 + 3600 + 61);     /* an hour, a minute and a second on */
+    vfs_write(f, "second", 6);
+    ok("written again, it says so, to the two seconds the disk keeps",
+       vfs_times(f, &w, &m) && when_is(&w, 2027, 1, 1, 8, 1, 0));
+    ok("and still when it was made", when_is(&m, 2027, 1, 1, 7, 0, 0));
+    ok("a rename keeps both", vfs_rename(f, g) && vfs_times(g, &w, &m)
+       && when_is(&w, 2027, 1, 1, 8, 1, 0) && when_is(&m, 2027, 1, 1, 7, 0, 0));
+    ok("a directory made is stamped too", vfs_mkdir(d) && vfs_times(d, &w, &m)
+       && when_is(&w, 2027, 1, 1, 8, 1, 0) && when_is(&m, 2027, 1, 1, 8, 1, 0));
+    ok("the files the kernel makes up keep none", !vfs_times("/sys/version", &w, &m));
+    ok("nor does the root", !vfs_times("/", &w, &m));
+
+    vfs_delete(g);
+    vfs_rmdir(d);
+    zone_test_fix(-1);
+    zone_set(was);
+}
+
 /* Whether the controller is actually reading the buffer.
  *
  * Every other thing a sound driver can be asked reports success while the
@@ -7028,6 +7074,7 @@ int selftest_run(void) {
     kprintf("[clipboard]\n"); test_clipboard();
     kprintf("[clock]\n"); test_clock();
     kprintf("[time zones]\n"); test_time_zones();
+    kprintf("[file times]\n"); test_file_times();
     kprintf("[codec routes]\n"); test_codec_routes();
     kprintf("[es1371]\n"); test_es1371();
     kprintf("[sound]\n"); test_sound();
