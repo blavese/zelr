@@ -37,6 +37,7 @@
 #include "theme.h"
 #include "fbcon.h"
 #include "zone.h"
+#include "timesync.h"
 
 #define LINE_MAX 256
 #define ARG_MAX  16
@@ -113,6 +114,7 @@ static void cmd_help(void) {
             "  uptime          time since boot\n"
             "  date            the date and time where the machine is\n"
             "  zone [NAME | list]   the time zone, or set it\n"
+            "  timesync [SERVER]    set the clock from a time server\n"
             "  uname           kernel identity\n"
             "  echo TEXT       print text\n"
             "  clear           clear the screen\n"
@@ -642,6 +644,12 @@ static void execute(char *buf) {
     else if (!strcmp(c, "uptime")) cmd_uptime();
     else if (!strcmp(c, "date")) cmd_date();
     else if (!strcmp(c, "zone")) cmd_zone(argc, argv);
+    else if (!strcmp(c, "timesync")) {
+        /* Whether or not the setting asks for it at startup: this is
+           somebody asking now. */
+        timesync_now(argc > 1 ? argv[1] : theme_timeserver());
+        kprintf("%s\n", timesync_said());
+    }
     else if (!strcmp(c, "uname"))
         kprintf("%s %s x86_64\n(c) %s %s, %s\n",
                 KERNEL_NAME, KERNEL_VERSION,

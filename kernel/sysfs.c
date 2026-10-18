@@ -24,6 +24,7 @@
 #include "sched.h"
 #include "timer.h"
 #include "zone.h"
+#include "timesync.h"
 #include "smp.h"
 #include "lapic.h"
 #include "blockdev.h"
@@ -372,6 +373,7 @@ static u32 render_time(char *b, u32 cap) {
     }
     put(&o, "source    %s\n", rtc_present() ? "cmos clock" : "none");
     put(&o, "clock     %s\n", theme()->clock_local ? "local" : "utc");
+    put(&o, "network   %s\n", timesync_said());
     put(&o, "uptime    %d s\n", (u32)(timer_ticks() / (timer_hz() ? timer_hz() : 100)));
     return o.len;
 }

@@ -26,6 +26,12 @@ static theme_t current;
 static u32  seen_changes;
 static bool read_since_defaults;
 
+/* Not a number, so not in KNOBS: the time server, as a name. */
+#define TIMESERVER_DEFAULT "pool.ntp.org"
+static char timeserver[64] = TIMESERVER_DEFAULT;
+
+const char *theme_timeserver(void) { return timeserver; }
+
 /* Six presets, differing only in accent and background temperature. The rest
    of the palette is derived, so a new accent never produces unreadable text. */
 static const struct {
@@ -106,6 +112,7 @@ static const theme_knob KNOBS[] = {
     { "dock_clock",   "Show the clock",      K(dock_clock),    1,   0,   1,   1 },
     { "clock_24",     "Twenty four hour",    K(clock_24),      1,   0,   1,   1 },
     { "clock_local",  "Clock keeps local time", K(clock_local), 1,   0,   1,   0 },
+    { "clock_net",    "Set it from the network", K(clock_net),  1,   0,   1,   1 },
     { "dock_hide",    "Tuck away",           K(dock_hide),     0,   0,   2,   1 },
 
     /* --- windows ------------------------------------------------------- */
@@ -442,6 +449,10 @@ static void apply(const char *key, const char *value) {
        file, so the shell's write and Settings set it the same way. A name
        this does not know leaves the zone as it was. */
     else if (!strcmp(key, "zone"))    zone_set(value);
+    else if (!strcmp(key, "timeserver") && value[0]) {
+        strncpy(timeserver, value, sizeof(timeserver) - 1);
+        timeserver[sizeof(timeserver) - 1] = 0;
+    }
 }
 
 bool theme_reload(void) {
@@ -611,6 +622,13 @@ bool theme_save(void) {
     n = put_key(out, n, "zone");
     for (const char *p = zone_name(); *p; p++) out[n++] = *p;
     out[n++] = '\n';
+    /* Only one somebody chose: the default is the default for a reason,
+       and a file that names it would keep it if the default moved. */
+    if (strcmp(timeserver, TIMESERVER_DEFAULT)) {
+        n = put_key(out, n, "timeserver");
+        for (const char *p = timeserver; *p; p++) out[n++] = *p;
+        out[n++] = '\n';
+    }
 
     return vfs_write(THEME_FILE, out, (u32)n);
 }

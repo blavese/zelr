@@ -7,6 +7,10 @@
 /* Into ZONES; 0 is UTC. */
 static int current;
 static i64 fixed = -1;               /* see zone_test_fix */
+static i64 adjust;                   /* see zone_set_adjust */
+
+void zone_set_adjust(i64 seconds) { adjust = seconds; }
+i64 zone_adjust(void) { return adjust; }
 
 bool zone_set(const char *name) {
     int i = zone_find(name);
@@ -61,7 +65,7 @@ void zone_from_reading(const rtc_time_t *reading, zone_time_t *out) {
         if (z->rule != TZR_NONE && zone_offset_at(z, summer) == z->offset + 60) r = summer;
         else r -= z->offset * 60;
     }
-    zone_at(r, out);
+    zone_at(r + adjust, out);
 }
 
 bool zone_now(zone_time_t *out) {

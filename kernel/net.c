@@ -17,6 +17,8 @@
 #include "tcp.h"
 #include "sched.h"
 #include "wait.h"
+#include "theme.h"
+#include "timesync.h"
 
 #define ETH_P_IP   0x0800
 #define ETH_P_ARP  0x0806
@@ -339,6 +341,7 @@ static void handle_dhcp(const u8 *p, u16 len) {
 }
 
 static void handle_dns_reply(const u8 *p, u16 len);
+static void handle_sntp_reply(u16 dport, const u8 *p, u16 len);
 
 static void handle_udp(const ip_t *ip, const u8 *p, u16 len) {
     if (len < sizeof(udp_t)) return;
@@ -348,6 +351,7 @@ static void handle_udp(const ip_t *ip, const u8 *p, u16 len) {
     u16 blen = (u16)(len - sizeof(udp_t));
 
     if (dport == 68) handle_dhcp(body, blen);
+    else if (dport >= 39000 && dport < 40000) handle_sntp_reply(dport, body, blen);
     else if (dport >= 40000) handle_dns_reply(body, blen);
 }
 
@@ -730,8 +734,16 @@ static bool dhcp_asking;
 bool net_dhcp_busy(void) { return dhcp_asking; }
 
 static void dhcp_task(void) {
-    net_dhcp(6000);
+    bool bound = net_dhcp(6000);
     dhcp_asking = false;
+    /* With an address, the time: a clock out by years fails every
+       certificate (timesync.h). In this task, so nobody waits for it. The
+       settings are read again first, since this can come before anything
+       else has read the file. */
+    if (bound) {
+        theme_reload();
+        if (theme()->clock_net) timesync_now(theme_timeserver());
+    }
     task_exit();
 }
 
@@ -820,6 +832,7 @@ static void handle_dns_reply(const u8 *p, u16 len) {
  * anywhere saying so. The one asking is remembered rather than just a flag,
  * so that a program ended while it waits can be let go of (net_abandon). */
 static void *volatile dns_asker;
+static void *volatile sntp_asker;      /* the same, for the time server's question below */
 
 static bool dns_take(u32 timeout_ms) {
     void *me = (void *)task_current();
@@ -859,6 +872,7 @@ void net_abandon(const void *task) {
     if (were_on) cli();
     if (deliver_owner == task) { deliver_depth = 0; deliver_owner = 0; }
     if (dns_asker == task) dns_asker = 0;
+    if (sntp_asker == task) sntp_asker = 0;
     if (were_on) sti();
 }
 
@@ -925,6 +939,72 @@ static bool ask_dns(const char *host, ipv4_t *out, u32 timeout_ms) {
 
     *out = dns_result;
     return true;
+}
+
+/* --- sntp ---------------------------------------------------------------
+ *
+ * One question to a time server and its answer (RFC 4330), forty eight bytes
+ * each way. What the answer says is timesync.c's to read; this carries it.
+ * The answer taken is the one that comes to the port asked from and whose
+ * originate stamp is the transmit stamp sent, eight bytes of nonce, so a
+ * stray packet, or one forged by something that did not see the question,
+ * is not taken. One question at a time, as the resolver is. */
+static volatile bool sntp_got;
+static volatile u16  sntp_port;
+static u8 sntp_nonce[8];
+static u8 sntp_reply[48];
+
+static void handle_sntp_reply(u16 dport, const u8 *p, u16 len) {
+    if (sntp_got || dport != sntp_port || len < 48) return;
+    for (int i = 0; i < 8; i++) if (p[24 + i] != sntp_nonce[i]) return;
+    memcpy(sntp_reply, p, 48);
+    sntp_got = true;
+}
+
+bool net_sntp(ipv4_t server, u16 port, const u8 nonce[8], u8 reply[48], u32 timeout_ms) {
+    if (!netdev_up() || !my_ip || !server) return false;
+
+    void *me = (void *)task_current();
+    if (!me) me = (void *)&sntp_asker;
+    u64 deadline = timer_ticks() + (timeout_ms * timer_hz()) / 1000u;
+    for (;;) {
+        bool were_on = interrupts_enabled();
+        if (were_on) cli();
+        bool mine = !sntp_asker;
+        if (mine) sntp_asker = me;
+        if (were_on) sti();
+        if (mine) break;
+        if (timer_ticks() >= deadline) return false;
+        net_wait();
+    }
+
+    memcpy(sntp_nonce, nonce, 8);
+    sntp_got = false;
+    sntp_port = (u16)(39000 + timer_ticks() % 1000);
+    u8 q[48];
+    memset(q, 0, sizeof(q));
+    q[0] = 0x23;                          /* no warning, version 4, a client */
+    memcpy(q + 40, nonce, 8);             /* the transmit stamp, which the answer echoes */
+
+    /* Asked again if nothing comes, as the resolver asks: one datagram each
+       way, and either may be lost. */
+    u64 gap = (timer_hz() * 3) / 4;
+    for (int tries = 0; tries < 3 && !sntp_got; tries++) {
+        if (!net_udp_send(server, sntp_port, port, q, sizeof(q))) break;
+        u64 until = timer_ticks() + gap;
+        if (until > deadline) until = deadline;
+        while (!sntp_got && timer_ticks() < until) {
+            net_poll();
+            if (!sntp_got) net_wait();
+        }
+        if (timer_ticks() >= deadline) break;
+        gap *= 2;
+    }
+    bool got = sntp_got;
+    if (got) memcpy(reply, sntp_reply, 48);
+    sntp_port = 0;
+    sntp_asker = 0;
+    return got;
 }
 
 /* --- helpers ------------------------------------------------------------ */

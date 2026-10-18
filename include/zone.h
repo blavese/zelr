@@ -53,6 +53,11 @@ void zone_from_reading(const rtc_time_t *reading, zone_time_t *out);
 /* An offset as people write it: "UTC", "UTC+10", "UTC-3:30". */
 void zone_offset_text(int offset, char *out, u32 cap);
 
+/* Seconds added to every reading of the clock: what timesync.c found the
+   clock out by, from a time server. Nought until one has answered. */
+void zone_set_adjust(i64 seconds);
+i64  zone_adjust(void);
+
 /* For the self test: zone_now answers this moment (seconds since 1970)
    rather than the clock's, until it is given -1. Files written meanwhile
    are stamped with it. */

@@ -69,6 +69,11 @@ bool  net_udp_send(ipv4_t dst, u16 sport, u16 dport, const void *data, u16 len);
 /* Resolves a name through the DHCP-supplied resolver. */
 bool  net_resolve(const char *host, ipv4_t *out, u32 timeout_ms);
 
+/* One SNTP question to a time server: the transmit stamp is the eight bytes
+   of nonce, and the answer (forty eight bytes) is the one that echoes them.
+   False with no answer in the time. Reading it is timesync.c's. */
+bool  net_sntp(ipv4_t server, u16 port, const u8 nonce[8], u8 reply[48], u32 timeout_ms);
+
 ipv4_t net_parse_ip(const char *s);
 void   net_format_ip(ipv4_t ip, char *out);
 

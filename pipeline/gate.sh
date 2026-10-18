@@ -635,6 +635,11 @@ if [ "$MODE" = "screen" ] || [ "$MODE" = "full" ]; then
   # nothing over the desktop.
   timetest() { keep timeout 600 python tools/timecheck.py; }
 
+  # A machine whose clock says 2020 asks a time server on this side once it
+  # has an address, and is told the real time; two that misbehave are not
+  # believed.
+  ntptest() { keep timeout 600 python tools/ntpcheck.py; }
+
   # The second boot of a machine, which is the one nothing else reaches:
   # every other check starts the kernel directly and never asks a firmware
   # to start from the disk the kernel formatted.
@@ -732,6 +737,7 @@ if [ "$MODE" = "screen" ] || [ "$MODE" = "full" ]; then
   par_start "the file manager copies, moves and renames" filestest
   par_start "the text editor's keys copy, paste, save and undo" notestest
   par_start "the clock is told in the zone the machine is in" timetest
+  par_start "a clock that is wrong is set from a time server" ntptest
   par_start "a machine still starts once it has formatted its disk" boottest
   par_start "ctrl+f finds a word that is on the screen" findtest
   par_start "a deal reaches the cloth and the dealer plays it out" gametest

@@ -59,10 +59,11 @@ def crop(px, w, rect):
     return b"".join(px[(y * w + left) * 3:(y * w + right) * 3] for y in range(top, bottom))
 
 # The Time page as settings.c lays it out: a section heading is 34 high, the
-# time and the zone below it 22 and 30, the clock's switch 30 and a gap of 6,
-# then the list's heading, then rows of 28. The list opens at the zone in use.
+# time and the zone below it 22 and 30, the clock's two switches 30 each, what
+# the time server said 22 and a gap of 6, then the list's heading, then rows
+# of 28. The list opens at the zone in use.
 UI_TITLE = 34
-LIST_Y = IN_Y + UI_PAD + UI_TITLE + 22 + 30 + 30 + 6 + UI_TITLE
+LIST_Y = IN_Y + UI_PAD + UI_TITLE + 22 + 30 + 30 + 30 + 22 + 6 + UI_TITLE
 
 
 def sidebar(name):

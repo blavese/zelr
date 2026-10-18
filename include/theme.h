@@ -158,6 +158,7 @@ typedef struct {
     bool dock_clock;
     bool clock_24;            /* or twelve hour, with am and pm */
     bool clock_local;         /* the CMOS clock keeps local time, not UTC (zone.h) */
+    bool clock_net;           /* set it from a time server once the network is up (timesync.h) */
     int  dock_hide;           /* 0 never, 1 when a window wants the room,
                                  2 always, out only when reached for */
 
@@ -224,6 +225,10 @@ int               theme_knob_get(const theme_knob *k);
 /* The named presets a settings program offers. */
 #define THEME_PRESETS 6
 const char *theme_preset_name(int i);
+
+/* The time server timesync.c asks: /zelr.cfg's "timeserver NAME[:PORT]",
+   or pool.ntp.org. */
+const char *theme_timeserver(void);
 u32         theme_preset_accent(int i);
 void        theme_apply_preset(int i);
 int         theme_current_preset(void);

@@ -73,6 +73,7 @@
 #include "clipboard.h"
 #include "rtc.h"
 #include "zone.h"
+#include "timesync.h"
 #include "rng.h"
 #include "tls.h"
 #include "tcp.h"
@@ -6706,6 +6707,78 @@ static void test_time_zones(void) {
     zone_set(was);
 }
 
+/* --- network time -----------------------------------------------------------
+ *
+ * What a time server answers, read by timesync_read: answers made here, the
+ * good ones carrying known moments and the rest one way each to be refused;
+ * and the adjustment an answer leads to, added to a reading of the clock.
+ * The asking itself, over the network, is ntpcheck's. */
+static void put_be32(u8 *p, u32 v) {
+    p[0] = (u8)(v >> 24); p[1] = (u8)(v >> 16); p[2] = (u8)(v >> 8); p[3] = (u8)v;
+}
+
+static void ntp_answer(u8 *a, const u8 *nonce, u32 secs, u32 frac) {
+    memset(a, 0, 48);
+    a[0] = 0x24;                       /* no warning, version 4, a server */
+    a[1] = 2;                          /* stratum 2 */
+    memcpy(a + 24, nonce, 8);          /* our transmit stamp, echoed */
+    put_be32(a + 40, secs);
+    put_be32(a + 44, frac);
+}
+
+static void test_network_time(void) {
+    const u8 nonce[8] = { 1, 2, 3, 4, 5, 6, 7, 8 };
+    u8 a[48];
+    i64 t = 0;
+    const char *why = "";
+
+    /* 20:00 UTC on New Year's Eve 2026 is 4007736000 seconds from 1900. */
+    ntp_answer(a, nonce, 4007736000u, 0);
+    ok("a time server's answer gives its time", timesync_read(a, 48, nonce, &t, &why) && t == 1798747200);
+    ntp_answer(a, nonce, 4007736000u, 0x80000000u);
+    ok("half a second over rounds up", timesync_read(a, 48, nonce, &t, &why) && t == 1798747201);
+    /* NTP's seconds start again in 2036: 1 January 2040 is 123010304. */
+    ntp_answer(a, nonce, 123010304u, 0);
+    ok("and a time past 2036, when NTP's seconds start again",
+       timesync_read(a, 48, nonce, &t, &why) && t == 2208988800LL);
+
+    int refused = 0;
+    const u8 other[8] = { 1, 2, 3, 4, 5, 6, 7, 9 };
+    ntp_answer(a, other, 4007736000u, 0);
+    refused += !timesync_read(a, 48, nonce, &t, &why);     /* not to this question */
+    ntp_answer(a, nonce, 4007736000u, 0); a[0] = 0x23;
+    refused += !timesync_read(a, 48, nonce, &t, &why);     /* a client's, not a server's */
+    ntp_answer(a, nonce, 4007736000u, 0); a[1] = 0;
+    refused += !timesync_read(a, 48, nonce, &t, &why);     /* stratum 0: a refusal */
+    ntp_answer(a, nonce, 4007736000u, 0); a[0] = 0xE4;
+    refused += !timesync_read(a, 48, nonce, &t, &why);     /* its own clock not set */
+    ntp_answer(a, nonce, 0, 0);
+    refused += !timesync_read(a, 48, nonce, &t, &why);     /* no time in it */
+    ntp_answer(a, nonce, 4007736000u, 0);
+    refused += !timesync_read(a, 47, nonce, &t, &why);     /* short */
+    ntp_answer(a, nonce, 4007736000u, 0); a[0] = 0x14;
+    refused += !timesync_read(a, 48, nonce, &t, &why);     /* version 2 */
+    ok("an answer to another question, a client's, a refusal, an unset clock's, an empty, a short and an old "
+       "one are each refused", refused == 7);
+    ntp_answer(a, nonce, 4007736000u, 0); a[1] = 0;
+    timesync_read(a, 48, nonce, &t, &why);
+    ok("and say why", !strcmp(why, "the server refused"));
+
+    /* The adjustment, added to whatever the clock reads. */
+    i64 was = zone_adjust();
+    zone_set_adjust(3600);
+    rtc_time_t reading = { 2026, 12, 31, 20, 0, 0, 0 };
+    zone_time_t z;
+    zone_from_reading(&reading, &z);
+    ok("a clock found an hour slow is read an hour on", z.utc == 1798747200 + 3600);
+    zone_set_adjust(was);
+
+    char buf[512];
+    int got = vfs_read("/sys/time", buf, sizeof(buf) - 1);
+    buf[got > 0 ? got : 0] = 0;
+    ok("/sys/time says what the time server said", contains(buf, "network   "));
+}
+
 /* --- file times -------------------------------------------------------------
  *
  * Every entry was stamped 1 January 2025 at midnight. Now a file says when it
@@ -7118,6 +7191,7 @@ int selftest_run(void) {
     kprintf("[clock]\n"); test_clock();
     kprintf("[time zones]\n"); test_time_zones();
     kprintf("[file times]\n"); test_file_times();
+    kprintf("[network time]\n"); test_network_time();
     kprintf("[codec routes]\n"); test_codec_routes();
     kprintf("[es1371]\n"); test_es1371();
     kprintf("[sound]\n"); test_sound();
