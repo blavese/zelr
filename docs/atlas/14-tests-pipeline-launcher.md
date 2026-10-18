@@ -856,6 +856,13 @@ A note on the verified run: `bash run.sh -T` created `zelr.img` in the repositor
 
 ### 8.1 The complete test catalogue
 
+Added in 0.160.0, not yet in the table below:
+- **`viewcheck.py`** (gate `viewtest`, full; 8 checks). Three PNGs made here (a 300 by 200 red one with a 60 by 60 blue
+  square, a 64 by 48 green one, a 1600 by 1200 red one) in /home/pictures by mkfat; `/bin/pictures` on the first from
+  the terminal: the console line and the red and blue counted on the screen; right: the green and no red; right: the
+  big one at under 50% and its red within the window; left twice: back; Files on the folder: "a.png - picture", and
+  Enter opens the viewer on it. Console lines are matched without case (mkfat's names are 8.3).
+
 Added in 0.159.0, not yet in the table below:
 - **`printcheck.py`** (gate `printtest`, full; 7 checks). The desktop with its terminal, the pointer parked; `sendkey
   print`; the console says where the screen was saved; the name's time is the host's to 5 s; the file read off the image

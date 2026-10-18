@@ -128,7 +128,9 @@ returns to the shell; alt and Escape returns to the shell from anywhere.
 Print Screen saves the screen as a PNG in `/home/pictures`, named by the
 time; the kernel compresses it with a deflate of its own (it had only ever
 inflated), so a screen is a hundred kilobytes or so rather than two and a
-third megabytes.
+third megabytes. Pictures, in the launcher's Media list, shows a PNG, JPEG,
+GIF or WebP with the browser's decoders, fitted to the window, and the
+arrow keys walk the rest of its folder; Files opens a picture there.
 
 The wheel scrolls whatever is under the pointer, the speaker by the clock
 sets the volume, and the launcher can switch the machine off. Drag on the
@@ -435,6 +437,7 @@ instead.
     python tools/timecheck.py   set the time zone from the shell and in Settings, read the clocks and a file's time
     python tools/ntpcheck.py    put the clock back to 2020, serve the time from here, see it set
     python tools/printcheck.py  press print screen, decode the PNG here, compare it with the screen
+    python tools/viewcheck.py   open pictures by name and from Files, walk the folder, count the colours
     python tools/powercheck.py  tell it to shut down, see if it does
     python tools/appcheck.py    make the calculator divide, play a file
     python tools/setcheck.py    write a setting by hand, watch the dock move

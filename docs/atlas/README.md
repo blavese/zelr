@@ -95,6 +95,14 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.160.0
+
+- **Pictures, a viewer (10)**: `userland/pictures.c` (`/bin/pictures [FILE | FOLDER]`, in /bin by builtin.S/builtin.c,
+  the launcher's Media list): png.h/jpeg.h/gif.h/webp.h chosen by the first bytes, fitted (`scale16`, never past 1:1),
+  nearest pixel on `BACKDROP`; arrows, space, Home and End walk the folder's pictures by name (`list_folder`, 256);
+  "pictures: NAME, W by H, N%" in the status bar and on the console when it changes. Files has `KIND_PICTURE` (.png,
+  .jpg, .jpeg, .gif, .webp: "picture") and opens it there (it went to Notes). viewcheck, a new gate step (67 now).
+
 ### 0.159.0
 
 - **Print Screen saves the screen (05, 07)**: `KEY_PRINT` 0x10A (PS/2 E0 37 after the pretend shift E0 2A, which
