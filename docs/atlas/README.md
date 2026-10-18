@@ -24,7 +24,7 @@ skimmed) and checking the results against a real build and test run.
 | [05-devices.md](05-devices.md) | Devices | PS/2, keyboard, mouse, Synaptics, xHCI/USB/HID/mass storage, HD Audio, Ensoniq, sound, framebuffer/VBE/SVGA/GOP, fbcon, VGA, clipboard, pins |
 | [06a-network.md](06a-network.md) | Network | netdev, e1000, PCnet, RTL8139, RNDIS, ARP/IPv4/ICMP/UDP/DHCP/DNS, TCP, the kernel HTTP client, wifi detection, the test web server |
 | [06b-tls-crypto.md](06b-tls-crypto.md) | TLS and cryptography | TLS 1.3, X.509 chains, RSA, ECDSA P-256/384, X25519, SHA-1/256/384/512, HMAC/HKDF/PBKDF2, AES/GCM, WPA2, the root store |
-| [07-wm-desktop.md](07-wm-desktop.md) | Desktop | the compositing window manager, window server, theme and its 31 knobs (32 since 0.157.0), gfx primitives |
+| [07-wm-desktop.md](07-wm-desktop.md) | Desktop | the compositing window manager, window server, theme and its 31 knobs (33 since 0.158.0), gfx primitives |
 | [08-kmain-shell-selftest.md](08-kmain-shell-selftest.md) | Kernel entry and self test | `kmain` phases, boot tasks, the kernel shell and its commands, first run, **the selftest sections** |
 | [09a-sdk-libc-toolkit.md](09a-sdk-libc-toolkit.md) | SDK, libc, toolkit | `sdk/zelr.h` ABI, `zelr.ld`, `sdk/libc`, `alloc.h`, `args.h`, `draw.h`, `ui.h` widgets |
 | [09b-term-sh-tests.md](09b-term-sh-tests.md) | Terminal and shell | `term.c` and its built-ins, `/bin/sh`, coreutils, the ring 3 test programs |
@@ -94,6 +94,20 @@ skimmed) and checking the results against a real build and test run.
 
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
+
+### 0.158.0
+
+- **The clock set from a time server (02, 06a, 08)**: `kernel/timesync.c` (`timesync_read` reads an SNTP answer: a
+  server's, version 3 or 4, to this question, stratum 1-15 and not unsynchronised, seconds from 1900 with RFC 4330's 2036
+  rule; `timesync_now` resolves the server, asks through net.c `net_sntp` and moves zone.h's adjustment,
+  `zone_set_adjust`, which `zone_from_reading` adds). net.c `net_sntp`: one 48-byte question from a port in 39000-39999
+  (handle_udp routes them), the transmit stamp an eight-byte nonce from rng.c and the answer taken only if it echoes
+  it; three tries; one asker at a time (`sntp_asker`, let go in `net_abandon`). The DHCP task asks once an address is
+  bound when the theme's `clock_net` is on (default on; "Set it from the network" on the Time page), the server
+  /zelr.cfg's `timeserver NAME[:PORT]` (theme.c `theme_timeserver`, written back only when not pool.ntp.org). /sys/time
+  `network` says what the last asking came to; the kernel shell has `timesync [SERVER]`. The CMOS clock is never written.
+  The self test starts no DHCP task, so nothing asks while it reads the clock. Selftest `[network time]` (7); ntpcheck,
+  a new gate step (65 now).
 
 ### 0.157.0
 

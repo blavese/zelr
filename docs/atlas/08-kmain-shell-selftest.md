@@ -145,6 +145,7 @@ Header comment (1-3): reads "from the PS/2 keyboard or the serial line, whicheve
 | `mem` (498) | - | `cmd_mem` (182-190): physical KiB total/used/free, heap KiB/bytes, files (on disk KiB free, or RAM fs count/bytes), serial counters irqs/got/read/dropped | pmm, heap, vfs, fat, fs, serial |
 | `uptime` (499) | - | `up S.cc seconds (T ticks at H Hz)` | timer |
 | `date` (0.156.0) | - | `Sunday 18 October 2026, 09:44:07 in Asia/Kathmandu (UTC+5:45)`, `, summer time` when it is; `no clock` | zone.h |
+| `timesync` (0.158.0) | `[SERVER[:PORT]]` | asks the server (default the theme's `timeserver`) and prints `timesync_said()`: "set from X, the clock was N s slow/fast/right" or "not set: ..." | timesync.h |
 | `zone` (0.156.0) | `[NAME \| list]` | the zone; `list` in two columns; a name sets it, saves /zelr.cfg (`theme_save`) and says the date; one it does not know: `zone: X is not one this knows (zone list shows them)` | zone.h, theme.c |
 | `uname` (500-503) | - | `zelr 0.37.0 x86_64` / `(c) 2026 blavese, GPL-3.0-or-later` | types.h |
 | `clear` (504) | - | `vga_clear()` (which clears fbcon when a framebuffer is active, vga.c:29-30) | vga/fbcon |
@@ -315,6 +316,12 @@ zone, offset, summer and local lines; `theme_save` writes it back. [video] gaine
 reading of 07:00 is Sydney's wall clock (20:00 UTC the day before), one in the skipped hour is read on the offset before,
 `x509_now` agrees with the zone's UTC to the minute, and with the switch off the reading is UTC again. The kernel shell
 re-reads /zelr.cfg after every command (`theme_reload`), so a setting written at the prompt applies without the desktop.
+
+48c. **[network time]** (0.158.0, 7): `timesync_read` on answers made here: 20:00 UTC on 2026-12-31 (4007736000 from
+1900), half a second rounding up, 2040 past the 2036 wrap (123010304); refused: another question's, a client's, stratum
+0, leap 3, no time, 47 bytes, version 2, and the refusal's reason; `zone_set_adjust(3600)` reads an hour on; /sys/time has
+its `network` line. A self test starts no DHCP task (main.c starts it only outside selftest mode, and `[network]` calls
+`net_dhcp` itself), so nothing asks a time server while the clock is read to the second.
 
 48b. **[file times]** (0.157.0, 8): with `zone_test_fix` at 2026-12-31 20:00 UTC in Sydney, a file written is stamped
 07:00:00 written and made; written again an hour, a minute and a second on, 08:01:00 written (two seconds) and the made

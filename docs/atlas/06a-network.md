@@ -217,6 +217,7 @@ table in kernel/syscall.c that maps socket numbers to TCP handles and records th
 | 49 | `int net_ping(ipv4_t dst, u32 timeout_ms)` | RTT ms or -1 |
 | 51 | `bool net_udp_send(ipv4_t dst, u16 sport, u16 dport, const void*, u16)` | unicast only |
 | 54 | `bool net_resolve(const char *host, ipv4_t *out, u32 timeout_ms)` | A record via DHCP-supplied DNS |
+| - | `bool net_sntp(ipv4_t server, u16 port, const u8 nonce[8], u8 reply[48], u32 timeout_ms)` (0.158.0) | one SNTP question from a port in 39000-39999 (`handle_udp` routes those to `handle_sntp_reply`), the nonce as the transmit stamp, the answer taken only if it echoes it; three tries; one asker (`sntp_asker`, let go in `net_abandon`). `dhcp_task` calls timesync.c `timesync_now` once bound when `clock_net` is on |
 | 56-57 | `net_parse_ip`, `net_format_ip` | dotted quad <-> host order (format needs >= 16 bytes) |
 | 59-60 | `net_rx_packets`, `net_tx_packets` | driver frame counters |
 

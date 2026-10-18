@@ -354,7 +354,7 @@ through `ui_input` built by `ui_feed` from `win_event`s. `ui_menubar`, `ui_row`,
 
 ## 12. Settings as design tokens
 
-### 12.1 The 31 knobs, 32 since 0.157.0 (theme.c:88-131; key, label as shown in Settings, range, default)
+### 12.1 The 31 knobs, 33 since 0.158.0 (theme.c:88-131; key, label as shown in Settings, range, default)
 | key | label | range | default |
 |---|---|---|---|
 | dock_h | Height | 20..120 | 44 |
@@ -367,6 +367,7 @@ through `ui_input` built by `ui_feed` from `win_event`s. `ui_menubar`, `ui_row`,
 | dock_clock | Show the clock | bool | 1 |
 | clock_24 | Twenty four hour | bool | 1 |
 | clock_local | Clock keeps local time (0.157.0; zone.h) | bool | 0 |
+| clock_net | Set it from the network (0.158.0; timesync.h) | bool | 1 |
 | dock_hide | Tuck away | 0..2 | 1 |
 | title_h | Title bar | 16..64 | 32 |
 | border | Frame | 0..8 | 1 |

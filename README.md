@@ -134,7 +134,7 @@ Everything the desktop is drawn from is a setting. Not the colours and the
 wallpaper alone: the dock's height, the gap it floats clear of the edge by,
 whether the name and the find button and the clock are on it at all, a window's
 title bar and frame and corner, the size of the icons, how long a fade
-takes, how close two clicks have to be. Thirty two of them, each a line in
+takes, how close two clicks have to be. Thirty three of them, each a line in
 `/zelr.cfg`, and the settings window's Everything page is generated from the
 kernel's own list of them rather than written by hand -- so there is nothing
 in the file that the window cannot set, and nothing the window sets that the
@@ -151,7 +151,11 @@ shell's and the terminal's `ls -l` show it, and so does Files beside the
 file chosen. The machine's own clock is taken to keep UTC, as QEMU's does;
 one that keeps local time instead, as Windows keeps the clock of a machine
 it shares, is a switch on the same page, and the time is worked out from it
-with the zone.
+with the zone. And once the machine has an address it asks a time server
+(SNTP, pool.ntp.org unless the file names another), so a clock a flat
+battery put back years is corrected before the browser checks its first
+certificate; the clock itself is never written, and the shell's `timesync`
+asks again.
 
 Everything on that desktop except the system info window is a separate
 program running in ring 3. Settings cannot reach into the window manager at
@@ -424,6 +428,7 @@ instead.
     python tools/filescheck.py  copy, move and rename in the file manager, from its keys
     python tools/notescheck.py  select all, copy, paste, save and undo in the editor, from its keys
     python tools/timecheck.py   set the time zone from the shell and in Settings, read the clocks and a file's time
+    python tools/ntpcheck.py    put the clock back to 2020, serve the time from here, see it set
     python tools/powercheck.py  tell it to shut down, see if it does
     python tools/appcheck.py    make the calculator divide, play a file
     python tools/setcheck.py    write a setting by hand, watch the dock move
@@ -1630,7 +1635,7 @@ byte.
 ## testing
 
 The kernel tests itself. `./run.sh -T` boots with selftest on the command line,
-runs 844 checks across every subsystem, then writes to QEMU's debug-exit port
+runs 851 checks across every subsystem, then writes to QEMU's debug-exit port
 so the host gets a real exit status.
 
     [string]                 9 checks  [waiting]               16 checks
@@ -1659,12 +1664,13 @@ so the host gets a real exit status.
     [built-in programs]     12 checks  [clock]                 18 checks
     [theme]                 24 checks  [time zones]            18 checks
     [taskbar]               18 checks  [file times]             8 checks
+                                       [network time]           7 checks
     [live tree]             23 checks  [codec routes]           6 checks
     [layout]                11 checks  [es1371]                 5 checks
                                        [sound]                  skipped
                                        [kernel stack]           3 checks
 
-    844 passed, 0 failed
+    851 passed, 0 failed
     SELFTEST_PASS
 
 The sound section is skipped because `run.sh` attaches no sound card (the
@@ -1672,7 +1678,7 @@ gate's q35 run gives it one), the
 identity map is checked in four more places when there is more memory to map,
 and the desktop keeps a copy of its wallpaper only when the memory allows it,
 which two more checks need: given 256 MiB, as the gate gives it, the same run
-is 850.
+is 857.
 
 Two of the sections are about what happens when something goes wrong half
 way, which a machine that keeps its power cannot show. `[fat]` makes the

@@ -429,7 +429,8 @@ The policy is eager save and restore on every `scheduler_switch` (sched.c:493, 5
   kernel): Hinnant's day arithmetic, `zone_sunday` for the nth or last Sunday, four rules (US, EU, AU, NZ). Since
   0.157.0 a clock that keeps local time is the theme's `clock_local`: `zone_from_reading` turns the reading into UTC
   with the zone, and `zone_time_t.at_utc` gives the moment in UTC (/sys/time's `now`, x509_now). `zone_test_fix`
-  holds the clock at a moment for the self test.
+  holds the clock at a moment for the self test. Since 0.158.0 `zone_set_adjust`/`zone_adjust` hold what a time
+  server found the clock out by (timesync.c), added to every reading; the CMOS clock is never written.
 - Users: main.c:450, sysfs.c:278, wm.c:2152 (panel clock), x509.c:172 (certificate validity), rng.c:147.
 
 ### 3.20 rng.c (228)

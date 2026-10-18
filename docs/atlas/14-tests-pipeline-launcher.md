@@ -856,6 +856,15 @@ A note on the verified run: `bash run.sh -T` created `zelr.img` in the repositor
 
 ### 8.1 The complete test catalogue
 
+Added in 0.158.0, not yet in the table below:
+- **`ntpcheck.py`** (gate `ntptest`, full; 10 checks). QEMU with `-rtc base=2020-06-01T00:00:00` and a mkfat disk whose
+  /zelr.cfg is `timeserver 10.0.2.2:PORT` and `zone Asia/Kolkata`; three SNTP servers on this side (threads, UDP on
+  127.0.0.1, reached by the guest at 10.0.2.2): a good one, one answering with a stranger's originate stamp, one
+  refusing (stratum 0). After DHCP the machine asks by itself: /sys/time's `network` says "set from ..., the clock was N
+  s slow", `now` is the host's UTC to 3 s and `local` 330 minutes on; `date` says the real day; a file written is stamped
+  with it (readfat.py `times`); `timesync` to the stranger finds no answer, to the refuser says so, neither moves the
+  clock; asked again, the clock is found right.
+
 Added in 0.156.0, not yet in the table below:
 - **`timecheck.py`** (gate `timetest`, full; 12 checks, 19 since 0.157.0, the last two the clock kept in local time:
   `date` straight after `write /zelr.cfg clock_local 1` says the host's UTC as Kathmandu's wall clock, and /sys/time's
