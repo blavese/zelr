@@ -131,6 +131,19 @@ def main():
                     filtered += 1
                     continue
 
+                # The first byte of a register-plus-address displacement: an
+                # addressing byte with mod 10 and no scale-index byte (rm not
+                # 100), then four bytes that are an address in the image. The
+                # kernel's statics are at their own addresses, so an array is
+                # reached so: 0.156.0's nvme_init had `movzx eax, byte
+                # [rbx+0x016b100f]`, 0f b6 83 0f 10 6b 01, once the image grew.
+                if (j > 0 and (body[j - 1] & 0xC0) == 0x80 and (body[j - 1] & 7) != 4
+                        and j + 4 <= len(body)):
+                    value, = struct.unpack_from("<I", body, j)
+                    if lo <= value < hi:
+                        filtered += 1
+                        continue
+
                 # Does this sit inside a 32-bit immediate holding an address?
                 # First handle an address at the start of a known immediate.
                 # This is common for `push $string`, where the first two bytes

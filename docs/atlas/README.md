@@ -111,6 +111,8 @@ numbered files are still to 6048716; where they disagree with this list, this li
   back buffer the desktop composites into, and a line at the bottom scrolled the whole desktop up a quarter of the
   screen, which the damage-only compositor kept. `fbcon_hold` (wm_run holds, panic lets go); `[video]` and timecheck.
 - defaultcheck compares setcheck's and wificheck's page lists with Settings' own.
+- check_sse.py excuses a 0F pair that starts a register-plus-address displacement (mod 10, no scale-index byte, the four
+  bytes an address in the image): nvme_init's `movzx eax, byte [rbx+0x016b100f]` failed the first 0.156.0 gate.
 
 ### 0.155.0
 
