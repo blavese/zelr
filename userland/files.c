@@ -27,6 +27,7 @@
 #define KIND_PROG   3
 #define KIND_OTHER  4
 #define KIND_PICTURE 5
+#define KIND_PAGE    6
 
 typedef struct {
     char name[NAME_MAX];
@@ -121,6 +122,7 @@ static int kind_of(const char *dir, const char *name, int is_dir) {
     if (ends_with(name, ".wav")) return KIND_SOUND;
     if (ends_with(name, ".png") || ends_with(name, ".jpg") || ends_with(name, ".jpeg")
         || ends_with(name, ".gif") || ends_with(name, ".webp")) return KIND_PICTURE;
+    if (ends_with(name, ".html") || ends_with(name, ".htm")) return KIND_PAGE;
     if (ends_with(name, ".txt") || ends_with(name, ".md")
         || ends_with(name, ".cfg") || ends_with(name, ".log")
         || ends_with(name, ".c") || ends_with(name, ".h")
@@ -134,6 +136,7 @@ static const char *kind_name(int k) {
         case KIND_TEXT:  return "text";
         case KIND_SOUND: return "sound";
         case KIND_PICTURE: return "picture";
+        case KIND_PAGE:  return "page";
         case KIND_PROG:  return "program";
         default:         return "file";
     }
@@ -286,6 +289,7 @@ static void open_entry(int index) {
         /* It went to the text editor, as everything unknown does, which
            showed a PNG as a page of noise. */
         case KIND_PICTURE: open_with(index, "/bin/pictures"); break;
+        case KIND_PAGE: open_with(index, "/bin/browser"); break;
         case KIND_PROG:
             if (spawn(target) < 0) say("would not run");
             else say("started");

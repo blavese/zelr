@@ -648,6 +648,11 @@ if [ "$MODE" = "screen" ] || [ "$MODE" = "full" ]; then
   # arrows, each step counted on the screen by the picture's own colours.
   viewtest() { keep timeout 600 python tools/viewcheck.py; }
 
+  # Pages on this machine: file: addresses, a page's sheet and picture read
+  # beside it, a folder listed, Files opening a page, and a page off the
+  # network refused a file its script asks for.
+  localtest() { keep timeout 600 python tools/localcheck.py; }
+
   # The second boot of a machine, which is the one nothing else reaches:
   # every other check starts the kernel directly and never asks a firmware
   # to start from the disk the kernel formatted.
@@ -748,6 +753,7 @@ if [ "$MODE" = "screen" ] || [ "$MODE" = "full" ]; then
   par_start "a clock that is wrong is set from a time server" ntptest
   par_start "print screen saves the screen as it is" printtest
   par_start "a picture is shown, and its folder walked" viewtest
+  par_start "pages on this machine open, and the web cannot read them" localtest
   par_start "a machine still starts once it has formatted its disk" boottest
   par_start "ctrl+f finds a word that is on the screen" findtest
   par_start "a deal reaches the cloth and the dealer plays it out" gametest

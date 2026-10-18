@@ -442,6 +442,29 @@ static int twqm(const char *address, char *query, int cap, char *name, int ncap)
 static void checks(void) {
     char out[256];
 
+    /* --- a file on this machine (web.h URL_FILE, fetch.h web_file) ------------ */
+    {
+        url_t f, j, w;
+        char t[URL_TEXT];
+        int parsed = url_parse("file:///home/site/index.html", &f);
+        ok("a file address parses to its path", parsed && f.secure == URL_FILE && w_same(f.path, "/home/site/index.html"));
+        url_text(&f, t, sizeof(t));
+        ok("and prints as it was written", w_same(t, "file:///home/site/index.html"));
+        ok("a page that is a file joins a picture beside it to a file",
+           url_join(&f, "pic.png", &j) && j.secure == URL_FILE && w_same(j.path, "/home/site/pic.png"));
+        ok("and a sheet a folder up", url_join(&f, "../style/a.css", &j) && w_same(j.path, "/home/style/a.css"));
+        ok("and its link to the web is to the web",
+           url_join(&f, "https://example.com/", &j) && j.secure == 1 && w_same(j.host, "example.com"));
+        url_parse("https://example.com/a/b.html", &w);
+        ok("a page off the network cannot point at a file", !url_join(&w, "file:///home/site/index.html", &j));
+        /* Nor have one read: the browser allows it only while the page it
+           shows is a file. */
+        response_t r;
+        char buf[64];
+        web_files_ok = 0;
+        ok("and a file is not read for a page off the network", web_get(&f, buf, sizeof(buf), &r) == WEB_ERR_SCHEME);
+    }
+
     /* --- the JSON underneath --------------------------------------------------- */
     {
         const char *s = "\"a\\\"b\" rest";

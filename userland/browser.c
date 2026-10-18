@@ -3996,6 +3996,8 @@ static void load(const char *address, int width, int keep_scroll) {
     }
 
     url_copy(&here, &u);
+    /* A file is read only for a page that is itself one (fetch.h). */
+    web_files_ok = here.secure == URL_FILE;
     say("fetching ", address);
 
     /* Asked for from the page that sent the browser here, if one did; then
@@ -4707,9 +4709,19 @@ static void set_search(const char *what) {
     set_address(full);
 }
 
-/* What was typed: somewhere to go, or something to look for. */
+/* What was typed: somewhere to go, or something to look for. A path, as
+   Files hands one over or a person types it, is a file on this machine. */
 static void go_or_search(const char *typed) {
+    while (*typed == ' ') typed++;
     if (w_same_fold(typed, START_ADDRESS)) set_address(START_ADDRESS);
+    else if (typed[0] == '/' && typed[1] != '/') {
+        char full[URL_TEXT];
+        int w = 0;
+        for (const char *p = "file://"; *p; p++) full[w++] = *p;
+        for (const char *p = typed; *p && w < (int)sizeof(full) - 1; p++) full[w++] = *p;
+        full[w] = 0;
+        set_address(full);
+    }
     else if (url_looks_like_address(typed)) set_address(typed);
     else set_search(typed);
 }

@@ -18,7 +18,10 @@
 #include "inflate.h"
 #include "web.h"
 
-#define WEB_ERR_SCHEME   -1     /* a scheme that is not http or https */
+/* Not -1, which a page's request hook (browser.c ask_begin, jsnet.h) means as
+   "every connection busy, ask again": a fetch() of an address this cannot
+   reach was asked again for ever and its promise never settled. */
+#define WEB_ERR_SCHEME   -11    /* a scheme that is not http or https */
 #define WEB_ERR_CONNECT  -2
 #define WEB_ERR_SEND     -3
 #define WEB_ERR_EMPTY    -4
@@ -974,9 +977,135 @@ static inline int web_send_hops(url_t *u, const char *body, char *buf, int cap,
     return r->status;
 }
 
+/* --- a file on this machine ------------------------------------------------
+ *
+ * A url of URL_FILE (web.h) is read here rather than asked of a server:
+ * whole, its type from its name, and answered as a server would, 200 or 404.
+ * A folder is answered as a page listing what is in it, each a link, as
+ * browsers list a folder. Only while web_files_ok, which the browser sets
+ * while the page it shows is itself a file: a page off the network asking
+ * for a file -- its script's fetch(), an image -- is refused, or it could
+ * read this machine's files and send them anywhere. */
+static int web_files_ok;
+
+static inline const char *web_file_type(const char *path) {
+    static const struct { const char *ext, *type; } T[] = {
+        { ".html", "text/html" }, { ".htm", "text/html" }, { ".css", "text/css" },
+        { ".js", "text/javascript" }, { ".mjs", "text/javascript" }, { ".json", "application/json" },
+        { ".png", "image/png" }, { ".jpg", "image/jpeg" }, { ".jpeg", "image/jpeg" },
+        { ".gif", "image/gif" }, { ".webp", "image/webp" }, { ".svg", "image/svg+xml" },
+        { ".txt", "text/plain" }, { ".md", "text/plain" }, { ".c", "text/plain" }, { ".h", "text/plain" },
+        { ".mp4", "video/mp4" },
+    };
+    int n = 0;
+    while (path[n]) n++;
+    for (unsigned i = 0; i < sizeof(T) / sizeof(T[0]); i++) {
+        int e = 0;
+        while (T[i].ext[e]) e++;
+        if (n > e && w_starts_fold(path + n - e, T[i].ext)) return T[i].type;
+    }
+    return "application/octet-stream";
+}
+
+static inline int web_file_add(char *buf, int cap, int n, const char *s) {
+    while (*s && n < cap - 1) buf[n++] = *s++;
+    buf[n] = 0;
+    return n;
+}
+
+/* A name in a page, with what HTML would read as markup spelled out. */
+static inline int web_file_add_name(char *buf, int cap, int n, const char *s) {
+    for (; *s && n < cap - 8; s++) {
+        if (*s == '&') n = web_file_add(buf, cap, n, "&amp;");
+        else if (*s == '<') n = web_file_add(buf, cap, n, "&lt;");
+        else if (*s == '"') n = web_file_add(buf, cap, n, "&quot;");
+        else buf[n++] = *s;
+    }
+    buf[n] = 0;
+    return n;
+}
+
+/* The path as the file system has it: no query, and %XX undone. Its length. */
+static inline int web_file_path(const url_t *u, char *path) {
+    int p = 0;
+    for (const char *s = u->path; *s && *s != '?' && p < URL_PATH - 1; s++) {
+        int hi = s[1], lo = hi ? s[2] : 0;
+        int h = hi >= '0' && hi <= '9' ? hi - '0' : (hi | 32) >= 'a' && (hi | 32) <= 'f' ? (hi | 32) - 'a' + 10 : -1;
+        int l = lo >= '0' && lo <= '9' ? lo - '0' : (lo | 32) >= 'a' && (lo | 32) <= 'f' ? (lo | 32) - 'a' + 10 : -1;
+        if (*s == '%' && h >= 0 && l >= 0) { path[p++] = (char)(h * 16 + l); s += 2; }
+        else path[p++] = *s;
+    }
+    path[p] = 0;
+    if (!path[0]) { path[0] = '/'; path[1] = 0; p = 1; }
+    return p;
+}
+
+static inline int web_file(const url_t *u, char *buf, int cap, response_t *r) {
+    r->status = 0; r->body = buf; r->len = 0; r->truncated = 0; r->cut = 0;
+    r->location[0] = 0; r->refpol[0] = 0; r->head = 0; r->hlen = 0; r->secure = 0; r->how[0] = 0;
+    r->ctype[0] = 0;
+    if (!web_files_ok) return WEB_ERR_SCHEME;
+    if (cap < 2) return WEB_ERR_BUSY;
+
+    char path[URL_PATH];
+    int p = web_file_path(u, path);
+
+    zelr_stat st;
+    int is_root = path[0] == '/' && !path[1];
+    if (!is_root && stat(path, &st) != 0) {
+        r->status = 404;
+        w_copy(r->ctype, sizeof(r->ctype), "text/html", sizeof(r->ctype));
+        r->len = web_file_add(buf, cap, 0, "<title>Not found</title><p>There is no such file here.");
+        return 404;
+    }
+    if (is_root || st.is_dir) {
+        int n = 0;
+        n = web_file_add(buf, cap, n, "<!doctype html><title>");
+        n = web_file_add_name(buf, cap, n, path);
+        n = web_file_add(buf, cap, n, "</title><h1>");
+        n = web_file_add_name(buf, cap, n, path);
+        n = web_file_add(buf, cap, n, "</h1><ul>");
+        int slash = path[p - 1] == '/';
+        zelr_stat e;
+        for (int i = 0; readdir(path, i, &e) == 1; i++) {
+            n = web_file_add(buf, cap, n, "<li><a href=\"");
+            if (!slash) {
+                /* Relative to the folder, which a path without its last
+                   slash is not: name the folder again. */
+                const char *leaf = path;
+                for (const char *q = path; *q; q++) if (*q == '/') leaf = q + 1;
+                n = web_file_add_name(buf, cap, n, leaf);
+                n = web_file_add(buf, cap, n, "/");
+            }
+            n = web_file_add_name(buf, cap, n, e.name);
+            if (e.is_dir) n = web_file_add(buf, cap, n, "/");
+            n = web_file_add(buf, cap, n, "\">");
+            n = web_file_add_name(buf, cap, n, e.name);
+            if (e.is_dir) n = web_file_add(buf, cap, n, "/");
+            n = web_file_add(buf, cap, n, "</a>");
+        }
+        n = web_file_add(buf, cap, n, "</ul>");
+        if (n >= cap - 8) r->truncated = 1;
+        r->status = 200;
+        r->len = n;
+        w_copy(r->ctype, sizeof(r->ctype), "text/html", sizeof(r->ctype));
+        return 200;
+    }
+    int want = (int)st.size;
+    int got = read_file(path, buf, want < cap - 1 ? want : cap - 1);
+    if (got < 0) got = 0;
+    buf[got] = 0;
+    r->truncated = want > cap - 1;
+    r->status = 200;
+    r->len = got;
+    w_copy(r->ctype, sizeof(r->ctype), web_file_type(path), sizeof(r->ctype));
+    return 200;
+}
+
 /* The method put back afterwards, since a redirect may have changed it. */
 static inline int web_send(url_t *u, const char *body, char *buf, int cap,
                            response_t *r) {
+    if (u->secure == URL_FILE) return web_file(u, buf, cap, r);
     const char *method = web_method;
     int rc = web_send_hops(u, body, buf, cap, r);
     web_method = method;
@@ -1114,6 +1243,8 @@ static inline int web_job_send_fresh(web_job *j) {
 
 /* An exchange begun: 0, or a WEB_ERR_ when it could not be sent. max is
    the most the answer may take, head and all; the buffer grows to it. */
+static inline int web_job_room(web_job *j, int want);
+
 static inline int web_job_start(web_job *j, const url_t *u, const char *method, const char *body, int blen,
                                 const char *type, const char *extra, const char *accept, int max) {
     url_copy(&j->u, u);
@@ -1131,6 +1262,19 @@ static inline int web_job_start(web_job *j, const url_t *u, const char *method, 
         j->cap = max < 65536 ? max : 65536;
         j->buf = (char *)malloc((u64)j->cap);
         if (!j->buf) { j->cap = 0; j->state = WJ_FAILED; j->err = WEB_ERR_BUSY; return WEB_ERR_BUSY; }
+    }
+    /* A file is read at once and the job is done: nothing to wait for. Room
+       for all of it, up to what the caller allows. */
+    if (u->secure == URL_FILE) {
+        char path[URL_PATH];
+        zelr_stat st;
+        web_file_path(u, path);
+        if (web_files_ok && stat(path, &st) == 0 && !st.is_dir && (int)st.size + 1 > j->cap)
+            web_job_room(j, (int)st.size + 1);
+        int rc = web_file(&j->u, j->buf, j->cap, &j->r);
+        if (rc < 0) { j->state = WJ_FAILED; j->err = rc; return rc; }
+        j->state = WJ_DONE;
+        return 0;
     }
     return web_job_send_fresh(j);
 }

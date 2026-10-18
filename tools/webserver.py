@@ -297,6 +297,21 @@ BIGSHEET_CSS = (b"/* " + b"filler " * 175000 + b"*/\n"
 # red) it was one purple from top to bottom, and over the white it should be
 # lavender: a fixed bar of 80% white hid Engadget's headline, and a caption's
 # dark band hid the picture it lay on.
+# A page off the network that tries to read a file on the machine (localcheck):
+# its script's fetch() of one, and a picture of one. Refused, the page turns
+# blue; read, red; and the picture, if it were drawn, would be green.
+PEEK_PAGE = b"""<!doctype html>
+<html><head><title>a page that peeks</title></head>
+<body style="margin:0;height:600px">
+<img src="file:///home/site/pic.png" width="40" height="30">
+<script>
+fetch("file:///home/site/index.htm").then(function (r) { return r.text(); })
+  .then(function (t) { document.body.style.background = t.length ? "#e03040" : "#3050e0"; },
+        function () { document.body.style.background = "#3050e0"; });
+</script>
+</body></html>
+"""
+
 GLASS_PAGE = b"""<!doctype html>
 <html><head><title>see through</title>
 <style>body { padding: 24px; background: #ffffff }
@@ -1619,6 +1634,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._send(BIGSHEET_PAGE)
         elif path == "/glass":
             self._send(GLASS_PAGE)
+        elif path == "/peek":
+            self._send(PEEK_PAGE)
         elif path == "/bigsheet.css":
             self._send(BIGSHEET_CSS, ctype="text/css")
         elif path == "/keys":

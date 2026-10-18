@@ -22,8 +22,15 @@ typedef struct {
     char host[URL_HOST];
     char path[URL_PATH];
     int  port;
-    int  secure;              /* https, so the connection is a TLS one */
+    int  secure;              /* https, so the connection is a TLS one; or URL_FILE */
 } url_t;
+
+/* A file on this machine, "file:///home/site/index.html": host "file", port
+   0, the path the file's. Reached only by an address typed or handed to the
+   browser, or from a page that is itself a file: url_join refuses the scheme
+   to a page from the network, and fetch.h reads one only while the page
+   shown is a file (web_files_ok). */
+#define URL_FILE 2
 
 /* --- small string helpers -------------------------------------------------
  *
@@ -86,6 +93,12 @@ static inline void url_copy(url_t *dst, const url_t *src) {
    implies, because a bar that says :80 after every address is noise. */
 static inline void url_text(const url_t *u, char *out, int cap) {
     int n = 0;
+    if (u->secure == URL_FILE) {
+        for (const char *p = "file://"; *p && n < cap - 1; p++) out[n++] = *p;
+        for (const char *p = u->path; *p && n < cap - 1; p++) out[n++] = *p;
+        out[n] = 0;
+        return;
+    }
     const char *scheme = u->secure ? "https://" : "http://";
     for (const char *p = scheme; *p && n < cap - 1; p++) out[n++] = *p;
     for (const char *p = u->host; *p && n < cap - 1; p++) out[n++] = *p;
@@ -136,7 +149,7 @@ static inline int url_looks_like_address(const char *in) {
     if (!*in) return 0;
 
     if (w_starts_fold(in, "http://") || w_starts_fold(in, "https://")
-        || w_starts_fold(in, "//"))
+        || w_starts_fold(in, "//") || w_starts_fold(in, "file://"))
         return 1;
 
     for (const char *p = in; *p; p++)
@@ -179,6 +192,18 @@ static inline void url_escape(const char *in, char *out, int cap) {
 
 static inline int url_parse(const char *in, url_t *out) {
     while (*in == ' ') in++;
+
+    if (w_starts_fold(in, "file://")) {
+        in += 7;
+        out->secure = URL_FILE;
+        out->host[0] = 'f'; out->host[1] = 'i'; out->host[2] = 'l'; out->host[3] = 'e'; out->host[4] = 0;
+        out->port = 0;
+        int n = 0;
+        if (*in != '/') out->path[n++] = '/';
+        while (*in && *in != '#' && n < URL_PATH - 1) out->path[n++] = *in++;
+        out->path[n] = 0;
+        return 1;
+    }
 
     out->secure = 1;
     if (w_starts_fold(in, "https://")) in += 8;
@@ -233,6 +258,11 @@ static inline int url_join(const url_t *base, const char *href, url_t *out) {
     if (w_starts_fold(href, "http://") || w_starts_fold(href, "https://"))
         return url_parse(href, out);
 
+    /* A file only from a file: a page off the network that could name one
+       could have it read and sent on. */
+    if (w_starts_fold(href, "file:"))
+        return base->secure == URL_FILE ? url_parse(href, out) : 0;
+
     /* A scheme relative link keeps the scheme of the page it is on, which is
        the entire reason for writing one. Parsing it on its own would apply
        the rule for something a person typed and could quietly take an
@@ -242,7 +272,7 @@ static inline int url_join(const url_t *base, const char *href, url_t *out) {
         for (const char *p = href + 2; *p && *p != '/' && *p != '?'; p++)
             if (*p == ':') { stated = 1; break; }
         if (!url_parse(href, out)) return 0;
-        out->secure = base->secure;
+        out->secure = base->secure == URL_FILE ? 1 : base->secure;
         /* A port written in the link is the port. Only the one url_parse
            guessed from a scheme that was not there gets corrected. */
         if (!stated) out->port = out->secure ? 443 : 80;
