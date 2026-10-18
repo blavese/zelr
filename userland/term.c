@@ -15,6 +15,7 @@
  * and the loop that feeds one to the other.
  */
 #include "zelr.h"
+#include "zones.h"
 #include "draw.h"
 
 #define COLS      160
@@ -1161,6 +1162,63 @@ static void cmd_time(int argc, char **argv) {
     good(work);
 }
 
+/* The value after a key at the start of a line of /sys/time, or 0. */
+static const char *time_line(const char *t, const char *key) {
+    int kl = strlen(key);
+    for (const char *p = t; *p; ) {
+        if (!strncmp(p, key, kl) && p[kl] == ' ') {
+            p += kl;
+            while (*p == ' ') p++;
+            return p;
+        }
+        while (*p && *p != '\n') p++;
+        if (*p) p++;
+    }
+    return 0;
+}
+
+static int digits(const char *p, int n) {
+    int v = 0;
+    for (int i = 0; i < n; i++) v = v * 10 + (p[i] - '0');
+    return v;
+}
+
+static void w_two(int v) { w_ch((char)('0' + v / 10 % 10)); w_ch((char)('0' + v % 10)); }
+
+/* The date and time where the machine is, as the kernel shell's date says
+   it, from /sys/time: "Sunday 18 October 2026, 21:05:33 in Australia/Sydney
+   (UTC+11)". */
+static void cmd_date(int argc, char **argv) {
+    (void)argc; (void)argv;
+    static const char *const DAYS[7] = { "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday" };
+    static const char *const MONTHS[12] = { "January", "February", "March", "April", "May", "June", "July",
+                                            "August", "September", "October", "November", "December" };
+    static char t[512];
+    int n = slurp("/sys/time", t, (int)sizeof(t) - 1);
+    if (n <= 0) { err("cannot read the clock"); return; }
+    t[n] = 0;
+    const char *local = time_line(t, "local"), *zone = time_line(t, "zone"), *off = time_line(t, "offset");
+    if (!local || strlen(local) < 19) { dim("no clock"); return; }
+    int y = digits(local, 4), mo = digits(local + 5, 2), d = digits(local + 8, 2);
+    if (mo < 1 || mo > 12) { dim("no clock"); return; }
+    int offset = 0, neg = off && *off == '-';
+    if (off) for (const char *p = off + neg; *p >= '0' && *p <= '9'; p++) offset = offset * 10 + (*p - '0');
+    w_reset();
+    w_str(DAYS[zone_weekday(zone_days_from_civil(y, mo, d))]); w_ch(' ');
+    w_num((u32)d); w_ch(' '); w_str(MONTHS[mo - 1]); w_ch(' '); w_num((u32)y); w_str(", ");
+    w_two(digits(local + 11, 2)); w_ch(':'); w_two(digits(local + 14, 2)); w_ch(':'); w_two(digits(local + 17, 2));
+    w_str(" in ");
+    for (const char *p = zone; p && *p && *p != '\n'; p++) w_ch(*p);
+    w_str(" (UTC");
+    if (offset) {
+        w_ch(neg ? '-' : '+');
+        w_num((u32)(offset / 60));
+        if (offset % 60) { w_ch(':'); w_two(offset % 60); }
+    }
+    w_ch(')');
+    say(work);
+}
+
 static void cmd_uptime(int argc, char **argv) {
     (void)argc; (void)argv;
     zelr_sysinfo si;
@@ -1496,6 +1554,7 @@ static const command COMMANDS[] = {
     { "time",    cmd_time,    "COMMAND...",    "how long something takes" },
     { "mem",     cmd_mem,     "",              "memory, with a bar" },
     { "uptime",  cmd_uptime,  "",              "how long this has been running" },
+    { "date",    cmd_date,    "",              "the date and time where the machine is" },
     { "net",     cmd_net,     "",              "the address, if there is one" },
     { "resolve", cmd_resolve, "HOST",          "look up a name" },
     { "get",     cmd_get,     "HOST [PATH] [FILE]", "fetch a page, https unless said" },

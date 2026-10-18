@@ -164,6 +164,18 @@ def main():
         keys("/bin/cat /sys/clipboard\n")
         c.add("the terminal's ls -l says when it was written", said_since(mark, when, 20))
 
+        # And its date, the same way: the day in words, the zone, the offset.
+        today = datetime.datetime.utcnow() + datetime.timedelta(minutes=330)
+        keys("clear\ndate\n")
+        time.sleep(1)
+        mon.send("sendkey ctrl-a", settle=0.3)
+        mon.send("sendkey ctrl-c", settle=0.3)
+        mark = len(vm.serial())
+        keys("/bin/cat /sys/clipboard\n")
+        c.add("the terminal's date says the day and the zone",
+              said_since(mark, "%s %d %s %d, " % (today.strftime("%A"), today.day, today.strftime("%B"), today.year), 20)
+              and said_since(mark, " in Asia/Calcutta (UTC+5:30)", 5))
+
         # Files on /home, the selection moved down until it is the file.
         mark = len(vm.serial())
         keys("/bin/files /home\n")
