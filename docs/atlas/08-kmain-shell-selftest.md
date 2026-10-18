@@ -317,6 +317,12 @@ reading of 07:00 is Sydney's wall clock (20:00 UTC the day before), one in the s
 `x509_now` agrees with the zone's UTC to the minute, and with the switch off the reading is UTC again. The kernel shell
 re-reads /zelr.cfg after every command (`theme_reload`), so a setting written at the prompt applies without the desktop.
 
+48d. **[screenshots]** (0.159.0, 6): `shot_deflate` of 200000 equal bytes (under a hundredth: 13 bits per 258-byte
+match), of a pattern with noise (under half), and of noise alone (no more than an eighth larger), each inflated back
+whole by sysfs.c's `sysfs_unpack`; `shot_png` of a 7 by 5 picture (a gradient row, then rows one shade on and alike, so
+both Sub and Up are chosen): the signature and IHDR, every chunk's CRC, and its rows inflated and unfiltered back to the
+pixels with both filters seen.
+
 48c. **[network time]** (0.158.0, 7): `timesync_read` on answers made here: 20:00 UTC on 2026-12-31 (4007736000 from
 1900), half a second rounding up, 2040 past the 2036 wrap (123010304); refused: another question's, a client's, stratum
 0, leap 3, no time, 47 bytes, version 2, and the refusal's reason; `zone_set_adjust(3600)` reads an hour on; /sys/time has

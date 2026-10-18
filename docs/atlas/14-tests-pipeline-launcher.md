@@ -856,6 +856,13 @@ A note on the verified run: `bash run.sh -T` created `zelr.img` in the repositor
 
 ### 8.1 The complete test catalogue
 
+Added in 0.159.0, not yet in the table below:
+- **`printcheck.py`** (gate `printtest`, full; 7 checks). The desktop with its terminal, the pointer parked; `sendkey
+  print`; the console says where the screen was saved; the name's time is the host's to 5 s; the file read off the image
+  (readfat.py) is a 1024 by 768 RGB PNG with every chunk's CRC good (zlib.crc32), under a quarter of the raw screen, and
+  decoded here (zlib and all five row filters) matches QEMU's screendump in all but a thousandth of the pixels (a cursor
+  blinks between the two). usbcheck gained "print screen on the usb keyboard saves the screen".
+
 Added in 0.158.0, not yet in the table below:
 - **`ntpcheck.py`** (gate `ntptest`, full; 10 checks). QEMU with `-rtc base=2020-06-01T00:00:00` and a mkfat disk whose
   /zelr.cfg is `timeserver 10.0.2.2:PORT` and `zone Asia/Kolkata`; three SNTP servers on this side (threads, UDP on

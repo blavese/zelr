@@ -125,6 +125,11 @@ whatever the desktop has open, then goes to a program that has a use for it
 -- the browser, the file manager, the calculator, blackjack -- and otherwise
 returns to the shell; alt and Escape returns to the shell from anywhere.
 
+Print Screen saves the screen as a PNG in `/home/pictures`, named by the
+time; the kernel compresses it with a deflate of its own (it had only ever
+inflated), so a screen is a hundred kilobytes or so rather than two and a
+third megabytes.
+
 The wheel scrolls whatever is under the pointer, the speaker by the clock
 sets the volume, and the launcher can switch the machine off. Drag on the
 wallpaper to sweep a band over the icons; press the right button on it for
@@ -429,6 +434,7 @@ instead.
     python tools/notescheck.py  select all, copy, paste, save and undo in the editor, from its keys
     python tools/timecheck.py   set the time zone from the shell and in Settings, read the clocks and a file's time
     python tools/ntpcheck.py    put the clock back to 2020, serve the time from here, see it set
+    python tools/printcheck.py  press print screen, decode the PNG here, compare it with the screen
     python tools/powercheck.py  tell it to shut down, see if it does
     python tools/appcheck.py    make the calculator divide, play a file
     python tools/setcheck.py    write a setting by hand, watch the dock move
@@ -1635,7 +1641,7 @@ byte.
 ## testing
 
 The kernel tests itself. `./run.sh -T` boots with selftest on the command line,
-runs 851 checks across every subsystem, then writes to QEMU's debug-exit port
+runs 857 checks across every subsystem, then writes to QEMU's debug-exit port
 so the host gets a real exit status.
 
     [string]                 9 checks  [waiting]               16 checks
@@ -1665,12 +1671,13 @@ so the host gets a real exit status.
     [theme]                 24 checks  [time zones]            18 checks
     [taskbar]               18 checks  [file times]             8 checks
                                        [network time]           7 checks
+                                       [screenshots]            6 checks
     [live tree]             23 checks  [codec routes]           6 checks
     [layout]                11 checks  [es1371]                 5 checks
                                        [sound]                  skipped
                                        [kernel stack]           3 checks
 
-    851 passed, 0 failed
+    857 passed, 0 failed
     SELFTEST_PASS
 
 The sound section is skipped because `run.sh` attaches no sound card (the
@@ -1678,7 +1685,7 @@ gate's q35 run gives it one), the
 identity map is checked in four more places when there is more memory to map,
 and the desktop keeps a copy of its wallpaper only when the memory allows it,
 which two more checks need: given 256 MiB, as the gate gives it, the same run
-is 857.
+is 863.
 
 Two of the sections are about what happens when something goes wrong half
 way, which a machine that keeps its power cannot show. `[fat]` makes the

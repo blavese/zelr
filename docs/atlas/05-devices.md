@@ -346,6 +346,8 @@ to `'*'`. Everything above 0x39 is 0.
 * `push(int c)` (50-60): ORs in `KEY_MOD_ALT/CTRL/SHIFT` from the *current*
   statics, calls `interrupting(KEY_CODE(c))` (so it fires even if the ring is
   full), then enqueues. A full ring drops the new key.
+* (0.159.0: E0 37 is `KEY_PRINT`, Print Screen; its E0 2A pretend shift finds nothing here and is dropped. usb.c's
+  `special` maps usage 0x46 to it.)
 * `extended_key(code)` (64-78): after 0xE0: 0x48 UP, 0x50 DOWN, 0x4B LEFT,
   0x4D RIGHT, 0x47 HOME, 0x4F END, 0x49 PGUP, 0x51 PGDN, 0x53 DEL, 0x52 INS.
   Anything else returns -1 (ignored). That includes keypad Enter (E0 1C),

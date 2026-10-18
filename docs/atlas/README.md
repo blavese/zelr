@@ -95,6 +95,17 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.159.0
+
+- **Print Screen saves the screen (05, 07)**: `KEY_PRINT` 0x10A (PS/2 E0 37 after the pretend shift E0 2A, which
+  `extended_key` drops; USB usage 0x46; sdk/zelr.h has it too). `wm_key` takes it before the windows and calls
+  `kernel/shot.c` `shot_save`: the back buffer (`fb_row`) as a PNG (8-bit RGB, each row filtered None/Sub/Up by the
+  smallest sum, zlib around `shot_deflate`: LZ77 over 32 KiB with a three-byte hash and a chain of 24, the fixed
+  Huffman codes, one block), written to `/home/pictures/screen YYYY-MM-DD HH.MM.SS.png` in local time, and "desktop:
+  the screen is saved in PATH" on the console. ~120 KB for a 1024 by 768 desktop; a few seconds under QEMU without
+  acceleration. Selftest `[screenshots]` (6, round trips through sysfs.c's inflate); printcheck, a new gate step (66
+  now), and usbcheck one more (the USB keyboard's Print Screen).
+
 ### 0.158.0
 
 - **The clock set from a time server (02, 06a, 08)**: `kernel/timesync.c` (`timesync_read` reads an SNTP answer: a

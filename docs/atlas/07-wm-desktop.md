@@ -402,6 +402,13 @@ Since 0.55.0 a frame with damage draws only its damage. `composite()` is the poi
 12. Press with no window under the pointer: badge toggles the launcher (opened at `dock_x`, `panel_rest_y − 212 − 8`); find button toggles find; net icon toggles its popup (closes volume); speaker: right = mute/unmute (remembering `volume_before_mute`), left toggles the popup; a chip: minimised → restore, top → minimise, else raise; the dock band (full screen width) otherwise swallows the click; an icon: select, double click (same icon within `dblclick_ms`) launches, a right press also opens the context menu; otherwise on the wallpaper (`my < work_h()`) start a band.
 13. Press on a window: `wm_raise`; close/max/min buttons; grip → start resize; title: right press toggles maximise, left starts a drag; content: `mouse_capture = w` and push `WM_EV_MOUSE{buttons | 0x80}` (user) or `on_mouse(…, true)` (kernel).
 
+#### 3.9.25b Print Screen (0.159.0)
+
+`wm_key` takes `KEY_PRINT` after `handle_shortcut` and before the find bar and the windows: `shot_save` (kernel/shot.c)
+writes the back buffer as a PNG to `/home/pictures/screen YYYY-MM-DD HH.MM.SS.png` (local time; `/home` and
+`/home/pictures` made if missing) and the desktop prints "desktop: the screen is saved in PATH" or "... was not saved:
+WHY". The desktop waits while it compresses (seconds under QEMU's emulation, about 5 MB of heap for the moment).
+
 #### 3.9.26 Shortcuts `handle_shortcut(key)` (3794-3874)
 - `KEY_CODE(key) == 6` (ctrl+f with or without the ctrl bit, so it works over serial) toggles find.
 - With `KEY_MOD_ALT`: Tab → `cycle_windows()` (raise the first non-minimised window below the top; if all minimised, un-minimise `stack[nwin−2]`) (3802-3815); d → minimise all; m → minimise top; f → toggle maximise top; q → close top; ←/→ snap top left/right; ↑ snap full; ↓ restore if maximised else minimise. "Top" was always `stack[nwin−1]`. Since 0.44.0 the chords act on `focused_window()`, and Tab walks: the first tab snapshots the stack front to back (`cyc[]`, with which were minimised) and starts at the focused window; each tab shows the next one (raising it, or bringing it back and putting it away again when the walk moves past); `cycle_end()` runs when alt is let go (`!kbd_alt()`, checked every pass of the loop), a button goes down, any other key or chord arrives, or the window is closed (`cycle_forget` from `wm_close`). It raises the rest in their old order and then the chosen one, so the window that was in front is next behind it. One tab and a release still swaps the front two.
