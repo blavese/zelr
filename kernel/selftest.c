@@ -2798,6 +2798,14 @@ static void test_theme(void) {
     ok("corner applied", theme()->corner == 14);
     ok("shadows applied", !theme()->shadows);
 
+    /* Put back to the defaults, the file is read again though nothing was
+       written since it was last looked at: the shell looks after every
+       command, and the desktop's theme_init after that opened on the
+       defaults. */
+    theme_init();
+    ok("put back to the defaults, the file is read again, changed or not",
+       theme()->corner == 14 && !theme()->shadows);
+
     /* A ground set by hand under a preset's accent survives a save: it was
        written as the preset alone and came back as the preset's ground. A
        palette that is all the preset's is still written as just that. */
@@ -6654,6 +6662,41 @@ static void test_time_zones(void) {
     got = vfs_read(THEME_FILE, buf, 2047);
     buf[got > 0 ? got : 0] = 0;
     ok("and saving the settings writes it back", contains(buf, "\nzone Asia/Tokyo\n"));
+
+    /* A clock that keeps local time (clock_local), read as zone_now reads
+       it: seven on New Year's morning on Sydney's clock is the evening
+       before in UTC; the same reading taken as UTC is eleven hours on. */
+    const char *local_clock = "zone Australia/Sydney\nclock_local 1\n";
+    vfs_write(THEME_FILE, local_clock, (u32)strlen(local_clock));
+    /* Not reloaded here: /sys/time reads the file itself, as a program that
+       writes it and asks the time with no desktop running needs. */
+    got = vfs_read("/sys/time", buf, 2047);
+    buf[got > 0 ? got : 0] = 0;
+    bool told = contains(buf, "clock     local\n");
+    rtc_time_t reading = { 2027, 1, 1, 7, 0, 0, 0 };
+    zone_from_reading(&reading, &z);
+    ok("a clock that keeps local time is read as the wall clock in the zone",
+       z.utc == 1798747200 && z.local.hour == 7 && z.at_utc.day == 31 && z.at_utc.hour == 20);
+    rtc_time_t skipped = { 2026, 10, 4, 2, 30, 0, 0 };
+    zone_from_reading(&skipped, &z);
+    ok("and a reading in the hour the clocks skip, on the offset from before",
+       z.utc == 1791045000 && z.local.hour == 3 && z.local.minute == 30);
+    /* A certificate's times are UTC, so its clock is the zone's UTC too:
+       the same minute as zone_now's, read twice in case one turns over. */
+    bool same_minute = !rtc_present();
+    for (int i = 0; i < 2 && !same_minute; i++) {
+        u64 x = x509_now() / 100;
+        zone_time_t n;
+        if (!zone_now(&n)) break;
+        same_minute = x == (u64)n.at_utc.year * 100000000ULL + (u64)n.at_utc.month * 1000000ULL
+                         + (u64)n.at_utc.day * 10000ULL + (u64)n.at_utc.hour * 100ULL + n.at_utc.minute;
+    }
+    ok("/sys/time reads the switch from the file itself and says so, and certificates are checked against "
+       "the clock in UTC", told && same_minute);
+    vfs_write(THEME_FILE, "clock_local 0\n", (u32)strlen("clock_local 0\n"));
+    theme_reload();
+    zone_from_reading(&reading, &z);
+    ok("a clock that keeps UTC is read as UTC", z.utc == 1798747200 + 11 * 3600 && z.local.hour == 18);
 
     if (had > 0) vfs_write(THEME_FILE, kept, (u32)had);
     else vfs_delete(THEME_FILE);

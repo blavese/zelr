@@ -157,6 +157,7 @@ typedef struct {
     int  dock_search_w;
     bool dock_clock;
     bool clock_24;            /* or twelve hour, with am and pm */
+    bool clock_local;         /* the CMOS clock keeps local time, not UTC (zone.h) */
     int  dock_hide;           /* 0 never, 1 when a window wants the room,
                                  2 always, out only when reached for */
 

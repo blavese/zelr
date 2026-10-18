@@ -15,6 +15,7 @@
 #include "sha256.h"
 #include "sha512.h"
 #include "rtc.h"
+#include "zone.h"
 #include "string.h"
 #include "roots.h"
 
@@ -169,12 +170,12 @@ static bool parse_time(u8 tag, const u8 *p, u32 len, u64 *out) {
 }
 
 u64 x509_now(void) {
-    rtc_time_t t;
-    if (!rtc_read(&t)) return 0;
-    /* The clock is read as if it were UTC. On a machine whose firmware
-       keeps local time this is out by the offset, which matters only within
-       a day of a certificate's edges, and saying so is better than adding a
-       timezone database to find out. */
+    /* UTC, as a certificate's times are: the clock's reading, or worked out
+       from it with the zone when the clock keeps local time (zone.h). It was
+       read as UTC whatever it kept, out by the offset on such a machine. */
+    zone_time_t z;
+    if (!zone_now(&z)) return 0;
+    const rtc_time_t t = z.at_utc;
     return (u64)t.year * 10000000000ULL + (u64)t.month * 100000000ULL
          + (u64)t.day * 1000000ULL + (u64)t.hour * 10000ULL
          + (u64)t.minute * 100ULL + t.second;

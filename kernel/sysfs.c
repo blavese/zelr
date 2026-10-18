@@ -350,11 +350,18 @@ static u32 render_clipboard(char *b, u32 cap) {
    moment where the machine is (zone.h). */
 static u32 render_time(char *b, u32 cap) {
     out_t o = { b, cap, 0 };
-    char now[24];
-    rtc_format(now, sizeof(now));
-    put(&o, "now       %s\n", now);
+    /* The zone and the clock's switch as the file has them now: a program
+       that writes /zelr.cfg and then asks the time is answered by what it
+       wrote, desktop or no desktop. Nothing is read if nothing changed. */
+    theme_reload();
     zone_time_t z;
     bool known = zone_now(&z);
+    /* UTC, which is the clock's reading only when the clock keeps UTC. */
+    if (known)
+        put(&o, "now       %04d-%02d-%02d %02d:%02d:%02d\n", z.at_utc.year, z.at_utc.month,
+            z.at_utc.day, z.at_utc.hour, z.at_utc.minute, z.at_utc.second);
+    else
+        put(&o, "now       no clock\n");
     if (known)
         put(&o, "local     %04d-%02d-%02d %02d:%02d:%02d\n", z.local.year, z.local.month,
             z.local.day, z.local.hour, z.local.minute, z.local.second);
@@ -364,6 +371,7 @@ static u32 render_time(char *b, u32 cap) {
         put(&o, "summer    %d\n", z.summer ? 1 : 0);
     }
     put(&o, "source    %s\n", rtc_present() ? "cmos clock" : "none");
+    put(&o, "clock     %s\n", theme()->clock_local ? "local" : "utc");
     put(&o, "uptime    %d s\n", (u32)(timer_ticks() / (timer_hz() ? timer_hz() : 100)));
     return o.len;
 }

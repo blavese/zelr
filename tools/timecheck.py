@@ -59,10 +59,10 @@ def crop(px, w, rect):
     return b"".join(px[(y * w + left) * 3:(y * w + right) * 3] for y in range(top, bottom))
 
 # The Time page as settings.c lays it out: a section heading is 34 high, the
-# time and the zone below it 22 and 30, then the list's heading, then rows of
-# 28. The list opens at the zone in use.
+# time and the zone below it 22 and 30, the clock's switch 30 and a gap of 6,
+# then the list's heading, then rows of 28. The list opens at the zone in use.
 UI_TITLE = 34
-LIST_Y = IN_Y + UI_PAD + UI_TITLE + 22 + 30 + UI_TITLE
+LIST_Y = IN_Y + UI_PAD + UI_TITLE + 22 + 30 + 30 + 6 + UI_TITLE
 
 
 def sidebar(name):
@@ -235,6 +235,28 @@ def main():
               cfg.count("zone ") == 1 and "zone Asia/Kathmandu" in cfg)
         out = vm.fresh("date")
         c.add("and the shell's date is told in it", "in Asia/Kathmandu (UTC+5:45)" in out)
+
+        # A clock that keeps local time. QEMU's keeps UTC, so with the switch
+        # on its reading is taken as Kathmandu's wall clock: /sys/time's
+        # local time is then the host's UTC, and its UTC 345 minutes before.
+        vm.fresh("write /zelr.cfg clock_local 1")
+        host = datetime.datetime.utcnow()
+        # date before anything reads /sys/time, which reads the file itself:
+        # this is the shell picking up what a command wrote.
+        out = vm.fresh("date")
+        told = re.search(r", (\d\d):(\d\d):(\d\d) in Asia/Kathmandu", out)
+        shown = (int(told.group(1)) * 3600 + int(told.group(2)) * 60 + int(told.group(3))) if told else None
+        at = host.hour * 3600 + host.minute * 60 + host.second
+        c.add("a clock switched to local time from the shell is read so at once (date says %s, the host %s)"
+              % (told.group(0)[2:10] if told else None, host.strftime("%H:%M:%S")),
+              shown is not None and min(abs(shown - at), 86400 - abs(shown - at)) <= 3)
+        host = datetime.datetime.utcnow()
+        st = vm.fresh("cat /sys/time")
+        now, local = stamp(st, "now"), stamp(st, "local")
+        c.add("a clock kept in local time is read as the zone's wall clock (%s, the host %s)"
+              % (local, host.strftime("%H:%M:%S")),
+              "clock     local" in st and local is not None and abs((local - host).total_seconds()) <= 3
+              and now is not None and (local - now).total_seconds() == 345 * 60)
     finally:
         vm.stop()
 

@@ -769,6 +769,11 @@ void shell_task(void) {
             kputc('\n');
             line[len] = 0;
             execute(line);
+            /* The settings file, if the command wrote it. Only the desktop
+               read it after boot, so a zone or the clock's switch written
+               at this prompt did nothing until the desktop was opened; the
+               look costs nothing when nothing was written. */
+            theme_reload();
             len = 0;
             prompt();
         } else if (c == '\b') {

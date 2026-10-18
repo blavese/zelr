@@ -1151,6 +1151,11 @@ static int page_time(surface *s, ui_input *in, ui_theme *t,
         puts(said);
         puts("\n");
     }
+    /* A clock another system keeps in local time: read as UTC, it is the
+       offset out, and the zone's offset added to it again. */
+    y = row(s, in, t, x, y, w, "clock_local");
+    y += UI_GAP;
+
     y = ui_section(s, t, x, y, w, "Time zone");
     int total = zone_count();
     int top = y;

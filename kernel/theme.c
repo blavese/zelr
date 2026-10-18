@@ -18,6 +18,14 @@
 
 static theme_t current;
 
+/* What vfs_changes() said when the file was last read, and whether it has
+   been read since the settings were put back to their defaults. theme_init
+   puts them back and so has to read the file again, changed or not: once the
+   shell read it after every command, the desktop's theme_init that followed
+   found nothing new and opened on the defaults. */
+static u32  seen_changes;
+static bool read_since_defaults;
+
 /* Six presets, differing only in accent and background temperature. The rest
    of the palette is derived, so a new accent never produces unreadable text. */
 static const struct {
@@ -97,6 +105,7 @@ static const theme_knob KNOBS[] = {
     { "dock_search_w", "Find bar width",     K(dock_search_w), 0, 120, 700, 260 },
     { "dock_clock",   "Show the clock",      K(dock_clock),    1,   0,   1,   1 },
     { "clock_24",     "Twenty four hour",    K(clock_24),      1,   0,   1,   1 },
+    { "clock_local",  "Clock keeps local time", K(clock_local), 1,   0,   1,   0 },
     { "dock_hide",    "Tuck away",           K(dock_hide),     0,   0,   2,   1 },
 
     /* --- windows ------------------------------------------------------- */
@@ -364,6 +373,7 @@ void theme_init(void) {
     theme_apply_preset(1);
     theme_defaults();
     derive();
+    read_since_defaults = false;
     theme_reload();
 }
 
@@ -443,12 +453,10 @@ bool theme_reload(void) {
     /* Only when something has been written since the last look. The desktop
        looks four times a second, and each look was a read of the file off
        the disk whether or not anybody had touched it. */
-    static u32 seen;
-    static bool looked;
     u32 now = vfs_changes();
-    if (looked && now == seen) return false;
-    looked = true;
-    seen = now;
+    if (read_since_defaults && now == seen_changes) return false;
+    read_since_defaults = true;
+    seen_changes = now;
 
     char buf[2048];
     int n = vfs_read(THEME_FILE, buf, sizeof(buf) - 1);

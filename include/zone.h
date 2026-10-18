@@ -12,11 +12,14 @@
  * are userland/zones.h, the same table the browser's Intl keeps, so the dock
  * and a page cannot disagree. A machine nobody has told is in UTC.
  *
- * A clock that keeps local time (as Windows sets it on a machine it shares)
- * is not allowed for: the zone is added to whatever the clock says. */
+ * A clock that keeps local time instead, as Windows sets the clock of a
+ * machine it shares and some virtual machines set theirs, is the theme's
+ * clock_local ("Clock keeps local time" on the Time page): its reading is
+ * then the wall clock in the zone, and UTC is worked out from it. */
 
 typedef struct {
     rtc_time_t local;    /* the wall clock in the zone */
+    rtc_time_t at_utc;   /* the same moment in UTC */
     i64  utc;            /* seconds since 1970, UTC */
     int  offset;         /* minutes east of UTC at that moment */
     bool summer;         /* whether that is the zone's summer time */
@@ -40,6 +43,12 @@ void zone_at(i64 utc, zone_time_t *out);
 
 /* Now, in the zone set; false when there is no clock to read. */
 bool zone_now(zone_time_t *out);
+
+/* A reading off the clock as zone_now takes it: UTC, or with clock_local the
+   wall clock in the zone. Where the clocks go forward an hour a local
+   reading in the gap is read on the offset from before; where they go back,
+   as the first of the two moments. */
+void zone_from_reading(const rtc_time_t *reading, zone_time_t *out);
 
 /* An offset as people write it: "UTC", "UTC+10", "UTC-3:30". */
 void zone_offset_text(int offset, char *out, u32 cap);
