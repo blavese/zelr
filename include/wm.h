@@ -158,6 +158,8 @@ bool wm_resize(window_t *w, int cw, int ch);
    corner drag under way on this window. wm_test_maximize: the maximise
    button, answering whether the window says it is now maximised. */
 bool wm_test_holds(const window_t *w);
+/* The dock's clock as it would read at a moment (seconds since 1970). */
+void wm_test_clock_text(i64 utc, char *out, u32 cap);
 void wm_test_pointer(int mx, int my, u8 buttons);
 void wm_test_begin_resize(window_t *w);
 bool wm_test_maximize(window_t *w);

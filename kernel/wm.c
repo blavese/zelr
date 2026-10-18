@@ -20,6 +20,7 @@
 #include "font.h"
 #include "theme.h"
 #include "rtc.h"
+#include "zone.h"
 #include "mouse.h"
 #include "keyboard.h"
 #include "heap.h"
@@ -2348,32 +2349,45 @@ static void draw_resize_preview(void) {
 
 
 
-static void clock_text(char *out, u32 cap) {
-    if (rtc_present()) {
-        rtc_format_short(out, cap);
+/* The hour and minute where the machine is (zone.h): the clock read
+   alone was UTC, the wrong hour for nearly everybody. */
+static void clock_text_at(const zone_time_t *z, char *out, u32 cap) {
+    kformat(out, cap, "%02d:%02d", z->local.hour, z->local.minute);
 
-        /* Twelve hour is the same string with the hour folded and two
-           letters after it, rather than a second formatter in rtc.c: the
-           clock is the desktop's, and the only thing the desktop wants
-           from the hardware is the hour it actually is. */
-        if (!theme()->clock_24 && cap >= 9
-            && out[0] >= '0' && out[0] <= '9' && out[2] == ':') {
-            int hh = (out[0] - '0') * 10 + (out[1] - '0');
-            bool pm = hh >= 12;
-            int h12 = hh % 12;
-            if (!h12) h12 = 12;
-            out[0] = (char)('0' + h12 / 10);
-            out[1] = (char)('0' + h12 % 10);
-            out[5] = ' ';
-            out[6] = pm ? 'p' : 'a';
-            out[7] = 'm';
-            out[8] = 0;
-            /* A leading nought on a twelve hour clock is the one thing
-               nobody writes. */
-            if (out[0] == '0') {
-                for (int i = 0; i < 8; i++) out[i] = out[i + 1];
-            }
+    /* Twelve hour is the same string with the hour folded and two letters
+       after it, rather than a second formatter: the clock is the
+       desktop's, and the only thing the desktop wants from the hardware is
+       the hour it actually is. */
+    if (!theme()->clock_24 && cap >= 9
+        && out[0] >= '0' && out[0] <= '9' && out[2] == ':') {
+        int hh = (out[0] - '0') * 10 + (out[1] - '0');
+        bool pm = hh >= 12;
+        int h12 = hh % 12;
+        if (!h12) h12 = 12;
+        out[0] = (char)('0' + h12 / 10);
+        out[1] = (char)('0' + h12 % 10);
+        out[5] = ' ';
+        out[6] = pm ? 'p' : 'a';
+        out[7] = 'm';
+        out[8] = 0;
+        /* A leading nought on a twelve hour clock is the one thing nobody
+           writes. */
+        if (out[0] == '0') {
+            for (int i = 0; i < 8; i++) out[i] = out[i + 1];
         }
+    }
+}
+
+void wm_test_clock_text(i64 utc, char *out, u32 cap) {
+    zone_time_t z;
+    zone_at(utc, &z);
+    clock_text_at(&z, out, cap);
+}
+
+static void clock_text(char *out, u32 cap) {
+    zone_time_t z;
+    if (zone_now(&z)) {
+        clock_text_at(&z, out, cap);
         return;
     }
 

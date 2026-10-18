@@ -36,6 +36,7 @@
 #include "serial.h"
 #include "theme.h"
 #include "fbcon.h"
+#include "zone.h"
 
 #define LINE_MAX 256
 #define ARG_MAX  16
@@ -110,6 +111,8 @@ static void cmd_help(void) {
             "  mem             memory usage\n"
             "  cpus            processors found and started\n"
             "  uptime          time since boot\n"
+            "  date            the date and time where the machine is\n"
+            "  zone [NAME | list]   the time zone, or set it\n"
             "  uname           kernel identity\n"
             "  echo TEXT       print text\n"
             "  clear           clear the screen\n"
@@ -198,6 +201,46 @@ static void cmd_uptime(void) {
     u32 secs = (u32)(t / timer_hz());
     kprintf("up %d.%02d seconds (%d ticks at %d Hz)\n",
             secs, (u32)((t % timer_hz()) * 100 / timer_hz()), (u32)t, timer_hz());
+}
+
+static const char *const DAY_NAMES[7] = {
+    "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"
+};
+static const char *const MONTH_NAMES[12] = {
+    "January", "February", "March", "April", "May", "June", "July",
+    "August", "September", "October", "November", "December"
+};
+
+static void cmd_date(void) {
+    zone_time_t z;
+    if (!zone_now(&z)) { kprintf("no clock\n"); return; }
+    char off[16];
+    zone_offset_text(z.offset, off, sizeof(off));
+    kprintf("%s %d %s %d, %02d:%02d:%02d in %s (%s%s)\n",
+            DAY_NAMES[z.local.weekday % 7], z.local.day, MONTH_NAMES[(z.local.month + 11) % 12],
+            z.local.year, z.local.hour, z.local.minute, z.local.second, zone_name(), off,
+            z.summer ? ", summer time" : "");
+}
+
+/* Set here, the zone is written into /zelr.cfg at once, as Settings' Time
+   page writes it, so it is still the zone after a reboot. */
+static void cmd_zone(int argc, char **argv) {
+    if (argc < 2) { kprintf("zone %s\n", zone_name()); return; }
+    if (!strcmp(argv[1], "list")) {
+        int col = 0;
+        for (int i = 0; zone_name_at(i); i++) {
+            kprintf("%-32s", zone_name_at(i));
+            if (++col == 2) { kprintf("\n"); col = 0; }
+        }
+        if (col) kprintf("\n");
+        return;
+    }
+    if (!zone_set(argv[1])) {
+        kprintf("zone: %s is not one this knows (zone list shows them)\n", argv[1]);
+        return;
+    }
+    if (!theme_save()) kprintf("zone: set, but /zelr.cfg could not be written\n");
+    cmd_date();
 }
 
 static volatile u32 spawn_n = 0;
@@ -575,6 +618,8 @@ static void execute(char *buf) {
     }
     else if (!strcmp(c, "mem")) cmd_mem();
     else if (!strcmp(c, "uptime")) cmd_uptime();
+    else if (!strcmp(c, "date")) cmd_date();
+    else if (!strcmp(c, "zone")) cmd_zone(argc, argv);
     else if (!strcmp(c, "uname"))
         kprintf("%s %s x86_64\n(c) %s %s, %s\n",
                 KERNEL_NAME, KERNEL_VERSION,

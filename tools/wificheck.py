@@ -34,7 +34,7 @@ WIN_X, WIN_Y = 124, 36
 IN_X, IN_Y = WIN_X + 1, WIN_Y + 33
 SIDEBAR_W, UI_PAD, UI_ROW = 160, 8, 26
 PAGES = ["Colours", "Dock", "Windows", "Desktop", "Behaviour",
-         "Screen", "Wireless", "Everything", "The file", "System", "About"]
+         "Screen", "Time", "Wireless", "Everything", "The file", "System", "About"]
 X0 = IN_X + SIDEBAR_W + UI_PAD * 2
 LOOK = (X0 + 85, IN_Y + 66 + 15)
 ROW0 = (X0 + 100, IN_Y + 142 + 13)

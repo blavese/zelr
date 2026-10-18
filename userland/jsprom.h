@@ -1004,13 +1004,16 @@ static void js_setup_generators(jctx *J) {
 
 /* --- Date ------------------------------------------------------------------------
  *
- * A moment is milliseconds since the start of 1970 in UTC, and there is no
- * other time zone here: the machine's clock has no idea where it is, so
- * local time is UTC and getTimezoneOffset() is 0. The clock itself is the
- * machine's (/sys/time), read once and carried forward by the tick counter;
- * where there is no clock -- the host build, which reaches no files -- it is
- * the start of 2026 plus however long the program has run, which is a clock
- * nobody set and not a claim about what time it is. */
+ * A moment is milliseconds since the start of 1970 in UTC. Local time is in
+ * the machine's zone, /sys/time's zone line (set in Settings, kernel/zone.c),
+ * read once a context, with its summer rules from zones.h, the table the
+ * kernel's clock keeps; where there is no zone -- the host build, which
+ * reaches no files -- local time is UTC. The clock itself is the machine's
+ * (/sys/time), read once and carried forward by the tick counter; where
+ * there is no clock it is the start of 2026 plus however long the program
+ * has run, which is a clock nobody set and not a claim about what time it is. */
+
+#include "zones.h"
 
 static double js_days_from_civil(double y, double m, double d) {
     /* Howard Hinnant's arithmetic, for any year. */
@@ -1079,6 +1082,52 @@ static double js_now(jctx *J) {
     return J->clock_base + (double)(ticks() - J->clock_tick0) * 10.0;
 }
 
+/* The zone local time is in, into ZONES. */
+static int js_zone(jctx *J) {
+    if (J->zone_read) return J->zone;
+    J->zone_read = 1;
+    J->zone = 0;
+    char buf[256];
+    int n = slurp("/sys/time", buf, (int)sizeof(buf) - 1);
+    if (n <= 0) return 0;
+    buf[n] = 0;
+    for (int i = 0; i < n; i++) {
+        if ((i && buf[i - 1] != '\n') || buf[i] != 'z' || buf[i + 1] != 'o' || buf[i + 2] != 'n'
+            || buf[i + 3] != 'e' || buf[i + 4] != ' ') continue;
+        int k = i + 4, w = 0;
+        while (buf[k] == ' ') k++;
+        char name[48];
+        while (buf[k] && buf[k] != '\n' && buf[k] != ' ' && w < (int)sizeof(name) - 1) name[w++] = buf[k++];
+        name[w] = 0;
+        int z = zone_find(name);
+        if (z > 0) J->zone = z;
+        break;
+    }
+    return J->zone;
+}
+
+/* Minutes east of UTC that local time is at a moment. */
+static int js_tza(jctx *J, double t) {
+    int z = js_zone(J);
+    if (!z || t != t) return 0;
+    return zone_offset_at(&ZONES[z], (long long)js_floor(t / 1000.0));
+}
+
+static double js_local(jctx *J, double t) { return t + js_tza(J, t) * 60000.0; }
+
+/* The moment a local time names. Where the clocks go back an hour the time
+   happens twice and the first is taken; where they go forward it never
+   happens and it is read on the offset from before the change, both as the
+   standard has it. */
+static double js_utc_of(jctx *J, double l) {
+    int z = js_zone(J);
+    if (!z || l != l) return l;
+    const zone_t *zz = &ZONES[z];
+    double summer = l - (zz->offset + 60) * 60000.0;
+    if (zz->rule != TZR_NONE && js_tza(J, summer) == zz->offset + 60) return summer;
+    return l - zz->offset * 60000.0;
+}
+
 /* The parts of a moment. */
 typedef struct { int y, mon, d, h, mi, s, ms, wd; } jdate;
 
@@ -1104,7 +1153,7 @@ static int js_word_is(const char *s, const char *w) {
     return 1;
 }
 
-static double js_date_parse(const char *s, u32 n) {
+static double js_date_parse(jctx *J, const char *s, u32 n) {
     u32 i = 0;
     while (i < n && s[i] == ' ') i++;
     /* ISO: [+-]YYYY[YY]-MM-DD[THH:MM[:SS[.sss]]][Z|+HH:MM] */
@@ -1157,10 +1206,12 @@ static double js_date_parse(const char *s, u32 n) {
                 off = zs * (oh * 60 + om);
                 zone = 1;
             }
-            (void)has_time;
-            (void)zone;
-            if (k == n && mon >= 1 && mon <= 12 && d >= 1 && d <= 31 && h <= 24 && mi < 60 && sec < 60)
-                return js_make_time(y, mon - 1, d, h, mi, sec, ms) - off * 60000.0;
+            /* A date alone is UTC, a date and a time with no zone local,
+               as the standard reads them. */
+            if (k == n && mon >= 1 && mon <= 12 && d >= 1 && d <= 31 && h <= 24 && mi < 60 && sec < 60) {
+                double t = js_make_time(y, mon - 1, d, h, mi, sec, ms);
+                return has_time && !zone ? js_utc_of(J, t) : t - off * 60000.0;
+            }
         }
     }
     /* "Tue, 01 Jan 2024 10:00:00 GMT", "January 1, 2024 10:00", "1 Jan 2024";
@@ -1174,6 +1225,7 @@ static double js_date_parse(const char *s, u32 n) {
     double nums[6];
     int nn = 0;
     double off = 0;
+    int zoned = 0;                      /* an offset or a zone's name was given */
     int pm = 0, am = 0;
     char sep = 0;                       /* what came after the first number: '/' or '-' for a date of numbers */
     for (u32 k = i; k < n;) {
@@ -1192,6 +1244,7 @@ static double js_date_parse(const char *s, u32 n) {
             if (q < n && s[q] == ':') q++;
             double mm = q + 1 < n ? (s[q] - '0') * 10 + (s[q + 1] - '0') : 0;
             off = zs * (hh * 60 + mm);
+            zoned = 1;
             k = q + 2;
             continue;
         }
@@ -1202,6 +1255,18 @@ static double js_date_parse(const char *s, u32 n) {
                 for (int q = 0; q < 12; q++) if (js_word_is(s + start, MON[q])) mon = q;
             if (k - start == 2 && js_word_is(s + start, "pm")) pm = 1;
             if (k - start == 2 && js_word_is(s + start, "am")) am = 1;
+            /* The zones mail and HTTP name, and America's, which browsers
+               read too. GMT+0100 is GMT, then the offset. */
+            static const struct { const char *w; int off; } ZW[] = {
+                { "gmt", 0 }, { "utc", 0 }, { "ut", 0 }, { "z", 0 },
+                { "est", -300 }, { "edt", -240 }, { "cst", -360 }, { "cdt", -300 },
+                { "mst", -420 }, { "mdt", -360 }, { "pst", -480 }, { "pdt", -420 },
+            };
+            for (u32 q = 0; q < sizeof(ZW) / sizeof(ZW[0]); q++) {
+                u32 wl = 0;
+                while (ZW[q].w[wl]) wl++;
+                if (k - start == wl && js_word_is(s + start, ZW[q].w)) { off = ZW[q].off; zoned = 1; }
+            }
             continue;
         }
         if ((c == '/' || c == '-') && nn == 1 && !sep) sep = c;
@@ -1227,7 +1292,8 @@ static double js_date_parse(const char *s, u32 n) {
     if (pm && h < 12) h += 12;
     if (am && h == 12) h = 0;
     if (y < 100) y += y < 50 ? 2000 : 1900;
-    return js_make_time(y, mon, d, h, mi, sec, 0) - off * 60000.0;
+    double t = js_make_time(y, mon, d, h, mi, sec, 0);
+    return zoned ? t - off * 60000.0 : js_utc_of(J, t);
 }
 
 static double js_this_time(jctx *J, jval t, int *ok) {
@@ -1254,13 +1320,13 @@ static jval nat_date_make(jctx *J, jval t, jval *a, int n) {
         else {
             v = js_to_primitive(J, v, 0);
             if (J->sig != JS_OK) return js_undef();
-            tv = v.t == JS_STR ? js_date_parse(v.str->s, v.str->len) : js_to_num(J, v);
+            tv = v.t == JS_STR ? js_date_parse(J, v.str->s, v.str->len) : js_to_num(J, v);
         }
     } else {
         double f[7] = { 0, 0, 1, 0, 0, 0, 0 };
         for (int i = 0; i < n && i < 7; i++) f[i] = js_to_num(J, a[i]);
         if (f[0] == f[0] && f[0] >= 0 && f[0] <= 99 && js_trunc(f[0]) == f[0]) f[0] += 1900;
-        tv = js_make_time(f[0], f[1], f[2], f[3], f[4], f[5], f[6]);
+        tv = js_utc_of(J, js_make_time(f[0], f[1], f[2], f[3], f[4], f[5], f[6]));
     }
     if (!js_is_obj(t)) return js_undef();
     t.obj->kind = JO_DATE;
@@ -1276,7 +1342,7 @@ static jval nat_date_now(jctx *J, jval t, jval *a, int n) {
 static jval nat_date_parse(jctx *J, jval t, jval *a, int n) {
     (void)t;
     jstr *s = js_to_str(J, js_arg(a, n, 0));
-    return js_num(js_date_parse(s->s, s->len));
+    return js_num(js_date_parse(J, s->s, s->len));
 }
 
 static jval nat_date_utc(jctx *J, jval t, jval *a, int n) {
@@ -1288,27 +1354,32 @@ static jval nat_date_utc(jctx *J, jval t, jval *a, int n) {
 }
 
 /* Every getter, by which part: 0 year, 1 month, 2 day of the month, 3 hours,
-   4 minutes, 5 seconds, 6 milliseconds, 7 day of the week, 8 the time. */
-static jval js_date_get(jctx *J, jval t, int which) {
+   4 minutes, 5 seconds, 6 milliseconds, 7 day of the week, 8 the time; in
+   local time or UTC. */
+static jval js_date_get(jctx *J, jval t, int which, int local) {
     int ok;
     double tv = js_this_time(J, t, &ok);
     if (!ok) return js_undef();
     if (tv != tv) return js_num(js_nan());
     if (which == 8) return js_num(tv);
     jdate p;
-    js_date_parts(tv, &p);
+    js_date_parts(local ? js_local(J, tv) : tv, &p);
     int v[8] = { p.y, p.mon, p.d, p.h, p.mi, p.s, p.ms, p.wd };
     return js_num(v[which]);
 }
 
-#define JS_DATE_GET(nm, k) static jval nat_date_##nm(jctx *J, jval t, jval *a, int n) { (void)a; (void)n; return js_date_get(J, t, k); }
+#define JS_DATE_GET(nm, k) \
+    static jval nat_date_##nm(jctx *J, jval t, jval *a, int n) { (void)a; (void)n; return js_date_get(J, t, k, 1); } \
+    static jval nat_date_utc##nm(jctx *J, jval t, jval *a, int n) { (void)a; (void)n; return js_date_get(J, t, k, 0); }
 JS_DATE_GET(getfullyear, 0) JS_DATE_GET(getmonth, 1) JS_DATE_GET(getdate, 2)
 JS_DATE_GET(gethours, 3) JS_DATE_GET(getminutes, 4) JS_DATE_GET(getseconds, 5)
-JS_DATE_GET(getms, 6) JS_DATE_GET(getday, 7) JS_DATE_GET(gettime, 8)
+JS_DATE_GET(getms, 6) JS_DATE_GET(getday, 7)
+
+static jval nat_date_gettime(jctx *J, jval t, jval *a, int n) { (void)a; (void)n; return js_date_get(J, t, 8, 0); }
 
 static jval nat_date_getyear(jctx *J, jval t, jval *a, int n) {
     (void)a; (void)n;
-    jval y = js_date_get(J, t, 0);
+    jval y = js_date_get(J, t, 0, 1);
     return y.t == JS_NUM ? js_num(y.num - 1900) : y;
 }
 
@@ -1317,11 +1388,12 @@ static jval nat_date_tzoffset(jctx *J, jval t, jval *a, int n) {
     int ok;
     double tv = js_this_time(J, t, &ok);
     if (!ok) return js_undef();
-    return js_num(tv != tv ? js_nan() : 0);
+    return js_num(tv != tv ? js_nan() : -js_tza(J, tv) + 0);
 }
 
-/* The setters: which parts are given, from `first`, and the rest kept. */
-static jval js_date_set(jctx *J, jval t, jval *a, int n, int first) {
+/* The setters: which parts are given, from `first`, and the rest kept; in
+   local time or UTC. */
+static jval js_date_set(jctx *J, jval t, jval *a, int n, int first, int local) {
     int ok;
     double tv = js_this_time(J, t, &ok);
     if (!ok) return js_undef();
@@ -1336,20 +1408,25 @@ static jval js_date_set(jctx *J, jval t, jval *a, int n, int first) {
         f[0] = 1970; f[1] = 0; f[2] = 1; f[3] = f[4] = f[5] = f[6] = 0;
     } else {
         jdate p;
-        js_date_parts(tv, &p);
+        js_date_parts(local ? js_local(J, tv) : tv, &p);
         f[0] = p.y; f[1] = p.mon; f[2] = p.d; f[3] = p.h; f[4] = p.mi; f[5] = p.s; f[6] = p.ms;
     }
     int most = first == 0 ? 3 : first == 1 ? 2 : first == 2 ? 1 : first == 3 ? 4 : first == 4 ? 3 : first == 5 ? 2 : 1;
     for (int i = 0; i < n && i < most; i++) f[first + i] = js_to_num(J, a[i]);
-    double v = js_time_clip(js_make_time(f[0], f[1], f[2], f[3], f[4], f[5], f[6]));
+    double v = js_make_time(f[0], f[1], f[2], f[3], f[4], f[5], f[6]);
+    v = js_time_clip(local ? js_utc_of(J, v) : v);
     t.obj->ival = js_num(v);
     return js_num(v);
 }
 
-#define JS_DATE_SET(nm, k) static jval nat_date_##nm(jctx *J, jval t, jval *a, int n) { return js_date_set(J, t, a, n, k); }
+#define JS_DATE_SET(nm, k) \
+    static jval nat_date_##nm(jctx *J, jval t, jval *a, int n) { return js_date_set(J, t, a, n, k, 1); } \
+    static jval nat_date_utc##nm(jctx *J, jval t, jval *a, int n) { return js_date_set(J, t, a, n, k, 0); }
 JS_DATE_SET(setfullyear, 0) JS_DATE_SET(setmonth, 1) JS_DATE_SET(setdate, 2)
 JS_DATE_SET(sethours, 3) JS_DATE_SET(setminutes, 4) JS_DATE_SET(setseconds, 5)
-JS_DATE_SET(setms, 6) JS_DATE_SET(settime, 8)
+JS_DATE_SET(setms, 6)
+
+static jval nat_date_settime(jctx *J, jval t, jval *a, int n) { return js_date_set(J, t, a, n, 8, 0); }
 
 static const char *const JS_DAYS[7] = { "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat" };
 static const char *const JS_MONTHS[12] = { "Jan", "Feb", "Mar", "Apr", "May", "Jun",
@@ -1378,9 +1455,11 @@ static jval js_date_text(jctx *J, jval t, int shape) {
         if (shape == 4) return js_throw(J, JS_ERR_RANGE, "an invalid date has no ISO text", J->error_line);
         return js_from_str(js_str(J, "Invalid Date"));
     }
+    /* The first three shapes are local time, the ISO and UTC ones not. */
+    int off = shape <= 2 ? js_tza(J, tv) : 0;
     jdate p;
-    js_date_parts(tv, &p);
-    char out[80];
+    js_date_parts(tv + off * 60000.0, &p);
+    char out[120];
     int w = 0;
     #define S(str) do { for (const char *q_ = (str); *q_; q_++) out[w++] = *q_; } while (0)
     switch (shape) {
@@ -1427,7 +1506,25 @@ static jval js_date_text(jctx *J, jval t, int shape) {
                 w += js_put_num(out + w, p.h, 2); out[w++] = ':';
                 w += js_put_num(out + w, p.mi, 2); out[w++] = ':';
                 w += js_put_num(out + w, p.s, 2);
-                S(" GMT+0000 (Coordinated Universal Time)");
+                /* " GMT+1100 (Australian Eastern Daylight Time)", or the
+                   offset again where the zone has no name of its own. */
+                int a = off < 0 ? -off : off;
+                S(" GMT");
+                out[w++] = off < 0 ? '-' : '+';
+                w += js_put_num(out + w, a / 60, 2);
+                w += js_put_num(out + w, a % 60, 2);
+                const zone_t *z = &ZONES[js_zone(J)];
+                const char *name = off != z->offset ? z->l_dst : z->l_std;
+                S(" (");
+                if (name) S(name);
+                else {
+                    S("GMT");
+                    out[w++] = off < 0 ? '-' : '+';
+                    w += js_put_num(out + w, a / 60, 2);
+                    out[w++] = ':';
+                    w += js_put_num(out + w, a % 60, 2);
+                }
+                out[w++] = ')';
             }
             break;
     }
@@ -1489,23 +1586,23 @@ static void js_setup_dates(jctx *J) {
     js_method(J, date, "parse", nat_date_parse, 1);
     js_method(J, date, "UTC", nat_date_utc, 7);
     struct { const char *n; jnative f; int k; } M[] = {
-        { "getFullYear", nat_date_getfullyear, 0 }, { "getUTCFullYear", nat_date_getfullyear, 0 },
-        { "getMonth", nat_date_getmonth, 0 }, { "getUTCMonth", nat_date_getmonth, 0 },
-        { "getDate", nat_date_getdate, 0 }, { "getUTCDate", nat_date_getdate, 0 },
-        { "getHours", nat_date_gethours, 0 }, { "getUTCHours", nat_date_gethours, 0 },
-        { "getMinutes", nat_date_getminutes, 0 }, { "getUTCMinutes", nat_date_getminutes, 0 },
-        { "getSeconds", nat_date_getseconds, 0 }, { "getUTCSeconds", nat_date_getseconds, 0 },
-        { "getMilliseconds", nat_date_getms, 0 }, { "getUTCMilliseconds", nat_date_getms, 0 },
-        { "getDay", nat_date_getday, 0 }, { "getUTCDay", nat_date_getday, 0 },
+        { "getFullYear", nat_date_getfullyear, 0 }, { "getUTCFullYear", nat_date_utcgetfullyear, 0 },
+        { "getMonth", nat_date_getmonth, 0 }, { "getUTCMonth", nat_date_utcgetmonth, 0 },
+        { "getDate", nat_date_getdate, 0 }, { "getUTCDate", nat_date_utcgetdate, 0 },
+        { "getHours", nat_date_gethours, 0 }, { "getUTCHours", nat_date_utcgethours, 0 },
+        { "getMinutes", nat_date_getminutes, 0 }, { "getUTCMinutes", nat_date_utcgetminutes, 0 },
+        { "getSeconds", nat_date_getseconds, 0 }, { "getUTCSeconds", nat_date_utcgetseconds, 0 },
+        { "getMilliseconds", nat_date_getms, 0 }, { "getUTCMilliseconds", nat_date_utcgetms, 0 },
+        { "getDay", nat_date_getday, 0 }, { "getUTCDay", nat_date_utcgetday, 0 },
         { "getTime", nat_date_gettime, 0 }, { "valueOf", nat_date_gettime, 0 },
         { "getYear", nat_date_getyear, 0 }, { "getTimezoneOffset", nat_date_tzoffset, 0 },
-        { "setFullYear", nat_date_setfullyear, 3 }, { "setUTCFullYear", nat_date_setfullyear, 3 },
-        { "setMonth", nat_date_setmonth, 2 }, { "setUTCMonth", nat_date_setmonth, 2 },
-        { "setDate", nat_date_setdate, 1 }, { "setUTCDate", nat_date_setdate, 1 },
-        { "setHours", nat_date_sethours, 4 }, { "setUTCHours", nat_date_sethours, 4 },
-        { "setMinutes", nat_date_setminutes, 3 }, { "setUTCMinutes", nat_date_setminutes, 3 },
-        { "setSeconds", nat_date_setseconds, 2 }, { "setUTCSeconds", nat_date_setseconds, 2 },
-        { "setMilliseconds", nat_date_setms, 1 }, { "setUTCMilliseconds", nat_date_setms, 1 },
+        { "setFullYear", nat_date_setfullyear, 3 }, { "setUTCFullYear", nat_date_utcsetfullyear, 3 },
+        { "setMonth", nat_date_setmonth, 2 }, { "setUTCMonth", nat_date_utcsetmonth, 2 },
+        { "setDate", nat_date_setdate, 1 }, { "setUTCDate", nat_date_utcsetdate, 1 },
+        { "setHours", nat_date_sethours, 4 }, { "setUTCHours", nat_date_utcsethours, 4 },
+        { "setMinutes", nat_date_setminutes, 3 }, { "setUTCMinutes", nat_date_utcsetminutes, 3 },
+        { "setSeconds", nat_date_setseconds, 2 }, { "setUTCSeconds", nat_date_utcsetseconds, 2 },
+        { "setMilliseconds", nat_date_setms, 1 }, { "setUTCMilliseconds", nat_date_utcsetms, 1 },
         { "setTime", nat_date_settime, 1 },
         { "toString", nat_date_tostring, 0 }, { "toDateString", nat_date_todatestring, 0 },
         { "toTimeString", nat_date_totimestring, 0 }, { "toUTCString", nat_date_toutcstring, 0 },

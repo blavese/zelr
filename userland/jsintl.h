@@ -12,7 +12,7 @@
  * Numbers are rounded from the shortest decimal that reads back as the
  * double (jsnum.h, js_shortest), as the browsers' ICU rounds them, half away
  * from nought as the standard's default mode has it. Dates are in the machine's time, which is
- * UTC, or in one of the time zones in INTL_ZONES, whose offsets and summer
+ * UTC, or in one of the time zones in ZONES, whose offsets and summer
  * rules are the ones in force in 2026; a zone this does not know is shown in
  * UTC and resolvedOptions says so. Each object keeps what it resolved as
  * bytes in a string under a key no script can name. */
@@ -904,140 +904,15 @@ static jval intl_number_text(jctx *J, double x, jval locales, jval opts) {
 
 /* --- time zones -------------------------------------------------------------------------- */
 
-enum { TZR_NONE, TZR_US, TZR_EU, TZR_AU, TZR_NZ };
+#include "zones.h"
 
-typedef struct {
-    const char *name;
-    int offset;                 /* minutes east of UTC, outside summer */
-    int rule;
-    const char *s_std, *s_dst;  /* short names, or 0 for GMT+N */
-    const char *l_std, *l_dst;  /* long names, or 0 for GMT+NN:NN */
-} intl_zone;
+/* The table and the summer rules are zones.h's, shared with the kernel's
+   clock; a moment here is milliseconds, there seconds. */
+static int intl_in_summer(const zone_t *z, double t) { return zone_in_summer(z, (long long)js_floor(t / 1000.0)); }
 
-static const intl_zone INTL_ZONES[] = {
-    { "UTC", 0, TZR_NONE, "UTC", "UTC", "Coordinated Universal Time", "Coordinated Universal Time" },
-    { "America/New_York", -300, TZR_US, "EST", "EDT", "Eastern Standard Time", "Eastern Daylight Time" },
-    { "America/Detroit", -300, TZR_US, "EST", "EDT", "Eastern Standard Time", "Eastern Daylight Time" },
-    { "America/Toronto", -300, TZR_US, "EST", "EDT", "Eastern Standard Time", "Eastern Daylight Time" },
-    { "America/Chicago", -360, TZR_US, "CST", "CDT", "Central Standard Time", "Central Daylight Time" },
-    { "America/Winnipeg", -360, TZR_US, "CST", "CDT", "Central Standard Time", "Central Daylight Time" },
-    { "America/Denver", -420, TZR_US, "MST", "MDT", "Mountain Standard Time", "Mountain Daylight Time" },
-    { "America/Edmonton", -420, TZR_US, "MST", "MDT", "Mountain Standard Time", "Mountain Daylight Time" },
-    { "America/Phoenix", -420, TZR_NONE, "MST", "MST", "Mountain Standard Time", "Mountain Standard Time" },
-    { "America/Los_Angeles", -480, TZR_US, "PST", "PDT", "Pacific Standard Time", "Pacific Daylight Time" },
-    { "America/Vancouver", -480, TZR_US, "PST", "PDT", "Pacific Standard Time", "Pacific Daylight Time" },
-    { "America/Anchorage", -540, TZR_US, "AKST", "AKDT", "Alaska Standard Time", "Alaska Daylight Time" },
-    { "Pacific/Honolulu", -600, TZR_NONE, "HST", "HST", "Hawaii-Aleutian Standard Time", "Hawaii-Aleutian Standard Time" },
-    { "America/Halifax", -240, TZR_US, "AST", "ADT", "Atlantic Standard Time", "Atlantic Daylight Time" },
-    { "America/Mexico_City", -360, TZR_NONE, "CST", "CST", "Central Standard Time", "Central Standard Time" },
-    { "America/Bogota", -300, TZR_NONE, 0, 0, "Colombia Standard Time", "Colombia Standard Time" },
-    { "America/Lima", -300, TZR_NONE, 0, 0, "Peru Standard Time", "Peru Standard Time" },
-    { "America/Sao_Paulo", -180, TZR_NONE, 0, 0, "Brasilia Standard Time", "Brasilia Standard Time" },
-    { "America/Argentina/Buenos_Aires", -180, TZR_NONE, 0, 0, "Argentina Standard Time", "Argentina Standard Time" },
-    { "Europe/London", 0, TZR_EU, "GMT", 0, "Greenwich Mean Time", "British Summer Time" },
-    { "Europe/Dublin", 0, TZR_EU, "GMT", 0, "Greenwich Mean Time", "Irish Standard Time" },
-    { "Europe/Lisbon", 0, TZR_EU, 0, 0, "Western European Standard Time", "Western European Summer Time" },
-    { "Europe/Paris", 60, TZR_EU, 0, 0, "Central European Standard Time", "Central European Summer Time" },
-    { "Europe/Berlin", 60, TZR_EU, 0, 0, "Central European Standard Time", "Central European Summer Time" },
-    { "Europe/Madrid", 60, TZR_EU, 0, 0, "Central European Standard Time", "Central European Summer Time" },
-    { "Europe/Rome", 60, TZR_EU, 0, 0, "Central European Standard Time", "Central European Summer Time" },
-    { "Europe/Amsterdam", 60, TZR_EU, 0, 0, "Central European Standard Time", "Central European Summer Time" },
-    { "Europe/Brussels", 60, TZR_EU, 0, 0, "Central European Standard Time", "Central European Summer Time" },
-    { "Europe/Vienna", 60, TZR_EU, 0, 0, "Central European Standard Time", "Central European Summer Time" },
-    { "Europe/Zurich", 60, TZR_EU, 0, 0, "Central European Standard Time", "Central European Summer Time" },
-    { "Europe/Stockholm", 60, TZR_EU, 0, 0, "Central European Standard Time", "Central European Summer Time" },
-    { "Europe/Oslo", 60, TZR_EU, 0, 0, "Central European Standard Time", "Central European Summer Time" },
-    { "Europe/Copenhagen", 60, TZR_EU, 0, 0, "Central European Standard Time", "Central European Summer Time" },
-    { "Europe/Warsaw", 60, TZR_EU, 0, 0, "Central European Standard Time", "Central European Summer Time" },
-    { "Europe/Prague", 60, TZR_EU, 0, 0, "Central European Standard Time", "Central European Summer Time" },
-    { "Europe/Budapest", 60, TZR_EU, 0, 0, "Central European Standard Time", "Central European Summer Time" },
-    { "Europe/Athens", 120, TZR_EU, 0, 0, "Eastern European Standard Time", "Eastern European Summer Time" },
-    { "Europe/Helsinki", 120, TZR_EU, 0, 0, "Eastern European Standard Time", "Eastern European Summer Time" },
-    { "Europe/Kyiv", 120, TZR_EU, 0, 0, "Eastern European Standard Time", "Eastern European Summer Time" },
-    { "Europe/Kiev", 120, TZR_EU, 0, 0, "Eastern European Standard Time", "Eastern European Summer Time" },
-    { "Europe/Bucharest", 120, TZR_EU, 0, 0, "Eastern European Standard Time", "Eastern European Summer Time" },
-    { "Europe/Istanbul", 180, TZR_NONE, 0, 0, 0, 0 },
-    { "Europe/Moscow", 180, TZR_NONE, 0, 0, "Moscow Standard Time", "Moscow Standard Time" },
-    { "Africa/Lagos", 60, TZR_NONE, 0, 0, "West Africa Standard Time", "West Africa Standard Time" },
-    { "Africa/Johannesburg", 120, TZR_NONE, 0, 0, "South Africa Standard Time", "South Africa Standard Time" },
-    { "Africa/Nairobi", 180, TZR_NONE, 0, 0, "East Africa Time", "East Africa Time" },
-    { "Asia/Dubai", 240, TZR_NONE, 0, 0, "Gulf Standard Time", "Gulf Standard Time" },
-    { "Asia/Karachi", 300, TZR_NONE, 0, 0, "Pakistan Standard Time", "Pakistan Standard Time" },
-    { "Asia/Kolkata", 330, TZR_NONE, 0, 0, "India Standard Time", "India Standard Time" },
-    { "Asia/Calcutta", 330, TZR_NONE, 0, 0, "India Standard Time", "India Standard Time" },
-    { "Asia/Kathmandu", 345, TZR_NONE, 0, 0, "Nepal Time", "Nepal Time" },
-    { "Asia/Dhaka", 360, TZR_NONE, 0, 0, "Bangladesh Standard Time", "Bangladesh Standard Time" },
-    { "Asia/Bangkok", 420, TZR_NONE, 0, 0, "Indochina Time", "Indochina Time" },
-    { "Asia/Jakarta", 420, TZR_NONE, 0, 0, "Western Indonesia Time", "Western Indonesia Time" },
-    { "Asia/Ho_Chi_Minh", 420, TZR_NONE, 0, 0, "Indochina Time", "Indochina Time" },
-    { "Asia/Shanghai", 480, TZR_NONE, 0, 0, "China Standard Time", "China Standard Time" },
-    { "Asia/Hong_Kong", 480, TZR_NONE, 0, 0, "Hong Kong Standard Time", "Hong Kong Standard Time" },
-    { "Asia/Singapore", 480, TZR_NONE, 0, 0, "Singapore Standard Time", "Singapore Standard Time" },
-    { "Asia/Taipei", 480, TZR_NONE, 0, 0, "Taipei Standard Time", "Taipei Standard Time" },
-    { "Asia/Manila", 480, TZR_NONE, 0, 0, "Philippine Standard Time", "Philippine Standard Time" },
-    { "Australia/Perth", 480, TZR_NONE, 0, 0, "Australian Western Standard Time", "Australian Western Standard Time" },
-    { "Asia/Seoul", 540, TZR_NONE, 0, 0, "Korean Standard Time", "Korean Standard Time" },
-    { "Asia/Tokyo", 540, TZR_NONE, 0, 0, "Japan Standard Time", "Japan Standard Time" },
-    { "Australia/Darwin", 570, TZR_NONE, 0, 0, "Australian Central Standard Time", "Australian Central Standard Time" },
-    { "Australia/Adelaide", 570, TZR_AU, 0, 0, "Australian Central Standard Time", "Australian Central Daylight Time" },
-    { "Australia/Brisbane", 600, TZR_NONE, 0, 0, "Australian Eastern Standard Time", "Australian Eastern Standard Time" },
-    { "Australia/Sydney", 600, TZR_AU, 0, 0, "Australian Eastern Standard Time", "Australian Eastern Daylight Time" },
-    { "Australia/Melbourne", 600, TZR_AU, 0, 0, "Australian Eastern Standard Time", "Australian Eastern Daylight Time" },
-    { "Australia/Canberra", 600, TZR_AU, 0, 0, "Australian Eastern Standard Time", "Australian Eastern Daylight Time" },
-    { "Australia/Hobart", 600, TZR_AU, 0, 0, "Australian Eastern Standard Time", "Australian Eastern Daylight Time" },
-    { "Pacific/Auckland", 720, TZR_NZ, 0, 0, "New Zealand Standard Time", "New Zealand Daylight Time" },
-    { 0, 0, 0, 0, 0, 0, 0 },
-};
+static int intl_zone_offset(const zone_t *z, double t) { return zone_offset_at(z, (long long)js_floor(t / 1000.0)); }
 
-/* The UTC time of the nth (1-based; 0 the last) Sunday of a month, at
-   `hour` in a clock `off` minutes east of UTC. */
-static double intl_sunday(int year, int month, int nth, int hour, int off) {
-    double first = js_make_time(year, month, 1, 0, 0, 0, 0);
-    jdate p;
-    js_date_parts(first, &p);
-    int day = 1 + (7 - p.wd) % 7;
-    if (nth > 0) day += 7 * (nth - 1);
-    else {
-        static const int DAYS[12] = { 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 };
-        int len = DAYS[month] + (month == 1 && ((year % 4 == 0 && year % 100 != 0) || year % 400 == 0));
-        while (day + 7 <= len) day += 7;
-    }
-    return js_make_time(year, month, day, hour, 0, 0, 0) - off * 60000.0;
-}
-
-static int intl_in_summer(const intl_zone *z, double t) {
-    if (z->rule == TZR_NONE) return 0;
-    jdate p;
-    js_date_parts(t, &p);
-    int y = p.y, o = z->offset;
-    switch (z->rule) {
-        case TZR_US: return t >= intl_sunday(y, 2, 2, 2, o) && t < intl_sunday(y, 10, 1, 1, o);
-        case TZR_EU: return t >= intl_sunday(y, 2, 0, 1, 0) && t < intl_sunday(y, 9, 0, 1, 0);
-        case TZR_AU: return t < intl_sunday(y, 3, 1, 2, o) || t >= intl_sunday(y, 9, 1, 2, o);
-        case TZR_NZ: return t < intl_sunday(y, 3, 1, 2, o) || t >= intl_sunday(y, 8, 0, 2, o);
-    }
-    return 0;
-}
-
-static int intl_zone_offset(const intl_zone *z, double t) { return z->offset + (intl_in_summer(z, t) ? 60 : 0); }
-
-/* A zone by name, as IANA writes it or in any case; -1 when it is none
-   this knows. UTC's other names are UTC. */
-static int intl_zone_find(const char *name) {
-    static const char *const UTCS[] = { "utc", "etc/utc", "gmt", "etc/gmt", "etc/universal", "universal", "zulu", "etc/zulu", 0 };
-    char low[64];
-    int k = 0;
-    for (; name[k] && k < 63; k++) low[k] = intl_low(name[k]);
-    low[k] = 0;
-    for (int i = 0; UTCS[i]; i++) if (intl_same(low, UTCS[i])) return 0;
-    for (int i = 0; INTL_ZONES[i].name; i++) {
-        const char *z = INTL_ZONES[i].name;
-        int j = 0;
-        while (z[j] && low[j] && intl_low(z[j]) == low[j]) j++;
-        if (!z[j] && !low[j]) return i;
-    }
-    return -1;
-}
+static int intl_zone_find(const char *name) { return zone_find(name); }
 
 /* GMT+1, GMT-5:30; long: GMT+01:00. */
 static void intl_gmt_text(char *out, int off, int longform) {
@@ -1065,7 +940,7 @@ enum { DS_NONE, DS_FULL, DS_LONG, DS_MEDIUM, DS_SHORT };
 typedef struct {
     u32 kind;
     u8 weekday, era, year, month, day, hour, minute, second, fsd, tzname, hour12, date_style, time_style, pad;
-    int zone;                       /* into INTL_ZONES */
+    int zone;                       /* into ZONES */
 } intl_dtf;
 
 static const char *const DT_TEXT3[] = { "long", "short", "narrow", 0 };
@@ -1089,7 +964,7 @@ static int intl_dtf_setup(jctx *J, intl_dtf *f, jval opts, int required, int def
     int h12 = intl_opt_bool(J, opts, "hour12");
     int cycle = intl_opt(J, opts, "hourCycle", DT_CYCLE, -1);
     char tz[64];
-    f->zone = 0;
+    f->zone = js_zone(J);           /* the machine's, as Date's local time is */
     if (intl_opt_text(J, opts, "timeZone", tz, (int)sizeof tz)) {
         int z = intl_zone_find(tz);
         /* An offset written as +HH:MM is a zone of its own, which this
@@ -1204,7 +1079,7 @@ static void intl_date_part(jctx *J, intl_parts *P, const intl_dtf *f, const jdat
 }
 
 static void intl_zone_name(jctx *J, intl_parts *P, const intl_dtf *f, int style, double t) {
-    const intl_zone *z = &INTL_ZONES[f->zone];
+    const zone_t *z = &ZONES[f->zone];
     int summer = intl_in_summer(z, t), off = intl_zone_offset(z, t);
     char buf[24];
     const char *name = 0;
@@ -1255,7 +1130,7 @@ static void intl_time_part(jctx *J, intl_parts *P, const intl_dtf *f, const jdat
 
 static int intl_format_date(jctx *J, intl_parts *P, const intl_dtf *f, double t) {
     if (t != t) { js_throw(J, JS_ERR_RANGE, "an invalid date cannot be written", J->error_line); return 0; }
-    const intl_zone *z = &INTL_ZONES[f->zone];
+    const zone_t *z = &ZONES[f->zone];
     double local = t + intl_zone_offset(z, t) * 60000.0;
     jdate d;
     js_date_parts(local, &d);
@@ -1385,7 +1260,7 @@ static jval nat_intl_dtf_resolved(jctx *J, jval t, jval *a, int n) {
     intl_set_str(J, o, "locale", "en-US");
     intl_set_str(J, o, "calendar", "gregory");
     intl_set_str(J, o, "numberingSystem", "latn");
-    intl_set_str(J, o, "timeZone", INTL_ZONES[f.zone].name);
+    intl_set_str(J, o, "timeZone", ZONES[f.zone].name);
     if (f.hour || f.time_style) {
         intl_set_str(J, o, "hourCycle", f.hour12 ? "h12" : "h23");
         intl_set(J, o, "hour12", js_bool(f.hour12));
@@ -2385,7 +2260,7 @@ static jval nat_intl_values_of(jctx *J, jval t, jval *a, int n) {
     else if (js_str_is(k, "collation")) js_arr_push(J, out, js_from_str(js_str(J, "default")));
     else if (js_str_is(k, "numberingSystem")) js_arr_push(J, out, js_from_str(js_str(J, "latn")));
     else if (js_str_is(k, "currency")) { for (int i = 0; INTL_CURRENCIES[i].code; i++) js_arr_push(J, out, js_from_str(js_str(J, INTL_CURRENCIES[i].code))); }
-    else if (js_str_is(k, "timeZone")) { for (int i = 0; INTL_ZONES[i].name; i++) js_arr_push(J, out, js_from_str(js_str(J, INTL_ZONES[i].name))); }
+    else if (js_str_is(k, "timeZone")) { for (int i = 0; ZONES[i].name; i++) js_arr_push(J, out, js_from_str(js_str(J, ZONES[i].name))); }
     else if (js_str_is(k, "unit")) { for (int i = 0; INTL_UNITS[i].id; i++) js_arr_push(J, out, js_from_str(js_str(J, INTL_UNITS[i].id))); }
     else return js_throw_named(J, JS_ERR_RANGE, "", k, " is not a kind of value Intl lists");
     return js_from_obj(out);

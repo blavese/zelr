@@ -97,7 +97,22 @@ def kernel_read_keys():
 def settings_saved_keys():
     """Every key save() writes by name."""
     body = body_of(read(SETTINGS), "static void save(void)")
-    return set(re.findall(r'line_(?:num|hex)\(out, n, "([a-z_]+)"', body))
+    return set(re.findall(r'line_(?:num|hex|text)\(out, n, "([a-z_]+)"', body))
+
+
+def settings_pages():
+    """The sidebar's pages, in order, as settings.c lists them."""
+    src = read(SETTINGS)
+    table = src[src.index("PAGES[] = {"):]
+    return re.findall(r'"([^"]+)"', table[:table.index("};")])
+
+
+def harness_pages(name):
+    """The same list as a harness keeps it to work out where each page's row
+    is in the sidebar (setcheck.py; wificheck.py has its own copy)."""
+    src = read(os.path.join(ROOT, "tools", name))
+    m = re.search(r"^PAGES = \[([^\]]*)\]", src, re.M)
+    return re.findall(r'"([^"]+)"', m.group(1)) if m else []
 
 
 def settings_keeps_the_rest():
@@ -130,6 +145,14 @@ def main():
     c.add("no key the kernel reads is lost when settings saves"
           + (" (drops %s)" % ", ".join(dropped) if dropped and not kept else ""),
           not dropped or kept)
+
+    # A page added to Settings moves every page below it down the sidebar,
+    # and a harness clicking by the old list lands on the page above the
+    # one it means (Time went in above Wireless).
+    pages = settings_pages()
+    c.add("the sidebar's pages were found (%d)" % len(pages), len(pages) >= 10)
+    for name in ("setcheck.py", "wificheck.py"):
+        c.add("%s lists Settings' pages in Settings' order" % name, harness_pages(name) == pages)
 
     return c.report()
 

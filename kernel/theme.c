@@ -14,6 +14,7 @@
 #include "printf.h"
 #include "fb.h"
 #include "sound.h"
+#include "zone.h"
 
 static theme_t current;
 
@@ -427,6 +428,10 @@ static void apply(const char *key, const char *value) {
         current.light = parse_dec(value) != 0;
         ground_again();
     }
+    /* Where the machine is: not part of the look, but a line in the same
+       file, so the shell's write and Settings set it the same way. A name
+       this does not know leaves the zone as it was. */
+    else if (!strcmp(key, "zone"))    zone_set(value);
 }
 
 bool theme_reload(void) {
@@ -592,6 +597,12 @@ bool theme_save(void) {
         n += put_num(out + n, (u32)knob_get(&KNOBS[i]));
         out[n++] = '\n';
     }
+
+    /* The zone too: a volume change on the dock writes this file whole, and
+       a zone it left out went back to UTC at the next boot. */
+    n = put_key(out, n, "zone");
+    for (const char *p = zone_name(); *p; p++) out[n++] = *p;
+    out[n++] = '\n';
 
     return vfs_write(THEME_FILE, out, (u32)n);
 }

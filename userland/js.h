@@ -481,6 +481,8 @@ typedef struct jctx {
     u32     nintern, intern_cap;
     double  clock_base;       /* the wall clock at the first tick read, in ms */
     int     clock_tick0;
+    int     zone;             /* local time's zone, into zones.h's ZONES; 0 is UTC */
+    int     zone_read;        /* whether /sys/time has been asked for it */
     jobj   *array_values;     /* Array.prototype.values, for the fast paths */
 
     /* The well known symbols, as their keys. */

@@ -30,6 +30,7 @@
  */
 #include "zelr.h"
 #include "ui.h"
+#include "zones.h"
 
 #define CFG "/zelr.cfg"
 #define SIDEBAR_W 160
@@ -89,11 +90,17 @@ static const struct { int w, h; const char *name; } MODES[] = {
 
 static const char *const PAGES[] = {
     "Colours", "Dock", "Windows", "Desktop", "Behaviour",
-    "Screen", "Wireless", "Everything", "The file", "System", "About"
+    "Screen", "Time", "Wireless", "Everything", "The file", "System", "About"
 };
-#define N_PAGES 11
+#define N_PAGES 12
 static int page = 0;
 static int scroll;              /* the Everything page, which is long */
+
+/* The zone the clock is shown in, as the file says ("zone Europe/Paris"),
+   or empty when the file names none and the machine is in UTC. Read from
+   the file this window writes rather than from /sys/time, so a choice made
+   here is not taken back by a look at the kernel before it has read it. */
+static char zone_in_use[40];
 
 /* --- reading and writing -------------------------------------------------- */
 
@@ -177,6 +184,14 @@ static int line_num(char *out, int at, const char *key, int v) {
 
 /* With the prefix, so the readers on both sides know it is hex without
    being told. See the note in kernel/theme.c. */
+static int line_text(char *out, int at, const char *key, const char *v) {
+    for (int i = 0; key[i]; i++) out[at++] = key[i];
+    out[at++] = ' ';
+    for (int i = 0; v[i]; i++) out[at++] = v[i];
+    out[at++] = '\n';
+    return at;
+}
+
 static int line_hex(char *out, int at, const char *key, u32 v) {
     for (int i = 0; key[i]; i++) out[at++] = key[i];
     out[at++] = ' ';
@@ -191,7 +206,7 @@ static int line_hex(char *out, int at, const char *key, u32 v) {
    file one to replace rather than one to keep. */
 static int manages(const char *key, int len) {
     static const char *const OWN[] = {
-        "look", "light", "preset", "accent", "desktop", "surface", "text",
+        "look", "light", "preset", "accent", "desktop", "surface", "text", "zone",
     };
     for (u32 i = 0; i < sizeof(OWN) / sizeof(OWN[0]); i++) {
         int k = 0;
@@ -268,6 +283,7 @@ static void save(void) {
 
     for (int i = 0; i < nknobs; i++)
         n = line_num(out, n, knobs[i].key, knobs[i].value);
+    if (zone_in_use[0]) n = line_text(out, n, "zone", zone_in_use);
 
     n = keep_unmanaged(out, n, (int)sizeof(out) - 1);
 
@@ -289,6 +305,27 @@ static void flush(int held) {
     if (held && ticks() - last_write < 8) return;
     save();
     dirty = 0;
+}
+
+/* The zone line of the file, if it has one. */
+static void zone_load(void) {
+    char cfg[2048];
+    int c = slurp(CFG, cfg, sizeof(cfg) - 1);
+    zone_in_use[0] = 0;
+    if (c <= 0) return;
+    cfg[c] = 0;
+    for (const char *p = cfg; *p; ) {
+        if (!strncmp(p, "zone ", 5)) {
+            p += 5;
+            while (*p == ' ') p++;
+            int i = 0;
+            while (*p && *p != '\n' && *p != '\r' && *p != ' ' && i < (int)sizeof(zone_in_use) - 1)
+                zone_in_use[i++] = *p++;
+            zone_in_use[i] = 0;
+        }
+        while (*p && *p != '\n') p++;
+        if (*p) p++;
+    }
 }
 
 /* The palette as the kernel has it now, rather than as this program would
@@ -988,6 +1025,164 @@ static int page_wireless(surface *s, ui_input *in, ui_theme *t,
     return y + UI_BTN_H + UI_GAP;
 }
 
+/* --- time ------------------------------------------------------------------
+ *
+ * The zone the machine's clock is shown in: the dock, /sys/time's local time
+ * and the shell's date. The names are zones.h's, the table the kernel reads
+ * the file's line against, so a zone chosen here is always one it knows.
+ * The time itself is the kernel's (/sys/time), so what this shows is what
+ * the dock shows. What the page says it also puts on the console, as the
+ * Wireless page does, for timecheck.py. */
+
+static int zone_top = -1;          /* the first zone listed; -1 until the page is first drawn */
+static char zone_said[96];
+
+/* "UTC", "UTC+9", "UTC-3:30". */
+static void offset_text(int off, char *out) {
+    int a = off < 0 ? -off : off, at = 0;
+    out[at++] = 'U'; out[at++] = 'T'; out[at++] = 'C';
+    if (off) {
+        out[at++] = off < 0 ? '-' : '+';
+        at += utoa((u32)(a / 60), out + at);
+        if (a % 60) {
+            out[at++] = ':';
+            out[at++] = (char)('0' + a % 60 / 10);
+            out[at++] = (char)('0' + a % 10);
+        }
+    }
+    out[at] = 0;
+}
+
+static void add_text(char *out, int *at, int cap, const char *s) {
+    while (*s && *at < cap - 1) out[(*at)++] = *s++;
+    out[*at] = 0;
+}
+
+static void add_num(char *out, int *at, int cap, int v) {
+    char d[12];
+    d[utoa((u32)v, d)] = 0;
+    add_text(out, at, cap, d);
+}
+
+static int page_time(surface *s, ui_input *in, ui_theme *t,
+                     int x, int y, int w, int h) {
+    static const char *const MONTHS[12] = { "January", "February", "March", "April", "May", "June", "July",
+                                            "August", "September", "October", "November", "December" };
+    static const char *const DAYS[7] = { "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday" };
+    char buf[512];
+    int n = slurp("/sys/time", buf, sizeof(buf) - 1);
+    buf[n > 0 ? n : 0] = 0;
+    char local[24], zone[40], off[12], summer[4];
+    sys_value(buf, "local", local, sizeof(local));
+    sys_value(buf, "zone", zone, sizeof(zone));
+    sys_value(buf, "offset", off, sizeof(off));
+    sys_value(buf, "summer", summer, sizeof(summer));
+    int offset = num(off);
+    char utc[12];
+    offset_text(offset, utc);
+
+    y = ui_section(s, t, x, y, w, "Where this machine is");
+    char line[96];
+    int at = 0;
+    line[0] = 0;
+    /* "2026-10-17 22:41:07" */
+    if (strlen(local) >= 16) {
+        int yy = num(local), mm = num(local + 5), dd = num(local + 8);
+        int hh = num(local + 11), mi = num(local + 14);
+        if (mm < 1 || mm > 12) mm = 1;
+        add_text(line, &at, sizeof(line), DAYS[zone_weekday(zone_days_from_civil(yy, mm, dd))]);
+        add_text(line, &at, sizeof(line), " ");
+        add_num(line, &at, sizeof(line), dd);
+        add_text(line, &at, sizeof(line), " ");
+        add_text(line, &at, sizeof(line), MONTHS[mm - 1]);
+        add_text(line, &at, sizeof(line), ", ");
+        knob *k24 = K("clock_24");
+        if (k24 && !k24->value) {
+            add_num(line, &at, sizeof(line), hh % 12 ? hh % 12 : 12);
+            add_text(line, &at, sizeof(line), ":");
+            line[at++] = (char)('0' + mi / 10); line[at++] = (char)('0' + mi % 10); line[at] = 0;
+            add_text(line, &at, sizeof(line), hh >= 12 ? " pm" : " am");
+        } else {
+            line[at++] = (char)('0' + hh / 10); line[at++] = (char)('0' + hh % 10);
+            line[at++] = ':';
+            line[at++] = (char)('0' + mi / 10); line[at++] = (char)('0' + mi % 10); line[at] = 0;
+        }
+    } else {
+        add_text(line, &at, sizeof(line), "This machine has no clock to read.");
+    }
+    ui_label(s, t, x, y, line);
+    y += 22;
+
+    char where[96];
+    at = 0;
+    where[0] = 0;
+    add_text(where, &at, sizeof(where), zone[0] ? zone : "UTC");
+    add_text(where, &at, sizeof(where), ", ");
+    if (!offset) add_text(where, &at, sizeof(where), "the same as UTC");
+    else {
+        int a = offset < 0 ? -offset : offset;
+        if (a >= 60) {
+            add_num(where, &at, sizeof(where), a / 60);
+            add_text(where, &at, sizeof(where), a < 120 ? " hour" : " hours");
+        }
+        if (a % 60) {
+            add_text(where, &at, sizeof(where), a >= 60 ? " " : "");
+            add_num(where, &at, sizeof(where), a % 60);
+            add_text(where, &at, sizeof(where), " minutes");
+        }
+        add_text(where, &at, sizeof(where), offset > 0 ? " ahead of UTC" : " behind UTC");
+    }
+    if (num(summer)) add_text(where, &at, sizeof(where), ", in summer time");
+    ui_dim_label(s, t, x, y, where);
+    y += 24 + UI_GAP;
+
+    /* Said when the kernel has taken a zone, which is when /sys/time says
+       so: a choice below is a write to the file, read by the kernel within
+       a quarter of a second. */
+    char said[96];
+    at = 0;
+    said[0] = 0;
+    add_text(said, &at, sizeof(said), zone[0] ? zone : "UTC");
+    add_text(said, &at, sizeof(said), ", ");
+    add_text(said, &at, sizeof(said), utc);
+    if (strcmp(said, zone_said)) {
+        strcpy(zone_said, said);
+        puts("settings: time zone ");
+        puts(said);
+        puts("\n");
+    }
+    y = ui_section(s, t, x, y, w, "Time zone");
+    int total = zone_count();
+    int top = y;
+    int shown = (h - top - 60) / (UI_ROW + 2);
+    if (shown < 1) shown = 1;
+    if (shown > total) shown = total;
+    /* The list opens at the zone in use, so the one chosen is in view. */
+    if (zone_top < 0) {
+        int in_use = zone_find(zone_in_use[0] ? zone_in_use : "UTC");
+        zone_top = in_use > 0 ? in_use : 0;
+    }
+    if (zone_top > total - shown) zone_top = total - shown;
+    if (zone_top < 0) zone_top = 0;
+    int lw = w - UI_SCROLL_W - UI_GAP;
+    int picked = zone_find(zone_in_use[0] ? zone_in_use : "UTC");
+    for (int i = 0; i < shown; i++) {
+        int z = zone_top + i;
+        /* The offset outside summer: the one a zone is known by. */
+        char right[12];
+        offset_text(ZONES[z].offset, right);
+        if (ui_row(s, in, t, x, y, lw, ZONES[z].name, right, z == picked) == 1 && z != picked) {
+            copy_into(zone_in_use, sizeof(zone_in_use), ZONES[z].name, sizeof(zone_in_use));
+            save();
+        }
+        y += UI_ROW + 2;
+    }
+    ui_scrollbar(s, t, x + w - UI_SCROLL_W, top, shown * (UI_ROW + 2), zone_top, shown, total);
+    y += UI_GAP;
+    ui_dim_label(s, t, x, y, "The dock's clock and the shell's date follow it.");
+    return y + 24;
+}
+
 static int page_system(surface *s, ui_input *in, ui_theme *t,
                        int x, int y, int w, int h) {
     (void)in;
@@ -1021,6 +1216,7 @@ int main(void) {
 
     knobs_load();
     colours_load();
+    zone_load();
 
     ui_input in;
     memset(&in, 0, sizeof(in));
@@ -1051,7 +1247,10 @@ int main(void) {
             if (in.keys[ki] == KEY_UP && page > 0) page--;
             if (in.keys[ki] == KEY_DOWN && page < N_PAGES - 1) page++;
         }
-        if (in.scroll) scroll += in.scroll;
+        if (in.scroll) {
+            if (page == 6 && zone_top >= 0) zone_top += in.scroll;
+            else scroll += in.scroll;
+        }
 
         /* The volume can change from the dock while this window is open,
            and a knob table read once at startup would then be showing a
@@ -1062,6 +1261,7 @@ int main(void) {
         if (ticks() - since_reload >= 25 && !dirty && !in.down) {
             since_reload = ticks();
             knobs_load();
+            zone_load();
         }
         ui_due(since_reload + 25);
 
@@ -1089,10 +1289,11 @@ int main(void) {
         case 3: y = page_desktop(&s, &in, &t, x, y, cw); break;
         case 4: y = page_behaviour(&s, &in, &t, x, y, cw); break;
         case 5: y = page_screen(&s, &in, &t, x, y, cw); break;
-        case 6: y = page_wireless(&s, &in, &t, x, y, cw); break;
-        case 7: y = page_everything(&s, &in, &t, x, y, cw, h); break;
-        case 8: y = page_file(&s, &in, &t, x, y, cw, h); break;
-        case 9: y = page_system(&s, &in, &t, x, y, cw, h); break;
+        case 6: y = page_time(&s, &in, &t, x, y, cw, h); break;
+        case 7: y = page_wireless(&s, &in, &t, x, y, cw); break;
+        case 8: y = page_everything(&s, &in, &t, x, y, cw, h); break;
+        case 9: y = page_file(&s, &in, &t, x, y, cw, h); break;
+        case 10: y = page_system(&s, &in, &t, x, y, cw, h); break;
         default: y = page_about(&s, &in, &t, x, y, cw, h); break;
         }
 

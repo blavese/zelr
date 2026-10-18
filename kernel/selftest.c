@@ -72,6 +72,7 @@
 #include "pic.h"
 #include "clipboard.h"
 #include "rtc.h"
+#include "zone.h"
 #include "rng.h"
 #include "tls.h"
 #include "tcp.h"
@@ -988,6 +989,7 @@ static void test_console(void) {
             else { if (!seen_paper) { paper = px; seen_paper = true; } same &= px == paper; }
         }
     ok("and draws it as the font has it", same && seen_ink && seen_paper && ink != paper);
+
     if (pointer) mouse_inject(x0 - mouse_x(), mouse_y() - y0, b);   /* back where it was */
 }
 
@@ -6551,6 +6553,102 @@ static void test_clock(void) {
     ok("a buffer too small is not written past", tiny[3] == '#');
 }
 
+/* --- time zones --------------------------------------------------------------
+ *
+ * The dock's clock and /sys/time's local time, in the zone /zelr.cfg names
+ * (zone.h, on userland/zones.h's table, which the browser's Intl shares).
+ * The moments are a second either side of 2026's changes of clock, and the
+ * answers are Windows' own zone data for the same moments, not this table's.
+ * Each check sets a zone and the one the machine was in is put back. */
+static void test_time_zones(void) {
+    char was[40];
+    strncpy(was, zone_name(), sizeof(was) - 1);
+    was[sizeof(was) - 1] = 0;
+
+    rtc_time_t t = { 2026, 10, 17, 12, 34, 56, 0 };
+    ok("a time off the clock is counted from 1970", zone_utc_of(&t) == 1792240496);
+    rtc_time_t leap = { 2000, 2, 29, 12, 0, 0, 0 };
+    ok("through a leap day", zone_utc_of(&leap) == 951825600);
+
+    ok("a zone it does not know is refused", !zone_set("Mars/Olympus"));
+    ok("and leaves the zone as it was", !strcmp(zone_name(), was));
+    ok("a zone is found by its name in any case",
+       zone_set("europe/london") && !strcmp(zone_name(), "Europe/London"));
+    ok("and GMT is UTC", zone_set("GMT") && !strcmp(zone_name(), "UTC"));
+
+    static const struct { const char *zone; i64 utc; int before, after; } CHANGES[] = {
+        { "America/New_York", 1772953199, -300, -240 },
+        { "America/New_York", 1793512799, -240, -300 },
+        { "Europe/London",    1774745999,    0,   60 },
+        { "Europe/London",    1792889999,   60,    0 },
+        { "Australia/Sydney", 1775318399,  660,  600 },
+        { "Australia/Sydney", 1791043199,  600,  660 },
+        { "Pacific/Auckland", 1775311199,  780,  720 },
+        { "Pacific/Auckland", 1790431199,  720,  780 },
+    };
+    int right = 0, n = (int)(sizeof(CHANGES) / sizeof(CHANGES[0]));
+    for (int i = 0; i < n; i++) {
+        zone_time_t a, b;
+        zone_set(CHANGES[i].zone);
+        zone_at(CHANGES[i].utc, &a);
+        zone_at(CHANGES[i].utc + 1, &b);
+        if (a.offset == CHANGES[i].before && b.offset == CHANGES[i].after) right++;
+        else kprintf("    %s at %d: %d then %d minutes\n", CHANGES[i].zone,
+                     (i32)CHANGES[i].utc, a.offset, b.offset);
+    }
+    ok("the clocks change at the second each zone's law says, on all four rules", right == n);
+
+    zone_time_t z;
+    zone_set("Australia/Sydney");
+    zone_at(1798747200, &z);
+    ok("eight in the evening of New Year's Eve in UTC is seven on Friday morning in Sydney",
+       z.local.year == 2027 && z.local.month == 1 && z.local.day == 1 && z.local.hour == 7
+       && z.local.minute == 0 && z.local.weekday == 5 && z.summer && z.offset == 660);
+    zone_set("Asia/Kolkata");
+    zone_at(1792267200, &z);
+    ok("half an hour is kept, and a zone with no summer never has one",
+       z.local.day == 18 && z.local.hour == 1 && z.local.minute == 30 && !z.summer && z.offset == 330);
+    zone_set("America/Los_Angeles");
+    zone_at(0, &z);
+    ok("west of London, 1970 starts on the Wednesday before",
+       z.local.year == 1969 && z.local.month == 12 && z.local.day == 31 && z.local.hour == 16
+       && z.local.weekday == 3);
+
+    zone_set("Australia/Sydney");
+    char clock[16];
+    wm_test_clock_text(1798747200, clock, sizeof(clock));
+    ok("the dock's clock reads the hour in the zone",
+       !strcmp(clock, theme()->clock_24 ? "07:00" : "7:00 am"));
+
+    /* The file, as Settings and the shell's write set it, and as a save of
+       the settings writes it back. What was there is put back after. */
+    char *kept = (char *)kmalloc(2048), *buf = (char *)kmalloc(2048);
+    if (!kept || !buf) { ok("memory for the settings file", false); kfree(kept); kfree(buf); zone_set(was); return; }
+    int had = vfs_read(THEME_FILE, kept, 2047);
+    vfs_write(THEME_FILE, "zone Asia/Tokyo\n", 16);
+    theme_reload();
+    ok("a zone line in /zelr.cfg sets the zone", !strcmp(zone_name(), "Asia/Tokyo"));
+
+    int got = vfs_read("/sys/time", buf, 2047);
+    buf[got > 0 ? got : 0] = 0;
+    ok("/sys/time says the zone, how far from UTC and the time there",
+       contains(buf, "zone      Asia/Tokyo\n")
+       && (!rtc_present() || (contains(buf, "offset    540\n") && contains(buf, "summer    0\n")
+                              && contains(buf, "local     "))));
+
+    theme_save();
+    got = vfs_read(THEME_FILE, buf, 2047);
+    buf[got > 0 ? got : 0] = 0;
+    ok("and saving the settings writes it back", contains(buf, "\nzone Asia/Tokyo\n"));
+
+    if (had > 0) vfs_write(THEME_FILE, kept, (u32)had);
+    else vfs_delete(THEME_FILE);
+    theme_reload();
+    kfree(kept);
+    kfree(buf);
+    zone_set(was);
+}
+
 /* Whether the controller is actually reading the buffer.
  *
  * Every other thing a sound driver can be asked reports success while the
@@ -6915,6 +7013,7 @@ int selftest_run(void) {
     kprintf("[interrupt routing]\n"); test_irqs();
     kprintf("[clipboard]\n"); test_clipboard();
     kprintf("[clock]\n"); test_clock();
+    kprintf("[time zones]\n"); test_time_zones();
     kprintf("[codec routes]\n"); test_codec_routes();
     kprintf("[es1371]\n"); test_es1371();
     kprintf("[sound]\n"); test_sound();

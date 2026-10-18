@@ -23,6 +23,7 @@
 #include "heap.h"
 #include "sched.h"
 #include "timer.h"
+#include "zone.h"
 #include "smp.h"
 #include "lapic.h"
 #include "blockdev.h"
@@ -344,12 +345,24 @@ static u32 render_clipboard(char *b, u32 cap) {
 }
 
 /* The wall clock, which is the one thing here that does not come from
-   counting since boot. */
+   counting since boot. `now` is UTC and stays the first line, since the
+   browser's Date reads the first date here as UTC; `local` is the same
+   moment where the machine is (zone.h). */
 static u32 render_time(char *b, u32 cap) {
     out_t o = { b, cap, 0 };
     char now[24];
     rtc_format(now, sizeof(now));
     put(&o, "now       %s\n", now);
+    zone_time_t z;
+    bool known = zone_now(&z);
+    if (known)
+        put(&o, "local     %04d-%02d-%02d %02d:%02d:%02d\n", z.local.year, z.local.month,
+            z.local.day, z.local.hour, z.local.minute, z.local.second);
+    put(&o, "zone      %s\n", zone_name());
+    if (known) {
+        put(&o, "offset    %d\n", z.offset);
+        put(&o, "summer    %d\n", z.summer ? 1 : 0);
+    }
     put(&o, "source    %s\n", rtc_present() ? "cmos clock" : "none");
     put(&o, "uptime    %d s\n", (u32)(timer_ticks() / (timer_hz() ? timer_hz() : 100)));
     return o.len;

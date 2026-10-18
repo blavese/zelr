@@ -630,6 +630,11 @@ if [ "$MODE" = "screen" ] || [ "$MODE" = "full" ]; then
   # off the disk. Its chords were typed into the text as control characters.
   notestest() { keep timeout 600 python tools/notescheck.py; }
 
+  # The time zone, from the shell and from Settings' Time page: /sys/time,
+  # the file, the date and the dock's clock follow it, and the console prints
+  # nothing over the desktop.
+  timetest() { keep timeout 600 python tools/timecheck.py; }
+
   # The second boot of a machine, which is the one nothing else reaches:
   # every other check starts the kernel directly and never asks a firmware
   # to start from the disk the kernel formatted.
@@ -726,6 +731,7 @@ if [ "$MODE" = "screen" ] || [ "$MODE" = "full" ]; then
   par_start "big files are copied, moved and saved whole" bigfiletest
   par_start "the file manager copies, moves and renames" filestest
   par_start "the text editor's keys copy, paste, save and undo" notestest
+  par_start "the clock is told in the zone the machine is in" timetest
   par_start "a machine still starts once it has formatted its disk" boottest
   par_start "ctrl+f finds a word that is on the screen" findtest
   par_start "a deal reaches the cloth and the dealer plays it out" gametest

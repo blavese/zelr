@@ -18,6 +18,10 @@
 
 static int failed, ran;
 
+/* The zone local time is in for the cases, as /sys/time would give it on the
+   machine; 0 is none, as on the host, where local time is UTC. */
+static const char *expect_zone;
+
 static void show(const char *s) { puts(s); }
 
 /* Runs a script and compares the value of its final expression. */
@@ -25,6 +29,7 @@ static void expect(const char *what, const char *src, const char *want) {
     ran++;
     jctx J;
     js_init(&J);
+    if (expect_zone) { J.zone = zone_find(expect_zone); J.zone_read = 1; }
 
     jval got = js_undef();
     int ok = js_eval_text(&J, src, (u32)strlen(src), &got);
@@ -1761,6 +1766,49 @@ int main(void) {
            " (function () { try { new Intl.DateTimeFormat('en', { timeZone: 'Nowhere' }); return 'none'; } catch (e) { return e.name; } })()].join(' | '); })()",
            "3:05 PM EDT | 2:05 PM EST | 11:05 AM PST | 9:05 PM GMT+2 | 7:05 PM GMT | 8:05 PM GMT+1 | 5:05 AM GMT+10 | "
            "6:05 AM GMT+11 | 12:35 AM GMT+5:30 | 8:05 AM GMT+13 | 7:05 PM UTC | 9:05:00 PM Central European Summer Time | UTC | UTC | RangeError");
+    /* Local time in the machine's zone (Settings' Time page), each answer
+       what Windows' own zone data gives for the moment. */
+    expect_zone = "Australia/Sydney";
+    expect("local time is the machine's zone: New Year's morning in Sydney",
+           "(function(){ var d = new Date(Date.UTC(2026, 11, 31, 20, 0));"
+           " return [d.getHours(), d.getDate(), d.getMonth(), d.getFullYear(), d.getDay(), d.getTimezoneOffset(),"
+           " d.getUTCHours(), d.getUTCDate()].join(); })()",
+           "7,1,0,2027,5,-660,20,31");
+    expect("and toString says the offset and the zone's name, summer and winter",
+           "String(new Date(Date.UTC(2026, 11, 31, 20, 0))) + ' | ' + new Date(Date.UTC(2026, 6, 1)).toString()"
+           " + ' | ' + new Date(Date.UTC(2026, 6, 1)).toTimeString()",
+           "Fri Jan 01 2027 07:00:00 GMT+1100 (Australian Eastern Daylight Time) | "
+           "Wed Jul 01 2026 10:00:00 GMT+1000 (Australian Eastern Standard Time) | "
+           "10:00:00 GMT+1000 (Australian Eastern Standard Time)");
+    expect("a date made of parts is local, and so is one read with a time and no zone",
+           "[new Date(2026, 6, 1, 10, 0).toISOString(), Date.parse('2026-07-01T10:00:00') === Date.UTC(2026, 6, 1),"
+           " Date.parse('2026-07-01') === Date.UTC(2026, 6, 1), Date.parse('July 1, 2026 10:00') === Date.UTC(2026, 6, 1),"
+           " Date.parse('Wed, 01 Jul 2026 00:00:00 GMT') === Date.UTC(2026, 6, 1),"
+           " new Date('Jul 1 2026 10:00 EST').toISOString(), new Date('2026-07-01T10:00:00+02:00').toISOString()].join(' | ')",
+           "2026-07-01T00:00:00.000Z | true | true | true | true | 2026-07-01T15:00:00.000Z | 2026-07-01T08:00:00.000Z");
+    expect("a time the clocks skip is read on the offset before, one they repeat as the first",
+           "[new Date(2026, 9, 4, 2, 30).getHours(), new Date(2026, 9, 4, 2, 30).toISOString(),"
+           " new Date(2026, 3, 5, 2, 30).getTimezoneOffset(), new Date(2026, 3, 5, 2, 30).toISOString()].join(' | ')",
+           "3 | 2026-10-03T16:30:00.000Z | -660 | 2026-04-04T15:30:00.000Z");
+    expect("the setters work in local time, and the UTC ones in UTC",
+           "(function(){ var a = new Date(Date.UTC(2026, 6, 1)), b = new Date(Date.UTC(2026, 6, 1));"
+           " a.setHours(0); b.setUTCHours(5); var c = new Date(Date.UTC(2026, 6, 1)); c.setDate(31);"
+           " return [a.toISOString(), b.toISOString(), c.toISOString()].join(' | '); })()",
+           "2026-06-30T14:00:00.000Z | 2026-07-01T05:00:00.000Z | 2026-07-31T00:00:00.000Z");
+    expect("and Intl's zone, when a page names none, is the machine's",
+           "[new Intl.DateTimeFormat().resolvedOptions().timeZone, new Date(Date.UTC(2026, 6, 1)).toLocaleTimeString('en-US'),"
+           " new Date(Date.UTC(2026, 6, 1)).toLocaleString('en-US', { timeZone: 'UTC' })].join(' | ')",
+           "Australia/Sydney | 10:00:00 AM | 7/1/2026, 12:00:00 AM");
+    expect_zone = "America/New_York";
+    expect("in New York the skipped hour is read on standard time, as the standard says",
+           "new Date(2026, 2, 8, 2, 30).toString()",
+           "Sun Mar 08 2026 03:30:00 GMT-0400 (Eastern Daylight Time)");
+    expect_zone = "Europe/Istanbul";
+    expect("and a zone with no name of its own is named by its offset",
+           "new Date(Date.UTC(2026, 6, 1)).toString()",
+           "Wed Jul 01 2026 03:00:00 GMT+0300 (GMT+03:00)");
+    expect_zone = 0;
+
     expect("and its parts, ranges and resolved options",
            "(function(){ var d = new Date(Date.UTC(2026, 8, 30, 19, 5)), e = new Date(Date.UTC(2026, 9, 2));"
            " var f = new Intl.DateTimeFormat('en', { year: 'numeric', month: 'short', day: 'numeric' }), r = f.resolvedOptions();"
