@@ -2731,6 +2731,18 @@ static void script_address(const char *url, int push) {
     address_moved = 1;
 }
 
+/* window.open from the page, in the reader's click: joined as a link is, so
+   a page off the network cannot open a file of the machine's or one of the
+   browser's own pages in a window either. */
+static void open_window(const char *address);
+static void script_open_window(const char *url) {
+    url_t u;
+    if (!url_join(&base, url, &u)) return;
+    char text[URL_TEXT];
+    url_text(&u, text, sizeof(text));
+    open_window(text);
+}
+
 /* history.back, forward and go: the browser's own buttons, pressed on the
    next pass (want_hist). */
 static int want_hist;                 /* how far to move, when hist_go is set */
@@ -3497,6 +3509,7 @@ static void build(const char *html, int len, int width, int want_sheets,
         jsdom_image_pixels_with(image_pixels);
         jsdom_scroll_with(script_scroll);
         jsdom_navigate_with(script_navigate);
+        jsdom_windows_with(script_open_window);
         jsdom_submit_with(submit_form);
         jsdom_cookies_with(script_cookies, script_set_cookie);
         jsdom_websockets_with(socket_cookies);

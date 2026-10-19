@@ -12,6 +12,8 @@ one for ADDRESS"); each step waits for that, then counts the screen.
   - ctrl and a click on the same link does the same;
   - ctrl and a click on the router's link gets past the router, since the
     page is told ctrl was held, and opens c;
+  - a click on a block whose script calls window.open opens b in a new
+    window (a window asked for in the reader's click, and only then);
   - ctrl+N opens the start page in a new window.
 
   python tools/opencheck.py [--keep]
@@ -35,6 +37,7 @@ BLUE = (0x30, 0x50, 0xE0)               # page b
 YELLOW = (0xE0, 0xC0, 0x20)             # page c
 TO_B = (0x30, 0xC0, 0x70)               # page a's link to b
 TO_C = (0xC0, 0x70, 0xC0)               # and its router's link to c
+TO_OPEN = (0x40, 0x80, 0xC0)            # and a block whose script opens b
 KEPT = (0x70, 0x70, 0x70)               # page a once its router kept a click
 NAMED = {" ": "spc", "/": "slash", ".": "dot", "-": "minus", "\n": "ret"}
 
@@ -43,10 +46,13 @@ body { margin: 0; background: #e03040; min-height: 600px }
 a { display: block; height: 150px; margin: 20px; color: white }
 #tob { background: #30c070 }
 #toc { background: #c070c0 }
+#tow { height: 100px; margin: 20px; background: #4080c0 }
 </style></head><body>
 <a id="tob" href="b.htm">to b</a>
 <a id="toc" href="c.htm">to c</a>
+<div id="tow">opens b</div>
 <script>
+document.getElementById("tow").addEventListener("click", function () { window.open("b.htm"); });
 document.getElementById("toc").addEventListener("click", function (e) {
   if (!e.ctrlKey) { e.preventDefault(); document.body.style.background = "#707070"; }
 });
@@ -191,6 +197,19 @@ def main():
             mon.send("sendkey alt-q", settle=1.0)
         time.sleep(2.0)
         page_a_whole("open-router-closed")
+
+        # window.open in the page's own click handler.
+        mark = len(vm.serial())
+        at = centre(TO_OPEN)
+        if at:
+            mon.click(at[0], at[1])
+        told = said_since(mark, "browser window: a new one for file:///home/open/b.htm", 30)
+        came = said_since(mark, "browser: file:///home/open/b.htm -- page b", 60)
+        c.add("a page's window.open in the reader's click opens a new window", bool(at) and told and came)
+        if told:
+            mon.send("sendkey alt-q", settle=1.0)
+        time.sleep(1.0)
+        page_a_whole("open-script-closed")
 
         # ctrl+N.
         mark = len(vm.serial())

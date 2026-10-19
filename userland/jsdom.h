@@ -4954,6 +4954,11 @@ static void (*jd_navigate)(const char *url, int replace);
    ctrl to the browser, which opens it in a window of its own. */
 static int jd_click_ctrl, jd_click_shift;
 
+/* While the reader's own click or key is being told to the page: the only
+   time window.open may open a window (jswin.h), as a browser's popup
+   blocker has it; spent by the first window it opens. */
+static int jd_activation;
+
 static int jd_fire_click(int node, int trusted, int x, int y) {
     if (!jd_open || node < 0 || jd_spent()) return 0;
     jobj *ev = jd_new_event(jd_evkind("MouseEvent"), "click", 1, 1);
@@ -4978,7 +4983,10 @@ static int jd_fire_click(int node, int trusted, int x, int y) {
     js_set(&jd_J, ev, "ctrlKey", js_bool(trusted && jd_click_ctrl));
     js_set(&jd_J, ev, "shiftKey", js_bool(trusted && jd_click_shift));
     jval tv = jd_el_value(&jd_J, node);
+    int was = jd_activation;
+    if (trusted) jd_activation = 1;
     int prevented = jd_dispatch_to(ev, tv, tv);
+    jd_activation = was;
     if (trusted || prevented) return prevented;
 
     /* What a click does, for one a script asked for. */
@@ -6434,8 +6442,11 @@ __attribute__((unused)) static int jsdom_key_down(u32 raw) {
     if (!jd_open || jd_spent()) return 0;
     jd_keyinfo ki;
     jd_key_info(raw, &ki);
-    if (jd_key_event("keydown", &ki, 0)) return 1;
-    return ki.charcode && !ki.ctrl && jd_key_event("keypress", &ki, 1);
+    int was = jd_activation, kept;
+    jd_activation = 1;
+    kept = jd_key_event("keydown", &ki, 0) || (ki.charcode && !ki.ctrl && jd_key_event("keypress", &ki, 1));
+    jd_activation = was;
+    return kept;
 }
 
 /* keyup, once the browser has done what the key does. */

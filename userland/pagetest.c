@@ -530,6 +530,13 @@ static void media_passes(int max) {
 
 /* Where the page sent the browser, and what address it said it was at. */
 static char went[512], moved[512];
+static char opened[256];
+static void fake_open(const char *url) {
+    int w = 0;
+    for (const char *p = url; *p && w < (int)sizeof(opened) - 1; p++) opened[w++] = *p;
+    opened[w] = 0;
+}
+
 static void fake_navigate(const char *url, int replace) {
     int w = 0;
     for (const char *p = replace ? "replace " : "go "; *p; p++) went[w++] = *p;
@@ -873,6 +880,29 @@ int main(void) {
             content_of(dom_by_id(&page, "out")), "true false");
         ok("a plain click it keeps for itself", jsdom_click(dom_by_id(&page, "a")) == 1);
         oks("and that one held neither", content_of(dom_by_id(&page, "out")), "false false");
+    }
+    /* window.open opens a window only in the reader's own click or key, as
+       a popup blocker has it, and one a click. */
+    {
+        jsdom_at("https://site.test/dir/page");
+        opened[0] = 0;
+        jsdom_windows_with(fake_open);
+        load("<body><p id=early>none</p><p id=out>none</p>"
+             "<button id=b onclick=\"var w = window.open('next', '_blank');"
+             " document.getElementById('out').textContent = (w === null) + ' ' + (w && w.closed);"
+             " window.open('again');\">open</button>"
+             "<script>document.getElementById('early').textContent = String(window.open('/at-load'));</script></body>");
+        char err[128];
+        int changed = 0;
+        run_scripts(&page, err, (int)sizeof(err), &changed);
+        ok("a window asked for as the page loads is refused, and none opens",
+           opened[0] == 0 && w_same(content_of(dom_by_id(&page, "early")), "null"));
+        jsdom_click(dom_by_id(&page, "b"));
+        oks("one asked for in the reader's click opens, at its address made whole, and only the first",
+            opened, "https://site.test/dir/next");
+        oks("and the page is given something that stands for it", content_of(dom_by_id(&page, "out")), "false false");
+        jsdom_windows_with(0);
+        jsdom_at("");
     }
 
     {

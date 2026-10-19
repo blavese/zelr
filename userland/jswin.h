@@ -1334,6 +1334,30 @@ static jval nat_css_escape(jctx *J, jval t, jval *a, int n) {
  * nothing, which is what the standard has a browser do when it cannot show
  * them. There is one window, so open() gives null, as it does when a
  * browser blocks one. */
+/* window.open: a window of its own for the address, through the browser
+   (jsdom_windows_with), when the reader's click or key is being told to the
+   page and not otherwise; null when refused. What it gives back stands for
+   the other window and can do nothing to it: each is a program of its own. */
+static void (*jd_open_window)(const char *url);
+void jsdom_windows_with(void (*fn)(const char *url)) { jd_open_window = fn; }
+
+static jval nat_win_open(jctx *J, jval t, jval *a, int n) {
+    (void)t;
+    if (!jd_activation || !jd_open_window || n < 1) return js_null();
+    jstr *href = js_to_str(J, a[0]);
+    char out[URL_TEXT + 256];
+    if (!href || !href->len || !jd_resolve(href->s, out, (int)sizeof(out))) return js_null();
+    jd_activation = 0;                       /* one window a click */
+    jd_open_window(out);
+    jobj *w = js_object(J, JO_PLAIN);
+    js_set(J, w, "closed", js_bool(0));
+    js_set(J, w, "opener", js_null());
+    js_set(J, w, "close", js_from_obj(js_native_n(J, "close", nat_nothing_js, 0)));
+    js_set(J, w, "focus", js_from_obj(js_native_n(J, "focus", nat_nothing_js, 0)));
+    js_set(J, w, "blur", js_from_obj(js_native_n(J, "blur", nat_nothing_js, 0)));
+    return js_from_obj(w);
+}
+
 static jval nat_alert(jctx *J, jval t, jval *a, int n) {
     (void)J; (void)t; (void)a; (void)n;
     return js_undef();
@@ -2170,7 +2194,7 @@ static void jd_setup_window_more(jctx *J) {
     js_declare(J, g, js_str(J, "alert"), js_from_obj(js_native_n(J, "alert", nat_alert, 0)));
     js_declare(J, g, js_str(J, "confirm"), js_from_obj(js_native_n(J, "confirm", nat_confirm, 0)));
     js_declare(J, g, js_str(J, "prompt"), js_from_obj(js_native_n(J, "prompt", nat_null_getter, 0)));
-    js_declare(J, g, js_str(J, "open"), js_from_obj(js_native_n(J, "open", nat_null_getter, 0)));
+    js_declare(J, g, js_str(J, "open"), js_from_obj(js_native_n(J, "open", nat_win_open, 0)));
     static const char *const QUIET[] = { "close", "focus", "blur", "print", "stop", 0 };
     for (int i = 0; QUIET[i]; i++) js_declare(J, g, js_str(J, QUIET[i]), js_from_obj(js_native_n(J, QUIET[i], nat_nothing_js, 0)));
     js_declare(J, g, js_str(J, "postMessage"), js_from_obj(js_native_n(J, "postMessage", nat_post_message, 1)));
