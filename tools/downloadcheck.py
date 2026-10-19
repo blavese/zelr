@@ -13,7 +13,9 @@ server that does not do ranges does. On a 64 MB volume:
     system refuses a write past a megabyte), are saved: they were "not
     saved";
   - whole.bin is not saved, and the browser says why;
-  - big.bin is saved, all of it, the console says so, the server was asked
+  - big.bin is saved, all of it, saying how far it has got as it goes
+    ("saving big.bin: 8 of 12 MB", drawn in the window and on the console),
+    the console says so when it is done, the server was asked
     for the rest in stretches from where the first part ended, and the file
     read off the disk image here is the server's, byte for byte.
 
@@ -94,6 +96,8 @@ def main():
             line = [ln for ln in vm.serial()[mark:].splitlines() if ln.startswith("browser: ") and "big.bin" in ln]
             c.add("one it sends in parts is saved, all of it, and read back (%s)" % (line[-1] if line else "nothing"),
                   saved)
+            c.add("and says how far it has got as it goes",
+                  "browser bar: saving big.bin: 8 of 12 MB" in vm.serial()[mark:])
             asked = srv.ranges()
             joined = bool(asked) and asked[-1][1] == len(BIG_BIN) - 1 and all(
                 asked[i][1] + 1 == asked[i + 1][0] for i in range(len(asked) - 1))

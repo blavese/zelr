@@ -62,6 +62,8 @@
  * the data its script draws from, and the buffer is mapped, so a page pays
  * only for what it uses (the comment above `src`). */
 #define SRC_MAX    (8 * 1024 * 1024)
+/* The bar of buttons and the address across the top of the window. */
+#define TOOLBAR_H (UI_PAD + UI_BTN_H + UI_PAD)
 #define DOC_ARENA  (2 * SRC_MAX)
 /* A sheet may be 4 MB: Ubuntu's is 1.1 MB, and cut at a megabyte the rule
    that hides its six notices was never read, so all six were drawn. The
@@ -3729,6 +3731,39 @@ static u32 sum_on(u32 sum, const char *p, int n) {
     return (b << 16) | a;
 }
 
+/* How far a download in stretches has got: drawn in the window, which
+   otherwise waits with nothing in it until all of it has come, and said on
+   the console for anything driving the machine over its serial line
+   ("browser bar:", not "browser:", which is a page's). */
+static void saving_shown(const char *name, long long at, long long total) {
+    char line[160];
+    int w = 0;
+    for (const char *p = "saving "; *p; p++) line[w++] = *p;
+    for (const char *p = name; *p && w < 100; p++) line[w++] = *p;
+    for (const char *p = ": "; *p; p++) line[w++] = *p;
+    char n[24];
+    number_into(n, (int)((at + (1 << 19)) >> 20));          /* to the nearest megabyte */
+    for (const char *p = n; *p; p++) line[w++] = *p;
+    for (const char *p = " of "; *p; p++) line[w++] = *p;
+    number_into(n, (int)((total + (1 << 19)) >> 20));
+    for (const char *p = n; *p; p++) line[w++] = *p;
+    for (const char *p = " MB"; *p; p++) line[w++] = *p;
+    line[w] = 0;
+    puts("browser bar: ");
+    puts(line);
+    putc('\n');
+    int win = browser_win;
+    int ww = win_width(win), wh = win_height(win);
+    u32 *px = win_surface(win);
+    if (!px || ww <= 0 || wh <= 0) return;
+    surface s = { px, ww, wh };
+    ui_theme t = ui_load_theme();
+    fill(&s, t.bg);
+    ui_toolbar(&s, &t, ww, TOOLBAR_H);
+    ui_label(&s, &t, UI_PAD, TOOLBAR_H + 20, line);
+    win_commit(win);
+}
+
 static int save_download_rest(url_t *u, const response_t *first, const char *name, char *path, int cap) {
     char clen[24];
     long long total = -1;
@@ -3745,6 +3780,7 @@ static int save_download_rest(url_t *u, const response_t *first, const char *nam
     long long at = first->len;
     int why = 0;
     while (ok && at < total) {
+        saving_shown(name, at, total);
         long long to = at + RANGE_STEP - 1;
         if (to >= total) to = total - 1;
         char range[80];
@@ -5193,8 +5229,6 @@ static void draw_page(surface *s, int ox, int oy, int vw, int vh) {
 }
 
 /* --- the window ----------------------------------------------------------- */
-
-#define TOOLBAR_H (UI_PAD + UI_BTN_H + UI_PAD)
 
 static char address[URL_TEXT];
 static ui_field bar = { address, sizeof(address), 0, 0, 0, 0 };
