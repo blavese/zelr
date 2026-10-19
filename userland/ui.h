@@ -366,6 +366,10 @@ typedef struct {
     u32  keys[UI_KEYS];   /* and all of them, in the order they arrived */
     int  nkeys;
     int  scroll;          /* wheel, in rows, positive is down */
+    int  middle_down;     /* the middle button is held */
+    int  middle_pressed;  /* it went down this frame */
+    int  middle_released; /* it came up this frame */
+    int  ctrl, shift;     /* held as the last press began (WIN_BTN_CTRL, _SHIFT) */
 } ui_input;
 
 /* --- waiting for the next frame --------------------------------------------
@@ -402,6 +406,7 @@ static inline void ui_wait(int win) {
 
 static inline void ui_begin(ui_input *in) {
     in->pressed = in->released = in->right_pressed = 0;
+    in->middle_pressed = in->middle_released = 0;
     in->key = 0;
     in->nkeys = 0;
     in->scroll = 0;
@@ -418,6 +423,14 @@ static inline void ui_feed(ui_input *in, const win_event *ev) {
         if (!now && in->down) in->released = 1;
         in->down = now;
         if (ev->buttons & WIN_BTN_RIGHT) in->right_pressed = 1;
+        int mid = (ev->buttons & WIN_BTN_MIDDLE) != 0;
+        if (mid && !in->middle_down) in->middle_pressed = 1;
+        if (!mid && in->middle_down) in->middle_released = 1;
+        in->middle_down = mid;
+        if (ev->buttons & WIN_BTN_DOWN) {
+            in->ctrl = (ev->buttons & WIN_BTN_CTRL) != 0;
+            in->shift = (ev->buttons & WIN_BTN_SHIFT) != 0;
+        }
     } else if (ev->type == WIN_EV_KEY) {
         /* The first one, not the last. A program that reads in->key and
            nothing else then acts on the key that arrived first, which is the

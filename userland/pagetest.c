@@ -856,6 +856,24 @@ int main(void) {
         ok("and one that merely looks at it does not",
            jsdom_click(dom_by_id(&page, "a")) == 0);
     }
+    /* A click with ctrl held says so: a page's router keeps a plain click
+       for itself and leaves that one to the browser, which opens the link
+       in a window of its own. */
+    {
+        load("<body><a id=a href='/next'>go</a><p id=out>none</p>"
+             "<script>document.getElementById('a').addEventListener('click', function (e) {"
+             " document.getElementById('out').textContent = e.ctrlKey + ' ' + e.shiftKey;"
+             " if (!e.ctrlKey) e.preventDefault(); });</script></body>");
+        char err[128];
+        int changed = 0;
+        run_scripts(&page, err, (int)sizeof(err), &changed);
+        ok("a click with ctrl held is left to the browser by a page's router",
+           jsdom_click_with(dom_by_id(&page, "a"), 0, 0, 1, 0) == 0);
+        oks("and the page is told ctrl was held, and not shift",
+            content_of(dom_by_id(&page, "out")), "true false");
+        ok("a plain click it keeps for itself", jsdom_click(dom_by_id(&page, "a")) == 1);
+        oks("and that one held neither", content_of(dom_by_id(&page, "out")), "false false");
+    }
 
     {
         load("<body><div id=outer><span id=inner>x</span></div><p id=out>no</p>"

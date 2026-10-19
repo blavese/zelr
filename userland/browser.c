@@ -4806,6 +4806,21 @@ static int draw_video_frames(surface *win_s, int win, int view_x, int view_y, in
 static char announce_at[URL_TEXT];
 static int  announce_owed, pics_relayout, pics_laid_at;
 
+/* Another browser, on an address or (0) the start page: a program of its
+   own, so each window's page, scripts and memory are its own, and closing
+   one leaves the rest. */
+static void open_window(const char *address) {
+    if (spawn_arg("/bin/browser", address) < 0) {
+        say("a new window could not be started", 0);
+        puts("browser: a new window could not be started\n");
+        return;
+    }
+    say("opened in a new window: ", address ? address : START_ADDRESS);
+    puts("browser: a new window for ");
+    puts(address ? address : START_ADDRESS);
+    putc('\n');
+}
+
 static void announce_page(void) {
     announce_owed = 0;
     puts("browser: ");
@@ -4962,6 +4977,12 @@ int main(int argc, char **argv) {
                 if (focus_node >= 0) give_focus(-1);
                 bar.focused = 1;
                 bar_fresh = 1;
+                dirty = 1;
+                continue;
+            }
+            /* ctrl+N is another window, on the start page. */
+            if (KEY_CTRL(raw) && key_ctrl_letter(raw) == 'n') {
+                open_window(0);
                 dirty = 1;
                 continue;
             }
@@ -5169,7 +5190,8 @@ int main(int argc, char **argv) {
          * the half a frame anybody can catch is a window with its toolbar and
          * part of a page rather than a page with no window around it. */
         if (in.mx != last_mx || in.my != last_my) dirty = 1;
-        if (in.nkeys || in.pressed || in.released || scrolled) dirty = 1;
+        if (in.nkeys || in.pressed || in.released || in.middle_pressed || in.middle_released || scrolled)
+            dirty = 1;
         if (scroll != last_scroll || want_load) dirty = 1;
         last_mx = in.mx;
         last_my = in.my;
@@ -5280,7 +5302,7 @@ int main(int argc, char **argv) {
          * navigated first would run the handler on a page that was already
          * leaving. */
         if (in.released && node_under >= 0 && jsdom_live()) {
-            int stop = jsdom_click_at(node_under, dx, in.my - view_y);
+            int stop = jsdom_click_with(node_under, dx, in.my - view_y, in.ctrl, in.shift);
 
             /* A handler that changed the document changed what is on the
                screen, and nothing else in this loop would notice: the
@@ -5368,6 +5390,22 @@ int main(int argc, char **argv) {
             && (node_under < 0
                 || lay_control_kind(&doc, node_under) == CTL_NONE))
             give_focus(-1);
+
+        /* A link with the middle button, or clicked with ctrl held, opens
+           in a window of its own, and this page stays where it is. The page
+           has had a ctrl click already, told it was one, and may have kept
+           it; a middle click is never a page's click. */
+        if (over_link >= 0 && (in.middle_released || (in.released && in.ctrl))) {
+            in.released = 0;
+            url_t next;
+            const char *href = page.text + page.links[over_link].href;
+            if (!w_starts_fold(href, "play:") && link_target(over_link, &next)) {
+                char text_of[URL_TEXT];
+                url_text(&next, text_of, sizeof(text_of));
+                open_window(text_of);
+                dirty = 1;
+            }
+        }
 
         if (over_link >= 0 && in.released) {
             in.released = 0;

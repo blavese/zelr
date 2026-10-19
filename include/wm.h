@@ -57,6 +57,16 @@ typedef struct {
     u32 key;
 } wm_event_t;
 
+/* What `buttons` holds, the bits a program knows as WIN_BTN_* (abicheck
+   compares them): the mouse's three buttons, and on the event that starts a
+   press, DOWN with the modifiers held as it began. */
+#define WM_BTN_LEFT   0x01
+#define WM_BTN_RIGHT  0x02
+#define WM_BTN_MIDDLE 0x04
+#define WM_BTN_CTRL   0x10
+#define WM_BTN_SHIFT  0x20
+#define WM_BTN_DOWN   0x80
+
 #define WM_EVENT_QUEUE 32
 
 /* Buttons are the raw PS/2 bitmask: bit 0 left, bit 1 right. */
@@ -226,3 +236,7 @@ int  wm_icons_right(void);
 /* The height a window has to live in: the screen, less the panel when the
    panel is resting on the bottom of it. */
 int  wm_work_height(void);
+
+/* Whether a window on the screen already has its corner within a few pixels
+   of (x, y), so a new one would open exactly over it. */
+bool wm_corner_taken(int x, int y);

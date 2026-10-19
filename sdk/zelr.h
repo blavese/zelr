@@ -930,10 +930,15 @@ static inline int power_reboot(void) {
 #define WIN_EV_FIND   6
 
 /* Bit 7 of buttons is set on the event that started a press, so a program
-   can tell a new stroke from the middle of one. */
-#define WIN_BTN_LEFT  0x01
-#define WIN_BTN_RIGHT 0x02
-#define WIN_BTN_DOWN  0x80
+   can tell a new stroke from the middle of one. That event also says
+   whether ctrl or shift was held as the press began: a link opened in a
+   window of its own, a choice added to. */
+#define WIN_BTN_LEFT   0x01
+#define WIN_BTN_RIGHT  0x02
+#define WIN_BTN_MIDDLE 0x04
+#define WIN_BTN_CTRL   0x10
+#define WIN_BTN_SHIFT  0x20
+#define WIN_BTN_DOWN   0x80
 
 typedef struct {
     u32 type;

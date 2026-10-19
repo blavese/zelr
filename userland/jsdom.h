@@ -4949,6 +4949,11 @@ static void (*jd_navigate)(const char *url, int replace);
 /* A click: from the browser (trusted, and the browser does what a click
    does itself afterwards: follows the link, ticks the box) or from a
    script's click(), after which this does it. */
+/* What was held as the reader's click began (jsdom_click_with), told to the
+   page as ctrlKey and shiftKey: a page's router leaves a link clicked with
+   ctrl to the browser, which opens it in a window of its own. */
+static int jd_click_ctrl, jd_click_shift;
+
 static int jd_fire_click(int node, int trusted, int x, int y) {
     if (!jd_open || node < 0 || jd_spent()) return 0;
     jobj *ev = jd_new_event(jd_evkind("MouseEvent"), "click", 1, 1);
@@ -4970,6 +4975,8 @@ static int jd_fire_click(int node, int trusted, int x, int y) {
     js_set(&jd_J, ev, "offsetX", js_num(x - bx));
     js_set(&jd_J, ev, "offsetY", js_num(y - by));
     js_set(&jd_J, ev, "which", js_num(1));
+    js_set(&jd_J, ev, "ctrlKey", js_bool(trusted && jd_click_ctrl));
+    js_set(&jd_J, ev, "shiftKey", js_bool(trusted && jd_click_shift));
     jval tv = jd_el_value(&jd_J, node);
     int prevented = jd_dispatch_to(ev, tv, tv);
     if (trusted || prevented) return prevented;
@@ -6253,6 +6260,14 @@ static void jsdom_loaded(void) {
    the page asked for the ordinary consequence -- following a link -- not to
    follow. */
 __attribute__((unused)) static int jsdom_click_at(int node, int x, int y) { return jd_fire_click(node, 1, x, y); }
+/* The same with what was held as it began. */
+__attribute__((unused)) static int jsdom_click_with(int node, int x, int y, int ctrl, int shift) {
+    jd_click_ctrl = ctrl;
+    jd_click_shift = shift;
+    int r = jd_fire_click(node, 1, x, y);
+    jd_click_ctrl = jd_click_shift = 0;
+    return r;
+}
 __attribute__((unused)) static int jsdom_click(int node) { return jd_fire_click(node, 1, 0, 0); }
 
 /* What the reader did to a form, told to the page as it happens: typing

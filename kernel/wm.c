@@ -825,6 +825,16 @@ static int work_h(void) {
 
 int wm_work_height(void) { return work_h(); }
 
+bool wm_corner_taken(int x, int y) {
+    for (int i = 0; i < nwin; i++) {
+        const window_t *w = stack[i];
+        if (w->minimized) continue;
+        int dx = w->x - x, dy = w->y - y;
+        if (dx > -8 && dx < 8 && dy > -8 && dy < 8) return true;
+    }
+    return false;
+}
+
 /* The topmost window covering the whole screen, or -1.
  *
  * Nothing below one is drawn and neither is the wallpaper: all of it would
@@ -3869,9 +3879,16 @@ static bool on_find_button(int mx, int my) {
     return mx >= x && mx < x + FIND_W;
 }
 
+/* The modifiers held as a press begins, for the event a program is given:
+   ctrl on a link opens it in a window of its own. */
+static u32 held_mods(void) {
+    return (kbd_ctrl() ? WM_BTN_CTRL : 0) | (kbd_shift() ? WM_BTN_SHIFT : 0);
+}
+
 static void handle_mouse(int mx, int my, u8 buttons) {
     bool pressed_now = (buttons & 1) && !(last_buttons & 1);
     bool right_now   = (buttons & 2) && !(last_buttons & 2);
+    bool middle_now  = (buttons & WM_BTN_MIDDLE) && !(last_buttons & WM_BTN_MIDDLE);
 
     /* The button that started the hold, or the left one when nothing is
        held, which is what a release meant before there was a choice. */
@@ -4091,6 +4108,25 @@ static void handle_mouse(int mx, int my, u8 buttons) {
         return;
     }
 
+    /* The middle button is a program's alone: a press on a window's
+       contents raises it and is handed to it, held until it comes up, and
+       anywhere else -- a title bar, the desktop, the dock -- it does
+       nothing. It was dropped everywhere, so a program never saw it. */
+    if (middle_now && !pressed_now && !right_now) {
+        if (menu_open || ctx_open) return;
+        bool title = false;
+        button_t b = BTN_NONE;
+        window_t *mw = window_at(mx, my, &title, &b);
+        if (!mw || title || b != BTN_NONE || on_grip(mw, mx, my) || !mw->owned_by_user) return;
+        wm_raise(mw);
+        mouse_capture = mw;
+        held_button = WM_BTN_MIDDLE;
+        wm_event_t ev = { WM_EV_MOUSE, mx - (mw->x + WM_BORDER), my - (mw->y + WM_TOP),
+                          buttons | WM_BTN_DOWN | held_mods(), 0 };
+        wm_push_event(mw, &ev);
+        return;
+    }
+
     if (!pressed_now && !right_now) return;
 
     bool on_title = false;
@@ -4230,8 +4266,8 @@ static void handle_mouse(int mx, int my, u8 buttons) {
     {
         int lx = mx - (w->x + WM_BORDER), ly = my - (w->y + WM_TOP);
         if (w->owned_by_user) {
-            wm_event_t ev = { WM_EV_MOUSE, lx, ly, buttons | 0x80, 0 };
-            wm_push_event(w, &ev);          /* 0x80 marks the initial press */
+            wm_event_t ev = { WM_EV_MOUSE, lx, ly, buttons | WM_BTN_DOWN | held_mods(), 0 };
+            wm_push_event(w, &ev);          /* DOWN marks the initial press */
         } else if (w->on_mouse) {
             w->on_mouse(w, lx, ly, buttons, true);
         }

@@ -243,6 +243,14 @@ int winsrv_create(u32 pid, const char *title, int cw, int ch) {
     if (y > maxy) y = maxy;
     if (x < 0) x = 0;
     if (y < 0) y = 0;
+    /* And a window too big for the cascade is pulled back to the same
+       corner every time, so a second browser opened exactly over the first
+       and looked like nothing had happened. Stepped back up and left from
+       there while a window already has that corner. */
+    for (int tries = 0; tries < 5 && (x > 0 || y > 0) && wm_corner_taken(x, y); tries++) {
+        x = x > 48 ? x - 48 : 0;
+        y = y > 38 ? y - 38 : 0;
+    }
     window_t *w = wm_create(title, x, y, cw, ch);
     if (!w) { kfree(raw); kfree(shown_raw); return -1; }
 

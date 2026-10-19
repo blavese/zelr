@@ -428,7 +428,8 @@ class Monitor:
             at_y += dy
         time.sleep(0.2)
 
-    def click(self, x, y):
+    def click(self, x, y, button=1):
+        """`button` is QEMU's: 1 the left, 2 the right, 4 the middle."""
         self.move_to(x, y)
 
         # And then check it got there, walking again if it did not.
@@ -459,7 +460,7 @@ class Monitor:
         # is a click it never sees: the button state it reads is the state
         # before, and then the state after, and nothing in between ever
         # happened as far as it is concerned.
-        self.send("mouse_button 1", settle=0.4)
+        self.send("mouse_button %d" % button, settle=0.4)
         self.send("mouse_button 0", settle=0.5)
 
     def click_for(self, x, y, name, want, timeout=20.0, tries=3):

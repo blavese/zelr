@@ -23,6 +23,10 @@ build notices, because each header compiles perfectly on its own.
 Both kinds were found by looking at a screen and wondering why it was
 wrong. This reads both headers instead, and takes a minute of nobody's time.
 
+A window's events are the same kind of thing, kept in include/wm.h: their
+kinds and the bits of their buttons (WM_EV_*, WM_BTN_*) are what a program
+reads as WIN_EV_* and WIN_BTN_*.
+
   python tools/abicheck.py
 """
 import io
@@ -34,6 +38,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from harness import Checks, ROOT                         # noqa: E402
 
 KERNEL = os.path.join(ROOT, "include", "syscall.h")
+WM = os.path.join(ROOT, "include", "wm.h")
 USER = os.path.join(ROOT, "sdk", "zelr.h")
 
 # The kernel's name for each shared struct, and the program's name for it.
@@ -137,12 +142,29 @@ def check_numbers(c, ktext, utext):
     c.add("no two calls share a number", not clash)
 
 
+def window_names(text, prefix):
+    """{NAME: value} for every #define PREFIX_NAME with a number, hex or not."""
+    return dict((n, int(v, 0)) for n, v in re.findall(
+        r"#define\s+" + prefix + r"([A-Z0-9_]+)\s+(0x[0-9A-Fa-f]+|\d+)\b", text))
+
+
+def check_window(c, wtext, utext):
+    for what, k, u in (("kinds", "WM_EV_", "WIN_EV_"), ("button bits", "WM_BTN_", "WIN_BTN_")):
+        kn, un = window_names(wtext, k), window_names(utext, u)
+        for n in sorted(set(kn) | set(un)):
+            if kn.get(n) != un.get(n):
+                print("  %s%s is %s to the kernel and %s%s %s to a program"
+                      % (k, n, kn.get(n, "missing"), u, n, un.get(n, "missing")))
+        c.add("a window event's %s are the same on both sides" % what, bool(kn) and kn == un)
+
+
 def main():
     ktext = strip_comments(io.open(KERNEL, encoding="utf-8").read())
     utext = strip_comments(io.open(USER, encoding="utf-8").read())
     c = Checks("the two sides of the syscall")
 
     check_numbers(c, ktext, utext)
+    check_window(c, strip_comments(io.open(WM, encoding="utf-8").read()), utext)
 
     for kname, uname in PAIRS:
         kbody, ubody = body_of(ktext, kname), body_of(utext, uname)
