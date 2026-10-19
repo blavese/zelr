@@ -252,6 +252,12 @@
    programs already built hand over at its old size. */
 #define SYS_FILE_TIMES    72
 
+/* A line the desktop shows above the dock for a few seconds, as it says
+   where Print Screen put the screen (SYS_NOTICE, rbx the text: at most 111
+   bytes before its end). The console has it too. -1 when there is no
+   desktop to show it, or no end to the text in time. */
+#define SYS_NOTICE        73
+
 typedef struct {
     u16 year, made_year;
     u8  month, day, hour, minute, second;

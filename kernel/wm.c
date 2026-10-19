@@ -2664,6 +2664,13 @@ static void notice(const char *text) {
     notice_damage();
 }
 
+bool wm_notice(const char *text) {
+    if (!running) return false;
+    kprintf("notice: %s\n", text);
+    notice(text);
+    return true;
+}
+
 static void draw_notice(void) {
     if (!notice_until) return;
     const theme_t *t = theme();

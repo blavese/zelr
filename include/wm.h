@@ -217,6 +217,10 @@ void wm_run(void);
 void wm_quit(void);
 bool wm_active(void);
 
+/* A line shown above the dock for a few seconds, and on the console: false
+   when the desktop is not running. */
+bool wm_notice(const char *text);
+
 void wm_push_event(window_t *w, const wm_event_t *ev);
 bool wm_pop_event(window_t *w, wm_event_t *out);
 

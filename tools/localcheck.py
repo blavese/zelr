@@ -21,7 +21,10 @@ pictures are the colours playcheck counts. Files calls it a film.
 Then a page from the web server on this side whose script fetches a file
 from the machine and paints itself red if it got one and blue if it was
 refused, and which shows a picture of one, green if it were drawn. It must
-come out blue with no green.
+come out blue with no green. And a file the server says to keep is saved
+to /home/downloads, which the browser says in a notice above the dock
+(SYS_NOTICE): on the console, and on the screen, where the band above the
+dock changes when the notice goes a few seconds later and then stays.
 
   python tools/localcheck.py [--keep]
 """
@@ -37,6 +40,7 @@ from harness import Guest, Checks, build_once, count_in, ROOT          # noqa: E
 from webserver import Server                                           # noqa: E402
 from genmedia import muxed_file                                        # noqa: E402
 from playcheck import colours_seen                                     # noqa: E402
+from printcheck import ABOVE_DOCK, crop                                # noqa: E402
 
 TOOLS = os.path.dirname(os.path.abspath(__file__))
 IMAGE = os.path.join(ROOT, "localcheck.%d.img" % os.getpid())
@@ -211,6 +215,23 @@ def main():
                   % (count_in(px, w, SCREEN, RED), count_in(px, w, SCREEN, BLUE)),
                   seen and refused and count_in(px, w, SCREEN, RED) < 100, shot)
             c.add("and a picture of one is not drawn", count_in(px, w, SCREEN, GREEN) < 50, shot)
+
+            # A download, said in a notice above the dock.
+            mark = len(vm.serial())
+            mon.send("sendkey ctrl-l", settle=0.3)
+            keys("http://%s/dl/report.bin\n" % srv.host)
+            told = said_since(mark, "notice: saved report.bin in /home/downloads", 60)
+            time.sleep(1.0)                     # the page that says it is drawn
+            w, h, px, shot = mon.screen("local-notice")
+            shown = crop(px, w, ABOVE_DOCK)
+            _, _, _, shot2, went = mon.wait_screen(
+                "local-notice-gone", lambda w, h, px: crop(px, w, ABOVE_DOCK) != shown, timeout=15)
+            w, h, px, _ = mon.screen("local-notice-gone2")
+            gone = crop(px, w, ABOVE_DOCK)
+            time.sleep(1.5)
+            w, h, px, _ = mon.screen("local-notice-after")
+            c.add("a download is said in a notice above the dock, which goes again",
+                  told and went and crop(px, w, ABOVE_DOCK) == gone, shot)
             mon.send("sendkey alt-q", settle=1.0)
 
             # Files, which sent a page to the text editor.

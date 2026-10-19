@@ -4447,6 +4447,15 @@ static void load(const char *address, int width, int keep_scroll) {
                 said[w] = 0;
                 show_message("Saved", said, width);
                 say("saved ", said);
+                /* Said on the desktop too: the page that says so is gone as
+                   soon as anything else is opened. */
+                static char told[160];
+                int k = 0;
+                for (const char *p = "saved "; *p; p++) told[k++] = *p;
+                for (const char *p = name; *p && k < 80; p++) told[k++] = *p;
+                for (const char *p = " in " DOWNLOADS; *p; p++) told[k++] = *p;
+                told[k] = 0;
+                desktop_notice(told);
             }
         }
         w_copy(title, sizeof(title), name, sizeof(title));

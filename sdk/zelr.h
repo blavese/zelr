@@ -8,7 +8,7 @@
  * reason. See NOTICE in the repository this came from.
  */
 
-/* The entire user-facing interface: seventy-two system calls and a little
+/* The entire user-facing interface: seventy-three system calls and a little
    sugar. Nothing is linked in from the kernel; every call below crosses the
    ring boundary through int 0x80.
  *
@@ -219,6 +219,12 @@ typedef long long          zelr_word;
    fails for them. A call of its own rather than more of zelr_stat, which
    programs already built hand over at its old size. */
 #define SYS_FILE_TIMES    72
+
+/* A line the desktop shows above the dock for a few seconds, as it says
+   where Print Screen put the screen (SYS_NOTICE, rbx the text: at most 111
+   bytes before its end). The console has it too. -1 when there is no
+   desktop to show it, or no end to the text in time. */
+#define SYS_NOTICE        73
 
 typedef struct {
     u16 year, made_year;
@@ -541,6 +547,11 @@ static inline int sock_state(int sock) {
 /* 0 with the times filled in, -1 when the path has none (see zelr_times). */
 static inline int file_times(const char *path, zelr_times *out) {
     return syscall(SYS_FILE_TIMES, (zelr_word)path, (zelr_word)out, 0);
+}
+
+/* 0 when the desktop shows it (see SYS_NOTICE). */
+static inline int desktop_notice(const char *text) {
+    return syscall(SYS_NOTICE, (zelr_word)text, 0, 0);
 }
 
 static inline int resolve(const char *host, u32 *out) {

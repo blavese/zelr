@@ -1553,6 +1553,24 @@ static void spawn_run_first(u32 pid) {
     }
 }
 
+/* A notice asked for by a program while there is no desktop to show it:
+   refused. Leaves with what the call answered, plus two. */
+static const u8 notice_asker[] = {
+    0x48, 0x8D, 0x1D, 0x11, 0, 0, 0,   /* lea rbx, [rip + 17]: the words below */
+    0xB8, SYS_NOTICE, 0, 0, 0,         /* mov eax, SYS_NOTICE */
+    0xCD, 0x80,                        /* int 0x80 */
+    0x8D, 0x58, 0x02,                  /* lea ebx, [rax + 2] */
+    0xB8, SYS_EXIT, 0, 0, 0,           /* mov eax, SYS_EXIT */
+    0xCD, 0x80,                        /* int 0x80 */
+    'h', 'e', 'l', 'l', 'o', 0,
+};
+
+static void test_notice_call(void) {
+    int pid = user_spawn_flat("selftest-notice", notice_asker, sizeof(notice_asker));
+    int status = pid > 0 ? task_wait((u32)pid) : -100;
+    ok("a program asking for a notice with no desktop up is refused", status == 1);
+}
+
 static void test_spawn_zero(void) {
     u32 size = zero_writer_make();
     u64 lo = 0, hi = 0;
@@ -7337,7 +7355,7 @@ int selftest_run(void) {
     kprintf("[network]\n");    test_net();
     kprintf("[tcp]\n");        test_tcp();
     kprintf("[elf]\n");        test_elf();
-    kprintf("[userspace]\n");  test_userspace(); test_spawn_zero(); test_console_wait(); test_input_handover();
+    kprintf("[userspace]\n");  test_userspace(); test_spawn_zero(); test_notice_call(); test_console_wait(); test_input_handover();
     kprintf("[video]\n");      test_video(); test_console();
     kprintf("[mouse]\n");      test_mouse(); test_mouse_edges();
     kprintf("[graphics]\n");   test_gfx(); test_frame_drawing();

@@ -750,6 +750,12 @@ static i64 sys_file_times(registers_t *r) {
     return 0;
 }
 
+static i64 sys_notice(registers_t *r) {
+    char text[112];
+    if (!copy_path(r->rbx, text, sizeof(text))) return -1;
+    return wm_notice(text) ? 0 : -1;
+}
+
 static i64 sys_chdir(registers_t *r) {
     char path[VFS_PATH_MAX];
     if (!copy_path(r->rbx, path, sizeof(path))) return -1;
@@ -1370,6 +1376,7 @@ static const syscall_fn TABLE[] = {
     [SYS_SOUND_STOP]  = sys_sound_stop,
     [SYS_SOCK_STATE]  = sys_sock_state,
     [SYS_FILE_TIMES]  = sys_file_times,
+    [SYS_NOTICE]      = sys_notice,
 };
 
 #define N_SYSCALLS (sizeof(TABLE) / sizeof(TABLE[0]))
