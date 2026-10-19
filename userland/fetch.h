@@ -1025,6 +1025,138 @@ static inline int web_file_add_name(char *buf, int cap, int n, const char *s) {
     return n;
 }
 
+/* --- a folder, as a page ---------------------------------------------------
+ *
+ * What is in it, folders first and then files, each by name with case
+ * folded, with a file's size and when each was last written, and a link up
+ * a folder. Made from a list here rather than from the disk, so a test can
+ * hand it one (sitetest). */
+#define WEB_FOLDER_MAX 256
+
+typedef struct {
+    char name[64];
+    u32  size;
+    int  is_dir;
+    int  has_when;              /* when below is the disk's */
+    zelr_times when;
+} web_entry;
+
+static inline int web_entry_before(const web_entry *a, const web_entry *b) {
+    if (a->is_dir != b->is_dir) return a->is_dir;
+    for (int i = 0; ; i++) {
+        char x = a->name[i], y = b->name[i];
+        if (x >= 'A' && x <= 'Z') x = (char)(x + 32);
+        if (y >= 'A' && y <= 'Z') y = (char)(y + 32);
+        if (x != y || !x) return x < y;
+    }
+}
+
+/* "100 bytes", "12 KB", "3.4 MB": a size as a person reads one. */
+static inline int web_size_text(char *out, u32 size) {
+    char t[24];
+    int n = 0;
+    u32 whole, tenth = 10;
+    const char *unit;
+    if (size < 1024) { whole = size; unit = size == 1 ? " byte" : " bytes"; }
+    else if (size < 1024 * 1024) { whole = (size + 1023) / 1024; unit = " KB"; }
+    else {
+        u32 tenths = (u32)(((u64)size * 10 + 1024 * 1024 - 1) / (1024 * 1024));
+        whole = tenths / 10;
+        tenth = tenths % 10;
+        unit = " MB";
+    }
+    do { t[n++] = (char)('0' + whole % 10); whole /= 10; } while (whole);
+    int w = 0;
+    while (n) out[w++] = t[--n];
+    if (tenth < 10) { out[w++] = '.'; out[w++] = (char)('0' + tenth); }
+    for (const char *p = unit; *p; p++) out[w++] = *p;
+    out[w] = 0;
+    return w;
+}
+
+static inline int web_folder_page(char *buf, int cap, const char *path, web_entry *e, int count) {
+    static const char *const MONTHS[] = { "January", "February", "March", "April", "May", "June", "July",
+                                          "August", "September", "October", "November", "December" };
+    /* An order of indices, not the entries moved: a whole web_entry
+       assigned is a memcpy, which ring 3 has not. */
+    static int order[WEB_FOLDER_MAX];
+    if (count > WEB_FOLDER_MAX) count = WEB_FOLDER_MAX;
+    for (int i = 0; i < count; i++) {
+        int j = i - 1;
+        while (j >= 0 && web_entry_before(&e[i], &e[order[j]])) { order[j + 1] = order[j]; j--; }
+        order[j + 1] = i;
+    }
+    int n = 0;
+    n = web_file_add(buf, cap, n, "<!doctype html><title>");
+    n = web_file_add_name(buf, cap, n, path);
+    n = web_file_add(buf, cap, n, "</title><style>table{border-collapse:collapse}"
+                                  "td{padding:3px 22px 3px 0}td.s{text-align:right}td.s,td.w{color:#555}"
+                                  "</style><h1>");
+    n = web_file_add_name(buf, cap, n, path);
+    n = web_file_add(buf, cap, n, "</h1>");
+    int len = 0;
+    while (path[len]) len++;
+    int slash = len && path[len - 1] == '/';
+    /* Up a folder, by its whole path: ".." from a path without its last
+       slash would be two up. */
+    int end = slash ? len - 1 : len;
+    if (end > 0) {
+        while (end > 0 && path[end - 1] != '/') end--;
+        char up[URL_PATH];
+        int u = 0;
+        for (int i = 0; i < end && u < URL_PATH - 1; i++) up[u++] = path[i];
+        up[u] = 0;
+        n = web_file_add(buf, cap, n, "<p><a href=\"");
+        n = web_file_add_name(buf, cap, n, up);
+        n = web_file_add(buf, cap, n, "\">up a folder</a></p>");
+    }
+    if (!count) return web_file_add(buf, cap, n, "<p>nothing here</p>");
+    n = web_file_add(buf, cap, n, "<table>");
+    const char *leaf = path;
+    for (const char *q = path; *q; q++) if (*q == '/' && q[1]) leaf = q + 1;
+    for (int oi = 0; oi < count; oi++) {
+        int i = order[oi];
+        n = web_file_add(buf, cap, n, "<tr><td><a href=\"");
+        if (!slash) {
+            /* Relative to the folder, which a path without its last
+               slash is not: name the folder again. */
+            n = web_file_add_name(buf, cap, n, leaf);
+            n = web_file_add(buf, cap, n, "/");
+        }
+        n = web_file_add_name(buf, cap, n, e[i].name);
+        if (e[i].is_dir) n = web_file_add(buf, cap, n, "/");
+        n = web_file_add(buf, cap, n, "\">");
+        n = web_file_add_name(buf, cap, n, e[i].name);
+        if (e[i].is_dir) n = web_file_add(buf, cap, n, "/");
+        n = web_file_add(buf, cap, n, "</a></td><td class=\"s\">");
+        if (!e[i].is_dir) {
+            char st[24];
+            web_size_text(st, e[i].size);
+            n = web_file_add(buf, cap, n, st);
+        }
+        n = web_file_add(buf, cap, n, "</td><td class=\"w\">");
+        const zelr_times *t = &e[i].when;
+        if (e[i].has_when && t->year && t->month >= 1 && t->month <= 12) {
+            char w[48];
+            int k = 0;
+            if (t->day >= 10) w[k++] = (char)('0' + t->day / 10);
+            w[k++] = (char)('0' + t->day % 10);
+            w[k++] = ' ';
+            for (const char *p = MONTHS[t->month - 1]; *p; p++) w[k++] = *p;
+            w[k++] = ' ';
+            for (int d = 1000, y = t->year; d; d /= 10) w[k++] = (char)('0' + y / d % 10);
+            w[k++] = ','; w[k++] = ' ';
+            w[k++] = (char)('0' + t->hour / 10); w[k++] = (char)('0' + t->hour % 10);
+            w[k++] = ':';
+            w[k++] = (char)('0' + t->minute / 10); w[k++] = (char)('0' + t->minute % 10);
+            w[k] = 0;
+            n = web_file_add(buf, cap, n, w);
+        }
+        n = web_file_add(buf, cap, n, "</td></tr>");
+    }
+    return web_file_add(buf, cap, n, "</table>");
+}
+
 /* The path as the file system has it: no query, and %XX undone. Its length. */
 static inline int web_file_path(const url_t *u, char *path) {
     int p = 0;
@@ -1059,32 +1191,26 @@ static inline int web_file(const url_t *u, char *buf, int cap, response_t *r) {
         return 404;
     }
     if (is_root || st.is_dir) {
-        int n = 0;
-        n = web_file_add(buf, cap, n, "<!doctype html><title>");
-        n = web_file_add_name(buf, cap, n, path);
-        n = web_file_add(buf, cap, n, "</title><h1>");
-        n = web_file_add_name(buf, cap, n, path);
-        n = web_file_add(buf, cap, n, "</h1><ul>");
-        int slash = path[p - 1] == '/';
+        static web_entry entries[WEB_FOLDER_MAX];
+        int count = 0;
         zelr_stat e;
-        for (int i = 0; readdir(path, i, &e) == 1; i++) {
-            n = web_file_add(buf, cap, n, "<li><a href=\"");
-            if (!slash) {
-                /* Relative to the folder, which a path without its last
-                   slash is not: name the folder again. */
-                const char *leaf = path;
-                for (const char *q = path; *q; q++) if (*q == '/') leaf = q + 1;
-                n = web_file_add_name(buf, cap, n, leaf);
-                n = web_file_add(buf, cap, n, "/");
-            }
-            n = web_file_add_name(buf, cap, n, e.name);
-            if (e.is_dir) n = web_file_add(buf, cap, n, "/");
-            n = web_file_add(buf, cap, n, "\">");
-            n = web_file_add_name(buf, cap, n, e.name);
-            if (e.is_dir) n = web_file_add(buf, cap, n, "/");
-            n = web_file_add(buf, cap, n, "</a>");
+        for (int i = 0; count < WEB_FOLDER_MAX && readdir(path, i, &e) == 1; i++) {
+            web_entry *w = &entries[count++];
+            int k = 0;
+            for (; e.name[k] && k < (int)sizeof(w->name) - 1; k++) w->name[k] = e.name[k];
+            w->name[k] = 0;
+            w->size = (u32)e.size;
+            w->is_dir = e.is_dir;
+            char full[URL_PATH + 64];
+            int f = 0;
+            for (const char *q = path; *q && f < URL_PATH - 1; q++) full[f++] = *q;
+            if (f && full[f - 1] != '/') full[f++] = '/';
+            for (const char *q = w->name; *q; q++) full[f++] = *q;
+            full[f] = 0;
+            w->has_when = file_times(full, &w->when) == 0;
         }
-        n = web_file_add(buf, cap, n, "</ul>");
+        (void)p;
+        int n = web_folder_page(buf, cap, path, entries, count);
         if (n >= cap - 8) r->truncated = 1;
         r->status = 200;
         r->len = n;

@@ -29,6 +29,7 @@ dock changes when the notice goes a few seconds later and then stays.
   python tools/localcheck.py [--keep]
 """
 import os
+import re
 import struct
 import subprocess
 import sys
@@ -169,8 +170,14 @@ def main():
             mark = len(vm.serial())
             mon.send("sendkey ctrl-l", settle=0.3)
             keys("/home/site/\n")
-            c.add("a folder is shown as a page of what is in it",
-                  said_since(mark, "browser: file:///home/site/ -- /home/site/"))
+            listed = said_since(mark, "browser: file:///home/site/ -- /home/site/")
+            line = [ln for ln in vm.serial()[mark:].splitlines() if "browser: file:///home/site/ --" in ln]
+            links = re.search(r"(\d+) links", line[-1]) if line else None
+            c.add("a folder is shown as a page of what is in it", listed)
+            # Its seven files and a link up a folder (sitetest checks the order,
+            # sizes and dates).
+            c.add("with a link to each thing in it and one up a folder (%s)" % (line[-1] if line else "nothing"),
+                  links is not None and int(links.group(1)) == 8)
 
             # A page on the disk is no different: its scripts are refused a
             # file every way they ask (a page saved from the web is a page on

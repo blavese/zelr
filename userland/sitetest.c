@@ -465,6 +465,39 @@ static void checks(void) {
         ok("and a file is not read for a page off the network", web_get(&f, buf, sizeof(buf), &r) == WEB_ERR_SCHEME);
     }
 
+    /* A folder as a page: folders first, then files, by name with case
+       folded; sizes as a person reads them; when each was written; names
+       that read as markup spelled out; a link up by the whole path. */
+    {
+        static web_entry e[5];
+        static char page[8192];
+        const char *names[5] = { "b.txt", "Zeta", "a<b&c.png", "alpha", "big.bin" };
+        const u32 sizes[5] = { 1500, 0, 100, 0, 3565158 };
+        const int dirs[5] = { 0, 1, 0, 1, 0 };
+        for (int i = 0; i < 5; i++) {
+            int k = 0;
+            for (; names[i][k]; k++) e[i].name[k] = names[i][k];
+            e[i].name[k] = 0;
+            e[i].size = sizes[i];
+            e[i].is_dir = dirs[i];
+            e[i].has_when = i == 0;
+        }
+        e[0].when.year = 2026; e[0].when.month = 10; e[0].when.day = 9;
+        e[0].when.hour = 14; e[0].when.minute = 5;
+        int len = web_folder_page(page, (int)sizeof(page), "/home/stuff/", e, 5);
+        int pa = site_search(page, 0, len, "alpha/"), pz = site_search(page, 0, len, "Zeta/"),
+            pp = site_search(page, 0, len, "a&lt;b&amp;c.png"), pb = site_search(page, 0, len, ">b.txt<"),
+            pg = site_search(page, 0, len, ">big.bin<");
+        ok("a folder lists its folders first and then its files, each by name",
+           pa >= 0 && pa < pz && pz < pp && pp < pb && pb < pg);
+        ok("with sizes as a person reads them", has(page, "100 bytes") && has(page, "2 KB") && has(page, "3.4 MB"));
+        ok("and when each was written, where the disk says", has(page, "9 October 2026, 14:05"));
+        ok("and a link up a folder, by its whole path", has(page, "<a href=\"/home/\">up a folder</a>"));
+        web_folder_page(page, (int)sizeof(page), "/", e, 0);
+        ok("the top has nothing above it, and an empty folder says so",
+           !has(page, "up a folder") && has(page, "nothing here"));
+    }
+
     /* --- the JSON underneath --------------------------------------------------- */
     {
         const char *s = "\"a\\\"b\" rest";
