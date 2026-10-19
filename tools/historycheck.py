@@ -6,7 +6,7 @@ Every page that loads is a line of /home/history (when, address, title);
 about:history lists them a day at a time; the bar suggests the bookmarks
 and then the history, newest first, as an address is typed. The browser
 says on the console what each page came to and what the bar suggests
-("browser: suggests N: ADDRESS | ..."), and each step waits for that.
+("browser bar: suggests N: ADDRESS | ..."), and each step waits for that.
 
   - three pages visited are three lines of /home/history, read off the
     disk image here, stamped with the time (the machine on the host's
@@ -112,8 +112,8 @@ def main():
         return False
 
     def suggested(vm, mark):
-        lines = [ln for ln in vm.serial()[mark:].splitlines() if "browser: suggests" in ln]
-        return lines[-1].split("browser: ")[-1].strip() if lines else "nothing"
+        lines = [ln for ln in vm.serial()[mark:].splitlines() if "browser bar: suggests" in ln]
+        return lines[-1].split("browser bar: ")[-1].strip() if lines else "nothing"
 
     def go(vm, mon, typed, wait_for, timeout=40):
         mark = len(vm.serial())
@@ -177,7 +177,7 @@ def main():
         mon.send("sendkey ctrl-l", settle=0.3)
         keys(mon, "beta")
         c.add("a word of a title typed into the bar suggests that page",
-              said_since(vm, mark, "browser: suggests 1: file:///home/open/b.htm", 20))
+              said_since(vm, mark, "browser bar: suggests 1: file:///home/open/b.htm", 20))
         mark = len(vm.serial())
         mon.send("sendkey down", settle=0.3)
         mon.send("sendkey ret", settle=0.3)
@@ -188,7 +188,7 @@ def main():
         mark = len(vm.serial())
         mon.send("sendkey ctrl-l", settle=0.3)
         keys(mon, "open")
-        found = said_since(vm, mark, "browser: suggests 3: file:///home/open/c.htm | file:///home/open/b.htm"
+        found = said_since(vm, mark, "browser bar: suggests 3: file:///home/open/c.htm | file:///home/open/b.htm"
                            " | file:///home/open/a.htm", 20)
         c.add("the bookmarks are suggested first, then the history, newest first (%s)" % suggested(vm, mark), found)
         mon.send("sendkey esc", settle=0.5)
@@ -198,7 +198,7 @@ def main():
         mark = len(vm.serial())
         mon.send("sendkey ctrl-l", settle=0.3)
         keys(mon, "alpha")
-        listed = said_since(vm, mark, "browser: suggests 1: file:///home/open/a.htm", 20)
+        listed = said_since(vm, mark, "browser bar: suggests 1: file:///home/open/a.htm", 20)
         time.sleep(0.5)
         w, h, px, _ = mon.screen("hist-bar")
         bar = box_of(px, w, (0, 40, w, 220), ACCENT)

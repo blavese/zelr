@@ -4,8 +4,8 @@ Three pages on a fresh volume, opened as files (no network needed): page a,
 red, with two links drawn as blocks of their own colours, one to page b
 (blue) and one to page c (yellow) that a script keeps for itself as a
 page's router does, unless ctrl was held. The browser says on the console
-what it loaded and when it starts another window ("browser: a new window
-for ADDRESS"); each step waits for that, then counts the screen.
+what it loaded and when it starts another window ("browser window: a new
+one for ADDRESS"); each step waits for that, then counts the screen.
 
   - the middle button on the link to b opens b in a new window; a stays on
     a, which shows beside b and fills the screen again once b is closed;
@@ -135,7 +135,7 @@ def main():
         at = centre(TO_B)
         if at:
             mon.click(at[0], at[1], button=4)
-        told = said_since(mark, "browser: a new window for file:///home/open/b.htm", 30)
+        told = said_since(mark, "browser window: a new one for file:///home/open/b.htm", 30)
         came = said_since(mark, "browser: file:///home/open/b.htm -- page b", 60)
         _, _, _, shot, both = mon.wait_screen(
             "open-mid", lambda w, h, px: count_in(px, w, SCREEN, BLUE) > 100000
@@ -158,7 +158,7 @@ def main():
             mon.send("sendkey ctrl 2500", settle=0.3)
             mon.send("mouse_button 1", settle=0.4)
             mon.send("mouse_button 0", settle=0.5)
-        told = said_since(mark, "browser: a new window for file:///home/open/b.htm", 30)
+        told = said_since(mark, "browser window: a new one for file:///home/open/b.htm", 30)
         came = said_since(mark, "browser: file:///home/open/b.htm -- page b", 60)
         _, _, _, shot, both = mon.wait_screen(
             "open-ctrl", lambda w, h, px: count_in(px, w, SCREEN, BLUE) > 100000
@@ -179,7 +179,7 @@ def main():
             mon.send("sendkey ctrl 2500", settle=0.3)
             mon.send("mouse_button 1", settle=0.4)
             mon.send("mouse_button 0", settle=0.5)
-        told = said_since(mark, "browser: a new window for file:///home/open/c.htm", 30)
+        told = said_since(mark, "browser window: a new one for file:///home/open/c.htm", 30)
         came = said_since(mark, "browser: file:///home/open/c.htm -- page c", 60)
         _, _, _, shot, seen = mon.wait_screen(
             "open-router", lambda w, h, px: count_in(px, w, SCREEN, YELLOW) > 100000, timeout=30)
@@ -196,7 +196,7 @@ def main():
         mark = len(vm.serial())
         mon.send("sendkey ctrl-n", settle=0.5)
         c.add("ctrl+N opens the start page in a new window",
-              said_since(mark, "browser: a new window for about:start", 30)
+              said_since(mark, "browser window: a new one for about:start", 30)
               and said_since(mark, "browser: about:start --", 60))
     finally:
         vm.stop()

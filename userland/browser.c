@@ -4089,9 +4089,11 @@ static void suggest_find(const char *typed) {
         sg_offer(typed, hs_text + t1 + 1, t2 - t1 - 1, hs_text + (t2 < end ? t2 + 1 : end), t2 < end ? end - t2 - 1 : 0);
     }
     /* Said on the console, for anything driving the machine over its serial
-       line (historycheck). */
+       line (historycheck); not as "browser: ", which is a page that finished
+       arriving to anything counting them (sitecheck took a suggestion for
+       the next page). */
     if (sg_n) {
-        puts("browser: suggests ");
+        puts("browser bar: suggests ");
         putn(sg_n);
         for (int i = 0; i < sg_n; i++) { puts(i ? " | " : ": "); puts(sg_addr[i]); }
         putc('\n');
@@ -5135,13 +5137,16 @@ static int  announce_owed, pics_relayout, pics_laid_at;
    own, so each window's page, scripts and memory are its own, and closing
    one leaves the rest. */
 static void open_window(const char *address) {
+    /* "browser window:", not "browser:": a line that begins "browser: " is
+       a page that finished arriving, and harnesses count them so
+       (sitecheck, browsercheck). */
     if (spawn_arg("/bin/browser", address) < 0) {
         say("a new window could not be started", 0);
-        puts("browser: a new window could not be started\n");
+        puts("browser window: a new one could not be started\n");
         return;
     }
     say("opened in a new window: ", address ? address : START_ADDRESS);
-    puts("browser: a new window for ");
+    puts("browser window: a new one for ");
     puts(address ? address : START_ADDRESS);
     putc('\n');
 }

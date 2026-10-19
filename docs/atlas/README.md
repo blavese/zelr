@@ -105,7 +105,8 @@ numbered files are still to 6048716; where they disagree with this list, this li
   file, and an about: link is followed only from an about: page (a site's link cannot forget the history). The bar
   suggests (`suggest_find`, `SUGGEST_MAX` 6) the bookmarks then the history newest first holding every word typed, each
   address once, read once a focus; down/up choose, return goes, a click on a row goes before the page hears it
-  (`suggest_row_at`), drawn over the page under the bar (`draw_suggestions`); "browser: suggests N: A | B" on the console.
+  (`suggest_row_at`), drawn over the page under the bar (`draw_suggestions`); "browser bar: suggests N: A | B" on the console (not
+  "browser: ", which harnesses take for a page that finished arriving).
   historycheck, a new gate step (70 now, 14 checks).
 
 ### 0.164.0
@@ -118,7 +119,7 @@ numbered files are still to 6048716; where they disagree with this list, this li
   more). ui.h `ui_input` has `middle_down`/`middle_pressed`/`middle_released` and `ctrl`/`shift` of the last press. Paint
   and the terminal treat a middle press as they treat a right one.
 - **Links in a window of their own (11)**: browser.c `open_window` spawns `/bin/browser` on the address (a program
-  each, so a window's page, scripts and memory are its own) and prints "browser: a new window for ADDRESS"; a link
+  each, so a window's page, scripts and memory are its own) and prints "browser window: a new one for ADDRESS"; a link
   released with the middle button, or clicked with ctrl held, goes there and the page stays; ctrl+N opens the start
   page. A trusted click tells the page `ctrlKey`/`shiftKey` (jsdom.h `jsdom_click_with`, `jd_click_ctrl`), so a page's
   router that keeps plain clicks leaves a ctrl click to the browser. The browser draws a frame for a middle press or
