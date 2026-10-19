@@ -38,6 +38,8 @@ static void ok(const char *what, int cond) {
 #define SUB  DIR "/dur-d"
 
 static char buf[256];
+static char three[3 * 1024 * 1024];     /* past the megabyte a call takes */
+static char again[3 * 1024 * 1024];
 
 /* What is on the disk under this name, read fresh. Returns the length, or
    -1 when there is nothing there. */
@@ -180,6 +182,17 @@ int main(void) {
        && t2.made_second == t.made_second);
     unlink(A);
     ok("the files the kernel makes up keep no time", file_times("/sys/version", &t) != 0);
+
+    /* A file past a megabyte, written and read whole by the SDK, which asks
+       a megabyte at a time: one call for all of it was refused, so Notes
+       could neither open such a file nor save one. */
+    for (int i = 0; i < (int)sizeof(three); i++) three[i] = (char)(i * 7 + i / 4096);
+    ok("spit writes a file of three megabytes", spit(A, three, (int)sizeof(three)) == (int)sizeof(three));
+    int back = slurp(A, again, (int)sizeof(again));
+    int same = back == (int)sizeof(again);
+    for (int i = 0; same && i < back; i++) same = again[i] == three[i];
+    ok("and slurp reads all of it back, the same", same);
+    unlink(A);
 
     unlink(B);
     puts(fails ? "DURTEST_FAIL\n" : "DURTEST_PASS\n");

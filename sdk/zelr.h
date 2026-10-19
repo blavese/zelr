@@ -394,6 +394,11 @@ static inline int close(int fd)  { return syscall(SYS_CLOSE, fd, 0, 0); }
    with -- <stdio.h> has an fread and an fwrite of its own, with four
    arguments and a FILE, and two functions of one name is not a thing C
    allows however different they are. */
+/* At most a megabyte a call each way: the kernel refuses more (syscall.c
+   sys_fread, sys_fwrite) rather than take it in pieces, so a caller with
+   more asks again, as slurp and spit do. */
+#define ZELR_IO_MAX (1024 * 1024)
+
 static inline int zelr_fread(int fd, void *buf, int len) {
     return syscall(SYS_FREAD, fd, (zelr_word)buf, len);
 }
@@ -435,7 +440,8 @@ static inline int slurp(const char *path, char *buf, int cap) {
     if (fd < 0) return -1;
     int total = 0;
     for (;;) {
-        int n = zelr_fread(fd, buf + total, cap - total);
+        int want = cap - total > ZELR_IO_MAX ? ZELR_IO_MAX : cap - total;
+        int n = zelr_fread(fd, buf + total, want);
         if (n <= 0) break;
         total += n;
         if (total >= cap) break;
@@ -444,12 +450,19 @@ static inline int slurp(const char *path, char *buf, int cap) {
     return total;
 }
 
+/* Writes a whole file. Returns the length, or -1. */
 static inline int spit(const char *path, const void *buf, int len) {
     int fd = open(path, O_WRITE | O_CREATE | O_TRUNC);
     if (fd < 0) return -1;
-    int n = zelr_fwrite(fd, buf, len);
+    int done = 0;
+    while (done < len) {
+        int want = len - done > ZELR_IO_MAX ? ZELR_IO_MAX : len - done;
+        int n = zelr_fwrite(fd, (const char *)buf + done, want);
+        if (n <= 0) { close(fd); return -1; }
+        done += n;
+    }
     close(fd);
-    return n;
+    return done;
 }
 
 /* --- the network ---------------------------------------------------------
