@@ -884,7 +884,7 @@ Added in 0.164.0, not yet in the table below:
   about:start.
 
 Added in 0.162.0, not yet in the table below:
-- **`localcheck.py`** (gate `localtest`, full; 16 checks since 0.167.0). /home/site on a mkfat volume (8.3 names: index.htm with
+- **`localcheck.py`** (gate `localtest`, full; 18 checks since 0.169.0). /home/site on a mkfat volume (8.3 names: index.htm with
   style.css and pic.png beside it, page2.htm); `/bin/browser /home/site/index.htm`: the console's `file:` address and
   title, the sheet's background and the picture counted on the screen; ctrl+L and a typed path; a typed folder listed, its
   console line saying 8 links (seven files and up a folder, 0.167.0);
@@ -892,6 +892,8 @@ Added in 0.162.0, not yet in the table below:
   worker (peekw.js): blue, no red, its own picture drawn; film.mp4 (genmedia `muxed_file` of the colours) typed into
   the bar: playcheck's colours counted on the screen (0.163.0); then webserver.py's `/peek`, whose script fetches a file
   here (red if read, blue if refused) and which shows one as a picture (green): blue, no red, no green; the server's
+  /styled kept with ctrl+S ("notice: saved styled.html in /home/downloads") and opened from the disk saying "1 style
+  sheet" (0.169.0); the server's
   /dl/report.bin saved, "notice: saved report.bin in /home/downloads" on the console and the band above the dock
   (printcheck's `ABOVE_DOCK`) changing when the notice goes and staying (0.166.0); Files on the folder: "film.mp4 - film" passed on the way to "index.htm - page", Enter opens the browser on it.
 

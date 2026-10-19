@@ -215,7 +215,10 @@ ctrl held, opens it in a window of its own and leaves the page where it is;
 ctrl+N opens another window on the start page. Where it has been is kept
 on the disk and listed a day at a time at about:history, and as an address
 is typed the bar suggests the bookmarks and then the history that match it.
-The start page lists the pages visited last.
+The start page lists the pages visited last. ctrl+S keeps the page in
+`/home/downloads`, named after its title, with where it came from written
+at its head, so that opened from the disk it still takes its sheets and
+pictures from the site.
 
 ## running it on a real machine
 

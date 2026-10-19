@@ -95,6 +95,15 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.169.0
+
+- **A page kept with ctrl+S (11)**: browser.c `save_page` asks for the page's markup again (`web_get`; what was fetched
+  to show it is gone by then), puts `<base href="WHERE">` (the address after any redirect) after `<head ...>`, else
+  `<html ...>`, else at the top, and saves it through `save_download` as TITLE.html (characters a path reads otherwise
+  made spaces; "page" for none) in /home/downloads, said in a notice. Not for about: pages or pages already on the disk.
+  localcheck two more (webserver.py's /styled kept as styled.html, and opened from the disk with its sheet taken from the
+  server, "1 style sheet").
+
 ### 0.168.0
 
 - **Files' trash (10)**: Delete puts a thing in /home/trash (renamed there where the disk can, copied and deleted where
