@@ -985,12 +985,15 @@ static const struct {
     const char *label;
     const char *program;
     int kind;
+    const char *arg;            /* what the program is started on, or none */
 } DESK[] = {
-    { "Terminal", "/bin/term",     0 },
-    { "Files",    "/bin/files",    1 },
-    { "Notes",    "/bin/notes",    2 },
-    { "Paint",    "/bin/paint",    3 },
-    { "Settings", "/bin/settings", 4 },
+    { "Terminal", "/bin/term",     0, 0 },
+    { "Files",    "/bin/files",    1, 0 },
+    { "Notes",    "/bin/notes",    2, 0 },
+    { "Paint",    "/bin/paint",    3, 0 },
+    { "Settings", "/bin/settings", 4, 0 },
+    /* Files on the trash (0.168.0), where a thing deleted waits. */
+    { "Trash",    "/bin/files",    5, "/home/trash" },
 };
 #define DESK_N ((int)(sizeof(DESK) / sizeof(DESK[0])))
 
@@ -1078,6 +1081,25 @@ static void icon_folder(int x, int y) {
                   RGB(0xF4, 0xD8, 0x8E), edge);
     fb_bevel_thin(x + IS(2), y + IS(10), ICON_TILE - IS(4), IS1(17),
                   RGB(0xF4, 0xD8, 0x8E), edge);
+}
+
+/* A bin with its lid on, the lines down its side lighter than it. */
+static void icon_trash(int x, int y) {
+    u32 body = RGB(0x8C, 0x96, 0xA6), lid = RGB(0x6E, 0x78, 0x8A), line = RGB(0xB8, 0xC0, 0xCC);
+    if (theme()->look == LOOK_MODERN) {
+        fb_round_rect_aa(x + IS(12), y + IS(3), IS1(8), IS1(4), IS(2), lid, 255);
+        fb_round_rect_aa(x + IS(4), y + IS(6), ICON_TILE - IS(8), IS1(4), IS(2), lid, 255);
+        fb_round_rect_aa(x + IS(6), y + IS(11), ICON_TILE - IS(12), IS1(18), IS(3), body, 255);
+        for (int k = 0; k < 3; k++)
+            fb_round_rect_aa(x + IS(10) + k * IS(5), y + IS(14), IS1(2), IS1(12), IS(1), line, 255);
+        return;
+    }
+    fb_rect((u32)(x + IS(12)), (u32)(y + IS(3)), (u32)IS1(8), (u32)IS1(3), lid);
+    fb_rect((u32)(x + IS(4)), (u32)(y + IS(6)), (u32)(ICON_TILE - IS(8)), (u32)IS1(4), lid);
+    fb_rect((u32)(x + IS(6)), (u32)(y + IS(11)), (u32)(ICON_TILE - IS(12)), (u32)IS1(18), body);
+    for (int k = 0; k < 3; k++)
+        fb_rect((u32)(x + IS(10) + k * IS(5)), (u32)(y + IS(14)), (u32)IS1(2), (u32)IS1(12), line);
+    fb_bevel_thin(x + IS(6), y + IS(11), ICON_TILE - IS(12), IS1(18), line, lid);
 }
 
 static void icon_page(int x, int y) {
@@ -1209,6 +1231,7 @@ static void draw_desk_icon(int i, int x, int y, bool selected) {
         case 1: icon_folder(tx, y);   break;
         case 2: icon_page(tx, y);     break;
         case 3: icon_paint(tx, y);    break;
+        case 5: icon_trash(tx, y);    break;
         default: icon_sliders(tx, y); break;
     }
 
@@ -3376,6 +3399,17 @@ static void launch(const char *path) {
     kfree(img);
 }
 
+/* A program started on one word, as a desktop icon may ask (the trash). */
+static void launch_with(const char *path, const char *arg) {
+    if (!arg) { launch(path); return; }
+    u32 size = 0;
+    u8 *img = vfs_slurp(path, &size);
+    if (!img) return;
+    const char *argv[2] = { path, arg };
+    user_spawn_elf_argv(path, img, size, 2, argv);
+    kfree(img);
+}
+
 static void menu_run(const mitem_t *it) {
     menu_open = false;
     menu_qn = 0;
@@ -4214,7 +4248,7 @@ static void handle_mouse(int mx, int my, u8 buttons) {
             desk_last_click = icon;
             desk_last_tick = now;
             if (again) {
-                launch(DESK[icon].program);
+                launch_with(DESK[icon].program, DESK[icon].arg);
                 desk_last_click = -1;
             }
             /* The right button on an icon is the desktop's menu too, with

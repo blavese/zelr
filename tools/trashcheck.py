@@ -18,7 +18,9 @@ with a file in it:
     folder, and the note goes;
   - Delete on a thing in the trash asks first, and the second press deletes
     it for good;
-  - ctrl+delete asks, and twice empties the trash.
+  - ctrl+delete asks, and twice empties the trash;
+  - the desktop's Trash icon, its sixth, opened with a double click, is
+    Files on the trash.
 
   python tools/trashcheck.py [--keep]
 """
@@ -30,6 +32,7 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from harness import Guest, Checks, build_once, count_in, ROOT   # noqa: E402
 from readfat import Fat16                                    # noqa: E402
+from deskcheck import desk_icon_rect                         # noqa: E402
 
 TOOLS = os.path.dirname(os.path.abspath(__file__))
 IMAGE = os.path.join(ROOT, "trash.%d.img" % os.getpid())
@@ -164,6 +167,17 @@ def main():
         key("ctrl-delete")
         c.add("and the second empties it",
               wait_disk(lambda: read("/home/trash/a.txt") is None) and said_since(mark, "files: the trash is empty"))
+        close()
+
+        # The desktop's sixth icon, double clicked: two presses inside the
+        # desktop's half second, the pointer moved once.
+        x0, y0, x1, y1 = desk_icon_rect(5)
+        mon.move_to((x0 + x1) // 2, y0 + 30)
+        mark = len(vm.serial())
+        for _ in range(2):
+            mon.send("mouse_button 1", settle=0.12)
+            mon.send("mouse_button 0", settle=0.12)
+        c.add("the desktop's Trash icon opens Files on the trash", said_since(mark, "files: /home/trash", 30))
         close()
     finally:
         vm.stop()
