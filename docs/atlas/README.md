@@ -95,6 +95,19 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.165.0
+
+- **The browser's history (11)**: browser.c `hs_note` (from `announce_page`, once a load) appends "WHEN\tADDRESS\tTITLE"
+  to /home/history (WHEN the local time from /sys/time's local line, `hs_when`; about: pages not kept; past
+  `HISTORY_MAX`, 64 KiB, the older half goes). `show_history` builds about:history newest first, a day to a heading,
+  each address once a day, with a "forget all of it" button (about:history?forget, `hs_forget`); the start page links to
+  it. The browser's own pages load with `here` = file:///, no Referer and `web_files_ok` 0, so a link on one may go to a
+  file, and an about: link is followed only from an about: page (a site's link cannot forget the history). The bar
+  suggests (`suggest_find`, `SUGGEST_MAX` 6) the bookmarks then the history newest first holding every word typed, each
+  address once, read once a focus; down/up choose, return goes, a click on a row goes before the page hears it
+  (`suggest_row_at`), drawn over the page under the bar (`draw_suggestions`); "browser: suggests N: A | B" on the console.
+  historycheck, a new gate step (70 now, 14 checks).
+
 ### 0.164.0
 
 - **The middle button and the modifiers reach programs (07)**: wm.c `handle_mouse` dropped the middle button

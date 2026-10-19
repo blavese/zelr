@@ -856,6 +856,15 @@ A note on the verified run: `bash run.sh -T` created `zelr.img` in the repositor
 
 ### 8.1 The complete test catalogue
 
+Added in 0.165.0, not yet in the table below:
+- **`historycheck.py`** (gate `historytest`, full; 14 checks). /home/open/{a,b,c}.htm on a mkfat volume, the first boot
+  on the host's clock (`HOST_CLOCK`). a, c (kept with ctrl+D) and b visited, about:history says 3; /home/history read off
+  the image here: a line each in order, stamped within the run; a second boot on the same disk (webserver.py's network)
+  still says 3; "beta" typed suggests b, down and return go; "open" suggests c (the bookmark), b, a; "alpha" typed and
+  the row under the bar clicked (the bar found by its accent ring and go button) goes to a; page a's block link to
+  about:history?forget is not followed (still 3); after the server's /peek, about:history's second entry (a, a file;
+  the links found as bands of accent inside the window) opens; the forget button (found by its colour) leaves 0.
+
 Added in 0.164.0, not yet in the table below:
 - **`opencheck.py`** (gate `opentest`, full; 10 checks). /home/open on a mkfat volume: a.htm (red) with two links drawn
   as blocks of their own colours, to b.htm (blue) and to c.htm (yellow) through a router script that keeps a click
