@@ -10,6 +10,12 @@ Files opens a page in the browser. The browser says on the console what it
 loaded ("browser: ADDRESS -- TITLE -- ..."), which each step waits for; the
 screen is then counted by the page's colours.
 
+A page on the disk asks for the page beside it every way a script can:
+fetch, XMLHttpRequest, and a worker's fetch (which the browser answers by
+another road). It paints itself red if any got it, blue if all were refused
+and the worker ran, and yellow if the worker never answered; it must come out
+blue, its own picture beside it still drawn.
+
 Then a page from the web server on this side whose script fetches a file
 from the machine and paints itself red if it got one and blue if it was
 refused, and which shows a picture of one, green if it were drawn. It must
@@ -50,6 +56,37 @@ INDEX = b"""<!doctype html>
 """
 PAGE2 = b"""<!doctype html><html><head><title>The second page</title></head><body><p>two</p></body></html>
 """
+# A page on the disk whose scripts ask for a file beside it, three ways:
+# all refused, it is blue; any read, red; the worker silent, yellow. Its own
+# picture is the browser's to read, and is drawn.
+PEEK = b"""<!doctype html><html><head><title>A page here that peeks</title></head>
+<body style="margin:0;min-height:600px"><img src="pic.png" width="40" height="30">
+<script>
+var said = {};
+function told(way, n) {
+  said[way] = n;
+  if (!("fetch" in said && "xhr" in said && "worker" in said)) return;
+  var got = said.fetch > 0 || said.xhr > 0 || said.worker > 0;
+  document.body.style.background = got ? "#e03040" : said.worker < 0 ? "#e0c020" : "#3050e0";
+}
+fetch("index.htm").then(function (r) { return r.text(); })
+  .then(function (t) { told("fetch", t.length); }, function () { told("fetch", 0); });
+var x = new XMLHttpRequest();
+x.onload = function () { told("xhr", (x.responseText || "").length); };
+x.onerror = function () { told("xhr", 0); };
+x.open("GET", "index.htm");
+x.send();
+try {
+  var w = new Worker("peekw.js");
+  w.onmessage = function (e) { told("worker", e.data); };
+  w.onerror = function () { told("worker", -1); };
+} catch (e) { told("worker", -1); }
+</script></body></html>
+"""
+PEEKW = b"""fetch("index.htm").then(function (r) { return r.text(); })
+  .then(function (t) { postMessage(t.length); }, function () { postMessage(0); });
+"""
+YELLOW = (0xE0, 0xC0, 0x20)             # the peeking page's worker never answered
 STYLE = b"body { background: #c03070; color: white; margin: 0; min-height: 600px }\n"
 
 
@@ -68,12 +105,12 @@ def main():
     build_once()
     c = Checks("pages on this machine")
     os.makedirs(WORK, exist_ok=True)
-    files = {"index.htm": INDEX, "page2.htm": PAGE2, "style.css": STYLE}
+    files = {"index.htm": INDEX, "page2.htm": PAGE2, "style.css": STYLE, "peek.htm": PEEK, "peekw.js": PEEKW}
     for name, body in files.items():
         with open(os.path.join(WORK, name), "wb") as f:
             f.write(body)
     png(os.path.join(WORK, "pic.png"), 40, 30, GREEN)
-    args = [os.path.join(WORK, n) + ":home/site/" + n for n in ("index.htm", "page2.htm", "style.css", "pic.png")]
+    args = [os.path.join(WORK, n) + ":home/site/" + n for n in list(files) + ["pic.png"]]
     r = subprocess.run([sys.executable, os.path.join(TOOLS, "mkfat.py"), IMAGE, "32768"] + args,
                        cwd=ROOT, capture_output=True, text=True)
     c.add("a volume with a small site on it", r.returncode == 0)
@@ -125,6 +162,21 @@ def main():
             keys("/home/site/\n")
             c.add("a folder is shown as a page of what is in it",
                   said_since(mark, "browser: file:///home/site/ -- /home/site/"))
+
+            # A page on the disk is no different: its scripts are refused a
+            # file every way they ask (a page saved from the web is a page on
+            # the disk), and its own picture still drawn.
+            mark = len(vm.serial())
+            mon.send("sendkey ctrl-l", settle=0.3)
+            keys("/home/site/peek.htm\n")
+            seen = said_since(mark, "browser: file:///home/site/peek.htm -- A page here that peeks")
+            _, _, _, shot, refused = mon.wait_screen(
+                "local-peekhere", lambda w, h, px: count_in(px, w, SCREEN, BLUE) > 100000, timeout=40)
+            w, h, px, _, _ = mon.wait_screen("local-peekhere2", lambda w, h, px: True)
+            c.add("a page on the disk is refused a file its scripts ask for, by fetch, XMLHttpRequest "
+                  "and a worker (red %d, yellow %d)" % (count_in(px, w, SCREEN, RED), count_in(px, w, SCREEN, YELLOW)),
+                  seen and refused and count_in(px, w, SCREEN, RED) < 100, shot)
+            c.add("and its own picture is still drawn", abs(count_in(px, w, SCREEN, GREEN) - 40 * 30) < 120, shot)
 
             # From the web: a page whose script asks for a file here.
             mark = len(vm.serial())

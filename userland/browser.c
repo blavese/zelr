@@ -2082,6 +2082,18 @@ static void request_lines(const url_t *u, const char *method, const char *header
 #define ASK_SEEN(method, url, status) ((void)0)
 #endif
 
+/* Whether a page's script may be given what is at this address. Never a file
+   on the machine, whatever the page: a page saved from the web and opened
+   here is a file page, and its script could read the machine's files and
+   send them anywhere. A page's own sheets, pictures and script files are the
+   browser's to read, through ask_begin's other callers and fetch_script.
+   Every way a script asks comes through here: fetch and XMLHttpRequest as
+   asks (ask_start), a worker's fetch and sendBeacon through do_request. */
+static int script_may_ask(const char *url) {
+    url_t u;
+    return !url_join(&base, url, &u) || u.secure != URL_FILE;
+}
+
 static int do_request(const char *method, const char *url, const char *body, int blen,
                       const char *type, const char *headers, jd_reply *out) {
     static char landed[URL_TEXT];
@@ -2094,6 +2106,7 @@ static int do_request(const char *method, const char *url, const char *body, int
     out->head = 0;
     out->hlen = 0;
     if (asks_made >= ASKS_MAX || !replybuf) return 0;
+    if (!script_may_ask(url)) { out->status = WEB_ERR_SCHEME; return 0; }
 
     url_t u;
     if (!url_join(&base, url, &u)) return 0;
@@ -2252,6 +2265,7 @@ static int script_ask_poll(int id, const char **text) {
 /* A page's script's request, counted against what a page may ask. */
 static int ask_start(const char *method, const char *url, const char *body, int blen,
                      const char *type, const char *headers, int max) {
+    if (!script_may_ask(url)) return WEB_ERR_SCHEME;
     return ask_begin(method, url, body, blen, type, headers, max, 1);
 }
 
