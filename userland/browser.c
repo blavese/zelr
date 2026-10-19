@@ -3827,6 +3827,310 @@ static int bm_put(char *out, int w, int cap, const char *s, int n) {
     return w;
 }
 
+/* --- what was visited ---------------------------------------------------
+ *
+ * Every page that loads is a line at the end of /home/history: when, in the
+ * machine's local time (/sys/time), its address and its title, a tab
+ * between. about:history lists them newest first, a day at a time, and the
+ * bar suggests them with the bookmarks as an address is typed. Kept to
+ * HISTORY_MAX: past that the older half goes. The browser's own pages are
+ * not kept. */
+#define HISTORY "/home/history"
+#define HISTORY_MAX (64 * 1024)
+#define HISTORY_ADDRESS "about:history"
+
+static char hs_text[HISTORY_MAX + 1];
+static int  hs_len;
+
+static void hs_read(void) {
+    hs_len = 0;
+    int fd = open(HISTORY, O_READ);
+    if (fd >= 0) {
+        int got;
+        while (hs_len < HISTORY_MAX && (got = zelr_fread(fd, hs_text + hs_len, HISTORY_MAX - hs_len)) > 0)
+            hs_len += got;
+        close(fd);
+    }
+    hs_text[hs_len] = 0;
+}
+
+/* The local time as "YYYY-MM-DD HH:MM", from /sys/time's local line. */
+static void hs_when(char *out) {
+    char t[512];
+    int n = slurp("/sys/time", t, (int)sizeof(t) - 1);
+    const char *none = "0000-00-00 00:00";
+    for (int i = 0; i < 16; i++) out[i] = none[i];
+    out[16] = 0;
+    if (n <= 0) return;
+    t[n] = 0;
+    for (int i = 0; i < n; i++) {
+        if ((i && t[i - 1] != '\n') || !w_starts_fold(t + i, "local ")) continue;
+        int k = i + 6;
+        while (t[k] == ' ') k++;
+        for (int j = 0; j < 16 && t[k + j] && t[k + j] != '\n'; j++) out[j] = t[k + j];
+        return;
+    }
+}
+
+static void hs_note(const char *addr, const char *ttl) {
+    if (!addr[0] || w_starts_fold(addr, "about:")) return;
+    char line[URL_TEXT + 256];
+    int n = 0;
+    hs_when(line);
+    n = 16;
+    line[n++] = '\t';
+    for (const char *p = addr; *p && n < URL_TEXT + 16; p++) line[n++] = *p;
+    line[n++] = '\t';
+    /* Nothing in a title that would end its field or its line. */
+    for (const char *p = ttl; *p && n < (int)sizeof(line) - 2; p++)
+        line[n++] = *p == '\t' || *p == '\n' || *p == '\r' ? ' ' : *p;
+    line[n++] = '\n';
+    mkdir("/home");
+    hs_read();
+    int fd;
+    if (hs_len + n > HISTORY_MAX) {
+        /* The older half goes, from a line's start. */
+        int cut = hs_len / 2;
+        while (cut < hs_len && hs_text[cut - 1] != '\n') cut++;
+        int k = 0;
+        for (int i = cut; i < hs_len; i++) hs_text[k++] = hs_text[i];
+        hs_len = k;
+        for (int i = 0; i < n; i++) hs_text[hs_len++] = line[i];
+        hs_text[hs_len] = 0;
+        fd = open(HISTORY, O_WRITE | O_CREATE | O_TRUNC);
+        if (fd < 0) return;
+        for (int done = 0, got; done < hs_len; done += got)
+            if ((got = zelr_fwrite(fd, hs_text + done, hs_len - done)) <= 0) break;
+    } else {
+        fd = open(HISTORY, O_WRITE | O_CREATE | O_APPEND);
+        if (fd < 0) return;
+        zelr_fwrite(fd, line, n);
+    }
+    close(fd);
+}
+
+static void hs_forget(void) {
+    mkdir("/home");
+    int fd = open(HISTORY, O_WRITE | O_CREATE | O_TRUNC);
+    if (fd >= 0) close(fd);
+    hs_len = 0;
+    hs_text[0] = 0;
+}
+
+/* The pages, newest first, a day to a heading, each address once a day. */
+static int show_history(int width) {
+    static const char *const MONTHS[] = { "January", "February", "March", "April", "May", "June", "July",
+                                          "August", "September", "October", "November", "December" };
+    static char out[HISTORY_MAX * 3 + 4096];
+    static int seen_at[1024], seen_len[1024];
+    int cap = (int)sizeof(out) - 512;
+    hs_read();
+    int w = 0, shown = 0;
+    const char *head =
+        "<html><head><title>history</title><style>"
+        "body{padding:22px 30px;max-width:760px}"
+        "h1{font-size:1.7em;color:#333;margin-bottom:0.5em}"
+        "h2{font-size:1.15em;color:#444;margin-top:1.4em}"
+        "li{margin:0.35em 0}small{color:#666}"
+        "a.forget{display:inline-block;padding:5px 12px;background:#f3dede;color:#8a1f1f;text-decoration:none}"
+        "</style></head><body><h1>history</h1>";
+    for (const char *p = head; *p; p++) out[w++] = *p;
+    char day[11] = "";
+    int nseen = 0, open_list = 0;
+    int e = hs_len;
+    while (e > 0 && w < cap) {
+        int a = e - 1;
+        while (a > 0 && hs_text[a - 1] != '\n') a--;
+        int line_end = e;
+        if (line_end > a && hs_text[line_end - 1] == '\n') line_end--;
+        e = a;
+        int t1 = a;
+        while (t1 < line_end && hs_text[t1] != '\t') t1++;
+        int t2 = t1 + 1;
+        while (t2 < line_end && hs_text[t2] != '\t') t2++;
+        if (t1 - a < 16 || t2 > line_end || t2 <= t1 + 1) continue;
+        const char *when = hs_text + a;
+        int same_day = day[0] != 0;
+        for (int i = 0; i < 10 && same_day; i++) same_day = when[i] == day[i];
+        if (!same_day) {
+            for (int i = 0; i < 10; i++) day[i] = when[i];
+            day[10] = 0;
+            nseen = 0;
+            if (open_list) for (const char *p = "</ul>"; *p; p++) out[w++] = *p;
+            int y = 0, m = 0, d = 0;
+            for (int i = 0; i < 4; i++) y = y * 10 + (when[i] - '0');
+            m = (when[5] - '0') * 10 + (when[6] - '0');
+            d = (when[8] - '0') * 10 + (when[9] - '0');
+            char h[48];
+            int hn = 0;
+            if (d >= 10) h[hn++] = (char)('0' + d / 10);
+            h[hn++] = (char)('0' + d % 10);
+            h[hn++] = ' ';
+            for (const char *p = m >= 1 && m <= 12 ? MONTHS[m - 1] : "?"; *p; p++) h[hn++] = *p;
+            h[hn++] = ' ';
+            for (int i = 0; i < 4; i++) h[hn++] = when[i];
+            h[hn] = 0;
+            (void)y;
+            for (const char *p = "<h2>"; *p; p++) out[w++] = *p;
+            for (const char *p = h; *p; p++) out[w++] = *p;
+            for (const char *p = "</h2><ul>"; *p; p++) out[w++] = *p;
+            open_list = 1;
+        }
+        int alen = t2 - t1 - 1, dup = 0;
+        for (int i = 0; i < nseen && !dup; i++) {
+            if (seen_len[i] != alen) continue;
+            int same = 1;
+            for (int k = 0; k < alen && same; k++) same = hs_text[seen_at[i] + k] == hs_text[t1 + 1 + k];
+            dup = same;
+        }
+        if (dup) continue;
+        if (nseen < 1024) { seen_at[nseen] = t1 + 1; seen_len[nseen] = alen; nseen++; }
+        for (const char *p = "<li><a href=\""; *p; p++) out[w++] = *p;
+        w = bm_put(out, w, cap, hs_text + t1 + 1, alen);
+        out[w++] = '"';
+        out[w++] = '>';
+        if (line_end > t2 + 1) w = bm_put(out, w, cap, hs_text + t2 + 1, line_end - t2 - 1);
+        else w = bm_put(out, w, cap, hs_text + t1 + 1, alen);
+        for (const char *p = "</a> <small>"; *p; p++) out[w++] = *p;
+        w = bm_put(out, w, cap, when + 11, 5);
+        out[w++] = ' ';
+        w = bm_put(out, w, cap, hs_text + t1 + 1, alen);
+        for (const char *p = "</small></li>"; *p; p++) out[w++] = *p;
+        shown++;
+    }
+    if (open_list) for (const char *p = "</ul>"; *p; p++) out[w++] = *p;
+    const char *tail = shown
+        ? "<p><a class=\"forget\" href=\"about:history?forget\">forget all of it</a></p></body></html>"
+        : "<p>nothing yet: the pages you visit are kept here</p></body></html>";
+    for (const char *p = tail; *p; p++) out[w++] = *p;
+    out[w] = 0;
+    int fetched, skipped;
+    build(out, w, width, 0, &fetched, &skipped);
+    scroll = 0;
+    return shown;
+}
+
+/* --- what the bar suggests --------------------------------------------------
+ *
+ * While an address is typed, the bookmarks and then the history, newest
+ * first, whose address or title holds every word typed, each address once,
+ * in a list under the bar: up and down choose, return goes, a click goes.
+ * Read from the disk once each time the bar is given the keyboard. */
+#define SUGGEST_MAX 6
+static char sg_addr[SUGGEST_MAX][URL_TEXT];
+static char sg_title[SUGGEST_MAX][100];
+static int  sg_n, sg_at = -1, sg_read;
+static char sg_for[URL_TEXT];
+static int  sg_bar_x, sg_bar_w;          /* where the bar was last drawn */
+#define SUGGEST_ROW 26
+
+/* Whether a run of text holds a word, letters folded. */
+static int sg_holds(const char *s, int n, const char *word, int wn) {
+    for (int i = 0; i + wn <= n; i++) {
+        int k = 0;
+        while (k < wn) {
+            char a = s[i + k], b = word[k];
+            if (a >= 'A' && a <= 'Z') a = (char)(a + 32);
+            if (b >= 'A' && b <= 'Z') b = (char)(b + 32);
+            if (a != b) break;
+            k++;
+        }
+        if (k == wn) return 1;
+    }
+    return 0;
+}
+
+static void sg_offer(const char *typed, const char *addr, int an, const char *ttl, int tn) {
+    if (sg_n >= SUGGEST_MAX || an <= 0 || an >= URL_TEXT) return;
+    for (int i = 0; i < sg_n; i++) {
+        int k = 0;
+        while (k < an && sg_addr[i][k] == addr[k]) k++;
+        if (k == an && !sg_addr[i][an]) return;
+    }
+    for (const char *p = typed; *p; ) {
+        while (*p == ' ') p++;
+        const char *q = p;
+        while (*q && *q != ' ') q++;
+        if (q > p && !sg_holds(addr, an, p, (int)(q - p)) && !sg_holds(ttl, tn, p, (int)(q - p))) return;
+        p = q;
+    }
+    for (int k = 0; k < an; k++) sg_addr[sg_n][k] = addr[k];
+    sg_addr[sg_n][an] = 0;
+    int k = 0;
+    for (; k < tn && k < (int)sizeof(sg_title[0]) - 1; k++) sg_title[sg_n][k] = ttl[k];
+    sg_title[sg_n][k] = 0;
+    sg_n++;
+}
+
+static void suggest_find(const char *typed) {
+    w_copy(sg_for, sizeof(sg_for), typed, sizeof(sg_for));
+    sg_n = 0;
+    sg_at = -1;
+    if (!sg_read) { bm_read(); hs_read(); sg_read = 1; }
+    for (int a = 0; a < bm_len && sg_n < SUGGEST_MAX; ) {
+        int e = a;
+        while (e < bm_len && bm_text[e] != '\n') e++;
+        int t = a;
+        while (t < e && bm_text[t] != '\t') t++;
+        sg_offer(typed, bm_text + a, t - a, bm_text + (t < e ? t + 1 : e), t < e ? e - t - 1 : 0);
+        a = e + 1;
+    }
+    for (int e = hs_len; e > 0 && sg_n < SUGGEST_MAX; ) {
+        int a = e - 1;
+        while (a > 0 && hs_text[a - 1] != '\n') a--;
+        int end = e;
+        if (end > a && hs_text[end - 1] == '\n') end--;
+        e = a;
+        int t1 = a;
+        while (t1 < end && hs_text[t1] != '\t') t1++;
+        int t2 = t1 + 1;
+        while (t2 < end && hs_text[t2] != '\t') t2++;
+        if (t2 > end || t1 >= end) continue;
+        sg_offer(typed, hs_text + t1 + 1, t2 - t1 - 1, hs_text + (t2 < end ? t2 + 1 : end), t2 < end ? end - t2 - 1 : 0);
+    }
+    /* Said on the console, for anything driving the machine over its serial
+       line (historycheck). */
+    if (sg_n) {
+        puts("browser: suggests ");
+        putn(sg_n);
+        for (int i = 0; i < sg_n; i++) { puts(i ? " | " : ": "); puts(sg_addr[i]); }
+        putc('\n');
+    }
+}
+
+static void suggest_clear(void) {
+    sg_n = 0;
+    sg_at = -1;
+    sg_for[0] = 0;
+    sg_read = 0;
+}
+
+static int suggest_row_at(int mx, int my) {
+    int y0 = UI_PAD + UI_BTN_H + 2;
+    if (!sg_n || mx < sg_bar_x || mx >= sg_bar_x + sg_bar_w || my < y0 || my >= y0 + sg_n * SUGGEST_ROW) return -1;
+    return (my - y0) / SUGGEST_ROW;
+}
+
+static void draw_suggestions(surface *s, const ui_theme *t) {
+    int x = sg_bar_x, y = UI_PAD + UI_BTN_H + 2, w = sg_bar_w, h = sg_n * SUGGEST_ROW + 2;
+    rect(s, x, y, w, h, t->stroke);
+    rect(s, x + 1, y + 1, w - 2, h - 2, t->well);
+    int fh = face_h(UI_FACE_BODY);
+    for (int i = 0; i < sg_n; i++) {
+        int ry = y + 1 + i * SUGGEST_ROW;
+        u32 fg = t->fg, dim = t->dim;
+        if (i == sg_at) {
+            rect(s, x + 1, ry, w - 2, SUGGEST_ROW, t->accent);
+            fg = dim = t->accent_fg;
+        }
+        int tx = x + UI_PAD, ty = ry + (SUGGEST_ROW - fh) / 2;
+        const char *name = sg_title[i][0] ? sg_title[i] : sg_addr[i];
+        int half = w / 2;
+        face_draw_clip(s, tx, ty, tx, x + half - 8, name, fg, UI_FACE_BODY);
+        face_draw_clip(s, x + half, ty, x + half, x + w - UI_PAD, sg_addr[i], dim, UI_FACE_BODY);
+    }
+}
+
 static void show_start(int width) {
     static const char PAGE_START[] =
         "<html><head><title>start</title><style>"
@@ -3838,7 +4142,8 @@ static void show_start(int width) {
         "<h1>where to?</h1>"
         "<form action=\"https://lite.duckduckgo.com/lite/\" method=\"get\">"
         "<input type=\"text\" name=\"q\" size=\"44\"> <input type=\"submit\" value=\"search\"></form>"
-        "<p><small>or type an address, or words to look for, into the bar above</small></p>"
+        "<p><small>or type an address, or words to look for, into the bar above; "
+        "<a href=\"about:history\">history</a></small></p>"
         "<!--bookmarks-->"
         "<h2>sites</h2><ul>"
         "<li><a href=\"https://www.youtube.com/results?search_query=music\">YouTube</a> "
@@ -3972,6 +4277,26 @@ static void load(const char *address, int width, int keep_scroll) {
     /* What was still coming for the last page is not this one's. */
     pic_wait_drop();
     pics_said = 0;
+    /* The browser's own pages are no site's: a link on one may go anywhere,
+       a file on this machine included, and says nothing of where it came
+       from. */
+    if (w_starts_fold(address, "about:")) {
+        url_parse("file:///", &here);
+        web_referrer_from[0] = 0;
+        web_files_ok = 0;
+    }
+    if (w_starts_fold(address, HISTORY_ADDRESS)) {
+        if (w_starts_fold(address, HISTORY_ADDRESS "?forget")) {
+            hs_forget();
+            set_address(HISTORY_ADDRESS);
+        }
+        int shown = show_history(width);
+        char n[16];
+        number_into(n, shown);
+        say("history, kept on this machine: ", n);
+        say_more(shown == 1 ? " page" : " pages");
+        return;
+    }
     if (w_same_fold(address, START_ADDRESS)) {
         show_start(width);
         char shown[16];
@@ -4728,7 +5053,7 @@ static void set_search(const char *what) {
    Files hands one over or a person types it, is a file on this machine. */
 static void go_or_search(const char *typed) {
     while (*typed == ' ') typed++;
-    if (w_same_fold(typed, START_ADDRESS)) set_address(START_ADDRESS);
+    if (w_same_fold(typed, START_ADDRESS) || w_starts_fold(typed, HISTORY_ADDRESS)) set_address(typed);
     else if (typed[0] == '/' && typed[1] != '/') {
         char full[URL_TEXT];
         int w = 0;
@@ -4822,6 +5147,7 @@ static void open_window(const char *address) {
 }
 
 static void announce_page(void) {
+    if (announce_owed) hs_note(announce_at, title);
     announce_owed = 0;
     puts("browser: ");
     puts(announce_at);
@@ -5002,15 +5328,21 @@ int main(int argc, char **argv) {
                 if (k == '\n') {
                     bar.focused = 0;
                     bar_fresh = 0;
+                    if (sg_at >= 0 && sg_at < sg_n) set_address(sg_addr[sg_at]);
+                    suggest_clear();
                     /* A sentence rather than an address is something to
                        look for, which is what an address bar has meant for
                        twenty years. */
                     go_or_search(address);
                     push_history(address);
                     want_load = 1;
+                } else if ((k == KEY_DOWN || k == KEY_UP) && sg_n > 0) {
+                    if (k == KEY_DOWN) sg_at = sg_at + 1 < sg_n ? sg_at + 1 : sg_at;
+                    else sg_at = sg_at >= 0 ? sg_at - 1 : -1;
                 } else if (k == 27) {
                     bar.focused = 0;
                     bar_fresh = 0;
+                    suggest_clear();
                     set_address(hist_at >= 0 ? hist[hist_at].text : address);
                 } else {
                     int pasting = KEY_CTRL(raw) && key_ctrl_letter(raw) == 'v';
@@ -5087,6 +5419,15 @@ int main(int argc, char **argv) {
                 }
             }
             if (jsdom_live()) jsdom_key_up(raw);
+        }
+
+        /* What the bar suggests for what is typed in it, found again when
+           that changes, and gone when the bar has not the keyboard. */
+        if (bar.focused && !bar_fresh && address[0]) {
+            if (!w_same(address, sg_for)) { suggest_find(address); dirty = 1; }
+        } else if (sg_n || sg_for[0]) {
+            suggest_clear();
+            dirty = 1;
         }
 
         /* A handler for what was typed may have changed the page. */
@@ -5233,8 +5574,8 @@ int main(int argc, char **argv) {
                every relative link on the page is resolved against a page
                nobody is looking at. */
             char landed[URL_TEXT];
-            if (w_same_fold(address, START_ADDRESS))
-                w_copy(landed, sizeof(landed), START_ADDRESS, sizeof(landed));
+            if (w_starts_fold(address, "about:"))
+                w_copy(landed, sizeof(landed), address, sizeof(landed));
             else
                 url_text(&here, landed, sizeof(landed));
             set_address(landed);
@@ -5290,6 +5631,22 @@ int main(int argc, char **argv) {
                 for (int k = 0; k < nr; k++) hover_reach[k] = reach[k];
                 relayout(view_w - UI_PAD * 2);
                 over_link = lay_link_at(&page, dx, dy);
+            }
+        }
+
+        /* A suggestion clicked goes there, and the page under the list
+           never hears of the click. */
+        if (in.released && sg_n > 0 && bar.focused) {
+            int row = suggest_row_at(in.mx, in.my);
+            if (row >= 0) {
+                in.released = 0;
+                set_address(sg_addr[row]);
+                suggest_clear();
+                bar.focused = 0;
+                bar_fresh = 0;
+                push_history(address);
+                want_load = 1;
+                dirty = 1;
             }
         }
 
@@ -5415,6 +5772,12 @@ int main(int argc, char **argv) {
                page stays where it is and the stream's waiting is not its. */
             if (w_starts_fold(href, "play:")) {
                 if (spawn_arg("/bin/play", href + 5) < 0) puts("browser: the player could not be started\n");
+            } else if (w_starts_fold(href, "about:") && hist_at >= 0 && w_starts_fold(hist[hist_at].text, "about:")) {
+                /* One of the browser's own pages, from another of them only:
+                   a site's link cannot forget the history. */
+                set_address(href);
+                push_history(href);
+                want_load = 1;
             } else if (link_target(over_link, &next)) {
                 char text_of[URL_TEXT];
                 url_text(&next, text_of, sizeof(text_of));
@@ -5448,6 +5811,8 @@ int main(int argc, char **argv) {
         int go_w = 40;
         int field_w = w - bx - go_w - UI_GAP - UI_PAD;
         if (field_w < 80) field_w = 80;
+        sg_bar_x = bx;
+        sg_bar_w = field_w;
         if (ui_field_draw(&s, &in, &t, bx, UI_PAD, field_w, &bar,
                           "type an address"))
             bar_fresh = 1;
@@ -5494,6 +5859,8 @@ int main(int argc, char **argv) {
         ui_scrollbar(&s, &t, view_x + view_w + 2, view_y + 2, view_h - 4,
                      scroll, view_h,
                      page.height < view_h ? view_h : page.height);
+        /* Over everything, under the bar. */
+        if (sg_n > 0 && bar.focused) draw_suggestions(&s, &t);
 
         win_commit(win);
         browser_wait(win);
