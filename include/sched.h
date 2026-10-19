@@ -233,8 +233,11 @@ void   sched_init(void);
 task_t *task_create(const char *name, void (*entry)(void));
 
 /* Builds a ring 3 task in its own address space. entry and stack_top are
-   addresses in that space, not the kernel's. */
-task_t *task_create_user(const char *name, u64 dir, u64 entry, u64 stack_top);
+   addresses in that space, not the kernel's; [zero_lo, zero_hi) are its
+   pages of zeros the fault handler gives out (elf_zero_range), set before
+   the task can run. */
+task_t *task_create_user(const char *name, u64 dir, u64 entry, u64 stack_top,
+                         u64 zero_lo, u64 zero_hi);
 
 /* A copy of the calling task, sharing nothing but the code it was built
    from. `frame` is the interrupt frame the caller will itself return

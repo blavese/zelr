@@ -11,8 +11,6 @@
 #include "elf.h"
 #include "user.h"
 
-#define USER_CODE_BASE  (USER_SPACE_BASE + 0x40000000ull)
-
 /* A program is entered with the stack pointer on a sixteen byte boundary,
  * which is what System V says and what the startup code in sdk/zelr.h
  * is written against.
@@ -361,7 +359,7 @@ int user_spawn_stub(const char *name) {
         return -2;
     }
 
-    task_t *t = task_create_user(name, dir, USER_CODE_BASE, rsp);
+    task_t *t = task_create_user(name, dir, USER_CODE_BASE, rsp, 0, 0);
     if (!t) { paging_free_directory(dir); return -3; }
     return (int)t->pid;
 }
@@ -379,7 +377,7 @@ int user_spawn_flat(const char *name, const u8 *image, u32 size) {
         return -2;
     }
 
-    task_t *t = task_create_user(name, dir, USER_CODE_BASE, rsp);
+    task_t *t = task_create_user(name, dir, USER_CODE_BASE, rsp, 0, 0);
     if (!t) { paging_free_directory(dir); return -3; }
     return (int)t->pid;
 }
@@ -406,9 +404,13 @@ int user_spawn_elf_argv(const char *name, const u8 *image, u32 size,
         return ELF_ERR_MEMORY;
     }
 
-    task_t *t = task_create_user(name, dir, entry, rsp);
+    task_t *t = task_create_user(name, dir, entry, rsp, zlo, zhi);
     if (!t) { paging_free_directory(dir); return ELF_ERR_MEMORY; }
-    t->zero_lo = zlo;
-    t->zero_hi = zhi;
-    return (int)t->pid;
+    /* Nothing of the task's may be touched from here: it may have run, and
+       ended, already. */
+    u32 pid = t->pid;
+    if (spawn_test_probe) spawn_test_probe(pid);
+    return (int)pid;
 }
+
+void (*spawn_test_probe)(u32 pid);

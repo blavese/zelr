@@ -347,7 +347,8 @@ task_t *task_fork(const char *name, u64 dir, const registers_t *frame,
     return t;
 }
 
-task_t *task_create_user(const char *name, u64 dir, u64 entry, u64 stack_top) {
+task_t *task_create_user(const char *name, u64 dir, u64 entry, u64 stack_top,
+                         u64 zero_lo, u64 zero_hi) {
     task_t *t = (task_t *)kcalloc(sizeof(task_t));
     if (!t) return 0;
     u8 *stack = (u8 *)kmalloc(STACK_SIZE);
@@ -361,6 +362,13 @@ task_t *task_create_user(const char *name, u64 dir, u64 entry, u64 stack_top) {
     t->on_cpu = -1;
     t->dir = dir;
     t->user = true;
+    /* Here and not by the caller afterwards: the task is runnable once it is
+       in the ring, and a kernel task starting it (the shell, the desktop's
+       launcher) can be preempted in between. A program that ran first
+       wrote its first zero data outside a range of nothing and was ended
+       at its first instruction (fptest in a gate, 0.163.0). */
+    t->zero_lo = zero_lo;
+    t->zero_hi = zero_hi;
     fpu_blank(fpu_area_of(t));
     inherit_cwd(t);
     /* Started rather than forked, so it gets the three it is born with

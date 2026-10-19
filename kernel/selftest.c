@@ -1500,6 +1500,79 @@ static const u8 console_reader[] = {
    runnable, so the scheduler kept handing it the processor and no other
    processor's system call got in until a key came. Waiting should be
    blocked, and cost nothing until the key. */
+/* A program whose first instruction writes to its zero data: an ELF of one
+   segment, two pages in memory and only the headers and these few bytes in
+   the file, so its second page is the loader's to give out on first touch
+   (elf_zero_range). It writes 7 there and leaves with what it reads back. */
+static u8 zero_writer[0x78 + 32];
+
+static void put_le(u8 *p, u64 v, int n) { for (int i = 0; i < n; i++) p[i] = (u8)(v >> (8 * i)); }
+
+static u32 zero_writer_make(void) {
+    static const u8 code[] = {
+        0x48, 0xB8, 0, 0, 0, 0, 0, 0, 0, 0,         /* mov rax, base + 0x1008 */
+        0x48, 0xC7, 0x00, 7, 0, 0, 0,               /* mov qword [rax], 7 */
+        0x8B, 0x18,                                 /* mov ebx, [rax] */
+        0xB8, SYS_EXIT, 0, 0, 0,                    /* mov eax, SYS_EXIT */
+        0xCD, 0x80,                                 /* int 0x80 */
+        0xEB, 0xFE,                                 /* and, in case, stay here */
+    };
+    u64 base = USER_CODE_BASE;
+    u8 *e = zero_writer;
+    for (u32 i = 0; i < sizeof(zero_writer); i++) e[i] = 0;
+    e[0] = 0x7F; e[1] = 'E'; e[2] = 'L'; e[3] = 'F';
+    e[4] = 2; e[5] = 1; e[6] = 1;                   /* 64-bit, little endian */
+    put_le(e + 16, 2, 2);                           /* an executable */
+    put_le(e + 18, 0x3E, 2);                        /* for x86-64 */
+    put_le(e + 20, 1, 4);
+    put_le(e + 24, base + 0x78, 8);                 /* entered at the code */
+    put_le(e + 32, 64, 8);                          /* program headers here */
+    put_le(e + 52, 64, 2);
+    put_le(e + 54, 56, 2);
+    put_le(e + 56, 1, 2);                           /* one of them */
+    u8 *p = e + 64;
+    put_le(p, 1, 4);                                /* PT_LOAD */
+    put_le(p + 4, 7, 4);                            /* read, write, run */
+    put_le(p + 16, base, 8);
+    put_le(p + 24, base, 8);
+    put_le(p + 32, 0x78 + sizeof(code), 8);         /* in the file */
+    put_le(p + 40, 0x2000, 8);                      /* in memory: two pages */
+    put_le(p + 48, 0x1000, 8);
+    for (u32 i = 0; i < sizeof(code); i++) e[0x78 + i] = code[i];
+    put_le(e + 0x78 + 2, base + 0x1008, 8);
+    return 0x78 + sizeof(code);
+}
+
+/* Lets the new task run before its starter goes on, as a tick there would. */
+static void spawn_run_first(u32 pid) {
+    spawn_test_probe = 0;
+    for (int i = 0; i < 200; i++) {
+        task_t *x = task_by_pid(pid);
+        if (!x || x->state == TASK_DEAD || x->slices > 0) break;
+        sleep_ms(2);
+    }
+}
+
+static void test_spawn_zero(void) {
+    u32 size = zero_writer_make();
+    u64 lo = 0, hi = 0;
+    u64 dir = paging_new_directory();
+    u64 entry = 0;
+    int rc = dir ? elf_load(dir, zero_writer, size, &entry) : -1;
+    if (rc == ELF_OK) elf_zero_range(&lo, &hi);
+    if (dir) paging_free_directory(dir);
+    ok("a program's second page, past its file, is zeros given on first touch",
+       rc == ELF_OK && hi - lo == 0x1000);
+
+    /* Started as the shell starts a program, and run before the shell goes
+       on: its zero range is its own from its first instruction. */
+    spawn_test_probe = spawn_run_first;
+    int pid = user_spawn_elf("selftest-zero", zero_writer, size);
+    spawn_test_probe = 0;
+    int status = pid > 0 ? task_wait((u32)pid) : -100;
+    ok("a program that runs before its starter goes on has its zero data", status == 7);
+}
+
 static void test_console_wait(void) {
     int pid = user_spawn_flat("selftest-reader", console_reader, sizeof(console_reader));
     ok("a program that reads the console can be started", pid > 0);
@@ -7264,7 +7337,7 @@ int selftest_run(void) {
     kprintf("[network]\n");    test_net();
     kprintf("[tcp]\n");        test_tcp();
     kprintf("[elf]\n");        test_elf();
-    kprintf("[userspace]\n");  test_userspace(); test_console_wait(); test_input_handover();
+    kprintf("[userspace]\n");  test_userspace(); test_spawn_zero(); test_console_wait(); test_input_handover();
     kprintf("[video]\n");      test_video(); test_console();
     kprintf("[mouse]\n");      test_mouse(); test_mouse_edges();
     kprintf("[graphics]\n");   test_gfx(); test_frame_drawing();

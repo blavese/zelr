@@ -19,6 +19,10 @@ int user_spawn_elf(const char *name, const u8 *image, u32 size);
 int user_spawn_elf_argv(const char *name, const u8 *image, u32 size,
                         int argc, const char *const *argv);
 
+/* For the self test: called with the new task's pid once it is runnable,
+   where a tick could land. */
+extern void (*spawn_test_probe)(u32 pid);
+
 /* How many words a program can be started on. The whole block -- the strings
    and the vector pointing into them -- is built inside the last page of the
    stack, so the real limit is a page and this is only the shape of it. */
@@ -37,6 +41,9 @@ u64 user_sbrk(i64 delta);
    that, so the only room that is certainly free is underneath. */
 #define USER_HEAP_BASE (USER_SPACE_BASE + 0x10000000ull)
 #define USER_HEAP_MAX  (USER_SPACE_BASE + 0x38000000ull)
+
+/* Where a program image is loaded and a flat one entered (sdk/zelr.ld). */
+#define USER_CODE_BASE (USER_SPACE_BASE + 0x40000000ull)
 
 /* Maps a fresh stack into an address space and puts the program's words on
    it, and says where the stack pointer goes. Public because exec builds one
