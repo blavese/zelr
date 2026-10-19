@@ -821,7 +821,10 @@ static void jd_media_load(int node) {
             if (data) d->bytes = js_str_n(&jd_J, data, len);
             free(data);
             if (!d->bytes) { jd_media_fail(s, 4, "a data: address that does not read"); return; }
-        } else if (!w_starts_fold(addr, "http://") && !w_starts_fold(addr, "https://")) {
+        } else if (!w_starts_fold(addr, "http://") && !w_starts_fold(addr, "https://")
+                   && !w_starts_fold(addr, "file:")) {
+            /* A file on the machine is the browser's to refuse: it reads one
+               only for a page that is itself a file (browser.c). */
             jd_media_fail(s, 4, "nothing a src of that kind can name is played here");
             return;
         }
@@ -1302,12 +1305,16 @@ static int jd_media_file_step(int s) {
         range[w++] = '\n';
         range[w] = 0;
         if (!d->ask && jd_ask_start) {
+            jd_asking_media = 1;
             int id = jd_ask_start("GET", d->url, 0, 0, 0, range, len + 65536);
+            jd_asking_media = 0;
             if (id == -1) return 0;              /* every way out busy: a later pass */
             if (id >= 0) { d->ask = id + 1; d->ask_from = from; return 1; }
             rp.status = id;
         } else if (!d->ask) {
+            jd_asking_media = 1;
             jd_do_request("GET", d->url, 0, 0, 0, range, &rp);
+            jd_asking_media = 0;
         }
         if (rp.status != 200 && rp.status != 206) {
             jd_media_ask_end(d);

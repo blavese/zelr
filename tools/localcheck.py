@@ -14,7 +14,9 @@ A page on the disk asks for the page beside it every way a script can:
 fetch, XMLHttpRequest, and a worker's fetch (which the browser answers by
 another road). It paints itself red if any got it, blue if all were refused
 and the worker ran, and yellow if the worker never answered; it must come out
-blue, its own picture beside it still drawn.
+blue, its own picture beside it still drawn. A film on the disk, which the
+browser plays in a page of its own, is read for its decoder and shown: its
+pictures are the colours playcheck counts. Files calls it a film.
 
 Then a page from the web server on this side whose script fetches a file
 from the machine and paints itself red if it got one and blue if it was
@@ -33,6 +35,8 @@ import zlib
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from harness import Guest, Checks, build_once, count_in, ROOT          # noqa: E402
 from webserver import Server                                           # noqa: E402
+from genmedia import muxed_file                                        # noqa: E402
+from playcheck import colours_seen                                     # noqa: E402
 
 TOOLS = os.path.dirname(os.path.abspath(__file__))
 IMAGE = os.path.join(ROOT, "localcheck.%d.img" % os.getpid())
@@ -105,7 +109,8 @@ def main():
     build_once()
     c = Checks("pages on this machine")
     os.makedirs(WORK, exist_ok=True)
-    files = {"index.htm": INDEX, "page2.htm": PAGE2, "style.css": STYLE, "peek.htm": PEEK, "peekw.js": PEEKW}
+    files = {"index.htm": INDEX, "page2.htm": PAGE2, "style.css": STYLE, "peek.htm": PEEK, "peekw.js": PEEKW,
+             "film.mp4": muxed_file("H264D_COLOURS", 10, 2)[0]}
     for name, body in files.items():
         with open(os.path.join(WORK, name), "wb") as f:
             f.write(body)
@@ -178,6 +183,22 @@ def main():
                   seen and refused and count_in(px, w, SCREEN, RED) < 100, shot)
             c.add("and its own picture is still drawn", abs(count_in(px, w, SCREEN, GREEN) - 40 * 30) < 120, shot)
 
+            # A film on the disk, put in a page of its own: its file is read
+            # for the decoder, which no script reads. Media took only http and
+            # https before.
+            mark = len(vm.serial())
+            mon.send("sendkey ctrl-l", settle=0.3)
+            keys("/home/site/film.mp4\n")
+            seen = said_since(mark, "browser: file:///home/site/film.mp4")
+            played = False
+            end = time.time() + 60
+            while seen and time.time() < end and not played:
+                w, h, px, shot = mon.screen("local-film")
+                n = colours_seen(w, h, px)
+                played = (n["red"] > 2000 and n["blue"] > 2000) or (n["green"] > 2000 and n["yellow"] > 2000)
+            c.add("a film on the disk plays (%s)" % ", ".join("%s %d" % kv for kv in sorted(n.items()))
+                  if seen else "a film on the disk plays (not loaded)", played, shot if seen else None)
+
             # From the web: a page whose script asks for a file here.
             mark = len(vm.serial())
             mon.send("sendkey ctrl-l", settle=0.3)
@@ -204,7 +225,8 @@ def main():
                 if said_since(mark, "files: index.htm - page", 3):
                     chosen = True
                     break
-            c.add("Files calls an html file a page", chosen)
+            c.add("Files calls an mp4 a film", said_since(mark, "files: film.mp4 - film", 1))
+            c.add("and an html file a page", chosen)
             mark = len(vm.serial())
             mon.send("sendkey ret", settle=0.5)
             c.add("and opens it in the browser",

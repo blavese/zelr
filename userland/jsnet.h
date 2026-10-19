@@ -56,6 +56,11 @@ static jd_ask_start_fn jd_ask_start;
 static jd_ask_poll_fn  jd_ask_poll;
 static jd_ask_end_fn   jd_ask_end;
 
+/* Set while a media element asks for a stretch of its file, which only the
+   decoder reads. The browser lets that reach a file beside a page on the
+   disk, and nothing else a script asks for (browser.c script_may_ask). */
+static int jd_asking_media;
+
 void jsdom_asks_with(jd_ask_start_fn start, jd_ask_poll_fn poll, jd_ask_end_fn end) {
     jd_ask_start = start;
     jd_ask_poll = poll;

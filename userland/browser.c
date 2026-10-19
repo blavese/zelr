@@ -2086,12 +2086,13 @@ static void request_lines(const url_t *u, const char *method, const char *header
    on the machine, whatever the page: a page saved from the web and opened
    here is a file page, and its script could read the machine's files and
    send them anywhere. A page's own sheets, pictures and script files are the
-   browser's to read, through ask_begin's other callers and fetch_script.
+   browser's to read, through ask_begin's other callers and fetch_script; a
+   video's file stretches are read only by the decoder (jd_asking_media).
    Every way a script asks comes through here: fetch and XMLHttpRequest as
    asks (ask_start), a worker's fetch and sendBeacon through do_request. */
 static int script_may_ask(const char *url) {
     url_t u;
-    return !url_join(&base, url, &u) || u.secure != URL_FILE;
+    return jd_asking_media || !url_join(&base, url, &u) || u.secure != URL_FILE;
 }
 
 static int do_request(const char *method, const char *url, const char *body, int blen,
