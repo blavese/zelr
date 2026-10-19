@@ -95,6 +95,15 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.168.0
+
+- **Files' trash (10)**: Delete puts a thing in /home/trash (renamed there where the disk can, copied and deleted where
+  it cannot; a clash gets " 2"), with "NAME\tFROM" in /home/trash/.where; ctrl+z in the trash puts it back; in the trash
+  Delete deletes for good on a second press, ctrl+delete twice or File's "Empty the trash" empties it; a stick's files
+  are deleted for good on a second press. Files lists no name beginning with a dot. filescheck's delete section now
+  checks a folder going into the trash (17 checks); trashcheck, a new gate step (71 now). tools/readfat.py read no name
+  beginning with a dot (it meant "." and ".."), so .where could not be read off an image.
+
 ### 0.167.0
 
 - **A folder as a page, with sizes and dates (11)**: fetch.h `web_folder_page` makes a folder's page from a list of

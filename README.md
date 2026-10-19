@@ -165,7 +165,11 @@ the shell and in the terminal) says it in words, and a page's `Date` is
 local in it. A file says
 when it was written and made, in that same local time as FAT keeps it: the
 shell's and the terminal's `ls -l` show it, and so does Files beside the
-file chosen. The machine's own clock is taken to keep UTC, as QEMU's does;
+file chosen. Delete in Files puts a thing in the trash (`/home/trash`, in
+its list of places) rather than taking it off the disk: ctrl+z there puts
+it back where it came from, and Delete there, or ctrl+delete for all of it,
+deletes for good on a second press. A stick's files are deleted for good,
+as before. The machine's own clock is taken to keep UTC, as QEMU's does;
 one that keeps local time instead, as Windows keeps the clock of a machine
 it shares, is a switch on the same page, and the time is worked out from it
 with the zone. And once the machine has an address it asks a time server
@@ -448,6 +452,7 @@ instead.
     python tools/mountcheck.py  mount a usb stick, copy files, watch the flushes
     python tools/namecheck.py   save long names and read them back
     python tools/filescheck.py  copy, move and rename in the file manager, from its keys
+    python tools/trashcheck.py  delete into the trash, put back with ctrl+z, delete for good, empty it
     python tools/notescheck.py  select all, copy, paste, save and undo in the editor, from its keys
     python tools/timecheck.py   set the time zone from the shell and in Settings, read the clocks and a file's time
     python tools/ntpcheck.py    put the clock back to 2020, serve the time from here, see it set

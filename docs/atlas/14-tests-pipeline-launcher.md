@@ -856,6 +856,15 @@ A note on the verified run: `bash run.sh -T` created `zelr.img` in the repositor
 
 ### 8.1 The complete test catalogue
 
+Added in 0.168.0, not yet in the table below:
+- **`trashcheck.py`** (gate `trashtest`, full; 12 checks). A mkfat volume with /home/docs/a.txt, /home/misc/a.txt and
+  /home/docs/sub/inner.txt; Files opened from the terminal on each folder ("files: PATH" on the console), driven by keys.
+  Delete puts docs' a.txt in /home/trash (the same bytes, "files: moved to the trash"), noted in .where; sub goes in
+  whole; misc's a.txt is kept beside it as "a.txt 2"; in the trash ctrl+z on "a.txt 2" puts it back in /home/misc ("files:
+  put back in /home/misc") and its note goes; Delete on sub asks, twice deletes for good; ctrl+delete asks, twice
+  empties ("files: the trash is empty"). Read back off the image with readfat, waiting on the disk; readfat's `walk`
+  (and so `read_file`) skipped every name beginning with a dot and now skips only "." and "..", or .where was never found.
+
 Added in 0.165.0, not yet in the table below:
 - **`historycheck.py`** (gate `historytest`, full; 15 checks since 0.166.0). /home/open/{a,b,c}.htm on a mkfat volume, the first boot
   on the host's clock (`HOST_CLOCK`). a, c (kept with ctrl+D) and b visited, about:history says 3; /home/history read off
@@ -927,7 +936,7 @@ Added in 0.156.0, not yet in the table below:
   and passed on a build whose desktop did not hold the console).
 
 Added in 0.45.0, not yet in the table below:
-- **`filescheck.py`** (gate `filestest`, full; 11 checks). Files driven from the keyboard on a mkfat
+- **`filescheck.py`** (gate `filestest`, full; 17 checks at 0.168.0, its delete section a folder going into the trash). Files driven from the keyboard on a mkfat
   volume seeded with `/home/box/readme.txt`, a 40,000-byte `/home/letter.txt` (past Files' 16 KiB copy
   buffer) and `/home/zeta.txt`. The first boot adds `/home/notes`, so the listing is box, letter.txt,
   notes, zeta.txt.
