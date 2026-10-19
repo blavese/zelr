@@ -3697,6 +3697,86 @@ static int save_download(const char *body, int len, const char *name, char *path
     return same && at == len ? len : -1;
 }
 
+/* --- a page kept ---------------------------------------------------------
+ *
+ * ctrl+S keeps the page in /home/downloads as TITLE.html: its own markup,
+ * asked for again (what was fetched to show it is gone by then), with a
+ * <base> at the top of its head naming where it came from, so that opened
+ * from the disk its sheets, pictures and links still go to the site. Its
+ * scripts run there as on any page on the disk, which is given no file
+ * (script_may_ask). The browser's own pages, and pages already on the
+ * disk, are not kept. */
+static char saved_said[200];
+static int bm_put(char *out, int w, int cap, const char *s, int n);
+
+static void save_page(void) {
+    if (hist_at < 0) return;
+    const char *addr = hist[hist_at].text;
+    url_t u;
+    if (w_starts_fold(addr, "about:")) { say("the browser's own pages are not saved", 0); return; }
+    if (!url_parse(addr, &u)) { say("this page could not be saved", 0); return; }
+    if (u.secure == URL_FILE) { say("this page is on the machine already", 0); return; }
+    response_t r;
+    web_accept = "text/html,*/*";
+    int rc = web_get(&u, replybuf, REPLY_MAX, &r);
+    web_accept = 0;
+    if (rc <= 0 || rc >= 400 || r.truncated || r.cut || r.len <= 0) {
+        say("the page could not be asked for again to save it", 0);
+        return;
+    }
+    /* Where the base goes: after <head ...>, else after <html ...>, else at
+       the top. */
+    int at = 0;
+    for (const char *tag = "<head", *again = "<html"; tag; tag = again, again = 0) {
+        int k = 0, tl = w_len(tag);
+        while (k + tl <= r.len && !(w_starts_fold(r.body + k, tag) && (r.body[k + tl] == '>' || r.body[k + tl] == ' '
+                                                                       || r.body[k + tl] == '\n' || r.body[k + tl] == '\t')))
+            k++;
+        if (k + tl > r.len) continue;
+        while (k < r.len && r.body[k] != '>') k++;
+        if (k < r.len) { at = k + 1; break; }
+    }
+    char where[URL_TEXT];
+    url_text(&u, where, sizeof(where));      /* after any redirect */
+    char *out = (char *)malloc((u64)r.len + URL_TEXT * 6 + 32);
+    if (!out) { say("the page could not be saved", 0); return; }
+    int n = 0;
+    for (int i = 0; i < at; i++) out[n++] = r.body[i];
+    for (const char *p = "<base href=\""; *p; p++) out[n++] = *p;
+    n = bm_put(out, n, n + URL_TEXT * 6, where, w_len(where));
+    for (const char *p = "\">"; *p; p++) out[n++] = *p;
+    for (int i = at; i < r.len; i++) out[n++] = r.body[i];
+    /* Named after its title, with nothing in it a path would read as
+       something else. */
+    char name[96];
+    int k = 0;
+    for (const char *p = title; *p && k < 60; p++) {
+        char ch = *p;
+        if (ch == '/' || ch == '\\' || ch == ':' || ch == '*' || ch == '?' || ch == '"' || ch == '<' || ch == '>'
+            || ch == '|' || (unsigned char)ch < ' ')
+            ch = ' ';
+        if (ch == ' ' && (!k || name[k - 1] == ' ')) continue;
+        name[k++] = ch;
+    }
+    while (k && name[k - 1] == ' ') k--;
+    if (!k) for (const char *p = "page"; *p; p++) name[k++] = *p;
+    for (const char *p = ".html"; *p; p++) name[k++] = *p;
+    name[k] = 0;
+    char path[160];
+    int got = save_download(out, n, name, path, (int)sizeof(path));
+    free(out);
+    if (got < 0) { say("the page could not be written to " DOWNLOADS, 0); return; }
+    const char *leaf = path;
+    for (const char *p = path; *p; p++) if (*p == '/') leaf = p + 1;
+    int w = 0;
+    for (const char *p = "saved "; *p; p++) saved_said[w++] = *p;
+    for (const char *p = leaf; *p && w < 120; p++) saved_said[w++] = *p;
+    for (const char *p = " in " DOWNLOADS; *p; p++) saved_said[w++] = *p;
+    saved_said[w] = 0;
+    say(saved_said, 0);
+    desktop_notice(saved_said);
+}
+
 /* --- looking something up ------------------------------------------------
  *
  * Where a search goes, and why it is not Google.
@@ -5374,6 +5454,12 @@ int main(int argc, char **argv) {
                 continue;
             }
             /* ctrl+N is another window, on the start page. */
+            /* ctrl+S keeps the page in the downloads folder. */
+            if (KEY_CTRL(raw) && key_ctrl_letter(raw) == 's') {
+                save_page();
+                dirty = 1;
+                continue;
+            }
             if (KEY_CTRL(raw) && key_ctrl_letter(raw) == 'n') {
                 open_window(0);
                 dirty = 1;

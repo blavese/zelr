@@ -21,7 +21,10 @@ pictures are the colours playcheck counts. Files calls it a film.
 Then a page from the web server on this side whose script fetches a file
 from the machine and paints itself red if it got one and blue if it was
 refused, and which shows a picture of one, green if it were drawn. It must
-come out blue with no green. And a file the server says to keep is saved
+come out blue with no green. A page from it kept with ctrl+S is a file in
+/home/downloads named after its title, and opened from there it still
+fetches its sheet from the server (the <base> the browser puts at its
+head). And a file the server says to keep is saved
 to /home/downloads, which the browser says in a notice above the dock
 (SYS_NOTICE): on the console, and on the screen, where the band above the
 dock changes when the notice goes a few seconds later and then stays.
@@ -222,6 +225,23 @@ def main():
                   % (count_in(px, w, SCREEN, RED), count_in(px, w, SCREEN, BLUE)),
                   seen and refused and count_in(px, w, SCREEN, RED) < 100, shot)
             c.add("and a picture of one is not drawn", count_in(px, w, SCREEN, GREEN) < 50, shot)
+
+            # A page kept with ctrl+S, opened again from the disk.
+            mark = len(vm.serial())
+            mon.send("sendkey ctrl-l", settle=0.3)
+            keys("http://%s/styled\n" % srv.host)
+            shown = said_since(mark, "browser: http://%s/styled -- styled" % srv.host, 60)
+            mark = len(vm.serial())
+            mon.send("sendkey ctrl-s", settle=0.3)
+            kept = said_since(mark, "notice: saved styled.html in /home/downloads", 40)
+            c.add("ctrl+S keeps a page in /home/downloads, named after its title", shown and kept)
+            mark = len(vm.serial())
+            mon.send("sendkey ctrl-l", settle=0.3)
+            keys("/home/downloads/styled.html\n")
+            again = said_since(mark, "browser: file:///home/downloads/styled.html -- styled", 40)
+            line = [ln for ln in vm.serial()[mark:].splitlines() if "browser: file:///home/downloads/styled.html" in ln]
+            c.add("and opened from there it still takes its sheet from the site (%s)" % (line[-1] if line else "nothing"),
+                  again and bool(line) and "1 style sheet" in line[-1])
 
             # A download, said in a notice above the dock.
             mark = len(vm.serial())
