@@ -95,6 +95,19 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.170.0
+
+- **Downloads past eight megabytes (11)**: a file to be kept that came truncated (more than `SRC_MAX`) is browser.c
+  `save_download_rest`: what came is written, then the rest asked for in `RANGE_STEP` (4 MiB) stretches with a Range
+  line (`web_extra`) into `src`, each answer a 206 or the download is "not sent in parts" (-2) or stopped (-3, the file
+  deleted); its length is the first answer's Content-Length; read back against an Adler-32 kept as it was written
+  (`sum_on`). `download_path` is the naming taken out of `save_download`. **Every download over a megabyte had been "not
+  saved"**: syscall.c `sys_fwrite` (and `sys_fread`) refuse more than 1 MiB a call and `save_download` wrote the file in
+  one; `write_all` writes `WRITE_PIECE` (1 MiB) at a time. A failure to fetch in parts or a short stop says so on the
+  status line ("not saved, not sent in parts: NAME"). webserver.py `/dl/big.bin` (12 MiB, Range,
+  206, Content-Range) and `/dl/whole.bin` (always whole); `RANGES_ASKED`, `Server.ranges()`; `/dl/mid.bin` (3 MiB, held at once). downloadcheck, a new gate
+  step (72 now).
+
 ### 0.169.0
 
 - **A page kept with ctrl+S (11)**: browser.c `save_page` asks for the page's markup again (`web_get`; what was fetched

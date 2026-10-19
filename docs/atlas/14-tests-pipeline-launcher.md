@@ -856,6 +856,14 @@ A note on the verified run: `bash run.sh -T` created `zelr.img` in the repositor
 
 ### 8.1 The complete test catalogue
 
+Added in 0.170.0, not yet in the table below:
+- **`downloadcheck.py`** (gate `downloadtest`, full; 9 checks). A 64 MB mkfat volume and webserver.py:
+  `/bin/browser http://HOST/dl/mid.bin` (3 MiB) says "saved /home/downloads/mid.bin, 3145728 bytes, read back the
+  same"; ctrl+L to `/dl/whole.bin` (12 MiB, never in parts) says "not saved, not sent in parts: whole.bin"; ctrl+L to
+  `/dl/big.bin` (12 MiB, in parts) says "saved /home/downloads/big.bin, 12582912 bytes, read back the same"; the server's
+  `ranges()` run on from where the first part ended to the last byte; read off the image, big.bin is `BIG_BIN` byte for
+  byte, mid.bin its first 3 MiB, and whole.bin is not there.
+
 Added in 0.168.0, not yet in the table below:
 - **`trashcheck.py`** (gate `trashtest`, full; 12 checks). A mkfat volume with /home/docs/a.txt, /home/misc/a.txt and
   /home/docs/sub/inner.txt; Files opened from the terminal on each folder ("files: PATH" on the console), driven by keys.

@@ -215,7 +215,9 @@ ctrl held, opens it in a window of its own and leaves the page where it is;
 ctrl+N opens another window on the start page. Where it has been is kept
 on the disk and listed a day at a time at about:history, and as an address
 is typed the bar suggests the bookmarks and then the history that match it.
-The start page lists the pages visited last. ctrl+S keeps the page in
+The start page lists the pages visited last. A file a server sends to be kept goes to `/home/downloads`, a file
+bigger than the eight megabytes the browser holds at once fetched in parts.
+ctrl+S keeps the page in
 `/home/downloads`, named after its title, with where it came from written
 at its head, so that opened from the disk it still takes its sheets and
 pictures from the site.
@@ -456,6 +458,7 @@ instead.
     python tools/namecheck.py   save long names and read them back
     python tools/filescheck.py  copy, move and rename in the file manager, from its keys
     python tools/trashcheck.py  delete into the trash, put back with ctrl+z, delete for good, empty it
+    python tools/downloadcheck.py  a 12 MB download fetched in parts with Range, read back byte for byte
     python tools/notescheck.py  select all, copy, paste, save and undo in the editor, from its keys
     python tools/timecheck.py   set the time zone from the shell and in Settings, read the clocks and a file's time
     python tools/ntpcheck.py    put the clock back to 2020, serve the time from here, see it set
