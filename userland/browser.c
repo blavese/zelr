@@ -3648,9 +3648,8 @@ static void download_name(const response_t *r, const url_t *u, char *out, int ca
     if (!w) w_copy(out, cap, "download", cap);
 }
 
-/* Saved under a name nothing in the folder has yet ("name (2).ext"), and
-   read back; how many bytes went, or -1. */
-static int save_download(const char *body, int len, const char *name, char *path, int cap) {
+/* A name in the downloads folder nothing there has yet ("name (2).ext"). */
+static void download_path(const char *name, char *path, int cap) {
     mkdir("/home");
     mkdir(DOWNLOADS);
     const char *dot = 0;
@@ -3672,16 +3671,31 @@ static int save_download(const char *body, int len, const char *name, char *path
         zelr_stat st;
         if (stat(path, &st) < 0) break;
     }
-    int fd = open(path, O_WRITE | O_CREATE | O_TRUNC);
-    if (fd < 0) return -1;
+}
+
+/* All of it written, a megabyte a call at most: the call refuses more
+   (syscall.c sys_fwrite), and a download past a megabyte was "not saved"
+   until 0.170.0. A write may also take less than it is given. */
+#define WRITE_PIECE (1024 * 1024)
+static int write_all(int fd, const char *p, int n) {
     int done = 0;
-    while (done < len) {
-        int got = zelr_fwrite(fd, body + done, len - done);
-        if (got <= 0) break;
+    while (done < n) {
+        int piece = n - done > WRITE_PIECE ? WRITE_PIECE : n - done;
+        int got = zelr_fwrite(fd, p + done, piece);
+        if (got <= 0) return 0;
         done += got;
     }
+    return 1;
+}
+
+/* Saved under such a name, and read back; how many bytes went, or -1. */
+static int save_download(const char *body, int len, const char *name, char *path, int cap) {
+    download_path(name, path, cap);
+    int fd = open(path, O_WRITE | O_CREATE | O_TRUNC);
+    if (fd < 0) return -1;
+    int ok = write_all(fd, body, len);
     close(fd);
-    if (done != len) return -1;
+    if (!ok) return -1;
     fd = open(path, O_READ);
     if (fd < 0) return -1;
     static char back[64 * 1024];
@@ -3695,6 +3709,79 @@ static int save_download(const char *body, int len, const char *name, char *path
     }
     close(fd);
     return same && at == len ? len : -1;
+}
+
+/* A file more than src holds (8 megabytes): what came first, then the rest
+   asked for a stretch at a time with Range and written on as it comes. Its
+   length is the first answer's Content-Length; a server that answers a
+   stretch with all of it again (200, not 206) cannot be asked this way.
+   Read back after, against a sum kept as it was written. How many bytes, or
+   -1 not written, -2 not sent in parts, -3 stopped partway (and what was
+   written is deleted). */
+#define RANGE_STEP (4 * 1024 * 1024)
+
+static u32 sum_on(u32 sum, const char *p, int n) {
+    u32 a = sum & 0xFFFF, b = sum >> 16;
+    for (int i = 0; i < n; i++) {
+        a = (a + (unsigned char)p[i]) % 65521;
+        b = (b + a) % 65521;
+    }
+    return (b << 16) | a;
+}
+
+static int save_download_rest(url_t *u, const response_t *first, const char *name, char *path, int cap) {
+    char clen[24];
+    long long total = -1;
+    if (first->head && first->hlen > 0 && wh_header(first->head, first->hlen, "content-length", clen, sizeof(clen))) {
+        total = 0;
+        for (const char *p = clen; *p >= '0' && *p <= '9'; p++) total = total * 10 + (*p - '0');
+    }
+    if (total <= first->len || total > 0x7FFFFFFF) return -2;
+    download_path(name, path, cap);
+    int fd = open(path, O_WRITE | O_CREATE | O_TRUNC);
+    if (fd < 0) return -1;
+    u32 sum = sum_on(1, first->body, first->len);
+    int ok = write_all(fd, first->body, first->len);
+    long long at = first->len;
+    int why = 0;
+    while (ok && at < total) {
+        long long to = at + RANGE_STEP - 1;
+        if (to >= total) to = total - 1;
+        char range[80];
+        int w = 0;
+        for (const char *p = "Range: bytes="; *p; p++) range[w++] = *p;
+        long long nums[2] = { at, to };
+        for (int k = 0; k < 2; k++) {
+            char t[24];
+            int n = 0;
+            long long v = nums[k];
+            do { t[n++] = (char)('0' + v % 10); v /= 10; } while (v);
+            while (n) range[w++] = t[--n];
+            if (!k) range[w++] = '-';
+        }
+        range[w++] = '\r'; range[w++] = '\n'; range[w] = 0;
+        response_t r;
+        url_t v;
+        url_copy(&v, u);
+        web_extra = range;
+        int rc = web_get(&v, src, SRC_MAX, &r);
+        web_extra = 0;
+        if (rc != 206) { why = rc == 200 ? -2 : -3; break; }
+        if (r.len <= 0 || r.len > to - at + 1 || r.cut) { why = -3; break; }
+        sum = sum_on(sum, r.body, r.len);
+        if (!write_all(fd, r.body, r.len)) { ok = 0; break; }
+        at += r.len;
+    }
+    close(fd);
+    if (why || !ok) { unlink(path); return why ? why : -1; }
+    /* Read back, a stretch at a time, against the sum. */
+    fd = open(path, O_READ);
+    if (fd < 0) return -1;
+    u32 back = 1;
+    long long got = 0;
+    for (int n; (n = zelr_fread(fd, src, WRITE_PIECE)) > 0; got += n) back = sum_on(back, src, n);
+    close(fd);
+    return got == total && back == sum ? (int)total : -1;
 }
 
 /* --- a page kept ---------------------------------------------------------
@@ -4558,13 +4645,15 @@ static void load(const char *address, int width, int keep_scroll) {
     if (kind == BODY_FILE) {
         char name[96], path[160], n[16];
         download_name(&reply, &here, name, (int)sizeof(name));
-        if (reply.truncated || reply.cut) {
-            show_message("Not saved", reply.truncated
-                         ? "It is more than this can hold at once (8 megabytes), and only part of it would be saved."
+        int got = reply.cut ? -3 : reply.truncated ? save_download_rest(&here, &reply, name, path, (int)sizeof(path))
+                                                   : save_download(reply.body, reply.len, name, path, (int)sizeof(path));
+        if (got == -2 || got == -3) {
+            show_message("Not saved", got == -2
+                         ? "It is more than this can hold at once (8 megabytes), and the server will not send it in "
+                           "parts."
                          : "The server stopped before the end of it, and only part of it would be saved.", width);
-            say("not saved: ", name);
+            say(got == -2 ? "not saved, not sent in parts: " : "not saved, it stopped short: ", name);
         } else {
-            int got = save_download(reply.body, reply.len, name, path, (int)sizeof(path));
             if (got < 0) {
                 show_message("Not saved", "It could not be written to " DOWNLOADS ": the disk is full, or "
                              "there is no disk.", width);

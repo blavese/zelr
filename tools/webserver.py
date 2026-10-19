@@ -16,6 +16,7 @@ knows it is talking to the machine it is running on.
 import base64
 import hashlib
 import http.server
+import re
 import socket
 import struct
 import threading
@@ -452,6 +453,17 @@ def _report_bytes():
 
 
 REPORT_BIN = _report_bytes()
+
+
+def _big_bytes(size=12 * 1024 * 1024):
+    """Twelve megabytes, more than the browser holds at once (8): blocks of
+    1024 each starting with its own number, so a stretch in the wrong place
+    or missing is seen as surely as a short end."""
+    filler = bytes(range(32, 127)) * 11
+    return b"".join(b"%08d" % i + filler[:1016] for i in range(size // 1024))
+
+
+BIG_BIN = _big_bytes()
 
 # Copy and paste: the address copied from the bar and pasted into the
 # page's field, which the page checks and shows as the colour of a box.
@@ -1235,6 +1247,9 @@ COOKIES = []
 # waited, and whether it closed the connection or asked again down it.
 STALLS = []
 
+# The stretches of /dl/big.bin asked for with Range, (first, last), in order.
+RANGES_ASKED = []
+
 GZIPPED = b"""<html><head><title>compressed</title></head><body>
 <h1>Sent compressed</h1>
 <p>This page went over the wire deflated, with a gzip wrapper round it, and
@@ -1642,6 +1657,26 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._send(KEYS_PAGE)
         elif path == "/paste":
             self._send(PASTE_PAGE)
+        elif path == "/dl/mid.bin":
+            # Three megabytes: held at once, but more than one call writes.
+            self._send(BIG_BIN[:3 * 1024 * 1024], ctype="application/octet-stream",
+                       extra=[("Content-Disposition", 'attachment; filename="mid.bin"')])
+        elif path in ("/dl/big.bin", "/dl/whole.bin"):
+            # big.bin is sent in parts when asked (Range, 206); whole.bin
+            # always all of it, as a server that does not do ranges does.
+            name = path.rsplit("/", 1)[1]
+            extra = [("Content-Disposition", 'attachment; filename="%s"' % name)]
+            m = re.match(r"bytes=(\d+)-(\d*)$", self.headers.get("Range", ""))
+            if m and path == "/dl/big.bin":
+                lo = int(m.group(1))
+                hi = int(m.group(2)) if m.group(2) else len(BIG_BIN) - 1
+                hi = min(hi, len(BIG_BIN) - 1)
+                RANGES_ASKED.append((lo, hi))
+                self._send(BIG_BIN[lo:hi + 1], ctype="application/octet-stream", status=206,
+                           extra=extra + [("Content-Range", "bytes %d-%d/%d" % (lo, hi, len(BIG_BIN))),
+                                          ("Accept-Ranges", "bytes")])
+            else:
+                self._send(BIG_BIN, ctype="application/octet-stream", extra=extra)
         elif path == "/dl/report.bin":
             self._send(REPORT_BIN, ctype="application/octet-stream",
                        extra=[("Content-Disposition", 'attachment; filename="report.bin"')])
@@ -1931,6 +1966,10 @@ class Server:
     def counts(self):
         """Connections opened and requests served, since the last reset."""
         return dict(COUNTS)
+
+    def ranges(self):
+        """The stretches of /dl/big.bin asked for, (first, last), oldest first."""
+        return list(RANGES_ASKED)
 
     def stalls(self):
         """What clients did with the answer that stopped short."""
