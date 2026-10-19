@@ -204,7 +204,9 @@ to answer the first time. `browser example.com`,
 or the browser in the launcher, shows the same page laid out rather than as
 markup. Anything typed at it that is not an address is something to look
 for, so `browser how an operating system boots` comes back with results, and
-clicking one goes to the page.
+clicking one goes to the page. The middle button on a link, or a click with
+ctrl held, opens it in a window of its own and leaves the page where it is;
+ctrl+N opens another window on the start page.
 
 ## running it on a real machine
 
@@ -447,6 +449,7 @@ instead.
     python tools/printcheck.py  press print screen, decode the PNG here, compare it with the screen
     python tools/viewcheck.py   open pictures by name and from Files, walk the folder, count the colours
     python tools/localcheck.py  open a site on the disk in the browser; a web page asks for one of its files
+    python tools/opencheck.py   open links in new windows: the middle button, ctrl and a click, ctrl+N
     python tools/powercheck.py  tell it to shut down, see if it does
     python tools/appcheck.py    make the calculator divide, play a file
     python tools/setcheck.py    write a setting by hand, watch the dock move

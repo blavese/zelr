@@ -856,6 +856,15 @@ A note on the verified run: `bash run.sh -T` created `zelr.img` in the repositor
 
 ### 8.1 The complete test catalogue
 
+Added in 0.164.0, not yet in the table below:
+- **`opencheck.py`** (gate `opentest`, full; 10 checks). /home/open on a mkfat volume: a.htm (red) with two links drawn
+  as blocks of their own colours, to b.htm (blue) and to c.htm (yellow) through a router script that keeps a click
+  unless `ctrlKey`. The links are found on the screen by colour. The middle button (`mon.click(..., button=4)`; harness
+  `click` takes QEMU's button now) opens b in a new window ("browser: a new window for ...", b's title once), a shows
+  beside it and fills the screen again after alt+q with no reload; `sendkey ctrl 2500` held over a left click does the
+  same; ctrl and a click on the router's link opens c with no grey (the router's mark for a kept click); ctrl+N opens
+  about:start.
+
 Added in 0.162.0, not yet in the table below:
 - **`localcheck.py`** (gate `localtest`, full; 14 checks since 0.163.0). /home/site on a mkfat volume (8.3 names: index.htm with
   style.css and pic.png beside it, page2.htm); `/bin/browser /home/site/index.htm`: the console's `file:` address and

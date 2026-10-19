@@ -95,6 +95,32 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.164.0
+
+- **The middle button and the modifiers reach programs (07)**: wm.c `handle_mouse` dropped the middle button
+  everywhere; a middle press on a window's contents now raises it and is handed to it (`held_button` 4, `mouse_capture`,
+  its release through the usual path), and nothing elsewhere. The event that starts a press carries `WM_BTN_CTRL` /
+  `WM_BTN_SHIFT` as held then (`held_mods`, from `kbd_ctrl`/`kbd_shift`). include/wm.h `WM_BTN_*` and the SDK's
+  `WIN_BTN_*` (MIDDLE 0x04, CTRL 0x10, SHIFT 0x20 new) are compared by abicheck, with `WM_EV_*`/`WIN_EV_*` (two checks
+  more). ui.h `ui_input` has `middle_down`/`middle_pressed`/`middle_released` and `ctrl`/`shift` of the last press. Paint
+  and the terminal treat a middle press as they treat a right one.
+- **Links in a window of their own (11)**: browser.c `open_window` spawns `/bin/browser` on the address (a program
+  each, so a window's page, scripts and memory are its own) and prints "browser: a new window for ADDRESS"; a link
+  released with the middle button, or clicked with ctrl held, goes there and the page stays; ctrl+N opens the start
+  page. A trusted click tells the page `ctrlKey`/`shiftKey` (jsdom.h `jsdom_click_with`, `jd_click_ctrl`), so a page's
+  router that keeps plain clicks leaves a ctrl click to the browser. The browser draws a frame for a middle press or
+  release too (it drew only for left ones, keys and the wheel, so the frame with the middle release was skipped). pagetest
+  four more; opencheck, a new gate step (69 now).
+- **A new window does not open exactly over another (07)**: winsrv.c's cascade (`handle % 5` steps of 48 by 38) is
+  clamped to the screen, so every window too big for it opened in the same corner, and a second browser looked like
+  nothing had happened. It now steps back up and left while `wm_corner_taken` (a window within 8 pixels of that corner).
+- **A program started by a kernel task could die at its first instruction (02)**: `user_spawn_elf_argv` gave the task its
+  zero data range (`zero_lo`/`zero_hi`, 0.128.0) after `task_create_user` had put it in the ring; the shell and the
+  desktop's launcher run with interrupts on, so a tick could run it first and its first write to zero data was ended as
+  a fault (fptest, once, in the 0.163.0 gate). `task_create_user` takes the range now. Selftest [userspace] two more
+  (an ELF made in the test whose second page is zeros; `spawn_test_probe` lets it run at the old gap). `USER_CODE_BASE`
+  is in user.h.
+
 ### 0.163.0
 
 - **A page on the disk whose scripts cannot read the machine's files (11)**: 0.162.0 kept a web page's requests away

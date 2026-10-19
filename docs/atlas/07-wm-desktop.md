@@ -465,7 +465,7 @@ Settings (or the shell's `write`) writes `/zelr.cfg` → within ~0.26 s `theme_r
 
 ### 4.7 State machines
 - **Panel**: {out, tucked} × animation phase; transitions in `panel_update` according to `dock_hide`, maximised windows, pointer y, open menus and dragging.
-- **Pointer mode** (mutually exclusive in practice): idle / band (left or right) / dragging window / resizing corner / captured by window / dragging volume slider.
+- **Pointer mode** (mutually exclusive in practice): idle / band (left or right) / dragging window / resizing corner / captured by window / dragging volume slider. Since 0.164.0 a middle press on a ring 3 window's contents captures too (`held_button` = `WM_BTN_MIDDLE`); anywhere else it does nothing. The event starting any press to a program carries `WM_BTN_CTRL`/`WM_BTN_SHIFT` as held then (`held_mods`).
 - **Window**: normal ↔ minimised (chip, button, alt+m/alt+↓, alt+d, shake) ; normal ↔ maximised (button, right-click title, alt+f, alt+↑, drag to top edge; dragging un-maximises) ; snapped left/right is just a size and position (not flagged).
 - **Launcher**: closed → open(categories) ↔ open(query results) → closed (choose, click away, right click, Esc, badge).
 - **Find**: closed ↔ open(empty) ↔ open(query, n hits, cursor `find_at`).
