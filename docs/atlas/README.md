@@ -95,6 +95,13 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.170.1
+
+- **The SDK's slurp and spit past a megabyte (09a)**: the kernel refuses a read or write of more than 1 MiB a call
+  (`sys_fread`, `sys_fwrite`), and slurp asked for all that was left, spit wrote it all in one: Notes could neither open
+  nor save a file past a megabyte. Both go `ZELR_IO_MAX` (1 MiB) at a time; spit gives back the length written or -1.
+  durtest two more.
+
 ### 0.170.0
 
 - **Downloads past eight megabytes (11)**: a file to be kept that came truncated (more than `SRC_MAX`) is browser.c

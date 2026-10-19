@@ -181,8 +181,8 @@ abichecked).
 | `readdir(path, index, out)` | 369-371 | 21 | 1 entry / 0 end / -1 error |
 | `stat(path, out)` | 372-374 | 22 | fills size/is_dir, name zeroed |
 | `chdir(path)` / `getcwd(buf, cap)` | 375-378 | 23/24 | getcwd: 1 ≤ cap ≤ 128, returns length |
-| `slurp(path, buf, cap)` | 381-393 | open+read+close | whole file into caller buffer, returns length or -1 |
-| `spit(path, buf, len)` | 395-401 | open(W\|C\|T)+write+close | |
+| `slurp(path, buf, cap)` | 381-393 | open+read+close | whole file into caller buffer, returns length or -1; since 0.170.1 a megabyte (`ZELR_IO_MAX`) a read, as the kernel refuses more a call |
+| `spit(path, buf, len)` | 395-401 | open(W\|C\|T)+write+close | since 0.170.1 a megabyte a write; the length written, or -1 |
 | `zelr_rename(from,to)` / `rename` [sugar] | 727-735 | 62 | same directory, 8.3 names only (`zelr.h:684-693`) |
 | `fsync(fd)` | 737-739 | 61 | bytes on the drive when 0 |
 | `poll(pollfd_t*, u32 n, timeout_ms)` | 723-725 | 63 | n ≤ 16; re-checks every tick (since 0.58.0 sleeps until a pipe or input wakes it); `POLLIN 1, POLLOUT 4, POLLERR 8, POLLHUP 0x10, POLLNVAL 0x20`; `pollfd_t {int fd; short events, revents;}` (`:709-719`, matches `include/fd.h:85-97`, not abichecked) |
