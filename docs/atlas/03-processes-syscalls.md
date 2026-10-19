@@ -9,6 +9,10 @@ reach it through `user_range_ok`. `[elf]` and maptest check it.
 day, hour, minute, second, as the disk keeps them, local time; -1 for /sys, /bin, the RAM files and the root). A call
 of its own rather than more of `zelr_stat_t`, which programs already built pass at its old size. 72 live calls.
 
+**Since 0.166.0**: **73 `SYS_NOTICE`** (rbx a string of at most 111 bytes before its end): wm.c `wm_notice`, the pill
+Print Screen uses above the dock for four seconds, and "notice: TEXT" on the console; -1 with no desktop running or no
+end in time (`copy_path`). The SDK's `desktop_notice`. 73 live calls.
+
 **Since 0.127.0**: a program's stack may grow to **8 MiB** (`USER_STACK_MAX`; pages given as touched), and elf.c's
 `USER_LOAD_MAX` is `USER_STACK_TOP - USER_STACK_MAX`, so no image reaches the stack's room (`[elf]` checks it). The
 numbers below (1 MiB, +0x4FF00000) are older.

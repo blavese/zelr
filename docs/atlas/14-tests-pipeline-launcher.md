@@ -857,10 +857,10 @@ A note on the verified run: `bash run.sh -T` created `zelr.img` in the repositor
 ### 8.1 The complete test catalogue
 
 Added in 0.165.0, not yet in the table below:
-- **`historycheck.py`** (gate `historytest`, full; 14 checks). /home/open/{a,b,c}.htm on a mkfat volume, the first boot
+- **`historycheck.py`** (gate `historytest`, full; 15 checks since 0.166.0). /home/open/{a,b,c}.htm on a mkfat volume, the first boot
   on the host's clock (`HOST_CLOCK`). a, c (kept with ctrl+D) and b visited, about:history says 3; /home/history read off
   the image here: a line each in order, stamped within the run; a second boot on the same disk (webserver.py's network)
-  still says 3; "beta" typed suggests b, down and return go; "open" suggests c (the bookmark), b, a; "alpha" typed and
+  still says 3, and about:start says ", 3 visited lately"; "beta" typed suggests b, down and return go; "open" suggests c (the bookmark), b, a; "alpha" typed and
   the row under the bar clicked (the bar found by its accent ring and go button) goes to a; page a's block link to
   about:history?forget is not followed (still 3); after the server's /peek, about:history's second entry (a, a file;
   the links found as bands of accent inside the window) opens; the forget button (found by its colour) leaves 0.
@@ -875,13 +875,15 @@ Added in 0.164.0, not yet in the table below:
   about:start.
 
 Added in 0.162.0, not yet in the table below:
-- **`localcheck.py`** (gate `localtest`, full; 14 checks since 0.163.0). /home/site on a mkfat volume (8.3 names: index.htm with
+- **`localcheck.py`** (gate `localtest`, full; 15 checks since 0.166.0). /home/site on a mkfat volume (8.3 names: index.htm with
   style.css and pic.png beside it, page2.htm); `/bin/browser /home/site/index.htm`: the console's `file:` address and
   title, the sheet's background and the picture counted on the screen; ctrl+L and a typed path; a typed folder listed;
   /home/site/peek.htm, a page on the disk whose scripts ask for index.htm beside it by fetch, XMLHttpRequest and a
   worker (peekw.js): blue, no red, its own picture drawn; film.mp4 (genmedia `muxed_file` of the colours) typed into
-  the bar: playcheck's colours counted on the screen (0.163.0); then webserver.py's `/peek`, whose script fetches a file here (red if read, blue if refused) and which shows one as a
-  picture (green): blue, no red, no green; Files on the folder: "film.mp4 - film" passed on the way to "index.htm - page", Enter opens the browser on it.
+  the bar: playcheck's colours counted on the screen (0.163.0); then webserver.py's `/peek`, whose script fetches a file
+  here (red if read, blue if refused) and which shows one as a picture (green): blue, no red, no green; the server's
+  /dl/report.bin saved, "notice: saved report.bin in /home/downloads" on the console and the band above the dock
+  (printcheck's `ABOVE_DOCK`) changing when the notice goes and staying (0.166.0); Files on the folder: "film.mp4 - film" passed on the way to "index.htm - page", Enter opens the browser on it.
 
 Added in 0.160.0, not yet in the table below:
 - **`viewcheck.py`** (gate `viewtest`, full; 8 checks). Three PNGs made here (a 300 by 200 red one with a 60 by 60 blue

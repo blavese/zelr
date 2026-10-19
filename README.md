@@ -126,7 +126,8 @@ whatever the desktop has open, then goes to a program that has a use for it
 returns to the shell; alt and Escape returns to the shell from anywhere.
 
 Print Screen saves the screen as a PNG in `/home/pictures`, named by the
-time, and says so in a notice above the dock for a few seconds; the kernel compresses it with a deflate of its own (it had only ever
+time, and says so in a notice above the dock for a few seconds, as any
+program can (the browser does when it saves a download); the kernel compresses it with a deflate of its own (it had only ever
 inflated), so a screen is a hundred kilobytes or so rather than two and a
 third megabytes. Pictures, in the launcher's Media list, shows a PNG, JPEG,
 GIF or WebP with the browser's decoders, fitted to the window, and the
@@ -209,6 +210,7 @@ ctrl held, opens it in a window of its own and leaves the page where it is;
 ctrl+N opens another window on the start page. Where it has been is kept
 on the disk and listed a day at a time at about:history, and as an address
 is typed the bar suggests the bookmarks and then the history that match it.
+The start page lists the pages visited last.
 
 ## running it on a real machine
 
@@ -1625,7 +1627,7 @@ is still the kernel's own, on the console; the one in a window is a program.
 ## writing a program for it
 
 Four files in `sdk/` are everything a program needs: `zelr.h`, which is the
-seventy-two system calls and a little sugar over them, `zelr.ld`, which says
+seventy-three system calls and a little sugar over them, `zelr.ld`, which says
 where a program is linked, a build line, and an example.
 
 ```bash

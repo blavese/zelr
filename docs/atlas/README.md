@@ -95,6 +95,17 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.166.0
+
+- **A notice for any program (03, 07)**: system call 73 `SYS_NOTICE` (sdk `desktop_notice`) shows a line in the desktop's
+  notice pill (the one Print Screen uses, now `wm_notice`) and says "notice: TEXT" on the console; -1 with no desktop.
+  The browser says a download it saved in one ("saved NAME in /home/downloads"). Selftest [userspace] one more (a
+  program refused with no desktop up); localcheck one more (a download's notice comes above the dock and goes).
+- **The start page lists the pages visited last (11)**: up to `START_RECENT` (5) addresses from /home/history, newest
+  first, each once, under "recently", with a link to about:history; the start page's status says ", N visited
+  lately". browser.c `hs_prev` reads history lines newest first for about:history, the suggestions and the start page.
+  historycheck one more.
+
 ### 0.165.0
 
 - **The browser's history (11)**: browser.c `hs_note` (from `announce_page`, once a load) appends "WHEN\tADDRESS\tTITLE"
