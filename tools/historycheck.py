@@ -12,6 +12,7 @@ says on the console what each page came to and what the bar suggests
     disk image here, stamped with the time (the machine on the host's
     clock);
   - about:history says it holds three, and still does after a restart;
+  - the start page lists the three as visited lately;
   - typing a word of a title suggests that page, and down and return go;
   - typing a word every address has suggests the bookmark first, then the
     history newest first;
@@ -171,6 +172,8 @@ def main():
         keys(mon, "/bin/browser about:history\n")
         c.add("the history is still there after a restart",
               said_since(vm, mark, "browser: about:history -- history -- history, kept on this machine: 3 pages", 60))
+        c.add("and the start page lists the three as visited lately",
+              go(vm, mon, "about:start", ", 3 visited lately"))
 
         # A word of a title, then down and return.
         mark = len(vm.serial())

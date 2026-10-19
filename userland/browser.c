@@ -3909,6 +3909,33 @@ static void hs_note(const char *addr, const char *ttl) {
     close(fd);
 }
 
+/* The line before *e in hs_text, so newest first, moving *e to its start:
+   where its time, address and title are. 0 when there is none left; a line
+   that does not read is passed over. */
+typedef struct { int when, addr, alen, ttl, tlen; } hs_line;
+
+static int hs_prev(int *e, hs_line *l) {
+    while (*e > 0) {
+        int a = *e - 1;
+        while (a > 0 && hs_text[a - 1] != '\n') a--;
+        int end = *e;
+        if (end > a && hs_text[end - 1] == '\n') end--;
+        *e = a;
+        int t1 = a;
+        while (t1 < end && hs_text[t1] != '\t') t1++;
+        int t2 = t1 + 1;
+        while (t2 < end && hs_text[t2] != '\t') t2++;
+        if (t1 - a < 16 || t1 >= end || t2 <= t1 + 1) continue;
+        l->when = a;
+        l->addr = t1 + 1;
+        l->alen = t2 - t1 - 1;
+        l->ttl = t2 < end ? t2 + 1 : end;
+        l->tlen = t2 < end ? end - t2 - 1 : 0;
+        return 1;
+    }
+    return 0;
+}
+
 static void hs_forget(void) {
     mkdir("/home");
     int fd = open(HISTORY, O_WRITE | O_CREATE | O_TRUNC);
@@ -3938,18 +3965,9 @@ static int show_history(int width) {
     char day[11] = "";
     int nseen = 0, open_list = 0;
     int e = hs_len;
-    while (e > 0 && w < cap) {
-        int a = e - 1;
-        while (a > 0 && hs_text[a - 1] != '\n') a--;
-        int line_end = e;
-        if (line_end > a && hs_text[line_end - 1] == '\n') line_end--;
-        e = a;
-        int t1 = a;
-        while (t1 < line_end && hs_text[t1] != '\t') t1++;
-        int t2 = t1 + 1;
-        while (t2 < line_end && hs_text[t2] != '\t') t2++;
-        if (t1 - a < 16 || t2 > line_end || t2 <= t1 + 1) continue;
-        const char *when = hs_text + a;
+    hs_line l;
+    while (w < cap && hs_prev(&e, &l)) {
+        const char *when = hs_text + l.when;
         int same_day = day[0] != 0;
         for (int i = 0; i < 10 && same_day; i++) same_day = when[i] == day[i];
         if (!same_day) {
@@ -3976,25 +3994,25 @@ static int show_history(int width) {
             for (const char *p = "</h2><ul>"; *p; p++) out[w++] = *p;
             open_list = 1;
         }
-        int alen = t2 - t1 - 1, dup = 0;
+        int dup = 0;
         for (int i = 0; i < nseen && !dup; i++) {
-            if (seen_len[i] != alen) continue;
+            if (seen_len[i] != l.alen) continue;
             int same = 1;
-            for (int k = 0; k < alen && same; k++) same = hs_text[seen_at[i] + k] == hs_text[t1 + 1 + k];
+            for (int k = 0; k < l.alen && same; k++) same = hs_text[seen_at[i] + k] == hs_text[l.addr + k];
             dup = same;
         }
         if (dup) continue;
-        if (nseen < 1024) { seen_at[nseen] = t1 + 1; seen_len[nseen] = alen; nseen++; }
+        if (nseen < 1024) { seen_at[nseen] = l.addr; seen_len[nseen] = l.alen; nseen++; }
         for (const char *p = "<li><a href=\""; *p; p++) out[w++] = *p;
-        w = bm_put(out, w, cap, hs_text + t1 + 1, alen);
+        w = bm_put(out, w, cap, hs_text + l.addr, l.alen);
         out[w++] = '"';
         out[w++] = '>';
-        if (line_end > t2 + 1) w = bm_put(out, w, cap, hs_text + t2 + 1, line_end - t2 - 1);
-        else w = bm_put(out, w, cap, hs_text + t1 + 1, alen);
+        if (l.tlen) w = bm_put(out, w, cap, hs_text + l.ttl, l.tlen);
+        else w = bm_put(out, w, cap, hs_text + l.addr, l.alen);
         for (const char *p = "</a> <small>"; *p; p++) out[w++] = *p;
         w = bm_put(out, w, cap, when + 11, 5);
         out[w++] = ' ';
-        w = bm_put(out, w, cap, hs_text + t1 + 1, alen);
+        w = bm_put(out, w, cap, hs_text + l.addr, l.alen);
         for (const char *p = "</small></li>"; *p; p++) out[w++] = *p;
         shown++;
     }
@@ -4075,19 +4093,9 @@ static void suggest_find(const char *typed) {
         sg_offer(typed, bm_text + a, t - a, bm_text + (t < e ? t + 1 : e), t < e ? e - t - 1 : 0);
         a = e + 1;
     }
-    for (int e = hs_len; e > 0 && sg_n < SUGGEST_MAX; ) {
-        int a = e - 1;
-        while (a > 0 && hs_text[a - 1] != '\n') a--;
-        int end = e;
-        if (end > a && hs_text[end - 1] == '\n') end--;
-        e = a;
-        int t1 = a;
-        while (t1 < end && hs_text[t1] != '\t') t1++;
-        int t2 = t1 + 1;
-        while (t2 < end && hs_text[t2] != '\t') t2++;
-        if (t2 > end || t1 >= end) continue;
-        sg_offer(typed, hs_text + t1 + 1, t2 - t1 - 1, hs_text + (t2 < end ? t2 + 1 : end), t2 < end ? end - t2 - 1 : 0);
-    }
+    hs_line l;
+    for (int e = hs_len; sg_n < SUGGEST_MAX && hs_prev(&e, &l); )
+        sg_offer(typed, hs_text + l.addr, l.alen, hs_text + l.ttl, l.tlen);
     /* Said on the console, for anything driving the machine over its serial
        line (historycheck); not as "browser: ", which is a page that finished
        arriving to anything counting them (sitecheck took a suggestion for
@@ -4133,6 +4141,10 @@ static void draw_suggestions(surface *s, const ui_theme *t) {
     }
 }
 
+/* How many of the pages visited last the start page lists, and did. */
+#define START_RECENT 5
+static int start_recent;
+
 static void show_start(int width) {
     static const char PAGE_START[] =
         "<html><head><title>start</title><style>"
@@ -4161,8 +4173,9 @@ static void show_start(int width) {
         "<small>where searches go, Google's included</small></li>"
         "<li><a href=\"https://example.com/\">example.com</a></li>"
         "</ul></body></html>";
-    /* The bookmarks go where the page leaves room for them. */
-    static char page_with[sizeof(PAGE_START) + BOOKMARKS_MAX * 3];
+    /* The bookmarks go where the page leaves room for them, and the pages
+       visited last after them. */
+    static char page_with[sizeof(PAGE_START) + BOOKMARKS_MAX * 3 + START_RECENT * (URL_TEXT * 10 + 600)];
     bm_read();
     const char *mark = "<!--bookmarks-->";
     int w = 0, i = 0, ml = w_len(mark);
@@ -4195,6 +4208,40 @@ static void show_start(int width) {
     } else {
         const char *none = "<p><small>ctrl+D keeps the page you are on here</small></p>";
         for (const char *p = none; *p; p++) page_with[w++] = *p;
+    }
+    start_recent = 0;
+    hs_read();
+    {
+        int rcap = (int)sizeof(page_with) - 512;
+        int seen_at[START_RECENT], seen_len[START_RECENT];
+        hs_line l;
+        for (int e = hs_len; start_recent < START_RECENT && w < rcap && hs_prev(&e, &l); ) {
+            int dup = 0;
+            for (int i = 0; i < start_recent && !dup; i++) {
+                if (seen_len[i] != l.alen) continue;
+                int same = 1;
+                for (int k = 0; k < l.alen && same; k++) same = hs_text[seen_at[i] + k] == hs_text[l.addr + k];
+                dup = same;
+            }
+            if (dup) continue;
+            seen_at[start_recent] = l.addr;
+            seen_len[start_recent] = l.alen;
+            if (!start_recent) for (const char *p = "<h2>recently</h2><ul>"; *p; p++) page_with[w++] = *p;
+            for (const char *p = "<li><a href=\""; *p; p++) page_with[w++] = *p;
+            w = bm_put(page_with, w, rcap, hs_text + l.addr, l.alen);
+            page_with[w++] = '"';
+            page_with[w++] = '>';
+            w = l.tlen ? bm_put(page_with, w, rcap, hs_text + l.ttl, l.tlen)
+                       : bm_put(page_with, w, rcap, hs_text + l.addr, l.alen);
+            for (const char *p = "</a> <small>"; *p; p++) page_with[w++] = *p;
+            w = bm_put(page_with, w, rcap, hs_text + l.addr, l.alen);
+            for (const char *p = "</small></li>"; *p; p++) page_with[w++] = *p;
+            start_recent++;
+        }
+        if (start_recent) {
+            const char *tail = "</ul><p><small><a href=\"about:history\">all of the history</a></small></p>";
+            for (const char *p = tail; *p; p++) page_with[w++] = *p;
+        }
     }
     if (PAGE_START[i]) i += ml;
     while (PAGE_START[i]) page_with[w++] = PAGE_START[i++];
@@ -4311,6 +4358,12 @@ static void load(const char *address, int width, int keep_scroll) {
             say_more(", ");
             say_more(shown);
             say_more(nb == 1 ? " bookmark" : " bookmarks");
+        }
+        if (start_recent) {
+            number_into(shown, start_recent);
+            say_more(", ");
+            say_more(shown);
+            say_more(" visited lately");
         }
         return;
     }
