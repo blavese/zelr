@@ -216,7 +216,8 @@ ctrl+N opens another window on the start page. Where it has been is kept
 on the disk and listed a day at a time at about:history, and as an address
 is typed the bar suggests the bookmarks and then the history that match it.
 The start page lists the pages visited last. A file a server sends to be kept goes to `/home/downloads`, a file
-bigger than the eight megabytes the browser holds at once fetched in parts.
+bigger than the eight megabytes the browser holds at once fetched in parts,
+the window saying how far it has got.
 ctrl+S keeps the page in
 `/home/downloads`, named after its title, with where it came from written
 at its head, so that opened from the disk it still takes its sheets and

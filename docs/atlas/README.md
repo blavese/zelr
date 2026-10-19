@@ -95,6 +95,13 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.171.0
+
+- **A big download says how far it has got (11)**: browser.c `saving_shown` draws "saving NAME: N of M MB" (to the
+  nearest megabyte) in the window before each stretch `save_download_rest` asks for, which waited blank until all of it
+  had come, and says it on the console as "browser bar: saving ..." (never "browser: ", a page's line). `TOOLBAR_H`
+  moved up to the other sizes. downloadcheck one more.
+
 ### 0.170.1
 
 - **The SDK's slurp and spit past a megabyte (09a)**: the kernel refuses a read or write of more than 1 MiB a call
