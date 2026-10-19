@@ -95,6 +95,22 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.163.0
+
+- **A page on the disk whose scripts cannot read the machine's files (11)**: 0.162.0 kept a web page's requests away
+  from files through `web_files_ok`, but that flag is on for every file page, so a page saved from the web and opened
+  here could fetch() its neighbours (and anything else by `../`) and send them out. browser.c `script_may_ask` now
+  refuses any address that joins to `URL_FILE`, whatever the page, in both ways a script asks: `ask_start` (fetch,
+  XMLHttpRequest, which is never synchronous here, and a video's file stretches) answers `WEB_ERR_SCHEME`, and
+  `do_request` (a worker's fetch, sendBeacon) a status of it. A video's stretches are let through (jsnet.h
+  `jd_asking_media`, set by jsmedia.h around its asks): only the decoder reads them, and an MP4 opened from the disk
+  is played from a page that names it. A file page's sheets, pictures, sprites and script files still go through
+  `ask_begin`'s other callers, `fetch_script` and `web_get`.
+- **Films on the disk (13, 10)**: jsmedia.h took only http and https for a src, so an MP4 opened from the disk (shown in
+  browser.c's page of its own, `<video autoplay src=...>`) never played; a `file:` src is now handed to the browser,
+  which reads one only for a file page. Files' `KIND_FILM` (.mp4, "film") opens in the browser. localcheck 14 (a page
+  on the disk that peeks three ways; a film typed into the bar plays; Files calls it a film).
+
 ### 0.162.0
 
 - **Pages on this machine (11, 10)**: web.h `URL_FILE` (secure 2, host "file", port 0): `url_parse` reads `file://PATH`,

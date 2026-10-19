@@ -133,9 +133,11 @@ GIF or WebP with the browser's decoders, fitted to the window, and the
 arrow keys walk the rest of its folder; Files opens a picture there. The
 browser opens pages on the machine too: a path typed into its bar or handed
 over by Files is a `file:` address, a page's sheets and pictures are read
-from beside it, and a folder is shown as a page of links. A page from the
-web cannot reach them: it cannot link to one, and its scripts are refused
-one.
+from beside it, and a folder is shown as a page of links. An MP4 on the
+disk plays in it, and Files opens one there. A page from the web cannot
+reach them: it cannot link to one. No page's scripts are given one, whether
+the page came from the web or from the disk, since a page saved from the
+web and opened here is a page on the disk.
 
 The wheel scrolls whatever is under the pointer, the speaker by the clock
 sets the volume, and the launcher can switch the machine off. Drag on the

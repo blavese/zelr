@@ -886,7 +886,9 @@ main loop (browser.c:1350): events → keys → timers → one XHR → form navi
 ### 3.1 `userland/web.h` (299 lines) -- URLs
 
 (0.162.0: `URL_FILE`, a `secure` of 2 for a file on the machine, "file:///path": parsed, printed and joined as the
-README's since list says; fetch.h `web_file` reads one, only while `web_files_ok`.)
+README's since list says; fetch.h `web_file` reads one, only while `web_files_ok`. Since 0.163.0 a page's scripts
+are never given one: browser.c `script_may_ask` refuses a file address from any page, for `ask_start` and
+`do_request` alike, but for a video's stretches (`jd_asking_media`).)
 
 Purpose (web.h:1-6): "everything here is bytes in and bytes out, with no screen anywhere in it."
 

@@ -857,11 +857,13 @@ A note on the verified run: `bash run.sh -T` created `zelr.img` in the repositor
 ### 8.1 The complete test catalogue
 
 Added in 0.162.0, not yet in the table below:
-- **`localcheck.py`** (gate `localtest`, full; 10 checks). /home/site on a mkfat volume (8.3 names: index.htm with
+- **`localcheck.py`** (gate `localtest`, full; 14 checks since 0.163.0). /home/site on a mkfat volume (8.3 names: index.htm with
   style.css and pic.png beside it, page2.htm); `/bin/browser /home/site/index.htm`: the console's `file:` address and
   title, the sheet's background and the picture counted on the screen; ctrl+L and a typed path; a typed folder listed;
-  then webserver.py's `/peek`, whose script fetches a file here (red if read, blue if refused) and which shows one as a
-  picture (green): blue, no red, no green; Files on the folder: "index.htm - page", Enter opens the browser on it.
+  /home/site/peek.htm, a page on the disk whose scripts ask for index.htm beside it by fetch, XMLHttpRequest and a
+  worker (peekw.js): blue, no red, its own picture drawn; film.mp4 (genmedia `muxed_file` of the colours) typed into
+  the bar: playcheck's colours counted on the screen (0.163.0); then webserver.py's `/peek`, whose script fetches a file here (red if read, blue if refused) and which shows one as a
+  picture (green): blue, no red, no green; Files on the folder: "film.mp4 - film" passed on the way to "index.htm - page", Enter opens the browser on it.
 
 Added in 0.160.0, not yet in the table below:
 - **`viewcheck.py`** (gate `viewtest`, full; 8 checks). Three PNGs made here (a 300 by 200 red one with a 60 by 60 blue
