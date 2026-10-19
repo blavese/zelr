@@ -191,31 +191,14 @@ def main():
         c.add("ctrl+c and ctrl+v copy a folder, with what is in it", fcopied)
         c.add("and the folder copied from is still there", read("/home/inner/kept.txt") == inner)
 
-        # --- delete: a folder with something in it, on a second press -----------------
-        # Back in /home. One Delete on inner asks; keys are taken in order, so
-        # omega.txt renamed by keys after it, seen on the disk, means the first
-        # Delete was taken, and inner is still there. Then two in a row.
+        # --- delete: a folder, into the trash -------------------------------------------
+        # Back in /home. Delete puts inner, with what is in it, in /home/trash
+        # at once (trashcheck takes it from there).
         key("backspace")                   # /home: box, inner, notes, omega.txt
         key("down"); key("down")           # inner
         key("delete")
-        key("down"); key("down")           # omega.txt
-        key("f2")
-        for _ in range(len("omega.txt")):
-            key("backspace", settle=0.02)
-        for ch in "psi":
-            key(ch, settle=0.02)
-        key("dot", settle=0.02)
-        for ch in "txt":
-            key(ch, settle=0.02)
-        key("ret")
-        asked = wait_disk(lambda: read("/home/psi.txt") == zeta) and read("/home/inner/kept.txt") == inner
-        c.add("delete on a folder with something in it asks first", asked)
-        # The list is box, inner, notes, psi.txt again, nothing selected.
-        key("down"); key("down")           # inner
-        key("delete")
-        key("delete")
-        gone = wait_disk(lambda: read("/home/inner/kept.txt") is None)
-        c.add("and the second press deletes it, with what is in it", gone)
+        trashed = wait_disk(lambda: read("/home/trash/inner/kept.txt") == inner) and read("/home/inner/kept.txt") is None
+        c.add("delete puts a folder in the trash, with what is in it", trashed)
         c.add("leaving the copy in box", read("/home/box/inner/kept.txt") == inner)
 
         mon.send("sendkey alt-q", settle=1.0)

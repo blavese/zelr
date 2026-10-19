@@ -654,6 +654,7 @@ if [ "$MODE" = "screen" ] || [ "$MODE" = "full" ]; then
   localtest() { keep timeout 600 python tools/localcheck.py; }
   opentest() { keep timeout 600 python tools/opencheck.py; }
   historytest() { keep timeout 900 python tools/historycheck.py; }
+  trashtest() { keep timeout 600 python tools/trashcheck.py; }
 
   # The second boot of a machine, which is the one nothing else reaches:
   # every other check starts the kernel directly and never asks a firmware
@@ -758,6 +759,7 @@ if [ "$MODE" = "screen" ] || [ "$MODE" = "full" ]; then
   par_start "pages on this machine open, and the web cannot read them" localtest
   par_start "a link opens in a window of its own" opentest
   par_start "the browser keeps, lists and suggests where it has been" historytest
+  par_start "a file deleted in Files waits in the trash" trashtest
   par_start "a machine still starts once it has formatted its disk" boottest
   par_start "ctrl+f finds a word that is on the screen" findtest
   par_start "a deal reaches the cloth and the dealer plays it out" gametest

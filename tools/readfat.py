@@ -182,7 +182,9 @@ class Fat16:
         if depth > 16:
             return
         for name, first, size, attr in self.entries(cluster):
-            if name.startswith("."):
+            # The directory's own two, not every name with a dot in front:
+            # Files' trash keeps .where (trashcheck).
+            if name in (".", ".."):
                 continue
             is_dir = bool(attr & 0x10)
             yield (prefix + name, first, size, is_dir, depth)

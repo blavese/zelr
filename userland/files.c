@@ -67,7 +67,7 @@ static const char *const MENU_TITLES[] = { "File", "Edit", "View", "Help" };
 #define N_MENUS 4
 
 static const char *const FILE_ITEMS[] = {
-    "Open", "New folder", "Rename", "Delete", "Close"
+    "Open", "New folder", "Rename", "Delete", "Empty the trash", "Close"
 };
 static const char *const EDIT_ITEMS[] = { "Copy", "Cut", "Paste" };
 static const char *const VIEW_ITEMS[] = { "Refresh", "Home", "Root" };
@@ -76,8 +76,8 @@ static const char *const HELP_ITEMS[] = { "About Files" };
 static const char *const *MENU_ITEMS[N_MENUS] = {
     FILE_ITEMS, EDIT_ITEMS, VIEW_ITEMS, HELP_ITEMS
 };
-static const int MENU_COUNTS[N_MENUS] = { 5, 3, 3, 1 };
-static const int MENU_WIDTHS[N_MENUS] = { 130, 110, 110, 130 };
+static const int MENU_COUNTS[N_MENUS] = { 6, 3, 3, 1 };
+static const int MENU_WIDTHS[N_MENUS] = { 150, 110, 110, 130 };
 
 static int bar_open = -1;              /* which title is down, or none */
 static int bar_x[N_MENUS];
@@ -230,6 +230,7 @@ static void reload(void) {
 
     zelr_stat st;
     for (int i = 0; i < MAX_ENTRIES && readdir(cwd, i, &st) == 1; i++) {
+        if (st.name[0] == '.') continue;          /* the trash's .where, and the like */
         total++;
         if (!st.is_dir) total_bytes += st.size;
         if (!matches(st.name)) continue;
@@ -447,27 +448,181 @@ static void begin_rename(void) {
     rename_field.focused = 1;
 }
 
-/* A folder with something in it is deleted, everything in it too, on a
-   second press of Delete with nothing else between: it used to say
-   "directory is not empty" and do nothing, and one press taking a folder
-   full of files would be too easy. Anything else pressed sets it back. */
+/* --- the trash ----------------------------------------------------------------
+ *
+ * Delete puts a thing in /home/trash rather than taking it off the disk:
+ * renamed there where the disk can (no data moved, a whole folder at once),
+ * copied and deleted where it cannot. Where it came from is a line of
+ * /home/trash/.where, "NAME\tFROM", so ctrl+z in the trash puts it back.
+ * In the trash, Delete takes a thing off the disk for good on a second
+ * press, and ctrl+delete (twice) or the File menu empties it. A stick's files
+ * are deleted for good, on a second press, as before: a stick goes to other
+ * machines, and a trash on this one would keep a copy of what was on it.
+ * Names beginning with a dot are not listed, the trash's own .where among
+ * them. */
+#define TRASH       "/home/trash"
+#define TRASH_WHERE "/home/trash/.where"
+#define WHERE_MAX   (16 * 1024)
+
+static char where_text[WHERE_MAX + 1];
+static char put_said[PATH_MAX + 16];
+
+static int in_trash(void) { return !strcmp(cwd, TRASH); }
+
+static int on_stick(const char *path) {
+    return !strncmp(path, "/usb", 4) && (path[4] == 0 || path[4] == '/');
+}
+
+static int where_read(void) {
+    int n = read_file(TRASH_WHERE, where_text, WHERE_MAX);
+    if (n < 0) n = 0;
+    where_text[n] = 0;
+    return n;
+}
+
+static void where_write(int n) {
+    int fd = open(TRASH_WHERE, O_WRITE | O_CREATE | O_TRUNC);
+    if (fd < 0) return;
+    for (int done = 0, got; done < n; done += got)
+        if ((got = zelr_fwrite(fd, where_text + done, n - done)) <= 0) break;
+    close(fd);
+}
+
+/* Where NAME in the trash came from, into from (empty if it does not say),
+   and with forget, its line taken out. */
+static void where_of(const char *name, char *from, int forget) {
+    int n = where_read(), w = 0, len = strlen(name);
+    from[0] = 0;
+    for (int a = 0; a < n; ) {
+        int e = a;
+        while (e < n && where_text[e] != '\n') e++;
+        int t = a;
+        while (t < e && where_text[t] != '\t') t++;
+        int is = t < e && t - a == len && !strncmp(where_text + a, name, len);
+        if (is) {
+            int k = 0;
+            for (int i = t + 1; i < e && k < PATH_MAX - 1; i++) from[k++] = where_text[i];
+            from[k] = 0;
+        }
+        if (!(is && forget)) {
+            for (int i = a; i < e; i++) where_text[w++] = where_text[i];
+            where_text[w++] = '\n';
+        }
+        a = e + 1;
+    }
+    if (forget) where_write(w);
+}
+
+/* A name in the trash nothing there has yet: the thing's own, else with a
+   number after it. */
+static void trash_name(const char *leaf, char *out) {
+    join(out, TRASH, leaf);
+    zelr_stat st;
+    for (int n = 2; n < 1000 && stat(out, &st) == 0; n++) {
+        char name[NAME_MAX];
+        int k = 0;
+        for (const char *p = leaf; *p && k < NAME_MAX - 8; p++) name[k++] = *p;
+        name[k++] = ' ';
+        k += utoa(n, name + k);
+        name[k] = 0;
+        join(out, TRASH, name);
+    }
+}
+
+/* Moved where the disk can, else copied and deleted. */
+static int move_tree(const char *from, const char *to) {
+    if (zelr_rename(from, to) == 0) return 0;
+    if (copy_tree(from, to, 0) < 0) return -1;
+    return remove_tree(from, 0);
+}
+
+static int move_to_trash(const char *target) {
+    const char *leaf = target;
+    for (const char *p = target; *p; p++) if (*p == '/') leaf = p + 1;
+    mkdir("/home");
+    mkdir(TRASH);
+    char dest[PATH_MAX];
+    trash_name(leaf, dest);
+    if (move_tree(target, dest) < 0) return -1;
+    int n = where_read();
+    const char *name = dest + strlen(TRASH) + 1;
+    if (n + strlen(name) + strlen(target) + 2 < WHERE_MAX) {
+        for (const char *p = name; *p; p++) where_text[n++] = *p;
+        where_text[n++] = '\t';
+        for (const char *p = target; *p; p++) where_text[n++] = *p;
+        where_text[n++] = '\n';
+    }
+    where_write(n);
+    return 0;
+}
+
+static void put_back(void) {
+    if (!in_trash()) { say("ctrl+z puts back what is in the trash"); return; }
+    if (selected < 0) { say("nothing selected"); return; }
+    char from[PATH_MAX], folder[PATH_MAX], here[PATH_MAX];
+    where_of(entries[selected].name, from, 0);
+    if (!from[0]) { say("it does not say where it came from"); return; }
+    zelr_stat st;
+    if (stat(from, &st) == 0) { say("something is there already"); return; }
+    strncpy(folder, from, sizeof(folder) - 1);
+    folder[sizeof(folder) - 1] = 0;
+    parent_of(folder);
+    if (stat(folder, &st) != 0 || !st.is_dir) { say("the folder it came from is gone"); return; }
+    join(here, TRASH, entries[selected].name);
+    if (move_tree(here, from) < 0) { say("could not put it back"); return; }
+    where_of(entries[selected].name, from, 1);
+    int k = 0;
+    for (const char *p = "put back in "; *p; p++) put_said[k++] = *p;
+    for (const char *p = folder; *p && k < (int)sizeof(put_said) - 1; p++) put_said[k++] = *p;
+    put_said[k] = 0;
+    say(put_said);
+    reload();
+}
+
+static void empty_trash(void) {
+    zelr_stat st;
+    char path[PATH_MAX];
+    int left = 0;
+    /* The first entry each time, as each one deleted is gone from the
+       list; one that will not go is stepped over. */
+    for (int i = 0; readdir(TRASH, i, &st) == 1; ) {
+        if (st.name[0] == '.') { i++; continue; }
+        join(path, TRASH, st.name);
+        if (remove_tree(path, 0) < 0) { left++; i++; }
+    }
+    where_write(0);
+    say(left ? "could not empty all of it" : "the trash is empty");
+    reload();
+}
+
+/* A thing deleted for good, a stick's or the trash's, on a second press of
+   Delete with nothing else between; anything else pressed sets it back.
+   Anywhere else Delete puts it in the trash, at once. */
 static int delete_armed = -1;
+static int empty_armed;
 
 static void do_delete(void) {
     if (selected < 0) { say("nothing selected"); return; }
     char target[PATH_MAX];
     join(target, cwd, entries[selected].name);
 
-    if (!entries[selected].is_dir) {
-        say(unlink(target) < 0 ? "delete failed" : "deleted");
-    } else if (rmdir(target) == 0) {
-        say("deleted");
-    } else if (delete_armed != selected) {
-        delete_armed = selected;
-        say("press delete again to delete the folder and everything in it");
+    if (!in_trash() && !on_stick(target)) {
+        if (!strcmp(target, TRASH)) { say("the trash stays: ctrl+delete in it empties it"); return; }
+        if (inside(TRASH, target)) { say("the trash is in it, so it stays"); return; }
+        say(move_to_trash(target) < 0 ? "could not move it to the trash" : "moved to the trash");
+        delete_armed = -1;
+        reload();
         return;
-    } else {
-        say(remove_tree(target, 0) < 0 ? "could not delete all of it" : "deleted");
+    }
+    if (delete_armed != selected) {
+        delete_armed = selected;
+        say("press delete again to delete it for good");
+        return;
+    }
+    if (remove_tree(target, 0) < 0) say("could not delete all of it");
+    else {
+        if (in_trash()) where_of(entries[selected].name, target, 1);
+        say("deleted for good");
     }
     delete_armed = -1;
     reload();
@@ -495,6 +650,7 @@ static const struct { const char *label, *path; } PLACES[] = {
     { "Temp",      "/tmp" },
     { "Stick",     "/usb" },
     { "Root",      "/" },
+    { "Trash",     "/home/trash" },
 };
 #define N_PLACES ((int)(sizeof(PLACES) / sizeof(PLACES[0])))
 
@@ -560,7 +716,8 @@ int main(int argc, char **argv) {
         for (int ki = 0; ki < in.nkeys; ki++) {
             int key = in.keys[ki];
             int code = KEY_CODE(key);
-            if (code != KEY_DELETE) delete_armed = -1;    /* a second press, and nothing between */
+            if (code != KEY_DELETE || KEY_CTRL(key)) delete_armed = -1;   /* a second press, and nothing between */
+            if (code != KEY_DELETE || !KEY_CTRL(key)) empty_armed = 0;
             if (renaming >= 0) {
                 if (code == '\n') {
                     char from[PATH_MAX], to[PATH_MAX];
@@ -585,7 +742,12 @@ int main(int argc, char **argv) {
             else if (code == KEY_DOWN && selected < count - 1) selected++;
             else if (code == '\n') open_entry(selected);
             else if (code == '\b') go_up();
+            else if (code == KEY_DELETE && KEY_CTRL(key)) {
+                if (!empty_armed) { empty_armed = 1; say("press ctrl+delete again to empty the trash"); }
+                else { empty_armed = 0; empty_trash(); }
+            }
             else if (code == KEY_DELETE) do_delete();
+            else if (code == 26) put_back();             /* ctrl+z */
             /* The chords every file manager has. Tested on the character
                alone as well as with the control bit, because a serial line
                sends the byte and no modifiers. */
@@ -822,12 +984,11 @@ int main(int argc, char **argv) {
                         reload();
                     } else if (pick == 2) {
                         begin_rename();
-                    } else if (pick == 3 && selected >= 0) {
-                        char target[PATH_MAX];
-                        join(target, cwd, entries[selected].name);
-                        say(unlink(target) < 0 ? "could not delete" : "deleted");
-                        reload();
-                    } else if (pick == 4) closing = 1;
+                    } else if (pick == 3) {
+                        do_delete();
+                    } else if (pick == 4) {
+                        empty_trash();
+                    } else if (pick == 5) closing = 1;
                 } else if (which == 1) {                /* Edit */
                     if (pick == 0) take(0);
                     else if (pick == 1) take(1);
