@@ -23,7 +23,7 @@ import time
 import zlib
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from harness import Guest, Checks, build_once, count_in, ROOT          # noqa: E402
+from harness import Guest, Checks, build_once, count_in, ROOT, HOST_CLOCK   # noqa: E402
 from readfat import Fat16                                              # noqa: E402
 
 DISK = os.path.join(ROOT, "printcheck.%d.img" % os.getpid())
@@ -90,7 +90,8 @@ def main():
     keep = "--keep" in sys.argv
     build_once()
     c = Checks("print screen")
-    vm = Guest(DISK, memory=256, keep=True)
+    # On the host's clock, which the name's time is compared with.
+    vm = Guest(DISK, memory=256, keep=True, extra=HOST_CLOCK)
     try:
         vm.wait_boot()
         vm.type("desktop\n")

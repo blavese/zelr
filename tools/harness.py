@@ -37,6 +37,15 @@ import time
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BUILD = os.path.join(ROOT, "build")
 
+# A network that reaches nothing past QEMU, for a harness that compares the
+# machine's clock with this one's. The machine asks pool.ntp.org for the
+# time after DHCP (timesync.c) and is then right where the host is wrong:
+# this host's clock was 4.3 seconds fast on 2026-10-19, and every such
+# comparison failed. Kept from the outside, the machine keeps the clock QEMU
+# gives it, which is the host's. Network time has its own harness, with its
+# own servers (ntpcheck).
+HOST_CLOCK = ["-nic", "user,restrict=on"]
+
 
 def qemu_path():
     q = os.environ.get("QEMU") or "C:/Program Files/qemu/qemu-system-x86_64.exe"

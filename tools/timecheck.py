@@ -7,7 +7,9 @@ local time, the shell's date and the dock follow it. This sets one from the
 shell and checks /sys/time's local time against its UTC, then chooses
 another in Settings with the mouse and reads the file and the date back.
 The zones have no summer time, so nothing here depends on the date it runs
-on, and half and three quarter hours, so the minutes are checked too.
+on, and half and three quarter hours, so the minutes are checked too. The
+machine is kept on the host's clock (harness HOST_CLOCK), which is what it
+is compared with.
 
 And a file's times, which were the first of January 2025 for every file
 whatever the clock said: one written from the shell is stamped with the
@@ -35,7 +37,7 @@ import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from harness import Guest, Checks, build_once, count_in, ROOT             # noqa: E402
+from harness import Guest, Checks, build_once, count_in, ROOT, HOST_CLOCK # noqa: E402
 from readfat import Fat16                                                 # noqa: E402
 from setcheck import (PAGES, IN_X, IN_Y, PAGE_X, UI_PAD, UI_ROW, CTX_X, CTX_Y,  # noqa: E402
                       CTX_PAD, CTX_ITEM, CTX_CLOSE, DOCK_SIDE, DOCK_H, PANEL_Y)
@@ -84,7 +86,7 @@ def main():
     keep = "--keep" in sys.argv
     build_once()
     c = Checks("time zones")
-    vm = Guest(DISK, memory=256)
+    vm = Guest(DISK, memory=256, extra=HOST_CLOCK)
     try:
         vm.wait_boot()
 
