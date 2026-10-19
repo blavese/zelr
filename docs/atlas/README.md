@@ -95,6 +95,13 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.173.0
+
+- **A Trash icon on the desktop (07)**: wm.c `DESK[]` has a sixth icon, "Trash", Files started on /home/trash (a new
+  `arg` field, `launch_with` spawning with it through `user_spawn_elf_argv`), drawn by `icon_trash` (a lidded bin, both
+  looks). The icon column and its hover zones follow `DESK_N`. trashcheck one more (a double click on the sixth icon
+  opens "files: /home/trash").
+
 ### 0.172.0
 
 - **window.open in the reader's click (12, 11)**: jsdom.h `jd_activation` is set while a trusted click

@@ -166,7 +166,8 @@ local in it. A file says
 when it was written and made, in that same local time as FAT keeps it: the
 shell's and the terminal's `ls -l` show it, and so does Files beside the
 file chosen. Delete in Files puts a thing in the trash (`/home/trash`, in
-its list of places) rather than taking it off the disk: ctrl+z there puts
+its list of places and an icon on the desktop) rather than taking it off
+the disk: ctrl+z there puts
 it back where it came from, and Delete there, or ctrl+delete for all of it,
 deletes for good on a second press. A stick's files are deleted for good,
 as before. The machine's own clock is taken to keep UTC, as QEMU's does;

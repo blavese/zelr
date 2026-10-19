@@ -865,7 +865,7 @@ Added in 0.170.0, not yet in the table below:
   byte, mid.bin its first 3 MiB, and whole.bin is not there.
 
 Added in 0.168.0, not yet in the table below:
-- **`trashcheck.py`** (gate `trashtest`, full; 12 checks). A mkfat volume with /home/docs/a.txt, /home/misc/a.txt and
+- **`trashcheck.py`** (gate `trashtest`, full; 13 checks since 0.173.0, the last the desktop's sixth icon, double clicked). A mkfat volume with /home/docs/a.txt, /home/misc/a.txt and
   /home/docs/sub/inner.txt; Files opened from the terminal on each folder ("files: PATH" on the console), driven by keys.
   Delete puts docs' a.txt in /home/trash (the same bytes, "files: moved to the trash"), noted in .where; sub goes in
   whole; misc's a.txt is kept beside it as "a.txt 2"; in the trash ctrl+z on "a.txt 2" puts it back in /home/misc ("files:
