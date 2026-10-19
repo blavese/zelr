@@ -95,6 +95,16 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.167.0
+
+- **A folder as a page, with sizes and dates (11)**: fetch.h `web_folder_page` makes a folder's page from a list of
+  `web_entry` (name, size, folder or not, `zelr_times`), so sitetest can hand it one: folders first, then files, each by
+  name with case folded (an order of indices, `web_entry_before`: a whole entry assigned is a memcpy ring 3 has not), a
+  file's size as `web_size_text` says it ("100 bytes", "2 KB" rounded up, "3.4 MB"), when each was written ("9 October
+  2026, 14:05", from `file_times`), and "up a folder" by the parent's whole path (".." from a path without its last slash
+  is two up); "nothing here" for an empty one. `web_file` fills the list from `readdir`, `WEB_FOLDER_MAX` 256. sitetest
+  five more; localcheck one more (the folder's links: its seven files and one up).
+
 ### 0.166.0
 
 - **A notice for any program (03, 07)**: system call 73 `SYS_NOTICE` (sdk `desktop_notice`) shows a line in the desktop's
