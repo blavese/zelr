@@ -883,7 +883,7 @@ Added in 0.165.0, not yet in the table below:
   the links found as bands of accent inside the window) opens; the forget button (found by its colour) leaves 0.
 
 Added in 0.164.0, not yet in the table below:
-- **`opencheck.py`** (gate `opentest`, full; 10 checks). /home/open on a mkfat volume: a.htm (red) with two links drawn
+- **`opencheck.py`** (gate `opentest`, full; 11 checks since 0.172.0, one a block whose click handler calls `window.open("b.htm")`). /home/open on a mkfat volume: a.htm (red) with two links drawn
   as blocks of their own colours, to b.htm (blue) and to c.htm (yellow) through a router script that keeps a click
   unless `ctrlKey`. The links are found on the screen by colour. The middle button (`mon.click(..., button=4)`; harness
   `click` takes QEMU's button now) opens b in a new window ("browser window: a new one for ...", b's title once), a shows

@@ -212,7 +212,9 @@ markup. Anything typed at it that is not an address is something to look
 for, so `browser how an operating system boots` comes back with results, and
 clicking one goes to the page. The middle button on a link, or a click with
 ctrl held, opens it in a window of its own and leaves the page where it is;
-ctrl+N opens another window on the start page. Where it has been is kept
+ctrl+N opens another window on the start page. A page's own `window.open`
+opens one too, when it is asked for in the reader's click or key and not
+otherwise. Where it has been is kept
 on the disk and listed a day at a time at about:history, and as an address
 is typed the bar suggests the bookmarks and then the history that match it.
 The start page lists the pages visited last. A file a server sends to be kept goes to `/home/downloads`, a file

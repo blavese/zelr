@@ -95,6 +95,15 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.172.0
+
+- **window.open in the reader's click (12, 11)**: jsdom.h `jd_activation` is set while a trusted click
+  (`jd_fire_click`) or key (`jsdom_key_down`) is told to the page; jswin.h `nat_win_open` (was a null getter) resolves the
+  address and calls the browser's hook (`jsdom_windows_with`) only then, spending the activation (one window a click),
+  and gives back a plain object standing for the window (`closed` false, `opener` null, no-op close/focus/blur); null
+  otherwise. browser.c `script_open_window` joins the address against the page as a link is (`url_join`: a web page
+  cannot open a `file:` or about: address) and calls `open_window`. pagetest three more; opencheck one more (11).
+
 ### 0.171.0
 
 - **A big download says how far it has got (11)**: browser.c `saving_shown` draws "saving NAME: N of M MB" (to the
