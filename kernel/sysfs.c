@@ -460,6 +460,24 @@ static u32 render_theme(char *b, u32 cap) {
     return o.len;
 }
 
+/* The disk's room and a stick's, a line each: "disk      N KiB, M KiB free"
+   or "none". Settings' Storage page reads it four times a second while it is
+   open, which fat.c's kept count makes cheap. Both are asked before anything
+   is written, because asking can wait for the filesystem, and while it waits
+   another task's read of /sys can use the one scratch buffer this is
+   rendered into. */
+static u32 render_storage(char *b, u32 cap) {
+    u64 dt = 0, df = 0, st = 0, sf = 0;
+    bool disk = vfs_space("/", &dt, &df);
+    bool stick = vfs_space("/usb", &st, &sf);
+    out_t o = { b, cap, 0 };
+    if (disk) put(&o, "disk      %u KiB, %u KiB free\n", (u32)(dt / 1024), (u32)(df / 1024));
+    else      put(&o, "disk      none\n");
+    if (stick) put(&o, "stick     %u KiB, %u KiB free\n", (u32)(st / 1024), (u32)(sf / 1024));
+    else       put(&o, "stick     none\n");
+    return o.len;
+}
+
 static const node_t nodes[] = {
     { "/sys/version",  render_version  },
     { "/sys/memory",   render_memory   },
@@ -477,6 +495,7 @@ static const node_t nodes[] = {
     { "/sys/settings", render_settings  },
     { "/sys/theme",    render_theme     },
     { "/sys/wifi",     render_wifi      },
+    { "/sys/storage",  render_storage   },
 };
 #define N_NODES (sizeof(nodes) / sizeof(nodes[0]))
 

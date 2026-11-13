@@ -115,6 +115,12 @@ typedef struct {
     bool fat_cache_valid;
     bool fat_cache_dirty;               /* changed and not yet written; see fat_defer */
     u8   fat_cache[SECTOR_SIZE];
+
+    /* The free space, as the last walk of the table found it; see
+       fat_free_bytes_held. */
+    bool free_known;
+    u32  free_gen;                      /* blk_writes() when it was counted */
+    u64  free_count;
 } fatvol_t;
 
 static fatvol_t volumes[FAT_VOLUMES] = {
@@ -177,6 +183,7 @@ static void fat_forget_volume_held(u32 vol) {
     volumes[vol].mounted = false;
     volumes[vol].fat_cache_valid = false;
     volumes[vol].fat_cache_dirty = false;
+    volumes[vol].free_known = false;
     dcache_forget();
     volumes[vol].fat_bits = 16;
     volumes[vol].alloc_hint = 2;
@@ -409,6 +416,9 @@ static bool fat_set(u32 cluster, u32 value) {
     u32 off = cluster * width;
     u32 lba = fat_start + off / SECTOR_SIZE;
     if (!fat_cache_load(lba)) return false;
+    /* An entry held back by fat_defer has not reached the disk, so
+       blk_writes alone would not say the count kept is old. */
+    CUR.free_known = false;
     if (fat_bits == 32) {
         /* The top four bits belong to whoever set them and are not ours to
            change, so the new value goes in underneath them. */
@@ -571,6 +581,7 @@ static bool fat_mount_at_held(u32 base_lba) {
         return false;
     }
 
+    CUR.free_known = false;
     mounted = true;
     return true;
 }
@@ -2547,12 +2558,24 @@ static u32 fat_reclaim_held(void) {
 /* Sixty four bits, because the product is: it was thirty two, and a volume
    with 4 GiB or more free reported whatever was left over past a multiple of
    4 GiB -- a new 16 GiB stick said it had next to nothing. */
+/* Counted by walking the whole table, which is a read of every sector of it,
+ * so the count is kept until something could have changed it: an entry set
+ * here, or any write to any disk (blk_writes, which also covers a format and
+ * whatever else writes sectors without coming through fat_set). Settings'
+ * Storage page asks four times a second while it is open, and without this
+ * each look read the table again. A walk that failed to read a sector
+ * counted those clusters as used and is not kept. */
 static u64 fat_free_bytes_held(void) {
     if (!mounted) return 0;
+    if (CUR.free_known && CUR.free_gen == blk_writes()) return CUR.free_count;
+    u32 failures_before = fat_read_failures;
     u64 free_clusters = 0;
     for (u32 c = 2; c < cluster_count + 2; c++)
         if (fat_get(c) == 0) free_clusters++;
-    return free_clusters * (u64)fat_cluster_bytes();
+    CUR.free_count = free_clusters * (u64)fat_cluster_bytes();
+    CUR.free_gen = blk_writes();
+    CUR.free_known = fat_read_failures == failures_before;
+    return CUR.free_count;
 }
 
 /* --- one task in the filesystem at a time ------------------------------------

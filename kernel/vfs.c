@@ -190,6 +190,23 @@ bool vfs_volume_missing(const char *abs) {
     return on_usb(abs) && !fat_mounted_on(FAT_VOL_USB);
 }
 
+static void unroute(void);
+
+/* Asked through a path, like everything else here, so the stick's room is
+   the stick's and the rest of the kernel never selects a volume. */
+bool vfs_space(const char *path, u64 *total, u64 *free_bytes) {
+    char abs[VFS_PATH_MAX];
+    if (!vfs_resolve(path, abs, sizeof(abs)) || vfs_generated(abs)) return false;
+    route(abs);
+    bool r = fat_mounted();
+    if (r) {
+        if (total) *total = (u64)fat_total_clusters() * fat_cluster_bytes();
+        if (free_bytes) *free_bytes = fat_free_bytes();
+    }
+    unroute();
+    return r;
+}
+
 /* And back, once the call that needed it is over.
  *
  * The selection used to stay wherever the last path left it, and everything

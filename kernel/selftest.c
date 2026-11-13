@@ -1375,6 +1375,25 @@ static void test_fat_names(void) {
     ok("which the next reclaim gives back", fat_reclaim() >= 1 &&
        fat_free_bytes() > free_before);
 
+    /* The count is kept until the table or the disk changes: Settings'
+       Storage page asks four times a second, and each count was a read of
+       the whole table. Kept too long, it would say a file written took
+       nothing. */
+    u64 free_kept = fat_free_bytes();
+    blk_io_t io_was, io_now;
+    blk_io(&io_was);
+    u64 free_again = fat_free_bytes();
+    blk_io(&io_now);
+    ok("free space asked again reads nothing from the disk",
+       free_again == free_kept && io_now.reads == io_was.reads);
+    static u8 roomy[40000];
+    for (u32 i = 0; i < sizeof(roomy); i++) roomy[i] = (u8)i;
+    bool roomy_ok = fat_write_file("/roomy.bin", roomy, sizeof(roomy));
+    u64 free_taken = fat_free_bytes();
+    fat_delete_file("/roomy.bin");
+    ok("and a file written takes from it, and gives it back deleted",
+       roomy_ok && free_taken + sizeof(roomy) <= free_kept && fat_free_bytes() == free_kept);
+
     /* A reclaim that cannot see everything must free nothing. A directory
        it cannot read used to be taken as empty, so the files in it were
        counted as leaked and their clusters swept up. */
@@ -6080,6 +6099,22 @@ static void test_live_tree(void) {
     n = vfs_read("/sys/devices", buf, sizeof(buf) - 1);
     if (n > 0) buf[n] = 0; else buf[0] = 0;
     ok("devices reports the video mode", contains(buf, "video"));
+
+    /* The room on each volume, for Settings' Storage page. */
+    n = vfs_read("/sys/storage", buf, sizeof(buf) - 1);
+    if (n > 0) buf[n] = 0; else buf[0] = 0;
+    u64 room = 0, room_free = 0;
+    char room_said[96];
+    if (vfs_space("/", &room, &room_free))
+        kformat(room_said, sizeof(room_said), "disk      %u KiB, %u KiB free\n",
+                (u32)(room / 1024), (u32)(room_free / 1024));
+    else
+        kformat(room_said, sizeof(room_said), "disk      none\n");
+    ok("storage says the disk's size and room", contains(buf, room_said) &&
+       (!vfs_disk_backed() || (room > 0 && room_free <= room)));
+    ok("and a stick's, or none", contains(buf, fat_mounted_on(FAT_VOL_USB) ? "stick     " : "stick     none"));
+    ok("but no room for what is not on a volume",
+       !vfs_space("/sys/memory", 0, 0) && !vfs_space("/bin", 0, 0));
 
     /* The point of the whole thing: nothing is cached. Read the clock twice
        with time passing in between and the two must differ. */

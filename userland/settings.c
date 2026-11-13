@@ -90,9 +90,10 @@ static const struct { int w, h; const char *name; } MODES[] = {
 
 static const char *const PAGES[] = {
     "Colours", "Dock", "Windows", "Desktop", "Behaviour",
-    "Screen", "Time", "Wireless", "Everything", "The file", "System", "About"
+    "Screen", "Time", "Wireless", "Everything", "The file", "System", "Storage",
+    "About"
 };
-#define N_PAGES 12
+#define N_PAGES 13
 static int page = 0;
 static int scroll;              /* the Everything page, which is long */
 
@@ -1204,6 +1205,179 @@ static int page_system(surface *s, ui_input *in, ui_theme *t,
     return y;
 }
 
+/* --- storage ---------------------------------------------------------------
+ *
+ * How full the disk and a stick are, as the kernel counts them
+ * (/sys/storage), and what the trash is holding: room the disk does not
+ * have back until the trash is emptied, which nothing said anywhere before.
+ * Emptying it is Files' to do (ctrl+delete twice in the trash), so this page
+ * opens Files there rather than being a second way to throw things away.
+ *
+ * Each part takes the same height whatever it has to say, so the button is
+ * where trashcheck.py works out it is. What the page shows it also says on
+ * the console when that changes ("settings: storage ..."), which is what
+ * the harness reads. */
+
+#define TRASH "/home/trash"
+#define VOLUME_H (22 + 18 + 22 + UI_GAP)        /* words, a bar, what is free */
+
+static char storage_said[200];
+static int  trash_counted_at = -1000;
+static int  trash_things;
+static u64  trash_bytes;
+
+/* "512 bytes", "1.7 KB", "31.9 MB", "250 MB": a tenth only where it
+   says something. */
+static void size_text(char *out, int *at, int cap, u64 bytes) {
+    static const char *const UNIT[] = { "bytes", "KB", "MB", "GB", "TB" };
+    int u = 0;
+    u64 scale = 1;
+    while (u < 4 && bytes >= scale * 1024) { scale *= 1024; u++; }
+    u64 whole = bytes / scale, tenths = (bytes % scale) * 10 / scale;
+    add_num(out, at, cap, (int)whole);
+    if (u >= 1 && whole < 100 && tenths) {
+        add_text(out, at, cap, ".");
+        add_num(out, at, cap, (int)tenths);
+    }
+    add_text(out, at, cap, " ");
+    add_text(out, at, cap, UNIT[u]);
+}
+
+/* "N KiB, M KiB free", a /sys/storage line; 0 for "none". */
+static int storage_line(const char *buf, const char *key, u64 *total, u64 *free_b) {
+    char v[64];
+    sys_value(buf, key, v, sizeof(v));
+    const char *p = v;
+    if (*p < '0' || *p > '9') return 0;
+    u64 a = 0, b = 0;
+    while (*p >= '0' && *p <= '9') a = a * 10 + (u64)(*p++ - '0');
+    while (*p && (*p < '0' || *p > '9')) p++;
+    while (*p >= '0' && *p <= '9') b = b * 10 + (u64)(*p++ - '0');
+    *total = a * 1024;
+    *free_b = b * 1024;
+    return a > 0;
+}
+
+/* What is used of a volume, in words and as a bar, and what is free. */
+static int space_line(surface *s, ui_theme *t, int x, int y, int w,
+                      u64 total, u64 free_b, char *said, int *sat, int scap) {
+    u64 used = total > free_b ? total - free_b : 0;
+    char line[96];
+    int at = 0;
+    line[0] = 0;
+    size_text(line, &at, sizeof(line), used);
+    add_text(line, &at, sizeof(line), " used of ");
+    size_text(line, &at, sizeof(line), total);
+    ui_label(s, t, x, y, line);
+    add_text(said, sat, scap, line);
+
+    int bw = w < 420 ? w : 420;
+    int fill_w = total ? (int)(used * (u64)bw / total) : 0;
+    if (used && fill_w < 3) fill_w = 3;      /* a little used is not nothing */
+    round_rect(s, x, y + 22, bw, 10, 5, mix(t->panel, t->fg, 20));
+    round_rect(s, x, y + 22, fill_w, 10, fill_w < 10 ? fill_w / 2 : 5, t->accent);
+
+    char fr[48];
+    at = 0;
+    fr[0] = 0;
+    size_text(fr, &at, sizeof(fr), free_b);
+    add_text(fr, &at, sizeof(fr), " free");
+    ui_dim_label(s, t, x, y + 40, fr);
+    return y + VOLUME_H;
+}
+
+/* Everything under the trash: the things in it, as Files lists them (no
+   names with a dot first, which is where its .where note is), and the bytes
+   of all they hold. A folder put in the trash is walked to a depth no
+   folder on this machine reaches, to keep a loop of any kind finite. */
+static void trash_walk(const char *path, int depth, int *things, u64 *bytes) {
+    zelr_stat st;
+    char child[256];
+    for (int i = 0; readdir(path, i, &st) == 1; i++) {
+        if (depth == 0 && st.name[0] == '.') continue;
+        if (depth == 0) (*things)++;
+        if (!st.is_dir) { *bytes += st.size; continue; }
+        if (depth >= 8) continue;
+        int at = 0;
+        child[0] = 0;
+        add_text(child, &at, sizeof(child), path);
+        add_text(child, &at, sizeof(child), "/");
+        add_text(child, &at, sizeof(child), st.name);
+        if (at < (int)sizeof(child) - 1) trash_walk(child, depth + 1, things, bytes);
+    }
+}
+
+static int page_storage(surface *s, ui_input *in, ui_theme *t,
+                        int x, int y, int w) {
+    char buf[256];
+    int n = slurp("/sys/storage", buf, sizeof(buf) - 1);
+    buf[n > 0 ? n : 0] = 0;
+
+    char said[200];
+    int sat = 0;
+    said[0] = 0;
+    u64 total, free_b;
+
+    y = ui_section(s, t, x, y, w, "This disk");
+    add_text(said, &sat, sizeof(said), "disk ");
+    if (storage_line(buf, "disk", &total, &free_b)) {
+        y = space_line(s, t, x, y, w, total, free_b, said, &sat, sizeof(said));
+    } else {
+        ui_dim_label(s, t, x, y, "No disk: files are kept in memory until the machine stops.");
+        add_text(said, &sat, sizeof(said), "none");
+        y += VOLUME_H;
+    }
+
+    y = ui_section(s, t, x, y, w, "Stick");
+    add_text(said, &sat, sizeof(said), "; stick ");
+    if (storage_line(buf, "stick", &total, &free_b)) {
+        y = space_line(s, t, x, y, w, total, free_b, said, &sat, sizeof(said));
+    } else {
+        ui_dim_label(s, t, x, y, "No stick in.");
+        add_text(said, &sat, sizeof(said), "none");
+        y += VOLUME_H;
+    }
+
+    /* Counted again once a second while the page is open: Files may be
+       putting things in it beside this window. */
+    if (ticks() - trash_counted_at >= 100) {
+        trash_things = 0;
+        trash_bytes = 0;
+        trash_walk(TRASH, 0, &trash_things, &trash_bytes);
+        trash_counted_at = ticks();
+    }
+    ui_due(trash_counted_at + 100);
+
+    y = ui_section(s, t, x, y, w, "Trash");
+    char line[96];
+    int at = 0;
+    line[0] = 0;
+    if (trash_things) {
+        add_num(line, &at, sizeof(line), trash_things);
+        add_text(line, &at, sizeof(line), trash_things == 1 ? " thing, " : " things, ");
+        size_text(line, &at, sizeof(line), trash_bytes);
+    } else {
+        add_text(line, &at, sizeof(line), "empty");
+    }
+    ui_label(s, t, x, y, trash_things ? line : "Empty.");
+    add_text(said, &sat, sizeof(said), "; the trash ");
+    add_text(said, &sat, sizeof(said), line);
+    y += 22;
+    ui_dim_label(s, t, x, y, "Kept until it is emptied: ctrl+delete twice in it.");
+    y += 22 + UI_GAP;
+    if (ui_button(s, in, t, x, y, 170, "open the trash"))
+        spawn_arg("/bin/files", TRASH);
+    y += UI_BTN_H + UI_GAP;
+
+    if (strcmp(said, storage_said)) {
+        strcpy(storage_said, said);
+        puts("settings: storage ");
+        puts(said);
+        puts("\n");
+    }
+    return y;
+}
+
 static int page_about(surface *s, ui_input *in, ui_theme *t,
                       int x, int y, int w, int h) {
     (void)in;
@@ -1218,7 +1392,15 @@ static int page_about(surface *s, ui_input *in, ui_theme *t,
 
 /* --- the window ----------------------------------------------------------- */
 
-int main(void) {
+int main(int argc, char **argv) {
+    /* "settings storage" opens on that page, for the shell, a harness, or
+       anything else that wants to send somebody to one. */
+    for (int i = 0; argc > 1 && i < N_PAGES; i++) {
+        const char *a = argv[1], *b = PAGES[i];
+        while (*a && *b && (*a | 32) == (*b | 32)) { a++; b++; }
+        if (!*a && !*b) page = i;
+    }
+
     int win = win_create("Settings", 700, 580);
     if (win < 0) exit(1);
     win_allow_resize(win);
@@ -1303,6 +1485,7 @@ int main(void) {
         case 8: y = page_everything(&s, &in, &t, x, y, cw, h); break;
         case 9: y = page_file(&s, &in, &t, x, y, cw, h); break;
         case 10: y = page_system(&s, &in, &t, x, y, cw, h); break;
+        case 11: y = page_storage(&s, &in, &t, x, y, cw); break;
         default: y = page_about(&s, &in, &t, x, y, cw, h); break;
         }
 

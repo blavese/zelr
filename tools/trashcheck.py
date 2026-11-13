@@ -20,7 +20,11 @@ with a file in it:
     it for good;
   - ctrl+delete asks, and twice empties the trash;
   - the desktop's Trash icon, its sixth, opened with a double click, is
-    Files on the trash.
+    Files on the trash;
+  - Settings' Storage page ("settings storage" from the terminal) says how
+    much of the disk is used, as the image's own table counts it, and what
+    the trash holds; reached from its sidebar, its button opens Files on
+    the trash.
 
   python tools/trashcheck.py [--keep]
 """
@@ -33,6 +37,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from harness import Guest, Checks, build_once, count_in, ROOT   # noqa: E402
 from readfat import Fat16                                    # noqa: E402
 from deskcheck import desk_icon_rect                         # noqa: E402
+from setcheck import (sidebar, PAGE_X, IN_Y, CTX_X, CTX_Y, CTX_PAD,   # noqa: E402
+                      CTX_ITEM, CTX_CLOSE, DOCK_SIDE, PANEL_Y, DOCK_H)
 
 TOOLS = os.path.dirname(os.path.abspath(__file__))
 IMAGE = os.path.join(ROOT, "trash.%d.img" % os.getpid())
@@ -48,6 +54,34 @@ def read(path):
         return Fat16(IMAGE).read_file(path)
     except Exception:          # gone, or a directory caught half written
         return None
+
+
+# Settings' Storage page as settings.c lays it out: three parts of a heading
+# (28 + 6) and a volume's 68 each, the trash's two lines, then its button.
+OPEN_TRASH = (PAGE_X + 85, IN_Y + 8 + 34 + 68 + 34 + 68 + 34 + 22 + 28 + 15)
+
+
+def size_text(n):
+    """settings.c size_text: a tenth only where it says something."""
+    units = ["bytes", "KB", "MB", "GB", "TB"]
+    u, scale = 0, 1
+    while u < 4 and n >= scale * 1024:
+        scale *= 1024
+        u += 1
+    whole, tenths = n // scale, (n % scale) * 10 // scale
+    s = str(whole)
+    if u >= 1 and whole < 100 and tenths:
+        s += ".%d" % tenths
+    return "%s %s" % (s, units[u])
+
+
+def disk_said():
+    """What the page should say of the disk, from the image's own table."""
+    fat = Fat16(IMAGE)
+    total = fat.clusters * fat.sectors_per_cluster * 512
+    free = sum(1 for cl in range(2, fat.clusters + 2) if fat.fat_entry(cl) == 0) \
+        * fat.sectors_per_cluster * 512
+    return "disk %s used of %s" % (size_text(total - free), size_text(total))
 
 
 def wait_disk(test, timeout=30):
@@ -136,6 +170,21 @@ def main():
               wait_disk(lambda: read("/home/trash/a.txt 2") == two) and read("/home/trash/a.txt") == one)
         close()
 
+        # Settings opened on its Storage page by name: the disk as its table
+        # says, no stick, and the three things in the trash, 1799 bytes.
+        mark = len(vm.serial())
+        for ch in "/bin/settings storage\n":
+            key(NAMED.get(ch, ch), settle=0.06)
+        said_since(mark, "settings: storage", 30)
+        time.sleep(1.0)
+        line = vm.serial()[mark:]
+        line = line[line.find("settings: storage"):].split("\n")[0].strip()
+        want = "settings: storage %s; stick none; the trash 3 things, %s" % (disk_said(), size_text(len(one) + len(two) + len(inner)))
+        c.add("settings storage opens on the Storage page, the disk as its table counts it",
+              line.startswith("settings: storage disk ") and " used of " in line, line)
+        c.add("and the trash's three things and their bytes", line == want, "%r, wanted %r" % (line, want))
+        close()
+
         # In the trash: sub, a.txt, a.txt 2.
         files_on("/home/trash")
         key("down"); key("down"); key("down")      # a.txt 2
@@ -179,6 +228,35 @@ def main():
             mon.send("mouse_button 0", settle=0.12)
         c.add("the desktop's Trash icon opens Files on the trash", said_since(mark, "files: /home/trash", 30))
         close()
+
+        # The terminal away so Settings is the first window and where the
+        # numbers say, then Settings from the launcher, its Storage page from
+        # the sidebar, and the page's button.
+        mon.move_to(950, 200)
+        mon.send("mouse_button 2", settle=0.4)
+        mon.send("mouse_button 0", settle=1.2)
+        mon.click(CTX_X + 60, CTX_Y + CTX_PAD + CTX_CLOSE * CTX_ITEM + CTX_ITEM // 2)
+        time.sleep(2.5)
+        mon.click(DOCK_SIDE + 16 + 38, PANEL_Y + DOCK_H // 2)
+        time.sleep(1.5)
+        for ch in "sett":
+            key(ch, settle=0.12)
+        key("ret", settle=0.5)
+        time.sleep(4)
+        shown = False
+        for _ in range(3):
+            mark = len(vm.serial())
+            mon.click(*sidebar("Storage"))
+            if said_since(mark, "settings: storage disk ", 15):
+                shown = True
+                break
+        line = vm.serial()[mark:]
+        line = line[line.find("settings: storage"):].split("\n")[0].strip()
+        c.add("Settings' sidebar has a Storage page, and an emptied trash is empty",
+              shown and line.endswith("; the trash empty"), line)
+        mark = len(vm.serial())
+        mon.click(*OPEN_TRASH)
+        c.add("and its button opens Files on the trash", said_since(mark, "files: /home/trash", 30))
     finally:
         vm.stop()
 

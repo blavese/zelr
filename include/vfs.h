@@ -74,3 +74,7 @@ bool vfs_disk_backed(void);
 /* Whether a path is on a volume that is not there: under /usb with no stick
    mounted. Nothing may be read or written there -- not even into memory. */
 bool vfs_volume_missing(const char *abs);
+
+/* The size of the volume a path is on and how much of it is free, in bytes.
+   False for /sys, /bin, the files kept in memory and a stick not there. */
+bool vfs_space(const char *path, u64 *total, u64 *free_bytes);
