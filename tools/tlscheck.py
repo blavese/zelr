@@ -67,15 +67,18 @@ SITES = [
     # Outlook and their sign-in could not be reached at all. (www.office.com
     # answers / with a redirect and no body; this one says where to go.)
     ("login.microsoftonline.com", None, "1.3, p-256"),
+    # Microsoft's account sign-in, which had nothing newer than 1.2 when
+    # 0.116.0 was written and was its RSA-PSS over P-256. It answers in 1.3
+    # now (seen 2026-11-14), the same way as the line above.
+    ("login.live.com", None, "1.3, p-256"),
 
     # Servers with nothing newer than TLS 1.2, refused until 0.116.0: signing
-    # with RSA-PSS over x25519, with ECDSA over x25519, with RSA's older
-    # padding over P-256, and with RSA-PSS over P-256 (Microsoft's account
-    # sign-in).
+    # with RSA-PSS over x25519, with ECDSA over x25519, and with RSA's older
+    # padding over P-256. The signature and the group are separate code, so
+    # RSA-PSS and P-256 are each still met here.
     ("imgur.com", None, "1.2, x25519"),
     ("genius.com", None, "1.2, x25519"),
     ("arstechnica.com", None, "1.2, p-256"),
-    ("login.live.com", None, "1.2, p-256"),
 ]
 
 # TLS 1.2 servers whose certificates are wrong on purpose (badssl.com), which

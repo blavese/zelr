@@ -26,8 +26,9 @@ anything inferred is marked as such.
 - Tests: selftest `[tls 1.2]` (`test_tls12`): the PRF against Python's hmac, the record layer against records sealed
   and opened with RFC 5288's layout (`tls_test_v12`), and a scripted server's flight (scratchpad `gen12.py`: an RSA
   key, a self-signed certificate for "server", an x25519 share signed over the fixed client random) taken as far as
-  the certificate's authority and refused for eleven faults. tlscheck: imgur.com, genius.com, arstechnica.com and
-  login.live.com over 1.2, and badssl.com's expired, wrong-host and self-signed certificates refused for their reasons.
+  the certificate's authority and refused for eleven faults. tlscheck: imgur.com, genius.com and arstechnica.com
+  over 1.2 (login.live.com was a fourth until it moved to 1.3, seen 2026-11-14; it is checked as 1.3 with P-256 now),
+  and badssl.com's expired, wrong-host and self-signed certificates refused for their reasons.
 
 **Since 0.115.0**:
 - **P-256 for the key exchange, when a server asks to start again with it** (RFC 8446 4.1.4). The hello lists x25519
