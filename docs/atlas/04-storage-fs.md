@@ -493,6 +493,7 @@ Programs: `program_t {name, data, size}`, `programs[48]`, `n_programs`. `sysfs_a
 | /sys/time | `render_time` :275 | `now       <rtc_format>` (UTC, first: the browser's Date reads it; since 0.157.0 zone.h's `at_utc`, so right under a clock kept in local time, and the file is re-read first, `theme_reload`); since 0.156.0 `local     YYYY-MM-DD hh:mm:ss`, `zone      NAME`, `offset    MINUTES`, `summer    0/1` (zone.h; local, offset and summer only with a clock); `source    cmos clock` or `none`; `clock     utc` or `local` (0.157.0); `uptime    N s` |
 | /sys/screen | `render_screen` :290 | `width`, `height`, `settable 0/1`, `source <fb_backend>`, `frames`, `shared`, `lastkib`, `fullkib`, `sentkib` (for settings.c) |
 | /sys/settings | `render_settings` :321 | `# key value low high default label`, then one line per theme knob (`theme_knob_*`) |
+| /sys/storage | `render_storage` (0.174.0) | `disk      N KiB, M KiB free` or `disk      none`; `stick     N KiB, M KiB free` or `stick     none` (vfs.c `vfs_space` for "/" and "/usb", both asked before anything is put in the scratch buffer, since asking can wait for the filesystem). fat.c keeps the free count while `blk_writes()` has not moved and no entry was set (`fatvol_t.free_known`) |
 | /sys/theme | `render_theme` :339 | `accent 0x…`, `desktop`, `surface`, `text`, `text_dim`, `light 0/1`, `look 0/1` (1 = LOOK_BUILT), `preset N` |
 
 Readers in userland include settings.c (settings, theme, screen, memory, cpu, devices, version, uptime, net) and ui.h (/sys/theme).
@@ -963,6 +964,10 @@ Also, `start_port` in AHCI spun forever if CR never cleared (ahci.c:131) -- FIXE
 - **D12. FIXED in 0.49.1.** crashcheck.py:31 documents `[--rounds N]` but :57-59 only parses `--rounds=N`. gate.sh:544 says "Six boots"; it is 2 + 2×rounds + 1 = 15.
 - **D13.** fd.c:404-418: the fsync explanation sits above `fd_ready_now` rather than `fd_sync` (fd.c area).
 - **D14.** `BB_MAGIC` spells "NYBX", a leftover of the pre-v0.11 "nyx" name.
+- **D16 (suspected, 0.174.0).** `render_devices` writes its first lines into the shared `scratch` buffer and then asks
+  `vfs_disk_backed()`, which takes the filesystem (`fat_enter`) and so can wait for it. While it waits, another task's
+  read of a /sys file renders into the same buffer, and the first lines of /sys/devices would be that file's. Not seen;
+  `render_storage` asks before it writes for this reason. The fix is the same: ask first.
 - **D15.** Unused API: `VFS_MAX_OPEN`, `fs_append`, `fat_selected`, `fat_mount`, `blk_count`, `blk_device_removable`, `diskfs_removable_mounted`. ahci.c includes pmm.h and timer.h without using them.
 
 ---

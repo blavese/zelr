@@ -170,7 +170,9 @@ its list of places and an icon on the desktop) rather than taking it off
 the disk: ctrl+z there puts
 it back where it came from, and Delete there, or ctrl+delete for all of it,
 deletes for good on a second press. A stick's files are deleted for good,
-as before. The machine's own clock is taken to keep UTC, as QEMU's does;
+as before. Settings' Storage page says how much of the disk and of a stick
+is used, as the kernel counts it (`/sys/storage`), and what the trash is
+holding, with a button that opens Files on it. The machine's own clock is taken to keep UTC, as QEMU's does;
 one that keeps local time instead, as Windows keeps the clock of a machine
 it shares, is a switch on the same page, and the time is worked out from it
 with the zone. And once the machine has an address it asks a time server
@@ -1677,7 +1679,7 @@ byte.
 ## testing
 
 The kernel tests itself. `./run.sh -T` boots with selftest on the command line,
-runs 857 checks across every subsystem, then writes to QEMU's debug-exit port
+runs 865 checks across every subsystem, then writes to QEMU's debug-exit port
 so the host gets a real exit status.
 
     [string]                 9 checks  [waiting]               16 checks
@@ -1693,11 +1695,11 @@ so the host gets a real exit status.
     [timer]                  6 checks  [certificates]          45 checks
     [interrupts]             2 checks  [randomness]             9 checks
     [disk]                  15 checks  [tls 1.3]               55 checks
-    [fat]                   66 checks  [tls 1.2]               18 checks
+    [fat]                   68 checks  [tls 1.2]               18 checks
     [network]                9 checks  [wpa]                   19 checks
     [tcp]                    8 checks  [ccmp]                   8 checks
     [elf]                    9 checks  [wireless]              16 checks
-    [userspace]              9 checks  [wait timeouts]          3 checks
+    [userspace]             12 checks  [wait timeouts]          3 checks
     [video]                 14 checks  [processors]             4 checks
     [mouse]                  4 checks  [black box]             24 checks
     [graphics]              15 checks  [acpi and pcie]          5 checks
@@ -1708,12 +1710,12 @@ so the host gets a real exit status.
     [taskbar]               18 checks  [file times]             8 checks
                                        [network time]           7 checks
                                        [screenshots]            6 checks
-    [live tree]             23 checks  [codec routes]           6 checks
+    [live tree]             26 checks  [codec routes]           6 checks
     [layout]                11 checks  [es1371]                 5 checks
                                        [sound]                  skipped
                                        [kernel stack]           3 checks
 
-    857 passed, 0 failed
+    865 passed, 0 failed
     SELFTEST_PASS
 
 The sound section is skipped because `run.sh` attaches no sound card (the
@@ -1721,7 +1723,7 @@ gate's q35 run gives it one), the
 identity map is checked in four more places when there is more memory to map,
 and the desktop keeps a copy of its wallpaper only when the memory allows it,
 which two more checks need: given 256 MiB, as the gate gives it, the same run
-is 863.
+is 871.
 
 Two of the sections are about what happens when something goes wrong half
 way, which a machine that keeps its power cannot show. `[fat]` makes the

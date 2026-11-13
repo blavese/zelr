@@ -95,6 +95,23 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.174.0
+
+- **Settings' Storage page (10, 04, 08)**: a page between System and About (`PAGES`, 13 now; setcheck's and wificheck's
+  lists follow): the disk's and a stick's room from a new `/sys/storage` (sysfs.c `render_storage`, "disk      N KiB, M
+  KiB free" or "none", and a "stick" line, both asked before anything is written, since asking can wait and the
+  scratch buffer is shared), as words, a bar and what is free; the trash's things and bytes (`trash_walk`, counted
+  once a second while shown, dot names left out as Files leaves them); "open the trash" (`spawn_arg` Files on
+  /home/trash). Every part is the same height whatever it says, so trashcheck can click the button. It says
+  "settings: storage disk X used of Y; stick none; the trash N things, SIZE" on the console when that changes.
+  `settings NAME` opens on the page named (any case). vfs.c `vfs_space(path, total, free)` asks through a path, as
+  everything else there does. **fat.c keeps the free count** (`fatvol_t.free_known/free_gen/free_count`): walking the
+  table was a read of every sector of it, four times a second with the page open; kept while `blk_writes()` has not
+  moved and no entry has been set (`fat_set`, for what fat_defer holds back), forgotten at mount and when a volume is
+  forgotten, and not kept from a walk that failed a read. Selftest five more (865 at 64 MiB): `[fat]` a second ask
+  reads nothing and a file written and deleted moves it, `[live tree]` /sys/storage's lines and no room for /sys or
+  /bin. trashcheck four more (17).
+
 ### 0.173.0
 
 - **A Trash icon on the desktop (07)**: wm.c `DESK[]` has a sixth icon, "Trash", Files started on /home/trash (a new

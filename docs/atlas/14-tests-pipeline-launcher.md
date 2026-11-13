@@ -865,7 +865,12 @@ Added in 0.170.0, not yet in the table below:
   byte, mid.bin its first 3 MiB, and whole.bin is not there.
 
 Added in 0.168.0, not yet in the table below:
-- **`trashcheck.py`** (gate `trashtest`, full; 13 checks since 0.173.0, the last the desktop's sixth icon, double clicked). A mkfat volume with /home/docs/a.txt, /home/misc/a.txt and
+- **`trashcheck.py`** (gate `trashtest`, full; 17 checks since 0.174.0: the desktop's sixth icon, double clicked
+  (0.173.0); Settings opened with `settings storage` from the terminal while the trash holds three things, its console
+  line compared whole with what tools/readfat.py counts of the image's table and the trash's 1799 bytes ("1.7 KB"); then,
+  the terminal closed from the desktop's menu so Settings is the first window, Settings from the launcher, Storage from
+  its sidebar ("the trash empty") and its button at the place settings.c's fixed heights put it, which opens "files:
+  /home/trash"). A mkfat volume with /home/docs/a.txt, /home/misc/a.txt and
   /home/docs/sub/inner.txt; Files opened from the terminal on each folder ("files: PATH" on the console), driven by keys.
   Delete puts docs' a.txt in /home/trash (the same bytes, "files: moved to the trash"), noted in .where; sub goes in
   whole; misc's a.txt is kept beside it as "a.txt 2"; in the trash ctrl+z on "a.txt 2" puts it back in /home/misc ("files:
