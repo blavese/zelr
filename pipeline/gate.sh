@@ -674,6 +674,7 @@ if [ "$MODE" = "screen" ] || [ "$MODE" = "full" ]; then
   idletest() { keep timeout 900 python tools/idlecheck.py; }
   zipmaketest() { keep timeout 600 python tools/zipmakecheck.py; }
   startlocktest() { keep timeout 600 python tools/startlockcheck.py; }
+  sorttest() { keep timeout 600 python tools/sortcheck.py; }
   downloadtest() { keep timeout 900 python tools/downloadcheck.py; }
 
   # The second boot of a machine, which is the one nothing else reaches:
@@ -797,6 +798,7 @@ if [ "$MODE" = "screen" ] || [ "$MODE" = "full" ]; then
   par_start "the screen locks by itself when nobody is there" idletest
   par_start "files makes a zip that another system reads" zipmaketest
   par_start "a machine with a password starts locked" startlocktest
+  par_start "files sorts by name, size and date" sorttest
   par_start "a download bigger than the browser holds is saved whole" downloadtest
   par_start "a machine still starts once it has formatted its disk" boottest
   par_start "ctrl+f finds a word that is on the screen" findtest

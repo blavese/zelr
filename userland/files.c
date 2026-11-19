@@ -39,6 +39,7 @@ typedef struct {
     u32  size;
     u32  is_dir;
     int  kind;
+    u32  when;                          /* written, as a number that sorts: by date only */
 } entry;
 
 static entry entries[MAX_ENTRIES];
@@ -82,13 +83,13 @@ static const char *const FILE_ITEMS[] = {
     "Open", "New folder", "Rename", "Delete", "Empty the trash", "Extract", "Make a zip", "Close"
 };
 static const char *const EDIT_ITEMS[] = { "Copy", "Cut", "Paste" };
-static const char *const VIEW_ITEMS[] = { "Refresh", "Home", "Root" };
+static const char *const VIEW_ITEMS[] = { "Refresh", "Home", "Root", "By name", "By size", "By date" };
 static const char *const HELP_ITEMS[] = { "About Files" };
 
 static const char *const *MENU_ITEMS[N_MENUS] = {
     FILE_ITEMS, EDIT_ITEMS, VIEW_ITEMS, HELP_ITEMS
 };
-static const int MENU_COUNTS[N_MENUS] = { 8, 3, 3, 1 };
+static const int MENU_COUNTS[N_MENUS] = { 8, 3, 6, 1 };
 static const int MENU_WIDTHS[N_MENUS] = { 150, 110, 110, 130 };
 
 static int bar_open = -1;              /* which title is down, or none */
@@ -166,18 +167,27 @@ static void say(const char *msg) {
     status[sizeof(status) - 1] = 0;
 }
 
-/* Directories first, then files, each alphabetical. readdir gives whatever
-   order the filesystem stores, which for FAT is creation order, and a
-   directory listing that changes order as files are written is unusable. */
+/* Directories first, then files, each alphabetical, or the largest or the
+   newest first (View, or ctrl+1, 2 and 3), the name settling a tie.
+   readdir gives whatever order the filesystem stores, which for FAT is
+   creation order, and a directory listing that changes order as files are
+   written is unusable. */
+static int sort_by;                    /* 0 by name, 1 by size, 2 by date */
+
+static int sorts_after(const entry *a, const entry *b) {
+    if (a->is_dir != b->is_dir) return !a->is_dir && b->is_dir;
+    if (sort_by == 1 && a->size != b->size) return a->size < b->size;
+    if (sort_by == 2 && a->when != b->when) return a->when < b->when;
+    return strcmp(a->name, b->name) > 0;
+}
+
 static void sort_entries(void) {
     for (int i = 1; i < count; i++) {
         entry key = entries[i];
         int j = i - 1;
         while (j >= 0) {
             entry *a = &entries[j];
-            int after = (a->is_dir != key.is_dir)
-                        ? (!a->is_dir && key.is_dir)
-                        : (strcmp(a->name, key.name) > 0);
+            int after = sorts_after(a, &key);
             if (!after) break;
             entries[j + 1] = entries[j];
             j--;
@@ -664,8 +674,31 @@ static void reload(void) {
         e->size = st.size;
         e->is_dir = st.is_dir;
         e->kind = kind_of(cwd, e->name, (int)st.is_dir);
+        e->when = 0;
+        /* Asked only when it is what the list is sorted by: one more call a
+           file, which a folder of hundreds should not pay for nothing. */
+        zelr_times t;
+        char path[PATH_MAX];
+        if (sort_by == 2) {
+            join(path, cwd, e->name);
+            if (file_times(path, &t) == 0 && t.year >= 1980)
+                e->when = (u32)(t.year - 1980) << 25 | (u32)t.month << 21 | (u32)t.day << 16
+                          | (u32)t.hour << 11 | (u32)t.minute << 5 | (u32)(t.second / 2);
+        }
     }
     sort_entries();
+}
+
+/* A new order, with the same entry chosen in it. */
+static void set_sort(int how) {
+    char keep[NAME_MAX];
+    keep[0] = 0;
+    if (selected >= 0 && selected < count) strcpy(keep, entries[selected].name);
+    sort_by = how;
+    reload();
+    for (int i = 0; i < count && keep[0]; i++) if (!strcmp(entries[i].name, keep)) selected = i;
+    say(how == 1 ? "sorted by size, the largest first"
+        : how == 2 ? "sorted by date, the newest first" : "sorted by name");
 }
 
 /* Everything below a folder whose name has the filter's text in it. */
@@ -1287,14 +1320,16 @@ int main(int argc, char **argv) {
                 filter_field.focused = 1;
                 filter_field.cursor = filter_field.len;
             } else if ((code == KEY_HOME || code == KEY_END) && count) {
+                /* Moving the selection shows the entry chosen on the line,
+                   in place of whatever was said before (a sort, a copy). */
                 selected = code == KEY_HOME ? 0 : count - 1;
-                if (searching) say("");
+                say("");
             } else if (code == KEY_UP && selected > 0) {
                 selected--;
-                if (searching) say("");     /* the result chosen, not the count, on the line */
+                say("");
             } else if (code == KEY_DOWN && selected < count - 1) {
                 selected++;
-                if (searching) say("");
+                say("");
             }
             else if (code == '\n') open_entry(selected);
             else if (code == '\b') go_up();
@@ -1313,6 +1348,7 @@ int main(int argc, char **argv) {
             else if (code == KEY_F1 + 1) begin_rename(); /* F2 */
             else if (code == 5)  extract_selected();     /* ctrl+e */
             else if (code == 11) make_zip();             /* ctrl+k */
+            else if (KEY_CTRL(key) && code >= '1' && code <= '3') set_sort(code - '1');
         }
         in.key = 0;
         in.nkeys = 0;
@@ -1557,6 +1593,7 @@ int main(int argc, char **argv) {
                     if (pick == 0) reload();
                     else if (pick == 1) go_to("/home");
                     else if (pick == 2) go_to("/");
+                    else if (pick >= 3) set_sort(pick - 3);
                 } else {                                /* Help */
                     say("Files, a ring 3 program");
                 }
