@@ -888,6 +888,14 @@ Added in 0.165.0, not yet in the table below:
   about:history?forget is not followed (still 3); after the server's /peek, about:history's second entry (a, a file;
   the links found as bands of accent inside the window) opens; the forget button (found by its colour) leaves 0.
 
+Added in 0.189.0, not yet in the table below:
+- **`startlockcheck.py`** (gate `startlocktest`, full; 9 checks). /cfg/lock written by mkfat as Settings writes it
+  (salt, space, hashlib's SHA-256 over salt and password "plum tree 42"). Boot 1 with `console`: "This machine has a
+  password"; "echo nothing runs" ("console: that is not the password", the words not on the serial line, stars
+  instead); the password ("console: the password was given"); "echo the console is open" answered; `desktop` opens
+  with no "desktop: locked". Boot 2 with no command line (the desktop by itself): "desktop: locked" and LOCK_BG over
+  400000 pixels; "not it" ("the password was wrong"); the password ("desktop: unlocked").
+
 Added in 0.188.0, not yet in the table below:
 - **`zipmakecheck.py`** (gate `zipmaketest`, full; 14 checks). /home/mk on a mkfat volume: proj/a.txt (31807 bytes of
   words, seeded), proj/sub/b.bin (8000 random bytes), proj/sub/c.txt, one.txt. Files on /home/mk by keys: down

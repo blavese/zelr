@@ -113,6 +113,18 @@ numbered files are still to 6048716; where they disagree with this list, this li
   built unsigned program; h264test in the machine still checks the decoder against Windows' answers in h264data.h.
   Gate 74 steps (one out, one in).
 
+### 0.189.0
+
+- **A machine with a password starts locked (07, 14)**: wm.c `session_open` (set when the lock opens, or by
+  `wm_session_begin`), `wm_password_set` (/cfg/lock is there), `wm_session_open` (given since the start, or no
+  password). `wm_run` calls `lock_screen` at its start while the session is not open, so the desktop opens locked
+  after a restart; shell.c `ask_password`, before the console's first prompt when the session is not open (started
+  with `console`, or the desktop left before the password was given): "This machine has a password. Type it and press
+  return.", stars for what is typed, "console: that is not the password" and again, or "console: the password was
+  given" and `wm_session_begin`. The keyboard and the serial line both arrive there. A desktop opened from a console
+  that took the password is not locked again. startlockcheck, new (9), gate step `startlocktest` (85 steps). **A
+  harness that puts /cfg/lock on a disk cannot use `wait_boot`**: the console asks rather than prompting.
+
 ### 0.188.0
 
 - **Files makes a .zip (14)**: userland/deflate.h `deflate_raw`: LZ77 with a hash of three bytes (`def_head`, the last

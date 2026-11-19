@@ -123,7 +123,10 @@ it is kept as a salted SHA-256, never as itself, and nothing gets round the
 lock but the password: not the pointer, not alt and Escape. The same page
 sets how many minutes with nobody there before it locks by itself; sound
 playing counts as somebody there, so a film or an album is not locked
-away. In the editor, ctrl and h opens a
+away. With a password set the machine starts locked, so a restart does not
+get round it: the desktop opens locked, and the console (started with the
+word console, or reached before the desktop) asks for the password before
+it takes a command, showing stars for what is typed. In the editor, ctrl and h opens a
 bar to find a word in the file and replace it, one at a time or every one at
 once (ctrl and r), whatever its case. Paint keeps what is drawn: ctrl and s
 saves it as a PNG (`paint FILE.png` opens one to draw on, and saves back to
@@ -511,6 +514,7 @@ instead.
     python tools/musiccheck.py  music from its keys: the next follows by itself, a pause loses nothing
     python tools/idlecheck.py   locked by itself after a minute idle; not while the pointer moves or sound plays
     python tools/zipmakecheck.py make a zip of a folder and a file in Files, open it with Python's zipfile
+    python tools/startlockcheck.py a password set: the console asks for it first, the desktop opens locked
     python tools/downloadcheck.py  a 12 MB download fetched in parts with Range, read back byte for byte
     python tools/notescheck.py  select all, copy, paste, save, undo, find and replace in the editor, from its keys
     python tools/timecheck.py   set the time zone from the shell and in Settings, read the clocks and a file's time
