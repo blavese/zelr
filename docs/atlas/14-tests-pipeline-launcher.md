@@ -887,6 +887,11 @@ Added in 0.165.0, not yet in the table below:
   about:history?forget is not followed (still 3); after the server's /peek, about:history's second entry (a, a file;
   the links found as bands of accent inside the window) opens; the forget button (found by its colour) leaves 0.
 
+Changed in 0.179.0, not yet in the table below:
+- **`notescheck.py`** 11 checks: after its copy, paste, save and undo, ctrl+H and "BETA" typed in capitals finds
+  "beta" ("notes: found"), Escape and "gamma" typed over it saves "alpha gamma"; ctrl+H, the field cleared, "a", Tab,
+  "o", ctrl+R ("notes: replaced 4") saves "olpho gommo", one ctrl+Z gives "alpha gamma" back; "zebra" is "not found".
+
 Added in 0.178.0, not yet in the table below:
 - **`zipcheck.py`** (gate `ziptest_files`, full; 11 checks). /home/arch on a mkfat volume: t.zip and bad.zip written by
   Python's zipfile (a deflated readme.txt, notes/a.txt stored, notes/b.txt deflated, and an entry ../evil.txt);

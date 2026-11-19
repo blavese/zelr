@@ -116,7 +116,9 @@ monitor, a music player, a calculator, a web browser, two card games, and
 what the machine is made of, with a field in it that narrows the list as
 you type. Press
 ctrl and f, or the magnifier in the tray, to look for a word that is on the
-screen rather than for a program to start. Drag a title bar to move a
+screen rather than for a program to start. In the editor, ctrl and h opens a
+bar to find a word in the file and replace it, one at a time or every one at
+once (ctrl and r), whatever its case. Drag a title bar to move a
 window; the three buttons at its right put it away, fill the screen, or
 close it.
 Drag the bottom right corner to resize, or drag a title bar to an edge to
@@ -485,7 +487,7 @@ instead.
     python tools/trashcheck.py  delete into the trash, put back with ctrl+z, delete for good, empty it
     python tools/zipcheck.py    go into a .zip in Files, open a file from it, extract it, refuse a damaged one
     python tools/downloadcheck.py  a 12 MB download fetched in parts with Range, read back byte for byte
-    python tools/notescheck.py  select all, copy, paste, save and undo in the editor, from its keys
+    python tools/notescheck.py  select all, copy, paste, save, undo, find and replace in the editor, from its keys
     python tools/timecheck.py   set the time zone from the shell and in Settings, read the clocks and a file's time
     python tools/ntpcheck.py    put the clock back to 2020, serve the time from here, see it set
     python tools/printcheck.py  press print screen, decode the PNG here, compare it with the screen

@@ -113,6 +113,18 @@ numbered files are still to 6048716; where they disagree with this list, this li
   built unsigned program; h264test in the machine still checks the decoder against Windows' answers in h264data.h.
   Gate 74 steps (one out, one in).
 
+### 0.179.0
+
+- **Find and replace in Notes (10, 14)**: ctrl+H (ctrl+F is the desktop's find) opens a bar under the toolbar
+  (`bar_open`, `BAR_H`) with two fields, "find" and "replace with" (`find_field`, `repl_field`), and buttons next,
+  replace and all. Keys go to the bar while one of its fields has the keyboard (`bar_key`): Return in the first is
+  `find_next` (from the selection's end or the cursor, round from the top: `find_from`; the match selected), in the
+  second `replace_one` (the selected match replaced, then the next found); ctrl+R `replace_all` (one `undo_mark` for
+  all of them, so one ctrl+Z takes them back); Tab between the fields; Escape puts the bar away, as it does with the
+  text focused. F3 is the next match anywhere. Matching ignores case (`fold`). Notes asks for Escape now
+  (`win_want_escape`), and says its status on the console as Files does ("notes: found", "notes: replaced 4",
+  "notes: not found"). notescheck four more (11).
+
 ### 0.178.0
 
 - **Archives in Files (10, 13, 14)**: `userland/zip.h` reads ZIP from PKWARE's APPNOTE: `zip_open` finds the end record
