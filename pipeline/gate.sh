@@ -290,6 +290,12 @@ run_step "the kernel uses no vector instructions" ssecheck
 imagecheck() { python tools/check_image.py; }
 run_step "the image leaves a small machine room for its programs" imagecheck
 
+# The other end of the same question: the machine the launcher starts has to
+# have room for the browser. It had 64 MiB, and the first page loaded ran it
+# out of memory.
+launchercheck() { python tools/check_launcher.py; }
+run_step "the launcher gives the machine room to browse" launchercheck
+
 # --- and on what a machine with no settings file looks like ---------------
 #
 # The other half of the same problem. The kernel holds the defaults because

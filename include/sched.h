@@ -151,6 +151,12 @@ typedef struct task {
        touched (elf.c, user_fault_fill); 0 and 0 for none. */
     u64   zero_lo, zero_hi;
 
+    /* A page user_fault_fill could not give it, for want of a free frame: a
+       fault there ends it as out of memory, which the log and the desktop
+       say, rather than as a bad pointer (idt.c end_the_program). 0 for
+       none. */
+    u64   oom_at;
+
     /* Where a handler returns to: a few instructions in the program itself
        that ask the kernel to put the frame back. The kernel cannot supply
        this -- it has no code mapped in ring 3 -- so the program hands its

@@ -152,7 +152,11 @@ public static class Emulator
             CreateNoWindow = true,
         };
         psi.ArgumentList.Add("-kernel");      psi.ArgumentList.Add(kernel);
-        psi.ArgumentList.Add("-m");           psi.ArgumentList.Add("64");
+        // Room for the browser. 64 MiB ran out on the first page it loaded
+        // (example.com), 128 on Wikipedia and 256 on GitHub; 512 loaded all
+        // three. QEMU takes host memory only as the machine uses it.
+        // tools/check_launcher.py keeps this at 512 or more.
+        psi.ArgumentList.Add("-m");           psi.ArgumentList.Add("1024");
         psi.ArgumentList.Add("-no-reboot");
         psi.ArgumentList.Add("-name");        psi.ArgumentList.Add("zelr");
 

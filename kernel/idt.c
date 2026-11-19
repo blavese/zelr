@@ -13,6 +13,8 @@
 #include "lapic.h"
 #include "timer.h"
 #include "wait.h"
+#include "wm.h"
+#include "pmm.h"
 
 u64 scheduler_switch(u64 rsp);
 
@@ -147,7 +149,19 @@ static bool end_the_program(registers_t *r, u64 addr) {
        hundred times in a row, and a hundred register dumps is a wall of
        text with the one useful line buried in it. Measured: a hundred
        faulting programs printed five hundred lines. */
-    if (r->int_no == 14)
+    /* Out of memory, said as such. A page the program had every right to
+       that no free frame could back (user_fault_fill) is not a bad pointer,
+       and "page fault" sent whoever read it looking for one: the browser on
+       a 64 MiB machine ended so on the first page it loaded, its window gone
+       with nothing on the desktop to say why. The desktop says it too. */
+    if (r->int_no == 14 && t && t->oom_at && t->oom_at == (addr & ~(u64)(PAGE_SIZE - 1))) {
+        bb_log("%s ended: out of memory at %p, rip %p", name, (void *)addr, (void *)r->rip);
+        const char *leaf = name;
+        for (const char *p = name; *p; p++) if (*p == '/') leaf = p + 1;
+        char said[96];
+        kformat(said, sizeof(said), "%s was stopped: the machine ran out of memory", leaf);
+        wm_notice(said);
+    } else if (r->int_no == 14)
         bb_log("%s ended: %s at %p, rip %p [%s %s]", name, what,
                (void *)addr, (void *)r->rip,
                (r->err_code & 1) ? "protection" : "not-present",

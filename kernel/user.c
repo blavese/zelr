@@ -307,7 +307,7 @@ bool user_fault_fill(u64 addr, u64 err) {
         if (virt_to_phys_in(t->dir, page)) return true;
 
         u64 frame = pmm_alloc_frame();
-        if (!frame) return false;
+        if (!frame) { t->oom_at = page; return false; }
         memset((void *)frame, 0, PAGE_SIZE);
         if (!map_page_in(t->dir, page, frame,
                          PTE_PRESENT | PTE_RW | PTE_USER)) {
@@ -328,7 +328,7 @@ bool user_fault_fill(u64 addr, u64 err) {
     if (virt_to_phys_in(t->dir, page)) return true;   /* another processor won */
 
     u64 frame = pmm_alloc_frame();
-    if (!frame) return false;                  /* out of memory: the program ends */
+    if (!frame) { t->oom_at = page; return false; }   /* out of memory: the program ends */
     memset((void *)frame, 0, PAGE_SIZE);
 
     u64 flags = PTE_PRESENT | PTE_USER;

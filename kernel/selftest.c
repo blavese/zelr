@@ -1610,6 +1610,37 @@ static void test_spawn_zero(void) {
     ok("a program that runs before its starter goes on has its zero data", status == 7);
 }
 
+/* A program ended for want of memory says so. The zero writer above, with
+   every frame refused once it is started: its first touch of its zero data
+   cannot be backed, so it ends at that page, and the log has to say out of
+   memory, not page fault. */
+static bool contains(const char *hay, const char *needle);
+
+static void oom_run_first(u32 pid) {
+    spawn_test_probe = 0;
+    pmm_test_fail_after(0);
+    for (int i = 0; i < 400; i++) {
+        task_t *x = task_by_pid(pid);
+        if (!x || x->state == TASK_DEAD) break;
+        sleep_ms(2);
+    }
+    pmm_test_fail_after(0xFFFFFFFFu);
+}
+
+static void test_oom_reported(void) {
+    u32 size = zero_writer_make();
+    spawn_test_probe = oom_run_first;
+    int pid = user_spawn_elf("selftest-oom", zero_writer, size);
+    spawn_test_probe = 0;
+    pmm_test_fail_after(0xFFFFFFFFu);
+    int status = pid > 0 ? task_wait((u32)pid) : -100;
+    const char *log = bb_text();
+    ok("a program that touches a page no frame can back is ended", status == 139);
+    ok("and the log says it ran out of memory, not that it faulted",
+       contains(log, "selftest-oom ended: out of memory at")
+       && !contains(log, "selftest-oom ended: page fault"));
+}
+
 static void test_console_wait(void) {
     int pid = user_spawn_flat("selftest-reader", console_reader, sizeof(console_reader));
     ok("a program that reads the console can be started", pid > 0);
@@ -7390,7 +7421,7 @@ int selftest_run(void) {
     kprintf("[network]\n");    test_net();
     kprintf("[tcp]\n");        test_tcp();
     kprintf("[elf]\n");        test_elf();
-    kprintf("[userspace]\n");  test_userspace(); test_spawn_zero(); test_notice_call(); test_console_wait(); test_input_handover();
+    kprintf("[userspace]\n");  test_userspace(); test_spawn_zero(); test_oom_reported(); test_notice_call(); test_console_wait(); test_input_handover();
     kprintf("[video]\n");      test_video(); test_console();
     kprintf("[mouse]\n");      test_mouse(); test_mouse_edges();
     kprintf("[graphics]\n");   test_gfx(); test_frame_drawing();

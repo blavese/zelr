@@ -11,9 +11,11 @@ rem The disk is zelr.img next to this file. It is made on first run and kept
 rem afterwards, which is the point: files written in zelr are still there the
 rem next time. Delete it to start clean.
 rem
-rem The memory given below is more than zelr will use. It maps 64 MiB of
-rem itself and ignores the rest, so -m 512 and -m 4096 look identical from
-rem inside; what makes it smooth is the acceleration, not the size.
+rem The memory given below is what the browser needs: zelr maps whatever it
+rem is given, and a page's scripts and pictures use it. At 64 MiB the browser
+rem ran out on the first page it loaded; 512 loaded GitHub, Wikipedia and the
+rem BBC. What makes it smooth is the acceleration, not the size.
+rem tools/check_launcher.py keeps every -m here at 512 or more.
 
 setlocal enabledelayedexpansion
 cd /d "%~dp0"
