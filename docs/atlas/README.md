@@ -95,6 +95,24 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.176.0
+
+- **Words selected in the browser (11, 14)**: browser.c keeps a selection as two points on the page (`sel_ax/ay`,
+  `sel_bx/by`, document coordinates), not as two items: the page is laid out again under a selection (a hover, a
+  script, a picture) and every item's number can change. `sel_range` works out the words between them once a frame
+  (`word_near`: the LK_TEXT item holding the point, else the nearest, a line away counting for more than any distance
+  along one) into `sel_lo`/`sel_hi`; `sel_all` (ctrl+A) is every word. A left press in the page's view
+  (`sel_press`) becomes a drag once the pointer has gone 5 px with the button held, and the release that ends a drag
+  is the selection's (cleared before the page's click and the link: a link where a drag ends is not followed); a
+  press and release in place clears it, as do Escape and a new page. Drawn in `draw_page` behind each selected word
+  (`SEL_COLOUR` 0xACCEF7) and across the space to the next selected word on its line. `sel_text` joins the words with a
+  space, or a new line where the next starts below the last or back to its left; ctrl+C (nothing focused) puts that on
+  the kernel's clipboard (`sel_copy`, up to its 64 KiB). The right button's menu gives "copy" and "look it up" first
+  while words are selected; "look it up" is `set_search` with the words on one line. On the console: "browser
+  selection: N words: TEXT" (a slash at each line's end) when a drag ends or ctrl+A, "browser selection: copied N
+  characters", "browser menu: looked up TEXT". Whole words only: a part of a word cannot be selected. selectcheck, new
+  (11), gate step `selecttest` (74 steps).
+
 ### 0.175.0
 
 - **The browser's right button menu (11, 12, 14)**: browser.c `menu_build` (from `over_link` and `node_under` as the

@@ -887,6 +887,16 @@ Added in 0.165.0, not yet in the table below:
   about:history?forget is not followed (still 3); after the server's /peek, about:history's second entry (a, a file;
   the links found as bands of accent inside the window) opens; the forget button (found by its colour) leaves 0.
 
+Added in 0.176.0, not yet in the table below:
+- **`selectcheck.py`** (gate `selecttest`, full; 11 checks). /home/sel/s.htm on a mkfat volume: two paragraphs of words
+  at 28px, each word in a span of its own background colour (the last, theta, a link to t.htm) so each word's box is
+  found by colour. `mon.drag` from beta to zeta must say "browser selection: 5 words: beta gamma delta/epsilon zeta";
+  the selection's colour counted inside each word's box (over 100 in the five, under 10 in alpha, eta, theta); ctrl+C
+  says "copied 29 characters"; a click in place brings beta's colour back; a drag from eta to theta (ending on the link, where a release
+  follows it) says "2 words: eta theta" and t.htm is never loaded; ctrl+A says all eight; a right click gives "copy; look it up" first and
+  "look it up" says "looked up ..." and loads lite.duckduckgo.com's search for them (the network); last, alt+Escape
+  leaves the desktop and the kernel shell's `cat /sys/clipboard` must hold "beta gamma delta\nepsilon zeta".
+
 Added in 0.175.0, not yet in the table below:
 - **`menucheck.py`** (gate `menutest`, full; 15 checks). /home/menu on a mkfat volume: m.htm (grey) with a block link to
   n.htm (green), an `<img>` of p.png (orange, a 160x80 PNG made by the harness with zlib) and a block (blue) whose

@@ -222,7 +222,11 @@ under it: a link opened, opened in a window of its own, its address copied
 or what it links to saved; a picture opened, its address copied or saved;
 and the page itself, back, forward, reloaded, saved or its address copied.
 A page that draws a menu of its own is told first (`contextmenu`) and may
-keep the button for it. Where it has been is kept
+keep the button for it. Dragging across a page selects its words, whole
+words from where the button went down to where the pointer is; ctrl+C
+copies them, a line apart where the page has them on lines apart, ctrl+A
+selects every word, and the right button's menu offers to copy them or to
+look them up. Where it has been is kept
 on the disk and listed a day at a time at about:history, and as an address
 is typed the bar suggests the bookmarks and then the history that match it.
 The start page lists the pages visited last. A file a server sends to be kept goes to `/home/downloads`, a file
@@ -478,6 +482,7 @@ instead.
     python tools/localcheck.py  open a site on the disk in the browser; a web page asks for one of its files
     python tools/opencheck.py   open links in new windows: the middle button, ctrl and a click, ctrl+N
     python tools/menucheck.py   the browser's right button menu: a link, a picture and the page, each row
+    python tools/selectcheck.py  drag over a page's words, copy them, and read the clipboard back
     python tools/historycheck.py  the browser's history kept, listed, suggested in the bar and forgotten
     python tools/powercheck.py  tell it to shut down, see if it does
     python tools/appcheck.py    make the calculator divide, play a file
