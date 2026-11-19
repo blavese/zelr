@@ -887,6 +887,15 @@ Added in 0.165.0, not yet in the table below:
   about:history?forget is not followed (still 3); after the server's /peek, about:history's second entry (a, a file;
   the links found as bands of accent inside the window) opens; the forget button (found by its colour) leaves 0.
 
+Added in 0.181.0, not yet in the table below:
+- **`paintcheck.py`** (gate `painttest`, full; 9 checks). /home/pic/start.png on a mkfat volume, 100x60, blue on the
+  left and yellow on the right, made with zlib. `/bin/paint /home/pic/start.png` ("opened ..., 100x60", the blue on the
+  screen); the paper's top left found by the blue; `mon.drag` a stroke 40 px under the picture; ctrl+S ("saved ...,
+  640x362"); the file off the disk image decoded by printcheck's `png_pixels` (every CRC good, the size said, the
+  picture's pixels in its top left, 22 points along the stroke in PALETTE[2], paper elsewhere); ctrl+Z ("undone") and
+  ctrl+S again (paper where the stroke was, the picture kept); `/bin/paint` with no file and ctrl+S writes
+  /home/picture.png, a PNG that decodes.
+
 Added in 0.180.0, not yet in the table below:
 - **`calendarcheck.py`** (gate `calendartest`, full; 10 checks). On the host's clock (`HOST_CLOCK`, UTC): /bin/calendar
   from the terminal opens on today ("calendar: DATE, WEEKDAY, MONTH YEAR", the weekday Python's own, either side of

@@ -113,6 +113,17 @@ numbered files are still to 6048716; where they disagree with this list, this li
   built unsigned program; h264test in the machine still checks the decoder against Windows' answers in h264data.h.
   Gate 74 steps (one out, one in).
 
+### 0.181.0
+
+- **Paint keeps its pictures (10, 14)**: userland/pngw.h writes PNG: RGB (colour type 2), every row filter 0, the
+  rows in a zlib stream of stored deflate blocks of 65535 bytes at most (nothing compressed: the whole of what a reader
+  must accept), its own CRC-32 and Adler-32; `png_write_size` says how much room a picture needs. paint.c: ctrl+S
+  writes what is under the toolbar to the file it was started on, or /home/picture.png ("paint: saved PATH, WxH");
+  started on a file, it is opened onto the paper with png.h (top left at the paper's, what does not fit left out;
+  "paint: opened PATH, WxH", or "a new picture, to be saved as PATH" when there is none); ctrl+Z takes back the last
+  stroke or clear (`keep_for_undo` copies the paper as a stroke begins or before a clear; one level). `main` takes its
+  argument. paintcheck, new (9), gate step `painttest` (77 steps).
+
 ### 0.180.0
 
 - **A calendar (10, 07, 14)**: userland/calendar.c, in the launcher's Productivity list (wm.c `M_WORK`). A month at a
