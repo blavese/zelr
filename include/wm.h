@@ -231,6 +231,12 @@ bool wm_notice(const char *text);
    file), and whether it is up. */
 bool wm_lock_matches(const char *typed);
 bool wm_locked(void);
+/* Whether a password is set; whether it has been given since the machine
+   started (or there is none), which the desktop opens locked without and
+   the console asks for; and that it has been, from the console. */
+bool wm_password_set(void);
+bool wm_session_open(void);
+void wm_session_begin(void);
 
 void wm_push_event(window_t *w, const wm_event_t *ev);
 bool wm_pop_event(window_t *w, wm_event_t *out);

@@ -745,6 +745,31 @@ static void execute(char *buf) {
 
 static bool console_only;
 
+static void ask_password(void) {
+    char typed[64];
+    u32 n = 0;
+    kprintf("This machine has a password. Type it and press return.\npassword: ");
+    for (;;) {
+        int ch = kbd_trygetchar();
+        if (ch < 0) { input_wait(250); continue; }
+        char c = (char)KEY_CODE(ch);
+        if (c == '\n' || c == '\r') {
+            typed[n] = 0;
+            kputc('\n');
+            bool good = wm_lock_matches(typed);
+            for (u32 i = 0; i < sizeof(typed); i++) typed[i] = 0;
+            n = 0;
+            if (good) { wm_session_begin(); kprintf("console: the password was given\n"); return; }
+            kprintf("console: that is not the password\npassword: ");
+        } else if (c == '\b') {
+            if (n) { n--; kputc('\b'); }
+        } else if (c >= ' ' && c < 127 && n < sizeof(typed) - 1) {
+            typed[n++] = c;
+            kputc('*');
+        }
+    }
+}
+
 void shell_console_only(void) { console_only = true; }
 
 void shell_task(void) {
@@ -761,6 +786,13 @@ void shell_task(void) {
      * when the setting is wrong. */
     theme_init();
     if (fb_active() && !console_only && theme()->autodesktop) enter_desktop();
+
+    /* A password set and not yet given (the desktop was not opened, or the
+       machine was started for the console): nothing is run until it is.
+       The keyboard and the serial line both arrive here, so this asks
+       either. What is typed is shown as stars and kept no longer than the
+       Return that checks it. */
+    if (!wm_session_open()) ask_password();
 
     u32 len = 0;
     prompt();

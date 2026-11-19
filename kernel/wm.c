@@ -2672,6 +2672,17 @@ bool wm_lock_matches(const char *typed) {
 
 bool wm_locked(void) { return locked; }
 
+/* Whether the password has been given since the machine started (at the
+   lock or at the console), or there is none to give. Until it has, the
+   desktop opens locked and the console asks for it first: a lock that a
+   restart got round would keep out only somebody who did not know how to
+   restart a machine. */
+static bool session_open;
+
+bool wm_password_set(void) { return vfs_stat(LOCK_FILE, 0, 0); }
+bool wm_session_open(void) { return session_open || !wm_password_set(); }
+void wm_session_begin(void) { session_open = true; }
+
 static void find_close(void);
 static void cycle_end(void);
 
@@ -2701,6 +2712,7 @@ static void lock_key(int c) {
     if (k == '\n' || k == '\r') {
         if (wm_lock_matches(lock_typed)) {
             locked = false;
+            session_open = true;
             kprintf("desktop: unlocked\n");
         } else {
             lock_wrong = true;
@@ -4953,6 +4965,9 @@ void wm_run(void) {
     apply_screen_size();
 
     fbcon_hold(true);           /* the screen is the desktop's now (fbcon.h) */
+
+    /* Started with a password nobody has given yet: it opens locked. */
+    if (!wm_session_open()) lock_screen();
     running = true;
     menu_open = false;
     mouse_set_autodraw(false);          /* the manager draws the pointer */
