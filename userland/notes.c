@@ -36,6 +36,18 @@ static int  partial;
 static int  scroll_line;          /* first line drawn */
 static int  sel_anchor = -1;      /* where a selection started, -1 for none */
 
+/* Find and replace, on ctrl+H (ctrl+F is the desktop's find, which looks
+   at the whole screen): a bar over the text with what to find and what to
+   put in its place. Return in the first goes to the next match, from the
+   cursor and round from the top, and selects it; Return in the second puts
+   the replacement over the match selected and goes to the next; ctrl+R
+   replaces every one as one change, so one ctrl+Z takes them all back;
+   Tab goes between the two, Escape puts the bar away. Matching ignores
+   case, as a person typing a word to look for means it to. */
+static char find_buf[64], repl_buf[64];
+static ui_field find_field, repl_field;
+static int  bar_open;
+
 /* Undo: copies of the text from before each change, the newest last, sixteen
    at most. A run of typing is one change, ended by anything that is not
    typing, so ctrl+z takes back a word typed rather than a letter. */
@@ -255,9 +267,97 @@ static void paste(void) {
     free(incoming);
 }
 
+/* --- finding and replacing ------------------------------------------------ */
+
+static char fold(char c) { return c >= 'A' && c <= 'Z' ? (char)(c + 32) : c; }
+
+static int match_at(int at, const char *q, int n) {
+    if (at < 0 || at + n > len) return 0;
+    for (int k = 0; k < n; k++) if (fold(buf[at + k]) != fold(q[k])) return 0;
+    return 1;
+}
+
+/* The next match from a place, round from the top if there is none after
+   it; -1 for none at all. */
+static int find_from(int from) {
+    int n = strlen(find_buf);
+    if (!n) return -1;
+    for (int i = from; i + n <= len; i++) if (match_at(i, find_buf, n)) return i;
+    for (int i = 0; i < from && i + n <= len; i++) if (match_at(i, find_buf, n)) return i;
+    return -1;
+}
+
+static void find_next(void) {
+    int from = has_selection() ? sel_high() : cursor;
+    int at = find_from(from);
+    if (at < 0) { say(find_buf[0] ? "not found" : "nothing to find"); return; }
+    sel_anchor = at;
+    cursor = at + (int)strlen(find_buf);
+    typing = 0;
+    say(at < from ? "found, from the top" : "found");
+}
+
+/* The match selected, replaced; then the next found. */
+static void replace_one(void) {
+    int n = strlen(find_buf);
+    if (n && has_selection() && sel_high() - sel_low() == n && match_at(sel_low(), find_buf, n)) {
+        undo_mark(0);
+        int at = sel_low();
+        delete_range(at, at + n);
+        insert_text(repl_buf, strlen(repl_buf));
+        sel_anchor = -1;
+    }
+    find_next();
+}
+
+static void replace_all(void) {
+    int n = strlen(find_buf), rn = strlen(repl_buf), count = 0;
+    if (!n) { say("nothing to find"); return; }
+    for (int i = 0; i + n <= len; ) {
+        if (!match_at(i, find_buf, n)) { i++; continue; }
+        if (!count) undo_mark(0);          /* one change, for one ctrl+Z */
+        delete_range(i, i + n);
+        cursor = i;
+        insert_text(repl_buf, rn);
+        i += rn;
+        count++;
+    }
+    sel_anchor = -1;
+    typing = 0;
+    if (!count) { say("not found"); return; }
+    static char said[40];
+    int k = 0;
+    for (const char *p = "replaced "; *p; p++) said[k++] = *p;
+    k += utoa((u32)count, said + k);
+    said[k] = 0;
+    say(said);
+}
+
+/* A key while the bar has the keyboard. */
+static void bar_key(u32 k) {
+    ui_field *f = find_field.focused ? &find_field : &repl_field;
+    if (k == 27) {
+        bar_open = 0;
+        find_field.focused = repl_field.focused = 0;
+    } else if (k == '\t') {
+        find_field.focused = !find_field.focused;
+        repl_field.focused = !find_field.focused;
+    } else if (k == '\n') {
+        if (f == &find_field) find_next();
+        else replace_one();
+    } else if (KEY_CTRL(k) && key_ctrl_letter(k) == 'r') {
+        replace_all();
+    } else if (KEY_CTRL(k) && key_ctrl_letter(k) == 'h') {
+        /* already open */
+    } else {
+        ui_field_key(f, k);
+    }
+}
+
 /* --- the window ----------------------------------------------------------- */
 
 #define TOOLBAR_H 40
+#define BAR_H     (UI_BTN_H + UI_PAD * 2)
 #define GUTTER_W  (5 * MONO_W)
 
 int main(int argc, char **argv) {
@@ -265,6 +365,14 @@ int main(int argc, char **argv) {
     int win = win_create("Notes", 700, 520);
     if (win < 0) exit(1);
     win_allow_resize(win);
+    win_want_escape(win);                   /* it puts the find bar away */
+
+    memset(&find_field, 0, sizeof(find_field));
+    find_field.buf = find_buf;
+    find_field.cap = sizeof(find_buf);
+    memset(&repl_field, 0, sizeof(repl_field));
+    repl_field.buf = repl_buf;
+    repl_field.cap = sizeof(repl_buf);
 
     ui_theme t = ui_load_theme();
     ui_input in;
@@ -310,7 +418,7 @@ int main(int argc, char **argv) {
         }
         if (closing) break;
 
-        int text_y = TOOLBAR_H;
+        int text_y = TOOLBAR_H + (bar_open ? BAR_H : 0);
         int text_h = h - text_y - UI_ROW;
         int rows = text_h / MONO_H;
         int cols = (w - GUTTER_W - UI_PAD) / MONO_W;
@@ -323,6 +431,9 @@ int main(int argc, char **argv) {
             u32 k = in.keys[ki];
             int shifted = 0;                /* selection extends while shift-like keys move */
 
+            if (find_field.focused || repl_field.focused) { bar_key(k); continue; }
+            if (k == 27 && bar_open) { bar_open = 0; continue; }
+
             /* The chords every editor has. Each was typed into the text as the
                control character it folds to: ctrl+s put a 0x13 in the file
                and saved nothing. */
@@ -334,8 +445,16 @@ int main(int argc, char **argv) {
                 else if (l == 'v') paste();
                 else if (l == 'a') { sel_anchor = 0; cursor = len; typing = 0; }
                 else if (l == 'z') undo();
+                else if (l == 'h') {
+                    bar_open = 1;
+                    find_field.focused = 1;
+                    repl_field.focused = 0;
+                    find_field.cursor = find_field.len;
+                }
                 continue;
             }
+            /* F3, the next match, whether the bar is open or not. */
+            if (k == KEY_F1 + 2) { find_next(); continue; }
 
             /* A key that moves the cursor ends a run of typing, and lets go
                of a selection: with no shift to extend one, select all and
@@ -392,6 +511,28 @@ int main(int argc, char **argv) {
         bx += 64 + UI_GAP;
 
         ui_field_draw(&s, &in, &t, bx, by, w - bx - UI_PAD, &name_field, "path");
+
+        /* The find bar, under the toolbar. */
+        if (bar_open) {
+            int fy = TOOLBAR_H + UI_PAD;
+            rect(&s, 0, TOOLBAR_H, w, BAR_H, mix(t.bg, t.fg, 8));
+            int fx = UI_PAD;
+            ui_label(&s, &t, fx, fy + (UI_BTN_H - FONT_H) / 2, "find");
+            fx += face_w("find", UI_FACE_BODY) + UI_GAP;
+            int fw = (w - fx - 3 * (70 + UI_GAP) - face_w("replace with", UI_FACE_BODY) - 3 * UI_GAP - UI_PAD) / 2;
+            if (fw < 80) fw = 80;
+            ui_field_draw(&s, &in, &t, fx, fy, fw, &find_field, "a word");
+            fx += fw + UI_GAP * 2;
+            ui_label(&s, &t, fx, fy + (UI_BTN_H - FONT_H) / 2, "replace with");
+            fx += face_w("replace with", UI_FACE_BODY) + UI_GAP;
+            ui_field_draw(&s, &in, &t, fx, fy, fw, &repl_field, "");
+            fx += fw + UI_GAP;
+            if (ui_button(&s, &in, &t, fx, fy, 70, "next")) find_next();
+            fx += 70 + UI_GAP;
+            if (ui_button(&s, &in, &t, fx, fy, 70, "replace")) replace_one();
+            fx += 70 + UI_GAP;
+            if (ui_button(&s, &in, &t, fx, fy, 70, "all")) replace_all();
+        }
         for (int ki = 0; ki < in.nkeys && name_field.focused; ki++) {
             if (in.keys[ki] == '\n') { load(name_buf); name_field.focused = 0; }
             else ui_field_key(&name_field, in.keys[ki]);
@@ -477,6 +618,12 @@ int main(int argc, char **argv) {
         right[ri] = 0;
 
         ui_statusbar(&s, &t, w, h, left, right);
+        static char said[128];
+        if (strcmp(status, said)) {
+            strncpy(said, status, sizeof(said) - 1);
+            said[sizeof(said) - 1] = 0;
+            if (said[0]) { puts("notes: "); puts(said); puts("\n"); }
+        }
 
         win_commit(win);
         ui_wait(win);          /* until a key, the pointer, or the cursor's blink */

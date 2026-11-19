@@ -109,6 +109,56 @@ def main():
         key("ctrl-s")
         c.add("and ctrl+z takes a run of typing back at once", wait_disk(lambda: read("/home/note.txt") == NOTE))
 
+        # Find and replace, on ctrl+H. Notes says its status on the console
+        # ("notes: found"), and the file is read back after each save.
+        def said_since(mark, text, timeout=20):
+            end = time.time() + timeout
+            while time.time() < end:
+                if text in vm.serial()[mark:]:
+                    return True
+                time.sleep(0.2)
+            return False
+
+        mark = len(vm.serial())
+        key("ctrl-h")
+        for k in ("shift-b", "shift-e", "shift-t", "shift-a"):    # in capitals: case is not asked
+            key(k, settle=0.05)
+        key("ret")
+        found = said_since(mark, "notes: found")
+        key("esc")
+        for ch in "gamma":
+            key(ch, settle=0.05)
+        key("ctrl-s")
+        c.add("ctrl+H finds a word whatever its case, and selects it to be typed over",
+              found and wait_disk(lambda: read("/home/note.txt") == b"alpha gamma\n"))
+
+        mark = len(vm.serial())
+        key("ctrl-h")
+        for _ in range(4):
+            key("backspace", settle=0.05)
+        key("a")
+        key("tab")
+        key("o")
+        key("ctrl-r")
+        replaced = said_since(mark, "notes: replaced 4")
+        key("esc")
+        key("ctrl-s")
+        c.add("ctrl+R replaces every one",
+              replaced and wait_disk(lambda: read("/home/note.txt") == b"olpho gommo\n"))
+
+        key("ctrl-z")
+        key("ctrl-s")
+        c.add("and one ctrl+z takes all of them back", wait_disk(lambda: read("/home/note.txt") == b"alpha gamma\n"))
+
+        mark = len(vm.serial())
+        key("ctrl-h")
+        key("backspace")
+        for ch in "zebra":
+            key(ch, settle=0.05)
+        key("ret")
+        c.add("a word that is not there is said not to be found", said_since(mark, "notes: not found"))
+        key("esc")
+
         mon.send("sendkey alt-q", settle=1.0)
     finally:
         vm.stop()
