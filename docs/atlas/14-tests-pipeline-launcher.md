@@ -459,6 +459,7 @@ All of them:
 - **usbcheck.py**: its `reports()` parser reads the `usb …` line of `/sys/devices`. The hot-plug part uses `device_add usb-kbd,bus=xhci.0,id=latecomer` and `device_del latecomer`. The stick is 8 MiB with pattern `DEADBEEF×4` at LBA 100; the test writes 0xAB to LBA 200 and verifies it on the host.
 - **soundcheck.py** also exports the audio helpers other harnesses import:
   - `read_wav` (35-78) is a hand parser that tolerates the zero length fields QEMU leaves when it did not exit cleanly.
+    It answers one channel, the first unless `channel` says (0.185.0, for m4acheck).
   - `loud_runs(samples, rate, floor=2000, min_ms=120)` works in 5 ms blocks.
   - `frequency_of` counts zero crossings with hysteresis over the middle 3/4 of the note.
   - `close_to(tol=0.06)`, `LOW_HZ 440`, `HIGH_HZ 880`, `NOTE_MS 600`.
@@ -886,6 +887,16 @@ Added in 0.165.0, not yet in the table below:
   the row under the bar clicked (the bar found by its accent ring and go button) goes to a; page a's block link to
   about:history?forget is not followed (still 3); after the server's /peek, about:history's second entry (a, a file;
   the links found as bands of accent inside the window) opens; the forget button (found by its colour) leaves 0.
+
+Added in 0.185.0, not yet in the table below:
+- **`m4acheck.py`** (gate `m4atest`, full; 11 checks). The frames of aacdata.h's first stream (440 Hz left, 660 right,
+  a second at 44100, Windows' encoder) put into an M4A written box by box here (ftyp, moov: mvhd, trak with tkhd, mdia,
+  mdhd, hdlr soun, minf, stbl with stsd/mp4a/esds, stts, stsc, stsz, stco; then mdat) and into ADTS (seven-byte
+  headers), plus JUNK.M4A of text, on a mkfat volume. q35 with intel-hda and a wav audiodev, 256 MiB. `music
+  /home/TONE.M4A` and `.AAC` typed in the terminal ("music: playing NAME, AAC, 44100 Hz, stereo", "music: finished
+  with"), alt+Q between; JUNK refused ("music: cannot play JUNK.M4A: not an m4a this can read"); Files on /home with
+  six downs ("files: TONE.M4A - sound", the .aac too). The recording: two sounds (`loud_runs` joined across gaps under
+  half a second), each channel's pitch within 6 per cent (`read_wav(path, channel)`).
 
 Added in 0.184.0, not yet in the table below:
 - **`searchcheck.py`** (gate `searchtest`, full; 9 checks). A mkfat volume: /home/docs/y2026/report.txt,

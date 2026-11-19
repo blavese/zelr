@@ -62,7 +62,7 @@ Context files, summarised in §3.15 only (other agents document them): `userland
 | Ring-3 terminal (`userland/term.c:915-917`) | `spawnv(path, argv)` |
 | Files itself (`files.c:227-258`) | notes / music with a path, or any /bin program with no argument |
 
-Three programs read an argument: **files** (a folder), **notes** (a file) and **music** (a WAV). All the others declare `main(void)` and ignore argv.
+Three programs read an argument: **files** (a folder), **notes** (a file) and **music** (a WAV, .m4a or .aac). All the others declare `main(void)` and ignore argv.
 
 ### 2.3 The common skeleton (every app except paint and cardtest)
 ```
@@ -176,7 +176,7 @@ win_close(win); exit(0);
 |---|---|
 | Directory | navigate into it (`go_to`) |
 | Current directory starts with `"/bin"` (`strncmp(dir,"/bin",4)`) | `spawn(path)`: runs it with no argument. Status "started" or "would not run" |
-| Name ends `.wav` | `spawn_arg("/bin/music", path)` |
+| Name ends `.wav`, `.m4a` or `.aac` (0.185.0) | `spawn_arg("/bin/music", path)` |
 | `.txt .md .cfg .log .c .h .sh` | `spawn_arg("/bin/notes", path)` (KIND_TEXT) |
 | Anything else (KIND_OTHER) | also `/bin/notes` (the `default:` branch) |
 
@@ -370,7 +370,7 @@ Compared with the kernel: `theme_init` sets look MODERN, light true, preset 1 (t
 - Playback: `fd`, `playing`, `data_at`, `data_len`, `data_done`, `src_rate`, `src_chans`, `src_bits`, `dev_rate=48000`, `dev_chans=2`, `step` (16.16), `frac` (:36-43).
 - Buffers: `short out[CHUNK*2]`, `u8 in_buf[CHUNK*4]` (8 KiB) (:45-46).
 
-**Finding files** (:93-111). `rescan()` scans `/home`, `/music` and `/usb`, non-recursively. `is_wav` requires the name to end in ".wav" (any case) with length ≥ 5. The first song is selected. (`/music` is never created by `kernel/layout.c:27`, so that readdir simply fails.)
+**Finding files** (:93-111). `rescan()` scans `/home`, `/music` and `/usb`, non-recursively. `is_wav` requires the name to end in ".wav" (any case) with length ≥ 5; since 0.185.0 `is_aac_name` takes ".m4a" and ".aac" too (`ends_in`). The first song is selected. (`/music` is never created by `kernel/layout.c:27`, so that readdir simply fails.)
 
 **WAV parsing: `open_song`** (:120-190).
 1. Open the file (`O_READ`) and read a 12-byte `RIFF....WAVE` header.
@@ -382,6 +382,11 @@ Compared with the kernel: `theme_init` sets look MODERN, light true, preset 1 (t
 4. Set `step = (src_rate<<16)/dev_rate` and seek to the data. The status shows "R Hz, B bit, mono|stereo".
 
 **Accepted formats.** PCM, unsigned 8-bit or signed 16-bit little-endian, any non-zero rate, one or more channels (only the first two are used: `r` is sample +2 bytes / +1 byte). The data chunk must come after fmt.
+
+**AAC (0.185.0).** `open_song` lets go of what was playing and calls `open_aac` for a name ending .m4a or .aac, else `open_wav` (the steps above), then prints "music: playing NAME, STATUS" or "music: cannot play NAME: STATUS".
+- `open_aac` reads the whole file into the heap (`AAC_FILE_MAX` 64 MB). An .m4a: `mp4_parse_init`, `aac_track` (the first `MP4_AUDIO` track with object type 2, 5 or 29: HE-AAC's low complexity part is played at its own rate, without the upper half its extension would add), `mp4_index` into `aac_frames`. An .aac: the first ADTS header gives the rate and channels. `aac_open` refuses more than two channels and rates aac.h does not take.
+- `pump_aac` makes up to CHUNK output frames from `aac_pcm`, calling `aac_next_frame` when `pos >> 16` passes the 1024 decoded (the position carried into the next frame); a frame aac.h will not decode is passed over. `data_len`/`data_done` become frames (m4a) or bytes (ADTS) for the bar. Finishing or Stop frees the file and the table (`aac_close_file`).
+- Not done: seeking, tags and cover pictures, gapless trimming (the encoder's first frame of delay is played), ALAC and MP3.
 
 **Resampling: `pump()`** (:194-244), once per frame while playing.
 - Source frames wanted: `want_src = (CHUNK·step + frac) >> 16`, clamped to [1, CHUNK]. Bytes are clamped to `in_buf` and to what is left of the data.
@@ -400,7 +405,7 @@ Compared with the kernel: `theme_init` sets look MODERN, light true, preset 1 (t
 **UI** (:358-438).
 - Toolbar of height `UI_ROW+UI_PAD` = 34 px with buttons `Play`/`Stop` (80 px; Stop closes the file, so there is no pause), `Tune` (80) and `Look again` (90, rescan).
 - List rows show the name and the size in K. A click selects; a click on the selected row plays it; the wheel scrolls 1 row per step.
-- With no files: "No .wav files in /home, /music or /usb." and "Copy one onto a stick and plug it in, or press Tune."
+- With no files: "No .wav, .m4a or .aac files in /home, /music or /usb." and "Copy one onto a stick and plug it in, or press Tune."
 - A progress bar (`data_done/data_len`) sits just above the status bar. Status left is the message; right is "playing", "tune" or "ready".
 - **No keyboard handling at all.**
 

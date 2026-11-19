@@ -113,6 +113,20 @@ numbered files are still to 6048716; where they disagree with this list, this li
   built unsigned program; h264test in the machine still checks the decoder against Windows' answers in h264data.h.
   Gate 74 steps (one out, one in).
 
+### 0.185.0
+
+- **Music plays AAC (10, 14)**: an `.m4a` or `.aac` (any case) is listed beside the WAVs, and Files calls it a sound
+  and opens it in Music. `open_aac` reads the whole file (64 MB at most, `slurp`); an .m4a goes through mp4.h
+  (`mp4_parse_init`, then `aac_track`: the first audio track whose object type is 2, or 5 or 29 with its low
+  complexity part played at its own rate, then `mp4_index` for where each frame is); an .aac is ADTS, read a header
+  at a time (`aac_adts_read`). Frames are decoded by aac.h as `pump_aac` needs them (`aac_next_frame`, a frame that
+  will not decode passed over), and stepped to the card's rate at the 16.16 ratio as a WAV's samples are, the
+  position carried across frames. The bar counts frames (m4a) or bytes (ADTS). `open_song` now says how it went on
+  the console: "music: playing NAME, STATUS" or "music: cannot play NAME: STATUS" ("AAC, 44100 Hz, stereo", "not an
+  m4a this can read", "it holds no aac sound", "only mono and stereo are played"). soundcheck's `read_wav` takes a
+  channel. m4acheck, new (11), gate step `m4atest` (81 steps). Not done: seeking, tags and cover pictures,
+  HE-AAC's upper half, ALAC and MP3.
+
 ### 0.184.0
 
 - **Looking for a file in Files (10, 14)**: "/" puts the keyboard in the filter field (it took it only from a click);

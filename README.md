@@ -500,6 +500,7 @@ instead.
     python tools/clockcheck.py  other places' times by their own rules, a stopwatch, a timer that rings
     python tools/lockcheck.py   set a password, lock with alt+L, a wrong one, alt+Escape, the pointer, the right one
     python tools/searchcheck.py look for a name in every folder below, act on a result, nothing found, back again
+    python tools/m4acheck.py    play an .m4a and an .aac, hear each channel at its pitch, refuse one that is not
     python tools/downloadcheck.py  a 12 MB download fetched in parts with Range, read back byte for byte
     python tools/notescheck.py  select all, copy, paste, save, undo, find and replace in the editor, from its keys
     python tools/timecheck.py   set the time zone from the shell and in Settings, read the clocks and a file's time
@@ -1189,7 +1190,10 @@ The music player reads WAV files, which is a header and then the samples.
 The hardware plays at one rate and in stereo and will not be argued with, so
 a file recorded at some other rate is stepped through at a ratio held in
 sixteen fixed point bits and a mono file has each sample written twice. Put
-one on a USB stick, plug it in, and it is under `/usb`.
+one on a USB stick, plug it in, and it is under `/usb`. It plays AAC as well,
+which is what most music bought or ripped now is: an `.m4a` has its frames
+found from its own sample tables and an `.aac` read header by header, each
+decoded by the same AAC decoder the stream player uses.
 
 **Two card games**, which are one program each and a pile of shared rules.
 
@@ -2169,7 +2173,7 @@ orders of magnitude away from Linux, which is roughly 30 million lines.
     kernel/wifi.c      what wireless hardware is here, and whether it is usable
     kernel/usbnet.c    ethernet over usb, for a phone or an adapter
     userland/monitor.c what the machine is doing, while it does it
-    userland/music.c   wav files, resampled to whatever the card wants
+    userland/music.c   wav, m4a and aac files, resampled to whatever the card wants
     userland/calc.c    arithmetic in millionths, because there is no fpu
     userland/cards.h   a deck, a shuffle, and a card drawn rather than stored
     userland/poker.h   what five cards out of seven are worth
