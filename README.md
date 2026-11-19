@@ -187,7 +187,10 @@ listed from the archive's own directory, a file in it opens (taken out into
 file checked against the CRC-32 the archive kept. Stored and deflated files
 are read, which is nearly every archive; one locked with a password or
 compressed some other way is refused saying so, and a name that would write
-outside the folder is not written. Settings' Storage page says how much of the disk and of a stick
+outside the folder is not written. In Files, / puts the keyboard in the
+filter, which narrows the folder as you type; Return there looks in every
+folder below it for names with those letters in them, and lists what it
+finds by its path, to open, copy or put in the trash. Settings' Storage page says how much of the disk and of a stick
 is used, as the kernel counts it (`/sys/storage`), and what the trash is
 holding, with a button that opens Files on it. The machine's own clock is taken to keep UTC, as QEMU's does;
 one that keeps local time instead, as Windows keeps the clock of a machine
@@ -496,6 +499,7 @@ instead.
     python tools/paintcheck.py  open a PNG in Paint, draw, save, decode it here, undo, save again
     python tools/clockcheck.py  other places' times by their own rules, a stopwatch, a timer that rings
     python tools/lockcheck.py   set a password, lock with alt+L, a wrong one, alt+Escape, the pointer, the right one
+    python tools/searchcheck.py look for a name in every folder below, act on a result, nothing found, back again
     python tools/downloadcheck.py  a 12 MB download fetched in parts with Range, read back byte for byte
     python tools/notescheck.py  select all, copy, paste, save, undo, find and replace in the editor, from its keys
     python tools/timecheck.py   set the time zone from the shell and in Settings, read the clocks and a file's time

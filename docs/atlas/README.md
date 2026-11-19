@@ -113,6 +113,18 @@ numbered files are still to 6048716; where they disagree with this list, this li
   built unsigned program; h264test in the machine still checks the decoder against Windows' answers in h264data.h.
   Gate 74 steps (one out, one in).
 
+### 0.184.0
+
+- **Looking for a file in Files (10, 14)**: "/" puts the keyboard in the filter field (it took it only from a click);
+  Return there is `search_below`: every file and folder under cwd whose name has the filter's text in it, case aside
+  (`matches`), walked eight folders deep (`search_walk`), the list made of them by their paths from cwd (entry names,
+  63 characters shown) with each whole path in `found_path`, sorted as a folder is; "found N below CWD" or "nothing
+  below CWD has TEXT in its name". `entry_path` is every entry's whole path (a result's own, else cwd's), used by
+  opening, Copy, Cut, Delete and the time beside a chosen file; Rename in a search says to do it in the file's own
+  folder; any `reload` ends a search, and Escape in the filter ends one and clears the line. Moving the selection in a
+  search shows the result chosen, not the count. Not inside an archive. searchcheck, new (9), gate step `searchtest`
+  (80 steps).
+
 ### 0.183.0
 
 - **A screen lock (07, 10, 14)**: wm.c `lock_screen` (alt+L in `handle_shortcut`, or "Lock the screen" in the launcher's

@@ -887,6 +887,16 @@ Added in 0.165.0, not yet in the table below:
   about:history?forget is not followed (still 3); after the server's /peek, about:history's second entry (a, a file;
   the links found as bands of accent inside the window) opens; the forget button (found by its colour) leaves 0.
 
+Added in 0.184.0, not yet in the table below:
+- **`searchcheck.py`** (gate `searchtest`, full; 9 checks). A mkfat volume: /home/docs/y2026/report.txt,
+  docs/oldrep.txt, docs/report1.txt, misc/deep/a/report.md, misc/notes.txt and
+  longer01/longer02/longer03/longer04/longer05/longer06/report.txt (64 characters from /home, one more than an entry's
+  name keeps, so only `found_path` reaches it). Files on /home by keys: "/", "report", Return ("found 4 below
+  /home"); four downs list them ("PATH - text"), not oldrep; up and Delete on the long one (moved to the trash:
+  /home/trash/report.txt, gone from its folder, misc's left); "zebra" ("nothing below /home has zebra in its name");
+  Escape ("files: /home"); "2026", down, Return goes into /home/docs/y2026. With only short paths, a build that took a
+  result's path from cwd and its name passed: the long path is what makes it fail.
+
 Added in 0.183.0, not yet in the table below:
 - **`lockcheck.py`** (gate `locktest`, full; 9 checks). The terminal closed from the desktop's menu; Settings from the
   launcher ("sett") is the first window, its Lock page from setcheck's `sidebar`, the field and the set and take away
