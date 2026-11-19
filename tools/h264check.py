@@ -17,6 +17,10 @@ says what it covered.
 Nothing fetched is kept: the segments are in build/h264check and replaced
 each run.
 
+It is not in the gate (since 0.176.1): it builds and runs two Windows
+programs, which Smart App Control flags as unsigned, and the machine it is
+developed on keeps none.
+
   python tools/h264check.py [channel]
 """
 import json
