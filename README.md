@@ -120,7 +120,8 @@ ctrl and f, or the magnifier in the tray, to look for a word that is on the
 screen rather than for a program to start. A notice the desktop shows above
 the dock is kept: alt and n lists the last twelve with the time each came,
 newest first, and the terminal's `notice TEXT` puts one up, a script's way
-of saying it has finished. Alt and l (or Lock the screen in
+of saying it has finished. The desktop says the day's note from the
+calendar as a notice when it opens and when the date turns over. Alt and l (or Lock the screen in
 the launcher) locks the screen behind a password set on Settings' Lock page;
 it is kept as a salted SHA-256, never as itself, and nothing gets round the
 lock but the password: not the pointer, not alt and Escape. The same page
@@ -529,6 +530,7 @@ instead.
     python tools/zoomcheck.py   a picture made bigger, moved about, fitted again and turned, counted by colour
     python tools/gotocheck.py   Notes goes to a line by number, and Return keeps the indent
     python tools/noticecheck.py notices from the terminal, listed with alt+N, put away, twelve kept
+    python tools/daycheck.py    the desktop says today's calendar note when it opens, and only once a day
     python tools/downloadcheck.py  a 12 MB download fetched in parts with Range, read back byte for byte
     python tools/notescheck.py  select all, copy, paste, save, undo, find and replace in the editor, from its keys
     python tools/timecheck.py   set the time zone from the shell and in Settings, read the clocks and a file's time

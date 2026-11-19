@@ -888,6 +888,12 @@ Added in 0.165.0, not yet in the table below:
   about:history?forget is not followed (still 3); after the server's /peek, about:history's second entry (a, a file;
   the links found as bands of accent inside the window) opens; the forget button (found by its colour) leaves 0.
 
+Added in 0.194.0, not yet in the table below:
+- **`daycheck.py`** (gate `daytest`, full; 5 checks). /home/calendar from mkfat with yesterday's, today's ("the dentist
+  at ten") and tomorrow's notes, by the host's UTC date (the machine's local date here). `desktop` ("notice: today:
+  the dentist at ten", and neither other note); alt-n ("desktop: notices: 1: today: the dentist at ten"); alt-esc to
+  the console and `desktop` again: no second "notice: today:".
+
 Added in 0.193.0, not yet in the table below:
 - **`noticecheck.py`** (gate `noticetest`, full; 6 checks). The terminal's `notice the first one`, `notice and a
   second` ("notice: ..." on the console); alt-n ("desktop: notices: 2: and a second | the first one", and the screen at

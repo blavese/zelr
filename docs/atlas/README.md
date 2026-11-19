@@ -113,6 +113,15 @@ numbered files are still to 6048716; where they disagree with this list, this li
   built unsigned program; h264test in the machine still checks the decoder against Windows' answers in h264data.h.
   Gate 74 steps (one out, one in).
 
+### 0.194.0
+
+- **The day's calendar note as a notice (07, 14)**: wm.c `day_note`, from the once a second look at the clock (so
+  on the desktop's first pass too): when the local date (`zone_now`) is not `day_looked`, it reads /home/calendar (32
+  KiB at most) and `day_note_in` finds the line "YYYY-MM-DD<tab>NOTE" for the date (a CR before the newline left out),
+  said with `wm_notice` as "today: NOTE". `day_looked` lasts the boot, so leaving and opening the desktop again does
+  not say it twice. Selftest `[windows]` +4 (`wm_test_day_note`: a note found, the last line's with no newline, none
+  for a day without one, none for a line with no tab). daycheck, new (5), gate step `daytest` (90 steps).
+
 ### 0.193.0
 
 - **The notices kept (07, 14)**: wm.c `notice` now also keeps each notice (`notice_keep`: `notices[NOTICES_MAX 12]`,
