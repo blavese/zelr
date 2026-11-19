@@ -355,16 +355,66 @@ static int open_song(const song_t *s) {
     return ok;
 }
 
-/* Plays the list's entry idx; when it finishes, the one after it follows. */
+/* Plays the list's entry idx; when it finishes, the one after it follows.
+   Started from the list, everything is unheard again but this one. */
+static u8 heard[MAX_FILES];
+
 static void play_index(int idx) {
     if (idx < 0 || idx >= nsongs) return;
     selected = idx;
+    for (int i = 0; i < MAX_FILES; i++) heard[i] = 0;
+    heard[idx] = 1;
     playing_idx = open_song(&songs[idx]) ? idx : -1;
+}
+
+/* Repeat (R): the list goes round, the first after the last. Shuffle (S):
+   the next is any not yet played since the list was started, chosen by the
+   machine's own randomness, so each is heard once before any twice. */
+static int repeat_on, shuffle_on;
+
+static void say_mode(void) {
+    puts("music: repeat ");
+    puts(repeat_on ? "on" : "off");
+    puts(", shuffle ");
+    puts(shuffle_on ? "on" : "off");
+    puts("\n");
+    say(repeat_on && shuffle_on ? "repeat and shuffle" : repeat_on ? "repeat" : shuffle_on ? "shuffle" : "in order");
+}
+
+static int shuffle_pick(void) {
+    int left = 0;
+    for (int i = 0; i < nsongs; i++) if (!heard[i]) left++;
+    if (!left) {
+        if (!repeat_on) return -1;
+        for (int i = 0; i < nsongs; i++) heard[i] = 0;
+        left = nsongs;
+    }
+    u32 r = 0;
+    random_bytes(&r, sizeof(r));
+    int n = (int)(r % (u32)left);
+    for (int i = 0; i < nsongs; i++) if (!heard[i] && n-- == 0) return i;
+    return -1;
 }
 
 /* The one after what finished, passing over any that will not open. */
 static void play_on(void) {
-    for (int i = playing_idx + 1; i < nsongs; i++) {
+    if (shuffle_on) {
+        for (int tries = 0; tries < nsongs; tries++) {
+            int i = shuffle_pick();
+            if (i < 0) break;
+            heard[i] = 1;
+            selected = i;
+            if (open_song(&songs[i])) { playing_idx = i; return; }
+        }
+        playing_idx = -1;
+        return;
+    }
+    for (int step = 1; step <= nsongs; step++) {
+        int i = playing_idx + step;
+        if (i >= nsongs) {
+            if (!repeat_on) break;
+            i -= nsongs;
+        }
         selected = i;
         if (open_song(&songs[i])) { playing_idx = i; return; }
     }
@@ -610,6 +660,8 @@ int main(int argc, char **argv) {
             else if (k == KEY_END && nsongs) { selected = nsongs - 1; follow = 1; }
             else if (k == KEY_RIGHT) { play_next(1); follow = 1; }
             else if (k == KEY_LEFT) { play_next(-1); follow = 1; }
+            else if (k == 'r' || k == 'R') { repeat_on = !repeat_on; say_mode(); }
+            else if (k == 's' || k == 'S') { shuffle_on = !shuffle_on; say_mode(); }
         }
 
         if (playing && !paused && !pump()) {
