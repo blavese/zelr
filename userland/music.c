@@ -45,6 +45,10 @@ static int    scroll;
 /* What is playing, if anything. */
 static int   fd = -1;
 static int   playing;
+static int   paused;             /* playing, but not fed: Space again goes on */
+static int   playing_idx = -1;   /* its place in the list, when played from there */
+static char  playing_name[NAME_MAX];
+static char  playing_said[96];   /* the line as it began, for going on */
 static u32   data_at, data_len, data_done;
 static u32   src_rate, src_chans, src_bits;
 static u32   dev_rate = 48000, dev_chans = 2;
@@ -137,6 +141,21 @@ static void rescan(void) {
     scan_dir("/music");
     scan_dir("/usb");
     if (nsongs) selected = 0;
+    playing_idx = -1;
+    puts("music: ");
+    putn(nsongs);
+    puts(nsongs == 1 ? " file to play\n" : " files to play\n");
+}
+
+/* Names on FAT are the same whatever their case. */
+static int same_path(const char *a, const char *b) {
+    for (;; a++, b++) {
+        char x = *a, y = *b;
+        if (x >= 'A' && x <= 'Z') x = (char)(x + 32);
+        if (y >= 'A' && y <= 'Z') y = (char)(y + 32);
+        if (x != y) return 0;
+        if (!x) return 1;
+    }
 }
 
 /* --- the header ------------------------------------------------------------
@@ -320,7 +339,7 @@ static int open_wav(const song_t *s) {
    the window. */
 static int open_song(const song_t *s) {
     if (fd >= 0) { close(fd); fd = -1; }
-    playing = 0;
+    playing = paused = 0;
     aac_close_file();
     data_len = data_done = 0;
     int ok = is_aac_name(s->name) ? open_aac(s) : open_wav(s);
@@ -329,7 +348,53 @@ static int open_song(const song_t *s) {
     puts(ok ? ", " : ": ");
     puts(status);
     puts("\n");
+    if (ok) {
+        copy_str(playing_name, NAME_MAX, s->name);
+        copy_str(playing_said, sizeof(playing_said), status);
+    }
     return ok;
+}
+
+/* Plays the list's entry idx; when it finishes, the one after it follows. */
+static void play_index(int idx) {
+    if (idx < 0 || idx >= nsongs) return;
+    selected = idx;
+    playing_idx = open_song(&songs[idx]) ? idx : -1;
+}
+
+/* The one after what finished, passing over any that will not open. */
+static void play_on(void) {
+    for (int i = playing_idx + 1; i < nsongs; i++) {
+        selected = i;
+        if (open_song(&songs[i])) { playing_idx = i; return; }
+    }
+    playing_idx = -1;
+}
+
+/* Next or previous: from what is playing, or else from what is chosen. */
+static void play_next(int by) {
+    int from = playing && playing_idx >= 0 ? playing_idx : selected;
+    play_index(from + by);
+}
+
+static void stop_playing(void) {
+    playing = paused = 0;
+    playing_idx = -1;
+    if (fd >= 0) { close(fd); fd = -1; }
+    aac_close_file();
+    say("stopped");
+}
+
+/* A pause stops feeding the card and keeps the place: what the card holds
+   (a third of a second at most, card_full) plays out, and going on starts
+   from where the feeding stopped, so nothing is lost or heard twice. */
+static void pause_or_go_on(void) {
+    if (!playing) { play_index(selected); return; }
+    paused = !paused;
+    say(paused ? "paused" : playing_said);
+    puts(paused ? "music: paused " : "music: going on with ");
+    puts(playing_name);
+    puts("\n");
 }
 
 /* Whether the card has a third of a second queued. Its ring holds more than
@@ -497,9 +562,13 @@ int main(int argc, char **argv) {
         copy_str(one.name, NAME_MAX, leaf);
         one.size = 0;
 
-        /* Put it at the top of the list as well, so it is the thing that is
-           selected and not just the thing that is playing. */
-        if (nsongs < MAX_FILES) {
+        int at = -1;
+        for (int i = 0; i < nsongs && at < 0; i++) if (same_path(songs[i].path, wanted)) at = i;
+        if (at >= 0) {
+            selected = at;
+        } else if (nsongs < MAX_FILES) {
+            /* Put it at the top of the list as well, so it is the thing
+               that is selected and not just the thing that is playing. */
             /* Copied a field at a time. A struct assignment of this size
                becomes a call to memcpy, and there is no library here to
                have one in. */
@@ -530,7 +599,20 @@ int main(int argc, char **argv) {
         }
         if (closing) break;
 
-        if (playing && !pump()) {
+        int follow = 0;            /* the selection moved by a key: keep it in view */
+        for (int ki = 0; ki < in.nkeys; ki++) {
+            u32 k = in.keys[ki];
+            if (k == ' ') pause_or_go_on();
+            else if (k == '\n') play_index(selected);
+            else if (k == KEY_UP && selected > 0) { selected--; follow = 1; }
+            else if (k == KEY_DOWN && selected + 1 < nsongs) { selected++; follow = 1; }
+            else if (k == KEY_HOME && nsongs) { selected = 0; follow = 1; }
+            else if (k == KEY_END && nsongs) { selected = nsongs - 1; follow = 1; }
+            else if (k == KEY_RIGHT) { play_next(1); follow = 1; }
+            else if (k == KEY_LEFT) { play_next(-1); follow = 1; }
+        }
+
+        if (playing && !paused && !pump()) {
             playing = 0;
             if (fd >= 0) close(fd);
             fd = -1;
@@ -545,6 +627,7 @@ int main(int argc, char **argv) {
                 putn((int)((u64)snd.queued * 1000 / (u32)dev_rate));
                 puts(" ms still to play\n");
             }
+            if (playing_idx >= 0) { play_on(); follow = 1; }
         }
         tune_step();
 
@@ -552,17 +635,12 @@ int main(int argc, char **argv) {
         ui_toolbar(&s, &t, w, UI_ROW + UI_PAD);
 
         int bx = UI_PAD;
-        if (ui_button(&s, &in, &t, bx, UI_PAD / 2, 80,
-                      playing ? "Stop" : "Play")) {
-            if (playing) {
-                playing = 0;
-                if (fd >= 0) { close(fd); fd = -1; }
-                aac_close_file();
-                say("stopped");
-            } else if (selected >= 0) {
-                open_song(&songs[selected]);
-            }
-        }
+        if (ui_button(&s, &in, &t, bx, UI_PAD / 2, 80, !playing ? "Play" : paused ? "Go on" : "Pause"))
+            pause_or_go_on();
+        bx += 86;
+        if (ui_button(&s, &in, &t, bx, UI_PAD / 2, 80, "Stop") && playing) stop_playing();
+        bx += 86;
+        if (ui_button(&s, &in, &t, bx, UI_PAD / 2, 80, "Next")) { play_next(1); follow = 1; }
         bx += 86;
         if (ui_button(&s, &in, &t, bx, UI_PAD / 2, 80, "Tune")) {
             tune_at = 0;
@@ -580,6 +658,10 @@ int main(int argc, char **argv) {
         if (shown < 1) shown = 1;
 
         if (in.scroll) scroll += in.scroll;
+        if (follow && selected >= 0) {
+            if (selected < scroll) scroll = selected;
+            if (selected >= scroll + shown) scroll = selected - shown + 1;
+        }
         if (scroll > nsongs - shown) scroll = nsongs - shown;
         if (scroll < 0) scroll = 0;
 
@@ -605,13 +687,13 @@ int main(int argc, char **argv) {
 
             if (over && in.released) {
                 in.released = 0;
-                if (selected == idx) open_song(&songs[idx]);
+                if (selected == idx) play_index(idx);
                 else selected = idx;
             }
 
             int ty = ry + (UI_ROW - face_h(UI_FACE_BODY)) / 2;
             face_draw(&s, UI_PAD * 2, ty, songs[idx].name,
-                      idx == selected ? t.fg : t.dim, UI_FACE_BODY);
+                      playing && idx == playing_idx ? t.accent : idx == selected ? t.fg : t.dim, UI_FACE_BODY);
 
             char size[24];
             int n = utoa(songs[idx].size / 1024, size);
@@ -629,14 +711,14 @@ int main(int argc, char **argv) {
         }
 
         ui_statusbar(&s, &t, w, h, status,
-                     playing ? "playing" : (tune_at >= 0 ? "tune" : "ready"));
+                     playing ? (paused ? "paused" : "playing") : (tune_at >= 0 ? "tune" : "ready"));
         win_commit(win);
         /* Playing, the card's buffer wants feeding every few milliseconds,
            so the loop keeps looking. Otherwise nothing changes until a key,
            the pointer or the next note of the tune: it looked every thirty
            milliseconds all the same, and drew and committed the window each
            time, thirty three frames a second of a player nobody was using. */
-        if (playing) {
+        if (playing && !paused) {
             sleep_ms(4);
         } else {
             if (tune_at >= 0) ui_due(tune_until);
