@@ -237,8 +237,10 @@ In the terminal, which is itself one of those ring 3 programs:
     run hello              start another program and wait for it
     theme amber            and it is remembered next time
 
-Tab completes commands and paths, up and down walk through history, and
-PageUp scrolls back.
+Tab completes commands and paths, up and down walk through history, ctrl+R
+looks back through it for a line with a word in it (ctrl+R again for the
+one before, Return to run it, an arrow to change it first, ctrl+G to let
+it go), and PageUp scrolls back.
 
     mkdir work
     cd work
@@ -534,6 +536,7 @@ instead.
     python tools/noticecheck.py notices from the terminal, listed with alt+N, put away, twelve kept
     python tools/daycheck.py    the desktop says today's calendar note when it opens, and only once a day
     python tools/detailcheck.py Files counts what a folder holds, and gives a file's size and date
+    python tools/backcheck.py   the terminal's ctrl+R finds lines typed before, runs one, changes one, lets go
     python tools/downloadcheck.py  a 12 MB download fetched in parts with Range, read back byte for byte
     python tools/notescheck.py  select all, copy, paste, save, undo, find and replace in the editor, from its keys
     python tools/timecheck.py   set the time zone from the shell and in Settings, read the clocks and a file's time

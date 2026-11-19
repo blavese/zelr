@@ -113,6 +113,16 @@ numbered files are still to 6048716; where they disagree with this list, this li
   built unsigned program; h264test in the machine still checks the decoder against Windows' answers in h264data.h.
   Gate 74 steps (one out, one in).
 
+### 0.196.0
+
+- **The terminal looks back with ctrl+R (10, 14)**: term.c `hs_on`, `hs_text`, `hs_found`; `hs_find(before)` is the
+  newest line in `hist` before an index with the text in it (case as typed). ctrl+R starts (the newest line found
+  with nothing typed), letters and Backspace change what is looked for (from the newest again), ctrl+R again goes to
+  the one before, Return runs what was found (`set_input`, `submit`), an arrow, Home or End take it to the line to
+  change, ctrl+G or Backspace with nothing typed let it go. `draw_prompt` shows "(back) TEXT: LINE" in its place, or
+  "nothing typed before has that". Escape stays the desktop's. The help line says so. backcheck, new (6), gate step
+  `backtest` (92 steps).
+
 ### 0.195.0
 
 - **Files' details (14)**: files.c `show_details` (ctrl+P, File menu "Details"): for a folder `details_walk` counts

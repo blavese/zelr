@@ -888,6 +888,12 @@ Added in 0.165.0, not yet in the table below:
   about:history?forget is not followed (still 3); after the server's /peek, about:history's second entry (a, a file;
   the links found as bands of accent inside the window) opens; the forget button (found by its colour) leaves 0.
 
+Added in 0.196.0, not yet in the table below:
+- **`backcheck.py`** (gate `backtest`, full; 6 checks). In the desktop's terminal by sendkey: `notice alpha one`, `notice
+  beta two`, `notice alpha three` ("notice: ..." on the console); ctrl-r "alpha" ctrl-r ret ("notice: alpha one", not
+  three); ctrl-r "beta" right " more" ret ("notice: beta two more"); ctrl-r "zzz" ret then `notice after` (only "notice:
+  after"); ctrl-r "alpha" ctrl-g then `notice let go`.
+
 Added in 0.195.0, not yet in the table below:
 - **`detailcheck.py`** (gate `detailtest`, full; 5 checks). /home/dt from mkfat: proj/a.txt 1500 bytes, proj/sub/b.bin
   3000, proj/sub/c.txt 24, one.txt 700 (all stamped 1 January 2025, 00:00). Files on /home/dt: down, ctrl-p ("files:
