@@ -32,6 +32,14 @@ static int  nnames;
 static int  at = -1;                /* into names: the picture shown */
 
 static picture pic;                 /* its pixels, or rgb 0 */
+
+/* How it is looked at: fitted to the window (zoom16 0), or at a scale in
+   sixteenths that + and - double and halve; where in it the middle of the
+   window is, when it is bigger than the window (pan_x, pan_y, its own
+   pixels); and a drag that moves it. */
+static int zoom16;
+static int pan_x, pan_y;
+static int drag_x, drag_y, dragging;
 static char shown_why[96];          /* why there is no picture, when there is none */
 static char said[160];
 
@@ -90,6 +98,29 @@ static void drop_picture(void) {
     if (pic.rgb) free(pic.rgb);
     pic.rgb = 0;
     pic.w = pic.h = 0;
+    zoom16 = 0;
+    pan_x = pan_y = 0;
+}
+
+/* A quarter turn to the right, into new memory: what was the left edge is
+   the top. */
+static void rotate_right(void) {
+    if (!pic.rgb) return;
+    u8 *to = (u8 *)malloc((u32)pic.w * pic.h * 3);
+    if (!to) return;
+    int nw = pic.h, nh = pic.w;
+    for (int y = 0; y < pic.h; y++)
+        for (int x = 0; x < pic.w; x++) {
+            const u8 *s = pic.rgb + ((u32)y * pic.w + x) * 3;
+            u8 *d = to + ((u32)x * nw + (nw - 1 - y)) * 3;
+            d[0] = s[0]; d[1] = s[1]; d[2] = s[2];
+        }
+    free(pic.rgb);
+    pic.rgb = to;
+    pic.w = nw;
+    pic.h = nh;
+    zoom16 = 0;
+    pan_x = pan_y = 0;
 }
 
 /* The file's bytes, decoded by whichever of the four its first bytes say it
@@ -130,26 +161,54 @@ static int scale16(int room_w, int room_h) {
     return s < 1 ? 1 : s;
 }
 
+static int scale_now(int room_w, int room_h) { return zoom16 ? zoom16 : scale16(room_w, room_h); }
+
+/* Where the picture's left (or top) edge goes: in the middle when it fits,
+   else so that pan is at the middle, pan kept where the picture still
+   covers the room. */
+static int edge_at(int size, int room, int k, int *pan) {
+    int d = size * k / 16;
+    if (d <= room) return (room - d) / 2;
+    int half = room * 8 / k;            /* half the room, in the picture's pixels */
+    if (*pan < half) *pan = half;
+    if (*pan > size - half) *pan = size - half;
+    return room / 2 - *pan * k / 16;
+}
+
 static void draw_picture(surface *s, int x0, int y0, int room_w, int room_h) {
     if (!pic.rgb) return;
-    int k = scale16(room_w, room_h);
+    int k = scale_now(room_w, room_h);
     int dw = pic.w * k / 16, dh = pic.h * k / 16;
     if (dw < 1) dw = 1;
     if (dh < 1) dh = 1;
-    int ox = x0 + (room_w - dw) / 2, oy = y0 + (room_h - dh) / 2;
-    for (int y = 0; y < dh; y++) {
-        int sy = y * pic.h / dh;
-        int py = oy + y;
-        if (py < 0 || py >= s->h) continue;
+    int ox = x0 + edge_at(pic.w, room_w, k, &pan_x), oy = y0 + edge_at(pic.h, room_h, k, &pan_y);
+    /* Only the part inside the room is worked out: at eight times, a large
+       picture is tens of thousands of pixels across. */
+    int ya = oy > y0 ? oy : y0, yb = oy + dh < y0 + room_h ? oy + dh : y0 + room_h;
+    int xa = ox > x0 ? ox : x0, xb = ox + dw < x0 + room_w ? ox + dw : x0 + room_w;
+    if (yb > s->h) yb = s->h;
+    if (xb > s->w) xb = s->w;
+    for (int py = ya < 0 ? 0 : ya; py < yb; py++) {
+        int sy = (int)((long long)(py - oy) * pic.h / dh);
         const u8 *src = pic.rgb + (u32)sy * pic.w * 3;
         u32 *dst = s->px + (u32)py * s->w;
-        for (int x = 0; x < dw; x++) {
-            int px = ox + x;
-            if (px < 0 || px >= s->w) continue;
-            const u8 *p = src + (x * pic.w / dw) * 3;
+        for (int px = xa < 0 ? 0 : xa; px < xb; px++) {
+            const u8 *p = src + (int)((long long)(px - ox) * pic.w / dw) * 3;
             dst[px] = (u32)p[0] << 16 | (u32)p[1] << 8 | p[2];
         }
     }
+}
+
+/* + and -: twice or half the size, about the middle of what is shown; back
+   to fitted when that is no bigger. 0 fits it again. */
+static void zoom_by(int up, int room_w, int room_h) {
+    if (!pic.rgb) return;
+    int k = scale_now(room_w, room_h), fit = scale16(room_w, room_h);
+    if (!zoom16) { pan_x = pic.w / 2; pan_y = pic.h / 2; }
+    int nk = up ? k * 2 : k / 2;
+    if (nk > 128) nk = 128;             /* eight times */
+    if (nk < 1) nk = 1;
+    zoom16 = nk <= fit && !up ? 0 : nk;
 }
 
 static void say_shown(int k) {
@@ -221,22 +280,45 @@ int main(int argc, char **argv) {
         }
         if (closing) break;
 
+        int bar = UI_ROW + 4;
+        int room_h = h - bar;
         for (int ki = 0; ki < in.nkeys; ki++) {
             u32 k = in.keys[ki];
-            if ((k == KEY_RIGHT || k == KEY_DOWN || k == ' ') && at + 1 < nnames) load(at + 1);
+            int kz = scale_now(w, room_h);
+            int wide = pic.rgb && pic.w * kz / 16 > w, tall = pic.rgb && pic.h * kz / 16 > room_h;
+            /* The arrows move about a picture bigger than the window, and
+               go between pictures otherwise. */
+            if (k == KEY_RIGHT && wide) pan_x += w * 4 / kz;
+            else if (k == KEY_LEFT && wide) pan_x -= w * 4 / kz;
+            else if (k == KEY_DOWN && tall) pan_y += room_h * 4 / kz;
+            else if (k == KEY_UP && tall) pan_y -= room_h * 4 / kz;
+            else if ((k == KEY_RIGHT || k == KEY_DOWN || k == ' ') && at + 1 < nnames) load(at + 1);
             else if ((k == KEY_LEFT || k == KEY_UP) && at > 0) load(at - 1);
             else if (k == KEY_HOME && nnames) load(0);
             else if (k == KEY_END && nnames) load(nnames - 1);
+            else if (k == '+' || k == '=') zoom_by(1, w, room_h);
+            else if (k == '-') zoom_by(0, w, room_h);
+            else if (k == '0') { zoom16 = 0; }
+            else if (k == 'r' || k == 'R') rotate_right();
         }
+        /* A drag moves a picture bigger than the window. */
+        if (in.pressed) { dragging = 1; drag_x = in.mx; drag_y = in.my; }
+        if (dragging && in.down && pic.rgb) {
+            int kz = scale_now(w, room_h);
+            pan_x -= (in.mx - drag_x) * 16 / kz;
+            pan_y -= (in.my - drag_y) * 16 / kz;
+            drag_x = in.mx;
+            drag_y = in.my;
+        }
+        if (!in.down) dragging = 0;
 
-        int bar = UI_ROW + 4;
         fill(&s, BACKDROP);
         draw_picture(&s, 0, 0, w, h - bar);
         if (!pic.rgb) {
             const char *msg = shown_why[0] ? shown_why : "no picture";
             face_draw(&s, (w - face_w(msg, UI_FACE_BODY)) / 2, (h - bar) / 2, msg, 0xc8ccd2, UI_FACE_BODY);
         }
-        int k = scale16(w, h - bar);
+        int k = scale_now(w, h - bar);
         say_shown(k);
 
         char right[48];
