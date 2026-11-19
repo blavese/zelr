@@ -407,7 +407,10 @@ Compared with the kernel: `theme_init` sets look MODERN, light true, preset 1 (t
 - List rows show the name and the size in K. A click selects; a click on the selected row plays it; the wheel scrolls 1 row per step.
 - With no files: "No .wav, .m4a or .aac files in /home, /music or /usb." and "Copy one onto a stick and plug it in, or press Tune."
 - A progress bar (`data_done/data_len`) sits just above the status bar. Status left is the message; right is "playing", "tune" or "ready".
-- **No keyboard handling at all.**
+- **Keys (0.186.0)**: Up/Down/Home/End choose, Return plays, Space pauses or goes on (plays the chosen when nothing
+  is), Right/Left the next or previous. Buttons Play/Pause/Go on, Stop, Next. A song played from the list is followed
+  by the next that opens (`play_index`, `play_on`); one given as an argument plays alone. A pause keeps the place (the
+  card's third of a second plays out, nothing is dropped or repeated).
 
 **Argument** (:308-329). `argv[1]` is copied into a `song_t`, inserted at the top of the list and played at once. The insertion uses a field-by-field `song_copy` because "A struct assignment of this size becomes a call to memcpy, and there is no library here to have one in".
 

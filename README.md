@@ -501,6 +501,7 @@ instead.
     python tools/lockcheck.py   set a password, lock with alt+L, a wrong one, alt+Escape, the pointer, the right one
     python tools/searchcheck.py look for a name in every folder below, act on a result, nothing found, back again
     python tools/m4acheck.py    play an .m4a and an .aac, hear each channel at its pitch, refuse one that is not
+    python tools/musiccheck.py  music from its keys: the next follows by itself, a pause loses nothing
     python tools/downloadcheck.py  a 12 MB download fetched in parts with Range, read back byte for byte
     python tools/notescheck.py  select all, copy, paste, save, undo, find and replace in the editor, from its keys
     python tools/timecheck.py   set the time zone from the shell and in Settings, read the clocks and a file's time
@@ -1193,7 +1194,10 @@ sixteen fixed point bits and a mono file has each sample written twice. Put
 one on a USB stick, plug it in, and it is under `/usb`. It plays AAC as well,
 which is what most music bought or ripped now is: an `.m4a` has its frames
 found from its own sample tables and an `.aac` read header by header, each
-decoded by the same AAC decoder the stream player uses.
+decoded by the same AAC decoder the stream player uses. It is worked from
+the keys as well as the pointer: up and down choose, Return plays, Space
+pauses and goes on from the same place, and left and right play the one
+before or after. A song played from the list is followed by the next.
 
 **Two card games**, which are one program each and a pile of shared rules.
 

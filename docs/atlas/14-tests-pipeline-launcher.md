@@ -888,6 +888,15 @@ Added in 0.165.0, not yet in the table below:
   about:history?forget is not followed (still 3); after the server's /peek, about:history's second entry (a, a file;
   the links found as bands of accent inside the window) opens; the forget button (found by its colour) leaves 0.
 
+Added in 0.186.0, not yet in the table below:
+- **`musiccheck.py`** (gate `musictest`, full; 13 checks). /home/A.WAV, B.WAV, C.WAV: sines of 440, 550 and 660 Hz
+  (22050 Hz mono; 0.6, 0.6 and 2.4 s). q35, intel-hda, a wav audiodev. `music` typed ("music: 3 files to play"); Down,
+  Return ("music: playing B.WAV", then "playing C.WAV" by itself); Space ("music: paused C.WAV"), 2.5 s, Space ("going
+  on with", "finished with"); Home, Right ("playing B.WAV"). The recording, in stretches joined across gaps under half
+  a second: at least three; the first begins at 550 Hz (B, not A) and the second ends at 660 (C); the sound in those
+  two adds up to 3.0 s within 0.2 (a pause that dropped what the card held, or a going on that started C again, would
+  not).
+
 Added in 0.185.0, not yet in the table below:
 - **`m4acheck.py`** (gate `m4atest`, full; 11 checks). The frames of aacdata.h's first stream (440 Hz left, 660 right,
   a second at 44100, Windows' encoder) put into an M4A written box by box here (ftyp, moov: mvhd, trak with tkhd, mdia,

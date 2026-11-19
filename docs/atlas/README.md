@@ -113,6 +113,18 @@ numbered files are still to 6048716; where they disagree with this list, this li
   built unsigned program; h264test in the machine still checks the decoder against Windows' answers in h264data.h.
   Gate 74 steps (one out, one in).
 
+### 0.186.0
+
+- **Music from the keys, a pause, and the next song (10, 14)**: Up/Down/Home/End choose (the list scrolls to
+  follow), Return plays the chosen, Space pauses and goes on (or plays the chosen when nothing is), Right/Left play the
+  next or previous from what is playing, else from what is chosen. Buttons Play/Pause/Go on, Stop, Next, Tune, Look
+  again. A song played from the list (`play_index`) is followed by the next one that opens (`play_on`, from the finish
+  in the loop); one started from an argument plays alone, and is selected in the list rather than added a second time
+  when it is there (`same_path`, case aside). A pause stops feeding the card and keeps the place: what the card holds
+  plays out and going on carries on from where feeding stopped. Console: "music: N files to play" at each scan,
+  "music: paused NAME", "music: going on with NAME". The song playing is drawn in the accent colour. musiccheck, new
+  (13), gate step `musictest` (82 steps).
+
 ### 0.185.0
 
 - **Music plays AAC (10, 14)**: an `.m4a` or `.aac` (any case) is listed beside the WAVs, and Files calls it a sound
