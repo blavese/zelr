@@ -113,6 +113,21 @@ numbered files are still to 6048716; where they disagree with this list, this li
   built unsigned program; h264test in the machine still checks the decoder against Windows' answers in h264data.h.
   Gate 74 steps (one out, one in).
 
+### 0.188.0
+
+- **Files makes a .zip (14)**: userland/deflate.h `deflate_raw`: LZ77 with a hash of three bytes (`def_head`, the last
+  place plus one) chained back through `def_prev` (32 KiB window, 64 places tried, 258 bytes at most), every place
+  passed put in the tables; one block of the standard's fixed codes; -1 when the result would not be smaller (or not
+  fit), so the caller keeps the bytes as they are. userland/zipw.h: `zipw_begin`, `zipw_add` (local header and data
+  into one buffer, deflated when `deflate_raw` says so, else stored; the central entry into another; a name ending /
+  is a folder, DOS attribute 0x10), `zipw_finish` (directory and end record; no ZIP64), `zipw_dos_time/_date`.
+  files.c `make_zip` (ctrl+K, File menu "Make a zip"): of the file or folder selected (`entry_path`, so a search's
+  result too), to NAME.zip in cwd (a file's extension gives way; " 2" and on when taken); `make_walk` counts first
+  (1024 files, 48 MB at most, said when passed), then reads each file whole and adds it with its written time; the
+  folders as entries of their own. "files: made NAME.zip: N files, X KB from Y KB", the new archive chosen. Home and
+  End move to the ends of the list. ziptest +9 (the writer against inflate.h and zip.h), zipmakecheck, new (14),
+  gate step `zipmaketest` (84 steps). Not done: dynamic Huffman codes (a few per cent smaller), adding to an archive.
+
 ### 0.187.0
 
 - **The screen locks by itself (07, 10, 14)**: knob `lock_after` (theme.h `int lock_after`, KNOBS "Lock when idle,

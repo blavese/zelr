@@ -190,7 +190,11 @@ listed from the archive's own directory, a file in it opens (taken out into
 file checked against the CRC-32 the archive kept. Stored and deflated files
 are read, which is nearly every archive; one locked with a password or
 compressed some other way is refused saying so, and a name that would write
-outside the folder is not written. In Files, / puts the keyboard in the
+outside the folder is not written. The other way, ctrl+K (or Make a zip in
+the File menu) makes NAME.zip beside the file or folder selected, with
+everything below it, each file deflated where that makes it smaller and
+kept as it is where it does not; another system's zip tools read it. Home
+and End go to the top and the bottom of the list. In Files, / puts the keyboard in the
 filter, which narrows the folder as you type; Return there looks in every
 folder below it for names with those letters in them, and lists what it
 finds by its path, to open, copy or put in the trash. Settings' Storage page says how much of the disk and of a stick
@@ -506,6 +510,7 @@ instead.
     python tools/m4acheck.py    play an .m4a and an .aac, hear each channel at its pitch, refuse one that is not
     python tools/musiccheck.py  music from its keys: the next follows by itself, a pause loses nothing
     python tools/idlecheck.py   locked by itself after a minute idle; not while the pointer moves or sound plays
+    python tools/zipmakecheck.py make a zip of a folder and a file in Files, open it with Python's zipfile
     python tools/downloadcheck.py  a 12 MB download fetched in parts with Range, read back byte for byte
     python tools/notescheck.py  select all, copy, paste, save, undo, find and replace in the editor, from its keys
     python tools/timecheck.py   set the time zone from the shell and in Settings, read the clocks and a file's time

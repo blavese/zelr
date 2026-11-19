@@ -888,6 +888,18 @@ Added in 0.165.0, not yet in the table below:
   about:history?forget is not followed (still 3); after the server's /peek, about:history's second entry (a, a file;
   the links found as bands of accent inside the window) opens; the forget button (found by its colour) leaves 0.
 
+Added in 0.188.0, not yet in the table below:
+- **`zipmakecheck.py`** (gate `zipmaketest`, full; 14 checks). /home/mk on a mkfat volume: proj/a.txt (31807 bytes of
+  words, seeded), proj/sub/b.bin (8000 random bytes), proj/sub/c.txt, one.txt. Files on /home/mk by keys: down
+  ("proj - folder"), ctrl+K ("files: made proj.zip: 3 files, "); up, ctrl+K on one.txt ("made one.zip: 1 file, ");
+  Home, ctrl+K ("made proj 2.zip"); End, Return ("files: /home/mk/proj.zip"), down ("proj - folder"). Then
+  /home/mk/proj.zip read off the image (readfat) and opened with Python's zipfile: names proj/, proj/a.txt, proj/sub/,
+  proj/sub/b.bin, proj/sub/c.txt; `testzip()` None; every byte the same; a.txt ZIP_DEFLATED under half (6929 of
+  31807), b.bin ZIP_STORED; one.zip holds one.txt.
+- **`ziptest`** +9 (27): text deflated under half and inflated back by inflate.h; 70000 zeros in under 460 bytes (13
+  bits a 258-byte match) and back; noise refused (-1); an archive made with zipw.h opened by zip.h with its three
+  entries, the text deflated and the noise stored, both out with their CRCs, the folder a folder; no room said.
+
 Added in 0.187.0, not yet in the table below:
 - **`idlecheck.py`** (gate `idletest`, full, timeout 900; 8 checks; about five minutes, the setting being in minutes).
   A mkfat volume with /home/LONG.WAV (80 s, 8000 Hz); q35 with intel-hda on audiodev `none` (the card still plays at
@@ -975,7 +987,8 @@ Added in 0.178.0, not yet in the table below:
   closed with alt+q); Delete refused ("only read here"); ctrl+E ("extracted 3 files into t; not 1: a name that would
   write outside the folder", the three files' bytes under /home/arch/t, no evil.txt anywhere); Backspace out; bad.zip
   second (after the folder t); ctrl+E ("extracted 2 files into bad; not 2:", readme.txt whole, a.txt not written).
-- **`ziptest`** (ring3check's SUITES): archives from tools/genzip.py (userland/zipdata.h), 18 checks.
+- **`ziptest`** (ring3check's SUITES): archives from tools/genzip.py (userland/zipdata.h), 18 checks (27 since
+  0.188.0, the writer's nine).
 
 Changed in 0.176.1, not yet in the table below:
 - **`check_launcher.py`** (gate `launchercheck`, fast and up): every `-m` in launcher/Emulator.cs and zelr.bat (not rem
