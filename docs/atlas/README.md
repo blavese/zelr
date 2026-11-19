@@ -113,6 +113,14 @@ numbered files are still to 6048716; where they disagree with this list, this li
   built unsigned program; h264test in the machine still checks the decoder against Windows' answers in h264data.h.
   Gate 74 steps (one out, one in).
 
+### 0.192.0
+
+- **Notes goes to a line and keeps the indent (10, 14)**: ctrl+G opens the bar as `bar_open` 2 with `goto_field`
+  ("go to line", digits only, `goto_key`); Return there is `go_to_line` (from 1, the nearest there is; the cursor to
+  its start, the selection let go; "line N of M", M counting the empty line after a last newline, as the cursor can be
+  there); Escape puts it away. Return in the text inserts the spaces and tabs the line began with, up to the cursor,
+  after the newline, inside the same change for ctrl+Z. gotocheck, new (7), gate step `gototest` (88 steps).
+
 ### 0.191.0
 
 - **Pictures zoomed, moved about and turned (10, 14)**: pictures.c `zoom16` (0 fitted; else sixteenths, `zoom_by`

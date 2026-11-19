@@ -888,6 +888,12 @@ Added in 0.165.0, not yet in the table below:
   about:history?forget is not followed (still 3); after the server's /peek, about:history's second entry (a, a file;
   the links found as bands of accent inside the window) opens; the forget button (found by its colour) leaves 0.
 
+Added in 0.192.0, not yet in the table below:
+- **`gotocheck.py`** (gate `gototest`, full; 7 checks). /home/code.txt, thirty lines "line N", the tenth "    indented
+  ten", ending in a newline. `/bin/notes /home/code.txt` ("notes: opened"); ctrl-g 1 0 ret ("notes: line 10 of 31");
+  end, ret, x, ctrl-s ("notes: saved"; read back: lines 10 to 12 "    indented ten", "    x", "line 11"); ctrl-g 999
+  ret ("line 32 of 32"); ctrl-g a 2 b ret ("line 2 of 32").
+
 Added in 0.191.0, not yet in the table below:
 - **`zoomcheck.py`** (gate `zoomtest`, full; 8 checks). /home/pictures/z.png, 200x100, red left half, blue right.
   Opened by name ("z.png, 200 by 100, 100%", 10000 of each colour); `equal` ("200%", 40000 of each); twice more

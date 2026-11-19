@@ -128,7 +128,9 @@ get round it: the desktop opens locked, and the console (started with the
 word console, or reached before the desktop) asks for the password before
 it takes a command, showing stars for what is typed. In the editor, ctrl and h opens a
 bar to find a word in the file and replace it, one at a time or every one at
-once (ctrl and r), whatever its case. Paint keeps what is drawn: ctrl and s
+once (ctrl and r), whatever its case; ctrl and g goes to a line by its
+number, and Return starts the new line with the spaces the one before began
+with. Paint keeps what is drawn: ctrl and s
 saves it as a PNG (`paint FILE.png` opens one to draw on, and saves back to
 it), and ctrl and z takes back the last stroke. Drag a title bar to move a
 window; the three buttons at its right put it away, fill the screen, or
@@ -522,6 +524,7 @@ instead.
     python tools/startlockcheck.py a password set: the console asks for it first, the desktop opens locked
     python tools/sortcheck.py   Files sorted by size, by date and by name, from its keys
     python tools/zoomcheck.py   a picture made bigger, moved about, fitted again and turned, counted by colour
+    python tools/gotocheck.py   Notes goes to a line by number, and Return keeps the indent
     python tools/downloadcheck.py  a 12 MB download fetched in parts with Range, read back byte for byte
     python tools/notescheck.py  select all, copy, paste, save, undo, find and replace in the editor, from its keys
     python tools/timecheck.py   set the time zone from the shell and in Settings, read the clocks and a file's time

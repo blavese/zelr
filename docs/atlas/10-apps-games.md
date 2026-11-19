@@ -292,6 +292,9 @@ Compared with the kernel: `theme_init` sets look MODERN, light true, preset 1 (t
 
 ### 3.3 `userland/notes.c`: "Notes" (the backlog's "editor")
 
+(Since 0.179.0 ctrl+H finds and replaces; since 0.192.0 ctrl+G goes to a line by number and Return keeps the indent
+of the line it ends. The atlas README's entries for those versions have the details.)
+
 **State.** `BUF_MAX 65536`, `PATH_MAX 256` (:16-17). `buf[65536]`, `len`, `cursor`, `dirty`, `path[256]`, `status[128]`, `scroll_line` (first line drawn), `sel_anchor=-1` (:19-27).
 
 **Buffer operations.**
