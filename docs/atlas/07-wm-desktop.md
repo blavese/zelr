@@ -185,6 +185,7 @@ Title bars: MODERN `title_a = title_b = raised; title_fg = text; title_off_a = t
 | 29 | volume | Volume | int | 0..100 | 70 | dock slider, `sound_set_volume` |
 | 30 | width | Screen width | int | 0..4096 | 0 | `want_w`, 0 = boot mode (3179-3191) |
 | 31 | height | Screen height | int | 0..4096 | 0 | `want_h` |
+| 32 | lock_after | Lock when idle, minutes | int | 0..240 | 0 | 0.187.0: minutes since `last_touch` (input, or sound queued) before `lock_screen`; 0 never |
 
 `_Static_assert(sizeof(wallpaper_t) == sizeof(int))` (140-141) because the wallpaper enum is read as an int. `knob_get` reads bool as 1 byte, others as int (153-157).
 

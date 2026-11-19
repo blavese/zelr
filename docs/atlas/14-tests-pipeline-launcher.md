@@ -888,6 +888,14 @@ Added in 0.165.0, not yet in the table below:
   about:history?forget is not followed (still 3); after the server's /peek, about:history's second entry (a, a file;
   the links found as bands of accent inside the window) opens; the forget button (found by its colour) leaves 0.
 
+Added in 0.187.0, not yet in the table below:
+- **`idlecheck.py`** (gate `idletest`, full, timeout 900; 8 checks; about five minutes, the setting being in minutes).
+  A mkfat volume with /home/LONG.WAV (80 s, 8000 Hz); q35 with intel-hda on audiodev `none` (the card still plays at
+  its rate, so `sound_queued` drains). `append /zelr.cfg lock_after 1` in the terminal; "desktop: locked" no sooner
+  than 58 s on the host's clock (the guest's never runs ahead of it); Return ("desktop: unlocked"); the pointer moved
+  every 15 s for 90 s and no lock; `music /home/LONG.WAV` ("music: playing LONG.WAV", "finished with") and no lock
+  in its 80 s; then locked no sooner than 57 s after the song ended.
+
 Added in 0.186.0, not yet in the table below:
 - **`musiccheck.py`** (gate `musictest`, full; 13 checks). /home/A.WAV, B.WAV, C.WAV: sines of 440, 550 and 660 Hz
   (22050 Hz mono; 0.6, 0.6 and 2.4 s). q35, intel-hda, a wav audiodev. `music` typed ("music: 3 files to play"); Down,

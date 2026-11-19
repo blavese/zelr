@@ -113,6 +113,16 @@ numbered files are still to 6048716; where they disagree with this list, this li
   built unsigned program; h264test in the machine still checks the decoder against Windows' answers in h264data.h.
   Gate 74 steps (one out, one in).
 
+### 0.187.0
+
+- **The screen locks by itself (07, 10, 14)**: knob `lock_after` (theme.h `int lock_after`, KNOBS "Lock when idle,
+  minutes", 0..240, default 0 = never; 32 knobs now), shown on Settings' Lock page under the password (`row`). wm.c
+  `last_touch` is set by `handle_mouse`, `wm_key`, the wheel and the start of `wm_run`, and by every pass while
+  `sound_queued()` is not nought (sound playing is somebody there); the loop, after the theme check, calls
+  `lock_screen` once `lock_after` minutes have passed since it. The loop wakes at least once a second (`idle_ms`, the
+  dock's clock), so nothing new had to be woken. idlecheck, new (8), gate step `idletest` (timeout 900; 83 steps).
+  Not done: a program saying it is being watched (only sound counts), locking when the lid closes.
+
 ### 0.186.0
 
 - **Music from the keys, a pause, and the next song (10, 14)**: Up/Down/Home/End choose (the list scrolls to

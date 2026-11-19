@@ -120,7 +120,10 @@ ctrl and f, or the magnifier in the tray, to look for a word that is on the
 screen rather than for a program to start. Alt and l (or Lock the screen in
 the launcher) locks the screen behind a password set on Settings' Lock page;
 it is kept as a salted SHA-256, never as itself, and nothing gets round the
-lock but the password: not the pointer, not alt and Escape. In the editor, ctrl and h opens a
+lock but the password: not the pointer, not alt and Escape. The same page
+sets how many minutes with nobody there before it locks by itself; sound
+playing counts as somebody there, so a film or an album is not locked
+away. In the editor, ctrl and h opens a
 bar to find a word in the file and replace it, one at a time or every one at
 once (ctrl and r), whatever its case. Paint keeps what is drawn: ctrl and s
 saves it as a PNG (`paint FILE.png` opens one to draw on, and saves back to
@@ -502,6 +505,7 @@ instead.
     python tools/searchcheck.py look for a name in every folder below, act on a result, nothing found, back again
     python tools/m4acheck.py    play an .m4a and an .aac, hear each channel at its pitch, refuse one that is not
     python tools/musiccheck.py  music from its keys: the next follows by itself, a pause loses nothing
+    python tools/idlecheck.py   locked by itself after a minute idle; not while the pointer moves or sound plays
     python tools/downloadcheck.py  a 12 MB download fetched in parts with Range, read back byte for byte
     python tools/notescheck.py  select all, copy, paste, save, undo, find and replace in the editor, from its keys
     python tools/timecheck.py   set the time zone from the shell and in Settings, read the clocks and a file's time
