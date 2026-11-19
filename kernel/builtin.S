@@ -407,3 +407,10 @@ builtin_h264test_end:
 builtin_mediatest_start:
 .incbin "build/user/mediatest.elf.z"
 builtin_mediatest_end:
+
+.balign 4
+.global builtin_ziptest_start
+.global builtin_ziptest_end
+builtin_ziptest_start:
+.incbin "build/user/ziptest.elf.z"
+builtin_ziptest_end:

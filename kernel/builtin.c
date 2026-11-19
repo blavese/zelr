@@ -68,6 +68,7 @@ extern const u8 builtin_aactest_start[], builtin_aactest_end[];
 extern const u8 builtin_play_start[], builtin_play_end[];
 extern const u8 builtin_h264test_start[], builtin_h264test_end[];
 extern const u8 builtin_mediatest_start[], builtin_mediatest_end[];
+extern const u8 builtin_ziptest_start[], builtin_ziptest_end[];
 
 typedef struct {
     const char *name;
@@ -134,6 +135,7 @@ static const program_t PROGRAMS[] = {
     { "play",     builtin_play_start,     builtin_play_end     },
     { "h264test", builtin_h264test_start, builtin_h264test_end },
     { "mediatest", builtin_mediatest_start, builtin_mediatest_end },
+    { "ziptest",  builtin_ziptest_start,  builtin_ziptest_end  },
 };
 
 #define N_PROGRAMS (sizeof(PROGRAMS) / sizeof(PROGRAMS[0]))

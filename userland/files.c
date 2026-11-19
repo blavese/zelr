@@ -15,6 +15,8 @@
  */
 #include "zelr.h"
 #include "ui.h"
+#include "alloc.h"
+#include "zip.h"
 
 #define MAX_ENTRIES 512
 #define NAME_MAX    64          /* as wide as the kernel's own names */
@@ -29,6 +31,7 @@
 #define KIND_PICTURE 5
 #define KIND_PAGE    6
 #define KIND_FILM    7
+#define KIND_ARCHIVE 8
 
 typedef struct {
     char name[NAME_MAX];
@@ -67,7 +70,7 @@ static const char *const MENU_TITLES[] = { "File", "Edit", "View", "Help" };
 #define N_MENUS 4
 
 static const char *const FILE_ITEMS[] = {
-    "Open", "New folder", "Rename", "Delete", "Empty the trash", "Close"
+    "Open", "New folder", "Rename", "Delete", "Empty the trash", "Extract", "Close"
 };
 static const char *const EDIT_ITEMS[] = { "Copy", "Cut", "Paste" };
 static const char *const VIEW_ITEMS[] = { "Refresh", "Home", "Root" };
@@ -76,7 +79,7 @@ static const char *const HELP_ITEMS[] = { "About Files" };
 static const char *const *MENU_ITEMS[N_MENUS] = {
     FILE_ITEMS, EDIT_ITEMS, VIEW_ITEMS, HELP_ITEMS
 };
-static const int MENU_COUNTS[N_MENUS] = { 6, 3, 3, 1 };
+static const int MENU_COUNTS[N_MENUS] = { 7, 3, 3, 1 };
 static const int MENU_WIDTHS[N_MENUS] = { 150, 110, 110, 130 };
 
 static int bar_open = -1;              /* which title is down, or none */
@@ -125,6 +128,7 @@ static int kind_of(const char *dir, const char *name, int is_dir) {
         || ends_with(name, ".gif") || ends_with(name, ".webp")) return KIND_PICTURE;
     if (ends_with(name, ".html") || ends_with(name, ".htm")) return KIND_PAGE;
     if (ends_with(name, ".mp4")) return KIND_FILM;
+    if (ends_with(name, ".zip")) return KIND_ARCHIVE;
     if (ends_with(name, ".txt") || ends_with(name, ".md")
         || ends_with(name, ".cfg") || ends_with(name, ".log")
         || ends_with(name, ".c") || ends_with(name, ".h")
@@ -141,6 +145,7 @@ static const char *kind_name(int k) {
         case KIND_PAGE:  return "page";
         case KIND_FILM:  return "film";
         case KIND_PROG:  return "program";
+        case KIND_ARCHIVE: return "archive";
         default:         return "file";
     }
 }
@@ -220,6 +225,268 @@ static void when_of(int index) {
     when_said[n] = 0;
 }
 
+/* --- an archive, as a folder --------------------------------------------------
+ *
+ * A .zip opened is gone into like a folder: cwd reads as the archive's path
+ * and then the folders inside it (/home/arch/t.zip/notes), its list comes
+ * from the archive's own directory (zip.h), and going up past it leaves it.
+ * The archive is read into memory once, when it is opened, and let go when
+ * it is left. Only read here: a file opened from it is taken out into /tmp
+ * and opened there, and Extract (ctrl+E, or the menus) takes all of it out
+ * into a folder beside it. Nothing changes it in place. */
+#define ARCHIVE_MAX (64 * 1024 * 1024)
+
+static char  arc_path[PATH_MAX];       /* the archive's file, or "" */
+static u8   *arc_data;
+static u32   arc_len;
+static zip_t arc;
+
+static int under(const char *path, const char *dir) {
+    int n = strlen(dir);
+    return n && !strncmp(path, dir, n) && (path[n] == 0 || path[n] == '/');
+}
+
+static int in_archive(void) { return arc_path[0] && under(cwd, arc_path); }
+
+static void arc_close(void) {
+    if (arc_data) free(arc_data);
+    arc_data = 0;
+    arc_len = 0;
+    arc_path[0] = 0;
+}
+
+/* A whole file into memory, a megabyte a call (the kernel's most). */
+static u8 *read_whole(const char *path, u32 *len) {
+    zelr_stat st;
+    if (stat(path, &st) < 0 || st.is_dir || st.size > ARCHIVE_MAX) return 0;
+    u8 *buf = (u8 *)malloc(st.size + 1);
+    if (!buf) return 0;
+    int fd = open(path, O_READ);
+    if (fd < 0) { free(buf); return 0; }
+    u32 at = 0;
+    while (at < st.size) {
+        int want = st.size - at > ZELR_IO_MAX ? ZELR_IO_MAX : (int)(st.size - at);
+        int got = zelr_fread(fd, buf + at, want);
+        if (got <= 0) break;
+        at += (u32)got;
+    }
+    close(fd);
+    if (at != st.size) { free(buf); return 0; }
+    *len = st.size;
+    return buf;
+}
+
+static char arc_said[160];
+
+/* Opened, or why not, said on the status line. */
+static int arc_open(const char *path) {
+    arc_close();
+    u32 len = 0;
+    u8 *data = read_whole(path, &len);
+    if (!data) { say("the archive could not be read (64 MB at most)"); return 0; }
+    int r = zip_open(&arc, data, len);
+    if (r != ZIP_OK) {
+        free(data);
+        int n = 0;
+        for (const char *p = "not opened: "; *p; p++) arc_said[n++] = *p;
+        for (const char *p = zip_why(r); *p && n < (int)sizeof(arc_said) - 1; p++) arc_said[n++] = *p;
+        arc_said[n] = 0;
+        say(arc_said);
+        return 0;
+    }
+    arc_data = data;
+    arc_len = len;
+    strncpy(arc_path, path, sizeof(arc_path) - 1);
+    arc_path[sizeof(arc_path) - 1] = 0;
+    return 1;
+}
+
+/* Where inside the archive cwd is: "" at its top, else "notes/" and so on,
+   as its entries' names begin. */
+static void arc_inner(char *out, int cap) {
+    const char *p = cwd + strlen(arc_path);
+    if (*p == '/') p++;
+    int n = 0;
+    while (*p && n < cap - 2) out[n++] = *p++;
+    if (n) out[n++] = '/';
+    out[n] = 0;
+}
+
+static void reload_archive(void) {
+    char inner[PATH_MAX];
+    arc_inner(inner, sizeof(inner));
+    int plen = strlen(inner);
+    u32 at = 0;
+    zip_entry e;
+    while (count < MAX_ENTRIES && zip_next(&arc, &at, &e) == 1) {
+        if (e.name_len <= plen || strncmp(e.name, inner, plen)) continue;
+        const char *rest = e.name + plen;
+        int rn = e.name_len - plen, cut = 0;
+        while (cut < rn && rest[cut] != '/') cut++;
+        int is_dir = cut < rn;          /* something below a folder, or the folder's own entry */
+        /* Nothing with a dot first, as Files lists nothing so anywhere: ".."
+           above all, which an archive can name to climb out of a folder. */
+        if (!cut || rest[0] == '.') continue;
+        char name[NAME_MAX];
+        int k = 0;
+        for (; k < cut && k < NAME_MAX - 1; k++) name[k] = rest[k];
+        name[k] = 0;
+        int seen = 0;
+        for (int i = 0; i < count && !seen; i++) seen = entries[i].is_dir == (u32)is_dir && !strcmp(entries[i].name, name);
+        if (seen) continue;
+        total++;
+        if (!is_dir) total_bytes += e.usize;
+        if (!matches(name)) continue;
+        entry *en = &entries[count++];
+        strncpy(en->name, name, NAME_MAX - 1);
+        en->name[NAME_MAX - 1] = 0;
+        en->size = is_dir ? 0 : e.usize;
+        en->is_dir = (u32)is_dir;
+        en->kind = kind_of(cwd, name, is_dir);
+    }
+    sort_entries();
+}
+
+/* An entry's name, safe to write under a folder: nothing that climbs out of
+   it (a ".." part, a leading slash, a drive) and no backslashes. 0 for one
+   that is not, which is skipped: an archive must not write where it likes. */
+static int safe_name(const zip_entry *e, char *out, int cap) {
+    if (e->name_len <= 0 || e->name_len >= cap) return 0;
+    for (int i = 0; i < e->name_len; i++) {
+        char c = e->name[i];
+        if (c == '\\' || c == ':' || !c) return 0;
+        out[i] = c;
+    }
+    out[e->name_len] = 0;
+    if (out[0] == '/') return 0;
+    for (int i = 0; out[i]; ) {
+        int j = i;
+        while (out[j] && out[j] != '/') j++;
+        if (j - i == 2 && out[i] == '.' && out[i + 1] == '.') return 0;
+        i = out[j] ? j + 1 : j;
+    }
+    return 1;
+}
+
+/* The folders a path needs, made one by one. */
+static void make_parents(const char *path) {
+    char part[PATH_MAX];
+    for (int i = 1; path[i]; i++) {
+        if (path[i] != '/') continue;
+        memcpy(part, path, i);
+        part[i] = 0;
+        mkdir(part);
+    }
+}
+
+static int write_whole(const char *path, const u8 *data, int len) {
+    int fd = open(path, O_WRITE | O_CREATE | O_TRUNC);
+    if (fd < 0) return -1;
+    int at = 0;
+    while (at < len) {
+        int piece = len - at > ZELR_IO_MAX ? ZELR_IO_MAX : len - at;
+        int got = zelr_fwrite(fd, data + at, piece);
+        if (got <= 0) break;
+        at += got;
+    }
+    close(fd);
+    return at == len ? 0 : -1;
+}
+
+/* One entry taken out to a file, or a ZIP_ number. */
+static int take_out(const zip_entry *e, const char *to) {
+    u8 *buf = (u8 *)malloc(e->usize + 1);
+    if (!buf) return ZIP_ROOM;
+    int got = zip_extract(&arc, e, buf, e->usize + 1);
+    if (got >= 0 && write_whole(to, buf, got) < 0) got = ZIP_ROOM;
+    free(buf);
+    if (got < 0) unlink(to);
+    return got;
+}
+
+/* Everything in the archive at path, into a folder beside it named after
+   it ("t" for t.zip, "t 2" when there is one). Opens the archive for it when
+   it is not the one open. */
+static void extract_all(const char *path) {
+    if (strcmp(arc_path, path) && !arc_open(path)) return;
+    char dest[PATH_MAX];
+    strncpy(dest, path, sizeof(dest) - 1);
+    dest[sizeof(dest) - 1] = 0;
+    int n = strlen(dest);
+    if (ends_with(dest, ".zip")) dest[n - 4] = 0;
+    char tried[PATH_MAX];
+    strncpy(tried, dest, sizeof(tried) - 1);
+    tried[sizeof(tried) - 1] = 0;
+    zelr_stat st;
+    for (int k = 2; stat(tried, &st) == 0 && k < 100; k++) {
+        int m = strlen(dest);
+        memcpy(tried, dest, m);
+        tried[m++] = ' ';
+        m += utoa((u32)k, tried + m);
+        tried[m] = 0;
+    }
+    if (mkdir(tried) < 0) { say("could not make the folder to extract into"); return; }
+
+    int files = 0, refused = 0, why = 0;
+    u32 at = 0;
+    zip_entry e;
+    char name[PATH_MAX], to[PATH_MAX];
+    while (zip_next(&arc, &at, &e) == 1) {
+        if (!safe_name(&e, name, PATH_MAX - strlen(tried) - 2)) { refused++; continue; }
+        join(to, tried, name);
+        if (e.is_dir) {
+            int m = strlen(to);
+            if (m > 1 && to[m - 1] == '/') to[m - 1] = 0;
+            make_parents(to);
+            mkdir(to);
+            continue;
+        }
+        make_parents(to);
+        int r = take_out(&e, to);
+        if (r < 0) { refused++; why = r; continue; }
+        files++;
+    }
+    const char *leaf = tried;
+    for (const char *p = tried; *p; p++) if (*p == '/') leaf = p + 1;
+    int m = 0;
+    for (const char *p = "extracted "; *p; p++) arc_said[m++] = *p;
+    m += utoa((u32)files, arc_said + m);
+    for (const char *p = files == 1 ? " file into " : " files into "; *p; p++) arc_said[m++] = *p;
+    for (const char *p = leaf; *p && m < 100; p++) arc_said[m++] = *p;
+    if (refused) {
+        for (const char *p = "; not "; *p; p++) arc_said[m++] = *p;
+        m += utoa((u32)refused, arc_said + m);
+        for (const char *p = ": "; *p; p++) arc_said[m++] = *p;
+        for (const char *p = why ? zip_why(why) : "a name that would write outside the folder";
+             *p && m < (int)sizeof(arc_said) - 1; p++) arc_said[m++] = *p;
+    }
+    arc_said[m] = 0;
+    say(arc_said);
+}
+
+static void reload(void);
+
+/* Extract, from the menus or ctrl+E: the archive open, or the one selected. */
+static void extract_selected(void) {
+    if (in_archive()) { extract_all(arc_path); return; }
+    if (selected < 0 || entries[selected].kind != KIND_ARCHIVE) { say("select an archive (.zip) to extract"); return; }
+    char path[PATH_MAX];
+    join(path, cwd, entries[selected].name);
+    extract_all(path);
+    char keep[128];
+    strncpy(keep, status, sizeof(keep) - 1);
+    keep[sizeof(keep) - 1] = 0;
+    reload();
+    say(keep);
+}
+
+/* What the archive refuses: anything that would change it. */
+static int read_only_here(void) {
+    if (!in_archive()) return 0;
+    say("an archive is only read here: extract it (ctrl+E) to change what is in it");
+    return 1;
+}
+
 static void reload(void) {
     when_for = -1;
     count = 0;
@@ -227,6 +494,9 @@ static void reload(void) {
     total_bytes = 0;
     selected = -1;
     first_row = 0;
+
+    if (arc_path[0] && !in_archive()) arc_close();     /* left it */
+    if (in_archive()) { reload_archive(); return; }
 
     zelr_stat st;
     for (int i = 0; i < MAX_ENTRIES && readdir(cwd, i, &st) == 1; i++) {
@@ -246,8 +516,14 @@ static void reload(void) {
 }
 
 static void go_to(const char *where) {
+    /* An archive's own path goes into it, when it opens. */
+    zelr_stat st;
+    if (!(arc_path[0] && under(where, arc_path)) && ends_with(where, ".zip")
+        && stat(where, &st) == 0 && !st.is_dir && !arc_open(where))
+        return;
     strncpy(cwd, where, sizeof(cwd) - 1);
     cwd[sizeof(cwd) - 1] = 0;
+    say("");                    /* what was said was about the folder left */
     filter_buf[0] = 0;
     filter_field.len = 0;
     filter_field.cursor = 0;
@@ -256,6 +532,7 @@ static void go_to(const char *where) {
 
 static void go_up(void) {
     parent_of(cwd);
+    say("");
     reload();
 }
 
@@ -278,7 +555,7 @@ static void open_entry(int index) {
     if (index < 0 || index >= count) return;
     entry *e = &entries[index];
 
-    if (e->is_dir) {
+    if (e->is_dir || e->kind == KIND_ARCHIVE) {
         char next[PATH_MAX];
         join(next, cwd, e->name);
         go_to(next);
@@ -287,6 +564,40 @@ static void open_entry(int index) {
 
     char target[PATH_MAX];
     join(target, cwd, e->name);
+
+    /* From inside an archive: taken out into /tmp under its own name, and
+       that is what is opened. */
+    if (in_archive()) {
+        char inner[PATH_MAX], full[PATH_MAX];
+        arc_inner(inner, sizeof(inner));
+        int n = 0;
+        for (const char *p = inner; *p && n < PATH_MAX - 1; p++) full[n++] = *p;
+        for (const char *p = e->name; *p && n < PATH_MAX - 1; p++) full[n++] = *p;
+        full[n] = 0;
+        u32 at = 0;
+        zip_entry z;
+        int found = 0;
+        while (!found && zip_next(&arc, &at, &z) == 1)
+            found = z.name_len == n && !strncmp(z.name, full, n);
+        if (!found) { say("it is not in the archive"); return; }
+        mkdir("/tmp");
+        join(target, "/tmp", e->name);
+        int r = take_out(&z, target);
+        if (r < 0) {
+            int m = 0;
+            for (const char *p = "not opened: "; *p; p++) arc_said[m++] = *p;
+            for (const char *p = zip_why(r); *p && m < (int)sizeof(arc_said) - 1; p++) arc_said[m++] = *p;
+            arc_said[m] = 0;
+            say(arc_said);
+            return;
+        }
+        const char *prog = e->kind == KIND_SOUND ? "/bin/music" : e->kind == KIND_PICTURE ? "/bin/pictures"
+                         : e->kind == KIND_PAGE || e->kind == KIND_FILM ? "/bin/browser" : "/bin/notes";
+        if (e->kind == KIND_PROG) prog = target;
+        if (prog == target ? spawn(target) < 0 : spawn_arg(prog, target) < 0) say("could not start it");
+        else say("opened from the archive");
+        return;
+    }
 
     switch (e->kind) {
         case KIND_SOUND: open_with(index, "/bin/music"); break;
@@ -397,6 +708,7 @@ static int rename_file(const char *from, const char *to) {
 }
 
 static void do_paste(void) {
+    if (read_only_here()) return;
     if (!clip_path[0]) { say("nothing copied"); return; }
 
     const char *leaf = clip_path;
@@ -426,6 +738,7 @@ static void do_paste(void) {
 /* What Copy and Cut do, from the menus or the keyboard: remember the
    selected file for the next Paste. */
 static void take(int cut) {
+    if (read_only_here()) return;
     if (selected < 0) { say("nothing selected"); return; }
     join(clip_path, cwd, entries[selected].name);
     clip_is_cut = cut;
@@ -439,6 +752,7 @@ static char rename_buf[NAME_MAX];
 static ui_field rename_field;
 
 static void begin_rename(void) {
+    if (read_only_here()) return;
     if (selected < 0) { say("nothing selected"); return; }
     renaming = selected;
     strncpy(rename_buf, entries[selected].name, sizeof(rename_buf) - 1);
@@ -602,6 +916,7 @@ static int delete_armed = -1;
 static int empty_armed;
 
 static void do_delete(void) {
+    if (read_only_here()) return;
     if (selected < 0) { say("nothing selected"); return; }
     char target[PATH_MAX];
     join(target, cwd, entries[selected].name);
@@ -635,9 +950,9 @@ static void do_delete(void) {
 #define SIDE_W    124
 
 static const char *const menu_items[] = {
-    "Open", "Edit", "Play", "Copy", "Cut", "Rename", "Delete"
+    "Open", "Edit", "Play", "Copy", "Cut", "Rename", "Delete", "Extract"
 };
-#define MENU_COUNT 7
+#define MENU_COUNT 8
 
 /* The places worth one click. /usb is listed whether or not a stick is in,
    because a list that changes shape under the pointer is worse than a row
@@ -755,6 +1070,7 @@ int main(int argc, char **argv) {
             else if (code == 24) take(1);                /* ctrl+x */
             else if (code == 22) do_paste();             /* ctrl+v */
             else if (code == KEY_F1 + 1) begin_rename(); /* F2 */
+            else if (code == 5)  extract_selected();     /* ctrl+e */
         }
         in.key = 0;
         in.nkeys = 0;
@@ -988,7 +1304,8 @@ int main(int argc, char **argv) {
                         do_delete();
                     } else if (pick == 4) {
                         empty_trash();
-                    } else if (pick == 5) closing = 1;
+                    } else if (pick == 5) extract_selected();
+                    else if (pick == 6) closing = 1;
                 } else if (which == 1) {                /* Edit */
                     if (pick == 0) take(0);
                     else if (pick == 1) take(1);
@@ -1024,6 +1341,8 @@ int main(int argc, char **argv) {
                     begin_rename();
                 } else if (pick == 6) {
                     do_delete();
+                } else if (pick == 7) {
+                    extract_selected();
                 }
             } else if (in.pressed) {
                 menu_open = 0;
