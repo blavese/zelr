@@ -56,6 +56,14 @@ static int   clip_is_cut;
 static char  filter_buf[32];
 static ui_field filter_field;
 
+/* A search below the folder (Return in the filter field): the list is then
+   every file and folder under cwd, eight deep at most, whose name has what
+   the filter has in it, each shown by its path from cwd and kept here by
+   its whole one. Anything that goes to a folder or reads it again ends
+   it. */
+static int   searching;
+static char  found_path[MAX_ENTRIES][PATH_MAX];
+
 /* --- the menu bar ---------------------------------------------------------
  *
  * Every command this program has, in the place every program puts them.
@@ -202,13 +210,23 @@ static int matches(const char *name) {
 static int  when_for = -1;
 static char when_said[48];
 
+/* An entry's whole path: in a search its own, else in cwd. */
+static void entry_path(int index, char *out) {
+    if (searching) {
+        strncpy(out, found_path[index], PATH_MAX - 1);
+        out[PATH_MAX - 1] = 0;
+    } else {
+        join(out, cwd, entries[index].name);
+    }
+}
+
 static void when_of(int index) {
     static const char *const MONTHS[12] = { "January", "February", "March", "April", "May", "June", "July",
                                             "August", "September", "October", "November", "December" };
     when_for = index;
     when_said[0] = 0;
     char path[PATH_MAX];
-    join(path, cwd, entries[index].name);
+    entry_path(index, path);
     zelr_times t;
     if (file_times(path, &t) != 0 || !t.year || t.month < 1 || t.month > 12) return;
     int n = 0;
@@ -488,6 +506,7 @@ static int read_only_here(void) {
 }
 
 static void reload(void) {
+    searching = 0;
     when_for = -1;
     count = 0;
     total = 0;
@@ -513,6 +532,78 @@ static void reload(void) {
         e->kind = kind_of(cwd, e->name, (int)st.is_dir);
     }
     sort_entries();
+}
+
+/* Everything below a folder whose name has the filter's text in it. */
+static void search_walk(const char *dir, const char *rel, int depth) {
+    zelr_stat st;
+    for (int i = 0; count < MAX_ENTRIES && readdir(dir, i, &st) == 1; i++) {
+        if (st.name[0] == '.') continue;
+        char path[PATH_MAX], r[PATH_MAX];
+        join(path, dir, st.name);
+        int n = 0;
+        for (const char *p = rel; *p && n < PATH_MAX - 2; p++) r[n++] = *p;
+        if (n) r[n++] = '/';
+        for (const char *p = st.name; *p && n < PATH_MAX - 1; p++) r[n++] = *p;
+        r[n] = 0;
+        if (matches(st.name)) {
+            entry *e = &entries[count];
+            strncpy(e->name, r, NAME_MAX - 1);
+            e->name[NAME_MAX - 1] = 0;
+            e->size = st.size;
+            e->is_dir = st.is_dir;
+            e->kind = kind_of(dir, st.name, (int)st.is_dir);
+            strncpy(found_path[count], path, PATH_MAX - 1);
+            found_path[count][PATH_MAX - 1] = 0;
+            count++;
+            total++;
+            if (!st.is_dir) total_bytes += st.size;
+        }
+        if (st.is_dir && depth < 8) search_walk(path, r, depth + 1);
+    }
+}
+
+static char search_said[160];
+
+static void search_below(void) {
+    if (!filter_buf[0]) { say("type part of a name to look for"); return; }
+    if (in_archive()) { say("a search looks in folders on the disk, not in an archive"); return; }
+    reload();
+    count = total = 0;
+    total_bytes = 0;
+    selected = -1;
+    first_row = 0;
+    searching = 1;
+    search_walk(cwd, "", 0);
+    /* Sorted as a folder is, but the paths kept beside their entries. */
+    for (int i = 1; i < count; i++) {
+        for (int j = i; j > 0; j--) {
+            entry *a = &entries[j - 1], *b = &entries[j];
+            int after = a->is_dir != b->is_dir ? (!a->is_dir && b->is_dir) : strcmp(a->name, b->name) > 0;
+            if (!after) break;
+            entry t = *a; *a = *b; *b = t;
+            char tp[PATH_MAX];
+            strcpy(tp, found_path[j - 1]);
+            strcpy(found_path[j - 1], found_path[j]);
+            strcpy(found_path[j], tp);
+        }
+    }
+    int k = 0;
+    if (count) {
+        for (const char *p = "found "; *p; p++) search_said[k++] = *p;
+        k += utoa((u32)count, search_said + k);
+        for (const char *p = " below "; *p; p++) search_said[k++] = *p;
+        for (const char *p = cwd; *p && k < 120; p++) search_said[k++] = *p;
+    } else {
+        for (const char *p = "nothing below "; *p; p++) search_said[k++] = *p;
+        for (const char *p = cwd; *p && k < 100; p++) search_said[k++] = *p;
+        for (const char *p = " has "; *p; p++) search_said[k++] = *p;
+        for (const char *p = filter_buf; *p && k < 150; p++) search_said[k++] = *p;
+        for (const char *p = " in its name"; *p && k < (int)sizeof(search_said) - 1; p++) search_said[k++] = *p;
+    }
+    search_said[k] = 0;
+    say(search_said);
+    filter_field.focused = 0;
 }
 
 static void go_to(const char *where) {
@@ -545,7 +636,7 @@ static void go_up(void) {
 static void open_with(int index, const char *program) {
     if (index < 0 || index >= count) return;
     char target[PATH_MAX];
-    join(target, cwd, entries[index].name);
+    entry_path(index, target);
 
     if (spawn_arg(program, target) < 0) say("could not start it");
     else say("opened");
@@ -557,13 +648,13 @@ static void open_entry(int index) {
 
     if (e->is_dir || e->kind == KIND_ARCHIVE) {
         char next[PATH_MAX];
-        join(next, cwd, e->name);
+        entry_path(index, next);
         go_to(next);
         return;
     }
 
     char target[PATH_MAX];
-    join(target, cwd, e->name);
+    entry_path(index, target);
 
     /* From inside an archive: taken out into /tmp under its own name, and
        that is what is opened. */
@@ -740,7 +831,7 @@ static void do_paste(void) {
 static void take(int cut) {
     if (read_only_here()) return;
     if (selected < 0) { say("nothing selected"); return; }
-    join(clip_path, cwd, entries[selected].name);
+    entry_path(selected, clip_path);
     clip_is_cut = cut;
     say(cut ? "cut" : "copied");
 }
@@ -753,6 +844,7 @@ static ui_field rename_field;
 
 static void begin_rename(void) {
     if (read_only_here()) return;
+    if (searching) { say("rename it in its own folder (Return goes there)"); return; }
     if (selected < 0) { say("nothing selected"); return; }
     renaming = selected;
     strncpy(rename_buf, entries[selected].name, sizeof(rename_buf) - 1);
@@ -919,7 +1011,7 @@ static void do_delete(void) {
     if (read_only_here()) return;
     if (selected < 0) { say("nothing selected"); return; }
     char target[PATH_MAX];
-    join(target, cwd, entries[selected].name);
+    entry_path(selected, target);
 
     if (!in_trash() && !on_stick(target)) {
         if (!strcmp(target, TRASH)) { say("the trash stays: ctrl+delete in it empties it"); return; }
@@ -1051,10 +1143,22 @@ int main(int argc, char **argv) {
                 }
             } else if (filter_field.focused) {
                 if (code == 27) { filter_buf[0] = 0; filter_field.len = 0;
-                                  filter_field.cursor = 0; filter_field.focused = 0; }
+                                  filter_field.cursor = 0; filter_field.focused = 0;
+                                  if (searching) { reload(); say(""); } }
+                else if (code == '\n') search_below();
                 else ui_field_key(&filter_field, key);
-            } else if (code == KEY_UP && selected > 0) selected--;
-            else if (code == KEY_DOWN && selected < count - 1) selected++;
+            } else if (code == '/') {
+                /* The filter, from the keyboard: type to narrow the folder,
+                   Return to look in every folder below it. */
+                filter_field.focused = 1;
+                filter_field.cursor = filter_field.len;
+            } else if (code == KEY_UP && selected > 0) {
+                selected--;
+                if (searching) say("");     /* the result chosen, not the count, on the line */
+            } else if (code == KEY_DOWN && selected < count - 1) {
+                selected++;
+                if (searching) say("");
+            }
             else if (code == '\n') open_entry(selected);
             else if (code == '\b') go_up();
             else if (code == KEY_DELETE && KEY_CTRL(key)) {

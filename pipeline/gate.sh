@@ -668,6 +668,7 @@ if [ "$MODE" = "screen" ] || [ "$MODE" = "full" ]; then
   painttest() { keep timeout 600 python tools/paintcheck.py; }
   clocktest() { keep timeout 600 python tools/clockcheck.py; }
   locktest() { keep timeout 600 python tools/lockcheck.py; }
+  searchtest() { keep timeout 600 python tools/searchcheck.py; }
   downloadtest() { keep timeout 900 python tools/downloadcheck.py; }
 
   # The second boot of a machine, which is the one nothing else reaches:
@@ -785,6 +786,7 @@ if [ "$MODE" = "screen" ] || [ "$MODE" = "full" ]; then
   par_start "paint opens a picture, saves it and takes a stroke back" painttest
   par_start "the clock tells other places' time, times and rings" clocktest
   par_start "the screen locks, and only its password opens it" locktest
+  par_start "files finds a name in every folder below" searchtest
   par_start "a download bigger than the browser holds is saved whole" downloadtest
   par_start "a machine still starts once it has formatted its disk" boottest
   par_start "ctrl+f finds a word that is on the screen" findtest
