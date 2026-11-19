@@ -208,7 +208,9 @@ everything below it, each file deflated where that makes it smaller and
 kept as it is where it does not; another system's zip tools read it. Home
 and End go to the top and the bottom of the list. The View menu, or ctrl+1,
 2 and 3, sorts it by name, by size (the largest first) or by date (the
-newest first), folders always at the top. In Files, / puts the keyboard in the
+newest first), folders always at the top. ctrl+P (or Details in the File
+menu) says how big a folder is, counting its files, folders and bytes all
+the way down, or a file's size and when it was written. In Files, / puts the keyboard in the
 filter, which narrows the folder as you type; Return there looks in every
 folder below it for names with those letters in them, and lists what it
 finds by its path, to open, copy or put in the trash. Settings' Storage page says how much of the disk and of a stick
@@ -531,6 +533,7 @@ instead.
     python tools/gotocheck.py   Notes goes to a line by number, and Return keeps the indent
     python tools/noticecheck.py notices from the terminal, listed with alt+N, put away, twelve kept
     python tools/daycheck.py    the desktop says today's calendar note when it opens, and only once a day
+    python tools/detailcheck.py Files counts what a folder holds, and gives a file's size and date
     python tools/downloadcheck.py  a 12 MB download fetched in parts with Range, read back byte for byte
     python tools/notescheck.py  select all, copy, paste, save, undo, find and replace in the editor, from its keys
     python tools/timecheck.py   set the time zone from the shell and in Settings, read the clocks and a file's time

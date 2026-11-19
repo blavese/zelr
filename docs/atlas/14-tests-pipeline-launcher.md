@@ -888,6 +888,12 @@ Added in 0.165.0, not yet in the table below:
   about:history?forget is not followed (still 3); after the server's /peek, about:history's second entry (a, a file;
   the links found as bands of accent inside the window) opens; the forget button (found by its colour) leaves 0.
 
+Added in 0.195.0, not yet in the table below:
+- **`detailcheck.py`** (gate `detailtest`, full; 5 checks). /home/dt from mkfat: proj/a.txt 1500 bytes, proj/sub/b.bin
+  3000, proj/sub/c.txt 24, one.txt 700 (all stamped 1 January 2025, 00:00). Files on /home/dt: down, ctrl-p ("files:
+  proj: 3 files and 1 folder, 4.4 KB in all"); down, ctrl-p ("files: one.txt: 700 bytes, written 1 January 2025,
+  00:00").
+
 Added in 0.194.0, not yet in the table below:
 - **`daycheck.py`** (gate `daytest`, full; 5 checks). /home/calendar from mkfat with yesterday's, today's ("the dentist
   at ten") and tomorrow's notes, by the host's UTC date (the machine's local date here). `desktop` ("notice: today:

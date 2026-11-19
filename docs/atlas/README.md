@@ -113,6 +113,14 @@ numbered files are still to 6048716; where they disagree with this list, this li
   built unsigned program; h264test in the machine still checks the decoder against Windows' answers in h264data.h.
   Gate 74 steps (one out, one in).
 
+### 0.195.0
+
+- **Files' details (14)**: files.c `show_details` (ctrl+P, File menu "Details"): for a folder `details_walk` counts
+  files, folders and bytes below it (16 deep), "NAME: N files and M folders, X.Y KB in all"; for a file its size and
+  `when_of`'s written time, "NAME: 700 bytes, written 1 January 2025, 00:00"; in an archive the entry's size, "in the
+  archive". Sizes by `size_words` (bytes, then KB and MB to a tenth). detailcheck, new (5), gate step `detailtest` (91
+  steps).
+
 ### 0.194.0
 
 - **The day's calendar note as a notice (07, 14)**: wm.c `day_note`, from the once a second look at the clock (so
