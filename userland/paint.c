@@ -6,8 +6,17 @@
  * with the outside world is a system call.
  *
  * Drawing primitives are here rather than shared with the kernel, because
- * nothing is shared with the kernel. */
+ * nothing is shared with the kernel.
+ *
+ * A picture is kept as a PNG: ctrl+S writes what is under the toolbar to
+ * the file this was started on, or /home/picture.png (pngw.h), and started
+ * on a PNG ("paint FILE.png") it opens with that picture on the paper
+ * (png.h, the browser's reader). ctrl+Z takes back the last stroke or
+ * clear. What it did is said on the console ("paint: saved PATH, WxH"). */
 #include "zelr.h"
+#include "alloc.h"
+#include "png.h"
+#include "pngw.h"
 
 #define TOOLBAR_H  58
 #define SWATCH     24
@@ -38,6 +47,10 @@ static int color = 2;
 static int brush = 1;
 static int drawing;
 static int last_x, last_y;
+
+static char path[256] = "/home/picture.png";
+static u32 *undo_px;                    /* the paper as it was before the last stroke or clear */
+static int  undo_ok;
 
 /* --- drawing ------------------------------------------------------------ */
 
@@ -148,6 +161,86 @@ static void clear_canvas(void) {
     rect(0, TOOLBAR_H, W, H - TOOLBAR_H, PAPER);
 }
 
+/* --- keeping it ------------------------------------------------------------ */
+
+static void say(const char *what, const char *more) {
+    puts("paint: ");
+    puts(what);
+    if (more) puts(more);
+    puts("\n");
+}
+
+static void say_size(const char *what) {
+    char line[320];
+    int n = 0;
+    for (const char *p = what; *p; p++) line[n++] = *p;
+    for (const char *p = path; *p && n < 280; p++) line[n++] = *p;
+    line[n++] = ',';
+    line[n++] = ' ';
+    n += utoa((u32)W, line + n);
+    line[n++] = 'x';
+    n += utoa((u32)(H - TOOLBAR_H), line + n);
+    line[n] = 0;
+    say(line, 0);
+}
+
+/* The paper, before a change that ctrl+Z can take back. */
+static void keep_for_undo(void) {
+    if (!undo_px) undo_px = (u32 *)malloc((u64)W * (u64)(H - TOOLBAR_H) * 4);
+    if (!undo_px) return;
+    memcpy(undo_px, px + (u32)TOOLBAR_H * W, W * (H - TOOLBAR_H) * 4);
+    undo_ok = 1;
+}
+
+static void undo(void) {
+    if (!undo_ok) { say("nothing to undo", 0); return; }
+    memcpy(px + (u32)TOOLBAR_H * W, undo_px, W * (H - TOOLBAR_H) * 4);
+    undo_ok = 0;
+    say("undone", 0);
+}
+
+static void save(void) {
+    int ch = H - TOOLBAR_H;
+    u32 size = png_write_size(W, ch);
+    u8 *out = (u8 *)malloc(size);
+    if (!out) { say("not saved: no memory for it", 0); return; }
+    int n = png_write(px + (u32)TOOLBAR_H * W, W, W, ch, out, size);
+    int ok = n > 0 && spit(path, out, n) == n;
+    free(out);
+    if (ok) say_size("saved ");
+    else say("not saved: ", path);
+}
+
+/* A PNG on the paper, its top left at the paper's; what does not fit is
+   left out, and paper shows where it does not reach. */
+static void open_picture(void) {
+    zelr_stat st;
+    if (stat(path, &st) < 0 || st.is_dir) { say("a new picture, to be saved as ", path); return; }
+    u8 *data = (u8 *)malloc(st.size + 1);
+    int n = data ? slurp(path, (char *)data, (int)st.size + 1) : -1;
+    picture pic;
+    int r = n > 0 ? png_decode(data, n, &pic, PAPER) : -1;
+    if (data) free(data);
+    if (r != PNG_OK) { say("could not open ", path); return; }
+    for (int y = 0; y < pic.h && TOOLBAR_H + y < H; y++)
+        for (int x = 0; x < pic.w && x < W; x++) {
+            const u8 *c = pic.rgb + ((u32)y * pic.w + x) * 3;
+            px[(u32)(TOOLBAR_H + y) * W + x] = RGB(c[0], c[1], c[2]);
+        }
+    free(pic.rgb);
+    char line[300];
+    int k = 0;
+    for (const char *p = "opened "; *p; p++) line[k++] = *p;
+    for (const char *p = path; *p && k < 260; p++) line[k++] = *p;
+    line[k++] = ',';
+    line[k++] = ' ';
+    k += utoa((u32)pic.w, line + k);
+    line[k++] = 'x';
+    k += utoa((u32)pic.h, line + k);
+    line[k] = 0;
+    say(line, 0);
+}
+
 /* --- input -------------------------------------------------------------- */
 
 static void on_mouse(int x, int y, u32 buttons) {
@@ -175,6 +268,7 @@ static void on_mouse(int x, int y, u32 buttons) {
             }
         }
         if (x >= clear_x() && x < clear_x() + 34 && y >= 8 && y < 42) {
+            keep_for_undo();
             clear_canvas();
             return;
         }
@@ -185,6 +279,7 @@ static void on_mouse(int x, int y, u32 buttons) {
 
     int r = BRUSHES[brush];
     if (!drawing || pressed) {
+        keep_for_undo();                /* a stroke begins */
         dot(x, y, r, PALETTE[color]);
         drawing = 1;
     } else {
@@ -195,13 +290,23 @@ static void on_mouse(int x, int y, u32 buttons) {
 }
 
 static void on_key(u32 key) {
+    if (KEY_CTRL(key)) {
+        int l = key_ctrl_letter(key);
+        if (l == 's') save();
+        else if (l == 'z') undo();
+        return;
+    }
     if (key >= '1' && key <= '4') { brush = (int)key - '1'; draw_toolbar(); }
-    else if (key == 'c' || key == 'C') clear_canvas();
+    else if (key == 'c' || key == 'C') { keep_for_undo(); clear_canvas(); }
     else if (key == '[') { color = (color + 15) % 16; draw_toolbar(); }
     else if (key == ']') { color = (color + 1) % 16; draw_toolbar(); }
 }
 
-int main(void) {
+int main(int argc, char **argv) {
+    if (argc > 1 && argv[1][0]) {
+        strncpy(path, argv[1], sizeof(path) - 1);
+        path[sizeof(path) - 1] = 0;
+    }
     int win = win_create("paint", 640, 420);
     if (win < 0) { puts("paint: no window\n"); return 1; }
 
@@ -213,6 +318,7 @@ int main(void) {
     if (W <= 0 || H <= 0) return 1;
 
     clear_canvas();
+    if (argc > 1 && argv[1][0]) open_picture();
     draw_toolbar();
     win_commit(win);
 
