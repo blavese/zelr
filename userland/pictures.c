@@ -102,6 +102,59 @@ static void drop_picture(void) {
     pan_x = pan_y = 0;
 }
 
+/* W: this picture as the wallpaper. The desktop has no decoders of its own,
+   so it is made the screen's size here, covering it (cut at the long sides
+   rather than left with bars), and written as /cfg/wallpaper.raw: "ZWP1",
+   the width and height, then a 0xRRGGBB pixel each. */
+static int screen_size(int *w, int *h) {
+    char buf[512];
+    int n = slurp("/sys/screen", buf, sizeof(buf) - 1);
+    if (n <= 0) return 0;
+    buf[n] = 0;
+    *w = *h = 0;
+    for (int i = 0; i < n; i++) {
+        if (i && buf[i - 1] != '\n') continue;
+        int *to = !strncmp(buf + i, "width ", 6) ? w : !strncmp(buf + i, "height ", 7) ? h : 0;
+        if (!to) continue;
+        int j = i;
+        while (buf[j] && buf[j] != ' ') j++;
+        while (buf[j] == ' ') j++;
+        for (; buf[j] >= '0' && buf[j] <= '9'; j++) *to = *to * 10 + buf[j] - '0';
+    }
+    return *w > 0 && *h > 0;
+}
+
+static void set_wallpaper(void) {
+    int sw, sh;
+    if (!pic.rgb || !screen_size(&sw, &sh)) return;
+    u32 bytes = 12 + (u32)sw * sh * 4;
+    u8 *out = (u8 *)malloc(bytes);
+    if (!out) { puts("pictures: not enough memory for a wallpaper\n"); return; }
+    out[0] = 'Z'; out[1] = 'W'; out[2] = 'P'; out[3] = '1';
+    *(u32 *)(out + 4) = (u32)sw;
+    *(u32 *)(out + 8) = (u32)sh;
+    /* Covering: the larger of the two scales, the rest cut evenly. */
+    long long dw = sw, dh = (long long)pic.h * sw / pic.w;
+    if (dh < sh) { dh = sh; dw = (long long)pic.w * sh / pic.h; }
+    long long ox = (dw - sw) / 2, oy = (dh - sh) / 2;
+    u32 *px = (u32 *)(out + 12);
+    for (int y = 0; y < sh; y++) {
+        int sy = (int)((y + oy) * pic.h / dh);
+        if (sy >= pic.h) sy = pic.h - 1;
+        for (int x = 0; x < sw; x++) {
+            int sx = (int)((x + ox) * pic.w / dw);
+            if (sx >= pic.w) sx = pic.w - 1;
+            const u8 *p = pic.rgb + ((u32)sy * pic.w + sx) * 3;
+            px[(u32)y * sw + x] = (u32)p[0] << 16 | (u32)p[1] << 8 | p[2];
+        }
+    }
+    int ok = spit("/cfg/wallpaper.raw", out, (int)bytes) == (int)bytes;
+    free(out);
+    puts(ok ? "pictures: the wallpaper is " : "pictures: the wallpaper could not be written for ");
+    puts(at >= 0 && at < nnames ? names[at] : "this picture");
+    puts("\n");
+}
+
 /* A quarter turn to the right, into new memory: what was the left edge is
    the top. */
 static void rotate_right(void) {
@@ -300,6 +353,7 @@ int main(int argc, char **argv) {
             else if (k == '-') zoom_by(0, w, room_h);
             else if (k == '0') { zoom16 = 0; }
             else if (k == 'r' || k == 'R') rotate_right();
+            else if (k == 'w' || k == 'W') set_wallpaper();
         }
         /* A drag moves a picture bigger than the window. */
         if (in.pressed) { dragging = 1; drag_x = in.mx; drag_y = in.my; }

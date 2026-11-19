@@ -1666,8 +1666,57 @@ static bool wall_still(int wp) {
         || wp == WALLPAPER_DOTS || wp == WALLPAPER_WEAVE;
 }
 
+/* --- a picture for the wallpaper -------------------------------------------
+ *
+ * Pictures writes /cfg/wallpaper.raw (W on a picture): "ZWP1", the width and
+ * the height as 32-bit numbers, then a 0xRRGGBB pixel each, already made the
+ * screen's size, the decoders being ring 3's. While it is there and the size
+ * of the screen it is the wallpaper, drawn as the kept copy of a still one
+ * is; taken away (Settings, or a wallpaper chosen there), the chosen one is
+ * back. Looked for when the theme is, and read only when something on the
+ * disk was written since. */
+#define WALL_PIC "/cfg/wallpaper.raw"
+static u32 *wall_pic;
+static u32  wall_pic_gen = 0xFFFFFFFF;          /* vfs_changes when last looked */
+
+static void wall_pic_look(void) {
+    u32 g = vfs_changes();
+    if (g == wall_pic_gen) return;
+    wall_pic_gen = g;
+    u32 size = 0;
+    bool dir = false;
+    u32 w = fb_width(), h = fb_height(), want = 12 + w * h * 4;
+    bool there = vfs_stat(WALL_PIC, &size, &dir) && !dir && size == want;
+    if (!there) {
+        if (wall_pic) {
+            kfree(wall_pic);
+            wall_pic = 0;
+            wall_valid = false;
+            kprintf("desktop: the wallpaper is no longer a picture\n");
+            need_frame();
+        }
+        return;
+    }
+    if (heap_total() - heap_used() < want * 3) return;   /* as the kept wallpaper: only with room to spare */
+    u8 *raw = (u8 *)kmalloc(want);
+    if (!raw) return;
+    int n = vfs_read(WALL_PIC, (char *)raw, want);
+    bool good = n == (int)want && raw[0] == 'Z' && raw[1] == 'W' && raw[2] == 'P' && raw[3] == '1'
+                && *(u32 *)(raw + 4) == w && *(u32 *)(raw + 8) == h;
+    if (!good) { kfree(raw); return; }
+    u32 *px = (u32 *)kmalloc(w * h * 4);
+    if (!px) { kfree(raw); return; }
+    memcpy(px, raw + 12, w * h * 4);
+    kfree(raw);
+    if (wall_pic) kfree(wall_pic);
+    wall_pic = px;
+    kprintf("desktop: the wallpaper is a picture now\n");
+    need_frame();
+}
+
 static void draw_wallpaper(void) {
     const theme_t *t = theme();
+    if (wall_pic) { fb_back_restore(wall_pic); return; }
     if (!wall_still(t->wallpaper)) { paint_wallpaper(); return; }
 
     wall_key_t k;
@@ -5211,6 +5260,7 @@ void wm_run(void) {
         if (timer_ticks() - last_theme_check > timer_hz() / 4) {
             last_theme_check = timer_ticks();
             if (theme_reload()) { apply_screen_size(); need_frame(); }
+            wall_pic_look();
         }
 
         /* Locked by itself after the knob's minutes with nobody there.

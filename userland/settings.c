@@ -619,12 +619,25 @@ static int page_desktop(surface *s, ui_input *in, ui_theme *t,
             int bx = x + col * 96, by = y + r * (UI_BTN_H + UI_GAP);
             if (ui_button(s, in, t, bx, by, 90, WALLPAPERS[i]) && k) {
                 k->value = i;
+                unlink("/cfg/wallpaper.raw");       /* one chosen here is the wallpaper */
                 save();
             }
             if (i == at) rect(s, bx, by + UI_BTN_H - 2, 90, 2, t->accent);
         }
         y += (UI_BTN_H + UI_GAP)
              * ((N_WALLPAPERS + WALLPAPER_COLS - 1) / WALLPAPER_COLS) + UI_GAP;
+    }
+    {
+        /* A picture set as the wallpaper in Pictures, and the way back. */
+        zelr_stat st;
+        if (stat("/cfg/wallpaper.raw", &st) == 0) {
+            ui_dim_label(s, t, x, y + (UI_BTN_H - FONT_H) / 2, "A picture is the wallpaper (W in Pictures).");
+            if (ui_button(s, in, t, x + 340, y, 120, "take it away")) {
+                unlink("/cfg/wallpaper.raw");
+                puts("settings: the wallpaper picture was taken away\n");
+            }
+            y += UI_BTN_H + UI_GAP;
+        }
     }
 
     y = row(s, in, t, x, y, w, "vignette");
