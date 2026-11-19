@@ -46,7 +46,11 @@ static int  sel_anchor = -1;      /* where a selection started, -1 for none */
    case, as a person typing a word to look for means it to. */
 static char find_buf[64], repl_buf[64];
 static ui_field find_field, repl_field;
-static int  bar_open;
+static int  bar_open;                    /* 1 find and replace, 2 go to a line */
+
+/* Go to a line, on ctrl+G: the bar holds one field for its number. */
+static char goto_buf[12];
+static ui_field goto_field;
 
 /* Undo: copies of the text from before each change, the newest last, sixteen
    at most. A run of typing is one change, ended by anything that is not
@@ -334,7 +338,43 @@ static void replace_all(void) {
 }
 
 /* A key while the bar has the keyboard. */
+/* The cursor to the start of line n (from 1), the nearest there is. */
+static void go_to_line(int n) {
+    int lines = total_lines();
+    if (n < 1) n = 1;
+    if (n > lines) n = lines;
+    cursor = start_of_line(n - 1);
+    sel_anchor = -1;
+    typing = 0;
+    char m[32];
+    int k = 0;
+    for (const char *p = "line "; *p; p++) m[k++] = *p;
+    k += utoa((u32)n, m + k);
+    for (const char *p = " of "; *p; p++) m[k++] = *p;
+    k += utoa((u32)lines, m + k);
+    m[k] = 0;
+    say(m);
+}
+
+static void goto_key(u32 k) {
+    if (k == 27) {
+        bar_open = 0;
+        goto_field.focused = 0;
+    } else if (k == '\n') {
+        int n = 0;
+        for (int i = 0; goto_buf[i] >= '0' && goto_buf[i] <= '9' && n < 10000000; i++) n = n * 10 + goto_buf[i] - '0';
+        if (goto_buf[0]) go_to_line(n);
+        bar_open = 0;
+        goto_field.focused = 0;
+    } else if (k < 128 && !KEY_CTRL(k) && k >= ' ' && (k < '0' || k > '9')) {
+        /* a number, and nothing else */
+    } else {
+        ui_field_key(&goto_field, k);
+    }
+}
+
 static void bar_key(u32 k) {
+    if (goto_field.focused) { goto_key(k); return; }
     ui_field *f = find_field.focused ? &find_field : &repl_field;
     if (k == 27) {
         bar_open = 0;
@@ -373,6 +413,9 @@ int main(int argc, char **argv) {
     memset(&repl_field, 0, sizeof(repl_field));
     repl_field.buf = repl_buf;
     repl_field.cap = sizeof(repl_buf);
+    memset(&goto_field, 0, sizeof(goto_field));
+    goto_field.buf = goto_buf;
+    goto_field.cap = sizeof(goto_buf);
 
     ui_theme t = ui_load_theme();
     ui_input in;
@@ -431,7 +474,7 @@ int main(int argc, char **argv) {
             u32 k = in.keys[ki];
             int shifted = 0;                /* selection extends while shift-like keys move */
 
-            if (find_field.focused || repl_field.focused) { bar_key(k); continue; }
+            if (find_field.focused || repl_field.focused || goto_field.focused) { bar_key(k); continue; }
             if (k == 27 && bar_open) { bar_open = 0; continue; }
 
             /* The chords every editor has. Each was typed into the text as the
@@ -448,8 +491,15 @@ int main(int argc, char **argv) {
                 else if (l == 'h') {
                     bar_open = 1;
                     find_field.focused = 1;
-                    repl_field.focused = 0;
+                    repl_field.focused = goto_field.focused = 0;
                     find_field.cursor = find_field.len;
+                }
+                else if (l == 'g') {
+                    bar_open = 2;
+                    goto_field.focused = 1;
+                    find_field.focused = repl_field.focused = 0;
+                    goto_buf[0] = 0;
+                    goto_field.len = goto_field.cursor = 0;
                 }
                 continue;
             }
@@ -487,8 +537,17 @@ int main(int argc, char **argv) {
             else if (k == '\n' || k == '\t' || (k >= 32 && !KEY_IS_SPECIAL(k))) {
                 undo_mark(!has_selection());
                 if (has_selection()) { delete_range(sel_low(), sel_high()); sel_anchor = -1; }
+                /* Return keeps the indent of the line it ends: the spaces
+                   it began with, up to where the cursor was. */
+                int indent = 0, from = line_start(cursor);
+                if (k == '\n')
+                    while (from + indent < cursor && (buf[from + indent] == ' ' || buf[from + indent] == '\t')) indent++;
+                char lead[64];
+                if (indent > (int)sizeof(lead)) indent = (int)sizeof(lead);
+                for (int i = 0; i < indent; i++) lead[i] = buf[from + i];
                 insert_char(k == '\t' ? ' ' : (char)k);
                 if (k == '\t') { insert_char(' '); insert_char(' '); insert_char(' '); }
+                if (indent) insert_text(lead, indent);
             }
             (void)shifted;
         }
@@ -512,8 +571,19 @@ int main(int argc, char **argv) {
 
         ui_field_draw(&s, &in, &t, bx, by, w - bx - UI_PAD, &name_field, "path");
 
+        /* The go to bar, under the toolbar. */
+        if (bar_open == 2) {
+            int fy = TOOLBAR_H + UI_PAD;
+            rect(&s, 0, TOOLBAR_H, w, BAR_H, mix(t.bg, t.fg, 8));
+            int fx = UI_PAD;
+            ui_label(&s, &t, fx, fy + (UI_BTN_H - FONT_H) / 2, "go to line");
+            fx += face_w("go to line", UI_FACE_BODY) + UI_GAP;
+            ui_field_draw(&s, &in, &t, fx, fy, 100, &goto_field, "a number");
+            fx += 100 + UI_GAP;
+            if (ui_button(&s, &in, &t, fx, fy, 60, "go")) goto_key('\n');
+        }
         /* The find bar, under the toolbar. */
-        if (bar_open) {
+        else if (bar_open) {
             int fy = TOOLBAR_H + UI_PAD;
             rect(&s, 0, TOOLBAR_H, w, BAR_H, mix(t.bg, t.fg, 8));
             int fx = UI_PAD;
