@@ -1444,6 +1444,9 @@ static int page_lock(surface *s, ui_input *in, ui_theme *t, int x, int y, int w)
     y += UI_BTN_H + UI_GAP * 2;
     int set = lock_is_set();
     ui_label(s, t, x, y, set ? "A password is set." : "No password: the lock opens with return.");
+    y += 24 + UI_GAP;
+    y = row(s, in, t, x, y, w, "lock_after");
+    ui_dim_label(s, t, x, y, "Nought never locks it by itself. Sound playing counts as somebody there.");
     const char *state = set ? "a password is set" : "no password";
     if (strcmp(state, lock_said)) {
         strcpy(lock_said, state);

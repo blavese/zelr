@@ -127,6 +127,10 @@ typedef struct {
        way is still a machine somebody can type at. */
     bool autodesktop;
 
+    /* Minutes with nothing pressed or moved, and no sound playing, before
+       the screen locks by itself; nought for never. */
+    int  lock_after;
+
     /* How loud, nought to a hundred. Kept here because this is the file
        the desktop's settings live in and the control is on the panel, not
        because it has anything to do with how things look. */

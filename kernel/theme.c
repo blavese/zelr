@@ -140,6 +140,7 @@ static const theme_knob KNOBS[] = {
     { "dblclick_ms",  "Double click within",   K(dblclick_ms), 0, 150, 1200, 500 },
     { "quirks",       "Shake to clear",        K(quirks),      1,   0,   1,   1 },
     { "autodesktop",  "Desktop at boot",       K(autodesktop), 1,   0,   1,   1 },
+    { "lock_after",   "Lock when idle, minutes", K(lock_after), 0,   0, 240,   0 },
 
     /* --- the machine --------------------------------------------------- */
     { "volume",       "Volume",              K(volume),        0,   0, 100,  70 },

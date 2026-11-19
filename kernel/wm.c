@@ -2675,6 +2675,10 @@ bool wm_locked(void) { return locked; }
 static void find_close(void);
 static void cycle_end(void);
 
+/* When somebody last pressed or moved anything (handle_mouse, wm_key, the
+   wheel), or sound was last playing: lock_after counts from here. */
+static u64 last_touch;
+
 static void lock_screen(void) {
     if (locked) return;
     locked = true;
@@ -4076,6 +4080,7 @@ static u32 held_mods(void) {
 }
 
 static void handle_mouse(int mx, int my, u8 buttons) {
+    last_touch = timer_ticks();
     /* Locked: the pointer moves and does nothing else. */
     if (locked) return;
     bool pressed_now = (buttons & 1) && !(last_buttons & 1);
@@ -4638,6 +4643,7 @@ static void deliver_key(window_t *top, int c) {
  * the calculator did nothing but end the session. alt+Escape leaves from
  * anywhere, which is how a program that wants Escape cannot trap anybody. */
 static bool wm_key(int c) {
+    last_touch = timer_ticks();
     /* Locked, every key is the lock's, alt+Escape among them. */
     if (locked) { lock_key(c); return true; }
     if (KEY_CODE(c) == 27) {
@@ -4953,6 +4959,7 @@ void wm_run(void) {
     last_mx = mouse_x();
     last_my = mouse_y();
     last_buttons = mouse_buttons();
+    last_touch = timer_ticks();
     need_frame();
     last_theme_check = timer_ticks();
 
@@ -5016,6 +5023,7 @@ void wm_run(void) {
            one gesture, and every desktop that makes you click first is
            wrong about it. */
         i32 wheel = mouse_take_scroll();
+        if (wheel) last_touch = timer_ticks();
         if (wheel && on_volume_button(last_mx, last_my)) {
             theme_set_volume(theme()->volume - wheel * 5);
             volume_blip();
@@ -5052,6 +5060,16 @@ void wm_run(void) {
             last_theme_check = timer_ticks();
             if (theme_reload()) { apply_screen_size(); need_frame(); }
         }
+
+        /* Locked by itself after the knob's minutes with nobody there.
+           Sound playing counts as somebody there: a film or an album runs
+           for an hour without a key, and nothing else here can say that a
+           person is watching. The loop wakes at least once a second (the
+           dock's clock, idle_ms), which is as near as this needs to be. */
+        if (sound_queued()) last_touch = timer_ticks();
+        if (theme()->lock_after > 0 && !locked
+            && timer_ticks() - last_touch >= (u64)theme()->lock_after * 60 * timer_hz())
+            lock_screen();
 
         /* A window that has redrawn needs its contents drawn again, not the
            desktop: what a program commits is its surface, and its frame,
