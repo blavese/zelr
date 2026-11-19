@@ -17,6 +17,7 @@
 #include "ui.h"
 #include "alloc.h"
 #include "zip.h"
+#include "zipw.h"
 
 #define MAX_ENTRIES 512
 #define NAME_MAX    64          /* as wide as the kernel's own names */
@@ -78,7 +79,7 @@ static const char *const MENU_TITLES[] = { "File", "Edit", "View", "Help" };
 #define N_MENUS 4
 
 static const char *const FILE_ITEMS[] = {
-    "Open", "New folder", "Rename", "Delete", "Empty the trash", "Extract", "Close"
+    "Open", "New folder", "Rename", "Delete", "Empty the trash", "Extract", "Make a zip", "Close"
 };
 static const char *const EDIT_ITEMS[] = { "Copy", "Cut", "Paste" };
 static const char *const VIEW_ITEMS[] = { "Refresh", "Home", "Root" };
@@ -87,7 +88,7 @@ static const char *const HELP_ITEMS[] = { "About Files" };
 static const char *const *MENU_ITEMS[N_MENUS] = {
     FILE_ITEMS, EDIT_ITEMS, VIEW_ITEMS, HELP_ITEMS
 };
-static const int MENU_COUNTS[N_MENUS] = { 7, 3, 3, 1 };
+static const int MENU_COUNTS[N_MENUS] = { 8, 3, 3, 1 };
 static const int MENU_WIDTHS[N_MENUS] = { 150, 110, 110, 130 };
 
 static int bar_open = -1;              /* which title is down, or none */
@@ -483,6 +484,139 @@ static void extract_all(const char *path) {
 }
 
 static void reload(void);
+
+/* --- making one ---------------------------------------------------------------
+ *
+ * A file or a folder and everything below it, as NAME.zip beside it: each file
+ * deflated when that makes it smaller (zipw.h, deflate.h), folders as entries
+ * of their own so an empty one comes back. Read whole and built in memory, so
+ * there is a limit, said when it is reached. */
+#define MAKE_MAX_FILES 1024
+#define MAKE_MAX_BYTES (48u * 1024 * 1024)
+
+static int mk_files, mk_dirs, mk_over, mk_unread;
+static u32 mk_bytes;
+
+/* Counts what is below path (z 0), or adds it to z under name. */
+static void make_walk(zipw_t *z, const char *path, const char *name, int depth) {
+    zelr_stat st;
+    if (stat(path, &st) < 0) return;
+    if (!st.is_dir) {
+        if (!z) {
+            mk_files++;
+            mk_bytes += st.size;
+            if (mk_files > MAKE_MAX_FILES || mk_bytes > MAKE_MAX_BYTES) mk_over = 1;
+            return;
+        }
+        u32 dt = 0, dd = zipw_dos_date(1980, 1, 1);
+        zelr_times t;
+        if (file_times(path, &t) == 0 && t.year) {
+            dt = zipw_dos_time(t.hour, t.minute, t.second);
+            dd = zipw_dos_date(t.year, t.month, t.day);
+        }
+        u8 *data = (u8 *)malloc(st.size + 1);
+        if (!data) { mk_unread++; return; }
+        if (slurp(path, (char *)data, (int)st.size + 1) == (int)st.size)
+            zipw_add(z, name, data, st.size, dt, dd);
+        else
+            mk_unread++;
+        free(data);
+        return;
+    }
+    if (depth > 8) return;
+    char sub[PATH_MAX], subname[PATH_MAX];
+    if (!z) mk_dirs++;
+    else {
+        int n = strlen(name);
+        if (n + 2 > PATH_MAX) return;
+        memcpy(subname, name, n);
+        subname[n] = '/';
+        subname[n + 1] = 0;
+        zipw_add(z, subname, 0, 0, 0, zipw_dos_date(1980, 1, 1));
+    }
+    for (int i = 0; readdir(path, i, &st) == 1; i++) {
+        if (!strcmp(st.name, ".") || !strcmp(st.name, "..")) continue;
+        join(sub, path, st.name);
+        join(subname, name, st.name);
+        make_walk(z, sub, subname, depth + 1);
+    }
+}
+
+/* Make a zip, from the menus or ctrl+K: of the file or folder selected. */
+static void make_zip(void) {
+    if (in_archive()) { say("a zip is made from what is on the disk, not from inside one"); return; }
+    if (selected < 0 || selected >= count) { say("select a file or folder to make a zip of"); return; }
+    char path[PATH_MAX];
+    entry_path(selected, path);
+    const char *leaf = path;
+    for (const char *p = path; *p; p++) if (*p == '/' && p[1]) leaf = p + 1;
+    char base[PATH_MAX];
+    strncpy(base, leaf, PATH_MAX - 8);
+    base[PATH_MAX - 8] = 0;
+    /* A file's own extension gives way to .zip, as report.txt makes report.zip. */
+    if (!entries[selected].is_dir) {
+        int dot = -1;
+        for (int i = 0; base[i]; i++) if (base[i] == '.') dot = i;
+        if (dot > 0) base[dot] = 0;
+    }
+    char want[PATH_MAX], dest[PATH_MAX];
+    join(want, cwd, base);
+    int wl = strlen(want);
+    if (wl + 8 >= PATH_MAX) { say("that name is too long to make a zip of"); return; }
+    memcpy(dest, want, wl);
+    memcpy(dest + wl, ".zip", 5);
+    zelr_stat st;
+    for (int k = 2; stat(dest, &st) == 0 && k < 100; k++) {
+        int m = wl;
+        memcpy(dest, want, m);
+        dest[m++] = ' ';
+        m += utoa((u32)k, dest + m);
+        memcpy(dest + m, ".zip", 5);
+    }
+
+    mk_files = mk_dirs = mk_over = mk_unread = 0;
+    mk_bytes = 0;
+    make_walk(0, path, leaf, 0);
+    if (mk_over) { say("too much for one zip made here: 1024 files or 48 MB"); return; }
+    u32 entries_n = (u32)(mk_files + mk_dirs);
+    u32 cap = mk_bytes + entries_n * (30 + PATH_MAX) + 4096;
+    u32 cd_cap = entries_n * (46 + PATH_MAX) + 64;
+    u8 *buf = (u8 *)malloc(cap + cd_cap + 22);
+    u8 *cd = (u8 *)malloc(cd_cap);
+    if (!buf || !cd) { if (buf) free(buf); if (cd) free(cd); say("not enough memory to make that zip"); return; }
+    zipw_t z;
+    zipw_begin(&z, buf, cap + cd_cap + 22, cd, cd_cap);
+    make_walk(&z, path, leaf, 0);
+    int n = zipw_finish(&z);
+    const char *dleaf = dest;
+    for (const char *p = dest; *p; p++) if (*p == '/') dleaf = p + 1;
+    char said[160];
+    int k = 0;
+    if (n < 0 || mk_unread) {
+        const char *why = mk_unread ? "a file in it could not be read" : "it did not fit";
+        for (const char *p = "no zip made: "; *p; p++) said[k++] = *p;
+        for (const char *p = why; *p; p++) said[k++] = *p;
+    } else if (spit(dest, buf, n) != n) {
+        for (const char *p = "could not write "; *p; p++) said[k++] = *p;
+        for (const char *p = dleaf; *p && k < 120; p++) said[k++] = *p;
+    } else {
+        for (const char *p = "made "; *p; p++) said[k++] = *p;
+        for (const char *p = dleaf; *p && k < 100; p++) said[k++] = *p;
+        for (const char *p = ": "; *p; p++) said[k++] = *p;
+        k += utoa((u32)mk_files, said + k);
+        for (const char *p = mk_files == 1 ? " file, " : " files, "; *p; p++) said[k++] = *p;
+        k += utoa((u32)((n + 1023) / 1024), said + k);
+        for (const char *p = " KB from "; *p; p++) said[k++] = *p;
+        k += utoa((mk_bytes + 1023) / 1024, said + k);
+        for (const char *p = " KB"; *p; p++) said[k++] = *p;
+    }
+    said[k] = 0;
+    free(buf);
+    free(cd);
+    reload();
+    for (int i = 0; i < count; i++) if (!strcmp(entries[i].name, dleaf)) selected = i;
+    say(said);
+}
 
 /* Extract, from the menus or ctrl+E: the archive open, or the one selected. */
 static void extract_selected(void) {
@@ -1152,6 +1286,9 @@ int main(int argc, char **argv) {
                    Return to look in every folder below it. */
                 filter_field.focused = 1;
                 filter_field.cursor = filter_field.len;
+            } else if ((code == KEY_HOME || code == KEY_END) && count) {
+                selected = code == KEY_HOME ? 0 : count - 1;
+                if (searching) say("");
             } else if (code == KEY_UP && selected > 0) {
                 selected--;
                 if (searching) say("");     /* the result chosen, not the count, on the line */
@@ -1175,6 +1312,7 @@ int main(int argc, char **argv) {
             else if (code == 22) do_paste();             /* ctrl+v */
             else if (code == KEY_F1 + 1) begin_rename(); /* F2 */
             else if (code == 5)  extract_selected();     /* ctrl+e */
+            else if (code == 11) make_zip();             /* ctrl+k */
         }
         in.key = 0;
         in.nkeys = 0;
@@ -1409,7 +1547,8 @@ int main(int argc, char **argv) {
                     } else if (pick == 4) {
                         empty_trash();
                     } else if (pick == 5) extract_selected();
-                    else if (pick == 6) closing = 1;
+                    else if (pick == 6) make_zip();
+                    else if (pick == 7) closing = 1;
                 } else if (which == 1) {                /* Edit */
                     if (pick == 0) take(0);
                     else if (pick == 1) take(1);
