@@ -113,6 +113,15 @@ numbered files are still to 6048716; where they disagree with this list, this li
   built unsigned program; h264test in the machine still checks the decoder against Windows' answers in h264data.h.
   Gate 74 steps (one out, one in).
 
+### 0.181.1
+
+- **A frame asked for while one is drawn is no longer lost (07 §10 34)**: `composite` takes what it is to draw
+  (`frame_is_whole`, the damage box) and clears it, with `needs_composite`, before it draws; it used to clear them
+  after the frame, and the loop `needs_composite` after that. The desktop's task can be preempted mid-frame, and a
+  program's commit then (a new size the desktop asked for, `apply_pending` -> `resize_slot` -> `wm_invalidate`) asked
+  for the whole screen and was wiped as the frame ended: a snapped or shrunk window left its old place on the screen
+  until something else covered it. Selftest `[windows]` +2 (`wm_test_asked_mid_frame`, a probe in `composite`).
+
 ### 0.181.0
 
 - **Paint keeps its pictures (10, 14)**: userland/pngw.h writes PNG: RGB (colour type 2), every row filter 0, the
