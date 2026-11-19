@@ -95,6 +95,30 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.175.0
+
+- **The browser's right button menu (11, 12, 14)**: browser.c `menu_build` (from `over_link` and `node_under` as the
+  right button is pressed in the page's view) offers "open the link", "open it in a new window", "copy the link's
+  address", "save what it links to" on a link (only "open the link" on a `play:` link, nothing but it on an about:
+  link), "open the picture", "copy the picture's address", "save the picture" on an `<img>` with an address
+  (`pic_source`, so srcset and lazy loaders' sources; none for data:), then "back"/"forward" as the history allows,
+  "reload", "save the page" (not for about: or file:), "copy the page's address". What a row acts on is copied as the
+  menu opens (`menu_href`, `menu_link`, `menu_pic`): a relayout renumbers `page.links`. Drawn with ui.h `ui_menu` after
+  everything else, as wide as its longest row (`menu_w`), placed by `menu_place` (ui_menu's own clamp); the pointer is
+  settled before the page sees it: a release on a row picks it (`menu_do`), a press elsewhere, the middle button or
+  the wheel puts it away and the release after that press is nobody's (`menu_swallow`), Escape puts it away before
+  the page or the bar hears it. Links followed by a click and by the menu share `follow_link` (play:, about: from
+  about: only, anything else to its joined address). `save_address` asks for an address into `replybuf` and saves it
+  as a followed download is (`download_name`, `save_download` or `save_download_rest`, a notice). Copies go to the
+  kernel's clipboard (`clip_set`). On the console: "browser menu: ROW; ROW; ...", "browser menu: copied ADDRESS",
+  "browser menu: saved PATH, N bytes, read back the same", "browser menu: kept by the page". **A right press is now a
+  reason to draw a frame** (the loop's `dirty`), or it was lost. jsdom.h: the click's MouseEvent is built by
+  `jd_mouse_event` (now with `button` and `buttons`), and `jsdom_context_menu` fires a trusted, cancelable,
+  bubbling contextmenu (button 2) and says whether the page prevented it; a page that does keeps the button and the
+  browser opens no menu. pagetest four more (389); menucheck, new (15), gate step `menutest` (73 steps). The right press that is a frame of
+  its own was found by a break menucheck did not catch: every right click it made came with the pointer's last move in
+  its frame; a fifteenth check presses again with the pointer at rest.
+
 ### 0.174.0
 
 - **Settings' Storage page (10, 04, 08)**: a page between System and About (`PAGES`, 13 now; setcheck's and wificheck's

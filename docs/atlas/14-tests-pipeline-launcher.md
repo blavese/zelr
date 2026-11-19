@@ -887,6 +887,20 @@ Added in 0.165.0, not yet in the table below:
   about:history?forget is not followed (still 3); after the server's /peek, about:history's second entry (a, a file;
   the links found as bands of accent inside the window) opens; the forget button (found by its colour) leaves 0.
 
+Added in 0.175.0, not yet in the table below:
+- **`menucheck.py`** (gate `menutest`, full; 15 checks). /home/menu on a mkfat volume: m.htm (grey) with a block link to
+  n.htm (green), an `<img>` of p.png (orange, a 160x80 PNG made by the harness with zlib) and a block (blue) whose
+  contextmenu handler prevents it and turns the page dark grey; n.htm (blue). Each thing is found on the screen by its
+  colour and right clicked (`mon.click(..., button=2)`); the rows are read from "browser menu: ..." and a row is clicked
+  at its place from the point (`UI_GAP` + `UI_ROW` a row). The link's menu is exactly its four rows, "reload" and "copy
+  the page's address"; "open it in a new window" (the new window's line and n's, then alt+q, m not reloaded); "copy the
+  link's address" then ctrl+L, ctrl+V, return goes to n; "back" from n's menu; the picture's three rows; "save the
+  picture" gives the same bytes at /home/downloads/p.png (tools/readfat.py); "open the picture"; a left press on the
+  link while the picture's menu is open follows nothing (3 s), the next click does; the blue block gives "kept by the
+  page" and the dark grey, and no rows; a menu over the page (counted clear of the pointer, left at its corner) goes
+  with Escape; a right press with no move (`mouse_button 2` alone, not `click`) opens one again, the frame the browser
+  once did not draw.
+
 Added in 0.164.0, not yet in the table below:
 - **`opencheck.py`** (gate `opentest`, full; 11 checks since 0.172.0, one a block whose click handler calls `window.open("b.htm")`). /home/open on a mkfat volume: a.htm (red) with two links drawn
   as blocks of their own colours, to b.htm (blue) and to c.htm (yellow) through a router script that keeps a click
