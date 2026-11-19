@@ -421,3 +421,10 @@ builtin_ziptest_end:
 builtin_calendar_start:
 .incbin "build/user/calendar.elf.z"
 builtin_calendar_end:
+
+.balign 4
+.global builtin_clock_start
+.global builtin_clock_end
+builtin_clock_start:
+.incbin "build/user/clock.elf.z"
+builtin_clock_end:

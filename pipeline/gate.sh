@@ -666,6 +666,7 @@ if [ "$MODE" = "screen" ] || [ "$MODE" = "full" ]; then
   ziptest_files() { keep timeout 600 python tools/zipcheck.py; }
   calendartest() { keep timeout 600 python tools/calendarcheck.py; }
   painttest() { keep timeout 600 python tools/paintcheck.py; }
+  clocktest() { keep timeout 600 python tools/clockcheck.py; }
   downloadtest() { keep timeout 900 python tools/downloadcheck.py; }
 
   # The second boot of a machine, which is the one nothing else reaches:
@@ -781,6 +782,7 @@ if [ "$MODE" = "screen" ] || [ "$MODE" = "full" ]; then
   par_start "an archive is gone into, opened from and extracted" ziptest_files
   par_start "the calendar knows today and keeps a note for a day" calendartest
   par_start "paint opens a picture, saves it and takes a stroke back" painttest
+  par_start "the clock tells other places' time, times and rings" clocktest
   par_start "a download bigger than the browser holds is saved whole" downloadtest
   par_start "a machine still starts once it has formatted its disk" boottest
   par_start "ctrl+f finds a word that is on the screen" findtest
