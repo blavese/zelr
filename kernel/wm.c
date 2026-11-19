@@ -456,6 +456,7 @@ static const mitem_t M_WORK[] = {
     { "Files",        "/bin/files" },
     { "Notes",        "/bin/notes" },
     { "Calculator",   "/bin/calc" },
+    { "Calendar",     "/bin/calendar" },
 };
 static const mitem_t M_WEB[] = {
     { "Browser",      "/bin/browser" },

@@ -414,3 +414,10 @@ builtin_mediatest_end:
 builtin_ziptest_start:
 .incbin "build/user/ziptest.elf.z"
 builtin_ziptest_end:
+
+.balign 4
+.global builtin_calendar_start
+.global builtin_calendar_end
+builtin_calendar_start:
+.incbin "build/user/calendar.elf.z"
+builtin_calendar_end:

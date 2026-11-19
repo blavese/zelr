@@ -664,6 +664,7 @@ if [ "$MODE" = "screen" ] || [ "$MODE" = "full" ]; then
   historytest() { keep timeout 900 python tools/historycheck.py; }
   trashtest() { keep timeout 600 python tools/trashcheck.py; }
   ziptest_files() { keep timeout 600 python tools/zipcheck.py; }
+  calendartest() { keep timeout 600 python tools/calendarcheck.py; }
   downloadtest() { keep timeout 900 python tools/downloadcheck.py; }
 
   # The second boot of a machine, which is the one nothing else reaches:
@@ -777,6 +778,7 @@ if [ "$MODE" = "screen" ] || [ "$MODE" = "full" ]; then
   par_start "the browser keeps, lists and suggests where it has been" historytest
   par_start "a file deleted in Files waits in the trash" trashtest
   par_start "an archive is gone into, opened from and extracted" ziptest_files
+  par_start "the calendar knows today and keeps a note for a day" calendartest
   par_start "a download bigger than the browser holds is saved whole" downloadtest
   par_start "a machine still starts once it has formatted its disk" boottest
   par_start "ctrl+f finds a word that is on the screen" findtest

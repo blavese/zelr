@@ -73,9 +73,9 @@ MENU_LEFT = DOCK_SIDE
 MENU_KINDS = ["Productivity", "Internet", "Media", "Games", "System",
               "Session"]
 MENU_IN = {
-    "Productivity": ["Terminal", "Files", "Notes", "Calculator"],
+    "Productivity": ["Terminal", "Files", "Notes", "Calculator", "Calendar"],
     "Internet": ["Browser"],
-    "Media": ["Paint", "Music"],
+    "Media": ["Paint", "Music", "Pictures"],
     "Games": ["Blackjack", "Poker"],
     "System": ["Settings", "Monitor", "System info"],
     "Session": ["Close all", "Leave desktop", "Shut down"],
