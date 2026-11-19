@@ -157,7 +157,8 @@ GIF or WebP with the browser's decoders, fitted to the window, and the
 arrow keys walk the rest of its folder; Files opens a picture there. + and
 - make it twice or half the size (up to eight times), 0 fits it again, the
 arrows or a drag move about one bigger than the window, and r turns it a
-quarter to the right. The
+quarter to the right. W makes it the wallpaper, covering the screen; a
+wallpaper chosen in Settings, or "take it away" there, puts it back. The
 browser opens pages on the machine too: a path typed into its bar or handed
 over by Files is a `file:` address, a page's sheets and pictures are read
 from beside it, and a folder is shown as a page of what is in it, folders
@@ -537,6 +538,7 @@ instead.
     python tools/daycheck.py    the desktop says today's calendar note when it opens, and only once a day
     python tools/detailcheck.py Files counts what a folder holds, and gives a file's size and date
     python tools/backcheck.py   the terminal's ctrl+R finds lines typed before, runs one, changes one, lets go
+    python tools/wallcheck.py   a picture made the wallpaper from Pictures, seen by colour, and taken away
     python tools/downloadcheck.py  a 12 MB download fetched in parts with Range, read back byte for byte
     python tools/notescheck.py  select all, copy, paste, save, undo, find and replace in the editor, from its keys
     python tools/timecheck.py   set the time zone from the shell and in Settings, read the clocks and a file's time

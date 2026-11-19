@@ -113,6 +113,18 @@ numbered files are still to 6048716; where they disagree with this list, this li
   built unsigned program; h264test in the machine still checks the decoder against Windows' answers in h264data.h.
   Gate 74 steps (one out, one in).
 
+### 0.197.0
+
+- **A picture as the wallpaper (07, 10, 14)**: pictures.c `set_wallpaper` (W): the screen's size from /sys/screen
+  (`screen_size`), the picture made to cover it (the larger scale, the rest cut evenly), written as /cfg/wallpaper.raw:
+  "ZWP1", width, height (u32), a 0xRRGGBB u32 a pixel; "pictures: the wallpaper is NAME". wm.c `wall_pic_look`, with
+  the four-times-a-second theme look and only when `vfs_changes` moved: the file there, of the screen's size and with
+  its header right (and three times its size free in the heap), is read into `wall_pic` ("desktop: the wallpaper is a
+  picture now"); gone or of another size, let go ("... no longer a picture"). `draw_wallpaper` restores `wall_pic`
+  through the clip as the kept copy of a still one is (no vignette or lights over it). Settings' Desktop page: a
+  wallpaper chosen takes the file away, and with one set a line says so with "take it away". A screen of another size
+  drops it until W is pressed again. wallcheck, new (5), gate step `walltest` (93 steps).
+
 ### 0.196.0
 
 - **The terminal looks back with ctrl+R (10, 14)**: term.c `hs_on`, `hs_text`, `hs_found`; `hs_find(before)` is the

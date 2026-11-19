@@ -888,6 +888,12 @@ Added in 0.165.0, not yet in the table below:
   about:history?forget is not followed (still 3); after the server's /peek, about:history's second entry (a, a file;
   the links found as bands of accent inside the window) opens; the forget button (found by its colour) leaves 0.
 
+Added in 0.197.0, not yet in the table below:
+- **`wallcheck.py`** (gate `walltest`, full; 5 checks). /home/pictures/w.png, 200x100, red left half, blue right.
+  `/bin/pictures /home/pictures/w.png`, `w` ("pictures: the wallpaper is w.png", "desktop: the wallpaper is a picture
+  now"); alt-d: red over 150000 pixels in x 120-500, y 40-600 and blue in x 530-1000; the Terminal icon double clicked,
+  `rm /cfg/wallpaper.raw` ("desktop: the wallpaper is no longer a picture"), alt-d: under 1000 of either.
+
 Added in 0.196.0, not yet in the table below:
 - **`backcheck.py`** (gate `backtest`, full; 6 checks). In the desktop's terminal by sendkey: `notice alpha one`, `notice
   beta two`, `notice alpha three` ("notice: ..." on the console); ctrl-r "alpha" ctrl-r ret ("notice: alpha one", not
