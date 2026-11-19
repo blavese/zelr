@@ -80,7 +80,7 @@ static const char *const MENU_TITLES[] = { "File", "Edit", "View", "Help" };
 #define N_MENUS 4
 
 static const char *const FILE_ITEMS[] = {
-    "Open", "New folder", "Rename", "Delete", "Empty the trash", "Extract", "Make a zip", "Close"
+    "Open", "New folder", "Rename", "Delete", "Empty the trash", "Extract", "Make a zip", "Details", "Close"
 };
 static const char *const EDIT_ITEMS[] = { "Copy", "Cut", "Paste" };
 static const char *const VIEW_ITEMS[] = { "Refresh", "Home", "Root", "By name", "By size", "By date" };
@@ -89,7 +89,7 @@ static const char *const HELP_ITEMS[] = { "About Files" };
 static const char *const *MENU_ITEMS[N_MENUS] = {
     FILE_ITEMS, EDIT_ITEMS, VIEW_ITEMS, HELP_ITEMS
 };
-static const int MENU_COUNTS[N_MENUS] = { 8, 3, 6, 1 };
+static const int MENU_COUNTS[N_MENUS] = { 9, 3, 6, 1 };
 static const int MENU_WIDTHS[N_MENUS] = { 150, 110, 110, 130 };
 
 static int bar_open = -1;              /* which title is down, or none */
@@ -626,6 +626,94 @@ static void make_zip(void) {
     reload();
     for (int i = 0; i < count; i++) if (!strcmp(entries[i].name, dleaf)) selected = i;
     say(said);
+}
+
+/* --- details --------------------------------------------------------------------
+ *
+ * What the entry chosen is, on the line (ctrl+P, or Details in the File menu):
+ * a file's size and when it was written; a folder's files, folders and bytes,
+ * everything below it counted (sixteen folders deep). The list shows a size
+ * for files only, so how big a folder is could not be seen at all. */
+static u32 dt_files, dt_dirs;
+static u64 dt_bytes;
+
+static void details_walk(const char *path, int depth) {
+    zelr_stat st;
+    for (int i = 0; readdir(path, i, &st) == 1; i++) {
+        if (!strcmp(st.name, ".") || !strcmp(st.name, "..")) continue;
+        char sub[PATH_MAX];
+        join(sub, path, st.name);
+        if (st.is_dir) {
+            dt_dirs++;
+            if (depth < 16) details_walk(sub, depth + 1);
+        } else {
+            dt_files++;
+            dt_bytes += st.size;
+        }
+    }
+}
+
+/* "700 bytes", "4.4 KB", "12.0 MB". */
+static int size_words(char *out, u64 b) {
+    int k = 0;
+    if (b < 1024) {
+        k += utoa((u32)b, out + k);
+        for (const char *p = b == 1 ? " byte" : " bytes"; *p; p++) out[k++] = *p;
+    } else {
+        int mega = b >= 1024 * 1024;
+        u64 tenths = b * 10 / (mega ? 1024 * 1024 : 1024);
+        k += utoa((u32)(tenths / 10), out + k);
+        out[k++] = '.';
+        out[k++] = (char)('0' + tenths % 10);
+        for (const char *p = mega ? " MB" : " KB"; *p; p++) out[k++] = *p;
+    }
+    out[k] = 0;
+    return k;
+}
+
+static int count_words(char *out, u32 n, const char *one, const char *many) {
+    int k = utoa(n, out);
+    out[k++] = ' ';
+    for (const char *p = n == 1 ? one : many; *p; p++) out[k++] = *p;
+    out[k] = 0;
+    return k;
+}
+
+static void show_details(void) {
+    if (selected < 0 || selected >= count) { say("select a file or folder to know about"); return; }
+    entry *e = &entries[selected];
+    char line[160];
+    int k = 0;
+    for (const char *p = e->name; *p && k < 60; p++) line[k++] = *p;
+    line[k++] = ':';
+    line[k++] = ' ';
+    if (in_archive()) {
+        k += size_words(line + k, e->size);
+        for (const char *p = ", in the archive"; *p; p++) line[k++] = *p;
+        line[k] = 0;
+        say(line);
+        return;
+    }
+    char path[PATH_MAX];
+    entry_path(selected, path);
+    if (e->is_dir) {
+        dt_files = dt_dirs = 0;
+        dt_bytes = 0;
+        details_walk(path, 0);
+        k += count_words(line + k, dt_files, "file", "files");
+        for (const char *p = " and "; *p; p++) line[k++] = *p;
+        k += count_words(line + k, dt_dirs, "folder", "folders");
+        line[k++] = ',';
+        line[k++] = ' ';
+        k += size_words(line + k, dt_bytes);
+        for (const char *p = " in all"; *p; p++) line[k++] = *p;
+    } else {
+        k += size_words(line + k, e->size);
+        if (when_for != selected) when_of(selected);
+        for (int i = 0; when_said[i] && k < (int)sizeof(line) - 1; i++) line[k++] = when_said[i];
+    }
+    line[k] = 0;
+    say(line);
 }
 
 /* Extract, from the menus or ctrl+E: the archive open, or the one selected. */
@@ -1348,6 +1436,7 @@ int main(int argc, char **argv) {
             else if (code == KEY_F1 + 1) begin_rename(); /* F2 */
             else if (code == 5)  extract_selected();     /* ctrl+e */
             else if (code == 11) make_zip();             /* ctrl+k */
+            else if (code == 16) show_details();         /* ctrl+p */
             else if (KEY_CTRL(key) && code >= '1' && code <= '3') set_sort(code - '1');
         }
         in.key = 0;
@@ -1584,7 +1673,8 @@ int main(int argc, char **argv) {
                         empty_trash();
                     } else if (pick == 5) extract_selected();
                     else if (pick == 6) make_zip();
-                    else if (pick == 7) closing = 1;
+                    else if (pick == 7) show_details();
+                    else if (pick == 8) closing = 1;
                 } else if (which == 1) {                /* Edit */
                     if (pick == 0) take(0);
                     else if (pick == 1) take(1);
