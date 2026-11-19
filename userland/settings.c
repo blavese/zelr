@@ -31,6 +31,7 @@
 #include "zelr.h"
 #include "ui.h"
 #include "zones.h"
+#include "sha256.h"
 
 #define CFG "/zelr.cfg"
 #define SIDEBAR_W 160
@@ -91,9 +92,9 @@ static const struct { int w, h; const char *name; } MODES[] = {
 static const char *const PAGES[] = {
     "Colours", "Dock", "Windows", "Desktop", "Behaviour",
     "Screen", "Time", "Wireless", "Everything", "The file", "System", "Storage",
-    "About"
+    "Lock", "About"
 };
-#define N_PAGES 13
+#define N_PAGES 14
 static int page = 0;
 static int scroll;              /* the Everything page, which is long */
 
@@ -1378,6 +1379,81 @@ static int page_storage(surface *s, ui_input *in, ui_theme *t,
     return y;
 }
 
+/* --- the lock --------------------------------------------------------------
+ *
+ * The screen lock's password (the desktop's alt+L, wm.c lock_screen). Kept as
+ * /cfg/lock, "SALT HEX": a salt of sixteen hex digits from the kernel's
+ * random numbers and the hex of SHA-256 over the salt and the password
+ * (sha256.h), which the kernel checks with its own. The password itself is
+ * never written, and the field is a secret one (never copied). Its layout
+ * is lockcheck.py's to click: the field and its buttons on one row under
+ * the heading and a line. */
+#define LOCK_FILE "/cfg/lock"
+
+static char lock_pass[48];
+static ui_field lock_field = { lock_pass, sizeof(lock_pass), 0, 0, 0, 1 };
+static char lock_said[24];
+
+static int lock_is_set(void) {
+    zelr_stat st;
+    return stat(LOCK_FILE, &st) == 0 && !st.is_dir && st.size > 0;
+}
+
+static void lock_set(void) {
+    if (!lock_pass[0]) { puts("settings: lock needs a password to set\n"); return; }
+    u8 raw[8];
+    if (random_bytes(raw, sizeof(raw)) != (long)sizeof(raw))
+        for (int i = 0; i < 8; i++) raw[i] = (u8)(ticks() >> (i * 3));
+    static const char HEX[] = "0123456789abcdef";
+    char line[100];
+    int n = 0;
+    for (int i = 0; i < 8; i++) { line[n++] = HEX[raw[i] >> 4]; line[n++] = HEX[raw[i] & 15]; }
+    u8 msg[16 + sizeof(lock_pass)], d[32];
+    int m = 0;
+    for (int i = 0; i < 16; i++) msg[m++] = (u8)line[i];
+    for (int i = 0; lock_pass[i]; i++) msg[m++] = (u8)lock_pass[i];
+    jc_sha256(msg, (u32)m, d);
+    line[n++] = ' ';
+    for (int i = 0; i < 32; i++) { line[n++] = HEX[d[i] >> 4]; line[n++] = HEX[d[i] & 15]; }
+    line[n++] = '\n';
+    memset(msg, 0, sizeof(msg));
+    memset(lock_pass, 0, sizeof(lock_pass));
+    lock_field.len = lock_field.cursor = 0;
+    lock_field.focused = 0;
+    mkdir("/cfg");
+    if (spit(LOCK_FILE, line, n) == n) puts("settings: lock password set\n");
+    else puts("settings: lock password could not be written\n");
+}
+
+static void lock_clear(void) {
+    unlink(LOCK_FILE);
+    puts("settings: lock password taken away\n");
+}
+
+static int page_lock(surface *s, ui_input *in, ui_theme *t, int x, int y, int w) {
+    y = ui_section(s, t, x, y, w, "Lock the screen");
+    ui_dim_label(s, t, x, y, "alt+L locks it, as does Lock the screen in the launcher.");
+    y += 22 + UI_GAP;
+    for (int ki = 0; ki < in->nkeys && lock_field.focused; ki++) {
+        if (in->keys[ki] == '\n') lock_set();
+        else ui_field_key(&lock_field, in->keys[ki]);
+    }
+    ui_field_draw(s, in, t, x, y, 240, &lock_field, "a new password");
+    if (ui_button_primary(s, in, t, x + 240 + UI_GAP, y, 90, "set")) lock_set();
+    if (ui_button(s, in, t, x + 240 + UI_GAP + 90 + UI_GAP, y, 110, "take away")) lock_clear();
+    y += UI_BTN_H + UI_GAP * 2;
+    int set = lock_is_set();
+    ui_label(s, t, x, y, set ? "A password is set." : "No password: the lock opens with return.");
+    const char *state = set ? "a password is set" : "no password";
+    if (strcmp(state, lock_said)) {
+        strcpy(lock_said, state);
+        puts("settings: lock ");
+        puts(state);
+        puts("\n");
+    }
+    return y + 24;
+}
+
 static int page_about(surface *s, ui_input *in, ui_theme *t,
                       int x, int y, int w, int h) {
     (void)in;
@@ -1486,6 +1562,7 @@ int main(int argc, char **argv) {
         case 9: y = page_file(&s, &in, &t, x, y, cw, h); break;
         case 10: y = page_system(&s, &in, &t, x, y, cw, h); break;
         case 11: y = page_storage(&s, &in, &t, x, y, cw); break;
+        case 12: y = page_lock(&s, &in, &t, x, y, cw); break;
         default: y = page_about(&s, &in, &t, x, y, cw, h); break;
         }
 

@@ -1641,6 +1641,35 @@ static void test_oom_reported(void) {
        && !contains(log, "selftest-oom ended: page fault"));
 }
 
+/* The lock's password, as Settings writes it: "SALT HEX", the hex of
+   SHA-256 over the salt and the password. */
+static void test_lock_password(void) {
+    vfs_delete("/cfg/lock");
+    ok("with no password set, the lock opens with return", wm_lock_matches(""));
+    const char *salt = "0123abcd", *pass = "open sesame";
+    u8 msg[64], d[SHA256_SIZE];
+    int m = 0;
+    for (const char *p = salt; *p; p++) msg[m++] = (u8)*p;
+    for (const char *p = pass; *p; p++) msg[m++] = (u8)*p;
+    sha256(msg, (u32)m, d);
+    char line[100];
+    int n = 0;
+    for (const char *p = salt; *p; p++) line[n++] = *p;
+    line[n++] = ' ';
+    for (int i = 0; i < SHA256_SIZE; i++) {
+        line[n++] = "0123456789abcdef"[d[i] >> 4];
+        line[n++] = "0123456789abcdef"[d[i] & 15];
+    }
+    line[n++] = '\n';
+    vfs_mkdir("/cfg");
+    bool wrote = vfs_write("/cfg/lock", line, (u32)n);
+    ok("with one set, the right password opens it", wrote && wm_lock_matches(pass));
+    ok("and a wrong one, or none, does not", !wm_lock_matches("open") && !wm_lock_matches(""));
+    vfs_write("/cfg/lock", "not a hash\n", 11);
+    ok("a file that is not a salt and a hash opens to anything, so nobody is shut out", wm_lock_matches("x"));
+    vfs_delete("/cfg/lock");
+}
+
 static void test_console_wait(void) {
     int pid = user_spawn_flat("selftest-reader", console_reader, sizeof(console_reader));
     ok("a program that reads the console can be started", pid > 0);
@@ -7428,7 +7457,7 @@ int selftest_run(void) {
     kprintf("[video]\n");      test_video(); test_console();
     kprintf("[mouse]\n");      test_mouse(); test_mouse_edges();
     kprintf("[graphics]\n");   test_gfx(); test_frame_drawing();
-    kprintf("[windows]\n");    test_wm(); test_wm_keys(); test_partial_frames();
+    kprintf("[windows]\n");    test_wm(); test_wm_keys(); test_partial_frames(); test_lock_password();
     kprintf("[window server]\n"); test_winsrv(); test_window_lifetimes();
     kprintf("[built-in programs]\n"); test_builtin();
     kprintf("[theme]\n");      test_theme();

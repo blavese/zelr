@@ -43,6 +43,7 @@
 #include "wifi.h"
 #include "io.h"
 #include "shot.h"
+#include "sha256.h"
 
 /* A bar that floats clear of the edges rather than one welded to them.
  *
@@ -393,6 +394,9 @@ static int  volume_before_mute = 70;
    of the dock's state because the bar is drawn long before the code that
    works on it is reached. */
 static bool find_open;
+
+/* The screen locked (alt+L, or Lock in the launcher): see lock_screen. */
+static bool locked;
 static char find_q[64];
 static int  find_qn;
 static int  find_total;      /* how many times it appears, everywhere */
@@ -477,6 +481,7 @@ static const mitem_t M_GAMES[] = {
     { "Poker",        "/bin/poker" },
 };
 static const mitem_t M_SESSION[] = {
+    { "Lock the screen", 0 },
     { "Close all",    0 },
     { "Leave desktop", 0 },
     { "Shut down",    0 },
@@ -2612,6 +2617,130 @@ static void draw_volume_panel(void) {
  * a word that is not there -- those are very different answers and one
  * number tells them apart.
  */
+/* --- the lock --------------------------------------------------------------
+ *
+ * alt+L, or Lock the screen in the launcher, puts a screen over everything that takes
+ * every key and the pointer until the password is typed and Return pressed.
+ * The password is /cfg/lock, "SALT HEX": the hex of SHA-256 over the salt
+ * and the password, which Settings' Lock page writes (userland/sha256.h)
+ * and this checks with the kernel's own (sha256.c). With no file there is no
+ * password, and Return opens it: a screen put away, not shut.
+ *
+ * Every key goes here while it is up, alt+Escape too, which would otherwise
+ * leave the desktop for the kernel's shell and so get round it; serial
+ * bytes arrive as keys and are taken the same way. What is typed is drawn
+ * as dots and never kept past the Return that checks it. A file that cannot
+ * be read as a salt and a hash opens to anything, so a damaged one does not
+ * shut its owner out; the console says so. */
+#define LOCK_FILE "/cfg/lock"
+#define LOCK_BG   0x0E141C
+
+static char lock_typed[64];
+static int  lock_n;
+static bool lock_wrong;
+static bool lock_has_password;
+
+static int lock_hex(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+bool wm_lock_matches(const char *typed) {
+    char buf[200];
+    int n = vfs_read(LOCK_FILE, buf, sizeof(buf) - 1);
+    if (n <= 0) return true;                    /* no password */
+    buf[n] = 0;
+    int sp = 0;
+    while (buf[sp] && buf[sp] != ' ') sp++;
+    int hx = sp + 1, ok = buf[sp] == ' ' && sp > 0 && sp <= 64;
+    for (int i = 0; ok && i < 64; i++) ok = lock_hex(buf[hx + i]) >= 0;
+    if (!ok) { kprintf("desktop: %s cannot be read, so the lock opens\n", LOCK_FILE); return true; }
+
+    u8 msg[128], d[SHA256_SIZE];
+    int m = 0;
+    for (int i = 0; i < sp; i++) msg[m++] = (u8)buf[i];
+    for (int i = 0; typed[i] && m < (int)sizeof(msg); i++) msg[m++] = (u8)typed[i];
+    sha256(msg, (u32)m, d);
+    int same = 1;
+    for (int i = 0; i < SHA256_SIZE; i++)
+        same &= (lock_hex(buf[hx + 2 * i]) << 4 | lock_hex(buf[hx + 2 * i + 1])) == d[i];
+    for (int i = 0; i < m; i++) msg[i] = 0;
+    return same;
+}
+
+bool wm_locked(void) { return locked; }
+
+static void find_close(void);
+static void cycle_end(void);
+
+static void lock_screen(void) {
+    if (locked) return;
+    locked = true;
+    lock_n = 0;
+    lock_typed[0] = 0;
+    lock_wrong = false;
+    lock_has_password = vfs_stat(LOCK_FILE, 0, 0);
+    menu_open = false;
+    ctx_open = false;
+    volume_open = false;
+    net_open = false;
+    find_close();
+    cycle_end();
+    kprintf("desktop: locked\n");
+    need_frame();
+}
+
+static void lock_key(int c) {
+    int k = KEY_CODE(c);
+    if (k == '\n' || k == '\r') {
+        if (wm_lock_matches(lock_typed)) {
+            locked = false;
+            kprintf("desktop: unlocked\n");
+        } else {
+            lock_wrong = true;
+            kprintf("desktop: the password was wrong\n");
+        }
+        for (int i = 0; i < (int)sizeof(lock_typed); i++) lock_typed[i] = 0;
+        lock_n = 0;
+    } else if (k == '\b') {
+        if (lock_n) lock_typed[--lock_n] = 0;
+        lock_wrong = false;
+    } else if (k == 27) {
+        lock_n = 0;
+        lock_typed[0] = 0;
+    } else if (k >= ' ' && k < 127 && !(c & (KEY_MOD_ALT | KEY_MOD_CTRL))
+               && lock_n < (int)sizeof(lock_typed) - 1) {
+        lock_typed[lock_n++] = (char)k;
+        lock_typed[lock_n] = 0;
+        lock_wrong = false;
+    }
+    need_frame();
+}
+
+/* Over everything, the dock and its panels too: the time, "Locked", a dot
+   for each letter typed and a line saying what to do. */
+static void draw_lock(void) {
+    if (!locked) return;
+    u32 W = fb_width(), H = fb_height();
+    fb_rect(0, 0, W, H, LOCK_BG);
+    char clock[24];
+    clock_text(clock, sizeof(clock));
+    face_text(((int)W - face_width(clock, FACE_TITLE)) / 2, (int)H / 2 - 96, clock, 0xFFFFFF, FACE_TITLE);
+    const char *head = "Locked";
+    face_text(((int)W - face_width(head, FACE_HEAD_BOLD)) / 2, (int)H / 2 - 48, head, 0xE6EDF3, FACE_HEAD_BOLD);
+    int bw = 280, bh = 36, bx = ((int)W - bw) / 2, by = (int)H / 2;
+    fb_round_rect_aa(bx, by, bw, bh, 10, 0x1E2A36, 255);
+    for (int i = 0; i < lock_n && i < 18; i++)
+        fb_rect((u32)(bx + 18 + i * 14), (u32)(by + bh / 2 - 3), 7, 7, 0xE6EDF3);
+    const char *hint = lock_wrong ? "That is not the password."
+                     : lock_has_password ? "Type the password and press return."
+                     : "No password is set: press return.";
+    face_text(((int)W - face_width(hint, FACE_BODY)) / 2, by + bh + 16, hint,
+              lock_wrong ? 0xF08A80 : 0xA0AEC0, FACE_BODY);
+}
+
 static void draw_find_bar(void) {
     if (!find_open) return;
     const theme_t *t = theme();
@@ -3324,6 +3453,7 @@ static void draw_scene(void) {
     draw_net_panel();
     draw_menu();
     draw_ctx();
+    draw_lock();
 }
 
 /* Frames that drew only what changed, for /sys/screen. */
@@ -3437,6 +3567,7 @@ static void menu_run(const mitem_t *it) {
     if (it->program) { launch(it->program); return; }
 
     if (!strcmp(it->label, "System info")) app_about();
+    else if (!strcmp(it->label, "Lock the screen")) lock_screen();
     else if (!strcmp(it->label, "Close all")) { while (nwin > 0) wm_close(stack[nwin - 1]); }
     else if (!strcmp(it->label, "Leave desktop")) running = false;
     else if (!strcmp(it->label, "Shut down")) {
@@ -3945,6 +4076,8 @@ static u32 held_mods(void) {
 }
 
 static void handle_mouse(int mx, int my, u8 buttons) {
+    /* Locked: the pointer moves and does nothing else. */
+    if (locked) return;
     bool pressed_now = (buttons & 1) && !(last_buttons & 1);
     bool right_now   = (buttons & 2) && !(last_buttons & 2);
     bool middle_now  = (buttons & WM_BTN_MIDDLE) && !(last_buttons & WM_BTN_MIDDLE);
@@ -4458,6 +4591,9 @@ static bool handle_shortcut(int key) {
     case 'q': case 'Q':
         if (top) wm_close(top);
         return true;
+    case 'l': case 'L':                            /* alt+l, lock the screen */
+        lock_screen();
+        return true;
     }
 
     /* Alt with an arrow snaps the front window to that side, which is the
@@ -4502,6 +4638,8 @@ static void deliver_key(window_t *top, int c) {
  * the calculator did nothing but end the session. alt+Escape leaves from
  * anywhere, which is how a program that wants Escape cannot trap anybody. */
 static bool wm_key(int c) {
+    /* Locked, every key is the lock's, alt+Escape among them. */
+    if (locked) { lock_key(c); return true; }
     if (KEY_CODE(c) == 27) {
         if (c & KEY_MOD_ALT) return false;
         cycle_end();

@@ -78,7 +78,7 @@ MENU_IN = {
     "Media": ["Paint", "Music", "Pictures"],
     "Games": ["Blackjack", "Poker"],
     "System": ["Settings", "Monitor", "System info"],
-    "Session": ["Close all", "Leave desktop", "Shut down"],
+    "Session": ["Lock the screen", "Close all", "Leave desktop", "Shut down"],
 }
 
 MENU_RECT = (MENU_LEFT + 4, 380, MENU_LEFT + MENU_W - 4, PANEL_Y - 6)

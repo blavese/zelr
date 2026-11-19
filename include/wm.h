@@ -226,6 +226,12 @@ bool wm_active(void);
    when the desktop is not running. */
 bool wm_notice(const char *text);
 
+/* The screen lock (wm.c): whether a password opens it, as /cfg/lock has it
+   ("SALT HEX", SHA-256 over the salt and the password; true for any with no
+   file), and whether it is up. */
+bool wm_lock_matches(const char *typed);
+bool wm_locked(void);
+
 void wm_push_event(window_t *w, const wm_event_t *ev);
 bool wm_pop_event(window_t *w, wm_event_t *out);
 

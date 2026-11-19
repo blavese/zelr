@@ -65,7 +65,7 @@ ROW_H, NAME_W = 30, 172
 
 PAGES = ["Colours", "Dock", "Windows", "Desktop", "Behaviour",
          "Screen", "Time", "Wireless", "Everything", "The file", "System", "Storage",
-         "About"]
+         "Lock", "About"]
 
 # The desktop's own menu, which is how the terminal is cleared away before
 # the settings window is opened: the cascade has to start from empty or the
