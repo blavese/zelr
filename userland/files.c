@@ -131,7 +131,7 @@ static int ends_with(const char *name, const char *ext) {
 static int kind_of(const char *dir, const char *name, int is_dir) {
     if (is_dir) return KIND_DIR;
     if (!strncmp(dir, "/bin", 4)) return KIND_PROG;
-    if (ends_with(name, ".wav")) return KIND_SOUND;
+    if (ends_with(name, ".wav") || ends_with(name, ".m4a") || ends_with(name, ".aac")) return KIND_SOUND;
     if (ends_with(name, ".png") || ends_with(name, ".jpg") || ends_with(name, ".jpeg")
         || ends_with(name, ".gif") || ends_with(name, ".webp")) return KIND_PICTURE;
     if (ends_with(name, ".html") || ends_with(name, ".htm")) return KIND_PAGE;

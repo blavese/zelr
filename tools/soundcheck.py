@@ -32,8 +32,8 @@ AUDIO = ["-audiodev", "wav,id=a0,path=" + WAV.replace("\\", "/"),
          "-device", "hda-output,audiodev=a0"]
 
 
-def read_wav(path):
-    """Mono samples and the rate.
+def read_wav(path, channel=0):
+    """One channel's samples (the first unless asked) and the rate.
 
     Parsed by hand rather than with the wave module, which refuses a file
     whose length fields are zero. QEMU writes those on the way out, and a
@@ -74,8 +74,9 @@ def read_wav(path):
     if channels < 2:
         return rate, list(values)
 
-    # One channel of it is enough, and both carry the same thing here.
-    return rate, list(values[::channels])
+    # One channel at a time: here both carry the same thing, and m4acheck
+    # puts a different pitch in each.
+    return rate, list(values[min(channel, channels - 1)::channels])
 
 
 def loud_runs(samples, rate, floor=2000, min_ms=120):

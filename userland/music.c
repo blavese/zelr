@@ -12,9 +12,19 @@
  * Nearest sample rather than anything cleverer: the arithmetic is integer,
  * this is a music player on an operating system with no floating point, and
  * the difference is audible only to somebody listening for it.
+ *
+ * And AAC, which is what most music bought or ripped now is: an .m4a (an
+ * MP4 holding an AAC track) is read whole and its frames found from its own
+ * sample tables (mp4.h, mp4_index); an .aac is ADTS, the frames one after
+ * another with a header each. Either is decoded by the stream player's
+ * decoder (aac.h), 1024 frames at a time as they are needed, and stepped to
+ * the card's rate as a WAV file's samples are.
  */
 #include "zelr.h"
 #include "ui.h"
+#include "alloc.h"
+#include "aac.h"
+#include "mp4.h"
 
 #define MAX_FILES  64
 #define NAME_MAX   64
@@ -45,6 +55,20 @@ static char  status[96];
 static short out[CHUNK * 2];
 static unsigned char in_buf[CHUNK * 4];
 
+/* The AAC file playing, when it is one: all of it, where each frame is (an
+   .m4a's) or where the next header is (ADTS), the decoder, and the last
+   frame decoded. */
+#define AAC_FILE_MAX (64 * 1024 * 1024)
+static int   is_aac;
+static u8   *aac_file;
+static u32   aac_file_len;
+static mp4_entry *aac_frames;
+static int   aac_nframes, aac_next;
+static u32   aac_adts_at;
+static aac_dec aac_d;
+static short aac_pcm[AAC_FRAME * AAC_MAX_CH];
+static u32   aac_have;                 /* frames of it in aac_pcm */
+
 /* --- little helpers -------------------------------------------------------- */
 
 static void copy_str(char *dst, int cap, const char *src) {
@@ -67,16 +91,21 @@ static void join(char *dst, int cap, const char *dir, const char *name) {
     dst[n] = 0;
 }
 
-static int is_wav(const char *name) {
-    int n = 0;
+static int ends_in(const char *name, const char *ext) {
+    int n = 0, e = 0;
     while (name[n]) n++;
-    if (n < 5) return 0;
-    const char *e = name + n - 4;
-    return (e[0] == '.'
-            && (e[1] == 'w' || e[1] == 'W')
-            && (e[2] == 'a' || e[2] == 'A')
-            && (e[3] == 'v' || e[3] == 'V'));
+    while (ext[e]) e++;
+    if (n <= e) return 0;
+    for (int i = 0; i < e; i++) {
+        char c = name[n - e + i];
+        if (c >= 'A' && c <= 'Z') c = (char)(c + 32);
+        if (c != ext[i]) return 0;
+    }
+    return 1;
 }
+
+static int is_wav(const char *name) { return ends_in(name, ".wav"); }
+static int is_aac_name(const char *name) { return ends_in(name, ".m4a") || ends_in(name, ".aac"); }
 
 static u32 le32(const unsigned char *p) {
     return (u32)p[0] | ((u32)p[1] << 8) | ((u32)p[2] << 16) | ((u32)p[3] << 24);
@@ -93,7 +122,7 @@ static void say(const char *s) { copy_str(status, sizeof(status), s); }
 static void scan_dir(const char *dir) {
     zelr_stat st;
     for (int i = 0; nsongs < MAX_FILES && readdir(dir, i, &st) == 1; i++) {
-        if (st.is_dir || !is_wav(st.name)) continue;
+        if (st.is_dir || !(is_wav(st.name) || is_aac_name(st.name))) continue;
         song_t *s = &songs[nsongs++];
         copy_str(s->name, NAME_MAX, st.name);
         join(s->path, PATH_MAX, dir, st.name);
@@ -117,10 +146,107 @@ static void rescan(void) {
  * particular order or to be the only ones there, so this walks the file
  * rather than assuming the layout every writer happens to use.
  */
-static int open_song(const song_t *s) {
-    if (fd >= 0) { close(fd); fd = -1; }
-    playing = 0;
+static void aac_close_file(void) {
+    if (aac_file) free(aac_file);
+    if (aac_frames) free(aac_frames);
+    aac_file = 0;
+    aac_frames = 0;
+    aac_file_len = 0;
+    aac_nframes = aac_next = 0;
+    aac_have = 0;
+    is_aac = 0;
+}
 
+/* The one track of an .m4a that is AAC: low complexity, or HE-AAC, whose
+   low complexity part is played (at its own rate, without the top half the
+   extension would add). */
+static const mp4_track *aac_track(const mp4_init *m) {
+    for (int i = 0; i < m->n; i++)
+        if (m->t[i].kind == MP4_AUDIO && (m->t[i].aot == 2 || m->t[i].aot == 5 || m->t[i].aot == 29))
+            return &m->t[i];
+    return 0;
+}
+
+static int open_aac(const song_t *s) {
+    zelr_stat st;
+    if (stat(s->path, &st) < 0 || st.is_dir) { say("cannot open it"); return 0; }
+    if (st.size > AAC_FILE_MAX) { say("too long: 64 MB at most"); return 0; }
+    aac_file = (u8 *)malloc(st.size + 1);
+    if (!aac_file) { say("not enough memory for it"); return 0; }
+    if (slurp(s->path, (char *)aac_file, (int)st.size + 1) != (int)st.size) {
+        say("cannot read it");
+        aac_close_file();
+        return 0;
+    }
+    aac_file_len = st.size;
+
+    int sfi, chans;
+    if (ends_in(s->name, ".aac")) {
+        aac_adts h;
+        if (!aac_adts_read(aac_file, (int)aac_file_len, &h)) { say("not an aac file this can read"); aac_close_file(); return 0; }
+        sfi = h.sfi;
+        chans = h.channels;
+        aac_adts_at = 0;
+    } else {
+        static mp4_init init;
+        if (mp4_parse_init(aac_file, aac_file_len, &init) < 0) { say("not an m4a this can read"); aac_close_file(); return 0; }
+        const mp4_track *t = aac_track(&init);
+        if (!t) { say("it holds no aac sound"); aac_close_file(); return 0; }
+        aac_nframes = mp4_index(aac_file, t, &aac_frames, &init);
+        if (aac_nframes <= 0) { say(aac_nframes < 0 ? init.why : "there is nothing in it"); aac_close_file(); return 0; }
+        sfi = t->sfi;
+        chans = t->channels ? t->channels : 2;
+    }
+    if (!aac_open(&aac_d, sfi, chans)) {
+        say(chans > AAC_MAX_CH ? "only mono and stereo are played" : "its rate is not one this can play");
+        aac_close_file();
+        return 0;
+    }
+    src_rate = (u32)AAC_RATES[aac_d.rate_idx].rate;
+    src_chans = (u32)aac_d.channels;
+    src_bits = 16;
+    frac = 0;
+    step = (u32)(((u64)src_rate << 16) / (dev_rate ? dev_rate : 48000));
+    is_aac = 1;
+
+    char msg[96];
+    int n = 0;
+    for (const char *p = "AAC, "; *p; p++) msg[n++] = *p;
+    n += utoa(src_rate, msg + n);
+    for (const char *p = " Hz, "; *p; p++) msg[n++] = *p;
+    for (const char *p = src_chans == 1 ? "mono" : "stereo"; *p; p++) msg[n++] = *p;
+    msg[n] = 0;
+    say(msg);
+    playing = 1;
+    return 1;
+}
+
+/* The next frame decoded into aac_pcm; 0 when there is none left. A frame
+   that will not decode is passed over, as the stream player passes one. */
+static int aac_next_frame(void) {
+    for (;;) {
+        const u8 *p;
+        int n;
+        if (aac_frames) {
+            if (aac_next >= aac_nframes) return 0;
+            mp4_entry *e = &aac_frames[aac_next++];
+            if (e->off < 0 || e->off + e->size > (long long)aac_file_len) continue;
+            p = aac_file + e->off;
+            n = (int)e->size;
+        } else {
+            aac_adts h;
+            if (aac_adts_at >= aac_file_len
+                || !aac_adts_read(aac_file + aac_adts_at, (int)(aac_file_len - aac_adts_at), &h)
+                || aac_adts_at + (u32)h.frame_len > aac_file_len) return 0;
+            p = aac_file + aac_adts_at + h.header_len;
+            n = h.frame_len - h.header_len;
+            aac_adts_at += (u32)h.frame_len;
+        }
+        if (aac_decode(&aac_d, p, n, aac_pcm) == AAC_FRAME) { aac_have = AAC_FRAME; return 1; }
+    }
+}
+
+static int open_wav(const song_t *s) {
     fd = open(s->path, O_READ);
     if (fd < 0) { say("cannot open it"); return 0; }
 
@@ -189,6 +315,23 @@ static int open_song(const song_t *s) {
     return 1;
 }
 
+/* Lets go of whatever was playing and opens what was chosen, saying on the
+   console how that went, as the status line does: a harness cannot read
+   the window. */
+static int open_song(const song_t *s) {
+    if (fd >= 0) { close(fd); fd = -1; }
+    playing = 0;
+    aac_close_file();
+    data_len = data_done = 0;
+    int ok = is_aac_name(s->name) ? open_aac(s) : open_wav(s);
+    puts(ok ? "music: playing " : "music: cannot play ");
+    puts(s->name);
+    puts(ok ? ", " : ": ");
+    puts(status);
+    puts("\n");
+    return ok;
+}
+
 /* Whether the card has a third of a second queued. Its ring holds more than
    a second (for the stream player, which must not run dry while it fetches),
    and what is in it plays whatever happens here: Stop has to be heard to
@@ -200,8 +343,37 @@ static int card_full(void) {
 
 /* One block: read source frames, step through them at the ratio, write the
    device's own rate out. Returns 0 when the file is finished. */
+static int pump_aac(void) {
+    if (card_full()) return 1;
+    u32 made = 0, pos = frac;
+    while (made < CHUNK) {
+        u32 i = pos >> 16;
+        if (i >= aac_have) {
+            /* This frame is used up: the position carries over into the
+               next, so the step stays even across the join. */
+            pos -= aac_have << 16;
+            if (!aac_next_frame()) { aac_have = 0; break; }
+            continue;
+        }
+        short l = aac_pcm[i * src_chans];
+        short r = src_chans > 1 ? aac_pcm[i * src_chans + 1] : l;
+        out[made * 2] = l;
+        out[made * 2 + 1] = r;
+        made++;
+        pos += step;
+    }
+    frac = pos;
+    /* How far through, for the bar: frames of an .m4a, bytes of ADTS. */
+    data_len = aac_frames ? (u32)aac_nframes : aac_file_len;
+    data_done = aac_frames ? (u32)aac_next : aac_adts_at;
+    if (made) sound_write(out, (int)made);
+    return made > 0;
+}
+
 static int pump(void) {
-    if (fd < 0 || !playing) return 0;
+    if (!playing) return 0;
+    if (is_aac) return pump_aac();
+    if (fd < 0) return 0;
 
     u32 src_frame = src_chans * (src_bits / 8);
     u32 left = data_len - data_done;
@@ -360,8 +532,9 @@ int main(int argc, char **argv) {
 
         if (playing && !pump()) {
             playing = 0;
-            close(fd);
+            if (fd >= 0) close(fd);
             fd = -1;
+            aac_close_file();
             say("finished");
             /* What the card still has to play of it, which is what Stop
                would have left playing: a third of a second (card_full).
@@ -384,6 +557,7 @@ int main(int argc, char **argv) {
             if (playing) {
                 playing = 0;
                 if (fd >= 0) { close(fd); fd = -1; }
+                aac_close_file();
                 say("stopped");
             } else if (selected >= 0) {
                 open_song(&songs[selected]);
@@ -411,7 +585,7 @@ int main(int argc, char **argv) {
 
         if (!nsongs) {
             face_draw(&s, UI_PAD * 2, list_y + UI_PAD,
-                      "No .wav files in /home, /music or /usb.",
+                      "No .wav, .m4a or .aac files in /home, /music or /usb.",
                       t.dim, UI_FACE_BODY);
             face_draw(&s, UI_PAD * 2, list_y + UI_PAD + 22,
                       "Copy one onto a stick and plug it in, or press Tune.",

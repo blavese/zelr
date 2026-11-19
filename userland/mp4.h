@@ -409,7 +409,7 @@ static int mp4_traf(const u8 *p, long long n, long long b, long long e, long lon
 
 /* Media segments: every moof and its samples; how many bytes were whole
    boxes (a caller keeps the rest for the next append), or -1 with why said. */
-static long long mp4_parse_media(const u8 *p, long long n, mp4_init *m, mp4_sample_fn fn, void *ctx) {
+__attribute__((unused)) static long long mp4_parse_media(const u8 *p, long long n, mp4_init *m, mp4_sample_fn fn, void *ctx) {
     long long at = 0, b, e, done = 0;
     u32 type;
     for (;;) {
