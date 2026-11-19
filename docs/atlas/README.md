@@ -113,6 +113,18 @@ numbered files are still to 6048716; where they disagree with this list, this li
   built unsigned program; h264test in the machine still checks the decoder against Windows' answers in h264data.h.
   Gate 74 steps (one out, one in).
 
+### 0.177.0
+
+- **A double click selects a word, a triple click its paragraph (11, 12, 14)**: browser.c counts presses in the page's
+  view while each comes within `DOUBLE_TICKS` (50, half a second) of the last and within 5 px of it (`clicks`). The
+  second selects the word holding the point (`word_at`, exact: between words nothing), the third the run of words around
+  it inside its nearest block (`sel_paragraph`: `dom_is_block` up from the word's node in `laid`, then outward through
+  LK_TEXT items while `node_within` it); either is set as two points at the words' middles (`sel_words`), so it is kept
+  like a drag's, and `sel_kept` stops the release clearing it. After the second click the page hears dblclick (jsdom.h
+  `jsdom_dblclick`: `jd_mouse_event` with detail 2), fired after the click as browsers order them. pagetest one more
+  (390); selectcheck two more (13): a double click on gamma ("1 word: gamma", and the page's block turned green by its
+  dblclick listener), a triple on zeta ("4 words: epsilon zeta eta theta", the link inside the paragraph included).
+
 ### 0.176.0
 
 - **Words selected in the browser (11, 14)**: browser.c keeps a selection as two points on the page (`sel_ax/ay`,

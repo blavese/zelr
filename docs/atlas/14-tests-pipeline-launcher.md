@@ -894,7 +894,8 @@ Changed in 0.176.1, not yet in the table below:
   runs Windows programs, which Smart App Control flags. It can still be run by hand where that is wanted.
 
 Added in 0.176.0, not yet in the table below:
-- **`selectcheck.py`** (gate `selecttest`, full; 11 checks). /home/sel/s.htm on a mkfat volume: two paragraphs of words
+- **`selectcheck.py`** (gate `selecttest`, full; 13 checks since 0.177.0: a double click on gamma and a triple on zeta,
+  pressed with `mouse_button` 0.12 s apart, the pointer still; the page's dblclick listener turns a block green). /home/sel/s.htm on a mkfat volume: two paragraphs of words
   at 28px, each word in a span of its own background colour (the last, theta, a link to t.htm) so each word's box is
   found by colour. `mon.drag` from beta to zeta must say "browser selection: 5 words: beta gamma delta/epsilon zeta";
   the selection's colour counted inside each word's box (over 100 in the five, under 10 in alpha, eta, theta); ctrl+C

@@ -229,7 +229,8 @@ keep the button for it. Dragging across a page selects its words, whole
 words from where the button went down to where the pointer is; ctrl+C
 copies them, a line apart where the page has them on lines apart, ctrl+A
 selects every word, and the right button's menu offers to copy them or to
-look them up. Where it has been is kept
+look them up. A double click selects the word under the pointer and a
+triple click its paragraph; the page hears `dblclick` as well. Where it has been is kept
 on the disk and listed a day at a time at about:history, and as an address
 is typed the bar suggests the bookmarks and then the history that match it.
 The start page lists the pages visited last. A file a server sends to be kept goes to `/home/downloads`, a file
