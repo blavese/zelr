@@ -4959,13 +4959,14 @@ static int jd_click_ctrl, jd_click_shift;
    blocker has it; spent by the first window it opens. */
 static int jd_activation;
 
-static int jd_fire_click(int node, int trusted, int x, int y) {
-    if (!jd_open || node < 0 || jd_spent()) return 0;
-    jobj *ev = jd_new_event(jd_evkind("MouseEvent"), "click", 1, 1);
+/* A mouse event where the reader's pointer is, x and y in the page's view:
+   a click (button 0), or the right button's contextmenu (button 2). */
+static jobj *jd_mouse_event(const char *type, int node, int trusted, int x, int y, int button) {
+    jobj *ev = jd_new_event(jd_evkind("MouseEvent"), type, 1, 1);
     if (!ev) return 0;
     js_set(&jd_J, ev, "isTrusted", js_bool(trusted));
     js_set(&jd_J, ev, "composed", js_bool(1));
-    js_set(&jd_J, ev, "detail", js_num(1));
+    js_set(&jd_J, ev, "detail", js_num(button ? 0 : 1));
     js_set(&jd_J, ev, "view", js_from_obj(jd_J.global_obj));
     js_set(&jd_J, ev, "clientX", js_num(x));
     js_set(&jd_J, ev, "clientY", js_num(y));
@@ -4979,9 +4980,18 @@ static int jd_fire_click(int node, int trusted, int x, int y) {
     jd_box(node, &bx, &by, &bw, &bh);
     js_set(&jd_J, ev, "offsetX", js_num(x - bx));
     js_set(&jd_J, ev, "offsetY", js_num(y - by));
-    js_set(&jd_J, ev, "which", js_num(1));
+    js_set(&jd_J, ev, "button", js_num(button));
+    js_set(&jd_J, ev, "buttons", js_num(button == 2 ? 2 : 0));
+    js_set(&jd_J, ev, "which", js_num(button + 1));
     js_set(&jd_J, ev, "ctrlKey", js_bool(trusted && jd_click_ctrl));
     js_set(&jd_J, ev, "shiftKey", js_bool(trusted && jd_click_shift));
+    return ev;
+}
+
+static int jd_fire_click(int node, int trusted, int x, int y) {
+    if (!jd_open || node < 0 || jd_spent()) return 0;
+    jobj *ev = jd_mouse_event("click", node, trusted, x, y, 0);
+    if (!ev) return 0;
     jval tv = jd_el_value(&jd_J, node);
     int was = jd_activation;
     if (trusted) jd_activation = 1;
@@ -6277,6 +6287,17 @@ __attribute__((unused)) static int jsdom_click_with(int node, int x, int y, int 
     return r;
 }
 __attribute__((unused)) static int jsdom_click(int node) { return jd_fire_click(node, 1, 0, 0); }
+
+/* The right button pressed on an element. The page hears contextmenu first
+   and may draw a menu of its own, which it says by preventing it: the
+   browser's menu is not opened then. */
+__attribute__((unused)) static int jsdom_context_menu(int node, int x, int y) {
+    if (!jd_open || node < 0 || jd_spent()) return 0;
+    jobj *ev = jd_mouse_event("contextmenu", node, 1, x, y, 2);
+    if (!ev) return 0;
+    jval tv = jd_el_value(&jd_J, node);
+    return jd_dispatch_to(ev, tv, tv);
+}
 
 /* What the reader did to a form, told to the page as it happens: typing
    (input), ticking a box (input and change), and sending it (submit, which

@@ -881,6 +881,28 @@ int main(void) {
         ok("a plain click it keeps for itself", jsdom_click(dom_by_id(&page, "a")) == 1);
         oks("and that one held neither", content_of(dom_by_id(&page, "out")), "false false");
     }
+    /* The right button: the page hears contextmenu, as a MouseEvent on the
+       element with button 2, and one that draws its own menu prevents it,
+       so the browser opens none of its own. */
+    {
+        load("<body><a id=a href='/next'>go</a><p id=b>plain</p><p id=out>none</p><p id=up>none</p>"
+             "<script>document.getElementById('a').addEventListener('contextmenu', function (e) {"
+             " document.getElementById('out').textContent = e.type + ' ' + e.button + ' ' + (e instanceof MouseEvent)"
+             " + ' ' + e.isTrusted + ' ' + e.cancelable; e.preventDefault(); });"
+             "document.addEventListener('contextmenu', function (e) {"
+             " document.getElementById('up').textContent = 'heard ' + e.target.id; });"
+             "</script></body>");
+        char err[128];
+        int changed = 0;
+        run_scripts(&page, err, (int)sizeof(err), &changed);
+        ok("a page that draws its own menu prevents the browser's",
+           jsdom_context_menu(dom_by_id(&page, "a"), 4, 4) == 1);
+        oks("and was told it was the right button, as a mouse event",
+            content_of(dom_by_id(&page, "out")), "contextmenu 2 true true true");
+        ok("one that only listens leaves the browser its menu",
+           jsdom_context_menu(dom_by_id(&page, "b"), 4, 30) == 0);
+        oks("and heard it bubble up to the document", content_of(dom_by_id(&page, "up")), "heard b");
+    }
     /* window.open opens a window only in the reader's own click or key, as
        a popup blocker has it, and one a click. */
     {

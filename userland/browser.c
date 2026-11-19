@@ -5429,6 +5429,215 @@ static void open_window(const char *address) {
     putc('\n');
 }
 
+/* A link followed, from a click or the right button's menu: a stream to the
+   player (play.c, a program of its own, so the page stays where it is and
+   the stream's waiting is not its), one of the browser's own pages only from
+   another of them (a site's link cannot forget the history), anything else
+   to the address it was joined to. Whether there is a page to load. */
+static int follow_link(const char *href, const char *joined) {
+    if (w_starts_fold(href, "play:")) {
+        if (spawn_arg("/bin/play", href + 5) < 0) puts("browser: the player could not be started\n");
+        return 0;
+    }
+    if (w_starts_fold(href, "about:") && hist_at >= 0 && w_starts_fold(hist[hist_at].text, "about:")) {
+        set_address(href);
+        push_history(href);
+        return 1;
+    }
+    if (!joined || !joined[0]) return 0;
+    set_address(joined);
+    push_history(joined);
+    nav_from_here();
+    return 1;
+}
+
+/* --- the right button's menu -----------------------------------------------
+ *
+ * What is under the pointer decides what it offers: a link (open it, open it
+ * in a window of its own, copy its address, save what it links to), a
+ * picture (open it, copy its address, save it), and always the page (back,
+ * forward, reload, save it, copy its address). What a row acts on is taken
+ * as the menu opens, because the page can be laid out again under it before
+ * a row is chosen and a link's number is then another link's. The page
+ * hears contextmenu first and may keep the press for a menu of its own
+ * (jsdom_context_menu).
+ *
+ * The rows are said on the console as it opens ("browser menu: open the
+ * link; ...") and what a row did once chosen ("browser menu: copied ..."),
+ * which is how menucheck.py finds a row and knows what it did. */
+
+enum { MA_LINK_OPEN, MA_LINK_WINDOW, MA_LINK_COPY, MA_LINK_SAVE,
+       MA_PIC_OPEN, MA_PIC_COPY, MA_PIC_SAVE,
+       MA_BACK, MA_FORWARD, MA_RELOAD, MA_PAGE_SAVE, MA_PAGE_COPY, MA_COUNT };
+static const char *const MENU_LABEL[MA_COUNT] = {
+    "open the link", "open it in a new window", "copy the link's address", "save what it links to",
+    "open the picture", "copy the picture's address", "save the picture",
+    "back", "forward", "reload", "save the page", "copy the page's address",
+};
+static int  menu_open, menu_x, menu_y, menu_n, menu_w;
+static int  menu_swallow;              /* the release after a press that put it away */
+static int  menu_act[MA_COUNT];
+static const char *menu_rows[MA_COUNT];
+static char menu_href[URL_TEXT];       /* the link as the page wrote it */
+static char menu_link[URL_TEXT];       /* and joined to the page */
+static char menu_pic[URL_TEXT];
+
+static void menu_add(int act) {
+    if (menu_n >= MA_COUNT) return;
+    menu_act[menu_n] = act;
+    menu_rows[menu_n++] = MENU_LABEL[act];
+}
+
+/* Where it is drawn: where it was asked for, pulled in from the window's
+   edges as ui_menu pulls it. */
+static void menu_place(int w, int h, int *x, int *y) {
+    int mh = menu_n * UI_ROW + UI_GAP * 2;
+    *x = menu_x + menu_w > w ? w - menu_w : menu_x;
+    *y = menu_y + mh > h ? h - mh : menu_y;
+    if (*x < 0) *x = 0;
+    if (*y < 0) *y = 0;
+}
+
+static void menu_build(int li, int node, int x, int y) {
+    menu_n = 0;
+    menu_href[0] = menu_link[0] = menu_pic[0] = 0;
+    url_t u;
+    if (li >= 0) {
+        w_copy(menu_href, sizeof(menu_href), page.text + page.links[li].href, sizeof(menu_href));
+        if (link_target(li, &u)) url_text(&u, menu_link, sizeof(menu_link));
+        int play = w_starts_fold(menu_href, "play:"), about = w_starts_fold(menu_href, "about:");
+        if (play || menu_link[0]) menu_add(MA_LINK_OPEN);
+        if (!play && !about && menu_link[0]) {
+            menu_add(MA_LINK_WINDOW);
+            menu_add(MA_LINK_COPY);
+            menu_add(MA_LINK_SAVE);
+        }
+    }
+    /* The picture the page draws there, from the source it chose (srcset,
+       a lazy loader's data-src); one written into the page as data has no
+       address to give. */
+    if (node >= 0 && node < doc.count && doc.nodes[node].kind == DN_ELEMENT && doc.nodes[node].tag == T_IMG) {
+        const char *s = pic_source(node);
+        if (s && !w_starts_fold(s, "data:") && url_join(&base, s, &u)) {
+            url_text(&u, menu_pic, sizeof(menu_pic));
+            menu_add(MA_PIC_OPEN);
+            menu_add(MA_PIC_COPY);
+            menu_add(MA_PIC_SAVE);
+        }
+    }
+    if (hist_at > 0) menu_add(MA_BACK);
+    if (hist_at + 1 < hist_n) menu_add(MA_FORWARD);
+    menu_add(MA_RELOAD);
+    /* save_page keeps neither the browser's own pages nor a file. */
+    if (hist_at >= 0 && !w_starts_fold(hist[hist_at].text, "about:")
+        && !w_starts_fold(hist[hist_at].text, "file:"))
+        menu_add(MA_PAGE_SAVE);
+    if (hist_at >= 0) menu_add(MA_PAGE_COPY);
+    /* As wide as its longest row in the toolkit's face, and a little. */
+    menu_w = 160;
+    for (int i = 0; i < menu_n; i++) {
+        int rw = face_w(menu_rows[i], UI_FACE_BODY) + UI_PAD * 3;
+        if (rw > menu_w) menu_w = rw;
+    }
+    menu_x = x;
+    menu_y = y;
+    menu_open = 1;
+    puts("browser menu: ");
+    for (int i = 0; i < menu_n; i++) {
+        if (i) puts("; ");
+        puts(menu_rows[i]);
+    }
+    putc('\n');
+}
+
+static void menu_copy(const char *what, const char *addr) {
+    clip_set(addr, w_len(addr));
+    say("copied ", what);
+    puts("browser menu: copied ");
+    puts(addr);
+    putc('\n');
+}
+
+/* What an address holds, kept in the downloads folder without going to it:
+   a picture, or what a link links to. Asked for as the page would ask for
+   it and saved as a download followed to is (a stretch at a time past what
+   one answer holds), and said the same way. */
+static void save_address(const char *addr) {
+    url_t u;
+    response_t r;
+    char name[96], path[160];
+    int rc = -1;
+    if (url_parse(addr, &u)) {
+        web_accept = "*/*";
+        rc = web_get(&u, replybuf, REPLY_MAX, &r);
+        web_accept = 0;
+    }
+    if (rc <= 0 || rc >= 400 || r.cut) {
+        say("it could not be asked for to save it: ", addr);
+        puts("browser menu: not saved: ");
+        puts(addr);
+        putc('\n');
+        return;
+    }
+    download_name(&r, &u, name, (int)sizeof(name));
+    int got = r.truncated ? save_download_rest(&u, &r, name, path, (int)sizeof(path))
+                          : save_download(r.body, r.len, name, path, (int)sizeof(path));
+    if (got < 0) {
+        say("not saved: ", name);
+        puts("browser menu: not saved: ");
+        puts(name);
+        putc('\n');
+        return;
+    }
+    char n[16], said[240];
+    number_into(n, got);
+    int w = 0;
+    for (const char *p = path; *p && w < 160; p++) said[w++] = *p;
+    for (const char *p = ", "; *p; p++) said[w++] = *p;
+    for (const char *p = n; *p; p++) said[w++] = *p;
+    for (const char *p = " bytes, read back the same"; *p; p++) said[w++] = *p;
+    said[w] = 0;
+    say("saved ", said);
+    puts("browser menu: saved ");
+    puts(said);
+    putc('\n');
+    char told[160];
+    int k = 0;
+    for (const char *p = "saved "; *p; p++) told[k++] = *p;
+    for (const char *p = name; *p && k < 80; p++) told[k++] = *p;
+    for (const char *p = " in " DOWNLOADS; *p; p++) told[k++] = *p;
+    told[k] = 0;
+    desktop_notice(told);
+}
+
+/* A row chosen. Whether there is a page to load. */
+static int menu_do(int act) {
+    switch (act) {
+    case MA_LINK_OPEN:   return follow_link(menu_href, menu_link);
+    case MA_LINK_WINDOW: open_window(menu_link); return 0;
+    case MA_LINK_COPY:   menu_copy("the link's address", menu_link); return 0;
+    case MA_LINK_SAVE:   save_address(menu_link); return 0;
+    case MA_PIC_OPEN:    return follow_link(menu_pic, menu_pic);
+    case MA_PIC_COPY:    menu_copy("the picture's address", menu_pic); return 0;
+    case MA_PIC_SAVE:    save_address(menu_pic); return 0;
+    case MA_BACK:
+    case MA_FORWARD: {
+        int to = hist_at + (act == MA_BACK ? -1 : 1);
+        if (to < 0 || to >= hist_n) return 0;
+        hist[hist_at].scroll = scroll;
+        hist_at = to;
+        set_address(hist[hist_at].text);
+        return 1;
+    }
+    case MA_RELOAD:      return 1;
+    case MA_PAGE_SAVE:   save_page(); return 0;
+    case MA_PAGE_COPY:
+        if (hist_at >= 0) menu_copy("the page's address", hist[hist_at].text);
+        return 0;
+    }
+    return 0;
+}
+
 static void announce_page(void) {
     if (announce_owed) hs_note(announce_at, title);
     announce_owed = 0;
@@ -5580,6 +5789,13 @@ int main(int argc, char **argv) {
         for (int ki = 0; ki < in.nkeys; ki++) {
             u32 raw = in.keys[ki];
             u32 k = KEY_CODE(raw);
+            /* Escape puts the right button's menu away and does nothing
+               else: the page and the bar never hear it. */
+            if (menu_open && k == 27) {
+                menu_open = 0;
+                dirty = 1;
+                continue;
+            }
             /* ctrl+L is the address bar's, whatever has the keyboard: what
                is typed next replaces the address, as after a click. */
             if (KEY_CTRL(raw) && key_ctrl_letter(raw) == 'l') {
@@ -5820,7 +6036,8 @@ int main(int argc, char **argv) {
          * the half a frame anybody can catch is a window with its toolbar and
          * part of a page rather than a page with no window around it. */
         if (in.mx != last_mx || in.my != last_my) dirty = 1;
-        if (in.nkeys || in.pressed || in.released || in.middle_pressed || in.middle_released || scrolled)
+        if (in.nkeys || in.pressed || in.released || in.middle_pressed || in.middle_released || in.right_pressed
+            || scrolled)
             dirty = 1;
         if (scroll != last_scroll || want_load) dirty = 1;
         last_mx = in.mx;
@@ -5904,12 +6121,73 @@ int main(int argc, char **argv) {
             node_under = page_node(lay_node_at(&page, dx, dy));
         }
 
+        /* The right button's menu takes the pointer while it is open: a row
+           released on is chosen, a press anywhere else puts it away (and
+           the release that follows it is nobody's), and what is under it is
+           not the page's to hover or click. A right press elsewhere opens
+           another, below. */
+        int menu_on = 0, menu_pick = -1;
+        if (menu_open) {
+            int mx, my;
+            menu_place(w, h, &mx, &my);
+            int mh = menu_n * UI_ROW + UI_GAP * 2;
+            menu_on = in.mx >= mx && in.mx < mx + menu_w && in.my >= my && in.my < my + mh;
+            if (menu_on) {
+                over_link = -1;
+                node_under = -1;
+                in.right_pressed = 0;
+            }
+            if (in.released && menu_on) {
+                int row = (in.my - my - UI_GAP) / UI_ROW;
+                if (in.my - my >= UI_GAP && row >= 0 && row < menu_n) {
+                    menu_pick = menu_act[row];
+                    menu_open = 0;
+                }
+                in.released = 0;
+                in.pressed = 0;
+            } else if ((in.pressed && !menu_on) || in.middle_pressed || scrolled) {
+                menu_open = 0;
+                menu_swallow = in.pressed || in.middle_pressed;
+                in.pressed = 0;
+                in.middle_pressed = 0;
+            }
+            if (!menu_open) dirty = 1;
+        }
+        if (menu_swallow && (in.released || in.middle_released)) {
+            in.released = 0;
+            in.middle_released = 0;
+            menu_swallow = 0;
+        }
+        if (menu_pick >= 0) {
+            if (menu_do(menu_pick)) want_load = 1;
+            dirty = 1;
+        }
+
+        /* The right button on the page: the page hears contextmenu first,
+           and a page that draws a menu of its own keeps the press. */
+        if (in.right_pressed && in.my > view_y && in.my < view_y + view_h
+            && in.mx > view_x && in.mx < view_x + view_w + UI_SCROLL_W) {
+            in.right_pressed = 0;
+            int kept = node_under >= 0 && jsdom_live() && jsdom_context_menu(node_under, dx, in.my - view_y);
+            if (jsdom_live() && jsdom_changed()) {
+                relayout(view_w - UI_PAD * 2);
+                over_link = lay_link_at(&page, dx, dy);
+            }
+            if (kept) {
+                menu_open = 0;
+                puts("browser menu: kept by the page\n");
+            } else {
+                menu_build(over_link, node_under, in.mx, in.my);
+            }
+            dirty = 1;
+        }
+
         /* :hover is a style, so an element coming under the pointer changes
            what the page looks like and the page has to be laid out again.
            Only when the element actually changed: doing it per frame lays
            out a whole document sixty times a second for a pointer that has
            not left the word it was on. */
-        if (node_under != last_hover) {
+        if (!menu_on && node_under != last_hover) {
             last_hover = node_under;
             hover_node = node_under;
             int reach[16], nr = css_hover_reach(&sheet, laid ? laid : &doc, node_under, reach, 16);
@@ -6056,25 +6334,10 @@ int main(int argc, char **argv) {
         if (over_link >= 0 && in.released) {
             in.released = 0;
             url_t next;
-            const char *href = page.text + page.links[over_link].href;
-            /* A stream, to the player: a program of its own (play.c), so the
-               page stays where it is and the stream's waiting is not its. */
-            if (w_starts_fold(href, "play:")) {
-                if (spawn_arg("/bin/play", href + 5) < 0) puts("browser: the player could not be started\n");
-            } else if (w_starts_fold(href, "about:") && hist_at >= 0 && w_starts_fold(hist[hist_at].text, "about:")) {
-                /* One of the browser's own pages, from another of them only:
-                   a site's link cannot forget the history. */
-                set_address(href);
-                push_history(href);
-                want_load = 1;
-            } else if (link_target(over_link, &next)) {
-                char text_of[URL_TEXT];
-                url_text(&next, text_of, sizeof(text_of));
-                set_address(text_of);
-                push_history(text_of);
-                nav_from_here();
-                want_load = 1;
-            }
+            char text_of[URL_TEXT];
+            text_of[0] = 0;
+            if (link_target(over_link, &next)) url_text(&next, text_of, sizeof(text_of));
+            if (follow_link(page.text + page.links[over_link].href, text_of)) want_load = 1;
         }
 
         /* --- the toolbar --------------------------------------------------- */
@@ -6150,6 +6413,14 @@ int main(int argc, char **argv) {
                      page.height < view_h ? view_h : page.height);
         /* Over everything, under the bar. */
         if (sg_n > 0 && bar.focused) draw_suggestions(&s, &t);
+        /* And the right button's menu over that: drawn only, since what it
+           was pointed at was settled before the page was. */
+        if (menu_open) {
+            int mx, my;
+            menu_place(w, h, &mx, &my);
+            in.released = 0;          /* a row is chosen above, not here */
+            ui_menu(&s, &in, &t, mx, my, menu_w, menu_rows, menu_n);
+        }
 
         win_commit(win);
         browser_wait(win);
