@@ -887,6 +887,17 @@ Added in 0.165.0, not yet in the table below:
   about:history?forget is not followed (still 3); after the server's /peek, about:history's second entry (a, a file;
   the links found as bands of accent inside the window) opens; the forget button (found by its colour) leaves 0.
 
+Added in 0.178.0, not yet in the table below:
+- **`zipcheck.py`** (gate `ziptest_files`, full; 11 checks). /home/arch on a mkfat volume: t.zip and bad.zip written by
+  Python's zipfile (a deflated readme.txt, notes/a.txt stored, notes/b.txt deflated, and an entry ../evil.txt);
+  bad.zip has a byte of a.txt changed. Files from the terminal on /home/arch, by keys: Enter on t.zip ("files:
+  /home/arch/t.zip"), the listing read from "files: NAME - kind" as the selection moves (notes a folder, readme.txt
+  text, nothing with a dot); Enter on readme.txt ("opened from the archive", /tmp/readme.txt the same bytes, the editor
+  closed with alt+q); Delete refused ("only read here"); ctrl+E ("extracted 3 files into t; not 1: a name that would
+  write outside the folder", the three files' bytes under /home/arch/t, no evil.txt anywhere); Backspace out; bad.zip
+  second (after the folder t); ctrl+E ("extracted 2 files into bad; not 2:", readme.txt whole, a.txt not written).
+- **`ziptest`** (ring3check's SUITES): archives from tools/genzip.py (userland/zipdata.h), 18 checks.
+
 Changed in 0.176.1, not yet in the table below:
 - **`check_launcher.py`** (gate `launchercheck`, fast and up): every `-m` in launcher/Emulator.cs and zelr.bat (not rem
   lines) is 512 or more, and at least one was found. It failed on a launcher put back to 64 and a zelr.bat line at 256.

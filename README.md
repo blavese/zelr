@@ -173,7 +173,13 @@ its list of places and an icon on the desktop) rather than taking it off
 the disk: ctrl+z there puts
 it back where it came from, and Delete there, or ctrl+delete for all of it,
 deletes for good on a second press. A stick's files are deleted for good,
-as before. Settings' Storage page says how much of the disk and of a stick
+as before. A .zip is gone into in Files like a folder: what is in it is
+listed from the archive's own directory, a file in it opens (taken out into
+`/tmp` first), and ctrl+E takes all of it out into a folder beside it, each
+file checked against the CRC-32 the archive kept. Stored and deflated files
+are read, which is nearly every archive; one locked with a password or
+compressed some other way is refused saying so, and a name that would write
+outside the folder is not written. Settings' Storage page says how much of the disk and of a stick
 is used, as the kernel counts it (`/sys/storage`), and what the trash is
 holding, with a button that opens Files on it. The machine's own clock is taken to keep UTC, as QEMU's does;
 one that keeps local time instead, as Windows keeps the clock of a machine
@@ -477,6 +483,7 @@ instead.
     python tools/namecheck.py   save long names and read them back
     python tools/filescheck.py  copy, move and rename in the file manager, from its keys
     python tools/trashcheck.py  delete into the trash, put back with ctrl+z, delete for good, empty it
+    python tools/zipcheck.py    go into a .zip in Files, open a file from it, extract it, refuse a damaged one
     python tools/downloadcheck.py  a 12 MB download fetched in parts with Range, read back byte for byte
     python tools/notescheck.py  select all, copy, paste, save and undo in the editor, from its keys
     python tools/timecheck.py   set the time zone from the shell and in Settings, read the clocks and a file's time

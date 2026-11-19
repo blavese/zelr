@@ -113,6 +113,27 @@ numbered files are still to 6048716; where they disagree with this list, this li
   built unsigned program; h264test in the machine still checks the decoder against Windows' answers in h264data.h.
   Gate 74 steps (one out, one in).
 
+### 0.178.0
+
+- **Archives in Files (10, 13, 14)**: `userland/zip.h` reads ZIP from PKWARE's APPNOTE: `zip_open` finds the end record
+  from the end back past the longest comment (it must end the file) and checks the central directory lies inside;
+  `zip_next` walks the directory (the archive's own account: the local headers of an archive written as a stream have
+  no sizes, flag bit 3); `zip_extract` takes stored (0) and deflated (8, `inflate_raw`) entries out and checks the
+  CRC-32 (`zip_crc32`, table made at first use); refused by name: other methods, a password (flag bit 0), ZIP64,
+  split archives. files.c: `KIND_ARCHIVE` (.zip) is gone into like a folder: `arc_open` reads it whole (64 MB at most,
+  `read_whole`) and cwd reads as the archive's path then its folders (`arc_path`, `in_archive`, `arc_inner`);
+  `reload_archive` lists one level of the directory, folders made from names, nothing whose part starts with a dot
+  (".." above all); going up past it lets it go (`arc_close`). A file opened from it is taken out into /tmp under its
+  name and opened by its kind (`take_out`). Extract (ctrl+E, File menu, right-click menu; `extract_selected`,
+  `extract_all`) takes everything into a folder beside the archive named after it ("t 2" when taken), making folders
+  as names need them (`make_parents`), skipping a name with a ".." part, a leading slash, a backslash or a colon
+  (`safe_name`: zip slip), and says "extracted N files into NAME" and what it did not write and why. Copy, cut,
+  paste, rename and delete inside an archive say it is only read there (`read_only_here`). Files clears its status
+  line when it goes to another folder (`go_to`, `go_up`): a message about the folder left stayed. New program
+  `ziptest` (ring3check, 18 checks) on archives tools/genzip.py writes with Python's zipfile into `zipdata.h` and
+  spoils (a stored byte changed, bzip2 said, a password said, the end cut off); new harness zipcheck.py (11), gate step
+  `ziptest_files` (75 steps).
+
 ### 0.177.0
 
 - **A double click selects a word, a triple click its paragraph (11, 12, 14)**: browser.c counts presses in the page's
