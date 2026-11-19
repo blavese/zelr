@@ -113,6 +113,16 @@ numbered files are still to 6048716; where they disagree with this list, this li
   built unsigned program; h264test in the machine still checks the decoder against Windows' answers in h264data.h.
   Gate 74 steps (one out, one in).
 
+### 0.191.0
+
+- **Pictures zoomed, moved about and turned (10, 14)**: pictures.c `zoom16` (0 fitted; else sixteenths, `zoom_by`
+  doubling or halving about the middle of what is shown, up to 128 = eight times, back to fitted when halving reaches
+  the fitted size), `pan_x`/`pan_y` (the picture's pixel at the room's middle, kept by `edge_at` where the picture
+  still covers the room), `scale_now`. `draw_picture` works out only the rows and columns inside the room. Keys: + or
+  =, -, 0, r or R (`rotate_right`, into new memory; zoom and pan reset); the arrows move a quarter of the room over a
+  picture bigger than it that way, and go between pictures otherwise; a drag moves it (`dragging`,
+  `drag_x/y`). The console's "N%" is the scale shown. zoomcheck, new (8), gate step `zoomtest` (87 steps).
+
 ### 0.190.0
 
 - **Files sorts by size and by date (14)**: `sort_by` (0 name, 1 size, 2 date) and `sorts_after` (folders first, then

@@ -888,6 +888,12 @@ Added in 0.165.0, not yet in the table below:
   about:history?forget is not followed (still 3); after the server's /peek, about:history's second entry (a, a file;
   the links found as bands of accent inside the window) opens; the forget button (found by its colour) leaves 0.
 
+Added in 0.191.0, not yet in the table below:
+- **`zoomcheck.py`** (gate `zoomtest`, full; 8 checks). /home/pictures/z.png, 200x100, red left half, blue right.
+  Opened by name ("z.png, 200 by 100, 100%", 10000 of each colour); `equal` ("200%", 40000 of each); twice more
+  ("800%", both colours over 20000); right (blue up and red down by 20000 each); `0` ("100%", 10000 red); `r` ("100 by
+  200, 100%", the red's mean row 60 above the blue's).
+
 Added in 0.190.0, not yet in the table below:
 - **`sortcheck.py`** (gate `sorttest`, full; 7 checks). /home/srt from mkfat (aaa.txt 2000 bytes, big.bin 30000,
   mid.txt 5000, small.txt 100, zdir/in.txt; all stamped with mkfat's one date) and fresh.txt written by the console's

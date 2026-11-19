@@ -148,7 +148,10 @@ program can (the browser does when it saves a download); the kernel compresses i
 inflated), so a screen is a hundred kilobytes or so rather than two and a
 third megabytes. Pictures, in the launcher's Media list, shows a PNG, JPEG,
 GIF or WebP with the browser's decoders, fitted to the window, and the
-arrow keys walk the rest of its folder; Files opens a picture there. The
+arrow keys walk the rest of its folder; Files opens a picture there. + and
+- make it twice or half the size (up to eight times), 0 fits it again, the
+arrows or a drag move about one bigger than the window, and r turns it a
+quarter to the right. The
 browser opens pages on the machine too: a path typed into its bar or handed
 over by Files is a `file:` address, a page's sheets and pictures are read
 from beside it, and a folder is shown as a page of what is in it, folders
@@ -518,6 +521,7 @@ instead.
     python tools/zipmakecheck.py make a zip of a folder and a file in Files, open it with Python's zipfile
     python tools/startlockcheck.py a password set: the console asks for it first, the desktop opens locked
     python tools/sortcheck.py   Files sorted by size, by date and by name, from its keys
+    python tools/zoomcheck.py   a picture made bigger, moved about, fitted again and turned, counted by colour
     python tools/downloadcheck.py  a 12 MB download fetched in parts with Range, read back byte for byte
     python tools/notescheck.py  select all, copy, paste, save, undo, find and replace in the editor, from its keys
     python tools/timecheck.py   set the time zone from the shell and in Settings, read the clocks and a file's time
