@@ -113,6 +113,17 @@ numbered files are still to 6048716; where they disagree with this list, this li
   built unsigned program; h264test in the machine still checks the decoder against Windows' answers in h264data.h.
   Gate 74 steps (one out, one in).
 
+### 0.193.0
+
+- **The notices kept (07, 14)**: wm.c `notice` now also keeps each notice (`notice_keep`: `notices[NOTICES_MAX 12]`,
+  its text and the dock clock's text at the time, the oldest let go). alt+N (`notices_toggle`) opens a panel above
+  the dock at the right (`notices_rect`, `NOTICES_W` 420, a line each, "nothing yet" when empty; `draw_notices` after
+  the network panel), and says "desktop: notices: N: NEWEST | ... | OLDEST" on the console, or "desktop: notices put
+  away". Escape, alt+N again, a press outside it, the lock and leaving the desktop put it away; a notice given while
+  it is open redraws it. It is in `desktop_is_still`, `desktop_is_steady` and `idle_ms` like the network panel, so a
+  pointer move over it draws a whole frame. The terminal's `notice TEXT` calls `desktop_notice`. noticecheck, new
+  (6), gate step `noticetest` (89 steps).
+
 ### 0.192.0
 
 - **Notes goes to a line and keeps the indent (10, 14)**: ctrl+G opens the bar as `bar_open` 2 with `goto_field`

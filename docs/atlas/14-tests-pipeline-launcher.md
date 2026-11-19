@@ -888,6 +888,12 @@ Added in 0.165.0, not yet in the table below:
   about:history?forget is not followed (still 3); after the server's /peek, about:history's second entry (a, a file;
   the links found as bands of accent inside the window) opens; the forget button (found by its colour) leaves 0.
 
+Added in 0.193.0, not yet in the table below:
+- **`noticecheck.py`** (gate `noticetest`, full; 6 checks). The terminal's `notice the first one`, `notice and a
+  second` ("notice: ..." on the console); alt-n ("desktop: notices: 2: and a second | the first one", and the screen at
+  x 700-1000, y 600-700 changed); esc ("desktop: notices put away", that part as it was); after six seconds alt-n lists
+  both again; `notice n1` to `n12`, alt-n: exactly n12 down to n1.
+
 Added in 0.192.0, not yet in the table below:
 - **`gotocheck.py`** (gate `gototest`, full; 7 checks). /home/code.txt, thirty lines "line N", the tenth "    indented
   ten", ending in a newline. `/bin/notes /home/code.txt` ("notes: opened"); ctrl-g 1 0 ret ("notes: line 10 of 31");
