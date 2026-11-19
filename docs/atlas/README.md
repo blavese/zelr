@@ -113,6 +113,23 @@ numbered files are still to 6048716; where they disagree with this list, this li
   built unsigned program; h264test in the machine still checks the decoder against Windows' answers in h264data.h.
   Gate 74 steps (one out, one in).
 
+### 0.183.0
+
+- **A screen lock (07, 10, 14)**: wm.c `lock_screen` (alt+L in `handle_shortcut`, or "Lock the screen" in the launcher's
+  Session list; "lock" alone would find the Clock first) puts a screen over everything (`draw_lock`, last in the scene:
+  `LOCK_BG`, the time, "Locked", a dot a letter, a line saying what to do) and closes the menus, panels and find bar.
+  While it is up every key is `lock_key`'s, checked at the top of `wm_key` before Escape (alt+Escape would leave the
+  desktop for the kernel's shell), and `handle_mouse` returns at once. Return checks what was typed with
+  `wm_lock_matches`: /cfg/lock is "SALT HEX", the hex of SHA-256 over the salt and the password (the kernel's
+  sha256.c); no file opens to anything (a screen put away), and a file that is not a salt and a hash opens to anything
+  so its owner is not shut out (said on the console). What is typed is cleared after each Return. Settings' Lock page
+  (`PAGES` 14; setcheck's and wificheck's lists follow) writes /cfg/lock with a salt of sixteen hex digits from
+  `random_bytes` and SHA-256 from `userland/sha256.h` (moved out of jscrypto.h, which includes it now), from a secret
+  field, and takes it away; it says "settings: lock password set", "... taken away", "settings: lock a password is
+  set"/"no password". On the console: "desktop: locked", "desktop: the password was wrong", "desktop: unlocked".
+  shotcheck's copy of the launcher has it. Selftest `[windows]` four more (`test_lock_password`); lockcheck, new (9),
+  gate step `locktest` (79 steps).
+
 ### 0.182.0
 
 - **A clock (10, 14)**: userland/clock.c, in the launcher's Productivity list. The time here is /sys/time's local

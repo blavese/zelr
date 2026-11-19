@@ -117,7 +117,10 @@ a picture viewer, two card games, and
 what the machine is made of, with a field in it that narrows the list as
 you type. Press
 ctrl and f, or the magnifier in the tray, to look for a word that is on the
-screen rather than for a program to start. In the editor, ctrl and h opens a
+screen rather than for a program to start. Alt and l (or Lock the screen in
+the launcher) locks the screen behind a password set on Settings' Lock page;
+it is kept as a salted SHA-256, never as itself, and nothing gets round the
+lock but the password: not the pointer, not alt and Escape. In the editor, ctrl and h opens a
 bar to find a word in the file and replace it, one at a time or every one at
 once (ctrl and r), whatever its case. Paint keeps what is drawn: ctrl and s
 saves it as a PNG (`paint FILE.png` opens one to draw on, and saves back to
@@ -492,6 +495,7 @@ instead.
     python tools/calendarcheck.py  today on the host's clock, moving about, a note kept, a leap day
     python tools/paintcheck.py  open a PNG in Paint, draw, save, decode it here, undo, save again
     python tools/clockcheck.py  other places' times by their own rules, a stopwatch, a timer that rings
+    python tools/lockcheck.py   set a password, lock with alt+L, a wrong one, alt+Escape, the pointer, the right one
     python tools/downloadcheck.py  a 12 MB download fetched in parts with Range, read back byte for byte
     python tools/notescheck.py  select all, copy, paste, save, undo, find and replace in the editor, from its keys
     python tools/timecheck.py   set the time zone from the shell and in Settings, read the clocks and a file's time

@@ -887,6 +887,16 @@ Added in 0.165.0, not yet in the table below:
   about:history?forget is not followed (still 3); after the server's /peek, about:history's second entry (a, a file;
   the links found as bands of accent inside the window) opens; the forget button (found by its colour) leaves 0.
 
+Added in 0.183.0, not yet in the table below:
+- **`lockcheck.py`** (gate `locktest`, full; 9 checks). The terminal closed from the desktop's menu; Settings from the
+  launcher ("sett") is the first window, its Lock page from setcheck's `sidebar`, the field and the set and take away
+  buttons at settings.c's layout (one row under the heading and a line). "zelr123" set: /cfg/lock off the disk image
+  is sixteen hex digits, a space and hashlib's SHA-256 of salt and password, the password not in it. alt+L ("desktop:
+  locked", `LOCK_BG` over 400000 pixels); "wrong" ("the password was wrong", still locked); alt+Escape (no "back at
+  the shell", still locked); the desktop's Trash icon double clicked (no "files: /home/trash"); the password ("desktop:
+  unlocked", the lock gone); "lock the" in the launcher locks it and the password opens it; Settings' take away, then
+  alt+L and Return alone open it.
+
 Added in 0.182.0, not yet in the table below:
 - **`clockcheck.py`** (gate `clocktest`, full; 8 checks). On the host's clock (`HOST_CLOCK`): the terminal closed from
   the desktop's menu and the clock opened from the launcher ("clo"), so it is the first window where setcheck's numbers
