@@ -413,7 +413,8 @@ of the line it ends. The atlas README's entries for those versions have the deta
 - **Keys (0.186.0)**: Up/Down/Home/End choose, Return plays, Space pauses or goes on (plays the chosen when nothing
   is), Right/Left the next or previous. Buttons Play/Pause/Go on, Stop, Next. A song played from the list is followed
   by the next that opens (`play_index`, `play_on`); one given as an argument plays alone. A pause keeps the place (the
-  card's third of a second plays out, nothing is dropped or repeated).
+  card's third of a second plays out, nothing is dropped or repeated). Since 0.198.0, R repeats the list and S shuffles it
+(each song once before any twice).
 
 **Argument** (:308-329). `argv[1]` is copied into a `song_t`, inserted at the top of the list and played at once. The insertion uses a field-by-field `song_copy` because "A struct assignment of this size becomes a call to memcpy, and there is no library here to have one in".
 

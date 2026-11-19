@@ -113,6 +113,14 @@ numbered files are still to 6048716; where they disagree with this list, this li
   built unsigned program; h264test in the machine still checks the decoder against Windows' answers in h264data.h.
   Gate 74 steps (one out, one in).
 
+### 0.198.0
+
+- **Music's repeat and shuffle (10, 14)**: music.c `repeat_on` (R) and `shuffle_on` (S), said by `say_mode` ("music:
+  repeat on, shuffle off" and the status line). `play_on`: in order, the next that opens, going round to the first
+  when repeat is on; shuffled, `shuffle_pick` takes one not yet `heard` at random (`random_bytes`), starting the round
+  again when all are heard and repeat is on, else stopping. `play_index` (a song started from the list) marks all
+  unheard but it. shufflecheck, new (6), gate step `shuffletest` (94 steps).
+
 ### 0.197.0
 
 - **A picture as the wallpaper (07, 10, 14)**: pictures.c `set_wallpaper` (W): the screen's size from /sys/screen

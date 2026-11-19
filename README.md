@@ -539,6 +539,7 @@ instead.
     python tools/detailcheck.py Files counts what a folder holds, and gives a file's size and date
     python tools/backcheck.py   the terminal's ctrl+R finds lines typed before, runs one, changes one, lets go
     python tools/wallcheck.py   a picture made the wallpaper from Pictures, seen by colour, and taken away
+    python tools/shufflecheck.py Music's repeat goes round the list, its shuffle plays each once
     python tools/downloadcheck.py  a 12 MB download fetched in parts with Range, read back byte for byte
     python tools/notescheck.py  select all, copy, paste, save, undo, find and replace in the editor, from its keys
     python tools/timecheck.py   set the time zone from the shell and in Settings, read the clocks and a file's time
@@ -1234,7 +1235,9 @@ found from its own sample tables and an `.aac` read header by header, each
 decoded by the same AAC decoder the stream player uses. It is worked from
 the keys as well as the pointer: up and down choose, Return plays, Space
 pauses and goes on from the same place, and left and right play the one
-before or after. A song played from the list is followed by the next.
+before or after. A song played from the list is followed by the next; R
+makes the list go round, and S plays it in a shuffled order, each song once
+before any twice.
 
 **Two card games**, which are one program each and a pile of shared rules.
 

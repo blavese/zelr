@@ -888,6 +888,12 @@ Added in 0.165.0, not yet in the table below:
   about:history?forget is not followed (still 3); after the server's /peek, about:history's second entry (a, a file;
   the links found as bands of accent inside the window) opens; the forget button (found by its colour) leaves 0.
 
+Added in 0.198.0, not yet in the table below:
+- **`shufflecheck.py`** (gate `shuffletest`, full; 6 checks). /home/A.WAV to F.WAV, 0.3 s each; q35 with intel-hda
+  on audiodev `none`. `music`; r ("music: repeat on, shuffle off"), ret: "music: playing" a to f, then a; r again:
+  the list ends after f ("finished with" after it, nothing more); s, then twice home and ret: six plays, a first,
+  each once, then nothing; and the two runs not both in the list's order (one in 14400 for a true shuffle).
+
 Added in 0.197.0, not yet in the table below:
 - **`wallcheck.py`** (gate `walltest`, full; 5 checks). /home/pictures/w.png, 200x100, red left half, blue right.
   `/bin/pictures /home/pictures/w.png`, `w` ("pictures: the wallpaper is w.png", "desktop: the wallpaper is a picture
