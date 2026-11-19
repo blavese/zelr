@@ -113,6 +113,19 @@ numbered files are still to 6048716; where they disagree with this list, this li
   built unsigned program; h264test in the machine still checks the decoder against Windows' answers in h264data.h.
   Gate 74 steps (one out, one in).
 
+### 0.180.0
+
+- **A calendar (10, 07, 14)**: userland/calendar.c, in the launcher's Productivity list (wm.c `M_WORK`). A month at a
+  time, weeks from Monday (`weekday`: Sakamoto's method, 0 for Monday), `leap` and `days_in` by the Gregorian rule;
+  today from /sys/time's `local` line (else its first, UTC), read again once a minute (`ui_due`); `move_days` and
+  `move_months` across months and years (a month keeps the day where the new month has it). Keys: arrows a day and a
+  week, Page Up/Down a month, Home today, Return writes the chosen day's note (Return keeps it, Escape leaves it),
+  Delete takes it away; a click chooses a day, a click on the day chosen writes its note. Notes are /home/calendar, a
+  line a day, "YYYY-MM-DD<tab>TEXT" (`note_of`, `note_set`: the day's line replaced and the rest kept as they were);
+  a day with one has a dot. On the console: "calendar: 2026-11-20, Friday, November 2026" (and ": NOTE"), "calendar:
+  kept a note for DATE", "calendar: took the note away from DATE". shotcheck's copy of the launcher's lists has
+  Calendar, and Pictures, which it had missed. calendarcheck, new (10), gate step `calendartest` (76 steps).
+
 ### 0.179.0
 
 - **Find and replace in Notes (10, 14)**: ctrl+H (ctrl+F is the desktop's find) opens a bar under the toolbar

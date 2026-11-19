@@ -887,6 +887,14 @@ Added in 0.165.0, not yet in the table below:
   about:history?forget is not followed (still 3); after the server's /peek, about:history's second entry (a, a file;
   the links found as bands of accent inside the window) opens; the forget button (found by its colour) leaves 0.
 
+Added in 0.180.0, not yet in the table below:
+- **`calendarcheck.py`** (gate `calendartest`, full; 10 checks). On the host's clock (`HOST_CLOCK`, UTC): /bin/calendar
+  from the terminal opens on today ("calendar: DATE, WEEKDAY, MONTH YEAR", the weekday Python's own, either side of
+  midnight accepted), the right arrow is tomorrow, Page Down a month on, Home today; Return, "dentist at ten",
+  Return ("kept a note for DATE", the line in /home/calendar off the disk image, and the day said with it); closed
+  and opened again, still there; Delete ("took the note away", the line gone); Page Down and arrows to 28 February
+  2028, then the 29th and the 1st of March.
+
 Changed in 0.179.0, not yet in the table below:
 - **`notescheck.py`** 11 checks: after its copy, paste, save and undo, ctrl+H and "BETA" typed in capitals finds
   "beta" ("notes: found"), Escape and "gamma" typed over it saves "alpha gamma"; ctrl+H, the field cleared, "a", Tab,
