@@ -95,6 +95,24 @@ skimmed) and checking the results against a real build and test run.
 What has changed in the tree since the atlas was written, newest first. File:line references in the
 numbered files are still to 6048716; where they disagree with this list, this list and the code win.
 
+### 0.176.1
+
+- **The browser out of memory on the launcher's machine, and said as such (02, 03, 14)**: the launcher
+  (launcher/Emulator.cs) started QEMU with `-m 64`. Measured with an RTL8139 as it has: at 64 MiB the browser ended on
+  the first page it loaded (example.com), at 128 on Wikipedia, at 256 on GitHub; 512 loaded all three, 1024 all four
+  with example.com. The ending was "page fault at 0x8038c00000 ... [not-present write]": user.c `user_fault_fill` had no
+  frame for a lazily mapped page and the fault was reported as a bad pointer, and the window vanished with nothing on the
+  desktop. Every gate harness that runs the browser gives 256 MiB, so nothing saw it (v0.160.0 and v0.173.0 end the same
+  way). The launcher asks for 1024 MiB now; zelr.bat's comment no longer says zelr maps 64 MiB and ignores the rest;
+  tools/check_launcher.py (gate `launchercheck`) keeps every `-m` in both at 512 or more; run.sh keeps 64 (the self
+  test's machine). `task_t.oom_at` is the page `user_fault_fill` could not back; idt.c `end_the_program` logs "NAME
+  ended: out of memory at ADDR" for a fault there and shows the desktop notice "LEAF was stopped: the machine ran out of
+  memory" (`wm_notice`). Selftest `[userspace]` two more (`test_oom_reported`: the zero writer with `pmm_test_fail_after(0)`
+  once started, from `oom_run_first`). **The gate builds no Windows programs**: `h264test_live` (h264check.py, which
+  built mfh264.exe and h264native.exe with zig and ran them) is out, since Windows' Smart App Control flags a freshly
+  built unsigned program; h264test in the machine still checks the decoder against Windows' answers in h264data.h.
+  Gate 74 steps (one out, one in).
+
 ### 0.176.0
 
 - **Words selected in the browser (11, 14)**: browser.c keeps a selection as two points on the page (`sel_ax/ay`,

@@ -887,6 +887,12 @@ Added in 0.165.0, not yet in the table below:
   about:history?forget is not followed (still 3); after the server's /peek, about:history's second entry (a, a file;
   the links found as bands of accent inside the window) opens; the forget button (found by its colour) leaves 0.
 
+Changed in 0.176.1, not yet in the table below:
+- **`check_launcher.py`** (gate `launchercheck`, fast and up): every `-m` in launcher/Emulator.cs and zelr.bat (not rem
+  lines) is 512 or more, and at least one was found. It failed on a launcher put back to 64 and a zelr.bat line at 256.
+- **`h264check.py` is out of the gate** (its step "live streams decode as windows decodes them" is gone): it builds and
+  runs Windows programs, which Smart App Control flags. It can still be run by hand where that is wanted.
+
 Added in 0.176.0, not yet in the table below:
 - **`selectcheck.py`** (gate `selecttest`, full; 11 checks). /home/sel/s.htm on a mkfat volume: two paragraphs of words
   at 28px, each word in a span of its own background colour (the last, theta, a link to t.htm) so each word's box is

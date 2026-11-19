@@ -94,7 +94,10 @@ The kernel is inside that file; nothing needs to be built.
 The launcher checks for QEMU, the emulator zelr boots on, and offers to install
 it from Microsoft's package manager if it is missing. Then press Start and a
 black window opens with the operating system running in it. Type `guide` when
-you get there.
+you get there. The machine it starts has a gigabyte of memory, which QEMU takes
+from Windows only as zelr uses it: the browser needs a few hundred megabytes for
+a site like GitHub, and a program that runs out of memory is stopped with a
+notice on the desktop saying so.
 
 It runs as a normal user, needs no administrator rights, and cannot affect
 Windows: the kernel only ever sees the pretend machine QEMU gives it. Your
@@ -467,7 +470,7 @@ instead.
     python tools/enscheck.py    the same, out of the other sound card
     python tools/volcheck.py    drag the volume slider, listen to the result
     python tools/playcheck.py   click a stream's link in the browser, listen and look
-    python tools/h264check.py   decode a live channel's renditions here and by Windows, compare
+    python tools/h264check.py   decode a live channel's renditions here and by Windows (not in the gate: it builds Windows programs)
     python tools/framecheck.py  move the pointer, ask what the frames cost
     python tools/mountcheck.py  mount a usb stick, copy files, watch the flushes
     python tools/namecheck.py   save long names and read them back
