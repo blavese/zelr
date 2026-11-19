@@ -680,6 +680,7 @@ if [ "$MODE" = "screen" ] || [ "$MODE" = "full" ]; then
   noticetest() { keep timeout 600 python tools/noticecheck.py; }
   daytest() { keep timeout 600 python tools/daycheck.py; }
   detailtest() { keep timeout 600 python tools/detailcheck.py; }
+  backtest() { keep timeout 600 python tools/backcheck.py; }
   downloadtest() { keep timeout 900 python tools/downloadcheck.py; }
 
   # The second boot of a machine, which is the one nothing else reaches:
@@ -809,6 +810,7 @@ if [ "$MODE" = "screen" ] || [ "$MODE" = "full" ]; then
   par_start "the notices given are kept and listed" noticetest
   par_start "the desktop says the day's calendar note" daytest
   par_start "files counts what a folder holds" detailtest
+  par_start "the terminal looks back through its lines with ctrl+R" backtest
   par_start "a download bigger than the browser holds is saved whole" downloadtest
   par_start "a machine still starts once it has formatted its disk" boottest
   par_start "ctrl+f finds a word that is on the screen" findtest

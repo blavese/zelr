@@ -142,6 +142,16 @@ static int  n_hist;
 static int  hist_at;            /* 0 means the line being typed */
 static char hist_stash[COLS + 1];   /* the line set aside while browsing */
 
+/* ctrl+R: back through what has been typed for a line with some text in it,
+   the newest first; ctrl+R again for the one before that. Return runs what
+   was found, an arrow (or Home or End) takes it to the line to change, and
+   ctrl+G, or Backspace with nothing to look for, lets it go. Escape is the
+   desktop's, as the help says, so it is not the way out here. */
+static int  hs_on;
+static char hs_text[COLS + 1];
+static int  hs_len;
+static int  hs_found;           /* into hist: the line found, -1 for none */
+
 static char *line_at(int i) { return lines[(first + i) % MAX_LINES]; }
 static u8   *slot_at(int i) { return &slots[(first + i) % MAX_LINES]; }
 
@@ -378,9 +388,33 @@ static void draw_all(void) {
  * so a blink of the cursor draws only this and commits only this
  * (win_commit_rect), where it drew and sent the whole window twice a second.
  * Returns the row's top. */
+static int hs_find(int before);
+
 static int draw_prompt(void) {
     int py = PAD + (rows - 1) * MONO_H;
     rect(&scr, 0, py, scr.w, scr.h - py, pal.bg);
+
+    /* Looking back: what is looked for, and the line it finds. */
+    if (hs_on) {
+        char head[COLS + 16];
+        int n = 0;
+        for (const char *p = "(back) "; *p; p++) head[n++] = *p;
+        for (int i = 0; hs_text[i] && n < COLS; i++) head[n++] = hs_text[i];
+        head[n++] = ':';
+        head[n++] = ' ';
+        head[n] = 0;
+        face_draw(&scr, PAD, py, head, pal.accent, UI_FACE_MONO);
+        int x = PAD + n * MONO_W;
+        char shown[COLS + 1];
+        int room = cols - n;
+        if (room < 1) room = 1;
+        const char *found = hs_found >= 0 ? hist[hs_found] : "nothing typed before has that";
+        int sn = 0;
+        for (int i = 0; found[i] && sn < room && sn < COLS; i++) shown[sn++] = found[i];
+        shown[sn] = 0;
+        face_draw(&scr, x, py, shown, hs_found >= 0 ? pal.fg : pal.dim, UI_FACE_MONO);
+        return py;
+    }
 
     char cwd[128];
     if (getcwd(cwd, sizeof(cwd)) < 0) strcpy(cwd, "/");
@@ -1604,7 +1638,7 @@ static void cmd_help(int argc, char **argv) {
     }
     say("");
     dim("A name on its own runs that program: here, then /usb, then /bin.");
-    dim("Tab completes. Up and down walk through history.");
+    dim("Tab completes. Up and down walk through history; ctrl+R looks in it.");
     dim("PageUp and PageDown scroll. Escape leaves the desktop.");
 }
 
@@ -1923,10 +1957,62 @@ static void history_step(int delta) {
     else               set_input(hist[n_hist - hist_at]);
 }
 
+/* The newest line before `before` with the text in it, or -1. */
+static int hs_find(int before) {
+    for (int i = before - 1; i >= 0; i--) {
+        const char *h = hist[i];
+        for (int j = 0; h[j]; j++) {
+            int k = 0;
+            while (k < hs_len && h[j + k] == hs_text[k]) k++;
+            if (k == hs_len) return i;
+        }
+        if (!hs_len) return i;
+    }
+    return -1;
+}
+
+static void hs_key(u32 key) {
+    if (KEY_CTRL(key)) {
+        int c = key_ctrl_letter(key);
+        if (c == 'r' && hs_found > 0) {
+            int f = hs_find(hs_found);
+            if (f >= 0) hs_found = f;
+        } else if (c == 'g') {
+            hs_on = 0;
+        }
+        return;
+    }
+    key = KEY_CODE(key);
+    if (key == '\n') {
+        hs_on = 0;
+        if (hs_found >= 0) { set_input(hist[hs_found]); submit(); }
+    } else if (key == KEY_LEFT || key == KEY_RIGHT || key == KEY_UP || key == KEY_DOWN
+               || key == KEY_HOME || key == KEY_END) {
+        hs_on = 0;
+        if (hs_found >= 0) set_input(hist[hs_found]);
+    } else if (key == '\b') {
+        if (!hs_len) { hs_on = 0; return; }
+        hs_text[--hs_len] = 0;
+        hs_found = hs_find(n_hist);
+    } else if (key >= ' ' && key < 127 && hs_len < COLS) {
+        hs_text[hs_len++] = (char)key;
+        hs_text[hs_len] = 0;
+        hs_found = hs_find(n_hist);
+    }
+}
+
 static void on_key(u32 key) {
+    if (hs_on) { hs_key(key); return; }
     /* Control chords first: they are not text and must not be typed. */
     if (KEY_CTRL(key)) {
         int c = key_ctrl_letter(key);
+        if (c == 'r') {
+            hs_on = 1;
+            hs_len = 0;
+            hs_text[0] = 0;
+            hs_found = hs_find(n_hist);
+            return;
+        }
         if (c == 'c') { copy_selection(); return; }
         if (c == 'v') { paste_clipboard(); return; }
         if (c == 'a') {                        /* select everything on screen */
