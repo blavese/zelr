@@ -112,8 +112,8 @@ are driving it down a serial line or something has gone wrong.
 A terminal opens, over a desktop with icons down the left of it. Click the
 name at the left of the dock, or the wallpaper, for the launcher: the
 programs by kind -- a file manager, an editor, paint, settings, a system
-monitor, a music player, a calculator, a calendar, a web browser, a picture
-viewer, two card games, and
+monitor, a music player, a calculator, a calendar, a clock, a web browser,
+a picture viewer, two card games, and
 what the machine is made of, with a field in it that narrows the list as
 you type. Press
 ctrl and f, or the magnifier in the tray, to look for a word that is on the
@@ -491,6 +491,7 @@ instead.
     python tools/zipcheck.py    go into a .zip in Files, open a file from it, extract it, refuse a damaged one
     python tools/calendarcheck.py  today on the host's clock, moving about, a note kept, a leap day
     python tools/paintcheck.py  open a PNG in Paint, draw, save, decode it here, undo, save again
+    python tools/clockcheck.py  other places' times by their own rules, a stopwatch, a timer that rings
     python tools/downloadcheck.py  a 12 MB download fetched in parts with Range, read back byte for byte
     python tools/notescheck.py  select all, copy, paste, save, undo, find and replace in the editor, from its keys
     python tools/timecheck.py   set the time zone from the shell and in Settings, read the clocks and a file's time
@@ -1152,9 +1153,9 @@ frame, never a calculation per pixel of the screen. The curves come from a
 seventeen entry table, since the kernel is built with no floating point in it
 at all.
 
-**Thirteen programs.** The terminal, the file manager, the editor, paint,
-settings, a system monitor, a music player, a calculator, a calendar, a web
-browser, a picture viewer and two card games, all ring 3 and all using nothing the kernel does not offer
+**Fourteen programs.** The terminal, the file manager, the editor, paint,
+settings, a system monitor, a music player, a calculator, a calendar, a
+clock, a web browser, a picture viewer and two card games, all ring 3 and all using nothing the kernel does not offer
 everybody. The browser has a section of its own further down, because what
 is interesting about it is not that it is a program.
 

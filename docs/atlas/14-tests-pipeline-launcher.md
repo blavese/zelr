@@ -887,6 +887,15 @@ Added in 0.165.0, not yet in the table below:
   about:history?forget is not followed (still 3); after the server's /peek, about:history's second entry (a, a file;
   the links found as bands of accent inside the window) opens; the forget button (found by its colour) leaves 0.
 
+Added in 0.182.0, not yet in the table below:
+- **`clockcheck.py`** (gate `clocktest`, full; 8 checks). On the host's clock (`HOST_CLOCK`): the terminal closed from
+  the desktop's menu and the clock opened from the launcher ("clo"), so it is the first window where setcheck's numbers
+  put it; London, New York and Tokyo said at their times now, the EU's and the US's summer rules worked out here (the
+  minute before accepted); "phoenix" typed and added (UTC-7, in /home/clocks); the first row's button (`take_button`:
+  rows `UI_BTN_H + 4` from 70 under the window's top) takes London away; Space, two seconds, Space (1 to 5 s
+  counted); Tab Tab, "0:03", Return ("the timer started, 3 seconds", "the timer is done", "notice: the timer is
+  done"); opened again, New York, Tokyo and Phoenix in that order.
+
 Added in 0.181.0, not yet in the table below:
 - **`paintcheck.py`** (gate `painttest`, full; 9 checks). /home/pic/start.png on a mkfat volume, 100x60, blue on the
   left and yellow on the right, made with zlib. `/bin/paint /home/pic/start.png` ("opened ..., 100x60", the blue on the

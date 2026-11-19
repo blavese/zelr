@@ -113,6 +113,21 @@ numbered files are still to 6048716; where they disagree with this list, this li
   built unsigned program; h264test in the machine still checks the decoder against Windows' answers in h264data.h.
   Gate 74 steps (one out, one in).
 
+### 0.182.0
+
+- **A clock (10, 14)**: userland/clock.c, in the launcher's Productivity list. The time here is /sys/time's local
+  line (and its zone); other places are worked out from its first line (UTC, made seconds since 1970 with
+  `zone_days_from_civil`) and zones.h's table (`zone_offset_at`, each place's summer by its own rule), read once a
+  second. The places are /home/clocks, a zone name a line (`cities_load`, `cities_save`; London, New York and Tokyo
+  until changed): "add a place" takes the first zone whose short or full name has what was typed in it, case aside
+  (`add_city`), and each row's button takes it away. A stopwatch (Space starts and stops it, R puts it back; ticks,
+  shown as m:ss.t) and a timer ("3" minutes or "1:30"; Return or start): at nought it says so on the console, puts up a
+  desktop notice and rings three short notes on a sound card if there is one (`ring`, square waves at the card's own
+  rate through `sound_write`). Tab goes between the two fields, Escape leaves them. On the console: "clock: here
+  HH:MM; PLACE HH:MM; ..." when a minute or the list changes, "clock: added NAME", "clock: took away NAME",
+  "clock: stopwatch started/stopped at m:ss.t", "clock: the timer started, N seconds", "clock: the timer is done".
+  shotcheck's copy of the launcher has it. clockcheck, new (8), gate step `clocktest` (78 steps).
+
 ### 0.181.1
 
 - **A frame asked for while one is drawn is no longer lost (07 §10 34)**: `composite` takes what it is to draw
