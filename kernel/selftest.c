@@ -2205,6 +2205,9 @@ static void test_partial_frames(void) {
        wm_test_damage(W - 10, H - 10, 50, 50, d) && d[0] == W - 10 && d[1] == H - 10
        && d[2] == W && d[3] == H);
     ok("and damage wholly off the screen is none", !wm_test_damage(-60, 10, 40, 10, d));
+    ok("a whole frame asked for while one is drawn is still asked for after it",
+       wm_test_asked_mid_frame(1));
+    ok("and so is a rectangle", wm_test_asked_mid_frame(2));
 
     /* Drawn whole before the two copies below are taken, so the wallpaper
        is kept while there is still room for it. */

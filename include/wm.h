@@ -197,6 +197,11 @@ void wm_test_draw_scene(int x, int y, int w, int h, bool clip);
 bool wm_test_forget_wallpaper(void);
 void wm_test_dock(int out[4]);
 bool wm_test_damage(int x, int y, int w, int h, int out[4]);
+/* A frame drawn with a request for the next made part way through it, as a
+   program's commit can when a tick hands it the processor mid-frame: the
+   whole screen (how 1) or a rectangle (2). Says whether the request was
+   still waiting when the frame ended. */
+bool wm_test_asked_mid_frame(int how);
 
 /* wm_test_wallpaper: the wallpaper a frame starts from (the cached copy when
    there is one), or drawn afresh, saved into a width * height buffer; true

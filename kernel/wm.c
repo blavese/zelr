@@ -3347,22 +3347,43 @@ static bool frame_is_partial(void) {
     return !frame_is_whole && dmg_x1 > dmg_x0 && under_kept;
 }
 
+/* For the self test: a request for another frame made part way through
+   this one (wm_test_asked_mid_frame). */
+static int mid_frame_probe;
+
 static void composite(void) {
     u64 started = rdtsc();
+
+    /* What this frame draws, taken and cleared before anything is drawn.
+       The desktop's task can be preempted part way through a frame, and a
+       program's commit in that time (a new size above all, which asks for
+       the whole screen) asks for the next one. Cleared after the frame, as
+       it was, that request went with this frame, which had already drawn
+       the window where it was: a window snapped or shrunk left its old
+       place on the screen until something else happened to cover it
+       (deskcheck's snap and 800x600 checks, now and then, on any build). */
+    bool part = frame_is_partial();
+    int d0 = dmg_x0, d1 = dmg_y0, d2 = dmg_x1, d3 = dmg_y1;
+    needs_composite = false;
+    frame_is_whole = false;
+    dmg_x0 = dmg_y0 = dmg_x1 = dmg_y1 = 0;
 
     /* The arrow comes off the last frame first, since the part of the
        screen left alone keeps whatever was drawn there; it goes back on at
        the end, wherever the pointer is now, outside the clip. */
-    bool part = frame_is_partial();
     int ox = under_x, oy = under_y;
     if (part) {
         put_back_under();
-        fb_clip(dmg_x0, dmg_y0, dmg_x1 - dmg_x0, dmg_y1 - dmg_y0);
+        fb_clip(d0, d1, d2 - d0, d3 - d1);
     } else {
         wall_now = timer_ticks();          /* a moving wallpaper moves on */
     }
     draw_scene();
     fb_unclip();
+
+    if (mid_frame_probe == 1) need_frame();
+    if (mid_frame_probe == 2) need_frame_in(10, 10, 20, 20);
+    mid_frame_probe = 0;
 
     keep_under(last_mx, last_my);
     draw_cursor(last_mx, last_my);
@@ -3377,17 +3398,12 @@ static void composite(void) {
     }
     if (part) {
         partial_draws++;
-        fb_flush_rect((u32)dmg_x0, (u32)dmg_y0, (u32)(dmg_x1 - dmg_x0),
-                      (u32)(dmg_y1 - dmg_y0));
+        fb_flush_rect((u32)d0, (u32)d1, (u32)(d2 - d0), (u32)(d3 - d1));
         fb_flush_rect((u32)ox, (u32)oy, CUR_W, CUR_H);
         fb_flush_rect((u32)last_mx, (u32)last_my, CUR_W, CUR_H);
     } else {
         fb_flush();
     }
-    /* Cleared, not set: the next frame sends only what asks to be sent, and
-       everything that changes the whole screen already calls need_frame. */
-    frame_is_whole = false;
-    dmg_x0 = dmg_y0 = dmg_x1 = dmg_y1 = 0;
 }
 
 /* --- launching ---------------------------------------------------------- */
@@ -4601,6 +4617,20 @@ void wm_test_dock(int out[4]) {
     out[0] = dock_x(); out[1] = taskbar_y(); out[2] = dock_w(); out[3] = TASKBAR_H;
 }
 
+bool wm_test_asked_mid_frame(int how) {
+    int k0 = dmg_x0, k1 = dmg_y0, k2 = dmg_x1, k3 = dmg_y1;
+    needs_composite = true;
+    frame_is_whole = true;
+    mid_frame_probe = how;
+    composite();
+    bool kept = needs_composite && (how == 1 ? frame_is_whole : dmg_x1 > dmg_x0);
+    /* Left as a frame that has yet to be drawn, whole: nothing is lost. */
+    needs_composite = true;
+    frame_is_whole = true;
+    dmg_x0 = k0; dmg_y0 = k1; dmg_x1 = k2; dmg_y1 = k3;
+    return kept;
+}
+
 bool wm_test_damage(int x, int y, int w, int h, int out[4]) {
     int k0 = dmg_x0, k1 = dmg_y0, k2 = dmg_x1, k3 = dmg_y1;
     dmg_x0 = dmg_y0 = dmg_x1 = dmg_y1 = 0;
@@ -4943,8 +4973,7 @@ void wm_run(void) {
         }
 
         if (needs_composite) {
-            composite();
-            needs_composite = false;
+            composite();                    /* which takes the request first */
         } else {
             /* Nothing to draw and nothing moved, so stop asking. This loop
                used to poll the mouse as fast as the processor would go,
