@@ -386,6 +386,7 @@ static bool still_moving(u64 since, u32 ms) {
 /* The volume panel, open when someone clicks the speaker. */
 static bool volume_open;
 static bool net_open;
+static bool notices_open;              /* alt+N: the notices given, newest first */
 static bool volume_drag;
 static int  volume_before_mute = 70;
 
@@ -2701,6 +2702,7 @@ static void lock_screen(void) {
     ctx_open = false;
     volume_open = false;
     net_open = false;
+    notices_open = false;
     find_close();
     cycle_end();
     kprintf("desktop: locked\n");
@@ -2826,7 +2828,78 @@ static void notice_damage(void) {
     need_frame_in(x - 14, y - 14, w + 28, h + 28);
 }
 
+/* The last notices given, with the time each came, for alt+N: a notice is
+   up for four seconds, and one that came while nobody was looking was
+   otherwise gone. */
+#define NOTICES_MAX 12
+static struct { char text[112]; char when[12]; } notices[NOTICES_MAX];
+static int notices_n;
+
+static void clock_text(char *out, u32 cap);
+
+static void notice_keep(const char *text) {
+    if (notices_n == NOTICES_MAX) {
+        for (int i = 1; i < NOTICES_MAX; i++) notices[i - 1] = notices[i];
+        notices_n--;
+    }
+    strncpy(notices[notices_n].text, text, sizeof(notices[0].text) - 1);
+    notices[notices_n].text[sizeof(notices[0].text) - 1] = 0;
+    clock_text(notices[notices_n].when, sizeof(notices[0].when));
+    notices_n++;
+}
+
+#define NOTICES_W 420
+static int notices_h(void) {
+    int line = face_height(FACE_BODY) + 8;
+    return 44 + (notices_n ? notices_n : 1) * line;
+}
+
+static void notices_rect(int *x, int *y) {
+    *x = (int)fb_width() - NOTICES_W - 16;
+    *y = taskbar_y() - notices_h() - 12;
+}
+
+static void draw_notices(void) {
+    if (!notices_open) return;
+    const theme_t *t = theme();
+    int px, py, h = notices_h();
+    notices_rect(&px, &py);
+    if (t->look == LOOK_MODERN) {
+        if (t->shadows) fb_shadow(px, py, NOTICES_W, h, 10, 7);
+        fb_round_rect_aa(px, py, NOTICES_W, h, 10, t->overlay, 248);
+        fb_round_rect_aa(px, py, NOTICES_W, h, 10, t->stroke, 85);
+        fb_round_rect_aa(px + 1, py + 1, NOTICES_W - 2, h - 2, 9, t->overlay, 252);
+    } else {
+        fb_rect((u32)px, (u32)py, NOTICES_W, (u32)h, t->surface);
+        raised(px, py, NOTICES_W, h);
+    }
+    int line = face_height(FACE_BODY) + 8;
+    face_text(px + 14, py + 12, "notices", t->text, FACE_BODY_BOLD);
+    int ty = py + 12 + line + 6;
+    if (!notices_n) face_text(px + 14, ty, "nothing yet", t->text_dim, FACE_BODY);
+    for (int i = notices_n - 1; i >= 0; i--, ty += line) {
+        face_text(px + 14, ty, notices[i].when, t->text_dim, FACE_BODY);
+        face_text(px + 84, ty, notices[i].text, t->text, FACE_BODY);
+    }
+}
+
+/* Opened or put away; what it holds is said on the console, newest first,
+   as a harness cannot read the panel. */
+static void notices_toggle(void) {
+    notices_open = !notices_open;
+    if (notices_open) {
+        kprintf("desktop: notices: %d", notices_n);
+        for (int i = notices_n - 1; i >= 0; i--) kprintf("%s%s", i == notices_n - 1 ? ": " : " | ", notices[i].text);
+        kprintf("\n");
+    } else {
+        kprintf("desktop: notices put away\n");
+    }
+    need_frame();
+}
+
 static void notice(const char *text) {
+    notice_keep(text);
+    if (notices_open) need_frame();
     if (notice_until) notice_damage();
     strncpy(notice_text, text, sizeof(notice_text) - 1);
     notice_text[sizeof(notice_text) - 1] = 0;
@@ -3467,6 +3540,7 @@ static void draw_scene(void) {
     draw_find_bar();
     draw_notice();
     draw_net_panel();
+    draw_notices();
     draw_menu();
     draw_ctx();
     draw_lock();
@@ -4153,6 +4227,14 @@ static void handle_mouse(int mx, int my, u8 buttons) {
 
     if (volume_drag && (buttons & hold)) { volume_from_pointer(mx); return; }
 
+    /* A press anywhere but on the notices puts them away. */
+    if (notices_open && (pressed_now || right_now)) {
+        int px, py;
+        notices_rect(&px, &py);
+        if (mx >= px && mx < px + NOTICES_W && my >= py && my < py + notices_h()) return;
+        notices_toggle();
+    }
+
     if (net_open && (pressed_now || right_now)) {
         int px, py;
         net_panel_rect(&px, &py);
@@ -4611,6 +4693,9 @@ static bool handle_shortcut(int key) {
     case 'l': case 'L':                            /* alt+l, lock the screen */
         lock_screen();
         return true;
+    case 'n': case 'N':                            /* alt+n, the notices given */
+        notices_toggle();
+        return true;
     }
 
     /* Alt with an arrow snaps the front window to that side, which is the
@@ -4666,6 +4751,7 @@ static bool wm_key(int c) {
         if (ctx_open)    { ctx_open = false; need_frame(); return true; }
         if (volume_open) { volume_open = false; volume_drag = false; need_frame(); return true; }
         if (net_open)    { net_open = false; need_frame(); return true; }
+        if (notices_open) { notices_toggle(); return true; }
         window_t *top = focused_window();
         if (top && top->wants_escape) { deliver_key(top, c); return true; }
         return false;
@@ -4849,14 +4935,14 @@ static bool pointer_is_quiet_at(int mx, int my) {
 static bool desktop_is_still(void) {
     return under_kept && !needs_composite && !dragging && !resizing && !mouse_capture
         && !band_on && !menu_open && !ctx_open && !volume_open && !net_open
-        && !find_open && cyc_at < 0;
+        && !notices_open && !find_open && cyc_at < 0;
 }
 
 /* The same, but with a menu allowed open: a move over one is drawn as that
    menu (hover_zone_at). The panels with a hover of their own still are not. */
 static bool desktop_is_steady(void) {
     return under_kept && !needs_composite && !dragging && !resizing && !mouse_capture
-        && !band_on && !volume_open && !net_open && !find_open && cyc_at < 0;
+        && !band_on && !volume_open && !net_open && !notices_open && !find_open && cyc_at < 0;
 }
 
 /* What a pointer at mx, my draws for being there, as a rectangle holding all
@@ -4943,7 +5029,7 @@ static void move_pointer_only(void) {
 static u32 idle_ms(void) {
     bool moving = wallpaper_moves(theme()->wallpaper) && covering_index() < 0;
     if (moving || still_moving(panel_since, PANEL_MS) || menu_open || ctx_open
-        || volume_open || net_open || find_open || cyc_at >= 0 || dragging
+        || volume_open || net_open || notices_open || find_open || cyc_at >= 0 || dragging
         || resizing || mouse_capture || band_on || volume_drag || held_button)
         return 1;
     u64 hz = timer_hz(), now = timer_ticks();
@@ -5167,6 +5253,7 @@ void wm_run(void) {
        back on the next `desktop` as if nothing had happened. */
     if (find_open) find_close();
     net_open = false;
+    notices_open = false;
     cyc_at = -1;
     ncyc = 0;
     band_on = false;

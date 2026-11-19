@@ -1482,6 +1482,15 @@ static void cmd_echo(int argc, char **argv) {
     say(body);
 }
 
+/* A notice on the desktop, above the dock, and kept with the others there
+(alt+N): a script's way of saying it has finished. */
+static void cmd_notice(int argc, char **argv) {
+    char body[112];
+    join_from(argv, argc, 1, body, sizeof(body) - 1);
+    if (!body[0]) { err("notice what?"); return; }
+    if (desktop_notice(body) < 0) err("there is no desktop to show it");
+}
+
 static void cmd_cd(int argc, char **argv) {
     const char *where = argc > 1 ? argv[1] : "/home";
     if (chdir(where) != 0) { err("not a directory"); return; }
@@ -1561,6 +1570,7 @@ static const command COMMANDS[] = {
     { "theme",   cmd_theme,   "[NAME]",        "change the colours" },
     { "history", cmd_history, "",              "what you have typed" },
     { "echo",    cmd_echo,    "TEXT",          "print it back" },
+    { "notice",  cmd_notice,  "TEXT",          "say it on the desktop, kept under alt+N" },
     { "clear",   cmd_clear,   "",              "empty the scrollback" },
     { "about",   cmd_about,   "",              "what this program is" },
 };
