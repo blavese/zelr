@@ -2238,6 +2238,17 @@ static void test_partial_frames(void) {
        wm_test_asked_mid_frame(1));
     ok("and so is a rectangle", wm_test_asked_mid_frame(2));
 
+    /* The calendar's note for today, as the desktop says it. */
+    const char *cal = "2026-11-19\tthe day before\n2026-11-20\tthe dentist at ten\r\n2026-11-21 no tab here\n"
+                      "2026-11-22\tlast, with no newline";
+    char day[112];
+    ok("the desktop finds today's note in the calendar's file",
+       wm_test_day_note(cal, 2026, 11, 20, day, sizeof(day)) && !strcmp(day, "today: the dentist at ten"));
+    ok("and the last line's, with nothing after it",
+       wm_test_day_note(cal, 2026, 11, 22, day, sizeof(day)) && !strcmp(day, "today: last, with no newline"));
+    ok("and none for a day with no note", !wm_test_day_note(cal, 2026, 11, 23, day, sizeof(day)));
+    ok("nor for a line with no tab after its date", !wm_test_day_note(cal, 2026, 11, 21, day, sizeof(day)));
+
     /* Drawn whole before the two copies below are taken, so the wallpaper
        is kept while there is still room for it. */
     window_t *a = wm_create("under", 150, 120, 300, 200);

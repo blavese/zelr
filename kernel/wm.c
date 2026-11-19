@@ -2914,6 +2914,57 @@ bool wm_notice(const char *text) {
     return true;
 }
 
+/* --- the day's note ------------------------------------------------------
+ *
+ * The calendar keeps a note a day in /home/calendar, a line each:
+ * "2026-11-20<tab>the dentist at ten". It says a day's note only while it is
+ * open; the desktop says today's as a notice when it opens and again when the
+ * date turns over, looked at with the dock's clock once a second. */
+#define DAY_FILE "/home/calendar"
+static u32 day_looked;                         /* yyyymmdd last looked at, 0 none */
+
+/* The note in buf for that date, as "today: NOTE", or false. */
+static bool day_note_in(const char *buf, int n, u32 y, u32 m, u32 d, char *out, int cap) {
+    char key[11];
+    key[0] = (char)('0' + y / 1000 % 10); key[1] = (char)('0' + y / 100 % 10);
+    key[2] = (char)('0' + y / 10 % 10);   key[3] = (char)('0' + y % 10);
+    key[4] = '-';
+    key[5] = (char)('0' + m / 10); key[6] = (char)('0' + m % 10);
+    key[7] = '-';
+    key[8] = (char)('0' + d / 10); key[9] = (char)('0' + d % 10);
+    key[10] = '\t';
+    for (int i = 0; i < n; ) {
+        int e = i;
+        while (e < n && buf[e] != '\n') e++;
+        if (e - i > 11 && !memcmp(buf + i, key, 11)) {
+            int k = 0;
+            for (const char *p = "today: "; *p && k < cap - 1; p++) out[k++] = *p;
+            for (int j = i + 11; j < e && buf[j] != '\r' && k < cap - 1; j++) out[k++] = buf[j];
+            out[k] = 0;
+            return true;
+        }
+        i = e + 1;
+    }
+    return false;
+}
+
+static void day_note(void) {
+    zone_time_t z;
+    if (!zone_now(&z)) return;
+    u32 today = z.local.year * 10000 + z.local.month * 100u + z.local.day;
+    if (today == day_looked) return;
+    day_looked = today;
+    static char buf[32768];
+    int n = vfs_read(DAY_FILE, buf, sizeof(buf) - 1);
+    if (n <= 0) return;
+    char text[112];
+    if (day_note_in(buf, n, z.local.year, z.local.month, z.local.day, text, sizeof(text))) wm_notice(text);
+}
+
+bool wm_test_day_note(const char *buf, u32 y, u32 m, u32 d, char *out, int cap) {
+    return day_note_in(buf, (int)strlen(buf), y, m, d, out, cap);
+}
+
 static void draw_notice(void) {
     if (!notice_until) return;
     const theme_t *t = theme();
@@ -5205,6 +5256,7 @@ void wm_run(void) {
         if (timer_ticks() - last_dock_look >= every) {
             last_dock_look = timer_ticks();
             if (moving || net_open || dock_changed()) need_frame();
+            day_note();
         }
 
         if (still_moving(panel_since, PANEL_MS)) panel_frame();

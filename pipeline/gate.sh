@@ -678,6 +678,7 @@ if [ "$MODE" = "screen" ] || [ "$MODE" = "full" ]; then
   zoomtest() { keep timeout 600 python tools/zoomcheck.py; }
   gototest() { keep timeout 600 python tools/gotocheck.py; }
   noticetest() { keep timeout 600 python tools/noticecheck.py; }
+  daytest() { keep timeout 600 python tools/daycheck.py; }
   downloadtest() { keep timeout 900 python tools/downloadcheck.py; }
 
   # The second boot of a machine, which is the one nothing else reaches:
@@ -805,6 +806,7 @@ if [ "$MODE" = "screen" ] || [ "$MODE" = "full" ]; then
   par_start "a picture zoomed, moved about and turned" zoomtest
   par_start "notes goes to a line and keeps the indent" gototest
   par_start "the notices given are kept and listed" noticetest
+  par_start "the desktop says the day's calendar note" daytest
   par_start "a download bigger than the browser holds is saved whole" downloadtest
   par_start "a machine still starts once it has formatted its disk" boottest
   par_start "ctrl+f finds a word that is on the screen" findtest

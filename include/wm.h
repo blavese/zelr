@@ -237,6 +237,9 @@ bool wm_locked(void);
 bool wm_password_set(void);
 bool wm_session_open(void);
 void wm_session_begin(void);
+/* For the self test: the calendar's note in buf for a date, as the desktop
+   says it ("today: NOTE"), or false. */
+bool wm_test_day_note(const char *buf, u32 y, u32 m, u32 d, char *out, int cap);
 
 void wm_push_event(window_t *w, const wm_event_t *ev);
 bool wm_pop_event(window_t *w, wm_event_t *out);
