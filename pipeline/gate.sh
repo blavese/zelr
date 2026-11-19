@@ -654,6 +654,7 @@ if [ "$MODE" = "screen" ] || [ "$MODE" = "full" ]; then
   localtest() { keep timeout 600 python tools/localcheck.py; }
   opentest() { keep timeout 600 python tools/opencheck.py; }
   menutest() { keep timeout 900 python tools/menucheck.py; }
+  selecttest() { keep timeout 900 python tools/selectcheck.py; }
   historytest() { keep timeout 900 python tools/historycheck.py; }
   trashtest() { keep timeout 600 python tools/trashcheck.py; }
   downloadtest() { keep timeout 900 python tools/downloadcheck.py; }
@@ -761,6 +762,7 @@ if [ "$MODE" = "screen" ] || [ "$MODE" = "full" ]; then
   par_start "pages on this machine open, and the web cannot read them" localtest
   par_start "a link opens in a window of its own" opentest
   par_start "the browser's right button menu does what its rows say" menutest
+  par_start "words dragged over are selected and copied" selecttest
   par_start "the browser keeps, lists and suggests where it has been" historytest
   par_start "a file deleted in Files waits in the trash" trashtest
   par_start "a download bigger than the browser holds is saved whole" downloadtest

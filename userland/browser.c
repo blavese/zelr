@@ -4992,6 +4992,108 @@ static void draw_frame_box(surface *s, const litem *it, int x, int sy, int vw) {
    drawn: a video's frame redraws only what crosses its box. */
 static int draw_x0 = -0x7FFFFFFF, draw_x1 = 0x7FFFFFFF;
 
+#define CLIP_TEXT_MAX (64 * 1024 - 1)
+#define SEL_COLOUR 0xACCEF7     /* behind words selected, as other browsers draw it */
+
+/* --- words selected ----------------------------------------------------------
+ *
+ * Dragging across the page selects the words between where the button went
+ * down and where the pointer is, whole words in the order the layout put
+ * them; ctrl+A selects them all, ctrl+C copies them to the clipboard, a line
+ * apart where the page puts them on lines apart, and the right button's menu
+ * offers to copy them or look them up.
+ *
+ * Kept as two points on the page, not as two words: the page is laid out
+ * again under a selection (a hover, a script, a picture arriving) and every
+ * word's number can change, but the words under two points mostly do not.
+ * sel_lo and sel_hi are worked out from the points once a frame
+ * (sel_range), for drawing and copying. */
+static int sel_on, sel_all;            /* there is one; ctrl+A's, every word */
+static int sel_ax, sel_ay, sel_bx, sel_by;   /* the two points, on the page */
+static int sel_lo = -1, sel_hi = -1;   /* the words between them, this frame */
+
+/* The word at a point, or the nearest: on its line first, then the first
+   word below. -1 when the page has none. */
+static int word_near(int x, int y) {
+    int best = -1, best_score = 0x7FFFFFFF;
+    for (int i = 0; i < page.nitems; i++) {
+        const litem *it = &page.items[i];
+        if (it->kind != LK_TEXT || it->at < 0) continue;
+        int dy = y < it->y ? it->y - y : y >= it->y + it->h ? y - (it->y + it->h) + 1 : 0;
+        int dx = x < it->x ? it->x - x : x >= it->x + it->w ? x - (it->x + it->w) + 1 : 0;
+        if (!dx && !dy) return i;
+        /* A line away counts for more than any distance along a line. */
+        int score = dy * 4096 + dx;
+        if (score < best_score) { best_score = score; best = i; }
+    }
+    return best;
+}
+
+static void sel_range(void) {
+    sel_lo = sel_hi = -1;
+    if (!sel_on) return;
+    if (sel_all) {
+        for (int i = 0; i < page.nitems; i++) {
+            if (page.items[i].kind != LK_TEXT || page.items[i].at < 0) continue;
+            if (sel_lo < 0) sel_lo = i;
+            sel_hi = i;
+        }
+        return;
+    }
+    int a = word_near(sel_ax, sel_ay), b = word_near(sel_bx, sel_by);
+    if (a < 0 || b < 0) return;
+    sel_lo = a < b ? a : b;
+    sel_hi = a < b ? b : a;
+}
+
+/* The words selected as text: a space between two on a line, a new line
+   where the next starts below the last or back to its left. How long. */
+static int sel_text(char *out, int cap, int *words) {
+    int n = 0, last = -1;
+    if (words) *words = 0;
+    for (int i = sel_lo; i >= 0 && i <= sel_hi && n < cap - 1; i++) {
+        const litem *it = &page.items[i];
+        if (it->kind != LK_TEXT || it->at < 0) continue;
+        if (last >= 0) {
+            const litem *p = &page.items[last];
+            out[n++] = it->y >= p->y + p->h || it->x < p->x ? '\n' : ' ';
+        }
+        for (const char *t = page.text + it->at; *t && n < cap - 1; t++) out[n++] = *t;
+        last = i;
+        if (words) (*words)++;
+    }
+    out[n] = 0;
+    return n;
+}
+
+/* Said on the console as a selection is made, on one line. */
+static void sel_say(void) {
+    static char text[200];
+    int words;
+    int n = sel_text(text, (int)sizeof(text), &words);
+    for (int i = 0; i < n; i++) if (text[i] == '\n') text[i] = '/';
+    char num[16];
+    number_into(num, words);
+    puts("browser selection: ");
+    puts(num);
+    puts(words == 1 ? " word: " : " words: ");
+    puts(text);
+    putc('\n');
+}
+
+static void sel_copy(void) {
+    static char text[CLIP_TEXT_MAX];
+    int n = sel_text(text, (int)sizeof(text), 0);
+    if (n <= 0) return;
+    clip_set(text, n);
+    char num[16];
+    number_into(num, n);
+    say("copied ", n == 1 ? "a character" : "the words selected");
+    puts("browser selection: copied ");
+    puts(num);
+    puts(" characters\n");
+}
+
 static void draw_page(surface *s, int ox, int oy, int vw, int vh) {
     /* In the order the layout worked out from z-indexes (lay_z_order). */
     for (int k = 0; k < page.nitems; k++) {
@@ -5212,6 +5314,15 @@ static void draw_page(surface *s, int ox, int oy, int vw, int vh) {
                makes somebody scroll back to it. */
             rect(s, x - 2, sy - 1, tface_w(page.text + it->at, it->face) + 4,
                  tface_h(it->face) + 3, 0xFFE58F);
+        }
+        if (i >= sel_lo && i <= sel_hi && sel_lo >= 0 && it->at >= 0) {
+            /* Across the space to the next word when it is selected too and
+               on the same line, so a selection reads as one run. */
+            int hw = it->w;
+            if (i + 1 <= sel_hi && page.items[i + 1].kind == LK_TEXT && page.items[i + 1].y == it->y
+                && page.items[i + 1].x > it->x)
+                hw = page.items[i + 1].x - it->x;
+            rect(s, x, sy, hw, it->h, SEL_COLOUR);
         }
 
         if (it->at < 0) continue;
@@ -5468,11 +5579,13 @@ static int follow_link(const char *href, const char *joined) {
 
 enum { MA_LINK_OPEN, MA_LINK_WINDOW, MA_LINK_COPY, MA_LINK_SAVE,
        MA_PIC_OPEN, MA_PIC_COPY, MA_PIC_SAVE,
-       MA_BACK, MA_FORWARD, MA_RELOAD, MA_PAGE_SAVE, MA_PAGE_COPY, MA_COUNT };
+       MA_BACK, MA_FORWARD, MA_RELOAD, MA_PAGE_SAVE, MA_PAGE_COPY,
+       MA_SEL_COPY, MA_SEL_LOOKUP, MA_COUNT };
 static const char *const MENU_LABEL[MA_COUNT] = {
     "open the link", "open it in a new window", "copy the link's address", "save what it links to",
     "open the picture", "copy the picture's address", "save the picture",
     "back", "forward", "reload", "save the page", "copy the page's address",
+    "copy", "look it up",
 };
 static int  menu_open, menu_x, menu_y, menu_n, menu_w;
 static int  menu_swallow;              /* the release after a press that put it away */
@@ -5502,6 +5615,12 @@ static void menu_build(int li, int node, int x, int y) {
     menu_n = 0;
     menu_href[0] = menu_link[0] = menu_pic[0] = 0;
     url_t u;
+    /* Words selected come first: copied, or looked up as a search is. */
+    sel_range();
+    if (sel_lo >= 0) {
+        menu_add(MA_SEL_COPY);
+        menu_add(MA_SEL_LOOKUP);
+    }
     if (li >= 0) {
         w_copy(menu_href, sizeof(menu_href), page.text + page.links[li].href, sizeof(menu_href));
         if (link_target(li, &u)) url_text(&u, menu_link, sizeof(menu_link));
@@ -5634,6 +5753,23 @@ static int menu_do(int act) {
     case MA_PAGE_COPY:
         if (hist_at >= 0) menu_copy("the page's address", hist[hist_at].text);
         return 0;
+    case MA_SEL_COPY:
+        sel_range();
+        if (sel_lo >= 0) sel_copy();
+        return 0;
+    case MA_SEL_LOOKUP: {
+        static char q[200];
+        sel_range();
+        int n = sel_text(q, (int)sizeof(q), 0);
+        for (int i = 0; i < n; i++) if (q[i] == '\n') q[i] = ' ';
+        if (n <= 0) return 0;
+        puts("browser menu: looked up ");
+        puts(q);
+        putc('\n');
+        set_search(q);
+        push_history(address);
+        return 1;
+    }
     }
     return 0;
 }
@@ -5898,6 +6034,20 @@ int main(int argc, char **argv) {
                     jsdom_typed(focus_node);
                 }
                 dirty = 1;
+            } else if (KEY_CTRL(raw) && key_ctrl_letter(raw) == 'c') {
+                /* The page's words: a field's own are copied by the field. */
+                sel_range();
+                if (sel_lo >= 0) sel_copy();
+                dirty = 1;
+            } else if (KEY_CTRL(raw) && key_ctrl_letter(raw) == 'a') {
+                sel_on = 1;
+                sel_all = 1;
+                sel_range();
+                if (sel_lo >= 0) sel_say();
+                dirty = 1;
+            } else if (k == 27 && sel_on) {
+                sel_on = 0;
+                dirty = 1;
             } else {
                 int pg = view_h - 40;
                 if (k == KEY_DOWN)       scroll += 40;
@@ -6062,6 +6212,7 @@ int main(int argc, char **argv) {
 
         if (want_load) {
             want_load = 0;
+            sel_on = 0;
             if (announce_owed) announce_page();  /* the last page, as far as it got */
             /* A reader asking for an address starts the count again; a page
                asking on their behalf does not, or a pair of pages pointing
@@ -6179,6 +6330,45 @@ int main(int argc, char **argv) {
             } else {
                 menu_build(over_link, node_under, in.mx, in.my);
             }
+            dirty = 1;
+        }
+
+        /* Words selected by dragging. A press in the page's view starts one
+           once the pointer has gone five pixels with the button held, and
+           the release that ends it is the selection's, not a click on what
+           is under it (a link where the drag began is not followed). A
+           press and a release in place is a click, and puts a selection
+           away. */
+        static int sel_press, sel_drag, sel_px, sel_py;
+        if (in.pressed && !menu_on && in.my > view_y && in.my < view_y + view_h
+            && in.mx > view_x && in.mx < view_x + view_w) {
+            sel_press = 1;
+            sel_drag = 0;
+            sel_px = dx;
+            sel_py = dy;
+        }
+        if (sel_press && in.down && !sel_drag
+            && (dx - sel_px) * (dx - sel_px) + (dy - sel_py) * (dy - sel_py) >= 25) {
+            sel_drag = 1;
+            sel_on = 1;
+            sel_all = 0;
+            sel_ax = sel_px;
+            sel_ay = sel_py;
+        }
+        if (sel_drag) {
+            sel_bx = dx;
+            sel_by = dy;
+        }
+        if (in.released && sel_press) {
+            if (sel_drag) {
+                in.released = 0;
+                sel_range();
+                if (sel_lo >= 0) sel_say();
+                else sel_on = 0;
+            } else if (sel_on) {
+                sel_on = 0;
+            }
+            sel_press = sel_drag = 0;
             dirty = 1;
         }
 
@@ -6405,6 +6595,7 @@ int main(int argc, char **argv) {
                but a line or a box half scrolled off the top, which is always
                drawn, landed on the toolbar above the bevel. */
             surface pg = { px + (u32)(view_y + 2) * (u32)w, w, view_h - 4 };
+            sel_range();
             draw_page(&pg, view_x + UI_PAD, 0, view_w, view_h - 4);
         }
         ui_sunken(&s, &t, view_x, view_y, view_w + UI_SCROLL_W, view_h);
