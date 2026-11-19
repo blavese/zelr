@@ -113,6 +113,16 @@ numbered files are still to 6048716; where they disagree with this list, this li
   built unsigned program; h264test in the machine still checks the decoder against Windows' answers in h264data.h.
   Gate 74 steps (one out, one in).
 
+### 0.190.0
+
+- **Files sorts by size and by date (14)**: `sort_by` (0 name, 1 size, 2 date) and `sorts_after` (folders first, then
+  the larger or the newer first, the name settling a tie); `entry.when` is the written time as a number that sorts
+  (DOS-like, from `file_times`), asked in `reload` only while sorting by date. `set_sort` (View's "By name", "By size",
+  "By date", or ctrl+1, 2, 3) keeps the chosen entry chosen and says "sorted by size, the largest first" and the like.
+  Up, Down, Home and End now always put the entry chosen on the line in place of what was said (they did only in a
+  search). An archive's listing sorts by name or size (its entries carry no time here); a search's results by name.
+  sortcheck, new (7), gate step `sorttest` (86 steps).
+
 ### 0.189.0
 
 - **A machine with a password starts locked (07, 14)**: wm.c `session_open` (set when the lock opens, or by

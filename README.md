@@ -197,7 +197,9 @@ outside the folder is not written. The other way, ctrl+K (or Make a zip in
 the File menu) makes NAME.zip beside the file or folder selected, with
 everything below it, each file deflated where that makes it smaller and
 kept as it is where it does not; another system's zip tools read it. Home
-and End go to the top and the bottom of the list. In Files, / puts the keyboard in the
+and End go to the top and the bottom of the list. The View menu, or ctrl+1,
+2 and 3, sorts it by name, by size (the largest first) or by date (the
+newest first), folders always at the top. In Files, / puts the keyboard in the
 filter, which narrows the folder as you type; Return there looks in every
 folder below it for names with those letters in them, and lists what it
 finds by its path, to open, copy or put in the trash. Settings' Storage page says how much of the disk and of a stick
@@ -515,6 +517,7 @@ instead.
     python tools/idlecheck.py   locked by itself after a minute idle; not while the pointer moves or sound plays
     python tools/zipmakecheck.py make a zip of a folder and a file in Files, open it with Python's zipfile
     python tools/startlockcheck.py a password set: the console asks for it first, the desktop opens locked
+    python tools/sortcheck.py   Files sorted by size, by date and by name, from its keys
     python tools/downloadcheck.py  a 12 MB download fetched in parts with Range, read back byte for byte
     python tools/notescheck.py  select all, copy, paste, save, undo, find and replace in the editor, from its keys
     python tools/timecheck.py   set the time zone from the shell and in Settings, read the clocks and a file's time

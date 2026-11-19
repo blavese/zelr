@@ -888,6 +888,13 @@ Added in 0.165.0, not yet in the table below:
   about:history?forget is not followed (still 3); after the server's /peek, about:history's second entry (a, a file;
   the links found as bands of accent inside the window) opens; the forget button (found by its colour) leaves 0.
 
+Added in 0.190.0, not yet in the table below:
+- **`sortcheck.py`** (gate `sorttest`, full; 7 checks). /home/srt from mkfat (aaa.txt 2000 bytes, big.bin 30000,
+  mid.txt 5000, small.txt 100, zdir/in.txt; all stamped with mkfat's one date) and fresh.txt written by the console's
+  `write` (today). Files there; the order read by Home and five downs ("files: NAME - kind"): ctrl+2 zdir, big, mid,
+  aaa, small, fresh; ctrl+3 zdir, fresh, then the rest by name; ctrl+1 (the chosen small.txt stays chosen: up gives
+  mid.txt) zdir, aaa, big, fresh, mid, small.
+
 Added in 0.189.0, not yet in the table below:
 - **`startlockcheck.py`** (gate `startlocktest`, full; 9 checks). /cfg/lock written by mkfat as Settings writes it
   (salt, space, hashlib's SHA-256 over salt and password "plum tree 42"). Boot 1 with `console`: "This machine has a
