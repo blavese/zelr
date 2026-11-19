@@ -903,6 +903,20 @@ int main(void) {
            jsdom_context_menu(dom_by_id(&page, "b"), 4, 30) == 0);
         oks("and heard it bubble up to the document", content_of(dom_by_id(&page, "up")), "heard b");
     }
+    /* A double click: dblclick, a MouseEvent with detail 2, bubbling to the
+       document. */
+    {
+        load("<body><p id=w>word</p><p id=out>none</p>"
+             "<script>document.addEventListener('dblclick', function (e) {"
+             " document.getElementById('out').textContent = e.type + ' ' + e.detail + ' ' + e.button + ' '"
+             " + (e instanceof MouseEvent) + ' ' + e.target.id; });</script></body>");
+        char err[128];
+        int changed = 0;
+        run_scripts(&page, err, (int)sizeof(err), &changed);
+        jsdom_dblclick(dom_by_id(&page, "w"), 4, 4);
+        oks("a double click is told as dblclick with detail 2, from the element it was on",
+            content_of(dom_by_id(&page, "out")), "dblclick 2 0 true w");
+    }
     /* window.open opens a window only in the reader's own click or key, as
        a popup blocker has it, and one a click. */
     {

@@ -4994,6 +4994,7 @@ static int draw_x0 = -0x7FFFFFFF, draw_x1 = 0x7FFFFFFF;
 
 #define CLIP_TEXT_MAX (64 * 1024 - 1)
 #define SEL_COLOUR 0xACCEF7     /* behind words selected, as other browsers draw it */
+#define DOUBLE_TICKS 50         /* a second press within half a second is a double click */
 
 /* --- words selected ----------------------------------------------------------
  *
@@ -5064,6 +5065,59 @@ static int sel_text(char *out, int cap, int *words) {
     }
     out[n] = 0;
     return n;
+}
+
+/* The word holding a point, and only that: a double click between words
+   selects nothing. -1 for none. */
+static int word_at(int x, int y) {
+    for (int i = 0; i < page.nitems; i++) {
+        const litem *it = &page.items[i];
+        if (it->kind != LK_TEXT || it->at < 0) continue;
+        if (x >= it->x && x < it->x + it->w && y >= it->y && y < it->y + it->h) return i;
+    }
+    return -1;
+}
+
+/* Words a to b as the selection, by the middles of their boxes: kept as
+   two points, as a drag's is. */
+static void sel_words(int a, int b) {
+    const litem *p = &page.items[a], *q = &page.items[b];
+    sel_on = 1;
+    sel_all = 0;
+    sel_ax = p->x + p->w / 2;
+    sel_ay = p->y + p->h / 2;
+    sel_bx = q->x + q->w / 2;
+    sel_by = q->y + q->h / 2;
+}
+
+static int node_within(const ddoc *d, int n, int anc) {
+    for (int depth = 0; n >= 0 && n < d->count && depth < 512; depth++, n = d->nodes[n].parent)
+        if (n == anc) return 1;
+    return 0;
+}
+
+/* A triple click's paragraph: the run of words around one, in the order
+   laid out, inside the nearest block holding it (dom_is_block). */
+static void sel_paragraph(int i) {
+    const ddoc *ld = laid ? laid : &doc;
+    int blk = page.items[i].node;
+    while (blk >= 0 && blk < ld->count
+           && !(ld->nodes[blk].kind == DN_ELEMENT && dom_is_block(ld->nodes[blk].tag)))
+        blk = ld->nodes[blk].parent;
+    int a = i, b = i;
+    for (int k = i - 1; k >= 0; k--) {
+        const litem *it = &page.items[k];
+        if (it->kind != LK_TEXT || it->at < 0) continue;
+        if (!node_within(ld, it->node, blk)) break;
+        a = k;
+    }
+    for (int k = i + 1; k < page.nitems; k++) {
+        const litem *it = &page.items[k];
+        if (it->kind != LK_TEXT || it->at < 0) continue;
+        if (!node_within(ld, it->node, blk)) break;
+        b = k;
+    }
+    sel_words(a, b);
 }
 
 /* Said on the console as a selection is made, on one line. */
@@ -6339,13 +6393,33 @@ int main(int argc, char **argv) {
            is under it (a link where the drag began is not followed). A
            press and a release in place is a click, and puts a selection
            away. */
-        static int sel_press, sel_drag, sel_px, sel_py;
+        static int sel_press, sel_drag, sel_px, sel_py, sel_kept;
+        /* Presses counted while each comes within half a second of the last
+           and where it was: the second selects the word under the pointer,
+           the third its paragraph, and the release after either keeps it. */
+        static int clicks, click_tick, click_x, click_y;
+        int dbl_node = -1;
         if (in.pressed && !menu_on && in.my > view_y && in.my < view_y + view_h
             && in.mx > view_x && in.mx < view_x + view_w) {
+            int now = ticks();
+            int near = (dx - click_x) * (dx - click_x) + (dy - click_y) * (dy - click_y) <= 25;
+            clicks = now - click_tick <= DOUBLE_TICKS && near ? clicks + 1 : 1;
+            click_tick = now;
+            click_x = dx;
+            click_y = dy;
             sel_press = 1;
             sel_drag = 0;
             sel_px = dx;
             sel_py = dy;
+            sel_kept = 0;
+            int wd = clicks >= 2 ? word_at(dx, dy) : -1;
+            if (wd >= 0) {
+                if (clicks == 2) sel_words(wd, wd);
+                else sel_paragraph(wd);
+                sel_range();
+                if (sel_lo >= 0) sel_say();
+                sel_kept = 1;
+            }
         }
         if (sel_press && in.down && !sel_drag
             && (dx - sel_px) * (dx - sel_px) + (dy - sel_py) * (dy - sel_py) >= 25) {
@@ -6365,8 +6439,9 @@ int main(int argc, char **argv) {
                 sel_range();
                 if (sel_lo >= 0) sel_say();
                 else sel_on = 0;
-            } else if (sel_on) {
-                sel_on = 0;
+            } else {
+                if (sel_on && !sel_kept) sel_on = 0;
+                if (clicks == 2) dbl_node = node_under;
             }
             sel_press = sel_drag = 0;
             dirty = 1;
@@ -6432,6 +6507,15 @@ int main(int argc, char **argv) {
                 say("a script stopped: ", jsdom_error());
             }
             if (stop) in.released = 0;
+        }
+        /* And after the second click in a place, dblclick. */
+        if (dbl_node >= 0 && jsdom_live()) {
+            jsdom_dblclick(dbl_node, dx, in.my - view_y);
+            if (jsdom_changed()) {
+                relayout(view_w - UI_PAD * 2);
+                over_link = lay_link_at(&page, dx, dy);
+                dirty = 1;
+            }
         }
 
         /* A control takes the click before a link does. It comes after the

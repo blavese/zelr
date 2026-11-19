@@ -6288,6 +6288,17 @@ __attribute__((unused)) static int jsdom_click_with(int node, int x, int y, int 
 }
 __attribute__((unused)) static int jsdom_click(int node) { return jd_fire_click(node, 1, 0, 0); }
 
+/* A second click in the same place soon after the first: the page hears
+   dblclick, a MouseEvent with detail 2, once the click has been told. */
+__attribute__((unused)) static int jsdom_dblclick(int node, int x, int y) {
+    if (!jd_open || node < 0 || jd_spent()) return 0;
+    jobj *ev = jd_mouse_event("dblclick", node, 1, x, y, 0);
+    if (!ev) return 0;
+    js_set(&jd_J, ev, "detail", js_num(2));
+    jval tv = jd_el_value(&jd_J, node);
+    return jd_dispatch_to(ev, tv, tv);
+}
+
 /* The right button pressed on an element. The page hears contextmenu first
    and may draw a menu of its own, which it says by preventing it: the
    browser's menu is not opened then. */

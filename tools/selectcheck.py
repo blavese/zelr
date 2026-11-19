@@ -15,6 +15,8 @@ clipcheck reads it.
     apart, and the clipboard holds exactly that;
   - a click in place puts the selection away;
   - a drag that ends on the link selects and does not follow it;
+  - a double click selects the word under it, and the page hears dblclick
+    (a block turns green); a triple click selects the word's paragraph;
   - ctrl+A selects every word;
   - the right button's menu offers "copy" and "look it up" first, and
     "look it up" searches for the words.
@@ -36,6 +38,7 @@ WORK = os.path.join(ROOT, "selectcheck.%d" % os.getpid())
 TERMINAL = (0x10, 0x14, 0x1A)
 SCREEN = (0, 0, 1024, 768)
 SELECTED = (0xAC, 0xCE, 0xF7)           # browser.c SEL_COLOUR
+HEARD = (0x10, 0xA0, 0x10)              # the page's block once it heard dblclick
 WORDS = [("alpha", (0xE0, 0x30, 0x40)), ("beta", (0x30, 0xC0, 0x70)), ("gamma", (0xE0, 0xC0, 0x20)),
          ("delta", (0xC0, 0x70, 0xC0)), ("epsilon", (0x40, 0x80, 0xC0)), ("zeta", (0xE0, 0x80, 0x20)),
          ("eta", (0x70, 0xB0, 0xB0)), ("theta", (0xB0, 0x90, 0x60))]
@@ -55,7 +58,11 @@ def page():
 body { margin: 0; background: #ffffff; font-size: 28px }
 p { margin: 24px; line-height: 48px }
 a { color: #202020; background: #%02x%02x%02x }
-</style></head><body><p>%s</p><p>%s <a href="t.htm">theta</a></p></body></html>
+#heard { height: 24px; margin: 24px; background: #101010 }
+</style></head><body><p>%s</p><p>%s <a href="t.htm">theta</a></p><div id="heard"></div>
+<script>document.addEventListener("dblclick", function (e) {
+  if (e.detail == 2) document.getElementById("heard").style.background = "#10a010"; });</script>
+</body></html>
 """ % (r, g, b, one, two)).encode()
 
 
@@ -182,6 +189,33 @@ def main():
         c.add("a drag that ends on a link selects (%s) and does not follow it" % line,
               said and line == "browser selection: 2 words: eta theta"
               and "file:///home/sel/t.htm" not in vm.serial()[mark:])
+
+        # A double click on gamma, a triple on zeta: presses half a second
+        # apart at most in the guest, the pointer still between them.
+        def presses(where, n):
+            mon.move_to(*where)
+            time.sleep(0.4)
+            for _ in range(n):
+                mon.send("mouse_button 1", settle=0.12)
+                mon.send("mouse_button 0", settle=0.12)
+
+        mark = len(vm.serial())
+        presses(centre(at["gamma"]), 2)
+        said = said_since(mark, "browser selection: ", 20)
+        time.sleep(0.5)
+        line = line_since(mark, "browser selection: ")
+        _, _, _, shot, heard = mon.wait_screen(
+            "sel-heard", lambda w, h, px: count_in(px, w, SCREEN, HEARD) > 1000, timeout=15)
+        c.add("a double click selects the word under it (%s), and the page hears dblclick" % line,
+              said and line == "browser selection: 1 word: gamma" and heard, shot)
+        mark = len(vm.serial())
+        presses(centre(at["zeta"]), 3)
+        said_since(mark, "browser selection: 4 words", 20)
+        time.sleep(0.5)
+        out = vm.serial()[mark:]
+        c.add("a triple click selects the word's paragraph",
+              "browser selection: 4 words: epsilon zeta eta theta" in out,
+              " / ".join(l.strip() for l in out.split("\n") if "browser selection" in l))
 
         # ctrl+A.
         mark = len(vm.serial())
