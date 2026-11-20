@@ -460,6 +460,7 @@ static const mitem_t M_WORK[] = {
     { "Terminal",     "/bin/term" },
     { "Files",        "/bin/files" },
     { "Notes",        "/bin/notes" },
+    { "Sheet",        "/bin/sheet" },
     { "Calculator",   "/bin/calc" },
     { "Calendar",     "/bin/calendar" },
     { "Clock",        "/bin/clock" },

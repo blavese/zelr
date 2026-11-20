@@ -73,7 +73,7 @@ MENU_LEFT = DOCK_SIDE
 MENU_KINDS = ["Productivity", "Internet", "Media", "Games", "System",
               "Session"]
 MENU_IN = {
-    "Productivity": ["Terminal", "Files", "Notes", "Calculator", "Calendar", "Clock"],
+    "Productivity": ["Terminal", "Files", "Notes", "Sheet", "Calculator", "Calendar", "Clock"],
     "Internet": ["Browser"],
     "Media": ["Paint", "Music", "Pictures"],
     "Games": ["Blackjack", "Poker"],

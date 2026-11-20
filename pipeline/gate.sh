@@ -690,6 +690,7 @@ if [ "$MODE" = "screen" ] || [ "$MODE" = "full" ]; then
   redirecttest() { keep timeout 600 python tools/redirectcheck.py; }
   tooltest() { keep timeout 600 python tools/toolcheck.py; }
   pipetest() { keep timeout 600 python tools/pipecheck.py; }
+  sheettest() { keep timeout 900 python tools/sheetcheck.py; }
   downloadtest() { keep timeout 900 python tools/downloadcheck.py; }
 
   # The second boot of a machine, which is the one nothing else reaches:
@@ -829,6 +830,7 @@ if [ "$MODE" = "screen" ] || [ "$MODE" = "full" ]; then
   par_start "the terminal sends output into a file" redirecttest
   par_start "the terminal's cal, du and df" tooltest
   par_start "the terminal hands one command's output to the next" pipetest
+  par_start "a spreadsheet works its formulas out and keeps them as CSV" sheettest
   par_start "a download bigger than the browser holds is saved whole" downloadtest
   par_start "a machine still starts once it has formatted its disk" boottest
   par_start "ctrl+f finds a word that is on the screen" findtest

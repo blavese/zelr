@@ -33,6 +33,7 @@
 #define KIND_PAGE    6
 #define KIND_FILM    7
 #define KIND_ARCHIVE 8
+#define KIND_SHEET   9
 
 typedef struct {
     char name[NAME_MAX];
@@ -139,6 +140,7 @@ static int kind_of(const char *dir, const char *name, int is_dir) {
     if (ends_with(name, ".html") || ends_with(name, ".htm")) return KIND_PAGE;
     if (ends_with(name, ".mp4")) return KIND_FILM;
     if (ends_with(name, ".zip")) return KIND_ARCHIVE;
+    if (ends_with(name, ".csv")) return KIND_SHEET;
     if (ends_with(name, ".txt") || ends_with(name, ".md")
         || ends_with(name, ".cfg") || ends_with(name, ".log")
         || ends_with(name, ".c") || ends_with(name, ".h")
@@ -156,6 +158,7 @@ static const char *kind_name(int k) {
         case KIND_FILM:  return "film";
         case KIND_PROG:  return "program";
         case KIND_ARCHIVE: return "archive";
+        case KIND_SHEET: return "sheet";
         default:         return "file";
     }
 }
@@ -938,7 +941,8 @@ static void open_entry(int index) {
             return;
         }
         const char *prog = e->kind == KIND_SOUND ? "/bin/music" : e->kind == KIND_PICTURE ? "/bin/pictures"
-                         : e->kind == KIND_PAGE || e->kind == KIND_FILM ? "/bin/browser" : "/bin/notes";
+                         : e->kind == KIND_PAGE || e->kind == KIND_FILM ? "/bin/browser"
+                         : e->kind == KIND_SHEET ? "/bin/sheet" : "/bin/notes";
         if (e->kind == KIND_PROG) prog = target;
         if (prog == target ? spawn(target) < 0 : spawn_arg(prog, target) < 0) say("could not start it");
         else say("opened from the archive");
@@ -954,6 +958,8 @@ static void open_entry(int index) {
            showed one as noise. */
         case KIND_PAGE:
         case KIND_FILM: open_with(index, "/bin/browser"); break;
+        /* A table went to the text editor as lines of commas. */
+        case KIND_SHEET: open_with(index, "/bin/sheet"); break;
         case KIND_PROG:
             if (spawn(target) < 0) say("would not run");
             else say("started");
@@ -1323,6 +1329,7 @@ static u32 kind_tint(const ui_theme *t, int kind) {
     switch (kind) {
         case KIND_DIR:   return t->accent;
         case KIND_TEXT:  return mix(t->fg, t->accent, 60);
+        case KIND_SHEET: return RGB(0x4C, 0xB0, 0x6E);
         case KIND_SOUND: return RGB(0x9A, 0x86, 0xE8);
         case KIND_PROG:  return RGB(0xE0, 0xA0, 0x3C);
         default:         return t->dim;

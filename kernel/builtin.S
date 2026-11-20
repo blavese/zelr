@@ -435,3 +435,10 @@ builtin_clock_end:
 builtin_help_start:
 .incbin "build/user/help.elf.z"
 builtin_help_end:
+
+.balign 4
+.global builtin_sheet_start
+.global builtin_sheet_end
+builtin_sheet_start:
+.incbin "build/user/sheet.elf.z"
+builtin_sheet_end:
