@@ -698,6 +698,7 @@ if [ "$MODE" = "screen" ] || [ "$MODE" = "full" ]; then
   ordertest() { keep timeout 900 python tools/ordercheck.py; }
   difftest() { keep timeout 900 python tools/diffcheck.py; }
   greptest() { keep timeout 900 python tools/grepcheck.py; }
+  slidetest() { keep timeout 900 python tools/slidecheck.py; }
   downloadtest() { keep timeout 900 python tools/downloadcheck.py; }
 
   # The second boot of a machine, which is the one nothing else reaches:
@@ -845,6 +846,7 @@ if [ "$MODE" = "screen" ] || [ "$MODE" = "full" ]; then
   par_start "a spreadsheet puts rows in order" ordertest
   par_start "the terminal compares two files, and counts lines alike" difftest
   par_start "the terminal's grep finds words in any case and in every folder below" greptest
+  par_start "pictures shows a folder as a slideshow" slidetest
   par_start "a download bigger than the browser holds is saved whole" downloadtest
   par_start "a machine still starts once it has formatted its disk" boottest
   par_start "ctrl+f finds a word that is on the screen" findtest

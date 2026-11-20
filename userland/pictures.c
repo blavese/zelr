@@ -11,6 +11,9 @@
  * each time it changes, which is how a harness knows (piccheck reads the
  * window, the line says which picture it should be).
  *
+ * S shows the folder as a slideshow: each picture for three seconds, the
+ * first again after the last, until S again or any key that moves.
+ *
  *   /bin/pictures [FILE | FOLDER]
  */
 #include "zelr.h"
@@ -42,6 +45,15 @@ static int pan_x, pan_y;
 static int drag_x, drag_y, dragging;
 static char shown_why[96];          /* why there is no picture, when there is none */
 static char said[160];
+
+#define SHOW_TICKS 300              /* a slideshow's picture: three seconds */
+static int show_on, show_next;      /* a slideshow, and the tick of its next picture */
+
+static void show_stop(void) {
+    if (!show_on) return;
+    show_on = 0;
+    puts("pictures: slideshow stopped\n");
+}
 
 static int lower(int c) { return c >= 'A' && c <= 'Z' ? c + 32 : c; }
 
@@ -337,6 +349,17 @@ int main(int argc, char **argv) {
         int room_h = h - bar;
         for (int ki = 0; ki < in.nkeys; ki++) {
             u32 k = in.keys[ki];
+            if (k == 's' || k == 'S') {
+                if (show_on) show_stop();
+                else if (nnames > 1) {
+                    show_on = 1;
+                    show_next = ticks() + SHOW_TICKS;
+                    puts("pictures: slideshow, every 3 seconds\n");
+                }
+                continue;
+            }
+            if (k == KEY_RIGHT || k == KEY_LEFT || k == KEY_UP || k == KEY_DOWN || k == ' '
+                || k == KEY_HOME || k == KEY_END) show_stop();
             int kz = scale_now(w, room_h);
             int wide = pic.rgb && pic.w * kz / 16 > w, tall = pic.rgb && pic.h * kz / 16 > room_h;
             /* The arrows move about a picture bigger than the window, and
@@ -355,8 +378,16 @@ int main(int argc, char **argv) {
             else if (k == 'r' || k == 'R') rotate_right();
             else if (k == 'w' || k == 'W') set_wallpaper();
         }
+        /* The slideshow's next picture when its time comes, and the loop
+           woken for it (ui_wait sleeps until then, not a second). */
+        if (show_on && ticks() - show_next >= 0) {
+            load(at + 1 < nnames ? at + 1 : 0);
+            show_next = ticks() + SHOW_TICKS;
+        }
+        if (show_on) ui_due(show_next);
+
         /* A drag moves a picture bigger than the window. */
-        if (in.pressed) { dragging = 1; drag_x = in.mx; drag_y = in.my; }
+        if (in.pressed) { show_stop(); dragging = 1; drag_x = in.mx; drag_y = in.my; }
         if (dragging && in.down && pic.rgb) {
             int kz = scale_now(w, room_h);
             pan_x -= (in.mx - drag_x) * 16 / kz;
@@ -378,6 +409,7 @@ int main(int argc, char **argv) {
         char right[48];
         int n = 0;
         if (nnames) {
+            if (show_on) for (const char *p = "slideshow, "; *p; p++) right[n++] = *p;
             n += utoa((u32)(at + 1), right + n);
             for (const char *p = " of "; *p; p++) right[n++] = *p;
             n += utoa((u32)nnames, right + n);

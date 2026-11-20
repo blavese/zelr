@@ -76,6 +76,7 @@ static const row_t ROWS[] = {
     { "pictures", "the arrows, a drag", "about a picture bigger than the window" },
     { "pictures", "R", "turned a quarter to the right" },
     { "pictures", "W", "made the wallpaper" },
+    { "pictures", "S", "a slideshow, three seconds a picture; S or an arrow stops it" },
     { "music", "Up, Down, Home, End", "a song chosen" },
     { "music", "Return", "the song chosen played" },
     { "music", "Space", "paused, and on from the same place" },
