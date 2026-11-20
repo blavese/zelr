@@ -882,7 +882,7 @@ static void connect_task(void) {
     int rc = 0, t = -1;
     ipv4_t ip = net_parse_ip(host);
     if (!ip && !net_resolve(host, &ip, 6000)) rc = NET_ERR_RESOLVE;
-    if (!rc && (t = tcp_open(ip, port, 6000)) < 0) rc = NET_ERR_CONNECT;
+    if (!rc && (t = tcp_open(ip, port, TCP_CONNECT_MS)) < 0) rc = NET_ERR_CONNECT;
     /* A handshake that fails takes the connection with it, as in
        sys_connect_tls. */
     if (!rc && secure && !tls_connect(t, host)) { tcp_close(t); t = -1; rc = NET_ERR_TLS; }
@@ -935,7 +935,7 @@ static i64 sys_connect(registers_t *r) {
     ipv4_t ip = net_parse_ip(host);
     if (!ip && !net_resolve(host, &ip, 6000)) { sock_give_back(h); return NET_ERR_RESOLVE; }
 
-    int t = tcp_open(ip, port, 6000);
+    int t = tcp_open(ip, port, TCP_CONNECT_MS);
     if (t < 0) { sock_give_back(h); return NET_ERR_CONNECT; }
 
     socks[h].tcp = t;
@@ -969,7 +969,7 @@ static i64 sys_connect_tls(registers_t *r) {
     ipv4_t ip = net_parse_ip(host);
     if (!ip && !net_resolve(host, &ip, 6000)) { sock_give_back(h); return NET_ERR_RESOLVE; }
 
-    int t = tcp_open(ip, port, 6000);
+    int t = tcp_open(ip, port, TCP_CONNECT_MS);
     if (t < 0) { sock_give_back(h); return NET_ERR_CONNECT; }
 
     /* A handshake that fails takes the connection with it. Leaving the TCP

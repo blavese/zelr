@@ -901,6 +901,15 @@ static void test_tcp(void) {
     ok("and the end counts once every byte before it is in",
        tcp_ended(h) && tcp_test_next(h) == 17);
     tcp_test_close(h);
+
+    /* A peer that answers seven seconds late, as badssl.com's servers did
+       on 2026-11-20, is waited for; one that never answers is let go at the
+       deadline asked for, not held. */
+    ok("a connection answered seven seconds late is made", tcp_test_connect(TCP_CONNECT_MS, 7000));
+    u64 asked = timer_ticks();
+    bool none = !tcp_test_connect(1500, 0);
+    ok("one never answered is let go at its deadline",
+       none && timer_ticks() - asked < (u64)timer_hz() * 4);
 }
 
 

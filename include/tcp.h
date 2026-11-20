@@ -21,6 +21,14 @@
    return a bool and take the handle separately. */
 int  tcp_open(ipv4_t ip, u16 port, u32 timeout_ms);
 
+/* How long a connection is waited for: ten seconds. It was six, and a server
+   slow to take connections (badssl.com took seven on 2026-11-20, and failed
+   three gates) was "could not connect" here and answered everywhere else.
+   Windows waits about twenty one. It stays under the browser's twelve
+   seconds of quiet before it gives up on a request (fetch.h WJ_QUIET), so a
+   page is told the kernel's answer rather than hanging up first. */
+#define TCP_CONNECT_MS 10000
+
 bool tcp_send(int h, const void *data, u16 len);
 
 /* Hands over what has arrived and takes it out of the buffer, so reading in
@@ -68,3 +76,8 @@ int  tcp_test_open(void);
 void tcp_test_segment(int h, u32 off, const char *data, u16 len, bool fin);
 u32  tcp_test_next(int h);
 void tcp_test_close(int h);
+
+/* A connection asked for with no wire under it, through the same wait as
+   tcp_open's, and answered after answer_ms by a task of its own (0: never).
+   Whether it was made. */
+bool tcp_test_connect(u32 timeout_ms, u32 answer_ms);

@@ -83,7 +83,7 @@ int http_get(const char *spec, const char *path, const char *save_as) {
        outside also times whoever typed the command. The reads below give the
        processor away while they wait, so the tick count keeps moving. */
     u64 began = timer_ticks();
-    int h = tcp_open(ip, port, 6000);
+    int h = tcp_open(ip, port, TCP_CONNECT_MS);
     if (h < 0) return HTTP_ERR_CONNECT;
 
     if (secure) {

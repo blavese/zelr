@@ -528,6 +528,24 @@ void tcp_give_to(int h, u32 pid) {
     if (c) c->owner = pid;
 }
 
+/* The handshake waited for, the SYN sent again as its timer says: the
+   handle once the peer answers, or -1 and the slot back at the deadline. */
+static int await_open(tcpc *c, int h, u32 timeout_ms) {
+    u64 deadline = timer_ticks() + ((u64)timeout_ms * timer_hz()) / 1000u;
+    while (c->state == T_SYNSENT && timer_ticks() < deadline) {
+        net_poll();
+        tcp_pump();                            /* resends the SYN if needed */
+        if (c->state == T_SYNSENT) net_wait();
+    }
+
+    if (c->state != T_OPEN) {
+        c->state = T_CLOSED;
+        c->used = false;
+        return -1;
+    }
+    return h;
+}
+
 int tcp_open(ipv4_t ip, u16 port, u32 timeout_ms) {
     if (!next_port) next_port = (u16)(45000 + (timer_ticks() & 0x0FFF));
 
@@ -589,19 +607,7 @@ int tcp_open(ipv4_t ip, u16 port, u32 timeout_ms) {
         return -1;
     }
 
-    u64 deadline = timer_ticks() + (timeout_ms * timer_hz()) / 1000u;
-    while (c->state == T_SYNSENT && timer_ticks() < deadline) {
-        net_poll();
-        tcp_pump();                            /* resends the SYN if needed */
-        if (c->state == T_SYNSENT) net_wait();
-    }
-
-    if (c->state != T_OPEN) {
-        c->state = T_CLOSED;
-        c->used = false;
-        return -1;
-    }
-    return h;
+    return await_open(c, h, timeout_ms);
 }
 
 bool tcp_send(int h, const void *data, u16 len) {
@@ -771,6 +777,61 @@ void tcp_test_segment(int h, u32 off, const char *data, u16 len, bool fin) {
 u32 tcp_test_next(int h) {
     const tcpc *c = slot(h);
     return c ? c->rcv_nxt - TEST_BASE : 0;
+}
+
+/* The far end of tcp_test_connect: it waits, then answers the SYN, if the
+   connection it was started for is still the one being asked for. */
+static volatile int test_answer_h = -1;
+static u32 test_answer_ms;
+
+static void test_answer_task(void) {
+    task_sleep(test_answer_ms);
+    int h = test_answer_h;
+    tcpc *c = h >= 0 ? &conns[h] : 0;
+    if (c && c->used && c->quiet && c->state == T_SYNSENT) {
+        u8 seg[sizeof(tcp_t)];
+        tcp_t *t = (tcp_t *)seg;
+        memset(t, 0, sizeof(tcp_t));
+        t->sport = np_hs(c->peer_port);
+        t->dport = np_hs(c->local_port);
+        t->seq = np_hl(TEST_BASE);
+        t->ack = np_hl(c->snd_nxt);
+        t->offset = 5 << 4;
+        t->flags = TH_SYN | TH_ACK;
+        tcp_input(c->peer_ip, seg, sizeof(tcp_t));
+    }
+    task_exit();
+}
+
+bool tcp_test_connect(u32 timeout_ms, u32 answer_ms) {
+    int h = take_slot();
+    if (h < 0) return false;
+    tcpc *c = &conns[h];
+    c->quiet = true;                           /* before anything can send */
+    c->peer_ip = 0x0A0002FEu;
+    c->peer_port = 1;
+    c->local_port = 1;
+    c->snd_nxt = c->snd_una = 1000;
+    c->rcv_nxt = 0;
+    c->rxlen = 0;
+    c->held = 0;
+    c->fin_held = false;
+    c->got_fin = false;
+    c->rt_pending = false;
+    c->state = T_SYNSENT;
+    u32 iss = c->snd_nxt;
+    c->snd_nxt = iss + 1;
+    send_reliable(c, iss, TH_SYN, 0, 0);
+    if (answer_ms) {
+        test_answer_ms = answer_ms;
+        test_answer_h = h;
+        if (!task_create("tcp answer", test_answer_task)) test_answer_h = -1;
+    }
+    int got = await_open(c, h, timeout_ms);
+    test_answer_h = -1;
+    if (got >= 0) tcp_test_close(h);
+    c->quiet = false;
+    return got >= 0;
 }
 
 void tcp_test_close(int h) {
