@@ -890,6 +890,12 @@ Added in 0.165.0, not yet in the table below:
   about:history?forget is not followed (still 3); after the server's /peek, about:history's second entry (a, a file;
   the links found as bands of accent inside the window) opens; the forget button (found by its colour) leaves 0.
 
+Added in 0.223.0, not yet in the table below:
+- **`cutcheck.py`** (gate `cuttest`, full; 15 checks). A CSV with an empty field and a line with no comma, a file apart
+  by tabs, one by spaces, one of words; `cut -d, -f2`, `-d , -f 1,3`, `-c 2-4`, `| cut -d, -f2-`, `-f 2` (tab),
+  `-d " " -f 2`, `| tr a-z A-Z`, `tr -d ,`, `tr abc x`, `tr "\t" ","`, `echo "two  spaces"`, `grep "b c"`, each `> FILE`;
+  the files compared with the same cut and tr written in Python. pipecheck's `echo "a|b"` now expects a|b.
+
 Added in 0.222.0, not yet in the table below:
 - **`sumcheck.py`** (gate `sumtest`, full; 9 checks). Files of known bytes on a fresh volume: empty, "abc", 55, 56
   and 64 bytes (one padding block or two), 3 MiB and 17 random bytes, a copy with one byte changed at 2*65536+4321,

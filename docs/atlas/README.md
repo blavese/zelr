@@ -113,6 +113,15 @@ numbered files are still to 6048716; where they disagree with this list, this li
   built unsigned program; h264test in the machine still checks the decoder against Windows' answers in h264data.h.
   Gate 74 steps (one out, one in).
 
+### 0.223.0
+
+- **cut, tr and quoted words in the terminal (10, 14)**: term.c `split` takes a word to a space outside double quotes
+  and leaves the quotes out (`echo "a|b"` writes a|b, where it wrote "a|b"; pipecheck's expectation follows).
+  `cmd_cut`: `-f LIST` with `-d C` (a tab unless given; `-d,` or `-d ,`), or `-c LIST`; a list of up to 16 numbers and
+  ranges (`cut_list`: N, N-M, N-, -M); what is chosen in the line's order, once; a line with no delimiter whole (`cut_line`
+  into `cut_row`, 4 KiB). `cmd_tr`: SET1 SET2 or -d SET, a map of 256; ranges and \n, \t, \\ (`tr_set`); a shorter SET2
+  repeats its last. Both read a file or what was piped in, 64 KiB at most as the others do.
+
 ### 0.222.0
 
 - **sha256sum and cmp in the terminal (10, 14)**: sha256.h's digest made a piece at a time (`jc_sha256_t`,
