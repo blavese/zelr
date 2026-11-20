@@ -48,6 +48,7 @@ typedef struct {
     u32  is_dir;
     int  kind;
     u32  when;                          /* written, as a number that sorts: by date only */
+    u8   marked;                        /* one of several chosen (Insert, ctrl+A) */
 } entry;
 
 static entry entries[MAX_ENTRIES];
@@ -60,7 +61,10 @@ static int   selected = -1;
 static int   first_row;
 
 static char  status[128];
-static char  clip_path[PATH_MAX];
+/* What Copy or Cut took: the marked entries, or the one chosen. */
+#define CLIP_MAX 64
+static char  clip_paths[CLIP_MAX][PATH_MAX];
+static int   clip_n;
 static int   clip_is_cut;
 
 static char  filter_buf[32];
@@ -232,6 +236,33 @@ static int  when_for = -1;
 static char when_said[48];
 
 /* An entry's whole path: in a search its own, else in cwd. */
+/* --- choosing several ------------------------------------------------------
+ *
+ * Insert marks the entry chosen (or unmarks it) and moves to the next;
+ * ctrl+A marks every one, and again none. Copy, Cut, Paste, Delete and
+ * Details then act on every marked entry, and on the one chosen when none
+ * is; the others (open, rename, a zip, extract) on the one chosen. Marks are
+ * let go whenever the list is read again: a folder gone into, a change
+ * made, a search. In an archive nothing is marked, as nothing there can be
+ * moved. "files: N chosen" on the line and the console. */
+static int marked_count(void) {
+    int n = 0;
+    for (int i = 0; i < count; i++) n += entries[i].marked;
+    return n;
+}
+
+static void say_marked(void) {
+    char line[40];
+    int n = marked_count(), k = 0;
+    if (!n) for (const char *p = "none chosen"; *p; p++) line[k++] = *p;
+    else {
+        k = utoa((u32)n, line);
+        for (const char *p = " chosen"; *p; p++) line[k++] = *p;
+    }
+    line[k] = 0;
+    say(line);
+}
+
 static void entry_path(int index, char *out) {
     if (searching) {
         strncpy(out, found_path[index], PATH_MAX - 1);
@@ -707,6 +738,36 @@ static int count_words(char *out, u32 n, const char *one, const char *many) {
 }
 
 static void show_details(void) {
+    int marks = marked_count();
+    if (marks) {
+        /* Everything marked counted together, folders all the way down. */
+        u32 files = 0, dirs = 0;
+        u64 bytes = 0;
+        char path[PATH_MAX], line[160];
+        for (int i = 0; i < count; i++) {
+            if (!entries[i].marked) continue;
+            if (!entries[i].is_dir) { files++; bytes += entries[i].size; continue; }
+            dt_files = dt_dirs = 0;
+            dt_bytes = 0;
+            entry_path(i, path);
+            details_walk(path, 0);
+            files += dt_files;
+            dirs += dt_dirs + 1;
+            bytes += dt_bytes;
+        }
+        int k = utoa((u32)marks, line);
+        for (const char *p = " chosen: "; *p; p++) line[k++] = *p;
+        k += count_words(line + k, files, "file", "files");
+        for (const char *p = " and "; *p; p++) line[k++] = *p;
+        k += count_words(line + k, dirs, "folder", "folders");
+        line[k++] = ',';
+        line[k++] = ' ';
+        k += size_words(line + k, bytes);
+        for (const char *p = " in all"; *p; p++) line[k++] = *p;
+        line[k] = 0;
+        say(line);
+        return;
+    }
     if (selected < 0 || selected >= count) { say("select a file or folder to know about"); return; }
     entry *e = &entries[selected];
     char line[160];
@@ -765,6 +826,7 @@ static int read_only_here(void) {
 }
 
 static void reload(void) {
+    for (int i = 0; i < MAX_ENTRIES; i++) entries[i].marked = 0;
     searching = 0;
     when_for = -1;
     count = 0;
@@ -1083,42 +1145,79 @@ static int rename_file(const char *from, const char *to) {
     return unlink(from) < 0 ? -1 : 0;
 }
 
-static void do_paste(void) {
-    if (read_only_here()) return;
-    if (!clip_path[0]) { say("nothing copied"); return; }
-
-    const char *leaf = clip_path;
-    for (const char *p = clip_path; *p; p++) if (*p == '/') leaf = p + 1;
-
+/* One taken thing put here: 0 done, 1 already here, 2 into itself, -1 the
+   copy failed. Something cut is moved by a rename where the disk can do
+   one, which moves no data and works for a folder too; copied otherwise, a
+   folder with everything in it, and then deleted. */
+static int paste_one(const char *src) {
+    const char *leaf = src;
+    for (const char *p = src; *p; p++) if (*p == '/') leaf = p + 1;
     char dest[PATH_MAX];
     join(dest, cwd, leaf);
-    if (!strcmp(dest, clip_path)) { say("already here"); return; }
-    if (inside(dest, clip_path)) { say("not into itself"); return; }
-
-    /* Something cut is moved by a rename where the disk can do one, which
-       moves no data and works for a folder too; copied otherwise, a folder
-       with everything in it, and then deleted. */
-    if (clip_is_cut && zelr_rename(clip_path, dest) == 0) {
-        clip_path[0] = 0;
-    } else {
-        if (copy_tree(clip_path, dest, 0) < 0) { say("copy failed"); return; }
-        if (clip_is_cut) {
-            remove_tree(clip_path, 0);
-            clip_path[0] = 0;
-        }
-    }
-    say(clip_is_cut ? "moved" : "copied");
-    reload();
+    if (!strcmp(dest, src)) return 1;
+    if (inside(dest, src)) return 2;
+    if (clip_is_cut && zelr_rename(src, dest) == 0) return 0;
+    if (copy_tree(src, dest, 0) < 0) return -1;
+    if (clip_is_cut) remove_tree(src, 0);
+    return 0;
 }
 
-/* What Copy and Cut do, from the menus or the keyboard: remember the
-   selected file for the next Paste. */
+static void do_paste(void) {
+    if (read_only_here()) return;
+    if (!clip_n) { say("nothing copied"); return; }
+
+    if (clip_n == 1) {
+        int r = paste_one(clip_paths[0]);
+        if (r == 1) { say("already here"); return; }
+        if (r == 2) { say("not into itself"); return; }
+        if (r < 0) { say("copy failed"); return; }
+        if (clip_is_cut) clip_n = 0;
+        say(clip_is_cut ? "moved" : "copied");
+        reload();
+        return;
+    }
+    int done = 0, missed = 0;
+    for (int i = 0; i < clip_n; i++) {
+        if (paste_one(clip_paths[i]) == 0) done++;
+        else missed++;
+    }
+    int cut = clip_is_cut;
+    if (cut) clip_n = 0;
+    char line[64];
+    int k = 0;
+    for (const char *p = cut ? "moved " : "copied "; *p; p++) line[k++] = *p;
+    k += utoa((u32)done, line + k);
+    for (const char *p = " here"; *p; p++) line[k++] = *p;
+    if (missed) {
+        for (const char *p = "; not "; *p; p++) line[k++] = *p;
+        k += utoa((u32)missed, line + k);
+    }
+    line[k] = 0;
+    reload();
+    say(line);
+}
+
+/* What Copy and Cut do, from the menus or the keyboard: remember what is
+   marked, or the entry chosen, for the next Paste. */
 static void take(int cut) {
     if (read_only_here()) return;
-    if (selected < 0) { say("nothing selected"); return; }
-    entry_path(selected, clip_path);
+    int marks = marked_count();
+    if (!marks && selected < 0) { say("nothing selected"); return; }
+    if (marks > CLIP_MAX) { say("sixty four at most at once"); return; }
+    clip_n = 0;
+    if (marks) {
+        for (int i = 0; i < count; i++) if (entries[i].marked) entry_path(i, clip_paths[clip_n++]);
+    } else {
+        entry_path(selected, clip_paths[clip_n++]);
+    }
     clip_is_cut = cut;
-    say(cut ? "cut" : "copied");
+    if (clip_n == 1) { say(cut ? "cut" : "copied"); return; }
+    char line[32];
+    int k = 0;
+    for (const char *p = cut ? "cut " : "copied "; *p; p++) line[k++] = *p;
+    k += utoa((u32)clip_n, line + k);
+    line[k] = 0;
+    say(line);
 }
 
 /* Rename happens in place: the row turns into a field rather than a dialog
@@ -1292,8 +1391,62 @@ static void empty_trash(void) {
 static int delete_armed = -1;
 static int empty_armed;
 
+/* Everything marked into the trash, or (on a stick or in the trash) deleted
+   for good on a second press, as one entry is. */
+static void delete_marked(int marks) {
+    char path[PATH_MAX], line[64];
+    int k = 0;
+    if (!in_trash() && !on_stick(cwd)) {
+        int moved = 0, kept = 0;
+        for (int i = 0; i < count; i++) {
+            if (!entries[i].marked) continue;
+            entry_path(i, path);
+            if (!strcmp(path, TRASH) || inside(TRASH, path) || move_to_trash(path) < 0) kept++;
+            else moved++;
+        }
+        for (const char *p = "moved "; *p; p++) line[k++] = *p;
+        k += utoa((u32)moved, line + k);
+        for (const char *p = " to the trash"; *p; p++) line[k++] = *p;
+        if (kept) {
+            for (const char *p = "; not "; *p; p++) line[k++] = *p;
+            k += utoa((u32)kept, line + k);
+        }
+        line[k] = 0;
+        delete_armed = -1;
+        reload();
+        say(line);
+        return;
+    }
+    if (delete_armed != -2) {
+        delete_armed = -2;
+        for (const char *p = "press delete again to delete "; *p; p++) line[k++] = *p;
+        k += utoa((u32)marks, line + k);
+        for (const char *p = " for good"; *p; p++) line[k++] = *p;
+        line[k] = 0;
+        say(line);
+        return;
+    }
+    int gone = 0;
+    for (int i = 0; i < count; i++) {
+        if (!entries[i].marked) continue;
+        entry_path(i, path);
+        if (remove_tree(path, 0) < 0) continue;
+        if (in_trash()) where_of(entries[i].name, path, 1);
+        gone++;
+    }
+    for (const char *p = "deleted "; *p; p++) line[k++] = *p;
+    k += utoa((u32)gone, line + k);
+    for (const char *p = " for good"; *p; p++) line[k++] = *p;
+    line[k] = 0;
+    delete_armed = -1;
+    reload();
+    say(line);
+}
+
 static void do_delete(void) {
     if (read_only_here()) return;
+    int marks = marked_count();
+    if (marks) { delete_marked(marks); return; }
     if (selected < 0) { say("nothing selected"); return; }
     char target[PATH_MAX];
     entry_path(selected, target);
@@ -1450,6 +1603,16 @@ int main(int argc, char **argv) {
                 selected++;
                 say("");
             }
+            else if (code == KEY_INSERT && selected >= 0 && !read_only_here()) {
+                entries[selected].marked ^= 1;
+                if (selected < count - 1) selected++;
+                say_marked();
+            }
+            else if (code == 1 && count && !read_only_here()) {      /* ctrl+a */
+                int all = marked_count() == count;
+                for (int i = 0; i < count; i++) entries[i].marked = (u8)!all;
+                say_marked();
+            }
             else if (code == '\n') open_entry(selected);
             else if (code == '\b') go_up();
             else if (code == KEY_DELETE && KEY_CTRL(key)) {
@@ -1591,8 +1754,11 @@ int main(int argc, char **argv) {
             int over = ui_hit(&in, cx, ry, cw - UI_SCROLL_W, UI_ROW);
             if (idx == selected)
                 rect(&s, cx, ry, cw - UI_SCROLL_W, UI_ROW, t.soft);
+            else if (e->marked)
+                rect(&s, cx, ry, cw - UI_SCROLL_W, UI_ROW, mix(t.bg, t.accent, 40));
             else if (over)
                 rect(&s, cx, ry, cw - UI_SCROLL_W, UI_ROW, mix(t.bg, t.fg, 14));
+            if (e->marked) rect(&s, cx, ry + 3, 3, UI_ROW - 6, t.accent);
 
             /* The tag, then the name, then what it is and how big. */
             round_rect(&s, cx + UI_PAD, ry + (UI_ROW - 12) / 2, 10, 12, 3,
@@ -1734,8 +1900,10 @@ int main(int argc, char **argv) {
                 else if (pick == 2) open_with(selected, "/bin/music");
                 else if (pick == 3 && selected >= 0) {
                     take(0);
-                    clip_set(clip_path, strlen(clip_path));
-                    say("copied a path");
+                    if (clip_n == 1) {                    /* several say how many */
+                        clip_set(clip_paths[0], strlen(clip_paths[0]));
+                        say("copied a path");
+                    }
                 } else if (pick == 4) {
                     take(1);
                 } else if (pick == 5) {

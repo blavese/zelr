@@ -43,6 +43,8 @@ static const row_t ROWS[] = {
     { "files", "ctrl+Delete", "the trash emptied (pressed twice)" },
     { "files", "ctrl+Z", "the last thing put in the trash put back" },
     { "files", "ctrl+C, ctrl+X, ctrl+V", "copy, cut and paste" },
+    { "files", "Insert", "the entry chosen marked, and the next chosen; copy, cut, delete take all marked" },
+    { "files", "ctrl+A", "every entry marked, or again none" },
     { "files", "F2", "the name changed" },
     { "files", "ctrl+E", "an archive taken out into a folder beside it" },
     { "files", "ctrl+K", "make a zip of what is chosen" },
