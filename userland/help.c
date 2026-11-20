@@ -51,6 +51,7 @@ static const row_t ROWS[] = {
     { "files", "ctrl+P", "how big a folder is, or a file's size and date" },
     { "files", "ctrl+1, ctrl+2, ctrl+3", "sorted by name, by size, by date" },
     { "notes", "ctrl+S", "saved" },
+    { "notes", "ctrl+O", "another file opened, chosen from a list" },
     { "notes", "ctrl+Z", "the last change taken back" },
     { "notes", "ctrl+A", "everything selected" },
     { "notes", "ctrl+C, ctrl+X, ctrl+V", "copy, cut and paste" },

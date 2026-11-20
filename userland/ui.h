@@ -955,3 +955,191 @@ static inline int ui_menu(surface *s, ui_input *in, const ui_theme *t,
     }
     return chosen;
 }
+
+/* --- choosing a file -------------------------------------------------------
+ *
+ * A file chosen from a list rather than a path typed. Folders first, then
+ * the files with the ending asked for (all of them for none), each in order
+ * of name; nothing with a dot first. Up, Down, Home, End, Page Up and Page
+ * Down move; Return goes into a folder or chooses a file; Backspace goes up a
+ * folder with the one it was in chosen; Escape lets it go. A click chooses a
+ * row, and a click on the row already chosen is Return. What it shows is said
+ * on the console when it changes, "WHO: choosing DIR, NAME", and what comes
+ * of it, "WHO: chose PATH" or "WHO: chose nothing". */
+#define UI_CHOOSE_MAX 256
+
+typedef struct {
+    int  open;
+    const char *who;
+    char dir[256];
+    char ext[8];
+    char names[UI_CHOOSE_MAX][64];
+    u8   dirs[UI_CHOOSE_MAX];
+    int  n, sel, first;
+    char picked[256];
+    char said[320];
+} ui_chooser;
+
+static inline int ui_ends_ci(const char *s, const char *tail) {
+    int n = strlen(s), t = strlen(tail);
+    if (n < t) return 0;
+    for (int i = 0; i < t; i++) {
+        char a = s[n - t + i], b = tail[i];
+        if (a >= 'A' && a <= 'Z') a = (char)(a + 32);
+        if (b >= 'A' && b <= 'Z') b = (char)(b + 32);
+        if (a != b) return 0;
+    }
+    return 1;
+}
+
+static inline void ui_chooser_join(const ui_chooser *c, const char *name, char *out) {
+    int k = 0;
+    for (const char *p = c->dir; *p && k < 250; p++) out[k++] = *p;
+    if (k && out[k - 1] != '/') out[k++] = '/';
+    for (const char *p = name; *p && k < 255; p++) out[k++] = *p;
+    out[k] = 0;
+}
+
+static inline void ui_chooser_read(ui_chooser *c, const char *select) {
+    zelr_stat st;
+    c->n = 0;
+    for (int i = 0; c->n < UI_CHOOSE_MAX && readdir(c->dir, i, &st) == 1; i++) {
+        if (st.name[0] == '.') continue;
+        if (!st.is_dir && c->ext[0] && !ui_ends_ci(st.name, c->ext)) continue;
+        strncpy(c->names[c->n], st.name, 63);
+        c->names[c->n][63] = 0;
+        c->dirs[c->n] = (u8)(st.is_dir != 0);
+        c->n++;
+    }
+    /* Folders first, then by name: few enough to sort by swapping. */
+    for (int i = 1; i < c->n; i++)
+        for (int j = i; j > 0; j--) {
+            int a = j - 1, b = j;
+            int after = c->dirs[a] != c->dirs[b] ? c->dirs[b] > c->dirs[a] : strcmp(c->names[a], c->names[b]) > 0;
+            if (!after) break;
+            char tmp[64];
+            strcpy(tmp, c->names[a]);
+            strcpy(c->names[a], c->names[b]);
+            strcpy(c->names[b], tmp);
+            u8 d = c->dirs[a];
+            c->dirs[a] = c->dirs[b];
+            c->dirs[b] = d;
+        }
+    c->sel = 0;
+    c->first = 0;
+    for (int i = 0; select && i < c->n; i++) if (!strcmp(c->names[i], select)) c->sel = i;
+}
+
+static inline void ui_chooser_open(ui_chooser *c, const char *dir, const char *ext, const char *who) {
+    strncpy(c->dir, dir && dir[0] ? dir : "/home", sizeof(c->dir) - 1);
+    c->dir[sizeof(c->dir) - 1] = 0;
+    strncpy(c->ext, ext ? ext : "", sizeof(c->ext) - 1);
+    c->ext[sizeof(c->ext) - 1] = 0;
+    c->who = who;
+    c->open = 1;
+    c->picked[0] = 0;
+    c->said[0] = 0;
+    ui_chooser_read(c, 0);
+}
+
+static inline void ui_chooser_tell(const char *who, const char *what) {
+    puts(who);
+    puts(": ");
+    puts(what);
+    puts("\n");
+}
+
+/* 1 when a file was chosen (in picked), -1 when let go, 0 otherwise. */
+static inline int ui_chooser_key(ui_chooser *c, u32 key) {
+    if (!c->open) return 0;
+    if (key == KEY_UP && c->sel > 0) c->sel--;
+    else if (key == KEY_DOWN && c->sel < c->n - 1) c->sel++;
+    else if (key == KEY_HOME) c->sel = 0;
+    else if (key == KEY_END && c->n) c->sel = c->n - 1;
+    else if (key == KEY_PAGE_UP) c->sel = c->sel > 10 ? c->sel - 10 : 0;
+    else if (key == KEY_PAGE_DOWN && c->n) c->sel = c->sel + 10 < c->n ? c->sel + 10 : c->n - 1;
+    else if (key == 27) {
+        c->open = 0;
+        ui_chooser_tell(c->who, "chose nothing");
+        return -1;
+    } else if (key == '\b') {
+        int cut = -1;
+        for (int i = 0; c->dir[i]; i++) if (c->dir[i] == '/') cut = i;
+        if (cut < 0 || !c->dir[1]) return 0;
+        char came[64];
+        strncpy(came, c->dir + cut + 1, 63);
+        came[63] = 0;
+        c->dir[cut > 0 ? cut : 1] = 0;
+        ui_chooser_read(c, came);
+    } else if (key == '\n' && c->n) {
+        char path[256];
+        ui_chooser_join(c, c->names[c->sel], path);
+        if (c->dirs[c->sel]) {
+            strcpy(c->dir, path);
+            ui_chooser_read(c, 0);
+        } else {
+            strcpy(c->picked, path);
+            c->open = 0;
+            char line[280];
+            int k = 0;
+            for (const char *p = "chose "; *p; p++) line[k++] = *p;
+            for (const char *p = path; *p && k < 278; p++) line[k++] = *p;
+            line[k] = 0;
+            ui_chooser_tell(c->who, line);
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* Drawn over x, y, w, h. 1 when a click chose a file. */
+static inline int ui_chooser_draw(surface *s, ui_input *in, const ui_theme *t, ui_chooser *c,
+                                  int x, int y, int w, int h) {
+    if (!c->open) return 0;
+    rect(s, x, y, w, h, t->bg);
+    rect(s, x, y, w, 1, t->line);
+    face_draw(s, x + UI_PAD, y + UI_PAD, "open a file", t->fg, UI_FACE_BOLD);
+    face_draw_clip(s, x + UI_PAD + 110, y + UI_PAD, x, x + w - UI_PAD, c->dir, t->dim, UI_FACE_BODY);
+    int ly = y + UI_PAD * 2 + face_h(UI_FACE_BOLD);
+    int lh = h - (ly - y) - UI_ROW;
+    int rows = lh / UI_ROW;
+    if (rows < 1) rows = 1;
+    if (c->sel < c->first) c->first = c->sel;
+    if (c->sel >= c->first + rows) c->first = c->sel - rows + 1;
+    int picked = 0;
+    if (!c->n) face_draw(s, x + UI_PAD, ly + 4, "nothing here to open", t->dim, UI_FACE_BODY);
+    for (int r = 0; r < rows && c->first + r < c->n; r++) {
+        int i = c->first + r, ry = ly + r * UI_ROW;
+        if (i == c->sel) rect(s, x, ry, w, UI_ROW, t->soft);
+        char label[70];
+        int k = 0;
+        for (const char *p = c->names[i]; *p && k < 64; p++) label[k++] = *p;
+        if (c->dirs[i]) label[k++] = '/';
+        label[k] = 0;
+        face_draw(s, x + UI_PAD, ry + (UI_ROW - face_h(UI_FACE_BODY)) / 2, label,
+                  c->dirs[i] ? t->accent : t->fg, UI_FACE_BODY);
+        if (in->released && ui_hit(in, x, ry, w, UI_ROW)) {
+            in->released = 0;
+            if (i == c->sel) picked = ui_chooser_key(c, '\n') == 1;
+            else c->sel = i;
+            return picked;                  /* drawn again, as it now is, next frame */
+        }
+    }
+    face_draw(s, x + UI_PAD, y + h - UI_ROW + (UI_ROW - face_h(UI_FACE_SMALL)) / 2,
+              "Return opens, Backspace goes up a folder, Escape lets it go", t->dim, UI_FACE_SMALL);
+
+    char line[320];
+    int k = 0;
+    for (const char *p = "choosing "; *p; p++) line[k++] = *p;
+    for (const char *p = c->dir; *p && k < 260; p++) line[k++] = *p;
+    line[k++] = ',';
+    line[k++] = ' ';
+    const char *now = c->n ? c->names[c->sel] : "nothing";
+    for (const char *p = now; *p && k < 318; p++) line[k++] = *p;
+    line[k] = 0;
+    if (strcmp(line, c->said)) {
+        strcpy(c->said, line);
+        ui_chooser_tell(c->who, line);
+    }
+    return 0;
+}

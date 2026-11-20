@@ -27,6 +27,11 @@ static int  len;
 static int  cursor;
 static int  dirty;
 static char path[PATH_MAX];
+
+/* ctrl+O: another file, chosen from a list (ui.h's chooser). With changes
+   not saved it says so first, and a second ctrl+O opens the list anyway. */
+static ui_chooser chooser;
+static int open_armed;
 static char status[128];
 
 /* A file that could not be read whole. Saving is refused for it, because
@@ -94,6 +99,7 @@ static void insert_text(const char *text, int n) {
     cursor += n;
     buf[len] = 0;
     dirty = 1;
+    if (!strcmp(status, "saved")) say("");           /* not since this */
 }
 
 static void insert_char(char c) { insert_text(&c, 1); }
@@ -177,7 +183,16 @@ static void load(const char *from) {
         len = n > 0 ? n : 0;
         buf[len] = 0;
         if (n != (int)st.size) { partial = 1; say("could not read all of it, so it cannot be saved"); }
-        else say("opened");
+        else {
+            const char *leaf = from;
+            for (const char *p = from; *p; p++) if (*p == '/') leaf = p + 1;
+            char line[80];
+            int k = 0;
+            for (const char *p = "opened "; *p; p++) line[k++] = *p;
+            for (const char *p = leaf; *p && k < (int)sizeof(line) - 1; p++) line[k++] = *p;
+            line[k] = 0;
+            say(line);
+        }
     }
     cursor = 0;
     scroll_line = 0;
@@ -474,6 +489,11 @@ int main(int argc, char **argv) {
             u32 k = in.keys[ki];
             int shifted = 0;                /* selection extends while shift-like keys move */
 
+            if (chooser.open) {
+                if (ui_chooser_key(&chooser, k) == 1) load(chooser.picked);
+                continue;
+            }
+            if (!(KEY_CTRL(k) && key_ctrl_letter(k) == 'o')) open_armed = 0;
             if (find_field.focused || repl_field.focused || goto_field.focused) { bar_key(k); continue; }
             if (k == 27 && bar_open) { bar_open = 0; continue; }
 
@@ -483,6 +503,21 @@ int main(int argc, char **argv) {
             if (KEY_CTRL(k)) {
                 int l = key_ctrl_letter(k);
                 if (l == 's') save();
+                else if (l == 'o') {
+                    if (dirty && !open_armed) {
+                        open_armed = 1;
+                        say("not saved: ctrl+S keeps it, ctrl+O again opens another anyway");
+                    } else {
+                        char dir[PATH_MAX];
+                        strcpy(dir, path);
+                        int cut = -1;
+                        for (int i = 0; dir[i]; i++) if (dir[i] == '/') cut = i;
+                        if (cut > 0) dir[cut] = 0;
+                        else strcpy(dir, "/home");
+                        open_armed = 0;
+                        ui_chooser_open(&chooser, dir, "", "notes");
+                    }
+                }
                 else if (l == 'c') copy_selection(0);
                 else if (l == 'x') copy_selection(1);
                 else if (l == 'v') paste();
@@ -661,7 +696,7 @@ int main(int argc, char **argv) {
         }
 
         /* Clicking puts the cursor where it was clicked; dragging selects. */
-        if (in.my >= text_y && in.my < text_y + text_h && in.mx >= GUTTER_W) {
+        if (!chooser.open && in.my >= text_y && in.my < text_y + text_h && in.mx >= GUTTER_W) {
             int row = (in.my - text_y) / MONO_H;
             int col = (in.mx - GUTTER_W) / MONO_W;
             int at2 = start_of_line(scroll_line + row);
@@ -687,6 +722,7 @@ int main(int argc, char **argv) {
         for (const char *m = status; *m && ri < (int)sizeof(right) - 1; m++) right[ri++] = *m;
         right[ri] = 0;
 
+        if (ui_chooser_draw(&s, &in, &t, &chooser, 0, text_y, w, text_h)) load(chooser.picked);
         ui_statusbar(&s, &t, w, h, left, right);
         static char said[128];
         if (strcmp(status, said)) {
