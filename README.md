@@ -151,7 +151,11 @@ comes back to itself, #value for words in a sum, #ref, #name, #error. Tab
 and Return move on as they do in other spreadsheets, F2 changes a cell,
 ctrl and g goes to one by its name, ctrl and s keeps the sheet as CSV
 (formulas as typed) and ctrl and o opens another; Files opens a .csv
-there. Drag a title bar to move a
+there. ctrl and d fills a cell from the one above it and ctrl and r from
+the one to its left, and a cell copied with ctrl and c and pasted elsewhere
+with ctrl and v, each with its references moved as far as it moved, but a
+part with a $ before it ($A$1, A$1); one moved off the sheet says #ref. A
+cut and paste keeps its references where they were. Drag a title bar to move a
 window; the three buttons at its right put it away, fill the screen, or
 close it.
 Drag the bottom right corner to resize, or drag a title bar to an edge to
@@ -572,6 +576,7 @@ instead.
     python tools/toolcheck.py   the terminal's cal against Python's calendar, du and df against what is there
     python tools/pipecheck.py   the terminal's |: sort, grep, wc, head and tail fed by the command before
     python tools/sheetcheck.py  Sheet: formulas worked out again, every error, CSV kept, read and Python's read
+    python tools/fillcheck.py   Sheet's references moved by ctrl+D, ctrl+R and a paste, $ kept, #ref off the edge
     python tools/downloadcheck.py  a 12 MB download fetched in parts with Range, read back byte for byte
     python tools/notescheck.py  select all, copy, paste, save, undo, find and replace in the editor, from its keys
     python tools/timecheck.py   set the time zone from the shell and in Settings, read the clocks and a file's time

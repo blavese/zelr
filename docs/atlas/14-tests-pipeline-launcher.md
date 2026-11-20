@@ -890,6 +890,13 @@ Added in 0.165.0, not yet in the table below:
   about:history?forget is not followed (still 3); after the server's /peek, about:history's second entry (a, a file;
   the links found as bands of accent inside the window) opens; the forget button (found by its colour) leaves 0.
 
+Added in 0.207.0, not yet in the table below:
+- **`fillcheck.py`** (gate `filltest`, full; 15 checks). `/bin/sheet /home/r.csv` from the terminal; row 1 typed
+  `1, =A1*2, =$A$1+A1, =A$1+1, , , =SUM($A$1:A5)` and 2 to 5 down A. ctrl+D at B2-B5, C2, D2 and G2, ctrl+R at E1,
+  B1 copied and pasted at C4 (=B4*2) and A7 (=#ref*2), B5 cut and pasted at F5 (=A5*2 still); each answer waited
+  for as the cell's console line, then eleven cells visited again with ctrl+G, and the saved CSV compared byte for
+  byte.
+
 Added in 0.206.0, not yet in the table below:
 - **`sheetcheck.py`** (gate `sheettest`, full; 14 checks). A volume with /home/s/in.csv as Python's csv module writes
   it (CRLF, `"say ""hi"", ok"`, a line break inside quotes). Sheet is opened from the launcher's search (`DOCK_BADGE`,
@@ -900,8 +907,8 @@ Added in 0.206.0, not yet in the table below:
   (sums, AVG, MIN/MAX, COUNT, #div/0, #cycle alone and in a pair, #value, #ref, #name, #error, 0.333333, -6);
   ctrl+S ("saved /home/new.csv, 8 rows"), opened again, C2 and C4 visited. The file read off the disk equals the
   CSV expected byte for byte, and Python's csv reads it back.
-- **`tlscheck.py`** (released with 0.195.0): `refusal` asks a badssl.com host again, up to three times, while the answer
-  is "could not connect".
+- **`tlscheck.py`** (released with 0.195.0): `refusal` asks a badssl.com host again, four times at most, five seconds
+  apart, while the answer is "could not connect" or "the connection stopped" and has no refusal's reason in it.
 
 Added in 0.205.0, not yet in the table below:
 - **`pipecheck.py`** (gate `pipetest`, full; 15 checks). A fresh volume with /home/p/fruit.txt (five lines, one

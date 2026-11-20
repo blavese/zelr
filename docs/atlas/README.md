@@ -113,6 +113,17 @@ numbered files are still to 6048716; where they disagree with this list, this li
   built unsigned program; h264test in the machine still checks the decoder against Windows' answers in h264data.h.
   Gate 74 steps (one out, one in).
 
+### 0.207.0
+
+- **Sheet's references move (10, 14)**: sheet.c `ref_at` reads a reference with a `$` before either part (`ref_t`:
+  row, column, which parts are fixed, whether it is on the sheet); `atom` and `call`'s ranges read through it, and
+  `#ref` reads as the error. `moved` rewrites a formula copied dr rows and dc columns: each reference not after a
+  letter, digit, point or # moves but for its fixed parts, and one moved off the sheet is written `#ref`. ctrl+D
+  fills from the cell above (`moved(..., 1, 0)`), ctrl+R from the left; ctrl+C keeps `copied`/`copied_r`/`copied_c`
+  and ctrl+V moves the clipboard's text by the distance when it is still what was copied (anything else goes in as
+  it is); ctrl+X forgets where from, so a cut pastes as it was. Help has two rows more. fillcheck, new (15), gate
+  step `filltest` (103 steps).
+
 ### 0.206.0
 
 - **The launcher read out of wm.c by the harnesses (14)**, a fix after the release commit: harness.py `launcher_menu`
@@ -135,10 +146,11 @@ numbered files are still to 6048716; where they disagree with this list, this li
   began in, `tab_from`), F2, Delete, ctrl+G/S/O/C/X/V, from the keyboard or as the control character a serial line
   sends (`chord`). "sheet: CELL TEXT[ is VALUE]" on the console when what is chosen changes, "sheet: saved/opened/new
   PATH, N rows" for files. Help has five rows for it. sheetcheck, new (14), gate step `sheettest` (102 steps).
-- **tlscheck** (released with 0.195.0, the commit after it): a badssl.com fetch that is to be refused is asked again, up
-  to three times, while the answer is "could not connect" (`refusal`); a wrong answer is still judged on the first go.
-  The machine's connections wait six seconds, and badssl.com took seven or never answered on 2026-11-20 (the 0.195.0
-  gate).
+- **tlscheck** (released with 0.195.0, the two commits after it): a badssl.com fetch that is to be refused is asked
+  again, four times at most and five seconds apart, while the answer is "could not connect" or "the connection stopped"
+  with no refusal's reason in it (`refusal`); an answer with a reason is still judged on the first go. The machine's
+  connections wait six seconds, and on 2026-11-20 badssl.com took seven, never answered, or dropped the handshake for a
+  third of connections (three 0.195.0 gates failed on it).
 
 ### 0.205.0
 
