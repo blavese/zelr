@@ -890,6 +890,13 @@ Added in 0.165.0, not yet in the table below:
   about:history?forget is not followed (still 3); after the server's /peek, about:history's second entry (a, a file;
   the links found as bands of accent inside the window) opens; the forget button (found by its colour) leaves 0.
 
+Added in 0.219.0, not yet in the table below:
+- **`pickcheck.py`** (gate `picktest`, full; 9 checks). /home/docs with a.txt, b.txt and sub/c.txt; Notes on a.txt
+  from the terminal. ctrl+O ("choosing /home/docs, sub"), Down twice, Return (b.txt), a letter and ctrl+S; ctrl+O,
+  Return into sub, Return (c.txt), a letter and save; ctrl+O, Backspace ("choosing /home/docs, sub"), Escape ("chose
+  nothing"), a letter and save; a letter unsaved and ctrl+O twice. The disk then says which was open when: a.txt as
+  it was, "Xbravo", "YZcharlie". (Not `opencheck.py`, which is the browser's new windows.)
+
 Added in 0.218.0, not yet in the table below:
 - **`eventcheck.py`** (gate `eventtest`, full; 6 checks). HOST_CLOCK and q35 with HD Audio recorded to a WAV, as
   alarmcheck. /home/calendar on the volume: today's note "lunch; WHEN call the bank; LATER not this one; ring at WHEN

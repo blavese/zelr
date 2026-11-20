@@ -137,7 +137,10 @@ get round it: the desktop opens locked, and the console (started with the
 word console, or reached before the desktop) asks for the password before
 it takes a command, showing stars for what is typed. In the editor, ctrl and h opens a
 bar to find a word in the file and replace it, one at a time or every one at
-once (ctrl and r), whatever its case; ctrl and g goes to a line by its
+once (ctrl and r), whatever its case; ctrl and o opens another file, chosen
+from a list of the folder's folders and files (Return opens, Backspace goes
+up, Escape lets it go), and says so first if the one open has changes not
+saved; ctrl and g goes to a line by its
 number, and Return starts the new line with the spaces the one before began
 with. Paint keeps what is drawn: ctrl and s
 saves it as a PNG (`paint FILE.png` opens one to draw on, and saves back to
@@ -606,6 +609,7 @@ instead.
     python tools/slidecheck.py  Pictures' slideshow: in order, round again, a few seconds apart, and stopped
     python tools/choosecheck.py Files with several chosen: copied, cut, pasted, deleted and counted together
     python tools/eventcheck.py  a time in today's calendar note is said and rung in its minute, and only that one
+    python tools/pickcheck.py   Notes' ctrl+O: a file chosen from a list, into a folder and up, let go, guarded
     python tools/wordscheck.py  Paint's words, the saved PNG against face.h drawn here, pixel for pixel
     python tools/downloadcheck.py  a 12 MB download fetched in parts with Range, read back byte for byte
     python tools/notescheck.py  select all, copy, paste, save, undo, find and replace in the editor, from its keys

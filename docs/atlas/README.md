@@ -113,6 +113,18 @@ numbered files are still to 6048716; where they disagree with this list, this li
   built unsigned program; h264test in the machine still checks the decoder against Windows' answers in h264data.h.
   Gate 74 steps (one out, one in).
 
+### 0.219.0
+
+- **A file chooser, and Notes' ctrl+O (09a, 10, 14)**: ui.h `ui_chooser` (256 entries of 64 bytes, `ui_chooser_read`
+  folders first then by name, nothing with a dot first, files filtered by an ending with `ui_ends_ci`;
+  `ui_chooser_key`: arrows, Home/End, Page Up/Down, Return into a folder or choosing a file (`picked`, returns 1),
+  Backspace up with the folder come from chosen, Escape (returns -1); `ui_chooser_draw` over a rectangle, a click
+  choosing a row and a click on the chosen row being Return). Console: "WHO: choosing DIR, NAME" when it changes,
+  "WHO: chose PATH", "WHO: chose nothing". notes.c: ctrl+O opens it in the file's folder, a first ctrl+O with changes
+  not saved says so instead (`open_armed`); the text area takes no clicks while it is open. Notes now says "opened
+  NAME" (a second file said "opened" again, which nothing could tell apart) and lets "saved" go at the next change.
+  Help's row. pickcheck, new (9), gate step `picktest` (113 steps). Paint, Sheet and the rest do not use it yet.
+
 ### 0.218.0
 
 - **The calendar's times (07, 08, 14)**: wm.c `calendar_due` reads today's note (`day_note_in`), cuts it into parts at
