@@ -113,6 +113,14 @@ numbered files are still to 6048716; where they disagree with this list, this li
   built unsigned program; h264test in the machine still checks the decoder against Windows' answers in h264data.h.
   Gate 74 steps (one out, one in).
 
+### 0.214.0
+
+- **A connection is waited for ten seconds (06a)**: include/tcp.h `TCP_CONNECT_MS` 10000 (it was 6000, written four
+  times in syscall.c and http.c); tcp.c's wait is `await_open`, shared by `tcp_open` and the self test's
+  `tcp_test_connect` (a quiet slot in SYN-sent, answered by a task `test_answer_task` after so many milliseconds).
+  It stays under fetch.h `WJ_QUIET` (12 s), so the browser hears the kernel's answer. Selftest `[tcp]` +2 (answered
+  seven seconds late: made; never answered with 1.5 s asked: let go within 4).
+
 ### 0.213.0
 
 - **The terminal's diff and uniq (09b, 14)**: term.c `cmd_diff` reads both files (`diff_a`/`diff_b`, 64 KiB each, 4000

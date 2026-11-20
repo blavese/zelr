@@ -580,7 +580,8 @@ Errors: `HTTP_ERR_RESOLVE -1`, `CONNECT -2`, `SEND -3`, `MEMORY -4`, `EMPTY -5`,
 * `done(h, secure)` (52-55): `tls_close` before `tcp_close` (close_notify needs the connection).
 * `starts_fold()` (57-64): case-insensitive prefix.
 * `http_get()` (66-172): strip `https://` (secure, default 443) or `http://` (default 80); host <= 127 chars; dotted
-  address or `net_resolve(host, 5000)`; prints "connecting to NAME (A.B.C.D) port N"; `tcp_open(ip, port, 6000)`; if
+  address or `net_resolve(host, 5000)`; prints "connecting to NAME (A.B.C.D) port N"; `tcp_open(ip, port,
+  TCP_CONNECT_MS)`; if
   secure, `tls_connect(h, host)` (certificate checked against the name), on failure print `tls: <reason>`, `tcp_close`,
   return `HTTP_ERR_TLS`, else print `secure: <suite>`; request in `req[512]`:
   `GET <path> HTTP/1.0\r\nHost: <spec as typed incl. :port>\r\nUser-Agent: zelr/0.37.0\r\nConnection: close\r\n\r\n`;
@@ -618,7 +619,7 @@ Sockets are **not** file descriptors: `SYS_POLL` (63) goes to `fd_poll` and know
 
 | Call | No. | Args (rbx, rcx, rdx) | Behaviour | Returns |
 |---|---|---|---|---|
-| SYS_CONNECT | 25 | host str (<=128), port | port 0 refused; `net_up()` (card only) else NET_ERR_DOWN; free socket else NET_ERR_BUSY; dotted or `net_resolve(6000)` else NET_ERR_RESOLVE; `tcp_open(6000)` else NET_ERR_CONNECT | socket 0..5 |
+| SYS_CONNECT | 25 | host str (<=128), port | port 0 refused; `net_up()` (card only) else NET_ERR_DOWN; free socket else NET_ERR_BUSY; dotted or `net_resolve(6000)` else NET_ERR_RESOLVE; `tcp_open(TCP_CONNECT_MS)` else NET_ERR_CONNECT | socket 0..5 |
 | SYS_TLS_CONNECT | 45 | host, port (0 -> 443) | as above (until 0.59.0 it also refused with NET_ERR_BUSY if **any** secure socket was open); `tls_connect` failure closes TCP -> NET_ERR_TLS | socket |
 | SYS_TLS_STATUS | 46 | buf, cap (1..256), which | TLS_WHY 0 -> `tls_error(-1)`, TLS_WHAT 1 -> `tls_describe(-1)` (machine-wide last) | length |
 | SYS_SEND | 26 | sock, buf, len | owner-checked; len 1..1400 plain (one segment), 1..8192 TLS | len or -1 |
@@ -789,7 +790,8 @@ States: `T_CLOSED(0)`, `T_SYNSENT(1)`, `T_OPEN(2)`, `T_CLOSING(3)` (covers FIN-W
 ```
 
 Retransmission timeline for one segment (if pumped and the clock runs): send at 0; resend at 0.4, 1.2, 2.8, 6.0, 10.0,
-14.0 s; declared dead at 18.0 s. `tcp_open` with 6 s sends the SYN at 0, 0.4, 1.2, 2.8 s. `tcp_send` gives up waiting at
+14.0 s; declared dead at 18.0 s. `tcp_open` with `TCP_CONNECT_MS` (10 s since 0.214.0, 6 before) sends the SYN at
+0, 0.4, 1.2, 2.8 and 6.0 s and waits to 10. `tcp_send` gives up waiting at
 8 s. `tcp_close` resends the FIN at 0.4 and 1.2 s within its 2 s.
 
 Receive: in-order bytes up to the free space are appended to the 64 KiB buffer; the ACK/window reflect exactly what was
@@ -799,7 +801,7 @@ and sends a window update. A peer that closes: its FIN (in order) sets `got_fin`
 
 ### 4.10 Kernel `fetch`
 
-`http_get` -> resolve (5 s) -> `tcp_open` (6 s) -> optional `tls_connect` -> one request -> read loop (10 s quiet
+`http_get` -> resolve (5 s) -> `tcp_open` (`TCP_CONNECT_MS`, 10 s) -> optional `tls_connect` -> one request -> read loop (10 s quiet
 timeout, 256 KiB cap) -> `tls_close`/`tcp_close` -> parse -> print/save.
 
 ### 4.11 USB adapter lifecycle
