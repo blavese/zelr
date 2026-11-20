@@ -755,7 +755,11 @@ static void load(const char *p) {
 
 /* --- the window ----------------------------------------------------------- */
 
-enum { M_GRID, M_EDIT, M_GOTO, M_OPEN };
+enum { M_GRID, M_EDIT, M_GOTO };
+
+/* ctrl+O: another sheet, chosen from a list of the folder's .csv files (or
+   a path typed into it). */
+static ui_chooser chooser;
 
 static int mode = M_GRID;
 static int row, col, top, left;
@@ -899,7 +903,7 @@ static void return_key(void) {
 
 static void ask_for(int m) {
     mode = m;
-    field_set(&ask, m == M_OPEN ? path : "");
+    field_set(&ask, "");
     ask.focused = 1;
 }
 
@@ -911,9 +915,6 @@ static void answer(void) {
         int n = word_at(s, &l, &d);
         if (n && !s[n] && cell_named(s, l, d, &r, &c)) { go(r, c); tab_from = -1; }
         else tell("there is no cell ", ask_buf, -1);
-    } else if (ask_buf[0]) {
-        load(ask_buf);
-        go(0, 0);
     }
     mode = M_GRID;
     ask.focused = 0;
@@ -935,7 +936,15 @@ static void grid_key(u32 k) {
     else if (chord(k, 's')) save();
     else if (chord(k, 'g')) ask_for(M_GOTO);
     else if (chord(k, 't')) sort_rows(row, col);
-    else if (chord(k, 'o')) ask_for(M_OPEN);
+    else if (chord(k, 'o')) {
+        char dir[PATH_MAX];
+        strcpy(dir, path);
+        int cut = -1;
+        for (int i = 0; dir[i]; i++) if (dir[i] == '/') cut = i;
+        if (cut > 0) dir[cut] = 0;
+        else strcpy(dir, "/home");
+        ui_chooser_open(&chooser, dir, ".csv", "sheet");
+    }
     else if (chord(k, 'c') || chord(k, 'x')) {
         clip_set(cells[row][col].text, strlen(cells[row][col].text));
         strcpy(copied, cells[row][col].text);
@@ -1049,7 +1058,10 @@ int main(int argc, char **argv) {
         for (int ki = 0; ki < in.nkeys; ki++) {
             u32 k = in.keys[ki];
             if (mode == M_EDIT) edit_key(k);
-            else if (mode == M_GOTO || mode == M_OPEN) ask_key(k);
+            else if (chooser.open) {
+                if (ui_chooser_key(&chooser, k) == 1) { load(chooser.picked); go(0, 0); }
+            }
+            else if (mode == M_GOTO) ask_key(k);
             else grid_key(k);
             follow = 1;
         }
@@ -1061,7 +1073,7 @@ int main(int argc, char **argv) {
         if (vis_c < 1) vis_c = 1;
 
         /* A click on a cell chooses it; one on the bar edits it. */
-        if (in.pressed && in.my >= gy + CELL_H && in.my < gy + gh && in.mx >= HEAD_W) {
+        if (!chooser.open && in.pressed && in.my >= gy + CELL_H && in.my < gy + gh && in.mx >= HEAD_W) {
             int r = top + (in.my - gy - CELL_H) / CELL_H, c = left + (in.mx - HEAD_W) / CELL_W;
             if (mode == M_EDIT) commit();
             mode = M_GRID;
@@ -1090,15 +1102,15 @@ int main(int argc, char **argv) {
         /* The bar: which cell, and what is in it. */
         char name[8];
         cell_name(row, col, name);
-        const char *box = mode == M_GOTO ? "go to" : mode == M_OPEN ? "open" : name;
+        const char *box = mode == M_GOTO ? "go to" : name;
         rect(&s, UI_PAD, UI_PAD, NAME_W, UI_BTN_H, t.well);
         ui_sunken(&s, &t, UI_PAD, UI_PAD, NAME_W, UI_BTN_H);
         face_draw(&s, UI_PAD + (NAME_W - face_w(box, UI_FACE_BOLD)) / 2,
                   UI_PAD + (UI_BTN_H - face_h(UI_FACE_BOLD)) / 2, box, t.fg, UI_FACE_BOLD);
         int fx = UI_PAD * 2 + NAME_W, fw = w - fx - UI_PAD;
-        if (mode == M_GOTO || mode == M_OPEN) {
+        if (mode == M_GOTO) {
             ui_field_draw(&s, &in, &t, fx, UI_PAD, fw, &ask,
-                          mode == M_GOTO ? "a cell, as B3" : "a file, as /home/sums.csv");
+                          "a cell, as B3");
         } else {
             if (mode == M_GRID) field_set(&edit, cells[row][col].text);
             int was = edit.focused;
@@ -1163,6 +1175,7 @@ int main(int argc, char **argv) {
             for (const char *p2 = " (changed)"; *p2 && n < (int)sizeof(status) - 1; p2++) status[n++] = *p2;
             status[n] = 0;
         }
+        if (ui_chooser_draw(&s, &in, &t, &chooser, 0, gy, w, gh)) { load(chooser.picked); go(0, 0); }
         ui_statusbar(&s, &t, w, h, status, "ctrl+S keeps it");
         say_chosen();
 

@@ -49,6 +49,10 @@ static char said[160];
 #define SHOW_TICKS 300              /* a slideshow's picture: three seconds */
 static int show_on, show_next;      /* a slideshow, and the tick of its next picture */
 
+/* ctrl+O: another picture, chosen from a list (ui.h); it opens among its own
+   folder's pictures, as one handed over by Files does. */
+static ui_chooser chooser;
+
 static void show_stop(void) {
     if (!show_on) return;
     show_on = 0;
@@ -104,6 +108,24 @@ static void list_folder(void) {
         strncpy(names[k], st.name, NAME_MAX - 1);
         names[k][NAME_MAX - 1] = 0;
     }
+}
+
+static void load(int index);
+
+static void open_path(const char *path) {
+    int cut = -1;
+    for (int i = 0; path[i]; i++) if (path[i] == '/') cut = i;
+    if (cut > 0) { memcpy(folder, path, cut); folder[cut] = 0; }
+    else strcpy(folder, "/");
+    list_folder();
+    int at_name = -1;
+    for (int i = 0; i < nnames; i++) if (!strcmp(names[i], path + cut + 1)) at_name = i;
+    if (at_name < 0) {
+        strcpy(shown_why, "not a picture this can show");
+        load(-1);
+        return;
+    }
+    load(at_name);
 }
 
 static void drop_picture(void) {
@@ -349,6 +371,15 @@ int main(int argc, char **argv) {
         int room_h = h - bar;
         for (int ki = 0; ki < in.nkeys; ki++) {
             u32 k = in.keys[ki];
+            if (chooser.open) {
+                if (ui_chooser_key(&chooser, k) == 1) open_path(chooser.picked);
+                continue;
+            }
+            if ((KEY_CTRL(k) && key_ctrl_letter(k) == 'o') || k == 15) {
+                show_stop();
+                ui_chooser_open(&chooser, folder, "", "pictures");
+                continue;
+            }
             if (k == 's' || k == 'S') {
                 if (show_on) show_stop();
                 else if (nnames > 1) {
@@ -387,7 +418,7 @@ int main(int argc, char **argv) {
         if (show_on) ui_due(show_next);
 
         /* A drag moves a picture bigger than the window. */
-        if (in.pressed) { show_stop(); dragging = 1; drag_x = in.mx; drag_y = in.my; }
+        if (in.pressed && !chooser.open) { show_stop(); dragging = 1; drag_x = in.mx; drag_y = in.my; }
         if (dragging && in.down && pic.rgb) {
             int kz = scale_now(w, room_h);
             pan_x -= (in.mx - drag_x) * 16 / kz;
@@ -415,6 +446,7 @@ int main(int argc, char **argv) {
             n += utoa((u32)nnames, right + n);
         }
         right[n] = 0;
+        if (ui_chooser_draw(&s, &in, &t, &chooser, 0, 0, w, h - bar)) open_path(chooser.picked);
         ui_statusbar(&s, &t, w, h, said, right);
 
         win_commit(win);
