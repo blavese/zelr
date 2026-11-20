@@ -10,6 +10,11 @@
  *
  * What is chosen is said on the console ("sheet: C2 =SUM(A1:B2) is 90"), and
  * so are saving and opening, for sheetcheck.py.
+ *
+ * Since 0.211.0 a formula also compares (= <> < > <= >=, giving TRUE or
+ * FALSE), joins words with &, holds words in quotes ("say ""hi"""), and
+ * knows IF, AND, OR, NOT, ROUND, ABS and LEN. Words a formula makes are
+ * kept in a pool that every pass of working out starts afresh.
  */
 #include "zelr.h"
 #include "ui.h"
@@ -29,7 +34,7 @@ enum { V_EMPTY, V_NUM, V_TEXT, V_ERR };
 typedef struct {
     int         kind;
     double      num;
-    const char *str;            /* words: the cell's own text; an error: its name */
+    const char *str;            /* words; an error's name; TRUE or FALSE for a number that is one */
 } val;
 
 typedef struct {
@@ -43,6 +48,26 @@ static int pass_no;
 
 static val number(double d) { val v = { V_NUM, d, 0 }; return v; }
 static val error(const char *why) { val v = { V_ERR, 0, why }; return v; }
+static val truth(int b) { val v = { V_NUM, b ? 1 : 0, b ? "TRUE" : "FALSE" }; return v; }
+
+/* Words a formula made, kept until the next pass of working out begins.
+   A cell holds 95 bytes of words, so a pass can make 5200 cells' worth
+   and still have room for what was made on the way. */
+static char pool[1 << 20];
+static u32 pool_n;
+
+static val words2(const char *a, int na, const char *b, int nb) {
+    if (na + nb > TEXT_MAX - 1) nb = TEXT_MAX - 1 - na;
+    if (nb < 0) { nb = 0; na = TEXT_MAX - 1; }
+    if (pool_n + (u32)(na + nb) + 1 > sizeof(pool)) return error("#room");
+    char *out = pool + pool_n;
+    for (int i = 0; i < na; i++) out[i] = a[i];
+    for (int i = 0; i < nb; i++) out[na + i] = b[i];
+    out[na + nb] = 0;
+    pool_n += (u32)(na + nb) + 1;
+    val v = { V_TEXT, 0, out };
+    return v;
+}
 
 static int is_digit(char c) { return c >= '0' && c <= '9'; }
 static int is_letter(char c) { return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'); }
@@ -127,6 +152,16 @@ static void num_text(double v, char *out) {
 /* --- working a cell out --------------------------------------------------- */
 
 static val cell_value(int r, int c);
+static void num_text(double v, char *out);
+
+/* A value as words, for & and LEN: a number as it is shown, TRUE or FALSE,
+   nothing for an empty cell. */
+static const char *as_words(val v, char *buf) {
+    if (v.kind == V_TEXT) return v.str;
+    if (v.kind == V_NUM && v.str) return v.str;
+    if (v.kind == V_NUM) { num_text(v.num, buf); return buf; }
+    return "";
+}
 
 /* What a cell's text is when it is not a formula: nothing, a number (all of
    it, with a sign), or words. */
@@ -225,6 +260,52 @@ static int word_at(const char *s, int *letters, int *digits) {
 
 static val expr(parse_t *P);
 
+/* A comparison, as spreadsheets make it: numbers by size, words by their
+   letters with case aside, any number below any words, an empty cell as
+   nought or as no words, whichever it is compared with. */
+static int low_ch(int ch) { return ch >= 'A' && ch <= 'Z' ? ch + 32 : ch; }
+
+static val compare(val a, const char *op, val b) {
+    if (a.kind == V_ERR) return a;
+    if (b.kind == V_ERR) return b;
+    int c;
+    if (a.kind == V_EMPTY) a = b.kind == V_TEXT ? (val){ V_TEXT, 0, "" } : number(0);
+    if (b.kind == V_EMPTY) b = a.kind == V_TEXT ? (val){ V_TEXT, 0, "" } : number(0);
+    if (a.kind == V_NUM && b.kind == V_NUM) c = a.num < b.num ? -1 : a.num > b.num ? 1 : 0;
+    else if (a.kind == V_NUM) c = -1;
+    else if (b.kind == V_NUM) c = 1;
+    else {
+        const char *x = a.str, *y = b.str;
+        while (*x && low_ch((u8)*x) == low_ch((u8)*y)) { x++; y++; }
+        c = low_ch((u8)*x) - low_ch((u8)*y);
+        c = c < 0 ? -1 : c > 0 ? 1 : 0;
+    }
+    if (op[0] == '=') return truth(c == 0);
+    if (op[0] == '<' && op[1] == '>') return truth(c != 0);
+    if (op[0] == '<' && op[1] == '=') return truth(c <= 0);
+    if (op[0] == '>' && op[1] == '=') return truth(c >= 0);
+    if (op[0] == '<') return truth(c < 0);
+    return truth(c > 0);
+}
+
+/* Whether a value counts as true: a number not nought; words are not a
+   truth (#value). */
+static int truthy(val v, val *bad) {
+    if (v.kind == V_ERR) { *bad = v; return -1; }
+    if (v.kind == V_TEXT) { *bad = error("#value"); return -1; }
+    return v.kind == V_NUM && v.num != 0;
+}
+
+/* Rounded half away from nought, to n places (n below nought rounds to
+   tens, hundreds and so on). */
+static double round_to(double x, int n) {
+    double m = 1;
+    for (int i = 0; i < (n < 0 ? -n : n) && i < 15; i++) m *= 10;
+    double y = n >= 0 ? x * m : x / m;
+    double r = y >= 0 ? (double)(long long)(y + 0.5) : -(double)(long long)(-y + 0.5);
+    return n >= 0 ? r / m : r * m;
+}
+
 typedef struct { double sum, lo, hi; int nums; val err; int erred; } acc_t;
 
 /* A value a function was given: numbers are counted, words and empty cells
@@ -243,12 +324,73 @@ static int named(const char *s, int n, const char *name) {
     return name[n] == 0;
 }
 
+/* IF, AND, OR, NOT, ROUND, ABS and LEN: each argument worked out whole. */
+static val scalar(parse_t *P, const char *name, int len) {
+    val arg[8];
+    int n = 0;
+    skip(P);
+    if (*P->p != ')') {
+        for (;;) {
+            val v = expr(P);
+            if (n < 8) arg[n++] = v;
+            skip(P);
+            if (*P->p == ',') { P->p++; continue; }
+            if (*P->p == ')') break;
+            return syntax(P);
+        }
+    }
+    P->p++;
+    val bad = error("#value");
+    if (named(name, len, "IF")) {
+        if (n < 2 || n > 3) return error("#value");
+        int t = truthy(arg[0], &bad);
+        if (t < 0) return bad;
+        return t ? arg[1] : n == 3 ? arg[2] : truth(0);
+    }
+    if (named(name, len, "AND") || named(name, len, "OR")) {
+        if (!n) return error("#value");
+        int want_all = named(name, len, "AND"), all = 1, any = 0;
+        for (int i = 0; i < n; i++) {
+            int t = truthy(arg[i], &bad);
+            if (t < 0) return bad;
+            all = all && t;
+            any = any || t;
+        }
+        return truth(want_all ? all : any);
+    }
+    if (named(name, len, "NOT")) {
+        if (n != 1) return error("#value");
+        int t = truthy(arg[0], &bad);
+        return t < 0 ? bad : truth(!t);
+    }
+    if (named(name, len, "LEN")) {
+        if (n != 1) return error("#value");
+        if (arg[0].kind == V_ERR) return arg[0];
+        char buf[40];
+        return number(strlen(as_words(arg[0], buf)));
+    }
+    if (named(name, len, "ABS") || named(name, len, "ROUND")) {
+        int round = named(name, len, "ROUND");
+        if (n < 1 || n > (round ? 2 : 1)) return error("#value");
+        for (int i = 0; i < n; i++) {
+            if (arg[i].kind == V_ERR) return arg[i];
+            if (arg[i].kind == V_TEXT) return error("#value");
+        }
+        double x = arg[0].kind == V_NUM ? arg[0].num : 0;
+        if (!round) return number(x < 0 ? -x : x);
+        double places = n == 2 && arg[1].kind == V_NUM ? arg[1].num : 0;
+        return number(round_to(x, (int)places));
+    }
+    return error("#name");
+}
+
 /* SUM, AVG (or AVERAGE), MIN, MAX and COUNT, of ranges (A1:B3) and of
    anything else, separated by commas. COUNT counts the numbers and passes
    errors over, as the others do not. */
 static val call(parse_t *P, const char *name, int len) {
     int fn = named(name, len, "SUM") ? 0 : named(name, len, "AVG") || named(name, len, "AVERAGE") ? 1
            : named(name, len, "MIN") ? 2 : named(name, len, "MAX") ? 3 : named(name, len, "COUNT") ? 4 : -1;
+    if (fn < 0) return scalar(P, name, len);
     acc_t a;
     memset(&a, 0, sizeof(a));
     skip(P);
@@ -311,6 +453,23 @@ static val atom(parse_t *P) {
         P->p += n;
         return number(d);
     }
+    /* Words in quotes, a quote in them doubled. */
+    if (*s == '"') {
+        char buf[TEXT_MAX];
+        int k = 0;
+        const char *q = s + 1;
+        for (;;) {
+            if (!*q) return syntax(P);
+            if (*q == '"') {
+                if (q[1] != '"') break;
+                q++;
+            }
+            if (k < TEXT_MAX - 1) buf[k++] = *q;
+            q++;
+        }
+        P->p = q + 1;
+        return words2(buf, k, "", 0);
+    }
     /* What a reference copied off the sheet's edge was written as. */
     if (s[0] == '#' && upper(s[1]) == 'R' && upper(s[2]) == 'E' && upper(s[3]) == 'F' && !is_letter(s[4])) {
         P->p = s + 4;
@@ -327,6 +486,8 @@ static val atom(parse_t *P) {
         while (is_letter(s[l])) l++;
         P->p = s + l;
         skip(P);
+        if (*P->p != '(' && named(s, l, "TRUE")) return truth(1);
+        if (*P->p != '(' && named(s, l, "FALSE")) return truth(0);
         if (*P->p != '(') return error("#name");
         P->p++;
         return call(P, s, l);
@@ -355,7 +516,7 @@ static val term(parse_t *P) {
     }
 }
 
-static val expr(parse_t *P) {
+static val sum_expr(parse_t *P) {
     val v = term(P);
     for (;;) {
         skip(P);
@@ -363,6 +524,39 @@ static val expr(parse_t *P) {
         if (op != '+' && op != '-') return v;
         P->p++;
         v = arith(v, op, term(P));
+    }
+}
+
+/* & joins two values' words, below + and - as in other spreadsheets:
+   =1+2&3 is 33. */
+static val join_expr(parse_t *P) {
+    val v = sum_expr(P);
+    for (;;) {
+        skip(P);
+        if (*P->p != '&') return v;
+        P->p++;
+        val w = sum_expr(P);
+        if (v.kind == V_ERR) continue;
+        if (w.kind == V_ERR) { v = w; continue; }
+        char ba[40], bb[40];
+        const char *a = as_words(v, ba), *b = as_words(w, bb);
+        v = words2(a, strlen(a), b, strlen(b));
+    }
+}
+
+/* Comparisons are the lowest of all: =A1+1>B1 compares a sum. */
+static val expr(parse_t *P) {
+    val v = join_expr(P);
+    for (;;) {
+        skip(P);
+        const char *p = P->p;
+        char op[3] = { 0, 0, 0 };
+        if (p[0] == '<' && (p[1] == '=' || p[1] == '>')) { op[0] = p[0]; op[1] = p[1]; }
+        else if (p[0] == '>' && p[1] == '=') { op[0] = '>'; op[1] = '='; }
+        else if (p[0] == '<' || p[0] == '>' || p[0] == '=') op[0] = p[0];
+        else return v;
+        P->p += op[1] ? 2 : 1;
+        v = compare(v, op, join_expr(P));
     }
 }
 
@@ -397,6 +591,7 @@ static val cell_value(int r, int c) {
 
 static void recalc(void) {
     pass_no++;
+    pool_n = 0;
     for (int r = 0; r < NROW; r++)
         for (int c = 0; c < NCOL; c++) cell_value(r, c);
 }
@@ -409,6 +604,17 @@ static void moved(const char *src, int dr, int dc, char *out, int cap) {
     int n = 0;
     if (src[0] != '=') { strncpy(out, src, cap - 1); out[cap - 1] = 0; return; }
     for (int i = 0; src[i] && n < cap - 1; ) {
+        if (src[i] == '"') {
+            out[n++] = src[i++];
+            while (src[i] && n < cap - 1) {
+                char ch = src[i++];
+                out[n++] = ch;
+                if (ch != '"') continue;
+                if (src[i] != '"') break;
+                if (n < cap - 1) out[n++] = src[i++];
+            }
+            continue;
+        }
         ref_t f;
         int after_word = i > 0 && (is_letter(src[i - 1]) || is_digit(src[i - 1]) || src[i - 1] == '.'
                                    || src[i - 1] == '#');
@@ -436,7 +642,7 @@ static void moved(const char *src, int dr, int dc, char *out, int cap) {
 /* What a cell shows. */
 static void shown_text(const cell_t *x, char *out) {
     switch (x->v.kind) {
-        case V_NUM:  num_text(x->v.num, out); break;
+        case V_NUM:  if (x->v.str) strcpy(out, x->v.str); else num_text(x->v.num, out); break;
         case V_TEXT: strcpy(out, x->v.str); break;
         case V_ERR:  strcpy(out, x->v.str); break;
         default:     out[0] = 0;
