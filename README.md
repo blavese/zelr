@@ -291,6 +291,8 @@ In the terminal, which is itself one of those ring 3 programs:
     cmp a.img b.img        the first byte and line two files differ at
     cut -d, -f2 t.csv      the second field of each line
     cat t.csv | tr a-z A-Z the same in capitals
+    unzip -l site.zip      what is in a zip, tar or .gz; unzip takes it out
+    zip notes.zip notes    a folder and everything in it into a new zip
 
 The terminal's own commands can send what they say into a file: `ls >
 list.txt` writes it, `>>` adds to what is there, and anything that goes
@@ -617,6 +619,7 @@ instead.
     python tools/grepcheck.py   the terminal's grep -i and -r: case aside, three folders deep, bytes passed over
     python tools/sumcheck.py    the terminal's sha256sum against hashlib, and cmp's byte and line, on 3 MiB files
     python tools/cutcheck.py    the terminal's cut and tr against the same written in Python, and quoted words
+    python tools/arccheck.py    the terminal's unzip of Python's zip, tar.gz and gz, and its zip read by zipfile
     python tools/slidecheck.py  Pictures' slideshow: in order, round again, a few seconds apart, and stopped
     python tools/choosecheck.py Files with several chosen: copied, cut, pasted, deleted and counted together
     python tools/eventcheck.py  a time in today's calendar note is said and rung in its minute, and only that one
@@ -1268,7 +1271,7 @@ executables in ring 3. The terminal is a shell that is not part of the kernel:
 listing a directory, reading a file, writing one, starting another program and
 fetching a page over TCP all go through int 0x80, and its `get` command does
 an HTTP GET from user space. It has a line editor, history kept in `/cfg`, tab
-completion over both commands and paths, and fifty-one commands of its own.
+completion over both commands and paths, and fifty-three commands of its own.
 Settings is the interesting one, because it changes how the desktop
 looks without being able to reach the window manager at all. It writes
 `/zelr.cfg`, a plain "key value" file, and the window manager re-reads that four

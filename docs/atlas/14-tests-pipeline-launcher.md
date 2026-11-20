@@ -890,6 +890,14 @@ Added in 0.165.0, not yet in the table below:
   about:history?forget is not followed (still 3); after the server's /peek, about:history's second entry (a, a file;
   the links found as bands of accent inside the window) opens; the forget button (found by its colour) leaves 0.
 
+Added in 0.224.0, not yet in the table below:
+- **`arccheck.py`** (gate `arctest`, full; 12 checks). t.zip (deflated a.txt, stored sub/b.txt, empty/, ../evil.txt),
+  t.tgz (x.txt, y/z.txt) and one.gz, all written by Python. `unzip -l` (each "%9d  NAME"), `unzip t.zip` (into t,
+  "extracted 2 files into t; not 1: a name that would write outside the folder", the empty folder made, evil.txt
+  nowhere), `unzip t.tgz /home/a/out`, `unzip one.gz` (as /home/a/one), `zip m.zip t out/x.txt` ("made m.zip: 3
+  files, "), each `> FILE`; m.zip read by zipfile: `testzip()` clean, names t/, t/a.txt, t/sub/, t/sub/b.txt, t/empty/,
+  x.txt, the bytes as they went in.
+
 Added in 0.223.0, not yet in the table below:
 - **`cutcheck.py`** (gate `cuttest`, full; 15 checks). A CSV with an empty field and a line with no comma, a file apart
   by tabs, one by spaces, one of words; `cut -d, -f2`, `-d , -f 1,3`, `-c 2-4`, `| cut -d, -f2-`, `-f 2` (tab),

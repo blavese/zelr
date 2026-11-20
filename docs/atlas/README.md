@@ -113,6 +113,18 @@ numbered files are still to 6048716; where they disagree with this list, this li
   built unsigned program; h264test in the machine still checks the decoder against Windows' answers in h264data.h.
   Gate 74 steps (one out, one in).
 
+### 0.224.0
+
+- **unzip and zip in the terminal, one archive code with Files (09a, 10, 14)**: userland/arcio.h holds what Files did
+  with archives on the disk: `arcio_read_whole` (64 MB), `arcio_safe_name` (no /, .., drive or backslash),
+  `arcio_make_parents`, `arcio_write_whole`, `arcio_take_out`, `arcio_dest_for` (beside it, named after it without
+  .zip/.tar/.tgz/.tar.gz/.gz, "NAME 2" when taken), `arcio_extract_into` (`arcio_out`: files, refused, the last
+  reason) and `arcio_make` (`arcio_make_walk` twice, counting then adding; 1024 files or 48 MB, `arcio_make_t`).
+  files.c's `read_whole`, `safe_name`, `make_parents`, `write_whole`, `take_out`, `make_walk` and the `mk_*` counts are
+  gone into it; its messages are as they were but for a zip it has no memory for ("no zip made: not enough memory for
+  it"). term.c `cmd_unzip` (`-l`: size and name a line; FOLDER made when not there; a .gz with no folder comes out
+  beside it) and `cmd_zip` (ARCHIVE then any files and folders, each under its own name).
+
 ### 0.223.0
 
 - **cut, tr and quoted words in the terminal (10, 14)**: term.c `split` takes a word to a space outside double quotes
