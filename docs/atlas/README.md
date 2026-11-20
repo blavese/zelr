@@ -113,6 +113,16 @@ numbered files are still to 6048716; where they disagree with this list, this li
   built unsigned program; h264test in the machine still checks the decoder against Windows' answers in h264data.h.
   Gate 74 steps (one out, one in).
 
+### 0.212.0
+
+- **Sheet sorts (10, 14)**: sheet.c `sort_rows` (ctrl+T): the rows from the chosen one to the last with anything in
+  it, ordered by the chosen column's values (`sort_cmp` on `sort_class`: numbers, words with case aside, truths,
+  errors, then empty last either way) with an insertion sort, so ties keep their order. Every cell of a moved row is
+  rewritten by `moved` by how far its row went, all into `texts` before any is put back, then one `recalc`.
+  `sort_col`/`sort_row`/`sort_desc` remember the last sort: the same column from the same row goes the other way.
+  "sheet: sorted rows A to B by C, smallest first" on the console. Help's row for ctrl+T. ordercheck, new (11), gate
+  step `ordertest` (107 steps).
+
 ### 0.211.0
 
 - **Sheet's comparisons and words (10, 14)**: sheet.c's parser has three levels now: `expr` compares (= <> < > <=

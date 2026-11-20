@@ -890,6 +890,12 @@ Added in 0.165.0, not yet in the table below:
   about:history?forget is not followed (still 3); after the server's /peek, about:history's second entry (a, a file;
   the links found as bands of accent inside the window) opens; the forget button (found by its colour) leaves 0.
 
+Added in 0.212.0, not yet in the table below:
+- **`ordercheck.py`** (gate `ordertest`, full; 11 checks). `/bin/sheet /home/o.csv`; a header and seven rows (a
+  name; a score that is a number, a tie, words, `=1/0` or nothing; a formula of its own row). ctrl+T at B2, again at
+  B2, then at A2; after each the names down A2-A8 and the formula beside each (its own row's, saying what that row's
+  should) are visited with ctrl+G. The header stays; the saved CSV, read by Python's csv, holds the last order.
+
 Added in 0.211.0, not yet in the table below:
 - **`logiccheck.py`** (gate `logictest`, full; 13 checks). `/bin/sheet /home/l.csv`; eight rows of four formulas typed
   over the serial line (comparisons of numbers and words, &, IF/AND/OR/NOT, ROUND to places and to hundreds, ABS,
