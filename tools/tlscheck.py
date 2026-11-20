@@ -133,6 +133,24 @@ def fetch(vm, target, timeout=180, tries=2):
     return out
 
 
+def refusal(vm, host, tries=3):
+    """A fetch that is to be refused, tried again only while the server never
+    took the connection.
+
+    badssl.com's servers have days when a connection takes seven seconds or
+    never arrives (the host's own Python saw both on 2026-11-20), and the
+    machine gives a connection six. "could not connect" is said before any
+    TLS is spoken, so like a name that will not resolve it says nothing about
+    certificates; anything else that comes back, a refusal for the wrong
+    reason above all, is kept as it is."""
+    out = ""
+    for _ in range(tries):
+        out = vm.fresh("fetch https://%s /" % host, timeout=120)
+        if "could not connect" not in out:
+            return out
+    return out
+
+
 def main():
     keep = "--keep" in sys.argv
     build_once()
@@ -174,7 +192,7 @@ def main():
             if not resolved(vm, host):
                 c.add("%s resolves, so there is something to connect to" % host, False)
                 continue
-            out = vm.fresh("fetch https://%s /" % host, timeout=120)
+            out = refusal(vm, host)
             c.add("%s is refused" % host, "secure:" not in out and status_of(out) is None)
             c.add("because %s" % reason, reason in out)
             if reason not in out:
