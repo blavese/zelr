@@ -3011,6 +3011,64 @@ static void day_note(void) {
     if (day_note_in(buf, n, z.local.year, z.local.month, z.local.day, text, sizeof(text))) wm_notice(text);
 }
 
+/* --- alarms -------------------------------------------------------------
+ *
+ * /home/alarms, a line each, "07:30 wake up" (the terminal's `alarm` writes
+ * it). At that minute of local time the desktop says "alarm: wake up" as a
+ * notice and rings a note, whatever is open or not. Looked at with the dock's
+ * clock, once a second, and the file read once a minute at most. */
+#define ALARM_FILE "/home/alarms"
+static u64 alarm_minute;                     /* yyyymmddhhmm last looked at */
+
+/* The text of the line in buf for hour:minute, as "alarm: TEXT", or false. */
+static bool alarm_in(const char *buf, int n, int hour, int minute, int *at, char *out, int cap) {
+    for (int i = *at; i < n; ) {
+        int e = i;
+        while (e < n && buf[e] != '\n') e++;
+        const char *l = buf + i;
+        bool timed = e - i >= 5 && l[0] >= '0' && l[0] <= '2' && l[1] >= '0' && l[1] <= '9' && l[2] == ':'
+                     && l[3] >= '0' && l[3] <= '5' && l[4] >= '0' && l[4] <= '9';
+        int next = e + 1;
+        if (timed && (l[0] - '0') * 10 + (l[1] - '0') == hour && (l[3] - '0') * 10 + (l[4] - '0') == minute) {
+            int k = 0;
+            for (const char *p = "alarm: "; *p && k < cap - 1; p++) out[k++] = *p;
+            int j = i + 5;
+            while (j < e && buf[j] == ' ') j++;
+            if (j >= e || buf[j] == '\r') for (const char *p = "it is time"; *p && k < cap - 1; p++) out[k++] = *p;
+            for (; j < e && buf[j] != '\r' && k < cap - 1; j++) out[k++] = buf[j];
+            out[k] = 0;
+            *at = next;
+            return true;
+        }
+        i = next;
+    }
+    return false;
+}
+
+static void alarms_look(void) {
+    zone_time_t z;
+    if (!zone_now(&z)) return;
+    u64 now = (u64)z.local.year * 100000000ull + (u64)z.local.month * 1000000ull + (u64)z.local.day * 10000ull
+              + (u64)z.local.hour * 100ull + z.local.minute;
+    if (now == alarm_minute) return;
+    alarm_minute = now;
+    static char buf[4096];
+    int n = vfs_read(ALARM_FILE, buf, sizeof(buf) - 1);
+    if (n <= 0) return;
+    char text[112];
+    int at = 0, rang = 0;
+    while (alarm_in(buf, n, z.local.hour, z.local.minute, &at, text, sizeof(text))) {
+        wm_notice(text);
+        rang = 1;
+    }
+    if (rang) sound_tone(880, 600);
+}
+
+bool wm_test_alarm(const char *buf, int hour, int minute, char *out, int cap) {
+    int at = 0;
+    return alarm_in(buf, (int)strlen(buf), hour, minute, &at, out, cap);
+}
+
 bool wm_test_day_note(const char *buf, u32 y, u32 m, u32 d, char *out, int cap) {
     return day_note_in(buf, (int)strlen(buf), y, m, d, out, cap);
 }
@@ -5326,6 +5384,7 @@ void wm_run(void) {
             last_dock_look = timer_ticks();
             if (moving || net_open || dock_changed()) need_frame();
             day_note();
+            alarms_look();
         }
 
         if (still_moving(panel_since, PANEL_MS)) panel_frame();

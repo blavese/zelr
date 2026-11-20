@@ -2249,6 +2249,16 @@ static void test_partial_frames(void) {
     ok("and none for a day with no note", !wm_test_day_note(cal, 2026, 11, 23, day, sizeof(day)));
     ok("nor for a line with no tab after its date", !wm_test_day_note(cal, 2026, 11, 21, day, sizeof(day)));
 
+    /* The alarms, as the desktop finds them for a minute. */
+    const char *al = "07:30 wake up\r\n12:05\n7:45 no leading nought\n23:59 last thing";
+    ok("the alarm for its minute is found",
+       wm_test_alarm(al, 7, 30, day, sizeof(day)) && !strcmp(day, "alarm: wake up"));
+    ok("and one with no words says it is time",
+       wm_test_alarm(al, 12, 5, day, sizeof(day)) && !strcmp(day, "alarm: it is time"));
+    ok("and the last line's", wm_test_alarm(al, 23, 59, day, sizeof(day)) && !strcmp(day, "alarm: last thing"));
+    ok("none for another minute, nor for a time not written HH:MM",
+       !wm_test_alarm(al, 7, 31, day, sizeof(day)) && !wm_test_alarm(al, 7, 45, day, sizeof(day)));
+
     /* Drawn whole before the two copies below are taken, so the wallpaper
        is kept while there is still room for it. */
     window_t *a = wm_create("under", 150, 120, 300, 200);

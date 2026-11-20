@@ -240,6 +240,8 @@ void wm_session_begin(void);
 /* For the self test: the calendar's note in buf for a date, as the desktop
    says it ("today: NOTE"), or false. */
 bool wm_test_day_note(const char *buf, u32 y, u32 m, u32 d, char *out, int cap);
+/* And the alarm in buf for hour:minute ("alarm: TEXT"), or false. */
+bool wm_test_alarm(const char *buf, int hour, int minute, char *out, int cap);
 
 void wm_push_event(window_t *w, const wm_event_t *ev);
 bool wm_pop_event(window_t *w, wm_event_t *out);

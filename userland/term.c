@@ -1516,6 +1516,53 @@ static void cmd_echo(int argc, char **argv) {
     say(body);
 }
 
+/* Alarms: /home/alarms, "07:30 wake up" a line, which the desktop watches
+   (it says them at their minute, and rings). `alarm` lists them, `alarm
+   HH:MM TEXT` adds one, `alarm clear` takes them all away. */
+static void cmd_alarm(int argc, char **argv) {
+    static char buf[4096];
+    if (argc < 2) {
+        int n = slurp("/home/alarms", buf, sizeof(buf) - 1);
+        if (n <= 0) { dim("no alarms"); return; }
+        buf[n] = 0;
+        for (char *l = buf; *l; ) {
+            char *e = l;
+            while (*e && *e != '\n') e++;
+            char keep = *e;
+            *e = 0;
+            if (*l) say(l);
+            if (!keep) break;
+            l = e + 1;
+        }
+        return;
+    }
+    if (!strcmp(argv[1], "clear")) {
+        unlink("/home/alarms");
+        dim("no alarms now");
+        return;
+    }
+    const char *t = argv[1];
+    int good = strlen(t) == 5 && t[2] == ':' && t[0] >= '0' && t[0] <= '2' && t[1] >= '0' && t[1] <= '9'
+               && t[3] >= '0' && t[3] <= '5' && t[4] >= '0' && t[4] <= '9' && (t[0] - '0') * 10 + (t[1] - '0') < 24;
+    if (!good) { err("a time is HH:MM, as 07:30"); return; }
+    char what[COLS + 1];
+    join_from(argv, argc, 2, what, COLS - 8);
+    int n = slurp("/home/alarms", buf, sizeof(buf) - COLS - 16);
+    if (n < 0) n = 0;
+    if (n && buf[n - 1] != '\n') buf[n++] = '\n';
+    for (int i = 0; i < 5; i++) buf[n++] = t[i];
+    if (what[0]) buf[n++] = ' ';
+    for (int i = 0; what[i]; i++) buf[n++] = what[i];
+    buf[n++] = '\n';
+    if (spit("/home/alarms", buf, n) != n) { err("could not write /home/alarms"); return; }
+    char line[COLS + 16];
+    int k = 0;
+    for (const char *p = "an alarm at "; *p; p++) line[k++] = *p;
+    for (int i = 0; i < 5; i++) line[k++] = t[i];
+    line[k] = 0;
+    say(line);
+}
+
 /* A notice on the desktop, above the dock, and kept with the others there
 (alt+N): a script's way of saying it has finished. */
 static void cmd_notice(int argc, char **argv) {
@@ -1605,6 +1652,7 @@ static const command COMMANDS[] = {
     { "history", cmd_history, "",              "what you have typed" },
     { "echo",    cmd_echo,    "TEXT",          "print it back" },
     { "notice",  cmd_notice,  "TEXT",          "say it on the desktop, kept under alt+N" },
+    { "alarm",   cmd_alarm,   "[HH:MM TEXT]",  "list the alarms, or set one; alarm clear" },
     { "clear",   cmd_clear,   "",              "empty the scrollback" },
     { "about",   cmd_about,   "",              "what this program is" },
 };
