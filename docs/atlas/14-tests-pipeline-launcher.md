@@ -888,6 +888,13 @@ Added in 0.165.0, not yet in the table below:
   about:history?forget is not followed (still 3); after the server's /peek, about:history's second entry (a, a file;
   the links found as bands of accent inside the window) opens; the forget button (found by its colour) leaves 0.
 
+Added in 0.201.0, not yet in the table below:
+- **`windowshotcheck.py`** (gate `windowshottest`, full; 5 checks). The desktop with its terminal; the screen's
+  terminal-page pixels counted; `alt-print` (QEMU sends SysRq) ("desktop: the window is saved in /home/pictures/window
+  ..."); alt-d, alt-print ("... there is no window in front"). The PNG read off the disk, decoded (printcheck's
+  `png_pixels`): between 200x150 and the screen's size (762x514), its terminal-page pixels within 2 per cent of the
+  screen's and over half of it.
+
 Added in 0.200.0, not yet in the table below:
 - **`helpcheck.py`** (gate `helptest`, full; 6 checks). The dock's name clicked (deskcheck's `DOCK_BADGE`), "help" and
   Return in the launcher ("help: N of N shown", over 50);

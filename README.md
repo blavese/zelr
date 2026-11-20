@@ -151,7 +151,8 @@ whatever the desktop has open, then goes to a program that has a use for it
 -- the browser, the file manager, the calculator, blackjack -- and otherwise
 returns to the shell; alt and Escape returns to the shell from anywhere.
 
-Print Screen saves the screen as a PNG in `/home/pictures`, named by the
+Print Screen saves the screen as a PNG in `/home/pictures` (with Alt, the
+window in front alone, frame and all, as "window" and the time), named by the
 time, and says so in a notice above the dock for a few seconds, as any
 program can (the browser does when it saves a download); the kernel compresses it with a deflate of its own (it had only ever
 inflated), so a screen is a hundred kilobytes or so rather than two and a
@@ -545,6 +546,7 @@ instead.
     python tools/shufflecheck.py Music's repeat goes round the list, its shuffle plays each once
     python tools/shapecheck.py  Paint's line, rectangle, fill and ellipse, read back from the PNG it saves
     python tools/helpcheck.py   Help's list of keys narrowed by a word, a key's name and a program's
+    python tools/windowshotcheck.py alt+Print Screen saves the front window alone, decoded and counted
     python tools/downloadcheck.py  a 12 MB download fetched in parts with Range, read back byte for byte
     python tools/notescheck.py  select all, copy, paste, save, undo, find and replace in the editor, from its keys
     python tools/timecheck.py   set the time zone from the shell and in Settings, read the clocks and a file's time

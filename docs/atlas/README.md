@@ -113,6 +113,15 @@ numbered files are still to 6048716; where they disagree with this list, this li
   built unsigned program; h264test in the machine still checks the decoder against Windows' answers in h264data.h.
   Gate 74 steps (one out, one in).
 
+### 0.201.0
+
+- **alt+Print Screen saves the front window (05, 07, 14)**: keyboard.c takes scancode 0x54 (SysRq, what a PS/2
+  keyboard sends for Print Screen while Alt is held) as `KEY_PRINT`, which `push` stamps with Alt. wm.c: Print Screen
+  with Alt saves `focused_window()`'s outer rectangle with shot.c `shot_save_rect` (kept to the screen; rows by
+  `part_row` from `fb_row`; named by `shot_name`, "/home/pictures/window DATE.png"), "desktop: the window is saved in
+  PATH", or "... was not saved: there is no window in front". Help's table has it. windowshotcheck, new (5), gate step
+  `windowshottest` (97 steps).
+
 ### 0.200.0
 
 - **Help (10, 14)**: userland/help.c, in the launcher's System list (/bin/help; builtin.S/.c, shotcheck's copy of the
