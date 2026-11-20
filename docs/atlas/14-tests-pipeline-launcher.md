@@ -890,6 +890,13 @@ Added in 0.165.0, not yet in the table below:
   about:history?forget is not followed (still 3); after the server's /peek, about:history's second entry (a, a file;
   the links found as bands of accent inside the window) opens; the forget button (found by its colour) leaves 0.
 
+Added in 0.211.0, not yet in the table below:
+- **`logiccheck.py`** (gate `logictest`, full; 13 checks). `/bin/sheet /home/l.csv`; eight rows of four formulas typed
+  over the serial line (comparisons of numbers and words, &, IF/AND/OR/NOT, ROUND to places and to hundreds, ABS,
+  LEN, words in quotes with a doubled quote, TRUE+TRUE, #value, #error); 30 cells visited with ctrl+G and compared,
+  grouped into five checks; D8 `="A1"&B8` pasted at D9 must be `="A1"&B9`; saved, read back by Python's csv as typed,
+  and opened again.
+
 Added in 0.210.0, not yet in the table below:
 - **`abicheck.py`** compares the longest path three ways (`check_path`: include/fat.h `FAT_PATH_MAX`, include/sched.h
   `TASK_CWD_MAX`, sdk/zelr.h `ZELR_PATH_MAX`; 13 checks). **maptest** asks getcwd with a 4096-byte buffer.

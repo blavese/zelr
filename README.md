@@ -147,7 +147,9 @@ desktop's own typeface at 13, 15 bold, 20 or 40 pixels by the brush's
 size, until Return or a click elsewhere; ctrl and z takes them back. Sheet, in the Productivity list, is a
 spreadsheet: 26 columns by 200 rows, each cell a number, words, or = and a
 formula of numbers, cells (B3), + - * / and brackets, and SUM, AVG, MIN,
-MAX and COUNT of ranges (A1:C9). Every cell is worked out again after any
+MAX and COUNT of ranges (A1:C9). A formula compares (= <> < > <= >=, which
+give TRUE or FALSE), joins words with & (="Total: "&B9), holds words in
+quotes, and knows IF, AND, OR, NOT, ROUND, ABS and LEN. Every cell is worked out again after any
 change, and one that cannot be says why: #div/0, #cycle for a cell that
 comes back to itself, #value for words in a sum, #ref, #name, #error. Tab
 and Return move on as they do in other spreadsheets, F2 changes a cell,
@@ -584,6 +586,7 @@ instead.
     python tools/pipecheck.py   the terminal's |: sort, grep, wc, head and tail fed by the command before
     python tools/sheetcheck.py  Sheet: formulas worked out again, every error, CSV kept, read and Python's read
     python tools/fillcheck.py   Sheet's references moved by ctrl+D, ctrl+R and a paste, $ kept, #ref off the edge
+    python tools/logiccheck.py  Sheet's comparisons, & and words in quotes, IF, AND, OR, NOT, ROUND, ABS, LEN
     python tools/wordscheck.py  Paint's words, the saved PNG against face.h drawn here, pixel for pixel
     python tools/downloadcheck.py  a 12 MB download fetched in parts with Range, read back byte for byte
     python tools/notescheck.py  select all, copy, paste, save, undo, find and replace in the editor, from its keys

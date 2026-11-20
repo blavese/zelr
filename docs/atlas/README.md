@@ -113,6 +113,18 @@ numbered files are still to 6048716; where they disagree with this list, this li
   built unsigned program; h264test in the machine still checks the decoder against Windows' answers in h264data.h.
   Gate 74 steps (one out, one in).
 
+### 0.211.0
+
+- **Sheet's comparisons and words (10, 14)**: sheet.c's parser has three levels now: `expr` compares (= <> < > <=
+  >=, `compare`: numbers by size, words letter by letter with case aside, any number below any words, an empty cell
+  as nought or as no words), `join_expr` joins with & (`as_words`: a number as it is shown, TRUE/FALSE, nothing for
+  empty), `sum_expr` is the old + and -. A truth is a number with `val.str` "TRUE"/"FALSE" (`truth`), shown so and
+  counted as 1 or 0. Words in quotes ("" a quote) and words a formula makes live in `pool` (1 MB, emptied at the start
+  of every `recalc`; full is `#room`), each 95 bytes at most. `call` hands names that are not SUM/AVG/MIN/MAX/COUNT to
+  `scalar`: IF (two or three parts; the part not taken is still worked out), AND, OR, NOT (`truthy`: words are
+  #value), ROUND (`round_to`, half away from nought, places below nought round to tens), ABS, LEN. `moved` copies
+  words in quotes as they are. logiccheck, new (13), gate step `logictest` (106 steps).
+
 ### 0.210.0
 
 - **Paths up to 255 bytes (03, 04, 09b, 14)**: include/fat.h `FAT_PATH_MAX` 256 (was 128), so `VFS_PATH_MAX` and
