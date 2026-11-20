@@ -113,6 +113,19 @@ numbered files are still to 6048716; where they disagree with this list, this li
   built unsigned program; h264test in the machine still checks the decoder against Windows' answers in h264data.h.
   Gate 74 steps (one out, one in).
 
+### 0.205.0
+
+- **The terminal's | (10, 14)**: term.c `run_line` notes a `|` outside double quotes; `stages_of` cuts the line into
+  at most eight commands (`st_argv`/`st_argc`/`st_cmd`), and `run_stages` refuses the line whole if any is not one of
+  the terminal's own, then runs them in turn, each but the last (and the last too when the line ends `> FILE`, as
+  `run_into` now asks) with `capturing` set; what was kept is copied into `pipe_buf` with `pipe_n` its length (-1:
+  nothing piped). cat, head/tail (`[LINES]` the one word), wc (no name), grep TEXT (the lines alone, no numbers) and
+  the new `sort [FILE]` (shell sort on line pointers, 8192 lines) read it through `read_input(0)` when given no file.
+  A line with no `|` runs as before, so `time` inside a pipe keeps its input. grep's "no matches" is shown only when
+  not captured. cat no longer prints an empty line after a file's last newline (`print_text`), and the terminal reads
+  64 KiB at a time (`IO_BUF`, was 16 KiB), as much as a pipe holds. pipecheck, new (15), gate step `pipetest` (101
+  steps).
+
 ### 0.204.0
 
 - **The terminal's cal, du and df (10, 14)**: term.c `cmd_cal` lays a month out as cal does (the title centred in

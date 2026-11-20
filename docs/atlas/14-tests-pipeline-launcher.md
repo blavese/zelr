@@ -888,6 +888,15 @@ Added in 0.165.0, not yet in the table below:
   about:history?forget is not followed (still 3); after the server's /peek, about:history's second entry (a, a file;
   the links found as bands of accent inside the window) opens; the forget button (found by its colour) leaves 0.
 
+Added in 0.205.0, not yet in the table below:
+- **`pipecheck.py`** (gate `pipetest`, full; 15 checks). A fresh volume with /home/p/fruit.txt (five lines, one
+  twice) and many.txt (3000 lines "line NNNN" shuffled, 30000 bytes). Typed into the desktop's terminal, each pipe
+  ending `> FILE`: `cat | calc` and `cat | nosuch` (refused, no file; a program started would have taken the keyboard,
+  and the closing `notice all done` would never arrive), `cat | sort`, `cat | grep ap | wc`, `cat | head 2`, `cat |
+  sort | tail 1`, `sort many.txt`, `cat many.txt | sort | head 3`, `echo "a|b"`, `cat | grep zz` (empty), `cat >
+  copy.txt` (the file exactly), `help | grep sort` (its own row). Each file read back off the disk and compared with
+  what Python makes of the same lines.
+
 Added in 0.204.0, not yet in the table below:
 - **`toolcheck.py`** (gate `tooltest`, full; 9 checks). A fresh volume with four files of known sizes under
   /home/dt (two folders below it). Typed into the desktop's terminal, each sent into a file with `>`: `cal 2 2028`,

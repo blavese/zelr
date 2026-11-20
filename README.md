@@ -250,7 +250,10 @@ In the terminal, which is itself one of those ring 3 programs:
 
 The terminal's own commands can send what they say into a file: `ls >
 list.txt` writes it, `>>` adds to what is there, and anything that goes
-wrong is still shown rather than written. Tab completes commands and paths, up and down walk through history, ctrl+R
+wrong is still shown rather than written. A `|` hands what one says to the
+next, which reads it where it would have read a file: `cat names.txt |
+sort | head 3`, or `help | grep file | wc` (cat, head, tail, wc, grep and
+sort read it). Tab completes commands and paths, up and down walk through history, ctrl+R
 looks back through it for a line with a word in it (ctrl+R again for the
 one before, Return to run it, an arrow to change it first, ctrl+G to let
 it go), and PageUp scrolls back.
@@ -558,6 +561,7 @@ instead.
     python tools/alarmcheck.py  an alarm set for the coming minute is said in it, once, and its ring heard
     python tools/redirectcheck.py the terminal's > and >>: files written, added to, errors kept on the screen
     python tools/toolcheck.py   the terminal's cal against Python's calendar, du and df against what is there
+    python tools/pipecheck.py   the terminal's |: sort, grep, wc, head and tail fed by the command before
     python tools/downloadcheck.py  a 12 MB download fetched in parts with Range, read back byte for byte
     python tools/notescheck.py  select all, copy, paste, save, undo, find and replace in the editor, from its keys
     python tools/timecheck.py   set the time zone from the shell and in Settings, read the clocks and a file's time
