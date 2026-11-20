@@ -72,6 +72,7 @@ static const row_t ROWS[] = {
     { "paint", "[, ]", "the colour before or after" },
     { "paint", "C", "the paper cleared" },
     { "paint", "ctrl+S", "saved as a PNG" },
+    { "paint", "ctrl+O", "another PNG opened, chosen from a list; ctrl+O again lets it go" },
     { "paint", "ctrl+Z", "the last stroke or shape taken back" },
     { "pictures", "Left, Right, Space", "the picture before or after in the folder" },
     { "pictures", "Home, End", "the first or the last picture" },

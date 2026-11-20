@@ -20,8 +20,12 @@
  * clicked on, as far as it reaches, and T words, typed where the paper is
  * clicked in the desktop's own typeface, the brush's size choosing which.
  * While words are being typed every key is theirs: Return or a click
- * elsewhere ends them ("paint: words TEXT, WxH at X,Y"). */
+ * elsewhere ends them ("paint: words TEXT, WxH at X,Y").
+ *
+ * ctrl+O opens another PNG, chosen from a list (ui.h's chooser); what is
+ * drawn here is named pr_ and flood so as not to be the toolkit's. */
 #include "zelr.h"
+#include "ui.h"
 #include "alloc.h"
 #include "png.h"
 #include "pngw.h"
@@ -66,10 +70,14 @@ static int anchor_x, anchor_y;          /* where a shape began */
 static char path[256] = "/home/picture.png";
 static u32 *undo_px;                    /* the paper as it was before the last stroke or clear */
 static int  undo_ok;
+/* Changed since it was opened or saved, and whether ctrl+O has said so
+   once: a second ctrl+O opens the list anyway, as Notes' does. */
+static int  unsaved;
+static int  open_armed;
 
 /* --- drawing ------------------------------------------------------------ */
 
-static void rect(int x, int y, int w, int h, u32 c) {
+static void pr_rect(int x, int y, int w, int h, u32 c) {
     if (x < 0) { w += x; x = 0; }
     if (y < 0) { h += y; y = 0; }
     if (x + w > W) w = W - x;
@@ -80,11 +88,11 @@ static void rect(int x, int y, int w, int h, u32 c) {
     }
 }
 
-static void frame(int x, int y, int w, int h, u32 c) {
-    rect(x, y, w, 1, c);
-    rect(x, y + h - 1, w, 1, c);
-    rect(x, y, 1, h, c);
-    rect(x + w - 1, y, 1, h, c);
+static void pr_frame(int x, int y, int w, int h, u32 c) {
+    pr_rect(x, y, w, 1, c);
+    pr_rect(x, y + h - 1, w, 1, c);
+    pr_rect(x, y, 1, h, c);
+    pr_rect(x + w - 1, y, 1, h, c);
 }
 
 /* A filled disc, clipped to the canvas area below the toolbar. */
@@ -107,7 +115,7 @@ static void dot(int cx, int cy, int r, u32 c) {
 }
 
 /* Bresenham, so a fast drag leaves a stroke instead of a dotted trail. */
-static void line(int x0, int y0, int x1, int y1, int r, u32 c) {
+static void pr_line(int x0, int y0, int x1, int y1, int r, u32 c) {
     int dx = x1 - x0, dy = y1 - y0;
     if (dx < 0) dx = -dx;
     if (dy < 0) dy = -dy;
@@ -139,10 +147,10 @@ static int isqrt(long long v) {
 }
 
 static void rectangle(int x0, int y0, int x1, int y1, int r, u32 c) {
-    line(x0, y0, x1, y0, r, c);
-    line(x1, y0, x1, y1, r, c);
-    line(x1, y1, x0, y1, r, c);
-    line(x0, y1, x0, y0, r, c);
+    pr_line(x0, y0, x1, y0, r, c);
+    pr_line(x1, y0, x1, y1, r, c);
+    pr_line(x1, y1, x0, y1, r, c);
+    pr_line(x0, y1, x0, y0, r, c);
 }
 
 /* The ellipse in the box from (x0, y0) to (x1, y1): walked both ways, by x
@@ -154,7 +162,7 @@ static void ellipse(int x0, int y0, int x1, int y1, int r, u32 c) {
     if (x1 < x0) { int t = x0; x0 = x1; x1 = t; }
     if (y1 < y0) { int t = y0; y0 = y1; y1 = t; }
     int a = (x1 - x0) / 2, b = (y1 - y0) / 2, cx = x0 + a, cy = y0 + b;
-    if (a < 1 || b < 1) { line(x0, y0, x1, y1, r, c); return; }
+    if (a < 1 || b < 1) { pr_line(x0, y0, x1, y1, r, c); return; }
     for (int dx = -a; dx <= a; dx++) {
         int dy = isqrt((long long)b * b * (a * a - dx * dx) / ((long long)a * a));
         dot(cx + dx, cy - dy, r, c);
@@ -170,7 +178,7 @@ static void ellipse(int x0, int y0, int x1, int y1, int r, u32 c) {
 /* Everything of the colour clicked on that touches it, a row at a time: a
    stretch of a row is filled and the rows above and below looked along it. A
    stack of stretches rather than of pixels, kept in the heap and grown. */
-static void fill(int x, int y, u32 c) {
+static void flood(int x, int y, u32 c) {
     if (y < TOOLBAR_H || y >= H || x < 0 || x >= W) return;
     u32 from = px[(u32)y * W + x];
     if (from == c) return;
@@ -215,7 +223,7 @@ static void shape_to(int x, int y) {
     memcpy(px + (u32)TOOLBAR_H * W, undo_px, W * (H - TOOLBAR_H) * 4);
     int r = BRUSHES[brush];
     u32 c = PALETTE[color];
-    if (tool == TOOL_LINE) line(anchor_x, anchor_y, x, y, r, c);
+    if (tool == TOOL_LINE) pr_line(anchor_x, anchor_y, x, y, r, c);
     else if (tool == TOOL_RECT) rectangle(anchor_x, anchor_y, x, y, r, c);
     else if (tool == TOOL_ELLIPSE) ellipse(anchor_x, anchor_y, x, y, r, c);
 }
@@ -228,7 +236,7 @@ static void draw_tools(void) {
     for (int i = 0; i < TOOLS; i++) {
         int x = tool_x(i), y = 32;
         u32 ink = i == tool ? WHITE : RGB(0x8A, 0x9B, 0xA6);
-        rect(x, y, 24, 22, i == tool ? RGB(0x39, 0x44, 0x4F) : BAR_BG);
+        pr_rect(x, y, 24, 22, i == tool ? RGB(0x39, 0x44, 0x4F) : BAR_BG);
         if (i == TOOL_BRUSH) {
             for (int dy = -4; dy <= 4; dy++)
                 for (int dx = -4; dx <= 4; dx++)
@@ -236,10 +244,10 @@ static void draw_tools(void) {
         } else if (i == TOOL_LINE) {
             for (int k = 0; k < 14; k++) { px[(u32)(y + 18 - k) * W + x + 5 + k] = ink; px[(u32)(y + 18 - k) * W + x + 6 + k] = ink; }
         } else if (i == TOOL_RECT) {
-            frame(x + 5, y + 5, 14, 12, ink);
+            pr_frame(x + 5, y + 5, 14, 12, ink);
         } else if (i == TOOL_WORDS) {
-            rect(x + 6, y + 4, 12, 2, ink);
-            rect(x + 11, y + 4, 2, 14, ink);
+            pr_rect(x + 6, y + 4, 12, 2, ink);
+            pr_rect(x + 11, y + 4, 2, 14, ink);
         } else if (i == TOOL_ELLIPSE) {
             for (int dx = -7; dx <= 7; dx++) {
                 int dy = isqrt(25 * (49 - dx * dx) / 49);
@@ -247,7 +255,7 @@ static void draw_tools(void) {
                 px[(u32)(y + 11 + dy) * W + x + 12 + dx] = ink;
             }
         } else {
-            rect(x + 6, y + 6, 12, 10, ink);
+            pr_rect(x + 6, y + 6, 12, 10, ink);
         }
     }
 }
@@ -263,16 +271,16 @@ static void choose_tool(int t) {
 static int clear_x(void) { return W - 44; }
 
 static void draw_toolbar(void) {
-    rect(0, 0, W, TOOLBAR_H, BAR_BG);
-    rect(0, TOOLBAR_H - 1, W, 1, BAR_EDGE);
+    pr_rect(0, 0, W, TOOLBAR_H, BAR_BG);
+    pr_rect(0, TOOLBAR_H - 1, W, 1, BAR_EDGE);
 
     for (int i = 0; i < 16; i++) {
         int x = 8 + i * (SWATCH + SWATCH_GAP);
         if (x + SWATCH > clear_x() - 8) break;
-        rect(x, 6, SWATCH, SWATCH, PALETTE[i]);
+        pr_rect(x, 6, SWATCH, SWATCH, PALETTE[i]);
         if (i == color) {
-            frame(x - 2, 4, SWATCH + 4, SWATCH + 4, WHITE);
-            frame(x - 3, 3, SWATCH + 6, SWATCH + 6, RGB(0x11, 0x16, 0x1C));
+            pr_frame(x - 2, 4, SWATCH + 4, SWATCH + 4, WHITE);
+            pr_frame(x - 3, 3, SWATCH + 6, SWATCH + 6, RGB(0x11, 0x16, 0x1C));
         }
     }
 
@@ -288,15 +296,15 @@ static void draw_toolbar(void) {
                     if (x >= 0 && x < W && y >= 0 && y < TOOLBAR_H - 1)
                         px[(u32)y * W + x] = c;
                 }
-        if (i == brush) frame(cx - 15, cy - 13, 30, 26, RGB(0x4F, 0x5C, 0x68));
+        if (i == brush) pr_frame(cx - 15, cy - 13, 30, 26, RGB(0x4F, 0x5C, 0x68));
     }
     draw_tools();
 
     /* Clear, drawn as a cross rather than as a word: there is no font on
        this side of the ring boundary. */
     int bx = clear_x();
-    rect(bx, 8, 34, 34, CLEAR_BG);
-    frame(bx, 8, 34, 34, BAR_EDGE);
+    pr_rect(bx, 8, 34, 34, CLEAR_BG);
+    pr_frame(bx, 8, 34, 34, BAR_EDGE);
     for (int i = 8; i < 26; i++) {
         for (int t = 0; t < 3; t++) {
             int y1 = 8 + i, x1 = bx + i + t;
@@ -308,7 +316,7 @@ static void draw_toolbar(void) {
 }
 
 static void clear_canvas(void) {
-    rect(0, TOOLBAR_H, W, H - TOOLBAR_H, PAPER);
+    pr_rect(0, TOOLBAR_H, W, H - TOOLBAR_H, PAPER);
 }
 
 /* --- keeping it ------------------------------------------------------------ */
@@ -336,6 +344,7 @@ static void say_size(const char *what) {
 
 /* The paper, before a change that ctrl+Z can take back. */
 static void keep_for_undo(void) {
+    unsaved = 1;                        /* every change to the paper starts here */
     if (!undo_px) undo_px = (u32 *)malloc((u64)W * (u64)(H - TOOLBAR_H) * 4);
     if (!undo_px) return;
     memcpy(undo_px, px + (u32)TOOLBAR_H * W, W * (H - TOOLBAR_H) * 4);
@@ -408,7 +417,7 @@ static void words_draw(int mark) {
     if (mark) {
         int mh = f->size * s;
         if (words_y + mh > H) mh = H - words_y;
-        if (x < W && mh > 0) rect(x, words_y, s, mh, c);
+        if (x < W && mh > 0) pr_rect(x, words_y, s, mh, c);
     }
 }
 
@@ -450,6 +459,44 @@ static void words_end(void) {
     say(line, 0);
 }
 
+/* --- another picture ------------------------------------------------------
+ *
+ * The list is drawn where the paper is, and the paper is the picture, so
+ * the paper is kept aside while the list is open and put back when it is
+ * let go; a picture chosen is opened on clean paper, and becomes what
+ * ctrl+S saves to. */
+static ui_chooser chooser;
+static ui_input pick_in;
+static u32 *behind;
+
+static void open_picture(void);
+
+static void choose_open(void) {
+    words_end();
+    if (!behind) behind = (u32 *)malloc((u64)W * (u64)(H - TOOLBAR_H) * 4);
+    if (!behind) { say("no memory to keep the paper while choosing", 0); return; }
+    memcpy(behind, px + (u32)TOOLBAR_H * W, W * (H - TOOLBAR_H) * 4);
+    memset(&pick_in, 0, sizeof(pick_in));
+    ui_chooser_open_on(&chooser, path, ".png", "paint");
+}
+
+static void choose_done(int picked) {
+    memcpy(px + (u32)TOOLBAR_H * W, behind, W * (H - TOOLBAR_H) * 4);
+    if (picked != 1) return;
+    strncpy(path, chooser.picked, sizeof(path) - 1);
+    path[sizeof(path) - 1] = 0;
+    clear_canvas();
+    open_picture();
+    undo_ok = 0;                        /* the last picture's strokes are not this one's */
+    unsaved = 0;
+}
+
+static void choose_draw(void) {
+    surface s = { px, W, H };
+    ui_theme t = ui_load_theme();
+    if (ui_chooser_draw(&s, &pick_in, &t, &chooser, 0, TOOLBAR_H, W, H - TOOLBAR_H) == 1) choose_done(1);
+}
+
 static void save(void) {
     int ch = H - TOOLBAR_H;
     u32 size = png_write_size(W, ch);
@@ -458,7 +505,7 @@ static void save(void) {
     int n = png_write(px + (u32)TOOLBAR_H * W, W, W, ch, out, size);
     int ok = n > 0 && spit(path, out, n) == n;
     free(out);
-    if (ok) say_size("saved ");
+    if (ok) { say_size("saved "); unsaved = 0; }
     else say("not saved: ", path);
 }
 
@@ -547,7 +594,7 @@ static void on_mouse(int x, int y, u32 buttons) {
         return;
     }
     if (tool == TOOL_FILL) {
-        if (pressed) { keep_for_undo(); fill(x, y, PALETTE[color]); }
+        if (pressed) { keep_for_undo(); flood(x, y, PALETTE[color]); }
         return;
     }
     if (tool != TOOL_BRUSH) {
@@ -567,13 +614,26 @@ static void on_mouse(int x, int y, u32 buttons) {
         dot(x, y, r, PALETTE[color]);
         drawing = 1;
     } else {
-        line(last_x, last_y, x, y, r, PALETTE[color]);
+        pr_line(last_x, last_y, x, y, r, PALETTE[color]);
     }
     last_x = x;
     last_y = y;
 }
 
 static void on_key(u32 key) {
+    /* ctrl+O, also as the control character a serial line sends. */
+    int open_key = (KEY_CTRL(key) && key_ctrl_letter(key) == 'o') || key == 15;
+    if (open_key) {
+        if (unsaved && !open_armed) {
+            open_armed = 1;
+            say("not saved: ctrl+S keeps it, ctrl+O again opens another anyway", 0);
+        } else {
+            open_armed = 0;
+            choose_open();
+        }
+        return;
+    }
+    open_armed = 0;
     if (KEY_CTRL(key)) {
         int l = key_ctrl_letter(key);
         if (l == 's') { words_end(); save(); }
@@ -627,15 +687,31 @@ int main(int argc, char **argv) {
         win_event ev;
         int changed = 0;
 
+        if (chooser.open) ui_begin(&pick_in);
         while (win_poll(win, &ev) == 1) {
             if (ev.type == WIN_EV_CLOSE) {
                 win_close(win);
                 return 0;
             }
-            if (ev.type == WIN_EV_MOUSE) { on_mouse(ev.x, ev.y, ev.buttons); changed = 1; }
+            if (chooser.open) {
+                if (ev.type == WIN_EV_KEY) {
+                    int r = ui_chooser_key(&chooser, ev.key);
+                    if (r) choose_done(r);
+                } else {
+                    ui_feed(&pick_in, &ev);
+                }
+                changed = 1;
+                continue;
+            }
+            if (ev.type == WIN_EV_MOUSE) {
+                if (ev.buttons & WIN_BTN_DOWN) open_armed = 0;
+                on_mouse(ev.x, ev.y, ev.buttons);
+                changed = 1;
+            }
             if (ev.type == WIN_EV_KEY)   { on_key(ev.key); changed = 1; }
         }
 
+        if (chooser.open && changed) choose_draw();
         if (changed) win_commit(win);
 
         /* Nothing here changes by itself, so asleep until the pointer or a

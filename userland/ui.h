@@ -1060,7 +1060,10 @@ static inline int ui_chooser_typed_at(const ui_chooser *c) {
     return -1;
 }
 
-static inline void ui_chooser_open(ui_chooser *c, const char *dir, const char *ext, const char *who) {
+/* The list of a folder, with `name` chosen in it when it is there (the
+   file open now, so that Return keeps it and a neighbour is one key away). */
+static inline void ui_chooser_open_at(ui_chooser *c, const char *dir, const char *ext, const char *who,
+                                      const char *name) {
     strncpy(c->dir, dir && dir[0] ? dir : "/home", sizeof(c->dir) - 1);
     c->dir[sizeof(c->dir) - 1] = 0;
     strncpy(c->ext, ext ? ext : "", sizeof(c->ext) - 1);
@@ -1069,7 +1072,25 @@ static inline void ui_chooser_open(ui_chooser *c, const char *dir, const char *e
     c->open = 1;
     c->picked[0] = 0;
     c->said[0] = 0;
-    ui_chooser_read(c, 0);
+    ui_chooser_read(c, name);
+}
+
+static inline void ui_chooser_open(ui_chooser *c, const char *dir, const char *ext, const char *who) {
+    ui_chooser_open_at(c, dir, ext, who, 0);
+}
+
+/* The folder an open file is in, with that file chosen: what ctrl+O
+   lists. A name with no folder lists /home. */
+static inline void ui_chooser_open_on(ui_chooser *c, const char *path, const char *ext, const char *who) {
+    int cut = -1;
+    for (int i = 0; path[i]; i++) if (path[i] == '/') cut = i;
+    if (cut < 0) { ui_chooser_open_at(c, "/home", ext, who, 0); return; }
+    if (cut == 0) { ui_chooser_open_at(c, "/", ext, who, path + 1); return; }
+    char dir[256];
+    int k = 0;
+    for (; k < cut && k < 255; k++) dir[k] = path[k];
+    dir[k] = 0;
+    ui_chooser_open_at(c, dir, ext, who, path + cut + 1);
 }
 
 static inline void ui_chooser_tell(const char *who, const char *what) {

@@ -936,15 +936,7 @@ static void grid_key(u32 k) {
     else if (chord(k, 's')) save();
     else if (chord(k, 'g')) ask_for(M_GOTO);
     else if (chord(k, 't')) sort_rows(row, col);
-    else if (chord(k, 'o')) {
-        char dir[PATH_MAX];
-        strcpy(dir, path);
-        int cut = -1;
-        for (int i = 0; dir[i]; i++) if (dir[i] == '/') cut = i;
-        if (cut > 0) dir[cut] = 0;
-        else strcpy(dir, "/home");
-        ui_chooser_open(&chooser, dir, ".csv", "sheet");
-    }
+    else if (chord(k, 'o')) ui_chooser_open_on(&chooser, path, ".csv", "sheet");
     else if (chord(k, 'c') || chord(k, 'x')) {
         clip_set(cells[row][col].text, strlen(cells[row][col].text));
         strcpy(copied, cells[row][col].text);

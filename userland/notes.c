@@ -508,14 +508,8 @@ int main(int argc, char **argv) {
                         open_armed = 1;
                         say("not saved: ctrl+S keeps it, ctrl+O again opens another anyway");
                     } else {
-                        char dir[PATH_MAX];
-                        strcpy(dir, path);
-                        int cut = -1;
-                        for (int i = 0; dir[i]; i++) if (dir[i] == '/') cut = i;
-                        if (cut > 0) dir[cut] = 0;
-                        else strcpy(dir, "/home");
                         open_armed = 0;
-                        ui_chooser_open(&chooser, dir, "", "notes");
+                        ui_chooser_open_on(&chooser, path, "", "notes");
                     }
                 }
                 else if (l == 'c') copy_selection(0);

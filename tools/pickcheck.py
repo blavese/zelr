@@ -1,4 +1,4 @@
-"""The file chooser: Notes', Sheet's and Pictures' ctrl+O.
+"""The file chooser: Notes', Sheet's, Pictures' and Paint's ctrl+O.
 
 Three files in /home/docs, one of them a folder down, on a fresh volume.
 Notes is started on the first from the terminal; the chooser says what it
@@ -18,7 +18,13 @@ opened is changed by a letter and saved, so the disk says which was open.
   - Sheet's list has its folder's .csv files and nothing else, and one
     chosen opens;
   - Pictures' ctrl+O opens another picture, and ctrl+O again lets the list
-    go (the desktop keeps Escape from Pictures).
+    go (the desktop keeps Escape from Pictures);
+  - Paint's ctrl+O opens another PNG, which ctrl+S then saves to, and the
+    paper, kept aside while the list is drawn over it, comes back whole
+    when the list is let go; with a change not saved it says so first
+    (0.221.0);
+  - the list opens on the file open now, in Notes, Pictures and Paint
+    (0.221.0).
 
   python tools/pickcheck.py [--keep]
 """
@@ -32,6 +38,8 @@ import zlib
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from harness import Guest, Checks, build_once, count_in, ROOT   # noqa: E402
 from readfat import Fat16                                    # noqa: E402
+from printcheck import png_pixels                            # noqa: E402
+from paintcheck import PAPER                                 # noqa: E402
 
 TOOLS = os.path.dirname(os.path.abspath(__file__))
 IMAGE = os.path.join(ROOT, "pickcheck.%d.img" % os.getpid())
@@ -108,7 +116,9 @@ def main():
         c.add("Notes opens a.txt", said_since(mark, "notes: opened", 30))
         time.sleep(1)
 
-        c.add("ctrl+O lists the folder first", press("ctrl-o", "choosing /home/docs, sub"))
+        on_open = press("ctrl-o", "choosing /home/docs, a.txt")
+        c.add("ctrl+O lists the folder on the file open, and the folder in it first",
+              on_open and press("home", "choosing /home/docs, sub"))
         key("down")
         moved = press("down", "choosing /home/docs, b.txt")
         mark = len(vm.serial())
@@ -116,7 +126,8 @@ def main():
         chose = said_since(mark, "notes: chose /home/docs/b.txt") and said_since(mark, "notes: opened")
         c.add("Down twice and Return open b.txt", moved and chose and change_and_save("shift-x"))
 
-        press("ctrl-o", "choosing /home/docs, sub")
+        press("ctrl-o", "choosing /home/docs, b.txt")
+        press("home", "choosing /home/docs, sub")
         inside = press("ret", "choosing /home/docs/sub, c.txt")
         mark = len(vm.serial())
         key("ret")
@@ -187,11 +198,47 @@ def main():
         mark = len(vm.serial())
         key("ret")
         shown = said_since(mark, "pictures: chose /home/p/b.png") and said_since(mark, "pictures: b.png, 40 by 30")
+        mark = len(vm.serial())
         key("ctrl-o")
+        on_shown = said_since(mark, "pictures: choosing /home/p, b.png")
         mark = len(vm.serial())
         key("ctrl-o")
         let_go = said_since(mark, "pictures: chose nothing")
-        c.add("Pictures' ctrl+O shows another picture, and ctrl+O again lets the list go", listed and shown and let_go)
+        c.add("Pictures' ctrl+O shows another picture, lists again on the one shown, and ctrl+O again lets the list go",
+              listed and shown and on_shown and let_go)
+        key("alt-q", settle=1.5)
+
+        # Paint: another PNG, saved to; the paper back after the list.
+        mark = paint_from = len(vm.serial())
+        vm.type("/bin/paint /home/p/a.png\n")
+        said_since(mark, "paint: opened /home/p/a.png", 30)
+        time.sleep(1)
+        mark = len(vm.serial())
+        key("ctrl-o")
+        listed = said_since(mark, "paint: choosing /home/p, a.png")
+        key("down")
+        mark = len(vm.serial())
+        key("ret")
+        opened = said_since(mark, "paint: chose /home/p/b.png") and said_since(mark, "paint: opened /home/p/b.png, ")
+        key("c")                        # the paper cleared: a change not saved
+        key("ctrl-z")                   # and taken back, so b.png is still blue
+        mark = len(vm.serial())
+        key("ctrl-o")
+        guarded = said_since(mark, "paint: not saved: ctrl+S keeps it, ctrl+O again opens another anyway")
+        mark = len(vm.serial())
+        key("ctrl-o")
+        guarded = guarded and said_since(mark, "paint: choosing /home/p, b.png")
+        mark = len(vm.serial())
+        key("ctrl-o")
+        let_go = said_since(mark, "paint: chose nothing")
+        mark = len(vm.serial())
+        key("ctrl-s")
+        saved = said_since(mark, "paint: saved /home/p/b.png")
+        c.add("Paint's ctrl+O opens b.png, ctrl+O twice lets the list go, and ctrl+S saves to b.png",
+              listed and opened and let_go and saved)
+        if not guarded:
+            print("      | Paint said %a" % [ln for ln in vm.serial()[paint_from:].splitlines() if "paint" in ln])
+        c.add("with a change not saved Paint's ctrl+O says so first, and opens the list the second time", guarded)
         key("alt-q", settle=1.0)
     finally:
         vm.stop()
@@ -207,6 +254,18 @@ def main():
     print("      | %a" % got)
     c.add("the disk says which was open when: a as it was, b, c and the new file changed and saved",
           got == [b"alpha\n", b"VXbravo\n", b"YZcharlie\n", b"Q"])
+    pic = read("/home/p/b.png")
+    px = png_pixels(pic) if pic else None
+
+    def at(x, y):
+        pw, ph, rgb, _ = px
+        i = (y * pw + x) * 3
+        return tuple(rgb[i:i + 3])
+    whole = px is not None and px[0] > 300 and px[1] > 200 and at(5, 5) == (40, 40, 200) and at(39, 29) == (40, 40, 200) \
+        and at(300, 200) == PAPER and at(41, 5) == PAPER
+    if px:
+        print("      | b.png saved %dx%d: %s at 5,5, %s at 300,200" % (px[0], px[1], at(5, 5), at(300, 200)))
+    c.add("the PNG Paint saved is b.png on its paper, nothing of the list left on it", whole)
 
     for i in range(len(FILES)):
         try:

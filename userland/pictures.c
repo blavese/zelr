@@ -377,7 +377,7 @@ int main(int argc, char **argv) {
             }
             if ((KEY_CTRL(k) && key_ctrl_letter(k) == 'o') || k == 15) {
                 show_stop();
-                ui_chooser_open(&chooser, folder, "", "pictures");
+                ui_chooser_open_at(&chooser, folder, "", "pictures", at >= 0 ? names[at] : 0);
                 continue;
             }
             if (k == 's' || k == 'S') {
