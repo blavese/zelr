@@ -890,6 +890,11 @@ Added in 0.165.0, not yet in the table below:
   about:history?forget is not followed (still 3); after the server's /peek, about:history's second entry (a, a file;
   the links found as bands of accent inside the window) opens; the forget button (found by its colour) leaves 0.
 
+Added in 0.215.0, not yet in the table below:
+- **`grepcheck.py`** (gate `greptest`, full; 9 checks). /home/g with a file, one a folder down, one two down, and a
+  file of bytes holding the word after a nought. grep with -i, without, -r, -ri, -i after a |, and `-x` (refused),
+  each `> FILE`; a walk's lines compared as a set, since its order is the disk's.
+
 Added in 0.213.0, not yet in the table below:
 - **`diffcheck.py`** (gate `difftest`, full; 9 checks). Files of known lines on a fresh volume (two short ones, two of
   900 lines with forty random changes, one of lines repeated in runs); diff, uniq, `uniq -c` and `sort | uniq -c`

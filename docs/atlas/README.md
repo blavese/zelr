@@ -113,6 +113,15 @@ numbered files are still to 6048716; where they disagree with this list, this li
   built unsigned program; h264test in the machine still checks the decoder against Windows' answers in h264data.h.
   Gate 74 steps (one out, one in).
 
+### 0.215.0
+
+- **grep -i and -r (09b, 14)**: term.c `cmd_grep` reads leading options (`-i`, `-r`, together as `-ri`; any other
+  is refused with its usage), then the text and the files. `grep_lines` searches what is in `io`, `grep_same` with
+  case aside under -i (`grep_fold`); -r sends a folder named to `grep_walk`, which goes sixteen folders deep as
+  `du_walk` does, says each line with its file's path, and passes over a file with a nought byte in its first
+  kilobyte. After a | the lines are as they are, as before. grepcheck, new (9), gate step
+  `greptest` (109 steps).
+
 ### 0.214.0
 
 - **A connection is waited for ten seconds (06a)**: include/tcp.h `TCP_CONNECT_MS` 10000 (it was 6000, written four

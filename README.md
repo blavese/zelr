@@ -272,6 +272,7 @@ In the terminal, which is itself one of those ring 3 programs:
     df                     how much of the disk and of a stick is used
     diff old.txt new.txt   the fewest lines taken out and put in, with their numbers
     sort list | uniq -c    how many times each line comes
+    grep -ri todo /home    every line with todo in it, any case, in every file below
 
 The terminal's own commands can send what they say into a file: `ls >
 list.txt` writes it, `>>` adds to what is there, and anything that goes
@@ -594,6 +595,7 @@ instead.
     python tools/logiccheck.py  Sheet's comparisons, & and words in quotes, IF, AND, OR, NOT, ROUND, ABS, LEN
     python tools/ordercheck.py  Sheet's ctrl+T: rows in order by a column, both ways, formulas moved with them
     python tools/diffcheck.py   the terminal's diff judged by what it must be, and uniq after a | and with -c
+    python tools/grepcheck.py   the terminal's grep -i and -r: case aside, three folders deep, bytes passed over
     python tools/wordscheck.py  Paint's words, the saved PNG against face.h drawn here, pixel for pixel
     python tools/downloadcheck.py  a 12 MB download fetched in parts with Range, read back byte for byte
     python tools/notescheck.py  select all, copy, paste, save, undo, find and replace in the editor, from its keys
