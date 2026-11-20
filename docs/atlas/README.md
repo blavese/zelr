@@ -113,6 +113,24 @@ numbered files are still to 6048716; where they disagree with this list, this li
   built unsigned program; h264test in the machine still checks the decoder against Windows' answers in h264data.h.
   Gate 74 steps (one out, one in).
 
+### 0.209.0
+
+- **Files reads tar and gzip (10, 14)**: zip.h keeps its calls and gains `zip_t.kind` (`ZIP_KIND_ZIP`, `_TAR`,
+  `_GZ`), `own` and `gz_name`. `zip_open` inflates a gzip whole (`gz_open`: RFC 1952 header, FEXTRA/FNAME/FCOMMENT/
+  FHCRC, CRC-32 and ISIZE checked, 256 MB at most, into memory `zip_close` frees), then takes a tar by its header's
+  checksum (`tar_looks`) and anything else as one file named by FNAME or "file"; an unzipped tar is found after the
+  zip end record is not. `tar_next` walks 512-byte headers: GNU 'L' and pax 'x' `path=` give the next entry its name
+  (`zip_long_name`), ustar's prefix is joined to the name, 'g'/'K' and every type but files and folders are passed
+  over, "./" is dropped, folders end with a slash. Names are given out from a static buffer, good until the next
+  call. A tar keeps no check of its files' bytes. files.c: `is_archive_name` (.zip, .tar, .tgz, .gz) for the kind
+  and for going in; `arc_close` calls `zip_close`; extract_all names the folder without .tar.gz, .tgz, .tar, .zip or
+  .gz, and a single gzipped file is written beside it ("extracted NAME"). tarcheck, new (16), gate step `tartest`
+  (105 steps).
+- Found on the way, not changed: **the kernel keeps a whole path to 127 bytes** (include/fat.h `FAT_PATH_MAX` 128,
+  `VFS_PATH_MAX`), and Files says "there is no room for it" when an entry's path is longer. **tools/mkfat.py writes
+  8.3 names only**: a name with two dots or past 8.3 is written malformed, listed by the kernel but not found by
+  name; a harness makes such names in the machine (tarcheck renames with mv).
+
 ### 0.208.0
 
 - **Paint's words (10, 14)**: paint.c `TOOL_WORDS` (T, a T icon after the fill's). It includes face.h (not draw.h,

@@ -225,7 +225,10 @@ listed from the archive's own directory, a file in it opens (taken out into
 file checked against the CRC-32 the archive kept. Stored and deflated files
 are read, which is nearly every archive; one locked with a password or
 compressed some other way is refused saying so, and a name that would write
-outside the folder is not written. The other way, ctrl+K (or Make a zip in
+outside the folder is not written. A .tar, .tar.gz or .tgz is gone into and
+taken out the same way (ustar, with GNU's and pax's long names; links are
+left out), and a .gz of one file holds that file, which ctrl+E puts beside
+it; a gzip is checked against its CRC-32 when it is opened. The other way, ctrl+K (or Make a zip in
 the File menu) makes NAME.zip beside the file or folder selected, with
 everything below it, each file deflated where that makes it smaller and
 kept as it is where it does not; another system's zip tools read it. Home
@@ -551,6 +554,7 @@ instead.
     python tools/filescheck.py  copy, move and rename in the file manager, from its keys
     python tools/trashcheck.py  delete into the trash, put back with ctrl+z, delete for good, empty it
     python tools/zipcheck.py    go into a .zip in Files, open a file from it, extract it, refuse a damaged one
+    python tools/tarcheck.py    tar, .tar.gz, .tgz and .gz in Files: long names, ./, a link, a damaged gzip
     python tools/calendarcheck.py  today on the host's clock, moving about, a note kept, a leap day
     python tools/paintcheck.py  open a PNG in Paint, draw, save, decode it here, undo, save again
     python tools/clockcheck.py  other places' times by their own rules, a stopwatch, a timer that rings

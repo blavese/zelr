@@ -890,6 +890,15 @@ Added in 0.165.0, not yet in the table below:
   about:history?forget is not followed (still 3); after the server's /peek, about:history's second entry (a, a file;
   the links found as bands of accent inside the window) opens; the forget button (found by its colour) leaves 0.
 
+Added in 0.209.0, not yet in the table below:
+- **`tarcheck.py`** (gate `tartest`, full; 16 checks). Six archives from Python's tarfile and gzip (a.tar pax with a
+  folder, a binary two folders down, a 110-byte path in a pax record under a short header name, and a link; g.tar
+  GNU with a 117-byte long name; d.tgz ustar with a path split over prefix and name; c.tar.gz with "./hello.txt";
+  n.txt.gz one file with FNAME; bad.tar.gz with its trailer's CRC-32 changed). The two-dot names go on the volume as
+  8.3 names and are renamed with the terminal's mv (mkfat writes 8.3 only). Files on /home/t, an entry chosen by
+  End, Home and Down until its line is said; ctrl+E on each, Enter into c.tar.gz and n.txt.gz; every file read back
+  off the disk and compared.
+
 Added in 0.208.0, not yet in the table below:
 - **`wordscheck.py`** (gate `wordstest`, full; 11 checks). Paint on shapecheck's marked picture (the mark finds the
   paper); T, then words at clicks: "zelr 4b" (its letters choose tools when not in words), "WAX" with a Backspace and
