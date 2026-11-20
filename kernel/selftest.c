@@ -2306,6 +2306,20 @@ static void test_partial_frames(void) {
     ok("none for another minute, nor for a time not written HH:MM",
        !wm_test_alarm(al, 7, 31, day, sizeof(day)) && !wm_test_alarm(al, 7, 45, day, sizeof(day)));
 
+    /* A day's note with times in it rings at them, part by part. */
+    const char *times = "2026-11-20\tlunch; 09:00 standup ; 14:30 the dentist; call at 16:00\n"
+                        "2026-11-21\t09:00 another day\n";
+    ok("a part of today's note that begins with a time is due at it",
+       wm_test_calendar_due(times, 2026, 11, 20, 9, 0, day, sizeof(day)) && !strcmp(day, "calendar: 09:00 standup"));
+    ok("and the next part at its own time",
+       wm_test_calendar_due(times, 2026, 11, 20, 14, 30, day, sizeof(day))
+       && !strcmp(day, "calendar: 14:30 the dentist"));
+    ok("a time inside a part is words, not an appointment",
+       !wm_test_calendar_due(times, 2026, 11, 20, 16, 0, day, sizeof(day)));
+    ok("and another day's time is not today's",
+       !wm_test_calendar_due(times, 2026, 11, 22, 9, 0, day, sizeof(day))
+       && wm_test_calendar_due(times, 2026, 11, 21, 9, 0, day, sizeof(day)));
+
     /* Drawn whole before the two copies below are taken, so the wallpaper
        is kept while there is still room for it. */
     window_t *a = wm_create("under", 150, 120, 300, 200);

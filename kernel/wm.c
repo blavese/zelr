@@ -3046,6 +3046,40 @@ static bool alarm_in(const char *buf, int n, int hour, int minute, int *at, char
     return false;
 }
 
+/* --- the calendar's times ------------------------------------------------
+ *
+ * A part of a day's note that begins with a time ("14:30 the dentist", or
+ * "lunch with Sam; 09:00 standup; 14:30 the dentist", parts parted by ';')
+ * is said as a notice at that minute of that day, "calendar: 14:30 the
+ * dentist", and rung, as an alarm is. A time inside a part ("call at 14:30")
+ * is words, not an appointment. */
+static bool calendar_due(const char *buf, int n, u32 y, u32 m, u32 d, int hour, int minute, int *at,
+                         char *out, int cap) {
+    char note[160];
+    if (!day_note_in(buf, n, y, m, d, note, sizeof(note))) return false;
+    const char *s = note + 7;                      /* past "today: " */
+    int len = (int)strlen(s);
+    for (int i = *at; i < len; ) {
+        while (i < len && (s[i] == ' ' || s[i] == ';')) i++;
+        int e = i;
+        while (e < len && s[e] != ';') e++;
+        const char *l = s + i;
+        bool timed = e - i >= 5 && l[0] >= '0' && l[0] <= '2' && l[1] >= '0' && l[1] <= '9' && l[2] == ':'
+                     && l[3] >= '0' && l[3] <= '5' && l[4] >= '0' && l[4] <= '9';
+        if (timed && (l[0] - '0') * 10 + (l[1] - '0') == hour && (l[3] - '0') * 10 + (l[4] - '0') == minute) {
+            int k = 0, last = e;
+            while (last > i && s[last - 1] == ' ') last--;
+            for (const char *p = "calendar: "; *p && k < cap - 1; p++) out[k++] = *p;
+            for (int j = i; j < last && k < cap - 1; j++) out[k++] = s[j];
+            out[k] = 0;
+            *at = e;
+            return true;
+        }
+        i = e + 1;
+    }
+    return false;
+}
+
 static void alarms_look(void) {
     zone_time_t z;
     if (!zone_now(&z)) return;
@@ -3054,15 +3088,28 @@ static void alarms_look(void) {
     if (now == alarm_minute) return;
     alarm_minute = now;
     static char buf[4096];
-    int n = vfs_read(ALARM_FILE, buf, sizeof(buf) - 1);
-    if (n <= 0) return;
     char text[112];
     int at = 0, rang = 0;
-    while (alarm_in(buf, n, z.local.hour, z.local.minute, &at, text, sizeof(text))) {
+    int n = vfs_read(ALARM_FILE, buf, sizeof(buf) - 1);
+    while (n > 0 && alarm_in(buf, n, z.local.hour, z.local.minute, &at, text, sizeof(text))) {
+        wm_notice(text);
+        rang = 1;
+    }
+    /* The calendar's, looked at whether or not there are alarms. */
+    static char cal[32768];
+    int cn = vfs_read(DAY_FILE, cal, sizeof(cal) - 1);
+    at = 0;
+    while (cn > 0 && calendar_due(cal, cn, z.local.year, z.local.month, z.local.day, z.local.hour, z.local.minute,
+                                  &at, text, sizeof(text))) {
         wm_notice(text);
         rang = 1;
     }
     if (rang) sound_tone(880, 600);
+}
+
+bool wm_test_calendar_due(const char *buf, u32 y, u32 m, u32 d, int hour, int minute, char *out, int cap) {
+    int at = 0;
+    return calendar_due(buf, (int)strlen(buf), y, m, d, hour, minute, &at, out, cap);
 }
 
 bool wm_test_alarm(const char *buf, int hour, int minute, char *out, int cap) {
