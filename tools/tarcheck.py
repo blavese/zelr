@@ -13,8 +13,9 @@ Six archives on a fresh volume, all written by Python's tarfile and gzip:
 
 mkfat writes 8.3 names only, so the three with two dots go onto the volume
 as ctar.gz, ntxt.gz and badtar.gz and are renamed in the terminal first.
-The kernel keeps a name to 63 bytes and a path to 127, so the long paths
-are long by depth and stay under 128 once extracted.
+The kernel keeps a name to 63 bytes, so the long paths are long by depth;
+d.tgz's comes out 132 bytes long, past the 127 a path could be before
+0.210.0.
 
 Files is driven by the keyboard and says on the console what its status
 line says; what came out is read off the disk image.
@@ -52,7 +53,7 @@ README = b"read me\nsecond line\n"
 BIN = bytes(random.Random(7).randrange(256) for _ in range(3000))
 LONG = "docs/" + "w" * 50 + "/" + "x" * 50 + ".txt"
 GLONG = "g/" + "y" * 55 + "/" + "z" * 55 + ".txt"
-SPLIT = "p/" + "q" * 55 + "/" + "r" * 50 + ".txt"
+SPLIT = "p/" + "q" * 60 + "/" + "r" * 55 + ".txt"
 RENAMED = {"ctar.gz": "c.tar.gz", "ntxt.gz": "n.txt.gz", "badtar.gz": "bad.tar.gz"}
 HELLO = b"hello from inside a tar.gz\n"
 N_TXT = b"one file, gzipped\n" * 20

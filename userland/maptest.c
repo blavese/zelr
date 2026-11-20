@@ -119,6 +119,11 @@ int main(void) {
     for (int i = 0; same && i <= hl; i++) if (fresh[i] != here[i]) same = 0;
     ok("a call can write into a mapped page the program has not touched", same);
 
+    /* A buffer bigger than any path is a buffer, not an error: the call
+       refused one past 128 bytes until 0.210.0. */
+    int bl = getcwd(fresh + 4096, 4096);
+    ok("getcwd takes a buffer bigger than any path", bl == hl);
+
     /* --- the end of it is the end of it --------------------------------- */
     //
     // One page past the mapping. A kernel that answers every fault by

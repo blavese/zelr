@@ -2,7 +2,12 @@
 #include "types.h"
 #include "rtc.h"
 
-#define FAT_PATH_MAX 128
+/* The longest path, its terminator counted: 255 bytes. It was 128, and an
+   archive's folders four deep with long names (or a download kept two
+   folders down) could not be written. The SDK says the same number as
+   ZELR_PATH_MAX, and the scheduler as TASK_CWD_MAX; tools/abicheck.py and
+   an assertion in vfs.c hold the three together. */
+#define FAT_PATH_MAX 256
 
 /* The longest name this reads or writes. Sixty three characters covers
    anything anybody types; the limit exists because a directory entry

@@ -39,6 +39,8 @@ from harness import Checks, ROOT                         # noqa: E402
 
 KERNEL = os.path.join(ROOT, "include", "syscall.h")
 WM = os.path.join(ROOT, "include", "wm.h")
+FAT = os.path.join(ROOT, "include", "fat.h")
+SCHED = os.path.join(ROOT, "include", "sched.h")
 USER = os.path.join(ROOT, "sdk", "zelr.h")
 
 # The kernel's name for each shared struct, and the program's name for it.
@@ -158,6 +160,23 @@ def check_window(c, wtext, utext):
         c.add("a window event's %s are the same on both sides" % what, bool(kn) and kn == un)
 
 
+def check_path(c, utext):
+    """The longest path, said three times: the kernel's (FAT_PATH_MAX), a
+    task's working directory (TASK_CWD_MAX) and a program's (ZELR_PATH_MAX).
+    A program's buffer smaller than the kernel's is a path it cannot be
+    given back; a working directory smaller is one strncpy'd past its end."""
+    def define(text, name):
+        m = re.search(r"#define\s+" + name + r"\s+(\d+)\b", text)
+        return int(m.group(1)) if m else None
+    fat = define(strip_comments(io.open(FAT, encoding="utf-8").read()), "FAT_PATH_MAX")
+    cwd = define(strip_comments(io.open(SCHED, encoding="utf-8").read()), "TASK_CWD_MAX")
+    sdk = define(utext, "ZELR_PATH_MAX")
+    if not (fat == cwd == sdk):
+        print("  FAT_PATH_MAX %s, TASK_CWD_MAX %s, ZELR_PATH_MAX %s" % (fat, cwd, sdk))
+    c.add("the longest path is the same to the kernel, a task and a program (%s)" % fat,
+          fat is not None and fat == cwd == sdk)
+
+
 def main():
     ktext = strip_comments(io.open(KERNEL, encoding="utf-8").read())
     utext = strip_comments(io.open(USER, encoding="utf-8").read())
@@ -165,6 +184,7 @@ def main():
 
     check_numbers(c, ktext, utext)
     check_window(c, strip_comments(io.open(WM, encoding="utf-8").read()), utext)
+    check_path(c, utext)
 
     for kname, uname in PAIRS:
         kbody, ubody = body_of(ktext, kname), body_of(utext, uname)

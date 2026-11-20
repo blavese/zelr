@@ -15,7 +15,7 @@ typedef struct {
 
 /* Matches VFS_PATH_MAX. Spelled out rather than included, because the
    scheduler has no other reason to know about the filesystem. */
-#define TASK_CWD_MAX 128
+#define TASK_CWD_MAX 256
 
 /* Every task gets a kernel stack of this size, and nothing grows one, so it
    has to be big enough for the deepest path in the kernel with an interrupt

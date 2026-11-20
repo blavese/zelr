@@ -25,7 +25,7 @@
 
 /* What the kernel will accept, so a path built here can always be passed
    back to it. */
-#define VFS_PATH  128
+#define VFS_PATH  ZELR_PATH_MAX
 #define VFS_NAME  32
 
 /* Roughly one terminal's worth of file. Anything larger is printed in full

@@ -510,6 +510,44 @@ static void test_paths(void) {
        vfs_resolve("../g.txt", out, sizeof(out)) && strcmp(out, "/g.txt") == 0);
     vfs_chdir("/");
     vfs_rmdir("/sub");
+
+    /* A path near the longest (255 bytes since 0.210.0; 127 before, and an
+       archive's deep folders could not be written): four folders of 55
+       letters under /lp, 227 bytes, and a file in the last, 233. */
+    char dir[VFS_PATH_MAX], file[VFS_PATH_MAX], level[4][VFS_PATH_MAX];
+    u32 n = 0;
+    for (const char *s = "/lp"; *s; s++) dir[n++] = *s;
+    dir[n] = 0;
+    bool made = vfs_mkdir(dir);
+    for (int k = 0; k < 4; k++) {
+        dir[n++] = '/';
+        for (int i = 0; i < 55; i++) dir[n++] = (char)('a' + k);
+        dir[n] = 0;
+        strcpy(level[k], dir);
+        made = made && vfs_mkdir(dir);
+    }
+    strcpy(file, dir);
+    strcpy(file + n, "/f.txt");
+    char buf[8];
+    ok("folders four deep make a path of 227 bytes", made && n == 227);
+    ok("a file at the bottom, 233 bytes, is written and read back",
+       vfs_write(file, "deep", 4) && vfs_read(file, buf, sizeof(buf)) == 4 && memcmp(buf, "deep", 4) == 0);
+    ok("the working directory holds all 227", vfs_chdir(dir) && strcmp(vfs_cwd(), dir) == 0);
+    ok("and a name is found from there", vfs_read("f.txt", buf, sizeof(buf)) == 4);
+    char past[VFS_PATH_MAX + 64];
+    for (u32 i = 0; i < sizeof(past) - 1; i++) past[i] = (i % 32) ? 'z' : '/';
+    past[sizeof(past) - 1] = 0;
+    ok("a path past the longest is refused, not cut short", !vfs_resolve(past, out, sizeof(out)));
+    char tall[VFS_PATH_MAX];
+    u32 t = 0;
+    for (int k = 0; k < 60; k++) { tall[t++] = '/'; tall[t++] = 'q'; }
+    tall[t] = 0;
+    ok("a path sixty folders deep resolves (thirty two was the most)",
+       vfs_resolve(tall, out, sizeof(out)) && strcmp(out, tall) == 0);
+    vfs_chdir("/");
+    vfs_delete(file);
+    for (int k = 3; k >= 0; k--) vfs_rmdir(level[k]);
+    vfs_rmdir("/lp");
 }
 
 static void test_directories(void) {

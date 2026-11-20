@@ -19,6 +19,8 @@
 #include "string.h"
 #include "printf.h"
 
+_Static_assert(TASK_CWD_MAX == VFS_PATH_MAX, "a task's working directory must hold any path (include/sched.h)");
+
 /* --- the live tree ------------------------------------------------------ */
 
 /* Programs built into the kernel image are files in /bin, which the live
@@ -77,7 +79,9 @@ bool vfs_resolve(const char *in, char *out, u32 cap) {
 
     /* Walk the components, keeping the offsets where each one starts so ".."
        can drop the previous one. */
-    u32 starts[32];
+    /* As many levels as a path of VFS_PATH_MAX bytes can have, a byte and a
+       slash each. */
+    u16 starts[VFS_PATH_MAX / 2];
     u32 depth = 0;
     u32 len = 1;
     out[0] = '/';
@@ -100,7 +104,7 @@ bool vfs_resolve(const char *in, char *out, u32 cap) {
             if (depth > 0) { depth--; len = starts[depth]; if (len < 1) len = 1; }
             continue;
         }
-        if (depth >= 32) return false;
+        if (depth >= VFS_PATH_MAX / 2) return false;
 
         if (len > 1) { if (len + 1 >= cap) return false; out[len++] = '/'; }
         starts[depth++] = len - (len > 1 ? 1 : 0);

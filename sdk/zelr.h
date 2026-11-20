@@ -399,6 +399,11 @@ static inline int close(int fd)  { return syscall(SYS_CLOSE, fd, 0, 0); }
    more asks again, as slurp and spit do. */
 #define ZELR_IO_MAX (1024 * 1024)
 
+/* The longest path the kernel takes, its terminator counted (255 bytes):
+   a buffer this big holds any path a call gives back or will accept.
+   The kernel's FAT_PATH_MAX; tools/abicheck.py compares them. */
+#define ZELR_PATH_MAX 256
+
 static inline int zelr_fread(int fd, void *buf, int len) {
     return syscall(SYS_FREAD, fd, (zelr_word)buf, len);
 }

@@ -762,9 +762,12 @@ static i64 sys_chdir(registers_t *r) {
     return vfs_chdir(path) ? 0 : -1;
 }
 
+/* A buffer bigger than any path is fine: only what the path needs is
+   written. It used to be refused outright, so a program asking with 256
+   bytes was told there was no working directory. */
 static i64 sys_getcwd(registers_t *r) {
     u64 buf = r->rbx, cap = r->rcx;
-    if (cap == 0 || cap > VFS_PATH_MAX) return -1;
+    if (cap == 0) return -1;
     if (!user_range_ok(buf, cap)) return -1;
     const char *at = vfs_cwd();
     u32 n = (u32)strlen(at);
