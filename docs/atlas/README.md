@@ -113,6 +113,17 @@ numbered files are still to 6048716; where they disagree with this list, this li
   built unsigned program; h264test in the machine still checks the decoder against Windows' answers in h264data.h.
   Gate 74 steps (one out, one in).
 
+### 0.199.0
+
+- **Paint's shapes and fill (10, 14)**: paint.c `tool` (B brush, L `line`, R `rectangle`, E `ellipse`, F `fill`;
+  icons by `draw_tools` beside the brush sizes, `tool_x`; "paint: a line" and so on, `choose_tool`). A shape keeps the
+  paper at the press (`keep_for_undo`, so ctrl+Z takes it back) and is drawn again over that copy at every move
+  (`shape_to`) from the press to the pointer. `ellipse` walks the box's ellipse by x and by y, so a steep side has no
+  gaps, each offset the floor of the true one: the root (`isqrt`, 64-bit) taken after the scaling. Taken before it,
+  offsets moved by two where the scale was two and a fill inside a pixel-wide ellipse got out (found by shapecheck's
+  fill inside one). `fill` is a scanline flood of the clicked colour with a growing stack of stretches in the heap.
+  shapecheck, new (9), gate step `shapetest` (95 steps). Not done: filled shapes, a colour picker, text.
+
 ### 0.198.0
 
 - **Music's repeat and shuffle (10, 14)**: music.c `repeat_on` (R) and `shuffle_on` (S), said by `say_mode` ("music:

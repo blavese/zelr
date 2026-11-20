@@ -136,7 +136,10 @@ once (ctrl and r), whatever its case; ctrl and g goes to a line by its
 number, and Return starts the new line with the spaces the one before began
 with. Paint keeps what is drawn: ctrl and s
 saves it as a PNG (`paint FILE.png` opens one to draw on, and saves back to
-it), and ctrl and z takes back the last stroke. Drag a title bar to move a
+it), and ctrl and z takes back the last stroke. Beside the brushes are a
+line, a rectangle and an ellipse, each dragged out and shown as it is
+dragged, and a fill that spreads the colour over what it is clicked on
+(also B, L, R, E and F). Drag a title bar to move a
 window; the three buttons at its right put it away, fill the screen, or
 close it.
 Drag the bottom right corner to resize, or drag a title bar to an edge to
@@ -540,6 +543,7 @@ instead.
     python tools/backcheck.py   the terminal's ctrl+R finds lines typed before, runs one, changes one, lets go
     python tools/wallcheck.py   a picture made the wallpaper from Pictures, seen by colour, and taken away
     python tools/shufflecheck.py Music's repeat goes round the list, its shuffle plays each once
+    python tools/shapecheck.py  Paint's line, rectangle, fill and ellipse, read back from the PNG it saves
     python tools/downloadcheck.py  a 12 MB download fetched in parts with Range, read back byte for byte
     python tools/notescheck.py  select all, copy, paste, save, undo, find and replace in the editor, from its keys
     python tools/timecheck.py   set the time zone from the shell and in Settings, read the clocks and a file's time

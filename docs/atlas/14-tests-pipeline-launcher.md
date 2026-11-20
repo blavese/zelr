@@ -888,6 +888,15 @@ Added in 0.165.0, not yet in the table below:
   about:history?forget is not followed (still 3); after the server's /peek, about:history's second entry (a, a file;
   the links found as bands of accent inside the window) opens; the forget button (found by its colour) leaves 0.
 
+Added in 0.199.0, not yet in the table below:
+- **`shapecheck.py`** (gate `shapetest`, full; 9 checks). /home/pic/s.png, a 20x20 blue mark, found on the screen
+  for the paper's top left (paintcheck's `box_of`). l, a drag from (100,60) by way of (200,100) to (300,60); r, drag
+  (100,120)-(300,220); f, click (200,170); 1 (the pixel brush), e, drag (350,120)-(550,220), f inside it; ctrl-s; the
+  PNG read off the image and decoded (printcheck's `png_pixels`): the line straight along y 60 and paper where the
+  pointer went between (a brush would have followed it); the rectangle's four sides; its inside filled and (200,240),
+  (60,170) paper; the ellipse's four extremes drawn (within 3 pixels); its inside filled, the box's corners and beyond
+  paper (a gap in the pixel-wide outline would let the fill out).
+
 Added in 0.198.0, not yet in the table below:
 - **`shufflecheck.py`** (gate `shuffletest`, full; 6 checks). /home/A.WAV to F.WAV, 0.3 s each; q35 with intel-hda
   on audiodev `none`. `music`; r ("music: repeat on, shuffle off"), ret: "music: playing" a to f, then a; r again:
