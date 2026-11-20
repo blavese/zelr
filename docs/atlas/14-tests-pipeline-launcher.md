@@ -890,6 +890,12 @@ Added in 0.165.0, not yet in the table below:
   about:history?forget is not followed (still 3); after the server's /peek, about:history's second entry (a, a file;
   the links found as bands of accent inside the window) opens; the forget button (found by its colour) leaves 0.
 
+Added in 0.220.0, not yet in the table below:
+- **`pickcheck.py`** (13 checks now): after Notes' checks, a path typed (/home/docs/new.txt, a new file, a letter and
+  saved), "b" typed choosing b.txt; Sheet on /home/s/one.csv, its list one.csv and two.csv and not notes.txt, two.csv
+  opened; Pictures on /home/p/a.png, b.png chosen and shown, ctrl+O twice ("chose nothing"). sheetcheck, fillcheck,
+  logiccheck and ordercheck open their sheets by a path typed into the chooser.
+
 Added in 0.219.0, not yet in the table below:
 - **`pickcheck.py`** (gate `picktest`, full; 9 checks). /home/docs with a.txt, b.txt and sub/c.txt; Notes on a.txt
   from the terminal. ctrl+O ("choosing /home/docs, sub"), Down twice, Return (b.txt), a letter and ctrl+S; ctrl+O,

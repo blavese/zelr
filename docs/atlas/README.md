@@ -113,6 +113,18 @@ numbered files are still to 6048716; where they disagree with this list, this li
   built unsigned program; h264test in the machine still checks the decoder against Windows' answers in h264data.h.
   Gate 74 steps (one out, one in).
 
+### 0.220.0
+
+- **The chooser takes words, and Sheet and Pictures use it (09a, 10, 14)**: ui.h `ui_chooser.typed`: a printable key
+  adds to it and chooses the first entry it begins (`ui_chooser_typed_at`, case aside); Return takes that entry while
+  the words begin it, and otherwise takes the words as a path (from / or the folder shown): into it when a folder,
+  chosen when not (`ui_chooser_pick`; a file not yet made, for a new one). Backspace takes a letter back while there
+  are any; ctrl+X/ctrl+U empty them; ctrl+O lets the list go as Escape does (Pictures does not get Escape). The
+  console line ends ", typed WORDS" while there are any. sheet.c: ctrl+O is the chooser on the folder's .csv files
+  (`M_OPEN` and its path field gone; a path typed after ctrl+X, as the Sheet harnesses do, still opens); the grid takes
+  no clicks while it is open. pictures.c: ctrl+O, `open_path` lists the chosen file's folder and shows it there.
+  Help's rows. pickcheck 9 to 13.
+
 ### 0.219.0
 
 - **A file chooser, and Notes' ctrl+O (09a, 10, 14)**: ui.h `ui_chooser` (256 entries of 64 bytes, `ui_chooser_read`

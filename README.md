@@ -139,7 +139,8 @@ it takes a command, showing stars for what is typed. In the editor, ctrl and h o
 bar to find a word in the file and replace it, one at a time or every one at
 once (ctrl and r), whatever its case; ctrl and o opens another file, chosen
 from a list of the folder's folders and files (Return opens, Backspace goes
-up, Escape lets it go), and says so first if the one open has changes not
+up, Escape lets it go; letters typed choose the name they begin, or are a
+path, a new file's too), and says so first if the one open has changes not
 saved; ctrl and g goes to a line by its
 number, and Return starts the new line with the spaces the one before began
 with. Paint keeps what is drawn: ctrl and s
@@ -162,8 +163,8 @@ change, and one that cannot be says why: #div/0, #cycle for a cell that
 comes back to itself, #value for words in a sum, #ref, #name, #error. Tab
 and Return move on as they do in other spreadsheets, F2 changes a cell,
 ctrl and g goes to one by its name, ctrl and s keeps the sheet as CSV
-(formulas as typed) and ctrl and o opens another; Files opens a .csv
-there. ctrl and d fills a cell from the one above it and ctrl and r from
+(formulas as typed) and ctrl and o opens another, chosen from a list of the
+folder's .csv files or typed; Files opens a .csv there. ctrl and d fills a cell from the one above it and ctrl and r from
 the one to its left, and a cell copied with ctrl and c and pasted elsewhere
 with ctrl and v, each with its references moved as far as it moved, but a
 part with a $ before it ($A$1, A$1); one moved off the sheet says #ref. A
@@ -190,7 +191,8 @@ arrow keys walk the rest of its folder; Files opens a picture there. + and
 - make it twice or half the size (up to eight times), 0 fits it again, the
 arrows or a drag move about one bigger than the window, and r turns it a
 quarter to the right. W makes it the wallpaper, covering the screen; a
-wallpaper chosen in Settings, or "take it away" there, puts it back. S shows
+wallpaper chosen in Settings, or "take it away" there, puts it back. Ctrl
+and o shows another picture, chosen from a list. S shows
 the folder as a slideshow, three seconds a picture and the first again
 after the last, until S again or an arrow. The
 browser opens pages on the machine too: a path typed into its bar or handed
@@ -609,7 +611,7 @@ instead.
     python tools/slidecheck.py  Pictures' slideshow: in order, round again, a few seconds apart, and stopped
     python tools/choosecheck.py Files with several chosen: copied, cut, pasted, deleted and counted together
     python tools/eventcheck.py  a time in today's calendar note is said and rung in its minute, and only that one
-    python tools/pickcheck.py   Notes' ctrl+O: a file chosen from a list, into a folder and up, let go, guarded
+    python tools/pickcheck.py   the file chooser in Notes, Sheet and Pictures: listed, typed, into folders, let go
     python tools/wordscheck.py  Paint's words, the saved PNG against face.h drawn here, pixel for pixel
     python tools/downloadcheck.py  a 12 MB download fetched in parts with Range, read back byte for byte
     python tools/notescheck.py  select all, copy, paste, save, undo, find and replace in the editor, from its keys
