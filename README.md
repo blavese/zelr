@@ -185,7 +185,9 @@ arrow keys walk the rest of its folder; Files opens a picture there. + and
 - make it twice or half the size (up to eight times), 0 fits it again, the
 arrows or a drag move about one bigger than the window, and r turns it a
 quarter to the right. W makes it the wallpaper, covering the screen; a
-wallpaper chosen in Settings, or "take it away" there, puts it back. The
+wallpaper chosen in Settings, or "take it away" there, puts it back. S shows
+the folder as a slideshow, three seconds a picture and the first again
+after the last, until S again or an arrow. The
 browser opens pages on the machine too: a path typed into its bar or handed
 over by Files is a `file:` address, a page's sheets and pictures are read
 from beside it, and a folder is shown as a page of what is in it, folders
@@ -596,6 +598,7 @@ instead.
     python tools/ordercheck.py  Sheet's ctrl+T: rows in order by a column, both ways, formulas moved with them
     python tools/diffcheck.py   the terminal's diff judged by what it must be, and uniq after a | and with -c
     python tools/grepcheck.py   the terminal's grep -i and -r: case aside, three folders deep, bytes passed over
+    python tools/slidecheck.py  Pictures' slideshow: in order, round again, a few seconds apart, and stopped
     python tools/wordscheck.py  Paint's words, the saved PNG against face.h drawn here, pixel for pixel
     python tools/downloadcheck.py  a 12 MB download fetched in parts with Range, read back byte for byte
     python tools/notescheck.py  select all, copy, paste, save, undo, find and replace in the editor, from its keys

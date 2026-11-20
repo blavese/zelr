@@ -113,6 +113,14 @@ numbered files are still to 6048716; where they disagree with this list, this li
   built unsigned program; h264test in the machine still checks the decoder against Windows' answers in h264data.h.
   Gate 74 steps (one out, one in).
 
+### 0.216.0
+
+- **Pictures' slideshow (10, 14)**: pictures.c `show_on`/`show_next`; S starts it (a folder of two or more) and says
+  "pictures: slideshow, every 3 seconds"; each pass loads the next picture when `ticks()` reaches `show_next`
+  (`SHOW_TICKS` 300), the first after the last, and `ui_due(show_next)` wakes the loop for it. S again, an arrow,
+  Space, Home, End or a press stops it (`show_stop`, "pictures: slideshow stopped"). The status bar says "slideshow"
+  while it runs. Help's row for S. slidecheck, new (8), gate step `slidetest` (110 steps).
+
 ### 0.215.0
 
 - **grep -i and -r (09b, 14)**: term.c `cmd_grep` reads leading options (`-i`, `-r`, together as `-ri`; any other

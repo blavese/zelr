@@ -890,6 +890,12 @@ Added in 0.165.0, not yet in the table below:
   about:history?forget is not followed (still 3); after the server's /peek, about:history's second entry (a, a file;
   the links found as bands of accent inside the window) opens; the forget button (found by its colour) leaves 0.
 
+Added in 0.216.0, not yet in the table below:
+- **`slidecheck.py`** (gate `slidetest`, full; 8 checks). Four PNGs of a colour each (made here) in /home/p; Pictures
+  opened on the folder from the terminal; S, then its "pictures: NAME," lines followed with the host's clock: b, c, d,
+  a, b in that order, each 2 to 9 seconds after the last (three on the machine's clock, which runs slow under load);
+  S again and seven quiet seconds; started again, the right arrow stops it and moves on once.
+
 Added in 0.215.0, not yet in the table below:
 - **`grepcheck.py`** (gate `greptest`, full; 9 checks). /home/g with a file, one a folder down, one two down, and a
   file of bytes holding the word after a nought. grep with -i, without, -r, -ri, -i after a |, and `-x` (refused),
