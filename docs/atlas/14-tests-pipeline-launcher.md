@@ -888,6 +888,15 @@ Added in 0.165.0, not yet in the table below:
   about:history?forget is not followed (still 3); after the server's /peek, about:history's second entry (a, a file;
   the links found as bands of accent inside the window) opens; the forget button (found by its colour) leaves 0.
 
+Added in 0.204.0, not yet in the table below:
+- **`toolcheck.py`** (gate `tooltest`, full; 9 checks). A fresh volume with four files of known sizes under
+  /home/dt (two folders below it). Typed into the desktop's terminal, each sent into a file with `>`: `cal 2 2028`,
+  `cal`, `cal 13 2028`, `du /home/dt`, `cat /sys/storage`, `df`, then `notice all done`. Read back off the disk: the
+  two months equal Python's `calendar.TextCalendar(0)` with the line ends trimmed (February 2028, a leap year's, and
+  this month); the bad month's file is empty; du says "5224 bytes in 4 files and 2 folders"; df's size is
+  /sys/storage's to the tenth of a megabyte, its free within a tenth (st.txt is written between the two), used plus
+  free its size; "stick: none".
+
 Added in 0.203.0, not yet in the table below:
 - **`redirectcheck.py`** (gate `redirecttest`, full; 7 checks). Typed into the desktop's terminal: `echo one >
   /home/e.txt`, `echo two >> /home/e.txt`, `ls / > /home/root.txt`, `help > /home/help.txt`, `cat /home/nothing >

@@ -244,6 +244,9 @@ In the terminal, which is itself one of those ring 3 programs:
     ps                     what is running
     run hello              start another program and wait for it
     theme amber            and it is remembered next time
+    cal 2 2028             a month, Monday first (this month with nothing)
+    du /home               the bytes, files and folders below a folder
+    df                     how much of the disk and of a stick is used
 
 The terminal's own commands can send what they say into a file: `ls >
 list.txt` writes it, `>>` adds to what is there, and anything that goes
@@ -554,6 +557,7 @@ instead.
     python tools/windowshotcheck.py alt+Print Screen saves the front window alone, decoded and counted
     python tools/alarmcheck.py  an alarm set for the coming minute is said in it, once, and its ring heard
     python tools/redirectcheck.py the terminal's > and >>: files written, added to, errors kept on the screen
+    python tools/toolcheck.py   the terminal's cal against Python's calendar, du and df against what is there
     python tools/downloadcheck.py  a 12 MB download fetched in parts with Range, read back byte for byte
     python tools/notescheck.py  select all, copy, paste, save, undo, find and replace in the editor, from its keys
     python tools/timecheck.py   set the time zone from the shell and in Settings, read the clocks and a file's time

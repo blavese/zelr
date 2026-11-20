@@ -113,6 +113,15 @@ numbered files are still to 6048716; where they disagree with this list, this li
   built unsigned program; h264test in the machine still checks the decoder against Windows' answers in h264data.h.
   Gate 74 steps (one out, one in).
 
+### 0.204.0
+
+- **The terminal's cal, du and df (10, 14)**: term.c `cmd_cal` lays a month out as cal does (the title centred in
+  twenty columns, Monday first, trailing spaces trimmed by `say_trimmed`), the first day's column from zone.c
+  `zone_weekday(zone_days_from_civil(...))`, this month from /sys/time's `local` line; `cmd_du` walks a folder
+  (`du_walk`, sixteen folders deep at most) counting bytes, files and folders; `cmd_df` reads /sys/storage's disk and
+  stick lines (KiB, KiB free) and says each in tenths of a megabyte. toolcheck, new (9), gate step `tooltest` (100
+  steps).
+
 ### 0.203.0
 
 - **The terminal's > and >> (10, 14)**: term.c `run_line` takes the first `>` outside double quotes; `run_into` runs
