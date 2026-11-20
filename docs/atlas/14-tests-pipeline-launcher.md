@@ -890,6 +890,15 @@ Added in 0.165.0, not yet in the table below:
   about:history?forget is not followed (still 3); after the server's /peek, about:history's second entry (a, a file;
   the links found as bands of accent inside the window) opens; the forget button (found by its colour) leaves 0.
 
+Added in 0.208.0, not yet in the table below:
+- **`wordscheck.py`** (gate `wordstest`, full; 11 checks). Paint on shapecheck's marked picture (the mark finds the
+  paper); T, then words at clicks: "zelr 4b" (its letters choose tools when not in words), "WAX" with a Backspace and
+  ended by the next click, "Hi!", "big" at the largest size, "gone" taken back with ctrl+Z; ctrl+S. The console's
+  "paint: words" lines give each one's text, size and place. The saved PNG is compared with the paper drawn in Python:
+  face.h's glyph tables and coverage parsed from the C, paint.c's palette and `WORD_FACE`/`WORD_SCALE` parsed too, the
+  same baseline and blend (C's truncating division); every pixel must match, and each set of words must have inked
+  more than 30.
+
 Added in 0.207.0, not yet in the table below:
 - **`fillcheck.py`** (gate `filltest`, full; 15 checks). `/bin/sheet /home/r.csv` from the terminal; row 1 typed
   `1, =A1*2, =$A$1+A1, =A$1+1, , , =SUM($A$1:A5)` and 2 to 5 down A. ctrl+D at B2-B5, C2, D2 and G2, ctrl+R at E1,

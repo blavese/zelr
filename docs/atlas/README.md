@@ -113,6 +113,18 @@ numbered files are still to 6048716; where they disagree with this list, this li
   built unsigned program; h264test in the machine still checks the decoder against Windows' answers in h264data.h.
   Gate 74 steps (one out, one in).
 
+### 0.208.0
+
+- **Paint's words (10, 14)**: paint.c `TOOL_WORDS` (T, a T icon after the fill's). It includes face.h (not draw.h,
+  whose `rect`/`line`/`fill` would meet paint's own) and draws as draw.h's `face_draw` does: baseline four fifths of
+  the size down, coverage blended (`blend`, draw.h's `mix`), 255 the colour itself. The brush's size picks
+  `WORD_FACE`/`WORD_SCALE` (13; 15 bold; 20; 20 at twice its size). A click on the paper ends any words being typed
+  and begins new ones (`words_begin` keeps the paper for ctrl+Z); each key puts that paper back and draws the words
+  again with a mark after them (`words_show`); every key but a ctrl chord is theirs while they are on, so T, L or 4
+  are letters; Return, a click, a tool chosen, clearing or ctrl+S end them without the mark (`words_end`, "paint:
+  words TEXT, WxH at X,Y" in paper coordinates); ctrl+Z while typing takes them back. A colour or a size chosen while
+  typing redraws them. Help's row for T. wordscheck, new (11), gate step `wordstest` (104 steps).
+
 ### 0.207.0
 
 - **Sheet's references move (10, 14)**: sheet.c `ref_at` reads a reference with a `$` before either part (`ref_t`:

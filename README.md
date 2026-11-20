@@ -142,7 +142,9 @@ saves it as a PNG (`paint FILE.png` opens one to draw on, and saves back to
 it), and ctrl and z takes back the last stroke. Beside the brushes are a
 line, a rectangle and an ellipse, each dragged out and shown as it is
 dragged, and a fill that spreads the colour over what it is clicked on
-(also B, L, R, E and F). Sheet, in the Productivity list, is a
+(also B, L, R, E and F). T puts words on the paper: click and type, in the
+desktop's own typeface at 13, 15 bold, 20 or 40 pixels by the brush's
+size, until Return or a click elsewhere; ctrl and z takes them back. Sheet, in the Productivity list, is a
 spreadsheet: 26 columns by 200 rows, each cell a number, words, or = and a
 formula of numbers, cells (B3), + - * / and brackets, and SUM, AVG, MIN,
 MAX and COUNT of ranges (A1:C9). Every cell is worked out again after any
@@ -577,6 +579,7 @@ instead.
     python tools/pipecheck.py   the terminal's |: sort, grep, wc, head and tail fed by the command before
     python tools/sheetcheck.py  Sheet: formulas worked out again, every error, CSV kept, read and Python's read
     python tools/fillcheck.py   Sheet's references moved by ctrl+D, ctrl+R and a paste, $ kept, #ref off the edge
+    python tools/wordscheck.py  Paint's words, the saved PNG against face.h drawn here, pixel for pixel
     python tools/downloadcheck.py  a 12 MB download fetched in parts with Range, read back byte for byte
     python tools/notescheck.py  select all, copy, paste, save, undo, find and replace in the editor, from its keys
     python tools/timecheck.py   set the time zone from the shell and in Settings, read the clocks and a file's time
