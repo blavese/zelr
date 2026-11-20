@@ -118,7 +118,7 @@ def main():
     check("cat | sort | tail 1", "/home/t.txt", "pear\n")
     check("sort of a file of 3000 lines", "/home/m.txt", "".join(l + "\n" for l in sorted(MANY)))
     check("cat | sort | head 3 of 3000 lines", "/home/mh.txt", "".join(l + "\n" for l in sorted(MANY)[:3]))
-    check("a | inside double quotes is not a pipe", "/home/q.txt", '"a|b"\n')
+    check("a | inside double quotes is not a pipe, and the quotes go (0.223.0)", "/home/q.txt", 'a|b\n')
     check("grep finding nothing pipes nothing", "/home/z.txt", "")
     check("cat > FILE copies a file exactly", "/home/copy.txt", FRUIT)
     hs = read("/home/hs.txt") or ""

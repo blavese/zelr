@@ -699,6 +699,7 @@ if [ "$MODE" = "screen" ] || [ "$MODE" = "full" ]; then
   difftest() { keep timeout 900 python tools/diffcheck.py; }
   greptest() { keep timeout 900 python tools/grepcheck.py; }
   sumtest() { keep timeout 900 python tools/sumcheck.py; }
+  cuttest() { keep timeout 900 python tools/cutcheck.py; }
   slidetest() { keep timeout 900 python tools/slidecheck.py; }
   choosetest() { keep timeout 900 python tools/choosecheck.py; }
   eventtest() { keep timeout 900 python tools/eventcheck.py; }
@@ -851,6 +852,7 @@ if [ "$MODE" = "screen" ] || [ "$MODE" = "full" ]; then
   par_start "the terminal compares two files, and counts lines alike" difftest
   par_start "the terminal's grep finds words in any case and in every folder below" greptest
   par_start "the terminal sums a file as other systems do, and finds where two differ" sumtest
+  par_start "the terminal cuts fields out of lines and turns letters into others" cuttest
   par_start "pictures shows a folder as a slideshow" slidetest
   par_start "files chooses several and moves them together" choosetest
   par_start "a time in the calendar rings at its minute" eventtest

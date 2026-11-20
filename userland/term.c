@@ -516,13 +516,24 @@ typedef void (*handler)(int argc, char **argv);
 
 static void run_line(char *cmdline);        /* used by time and by the loop */
 
+/* Words run to a space outside double quotes, and the quotes go: "a b" is
+   one word, a b, as other shells have it (a delimiter of one space for cut,
+   two words for grep to find together). */
 static int split(char *s, char **argv, int max) {
     int n = 0;
     while (*s && n < max) {
         while (*s == ' ') *s++ = 0;
         if (!*s) break;
         argv[n++] = s;
-        while (*s && *s != ' ') s++;
+        char *out = s;
+        int quoted = 0;
+        while (*s && (quoted || *s != ' ')) {
+            if (*s == '"') { quoted = !quoted; s++; continue; }
+            *out++ = *s++;
+        }
+        int more = *s != 0;
+        *out = 0;
+        if (more) s++;
     }
     return n;
 }
@@ -1122,6 +1133,149 @@ static void cmd_cmp(int argc, char **argv) {
     }
     close(fa);
     close(fb);
+}
+
+/* cut -f LIST [-d C] [FILE], cut -c LIST [FILE]: parts of each line, of a
+   file or of what was piped in. LIST is numbers from 1 and ranges (2-4,
+   3-, -2) apart by commas; what is chosen comes in the line's order, once.
+   Fields are apart by a tab unless -d says otherwise, and a line without
+   one is given whole, as other systems give it. */
+#define CUT_RANGES 16
+static int cut_lo[CUT_RANGES], cut_hi[CUT_RANGES], cut_n;
+static char cut_row[4096];
+
+static bool cut_list(const char *s) {
+    cut_n = 0;
+    while (*s) {
+        if (cut_n == CUT_RANGES) return false;
+        int lo = 0, hi = 0, dash = 0;
+        while (*s >= '0' && *s <= '9') lo = lo * 10 + (*s++ - '0');
+        if (*s == '-') {
+            dash = 1;
+            s++;
+            while (*s >= '0' && *s <= '9') hi = hi * 10 + (*s++ - '0');
+        }
+        if (*s && *s != ',') return false;
+        if (*s == ',') s++;
+        if (!dash) hi = lo;
+        if (dash && !lo) lo = 1;
+        if (!lo || (hi && hi < lo)) return false;
+        cut_lo[cut_n] = lo;
+        cut_hi[cut_n] = hi;               /* 0: to the end */
+        cut_n++;
+    }
+    return cut_n > 0;
+}
+
+static bool cut_wanted(int k) {
+    for (int i = 0; i < cut_n; i++)
+        if (k >= cut_lo[i] && (!cut_hi[i] || k <= cut_hi[i])) return true;
+    return false;
+}
+
+static void cut_line(const char *line, int len, bool chars, char delim) {
+    int o = 0, cap = (int)sizeof(cut_row) - 1;
+    if (chars) {
+        for (int i = 0; i < len && o < cap; i++) if (cut_wanted(i + 1)) cut_row[o++] = line[i];
+    } else {
+        bool any = false;
+        for (int i = 0; i < len; i++) if (line[i] == delim) { any = true; break; }
+        if (!any) {
+            for (int i = 0; i < len && o < cap; i++) cut_row[o++] = line[i];
+        } else {
+            int field = 1, first = 1;
+            for (int i = 0; i <= len; i++) {
+                int start = i;
+                while (i < len && line[i] != delim) i++;
+                if (cut_wanted(field)) {
+                    if (!first && o < cap) cut_row[o++] = delim;
+                    for (int k = start; k < i && o < cap; k++) cut_row[o++] = line[k];
+                    first = 0;
+                }
+                field++;
+            }
+        }
+    }
+    cut_row[o] = 0;
+    say(cut_row);
+}
+
+static void cmd_cut(int argc, char **argv) {
+    const char *list = 0, *path = 0;
+    char delim = '\t';
+    bool chars = false;
+    for (int i = 1; i < argc; i++) {
+        const char *a = argv[i];
+        if (a[0] == '-' && (a[1] == 'f' || a[1] == 'c' || a[1] == 'd') && a[2] == 0 && i + 1 < argc) {
+            if (a[1] == 'd') delim = argv[++i][0];
+            else { chars = a[1] == 'c'; list = argv[++i]; }
+        } else if (a[0] == '-' && (a[1] == 'f' || a[1] == 'c')) {
+            chars = a[1] == 'c';
+            list = a + 2;
+        } else if (a[0] == '-' && a[1] == 'd') {
+            delim = a[2];
+        } else {
+            path = a;
+        }
+    }
+    if (!list || !delim || (!path && pipe_n < 0)) { need("cut -f LIST [-d C] FILE, or cut -c LIST FILE"); return; }
+    if (!cut_list(list)) { err("a list is numbers and ranges apart by commas: 1,3 or 2-4 or 3-"); return; }
+    int total = read_input(path);
+    if (total <= 0) return;
+    for (int i = 0, start = 0; i <= total; i++) {
+        if (i < total && io[i] != '\n') continue;
+        if (i == total && start == total) break;     /* nothing after the last newline */
+        cut_line(io + start, i - start, chars, delim);
+        start = i + 1;
+    }
+}
+
+/* tr SET1 SET2 [FILE], tr -d SET [FILE]: each byte of SET1 made the one in
+   the same place in SET2 (the last of SET2 again when it is shorter), or
+   with -d taken out. A set may hold ranges (a-z) and \n, \t and \\. */
+static int tr_set(const char *s, u8 *out) {
+    int n = 0;
+    while (*s && n < 256) {
+        int c = (u8)*s++;
+        if (c == '\\' && *s) {
+            char e = *s++;
+            c = e == 'n' ? '\n' : e == 't' ? '\t' : (u8)e;
+        }
+        if (*s == '-' && s[1]) {
+            int to = (u8)s[1];
+            s += 2;
+            if (to == '\\' && *s) {
+                char e = *s++;
+                to = e == 'n' ? '\n' : e == 't' ? '\t' : (u8)e;
+            }
+            for (int k = c; k <= to && n < 256; k++) out[n++] = (u8)k;
+            continue;
+        }
+        out[n++] = (u8)c;
+    }
+    return n;
+}
+
+static void cmd_tr(int argc, char **argv) {
+    bool del = argc > 1 && !strcmp(argv[1], "-d");
+    int sets = del ? 1 : 2, first = del ? 2 : 1;
+    const char *path = argc > first + sets ? argv[first + sets] : 0;
+    if (argc < first + sets || (!path && pipe_n < 0)) { need("tr SET1 SET2 FILE, or tr -d SET FILE"); return; }
+    static u8 a[256], b[256];
+    int na = tr_set(argv[first], a), nb = del ? 0 : tr_set(argv[first + 1], b);
+    if (!na || (!del && !nb)) { err("a set cannot be empty"); return; }
+    int map[256];
+    for (int k = 0; k < 256; k++) map[k] = k;
+    for (int k = 0; k < na; k++) map[a[k]] = del ? -1 : b[k < nb ? k : nb - 1];
+    int total = read_input(path);
+    if (total <= 0) return;
+    int o = 0;
+    for (int i = 0; i < total; i++) {
+        int m = map[(u8)io[i]];
+        if (m >= 0) io[o++] = (char)m;
+    }
+    io[o] = 0;
+    print_text(o);
 }
 
 /* sort [FILE]: the lines in byte order, of a file or of what was piped in. */
@@ -2125,6 +2279,8 @@ static const command COMMANDS[] = {
     { "diff",    cmd_diff,    "FILE FILE",     "the lines two files differ by" },
     { "find",    cmd_find,    "NAME [WHERE]",  "files whose name contains it" },
     { "hex",     cmd_hex,     "FILE [BYTES]",  "what a file really holds" },
+    { "cut",     cmd_cut,     "-f LIST [-d C] FILE", "fields of each line, or -c LIST its characters" },
+    { "tr",      cmd_tr,      "SET1 SET2 FILE", "bytes made others, or -d taken out" },
     { "sha256sum", cmd_sha256sum, "FILE...",   "each file's SHA-256, to compare with a sum taken elsewhere" },
     { "cmp",     cmd_cmp,     "FILE FILE",     "the first byte two files differ at" },
     { "wc",      cmd_wc,      "FILE",          "lines, words and bytes" },
