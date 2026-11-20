@@ -35,6 +35,7 @@ else's server staying misconfigured.
 import os
 import re
 import sys
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from harness import Guest, Checks, build_once, ROOT              # noqa: E402
@@ -133,21 +134,28 @@ def fetch(vm, target, timeout=180, tries=2):
     return out
 
 
-def refusal(vm, host, tries=3):
-    """A fetch that is to be refused, tried again only while the server never
-    took the connection.
+def refusal(vm, host, tries=4):
+    """A fetch that is to be refused, tried again only while the server gave
+    no answer to judge.
 
     badssl.com's servers have days when a connection takes seven seconds or
-    never arrives (the host's own Python saw both on 2026-11-20), and the
-    machine gives a connection six. "could not connect" is said before any
-    TLS is spoken, so like a name that will not resolve it says nothing about
-    certificates; anything else that comes back, a refusal for the wrong
-    reason above all, is kept as it is."""
+    never arrives, or is dropped part way through the handshake (the host's
+    own Python saw a third of its connections fail on 2026-11-20, and three
+    gates that day failed on it), and the machine gives a connection six.
+    "could not connect" is said before any TLS is spoken, and "the connection
+    stopped" when the server went away before its certificate was looked at:
+    like a name that will not resolve, neither says anything about
+    certificates, so the fetch is asked again a few seconds later. An answer
+    with any refusal's reason in it, the wrong one above all, and anything
+    else that comes back, is kept as it is."""
     out = ""
-    for _ in range(tries):
+    for k in range(tries):
         out = vm.fresh("fetch https://%s /" % host, timeout=120)
-        if "could not connect" not in out:
+        judged = any(reason in out for _, reason in BAD)
+        if judged or ("could not connect" not in out and "the connection stopped" not in out):
             return out
+        if k + 1 < tries:
+            time.sleep(5)
     return out
 
 
