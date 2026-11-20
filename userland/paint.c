@@ -17,11 +17,15 @@
  * Tools, by key or from the icons beside the brush sizes: B the brush, L a
  * line, R a rectangle, E an ellipse (each drawn from where the button went
  * down to where it is, shown as it is dragged), F a fill of the colour
- * clicked on, as far as it reaches. */
+ * clicked on, as far as it reaches, and T words, typed where the paper is
+ * clicked in the desktop's own typeface, the brush's size choosing which.
+ * While words are being typed every key is theirs: Return or a click
+ * elsewhere ends them ("paint: words TEXT, WxH at X,Y"). */
 #include "zelr.h"
 #include "alloc.h"
 #include "png.h"
 #include "pngw.h"
+#include "face.h"
 
 #define TOOLBAR_H  58
 #define SWATCH     24
@@ -53,8 +57,9 @@ static int brush = 1;
 static int drawing;
 static int last_x, last_y;
 
-enum { TOOL_BRUSH, TOOL_LINE, TOOL_RECT, TOOL_ELLIPSE, TOOL_FILL, TOOLS };
-static const char *const TOOL_NAMES[TOOLS] = { "the brush", "a line", "a rectangle", "an ellipse", "a fill" };
+enum { TOOL_BRUSH, TOOL_LINE, TOOL_RECT, TOOL_ELLIPSE, TOOL_FILL, TOOL_WORDS, TOOLS };
+static const char *const TOOL_NAMES[TOOLS] = { "the brush", "a line", "a rectangle", "an ellipse", "a fill",
+                                               "words" };
 static int tool;
 static int anchor_x, anchor_y;          /* where a shape began */
 
@@ -232,6 +237,9 @@ static void draw_tools(void) {
             for (int k = 0; k < 14; k++) { px[(u32)(y + 18 - k) * W + x + 5 + k] = ink; px[(u32)(y + 18 - k) * W + x + 6 + k] = ink; }
         } else if (i == TOOL_RECT) {
             frame(x + 5, y + 5, 14, 12, ink);
+        } else if (i == TOOL_WORDS) {
+            rect(x + 6, y + 4, 12, 2, ink);
+            rect(x + 11, y + 4, 2, 14, ink);
         } else if (i == TOOL_ELLIPSE) {
             for (int dx = -7; dx <= 7; dx++) {
                 int dy = isqrt(25 * (49 - dx * dx) / 49);
@@ -341,6 +349,107 @@ static void undo(void) {
     say("undone", 0);
 }
 
+/* --- words ---------------------------------------------------------------
+ *
+ * Drawn as the desktop draws its own (draw.h's face_draw: the same faces, the
+ * same baseline four fifths of the way down, edges blended by coverage), so
+ * a picture's words read like the window's. The brush's size picks the face:
+ * 13 pixels, 15 bold, 20, and 20 drawn at twice its size. While they are
+ * typed the paper they cover is the one kept for ctrl+Z, put back and the
+ * words drawn again at each key, with a mark where the next letter goes. */
+static const int WORD_FACE[4] = { 0, 3, 2, 2 };
+static const int WORD_SCALE[4] = { 1, 1, 1, 2 };
+
+static char words[120];
+static int nwords, words_on, words_x, words_y;
+
+static u32 blend(u32 under, u32 over, int a) {
+    int ur = (under >> 16) & 0xFF, ug = (under >> 8) & 0xFF, ub = under & 0xFF;
+    int orr = (over >> 16) & 0xFF, og = (over >> 8) & 0xFF, ob = over & 0xFF;
+    return RGB(ur + (orr - ur) * a / 255, ug + (og - ug) * a / 255, ub + (ob - ub) * a / 255);
+}
+
+static int words_width(void) {
+    const face_t *f = &face_faces[WORD_FACE[brush]];
+    int w = 0;
+    for (int i = 0; i < nwords; i++) {
+        unsigned char ch = (unsigned char)words[i];
+        if (ch < FACE_FIRST || ch > FACE_LAST) ch = ' ';
+        w += f->glyphs[ch - FACE_FIRST].advance;
+    }
+    return w * WORD_SCALE[brush];
+}
+
+static void words_draw(int mark) {
+    const face_t *f = &face_faces[WORD_FACE[brush]];
+    int s = WORD_SCALE[brush];
+    int base = words_y + (f->size * 4) / 5 * s;
+    int x = words_x;
+    u32 c = PALETTE[color];
+    for (int i = 0; i < nwords; i++) {
+        unsigned char ch = (unsigned char)words[i];
+        if (ch < FACE_FIRST || ch > FACE_LAST) ch = ' ';
+        const face_glyph *g = &f->glyphs[ch - FACE_FIRST];
+        const unsigned char *gp = f->pixels + g->at;
+        for (int gy = 0; gy < g->h; gy++)
+            for (int gx = 0; gx < g->w; gx++) {
+                int a = gp[gy * g->w + gx];
+                if (!a) continue;
+                for (int sy = 0; sy < s; sy++)
+                    for (int sx = 0; sx < s; sx++) {
+                        int py = base + (gy - g->top) * s + sy, qx = x + (g->left + gx) * s + sx;
+                        if (py < TOOLBAR_H || py >= H || qx < 0 || qx >= W) continue;
+                        u32 *slot = &px[(u32)py * W + qx];
+                        *slot = a == 255 ? c : blend(*slot, c, a);
+                    }
+            }
+        x += g->advance * s;
+    }
+    if (mark) {
+        int mh = f->size * s;
+        if (words_y + mh > H) mh = H - words_y;
+        if (x < W && mh > 0) rect(x, words_y, s, mh, c);
+    }
+}
+
+/* The paper as it was before the words, and the words on it again. */
+static void words_show(void) {
+    if (undo_ok) memcpy(px + (u32)TOOLBAR_H * W, undo_px, W * (H - TOOLBAR_H) * 4);
+    words_draw(1);
+}
+
+static void words_begin(int x, int y) {
+    keep_for_undo();
+    words_on = 1;
+    nwords = 0;
+    words_x = x;
+    words_y = y;
+    words_show();
+}
+
+static void words_end(void) {
+    if (!words_on) return;
+    words_on = 0;
+    if (undo_ok) memcpy(px + (u32)TOOLBAR_H * W, undo_px, W * (H - TOOLBAR_H) * 4);
+    words_draw(0);
+    if (!nwords) return;
+    char line[220];
+    int n = 0;
+    for (const char *p = "words "; *p; p++) line[n++] = *p;
+    for (int i = 0; i < nwords; i++) line[n++] = words[i];
+    line[n++] = ',';
+    line[n++] = ' ';
+    n += utoa((u32)words_width(), line + n);
+    line[n++] = 'x';
+    n += utoa((u32)(face_faces[WORD_FACE[brush]].size * WORD_SCALE[brush]), line + n);
+    for (const char *p = " at "; *p; p++) line[n++] = *p;
+    n += utoa((u32)words_x, line + n);
+    line[n++] = ',';
+    n += utoa((u32)(words_y - TOOLBAR_H), line + n);
+    line[n] = 0;
+    say(line, 0);
+}
+
 static void save(void) {
     int ch = H - TOOLBAR_H;
     u32 size = png_write_size(W, ch);
@@ -398,6 +507,7 @@ static void on_mouse(int x, int y, u32 buttons) {
             if (x >= sx && x < sx + SWATCH && y >= 6 && y < 6 + SWATCH) {
                 color = i;
                 draw_toolbar();
+                if (words_on) words_show();
                 return;
             }
         }
@@ -406,17 +516,20 @@ static void on_mouse(int x, int y, u32 buttons) {
             if (x >= cx - 15 && x <= cx + 15 && y >= 31) {
                 brush = i;
                 draw_toolbar();
+                if (words_on) words_show();
                 return;
             }
         }
         for (int i = 0; i < TOOLS; i++) {
             if (x >= tool_x(i) && x < tool_x(i) + 24 && y >= 32 && y < 54) {
+                words_end();
                 choose_tool(i);
                 draw_toolbar();
                 return;
             }
         }
         if (x >= clear_x() && x < clear_x() + 34 && y >= 8 && y < 42) {
+            words_end();
             keep_for_undo();
             clear_canvas();
             return;
@@ -426,6 +539,13 @@ static void on_mouse(int x, int y, u32 buttons) {
 
     if (!left) { drawing = 0; return; }
 
+    if (tool == TOOL_WORDS) {
+        if (pressed) {
+            words_end();
+            words_begin(x, y);
+        }
+        return;
+    }
     if (tool == TOOL_FILL) {
         if (pressed) { keep_for_undo(); fill(x, y, PALETTE[color]); }
         return;
@@ -456,8 +576,19 @@ static void on_mouse(int x, int y, u32 buttons) {
 static void on_key(u32 key) {
     if (KEY_CTRL(key)) {
         int l = key_ctrl_letter(key);
-        if (l == 's') save();
-        else if (l == 'z') undo();
+        if (l == 's') { words_end(); save(); }
+        else if (l == 'z') { words_on = 0; undo(); }
+        return;
+    }
+    /* Words being typed take every key: the letters that choose tools are
+       letters in them. */
+    if (words_on) {
+        if (key == '\n') words_end();
+        else if (key == '\b') { if (nwords) nwords--; words_show(); }
+        else if (key >= 32 && key < 127 && nwords < (int)sizeof(words) - 1) {
+            words[nwords++] = (char)key;
+            words_show();
+        }
         return;
     }
     if (key >= '1' && key <= '4') { brush = (int)key - '1'; draw_toolbar(); }
@@ -469,6 +600,7 @@ static void on_key(u32 key) {
     else if (key == 'r' || key == 'R') { choose_tool(TOOL_RECT); draw_toolbar(); }
     else if (key == 'e' || key == 'E') { choose_tool(TOOL_ELLIPSE); draw_toolbar(); }
     else if (key == 'f' || key == 'F') { choose_tool(TOOL_FILL); draw_toolbar(); }
+    else if (key == 't' || key == 'T') { choose_tool(TOOL_WORDS); draw_toolbar(); }
 }
 
 int main(int argc, char **argv) {

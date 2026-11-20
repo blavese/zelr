@@ -63,6 +63,7 @@ static const row_t ROWS[] = {
     { "sheet", "ctrl+D, ctrl+R", "the cell above, or to the left, copied in, its references moved" },
     { "sheet", "ctrl+C, ctrl+V", "a cell copied and pasted, its references moved ($ keeps one)" },
     { "paint", "B, L, R, E, F", "the brush, a line, a rectangle, an ellipse, a fill" },
+    { "paint", "T", "words, typed where the paper is clicked; Return ends them" },
     { "paint", "1, 2, 3, 4", "the brush's size" },
     { "paint", "[, ]", "the colour before or after" },
     { "paint", "C", "the paper cleared" },
