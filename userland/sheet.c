@@ -805,6 +805,86 @@ static void set_text(const char *t) {
     recalc();
 }
 
+/* --- sorting ---------------------------------------------------------------
+ *
+ * ctrl+T puts the rows from the chosen one down to the last with anything in
+ * it in order by the chosen column: numbers smallest first, then words A to
+ * Z with case aside, then truths, then errors, and empty cells last whichever
+ * way it goes. ctrl+T again on the same column from the same row goes the
+ * other way. Rows that tie keep
+ * their order. Each row is moved whole, its formulas as a copy of it would
+ * be (moved), so =B2*C2 moved to row 5 is =B5*C5; one that names another row
+ * names whatever is there afterwards, as in other spreadsheets. */
+static int sort_col = -1, sort_row, sort_desc;
+
+static int sort_class(const val *v) {
+    switch (v->kind) {
+        case V_NUM:  return v->str ? 2 : 0;
+        case V_TEXT: return 1;
+        case V_ERR:  return 3;
+        default:     return 4;
+    }
+}
+
+static int sort_cmp(const val *a, const val *b, int desc) {
+    int ca = sort_class(a), cb = sort_class(b), c;
+    if (ca == 4 || cb == 4) return ca == cb ? 0 : ca == 4 ? 1 : -1;
+    if (ca != cb) c = ca < cb ? -1 : 1;
+    else if (ca == 1) {
+        const char *x = a->str, *y = b->str;
+        while (*x && low_ch((u8)*x) == low_ch((u8)*y)) { x++; y++; }
+        c = low_ch((u8)*x) - low_ch((u8)*y);
+        c = c < 0 ? -1 : c > 0;
+    } else if (ca == 3) c = 0;
+    else c = a->num < b->num ? -1 : a->num > b->num;
+    return desc ? -c : c;
+}
+
+static void tell(const char *what, const char *p, int rows);
+static void cell_name(int r, int c, char *out);
+
+static void sort_rows(int row, int col) {
+    int last = -1;
+    for (int r = 0; r < NROW; r++)
+        for (int c = 0; c < NCOL; c++) if (cells[r][c].text[0]) last = r;
+    if (last <= row) { tell("nothing below to sort", "", -1); sort_col = -1; return; }
+    int desc = sort_col == col && sort_row == row ? !sort_desc : 0;
+    int n = last - row + 1;
+    static int order[NROW];
+    for (int i = 0; i < n; i++) order[i] = row + i;
+    for (int i = 1; i < n; i++) {
+        int x = order[i], j = i;
+        while (j > 0 && sort_cmp(&cells[order[j - 1]][col].v, &cells[x][col].v, desc) > 0) {
+            order[j] = order[j - 1];
+            j--;
+        }
+        order[j] = x;
+    }
+    static char texts[NROW][NCOL][TEXT_MAX];
+    for (int i = 0; i < n; i++)
+        for (int c = 0; c < NCOL; c++) moved(cells[order[i]][c].text, row + i - order[i], 0, texts[i][c], TEXT_MAX);
+    for (int i = 0; i < n; i++)
+        for (int c = 0; c < NCOL; c++) strcpy(cells[row + i][c].text, texts[i][c]);
+    changed = 1;
+    recalc();
+    sort_col = col;
+    sort_row = row;
+    sort_desc = desc;
+
+    char line[96], name[8];
+    int k = 0;
+    for (const char *p = "rows "; *p; p++) line[k++] = *p;
+    k += utoa((u32)(row + 1), line + k);
+    for (const char *p = " to "; *p; p++) line[k++] = *p;
+    k += utoa((u32)(last + 1), line + k);
+    for (const char *p = " by "; *p; p++) line[k++] = *p;
+    cell_name(0, col, name);
+    line[k++] = name[0];
+    for (const char *p = desc ? ", largest first" : ", smallest first"; *p; p++) line[k++] = *p;
+    line[k] = 0;
+    tell("sorted ", line, -1);
+}
+
 /* A ctrl chord, from the keyboard or as the control character a serial line
    sends for it. */
 static int chord(u32 k, char letter) {
@@ -854,6 +934,7 @@ static void grid_key(u32 k) {
     else if (code == KEY_F1 + 1) begin_edit(1);
     else if (chord(k, 's')) save();
     else if (chord(k, 'g')) ask_for(M_GOTO);
+    else if (chord(k, 't')) sort_rows(row, col);
     else if (chord(k, 'o')) ask_for(M_OPEN);
     else if (chord(k, 'c') || chord(k, 'x')) {
         clip_set(cells[row][col].text, strlen(cells[row][col].text));

@@ -58,6 +58,7 @@ static const row_t ROWS[] = {
     { "sheet", "a key, F2", "the cell typed into, or what is in it changed" },
     { "sheet", "Return, Tab", "kept, and down (back to where the Tabs began) or along" },
     { "sheet", "ctrl+G", "to a cell by its name, as B3" },
+    { "sheet", "ctrl+T", "the rows from here down in order by this column; again, the other way" },
     { "sheet", "ctrl+S, ctrl+O", "saved as CSV, or another opened" },
     { "sheet", "Delete", "the cell emptied" },
     { "sheet", "ctrl+D, ctrl+R", "the cell above, or to the left, copied in, its references moved" },
