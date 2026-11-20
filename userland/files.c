@@ -16,8 +16,7 @@
 #include "zelr.h"
 #include "ui.h"
 #include "alloc.h"
-#include "zip.h"
-#include "zipw.h"
+#include "arcio.h"
 
 #define MAX_ENTRIES 512
 #define NAME_MAX    64          /* as wide as the kernel's own names */
@@ -304,7 +303,6 @@ static void when_of(int index) {
  * it is left. Only read here: a file opened from it is taken out into /tmp
  * and opened there, and Extract (ctrl+E, or the menus) takes all of it out
  * into a folder beside it. Nothing changes it in place. */
-#define ARCHIVE_MAX (64 * 1024 * 1024)
 
 static char  arc_path[PATH_MAX];       /* the archive's file, or "" */
 static u8   *arc_data;
@@ -326,34 +324,13 @@ static void arc_close(void) {
     arc_path[0] = 0;
 }
 
-/* A whole file into memory, a megabyte a call (the kernel's most). */
-static u8 *read_whole(const char *path, u32 *len) {
-    zelr_stat st;
-    if (stat(path, &st) < 0 || st.is_dir || st.size > ARCHIVE_MAX) return 0;
-    u8 *buf = (u8 *)malloc(st.size + 1);
-    if (!buf) return 0;
-    int fd = open(path, O_READ);
-    if (fd < 0) { free(buf); return 0; }
-    u32 at = 0;
-    while (at < st.size) {
-        int want = st.size - at > ZELR_IO_MAX ? ZELR_IO_MAX : (int)(st.size - at);
-        int got = zelr_fread(fd, buf + at, want);
-        if (got <= 0) break;
-        at += (u32)got;
-    }
-    close(fd);
-    if (at != st.size) { free(buf); return 0; }
-    *len = st.size;
-    return buf;
-}
-
 static char arc_said[160];
 
 /* Opened, or why not, said on the status line. */
 static int arc_open(const char *path) {
     arc_close();
     u32 len = 0;
-    u8 *data = read_whole(path, &len);
+    u8 *data = arcio_read_whole(path, &len);
     if (!data) { say("the archive could not be read (64 MB at most)"); return 0; }
     int r = zip_open(&arc, data, len);
     if (r != ZIP_OK) {
@@ -418,91 +395,18 @@ static void reload_archive(void) {
     sort_entries();
 }
 
-/* An entry's name, safe to write under a folder: nothing that climbs out of
-   it (a ".." part, a leading slash, a drive) and no backslashes. 0 for one
-   that is not, which is skipped: an archive must not write where it likes. */
-static int safe_name(const zip_entry *e, char *out, int cap) {
-    if (e->name_len <= 0 || e->name_len >= cap) return 0;
-    for (int i = 0; i < e->name_len; i++) {
-        char c = e->name[i];
-        if (c == '\\' || c == ':' || !c) return 0;
-        out[i] = c;
-    }
-    out[e->name_len] = 0;
-    if (out[0] == '/') return 0;
-    for (int i = 0; out[i]; ) {
-        int j = i;
-        while (out[j] && out[j] != '/') j++;
-        if (j - i == 2 && out[i] == '.' && out[i + 1] == '.') return 0;
-        i = out[j] ? j + 1 : j;
-    }
-    return 1;
-}
-
-/* The folders a path needs, made one by one. */
-static void make_parents(const char *path) {
-    char part[PATH_MAX];
-    for (int i = 1; path[i]; i++) {
-        if (path[i] != '/') continue;
-        memcpy(part, path, i);
-        part[i] = 0;
-        mkdir(part);
-    }
-}
-
-static int write_whole(const char *path, const u8 *data, int len) {
-    int fd = open(path, O_WRITE | O_CREATE | O_TRUNC);
-    if (fd < 0) return -1;
-    int at = 0;
-    while (at < len) {
-        int piece = len - at > ZELR_IO_MAX ? ZELR_IO_MAX : len - at;
-        int got = zelr_fwrite(fd, data + at, piece);
-        if (got <= 0) break;
-        at += got;
-    }
-    close(fd);
-    return at == len ? 0 : -1;
-}
-
-/* One entry taken out to a file, or a ZIP_ number. */
-static int take_out(const zip_entry *e, const char *to) {
-    u8 *buf = (u8 *)malloc(e->usize + 1);
-    if (!buf) return ZIP_ROOM;
-    int got = zip_extract(&arc, e, buf, e->usize + 1);
-    if (got >= 0 && write_whole(to, buf, got) < 0) got = ZIP_ROOM;
-    free(buf);
-    if (got < 0) unlink(to);
-    return got;
-}
-
 /* Everything in the archive at path, into a folder beside it named after
    it ("t" for t.zip, "t 2" when there is one). Opens the archive for it when
    it is not the one open. */
 static void extract_all(const char *path) {
     if (strcmp(arc_path, path) && !arc_open(path)) return;
-    char dest[PATH_MAX];
-    strncpy(dest, path, sizeof(dest) - 1);
-    dest[sizeof(dest) - 1] = 0;
-    int n = strlen(dest);
-    if (ends_with(dest, ".tar.gz")) dest[n - 7] = 0;
-    else if (ends_with(dest, ".zip") || ends_with(dest, ".tar") || ends_with(dest, ".tgz")) dest[n - 4] = 0;
-    else if (ends_with(dest, ".gz")) dest[n - 3] = 0;
     char tried[PATH_MAX];
-    strncpy(tried, dest, sizeof(tried) - 1);
-    tried[sizeof(tried) - 1] = 0;
-    zelr_stat st;
-    for (int k = 2; stat(tried, &st) == 0 && k < 100; k++) {
-        int m = strlen(dest);
-        memcpy(tried, dest, m);
-        tried[m++] = ' ';
-        m += utoa((u32)k, tried + m);
-        tried[m] = 0;
-    }
+    arcio_dest_for(path, tried);
     /* A file gzipped comes out as that file beside it, not in a folder. */
     if (arc.kind == ZIP_KIND_GZ) {
         u32 at0 = 0;
         zip_entry one;
-        int r = zip_next(&arc, &at0, &one) == 1 ? take_out(&one, tried) : ZIP_BAD;
+        int r = zip_next(&arc, &at0, &one) == 1 ? arcio_take_out(&arc, &one, tried) : ZIP_BAD;
         const char *leaf = tried;
         for (const char *p = tried; *p; p++) if (*p == '/') leaf = p + 1;
         int m = 0;
@@ -514,25 +418,9 @@ static void extract_all(const char *path) {
     }
     if (mkdir(tried) < 0) { say("could not make the folder to extract into"); return; }
 
-    int files = 0, refused = 0, why = 0;
-    u32 at = 0;
-    zip_entry e;
-    char name[PATH_MAX], to[PATH_MAX];
-    while (zip_next(&arc, &at, &e) == 1) {
-        if (!safe_name(&e, name, PATH_MAX - strlen(tried) - 2)) { refused++; continue; }
-        join(to, tried, name);
-        if (e.is_dir) {
-            int m = strlen(to);
-            if (m > 1 && to[m - 1] == '/') to[m - 1] = 0;
-            make_parents(to);
-            mkdir(to);
-            continue;
-        }
-        make_parents(to);
-        int r = take_out(&e, to);
-        if (r < 0) { refused++; why = r; continue; }
-        files++;
-    }
+    arcio_out out;
+    arcio_extract_into(&arc, tried, &out);
+    int files = out.files, refused = out.refused, why = out.why;
     const char *leaf = tried;
     for (const char *p = tried; *p; p++) if (*p == '/') leaf = p + 1;
     int m = 0;
@@ -555,61 +443,8 @@ static void reload(void);
 
 /* --- making one ---------------------------------------------------------------
  *
- * A file or a folder and everything below it, as NAME.zip beside it: each file
- * deflated when that makes it smaller (zipw.h, deflate.h), folders as entries
- * of their own so an empty one comes back. Read whole and built in memory, so
- * there is a limit, said when it is reached. */
-#define MAKE_MAX_FILES 1024
-#define MAKE_MAX_BYTES (48u * 1024 * 1024)
-
-static int mk_files, mk_dirs, mk_over, mk_unread;
-static u32 mk_bytes;
-
-/* Counts what is below path (z 0), or adds it to z under name. */
-static void make_walk(zipw_t *z, const char *path, const char *name, int depth) {
-    zelr_stat st;
-    if (stat(path, &st) < 0) return;
-    if (!st.is_dir) {
-        if (!z) {
-            mk_files++;
-            mk_bytes += st.size;
-            if (mk_files > MAKE_MAX_FILES || mk_bytes > MAKE_MAX_BYTES) mk_over = 1;
-            return;
-        }
-        u32 dt = 0, dd = zipw_dos_date(1980, 1, 1);
-        zelr_times t;
-        if (file_times(path, &t) == 0 && t.year) {
-            dt = zipw_dos_time(t.hour, t.minute, t.second);
-            dd = zipw_dos_date(t.year, t.month, t.day);
-        }
-        u8 *data = (u8 *)malloc(st.size + 1);
-        if (!data) { mk_unread++; return; }
-        if (slurp(path, (char *)data, (int)st.size + 1) == (int)st.size)
-            zipw_add(z, name, data, st.size, dt, dd);
-        else
-            mk_unread++;
-        free(data);
-        return;
-    }
-    if (depth > 8) return;
-    char sub[PATH_MAX], subname[PATH_MAX];
-    if (!z) mk_dirs++;
-    else {
-        int n = strlen(name);
-        if (n + 2 > PATH_MAX) return;
-        memcpy(subname, name, n);
-        subname[n] = '/';
-        subname[n + 1] = 0;
-        zipw_add(z, subname, 0, 0, 0, zipw_dos_date(1980, 1, 1));
-    }
-    for (int i = 0; readdir(path, i, &st) == 1; i++) {
-        if (!strcmp(st.name, ".") || !strcmp(st.name, "..")) continue;
-        join(sub, path, st.name);
-        join(subname, name, st.name);
-        make_walk(z, sub, subname, depth + 1);
-    }
-}
-
+ * A file or a folder and everything below it, as NAME.zip beside it, made by
+ * arcio.h as the terminal's zip makes one. */
 /* Make a zip, from the menus or ctrl+K: of the file or folder selected. */
 static void make_zip(void) {
     if (in_archive()) { say("a zip is made from what is on the disk, not from inside one"); return; }
@@ -642,26 +477,17 @@ static void make_zip(void) {
         memcpy(dest + m, ".zip", 5);
     }
 
-    mk_files = mk_dirs = mk_over = mk_unread = 0;
-    mk_bytes = 0;
-    make_walk(0, path, leaf, 0);
-    if (mk_over) { say("too much for one zip made here: 1024 files or 48 MB"); return; }
-    u32 entries_n = (u32)(mk_files + mk_dirs);
-    u32 cap = mk_bytes + entries_n * (30 + PATH_MAX) + 4096;
-    u32 cd_cap = entries_n * (46 + PATH_MAX) + 64;
-    u8 *buf = (u8 *)malloc(cap + cd_cap + 22);
-    u8 *cd = (u8 *)malloc(cd_cap);
-    if (!buf || !cd) { if (buf) free(buf); if (cd) free(cd); say("not enough memory to make that zip"); return; }
-    zipw_t z;
-    zipw_begin(&z, buf, cap + cd_cap + 22, cd, cd_cap);
-    make_walk(&z, path, leaf, 0);
-    int n = zipw_finish(&z);
+    const char *one[1] = { path };
+    arcio_make_t mk;
+    u8 *buf = 0;
+    int n = arcio_make(one, 1, &buf, &mk);
+    if (mk.over) { say("too much for one zip made here: 1024 files or 48 MB"); return; }
     const char *dleaf = dest;
     for (const char *p = dest; *p; p++) if (*p == '/') dleaf = p + 1;
     char said[160];
     int k = 0;
-    if (n < 0 || mk_unread) {
-        const char *why = mk_unread ? "a file in it could not be read" : "it did not fit";
+    if (n < 0) {
+        const char *why = mk.unread ? "a file in it could not be read" : "not enough memory for it";
         for (const char *p = "no zip made: "; *p; p++) said[k++] = *p;
         for (const char *p = why; *p; p++) said[k++] = *p;
     } else if (spit(dest, buf, n) != n) {
@@ -671,16 +497,15 @@ static void make_zip(void) {
         for (const char *p = "made "; *p; p++) said[k++] = *p;
         for (const char *p = dleaf; *p && k < 100; p++) said[k++] = *p;
         for (const char *p = ": "; *p; p++) said[k++] = *p;
-        k += utoa((u32)mk_files, said + k);
-        for (const char *p = mk_files == 1 ? " file, " : " files, "; *p; p++) said[k++] = *p;
+        k += utoa((u32)mk.files, said + k);
+        for (const char *p = mk.files == 1 ? " file, " : " files, "; *p; p++) said[k++] = *p;
         k += utoa((u32)((n + 1023) / 1024), said + k);
         for (const char *p = " KB from "; *p; p++) said[k++] = *p;
-        k += utoa((mk_bytes + 1023) / 1024, said + k);
+        k += utoa((mk.bytes + 1023) / 1024, said + k);
         for (const char *p = " KB"; *p; p++) said[k++] = *p;
     }
     said[k] = 0;
-    free(buf);
-    free(cd);
+    if (buf) free(buf);
     reload();
     for (int i = 0; i < count; i++) if (!strcmp(entries[i].name, dleaf)) selected = i;
     say(said);
@@ -1017,7 +842,7 @@ static void open_entry(int index) {
         if (!found) { say("it is not in the archive"); return; }
         mkdir("/tmp");
         join(target, "/tmp", e->name);
-        int r = take_out(&z, target);
+        int r = arcio_take_out(&arc, &z, target);
         if (r < 0) {
             int m = 0;
             for (const char *p = "not opened: "; *p; p++) arc_said[m++] = *p;

@@ -18,6 +18,7 @@
 #include "zones.h"
 #include "draw.h"
 #include "sha256.h"
+#include "arcio.h"
 
 #define COLS      160
 #define MAX_LINES 400
@@ -1278,6 +1279,98 @@ static void cmd_tr(int argc, char **argv) {
     print_text(o);
 }
 
+/* unzip [-l] ARCHIVE [FOLDER]: a zip, tar, .tar.gz, .tgz or .gz taken out
+   into a folder (made when it is not there), or with no folder into one
+   beside it named after it, as Files takes it out; -l lists what is in it,
+   each entry's size and name. An entry whose name would write outside the
+   folder is refused and counted. */
+static void cmd_unzip(int argc, char **argv) {
+    int list = argc > 1 && !strcmp(argv[1], "-l");
+    const char *path = argc > 1 + list ? argv[1 + list] : 0;
+    const char *into = argc > 2 + list ? argv[2 + list] : 0;
+    if (!path) { need("unzip [-l] ARCHIVE [FOLDER]"); return; }
+    u32 len = 0;
+    u8 *data = arcio_read_whole(path, &len);
+    if (!data) { err("it could not be read (64 MB at most)"); return; }
+    zip_t z;
+    int r = zip_open(&z, data, len);
+    if (r != ZIP_OK) {
+        w_reset(); w_str("not opened: "); w_str(zip_why(r)); err(work);
+        free(data);
+        return;
+    }
+    if (list) {
+        u32 at = 0;
+        zip_entry e;
+        while (zip_next(&z, &at, &e) == 1) {
+            w_reset();
+            w_rnum(e.is_dir ? 0 : e.usize, 9);
+            w_str("  ");
+            for (int i = 0; i < e.name_len && work_n < COLS; i++) w_ch(e.name[i]);
+            say(work);
+        }
+    } else {
+        char dest[ARCIO_PATH];
+        if (into) { strncpy(dest, into, sizeof(dest) - 1); dest[sizeof(dest) - 1] = 0; }
+        else arcio_dest_for(path, dest);
+        w_reset();
+        if (z.kind == ZIP_KIND_GZ && !into) {
+            /* A file gzipped comes out as that file beside it. */
+            u32 at = 0;
+            zip_entry one;
+            int got = zip_next(&z, &at, &one) == 1 ? arcio_take_out(&z, &one, dest) : ZIP_BAD;
+            if (got < 0) { w_str("not extracted: "); w_str(zip_why(got)); err(work); }
+            else { w_str("extracted "); w_str(arcio_leaf(dest)); say(work); }
+        } else {
+            arcio_make_parents(dest);
+            mkdir(dest);
+            zelr_stat st;
+            if (stat(dest, &st) != 0 || !st.is_dir) {
+                err("could not make the folder to extract into");
+            } else {
+                arcio_out out;
+                arcio_extract_into(&z, dest, &out);
+                w_str("extracted "); w_num((u32)out.files);
+                w_str(out.files == 1 ? " file into " : " files into "); w_str(arcio_leaf(dest));
+                if (out.refused) {
+                    w_str("; not "); w_num((u32)out.refused); w_str(": ");
+                    w_str(out.why ? zip_why(out.why) : "a name that would write outside the folder");
+                }
+                say(work);
+            }
+        }
+    }
+    zip_close(&z);
+    free(data);
+}
+
+/* zip ARCHIVE PATH...: files and folders, everything below them, into a new
+   zip, each under its own name; a file is deflated when that makes it
+   smaller. 1024 files or 48 MB at most, as Files makes one. */
+static void cmd_zip(int argc, char **argv) {
+    if (argc < 3) { need("zip ARCHIVE.zip FILE-OR-FOLDER..."); return; }
+    for (int i = 2; i < argc; i++) {
+        zelr_stat st;
+        if (stat(argv[i], &st) != 0) { not_a_file(argv[i], ": no such file"); return; }
+    }
+    arcio_make_t mk;
+    u8 *buf = 0;
+    int n = arcio_make((const char *const *)(argv + 2), argc - 2, &buf, &mk);
+    if (n < 0) {
+        err(mk.over ? "too much for one zip made here: 1024 files or 48 MB"
+            : mk.unread ? "no zip made: a file in it could not be read" : "no zip made: not enough memory for it");
+        return;
+    }
+    int wrote = arcio_write_whole(argv[1], buf, n);
+    free(buf);
+    if (wrote < 0) { not_a_file(argv[1], ": could not be written"); return; }
+    w_reset();
+    w_str("made "); w_str(arcio_leaf(argv[1])); w_str(": ");
+    w_num((u32)mk.files); w_str(mk.files == 1 ? " file, " : " files, ");
+    w_num((u32)((n + 1023) / 1024)); w_str(" KB from "); w_num((mk.bytes + 1023) / 1024); w_str(" KB");
+    say(work);
+}
+
 /* sort [FILE]: the lines in byte order, of a file or of what was piped in. */
 static void cmd_sort(int argc, char **argv) {
     const char *path = argc > 1 ? argv[1] : 0;
@@ -2283,6 +2376,8 @@ static const command COMMANDS[] = {
     { "tr",      cmd_tr,      "SET1 SET2 FILE", "bytes made others, or -d taken out" },
     { "sha256sum", cmd_sha256sum, "FILE...",   "each file's SHA-256, to compare with a sum taken elsewhere" },
     { "cmp",     cmd_cmp,     "FILE FILE",     "the first byte two files differ at" },
+    { "unzip",   cmd_unzip,   "[-l] ARCHIVE [FOLDER]", "a zip, tar or .gz taken out, or -l listed" },
+    { "zip",     cmd_zip,     "ARCHIVE.zip PATH...", "files and folders into a new zip" },
     { "wc",      cmd_wc,      "FILE",          "lines, words and bytes" },
     { "stat",    cmd_stat,    "PATH",          "size, kind, and where it is kept" },
     { "write",   cmd_write,   "FILE TEXT",     "create or overwrite" },

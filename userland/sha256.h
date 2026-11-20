@@ -85,7 +85,8 @@ static void jc_sha256_end(jc_sha256_t *s, u8 out[32]) {
     }
 }
 
-static void jc_sha256(const u8 *data, u32 n, u8 out[32]) {
+/* Inline, as the terminal uses only the three above. */
+static inline void jc_sha256(const u8 *data, u32 n, u8 out[32]) {
     jc_sha256_t s;
     jc_sha256_start(&s);
     jc_sha256_add(&s, data, n);
