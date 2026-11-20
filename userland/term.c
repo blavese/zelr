@@ -168,8 +168,20 @@ static void push_line(const char *s, u8 slot) {
     slots[idx] = slot;
 }
 
+/* CMD > FILE: while one of the terminal's own commands runs with its output
+   sent to a file, what it says is kept here instead of shown, a line each as
+   it said it (unwrapped), and written when it is done. What goes wrong is
+   still shown, as a shell keeps errors on the screen. */
+static char cap_buf[65536];
+static int  cap_n, capturing;
+
 /* Prints text, breaking it at newlines and wrapping anything too wide. */
 static void print(const char *s, u8 slot) {
+    if (capturing && slot != C_WARN) {
+        for (int i = 0; s[i] && cap_n < (int)sizeof(cap_buf) - 1; i++) cap_buf[cap_n++] = s[i];
+        if (cap_n < (int)sizeof(cap_buf) - 1) cap_buf[cap_n++] = '\n';
+        return;
+    }
     char buf[COLS + 1];
     int n = 0;
     for (int i = 0; ; i++) {
@@ -1735,7 +1747,58 @@ static bool find_program(const char *name, char *out, int cap) {
 
 /* Runs one command line. Anything that is not a command is looked for as a
    program, so one can be started by typing its name. */
+/* The output of a command of the terminal's own into a file: "> FILE"
+   writes it, ">> FILE" adds to what is there. The first > outside double
+   quotes is the one. A program from /bin prints to the console, not here,
+   so it cannot be sent anywhere from this line, and says so. */
+static int run_into(char *cmdline, char *to, int append) {
+    while (*to == ' ') to++;
+    char *e = to + strlen(to);
+    while (e > to && e[-1] == ' ') *--e = 0;
+    if (!*to) { err("to a file: COMMAND > FILE, or >> to add to it"); return 1; }
+    char *argv[16];
+    int argc = split(cmdline, argv, 16);
+    if (!argc) { err("nothing to send to a file"); return 1; }
+    const command *c = command_named(argv[0]);
+    if (!c) { err("only the terminal's own commands can be sent to a file"); return 1; }
+
+    static char before[65536];
+    int had = 0;
+    if (append) {
+        had = slurp(to, before, sizeof(before));
+        if (had < 0) had = 0;
+    }
+    capturing = 1;
+    cap_n = 0;
+    c->fn(argc, argv);
+    capturing = 0;
+
+    /* What was there first, then what was said: one write either way. */
+    static char out[131072];
+    int n = 0;
+    for (int i = 0; i < had; i++) out[n++] = before[i];
+    for (int i = 0; i < cap_n; i++) out[n++] = cap_buf[i];
+    if (spit(to, out, n) != n) { err("could not write that file"); return 1; }
+    w_reset();
+    w_num((u32)cap_n);
+    w_str(append ? " bytes added to " : " bytes written to ");
+    w_str(to);
+    dim(work);
+    return 1;
+}
+
 static void run_line(char *cmdline) {
+    int quoted = 0;
+    for (char *p = cmdline; *p; p++) {
+        if (*p == '"') quoted = !quoted;
+        if (*p == '>' && !quoted) {
+            int append = p[1] == '>';
+            *p = 0;
+            run_into(cmdline, p + 1 + append, append);
+            return;
+        }
+    }
+
     char *argv[16];
     int argc = split(cmdline, argv, 16);
     if (!argc) return;
