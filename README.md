@@ -287,13 +287,15 @@ In the terminal, which is itself one of those ring 3 programs:
     diff old.txt new.txt   the fewest lines taken out and put in, with their numbers
     sort list | uniq -c    how many times each line comes
     grep -ri todo /home    every line with todo in it, any case, in every file below
+    sha256sum zelr.iso     a file's SHA-256, to compare with the one published
+    cmp a.img b.img        the first byte and line two files differ at
 
 The terminal's own commands can send what they say into a file: `ls >
 list.txt` writes it, `>>` adds to what is there, and anything that goes
 wrong is still shown rather than written. A `|` hands what one says to the
 next, which reads it where it would have read a file: `cat names.txt |
-sort | head 3`, or `help | grep file | wc` (cat, head, tail, wc, grep, sort
-and uniq read it). Tab completes commands and paths, up and down walk through history, ctrl+R
+sort | head 3`, or `help | grep file | wc` (cat, head, tail, wc, grep, sort,
+uniq and sha256sum read it). Tab completes commands and paths, up and down walk through history, ctrl+R
 looks back through it for a line with a word in it (ctrl+R again for the
 one before, Return to run it, an arrow to change it first, ctrl+G to let
 it go), and PageUp scrolls back.
@@ -610,6 +612,7 @@ instead.
     python tools/ordercheck.py  Sheet's ctrl+T: rows in order by a column, both ways, formulas moved with them
     python tools/diffcheck.py   the terminal's diff judged by what it must be, and uniq after a | and with -c
     python tools/grepcheck.py   the terminal's grep -i and -r: case aside, three folders deep, bytes passed over
+    python tools/sumcheck.py    the terminal's sha256sum against hashlib, and cmp's byte and line, on 3 MiB files
     python tools/slidecheck.py  Pictures' slideshow: in order, round again, a few seconds apart, and stopped
     python tools/choosecheck.py Files with several chosen: copied, cut, pasted, deleted and counted together
     python tools/eventcheck.py  a time in today's calendar note is said and rung in its minute, and only that one
@@ -1261,7 +1264,7 @@ executables in ring 3. The terminal is a shell that is not part of the kernel:
 listing a directory, reading a file, writing one, starting another program and
 fetching a page over TCP all go through int 0x80, and its `get` command does
 an HTTP GET from user space. It has a line editor, history kept in `/cfg`, tab
-completion over both commands and paths, and thirty-eight commands of its own.
+completion over both commands and paths, and forty-nine commands of its own.
 Settings is the interesting one, because it changes how the desktop
 looks without being able to reach the window manager at all. It writes
 `/zelr.cfg`, a plain "key value" file, and the window manager re-reads that four

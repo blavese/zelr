@@ -890,6 +890,12 @@ Added in 0.165.0, not yet in the table below:
   about:history?forget is not followed (still 3); after the server's /peek, about:history's second entry (a, a file;
   the links found as bands of accent inside the window) opens; the forget button (found by its colour) leaves 0.
 
+Added in 0.222.0, not yet in the table below:
+- **`sumcheck.py`** (gate `sumtest`, full; 9 checks). Files of known bytes on a fresh volume: empty, "abc", 55, 56
+  and 64 bytes (one padding block or two), 3 MiB and 17 random bytes, a copy with one byte changed at 2*65536+4321,
+  and its first 100000 bytes. `sha256sum` of six on one line, `echo hello | sha256sum`, and four cmp's, each `> FILE`,
+  then `notice all done`; the sums compared with hashlib's, the cmp's with the byte and line Python counts.
+
 Added in 0.221.0, not yet in the table below:
 - **`pickcheck.py`** (16 checks now): Notes' list opens on a.txt and Home goes to the folder (each later ctrl+O on the
   file open, Home before the folder's Return); Pictures' second ctrl+O lists on b.png; Paint on /home/p/a.png: ctrl+O

@@ -113,6 +113,16 @@ numbered files are still to 6048716; where they disagree with this list, this li
   built unsigned program; h264test in the machine still checks the decoder against Windows' answers in h264data.h.
   Gate 74 steps (one out, one in).
 
+### 0.222.0
+
+- **sha256sum and cmp in the terminal (10, 14)**: sha256.h's digest made a piece at a time (`jc_sha256_t`,
+  `jc_sha256_start`, `_add`, `_end`; `jc_sha256` is those three, so Settings' and crypto.subtle's sums are made the same
+  way). term.c `cmd_sha256sum`: each file read in pieces of 65535 (each ending mid-block, so the part-block path runs
+  on every file), "HEX  NAME" as other systems print it; after a |, what was piped in, named "-". `cmd_cmp`: both files
+  read side by side in 64 KiB pieces through diff's buffers (`diff_a`, `diff_b`); "A B differ: byte N, line L" counted from 1, "A ends
+  first, after byte N", "A B are the same, N bytes". Errors (no such file, a folder) are warnings, so never written
+  into a file. The README's count of the terminal's commands was 38 and is 49.
+
 ### 0.221.0
 
 - **Paint's ctrl+O, and the list opens on the file open (09a, 10, 14)**: paint.c includes ui.h (its own drawing renamed
