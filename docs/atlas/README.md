@@ -113,6 +113,14 @@ numbered files are still to 6048716; where they disagree with this list, this li
   built unsigned program; h264test in the machine still checks the decoder against Windows' answers in h264data.h.
   Gate 74 steps (one out, one in).
 
+### 0.203.0
+
+- **The terminal's > and >> (10, 14)**: term.c `run_line` takes the first `>` outside double quotes; `run_into` runs
+  the command before it (only the terminal's own: a program from /bin prints to the console, and is refused) with
+  `capturing` set, so `print` keeps every line said (not `C_WARN`, the errors) in `cap_buf` (64 KiB) unwrapped instead
+  of showing it, then writes the file with one `spit` (what was there first, for `>>`), "N bytes written to FILE" or
+  "added to". redirectcheck, new (7), gate step `redirecttest` (99 steps).
+
 ### 0.202.0
 
 - **Alarms (07, 10, 14)**: /home/alarms, "HH:MM TEXT" a line. wm.c `alarms_look`, with `day_note` in the once a second

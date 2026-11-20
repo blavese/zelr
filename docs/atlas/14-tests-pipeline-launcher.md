@@ -888,6 +888,13 @@ Added in 0.165.0, not yet in the table below:
   about:history?forget is not followed (still 3); after the server's /peek, about:history's second entry (a, a file;
   the links found as bands of accent inside the window) opens; the forget button (found by its colour) leaves 0.
 
+Added in 0.203.0, not yet in the table below:
+- **`redirectcheck.py`** (gate `redirecttest`, full; 7 checks). Typed into the desktop's terminal: `echo one >
+  /home/e.txt`, `echo two >> /home/e.txt`, `ls / > /home/root.txt`, `help > /home/help.txt`, `cat /home/nothing >
+  /home/err.txt`, `/bin/calc > /home/calc.txt`, then `notice all done` (the console's sign that the rest ran). Read
+  back off the disk: e.txt "one\ntwo\n"; root.txt has home and bin; help.txt has notice, alarm and echo; err.txt is
+  empty; calc.txt is not there.
+
 Added in 0.202.0, not yet in the table below:
 - **`alarmcheck.py`** (gate `alarmtest`, full; 6 checks). q35 with intel-hda on a wav audiodev, HOST_CLOCK (the zone is
   UTC, so the host's UTC minute is the machine's). `alarm HH:MM time to stretch` for the coming minute (the one after

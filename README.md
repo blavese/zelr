@@ -245,7 +245,9 @@ In the terminal, which is itself one of those ring 3 programs:
     run hello              start another program and wait for it
     theme amber            and it is remembered next time
 
-Tab completes commands and paths, up and down walk through history, ctrl+R
+The terminal's own commands can send what they say into a file: `ls >
+list.txt` writes it, `>>` adds to what is there, and anything that goes
+wrong is still shown rather than written. Tab completes commands and paths, up and down walk through history, ctrl+R
 looks back through it for a line with a word in it (ctrl+R again for the
 one before, Return to run it, an arrow to change it first, ctrl+G to let
 it go), and PageUp scrolls back.
@@ -551,6 +553,7 @@ instead.
     python tools/helpcheck.py   Help's list of keys narrowed by a word, a key's name and a program's
     python tools/windowshotcheck.py alt+Print Screen saves the front window alone, decoded and counted
     python tools/alarmcheck.py  an alarm set for the coming minute is said in it, once, and its ring heard
+    python tools/redirectcheck.py the terminal's > and >>: files written, added to, errors kept on the screen
     python tools/downloadcheck.py  a 12 MB download fetched in parts with Range, read back byte for byte
     python tools/notescheck.py  select all, copy, paste, save, undo, find and replace in the editor, from its keys
     python tools/timecheck.py   set the time zone from the shell and in Settings, read the clocks and a file's time
