@@ -138,14 +138,16 @@ word console, or reached before the desktop) asks for the password before
 it takes a command, showing stars for what is typed. In the editor, ctrl and h opens a
 bar to find a word in the file and replace it, one at a time or every one at
 once (ctrl and r), whatever its case; ctrl and o opens another file, chosen
-from a list of the folder's folders and files (Return opens, Backspace goes
-up, Escape lets it go; letters typed choose the name they begin, or are a
+from a list of the folder's folders and files, the one open chosen first
+(Return opens, Backspace goes up, Escape lets it go; letters typed choose the name they begin, or are a
 path, a new file's too), and says so first if the one open has changes not
 saved; ctrl and g goes to a line by its
 number, and Return starts the new line with the spaces the one before began
 with. Paint keeps what is drawn: ctrl and s
 saves it as a PNG (`paint FILE.png` opens one to draw on, and saves back to
-it), and ctrl and z takes back the last stroke. Beside the brushes are a
+it), ctrl and o opens another, chosen from a list of the folder's PNG files
+(said first when what is drawn is not saved), and ctrl and z takes back the
+last stroke. Beside the brushes are a
 line, a rectangle and an ellipse, each dragged out and shown as it is
 dragged, and a fill that spreads the colour over what it is clicked on
 (also B, L, R, E and F). T puts words on the paper: click and type, in the
@@ -611,7 +613,7 @@ instead.
     python tools/slidecheck.py  Pictures' slideshow: in order, round again, a few seconds apart, and stopped
     python tools/choosecheck.py Files with several chosen: copied, cut, pasted, deleted and counted together
     python tools/eventcheck.py  a time in today's calendar note is said and rung in its minute, and only that one
-    python tools/pickcheck.py   the file chooser in Notes, Sheet and Pictures: listed, typed, into folders, let go
+    python tools/pickcheck.py   the file chooser in Notes, Sheet, Pictures and Paint: listed, typed, into folders, let go
     python tools/wordscheck.py  Paint's words, the saved PNG against face.h drawn here, pixel for pixel
     python tools/downloadcheck.py  a 12 MB download fetched in parts with Range, read back byte for byte
     python tools/notescheck.py  select all, copy, paste, save, undo, find and replace in the editor, from its keys

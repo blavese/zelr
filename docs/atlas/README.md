@@ -113,6 +113,18 @@ numbered files are still to 6048716; where they disagree with this list, this li
   built unsigned program; h264test in the machine still checks the decoder against Windows' answers in h264data.h.
   Gate 74 steps (one out, one in).
 
+### 0.221.0
+
+- **Paint's ctrl+O, and the list opens on the file open (09a, 10, 14)**: paint.c includes ui.h (its own drawing renamed
+  `pr_rect`/`pr_frame`/`pr_line`/`flood`, out of the toolkit's way); `choose_open` keeps the paper in `behind` while the
+  chooser is drawn over it, `choose_done` puts it back and, on a pick, clears the paper, opens the PNG (`open_picture`)
+  and makes it what ctrl+S saves to; ctrl+Z then has nothing to take back. `unsaved` (set in `keep_for_undo`, which every
+  change starts with; cleared by a save or an open) and `open_armed` give Notes' guard: the first ctrl+O says "not saved:
+  ctrl+S keeps it, ctrl+O again opens another anyway". ctrl+O also as the control character 15. ui.h
+  `ui_chooser_open_at` (a name chosen in the list when it is there) and `ui_chooser_open_on` (the folder of a path, its
+  file chosen; no folder lists /home): Notes, Sheet and Paint open on their file, Pictures on the picture shown. Help's
+  row. pickcheck 13 to 16.
+
 ### 0.220.0
 
 - **The chooser takes words, and Sheet and Pictures use it (09a, 10, 14)**: ui.h `ui_chooser.typed`: a printable key

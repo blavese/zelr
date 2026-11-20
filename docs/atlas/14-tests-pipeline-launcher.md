@@ -890,6 +890,14 @@ Added in 0.165.0, not yet in the table below:
   about:history?forget is not followed (still 3); after the server's /peek, about:history's second entry (a, a file;
   the links found as bands of accent inside the window) opens; the forget button (found by its colour) leaves 0.
 
+Added in 0.221.0, not yet in the table below:
+- **`pickcheck.py`** (16 checks now): Notes' list opens on a.txt and Home goes to the folder (each later ctrl+O on the
+  file open, Home before the folder's Return); Pictures' second ctrl+O lists on b.png; Paint on /home/p/a.png: ctrl+O
+  lists on a.png, Down and Return open b.png, `c` and ctrl+Z (a change, taken back) make the next ctrl+O say "not saved"
+  and the one after list on b.png, ctrl+O lets it go ("chose nothing"), ctrl+S saves b.png; b.png read off the disk is
+  640x362 with blue at 5,5 and 39,29 and paper at 41,5 and 300,200 (nothing of the list left on it). Paint's lines are
+  printed if its guard check fails.
+
 Added in 0.220.0, not yet in the table below:
 - **`pickcheck.py`** (13 checks now): after Notes' checks, a path typed (/home/docs/new.txt, a new file, a letter and
   saved), "b" typed choosing b.txt; Sheet on /home/s/one.csv, its list one.csv and two.csv and not notes.txt, two.csv
