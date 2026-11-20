@@ -17,6 +17,7 @@
 #include "zelr.h"
 #include "zones.h"
 #include "draw.h"
+#include "sha256.h"
 
 #define COLS      160
 #define MAX_LINES 400
@@ -1014,6 +1015,113 @@ static void cmd_diff(int argc, char **argv) {
     }
 #undef LCS
     if (!said && !capturing) dim("the same");
+}
+
+/* sha256sum FILE...: each file's SHA-256 in hex, then its name, as other
+   systems print it, so that a sum taken elsewhere can be compared by eye
+   or by a program; with no file, what was piped in, named "-". A file is
+   read a piece at a time, so its size does not matter. */
+static void sum_say(const u8 d[32], const char *name) {
+    const char *digits = "0123456789abcdef";
+    w_reset();
+    for (int k = 0; k < 32; k++) { w_ch(digits[d[k] >> 4]); w_ch(digits[d[k] & 15]); }
+    w_str("  ");
+    w_str(name);
+    say(work);
+}
+
+static void not_a_file(const char *path, const char *why) {
+    w_reset();
+    w_str(path);
+    w_str(why);
+    err(work);
+}
+
+static void cmd_sha256sum(int argc, char **argv) {
+    u8 d[32];
+    jc_sha256_t s;
+    if (argc < 2 && pipe_n >= 0) {
+        jc_sha256_start(&s);
+        jc_sha256_add(&s, (const u8 *)pipe_buf, (u32)pipe_n);
+        jc_sha256_end(&s, d);
+        sum_say(d, "-");
+        return;
+    }
+    if (argc < 2) { need("sha256sum FILE..."); return; }
+    for (int i = 1; i < argc; i++) {
+        zelr_stat st;
+        if (stat(argv[i], &st) != 0) { not_a_file(argv[i], ": no such file"); continue; }
+        if (st.is_dir) { not_a_file(argv[i], ": a folder"); continue; }
+        int fd = open(argv[i], O_READ);
+        if (fd < 0) { not_a_file(argv[i], ": cannot open it"); continue; }
+        /* Pieces one short of the buffer, as read_all reads: each ends
+           mid-block, so the way a short read from a stick would leave the
+           digest is the way every file goes. */
+        jc_sha256_start(&s);
+        for (;;) {
+            int n = fread(fd, io, (int)sizeof(io) - 1);
+            if (n <= 0) break;
+            jc_sha256_add(&s, (const u8 *)io, (u32)n);
+        }
+        close(fd);
+        jc_sha256_end(&s, d);
+        sum_say(d, argv[i]);
+    }
+}
+
+/* cmp FILE FILE: where two files first differ, by byte and line counted
+   from 1 as other systems count them, or that one ends first, or that they
+   are the same. Read a piece at a time, so their size does not matter. */
+static void cmd_cmp(int argc, char **argv) {
+    if (argc < 3) { need("cmp FILE FILE"); return; }
+    for (int i = 1; i <= 2; i++) {
+        zelr_stat st;
+        if (stat(argv[i], &st) != 0) { not_a_file(argv[i], ": no such file"); return; }
+        if (st.is_dir) { not_a_file(argv[i], ": a folder"); return; }
+    }
+    int fa = open(argv[1], O_READ);
+    int fb = fa < 0 ? -1 : open(argv[2], O_READ);
+    if (fa < 0 || fb < 0) { if (fa >= 0) close(fa); err("cannot open them"); return; }
+    u32 at = 0, line = 1;
+    for (;;) {
+        /* As much of b as came of a, so the two pieces line up. */
+        int na = fread(fa, diff_a, IO_BUF);
+        if (na < 0) na = 0;
+        int nb = 0;
+        while (nb < na) {
+            int n = fread(fb, diff_b + nb, na - nb);
+            if (n <= 0) break;
+            nb += n;
+        }
+        w_reset();
+        if (na == 0) {
+            /* a has ended: b too, or b is longer. */
+            if (fread(fb, diff_b, 1) > 0) {
+                w_str(argv[1]); w_str(" ends first, after byte "); w_num(at);
+            } else {
+                w_str(argv[1]); w_ch(' '); w_str(argv[2]); w_str(" are the same, ");
+                w_num(at); w_str(at == 1 ? " byte" : " bytes");
+            }
+            say(work);
+            break;
+        }
+        int k = 0;
+        while (k < nb && diff_a[k] == diff_b[k]) { if (diff_a[k] == '\n') line++; k++; }
+        if (k < nb) {
+            w_str(argv[1]); w_ch(' '); w_str(argv[2]); w_str(" differ: byte "); w_num(at + (u32)k + 1);
+            w_str(", line "); w_num(line);
+            say(work);
+            break;
+        }
+        if (nb < na) {
+            w_str(argv[2]); w_str(" ends first, after byte "); w_num(at + (u32)nb);
+            say(work);
+            break;
+        }
+        at += (u32)na;
+    }
+    close(fa);
+    close(fb);
 }
 
 /* sort [FILE]: the lines in byte order, of a file or of what was piped in. */
@@ -2017,6 +2125,8 @@ static const command COMMANDS[] = {
     { "diff",    cmd_diff,    "FILE FILE",     "the lines two files differ by" },
     { "find",    cmd_find,    "NAME [WHERE]",  "files whose name contains it" },
     { "hex",     cmd_hex,     "FILE [BYTES]",  "what a file really holds" },
+    { "sha256sum", cmd_sha256sum, "FILE...",   "each file's SHA-256, to compare with a sum taken elsewhere" },
+    { "cmp",     cmd_cmp,     "FILE FILE",     "the first byte two files differ at" },
     { "wc",      cmd_wc,      "FILE",          "lines, words and bytes" },
     { "stat",    cmd_stat,    "PATH",          "size, kind, and where it is kept" },
     { "write",   cmd_write,   "FILE TEXT",     "create or overwrite" },

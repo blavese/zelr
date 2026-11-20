@@ -4,7 +4,9 @@
 /* SHA-256, from FIPS 180-4. The browser's crypto.subtle digests with it
    (jscrypto.h) and Settings hashes the screen lock's password with it; the
    kernel has its own (kernel/sha256.c), which checks the password, and the
-   two must agree, which the self test's [windows] and lockcheck.py see. */
+   two must agree, which the self test's [windows] and lockcheck.py see.
+   The terminal's sha256sum feeds it a file a piece at a time
+   (jc_sha256_start, _add, _end), which is what jc_sha256 is made of. */
 
 /* --- SHA-256 ------------------------------------------------------------------ */
 
@@ -39,20 +41,54 @@ static void jc_sha256_block(u32 h[8], const u8 *p) {
     h[0] += a; h[1] += b; h[2] += c; h[3] += d; h[4] += e; h[5] += f; h[6] += g; h[7] += k;
 }
 
-static void jc_sha256(const u8 *data, u32 n, u8 out[32]) {
-    u32 h[8] = { 0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19 };
+/* A digest being made: the state, the part of a block not yet full, and
+   how many bytes have gone in (the padding ends with it, in bits). */
+typedef struct {
+    u32 h[8];
+    u8  part[64];
+    u32 npart;
+    unsigned long long total;
+} jc_sha256_t;
+
+static void jc_sha256_start(jc_sha256_t *s) {
+    static const u32 H0[8] = { 0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
+                               0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19 };
+    for (int k = 0; k < 8; k++) s->h[k] = H0[k];
+    s->npart = 0;
+    s->total = 0;
+}
+
+static void jc_sha256_add(jc_sha256_t *s, const u8 *data, u32 n) {
+    s->total += n;
     u32 i = 0;
-    for (; i + 64 <= n; i += 64) jc_sha256_block(h, data + i);
-    u8 last[128];
-    u32 r = n - i, pad = r < 56 ? 64 : 128;
-    for (u32 k = 0; k < pad; k++) last[k] = k < r ? data[i + k] : 0;
-    last[r] = 0x80;
-    unsigned long long bits = (unsigned long long)n * 8;
-    for (int k = 0; k < 8; k++) last[pad - 1 - k] = (u8)(bits >> (8 * k));
-    for (u32 k = 0; k < pad; k += 64) jc_sha256_block(h, last + k);
-    for (int k = 0; k < 8; k++) {
-        out[4 * k] = (u8)(h[k] >> 24); out[4 * k + 1] = (u8)(h[k] >> 16);
-        out[4 * k + 2] = (u8)(h[k] >> 8); out[4 * k + 3] = (u8)h[k];
+    if (s->npart) {
+        while (i < n && s->npart < 64) s->part[s->npart++] = data[i++];
+        if (s->npart < 64) return;
+        jc_sha256_block(s->h, s->part);
+        s->npart = 0;
     }
+    for (; i + 64 <= n; i += 64) jc_sha256_block(s->h, data + i);
+    while (i < n) s->part[s->npart++] = data[i++];
+}
+
+static void jc_sha256_end(jc_sha256_t *s, u8 out[32]) {
+    u8 last[128];
+    u32 r = s->npart, pad = r < 56 ? 64 : 128;
+    for (u32 k = 0; k < pad; k++) last[k] = k < r ? s->part[k] : 0;
+    last[r] = 0x80;
+    unsigned long long bits = s->total * 8;
+    for (int k = 0; k < 8; k++) last[pad - 1 - k] = (u8)(bits >> (8 * k));
+    for (u32 k = 0; k < pad; k += 64) jc_sha256_block(s->h, last + k);
+    for (int k = 0; k < 8; k++) {
+        out[4 * k] = (u8)(s->h[k] >> 24); out[4 * k + 1] = (u8)(s->h[k] >> 16);
+        out[4 * k + 2] = (u8)(s->h[k] >> 8); out[4 * k + 3] = (u8)s->h[k];
+    }
+}
+
+static void jc_sha256(const u8 *data, u32 n, u8 out[32]) {
+    jc_sha256_t s;
+    jc_sha256_start(&s);
+    jc_sha256_add(&s, data, n);
+    jc_sha256_end(&s, out);
 }
 
