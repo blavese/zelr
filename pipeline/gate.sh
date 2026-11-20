@@ -685,6 +685,7 @@ if [ "$MODE" = "screen" ] || [ "$MODE" = "full" ]; then
   shuffletest() { keep timeout 600 python tools/shufflecheck.py; }
   shapetest() { keep timeout 600 python tools/shapecheck.py; }
   helptest() { keep timeout 600 python tools/helpcheck.py; }
+  windowshottest() { keep timeout 600 python tools/windowshotcheck.py; }
   downloadtest() { keep timeout 900 python tools/downloadcheck.py; }
 
   # The second boot of a machine, which is the one nothing else reaches:
@@ -819,6 +820,7 @@ if [ "$MODE" = "screen" ] || [ "$MODE" = "full" ]; then
   par_start "music repeats and shuffles its list" shuffletest
   par_start "paint draws lines, rectangles, ellipses and fills" shapetest
   par_start "help lists every key, narrowed as you type" helptest
+  par_start "alt+print screen saves the front window alone" windowshottest
   par_start "a download bigger than the browser holds is saved whole" downloadtest
   par_start "a machine still starts once it has formatted its disk" boottest
   par_start "ctrl+f finds a word that is on the screen" findtest

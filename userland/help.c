@@ -27,6 +27,7 @@ static const row_t ROWS[] = {
     { "desktop", "alt+Escape", "the desktop left for the console" },
     { "desktop", "ctrl+F", "a word looked for on the screen" },
     { "desktop", "Print Screen", "the screen saved as a PNG in /home/pictures" },
+    { "desktop", "alt+Print Screen", "the front window alone saved as a PNG in /home/pictures" },
     { "terminal", "Tab", "a command or a path finished" },
     { "terminal", "Up, Down", "back and on through what was typed" },
     { "terminal", "ctrl+R", "back through what was typed for a word; Return runs it, ctrl+G lets go" },

@@ -4862,6 +4862,24 @@ static bool wm_key(int c) {
     /* Print Screen saves what the screen shows, as it was drawn last: the
        frame is the back buffer. Said on the console (and so the serial
        line), which is where a harness reads it. */
+    if (KEY_CODE(c) == KEY_PRINT && (c & KEY_MOD_ALT)) {
+        /* With Alt, the front window alone, frame and all. */
+        window_t *w = focused_window();
+        const char *why = "there is no window in front";
+        const char *path = w ? shot_save_rect(w->x, w->y, wm_outer_w(w), wm_outer_h(w), &why) : 0;
+        char line[112];
+        if (path) {
+            kprintf("desktop: the window is saved in %s\n", path);
+            const char *name = path;
+            for (const char *p = path; *p; p++) if (*p == '/') name = p + 1;
+            kformat(line, sizeof(line), "saved %s in pictures", name);
+        } else {
+            kprintf("desktop: the window was not saved: %s\n", why);
+            kformat(line, sizeof(line), "the window was not saved: %s", why);
+        }
+        notice(line);
+        return true;
+    }
     if (KEY_CODE(c) == KEY_PRINT) {
         const char *why = "";
         const char *path = shot_save(&why);

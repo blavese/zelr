@@ -146,6 +146,10 @@ void keyboard_byte(u8 sc) {
     if (sc >= 0x3B && sc <= 0x44) { push(KEY_F1 + (sc - 0x3B)); return; }
     if (sc == 0x57) { push(KEY_F1 + 10); return; }
     if (sc == 0x58) { push(KEY_F1 + 11); return; }
+    /* SysRq: what Print Screen sends while Alt is held, which push stamps on
+       it, so alt+Print Screen is Print Screen with Alt, as it is to a USB
+       keyboard. */
+    if (sc == 0x54) { push(KEY_PRINT); return; }
 
     if (sc >= 128) return;
     char c = shift ? MAP_SHIFT[sc] : MAP[sc];

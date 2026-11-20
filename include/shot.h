@@ -12,6 +12,10 @@
    (no memory, no disk); `why` says which. */
 const char *shot_save(const char **why);
 
+/* The same for a part of the screen, the front window (alt+Print Screen):
+   "window DATE.png". */
+const char *shot_save_rect(int x, int y, int w, int h, const char **why);
+
 /* Deflate (RFC 1951) of n bytes into out, a single block with the fixed
    codes: the size written, or 0 when cap is too small. For the self test,
    which inflates it back. */

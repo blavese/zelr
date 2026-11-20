@@ -245,6 +245,46 @@ static const u32 *screen_row(u32 y, void *arg) {
     return fb_row((int)y);
 }
 
+static int part_x, part_y;
+static const u32 *part_row(u32 y, void *arg) {
+    (void)arg;
+    return fb_row((int)y + part_y) + part_x;
+}
+
+static const char *shot_name(const char *what, char *path, u32 cap) {
+    zone_time_t z;
+    vfs_mkdir("/home");
+    vfs_mkdir("/home/pictures");
+    if (zone_now(&z))
+        kformat(path, cap, "/home/pictures/%s %04d-%02d-%02d %02d.%02d.%02d.png", what,
+                z.local.year, z.local.month, z.local.day, z.local.hour, z.local.minute, z.local.second);
+    else
+        kformat(path, cap, "/home/pictures/%s.png", what);
+    return path;
+}
+
+const char *shot_save_rect(int x, int y, int w, int h, const char **why) {
+    static char path[96];
+    *why = "";
+    if (!fb_active()) { *why = "there is no screen"; return 0; }
+    /* Kept to the screen: a window can reach past its edges. */
+    if (x < 0) { w += x; x = 0; }
+    if (y < 0) { h += y; y = 0; }
+    if (x + w > (int)fb_width()) w = (int)fb_width() - x;
+    if (y + h > (int)fb_height()) h = (int)fb_height() - y;
+    if (w <= 0 || h <= 0) { *why = "none of it is on the screen"; return 0; }
+    shot_name("window", path, sizeof(path));
+    part_x = x;
+    part_y = y;
+    u32 len = 0;
+    u8 *png = shot_png((u32)w, (u32)h, part_row, 0, &len);
+    if (!png) { *why = "not enough memory"; return 0; }
+    bool ok = vfs_write(path, png, len);
+    kfree(png);
+    if (!ok) { *why = "the disk would not take it"; return 0; }
+    return path;
+}
+
 const char *shot_save(const char **why) {
     static char path[96];
     *why = "";
