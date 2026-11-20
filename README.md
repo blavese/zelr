@@ -113,7 +113,7 @@ A terminal opens, over a desktop with icons down the left of it. Click the
 name at the left of the dock, or the wallpaper, for the launcher: the
 programs by kind -- a file manager, an editor, paint, settings, a system
 monitor, a music player, a calculator, a calendar, a clock, a web browser,
-a picture viewer, two card games, and
+a picture viewer, Help (every key, narrowed as you type), two card games, and
 what the machine is made of, with a field in it that narrows the list as
 you type. Press
 ctrl and f, or the magnifier in the tray, to look for a word that is on the
@@ -544,6 +544,7 @@ instead.
     python tools/wallcheck.py   a picture made the wallpaper from Pictures, seen by colour, and taken away
     python tools/shufflecheck.py Music's repeat goes round the list, its shuffle plays each once
     python tools/shapecheck.py  Paint's line, rectangle, fill and ellipse, read back from the PNG it saves
+    python tools/helpcheck.py   Help's list of keys narrowed by a word, a key's name and a program's
     python tools/downloadcheck.py  a 12 MB download fetched in parts with Range, read back byte for byte
     python tools/notescheck.py  select all, copy, paste, save, undo, find and replace in the editor, from its keys
     python tools/timecheck.py   set the time zone from the shell and in Settings, read the clocks and a file's time

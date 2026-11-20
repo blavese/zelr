@@ -113,6 +113,15 @@ numbered files are still to 6048716; where they disagree with this list, this li
   built unsigned program; h264test in the machine still checks the decoder against Windows' answers in h264data.h.
   Gate 74 steps (one out, one in).
 
+### 0.200.0
+
+- **Help (10, 14)**: userland/help.c, in the launcher's System list (/bin/help; builtin.S/.c, shotcheck's copy of the
+  launcher). `ROWS[]` is every key the desktop and its programs take, where, the keys and what they do (70), kept by
+  hand beside the programs: **a key changed in a program changes here too**. A filter field has the keyboard from the
+  start; a row is shown when where, keys or what has the text (case aside); Up, Down, Page Up and Page Down and the
+  wheel scroll. "help: N of M shown; the first, WHERE KEYS: WHAT" on the console when it changes. helpcheck, new (6),
+  gate step `helptest` (96 steps).
+
 ### 0.199.0
 
 - **Paint's shapes and fill (10, 14)**: paint.c `tool` (B brush, L `line`, R `rectangle`, E `ellipse`, F `fill`;

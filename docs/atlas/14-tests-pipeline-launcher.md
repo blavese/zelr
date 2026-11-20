@@ -888,6 +888,13 @@ Added in 0.165.0, not yet in the table below:
   about:history?forget is not followed (still 3); after the server's /peek, about:history's second entry (a, a file;
   the links found as bands of accent inside the window) opens; the forget button (found by its colour) leaves 0.
 
+Added in 0.200.0, not yet in the table below:
+- **`helpcheck.py`** (gate `helptest`, full; 6 checks). The dock's name clicked (deskcheck's `DOCK_BADGE`), "help" and
+  Return in the launcher ("help: N of N shown", over 50);
+  "zip" (the last line after typing stops: "1 of N shown; the first, files ctrl+K: make a zip"); backspaces, "alt+" (8
+  to 10, alt+Tab first); "zebra" (0); each of desktop, terminal, files, notes, paint, pictures, music, calendar,
+  clock and browser typed alone leaves two rows or more.
+
 Added in 0.199.0, not yet in the table below:
 - **`shapecheck.py`** (gate `shapetest`, full; 9 checks). /home/pic/s.png, a 20x20 blue mark, found on the screen
   for the paper's top left (paintcheck's `box_of`). l, a drag from (100,60) by way of (200,100) to (300,60); r, drag
