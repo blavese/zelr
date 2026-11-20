@@ -174,6 +174,33 @@ static val arith(val a, char op, val b) {
     return number(z);
 }
 
+/* A reference as a formula has it: letters then digits, each part with a $
+   before it when it stays put as the formula is copied ($A$1, A$1, $A1).
+   Its length, or 0 when s does not start with one; in range is whether it
+   names a cell on the sheet (one letter, a row from 1 to 200). */
+typedef struct { int len, row, col, row_fixed, col_fixed, in_range; } ref_t;
+
+static int ref_at(const char *s, ref_t *f) {
+    int i = 0, l0, d0;
+    memset(f, 0, sizeof(*f));
+    if (s[i] == '$') { f->col_fixed = 1; i++; }
+    l0 = i;
+    while (is_letter(s[i])) i++;
+    if (i == l0) return 0;
+    int letters = i - l0;
+    if (s[i] == '$') { f->row_fixed = 1; i++; }
+    d0 = i;
+    while (is_digit(s[i])) i++;
+    if (i == d0) return 0;
+    int n = 0;
+    for (int k = d0; k < i && k < d0 + 6; k++) n = n * 10 + (s[k] - '0');
+    f->len = i;
+    f->col = upper(s[l0]) - 'A';
+    f->row = n - 1;
+    f->in_range = letters == 1 && i - d0 <= 4 && n >= 1 && n <= NROW;
+    return i;
+}
+
 /* A cell's name, B3 in either case: its row and column, or 0 when it is past
    the sheet's edges. */
 static int cell_named(const char *s, int letters, int digits, int *r, int *c) {
@@ -228,18 +255,19 @@ static val call(parse_t *P, const char *name, int len) {
     if (*P->p != ')') {
         for (;;) {
             skip(P);
-            int l1, d1, l2, d2, r1, c1, r2, c2;
+            ref_t f1, f2;
             const char *s = P->p;
-            int n1 = word_at(s, &l1, &d1);
+            int n1 = ref_at(s, &f1);
             const char *colon = s + n1;
             while (*colon == ' ') colon++;
-            if (n1 && d1 && *colon == ':') {
+            if (n1 && *colon == ':') {
                 const char *t = colon + 1;
                 while (*t == ' ') t++;
-                int n2 = word_at(t, &l2, &d2);
-                if (!n2 || !d2) return syntax(P);
+                int n2 = ref_at(t, &f2);
+                if (!n2) return syntax(P);
                 P->p = t + n2;
-                if (!cell_named(s, l1, d1, &r1, &c1) || !cell_named(t, l2, d2, &r2, &c2)) take(&a, error("#ref"));
+                int r1 = f1.row, c1 = f1.col, r2 = f2.row, c2 = f2.col;
+                if (!f1.in_range || !f2.in_range) take(&a, error("#ref"));
                 else {
                     if (r1 > r2) { int x = r1; r1 = r2; r2 = x; }
                     if (c1 > c2) { int x = c1; c1 = c2; c2 = x; }
@@ -283,19 +311,25 @@ static val atom(parse_t *P) {
         P->p += n;
         return number(d);
     }
-    if (is_letter(*s)) {
-        int l, d;
-        int n = word_at(s, &l, &d);
+    /* What a reference copied off the sheet's edge was written as. */
+    if (s[0] == '#' && upper(s[1]) == 'R' && upper(s[2]) == 'E' && upper(s[3]) == 'F' && !is_letter(s[4])) {
+        P->p = s + 4;
+        return error("#ref");
+    }
+    ref_t f;
+    int n = ref_at(s, &f);
+    if (n) {
         P->p = s + n;
-        if (!d) {
-            skip(P);
-            if (*P->p != '(') return error("#name");
-            P->p++;
-            return call(P, s, l);
-        }
-        int r, c;
-        if (!cell_named(s, l, d, &r, &c)) return error("#ref");
-        return cell_value(r, c);
+        return f.in_range ? cell_value(f.row, f.col) : error("#ref");
+    }
+    if (is_letter(*s)) {
+        int l = 0;
+        while (is_letter(s[l])) l++;
+        P->p = s + l;
+        skip(P);
+        if (*P->p != '(') return error("#name");
+        P->p++;
+        return call(P, s, l);
     }
     return syntax(P);
 }
@@ -365,6 +399,38 @@ static void recalc(void) {
     pass_no++;
     for (int r = 0; r < NROW; r++)
         for (int c = 0; c < NCOL; c++) cell_value(r, c);
+}
+
+/* A formula as it reads copied dr rows down and dc columns along: each
+   reference moves with it but for a part with a $ before it, and one moved
+   off the sheet is written #ref, as it then says. Words and numbers are
+   copied as they are. */
+static void moved(const char *src, int dr, int dc, char *out, int cap) {
+    int n = 0;
+    if (src[0] != '=') { strncpy(out, src, cap - 1); out[cap - 1] = 0; return; }
+    for (int i = 0; src[i] && n < cap - 1; ) {
+        ref_t f;
+        int after_word = i > 0 && (is_letter(src[i - 1]) || is_digit(src[i - 1]) || src[i - 1] == '.'
+                                   || src[i - 1] == '#');
+        if (!after_word && ref_at(src + i, &f) && f.in_range) {
+            int r = f.row + (f.row_fixed ? 0 : dr), c = f.col + (f.col_fixed ? 0 : dc);
+            char ref[16];
+            int k = 0;
+            if (r < 0 || r >= NROW || c < 0 || c >= NCOL) {
+                for (const char *p = "#ref"; *p; p++) ref[k++] = *p;
+            } else {
+                if (f.col_fixed) ref[k++] = '$';
+                ref[k++] = (char)('A' + c);
+                if (f.row_fixed) ref[k++] = '$';
+                k += utoa((u32)(r + 1), ref + k);
+            }
+            for (int j = 0; j < k && n < cap - 1; j++) out[n++] = ref[j];
+            i += f.len;
+            continue;
+        }
+        out[n++] = src[i++];
+    }
+    out[n] = 0;
 }
 
 /* What a cell shows. */
@@ -488,6 +554,8 @@ enum { M_GRID, M_EDIT, M_GOTO, M_OPEN };
 static int mode = M_GRID;
 static int row, col, top, left;
 static int tab_from = -1;       /* the column a row of Tabs began in, for Return */
+static char copied[TEXT_MAX];   /* what ctrl+C took, and from where, so a paste can move it */
+static int copied_r = -1, copied_c;
 static char edit_buf[TEXT_MAX];
 static char ask_buf[PATH_MAX];
 static ui_field edit, ask;
@@ -583,14 +651,29 @@ static void grid_key(u32 k) {
     else if (chord(k, 'o')) ask_for(M_OPEN);
     else if (chord(k, 'c') || chord(k, 'x')) {
         clip_set(cells[row][col].text, strlen(cells[row][col].text));
-        if (chord(k, 'x')) set_text("");
+        strcpy(copied, cells[row][col].text);
+        copied_r = row;
+        copied_c = col;
+        if (chord(k, 'x')) { set_text(""); copied_r = -1; }
     } else if (chord(k, 'v')) {
-        char got[TEXT_MAX];
+        /* What this sheet copied moves its references to where it lands; what
+           came from anywhere else goes in as it is. */
+        char got[TEXT_MAX], put[TEXT_MAX];
         int n = clip_get(got, (int)sizeof(got) - 1);
         if (n < 0) n = 0;
         got[n] = 0;
         for (int i = 0; i < n; i++) if (got[i] == '\n' || got[i] == '\r') { got[i] = 0; break; }
-        set_text(got);
+        if (copied_r >= 0 && !strcmp(got, copied)) moved(got, row - copied_r, col - copied_c, put, sizeof(put));
+        else strcpy(put, got);
+        set_text(put);
+    } else if (chord(k, 'd') && row > 0) {
+        char put[TEXT_MAX];
+        moved(cells[row - 1][col].text, 1, 0, put, sizeof(put));
+        set_text(put);
+    } else if (chord(k, 'r') && col > 0) {
+        char put[TEXT_MAX];
+        moved(cells[row][col - 1].text, 0, 1, put, sizeof(put));
+        set_text(put);
     } else if (!KEY_CTRL(k) && !KEY_IS_SPECIAL(k) && k >= 32 && k < 127) {
         begin_edit(0);
         ui_field_key(&edit, k);
