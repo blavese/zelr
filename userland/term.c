@@ -1234,6 +1234,154 @@ static void w_two(int v) { w_ch((char)('0' + v / 10 % 10)); w_ch((char)('0' + v 
 /* The date and time where the machine is, as the kernel shell's date says
    it, from /sys/time: "Sunday 18 October 2026, 21:05:33 in Australia/Sydney
    (UTC+11)". */
+/* A number typed as a word, or -1. */
+static int word_num(const char *s) {
+    int v = 0;
+    if (!*s) return -1;
+    for (; *s; s++) {
+        if (*s < '0' || *s > '9' || v > 100000) return -1;
+        v = v * 10 + (*s - '0');
+    }
+    return v;
+}
+
+/* A line said without what it ends with in spaces. */
+static void say_trimmed(void) {
+    while (work_n && work[work_n - 1] == ' ') work[--work_n] = 0;
+    say(work);
+}
+
+/* cal, or cal MONTH YEAR: the month, Monday first, laid out as cal always
+   has, twenty columns wide with the title in the middle of them. */
+static void cmd_cal(int argc, char **argv) {
+    static const char *const MONTHS[12] = { "January", "February", "March", "April", "May", "June", "July",
+                                            "August", "September", "October", "November", "December" };
+    int y = 0, m = 0;
+    if (argc >= 3) {
+        m = word_num(argv[1]);
+        y = word_num(argv[2]);
+    } else if (argc == 2) {
+        err("cal, or cal MONTH YEAR, as cal 2 2028");
+        return;
+    } else {
+        static char t[512];
+        int n = slurp("/sys/time", t, (int)sizeof(t) - 1);
+        const char *local = 0;
+        if (n > 0) { t[n] = 0; local = time_line(t, "local"); }
+        if (!local || strlen(local) < 10) { err("cannot read the clock"); return; }
+        y = digits(local, 4);
+        m = digits(local + 5, 2);
+    }
+    if (m < 1 || m > 12 || y < 1 || y > 9999) { err("a month is 1 to 12, and a year 1 to 9999"); return; }
+    static const int DAYS[12] = { 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 };
+    int days = DAYS[m - 1];
+    if (m == 2 && ((y % 4 == 0 && y % 100 != 0) || y % 400 == 0)) days = 29;
+
+    char title[32];
+    int tn = 0;
+    for (const char *p = MONTHS[m - 1]; *p; p++) title[tn++] = *p;
+    title[tn++] = ' ';
+    tn += utoa((u32)y, title + tn);
+    title[tn] = 0;
+    w_reset();
+    for (int i = 0; i < (20 - tn) / 2; i++) w_ch(' ');
+    w_str(title);
+    say_trimmed();
+    say("Mo Tu We Th Fr Sa Su");
+
+    int col = (zone_weekday(zone_days_from_civil(y, m, 1)) + 6) % 7;   /* Monday is 0 */
+    w_reset();
+    for (int c = 0; c < col; c++) w_str(c ? "   " : "  ");
+    for (int d = 1; d <= days; d++) {
+        if (col) w_ch(' ');
+        w_ch(d < 10 ? ' ' : (char)('0' + d / 10));
+        w_ch((char)('0' + d % 10));
+        if (++col == 7) { say_trimmed(); w_reset(); col = 0; }
+    }
+    if (col) say_trimmed();
+}
+
+/* df: how much of the disk and of a stick is used, as the kernel counts it
+   (/sys/storage). */
+static void size_words(u32 kib) {
+    u32 tenths = (u32)((u64)kib * 10 / 1024);
+    w_num(tenths / 10);
+    w_ch('.');
+    w_ch((char)('0' + tenths % 10));
+    w_str(" MB");
+}
+
+static void cmd_df(int argc, char **argv) {
+    (void)argc; (void)argv;
+    static char t[512];
+    int n = slurp("/sys/storage", t, (int)sizeof(t) - 1);
+    if (n <= 0) { err("cannot read /sys/storage"); return; }
+    t[n] = 0;
+    static const char *const WHICH[2] = { "disk", "stick" };
+    for (int k = 0; k < 2; k++) {
+        const char *l = time_line(t, WHICH[k]);
+        w_reset();
+        w_str(WHICH[k]);
+        w_str(": ");
+        u32 total = 0, freek = 0;
+        const char *p = l;
+        while (p && *p == ' ') p++;
+        if (!p || *p < '0' || *p > '9') { w_str("none"); say(work); continue; }
+        while (*p >= '0' && *p <= '9') total = total * 10 + (u32)(*p++ - '0');
+        while (*p && (*p < '0' || *p > '9') && *p != '\n') p++;
+        while (*p >= '0' && *p <= '9') freek = freek * 10 + (u32)(*p++ - '0');
+        size_words(total);
+        w_str(", ");
+        size_words(total - freek);
+        w_str(" used, ");
+        size_words(freek);
+        w_str(" free");
+        say(work);
+    }
+}
+
+/* du [PATH]: what is below a folder, all the way down. */
+static u32 du_files, du_dirs;
+static u64 du_bytes;
+
+static void du_walk(const char *dir, int depth) {
+    zelr_stat st;
+    for (int i = 0; readdir(dir, i, &st) == 1; i++) {
+        if (!strcmp(st.name, ".") || !strcmp(st.name, "..")) continue;
+        char sub[VFS_PATH];
+        path_join(dir, st.name, sub, sizeof(sub));
+        if (st.is_dir) {
+            du_dirs++;
+            if (depth < 16) du_walk(sub, depth + 1);
+        } else {
+            du_files++;
+            du_bytes += st.size;
+        }
+    }
+}
+
+static void cmd_du(int argc, char **argv) {
+    char where[VFS_PATH];
+    if (argc > 1) strncpy(where, argv[1], sizeof(where) - 1);
+    else if (getcwd(where, sizeof(where)) < 0) strcpy(where, "/");
+    where[sizeof(where) - 1] = 0;
+    zelr_stat st;
+    if (stat(where, &st) < 0) { err("there is nothing there"); return; }
+    du_files = du_dirs = 0;
+    du_bytes = 0;
+    if (st.is_dir) du_walk(where, 0);
+    else { du_files = 1; du_bytes = st.size; }
+    w_reset();
+    w_num((u32)du_bytes);
+    w_str(du_bytes == 1 ? " byte in " : " bytes in ");
+    w_num(du_files);
+    w_str(du_files == 1 ? " file and " : " files and ");
+    w_num(du_dirs);
+    w_str(du_dirs == 1 ? " folder: " : " folders: ");
+    w_str(where);
+    say(work);
+}
+
 static void cmd_date(int argc, char **argv) {
     (void)argc; (void)argv;
     static const char *const DAYS[7] = { "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday" };
@@ -1657,6 +1805,9 @@ static const command COMMANDS[] = {
     { "mem",     cmd_mem,     "",              "memory, with a bar" },
     { "uptime",  cmd_uptime,  "",              "how long this has been running" },
     { "date",    cmd_date,    "",              "the date and time where the machine is" },
+    { "cal",     cmd_cal,     "[MONTH YEAR]",  "a month, Monday first" },
+    { "df",      cmd_df,      "",              "how much of the disk and a stick is used" },
+    { "du",      cmd_du,      "[PATH]",        "the bytes, files and folders below a folder" },
     { "net",     cmd_net,     "",              "the address, if there is one" },
     { "resolve", cmd_resolve, "HOST",          "look up a name" },
     { "get",     cmd_get,     "HOST [PATH] [FILE]", "fetch a page, https unless said" },

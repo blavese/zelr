@@ -688,6 +688,7 @@ if [ "$MODE" = "screen" ] || [ "$MODE" = "full" ]; then
   windowshottest() { keep timeout 600 python tools/windowshotcheck.py; }
   alarmtest() { keep timeout 600 python tools/alarmcheck.py; }
   redirecttest() { keep timeout 600 python tools/redirectcheck.py; }
+  tooltest() { keep timeout 600 python tools/toolcheck.py; }
   downloadtest() { keep timeout 900 python tools/downloadcheck.py; }
 
   # The second boot of a machine, which is the one nothing else reaches:
@@ -825,6 +826,7 @@ if [ "$MODE" = "screen" ] || [ "$MODE" = "full" ]; then
   par_start "alt+print screen saves the front window alone" windowshottest
   par_start "an alarm is said and rung at its minute" alarmtest
   par_start "the terminal sends output into a file" redirecttest
+  par_start "the terminal's cal, du and df" tooltest
   par_start "a download bigger than the browser holds is saved whole" downloadtest
   par_start "a machine still starts once it has formatted its disk" boottest
   par_start "ctrl+f finds a word that is on the screen" findtest
