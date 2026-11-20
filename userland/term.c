@@ -30,7 +30,7 @@
 
 /* Roughly one terminal's worth of file. Anything larger is printed in full
    but never held in one piece. */
-#define IO_BUF 16384
+#define IO_BUF 65536
 
 #define HISTORY_FILE "/cfg/history"
 #define THEME_FILE   "/cfg/term"
@@ -174,6 +174,14 @@ static void push_line(const char *s, u8 slot) {
    still shown, as a shell keeps errors on the screen. */
 static char cap_buf[65536];
 static int  cap_n, capturing;
+
+/* CMD | CMD: what a command before a | says is the input of the one after
+   it, which reads it where it would have read a file (cat, head, tail, wc,
+   grep and sort, given no file). There is one task, so each command's
+   output is kept whole in cap_buf before the next one starts, and handed
+   over here. */
+static char pipe_buf[65536];
+static int  pipe_n = -1;            /* -1: nothing is piped into this command */
 
 /* Prints text, breaking it at newlines and wrapping anything too wide. */
 static void print(const char *s, u8 slot) {
@@ -710,19 +718,37 @@ static int read_all(const char *path) {
     return total;
 }
 
+/* The text a command works on, into io: the file, or with no file what was
+   piped in. */
+static int read_input(const char *path) {
+    if (path) return read_all(path);
+    int n = pipe_n < (int)sizeof(io) - 1 ? pipe_n : (int)sizeof(io) - 1;
+    for (int i = 0; i < n; i++) io[i] = pipe_buf[i];
+    io[n] = 0;
+    return n;
+}
+
+/* A file's last newline ends its last line; it does not start another, or
+   cat sent through sort would give an empty line first. */
+static void print_text(int n) {
+    if (n > 0 && io[n - 1] == '\n') io[n - 1] = 0;
+    if (n > 0) print(io, C_FG);
+}
+
 static void cmd_cat(int argc, char **argv) {
+    if (argc < 2 && pipe_n >= 0) { print_text(read_input(0)); return; }
     if (argc < 2) { need("cat FILE"); return; }
     for (int i = 1; i < argc; i++) {
         if (argc > 2) { w_reset(); w_str("== "); w_str(argv[i]); w_str(" =="); dim(work); }
-        if (read_all(argv[i]) >= 0) print(io, C_FG);
+        print_text(read_all(argv[i]));
     }
 }
 
 /* Prints the first or last few lines. Reading the whole file to do it is
    fine at these sizes and keeps one code path. */
 static void head_tail(const char *path, int count, bool from_end) {
-    int total = read_all(path);
-    if (total < 0) return;
+    int total = read_input(path);
+    if (total <= 0) return;
 
     int nl = 0;
     for (int i = 0; i < total; i++) if (io[i] == '\n') nl++;
@@ -747,19 +773,24 @@ static void head_tail(const char *path, int count, bool from_end) {
     }
 }
 
+/* After a |, head and tail read what was piped in, and the one word is the
+   number of lines. */
 static void cmd_head(int argc, char **argv) {
+    if (pipe_n >= 0 && argc <= 2) { head_tail(0, argc > 1 ? parse_num(argv[1], 10) : 10, false); return; }
     if (argc < 2) { need("head FILE [LINES]"); return; }
     head_tail(argv[1], argc > 2 ? parse_num(argv[2], 10) : 10, false);
 }
 
 static void cmd_tail(int argc, char **argv) {
+    if (pipe_n >= 0 && argc <= 2) { head_tail(0, argc > 1 ? parse_num(argv[1], 10) : 10, true); return; }
     if (argc < 2) { need("tail FILE [LINES]"); return; }
     head_tail(argv[1], argc > 2 ? parse_num(argv[2], 10) : 10, true);
 }
 
 static void cmd_wc(int argc, char **argv) {
-    if (argc < 2) { need("wc FILE"); return; }
-    int total = read_all(argv[1]);
+    const char *path = argc > 1 ? argv[1] : 0;
+    if (!path && pipe_n < 0) { need("wc FILE"); return; }
+    int total = read_input(path);
     if (total < 0) return;
 
     int nl = 0, words = 0;
@@ -775,21 +806,24 @@ static void cmd_wc(int argc, char **argv) {
     w_reset();
     w_rnum((u32)nl, 7); w_str(" lines");
     w_rnum((u32)words, 8); w_str(" words");
-    w_rnum((u32)total, 9); w_str(" bytes  ");
-    w_str(argv[1]);
+    w_rnum((u32)total, 9); w_str(" bytes");
+    if (path) { w_str("  "); w_str(path); }
     say(work);
 }
 
-/* Lines of a file containing a string. The one search that is worth having
-   built in, because there is no pipe to build it out of. */
+/* Lines of a file containing a string, each with its number; after a |,
+   the lines of what was piped in, as they are, so that a wc after it
+   counts them. Finding none says so only on the screen: in a file or a
+   pipe it is nothing. */
 static void cmd_grep(int argc, char **argv) {
-    if (argc < 3) { need("grep TEXT FILE..."); return; }
+    bool from_pipe = argc == 2 && pipe_n >= 0;
+    if (argc < 3 && !from_pipe) { need("grep TEXT FILE..."); return; }
     const char *needle = argv[1];
     int nl = strlen(needle);
     int hits = 0;
 
-    for (int f = 2; f < argc; f++) {
-        int total = read_all(argv[f]);
+    for (int f = 2; f < argc || (from_pipe && f == 2); f++) {
+        int total = read_input(from_pipe ? 0 : argv[f]);
         if (total < 0) continue;
 
         int line = 1, start = 0;
@@ -802,7 +836,7 @@ static void cmd_grep(int argc, char **argv) {
                 if (strncmp(io + k, needle, nl) != 0) continue;
                 w_reset();
                 if (argc > 3) { w_str(argv[f]); w_ch(':'); }
-                w_num((u32)line); w_str(": ");
+                if (!from_pipe) { w_num((u32)line); w_str(": "); }
                 w_str(io + start);
                 say(work);
                 hits++;
@@ -813,7 +847,34 @@ static void cmd_grep(int argc, char **argv) {
             start = i + 1;
         }
     }
-    if (!hits) dim("no matches");
+    if (!hits && !capturing) dim("no matches");
+}
+
+/* sort [FILE]: the lines in byte order, of a file or of what was piped in. */
+static void cmd_sort(int argc, char **argv) {
+    const char *path = argc > 1 ? argv[1] : 0;
+    if (!path && pipe_n < 0) { need("sort FILE"); return; }
+    int total = read_input(path);
+    if (total <= 0) return;
+    static char *line[8192];
+    int n = 0;
+    for (int i = 0, start = 0; i <= total && n < 8192; i++) {
+        if (i != total && io[i] != '\n') continue;
+        if (i == total && start == total) break;     /* nothing after the last newline */
+        io[i] = 0;
+        line[n++] = io + start;
+        start = i + 1;
+    }
+    /* Shell's sort on the pointers: no memory to ask for, and a few thousand
+       lines take nothing. */
+    for (int gap = n / 2; gap > 0; gap /= 2)
+        for (int i = gap; i < n; i++)
+            for (int j = i; j >= gap && strcmp(line[j - gap], line[j]) > 0; j -= gap) {
+                char *t = line[j];
+                line[j] = line[j - gap];
+                line[j - gap] = t;
+            }
+    for (int i = 0; i < n; i++) say(line[i]);
 }
 
 /* What a file actually contains, which matters when it is not text. */
@@ -1785,6 +1846,7 @@ static const command COMMANDS[] = {
     { "head",    cmd_head,    "FILE [LINES]",  "the first few lines" },
     { "tail",    cmd_tail,    "FILE [LINES]",  "the last few" },
     { "grep",    cmd_grep,    "TEXT FILE...",  "lines containing something" },
+    { "sort",    cmd_sort,    "[FILE]",        "lines in order, of a file or after a |" },
     { "find",    cmd_find,    "NAME [WHERE]",  "files whose name contains it" },
     { "hex",     cmd_hex,     "FILE [BYTES]",  "what a file really holds" },
     { "wc",      cmd_wc,      "FILE",          "lines, words and bytes" },
@@ -1849,6 +1911,7 @@ static void cmd_help(int argc, char **argv) {
     }
     say("");
     dim("A name on its own runs that program: here, then /usb, then /bin.");
+    dim("CMD | CMD hands what one says to the next; > FILE writes it, >> adds.");
     dim("Tab completes. Up and down walk through history; ctrl+R looks in it.");
     dim("PageUp and PageDown scroll. Escape leaves the desktop.");
 }
@@ -1902,16 +1965,67 @@ static bool find_program(const char *name, char *out, int cap) {
    writes it, ">> FILE" adds to what is there. The first > outside double
    quotes is the one. A program from /bin prints to the console, not here,
    so it cannot be sent anywhere from this line, and says so. */
+#define STAGES 8
+static char *st_argv[STAGES][16];
+static int st_argc[STAGES];
+static const command *st_cmd[STAGES];
+
+/* Cuts a line at its |s outside double quotes, and each piece into words:
+   the number of commands, or 0 once it has said what is wrong. */
+static int stages_of(char *line, const char *empty) {
+    char *piece[STAGES];
+    int n = 0, quoted = 0;
+    piece[n++] = line;
+    for (char *p = line; *p; p++) {
+        if (*p == '"') quoted = !quoted;
+        if (*p == '|' && !quoted) {
+            if (n == STAGES) { err("eight commands to a line at most"); return 0; }
+            *p = 0;
+            piece[n++] = p + 1;
+        }
+    }
+    for (int i = 0; i < n; i++) {
+        st_argc[i] = split(piece[i], st_argv[i], 16);
+        if (!st_argc[i]) { err(n > 1 ? "a | needs a command on each side" : empty); return 0; }
+        st_cmd[i] = command_named(st_argv[i][0]);
+    }
+    return n;
+}
+
+/* Runs a line's commands in turn, each one's output kept and handed to the
+   next as its input; the last one's is said, or kept in cap_buf when it
+   goes to a file. A program from /bin prints to the console, so it can
+   take no part, and nothing runs. 0 when refused. */
+static int run_stages(int n, int keep) {
+    for (int i = 0; i < n; i++)
+        if (!st_cmd[i]) {
+            err(n > 1 ? "only the terminal's own commands can be piped"
+                      : "only the terminal's own commands can be sent to a file");
+            return 0;
+        }
+    pipe_n = -1;
+    for (int i = 0; i < n; i++) {
+        if (keep || i < n - 1) { capturing = 1; cap_n = 0; }
+        st_cmd[i]->fn(st_argc[i], st_argv[i]);
+        capturing = 0;
+        if (i < n - 1) {
+            for (int k = 0; k < cap_n; k++) pipe_buf[k] = cap_buf[k];
+            pipe_n = cap_n;
+        }
+    }
+    pipe_n = -1;
+    return 1;
+}
+
 static int run_into(char *cmdline, char *to, int append) {
     while (*to == ' ') to++;
     char *e = to + strlen(to);
     while (e > to && e[-1] == ' ') *--e = 0;
     if (!*to) { err("to a file: COMMAND > FILE, or >> to add to it"); return 1; }
-    char *argv[16];
-    int argc = split(cmdline, argv, 16);
-    if (!argc) { err("nothing to send to a file"); return 1; }
-    const command *c = command_named(argv[0]);
-    if (!c) { err("only the terminal's own commands can be sent to a file"); return 1; }
+    for (const char *q = to; *q; q++)
+        if (*q == '|') { err("the file goes last: CMD | CMD > FILE"); return 1; }
+    int stages = stages_of(cmdline, "nothing to send to a file");
+    if (!stages) return 1;
 
     static char before[65536];
     int had = 0;
@@ -1919,10 +2033,7 @@ static int run_into(char *cmdline, char *to, int append) {
         had = slurp(to, before, sizeof(before));
         if (had < 0) had = 0;
     }
-    capturing = 1;
-    cap_n = 0;
-    c->fn(argc, argv);
-    capturing = 0;
+    if (!run_stages(stages, 1)) return 1;
 
     /* What was there first, then what was said: one write either way. */
     static char out[131072];
@@ -1939,15 +2050,23 @@ static int run_into(char *cmdline, char *to, int append) {
 }
 
 static void run_line(char *cmdline) {
-    int quoted = 0;
+    int quoted = 0, piped = 0;
     for (char *p = cmdline; *p; p++) {
         if (*p == '"') quoted = !quoted;
+        if (*p == '|' && !quoted) piped = 1;
         if (*p == '>' && !quoted) {
             int append = p[1] == '>';
             *p = 0;
             run_into(cmdline, p + 1 + append, append);
             return;
         }
+    }
+    /* A line with no | runs as it always has, so that time's line inside a
+       pipe keeps the input handed to it. */
+    if (piped) {
+        int n = stages_of(cmdline, "nothing to run");
+        if (n) run_stages(n, 0);
+        return;
     }
 
     char *argv[16];
