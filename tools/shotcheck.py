@@ -24,7 +24,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from harness import (Guest, Checks, build_once, count_all, count_in,     # noqa: E402
-                     centre_of, ROOT)
+                     centre_of, ROOT, launcher_where)
 
 DISK = os.path.join(ROOT, "shotcheck.%d.img" % os.getpid())
 
@@ -65,31 +65,12 @@ MENU_LEFT = DOCK_SIDE
 
 # Which kind, and where in it. Settings is the first thing under System,
 # which is the fifth kind -- it was the fourth until Games went in between
-# Media and System, and this list not knowing that is what made the check
+# Media and System, and a list here not knowing that is what made the check
 # rest on Media, click where Settings would have been, and report that
-# Settings would not start. Written as names and looked up, so moving a
-# program between kinds is one edit here rather than two numbers to work
-# out again.
-MENU_KINDS = ["Productivity", "Internet", "Media", "Games", "System",
-              "Session"]
-MENU_IN = {
-    "Productivity": ["Terminal", "Files", "Notes", "Sheet", "Calculator", "Calendar", "Clock"],
-    "Internet": ["Browser"],
-    "Media": ["Paint", "Music", "Pictures"],
-    "Games": ["Blackjack", "Poker"],
-    "System": ["Settings", "Monitor", "Help", "System info"],
-    "Session": ["Lock the screen", "Close all", "Leave desktop", "Shut down"],
-}
+# Settings would not start. Read out of wm.c by name (harness.py
+# launcher_where), so moving a program between kinds is no edit here.
 
 MENU_RECT = (MENU_LEFT + 4, 380, MENU_LEFT + MENU_W - 4, PANEL_Y - 6)
-
-
-def menu_where(name):
-    """Which kind a program is under, and where in that kind."""
-    for kind, things in MENU_IN.items():
-        if name in things:
-            return MENU_KINDS.index(kind), things.index(name)
-    raise KeyError(name)
 
 
 def rail_at(top, i):
@@ -210,7 +191,7 @@ def main():
         # Found on the screen rather than worked out from constants.
         top = settled_menu_top(mon)
         c.add("the menu's top edge is on the screen", top is not None, shot)
-        kind, thing = menu_where("Settings")
+        kind, thing = launcher_where("Settings")
 
         # Waited for on all six swatches rather than on the accent. The
         # accent was already on the screen before the click, from the

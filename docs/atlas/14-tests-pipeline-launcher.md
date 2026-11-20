@@ -444,7 +444,9 @@ All of them:
   - All run on one `G(pc,256)`. The disk is `ring3.<pid>.img`.
 - **shotcheck.py**
   - Geometry for a 1024x768 screen: dock height 44, gap 14, side 16. The launcher has two columns: `MENU_RAIL 132`, `MENU_PANE 152`, `MENU_ITEM_H 32`, `MENU_PAD 10`.
-  - The menu kinds are in `MENU_KINDS` and `MENU_IN` (73-82). `menu_top()` finds the menu edge by colour `(0xF3,0xF3,0xF6)` inside `MENU_RECT`.
+  - Where Settings is in the launcher is read out of kernel/wm.c (harness.py `launcher_where`, since the 0.206.0 fix;
+    it had its own copy of the lists, `MENU_KINDS` and `MENU_IN`). `menu_top()` finds the menu edge by colour
+    `(0xF3,0xF3,0xF6)` inside `MENU_RECT`.
   - It waits for the terminal's `SLATE` page (more than 100000 px in `PAGE`), clicks the dock badge, moves onto the "System" kind and clicks "Settings". That gesture is retried up to 3 times as a whole.
   - It waits for all 6 accent swatches, then clicks the teal swatch found by `centre_of`. Pass means teal pixels rose by more than 600 (`SWING`) **and** indigo pixels fell by more than 600.
   - It imports `count_all` but never calls it.

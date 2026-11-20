@@ -293,6 +293,45 @@ def read_ppm(path):
     return w, h, px
 
 
+# --- the launcher, as wm.c lists it ------------------------------------------
+
+def launcher_menu():
+    """The launcher's kinds and what is under each, read out of kernel/wm.c.
+
+    A list of (kind, [labels]) in the order wm.c's MCAT has them. The
+    launcher is as tall as the longer of its two columns, so a harness that
+    places it needs these; four of them once wrote the row count down as 6,
+    and when Sheet made Productivity seven long the launcher grew a row
+    upward and every click on it landed one row down (gamecheck rested on
+    System and found no Blackjack, 0.206.0)."""
+    with open(os.path.join(ROOT, "kernel", "wm.c"), encoding="utf-8") as f:
+        src = f.read()
+    lists = {}
+    for name, body in re.findall(r"static const mitem_t (\w+)\[\] = \{(.*?)\n\};", src, re.S):
+        lists[name] = re.findall(r'\{\s*"([^"]+)"', body)
+    cat = re.search(r"\} MCAT\[\] = \{(.*?)\n\};", src, re.S)
+    if not cat:
+        raise ValueError("kernel/wm.c has no MCAT[] the way this reads it")
+    kinds = [(kind, lists[arr]) for kind, arr in re.findall(r'\{\s*"([^"]+)",\s*CAT\((\w+)\)', cat.group(1))]
+    if not kinds or not all(things for _, things in kinds):
+        raise ValueError("kernel/wm.c's launcher read as %r" % (kinds,))
+    return kinds
+
+
+def launcher_rows():
+    """How many rows tall the launcher is: wm.c's menu_rows()."""
+    kinds = launcher_menu()
+    return max([len(kinds)] + [len(things) for _, things in kinds])
+
+
+def launcher_where(label):
+    """Which kind a launcher entry is under, and where in it, both from 0."""
+    for i, (_, things) in enumerate(launcher_menu()):
+        if label in things:
+            return i, things.index(label)
+    raise KeyError("%s is not in the launcher" % label)
+
+
 # --- the kernel's own variables --------------------------------------------
 
 def kernel_symbol(name, source):

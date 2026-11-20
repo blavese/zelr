@@ -23,7 +23,7 @@ import zlib
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from harness import (Guest, build_once, count_near,
-                     ROOT)                                 # noqa: E402
+                     ROOT, launcher_rows, launcher_where)  # noqa: E402
 from webserver import Server                               # noqa: E402
 
 DISK = os.path.join(ROOT, "shots.%d.img" % os.getpid())
@@ -47,7 +47,7 @@ CHIPS_X = DOCK_SIDE + 16 + BADGE_W + 18
 MENU_ITEM, MENU_PAD = 32, 10
 MENU_RAIL, MENU_PANE = 132, 152
 MENU_W = MENU_PAD * 2 + MENU_RAIL + MENU_PANE
-MENU_ROWS = 6
+MENU_ROWS = launcher_rows()
 MENU_H = MENU_PAD * 2 + MENU_ROWS * MENU_ITEM
 MENU_LEFT = DOCK_SIDE
 MENU_TOP = PANEL_Y - MENU_H - 8
@@ -122,17 +122,15 @@ def write_png(path, w, h, pixels):
 
 
 # What the launcher lists: which kind a thing is in, and where it is in
-# that kind. One number was enough when the menu was one list of thirteen.
-#
-# The kinds are in the order wm.c lists them, so adding one in the middle
-# moves everything below it: Games went in between Media and System, and
-# the two rows under System are two lower than they were.
-TERMINAL, FILES, NOTES, CALC = (0, 0), (0, 1), (0, 2), (0, 3)
-BROWSER = (1, 0)
-PAINT, MUSIC = (2, 0), (2, 1)
-BLACKJACK, POKER = (3, 0), (3, 1)
-SETTINGS, MONITOR, ABOUT = (4, 0), (4, 1), (4, 2)
-CLOSE_ALL = (5, 0)
+# that kind, read out of wm.c by name. They were numbers, and every program
+# added moved some: Close all had become Lock the screen and About had
+# become Help before anyone ran this again.
+TERMINAL, FILES, NOTES, CALC = (launcher_where(n) for n in ("Terminal", "Files", "Notes", "Calculator"))
+BROWSER = launcher_where("Browser")
+PAINT, MUSIC = launcher_where("Paint"), launcher_where("Music")
+BLACKJACK, POKER = launcher_where("Blackjack"), launcher_where("Poker")
+SETTINGS, MONITOR, ABOUT = (launcher_where(n) for n in ("Settings", "Monitor", "System info"))
+CLOSE_ALL = launcher_where("Close all")
 
 
 def rail_row(i):

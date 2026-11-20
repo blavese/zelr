@@ -21,7 +21,8 @@ import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from harness import Guest, Checks, build_once, count_in, ROOT   # noqa: E402
+from harness import (Guest, Checks, build_once, count_in, ROOT,  # noqa: E402
+                     launcher_rows, launcher_where)
 
 DISK = os.path.join(ROOT, "gamecheck.%d.img" % os.getpid())
 
@@ -41,15 +42,16 @@ MENU_RAIL, MENU_PANE = 132, 152
 MENU_W = MENU_PAD * 2 + MENU_RAIL + MENU_PANE
 MENU_LEFT = DOCK_SIDE
 
-# Productivity, Internet, Media, Games, System, Session: Games is the fourth
-# row, and it did not exist until there was a game to put in it.
-GAMES_ROW = 3
+# Games did not exist until there was a game to put in it. Where it and
+# Blackjack are is read out of wm.c, as the launcher's height is.
+GAMES_ROW, BLACKJACK_AT = launcher_where("Blackjack")
 MENU_PANEL = (0xF4, 0xF4, 0xF7)
 
 
 def menu_rows():
-    """As tall as the longest column, which is how wm.c sizes it."""
-    return 6
+    """As tall as the longest column, which is how wm.c sizes it: written
+    down as 6, it was one row short once Sheet made Productivity seven long."""
+    return launcher_rows()
 
 
 def menu_top():
@@ -130,7 +132,7 @@ def main():
         # Open once its chips are out, which it draws while it waits for a
         # bet and at no other time: six seconds and a look was enough on an
         # idle host and not always on the gate's.
-        mon.click(*pane_row(0))
+        mon.click(*pane_row(BLACKJACK_AT))
         mon.move_to(20, 20)
         w, h, px, shot, _ = mon.wait_screen(
             "bj-open", lambda w, h, px: count_in(px, SCREEN_W, (180, 580, 980, 680), CHIP_RED) > 150,

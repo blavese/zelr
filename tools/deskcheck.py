@@ -23,7 +23,8 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from harness import (Guest, Checks, build_once, count_in, count_near,
                      row_mean, colour_gap, face_width, FACE_BODY,
-                     _count, ROOT)                            # noqa: E402
+                     _count, ROOT, launcher_rows,
+                     launcher_where)                          # noqa: E402
 
 DISK = os.path.join(ROOT, "deskcheck.%d.img" % os.getpid())
 
@@ -40,7 +41,7 @@ MENU_PAD = 10
 MENU_RAIL = 132
 MENU_PANE = 152
 MENU_W = MENU_PAD * 2 + MENU_RAIL + MENU_PANE
-MENU_ROWS = 6            # six kinds, and no kind has more than four in it
+MENU_ROWS = launcher_rows()      # the longer column, read out of wm.c
 MENU_H = MENU_PAD * 2 + MENU_ROWS * MENU_ITEM
 
 # It opens from the badge against the left of the dock, eight pixels above
@@ -500,12 +501,12 @@ def main():
         c.add("the launcher menu opens where it is expected", up)
 
         # Paint, which is now two moves rather than one: the kind, then
-        # the thing. Media is the third kind and Paint the first thing in
-        # it, and both are worked out from where the menu is rather than
-        # from a number that happened to be right once.
-        mon.move_to(*rail_row(2))
+        # the thing, both read out of wm.c's lists rather than from numbers
+        # that happened to be right once.
+        kind, thing = launcher_where("Paint")
+        mon.move_to(*rail_row(kind))
         time.sleep(0.6)
-        mon.click(*pane_row(0))
+        mon.click(*pane_row(thing))
         w, h, px, shot, ok = mon.wait_screen(
             "desk-two",
             lambda w, h, px: desktop_bytes(w, h, px) != weave, timeout=40)

@@ -115,6 +115,12 @@ numbered files are still to 6048716; where they disagree with this list, this li
 
 ### 0.206.0
 
+- **The launcher read out of wm.c by the harnesses (14)**, a fix after the release commit: harness.py `launcher_menu`
+  (wm.c's `mitem_t` lists and `MCAT[]`), `launcher_rows` (the longer column, as wm.c's `menu_rows`) and `launcher_where`
+  (a label's kind and place). gamecheck, deskcheck and shots.py wrote the height down as 6 rows; Sheet made Productivity
+  seven long, the launcher grew a row upward, and every click on it landed a row down (gamecheck rested on System and
+  failed the 0.206.0 gate; deskcheck opened Poker instead of Paint and passed, since any second window did). shotcheck's
+  and shots.py's lists of kinds and places are gone too (shots.py's Close all and About had already moved).
 - **Sheet (10, 14)**: userland/sheet.c, in the launcher's Productivity list after Notes (/bin/sheet; builtin.S/.c,
   shotcheck's copy of the launcher), and Files' `KIND_SHEET` for .csv (kind "sheet", opened there, from an archive
   too). 26 by 200 cells of 96 bytes of text each. A cell's text is plain (`plain`: nothing, a number with a sign,
