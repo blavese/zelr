@@ -12,7 +12,12 @@
  * the file this was started on, or /home/picture.png (pngw.h), and started
  * on a PNG ("paint FILE.png") it opens with that picture on the paper
  * (png.h, the browser's reader). ctrl+Z takes back the last stroke or
- * clear. What it did is said on the console ("paint: saved PATH, WxH"). */
+ * clear. What it did is said on the console ("paint: saved PATH, WxH").
+ *
+ * Tools, by key or from the icons beside the brush sizes: B the brush, L a
+ * line, R a rectangle, E an ellipse (each drawn from where the button went
+ * down to where it is, shown as it is dragged), F a fill of the colour
+ * clicked on, as far as it reaches. */
 #include "zelr.h"
 #include "alloc.h"
 #include "png.h"
@@ -47,6 +52,11 @@ static int color = 2;
 static int brush = 1;
 static int drawing;
 static int last_x, last_y;
+
+enum { TOOL_BRUSH, TOOL_LINE, TOOL_RECT, TOOL_ELLIPSE, TOOL_FILL, TOOLS };
+static const char *const TOOL_NAMES[TOOLS] = { "the brush", "a line", "a rectangle", "an ellipse", "a fill" };
+static int tool;
+static int anchor_x, anchor_y;          /* where a shape began */
 
 static char path[256] = "/home/picture.png";
 static u32 *undo_px;                    /* the paper as it was before the last stroke or clear */
@@ -109,7 +119,138 @@ static void line(int x0, int y0, int x1, int y1, int r, u32 c) {
     }
 }
 
+/* --- shapes --------------------------------------------------------------- */
+
+static int isqrt(long long v) {
+    if (v <= 0) return 0;
+    unsigned long long n = (unsigned long long)v, r = 0, bit = 1ull << 62;
+    while (bit > n) bit >>= 2;
+    while (bit) {
+        if (n >= r + bit) { n -= r + bit; r = (r >> 1) + bit; }
+        else r >>= 1;
+        bit >>= 2;
+    }
+    return (int)r;
+}
+
+static void rectangle(int x0, int y0, int x1, int y1, int r, u32 c) {
+    line(x0, y0, x1, y0, r, c);
+    line(x1, y0, x1, y1, r, c);
+    line(x1, y1, x0, y1, r, c);
+    line(x0, y1, x0, y0, r, c);
+}
+
+/* The ellipse in the box from (x0, y0) to (x1, y1): walked both ways, by x
+   and by y, so a steep side has no gaps, and each offset the floor of the
+   true one: the root is taken after the scaling. Taken before it (b times
+   the root over a), offsets moved by two where the scale is two, and a fill
+   inside a pixel-wide ellipse got out through the corners that left. */
+static void ellipse(int x0, int y0, int x1, int y1, int r, u32 c) {
+    if (x1 < x0) { int t = x0; x0 = x1; x1 = t; }
+    if (y1 < y0) { int t = y0; y0 = y1; y1 = t; }
+    int a = (x1 - x0) / 2, b = (y1 - y0) / 2, cx = x0 + a, cy = y0 + b;
+    if (a < 1 || b < 1) { line(x0, y0, x1, y1, r, c); return; }
+    for (int dx = -a; dx <= a; dx++) {
+        int dy = isqrt((long long)b * b * (a * a - dx * dx) / ((long long)a * a));
+        dot(cx + dx, cy - dy, r, c);
+        dot(cx + dx, cy + dy, r, c);
+    }
+    for (int dy = -b; dy <= b; dy++) {
+        int dx = isqrt((long long)a * a * (b * b - dy * dy) / ((long long)b * b));
+        dot(cx - dx, cy + dy, r, c);
+        dot(cx + dx, cy + dy, r, c);
+    }
+}
+
+/* Everything of the colour clicked on that touches it, a row at a time: a
+   stretch of a row is filled and the rows above and below looked along it. A
+   stack of stretches rather than of pixels, kept in the heap and grown. */
+static void fill(int x, int y, u32 c) {
+    if (y < TOOLBAR_H || y >= H || x < 0 || x >= W) return;
+    u32 from = px[(u32)y * W + x];
+    if (from == c) return;
+    int cap = 1024, n = 0;
+    int *st = (int *)malloc((u64)cap * 2 * sizeof(int));
+    if (!st) return;
+    st[n * 2] = x; st[n * 2 + 1] = y; n++;
+    while (n) {
+        n--;
+        int sx = st[n * 2], sy = st[n * 2 + 1];
+        u32 *row = px + (u32)sy * W;
+        if (row[sx] != from) continue;
+        int l = sx, rr = sx;
+        while (l > 0 && row[l - 1] == from) l--;
+        while (rr < W - 1 && row[rr + 1] == from) rr++;
+        for (int i = l; i <= rr; i++) row[i] = c;
+        for (int dy = -1; dy <= 1; dy += 2) {
+            int ny = sy + dy;
+            if (ny < TOOLBAR_H || ny >= H) continue;
+            u32 *nrow = px + (u32)ny * W;
+            for (int i = l; i <= rr; i++) {
+                if (nrow[i] != from || (i > l && nrow[i - 1] == from)) continue;
+                if (n == cap) {
+                    int *more = (int *)malloc((u64)cap * 4 * sizeof(int));
+                    if (!more) { free(st); return; }
+                    memcpy(more, st, (u64)cap * 2 * sizeof(int));
+                    free(st);
+                    st = more;
+                    cap *= 2;
+                }
+                st[n * 2] = i; st[n * 2 + 1] = ny; n++;
+            }
+        }
+    }
+    free(st);
+}
+
+/* The paper as it was when the shape began, and the shape drawn on it to
+   where the pointer is: dragged, it follows. */
+static void shape_to(int x, int y) {
+    if (!undo_ok) return;
+    memcpy(px + (u32)TOOLBAR_H * W, undo_px, W * (H - TOOLBAR_H) * 4);
+    int r = BRUSHES[brush];
+    u32 c = PALETTE[color];
+    if (tool == TOOL_LINE) line(anchor_x, anchor_y, x, y, r, c);
+    else if (tool == TOOL_RECT) rectangle(anchor_x, anchor_y, x, y, r, c);
+    else if (tool == TOOL_ELLIPSE) ellipse(anchor_x, anchor_y, x, y, r, c);
+}
+
 /* --- the toolbar -------------------------------------------------------- */
+
+static int tool_x(int i) { return 160 + i * 30; }
+
+static void draw_tools(void) {
+    for (int i = 0; i < TOOLS; i++) {
+        int x = tool_x(i), y = 32;
+        u32 ink = i == tool ? WHITE : RGB(0x8A, 0x9B, 0xA6);
+        rect(x, y, 24, 22, i == tool ? RGB(0x39, 0x44, 0x4F) : BAR_BG);
+        if (i == TOOL_BRUSH) {
+            for (int dy = -4; dy <= 4; dy++)
+                for (int dx = -4; dx <= 4; dx++)
+                    if (dx * dx + dy * dy <= 16) px[(u32)(y + 11 + dy) * W + x + 12 + dx] = ink;
+        } else if (i == TOOL_LINE) {
+            for (int k = 0; k < 14; k++) { px[(u32)(y + 18 - k) * W + x + 5 + k] = ink; px[(u32)(y + 18 - k) * W + x + 6 + k] = ink; }
+        } else if (i == TOOL_RECT) {
+            frame(x + 5, y + 5, 14, 12, ink);
+        } else if (i == TOOL_ELLIPSE) {
+            for (int dx = -7; dx <= 7; dx++) {
+                int dy = isqrt(25 * (49 - dx * dx) / 49);
+                px[(u32)(y + 11 - dy) * W + x + 12 + dx] = ink;
+                px[(u32)(y + 11 + dy) * W + x + 12 + dx] = ink;
+            }
+        } else {
+            rect(x + 6, y + 6, 12, 10, ink);
+        }
+    }
+}
+
+static void choose_tool(int t) {
+    tool = t;
+    puts("paint: ");
+    puts(TOOL_NAMES[t]);
+    puts("\n");
+}
+
 
 static int clear_x(void) { return W - 44; }
 
@@ -141,6 +282,7 @@ static void draw_toolbar(void) {
                 }
         if (i == brush) frame(cx - 15, cy - 13, 30, 26, RGB(0x4F, 0x5C, 0x68));
     }
+    draw_tools();
 
     /* Clear, drawn as a cross rather than as a word: there is no font on
        this side of the ring boundary. */
@@ -267,6 +409,13 @@ static void on_mouse(int x, int y, u32 buttons) {
                 return;
             }
         }
+        for (int i = 0; i < TOOLS; i++) {
+            if (x >= tool_x(i) && x < tool_x(i) + 24 && y >= 32 && y < 54) {
+                choose_tool(i);
+                draw_toolbar();
+                return;
+            }
+        }
         if (x >= clear_x() && x < clear_x() + 34 && y >= 8 && y < 42) {
             keep_for_undo();
             clear_canvas();
@@ -276,6 +425,21 @@ static void on_mouse(int x, int y, u32 buttons) {
     }
 
     if (!left) { drawing = 0; return; }
+
+    if (tool == TOOL_FILL) {
+        if (pressed) { keep_for_undo(); fill(x, y, PALETTE[color]); }
+        return;
+    }
+    if (tool != TOOL_BRUSH) {
+        if (!drawing || pressed) {
+            keep_for_undo();            /* the paper the shape is drawn over */
+            anchor_x = x;
+            anchor_y = y;
+            drawing = 1;
+        }
+        shape_to(x, y);
+        return;
+    }
 
     int r = BRUSHES[brush];
     if (!drawing || pressed) {
@@ -300,6 +464,11 @@ static void on_key(u32 key) {
     else if (key == 'c' || key == 'C') { keep_for_undo(); clear_canvas(); }
     else if (key == '[') { color = (color + 15) % 16; draw_toolbar(); }
     else if (key == ']') { color = (color + 1) % 16; draw_toolbar(); }
+    else if (key == 'b' || key == 'B') { choose_tool(TOOL_BRUSH); draw_toolbar(); }
+    else if (key == 'l' || key == 'L') { choose_tool(TOOL_LINE); draw_toolbar(); }
+    else if (key == 'r' || key == 'R') { choose_tool(TOOL_RECT); draw_toolbar(); }
+    else if (key == 'e' || key == 'E') { choose_tool(TOOL_ELLIPSE); draw_toolbar(); }
+    else if (key == 'f' || key == 'F') { choose_tool(TOOL_FILL); draw_toolbar(); }
 }
 
 int main(int argc, char **argv) {

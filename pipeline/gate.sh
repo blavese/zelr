@@ -683,6 +683,7 @@ if [ "$MODE" = "screen" ] || [ "$MODE" = "full" ]; then
   backtest() { keep timeout 600 python tools/backcheck.py; }
   walltest() { keep timeout 600 python tools/wallcheck.py; }
   shuffletest() { keep timeout 600 python tools/shufflecheck.py; }
+  shapetest() { keep timeout 600 python tools/shapecheck.py; }
   downloadtest() { keep timeout 900 python tools/downloadcheck.py; }
 
   # The second boot of a machine, which is the one nothing else reaches:
@@ -815,6 +816,7 @@ if [ "$MODE" = "screen" ] || [ "$MODE" = "full" ]; then
   par_start "the terminal looks back through its lines with ctrl+R" backtest
   par_start "a picture made the wallpaper and taken away" walltest
   par_start "music repeats and shuffles its list" shuffletest
+  par_start "paint draws lines, rectangles, ellipses and fills" shapetest
   par_start "a download bigger than the browser holds is saved whole" downloadtest
   par_start "a machine still starts once it has formatted its disk" boottest
   par_start "ctrl+f finds a word that is on the screen" findtest
