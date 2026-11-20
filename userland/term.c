@@ -811,43 +811,97 @@ static void cmd_wc(int argc, char **argv) {
     say(work);
 }
 
-/* Lines of a file containing a string, each with its number; after a |,
-   the lines of what was piped in, as they are, so that a wc after it
-   counts them. Finding none says so only on the screen: in a file or a
-   pipe it is nothing. */
-static void cmd_grep(int argc, char **argv) {
-    bool from_pipe = argc == 2 && pipe_n >= 0;
-    if (argc < 3 && !from_pipe) { need("grep TEXT FILE..."); return; }
-    const char *needle = argv[1];
-    int nl = strlen(needle);
-    int hits = 0;
+/* grep [-i] [-r] TEXT FILE...: lines of a file containing a string, each
+   with its number, and with its file's name when there are several; after
+   a |, the lines of what was piped in, as they are, so that a wc after it
+   counts them. -i finds the string with case aside. -r looks in every file
+   below a folder named, sixteen folders deep as du goes, each line with its
+   file's path, and passes over a file with a nought byte in its first
+   kilobyte (a picture, a program), as its lines are not lines. Finding
+   none says so only on the screen: in a file or a pipe it is nothing. */
+static int grep_fold, grep_hits;
 
-    for (int f = 2; f < argc || (from_pipe && f == 2); f++) {
-        int total = read_input(from_pipe ? 0 : argv[f]);
-        if (total < 0) continue;
-
-        int line = 1, start = 0;
-        for (int i = 0; i <= total; i++) {
-            if (i != total && io[i] != '\n') continue;
-
-            char save = io[i];
-            io[i] = 0;
-            for (int k = start; k + nl <= i; k++) {
-                if (strncmp(io + k, needle, nl) != 0) continue;
-                w_reset();
-                if (argc > 3) { w_str(argv[f]); w_ch(':'); }
-                if (!from_pipe) { w_num((u32)line); w_str(": "); }
-                w_str(io + start);
-                say(work);
-                hits++;
-                break;
-            }
-            io[i] = save;
-            line++;
-            start = i + 1;
+static int grep_same(const char *a, const char *b, int n) {
+    for (int i = 0; i < n; i++) {
+        char x = a[i], y = b[i];
+        if (grep_fold) {
+            if (x >= 'A' && x <= 'Z') x = (char)(x + 32);
+            if (y >= 'A' && y <= 'Z') y = (char)(y + 32);
         }
+        if (x != y) return 0;
     }
-    if (!hits && !capturing) dim("no matches");
+    return 1;
+}
+
+/* The lines of what is in io that hold the needle. */
+static void grep_lines(int total, const char *needle, const char *name, int numbered) {
+    int nl = strlen(needle), line = 1, start = 0;
+    for (int i = 0; i <= total; i++) {
+        if (i != total && io[i] != '\n') continue;
+        char save = io[i];
+        io[i] = 0;
+        for (int k = start; k + nl <= i; k++) {
+            if (!grep_same(io + k, needle, nl)) continue;
+            w_reset();
+            if (name) { w_str(name); w_ch(':'); }
+            if (numbered) { w_num((u32)line); w_str(": "); }
+            w_str(io + start);
+            say(work);
+            grep_hits++;
+            break;
+        }
+        io[i] = save;
+        line++;
+        start = i + 1;
+    }
+}
+
+static void grep_walk(const char *dir, const char *needle, int depth) {
+    zelr_stat st;
+    for (int i = 0; readdir(dir, i, &st) == 1; i++) {
+        if (!strcmp(st.name, ".") || !strcmp(st.name, "..")) continue;
+        char sub[VFS_PATH];
+        path_join(dir, st.name, sub, sizeof(sub));
+        if (st.is_dir) {
+            if (depth < 16) grep_walk(sub, needle, depth + 1);
+            continue;
+        }
+        int total = read_all(sub);
+        if (total < 0) continue;
+        int binary = 0;
+        for (int k = 0; k < total && k < 1024 && !binary; k++) binary = !io[k];
+        if (!binary) grep_lines(total, needle, sub, 1);
+    }
+}
+
+static void cmd_grep(int argc, char **argv) {
+    int a = 1, walk = 0;
+    grep_fold = 0;
+    grep_hits = 0;
+    while (a < argc && argv[a][0] == '-' && argv[a][1]) {
+        for (const char *o = argv[a] + 1; *o; o++) {
+            if (*o == 'i') grep_fold = 1;
+            else if (*o == 'r') walk = 1;
+            else { need("grep [-i] [-r] TEXT FILE..."); return; }
+        }
+        a++;
+    }
+    int files = argc - a - 1;
+    bool from_pipe = files == 0 && pipe_n >= 0;
+    if (files < 1 && !from_pipe) { need("grep [-i] [-r] TEXT FILE..."); return; }
+    const char *needle = argv[a];
+    if (from_pipe) {
+        int total = read_input(0);
+        if (total > 0) grep_lines(total, needle, 0, 0);
+    }
+    for (int f = a + 1; f < argc; f++) {
+        zelr_stat st;
+        if (walk && stat(argv[f], &st) == 0 && st.is_dir) { grep_walk(argv[f], needle, 0); continue; }
+        int total = read_all(argv[f]);
+        if (total < 0) continue;
+        grep_lines(total, needle, files > 1 || walk ? argv[f] : 0, 1);
+    }
+    if (!grep_hits && !capturing) dim("no matches");
 }
 
 /* uniq [-c] [FILE]: lines alike one after another said once, with -c how
@@ -1957,7 +2011,7 @@ static const command COMMANDS[] = {
     { "cat",     cmd_cat,     "FILE...",       "print a file" },
     { "head",    cmd_head,    "FILE [LINES]",  "the first few lines" },
     { "tail",    cmd_tail,    "FILE [LINES]",  "the last few" },
-    { "grep",    cmd_grep,    "TEXT FILE...",  "lines containing something" },
+    { "grep",    cmd_grep,    "[-ir] TEXT FILE...", "lines containing something, -i case aside, -r in folders" },
     { "sort",    cmd_sort,    "[FILE]",        "lines in order, of a file or after a |" },
     { "uniq",    cmd_uniq,    "[-c] [FILE]",   "lines alike in a row said once, -c counted" },
     { "diff",    cmd_diff,    "FILE FILE",     "the lines two files differ by" },
