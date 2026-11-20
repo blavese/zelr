@@ -243,7 +243,10 @@ and End go to the top and the bottom of the list. The View menu, or ctrl+1,
 2 and 3, sorts it by name, by size (the largest first) or by date (the
 newest first), folders always at the top. ctrl+P (or Details in the File
 menu) says how big a folder is, counting its files, folders and bytes all
-the way down, or a file's size and when it was written. In Files, / puts the keyboard in the
+the way down, or a file's size and when it was written. Insert marks the
+entry chosen and moves to the next, and ctrl+A marks every one (again,
+none); copy, cut, paste, Delete and ctrl+P then take everything marked
+together. In Files, / puts the keyboard in the
 filter, which narrows the folder as you type; Return there looks in every
 folder below it for names with those letters in them, and lists what it
 finds by its path, to open, copy or put in the trash. Settings' Storage page says how much of the disk and of a stick
@@ -599,6 +602,7 @@ instead.
     python tools/diffcheck.py   the terminal's diff judged by what it must be, and uniq after a | and with -c
     python tools/grepcheck.py   the terminal's grep -i and -r: case aside, three folders deep, bytes passed over
     python tools/slidecheck.py  Pictures' slideshow: in order, round again, a few seconds apart, and stopped
+    python tools/choosecheck.py Files with several chosen: copied, cut, pasted, deleted and counted together
     python tools/wordscheck.py  Paint's words, the saved PNG against face.h drawn here, pixel for pixel
     python tools/downloadcheck.py  a 12 MB download fetched in parts with Range, read back byte for byte
     python tools/notescheck.py  select all, copy, paste, save, undo, find and replace in the editor, from its keys

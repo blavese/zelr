@@ -890,6 +890,13 @@ Added in 0.165.0, not yet in the table below:
   about:history?forget is not followed (still 3); after the server's /peek, about:history's second entry (a, a file;
   the links found as bands of accent inside the window) opens; the forget button (found by its colour) leaves 0.
 
+Added in 0.217.0, not yet in the table below:
+- **`choosecheck.py`** (gate `choosetest`, full; 16 checks). /home/m with five files of known sizes and a folder,
+  /home/n with one file. Files from the keyboard (End, Home and Down until an entry is said): Insert on a, b and d;
+  ctrl+P (700 bytes); ctrl+C; into /home/n, ctrl+V ("copied 3 here"); ctrl+A ("4 chosen"); Delete ("moved 4 to the
+  trash"); back in /home/m ctrl+A, Insert on the folder ("5 chosen"), ctrl+P (1.4 KB), ctrl+X, ctrl+V in /home/n
+  ("moved 5 here"); ctrl+A twice ("none chosen"). The disk then holds the five in /home/n and the four in the trash.
+
 Added in 0.216.0, not yet in the table below:
 - **`slidecheck.py`** (gate `slidetest`, full; 8 checks). Four PNGs of a colour each (made here) in /home/p; Pictures
   opened on the folder from the terminal; S, then its "pictures: NAME," lines followed with the host's clock: b, c, d,

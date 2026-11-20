@@ -113,6 +113,19 @@ numbered files are still to 6048716; where they disagree with this list, this li
   built unsigned program; h264test in the machine still checks the decoder against Windows' answers in h264data.h.
   Gate 74 steps (one out, one in).
 
+### 0.217.0
+
+- **Files chooses several (10, 14)**: files.c `entry.marked`; Insert toggles the chosen entry's mark and moves to
+  the next, ctrl+A (code 1) marks every one or, when all are, none (`say_marked`: "N chosen", "none chosen"); `reload`
+  lets every mark go, so a folder entered, a change or a search starts unmarked; nothing is marked in an archive
+  (`read_only_here`). Copy/Cut (`take`) keep every marked path, 64 at most (`clip_paths`, `clip_n`; it was one
+  `clip_path`), else the chosen one; Paste (`paste_one` for each) says "copied N here"/"moved N here" (and "; not M"),
+  one entry keeping its old words; Delete (`delete_marked`) moves them all to the trash, or on a stick or in the trash
+  deletes them for good on a second press (`delete_armed` -2); Details counts them together, folders all the way
+  down. Marked rows are tinted with an accent bar. The right button's Copy puts a path on the clipboard only when one
+  was taken. Help's rows for Insert and ctrl+A. choosecheck, new (16), gate step `choosetest` (111 steps). Not done:
+  marking with the mouse.
+
 ### 0.216.0
 
 - **Pictures' slideshow (10, 14)**: pictures.c `show_on`/`show_next`; S starts it (a folder of two or more) and says
