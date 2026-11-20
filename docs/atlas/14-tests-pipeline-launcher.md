@@ -890,6 +890,12 @@ Added in 0.165.0, not yet in the table below:
   about:history?forget is not followed (still 3); after the server's /peek, about:history's second entry (a, a file;
   the links found as bands of accent inside the window) opens; the forget button (found by its colour) leaves 0.
 
+Added in 0.218.0, not yet in the table below:
+- **`eventcheck.py`** (gate `eventtest`, full; 6 checks). HOST_CLOCK and q35 with HD Audio recorded to a WAV, as
+  alarmcheck. /home/calendar on the volume: today's note "lunch; WHEN call the bank; LATER not this one; ring at WHEN
+  too" (WHEN two or three minutes on) and tomorrow's "WHEN wrong day". The notice for WHEN in its own minute, once,
+  no notice for the others, and the ring at 880 Hz.
+
 Added in 0.217.0, not yet in the table below:
 - **`choosecheck.py`** (gate `choosetest`, full; 16 checks). /home/m with five files of known sizes and a folder,
   /home/n with one file. Files from the keyboard (End, Home and Down until an entry is said): Insert on a, b and d;

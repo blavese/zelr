@@ -113,6 +113,14 @@ numbered files are still to 6048716; where they disagree with this list, this li
   built unsigned program; h264test in the machine still checks the decoder against Windows' answers in h264data.h.
   Gate 74 steps (one out, one in).
 
+### 0.218.0
+
+- **The calendar's times (07, 08, 14)**: wm.c `calendar_due` reads today's note (`day_note_in`), cuts it into parts at
+  ';', and a part that begins HH:MM at this minute is "calendar: PART" (spaces at its end dropped); a time inside a
+  part is words. `alarms_look` looks at it each new minute beside the alarms, reading /home/calendar (32 KiB) whether
+  or not /home/alarms exists (it returned without one), and rings 880 Hz once for all that are due. Selftest
+  `wm_test_calendar_due` +4. eventcheck, new (6), gate step `eventtest` (112 steps).
+
 ### 0.217.0
 
 - **Files chooses several (10, 14)**: files.c `entry.marked`; Insert toggles the chosen entry's mark and moves to

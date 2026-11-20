@@ -124,7 +124,9 @@ of saying it has finished. The desktop says the day's note from the
 calendar as a notice when it opens and when the date turns over, and keeps
 alarms: `alarm 07:30 wake up` in the terminal, and at that minute the
 desktop says it and rings, whatever is open (`alarm` lists them, `alarm
-clear` takes them away; they are /home/alarms, a line each). Alt and l (or Lock the screen in
+clear` takes them away; they are /home/alarms, a line each). A part of a
+day's note in the calendar that begins with a time ("14:30 the dentist",
+parts parted by ;) is said and rung at that minute of that day as well. Alt and l (or Lock the screen in
 the launcher) locks the screen behind a password set on Settings' Lock page;
 it is kept as a salted SHA-256, never as itself, and nothing gets round the
 lock but the password: not the pointer, not alt and Escape. The same page
@@ -603,6 +605,7 @@ instead.
     python tools/grepcheck.py   the terminal's grep -i and -r: case aside, three folders deep, bytes passed over
     python tools/slidecheck.py  Pictures' slideshow: in order, round again, a few seconds apart, and stopped
     python tools/choosecheck.py Files with several chosen: copied, cut, pasted, deleted and counted together
+    python tools/eventcheck.py  a time in today's calendar note is said and rung in its minute, and only that one
     python tools/wordscheck.py  Paint's words, the saved PNG against face.h drawn here, pixel for pixel
     python tools/downloadcheck.py  a 12 MB download fetched in parts with Range, read back byte for byte
     python tools/notescheck.py  select all, copy, paste, save, undo, find and replace in the editor, from its keys
