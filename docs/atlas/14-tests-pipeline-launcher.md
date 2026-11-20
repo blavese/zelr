@@ -890,6 +890,13 @@ Added in 0.165.0, not yet in the table below:
   about:history?forget is not followed (still 3); after the server's /peek, about:history's second entry (a, a file;
   the links found as bands of accent inside the window) opens; the forget button (found by its colour) leaves 0.
 
+Added in 0.213.0, not yet in the table below:
+- **`diffcheck.py`** (gate `difftest`, full; 9 checks). Files of known lines on a fresh volume (two short ones, two of
+  900 lines with forty random changes, one of lines repeated in runs); diff, uniq, `uniq -c` and `sort | uniq -c`
+  typed into the terminal, each `> FILE`, then `notice all done`. A diff is judged by what it must be: its lines
+  applied to A give B, each carries its own file's line number and text, and there are as many as A and B's lengths
+  less twice their longest shared run (Python works it out). A file diffed with itself writes nothing.
+
 Added in 0.212.0, not yet in the table below:
 - **`ordercheck.py`** (gate `ordertest`, full; 11 checks). `/bin/sheet /home/o.csv`; a header and seven rows (a
   name; a score that is a number, a tie, words, `=1/0` or nothing; a formula of its own row). ctrl+T at B2, again at

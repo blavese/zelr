@@ -113,6 +113,15 @@ numbered files are still to 6048716; where they disagree with this list, this li
   built unsigned program; h264test in the machine still checks the decoder against Windows' answers in h264data.h.
   Gate 74 steps (one out, one in).
 
+### 0.213.0
+
+- **The terminal's diff and uniq (09b, 14)**: term.c `cmd_diff` reads both files (`diff_a`/`diff_b`, 64 KiB each, 4000
+  lines each, `diff_lines`), passes over the lines they begin and end with alike, tables what lies between (a
+  thousand lines each at most; `diff_lcs`, u16, how much of the longest shared run is left from each pair of places)
+  and walks it forward: "- N: line" for A's line N gone, "+ N: line" for B's line N come, the fewest there can be.
+  "the same" only when nothing is captured. `cmd_uniq` (`[-c] [FILE]`, or after a |) says lines alike in a row once,
+  `-c` with the count in seven columns (`uniq_say`). diffcheck, new (9), gate step `difftest` (108 steps).
+
 ### 0.212.0
 
 - **Sheet sorts (10, 14)**: sheet.c `sort_rows` (ctrl+T): the rows from the chosen one to the last with anything in

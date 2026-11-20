@@ -270,13 +270,15 @@ In the terminal, which is itself one of those ring 3 programs:
     cal 2 2028             a month, Monday first (this month with nothing)
     du /home               the bytes, files and folders below a folder
     df                     how much of the disk and of a stick is used
+    diff old.txt new.txt   the fewest lines taken out and put in, with their numbers
+    sort list | uniq -c    how many times each line comes
 
 The terminal's own commands can send what they say into a file: `ls >
 list.txt` writes it, `>>` adds to what is there, and anything that goes
 wrong is still shown rather than written. A `|` hands what one says to the
 next, which reads it where it would have read a file: `cat names.txt |
-sort | head 3`, or `help | grep file | wc` (cat, head, tail, wc, grep and
-sort read it). Tab completes commands and paths, up and down walk through history, ctrl+R
+sort | head 3`, or `help | grep file | wc` (cat, head, tail, wc, grep, sort
+and uniq read it). Tab completes commands and paths, up and down walk through history, ctrl+R
 looks back through it for a line with a word in it (ctrl+R again for the
 one before, Return to run it, an arrow to change it first, ctrl+G to let
 it go), and PageUp scrolls back.
@@ -591,6 +593,7 @@ instead.
     python tools/fillcheck.py   Sheet's references moved by ctrl+D, ctrl+R and a paste, $ kept, #ref off the edge
     python tools/logiccheck.py  Sheet's comparisons, & and words in quotes, IF, AND, OR, NOT, ROUND, ABS, LEN
     python tools/ordercheck.py  Sheet's ctrl+T: rows in order by a column, both ways, formulas moved with them
+    python tools/diffcheck.py   the terminal's diff judged by what it must be, and uniq after a | and with -c
     python tools/wordscheck.py  Paint's words, the saved PNG against face.h drawn here, pixel for pixel
     python tools/downloadcheck.py  a 12 MB download fetched in parts with Range, read back byte for byte
     python tools/notescheck.py  select all, copy, paste, save, undo, find and replace in the editor, from its keys
