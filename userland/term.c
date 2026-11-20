@@ -850,6 +850,118 @@ static void cmd_grep(int argc, char **argv) {
     if (!hits && !capturing) dim("no matches");
 }
 
+/* uniq [-c] [FILE]: lines alike one after another said once, with -c how
+   many there were in front; of a file or of what was piped in. Only lines
+   that follow each other: sort first to count them all. */
+static void uniq_say(const char *line, int run, int counts) {
+    if (!counts) { say(line); return; }
+    w_reset();
+    w_rnum((u32)run, 7);
+    w_ch(' ');
+    w_str(line);
+    say(work);
+}
+
+static void cmd_uniq(int argc, char **argv) {
+    int counts = argc > 1 && !strcmp(argv[1], "-c");
+    const char *path = argc > 1 + counts ? argv[1 + counts] : 0;
+    if (!path && pipe_n < 0) { need("uniq [-c] FILE"); return; }
+    int total = read_input(path);
+    if (total <= 0) return;
+    char *prev = 0;
+    int run = 0, start = 0;
+    for (int i = 0; i <= total; i++) {
+        if (i < total && io[i] != '\n') continue;
+        if (i == total && start == total) break;     /* nothing after the last newline */
+        io[i] = 0;
+        char *line = io + start;
+        if (prev && !strcmp(prev, line)) run++;
+        else {
+            if (prev) uniq_say(prev, run, counts);
+            prev = line;
+            run = 1;
+        }
+        start = i + 1;
+    }
+    if (prev) uniq_say(prev, run, counts);
+}
+
+/* diff A B: the fewest lines taken out of A and put in from B that make one
+   the other, each said with its own file's line number ("- 3: ..." is A's
+   third line gone, "+ 3: ..." B's third come). Worked out from the longest
+   run of lines the two share, kept in a table of how much of it is left
+   from each pair of places; the lines the two begin and end with alike are
+   passed over first, so only what lies between is tabled, a thousand lines
+   each at most. Saying nothing on the screen would look like a fault, so
+   two files alike are said to be the same, there and only there. */
+#define DIFF_LINES 4000
+#define DIFF_MID   1000
+static char diff_a[IO_BUF + 1], diff_b[IO_BUF + 1];
+static char *diff_la[DIFF_LINES], *diff_lb[DIFF_LINES];
+static u16 diff_lcs[(DIFF_MID + 1) * (DIFF_MID + 1)];
+
+static int diff_lines(char *buf, int n, char **out) {
+    int k = 0, start = 0;
+    for (int i = 0; i <= n && k < DIFF_LINES; i++) {
+        if (i < n && buf[i] != '\n') continue;
+        if (i == n && start == n) break;
+        buf[i] = 0;
+        out[k++] = buf + start;
+        start = i + 1;
+    }
+    return k;
+}
+
+static void diff_say(char sign, int num, const char *text) {
+    w_reset();
+    w_ch(sign);
+    w_ch(' ');
+    w_num((u32)num);
+    w_str(": ");
+    w_str(text);
+    say(work);
+}
+
+static void cmd_diff(int argc, char **argv) {
+    if (argc < 3) { need("diff FILE FILE"); return; }
+    int na = read_all(argv[1]);
+    if (na < 0) return;
+    for (int i = 0; i < na; i++) diff_a[i] = io[i];
+    diff_a[na] = 0;
+    int nb = read_all(argv[2]);
+    if (nb < 0) return;
+    for (int i = 0; i < nb; i++) diff_b[i] = io[i];
+    diff_b[nb] = 0;
+    char **la = diff_la, **lb = diff_lb;
+    int n = diff_lines(diff_a, na, la), m = diff_lines(diff_b, nb, lb);
+    if (n == DIFF_LINES || m == DIFF_LINES) { err("too long to compare here: 4000 lines each at most"); return; }
+
+    int pre = 0, suf = 0;
+    while (pre < n && pre < m && !strcmp(la[pre], lb[pre])) pre++;
+    while (suf < n - pre && suf < m - pre && !strcmp(la[n - 1 - suf], lb[m - 1 - suf])) suf++;
+    int an = n - pre - suf, bn = m - pre - suf;
+    if (an > DIFF_MID || bn > DIFF_MID) {
+        err("too different to compare here: a thousand lines each between what they share");
+        return;
+    }
+#define LCS(i, j) diff_lcs[(i) * (bn + 1) + (j)]
+    for (int i = an; i >= 0; i--)
+        for (int j = bn; j >= 0; j--) {
+            if (i == an || j == bn) LCS(i, j) = 0;
+            else if (!strcmp(la[pre + i], lb[pre + j])) LCS(i, j) = (u16)(LCS(i + 1, j + 1) + 1);
+            else LCS(i, j) = LCS(i + 1, j) >= LCS(i, j + 1) ? LCS(i + 1, j) : LCS(i, j + 1);
+        }
+    int i = 0, j = 0, said = 0;
+    while (i < an || j < bn) {
+        if (i < an && j < bn && !strcmp(la[pre + i], lb[pre + j])) { i++; j++; continue; }
+        if (j >= bn || (i < an && LCS(i + 1, j) >= LCS(i, j + 1))) { diff_say('-', pre + i + 1, la[pre + i]); i++; }
+        else { diff_say('+', pre + j + 1, lb[pre + j]); j++; }
+        said++;
+    }
+#undef LCS
+    if (!said && !capturing) dim("the same");
+}
+
 /* sort [FILE]: the lines in byte order, of a file or of what was piped in. */
 static void cmd_sort(int argc, char **argv) {
     const char *path = argc > 1 ? argv[1] : 0;
@@ -1847,6 +1959,8 @@ static const command COMMANDS[] = {
     { "tail",    cmd_tail,    "FILE [LINES]",  "the last few" },
     { "grep",    cmd_grep,    "TEXT FILE...",  "lines containing something" },
     { "sort",    cmd_sort,    "[FILE]",        "lines in order, of a file or after a |" },
+    { "uniq",    cmd_uniq,    "[-c] [FILE]",   "lines alike in a row said once, -c counted" },
+    { "diff",    cmd_diff,    "FILE FILE",     "the lines two files differ by" },
     { "find",    cmd_find,    "NAME [WHERE]",  "files whose name contains it" },
     { "hex",     cmd_hex,     "FILE [BYTES]",  "what a file really holds" },
     { "wc",      cmd_wc,      "FILE",          "lines, words and bytes" },
