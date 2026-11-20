@@ -113,6 +113,17 @@ numbered files are still to 6048716; where they disagree with this list, this li
   built unsigned program; h264test in the machine still checks the decoder against Windows' answers in h264data.h.
   Gate 74 steps (one out, one in).
 
+### 0.210.0
+
+- **Paths up to 255 bytes (03, 04, 09b, 14)**: include/fat.h `FAT_PATH_MAX` 256 (was 128), so `VFS_PATH_MAX` and
+  every path buffer on its word; include/sched.h `TASK_CWD_MAX` 256, which vfs.c now asserts equals `VFS_PATH_MAX`
+  (a smaller one would be strncpy'd past by `set_cwd`); sdk/zelr.h `ZELR_PATH_MAX` 256, which the terminal's
+  `VFS_PATH` is, and tools/abicheck.py compares the three (`check_path`). `vfs_resolve` takes as many levels as a
+  path that long can have (`VFS_PATH_MAX / 2`, was 32). `sys_getcwd` takes a buffer bigger than any path (it
+  returned -1 for one past `VFS_PATH_MAX`). The kernel's stacks hold about 128 bytes more a path buffer. Selftest
+  `[paths]` +6 (folders four deep, 227 and 233 bytes, the working directory, a relative name, past the longest
+  refused, sixty levels); maptest +1 (getcwd into 4096 bytes); tarcheck's ustar path back to 132 bytes once out.
+
 ### 0.209.0
 
 - **Files reads tar and gzip (10, 14)**: zip.h keeps its calls and gains `zip_t.kind` (`ZIP_KIND_ZIP`, `_TAR`,
@@ -126,8 +137,8 @@ numbered files are still to 6048716; where they disagree with this list, this li
   and for going in; `arc_close` calls `zip_close`; extract_all names the folder without .tar.gz, .tgz, .tar, .zip or
   .gz, and a single gzipped file is written beside it ("extracted NAME"). tarcheck, new (16), gate step `tartest`
   (105 steps).
-- Found on the way, not changed: **the kernel keeps a whole path to 127 bytes** (include/fat.h `FAT_PATH_MAX` 128,
-  `VFS_PATH_MAX`), and Files says "there is no room for it" when an entry's path is longer. **tools/mkfat.py writes
+- Found on the way, not changed here: **the kernel kept a whole path to 127 bytes** (include/fat.h `FAT_PATH_MAX`
+  128, `VFS_PATH_MAX`; 255 since 0.210.0), and Files says "there is no room for it" when an entry's path is longer. **tools/mkfat.py writes
   8.3 names only**: a name with two dots or past 8.3 is written malformed, listed by the kernel but not found by
   name; a harness makes such names in the machine (tarcheck renames with mv).
 

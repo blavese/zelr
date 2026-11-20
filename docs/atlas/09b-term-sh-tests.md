@@ -109,7 +109,7 @@ Includes `zelr.h` and `draw.h` (`term.c:17-18`). It does not include `ui.h`: thi
 | `MAX_LINES` | 400 | Scrollback ring size |
 | `PAD` | 8 | Pixel margin around the text grid |
 | `MAX_HIST` | 64 | History entries kept |
-| `VFS_PATH` | 128 | Path buffers ("what the kernel will accept"). Matches `FAT_PATH_MAX` 128. |
+| `VFS_PATH` | `ZELR_PATH_MAX` (256) | Path buffers ("what the kernel will accept"), the SDK's word for `FAT_PATH_MAX` since 0.210.0. |
 | `VFS_NAME` | 32 | Name buffers for completion. **Not** what the kernel accepts: `VFS_NAME_MAX` is `FAT_NAME_MAX` = 64 (`include/fat.h:9`). See section 10. |
 | `IO_BUF` | 16384 | Shared file and network buffer `io[]` (`term.c:600`). Reads cap at 16383 bytes. |
 | `HISTORY_FILE` | `"/cfg/history"` | History, one entry per line |

@@ -292,7 +292,8 @@ State: `table[16]`, `count`, `scheme`, `char gpt_error[64]` (parts.c:37-40).
 ### 3.7 include/fat.h + kernel/fat.c: FAT16/FAT32
 
 #### Public constants (fat.h)
-`FAT_PATH_MAX 128` (:4), `FAT_NAME_MAX 64` (:9; 63 characters plus NUL), `FAT_VOLUMES 2`, `FAT_VOL_DISK 0`, `FAT_VOL_USB 1` (:13-15).
+`FAT_PATH_MAX 256` (255 bytes and the terminator; 128 until 0.210.0; the SDK's `ZELR_PATH_MAX`, compared by
+abicheck), `FAT_NAME_MAX 64` (:9; 63 characters plus NUL), `FAT_VOLUMES 2`, `FAT_VOL_DISK 0`, `FAT_VOL_USB 1` (:13-15).
 
 #### Private constants (fat.c)
 - ATTR (:35-41): RO 0x01, HIDDEN 0x02, SYSTEM 0x04, VOLUME_ID 0x08, DIRECTORY 0x10, ARCHIVE 0x20, LFN 0x0F.
@@ -434,7 +435,7 @@ It does not check that the FAT is large enough for `cluster_count`, and does not
 
 ### 3.8 include/vfs.h + kernel/vfs.c: the namespace
 
-Constants (vfs.h): `VFS_PATH_MAX = FAT_PATH_MAX` (128), `VFS_NAME_MAX = FAT_NAME_MAX` (64), `VFS_MAX_OPEN 16` (**unused**). Open flags: `O_READ 0x01`, `O_WRITE 0x02`, `O_CREATE 0x04`, `O_TRUNC 0x08`, `O_APPEND 0x10` (used by fd.c).
+Constants (vfs.h): `VFS_PATH_MAX = FAT_PATH_MAX` (256), `VFS_NAME_MAX = FAT_NAME_MAX` (64), `VFS_MAX_OPEN 16` (**unused**). Open flags: `O_READ 0x01`, `O_WRITE 0x02`, `O_CREATE 0x04`, `O_TRUNC 0x08`, `O_APPEND 0x10` (used by fd.c).
 
 - `vfs_add_builtin` delegates to `sysfs_add_program`; `vfs_builtin_count` to `sysfs_program_count` (:26-30).
 - `bool vfs_generated(abs)` (:37-40): `sysfs_owns(abs)` or "/bin" and "/bin/…". fd.c uses it too, to refuse `O_WRITE`.

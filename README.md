@@ -554,7 +554,8 @@ instead.
     python tools/filescheck.py  copy, move and rename in the file manager, from its keys
     python tools/trashcheck.py  delete into the trash, put back with ctrl+z, delete for good, empty it
     python tools/zipcheck.py    go into a .zip in Files, open a file from it, extract it, refuse a damaged one
-    python tools/tarcheck.py    tar, .tar.gz, .tgz and .gz in Files: long names, ./, a link, a damaged gzip
+    python tools/tarcheck.py    tar, .tar.gz, .tgz and .gz in Files: long names, ./, a link, a damaged gzip,
+                                a path 132 bytes long once taken out
     python tools/calendarcheck.py  today on the host's clock, moving about, a note kept, a leap day
     python tools/paintcheck.py  open a PNG in Paint, draw, save, decode it here, undo, save again
     python tools/clockcheck.py  other places' times by their own rules, a stopwatch, a timer that rings

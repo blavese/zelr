@@ -890,6 +890,11 @@ Added in 0.165.0, not yet in the table below:
   about:history?forget is not followed (still 3); after the server's /peek, about:history's second entry (a, a file;
   the links found as bands of accent inside the window) opens; the forget button (found by its colour) leaves 0.
 
+Added in 0.210.0, not yet in the table below:
+- **`abicheck.py`** compares the longest path three ways (`check_path`: include/fat.h `FAT_PATH_MAX`, include/sched.h
+  `TASK_CWD_MAX`, sdk/zelr.h `ZELR_PATH_MAX`; 13 checks). **maptest** asks getcwd with a 4096-byte buffer.
+  **tarcheck**'s d.tgz path comes out 132 bytes long. Selftest `[paths]` has six more.
+
 Added in 0.209.0, not yet in the table below:
 - **`tarcheck.py`** (gate `tartest`, full; 16 checks). Six archives from Python's tarfile and gzip (a.tar pax with a
   folder, a binary two folders down, a 110-byte path in a pax record under a short header name, and a link; g.tar

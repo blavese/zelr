@@ -131,7 +131,7 @@ Design decisions and their stated reasons:
 - `u64 brk, brk_base` -- heap break, 0 until first sbrk.
 - `u32 parent_pid` -- who forked it; 0 for kernel-started.
 - `bool user` -- runs in ring 3.
-- `char cwd[TASK_CWD_MAX]` (128) -- working dir, inherited at creation.
+- `char cwd[TASK_CWD_MAX]` (256 since 0.210.0, 128 before) -- working dir, inherited at creation.
 - `i16 fd[TASK_MAX_FD]` (16) -- per-task descriptor array; each entry indexes the open-file table or is -1. Copied by fork, kept by exec.
 - `u32 sig_pending` -- bit per pending signal, acted on by the scheduler.
 - `u32 sig_running` -- bit per signal currently inside its handler (blocks re-entry).
@@ -141,7 +141,7 @@ Design decisions and their stated reasons:
 - `int on_cpu` -- which CPU runs it, or -1. Distinct from `state`: state = wants to run, on_cpu = already running.
 - `struct task *next` -- circular list link.
 
-Constants: `VMA_MAX 16`, `TASK_CWD_MAX 128`, `TASK_STACK_SIZE 32768`, `TASK_MAX_FD 16` (asserted == FD_MAX in fd.c:24). `REAP_GRACE` = 10s (defined in sched.c:71 as `10u*100u` ticks).
+Constants: `VMA_MAX 16`, `TASK_CWD_MAX 256` (vfs.c asserts it equals VFS_PATH_MAX), `TASK_STACK_SIZE 32768`, `TASK_MAX_FD 16` (asserted == FD_MAX in fd.c:24). `REAP_GRACE` = 10s (defined in sched.c:71 as `10u*100u` ticks).
 
 ### kernel/sched.c
 
@@ -443,7 +443,7 @@ Complete table (number, kernel handler, sdk wrapper, args → return):
 
 **Count reconciliation**: 63 distinct populated numbers (0–43, 45–63). 44 retired. `N_SYSCALLS = 64` (highest index 63 + 1). sdk/zelr.h line 11 says "forty-seven system calls" and line 31 of README says "sixty-three system calls" -- see §10. abicheck.py confirms both headers define the same SYS_* names and values (they do -- I verified all 63 match between include/syscall.h and sdk/zelr.h, including the out-of-order block 56/57 placed after 55 in both files, and 58/45/46 defined before the 48–57 block in both).
 
-**Pointer validation summary**: every handler that takes a user pointer calls `user_range_ok`/`copy_path` before dereferencing; strings are copied into kernel buffers (`copy_path`, VFS_PATH_MAX=128, or 128-byte host buffers for connect/resolve). sys_poll re-validates after sleeping. Output structs are memcpy'd into the validated user buffer.
+**Pointer validation summary**: every handler that takes a user pointer calls `user_range_ok`/`copy_path` before dereferencing; strings are copied into kernel buffers (`copy_path`, VFS_PATH_MAX=256 since 0.210.0, or 128-byte host buffers for connect/resolve). sys_poll re-validates after sleeping. Output structs are memcpy'd into the validated user buffer.
 
 **Consumers (grep)**: sdk/zelr.h wraps all; userland shells (sh.c, term.c) use fork/exec/dup2/pipe/wait/signal/kill/spawnv; kernel shell.c and wm.c call user_spawn_elf(_argv); selftest.c/ring3check tests exercise everything. `syscall_release`/`winsrv_release`/`fd_table_release`/`signal_end_task` are the teardown fan-out used by exit, kill and fault.
 
@@ -472,7 +472,7 @@ Complete table (number, kernel handler, sdk wrapper, args → return):
 | STACK_PAINT | 0xC5C5C5C5C5C5C5C5 | sched.c:38 | stack fill / guard |
 | REAP_GRACE | 1000 ticks (10 s) | sched.c:71 | dead-task retention |
 | VMA_MAX | 16 | sched.h:8 | mmap regions per task |
-| TASK_CWD_MAX | 128 | sched.h:18 | cwd length (=VFS_PATH_MAX) |
+| TASK_CWD_MAX | 256 | sched.h:18 | cwd length (=VFS_PATH_MAX; asserted in vfs.c) |
 | TASK_MAX_FD / FD_MAX | 16 | sched.h:52 / fd.h:41 | fds per task |
 | FPU_AREA | 512 | fpu.h:32 | FXSAVE area (+16 slack in task_t) |
 | next_pid start | 1 | sched.c:163 | pids start at 1 |
