@@ -23,6 +23,13 @@
 #define NAME_MAX    64          /* as wide as the kernel's own names */
 #define PATH_MAX    256
 
+/* What zip.h reads: zip, tar, a tar gzipped, a file gzipped. */
+static int ends_with(const char *s, const char *tail);
+static int is_archive_name(const char *name) {
+    return ends_with(name, ".zip") || ends_with(name, ".tar") || ends_with(name, ".tgz")
+        || ends_with(name, ".gz");
+}
+
 /* What a file is, as far as opening it goes. */
 #define KIND_DIR    0
 #define KIND_TEXT   1
@@ -139,7 +146,7 @@ static int kind_of(const char *dir, const char *name, int is_dir) {
         || ends_with(name, ".gif") || ends_with(name, ".webp")) return KIND_PICTURE;
     if (ends_with(name, ".html") || ends_with(name, ".htm")) return KIND_PAGE;
     if (ends_with(name, ".mp4")) return KIND_FILM;
-    if (ends_with(name, ".zip")) return KIND_ARCHIVE;
+    if (is_archive_name(name)) return KIND_ARCHIVE;
     if (ends_with(name, ".csv")) return KIND_SHEET;
     if (ends_with(name, ".txt") || ends_with(name, ".md")
         || ends_with(name, ".cfg") || ends_with(name, ".log")
@@ -281,6 +288,7 @@ static int under(const char *path, const char *dir) {
 static int in_archive(void) { return arc_path[0] && under(cwd, arc_path); }
 
 static void arc_close(void) {
+    zip_close(&arc);
     if (arc_data) free(arc_data);
     arc_data = 0;
     arc_len = 0;
@@ -445,7 +453,9 @@ static void extract_all(const char *path) {
     strncpy(dest, path, sizeof(dest) - 1);
     dest[sizeof(dest) - 1] = 0;
     int n = strlen(dest);
-    if (ends_with(dest, ".zip")) dest[n - 4] = 0;
+    if (ends_with(dest, ".tar.gz")) dest[n - 7] = 0;
+    else if (ends_with(dest, ".zip") || ends_with(dest, ".tar") || ends_with(dest, ".tgz")) dest[n - 4] = 0;
+    else if (ends_with(dest, ".gz")) dest[n - 3] = 0;
     char tried[PATH_MAX];
     strncpy(tried, dest, sizeof(tried) - 1);
     tried[sizeof(tried) - 1] = 0;
@@ -456,6 +466,20 @@ static void extract_all(const char *path) {
         tried[m++] = ' ';
         m += utoa((u32)k, tried + m);
         tried[m] = 0;
+    }
+    /* A file gzipped comes out as that file beside it, not in a folder. */
+    if (arc.kind == ZIP_KIND_GZ) {
+        u32 at0 = 0;
+        zip_entry one;
+        int r = zip_next(&arc, &at0, &one) == 1 ? take_out(&one, tried) : ZIP_BAD;
+        const char *leaf = tried;
+        for (const char *p = tried; *p; p++) if (*p == '/') leaf = p + 1;
+        int m = 0;
+        for (const char *p = r < 0 ? "not extracted: " : "extracted "; *p; p++) arc_said[m++] = *p;
+        for (const char *p = r < 0 ? zip_why(r) : leaf; *p && m < (int)sizeof(arc_said) - 1; p++) arc_said[m++] = *p;
+        arc_said[m] = 0;
+        say(arc_said);
+        return;
     }
     if (mkdir(tried) < 0) { say("could not make the folder to extract into"); return; }
 
@@ -722,7 +746,7 @@ static void show_details(void) {
 /* Extract, from the menus or ctrl+E: the archive open, or the one selected. */
 static void extract_selected(void) {
     if (in_archive()) { extract_all(arc_path); return; }
-    if (selected < 0 || entries[selected].kind != KIND_ARCHIVE) { say("select an archive (.zip) to extract"); return; }
+    if (selected < 0 || entries[selected].kind != KIND_ARCHIVE) { say("select an archive (.zip, .tar, .tgz or .gz) to extract"); return; }
     char path[PATH_MAX];
     join(path, cwd, entries[selected].name);
     extract_all(path);
@@ -867,7 +891,7 @@ static void search_below(void) {
 static void go_to(const char *where) {
     /* An archive's own path goes into it, when it opens. */
     zelr_stat st;
-    if (!(arc_path[0] && under(where, arc_path)) && ends_with(where, ".zip")
+    if (!(arc_path[0] && under(where, arc_path)) && is_archive_name(where)
         && stat(where, &st) == 0 && !st.is_dir && !arc_open(where))
         return;
     strncpy(cwd, where, sizeof(cwd) - 1);

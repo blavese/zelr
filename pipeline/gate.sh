@@ -693,6 +693,7 @@ if [ "$MODE" = "screen" ] || [ "$MODE" = "full" ]; then
   sheettest() { keep timeout 900 python tools/sheetcheck.py; }
   filltest() { keep timeout 900 python tools/fillcheck.py; }
   wordstest() { keep timeout 900 python tools/wordscheck.py; }
+  tartest() { keep timeout 900 python tools/tarcheck.py; }
   downloadtest() { keep timeout 900 python tools/downloadcheck.py; }
 
   # The second boot of a machine, which is the one nothing else reaches:
@@ -835,6 +836,7 @@ if [ "$MODE" = "screen" ] || [ "$MODE" = "full" ]; then
   par_start "a spreadsheet works its formulas out and keeps them as CSV" sheettest
   par_start "a spreadsheet moves references as a formula is filled and pasted" filltest
   par_start "paint puts words on the paper in the desktop's typeface" wordstest
+  par_start "files reads tar, .tar.gz, .tgz and .gz" tartest
   par_start "a download bigger than the browser holds is saved whole" downloadtest
   par_start "a machine still starts once it has formatted its disk" boottest
   par_start "ctrl+f finds a word that is on the screen" findtest
