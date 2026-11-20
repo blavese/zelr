@@ -121,7 +121,10 @@ screen rather than for a program to start. A notice the desktop shows above
 the dock is kept: alt and n lists the last twelve with the time each came,
 newest first, and the terminal's `notice TEXT` puts one up, a script's way
 of saying it has finished. The desktop says the day's note from the
-calendar as a notice when it opens and when the date turns over. Alt and l (or Lock the screen in
+calendar as a notice when it opens and when the date turns over, and keeps
+alarms: `alarm 07:30 wake up` in the terminal, and at that minute the
+desktop says it and rings, whatever is open (`alarm` lists them, `alarm
+clear` takes them away; they are /home/alarms, a line each). Alt and l (or Lock the screen in
 the launcher) locks the screen behind a password set on Settings' Lock page;
 it is kept as a salted SHA-256, never as itself, and nothing gets round the
 lock but the password: not the pointer, not alt and Escape. The same page
@@ -547,6 +550,7 @@ instead.
     python tools/shapecheck.py  Paint's line, rectangle, fill and ellipse, read back from the PNG it saves
     python tools/helpcheck.py   Help's list of keys narrowed by a word, a key's name and a program's
     python tools/windowshotcheck.py alt+Print Screen saves the front window alone, decoded and counted
+    python tools/alarmcheck.py  an alarm set for the coming minute is said in it, once, and its ring heard
     python tools/downloadcheck.py  a 12 MB download fetched in parts with Range, read back byte for byte
     python tools/notescheck.py  select all, copy, paste, save, undo, find and replace in the editor, from its keys
     python tools/timecheck.py   set the time zone from the shell and in Settings, read the clocks and a file's time

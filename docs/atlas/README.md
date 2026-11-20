@@ -113,6 +113,15 @@ numbered files are still to 6048716; where they disagree with this list, this li
   built unsigned program; h264test in the machine still checks the decoder against Windows' answers in h264data.h.
   Gate 74 steps (one out, one in).
 
+### 0.202.0
+
+- **Alarms (07, 10, 14)**: /home/alarms, "HH:MM TEXT" a line. wm.c `alarms_look`, with `day_note` in the once a second
+  look: when the local minute (`zone_now`, as yyyymmddhhmm in `alarm_minute`) is a new one, it reads the file (4 KiB)
+  and says each line of that minute with `wm_notice` ("alarm: TEXT", or "alarm: it is time" with no words; `alarm_in`
+  takes only two-digit HH:MM and leaves out a CR), then rings once (`sound_tone(880, 600)`). The terminal's `alarm`
+  lists, adds ("HH:MM", hours under 24) or clears (unlink). Selftest `[windows]` +4 (`wm_test_alarm`). alarmcheck, new
+  (6), gate step `alarmtest` (98 steps).
+
 ### 0.201.0
 
 - **alt+Print Screen saves the front window (05, 07, 14)**: keyboard.c takes scancode 0x54 (SysRq, what a PS/2

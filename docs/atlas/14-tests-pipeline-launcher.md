@@ -888,6 +888,13 @@ Added in 0.165.0, not yet in the table below:
   about:history?forget is not followed (still 3); after the server's /peek, about:history's second entry (a, a file;
   the links found as bands of accent inside the window) opens; the forget button (found by its colour) leaves 0.
 
+Added in 0.202.0, not yet in the table below:
+- **`alarmcheck.py`** (gate `alarmtest`, full; 6 checks). q35 with intel-hda on a wav audiodev, HOST_CLOCK (the zone is
+  UTC, so the host's UTC minute is the machine's). `alarm HH:MM time to stretch` for the coming minute (the one after
+  when past 45 seconds) and `alarm ... not this one` ten minutes on; "notice: alarm: time to stretch" seen in that
+  minute on the host's clock, once after three seconds more, and not the other; /home/alarms read back (both lines);
+  the last stretch of sound in the recording at 880 Hz.
+
 Added in 0.201.0, not yet in the table below:
 - **`windowshotcheck.py`** (gate `windowshottest`, full; 5 checks). The desktop with its terminal; the screen's
   terminal-page pixels counted; `alt-print` (QEMU sends SysRq) ("desktop: the window is saved in /home/pictures/window
