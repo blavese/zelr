@@ -77,7 +77,7 @@ MENU_IN = {
     "Internet": ["Browser"],
     "Media": ["Paint", "Music", "Pictures"],
     "Games": ["Blackjack", "Poker"],
-    "System": ["Settings", "Monitor", "System info"],
+    "System": ["Settings", "Monitor", "Help", "System info"],
     "Session": ["Lock the screen", "Close all", "Leave desktop", "Shut down"],
 }
 

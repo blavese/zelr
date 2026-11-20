@@ -71,6 +71,7 @@ extern const u8 builtin_mediatest_start[], builtin_mediatest_end[];
 extern const u8 builtin_ziptest_start[], builtin_ziptest_end[];
 extern const u8 builtin_calendar_start[], builtin_calendar_end[];
 extern const u8 builtin_clock_start[], builtin_clock_end[];
+extern const u8 builtin_help_start[], builtin_help_end[];
 
 typedef struct {
     const char *name;
@@ -140,6 +141,7 @@ static const program_t PROGRAMS[] = {
     { "ziptest",  builtin_ziptest_start,  builtin_ziptest_end  },
     { "calendar", builtin_calendar_start, builtin_calendar_end },
     { "clock",    builtin_clock_start,    builtin_clock_end    },
+    { "help",     builtin_help_start,     builtin_help_end     },
 };
 
 #define N_PROGRAMS (sizeof(PROGRAMS) / sizeof(PROGRAMS[0]))

@@ -428,3 +428,10 @@ builtin_calendar_end:
 builtin_clock_start:
 .incbin "build/user/clock.elf.z"
 builtin_clock_end:
+
+.balign 4
+.global builtin_help_start
+.global builtin_help_end
+builtin_help_start:
+.incbin "build/user/help.elf.z"
+builtin_help_end:

@@ -475,6 +475,7 @@ static const mitem_t M_MEDIA[] = {
 static const mitem_t M_SYSTEM[] = {
     { "Settings",     "/bin/settings" },
     { "Monitor",      "/bin/monitor" },
+    { "Help",         "/bin/help" },
     { "System info",  0 },
 };
 static const mitem_t M_GAMES[] = {
