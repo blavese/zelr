@@ -113,6 +113,27 @@ numbered files are still to 6048716; where they disagree with this list, this li
   built unsigned program; h264test in the machine still checks the decoder against Windows' answers in h264data.h.
   Gate 74 steps (one out, one in).
 
+### 0.206.0
+
+- **Sheet (10, 14)**: userland/sheet.c, in the launcher's Productivity list after Notes (/bin/sheet; builtin.S/.c,
+  shotcheck's copy of the launcher), and Files' `KIND_SHEET` for .csv (kind "sheet", opened there, from an archive
+  too). 26 by 200 cells of 96 bytes of text each. A cell's text is plain (`plain`: nothing, a number with a sign,
+  or words) or a formula after `=`, read by recursive descent (`expr`/`term`/`unary`/`atom`, `call` for SUM, AVG or
+  AVERAGE, MIN, MAX, COUNT over ranges and expressions) and worked out as it is read. `recalc` works out every cell
+  after any change: `cell_value` keeps a pass number per cell, so each is worked out once a pass, and `busy` marks
+  one being worked out, so a reference back to it is `#cycle`. Errors win over what follows them; empty is nought
+  in arithmetic, words are `#value`; a range passes over words and empty cells; COUNT passes over errors too.
+  Numbers shown with six places at most, trailing zeros dropped (`num_text`). Saved as CSV (`save`: a row up to its
+  last cell, quoted when a comma, a quote or an end space is in it), read as CSV from anything (`load`: doubled
+  quotes, CRLF, a line break in quotes made a space). Keys: arrows, Tab (Return goes back to the column the Tabs
+  began in, `tab_from`), F2, Delete, ctrl+G/S/O/C/X/V, from the keyboard or as the control character a serial line
+  sends (`chord`). "sheet: CELL TEXT[ is VALUE]" on the console when what is chosen changes, "sheet: saved/opened/new
+  PATH, N rows" for files. Help has five rows for it. sheetcheck, new (14), gate step `sheettest` (102 steps).
+- **tlscheck** (released with 0.195.0, the commit after it): a badssl.com fetch that is to be refused is asked again, up
+  to three times, while the answer is "could not connect" (`refusal`); a wrong answer is still judged on the first go.
+  The machine's connections wait six seconds, and badssl.com took seven or never answered on 2026-11-20 (the 0.195.0
+  gate).
+
 ### 0.205.0
 
 - **The terminal's | (10, 14)**: term.c `run_line` notes a `|` outside double quotes; `stages_of` cuts the line into

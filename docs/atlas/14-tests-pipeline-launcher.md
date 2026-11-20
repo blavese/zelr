@@ -888,6 +888,19 @@ Added in 0.165.0, not yet in the table below:
   about:history?forget is not followed (still 3); after the server's /peek, about:history's second entry (a, a file;
   the links found as bands of accent inside the window) opens; the forget button (found by its colour) leaves 0.
 
+Added in 0.206.0, not yet in the table below:
+- **`sheetcheck.py`** (gate `sheettest`, full; 14 checks). A volume with /home/s/in.csv as Python's csv module writes
+  it (CRLF, `"say ""hi"", ok"`, a line break inside quotes). Sheet is opened from the launcher's search (`DOCK_BADGE`,
+  "sheet", Return: "sheet: new /home/sheet.csv") and closed; Files is started from the terminal on /home/s, Down
+  says "files: in.csv - sheet", Return opens it ("sheet: opened /home/s/in.csv, 6 rows"); B4, B5 and A6 visited with
+  ctrl+G. ctrl+O (ctrl+X empties the field) /home/new.csv starts a new one; eight rows are typed over the serial line
+  with Tabs, each Return said as "sheet: A<n> empty"; A1 changed from 2 to 7; 21 cells visited and compared
+  (sums, AVG, MIN/MAX, COUNT, #div/0, #cycle alone and in a pair, #value, #ref, #name, #error, 0.333333, -6);
+  ctrl+S ("saved /home/new.csv, 8 rows"), opened again, C2 and C4 visited. The file read off the disk equals the
+  CSV expected byte for byte, and Python's csv reads it back.
+- **`tlscheck.py`** (released with 0.195.0): `refusal` asks a badssl.com host again, up to three times, while the answer
+  is "could not connect".
+
 Added in 0.205.0, not yet in the table below:
 - **`pipecheck.py`** (gate `pipetest`, full; 15 checks). A fresh volume with /home/p/fruit.txt (five lines, one
   twice) and many.txt (3000 lines "line NNNN" shuffled, 30000 bytes). Typed into the desktop's terminal, each pipe

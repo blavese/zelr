@@ -111,7 +111,7 @@ are driving it down a serial line or something has gone wrong.
 
 A terminal opens, over a desktop with icons down the left of it. Click the
 name at the left of the dock, or the wallpaper, for the launcher: the
-programs by kind -- a file manager, an editor, paint, settings, a system
+programs by kind -- a file manager, an editor, a spreadsheet, paint, settings, a system
 monitor, a music player, a calculator, a calendar, a clock, a web browser,
 a picture viewer, Help (every key, narrowed as you type), two card games, and
 what the machine is made of, with a field in it that narrows the list as
@@ -142,7 +142,16 @@ saves it as a PNG (`paint FILE.png` opens one to draw on, and saves back to
 it), and ctrl and z takes back the last stroke. Beside the brushes are a
 line, a rectangle and an ellipse, each dragged out and shown as it is
 dragged, and a fill that spreads the colour over what it is clicked on
-(also B, L, R, E and F). Drag a title bar to move a
+(also B, L, R, E and F). Sheet, in the Productivity list, is a
+spreadsheet: 26 columns by 200 rows, each cell a number, words, or = and a
+formula of numbers, cells (B3), + - * / and brackets, and SUM, AVG, MIN,
+MAX and COUNT of ranges (A1:C9). Every cell is worked out again after any
+change, and one that cannot be says why: #div/0, #cycle for a cell that
+comes back to itself, #value for words in a sum, #ref, #name, #error. Tab
+and Return move on as they do in other spreadsheets, F2 changes a cell,
+ctrl and g goes to one by its name, ctrl and s keeps the sheet as CSV
+(formulas as typed) and ctrl and o opens another; Files opens a .csv
+there. Drag a title bar to move a
 window; the three buttons at its right put it away, fill the screen, or
 close it.
 Drag the bottom right corner to resize, or drag a title bar to an edge to
@@ -562,6 +571,7 @@ instead.
     python tools/redirectcheck.py the terminal's > and >>: files written, added to, errors kept on the screen
     python tools/toolcheck.py   the terminal's cal against Python's calendar, du and df against what is there
     python tools/pipecheck.py   the terminal's |: sort, grep, wc, head and tail fed by the command before
+    python tools/sheetcheck.py  Sheet: formulas worked out again, every error, CSV kept, read and Python's read
     python tools/downloadcheck.py  a 12 MB download fetched in parts with Range, read back byte for byte
     python tools/notescheck.py  select all, copy, paste, save, undo, find and replace in the editor, from its keys
     python tools/timecheck.py   set the time zone from the shell and in Settings, read the clocks and a file's time
