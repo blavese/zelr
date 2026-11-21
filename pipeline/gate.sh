@@ -704,6 +704,7 @@ if [ "$MODE" = "screen" ] || [ "$MODE" = "full" ]; then
   scripttest() { keep timeout 900 python tools/scriptcheck.py; }
   texttest() { keep timeout 900 python tools/textcheck.py; }
   counttest() { keep timeout 900 python tools/countcheck.py; }
+  smalltest() { keep timeout 900 python tools/smallcheck.py; }
   slidetest() { keep timeout 900 python tools/slidecheck.py; }
   choosetest() { keep timeout 900 python tools/choosecheck.py; }
   eventtest() { keep timeout 900 python tools/eventcheck.py; }
@@ -861,6 +862,7 @@ if [ "$MODE" = "screen" ] || [ "$MODE" = "full" ]; then
   par_start "the terminal runs a file of its lines, with the words given and names set" scripttest
   par_start "a spreadsheet takes words apart and finds words in words" texttest
   par_start "a spreadsheet counts and adds up what meets a criterion" counttest
+  par_start "the terminal's small tools count, number, turn round, name and touch" smalltest
   par_start "pictures shows a folder as a slideshow" slidetest
   par_start "files chooses several and moves them together" choosetest
   par_start "a time in the calendar rings at its minute" eventtest

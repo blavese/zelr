@@ -1371,6 +1371,163 @@ static void cmd_zip(int argc, char **argv) {
     say(work);
 }
 
+/* --- small tools ---------------------------------------------------------------
+ *
+ * seq, nl, tac, rev, basename, dirname and touch, which a script reaches for
+ * more than a person does. nl, tac and rev read a file or what was piped in. */
+
+/* seq LAST, seq FIRST LAST, seq FIRST STEP LAST: whole numbers, one a line,
+   from FIRST (1) by STEP (1, or -1 when LAST is below FIRST), as far as LAST;
+   ten thousand at most. */
+static bool whole_number(const char *s, int *out) {
+    int neg = *s == '-', v = 0, any = 0;
+    if (neg || *s == '+') s++;
+    for (; *s; s++) {
+        if (*s < '0' || *s > '9' || v > 100000000) return false;
+        v = v * 10 + (*s - '0');
+        any = 1;
+    }
+    *out = neg ? -v : v;
+    return any;
+}
+
+static void cmd_seq(int argc, char **argv) {
+    int first = 1, step = 0, last;
+    bool ok = argc >= 2 && argc <= 4 && whole_number(argv[argc - 1], &last);
+    if (ok && argc >= 3) ok = whole_number(argv[1], &first);
+    if (ok && argc == 4) ok = whole_number(argv[2], &step) && step != 0;
+    if (!ok) { need("seq [FIRST [STEP]] LAST, whole numbers"); return; }
+    if (!step) step = last < first ? -1 : 1;
+    int n = 0;
+    for (int v = first; step > 0 ? v <= last : v >= last; v += step) {
+        if (++n > 10000) { err("ten thousand numbers at most"); return; }
+        w_reset();
+        if (v < 0) { w_ch('-'); w_num((u32)-v); } else w_num((u32)v);
+        say(work);
+    }
+}
+
+/* The lines of what read_input gave: their starts, ended at their newlines,
+   none after the last newline. */
+static char *small_line[8192];
+
+static int small_lines(int total) {
+    int n = 0;
+    for (int i = 0, start = 0; i <= total && n < 8192; i++) {
+        if (i != total && io[i] != '\n') continue;
+        if (i == total && start == total) break;
+        io[i] = 0;
+        small_line[n++] = io + start;
+        start = i + 1;
+    }
+    return n;
+}
+
+/* nl [FILE]: each line with its number before it, right in six places, and
+   a tab, as other systems number with cat -n. */
+static void cmd_nl(int argc, char **argv) {
+    const char *path = argc > 1 ? argv[1] : 0;
+    if (!path && pipe_n < 0) { need("nl FILE"); return; }
+    int total = read_input(path);
+    if (total <= 0) return;
+    int n = small_lines(total);
+    for (int i = 0; i < n; i++) {
+        w_reset();
+        w_rnum((u32)(i + 1), 6);
+        w_ch('\t');
+        w_str(small_line[i]);
+        say(work);
+    }
+}
+
+/* tac [FILE]: the lines last first. */
+static void cmd_tac(int argc, char **argv) {
+    const char *path = argc > 1 ? argv[1] : 0;
+    if (!path && pipe_n < 0) { need("tac FILE"); return; }
+    int total = read_input(path);
+    if (total <= 0) return;
+    for (int i = small_lines(total) - 1; i >= 0; i--) say(small_line[i]);
+}
+
+/* rev [FILE]: each line's characters the other way round. */
+static void cmd_rev(int argc, char **argv) {
+    const char *path = argc > 1 ? argv[1] : 0;
+    if (!path && pipe_n < 0) { need("rev FILE"); return; }
+    int total = read_input(path);
+    if (total <= 0) return;
+    int n = small_lines(total);
+    for (int i = 0; i < n; i++) {
+        char *s = small_line[i];
+        int len = strlen(s);
+        for (int a = 0, b = len - 1; a < b; a++, b--) { char t = s[a]; s[a] = s[b]; s[b] = t; }
+        say(s);
+    }
+}
+
+/* basename PATH [ENDING]: the last part of a path, an ending such as .txt
+   taken off it when given (and not all of it); dirname PATH: all but the
+   last part, "." when there is none and "/" for one at the top. Neither
+   looks at the disk. */
+static void cmd_basename(int argc, char **argv) {
+    if (argc < 2 || argc > 3) { need("basename PATH [ENDING]"); return; }
+    char part[VFS_PATH];
+    strncpy(part, argv[1], sizeof(part) - 1);
+    part[sizeof(part) - 1] = 0;
+    int n = strlen(part);
+    while (n > 1 && part[n - 1] == '/') part[--n] = 0;
+    const char *leaf = part;
+    for (int i = 0; i < n - 1; i++) if (part[i] == '/') leaf = part + i + 1;
+    char out[VFS_PATH];
+    strcpy(out, leaf);
+    if (argc == 3) {
+        int m = strlen(out), e = strlen(argv[2]);
+        if (e < m && !strcmp(out + m - e, argv[2])) out[m - e] = 0;
+    }
+    say(out);
+}
+
+static void cmd_dirname(int argc, char **argv) {
+    if (argc != 2) { need("dirname PATH"); return; }
+    char part[VFS_PATH];
+    strncpy(part, argv[1], sizeof(part) - 1);
+    part[sizeof(part) - 1] = 0;
+    int n = strlen(part);
+    while (n > 1 && part[n - 1] == '/') part[--n] = 0;
+    int cut = -1;
+    for (int i = 0; i < n; i++) if (part[i] == '/') cut = i;
+    if (cut < 0) { say("."); return; }
+    while (cut > 0 && part[cut - 1] == '/') cut--;
+    if (cut == 0) { say("/"); return; }
+    part[cut] = 0;
+    say(part);
+}
+
+/* touch FILE...: a file made, empty, when it is not there; one that is has
+   its first byte written again as it was, so the disk says it was written
+   now. An empty file that is there is made again, as empty. */
+static void cmd_touch(int argc, char **argv) {
+    if (argc < 2) { need("touch FILE..."); return; }
+    for (int i = 1; i < argc; i++) {
+        zelr_stat st;
+        if (stat(argv[i], &st) == 0 && st.is_dir) { not_a_file(argv[i], ": a folder"); continue; }
+        bool there = stat(argv[i], &st) == 0 && st.size > 0;
+        if (!there) {
+            int fd = open(argv[i], O_WRITE | O_CREATE | O_TRUNC);
+            if (fd < 0) { not_a_file(argv[i], ": cannot be written"); continue; }
+            close(fd);
+            continue;
+        }
+        char first;
+        int rd = open(argv[i], O_READ);
+        bool got = rd >= 0 && fread(rd, &first, 1) == 1;
+        if (rd >= 0) close(rd);
+        int fd = got ? open(argv[i], O_WRITE) : -1;
+        bool again = fd >= 0 && fwrite(fd, &first, 1) == 1;
+        if (fd >= 0) close(fd);
+        if (!again) not_a_file(argv[i], ": could not be written again");
+    }
+}
+
 /* sort [FILE]: the lines in byte order, of a file or of what was piped in. */
 static void cmd_sort(int argc, char **argv) {
     const char *path = argc > 1 ? argv[1] : 0;
@@ -2374,6 +2531,13 @@ static const command COMMANDS[] = {
     { "diff",    cmd_diff,    "FILE FILE",     "the lines two files differ by" },
     { "find",    cmd_find,    "NAME [WHERE]",  "files whose name contains it" },
     { "hex",     cmd_hex,     "FILE [BYTES]",  "what a file really holds" },
+    { "seq",     cmd_seq,     "[FIRST [STEP]] LAST", "whole numbers, one a line" },
+    { "nl",      cmd_nl,      "[FILE]",        "the lines numbered" },
+    { "tac",     cmd_tac,     "[FILE]",        "the lines last first" },
+    { "rev",     cmd_rev,     "[FILE]",        "each line the other way round" },
+    { "basename", cmd_basename, "PATH [ENDING]", "the last part of a path" },
+    { "dirname", cmd_dirname, "PATH",          "all but the last part of a path" },
+    { "touch",   cmd_touch,   "FILE...",       "made when it is not there, or written now" },
     { "source",  cmd_source,  "FILE [WORDS...]", "a file's lines run as if typed; $1 to $9 are the words" },
     { "set",     cmd_set,     "[NAME [TEXT]]", "a name for $NAME on any line, or the names given" },
     { "cut",     cmd_cut,     "-f LIST [-d C] FILE", "fields of each line, or -c LIST its characters" },
