@@ -2347,6 +2347,8 @@ static void cmd_about(int argc, char **argv) {
    Adding a command here is the whole job of adding a command. */
 
 static void cmd_help(int argc, char **argv);
+static void cmd_source(int argc, char **argv);      /* with run_line, below the table */
+static void cmd_set(int argc, char **argv);
 
 typedef struct {
     const char *name;
@@ -2372,6 +2374,8 @@ static const command COMMANDS[] = {
     { "diff",    cmd_diff,    "FILE FILE",     "the lines two files differ by" },
     { "find",    cmd_find,    "NAME [WHERE]",  "files whose name contains it" },
     { "hex",     cmd_hex,     "FILE [BYTES]",  "what a file really holds" },
+    { "source",  cmd_source,  "FILE [WORDS...]", "a file's lines run as if typed; $1 to $9 are the words" },
+    { "set",     cmd_set,     "[NAME [TEXT]]", "a name for $NAME on any line, or the names given" },
     { "cut",     cmd_cut,     "-f LIST [-d C] FILE", "fields of each line, or -c LIST its characters" },
     { "tr",      cmd_tr,      "SET1 SET2 FILE", "bytes made others, or -d taken out" },
     { "sha256sum", cmd_sha256sum, "FILE...",   "each file's SHA-256, to compare with a sum taken elsewhere" },
@@ -2578,7 +2582,136 @@ static int run_into(char *cmdline, char *to, int append) {
     return 1;
 }
 
-static void run_line(char *cmdline) {
+/* --- scripts and names ------------------------------------------------------
+ *
+ * source FILE [WORDS...] runs a file's lines one after another as if each
+ * were typed, passing over empty lines and those that begin with #. In them
+ * $1 to $9 are the words given after the file, $0 the file, $# how many and
+ * $* all of them; on any line, typed or in a script, $NAME is what `set NAME
+ * TEXT` gave it (nothing when nothing did, as other shells have it). One
+ * script at a time: one that sources another, itself included, is told it
+ * cannot, rather than going round for ever. */
+#define VARS 32
+static char var_name[VARS][16], var_text[VARS][COLS + 1];
+static int  nvars;
+static const char *script_word[10];
+static int  script_words, in_script;
+static char script_text[IO_BUF];
+
+static int var_find(const char *name, int n) {
+    for (int i = 0; i < nvars; i++)
+        if ((int)strlen(var_name[i]) == n && !strncmp(var_name[i], name, n)) return i;
+    return -1;
+}
+
+static bool name_char(char c, bool first) {
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_' || (!first && c >= '0' && c <= '9');
+}
+
+/* A line with its $s put in, cut at cap. */
+static void expand(const char *in, char *out, int cap) {
+    int o = 0;
+    for (int i = 0; in[i] && o < cap - 1; ) {
+        if (in[i] != '$') { out[o++] = in[i++]; continue; }
+        const char *put = 0;
+        char num[12];
+        int take = 1;
+        char c = in[i + 1];
+        if (c >= '0' && c <= '9') {
+            int k = c - '0';
+            put = in_script && k < script_words ? script_word[k] : "";
+            take = 2;
+        } else if (c == '#') {
+            num[utoa((u32)(in_script && script_words ? script_words - 1 : 0), num)] = 0;
+            put = num;
+            take = 2;
+        } else if (c == '*') {
+            for (int k = 1; in_script && k < script_words; k++) {
+                if (k > 1 && o < cap - 1) out[o++] = ' ';
+                for (const char *p = script_word[k]; *p && o < cap - 1; p++) out[o++] = *p;
+            }
+            i += 2;
+            continue;
+        } else if (name_char(c, true)) {
+            int n = 1;
+            while (name_char(in[i + 1 + n], false)) n++;
+            int v = var_find(in + i + 1, n);
+            put = v >= 0 ? var_text[v] : "";
+            take = 1 + n;
+        } else {
+            out[o++] = in[i++];             /* a $ that names nothing is a $ */
+            continue;
+        }
+        for (const char *p = put; *p && o < cap - 1; p++) out[o++] = *p;
+        i += take;
+    }
+    out[o] = 0;
+}
+
+/* set NAME TEXT gives a name its text, set NAME takes it away, and set
+   alone lists them, NAME=TEXT a line. */
+static void cmd_set(int argc, char **argv) {
+    if (argc < 2) {
+        for (int i = 0; i < nvars; i++) {
+            w_reset(); w_str(var_name[i]); w_ch('='); w_str(var_text[i]); say(work);
+        }
+        return;
+    }
+    const char *name = argv[1];
+    int n = strlen(name);
+    bool good = n > 0 && n < (int)sizeof(var_name[0]) && name_char(name[0], true);
+    for (int i = 1; good && i < n; i++) good = name_char(name[i], false);
+    if (!good) { err("a name is letters, digits and _, fifteen at most, not starting with a digit"); return; }
+    int v = var_find(name, n);
+    if (argc < 3) {
+        if (v >= 0) {
+            for (int i = v; i < nvars - 1; i++) {
+                strcpy(var_name[i], var_name[i + 1]);
+                strcpy(var_text[i], var_text[i + 1]);
+            }
+            nvars--;
+        }
+        return;
+    }
+    if (v < 0) {
+        if (nvars == VARS) { err("thirty-two names at most"); return; }
+        v = nvars++;
+        strcpy(var_name[v], name);
+    }
+    join_from(argv, argc, 2, var_text[v], (int)sizeof(var_text[v]));
+}
+
+static void cmd_source(int argc, char **argv) {
+    if (argc < 2) { need("source FILE [WORDS...]"); return; }
+    if (in_script) { err("a script cannot run another here"); return; }
+    int total = read_all(argv[1]);
+    if (total < 0) return;
+    for (int i = 0; i < total; i++) script_text[i] = io[i];
+    script_text[total] = 0;
+    script_words = argc - 1 < 10 ? argc - 1 : 10;
+    for (int k = 0; k < script_words; k++) script_word[k] = argv[1 + k];
+    in_script = 1;
+    for (int i = 0, start = 0; i <= total; i++) {
+        if (i < total && script_text[i] != '\n') continue;
+        int n = i - start;
+        if (n > 0 && script_text[start + n - 1] == '\r') n--;
+        char line[COLS + 1];
+        if (n > COLS) n = COLS;
+        for (int k = 0; k < n; k++) line[k] = script_text[start + k];
+        line[n] = 0;
+        start = i + 1;
+        int lead = 0;
+        while (line[lead] == ' ' || line[lead] == '\t') lead++;
+        if (!line[lead] || line[lead] == '#') continue;
+        run_line(line + lead);
+    }
+    in_script = 0;
+    script_words = 0;
+}
+
+static void run_line(char *given) {
+    char cmdline[COLS * 2 + 1];
+    expand(given, cmdline, (int)sizeof(cmdline));
     int quoted = 0, piped = 0;
     for (char *p = cmdline; *p; p++) {
         if (*p == '"') quoted = !quoted;
