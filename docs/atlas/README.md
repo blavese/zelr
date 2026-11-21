@@ -113,6 +113,14 @@ numbered files are still to 6048716; where they disagree with this list, this li
   built unsigned program; h264test in the machine still checks the decoder against Windows' answers in h264data.h.
   Gate 74 steps (one out, one in).
 
+### 0.231.0
+
+- **Wildcards in the terminal (10, 14)**: term.c `split` notes a * or ? outside double quotes and has `glob_expand`
+  make the word the names it matches (`glob_match`: * any run, ? any one, case aside), sorted by their bytes, the
+  folder part as typed before each. Only the last part of a path; a dot name only for a pattern beginning with a dot;
+  no match leaves the word as typed. Names go into `glob_pool` (16 KiB), which a typed line (and F1) starts afresh and
+  `cmd_source` puts back to where it was before each of its lines.
+
 ### 0.230.0
 
 - **The calculator's memory, square root and tape (09a, 14)**: calc.c keeps `memory` (M+ adds what is shown, MR shows

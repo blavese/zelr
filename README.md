@@ -304,7 +304,8 @@ wrong is still shown rather than written. A `|` hands what one says to the
 next, which reads it where it would have read a file: `cat names.txt |
 sort | head 3`, or `help | grep file | wc` (cat, head, tail, wc, grep, sort,
 uniq, sha256sum, cut and tr read it). Words in double quotes are one word,
-the quotes left out: `grep "two words" notes.txt`. Tab completes commands and paths, up and down walk through history, ctrl+R
+the quotes left out: `grep "two words" notes.txt`. A word with * or ? in it
+stands for the names it matches, in order: `cat notes/*.txt`, `rm *.tmp`. Tab completes commands and paths, up and down walk through history, ctrl+R
 looks back through it for a line with a word in it (ctrl+R again for the
 one before, Return to run it, an arrow to change it first, ctrl+G to let
 it go), and PageUp scrolls back.
@@ -629,6 +630,7 @@ instead.
     python tools/countcheck.py  Sheet's COUNTIF, SUMIF and AVERAGEIF, criteria read as spreadsheets read them
     python tools/smallcheck.py  the terminal's seq, nl, tac, rev, basename, dirname and touch
     python tools/calccheck.py   the calculator's sums, square roots and memory, read off its tape on the console
+    python tools/globcheck.py   the terminal's * and ? against Python's fnmatch, in a folder and after cd
     python tools/slidecheck.py  Pictures' slideshow: in order, round again, a few seconds apart, and stopped
     python tools/choosecheck.py Files with several chosen: copied, cut, pasted, deleted and counted together
     python tools/eventcheck.py  a time in today's calendar note is said and rung in its minute, and only that one

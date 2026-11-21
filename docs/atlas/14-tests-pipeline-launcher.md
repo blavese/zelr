@@ -890,6 +890,12 @@ Added in 0.165.0, not yet in the table below:
   about:history?forget is not followed (still 3); after the server's /peek, about:history's second entry (a, a file;
   the links found as bands of accent inside the window) opens; the forget button (found by its colour) leaves 0.
 
+Added in 0.231.0, not yet in the table below:
+- **`globcheck.py`** (gate `globtest`, full; 10 checks). Eight files in /home/w (.txt, .md, .tmp, one name of two
+  letters); `echo /home/w/*.txt`, `echo /home/w/?.md`, `cd`, `echo *.txt`, `echo B*`, `cat *.txt` (each under its
+  "== NAME ==" line), `echo "*.txt" and zz*q`, `rm *.tmp`, each `> FILE`; compared with Python's fnmatch over the same
+  names, case aside and sorted; the folder walked after to see only the .tmp files gone.
+
 Added in 0.230.0, not yet in the table below:
 - **`calccheck.py`** (gate `calctest`, full; 9 checks). The calculator started from the terminal, waited for by its
   accent keys; keys typed over the serial line (78/4, 0.1+0.2, 2r, 1000000r, 9m, 4m, cM*3, L, 5/0, 4~r) and each tape
