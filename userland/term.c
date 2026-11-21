@@ -517,9 +517,70 @@ typedef void (*handler)(int argc, char **argv);
 
 static void run_line(char *cmdline);        /* used by time and by the loop */
 
+/* --- wildcards ----------------------------------------------------------------
+ *
+ * A word with * or ? outside double quotes stands for the names in its folder
+ * that it matches, in order of their bytes: * for any run of characters, ? for
+ * any one, case aside as the disk has it. Only the last part of a path may
+ * have them (*.txt, /home/a?.csv, or a folder's name, a slash and *.md); a
+ * name beginning with a dot is matched only by a word that begins with one; a
+ * word that matches nothing is left as it was typed, as other shells leave
+ * it. The names are kept in a pool that each line typed starts afresh. */
+#define GLOB_POOL 16384
+static char glob_pool[GLOB_POOL];
+static int  glob_n;
+
+static bool glob_match(const char *p, const char *s) {
+    const char *star = 0, *back = 0;
+    while (*s) {
+        char a = *p, b = *s;
+        if (a >= 'A' && a <= 'Z') a = (char)(a + 32);
+        if (b >= 'A' && b <= 'Z') b = (char)(b + 32);
+        if (*p == '*') { star = ++p; back = s; continue; }
+        if (*p && (*p == '?' || a == b)) { p++; s++; continue; }
+        if (star) { p = star; s = ++back; continue; }
+        return false;
+    }
+    while (*p == '*') p++;
+    return !*p;
+}
+
+/* The word at argv[at] made the names it matches, sorted: the new count. */
+static int glob_expand(char **argv, int at, int max) {
+    const char *word = argv[at];
+    int cut = -1;
+    for (int i = 0; word[i]; i++) if (word[i] == '/') cut = i;
+    char dir[VFS_PATH];
+    if (cut < 0) { if (getcwd(dir, sizeof(dir)) < 0) strcpy(dir, "/"); }
+    else if (cut == 0) strcpy(dir, "/");
+    else if (cut < (int)sizeof(dir)) { memcpy(dir, word, cut); dir[cut] = 0; }
+    else return at + 1;
+    for (int i = 0; dir[i]; i++) if (dir[i] == '*' || dir[i] == '?') return at + 1;
+    const char *pat = word + cut + 1;
+    int first = at;
+    zelr_stat st;
+    for (int i = 0; readdir(dir, i, &st) == 1 && at < max; i++) {
+        if (!strcmp(st.name, ".") || !strcmp(st.name, "..")) continue;
+        if (st.name[0] == '.' && pat[0] != '.') continue;
+        if (!glob_match(pat, st.name)) continue;
+        int need = cut + 1 + (int)strlen(st.name) + 1;
+        if (glob_n + need > GLOB_POOL) break;
+        char *w = glob_pool + glob_n;
+        for (int k = 0; k <= cut; k++) w[k] = word[k];
+        strcpy(w + cut + 1, st.name);
+        glob_n += need;
+        int k = at;
+        while (k > first && strcmp(argv[k - 1], w) > 0) { argv[k] = argv[k - 1]; k--; }
+        argv[k] = w;
+        at++;
+    }
+    return at > first ? at : first + 1;
+}
+
 /* Words run to a space outside double quotes, and the quotes go: "a b" is
    one word, a b, as other shells have it (a delimiter of one space for cut,
-   two words for grep to find together). */
+   two words for grep to find together). A word with a wildcard outside the
+   quotes becomes the names it matches. */
 static int split(char *s, char **argv, int max) {
     int n = 0;
     while (*s && n < max) {
@@ -527,14 +588,16 @@ static int split(char *s, char **argv, int max) {
         if (!*s) break;
         argv[n++] = s;
         char *out = s;
-        int quoted = 0;
+        int quoted = 0, wild = 0;
         while (*s && (quoted || *s != ' ')) {
             if (*s == '"') { quoted = !quoted; s++; continue; }
+            if (!quoted && (*s == '*' || *s == '?')) wild = 1;
             *out++ = *s++;
         }
         int more = *s != 0;
         *out = 0;
         if (more) s++;
+        if (wild) n = glob_expand(argv, n - 1, max);
     }
     return n;
 }
@@ -2855,6 +2918,7 @@ static void cmd_source(int argc, char **argv) {
     script_words = argc - 1 < 10 ? argc - 1 : 10;
     for (int k = 0; k < script_words; k++) script_word[k] = argv[1 + k];
     in_script = 1;
+    int names_kept = glob_n;                /* the words given may be in the pool */
     for (int i = 0, start = 0; i <= total; i++) {
         if (i < total && script_text[i] != '\n') continue;
         int n = i - start;
@@ -2867,6 +2931,7 @@ static void cmd_source(int argc, char **argv) {
         int lead = 0;
         while (line[lead] == ' ' || line[lead] == '\t') lead++;
         if (!line[lead] || line[lead] == '#') continue;
+        glob_n = names_kept;
         run_line(line + lead);
     }
     in_script = 0;
@@ -3121,6 +3186,7 @@ static void submit(void) {
     hist_at = 0;
     view = 0;
 
+    glob_n = 0;
     run_line(copy);
 }
 
@@ -3274,6 +3340,7 @@ static void on_key(u32 key) {
         case KEY_F1: {
             char line[8];
             strcpy(line, "help");
+            glob_n = 0;
             run_line(line);
             return;
         }
