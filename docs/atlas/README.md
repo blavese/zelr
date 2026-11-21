@@ -113,6 +113,16 @@ numbered files are still to 6048716; where they disagree with this list, this li
   built unsigned program; h264test in the machine still checks the decoder against Windows' answers in h264data.h.
   Gate 74 steps (one out, one in).
 
+### 0.225.0
+
+- **Scripts and names in the terminal (10, 14)**: term.c `cmd_source` reads a file into `script_text` (64 KiB) and runs
+  each line through `run_line`, passing over empty lines and those beginning with # (after spaces), a line cut at
+  COLS; `script_word` holds $0 to $9 (the file, then the words). `run_line` puts the $s in first (`expand`, into a
+  local buffer twice COLS long): $0-$9, $# (the words after the file), $* (them, apart by spaces), $NAME from
+  `cmd_set` (`var_name`/`var_text`, 32 names of 15 characters); a name never set is nothing, a $ naming nothing stays.
+  `in_script` refuses a source inside a script ("a script cannot run another here"). `set` alone lists NAME=TEXT,
+  `set NAME` takes one away. Inside double quotes too, as the expansion comes before the words are split.
+
 ### 0.224.0
 
 - **unzip and zip in the terminal, one archive code with Files (09a, 10, 14)**: userland/arcio.h holds what Files did

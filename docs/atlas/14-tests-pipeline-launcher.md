@@ -890,6 +890,13 @@ Added in 0.165.0, not yet in the table below:
   about:history?forget is not followed (still 3); after the server's /peek, about:history's second entry (a, a file;
   the links found as bands of accent inside the window) opens; the forget button (found by its colour) leaves 0.
 
+Added in 0.225.0, not yet in the table below:
+- **`scriptcheck.py`** (gate `scripttest`, full; 13 checks). make.sh (a comment, set, an empty line, $1, "$2 and $1",
+  $# and $*, a folder named $1 with a file written from $0, an indented comment, a lone $ and an unset name) run as
+  `source make.sh alpha beta`; loop.sh (append, then `source` itself) must append once; `set > FILE` lists
+  greeting=hello; a typed `echo $greeting typed`; `set greeting` then `echo [$greeting]` gives []. The files read back, and the
+  terminal's fault colour (E07A6A) counted on the screen before and after make.sh (a comment run says a fault).
+
 Added in 0.224.0, not yet in the table below:
 - **`arccheck.py`** (gate `arctest`, full; 12 checks). t.zip (deflated a.txt, stored sub/b.txt, empty/, ../evil.txt),
   t.tgz (x.txt, y/z.txt) and one.gz, all written by Python. `unzip -l` (each "%9d  NAME"), `unzip t.zip` (into t,
