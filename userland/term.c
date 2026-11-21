@@ -438,8 +438,14 @@ static int draw_prompt(void) {
         return py;
     }
 
-    char cwd[128];
-    if (getcwd(cwd, sizeof(cwd)) < 0) strcpy(cwd, "/");
+    /* Where the shell is: 128 bytes drew / for a folder deeper than that, and
+       a deep folder's whole path would leave the line no room on the row,
+       so past half the row it is its end alone, after "...". */
+    char where[VFS_PATH], cwd[VFS_PATH];
+    if (getcwd(where, sizeof(where)) < 0) strcpy(where, "/");
+    int wl = strlen(where), most = cols / 2 > 12 ? cols / 2 : 12;
+    if (wl > most) { strcpy(cwd, "..."); strcpy(cwd + 3, where + wl - (most - 3)); }
+    else strcpy(cwd, where);
     face_draw(&scr, PAD, py, cwd, pal.accent, UI_FACE_MONO);
     int x = PAD + (strlen(cwd) + 1) * MONO_W;
     face_draw(&scr, x, py, "> ", pal.dim, UI_FACE_MONO);
@@ -2819,7 +2825,10 @@ static int run_into(char *cmdline, char *to, int append) {
  * script at a time: one that sources another, itself included, is told it
  * cannot, rather than going round for ever. */
 #define VARS 32
-static char var_name[VARS][16], var_text[VARS][COLS + 1];
+/* A name's text is as long as a line can be once its names are put in
+   (0.232.0; it was a screen's width, and a path set in two halves was cut
+   short of the file it named). */
+static char var_name[VARS][16], var_text[VARS][COLS * 2 + 1];
 static int  nvars;
 static const char *script_word[10];
 static int  script_words, in_script;

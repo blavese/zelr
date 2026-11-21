@@ -159,7 +159,7 @@ static int builtin(stage_t *st) {
     }
 
     if (!strcmp(c, "pwd")) {
-        char cwd[128];
+        char cwd[ZELR_PATH_MAX];
         if (getcwd(cwd, sizeof(cwd)) >= 0) { say(cwd); say("\n"); }
         return 1;
     }
@@ -305,7 +305,7 @@ static void run(stage_t *stages, int count, int background) {
 /* --- the loop ------------------------------------------------------------ */
 
 static void prompt(void) {
-    char cwd[128];
+    char cwd[ZELR_PATH_MAX];
     if (getcwd(cwd, sizeof(cwd)) >= 0) say(cwd);
     say(" $ ");
 }

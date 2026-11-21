@@ -38,7 +38,7 @@ int main(int ac, char **av) {
     int argc = ac - 1;
 
     if (argc == 0) {
-        char cwd[128];
+        char cwd[ZELR_PATH_MAX];        /* 128 listed / from a folder deeper than that */
         if (getcwd(cwd, sizeof(cwd)) < 0) strcpy(cwd, "/");
         return list(cwd);
     }

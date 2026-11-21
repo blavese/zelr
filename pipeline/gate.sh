@@ -707,6 +707,7 @@ if [ "$MODE" = "screen" ] || [ "$MODE" = "full" ]; then
   smalltest() { keep timeout 900 python tools/smallcheck.py; }
   calctest() { keep timeout 900 python tools/calccheck.py; }
   globtest() { keep timeout 900 python tools/globcheck.py; }
+  deeptest() { keep timeout 900 python tools/deepcheck.py; }
   slidetest() { keep timeout 900 python tools/slidecheck.py; }
   choosetest() { keep timeout 900 python tools/choosecheck.py; }
   eventtest() { keep timeout 900 python tools/eventcheck.py; }
@@ -867,6 +868,7 @@ if [ "$MODE" = "screen" ] || [ "$MODE" = "full" ]; then
   par_start "the terminal's small tools count, number, turn round, name and touch" smalltest
   par_start "the calculator keeps a number aside and takes square roots" calctest
   par_start "the terminal's * and ? stand for the names they match" globtest
+  par_start "programs work in a folder deeper than 127 bytes" deeptest
   par_start "pictures shows a folder as a slideshow" slidetest
   par_start "files chooses several and moves them together" choosetest
   par_start "a time in the calendar rings at its minute" eventtest

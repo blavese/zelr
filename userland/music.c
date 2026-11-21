@@ -28,7 +28,7 @@
 
 #define MAX_FILES  64
 #define NAME_MAX   64
-#define PATH_MAX   128
+#define PATH_MAX   ZELR_PATH_MAX   /* the kernel's, 256 since 0.210.0; it was 128 here */
 #define CHUNK      2048          /* frames handed to the driver at a time */
 
 typedef struct {
