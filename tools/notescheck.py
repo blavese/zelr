@@ -1,8 +1,8 @@
 """Notes, the text editor, worked from its keys.
 
 ctrl+a selects all of the text, ctrl+c copies it, ctrl+v pastes it, ctrl+s
-saves and ctrl+z undoes. Each was typed into the text as the control
-character it folds to -- ctrl+s put a 0x13 in the file and saved nothing --
+saves, ctrl+z undoes and ctrl+y redoes. Each was typed into the text as
+the control character it folds to -- ctrl+s put a 0x13 in the file and saved nothing --
 and there was no undo at all. This opens Notes on a file seeded on the disk,
 presses the chords through the monitor, and reads the file back off the disk
 image on this side with tools/readfat.py after every save.
@@ -108,6 +108,35 @@ def main():
         key("ctrl-z")
         key("ctrl-s")
         c.add("and ctrl+z takes a run of typing back at once", wait_disk(lambda: read("/home/note.txt") == NOTE))
+
+        # ctrl+Y puts back what ctrl+Z took (0.226.0), and a change made
+        # after an undo leaves nothing to put back.
+        def said_now(text, timeout=20):
+            end = time.time() + timeout
+            while time.time() < end:
+                if text in vm.serial()[mark0:]:
+                    return True
+                time.sleep(0.2)
+            return False
+
+        key("ctrl-y")
+        key("ctrl-s")
+        c.add("ctrl+y puts the typing ctrl+z took back where it was",
+              wait_disk(lambda: read("/home/note.txt") == NOTE + b"zzz"))
+        mark0 = len(vm.serial())
+        key("ctrl-y")
+        nothing = said_now("notes: nothing to redo")
+        key("ctrl-z")
+        key("q")
+        mark0 = len(vm.serial())
+        key("ctrl-y")
+        nothing = nothing and said_now("notes: nothing to redo")
+        key("ctrl-s")
+        c.add("with nothing taken back, or a change made since, ctrl+y has nothing to put back",
+              nothing and wait_disk(lambda: read("/home/note.txt") == NOTE + b"q"))
+        key("ctrl-z")
+        key("ctrl-s")
+        wait_disk(lambda: read("/home/note.txt") == NOTE)
 
         # Find and replace, on ctrl+H. Notes says its status on the console
         # ("notes: found"), and the file is read back after each save.

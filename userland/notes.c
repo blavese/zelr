@@ -64,6 +64,11 @@ static ui_field goto_field;
 typedef struct { char *text; int len, cursor; } undo_t;
 static undo_t undos[UNDO_MAX];
 static int    nundo;
+/* Redo: the text as it was before each ctrl+Z, for ctrl+Y to put back, the
+   newest last. Any new change forgets them, as they no longer come after
+   what is there. */
+static undo_t redos[UNDO_MAX];
+static int    nredo;
 static int    typing;             /* the newest copy already covers this run of typing */
 
 /* --- the buffer ----------------------------------------------------------- */
@@ -198,8 +203,9 @@ static void load(const char *from) {
     scroll_line = 0;
     sel_anchor = -1;
     dirty = 0;
-    /* Another file's changes are not this one's to undo. */
+    /* Another file's changes are not this one's to undo, nor to redo. */
     while (nundo > 0) free(undos[--nundo].text);
+    while (nredo > 0) free(redos[--nredo].text);
     typing = 0;
     strncpy(path, from, PATH_MAX - 1);
     path[PATH_MAX - 1] = 0;
@@ -218,43 +224,56 @@ static void save(void) {
 /* A copy of the text as it is, before a change: the oldest goes when there
    are sixteen. Typing after typing takes no copy, the first letter's covering
    the run. */
-static void undo_mark(int is_typing) {
-    if (is_typing && typing) return;
-    typing = is_typing;
+/* The text as it is onto one of the two stacks, the oldest going when it
+   holds sixteen. */
+static void keep_copy(undo_t *stack, int *n) {
     char *copy = (char *)malloc((u64)len + 1);
     if (!copy) return;
     memcpy(copy, buf, len);
     copy[len] = 0;
-    if (nundo == UNDO_MAX) {
-        free(undos[0].text);
+    if (*n == UNDO_MAX) {
+        free(stack[0].text);
         for (int i = 1; i < UNDO_MAX; i++) {
-            undos[i - 1].text = undos[i].text;
-            undos[i - 1].len = undos[i].len;
-            undos[i - 1].cursor = undos[i].cursor;
+            stack[i - 1].text = stack[i].text;
+            stack[i - 1].len = stack[i].len;
+            stack[i - 1].cursor = stack[i].cursor;
         }
-        nundo--;
+        (*n)--;
     }
-    undos[nundo].text = copy;
-    undos[nundo].len = len;
-    undos[nundo].cursor = cursor;
-    nundo++;
+    stack[*n].text = copy;
+    stack[*n].len = len;
+    stack[*n].cursor = cursor;
+    (*n)++;
 }
 
-static void undo(void) {
-    if (!nundo) { say("nothing to undo"); return; }
-    undo_t *u = &undos[nundo - 1];
+static void undo_mark(int is_typing) {
+    if (is_typing && typing) return;
+    typing = is_typing;
+    while (nredo > 0) free(redos[--nredo].text);
+    keep_copy(undos, &nundo);
+}
+
+/* The top of one stack made the text, what was there going onto the other:
+   ctrl+Z from undos to redos, ctrl+Y back. */
+static void take_from(undo_t *from, int *nfrom, undo_t *onto, int *nonto, const char *none, const char *done) {
+    if (!*nfrom) { say(none); return; }
+    undo_t *u = &from[*nfrom - 1];
     if (!reserve(u->len)) { say("not enough memory for that"); return; }
+    keep_copy(onto, nonto);
     memcpy(buf, u->text, u->len);
     len = u->len;
     buf[len] = 0;
     cursor = u->cursor <= len ? u->cursor : len;
     free(u->text);
-    nundo--;
+    (*nfrom)--;
     sel_anchor = -1;
     typing = 0;
     dirty = 1;
-    say("undone");
+    say(done);
 }
+
+static void undo(void) { take_from(undos, &nundo, redos, &nredo, "nothing to undo", "undone"); }
+static void redo(void) { take_from(redos, &nredo, undos, &nundo, "nothing to redo", "redone"); }
 
 /* --- selection and the clipboard ------------------------------------------ */
 
@@ -517,6 +536,7 @@ int main(int argc, char **argv) {
                 else if (l == 'v') paste();
                 else if (l == 'a') { sel_anchor = 0; cursor = len; typing = 0; }
                 else if (l == 'z') undo();
+                else if (l == 'y') redo();
                 else if (l == 'h') {
                     bar_open = 1;
                     find_field.focused = 1;

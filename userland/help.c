@@ -53,6 +53,7 @@ static const row_t ROWS[] = {
     { "notes", "ctrl+S", "saved" },
     { "notes", "ctrl+O", "another file opened, chosen from a list" },
     { "notes", "ctrl+Z", "the last change taken back" },
+    { "notes", "ctrl+Y", "what ctrl+Z took back put back" },
     { "notes", "ctrl+A", "everything selected" },
     { "notes", "ctrl+C, ctrl+X, ctrl+V", "copy, cut and paste" },
     { "notes", "ctrl+H", "find and replace; Return the next, ctrl+R every one" },
