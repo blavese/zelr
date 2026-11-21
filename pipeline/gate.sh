@@ -702,6 +702,7 @@ if [ "$MODE" = "screen" ] || [ "$MODE" = "full" ]; then
   cuttest() { keep timeout 900 python tools/cutcheck.py; }
   arctest() { keep timeout 900 python tools/arccheck.py; }
   scripttest() { keep timeout 900 python tools/scriptcheck.py; }
+  texttest() { keep timeout 900 python tools/textcheck.py; }
   slidetest() { keep timeout 900 python tools/slidecheck.py; }
   choosetest() { keep timeout 900 python tools/choosecheck.py; }
   eventtest() { keep timeout 900 python tools/eventcheck.py; }
@@ -857,6 +858,7 @@ if [ "$MODE" = "screen" ] || [ "$MODE" = "full" ]; then
   par_start "the terminal cuts fields out of lines and turns letters into others" cuttest
   par_start "the terminal takes archives apart and makes zips" arctest
   par_start "the terminal runs a file of its lines, with the words given and names set" scripttest
+  par_start "a spreadsheet takes words apart and finds words in words" texttest
   par_start "pictures shows a folder as a slideshow" slidetest
   par_start "files chooses several and moves them together" choosetest
   par_start "a time in the calendar rings at its minute" eventtest

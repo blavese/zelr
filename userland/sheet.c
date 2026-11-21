@@ -14,7 +14,8 @@
  * Since 0.211.0 a formula also compares (= <> < > <= >=, giving TRUE or
  * FALSE), joins words with &, holds words in quotes ("say ""hi"""), and
  * knows IF, AND, OR, NOT, ROUND, ABS and LEN. Words a formula makes are
- * kept in a pool that every pass of working out starts afresh.
+ * kept in a pool that every pass of working out starts afresh. Since
+ * 0.227.0 it knows UPPER, LOWER, TRIM, LEFT, RIGHT, MID and FIND as well.
  */
 #include "zelr.h"
 #include "ui.h"
@@ -324,7 +325,8 @@ static int named(const char *s, int n, const char *name) {
     return name[n] == 0;
 }
 
-/* IF, AND, OR, NOT, ROUND, ABS and LEN: each argument worked out whole. */
+/* IF, AND, OR, NOT, ROUND, ABS, LEN and the words' functions: each argument
+   worked out whole. */
 static val scalar(parse_t *P, const char *name, int len) {
     val arg[8];
     int n = 0;
@@ -380,6 +382,67 @@ static val scalar(parse_t *P, const char *name, int len) {
         if (!round) return number(x < 0 ? -x : x);
         double places = n == 2 && arg[1].kind == V_NUM ? arg[1].num : 0;
         return number(round_to(x, (int)places));
+    }
+    /* Words: UPPER, LOWER and TRIM (spaces at the ends gone, a run of them
+       inside made one) of a value; LEFT and RIGHT of it, one letter or as
+       many as asked; MID from a place counted from 1; FIND of some words in
+       others, case counting as spreadsheets have it, their place from 1 or
+       #value when they are not there. A number is taken as it is shown, and
+       a count or place that is not a number, or below nought, is #value. */
+    if (named(name, len, "UPPER") || named(name, len, "LOWER") || named(name, len, "TRIM")) {
+        if (n != 1) return error("#value");
+        if (arg[0].kind == V_ERR) return arg[0];
+        char buf[40], out[TEXT_MAX];
+        const char *w = as_words(arg[0], buf);
+        int k = 0;
+        if (named(name, len, "TRIM")) {
+            for (int i = 0; w[i] && k < TEXT_MAX - 1; i++) {
+                if (w[i] == ' ' && (k == 0 || out[k - 1] == ' ')) continue;
+                out[k++] = w[i];
+            }
+            while (k && out[k - 1] == ' ') k--;
+        } else {
+            int up = named(name, len, "UPPER");
+            for (int i = 0; w[i] && k < TEXT_MAX - 1; i++) {
+                char ch = w[i];
+                if (up && ch >= 'a' && ch <= 'z') ch = (char)(ch - 32);
+                if (!up && ch >= 'A' && ch <= 'Z') ch = (char)(ch + 32);
+                out[k++] = ch;
+            }
+        }
+        return words2(out, k, "", 0);
+    }
+    if (named(name, len, "LEFT") || named(name, len, "RIGHT") || named(name, len, "MID")) {
+        int mid = named(name, len, "MID");
+        if (mid ? n != 3 : (n < 1 || n > 2)) return error("#value");
+        for (int i = 0; i < n; i++) if (arg[i].kind == V_ERR) return arg[i];
+        for (int i = 1; i < n; i++) if (arg[i].kind != V_NUM || arg[i].num < 0) return error("#value");
+        char buf[40];
+        const char *w = as_words(arg[0], buf);
+        int wl = strlen(w), from = 0, count;
+        if (mid) {
+            if (arg[1].num < 1) return error("#value");
+            from = arg[1].num - 1 > wl ? wl : (int)arg[1].num - 1;
+            count = arg[2].num > wl ? wl : (int)arg[2].num;
+        } else {
+            double c = n == 2 ? arg[1].num : 1;
+            count = c > wl ? wl : (int)c;
+            if (named(name, len, "RIGHT")) from = wl - count;
+        }
+        if (count > wl - from) count = wl - from;
+        return words2(w + from, count, "", 0);
+    }
+    if (named(name, len, "FIND")) {
+        if (n < 2 || n > 3) return error("#value");
+        for (int i = 0; i < n; i++) if (arg[i].kind == V_ERR) return arg[i];
+        if (n == 3 && (arg[2].kind != V_NUM || arg[2].num < 1)) return error("#value");
+        char b1[40], b2[40];
+        const char *needle = as_words(arg[0], b1), *hay = as_words(arg[1], b2);
+        int nl = strlen(needle), hl = strlen(hay);
+        if (n == 3 && arg[2].num - 1 > hl) return error("#value");
+        for (int i = n == 3 ? (int)arg[2].num - 1 : 0; i + nl <= hl; i++)
+            if (!strncmp(hay + i, needle, nl)) return number(i + 1);
+        return error("#value");
     }
     return error("#name");
 }
