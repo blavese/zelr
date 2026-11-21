@@ -135,7 +135,8 @@ playing counts as somebody there, so a film or an album is not locked
 away. With a password set the machine starts locked, so a restart does not
 get round it: the desktop opens locked, and the console (started with the
 word console, or reached before the desktop) asks for the password before
-it takes a command, showing stars for what is typed. In the editor, ctrl and h opens a
+it takes a command, showing stars for what is typed. In the editor, ctrl and z
+takes back a change and ctrl and y puts it back again; ctrl and h opens a
 bar to find a word in the file and replace it, one at a time or every one at
 once (ctrl and r), whatever its case; ctrl and o opens another file, chosen
 from a list of the folder's folders and files, the one open chosen first
@@ -629,7 +630,7 @@ instead.
     python tools/pickcheck.py   the file chooser in Notes, Sheet, Pictures and Paint: listed, typed, into folders, let go
     python tools/wordscheck.py  Paint's words, the saved PNG against face.h drawn here, pixel for pixel
     python tools/downloadcheck.py  a 12 MB download fetched in parts with Range, read back byte for byte
-    python tools/notescheck.py  select all, copy, paste, save, undo, find and replace in the editor, from its keys
+    python tools/notescheck.py  select all, copy, paste, save, undo, redo, find and replace in the editor, from its keys
     python tools/timecheck.py   set the time zone from the shell and in Settings, read the clocks and a file's time
     python tools/ntpcheck.py    put the clock back to 2020, serve the time from here, see it set
     python tools/printcheck.py  press print screen, decode the PNG here, compare it with the screen

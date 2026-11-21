@@ -113,6 +113,13 @@ numbered files are still to 6048716; where they disagree with this list, this li
   built unsigned program; h264test in the machine still checks the decoder against Windows' answers in h264data.h.
   Gate 74 steps (one out, one in).
 
+### 0.226.0
+
+- **Notes' ctrl+Y (09a, 14)**: notes.c `redos` beside `undos` (sixteen each, `keep_copy` onto either); `take_from`
+  makes the top of one the text and keeps what was there on the other: ctrl+Z from undos onto redos, ctrl+Y back.
+  `undo_mark` (every change starts with it) forgets the redos; opening another file forgets both. "redone",
+  "nothing to redo". Help's row. notescheck 11 to 13.
+
 ### 0.225.0
 
 - **Scripts and names in the terminal (10, 14)**: term.c `cmd_source` reads a file into `script_text` (64 KiB) and runs

@@ -890,6 +890,11 @@ Added in 0.165.0, not yet in the table below:
   about:history?forget is not followed (still 3); after the server's /peek, about:history's second entry (a, a file;
   the links found as bands of accent inside the window) opens; the forget button (found by its colour) leaves 0.
 
+Added in 0.226.0, not yet in the table below:
+- **`notescheck.py`** (13 checks now): after the run of typing is taken back, ctrl+Y puts "zzz" back (saved and read);
+  ctrl+Y again says "nothing to redo"; ctrl+Z, "q" typed, and ctrl+Y says it again and the file is the note and q;
+  ctrl+Z then leaves the note as it was for the find and replace checks.
+
 Added in 0.225.0, not yet in the table below:
 - **`scriptcheck.py`** (gate `scripttest`, full; 13 checks). make.sh (a comment, set, an empty line, $1, "$2 and $1",
   $# and $*, a folder named $1 with a file written from $0, an indented comment, a lone $ and an unset name) run as
