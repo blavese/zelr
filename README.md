@@ -631,6 +631,7 @@ instead.
     python tools/smallcheck.py  the terminal's seq, nl, tac, rev, basename, dirname and touch
     python tools/calccheck.py   the calculator's sums, square roots and memory, read off its tape on the console
     python tools/globcheck.py   the terminal's * and ? against Python's fnmatch, in a folder and after cd
+    python tools/deepcheck.py   a song 194 bytes down: pwd, /bin/ls with no folder named, Music playing it
     python tools/slidecheck.py  Pictures' slideshow: in order, round again, a few seconds apart, and stopped
     python tools/choosecheck.py Files with several chosen: copied, cut, pasted, deleted and counted together
     python tools/eventcheck.py  a time in today's calendar note is said and rung in its minute, and only that one

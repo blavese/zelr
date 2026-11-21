@@ -113,6 +113,15 @@ numbered files are still to 6048716; where they disagree with this list, this li
   built unsigned program; h264test in the machine still checks the decoder against Windows' answers in h264data.h.
   Gate 74 steps (one out, one in).
 
+### 0.232.0
+
+- **The last paths of 127 bytes (10, 14)**: 0.210.0 made paths 255 bytes, and four places still held 128: music.c
+  `PATH_MAX` (a song's path cut, so it did not open), ls.c with no folder named (getcwd failed and it listed /),
+  sh.c's pwd and prompt (nothing said), and the terminal's prompt (it drew /). All are `ZELR_PATH_MAX`/`VFS_PATH` now,
+  and the terminal's prompt shows a path longer than half the row as "..." and its end, which left the line no room.
+  term.c `var_text` (what `set` gives a name) is a line's length after its names are put in (`COLS * 2 + 1`); it was
+  `COLS + 1`, and a path set in two halves was cut short of its file.
+
 ### 0.231.0
 
 - **Wildcards in the terminal (10, 14)**: term.c `split` notes a * or ? outside double quotes and has `glob_expand`

@@ -890,6 +890,12 @@ Added in 0.165.0, not yet in the table below:
   about:history?forget is not followed (still 3); after the server's /peek, about:history's second entry (a, a file;
   the links found as bands of accent inside the window) opens; the forget button (found by its colour) leaves 0.
 
+Added in 0.232.0, not yet in the table below:
+- **`deepcheck.py`** (gate `deeptest`, full; 5 checks; q35 with HD Audio). A WAV twenty folders down (194 bytes), made
+  by mkfat; the terminal gets there in two cd's (a typed line holds 160) and names it in two set's; `pwd > FILE`
+  read back, `/bin/ls` with nothing after it saying song.wav on the console, `music $b/song.wav` saying "music:
+  finished with". The terminal's prompt was looked at, not checked.
+
 Added in 0.231.0, not yet in the table below:
 - **`globcheck.py`** (gate `globtest`, full; 10 checks). Eight files in /home/w (.txt, .md, .tmp, one name of two
   letters); `echo /home/w/*.txt`, `echo /home/w/?.md`, `cd`, `echo *.txt`, `echo B*`, `cat *.txt` (each under its
