@@ -890,6 +890,11 @@ Added in 0.165.0, not yet in the table below:
   about:history?forget is not followed (still 3); after the server's /peek, about:history's second entry (a, a file;
   the links found as bands of accent inside the window) opens; the forget button (found by its colour) leaves 0.
 
+Added in 0.228.0, not yet in the table below:
+- **`countcheck.py`** (gate `counttest`, full; 8 checks). A table (fruit, how many with a negative and an empty one,
+  what they cost) and three rows of COUNTIF/SUMIF/AVERAGEIF typed into a new sheet, each visited with ctrl+G and
+  compared with the same worked out in Python by `meets`, written as spreadsheets read a criterion.
+
 Added in 0.227.0, not yet in the table below:
 - **`textcheck.py`** (gate `texttest`, full; 9 checks). Six rows typed into a new sheet (logiccheck's way: tabs and
   Return over the serial line, each cell visited with ctrl+G): UPPER/LOWER/TRIM of "  Hello   World  " (bracketed so

@@ -113,6 +113,15 @@ numbered files are still to 6048716; where they disagree with this list, this li
   built unsigned program; h264test in the machine still checks the decoder against Windows' answers in h264data.h.
   Gate 74 steps (one out, one in).
 
+### 0.228.0
+
+- **Sheet's COUNTIF, SUMIF and AVERAGEIF (10, 14)**: sheet.c `call_if` from `call`: a range (`range_at`, which puts
+  its corners in order), a criterion worked out whole, and for SUMIF and AVERAGEIF an optional second range read at
+  the same places. `meets`: a number criterion is equal; words may begin with = <> < > <= >= and then say a number
+  (numbers compared, a sign read) or words (words compared, case aside, `compare`); a cell of the other kind meets only
+  <>, an empty one too; an error cell meets nothing. AVERAGEIF meeting nothing is #div/0; a corner off the sheet #ref.
+  No wildcards (* ?) and no "" for empty cells.
+
 ### 0.227.0
 
 - **Sheet's functions for words (10, 14)**: sheet.c `scalar`: UPPER, LOWER, TRIM (ends gone, inner runs made one),
