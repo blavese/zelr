@@ -890,6 +890,13 @@ Added in 0.165.0, not yet in the table below:
   about:history?forget is not followed (still 3); after the server's /peek, about:history's second entry (a, a file;
   the links found as bands of accent inside the window) opens; the forget button (found by its colour) leaves 0.
 
+Added in 0.230.0, not yet in the table below:
+- **`calccheck.py`** (gate `calctest`, full; 9 checks). The calculator started from the terminal, waited for by its
+  accent keys; keys typed over the serial line (78/4, 0.1+0.2, 2r, 1000000r, 9m, 4m, cM*3, L, 5/0, 4~r) and each tape
+  line compared with the answer in Python, in millionths (`math.isqrt` for the roots); cM+5 after MC must give 0 + 5,
+  since the line MC prints says nought whatever is kept. appcheck (six rows, 280x440)
+  and helpcheck (calculator among PROGRAMS) follow.
+
 Added in 0.229.0, not yet in the table below:
 - **`smallcheck.py`** (gate `smalltest`, full; 9 checks; `HOST_CLOCK`). lines.txt (an empty line among four) and
   old.txt (mkfat's date, 2025-01-01). Five seq's, nl, `| tac`, rev, three basename's and three dirname's, each

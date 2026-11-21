@@ -113,6 +113,16 @@ numbered files are still to 6048716; where they disagree with this list, this li
   built unsigned program; h264test in the machine still checks the decoder against Windows' answers in h264data.h.
   Gate 74 steps (one out, one in).
 
+### 0.230.0
+
+- **The calculator's memory, square root and tape (09a, 14)**: calc.c keeps `memory` (M+ adds what is shown, MR shows
+  it, MC clears it; an M in the display's corner while it holds something), `square_root` (the whole root of the
+  millionths times a million in `unsigned __int128`, by halving, so to the millionth below; below nought it cannot),
+  and `tape` ("calc: 78 / 4 = 19.5", "calc: sqrt 2 = 1.414213", "calc: memory 13", "calc: 5 / 0 = cannot"). A row of
+  MC, MR, M+ and sqrt above the C row (six rows; the window 280x440); keys m, M, L and r. The header's account of why
+  it works in millionths was out of date (ring 3 has floating point now): it is for decimals that are exact. appcheck's
+  `key_at` counts six rows, the memory row first; helpcheck covers the calculator's two rows in Help.
+
 ### 0.229.0
 
 - **The terminal's small tools (10, 14)**: term.c `cmd_seq` (LAST, FIRST LAST, FIRST STEP LAST; whole numbers,
