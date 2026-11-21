@@ -890,6 +890,13 @@ Added in 0.165.0, not yet in the table below:
   about:history?forget is not followed (still 3); after the server's /peek, about:history's second entry (a, a file;
   the links found as bands of accent inside the window) opens; the forget button (found by its colour) leaves 0.
 
+Added in 0.227.0, not yet in the table below:
+- **`textcheck.py`** (gate `texttest`, full; 9 checks). Six rows typed into a new sheet (logiccheck's way: tabs and
+  Return over the serial line, each cell visited with ctrl+G): UPPER/LOWER/TRIM of "  Hello   World  " (bracketed so
+  the spaces show), LEFT/RIGHT/MID of "spreadsheet" with counts, without, past the end and from 0, FIND with case, from
+  a place and not there, UPPER of a number, LEN(TRIM()), LEFT of -1, LOWER(1/0), and nested and joined forms; each
+  compared with the same worked out in Python (str methods and `find`).
+
 Added in 0.226.0, not yet in the table below:
 - **`notescheck.py`** (13 checks now): after the run of typing is taken back, ctrl+Y puts "zzz" back (saved and read);
   ctrl+Y again says "nothing to redo"; ctrl+Z, "q" typed, and ctrl+Y says it again and the file is the note and q;

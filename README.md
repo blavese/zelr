@@ -624,6 +624,7 @@ instead.
     python tools/cutcheck.py    the terminal's cut and tr against the same written in Python, and quoted words
     python tools/arccheck.py    the terminal's unzip of Python's zip, tar.gz and gz, and its zip read by zipfile
     python tools/scriptcheck.py the terminal's scripts: $1 to $9, $# and $*, set's names, a script sourcing itself
+    python tools/textcheck.py   Sheet's UPPER, LOWER, TRIM, LEFT, RIGHT, MID and FIND against the same in Python
     python tools/slidecheck.py  Pictures' slideshow: in order, round again, a few seconds apart, and stopped
     python tools/choosecheck.py Files with several chosen: copied, cut, pasted, deleted and counted together
     python tools/eventcheck.py  a time in today's calendar note is said and rung in its minute, and only that one

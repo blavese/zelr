@@ -113,6 +113,14 @@ numbered files are still to 6048716; where they disagree with this list, this li
   built unsigned program; h264test in the machine still checks the decoder against Windows' answers in h264data.h.
   Gate 74 steps (one out, one in).
 
+### 0.227.0
+
+- **Sheet's functions for words (10, 14)**: sheet.c `scalar`: UPPER, LOWER, TRIM (ends gone, inner runs made one),
+  LEFT and RIGHT (one, or as many as asked), MID (from a place counted from 1), FIND (case counting, from an optional
+  place; #value when not there). A value is taken as `as_words` shows it; an error argument is passed on; a count or
+  place that is not a number or is below nought (MID's place below 1) is #value; counts past the end are cut to it.
+  Results go through `words2` into the pool. Help's row for `=`.
+
 ### 0.226.0
 
 - **Notes' ctrl+Y (09a, 14)**: notes.c `redos` beside `undos` (sixteen each, `keep_copy` onto either); `take_from`
