@@ -46,7 +46,8 @@ AUDIO = ["-audiodev", "wav,id=a0,path=" + REC.replace("\\", "/"),
          "-device", "hda-output,audiodev=a0"]
 
 # The calculator opens as the second window, so it cascades one step in from
-# where the terminal is. Its keys are a four by five grid under the display.
+# where the terminal is. Its keys are a four by six grid under the display,
+# the memory keys first (0.230.0); a row here counts from the C row.
 #
 # Written the way the kernel writes it. Every one of these was a number that
 # happened to be right until the frame went from one pixel to four and the
@@ -59,7 +60,8 @@ ICON_LEFT, ICON_CELL_W = 14, 78           # where winsrv.c starts the cascade
 CASCADE_X = ICON_LEFT + ICON_CELL_W + 14
 
 CALC_X, CALC_Y = CASCADE_X + 48, 36 + 38  # one step in: the second window
-CALC_W, CALC_H = 280, 380                 # what the program asks for
+CALC_W, CALC_H = 280, 440                 # what the program asks for
+CALC_ROWS, MEMORY_ROWS = 6, 1
 
 INNER_X, INNER_Y = CALC_X + WM_BORDER, CALC_Y + WM_TOP
 UI_PAD, UI_GAP = 8, 6
@@ -81,9 +83,9 @@ def key_at(col, row):
     gw = CALC_W - UI_PAD * 2
     gh = CALC_H - DISPLAY_H - UI_PAD * 2
     kw = (gw - UI_GAP * 3) // 4
-    kh = (gh - UI_GAP * 4) // 5
+    kh = (gh - UI_GAP * (CALC_ROWS - 1)) // CALC_ROWS
     return (gx + col * (kw + UI_GAP) + kw // 2,
-            gy + row * (kh + UI_GAP) + kh // 2)
+            gy + (row + MEMORY_ROWS) * (kh + UI_GAP) + kh // 2)
 
 
 def make_tone():

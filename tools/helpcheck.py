@@ -28,7 +28,7 @@ TERMINAL = (0x10, 0x14, 0x1A)
 SCREEN = (0, 0, 1024, 768)
 NAMED = {" ": "spc", "/": "slash", ".": "dot", "-": "minus", "+": "shift-equal", "\n": "ret"}
 PROGRAMS = ["desktop", "terminal", "files", "notes", "sheet", "paint", "pictures", "music", "calendar", "clock",
-            "browser"]
+            "browser", "calculator"]
 
 
 def main():

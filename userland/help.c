@@ -97,6 +97,8 @@ static const row_t ROWS[] = {
     { "calendar", "Delete", "the day's note taken away" },
     { "clock", "Space", "the stopwatch started or stopped" },
     { "clock", "R", "the stopwatch put back" },
+    { "calculator", "m, M, L", "what is shown added to what is kept aside (M+), that shown (MR), or cleared (MC)" },
+    { "calculator", "r", "the square root of what is shown" },
     { "browser", "ctrl+L", "the address bar" },
     { "browser", "ctrl+D", "the page bookmarked" },
     { "browser", "ctrl+N", "a new window" },

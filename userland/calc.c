@@ -1,11 +1,17 @@
 /* A calculator.
  *
- * There is no floating point anywhere in this system: the kernel is built
- * with the vector registers turned off, and a program that used a double
- * would fault on the first instruction that touched one. So everything here
- * is a sixty four bit integer of millionths. Six decimal places is more than
- * a calculator this size needs and leaves room for the multiply, which is the
- * one operation that has to hold twice as many digits as it started with.
+ * Everything here is a sixty four bit integer of millionths, so that 0.1 and
+ * 0.2 make 0.3 as they do on paper, which floating point does not. (This was
+ * written when a program could not use floating point at all; ring 3 can now,
+ * and Sheet does, but money and a calculator want decimals that are exact.)
+ * Six decimal places is more than a calculator this size needs and leaves
+ * room for the multiply, which is the one operation that has to hold twice as
+ * many digits as it started with.
+ *
+ * It keeps a number aside (M+ adds what is shown to it, MR shows it, MC
+ * clears it) and takes square roots, and says each sum it works out on the
+ * console ("calc: 78 / 4 = 19.5"), which is its tape and what calccheck
+ * reads.
  *
  * What is on screen is a string being typed, not a number being edited: that
  * is the difference between a calculator that lets you type 1.50 and one that
@@ -24,6 +30,7 @@ static int   typing = 1;          /* the display is a string being typed */
 static i64   acc;                 /* what is waiting for an operator */
 static char  pending;             /* 0, or one of + - x / */
 static int   error;
+static i64   memory;              /* M+ adds to it, MR shows it, MC clears it */
 
 /* --- numbers as text ------------------------------------------------------ */
 
@@ -91,24 +98,48 @@ static void show(i64 v) {
     typing = 0;
 }
 
+/* --- the tape --------------------------------------------------------------- */
+
+/* "calc: " and the words and numbers given, on the console. */
+static void tape(const char *a, i64 x, const char *b, i64 y, const char *c, i64 z, int nums) {
+    char line[160], num[ENTRY_MAX + 8];
+    int n = 0;
+    const char *words[3] = { a, b, c };
+    i64 vals[3] = { x, y, z };
+    for (const char *p = "calc: "; *p; p++) line[n++] = *p;
+    for (int i = 0; i < 3; i++) {
+        if (words[i]) for (const char *p = words[i]; *p && n < 140; p++) line[n++] = *p;
+        if (i < nums) {
+            format(vals[i], num, sizeof(num));
+            for (const char *p = num; *p && n < 150; p++) line[n++] = *p;
+        }
+    }
+    line[n++] = '\n';
+    line[n] = 0;
+    puts(line);
+}
+
 /* --- the arithmetic ------------------------------------------------------- */
 
 static void apply(void) {
     i64 rhs = parse_entry();
     i64 v = acc;
+    i64 was = acc;
+    char op[4] = { ' ', pending, ' ', 0 };
 
     switch (pending) {
         case '+': v = acc + rhs; break;
         case '-': v = acc - rhs; break;
         case 'x': v = (acc * rhs) / SCALE; break;
         case '/':
-            if (!rhs) { error = 1; return; }
+            if (!rhs) { error = 1; tape("", was, op, rhs, " = cannot", 0, 2); return; }
             v = (acc * SCALE) / rhs;
             break;
         default:  v = rhs; break;
     }
     acc = v;
     show(v);
+    if (pending) tape("", was, op, rhs, " = ", v, 3);
 }
 
 static void digit(char c) {
@@ -175,13 +206,48 @@ static void percent(void) {
     show(parse_entry() / 100);
 }
 
+/* The square root of what is shown, to the millionth below it: the whole
+   root of the number times a million, in 128 bits so that numbers up to the
+   most this holds have one. Below nought it cannot. */
+static void square_root(void) {
+    if (error) return;
+    i64 v = parse_entry();
+    if (v < 0) { error = 1; tape("sqrt ", v, " cannot", 0, 0, 0, 1); return; }
+    unsigned __int128 n = (unsigned __int128)(u64)v * (u64)SCALE, lo = 0, hi = (u64)3037000500u * 1000u;
+    while (lo < hi) {                     /* the most r with r * r <= n */
+        unsigned __int128 mid = (lo + hi + 1) / 2;
+        if (mid * mid <= n) lo = mid; else hi = mid - 1;
+    }
+    show((i64)lo);
+    tape("sqrt ", v, " = ", (i64)lo, 0, 0, 2);
+}
+
+static void memory_add(void) {
+    if (error) return;
+    memory += parse_entry();
+    typing = 0;                           /* the next digit starts a new number */
+    tape("memory ", memory, 0, 0, 0, 0, 1);
+}
+
+static void memory_recall(void) {
+    if (error) return;
+    show(memory);
+}
+
+static void memory_clear(void) {
+    memory = 0;
+    tape("memory ", 0, 0, 0, 0, 0, 1);
+}
+
 /* --- the keys ------------------------------------------------------------- */
 
 typedef struct { const char *label; char key; int wide; } key_t;
 
-/* Five rows of four. The wide one is the zero, which is what the extra space
-   in a grid like this is always spent on. */
+/* Six rows of four: what is kept aside and the square root, then the
+   numbers and what is done with them. The wide one is the zero, which is what
+   the extra space in a grid like this is always spent on. */
 static const key_t KEYS[] = {
+    { "MC", 'L', 0 }, { "MR", 'M', 0 }, { "M+", 'm', 0 }, { "sqrt", 'r', 0 },
     { "C", 'C', 0 }, { "+/-", '~', 0 }, { "%", '%', 0 }, { "/", '/', 0 },
     { "7", '7', 0 }, { "8", '8', 0 },   { "9", '9', 0 }, { "x", 'x', 0 },
     { "4", '4', 0 }, { "5", '5', 0 },   { "6", '6', 0 }, { "-", '-', 0 },
@@ -199,13 +265,17 @@ static void press(char k) {
         case 'C': clear_all(); break;
         case '~': negate(); break;
         case '%': percent(); break;
+        case 'r': square_root(); break;
+        case 'm': memory_add(); break;
+        case 'M': memory_recall(); break;
+        case 'L': memory_clear(); break;
         case 8:   backspace(); break;
         default:  break;
     }
 }
 
 int main(void) {
-    int win = win_create("Calculator", 280, 380);
+    int win = win_create("Calculator", 280, 440);
     if (win < 0) exit(1);
     win_allow_resize(win);
     win_want_escape(win);                   /* it has a use for Escape */
@@ -264,6 +334,8 @@ int main(void) {
         /* What is waiting, small, above it: 12 + is a state worth seeing.
            Formatted into a buffer of its own, because drawing must not
            touch what is being typed. */
+        if (memory && !error)
+            face_draw(&s, dx + dw - UI_PAD - face_w("M", UI_FACE_SMALL), dy + UI_PAD, "M", t.dim, UI_FACE_SMALL);
         if (pending && !error) {
             char wait[ENTRY_MAX + 8];
             format(acc, wait, sizeof(wait));
@@ -279,7 +351,7 @@ int main(void) {
         int gx = UI_PAD, gy = disp_h + UI_PAD;
         int gw = w - UI_PAD * 2, gh = h - gy - UI_PAD;
         int kw = (gw - UI_GAP * 3) / 4;
-        int kh = (gh - UI_GAP * 4) / 5;
+        int kh = (gh - UI_GAP * 5) / 6;
         if (kh < 20) kh = 20;
 
         int col = 0, row = 0;
