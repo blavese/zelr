@@ -15,7 +15,8 @@
  * FALSE), joins words with &, holds words in quotes ("say ""hi"""), and
  * knows IF, AND, OR, NOT, ROUND, ABS and LEN. Words a formula makes are
  * kept in a pool that every pass of working out starts afresh. Since
- * 0.227.0 it knows UPPER, LOWER, TRIM, LEFT, RIGHT, MID and FIND as well.
+ * 0.227.0 it knows UPPER, LOWER, TRIM, LEFT, RIGHT, MID and FIND as well,
+ * and since 0.228.0 COUNTIF, SUMIF and AVERAGEIF.
  */
 #include "zelr.h"
 #include "ui.h"
@@ -447,10 +448,105 @@ static val scalar(parse_t *P, const char *name, int len) {
     return error("#name");
 }
 
+/* A range as a function is given it, A1:B3, its corners put in order: 1,
+   0 when there is none at P (nothing moved), or -1 for a syntax error. A
+   corner off the sheet is in_range 0 in the ref, which the caller says. */
+static int range_at(parse_t *P, ref_t *f1, ref_t *f2) {
+    skip(P);
+    const char *s = P->p;
+    int n1 = ref_at(s, f1);
+    const char *colon = s + n1;
+    while (*colon == ' ') colon++;
+    if (!n1 || *colon != ':') return 0;
+    const char *t = colon + 1;
+    while (*t == ' ') t++;
+    int n2 = ref_at(t, f2);
+    if (!n2) return -1;
+    P->p = t + n2;
+    if (f1->row > f2->row) { int x = f1->row; f1->row = f2->row; f2->row = x; }
+    if (f1->col > f2->col) { int x = f1->col; f1->col = f2->col; f2->col = x; }
+    return 1;
+}
+
+/* Whether a cell's value meets a criterion, as spreadsheets read one: a
+   number is equal to it; words may begin with = <> < > <= or >= and then
+   say a number, which numbers are compared with, or words, which words are
+   compared with, case aside; words with none of those are equal to the
+   cell's words. A cell of the other kind meets only <>, which an empty one
+   meets too. */
+static int meets(val cell, val crit) {
+    if (cell.kind == V_ERR) return 0;
+    if (crit.kind == V_NUM) return cell.kind == V_NUM && cell.num == crit.num;
+    if (crit.kind != V_TEXT) return 0;
+    const char *s = crit.str, *op = "=";
+    if (s[0] == '<' && s[1] == '>') { op = "<>"; s += 2; }
+    else if ((s[0] == '<' || s[0] == '>') && s[1] == '=') { op = s[0] == '<' ? "<=" : ">="; s += 2; }
+    else if (s[0] == '<' || s[0] == '>') { op = s[0] == '<' ? "<" : ">"; s += 1; }
+    else if (s[0] == '=') s += 1;
+    int other_kind_meets = op[0] == '<' && op[1] == '>';
+    double d;
+    const char *digits = s + (s[0] == '-' || s[0] == '+');
+    int n = read_number(digits, &d);
+    if (n && !digits[n]) {
+        if (s[0] == '-') d = -d;
+        if (cell.kind != V_NUM) return other_kind_meets;
+        return compare(cell, op, number(d)).num != 0;
+    }
+    if (cell.kind != V_TEXT) return other_kind_meets;
+    val w = { V_TEXT, 0, s };
+    return compare(cell, op, w).num != 0;
+}
+
+/* COUNTIF(range, criterion), SUMIF(range, criterion[, range summed]) and
+   AVERAGEIF the same: the cells of the first range that meet the
+   criterion counted, or the numbers in the same places of the second range
+   (the first when there is none) added up or averaged. */
+static val call_if(parse_t *P, int fn) {
+    ref_t a1, a2, b1, b2;
+    int r = range_at(P, &a1, &a2);
+    if (r <= 0) return syntax(P);
+    skip(P);
+    if (*P->p != ',') return syntax(P);
+    P->p++;
+    val crit = expr(P);
+    skip(P);
+    int other = 0;
+    if (*P->p == ',' && fn) {
+        P->p++;
+        if (range_at(P, &b1, &b2) <= 0) return syntax(P);
+        other = 1;
+        skip(P);
+    }
+    if (*P->p != ')') return syntax(P);
+    P->p++;
+    if (!a1.in_range || !a2.in_range || (other && (!b1.in_range || !b2.in_range))) return error("#ref");
+    if (crit.kind == V_ERR) return crit;
+    double sum = 0;
+    int hits = 0;
+    for (int row = a1.row; row <= a2.row; row++)
+        for (int c = a1.col; c <= a2.col; c++) {
+            if (!meets(cell_value(row, c), crit)) continue;
+            if (!fn) { hits++; continue; }
+            int rr = other ? b1.row + row - a1.row : row, cc = other ? b1.col + c - a1.col : c;
+            if (rr >= NROW || cc >= NCOL) continue;
+            val v = cell_value(rr, cc);
+            if (v.kind == V_ERR) return v;
+            if (v.kind != V_NUM) continue;
+            sum += v.num;
+            hits++;
+        }
+    if (fn == 0) return number(hits);
+    if (fn == 1) return number(sum);
+    return hits ? number(sum / hits) : error("#div/0");
+}
+
 /* SUM, AVG (or AVERAGE), MIN, MAX and COUNT, of ranges (A1:B3) and of
    anything else, separated by commas. COUNT counts the numbers and passes
    errors over, as the others do not. */
 static val call(parse_t *P, const char *name, int len) {
+    if (named(name, len, "COUNTIF")) return call_if(P, 0);
+    if (named(name, len, "SUMIF")) return call_if(P, 1);
+    if (named(name, len, "AVERAGEIF")) return call_if(P, 2);
     int fn = named(name, len, "SUM") ? 0 : named(name, len, "AVG") || named(name, len, "AVERAGE") ? 1
            : named(name, len, "MIN") ? 2 : named(name, len, "MAX") ? 3 : named(name, len, "COUNT") ? 4 : -1;
     if (fn < 0) return scalar(P, name, len);
