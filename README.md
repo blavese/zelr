@@ -296,6 +296,7 @@ In the terminal, which is itself one of those ring 3 programs:
     zip notes.zip notes    a folder and everything in it into a new zip
     source tidy.sh /home   a file of these lines run in turn, /home as its $1
     set dest /home/backup  a name, put in wherever $dest is written
+    seq 10 | tac | nl      and seq, nl, tac, rev, basename, dirname and touch
 
 The terminal's own commands can send what they say into a file: `ls >
 list.txt` writes it, `>>` adds to what is there, and anything that goes
@@ -626,6 +627,7 @@ instead.
     python tools/scriptcheck.py the terminal's scripts: $1 to $9, $# and $*, set's names, a script sourcing itself
     python tools/textcheck.py   Sheet's UPPER, LOWER, TRIM, LEFT, RIGHT, MID and FIND against the same in Python
     python tools/countcheck.py  Sheet's COUNTIF, SUMIF and AVERAGEIF, criteria read as spreadsheets read them
+    python tools/smallcheck.py  the terminal's seq, nl, tac, rev, basename, dirname and touch
     python tools/slidecheck.py  Pictures' slideshow: in order, round again, a few seconds apart, and stopped
     python tools/choosecheck.py Files with several chosen: copied, cut, pasted, deleted and counted together
     python tools/eventcheck.py  a time in today's calendar note is said and rung in its minute, and only that one
@@ -1277,7 +1279,7 @@ executables in ring 3. The terminal is a shell that is not part of the kernel:
 listing a directory, reading a file, writing one, starting another program and
 fetching a page over TCP all go through int 0x80, and its `get` command does
 an HTTP GET from user space. It has a line editor, history kept in `/cfg`, tab
-completion over both commands and paths, and fifty-five commands of its own.
+completion over both commands and paths, and sixty-two commands of its own.
 Settings is the interesting one, because it changes how the desktop
 looks without being able to reach the window manager at all. It writes
 `/zelr.cfg`, a plain "key value" file, and the window manager re-reads that four

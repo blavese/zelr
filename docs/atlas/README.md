@@ -113,6 +113,15 @@ numbered files are still to 6048716; where they disagree with this list, this li
   built unsigned program; h264test in the machine still checks the decoder against Windows' answers in h264data.h.
   Gate 74 steps (one out, one in).
 
+### 0.229.0
+
+- **The terminal's small tools (10, 14)**: term.c `cmd_seq` (LAST, FIRST LAST, FIRST STEP LAST; whole numbers,
+  `whole_number`; down by itself when LAST is below FIRST; 10000 at most), `cmd_nl` ("%6d\t" as cat -n), `cmd_tac`,
+  `cmd_rev` (all three on `small_lines`, 8192 lines of what `read_input` gave), `cmd_basename` (an ending taken off
+  unless it is all of it; slashes at the end passed over), `cmd_dirname` ("." with no folder, "/" at the top), and
+  `cmd_touch` (a file not there made empty; one there has its first byte read and written again with O_WRITE alone,
+  which leaves the rest and stamps it; an empty one made again).
+
 ### 0.228.0
 
 - **Sheet's COUNTIF, SUMIF and AVERAGEIF (10, 14)**: sheet.c `call_if` from `call`: a range (`range_at`, which puts

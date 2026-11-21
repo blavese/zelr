@@ -890,6 +890,12 @@ Added in 0.165.0, not yet in the table below:
   about:history?forget is not followed (still 3); after the server's /peek, about:history's second entry (a, a file;
   the links found as bands of accent inside the window) opens; the forget button (found by its colour) leaves 0.
 
+Added in 0.229.0, not yet in the table below:
+- **`smallcheck.py`** (gate `smalltest`, full; 9 checks; `HOST_CLOCK`). lines.txt (an empty line among four) and
+  old.txt (mkfat's date, 2025-01-01). Five seq's, nl, `| tac`, rev, three basename's and three dirname's, each
+  `> FILE` and compared with the same written in Python; `touch old.txt new.txt`: old.txt's written time (readfat
+  `times`) moves to within two days of the host's and its bytes stay, new.txt is there and empty.
+
 Added in 0.228.0, not yet in the table below:
 - **`countcheck.py`** (gate `counttest`, full; 8 checks). A table (fruit, how many with a negative and an empty one,
   what they cost) and three rows of COUNTIF/SUMIF/AVERAGEIF typed into a new sheet, each visited with ctrl+G and
